@@ -1914,12 +1914,6 @@ public:
 
   void
   STDMETHODCALLTYPE
-  SwapDeviceContextState(ID3DDeviceContextState *pState, ID3DDeviceContextState **ppPreviousState) override {
-    UNIMPLEMENTED("SwapDeviceContextState");
-  }
-
-  void
-  STDMETHODCALLTYPE
   ClearState() override {
     std::lock_guard<mutex_t> lock(mutex);
 
