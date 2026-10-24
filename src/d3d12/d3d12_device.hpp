@@ -280,7 +280,8 @@ public:
   virtual void ReleasePrivate() = 0;
 };
 
-class MTLD3D12Device : public ID3D12Device8 { // MacNeutron: 5-8 (AMD FSR 3's swapchain needs 8)
+// MacNeutron: 5-10 (AMD FSR 3's swapchain needs 8; enhanced barriers, 10)
+class MTLD3D12Device : public ID3D12Device10 {
 public:
   virtual WMT::Device GetMTLDevice() = 0;
 

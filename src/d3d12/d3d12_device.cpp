@@ -17,6 +17,7 @@
  */
 
 #include "d3d12_device.hpp"
+#include "d3d12_barrier_legacy.hpp"
 #include "d3d12_stats.hpp"
 #include "d3d12_feature_data.hpp"
 #include "d3d12_dxil_dump.hpp"
@@ -424,7 +425,8 @@ public:
     if (riid == __uuidof(IUnknown) || riid == __uuidof(ID3D12Object) || riid == __uuidof(ID3D12Device) ||
         riid == __uuidof(ID3D12Device1) || riid == __uuidof(ID3D12Device2) || riid == __uuidof(ID3D12Device3) ||
         riid == __uuidof(ID3D12Device4) || riid == __uuidof(ID3D12Device5) || riid == __uuidof(ID3D12Device6) ||
-        riid == __uuidof(ID3D12Device7) || riid == __uuidof(ID3D12Device8)) {
+        riid == __uuidof(ID3D12Device7) || riid == __uuidof(ID3D12Device8) || riid == __uuidof(ID3D12Device9) ||
+        riid == __uuidof(ID3D12Device10)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -847,7 +849,7 @@ public:
         return E_INVALIDARG;
       auto *out = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS12 *>(pFeatureData);
       out->RelaxedFormatCastingSupported = FALSE;
-      out->EnhancedBarriersSupported = FALSE;
+      out->EnhancedBarriersSupported = TRUE; // MacNeutron: as legacy barriers (d3d12_barrier_legacy.hpp)
       out->MSPrimitivesPipelineStatisticIncludesCulledPrimitives = D3D12_TRI_STATE_FALSE;
       return S_OK;
     }
@@ -1734,6 +1736,78 @@ public:
   ) {
     DXMT_STAT_SCOPE("device.CreateReservedResource1");
     return E_NOTIMPL;
+  }
+
+  // MacNeutron: ID3D12Device9 and 10, for enhanced barriers (OPTIONS12). DXMT's shader cache isn't the program's to
+  // drive; a creator ID changes nothing; a layout is the state it starts in (d3d12_barrier_legacy.hpp's InitialState).
+  HRESULT STDMETHODCALLTYPE
+  CreateShaderCacheSession(const D3D12_SHADER_CACHE_SESSION_DESC *pDesc, REFIID riid, void **ppSession) {
+    DXMT_STAT_SCOPE("device.CreateShaderCacheSession");
+    InitReturnPtr(ppSession);
+    return E_NOTIMPL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  ShaderCacheControl(D3D12_SHADER_CACHE_KIND_FLAGS Kinds, D3D12_SHADER_CACHE_CONTROL_FLAGS Control) {
+    DXMT_STAT_SCOPE("device.ShaderCacheControl");
+    return E_NOTIMPL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  CreateCommandQueue1(const D3D12_COMMAND_QUEUE_DESC *pDesc, REFIID CreatorID, REFIID riid, void **ppCommandQueue) {
+    DXMT_STAT_SCOPE("device.CreateCommandQueue1");
+    return CreateCommandQueue(pDesc, riid, ppCommandQueue);
+  }
+
+  // Castable formats (RelaxedFormatCastingSupported FALSE): warned once, then ignored.
+  static void
+  IgnoreCastableFormats(UINT32 NumCastableFormats) {
+    static bool warned = false;
+    if (NumCastableFormats && !std::exchange(warned, true))
+      WARN("CreateCommittedResource3/CreatePlacedResource2: castable formats ignored");
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  CreateCommittedResource3(
+      const D3D12_HEAP_PROPERTIES *pHeapProps, D3D12_HEAP_FLAGS HeapFlags, const D3D12_RESOURCE_DESC1 *pDesc,
+      D3D12_BARRIER_LAYOUT InitialLayout, const D3D12_CLEAR_VALUE *OptimizedClearValue,
+      ID3D12ProtectedResourceSession *pSession, UINT32 NumCastableFormats, DXGI_FORMAT *pCastableFormats, REFIID riid,
+      void **ppResource
+  ) {
+    DXMT_STAT_SCOPE("device.CreateCommittedResource3");
+    if (!pHeapProps)
+      return E_INVALIDARG;
+    IgnoreCastableFormats(NumCastableFormats);
+    auto state = InitialState(InitialLayout, pHeapProps->Type);
+    return CreateCommittedResource2(
+        pHeapProps, HeapFlags, pDesc, state, OptimizedClearValue, pSession, riid, ppResource
+    );
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  CreatePlacedResource2(
+      ID3D12Heap *pHeap, UINT64 Offset, const D3D12_RESOURCE_DESC1 *pDesc, D3D12_BARRIER_LAYOUT InitialLayout,
+      const D3D12_CLEAR_VALUE *OptimizedClearValue, UINT32 NumCastableFormats, DXGI_FORMAT *pCastableFormats,
+      REFIID riid, void **ppResource
+  ) {
+    DXMT_STAT_SCOPE("device.CreatePlacedResource2");
+    if (!pHeap)
+      return E_INVALIDARG;
+    IgnoreCastableFormats(NumCastableFormats);
+    auto type = static_cast<MTLD3D12Heap *>(pHeap)->GetDesc().Properties.Type;
+    return CreatePlacedResource1(
+        pHeap, Offset, pDesc, InitialState(InitialLayout, type), OptimizedClearValue, riid, ppResource
+    );
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  CreateReservedResource2(
+      const D3D12_RESOURCE_DESC *pDesc, D3D12_BARRIER_LAYOUT InitialLayout,
+      const D3D12_CLEAR_VALUE *OptimizedClearValue, ID3D12ProtectedResourceSession *pSession, UINT32 NumCastableFormats,
+      DXGI_FORMAT *pCastableFormats, REFIID riid, void **ppResource
+  ) {
+    DXMT_STAT_SCOPE("device.CreateReservedResource2");
+    return E_NOTIMPL; // as CreateReservedResource1
   }
 
   D3D12_RESOURCE_ALLOCATION_INFO *STDMETHODCALLTYPE

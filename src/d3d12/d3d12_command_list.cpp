@@ -17,6 +17,7 @@
  */
 
 #include "d3d12_command_allocator.hpp"
+#include "d3d12_barrier_legacy.hpp"
 #include "d3d12_stats.hpp"
 #include "com/com_pointer.hpp"
 #include "dxmt_format.hpp"
@@ -170,6 +171,7 @@ class MTLD3D12GraphicsCommandListImpl
 
   Com<MTLD3D12CommandAllocatorImpl, false> allocator_;
   std::vector<const void *> transitioned_; // ResourceBarrier's scratch
+  std::vector<D3D12_RESOURCE_BARRIER> legacy_barriers_; // Barrier's scratch
   // MacNeutron: the open render pass's resolves, from its BeginRenderPass, done by its EndRenderPass.
   struct PendingResolve {
     ID3D12Resource *src, *dst;
@@ -2341,10 +2343,13 @@ public:
     WARN_ONCE("DispatchMesh: mesh shaders not supported (MeshShaderTier NOT_SUPPORTED)");
   }
 
+  // Enhanced barriers (OPTIONS12): one call is one ResourceBarrier call of the legacy barriers they mean to DXMT
+  // (d3d12_barrier_legacy.hpp), which ResourceBarrier classifies as its own.
   void STDMETHODCALLTYPE
   Barrier(UINT32 NumBarrierGroups, const D3D12_BARRIER_GROUP *pBarrierGroups) {
     DXMT_STAT_SCOPE("list.Barrier");
-    WARN("Barrier: not implemented yet");
+    LegacyBarriers(NumBarrierGroups, pBarrierGroups, legacy_barriers_);
+    ResourceBarrier(legacy_barriers_.size(), legacy_barriers_.data());
   }
 #undef WARN_ONCE
 
