@@ -76,8 +76,12 @@ LegacyResourceBarrier(
     D3D12_BARRIER_SYNC sync_before, D3D12_BARRIER_ACCESS before, D3D12_BARRIER_ACCESS after,
     ID3D12Resource *resource, std::vector<D3D12_RESOURCE_BARRIER> &out
 ) {
-  if (sync_before == D3D12_BARRIER_SYNC_NONE || before == D3D12_BARRIER_ACCESS_NO_ACCESS)
+  if (sync_before == D3D12_BARRIER_SYNC_NONE)
     return; // nothing earlier to wait on
+  if (before == D3D12_BARRIER_ACCESS_NO_ACCESS) {
+    out.push_back(AnyResourceBarrier()); // still a scope to wait for: an execution dependency
+    return;
+  }
   bool known_before, known_after = true;
   auto state_before = LegacyState(before, &known_before);
   // No access after: whatever wrote it still has to end, as when it leaves for COMMON.
@@ -106,12 +110,15 @@ LegacyBarriers(UINT32 group_count, const D3D12_BARRIER_GROUP *groups, std::vecto
         if (!group.pGlobalBarriers)
           break;
         auto &b = group.pGlobalBarriers[i];
-        if (b.SyncBefore == D3D12_BARRIER_SYNC_NONE || b.AccessBefore == D3D12_BARRIER_ACCESS_NO_ACCESS ||
-            ReadOnlyAccess(b.AccessBefore))
-          break;
-        out.push_back(
-            b.AccessBefore == D3D12_BARRIER_ACCESS_UNORDERED_ACCESS ? UavBarrier(nullptr) : AnyResourceBarrier()
-        );
+        bool reads = ReadOnlyAccess(b.AccessBefore);
+        if (b.SyncBefore == D3D12_BARRIER_SYNC_NONE ||
+            (reads && (ReadOnlyAccess(b.AccessAfter) || b.AccessAfter == D3D12_BARRIER_ACCESS_NO_ACCESS)))
+          break; // nothing earlier to wait on, or reads then reads (or nothing)
+        // UAV writes before, or reads before UAV writes (a write after read, as a legacy move into UNORDERED_ACCESS
+        // orders): a UAV barrier; any other write on either side: any resource.
+        bool uav = b.AccessBefore == D3D12_BARRIER_ACCESS_UNORDERED_ACCESS ||
+                   (reads && b.AccessAfter == D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+        out.push_back(uav ? UavBarrier(nullptr) : AnyResourceBarrier());
         break;
       }
       case D3D12_BARRIER_TYPE_TEXTURE:

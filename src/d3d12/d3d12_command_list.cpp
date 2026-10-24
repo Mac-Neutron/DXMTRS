@@ -1237,6 +1237,9 @@ public:
     resolve->type = EncoderType::Resolve;
     resolve->writes_unknown = false;
     allocator_->Writes(dst);
+    // And the source, which the pass stores (StoreAndMultisampleResolve): a render pass's resolve has no barrier before
+    // or after it, so it waits on the source's writers, and the source's next writer on it (GPU overlap spec §3.1).
+    allocator_->Writes(src);
 
     TextureViewDescriptor src_desc;
     src_desc.format = format;
