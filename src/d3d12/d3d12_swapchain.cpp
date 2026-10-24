@@ -983,7 +983,10 @@ CreateSwapChain(
     const DXGI_SWAP_CHAIN_DESC1 *pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc,
     IDXGISwapChain1 **ppSwapChain
 ) {
-  auto swapchain = Com(new MTLD3D12SwapChain(pFactory, pDevice, pQueue, hWnd, pDesc, pFullscreenDesc));
+  // A DXGI object starts with its reference (ComObjectWithInitialRef): adopted, not added to, or the swapchain and its
+  // view outlive the last Release.
+  auto swapchain =
+      Com<MTLD3D12SwapChain>::transfer(new MTLD3D12SwapChain(pFactory, pDevice, pQueue, hWnd, pDesc, pFullscreenDesc));
   HRESULT hr = swapchain->ResizeBuffers(0, pDesc->Width, pDesc->Height, DXGI_FORMAT_UNKNOWN, 0);
   if (FAILED(hr))
     return hr;
