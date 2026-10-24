@@ -281,8 +281,15 @@ public:
 
   HRESULT STDMETHODCALLTYPE EnumWarpAdapter(REFIID iid,
                                             void **adapter) override {
-    ERR("DXGIFactory::EnumWrapAdapter: not implemented");
-    return DXGI_ERROR_NOT_FOUND;
+    // No WARP on Metal: the first adapter, as DXVK answers. 3DMark's Steel Nomad wraps what this returns unchecked and
+    // crashed on a null one.
+    InitReturnPtr(adapter);
+    Com<IDXGIAdapter1> first;
+    HRESULT hr = this->EnumAdapters1(0, &first);
+    if (FAILED(hr))
+      return hr;
+    WARN("DXGIFactory::EnumWarpAdapter: no WARP, returning the first adapter");
+    return first->QueryInterface(iid, adapter);
   };
 
   HRESULT STDMETHODCALLTYPE
