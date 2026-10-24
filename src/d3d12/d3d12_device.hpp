@@ -107,10 +107,26 @@ public:
   virtual HRESULT Present(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after) = 0;
 };
 
-class MTLD3D12Resource : public ID3D12Resource {
+class MTLD3D12Resource : public ID3D12Resource2 {
 public:
   Rc<Texture> texture;
   Rc<Buffer> buffer;
+
+  // ID3D12Resource1 and 2, which a swapchain's GetBuffer may be asked for (3DMark's Steel Nomad stopped on
+  // E_NOINTERFACE): no protected sessions, and the description with no sampler feedback.
+  HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID riid, void **ppProtectedSession) final {
+    if (ppProtectedSession)
+      *ppProtectedSession = nullptr;
+    return E_NOTIMPL;
+  }
+
+  D3D12_RESOURCE_DESC1 *STDMETHODCALLTYPE GetDesc1(D3D12_RESOURCE_DESC1 *__ret) final {
+    D3D12_RESOURCE_DESC d;
+    GetDesc(&d);
+    *__ret = {d.Dimension, d.Alignment, d.Width, d.Height, d.DepthOrArraySize, d.MipLevels, d.Format, d.SampleDesc,
+              d.Layout, d.Flags, {}};
+    return __ret;
+  }
 
   virtual HRESULT STDMETHODCALLTYPE
   CreateShaderResourceView(const D3D12_SHADER_RESOURCE_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE Descriptor) = 0;
