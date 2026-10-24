@@ -18,6 +18,7 @@
 
 #include "d3d12_device.hpp"
 #include "d3d12_barrier_legacy.hpp"
+#include "d3d12_shared_fence.hpp"
 #include "d3d12_stats.hpp"
 #include "d3d12_feature_data.hpp"
 #include "d3d12_dxil_dump.hpp"
@@ -1285,13 +1286,13 @@ public:
       ID3D12DeviceChild *object, const SECURITY_ATTRIBUTES *attributes, DWORD access, const WCHAR *name, HANDLE *handle
   ) {
     DXMT_STAT_SCOPE("device.CreateSharedHandle");
-    return E_NOTIMPL;
+    return ShareFence(object, name, handle);
   };
 
   HRESULT STDMETHODCALLTYPE
   OpenSharedHandle(HANDLE handle, REFIID riid, void **object) {
     DXMT_STAT_SCOPE("device.OpenSharedHandle");
-    return E_NOTIMPL;
+    return OpenSharedFence(handle, riid, object);
   };
 
   HRESULT STDMETHODCALLTYPE
