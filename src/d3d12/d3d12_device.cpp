@@ -1775,6 +1775,7 @@ public:
       void **ppResource
   ) {
     DXMT_STAT_SCOPE("device.CreateCommittedResource3");
+    InitReturnPtr(ppResource);
     if (!pHeapProps)
       return E_INVALIDARG;
     IgnoreCastableFormats(NumCastableFormats);
@@ -1791,6 +1792,7 @@ public:
       REFIID riid, void **ppResource
   ) {
     DXMT_STAT_SCOPE("device.CreatePlacedResource2");
+    InitReturnPtr(ppResource);
     if (!pHeap)
       return E_INVALIDARG;
     IgnoreCastableFormats(NumCastableFormats);
@@ -1807,6 +1809,7 @@ public:
       DXGI_FORMAT *pCastableFormats, REFIID riid, void **ppResource
   ) {
     DXMT_STAT_SCOPE("device.CreateReservedResource2");
+    InitReturnPtr(ppResource);
     return E_NOTIMPL; // as CreateReservedResource1
   }
 

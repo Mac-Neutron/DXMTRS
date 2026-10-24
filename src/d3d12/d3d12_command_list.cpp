@@ -2137,9 +2137,8 @@ public:
     auto *pSrc = static_cast<MTLD3D12Resource *>(pSrcResource);
     if (!pDst || !pSrc || !pDst->texture || !pSrc->texture)
       return;
-    MTL_DXGI_FORMAT_DESC format_desc, dst_format;
-    if (FAILED(MTLQueryDXGIFormat(device_->GetMTLDevice(), Format, format_desc)) ||
-        FAILED(MTLQueryDXGIFormat(device_->GetMTLDevice(), pDstResource->GetDesc().Format, dst_format))) {
+    MTL_DXGI_FORMAT_DESC format_desc;
+    if (FAILED(MTLQueryDXGIFormat(device_->GetMTLDevice(), Format, format_desc))) {
       ERR("ResolveSubresourceRegion: invalid format ", Format);
       return;
     }
@@ -2153,18 +2152,32 @@ public:
     }
     auto &src = pSrc->texture, &dst = pDst->texture;
     LONG width = src->width(), height = src->height();
-    D3D12_RECT rect = pSrcRect ? *pSrcRect : D3D12_RECT{0, 0, width, height};
-    rect = {std::max(rect.left, (LONG)0), std::max(rect.top, (LONG)0), std::min(rect.right, width),
-            std::min(rect.bottom, height)};
-    if (rect.right <= rect.left || rect.bottom <= rect.top)
-      return;
     auto DstMips = dst->miplevelCount();
     auto DstLevel = DstSubresource % DstMips, DstSlice = DstSubresource / DstMips;
-    if (!DstX && !DstY && !rect.left && !rect.top && rect.right == width && rect.bottom == height) {
+    LONG dst_width = std::max(1u, dst->width() >> DstLevel), dst_height = std::max(1u, dst->height() >> DstLevel);
+    if ((LONG)DstX >= dst_width || (LONG)DstY >= dst_height)
+      return;
+    // The rectangle as much of it as is inside the source, and fits the destination at (DstX, DstY).
+    D3D12_RECT rect = pSrcRect ? *pSrcRect : D3D12_RECT{0, 0, width, height};
+    rect.left = std::max(rect.left, (LONG)0);
+    rect.top = std::max(rect.top, (LONG)0);
+    rect.right = std::min({rect.right, width, rect.left + dst_width - (LONG)DstX});
+    rect.bottom = std::min({rect.bottom, height, rect.top + dst_height - (LONG)DstY});
+    if (rect.right <= rect.left || rect.bottom <= rect.top)
+      return;
+    if (!DstX && !DstY && !rect.left && !rect.top && rect.right == width && rect.bottom == height &&
+        dst_width == width && dst_height == height) { // the whole source onto a destination its size
       EncodeResolve(src.ptr(), SrcSubresource, dst.ptr(), DstLevel, DstSlice, format_desc.PixelFormat);
       return;
     }
+    MTL_DXGI_FORMAT_DESC dst_format;
+    if (FAILED(MTLQueryDXGIFormat(device_->GetMTLDevice(), pDstResource->GetDesc().Format, dst_format))) {
+      ERR("ResolveSubresourceRegion: invalid destination format ", pDstResource->GetDesc().Format);
+      return;
+    }
     // A part: Metal resolves whole attachments, so the whole into a scratch texture, then the rectangle copied out.
+    // ponytail: a scratch texture the source's size and a whole resolve a call (two for a pass resolved in two
+    // halves); one scratch per source and slice an EndRenderPass, or kept by the allocator for reuse, if it shows.
     WMTTextureInfo info = {};
     info.pixel_format = format_desc.PixelFormat;
     info.type = WMTTextureType2D;
@@ -2347,12 +2360,14 @@ public:
   }
 
   // Enhanced barriers (OPTIONS12): one call is one ResourceBarrier call of the legacy barriers they mean to DXMT
-  // (d3d12_barrier_legacy.hpp), which ResourceBarrier classifies as its own.
+  // (d3d12_barrier_legacy.hpp), which ResourceBarrier classifies as its own; none when they order nothing (a barrier
+  // call would still part the passes on either side).
   void STDMETHODCALLTYPE
   Barrier(UINT32 NumBarrierGroups, const D3D12_BARRIER_GROUP *pBarrierGroups) {
     DXMT_STAT_SCOPE("list.Barrier");
     LegacyBarriers(NumBarrierGroups, pBarrierGroups, legacy_barriers_);
-    ResourceBarrier(legacy_barriers_.size(), legacy_barriers_.data());
+    if (!legacy_barriers_.empty())
+      ResourceBarrier(legacy_barriers_.size(), legacy_barriers_.data());
   }
 #undef WARN_ONCE
 
