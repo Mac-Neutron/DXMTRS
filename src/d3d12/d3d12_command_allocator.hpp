@@ -115,6 +115,8 @@ class MTLD3D12CommandAllocatorImpl : public MTLD3D12Pageable<MTLD3D12CommandAllo
   std::vector<PooledICB> icb_;
   std::unordered_map<uint64_t, std::vector<PooledICB>> icb_free_; // by key; no allocation once warm
   PooledICB &AcquireICB(WMTIndirectCommandBufferInfo &info, size_t MaxCount, WMTResourceOptions storage);
+  // MacNeutron: textures the lists made for themselves (ResolveSubresourceRegion's partial resolves), until Reset.
+  std::vector<Rc<Texture>> kept_textures_;
 
   ClearUAV<MTLD3D12CommandAllocatorImpl> clear_uav_;
   ClearRTV<MTLD3D12CommandAllocatorImpl> clear_rtv_;
@@ -340,6 +342,12 @@ public:
         return;
     e->writes[e->write_count++] = resource;
   }
+
+  void
+  KeepTexture(Rc<Texture> texture) {
+    kept_textures_.push_back(std::move(texture));
+  }
+
 
 
   // What the closing encoder `e` waits on (GPU overlap spec §3.1). A join (all earlier work) when it is the list's

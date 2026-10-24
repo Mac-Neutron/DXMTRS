@@ -122,6 +122,7 @@ MTLD3D12CommandAllocatorImpl::Reset() {
   if (encoder_last)
     return E_FAIL;
   DestroyEncoders();
+  kept_textures_.clear();
   return Initialize();
 };
 
