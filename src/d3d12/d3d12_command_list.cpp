@@ -309,7 +309,10 @@ public:
 
     if (riid == __uuidof(IUnknown) || riid == __uuidof(ID3D12Object) || riid == __uuidof(ID3D12DeviceChild) ||
         riid == __uuidof(ID3D12CommandList) || riid == __uuidof(ID3D12GraphicsCommandList) ||
-        riid == __uuidof(ID3D12GraphicsCommandList1) || riid == __uuidof(ID3D12GraphicsCommandList2)) {
+        riid == __uuidof(ID3D12GraphicsCommandList1) || riid == __uuidof(ID3D12GraphicsCommandList2) ||
+        riid == __uuidof(ID3D12GraphicsCommandList3) || riid == __uuidof(ID3D12GraphicsCommandList4) ||
+        riid == __uuidof(ID3D12GraphicsCommandList5) || riid == __uuidof(ID3D12GraphicsCommandList6) ||
+        riid == __uuidof(ID3D12GraphicsCommandList7)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -2120,6 +2123,115 @@ public:
     DXMT_STAT_SCOPE("list.SetViewInstanceMask");
     IMPLEMENT_ME
   }
+
+  // MacNeutron: ID3D12GraphicsCommandList3 to 7. What the caps report off (protected sessions, meta commands, ray
+  // tracing, VRS, mesh shaders) does nothing, as at those tiers no program may call it to effect.
+#define WARN_ONCE(...)                                                                                                 \
+  do {                                                                                                                 \
+    static bool warned_ = false;                                                                                       \
+    if (!std::exchange(warned_, true))                                                                                 \
+      WARN(__VA_ARGS__);                                                                                               \
+  } while (0)
+
+  void STDMETHODCALLTYPE
+  SetProtectedResourceSession(ID3D12ProtectedResourceSession *pSession) {
+    DXMT_STAT_SCOPE("list.SetProtectedResourceSession");
+    if (pSession) // none can exist: CreateProtectedResourceSession answers E_NOTIMPL
+      WARN_ONCE("SetProtectedResourceSession: protected sessions not supported");
+  }
+
+  void STDMETHODCALLTYPE
+  BeginRenderPass(
+      UINT NumRenderTargets, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *pRenderTargets,
+      const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *pDepthStencil, D3D12_RENDER_PASS_FLAGS Flags
+  ) {
+    DXMT_STAT_SCOPE("list.BeginRenderPass");
+    WARN("BeginRenderPass: not implemented yet");
+  }
+
+  void STDMETHODCALLTYPE
+  EndRenderPass() {
+    DXMT_STAT_SCOPE("list.EndRenderPass");
+    WARN("EndRenderPass: not implemented yet");
+  }
+
+  void STDMETHODCALLTYPE
+  InitializeMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pData, SIZE_T DataSize) {
+    DXMT_STAT_SCOPE("list.InitializeMetaCommand");
+    WARN_ONCE("InitializeMetaCommand: meta commands not supported (EnumerateMetaCommands reports none)");
+  }
+
+  void STDMETHODCALLTYPE
+  ExecuteMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pData, SIZE_T DataSize) {
+    DXMT_STAT_SCOPE("list.ExecuteMetaCommand");
+    WARN_ONCE("ExecuteMetaCommand: meta commands not supported (EnumerateMetaCommands reports none)");
+  }
+
+  void STDMETHODCALLTYPE
+  BuildRaytracingAccelerationStructure(
+      const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc, UINT NumPostbuildInfoDescs,
+      const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *pPostbuildInfoDescs
+  ) {
+    DXMT_STAT_SCOPE("list.BuildRaytracingAccelerationStructure");
+    WARN_ONCE("BuildRaytracingAccelerationStructure: ray tracing not supported (RaytracingTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  EmitRaytracingAccelerationStructurePostbuildInfo(
+      const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *pDesc, UINT NumSources,
+      const D3D12_GPU_VIRTUAL_ADDRESS *pSources
+  ) {
+    DXMT_STAT_SCOPE("list.EmitRaytracingAccelerationStructurePostbuildInfo");
+    WARN_ONCE("EmitRaytracingAccelerationStructurePostbuildInfo: ray tracing not supported (RaytracingTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  CopyRaytracingAccelerationStructure(
+      D3D12_GPU_VIRTUAL_ADDRESS Dst, D3D12_GPU_VIRTUAL_ADDRESS Src, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE Mode
+  ) {
+    DXMT_STAT_SCOPE("list.CopyRaytracingAccelerationStructure");
+    WARN_ONCE("CopyRaytracingAccelerationStructure: ray tracing not supported (RaytracingTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  SetPipelineState1(ID3D12StateObject *pStateObject) {
+    DXMT_STAT_SCOPE("list.SetPipelineState1");
+    if (pStateObject) // none can exist: CreateStateObject answers E_NOTIMPL
+      WARN_ONCE("SetPipelineState1: state objects not supported (RaytracingTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  DispatchRays(const D3D12_DISPATCH_RAYS_DESC *pDesc) {
+    DXMT_STAT_SCOPE("list.DispatchRays");
+    WARN_ONCE("DispatchRays: ray tracing not supported (RaytracingTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  RSSetShadingRate(D3D12_SHADING_RATE BaseShadingRate, const D3D12_SHADING_RATE_COMBINER *pCombiners) {
+    DXMT_STAT_SCOPE("list.RSSetShadingRate");
+    if (BaseShadingRate != D3D12_SHADING_RATE_1X1 || pCombiners) // 1x1 is every draw's rate
+      WARN_ONCE("RSSetShadingRate: variable rate shading not supported (VariableShadingRateTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  RSSetShadingRateImage(ID3D12Resource *pImage) {
+    DXMT_STAT_SCOPE("list.RSSetShadingRateImage");
+    if (pImage)
+      WARN_ONCE("RSSetShadingRateImage: variable rate shading not supported (VariableShadingRateTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  DispatchMesh(UINT X, UINT Y, UINT Z) {
+    DXMT_STAT_SCOPE("list.DispatchMesh");
+    WARN_ONCE("DispatchMesh: mesh shaders not supported (MeshShaderTier NOT_SUPPORTED)");
+  }
+
+  void STDMETHODCALLTYPE
+  Barrier(UINT32 NumBarrierGroups, const D3D12_BARRIER_GROUP *pBarrierGroups) {
+    DXMT_STAT_SCOPE("list.Barrier");
+    WARN("Barrier: not implemented yet");
+  }
+#undef WARN_ONCE
 
   // MacNeutron (XeSS answered by MetalFX): IMTLD3D12CommandListExt. Everything is checked before anything is recorded.
   // An input MetalFX can't take as it is (another Metal format than the upscaler's, or not readable: a depth/stencil

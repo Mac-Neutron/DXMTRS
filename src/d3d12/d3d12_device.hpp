@@ -65,7 +65,7 @@ struct TimestampResolve {
   const uint64_t *values = nullptr;
 };
 
-class MTLD3D12GraphicsCommandList : public ID3D12GraphicsCommandList2 {
+class MTLD3D12GraphicsCommandList : public ID3D12GraphicsCommandList7 { // MacNeutron: 3-7 (3DMark's Steel Nomad asks for 4-6)
 public:
   EncoderData *entry;
   size_t encoder_count = 0; // SIZE_MAX while recording
