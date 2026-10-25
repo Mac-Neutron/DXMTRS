@@ -2209,7 +2209,7 @@ public:
         auto drawable = pair.presenter->encodeCommands(cmdbuf, fg.generated[slot], pair.metadata, none, none);
         cmdbuf.presentDrawable(drawable);
       }
-      WMT::MetalDrawable drawable;
+      WMT::Reference<WMT::MetalDrawable> drawable;
       {
         DXMT_STAT_SCOPE("pacer.(real frame: drawable and blit)");
         drawable = pair.presenter->encodeCommands(cmdbuf, fg.real[slot], pair.metadata, none, none);

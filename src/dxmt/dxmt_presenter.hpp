@@ -2,6 +2,7 @@
 #include "Metal.hpp"
 #include "dxmt_command.hpp"
 #include "rc/util_rc.hpp"
+#include "thread.hpp"
 #include "util_cpu_fence.hpp"
 #include "winemetal.h"
 #include <atomic>
@@ -28,6 +29,7 @@ public:
   Presenter(
       WMT::Device device, WMT::MetalLayer layer, InternalCommandLibrary &lib, float scale_factor, uint8_t sample_count
   );
+  ~Presenter();
 
   bool changeLayerProperties(
       WMTPixelFormat format, WMTColorSpace colorspace, double width, double height, uint8_t sample_count
@@ -65,7 +67,7 @@ public:
 
   PresentState synchronizeLayerProperties();
 
-  WMT::MetalDrawable encodeCommands(
+  WMT::Reference<WMT::MetalDrawable> encodeCommands(
       WMT::CommandBuffer cmdbuf, WMT::Texture backbuffer, DXMTPresentMetadata metadata,
       std::function<void(WMT::RenderCommandEncoder)> &&wait_fences,
       std::function<void(WMT::RenderCommandEncoder)> &&update_fences
@@ -73,6 +75,23 @@ public:
 
 private:
   void buildRenderPipelineState(bool is_pq, bool with_hdr_metadata, bool is_ms, bool gamma_enable);
+#ifdef DXMT_NATIVE
+  // MacNeutron (the VM host): DXMT's presenter fetches its next drawable on a thread of its own, as the display recycles
+  // drawables (Metal only hands one back at a refresh). The frame's present then finds one ready instead of waiting up
+  // to a display frame on the game's vCPU (docs/research/2026-10-15-vm-route/README.md, M3's "upgrade"). Native DXMT on
+  // macOS is not the VM host (it has no WSI hooks: winemac's window system), so this is off there.
+  void drawableWorker();
+  void requestDrawableLocked();
+  void invalidateDrawable();
+  WMT::Reference<WMT::MetalDrawable> acquireDrawable();
+  bool prefetch_drawable_ = false;
+  dxmt::thread drawable_thread_;
+  dxmt::mutex drawable_mutex_;
+  dxmt::condition_variable drawable_cv_;
+  bool drawable_stop_ = false, drawable_wanted_ = false, drawable_busy_ = false;
+  uint64_t drawable_generation_ = 0, prefetched_generation_ = 0;
+  WMT::Reference<WMT::MetalDrawable> prefetched_drawable_;
+#endif
 
   WMT::Device device_;
   WMT::MetalLayer layer_;
