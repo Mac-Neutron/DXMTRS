@@ -332,7 +332,8 @@ public:
   WMT::Reference<WMT::DepthStencilState> default_depth_stencil_state;
 };
 
-HRESULT CreateD3D12Device(IMTLDXGIAdapter *adapter, REFIID riid, void **ppDevice);
+HRESULT
+CreateD3D12Device(IMTLDXGIAdapter *pAdapter, D3D_FEATURE_LEVEL MinimumFeatueLevel, REFIID riid, void **ppDevice);
 
 HRESULT CreateClosedCommandList(MTLD3D12Device *pDevice, REFIID riid, void **ppCommandList);
 
