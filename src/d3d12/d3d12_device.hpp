@@ -104,7 +104,9 @@ public:
 
 class MTLD3D12CommandQueue : public ID3D12CommandQueue {
 public:
-  virtual HRESULT Present(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after) = 0;
+  // refresh_rate: the display's, in Hz (0 when unknown), for adaptive frame generation.
+  virtual HRESULT Present(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after,
+                          double refresh_rate) = 0;
 };
 
 class MTLD3D12Resource : public ID3D12Resource2 {

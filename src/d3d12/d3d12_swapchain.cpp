@@ -806,7 +806,8 @@ public:
     );
 
     auto &backbuffer = backbuffers_[presentation_count_ % backbuffers_.size()];
-    hr = queue_->Present(this->presenter.ptr(), backbuffer.ptr(), present_semaphore_, vsync_duration);
+    hr = queue_->Present(this->presenter.ptr(), backbuffer.ptr(), present_semaphore_, vsync_duration,
+                         init_refresh_rate_ < 1000.0 ? init_refresh_rate_ : 0.0);
 
     presentation_count_ += 1;
 

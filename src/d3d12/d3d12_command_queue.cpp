@@ -92,10 +92,18 @@ struct FrameGenSlot {
 };
 static FrameGenSlot g_framegen_slot;
 
+// MACNEUTRON_FRAMEGEN=1: adaptive, only while the game renders below about 45% of the display's refresh rate (an
+// interpolated frame between each two holds the game to half the refresh rate, so faster than that it only lowers the
+// game's frame rate and costs MetalFX's ~3.7 ms a generated frame at 1440p); =always: every frame, as before.
 static bool
 FrameGenOn() {
-  static const bool on = env::getEnvVar("MACNEUTRON_FRAMEGEN") == "1";
-  return on;
+  static const std::string v = env::getEnvVar("MACNEUTRON_FRAMEGEN");
+  return v == "1" || v == "always";
+}
+static bool
+FrameGenAlways() {
+  static const bool always = env::getEnvVar("MACNEUTRON_FRAMEGEN") == "always";
+  return always;
 }
 
 class MTLD3D12CommandQueueImpl : public MTLD3D12Pageable<MTLD3D12CommandQueue, IMTLSwapChainFactory> {
@@ -2111,8 +2119,9 @@ public:
   }
 
   HRESULT
-  Present(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after) {
-    HRESULT hr = PresentFrame(presenter, backbuffer, hLantecyWaitable, after);
+  Present(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after,
+          double refresh_rate) {
+    HRESULT hr = PresentFrame(presenter, backbuffer, hLantecyWaitable, after, refresh_rate);
     // Once the present is committed: start or stop a frame capture at this boundary.
     auto &dumps = Dumps();
     if (dumps.Dumping()) { // the end of a dumped frame, in passes.txt
@@ -2184,7 +2193,60 @@ public:
     uint64_t committed = 0; // frames the pacing thread has committed
     bool stop = false;
     dxmt::thread thread;
+    // Adaptive (MACNEUTRON_FRAMEGEN=1): on or off, since when, and since when the condition that would change it has
+    // held; the game's wait for the pacing thread a frame and the pacing thread's time a pair (seconds, smoothed); the
+    // slowest frame interval at which generation held the game back, and when it learned it.
+    bool adapt_on = false;
+    std::chrono::steady_clock::time_point adapt_since{}, holding_since{}, learned_at{};
+    double wait = 0.0, pair = 0.0, learned_cap = 0.0;
   } framegen_;
+
+  // Adaptive frame generation's decision for this present: true to generate. Generating shows two frames a game frame,
+  // each taking a drawable, so the game can render at most one frame a pair: two refreshes at best, more when the
+  // compositor returns drawables late (8 ms each at 144 Hz here: a 58 fps game fell to 40). So it judges by what
+  // happens. Off, it turns on once the game has stayed slower than 1.1x the pair's cost for half a second: two
+  // refreshes, the pacing thread's measured time a pair, or the slowest interval at which it last held the game back
+  // (forgotten after 60 s). On, it turns off once the game has waited for the pacing thread more than a tenth of each
+  // frame for half a second: generation is lowering the game's own frame rate.
+  bool
+  AdaptFrameGen(double interval, double refresh, std::chrono::steady_clock::time_point now) {
+    using namespace std::chrono_literals;
+    auto &fg = framegen_;
+    auto held = [&](bool cond, std::chrono::milliseconds d) {
+      if (!cond) {
+        fg.holding_since = {};
+        return false;
+      }
+      if (fg.holding_since == std::chrono::steady_clock::time_point{})
+        fg.holding_since = now;
+      return now - fg.holding_since >= d;
+    };
+    auto to = [&](bool on, const char *why) {
+      fg.adapt_on = on;
+      fg.adapt_since = now;
+      fg.holding_since = {};
+      fg.wait = 0.0;
+      fprintf(stderr, "macneutron-framegen: %s at %.0f fps (display %.0f Hz): %s\n", on ? "on" : "off", 1.0 / interval,
+              refresh, why);
+    };
+    if (fg.learned_cap > 0.0 && now - fg.learned_at >= 60s)
+      fg.learned_cap = 0.0;
+    if (!fg.adapt_on) {
+      double pair;
+      {
+        std::lock_guard<dxmt::mutex> lock(fg.mutex); // the pacing thread writes it
+        pair = fg.pair;
+      }
+      double cap = std::max({2.0 / refresh, pair, fg.learned_cap});
+      if (held(interval > 1.1 * cap, 500ms))
+        to(true, "a frame generated between each two");
+    } else if (held(fg.wait > 0.1 * interval, 500ms)) {
+      fg.learned_cap = std::max(fg.learned_cap, interval);
+      fg.learned_at = now;
+      to(false, "generating held the game back, frames presented as rendered");
+    }
+    return fg.adapt_on;
+  }
 
   void
   PacingThread() {
@@ -2200,6 +2262,7 @@ public:
         fg.pending.erase(fg.pending.begin());
       }
       auto pool = WMT::MakeAutoreleasePool();
+      auto start = std::chrono::steady_clock::now();
       unsigned slot = pair.index % kFrameGenRing;
       auto cmdbuf = fg.queue.commandBuffer();
       cmdbuf.encodeWaitForEvent(fg.written, pair.index + 1);
@@ -2223,6 +2286,8 @@ public:
       {
         std::lock_guard<dxmt::mutex> lock(fg.mutex);
         fg.committed = pair.index + 1;
+        if (pair.generated) // its two drawables' time: what a frame costs the pacing, for AdaptFrameGen
+          fg.pair = fg.pair * 0.9 + std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 0.1;
       }
       fg.cv.notify_all();
     }
@@ -2255,7 +2320,7 @@ public:
   // interval under 50 ms.
   bool
   PresentFrameGen(WMT::CommandBuffer &cmdbuf, Presenter *presenter, WMT::Texture frame,
-                  const DXMTPresentMetadata &metadata) {
+                  const DXMTPresentMetadata &metadata, double refresh_rate) {
     auto &fg = framegen_;
     auto now = std::chrono::steady_clock::now();
     double since = fg.last.time_since_epoch().count() ? std::chrono::duration<double>(now - fg.last).count() : 1.0;
@@ -2277,6 +2342,15 @@ public:
     }
     if (fg.failed)
       return false;
+    // Adaptive: a frame presented as rendered goes the swap chain's way (no copy into the ring); the next frame
+    // generation starts from it again.
+    if (!FrameGenAlways()) {
+      double refresh = refresh_rate > 0.0 ? refresh_rate : 60.0;
+      if (fg.interval <= 0.0 || !AdaptFrameGen(fg.interval, refresh, now)) {
+        fg.has_prev = false;
+        return false;
+      }
+    }
     auto device = device_->GetMTLDevice();
     // The ring, for this frame's size and format; another size or format waits for the frames in flight.
     if (frame.width() != fg.width || frame.height() != fg.height || frame.pixelFormat() != fg.format) {
@@ -2346,8 +2420,11 @@ public:
     uint64_t n = fg.enqueued;
     {
       DXMT_STAT_SCOPE("queue.(frame generation: wait for the pacing thread)");
+      auto start = std::chrono::steady_clock::now();
       std::unique_lock<dxmt::mutex> lock(fg.mutex);
       fg.cv.wait(lock, [&] { return fg.committed + kFrameGenRing - 1 > n; });
+      double w = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      fg.wait = fg.wait * 0.9 + w * 0.1;
     }
     unsigned slot = n % kFrameGenRing, prev = (n + kFrameGenRing - 1) % kFrameGenRing;
     uint16_t done = Order(nullptr, true);
@@ -2400,7 +2477,8 @@ public:
   }
 
   HRESULT
-  PresentFrame(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after) {
+  PresentFrame(Presenter *presenter, ID3D12Resource *backbuffer, HANDLE hLantecyWaitable, double after,
+               double refresh_rate) {
     bool handed = false;
     {
       auto scope = StartCommitting(true);
@@ -2413,7 +2491,7 @@ public:
       // MacNeutron (frame generation): the pacing thread presents this frame, and a generated one before it. A game
       // that waits for vsync (`after`) already presents at the display's rate: nothing is generated for it.
       if (FrameGenOn() && after <= 0.0)
-        handed = PresentFrameGen(cmdbuf, presenter, view.texture, state.metadata);
+        handed = PresentFrameGen(cmdbuf, presenter, view.texture, state.metadata, refresh_rate);
       if (!handed) {
         if (FrameGenOn() && framegen_.thread.joinable())
           DrainPacing();
