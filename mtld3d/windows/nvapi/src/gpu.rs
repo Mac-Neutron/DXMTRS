@@ -18,7 +18,8 @@ use crate::sys::short_string;
 /// The registry IDs of the Metal devices, as `WMT::CopyAllDevices` lists them.
 ///
 /// At most `MAX_GPUS`, as many as a handle array holds.
-fn registry_ids() -> Vec<u64> {
+#[must_use]
+pub fn registry_ids() -> Vec<u64> {
     // SAFETY: takes no arguments; the array it returns is ours, released below.
     let devices: ObjHandle = unsafe { WMTCopyAllDevices() };
     if devices == 0 {
@@ -50,7 +51,8 @@ fn handle_id(handle: *mut c_void) -> u64 {
 }
 
 /// A registry ID's handle.
-fn id_handle(registry_id: u64) -> *mut c_void {
+#[must_use]
+pub fn id_handle(registry_id: u64) -> *mut c_void {
     core::ptr::without_provenance_mut(usize::try_from(registry_id).unwrap_or(0))
 }
 
