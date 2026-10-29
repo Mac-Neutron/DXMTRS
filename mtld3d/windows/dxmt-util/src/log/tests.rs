@@ -46,3 +46,10 @@ fn text_mode_ends_lines_in_crlf() {
     assert_eq!(text_mode(&text, true), "warn:  a\r\nwarn:  b\r\n");
     assert_eq!(text_mode(&text, false), text);
 }
+
+#[test]
+fn a_multibyte_name_without_exe_keeps_its_name() {
+    // Its last 4 bytes start inside the euro sign: slicing there panics.
+    assert_eq!(file_name(Some("/l"), true, "C:\\a\u{20ac}bc", "nvngx.log").as_deref(), Some("/l/a\u{20ac}bc_nvngx.log"));
+    assert_eq!(file_name(Some("/l"), true, "g\u{20ac}.EXE", "nvngx.log").as_deref(), Some("/l/g\u{20ac}_nvngx.log"));
+}

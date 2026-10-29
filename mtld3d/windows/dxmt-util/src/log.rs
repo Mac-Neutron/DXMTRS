@@ -65,8 +65,8 @@ fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &s
         return None;
     }
     let exe = exe_path.rsplit(['\\', '/']).next().unwrap_or(exe_path);
-    let base = match exe.len().checked_sub(4) {
-        Some(at) if exe[at..].eq_ignore_ascii_case(".exe") => &exe[..at],
+    let base = match exe.split_at_checked(exe.len().saturating_sub(4)) {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case(".exe") => stem,
         _ => exe,
     };
     let slash = if path.is_empty() || path.ends_with('/') { "" } else { "/" };
