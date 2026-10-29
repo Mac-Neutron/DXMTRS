@@ -110,8 +110,10 @@ fn wine_output() -> Option<WineOutput> {
         fn GetModuleHandleA(name: *const u8) -> *mut core::ffi::c_void;
         fn GetProcAddress(module: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void;
     }
-    // SAFETY: both names are NUL-terminated literals; a null module makes GetProcAddress fail, not crash.
-    let address = unsafe { GetProcAddress(GetModuleHandleA(c"ntdll.dll".as_ptr().cast()), c"__wine_dbg_output".as_ptr().cast()) };
+    // SAFETY: the name is a NUL-terminated literal; a missing module gives null, not a crash.
+    let ntdll = unsafe { GetModuleHandleA(c"ntdll.dll".as_ptr().cast()) };
+    // SAFETY: the name is a NUL-terminated literal; a null module makes GetProcAddress fail, not crash.
+    let address = unsafe { GetProcAddress(ntdll, c"__wine_dbg_output".as_ptr().cast()) };
     // SAFETY: ntdll's `__wine_dbg_output` has `WineOutput`'s signature.
     (!address.is_null()).then(|| unsafe { core::mem::transmute::<*mut core::ffi::c_void, WineOutput>(address) })
 }
