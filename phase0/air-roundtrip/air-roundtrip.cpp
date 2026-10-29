@@ -11,9 +11,12 @@
 #include "metallib_writer.hpp"
 #ifdef AIR_ROUNDTRIP_DXIL_WRITER
 #include "DXILWriter/DXILBitcodeWriter.h"
+#include "llvm/Config/llvm-config.h"
+#if LLVM_VERSION_MAJOR >= 17
 #include "DirectXIRPasses/DXILAttributes.h"
 #include "DirectXIRPasses/DXILDebugInfo.h"
 #include "DirectXIRPasses/PointerTypeAnalysis.h"
+#endif
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -26,6 +29,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +67,42 @@ namespace {
 
 using namespace llvm;
 
+#if LLVM_VERSION_MAJOR < 17
+// LLVM 15 (typed pointers, so types are exact): only DXILPrepare's attribute step, with its list of the enum attributes
+// the writer's old record format encodes (DXILPrepare.cpp's isValidForDXIL, which LLVM 15 doesn't export).
+void Prepare(Module &module) {
+  static const Attribute::AttrKind kept[] = {
+    Attribute::Alignment, Attribute::AlwaysInline, Attribute::Builtin, Attribute::ByVal, Attribute::InAlloca,
+    Attribute::Cold, Attribute::Convergent, Attribute::InlineHint, Attribute::InReg, Attribute::JumpTable,
+    Attribute::MinSize, Attribute::Naked, Attribute::Nest, Attribute::NoAlias, Attribute::NoBuiltin,
+    Attribute::NoCapture, Attribute::NoDuplicate, Attribute::NoImplicitFloat, Attribute::NoInline,
+    Attribute::NonLazyBind, Attribute::NonNull, Attribute::Dereferenceable, Attribute::DereferenceableOrNull,
+    Attribute::NoRedZone, Attribute::NoReturn, Attribute::NoUnwind, Attribute::OptimizeForSize,
+    Attribute::OptimizeNone, Attribute::ReadNone, Attribute::ReadOnly, Attribute::ArgMemOnly, Attribute::Returned,
+    Attribute::ReturnsTwice, Attribute::SExt, Attribute::StackAlignment, Attribute::StackProtect,
+    Attribute::StackProtectReq, Attribute::StackProtectStrong, Attribute::SafeStack, Attribute::StructRet,
+    Attribute::SanitizeAddress, Attribute::SanitizeThread, Attribute::SanitizeMemory, Attribute::UWTable,
+    Attribute::ZExt};
+  AttributeMask newer;
+  for (unsigned k = Attribute::FirstEnumAttr; k <= Attribute::LastEnumAttr; k++)
+    if (std::find(std::begin(kept), std::end(kept), Attribute::AttrKind(k)) == std::end(kept))
+      newer.addAttribute(Attribute::AttrKind(k));
+  auto strip = [&](auto &target, size_t args) {
+    target.removeFnAttrs(newer);
+    target.removeRetAttrs(newer);
+    for (size_t i = 0; i < args; i++)
+      target.removeParamAttrs(i, newer);
+  };
+  for (auto &function : module) {
+    strip(function, function.arg_size());
+    for (auto &block : function)
+      for (auto &inst : block)
+        if (auto *call = dyn_cast<CallBase>(&inst))
+          strip(*call, call->arg_size());
+  }
+}
+void Mismatches(Module &) {}
+#else
 // DXILPrepare's step before the DXIL writer: where a load, store or GEP uses a pointer as another type than the one
 // inferred for it, a no-op bitcast in between, which the writer writes as a typed bitcast.
 Value *Cast(IRBuilder<> &builder, const dxil::PointerTypeMap &types, Value *pointer, Type *type) {
@@ -168,6 +208,7 @@ void Mismatches(Module &module) {
           check(inst, store->getPointerOperand(), store->getValueOperand()->getType());
       }
 }
+#endif
 
 } // namespace
 
@@ -178,7 +219,11 @@ void air_roundtrip_write_bitcode(const Module &M, raw_ostream &Out, bool, const 
                                  ModuleHash *) {
   SmallVector<char, 0> buffer;
   raw_svector_ostream os(buffer);
+#if LLVM_VERSION_MAJOR >= 17
   dxil::WriteDXILToFile(M, os, dxil::DXILDebugInfoMap());
+#else
+  dxil::WriteDXILToFile(M, os);
+#endif
   uint32_t header[5] = {0x0b17c0de, 0, 20, uint32_t(buffer.size() - 20), cpu_type};
   memcpy(buffer.data(), header, sizeof(header));
   while (buffer.size() & 15)
