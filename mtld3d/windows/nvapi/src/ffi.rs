@@ -1,7 +1,8 @@
-//! What `nvapi64.dll` imports: winemetal's Metal and display calls, and user32's monitor enumeration.
+//! What `nvapi64.dll` imports: winemetal's Metal and display calls, and user32's monitors.
 //!
-//! meson links winemetal and user32. Declared without `cfg(windows)`: a host test binary still links, because the linker strips what no test
-//! reaches. A function that calls one of these is out of the host tests' reach.
+//! meson links winemetal and user32. Declared without `cfg(windows)`: a host test binary
+//! still links, because the linker strips what no test reaches. A function that calls one of
+//! these is out of the host tests' reach.
 
 use core::ffi::c_void;
 

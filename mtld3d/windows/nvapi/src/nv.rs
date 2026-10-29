@@ -1,7 +1,7 @@
-//! NVIDIA's NVAPI as DXMT answers it: the statuses, the structs the functions write and their versions.
+//! NVIDIA's NVAPI as DXMT answers it: statuses, the structs the functions write, versions.
 //!
-//! Sizes and offsets are those of `external/nvapi`'s headers under llvm-mingw, identical for x86-64 and
-//! ARM64EC; each struct asserts its size, so a wrong mirror fails the build.
+//! Sizes and offsets are those of `external/nvapi`'s headers under llvm-mingw, identical for
+//! x86-64 and ARM64EC; each struct asserts its size, so a wrong mirror fails the build.
 
 /// `NVAPI_SDK_VERSION`, which the driver-version strings carry.
 pub const NVAPI_SDK_VERSION: u32 = 57218;
@@ -72,7 +72,9 @@ pub struct SliStateV2 {
 const _: () = assert!(size_of::<SliStateV2>() == 32);
 pub const SLI_STATE_VER2: u32 = version(size_of::<SliStateV2>(), 1);
 
-/// The static metadata descriptor of `NV_HDR_CAPABILITIES`'s `display_data` (type 1, SMPTE ST 2086).
+/// The static metadata descriptor of `NV_HDR_CAPABILITIES`'s `display_data`.
+///
+/// Type 1, SMPTE ST 2086.
 #[repr(C)]
 pub struct HdrDisplayData {
     pub primary_x0: u16,
@@ -102,8 +104,9 @@ pub struct HdrCapabilitiesV1 {
 const _: () = assert!(size_of::<HdrCapabilitiesV1>() == 36);
 pub const HDR_CAPABILITIES_VER1: u32 = version(size_of::<HdrCapabilitiesV1>(), 1);
 
-/// The Dolby Vision metadata after `display_data` in V2 and V3: a flags word, then ten chromaticity and luminance
-/// values.
+/// The Dolby Vision metadata after `display_data` in V2 and V3.
+///
+/// A flags word, then ten chromaticity and luminance values.
 #[repr(C)]
 pub struct DvStaticMetadata {
     pub flags: u32,
@@ -262,7 +265,9 @@ pub struct LatencyMarkerParams {
 const _: () = assert!(size_of::<LatencyMarkerParams>() == 88);
 pub const LATENCY_MARKER_PARAMS_VER1: u32 = version(size_of::<LatencyMarkerParams>(), 1);
 
-/// One of `NV_LATENCY_RESULT_PARAMS`' 64 frame reports: fourteen timestamps, two durations, reserved bytes.
+/// One of `NV_LATENCY_RESULT_PARAMS`' 64 frame reports.
+///
+/// Fourteen timestamps, two durations, reserved bytes.
 #[repr(C)]
 pub struct FrameReport {
     pub times: [u64; 14],
