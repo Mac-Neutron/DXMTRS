@@ -350,6 +350,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nvapi"
+version = "0.14.1"
+dependencies = [
+ "dxmt-util",
+]
+
+[[package]]
 name = "nvngx"
 version = "0.14.1"
 dependencies = [

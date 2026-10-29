@@ -1,0 +1,17 @@
+[package]
+name = "nvapi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "LGPL-2.1-or-later"
+description = "DXMT's nvapi64.dll: NVIDIA's NVAPI answered for Metal GPUs"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-util = { path = "../dxmt-util" }

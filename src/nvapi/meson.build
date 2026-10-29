@@ -1,19 +1,22 @@
-nvapi_src = [
-  'nvapi.cpp',
-]
+# DXMT's nvapi64.dll, in Rust (mtld3d/windows/nvapi): the DLL is linked from the crate's static library, its export
+# named by nvapi64.def.
+nvapi_rust = []
+foreach t : rust_pe_targets
+  nvapi_rust += custom_target('nvapi-' + t,
+    output             : 'nvapi-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
+    command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'nvapi', rust_target_dir, '@OUTPUT@'],
+    build_always_stale : true,
+  )
+endforeach
 
-nvapi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
-nvapi_link_depends = []
-
-nvapi_dll = shared_library('nvapi64', nvapi_src,
+nvapi_dll = shared_library('nvapi64',
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, util_dep, winemetal_dep ],
-  include_directories : [ dxmt_include_path, include_directories('../../external/nvapi') ],
+  dependencies        : [ rust_runtime_dep, winemetal_dep ],
+  link_with           : nvapi_rust,
+  link_args           : [ '-ldxgi', '-luser32' ],
   install             : true,
   install_dir         : windows_native_install_dir,
   vs_module_defs      : 'nvapi64.def',
-  link_args           : nvapi_ld_args,
-  link_depends        : [ nvapi_link_depends ],
   install_tag         : 'nvext',
 )
 
