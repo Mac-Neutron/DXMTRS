@@ -1,6 +1,9 @@
 //! DXMT's `nvngx.dll`: DLSS super resolution answered by MetalFX, for Direct3D 11 and 12.
 
 mod com;
+mod d3d12;
+mod entry;
+mod float_cast;
 mod log;
 mod ngx;
 mod parameter;
@@ -8,21 +11,9 @@ mod parameter;
 /// NGX's generic failure, `NVSDK_NGX_Result_Fail`.
 const FAIL: u32 = 0xbad0_0000;
 
-/// `NVSDK_NGX_D3D11_AllocateParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_AllocateParameters() -> u32 {
-    FAIL
-}
-
 /// `NVSDK_NGX_D3D11_CreateFeature`: not implemented yet.
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D11_CreateFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_DestroyParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_DestroyParameters() -> u32 {
     FAIL
 }
 
@@ -32,171 +23,9 @@ pub extern "system" fn NVSDK_NGX_D3D11_EvaluateFeature() -> u32 {
     FAIL
 }
 
-/// `NVSDK_NGX_D3D11_GetCapabilityParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_GetCapabilityParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_GetFeatureRequirements`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_GetFeatureRequirements() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_GetParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_GetParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_GetScratchBufferSize`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Init`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Init_Ext`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_Ext() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Init_ProjectID`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_ProjectID() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Init_with_ProjectID`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_with_ProjectID() -> u32 {
-    FAIL
-}
-
 /// `NVSDK_NGX_D3D11_ReleaseFeature`: not implemented yet.
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D11_ReleaseFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Shutdown`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Shutdown() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_Shutdown1`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Shutdown1() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_AllocateParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_AllocateParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_CreateFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_DestroyParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_DestroyParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_EvaluateFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_EvaluateFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_GetCapabilityParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_GetCapabilityParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_GetFeatureRequirements`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_GetFeatureRequirements() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_GetParameters`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_GetParameters() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_GetScratchBufferSize`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Init`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Init_Ext`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init_Ext() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Init_ProjectID`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init_ProjectID() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Init_with_ProjectID`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init_with_ProjectID() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_PopulateParameters_Impl`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_PopulateParameters_Impl() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_ReleaseFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_ReleaseFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Shutdown`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Shutdown() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D12_Shutdown1`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Shutdown1() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_UpdateFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_UpdateFeature() -> u32 {
     FAIL
 }
 

@@ -394,6 +394,8 @@ These handle ~95% of every clippy complaint raised in the tree. Apply the fix; d
 7. **`unix/mtl/tests/common.rs`** — `dead_code`. The facade tests' shared fixtures: each test binary compiles the module and uses a subset.
 8. **`unix/shared/src/trig.rs`, `unix/shared/src/ftol.rs`** — `clippy::pedantic` and `clippy::nursery`, module-level (upstream's). Bit manipulation on IEEE fields and explicit polynomials for the no-FMA x86 baselines: the casts, shifts and unfused mul/add are the point; each file's own comment says why.
 
+9. **`windows/nvngx/src/float_cast.rs`** — `cast_possible_truncation` + `cast_sign_loss` + `cast_precision_loss`, mod-level (DXMTRS). Five helpers that are C++'s `static_cast` between floats and integers: NGX's parameter map converts a stored value to the type a getter asks for as DXMT's `nvngx_parameter.hpp` does, and DLSS's render-size callback does C++'s float math. The class of exception 1: the structural alternative re-implements `as` bit by bit for the same results, and the C++ casts are the contract with the game's calls.
+
 **Note on `as`:** even when an `as` cast is identity at compile time (e.g. `u64 as usize` on a 64-bit-only build), prefer `usize::try_from(v).expect(...)` with a one-line rationale. `as` is the smell; `try_from` keeps the bound check explicit and survives a future port to a 32-bit unix host without silent truncation.
 
 ### Adding a new per-site allow

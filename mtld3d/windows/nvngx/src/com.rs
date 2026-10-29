@@ -63,6 +63,7 @@ pub struct CommandList12Vtbl {
 
 /// `D3D12_RESOURCE_DESC`.
 #[repr(C)]
+#[derive(Default)]
 pub struct ResourceDesc12 {
     pub dimension: u32,
     pub alignment: u64,
@@ -87,7 +88,7 @@ pub struct Resource12Vtbl {
 
 /// `MTL_TEMPORAL_SCALER_D3D12_DESC`.
 #[repr(C)]
-#[derive(PartialEq)]
+#[derive(Default, PartialEq)]
 pub struct ScalerDesc12 {
     pub input_width: u32,
     pub input_height: u32,

@@ -4,6 +4,7 @@
 //! NGX SDK they were built against calls them. A value keeps the type its setter stored, and a
 //! getter of another type answers only the conversions DXMT's `nvngx_parameter.hpp` allows.
 
+use crate::float_cast::{f32_to_i32, f32_to_u32, f64_to_f32, i32_to_f32, u32_to_f32};
 use crate::ngx::{FAIL, OK};
 use core::ffi::{CStr, c_char, c_void};
 use std::collections::BTreeMap;
@@ -25,7 +26,7 @@ impl Value {
     fn as_ptr(&self) -> Option<*mut c_void> {
         match *self {
             Self::Ptr(p) | Self::D3D12(p) | Self::D3D11(p) => Some(p),
-            Self::U64(v) => Some(v as usize as *mut c_void),
+            Self::U64(v) => Some(core::ptr::with_exposed_provenance_mut(usize::try_from(v).ok()?)),
             _ => None,
         }
     }
@@ -46,26 +47,24 @@ impl Value {
         }
     }
 
-    /// As `int`, the C casts' truncations.
-    #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap, reason = "the C++ casts' bits")]
+    /// As `int`: an `unsigned long long`'s low 32 bits, as C++'s cast keeps them.
     fn as_i32(&self) -> Option<i32> {
         match *self {
             Self::I32(v) => Some(v),
-            Self::U32(v) => Some(v as i32),
-            Self::F32(v) => Some(v as i32),
-            Self::U64(v) => Some(v as i32),
+            Self::U32(v) => Some(v.cast_signed()),
+            Self::F32(v) => Some(f32_to_i32(v)),
+            Self::U64(v) => Some(low32(v).cast_signed()),
             _ => None,
         }
     }
 
     /// As `unsigned int`.
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "the C++ casts' bits")]
     fn as_u32(&self) -> Option<u32> {
         match *self {
             Self::U32(v) => Some(v),
-            Self::I32(v) => Some(v as u32),
-            Self::F32(v) => Some(v as u32),
-            Self::U64(v) => Some(v as u32),
+            Self::I32(v) => Some(v.cast_unsigned()),
+            Self::F32(v) => Some(f32_to_u32(v)),
+            Self::U64(v) => Some(low32(v)),
             _ => None,
         }
     }
@@ -80,28 +79,31 @@ impl Value {
     }
 
     /// As `float`.
-    #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation, reason = "the C++ casts' values")]
     fn as_f32(&self) -> Option<f32> {
         match *self {
             Self::F32(v) => Some(v),
-            Self::U32(v) => Some(v as f32),
-            Self::I32(v) => Some(v as f32),
-            Self::F64(v) => Some(v as f32),
+            Self::U32(v) => Some(u32_to_f32(v)),
+            Self::I32(v) => Some(i32_to_f32(v)),
+            Self::F64(v) => Some(f64_to_f32(v)),
             _ => None,
         }
     }
 
     /// As `unsigned long long`: an `int` sign-extended, as C++'s cast does.
-    #[expect(clippy::cast_sign_loss, reason = "the C++ cast's bits")]
     fn as_u64(&self) -> Option<u64> {
         match *self {
             Self::U64(v) => Some(v),
-            Self::Ptr(p) => Some(p as usize as u64),
-            Self::I32(v) => Some(v as u64),
+            Self::Ptr(p) => u64::try_from(p.expose_provenance()).ok(),
+            Self::I32(v) => Some(i64::from(v).cast_unsigned()),
             Self::U32(v) => Some(u64::from(v)),
             _ => None,
         }
     }
+}
+
+/// The low 32 bits of `v`, which C++'s cast to a 32-bit integer keeps.
+fn low32(v: u64) -> u32 {
+    u32::try_from(v & 0xffff_ffff).unwrap_or(0)
 }
 
 /// The map: its vtable first, as a C++ object with virtual functions.

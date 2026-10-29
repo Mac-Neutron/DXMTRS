@@ -54,3 +54,30 @@ const _: () = {
     assert!(size_of::<FeatureDiscoveryInfo>() == 56 && offset_of!(FeatureDiscoveryInfo, application_data_path) == 40);
     assert!(size_of::<FeatureRequirement>() == 264 && offset_of!(FeatureRequirement, min_os_version) == 8);
 };
+
+/// A feature's head, which both APIs' features start with: the game's handle is its address.
+#[repr(C)]
+#[derive(Default)]
+pub struct Dlss {
+    pub handle: u32,
+    pub feature: u32,
+    /// 11 or 12: the API whose CreateFeature made it.
+    pub api: u32,
+    pub width: u32,
+    pub height: u32,
+    pub target_width: u32,
+    pub target_height: u32,
+    pub quality: i32,
+    pub flag: i32,
+    pub enable_output_subrects: i32,
+}
+
+/// `printf`'s `%#x`: `0`, or `0x` and lowercase hex digits.
+pub fn hex(v: u32) -> String {
+    if v == 0 { "0".to_owned() } else { format!("{v:#x}") }
+}
+
+/// `printf`'s `%p` in Windows' C runtime: 16 uppercase hex digits.
+pub fn pointer(p: *const core::ffi::c_void) -> String {
+    format!("{:016X}", p.addr())
+}
