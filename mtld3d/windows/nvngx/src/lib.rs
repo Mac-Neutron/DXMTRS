@@ -1,6 +1,9 @@
 //! DXMT's `nvngx.dll`: DLSS super resolution answered by MetalFX, for Direct3D 11 and 12.
 
+mod com;
 mod log;
+mod ngx;
+mod parameter;
 
 /// NGX's generic failure, `NVSDK_NGX_Result_Fail`.
 const FAIL: u32 = 0xbad0_0000;
