@@ -11,8 +11,8 @@ use dxmt_util::log::Logger;
 
 /// This DLL's log file.
 ///
-/// Process-wide resource: one log file per DLL, opened by the first message that passes the level, and
-/// the exports have no object to hold it. It is DXMT's `Logger::s_instance`.
+/// Process-wide resource: one log file per DLL, opened by the first message that passes the
+/// level, and the exports have no object to hold it. It is DXMT's `Logger::s_instance`.
 static LOG: Logger = Logger::new("nvngx.log");
 
 #[cfg(windows)]

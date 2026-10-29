@@ -206,7 +206,7 @@ unsafe extern "system" fn name_proc(monitor: *mut c_void, _dc: *mut c_void, _rec
 
 /// The status that ends a display-name lookup before it writes: not found first, then a null `id`.
 ///
-/// The C++ writes through `id` unchecked, so a null `id` fails only where the C++ would have crashed.
+/// The C++ writes through `id` unchecked: a null `id` fails only where the C++ would have crashed.
 const fn name_lookup_failure(found: bool, id: *const u32) -> Option<Status> {
     if !found {
         Some(NVIDIA_DEVICE_NOT_FOUND)

@@ -76,7 +76,7 @@ fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &s
 /// Wine's `__wine_dbg_output`, which ntdll exports.
 type WineOutput = unsafe extern "C" fn(*const core::ffi::c_char) -> i32;
 
-/// The log's state: the level from the first message, the outputs from the first one that passes it.
+/// The log's state: the level from the first message, the outputs from the first that passes it.
 struct State {
     level: Level,
     sinks: Option<Sinks>,
