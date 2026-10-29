@@ -1,8 +1,9 @@
 //! DXMT's log, written the way `util/log/log.cpp` writes it.
 //!
-//! The level comes from `DXMT_LOG_LEVEL` (`info` unless it names another). Each line of a message gets the level's
-//! prefix and goes to Wine's debug output (stderr outside Wine) and to `<DXMT_LOG_PATH>/<exe>_nvngx.log`: no file
-//! when the path is `none`, or unset while Wine's output exists.
+//! The level comes from `DXMT_LOG_LEVEL` (`info` unless it names another). Each line of a message
+//! gets the level's prefix and goes to Wine's debug output (stderr outside Wine) and to
+//! `<DXMT_LOG_PATH>/<exe>_nvngx.log`: no file when the path is `none`, or unset while Wine's output
+//! exists.
 
 use std::{
     fs::File,
