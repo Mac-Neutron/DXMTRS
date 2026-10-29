@@ -213,6 +213,34 @@ if dxmt_crossbuild
   add_project_link_arguments(['-arch', native_compiler_arch], language: 'cpp',  native: true)
 endif
 
+# DXMTRS: DLLs written in Rust. A crate's static library is built per Rust target by tools/cargo-staticlib.sh (in its
+# subdir: custom_target('<crate>-<target>') for each of rust_pe_targets) and linked by meson with rust_runtime_dep:
+# what Rust's -msvc standard library needs from MSVC's runtime that llvm-mingw's lacks. In a native build the targets
+# are macOS's.
+cargo_staticlib = find_program('tools/cargo-staticlib.sh')
+rust_target_dir = meson.current_build_dir() / 'cargo'
+if not dxmt_crossbuild
+  rust_pe_targets = [cpu_family == 'aarch64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin']
+elif cpu_family == 'aarch64'
+  rust_pe_targets = ['aarch64-pc-windows-msvc', 'arm64ec-pc-windows-msvc']
+elif cpu_family == 'x86_64'
+  rust_pe_targets = ['x86_64-pc-windows-msvc']
+else
+  rust_pe_targets = ['i686-pc-windows-msvc']
+endif
+# The standard library calls ntdll directly (NtWriteFile, RtlNtStatusToDosError); i686 also calls MSVC's 64-bit
+# arithmetic helpers (__aulldiv), which Wine's ntdll exports undecorated (llvm-mingw's import library has them only
+# @16-decorated).
+rust_pe_wine_ntdll = []
+if dxmt_crossbuild and cpu_family == 'x86'
+  rust_wine_dir = get_option('wine_install_path') != '' ? get_option('wine_install_path') / 'lib/wine' : get_option('wine_build_path') / 'dlls/ntdll'
+  rust_pe_wine_ntdll = [cc.find_library('ntdll', static : true,
+    dirs : [meson.project_source_root() / rust_wine_dir / windows_builtin_install_dir])]
+endif
+rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll'] : [],
+  dependencies : rust_pe_wine_ntdll,
+  sources : files('src/util/rust_pe_rt.c'))
+
 subdir('libs')
 subdir('src')
 

@@ -346,6 +346,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nvngx"
+version = "0.14.1"
+
+[[package]]
 name = "objc2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

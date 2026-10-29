@@ -1,19 +1,22 @@
-nvngx_src = [
-  'nvngx.cpp',
-  'nvngx_d3d12.cpp',
-]
+# DXMT's nvngx.dll, in Rust (mtld3d/windows/nvngx): the DLL is linked from the crate's static library, its exports
+# named by nvngx.def.
+nvngx_rust = []
+foreach t : rust_pe_targets
+  nvngx_rust += custom_target('nvngx-' + t,
+    output             : 'nvngx-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
+    command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'nvngx', rust_target_dir, '@OUTPUT@'],
+    build_always_stale : true,
+  )
+endforeach
 
-nvngx_ld_args      = []
-nvngx_link_depends = []
-
-nvngx_dll = shared_library('nvngx', nvngx_src,
+nvngx_dll = shared_library('nvngx',
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, util_dep, winemetal_dep ],
-  include_directories : [ dxmt_include_path ],
+  dependencies        : [ rust_runtime_dep ],
+  link_with           : nvngx_rust,
+  link_args           : [ '-ldxgi' ],
   install             : true,
   install_dir         : windows_native_install_dir,
-  link_args           : nvngx_ld_args,
-  link_depends        : [ nvngx_link_depends ],
+  vs_module_defs      : 'nvngx.def',
   install_tag         : 'nvext',
 )
 
