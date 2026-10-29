@@ -50,6 +50,14 @@ fn lines(level: &Level, message: &str) -> String {
     })
 }
 
+/// `text` as a text-mode stream writes it.
+///
+/// On Windows `std::ofstream` and `std::cerr` turn each `\n` into `\r\n`; Wine's debug output
+/// takes the `\n` form.
+fn text_mode(text: &str, crlf: bool) -> String {
+    if crlf { text.replace('\n', "\r\n") } else { text.to_owned() }
+}
+
 /// The log file's path: `<log_path>/<exe's base name>_<file>`.
 fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &str) -> Option<String> {
     let path = log_path.unwrap_or("");
@@ -130,10 +138,10 @@ impl Logger {
                 unsafe { wine(text.as_ptr()) };
             }
         } else {
-            let _ = std::io::stderr().write_all(text.as_bytes());
+            let _ = std::io::stderr().write_all(text_mode(&text, cfg!(windows)).as_bytes());
         }
         if let Some(file) = state.file.as_mut() {
-            let _ = file.write_all(text.as_bytes());
+            let _ = file.write_all(text_mode(&text, cfg!(windows)).as_bytes());
         }
     }
 

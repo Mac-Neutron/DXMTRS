@@ -1,4 +1,4 @@
-use super::{Level, file_name, level_from, lines};
+use super::{Level, file_name, level_from, lines, text_mode};
 
 #[test]
 fn level_names_and_default() {
@@ -38,4 +38,11 @@ fn file_names() {
     assert_eq!(file_name(Some("/tmp/logs"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
     assert_eq!(file_name(Some("/tmp/logs/"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
     assert_eq!(file_name(Some("/l"), true, "tool", "nvngx.log").as_deref(), Some("/l/tool_nvngx.log"));
+}
+
+#[test]
+fn text_mode_ends_lines_in_crlf() {
+    let text = lines(&Level::Warn, "a\nb");
+    assert_eq!(text_mode(&text, true), "warn:  a\r\nwarn:  b\r\n");
+    assert_eq!(text_mode(&text, false), text);
 }
