@@ -11,9 +11,9 @@ dxgi_src = [
 dxgi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
 dxgi_link_depends = []
 
-dxgi_dll = shared_library('dxgi', dxgi_src, dxgi_res,
+dxgi_dll = shared_library('dxgi', dxgi_src, dxgi_res, rust_probe_src,
   name_prefix         : '',
-  dependencies        : [ dxmt_dep, util_dep, winemetal_dep ],
+  dependencies        : [ dxmt_dep, util_dep, winemetal_dep, rust_pe_dep ],
   include_directories : [ dxmt_include_path ],
   install             : true,
   install_dir         : windows_native_install_dir,

@@ -28,9 +28,9 @@ d3d12_src = [
 d3d12_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
 d3d12_link_depends = []
 
-d3d12_dll = shared_library('d3d12', d3d12_src,
+d3d12_dll = shared_library('d3d12', d3d12_src, rust_probe_src,
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, dxmt_dep, airconv_forward_dep, util_dep, winemetal_dep, dxbc_parser_dep ],
+  dependencies        : [ dxgi_dep, dxmt_dep, airconv_forward_dep, util_dep, winemetal_dep, dxbc_parser_dep, rust_pe_dep ],
   include_directories : [ dxmt_include_path ],
   install             : true,
   install_dir         : windows_native_install_dir,

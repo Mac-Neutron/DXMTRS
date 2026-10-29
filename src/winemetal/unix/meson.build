@@ -24,12 +24,13 @@ winemetal_unix_ld_args = [
 ]
 winemetal_unix_link_depends = []
 
-shared_library('winemetal', winemetal_unix_src,
+shared_library('winemetal', winemetal_unix_src, rust_probe_src,
   name_prefix         : '',
   dependencies        : [ airconv_dep_darwin ],
   include_directories : dxmt_include_path,
   c_args              : ['-ObjC'],
-  link_args           : winemetal_unix_ld_args,
+  link_args           : winemetal_unix_ld_args + [rust_unix_lib.full_path()],
+  link_depends        : rust_unix_lib,
   native              : true,
   name_suffix         : 'so',
   install_rpath       : '',

@@ -34,9 +34,9 @@ else
   error('One of the options -Dwine_build_path or -Dwine_install_path is required')
 endif
 
-winemetal_dll = shared_library('winemetal', winemetal_src,
+winemetal_dll = shared_library('winemetal', winemetal_src, rust_probe_src,
   name_prefix         : '',
-  dependencies        : [ lib_winecrt0, lib_ntdll, lib_dbghelp, airconv_forward_dep ],
+  dependencies        : [ lib_winecrt0, lib_ntdll, lib_dbghelp, airconv_forward_dep, rust_pe_dep ],
   include_directories : dxmt_include_path,
   install             : true,
   install_dir         : windows_builtin_install_dir,

@@ -47,3 +47,6 @@ util_dep = declare_dependency(
   link_with           : [ util_lib ],
   include_directories : [ include_directories('.') ],
 )
+
+# DXMTRS Phase 0 (E1): compiled into every binary, which then needs its Rust static library.
+rust_probe_src = files('rust_probe.c')

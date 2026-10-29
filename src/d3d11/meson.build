@@ -42,9 +42,10 @@ d3d10_src = [
 d3d11_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
 d3d11_link_depends = []
 
-d3d11_dll = shared_library('d3d11', d3d11_src, d3d10_src, d3d11_res,
+d3d11_dll = shared_library('d3d11', d3d11_src, d3d10_src, d3d11_res, rust_probe_src,
   name_prefix         : '',
   dependencies        : [ 
+    rust_pe_dep,
     dxgi_dep, 
     dxbc_parser_dep,
     airconv_forward_dep,

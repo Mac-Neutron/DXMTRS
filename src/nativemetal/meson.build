@@ -13,9 +13,10 @@ winemetal_ld_args = [
   '-lsqlite3',
 ]
 
-winemetal_dll = shared_library('winemetal', winemetal_src,
+winemetal_dll = shared_library('winemetal', winemetal_src, rust_probe_src,
   name_prefix         : '',
   dependencies        : [ airconv_dep_darwin ],
+  link_with           : rust_unix_lib,
   include_directories : [ dxmt_include_path, include_directories('.') ],
   # The Wine build's winemetal.so defines the same classes: both load in the VM host (macneutron-vm).
   c_args              : ['-ObjC', '-DDXMT_NATIVE=1', '-DCacheReader=DXMTNativeCacheReader',

@@ -5,9 +5,9 @@ nvapi_src = [
 nvapi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
 nvapi_link_depends = []
 
-nvapi_dll = shared_library('nvapi64', nvapi_src,
+nvapi_dll = shared_library('nvapi64', nvapi_src, rust_probe_src,
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, util_dep, winemetal_dep ],
+  dependencies        : [ dxgi_dep, util_dep, winemetal_dep, rust_pe_dep ],
   include_directories : [ dxmt_include_path, include_directories('../../external/nvapi') ],
   install             : true,
   install_dir         : windows_native_install_dir,

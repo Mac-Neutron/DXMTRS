@@ -6,9 +6,9 @@ nvngx_src = [
 nvngx_ld_args      = []
 nvngx_link_depends = []
 
-nvngx_dll = shared_library('nvngx', nvngx_src,
+nvngx_dll = shared_library('nvngx', nvngx_src, rust_probe_src,
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, util_dep, winemetal_dep ],
+  dependencies        : [ dxgi_dep, util_dep, winemetal_dep, rust_pe_dep ],
   include_directories : [ dxmt_include_path ],
   install             : true,
   install_dir         : windows_native_install_dir,
