@@ -76,3 +76,19 @@ pub fn hex(v: u32) -> String {
 pub fn pointer(p: *const core::ffi::c_void) -> String {
     format!("{:016X}", p.addr())
 }
+
+/// Writes `text` to `out` as one line of the game's log: `macneutron-dlss: ` first.
+///
+/// A failed write is ignored, as C's `fprintf` ignores it: the game carries on whatever its
+/// stderr is.
+pub fn line(out: &mut impl std::io::Write, text: std::fmt::Arguments) {
+    let _ = writeln!(out, "macneutron-dlss: {text}");
+}
+
+/// Writes `text` to stderr, the game's log, as `line` does.
+pub fn note(text: std::fmt::Arguments) {
+    line(&mut std::io::stderr(), text);
+}
+
+#[cfg(test)]
+mod tests;

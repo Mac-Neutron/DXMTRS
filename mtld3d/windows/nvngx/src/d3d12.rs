@@ -13,7 +13,7 @@ use crate::com::{
 };
 use crate::ngx::{
     Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE, FLAG_DEPTH_INVERTED,
-    FLAG_MV_JITTERED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK, hex, pointer,
+    FLAG_MV_JITTERED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK, hex, note, pointer,
 };
 use crate::parameter::Parameters;
 use core::ffi::{CStr, c_void};
@@ -25,7 +25,7 @@ use std::sync::{
 /// Writes `message` to the game's log (stderr), the first time `latch` is reached.
 fn once(latch: &AtomicBool, message: std::fmt::Arguments) {
     if !latch.swap(true, Ordering::Relaxed) {
-        eprintln!("macneutron-dlss: {message}");
+        note(message);
     }
 }
 
@@ -173,19 +173,17 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
     let sx = crate::float_cast::u32_to_f32(target_width) / crate::float_cast::u32_to_f32(width);
     let sy = crate::float_cast::u32_to_f32(target_height) / crate::float_cast::u32_to_f32(height);
     if sx > made.max_scale + 0.01 || sy > made.max_scale + 0.01 || sx < 0.99 || sy < 0.99 {
-        eprintln!(
-            "macneutron-dlss: CreateFeature: {width}x{height} to {target_width}x{target_height} is outside MetalFX's \
-             {:.2}x-{:.2}x",
+        note(format_args!(
+            "CreateFeature: {width}x{height} to {target_width}x{target_height} is outside MetalFX's {:.2}x-{:.2}x",
             made.min_scale, made.max_scale
-        );
+        ));
         return INVALID_PARAMETER;
     }
-    eprintln!(
-        "macneutron-dlss: DLSS {width}x{height} to {target_width}x{target_height} (quality {}, flags {}) answered by \
-         MetalFX",
+    note(format_args!(
+        "DLSS {width}x{height} to {target_width}x{target_height} (quality {}, flags {}) answered by MetalFX",
         made.dlss.quality,
         hex(made.dlss.flag.cast_unsigned())
-    );
+    ));
     // SAFETY: the game's out pointer, checked non-null; the handle is the feature's first field.
     unsafe { out_handle.write(Box::into_raw(made).cast::<u32>()) };
     OK
@@ -297,8 +295,8 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     let pre_exposure = float(c"DLSS.Pre.Exposure", 1.0);
     let reset = params.i32(c"Reset").unwrap_or(0);
     if !LOGGED_INPUTS.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "macneutron-dlss: flags {} quality {}; render {iw}x{ih} of {}x{}, output {}x{}; formats colour {} depth {} \
+        note(format_args!(
+            "flags {} quality {}; render {iw}x{ih} of {}x{}, output {}x{}; formats colour {} depth {} \
              motion {} output {}; sizes colour {}x{} depth {}x{} motion {}x{} output {}x{}; bases colour {cx},{cy} \
              depth {dx},{dy} motion {mx},{my} output {ox},{oy}; exposure texture {}; jitter {jitter_x:.6},{jitter_y:.6}; \
              motion scale {scale_x:.6},{scale_y:.6}; pre-exposure {pre_exposure:.6}; reset {reset}",
@@ -321,7 +319,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
             od.width,
             od.height,
             pointer(exposure)
-        );
+        ));
     }
 
     // The upscaler for these textures: the one there is if they hold the region it reads, else one

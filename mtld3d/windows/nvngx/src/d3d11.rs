@@ -1,7 +1,7 @@
 //! NGX's Direct3D 11 feature entry points, on DXMT's private `IMTLD3D11ContextExt`.
 //!
-//! The upscale is the immediate context's: DXMT's context makes `MetalFX`'s temporal upscaler for the
-//! textures each evaluation passes.
+//! The upscale is the immediate context's: DXMT's context makes `MetalFX`'s temporal upscaler
+//! for the textures each evaluation passes.
 
 use crate::com::{
     ContextExt11Vtbl, FEATURE_METALFX_TEMPORAL_SCALER, IID_CONTEXT_EXT_11, IID_CONTEXT_EXT1_11, UpscaleDesc11, query,
