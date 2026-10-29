@@ -170,8 +170,8 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
     d.quality = params.i32(c"PerfQualityValue").unwrap_or(0);
     d.flag = params.i32(c"DLSS.Feature.Create.Flags").unwrap_or(0);
     d.enable_output_subrects = params.i32(c"DLSS.Enable.Output.Subrects").unwrap_or(0);
-    let sx = crate::float_cast::u32_to_f32(target_width) / crate::float_cast::u32_to_f32(width);
-    let sy = crate::float_cast::u32_to_f32(target_height) / crate::float_cast::u32_to_f32(height);
+    let sx = dxmt_util::float_cast::u32_to_f32(target_width) / dxmt_util::float_cast::u32_to_f32(width);
+    let sy = dxmt_util::float_cast::u32_to_f32(target_height) / dxmt_util::float_cast::u32_to_f32(height);
     if sx > made.max_scale + 0.01 || sy > made.max_scale + 0.01 || sx < 0.99 || sy < 0.99 {
         note(format_args!(
             "CreateFeature: {width}x{height} to {target_width}x{target_height} is outside MetalFX's {:.2}x-{:.2}x",

@@ -37,7 +37,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_CreateFeature(
     let Some(ext) = (unsafe { query(context, &IID_CONTEXT_EXT1_11) }) else { return INVALID_PARAMETER };
     let ext = Held(ext);
     if feature != FEATURE_SUPERSAMPLING {
-        crate::log::err(&format!("NVSDK_NGX_D3D11_CreateFeature: feature {feature} not handled"));
+        crate::LOG.err(&format!("NVSDK_NGX_D3D11_CreateFeature: feature {feature} not handled"));
         return FAIL;
     }
     let mut supported = 0_i32;

@@ -1,0 +1,11 @@
+[package]
+name = "dxmt-util"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "LGPL-2.1-or-later"
+description = "What DXMT's Rust DLLs (nvngx, nvapi) share: the log, COM helpers, float casts and the NVIDIA-extension check"
+publish = false
+
+[lints]
+workspace = true

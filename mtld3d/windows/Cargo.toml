@@ -1,5 +1,5 @@
 [workspace]
-members = ["shim", "d3d9", "core", "tests", "types", "nvngx"]
+members = ["shim", "d3d9", "core", "tests", "types", "nvngx", "dxmt-util"]
 resolver = "2"
 
 [workspace.package]

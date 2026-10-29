@@ -4,7 +4,7 @@
 //! NGX SDK they were built against calls them. A value keeps the type its setter stored, and a
 //! getter of another type answers only the conversions DXMT's `nvngx_parameter.hpp` allows.
 
-use crate::float_cast::{f32_to_i32, f32_to_u32, f64_to_f32, i32_to_f32, u32_to_f32};
+use dxmt_util::float_cast::{f32_to_i32, f32_to_u32, f64_to_f32, i32_to_f32, u32_to_f32};
 use crate::ngx::{FAIL, OK};
 use core::ffi::{CStr, c_char, c_void};
 use std::collections::BTreeMap;

@@ -24,13 +24,18 @@ fn each_line_prefixed() {
 }
 
 #[test]
+fn file_name_names_the_dll() {
+    assert_eq!(file_name(Some("/tmp/x"), false, "C:\\game.exe", "nvapi.log").as_deref(), Some("/tmp/x/game_nvapi.log"));
+}
+
+#[test]
 fn file_names() {
     let exe = "C:\\games\\Game.EXE";
-    assert_eq!(file_name(Some("none"), false, exe), None);
-    assert_eq!(file_name(None, true, exe), None);
-    assert_eq!(file_name(Some(""), true, exe), None);
-    assert_eq!(file_name(None, false, exe).as_deref(), Some("Game_nvngx.log"));
-    assert_eq!(file_name(Some("/tmp/logs"), true, exe).as_deref(), Some("/tmp/logs/Game_nvngx.log"));
-    assert_eq!(file_name(Some("/tmp/logs/"), true, exe).as_deref(), Some("/tmp/logs/Game_nvngx.log"));
-    assert_eq!(file_name(Some("/l"), true, "tool").as_deref(), Some("/l/tool_nvngx.log"));
+    assert_eq!(file_name(Some("none"), false, exe, "nvngx.log"), None);
+    assert_eq!(file_name(None, true, exe, "nvngx.log"), None);
+    assert_eq!(file_name(Some(""), true, exe, "nvngx.log"), None);
+    assert_eq!(file_name(None, false, exe, "nvngx.log").as_deref(), Some("Game_nvngx.log"));
+    assert_eq!(file_name(Some("/tmp/logs"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
+    assert_eq!(file_name(Some("/tmp/logs/"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
+    assert_eq!(file_name(Some("/l"), true, "tool", "nvngx.log").as_deref(), Some("/l/tool_nvngx.log"));
 }

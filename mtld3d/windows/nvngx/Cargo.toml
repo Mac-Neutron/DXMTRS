@@ -12,3 +12,6 @@ crate-type = ["staticlib"]
 
 [lints]
 workspace = true
+
+[dependencies]
+dxmt-util = { path = "../dxmt-util" }

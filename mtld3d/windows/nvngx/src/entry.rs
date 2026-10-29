@@ -3,7 +3,7 @@
 //! The capability map is what NGX's SDK reads before it creates a feature: DLSS available, no
 //! driver update needed, and the callback that picks a quality mode's render size.
 
-use crate::float_cast::{f32_to_u32, u32_to_f32};
+use dxmt_util::float_cast::{f32_to_u32, u32_to_f32};
 use crate::ngx::{
     FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FeatureDiscoveryInfo, FeatureRequirement, INVALID_PARAMETER,
     OK, SUPPORTED, UNSUPPORTED,
@@ -131,7 +131,7 @@ fn requirements(info: *const FeatureDiscoveryInfo, requirement: *mut FeatureRequ
         return OK;
     }
     if other == FAIL {
-        crate::log::warn(&format!("NVSDK_NGX_D3D11_GetFeatureRequirements: unsupported feature {}", info.feature_id));
+        crate::LOG.warn(&format!("NVSDK_NGX_D3D11_GetFeatureRequirements: unsupported feature {}", info.feature_id));
     }
     requirement.feature_supported = UNSUPPORTED;
     other

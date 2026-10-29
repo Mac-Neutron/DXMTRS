@@ -35,7 +35,7 @@ unix/shared/src/trig.rs
 unix/unix/src/metal/command.rs
 unix/unix/src/metal/macdrv.rs
 windows/core/src/config.rs
-windows/nvngx/src/float_cast.rs'
+windows/dxmt-util/src/float_cast.rs'
 
 ONCELOCK_SITES='unix/shared/src/crumb.rs
 windows/core/src/page_box.rs
