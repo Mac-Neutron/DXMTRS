@@ -6,6 +6,7 @@
 //! exists.
 
 use std::{
+    fmt::Write as _,
     fs::File,
     io::Write,
     sync::{LazyLock, Mutex},
@@ -35,7 +36,7 @@ fn level_from(value: Option<&str>) -> Level {
 }
 
 /// Each line of `message` with the level's prefix, as `std::getline` splits it.
-fn lines(level: Level, message: &str) -> String {
+fn lines(level: &Level, message: &str) -> String {
     let prefix = match level {
         Level::Trace => "trace: ",
         Level::Debug => "debug: ",
@@ -43,7 +44,10 @@ fn lines(level: Level, message: &str) -> String {
         Level::Warn => "warn:  ",
         Level::Error | Level::None => "err:   ",
     };
-    message.split_terminator('\n').map(|line| format!("{prefix}{line}\n")).collect()
+    message.split_terminator('\n').fold(String::new(), |mut text, line| {
+        let _ = writeln!(text, "{prefix}{line}");
+        text
+    })
 }
 
 /// The log file's path: `<log_path>/<exe's base name>_nvngx.log`.
@@ -98,9 +102,9 @@ const fn wine_output() -> Option<WineOutput> {
 }
 
 /// Writes `message` at `level` if the log's level lets it through.
-fn emit(level: Level, message: &str) {
+fn emit(level: &Level, message: &str) {
     let Ok(mut log) = LOG.lock() else { return };
-    if level < log.level {
+    if *level < log.level {
         return;
     }
     let text = lines(level, message);
@@ -119,17 +123,12 @@ fn emit(level: Level, message: &str) {
 
 /// Logs an error.
 pub fn err(message: &str) {
-    emit(Level::Error, message);
+    emit(&Level::Error, message);
 }
 
 /// Logs a warning.
 pub fn warn(message: &str) {
-    emit(Level::Warn, message);
-}
-
-/// Logs a trace message.
-pub fn trace(message: &str) {
-    emit(Level::Trace, message);
+    emit(&Level::Warn, message);
 }
 
 #[cfg(test)]

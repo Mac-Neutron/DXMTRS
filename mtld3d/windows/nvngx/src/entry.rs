@@ -12,8 +12,9 @@ use crate::parameter::{Parameters, Value};
 use core::ffi::c_void;
 use std::sync::LazyLock;
 
-/// `DLSSOptimalSettingsCallback`: the render size, scale and dynamic range for `Width`, `Height` and
-/// `PerfQualityValue`.
+/// `DLSSOptimalSettingsCallback`: a quality mode's render size, scale and dynamic range.
+///
+/// From `Width`, `Height` and `PerfQualityValue`, with DXMT's scales for each mode.
 extern "C" fn optimal_settings(params: *mut Parameters) -> u32 {
     // SAFETY: NGX's SDK calls this with the capability map it got from us.
     let Some(params) = (unsafe { params.as_mut() }) else { return FAIL };
@@ -195,9 +196,9 @@ pub extern "system" fn NVSDK_NGX_D3D11_DestroyParameters(params: *mut Parameters
     OK
 }
 
-/// No scratch memory: MetalFX holds its own.
+/// No scratch memory: `MetalFX` holds its own.
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(_: u32, _: *const Parameters, out: *mut usize) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(_: u32, _: *const Parameters, out: *mut usize) -> u32 {
     if !out.is_null() {
         // SAFETY: the game's out pointer, checked non-null.
         unsafe { out.write(0) };
@@ -206,7 +207,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(_: u32, _: *const Pa
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(feature: u32, params: *const Parameters, out: *mut usize) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(feature: u32, params: *const Parameters, out: *mut usize) -> u32 {
     NVSDK_NGX_D3D12_GetScratchBufferSize(feature, params, out)
 }
 
@@ -229,43 +230,43 @@ pub extern "system" fn NVSDK_NGX_D3D11_GetFeatureRequirements(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_UpdateFeature(_: *const c_void, _: u32) -> u32 {
+pub const extern "system" fn NVSDK_NGX_UpdateFeature(_: *const c_void, _: u32) -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Shutdown() -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D12_Shutdown() -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Shutdown1(_: *mut c_void) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D12_Shutdown1(_: *mut c_void) -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Shutdown() -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Shutdown() -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Shutdown1(_: *mut c_void) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Shutdown1(_: *mut c_void) -> u32 {
     OK
 }
 
 /// Direct3D 11's initialisations all succeed: the device is checked when a feature is made.
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init(_: u64, _: *const u16, _: *mut c_void, _: *const c_void, _: u32) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Init(_: u64, _: *const u16, _: *mut c_void, _: *const c_void, _: u32) -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_Ext(_: u64, _: *const u16, _: *mut c_void, _: u32, _: *const c_void) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Init_Ext(_: u64, _: *const u16, _: *mut c_void, _: u32, _: *const c_void) -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_ProjectID(
+pub const extern "system" fn NVSDK_NGX_D3D11_Init_ProjectID(
     _: *const u8,
     _: u32,
     _: *const u8,
@@ -278,7 +279,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_Init_ProjectID(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_Init_with_ProjectID(
+pub const extern "system" fn NVSDK_NGX_D3D11_Init_with_ProjectID(
     _: *const u8,
     _: u32,
     _: *const u8,

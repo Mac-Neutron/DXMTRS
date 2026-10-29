@@ -9,11 +9,6 @@ pub const FEATURE_NOT_SUPPORTED: u32 = 0xbad0_0001;
 /// `NVSDK_NGX_Result_FAIL_InvalidParameter`.
 pub const INVALID_PARAMETER: u32 = 0xbad0_0005;
 
-/// Whether `result` is a failure, as `NVSDK_NGX_FAILED` tests it.
-pub const fn failed(result: u32) -> bool {
-    result & FAIL == FAIL
-}
-
 /// `NVSDK_NGX_Feature_SuperSampling`: DLSS super resolution, the one feature nvngx makes.
 pub const FEATURE_SUPERSAMPLING: u32 = 1;
 
@@ -23,7 +18,7 @@ pub const FLAG_MV_LOWRES: u32 = 1 << 1;
 pub const FLAG_MV_JITTERED: u32 = 1 << 2;
 /// A depth buffer with 1 nearest.
 pub const FLAG_DEPTH_INVERTED: u32 = 1 << 3;
-/// No exposure texture: MetalFX works the exposure out.
+/// No exposure texture: `MetalFX` works the exposure out.
 pub const FLAG_AUTO_EXPOSURE: u32 = 1 << 6;
 
 /// `NVSDK_NGX_FeatureDiscoveryInfo`.
@@ -61,7 +56,7 @@ const _: () = {
 pub struct Dlss {
     pub handle: u32,
     pub feature: u32,
-    /// 11 or 12: the API whose CreateFeature made it.
+    /// 11 or 12: the API whose `CreateFeature` made it.
     pub api: u32,
     pub width: u32,
     pub height: u32,

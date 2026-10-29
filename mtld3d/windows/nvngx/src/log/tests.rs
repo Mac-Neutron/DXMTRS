@@ -14,13 +14,13 @@ fn level_names_and_default() {
 
 #[test]
 fn each_line_prefixed() {
-    assert_eq!(lines(Level::Warn, "a\nb"), "warn:  a\nwarn:  b\n");
-    assert_eq!(lines(Level::Error, "x\n"), "err:   x\n");
-    assert_eq!(lines(Level::Trace, "t"), "trace: t\n");
-    assert_eq!(lines(Level::Debug, "d"), "debug: d\n");
-    assert_eq!(lines(Level::Info, "i"), "info:  i\n");
-    assert_eq!(lines(Level::Info, ""), "");
-    assert_eq!(lines(Level::Info, "\n"), "info:  \n");
+    assert_eq!(lines(&Level::Warn, "a\nb"), "warn:  a\nwarn:  b\n");
+    assert_eq!(lines(&Level::Error, "x\n"), "err:   x\n");
+    assert_eq!(lines(&Level::Trace, "t"), "trace: t\n");
+    assert_eq!(lines(&Level::Debug, "d"), "debug: d\n");
+    assert_eq!(lines(&Level::Info, "i"), "info:  i\n");
+    assert_eq!(lines(&Level::Info, ""), "");
+    assert_eq!(lines(&Level::Info, "\n"), "info:  \n");
 }
 
 #[test]

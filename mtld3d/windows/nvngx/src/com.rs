@@ -1,6 +1,6 @@
 //! The COM interfaces nvngx calls, and the structures they take.
 //!
-//! IUnknown, the D3D11 and D3D12 slots nvngx uses, and DXMT's private extensions
+//! `IUnknown`, the D3D11 and D3D12 slots nvngx uses, and DXMT's private extensions
 //! (`d3d11_interfaces.hpp`, `d3d12_interfaces.hpp`); a slot nvngx never calls is an opaque
 //! pointer. Layouts are the C++ headers', checked by the asserts below.
 
@@ -23,7 +23,7 @@ impl Guid {
 
 pub type Hresult = i32;
 
-/// IUnknown's slots, which every interface starts with.
+/// `IUnknown`'s slots, which every interface starts with.
 #[repr(C)]
 pub struct IUnknownVtbl {
     pub query_interface: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
@@ -205,8 +205,10 @@ pub unsafe fn query(object: *mut c_void, iid: &Guid) -> Option<*mut c_void> {
         return None;
     }
     let mut out = core::ptr::null_mut();
-    // SAFETY: a COM object's first field is its vtable, which starts with IUnknown's slots.
-    let hr = unsafe { ((*(*object.cast::<Object<IUnknownVtbl>>()).vtbl).query_interface)(object, iid, &raw mut out) };
+    // SAFETY: every COM interface starts with `IUnknown`'s slots.
+    let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+    // SAFETY: `object` is live; `out` is a local the call writes.
+    let hr = unsafe { (unknown.query_interface)(object, iid, &raw mut out) };
     (hr >= 0 && !out.is_null()).then_some(out)
 }
 
@@ -217,8 +219,10 @@ pub unsafe fn query(object: *mut c_void, iid: &Guid) -> Option<*mut c_void> {
 /// `object` is a live COM object the caller holds a reference to, or null.
 pub unsafe fn release(object: *mut c_void) {
     if !object.is_null() {
-        // SAFETY: as `query`.
-        unsafe { ((*(*object.cast::<Object<IUnknownVtbl>>()).vtbl).release)(object) };
+        // SAFETY: every COM interface starts with `IUnknown`'s slots.
+        let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+        // SAFETY: the caller holds the reference this gives back.
+        unsafe { (unknown.release)(object) };
     }
 }
 
@@ -228,6 +232,8 @@ pub unsafe fn release(object: *mut c_void) {
 ///
 /// `object` is a live COM object whose interface starts with `V`'s slots.
 pub unsafe fn vtbl<'a, V>(object: *mut c_void) -> &'a V {
-    // SAFETY: the caller's.
-    unsafe { &*(*object.cast::<Object<V>>()).vtbl }
+    // SAFETY: the caller's: a live COM object, whose first field is its vtable pointer.
+    let head = unsafe { &*object.cast::<Object<V>>() };
+    // SAFETY: a live object's vtable lives as long as its module, past any use here.
+    unsafe { &*head.vtbl }
 }

@@ -1,8 +1,8 @@
-//! NGX's Direct3D 12 entry points, on DXMT's private interface to MetalFX's temporal upscaler.
+//! NGX's Direct3D 12 entry points, on DXMT's private interface to `MetalFX`'s temporal upscaler.
 //!
 //! A DLSS feature's upscaler is made at its first evaluation, from the formats of the textures the
 //! game really passes (creation names only sizes and flags), and made again when they change.
-//! NGX's conventions are MetalFX's: motion vectors point from the current frame to the previous
+//! NGX's conventions are `MetalFX`'s: motion vectors point from the current frame to the previous
 //! one, in pixels after `MV.Scale`; the jitter is the sample's offset in input pixels. The first
 //! evaluation logs what the game passed to the game's log (stderr), once, before any pixel is
 //! trusted.
@@ -57,7 +57,7 @@ impl Drop for Feature {
     }
 }
 
-/// Initialisation succeeds on a device with MetalFX's temporal upscaler.
+/// Initialisation succeeds on a device with `MetalFX`'s temporal upscaler.
 fn init_with(device: *mut c_void) -> u32 {
     /// A per-call-site log-once latch.
     static LOGGED: AtomicBool = AtomicBool::new(false);
@@ -135,7 +135,9 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
     }
     let mut device = core::ptr::null_mut();
     // SAFETY: the game's command list, a live COM object.
-    if unsafe { (vtbl::<CommandList12Vtbl>(list).get_device)(list, &IID_ID3D12_DEVICE, &raw mut device) } < 0 {
+    let slots = unsafe { vtbl::<CommandList12Vtbl>(list) };
+    // SAFETY: `device` is a local the call writes.
+    if unsafe { (slots.get_device)(list, &raw const IID_ID3D12_DEVICE, &raw mut device) } < 0 {
         return INVALID_PARAMETER;
     }
     // SAFETY: GetDevice's new reference, released once queried.
@@ -150,10 +152,11 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
         ext,
         scaler: Mutex::new(Scaler { scaler: core::ptr::null_mut(), desc: ScalerDesc12::default() }),
     });
-    // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`; the outputs are the feature's.
-    unsafe {
-        (vtbl::<DeviceExt12Vtbl>(ext).get_temporal_scaler_scale_range)(ext, &raw mut made.min_scale, &raw mut made.max_scale);
-    }
+    // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
+    let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
+    let made_ref = &mut *made;
+    // SAFETY: the outputs are the feature's fields.
+    unsafe { (slots.get_temporal_scaler_scale_range)(ext, &raw mut made_ref.min_scale, &raw mut made_ref.max_scale) };
     let d = &mut made.dlss;
     let (Some(width), Some(height), Some(target_width), Some(target_height)) =
         (params.u32(c"Width"), params.u32(c"Height"), params.u32(c"OutWidth"), params.u32(c"OutHeight"))
@@ -197,7 +200,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_ReleaseFeature(handle: *mut u32) -> u32 {
     let head = unsafe { &*handle.cast::<Dlss>() };
     if head.feature == FEATURE_SUPERSAMPLING && head.api == 12 {
         // SAFETY: a Direct3D 12 feature, boxed by CreateFeature; ReleaseFeature is its last use.
-        drop(unsafe { Box::from_raw(handle.cast::<Feature>()) });
+        drop(unsafe { Box::from_raw(handle.cast::<c_void>().cast::<Feature>()) });
     }
     OK
 }
@@ -220,7 +223,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_EvaluateFeature(
         return FEATURE_NOT_SUPPORTED;
     }
     // SAFETY: a Direct3D 12 feature, live until ReleaseFeature.
-    let feature = unsafe { &*handle.cast::<Feature>() };
+    let feature = unsafe { &*handle.cast::<c_void>().cast::<Feature>() };
     let Ok(mut scaler) = feature.scaler.lock() else { return FAIL };
     evaluate(feature, &mut scaler, list, params)
 }
@@ -233,8 +236,10 @@ fn resource(params: &Parameters, name: &CStr) -> *mut c_void {
 /// `resource`'s description.
 fn desc(resource: *mut c_void) -> ResourceDesc12 {
     let mut desc = ResourceDesc12::default();
-    // SAFETY: a live `ID3D12Resource`; GetDesc writes its description through the pointer.
-    unsafe { (vtbl::<Resource12Vtbl>(resource).get_desc)(resource, &raw mut desc) };
+    // SAFETY: a live `ID3D12Resource`.
+    let slots = unsafe { vtbl::<Resource12Vtbl>(resource) };
+    // SAFETY: GetDesc writes its description through the pointer to the local.
+    unsafe { (slots.get_desc)(resource, &raw mut desc) };
     desc
 }
 
@@ -372,8 +377,10 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         scaler.scaler = core::ptr::null_mut();
         (want.input_width, want.input_height) = (tw, th);
         let ext = feature.ext;
-        // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`; the new upscaler is the feature's reference.
-        let hr = unsafe { (vtbl::<DeviceExt12Vtbl>(ext).create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
+        // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
+        let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
+        // SAFETY: `want` outlives the call; the new upscaler is the feature's reference.
+        let hr = unsafe { (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
         if hr < 0 {
             scaler.scaler = core::ptr::null_mut();
             once(
@@ -419,8 +426,10 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         reset: i32::from(reset != 0),
         depth_reversed: i32::from(flag & FLAG_DEPTH_INVERTED != 0),
     };
-    // SAFETY: `list_ext` is DXMT's `IMTLD3D12CommandListExt`, `scaler` the feature's live upscaler.
-    let hr = unsafe { (vtbl::<CommandListExt12Vtbl>(list_ext).temporal_upscale)(list_ext, scaler.scaler, &raw const d) };
+    // SAFETY: `list_ext` is DXMT's `IMTLD3D12CommandListExt`.
+    let slots = unsafe { vtbl::<CommandListExt12Vtbl>(list_ext) };
+    // SAFETY: `scaler` is the feature's live upscaler; `d` and its textures outlive the call.
+    let hr = unsafe { (slots.temporal_upscale)(list_ext, scaler.scaler, &raw const d) };
     // SAFETY: `query`'s new reference.
     unsafe { release(list_ext) };
     if hr < 0 {

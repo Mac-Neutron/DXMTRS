@@ -1,33 +1,13 @@
-//! DXMT's `nvngx.dll`: DLSS super resolution answered by MetalFX, for Direct3D 11 and 12.
+//! DXMT's `nvngx.dll`: DLSS super resolution answered by `MetalFX`, for Direct3D 11 and 12.
 
 mod com;
+mod d3d11;
 mod d3d12;
 mod entry;
 mod float_cast;
 mod log;
 mod ngx;
 mod parameter;
-
-/// NGX's generic failure, `NVSDK_NGX_Result_Fail`.
-const FAIL: u32 = 0xbad0_0000;
-
-/// `NVSDK_NGX_D3D11_CreateFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_CreateFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_EvaluateFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_EvaluateFeature() -> u32 {
-    FAIL
-}
-
-/// `NVSDK_NGX_D3D11_ReleaseFeature`: not implemented yet.
-#[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D11_ReleaseFeature() -> u32 {
-    FAIL
-}
 
 #[cfg(windows)]
 /// The GUID of DXMT's NVIDIA extension, which DXGI answers only when `DXMT_ENABLE_NVEXT` is set.

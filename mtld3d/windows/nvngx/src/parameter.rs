@@ -32,7 +32,7 @@ impl Value {
     }
 
     /// As `ID3D12Resource *`.
-    fn as_d3d12(&self) -> Option<*mut c_void> {
+    const fn as_d3d12(&self) -> Option<*mut c_void> {
         match *self {
             Self::D3D12(p) | Self::Ptr(p) => Some(p),
             _ => None,
@@ -40,7 +40,7 @@ impl Value {
     }
 
     /// As `ID3D11Resource *`.
-    fn as_d3d11(&self) -> Option<*mut c_void> {
+    const fn as_d3d11(&self) -> Option<*mut c_void> {
         match *self {
             Self::D3D11(p) | Self::Ptr(p) => Some(p),
             _ => None,
@@ -79,7 +79,7 @@ impl Value {
     }
 
     /// As `float`.
-    fn as_f32(&self) -> Option<f32> {
+    const fn as_f32(&self) -> Option<f32> {
         match *self {
             Self::F32(v) => Some(v),
             Self::U32(v) => Some(u32_to_f32(v)),
@@ -147,11 +147,16 @@ unsafe fn store(this: *mut Parameters, name: *const c_char, value: Value) {
     if this.is_null() || name.is_null() {
         return;
     }
-    // SAFETY: the caller's.
-    unsafe { (*this).set(CStr::from_ptr(name), value) };
+    // SAFETY: the caller's: a NUL-terminated string.
+    let name = unsafe { CStr::from_ptr(name) };
+    // SAFETY: the caller's: a live map, which nothing else borrows during the game's call.
+    let map = unsafe { &mut *this };
+    map.set(name, value);
 }
 
-/// Writes `name`'s value, converted by `convert`, to `out`: NGX's OK, or FAIL when absent or not convertible.
+/// Writes `name`'s value, converted by `convert`, to `out`.
+///
+/// NGX's OK, or FAIL when the name is absent or its value doesn't convert.
 ///
 /// # Safety
 ///
@@ -160,15 +165,15 @@ unsafe fn fetch<T>(this: *const Parameters, name: *const c_char, out: *mut T, co
     if this.is_null() || name.is_null() || out.is_null() {
         return FAIL;
     }
-    // SAFETY: the caller's.
-    match unsafe { (*this).values.get(CStr::from_ptr(name).to_bytes()) }.and_then(convert) {
-        Some(value) => {
-            // SAFETY: the caller's.
-            unsafe { out.write(value) };
-            OK
-        }
-        None => FAIL,
-    }
+    // SAFETY: the caller's: a NUL-terminated string.
+    let name = unsafe { CStr::from_ptr(name) };
+    // SAFETY: the caller's: a live map.
+    let map = unsafe { &*this };
+    map.values.get(name.to_bytes()).and_then(convert).map_or(FAIL, |value| {
+        // SAFETY: the caller's: `out` is writable.
+        unsafe { out.write(value) };
+        OK
+    })
 }
 
 macro_rules! setter {
