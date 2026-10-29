@@ -2,8 +2,7 @@
 
 use crate::ffi::{
     COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription, EnumDisplayMonitors,
-    GetMonitorInfoW, HdrMetadata, MONITORINFOF_PRIMARY, MonitorInfoExW, NSArray_count, NSArray_object,
-    NSObject_release, MTLDevice_registryID, WMTCopyAllDevices, WMTGetDisplayDescription, WMTGetPrimaryDisplayId,
+    GetMonitorInfoW, HdrMetadata, MONITORINFOF_PRIMARY, MonitorInfoExW, WMTGetDisplayDescription, WMTGetPrimaryDisplayId,
     WMTGetSecondaryDisplayId, WMTQueryDisplaySetting, WMTUpdateDisplaySetting,
 };
 use crate::nv::{
@@ -14,6 +13,7 @@ use crate::nv::{
     HdrColorDataV2, HdrMasteringData, INCOMPATIBLE_STRUCT_VERSION, INSUFFICIENT_BUFFER, INVALID_ARGUMENT,
     END_ENUMERATION, MONITOR_CONN_TYPE_UNKNOWN, NOT_SUPPORTED, NVIDIA_DEVICE_NOT_FOUND, OK, Status,
 };
+use crate::gpu::{id_handle, registry_ids};
 use core::ffi::{CStr, c_char, c_void};
 use dxmt_util::float_cast::f32_to_u16;
 
@@ -163,37 +163,18 @@ fn secondary_display_id() -> u32 {
     unsafe { WMTGetSecondaryDisplayId() }
 }
 
-/// The physical GPU handles: every Metal device's registry ID, as `CopyAllDevices` lists them.
-fn device_handles() -> Vec<u64> {
-    // SAFETY: winemetal returns a retained array.
-    let devices = unsafe { WMTCopyAllDevices() };
-    // SAFETY: `devices` is that array.
-    let count = unsafe { NSArray_count(devices) };
-    let ids = (0..count)
-        .map(|i| {
-            // SAFETY: `i` is below the array's count.
-            let device = unsafe { NSArray_object(devices, i) };
-            // SAFETY: `device` is a Metal device the array holds.
-            unsafe { MTLDevice_registryID(device) }
-        })
-        .collect();
-    // SAFETY: the reference `WMTCopyAllDevices` gave.
-    unsafe { NSObject_release(devices) };
-    ids
-}
-
 extern "C" fn get_physical_gpus_from_display(display: *mut c_void, gpus: *mut *mut c_void, count: *mut u32) -> Status {
     if display.is_null() || gpus.is_null() || count.is_null() {
         return INVALID_ARGUMENT;
     }
-    let ids = device_handles();
+    let ids = registry_ids();
     if ids.is_empty() {
         return NVIDIA_DEVICE_NOT_FOUND;
     }
     for (i, id) in ids.iter().enumerate() {
-        let handle = core::ptr::without_provenance_mut::<c_void>(usize::try_from(*id).unwrap_or(0));
-        // SAFETY: the game's array has room for NVAPI_MAX_PHYSICAL_GPUS handles.
-        unsafe { gpus.wrapping_add(i).write(handle) };
+        // SAFETY: `registry_ids` returns at most `MAX_GPUS` IDs, and the game's array holds
+        // NVAPI_MAX_PHYSICAL_GPUS handles.
+        unsafe { gpus.wrapping_add(i).write(id_handle(*id)) };
     }
     // SAFETY: the game's out pointer, checked non-null.
     unsafe { count.write(u32::try_from(ids.len()).unwrap_or(0)) };
