@@ -1,6 +1,8 @@
-use super::{device_name_is, display_count, hdr_mode, low16, mastering_of, mastering_of_description, metadata_of, primaries};
+use super::{
+    device_name_is, display_count, hdr_mode, low16, mastering_of, mastering_of_description, metadata_of, name_lookup_failure, primaries,
+};
 use crate::ffi::{COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription, HdrMetadata};
-use crate::nv::{HDR_MODE_OFF, HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH};
+use crate::nv::{HDR_MODE_OFF, INVALID_ARGUMENT, NVIDIA_DEVICE_NOT_FOUND, HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH};
 
 /// A P3 display with headroom 4.0, as this Mac's built-in one reports.
 const P3: DisplayDescription = DisplayDescription {
@@ -94,4 +96,13 @@ fn a_display_without_a_setting_has_its_description_and_minimum_1() {
     assert_eq!(m.min_display_mastering_luminance, 1);
     assert_eq!(m.max_content_light_level, 400);
     assert_eq!(m.max_frame_average_light_level, 400);
+}
+
+#[test]
+fn an_unknown_name_is_not_found_even_with_a_null_id() {
+    let mut id = 0_u32;
+    assert_eq!(name_lookup_failure(false, core::ptr::null()), Some(NVIDIA_DEVICE_NOT_FOUND));
+    assert_eq!(name_lookup_failure(false, &raw const id), Some(NVIDIA_DEVICE_NOT_FOUND));
+    assert_eq!(name_lookup_failure(true, core::ptr::null()), Some(INVALID_ARGUMENT));
+    assert_eq!(name_lookup_failure(true, &raw mut id), None);
 }

@@ -204,8 +204,21 @@ unsafe extern "system" fn name_proc(monitor: *mut c_void, _dc: *mut c_void, _rec
     0
 }
 
+/// The status that ends a display-name lookup before it writes: not found first, then a null `id`.
+///
+/// The C++ writes through `id` unchecked, so a null `id` fails only where the C++ would have crashed.
+fn name_lookup_failure(found: bool, id: *const u32) -> Option<Status> {
+    if !found {
+        Some(NVIDIA_DEVICE_NOT_FOUND)
+    } else if id.is_null() {
+        Some(INVALID_ARGUMENT)
+    } else {
+        None
+    }
+}
+
 extern "C" fn get_display_id_by_display_name(name: *const c_char, id: *mut u32) -> Status {
-    if name.is_null() || id.is_null() {
+    if name.is_null() {
         return INVALID_ARGUMENT;
     }
     // SAFETY: the game's NUL-terminated string.
@@ -214,8 +227,8 @@ extern "C" fn get_display_id_by_display_name(name: *const c_char, id: *mut u32) 
     let data = (&raw mut search).expose_provenance();
     // SAFETY: `name_proc` reads the `NameSearch` through `data` while `search` lives.
     unsafe { EnumDisplayMonitors(core::ptr::null_mut(), core::ptr::null(), name_proc, isize::try_from(data).unwrap_or(0)) };
-    if search.monitor.is_null() {
-        return NVIDIA_DEVICE_NOT_FOUND;
+    if let Some(status) = name_lookup_failure(!search.monitor.is_null(), id) {
+        return status;
     }
     let display_id = if search.is_primary { primary_display_id() } else { secondary_display_id() };
     // SAFETY: the game's out pointer, checked non-null.
