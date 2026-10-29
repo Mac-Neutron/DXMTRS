@@ -14,7 +14,8 @@
 
 set -eu
 
-cd "$(git rev-parse --show-toplevel)"
+# mtld3d lives in a subfolder of DXMTRS, so the repository root is not the folder the rules are relative to.
+cd "$(dirname "$0")/.."
 
 INVENTORY=scripts/derive_inventory.txt
 COVERAGE=windows/tests/COVERAGE.md
