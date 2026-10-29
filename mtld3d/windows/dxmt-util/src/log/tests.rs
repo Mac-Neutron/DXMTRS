@@ -1,4 +1,4 @@
-use super::{Level, file_name, level_from, lines, text_mode};
+use super::{Level, Logger, file_name, level_from, lines, text_mode};
 
 #[test]
 fn level_names_and_default() {
@@ -52,4 +52,33 @@ fn a_multibyte_name_without_exe_keeps_its_name() {
     // Its last 4 bytes start inside the euro sign: slicing there panics.
     assert_eq!(file_name(Some("/l"), true, "C:\\a\u{20ac}bc", "nvngx.log").as_deref(), Some("/l/a\u{20ac}bc_nvngx.log"));
     assert_eq!(file_name(Some("/l"), true, "g\u{20ac}.EXE", "nvngx.log").as_deref(), Some("/l/g\u{20ac}_nvngx.log"));
+}
+
+/// A fresh directory for a log file.
+fn log_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("dxmt-util-log-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_file_is_created_by_the_first_message_that_passes_the_level() {
+    let dir = log_dir("level");
+    let path = dir.to_string_lossy().into_owned();
+    let env = |level: &'static str| {
+        let path = path.clone();
+        move |name: &str| match name {
+            "DXMT_LOG_LEVEL" => Some(level.to_owned()),
+            "DXMT_LOG_PATH" => Some(path.clone()),
+            _ => None,
+        }
+    };
+    let filtered = Logger::new("t.log");
+    filtered.emit_with(&env("none"), &Level::Error, "dropped");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a filtered message created the file");
+    let passing = Logger::new("t.log");
+    passing.emit_with(&env("warn"), &Level::Warn, "kept");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

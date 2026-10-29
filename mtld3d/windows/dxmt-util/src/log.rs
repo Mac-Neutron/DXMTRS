@@ -76,21 +76,25 @@ fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &s
 /// Wine's `__wine_dbg_output`, which ntdll exports.
 type WineOutput = unsafe extern "C" fn(*const core::ffi::c_char) -> i32;
 
-/// The log's state, opened by its first message.
+/// The log's state: the level from the first message, the outputs from the first one that passes it.
 struct State {
     level: Level,
+    sinks: Option<Sinks>,
+}
+
+/// Where a passing message goes: Wine's debug output or stderr, and the log file.
+struct Sinks {
     wine: Option<WineOutput>,
     file: Option<File>,
 }
 
-impl State {
-    fn open(file: &str) -> Self {
+impl Sinks {
+    fn open(file: &str, env: &impl Fn(&str) -> Option<String>) -> Self {
         let wine = wine_output();
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        let path = std::env::var("DXMT_LOG_PATH").ok();
+        let path = env("DXMT_LOG_PATH");
         let file = file_name(path.as_deref(), wine.is_some(), &exe, file).and_then(|name| File::create(name).ok());
-        let level = level_from(std::env::var("DXMT_LOG_LEVEL").ok().as_deref());
-        Self { level, wine, file }
+        Self { wine, file }
     }
 }
 
@@ -126,13 +130,21 @@ impl Logger {
 
     /// Writes `message` at `level` if the log's level lets it through.
     fn emit(&self, level: &Level, message: &str) {
+        self.emit_with(&|name| std::env::var(name).ok(), level, message);
+    }
+
+    /// `emit` with the environment passed in, so a host test can steer it.
+    ///
+    /// As `Logger::emitMsg`, the file is created by the first message that passes the level.
+    fn emit_with(&self, env: &impl Fn(&str) -> Option<String>, level: &Level, message: &str) {
         let Ok(mut guard) = self.state.lock() else { return };
-        let state = guard.get_or_insert_with(|| State::open(self.file));
+        let state = guard.get_or_insert_with(|| State { level: level_from(env("DXMT_LOG_LEVEL").as_deref()), sinks: None });
         if *level < state.level {
             return;
         }
+        let sinks = state.sinks.get_or_insert_with(|| Sinks::open(self.file, env));
         let text = lines(level, message);
-        if let Some(wine) = state.wine {
+        if let Some(wine) = sinks.wine {
             if let Ok(text) = std::ffi::CString::new(text.as_str()) {
                 // SAFETY: `text` is NUL-terminated and outlives the call.
                 unsafe { wine(text.as_ptr()) };
@@ -140,7 +152,7 @@ impl Logger {
         } else {
             let _ = std::io::stderr().write_all(text_mode(&text, cfg!(windows)).as_bytes());
         }
-        if let Some(file) = state.file.as_mut() {
+        if let Some(file) = sinks.file.as_mut() {
             let _ = file.write_all(text_mode(&text, cfg!(windows)).as_bytes());
         }
     }
