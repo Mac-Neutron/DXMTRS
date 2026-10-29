@@ -1,5 +1,4 @@
-//! DXMT's `nvngx.dll`: NVIDIA NGX's DLSS super resolution answered by MetalFX, for Direct3D 11
-//! and 12.
+//! DXMT's `nvngx.dll`: DLSS super resolution answered by MetalFX, for Direct3D 11 and 12.
 
 mod log;
 
@@ -211,8 +210,9 @@ unsafe extern "system" {
 }
 
 #[cfg(windows)]
-/// Refuses to load unless DXMT's NVIDIA extension is on, as games without DLSS enabled must not
-/// see NGX.
+/// Refuses to load unless DXMT's NVIDIA extension is on.
+///
+/// Games without DLSS enabled must not see NGX.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllMain(module: *mut core::ffi::c_void, reason: u32, _reserved: *mut core::ffi::c_void) -> i32 {
     const DLL_PROCESS_ATTACH: u32 = 1;
