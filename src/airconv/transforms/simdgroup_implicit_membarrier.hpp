@@ -1,5 +1,6 @@
 #pragma once
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 
@@ -10,6 +11,9 @@
  */
 
 namespace llvm::air {
+// Declares (or finds) `air.simdgroup.barrier`, the intrinsic the pass calls.
+FunctionCallee declareSimdgroupBarrier(Module &M);
+
 class SimdgroupImplicitMemBarrierPass : public PassInfoMixin<SimdgroupImplicitMemBarrierPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

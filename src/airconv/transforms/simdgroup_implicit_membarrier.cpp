@@ -5,10 +5,24 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/raw_ostream.h"
-#include "../nt/air_builder.hpp"
 
 namespace llvm::air {
+
+// `air.simdgroup.barrier(i32 flags, i32 1)`, declared as AIRBuilder::CreateBarrier(flags, true) declares it
+// (nt/air_builder.cpp), so this pass needs nothing else from AIRBuilder.
+FunctionCallee
+declareSimdgroupBarrier(Module &M) {
+  auto &Context = M.getContext();
+  auto Attrs = AttributeList::get(
+      Context, {{~0U, Attribute::get(Context, Attribute::AttrKind::Convergent)},
+                {~0U, Attribute::get(Context, Attribute::AttrKind::NoUnwind)},
+                {~0U, Attribute::get(Context, Attribute::AttrKind::WillReturn)}}
+  );
+  auto I32 = Type::getInt32Ty(Context);
+  return M.getOrInsertFunction(
+      "air.simdgroup.barrier", FunctionType::get(Type::getVoidTy(Context), {I32, I32}, false), Attrs
+  );
+}
 
 PreservedAnalyses
 SimdgroupImplicitMemBarrierPass::run(Function &F, FunctionAnalysisManager &AM) {
@@ -49,9 +63,11 @@ SimdgroupImplicitMemBarrierPass::run(Function &F, FunctionAnalysisManager &AM) {
           IRBuilder<> builder(Store->getParent());
           if (Store->getNextNode())
             builder.SetInsertPoint(Store->getNextNode());
-          AIRBuilder air(builder, nulls());
           // I expect atomic_thread_fence() to work, but no luck
-          air.CreateBarrier(MemFlags::Threadgroup, true);
+          constexpr uint32_t ThreadgroupMemFlags = 2; // MemFlags::Threadgroup
+          builder.CreateCall(
+              declareSimdgroupBarrier(*F.getParent()), {builder.getInt32(ThreadgroupMemFlags), builder.getInt32(1)}
+          );
           Changed = true;
         }
       }
