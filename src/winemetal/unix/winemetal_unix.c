@@ -109,59 +109,15 @@ NTSTATUS _MTLTexture_newTextureView(void *obj);
 
 NTSTATUS _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj);
 
-static NTSTATUS
-_MTLDevice_newLibrary(void *obj) {
-  struct unixcall_mtldevice_newlibrary *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  NSError *err = NULL;
-  params->ret_library = (obj_handle_t)[device newLibraryWithData:(dispatch_data_t)params->data error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newLibrary(void *obj);
 
-static NTSTATUS
-_MTLLibrary_newFunction(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  id<MTLLibrary> library = (id<MTLLibrary>)params->handle;
-  NSString *name = [[NSString alloc] initWithCString:(char *)params->arg encoding:NSUTF8StringEncoding];
-  params->ret = (obj_handle_t)[library newFunctionWithName:name];
-  [name release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLLibrary_newFunction(void *obj);
 
 NTSTATUS _NSString_lengthOfBytesUsingEncoding(void *obj);
 
 NTSTATUS _NSObject_description(void *obj);
 
-static NTSTATUS
-_MTLDevice_newComputePipelineState(void *obj) {
-  struct unixcall_mtldevice_newcomputepso *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  const struct WMTComputePipelineInfo *info = params->info.ptr;
-  MTLComputePipelineDescriptor *descriptor = [[MTLComputePipelineDescriptor alloc] init];
-  NSError *err = NULL;
-  descriptor.computeFunction = (id<MTLFunction>)info->compute_function;
-  descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = info->tgsize_is_multiple_of_sgwidth;
-  descriptor.supportIndirectCommandBuffers = info->support_indirect_command_buffers;
-  for (unsigned i = 0; i < 31; i++) {
-    if (info->immutable_buffers & (1 << i))
-      descriptor.buffers[i].mutability = MTLMutabilityImmutable;
-  }
-  if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
-    descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
-                                                    count:info->num_binary_archives_for_lookup];
-  MTLPipelineOption options =
-      info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
-  params->ret_pso =
-      (obj_handle_t)[device newComputePipelineStateWithDescriptor:descriptor options:options reflection:nil error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  if (!err && info->binary_archive_for_serialization) {
-    [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addComputePipelineFunctionsWithDescriptor:descriptor
-                                                                                                      error:&err];
-  }
-  [descriptor release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newComputePipelineState(void *obj);
 
 NTSTATUS _MTLCommandBuffer_blitCommandEncoder(void *obj);
 
@@ -173,225 +129,14 @@ NTSTATUS _MTLCommandEncoder_endEncoding(void *obj);
 
 #ifndef DXMT_NO_PRIVATE_API
 
-typedef NS_ENUM(NSUInteger, MTLLogicOperation) {
-  MTLLogicOperationClear,
-  MTLLogicOperationSet,
-  MTLLogicOperationCopy,
-  MTLLogicOperationCopyInverted,
-  MTLLogicOperationNoop,
-  MTLLogicOperationInvert,
-  MTLLogicOperationAnd,
-  MTLLogicOperationNand,
-  MTLLogicOperationOr,
-  MTLLogicOperationNor,
-  MTLLogicOperationXor,
-  MTLLogicOperationEquivalence,
-  MTLLogicOperationAndReverse,
-  MTLLogicOperationAndInverted,
-  MTLLogicOperationOrReverse,
-  MTLLogicOperationOrInverted,
-};
-
-@interface
-MTLRenderPipelineDescriptor ()
-
-- (void)setLogicOperationEnabled:(BOOL)enable;
-- (void)setLogicOperation:(MTLLogicOperation)op;
-
-@end
-
-@interface
-MTLMeshRenderPipelineDescriptor ()
-
-- (void)setLogicOperationEnabled:(BOOL)enable;
-- (void)setLogicOperation:(MTLLogicOperation)op;
-
-@end
-
 #endif
 
-/* The descriptor slot 34 and MacNeutron's slot 156 share: +1, the caller releases it. */
-static MTLRenderPipelineDescriptor *
-render_pipeline_descriptor(const struct WMTRenderPipelineInfo *info) {
-  MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
-
-  for (unsigned i = 0; i < 8; i++) {
-    descriptor.colorAttachments[i].pixelFormat = to_metal_pixel_format(info->colors[i].pixel_format);
-    descriptor.colorAttachments[i].blendingEnabled = info->colors[i].blending_enabled;
-    descriptor.colorAttachments[i].writeMask = (MTLColorWriteMask)info->colors[i].write_mask;
-
-    descriptor.colorAttachments[i].alphaBlendOperation = (MTLBlendOperation)info->colors[i].alpha_blend_operation;
-    descriptor.colorAttachments[i].rgbBlendOperation = (MTLBlendOperation)info->colors[i].rgb_blend_operation;
-
-    descriptor.colorAttachments[i].sourceRGBBlendFactor = (MTLBlendFactor)info->colors[i].src_rgb_blend_factor;
-    descriptor.colorAttachments[i].sourceAlphaBlendFactor = (MTLBlendFactor)info->colors[i].src_alpha_blend_factor;
-    descriptor.colorAttachments[i].destinationRGBBlendFactor = (MTLBlendFactor)info->colors[i].dst_rgb_blend_factor;
-    descriptor.colorAttachments[i].destinationAlphaBlendFactor = (MTLBlendFactor)info->colors[i].dst_alpha_blend_factor;
-  }
-
-  for (unsigned i = 0; i < 31; i++) {
-    if (info->immutable_fragment_buffers & (1 << i))
-      descriptor.fragmentBuffers[i].mutability = MTLMutabilityImmutable;
-    if (info->immutable_vertex_buffers & (1 << i))
-      descriptor.vertexBuffers[i].mutability = MTLMutabilityImmutable;
-  }
-
-#ifndef DXMT_NO_PRIVATE_API
-  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
-  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
-#endif
-  descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
-  descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
-  descriptor.alphaToCoverageEnabled = info->alpha_to_coverage_enabled;
-  descriptor.rasterizationEnabled = info->rasterization_enabled;
-  descriptor.rasterSampleCount = info->raster_sample_count;
-  descriptor.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)info->input_primitive_topology;
-  descriptor.tessellationPartitionMode = (MTLTessellationPartitionMode)info->tessellation_partition_mode;
-  descriptor.tessellationFactorStepFunction = (MTLTessellationFactorStepFunction)info->tessellation_factor_step;
-  descriptor.tessellationOutputWindingOrder = (MTLWinding)info->tessellation_output_winding_order;
-  descriptor.maxTessellationFactor = info->max_tessellation_factor;
-
-  descriptor.vertexFunction = (id<MTLFunction>)info->vertex_function;
-  descriptor.fragmentFunction = (id<MTLFunction>)info->fragment_function;
-  descriptor.supportIndirectCommandBuffers = info->support_indirect_command_buffers;
-
-  if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
-    descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
-                                                    count:info->num_binary_archives_for_lookup];
-  return descriptor;
-}
-
-/* Slots 34 and 156: the pipeline of `descriptor` (released here) and its error. */
-static void
-render_pipeline_state(
-    obj_handle_t device, const struct WMTRenderPipelineInfo *info, MTLRenderPipelineDescriptor *descriptor,
-    obj_handle_t *ret_pso, obj_handle_t *ret_error
-) {
-  NSError *err = NULL;
-  MTLPipelineOption options =
-      info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
-  *ret_pso = (obj_handle_t)[(id<MTLDevice>)device newRenderPipelineStateWithDescriptor:descriptor
-                                                                                              options:options
-                                                                                           reflection:nil
-                                                                                                error:&err];
-  *ret_error = (obj_handle_t)[err retain];
-  if (!err && info->binary_archive_for_serialization) {
-    [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
-                                                                                                     error:&err];
-  }
-  [descriptor release];
-}
-
-static NTSTATUS
-_MTLDevice_newRenderPipelineState(void *obj) {
-  struct unixcall_mtldevice_newrenderpso *params = obj;
-  const struct WMTRenderPipelineInfo *info = params->info.ptr;
-  render_pipeline_state(
-      params->device, info, render_pipeline_descriptor(info), &params->ret_pso, &params->ret_error
-  );
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newRenderPipelineState(void *obj);
 
 /* MacNeutron: slot 34's pipeline with a vertex descriptor (Direct3D 9 on winemetal). */
-static NTSTATUS
-_MTLDevice_newRenderPipelineStateWithVertexDescriptor(void *obj) {
-  struct unixcall_mtldevice_newrenderpso_vertex *params = obj;
-  const struct WMTRenderPipelineInfo *info = params->info.ptr;
-  const struct WMTVertexDescriptorInfo *vertex = params->vertex.ptr;
-  MTLRenderPipelineDescriptor *descriptor = render_pipeline_descriptor(info);
-  MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-  for (unsigned i = 0; i < 31; i++) {
-    if (vertex->attributes[i].format) {
-      vd.attributes[i].format = (MTLVertexFormat)vertex->attributes[i].format;
-      vd.attributes[i].offset = vertex->attributes[i].offset;
-      vd.attributes[i].bufferIndex = vertex->attributes[i].buffer_index;
-    }
-    if (vertex->layouts[i].stride) {
-      vd.layouts[i].stride = vertex->layouts[i].stride;
-      vd.layouts[i].stepFunction = (MTLVertexStepFunction)vertex->layouts[i].step_function;
-      vd.layouts[i].stepRate = vertex->layouts[i].step_rate;
-    }
-  }
-  descriptor.vertexDescriptor = vd;
-  render_pipeline_state(params->device, info, descriptor, &params->ret_pso, &params->ret_error);
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newRenderPipelineStateWithVertexDescriptor(void *obj);
 
-static NTSTATUS
-_MTLDevice_newMeshRenderPipelineState(void *obj) {
-  struct unixcall_mtldevice_newmeshrenderpso *params = obj;
-  const struct WMTMeshRenderPipelineInfo *info = params->info.ptr;
-  MTLMeshRenderPipelineDescriptor *descriptor = [[MTLMeshRenderPipelineDescriptor alloc] init];
-
-  for (unsigned i = 0; i < 8; i++) {
-    descriptor.colorAttachments[i].pixelFormat = to_metal_pixel_format(info->colors[i].pixel_format);
-    descriptor.colorAttachments[i].blendingEnabled = info->colors[i].blending_enabled;
-    descriptor.colorAttachments[i].writeMask = (MTLColorWriteMask)info->colors[i].write_mask;
-
-    descriptor.colorAttachments[i].alphaBlendOperation = (MTLBlendOperation)info->colors[i].alpha_blend_operation;
-    descriptor.colorAttachments[i].rgbBlendOperation = (MTLBlendOperation)info->colors[i].rgb_blend_operation;
-
-    descriptor.colorAttachments[i].sourceRGBBlendFactor = (MTLBlendFactor)info->colors[i].src_rgb_blend_factor;
-    descriptor.colorAttachments[i].sourceAlphaBlendFactor = (MTLBlendFactor)info->colors[i].src_alpha_blend_factor;
-    descriptor.colorAttachments[i].destinationRGBBlendFactor = (MTLBlendFactor)info->colors[i].dst_rgb_blend_factor;
-    descriptor.colorAttachments[i].destinationAlphaBlendFactor = (MTLBlendFactor)info->colors[i].dst_alpha_blend_factor;
-  }
-
-  for (unsigned i = 0; i < 31; i++) {
-    if (info->immutable_fragment_buffers & (1 << i))
-      descriptor.fragmentBuffers[i].mutability = MTLMutabilityImmutable;
-    if (info->immutable_mesh_buffers & (1 << i))
-      descriptor.meshBuffers[i].mutability = MTLMutabilityImmutable;
-    if (info->immutable_object_buffers & (1 << i))
-      descriptor.objectBuffers[i].mutability = MTLMutabilityImmutable;
-  }
-
-#ifndef DXMT_NO_PRIVATE_API
-  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
-  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
-#endif
-  descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
-  descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
-  descriptor.alphaToCoverageEnabled = info->alpha_to_coverage_enabled;
-  descriptor.rasterizationEnabled = info->rasterization_enabled;
-  descriptor.rasterSampleCount = info->raster_sample_count;
-
-  descriptor.objectFunction = (id<MTLFunction>)info->object_function;
-  descriptor.meshFunction = (id<MTLFunction>)info->mesh_function;
-  descriptor.fragmentFunction = (id<MTLFunction>)info->fragment_function;
-  descriptor.payloadMemoryLength = info->payload_memory_length;
-
-  descriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth = info->mesh_tgsize_is_multiple_of_sgwidth;
-  descriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth = info->object_tgsize_is_multiple_of_sgwidth;
-  descriptor.supportIndirectCommandBuffers = info->support_indirect_command_buffers;
-
-  MTLPipelineOption options = MTLPipelineOptionNone;
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
-  if (@available(macOS 15, *)) {
-    if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
-      descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
-                                                      count:info->num_binary_archives_for_lookup];
-    options = info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
-  }
-#endif
-  NSError *err = NULL;
-  params->ret_pso = (obj_handle_t)[(id<MTLDevice>)params->device newRenderPipelineStateWithMeshDescriptor:descriptor
-                                                                                                  options:options
-                                                                                               reflection:nil
-                                                                                                    error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
-  if (@available(macOS 15, *)) {
-    if (!err && info->binary_archive_for_serialization) {
-      [(id<MTLBinaryArchive>)info->binary_archive_for_serialization
-          addMeshRenderPipelineFunctionsWithDescriptor:descriptor
-                                                 error:&err];
-    }
-  }
-#endif
-  [descriptor release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newMeshRenderPipelineState(void *obj);
 
 NTSTATUS _MTLBlitCommandEncoder_encodeCommands(void *obj);
 
@@ -1511,23 +1256,7 @@ _MetalLayer_getEDRValue(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLLibrary_newFunctionWithConstants(void *obj) {
-  struct unixcall_mtllibrary_newfunction_with_constants *params = obj;
-  id<MTLLibrary> library = (id<MTLLibrary>)params->library;
-  NSString *name = [[NSString alloc] initWithCString:(char *)params->name.ptr encoding:NSUTF8StringEncoding];
-  struct WMTFunctionConstant *constants = (struct WMTFunctionConstant *)params->constants.ptr;
-  NSError *err = NULL;
-  MTLFunctionConstantValues *values = [[MTLFunctionConstantValues alloc] init];
-  for (uint64_t i = 0; i < params->num_constants; i++)
-    [values setConstantValue:constants[i].data.ptr type:(MTLDataType)constants[i].type atIndex:constants[i].index];
-
-  params->ret = (obj_handle_t)[library newFunctionWithName:name constantValues:values error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [name release];
-  [values release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLLibrary_newFunctionWithConstants(void *obj);
 
 static NTSTATUS
 _WMTQueryDisplaySetting(void *obj) {
@@ -1749,40 +1478,9 @@ NTSTATUS _MTLBuffer_updateContents(void *obj);
 
 NTSTATUS _WMTGetOSVersion(void *obj);
 
-static NTSTATUS
-_MTLDevice_newBinaryArchive(void *obj) {
-  struct unixcall_mtldevice_newbinaryarchive *params = obj;
-  NSString *path_str = NULL;
-  NSURL *url = NULL;
-  MTLBinaryArchiveDescriptor *desc = [[MTLBinaryArchiveDescriptor alloc] init];
-  if (params->url.ptr != NULL) {
-    path_str = [[NSString alloc] initWithCString:params->url.ptr encoding:NSUTF8StringEncoding];
-    url = [[NSURL alloc] initFileURLWithPath:path_str];
-    desc.url = url;
-  }
-  NSError *err = NULL;
-  params->ret_archive = (obj_handle_t)[(id<MTLDevice>)params->device newBinaryArchiveWithDescriptor:desc error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [desc release];
-  if (url)
-    [url release];
-  if (path_str)
-    [path_str release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newBinaryArchive(void *obj);
 
-static NTSTATUS
-_MTLBinaryArchive_serialize(void *obj) {
-  struct unixcall_mtlbinaryarchive_serialize *params = obj;
-  NSString *path_str = [[NSString alloc] initWithCString:params->url.ptr encoding:NSUTF8StringEncoding];
-  NSURL *url = [[NSURL alloc] initFileURLWithPath:path_str];
-  NSError *err = NULL;
-  [(id<MTLBinaryArchive>)params->archive serializeToURL:url error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [url release];
-  [path_str release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLBinaryArchive_serialize(void *obj);
 
 NTSTATUS _DispatchData_alloc_init(void *obj);
 
@@ -1977,54 +1675,7 @@ NTSTATUS _MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(void *obj);
 
 NTSTATUS _MTLCommandBuffer_property(void *obj);
 
-static NTSTATUS
-_MTLDevice_newTileRenderPipelineState(void *obj) {
-  struct unixcall_mtldevice_newrenderpso *params = obj;
-  const struct WMTTileRenderPipelineInfo *info = params->info.ptr;
-  MTLTileRenderPipelineDescriptor *descriptor = [[MTLTileRenderPipelineDescriptor alloc] init];
-
-  for (unsigned i = 0; i < 8; i++) {
-    descriptor.colorAttachments[i].pixelFormat = to_metal_pixel_format(info->color_formats[i]);
-  }
-
-  for (unsigned i = 0; i < 31; i++) {
-    if (info->immutable_tile_buffers & (1 << i))
-      descriptor.tileBuffers[i].mutability = MTLMutabilityImmutable;
-  }
-
-  descriptor.rasterSampleCount = info->raster_sample_count;
-  descriptor.threadgroupSizeMatchesTileSize = info->tgsize_matches_tile_size;
-
-
-  descriptor.tileFunction = (id<MTLFunction>)info->tile_function;
-
-  MTLPipelineOption options = MTLPipelineOptionNone;
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
-  if (@available(macOS 15, *)) {
-    if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
-      descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
-                                                      count:info->num_binary_archives_for_lookup];
-    options = info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
-  }
-#endif
-  NSError *err = NULL;
-  params->ret_pso = (obj_handle_t)[(id<MTLDevice>)params->device newRenderPipelineStateWithTileDescriptor:descriptor
-                                                                                                  options:options
-                                                                                               reflection:nil
-                                                                                                    error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
-  if (@available(macOS 15, *)) {
-    if (!err && info->binary_archive_for_serialization) {
-      [(id<MTLBinaryArchive>)info->binary_archive_for_serialization
-          addTileRenderPipelineFunctionsWithDescriptor:descriptor
-                                                 error:&err];
-    }
-  }
-#endif
-  [descriptor release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newTileRenderPipelineState(void *obj);
 
 NTSTATUS _MTLDevice_newResidencySet(void *obj);
 
@@ -2050,42 +1701,10 @@ NTSTATUS _MTLHeap_newTexture(void *obj);
 
 NTSTATUS _MTLDevice_newIndirectCommandBuffer(void *obj);
 
-static NTSTATUS
-_MTLDevice_newLibraryWithSource(void *obj) {
-  struct unixcall_mtldevice_newlibrarywithsource *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  NSString *source =
-      [[NSString alloc] initWithBytes:params->source.ptr length:params->length encoding:NSASCIIStringEncoding];
-  NSError *err = NULL;
-  MTLCompileOptions * options = [[MTLCompileOptions alloc] init];
-  options.languageVersion = MTLLanguageVersion3_1;
-  params->ret_library = (obj_handle_t)[device newLibraryWithSource:source options:options error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [source release];
-  [options release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newLibraryWithSource(void *obj);
 
 /* MacNeutron: slot 144 with compile options (Direct3D 9 on winemetal). */
-static NTSTATUS
-_MTLDevice_newLibraryWithSourceOptions(void *obj) {
-  struct unixcall_mtldevice_newlibrarywithsource_options *params = obj;
-  const struct WMTCompileOptions *info = params->options.ptr;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  NSString *source =
-      [[NSString alloc] initWithBytes:params->source.ptr length:params->length encoding:NSASCIIStringEncoding];
-  MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
-  if (info->language_version)
-    options.languageVersion = (MTLLanguageVersion)info->language_version;
-  options.preserveInvariance = info->preserve_invariance;
-  options.mathMode = (MTLMathMode)info->math_mode;
-  NSError *err = NULL;
-  params->ret_library = (obj_handle_t)[device newLibraryWithSource:source options:options error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [options release];
-  [source release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newLibraryWithSourceOptions(void *obj);
 
 /* MacNeutron: the guest's own slots (153-154, its memory; 155, Direct3D forwarding) in this table's place. */
 static NTSTATUS
