@@ -12,7 +12,8 @@
 # constants SCREAMING_SNAKE_CASE (WMTPixelFormatBGRX8Unorm: WMT_PIXEL_FORMAT_BGRX8_UNORM). A struct's bitfields are
 # one integer field, bits, with <FIELD>_SHIFT and <FIELD>_WIDTH constants. Fails when a struct of winemetal_thunks.h or
 # airconv_thunks.h is missing from a dump or has no mirror, when a mirror or a constant names nothing in the C, on a
-# bitfield it cannot place, and when the slots are not 0..157 once each or differ from slot.rs's.
+# bitfield it cannot place, and when the slots are not 0..157 once each or differ from slot.rs's. A compile_error! stops a
+# build for any other target.
 set -eu
 [ $# -eq 1 ] || { echo "usage: winemetal-layouts.sh <llvm-mingw-bin>" >&2; exit 2; }
 bin=$1
@@ -71,13 +72,13 @@ cat <<'EOF'
 use core::mem::offset_of;
 EOF
 
-# Records: S <c> <size>, F <c> <field> <offset>, B <c> <field> <bit> <width>, E <message>.
-printf '%s\n' \
-  'aarch64-apple-darwin all(target_arch = "aarch64", target_os = "macos")' \
-  'aarch64-w64-mingw32 all(target_arch = "aarch64", target_os = "windows")' \
-  'arm64ec-w64-mingw32 all(target_arch = "arm64ec", target_os = "windows")' \
-  'x86_64-w64-mingw32 all(target_arch = "x86_64", target_os = "windows")' \
-  'i686-w64-mingw32 all(target_arch = "x86", target_os = "windows")' |
+# The targets and their cfgs. Records: S <c> <size>, F <c> <field> <offset>, B <c> <field> <bit> <width>, E <message>.
+targets='aarch64-apple-darwin all(target_arch = "aarch64", target_os = "macos")
+aarch64-w64-mingw32 all(target_arch = "aarch64", target_os = "windows")
+arm64ec-w64-mingw32 all(target_arch = "arm64ec", target_os = "windows")
+x86_64-w64-mingw32 all(target_arch = "x86_64", target_os = "windows")
+i686-w64-mingw32 all(target_arch = "x86", target_os = "windows")'
+printf '%s\n' "$targets" |
 while read -r target cfg; do
   case $target in
   *-apple-*) apple -fsyntax-only -Xclang -fdump-record-layouts-complete "$t/tu.c" ;;
@@ -128,6 +129,11 @@ while read -r target cfg; do
   awk '!seen[$0]++' "$t/out"
   printf '};\n'
 done
+
+# Any other target has no layout facts: the crate does not build there.
+printf '\n#[cfg(not(any(\n'
+printf '%s\n' "$targets" | sed 's/^[^ ]* \(.*\)/    \1,/'
+printf ')))]\ncompile_error!("winemetal-wire: no layout facts for this target");\n'
 
 # Constants: every enumerator of winemetal.h (WMTWsi*, the native hooks', aside) and SM50_BINDING_INDEX_*, valued by an
 # enum of probes; airconv's unix_sm50_* are slots.

@@ -6756,6 +6756,15 @@ const _: () = {
     assert!(size_of::<crate::Sm50GetArgumentsInfoParams32>() == 16);
 };
 
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_os = "macos"),
+    all(target_arch = "aarch64", target_os = "windows"),
+    all(target_arch = "arm64ec", target_os = "windows"),
+    all(target_arch = "x86_64", target_os = "windows"),
+    all(target_arch = "x86", target_os = "windows"),
+)))]
+compile_error!("winemetal-wire: no layout facts for this target");
+
 const _: () = {
     assert!(crate::AIRCONV_VERSION == 26);
     assert!(crate::NULL_OBJECT_HANDLE == 0);
