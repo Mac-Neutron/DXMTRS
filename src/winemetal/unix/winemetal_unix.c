@@ -27,68 +27,23 @@ execute_on_main(dispatch_block_t block) {
   }
 }
 
-static NTSTATUS
-_NSObject_retain(NSObject **obj) {
-  [*obj retain];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSObject_retain(void *obj);
 
-static NTSTATUS
-_NSObject_release(NSObject **obj) {
-  [*obj release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSObject_release(void *obj);
 
-static NTSTATUS
-_NSArray_object(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(NSArray *)params->handle objectAtIndex:params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSArray_object(void *obj);
 
-static NTSTATUS
-_NSArray_count(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(NSArray *)params->handle count];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSArray_count(void *obj);
 
-static NTSTATUS
-_MTLCopyAllDevices(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  params->ret = (obj_handle_t)MTLCopyAllDevices();
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCopyAllDevices(void *obj);
 
-static NTSTATUS
-_MTLDevice_recommendedMaxWorkingSetSize(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle recommendedMaxWorkingSetSize];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_recommendedMaxWorkingSetSize(void *obj);
 
-static NTSTATUS
-_MTLDevice_currentAllocatedSize(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle currentAllocatedSize];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_currentAllocatedSize(void *obj);
 
-static NTSTATUS
-_MTLDevice_name(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle name];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_name(void *obj);
 
-static NTSTATUS
-_NSString_getCString(void *obj) {
-  struct unixcall_nsstring_getcstring *params = obj;
-  params->ret = (uint32_t)[(NSString *)params->str getCString:(char *)params->buffer_ptr
-                                                    maxLength:params->max_length
-                                                     encoding:params->encoding];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSString_getCString(void *obj);
 
 static NTSTATUS
 _MTLDevice_newCommandQueue(void *obj) {
@@ -97,12 +52,7 @@ _MTLDevice_newCommandQueue(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_NSAutoreleasePool_alloc_init(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[[NSAutoreleasePool alloc] init];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSAutoreleasePool_alloc_init(void *obj);
 
 static NTSTATUS
 _MTLCommandQueue_commandBuffer(void *obj) {
@@ -371,12 +321,7 @@ _MTLTexture_newTextureView(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle minimumLinearTextureAlignmentForPixelFormat:to_metal_pixel_format(params->arg)];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj);
 
 static NTSTATUS
 _MTLDevice_newLibrary(void *obj) {
@@ -398,19 +343,9 @@ _MTLLibrary_newFunction(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_NSString_lengthOfBytesUsingEncoding(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  params->ret = (uint64_t)[(NSString *)params->handle lengthOfBytesUsingEncoding:(NSStringEncoding)params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSString_lengthOfBytesUsingEncoding(void *obj);
 
-static NTSTATUS
-_NSObject_description(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(NSObject *)params->handle description];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSObject_description(void *obj);
 
 static NTSTATUS
 _MTLDevice_newComputePipelineState(void *obj) {
@@ -1461,33 +1396,13 @@ _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_supportsFamily(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle supportsFamily:(MTLGPUFamily)params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_supportsFamily(void *obj);
 
-static NTSTATUS
-_MTLDevice_supportsBCTextureCompression(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle supportsBCTextureCompression];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_supportsBCTextureCompression(void *obj);
 
-static NTSTATUS
-_MTLDevice_supportsTextureSampleCount(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle supportsTextureSampleCount:params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_supportsTextureSampleCount(void *obj);
 
-static NTSTATUS
-_MTLDevice_hasUnifiedMemory(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle hasUnifiedMemory];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_hasUnifiedMemory(void *obj);
 
 static NTSTATUS
 _MTLCaptureManager_sharedCaptureManager(void *obj) {
@@ -1675,21 +1590,9 @@ _MTLCommandBuffer_encodeSpatialScale(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_NSString_string(void *obj) {
-  struct unixcall_nsstring_string *params = obj;
-  NSString *str = [NSString stringWithCString:params->buffer_ptr.ptr encoding:(NSStringEncoding)params->encoding];
-  params->ret = (obj_handle_t)str;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSString_string(void *obj);
 
-static NTSTATUS
-_NSString_alloc_init(void *obj) {
-  struct unixcall_nsstring_string *params = obj;
-  NSString *str = [[NSString alloc] initWithCString:params->buffer_ptr.ptr encoding:(NSStringEncoding)params->encoding];
-  params->ret = (obj_handle_t)str;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _NSString_alloc_init(void *obj);
 
 static bool
 developer_hud_uses_metric_service(void) {
@@ -2011,19 +1914,9 @@ thunk_SM50CompileGeometryPipelineGeometry(void *args) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCommandEncoder_setLabel(void *args) {
-  struct unixcall_generic_obj_obj_noret *params = args;
-  [(id<MTLCommandEncoder>)params->handle setLabel:(NSString *)params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandEncoder_setLabel(void *obj);
 
-static NTSTATUS
-_MTLDevice_setShouldMaximizeConcurrentCompilation(void *args) {
-  struct unixcall_generic_obj_uint64_noret *params = args;
-  [(id<MTLDevice>)params->handle setShouldMaximizeConcurrentCompilation:(BOOL)params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_setShouldMaximizeConcurrentCompilation(void *obj);
 
 static NTSTATUS
 thunk_SM50GetArgumentsInfo(void *args) {
@@ -2856,15 +2749,7 @@ _MTLBuffer_updateContents(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_WMTGetOSVersion(void *obj) {
-  struct unixcall_get_os_version *params = obj;
-  NSOperatingSystemVersion version = [NSProcessInfo processInfo].operatingSystemVersion;
-  params->ret_major = version.majorVersion;
-  params->ret_minor = version.minorVersion;
-  params->ret_patch = version.patchVersion;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _WMTGetOSVersion(void *obj);
 
 static NTSTATUS
 _MTLDevice_newBinaryArchive(void *obj) {
@@ -2901,12 +2786,7 @@ _MTLBinaryArchive_serialize(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_DispatchData_alloc_init(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  params->ret = (obj_handle_t)dispatch_data_create((void *)params->handle, params->arg, NULL, NULL);
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DispatchData_alloc_init(void *obj);
 
 @interface MTLSharedTextureHandle ()
 
@@ -3011,12 +2891,7 @@ _MTLDevice_newSharedEventWithMachPort(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_registryID(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLDevice>)params->handle registryID];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_registryID(void *obj);
 
 static NTSTATUS
 _MTLSharedEvent_waitUntilSignaledValue(void *obj) {
@@ -3087,31 +2962,9 @@ _MTLCommandBuffer_computeCommandEncoderWithSampleBuffers(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_sampleTimestamps(void *obj) {
-  struct unixcall_mtldevice_sampletimestamps *params = obj;
-  MTLTimestamp cpu = 0, gpu = 0;
-  [(id<MTLDevice>)params->device sampleTimestamps:&cpu gpuTimestamp:&gpu];
-  params->cpu = cpu;
-  params->gpu = gpu;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_sampleTimestamps(void *obj);
 
-static NTSTATUS
-_DispatchData_copyBytes(void *obj) {
-  struct unixcall_dispatchdata_copybytes *params = obj;
-  dispatch_data_t data = (dispatch_data_t)params->data;
-  char *out = params->buffer.ptr;
-  uint64_t capacity = params->capacity;
-  dispatch_data_apply(data, ^bool(dispatch_data_t region, size_t offset, const void *bytes, size_t length) {
-    if (offset >= capacity)
-      return false;
-    memcpy(out + offset, bytes, MIN(length, capacity - offset));
-    return true;
-  });
-  params->ret_size = dispatch_data_get_size(data);
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DispatchData_copyBytes(void *obj);
 
 static NTSTATUS
 _MTLDevice_temporalScalerScaleRange(void *obj) {
