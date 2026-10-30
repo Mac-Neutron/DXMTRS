@@ -45,42 +45,17 @@ NTSTATUS _MTLDevice_name(void *obj);
 
 NTSTATUS _NSString_getCString(void *obj);
 
-static NTSTATUS
-_MTLDevice_newCommandQueue(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newCommandQueueWithMaxCommandBufferCount:params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newCommandQueue(void *obj);
 
 NTSTATUS _NSAutoreleasePool_alloc_init(void *obj);
 
-static NTSTATUS
-_MTLCommandQueue_commandBuffer(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLCommandQueue>)params->handle commandBuffer];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandQueue_commandBuffer(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_commit(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  [(id<MTLCommandBuffer>)params->handle commit];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_commit(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_waitUntilCompleted(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  [(id<MTLCommandBuffer>)params->handle waitUntilCompleted];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_waitUntilCompleted(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_status(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLCommandBuffer>)params->handle status];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_status(void *obj);
 
 static NTSTATUS
 _MTLDevice_newSharedEvent(void *obj) {
@@ -96,12 +71,7 @@ _MTLSharedEvent_signaledValue(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCommandBuffer_encodeSignalEvent(void *obj) {
-  struct unixcall_generic_obj_obj_uint64_noret *params = obj;
-  [(id<MTLCommandBuffer>)params->handle encodeSignalEvent:(id<MTLSharedEvent>)params->arg0 value:params->arg1];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_encodeSignalEvent(void *obj);
 
 #ifdef DXMT_NATIVE
 #endif
@@ -193,100 +163,13 @@ _MTLDevice_newComputePipelineState(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCommandBuffer_blitCommandEncoder(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle blitCommandEncoder];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_blitCommandEncoder(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_computeCommandEncoder(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle
-      computeCommandEncoderWithDispatchType:params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_computeCommandEncoder(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_renderCommandEncoder(void *obj) {
-  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
-  struct WMTRenderPassInfo *info = (struct WMTRenderPassInfo *)params->arg;
-  MTLRenderPassDescriptor *descriptor = [[MTLRenderPassDescriptor alloc] init];
-  for (unsigned i = 0; i < 8; i++) {
-    descriptor.colorAttachments[i].clearColor = MTLClearColorMake(
-        info->colors[i].clear_color.r, info->colors[i].clear_color.g, info->colors[i].clear_color.b,
-        info->colors[i].clear_color.a
-    );
-    descriptor.colorAttachments[i].level = info->colors[i].level;
-    descriptor.colorAttachments[i].slice = info->colors[i].slice;
-    descriptor.colorAttachments[i].depthPlane = info->colors[i].depth_plane;
-    descriptor.colorAttachments[i].texture = (id<MTLTexture>)info->colors[i].texture;
-    descriptor.colorAttachments[i].loadAction = (MTLLoadAction)info->colors[i].load_action;
-    descriptor.colorAttachments[i].storeAction = (MTLStoreAction)info->colors[i].store_action;
-    descriptor.colorAttachments[i].resolveTexture = (id<MTLTexture>)info->colors[i].resolve_texture;
-    descriptor.colorAttachments[i].resolveLevel = info->colors[i].resolve_level;
-    descriptor.colorAttachments[i].resolveSlice = info->colors[i].resolve_slice;
-    descriptor.colorAttachments[i].resolveDepthPlane = info->colors[i].resolve_depth_plane;
-  }
+NTSTATUS _MTLCommandBuffer_renderCommandEncoder(void *obj);
 
-  if (info->depth.texture) {
-    descriptor.depthAttachment.clearDepth = info->depth.clear_depth;
-    descriptor.depthAttachment.depthPlane = info->depth.depth_plane;
-    descriptor.depthAttachment.level = info->depth.level;
-    descriptor.depthAttachment.slice = info->depth.slice;
-    descriptor.depthAttachment.texture = (id<MTLTexture>)info->depth.texture;
-    descriptor.depthAttachment.loadAction = (MTLLoadAction)info->depth.load_action;
-    descriptor.depthAttachment.storeAction = (MTLStoreAction)info->depth.store_action;
-  }
-
-  if (info->stencil.texture) {
-    descriptor.stencilAttachment.clearStencil = info->stencil.clear_stencil;
-    descriptor.stencilAttachment.depthPlane = info->stencil.depth_plane;
-    descriptor.stencilAttachment.level = info->stencil.level;
-    descriptor.stencilAttachment.slice = info->stencil.slice;
-    descriptor.stencilAttachment.texture = (id<MTLTexture>)info->stencil.texture;
-    descriptor.stencilAttachment.loadAction = (MTLLoadAction)info->stencil.load_action;
-    descriptor.stencilAttachment.storeAction = (MTLStoreAction)info->stencil.store_action;
-  }
-
-  descriptor.defaultRasterSampleCount = info->default_raster_sample_count;
-  descriptor.renderTargetArrayLength = info->render_target_array_length;
-  descriptor.renderTargetHeight = info->render_target_height;
-  descriptor.renderTargetWidth = info->render_target_width;
-  descriptor.visibilityResultBuffer = (id<MTLBuffer>)info->visibility_buffer;
-  for (unsigned i = 0; i < 4; i++) { // timestamps at the pass's end (MacNeutron)
-    if (!info->sample_buffers[i].sample_buffer)
-      continue;
-    MTLRenderPassSampleBufferAttachmentDescriptor *sample = descriptor.sampleBufferAttachments[i];
-    sample.sampleBuffer = (id<MTLCounterSampleBuffer>)info->sample_buffers[i].sample_buffer;
-    sample.startOfVertexSampleIndex = info->sample_buffers[i].start_of_vertex_sample_index;
-    sample.endOfVertexSampleIndex = MTLCounterDontSample;
-    sample.startOfFragmentSampleIndex = MTLCounterDontSample;
-    sample.endOfFragmentSampleIndex = info->sample_buffers[i].end_of_fragment_sample_index;
-  }
-  if (info->visibility_accumulate) {
-    if (@available(macOS 14.0, *))
-      descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
-  }
-
-  if (info->tile_height && info->tile_width) {
-    descriptor.tileWidth = info->tile_width;
-    descriptor.tileHeight = info->tile_height;
-  }
-
-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle renderCommandEncoderWithDescriptor:descriptor];
-
-  [descriptor release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCommandEncoder_endEncoding(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  [(id<MTLCommandEncoder>)params->handle endEncoding];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandEncoder_endEncoding(void *obj);
 
 #ifndef DXMT_NO_PRIVATE_API
 
@@ -510,602 +393,11 @@ _MTLDevice_newMeshRenderPipelineState(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLBlitCommandEncoder_encodeCommands(void *obj) {
-  struct unixcall_generic_obj_cmd_noret *params = obj;
-  const struct wmtcmd_base *next = params->cmd_head.ptr;
-  id<MTLBlitCommandEncoder> encoder = (id<MTLBlitCommandEncoder>)params->encoder;
-  while (next) {
-    switch ((enum WMTBlitCommandType)next->type) {
-    default:
-      assert(!next->type && "unhandled blit command type");
-      break;
-    case WMTBlitCommandCopyFromBufferToBuffer: {
-      struct wmtcmd_blit_copy_from_buffer_to_buffer *body = (struct wmtcmd_blit_copy_from_buffer_to_buffer *)next;
-      [encoder copyFromBuffer:(id<MTLBuffer>)body->src
-                 sourceOffset:body->src_offset
-                     toBuffer:(id<MTLBuffer>)body->dst
-            destinationOffset:body->dst_offset
-                         size:body->copy_length];
-      break;
-    }
-    case WMTBlitCommandCopyFromBufferToTexture: {
-      struct wmtcmd_blit_copy_from_buffer_to_texture *body = (struct wmtcmd_blit_copy_from_buffer_to_texture *)next;
-      [encoder copyFromBuffer:(id<MTLBuffer>)body->src
-                 sourceOffset:body->src_offset
-            sourceBytesPerRow:body->bytes_per_row
-          sourceBytesPerImage:body->bytes_per_image
-                   sourceSize:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-                    toTexture:(id<MTLTexture>)body->dst
-             destinationSlice:body->slice
-             destinationLevel:body->level
-            destinationOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)];
-      break;
-    }
-    case WMTBlitCommandCopyFromBufferToTextureWithBlitOption: {
-      struct wmtcmd_blit_copy_from_buffer_to_texture_withblitoption *body =
-          (struct wmtcmd_blit_copy_from_buffer_to_texture_withblitoption *)next;
-      [encoder copyFromBuffer:(id<MTLBuffer>)body->src
-                 sourceOffset:body->src_offset
-            sourceBytesPerRow:body->bytes_per_row
-          sourceBytesPerImage:body->bytes_per_image
-                   sourceSize:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-                    toTexture:(id<MTLTexture>)body->dst
-             destinationSlice:body->slice
-             destinationLevel:body->level
-            destinationOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)
-                      options:(MTLBlitOption)body->options];
-      break;
-    }
-    case WMTBlitCommandCopyFromTextureToBuffer: {
-      struct wmtcmd_blit_copy_from_texture_to_buffer *body = (struct wmtcmd_blit_copy_from_texture_to_buffer *)next;
-      [encoder copyFromTexture:(id<MTLTexture>)body->src
-                       sourceSlice:body->slice
-                       sourceLevel:body->level
-                      sourceOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)
-                        sourceSize:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-                          toBuffer:(id<MTLBuffer>)body->dst
-                 destinationOffset:body->offset
-            destinationBytesPerRow:body->bytes_per_row
-          destinationBytesPerImage:body->bytes_per_image];
-      break;
-    }
-    case WMTBlitCommandCopyFromTextureToBufferWithBlitOption: {
-      struct wmtcmd_blit_copy_from_texture_to_buffer_withblitoption *body =
-          (struct wmtcmd_blit_copy_from_texture_to_buffer_withblitoption *)next;
-      [encoder copyFromTexture:(id<MTLTexture>)body->src
-                       sourceSlice:body->slice
-                       sourceLevel:body->level
-                      sourceOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)
-                        sourceSize:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-                          toBuffer:(id<MTLBuffer>)body->dst
-                 destinationOffset:body->offset
-            destinationBytesPerRow:body->bytes_per_row
-          destinationBytesPerImage:body->bytes_per_image
-                           options:(MTLBlitOption)body->options];
-      break;
-    }
-    case WMTBlitCommandCopyFromTextureToTexture: {
-      struct wmtcmd_blit_copy_from_texture_to_texture *body = (struct wmtcmd_blit_copy_from_texture_to_texture *)next;
-      [encoder copyFromTexture:(id<MTLTexture>)body->src
-                   sourceSlice:body->src_slice
-                   sourceLevel:body->src_level
-                  sourceOrigin:MTLOriginMake(body->src_origin.x, body->src_origin.y, body->src_origin.z)
-                    sourceSize:MTLSizeMake(body->src_size.width, body->src_size.height, body->src_size.depth)
-                     toTexture:(id<MTLTexture>)body->dst
-              destinationSlice:body->dst_slice
-              destinationLevel:body->dst_level
-             destinationOrigin:MTLOriginMake(body->dst_origin.x, body->dst_origin.y, body->dst_origin.z)];
-      break;
-    }
-    case WMTBlitCommandGenerateMipmaps: {
-      struct wmtcmd_blit_generate_mipmaps *body = (struct wmtcmd_blit_generate_mipmaps *)next;
-      [encoder generateMipmapsForTexture:(id<MTLTexture>)body->texture];
-      break;
-    }
-    case WMTBlitCommandUpdateFence: {
-      struct wmtcmd_blit_fence_op *body = (struct wmtcmd_blit_fence_op *)next;
-      [encoder updateFence:(id<MTLFence>)body->fence];
-      break;
-    }
-    case WMTBlitCommandWaitForFence: {
-      struct wmtcmd_blit_fence_op *body = (struct wmtcmd_blit_fence_op *)next;
-      [encoder waitForFence:(id<MTLFence>)body->fence];
-      break;
-    }
-    case WMTBlitCommandFillBuffer: {
-      struct wmtcmd_blit_fillbuffer *body = (struct wmtcmd_blit_fillbuffer *)next;
-      [encoder fillBuffer:(id<MTLBuffer>)body->buffer range:NSMakeRange(body->offset, body->length) value:body->value];
-      break;
-    }
-    case WMTBlitCommandResolveCounters: {
-      struct wmtcmd_blit_resolvecounters *body = (struct wmtcmd_blit_resolvecounters *)next;
-      [encoder resolveCounters:(id<MTLCounterSampleBuffer>)body->sample_buffer
-                       inRange:NSMakeRange(body->start, body->len)
-             destinationBuffer:(id<MTLBuffer>)body->dst_buffer
-             destinationOffset:body->dst_offset];
-      break;
-    }
-    case WMTBlitCommandResetCommandsInBuffer: {
-      struct wmtcmd_blit_resetcommands *body = (struct wmtcmd_blit_resetcommands *)next;
-      [encoder resetCommandsInBuffer:(id<MTLIndirectCommandBuffer>)body->indirect_command_buffer
-                           withRange:NSMakeRange(body->location, body->length)];
-      break;
-    }
-    case WMTBlitCommandCopyTexture: {
-      struct wmtcmd_blit_copy_texture *body = (struct wmtcmd_blit_copy_texture *)next;
-      [encoder copyFromTexture:(id<MTLTexture>)body->src toTexture:(id<MTLTexture>)body->dst];
-      break;
-    }
-    }
+NTSTATUS _MTLBlitCommandEncoder_encodeCommands(void *obj);
 
-    next = next->next.ptr;
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLComputeCommandEncoder_encodeCommands(void *obj);
 
-static NTSTATUS
-_MTLComputeCommandEncoder_encodeCommands(void *obj) {
-  struct unixcall_generic_obj_cmd_noret *params = obj;
-  const struct wmtcmd_base *next = params->cmd_head.ptr;
-  id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)params->encoder;
-  MTLSize threadgroup_size = {0, 0, 0};
-  while (next) {
-    switch ((enum WMTComputeCommandType)next->type) {
-    default:
-      assert(!next->type && "unhandled compute command type");
-      break;
-    case WMTComputeCommandDispatch: {
-      struct wmtcmd_compute_dispatch *body = (struct wmtcmd_compute_dispatch *)next;
-      [encoder dispatchThreadgroups:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-              threadsPerThreadgroup:threadgroup_size];
-      break;
-    }
-    case WMTComputeCommandDispatchThreads: {
-      struct wmtcmd_compute_dispatch *body = (struct wmtcmd_compute_dispatch *)next;
-      [encoder dispatchThreads:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
-          threadsPerThreadgroup:threadgroup_size];
-      break;
-    }
-    case WMTComputeCommandDispatchIndirect: {
-      struct wmtcmd_compute_dispatch_indirect *body = (struct wmtcmd_compute_dispatch_indirect *)next;
-      [encoder dispatchThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                                 indirectBufferOffset:body->indirect_args_offset
-                                threadsPerThreadgroup:threadgroup_size];
-      break;
-    }
-    case WMTComputeCommandSetPSO: {
-      struct wmtcmd_compute_setpso *body = (struct wmtcmd_compute_setpso *)next;
-      [encoder setComputePipelineState:(id<MTLComputePipelineState>)body->pso];
-      threadgroup_size.width = body->threadgroup_size.width;
-      threadgroup_size.height = body->threadgroup_size.height;
-      threadgroup_size.depth = body->threadgroup_size.depth;
-      break;
-    }
-    case WMTComputeCommandSetBuffer: {
-      struct wmtcmd_compute_setbuffer *body = (struct wmtcmd_compute_setbuffer *)next;
-      [encoder setBuffer:(id<MTLBuffer>)body->buffer offset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTComputeCommandSetBufferOffset: {
-      struct wmtcmd_compute_setbufferoffset *body = (struct wmtcmd_compute_setbufferoffset *)next;
-      [encoder setBufferOffset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTComputeCommandUseResource: {
-      struct wmtcmd_compute_useresource *body = (struct wmtcmd_compute_useresource *)next;
-      [encoder useResource:(id<MTLResource>)body->resource usage:(MTLResourceUsage)body->usage];
-      break;
-    }
-    case WMTComputeCommandSetBytes: {
-      struct wmtcmd_compute_setbytes *body = (struct wmtcmd_compute_setbytes *)next;
-      [encoder setBytes:body->bytes.ptr length:body->length atIndex:body->index];
-      break;
-    }
-    case WMTComputeCommandSetTexture: {
-      struct wmtcmd_compute_settexture *body = (struct wmtcmd_compute_settexture *)next;
-      [encoder setTexture:(id<MTLTexture>)body->texture atIndex:body->index];
-      break;
-    }
-    case WMTComputeCommandUpdateFence: {
-      struct wmtcmd_compute_fence_op *body = (struct wmtcmd_compute_fence_op *)next;
-      [encoder updateFence:(id<MTLFence>)body->fence];
-      break;
-    }
-    case WMTComputeCommandWaitForFence: {
-      struct wmtcmd_compute_fence_op *body = (struct wmtcmd_compute_fence_op *)next;
-      [encoder waitForFence:(id<MTLFence>)body->fence];
-      break;
-    }
-    case WMTComputeCommandMemoryBarrier: {
-      struct wmtcmd_compute_memory_barrier *body = (struct wmtcmd_compute_memory_barrier *)next;
-      [encoder memoryBarrierWithScope:(MTLBarrierScope)body->scope];
-      break;
-    }    
-    case WMTComputeCommandExecuteCommandsInBuffer: {
-      struct wmtcmd_compute_executecommands *body = (struct wmtcmd_compute_executecommands *)next;
-      [encoder executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)body->indirect_command_buffer
-                             withRange:NSMakeRange(body->location, body->length)];
-      break;
-    }
-    }
-
-    next = next->next.ptr;
-  }
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLRenderCommandEncoder_encodeCommands(void *obj) {
-  struct unixcall_generic_obj_cmd_noret *params = obj;
-  const struct wmtcmd_base *next = params->cmd_head.ptr;
-  id<MTLRenderCommandEncoder> encoder = (id<MTLRenderCommandEncoder>)params->encoder;
-  while (next) {
-    switch ((enum WMTRenderCommandType)next->type) {
-    default:
-      assert(!next->type && "unhandled render command type");
-      break;
-    case WMTRenderCommandNop:
-      break;
-    case WMTRenderCommandUseResource: {
-      struct wmtcmd_render_useresource *body = (struct wmtcmd_render_useresource *)next;
-      [encoder useResource:(id<MTLResource>)body->resource
-                     usage:(MTLResourceUsage)body->usage
-                    stages:(MTLRenderStages)body->stages];
-      break;
-    }
-    case WMTRenderCommandSetVertexBuffer: {
-      struct wmtcmd_render_setbuffer *body = (struct wmtcmd_render_setbuffer *)next;
-      [encoder setVertexBuffer:(id<MTLBuffer>)body->buffer offset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetVertexBufferOffset: {
-      struct wmtcmd_render_setbufferoffset *body = (struct wmtcmd_render_setbufferoffset *)next;
-      [encoder setVertexBufferOffset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetFragmentBuffer: {
-      struct wmtcmd_render_setbuffer *body = (struct wmtcmd_render_setbuffer *)next;
-      [encoder setFragmentBuffer:(id<MTLBuffer>)body->buffer offset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetFragmentBufferOffset: {
-      struct wmtcmd_render_setbufferoffset *body = (struct wmtcmd_render_setbufferoffset *)next;
-      [encoder setFragmentBufferOffset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetMeshBuffer: {
-      struct wmtcmd_render_setbuffer *body = (struct wmtcmd_render_setbuffer *)next;
-      [encoder setMeshBuffer:(id<MTLBuffer>)body->buffer offset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetMeshBufferOffset: {
-      struct wmtcmd_render_setbufferoffset *body = (struct wmtcmd_render_setbufferoffset *)next;
-      [encoder setMeshBufferOffset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetObjectBuffer: {
-      struct wmtcmd_render_setbuffer *body = (struct wmtcmd_render_setbuffer *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->buffer offset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetObjectBufferOffset: {
-      struct wmtcmd_render_setbufferoffset *body = (struct wmtcmd_render_setbufferoffset *)next;
-      [encoder setObjectBufferOffset:body->offset atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetFragmentBytes: {
-      struct wmtcmd_render_setbytes *body = (struct wmtcmd_render_setbytes *)next;
-      [encoder setFragmentBytes:body->bytes.ptr length:body->length atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetFragmentTexture: {
-      struct wmtcmd_render_settexture *body = (struct wmtcmd_render_settexture *)next;
-      [encoder setFragmentTexture:(id<MTLTexture>)body->texture atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetRasterizerState: {
-      struct wmtcmd_render_setrasterizerstate *body = (struct wmtcmd_render_setrasterizerstate *)next;
-      [encoder setTriangleFillMode:(MTLTriangleFillMode)body->fill_mode];
-      [encoder setCullMode:(MTLCullMode)body->cull_mode];
-      [encoder setDepthClipMode:(MTLDepthClipMode)body->depth_clip_mode];
-      [encoder setDepthBias:body->depth_bias slopeScale:body->scole_scale clamp:body->depth_bias_clamp];
-      [encoder setFrontFacingWinding:(MTLWinding)body->winding];
-      break;
-    }
-    case WMTRenderCommandSetViewports: {
-      struct wmtcmd_render_setviewports *body = (struct wmtcmd_render_setviewports *)next;
-      [encoder setViewports:(const MTLViewport *)body->viewports.ptr count:body->viewport_count];
-      break;
-    }
-    case WMTRenderCommandSetScissorRects: {
-      struct wmtcmd_render_setscissorrects *body = (struct wmtcmd_render_setscissorrects *)next;
-      [encoder setScissorRects:(const MTLScissorRect *)body->scissor_rects.ptr count:body->rect_count];
-      break;
-    }
-    case WMTRenderCommandSetPSO: {
-      struct wmtcmd_render_setpso *body = (struct wmtcmd_render_setpso *)next;
-      [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)body->pso];
-      break;
-    }
-    case WMTRenderCommandSetDSSO: {
-      struct wmtcmd_render_setdsso *body = (struct wmtcmd_render_setdsso *)next;
-      [encoder setDepthStencilState:(id<MTLDepthStencilState>)body->dsso];
-      [encoder setStencilReferenceValue:body->stencil_ref];
-      break;
-    }
-    case WMTRenderCommandSetDepthStencilState: {
-      struct wmtcmd_render_setdepthstencilstate *body = (struct wmtcmd_render_setdepthstencilstate *)next;
-      [encoder setDepthStencilState:(id<MTLDepthStencilState>)body->depth_stencil_state];
-      break;
-    }
-    case WMTRenderCommandSetVertexBytes: {
-      struct wmtcmd_render_setbytes *body = (struct wmtcmd_render_setbytes *)next;
-      [encoder setVertexBytes:body->bytes.ptr length:body->length atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetVertexTexture: {
-      struct wmtcmd_render_settexture *body = (struct wmtcmd_render_settexture *)next;
-      [encoder setVertexTexture:(id<MTLTexture>)body->texture atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetVertexSamplerState: {
-      struct wmtcmd_render_setsampler *body = (struct wmtcmd_render_setsampler *)next;
-      [encoder setVertexSamplerState:(id<MTLSamplerState>)body->sampler atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetFragmentSamplerState: {
-      struct wmtcmd_render_setsampler *body = (struct wmtcmd_render_setsampler *)next;
-      [encoder setFragmentSamplerState:(id<MTLSamplerState>)body->sampler atIndex:body->index];
-      break;
-    }
-    case WMTRenderCommandSetBlendFactorAndStencilRef: {
-      struct wmtcmd_render_setblendcolor *body = (struct wmtcmd_render_setblendcolor *)next;
-      [encoder setBlendColorRed:body->red green:body->green blue:body->blue alpha:body->alpha];
-      [encoder setStencilReferenceValue:body->stencil_ref];
-      break;
-    }
-    case WMTRenderCommandSetBlendFactor: {
-      struct wmtcmd_render_setblendcolor *body = (struct wmtcmd_render_setblendcolor *)next;
-      [encoder setBlendColorRed:body->red green:body->green blue:body->blue alpha:body->alpha];
-      break;
-    }
-    case WMTRenderCommandSetStencilRef: {
-      struct wmtcmd_render_setstencilref *body = (struct wmtcmd_render_setstencilref *)next;
-      [encoder setStencilReferenceValue:body->stencil_ref];
-      break;
-    }
-    case WMTRenderCommandSetVisibilityMode: {
-      struct wmtcmd_render_setvisibilitymode *body = (struct wmtcmd_render_setvisibilitymode *)next;
-      [encoder setVisibilityResultMode:(MTLVisibilityResultMode)body->mode offset:body->offset];
-      break;
-    }
-    case WMTRenderCommandDraw: {
-      struct wmtcmd_render_draw *body = (struct wmtcmd_render_draw *)next;
-      [encoder drawPrimitives:(MTLPrimitiveType)body->primitive_type
-                  vertexStart:body->vertex_start
-                  vertexCount:body->vertex_count
-                instanceCount:body->instance_count
-                 baseInstance:body->base_instance];
-      break;
-    }
-    case WMTRenderCommandDrawIndexed: {
-      struct wmtcmd_render_draw_indexed *body = (struct wmtcmd_render_draw_indexed *)next;
-      [encoder drawIndexedPrimitives:(MTLPrimitiveType)body->primitive_type
-                          indexCount:body->index_count
-                           indexType:(MTLIndexType)body->index_type
-                         indexBuffer:(id<MTLBuffer>)body->index_buffer
-                   indexBufferOffset:body->index_buffer_offset
-                       instanceCount:body->instance_count
-                          baseVertex:body->base_vertex
-                        baseInstance:body->base_instance];
-      break;
-    }
-    case WMTRenderCommandDrawIndirect: {
-      struct wmtcmd_render_draw_indirect *body = (struct wmtcmd_render_draw_indirect *)next;
-      [encoder drawPrimitives:(MTLPrimitiveType)body->primitive_type
-                indirectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-          indirectBufferOffset:body->indirect_args_offset];
-      break;
-    }
-    case WMTRenderCommandDrawIndexedIndirect: {
-      struct wmtcmd_render_draw_indexed_indirect *body = (struct wmtcmd_render_draw_indexed_indirect *)next;
-      [encoder drawIndexedPrimitives:(MTLPrimitiveType)body->primitive_type
-                           indexType:(MTLIndexType)body->index_type
-                         indexBuffer:(id<MTLBuffer>)body->index_buffer
-                   indexBufferOffset:body->index_buffer_offset
-                      indirectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                indirectBufferOffset:body->indirect_args_offset];
-      break;
-    }
-    case WMTRenderCommandDrawMeshThreadgroups: {
-      struct wmtcmd_render_draw_meshthreadgroups *body = (struct wmtcmd_render_draw_meshthreadgroups *)next;
-      [encoder drawMeshThreadgroups:MTLSizeMake(
-                                        body->threadgroup_per_grid.width, body->threadgroup_per_grid.height,
-                                        body->threadgroup_per_grid.depth
-                                    )
-          threadsPerObjectThreadgroup:MTLSizeMake(
-                                          body->object_threadgroup_size.width, body->object_threadgroup_size.height,
-                                          body->object_threadgroup_size.depth
-                                      )
-            threadsPerMeshThreadgroup:MTLSizeMake(
-                                          body->mesh_threadgroup_size.width, body->mesh_threadgroup_size.height,
-                                          body->mesh_threadgroup_size.depth
-                                      )];
-      break;
-    }
-    case WMTRenderCommandDrawMeshThreadgroupsIndirect: {
-      struct wmtcmd_render_draw_meshthreadgroups_indirect *body =
-          (struct wmtcmd_render_draw_meshthreadgroups_indirect *)next;
-      [encoder drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                                 indirectBufferOffset:body->indirect_args_offset
-                          threadsPerObjectThreadgroup:MTLSizeMake(
-                                                          body->object_threadgroup_size.width,
-                                                          body->object_threadgroup_size.height,
-                                                          body->object_threadgroup_size.depth
-                                                      )
-                            threadsPerMeshThreadgroup:MTLSizeMake(
-                                                          body->mesh_threadgroup_size.width,
-                                                          body->mesh_threadgroup_size.height,
-                                                          body->mesh_threadgroup_size.depth
-                                                      )];
-      break;
-    }
-    case WMTRenderCommandMemoryBarrier: {
-      struct wmtcmd_render_memory_barrier *body = (struct wmtcmd_render_memory_barrier *)next;
-      [encoder memoryBarrierWithScope:(MTLBarrierScope)body->scope
-                          afterStages:(MTLRenderStages)body->stages_after
-                         beforeStages:(MTLRenderStages)body->stages_before];
-      break;
-    }
-    case WMTRenderCommandDXMTGeometryDraw: {
-      struct wmtcmd_render_dxmt_geometry_draw *body = (struct wmtcmd_render_dxmt_geometry_draw *)next;
-      [encoder setObjectBufferOffset:body->draw_arguments_offset atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      [encoder drawMeshThreadgroups:MTLSizeMake(body->warp_count, body->instance_count, 1)
-          threadsPerObjectThreadgroup:MTLSizeMake(body->vertex_per_warp, 1, 1)
-            threadsPerMeshThreadgroup:MTLSizeMake(1, 1, 1)];
-      break;
-    }
-    case WMTRenderCommandDXMTGeometryDrawIndexed: {
-      struct wmtcmd_render_dxmt_geometry_draw_indexed *body = (struct wmtcmd_render_dxmt_geometry_draw_indexed *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->index_buffer
-                        offset:body->index_buffer_offset
-                       atIndex:SM50_BINDING_INDEX_INDEX_BUFFER];
-      [encoder setObjectBufferOffset:body->draw_arguments_offset atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      [encoder drawMeshThreadgroups:MTLSizeMake(body->warp_count, body->instance_count, 1)
-          threadsPerObjectThreadgroup:MTLSizeMake(body->vertex_per_warp, 1, 1)
-            threadsPerMeshThreadgroup:MTLSizeMake(1, 1, 1)];
-      break;
-    }
-    case WMTRenderCommandDXMTGeometryDrawIndirect: {
-      struct wmtcmd_render_dxmt_geometry_draw_indirect *body = (struct wmtcmd_render_dxmt_geometry_draw_indirect *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                        offset:body->indirect_args_offset
-                       atIndex:SM50_BINDING_INDEX_INDIRECT_ARGUMENTS];
-      [encoder drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->dispatch_args_buffer
-                                 indirectBufferOffset:body->dispatch_args_offset
-                          threadsPerObjectThreadgroup:MTLSizeMake(body->vertex_per_warp, 1, 1)
-                            threadsPerMeshThreadgroup:MTLSizeMake(1, 1, 1)];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->imm_draw_arguments
-                        offset:0
-                       atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      break;
-    }
-    case WMTRenderCommandDXMTGeometryDrawIndexedIndirect: {
-      struct wmtcmd_render_dxmt_geometry_draw_indexed_indirect *body =
-          (struct wmtcmd_render_dxmt_geometry_draw_indexed_indirect *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->index_buffer
-                        offset:body->index_buffer_offset
-                       atIndex:SM50_BINDING_INDEX_INDEX_BUFFER];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                        offset:body->indirect_args_offset
-                       atIndex:SM50_BINDING_INDEX_INDIRECT_ARGUMENTS];
-      [encoder drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->dispatch_args_buffer
-                                 indirectBufferOffset:body->dispatch_args_offset
-                          threadsPerObjectThreadgroup:MTLSizeMake(body->vertex_per_warp, 1, 1)
-                            threadsPerMeshThreadgroup:MTLSizeMake(1, 1, 1)];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->imm_draw_arguments
-                        offset:0
-                       atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      break;
-    }
-    case WMTRenderCommandDXMTTessellationMeshDraw: {
-      struct wmtcmd_render_dxmt_tessellation_mesh_draw *body = (struct wmtcmd_render_dxmt_tessellation_mesh_draw *)next;
-      [encoder setObjectBufferOffset:body->draw_arguments_offset atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      [encoder drawMeshThreadgroups:MTLSizeMake(body->patch_per_mesh_instance, body->instance_count, 1)
-          threadsPerObjectThreadgroup:MTLSizeMake(body->threads_per_patch, body->patch_per_group, 1)
-            threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
-      break;
-    }
-    case WMTRenderCommandDXMTTessellationMeshDrawIndexed: {
-      struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed *body =
-          (struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->index_buffer
-                        offset:body->index_buffer_offset
-                       atIndex:SM50_BINDING_INDEX_INDEX_BUFFER];
-      [encoder setObjectBufferOffset:body->draw_arguments_offset atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      [encoder drawMeshThreadgroups:MTLSizeMake(body->patch_per_mesh_instance, body->instance_count, 1)
-          threadsPerObjectThreadgroup:MTLSizeMake(body->threads_per_patch, body->patch_per_group, 1)
-            threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
-      break;
-    }
-
-    case WMTRenderCommandDXMTTessellationMeshDrawIndirect: {
-      struct wmtcmd_render_dxmt_tessellation_mesh_draw_indirect *body = (struct wmtcmd_render_dxmt_tessellation_mesh_draw_indirect *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                        offset:body->indirect_args_offset
-                       atIndex:SM50_BINDING_INDEX_INDIRECT_ARGUMENTS];
-      [encoder drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->dispatch_args_buffer
-                                 indirectBufferOffset:body->dispatch_args_offset
-                          threadsPerObjectThreadgroup:MTLSizeMake(body->threads_per_patch, body->patch_per_group, 1)
-                            threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->imm_draw_arguments
-                        offset:0
-                       atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      break;
-    }
-    case WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect: {
-      struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed_indirect *body =
-          (struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed_indirect *)next;
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->index_buffer
-                        offset:body->index_buffer_offset
-                       atIndex:SM50_BINDING_INDEX_INDEX_BUFFER];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
-                        offset:body->indirect_args_offset
-                       atIndex:SM50_BINDING_INDEX_INDIRECT_ARGUMENTS];
-      [encoder drawMeshThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)body->dispatch_args_buffer
-                                 indirectBufferOffset:body->dispatch_args_offset
-                          threadsPerObjectThreadgroup:MTLSizeMake(body->threads_per_patch, body->patch_per_group, 1)
-                            threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
-      [encoder setObjectBuffer:(id<MTLBuffer>)body->imm_draw_arguments
-                        offset:0
-                       atIndex:SM50_BINDING_INDEX_DRAW_ARGUMENTS];
-      break;
-    }
-    case WMTRenderCommandUpdateFence: {
-      struct wmtcmd_render_fence_op *body = (struct wmtcmd_render_fence_op *)next;
-      [encoder updateFence:(id<MTLFence>)body->fence afterStages:(MTLRenderStages)body->stages];
-      break;
-    }
-    case WMTRenderCommandWaitForFence: {
-      struct wmtcmd_render_fence_op *body = (struct wmtcmd_render_fence_op *)next;
-      [encoder waitForFence:(id<MTLFence>)body->fence beforeStages:(MTLRenderStages)body->stages];
-      break;
-    }
-    case WMTRenderCommandSetViewport: {
-      struct wmtcmd_render_setviewport *body = (struct wmtcmd_render_setviewport *)next;
-      union {
-        struct WMTViewport src;
-        MTLViewport dst;
-      } u = {.src = body->viewport};
-      [encoder setViewport:u.dst];
-      break;
-    }
-    case WMTRenderCommandSetScissorRect: {
-      struct wmtcmd_render_setscissorrect *body = (struct wmtcmd_render_setscissorrect *)next;
-      union {
-        struct WMTScissorRect src;
-        MTLScissorRect dst;
-      } u = {.src = body->scissor_rect};
-      [encoder setScissorRect:u.dst];
-      break;
-    }
-    case WMTRenderCommandDispatchThreadsPerTile: {
-      struct wmtcmd_render_dispatch_threads_per_tile *body = (struct wmtcmd_render_dispatch_threads_per_tile *)next;
-      [encoder dispatchThreadsPerTile:MTLSizeMake(body->width, body->height, 1)];
-      break;
-    }
-    case WMTRenderCommandExecuteCommandsInBuffer: {
-      struct wmtcmd_render_executecommands *body = (struct wmtcmd_render_executecommands *)next;
-      [encoder executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)body->indirect_command_buffer
-                             withRange:NSMakeRange(body->location, body->length)];
-      break;
-    }
-    }
-    next = next->next.ptr;
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLRenderCommandEncoder_encodeCommands(void *obj);
 
 NTSTATUS _MTLTexture_pixelFormat(void *obj);
 
@@ -1124,13 +416,6 @@ NTSTATUS _MTLTexture_replaceRegion(void *obj);
 NTSTATUS _MTLBuffer_didModifyRange(void *obj);
 
 #ifdef DXMT_NATIVE
-static void (*present_hook)(void *cmdbuf, void *drawable);
-
-__attribute__((visibility("default"))) void
-WMTSetPresentHook(void (*hook)(void *cmdbuf, void *drawable)) {
-  present_hook = hook;
-}
-#define PRESENT_HOOK(cmdbuf, drawable) (present_hook ? present_hook((void *)(cmdbuf), (void *)(drawable)) : (void)0)
 
 static const struct WMTWsiHooks *wsi_hooks;
 
@@ -1144,25 +429,11 @@ WMTGetWsiHooks(void) {
   return wsi_hooks;
 }
 #else
-#define PRESENT_HOOK(cmdbuf, drawable) ((void)0)
 #endif
 
-static NTSTATUS
-_MTLCommandBuffer_presentDrawable(void *obj) {
-  struct unixcall_generic_obj_obj_noret *params = obj;
-  PRESENT_HOOK(params->handle, params->arg);
-  [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_presentDrawable(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
-  struct unixcall_generic_obj_obj_double_noret *params = obj;
-  PRESENT_HOOK(params->handle, params->arg0);
-  [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg0
-                                   afterMinimumDuration:params->arg1];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj);
 
 NTSTATUS _MTLDevice_supportsFamily(void *obj);
 
@@ -2022,40 +1293,11 @@ thunk32_SM50GetArgumentsInfo(void *args) {
 }
 #endif /* DXMT_NATIVE */
 
-static NTSTATUS
-_MTLCommandBuffer_error(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle error];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_error(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_logs(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle logs];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_logs(void *obj);
 
-static NTSTATUS
-_MTLLogContainer_enumerate(void *obj) {
-  struct unixcall_enumerate *params = obj;
-  uint64_t count = 0;
-  uint64_t read = 0;
-  id *buffer = params->buffer.ptr;
-  for (id _ in (id<MTLLogContainer>)params->enumerable) {
-    if (count >= params->start) {
-      if (count < params->start + params->buffer_size) {
-        buffer[count - params->start] = _;
-        read++;
-      } else {
-        break;
-      }
-    }
-    count++;
-  }
-  params->ret_read = read;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLLogContainer_enumerate(void *obj);
 
 CFStringRef
 GetColorSpaceName(enum WMTColorSpace colorspace) {
@@ -2352,12 +1594,7 @@ _WMTQueryDisplaySettingForLayer(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCommandBuffer_encodeWaitForEvent(void *obj) {
-  struct unixcall_generic_obj_obj_uint64_noret *params = obj;
-  [(id<MTLCommandBuffer>)params->handle encodeWaitForEvent:(id<MTLSharedEvent>)params->arg0 value:params->arg1];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_encodeWaitForEvent(void *obj);
 
 static NTSTATUS
 _MTLSharedEvent_signalValue(void *obj) {
@@ -2662,66 +1899,11 @@ _MTLSharedEvent_waitUntilSignaledValue(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCounterSampleBuffer_newTimestampBuffer(void *obj) {
-  struct unixcall_mtlcountersamplebuffer_newtimestampbuffer *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
+NTSTATUS _MTLCounterSampleBuffer_newTimestampBuffer(void *obj);
 
-  MTLCounterSampleBufferDescriptor *desc = [[MTLCounterSampleBufferDescriptor alloc] init];
-  NSArray<id<MTLCounterSet>> *counter_sets = [device counterSets];
-  id<MTLCounterSet> timestamp_counter_set = nil;
-  for (id<MTLCounterSet> counterSet in counter_sets) {
-    if ([counterSet.name isEqualToString:MTLCommonCounterSetTimestamp]) {
-      timestamp_counter_set = counterSet;
-      break;
-    }
-  }
-  desc.counterSet = timestamp_counter_set;
-  desc.sampleCount = params->sample_count;
-  desc.storageMode = params->shared ? MTLStorageModeShared : MTLStorageModePrivate;
+NTSTATUS _MTLCounterSampleBuffer_resolveCounterRange(void *obj);
 
-  NSError *error = nil;
-  params->ret = (obj_handle_t)[device newCounterSampleBufferWithDescriptor:desc error:&error];
-
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCounterSampleBuffer_resolveCounterRange(void *obj) {
-  struct unixcall_mtlcountersamplebuffer_resolvecounterrange *params = obj;
-  id<MTLCounterSampleBuffer> sample_buffer = (id<MTLCounterSampleBuffer>)params->sample_buffer;
-
-  // The NSData is autoreleased: callers' threads (a queue's completion thread) have no pool of their own.
-  @autoreleasepool {
-    NSData *data = [sample_buffer resolveCounterRange:NSMakeRange(params->start, params->len)];
-    if (data && params->data_out.ptr) {
-      [data getBytes:params->data_out.ptr length:params->data_length];
-    }
-  }
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCommandBuffer_computeCommandEncoderWithSampleBuffers(void *obj) {
-  struct unixcall_mtlcommandbuffer_computecommandencoderwithsamplebuffers *params = obj;
-  id<MTLCommandBuffer> cmdbuf = (id<MTLCommandBuffer>)params->cmdbuf;
-  struct WMTSampleBufferAttachmentInfo *attachments = params->attachments.ptr;
-
-  MTLComputePassDescriptor *compute_desc = [[MTLComputePassDescriptor alloc] init];
-  compute_desc.dispatchType = params->concurrent ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial;
-  for (uint64_t i = 0; i < params->num_attachments; i++) {
-    MTLComputePassSampleBufferAttachmentDescriptor *desc = compute_desc.sampleBufferAttachments[i];
-    desc.sampleBuffer = (id<MTLCounterSampleBuffer>)attachments[i].sample_buffer;
-    desc.startOfEncoderSampleIndex = attachments[i].start_of_encoder_sample_index;
-    desc.endOfEncoderSampleIndex = attachments[i].end_of_encoder_sample_index;
-  }
-
-  params->ret = (obj_handle_t)[cmdbuf computeCommandEncoderWithDescriptor:compute_desc];
-
-  [compute_desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_computeCommandEncoderWithSampleBuffers(void *obj);
 
 NTSTATUS _MTLDevice_sampleTimestamps(void *obj);
 
@@ -2791,50 +1973,9 @@ _MTLCommandBuffer_encodeFrameInterpolate(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(void *obj) {
-  struct unixcall_mtlcommandbuffer_blitcommandencoderwithsamplebuffers *params = obj;
-  id<MTLCommandBuffer> cmdbuf = (id<MTLCommandBuffer>)params->cmdbuf;
-  struct WMTSampleBufferAttachmentInfo *attachments = params->attachments.ptr;
+NTSTATUS _MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(void *obj);
 
-  MTLBlitPassDescriptor *blit_desc = [[MTLBlitPassDescriptor alloc] init];
-  for (uint64_t i = 0; i < params->num_attachments; i++) {
-    MTLBlitPassSampleBufferAttachmentDescriptor *desc = blit_desc.sampleBufferAttachments[i];
-    desc.sampleBuffer = (id<MTLCounterSampleBuffer>)attachments[i].sample_buffer;
-    desc.startOfEncoderSampleIndex = attachments[i].start_of_encoder_sample_index;
-    desc.endOfEncoderSampleIndex = attachments[i].end_of_encoder_sample_index;
-  }
-
-  params->ret = (obj_handle_t)[cmdbuf blitCommandEncoderWithDescriptor:blit_desc];
-
-  [blit_desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCommandBuffer_property(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  id<MTLCommandBuffer> cmdbuf = (id<MTLCommandBuffer>)params->handle;
-  double ns = 1000000000;
-  switch (params->arg) {
-  case WMTCommandBufferPropertyKernelStartTime:
-    params->ret = (uint64_t)([cmdbuf kernelStartTime] * ns);
-    break;
-  case WMTCommandBufferPropertyKernelEndTime:
-    params->ret = (uint64_t)([cmdbuf kernelEndTime] * ns);
-    break;
-  case WMTCommandBufferPropertyGPUStartTime:
-    params->ret = (uint64_t)([cmdbuf GPUStartTime] * ns);
-    break;
-  case WMTCommandBufferPropertyGPUEndTime:
-    params->ret = (uint64_t)([cmdbuf GPUEndTime] * ns);
-    break;
-  default:
-    params->ret = 0;
-    break;
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_property(void *obj);
 
 static NTSTATUS
 _MTLDevice_newTileRenderPipelineState(void *obj) {
