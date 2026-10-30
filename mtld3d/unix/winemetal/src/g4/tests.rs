@@ -182,6 +182,30 @@ fn an_empty_archive_cannot_be_serialized() {
 }
 
 #[test]
+fn an_empty_path_is_a_nil_url() {
+    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let empty = c"";
+    // The C: an empty archive with no error (112), Metal's "Invalid URL" error at +1 (113).
+    let mut a = UnixcallMtldeviceNewbinaryarchive {
+        device: handle(&*device),
+        url: mem(&empty.to_bytes_with_nul()[0]),
+        ret_archive: FILL,
+        ret_error: FILL,
+    };
+    // SAFETY: a live params block.
+    assert_eq!(unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) }, 0);
+    assert_eq!(a.ret_error, 0);
+    assert_eq!(retain_count(a.ret_archive), 1);
+    let mut s = UnixcallMtlbinaryarchiveSerialize { archive: a.ret_archive, url: mem(&empty.to_bytes_with_nul()[0]), ret_error: FILL };
+    // SAFETY: a live params block.
+    assert_eq!(unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) }, 0);
+    assert_ne!(s.ret_error, 0);
+    assert_ne!(s.ret_error, FILL);
+    drop(take(s.ret_error));
+    drop(take(a.ret_archive));
+}
+
+#[test]
 fn null_info_blocks_write_nothing() {
     let mut c = UnixcallMtldeviceNewcomputepso { device: 0, info: MemPtr { ptr: 0 }, ret_error: FILL, ret_pso: FILL };
     // SAFETY: a live params block.

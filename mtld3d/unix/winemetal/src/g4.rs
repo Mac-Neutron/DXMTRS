@@ -61,7 +61,7 @@ const BUFFER_SLOTS: usize = 31;
 const ZERO_VALUE_BYTES: usize = 64;
 
 extern_class!(
-    /// `NSURL`, re-declared to send `-initFileURLWithPath:` a nil path, which raises.
+    /// `NSURL`, re-declared for `-initFileURLWithPath:`'s nil path (raises) and nil answer.
     #[unsafe(super(NSObject))]
     #[name = "NSURL"]
     struct RawUrl;
@@ -69,10 +69,10 @@ extern_class!(
 
 impl RawUrl {
     extern_methods!(
-        /// `-initFileURLWithPath:`, with the path the C's string decode gave: nil raises.
+        /// `-initFileURLWithPath:` on the C's decode: nil raises, "" answers nil.
         #[unsafe(method(initFileURLWithPath:))]
         #[unsafe(method_family = init)]
-        fn init_file_url_with_path(this: Allocated<Self>, path: Option<&NSString>) -> Retained<Self>;
+        fn init_file_url_with_path(this: Allocated<Self>, path: Option<&NSString>) -> Option<Retained<Self>>;
     );
 }
 
@@ -309,8 +309,8 @@ trait RawArchive {
     /// `-addTileRenderPipelineFunctionsWithDescriptor:error:`.
     fn add_tile(&self, descriptor: &MTLTileRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
 
-    /// `-serializeToURL:error:`.
-    fn serialize_to_url(&self, url: &NSURL, error: &mut *mut NSError) -> bool;
+    /// `-serializeToURL:error:`, nil for an empty path as the C sent it.
+    fn serialize_to_url(&self, url: Option<&NSURL>, error: &mut *mut NSError) -> bool;
 }
 
 impl RawArchive for ProtocolObject<dyn MTLBinaryArchive> {
@@ -333,7 +333,7 @@ impl RawArchive for ProtocolObject<dyn MTLBinaryArchive> {
 
         #[unsafe(method(serializeToURL:error:))]
         #[unsafe(method_family = none)]
-        fn serialize_to_url(&self, url: &NSURL, error: &mut *mut NSError) -> bool;
+        fn serialize_to_url(&self, url: Option<&NSURL>, error: &mut *mut NSError) -> bool;
     );
 }
 
@@ -467,11 +467,11 @@ fn string_from_c_str(s: &core::ffi::CStr) -> Option<Retained<NSString>> {
     unsafe { NSString::initWithCString_encoding(NSString::alloc(), first, UTF8) }
 }
 
-/// The file URL of `path`, which raises for nil, as `-[NSURL initFileURLWithPath:]` does.
-fn file_url(path: Option<&NSString>) -> Retained<NSURL> {
-    let url = RawUrl::init_file_url_with_path(RawUrl::alloc(), path);
+/// The file URL of `path`: raises for nil and is nil for "", as `-[NSURL initFileURLWithPath:]`.
+fn file_url(path: Option<&NSString>) -> Option<Retained<NSURL>> {
+    let url = RawUrl::init_file_url_with_path(RawUrl::alloc(), path)?;
     // SAFETY: the same class under two declarations of it.
-    unsafe { Retained::cast_unchecked::<NSURL>(url) }
+    Some(unsafe { Retained::cast_unchecked::<NSURL>(url) })
 }
 
 /// Slot 25: a library from metallib data.
@@ -856,7 +856,7 @@ pub unsafe extern "C-unwind" fn mtl_device_new_binary_archive(args: *mut c_void)
     // SAFETY: the guest's path is NUL-terminated.
     if let Some(path) = unsafe { mem_cstr(p.url) } {
         let url = file_url(string_from_c_str(path).as_deref());
-        descriptor.setUrl(Some(&url));
+        descriptor.setUrl(url.as_deref());
     }
     let (archive, error) = with_error(|error| device(p.device)?.new_binary_archive(&descriptor, error));
     p.ret_archive = ret_owned(archive);
@@ -881,7 +881,7 @@ pub unsafe extern "C-unwind" fn mtl_binary_archive_serialize(args: *mut c_void) 
     let url = file_url(string_from_c_str(path).as_deref());
     let mut error: *mut NSError = ptr::null_mut();
     if let Some(archive) = archive(p.archive) {
-        archive.serialize_to_url(&url, &mut error);
+        archive.serialize_to_url(url.as_deref(), &mut error);
     }
     // SAFETY: `error` is null or the autoreleased error the send set.
     p.ret_error = ret_owned(unsafe { Retained::retain(error) });
