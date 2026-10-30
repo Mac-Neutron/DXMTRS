@@ -146,7 +146,7 @@ fn real_main() -> Result<ExitCode, String> {
             summary.dropped_sites.len()
         );
         // Point the human at the exact CONFORMANCE.md edits the re-baseline
-        // requires; `make test` (the triage sync test) stays red until done.
+        // requires; the unit tests (the triage sync test) stay red until done.
         // Loaded tolerantly: the doc may be mid-edit during a re-baseline.
         let classes = triage::load(&assets).unwrap_or_default();
         for site in &summary.new_sites {
@@ -165,7 +165,9 @@ fn real_main() -> Result<ExitCode, String> {
     }
 
     if !baseline_path.is_file() {
-        println!("no baseline.txt - current results (run 'make conformance-baseline' to record):");
+        println!(
+            "no baseline.txt - current results (run 'dxmt/mtld3d-conformance.sh --update-baseline' to record):"
+        );
         print!("{}", render_current(&current));
         return Ok(ExitCode::SUCCESS);
     }
@@ -189,8 +191,8 @@ fn real_main() -> Result<ExitCode, String> {
     for leg in diff::unrecorded_legs(&baseline, &current) {
         println!(
             "conformance: baseline.txt has no [{leg}/...] entries: this leg was never recorded \
-             on the Wine it runs under, so every site it fails reads as new; `make \
-             conformance-baseline` on that Wine records them"
+             on the Wine it runs under, so every site it fails reads as new; `dxmt/mtld3d-conformance.sh --update-baseline` \
+             on that Wine records them"
         );
     }
     Ok(verdict(&report, validation_errors))
@@ -199,7 +201,7 @@ fn real_main() -> Result<ExitCode, String> {
 /// The Wine prefix the subtests run in: `WINEPREFIX`, else Wine's default.
 ///
 /// `$HOME/.wine` is where Wine goes without the variable, which is the same
-/// fallback the Makefile's prefix target uses, and `None` is a machine that
+/// fallback MacNeutron's conformance script uses, and `None` is a machine that
 /// names neither.
 fn wine_prefix() -> Option<PathBuf> {
     std::env::var_os("WINEPREFIX")
@@ -237,7 +239,7 @@ fn verdict(report: &diff::Report, validation_errors: usize) -> ExitCode {
         println!("conformance: REGRESSIONS detected");
     } else if report.stale {
         println!(
-            "conformance: STALE BASELINE - some sites read below their pins; run `make conformance-baseline` and re-triage"
+            "conformance: STALE BASELINE - some sites read below their pins; run `dxmt/mtld3d-conformance.sh --update-baseline` and re-triage"
         );
     } else if !validation_failed {
         println!("conformance: no regressions vs baseline");

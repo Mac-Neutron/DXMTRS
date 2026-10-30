@@ -1,7 +1,7 @@
 #!/usr/bin/env swift
 
 // Capture native and software cursors during a stationary application startup.
-// Usage: swift scripts/cursor_startup_probe.swift <app> <output-directory> <x> <y>
+// Usage: swift tests/d3d9/probes/cursor_startup_probe.swift <app> <output-directory> <x> <y>
 // Close the application first. Coordinates are global screen points.
 // Screen recording and input posting access must already be available.
 import AppKit

@@ -30,9 +30,9 @@
 //! the cache after each run: a record a run appended is a shader or a
 //! pipeline the prewarm did not provide.
 //!
-//! Real caches are measured the same way. `make bench BENCH_CORPUS=...`
-//! copies each named cache to `corpus/<name>/mtld3d_shaders.bin` under the
-//! report directory, `<name>` the one the Makefile's corpus rule gives it,
+//! Real caches are measured the same way. The runner's `bench-ab --corpus-dir`
+//! stages each cache as `corpus/<name>/mtld3d_shaders.bin` under the
+//! log directory, `<name>` the one the caller gives it,
 //! and each is measured beside a private executable that only clears and
 //! presents, so the prewarm of that cache is the work, and reported as
 //! `cold_start_<name>`. A corpus whose header names another
@@ -123,7 +123,7 @@ const DRAW_EXE: &str = "cold-start.exe";
 const CLEAR_EXE: &str = "cold-start-clear.exe";
 /// What names the temporary directories of this benchmark's runs.
 const TEMP_PREFIX: &str = "bench-cold-start-";
-/// The file name of each corpus cache the Makefile stages under `corpus/<name>/`.
+/// The file name of each corpus cache the caller stages under `corpus/<name>/`.
 const CORPUS_FILE: &str = "mtld3d_shaders.bin";
 /// This test, which each copy runs.
 const TEST_PATH: &str = "bench_cold_start::cold_start";
@@ -190,7 +190,7 @@ const STEPS: [Step; 6] = [
 
 /// Launch to first frame over fresh processes, on the synthetic cache and on each corpus.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn cold_start() {
     let exe = std::env::current_exe().expect("resolve test executable");
     if let Some(role) = Role::of(&exe) {
@@ -250,7 +250,7 @@ fn cold_start() {
         }
     }
     if corpora + skipped == 0 {
-        notes.push_str("corpus: none under corpus/ (make bench BENCH_CORPUS=...)\n");
+        notes.push_str("corpus: none under corpus/ (bench-ab --corpus-dir)\n");
     }
 
     let shape = format!(
@@ -892,9 +892,9 @@ fn spawn(exe: &Path, dir: &Path) -> Child {
     }
 }
 
-/// The corpus caches `make bench BENCH_CORPUS=...` staged under `corpus/`, by corpus name.
+/// The corpus caches the caller staged under `corpus/` (`bench-ab --corpus-dir`), by corpus name.
 ///
-/// Each is `corpus/<name>/mtld3d_shaders.bin`, the name the Makefile gave
+/// Each is `corpus/<name>/mtld3d_shaders.bin`, the name the caller gave
 /// it (the directory the cache came from, every character other than an
 /// ASCII letter or digit turned into `_`, as the host emitter names a
 /// corpus). The name is mapped the same way again here, so a directory

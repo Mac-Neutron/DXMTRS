@@ -127,7 +127,7 @@ const LOG_TARGET: &str = "mtld3d::perf";
 ///
 /// Per-pass dump, `present_texture=…` audit line, and per-RT pair stats
 /// sit alongside the per-event pass-break / pass-open probes in
-/// `windows/core/src/passes.rs`. The per-frame `log_frame_summary` dump
+/// `src/d3d9/core/src/passes.rs`. The per-frame `log_frame_summary` dump
 /// just rides the same switch.
 #[cfg(perf_tracking)]
 const PASSES_TARGET: &str = "mtld3d::d3d9::passes";
@@ -983,7 +983,7 @@ struct FrameCounters {
     /// DYNAMIC buffer a queued draw may still be reading. `plan_lock`
     /// answers `WriteInPlace` on the strength of the DYNAMIC timing
     /// contract rather than renaming, the divergence listed in
-    /// `docs/STATUS.md#kept-divergences`. The arm has no other side effect,
+    /// `docs/d3d9/STATUS.md#kept-divergences`. The arm has no other side effect,
     /// so this count is the only signal that a game leans on it.
     /// `NOOVERWRITE` / `READONLY` and uncontended Locks are excluded:
     /// handing those back in place is the specified behaviour.
@@ -6742,7 +6742,7 @@ fn format_bytes(bytes: u64) -> String {
 ///
 /// Each method appends one ` key=value` pair and adds the key's suffix
 /// itself, so the unit a suffix promises is decided here and nowhere else;
-/// `docs/ARCHITECTURE.md` lists every key. Floats carry three decimals,
+/// `docs/d3d9/ARCHITECTURE.md` lists every key. Floats carry three decimals,
 /// integers none, and nothing is ever styled.
 #[cfg(perf_tracking)]
 struct KvLine {

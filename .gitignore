@@ -19,3 +19,6 @@ releases
 prefixes
 /target
 /.codex
+.idea/
+*.swp
+*~

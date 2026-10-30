@@ -249,7 +249,7 @@ fn release_dc_on_a_lockable_backbuffer_reaches_the_back_buffer() {
     // directions: it shows what the GPU painted before it, and what GDI draws
     // into it reaches the back buffer at `ReleaseDC`, with no Present in
     // between. Every coordinate here is the reported one, so the test also
-    // stands under `make test SCALE=<n>`.
+    // stands under a suite-wide `render.scale`.
     const GREEN: u32 = 0xFF00_FF00;
     const RED: u32 = 0xFFFF_0000;
     const GREEN_COLORREF: u32 = 0x0000_FF00;

@@ -105,6 +105,85 @@ export CXXFLAGS='-arch x86_64'
 ```
 
 
+## Rust
+
+The Rust crates (Direct3D 9 under `src/d3d9`, `src/winemetal`, `src/nvapi`, `src/nvngx`, `src/util` and the test
+crates under `tests/d3d9`) are one Cargo workspace at the root: `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` (the
+code-generation flags per target) and `rustfmt.toml`. A bare `cargo` command at the root builds for the host, which is
+what the unit tests and clippy's host leg use. The binaries that ship are built by meson, which runs
+`tools/cargo-staticlib.sh` once per crate and target and then links; do not build a shipped binary by hand.
+
+The toolchain is the `cargo_toolchain` option of `meson.options` (MacNeutron's `MTLD3D_RUST`). Meson runs cargo
+offline, so the locked crates are fetched first, from the root, with `cargo "+<toolchain>" fetch --locked`. Cargo
+output stays out of the source tree: every cargo run outside meson sets an absolute `CARGO_TARGET_DIR`, and the root
+`.gitignore` covers `/target` for a developer's own runs.
+
+### Which target builds what
+
+- `aarch64-apple-darwin`: the Unix side that runs in the Mac's Wine, `winemetal.so` and D3D9's `mtld3d.so`.
+- `aarch64-pc-windows-msvc` and `arm64ec-pc-windows-msvc`: the two halves of the ARM64X images `d3d9.dll` and
+  `mtld3d.dll`. Rust has no ARM64X target, so each crate is built once per half as a static library and
+  `tools/arm64x-link.sh` links both into one image. It needs LLD 23 or newer (llvm-mingw's own `lld-link`, never the one
+  on `PATH`) and an llvm-mingw whose `aarch64-w64-mingw32` sysroot carries the ARM64 and ARM64EC halves together.
+  `nvngx.dll`, `nvapi64.dll` and `winemetal.dll` are built for both targets too.
+- `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`: the PE side of the VM guest, linked by meson's own driver
+  (`i686` is D3D9 and `winemetal.dll` only).
+- `x86_64-unknown-linux-gnu` and `i686-unknown-linux-gnu`: the guest's `mtld3d.so`, built through
+  `tools/linux-cargo.sh` against a Fedora sysroot (`MTLD3D_SYSROOT`; `MTLD3D_LINUX` picks the architecture).
+
+The per-target C and C++ environment that cc-rs reads (compiler, flags, file-prefix remaps) comes from
+`tools/mingw-cc.sh env`, which `tools/cargo-staticlib.sh` evaluates when `MTLD3D_LLVM_MINGW` is set. Only
+`src/d3d9`'s meson targets set it. They also pass `MTLD3D_WINECRT0`, the path of Wine's `libwinecrt0.a`, which the
+`mtld3d.dll` shim bundles. Both are build-time variables, not runtime ones.
+
+### Instruction-set baselines
+
+The x86 PE DLLs are guest code, which an x86 translator runs: Rosetta under an x86_64 Wine, and the translator an
+arm64 Wine carries (FEX). The ARM64X images are native code and have no such baseline. `.cargo/config.toml` sets the
+x86 builds' CPU baseline for the Rust, and `tools/mingw-cc.sh env` sets it for the C and C++ that build scripts compile.
+Neither goes past SSE4.2 or uses BMI; the comments in `.cargo/config.toml` say why. DXMT's own C++ has no baseline of
+its own.
+
+The i686 build targets `pentium4`, plain SSE2. The 32-bit build that matters today is the one World of Warcraft 1.12
+and 3.3.5a load under Rosetta, and there `pentium4` measured faster than `nehalem`: 9 to 15 % less time per call for the
+state setters, the shader-constant uploads and a vertex-buffer lock, and 2.4 % off the buffer benchmark's frame, while
+the World of Warcraft 1.12 frame moved by +0.8 %, inside that run's noise, and the fixed-function draws by +0.5 %. Two
+per-draw gauges of the perf summary rose: the draw snapshot (`draw_snapshot_ms`) by 9.5 % and its key building
+(`draw_snapshot_keys_ms`) by 7.3 %. Under the arm64 Wine's translator the same change cost about 7 % on a clean draw
+and 2 to 3 % on a frame, so the baseline is worth measuring again once that translator is in production use.
+
+The x86_64 build targets `x86-64-v2`. Lowering it to plain `x86-64` measured neutral under both translators, so the
+SSE4.2 ceiling neither costs nor buys anything measurable.
+
+### `tools/rust-check.sh`
+
+The Rust gate. It runs, from the root, the nightly `cargo fmt --check`, clippy with `nursery` and `pedantic` and
+warnings denied (1.99.0, on `aarch64-apple-darwin` and on every `-pc-windows-msvc` target a crate ships on, plus the
+`MTLD3D_PERF=1` build in a target directory of its own, `clippy-perf`), `cargo doc` with rustdoc warnings denied,
+the host unit tests with `cargo test` (the `test-unit-perf` leg on the perf build, the `mtld3d-core/disk-cache`
+feature, and `winemetal`'s tests with `-undefined dynamic_lookup`), and `tools/audit.sh`. It prints `rust-check: ok`
+and exits 0 when every leg passed. Run it from a clean checkout: its audit
+leg refuses while `git ls-files --others --exclude-standard` lists a `.rs`, `.toml` or `.md` file, since the audit
+reads tracked files only.
+
+Its inputs are variables, so it runs under whatever environment holds the toolchains. MacNeutron sets them from its
+pins:
+
+| Variable | What it names |
+| --- | --- |
+| `MTLD3D_RUST` | The rustup toolchain for clippy, doc and the tests. Default: `cargo_toolchain` in `meson.options`. |
+| `MTLD3D_RUST_NIGHTLY` | The pinned nightly rustfmt needs (`rustfmt.toml` uses unstable options), as rustup names it, such as `nightly-2026-10-30`. |
+| `RUST_NIGHTLY_BIN` | Optional. The `bin` folder of that nightly; default `~/.rustup/toolchains/nightly-aarch64-apple-darwin/bin`. The script refuses unless the installed nightly's channel date is the pin's. |
+| `MTLD3D_LLVM_MINGW` | The llvm-mingw root. Its `bin` folder is also on `PATH`. |
+| `WINE_BUILD` | The Mac Wine build tree, for `libntdll.a` and `libwinecrt0.a`. |
+| `GUEST_WINE_SDK` | The VM guest's Wine SDK. |
+| `CARGO_TARGET_DIR` | Optional. An absolute folder outside the tree. |
+
+The script does no sysroot work and has no Linux leg: no leg compiles a Linux target. The guest build does, and
+Linux-only code is not linted (pre-existing). Generated files (`src/winemetal/wire/src/layouts.rs`,
+`src/winemetal/src/protos.rs`, from `tools/winemetal-layouts.sh`) are skipped by rustfmt and regenerated by their
+generator.
+
 # Debugging
 The following environment variables can be used for **debugging** purposes.
 - `MTL_SHADER_VALIDATION=1` Enable Metal shader validation layer

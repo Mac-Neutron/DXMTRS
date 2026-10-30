@@ -216,7 +216,7 @@ const SPAN_META: &str = "window_s";
 
 /// The metrics a round may lack, from the keys the `perf-kv` line may leave out of a window.
 ///
-/// `docs/ARCHITECTURE.md` names the eight keys: the fault counts, absent
+/// `docs/d3d9/ARCHITECTURE.md` names the eight keys: the fault counts, absent
 /// from a window without a fault sample, the GPU copies of the vertex and
 /// index buffer pool, absent when it has none to count, and the five
 /// memory gauges, absent from a window that closed before their sample
@@ -308,7 +308,7 @@ impl Kind {
 /// Where one leg of a layout comparison ran: which Wine, and which build of the PE side.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Layout {
-    /// The Wine the leg ran under, as the Makefile names it (`sdk`, `arm64`).
+    /// The Wine the leg ran under, as the caller names it (`sdk`, `arm64`).
     pub runtime: String,
     /// The build of `d3d9.dll` and `mtld3d.dll` the leg loaded (`x86_64`, `arm64x`).
     pub variant: String,

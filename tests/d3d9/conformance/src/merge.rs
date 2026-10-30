@@ -3,7 +3,7 @@
 //! With classifications living in CONFORMANCE.md (see [`crate::triage`]),
 //! a re-baseline is a plain re-record of counts — there is no class state to
 //! carry. The prior baseline is still consulted to report what changed: which
-//! sites are new (they need a CONFORMANCE.md entry before `make test` goes
+//! sites are new (they need a CONFORMANCE.md entry before the unit tests go
 //! green again) and which were dropped (their prose entries are now stale and
 //! must be removed).
 //!
@@ -26,7 +26,7 @@ pub struct MergeSummary {
     /// Prior sites that no longer fail — their prose entries are now stale.
     ///
     /// Each of these still has a CONFORMANCE.md cluster entry that must be
-    /// removed for `make test` to go green again.
+    /// removed for the unit tests to go green again.
     pub dropped_sites: Vec<Site>,
     /// Skipped assertions whose prior counts were retained without a new measurement.
     pub skipped_sites: Vec<Site>,

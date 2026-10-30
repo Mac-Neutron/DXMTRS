@@ -286,7 +286,7 @@ fn occlusion_query_counts_in_reported_pixels_under_the_scale() {
     //
     // Pins its own scale (a clean half, so the render extent is exact) rather
     // than inheriting the run's: at the identity there is nothing to convert,
-    // and this has to fail in the ordinary `make test` if it regresses.
+    // and this has to fail in an ordinary run if it regresses.
     let h = Harness::with_config("render.scale=0.5;query.flushImmediate=false");
     let (width, height) = h.dims();
     let Some(q) = h.create_query(D3DQUERYTYPE_OCCLUSION) else {

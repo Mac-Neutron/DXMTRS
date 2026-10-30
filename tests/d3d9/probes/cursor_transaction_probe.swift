@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 // Verify cursor visibility when input changes twice before the transaction commits.
-// Usage: swift scripts/cursor_transaction_probe.swift <existing-output-directory>
+// Usage: swift tests/d3d9/probes/cursor_transaction_probe.swift <existing-output-directory>
 import AppKit
 import Metal
 import QuartzCore

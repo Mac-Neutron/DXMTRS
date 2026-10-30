@@ -1,7 +1,7 @@
 //! Pure-Rust d3d9 helpers shared by `d3d9.dll`.
 //!
 //! Host-testable: no COM, no `raw-dylib`, no `winecrt0`. Consumed by
-//! `windows/d3d9` as an rlib.
+//! `src/d3d9` as an rlib.
 
 /// `log` target for every mtld3d-core call site *except* `dxso::*` and `perf`.
 ///

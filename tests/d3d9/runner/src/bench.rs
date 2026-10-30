@@ -75,7 +75,7 @@ const LAYOUTS_FILE: &str = "layouts.txt";
 /// One of the two builds an A/B run compares, and the directory its runs write into.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Leg {
-    /// The reference build, `BASE` in the Makefile.
+    /// The reference build, the one the `--base-*` flags name.
     Base,
     /// The build under test, the current checkout.
     Cand,

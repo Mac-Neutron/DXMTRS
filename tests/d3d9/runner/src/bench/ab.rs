@@ -817,7 +817,7 @@ fn run_shape(
 /// Link the staged caches at `corpus` into the run directory `dir` as `corpus`, once.
 ///
 /// A benchmark reads real caches from `corpus` under its log directory, as
-/// `make bench` stages them. Both legs' runs link the one staged copy, which
+/// the caller stages them (`--corpus-dir`). Both legs' runs link the one staged copy, which
 /// the benchmark only copies from, so no leg sees a cache the other did not.
 ///
 /// # Errors

@@ -6,22 +6,26 @@ kit — the WHQL/HLK tests are driver-certification machinery). Those tests buil
 into one `d3d9_test.exe` per architecture, with four subtests selected by
 source-file stem: `device`, `visual`, `stateblock`, `d3d9ex`.
 
-Because our `d3d9.dll` is installed as a Wine *builtin* (`make install`), running
+Because our `d3d9.dll` is installed as a Wine *builtin* (MacNeutron ships it that way), running
 `d3d9_test.exe` exercises our implementation directly.
 
 ## Running
 
+MacNeutron's `dxmt/mtld3d-conformance.sh` runs the `arm64x` leg against the Wine
+the launcher ships, in a prefix of its own; the runner's arguments pass through:
+
 ```
-make conformance                # diff both legs (i686, and arm64x or x86_64) vs baseline.txt
-make conformance-i686           # one leg, one runner process (what CI runs)
-make conformance-arm64x         # the x86_64 binary against the ARM64X build (arm64 Wine)
-make conformance-x86_64         # the x86_64 binary against the x86_64 build (x86_64 Wine)
-make conformance-intel          # both legs under the intel.* config keys
-make conformance-intel-i686     # one leg under the intel.* keys
-make conformance-scale          # both legs at render.scale = 0.75
-make conformance-scale-i686     # one leg at render.scale = 0.75 (what CI runs, on one image)
-make conformance-baseline       # (re)record this machine's six legs of baseline.txt in sequence
+dxmt/mtld3d-conformance.sh                          # the arm64x leg, diffed against baseline.txt
+dxmt/mtld3d-conformance.sh --variant intel          # under the intel.* config keys
+dxmt/mtld3d-conformance.sh --variant scale          # at render.scale = 0.75
+dxmt/mtld3d-conformance.sh --only visual --repeat 20 --log debug   # one subtest, repeated
+dxmt/mtld3d-conformance.sh --update-baseline        # (re)record this leg's entries of baseline.txt
 ```
+
+`eac-vm/dxmt/d3d9-gate.sh` runs the same runner in the VM, on its x64 and i386
+lanes. The legs that need other Wines (the `i686` and `x86_64` keys below) have no
+script in this tree: the runner takes any Wine as explicit paths, so they run
+by hand.
 
 A leg is one build under one Wine, one variant and one GPU family. The build
 and the Wine are named by the runner's `--arch` label, and each Wine has keys
@@ -41,76 +45,54 @@ layer applies different texture rules). The `scale` variant (`--variant
 scale`) runs the same binary at `render.scale = 0.75`, so every frame is
 rasterized on a smaller grid and read back through the resolve that brings it
 up to the reported size; its results record under `[<arch>+scale/<subtest>]`
-and CI runs it on one image and one arch, like the scaled end-to-end leg.
+
 The sites share the classifications below whatever the leg, since a site's
 nature does not depend on the leg that hit it. On the Apple family the two keys that only change a code path and no
 answer, `intel.managedMemory` and `intel.linearAlign256`, must move no count
 at all, and a site that fails only under the variant is expected to trace to
-one of the two caps keys. The `@mac2` entries are recorded by CI, whose
-Intel image is the one Mac2 machine the project runs on: dispatch the
-workflow with `record_intel_baseline` (and `intel_only`, so only the Intel
-legs run) and copy the `@mac2` sections out of the `baseline-mac2-<arch>`
-artifacts (`make conformance-baseline` on an Apple Silicon machine leaves
-them untouched, the merge being leg-scoped). Pull requests do not run the
-Intel image, so a change that fixes a site updates the Apple entries and
-leaves the site's `@mac2` pin above the new count; the next nightly Intel run
-then fails on a stale baseline, not a regression. The fix is that same
-dispatch, `record_intel_baseline` with `intel_only`, best made on the pull
-request's branch before it merges so the `@mac2` sections land with it, or
-on `main` once the nightly shows the stale pin.
+one of the two caps keys. The `@mac2` entries can only be recorded on an Intel/AMD
+Mac: `--update-baseline` there writes them, and on an Apple Silicon machine it
+leaves them untouched, the merge being leg-scoped. A change that fixes a site
+updates the Apple entries and leaves the site's `@mac2` pin above the new count;
+the next run on an Intel Mac then fails on a stale baseline, not a regression.
+The fix is a re-record on that machine.
 
 ### The two Wines
 
-The Makefile runs two legs under the Wine `WINE_SDK` names, both against the
-builds `make install` puts there, and the Wine decides the keys they record
-under. Both legs run one build of Wine's d3d9 tests, whichever Wine runs
-them: the `{i386,x86_64}-windows/d3d9_test.exe` of wine-build's arm64 Wine
-release, under the directory `WINE_TESTS` names (The test binaries, below).
+The baseline serves two Wines, and the Wine decides the keys a leg records
+under. Both run one build of Wine's d3d9 tests, whichever Wine runs
+them: the `{i386,x86_64}-windows/d3d9_test.exe` of one build (The test binaries,
+below).
 
-| Target | arm64 Wine (macos-26 CI image) | x86_64 Wine (macos-15 CI image, under Rosetta, and macos-15-intel) |
+| Leg | arm64 Wine | x86_64 Wine (Rosetta on Apple Silicon, or an Intel Mac) |
 | --- | --- | --- |
-| `conformance-i686` | the i386 binary against the i686 build, as `i686-arm64` | the same, as `i686` |
-| 64-bit leg | `conformance-arm64x`: the x86_64 binary against the ARM64X build, as `arm64x` | `conformance-x86_64`: the x86_64 binary against the x86_64 build, as `x86_64` |
+| 32-bit | the i386 binary against the i686 build, as `i686-arm64` | the same, as `i686` |
+| 64-bit | the x86_64 binary against the ARM64X build, as `arm64x` | the x86_64 binary against the x86_64 build, as `x86_64` |
 
-The `-intel` and `-scale` legs and the baseline targets follow the same two
-(`conformance-baseline-arm64x`, `conformance-intel-i686` and the like), each
-recording under its key's `+intel` or `+scale` form, `ARCH` takes `i686` or
-the 64-bit leg's name for `conformance-isolate`, and a leg of the other Wine
-stops saying why.
+The `+intel` and `+scale` variants follow the same two, each recording under its
+key's `+intel` or `+scale` form.
 
 Baseline keys are per Wine. The same i686 build reads other counts under the
 arm64 Wine's x86 translator than under Rosetta, and the two Wines carry
 their own Wine version, so a run under one Wine reads and writes only that
-Wine's keys: `make conformance-baseline` on the arm64 Wine rewrites the
+Wine's keys: `--update-baseline` on the arm64 Wine rewrites the
 `i686-arm64` and `arm64x` sections and never touches `i686` or `x86_64`,
-which serve the x86_64 Wine and its two CI images, macos-15 and
-macos-15-intel. `i686-arm64` keeps the runner's `<arch>[+variant][@gpu]`
+which serve the x86_64 Wine. `i686-arm64` keeps the runner's `<arch>[+variant][@gpu]`
 grammar: the arch part names the build and the Wine together, as `arm64x`
 already does, so no new axis is needed and every existing key parses as
 before. A key with no entries yet makes its
 leg's run report every failing site as new and fail, and the runner says so
-in one line naming the key and `make conformance-baseline`. The header's
+in one line naming the key and `--update-baseline`. The header's
 `Wine:` line is one for the file and names the build of the tests every
 section was recorded against, `wine-11.19-17-gd57b522eea5`: the version of
 the Wine the tests were built from, never of the Wine that runs them. The
-Makefile tells the runner that version (`--tests-wine-version`) from the
-first of these that answers:
-
-1. the first line of `$WINE_TESTS/VERSION`. This file is the contract with
-   wine-build: a release that publishes the tests writes it into
-   `lib/wine/tests`, holding the `wine --version` string of the build the
-   tests came from, so a directory of tests extracted alone still says
-   which build it is. wine-build writes it from arm64-11.19-2 on;
-2. the `wine --version` of the Wine tree `WINE_TESTS` lies in
-   (`$WINE_TESTS/../../../bin/wine`), when that tree has a runnable
-   `bin/wine`. In the arm64 mode's default this is `WINE_SDK`'s own;
-3. nothing, for tests with neither; CI's x86_64-Wine images extract the
-   tests with their `VERSION`, so every CI image compares.
+caller tells the runner that version (`--tests-wine-version`); MacNeutron's
+script passes the `wine --version` string of the Wine that runs the tests. A caller
+with no version passes none: the run compares nothing and a re-record keeps the
+header as it is.
 
 A run compares the header with that version and warns when they differ, and
-`make conformance-baseline` writes it into the header. When it is unknown
-the run says so in one line and compares nothing, and a re-record keeps the
-header as it is. A site the arm64 Wine moves is reclassified only on the
+`--update-baseline` writes it into the header. A site the arm64 Wine moves is reclassified only on the
 evidence of a recorded run.
 
 Set `MTLD3D_CONFORMANCE_RAW_DIR=<dir>` to also persist each subtest's full raw
@@ -127,11 +109,9 @@ GPU-hang line (`kIOAccelCommandBufferCallbackErrorHang`, or the
 drops afterwards) stops the subtest at once and ends the leg: exit code 3, no
 verdict, no baseline write. Every count after that line is a read off a GPU
 that runs nothing, and waiting out the subtest's budget would only make the
-same non-verdict cost minutes. On the Intel CI image the paravirtual GPU stays
-hung for the rest of the machine's life, so the later subtests would hang too.
-The job marks the leg with a `GPU hang` annotation, and the answer is a re-run
-of the failed jobs, which lands them on fresh runners; CI does that once by
-itself (`CONTRIBUTING.md`, "Pull requests", says when).
+same non-verdict cost minutes. A paravirtual GPU stays hung for the rest of
+the machine's life, so the later subtests would hang too, and the answer is to
+run the leg again on a machine whose GPU works.
 A hang on a real GPU is worth a look on its own (a shader that hangs the GPU is
 a bug), but the leg has to run again for its counts either way.
 
@@ -147,7 +127,7 @@ directory they go to the runner's stderr. They are the one account of where a
 hang was: the raw log of a process parked in a syscall ends in that line and
 nothing else, and a thread parked in `wine_server_call` shows nothing of the
 server that owes it a reply. The server is matched on two things, so no other
-prefix's is ever read: the binary it was exec'd from, which the Makefile names
+prefix's is ever read: the binary it was exec'd from, which the caller names
 with `--wineserver` out of the same Wine as the loader, and the directory
 it works from, which wineserver names after the device and inode of the prefix
 it serves. When no such server is running, the file says so instead of failing
@@ -157,54 +137,43 @@ exception (Wine ends the process with the exception code, of which unix keeps
 the low byte: `code 5` is an access violation) from a signal (11 `SIGSEGV`,
 10 `SIGBUS`, 6 `SIGABRT`, 9 `SIGKILL`).
 A run that reached its summary reads `code 0` once a device existed (the layer
-ends the process from its detach, see CONTRIBUTING.md), else the framework's
+ends the process from its detach, see `docs/d3d9/TESTING.md`), else the framework's
 failure count capped at 255.
 Each process is also told `log.dir=Z:<dir>/<leg>-<subtest>`, so its log file
 (`d3d9_test-<pid>.log`, and any GPU trace) lands in a directory beside its raw
-output, one per process. The runner's `--log <filter>` (`LOG=` for the Makefile
-targets) is the `RUST_LOG` those processes run under; the default `off` writes
+output, one per process. The runner's `--log <filter>` is the `RUST_LOG` those processes run under; the default `off` writes
 nothing, and the crash handlers' lines then go to stderr, i.e. into the raw log.
 
-A repeat run (`make conformance-isolate REPEAT=<n>`) keeps every run,
-`<leg>-<subtest>-<n>.log`, with its own log directory. Dispatching the workflow
-with `conformance_repeat=<n>` runs it on every conformance job, under
-`LOG=debug`, and uploads the lot as `conformance-raw-<image>-<arch>`: the way to
-make a subtest that dies one run in a few die in one sitting, on the machine
-where it does.
+A repeat run (`--repeat <n>`) keeps every run,
+`<leg>-<subtest>-<n>.log`, with its own log directory; with `--log debug` it is
+the way to make a subtest that dies one run in a few die in one sitting, on the
+machine where it does.
 
-In CI the raw artifact of every conformance job also carries `system/`: the
-system log of the job's span (the job budget plus five minutes), with the
-kernel and GPU lines the e2e legs collect and every line of the `wine`
-processes that is an error or fault or names an exception, and
-`collection-status.txt` saying what was collected and how. A sample shows
-where a hung process waits; when it waits on a main-thread request after
-AppKit swallowed an Objective-C exception (the sample then has a thread
-named `SOME_OTHER_THREAD_SWALLOWED_AT_LEAST_ONE_EXCEPTION`), the system log
-is where AppKit reports the exception, if it logs it there and does not
+A sample shows where a hung process waits; when it waits on a main-thread
+request after AppKit swallowed an Objective-C exception (the sample then has a
+thread named `SOME_OTHER_THREAD_SWALLOWED_AT_LEAST_ONE_EXCEPTION`), the system
+log is where AppKit reports the exception, if it logs it there and does not
 redact it.
 
 ### The test binaries
 
-The test binaries are the `{i386,x86_64}-windows/d3d9_test.exe` of
-wine-build's arm64 Wine release, under its `lib/wine/tests`, and every leg
-runs that one build whichever Wine it runs under: a site is named by its
+The test binaries are the `{i386,x86_64}-windows/d3d9_test.exe` of one build of
+Wine's tests (the arm64 Wine release's `lib/wine/tests`; MacNeutron's
+`make wine-arm64-winetests` builds the x64 one from its pinned Wine), and every
+leg runs that one build whichever Wine it runs under: a site is named by its
 `file:line`, which moves between Wine versions (the x86_64 Wine cx-26.3.0-7
 ships Wine 11.0's tests, the arm64 Wine arm64-11.19-2 Wine 11.19's), so one
 classification list can only serve one build of the tests, and a PE test
-runs under any Wine. `WINE_TESTS` names the directory. Under the arm64 Wine
-it defaults to `$WINE_SDK/lib/wine/tests`, the same install `make install`
-puts our builtin `d3d9.dll` into; under an x86_64 Wine it has no default and
-the conformance targets stop without it, and CI's x86_64-Wine images fetch
-the pinned arm64 release's `lib/wine/tests` alone for it. The binaries are
+runs under any Wine. The binaries are
 not vendored here: they are large and drift with the Wine version, so
 `baseline.txt` records the Wine version it was taken against instead.
 
-The runner is the Rust tool `mtld3d-conformance` (`unix/conformance/`). It takes
+The runner is the Rust tool `mtld3d-conformance` (`tests/d3d9/conformance/`). It takes
 the loader and one test binary as explicit paths (`--wine`, `--exe`, plus
 `--arch` as the label to record under) and resolves nothing itself: every Wine
-location lives in the Makefile. One invocation therefore covers one leg,
+location is the caller's. One invocation therefore covers one leg,
 which is what lets the 32-bit and 64-bit gates, and the native and Intel
-variants, be separate CI jobs, and `--update-baseline` rewrites only its own
+variants, run as separate invocations, and `--update-baseline` rewrites only its own
 leg's entries. It runs each
 subtest as its own process, so a crash in one cannot poison another's counts,
 with Metal API validation left on in `nslog` mode (it logs rather than aborting,
@@ -231,15 +200,15 @@ detail, up to the next `NSLog` line, Wine channel line or blank line, so the
 whole report reaches the log indented under its `metal-validation:` line
 instead of only in the raw output. One report counts once.
 
-This is **not** part of `make test`: many checks fail by design (see below), so
+This is **not** part of the unit tests: many checks fail by design (see below), so
 it is a tracked-score tool, not a pass/fail gate on zero. The runner exits
 non-zero on a *regression* vs the baseline — a per-site failure count that went
 up, a new failing site, or a subtest that started crashing — and equally on a
 *stale baseline* — a count that dropped, a site that disappeared, or a crash
 that cleared. An improvement fails the gate on purpose: tolerating it would let
 baseline.txt overstate reality, and the surplus becomes a budget a later
-regression can hide in. The fix for a stale baseline is `make
-conformance-baseline` plus the matching triage edit here, not a code hunt. The
+regression can hide in. The fix for a stale baseline is `--update-baseline`
+plus the matching triage edit here, not a code hunt. The
 `flaky` and `ceiling` classes are the two tolerances (see below).
 
 A recognized upstream skip is an absent measurement, not a passing assertion.
@@ -259,7 +228,7 @@ site holds its pin, because API misuse is invisible to a pass/fail count. A
 ## Kept divergences
 
 Divergences from D3D9 kept on purpose, because closing them costs frame time,
-memory, or a game that relies on the looser behaviour. `docs/STATUS.md` lists them
+memory, or a game that relies on the looser behaviour. `docs/d3d9/STATUS.md` lists them
 in one line each; this section is where the reasoning lives. Where Wine's
 suite observes a divergence, the cluster below carries the site-level detail
 and is named here; the rest have no conformance site and this is their only
@@ -280,7 +249,7 @@ record. A knob, where one makes sense, is named with its default.
   back-buffer size reports the chain of that size, but rasterizes at
   `render.scale` of it, and a smaller base can hold a shorter chain: 640x480
   has ten levels, its 480x360 at 0.75 nine. The Metal texture holds the
-  shorter chain (`rasterized_level_count` in `windows/core/src/render_scale.rs`)
+  shorter chain (`rasterized_level_count` in `src/d3d9/core/src/render_scale.rs`)
   and every reported level past it lands on its last level (`rasterized_level`),
   so a draw, fill, copy or write into one of those tail levels is seen by the
   others. The shared Metal level is 1x1, so a read of any shared level returns
@@ -335,7 +304,7 @@ record. A knob, where one makes sense, is named with its default.
   Content that tests against depth or stencil from an earlier frame without
   clearing reads undefined values. Sites: `z_range_test` and `texdepth_test`
   below. No knob: the gates are compile-time constants in
-  `windows/core/src/passes.rs`.
+  `src/d3d9/core/src/passes.rs`.
 - **A partial `Lock` of a dynamic vertex or index buffer without
   `D3DLOCK_DISCARD` returns a pointer into memory a queued draw may still
   read.** D3D9 keeps the game's writes from landing under a draw the GPU has
@@ -562,7 +531,7 @@ record. A knob, where one makes sense, is named with its default.
   taken here (the device-loss decision), and a present into a covered window
   already skips the drawable without costing the application anything, so
   there is no state to report. The failure latch the layer keeps
-  (`docs/STATUS.md`, device loss) is still reported, in the answers D3D9Ex
+  (`docs/d3d9/STATUS.md`, device loss) is still reported, in the answers D3D9Ex
   documents: `TestCooperativeLevel` answers `D3D_OK` on an extended device
   whatever the latch holds, as the extended runtime does; `Present`,
   `PresentEx`, the swap chain's `Present`, `CheckDeviceState`, `Reset` and
@@ -844,7 +813,7 @@ Each datum has exactly one authoritative home, split by who writes it:
 - **`baseline.txt` (machine-owned)** records the current *results*: for each
   `(arch, subtest)`, the crash bit plus every failing assertion as a
   `<file>.c:<line>` site with a hit count. No classifications — the file is
-  freely rewritten by `make conformance-baseline` without ever touching prose.
+  freely rewritten by `--update-baseline` without ever touching prose.
 
   ```
   [i686/device] crash=1
@@ -856,7 +825,7 @@ Each datum has exactly one authoritative home, split by who writes it:
   per-cluster section below declares every site's classification as a
   `<line>=<class>` token on a `Sites:` line, next to the rationale prose.
   The runner loads classes from here (for the flaky/ceiling tolerances and
-  untriaged reporting); a unit test in the runner crate fails `make test` unless the
+  untriaged reporting); a unit test in the runner crate fails the unit tests unless the
   two files cover exactly the same sites — so a new baseline site stays loud
   until someone writes its rationale, and a fixed site's prose must be
   removed rather than lingering as history.
@@ -867,10 +836,10 @@ not 74 distinct defects. Recording the location (not just a total) means a fixed
 bug and a new regression can no longer net out to the same number and hide each
 other.
 
-`make conformance-baseline` re-records `baseline.txt` and prints exactly which
+`--update-baseline` re-records `baseline.txt` and prints exactly which
 sites are new (add them to a cluster below, with a rationale) and which were
 dropped (delete their tokens and trim the prose). A new build of the tests
-renumbers source lines, so moving `WINE_TESTS` to another release is a
+renumbers source lines, so moving to another release of the tests is a
 re-baseline of every section with the `Sites:` tokens here renumbered in the
 same change. The runner's warning that `file:line` sites may have drifted
 compares the header with the Wine version the tests came from (The two
@@ -1287,7 +1256,7 @@ working set on each activation change, which costs frame time and risks the
 game's own recreate path, for a device that lost nothing. The
 `D3DERR_DEVICENOTRESET` half is real and implemented: a failed `Reset`
 latches it until one succeeds. Listed under Deliberately not implemented
-in `docs/STATUS.md`.
+in `docs/d3d9/STATUS.md`.
 
 4547 is `expected`, and follows from the same no-modeset decision as the
 message sites above. Both mode-change `Reset`s expect the device window to be
@@ -1791,7 +1760,7 @@ Sites: 29153=real
 
 The `D3DTSS_TCI_SPHEREMAP` row reads `0x00757d00` where `0x00836900` is
 expected; the camera-space position, normal and reflection-vector rows
-pass. The fixed-function emitter (`windows/core/src/dxso/ff.rs`, the
+pass. The fixed-function emitter (`src/d3d9/core/src/dxso/ff.rs`, the
 SPHEREMAP arm) divides by `m = 2 * length(R + (0, 0, 1))`; the test's
 geometry evaluated with that formula gives the value read, and with
 `R + (0, 0, -1)`, which wined3d emits, the value expected. DXVK uses the

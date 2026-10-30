@@ -23,7 +23,7 @@ use crate::{
 ///
 /// A baseline site with no prose entry is untriaged work-in-progress; a
 /// prose entry for a site that no longer fails is stale documentation.
-/// Either direction fails `make test` until the prose is fixed.
+/// Either direction fails the unit tests until the prose is fixed.
 #[test]
 fn conformance_md_covers_exactly_the_baseline_sites() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -93,7 +93,7 @@ struct DocSummary {
 /// The sentence is hand-written over data the tokens already carry, so a
 /// reclassification that forgets it leaves the document stating counts nobody
 /// measured (it read 133 `expected`, 4 `caps`, 24 `ceiling` for two months
-/// against tokens reading 131, 1, 22). Recounting it here fails `make test`
+/// against tokens reading 131, 1, 22). Recounting it here fails the unit tests
 /// instead.
 #[test]
 fn conformance_md_summary_matches_the_sites_tokens() {

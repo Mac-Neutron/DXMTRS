@@ -15,11 +15,11 @@
 //! ## Build
 //!
 //! ```sh
-//! MTLD3D_CRUMB=1 make install
+//! MTLD3D_CRUMB=1 meson compile -C <build dir>
 //! ```
 //!
-//! Routed through each consumer's `build.rs` (see `unix/shared/build.rs`,
-//! `unix/unix/build.rs`, `windows/d3d9/build.rs`).
+//! Routed through each consumer's `build.rs` (see `src/d3d9/shared/build.rs`,
+//! `src/d3d9/unix/build.rs`, `src/d3d9/build.rs`).
 
 #[cfg(not(mtld3d_crumb))]
 mod disabled {

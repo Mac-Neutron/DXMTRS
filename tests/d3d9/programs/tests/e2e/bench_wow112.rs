@@ -29,7 +29,7 @@
 //! fixed-function shares, textures per draw, blend, alpha-test, depth-write,
 //! cull and colour-mask shares, the shader, texture, blend, alpha-test and
 //! cull switches and the distinct shaders and textures of every pass land
-//! close to the game's, which `make bench-shape` checks against the dump.
+//! close to the game's, which the runner's `bench-shape` checks against the dump.
 //!
 //! The calls between draws follow the game's own state cache: a render
 //! state, shader, texture, sampler state or index buffer is set only when it
@@ -814,7 +814,7 @@ const QUERY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One busy frame, repeatedly: warm up, then time the frames.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn wow_112_busy_frame() {
     // Before the device: its creation logs, so the layer log is written after
     // this mark whatever the benchmark's warm-up logs.

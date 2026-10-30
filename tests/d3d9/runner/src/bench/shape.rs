@@ -80,7 +80,7 @@ pub const STOP_AFTER: usize = WINDOW + 3;
 /// The line a benchmark prints on stdout where its measured frames start.
 ///
 /// The frames after it are the steady ones the timed runs measure. The
-/// benchmarks print it from `windows/tests/tests/e2e/bench.rs`, which has
+/// benchmarks print it from `tests/d3d9/programs/tests/e2e/bench.rs`, which has
 /// no crate in common with this runner, so the text is written there too.
 pub const MEASURING: &str = "[bench] measured frames start";
 

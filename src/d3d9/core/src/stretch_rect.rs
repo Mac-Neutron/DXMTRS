@@ -1,6 +1,6 @@
 //! Rect parsing + validation for `IDirect3DDevice9::StretchRect`.
 //!
-//! The actual blit dispatch lives in `windows/d3d9` (it needs a Metal
+//! The actual blit dispatch lives in `src/d3d9` (it needs a Metal
 //! handle); only the pure host-testable parts live here: the rect check, the
 //! routes a same-texture pair and a planar YUV endpoint take, the source
 //! decode selector, and the CPU twins of the YUV decodes the blit fragment
@@ -284,7 +284,7 @@ pub const fn planar_stretch_route(
 /// planar modes the luma texel and its 4:2:0 chroma sample, and all four YUV
 /// modes convert to RGB. The opaque-alpha mode samples as-is and replaces the
 /// alpha with one. The discriminants are the uniform's values; the MSL in
-/// `unix/unix/src/metal/blit.rs` matches on them.
+/// `src/d3d9/unix/src/metal/blit.rs` matches on them.
 #[repr(u32)]
 pub enum BlitDecode {
     /// Sample the source texture as-is (any RGB format).
@@ -387,7 +387,7 @@ pub const fn is_planar_yuv(d3d_format: u32) -> bool {
 /// centred on 128, the convention every desktop driver applies to packed
 /// YUV surfaces. Computed in 16.16 fixed point, rounded to nearest and
 /// clamped; it agrees with the float version in the blit fragment function
-/// (`unix/unix/src/metal/blit.rs`) on every reference sample, keep the two
+/// (`src/d3d9/unix/src/metal/blit.rs`) on every reference sample, keep the two
 /// in step.
 #[must_use]
 pub fn yuv_to_rgb8(luma: u8, cb: u8, cr: u8) -> (u8, u8, u8) {

@@ -1,7 +1,7 @@
 //! A perf window's length, read back out of a layer log line.
 //!
 //! The benchmarks align their measured frames to the layer's perf windows,
-//! and `make bench-ab` runs the candidate's benchmark binary against a base
+//! and the runner's `bench-ab` runs the candidate's benchmark binary against a base
 //! build whose windows may be of another length (5 s before the interval
 //! became 2 s), so the length a run's windows have is read from the log it
 //! writes rather than from [`super::SUMMARY_INTERVAL_SECS`]. Two lines carry

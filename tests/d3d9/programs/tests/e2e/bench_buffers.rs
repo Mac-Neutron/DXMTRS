@@ -86,7 +86,7 @@ const FVF: u32 = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
 /// Dynamic ring appends, wraps, static rewrites and preserving locks, repeatedly: warm up, time.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn dynamic_buffer_churn() {
     // Before the device: its creation logs, so the layer log is written after
     // this mark whatever the benchmark's warm-up logs.

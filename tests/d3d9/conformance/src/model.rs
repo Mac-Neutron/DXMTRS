@@ -394,7 +394,7 @@ impl Baseline {
         out.push_str("# mtld3d d3d9 conformance baseline — per-site failure counts.\n");
         let _ = writeln!(out, "# Wine: {}", self.wine_version);
         out.push_str(
-            "# Regenerate with 'make conformance-baseline'. Classifications + triage prose\n",
+            "# Regenerate with 'dxmt/mtld3d-conformance.sh --update-baseline'. Classifications + triage prose\n",
         );
         out.push_str(
             "# live in CONFORMANCE.md ('Per-cluster classification'); a runner unit test\n",

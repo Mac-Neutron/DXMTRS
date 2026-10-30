@@ -2,7 +2,7 @@
 
 The games mtld3d has been run with, and how far each one gets. A profile
 named in the table is a built-in set of options the game gets without any
-configuration; [`app_profile.rs`](../windows/core/src/app_profile.rs) gives
+configuration; [`app_profile.rs`](../../src/d3d9/core/src/app_profile.rs) gives
 the reason for each one.
 
 | Game | Status |
@@ -42,7 +42,7 @@ NosTale draws its text with GDI into slots sized for 96 DPI, so it has to
 run DPI-unaware. On a prefix above 96 DPI, a DPI-aware NosTale draws its
 text larger. The slots clip it, and the text overflows its boxes. Do not
 give its executable the `HIGHDPIAWARE` flag that
-[`INSTALL.md`](../INSTALL.md#fullscreen) recommends for fullscreen, and do
+[`README.md`](README.md#fullscreen) recommends for fullscreen, and do
 not set that flag as the prefix default with `/ve`.
 
 Play NosTale in a window. Its fullscreen mode keeps a windowed device and

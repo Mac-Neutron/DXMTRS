@@ -1,14 +1,14 @@
-//! Support shared by the synthetic benchmarks, which `make bench` runs and `make test` skips.
+//! Support shared by the synthetic benchmarks, which only the runner's `--ignored` runs.
 //!
 //! No test of its own. The benchmarks, one or more in each `bench_*.rs`
 //! beside this file, are `#[ignore]`d: they take seconds each and
 //! their numbers depend on the machine and on whatever else it is running,
 //! so they measure and report instead of asserting, and the ordinary suite
-//! lists them as ignored. `make bench` runs them alone, one at a time in one
-//! process, through the runner's `--ignored`.
+//! lists them as ignored. The runner's `--ignored` runs them alone, one at a time in one
+//! process.
 //!
 //! Each benchmark writes a plain-text report, `bench-<name>.txt`, into the
-//! directory the layer writes its log to (`log.dir`, which `make bench`
+//! directory the layer writes its log to (`log.dir`, which the caller
 //! points at its output directory), and beside it `bench-<name>.metrics`,
 //! the same numbers one record per line for a program to compare (see
 //! [`Metrics`]). On a `PERF=1` build the report carries the rows of the
@@ -40,7 +40,7 @@
 //! unmeasured frames again until the window it measured has written its own
 //! ([`SpanStart::end`]). The length is read from the log, the `perf-kv`
 //! line's `window_s` or the grid header's `window=`, not from this binary's
-//! own layer build: `make bench-ab` runs this binary against a base whose
+//! own layer build: the runner's `bench-ab` runs this binary against a base whose
 //! windows may be longer (5 s before they became 2 s). A log that already
 //! holds perf windows is waited on for up to two of its windows, and one
 //! that does not close then fails the benchmark, since a round without its
@@ -87,7 +87,7 @@ const GRANULARITY_READS: u32 = 100_000;
 /// The interval of this binary's own layer build, the span of a run with no window to align to.
 ///
 /// A run with windows measures the length its log's windows have, which a
-/// base build of `make bench-ab` may have set otherwise. At the frame rates
+/// base build of the runner's `bench-ab` may have set otherwise. At the frame rates
 /// the frame benchmarks run (0.8 ms a frame or less) 2 s is 2500 frames or
 /// more, 25 in their p99's tail; `api_call_cost`, whose rounds take about
 /// 35 ms, gets about 57 rounds, a sample of every call kind each, where its
@@ -119,7 +119,7 @@ const LOG_POLL: Duration = Duration::from_millis(10);
 ///
 /// `bench-ab` stops a benchmark's untimed shape run once the layer log holds
 /// enough submissions after it, the frames the timed runs measure; the
-/// runner (`unix/e2e/src/bench/shape.rs`) shares no crate with this binary
+/// runner (`tests/d3d9/runner/src/bench/shape.rs`) shares no crate with this binary
 /// and writes the same text.
 const MEASURING: &str = "[bench] measured frames start";
 
@@ -129,7 +129,7 @@ const PERF_HEADER: &str = "── perf  window=";
 /// What precedes the pairs of the machine-read `perf-kv` line the layer logs after each window.
 ///
 /// The line is `perf-kv v1 window_s=<x> frames=<n> key=value ...` after the
-/// logger's prefix; `docs/ARCHITECTURE.md` lists the keys and what each
+/// logger's prefix; `docs/d3d9/ARCHITECTURE.md` lists the keys and what each
 /// suffix means.
 const PERF_KV: &str = "] perf-kv v1 ";
 
@@ -251,8 +251,8 @@ const PROCESS_BYTES_KEYS: [&str; 4] = [
 /// The `perf-kv` flag of Metal's capture layer, which [`perf_rule`] records as `exact`.
 ///
 /// The layer sits under every Metal call, so a leg measured with it and one
-/// without it measure different things. `make bench`, `make bench-ab` and
-/// `make bench-variants` unset `MTL_CAPTURE_ENABLED`; legs run in different
+/// without it measure different things. Whoever runs the benchmarks unsets
+/// `MTL_CAPTURE_ENABLED` for every leg (`docs/d3d9/TESTING.md`); legs run in different
 /// environments some other way fail on this row.
 const CAPTURE_LAYER_KEY: &str = "metal_capture_layer_count";
 
@@ -546,7 +546,7 @@ impl CallTimes {
 /// The layer names the file `<exe stem>-<host pid>.log`, and the host pid is
 /// not visible from inside Wine, so the file is the newest log of this
 /// executable in the log directory, and it must have been written since the
-/// benchmark started: `make bench` runs one process at a time into a
+/// benchmark started: the runner runs one process at a time into a
 /// directory of its own, and this process is writing its log. The layer
 /// creates the file on its log thread's first write, so it is looked for
 /// after the warm-up, by which time the device has logged.
@@ -1372,7 +1372,7 @@ impl PassState {
 ///   (`i686` or `x86_64`), `profile` and `debug_assertions` (`true` or
 ///   `false`), and `config` (the suite-wide `MTLD3D_CONFIG`, or `none`).
 ///   `profile` and `debug_assertions` describe the benchmark binary, which
-///   `make bench` builds with the layer's profile. `config` leaves out the
+///   is built with the layer's profile. `config` leaves out the
 ///   entries a benchmark's harness adds on top of it, such as the stutter
 ///   benchmark's `shaderCache.enable=false`; `config_entries` names those
 ///   (or `none`), so the two together are the settings the layer ran with.
@@ -1565,7 +1565,7 @@ impl Metrics {
     /// The `mem.*` records: the samples after the warm-up and at the end, absolute and as growth.
     ///
     /// `before` is taken right before the benchmark creates its interface.
-    /// `make bench-ab` runs a leg's benchmarks in one process, so the
+    /// The runner's `bench-ab` runs a leg's benchmarks in one process, so the
     /// absolute figures (`mem.warm.*`, `mem.end.*`, and `mem.peak_ws_mib`,
     /// the process's peak so far) carry whatever the benchmarks before this
     /// one left, and are reported as `info`. What this benchmark adds is its
@@ -1701,7 +1701,7 @@ impl Metrics {
     ///   because a window lasts two seconds, not a number of frames, so its
     ///   totals grow with the frame rate.
     ///
-    /// A key a window leaves out (`docs/ARCHITECTURE.md` names the ones that
+    /// A key a window leaves out (`docs/d3d9/ARCHITECTURE.md` names the ones that
     /// can be) is recorded only when every window read carries it, so each
     /// value covers the same windows; a comparison reports a key some rounds
     /// of a leg carry and others do not as incomplete, not judged.
@@ -2273,7 +2273,7 @@ fn mib(bytes: u64) -> String {
 
 /// The cargo profile this benchmark was built with, and whether debug assertions were on.
 ///
-/// `make bench` builds the benchmark with the layer's profile, so this is
+/// The benchmark is built with the layer's profile, so this is
 /// the layer's build too. A binary outside a cargo target directory (a
 /// stage) names no profile, and the debug-assertion state still says which
 /// kind of build it is.

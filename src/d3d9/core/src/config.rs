@@ -1,7 +1,7 @@
 //! `mtld3d.conf` parser.
 //!
 //! Pure-string in, typed config out — no I/O, no env reads. The
-//! PE-side wrapper in `windows/d3d9/src/config.rs` does the
+//! PE-side wrapper in `src/d3d9/src/config.rs` does the
 //! EXE-relative file lookup and feeds the file body to [`parse`];
 //! this module is host-testable through `cargo test -p mtld3d-core
 //! --target x86_64-apple-darwin`.

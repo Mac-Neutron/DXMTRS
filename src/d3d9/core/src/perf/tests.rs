@@ -1073,7 +1073,7 @@ fn kv_aggregates_average_peak_and_total_over_frames() {
 /// Every key is a unit-suffixed `[a-z0-9_]+` name that appears once.
 ///
 /// Runs on the full line a window logs, compilation keys included, so a
-/// key added anywhere is held to the naming contract `docs/ARCHITECTURE.md`
+/// key added anywhere is held to the naming contract `docs/d3d9/ARCHITECTURE.md`
 /// states: the suffix names the unit, and the value format follows it
 /// (three decimals for `_ms`, `_avg_ms` and `_peak_ms`, a bare integer
 /// otherwise).

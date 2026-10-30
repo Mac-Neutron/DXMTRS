@@ -5,7 +5,7 @@
 //! a texture in either of those pools. D3D9 copies 1:1 and converts nothing,
 //! so the destination has to carry the source's extent and format, and its
 //! backing has to hold every row the copy writes. The surface plumbing lives in
-//! `windows/d3d9`; the geometry decision is here.
+//! `src/d3d9`; the geometry decision is here.
 
 use mtld3d_types::{
     D3DFMT_A1R5G5B5, D3DFMT_A8B8G8R8, D3DFMT_A8R8G8B8, D3DFMT_X1R5G5B5, D3DFMT_X8B8G8R8,

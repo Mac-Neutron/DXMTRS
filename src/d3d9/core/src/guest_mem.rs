@@ -27,9 +27,9 @@
 //! bytes, which LLVM expands inline in an optimised build (the DLLs are only
 //! built optimised), and the block loops step by a stride the optimiser cannot
 //! see (`block_stride`), so its loop idiom pass cannot turn a loop back into a
-//! call. The Makefile's `MEM_ROUTINE_GATE` checks that this holds: every build
-//! of the `x86_64` DLL fails if any function of this module, or any of the
-//! four exports, calls or jumps straight to one of the four.
+//! call. Nothing in the build checks that this holds: a function of this module,
+//! or any of the four exports, that calls or jumps straight to one of the four
+//! recurses at run time, so read the `x86_64` DLL's disassembly after changing it.
 
 use core::{
     ffi::c_void,

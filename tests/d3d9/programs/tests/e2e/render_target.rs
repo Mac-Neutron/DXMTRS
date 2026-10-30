@@ -992,7 +992,7 @@ fn stretch_rect_from_an_x_offscreen_plain_into_one_with_alpha_writes_opaque_alph
 
     // Each source is red with its padding clear. X8R8G8B8 shares its storage
     // with A1R5G5B5 and A4R4G4B4 on a device that widens the packed 16-bit
-    // formats (`make test INTEL=1`), where a byte copy would hand the padding
+    // formats (a run with the `intel.*` keys forced), where a byte copy would hand the padding
     // over; on a device with them the pair is two storages either way.
     let fill = |format: u32| -> Vec<u8> {
         if format == D3DFMT_X1R5G5B5 {
@@ -1621,7 +1621,7 @@ fn intz_depth_sample_via_fixed_function() {
     // texture is `Depth32Float`, the FF emitter must declare it `depth2d<float>`
     // and read it with `sample_compare` (the slot is a LessEqual comparison
     // sampler) — a plain `texture2d` + `sample()` trips Metal validation, which
-    // is on under `make test`. `make test` is the regression guard for that.
+    // is on in the suite. The suite is the regression guard for that.
     let h = Harness::new();
     let depth_tex = h.create_texture(
         640,
@@ -1924,7 +1924,7 @@ fn intz_depth_sample_via_programmable_ps() {
     // Because slot 0 holds a `Depth32Float` texture, `depth_sampler_mask`
     // selects the `depth2d` + `sample_compare` variant — the path the real
     // cascade-shadow shaders take. The FF vertex pipeline feeds the
-    // programmable PS (VS/PS source resolve independently). `make test` runs
+    // programmable PS (VS/PS source resolve independently). The suite runs
     // with Metal validation on, so a depth/`texture2d` mismatch would fail here.
     let h = Harness::new();
     let depth_tex = h.create_texture(
@@ -4268,7 +4268,7 @@ fn render_to_default_pool_target_round_trips() {
     // GetRenderTargetData source into a SYSTEMMEM surface — i.e. create_color_target
     // produces a real, renderable, readable Metal texture that SetRenderTarget and
     // the readback blit both resolve via metal_color_handle. Metal validation is on
-    // under `make test`, so a malformed RT attachment would abort the draw.
+    // in the suite, so a malformed RT attachment would abort the draw.
     //
     // Nothing inside the frame samples the offscreen RT, so only the read-back
     // note keeps its colour store; the pixel assert at the end pins that.
@@ -7078,7 +7078,7 @@ fn same_size_depth_bind_inherits_contents_when_aliased() {
 /// the device holds the surface alive while it is bound, so the texture is
 /// released one frame after the application drops its own reference: the
 /// binding of the next surface is what finalizes the previous one, while the
-/// frame that drew against it is still in flight. `make test` runs with
+/// frame that drew against it is still in flight. The suite runs with
 /// `MTL_DEBUG_LAYER` on, so a destroy that lands before that frame retires
 /// aborts the process instead of reading freed storage. Every iteration also
 /// depth-tests through its own fresh surface, which fails if a retire took a

@@ -7,7 +7,7 @@
 //! takes contention (`last_submit_seq > coherent_seq`, without
 //! `NOOVERWRITE` or `READONLY`) plus either `DISCARD` or a whole-buffer
 //! range: a contended *partial* Lock keeps the live pointer, the
-//! divergence listed in `docs/STATUS.md#kept-divergences`. Unlock is
+//! divergence listed in `docs/d3d9/STATUS.md#kept-divergences`. Unlock is
 //! a no-op for `Direct` buffers; `Staged` buffers upload their dirty
 //! span there.
 //!
@@ -648,7 +648,7 @@ extern "system" fn vb_get_type(this: *mut c_void) -> u32 {
 ///   The game opted into the DISCARD/NOOVERWRITE timing contract, the
 ///   same one non-persistent mapped-buffer APIs (e.g. OpenGL
 ///   `glBufferSubData`) make implicitly. This is the divergence listed
-///   in `docs/STATUS.md#kept-divergences`; the only trace it
+///   in `docs/d3d9/STATUS.md#kept-divergences`; the only trace it
 ///   leaves is the `in-place` perf counter bumped below.
 /// - Non-DYNAMIC buffers never reach `plan_lock`: they are `Staged`, and
 ///   a partial write there uploads the dirtied range to a separate
@@ -830,7 +830,7 @@ extern "system" fn vb_lock(
                 // Count the kept divergence: a contended partial Lock
                 // without DISCARD or NOOVERWRITE hands back a pointer
                 // into the backing a queued draw may still be reading
-                // (`docs/STATUS.md#kept-divergences`). Counted and not
+                // (`docs/d3d9/STATUS.md#kept-divergences`). Counted and not
                 // warned because it is a by-design no-op on a per-frame
                 // batcher path, not a stub or a fallback. The other two
                 // ways to reach `WriteInPlace` (NOOVERWRITE/READONLY,

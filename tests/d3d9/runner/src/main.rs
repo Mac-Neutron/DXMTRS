@@ -1,6 +1,6 @@
 //! End-to-end test runner for mtld3d: run and account for the suite's test binaries under Wine.
 //!
-//! Each binary the Makefile hands in runs once, all of its tests on the
+//! Each binary the caller hands in runs once, all of its tests on the
 //! number of threads `--jobs` names. Explicit selections are batched to fit
 //! Windows command lines; failures, crashes, hangs and missing results can
 //! cost further processes (see `attribute`). Every path and knob is an

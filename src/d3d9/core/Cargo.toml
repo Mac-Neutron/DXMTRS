@@ -33,9 +33,9 @@ xxhash-rust = { workspace = true }
 # Used by the `dxso::emit_tests` MSL-compile checks (`metal_compile_or_fail`)
 # to compile every emitted shader through
 # `MTLDevice::newLibraryWithSource_options_error`. Same crates the
-# production unix .so uses (`unix/unix/Cargo.toml`) so test and runtime
-# stay aligned. mtld3d-core tests only ever build on macOS (`make clippy`
-# only passes `--all-targets` for the unix target), so no target-gate is
+# production unix .so uses (`src/d3d9/unix/Cargo.toml`) so test and runtime
+# stay aligned. mtld3d-core tests only ever build on macOS (clippy only
+# passes `--all-targets` for the darwin target), so no target-gate is
 # needed.
 [dev-dependencies]
 objc2 = { workspace = true }

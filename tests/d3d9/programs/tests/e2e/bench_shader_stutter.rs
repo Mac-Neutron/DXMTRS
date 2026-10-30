@@ -9,7 +9,7 @@
 //! per-run salt), so neither the layer nor Metal's own compiler cache can
 //! have seen it, on this run or an earlier one. The interface is created
 //! with `shaderCache.enable=false` on top of whatever the suite-wide
-//! configuration carries, which is how `make bench BENCH_CONFIG=...` tries
+//! configuration carries, which is how the runner's `--config` tries
 //! other options against the same frames.
 //!
 //! The warm-up draws the base workload alone, for at least
@@ -37,8 +37,8 @@
 //! colour, until every one does or [`VERIFY_FRAMES`] have gone by. A layer
 //! that skips a draw for a pipeline still building has had the settle
 //! frames to build it, so a cell left black is a shader that was never
-//! drawn. `K` and the offscreen count are fixed per test; `make bench
-//! FILTER=<test name>` picks one.
+//! drawn. `K` and the offscreen count are fixed per test; the runner's
+//! `--filter <test name>` picks one.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -88,14 +88,14 @@ const SETTLE_CAPACITY: usize = 1 << 16;
 
 /// One new pixel shader per frame on the back buffer.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn one_new_shader_per_frame() {
     stutter("shader_stutter_k1", 1, 0);
 }
 
 /// Two new pixel shaders per frame on the back buffer and one into an uncleared offscreen target.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn two_new_shaders_per_frame_and_one_offscreen() {
     stutter("shader_stutter_k2_offscreen", 2, 1);
 }
@@ -105,7 +105,7 @@ fn two_new_shaders_per_frame_and_one_offscreen() {
 /// None of the three may be left out of its frame, so each frame's stall
 /// is what building three shaders the frame cannot do without costs.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn three_new_shaders_per_frame_offscreen() {
     stutter("shader_stutter_offscreen3", 0, 3);
 }

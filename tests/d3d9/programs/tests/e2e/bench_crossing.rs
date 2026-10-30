@@ -99,7 +99,7 @@ impl Kind {
 
 /// Every kind's frames, block by block.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn crossing_stride_draws() {
     let tsc = TscClock::calibrated();
     let since = SystemTime::now();

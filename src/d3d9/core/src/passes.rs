@@ -140,7 +140,7 @@ const ENABLE_FIRST_USE_STENCIL_DONTCARE: bool = true;
 /// depth test off or always passing), since nothing in the frame reads what
 /// the pass before them stores; that part is not a divergence. The rationale
 /// and the sites it costs are in the Kept divergences section of
-/// `unix/conformance/CONFORMANCE.md`. Flipping this alone does not
+/// `tests/d3d9/conformance/CONFORMANCE.md`. Flipping this alone does not
 /// carry depth across `Present`: [`ENABLE_FIRST_USE_DONTCARE`] and
 /// [`ENABLE_FIRST_USE_STENCIL_DONTCARE`] discard it again on the next frame's
 /// first use.

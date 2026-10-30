@@ -715,7 +715,7 @@ extern "system" fn ib_lock(
                 // Count the kept divergence: a contended partial Lock
                 // without DISCARD or NOOVERWRITE hands back a pointer
                 // into the backing a queued draw may still be reading
-                // (`docs/STATUS.md#kept-divergences`). Counted and not
+                // (`docs/d3d9/STATUS.md#kept-divergences`). Counted and not
                 // warned because it is a by-design no-op on a per-frame
                 // batcher path, not a stub or a fallback. The other two
                 // ways to reach `WriteInPlace` (NOOVERWRITE/READONLY,

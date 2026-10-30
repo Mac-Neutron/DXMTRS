@@ -9,7 +9,7 @@
 //! asserts after each `FreeLibrary` that the module is still mapped, and then
 //! ends the process with a status of its own. A detach that ended the process
 //! at a `FreeLibrary` would end it while the test runs, before any result or
-//! declaration, and the runner in `unix/e2e` fails a test whose process ends
+//! declaration, and the runner in `tests/d3d9/runner` fails a test whose process ends
 //! that way. The declared status is the second check: the runner fails the
 //! test unless the process ended with exactly that code, which proves the
 //! exit-status hook and the `TerminateProcess` at the real exit survived both

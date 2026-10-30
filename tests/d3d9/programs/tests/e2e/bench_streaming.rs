@@ -108,7 +108,7 @@ const FVF: u32 = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
 /// Create, fill, draw and release textures every frame against a full live set: warm up, time.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn texture_streaming() {
     // Before the device: its creation logs, so the layer log is written after
     // this mark whatever the benchmark's warm-up logs.

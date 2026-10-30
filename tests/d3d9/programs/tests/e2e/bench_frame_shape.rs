@@ -278,7 +278,7 @@ const GLOW_SCISSOR: D3DRECT = rect(0, 0, GLOW_WIDTH.cast_signed(), GLOW_HEIGHT.c
 
 /// One busy frame, repeatedly: warm up, then time the frames.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn wow_335a_busy_frame() {
     // Before the device: its creation logs, so the layer log is written after
     // this mark whatever the benchmark's warm-up logs.

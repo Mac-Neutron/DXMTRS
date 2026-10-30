@@ -5,7 +5,7 @@
 //! `CheckDeviceMultiSampleType` refuses must not create, and one they accept
 //! must. The sweeps walk every numbered `D3DFORMAT` and the FOURCC formats
 //! titles probe, through every create entry point and pool the answer speaks
-//! for, and report every disagreement at once. Under `make test INTEL=1` the
+//! for, and report every disagreement at once. With the `intel.*` keys forced, the
 //! same sweeps run against the answers of a device without the packed 16-bit
 //! formats or 32-bit float filtering.
 
@@ -117,7 +117,7 @@ const fn succeeded(hr: i32) -> bool {
 /// offers them: their depth is served, the depth-surface `LockRect` they
 /// promise is not. The planar YUV pair is advertised as a plain surface but
 /// exists in `D3DPOOL_DEFAULT` only, which a query, having no pool, cannot
-/// say. All three are in `docs/STATUS.md`.
+/// say. All three are in `docs/d3d9/STATUS.md`.
 fn kept_divergence(shape: &str, format: u32) -> bool {
     match format {
         D3DFMT_ATI1 => shape.starts_with("texture") || shape.starts_with("offscreen"),

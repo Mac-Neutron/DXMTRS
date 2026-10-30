@@ -5,9 +5,9 @@
 //! supplies stays in the reported space, so each test here asserts on reported
 //! coordinates and must pass **unchanged** at any scale.
 //!
-//! That is the point: run the suite normally for the default path, and
-//! `make test SCALE=0.75` (or `0.5`, or a non-dividing `0.67`) to prove the two
-//! spaces never leaked into each other. A test that only held at 1.0 would be
+//! That is the point: run the suite normally for the default path, and with
+//! `render.scale=0.75` in `MTLD3D_CONFIG` (or `0.5`, or a non-dividing `0.67`)
+//! to prove the two spaces never leaked into each other. A test that only held at 1.0 would be
 //! asserting on the render space by accident.
 //!
 //! Exact-colour comparisons survive resampling because every region asserted on
@@ -657,11 +657,11 @@ fn reset_resize_keeps_reported_coordinates() {
 ///
 /// Pins its own scale (a clean half, so the conversion is exact) rather than
 /// inheriting the run's: at the identity the conversion is unobservable, and
-/// this must fail in the ordinary `make test` if it regresses.
+/// this must fail in an ordinary run if it regresses.
 #[test]
 fn a_point_keeps_its_reported_diameter_under_the_scale() {
     // The scale under test, resolved by this harness alone. The parser keeps
-    // the last entry, so this wins over a `make test SCALE=<n>` run too.
+    // the last entry, so this wins over a suite-wide `render.scale` too.
     let h = Harness::with_config("render.scale=0.5");
     assert_eq!(h.set_render_state(D3DRS_LIGHTING, 0), 0, "lighting off");
     h.select_diffuse_stage(0);
@@ -708,9 +708,9 @@ const ODD_FRAME: (u32, u32) = (803, 603);
 ///
 /// Its viewport is the whole target, set through `SetViewport`. Pins the scale
 /// rather than inheriting it: at the identity the two roundings cannot
-/// disagree, and this must fail in the ordinary `make test` if it regresses.
-/// The parser keeps the last entry, so this wins over a `make test SCALE=<n>`
-/// run too.
+/// disagree, and this must fail in an ordinary run if it regresses.
+/// The parser keeps the last entry, so this wins over a suite-wide
+/// `render.scale` too.
 fn odd_frame_at_three_quarters() -> Harness {
     let h = Harness::create(&HarnessConfig {
         width: ODD_FRAME.0,
@@ -1413,7 +1413,7 @@ fn a_ps_3_0_vpos_reads_reported_pixel_coordinates_under_the_scale() {
     //
     // Pins its own scale (a clean half) rather than inheriting the run's: at
     // the identity the register needs no conversion, and this has to fail in
-    // the ordinary `make test` if it regresses.
+    // an ordinary run if it regresses.
     //
     // ps_3_0: def c0, 0, 0, 0, 0; dcl vPos.xy; mov r0, c0; frc r0.xy, vPos.xy;
     // mov oC0, r0.
@@ -1520,7 +1520,7 @@ fn a_scaled_target_reads_back_at_the_reported_extent_in_every_colour_format() {
     //
     // Pins its own scale (a clean half, so both extents are exact) rather
     // than inheriting the run's: at the identity there is no resolve, and
-    // this has to fail in the ordinary `make test` if it regresses.
+    // this has to fail in an ordinary run if it regresses.
     const RED: u32 = 0xFFFF_0000;
     // Each format's own encoding of opaque red, as the u32 words of one pixel.
     const FORMATS: [(u32, &str, &[u32]); 4] = [
@@ -1589,14 +1589,14 @@ fn a_scaled_target_reads_back_at_the_reported_extent_in_every_colour_format() {
 ///
 /// Pins its own scale (a clean half, so both extents are exact) rather than
 /// inheriting the run's: at the identity there is nothing to convert, and this
-/// has to fail in the ordinary `make test` if it regresses.
+/// has to fail in an ordinary run if it regresses.
 #[test]
 fn a_depth_texture_at_the_backbuffer_size_is_charged_its_scaled_chain() {
     // A size that is not the back buffer's, for the texture that keeps its own.
     const OWN_SIZE: u32 = 256;
 
     // The scale under test, resolved by this harness alone. The parser keeps
-    // the last entry, so this wins over a `make test SCALE=<n>` run too.
+    // the last entry, so this wins over a suite-wide `render.scale` too.
     let h = Harness::with_config("render.scale=0.5");
     let (width, height) = h.dims();
     // One level of a four-byte depth format, at half of each reported edge.
@@ -1664,14 +1664,14 @@ fn a_depth_texture_at_the_backbuffer_size_is_charged_its_scaled_chain() {
 ///
 /// Pins its own scale (a clean half, so both extents are exact) rather than
 /// inheriting the run's: at the identity there is nothing to convert, and this
-/// has to fail in the ordinary `make test` if it regresses.
+/// has to fail in an ordinary run if it regresses.
 #[test]
 fn a_standalone_surface_at_the_backbuffer_size_is_charged_its_scaled_extent() {
     // A size that is not the back buffer's, for the surface that keeps its own.
     const OWN_SIZE: u32 = 256;
 
     // The scale under test, resolved by this harness alone. The parser keeps
-    // the last entry, so this wins over a `make test SCALE=<n>` run too.
+    // the last entry, so this wins over a suite-wide `render.scale` too.
     let h = Harness::with_config("render.scale=0.5");
     let (width, height) = h.dims();
     // Both formats are four bytes a texel, at half of each reported edge.

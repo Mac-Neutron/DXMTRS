@@ -3,7 +3,7 @@
 What mtld3d implements, what it does not yet, what it never will, and the
 divergences from D3D9 it keeps on purpose. The tested games are in
 [`GAMES.md`](GAMES.md); the end-to-end suite's coverage is in
-[`COVERAGE.md`](../windows/tests/COVERAGE.md).
+[`COVERAGE.md`](../../tests/d3d9/programs/COVERAGE.md).
 
 ## Supported
 
@@ -230,7 +230,7 @@ unless its entry says otherwise.
   Apple GPU returns the target's contents from before the pass began rather
   than the pixels the pass has written. Depth has this handled: a draw that
   samples the bound depth attachment reads a snapshot copy
-  (`depth_snapshot_for_sampling` in `unix/unix/src/encoder.rs`). Colour
+  (`depth_snapshot_for_sampling` in `src/d3d9/unix/src/encoder.rs`). Colour
   has no equivalent. DXVK detects the bind and resolves it; it is not built
   here because no known title needs it.
 
@@ -240,7 +240,7 @@ unless its entry says otherwise.
   behind it. It maps a D3D9 device onto a D3D12 device, which has no
   counterpart here.
 - Physical display-mode switching: the mode is meant to stay virtual, see the
-  [Fullscreen](../INSTALL.md#fullscreen) section of `INSTALL.md`.
+  [Fullscreen](README.md#fullscreen) section of `README.md`.
 - Device loss on focus changes: no exclusive mode is taken, so a focus
   change loses nothing, and `TestCooperativeLevel` reports `D3D_OK` across
   it. A device is lost only when the layer itself fails: a frame that
@@ -279,7 +279,7 @@ unless its entry says otherwise.
 
 Divergences from D3D9 kept on purpose because closing them costs frame time,
 memory, or a game that relies on the looser behaviour. The rationale for each
-is in [`CONFORMANCE.md`](../unix/conformance/CONFORMANCE.md#kept-divergences).
+is in [`CONFORMANCE.md`](../../tests/d3d9/conformance/CONFORMANCE.md#kept-divergences).
 
 - `LockRect` serves a level of a non-dynamic DEFAULT-pool 2D texture, which
   D3D9 rejects. No knob.

@@ -1,6 +1,6 @@
 # mtld3d d3d9 conformance baseline — per-site failure counts.
 # Wine: wine-11.19-17-gd57b522eea5
-# Regenerate with 'make conformance-baseline'. Classifications + triage prose
+# Regenerate with 'dxmt/mtld3d-conformance.sh --update-baseline'. Classifications + triage prose
 # live in CONFORMANCE.md ('Per-cluster classification'); a runner unit test
 # keeps the two files covering the same sites.
 # Format: "[leg/subtest] crash=<0|1>" header, then indented

@@ -89,7 +89,7 @@ enum Answering {
 
 /// The throttled frame under the built-in `wow` profile's settings.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn query_poll_wow() {
     let wow = mtld3d_core::app_profile::builtin("wow").expect("the wow profile ships");
     poll("query_poll_wow", wow.settings(), &Answering::Immediate, 0);
@@ -97,14 +97,14 @@ fn query_poll_wow() {
 
 /// The throttled frame with both query keys at their defaults.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn query_poll_spec() {
     poll("query_poll_spec", SPEC_KEYS, &Answering::Retirement, 0);
 }
 
 /// The spec frame with the occlusion reads waiting for their counts through `D3DGETDATA_FLUSH`.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn query_flush_read_spec() {
     poll(
         "query_flush_read_spec",

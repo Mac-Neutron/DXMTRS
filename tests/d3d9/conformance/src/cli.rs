@@ -61,7 +61,7 @@ pub struct Config {
 /// `--variant <native|intel|scale>`, `--assets <dir>`, `--only <subtest>`,
 /// `--repeat <N>`, `--log <filter>`.
 /// `--wine`, `--exe` and `--arch` are mandatory: the runner resolves no paths of
-/// its own, so the caller (the Makefile) owns every Wine location. One
+/// its own, so the caller owns every Wine location. One
 /// invocation runs one test binary, which is what lets a 32-bit and a 64-bit CI
 /// job be two independent processes. `--variant` defaults to `native` and
 /// `--assets` to the crate directory. `--only`/`--repeat>1` are mutually exclusive with

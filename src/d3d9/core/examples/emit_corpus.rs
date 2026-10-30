@@ -1,7 +1,7 @@
 //! Time DXSO parsing and MSL emission over shader corpora on the host, without Wine.
 //!
 //! Usage: `emit_corpus [--iters N] [--metrics DIR] [mtld3d_shaders.bin ...]`, which
-//! `make bench-host` runs with the production profile.
+//! the runner's `bench-ab` runs per leg (`--base-host`, `--cand-host`) with the production profile.
 //!
 //! Two synthetic corpora always run: `synthetic_ff`, about sixty fixed-function
 //! vertex keys and fifty pixel keys shaped like the ones a fixed-function game

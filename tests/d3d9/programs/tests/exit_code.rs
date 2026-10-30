@@ -8,7 +8,7 @@
 //! the process can read its own unix exit status, so the assertion belongs
 //! to the runner: the test creates a device, declares on stdout the code it
 //! is about to end with, and ends with it through the `ExitProcess` import
-//! of this binary, and `unix/e2e` fails the test unless the process ended
+//! of this binary, and `tests/d3d9/runner` fails the test unless the process ended
 //! exactly there.
 //!
 //! It is a binary of its own because it ends the process it runs in, and it

@@ -1,9 +1,9 @@
-# Contributing
+# Testing Direct3D 9
 
-Contributions are welcome, written by hand or with an agent. This file is the
-operating manual: what to read before changing anything, which gates have to be
-green, how to read their output, and what makes a pull request land on the first
-review instead of the third.
+How to read a D3D9 test run, how conformance work is organised, how the
+benchmarks are judged, and the companion edits that belong in the same change.
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) is the tree's operating manual and
+owns the gate (`tools/rust-check.sh`); this file is its D3D9 part.
 
 It states no rule twice. Every rule has exactly one home, and this file points
 at it.
@@ -13,113 +13,50 @@ at it.
 | File | What it owns |
 | --- | --- |
 | [`README.md`](README.md) | The goal, the features, the requirements, and where everything else lives. |
-| [`docs/BUILDING.md`](docs/BUILDING.md) | Building from source, installing into a Wine tree, the gates and tests, the two Wines (arm64 and x86_64) and the paths the Makefile reads, benchmarks and the release bundle. |
-| [`docs/GAMES.md`](docs/GAMES.md) | The games tested so far and how far each one gets. |
-| [`docs/STATUS.md`](docs/STATUS.md) | What is implemented, what is not yet, what never will be, and the divergences kept on purpose. |
-| [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Every code rule: module layout, visibility, data-structure discipline, unsafe discipline, doc-comment shape, dependencies. |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The boundary contract: thunk versus command, stable backing for pointers the unix side dereferences, typed wire values, labelling Metal objects, the threading model, the perf counters and how to read them. |
-| [`unix/conformance/CONFORMANCE.md`](unix/conformance/CONFORMANCE.md) | The conformance suite: how the runner and the baseline work, what each classification means, and the current per-site audit with its rationales. |
-| [`windows/tests/COVERAGE.md`](windows/tests/COVERAGE.md) | What the end-to-end suite covers, and the stubs whose contract a test pins on purpose. |
-| [`mtld3d.conf`](mtld3d.conf) | Every runtime option, its default, and a short why. |
+| [`GAMES.md`](GAMES.md) | The games tested so far and how far each one gets. |
+| [`STATUS.md`](STATUS.md) | What is implemented, what is not yet, what never will be, and the divergences kept on purpose. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | The boundary contract: thunk versus command, stable backing for pointers the unix side dereferences, typed wire values, labelling Metal objects, the threading model, the perf counters and how to read them. |
+| [`CONFORMANCE.md`](../../tests/d3d9/conformance/CONFORMANCE.md) | The conformance suite: how the runner and the baseline work, what each classification means, and the current per-site audit with its rationales. |
+| [`COVERAGE.md`](../../tests/d3d9/programs/COVERAGE.md) | What the end-to-end suite covers, and the stubs whose contract a test pins on purpose. |
+| [`mtld3d.conf`](../../mtld3d.conf) | Every runtime option, its default, and a short why. |
 
-Read the conformance document before changing anything in the render, state or
-shader-emission path. It is where the reasoning behind the current behaviour
-lives, and a change that looks like a fix is often a divergence that was
-measured and kept.
+## What runs where
 
-## The gates
+- The host unit tests, `cargo test` over the D3D9 crates, run in
+  `tools/rust-check.sh` ([`DEVELOPMENT.md`](../DEVELOPMENT.md#rust)). They are
+  the only D3D9 tests the gate runs.
+- The conformance suite and the checks that read the product (`d3d9-check`,
+  the facade test, the VM's `d3d9-gate`) belong to MacNeutron, which builds
+  and installs the tree; see "Working on conformance".
+- The end-to-end programs in `tests/d3d9/programs` and their runner in
+  `tests/d3d9/runner` are built as Windows programs for `i686`, `x86_64`,
+  `aarch64` and run under Wine. They used to link against the Windows SDK
+  libraries that xwin supplied; this tree no longer fetches xwin, so the programs
+  compile (`cargo check` and clippy cover them) but do not link, and the
+  runner's own unit tests run in the gate. They are built again, with llvm-mingw,
+  when D3D9 moves onto the shared core. Until then the sections "Reading a test
+  run" and "Benchmarks" describe what the runner does when it is given built
+  programs.
 
-Two commands, both green before you commit:
-
-- `make check` is `cargo fmt --check`, clippy with `nursery` and `pedantic`,
-  `make audit`, the Makefile's own tests (`test-isolation` and
-  `test-e2e-discovery`), and `make doc`. It also runs the native and i686
-  clippy legs again, and the host-native unit tests that `make test` runs, on
-  a `PERF=1` build (`clippy-perf` and `test-unit-perf`), since no other gate
-  compiles the perf telemetry or the tests behind `cfg(perf_tracking)`. Only
-  the check legs deny warnings, so a plain `cargo clippy` in an editor reports
-  without failing. Each audit finding names the section of
-  `docs/CONVENTIONS.md` behind it; read that section rather than
-  pattern-matching your way past the grep.
-- `make test` is the host-native unit tests plus the end-to-end suite under
-  the Wine `WINE_SDK` names, one leg per build a game loads there:
-  `test-e2e-i686`, the 32-bit suite against the i686 build, and the x64
-  suite against the 64-bit build, `test-e2e-arm64x` against the ARM64X build
-  under the arm64 Wine, the primary target, and `test-e2e-x86_64` against the
-  x86_64 build under an x86_64 Wine (the two modes of
-  [`docs/BUILDING.md`](docs/BUILDING.md#prerequisites)). Under the arm64 Wine
-  a third leg, `test-e2e-arm64`, runs the suite as native ARM64 processes
-  against the ARM64X build's ARM64 half, in a private clone of `WINE_SDK` and
-  a prefix made after its install. Conformance is not
-  part of it, on purpose: many of its checks fail by design, so it gates on a
-  regression against a baseline instead of on zero failures.
-
-Under the arm64 Wine, `make test-e2e-x86_64` runs the x64 suite against the
-x86_64 build, emulated, and is not part of `make test`. It installs into a
-private clone of `WINE_SDK` and creates a fresh prefix for it, since the
-x86_64 build would take the ARM64X build's place in `aarch64-windows` (and a
-prefix only knows the builtins that were installed when it was made). The
-environment variables the targets read are listed in
-[`docs/BUILDING.md`](docs/BUILDING.md#which-target-reads-which-path).
-
-`make fmt` uses nightly rustfmt. If a toolchain bump reformats files you never
-touched, that churn is its own pull request, not a hand-revert and not a passenger
-in yours.
-
-Every test leg installs the build into the Wine tree `WINE_SDK` names (and
-into `WINE_INSTALL_DIR` when set) before it runs, so two checkouts testing at once
-overwrite each other's `d3d9.dll` and `mtld3d.so`, and a game launched from that
-tree meanwhile runs whichever build landed last. `make test ISOLATED=1` avoids
-both: it clones that Wine and the ambient prefix once into `.wine-isolated/`
-inside the checkout (APFS clones, so neither costs space or a prefix boot) and
-points the tools, the install and the prefix at the clones. Each clone is one
-`clonefile(2)` on the directory (the Makefile's `clone_tree`), so it costs a
-call rather than a walk of the file count, and falls back to `cp -c -R` and then
-to `cp -R` when the source sits on another volume or on a volume that is not
-APFS. Use it whenever another worktree may be testing or a game is running; a
-plain `make install` still targets the shared trees on purpose, since that is
-how the game gets a build. The display mode is the one thing a clone cannot
-separate: the tests that change or read it take turns across every run on the
-machine, as [`windows/tests/COVERAGE.md`](windows/tests/COVERAGE.md) describes.
-The clones and the persistent wineserver of the
-private prefix stay behind for the next run; `make clean-isolated` takes down
-the ones in the checkout you are in, and `make clean-isolated-orphans` the ones
-a removed checkout left behind. Either one ends the whole Wine session rather
-than its server alone: the service processes a prefix keeps (`services.exe`,
-the two `winedevice.exe`, `plugplay.exe`, `svchost.exe`, `rpcss.exe`) outlive a
-server that is merely signalled, and nothing in their name says which checkout
-they belong to, so what is left over after the server is gone is found by the
-paths it holds open. `clean-isolated-orphans` finds the environments three ways:
-the clones beside the checkouts, the record every isolated checkout writes into
-the directory the worktrees share, and any process still running out of one. So
-neither a removed directory, nor a checkout kept somewhere else, nor a reboot
-that took the servers hides one. A directory that is still a checkout is left
-alone there: its environment may be mid-run, and it is that checkout's own
-`make clean-isolated` to take down. A failing run whose log shows a `d3d9.dll v`
-stamp that is not your checkout's is that collision, not a regression.
-
-`scripts/audit.sh --file <path>` runs the per-file subset of the audit, so an
-agent runner or an editor can call it after every edit and surface a violation
-while you write rather than at commit time. Such a hook, and any digest of the
-conventions an agent runner prints at session start, is optional local setup:
-the tree tracks neither, nothing keeps a digest in step with
-`docs/CONVENTIONS.md`, and `make check` is the gate either way.
+Read the conformance document before changing anything in the render, state
+or shader-emission path. It is where the reasoning behind the current
+behaviour lives, and a change that looks like a fix is often a divergence that
+was measured and kept.
 
 ## Reading a test run
 
 The end-to-end suite is six test binaries per architecture, and the runner
-in `unix/e2e` runs each one once under Wine with every test of the binary on
-`JOBS` threads of that process (four at a time by default; the Makefile says
-what that assumes of the Wine it runs under). It prints one
+in `tests/d3d9/runner` runs each one once under Wine with every test of the
+binary on the number of threads `--jobs` names. It prints one
 `PASS`/`FAIL`/`SKIP` line per test and a summary that counts every test, so
 the summary is the thing to read; a failure is fatal to the default run
-(`FAIL_FAST=0` reports the whole suite). One trap remains: a pipeline
-reports the last stage's status, so `make test | tee log` returns the exit
-code of `tee`. Capture with a plain redirect, `make test > out.log 2>&1`,
+(`--no-fail-fast` reports the whole suite). One trap remains: a pipeline
+reports the last stage's status, so `runner ... | tee log` returns the exit
+code of `tee`. Capture with a plain redirect, `runner ... > out.log 2>&1`,
 and judge the run by the runner's summary on both architectures. mtld3d's
 log of each test process is a file, `<binary>-<pid>.log` under `mtld3d-logs`
-next to the test executable in `windows/target`, one per process, so one
-file carries the whole suite's log.
+next to the test executable, one per process, so one file carries the whole
+suite's log.
 
 A process that ends cleanly is still checked against libtest's own account.
 Its `test result:` line counts the results it printed, and a runner tally
@@ -143,7 +80,7 @@ to `<binary>-<pid>.layer-log` beside the stderr, because the layer keeps only
 its ten newest logs and the next run would remove it, and quotes it in the
 same note from the banner on when there is one. Every test process runs
 under Apple's Main Thread Checker (`debug.mainThreadChecker` in the suite's
-config, `docs/ARCHITECTURE.md` says how), so a kept `.stderr` that carries a
+config, `ARCHITECTURE.md` says how), so a kept `.stderr` that carries a
 `Main Thread Checker: UI API called on a background thread:` line names the
 AppKit call the layer made off the main thread and the thread that made it;
 that call is the failure, whatever the process printed after it.
@@ -163,8 +100,8 @@ verdict, even under `FAIL_FAST=0` or when the process itself exits cleanly.
 The runner watches stderr while the process runs, checks the layer log before
 it can launch another process, and keeps both accounts of the initiating
 process. Assertions after that report are not measurements of the source: the
-later results may reflect the hosted GPU's failed state. CI re-runs such a leg
-on a fresh machine; "Pull requests" below says when.
+later results may reflect the GPU's failed state. Run the leg again once the
+GPU has recovered.
 
 When every test is accounted for but the process ends abnormally, the runner
 keeps its full captured stdout, stderr and exit status together in
@@ -175,28 +112,6 @@ reported in the note without changing those verdicts. Clean successful and
 expected self-exiting processes create no such file. As with stderr, the
 newest ten bundles remain in the selected log directory.
 
-In CI every end-to-end leg uploads all four kinds of file as its
-`e2e-logs-<image>-<arch>` artifact on every run, kept fourteen days; the
-directory holds the ten newest of each, so a leg that restarted more than ten
-processes hands back its last ten. They are the layer's side of a red leg,
-which the job log lacks: when one image reads back black on test after test
-while its sibling legs are green, re-run the failed jobs first (`gh run rerun
-<run-id> --failed`, which lands on a fresh machine) and read the command
-buffer errors in the artifact's log, since a hosted runner's GPU can fail that
-way with no hang line in the job log and nothing else tells it from a
-regression. The Intel image's GPU, the paravirtual `AppleParavirtGPUMetal`,
-refuses a texture or a view now and then while several threads create
-and release them, with its kernel logging `addObject: Object already exists`
-in the system log, so on a paravirtual device the layer asks again for up to
-a quarter of a second and logs each create it recovers that way. A
-`CreateBackbuffer` failure on the Intel image is therefore read from two
-lines. The unix line names the request and the device; a sane request (the
-window's size, `BGRA8Unorm`, a sample count the device answered for)
-together with the layer's `still refused after` line for it is that runner
-fault outlasting the retries, so re-run the failed jobs and add the leg to
-the issue that tracks the fault. A line naming a zero dimension or a null
-handle is the layer's own bug.
-
 Two things are worth knowing when a test process looks wrong. Once a device
 has existed, `d3d9.dll` terminates the process from the
 `DLL_PROCESS_DETACH` of its exit (it cannot survive the allocator's
@@ -206,16 +121,16 @@ process asked to exit with, and 0 for a process that never asked. A
 `FreeLibrary` after a device does not reach that detach: the first
 `CreateDevice` pins the image, so it stays mapped and the process carries
 on. The harness's panic hook
-(`windows/tests/src/win32.rs`) does not wait for libtest to reach its own
+(`tests/d3d9/programs/src/win32.rs`) does not wait for libtest to reach its own
 exit and terminates with libtest's failure code at the first failed
 assertion, after the default hook has printed the report that names the
 test. The tests in flight go down with the process: the runner marks the
 named test failed and runs the rest again in a fresh process, and a crash or
-a hang (no result for `TIMEOUT` seconds) is charged the same way, through a
+a hang (no result for `--timeout` seconds) is charged the same way, through a
 one-thread re-run of the tests that were in flight when nothing names the
 culprit. So a failure costs one result and one extra process, and the
-`processes` count in the summary says how many the run took: twelve is a
-clean `make test`.
+`processes` count in the summary says how many the run took: one per test
+binary is a clean run.
 
 Explicit test selections, including recovery rounds and filtered initial runs,
 are split into batches that fit the Windows command-line limit. The budget
@@ -236,92 +151,74 @@ choice explicit when a test needs the non-client frame.
 
 ## Benchmarks
 
-The benchmark launchers set `RUST_LOG=info` and `__CX_UNIX_RUST_LOG=info`
-for timed Wine processes, independent of the shell's filters: startup identity
-and perf records are required inputs, even when no warning occurs. Untimed
-shape processes set both variables to the pass-trace filter described below.
-Ordinary test runs keep the caller's logging settings.
+The synthetic benchmarks are `#[ignore]`d tests of the end-to-end binary, so a
+normal run lists them as ignored and never runs them; the runner's `--ignored`
+runs only them. The benchmark launchers set `RUST_LOG=info` and
+`__CX_UNIX_RUST_LOG=info` for timed Wine processes, independent of the shell's
+filters: startup identity and perf records are required inputs, even when no
+warning occurs. Untimed shape processes set both variables to the pass-trace
+filter described below.
 
-The synthetic benchmarks are `#[ignore]`d tests of the end-to-end binary, so
-`make test` lists them as ignored and never runs them. `make bench` runs them
-once against this checkout and writes a report per benchmark. `make bench-ab
-BASE=<ref>` is the one that answers whether a change made things slower: it
-builds `BASE` in a worktree of its own and this checkout, each into its own
-isolated Wine tree, runs every benchmark against both in alternating order
-for `RUNS` rounds (five by default, three at least), and judges each metric
-pair by pair against the noise those rounds show. A leg's round is one
-process running every benchmark in libtest's order, which is the same in
-both legs, so what one benchmark leaves in the process (the process-wide
-pipeline cache, the page-box pool) reaches the next alike on both sides of
-each pair; the memory rows a comparison judges are each benchmark's growth
-from a sample taken before its interface. That growth is clamped at zero,
-and memory an earlier benchmark frees late, inside a later one, can hide
-some of the later one's growth, which one process a round cannot avoid.
-The two runs of one benchmark in a round are therefore a whole round
-process apart, about 33 s with the `wow` set, rather than back to back, and
-with an odd `RUNS` one leg goes first in one round more than the other (3
-to 2 with the default five). Before each round's process the run measures
-for half a second the CPU its busiest other processes take, and the report
-warns about every round that started on a busy machine (one other process
-at a quarter of a core, all of them at half, or macOS throttling for heat);
-run those again. `BENCH_WAIT_IDLE=120` optionally waits up to 120 seconds
-before each timed process for three consecutive quiet half-second CPU
-samples, using those same thresholds. The default `0` keeps advisory
-sampling. A failed CPU sample cannot count as quiet: both process reads
-must succeed and include the sampler itself. Some macOS hosts do not expose
-`kernel_task` to `ps`; its CPU share then remains unavailable, explicitly
-recorded in each idle sample, and only the foreign-process thresholds can
-be checked. Each attempt stays in
-the round's `idle-<binary>/sample-*.txt` files (or `idle-host/`), including
-rejected samples, and `idle-<binary>.txt` records the wait and its outcome.
-The final accepted sample is the ordinary `machine-<binary>.txt` that the
-report reads. A timeout ends the run with exit 2 and no performance verdict,
-preserving completed rounds. This checks the machine before a process
-starts; it cannot promise that background work stays idle during it. The
-runner exposes the same option as `bench-ab --wait-idle <seconds>`, alongside
-its explicit Wine, prefix, stamp and binary paths, so a rebuilt runner can
-compare existing installed product builds without rebuilding those legs.
-`--base-config` and `--cand-config` replace the shared `--config` for the
-named leg, including an explicitly empty value; the other leg keeps the
-shared config. These apply to timed tests and their untimed shape runs,
-with the run's own `log.dir` appended last. For a configuration comparison
-of one clean build, `--allow-same-image` permits the same recorded image
-identities on both legs; use complete config strings and retain their
-runtime logs so the intended difference can be checked. The host emitter
-does not load the renderer and does not use these runtime settings. The runner
-exits 1 on a regression and 2 when the run itself cannot be trusted, which
-includes the two legs running different Wines. The runs and the report stay
-in a directory under the main checkout's `.codex/evidence/bench-ab`, and
-`make bench-compare AB_DIR=<dir>` judges one again into a report of its own,
-for instance with `ACCEPT=<metric>,...` naming an exact count (a draw count,
-a pass count) that the change is meant to move. `make clean-bench-ab`
-removes the kept base worktrees. The metrics a benchmark writes include the
+The runner's `bench-ab` subcommand is the one that answers whether a change
+made things slower. It runs a base build and a candidate build, each under its
+own Wine and prefix (`--base-wine`, `--base-prefix`, `--base-stamp`, and the
+`--cand-` set), in alternating order for `--runs` rounds (five by default, three
+at least), and judges each metric pair by pair against the noise those rounds
+show. A leg's round is one process running every selected benchmark in libtest's
+order, which is the same in both legs, so what one benchmark leaves in the
+process (the process-wide pipeline cache, the page-box pool) reaches the next
+alike on both sides of each pair; the memory rows a comparison judges are each
+benchmark's growth from a sample taken before its interface. That growth is
+clamped at zero, and memory an earlier benchmark frees late, inside a later one,
+can hide some of the later one's growth, which one process a round cannot avoid.
+The two runs of one benchmark in a round are therefore a whole round process
+apart rather than back to back, and with an odd `--runs` one leg goes first in
+one round more than the other. Before each round's process the run measures for
+half a second the CPU its busiest other processes take, and the report warns
+about every round that started on a busy machine (one other process at a quarter
+of a core, all of them at half, or macOS throttling for heat); run those again.
+`--wait-idle 120` optionally waits up to 120 seconds before each timed process
+for three consecutive quiet half-second CPU samples, using those same
+thresholds. The default `0` keeps advisory sampling. A failed CPU sample cannot
+count as quiet: both process reads must succeed and include the sampler itself.
+Some macOS hosts do not expose `kernel_task` to `ps`; its CPU share then remains
+unavailable, explicitly recorded in each idle sample, and only the
+foreign-process thresholds can be checked. Each attempt stays in the round's
+`idle-<binary>/sample-*.txt` files (or `idle-host/`), including rejected
+samples, and `idle-<binary>.txt` records the wait and its outcome. The final
+accepted sample is the ordinary `machine-<binary>.txt` that the report reads. A
+timeout ends the run with exit 2 and no performance verdict, preserving
+completed rounds. This checks the machine before a process starts; it cannot
+promise that background work stays idle during it.
+
+`--base-config` and `--cand-config` replace the shared `--config` for the named
+leg, including an explicitly empty value; the other leg keeps the shared config.
+These apply to timed tests and their untimed shape runs, with the run's own
+`log.dir` appended last. For a configuration comparison of one clean build,
+`--allow-same-image` permits the same recorded image identities on both legs;
+use complete config strings and retain their runtime logs so the intended
+difference can be checked. The host emitter does not load the renderer and does
+not use these runtime settings. The runner exits 1 on a regression and 2 when the
+run itself cannot be trusted, which includes the two legs running different
+Wines. The runs and the report stay in the directory `--out` names, and
+`bench-compare <dir>` judges one again into a report of its own, for instance
+with `--accept <metric>,...` naming an exact count (a draw count, a pass count)
+that the change is meant to move. The metrics a benchmark writes include the
 layer's own counters, read from the `perf-kv` line of its perf windows as
-`perf.*` (`bench.rs` gives the rules): the per-frame counts of work the API
-calls fix, such as `perf.draws_pf` and `perf.passes_pf`, are the exact ones.
+`perf.*` (`bench.rs` gives the rules): the per-frame counts of work the API calls
+fix, such as `perf.draws_pf` and `perf.passes_pf`, are the exact ones.
 
-`make bench` and `make bench-ab` run under the Wine `WINE_SDK` names and
-measure one build: `ARCH=i686`, the default, the i686 build under the i686
-benchmark binary, the path World of Warcraft 1.12 and 3.3.5a take, whose x86
-translator runs our 32-bit DLLs, and `ARCH=arm64x` the ARM64X build under the
-x86_64 benchmark binary on the arm64 Wine, or `ARCH=x86_64` the x86_64 build
-on an x86_64 Wine. Each leg of `bench-ab` gets a private clone of that Wine
-with a fresh prefix, as the arm64 Wine's `test-e2e-x86_64` does, and
-`ARCH=arm64x make bench-ab` needs a `BASE` whose Makefile has
-`windows-arm64x`: it stops with a message naming `BASE` otherwise. A `BASE`
-whose Makefile predates `WINE_SDK` as the one Wine is given the variables of
-its own layout as well, all naming `WINE_SDK`, so `make bench-ab BASE=<an
-older commit>` still compares like with like. `bench-ab` and `bench-variants`
-set up isolated trees of their own and refuse `ISOLATED=1`. `make
-bench-variants` compares layouts instead of commits, under the arm64 Wine
-only: this checkout's x86_64 build, emulated, against its ARM64X build, both
-under `WINE_SDK` (`x86_64-vs-arm64x`). The pair is a `bench-ab` run whose
-report names each leg's runtime and DLL variant; it has one commit in both
-legs, so a binary the two layouts share loads as one image, which the
-comparison notes instead of refusing. It runs one Wine in both legs and
-changes only our DLLs, so it measures what the ARM64X build buys an x64 game.
-There is no pair for the i686 build, since a 32-bit process never loads the
-ARM64X build.
+A benchmark measures one build: the i686 build under the i686 benchmark binary
+is the path World of Warcraft 1.12 and 3.3.5a take, whose x86 translator runs
+our 32-bit DLLs; the ARM64X build under the x86_64 benchmark binary is the arm64
+Wine's x64 path, and the x86_64 build runs on an x86_64 Wine. A layout comparison
+(`--<leg>-runtime` and `--<leg>-variant`, given for both legs or neither)
+compares one commit's two layouts, such as its x86_64 build, emulated, against
+its ARM64X build, both under the arm64 Wine; it has one commit in both legs, so
+a binary the two layouts share loads as one image, which the comparison notes
+instead of refusing. It runs one Wine in both legs and changes only our DLLs, so
+it measures what the ARM64X build buys an x64 game. There is no pair for the
+i686 build, since a 32-bit process never loads the ARM64X build.
 
 On an arm64 Wine the benchmarks' clock is FEX's translation of `rdtsc`, a
 counter read that is not ordered after earlier stores (an `mfence` does not
@@ -343,44 +240,33 @@ moved by 30 to 50 % in runs whose change did not touch the call. A
 comparison therefore fails a setter row only past 50 %, and a smaller
 change to the cost of a call is for the frame benchmarks to show. The draw
 rows (`ns_per_call.draw_*`) move far less and fail past 15 %. An A/A run
-(`BASE=HEAD`) builds one commit twice with the same code placement, so it
-does not reproduce this; it has still moved single setter rows by about
-30 % (`5f274cd66021`, `aad71d015386`), for a reason not established (data
-placement is a candidate). `RATIO_FLOOR_PER_CALL` in
-`unix/e2e/src/bench/compare.rs` gives the measurements.
+(one commit against itself) builds it twice with the same code placement, so it
+does not reproduce this; it has still moved single setter rows by about 30 %,
+for a reason not established (data placement is a candidate).
+`RATIO_FLOOR_PER_CALL` in `tests/d3d9/runner/src/bench/compare.rs` gives the
+measurements.
 
-An exact count a change moved on purpose fails every comparison against a
-base from before that change, so such a run names it in `ACCEPT`, and only
-that run: the next change to the count fails again. Against v0.11.0 or an
-older base, `cold_start`'s `prewarm.shaders` reads 98 in the base and 92 in
-the candidate. Since #1050 an unlit fixed-function draw no longer keys
-`D3DRS_SPECULARENABLE` into its vertex shader (`build_vs_flags` in
-`windows/core/src/ff_state.rs`), and the benchmark's 24 fixed-function
-combinations toggle specular on 12 unlit ones, so six pairs of them share
-one shader. Nothing goes unprepared: both legs pre-warm 196 pipelines with
-none failed or skipped, and every shader the candidate's cache holds is
-pre-warmed. Such a run takes `ACCEPT=prewarm.shaders`.
+An exact count a change moved on purpose fails every comparison against a base
+from before that change, so such a run names it in `--accept`, and only that
+run: the next change to the count fails again.
 
-`make bench-host` is the one benchmark that needs no Wine: it times DXSO
-parsing and MSL emission on this machine over two synthetic corpora and any
-shader cache `BENCH_CORPUS` names, and writes its metrics into the `host`
-directory beside the reports of `make bench`. `make bench-ab` runs it too, in
-rounds of its own before the others, the run's first benchmark processes
-(only the short Wine process that lists the benchmarks comes before), so no
-benchmark's Wine process can still be exiting on the cores it times: each
-leg builds and runs its own
-tree's emitter, both read the same `BENCH_CORPUS`, and its MSL byte counts
-are exact, so a change that alters the emitted code shows up there even when
-its time per shader stays inside the noise. A `BASE` older than the host
-benchmark runs neither leg's, and the run says so. The same caches are what
-`cold_start` measures in both legs. A cache only one build can read (a
-format or schema change between them) is skipped for both with a note.
-`cold_start` counts a cache's records with the candidate's reader, so
-when the base's layer writes another schema the base leg reports its
-timings without those counts, and their rows read as added. Any
-other difference in what a benchmark ran, such as its own configuration
-entries or the depth path it took, stops the comparison: only the build and
-the run may differ between the legs.
+The host benchmark needs no Wine: it times DXSO parsing and MSL emission on this
+machine over two synthetic corpora and any shader cache `--host-corpus` names
+(`host::emit_corpus`). `bench-ab` runs it too when it is given each leg's
+`emit_corpus` (`--base-host`, `--cand-host`), in rounds of its own before the
+others, the run's first benchmark processes (only the short Wine process that
+lists the benchmarks comes before), so no benchmark's Wine process can still be
+exiting on the cores it times: each leg runs its own tree's emitter, both read
+the same corpus, and its MSL byte counts are exact, so a change that alters the
+emitted code shows up there even when its time per shader stays inside the
+noise. The same caches are what `cold_start` measures in both legs (`--corpus-dir`
+stages them). A cache only one build can read (a format or schema change between
+them) is skipped for both with a note. `cold_start` counts a cache's records with
+the candidate's reader, so when the base's layer writes another schema the base
+leg reports its timings without those counts, and their rows read as added. Any
+other difference in what a benchmark ran, such as its own configuration entries
+or the depth path it took, stops the comparison: only the build and the run may
+differ between the legs.
 
 After its timed rounds, each scene benchmark (one whose metrics declare its
 frame in `shape` lines) runs once more per leg with the pass trace on
@@ -392,83 +278,63 @@ as the shader-stutter one, gets a note instead. The runner stops that run
 once its log holds 33 submissions after the line the benchmark prints where
 its measured frames start, so it writes no metrics: its stamp and images are
 read from the log's identity lines and held to the leg's stamp and to the
-images of the leg's timed rounds. That costs a run of about six seconds per
-leg per scene benchmark and some MB of trace in the directory. The report
-compares the most common pass shape of the last thirty complete submissions
-between the legs, with every load and store action the load/store rules
-decided on those passes, and a leg in which fewer than 80 % of them agree is
-an untrustworthy run, exit 2. A rule that drops a store a
-later pass needs makes the frame faster, not slower, so the timings cannot
-catch it and this comparison does: any difference is a shape change, which
-fails the run like a changed exact metric unless `ACCEPT` names `shape` or
-`shape:<bench>`.
+images of the leg's timed rounds. The report compares the most common pass shape
+of the last thirty complete submissions between the legs, with every load and
+store action the load/store rules decided on those passes, and a leg in which
+fewer than 80 % of them agree is an untrustworthy run, exit 2. A rule that drops
+a store a later pass needs makes the frame faster, not slower, so the timings
+cannot catch it and this comparison does: any difference is a shape change,
+which fails the run like a changed exact metric unless `--accept` names `shape`
+or `shape:<bench>`.
 
-`make bench-shape GAME_LOG=<layer log> BENCH_METRICS=<bench-<name>.metrics>`
-checks a benchmark's scene against a frame a game dumped with Ctrl+Shift+P:
-the pass count, and per pass the draw count, the fixed-function share and the
-textures per draw, with render-target sizes shown relative to each side's
-back buffer. Each pass is also compared on its state mix, which a benchmark
-declares by appending these counts to its `shape` line: `blend=`, `atest=`,
-`zwrite_off=`, `cull_none=` and `cmask0=` count the draws with blending on,
-with alpha test on, whose depth-write field is 0, with cull mode NONE, and
-whose render target 0 colour write mask is 0, and are judged as shares of
-the pass's draws within 10 points. `vs_sw=`, `ps_sw=`, `tex_sw=`,
-`blend_sw=`, `atest_sw=` and `cull_sw=` count the draws after the pass's
-first whose vertex shader, pixel shader, stage-0 texture, whole blend tuple,
-whole alpha-test tuple or cull mode differs from the draw before (fixed
-function and no texture are values like any other), and `vs_n=`, `ps_n=`
-and `tex_n=` count the distinct programmable vertex and pixel shaders and
-the distinct textures on any stage. Those nine are judged within 15 % of the
-game's count, but never closer than 5. A `shape` line without the state keys
-still parses: its state mix prints as not reported and is not judged. Run it
-by hand when building or reshaping a scene that stands for a game; it is no
-gate.
+`bench-shape --game-log <layer log> --metrics <bench-<name>.metrics>` checks a
+benchmark's scene against a frame a game dumped with Ctrl+Shift+P: the pass
+count, and per pass the draw count, the fixed-function share and the textures per
+draw, with render-target sizes shown relative to each side's back buffer. Each
+pass is also compared on its state mix, which a benchmark declares by appending
+these counts to its `shape` line: `blend=`, `atest=`, `zwrite_off=`,
+`cull_none=` and `cmask0=` count the draws with blending on, with alpha test on,
+whose depth-write field is 0, with cull mode NONE, and whose render target 0
+colour write mask is 0, and are judged as shares of the pass's draws within 10
+points. `vs_sw=`, `ps_sw=`, `tex_sw=`, `blend_sw=`, `atest_sw=` and `cull_sw=`
+count the draws after the pass's first whose vertex shader, pixel shader, stage-0
+texture, whole blend tuple, whole alpha-test tuple or cull mode differs from the
+draw before (fixed function and no texture are values like any other), and
+`vs_n=`, `ps_n=` and `tex_n=` count the distinct programmable vertex and pixel
+shaders and the distinct textures on any stage. Those nine are judged within
+15 % of the game's count, but never closer than 5. A `shape` line without the
+state keys still parses: its state mix prints as not reported and is not judged.
+Run it by hand when building or reshaping a scene that stands for a game; it is
+no gate.
 
-Bench numbers come from `PROD=1 PERF=1` builds only; `make bench-ab` builds
-both legs that way and refuses any other profile, since `release` carries
-debug assertions that cost more than the frame does. Nothing else may run on
-the machine during a benchmark: no test leg, no conformance run, no build in
-another worktree, no game. Each of them takes the same cores and GPU the
-numbers measure, and a verdict is only as good as the quiet it was measured
-in. The benchmark targets unset `MTL_CAPTURE_ENABLED` for their Wine
-processes, as they turn the Metal validation layer and HUD off: Metal's
-capture layer sits under every Metal call, and
-[`ARCHITECTURE.md`](docs/ARCHITECTURE.md#ctrlshiftp-three-frame-dump-and-gpu-capture)
-gives its measured cost. A deliberate comparison with the capture layer
-runs the benchmark binary through the runner directly; every perf window
-says whether it was on (`metal_capture_layer_count`, judged exact, so legs
-that differ in it fail).
-`BASE=HEAD` is an A/A run of one commit against itself (or of your
-uncommitted changes against the commit they sit on) and shows how far the
-machine moves the numbers by itself; run it when a verdict looks surprising.
+Bench numbers come from production-profile builds with `MTLD3D_PERF=1` only:
+`release` carries debug assertions that cost more than the frame does. Nothing
+else may run on the machine during a benchmark: no test leg, no conformance run,
+no build in another worktree, no game. Each of them takes the same cores and GPU
+the numbers measure, and a verdict is only as good as the quiet it was measured
+in. Run the benchmark processes with `MTL_CAPTURE_ENABLED` unset and the Metal
+validation layer and HUD off: Metal's capture layer sits under every Metal call,
+and [`ARCHITECTURE.md`](ARCHITECTURE.md#ctrlshiftp-three-frame-dump-and-gpu-capture)
+gives its measured cost. A deliberate comparison with the capture layer runs the
+benchmark binary through the runner directly; every perf window says whether it
+was on (`metal_capture_layer_count`, judged exact, so legs that differ in it
+fail). An A/A run of one commit against itself (or of your uncommitted changes
+against the commit they sit on) shows how far the machine moves the numbers by
+itself; run it when a verdict looks surprising.
 
-Run `make bench-ab BASE=origin/main` with the default `BENCH_SET=wow` before
-merging a change to the render, encoder, submit or shader path, and put the
-summary line in the pull request's verification. The `wow` set is the two
-World of Warcraft frames, the EVENT-query throttle under the game's settings
-and under the D3D9 defaults, the per-call API cost, and the buffer-lock and
-texture-streaming benchmarks at the game's rates. A leg's round is one
-process that runs all seven in libtest's order, the same in both legs, each
-on a device of its own: about a second for Wine's start, then per benchmark
-about 4.5 s for its device, the warm-up, untimed frames until its second perf
-window opens two seconds after its first frame, and that one window
-measured. So a round of one leg takes about 33 s and the default five rounds
-of both legs about 5.5 minutes, the four shape runs under half a minute and
-the host emitter's rounds about 20 s. Before the first run the two legs build at the same time
-and their prefixes boot while the benchmark binary builds: about a minute and
-a half with a new base worktree and a changed candidate, well under a minute
-when neither needs a build, longer when a change rebuilds the production
-layer in both legs. An A/A run of one commit against itself should take
-about 8 minutes in all, down from the 20 an earlier layout of the run took
-(an estimate from that run's timestamps and the new spans; the first run's
-timestamps say what it is on your machine). `BENCH_SET=full` runs every
-benchmark, the shader-stutter and cold-start ones included, and takes about
-twice as long. `BENCH_SET` may also be a space-separated list of test-name
-filters, each selecting the benchmarks whose test path contains it, mixed
-with the set names (`wow cold_start`), so `BENCH_SET=dynamic_buffer_churn`
-rechecks one suspicious benchmark without the rest of the set; the host
-emitter's rounds run with a set name or a filter that is part of
-`host::emit_corpus`.
+Before landing a change to the render, encoder, submit or shader path, run
+`bench-ab` against the previous commit on the `wow` set and put the summary line
+in the change's verification. The `wow` set is the two World of Warcraft
+frames, the EVENT-query throttle under the game's settings and under the D3D9
+defaults, the per-call API cost, and the buffer-lock and texture-streaming
+benchmarks at the game's rates (`--bench` takes whitespace-separated test-name
+filters, each selecting the benchmarks whose test path contains it, so one
+suspicious benchmark can be rechecked alone). A leg's round is one process that
+runs all seven in libtest's order, each on a device of its own: about a second
+for Wine's start, then per benchmark about 4.5 s for its device, the warm-up,
+untimed frames until its second perf window opens two seconds after its first
+frame, and that one window measured. The full set, the shader-stutter and
+cold-start benchmarks included, takes about twice as long.
 
 ## Which suite is right when they disagree
 
@@ -488,43 +354,51 @@ Speed is the goal and conformance serves it, so a divergence that buys frame tim
 and breaks no game is allowed to stay. What is not allowed is a silent one.
 
 A kept divergence is a decision with three obligations: it gets its line in
-the kept-divergence list of `docs/STATUS.md`, its rationale goes in the Kept
-divergences section of `CONFORMANCE.md` (plus the cluster prose where Wine's
+the kept-divergence list of [`STATUS.md`](STATUS.md), its rationale goes in the Kept
+divergences section of [`CONFORMANCE.md`](../../tests/d3d9/conformance/CONFORMANCE.md) (plus the cluster prose where Wine's
 suite has a site for it), and where a knob makes sense it is revertible from
 `mtld3d.conf`. "It matches what we ship today" is not a justification for a
 change, because what we ship today may itself be the divergence. Prove a claim
 about observable behaviour with a test that fails before the change and passes
-after, and say in the pull request which way it went.
+after, and say in the change's description which way it went.
 
 ## Reference implementations
 
 Before inventing a render-state heuristic, a per-shader allowlist, or any
 game-shaped special case, read what an established implementation does. DXVK's
 `src/d3d9/` (including its shader translator under `dxso/`) is the correctness
-reference and has been hardened against thousands of D3D9 titles; dxmt is the
-D3D9-on-Metal reference for the workloads it has been validated against; Wine's
-own wined3d is the baseline that runs on the same machine, so a behaviour we get
+reference and has been hardened against thousands of D3D9 titles; Wine's own
+wined3d is the baseline that runs on the same machine, so a behaviour we get
 wrong and it gets right is a regression by definition.
 
 If one of them ships clean where we do not, the gap is usually a structural
 feature we have not ported, not a quirk of one game. Port the structure. When
-our architecture forces a deviation, say so explicitly in the pull request
+our architecture forces a deviation, say so explicitly in the change's description
 instead of quietly simplifying.
 
 ## Working on conformance
 
+Conformance runs against the product MacNeutron builds, through its script
+`dxmt/mtld3d-conformance.sh`:
+
 ```sh
-make conformance                       # both legs (i686, and arm64x or x86_64), diffed against the baseline
-make conformance-i686                  # one leg, one runner process
-make conformance-isolate ONLY=visual ARCH=arm64x REPEAT=1
-make conformance-isolate ONLY=device ARCH=i686 REPEAT=20 VARIANT=intel LOG=debug
-make conformance-baseline-i686         # re-record this leg's entries
+dxmt/mtld3d-conformance.sh                       # the arm64x leg under wine.app, diffed against the baseline
+dxmt/mtld3d-conformance.sh --only visual         # runner arguments pass through
+dxmt/mtld3d-conformance.sh --only device --repeat 20 --variant intel --log debug
+dxmt/mtld3d-conformance.sh --update-baseline     # re-record this leg's entries
 ```
 
-Every leg runs one build of Wine's d3d9 tests, the arm64 Wine release's, so
-the `file:line` sites of the baseline hold under either Wine. Under an
-x86_64 Wine, point `WINE_TESTS` at that release's `lib/wine/tests`
-(`docs/BUILDING.md` has the details).
+The script runs the x64 `d3d9_test.exe` of Wine's d3d9 tests (the one
+`make wine-arm64-winetests` builds in MacNeutron) in a prefix of its own under
+the Wine the product ships, through `mtld3d-conformance` in
+`tests/d3d9/conformance`, and passes when only the sites listed in
+MacNeutron's `dxmt/mtld3d-triaged.txt` fail anew. `eac-vm/dxmt/d3d9-gate.sh`
+runs the same suite in the VM: its x64 lane is held to the macOS product's
+figures at most, and its i386 lane to its baseline's failures and crashes at
+most. Both lanes run one build of Wine's tests, so the `file:line` sites of the
+baseline hold under either. MacNeutron's `dxmt/d3d9-check.sh` (D3D9 through the
+launcher) and `dxmt/mtld3d-facade-test.sh` (the winemetal facade's tests) are the
+smaller checks on the product.
 
 The rules that are easy to get wrong:
 
@@ -540,7 +414,7 @@ The rules that are easy to get wrong:
   raw actual-versus-expected values, which `MTLD3D_CONFORMANCE_RAW_DIR=<dir>`
   keeps. A site name is not a description of what the test exercises.
 - Run gating runs with clean shader caches, and never re-record prefix drift: the
-  Makefile pins the prefix display state before every run for a reason.
+  script pins the prefix's display state before every run for a reason.
 
 A shader-emission or shared-crate change has wide, subtle fallout. Run the whole
 suite before committing, not just the subtest you were working on.
@@ -552,7 +426,7 @@ Each of these rots silently when it is left for later:
 - A new render-state, texture-stage-state or sampler-state consumer moves its
   slot to consumed in the matching classifier, and flips the matching caps bit.
   The classifier warnings are only useful while every warning is a real gap.
-- Shader emission has a source-derived fingerprint (`windows/core/build.rs`).
+- Shader emission has a source-derived fingerprint (`src/d3d9/core/build.rs`).
   Changes under `dxso/` and to its shared MSL inputs invalidate MSL automatically;
   extend the source list when adding an emission dependency outside those paths.
   Bump the shader-cache schema for incompatible shader keys or pipeline-translation
@@ -561,214 +435,39 @@ Each of these rots silently when it is left for later:
 - A new config key ships with its dispatch arm, its unit test, and its entry in
   the `mtld3d.conf` sample with the default and a short why.
 - A new built-in app profile ships with the rationale for every key it sets as
-  the comment on its entry in `windows/core/src/app_profile.rs` and a test that
+  the comment on its entry in `src/d3d9/core/src/app_profile.rs` and a test that
   resolves it from the version strings the shipped binary actually carries.
-  `docs/GAMES.md` names a game's profile in its row; the settings and
+  [`GAMES.md`](GAMES.md) names a game's profile in its row; the settings and
   reasons stay in `app_profile.rs`.
   A profile that pins no version field is not a profile, it is a name collision
   waiting to happen.
-- A new `Clone` or `Copy` derive updates `scripts/derive_inventory.txt`
-  (`scripts/audit.sh --update-derives`).
 
-## Standing rules worth knowing before you write code
+## D3D9 rules worth knowing before you write code
 
-The full set is in `docs/CONVENTIONS.md`. These are the ones a newcomer trips:
+The tree-wide rules are in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) and
+[`CONVENTIONS.md`](../CONVENTIONS.md). These are the ones D3D9 adds:
 
-- No new `MTLD3D_*` environment variable. A runtime knob is a `mtld3d.conf` key;
-  a diagnostic is a narrowed `mtld3d::*` log target consumed through `RUST_LOG`.
-- No fourth `#[allow]`. The tree carries exactly three, and complexity lints are
-  never suppressed: introduce a parameter struct instead.
-- No silent failures. Every stub, fallback and catch-all arm logs once.
-- No `pub(crate)`, no `mod.rs`, no type aliases, no glob imports, no raw
-  Objective-C selectors.
-- Hash maps use `FxHashMap`; content hashing uses xxh3.
-- Pure logic belongs in `mtld3d-core`; `windows/d3d9` is COM wiring. Runtime
-  placement follows the Unix-first policy in `docs/ARCHITECTURE.md`; native
-  orchestration reuses core logic. A COM wrapper carries a vtable pointer, a
-  refcount and an opaque inner pointer, and every other field lives on the
-  inner struct.
-- Every integer with symbolic meaning that crosses the boundary is a typed value
-  in `unix/shared`, never a bare `u32` and never a locally restated constant.
-- Comments state the invariant, not the history that produced it: no incident
-  provenance, no upstream test-file citations outside `unix/conformance/`, no
-  absolute paths from someone's machine. The audit greps for these.
-- No em dashes in prose, comments, commit messages or documentation.
+- No new `MTLD3D_*` runtime environment variable. A runtime knob is a
+  `mtld3d.conf` key; a diagnostic is a narrowed `mtld3d::*` log target consumed
+  through `RUST_LOG`.
+- Pure logic belongs in `mtld3d-core`; `src/d3d9` is COM wiring. Runtime
+  placement follows the Unix-first policy in [`ARCHITECTURE.md`](ARCHITECTURE.md);
+  native orchestration reuses core logic. A COM wrapper carries a vtable
+  pointer, a refcount and an opaque inner pointer, and every other field lives
+  on the inner struct.
+- Every integer with symbolic meaning that crosses the boundary is a typed
+  value in `src/d3d9/shared`, never a bare `u32` and never a locally restated
+  constant.
+- Comments cite no upstream test file outside `tests/d3d9/conformance/`, where
+  the citations are the data.
 
-## Pull requests
+## What sends a D3D9 change back
 
-`main` is protected, so everything lands through a pull request, maintainers
-included, and pull requests are squash-merged.
+In addition to what [`CONTRIBUTING.md`](../../CONTRIBUTING.md) lists:
 
-That makes the pull request, not the commit, the unit of review and the unit of
-history. One pull request is one clearly defined change, and the squashed commit
-is what has to stay bisectable on `main`. No drive-bys: an unrelated cleanup, a
-rename or a reformat picked up along the way goes in its own pull request. It
-keeps the review small and keeps `main` at one change per commit.
-
-Commits inside the branch are discarded by the squash, so they need no polish.
-The description is what survives, and for anything non-trivial it carries:
-
-1. The user-visible symptom, quoting the exact log line or error where there is
-   one.
-2. The root cause, the mechanism, and say so when it is conjecture.
-3. The fix, in its minimum conceptual steps.
-4. At least one considered alternative, including the dead ends.
-5. Verification: the commands you ran and what a reviewer should look for.
-
-CI pins two Wines and runs one per image, which sets the Makefile's mode and
-so its legs: macos-26 runs the arm64 Wine (the arm64 legs, `i686` and
-`arm64x`, against the arm64 Wine's conformance keys, and the native ARM64 e2e
-leg, `aarch64`), and macos-15, under Rosetta, and the Intel image run the
-x86_64 Wine (the x86_64 legs, `i686` and `x86_64`, against the x86_64 Wine's
-keys). The arm64 Wine needs macOS 26.4, which macos-15 does not have. Every
-conformance leg runs the arm64 Wine release's `d3d9_test.exe`: the
-x86_64-Wine images fetch that release's `lib/wine/tests` alone, `VERSION`
-included, cached by its pin, and name it in `WINE_TESTS`. CI compiles on two
-machines and replays everywhere else, both on macos-26 in the arm64 mode.
-One job builds the stage (`make stage`: the i686, x86_64 and ARM64X builds,
-both unix `.so` builds, the e2e test binaries of every leg, the e2e and
-conformance runners for both host arches), which serves the legs of both
-Wines, and another runs formatting and audit first, then documentation,
-Clippy (the ARM64X halves included) and unit tests, with the `PERF=1` Clippy
-and unit-test legs of `make check`, as steps of one job. Production bundles
-are built by the release job only, also on macos-26 in the arm64 mode, so
-they carry the ARM64X pair beside the x86 builds.
-Every run on `main` has its own concurrency group so pending runs survive
-later pushes and every commit keeps its CI result. PR updates cancel the
-superseded run. The test machines carry no toolchain: they install the stage
-(`STAGE=<dir>`) and run the end-to-end and conformance suites on up to three
-images: the newest macOS on arm64, the oldest macOS mtld3d supports on arm64,
-and the Intel image, whose device has no unified memory and none of the
-packed 16-bit formats, so it runs the Intel/AMD code paths for real. A pull
-request runs the two arm64 images, and every leg it runs gates it. The Intel
-image's paravirtual GPU hangs and reads multisampled results wrong by itself,
-with no Wine and no mtld3d involved, often enough that a pull request could
-not count on a green Intel leg, so its legs run every night on `main` and on
-a dispatch with `intel_only`, which run that image alone; a push to `main`
-and any other dispatch run all three images. An Intel failure in the nightly
-run that is not a GPU hang comes from the commits since the last green one:
-a regression, or a `@mac2` conformance pin left stale by a pull request that
-fixed a site and updated only the Apple entries, which is re-recorded rather
-than read as a regression (`unix/conformance/CONFORMANCE.md` has the
-procedure). So a pull request that moves conformance counts, edits
-`baseline.txt`, or touches an Intel code path (the `intel.*` keys, Managed
-memory, the packed 16-bit formats) dispatches the workflow with `intel_only`
-on its branch before it merges. A release waits for a green Intel run (see
-"Cutting a release"). One more end-to-end leg, and one more conformance leg,
-run their suite at `render.scale = 0.75`, the evidence that the coordinates
-the tests assert on stay in the space D3D9 reports when the frame is
-rasterized smaller; a test that needs single-pixel resolution asks
-`render_scale_is_identity()` and pins its exact shape at the identity rather
-than failing that leg, and the conformance sites that cannot (a probe on a
-colour boundary) are classified under "The scaled leg" in
-`unix/conformance/CONFORMANCE.md`. The Intel image reads the conformance
-baseline's `@mac2` entries, which only it can record: dispatch the workflow
-with `record_intel_baseline` (and `intel_only`, to run nothing else) and
-commit the `@mac2` sections from the `baseline-mac2-<arch>` artifacts
-(`unix/conformance/CONFORMANCE.md` has the procedure). A conformance subtest
-that dies on one image now and then is caught by dispatching with
-`conformance_repeat=<n>`, which runs it that many times on every image and
-uploads each run's raw output, ending in how the process ended, with the
-layer's debug log beside it. Every conformance job's raw artifact, repeat or
-not, also carries the system log of the job's span, which is where AppKit
-reports an exception it swallowed, if it logs it there unredacted. Run
-`make conformance` locally when your change touches the render or
-shader-emission path. The
-manual
-`probe-metal` job is how an image is checked before it is added, and it runs
-under the forced Intel answers, because its device filters 32-bit floats
-where a real Intel/AMD Mac's driver does not. On an Apple-family machine the
-forced answers (`make test INTEL=1`, `make conformance-intel`) are the way to
-run the Intel paths without the hardware.
-
-The end-to-end legs run one test at a time in CI on purpose (`JOBS=1`, against
-a local default of four), because parallel device creation aborts on a runner.
-A flake there is not fixed by re-enabling parallelism.
-
-A leg a GPU hang cut short (the runner's exit code 3, under "Reading a test
-run") has no verdict, and a hosted machine whose GPU hung stays hung, so the
-e2e and conformance steps mark such a leg with an error annotation titled
-`GPU hang`. When a run fails and every job that did not succeed carries that
-annotation, `.github/workflows/rerun-gpu-hangs.yml` re-runs the failed jobs
-once, which puts them on fresh machines; it leaves a pull request's run alone
-once a newer push has replaced it. A second hang, or a hang beside any other
-failure, is for a person to read, and the failed jobs are re-run by hand
-with `gh run rerun <run-id> --failed`.
-
-## What sends a pull request back
-
-- `make check` or `make test` is red, or the run was judged by the summary.
-- A new lint suppression, or a new environment variable.
 - A conformance regression with no re-recorded baseline and no rationale.
 - An end-to-end assertion deleted without saying which behaviour it contradicted.
 - A behaviour change that diverges from D3D9 without being written down as a
   decision.
 - A missing companion edit: classifier arm, caps bit, cache-schema bump, config
-  sample entry, derive inventory.
-- Incident provenance or a private path in a comment.
-- Two unrelated changes in one branch.
-
-## Issues and labels
-
-The GitHub tracker is the backlog. A finding worth keeping, whether it comes
-out of a review, a session, or a game report, becomes an issue the moment it is
-not being fixed on the spot: one issue per finding, verified against the source
-before filing.
-
-Every open issue carries one type label, one priority label, and, where the
-work can be estimated, one effort label:
-
-- Type: `bug` is wrong behaviour in an implemented path; `enhancement` is a new
-  capability or an unimplemented part of the D3D9 surface; `performance` is
-  speed or memory with no behaviour change; `game-compat` is a specific game
-  failing or misbehaving; `infra` is build, CI, test harness, or tooling.
-- Priority: `P1` is next in line, a user-visible breakage or a live correctness
-  hazard; `P2` is real and expected to get done; `P3` is speculative,
-  nice-to-have, or waiting on its trigger.
-- Effort: `effort/S` is hours; `effort/M` is a normal single-PR change;
-  `effort/L` is multi-day or needs a design first.
-
-Two modifiers exist. `blocked` marks an issue waiting on an external trigger,
-a machine we do not have, or an upstream change, with the body naming exactly
-what it waits for; a blocked issue keeps its priority, the label only says why
-it is not moving. `needs-repro` marks an external report that has not been
-reproduced or root-caused locally yet.
-
-File the issue with its labels attached. When a claim in an issue body stops
-being true, edit the body rather than correcting it in a comment trail.
-
-## Cutting a release
-
-A release is a `v*` tag, and pushing one is the whole trigger: CI drafts the
-release, attaches the two archives `make bundle` produces, and leaves the body
-empty for the notes, which are written by hand.
-
-The version lives in the `[workspace.package]` table of both `Cargo.toml`s and
-in the local-crate entries of both `Cargo.lock`s, so the bump is its own commit
-touching four files. Refresh each lock with `cargo metadata --format-version 1
---manifest-path <workspace>/Cargo.toml > /dev/null`, which rewrites the version
-lines without the dependency churn `cargo update` would bring, and check the bump
-before tagging with `make version-check TAG=vX.Y.Z`.
-
-Before the bump, measure the release against the previous one on a quiet
-machine with `make bench-ab BASE=<previous tag> BENCH_SET=full
-LOG_DIR=$PWD/.codex/evidence/bench-release/<version>`, which archives the runs
-and the report there. A regression it reports is fixed before the tag or named
-in the notes.
-
-Land that commit and wait for its run on `main` to go green. The latest Intel
-run on `main` has to be green too: that is the commit's own push run, which
-carries the Intel legs, unless a nightly or an `intel_only` dispatch ran
-after it. Pull requests do not run the Intel image, so that run is the only
-Intel verdict the release has, and a run whose Intel legs show nothing but
-GPU hangs is re-run until it gives one. Then push the tag. The
-release job refuses a tag whose version disagrees with either workspace, and
-refuses one whose commit has no green run on `main`; a tag pushed while that run
-is still going is waited on rather than rejected. It builds the bundle itself,
-after the tag exists, because every binary stamps `git describe` and one built
-before the tag names the previous release.
-
-What is left is the notes and the publish. Group the points into sections rather
-than one flat list, give the two or three headline items a section each, and end
-every point with the pull requests that did it. Then
-`gh release edit vX.Y.Z --draft=false --latest`.
+  sample entry.

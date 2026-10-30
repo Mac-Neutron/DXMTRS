@@ -2,7 +2,7 @@
 //!
 //! The library is resolved at load time via `raw-dylib`; on i386 the exports
 //! are undecorated `stdcall`, on x64 and ARM64 they are plain. Wine resolves
-//! the DLL from the prefix `make install` populates.
+//! the DLL from the prefix the install populates.
 
 use core::ffi::c_void;
 

@@ -6,7 +6,7 @@
 //! carries no persistent CPU store but is read back on demand; and a
 //! `Lockable == FALSE` render target has no CPU-visible store at all, which
 //! D3D9 answers with `D3DERR_INVALIDCALL`. The surface plumbing lives in
-//! `windows/d3d9`; the routing decision is here.
+//! `src/d3d9`; the routing decision is here.
 
 /// The store a standalone colour surface's `LockRect` hands back.
 #[derive(Debug, PartialEq, Eq)]

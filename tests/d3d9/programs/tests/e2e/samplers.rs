@@ -1216,7 +1216,7 @@ fn render_lod_bias_keeps_the_base_level_under_the_scale() {
     //
     // Pins its own scale (a clean half, so the LOD is exactly 1) rather than
     // inheriting the run's: at the identity there is nothing to compensate,
-    // and this has to fail in the ordinary `make test` if it regresses.
+    // and this has to fail in an ordinary run if it regresses.
     let h = Harness::with_config("render.scale=0.5");
     let tex = mip_tinted_texture(&h);
     arm_mip_tinted(&h, &tex);

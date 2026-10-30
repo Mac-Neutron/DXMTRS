@@ -513,7 +513,7 @@ pub const fn depth_format_has_stencil(fmt: u32) -> bool {
 }
 
 // D3D9 colour formats whose Metal counterpart has an sRGB twin. Mirror of
-// the PE-side `PixelFormat::srgb_twin()` table in `unix/shared/src/mtl.rs`
+// the PE-side `PixelFormat::srgb_twin()` table in `src/d3d9/shared/src/mtl.rs`
 // — drives the answer `CheckDeviceFormat` returns for
 // `D3DUSAGE_QUERY_SRGBREAD`. Adding a new linear/sRGB pair to `PixelFormat`
 // requires extending this list too. The write side is not this question: a
@@ -1436,7 +1436,7 @@ extern "system" fn d3d9_check_device_format(
     } else if rtype == D3DRTYPE_SURFACE || rtype == D3DRTYPE_TEXTURE {
         // SRGBREAD: per-format gate for whether `D3DSAMP_SRGBTEXTURE=1`
         // delivers a real decode. Matches the eager sRGB twin view
-        // created in `unix/unix/src/metal/texture.rs::create_texture`
+        // created in `src/d3d9/unix/src/metal/texture.rs::create_texture`
         // — only formats with an MTLPixelFormat sRGB twin succeed.
         if usage & D3DUSAGE_QUERY_SRGBREAD != 0 && !has_srgb_read_decode(check_format) {
             false

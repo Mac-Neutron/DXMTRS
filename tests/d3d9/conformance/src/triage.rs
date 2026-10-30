@@ -8,7 +8,7 @@
 //! only machine-recorded counts — a re-baseline never needs to touch prose,
 //! and a site's class can never disagree between two files because it exists
 //! in exactly one. A site present in the baseline with no entry here is
-//! untriaged by definition; the unit test below fails `make test` until the
+//! untriaged by definition; the unit test below fails until the
 //! prose is written, and the stale direction (prose for a site that no longer
 //! fails) fails it too.
 

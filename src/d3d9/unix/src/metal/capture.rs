@@ -79,7 +79,7 @@ pub fn start_capture(device_handle: MetalHandle<MTLDeviceKind>) {
 /// trace document as a destination, so this asks Metal rather than parsing
 /// the variable. The layer sits under every Metal call whether or not a
 /// capture runs, so a timing taken with it loaded is not comparable with one
-/// taken without; docs/ARCHITECTURE.md gives the measured cost.
+/// taken without; docs/d3d9/ARCHITECTURE.md gives the measured cost.
 pub fn capture_layer_loaded() -> bool {
     // SAFETY: `sharedCaptureManager` is an always-live process-wide singleton.
     let manager = unsafe { MTLCaptureManager::sharedCaptureManager() };

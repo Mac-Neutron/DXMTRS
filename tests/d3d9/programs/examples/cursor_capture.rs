@@ -1,4 +1,4 @@
-//! Visible Wine cursor probe. See windows/tests/COVERAGE.md for running and checking its log.
+//! Visible Wine cursor probe. See tests/d3d9/programs/COVERAGE.md for running and checking its log.
 
 use std::time::{Duration, Instant};
 

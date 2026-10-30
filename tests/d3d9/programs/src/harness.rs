@@ -278,7 +278,7 @@ pub struct HarnessConfig {
     /// `MTLD3D_CONFIG` for the one `Direct3DCreate9` this harness makes and
     /// taken out of the environment again before the call returns. The
     /// parser keeps the last entry for a key, so these win over a
-    /// `make test SCALE=<n>` or `INTEL=1` run. Empty (the default) means
+    /// suite-wide `render.scale` or `intel.*` setting. Empty (the default) means
     /// the suite-wide configuration.
     pub config_entries: &'static str,
     /// `D3DPRESENT_PARAMETERS.Windowed`, in its wire encoding (1 = windowed).
@@ -404,7 +404,7 @@ pub fn run_child(
 
 /// True when the suite rasterizes at the resolution D3D9 reports.
 ///
-/// `make test SCALE=<n>` puts `render.scale` in `MTLD3D_CONFIG` for every test
+/// Running the suite with `render.scale` in `MTLD3D_CONFIG` puts it on every test
 /// process: the frame is then rasterized smaller and resolved back up to the
 /// reported resolution on the way to a readback. A probe within a pixel or two
 /// of a colour boundary reads that resolve rather than what was rasterized, so

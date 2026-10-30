@@ -4,7 +4,7 @@
 //! mode, notifies every CPU write with `didModifyRange:`, and needs a
 //! 256-byte row alignment for a linear texture upload, so mips narrower than
 //! that floor go through padded staging or the GPU upload pass. These tests
-//! force both answers so the paths run on Apple Silicon in every `make test`,
+//! force both answers so the paths run on Apple Silicon in every ordinary run,
 //! where they would otherwise wait for the rare Intel-hardware run.
 //!
 //! What they can prove there: the Managed buffers are created, written, drawn

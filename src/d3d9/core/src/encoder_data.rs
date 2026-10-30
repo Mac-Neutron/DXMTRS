@@ -778,7 +778,7 @@ impl TextureUploadJob {
 /// per-op heap allocation. The latter carries changed state. Non-draw
 /// operations carry typed, owned payloads and dispatch exhaustively.
 ///
-/// See `windows/core/src/scratch.rs` for why hot payloads (snapshots,
+/// See `src/d3d9/core/src/scratch.rs` for why hot payloads (snapshots,
 /// const ranges, stage bindings) are pointers into the per-frame arena
 /// rather than `Box<T>`.
 pub enum Op {
@@ -1073,7 +1073,7 @@ pub struct FrameData {
     pub render_scale: RenderScale,
     /// Metal pixel format of the backbuffer.
     ///
-    /// Always `Bgra8Unorm` in mtld3d today, `unix/unix/src/metal/texture.rs`
+    /// Always `Bgra8Unorm` in mtld3d today, `src/d3d9/unix/src/metal/texture.rs`
     /// always creates the backbuffer as `BGRA8Unorm`. Seeded into
     /// `PassState::reset_frame` so the initial pass's pipeline cache key has
     /// the right format before any `SetRenderTarget`.

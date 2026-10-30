@@ -73,7 +73,7 @@ const _: () = assert!(SPRITES <= SLOTS, "one slot per sprite");
 
 /// Rewrite a sprite scratch between the draws that sample it, every frame: warm up, time.
 #[test]
-#[ignore = "benchmark, run by `make bench`"]
+#[ignore = "benchmark, run by `runner --ignored`"]
 fn sprite_scratch() {
     // Before the device: its creation logs, so the layer log is written after
     // this mark whatever the benchmark's warm-up logs.
