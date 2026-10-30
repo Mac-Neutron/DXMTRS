@@ -1,5 +1,5 @@
 [workspace]
-members = ["unix", "mtl", "shared", "conformance", "e2e", "winemetal"]
+members = ["unix", "mtl", "shared", "conformance", "e2e", "winemetal", "winemetal-wire"]
 resolver = "2"
 
 [workspace.package]
@@ -96,6 +96,7 @@ rustc-hash = "2"
 # a bump that changes the allocator's shape; this workspace has none.
 snmalloc-rs = { version = "0.7.6", features = ["build_cc"] }
 strum = { version = "0.28", default-features = false }
+winemetal-wire = { path = "winemetal-wire" }
 
 [profile.dev]
 panic = "abort"

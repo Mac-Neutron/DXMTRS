@@ -742,7 +742,12 @@ dependencies = [
  "objc2-metal",
  "objc2-metal-fx",
  "objc2-quartz-core",
+ "winemetal-wire",
 ]
+
+[[package]]
+name = "winemetal-wire"
+version = "0.14.1"
 
 [[package]]
 name = "xxhash-rust"
