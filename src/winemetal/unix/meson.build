@@ -12,20 +12,6 @@ else
   error('One of the options -Dwine_build_path or -Dwine_install_path is required')
 endif
 
-winemetal_unix_ld_args = [
-  '-Wl,-install_name,@rpath/winemetal.so',
-  winemac_so, ntdll_so,
-  '-weak_framework', 'CoreFoundation', '-weak_framework', 'Metal',
-  '-framework', 'MetalFX', '-weak_framework', 'Foundation',
-  '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',
-  '-weak_framework', 'ColorSync',  '-weak_framework', 'Cocoa',
-  '-lsqlite3', '-weak_framework', 'AppKit',
-  # The two tables are the Rust archive's (table.rs) and no object here names them: -u pulls the member that holds
-  # them, and the constructors with it. winemac.so exports the same two names, so a missing table would bind to its.
-  '-Wl,-u,___wine_unix_call_funcs', '-Wl,-u,___wine_unix_call_wow64_funcs',
-] + (get_option('debug') ? [] : ['-Wl,-S'])
-winemetal_unix_link_depends = []
-
 # DXMTRS: winemetal's Rust half (mtld3d/unix/winemetal), a static library for the Mac's architecture. winemetal.so is a
 # build-machine target, which meson won't link_with a custom target (a host one): the archive goes in by its path, and
 # the target in link_depends. Cargo runs on every build (build_always_stale) and decides what to rebuild; the script
@@ -40,8 +26,21 @@ winemetal_unix_rust = custom_target('winemetal-unix-rust',
                         'winemetal', rust_target_dir, '@OUTPUT@', 'production-unwind'],
   build_always_stale : true,
 )
-winemetal_unix_ld_args += winemetal_unix_rust.full_path()
-winemetal_unix_link_depends += winemetal_unix_rust
+
+winemetal_unix_ld_args = [
+  '-Wl,-install_name,@rpath/winemetal.so',
+  # The two tables are the Rust archive's (table.rs) and no object here names them: -u pulls the member that holds
+  # them, and the constructors with it, but only from an archive ld64 meets before winemac.so, which exports the same
+  # two names and would satisfy -u itself (a dylib's export binds; no Rust in the image). Keep the archive first.
+  winemetal_unix_rust.full_path(), winemac_so, ntdll_so,
+  '-weak_framework', 'CoreFoundation', '-weak_framework', 'Metal',
+  '-framework', 'MetalFX', '-weak_framework', 'Foundation',
+  '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',
+  '-weak_framework', 'ColorSync',  '-weak_framework', 'Cocoa',
+  '-lsqlite3', '-weak_framework', 'AppKit',
+  '-Wl,-u,___wine_unix_call_funcs', '-Wl,-u,___wine_unix_call_wow64_funcs',
+] + (get_option('debug') ? [] : ['-Wl,-S'])
+winemetal_unix_link_depends = [winemetal_unix_rust]
 
 shared_library('winemetal', winemetal_unix_src,
   name_prefix         : '',
