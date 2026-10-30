@@ -11,6 +11,14 @@ dxgi_src = [
 dxgi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
 dxgi_link_depends = []
 
+# MacNeutron (DXMTRS step 3): natively the dylib exports its five entry points (the .def's names) and nothing else, so no
+# other dylib binds to anything but them. The C++ objects define the names; no -u.
+if not dxmt_crossbuild
+  foreach n : [ 'CreateDXGIFactory', 'CreateDXGIFactory1', 'CreateDXGIFactory2', 'DXGIDeclareAdapterRemovalSupport', 'DXGIGetDebugInterface1' ]
+    dxgi_ld_args += [ '-Wl,-exported_symbol,_' + n ]
+  endforeach
+endif
+
 dxgi_dll = shared_library('dxgi', dxgi_src, dxgi_res,
   name_prefix         : '',
   dependencies        : [ dxmt_dep, util_dep, winemetal_dep ],
