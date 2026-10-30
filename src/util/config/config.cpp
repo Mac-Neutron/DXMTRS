@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <utility>
 #include <cmath>
@@ -337,7 +338,8 @@ namespace dxmt {
       // Inform the user that we loaded a default config
       Logger::info(str::format("Found built-in config:"));
 
-      for (auto& pair : config->m_options)
+      // In key order: the options are a hash map, whose order differs between targets (DXMTRS's dxgi logs the same way)
+      for (auto& pair : std::map<std::string, std::string>(config->m_options.begin(), config->m_options.end()))
         Logger::info(str::format("  ", pair.first, " = ", pair.second));
 
       return *config;
