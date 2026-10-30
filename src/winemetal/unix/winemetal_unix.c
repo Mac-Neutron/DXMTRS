@@ -145,36 +145,11 @@ NTSTATUS _MTLDevice_supportsTextureSampleCount(void *obj);
 
 NTSTATUS _MTLDevice_hasUnifiedMemory(void *obj);
 
-static NTSTATUS
-_MTLCaptureManager_sharedCaptureManager(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[MTLCaptureManager sharedCaptureManager];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCaptureManager_sharedCaptureManager(void *obj);
 
-static NTSTATUS
-_MTLCaptureManager_startCapture(void *obj) {
-  struct unixcall_mtlcapturemanager_startcapture *params = obj;
-  MTLCaptureDescriptor *desc = [[MTLCaptureDescriptor alloc] init];
-  const struct WMTCaptureInfo *info = params->info.ptr;
-  desc.destination = (MTLCaptureDestination)info->destination;
-  desc.captureObject = (id)info->capture_object;
-  NSString *path_str = [[NSString alloc] initWithCString:info->output_url.ptr encoding:NSUTF8StringEncoding];
-  NSURL *url = [[NSURL alloc] initFileURLWithPath:path_str];
-  desc.outputURL = url;
-  [(MTLCaptureManager *)params->capture_manager startCaptureWithDescriptor:desc error:nil];
-  [url release];
-  [path_str release];
-  [desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCaptureManager_startCapture(void *obj);
 
-static NTSTATUS
-_MTLCaptureManager_stopCapture(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  [(MTLCaptureManager *)params->handle stopCapture];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCaptureManager_stopCapture(void *obj);
 
 NTSTATUS _MTLDevice_newTemporalScaler(void *obj);
 
