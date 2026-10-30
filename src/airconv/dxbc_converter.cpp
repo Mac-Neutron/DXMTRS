@@ -798,7 +798,8 @@ llvm::Error convert_dxbc_vertex_shader(
   }
   auto value = epilogue_result.get();
 
-  if (pShaderInternal->clip_distance_scalars.size()) {
+  // A void function (rasterization disabled) returns no outputs, so no clip distances either.
+  if (value != nullptr && pShaderInternal->clip_distance_scalars.size()) {
     auto clip_distance_ty = llvm::ArrayType::get(
       types._float, pShaderInternal->clip_distance_scalars.size()
     );
