@@ -104,143 +104,13 @@ _MTLCommandBuffer_encodeSignalEvent(void *obj) {
 }
 
 #ifdef DXMT_NATIVE
-static void *(*memory_alloc)(uint64_t length, void *ctx);
-static void (*memory_free)(void *ptr, void *ctx);
-static void *memory_ctx;
-
-__attribute__((visibility("default"))) void
-WMTSetMemoryHooks(void *(*alloc)(uint64_t length, void *ctx), void (*free)(void *ptr, void *ctx), void *ctx) {
-  memory_alloc = alloc, memory_free = free, memory_ctx = ctx;
-}
-
-__attribute__((visibility("default"))) int
-WMTMemoryHooked(void) {
-  return memory_alloc != NULL;
-}
-
-/* A CPU-visible buffer over the hooks' memory (whole pages, as newBufferWithBytesNoCopy takes them); nil if they gave
- * none. */
-static id<MTLBuffer>
-hooked_buffer(id<MTLDevice> device, struct WMTBufferInfo *info) {
-  uint64_t page = 16384, length = (info->length + page - 1) / page * page;
-  void *ptr = memory_alloc(length, memory_ctx);
-  if (!ptr)
-    return nil;
-  void (*release)(void *, void *) = memory_free;
-  void *ctx = memory_ctx;
-  id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:ptr
-                                                   length:length
-                                                  options:(enum MTLResourceOptions)info->options
-                                              deallocator:^(void *p, NSUInteger n) {
-                                                (void)n;
-                                                release(p, ctx);
-                                              }];
-  if (!buffer)
-    release(ptr, ctx);
-  else
-    info->memory.ptr = ptr;
-  return buffer;
-}
 #endif
 
-static NTSTATUS
-_MTLDevice_newBuffer(void *obj) {
-  struct unixcall_mtldevice_newbuffer *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTBufferInfo *info = params->info.ptr;
-  id<MTLBuffer> buffer;
-#ifdef DXMT_NATIVE
-  enum MTLStorageMode storage = (enum MTLStorageMode)((info->options >> MTLResourceStorageModeShift) & 0xf);
-  if (!info->memory.ptr && memory_alloc && storage != MTLStorageModePrivate && storage != MTLStorageModeMemoryless) {
-    buffer = hooked_buffer(device, info);
-    params->ret = (obj_handle_t)buffer;
-    info->gpu_address = buffer ? [buffer gpuAddress] : 0;
-    return STATUS_SUCCESS;
-  }
-#endif
-  if (info->memory.ptr) {
-    buffer = [device newBufferWithBytesNoCopy:info->memory.ptr
-                                       length:info->length
-                                      options:(enum MTLResourceOptions)info->options
-                                  deallocator:NULL];
-  } else {
-    buffer = [device newBufferWithLength:info->length options:(enum MTLResourceOptions)info->options];
-    info->memory.ptr = [buffer storageMode] == MTLStorageModePrivate ? NULL : [buffer contents];
-  }
-  params->ret = (obj_handle_t)buffer;
-  info->gpu_address = [buffer gpuAddress];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newBuffer(void *obj);
 
-/* DXMT_MAX_ANISOTROPY=<1..16>: a floor on maxAnisotropy for trilinear, non-comparison samplers (0 = off), read by
- * the Rust half's constructor (mtld3d/unix/winemetal, init.rs). */
-extern uint32_t forced_max_anisotropy;
+NTSTATUS _MTLDevice_newSamplerState(void *obj);
 
-static NTSTATUS
-_MTLDevice_newSamplerState(void *obj) {
-  struct unixcall_mtldevice_newsamplerstate *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTSamplerInfo *info = params->info.ptr;
-
-  MTLSamplerDescriptor *sampler_desc = [[MTLSamplerDescriptor alloc] init];
-  sampler_desc.borderColor = (MTLSamplerBorderColor)info->border_color;
-  sampler_desc.rAddressMode = (MTLSamplerAddressMode)info->r_address_mode;
-  sampler_desc.sAddressMode = (MTLSamplerAddressMode)info->s_address_mode;
-  sampler_desc.tAddressMode = (MTLSamplerAddressMode)info->t_address_mode;
-  sampler_desc.magFilter = (MTLSamplerMinMagFilter)info->mag_filter;
-  sampler_desc.minFilter = (MTLSamplerMinMagFilter)info->min_filter;
-  sampler_desc.mipFilter = (MTLSamplerMipFilter)info->mip_filter;
-  sampler_desc.compareFunction = (MTLCompareFunction)info->compare_function;
-  sampler_desc.lodMaxClamp = info->lod_max_clamp;
-  sampler_desc.lodMinClamp = info->lod_min_clamp;
-  sampler_desc.maxAnisotropy = info->max_anisotroy;
-  if (forced_max_anisotropy && info->min_filter == WMTSamplerMinMagFilterLinear &&
-      info->mag_filter == WMTSamplerMinMagFilterLinear && info->mip_filter == WMTSamplerMipFilterLinear &&
-      info->compare_function == WMTCompareFunctionNever && info->max_anisotroy < forced_max_anisotropy)
-    sampler_desc.maxAnisotropy = forced_max_anisotropy;
-  sampler_desc.lodAverage = info->lod_average;
-  sampler_desc.normalizedCoordinates = info->normalized_coords;
-  sampler_desc.supportArgumentBuffers = info->support_argument_buffers;
-
-  id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:sampler_desc];
-  info->gpu_resource_id = info->support_argument_buffers ? [sampler gpuResourceID]._impl : 0;
-  params->ret = (obj_handle_t)sampler;
-  [sampler_desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLDevice_newDepthStencilState(void *obj) {
-  struct unixcall_mtldevice_newdepthstencilstate *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  const struct WMTDepthStencilInfo *info = params->info.ptr;
-
-  MTLDepthStencilDescriptor *desc = [[MTLDepthStencilDescriptor alloc] init];
-  desc.depthCompareFunction = (MTLCompareFunction)info->depth_compare_function;
-  desc.depthWriteEnabled = info->depth_write_enabled;
-
-  if (info->front_stencil.enabled) {
-    desc.frontFaceStencil.depthStencilPassOperation = (MTLStencilOperation)info->front_stencil.depth_stencil_pass_op;
-    desc.frontFaceStencil.depthFailureOperation = (MTLStencilOperation)info->front_stencil.depth_fail_op;
-    desc.frontFaceStencil.stencilFailureOperation = (MTLStencilOperation)info->front_stencil.stencil_fail_op;
-    desc.frontFaceStencil.stencilCompareFunction = (MTLCompareFunction)info->front_stencil.stencil_compare_function;
-    desc.frontFaceStencil.writeMask = info->front_stencil.write_mask;
-    desc.frontFaceStencil.readMask = info->front_stencil.read_mask;
-  }
-
-  if (info->back_stencil.enabled) {
-    desc.backFaceStencil.depthStencilPassOperation = (MTLStencilOperation)info->back_stencil.depth_stencil_pass_op;
-    desc.backFaceStencil.depthFailureOperation = (MTLStencilOperation)info->back_stencil.depth_fail_op;
-    desc.backFaceStencil.stencilFailureOperation = (MTLStencilOperation)info->back_stencil.stencil_fail_op;
-    desc.backFaceStencil.stencilCompareFunction = (MTLCompareFunction)info->back_stencil.stencil_compare_function;
-    desc.backFaceStencil.writeMask = info->back_stencil.write_mask;
-    desc.backFaceStencil.readMask = info->back_stencil.read_mask;
-  }
-
-  params->ret = (obj_handle_t)[device newDepthStencilStateWithDescriptor:desc];
-  [desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newDepthStencilState(void *obj);
 
 /* The Rust half's (format.rs, texture.rs). */
 MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat);
@@ -261,65 +131,11 @@ extract_texture_descriptor(id<MTLTexture> desc, struct WMTTextureInfo *info) {
   info->flags = 0;
 };
 
-static NTSTATUS
-_MTLDevice_newTexture(void *obj) {
-  struct unixcall_mtldevice_newtexture *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTTextureInfo *info = params->info.ptr;
-  MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
-  fill_texture_descriptor(desc, info);
+NTSTATUS _MTLDevice_newTexture(void *obj);
 
-  id<MTLTexture> ret = [device newTextureWithDescriptor:desc];
-  params->ret = (obj_handle_t)ret;
-  info->gpu_resource_id = [ret gpuResourceID]._impl;
-  info->mach_port = 0;
+NTSTATUS _MTLBuffer_newTexture(void *obj);
 
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLBuffer_newTexture(void *obj) {
-  struct unixcall_mtlbuffer_newtexture *params = obj;
-  id<MTLBuffer> buffer = (id<MTLBuffer>)params->buffer;
-  struct WMTTextureInfo *info = params->info.ptr;
-  MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
-  fill_texture_descriptor(desc, info);
-
-  id<MTLTexture> ret = [buffer newTextureWithDescriptor:desc offset:params->offset bytesPerRow:params->bytes_per_row];
-  params->ret = (obj_handle_t)ret;
-  info->gpu_resource_id = [ret gpuResourceID]._impl;
-  info->mach_port = 0;
-
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static inline MTLTextureSwizzleChannels
-to_metal_swizzle(struct WMTTextureSwizzleChannels swizzle, enum WMTPixelFormat format) {
-  return MTLTextureSwizzleChannelsMake(
-      (MTLTextureSwizzle)DECODE_FORMAT_COMPONENT_SWIZZLE(format, 0, swizzle.r),
-      (MTLTextureSwizzle)DECODE_FORMAT_COMPONENT_SWIZZLE(format, 1, swizzle.g),
-      (MTLTextureSwizzle)DECODE_FORMAT_COMPONENT_SWIZZLE(format, 2, swizzle.b),
-      (MTLTextureSwizzle)DECODE_FORMAT_COMPONENT_SWIZZLE(format, 3, swizzle.a)
-  );
-}
-
-static NTSTATUS
-_MTLTexture_newTextureView(void *obj) {
-  struct unixcall_mtltexture_newtextureview *params = obj;
-  id<MTLTexture> texture = (id<MTLTexture>)params->texture;
-
-  id<MTLTexture> ret = [texture
-      newTextureViewWithPixelFormat:to_metal_pixel_format(params->format)
-                        textureType:(MTLTextureType)params->texture_type
-                             levels:NSMakeRange(params->level_start, params->level_count)
-                             slices:NSMakeRange(params->slice_start, params->slice_count)
-                            swizzle:to_metal_swizzle(params->swizzle, params->format)];
-  params->ret = (obj_handle_t)ret;
-  params->gpu_resource_id = [ret gpuResourceID]._impl;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_newTextureView(void *obj);
 
 NTSTATUS _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj);
 
@@ -1291,69 +1107,21 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLTexture_pixelFormat(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle pixelFormat];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_pixelFormat(void *obj);
 
-static NTSTATUS
-_MTLTexture_width(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle width];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_width(void *obj);
 
-static NTSTATUS
-_MTLTexture_height(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle height];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_height(void *obj);
 
-static NTSTATUS
-_MTLTexture_depth(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle depth];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_depth(void *obj);
 
-static NTSTATUS
-_MTLTexture_arrayLength(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle arrayLength];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_arrayLength(void *obj);
 
-static NTSTATUS
-_MTLTexture_mipmapLevelCount(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLTexture>)params->handle mipmapLevelCount];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_mipmapLevelCount(void *obj);
 
-static NTSTATUS
-_MTLTexture_replaceRegion(void *obj) {
-  struct unixcall_mtltexture_replaceregion *params = obj;
-  [(id<MTLTexture>)params->texture replaceRegion:MTLRegionMake3D(
-                                                     params->origin.x, params->origin.y, params->origin.z,
-                                                     params->size.width, params->size.height, params->size.depth
-                                                 )
-                                     mipmapLevel:params->level
-                                           slice:params->slice
-                                       withBytes:params->data.ptr
-                                     bytesPerRow:params->bytes_per_row
-                                   bytesPerImage:params->bytes_per_image];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_replaceRegion(void *obj);
 
-static NTSTATUS
-_MTLBuffer_didModifyRange(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  [(id<MTLBuffer>)params->handle didModifyRange:NSMakeRange(params->arg, params->ret)];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLBuffer_didModifyRange(void *obj);
 
 #ifdef DXMT_NATIVE
 static void (*present_hook)(void *cmdbuf, void *drawable);
@@ -2740,14 +2508,7 @@ _MTLDevice_newEvent(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLBuffer_updateContents(void *obj) {
-  struct unixcall_mtlbuffer_updatecontents *params = obj;
-  memcpy((void *)((char *)[(id<MTLBuffer>)params->buffer contents] + params->offset), params->data.ptr, params->length);
-  if ([(id<MTLBuffer>)params->buffer storageMode] == MTLStorageModeManaged)
-    [(id<MTLBuffer>)params->buffer didModifyRange:NSMakeRange(params->offset, params->length)];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLBuffer_updateContents(void *obj);
 
 NTSTATUS _WMTGetOSVersion(void *obj);
 
@@ -3124,183 +2885,29 @@ _MTLDevice_newTileRenderPipelineState(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_newResidencySet(void *obj) {
-  struct unixcall_mtldevice_newresidencyset *params = obj;
-  NSError *err = NULL;
-  MTLResidencySetDescriptor *descriptor = [[MTLResidencySetDescriptor alloc] init];
-  descriptor.initialCapacity = params->init_capacity;
-  params->ret_set = (obj_handle_t)[(id<MTLDevice>)params->device newResidencySetWithDescriptor:descriptor error:&err];
-  params->ret_error = (obj_handle_t)[err retain];
-  [descriptor release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newResidencySet(void *obj);
 
-static NTSTATUS
-_MTLResidencySet_addAllocations(void *obj) {
-  struct unixcall_mtlresidencyset_addallocations *params = obj;
-  id<MTLResidencySet> set = (id<MTLResidencySet>)params->set;
-  [set addAllocations:(id<MTLAllocation> const *)params->allocations.ptr count:params->count];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLResidencySet_addAllocations(void *obj);
 
-static NTSTATUS
-_MTLResidencySet_removeAllocations(void *obj) {
-  struct unixcall_mtlresidencyset_addallocations *params = obj;
-  id<MTLResidencySet> set = (id<MTLResidencySet>)params->set;
-  [set removeAllocations:(id<MTLAllocation> const *)params->allocations.ptr count:params->count];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLResidencySet_removeAllocations(void *obj);
 
-static NTSTATUS
-_MTLResidencySet_removeAllAllocations(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  id<MTLResidencySet> set = (id<MTLResidencySet>)params->handle;
-  [set removeAllAllocations];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLResidencySet_removeAllAllocations(void *obj);
 
-static NTSTATUS
-_MTLResidencySet_commit(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  id<MTLResidencySet> set = (id<MTLResidencySet>)params->handle;
-  [set commit];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLResidencySet_commit(void *obj);
 
-static NTSTATUS
-_MTLCommandQueue_addResidencySet(void *obj) {
-  struct unixcall_generic_obj_obj_noret *params = obj;
-  id<MTLCommandQueue> queue = (id<MTLCommandQueue>)params->handle;
-  id<MTLResidencySet> set = (id<MTLResidencySet>)params->arg;
-  [queue addResidencySet:set];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandQueue_addResidencySet(void *obj);
 
-static NTSTATUS
-_MTLDevice_newHeap(void *obj) {
-  struct unixcall_mtldevice_newheap *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTHeapInfo const *info = params->info.ptr;
-  MTLHeapDescriptor *desc = [[MTLHeapDescriptor alloc] init];
-  desc.resourceOptions = (MTLResourceOptions)info->options;
-  desc.sparsePageSize = (MTLSparsePageSize)info->sparse_page_size;
-  desc.type = (MTLHeapType)info->type;
-  desc.size = info->size;
+NTSTATUS _MTLDevice_newHeap(void *obj);
 
-  params->ret = (obj_handle_t)[device newHeapWithDescriptor:desc];
+NTSTATUS _MTLDevice_heapBufferSizeAndAlign(void *obj);
 
-  [desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_heapTextureSizeAndAlign(void *obj);
 
-static NTSTATUS
-_MTLDevice_heapBufferSizeAndAlign(void *obj) {
-  struct unixcall_mtldevice_heapbuffersizeandalign *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  MTLSizeAndAlign ret =
-      [device heapBufferSizeAndAlignWithLength:params->length options:(MTLResourceOptions)params->options];
-  params->ret_size = ret.size;
-  params->ret_align = ret.align;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLHeap_newBuffer(void *obj);
 
-static NTSTATUS
-_MTLDevice_heapTextureSizeAndAlign(void *obj) {
-  struct unixcall_mtldevice_heaptexturesizeandalign *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTTextureInfo *info = params->info.ptr;
-  MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
-  fill_texture_descriptor(desc, info);
-  MTLSizeAndAlign ret = [device heapTextureSizeAndAlignWithDescriptor:desc];
-  params->ret_size = ret.size;
-  params->ret_align = ret.align;
-  [desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLHeap_newTexture(void *obj);
 
-static NTSTATUS
-_MTLHeap_newBuffer(void *obj) {
-  struct unixcall_mtlheap_newbuffer *params = obj;
-  id<MTLHeap> heap = (id<MTLHeap>)params->heap;
-  struct WMTBufferInfo *info = params->info.ptr;
-  id<MTLBuffer> buffer;
-  if (~params->offset == 0)
-    buffer = [heap newBufferWithLength:info->length options:(enum MTLResourceOptions)info->options];
-  else
-    buffer =
-        [heap newBufferWithLength:info->length options:(enum MTLResourceOptions)info->options offset:params->offset];
-  info->memory.ptr = [heap storageMode] == MTLStorageModePrivate ? NULL : [buffer contents];
-
-  params->ret = (obj_handle_t)buffer;
-  info->gpu_address = [buffer gpuAddress];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLHeap_newTexture(void *obj) {
-  struct unixcall_mtlheap_newtexture *params = obj;
-  id<MTLHeap> heap = (id<MTLHeap>)params->heap;
-  struct WMTTextureInfo *info = params->info.ptr;
-  MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
-  fill_texture_descriptor(desc, info);
-
-  id<MTLTexture> ret;
-  if (~params->offset == 0)
-    ret = [heap newTextureWithDescriptor:desc];
-  else
-    ret = [heap newTextureWithDescriptor:desc offset:params->offset];
-  params->ret = (obj_handle_t)ret;
-  info->gpu_resource_id = [ret gpuResourceID]._impl;
-  info->mach_port = 0;
-
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLDevice_newIndirectCommandBuffer(void *obj) {
-  struct unixcall_mtldevice_newicb *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-
-  struct WMTIndirectCommandBufferInfo *info = params->info.ptr;
-
-  MTLIndirectCommandBufferDescriptor *desc = [[MTLIndirectCommandBufferDescriptor alloc] init];
-
-  desc.commandTypes = (MTLIndirectCommandType)info->type;
-
-  desc.maxFragmentBufferBindCount = info->max_fragment_buffer_binding;
-  desc.maxKernelBufferBindCount = info->max_kernel_buffer_binding;
-  desc.maxKernelThreadgroupMemoryBindCount = info->max_kernel_threadgroup_memory_binding;
-  desc.maxMeshBufferBindCount = info->max_mesh_buffer_binding;
-  desc.maxObjectBufferBindCount = info->max_object_buffer_binding;
-  desc.maxObjectThreadgroupMemoryBindCount = info->max_object_threadgroup_memory_binding;
-  desc.maxVertexBufferBindCount = info->max_vertex_buffer_binding;
-
-  desc.inheritBuffers = info->inherit_buffers;
-  desc.inheritPipelineState = info->inherit_pso;
-  desc.supportDynamicAttributeStride = info->support_dynamic_attribute_stride;
-  desc.supportRayTracing = info->support_ray_tracing;
-
-#if 0 // needs macOS 26 SDK, and we don't really use it at the moment
-  desc.inheritCullMode = info->inherit_cull_mode;
-  desc.inheritDepthBias = info->inherit_depth_bias;
-  desc.inheritDepthClipMode = info->inherit_depth_clip_mode;
-  desc.inheritDepthStencilState = info->inherit_depth_stencil_state;
-  desc.inheritFrontFacingWinding = info->inherit_front_facing;
-  desc.inheritTriangleFillMode = info->inherit_fill_mode;
-  desc.supportColorAttachmentMapping = info->support_color_attachment_mapping;
-#endif
-
-  id<MTLIndirectCommandBuffer> icb =
-      [device newIndirectCommandBufferWithDescriptor:desc
-                                     maxCommandCount:params->max_count
-                                             options:(MTLResourceOptions)params->options];
-  params->ret = (obj_handle_t)icb;
-  info->gpu_resource_id = [icb gpuResourceID]._impl;
-  [desc release];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newIndirectCommandBuffer(void *obj);
 
 static NTSTATUS
 _MTLDevice_newLibraryWithSource(void *obj) {
@@ -3345,20 +2952,7 @@ _MacNeutron_guestOnly(void *obj) {
   return STATUS_NOT_IMPLEMENTED;
 }
 
-static NTSTATUS
-_MTLTexture_getBytes(void *obj) {
-  struct unixcall_mtltexture_replaceregion *params = obj;
-  [(id<MTLTexture>)params->texture getBytes:params->data.ptr
-                                bytesPerRow:params->bytes_per_row
-                              bytesPerImage:params->bytes_per_image
-                                 fromRegion:MTLRegionMake3D(
-                                                params->origin.x, params->origin.y, params->origin.z,
-                                                params->size.width, params->size.height, params->size.depth
-                                            )
-                                mipmapLevel:params->level
-                                      slice:params->slice];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLTexture_getBytes(void *obj);
 
 /*
  * Definition from cache.c
