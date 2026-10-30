@@ -1,0 +1,17 @@
+[package]
+name = "winemetal-pe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "LGPL-2.1-or-later"
+description = "DXMT's winemetal.dll (Wine builds): the C API of winemetal.h as thunks to winemetal.so"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+winemetal-wire = { workspace = true }

@@ -1,8 +1,18 @@
+# DXMTRS: winemetal.dll's thunks and DllMain are Rust (mtld3d/windows/winemetal-pe), linked from the crate's static
+# library per Rust target as nvapi's are; its exports are named by the .def (the VM guest's adds its three calls). The
+# SM50 thunks stay C. winemetal_thunks.c is the native dylib's (src/nativemetal).
 winemetal_src = [
-  'main.c',
   'airconv_thunks.c',
-  'winemetal_thunks.c'
 ]
+
+winemetal_rust = []
+foreach t : rust_pe_targets
+  winemetal_rust += custom_target('winemetal-pe-' + t,
+    output             : 'winemetal-pe-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
+    command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'winemetal-pe', rust_target_dir, '@OUTPUT@'],
+    build_always_stale : true,
+  )
+endforeach
 
 winemetal_ld_args = []
 
@@ -36,7 +46,9 @@ endif
 
 winemetal_dll = shared_library('winemetal', winemetal_src,
   name_prefix         : '',
-  dependencies        : [ lib_winecrt0, lib_ntdll, lib_dbghelp, airconv_forward_dep ],
+  dependencies        : [ lib_winecrt0, lib_ntdll, lib_dbghelp, airconv_forward_dep, rust_runtime_dep ],
+  link_with           : winemetal_rust,
+  vs_module_defs      : get_option('guest_vm') ? 'winemetal-guest.def' : 'winemetal.def',
   include_directories : dxmt_include_path,
   install             : true,
   install_dir         : windows_builtin_install_dir,

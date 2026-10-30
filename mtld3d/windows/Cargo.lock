@@ -636,6 +636,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "winemetal-pe"
+version = "0.14.1"
+dependencies = [
+ "winemetal-wire",
+]
+
+[[package]]
+name = "winemetal-wire"
+version = "0.14.1"
+
+[[package]]
 name = "xbr"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

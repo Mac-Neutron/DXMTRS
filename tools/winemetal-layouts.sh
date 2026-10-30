@@ -14,8 +14,19 @@
 # airconv_thunks.h is missing from a dump or has no mirror, when a mirror or a constant names nothing in the C, on a
 # bitfield it cannot place, and when the slots are not 0..157 once each or differ from slot.rs's. A compile_error! stops a
 # build for any other target.
+#
+# With --protos it prints winemetal-pe's src/protos.rs instead, the compile-time asserts that pin the PE thunks'
+# signatures to winemetal.h's prototypes:
+#   sh tools/winemetal-layouts.sh --protos "$(sh dxmt/toolchain.sh)" > mtld3d/windows/winemetal-pe/src/protos.rs
+# Per Windows target, from llvm-mingw's clang -ast-dump=json (-DDXMT_GUEST_VM, read with jq): every WINEMETAL_API
+# function (the dllimport ones: winemetal.h's DXMT_NATIVE and non-Windows blocks are out) as the type of an
+# unsafe extern "C" fn the export of that name must coerce to. Each type is the C's on that target: a typedef resolved
+# to its integer (intptr_t is isize), an enum to its underlying type (u32 for one without a fixed type, after checking
+# that none of its values is negative), a struct to its winemetal-wire mirror. Fails on a type it cannot map.
 set -eu
-[ $# -eq 1 ] || { echo "usage: winemetal-layouts.sh <llvm-mingw-bin>" >&2; exit 2; }
+protos=
+[ "${1:-}" != --protos ] || { protos=1; shift; }
+[ $# -eq 1 ] || { echo "usage: winemetal-layouts.sh [--protos] <llvm-mingw-bin>" >&2; exit 2; }
 bin=$1
 root=$(cd "$(dirname "$0")/.." && pwd)
 wm=$root/src/winemetal
@@ -53,6 +64,94 @@ function rust(s,   o, i, k, w) {
 }'
 
 flags="-DDXMT_GUEST_VM -I$wm -I$root/src/airconv"
+
+if [ -n "$protos" ]; then
+  cat <<'EOF'
+//! winemetal.h's prototypes, asserted against the exports on each Windows target.
+//!
+//! Written by `tools/winemetal-layouts.sh --protos` from clang's AST of every `WINEMETAL_API`
+//! function: regenerate it, never edit it.
+
+use core::ffi::{c_char, c_void};
+
+use winemetal_wire as wire;
+EOF
+  printf '#include "winemetal.h"\n' >"$t/api.c"
+  printf '%s\n' \
+    'aarch64-w64-mingw32 all(target_arch = "aarch64", target_os = "windows")' \
+    'arm64ec-w64-mingw32 all(target_arch = "arm64ec", target_os = "windows")' \
+    'x86_64-w64-mingw32 all(target_arch = "x86_64", target_os = "windows")' \
+    'i686-w64-mingw32 all(target_arch = "x86", target_os = "windows")' |
+  while read -r target cfg; do
+    "$bin/$target-clang" -ffreestanding $flags -fsyntax-only -Xclang -ast-dump=json "$t/api.c" >"$t/ast.json"
+    # Records: T <typedef>\t<type>, E <enum>\t<underlying type, or "-" when not fixed>, N <enum with a negative value>,
+    # F <function>\t<return type>\t<parameter type>...
+    jq -r '.inner[] |
+      if .kind == "TypedefDecl" then ["T", .name, .type.qualType] | join("\t")
+      elif .kind == "EnumDecl" and .name then
+        (["E", .name, (.fixedUnderlyingType.qualType // "-")] | join("\t")),
+        (if [.. | .value? // empty | strings | select(startswith("-"))] | length > 0 then "N\t" + .name
+         else empty end)
+      elif .kind == "FunctionDecl" and ((.inner // []) | any(.kind == "DLLImportAttr")) then
+        (["F", .name, (.type.qualType | sub(" ?\\(.*$"; ""))] +
+          [.inner[] | select(.kind == "ParmVarDecl") | .type.qualType]) | join("\t")
+      else empty end' "$t/ast.json" >"$t/decls"
+    printf '\n#[cfg(%s)]\nconst _: () = {\n' "$cfg"
+    awk -F '\t' "$names"'
+      function base(s) {
+        if (s == "intptr_t") return "isize"
+        if (s == "uintptr_t") return "usize"
+        while (s in td) s = td[s]
+        if (s ~ /^enum /) {
+          s = substr(s, 6)
+          if (!(s in en)) bad = bad " enum " s
+          if (s in neg) bad = bad " enum " s " has a negative value"
+          s = en[s] == "-" ? "unsigned int" : en[s]
+          while (s in td) s = td[s]
+        }
+        if (s ~ /^struct /) return "wire::" rust(substr(s, 8))
+        if (s in prim) return prim[s]
+        bad = bad " " s
+        return s
+      }
+      function rs(s, ret,   c) {
+        sub(/^ +/, "", s); sub(/ +$/, "", s)
+        if (s ~ /\*$/) {
+          sub(/ *\*$/, "", s)
+          c = s ~ /^const /
+          sub(/^const /, "", s)
+          return (c ? "*const " : "*mut ") (s == "void" ? "c_void" : rs(s))
+        }
+        sub(/^const /, "", s)
+        if (s == "void") return ret ? "" : "c_void"
+        return base(s)
+      }
+      BEGIN {
+        split("unsigned_long_long:u64 long_long:i64 unsigned_long:u32 long:i32 unsigned_int:u32 int:i32 " \
+          "unsigned_short:u16 short:i16 unsigned_char:u8 signed_char:i8 char:c_char bool:bool float:f32 double:f64", \
+          kv, " ")
+        for (i in kv) { split(kv[i], p, ":"); gsub(/_/, " ", p[1]); prim[p[1]] = p[2] }
+        prim["_Bool"] = "bool"
+      }
+      $1 == "T" { td[$2] = $3; next }
+      $1 == "E" { en[$2] = $3; next }
+      $1 == "N" { neg[$2] = 1; next }
+      $1 == "F" {
+        args = ""
+        for (i = 4; i <= NF; i++) args = args (i > 4 ? ", " : "") rs($i)
+        r = rs($3, 1)
+        print "    let _: unsafe extern \"C\" fn(" args ")" (r == "" ? "" : " -> " r) " = crate::" $2 ";"
+        n++
+      }
+      END {
+        if (bad != "") { print "E cannot map:" bad; exit 1 }
+        if (n != 145) { print "E " n " WINEMETAL_API functions, not 145"; exit 1 }
+      }' "$t/decls" >"$t/out" || fail "$target: $(tail -1 "$t/out")"
+    cat "$t/out"
+    printf '};\n'
+  done
+  exit 0
+fi
 printf '#include "winemetal_thunks.h"\n#include "airconv_thunks.h"\n' >"$t/tu.c"
 apple() { xcrun clang -target aarch64-apple-darwin $flags "$@"; }
 
