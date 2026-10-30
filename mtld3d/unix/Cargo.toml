@@ -1,5 +1,5 @@
 [workspace]
-members = ["unix", "mtl", "shared", "conformance", "e2e"]
+members = ["unix", "mtl", "shared", "conformance", "e2e", "winemetal"]
 resolver = "2"
 
 [workspace.package]
@@ -157,6 +157,14 @@ lto = "fat"
 codegen-units = 1
 debug-assertions = false
 overflow-checks = false
+
+# winemetal's static library (winemetal.so and the native winemetal.dylib): production, but
+# unwinding. Its handlers are `extern "C-unwind"`, so an Objective-C exception Metal raises
+# leaves them for the caller's `@catch`, as it left DXMT's C; a Rust panic still aborts
+# (`ffi::AbortOnPanic`).
+[profile.production-unwind]
+inherits = "production"
+panic = "unwind"
 
 # Warn-level so a plain `cargo clippy` (or an editor) reports findings without
 # hard-failing; the hard gate is `make check`, which denies every warning via

@@ -20,9 +20,24 @@ winemetal_unix_ld_args = [
   '-framework', 'MetalFX', '-weak_framework', 'Foundation',
   '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',
   '-weak_framework', 'ColorSync',  '-weak_framework', 'Cocoa',
-  '-lsqlite3',
+  '-lsqlite3', '-weak_framework', 'AppKit',
 ]
 winemetal_unix_link_depends = []
+
+# DXMTRS: winemetal's Rust half (mtld3d/unix/winemetal), a static library for the Mac's architecture. winemetal.so is a
+# build-machine target, which meson won't link_with a custom target (a host one): the archive goes in by its path, and
+# the target in link_depends. Cargo runs on every build (build_always_stale) and decides what to rebuild; the script
+# copies only a changed archive, so an unchanged one relinks nothing. AppKit is named: objc2 looks its classes up by
+# name, where the C's static references linked it.
+winemetal_unix_rust = custom_target('winemetal-unix-rust',
+  output             : 'libwinemetal-rust.a',
+  command            : [cargo_staticlib, get_option('cargo_toolchain'),
+                        native_compiler_arch == 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin',
+                        'winemetal', rust_target_dir, '@OUTPUT@', 'production-unwind'],
+  build_always_stale : true,
+)
+winemetal_unix_ld_args += winemetal_unix_rust.full_path()
+winemetal_unix_link_depends += winemetal_unix_rust
 
 shared_library('winemetal', winemetal_unix_src,
   name_prefix         : '',
@@ -30,6 +45,7 @@ shared_library('winemetal', winemetal_unix_src,
   include_directories : dxmt_include_path,
   c_args              : ['-ObjC'],
   link_args           : winemetal_unix_ld_args,
+  link_depends        : winemetal_unix_link_depends,
   native              : true,
   name_suffix         : 'so',
   install_rpath       : '',

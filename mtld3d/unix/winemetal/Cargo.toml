@@ -1,0 +1,92 @@
+[package]
+name = "winemetal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "LGPL-2.1-or-later"
+description = "DXMT's winemetal: the Unix side of its Unix calls, over Metal"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# The native winemetal.dylib's code (DXMT_NATIVE in the C): the memory, present and WSI hooks, the
+# native event functions and the native cache class names.
+native = []
+
+# The framework crates keep their default features, which enable every header; the lists name the
+# headers the handlers send to, so the crate keeps them if the workspace's defaults go. AppKit is
+# not a dependency: the few NSScreen, NSView and NSWindow getters are declared locally.
+[dependencies]
+block2 = { workspace = true }
+dispatch2 = "0.3"
+libc = { workspace = true }
+objc2 = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["block2", "CFCGTypes", "CFData", "CFRunLoop", "CFString"] }
+objc2-core-graphics = { workspace = true, features = ["CGColorSpace", "CGDirectDisplay", "CGDisplayConfiguration"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSAutoreleasePool",
+    "NSData",
+    "NSEnumerator",
+    "NSError",
+    "NSObject",
+    "NSProcessInfo",
+    "NSRange",
+    "NSString",
+    "NSThread",
+    "NSURL",
+] }
+objc2-metal = { workspace = true, features = [
+    "block2",
+    "dispatch2",
+    "objc2-core-foundation",
+    "MTLAllocation",
+    "MTLArgument",
+    "MTLBinaryArchive",
+    "MTLBlitCommandEncoder",
+    "MTLBlitPass",
+    "MTLBuffer",
+    "MTLCaptureManager",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePass",
+    "MTLComputePipeline",
+    "MTLCounters",
+    "MTLDataType",
+    "MTLDepthStencil",
+    "MTLDevice",
+    "MTLDrawable",
+    "MTLEvent",
+    "MTLFence",
+    "MTLFunctionConstantValues",
+    "MTLFunctionLog",
+    "MTLHeap",
+    "MTLIndirectCommandBuffer",
+    "MTLLibrary",
+    "MTLPipeline",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLResidencySet",
+    "MTLResource",
+    "MTLSampler",
+    "MTLTexture",
+    "MTLTypes",
+    "MTLVertexDescriptor",
+] }
+objc2-metal-fx = { workspace = true, features = ["MTLFXFrameInterpolator", "MTLFXSpatialScaler", "MTLFXTemporalScaler"] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-metal",
+] }
+
+[lints]
+workspace = true
