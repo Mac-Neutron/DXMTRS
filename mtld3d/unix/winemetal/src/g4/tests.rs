@@ -1,7 +1,9 @@
+use core::cell::Cell;
 use core::ffi::CStr;
 
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol};
+use objc2::define_class;
 use objc2_metal::MTLCreateSystemDefaultDevice;
 
 use winemetal_wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED};
@@ -436,4 +438,125 @@ fn a_nil_device_still_adds_to_the_archive() {
     assert_eq!(unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast()) }, 0);
     assert_eq!((compute_call.ret_pso, compute_call.ret_error), (0, 0));
     assert!(serializes(archive, "nil-device"));
+}
+
+const CONSTANT_SOURCE: &CStr = c"#include <metal_stdlib>
+using namespace metal;
+constant int kc [[function_constant(0)]];
+kernel void kk(device int *o [[buffer(0)]]) { o[0] = kc; }
+";
+
+/// Slot 98 over `library`'s `kk` with one constant of `data_type` at index 0 and no data.
+fn function_with_null_constant(library: &NSObject, data_type: u16) -> UnixcallMtllibraryNewfunctionWithConstants {
+    let constant = WMTFunctionConstant { data: MemPtr { ptr: 0 }, r#type: data_type, index: 0, reserved: 0 };
+    let mut p = UnixcallMtllibraryNewfunctionWithConstants {
+        library: handle(library),
+        name: mem(&c"kk".to_bytes()[0]),
+        constants: mem(&constant),
+        num_constants: 1,
+        ret: FILL,
+        ret_error: FILL,
+    };
+    // SAFETY: a live params block.
+    assert_eq!(unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) }, 0);
+    p
+}
+
+#[test]
+fn a_constant_without_data_is_sent_with_its_type() {
+    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else { return };
+    // Float2x2: Metal reads no bytes of it, records the type and refuses the function, whose
+    // constant is an int. The C sent the null pointer as it was and got that error.
+    let p = function_with_null_constant(&library, 7);
+    assert_eq!(p.ret, 0);
+    assert_ne!(p.ret_error, 0);
+    assert_ne!(p.ret_error, FILL);
+    // Metal's autoreleased error and the handler's retain.
+    assert!(retain_count(p.ret_error) >= 2);
+    drop(take(p.ret_error));
+}
+
+#[test]
+fn a_constant_without_data_of_a_type_metal_reads_is_zero() {
+    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else { return };
+    // Int: the C faulted in Metal's read of the four bytes; the handler gives it zeros.
+    let p = function_with_null_constant(&library, 29);
+    assert_ne!(p.ret, 0);
+    assert_ne!(p.ret, FILL);
+    assert_eq!(p.ret_error, 0);
+    drop(take(p.ret));
+    // None of the types any 16-bit value names may fault, those Metal reads included.
+    for data_type in 0..=u16::MAX {
+        let p = function_with_null_constant(&library, data_type);
+        assert!(p.ret != FILL && p.ret_error != FILL, "type {data_type}");
+        drop(take(p.ret));
+        drop(take(p.ret_error));
+    }
+}
+
+thread_local! {
+    /// Where the stub archive looks for the `ret_pso` and `ret_error` fields of the call it is in.
+    static WATCHED: Cell<[*const u64; 2]> = const { Cell::new([core::ptr::null(); 2]) };
+
+    /// What the stub archive saw in those fields when the handler added to it.
+    static SEEN: Cell<Option<[u64; 2]>> = const { Cell::new(None) };
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; the class has no ivars and no Drop.
+    #[unsafe(super(NSObject))]
+    #[name = "WinemetalG4StubArchive"]
+    struct StubArchive;
+
+    impl StubArchive {
+        #[unsafe(method(addRenderPipelineFunctionsWithDescriptor:error:))]
+        fn add_render(&self, _descriptor: &AnyObject, _error: *mut *mut NSError) -> bool {
+            let [pso, error] = WATCHED.get();
+            // SAFETY: the fields of the test's live params block.
+            let pso = unsafe { pso.read_volatile() };
+            // SAFETY: as above.
+            let error = unsafe { error.read_volatile() };
+            SEEN.set(Some([pso, error]));
+            true
+        }
+    }
+);
+
+impl StubArchive {
+    extern_methods!(
+        #[unsafe(method(new))]
+        #[unsafe(method_family = new)]
+        fn new() -> Retained<Self>;
+    );
+}
+
+#[test]
+fn a_render_pipeline_is_written_before_the_archive_add() {
+    // A nil device builds nothing and answers no error: the C writes that pair, then adds. An add
+    // that raises must find them written.
+    let archive = StubArchive::new();
+    let render = render_info(0, 0, handle(&*archive));
+    let mut call = UnixcallMtldeviceNewrenderpso { device: 0, info: mem(&render), ret_error: FILL, ret_pso: FILL };
+    WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
+    SEEN.set(None);
+    // SAFETY: a live params block.
+    assert_eq!(unsafe { mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut call).cast()) }, 0);
+    assert_eq!(SEEN.get(), Some([0, 0]), "slot 34");
+
+    // SAFETY: plain data, all zeroes is a valid value.
+    let vertex: WMTVertexDescriptorInfo = unsafe { core::mem::zeroed() };
+    let mut call = UnixcallMtldeviceNewrenderpsoVertex {
+        device: 0,
+        info: mem(&render),
+        vertex: mem(&vertex),
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
+    WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
+    SEEN.set(None);
+    // SAFETY: a live params block.
+    assert_eq!(unsafe { mtl_device_new_render_pipeline_state_with_vertex_descriptor(core::ptr::from_mut(&mut call).cast()) }, 0);
+    assert_eq!(SEEN.get(), Some([0, 0]), "slot 156");
 }

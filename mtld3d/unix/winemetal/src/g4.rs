@@ -8,7 +8,8 @@
 //! Where the C sends nil it still sends: an argument that is nil is sent as nil through a local
 //! re-declaration taking an `Option`, and a nil receiver answers the zeros of a message to nil.
 //! Where the C faults on a null pointer (a null params block member it dereferences) the handler
-//! sends nothing and writes nothing.
+//! sends nothing and writes nothing; slot 98's constant without data is the one exception, which
+//! reads as zeros where Metal reads it.
 
 use core::ffi::{c_char, c_void};
 use core::ptr::{self, NonNull};
@@ -52,6 +53,12 @@ const ASCII: NSUInteger = 1;
 
 /// How many buffer slots a pipeline descriptor's immutability masks cover.
 const BUFFER_SLOTS: usize = 31;
+
+/// How many zeros slot 98 gives a constant without data.
+///
+/// Twice the 32 bytes of the largest value Metal reads (macOS 27: types 0-159 tried with a guard
+/// page after the value, and all 16-bit types with a null pointer, which faults for 48 of them).
+const ZERO_VALUE_BYTES: usize = 64;
 
 extern_class!(
     /// `NSURL`, re-declared to send `-initFileURLWithPath:` a nil path, which raises.
@@ -587,22 +594,26 @@ fn render_pipeline_descriptor(info: &WMTRenderPipelineInfo) -> Retained<MTLRende
 }
 
 /// Slots 34 and 156: the pipeline of `descriptor` and its error, then the serialisation archive.
+///
+/// The pipeline and the error are written to the two fields before the add, as the C did, so an
+/// add that raises leaves them written.
 fn render_pipeline_state(
     device_handle: u64,
     info: &WMTRenderPipelineInfo,
     descriptor: &MTLRenderPipelineDescriptor,
-) -> (u64, u64) {
+    ret_pso: &mut u64,
+    ret_error: &mut u64,
+) {
     let options = pipeline_option(info.fail_on_binary_archive_miss);
     let (pso, error) = with_error(|error| {
         device(device_handle)?.new_render_pipeline_state(descriptor, options, ptr::null_mut(), error)
     });
-    let pso = ret_owned(pso);
+    *ret_pso = ret_owned(pso);
     let failed = error.is_some();
-    let error = ret_owned(error);
+    *ret_error = ret_owned(error);
     if !failed {
         add_functions(info.binary_archive_for_serialization, |a, e| a.add_render(descriptor, e));
     }
-    (pso, error)
 }
 
 /// Slot 34: a render pipeline state.
@@ -620,7 +631,7 @@ pub unsafe extern "C-unwind" fn mtl_device_new_render_pipeline_state(args: *mut 
         return STATUS_SUCCESS;
     };
     let descriptor = render_pipeline_descriptor(info);
-    (p.ret_pso, p.ret_error) = render_pipeline_state(p.device, info, &descriptor);
+    render_pipeline_state(p.device, info, &descriptor, &mut p.ret_pso, &mut p.ret_error);
     STATUS_SUCCESS
 }
 
@@ -676,7 +687,7 @@ pub unsafe extern "C-unwind" fn mtl_device_new_render_pipeline_state_with_vertex
         return STATUS_SUCCESS;
     };
     descriptor.setVertexDescriptor(Some(&vertex_descriptor(vertex)));
-    (p.ret_pso, p.ret_error) = render_pipeline_state(p.device, info, &descriptor);
+    render_pipeline_state(p.device, info, &descriptor, &mut p.ret_pso, &mut p.ret_error);
     STATUS_SUCCESS
 }
 
@@ -805,12 +816,16 @@ pub unsafe extern "C-unwind" fn mtl_library_new_function_with_constants(args: *m
     };
     let name = string_from_c_str(name);
     let values = MTLFunctionConstantValues::new();
+    // A constant without data goes to Metal as the C sent it. For most types Metal never reads the
+    // value: it records the type and the function then fails, with the error the C answered. For
+    // the 48 scalar, vector and long types (3-6, 16-19, 29-56, 81-88, 121-124) it reads up to 32
+    // bytes, where the C faulted: those read zeros, so no guest value crashes the host.
+    let zeros = [0_u8; ZERO_VALUE_BYTES];
     for constant in constants {
-        // SAFETY: the value's bytes, null is the C's fault (the constant is left out).
-        let Some(data) = NonNull::new(u64_to_usize(constant.data.ptr) as *mut c_void) else {
-            continue;
-        };
-        // SAFETY: `data` is the guest's value for the type; Metal checks the index.
+        let given = core::ptr::with_exposed_provenance_mut::<c_void>(u64_to_usize(constant.data.ptr));
+        let data = NonNull::new(given).unwrap_or_else(|| NonNull::from(&zeros).cast());
+        // SAFETY: `data` is the guest's value for the type, or zeros as large as any value Metal
+        // reads; Metal checks the index.
         unsafe {
             values.setConstantValue_type_atIndex(
                 data,
