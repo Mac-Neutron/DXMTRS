@@ -1,10 +1,9 @@
-//! What MSVC's static CRT supplies that the ARM64X link has no library for.
+//! What MSVC's static CRT supplies that llvm-mingw's has no library for.
 //!
-//! The i386 and `x86_64` DLLs link MSVC's `msvcrt.lib`, whose static part defines
-//! everything below. The two ARM64X halves link llvm-mingw's CRT instead (see
-//! `windows-arm64x` in the Makefile), which defines none of it, and MSVC's
-//! ARM64 and ARM64EC libraries are not available to this build. `MacNeutron`: so
-//! do the x86 DLLs of its VM guest (`cfg(mingw_crt)`, `MTLD3D_MINGW_CRT`).
+//! Every DLL of this crate links llvm-mingw's CRT (`src/d3d9/meson.build`: the
+//! ARM64X pair through `tools/arm64x-link.sh`, the VM guest's x86 pairs through
+//! meson), which defines none of it, and MSVC's libraries are not available to
+//! this build. `_fltused` comes from `src/util/rust_pe_rt.c`.
 
 use core::ffi::c_void;
 
@@ -14,22 +13,14 @@ use crate::DLL_THREAD_DETACH;
 ///
 /// std's `catch_unwind` emits a C++ type descriptor for the Rust panic, and the
 /// descriptor's first field points at this vtable, so the name has to resolve.
-/// Nothing ever reads through it. Every profile in `windows/Cargo.toml` builds
-/// with `panic = "abort"`, so no Rust panic is thrown as a C++ exception for a
+/// Nothing ever reads through it. Every profile this crate is built with
+/// (`dev`, `release`, `production`) sets `panic = "abort"`, so no Rust panic is thrown as a C++ exception for a
 /// handler to match. And a handler that did match one would not call through
 /// it either: the C++ frame handler (`__CxxFrameHandler3`, which Wine
 /// implements) compares a thrown type with a caught one by descriptor address
 /// and then by decorated name, never through the vtable.
 #[unsafe(export_name = "??_7type_info@@6B@")]
 pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
-
-/// MSVC's marker that an image uses floating point.
-///
-/// Which LLVM's x86 code for the `-msvc` targets references and MSVC's CRT defines; nothing reads
-/// it.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[unsafe(no_mangle)]
-pub static _fltused: i32 = 0;
 
 /// The TLS callback that tears down snmalloc's per-thread allocator.
 ///
@@ -68,14 +59,14 @@ pub fn attach() {
 
 /// Runs snmalloc's per-thread teardown when a thread exits.
 ///
-/// This is the part of MSVC's CRT that the x86 DLLs get from `__tlregdtor` and
-/// the TLS callback behind it, which run snmalloc's C++ `thread_local`
-/// destructor. llvm-mingw's `__tlregdtor` accepts a destructor and never runs
-/// it, so the ARM64X halves build snmalloc to be told about thread exit
+/// This is the part of MSVC's CRT that a DLL linked against it gets from
+/// `__tlregdtor` and the TLS callback behind it, which run snmalloc's C++
+/// `thread_local` destructor. llvm-mingw's `__tlregdtor` accepts a destructor
+/// and never runs it, so these DLLs build snmalloc to be told about thread exit
 /// instead, and are told here.
 ///
-/// Unlike the x86 DLLs, whose CRT callback runs the destructors on a process
-/// detach too, this one leaves a process detach alone, on purpose. Wine calls
+/// Unlike MSVC's CRT callback, which runs the destructors on a process detach
+/// too, this one leaves a process detach alone, on purpose. Wine calls
 /// TLS callbacks before the DLL's entry point, so a teardown there would run
 /// ahead of `DllMain`, whose detach at the exit of a process that created a
 /// device ends it so that the allocator is not torn down on Wine's 1 MB

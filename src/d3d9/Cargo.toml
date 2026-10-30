@@ -8,7 +8,7 @@ description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
 authors = ["Alexander Theissen <alex.theissen@me.com>"]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 bitflags = { workspace = true }

@@ -4,28 +4,26 @@ fn main() {
         return;
     }
 
-    // Where Wine keeps this target's libraries, and the path its per-arch
-    // objects carry inside `libwinecrt0.a`. The two differ for arm64ec: an
-    // ARM64X build (`--enable-archs=arm64ec,aarch64`) installs one archive
-    // under the native arch and packs BOTH arches' objects into it
-    // (`output_static_lib` in Wine's makedep adds `object_files[hybrid_arch]`),
-    // so the EC build takes the EC object out of the aarch64 archive. That also
-    // matches the loader, whose `get_pe_dir` knows no arm64ec directory and
-    // redirects a hybrid module requested as AMD64 to `aarch64-windows`.
+    // The path its per-arch objects carry inside `libwinecrt0.a`. An ARM64X
+    // build (`--enable-archs=arm64ec,aarch64`) installs one archive under the
+    // native arch and packs BOTH arches' objects into it (`output_static_lib`
+    // in Wine's makedep adds `object_files[hybrid_arch]`), so the EC build takes
+    // the EC object out of the aarch64 archive, which is the one
+    // `src/d3d9/meson.build` names for both halves (`MTLD3D_WINECRT0`, the
+    // absolute path of this target's `libwinecrt0.a`).
     //
     // Spelled out rather than defaulted, so a target we have not thought about
     // fails here instead of silently linking another arch's `unix_lib.o`.
-    let (lib_arch, object_arch) = match target.split('-').next().expect("target triple has an arch")
-    {
-        "x86_64" => ("x86_64-windows", "x86_64-windows"),
-        "i686" => ("i386-windows", "i386-windows"),
-        "aarch64" => ("aarch64-windows", "aarch64-windows"),
-        "arm64ec" => ("aarch64-windows", "arm64ec-windows"),
+    let object_arch = match target.split('-').next().expect("target triple has an arch") {
+        "x86_64" => "x86_64-windows",
+        "i686" => "i386-windows",
+        "aarch64" => "aarch64-windows",
+        "arm64ec" => "arm64ec-windows",
         arch => panic!("no Wine builtin directory known for target arch `{arch}`"),
     };
 
-    let wine_sdk = std::env::var("WINE_SDK").expect("WINE_SDK must be set");
-    let lib_dir = format!("{wine_sdk}/lib/wine/{lib_arch}");
+    let winecrt0 =
+        std::env::var("MTLD3D_WINECRT0").expect("MTLD3D_WINECRT0 must name libwinecrt0.a");
     let out_dir = std::env::var("OUT_DIR").unwrap();
 
     // `llvm-ar` is never on PATH under either of the names it can arrive as, so
@@ -36,34 +34,23 @@ fn main() {
     let llvm_ar = std::env::var("LLVM_AR").unwrap_or_else(|_| resolve_llvm_ar());
 
     // Take just unix_lib.o out of winecrt0.a, which avoids the TLS symbol
-    // conflicts with MSVC's CRT (both define __tls_index, __tls_start, etc.).
+    // conflicts with the CRT (both define __tls_index, __tls_start, etc.).
     // Absolute, because the extraction runs with its working directory set to
     // `OUT_DIR`; canonicalizing here also turns a missing archive into an error
     // naming the file rather than an `ar` failure.
-    let archive = std::fs::canonicalize(format!("{lib_dir}/libwinecrt0.a"))
-        .unwrap_or_else(|err| panic!("{lib_dir}/libwinecrt0.a: {err}"));
+    let archive =
+        std::fs::canonicalize(&winecrt0).unwrap_or_else(|err| panic!("{winecrt0}: {err}"));
     let unix_lib_path =
         extract_unix_lib(&llvm_ar, &archive.to_string_lossy(), object_arch, &out_dir);
 
-    // The two ARM64X halves are built as static libraries and linked into one
-    // image by the Makefile, and cargo hands link arguments to a cdylib only.
-    // So for those the object travels inside the static library instead, as a
-    // native library rustc bundles into it; the link that follows pulls it in
-    // through the unix-call symbols the shim references. MacNeutron: so do the
-    // x86 DLLs linked on llvm-mingw's CRT (`MTLD3D_MINGW_CRT`, the VM guest's).
-    if matches!(object_arch, "aarch64-windows" | "arm64ec-windows")
-        || std::env::var_os("MTLD3D_MINGW_CRT").is_some()
-    {
-        bundle_unix_lib(&llvm_ar, &unix_lib_path, &out_dir);
-    } else {
-        println!("cargo:rustc-link-arg-cdylib={unix_lib_path}");
+    // Every DLL links the crate as a static library (`src/d3d9/meson.build`),
+    // and cargo hands link arguments to a cdylib only. So the object travels
+    // inside the static library, as a native library rustc bundles into it;
+    // the link that follows pulls it in through the unix-call symbols the
+    // shim references.
+    bundle_unix_lib(&llvm_ar, &unix_lib_path, &out_dir);
 
-        // Preserve Wine's long DWARF section names without linker warnings.
-        println!("cargo:rustc-link-arg-cdylib=/ignore:longsections");
-    }
-
-    println!("cargo:rerun-if-env-changed=WINE_SDK");
-    println!("cargo:rerun-if-env-changed=MTLD3D_MINGW_CRT");
+    println!("cargo:rerun-if-env-changed=MTLD3D_WINECRT0");
     println!("cargo:rerun-if-env-changed=LLVM_AR");
 }
 
@@ -82,7 +69,7 @@ fn main() {
 /// # Panics
 ///
 /// If the archive is unreadable or carries no `unix_lib.o` for this arch, which
-/// is what a `WINE_SDK` built without this architecture looks like.
+/// is what a Wine built without this architecture looks like.
 fn extract_unix_lib(llvm_ar: &str, archive: &str, object_arch: &str, out_dir: &str) -> String {
     let listing = std::process::Command::new(llvm_ar)
         .args(["t", archive])
@@ -90,7 +77,7 @@ fn extract_unix_lib(llvm_ar: &str, archive: &str, object_arch: &str, out_dir: &s
         .expect("ar failed");
     assert!(
         listing.status.success(),
-        "could not read {archive}: is WINE_SDK a Wine build tree carrying this architecture?"
+        "could not read {archive}: is it a Wine build carrying this architecture?"
     );
     let listing = String::from_utf8(listing.stdout).expect("ar member names are UTF-8");
 
@@ -199,10 +186,10 @@ fn resolve_llvm_ar() -> String {
 /// `llvm-ar` from the active toolchain's `llvm-tools` component.
 ///
 /// The first choice, because it needs nothing installed beyond the toolchain
-/// this build is already running under, and `make setup-rust` installs that
-/// component for exactly this (and for the `lld-link`/`llvm-lib` symlinks it
-/// creates from the same directory). `None` when the component is absent, which
-/// is what a toolchain installed without it looks like.
+/// this build is already running under (MacNeutron's build installs that
+/// component, and links `lld-link`/`llvm-lib` from the same directory).
+/// `None` when the component is absent, which is what a toolchain installed
+/// without it looks like.
 fn toolchain_llvm_ar() -> Option<String> {
     let rustc = std::env::var("RUSTC").ok()?;
     let host = std::env::var("HOST").ok()?;

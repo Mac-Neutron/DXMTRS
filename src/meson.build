@@ -5,6 +5,7 @@ if not dxmt_crossbuild
 subdir('nativemetal')
 else
 subdir('winemetal')
+subdir('d3d9')
 endif
 
 subdir('dxmt')
