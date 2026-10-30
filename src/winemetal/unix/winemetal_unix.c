@@ -55,9 +55,6 @@ NTSTATUS _MTLSharedEvent_signaledValue(void *obj);
 
 NTSTATUS _MTLCommandBuffer_encodeSignalEvent(void *obj);
 
-#ifdef DXMT_NATIVE
-#endif
-
 NTSTATUS _MTLDevice_newBuffer(void *obj);
 
 NTSTATUS _MTLDevice_newSamplerState(void *obj);
@@ -127,11 +124,6 @@ NTSTATUS _MTLTexture_mipmapLevelCount(void *obj);
 NTSTATUS _MTLTexture_replaceRegion(void *obj);
 
 NTSTATUS _MTLBuffer_didModifyRange(void *obj);
-
-#ifdef DXMT_NATIVE
-
-#else
-#endif
 
 NTSTATUS _MTLCommandBuffer_presentDrawable(void *obj);
 
