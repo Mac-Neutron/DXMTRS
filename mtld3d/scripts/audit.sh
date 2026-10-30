@@ -36,6 +36,9 @@ unix/shared/src/trig.rs
 unix/unix/src/metal/command.rs
 unix/unix/src/metal/macdrv.rs
 unix/winemetal/src/float_cast.rs
+unix/winemetal/src/g3/blit.rs
+unix/winemetal/src/g3/render.rs
+unix/winemetal/src/g6.rs
 windows/core/src/config.rs
 windows/dxmt-util/src/float_cast.rs'
 
