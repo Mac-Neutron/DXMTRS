@@ -29,6 +29,11 @@ namespace dxmt::dxbc {
 class SM50ShaderInternal;
 }
 
+namespace microsoft {
+class CSignatureParser;
+class CSignatureParser5;
+}
+
 // The DXIL front end's units, as airconv (dxbc_converter.cpp) and each other use them.
 namespace dxmt::dxil {
 
@@ -51,6 +56,12 @@ bool ModuleCallsOp(const llvm::Module &module, uint32_t opcode);
 
 // dxil_initialize.cpp: SM50Initialize's DXIL branch.
 llvm::Error InitializeDXIL(const Container &container, dxbc::SM50ShaderInternal *shader, MTL_SHADER_REFLECTION *refl);
+
+// dxil_entry.cpp: DXILGetEntry's arrays, set on the handle by SM50Initialize (test use): a DXIL shader's entry, or a
+// DXBC shader's ISGN and OSGN (the rasterized stream).
+void BuildEntryView(dxbc::SM50ShaderInternal *shader);
+void BuildEntryView(dxbc::SM50ShaderInternal *shader, const microsoft::CSignatureParser &input,
+                    const microsoft::CSignatureParser5 &output);
 
 // dxil_signature.cpp: pushes the signature handlers (entry point inputs/outputs) for this stage, and fills
 // `unpacked_inputs` (see DXILShader). `quads_2d` (DXILShader's) remaps a compute shader's thread IDs; `flat_index`

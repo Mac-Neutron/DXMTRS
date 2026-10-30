@@ -22,6 +22,7 @@ airconv_src = files([
  'dxil/dxil_initialize.cpp',
  'dxil/dxil_signature.cpp',
  'dxil/dxil_passthrough.cpp',
+ 'dxil/dxil_entry.cpp',
  'dxil/dxil_converter.cpp',
  'dxil/dxil_lower.cpp',
  'dxil/dxil_lower_resources.cpp',

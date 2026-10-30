@@ -461,6 +461,8 @@ public:
   uint32_t ps_has_coverage_output = 0;
   /* MacNeutron: set for a DXIL shader, whose SM50Compile takes the DXIL front end (dxil/) instead of bbs */
   std::shared_ptr<const dxmt::dxil::DXILShader> dxil;
+  /* MacNeutron: DXILGetEntry's arrays (dxil/dxil_entry.cpp), built at SM50Initialize; test use */
+  std::shared_ptr<const dxmt::dxil::EntryView> entry_view;
 
   BasicBlock *entry() const {
     return bbs.front().get();

@@ -1022,6 +1022,7 @@ AIRCONV_API int SM50Initialize(
         errorOut << llvm::toString(std::move(err));
         SM50_RETURN_ERROR(errorObj, ppError, 1);
       }
+      dxmt::dxil::BuildEntryView(sm50_shader);
       *ppShader = (sm50_shader_t)sm50_shader;
       return 0;
     }
@@ -1326,6 +1327,7 @@ AIRCONV_API int SM50Initialize(
     pRefl->ArgumentTableQwords = binding_table.Size();
   }
 
+  dxmt::dxil::BuildEntryView(sm50_shader.get(), inputParser, outputParser);
   *ppShader = (sm50_shader_t)sm50_shader.release();
   return 0;
 };

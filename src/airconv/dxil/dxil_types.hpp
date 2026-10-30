@@ -144,6 +144,9 @@ struct DXILShader {
   uint64_t capture_hash = 0; // FNV-1a of the whole container, as capture mode names the shader (MacNeutron)
 };
 
+// DXILGetEntry's arrays, owned by the shader handle (dxil_entry.cpp).
+struct EntryView;
+
 // Vertex shaders' unpacked SV_VertexID/SV_InstanceID read io_binding_map's vertex_id/instance_id instead of an argument.
 constexpr uint32_t kUnpackedVertexID = ~0u, kUnpackedInstanceID = ~0u - 1;
 
