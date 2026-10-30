@@ -4,7 +4,6 @@
 #include "d3d11_private.h"
 #include "dxgi_interfaces.h"
 #include "dxgi_object.hpp"
-#include "dxgi_output.hpp"
 #include "d3d11_context.hpp"
 #include "dxmt_context.hpp"
 #include "dxmt_hud_state.hpp"
@@ -334,6 +333,9 @@ public:
     output->GetDesc(&desc);
 
     monitor_ = desc.Monitor;
+    // Another vendor's output has no gamma ramp of ours: presents go on without one.
+    gamma_output_ = nullptr;
+    output->QueryInterface(IID_PPV_ARGS(&gamma_output_));
     target_  = std::move(output);
 
     lock = {};
@@ -360,6 +362,7 @@ public:
     // Restore internal state
     fullscreen_desc_.Windowed = TRUE;
     target_  = nullptr;
+    gamma_output_ = nullptr;
     monitor_ = wsi::getWindowMonitor(hWnd);
     
     if (!wsi::isWindow(hWnd))
@@ -800,10 +803,8 @@ public:
     auto &cmd_queue = device_->GetDXMTDevice().queue();
     auto chunk = cmd_queue.CurrentChunk();
     chunk->signal_frame_latency_fence_ = cmd_queue.CurrentFrameSeq();
-    if (target_) {
-      auto output = static_cast<MTLDXGIOutput *>(target_.ptr());
-      presenter->changeGammaRamp(output->GetGammaRamp());
-    }
+    if (gamma_output_)
+      presenter->changeGammaRamp(gamma_output_->GetGammaRamp());
     if constexpr (EnableMetalFX) {
       chunk->emitcc([
         this, vsync_duration, backbuffer = backbuffer_->texture(),
@@ -1101,6 +1102,7 @@ private:
   HWND hWnd;
   HMONITOR monitor_;
   Com<IDXGIOutput1> target_;
+  Com<IMTLDXGIOutput> gamma_output_;
   wsi::DXMTWindowState window_state_;
   uint32_t frame_latency;
   DXGI_COLOR_SPACE_TYPE colorspace_ = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;

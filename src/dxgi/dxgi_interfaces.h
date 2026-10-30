@@ -11,6 +11,16 @@ DEFINE_COM_INTERFACE("acdf3ef1-b33a-4cb6-97bd-1c1974827e6d", IMTLDXGIAdapter)
   virtual D3DKMT_HANDLE STDMETHODCALLTYPE GetLocalD3DKMT() = 0;
 };
 
+namespace dxmt {
+struct DXMTGammaRamp;
+} // namespace dxmt
+
+// The output's gamma ramp, which d3d11's swap chain reads at each fullscreen present (slot 29).
+DEFINE_COM_INTERFACE("4c1128cd-b437-4d44-9958-5d765bb85a76", IMTLDXGIOutput)
+    : public IDXGIOutput6 {
+  virtual const dxmt::DXMTGammaRamp *STDMETHODCALLTYPE GetGammaRamp() = 0;
+};
+
 DEFINE_COM_INTERFACE("6bfa1657-9cb1-471a-a4fb-7cacf8a81207", IMTLDXGIDevice)
     : public IDXGIDevice3 {
   virtual WMT::Device STDMETHODCALLTYPE GetMTLDevice() = 0;

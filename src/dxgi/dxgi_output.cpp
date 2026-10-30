@@ -4,7 +4,7 @@
 #include "com/com_guid.hpp"
 #include "com/com_pointer.hpp"
 #include "dxgi_interfaces.h"
-#include "dxgi_output.hpp"
+#include "dxgi_object.hpp"
 #include "dxgi_options.hpp"
 #include "dxmt_format.hpp"
 #include "dxmt_presenter.hpp"
@@ -135,7 +135,7 @@ void FilterModesByDesc(std::vector<DXGI_MODE_DESC1> &Modes,
   }
 }
 
-class MTLDXGIOutputImpl : public MTLDXGIOutput {
+class MTLDXGIOutputImpl : public MTLDXGIObject<IMTLDXGIOutput> {
 public:
   MTLDXGIOutputImpl(IMTLDXGIAdapter *adapter, HMONITOR monitor, DxgiOptions &options)
       : adapter_(adapter), monitor_(monitor), options_(options) {
@@ -171,7 +171,7 @@ public:
         riid == __uuidof(IDXGIOutput) || riid == __uuidof(IDXGIOutput1) ||
         riid == __uuidof(IDXGIOutput2) || riid == __uuidof(IDXGIOutput3) ||
         riid == __uuidof(IDXGIOutput4) || riid == __uuidof(IDXGIOutput5) ||
-        riid == __uuidof(IDXGIOutput6)) {
+        riid == __uuidof(IDXGIOutput6) || riid == __uuidof(IMTLDXGIOutput)) {
       *ppvObject = ref(this);
       return S_OK;
     }
