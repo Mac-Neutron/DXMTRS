@@ -219,160 +219,13 @@ _MTLCaptureManager_stopCapture(void *obj) {
   return STATUS_SUCCESS;
 }
 
-#include <signal.h>
+NTSTATUS _MTLDevice_newTemporalScaler(void *obj);
 
-void
-temp_handler(int signum) {
-  fprintf(stderr, "received signal %d in temp_handler(), and it may cause problem!\n", signum);
-}
+NTSTATUS _MTLDevice_newSpatialScaler(void *obj);
 
-static const int SIGNALS[] = {
-    SIGHUP,
-    SIGINT,
-    SIGTERM,
-    SIGUSR2,
-    SIGILL,
-    SIGTRAP,
-    SIGABRT,
-    SIGFPE,
-    SIGBUS,
-    SIGSEGV,
-    SIGQUIT
-#ifdef SIGSYS
-    ,
-    SIGSYS
-#endif
-#ifdef SIGXCPU
-    ,
-    SIGXCPU
-#endif
-#ifdef SIGXFSZ
-    ,
-    SIGXFSZ
-#endif
-#ifdef SIGEMT
-    ,
-    SIGEMT
-#endif
-    ,
-    SIGUSR1
-#ifdef SIGINFO
-    ,
-    SIGINFO
-#endif
-};
+NTSTATUS _MTLCommandBuffer_encodeTemporalScale(void *obj);
 
-static NTSTATUS
-_MTLDevice_newTemporalScaler(void *obj) {
-  struct unixcall_mtldevice_newfxtemporalscaler *params = obj;
-  MTLFXTemporalScalerDescriptor *desc = [[MTLFXTemporalScalerDescriptor alloc] init];
-  const struct WMTFXTemporalScalerInfo *info = params->info.ptr;
-  desc.colorTextureFormat = to_metal_pixel_format(info->color_format);
-  desc.outputTextureFormat = to_metal_pixel_format(info->output_format);
-  desc.depthTextureFormat = to_metal_pixel_format(info->depth_format);
-  desc.motionTextureFormat = to_metal_pixel_format(info->motion_format);
-  desc.inputWidth = info->input_width;
-  desc.inputHeight = info->input_height;
-  desc.outputWidth = info->output_width;
-  desc.outputHeight = info->output_height;
-  desc.inputContentMaxScale = info->input_content_max_scale;
-  desc.inputContentMinScale = info->input_content_min_scale;
-  desc.inputContentPropertiesEnabled = info->input_content_properties_enabled;
-  #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
-  if (@available(macOS 15, *)) {
-    desc.requiresSynchronousInitialization = info->requires_synchronous_initialization;
-  }
-  #endif
-  desc.autoExposureEnabled = info->auto_exposure;
-  desc.reactiveMaskTextureEnabled = info->reactive_mask_enabled;
-  if (info->reactive_mask_enabled)
-    desc.reactiveMaskTextureFormat = to_metal_pixel_format(info->reactive_mask_format);
-  desc.outputResolutionMotionVectorsEnabled = info->output_resolution_motion_vectors;
-  desc.jitteredMotionVectorsEnabled = info->jittered_motion_vectors;
-
-  struct sigaction old_action[sizeof(SIGNALS) / sizeof(int)], new_action;
-  if (@available(macOS 16, *)) {} else {
-    new_action.sa_handler = temp_handler;
-    sigemptyset(&new_action.sa_mask);
-    new_action.sa_flags = 0;
-    for (unsigned int i = 0; i < sizeof(SIGNALS) / sizeof(int); i++)
-      sigaction(SIGNALS[i], &new_action, &old_action[i]);
-  }
-
-  params->ret = (obj_handle_t)[desc newTemporalScalerWithDevice:(id<MTLDevice>)params->device];
-
-  if (@available(macOS 16, *)) {} else {
-    for (unsigned int i = 0; i < sizeof(SIGNALS) / sizeof(int); i++)
-      sigaction(SIGNALS[i], &old_action[i], NULL);
-  }
-
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLDevice_newSpatialScaler(void *obj) {
-  struct unixcall_mtldevice_newfxspatialscaler *params = obj;
-  MTLFXSpatialScalerDescriptor *desc = [[MTLFXSpatialScalerDescriptor alloc] init];
-  const struct WMTFXSpatialScalerInfo *info = params->info.ptr;
-  desc.colorTextureFormat = to_metal_pixel_format(info->color_format);
-  desc.outputTextureFormat = to_metal_pixel_format(info->output_format);
-  desc.inputWidth = info->input_width;
-  desc.inputHeight = info->input_height;
-  desc.outputWidth = info->output_width;
-  desc.outputHeight = info->output_height;
-  params->ret = (obj_handle_t)[desc newSpatialScalerWithDevice:(id<MTLDevice>)params->device];
-  [desc release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCommandBuffer_encodeTemporalScale(void *obj) {
-  struct unixcall_mtlcommandbuffer_temporal_scale *params = obj;
-  id<MTLCommandBuffer> cmdbuf = (id<MTLCommandBuffer>)params->cmdbuf;
-  id<MTLFXTemporalScaler> scaler = (id<MTLFXTemporalScaler>)params->scaler;
-  scaler.colorTexture = (id<MTLTexture>)params->color;
-  scaler.outputTexture = (id<MTLTexture>)params->output;
-  scaler.depthTexture = (id<MTLTexture>)params->depth;
-  scaler.motionTexture = (id<MTLTexture>)params->motion;
-  scaler.exposureTexture = (id<MTLTexture>)params->exposure;
-  scaler.fence = (id<MTLFence>)params->fence;
-  const struct WMTFXTemporalScalerProps *props = params->props.ptr;
-  scaler.inputContentWidth = props->input_content_width;
-  scaler.inputContentHeight = props->input_content_height;
-  scaler.reset = props->reset;
-  scaler.depthReversed = props->depth_reversed;
-  scaler.motionVectorScaleX = props->motion_vector_scale_x;
-  scaler.motionVectorScaleY = props->motion_vector_scale_y;
-  scaler.jitterOffsetX = props->jitter_offset_x;
-  scaler.jitterOffsetY = props->jitter_offset_y;
-  scaler.preExposure = props->pre_exposure;
-  scaler.reactiveMaskTexture = (id<MTLTexture>)params->reactive_mask;
-  scaler.colorContentOffsetX = props->color_content_offset_x;
-  scaler.colorContentOffsetY = props->color_content_offset_y;
-  scaler.depthContentOffsetX = props->depth_content_offset_x;
-  scaler.depthContentOffsetY = props->depth_content_offset_y;
-  scaler.motionContentOffsetX = props->motion_content_offset_x;
-  scaler.motionContentOffsetY = props->motion_content_offset_y;
-  scaler.reactiveMaskContentOffsetX = props->reactive_mask_content_offset_x;
-  scaler.reactiveMaskContentOffsetY = props->reactive_mask_content_offset_y;
-  scaler.outputOffsetX = props->output_offset_x;
-  scaler.outputOffsetY = props->output_offset_y;
-  [scaler encodeToCommandBuffer:cmdbuf];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLCommandBuffer_encodeSpatialScale(void *obj) {
-  struct unixcall_mtlcommandbuffer_spatial_scale *params = obj;
-  id<MTLCommandBuffer> cmdbuf = (id<MTLCommandBuffer>)params->cmdbuf;
-  id<MTLFXSpatialScaler> scaler = (id<MTLFXSpatialScaler>)params->scaler;
-  scaler.colorTexture = (id<MTLTexture>)params->color;
-  scaler.outputTexture = (id<MTLTexture>)params->output;
-  scaler.fence = (id<MTLFence>)params->fence;
-  [scaler encodeToCommandBuffer:cmdbuf];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_encodeSpatialScale(void *obj);
 
 NTSTATUS _NSString_string(void *obj);
 
@@ -455,19 +308,9 @@ _MetalLayer_nextDrawable(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-_MTLDevice_supportsFXSpatialScaler(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [MTLFXSpatialScalerDescriptor supportsDevice:(id<MTLDevice>)params->handle];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_supportsFXSpatialScaler(void *obj);
 
-static NTSTATUS
-_MTLDevice_supportsFXTemporalScaler(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [MTLFXTemporalScalerDescriptor supportsDevice:(id<MTLDevice>)params->handle];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_supportsFXTemporalScaler(void *obj);
 
 static NTSTATUS
 _MetalLayer_setProps(void *obj) {
@@ -1607,69 +1450,11 @@ NTSTATUS _MTLDevice_sampleTimestamps(void *obj);
 
 NTSTATUS _DispatchData_copyBytes(void *obj);
 
-static NTSTATUS
-_MTLDevice_temporalScalerScaleRange(void *obj) {
-  struct unixcall_mtldevice_fxtemporalscaler_scale *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  params->min_scale = [MTLFXTemporalScalerDescriptor supportedInputContentMinScaleForDevice:device];
-  params->max_scale = [MTLFXTemporalScalerDescriptor supportedInputContentMaxScaleForDevice:device];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_temporalScalerScaleRange(void *obj);
 
-/* MacNeutron (frame generation on MetalFX): macOS 26's frame interpolator; nil before it, or when MetalFX makes none. */
-static NTSTATUS
-_MTLDevice_newFrameInterpolator(void *obj) {
-  struct unixcall_mtldevice_newfxframeinterpolator *params = obj;
-  params->ret = 0;
-  if (@available(macOS 26, *)) {
-    const struct WMTFXFrameInterpolatorInfo *info = params->info.ptr;
-    MTLFXFrameInterpolatorDescriptor *desc = [[MTLFXFrameInterpolatorDescriptor alloc] init];
-    desc.colorTextureFormat = to_metal_pixel_format(info->color_format);
-    desc.outputTextureFormat = to_metal_pixel_format(info->output_format);
-    desc.depthTextureFormat = to_metal_pixel_format(info->depth_format);
-    desc.motionTextureFormat = to_metal_pixel_format(info->motion_format);
-    desc.uiTextureFormat = MTLPixelFormatInvalid;
-    desc.inputWidth = info->input_width;
-    desc.inputHeight = info->input_height;
-    desc.outputWidth = info->output_width;
-    desc.outputHeight = info->output_height;
-    if (info->scaler)
-      desc.scaler = (id<MTLFXFrameInterpolatableScaler>)info->scaler;
-    if ([MTLFXFrameInterpolatorDescriptor supportsDevice:(id<MTLDevice>)params->device])
-      params->ret = (obj_handle_t)[desc newFrameInterpolatorWithDevice:(id<MTLDevice>)params->device];
-    [desc release];
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newFrameInterpolator(void *obj);
 
-static NTSTATUS
-_MTLCommandBuffer_encodeFrameInterpolate(void *obj) {
-  struct unixcall_mtlcommandbuffer_frame_interpolate *params = obj;
-  if (@available(macOS 26, *)) {
-    id<MTLFXFrameInterpolator> interpolator = (id<MTLFXFrameInterpolator>)params->interpolator;
-    const struct WMTFXFrameInterpolatorProps *props = params->props.ptr;
-    interpolator.colorTexture = (id<MTLTexture>)params->color;
-    interpolator.prevColorTexture = (id<MTLTexture>)params->prev_color;
-    interpolator.depthTexture = (id<MTLTexture>)params->depth;
-    interpolator.motionTexture = (id<MTLTexture>)params->motion;
-    interpolator.outputTexture = (id<MTLTexture>)params->output;
-    interpolator.fence = (id<MTLFence>)params->fence;
-    interpolator.motionVectorScaleX = props->motion_vector_scale_x;
-    interpolator.motionVectorScaleY = props->motion_vector_scale_y;
-    interpolator.deltaTime = props->delta_time;
-    interpolator.nearPlane = props->near_plane;
-    interpolator.farPlane = props->far_plane;
-    interpolator.fieldOfView = props->field_of_view;
-    interpolator.aspectRatio = props->aspect_ratio;
-    interpolator.jitterOffsetX = props->jitter_offset_x;
-    interpolator.jitterOffsetY = props->jitter_offset_y;
-    interpolator.shouldResetHistory = props->reset;
-    interpolator.depthReversed = props->depth_reversed;
-    interpolator.isUITextureComposited = props->ui_composited;
-    [interpolator encodeToCommandBuffer:(id<MTLCommandBuffer>)params->cmdbuf];
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLCommandBuffer_encodeFrameInterpolate(void *obj);
 
 NTSTATUS _MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(void *obj);
 
