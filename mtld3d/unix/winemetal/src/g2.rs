@@ -761,9 +761,10 @@ pub unsafe extern "C-unwind" fn buffer_update_contents(args: *mut c_void) -> i32
     };
     let offset = u64_to_usize(p.offset);
     let length = u64_to_usize(p.length);
+    // Sent at any length, as the C sends it, so a handle that cannot answer it is refused.
+    let contents = buffer.contents_ptr().cast::<u8>();
     if length != 0 {
         let source = address(p.data.ptr).cast::<u8>();
-        let contents = buffer.contents_ptr().cast::<u8>();
         if source.is_null() || contents.is_null() {
             return STATUS_SUCCESS;
         }

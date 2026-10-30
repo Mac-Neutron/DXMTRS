@@ -1,6 +1,9 @@
 use core::mem::size_of;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLResourceOptions};
+use objc2::{define_class, extern_methods};
+use objc2_foundation::NSObject;
+use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLResourceOptions, MTLStorageMode};
 
 use super::*;
 use crate::ffi::Handler;
@@ -177,6 +180,53 @@ fn update_contents_of_no_bytes_copies_nothing() {
     let handle = Retained::as_ptr(&buffer).expose_provenance() as u64;
     assert_eq!(update(handle, 4, core::ptr::null(), 0), 0);
     assert_eq!(bytes(&buffer, 16), vec![0xa5_u8; 16]);
+}
+
+/// How many `-contents` sends [`NotABuffer`] has answered.
+static CONTENTS_SENT: AtomicUsize = AtomicUsize::new(0);
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements. This fixture has no ivars or Drop.
+    /// A handle of the wrong class.
+    ///
+    /// It counts the `-contents` sends it gets and answers `-storageMode` as a private buffer does.
+    #[unsafe(super(NSObject))]
+    #[name = "WinemetalTestNotABuffer"]
+    struct NotABuffer;
+
+    impl NotABuffer {
+        // SAFETY: the signature is `-contents`'s, a pointer.
+        #[unsafe(method(contents))]
+        fn contents(&self) -> *mut c_void {
+            CONTENTS_SENT.fetch_add(1, Ordering::SeqCst);
+            core::ptr::null_mut()
+        }
+
+        // SAFETY: the signature is `-storageMode`'s, an `NSUInteger` enum.
+        #[unsafe(method(storageMode))]
+        fn storage_mode(&self) -> MTLStorageMode {
+            MTLStorageMode::Private
+        }
+    }
+);
+
+impl NotABuffer {
+    extern_methods!(
+        // SAFETY: NSObject's inherited new initializes this subclass, which has no ivars.
+        #[unsafe(method(new))]
+        #[unsafe(method_family = new)]
+        fn new() -> Retained<Self>;
+    );
+}
+
+#[test]
+fn update_contents_of_no_bytes_still_sends_contents() {
+    // The C sends `-contents` first, so a handle that cannot answer it is refused at any length.
+    let handle = NotABuffer::new();
+    let before = CONTENTS_SENT.load(Ordering::SeqCst);
+    let handle = Retained::as_ptr(&handle).expose_provenance() as u64;
+    assert_eq!(update(handle, 0, core::ptr::null(), 0), 0);
+    assert_eq!(CONTENTS_SENT.load(Ordering::SeqCst), before + 1);
 }
 
 #[test]
