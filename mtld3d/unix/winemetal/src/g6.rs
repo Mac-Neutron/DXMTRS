@@ -48,6 +48,9 @@ extern_class!(
 impl HudService {
     extern_methods!(
         /// `-insertMetric:after:name:unit:nameColor:valueColor:visualType:options:`.
+        // allow: the C's private 8-argument selector in objc2's selector shape
+        // (CONVENTIONS exception 4's class).
+        #[allow(clippy::too_many_arguments)]
         #[unsafe(method(insertMetric:after:name:unit:nameColor:valueColor:visualType:options:))]
         #[unsafe(method_family = none)]
         fn insert_metric(
