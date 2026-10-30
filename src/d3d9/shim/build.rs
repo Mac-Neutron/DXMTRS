@@ -186,8 +186,9 @@ fn resolve_llvm_ar() -> String {
 /// `llvm-ar` from the active toolchain's `llvm-tools` component.
 ///
 /// The first choice, because it needs nothing installed beyond the toolchain
-/// this build is already running under (MacNeutron's build installs that
-/// component, and links `lld-link`/`llvm-lib` from the same directory).
+/// this build is already running under (the build's tools folder links
+/// `lld-link` and `llvm-lib` from the same directory, so the component is
+/// installed there).
 /// `None` when the component is absent, which is what a toolchain installed
 /// without it looks like.
 fn toolchain_llvm_ar() -> Option<String> {

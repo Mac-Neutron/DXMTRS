@@ -2,56 +2,56 @@
 #
 # Mechanical gate for the rules in docs/CONVENTIONS.md that a linter cannot
 # express. clippy covers lint-shaped rules; these are the grep-shaped ones,
-# and without a gate they drift. Run by `make audit`, which `make check` calls
+# and without a gate they drift. Run by tools/rust-check.sh, the gate to pass
 # before every commit.
 #
-#   scripts/audit.sh                  audit the whole tree
-#   scripts/audit.sh --file <path>    the per-file subset, for an editor hook
-#   scripts/audit.sh --update-derives regenerate scripts/derive_inventory.txt
+#   tools/audit.sh                  audit the whole tree
+#   tools/audit.sh --file <path>    the per-file subset, for an editor hook
+#   tools/audit.sh --update-derives regenerate tools/derive_inventory.txt
 #
 # POSIX sh + awk only: no bashisms, and no GNU awk extensions (`\s`, `\b`),
 # since the stock macOS awk has neither.
 
 set -eu
 
-# mtld3d lives in a subfolder of DXMTRS, so the repository root is not the folder the rules are relative to.
+# The rules are relative to the repository root, whatever folder the caller is in.
 cd "$(dirname "$0")/.."
 
-INVENTORY=scripts/derive_inventory.txt
-COVERAGE=windows/tests/COVERAGE.md
-COVERAGE_TESTS=windows/tests/tests
+INVENTORY=tools/derive_inventory.txt
+COVERAGE=tests/d3d9/programs/COVERAGE.md
+COVERAGE_TESTS=tests/d3d9/programs/tests
 
 # Files permitted to hold each narrowly-scoped exception. These are sets, not
 # counts: a new site fails even if an old one was deleted in the same change.
-ALLOW_SITES='unix/mtl/src/foundation.rs
-unix/mtl/src/lib.rs
-unix/mtl/src/metal.rs
-unix/mtl/src/metal/command.rs
-unix/mtl/src/metal/types.rs
-unix/mtl/src/metal_fx.rs
-unix/mtl/src/quartz_core.rs
-unix/mtl/tests/common.rs
-unix/shared/src/ftol.rs
-unix/shared/src/trig.rs
-unix/unix/src/metal/command.rs
-unix/unix/src/metal/macdrv.rs
-unix/winemetal/src/float_cast.rs
-unix/winemetal/src/g3/blit.rs
-unix/winemetal/src/g3/render.rs
-unix/winemetal/src/g6.rs
-windows/core/src/config.rs
-windows/dxmt-util/src/float_cast.rs'
+ALLOW_SITES='src/d3d9/mtl/src/foundation.rs
+src/d3d9/mtl/src/lib.rs
+src/d3d9/mtl/src/metal.rs
+src/d3d9/mtl/src/metal/command.rs
+src/d3d9/mtl/src/metal/types.rs
+src/d3d9/mtl/src/metal_fx.rs
+src/d3d9/mtl/src/quartz_core.rs
+src/d3d9/mtl/tests/common.rs
+src/d3d9/shared/src/ftol.rs
+src/d3d9/shared/src/trig.rs
+src/d3d9/unix/src/metal/command.rs
+src/d3d9/unix/src/metal/macdrv.rs
+src/winemetal/unix/src/float_cast.rs
+src/winemetal/unix/src/g3/blit.rs
+src/winemetal/unix/src/g3/render.rs
+src/winemetal/unix/src/g6.rs
+src/d3d9/core/src/config.rs
+src/util/src/float_cast.rs'
 
-ONCELOCK_SITES='unix/shared/src/crumb.rs
-windows/core/src/page_box.rs
-unix/unix/src/metal/blit.rs
-unix/unix/src/metal/clear_quad.rs
-unix/unix/src/metal/null_texture.rs
-unix/unix/src/metal/present.rs
-unix/unix/src/metal/upload_quad.rs
-unix/unix/src/metal/upscale.rs'
+ONCELOCK_SITES='src/d3d9/shared/src/crumb.rs
+src/d3d9/core/src/page_box.rs
+src/d3d9/unix/src/metal/blit.rs
+src/d3d9/unix/src/metal/clear_quad.rs
+src/d3d9/unix/src/metal/null_texture.rs
+src/d3d9/unix/src/metal/present.rs
+src/d3d9/unix/src/metal/upload_quad.rs
+src/d3d9/unix/src/metal/upscale.rs'
 
-INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
+INLINE_ALWAYS_SITES='src/d3d9/shared/src/crumb.rs'
 
 # Files permitted a raw `msg_send!`: a send no typed binding or local re-declaration can express,
 # each with its argument in docs/CONVENTIONS.md (none today). `class!` and `sel!` stay banned
@@ -59,13 +59,13 @@ INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
 MSG_SEND_SITES=''
 
 # Vendored third-party crates keep their upstream form: the audit skips them.
-VENDOR_TREE='^windows/vendor/'
+VENDOR_TREE='^vendor/'
 
 # The end-to-end tests that share one process. A thread one of them spawns
 # goes through the harness's `in_flight::spawn_scoped`, which names it after
 # the test, so a panic on it and the device it creates attribute to the test
 # rather than to `<unnamed>`; the raw spawn calls are banned here.
-E2E_TESTS_DIR=windows/tests/tests/e2e
+E2E_TESTS_DIR=tests/d3d9/programs/tests/e2e
 E2E_SPAWN='\.spawn(_scoped)?\(|thread::spawn\(|thread::Builder'
 E2E_SPAWN_MESSAGE='raw thread spawn in an end-to-end test: use mtld3d_tests::spawn_scoped, which names the worker after its test'
 
@@ -77,33 +77,45 @@ E2E_SPAWN_MESSAGE='raw thread spawn in an end-to-end test: use mtld3d_tests::spa
 # joins the scoped workers it spawned moments before, so both are left out.
 PE_JOIN='\.join\(\)|JoinHandle::join'
 PE_JOIN_MESSAGE='thread join on the PE side: poll JoinHandle::is_finished, then drop the handle'
-PE_JOIN_EXEMPT='^windows/tests/|/tests(\.rs$|/)'
+PE_JOIN_EXEMPT='^tests/d3d9/|/tests(\.rs$|/)'
+
+# The PE side: the crates that build for -pc-windows-msvc, each named by its src/ and build.rs, and the programs of
+# the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/d3d9/*.rs would also select
+# src/d3d9/unix/** and src/winemetal/*.rs its unix/ and wire/, which run on the Mac.
+PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal'
+is_pe() {
+    for crate in $PE_CRATES; do
+        case $1 in "$crate"/src/*.rs | "$crate"/build.rs) return 0 ;; esac
+    done
+    case $1 in tests/d3d9/programs/*.rs) return 0 ;; esac
+    return 1
+}
 
 # The COM entry points that hold the device's API lock: every
 # `extern "system" fn` defined in these files opens with `let _api =`. The
 # cursor window procedure is the one exception, by name: it runs on the window
 # thread, which a thunk holding the lock sends synchronous messages to.
-API_LOCK_FILES='windows/d3d9/src/device.rs
-windows/d3d9/src/device/extended.rs
-windows/d3d9/src/cursor.rs
-windows/d3d9/src/texture.rs
-windows/d3d9/src/surface.rs
-windows/d3d9/src/vertex_buffer.rs
-windows/d3d9/src/index_buffer.rs
-windows/d3d9/src/swapchain.rs
-windows/d3d9/src/query.rs
-windows/d3d9/src/state_block.rs
-windows/d3d9/src/vertex_decl.rs
-windows/d3d9/src/vertex_shader.rs
-windows/d3d9/src/pixel_shader.rs'
+API_LOCK_FILES='src/d3d9/src/device.rs
+src/d3d9/src/device/extended.rs
+src/d3d9/src/cursor.rs
+src/d3d9/src/texture.rs
+src/d3d9/src/surface.rs
+src/d3d9/src/vertex_buffer.rs
+src/d3d9/src/index_buffer.rs
+src/d3d9/src/swapchain.rs
+src/d3d9/src/query.rs
+src/d3d9/src/state_block.rs
+src/d3d9/src/vertex_decl.rs
+src/d3d9/src/vertex_shader.rs
+src/d3d9/src/pixel_shader.rs'
 API_LOCK_EXEMPT='cursor_wnd_proc'
 
 # A pointer the application hands a PE entry point promises no alignment, so
 # the entry point reaches it only through the alignment-free helpers of
 # `mtld3d_shared::ffi_boundary`. The vectored exception handler is the one
 # `extern "system" fn` whose pointers come from the system instead.
-APP_POINTER_DIR=windows/d3d9/src
-APP_POINTER_EXEMPT='windows/d3d9/src/crash.rs'
+APP_POINTER_DIR=src/d3d9/src
+APP_POINTER_EXEMPT='src/d3d9/src/crash.rs'
 APP_POINTER_INPTR="InPtr(Mut)?(::)?<('[a-z_]+, *)?(mtld3d_types::)?(D3D|Guid|LUID)"
 APP_POINTER_INPTR_MESSAGE='InPtr/InPtrMut over an application struct: read it with ValueIn, write it with OutPtr'
 
@@ -378,7 +390,7 @@ case "${1:-}" in
     file=${2:?--file needs a path}
     # An editor hook's view: only the checks that a single file can answer.
     case $file in *.rs) ;; *) exit 0 ;; esac
-    case $file in windows/vendor/*) exit 0 ;; esac
+    case $file in vendor/*) exit 0 ;; esac
     [ -f "$file" ] || exit 0
 
     findings=$(doc_shape "$file")
@@ -434,14 +446,10 @@ case "${1:-}" in
         fi
         ;;
     esac
-    case $file in
-    windows/*.rs)
-        if ! printf '%s\n' "$file" | grep -qE "$PE_JOIN_EXEMPT"; then
-            banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
-                "$PE_JOIN_MESSAGE" "$file"
-        fi
-        ;;
-    esac
+    if is_pe "$file" && ! printf '%s\n' "$file" | grep -qE "$PE_JOIN_EXEMPT"; then
+        banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
+            "$PE_JOIN_MESSAGE" "$file"
+    fi
 
     exit $status
     ;;
@@ -480,7 +488,7 @@ fi
 drift=$(derive_scan "$@" | diff "$INVENTORY" - || true)
 if [ -n "$drift" ]; then
     report 'No default Copy / Clone on aggregate structs' \
-        "derive inventory drift (< committed, > working tree). A Clone/Copy derive needs a concrete callsite; record it with scripts/audit.sh --update-derives" \
+        "derive inventory drift (< committed, > working tree). A Clone/Copy derive needs a concrete callsite; record it with tools/audit.sh --update-derives" \
         "$drift"
 fi
 
@@ -513,7 +521,8 @@ if [ -n "$e2e_tests" ]; then
     banned "$E2E_SPAWN" 'Every end-to-end test names itself' "$E2E_SPAWN_MESSAGE" $e2e_tests
 fi
 
-pe_sources=$(git ls-files 'windows/*.rs' | grep -vE "$PE_JOIN_EXEMPT" || true)
+pe_sources=$(git ls-files '*.rs' | while read -r f; do is_pe "$f" && printf '%s\n' "$f"; done |
+    grep -vE "$PE_JOIN_EXEMPT" || true)
 if [ -n "$pe_sources" ]; then
     # shellcheck disable=SC2086
     banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
@@ -553,18 +562,24 @@ fi
 # source described private work, cited the upstream test suite as if the reader
 # could open it, and narrated its own development history.
 
-RELEASE=$(git ls-files '*.rs' '*.m' '*.msl' '*.md' '*.toml' '*.conf' Makefile |
-    grep -v '^unix/conformance/' || true)
+# What the rules read: the workspace crates' files (Cargo.toml's members), the root manifest and cargo config, D3D9's
+# documents, the conventions, the sample configuration and this script.
+CRATES=$(sed -n '/^members = \[/,/^\]/s/^ *"\(.*\)",$/\1/p' Cargo.toml)
+# shellcheck disable=SC2086
+RELEASE=$({
+    git ls-files $CRATES docs/d3d9 | grep -E '\.(rs|m|msl|md|toml|conf)$'
+    git ls-files Cargo.toml .cargo/config.toml rustfmt.toml docs/CONVENTIONS.md mtld3d.conf tools/audit.sh
+} | grep -v '^tests/d3d9/conformance/' || true)
 
 # shellcheck disable=SC2086
 set -- $RELEASE
 
-banned_in_comments 'dxvk|DXVK|dxmt|wined3d|wine3d|d9vk' \
+banned_in_comments 'dxvk|DXVK|wined3d|wine3d|d9vk' \
     'Mechanical audit' \
     'reference to a competing D3D9 implementation — restate the contract in spec terms' "$@"
 
 # Wine's d3d9 TEST suite, cited as provenance. A reader who clones this repo
-# cannot open `device.c`, and the behavioural statement never needed it.
+# cannot open the test source, and the behavioural statement never needed it.
 #
 # Wine itself is fair game — this is the layer's host — so the net is drawn
 # tight: the four d3d9 test-source stems, and a `test_*` name only when Wine is
@@ -572,7 +587,7 @@ banned_in_comments 'dxvk|DXVK|dxmt|wined3d|wine3d|d9vk' \
 # both have to stay clean, and a wider pattern catches them.
 banned_in_comments '(^|[^a-z_])(visual|device|stateblock|d3d9ex)\.c([^a-z]|$)|[Ww]ine.*\btest_[a-z_]{3,}|\btest_[a-z_]{3,}.*[Ww]ine' \
     'Mechanical audit' \
-    'Wine test-file citation outside unix/conformance — keep the behaviour, drop the citation' "$@"
+    'Wine test-file citation outside tests/d3d9/conformance — keep the behaviour, drop the citation' "$@"
 
 # Private development context: a reverse-engineered third-party DLL, and private
 # shorthand for hardware that came up while debugging.
