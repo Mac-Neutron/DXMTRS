@@ -9,7 +9,7 @@
 # (MTLD3D_LINUX_TRIPLE, x86-64's by default), against the VM guest's sysroot (MTLD3D_SYSROOT).
 #   mingw-cc.sh env <rust-target> <links-dir>
 # makes the four links in <links-dir> and prints the environment cc-rs reads for <rust-target> (tools/cargo-staticlib.sh
-# evals it): the compilers and today's flags per target, NDEBUG where today's build had it.
+# and tools/linux-cargo.sh eval it): the compilers and today's flags per target, NDEBUG where today's build had it.
 case $(basename "$0") in
   mingw-cc.sh)
     [ $# = 3 ] && [ "$1" = env ] || { echo "usage: mingw-cc.sh env <rust-target> <links-dir>" >&2; exit 2; }
@@ -31,6 +31,18 @@ case $(basename "$0") in
         echo "export CXXFLAGS_$u='-fno-exceptions -fno-rtti -fno-threadsafe-statics -DSNMALLOC_USE_THREAD_CLEANUP \
 -include stdlib.h $maps'"
         echo "export CFLAGS=-DNDEBUG CXXFLAGS=-DNDEBUG" ;;
+      x86_64-pc-windows-msvc|i686-pc-windows-msvc)
+        # The VM guest's: its CPU baseline and frame pointers; no NDEBUG (today's guest build has none).
+        case $t in x86_64-*) cpu=-march=x86-64-v2 ;; *) cpu=-march=pentium4 ;; esac
+        echo "export CC_$u='$d/mingw-cc' CXX_$u='$d/mingw-c++' CFLAGS_$u='$cpu -fno-omit-frame-pointer $maps'"
+        echo "export CXXFLAGS_$u='$cpu -fno-omit-frame-pointer -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+-DSNMALLOC_USE_THREAD_CLEANUP -include stdlib.h $maps'" ;;
+      x86_64-unknown-linux-gnu|i686-unknown-linux-gnu)
+        # The VM guest's Linux side (tools/linux-cargo.sh): linux-cc as C compiler and linker, Fedora's triple.
+        echo "export CC_$u='$d/linux-cc' CXX_$u='$d/linux-c++' AR_$u='${MTLD3D_LLVM_MINGW:?}/bin/llvm-ar'"
+        echo "export CFLAGS_$u='$maps' CXXFLAGS_$u='$maps'"
+        echo "export CARGO_TARGET_$(echo "$u" | tr a-z A-Z)_LINKER='$d/linux-cc'"
+        echo "export MTLD3D_LINUX_TRIPLE=${t%%-*}-redhat-linux" ;;
       *-apple-darwin)
         echo "export CFLAGS_$u='$maps' CXXFLAGS_$u='$maps' CFLAGS=-DNDEBUG CXXFLAGS=-DNDEBUG" ;;
       *) echo "mingw-cc.sh: no C environment for $t" >&2; exit 2 ;;

@@ -58,6 +58,30 @@ if cpu_family == 'aarch64'
       install_dir : windows_builtin_install_dir,
     )
   endforeach
+else
+  # Every other cross build (the VM guest's x86_64 and i386 pairs): linked by meson's driver as nvngx.dll is, then
+  # marked builtin. lld's MinGW driver does no ICF unless asked; llvm-mingw's CRT comes ahead of Wine's libntdll.a
+  # (which meson places after these), so strlen, wcslen and mem* stay ucrt's, and kernel32 ahead of mincore's sets.
+  d3d9_link_args = ['-Wl,--gc-sections', '-Wl,--icf=all', '-lmingw32', '-lmingwex', '-lucrt', '-lkernel32', '-lmincore',
+                    '-luser32', '-ladvapi32', '-lgdi32', '-lws2_32', '-luserenv', '-lbcrypt', '-ldbghelp']
+  foreach dll : [['d3d9', 'd3d9.def', wrc_generator.process('version.rc')], ['mtld3d', 'shim/mtld3d.def', []]]
+    d3d9_dll = shared_library(dll[0], dll[2],
+      name_prefix    : '',
+      link_with      : d3d9_rust[dll[0]],
+      vs_module_defs : dll[1],
+      dependencies   : [lib_ntdll, rust_runtime_dep],
+      link_args      : d3d9_link_args,
+      install        : true,
+      install_dir    : windows_builtin_install_dir,
+    )
+    custom_target('postprocess_' + dll[0],
+      input            : d3d9_dll,
+      output           : dll[0] + '.dll.postproc',
+      command          : [winebuild, '--builtin', '@INPUT@'],
+      depends          : d3d9_dll,
+      build_by_default : true,
+    )
+  endforeach
 endif
 
 subdir('unix')
