@@ -89,8 +89,13 @@ pub const fn encode_format_swizzle(base_format: u32, r: u8, g: u8, b: u8, a: u8)
         | (encode_format_component_offset(a, 5) << 12)
 }
 
-/// `DECODE_FORMAT_COMPONENT_SWIZZLE`, for `component` 0 to 3 and its identity swizzle `base`.
-const fn decode_format_component_swizzle(format: u32, component: u32, base: u32) -> u32 {
+/// `DECODE_FORMAT_COMPONENT_SWIZZLE`: the swizzle `format` makes of `base` for a component.
+///
+/// `component` is 0 to 3 (red to alpha) and `base` a `WMT_TEXTURE_SWIZZLE_*`: the component's
+/// identity swizzle for the `GET_SWIZZLE_*` getters, a texture view's requested swizzle for
+/// winemetal's views.
+#[must_use]
+pub const fn decode_format_component_swizzle(format: u32, component: u32, base: u32) -> u32 {
     (base + ((format >> (21 - 3 * component)) & 0x7)) % 6
 }
 

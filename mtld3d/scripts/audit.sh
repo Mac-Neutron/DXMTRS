@@ -35,6 +35,7 @@ unix/shared/src/ftol.rs
 unix/shared/src/trig.rs
 unix/unix/src/metal/command.rs
 unix/unix/src/metal/macdrv.rs
+unix/winemetal/src/float_cast.rs
 windows/core/src/config.rs
 windows/dxmt-util/src/float_cast.rs'
 
@@ -48,6 +49,11 @@ unix/unix/src/metal/upload_quad.rs
 unix/unix/src/metal/upscale.rs'
 
 INLINE_ALWAYS_SITES='unix/shared/src/crumb.rs'
+
+# Files permitted a raw `msg_send!`: a send no typed binding or local re-declaration can express,
+# each with its argument in docs/CONVENTIONS.md (none today). `class!` and `sel!` stay banned
+# everywhere.
+MSG_SEND_SITES=''
 
 # Vendored third-party crates keep their upstream form: the audit skips them.
 VENDOR_TREE='^windows/vendor/'
@@ -350,6 +356,13 @@ confined() {
     fi
 }
 
+# The arguments that are not in a site list, one per line.
+outside() {
+    permitted=$1
+    shift
+    printf '%s\n' "$@" | grep -vxF "$permitted" || true
+}
+
 # --- modes -------------------------------------------------------------------
 
 case "${1:-}" in
@@ -383,8 +396,12 @@ case "${1:-}" in
         'pub(crate) visibility' "$file"
     banned 'extern "stdcall"' 'extern "system" everywhere, not extern "stdcall"' \
         'extern "stdcall"' "$file"
-    banned 'msg_send!|(^|[^_A-Za-z0-9])class!\(|sel!\(' 'No raw msg_send! — use typed objc2-* bindings' \
+    banned '(^|[^_A-Za-z0-9])class!\(|sel!\(' 'No raw msg_send! — use typed objc2-* bindings' \
         'untyped Obj-C selector' "$file"
+    if [ -n "$(outside "$MSG_SEND_SITES" "$file")" ]; then
+        banned 'msg_send!' 'No raw msg_send! — use typed objc2-* bindings' \
+            'raw msg_send! outside the listed raw-send sites' "$file"
+    fi
     banned 'MainThreadMarker::new_unchecked' 'AppKit work runs on the main thread' \
         'unchecked MainThreadMarker: dispatch to the main thread and use MainThreadMarker::new().expect(..)' "$file"
     banned '(^|[^A-Za-z0-9_])Hash(Map|Set)([^A-Za-z0-9_]|$)' 'FxHash for maps, xxh3 for content' \
@@ -468,8 +485,11 @@ banned 'pub\(crate\)' 'No pub(crate) — use module hierarchy' \
     'pub(crate) visibility' "$@"
 banned 'extern "stdcall"' 'extern "system" everywhere, not extern "stdcall"' \
     'extern "stdcall"' "$@"
-banned 'msg_send!|(^|[^_A-Za-z0-9])class!\(|sel!\(' 'No raw msg_send! — use typed objc2-* bindings' \
+banned '(^|[^_A-Za-z0-9])class!\(|sel!\(' 'No raw msg_send! — use typed objc2-* bindings' \
     'untyped Obj-C selector' "$@"
+# shellcheck disable=SC2046
+banned 'msg_send!' 'No raw msg_send! — use typed objc2-* bindings' \
+    'raw msg_send! outside the listed raw-send sites' $(outside "$MSG_SEND_SITES" "$@")
 banned 'MainThreadMarker::new_unchecked' 'AppKit work runs on the main thread' \
     'unchecked MainThreadMarker: dispatch to the main thread and use MainThreadMarker::new().expect(..)' "$@"
 banned '(^|[^A-Za-z0-9_])Hash(Map|Set)([^A-Za-z0-9_]|$)' 'FxHash for maps, xxh3 for content' \

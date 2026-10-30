@@ -1,5 +1,9 @@
 [workspace]
 members = ["unix", "mtl", "shared", "conformance", "e2e", "winemetal", "winemetal-wire"]
+# A command without -p (make test-unit's `cargo nextest run`, make's builds and lints) leaves winemetal out: its unit
+# test binary references symbols only the link of winemetal.so or the native winemetal.dylib provides (NtSetEvent,
+# sqlite3_*, SM50*), so its tests run on their own, `cargo test -p winemetal` with `-undefined dynamic_lookup`.
+default-members = ["unix", "mtl", "shared", "conformance", "e2e", "winemetal-wire"]
 resolver = "2"
 
 [workspace.package]

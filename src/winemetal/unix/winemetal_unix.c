@@ -222,16 +222,9 @@ _MTLDevice_newBuffer(void *obj) {
   return STATUS_SUCCESS;
 }
 
-/* DXMT_MAX_ANISOTROPY=<1..16>: a floor on maxAnisotropy for trilinear, non-comparison samplers (0 = off). */
-static uint32_t forced_max_anisotropy;
-
-__attribute__((constructor)) static void
-read_max_anisotropy(void) {
-  const char *p = getenv("DXMT_MAX_ANISOTROPY");
-  int n = p ? atoi(p) : 0;
-  if (n >= 1 && n <= 16)
-    forced_max_anisotropy = n;
-}
+/* DXMT_MAX_ANISOTROPY=<1..16>: a floor on maxAnisotropy for trilinear, non-comparison samplers (0 = off), read by
+ * the Rust half's constructor (mtld3d/unix/winemetal, init.rs). */
+extern uint32_t forced_max_anisotropy;
 
 static NTSTATUS
 _MTLDevice_newSamplerState(void *obj) {
@@ -299,28 +292,9 @@ _MTLDevice_newDepthStencilState(void *obj) {
   return STATUS_SUCCESS;
 }
 
-MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat format) {
-  return (MTLPixelFormat)ORIGINAL_FORMAT(format);
-}
-
-void
-fill_texture_descriptor(MTLTextureDescriptor *desc, struct WMTTextureInfo *info) {
-  desc.textureType = (MTLTextureType)info->type;
-  desc.pixelFormat = to_metal_pixel_format(info->pixel_format);
-  desc.width = info->width;
-  desc.height = info->height;
-  desc.depth = info->depth;
-  desc.arrayLength = info->array_length;
-  desc.mipmapLevelCount = info->mipmap_level_count;
-  desc.sampleCount = info->sample_count;
-  desc.usage = (MTLTextureUsage)info->usage;
-  desc.resourceOptions = (MTLResourceOptions)info->options;
-  static SEL compression_mode;
-  if (!compression_mode)
-    compression_mode = sel_registerName("setCompressionMode:");
-  if ((info->flags & WMTTextureFlagLossless) && [desc respondsToSelector:compression_mode])
-    ((void (*)(id, SEL, NSInteger))objc_msgSend)(desc, compression_mode, 1);
-};
+/* The Rust half's (format.rs, texture.rs). */
+MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat);
+void fill_texture_descriptor(MTLTextureDescriptor *, struct WMTTextureInfo *);
 
 void
 extract_texture_descriptor(id<MTLTexture> desc, struct WMTTextureInfo *info) {
@@ -3531,16 +3505,6 @@ _MTLTexture_getBytes(void *obj) {
                                 mipmapLevel:params->level
                                       slice:params->slice];
   return STATUS_SUCCESS;
-}
-
-/* MacNeutron's MetalFX presenter, from beside this library, when the launcher asks for it (MACNEUTRON_PRESENT=1).
- * Wine's loader runs under the hardened runtime, which ignores DYLD_INSERT_LIBRARIES, so winemetal.so loads it here,
- * once in each process that loads winemetal.dll. */
-__attribute__((constructor)) static void
-load_presenter(void) {
-  const char *p = getenv("MACNEUTRON_PRESENT");
-  if (p && !strcmp(p, "1") && !dlopen("@loader_path/libmacneutron-present.dylib", RTLD_NOW | RTLD_LOCAL))
-    fprintf(stderr, "winemetal: can't load the MetalFX presenter: %s\n", dlerror());
 }
 
 /*
