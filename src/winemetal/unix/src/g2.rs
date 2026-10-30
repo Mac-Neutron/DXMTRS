@@ -1118,7 +1118,7 @@ pub unsafe extern "C-unwind" fn new_indirect_command_buffer(args: *mut c_void) -
     unsafe {
         desc.setMaxKernelThreadgroupMemoryBindCount(usize::from(
             info.max_kernel_threadgroup_memory_binding,
-        ))
+        ));
     };
     // SAFETY: as above.
     unsafe { desc.setMaxMeshBufferBindCount(usize::from(info.max_mesh_buffer_binding)) };
@@ -1128,7 +1128,7 @@ pub unsafe extern "C-unwind" fn new_indirect_command_buffer(args: *mut c_void) -
     unsafe {
         desc.setMaxObjectThreadgroupMemoryBindCount(usize::from(
             info.max_object_threadgroup_memory_binding,
-        ))
+        ));
     };
     desc.setMaxVertexBufferBindCount(usize::from(info.max_vertex_buffer_binding));
     desc.setInheritBuffers(info.inherit_buffers() != 0);

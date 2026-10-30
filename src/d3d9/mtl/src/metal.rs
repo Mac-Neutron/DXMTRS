@@ -2,7 +2,7 @@
 //!
 //! Protocols are traits implemented by `ProtocolObject<dyn Protocol>` (objc2's shape), their
 //! methods default bodies over the object's handle. What winemetal has no getter for comes from
-//! [`crate::meta`].
+//! `crate::meta`.
 
 #![allow(
     non_snake_case,

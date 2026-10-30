@@ -463,7 +463,7 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_values(
         let listener_events = unsafe { listener.as_ref() }.events();
         // SAFETY: a live block, which Metal copies.
         unsafe {
-            event.notifyListener_atValue_block(listener_events, value, RcBlock::as_ptr(&block))
+            event.notifyListener_atValue_block(listener_events, value, RcBlock::as_ptr(&block));
         };
     }
     STATUS_SUCCESS

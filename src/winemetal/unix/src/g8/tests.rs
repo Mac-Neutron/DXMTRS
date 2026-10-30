@@ -310,8 +310,8 @@ fn a_writer_waits_for_the_lock_file() {
 fn a_relative_path_is_under_the_user_cache_folder() {
     let unique = format!("winemetal-g8-relative-{}", std::process::id());
     let mut buf = [0 as c_char; PATH_MAX];
-    // SAFETY: a buffer of its own length.
     assert_ne!(
+        // SAFETY: a buffer of its own length.
         unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr(), buf.len()) },
         0
     );

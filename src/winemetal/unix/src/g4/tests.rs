@@ -59,8 +59,8 @@ fn library_of_source() -> Option<(Device, Retained<NSObject>)> {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -116,8 +116,8 @@ fn nil_device_writes_a_nil_library_and_error() {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -129,8 +129,8 @@ fn nil_device_writes_a_nil_library_and_error() {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut s).cast()) },
         0
     );
@@ -148,8 +148,8 @@ fn a_function_is_made_by_name() {
             arg: name.as_ptr().expose_provenance() as u64,
             ret: FILL,
         };
-        // SAFETY: a live params block.
         assert_eq!(
+            // SAFETY: a live params block.
             unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
             0
         );
@@ -168,8 +168,8 @@ fn a_null_name_writes_nothing() {
         arg: 0,
         ret: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -189,8 +189,8 @@ fn a_syntax_error_gives_an_error_the_handler_retained() {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -211,8 +211,8 @@ fn an_empty_archive_cannot_be_serialized() {
         ret_archive: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
         0
     );
@@ -224,8 +224,8 @@ fn an_empty_archive_cannot_be_serialized() {
         url: mem(&path.to_bytes()[0]),
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
         0
     );
@@ -248,8 +248,8 @@ fn an_empty_path_is_a_nil_url() {
         ret_archive: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
         0
     );
@@ -260,8 +260,8 @@ fn an_empty_path_is_a_nil_url() {
         url: mem(&empty.to_bytes_with_nul()[0]),
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
         0
     );
@@ -279,8 +279,8 @@ fn null_info_blocks_write_nothing() {
         ret_error: FILL,
         ret_pso: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut c).cast()) },
         0
     );
@@ -293,8 +293,8 @@ fn null_info_blocks_write_nothing() {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library_with_source_options(core::ptr::from_mut(&mut o).cast()) },
         0
     );
@@ -314,8 +314,8 @@ fn constants_with_a_null_table_and_a_count_write_nothing() {
         ret: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -335,8 +335,8 @@ fn no_constants_still_asks_metal() {
         ret: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -384,8 +384,8 @@ fn compile(device: u64, source: &CStr) -> Option<Retained<NSObject>> {
         ret_error: FILL,
         ret_library: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -400,8 +400,8 @@ fn function_in(library: &NSObject, name: &CStr) -> u64 {
         arg: name.as_ptr().expose_provenance() as u64,
         ret: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -417,8 +417,8 @@ fn empty_archive(device: u64) -> u64 {
         ret_archive: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
         0
     );
@@ -454,8 +454,8 @@ fn serializes(archive: u64, name: &str) -> bool {
         url: mem(&c_path.to_bytes_with_nul()[0]),
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
         0
     );
@@ -496,8 +496,8 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         ret_error: FILL,
         ret_pso: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe {
             mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast())
         },
@@ -515,8 +515,8 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         ret_error: FILL,
         ret_pso: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe {
             mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut render_call).cast())
         },
@@ -543,8 +543,8 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         ret_error: FILL,
         ret_pso: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe {
             mtl_device_new_render_pipeline_state_with_vertex_descriptor(
                 core::ptr::from_mut(&mut vertex_call).cast(),
@@ -573,8 +573,8 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
             ret_error: FILL,
             ret_pso: FILL,
         };
-        // SAFETY: a live params block.
         assert_eq!(
+            // SAFETY: a live params block.
             unsafe {
                 mtl_device_new_mesh_render_pipeline_state(
                     core::ptr::from_mut(&mut mesh_call).cast(),
@@ -601,8 +601,8 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
             ret_error: FILL,
             ret_pso: FILL,
         };
-        // SAFETY: a live params block.
         assert_eq!(
+            // SAFETY: a live params block.
             unsafe {
                 mtl_device_new_tile_render_pipeline_state(
                     core::ptr::from_mut(&mut tile_call).cast(),
@@ -636,8 +636,8 @@ fn a_nil_device_still_adds_to_the_archive() {
         ret_error: FILL,
         ret_pso: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe {
             mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast())
         },
@@ -672,8 +672,8 @@ fn function_with_null_constant(
         ret: FILL,
         ret_error: FILL,
     };
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
         0
     );
@@ -772,8 +772,8 @@ fn a_render_pipeline_is_written_before_the_archive_add() {
     };
     WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
     SEEN.set(None);
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe { mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut call).cast()) },
         0
     );
@@ -790,8 +790,8 @@ fn a_render_pipeline_is_written_before_the_archive_add() {
     };
     WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
     SEEN.set(None);
-    // SAFETY: a live params block.
     assert_eq!(
+        // SAFETY: a live params block.
         unsafe {
             mtl_device_new_render_pipeline_state_with_vertex_descriptor(
                 core::ptr::from_mut(&mut call).cast(),

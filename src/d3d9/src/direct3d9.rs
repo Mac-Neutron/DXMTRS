@@ -769,19 +769,16 @@ pub fn install_page_allocator() {
 /// Asked at the first `PageBox`, which is when the device is first queried, as it was before the
 /// hook.
 fn page_allocator() -> Option<mtld3d_core::page_box::PageAllocator> {
-    if !device_info()
-        .caps
-        .contains(DeviceCapsFlags::PAGES_FROM_UNIX)
-    {
-        return None;
-    }
     fn alloc(len: usize) -> Option<core::ptr::NonNull<u8>> {
         let mut params = mtld3d_shared::AllocPagesParams {
             len: len as u64,
             ptr: 0,
         };
         unix_call(&mut params);
-        core::ptr::NonNull::new(params.ptr as usize as *mut u8)
+        // The low `usize` bytes, as the cast kept them (a 32-bit guest's Unix side answers below 4 GiB).
+        let mut word = [0; size_of::<usize>()];
+        word.copy_from_slice(&params.ptr.to_le_bytes()[..size_of::<usize>()]);
+        core::ptr::NonNull::new(usize::from_le_bytes(word) as *mut u8)
     }
     fn free(ptr: core::ptr::NonNull<u8>, len: usize) {
         let mut params = mtld3d_shared::FreePagesParams {
@@ -789,6 +786,12 @@ fn page_allocator() -> Option<mtld3d_core::page_box::PageAllocator> {
             len: len as u64,
         };
         unix_call(&mut params);
+    }
+    if !device_info()
+        .caps
+        .contains(DeviceCapsFlags::PAGES_FROM_UNIX)
+    {
+        return None;
     }
     log::info!(target: LOG_TARGET, "page boxes: pages from the unix side (winemetal)");
     Some(mtld3d_core::page_box::PageAllocator { alloc, free })

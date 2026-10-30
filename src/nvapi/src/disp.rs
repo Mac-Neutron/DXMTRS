@@ -466,7 +466,7 @@ extern "C" fn get_connected_display_ids(
                 connector_type: MONITOR_CONN_TYPE_UNKNOWN,
                 display_id,
                 flags,
-            })
+            });
         };
     }
     OK

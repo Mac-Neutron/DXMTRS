@@ -34,6 +34,14 @@ pub extern "system" fn DllMain(
     if reason != DLL_PROCESS_ATTACH {
         return 1;
     }
+    attach(module)
+}
+
+/// `DLL_PROCESS_ATTACH`'s work.
+///
+/// Private, so that the exported `DllMain` passes no pointer argument to an unsafe call itself.
+#[cfg(windows)]
+fn attach(module: *mut core::ffi::c_void) -> i32 {
     // SAFETY: `module` is this DLL's handle, which the loader passes to DllMain.
     unsafe { DisableThreadLibraryCalls(module) };
     i32::from(dxmt_util::nvext::enabled())

@@ -157,7 +157,7 @@ extern "C" fn get_logical_gpu_info(gpu: *mut c_void, data: *mut LogicalGpuData) 
     unsafe {
         data.os_adapter_id
             .cast::<[u8; 8]>()
-            .write(luid(handle_id(gpu)))
+            .write(luid(handle_id(gpu)));
     };
     OK
 }

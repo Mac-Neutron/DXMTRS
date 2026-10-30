@@ -181,7 +181,7 @@ pub fn mem_ptr<T>(p: *const T) -> MemPtr {
 #[cfg(target_pointer_width = "32")]
 pub fn mem_ptr<T>(p: *const T) -> MemPtr {
     MemPtr {
-        ptr: p.expose_provenance() as u32,
+        ptr: u32::from_ne_bytes(p.expose_provenance().to_ne_bytes()),
         high: 0,
     }
 }
