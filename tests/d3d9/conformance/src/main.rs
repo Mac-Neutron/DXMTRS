@@ -200,9 +200,9 @@ fn real_main() -> Result<ExitCode, String> {
 
 /// The Wine prefix the subtests run in: `WINEPREFIX`, else Wine's default.
 ///
-/// `$HOME/.wine` is where Wine goes without the variable, which is the same
-/// fallback MacNeutron's conformance script uses, and `None` is a machine that
-/// names neither.
+/// `$HOME/.wine` is where Wine goes without the variable (the conformance
+/// script, `dxmt/mtld3d-conformance.sh`, always sets it), and `None` is a
+/// machine that names neither.
 fn wine_prefix() -> Option<PathBuf> {
     std::env::var_os("WINEPREFIX")
         .map(PathBuf::from)
