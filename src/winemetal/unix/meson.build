@@ -1,6 +1,7 @@
 winemetal_unix_src = [
   'winemetal_unix.c',
   'cache.c',
+  'sm50_wow64.c',
 ]
 
 if wine_build_path != ''
