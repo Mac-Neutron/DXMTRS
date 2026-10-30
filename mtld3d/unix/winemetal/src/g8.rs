@@ -126,6 +126,54 @@ impl CacheObject {
 }
 
 extern_class!(
+    /// `NSData`, re-declared to wrap a key over a pointer that may be null.
+    ///
+    /// The C built one of these around every key, before any send: Foundation raises for a length
+    /// above 2^63, and an empty one answers a null `bytes` whatever the pointer.
+    #[unsafe(super(NSObject))]
+    #[name = "NSData"]
+    struct KeyData;
+);
+
+impl KeyData {
+    extern_methods!(
+        /// `-initWithBytesNoCopy:length:freeWhenDone:`, which raises for an absurd length.
+        #[unsafe(method(initWithBytesNoCopy:length:freeWhenDone:))]
+        unsafe fn init_no_copy(
+            this: Allocated<Self>,
+            bytes: *const c_void,
+            length: usize,
+            free_when_done: bool,
+        ) -> Option<Retained<Self>>;
+
+        /// `-bytes`.
+        #[unsafe(method(bytes))]
+        fn bytes(&self) -> *const c_void;
+
+        /// `-length`.
+        #[unsafe(method(length))]
+        fn length(&self) -> usize;
+    );
+
+    /// Wraps the `length` bytes at `key` without copying them, as the C did.
+    ///
+    /// `None` if Foundation answers nil.
+    ///
+    /// # Safety
+    ///
+    /// A non-null `key` points to `length` readable bytes while the result lives.
+    unsafe fn wrap(key: *const c_void, length: usize) -> Option<Retained<Self>> {
+        // SAFETY: the caller's contract; the bytes are not copied, nor freed.
+        unsafe { Self::init_no_copy(Self::alloc(), key, length, false) }
+    }
+
+    /// The bytes and length of a key, `(null, 0)` for no object (a message to nil).
+    fn parts(this: Option<&Self>) -> (*const c_void, usize) {
+        this.map_or((ptr::null(), 0), |this| (this.bytes(), this.length()))
+    }
+}
+
+extern_class!(
     /// `NSString`, re-declared to send `-stringByAppendingPathComponent:` a nil component.
     ///
     /// The C's `initWithCString:` answers nil for invalid UTF-8, and its path then goes to this
@@ -316,7 +364,7 @@ impl CacheReader {
         let stmt = &self.ivars().stmt;
         stmt.rewind();
         // SAFETY: the caller's contract; the statement is reset before this returns.
-        unsafe { stmt.bind_blob(1, blob(key, length), length as u64) };
+        unsafe { stmt.bind_blob(1, key, length as u64) };
         let found = if stmt.step() == sqlite::ROW {
             let (data, len) = stmt.column_blob(0);
             copy_to_dispatch_data(data, i32_to_usize(len))
@@ -385,7 +433,7 @@ impl CacheWriter {
         let conn = self.ivars();
         conn.stmt.rewind();
         // SAFETY: the caller's contract; the statement is reset before this returns.
-        unsafe { conn.stmt.bind_blob(1, blob(key, length), length as u64) };
+        unsafe { conn.stmt.bind_blob(1, key, length as u64) };
 
         let mut bytes = ptr::null();
         let mut size = 0_usize;
@@ -424,11 +472,6 @@ fn drop_other_versions(db: &Db, keep: &str) {
     }
 }
 
-/// The address SQLite binds for `length` bytes at `data`: null for none, as an empty `NSData`'s.
-const fn blob(data: *const c_void, length: usize) -> *const c_void {
-    if length == 0 { ptr::null() } else { data }
-}
-
 /// A new dispatch data object holding a copy of the `len` bytes at `data`, as a +1 object pointer.
 fn copy_to_dispatch_data(data: *const c_void, len: usize) -> *mut AnyObject {
     // A null buffer is the empty object, whatever the length.
@@ -465,11 +508,16 @@ pub unsafe extern "C-unwind" fn cache_reader_get(obj: *mut c_void) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let params = unsafe { ffi::params::<UnixcallCacheGet>(obj) };
+    // The C wrapped the key before the send, so an absurd length raises even for a nil handle.
+    // SAFETY: the caller's key, readable for its length; `key` outlives the send.
+    let key = unsafe { KeyData::wrap(mem_ptr(params.key), u64_to_usize(params.key_length)) };
+    let (bytes, length) = KeyData::parts(key.as_deref());
     // SAFETY: a non-zero handle names a live object.
     let reader = unsafe { handle::obj::<CacheObject>(params.cache) };
     params.ret_data = reader.map_or(0, |reader| {
-        // SAFETY: the caller's key; the object answers `getKey:length:` or the send raises.
-        let data = unsafe { reader.get_key(mem_ptr(params.key), u64_to_usize(params.key_length)) };
+        // SAFETY: `bytes` and `length` are the key's; the object answers `getKey:length:` or the
+        // send raises.
+        let data = unsafe { reader.get_key(bytes, length) };
         // The object is +1: the dispatch data the lookup made.
         handle::ret_passthrough(data)
     });
@@ -501,12 +549,17 @@ pub unsafe extern "C-unwind" fn cache_writer_set(obj: *mut c_void) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let params = unsafe { ffi::params::<UnixcallCacheSet>(obj) };
+    // The C wrapped the key before the send, so an absurd length raises even for a nil handle.
+    // SAFETY: the caller's key, readable for its length; `key` outlives the send.
+    let key = unsafe { KeyData::wrap(mem_ptr(params.key), u64_to_usize(params.key_length)) };
+    let (bytes, length) = KeyData::parts(key.as_deref());
     // SAFETY: a non-zero handle names a live object.
     let writer = unsafe { handle::obj::<CacheObject>(params.cache) };
     if let Some(writer) = writer {
         let value = ptr::with_exposed_provenance::<AnyObject>(u64_to_usize(params.value_data));
-        // SAFETY: the caller's key and value; the object answers `setKey:length:value:` or the send raises.
-        unsafe { writer.set_key(mem_ptr(params.key), u64_to_usize(params.key_length), value) };
+        // SAFETY: `bytes` and `length` are the key's and `value` the caller's; the object answers
+        // `setKey:length:value:` or the send raises.
+        unsafe { writer.set_key(bytes, length, value) };
     }
     STATUS_SUCCESS
 }

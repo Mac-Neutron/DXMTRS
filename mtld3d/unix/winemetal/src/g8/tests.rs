@@ -390,3 +390,68 @@ fn wrong_class_handle_raises() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("cannot catch foreign exceptions"), "{stderr}");
 }
+
+/// Set in the child [`a_key_length_above_two_to_the_63_raises`] runs: `<call>-<handle>:<length>`.
+const CHILD_ABSURD: &str = "WINEMETAL_TEST_CACHE_ABSURD_KEY";
+
+/// Set beside [`CHILD_ABSURD`]: the folder the live handles' database lives in.
+const CHILD_ABSURD_DIR: &str = "WINEMETAL_TEST_CACHE_ABSURD_DIR";
+
+/// The child of [`a_key_length_above_two_to_the_63_raises`]: slot 116 or 118 on `case`.
+fn absurd_key_child(case: &str, dir: &Path) {
+    let (which, length) = case.split_once(':').expect("<call>-<handle>:<length>");
+    let (call_name, handle_kind) = which.split_once('-').expect("<call>-<handle>");
+    let length = length.parse::<u64>().expect("a length");
+    let db = dir.join("cache.db");
+    let live = handle_kind == "live";
+    let key = b"key-0001";
+    let value = DispatchData::from_bytes(b"a value");
+    let w = if live { writer(&db, 1) } else { 0 };
+    // A live handle that failed to open would be a nil send: the raise would come from the key alone.
+    assert_eq!(w != 0, live);
+    if call_name == "get" {
+        let cache = if live { reader(&db, 1) } else { 0 };
+        assert_eq!(cache != 0, live);
+        let mut params = UnixcallCacheGet { cache, key: mem(key.as_ptr()), key_length: length, ret_data: FILL };
+        call(cache_reader_get, &mut params);
+    } else {
+        let value_data = ptr::from_ref::<DispatchData>(&value).expose_provenance() as u64;
+        let mut params = UnixcallCacheSet { cache: w, key: mem(key.as_ptr()), key_length: length, value_data };
+        call(cache_writer_set, &mut params);
+    }
+}
+
+#[test]
+fn a_key_length_above_two_to_the_63_raises() {
+    if let Some(case) = std::env::var_os(CHILD_ABSURD) {
+        let dir = PathBuf::from(std::env::var_os(CHILD_ABSURD_DIR).expect("the folder"));
+        absurd_key_child(case.to_str().expect("a UTF-8 case"), &dir);
+        return;
+    }
+    let dir = folder("absurd");
+    let run = |case: &str| {
+        Command::new(std::env::current_exe().expect("the test binary's path"))
+            .args(["--exact", "g8::tests::a_key_length_above_two_to_the_63_raises", "--test-threads=1", "--nocapture"])
+            .env(CHILD_ABSURD, case)
+            .env(CHILD_ABSURD_DIR, &dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("the test binary runs again")
+    };
+    // The C built `[[NSData alloc] initWithBytesNoCopy:key length:key_length ...]` before any send,
+    // a nil handle included, and Foundation raises above 2^63: the exception leaves the handler
+    // and aborts the harness's frame, as in `wrong_class_handle_raises`.
+    for which in ["get-nil", "set-nil", "get-live", "set-live"] {
+        // A key of the length it has goes through.
+        let output = run(&format!("{which}:8"));
+        assert!(output.status.success(), "{which}:8 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+        for length in [(1_u64 << 63) + 1, u64::MAX] {
+            let output = run(&format!("{which}:{length}"));
+            assert_eq!(output.status.signal(), Some(libc::SIGABRT), "{which}:{length} {}", output.status);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("cannot catch foreign exceptions"), "{which}:{length} {stderr}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
