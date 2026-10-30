@@ -12,7 +12,7 @@ else
   error('One of the options -Dwine_build_path or -Dwine_install_path is required')
 endif
 
-# DXMTRS: winemetal's Rust half (mtld3d/unix/winemetal), a static library for the Mac's architecture. winemetal.so is a
+# DXMTRS: winemetal's Rust half (src/winemetal/unix), a static library for the Mac's architecture. winemetal.so is a
 # build-machine target, which meson won't link_with a custom target (a host one): the archive goes in by its path, and
 # the target in link_depends. Cargo runs on every build (build_always_stale) and decides what to rebuild; the script
 # copies only a changed archive, so an unchanged one relinks nothing. AppKit is named: objc2 looks its classes up by

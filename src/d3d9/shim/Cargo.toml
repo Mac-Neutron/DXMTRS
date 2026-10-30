@@ -1,0 +1,18 @@
+[package]
+name = "mtld3d"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Zlib"
+description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
+authors = ["Alexander Theissen <alex.theissen@me.com>"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mtld3d-shared = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

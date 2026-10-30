@@ -12,7 +12,7 @@ winemetal_ld_args = [
   '-lsqlite3', '-weak_framework', 'AppKit',
 ] + (get_option('debug') ? [] : ['-Wl,-S'])
 
-# DXMTRS: winemetal's Rust half (mtld3d/unix/winemetal) with its native feature, linked as the Wine build's is
+# DXMTRS: winemetal's Rust half (src/winemetal/unix) with its native feature, linked as the Wine build's is
 # (src/winemetal/unix/meson.build, AppKit's and -Wl,-S's reasons too), here by link_with: both are host targets.
 # b_asneeded stays off: ld64's -dead_strip_dylibs would drop the frameworks objc2 only looks classes up in by name at
 # run time.

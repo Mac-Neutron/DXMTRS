@@ -1,0 +1,14 @@
+[package]
+name = "mtld3d-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Zlib"
+description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
+authors = ["Alexander Theissen <alex.theissen@me.com>"]
+
+[dependencies]
+libc = { workspace = true }
+
+[lints]
+workspace = true

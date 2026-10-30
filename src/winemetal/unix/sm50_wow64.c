@@ -1,6 +1,6 @@
 /*
  * winemetal's WoW64 converters for the translator thunks (the Wine build only): the 32-bit params of the SM50*
- * calls widened to the 64-bit ones, named by the WoW64 table (mtld3d/unix/winemetal/src/table.rs).
+ * calls widened to the 64-bit ones, named by the WoW64 table (src/winemetal/unix/src/table.rs).
  */
 #include <stdint.h>
 #include <stdlib.h>

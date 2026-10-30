@@ -1,7 +1,7 @@
 #!/bin/sh
 # cargo-staticlib.sh <toolchain> <rust-target> <crate> <cargo-target-dir> <out-file> [<profile> [<features>]]: builds
 # <crate>'s static library for <rust-target> with <profile> (default production) and <features> (cargo's list), in the
-# mtld3d workspace that holds the crate, and copies it to <out-file>. Meson runs it for every Rust target a build links
+# tree's one workspace, and copies it to <out-file>. Meson runs it for every Rust target a build links
 # (meson.build). macOS targets build for macOS 27 unless MACOSX_DEPLOYMENT_TARGET says otherwise. No home or build
 # folder goes into the library: rustc remaps them as dxmt/mtld3d-build.sh's cargo config does (cargo joins these
 # rustflags with the workspace's; rustc tries the last prefix first, so the most specific comes last). Cargo runs
@@ -12,13 +12,12 @@ set -eu
   exit 2
 }
 root=$(cd "$(dirname "$0")/.." && pwd)
-ws=$root/mtld3d/windows; [ ! -d "$root/mtld3d/unix/$3" ] || ws=$root/mtld3d/unix
 profile=${6:-production}
 case $2 in *-apple-darwin) export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-27.0}" ;; esac
 ch=${CARGO_HOME:-$HOME/.cargo}
 remap="target.'cfg(all())'.rustflags=[\"--remap-path-prefix=$HOME=~\", \"--remap-path-prefix=$ch/registry/src=crates\", \
-\"--remap-path-prefix=$root/mtld3d=mtld3d\"]"
-( cd "$ws" && CARGO_TARGET_DIR=$4 cargo "+$1" build -q --offline --profile "$profile" --target "$2" -p "$3" \
+\"--remap-path-prefix=$root=dxmtrs\"]"
+( cd "$root" && CARGO_TARGET_DIR=$4 cargo "+$1" build -q --offline --profile "$profile" --target "$2" -p "$3" \
   ${7:+--features "$7"} --config "$remap" )
 lib=$(echo "$3" | tr - _)
 case $2 in *-windows-msvc) f=$lib.lib ;; *) f=lib$lib.a ;; esac

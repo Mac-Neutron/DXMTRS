@@ -1,0 +1,213 @@
+[workspace]
+# Every Rust crate of the tree. A build names its package (-p) and target, so one workspace serves the PE, macOS and
+# Linux crates alike.
+members = [
+    "src/d3d9",
+    "src/d3d9/core",
+    "src/d3d9/mtl",
+    "src/d3d9/shared",
+    "src/d3d9/shim",
+    "src/d3d9/types",
+    "src/d3d9/unix",
+    "src/nvapi",
+    "src/nvngx",
+    "src/util",
+    "src/winemetal",
+    "src/winemetal/unix",
+    "src/winemetal/wire",
+    "tests/d3d9/conformance",
+    "tests/d3d9/programs",
+    "tests/d3d9/runner",
+]
+# A command without -p takes the crates that build and test on the host. It leaves the PE crates out, and winemetal:
+# its unit test binary references symbols only the link of winemetal.so or the native winemetal.dylib provides
+# (NtSetEvent, sqlite3_*, SM50*), so its tests run on their own, `cargo test -p winemetal` with `-undefined
+# dynamic_lookup`.
+default-members = [
+    "src/d3d9/core",
+    "src/d3d9/mtl",
+    "src/d3d9/shared",
+    "src/d3d9/types",
+    "src/d3d9/unix",
+    "src/winemetal/wire",
+    "tests/d3d9/conformance",
+    "tests/d3d9/runner",
+]
+resolver = "2"
+
+# DXMTRS's. D3D9's crates (src/d3d9, tests/d3d9) state their own zlib licence and authors in their manifests, so a new
+# crate is never zlib by accident.
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+version = "0.14.1"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/Mac-Neutron/DXMTRS"
+
+[workspace.dependencies]
+dxmt-util = { path = "src/util" }
+mtld3d-core = { path = "src/d3d9/core" }
+mtld3d-mtl = { path = "src/d3d9/mtl" }
+mtld3d-shared = { path = "src/d3d9/shared" }
+mtld3d-types = { path = "src/d3d9/types" }
+winemetal-wire = { path = "src/winemetal/wire" }
+bitflags = "2"
+block2 = "0.6"
+cc = "1"
+dispatch2 = "0.3"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+libc = "0.2"
+libloading = "0.9"
+log = "0.4"
+# `disable-encoding-assertions` turns off objc2's debug-only runtime
+# message-send verification. Under an Xcode GPU capture, Metal substitutes a
+# `CaptureMTLDevice` proxy that forwards `MTLDevice` methods dynamically rather
+# than declaring them on its class; that verification inspects the class method
+# table (which does not see dynamic forwarding) and aborts a `release`/`dev`
+# build with "method not found" before the forwarded call can run. We use only
+# generated typed bindings (no hand-rolled `msg_send!`), so the check only ever
+# produces that false positive here — disabling it lets the real, forwarded
+# value come back and makes capturable debug builds behave like production.
+objc2 = { version = "0.6", features = ["disable-encoding-assertions"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSColor",
+    "NSColorSpace",
+    "NSCursor",
+    "NSEvent",
+    "NSGraphics",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-quartz-core",
+] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes", "CFRunLoop"] }
+objc2-core-graphics = { version = "0.3", features = ["CGColorSpace", "CGDirectDisplay"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSDictionary",
+    "NSException",
+    "NSString",
+    "NSURL",
+    "NSProcessInfo",
+    "NSNotification",
+    "NSNull",
+    "NSOperation",
+    "block2",
+] }
+objc2-metal = { version = "0.3", features = [
+    "MTLBuffer",
+    "MTLCaptureManager",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLDepthStencil",
+    "MTLDevice",
+    "MTLDrawable",
+    "MTLLibrary",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLResource",
+    "MTLSampler",
+    "MTLTexture",
+    "MTLTypes",
+    "MTLVertexDescriptor",
+] }
+objc2-metal-fx = { version = "0.3", features = ["MTLFXSpatialScaler"] }
+objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CATransaction", "objc2-metal"] }
+rustc-hash = "2"
+# The global allocator of D3D9's DLLs and of its mtld3d.so, one `build_cc` configuration for both. The `snmalloc_drift`
+# tests (mtld3d-core's, and tests/d3d9/programs' on Windows) catch a bump that changes the allocator's shape.
+snmalloc-rs = { version = "0.7.6", features = ["build_cc"] }
+strum = { version = "0.28", default-features = false }
+xbr = { version = "0.2", default-features = false }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+zstd = { version = "0.14", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+# Limited debug info for post-mortem symbolication of crash backtraces (the `abort_backtrace` handler in d3d9, an
+# NSException stack trace in mtld3d.so, any game-side crash dumper). Function names + line tables + inline frame chain
+# — the last bit is load-bearing because the code uses `#[inline(always)]` heavily, so `line-tables-only` would
+# collapse most call sites into their parents. Skips variable type info (only useful in a live debugger). On MSVC the
+# bytes land in the side-by-side `.pdb`, not the DLL; on macOS cargo's `split-debuginfo = "unpacked"` leaves the DWARF
+# in the compiler's `.o` files and the dylib carries only a debug map (`OSO` stabs) naming them by absolute path.
+debug = 1
+
+# `release` is the dev/test profile, so a `cfg(debug_assertions)` guard (and `overflow-checks`) would otherwise be
+# compiled out of exactly the build under test. Both are on so bugs trip during dev + testing: `debug-assertions`
+# carries every `debug_assert!` including the `LastBoundCache` cache-in-sync guard; `overflow-checks` turns silent
+# integer wraps into panics. `production` (the shipped artifacts) overrides both back off below.
+debug-assertions = true
+overflow-checks = true
+
+# snmalloc-sys 0.7's and zstd-sys's build scripts read cargo's `DEBUG` env var (set when the package's debuginfo is
+# enabled): snmalloc-sys then builds its C++ as a `Debug` build (`-g`, and on windows-msvc `msvcrtd`), and cc-rs gives
+# zstd-sys's C `-g` (`/MDd` on windows-msvc). Keep both release builds in every profile, since dev defaults to
+# `debug = 2`. Under LTO rustc links the dylib against a filtered copy of each rlib in a temporary directory it deletes
+# after the link, so a debug map would name objects that no longer exist. `NDEBUG` is not these overrides' job.
+[profile.release.package.snmalloc-sys]
+debug = 0
+
+[profile.dev.package.snmalloc-sys]
+debug = 0
+
+[profile.release.package.zstd-sys]
+debug = 0
+
+[profile.dev.package.zstd-sys]
+debug = 0
+
+# Shipped builds — fat cross-crate LTO + a single codegen unit so the linker can inline and DCE across the whole
+# binary. Inherits everything else from `release`, including the per-package `debug = 0` overrides (cargo merges
+# per-package overrides through the `inherits` chain), but turns `debug-assertions` + `overflow-checks` back off: the
+# shipped artifact must not pay the cost or panic in users' hands.
+[profile.production]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+# winemetal's static library (winemetal.so and the native winemetal.dylib): production, but
+# unwinding. Its handlers are `extern "C-unwind"`, so an Objective-C exception Metal raises
+# leaves them for the caller's `@catch`, as it left DXMT's C; a Rust panic still aborts
+# (`ffi::AbortOnPanic`).
+[profile.production-unwind]
+inherits = "production"
+panic = "unwind"
+
+# Warn-level so a plain `cargo clippy` (or an editor) reports findings without hard-failing; the gate denies every
+# warning (`-D warnings`).
+[workspace.lints.clippy]
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Length is a poor proxy for complexity; allow long procedural functions
+# (frame encoder, MSL codegen templates, per-opcode dispatchers) where the
+# structural alternative is fragmented helpers threading the same state.
+too_many_lines = "allow"
+# Stricter unsafe discipline (see docs/CONVENTIONS.md §"Unsafe is a last resort").
+missing_safety_doc = "warn"
+not_unsafe_ptr_arg_deref = "warn"
+transmute_ptr_to_ref = "warn"
+multiple_unsafe_ops_per_block = "warn"
+undocumented_unsafe_blocks = "warn"
+
+# snmalloc-sys 0.7.6 with its ARM64EC tests taking GNU mode's `__arm64ec__` as well as MSVC's `_M_ARM64EC`
+# (aal/aal.h, aal/aal_arm.h, global/memcpy.h): a build whose ARM64X halves compile its C++ for the mingw triples
+# (MacNeutron's, against llvm-mingw's headers rather than xwin's) otherwise takes ARM64EC for x86-64, whose
+# macros it also defines, down to `rep movsb` inline assembly. Every other target compiles the same code as upstream's.
+[patch.crates-io]
+snmalloc-sys = { path = "vendor/snmalloc-sys" }

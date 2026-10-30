@@ -1,0 +1,71 @@
+# No `[build] target`: a bare cargo command builds for the host. Shipped artifacts are built with an explicit
+# `--target` (tools/cargo-staticlib.sh, which meson runs).
+#
+# The PE baselines are `pentium4` (SSE2) for i686 and `x86-64-v2` (SSE4.2) for x86_64; mtld3d/docs/BUILDING.md
+# ("Instruction-set baselines") gives what was measured for each.
+#
+# NO BMI here, in either PE target. These DLLs are guest code, so they run under whichever x86
+# translator the host Wine uses, and CrossOver's arm64 Wine translates 32-bit
+# guests with `xtajit`, which implements neither BMI2 nor BMI1. Each one aborted
+# module init with STATUS_ILLEGAL_INSTRUCTION (c000001d) and took the game down
+# at startup: first a `mulx` in the shim's DllMain, then an `andn` in d3d9's.
+# Rosetta implements both, which is why this only ever showed up on an arm64
+# Wine, and why the flags looked free for so long.
+#
+# LZCNT went with them: an ABM-less CPU decodes it as BSF/BSR rather than
+# faulting, so an unsupported one would have gone unnoticed while quietly
+# returning a different answer. `tzcnt` still appears in the disassembly, which
+# is fine and not a regression of this rule: LLVM only emits it where BSF
+# semantics agree, and the encoding is a REP-prefixed BSF that any x86 decodes.
+#
+# The x86_64 macOS `.so` keeps BMI (below): that one is host code and only ever
+# runs under Rosetta, never under xtajit.
+#
+# Frame pointers are not pinned here: a normal build takes the toolchain default.
+#
+# The PE linker is `lld-link` from PATH (LLD selects its COFF driver from the name it is invoked under).
+[target.i686-pc-windows-msvc]
+linker = "lld-link"
+rustflags = ["-C", "target-cpu=pentium4", "-C", "target-feature=-crt-static"]
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link"
+rustflags = ["-C", "target-cpu=x86-64-v2", "-C", "target-feature=-crt-static"]
+
+# The two halves of the ARM64X DLLs. Rust has no ARM64X target, so each crate is built once per half as a static
+# library and both are linked into one image with `lld-link /machine:arm64x`; cargo links no DLL for these targets.
+[target.aarch64-pc-windows-msvc]
+linker = "lld-link"
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.arm64ec-pc-windows-msvc]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+# The x86_64 macOS build of mtld3d.so (an aarch64 build needs no entry of its own: it is the native arch, and its ABI
+# mandates a frame pointer anyway). It runs under x86-on-ARM translation, whose vector unit is 128-bit: 256-bit
+# AVX/AVX2 ops are split across two halves and underperform plain SSE, so the baseline caps at SSE4.2 plus the
+# AVX-independent GPR bit-manipulation features (BMI1/BMI2/LZCNT).
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+    "-C", "target-feature=+bmi1,+bmi2,+lzcnt",
+]
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "15.0"
+# `-march=x86-64-v2` mirrors the x86_64 macOS rustflags so build-script C/C++ code (mtld3d-unix's Objective-C
+# delegate forward, snmalloc-sys's C++, zstd-sys's C) gets the same ISA. cc-rs appends the plain `CFLAGS` /
+# `CXXFLAGS` to these.
+CFLAGS_x86_64-apple-darwin   = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"
+CXXFLAGS_x86_64-apple-darwin = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"
+# The MSVC librarian, as a bare name resolved from PATH: `llvm-lib` is `llvm-ar` in lib.exe-compatible mode (it
+# switches on the name it is invoked under), which matters because cc-rs drives the archiver with MSVC syntax
+# (`-out:`) for these targets. Apple's `ar` cannot stand in: it is Mach-O only, and handed a COFF object it writes an
+# archive with no members at all and exits 0.
+AR_i686-pc-windows-msvc         = "llvm-lib"
+AR_x86_64-pc-windows-msvc       = "llvm-lib"
+AR_aarch64-pc-windows-msvc      = "llvm-lib"
+AR_arm64ec-pc-windows-msvc      = "llvm-lib"
+# `llvm-lib` infers an archive's machine from its first member and takes an
+# ARM64EC object for a plain ARM64 one, so it is told which it is writing.
+ARFLAGS_arm64ec-pc-windows-msvc = "-machine:arm64ec"

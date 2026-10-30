@@ -1,0 +1,13 @@
+[package]
+name = "mtld3d-mtl"
+description = "MacNeutron: the subset of objc2's Metal bindings mtld3d uses, over winemetal's Unix-call table"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Zlib"
+authors = ["Alexander Theissen <alex.theissen@me.com>"]
+
+[dependencies]
+bitflags = { workspace = true }
+log = { workspace = true }
+rustc-hash = { workspace = true }

@@ -1268,7 +1268,7 @@ enum WMTRenderCommandType : uint16_t {
   WMTRenderCommandSetBlendFactor,
   WMTRenderCommandSetStencilRef,
   WMTRenderCommandSetDepthStencilState,
-  /* MacNeutron: mtld3d's direct binds (Direct3D 9 on winemetal), appended so every value above stays. Vertex bytes
+  /* MacNeutron: Direct3D 9's direct binds (src/d3d9 on winemetal), appended so every value above stays. Vertex bytes
    * and the vertex texture take wmtcmd_render_setbytes and wmtcmd_render_settexture, both samplers
    * wmtcmd_render_setsampler. */
   WMTRenderCommandSetVertexBytes,

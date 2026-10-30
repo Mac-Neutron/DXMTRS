@@ -1,7 +1,7 @@
 #!/bin/sh
 # winemetal-layouts.sh <llvm-mingw-bin>: prints winemetal-wire's src/layouts.rs, the compile-time asserts that pin the
 # crate's hand-written mirrors to winemetal's C:
-#   sh tools/winemetal-layouts.sh "$(sh dxmt/toolchain.sh)" > mtld3d/unix/winemetal-wire/src/layouts.rs
+#   sh tools/winemetal-layouts.sh "$(sh dxmt/toolchain.sh)" > src/winemetal/wire/src/layouts.rs
 # Per target the crates build for, from clang's -fdump-record-layouts: each mirrored struct's size, each field's offset,
 # each bitfield's shift and width (Apple clang for aarch64-apple-darwin; llvm-mingw's clang, -ffreestanding, for the
 # four Windows targets). Once, from Apple clang: each enum value of winemetal.h and each SM50_BINDING_INDEX_*, each
@@ -17,7 +17,7 @@
 #
 # With --protos it prints winemetal-pe's src/protos.rs instead, the compile-time asserts that pin the PE thunks'
 # signatures to winemetal.h's prototypes:
-#   sh tools/winemetal-layouts.sh --protos "$(sh dxmt/toolchain.sh)" > mtld3d/windows/winemetal-pe/src/protos.rs
+#   sh tools/winemetal-layouts.sh --protos "$(sh dxmt/toolchain.sh)" > src/winemetal/src/protos.rs
 # Per Windows target, from llvm-mingw's clang -ast-dump=json (-DDXMT_GUEST_VM, read with jq): every WINEMETAL_API
 # function (the dllimport ones: winemetal.h's DXMT_NATIVE and non-Windows blocks are out) as the type of an
 # unsafe extern "C" fn the export of that name must coerce to. Each type is the C's on that target: a typedef resolved
@@ -30,7 +30,7 @@ protos=
 bin=$1
 root=$(cd "$(dirname "$0")/.." && pwd)
 wm=$root/src/winemetal
-wire=$root/mtld3d/unix/winemetal-wire/src
+wire=$root/src/winemetal/wire/src
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 fail() { echo "winemetal-layouts.sh: $*" >&2; exit 1; }

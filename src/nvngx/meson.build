@@ -1,4 +1,4 @@
-# DXMT's nvngx.dll, in Rust (mtld3d/windows/nvngx): the DLL is linked from the crate's static library, its exports
+# DXMT's nvngx.dll, in Rust (src/nvngx): the DLL is linked from the crate's static library, its exports
 # named by nvngx.def.
 nvngx_rust = []
 foreach t : rust_pe_targets

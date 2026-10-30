@@ -1,4 +1,4 @@
-# DXMT's nvapi64.dll, in Rust (mtld3d/windows/nvapi): the DLL is linked from the crate's static library, its export
+# DXMT's nvapi64.dll, in Rust (src/nvapi): the DLL is linked from the crate's static library, its export
 # named by nvapi64.def.
 nvapi_rust = []
 foreach t : rust_pe_targets
