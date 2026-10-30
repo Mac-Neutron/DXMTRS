@@ -18,6 +18,7 @@ homepage = "https://github.com/athei/mtld3d"
 bitflags = "2"
 block2 = "0.6"
 cc = "1"
+dispatch2 = "0.3"
 mtld3d-shared = { path = "shared" }
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 libc = "0.2"

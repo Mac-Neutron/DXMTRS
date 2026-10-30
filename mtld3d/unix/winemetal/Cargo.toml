@@ -15,12 +15,12 @@ crate-type = ["staticlib"]
 # native event functions and the native cache class names.
 native = []
 
-# The framework crates keep their default features, which enable every header; the lists name the
-# headers the handlers send to, so the crate keeps them if the workspace's defaults go. AppKit is
-# not a dependency: the few NSScreen, NSView and NSWindow getters are declared locally.
+# The framework crates keep their default features, which enable every header; the feature lists
+# document the headers the lanes' handlers send to. AppKit is not a dependency: the few NSScreen,
+# NSView and NSWindow getters are declared locally.
 [dependencies]
 block2 = { workspace = true }
-dispatch2 = "0.3"
+dispatch2 = { workspace = true }
 libc = { workspace = true }
 objc2 = { workspace = true }
 objc2-core-foundation = { workspace = true, features = ["block2", "CFCGTypes", "CFData", "CFRunLoop", "CFString"] }
