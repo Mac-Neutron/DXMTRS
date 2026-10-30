@@ -18,14 +18,6 @@ typedef int NTSTATUS;
 #define STATUS_UNSUCCESSFUL 0xC0000001
 #define STATUS_NOT_IMPLEMENTED 0xC0000002
 
-void
-execute_on_main(dispatch_block_t block) {
-  if ([NSThread isMainThread]) {
-    block();
-  } else {
-    dispatch_sync(dispatch_get_main_queue(), block);
-  }
-}
 
 NTSTATUS _NSObject_retain(void *obj);
 
@@ -162,17 +154,6 @@ NTSTATUS _MTLBuffer_didModifyRange(void *obj);
 
 #ifdef DXMT_NATIVE
 
-static const struct WMTWsiHooks *wsi_hooks;
-
-__attribute__((visibility("default"))) void
-WMTSetWsiHooks(const struct WMTWsiHooks *hooks) {
-  wsi_hooks = hooks;
-}
-
-__attribute__((visibility("default"))) const struct WMTWsiHooks *
-WMTGetWsiHooks(void) {
-  return wsi_hooks;
-}
 #else
 #endif
 
@@ -231,207 +212,30 @@ NTSTATUS _NSString_string(void *obj);
 
 NTSTATUS _NSString_alloc_init(void *obj);
 
-static bool
-developer_hud_uses_metric_service(void) {
-  NSOperatingSystemVersion version = [NSProcessInfo processInfo].operatingSystemVersion;
-  return version.majorVersion >= 27;
-}
 
-static NTSTATUS
-_DeveloperHUDProperties_instance(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  Class cls = objc_lookUpClass(
-      developer_hud_uses_metric_service()
-          ? "MTLHUDService"
-          : "_CADeveloperHUDProperties"
-  );
-  params->ret =
-      (obj_handle_t)((id(*)(id, SEL))objc_msgSend)((id)cls, @selector(instance));
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DeveloperHUDProperties_instance(void *obj);
 
-static NTSTATUS
-_DeveloperHUDProperties_addLabel(void *obj) {
-  struct unixcall_generic_obj_obj_obj_uint64_ret *params = obj;
-  if (developer_hud_uses_metric_service()) {
-    params->ret =
-        ((bool (*)(id, SEL, id, id, id, id, uint32_t, uint32_t, uint32_t, uint64_t))objc_msgSend)(
-            (id)params->handle,
-            @selector(insertMetric:after:name:unit:nameColor:valueColor:visualType:options:),
-            (id)params->arg0,
-            (id)params->arg1,
-            @"",
-            @"",
-            UINT32_MAX,
-            UINT32_MAX,
-            1u,
-            0u
-        );
-  } else {
-    params->ret =
-        ((bool (*)(id, SEL, id, id))objc_msgSend)(
-            (id)params->handle,
-            @selector(addLabel:after:),
-            (id)params->arg0,
-            (id)params->arg1
-        );
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DeveloperHUDProperties_addLabel(void *obj);
 
-static NTSTATUS
-_DeveloperHUDProperties_updateLabel(void *obj) {
-  struct unixcall_generic_obj_obj_obj_noret *params = obj;
-  ((void (*)(id, SEL, id, id)
-  )objc_msgSend)((id)params->handle, @selector(updateLabel:value:), (id)params->arg0, (id)params->arg1);
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DeveloperHUDProperties_updateLabel(void *obj);
 
-static NTSTATUS
-_DeveloperHUDProperties_remove(void *obj) {
-  struct unixcall_generic_obj_obj_noret *params = obj;
-  ((void (*)(id, SEL, id))objc_msgSend)((id)params->handle, @selector(remove:), (id)params->arg);
-  return STATUS_SUCCESS;
-}
+NTSTATUS _DeveloperHUDProperties_remove(void *obj);
 
-static NTSTATUS
-_MetalDrawable_texture(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<CAMetalDrawable>)params->handle texture];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalDrawable_texture(void *obj);
 
-static NTSTATUS
-_MetalLayer_nextDrawable(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(CAMetalLayer *)params->handle nextDrawable];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalLayer_nextDrawable(void *obj);
 
 NTSTATUS _MTLDevice_supportsFXSpatialScaler(void *obj);
 
 NTSTATUS _MTLDevice_supportsFXTemporalScaler(void *obj);
 
-static NTSTATUS
-_MetalLayer_setProps(void *obj) {
-  struct unixcall_generic_obj_constptr_noret *params = obj;
-  CAMetalLayer *layer = (CAMetalLayer *)params->handle;
-  const struct WMTLayerProps *props = params->arg.ptr;
-  execute_on_main(^{
-    layer.device = (id<MTLDevice>)props->device;
-    layer.opaque = props->opaque;
-    layer.framebufferOnly = props->framebuffer_only;
-    layer.contentsScale = props->contents_scale;
-    layer.displaySyncEnabled = props->display_sync_enabled;
-    layer.drawableSize = CGSizeMake(props->drawable_width, props->drawable_height);
-    layer.pixelFormat = to_metal_pixel_format(props->pixel_format);
-  });
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalLayer_setProps(void *obj);
 
-static NTSTATUS
-_MetalLayer_getProps(void *obj) {
-  struct unixcall_generic_obj_ptr_noret *params = obj;
-  CAMetalLayer *layer = (CAMetalLayer *)params->handle;
-  struct WMTLayerProps *props = params->arg.ptr;
-  props->device = (obj_handle_t)layer.device;
-  props->opaque = layer.opaque;
-  props->framebuffer_only = layer.framebufferOnly;
-  props->contents_scale = layer.contentsScale;
-  props->display_sync_enabled = layer.displaySyncEnabled;
-  props->drawable_height = layer.drawableSize.height;
-  props->drawable_width = layer.drawableSize.width;
-  props->pixel_format = layer.pixelFormat;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalLayer_getProps(void *obj);
 
-typedef struct macdrv_opaque_metal_device *macdrv_metal_device;
-typedef struct macdrv_opaque_metal_view *macdrv_metal_view;
-typedef struct macdrv_opaque_metal_layer *macdrv_metal_layer;
-typedef struct macdrv_opaque_view *macdrv_view;
-typedef struct macdrv_opaque_window *macdrv_window;
-typedef struct macdrv_opaque_window_data *macdrv_window_data;
-typedef struct opaque_window_surface *window_surface;
-typedef struct opaque_HWND *HWND;
-struct macdrv_win_data {
-  HWND hwnd; /* hwnd that this private data belongs to */
-  macdrv_window cocoa_window;
-  macdrv_view cocoa_view;
-  macdrv_view client_cocoa_view;
-};
+NTSTATUS _CreateMetalViewFromHWND(void *obj);
 
-struct macdrv_functions_t {
-  void (*macdrv_init_display_devices)(BOOL);
-  struct macdrv_win_data *(*get_win_data)(HWND hwnd);
-  void (*release_win_data)(struct macdrv_win_data *data);
-  macdrv_window (*macdrv_get_cocoa_window)(HWND hwnd, BOOL require_on_screen);
-  macdrv_metal_device (*macdrv_create_metal_device)(void);
-  void (*macdrv_release_metal_device)(macdrv_metal_device d);
-  macdrv_metal_view (*macdrv_view_create_metal_view)(macdrv_view v, macdrv_metal_device d);
-  macdrv_metal_layer (*macdrv_view_get_metal_layer)(macdrv_metal_view v);
-  void (*macdrv_view_release_metal_view)(macdrv_metal_view v);
-  void (*on_main_thread)(dispatch_block_t b);
-};
-
-static NTSTATUS
-_CreateMetalViewFromHWND(void *obj) {
-  struct unixcall_create_metal_view_from_hwnd *params = obj;
-
-  struct macdrv_win_data *(*pfn_get_win_data)(HWND hwnd) = NULL;
-  void (*pfn_release_win_data)(struct macdrv_win_data *data) = NULL;
-  macdrv_metal_view (*pfn_macdrv_view_create_metal_view)(macdrv_view v, macdrv_metal_device d) = NULL;
-  macdrv_metal_layer (*pfn_macdrv_view_get_metal_layer)(macdrv_metal_view v) = NULL;
-
-  struct macdrv_functions_t *macdrv_functions;
-  if ((macdrv_functions = dlsym(RTLD_DEFAULT, "macdrv_functions"))) {
-    pfn_get_win_data = macdrv_functions->get_win_data;
-    pfn_release_win_data = macdrv_functions->release_win_data;
-    pfn_macdrv_view_create_metal_view = macdrv_functions->macdrv_view_create_metal_view;
-    pfn_macdrv_view_get_metal_layer = macdrv_functions->macdrv_view_get_metal_layer;
-  } else {
-    pfn_get_win_data = dlsym(RTLD_DEFAULT, "get_win_data");
-    pfn_release_win_data = dlsym(RTLD_DEFAULT, "release_win_data");
-    pfn_macdrv_view_create_metal_view = dlsym(RTLD_DEFAULT, "macdrv_view_create_metal_view");
-    pfn_macdrv_view_get_metal_layer = dlsym(RTLD_DEFAULT, "macdrv_view_get_metal_layer");
-  }
-
-  if (pfn_get_win_data && pfn_release_win_data && pfn_macdrv_view_create_metal_view &&
-      pfn_macdrv_view_get_metal_layer) {
-    struct macdrv_win_data *win_data = pfn_get_win_data((HWND)params->hwnd);
-    /* MacNeutron: no window data, or no view in it (a window the driver doesn't know): no view, as without a driver */
-    macdrv_metal_view view = win_data && win_data->client_cocoa_view
-                                 ? pfn_macdrv_view_create_metal_view(win_data->client_cocoa_view,
-                                                                     (macdrv_metal_device)params->device)
-                                 : NULL;
-    params->ret_view = (obj_handle_t)view;
-    if (view) {
-      params->ret_layer = (obj_handle_t)pfn_macdrv_view_get_metal_layer(view);
-    }
-    if (win_data)
-      pfn_release_win_data(win_data);
-  }
-
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_ReleaseMetalView(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-
-  void (*pfn_macdrv_view_release_metal_view)(macdrv_metal_view v) = NULL;
-
-  struct macdrv_functions_t *macdrv_functions;
-  if ((macdrv_functions = dlsym(RTLD_DEFAULT, "macdrv_functions"))) {
-    pfn_macdrv_view_release_metal_view = macdrv_functions->macdrv_view_release_metal_view;
-  } else {
-    pfn_macdrv_view_release_metal_view = dlsym(RTLD_DEFAULT, "macdrv_view_release_metal_view");
-  }
-
-  if (pfn_macdrv_view_release_metal_view)
-    pfn_macdrv_view_release_metal_view((macdrv_metal_view)params->handle);
-
-  return STATUS_SUCCESS;
-}
+NTSTATUS _ReleaseMetalView(void *obj);
 
 static NTSTATUS
 thunk_SM50Initialize(void *args) {
@@ -887,284 +691,26 @@ NTSTATUS _MTLCommandBuffer_logs(void *obj);
 
 NTSTATUS _MTLLogContainer_enumerate(void *obj);
 
-CFStringRef
-GetColorSpaceName(enum WMTColorSpace colorspace) {
-  switch (colorspace) {
-  case WMTColorSpaceSRGB:
-    return kCGColorSpaceSRGB;
-  case WMTColorSpaceSRGBLinear:
-  case WMTColorSpaceHDR_scRGB:
-    return kCGColorSpaceExtendedLinearSRGB;
-  case WMTColorSpaceBT2020:
-    return kCGColorSpaceITUR_2020_sRGBGamma;
-  case WMTColorSpaceHDR_PQ:
-    return kCGColorSpaceITUR_2100_PQ;
-  default:
-    return nil;
-  }
-}
 
-static NTSTATUS
-_CGColorSpace_checkColorSpaceSupported(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = false;
-  CFStringRef name = GetColorSpaceName((enum WMTColorSpace)params->handle);
-  if (!name)
-    return STATUS_SUCCESS;
-  CGColorSpaceRef ref = CGColorSpaceCreateWithName(name);
-  if (!ref)
-    return STATUS_SUCCESS;
-  CGColorSpaceRelease(ref);
-  params->ret = true;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _CGColorSpace_checkColorSpaceSupported(void *obj);
 
-static NTSTATUS
-_MetalLayer_setColorSpace(void *obj) {
-  struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
-  CAMetalLayer *layer = (CAMetalLayer *)params->handle;
-  enum WMTColorSpace colorspace = params->arg;
-  CFStringRef name = GetColorSpaceName(colorspace);
-  params->ret = false;
-  if (!name)
-    return STATUS_SUCCESS;
-  CGColorSpaceRef ref = CGColorSpaceCreateWithName(name);
-  if (!ref)
-    return STATUS_SUCCESS;
-  execute_on_main(^{
-    layer.colorspace = ref;
-    layer.wantsExtendedDynamicRangeContent = WMT_COLORSPACE_IS_HDR(colorspace);
-    CGColorSpaceRelease(ref);
-  });
-  params->ret = true;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalLayer_setColorSpace(void *obj);
 
-static NTSTATUS
-_WMTGetPrimaryDisplayId(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  params->ret = CGMainDisplayID();
-  return STATUS_SUCCESS;
-}
+NTSTATUS _WMTGetPrimaryDisplayId(void *obj);
 
-static NTSTATUS
-_WMTGetSecondaryDisplayId(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  params->ret = kCGNullDirectDisplay;
+NTSTATUS _WMTGetSecondaryDisplayId(void *obj);
 
-  uint32_t count = 0;
-  CGGetOnlineDisplayList(0, NULL, &count);
+NTSTATUS _WMTGetDisplayDescription(void *obj);
 
-  if (count == 0)
-    return STATUS_SUCCESS;
-
-  CGDirectDisplayID main_display = CGMainDisplayID();
-  CGDirectDisplayID displays[count];
-  CGGetOnlineDisplayList(count, displays, &count);
-
-  for (uint32_t i = 0; i < count; i++) {
-    CGDirectDisplayID id = displays[i];
-    if (id == main_display)
-      continue;
-    if (CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay)
-      continue;
-    params->ret = id;
-    break;
-  }
-
-  return STATUS_SUCCESS;
-}
-
-typedef struct icc_XYZ_t {
-  uint32_t sig;      // 0x205a5958
-  uint32_t reserved; // 0
-  int32_t x;
-  int32_t y;
-  int32_t z;
-} icc_XYZ_t;
-
-bool
-GetChromaticity_xy(ColorSyncProfileRef profile, CFStringRef tag, float *out_x, float *out_y) {
-  CFDataRef tag_data = ColorSyncProfileCopyTag(profile, tag);
-  if (!tag_data)
-    return false;
-  if (CFDataGetLength(tag_data) != sizeof(icc_XYZ_t)) {
-    CFRelease(tag_data);
-    return false;
-  }
-  icc_XYZ_t *data = (icc_XYZ_t *)CFDataGetBytePtr(tag_data);
-  if (data->sig != 0x205a5958)
-    return false;
-  double X = (int32_t)__builtin_bswap32(data->x) / 65536.0;
-  double Y = (int32_t)__builtin_bswap32(data->y) / 65536.0;
-  double Z = (int32_t)__builtin_bswap32(data->z) / 65536.0;
-  *out_x = X / (X + Y + Z);
-  *out_y = Y / (X + Y + Z);
-  CFRelease(tag_data);
-  return true;
-}
-
-bool
-GetDisplayColorGamut(ColorSyncProfileRef profile, struct WMTDisplayDescription *desc_out) {
-  return GetChromaticity_xy(
-             profile, kColorSyncSigMediaWhitePointTag, &desc_out->white_points[0], &desc_out->white_points[1]
-         ) &&
-         GetChromaticity_xy(
-             profile, kColorSyncSigRedColorantTag, &desc_out->red_primaries[0], &desc_out->red_primaries[1]
-         ) &&
-         GetChromaticity_xy(
-             profile, kColorSyncSigGreenColorantTag, &desc_out->green_primaries[0], &desc_out->green_primaries[1]
-         ) &&
-         GetChromaticity_xy(
-             profile, kColorSyncSigBlueColorantTag, &desc_out->blue_primaries[0], &desc_out->blue_primaries[1]
-         );
-}
-
-NSScreen *
-GetNSScreenForDisplayID(CGDirectDisplayID display_id) {
-  for (NSScreen *screen in [NSScreen screens]) {
-    CGDirectDisplayID id = [[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue];
-    if (id == display_id) {
-      return screen;
-    }
-  }
-  return nil;
-}
-
-static NTSTATUS
-_WMTGetDisplayDescription(void *obj) {
-  struct unixcall_generic_obj_ptr_noret *params = obj;
-  CGDirectDisplayID display_id = params->handle;
-  struct WMTDisplayDescription *desc_out = params->arg.ptr;
-  ColorSyncProfileRef profile = ColorSyncProfileCreateWithDisplayID(display_id);
-  ColorSyncProfileRef fallback = NULL;
-  if (!profile || !GetDisplayColorGamut(profile, desc_out)) {
-    fallback = ColorSyncProfileCreateWithName(kColorSyncGenericRGBProfile);
-    if (fallback)
-      GetDisplayColorGamut(fallback, desc_out);
-  }
-  @autoreleasepool {
-  NSScreen *screen = GetNSScreenForDisplayID(display_id);
-  if (screen) {
-    desc_out->maximum_edr_color_component_value = [screen maximumExtendedDynamicRangeColorComponentValue];
-    desc_out->maximum_reference_edr_color_component_value =
-        [screen maximumReferenceExtendedDynamicRangeColorComponentValue];
-    desc_out->maximum_potential_edr_color_component_value =
-        [screen maximumPotentialExtendedDynamicRangeColorComponentValue];
-  } else {
-    desc_out->maximum_edr_color_component_value = 1.0;
-    desc_out->maximum_reference_edr_color_component_value = 0.0;
-    desc_out->maximum_potential_edr_color_component_value = 1.0;
-  }
-  }
-  if (profile)
-    CFRelease(profile);
-  if (fallback)
-    CFRelease(fallback);
-  return STATUS_SUCCESS;
-}
-
-struct DisplaySetting {
-  uint64_t version;
-  enum WMTColorSpace colorspace;
-  struct WMTHDRMetadata hdr_metadata;
-};
-
-struct DisplaySetting g_display_settings[2] = {{0, 0, {}}, {0, 0, {}}};
-
-static NTSTATUS
-_MetalLayer_getEDRValue(void *obj) {
-  struct unixcall_generic_obj_ptr_noret *params = obj;
-  CAMetalLayer *layer = (CAMetalLayer *)params->handle;
-  struct WMTEDRValue *value = params->arg.ptr;
-  value->maximum_edr_color_component_value = 1.0;
-  value->maximum_potential_edr_color_component_value = 1.0;
-
-  if (![layer.delegate isKindOfClass:NSView.class])
-    return STATUS_SUCCESS;
-
-  NSView *view = (NSView *)layer.delegate;
-  if (!view.window)
-    return STATUS_SUCCESS;
-
-  if (!view.window.screen)
-    return STATUS_SUCCESS;
-
-  NSScreen *screen = view.window.screen;
-
-  value->maximum_edr_color_component_value =
-      layer.wantsExtendedDynamicRangeContent ? screen.maximumExtendedDynamicRangeColorComponentValue : 1.0;
-  value->maximum_potential_edr_color_component_value = screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
-
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MetalLayer_getEDRValue(void *obj);
 
 NTSTATUS _MTLLibrary_newFunctionWithConstants(void *obj);
 
-static NTSTATUS
-_WMTQueryDisplaySetting(void *obj) {
-  struct unixcall_query_display_setting *params = obj;
-  CGDirectDisplayID display_id = params->display_id;
-  struct WMTHDRMetadata *value = params->hdr_metadata.ptr;
-  params->ret = false;
-  struct DisplaySetting *setting = &g_display_settings[display_id == CGMainDisplayID()];
-  if (setting->version) {
-    *value = setting->hdr_metadata;
-    params->colorspace = setting->colorspace;
-    params->ret = true;
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _WMTQueryDisplaySetting(void *obj);
 
-static NTSTATUS
-_WMTUpdateDisplaySetting(void *obj) {
-  struct unixcall_update_display_setting *params = obj;
-  CGDirectDisplayID display_id = params->display_id;
-  const struct WMTHDRMetadata *value = params->hdr_metadata.ptr;
-  struct DisplaySetting *setting = &g_display_settings[display_id == CGMainDisplayID()];
-  if (value) {
-    setting->hdr_metadata = *value;
-    setting->colorspace = params->colorspace;
-    setting->version++;
-  } else {
-    setting->version = 0;
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _WMTUpdateDisplaySetting(void *obj);
 
-static NTSTATUS
-_WMTQueryDisplaySettingForLayer(void *obj) {
-  struct unixcall_query_display_setting_for_layer *params = obj;
-  CAMetalLayer *layer = (CAMetalLayer *)params->layer;
-  struct WMTHDRMetadata *hdr_metadata_out = params->hdr_metadata.ptr;
-
-  @autoreleasepool {
-  params->version = 0;
-  if (![layer.delegate isKindOfClass:NSView.class])
-    return STATUS_SUCCESS;
-
-  NSView *view = (NSView *)layer.delegate;
-  if (!view.window)
-    return STATUS_SUCCESS;
-
-  if (!view.window.screen)
-    return STATUS_SUCCESS;
-
-  NSScreen *screen = view.window.screen;
-  CGDirectDisplayID id = [[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue];
-
-  struct DisplaySetting *setting = &g_display_settings[id == CGMainDisplayID()];
-  *hdr_metadata_out = setting->hdr_metadata;
-  params->version = setting->version;
-  params->colorspace = setting->colorspace;
-  params->edr_value.maximum_edr_color_component_value =
-      layer.wantsExtendedDynamicRangeContent ? screen.maximumExtendedDynamicRangeColorComponentValue : 1.0;
-  params->edr_value.maximum_potential_edr_color_component_value =
-      screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
-  }
-
-  return STATUS_SUCCESS;
-}
+NTSTATUS _WMTQueryDisplaySettingForLayer(void *obj);
 
 NTSTATUS _MTLCommandBuffer_encodeWaitForEvent(void *obj);
 
