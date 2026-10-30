@@ -12,9 +12,7 @@ use std::io::Write;
 /// `DXMT_MAX_ANISOTROPY=<1..16>`: the floor on a sampler's `maxAnisotropy`, 0 for none.
 ///
 /// For trilinear, non-comparison samplers. Process-wide (§State lives on an object): one
-/// environment, read once when the image loads. Exported under the C's name for the C sampler
-/// handler.
-#[unsafe(export_name = "forced_max_anisotropy")]
+/// environment, read once when the image loads.
 pub static FORCED_MAX_ANISOTROPY: AtomicU32 = AtomicU32::new(0);
 
 /// `DXMT_MAX_ANISOTROPY`'s value: `atoi`'s reading of `v` when it is 1 to 16, else 0.

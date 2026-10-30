@@ -6,7 +6,6 @@ use objc2_foundation::NSInteger;
 use objc2_metal::{MTLResourceOptions, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage};
 use winemetal_wire::{WMT_TEXTURE_FLAG_LOSSLESS, WMTTextureInfo};
 
-use crate::ffi::AbortOnPanic;
 use crate::float_cast::u64_to_usize;
 use crate::format::pixel_format;
 
@@ -57,27 +56,5 @@ pub fn fill_texture_descriptor(desc: &MTLTextureDescriptor, info: &WMTTextureInf
         // SAFETY: the same object under a second declaration of its own class.
         let private = unsafe { &*core::ptr::from_ref(desc).cast::<PrivateTextureDescriptor>() };
         private.set_compression_mode(1);
-    }
-}
-
-/// `fill_texture_descriptor`, for the C handlers.
-///
-/// A null `desc` or `info` fills nothing (the C sent to nil, or read through null).
-///
-/// # Safety
-///
-/// `desc` is null or a live `MTLTextureDescriptor`, `info` null or a live `WMTTextureInfo`.
-#[unsafe(export_name = "fill_texture_descriptor")]
-pub unsafe extern "C-unwind" fn fill_texture_descriptor_c(
-    desc: *mut MTLTextureDescriptor,
-    info: *mut WMTTextureInfo,
-) {
-    let _guard = AbortOnPanic;
-    // SAFETY: the caller's contract.
-    let desc = unsafe { desc.as_ref() };
-    // SAFETY: the caller's contract.
-    let info = unsafe { info.as_ref() };
-    if let (Some(desc), Some(info)) = (desc, info) {
-        fill_texture_descriptor(desc, info);
     }
 }

@@ -1,6 +1,4 @@
 winemetal_unix_src = [
-  'winemetal_unix.c',
-  'cache.c',
   'sm50_wow64.c',
 ]
 
@@ -22,6 +20,9 @@ winemetal_unix_ld_args = [
   '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',
   '-weak_framework', 'ColorSync',  '-weak_framework', 'Cocoa',
   '-lsqlite3', '-weak_framework', 'AppKit',
+  # The two tables are the Rust archive's (table.rs) and no object here names them: -u pulls the member that holds
+  # them, and the constructors with it. winemac.so exports the same two names, so a missing table would bind to its.
+  '-Wl,-u,___wine_unix_call_funcs', '-Wl,-u,___wine_unix_call_wow64_funcs',
 ] + (get_option('debug') ? [] : ['-Wl,-S'])
 winemetal_unix_link_depends = []
 

@@ -37,9 +37,9 @@ use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, mem_slice, params};
 use crate::float_cast::{f64_to_u64, u64_to_usize};
 use crate::handle::{obj, ret_owned, ret_passthrough};
 
-mod blit;
-mod compute;
-mod render;
+pub mod blit;
+pub mod compute;
+pub mod render;
 
 type CommandBuffer = ProtocolObject<dyn MTLCommandBuffer>;
 

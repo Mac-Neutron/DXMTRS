@@ -1,9 +1,9 @@
 //! DXMT's winemetal: the Unix side of its Unix calls, over Metal.
 //!
 //! A static library linked into the Wine build's `winemetal.so` and, with the `native` feature,
-//! the native `winemetal.dylib`. Each handler is exported under its C name, so the C table of
-//! handlers reaches it until the tables move here too ([`table`]). The handlers are grouped as
-//! winemetal's slots are ([`g1`] to [`g10`]); the modules before them are what the groups share.
+//! the native `winemetal.dylib`, whose Unix-call tables ([`table`]) name a handler for each slot,
+//! exported under its C name. The handlers are grouped as winemetal's slots are ([`g1`] to
+//! [`g10`]); the modules before them are what the groups share.
 
 pub mod ffi;
 pub mod float_cast;

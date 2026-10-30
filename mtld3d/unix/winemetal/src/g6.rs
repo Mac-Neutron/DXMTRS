@@ -35,8 +35,8 @@ use crate::float_cast::{u64_to_usize, usize_to_u32};
 use crate::format::pixel_format;
 use crate::handle::{lookup_class, obj, ret_passthrough};
 
-mod appkit;
-mod display;
+pub mod appkit;
+pub mod display;
 
 extern_class!(
     /// `MTLHUDService`, re-declared for its private metric selectors.

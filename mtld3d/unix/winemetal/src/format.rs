@@ -3,8 +3,6 @@
 use objc2_metal::{MTLPixelFormat, MTLTextureSwizzle, MTLTextureSwizzleChannels};
 use winemetal_wire::{WMTTextureSwizzleChannels, decode_format_component_swizzle, original_format};
 
-use crate::ffi::AbortOnPanic;
-
 /// The Metal pixel format of a `WMTPixelFormat`: `ORIGINAL_FORMAT`.
 ///
 /// The format without the custom swizzle in its high bits.
@@ -29,13 +27,6 @@ pub fn swizzle(format: u32, channels: WMTTextureSwizzleChannels) -> MTLTextureSw
         blue: decode(2, channels.b),
         alpha: decode(3, channels.a),
     }
-}
-
-/// `to_metal_pixel_format`, [`pixel_format`] for the C handlers.
-#[unsafe(no_mangle)]
-pub extern "C-unwind" fn to_metal_pixel_format(format: u32) -> MTLPixelFormat {
-    let _guard = AbortOnPanic;
-    pixel_format(format)
 }
 
 #[cfg(test)]
