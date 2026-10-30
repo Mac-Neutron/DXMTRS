@@ -32,13 +32,13 @@ use mtld3d_shared::{
     mtl_handle::{MTLDeviceKind, MTLRenderPipelineStateKind},
     perf::NanosSetTimer,
 };
-use crate::mtl::objc2::rc::autoreleasepool;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     LOG_TARGET,
     encoder::{StageLibHandles, WarmCache, compile_stage_library},
     metal::handle::IntoRetained,
+    mtl::objc2::rc::autoreleasepool,
 };
 
 /// Start prewarm for one device and return its startup barrier.

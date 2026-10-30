@@ -46,8 +46,14 @@ pub const UNSUPPORTED: u32 = 1;
 
 const _: () = {
     use core::mem::offset_of;
-    assert!(size_of::<FeatureDiscoveryInfo>() == 56 && offset_of!(FeatureDiscoveryInfo, application_data_path) == 40);
-    assert!(size_of::<FeatureRequirement>() == 264 && offset_of!(FeatureRequirement, min_os_version) == 8);
+    assert!(
+        size_of::<FeatureDiscoveryInfo>() == 56
+            && offset_of!(FeatureDiscoveryInfo, application_data_path) == 40
+    );
+    assert!(
+        size_of::<FeatureRequirement>() == 264
+            && offset_of!(FeatureRequirement, min_os_version) == 8
+    );
 };
 
 /// A feature's head, which both APIs' features start with: the game's handle is its address.
@@ -69,7 +75,11 @@ pub struct Dlss {
 
 /// `printf`'s `%#x`: `0`, or `0x` and lowercase hex digits.
 pub fn hex(v: u32) -> String {
-    if v == 0 { "0".to_owned() } else { format!("{v:#x}") }
+    if v == 0 {
+        "0".to_owned()
+    } else {
+        format!("{v:#x}")
+    }
 }
 
 /// `printf`'s `%p` in Windows' C runtime: 16 uppercase hex digits.

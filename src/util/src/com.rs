@@ -15,7 +15,12 @@ impl Guid {
     /// A GUID from its four fields.
     #[must_use]
     pub const fn new(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> Self {
-        Self { data1, data2, data3, data4 }
+        Self {
+            data1,
+            data2,
+            data3,
+            data4,
+        }
     }
 }
 
@@ -24,7 +29,8 @@ pub type Hresult = i32;
 /// `IUnknown`'s slots, which every interface starts with.
 #[repr(C)]
 pub struct IUnknownVtbl {
-    pub query_interface: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
+    pub query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
     pub add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     pub release: unsafe extern "system" fn(*mut c_void) -> u32,
 }

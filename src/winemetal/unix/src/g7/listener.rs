@@ -15,22 +15,22 @@
 //! the listener after the last: its handle, its one start (counted from the create) and each
 //! notification Metal holds.
 
-use core::hint::spin_loop;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::{
+    hint::spin_loop,
+    ptr::{self, NonNull},
+    sync::atomic::{AtomicPtr, Ordering},
+};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use block2::RcBlock;
-use objc2::AnyThread;
-use objc2::rc::Retained;
+use objc2::{AnyThread, rc::Retained};
 use objc2_core_foundation::{
     CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource, CFRunLoopSourceContext, CFType,
     kCFRunLoopCommonModes,
 };
 use objc2_metal::MTLSharedEventListener;
 
-use crate::ffi::AbortOnPanic;
-use crate::float_cast::u64_to_usize;
+use crate::{ffi::AbortOnPanic, float_cast::u64_to_usize};
 
 /// A listener; its handle is its address.
 #[repr(C)]
@@ -50,7 +50,11 @@ impl Listener {
     pub fn create() -> u64 {
         let listener = Box::new(Self {
             first_word: AtomicPtr::new(ptr::null_mut()),
-            state: Mutex::new(State { phase: Phase::Unstarted, owners: 2, run_loop: None }),
+            state: Mutex::new(State {
+                phase: Phase::Unstarted,
+                owners: 2,
+                run_loop: None,
+            }),
             events: MTLSharedEventListener::init(MTLSharedEventListener::alloc()),
         });
         Box::into_raw(listener).expose_provenance() as u64
@@ -95,7 +99,9 @@ impl Listener {
         let Some(run_loop) = CFRunLoop::current() else {
             return;
         };
-        listener.first_word.store(CFRetained::as_ptr(&run_loop).as_ptr(), Ordering::Release);
+        listener
+            .first_word
+            .store(CFRetained::as_ptr(&run_loop).as_ptr(), Ordering::Release);
         state.run_loop = Some(run_loop.clone());
         state.phase = Phase::Running;
         drop(state);

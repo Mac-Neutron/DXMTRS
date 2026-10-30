@@ -73,7 +73,11 @@ const RTLD_NOW: c_int = 0x2;
 fn last_error() -> String {
     // SAFETY: dlerror returns null or a NUL-terminated string valid until the next dl call on this thread.
     let e = unsafe { dlerror() };
-    if e.is_null() { "unknown dlopen error".to_owned() } else { unsafe { CStr::from_ptr(e) }.to_string_lossy().into_owned() }
+    if e.is_null() {
+        "unknown dlopen error".to_owned()
+    } else {
+        unsafe { CStr::from_ptr(e) }.to_string_lossy().into_owned()
+    }
 }
 
 /// The path of `winemetal.so` to load: `MTLD3D_WINEMETAL`, else the one beside this image.
@@ -81,14 +85,26 @@ fn library_path() -> Result<String, String> {
     if let Some(path) = std::env::var_os("MTLD3D_WINEMETAL") {
         return Ok(path.to_string_lossy().into_owned());
     }
-    let mut info = DlInfo { dli_fname: core::ptr::null(), dli_fbase: core::ptr::null_mut(), dli_sname: core::ptr::null(), dli_saddr: core::ptr::null_mut() };
+    let mut info = DlInfo {
+        dli_fname: core::ptr::null(),
+        dli_fbase: core::ptr::null_mut(),
+        dli_sname: core::ptr::null(),
+        dli_saddr: core::ptr::null_mut(),
+    };
     // SAFETY: dladdr only reads the address, a function of this image.
-    if unsafe { dladdr(library_path as *const c_void, &raw mut info) } == 0 || info.dli_fname.is_null() {
+    if unsafe { dladdr(library_path as *const c_void, &raw mut info) } == 0
+        || info.dli_fname.is_null()
+    {
         return Err("dladdr found no image for mtld3d's facade".to_owned());
     }
     // SAFETY: dli_fname is a NUL-terminated path owned by the dynamic loader.
-    let image = unsafe { CStr::from_ptr(info.dli_fname) }.to_string_lossy().into_owned();
-    let dir = image.rsplit_once('/').map_or(".", |(dir, _)| dir).to_owned();
+    let image = unsafe { CStr::from_ptr(info.dli_fname) }
+        .to_string_lossy()
+        .into_owned();
+    let dir = image
+        .rsplit_once('/')
+        .map_or(".", |(dir, _)| dir)
+        .to_owned();
     Ok(format!("{dir}/winemetal.so"))
 }
 
@@ -103,20 +119,31 @@ impl Table {
 
     fn load() -> Result<Self, String> {
         let path = library_path()?;
-        let c_path = std::ffi::CString::new(path.clone()).map_err(|_| format!("{path}: a NUL in the path"))?;
+        let c_path = std::ffi::CString::new(path.clone())
+            .map_err(|_| format!("{path}: a NUL in the path"))?;
         // SAFETY: a plain dlopen of a path; the handle is kept for the process's life.
         let handle = unsafe { dlopen(c_path.as_ptr(), RTLD_NOW) };
         if handle.is_null() {
             return Err(format!("dlopen {path}: {}", last_error()));
         }
-        let symbol = if WOW64.load(Ordering::Relaxed) { c"__wine_unix_call_wow64_funcs" } else { c"__wine_unix_call_funcs" };
+        let symbol = if WOW64.load(Ordering::Relaxed) {
+            c"__wine_unix_call_wow64_funcs"
+        } else {
+            c"__wine_unix_call_funcs"
+        };
         // SAFETY: a symbol lookup in the handle just opened.
         let funcs = unsafe { dlsym(handle, symbol.as_ptr()) };
         if funcs.is_null() {
-            return Err(format!("{path} has no {}: {}", symbol.to_string_lossy(), last_error()));
+            return Err(format!(
+                "{path} has no {}: {}",
+                symbol.to_string_lossy(),
+                last_error()
+            ));
         }
         log::info!(target: "mtld3d::mtl", "winemetal: {path} ({})", symbol.to_string_lossy());
-        Ok(Self { funcs: funcs.cast() })
+        Ok(Self {
+            funcs: funcs.cast(),
+        })
     }
 
     /// The address of slot `slot`'s function, for a test that checks the table against its symbols.

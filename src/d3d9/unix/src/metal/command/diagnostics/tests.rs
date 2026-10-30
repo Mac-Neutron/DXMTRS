@@ -1,25 +1,28 @@
 use log::{Level, log_enabled};
-use crate::mtl::objc2::{
-    define_class, extern_methods,
-    rc::Retained,
-    runtime::{AnyObject, ProtocolObject},
-};
-use crate::mtl::objc2_foundation::{
-    NSArray, NSDictionary, NSError, NSLocalizedDescriptionKey, NSObject, NSObjectProtocol, NSString,
-};
-use crate::mtl::objc2_metal::{
-    MTLBuffer, MTLCommandBufferEncoderInfo, MTLCommandBufferEncoderInfoErrorKey,
-    MTLCommandBufferErrorOption, MTLCommandBufferStatus, MTLCommandEncoderErrorState,
-    MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat, MTLResource,
-    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage,
-};
 
 use super::{
     BlitSite, DepthTransfer, DepthTransferResample, append_signposts, buffer_role,
     copy_buffer_details, depth_transfer, depth_transfer_resample, diagnostic_descriptor,
     dispatch_region, encoder_state_name, error_details, metadata_string, optional_string,
     resample_details, sequence, status_name, texture_details,
+};
+use crate::mtl::{
+    objc2::{
+        define_class, extern_methods,
+        rc::Retained,
+        runtime::{AnyObject, ProtocolObject},
+    },
+    objc2_foundation::{
+        NSArray, NSDictionary, NSError, NSLocalizedDescriptionKey, NSObject, NSObjectProtocol,
+        NSString,
+    },
+    objc2_metal::{
+        MTLBuffer, MTLCommandBufferEncoderInfo, MTLCommandBufferEncoderInfoErrorKey,
+        MTLCommandBufferErrorOption, MTLCommandBufferStatus, MTLCommandEncoderErrorState,
+        MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat, MTLResource,
+        MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
+        MTLTextureType, MTLTextureUsage,
+    },
 };
 
 define_class!(

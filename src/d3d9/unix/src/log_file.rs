@@ -37,14 +37,15 @@
 //! past that count, so a game launched every day does not pile up files.
 
 use core::ffi::c_void;
+#[cfg(not(target_os = "linux"))]
+use std::os::fd::FromRawFd;
+#[cfg(not(mtl_facade))]
+use std::sync::atomic::AtomicU32;
 use std::{
     ffi::CString,
     fs::{File, OpenOptions},
     io::Write,
-    os::{
-        fd::AsRawFd,
-        unix::ffi::OsStrExt,
-    },
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
     sync::{
         Mutex, MutexGuard, TryLockError,
@@ -52,10 +53,6 @@ use std::{
     },
     time::SystemTime,
 };
-#[cfg(not(mtl_facade))]
-use std::sync::atomic::AtomicU32;
-#[cfg(not(target_os = "linux"))]
-use std::os::fd::FromRawFd;
 
 use mtld3d_core::crash_report::{CrashContext, CrashRoute, Severity, SinkState, crash_route};
 

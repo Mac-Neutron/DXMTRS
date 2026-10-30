@@ -2,8 +2,7 @@
 
 use core::ffi::c_void;
 
-use objc2::extern_methods;
-use objc2::runtime::ProtocolObject;
+use objc2::{extern_methods, runtime::ProtocolObject};
 use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLBarrierScope, MTLBuffer, MTLCullMode, MTLDepthClipMode, MTLFence, MTLIndexType,
@@ -47,20 +46,21 @@ use winemetal_wire::{
     WmtcmdRenderDxmtGeometryDrawIndirect, WmtcmdRenderDxmtTessellationMeshDraw,
     WmtcmdRenderDxmtTessellationMeshDrawIndexed,
     WmtcmdRenderDxmtTessellationMeshDrawIndexedIndirect,
-    WmtcmdRenderDxmtTessellationMeshDrawIndirect, WmtcmdRenderExecutecommands,
-    WmtcmdRenderFenceOp, WmtcmdRenderMemoryBarrier, WmtcmdRenderSetblendcolor,
-    WmtcmdRenderSetbuffer, WmtcmdRenderSetbufferoffset, WmtcmdRenderSetbytes,
-    WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
-    WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetsampler, WmtcmdRenderSetscissorrect,
-    WmtcmdRenderSetscissorrects, WmtcmdRenderSetstencilref, WmtcmdRenderSettexture,
-    WmtcmdRenderSetviewport, WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode,
-    WmtcmdRenderUseresource,
+    WmtcmdRenderDxmtTessellationMeshDrawIndirect, WmtcmdRenderExecutecommands, WmtcmdRenderFenceOp,
+    WmtcmdRenderMemoryBarrier, WmtcmdRenderSetblendcolor, WmtcmdRenderSetbuffer,
+    WmtcmdRenderSetbufferoffset, WmtcmdRenderSetbytes, WmtcmdRenderSetdepthstencilstate,
+    WmtcmdRenderSetdsso, WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate,
+    WmtcmdRenderSetsampler, WmtcmdRenderSetscissorrect, WmtcmdRenderSetscissorrects,
+    WmtcmdRenderSetstencilref, WmtcmdRenderSettexture, WmtcmdRenderSetviewport,
+    WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode, WmtcmdRenderUseresource,
 };
 
 use super::{body, range, raw, size};
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params};
-use crate::float_cast::u64_to_usize;
-use crate::handle::obj;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params},
+    float_cast::u64_to_usize,
+    handle::obj,
+};
 
 type Encoder = ProtocolObject<dyn MTLRenderCommandEncoder>;
 type Buffer = ProtocolObject<dyn MTLBuffer>;
@@ -811,5 +811,9 @@ fn tessellation_draw(
 
 /// A `width` by `height` by 1 size.
 const fn threads(width: usize, height: usize) -> MTLSize {
-    MTLSize { width, height, depth: 1 }
+    MTLSize {
+        width,
+        height,
+        depth: 1,
+    }
 }

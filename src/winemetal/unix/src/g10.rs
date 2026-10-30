@@ -268,7 +268,9 @@ pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_hull(args: *m
 /// `args` points to the caller's `sm50_compile_tessellation_pipeline_domain_params`, whose fields
 /// are what `SM50CompileTessellationPipelineDomain` takes.
 #[unsafe(export_name = "thunk_SM50CompileTessellationPipelineDomain")]
-pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_domain(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_domain(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileTessellationPipelineDomainParams>(args) };

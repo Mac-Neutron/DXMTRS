@@ -1,11 +1,12 @@
 //! `MetalFX`: scalers and the frame interpolator.
 
 use winemetal_wire::{
-    UnixcallGenericObjUint64Ret, UnixcallMtlcommandbufferFrameInterpolate, UnixcallMtlcommandbufferSpatialScale,
-    UnixcallMtlcommandbufferTemporalScale, UnixcallMtldeviceFxtemporalscalerScale,
-    UnixcallMtldeviceNewfxframeinterpolator, UnixcallMtldeviceNewfxspatialscaler, UnixcallMtldeviceNewfxtemporalscaler,
-    WMTFXFrameInterpolatorInfo, WMTFXFrameInterpolatorProps, WMTFXSpatialScalerInfo, WMTFXTemporalScalerInfo,
-    WMTFXTemporalScalerProps, slot,
+    UnixcallGenericObjUint64Ret, UnixcallMtlcommandbufferFrameInterpolate,
+    UnixcallMtlcommandbufferSpatialScale, UnixcallMtlcommandbufferTemporalScale,
+    UnixcallMtldeviceFxtemporalscalerScale, UnixcallMtldeviceNewfxframeinterpolator,
+    UnixcallMtldeviceNewfxspatialscaler, UnixcallMtldeviceNewfxtemporalscaler,
+    WMTFXFrameInterpolatorInfo, WMTFXFrameInterpolatorProps, WMTFXSpatialScalerInfo,
+    WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps, slot,
 };
 
 use crate::transport::{call, mem_ptr};

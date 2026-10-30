@@ -8,6 +8,7 @@ pub mod nv;
 pub mod sys;
 
 use core::ffi::c_void;
+
 use dxmt_util::log::Logger;
 
 /// This DLL's log file.
@@ -20,8 +21,16 @@ static LOG: Logger = Logger::new("nvapi.log");
 const INTERFACE_TABLE: &str = include_str!("../../../external/nvapi/nvapi_interface.h");
 
 /// The IDs DXMT answers with null and no log line: IDs the table does not name that games probe.
-const UNNAMED_IDS: [u32; 8] =
-    [0x33c7_358c, 0x593e_8644, 0xad29_8d3f, 0xd7c6_1344, 0xd44d_3c4e, 0x6d67_533c, 0xb7fb_dbfa, 0xc99f_4a67];
+const UNNAMED_IDS: [u32; 8] = [
+    0x33c7_358c,
+    0x593e_8644,
+    0xad29_8d3f,
+    0xd7c6_1344,
+    0xd44d_3c4e,
+    0x6d67_533c,
+    0xb7fb_dbfa,
+    0xc99f_4a67,
+];
 
 /// The table's entries: a function's name and its ID.
 ///
@@ -38,7 +47,9 @@ fn table() -> impl Iterator<Item = (&'static str, u32)> {
 
 /// The name NVIDIA's table gives `id`.
 fn name_of(id: u32) -> Option<&'static str> {
-    table().find(|&(_, entry)| entry == id).map(|(name, _)| name)
+    table()
+        .find(|&(_, entry)| entry == id)
+        .map(|(name, _)| name)
 }
 
 /// The error line for a function DXMT does not provide: its name, or its ID if the table has none.

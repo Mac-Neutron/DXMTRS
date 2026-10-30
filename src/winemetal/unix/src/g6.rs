@@ -4,15 +4,19 @@
 //! the caller is there, else through the main queue while the caller waits. The display reads
 //! (`display`) run on the calling thread.
 
-use core::ffi::{CStr, c_void};
-use core::mem::transmute;
-use core::ptr;
 #[cfg(feature = "native")]
 use core::sync::atomic::{AtomicPtr, Ordering};
+use core::{
+    ffi::{CStr, c_void},
+    mem::transmute,
+    ptr,
+};
 
 use dispatch2::DispatchQueue;
-use objc2::runtime::{AnyClass, AnyObject, NSObject, ProtocolObject};
-use objc2::{extern_class, extern_methods};
+use objc2::{
+    extern_class, extern_methods,
+    runtime::{AnyClass, AnyObject, NSObject, ProtocolObject},
+};
 use objc2_core_foundation::{CFString, CGSize};
 use objc2_core_graphics::{
     CGColorSpace, kCGColorSpaceExtendedLinearSRGB, kCGColorSpaceITUR_2020_sRGBGamma,
@@ -30,10 +34,12 @@ use winemetal_wire::{
     WMT_COLOR_SPACE_SRGB_LINEAR, WMTLayerProps,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params};
-use crate::float_cast::{u64_to_usize, usize_to_u32};
-use crate::format::pixel_format;
-use crate::handle::{lookup_class, obj, ret_passthrough};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params},
+    float_cast::{u64_to_usize, usize_to_u32},
+    format::pixel_format,
+    handle::{lookup_class, obj, ret_passthrough},
+};
 
 pub mod appkit;
 pub mod display;
@@ -169,9 +175,8 @@ pub unsafe extern "C-unwind" fn hud_add_label(args: *mut c_void) -> i32 {
     // SAFETY: as above.
     let after = unsafe { obj::<AnyObject>(p.arg1) };
     let (name, unit) = (ns_string!(""), ns_string!(""));
-    let added = hud.is_some_and(|h| {
-        h.insert_metric(metric, after, name, unit, u32::MAX, u32::MAX, 1, 0)
-    });
+    let added =
+        hud.is_some_and(|h| h.insert_metric(metric, after, name, unit, u32::MAX, u32::MAX, 1, 0));
     p.ret = added.into();
     STATUS_SUCCESS
 }
@@ -355,7 +360,11 @@ fn symbol(name: &CStr) -> *mut c_void {
 /// winemac's table of functions, `None` where it publishes none (native: its loose symbols).
 fn macdrv_functions() -> Option<&'static MacdrvFunctions> {
     // SAFETY: winemac's table, which lives as long as the process.
-    unsafe { symbol(c"macdrv_functions").cast::<MacdrvFunctions>().as_ref() }
+    unsafe {
+        symbol(c"macdrv_functions")
+            .cast::<MacdrvFunctions>()
+            .as_ref()
+    }
 }
 
 /// Slot 72, `_CreateMetalViewFromHWND`: a Metal view (+1, winemac's) in the window's view.
@@ -374,10 +383,12 @@ pub unsafe extern "C-unwind" fn create_metal_view(args: *mut c_void) -> i32 {
     let fns = macdrv_functions().map_or_else(
         || {
             // SAFETY: winemac's function of this signature, or null.
-            let get = unsafe { transmute::<*mut c_void, Option<GetWinData>>(symbol(c"get_win_data")) };
+            let get =
+                unsafe { transmute::<*mut c_void, Option<GetWinData>>(symbol(c"get_win_data")) };
             // SAFETY: as above.
-            let release =
-                unsafe { transmute::<*mut c_void, Option<ReleaseWinData>>(symbol(c"release_win_data")) };
+            let release = unsafe {
+                transmute::<*mut c_void, Option<ReleaseWinData>>(symbol(c"release_win_data"))
+            };
             let create = symbol(c"macdrv_view_create_metal_view");
             // SAFETY: as above.
             let create = unsafe { transmute::<*mut c_void, Option<CreateMetalView>>(create) };
@@ -386,7 +397,14 @@ pub unsafe extern "C-unwind" fn create_metal_view(args: *mut c_void) -> i32 {
             let layer_of = unsafe { transmute::<*mut c_void, Option<GetMetalLayer>>(layer_of) };
             (get, release, create, layer_of)
         },
-        |t| (t.get_win_data, t.release_win_data, t.view_create_metal_view, t.view_get_metal_layer),
+        |t| {
+            (
+                t.get_win_data,
+                t.release_win_data,
+                t.view_create_metal_view,
+                t.view_get_metal_layer,
+            )
+        },
     );
     let (Some(get), Some(release), Some(create), Some(layer_of)) = fns else {
         return STATUS_SUCCESS;

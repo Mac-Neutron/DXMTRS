@@ -23,8 +23,20 @@ fn sli_is_one_afr_group_and_leaves_the_version() {
     };
     fill_sli(&mut state);
     assert_eq!(
-        [state.version, state.max_num_afr_groups, state.num_afr_groups, state.current_afr_index],
+        [
+            state.version,
+            state.max_num_afr_groups,
+            state.num_afr_groups,
+            state.current_afr_index
+        ],
         [7, 1, 1, 0]
     );
-    assert_eq!([state.next_frame_afr_index, state.previous_frame_afr_index, state.is_cur_afr_group_new], [0; 3]);
+    assert_eq!(
+        [
+            state.next_frame_afr_index,
+            state.previous_frame_afr_index,
+            state.is_cur_afr_group_new
+        ],
+        [0; 3]
+    );
 }

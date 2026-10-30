@@ -29,6 +29,12 @@ fn a_version_is_the_size_and_the_number() {
 
 #[test]
 fn an_unprovided_function_is_logged_by_name_or_id() {
-    assert_eq!(not_implemented(0xe364_0a56), "nvapi: function NvAPI_GPU_GetThermalSettings not implemented");
-    assert_eq!(not_implemented(0x1234_5678), "nvapi: function id 305419896 not implemented");
+    assert_eq!(
+        not_implemented(0xe364_0a56),
+        "nvapi: function NvAPI_GPU_GetThermalSettings not implemented"
+    );
+    assert_eq!(
+        not_implemented(0x1234_5678),
+        "nvapi: function id 305419896 not implemented"
+    );
 }

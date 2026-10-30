@@ -32,9 +32,9 @@
 //! the registry lock sits at the bottom of every order. It is not taken
 //! anywhere else.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[cfg(any(not(mtl_facade), test))]
 use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::{
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
@@ -272,7 +272,11 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    fn new(#[cfg(any(not(mtl_facade), test))] view: usize, layer: usize, latches: &AttachLatches) -> Self {
+    fn new(
+        #[cfg(any(not(mtl_facade), test))] view: usize,
+        layer: usize,
+        latches: &AttachLatches,
+    ) -> Self {
         Self {
             #[cfg(any(not(mtl_facade), test))]
             view,
@@ -652,7 +656,12 @@ pub const fn undisplayed_run_edge(before: u32, displayed: bool) -> Option<bool> 
 /// the view again, giving back what that record held, so the insert here
 /// replaces nothing.
 pub fn register(view: usize, layer: usize, latches: &AttachLatches) -> Arc<Attachment> {
-    let att = Arc::new(Attachment::new(#[cfg(any(not(mtl_facade), test))] view, layer, latches));
+    let att = Arc::new(Attachment::new(
+        #[cfg(any(not(mtl_facade), test))]
+        view,
+        layer,
+        latches,
+    ));
     lock().insert(view, Arc::clone(&att));
     att
 }

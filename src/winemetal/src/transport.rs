@@ -1,7 +1,9 @@
 //! Wine's unix-call handshake and calls, as `winemetal_thunks.c` and `main.c` made them.
 
-use core::ffi::{c_char, c_void};
-use core::mem::MaybeUninit;
+use core::{
+    ffi::{c_char, c_void},
+    mem::MaybeUninit,
+};
 
 use winemetal_wire::{self as wire, MemPtr};
 
@@ -178,7 +180,10 @@ pub fn mem_ptr<T>(p: *const T) -> MemPtr {
 /// `WMT_MEMPTR_SET`: `p`'s address, and a high half of 0.
 #[cfg(target_pointer_width = "32")]
 pub fn mem_ptr<T>(p: *const T) -> MemPtr {
-    MemPtr { ptr: p.expose_provenance() as u32, high: 0 }
+    MemPtr {
+        ptr: p.expose_provenance() as u32,
+        high: 0,
+    }
 }
 
 /// A `MemPtr`'s pointer (`.ptr`; a 32-bit process ignores the high half, as the C did).

@@ -7,19 +7,24 @@
 //! evaluation logs what the game passed to the game's log (stderr), once, before any pixel is
 //! trusted.
 
-use crate::com::{
-    CommandList12Vtbl, CommandListExt12Vtbl, DeviceExt12Vtbl, IID_COMMAND_LIST_EXT_12, IID_DEVICE_EXT_12,
-    IID_ID3D12_DEVICE, Resource12Vtbl, ResourceDesc12, ScalerDesc12, UpscaleDesc12, query, release, vtbl,
-};
-use crate::ngx::{
-    Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE, FLAG_DEPTH_INVERTED,
-    FLAG_MV_JITTERED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK, hex, note, pointer,
-};
-use crate::parameter::Parameters;
 use core::ffi::{CStr, c_void};
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, AtomicU32, Ordering},
+};
+
+use crate::{
+    com::{
+        CommandList12Vtbl, CommandListExt12Vtbl, DeviceExt12Vtbl, IID_COMMAND_LIST_EXT_12,
+        IID_DEVICE_EXT_12, IID_ID3D12_DEVICE, Resource12Vtbl, ResourceDesc12, ScalerDesc12,
+        UpscaleDesc12, query, release, vtbl,
+    },
+    ngx::{
+        Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE,
+        FLAG_DEPTH_INVERTED, FLAG_MV_JITTERED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK, hex, note,
+        pointer,
+    },
+    parameter::Parameters,
 };
 
 /// Writes `message` to the game's log (stderr), the first time `latch` is reached.
@@ -66,7 +71,12 @@ fn init_with(device: *mut c_void) -> u32 {
     }
     // SAFETY: the game's device, a live COM object.
     let Some(ext) = (unsafe { query(device, &IID_DEVICE_EXT_12) }) else {
-        once(&LOGGED, format_args!("NGX initialised on a device without MetalFX's temporal upscaler: DLSS unavailable"));
+        once(
+            &LOGGED,
+            format_args!(
+                "NGX initialised on a device without MetalFX's temporal upscaler: DLSS unavailable"
+            ),
+        );
         return FEATURE_NOT_SUPPORTED;
     };
     // SAFETY: `query`'s new reference.
@@ -75,12 +85,24 @@ fn init_with(device: *mut c_void) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init(_: u64, _: *const u16, device: *mut c_void, _: *const c_void, _: u32) -> u32 {
+pub extern "system" fn NVSDK_NGX_D3D12_Init(
+    _: u64,
+    _: *const u16,
+    device: *mut c_void,
+    _: *const c_void,
+    _: u32,
+) -> u32 {
     init_with(device)
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn NVSDK_NGX_D3D12_Init_Ext(_: u64, _: *const u16, device: *mut c_void, _: u32, _: *const c_void) -> u32 {
+pub extern "system" fn NVSDK_NGX_D3D12_Init_Ext(
+    _: u64,
+    _: *const u16,
+    device: *mut c_void,
+    _: u32,
+    _: *const c_void,
+) -> u32 {
     init_with(device)
 }
 
@@ -122,12 +144,17 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
     /// A per-call-site log-once latch.
     static LOGGED: AtomicBool = AtomicBool::new(false);
     // SAFETY: the game's map, from AllocateParameters, or null.
-    let Some(params) = (unsafe { params.as_ref() }) else { return INVALID_PARAMETER };
+    let Some(params) = (unsafe { params.as_ref() }) else {
+        return INVALID_PARAMETER;
+    };
     if out_handle.is_null() {
         return INVALID_PARAMETER;
     }
     if feature != FEATURE_SUPERSAMPLING {
-        once(&LOGGED, format_args!("CreateFeature: feature {feature} isn't DLSS super resolution: refused"));
+        once(
+            &LOGGED,
+            format_args!("CreateFeature: feature {feature} isn't DLSS super resolution: refused"),
+        );
         return FEATURE_NOT_SUPPORTED;
     }
     if list.is_null() {
@@ -144,34 +171,56 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
     let ext = unsafe { query(device, &IID_DEVICE_EXT_12) };
     // SAFETY: as above.
     unsafe { release(device) };
-    let Some(ext) = ext else { return FEATURE_NOT_SUPPORTED };
+    let Some(ext) = ext else {
+        return FEATURE_NOT_SUPPORTED;
+    };
     let mut made = Box::new(Feature {
-        dlss: Dlss { handle: NEXT_ID.fetch_add(1, Ordering::Relaxed), feature, api: 12, ..Dlss::default() },
+        dlss: Dlss {
+            handle: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            feature,
+            api: 12,
+            ..Dlss::default()
+        },
         min_scale: 1.0,
         max_scale: 3.0,
         ext,
-        scaler: Mutex::new(Scaler { scaler: core::ptr::null_mut(), desc: ScalerDesc12::default() }),
+        scaler: Mutex::new(Scaler {
+            scaler: core::ptr::null_mut(),
+            desc: ScalerDesc12::default(),
+        }),
     });
     // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
     let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
     let made_ref = &mut *made;
     // SAFETY: the outputs are the feature's fields.
-    unsafe { (slots.get_temporal_scaler_scale_range)(ext, &raw mut made_ref.min_scale, &raw mut made_ref.max_scale) };
+    unsafe {
+        (slots.get_temporal_scaler_scale_range)(
+            ext,
+            &raw mut made_ref.min_scale,
+            &raw mut made_ref.max_scale,
+        )
+    };
     let d = &mut made.dlss;
-    let (Some(width), Some(height), Some(target_width), Some(target_height)) =
-        (params.u32(c"Width"), params.u32(c"Height"), params.u32(c"OutWidth"), params.u32(c"OutHeight"))
-    else {
+    let (Some(width), Some(height), Some(target_width), Some(target_height)) = (
+        params.u32(c"Width"),
+        params.u32(c"Height"),
+        params.u32(c"OutWidth"),
+        params.u32(c"OutHeight"),
+    ) else {
         return INVALID_PARAMETER;
     };
     if width == 0 || height == 0 || target_width == 0 || target_height == 0 {
         return INVALID_PARAMETER;
     }
-    (d.width, d.height, d.target_width, d.target_height) = (width, height, target_width, target_height);
+    (d.width, d.height, d.target_width, d.target_height) =
+        (width, height, target_width, target_height);
     d.quality = params.i32(c"PerfQualityValue").unwrap_or(0);
     d.flag = params.i32(c"DLSS.Feature.Create.Flags").unwrap_or(0);
     d.enable_output_subrects = params.i32(c"DLSS.Enable.Output.Subrects").unwrap_or(0);
-    let sx = dxmt_util::float_cast::u32_to_f32(target_width) / dxmt_util::float_cast::u32_to_f32(width);
-    let sy = dxmt_util::float_cast::u32_to_f32(target_height) / dxmt_util::float_cast::u32_to_f32(height);
+    let sx =
+        dxmt_util::float_cast::u32_to_f32(target_width) / dxmt_util::float_cast::u32_to_f32(width);
+    let sy = dxmt_util::float_cast::u32_to_f32(target_height)
+        / dxmt_util::float_cast::u32_to_f32(height);
     if sx > made.max_scale + 0.01 || sy > made.max_scale + 0.01 || sx < 0.99 || sy < 0.99 {
         note(format_args!(
             "CreateFeature: {width}x{height} to {target_width}x{target_height} is outside MetalFX's {:.2}x-{:.2}x",
@@ -211,7 +260,9 @@ pub extern "system" fn NVSDK_NGX_D3D12_EvaluateFeature(
     _: *mut c_void,
 ) -> u32 {
     // SAFETY: the game's map, or null.
-    let Some(params) = (unsafe { params.as_ref() }) else { return INVALID_PARAMETER };
+    let Some(params) = (unsafe { params.as_ref() }) else {
+        return INVALID_PARAMETER;
+    };
     if handle.is_null() {
         return INVALID_PARAMETER;
     }
@@ -222,13 +273,19 @@ pub extern "system" fn NVSDK_NGX_D3D12_EvaluateFeature(
     }
     // SAFETY: a Direct3D 12 feature, live until ReleaseFeature.
     let feature = unsafe { &*handle.cast::<c_void>().cast::<Feature>() };
-    let Ok(mut scaler) = feature.scaler.lock() else { return FAIL };
+    let Ok(mut scaler) = feature.scaler.lock() else {
+        return FAIL;
+    };
     evaluate(feature, &mut scaler, list, params)
 }
 
 /// An `ID3D12Resource` parameter, whichever of NGX's setters the game used for it.
 fn resource(params: &Parameters, name: &CStr) -> *mut c_void {
-    params.d3d12(name).filter(|p| !p.is_null()).or_else(|| params.ptr(name)).unwrap_or(core::ptr::null_mut())
+    params
+        .d3d12(name)
+        .filter(|p| !p.is_null())
+        .or_else(|| params.ptr(name))
+        .unwrap_or(core::ptr::null_mut())
 }
 
 /// `resource`'s description.
@@ -259,10 +316,17 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     let dlss = &feature.dlss;
     let flag = dlss.flag.cast_unsigned();
     let (color, output) = (resource(params, c"Color"), resource(params, c"Output"));
-    let (depth, motion) = (resource(params, c"Depth"), resource(params, c"MotionVectors"));
-    let exposure =
-        if flag & FLAG_AUTO_EXPOSURE == 0 { resource(params, c"ExposureTexture") } else { core::ptr::null_mut() };
-    if list.is_null() || color.is_null() || output.is_null() || depth.is_null() || motion.is_null() {
+    let (depth, motion) = (
+        resource(params, c"Depth"),
+        resource(params, c"MotionVectors"),
+    );
+    let exposure = if flag & FLAG_AUTO_EXPOSURE == 0 {
+        resource(params, c"ExposureTexture")
+    } else {
+        core::ptr::null_mut()
+    };
+    if list.is_null() || color.is_null() || output.is_null() || depth.is_null() || motion.is_null()
+    {
         once(
             &LOGGED_MISSING,
             format_args!(
@@ -277,20 +341,43 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         return INVALID_PARAMETER;
     }
     let base = |name: &CStr| params.u32(name).unwrap_or(0);
-    let (cx, cy) = (base(c"DLSS.Input.Color.Subrect.Base.X"), base(c"DLSS.Input.Color.Subrect.Base.Y"));
-    let (dx, dy) = (base(c"DLSS.Input.Depth.Subrect.Base.X"), base(c"DLSS.Input.Depth.Subrect.Base.Y"));
-    let (mx, my) = (base(c"DLSS.Input.MV.SubrectBase.X"), base(c"DLSS.Input.MV.SubrectBase.Y"));
-    let (ox, oy) = (base(c"DLSS.Output.Subrect.Base.X"), base(c"DLSS.Output.Subrect.Base.Y"));
-    let mut iw = params.u32(c"DLSS.Render.Subrect.Dimensions.Width").unwrap_or(dlss.width);
-    let mut ih = params.u32(c"DLSS.Render.Subrect.Dimensions.Height").unwrap_or(dlss.height);
+    let (cx, cy) = (
+        base(c"DLSS.Input.Color.Subrect.Base.X"),
+        base(c"DLSS.Input.Color.Subrect.Base.Y"),
+    );
+    let (dx, dy) = (
+        base(c"DLSS.Input.Depth.Subrect.Base.X"),
+        base(c"DLSS.Input.Depth.Subrect.Base.Y"),
+    );
+    let (mx, my) = (
+        base(c"DLSS.Input.MV.SubrectBase.X"),
+        base(c"DLSS.Input.MV.SubrectBase.Y"),
+    );
+    let (ox, oy) = (
+        base(c"DLSS.Output.Subrect.Base.X"),
+        base(c"DLSS.Output.Subrect.Base.Y"),
+    );
+    let mut iw = params
+        .u32(c"DLSS.Render.Subrect.Dimensions.Width")
+        .unwrap_or(dlss.width);
+    let mut ih = params
+        .u32(c"DLSS.Render.Subrect.Dimensions.Height")
+        .unwrap_or(dlss.height);
     if iw == 0 || ih == 0 {
         (iw, ih) = (dlss.width, dlss.height);
     }
     let (cd, dd, md, od) = (desc(color), desc(depth), desc(motion), desc(output));
-    let ((cw, ch), (dw, dh), (mut mw, mut mh), (ow, oh)) =
-        (extent(&cd, cx, cy), extent(&dd, dx, dy), extent(&md, mx, my), extent(&od, ox, oy));
+    let ((cw, ch), (dw, dh), (mut mw, mut mh), (ow, oh)) = (
+        extent(&cd, cx, cy),
+        extent(&dd, dx, dy),
+        extent(&md, mx, my),
+        extent(&od, ox, oy),
+    );
     let float = |name: &CStr, fallback: f32| params.f32(name).unwrap_or(fallback);
-    let (jitter_x, jitter_y) = (float(c"Jitter.Offset.X", 0.0), float(c"Jitter.Offset.Y", 0.0));
+    let (jitter_x, jitter_y) = (
+        float(c"Jitter.Offset.X", 0.0),
+        float(c"Jitter.Offset.Y", 0.0),
+    );
     let (scale_x, scale_y) = (float(c"MV.Scale.X", 1.0), float(c"MV.Scale.Y", 1.0));
     let pre_exposure = float(c"DLSS.Pre.Exposure", 1.0);
     let reset = params.i32(c"Reset").unwrap_or(0);
@@ -349,7 +436,11 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     }
     if want.output_resolution_motion_vectors != 0 {
         // An output-size texture, which holds every input pixel's motion.
-        (mw, mh) = if mw < want.output_width || mh < want.output_height { (0, 0) } else { (u32::MAX, u32::MAX) };
+        (mw, mh) = if mw < want.output_width || mh < want.output_height {
+            (0, 0)
+        } else {
+            (u32::MAX, u32::MAX)
+        };
     }
     let tw = cw.min(dw).min(mw).min(want.output_width);
     let th = ch.min(dh).min(mh).min(want.output_height);
@@ -378,7 +469,8 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
         let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
         // SAFETY: `want` outlives the call; the new upscaler is the feature's reference.
-        let hr = unsafe { (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
+        let hr =
+            unsafe { (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
         if hr < 0 {
             scaler.scaler = core::ptr::null_mut();
             once(
@@ -401,7 +493,13 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     }
     // SAFETY: the game's command list, a live COM object.
     let Some(list_ext) = (unsafe { query(list, &IID_COMMAND_LIST_EXT_12) }) else {
-        once(&LOGGED_FOREIGN, format_args!("EvaluateFeature: command list {} isn't DXMT's", pointer(list)));
+        once(
+            &LOGGED_FOREIGN,
+            format_args!(
+                "EvaluateFeature: command list {} isn't DXMT's",
+                pointer(list)
+            ),
+        );
         return INVALID_PARAMETER;
     };
     let d = UpscaleDesc12 {
@@ -420,7 +518,11 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         output_offset: [ox, oy],
         jitter_offset: [jitter_x, jitter_y],
         motion_vector_scale: [scale_x, scale_y],
-        pre_exposure: if pre_exposure > 0.0 { pre_exposure } else { 1.0 },
+        pre_exposure: if pre_exposure > 0.0 {
+            pre_exposure
+        } else {
+            1.0
+        },
         reset: i32::from(reset != 0),
         depth_reversed: i32::from(flag & FLAG_DEPTH_INVERTED != 0),
     };

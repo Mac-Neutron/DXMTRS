@@ -13,18 +13,22 @@ use mtld3d_shared::{
     mtl_handle::{MTLCommandQueueKind, MTLDepthStencilStateKind, MTLDeviceKind, MTLTextureKind},
     texture_views::TextureViews,
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLBlendFactor, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCompareFunction,
-    MTLDepthStencilDescriptor, MTLDevice, MTLLoadAction, MTLPixelFormat, MTLRenderPassDescriptor,
-    MTLResource, MTLStencilDescriptor, MTLStencilOperation, MTLStorageMode, MTLStoreAction,
-    MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle, MTLTextureSwizzleChannels, MTLTextureType,
-    MTLTextureUsage,
-};
 
-use crate::metal::{
-    command::diagnostics,
-    handle::{IntoRetained, ReleaseRetain},
+use crate::{
+    metal::{
+        command::diagnostics,
+        handle::{IntoRetained, ReleaseRetain},
+    },
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLBlendFactor, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCompareFunction,
+            MTLDepthStencilDescriptor, MTLDevice, MTLLoadAction, MTLPixelFormat,
+            MTLRenderPassDescriptor, MTLResource, MTLStencilDescriptor, MTLStencilOperation,
+            MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle,
+            MTLTextureSwizzleChannels, MTLTextureType, MTLTextureUsage,
+        },
+    },
 };
 
 /// The texture handles this side has minted and not yet destroyed.
@@ -1130,9 +1134,9 @@ fn required_sample_view(
             "{label}: Metal declined the required {format:?} sampling view; texture creation failed");
         return None;
     };
-    view.setLabel(Some(&crate::mtl::objc2_foundation::NSString::from_str(&format!(
-        "{label}-sample"
-    ))));
+    view.setLabel(Some(&crate::mtl::objc2_foundation::NSString::from_str(
+        &format!("{label}-sample"),
+    )));
     Some(view)
 }
 

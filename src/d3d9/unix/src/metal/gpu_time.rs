@@ -13,9 +13,9 @@ use std::{
 };
 
 use mtld3d_shared::perf::{CommandBufferRole, GpuBusy, perf_enabled};
-use crate::mtl::objc2::runtime::ProtocolObject;
-use crate::mtl::objc2_metal::MTLCommandBuffer;
 use strum::EnumCount;
+
+use crate::mtl::{objc2::runtime::ProtocolObject, objc2_metal::MTLCommandBuffer};
 
 /// One role's sums since the last drain.
 struct RoleSums {

@@ -3,10 +3,14 @@ use mtld3d_shared::{
     BufferCreateDesc, MetalHandle,
     mtl::{BufferKind, StorageMode},
 };
-use crate::mtl::objc2::rc::{Retained, autoreleasepool};
-use crate::mtl::objc2_metal::{MTLBuffer, MTLCreateSystemDefaultDevice, MTLDevice, MTLResourceOptions};
 
-use crate::metal::handle::IntoRetained;
+use crate::{
+    metal::handle::IntoRetained,
+    mtl::{
+        objc2::rc::{Retained, autoreleasepool},
+        objc2_metal::{MTLBuffer, MTLCreateSystemDefaultDevice, MTLDevice, MTLResourceOptions},
+    },
+};
 
 #[test]
 fn batch_creation_keeps_successes_and_clears_failures_after_pool_drain() {

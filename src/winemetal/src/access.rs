@@ -1,8 +1,8 @@
 //! Texture and buffer access: a texture's properties, its bytes in and out, a buffer's contents.
 
 use winemetal_wire::{
-    MemPtr, UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret, UnixcallMtlbufferUpdatecontents,
-    UnixcallMtltextureReplaceregion, WMTOrigin, WMTSize, slot,
+    MemPtr, UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret,
+    UnixcallMtlbufferUpdatecontents, UnixcallMtltextureReplaceregion, WMTOrigin, WMTSize, slot,
 };
 
 use crate::transport::{call, low_half};

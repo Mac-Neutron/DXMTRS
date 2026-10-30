@@ -41,32 +41,37 @@ use mtld3d_shared::{
     ExtraColorDesc, MetalHandle, PassDescriptor,
     mtl::{BlockLayout, LoadAction, PixelFormat, PresentDebugFlags, StoreAction},
 };
-use crate::mtl::objc2::{Message as _, rc::Retained, runtime::ProtocolObject};
-#[cfg(not(mtl_facade))]
-use crate::mtl::objc2::runtime::AnyObject;
-#[cfg(not(mtl_facade))]
-use crate::mtl::objc2_foundation::{NSDictionary, NSError, NSLocalizedDescriptionKey};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
-    MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLOrigin, MTLPixelFormat,
-    MTLResource, MTLResourceOptions, MTLSharedEvent, MTLSize, MTLStorageMode, MTLTexture,
-    MTLTextureDescriptor, MTLTextureUsage,
-};
 
 #[cfg(not(mtl_facade))]
 use super::command_buffer_error;
 use super::{
     CopyBufferEndpoint, CopyEndpoint, CopyRegion, CopyRejectReason, DeviceRecord, EncodeContext,
-    PendingCmdBuf, PresentGeometry, PresentRoute, SETTLED_PRESENTS, commit_registered, copy_buffer_to_texture_reject, copy_texture_reject,
-    copy_texture_to_buffer_reject, encode_upload_cmd_buf, first_pending, geometry_settled,
-    install_frame_handler, present_route, publish_idle_upload, readback_completed, retire_finished,
-    submit_frame, submit_frame_with, wait_for_gpu_retire,
+    PendingCmdBuf, PresentGeometry, PresentRoute, SETTLED_PRESENTS, commit_registered,
+    copy_buffer_to_texture_reject, copy_texture_reject, copy_texture_to_buffer_reject,
+    encode_upload_cmd_buf, first_pending, geometry_settled, install_frame_handler, present_route,
+    publish_idle_upload, readback_completed, retire_finished, submit_frame, submit_frame_with,
+    wait_for_gpu_retire,
 };
-use crate::metal::{
-    depth_transfer::PlanePool,
-    submission::{FrameSubmission, RetirementCounter, SubmissionOutcome, SubmitDescription},
-    transient::{SubmitStamp, UploadRing},
+#[cfg(not(mtl_facade))]
+use crate::mtl::objc2::runtime::AnyObject;
+#[cfg(not(mtl_facade))]
+use crate::mtl::objc2_foundation::{NSDictionary, NSError, NSLocalizedDescriptionKey};
+use crate::{
+    metal::{
+        depth_transfer::PlanePool,
+        submission::{FrameSubmission, RetirementCounter, SubmissionOutcome, SubmitDescription},
+        transient::{SubmitStamp, UploadRing},
+    },
+    mtl::{
+        objc2::{Message as _, rc::Retained, runtime::ProtocolObject},
+        objc2_foundation::NSString,
+        objc2_metal::{
+            MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus,
+            MTLCommandEncoder, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLOrigin,
+            MTLPixelFormat, MTLResource, MTLResourceOptions, MTLSharedEvent, MTLSize,
+            MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
+        },
+    },
 };
 
 /// Two device identities that sort either side of each other's seqs.
@@ -1235,7 +1240,9 @@ fn readback_completion_preserves_driver_error_details() {
 /// A failed upscale after HDR preflight must still convert the original SDR frame.
 #[test]
 fn hdr_upscale_failure_reencodes_the_original_source() {
-    use crate::mtl::objc2_metal::{MTLClearColor, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction};
+    use crate::mtl::objc2_metal::{
+        MTLClearColor, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction,
+    };
     let queue = test_queue();
     let device = queue.device();
     if !crate::metal::upscale::is_available(&device) {
@@ -1304,6 +1311,7 @@ fn hdr_upscale_failure_reencodes_the_original_source() {
 #[test]
 fn depth_plane_failure_aborts_the_pair_and_retry_retains_sources() {
     use mtld3d_shared::{BlitCommand, BlitCommandType, CopyBufferToTextureInfo};
+
     use crate::mtl::objc2_metal::{MTLBlitOption, MTLEvent};
 
     let queue = test_queue();

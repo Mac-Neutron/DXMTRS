@@ -22,6 +22,10 @@ fn pixel_format_strips_swizzle() {
     for (format, [r, g, b, a], metal, decoded) in VECTORS {
         assert_eq!(pixel_format(format), MTLPixelFormat(metal), "{format}");
         let s = swizzle(format, WMTTextureSwizzleChannels { r, g, b, a });
-        assert_eq!([s.red.0, s.green.0, s.blue.0, s.alpha.0], decoded, "{format} {r} {g} {b} {a}");
+        assert_eq!(
+            [s.red.0, s.green.0, s.blue.0, s.alpha.0],
+            decoded,
+            "{format} {r} {g} {b} {a}"
+        );
     }
 }

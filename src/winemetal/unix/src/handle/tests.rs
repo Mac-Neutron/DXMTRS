@@ -1,6 +1,8 @@
-use objc2::rc::{Weak, autoreleasepool};
-use objc2::runtime::{NSObject, NSObjectProtocol};
-use objc2::{extern_class, extern_methods};
+use objc2::{
+    extern_class, extern_methods,
+    rc::{Weak, autoreleasepool},
+    runtime::{NSObject, NSObjectProtocol},
+};
 use objc2_foundation::{NSInteger, NSString};
 
 use super::*;
@@ -17,7 +19,11 @@ impl RawError {
         /// `+errorWithDomain:code:userInfo:`, autoreleased, as a raw pointer.
         #[unsafe(method(errorWithDomain:code:userInfo:))]
         #[unsafe(method_family = none)]
-        fn error(domain: &NSString, code: NSInteger, user_info: Option<&AnyObject>) -> *mut NSObject;
+        fn error(
+            domain: &NSString,
+            code: NSInteger,
+            user_info: Option<&AnyObject>,
+        ) -> *mut NSObject;
     );
 }
 

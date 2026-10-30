@@ -1,21 +1,41 @@
 //! NVAPI's Direct3D: the device extensions, SLI and Reflex.
 
-use crate::LOG;
-use crate::nv::{
-    EXTN_OP_FP16_ATOMIC, EXTN_OP_SHFL, EXTN_OP_UINT64_ATOMIC, FrameReport, GET_SLEEP_STATUS_PARAMS_VER1,
-    GetSleepStatusParams, INCOMPATIBLE_STRUCT_VERSION, INVALID_ARGUMENT, LATENCY_MARKER_PARAMS_VER1,
-    LATENCY_RESULT_PARAMS_VER1, LatencyResultParams, NO_IMPLEMENTATION, NOT_SUPPORTED, OK, SET_SLEEP_MODE_PARAMS_VER1,
-    SLI_STATE_VER1, SLI_STATE_VER2, SliStateV1, SliStateV2, Status,
-};
 use core::ffi::c_void;
+
 use dxmt_util::com::{Guid, IUnknownVtbl, query as query_interface, release, vtbl};
 
+use crate::{
+    LOG,
+    nv::{
+        EXTN_OP_FP16_ATOMIC, EXTN_OP_SHFL, EXTN_OP_UINT64_ATOMIC, FrameReport,
+        GET_SLEEP_STATUS_PARAMS_VER1, GetSleepStatusParams, INCOMPATIBLE_STRUCT_VERSION,
+        INVALID_ARGUMENT, LATENCY_MARKER_PARAMS_VER1, LATENCY_RESULT_PARAMS_VER1,
+        LatencyResultParams, NO_IMPLEMENTATION, NOT_SUPPORTED, OK, SET_SLEEP_MODE_PARAMS_VER1,
+        SLI_STATE_VER1, SLI_STATE_VER2, SliStateV1, SliStateV2, Status,
+    },
+};
+
 /// DXMT's `IMTLD3D11ContextExt`.
-static IID_CONTEXT_EXT: Guid = Guid::new(0x43ac_e3ce, 0x1956, 0x448b, [0xa4, 0xeb, 0xae, 0xe6, 0x8b, 0xde, 0xb2, 0x83]);
+static IID_CONTEXT_EXT: Guid = Guid::new(
+    0x43ac_e3ce,
+    0x1956,
+    0x448b,
+    [0xa4, 0xeb, 0xae, 0xe6, 0x8b, 0xde, 0xb2, 0x83],
+);
 /// DXMT's `IMTLD3D11DeviceExt`.
-static IID_DEVICE_EXT: Guid = Guid::new(0xefc7_7ae6, 0x2179, 0x4c0a, [0xb8, 0x44, 0x76, 0x61, 0xca, 0x0d, 0xcd, 0xe7]);
+static IID_DEVICE_EXT: Guid = Guid::new(
+    0xefc7_7ae6,
+    0x2179,
+    0x4c0a,
+    [0xb8, 0x44, 0x76, 0x61, 0xca, 0x0d, 0xcd, 0xe7],
+);
 /// `ID3D11Device`.
-static IID_DEVICE: Guid = Guid::new(0xdb6f_6ddb, 0xac77, 0x4e88, [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40]);
+static IID_DEVICE: Guid = Guid::new(
+    0xdb6f_6ddb,
+    0xac77,
+    0x4e88,
+    [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40],
+);
 
 /// `IMTLD3D11ContextExt`: `TemporalUpscale` (unused here), `BeginUAVOverlap` and `EndUAVOverlap`.
 #[repr(C)]
@@ -78,12 +98,16 @@ const extern "C" fn get_current_sli_state(device: *mut c_void, state: *mut SliSt
     match version {
         SLI_STATE_VER1 => {
             // SAFETY: the game's V1 struct.
-            let Some(state) = (unsafe { state.as_mut() }) else { return INVALID_ARGUMENT };
+            let Some(state) = (unsafe { state.as_mut() }) else {
+                return INVALID_ARGUMENT;
+            };
             fill_sli(state);
         }
         SLI_STATE_VER2 => {
             // SAFETY: the game's V2 struct.
-            let Some(state) = (unsafe { state.cast::<SliStateV2>().as_mut() }) else { return INVALID_ARGUMENT };
+            let Some(state) = (unsafe { state.cast::<SliStateV2>().as_mut() }) else {
+                return INVALID_ARGUMENT;
+            };
             fill_sli(&mut state.v1);
             state.num_vr_sli_gpus = 0;
         }
@@ -103,7 +127,9 @@ const fn fill_sli(state: &mut SliStateV1) {
 }
 
 extern "C" fn begin_uav_overlap(object: *mut c_void) -> Status {
-    let Some(ext) = context_ext(object) else { return INVALID_ARGUMENT };
+    let Some(ext) = context_ext(object) else {
+        return INVALID_ARGUMENT;
+    };
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt`.
     let slots = unsafe { vtbl::<ContextExtVtbl>(ext.0) };
     // SAFETY: as above.
@@ -112,7 +138,9 @@ extern "C" fn begin_uav_overlap(object: *mut c_void) -> Status {
 }
 
 extern "C" fn end_uav_overlap(object: *mut c_void) -> Status {
-    let Some(ext) = context_ext(object) else { return INVALID_ARGUMENT };
+    let Some(ext) = context_ext(object) else {
+        return INVALID_ARGUMENT;
+    };
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt`.
     let slots = unsafe { vtbl::<ContextExtVtbl>(ext.0) };
     // SAFETY: as above.
@@ -120,16 +148,28 @@ extern "C" fn end_uav_overlap(object: *mut c_void) -> Status {
     OK
 }
 
-const extern "C" fn set_depth_bounds_test(_object: *mut c_void, _enable: u32, _min: f32, _max: f32) -> Status {
+const extern "C" fn set_depth_bounds_test(
+    _object: *mut c_void,
+    _enable: u32,
+    _min: f32,
+    _max: f32,
+) -> Status {
     NOT_SUPPORTED
 }
 
 /// Whether the C++ names the opcode: the ones games probe, which it answers without a warning.
 const fn extn_op_is_known(op: u32) -> bool {
-    matches!(op, EXTN_OP_UINT64_ATOMIC | EXTN_OP_SHFL | EXTN_OP_FP16_ATOMIC)
+    matches!(
+        op,
+        EXTN_OP_UINT64_ATOMIC | EXTN_OP_SHFL | EXTN_OP_FP16_ATOMIC
+    )
 }
 
-extern "C" fn is_extn_op_code_supported(_device: *mut c_void, op: u32, supported: *mut u8) -> Status {
+extern "C" fn is_extn_op_code_supported(
+    _device: *mut c_void,
+    op: u32,
+    supported: *mut u8,
+) -> Status {
     if supported.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -143,7 +183,9 @@ extern "C" fn is_extn_op_code_supported(_device: *mut c_void, op: u32, supported
 
 extern "C" fn set_extn_slot(device: *mut c_void, slot: u32) -> Status {
     // SAFETY: the game's live COM object, or null.
-    let Some(ext) = (unsafe { query_interface(device, &IID_DEVICE_EXT) }).map(Held) else { return INVALID_ARGUMENT };
+    let Some(ext) = (unsafe { query_interface(device, &IID_DEVICE_EXT) }).map(Held) else {
+        return INVALID_ARGUMENT;
+    };
     // SAFETY: `ext` is DXMT's `IMTLD3D11DeviceExt`.
     let slots = unsafe { vtbl::<DeviceExtVtbl>(ext.0) };
     // SAFETY: as above.
@@ -151,7 +193,11 @@ extern "C" fn set_extn_slot(device: *mut c_void, slot: u32) -> Status {
     OK
 }
 
-const extern "C" fn get_object_handle_for_resource(_device: *mut c_void, resource: *mut c_void, handle: *mut *mut c_void) -> Status {
+const extern "C" fn get_object_handle_for_resource(
+    _device: *mut c_void,
+    resource: *mut c_void,
+    handle: *mut *mut c_void,
+) -> Status {
     if handle.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -160,11 +206,20 @@ const extern "C" fn get_object_handle_for_resource(_device: *mut c_void, resourc
     OK
 }
 
-const extern "C" fn set_resource_hint(_device: *mut c_void, _handle: *mut c_void, _category: u32, _name: u32, _value: *mut u32) -> Status {
+const extern "C" fn set_resource_hint(
+    _device: *mut c_void,
+    _handle: *mut c_void,
+    _category: u32,
+    _name: u32,
+    _value: *mut u32,
+) -> Status {
     OK
 }
 
-const extern "C" fn get_sleep_status(device: *mut c_void, params: *mut GetSleepStatusParams) -> Status {
+const extern "C" fn get_sleep_status(
+    device: *mut c_void,
+    params: *mut GetSleepStatusParams,
+) -> Status {
     if device.is_null() || params.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -173,7 +228,9 @@ const extern "C" fn get_sleep_status(device: *mut c_void, params: *mut GetSleepS
         return INCOMPATIBLE_STRUCT_VERSION;
     }
     // SAFETY: the game's V1 struct.
-    let Some(params) = (unsafe { params.as_mut() }) else { return INVALID_ARGUMENT };
+    let Some(params) = (unsafe { params.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
     params.low_latency_mode = 0;
     params.fs_vrr = 0;
     params.cpl_vsync_on = 0;
@@ -188,7 +245,11 @@ const fn version_only(device: *mut c_void, params: *const u32, version: u32) -> 
         return INVALID_ARGUMENT;
     }
     // SAFETY: every version starts with the version word.
-    if unsafe { params.read() } == version { OK } else { INCOMPATIBLE_STRUCT_VERSION }
+    if unsafe { params.read() } == version {
+        OK
+    } else {
+        INCOMPATIBLE_STRUCT_VERSION
+    }
 }
 
 const extern "C" fn set_sleep_mode(device: *mut c_void, params: *const u32) -> Status {
@@ -200,7 +261,11 @@ const extern "C" fn set_latency_marker(device: *mut c_void, params: *const u32) 
 }
 
 const extern "C" fn sleep(device: *mut c_void) -> Status {
-    if device.is_null() { INVALID_ARGUMENT } else { OK }
+    if device.is_null() {
+        INVALID_ARGUMENT
+    } else {
+        OK
+    }
 }
 
 extern "C" fn get_latency(device: *mut c_void, params: *mut LatencyResultParams) -> Status {
@@ -212,15 +277,26 @@ extern "C" fn get_latency(device: *mut c_void, params: *mut LatencyResultParams)
         return INCOMPATIBLE_STRUCT_VERSION;
     }
     // SAFETY: the game's V1 struct.
-    let Some(params) = (unsafe { params.as_mut() }) else { return INVALID_ARGUMENT };
+    let Some(params) = (unsafe { params.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
     for report in &mut params.frame_report {
-        *report = FrameReport { times: [0; 14], gpu_active_render_time_us: 0, gpu_frame_time_us: 0, rsvd: [0; 120] };
+        *report = FrameReport {
+            times: [0; 14],
+            gpu_active_render_time_us: 0,
+            gpu_frame_time_us: 0,
+            rsvd: [0; 120],
+        };
     }
     OK
 }
 
 const extern "C" fn set_vertical_sync_mode(device: *mut c_void, _mode: u32) -> Status {
-    if device.is_null() { INVALID_ARGUMENT } else { NO_IMPLEMENTATION }
+    if device.is_null() {
+        INVALID_ARGUMENT
+    } else {
+        NO_IMPLEMENTATION
+    }
 }
 
 /// The address of an `NvAPI_*` function, for `nvapi_QueryInterface`.

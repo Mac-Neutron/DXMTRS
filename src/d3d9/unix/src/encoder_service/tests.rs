@@ -213,8 +213,9 @@ fn failed_startup_retires_started_workers(reject_submit: bool) {
                 let device = crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice()
                     .expect("Metal device for late startup failure");
                 // SAFETY: device remains retained through the encoder startup result.
-                let device_handle =
-                    unsafe { MetalHandle::new(crate::mtl::objc2::rc::Retained::as_ptr(&device) as u64) };
+                let device_handle = unsafe {
+                    MetalHandle::new(crate::mtl::objc2::rc::Retained::as_ptr(&device) as u64)
+                };
                 let startup = super::EncoderStartup {
                     context: super::EncoderContext {
                         device_handle,

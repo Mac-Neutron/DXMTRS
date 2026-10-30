@@ -2,7 +2,9 @@
 
 use core::ffi::{c_char, c_void};
 
-use winemetal_wire::{UnixcallCacheAllocInit, UnixcallCacheGet, UnixcallCacheSet, UnixcallSetmetalcachepath, slot};
+use winemetal_wire::{
+    UnixcallCacheAllocInit, UnixcallCacheGet, UnixcallCacheSet, UnixcallSetmetalcachepath, slot,
+};
 
 use crate::transport::{call, mem_ptr};
 

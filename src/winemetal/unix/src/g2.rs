@@ -4,44 +4,47 @@
 //! goes to the object the handle names, or to nil for the null handle, and answers what the C's
 //! send answered; a texture getter on a handle of another class raises, as it did.
 
-use core::ffi::c_void;
-use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
+use core::{ffi::c_void, ptr::NonNull, sync::atomic::Ordering};
 #[cfg(feature = "native")]
 use std::sync::{Mutex, PoisonError};
 
-use objc2::extern_methods;
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{
+    extern_methods,
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
+};
 use objc2_foundation::{NSError, NSRange};
 use objc2_metal::{
     MTLBuffer, MTLCommandQueue, MTLCompareFunction, MTLDepthStencilDescriptor, MTLDevice, MTLHeap,
     MTLHeapDescriptor, MTLHeapType, MTLIndirectCommandBuffer, MTLIndirectCommandBufferDescriptor,
-    MTLIndirectCommandType, MTLOrigin, MTLRegion, MTLResidencySet, MTLResidencySetDescriptor, MTLResource,
-    MTLResourceID, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerBorderColor, MTLSamplerDescriptor,
-    MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLSize, MTLSparsePageSize,
-    MTLStencilDescriptor, MTLStencilOperation, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
-    MTLTextureType,
+    MTLIndirectCommandType, MTLOrigin, MTLRegion, MTLResidencySet, MTLResidencySetDescriptor,
+    MTLResource, MTLResourceID, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerBorderColor,
+    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLSize,
+    MTLSparsePageSize, MTLStencilDescriptor, MTLStencilOperation, MTLStorageMode, MTLTexture,
+    MTLTextureDescriptor, MTLTextureType,
 };
 use winemetal_wire::{
     UnixcallGenericObjNoret, UnixcallGenericObjObjNoret, UnixcallGenericObjUint64Ret,
-    UnixcallGenericObjUint64Uint64Ret, UnixcallMtlbufferNewtexture, UnixcallMtlbufferUpdatecontents,
-    UnixcallMtldeviceHeapbuffersizeandalign, UnixcallMtldeviceHeaptexturesizeandalign,
-    UnixcallMtldeviceNewbuffer, UnixcallMtldeviceNewdepthstencilstate, UnixcallMtldeviceNewheap,
-    UnixcallMtldeviceNewicb, UnixcallMtldeviceNewresidencyset, UnixcallMtldeviceNewsamplerstate,
+    UnixcallGenericObjUint64Uint64Ret, UnixcallMtlbufferNewtexture,
+    UnixcallMtlbufferUpdatecontents, UnixcallMtldeviceHeapbuffersizeandalign,
+    UnixcallMtldeviceHeaptexturesizeandalign, UnixcallMtldeviceNewbuffer,
+    UnixcallMtldeviceNewdepthstencilstate, UnixcallMtldeviceNewheap, UnixcallMtldeviceNewicb,
+    UnixcallMtldeviceNewresidencyset, UnixcallMtldeviceNewsamplerstate,
     UnixcallMtldeviceNewtexture, UnixcallMtlheapNewbuffer, UnixcallMtlheapNewtexture,
     UnixcallMtlresidencysetAddallocations, UnixcallMtltextureNewtextureview,
-    UnixcallMtltextureReplaceregion, WMTBufferInfo, WMTDepthStencilInfo, WMTHeapInfo,
-    WMTIndirectCommandBufferInfo, WMTSamplerInfo, WMTStencilInfo, WMTTextureInfo, WMT_COMPARE_FUNCTION_NEVER,
-    WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMT_SAMPLER_MIP_FILTER_LINEAR,
+    UnixcallMtltextureReplaceregion, WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_MIN_MAG_FILTER_LINEAR,
+    WMT_SAMPLER_MIP_FILTER_LINEAR, WMTBufferInfo, WMTDepthStencilInfo, WMTHeapInfo,
+    WMTIndirectCommandBufferInfo, WMTSamplerInfo, WMTStencilInfo, WMTTextureInfo,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, params};
-use crate::float_cast::{u64_to_usize, usize_to_u32};
-use crate::format::{pixel_format, swizzle};
-use crate::handle::{obj, ret_owned};
-use crate::init::FORCED_MAX_ANISOTROPY;
-use crate::texture::fill_texture_descriptor;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, params},
+    float_cast::{u64_to_usize, usize_to_u32},
+    format::{pixel_format, swizzle},
+    handle::{obj, ret_owned},
+    init::FORCED_MAX_ANISOTROPY,
+    texture::fill_texture_descriptor,
+};
 
 /// `MTLBuffer`'s `contents`, as the raw pointer Metal answers.
 ///
@@ -225,7 +228,11 @@ struct MemoryHooks {
 /// C's statics did. The lock is never held across a hook, and atomics would do if `newBuffer`
 /// ever showed up in a profile.
 #[cfg(feature = "native")]
-static MEMORY_HOOKS: Mutex<MemoryHooks> = Mutex::new(MemoryHooks { alloc: None, free: None, ctx: 0 });
+static MEMORY_HOOKS: Mutex<MemoryHooks> = Mutex::new(MemoryHooks {
+    alloc: None,
+    free: None,
+    ctx: 0,
+});
 
 /// The `max_anisotroy` a sampler gets: the guest's, or the forced floor for a trilinear sampler.
 ///
@@ -249,7 +256,11 @@ pub const fn max_anisotropy(info: &WMTSamplerInfo, forced: u32) -> u32 {
 /// A heap offset, `None` for the guest's `!0`: no placement.
 #[must_use]
 pub const fn placement_offset(offset: u64) -> Option<usize> {
-    if offset == u64::MAX { None } else { Some(u64_to_usize(offset)) }
+    if offset == u64::MAX {
+        None
+    } else {
+        Some(u64_to_usize(offset))
+    }
 }
 
 /// A length rounded up to whole pages, as `newBufferWithBytesNoCopy:` takes memory.
@@ -283,7 +294,11 @@ const fn address(ptr: u64) -> *mut c_void {
 #[cfg(feature = "native")]
 fn hooks() -> MemoryHooks {
     let hooks = MEMORY_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
-    MemoryHooks { alloc: hooks.alloc, free: hooks.free, ctx: hooks.ctx }
+    MemoryHooks {
+        alloc: hooks.alloc,
+        free: hooks.free,
+        ctx: hooks.ctx,
+    }
 }
 
 /// The host's context as the pointer it gave.
@@ -325,10 +340,13 @@ fn sampler_descriptor(info: &WMTSamplerInfo, forced: u32) -> Retained<MTLSampler
 
 /// One face of a depth-stencil descriptor from the guest's.
 fn set_stencil(stencil: &MTLStencilDescriptor, info: WMTStencilInfo) {
-    stencil.setDepthStencilPassOperation(MTLStencilOperation(usize::from(info.depth_stencil_pass_op)));
+    stencil
+        .setDepthStencilPassOperation(MTLStencilOperation(usize::from(info.depth_stencil_pass_op)));
     stencil.setDepthFailureOperation(MTLStencilOperation(usize::from(info.depth_fail_op)));
     stencil.setStencilFailureOperation(MTLStencilOperation(usize::from(info.stencil_fail_op)));
-    stencil.setStencilCompareFunction(MTLCompareFunction(usize::from(info.stencil_compare_function)));
+    stencil.setStencilCompareFunction(MTLCompareFunction(usize::from(
+        info.stencil_compare_function,
+    )));
     stencil.setWriteMask(u32::from(info.write_mask));
     stencil.setReadMask(u32::from(info.read_mask));
 }
@@ -336,7 +354,11 @@ fn set_stencil(stencil: &MTLStencilDescriptor, info: WMTStencilInfo) {
 /// The region of a texture copy.
 const fn region(origin: &winemetal_wire::WMTOrigin, size: &winemetal_wire::WMTSize) -> MTLRegion {
     MTLRegion {
-        origin: MTLOrigin { x: u64_to_usize(origin.x), y: u64_to_usize(origin.y), z: u64_to_usize(origin.z) },
+        origin: MTLOrigin {
+            x: u64_to_usize(origin.x),
+            y: u64_to_usize(origin.y),
+            z: u64_to_usize(origin.z),
+        },
         size: MTLSize {
             width: u64_to_usize(size.width),
             height: u64_to_usize(size.height),
@@ -393,10 +415,17 @@ fn hooked_buffer(
 /// takes the hooks away.
 #[cfg(feature = "native")]
 #[unsafe(export_name = "WMTSetMemoryHooks")]
-pub extern "C-unwind" fn set_memory_hooks(alloc: Option<AllocHook>, free: Option<FreeHook>, ctx: *mut c_void) {
+pub extern "C-unwind" fn set_memory_hooks(
+    alloc: Option<AllocHook>,
+    free: Option<FreeHook>,
+    ctx: *mut c_void,
+) {
     let _guard = AbortOnPanic;
-    *MEMORY_HOOKS.lock().unwrap_or_else(PoisonError::into_inner) =
-        MemoryHooks { alloc, free, ctx: ctx.expose_provenance() };
+    *MEMORY_HOOKS.lock().unwrap_or_else(PoisonError::into_inner) = MemoryHooks {
+        alloc,
+        free,
+        ctx: ctx.expose_provenance(),
+    };
 }
 
 /// `WMTMemoryHooked`: whether the host set an allocator, as a C `int`.
@@ -404,7 +433,13 @@ pub extern "C-unwind" fn set_memory_hooks(alloc: Option<AllocHook>, free: Option
 #[unsafe(export_name = "WMTMemoryHooked")]
 pub extern "C-unwind" fn memory_hooked() -> i32 {
     let _guard = AbortOnPanic;
-    i32::from(MEMORY_HOOKS.lock().unwrap_or_else(PoisonError::into_inner).alloc.is_some())
+    i32::from(
+        MEMORY_HOOKS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .alloc
+            .is_some(),
+    )
 }
 
 /// Slot 18, `MTLDevice_newBuffer`: a buffer over the guest's memory, the host's pages, or Metal's.
@@ -444,7 +479,8 @@ pub unsafe extern "C-unwind" fn new_buffer(args: *mut c_void) -> i32 {
     let buffer = if let Some(memory) = NonNull::new(address(info.memory.ptr)) {
         // SAFETY: the guest's memory, which outlives the buffer; Metal has no deallocator to run.
         device.and_then(|device| unsafe {
-            device.newBufferWithBytesNoCopy_length_options_deallocator(memory, length, options, None)
+            device
+                .newBufferWithBytesNoCopy_length_options_deallocator(memory, length, options, None)
         })
     } else {
         let buffer = device.and_then(|device| device.newBufferWithLength_options(length, options));
@@ -478,7 +514,9 @@ pub unsafe extern "C-unwind" fn new_sampler_state(args: *mut c_void) -> i32 {
     info.gpu_resource_id = if info.support_argument_buffers == 0 {
         0
     } else {
-        sampler.as_deref().map_or(0, |sampler| resource_id(sampler.gpuResourceID()))
+        sampler
+            .as_deref()
+            .map_or(0, |sampler| resource_id(sampler.gpuResourceID()))
     };
     p.ret = ret_owned(sampler);
     STATUS_SUCCESS
@@ -533,7 +571,9 @@ pub unsafe extern "C-unwind" fn new_texture(args: *mut c_void) -> i32 {
     let desc = MTLTextureDescriptor::new();
     fill_texture_descriptor(&desc, info);
     let texture = device.and_then(|device| device.newTextureWithDescriptor(&desc));
-    info.gpu_resource_id = texture.as_deref().map_or(0, |texture| resource_id(texture.gpuResourceID()));
+    info.gpu_resource_id = texture
+        .as_deref()
+        .map_or(0, |texture| resource_id(texture.gpuResourceID()));
     info.mach_port = 0;
     p.ret = ret_owned(texture);
     STATUS_SUCCESS
@@ -564,7 +604,9 @@ pub unsafe extern "C-unwind" fn buffer_new_texture(args: *mut c_void) -> i32 {
             u64_to_usize(p.bytes_per_row),
         )
     });
-    info.gpu_resource_id = texture.as_deref().map_or(0, |texture| resource_id(texture.gpuResourceID()));
+    info.gpu_resource_id = texture
+        .as_deref()
+        .map_or(0, |texture| resource_id(texture.gpuResourceID()));
     info.mach_port = 0;
     p.ret = ret_owned(texture);
     STATUS_SUCCESS
@@ -595,7 +637,9 @@ pub unsafe extern "C-unwind" fn texture_new_texture_view(args: *mut c_void) -> i
             )
         }
     });
-    p.gpu_resource_id = view.as_deref().map_or(0, |view| resource_id(view.gpuResourceID()));
+    p.gpu_resource_id = view
+        .as_deref()
+        .map_or(0, |view| resource_id(view.gpuResourceID()));
     p.ret = ret_owned(view);
     STATUS_SUCCESS
 }
@@ -605,7 +649,10 @@ pub unsafe extern "C-unwind" fn texture_new_texture_view(args: *mut c_void) -> i
 /// # Safety
 ///
 /// `args` is a `UnixcallGenericObjUint64Ret` whose handle is a live texture or null.
-unsafe fn texture_value(args: *mut c_void, value: impl FnOnce(&ProtocolObject<dyn MTLTexture>) -> usize) {
+unsafe fn texture_value(
+    args: *mut c_void,
+    value: impl FnOnce(&ProtocolObject<dyn MTLTexture>) -> usize,
+) {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallGenericObjUint64Ret>(args) };
     // SAFETY: the caller's contract: a live `MTLTexture`, or the null handle.
@@ -940,7 +987,8 @@ pub unsafe extern "C-unwind" fn heap_buffer_size_and_align(args: *mut c_void) ->
     let device = unsafe { obj::<ProtocolObject<dyn MTLDevice>>(p.device) };
     let options = MTLResourceOptions(u64_to_usize(p.options));
     let (size, align) = device.map_or((0, 0), |device| {
-        let size_and_align = device.heapBufferSizeAndAlignWithLength_options(u64_to_usize(p.length), options);
+        let size_and_align =
+            device.heapBufferSizeAndAlignWithLength_options(u64_to_usize(p.length), options);
         (size_and_align.size, size_and_align.align)
     });
     p.ret_size = usize_to_u32(size);
@@ -1036,7 +1084,9 @@ pub unsafe extern "C-unwind" fn heap_new_texture(args: *mut c_void) -> i32 {
             |offset| unsafe { heap.newTextureWithDescriptor_offset(&desc, offset) },
         )
     });
-    info.gpu_resource_id = texture.as_deref().map_or(0, |texture| resource_id(texture.gpuResourceID()));
+    info.gpu_resource_id = texture
+        .as_deref()
+        .map_or(0, |texture| resource_id(texture.gpuResourceID()));
     info.mach_port = 0;
     p.ret = ret_owned(texture);
     STATUS_SUCCESS
@@ -1065,13 +1115,21 @@ pub unsafe extern "C-unwind" fn new_indirect_command_buffer(args: *mut c_void) -
     desc.setMaxFragmentBufferBindCount(usize::from(info.max_fragment_buffer_binding));
     desc.setMaxKernelBufferBindCount(usize::from(info.max_kernel_buffer_binding));
     // SAFETY: Metal checks the count when the buffer is made, as it did for the C.
-    unsafe { desc.setMaxKernelThreadgroupMemoryBindCount(usize::from(info.max_kernel_threadgroup_memory_binding)) };
+    unsafe {
+        desc.setMaxKernelThreadgroupMemoryBindCount(usize::from(
+            info.max_kernel_threadgroup_memory_binding,
+        ))
+    };
     // SAFETY: as above.
     unsafe { desc.setMaxMeshBufferBindCount(usize::from(info.max_mesh_buffer_binding)) };
     // SAFETY: as above.
     unsafe { desc.setMaxObjectBufferBindCount(usize::from(info.max_object_buffer_binding)) };
     // SAFETY: as above.
-    unsafe { desc.setMaxObjectThreadgroupMemoryBindCount(usize::from(info.max_object_threadgroup_memory_binding)) };
+    unsafe {
+        desc.setMaxObjectThreadgroupMemoryBindCount(usize::from(
+            info.max_object_threadgroup_memory_binding,
+        ))
+    };
     desc.setMaxVertexBufferBindCount(usize::from(info.max_vertex_buffer_binding));
     desc.setInheritBuffers(info.inherit_buffers() != 0);
     desc.setInheritPipelineState(info.inherit_pso() != 0);
@@ -1087,7 +1145,9 @@ pub unsafe extern "C-unwind" fn new_indirect_command_buffer(args: *mut c_void) -
             )
         }
     });
-    info.gpu_resource_id = icb.as_deref().map_or(0, |icb| resource_id(icb.gpuResourceID()));
+    info.gpu_resource_id = icb
+        .as_deref()
+        .map_or(0, |icb| resource_id(icb.gpuResourceID()));
     p.ret = ret_owned(icb);
     STATUS_SUCCESS
 }

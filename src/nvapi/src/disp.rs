@@ -1,21 +1,28 @@
 //! NVAPI's displays, their IDs and HDR.
 
-use crate::ffi::{
-    COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription, EnumDisplayMonitors,
-    GetMonitorInfoW, HdrMetadata, MONITORINFOF_PRIMARY, MonitorInfoExW, WMTGetDisplayDescription, WMTGetPrimaryDisplayId,
-    WMTGetSecondaryDisplayId, WMTQueryDisplaySetting, WMTUpdateDisplaySetting,
-};
-use crate::nv::{
-    BPC_10, COLOR_FORMAT_RGB, DISPLAYIDS_ACTIVE, DISPLAYIDS_CONNECTED, DISPLAYIDS_PHYSICALLY_CONNECTED,
-    DYNAMIC_RANGE_VESA, GPU_DISPLAYIDS_VER1, GPU_DISPLAYIDS_VER2, GpuDisplayIds, HDR_CAP_ST2084_EOTF, HDR_CAPABILITIES_VER1,
-    HDR_CAPABILITIES_VER2, HDR_CAPABILITIES_VER3, HDR_CMD_GET, HDR_COLOR_DATA_VER1, HDR_COLOR_DATA_VER2, HDR_MODE_OFF,
-    HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH, HdrCapabilitiesV1, HdrCapabilitiesV2, HdrCapabilitiesV3, HdrColorDataV1,
-    HdrColorDataV2, HdrMasteringData, INCOMPATIBLE_STRUCT_VERSION, INSUFFICIENT_BUFFER, INVALID_ARGUMENT,
-    END_ENUMERATION, MONITOR_CONN_TYPE_UNKNOWN, NOT_SUPPORTED, NVIDIA_DEVICE_NOT_FOUND, OK, Status,
-};
-use crate::gpu::{id_handle, registry_ids};
 use core::ffi::{CStr, c_char, c_void};
+
 use dxmt_util::float_cast::f32_to_u16;
+
+use crate::{
+    ffi::{
+        COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription,
+        EnumDisplayMonitors, GetMonitorInfoW, HdrMetadata, MONITORINFOF_PRIMARY, MonitorInfoExW,
+        WMTGetDisplayDescription, WMTGetPrimaryDisplayId, WMTGetSecondaryDisplayId,
+        WMTQueryDisplaySetting, WMTUpdateDisplaySetting,
+    },
+    gpu::{id_handle, registry_ids},
+    nv::{
+        BPC_10, COLOR_FORMAT_RGB, DISPLAYIDS_ACTIVE, DISPLAYIDS_CONNECTED,
+        DISPLAYIDS_PHYSICALLY_CONNECTED, DYNAMIC_RANGE_VESA, END_ENUMERATION, GPU_DISPLAYIDS_VER1,
+        GPU_DISPLAYIDS_VER2, GpuDisplayIds, HDR_CAP_ST2084_EOTF, HDR_CAPABILITIES_VER1,
+        HDR_CAPABILITIES_VER2, HDR_CAPABILITIES_VER3, HDR_CMD_GET, HDR_COLOR_DATA_VER1,
+        HDR_COLOR_DATA_VER2, HDR_MODE_OFF, HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH,
+        HdrCapabilitiesV1, HdrCapabilitiesV2, HdrCapabilitiesV3, HdrColorDataV1, HdrColorDataV2,
+        HdrMasteringData, INCOMPATIBLE_STRUCT_VERSION, INSUFFICIENT_BUFFER, INVALID_ARGUMENT,
+        MONITOR_CONN_TYPE_UNKNOWN, NOT_SUPPORTED, NVIDIA_DEVICE_NOT_FOUND, OK, Status,
+    },
+};
 
 /// A display's primaries and luminance as NVAPI scales them, from a `WMTDisplayDescription`.
 pub struct Scaled {
@@ -148,7 +155,10 @@ fn scaled_description(id: u32) -> (Scaled, f32) {
     let mut desc = empty_description();
     // SAFETY: winemetal fills the local description.
     unsafe { WMTGetDisplayDescription(id, &raw mut desc) };
-    (primaries(&desc), desc.maximum_potential_edr_color_component_value)
+    (
+        primaries(&desc),
+        desc.maximum_potential_edr_color_component_value,
+    )
 }
 
 /// The primary display's ID, 0 for none.
@@ -163,7 +173,11 @@ fn secondary_display_id() -> u32 {
     unsafe { WMTGetSecondaryDisplayId() }
 }
 
-extern "C" fn get_physical_gpus_from_display(display: *mut c_void, gpus: *mut *mut c_void, count: *mut u32) -> Status {
+extern "C" fn get_physical_gpus_from_display(
+    display: *mut c_void,
+    gpus: *mut *mut c_void,
+    count: *mut u32,
+) -> Status {
     if display.is_null() || gpus.is_null() || count.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -188,15 +202,30 @@ struct NameSearch<'a> {
     is_primary: bool,
 }
 
-unsafe extern "system" fn name_proc(monitor: *mut c_void, _dc: *mut c_void, _rect: *mut [i32; 4], data: isize) -> i32 {
+unsafe extern "system" fn name_proc(
+    monitor: *mut c_void,
+    _dc: *mut c_void,
+    _rect: *mut [i32; 4],
+    data: isize,
+) -> i32 {
     // SAFETY: `data` is the `NameSearch` the caller passed, alive for the enumeration.
-    let Some(search) = (unsafe { core::ptr::with_exposed_provenance_mut::<NameSearch>(usize::try_from(data).unwrap_or(0)).as_mut() })
-    else {
+    let Some(search) = (unsafe {
+        core::ptr::with_exposed_provenance_mut::<NameSearch>(usize::try_from(data).unwrap_or(0))
+            .as_mut()
+    }) else {
         return 0;
     };
-    let mut info = MonitorInfoExW { size: 104, monitor: [0; 4], work: [0; 4], flags: 0, device: [0; 32] };
+    let mut info = MonitorInfoExW {
+        size: 104,
+        monitor: [0; 4],
+        work: [0; 4],
+        flags: 0,
+        device: [0; 32],
+    };
     // SAFETY: `info` is a local `MONITORINFOEXW` with its size set.
-    if unsafe { GetMonitorInfoW(monitor, &raw mut info) } == 0 || !device_name_is(search.name, &info.device) {
+    if unsafe { GetMonitorInfoW(monitor, &raw mut info) } == 0
+        || !device_name_is(search.name, &info.device)
+    {
         return 1;
     }
     search.monitor = monitor;
@@ -223,14 +252,29 @@ extern "C" fn get_display_id_by_display_name(name: *const c_char, id: *mut u32) 
     }
     // SAFETY: the game's NUL-terminated string.
     let name = unsafe { CStr::from_ptr(name) };
-    let mut search = NameSearch { name: name.to_bytes(), monitor: core::ptr::null_mut(), is_primary: false };
+    let mut search = NameSearch {
+        name: name.to_bytes(),
+        monitor: core::ptr::null_mut(),
+        is_primary: false,
+    };
     let data = (&raw mut search).expose_provenance();
     // SAFETY: `name_proc` reads the `NameSearch` through `data` while `search` lives.
-    unsafe { EnumDisplayMonitors(core::ptr::null_mut(), core::ptr::null(), name_proc, isize::try_from(data).unwrap_or(0)) };
+    unsafe {
+        EnumDisplayMonitors(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            name_proc,
+            isize::try_from(data).unwrap_or(0),
+        )
+    };
     if let Some(status) = name_lookup_failure(!search.monitor.is_null(), id) {
         return status;
     }
-    let display_id = if search.is_primary { primary_display_id() } else { secondary_display_id() };
+    let display_id = if search.is_primary {
+        primary_display_id()
+    } else {
+        secondary_display_id()
+    };
     // SAFETY: the game's out pointer, checked non-null.
     unsafe { id.write(display_id) };
     OK
@@ -252,7 +296,9 @@ extern "C" fn get_hdr_capabilities(display_id: u32, caps: *mut HdrCapabilitiesV3
     // SAFETY: the game allocated the size its version says.
     unsafe { caps.cast::<u8>().write_bytes(0, size) };
     // SAFETY: V2 and V3 start with V1, and the struct holds at least V1.
-    let Some(out) = (unsafe { caps.cast::<HdrCapabilitiesV1>().as_mut() }) else { return INVALID_ARGUMENT };
+    let Some(out) = (unsafe { caps.cast::<HdrCapabilitiesV1>().as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
     out.version = version;
     out.flags = u32::from(max_potential > 1.0) * HDR_CAP_ST2084_EOTF;
     let data = &mut out.display_data;
@@ -282,7 +328,9 @@ extern "C" fn hdr_color_control(display_id: u32, data: *mut HdrColorDataV2) -> S
         return INCOMPATIBLE_STRUCT_VERSION;
     }
     // SAFETY: V2 starts with V1, and the struct holds at least V1.
-    let Some(v1) = (unsafe { data.cast::<HdrColorDataV1>().as_mut() }) else { return INVALID_ARGUMENT };
+    let Some(v1) = (unsafe { data.cast::<HdrColorDataV1>().as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
     let mut metadata = metadata_of(&v1.mastering_display_data);
     let mut colorspace = COLOR_SPACE_SRGB;
     if v1.cmd == HDR_CMD_GET {
@@ -296,7 +344,9 @@ extern "C" fn hdr_color_control(display_id: u32, data: *mut HdrColorDataV2) -> S
         }
         if version == HDR_COLOR_DATA_VER2 {
             // SAFETY: the game's struct is a V2.
-            let Some(v2) = (unsafe { data.as_mut() }) else { return INVALID_ARGUMENT };
+            let Some(v2) = (unsafe { data.as_mut() }) else {
+                return INVALID_ARGUMENT;
+            };
             v2.hdr_color_format = COLOR_FORMAT_RGB;
             v2.hdr_dynamic_range = DYNAMIC_RANGE_VESA;
             v2.hdr_bpc = BPC_10;
@@ -305,7 +355,11 @@ extern "C" fn hdr_color_control(display_id: u32, data: *mut HdrColorDataV2) -> S
         // SAFETY: a null metadata is the call's "off".
         unsafe { WMTUpdateDisplaySetting(display_id, COLOR_SPACE_SRGB, core::ptr::null()) };
     } else {
-        let space = if v1.hdr_mode == HDR_MODE_UHDA { COLOR_SPACE_HDR_SCRGB } else { COLOR_SPACE_HDR_PQ };
+        let space = if v1.hdr_mode == HDR_MODE_UHDA {
+            COLOR_SPACE_HDR_SCRGB
+        } else {
+            COLOR_SPACE_HDR_PQ
+        };
         // SAFETY: winemetal reads the local metadata.
         unsafe { WMTUpdateDisplaySetting(display_id, space, &raw const metadata) };
     }
@@ -313,7 +367,11 @@ extern "C" fn hdr_color_control(display_id: u32, data: *mut HdrColorDataV2) -> S
 }
 
 const extern "C" fn get_monitor_capabilities(_display_id: u32, caps: *mut c_void) -> Status {
-    if caps.is_null() { INVALID_ARGUMENT } else { NOT_SUPPORTED }
+    if caps.is_null() {
+        INVALID_ARGUMENT
+    } else {
+        NOT_SUPPORTED
+    }
 }
 
 /// What `EnumDisplayMonitors` finds for `EnumNvidiaDisplayHandle`: the monitor at `index`.
@@ -322,10 +380,17 @@ struct IndexSearch {
     monitor: *mut c_void,
 }
 
-unsafe extern "system" fn index_proc(monitor: *mut c_void, _dc: *mut c_void, _rect: *mut [i32; 4], data: isize) -> i32 {
+unsafe extern "system" fn index_proc(
+    monitor: *mut c_void,
+    _dc: *mut c_void,
+    _rect: *mut [i32; 4],
+    data: isize,
+) -> i32 {
     // SAFETY: `data` is the `IndexSearch` the caller passed, alive for the enumeration.
-    let Some(search) = (unsafe { core::ptr::with_exposed_provenance_mut::<IndexSearch>(usize::try_from(data).unwrap_or(0)).as_mut() })
-    else {
+    let Some(search) = (unsafe {
+        core::ptr::with_exposed_provenance_mut::<IndexSearch>(usize::try_from(data).unwrap_or(0))
+            .as_mut()
+    }) else {
         return 0;
     };
     if search.index > 0 {
@@ -340,10 +405,20 @@ extern "C" fn enum_nvidia_display_handle(index: u32, handle: *mut *mut c_void) -
     if handle.is_null() {
         return INVALID_ARGUMENT;
     }
-    let mut search = IndexSearch { index, monitor: core::ptr::null_mut() };
+    let mut search = IndexSearch {
+        index,
+        monitor: core::ptr::null_mut(),
+    };
     let data = (&raw mut search).expose_provenance();
     // SAFETY: `index_proc` reads the `IndexSearch` through `data` while `search` lives.
-    unsafe { EnumDisplayMonitors(core::ptr::null_mut(), core::ptr::null(), index_proc, isize::try_from(data).unwrap_or(0)) };
+    unsafe {
+        EnumDisplayMonitors(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            index_proc,
+            isize::try_from(data).unwrap_or(0),
+        )
+    };
     if search.monitor.is_null() {
         return END_ENUMERATION;
     }
@@ -352,7 +427,12 @@ extern "C" fn enum_nvidia_display_handle(index: u32, handle: *mut *mut c_void) -
     OK
 }
 
-extern "C" fn get_connected_display_ids(_gpu: *mut c_void, ids: *mut GpuDisplayIds, count: *mut u32, _flags: u32) -> Status {
+extern "C" fn get_connected_display_ids(
+    _gpu: *mut c_void,
+    ids: *mut GpuDisplayIds,
+    count: *mut u32,
+    _flags: u32,
+) -> Status {
     if count.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -380,7 +460,14 @@ extern "C" fn get_connected_display_ids(_gpu: *mut c_void, ids: *mut GpuDisplayI
         let display_id = if i == 0 { primary } else { secondary };
         let flags = DISPLAYIDS_ACTIVE | DISPLAYIDS_CONNECTED | DISPLAYIDS_PHYSICALLY_CONNECTED;
         // SAFETY: the entry is the game's.
-        unsafe { entry.write(GpuDisplayIds { version, connector_type: MONITOR_CONN_TYPE_UNKNOWN, display_id, flags }) };
+        unsafe {
+            entry.write(GpuDisplayIds {
+                version,
+                connector_type: MONITOR_CONN_TYPE_UNKNOWN,
+                display_id,
+                flags,
+            })
+        };
     }
     OK
 }

@@ -23,18 +23,20 @@ use mtld3d_shared::{
     mtl::PixelFormat,
     mtl_handle::{MTLFunctionKind, MTLRenderPipelineStateKind},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLMathMode,
-    MTLRenderPipelineDescriptor,
-};
 use rustc_hash::FxHashMap;
 
 use super::texture::mtl_pixel_format;
 use crate::{
     LOG_TARGET,
     metal::handle::{IntoRetained, keep_first},
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_foundation::NSString,
+        objc2_metal::{
+            MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLMathMode,
+            MTLRenderPipelineDescriptor,
+        },
+    },
 };
 
 /// MSL source for the blit-quad library.

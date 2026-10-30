@@ -3,24 +3,32 @@
 //! The capability map is what NGX's SDK reads before it creates a feature: DLSS available, no
 //! driver update needed, and the callback that picks a quality mode's render size.
 
-use dxmt_util::float_cast::{f32_to_u32, u32_to_f32};
-use crate::ngx::{
-    FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FeatureDiscoveryInfo, FeatureRequirement, INVALID_PARAMETER,
-    OK, SUPPORTED, UNSUPPORTED,
-};
-use crate::parameter::{Parameters, Value};
 use core::ffi::c_void;
 use std::sync::LazyLock;
+
+use dxmt_util::float_cast::{f32_to_u32, u32_to_f32};
+
+use crate::{
+    ngx::{
+        FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FeatureDiscoveryInfo,
+        FeatureRequirement, INVALID_PARAMETER, OK, SUPPORTED, UNSUPPORTED,
+    },
+    parameter::{Parameters, Value},
+};
 
 /// `DLSSOptimalSettingsCallback`: a quality mode's render size, scale and dynamic range.
 ///
 /// From `Width`, `Height` and `PerfQualityValue`, with DXMT's scales for each mode.
 extern "C" fn optimal_settings(params: *mut Parameters) -> u32 {
     // SAFETY: NGX's SDK calls this with the capability map it got from us.
-    let Some(params) = (unsafe { params.as_mut() }) else { return FAIL };
-    let (Some(width), Some(height), Some(quality)) =
-        (params.u32(c"Width"), params.u32(c"Height"), params.i32(c"PerfQualityValue"))
-    else {
+    let Some(params) = (unsafe { params.as_mut() }) else {
+        return FAIL;
+    };
+    let (Some(width), Some(height), Some(quality)) = (
+        params.u32(c"Width"),
+        params.u32(c"Height"),
+        params.i32(c"PerfQualityValue"),
+    ) else {
         return FAIL;
     };
     let scale: f32 = match quality {
@@ -33,11 +41,20 @@ extern "C" fn optimal_settings(params: *mut Parameters) -> u32 {
     };
     params.set(c"Scale", Value::F32(scale));
     params.set(c"SuperSampling.ScaleFactor", Value::F32(scale));
-    params.set(c"OutWidth", Value::U32(f32_to_u32((u32_to_f32(width) * scale).ceil())));
-    params.set(c"OutHeight", Value::U32(f32_to_u32((u32_to_f32(height) * scale).ceil())));
+    params.set(
+        c"OutWidth",
+        Value::U32(f32_to_u32((u32_to_f32(width) * scale).ceil())),
+    );
+    params.set(
+        c"OutHeight",
+        Value::U32(f32_to_u32((u32_to_f32(height) * scale).ceil())),
+    );
     params.set(c"Sharpness", Value::F32(0.0));
     params.set(c"DLSS.Get.Dynamic.Min.Render.Width", Value::U32(width / 3));
-    params.set(c"DLSS.Get.Dynamic.Min.Render.Height", Value::U32(height / 3));
+    params.set(
+        c"DLSS.Get.Dynamic.Min.Render.Height",
+        Value::U32(height / 3),
+    );
     params.set(c"DLSS.Get.Dynamic.Max.Render.Width", Value::U32(width));
     params.set(c"DLSS.Get.Dynamic.Max.Render.Height", Value::U32(height));
     params.set(c"DLSSMode", Value::I32(1));
@@ -79,7 +96,10 @@ pub fn populate_capabilities(params: &mut Parameters) {
     }
     params.set(c"SuperSampling.FeatureInitResult", Value::U32(1));
     let callback: extern "C" fn(*mut Parameters) -> u32 = optimal_settings;
-    params.set(c"DLSSOptimalSettingsCallback", Value::Ptr(callback as *mut c_void));
+    params.set(
+        c"DLSSOptimalSettingsCallback",
+        Value::Ptr(callback as *mut c_void),
+    );
     let callback: extern "C" fn(*mut Parameters) -> u32 = stats;
     params.set(c"DLSSGetStatsCallback", Value::Ptr(callback as *mut c_void));
     for (name, value) in [
@@ -93,7 +113,11 @@ pub fn populate_capabilities(params: &mut Parameters) {
         params.set(name, Value::F32(value));
     }
     params.set(c"PerfQualityValue", Value::I32(2));
-    for name in [c"CreationNodeMask", c"VisibilityNodeMask", c"DLSS.Enable.Output.Subrects"] {
+    for name in [
+        c"CreationNodeMask",
+        c"VisibilityNodeMask",
+        c"DLSS.Enable.Output.Subrects",
+    ] {
         params.set(name, Value::I32(1));
     }
 }
@@ -111,16 +135,26 @@ fn give(out: *mut *mut Parameters, capabilities: bool) -> u32 {
     if out.is_null() {
         return INVALID_PARAMETER;
     }
-    let params = if capabilities { new_capabilities() } else { Parameters::allocate() };
+    let params = if capabilities {
+        new_capabilities()
+    } else {
+        Parameters::allocate()
+    };
     // SAFETY: the game's out pointer, checked non-null.
     unsafe { out.write(params) };
     OK
 }
 
 /// Answers whether `info`'s feature is DLSS super resolution, and its requirements.
-fn requirements(info: *const FeatureDiscoveryInfo, requirement: *mut FeatureRequirement, other: u32) -> u32 {
+fn requirements(
+    info: *const FeatureDiscoveryInfo,
+    requirement: *mut FeatureRequirement,
+    other: u32,
+) -> u32 {
     // SAFETY: the game's pointers, each null or a live structure.
-    let (Some(info), Some(requirement)) = (unsafe { info.as_ref() }, unsafe { requirement.as_mut() }) else {
+    let (Some(info), Some(requirement)) =
+        (unsafe { info.as_ref() }, unsafe { requirement.as_mut() })
+    else {
         return INVALID_PARAMETER;
     };
     if info.feature_id == FEATURE_SUPERSAMPLING {
@@ -131,7 +165,10 @@ fn requirements(info: *const FeatureDiscoveryInfo, requirement: *mut FeatureRequ
         return OK;
     }
     if other == FAIL {
-        crate::LOG.warn(&format!("NVSDK_NGX_D3D11_GetFeatureRequirements: unsupported feature {}", info.feature_id));
+        crate::LOG.warn(&format!(
+            "NVSDK_NGX_D3D11_GetFeatureRequirements: unsupported feature {}",
+            info.feature_id
+        ));
     }
     requirement.feature_supported = UNSUPPORTED;
     other
@@ -179,7 +216,9 @@ pub extern "system" fn NVSDK_NGX_D3D11_AllocateParameters(out: *mut *mut Paramet
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D12_PopulateParameters_Impl(params: *mut Parameters) -> u32 {
     // SAFETY: the game's map, from AllocateParameters.
-    let Some(params) = (unsafe { params.as_mut() }) else { return INVALID_PARAMETER };
+    let Some(params) = (unsafe { params.as_mut() }) else {
+        return INVALID_PARAMETER;
+    };
     populate_capabilities(params);
     OK
 }
@@ -198,7 +237,11 @@ pub extern "system" fn NVSDK_NGX_D3D11_DestroyParameters(params: *mut Parameters
 
 /// No scratch memory: `MetalFX` holds its own.
 #[unsafe(no_mangle)]
-pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(_: u32, _: *const Parameters, out: *mut usize) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(
+    _: u32,
+    _: *const Parameters,
+    out: *mut usize,
+) -> u32 {
     if !out.is_null() {
         // SAFETY: the game's out pointer, checked non-null.
         unsafe { out.write(0) };
@@ -207,7 +250,11 @@ pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(_: u32, _: *co
 }
 
 #[unsafe(no_mangle)]
-pub const extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(feature: u32, params: *const Parameters, out: *mut usize) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(
+    feature: u32,
+    params: *const Parameters,
+    out: *mut usize,
+) -> u32 {
     NVSDK_NGX_D3D12_GetScratchBufferSize(feature, params, out)
 }
 
@@ -256,12 +303,24 @@ pub const extern "system" fn NVSDK_NGX_D3D11_Shutdown1(_: *mut c_void) -> u32 {
 
 /// Direct3D 11's initialisations all succeed: the device is checked when a feature is made.
 #[unsafe(no_mangle)]
-pub const extern "system" fn NVSDK_NGX_D3D11_Init(_: u64, _: *const u16, _: *mut c_void, _: *const c_void, _: u32) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Init(
+    _: u64,
+    _: *const u16,
+    _: *mut c_void,
+    _: *const c_void,
+    _: u32,
+) -> u32 {
     OK
 }
 
 #[unsafe(no_mangle)]
-pub const extern "system" fn NVSDK_NGX_D3D11_Init_Ext(_: u64, _: *const u16, _: *mut c_void, _: u32, _: *const c_void) -> u32 {
+pub const extern "system" fn NVSDK_NGX_D3D11_Init_Ext(
+    _: u64,
+    _: *const u16,
+    _: *mut c_void,
+    _: u32,
+    _: *const c_void,
+) -> u32 {
     OK
 }
 

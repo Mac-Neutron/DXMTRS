@@ -1,13 +1,14 @@
 //! `MTLTextureDescriptor` from a `WMTTextureInfo`.
 
-use objc2::runtime::{NSObject, NSObjectProtocol, Sel};
-use objc2::{extern_class, extern_methods};
+use objc2::{
+    extern_class, extern_methods,
+    runtime::{NSObject, NSObjectProtocol, Sel},
+};
 use objc2_foundation::NSInteger;
 use objc2_metal::{MTLResourceOptions, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage};
 use winemetal_wire::{WMT_TEXTURE_FLAG_LOSSLESS, WMTTextureInfo};
 
-use crate::float_cast::u64_to_usize;
-use crate::format::pixel_format;
+use crate::{float_cast::u64_to_usize, format::pixel_format};
 
 extern_class!(
     /// `MTLTextureDescriptor`, re-declared for its private `setCompressionMode:`.

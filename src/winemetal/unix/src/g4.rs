@@ -11,12 +11,16 @@
 //! sends nothing and writes nothing; slot 98's constant without data is the one exception, which
 //! reads as zeros where Metal reads it.
 
-use core::ffi::{c_char, c_void};
-use core::ptr::{self, NonNull};
+use core::{
+    ffi::{c_char, c_void},
+    ptr::{self, NonNull},
+};
 
-use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{AnyThread, Message, extern_class, extern_methods};
+use objc2::{
+    AnyThread, Message, extern_class, extern_methods,
+    rc::{Allocated, Retained},
+    runtime::{AnyObject, NSObject, ProtocolObject},
+};
 use objc2_foundation::{NSArray, NSError, NSString, NSUInteger, NSURL};
 use objc2_metal::{
     MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLBlendFactor, MTLBlendOperation,
@@ -40,10 +44,12 @@ use winemetal_wire::{
     WMTVertexDescriptorInfo,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_cstr, mem_ref, mem_slice, params};
-use crate::float_cast::u64_to_usize;
-use crate::format::pixel_format;
-use crate::handle::{obj, ret_owned};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_cstr, mem_ref, mem_slice, params},
+    float_cast::u64_to_usize,
+    format::pixel_format,
+    handle::{obj, ret_owned},
+};
 
 /// `NSUTF8StringEncoding`.
 const UTF8: NSUInteger = 4;
@@ -72,7 +78,10 @@ impl RawUrl {
         /// `-initFileURLWithPath:` on the C's decode: nil raises, "" answers nil.
         #[unsafe(method(initFileURLWithPath:))]
         #[unsafe(method_family = init)]
-        fn init_file_url_with_path(this: Allocated<Self>, path: Option<&NSString>) -> Option<Retained<Self>>;
+        fn init_file_url_with_path(
+            this: Allocated<Self>,
+            path: Option<&NSString>,
+        ) -> Option<Retained<Self>>;
     );
 }
 
@@ -267,7 +276,10 @@ impl RawDevice for ProtocolObject<dyn MTLDevice> {
 /// The library's sends with a nil-able name and the C's raw `NSError **`.
 trait RawLibrary {
     /// `-newFunctionWithName:`, the name sent as it is (nil included).
-    fn new_function(&self, name: Option<&NSString>) -> Option<Retained<ProtocolObject<dyn MTLFunction>>>;
+    fn new_function(
+        &self,
+        name: Option<&NSString>,
+    ) -> Option<Retained<ProtocolObject<dyn MTLFunction>>>;
 
     /// `-newFunctionWithName:constantValues:error:`, the name sent as it is (nil included).
     fn new_function_with_constants(
@@ -282,7 +294,10 @@ impl RawLibrary for ProtocolObject<dyn MTLLibrary> {
     extern_methods!(
         #[unsafe(method(newFunctionWithName:))]
         #[unsafe(method_family = new)]
-        fn new_function(&self, name: Option<&NSString>) -> Option<Retained<ProtocolObject<dyn MTLFunction>>>;
+        fn new_function(
+            &self,
+            name: Option<&NSString>,
+        ) -> Option<Retained<ProtocolObject<dyn MTLFunction>>>;
 
         #[unsafe(method(newFunctionWithName:constantValues:error:))]
         #[unsafe(method_family = new)]
@@ -298,16 +313,32 @@ impl RawLibrary for ProtocolObject<dyn MTLLibrary> {
 /// The archive's sends with the C's raw `NSError **`, whose `BOOL` the C ignored.
 trait RawArchive {
     /// `-addComputePipelineFunctionsWithDescriptor:error:`.
-    fn add_compute(&self, descriptor: &MTLComputePipelineDescriptor, error: &mut *mut NSError) -> bool;
+    fn add_compute(
+        &self,
+        descriptor: &MTLComputePipelineDescriptor,
+        error: &mut *mut NSError,
+    ) -> bool;
 
     /// `-addRenderPipelineFunctionsWithDescriptor:error:`.
-    fn add_render(&self, descriptor: &MTLRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+    fn add_render(
+        &self,
+        descriptor: &MTLRenderPipelineDescriptor,
+        error: &mut *mut NSError,
+    ) -> bool;
 
     /// `-addMeshRenderPipelineFunctionsWithDescriptor:error:`.
-    fn add_mesh(&self, descriptor: &MTLMeshRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+    fn add_mesh(
+        &self,
+        descriptor: &MTLMeshRenderPipelineDescriptor,
+        error: &mut *mut NSError,
+    ) -> bool;
 
     /// `-addTileRenderPipelineFunctionsWithDescriptor:error:`.
-    fn add_tile(&self, descriptor: &MTLTileRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+    fn add_tile(
+        &self,
+        descriptor: &MTLTileRenderPipelineDescriptor,
+        error: &mut *mut NSError,
+    ) -> bool;
 
     /// `-serializeToURL:error:`, nil for an empty path as the C sent it.
     fn serialize_to_url(&self, url: Option<&NSURL>, error: &mut *mut NSError) -> bool;
@@ -317,19 +348,35 @@ impl RawArchive for ProtocolObject<dyn MTLBinaryArchive> {
     extern_methods!(
         #[unsafe(method(addComputePipelineFunctionsWithDescriptor:error:))]
         #[unsafe(method_family = none)]
-        fn add_compute(&self, descriptor: &MTLComputePipelineDescriptor, error: &mut *mut NSError) -> bool;
+        fn add_compute(
+            &self,
+            descriptor: &MTLComputePipelineDescriptor,
+            error: &mut *mut NSError,
+        ) -> bool;
 
         #[unsafe(method(addRenderPipelineFunctionsWithDescriptor:error:))]
         #[unsafe(method_family = none)]
-        fn add_render(&self, descriptor: &MTLRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+        fn add_render(
+            &self,
+            descriptor: &MTLRenderPipelineDescriptor,
+            error: &mut *mut NSError,
+        ) -> bool;
 
         #[unsafe(method(addMeshRenderPipelineFunctionsWithDescriptor:error:))]
         #[unsafe(method_family = none)]
-        fn add_mesh(&self, descriptor: &MTLMeshRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+        fn add_mesh(
+            &self,
+            descriptor: &MTLMeshRenderPipelineDescriptor,
+            error: &mut *mut NSError,
+        ) -> bool;
 
         #[unsafe(method(addTileRenderPipelineFunctionsWithDescriptor:error:))]
         #[unsafe(method_family = none)]
-        fn add_tile(&self, descriptor: &MTLTileRenderPipelineDescriptor, error: &mut *mut NSError) -> bool;
+        fn add_tile(
+            &self,
+            descriptor: &MTLTileRenderPipelineDescriptor,
+            error: &mut *mut NSError,
+        ) -> bool;
 
         #[unsafe(method(serializeToURL:error:))]
         #[unsafe(method_family = none)]
@@ -457,7 +504,9 @@ fn add_functions(
 fn string_from_bytes(bytes: &[u8], encoding: NSUInteger) -> Option<Retained<NSString>> {
     let first = NonNull::from(bytes).cast::<c_void>();
     // SAFETY: `first` points to `bytes.len()` readable bytes (a dangling pointer for none).
-    unsafe { NSString::initWithBytes_length_encoding(NSString::alloc(), first, bytes.len(), encoding) }
+    unsafe {
+        NSString::initWithBytes_length_encoding(NSString::alloc(), first, bytes.len(), encoding)
+    }
 }
 
 /// A string from a NUL-terminated C string as UTF-8, nil (`None`) when it does not decode.
@@ -484,9 +533,8 @@ pub unsafe extern "C-unwind" fn mtl_device_new_library(args: *mut c_void) -> i32
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtldeviceNewlibrary>(args) };
-    let (library, error) = with_error(|error| {
-        device(p.device)?.new_library_with_data(any_object(p.data), error)
-    });
+    let (library, error) =
+        with_error(|error| device(p.device)?.new_library_with_data(any_object(p.data), error));
     p.ret_library = ret_owned(library);
     p.ret_error = ret_owned(error);
     STATUS_SUCCESS
@@ -529,11 +577,16 @@ pub unsafe extern "C-unwind" fn mtl_device_new_compute_pipeline_state(args: *mut
     descriptor.setComputeFunction(function(info.compute_function));
     // SAFETY: a flag.
     unsafe {
-        descriptor.setThreadGroupSizeIsMultipleOfThreadExecutionWidth(flag(info.tgsize_is_multiple_of_sgwidth));
+        descriptor.setThreadGroupSizeIsMultipleOfThreadExecutionWidth(flag(
+            info.tgsize_is_multiple_of_sgwidth,
+        ));
     }
     descriptor.setSupportIndirectCommandBuffers(flag(info.support_indirect_command_buffers));
     set_immutable(&descriptor.buffers(), info.immutable_buffers);
-    if let Some(archives) = lookup_archives(info.num_binary_archives_for_lookup, info.binary_archives_for_lookup) {
+    if let Some(archives) = lookup_archives(
+        info.num_binary_archives_for_lookup,
+        info.binary_archives_for_lookup,
+    ) {
         descriptor.setBinaryArchives(Some(&archives));
     }
     let options = pipeline_option(info.fail_on_binary_archive_miss);
@@ -544,16 +597,23 @@ pub unsafe extern "C-unwind" fn mtl_device_new_compute_pipeline_state(args: *mut
     let failed = error.is_some();
     p.ret_error = ret_owned(error);
     if !failed {
-        add_functions(info.binary_archive_for_serialization, |a, e| a.add_compute(&descriptor, e));
+        add_functions(info.binary_archive_for_serialization, |a, e| {
+            a.add_compute(&descriptor, e)
+        });
     }
     STATUS_SUCCESS
 }
 
 /// The render pipeline descriptor slots 34 and 156 share.
-fn render_pipeline_descriptor(info: &WMTRenderPipelineInfo) -> Retained<MTLRenderPipelineDescriptor> {
+fn render_pipeline_descriptor(
+    info: &WMTRenderPipelineInfo,
+) -> Retained<MTLRenderPipelineDescriptor> {
     let descriptor = MTLRenderPipelineDescriptor::new();
     set_color_attachments(&descriptor.colorAttachments(), &info.colors);
-    set_immutable(&descriptor.fragmentBuffers(), info.immutable_fragment_buffers);
+    set_immutable(
+        &descriptor.fragmentBuffers(),
+        info.immutable_fragment_buffers,
+    );
     set_immutable(&descriptor.vertexBuffers(), info.immutable_vertex_buffers);
     {
         // SAFETY: the same class under two declarations of it.
@@ -568,7 +628,9 @@ fn render_pipeline_descriptor(info: &WMTRenderPipelineInfo) -> Retained<MTLRende
     descriptor.setRasterSampleCount(usize::from(info.raster_sample_count));
     // SAFETY: Metal checks the topology when it makes a pipeline.
     unsafe {
-        descriptor.setInputPrimitiveTopology(MTLPrimitiveTopologyClass(info.input_primitive_topology as usize));
+        descriptor.setInputPrimitiveTopology(MTLPrimitiveTopologyClass(
+            info.input_primitive_topology as usize,
+        ));
     }
     // SAFETY: as above.
     unsafe {
@@ -587,7 +649,10 @@ fn render_pipeline_descriptor(info: &WMTRenderPipelineInfo) -> Retained<MTLRende
     descriptor.setVertexFunction(function(info.vertex_function));
     descriptor.setFragmentFunction(function(info.fragment_function));
     descriptor.setSupportIndirectCommandBuffers(flag(info.support_indirect_command_buffers));
-    if let Some(archives) = lookup_archives(info.num_binary_archives_for_lookup, info.binary_archives_for_lookup) {
+    if let Some(archives) = lookup_archives(
+        info.num_binary_archives_for_lookup,
+        info.binary_archives_for_lookup,
+    ) {
         descriptor.setBinaryArchives(Some(&archives));
     }
     descriptor
@@ -606,13 +671,20 @@ fn render_pipeline_state(
 ) {
     let options = pipeline_option(info.fail_on_binary_archive_miss);
     let (pso, error) = with_error(|error| {
-        device(device_handle)?.new_render_pipeline_state(descriptor, options, ptr::null_mut(), error)
+        device(device_handle)?.new_render_pipeline_state(
+            descriptor,
+            options,
+            ptr::null_mut(),
+            error,
+        )
     });
     *ret_pso = ret_owned(pso);
     let failed = error.is_some();
     *ret_error = ret_owned(error);
     if !failed {
-        add_functions(info.binary_archive_for_serialization, |a, e| a.add_render(descriptor, e));
+        add_functions(info.binary_archive_for_serialization, |a, e| {
+            a.add_render(descriptor, e)
+        });
     }
 }
 
@@ -631,7 +703,13 @@ pub unsafe extern "C-unwind" fn mtl_device_new_render_pipeline_state(args: *mut 
         return STATUS_SUCCESS;
     };
     let descriptor = render_pipeline_descriptor(info);
-    render_pipeline_state(p.device, info, &descriptor, &mut p.ret_pso, &mut p.ret_error);
+    render_pipeline_state(
+        p.device,
+        info,
+        &descriptor,
+        &mut p.ret_pso,
+        &mut p.ret_error,
+    );
     STATUS_SUCCESS
 }
 
@@ -645,7 +723,8 @@ fn vertex_descriptor(info: &WMTVertexDescriptorInfo) -> Retained<MTLVertexDescri
     for (i, (attribute, layout)) in info.attributes.iter().zip(&info.layouts).enumerate() {
         if attribute.format != 0 {
             // SAFETY: `i` is below 31, the count of vertex attributes.
-            let a: Retained<MTLVertexAttributeDescriptor> = unsafe { attributes.objectAtIndexedSubscript(i) };
+            let a: Retained<MTLVertexAttributeDescriptor> =
+                unsafe { attributes.objectAtIndexedSubscript(i) };
             a.setFormat(MTLVertexFormat(attribute.format as usize));
             // SAFETY: Metal checks the offset when it makes a pipeline.
             unsafe { a.setOffset(attribute.offset as usize) };
@@ -654,7 +733,8 @@ fn vertex_descriptor(info: &WMTVertexDescriptorInfo) -> Retained<MTLVertexDescri
         }
         if layout.stride != 0 {
             // SAFETY: `i` is below 31, the count of vertex buffer layouts.
-            let l: Retained<MTLVertexBufferLayoutDescriptor> = unsafe { layouts.objectAtIndexedSubscript(i) };
+            let l: Retained<MTLVertexBufferLayoutDescriptor> =
+                unsafe { layouts.objectAtIndexedSubscript(i) };
             // SAFETY: Metal checks the stride when it makes a pipeline.
             unsafe { l.setStride(layout.stride as usize) };
             l.setStepFunction(MTLVertexStepFunction(layout.step_function as usize));
@@ -687,7 +767,13 @@ pub unsafe extern "C-unwind" fn mtl_device_new_render_pipeline_state_with_vertex
         return STATUS_SUCCESS;
     };
     descriptor.setVertexDescriptor(Some(&vertex_descriptor(vertex)));
-    render_pipeline_state(p.device, info, &descriptor, &mut p.ret_pso, &mut p.ret_error);
+    render_pipeline_state(
+        p.device,
+        info,
+        &descriptor,
+        &mut p.ret_pso,
+        &mut p.ret_error,
+    );
     STATUS_SUCCESS
 }
 
@@ -697,7 +783,9 @@ pub unsafe extern "C-unwind" fn mtl_device_new_render_pipeline_state_with_vertex
 ///
 /// `args` points to the slot's `UnixcallMtldeviceNewmeshrenderpso`.
 #[unsafe(export_name = "_MTLDevice_newMeshRenderPipelineState")]
-pub unsafe extern "C-unwind" fn mtl_device_new_mesh_render_pipeline_state(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_device_new_mesh_render_pipeline_state(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtldeviceNewmeshrenderpso>(args) };
@@ -707,7 +795,10 @@ pub unsafe extern "C-unwind" fn mtl_device_new_mesh_render_pipeline_state(args: 
     };
     let descriptor = MTLMeshRenderPipelineDescriptor::new();
     set_color_attachments(&descriptor.colorAttachments(), &info.colors);
-    set_immutable(&descriptor.fragmentBuffers(), info.immutable_fragment_buffers);
+    set_immutable(
+        &descriptor.fragmentBuffers(),
+        info.immutable_fragment_buffers,
+    );
     set_immutable(&descriptor.meshBuffers(), info.immutable_mesh_buffers);
     set_immutable(&descriptor.objectBuffers(), info.immutable_object_buffers);
     {
@@ -729,23 +820,35 @@ pub unsafe extern "C-unwind" fn mtl_device_new_mesh_render_pipeline_state(args: 
     // SAFETY: as above.
     unsafe { descriptor.setFragmentFunction(function(info.fragment_function)) };
     descriptor.setPayloadMemoryLength(usize::from(info.payload_memory_length));
-    descriptor
-        .setMeshThreadgroupSizeIsMultipleOfThreadExecutionWidth(flag(info.mesh_tgsize_is_multiple_of_sgwidth));
-    descriptor
-        .setObjectThreadgroupSizeIsMultipleOfThreadExecutionWidth(flag(info.object_tgsize_is_multiple_of_sgwidth));
+    descriptor.setMeshThreadgroupSizeIsMultipleOfThreadExecutionWidth(flag(
+        info.mesh_tgsize_is_multiple_of_sgwidth,
+    ));
+    descriptor.setObjectThreadgroupSizeIsMultipleOfThreadExecutionWidth(flag(
+        info.object_tgsize_is_multiple_of_sgwidth,
+    ));
     descriptor.setSupportIndirectCommandBuffers(flag(info.support_indirect_command_buffers));
-    if let Some(archives) = lookup_archives(info.num_binary_archives_for_lookup, info.binary_archives_for_lookup) {
+    if let Some(archives) = lookup_archives(
+        info.num_binary_archives_for_lookup,
+        info.binary_archives_for_lookup,
+    ) {
         descriptor.setBinaryArchives(Some(&archives));
     }
     let options = pipeline_option(info.fail_on_binary_archive_miss);
     let (pso, error) = with_error(|error| {
-        device(p.device)?.new_mesh_render_pipeline_state(&descriptor, options, ptr::null_mut(), error)
+        device(p.device)?.new_mesh_render_pipeline_state(
+            &descriptor,
+            options,
+            ptr::null_mut(),
+            error,
+        )
     });
     p.ret_pso = ret_owned(pso);
     let failed = error.is_some();
     p.ret_error = ret_owned(error);
     if !failed {
-        add_functions(info.binary_archive_for_serialization, |a, e| a.add_mesh(&descriptor, e));
+        add_functions(info.binary_archive_for_serialization, |a, e| {
+            a.add_mesh(&descriptor, e)
+        });
     }
     STATUS_SUCCESS
 }
@@ -756,7 +859,9 @@ pub unsafe extern "C-unwind" fn mtl_device_new_mesh_render_pipeline_state(args: 
 ///
 /// `args` points to the slot's `UnixcallMtldeviceNewrenderpso`.
 #[unsafe(export_name = "_MTLDevice_newTileRenderPipelineState")]
-pub unsafe extern "C-unwind" fn mtl_device_new_tile_render_pipeline_state(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_device_new_tile_render_pipeline_state(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtldeviceNewrenderpso>(args) };
@@ -780,18 +885,28 @@ pub unsafe extern "C-unwind" fn mtl_device_new_tile_render_pipeline_state(args: 
         let raw = unsafe { &*ptr::from_ref(&*descriptor).cast::<RawTileDescriptor>() };
         raw.set_tile_function(function(info.tile_function));
     }
-    if let Some(archives) = lookup_archives(info.num_binary_archives_for_lookup, info.binary_archives_for_lookup) {
+    if let Some(archives) = lookup_archives(
+        info.num_binary_archives_for_lookup,
+        info.binary_archives_for_lookup,
+    ) {
         descriptor.setBinaryArchives(Some(&archives));
     }
     let options = pipeline_option(info.fail_on_binary_archive_miss);
     let (pso, error) = with_error(|error| {
-        device(p.device)?.new_tile_render_pipeline_state(&descriptor, options, ptr::null_mut(), error)
+        device(p.device)?.new_tile_render_pipeline_state(
+            &descriptor,
+            options,
+            ptr::null_mut(),
+            error,
+        )
     });
     p.ret_pso = ret_owned(pso);
     let failed = error.is_some();
     p.ret_error = ret_owned(error);
     if !failed {
-        add_functions(info.binary_archive_for_serialization, |a, e| a.add_tile(&descriptor, e));
+        add_functions(info.binary_archive_for_serialization, |a, e| {
+            a.add_tile(&descriptor, e)
+        });
     }
     STATUS_SUCCESS
 }
@@ -811,7 +926,9 @@ pub unsafe extern "C-unwind" fn mtl_library_new_function_with_constants(args: *m
         return STATUS_SUCCESS;
     };
     // SAFETY: the guest's table holds `num_constants` entries; null with a count is the C's fault.
-    let Some(constants) = (unsafe { mem_slice::<WMTFunctionConstant>(p.constants, p.num_constants) }) else {
+    let Some(constants) =
+        (unsafe { mem_slice::<WMTFunctionConstant>(p.constants, p.num_constants) })
+    else {
         return STATUS_SUCCESS;
     };
     let name = string_from_c_str(name);
@@ -822,7 +939,8 @@ pub unsafe extern "C-unwind" fn mtl_library_new_function_with_constants(args: *m
     // bytes, where the C faulted: those read zeros, so no guest value crashes the host.
     let zeros = [0_u8; ZERO_VALUE_BYTES];
     for constant in constants {
-        let given = core::ptr::with_exposed_provenance_mut::<c_void>(u64_to_usize(constant.data.ptr));
+        let given =
+            core::ptr::with_exposed_provenance_mut::<c_void>(u64_to_usize(constant.data.ptr));
         let data = NonNull::new(given).unwrap_or_else(|| NonNull::from(&zeros).cast());
         // SAFETY: `data` is the guest's value for the type, or zeros as large as any value Metal
         // reads; Metal checks the index.
@@ -858,7 +976,8 @@ pub unsafe extern "C-unwind" fn mtl_device_new_binary_archive(args: *mut c_void)
         let url = file_url(string_from_c_str(path).as_deref());
         descriptor.setUrl(url.as_deref());
     }
-    let (archive, error) = with_error(|error| device(p.device)?.new_binary_archive(&descriptor, error));
+    let (archive, error) =
+        with_error(|error| device(p.device)?.new_binary_archive(&descriptor, error));
     p.ret_archive = ret_owned(archive);
     p.ret_error = ret_owned(error);
     STATUS_SUCCESS
@@ -919,7 +1038,9 @@ pub unsafe extern "C-unwind" fn mtl_device_new_library_with_source(args: *mut c_
 ///
 /// `args` points to the slot's `UnixcallMtldeviceNewlibrarywithsourceOptions`.
 #[unsafe(export_name = "_MTLDevice_newLibraryWithSourceOptions")]
-pub unsafe extern "C-unwind" fn mtl_device_new_library_with_source_options(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_device_new_library_with_source_options(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtldeviceNewlibrarywithsourceOptions>(args) };

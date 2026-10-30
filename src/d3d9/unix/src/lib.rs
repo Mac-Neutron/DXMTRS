@@ -52,7 +52,6 @@ type UnixCallFn = unsafe extern "C" fn(*mut c_void) -> i32;
 
 const DISPATCH_TABLE: [UnixCallFn; Thunks::COUNT] = build_dispatch_table::<false>();
 
-
 /// Every native Rust allocation goes through snmalloc, the allocator the PE side uses.
 ///
 /// Process-wide resource: a dylib has one global allocator. The native encoder,

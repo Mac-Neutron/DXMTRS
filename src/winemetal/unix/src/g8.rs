@@ -18,22 +18,28 @@
 
 mod sqlite;
 
-use core::ffi::{CStr, c_char, c_void};
-use core::ptr::{self, NonNull};
+use core::{
+    ffi::{CStr, c_char, c_void},
+    ptr::{self, NonNull},
+};
 
 use dispatch2::{DispatchData, DispatchRetained};
-use objc2::rc::{Allocated, PartialInit, Retained};
-use objc2::runtime::{AnyObject, NSObject};
-use objc2::{AnyThread, ClassType, DefinedClass, Message, define_class, extern_class, extern_methods};
+use objc2::{
+    AnyThread, ClassType, DefinedClass, Message, define_class, extern_class, extern_methods,
+    rc::{Allocated, PartialInit, Retained},
+    runtime::{AnyObject, NSObject},
+};
 use objc2_foundation::{NSFileManager, NSString, NSUTF8StringEncoding, ns_string};
+use sqlite::{Db, Stmt};
 use winemetal_wire::{
     MemPtr, UnixcallCacheAllocInit, UnixcallCacheGet, UnixcallCacheSet, UnixcallSetmetalcachepath,
 };
 
-use crate::ffi::{self, AbortOnPanic, STATUS_SUCCESS};
-use crate::float_cast::{i32_to_usize, u64_to_usize};
-use crate::handle;
-use sqlite::{Db, Stmt};
+use crate::{
+    ffi::{self, AbortOnPanic, STATUS_SUCCESS},
+    float_cast::{i32_to_usize, u64_to_usize},
+    handle,
+};
 
 /// `PATH_MAX`: the buffer `confstr` fills with the user cache folder.
 const PATH_MAX: usize = libc::PATH_MAX.cast_unsigned() as usize;
@@ -265,7 +271,8 @@ fn resolve_cache_dir(path: Option<&NSString>, path_is_file: bool) -> Option<Reta
     } else {
         let mut buf: [c_char; PATH_MAX] = [0; PATH_MAX];
         // SAFETY: a buffer of its own length.
-        let len = unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr(), buf.len()) };
+        let len =
+            unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr(), buf.len()) };
         if len == 0 {
             return None;
         }
@@ -277,13 +284,16 @@ fn resolve_cache_dir(path: Option<&NSString>, path_is_file: bool) -> Option<Reta
             base.append_component(path)
         })
     }?;
-    let folder = if path_is_file { resolved.stringByDeletingLastPathComponent() } else { resolved.clone() };
+    let folder = if path_is_file {
+        resolved.stringByDeletingLastPathComponent()
+    } else {
+        resolved.clone()
+    };
     // The C ignored the result: a failure shows when the database opens.
     // SAFETY: no attributes.
     let _ = unsafe {
-        NSFileManager::defaultManager().createDirectoryAtPath_withIntermediateDirectories_attributes_error(
-            &folder, true, None,
-        )
+        NSFileManager::defaultManager()
+            .createDirectoryAtPath_withIntermediateDirectories_attributes_error(&folder, true, None)
     };
     Some(resolved)
 }
@@ -338,7 +348,10 @@ impl CacheReader {
             return None;
         };
         let table = table_name(version);
-        let db = match Db::open(fs_path(&db_path), sqlite::OPEN_READONLY | sqlite::OPEN_NOMUTEX) {
+        let db = match Db::open(
+            fs_path(&db_path),
+            sqlite::OPEN_READONLY | sqlite::OPEN_NOMUTEX,
+        ) {
             Ok(db) => db,
             Err(why) => {
                 log_message("[CacheReader] Failed to open DB: %s", &why);
@@ -388,7 +401,10 @@ impl CacheWriter {
         };
         let lock_path = db_path.stringByAppendingString(ns_string!("-lock"));
         let Some(lock) = FileLock::exclusive(fs_path(&lock_path)) else {
-            log_object("[CacheWriter] Failed to open file for locking %@", &lock_path);
+            log_object(
+                "[CacheWriter] Failed to open file for locking %@",
+                &lock_path,
+            );
             return None;
         };
         let flags = sqlite::OPEN_READWRITE | sqlite::OPEN_CREATE | sqlite::OPEN_NOMUTEX;
@@ -404,14 +420,18 @@ impl CacheWriter {
         let _ = db.exec(c"PRAGMA journal_mode=WAL;");
         let _ = db.exec(c"PRAGMA synchronous=NORMAL;");
         let table = table_name(version);
-        let create = format!("CREATE TABLE IF NOT EXISTS {table} (key BLOB PRIMARY KEY, value BLOB NOT NULL);");
+        let create = format!(
+            "CREATE TABLE IF NOT EXISTS {table} (key BLOB PRIMARY KEY, value BLOB NOT NULL);"
+        );
         if let Err(why) = db.exec(&sql(create)) {
             log_message("[CacheWriter] Failed to create table: %s", &why);
         }
         drop_other_versions(&db, &table);
 
         drop(lock);
-        let stmt = match db.prepare(&sql(format!("INSERT OR REPLACE INTO {table} (key, value) VALUES (?, ?);"))) {
+        let stmt = match db.prepare(&sql(format!(
+            "INSERT OR REPLACE INTO {table} (key, value) VALUES (?, ?);"
+        ))) {
             Ok(stmt) => stmt,
             Err(why) => {
                 log_message("[CacheWriter] Failed to prepare INSERT: %s", &why);
@@ -455,7 +475,9 @@ impl CacheWriter {
 /// Drops every `cache_*` table but `keep`, then `VACUUM`s if there was one.
 fn drop_other_versions(db: &Db, keep: &str) {
     let mut stale = Vec::new();
-    if let Ok(list) = db.prepare(c"SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'cache_*';") {
+    if let Ok(list) =
+        db.prepare(c"SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'cache_*';")
+    {
         while list.step() == sqlite::ROW {
             // A name that is not UTF-8 is left alone (the C raised on it).
             let name = list.column_text(0).and_then(|name| name.to_str().ok());
@@ -583,7 +605,9 @@ pub unsafe extern "C-unwind" fn set_metal_shader_cache_path(obj: *mut c_void) ->
     // SAFETY: its path (not retained), or nil.
     let current = unsafe { current.as_ref() };
     // A nil on either side is not equal, as `isEqualToString:` answers.
-    let same = current.zip(resolved.as_deref()).is_some_and(|(current, resolved)| current.isEqualToString(resolved));
+    let same = current
+        .zip(resolved.as_deref())
+        .is_some_and(|(current, resolved)| current.isEqualToString(resolved));
     params.ret_success = u64::from(same);
     STATUS_SUCCESS
 }

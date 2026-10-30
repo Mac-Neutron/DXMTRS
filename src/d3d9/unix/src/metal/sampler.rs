@@ -4,15 +4,19 @@ use mtld3d_shared::{
     mtl::{AddressMode, BorderColor, MinMagFilter, MipFilter},
     mtl_handle::MTLSamplerStateKind,
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLCompareFunction, MTLDevice, MTLSamplerAddressMode, MTLSamplerBorderColor,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter,
-};
 
-use crate::metal::{
-    device::{supports_sampler_border, supports_sampler_mirror_clamp},
-    handle::ReleaseRetain,
+use crate::{
+    metal::{
+        device::{supports_sampler_border, supports_sampler_mirror_clamp},
+        handle::ReleaseRetain,
+    },
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLCompareFunction, MTLDevice, MTLSamplerAddressMode, MTLSamplerBorderColor,
+            MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter,
+        },
+    },
 };
 
 /// Sub-target for the depth-path diagnostic probe in `create_sampler_state`.
@@ -117,8 +121,10 @@ pub fn create_sampler_state(
     } else {
         "samp"
     };
-    let label =
-        crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-{label_kind}-{:#x}", params.id));
+    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+        "mtld3d-{label_kind}-{:#x}",
+        params.id
+    ));
     desc.setLabel(Some(&label));
 
     let Some(sampler) = device.newSamplerStateWithDescriptor(&desc) else {

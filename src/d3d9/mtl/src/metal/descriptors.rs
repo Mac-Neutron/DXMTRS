@@ -8,11 +8,12 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::{
-    MTLBlendFactor, MTLBlendOperation, MTLBuffer, MTLClearColor, MTLColorWriteMask, MTLCompareFunction, MTLFunction,
-    MTLLanguageVersion, MTLLoadAction, MTLMathMode, MTLPixelFormat, MTLSamplerAddressMode, MTLSamplerBorderColor,
-    MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLStencilOperation, MTLStorageMode, MTLStoreAction, MTLTexture,
-    MTLTextureSwizzleChannels, MTLTextureType, MTLTextureUsage, MTLVertexFormat, MTLVertexStepFunction,
-    MTLResourceStorageModeShift, retained,
+    MTLBlendFactor, MTLBlendOperation, MTLBuffer, MTLClearColor, MTLColorWriteMask,
+    MTLCompareFunction, MTLFunction, MTLLanguageVersion, MTLLoadAction, MTLMathMode,
+    MTLPixelFormat, MTLResourceStorageModeShift, MTLSamplerAddressMode, MTLSamplerBorderColor,
+    MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLStencilOperation, MTLStorageMode,
+    MTLStoreAction, MTLTexture, MTLTextureSwizzleChannels, MTLTextureType, MTLTextureUsage,
+    MTLVertexFormat, MTLVertexStepFunction, retained,
 };
 
 /// objc2-metal's `MTLMultisampleDepthResolveFilter`.
@@ -143,54 +144,104 @@ impl MTLTextureDescriptor {
         height: NSUInteger,
         mipmapped: bool,
     ) -> Retained<Self> {
-        let mips = if mipmapped { usize::BITS as usize - width.max(height).max(1).leading_zeros() as usize } else { 1 };
-        Self::boxed(Mutex::new(TextureDesc { pixel_format, width, height, mipmap_level_count: mips, ..TextureDesc::default() }))
+        let mips = if mipmapped {
+            usize::BITS as usize - width.max(height).max(1).leading_zeros() as usize
+        } else {
+            1
+        };
+        Self::boxed(Mutex::new(TextureDesc {
+            pixel_format,
+            width,
+            height,
+            mipmap_level_count: mips,
+            ..TextureDesc::default()
+        }))
     }
 
-    pub fn textureType(&self) -> MTLTextureType { lock(&self.d).texture_type }
-    pub fn setTextureType(&self, v: MTLTextureType) { lock(&self.d).texture_type = v; }
-    pub fn pixelFormat(&self) -> MTLPixelFormat { lock(&self.d).pixel_format }
-    pub fn setPixelFormat(&self, v: MTLPixelFormat) { lock(&self.d).pixel_format = v; }
-    pub fn width(&self) -> NSUInteger { lock(&self.d).width }
+    pub fn textureType(&self) -> MTLTextureType {
+        lock(&self.d).texture_type
+    }
+    pub fn setTextureType(&self, v: MTLTextureType) {
+        lock(&self.d).texture_type = v;
+    }
+    pub fn pixelFormat(&self) -> MTLPixelFormat {
+        lock(&self.d).pixel_format
+    }
+    pub fn setPixelFormat(&self, v: MTLPixelFormat) {
+        lock(&self.d).pixel_format = v;
+    }
+    pub fn width(&self) -> NSUInteger {
+        lock(&self.d).width
+    }
     /// objc2's `setWidth`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setWidth(&self, v: NSUInteger) { lock(&self.d).width = v; }
-    pub fn height(&self) -> NSUInteger { lock(&self.d).height }
+    pub unsafe fn setWidth(&self, v: NSUInteger) {
+        lock(&self.d).width = v;
+    }
+    pub fn height(&self) -> NSUInteger {
+        lock(&self.d).height
+    }
     /// objc2's `setHeight`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setHeight(&self, v: NSUInteger) { lock(&self.d).height = v; }
-    pub fn depth(&self) -> NSUInteger { lock(&self.d).depth }
+    pub unsafe fn setHeight(&self, v: NSUInteger) {
+        lock(&self.d).height = v;
+    }
+    pub fn depth(&self) -> NSUInteger {
+        lock(&self.d).depth
+    }
     /// objc2's `setDepth`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setDepth(&self, v: NSUInteger) { lock(&self.d).depth = v; }
-    pub fn mipmapLevelCount(&self) -> NSUInteger { lock(&self.d).mipmap_level_count }
+    pub unsafe fn setDepth(&self, v: NSUInteger) {
+        lock(&self.d).depth = v;
+    }
+    pub fn mipmapLevelCount(&self) -> NSUInteger {
+        lock(&self.d).mipmap_level_count
+    }
     /// objc2's `setMipmapLevelCount`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setMipmapLevelCount(&self, v: NSUInteger) { lock(&self.d).mipmap_level_count = v; }
-    pub fn sampleCount(&self) -> NSUInteger { lock(&self.d).sample_count }
+    pub unsafe fn setMipmapLevelCount(&self, v: NSUInteger) {
+        lock(&self.d).mipmap_level_count = v;
+    }
+    pub fn sampleCount(&self) -> NSUInteger {
+        lock(&self.d).sample_count
+    }
     /// objc2's `setSampleCount`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setSampleCount(&self, v: NSUInteger) { lock(&self.d).sample_count = v; }
-    pub fn arrayLength(&self) -> NSUInteger { lock(&self.d).array_length }
+    pub unsafe fn setSampleCount(&self, v: NSUInteger) {
+        lock(&self.d).sample_count = v;
+    }
+    pub fn arrayLength(&self) -> NSUInteger {
+        lock(&self.d).array_length
+    }
     /// objc2's `setArrayLength`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setArrayLength(&self, v: NSUInteger) { lock(&self.d).array_length = v; }
-    pub fn storageMode(&self) -> MTLStorageMode { lock(&self.d).storage_mode }
-    pub fn setStorageMode(&self, v: MTLStorageMode) { lock(&self.d).storage_mode = v; }
-    pub fn usage(&self) -> MTLTextureUsage { lock(&self.d).usage }
-    pub fn setUsage(&self, v: MTLTextureUsage) { lock(&self.d).usage = v; }
+    pub unsafe fn setArrayLength(&self, v: NSUInteger) {
+        lock(&self.d).array_length = v;
+    }
+    pub fn storageMode(&self) -> MTLStorageMode {
+        lock(&self.d).storage_mode
+    }
+    pub fn setStorageMode(&self, v: MTLStorageMode) {
+        lock(&self.d).storage_mode = v;
+    }
+    pub fn usage(&self) -> MTLTextureUsage {
+        lock(&self.d).usage
+    }
+    pub fn setUsage(&self, v: MTLTextureUsage) {
+        lock(&self.d).usage = v;
+    }
     pub fn swizzle(&self) -> MTLTextureSwizzleChannels {
         let s = lock(&self.d).swizzle;
         MTLTextureSwizzleChannels {
@@ -200,7 +251,9 @@ impl MTLTextureDescriptor {
             alpha: super::MTLTextureSwizzle(s[3]),
         }
     }
-    pub fn setSwizzle(&self, s: MTLTextureSwizzleChannels) { lock(&self.d).swizzle = [s.red.0, s.green.0, s.blue.0, s.alpha.0]; }
+    pub fn setSwizzle(&self, s: MTLTextureSwizzleChannels) {
+        lock(&self.d).swizzle = [s.red.0, s.green.0, s.blue.0, s.alpha.0];
+    }
 
     /// winemetal's info for slot 21, and the facade's record of the texture.
     pub fn info(&self) -> (wmt::TextureInfo, meta::Texture) {
@@ -280,19 +333,45 @@ impl MTLSamplerDescriptor {
             label: None,
         }))
     }
-    pub fn setMinFilter(&self, v: MTLSamplerMinMagFilter) { lock(&self.d).min = v; }
-    pub fn setMagFilter(&self, v: MTLSamplerMinMagFilter) { lock(&self.d).mag = v; }
-    pub fn setMipFilter(&self, v: MTLSamplerMipFilter) { lock(&self.d).mip = v; }
-    pub fn setMaxAnisotropy(&self, v: NSUInteger) { lock(&self.d).max_anisotropy = v; }
-    pub fn setSAddressMode(&self, v: MTLSamplerAddressMode) { lock(&self.d).s = v; }
-    pub fn setTAddressMode(&self, v: MTLSamplerAddressMode) { lock(&self.d).t = v; }
-    pub fn setRAddressMode(&self, v: MTLSamplerAddressMode) { lock(&self.d).r = v; }
-    pub fn setBorderColor(&self, v: MTLSamplerBorderColor) { lock(&self.d).border = v; }
-    pub fn setLodMinClamp(&self, v: f32) { lock(&self.d).lod_min = v; }
-    pub fn setLodMaxClamp(&self, v: f32) { lock(&self.d).lod_max = v; }
-    pub fn setCompareFunction(&self, v: MTLCompareFunction) { lock(&self.d).compare = v; }
-    pub fn label(&self) -> Option<Retained<NSString>> { lock(&self.d).label.as_deref().map(NSString::from_str) }
-    pub fn setLabel(&self, v: Option<&NSString>) { lock(&self.d).label = v.map(NSString::to_rust); }
+    pub fn setMinFilter(&self, v: MTLSamplerMinMagFilter) {
+        lock(&self.d).min = v;
+    }
+    pub fn setMagFilter(&self, v: MTLSamplerMinMagFilter) {
+        lock(&self.d).mag = v;
+    }
+    pub fn setMipFilter(&self, v: MTLSamplerMipFilter) {
+        lock(&self.d).mip = v;
+    }
+    pub fn setMaxAnisotropy(&self, v: NSUInteger) {
+        lock(&self.d).max_anisotropy = v;
+    }
+    pub fn setSAddressMode(&self, v: MTLSamplerAddressMode) {
+        lock(&self.d).s = v;
+    }
+    pub fn setTAddressMode(&self, v: MTLSamplerAddressMode) {
+        lock(&self.d).t = v;
+    }
+    pub fn setRAddressMode(&self, v: MTLSamplerAddressMode) {
+        lock(&self.d).r = v;
+    }
+    pub fn setBorderColor(&self, v: MTLSamplerBorderColor) {
+        lock(&self.d).border = v;
+    }
+    pub fn setLodMinClamp(&self, v: f32) {
+        lock(&self.d).lod_min = v;
+    }
+    pub fn setLodMaxClamp(&self, v: f32) {
+        lock(&self.d).lod_max = v;
+    }
+    pub fn setCompareFunction(&self, v: MTLCompareFunction) {
+        lock(&self.d).compare = v;
+    }
+    pub fn label(&self) -> Option<Retained<NSString>> {
+        lock(&self.d).label.as_deref().map(NSString::from_str)
+    }
+    pub fn setLabel(&self, v: Option<&NSString>) {
+        lock(&self.d).label = v.map(NSString::to_rust);
+    }
 
     pub fn info(&self) -> wmt::SamplerInfo {
         let d = lock(&self.d);
@@ -351,12 +430,24 @@ impl MTLStencilDescriptor {
     pub fn new() -> Retained<Self> {
         Self::boxed(Mutex::new(StencilDesc::default()))
     }
-    pub fn setStencilCompareFunction(&self, v: MTLCompareFunction) { lock(&self.d).compare = v; }
-    pub fn setStencilFailureOperation(&self, v: MTLStencilOperation) { lock(&self.d).fail = v; }
-    pub fn setDepthFailureOperation(&self, v: MTLStencilOperation) { lock(&self.d).depth_fail = v; }
-    pub fn setDepthStencilPassOperation(&self, v: MTLStencilOperation) { lock(&self.d).pass = v; }
-    pub fn setReadMask(&self, v: u32) { lock(&self.d).read_mask = v; }
-    pub fn setWriteMask(&self, v: u32) { lock(&self.d).write_mask = v; }
+    pub fn setStencilCompareFunction(&self, v: MTLCompareFunction) {
+        lock(&self.d).compare = v;
+    }
+    pub fn setStencilFailureOperation(&self, v: MTLStencilOperation) {
+        lock(&self.d).fail = v;
+    }
+    pub fn setDepthFailureOperation(&self, v: MTLStencilOperation) {
+        lock(&self.d).depth_fail = v;
+    }
+    pub fn setDepthStencilPassOperation(&self, v: MTLStencilOperation) {
+        lock(&self.d).pass = v;
+    }
+    pub fn setReadMask(&self, v: u32) {
+        lock(&self.d).read_mask = v;
+    }
+    pub fn setWriteMask(&self, v: u32) {
+        lock(&self.d).write_mask = v;
+    }
 }
 
 fn stencil_info(s: Option<StencilDesc>) -> wmt::StencilInfo {
@@ -388,14 +479,32 @@ object!(
 impl MTLDepthStencilDescriptor {
     #[must_use]
     pub fn new() -> Retained<Self> {
-        Self::boxed(Mutex::new(DepthStencilDesc { compare: MTLCompareFunction::Always, write: false, front: None, back: None, label: None }))
+        Self::boxed(Mutex::new(DepthStencilDesc {
+            compare: MTLCompareFunction::Always,
+            write: false,
+            front: None,
+            back: None,
+            label: None,
+        }))
     }
-    pub fn setDepthCompareFunction(&self, v: MTLCompareFunction) { lock(&self.d).compare = v; }
-    pub fn setDepthWriteEnabled(&self, v: bool) { lock(&self.d).write = v; }
-    pub fn setFrontFaceStencil(&self, v: Option<&MTLStencilDescriptor>) { lock(&self.d).front = v.map(|s| *lock(&s.d)); }
-    pub fn setBackFaceStencil(&self, v: Option<&MTLStencilDescriptor>) { lock(&self.d).back = v.map(|s| *lock(&s.d)); }
-    pub fn label(&self) -> Option<Retained<NSString>> { lock(&self.d).label.as_deref().map(NSString::from_str) }
-    pub fn setLabel(&self, v: Option<&NSString>) { lock(&self.d).label = v.map(NSString::to_rust); }
+    pub fn setDepthCompareFunction(&self, v: MTLCompareFunction) {
+        lock(&self.d).compare = v;
+    }
+    pub fn setDepthWriteEnabled(&self, v: bool) {
+        lock(&self.d).write = v;
+    }
+    pub fn setFrontFaceStencil(&self, v: Option<&MTLStencilDescriptor>) {
+        lock(&self.d).front = v.map(|s| *lock(&s.d));
+    }
+    pub fn setBackFaceStencil(&self, v: Option<&MTLStencilDescriptor>) {
+        lock(&self.d).back = v.map(|s| *lock(&s.d));
+    }
+    pub fn label(&self) -> Option<Retained<NSString>> {
+        lock(&self.d).label.as_deref().map(NSString::from_str)
+    }
+    pub fn setLabel(&self, v: Option<&NSString>) {
+        lock(&self.d).label = v.map(NSString::to_rust);
+    }
 
     pub fn info(&self) -> wmt::DepthStencilInfo {
         let d = lock(&self.d);
@@ -419,11 +528,22 @@ impl MTLCompileOptions {
     #[must_use]
     pub fn new() -> Retained<Self> {
         // Metal's defaults: the newest language version, no invariance, fast math.
-        Self::boxed(Mutex::new(wmt::CompileOptions { language_version: 0, preserve_invariance: 0, math_mode: MTLMathMode::Fast.0 as u8, padding: [0; 6] }))
+        Self::boxed(Mutex::new(wmt::CompileOptions {
+            language_version: 0,
+            preserve_invariance: 0,
+            math_mode: MTLMathMode::Fast.0 as u8,
+            padding: [0; 6],
+        }))
     }
-    pub fn setMathMode(&self, v: MTLMathMode) { lock(&self.d).math_mode = v.0 as u8; }
-    pub fn setLanguageVersion(&self, v: MTLLanguageVersion) { lock(&self.d).language_version = v.0 as u64; }
-    pub fn setPreserveInvariance(&self, v: bool) { lock(&self.d).preserve_invariance = u8::from(v); }
+    pub fn setMathMode(&self, v: MTLMathMode) {
+        lock(&self.d).math_mode = v.0 as u8;
+    }
+    pub fn setLanguageVersion(&self, v: MTLLanguageVersion) {
+        lock(&self.d).language_version = v.0 as u64;
+    }
+    pub fn setPreserveInvariance(&self, v: bool) {
+        lock(&self.d).preserve_invariance = u8::from(v);
+    }
 
     pub fn info(&self) -> wmt::CompileOptions {
         *lock(&self.d)
@@ -442,7 +562,11 @@ impl Default for VertexDesc {
     fn default() -> Self {
         Self {
             attributes: [wmt::VertexAttributeInfo::default(); 31],
-            layouts: [wmt::VertexBufferLayoutInfo { stride: 0, step_function: MTLVertexStepFunction::PerVertex.0 as u32, step_rate: 1 }; 31],
+            layouts: [wmt::VertexBufferLayoutInfo {
+                stride: 0,
+                step_function: MTLVertexStepFunction::PerVertex.0 as u32,
+                step_rate: 1,
+            }; 31],
         }
     }
 }
@@ -489,7 +613,10 @@ impl MTLVertexAttributeDescriptorArray {
     ///
     /// # Safety
     /// `index` < 31.
-    pub unsafe fn objectAtIndexedSubscript(&self, index: NSUInteger) -> Retained<MTLVertexAttributeDescriptor> {
+    pub unsafe fn objectAtIndexedSubscript(
+        &self,
+        index: NSUInteger,
+    ) -> Retained<MTLVertexAttributeDescriptor> {
         MTLVertexAttributeDescriptor::boxed(Arc::clone(&self.d), index.min(30))
     }
 }
@@ -499,24 +626,35 @@ impl MTLVertexBufferLayoutDescriptorArray {
     ///
     /// # Safety
     /// `index` < 31.
-    pub unsafe fn objectAtIndexedSubscript(&self, index: NSUInteger) -> Retained<MTLVertexBufferLayoutDescriptor> {
+    pub unsafe fn objectAtIndexedSubscript(
+        &self,
+        index: NSUInteger,
+    ) -> Retained<MTLVertexBufferLayoutDescriptor> {
         MTLVertexBufferLayoutDescriptor::boxed(Arc::clone(&self.d), index.min(30))
     }
 }
 
 impl MTLVertexAttributeDescriptor {
-    pub fn format(&self) -> MTLVertexFormat { MTLVertexFormat(lock(&self.d).attributes[self.index].format as usize) }
-    pub fn setFormat(&self, v: MTLVertexFormat) { lock(&self.d).attributes[self.index].format = v.0 as u32; }
+    pub fn format(&self) -> MTLVertexFormat {
+        MTLVertexFormat(lock(&self.d).attributes[self.index].format as usize)
+    }
+    pub fn setFormat(&self, v: MTLVertexFormat) {
+        lock(&self.d).attributes[self.index].format = v.0 as u32;
+    }
     /// objc2's `setOffset`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setOffset(&self, v: NSUInteger) { lock(&self.d).attributes[self.index].offset = v as u32; }
+    pub unsafe fn setOffset(&self, v: NSUInteger) {
+        lock(&self.d).attributes[self.index].offset = v as u32;
+    }
     /// objc2's `setBufferIndex`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setBufferIndex(&self, v: NSUInteger) { lock(&self.d).attributes[self.index].buffer_index = v as u32; }
+    pub unsafe fn setBufferIndex(&self, v: NSUInteger) {
+        lock(&self.d).attributes[self.index].buffer_index = v as u32;
+    }
 }
 
 impl MTLVertexBufferLayoutDescriptor {
@@ -524,13 +662,19 @@ impl MTLVertexBufferLayoutDescriptor {
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setStride(&self, v: NSUInteger) { lock(&self.d).layouts[self.index].stride = v as u32; }
-    pub fn setStepFunction(&self, v: MTLVertexStepFunction) { lock(&self.d).layouts[self.index].step_function = v.0 as u32; }
+    pub unsafe fn setStride(&self, v: NSUInteger) {
+        lock(&self.d).layouts[self.index].stride = v as u32;
+    }
+    pub fn setStepFunction(&self, v: MTLVertexStepFunction) {
+        lock(&self.d).layouts[self.index].step_function = v.0 as u32;
+    }
     /// objc2's `setStepRate`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setStepRate(&self, v: NSUInteger) { lock(&self.d).layouts[self.index].step_rate = v as u32; }
+    pub unsafe fn setStepRate(&self, v: NSUInteger) {
+        lock(&self.d).layouts[self.index].step_rate = v as u32;
+    }
 }
 
 // --- Render pipelines.
@@ -614,21 +758,45 @@ impl MTLRenderPipelineDescriptor {
     pub fn new() -> Retained<Self> {
         Self::boxed(Arc::new(Mutex::new(PipelineDesc::default())))
     }
-    pub fn label(&self) -> Option<Retained<NSString>> { lock(&self.d).label.as_deref().map(NSString::from_str) }
-    pub fn setLabel(&self, v: Option<&NSString>) { lock(&self.d).label = v.map(NSString::to_rust); }
-    pub fn setVertexFunction(&self, v: Option<&ProtocolObject<dyn MTLFunction>>) { lock(&self.d).vertex = v.and_then(|f| retained(f.handle())); }
-    pub fn setFragmentFunction(&self, v: Option<&ProtocolObject<dyn MTLFunction>>) { lock(&self.d).fragment = v.and_then(|f| retained(f.handle())); }
-    pub fn setVertexDescriptor(&self, v: Option<&MTLVertexDescriptor>) { lock(&self.d).vertex_descriptor = v.map(|v| *lock(&v.d)); }
-    pub fn sampleCount(&self) -> NSUInteger { lock(&self.d).raster_sample_count }
-    pub fn setSampleCount(&self, v: NSUInteger) { lock(&self.d).raster_sample_count = v; }
-    pub fn setRasterSampleCount(&self, v: NSUInteger) { lock(&self.d).raster_sample_count = v; }
-    pub fn setAlphaToCoverageEnabled(&self, v: bool) { lock(&self.d).alpha_to_coverage = v; }
-    pub fn setRasterizationEnabled(&self, v: bool) { lock(&self.d).rasterization = v; }
+    pub fn label(&self) -> Option<Retained<NSString>> {
+        lock(&self.d).label.as_deref().map(NSString::from_str)
+    }
+    pub fn setLabel(&self, v: Option<&NSString>) {
+        lock(&self.d).label = v.map(NSString::to_rust);
+    }
+    pub fn setVertexFunction(&self, v: Option<&ProtocolObject<dyn MTLFunction>>) {
+        lock(&self.d).vertex = v.and_then(|f| retained(f.handle()));
+    }
+    pub fn setFragmentFunction(&self, v: Option<&ProtocolObject<dyn MTLFunction>>) {
+        lock(&self.d).fragment = v.and_then(|f| retained(f.handle()));
+    }
+    pub fn setVertexDescriptor(&self, v: Option<&MTLVertexDescriptor>) {
+        lock(&self.d).vertex_descriptor = v.map(|v| *lock(&v.d));
+    }
+    pub fn sampleCount(&self) -> NSUInteger {
+        lock(&self.d).raster_sample_count
+    }
+    pub fn setSampleCount(&self, v: NSUInteger) {
+        lock(&self.d).raster_sample_count = v;
+    }
+    pub fn setRasterSampleCount(&self, v: NSUInteger) {
+        lock(&self.d).raster_sample_count = v;
+    }
+    pub fn setAlphaToCoverageEnabled(&self, v: bool) {
+        lock(&self.d).alpha_to_coverage = v;
+    }
+    pub fn setRasterizationEnabled(&self, v: bool) {
+        lock(&self.d).rasterization = v;
+    }
     pub fn colorAttachments(&self) -> Retained<MTLRenderPipelineColorAttachmentDescriptorArray> {
         MTLRenderPipelineColorAttachmentDescriptorArray::boxed(Arc::clone(&self.d))
     }
-    pub fn setDepthAttachmentPixelFormat(&self, v: MTLPixelFormat) { lock(&self.d).depth_format = v; }
-    pub fn setStencilAttachmentPixelFormat(&self, v: MTLPixelFormat) { lock(&self.d).stencil_format = v; }
+    pub fn setDepthAttachmentPixelFormat(&self, v: MTLPixelFormat) {
+        lock(&self.d).depth_format = v;
+    }
+    pub fn setStencilAttachmentPixelFormat(&self, v: MTLPixelFormat) {
+        lock(&self.d).stencil_format = v;
+    }
     pub fn reset(&self) {
         *lock(&self.d) = PipelineDesc::default();
     }
@@ -675,7 +843,10 @@ impl MTLRenderPipelineDescriptor {
             support_indirect_command_buffers: false,
             padding: [0; 5],
         };
-        let vertex = d.vertex_descriptor.map(|v| wmt::VertexDescriptorInfo { attributes: v.attributes, layouts: v.layouts });
+        let vertex = d.vertex_descriptor.map(|v| wmt::VertexDescriptorInfo {
+            attributes: v.attributes,
+            layouts: v.layouts,
+        });
         (info, vertex)
     }
 }
@@ -685,7 +856,10 @@ impl MTLRenderPipelineColorAttachmentDescriptorArray {
     ///
     /// # Safety
     /// `index` < 8.
-    pub unsafe fn objectAtIndexedSubscript(&self, index: NSUInteger) -> Retained<MTLRenderPipelineColorAttachmentDescriptor> {
+    pub unsafe fn objectAtIndexedSubscript(
+        &self,
+        index: NSUInteger,
+    ) -> Retained<MTLRenderPipelineColorAttachmentDescriptor> {
         MTLRenderPipelineColorAttachmentDescriptor::boxed(Arc::clone(&self.d), index.min(7))
     }
 }
@@ -694,16 +868,36 @@ impl MTLRenderPipelineColorAttachmentDescriptor {
     fn with<R>(&self, f: impl FnOnce(&mut ColorBlend) -> R) -> R {
         f(&mut lock(&self.d).colors[self.index])
     }
-    pub fn pixelFormat(&self) -> MTLPixelFormat { self.with(|c| c.pixel_format) }
-    pub fn setPixelFormat(&self, v: MTLPixelFormat) { self.with(|c| c.pixel_format = v); }
-    pub fn setBlendingEnabled(&self, v: bool) { self.with(|c| c.blending = v); }
-    pub fn setSourceRGBBlendFactor(&self, v: MTLBlendFactor) { self.with(|c| c.src_rgb = v); }
-    pub fn setDestinationRGBBlendFactor(&self, v: MTLBlendFactor) { self.with(|c| c.dst_rgb = v); }
-    pub fn setRgbBlendOperation(&self, v: MTLBlendOperation) { self.with(|c| c.rgb_op = v); }
-    pub fn setSourceAlphaBlendFactor(&self, v: MTLBlendFactor) { self.with(|c| c.src_alpha = v); }
-    pub fn setDestinationAlphaBlendFactor(&self, v: MTLBlendFactor) { self.with(|c| c.dst_alpha = v); }
-    pub fn setAlphaBlendOperation(&self, v: MTLBlendOperation) { self.with(|c| c.alpha_op = v); }
-    pub fn setWriteMask(&self, v: MTLColorWriteMask) { self.with(|c| c.write_mask = v); }
+    pub fn pixelFormat(&self) -> MTLPixelFormat {
+        self.with(|c| c.pixel_format)
+    }
+    pub fn setPixelFormat(&self, v: MTLPixelFormat) {
+        self.with(|c| c.pixel_format = v);
+    }
+    pub fn setBlendingEnabled(&self, v: bool) {
+        self.with(|c| c.blending = v);
+    }
+    pub fn setSourceRGBBlendFactor(&self, v: MTLBlendFactor) {
+        self.with(|c| c.src_rgb = v);
+    }
+    pub fn setDestinationRGBBlendFactor(&self, v: MTLBlendFactor) {
+        self.with(|c| c.dst_rgb = v);
+    }
+    pub fn setRgbBlendOperation(&self, v: MTLBlendOperation) {
+        self.with(|c| c.rgb_op = v);
+    }
+    pub fn setSourceAlphaBlendFactor(&self, v: MTLBlendFactor) {
+        self.with(|c| c.src_alpha = v);
+    }
+    pub fn setDestinationAlphaBlendFactor(&self, v: MTLBlendFactor) {
+        self.with(|c| c.dst_alpha = v);
+    }
+    pub fn setAlphaBlendOperation(&self, v: MTLBlendOperation) {
+        self.with(|c| c.alpha_op = v);
+    }
+    pub fn setWriteMask(&self, v: MTLColorWriteMask) {
+        self.with(|c| c.write_mask = v);
+    }
 }
 
 // --- Render passes.
@@ -735,10 +929,18 @@ pub struct PassDesc {
 impl Default for PassDesc {
     fn default() -> Self {
         // Metal's defaults: colour attachments store, depth and stencil don't; every load is DontCare.
-        let color = Attachment { store: MTLStoreAction::Store, ..Attachment::default() };
+        let color = Attachment {
+            store: MTLStoreAction::Store,
+            ..Attachment::default()
+        };
         Self {
             colors: core::array::from_fn(|_| color.clone()),
-            clear_colors: [MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 }; 8],
+            clear_colors: [MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            }; 8],
             depth: Attachment::default(),
             clear_depth: 1.0,
             stencil: Attachment::default(),
@@ -804,7 +1006,12 @@ impl MTLRenderPassDescriptor {
                 level: c.level as u16,
                 slice: c.slice as u16,
                 depth_plane: c.depth_plane as u32,
-                clear_color: wmt::ClearColor { r: clear.red, g: clear.green, b: clear.blue, a: clear.alpha },
+                clear_color: wmt::ClearColor {
+                    r: clear.red,
+                    g: clear.green,
+                    b: clear.blue,
+                    a: clear.alpha,
+                },
                 resolve_texture: handle(&c.resolve_texture),
                 resolve_level: c.resolve_level as u16,
                 resolve_slice: c.resolve_slice as u16,
@@ -839,7 +1046,10 @@ impl MTLRenderPassColorAttachmentDescriptorArray {
     ///
     /// # Safety
     /// `index` < 8.
-    pub unsafe fn objectAtIndexedSubscript(&self, index: NSUInteger) -> Retained<MTLRenderPassColorAttachmentDescriptor> {
+    pub unsafe fn objectAtIndexedSubscript(
+        &self,
+        index: NSUInteger,
+    ) -> Retained<MTLRenderPassColorAttachmentDescriptor> {
         MTLRenderPassAttachmentDescriptor::boxed(Arc::clone(&self.d), Which::Color(index.min(7)))
     }
 }
@@ -853,38 +1063,97 @@ impl MTLRenderPassAttachmentDescriptor {
             Which::Stencil => f(&mut d.stencil),
         }
     }
-    pub fn texture(&self) -> Option<Texture> { self.with(|a| a.texture.clone()) }
-    pub fn setTexture(&self, v: Option<&ProtocolObject<dyn MTLTexture>>) { let t = keep_texture(v); self.with(|a| a.texture = t); }
-    pub fn level(&self) -> NSUInteger { self.with(|a| a.level) }
-    pub fn setLevel(&self, v: NSUInteger) { self.with(|a| a.level = v); }
-    pub fn slice(&self) -> NSUInteger { self.with(|a| a.slice) }
-    pub fn setSlice(&self, v: NSUInteger) { self.with(|a| a.slice = v); }
-    pub fn depthPlane(&self) -> NSUInteger { self.with(|a| a.depth_plane) }
-    pub fn setDepthPlane(&self, v: NSUInteger) { self.with(|a| a.depth_plane = v); }
-    pub fn resolveTexture(&self) -> Option<Texture> { self.with(|a| a.resolve_texture.clone()) }
-    pub fn setResolveTexture(&self, v: Option<&ProtocolObject<dyn MTLTexture>>) { let t = keep_texture(v); self.with(|a| a.resolve_texture = t); }
-    pub fn resolveLevel(&self) -> NSUInteger { self.with(|a| a.resolve_level) }
-    pub fn setResolveLevel(&self, v: NSUInteger) { self.with(|a| a.resolve_level = v); }
-    pub fn resolveSlice(&self) -> NSUInteger { self.with(|a| a.resolve_slice) }
-    pub fn setResolveSlice(&self, v: NSUInteger) { self.with(|a| a.resolve_slice = v); }
-    pub fn resolveDepthPlane(&self) -> NSUInteger { self.with(|a| a.resolve_depth_plane) }
-    pub fn setResolveDepthPlane(&self, v: NSUInteger) { self.with(|a| a.resolve_depth_plane = v); }
-    pub fn loadAction(&self) -> MTLLoadAction { self.with(|a| a.load) }
-    pub fn setLoadAction(&self, v: MTLLoadAction) { self.with(|a| a.load = v); }
-    pub fn storeAction(&self) -> MTLStoreAction { self.with(|a| a.store) }
-    pub fn setStoreAction(&self, v: MTLStoreAction) { self.with(|a| a.store = v); }
+    pub fn texture(&self) -> Option<Texture> {
+        self.with(|a| a.texture.clone())
+    }
+    pub fn setTexture(&self, v: Option<&ProtocolObject<dyn MTLTexture>>) {
+        let t = keep_texture(v);
+        self.with(|a| a.texture = t);
+    }
+    pub fn level(&self) -> NSUInteger {
+        self.with(|a| a.level)
+    }
+    pub fn setLevel(&self, v: NSUInteger) {
+        self.with(|a| a.level = v);
+    }
+    pub fn slice(&self) -> NSUInteger {
+        self.with(|a| a.slice)
+    }
+    pub fn setSlice(&self, v: NSUInteger) {
+        self.with(|a| a.slice = v);
+    }
+    pub fn depthPlane(&self) -> NSUInteger {
+        self.with(|a| a.depth_plane)
+    }
+    pub fn setDepthPlane(&self, v: NSUInteger) {
+        self.with(|a| a.depth_plane = v);
+    }
+    pub fn resolveTexture(&self) -> Option<Texture> {
+        self.with(|a| a.resolve_texture.clone())
+    }
+    pub fn setResolveTexture(&self, v: Option<&ProtocolObject<dyn MTLTexture>>) {
+        let t = keep_texture(v);
+        self.with(|a| a.resolve_texture = t);
+    }
+    pub fn resolveLevel(&self) -> NSUInteger {
+        self.with(|a| a.resolve_level)
+    }
+    pub fn setResolveLevel(&self, v: NSUInteger) {
+        self.with(|a| a.resolve_level = v);
+    }
+    pub fn resolveSlice(&self) -> NSUInteger {
+        self.with(|a| a.resolve_slice)
+    }
+    pub fn setResolveSlice(&self, v: NSUInteger) {
+        self.with(|a| a.resolve_slice = v);
+    }
+    pub fn resolveDepthPlane(&self) -> NSUInteger {
+        self.with(|a| a.resolve_depth_plane)
+    }
+    pub fn setResolveDepthPlane(&self, v: NSUInteger) {
+        self.with(|a| a.resolve_depth_plane = v);
+    }
+    pub fn loadAction(&self) -> MTLLoadAction {
+        self.with(|a| a.load)
+    }
+    pub fn setLoadAction(&self, v: MTLLoadAction) {
+        self.with(|a| a.load = v);
+    }
+    pub fn storeAction(&self) -> MTLStoreAction {
+        self.with(|a| a.store)
+    }
+    pub fn setStoreAction(&self, v: MTLStoreAction) {
+        self.with(|a| a.store = v);
+    }
     pub fn clearColor(&self) -> MTLClearColor {
-        match self.which { Which::Color(i) => lock(&self.d).clear_colors[i], _ => MTLClearColor::default() }
+        match self.which {
+            Which::Color(i) => lock(&self.d).clear_colors[i],
+            _ => MTLClearColor::default(),
+        }
     }
     pub fn setClearColor(&self, v: MTLClearColor) {
-        if let Which::Color(i) = self.which { lock(&self.d).clear_colors[i] = v; }
+        if let Which::Color(i) = self.which {
+            lock(&self.d).clear_colors[i] = v;
+        }
     }
-    pub fn clearDepth(&self) -> f64 { lock(&self.d).clear_depth }
-    pub fn setClearDepth(&self, v: f64) { lock(&self.d).clear_depth = v; }
+    pub fn clearDepth(&self) -> f64 {
+        lock(&self.d).clear_depth
+    }
+    pub fn setClearDepth(&self, v: f64) {
+        lock(&self.d).clear_depth = v;
+    }
     /// Metal's default (sample 0): mtld3d only reads it.
-    pub fn depthResolveFilter(&self) -> MTLMultisampleDepthResolveFilter { MTLMultisampleDepthResolveFilter::Sample0 }
+    pub fn depthResolveFilter(&self) -> MTLMultisampleDepthResolveFilter {
+        MTLMultisampleDepthResolveFilter::Sample0
+    }
     /// Metal's default (sample 0): mtld3d only reads it.
-    pub fn stencilResolveFilter(&self) -> MTLMultisampleStencilResolveFilter { MTLMultisampleStencilResolveFilter::Sample0 }
-    pub fn clearStencil(&self) -> u32 { lock(&self.d).clear_stencil }
-    pub fn setClearStencil(&self, v: u32) { lock(&self.d).clear_stencil = v; }
+    pub fn stencilResolveFilter(&self) -> MTLMultisampleStencilResolveFilter {
+        MTLMultisampleStencilResolveFilter::Sample0
+    }
+    pub fn clearStencil(&self) -> u32 {
+        lock(&self.d).clear_stencil
+    }
+    pub fn setClearStencil(&self, v: u32) {
+        lock(&self.d).clear_stencil = v;
+    }
 }

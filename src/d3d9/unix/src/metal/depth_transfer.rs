@@ -5,21 +5,25 @@ use mtld3d_shared::{
     mtl::DepthTransferKind,
     mtl_handle::{MTLComputePipelineStateKind, MTLDeviceKind, MTLTextureKind},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLDevice, MTLLanguageVersion, MTLLibrary,
-    MTLMathMode, MTLOrigin, MTLPixelFormat, MTLResource, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
-};
 
 use super::{
     command::diagnostics,
     handle::{IntoRetained, ReleaseRetain},
     transient::{LastUse, OwnedBuffer, SubmitStamp},
 };
-use crate::LOG_TARGET;
+use crate::{
+    LOG_TARGET,
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_foundation::NSString,
+        objc2_metal::{
+            MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder,
+            MTLCompileOptions, MTLComputeCommandEncoder, MTLDevice, MTLLanguageVersion, MTLLibrary,
+            MTLMathMode, MTLOrigin, MTLPixelFormat, MTLResource, MTLResourceOptions, MTLSize,
+            MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+        },
+    },
+};
 
 /// Retired plane sets a device keeps beside the ones in flight.
 const SPARE_PLANE_SETS: usize = 2;

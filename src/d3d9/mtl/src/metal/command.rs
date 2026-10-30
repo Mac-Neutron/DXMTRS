@@ -8,20 +8,20 @@
 //! time is that moment.
 
 use core::{cell::RefCell, ffi::c_void, ptr::NonNull};
-
-use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     cell::Cell,
     sync::{Condvar, LazyLock, Mutex, mpsc},
     time::Instant,
 };
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use super::{
     CFTimeInterval, MTLBlitOption, MTLBuffer, MTLCommandBufferErrorOption, MTLCommandBufferStatus,
-    MTLComputePipelineState, MTLCullMode, MTLDepthStencilState, MTLDevice, MTLEvent, MTLIndexType, MTLOrigin,
-    MTLPrimitiveType, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLResource, MTLSamplerState, MTLScissorRect,
-    MTLSize, MTLTexture, MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode, device_of, handle_of, label_of,
-    retained, set_label_of,
+    MTLComputePipelineState, MTLCullMode, MTLDepthStencilState, MTLDevice, MTLEvent, MTLIndexType,
+    MTLOrigin, MTLPrimitiveType, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLResource,
+    MTLSamplerState, MTLScissorRect, MTLSize, MTLTexture, MTLTriangleFillMode, MTLViewport,
+    MTLVisibilityResultMode, device_of, handle_of, label_of, retained, set_label_of,
 };
 use crate::{
     block2::{DynBlock, Kept},
@@ -34,8 +34,10 @@ use crate::{
     table, wmt,
 };
 
-pub type MTLCommandBufferHandler = *mut DynBlock<dyn Fn(NonNull<ProtocolObject<dyn MTLCommandBuffer>>)>;
-pub type MTLDrawablePresentedHandler = *mut DynBlock<dyn Fn(NonNull<ProtocolObject<dyn MTLDrawable>>)>;
+pub type MTLCommandBufferHandler =
+    *mut DynBlock<dyn Fn(NonNull<ProtocolObject<dyn MTLCommandBuffer>>)>;
+pub type MTLDrawablePresentedHandler =
+    *mut DynBlock<dyn Fn(NonNull<ProtocolObject<dyn MTLDrawable>>)>;
 
 // --- Command lists.
 
@@ -67,12 +69,23 @@ struct Nodes {
 
 impl Nodes {
     fn push<T: Copy>(&mut self, ty: u16, body: T) -> usize {
-        let node = Node { ty, reserved: [0; 3], next: 0, body };
+        let node = Node {
+            ty,
+            reserved: [0; 3],
+            next: 0,
+            body,
+        };
         let start = self.words.len();
         let words = core::mem::size_of::<Node<T>>().div_ceil(8);
         self.words.resize(start + words, 0);
         // SAFETY: the words just reserved hold the node; u64 alignment covers every node's.
-        unsafe { self.words.as_mut_ptr().add(start).cast::<Node<T>>().write_unaligned(node) };
+        unsafe {
+            self.words
+                .as_mut_ptr()
+                .add(start)
+                .cast::<Node<T>>()
+                .write_unaligned(node)
+        };
         self.starts.push(start);
         start
     }
@@ -85,7 +98,13 @@ impl Nodes {
         let at = self.words.len();
         self.words.resize(at + bytes.len().div_ceil(8), 0);
         // SAFETY: the words just reserved hold the copy.
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.words.as_mut_ptr().add(at).cast::<u8>(), bytes.len()) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.words.as_mut_ptr().add(at).cast::<u8>(),
+                bytes.len(),
+            )
+        };
         self.payloads.push((start + 2 + pointer_at / 8, at));
     }
 
@@ -100,7 +119,10 @@ impl Nodes {
         }
         let base = self.words.as_mut_ptr();
         for (i, &start) in self.starts.iter().enumerate() {
-            let next = self.starts.get(i + 1).map_or(0, |&n| base as u64 + (n * 8) as u64);
+            let next = self
+                .starts
+                .get(i + 1)
+                .map_or(0, |&n| base as u64 + (n * 8) as u64);
             // SAFETY: word start+1 is the node's `next`.
             unsafe { *base.add(start + 1) = next };
         }
@@ -109,7 +131,10 @@ impl Nodes {
             unsafe { *base.add(pointer) = base.add(payload) as u64 };
         }
         // SAFETY: start 0 is the head; the list stays put for the call.
-        let mut params = wmt::ObjCmdNoRet { encoder, cmd_head: wmt::Ptr::new(unsafe { base.add(self.starts[0]) }.cast()) };
+        let mut params = wmt::ObjCmdNoRet {
+            encoder,
+            cmd_head: wmt::Ptr::new(unsafe { base.add(self.starts[0]) }.cast()),
+        };
         // SAFETY: an encodeCommands slot over a well-formed list.
         unsafe { table::call(slot, &mut params) };
         self.words.clear();
@@ -127,7 +152,13 @@ struct Raster {
     clamp: f32,
 }
 
-const METAL_RASTER: Raster = Raster { fill: 0, cull: 0, bias: 0.0, slope: 0.0, clamp: 0.0 };
+const METAL_RASTER: Raster = Raster {
+    fill: 0,
+    cull: 0,
+    bias: 0.0,
+    slope: 0.0,
+    clamp: 0.0,
+};
 
 struct EncoderState {
     slot: u32,
@@ -149,7 +180,9 @@ thread_local! {
 fn record(encoder: u64, f: impl FnOnce(&mut EncoderState)) {
     ENCODERS.with(|map| {
         let mut map = map.borrow_mut();
-        let state = map.get_mut(&encoder).expect("a facade encoder used on a thread other than the one that made it");
+        let state = map
+            .get_mut(&encoder)
+            .expect("a facade encoder used on a thread other than the one that made it");
         f(state);
         if state.nodes.full() {
             state.nodes.flush(state.slot, encoder);
@@ -159,7 +192,15 @@ fn record(encoder: u64, f: impl FnOnce(&mut EncoderState)) {
 
 fn begin(encoder: u64, slot: u32) {
     ENCODERS.with(|map| {
-        map.borrow_mut().insert(encoder, EncoderState { slot, nodes: Nodes::default(), raster: METAL_RASTER, compute_pso: 0 });
+        map.borrow_mut().insert(
+            encoder,
+            EncoderState {
+                slot,
+                nodes: Nodes::default(),
+                raster: METAL_RASTER,
+                compute_pso: 0,
+            },
+        );
     });
 }
 
@@ -185,25 +226,56 @@ fn handle_or_zero<T: ?Sized>(obj: Option<&T>) -> u64 {
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
-struct SetBuffer { buffer: u64, offset: u64, index: u8 }
+struct SetBuffer {
+    buffer: u64,
+    offset: u64,
+    index: u8,
+}
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
-struct SetBytes { bytes: u64, length: u64, index: u8 }
+struct SetBytes {
+    bytes: u64,
+    length: u64,
+    index: u8,
+}
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
-struct SetObject { object: u64, index: u8 }
+struct SetObject {
+    object: u64,
+    index: u8,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SetHandle { handle: u64 }
+struct SetHandle {
+    handle: u64,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SetRasterizer { fill: u8, cull: u8, clip: u8, winding: u8, bias: f32, slope: f32, clamp: f32 }
+struct SetRasterizer {
+    fill: u8,
+    cull: u8,
+    clip: u8,
+    winding: u8,
+    bias: f32,
+    slope: f32,
+    clamp: f32,
+}
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
-struct SetVisibility { offset: u64, mode: u8 }
+struct SetVisibility {
+    offset: u64,
+    mode: u8,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Draw { primitive: u8, padding: [u8; 7], start: u64, count: u64, instances: u32, base_instance: u32 }
+struct Draw {
+    primitive: u8,
+    padding: [u8; 7],
+    start: u64,
+    count: u64,
+    instances: u32,
+    base_instance: u32,
+}
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
 struct DrawIndexed {
@@ -220,33 +292,89 @@ struct DrawIndexed {
 /// `WMTScissorRect`: objc2's `MTLScissorRect` holds `NSUInteger`s.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ScissorRect { x: u64, y: u64, width: u64, height: u64 }
+struct ScissorRect {
+    x: u64,
+    y: u64,
+    width: u64,
+    height: u64,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct BlendColor { red: f32, green: f32, blue: f32, alpha: f32, stencil_ref: u8 }
+struct BlendColor {
+    red: f32,
+    green: f32,
+    blue: f32,
+    alpha: f32,
+    stencil_ref: u8,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct StencilRef { stencil_ref: u8 }
+struct StencilRef {
+    stencil_ref: u8,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct BufferToBuffer { src: u64, src_offset: u64, dst: u64, dst_offset: u64, length: u64 }
+struct BufferToBuffer {
+    src: u64,
+    src_offset: u64,
+    dst: u64,
+    dst_offset: u64,
+    length: u64,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct BufferToTexture { src: u64, src_offset: u64, bytes_per_row: u32, bytes_per_image: u32, size: wmt::Size, dst: u64, slice: u32, level: u16, options: u16, origin: wmt::Origin }
+struct BufferToTexture {
+    src: u64,
+    src_offset: u64,
+    bytes_per_row: u32,
+    bytes_per_image: u32,
+    size: wmt::Size,
+    dst: u64,
+    slice: u32,
+    level: u16,
+    options: u16,
+    origin: wmt::Origin,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct TextureToBuffer { src: u64, slice: u32, level: u16, options: u16, origin: wmt::Origin, size: wmt::Size, dst: u64, offset: u64, bytes_per_row: u32, bytes_per_image: u32 }
+struct TextureToBuffer {
+    src: u64,
+    slice: u32,
+    level: u16,
+    options: u16,
+    origin: wmt::Origin,
+    size: wmt::Size,
+    dst: u64,
+    offset: u64,
+    bytes_per_row: u32,
+    bytes_per_image: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct TextureToTexture { src: u64, src_slice: u32, src_level: u32, src_origin: wmt::Origin, src_size: wmt::Size, dst: u64, dst_slice: u32, dst_level: u32, dst_origin: wmt::Origin }
+struct TextureToTexture {
+    src: u64,
+    src_slice: u32,
+    src_level: u32,
+    src_origin: wmt::Origin,
+    src_size: wmt::Size,
+    dst: u64,
+    dst_slice: u32,
+    dst_level: u32,
+    dst_origin: wmt::Origin,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ComputePso { pso: u64, threadgroup_size: wmt::Size }
+struct ComputePso {
+    pso: u64,
+    threadgroup_size: wmt::Size,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Dispatch { size: wmt::Size }
+struct Dispatch {
+    size: wmt::Size,
+}
 
 const BLIT_BUFFER_TO_BUFFER: u16 = 1;
 const BLIT_BUFFER_TO_TEXTURE: u16 = 2;
@@ -262,10 +390,18 @@ const COMPUTE_SET_BYTES: u16 = 7;
 const COMPUTE_SET_TEXTURE: u16 = 8;
 
 fn origin(o: MTLOrigin) -> wmt::Origin {
-    wmt::Origin { x: o.x as u64, y: o.y as u64, z: o.z as u64 }
+    wmt::Origin {
+        x: o.x as u64,
+        y: o.y as u64,
+        z: o.z as u64,
+    }
 }
 fn size(s: MTLSize) -> wmt::Size {
-    wmt::Size { width: s.width as u64, height: s.height as u64, depth: s.depth as u64 }
+    wmt::Size {
+        width: s.width as u64,
+        height: s.height as u64,
+        depth: s.depth as u64,
+    }
 }
 
 // --- Encoders.
@@ -293,32 +429,84 @@ pub unsafe trait MTLCommandEncoder: NSObjectProtocol {
 pub unsafe trait MTLRenderCommandEncoder: MTLCommandEncoder {
     fn setRenderPipelineState(&self, pipeline_state: &ProtocolObject<dyn MTLRenderPipelineState>) {
         let pso = pipeline_state.handle();
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_PSO, SetHandle { handle: pso }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(wmt::RENDER_SET_PSO, SetHandle { handle: pso });
+        });
     }
-    unsafe fn setVertexBytes_length_atIndex(&self, bytes: NonNull<c_void>, length: NSUInteger, index: NSUInteger) {
+    unsafe fn setVertexBytes_length_atIndex(
+        &self,
+        bytes: NonNull<c_void>,
+        length: NSUInteger,
+        index: NSUInteger,
+    ) {
         let data = bytes_of(bytes, length);
         record(handle_of(self), |s| {
-            s.nodes.push_payload(wmt::RENDER_SET_VERTEX_BYTES, SetBytes { bytes: 0, length: length as u64, index: index as u8 }, 0, data);
+            s.nodes.push_payload(
+                wmt::RENDER_SET_VERTEX_BYTES,
+                SetBytes {
+                    bytes: 0,
+                    length: length as u64,
+                    index: index as u8,
+                },
+                0,
+                data,
+            );
         });
     }
-    unsafe fn setVertexBuffer_offset_atIndex(&self, buffer: Option<&ProtocolObject<dyn MTLBuffer>>, offset: NSUInteger, index: NSUInteger) {
+    unsafe fn setVertexBuffer_offset_atIndex(
+        &self,
+        buffer: Option<&ProtocolObject<dyn MTLBuffer>>,
+        offset: NSUInteger,
+        index: NSUInteger,
+    ) {
         let buffer = handle_or_zero(buffer);
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_VERTEX_BUFFER, SetBuffer { buffer, offset: offset as u64, index: index as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_VERTEX_BUFFER,
+                SetBuffer {
+                    buffer,
+                    offset: offset as u64,
+                    index: index as u8,
+                },
+            );
         });
     }
-    unsafe fn setVertexTexture_atIndex(&self, texture: Option<&ProtocolObject<dyn MTLTexture>>, index: NSUInteger) {
+    unsafe fn setVertexTexture_atIndex(
+        &self,
+        texture: Option<&ProtocolObject<dyn MTLTexture>>,
+        index: NSUInteger,
+    ) {
         let texture = handle_or_zero(texture);
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_VERTEX_TEXTURE, SetObject { object: texture, index: index as u8 }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(
+                wmt::RENDER_SET_VERTEX_TEXTURE,
+                SetObject {
+                    object: texture,
+                    index: index as u8,
+                },
+            );
+        });
     }
-    unsafe fn setVertexSamplerState_atIndex(&self, sampler: Option<&ProtocolObject<dyn MTLSamplerState>>, index: NSUInteger) {
+    unsafe fn setVertexSamplerState_atIndex(
+        &self,
+        sampler: Option<&ProtocolObject<dyn MTLSamplerState>>,
+        index: NSUInteger,
+    ) {
         let sampler = handle_or_zero(sampler);
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_VERTEX_SAMPLER_STATE, SetObject { object: sampler, index: index as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_VERTEX_SAMPLER_STATE,
+                SetObject {
+                    object: sampler,
+                    index: index as u8,
+                },
+            );
         });
     }
     fn setViewport(&self, viewport: MTLViewport) {
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_VIEWPORT, viewport); });
+        record(handle_of(self), |s| {
+            s.nodes.push(wmt::RENDER_SET_VIEWPORT, viewport);
+        });
     }
     fn setCullMode(&self, cull_mode: MTLCullMode) {
         raster(handle_of(self), |r| r.cull = cull_mode.0 as u8);
@@ -331,55 +519,143 @@ pub unsafe trait MTLRenderCommandEncoder: MTLCommandEncoder {
         });
     }
     fn setScissorRect(&self, rect: MTLScissorRect) {
-        let rect = ScissorRect { x: rect.x as u64, y: rect.y as u64, width: rect.width as u64, height: rect.height as u64 };
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_SCISSOR_RECT, rect); });
+        let rect = ScissorRect {
+            x: rect.x as u64,
+            y: rect.y as u64,
+            width: rect.width as u64,
+            height: rect.height as u64,
+        };
+        record(handle_of(self), |s| {
+            s.nodes.push(wmt::RENDER_SET_SCISSOR_RECT, rect);
+        });
     }
     fn setTriangleFillMode(&self, fill_mode: MTLTriangleFillMode) {
         raster(handle_of(self), |r| r.fill = fill_mode.0 as u8);
     }
-    unsafe fn setFragmentBytes_length_atIndex(&self, bytes: NonNull<c_void>, length: NSUInteger, index: NSUInteger) {
+    unsafe fn setFragmentBytes_length_atIndex(
+        &self,
+        bytes: NonNull<c_void>,
+        length: NSUInteger,
+        index: NSUInteger,
+    ) {
         let data = bytes_of(bytes, length);
         record(handle_of(self), |s| {
-            s.nodes.push_payload(wmt::RENDER_SET_FRAGMENT_BYTES, SetBytes { bytes: 0, length: length as u64, index: index as u8 }, 0, data);
+            s.nodes.push_payload(
+                wmt::RENDER_SET_FRAGMENT_BYTES,
+                SetBytes {
+                    bytes: 0,
+                    length: length as u64,
+                    index: index as u8,
+                },
+                0,
+                data,
+            );
         });
     }
-    unsafe fn setFragmentBuffer_offset_atIndex(&self, buffer: Option<&ProtocolObject<dyn MTLBuffer>>, offset: NSUInteger, index: NSUInteger) {
+    unsafe fn setFragmentBuffer_offset_atIndex(
+        &self,
+        buffer: Option<&ProtocolObject<dyn MTLBuffer>>,
+        offset: NSUInteger,
+        index: NSUInteger,
+    ) {
         let buffer = handle_or_zero(buffer);
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_FRAGMENT_BUFFER, SetBuffer { buffer, offset: offset as u64, index: index as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_FRAGMENT_BUFFER,
+                SetBuffer {
+                    buffer,
+                    offset: offset as u64,
+                    index: index as u8,
+                },
+            );
         });
     }
-    unsafe fn setFragmentTexture_atIndex(&self, texture: Option<&ProtocolObject<dyn MTLTexture>>, index: NSUInteger) {
+    unsafe fn setFragmentTexture_atIndex(
+        &self,
+        texture: Option<&ProtocolObject<dyn MTLTexture>>,
+        index: NSUInteger,
+    ) {
         let texture = handle_or_zero(texture);
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_FRAGMENT_TEXTURE, SetObject { object: texture, index: index as u8 }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(
+                wmt::RENDER_SET_FRAGMENT_TEXTURE,
+                SetObject {
+                    object: texture,
+                    index: index as u8,
+                },
+            );
+        });
     }
-    unsafe fn setFragmentSamplerState_atIndex(&self, sampler: Option<&ProtocolObject<dyn MTLSamplerState>>, index: NSUInteger) {
+    unsafe fn setFragmentSamplerState_atIndex(
+        &self,
+        sampler: Option<&ProtocolObject<dyn MTLSamplerState>>,
+        index: NSUInteger,
+    ) {
         let sampler = handle_or_zero(sampler);
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_FRAGMENT_SAMPLER_STATE, SetObject { object: sampler, index: index as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_FRAGMENT_SAMPLER_STATE,
+                SetObject {
+                    object: sampler,
+                    index: index as u8,
+                },
+            );
         });
     }
     fn setBlendColorRed_green_blue_alpha(&self, red: f32, green: f32, blue: f32, alpha: f32) {
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_BLEND_FACTOR, BlendColor { red, green, blue, alpha, stencil_ref: 0 });
+            s.nodes.push(
+                wmt::RENDER_SET_BLEND_FACTOR,
+                BlendColor {
+                    red,
+                    green,
+                    blue,
+                    alpha,
+                    stencil_ref: 0,
+                },
+            );
         });
     }
-    fn setDepthStencilState(&self, depth_stencil_state: Option<&ProtocolObject<dyn MTLDepthStencilState>>) {
+    fn setDepthStencilState(
+        &self,
+        depth_stencil_state: Option<&ProtocolObject<dyn MTLDepthStencilState>>,
+    ) {
         let state = handle_or_zero(depth_stencil_state);
-        record(handle_of(self), |s| { s.nodes.push(wmt::RENDER_SET_DEPTH_STENCIL_STATE, SetHandle { handle: state }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(
+                wmt::RENDER_SET_DEPTH_STENCIL_STATE,
+                SetHandle { handle: state },
+            );
+        });
     }
     /// winemetal's node takes 8 bits: a Depth32Float_Stencil8 plane has no more.
     fn setStencilReferenceValue(&self, reference_value: u32) {
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_STENCIL_REF, StencilRef { stencil_ref: reference_value as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_STENCIL_REF,
+                StencilRef {
+                    stencil_ref: reference_value as u8,
+                },
+            );
         });
     }
     fn setVisibilityResultMode_offset(&self, mode: MTLVisibilityResultMode, offset: NSUInteger) {
         record(handle_of(self), |s| {
-            s.nodes.push(wmt::RENDER_SET_VISIBILITY_MODE, SetVisibility { offset: offset as u64, mode: mode.0 as u8 });
+            s.nodes.push(
+                wmt::RENDER_SET_VISIBILITY_MODE,
+                SetVisibility {
+                    offset: offset as u64,
+                    mode: mode.0 as u8,
+                },
+            );
         });
     }
-    unsafe fn drawPrimitives_vertexStart_vertexCount(&self, primitive_type: MTLPrimitiveType, vertex_start: NSUInteger, vertex_count: NSUInteger) {
+    unsafe fn drawPrimitives_vertexStart_vertexCount(
+        &self,
+        primitive_type: MTLPrimitiveType,
+        vertex_start: NSUInteger,
+        vertex_count: NSUInteger,
+    ) {
         record(handle_of(self), |s| {
             s.nodes.push(
                 wmt::RENDER_DRAW,
@@ -438,7 +714,15 @@ fn raster(encoder: u64, f: impl FnOnce(&mut Raster)) {
             let r = s.raster;
             s.nodes.push(
                 wmt::RENDER_SET_RASTERIZER_STATE,
-                SetRasterizer { fill: r.fill, cull: r.cull, clip: 0, winding: 0, bias: r.bias, slope: r.slope, clamp: r.clamp },
+                SetRasterizer {
+                    fill: r.fill,
+                    cull: r.cull,
+                    clip: 0,
+                    winding: 0,
+                    bias: r.bias,
+                    slope: r.slope,
+                    clamp: r.clamp,
+                },
             );
         }
     });
@@ -473,7 +757,9 @@ pub unsafe trait MTLBlitCommandEncoder: MTLCommandEncoder {
             dst_level: destination_level as u32,
             dst_origin: origin(destination_origin),
         };
-        record(handle_of(self), |s| { s.nodes.push(BLIT_TEXTURE_TO_TEXTURE, body); });
+        record(handle_of(self), |s| {
+            s.nodes.push(BLIT_TEXTURE_TO_TEXTURE, body);
+        });
     }
     // allow: objc2's signature for this Metal method, which every caller of the facade uses.
     #[allow(clippy::too_many_arguments)]
@@ -526,8 +812,14 @@ pub unsafe trait MTLBlitCommandEncoder: MTLCommandEncoder {
         };
         // The plain node's level is 32 bits where the option node's level and options are two 16-bit halves: with
         // no option the two layouts agree (a level is far below 65,536).
-        let ty = if options.is_empty() { BLIT_BUFFER_TO_TEXTURE } else { BLIT_BUFFER_TO_TEXTURE_OPTION };
-        record(handle_of(self), |s| { s.nodes.push(ty, body); });
+        let ty = if options.is_empty() {
+            BLIT_BUFFER_TO_TEXTURE
+        } else {
+            BLIT_BUFFER_TO_TEXTURE_OPTION
+        };
+        record(handle_of(self), |s| {
+            s.nodes.push(ty, body);
+        });
     }
     // allow: objc2's signature for this Metal method, which every caller of the facade uses.
     #[allow(clippy::too_many_arguments)]
@@ -578,12 +870,21 @@ pub unsafe trait MTLBlitCommandEncoder: MTLCommandEncoder {
             bytes_per_row: destination_bytes_per_row as u32,
             bytes_per_image: destination_bytes_per_image as u32,
         };
-        let ty = if options.is_empty() { BLIT_TEXTURE_TO_BUFFER } else { BLIT_TEXTURE_TO_BUFFER_OPTION };
-        record(handle_of(self), |s| { s.nodes.push(ty, body); });
+        let ty = if options.is_empty() {
+            BLIT_TEXTURE_TO_BUFFER
+        } else {
+            BLIT_TEXTURE_TO_BUFFER_OPTION
+        };
+        record(handle_of(self), |s| {
+            s.nodes.push(ty, body);
+        });
     }
     fn generateMipmapsForTexture(&self, texture: &ProtocolObject<dyn MTLTexture>) {
         let texture = texture.handle();
-        record(handle_of(self), |s| { s.nodes.push(BLIT_GENERATE_MIPMAPS, SetHandle { handle: texture }); });
+        record(handle_of(self), |s| {
+            s.nodes
+                .push(BLIT_GENERATE_MIPMAPS, SetHandle { handle: texture });
+        });
     }
     unsafe fn copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
         &self,
@@ -600,7 +901,9 @@ pub unsafe trait MTLBlitCommandEncoder: MTLCommandEncoder {
             dst_offset: destination_offset as u64,
             length: size as u64,
         };
-        record(handle_of(self), |s| { s.nodes.push(BLIT_BUFFER_TO_BUFFER, body); });
+        record(handle_of(self), |s| {
+            s.nodes.push(BLIT_BUFFER_TO_BUFFER, body);
+        });
     }
 }
 
@@ -610,43 +913,114 @@ pub unsafe trait MTLComputeCommandEncoder: MTLCommandEncoder {
         let pso = state.handle();
         record(handle_of(self), |s| {
             s.compute_pso = pso;
-            s.nodes.push(COMPUTE_SET_PSO, ComputePso { pso, threadgroup_size: wmt::Size::default() });
+            s.nodes.push(
+                COMPUTE_SET_PSO,
+                ComputePso {
+                    pso,
+                    threadgroup_size: wmt::Size::default(),
+                },
+            );
         });
     }
-    unsafe fn setBytes_length_atIndex(&self, bytes: NonNull<c_void>, length: NSUInteger, index: NSUInteger) {
+    unsafe fn setBytes_length_atIndex(
+        &self,
+        bytes: NonNull<c_void>,
+        length: NSUInteger,
+        index: NSUInteger,
+    ) {
         let data = bytes_of(bytes, length);
         record(handle_of(self), |s| {
-            s.nodes.push_payload(COMPUTE_SET_BYTES, SetBytes { bytes: 0, length: length as u64, index: index as u8 }, 0, data);
+            s.nodes.push_payload(
+                COMPUTE_SET_BYTES,
+                SetBytes {
+                    bytes: 0,
+                    length: length as u64,
+                    index: index as u8,
+                },
+                0,
+                data,
+            );
         });
     }
-    unsafe fn setBuffer_offset_atIndex(&self, buffer: Option<&ProtocolObject<dyn MTLBuffer>>, offset: NSUInteger, index: NSUInteger) {
+    unsafe fn setBuffer_offset_atIndex(
+        &self,
+        buffer: Option<&ProtocolObject<dyn MTLBuffer>>,
+        offset: NSUInteger,
+        index: NSUInteger,
+    ) {
         let buffer = handle_or_zero(buffer);
-        record(handle_of(self), |s| { s.nodes.push(COMPUTE_SET_BUFFER, SetBuffer { buffer, offset: offset as u64, index: index as u8 }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(
+                COMPUTE_SET_BUFFER,
+                SetBuffer {
+                    buffer,
+                    offset: offset as u64,
+                    index: index as u8,
+                },
+            );
+        });
     }
-    unsafe fn setTexture_atIndex(&self, texture: Option<&ProtocolObject<dyn MTLTexture>>, index: NSUInteger) {
+    unsafe fn setTexture_atIndex(
+        &self,
+        texture: Option<&ProtocolObject<dyn MTLTexture>>,
+        index: NSUInteger,
+    ) {
         let texture = handle_or_zero(texture);
-        record(handle_of(self), |s| { s.nodes.push(COMPUTE_SET_TEXTURE, SetObject { object: texture, index: index as u8 }); });
+        record(handle_of(self), |s| {
+            s.nodes.push(
+                COMPUTE_SET_TEXTURE,
+                SetObject {
+                    object: texture,
+                    index: index as u8,
+                },
+            );
+        });
     }
     /// winemetal's dispatch takes the threadgroup size from the last pipeline node.
     ///
     /// The facade gives it there.
-    fn dispatchThreadgroups_threadsPerThreadgroup(&self, threadgroups_per_grid: MTLSize, threads_per_threadgroup: MTLSize) {
+    fn dispatchThreadgroups_threadsPerThreadgroup(
+        &self,
+        threadgroups_per_grid: MTLSize,
+        threads_per_threadgroup: MTLSize,
+    ) {
         let groups = size(threadgroups_per_grid);
         let threads = size(threads_per_threadgroup);
         record(handle_of(self), |s| {
             // The size rides on the pipeline node winemetal reads it from: the newest one's if it is still unsized,
             // else a new node for the same pipeline (also after a flush, which left the list without one).
-            let newest = s.nodes.starts.iter().rev().find(|&&start| s.nodes.words[start] as u16 == COMPUTE_SET_PSO).copied();
+            let newest = s
+                .nodes
+                .starts
+                .iter()
+                .rev()
+                .find(|&&start| s.nodes.words[start] as u16 == COMPUTE_SET_PSO)
+                .copied();
             // SAFETY: a node at a recorded start whose type is COMPUTE_SET_PSO is a ComputePso.
-            let node = newest.map(|start| unsafe { s.nodes.words.as_mut_ptr().add(start).cast::<Node<ComputePso>>() });
+            let node = newest.map(|start| unsafe {
+                s.nodes
+                    .words
+                    .as_mut_ptr()
+                    .add(start)
+                    .cast::<Node<ComputePso>>()
+            });
             // SAFETY: as above.
             match node.map(|n| unsafe { (*n).body }) {
-                Some(body) if body.threadgroup_size == wmt::Size::default() || body.threadgroup_size == threads => {
+                Some(body)
+                    if body.threadgroup_size == wmt::Size::default()
+                        || body.threadgroup_size == threads =>
+                {
                     // SAFETY: as above.
                     unsafe { (*node.unwrap()).body.threadgroup_size = threads };
                 }
                 _ => {
-                    s.nodes.push(COMPUTE_SET_PSO, ComputePso { pso: s.compute_pso, threadgroup_size: threads });
+                    s.nodes.push(
+                        COMPUTE_SET_PSO,
+                        ComputePso {
+                            pso: s.compute_pso,
+                            threadgroup_size: threads,
+                        },
+                    );
                 }
             }
             s.nodes.push(COMPUTE_DISPATCH, Dispatch { size: groups });
@@ -665,9 +1039,18 @@ unsafe impl MTLCommandEncoder for ProtocolObject<dyn MTLCommandEncoder> {}
 /// An encoder from `slot`.
 ///
 /// Slot 30 (blit) takes the buffer alone, 31 and 32 (compute, render) an argument too.
-fn new_encoder<P: ?Sized>(cb: u64, slot: u32, arg: Option<u64>, list_slot: u32) -> Option<Retained<ProtocolObject<P>>> {
+fn new_encoder<P: ?Sized>(
+    cb: u64,
+    slot: u32,
+    arg: Option<u64>,
+    list_slot: u32,
+) -> Option<Retained<ProtocolObject<P>>> {
     let handle = if let Some(arg) = arg {
-        let mut params = wmt::ObjU64ObjRet { handle: cb, arg, ret: 0 };
+        let mut params = wmt::ObjU64ObjRet {
+            handle: cb,
+            arg,
+            ret: 0,
+        };
         // SAFETY: an encoder-creating slot on a live command buffer; the encoder is autoreleased.
         unsafe { table::call(slot, &mut params) };
         params.ret
@@ -699,15 +1082,24 @@ enum Handler {
 static PENDING: Mutex<Option<FxHashMap<u64, Vec<Handler>>>> = Mutex::new(None);
 
 fn pending() -> std::sync::MutexGuard<'static, Option<FxHashMap<u64, Vec<Handler>>>> {
-    PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn add_pending(handle: u64, handler: Handler) {
-    pending().get_or_insert_with(FxHashMap::default).entry(handle).or_default().push(handler);
+    pending()
+        .get_or_insert_with(FxHashMap::default)
+        .entry(handle)
+        .or_default()
+        .push(handler);
 }
 
 fn take_pending(handle: u64) -> Vec<Handler> {
-    pending().as_mut().and_then(|map| map.remove(&handle)).unwrap_or_default()
+    pending()
+        .as_mut()
+        .and_then(|map| map.remove(&handle))
+        .unwrap_or_default()
 }
 
 struct Committed {
@@ -735,11 +1127,16 @@ thread_local! {
 }
 
 fn retiring() -> std::sync::MutexGuard<'static, Option<FxHashSet<u64>>> {
-    RETIRING.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    RETIRING
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn retirer(queue: u64) -> mpsc::Sender<Committed> {
-    let mut map = RETIRERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut map = RETIRERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     map.get_or_insert_with(FxHashMap::default)
         .entry(queue)
         .or_insert_with(|| {
@@ -780,11 +1177,15 @@ fn run_handlers(cb: u64, handlers: Vec<Handler>, time: f64) {
     for handler in handlers {
         match handler {
             // SAFETY: the buffer lives for the call (a message's reference, or the caller's last one).
-            Handler::Completed(h) => (h.0)(NonNull::from(unsafe { ProtocolObject::<dyn MTLCommandBuffer>::from_handle(cb) })),
+            Handler::Completed(h) => (h.0)(NonNull::from(unsafe {
+                ProtocolObject::<dyn MTLCommandBuffer>::from_handle(cb)
+            })),
             Handler::Presented(drawable, h) => {
                 meta::with(drawable, |e| e.presented_time = time);
                 // SAFETY: the drawable is kept alive by the reference taken for the handler, given back below.
-                (h.0)(NonNull::from(unsafe { ProtocolObject::<dyn MTLDrawable>::from_handle(drawable) }));
+                (h.0)(NonNull::from(unsafe {
+                    ProtocolObject::<dyn MTLDrawable>::from_handle(drawable)
+                }));
                 release_drawable(drawable);
             }
         }
@@ -800,13 +1201,21 @@ fn now() -> f64 {
 /// Gives back the reference `keep_drawable` took for a presented handler.
 fn release_drawable(drawable: u64) {
     // SAFETY: that reference.
-    unsafe { <ProtocolObject<dyn MTLDrawable> as objc2::Message>::release_raw(objc2::addr_of(drawable) as *const _) };
+    unsafe {
+        <ProtocolObject<dyn MTLDrawable> as objc2::Message>::release_raw(
+            objc2::addr_of(drawable) as *const _
+        )
+    };
 }
 
 /// A reference on `drawable` for a presented handler, until it has run (release_drawable).
 fn keep_drawable(drawable: u64) {
     // SAFETY: a live drawable.
-    unsafe { <ProtocolObject<dyn MTLDrawable> as objc2::Message>::retain_raw(objc2::addr_of(drawable) as *const _) };
+    unsafe {
+        <ProtocolObject<dyn MTLDrawable> as objc2::Message>::retain_raw(
+            objc2::addr_of(drawable) as *const _
+        )
+    };
 }
 
 /// The facade's last reference to `handle` (objc2.rs).
@@ -817,12 +1226,24 @@ fn keep_drawable(drawable: u64) {
 pub fn forget(handle: u64, entry: &meta::Entry) {
     let handlers = take_pending(handle);
     if !handlers.is_empty() {
-        run_handlers(handle, handlers, if entry.presented_by != 0 { now() } else { 0.0 });
+        run_handlers(
+            handle,
+            handlers,
+            if entry.presented_by != 0 { now() } else { 0.0 },
+        );
     }
-    if let Some(map) = RETIRERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+    if let Some(map) = RETIRERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
         map.remove(&handle);
     }
-    if let Some(map) = STATUS_OVERRIDE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+    if let Some(map) = STATUS_OVERRIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
         map.remove(&handle);
     }
 }
@@ -834,14 +1255,24 @@ static STATUS_OVERRIDE: Mutex<Option<FxHashMap<u64, u64>>> = Mutex::new(None);
 ///
 /// For a test of the error path (a real GPU fault isn't deterministic on Apple Silicon).
 #[doc(hidden)]
-pub fn set_status_for_test(cb: &ProtocolObject<dyn MTLCommandBuffer>, status: MTLCommandBufferStatus) {
-    STATUS_OVERRIDE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(FxHashMap::default).insert(cb.handle(), status.0 as u64);
+pub fn set_status_for_test(
+    cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    status: MTLCommandBufferStatus,
+) {
+    STATUS_OVERRIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(FxHashMap::default)
+        .insert(cb.handle(), status.0 as u64);
 }
 
 /// Hands `cb` and its `handlers` to its queue's retirement thread.
 fn send_retire(cb: u64, handlers: Vec<Handler>) {
     let queue = meta::read(cb, |e| e.map_or(0, |e| e.queue));
-    let committed = Committed { cb: retained(cb).expect("a committed buffer"), handlers };
+    let committed = Committed {
+        cb: retained(cb).expect("a committed buffer"),
+        handlers,
+    };
     retiring().get_or_insert_with(FxHashSet::default).insert(cb);
     let _ = retirer(queue).send(committed);
 }
@@ -861,7 +1292,10 @@ pub unsafe trait MTLCommandQueue: NSObjectProtocol {
     }
     fn commandBuffer(&self) -> Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
         let queue = handle_of(self);
-        let mut params = wmt::ObjObjRet { handle: queue, ret: 0 };
+        let mut params = wmt::ObjObjRet {
+            handle: queue,
+            ret: 0,
+        };
         // SAFETY: slot 11 returns an autoreleased command buffer.
         unsafe { table::call(wmt::QUEUE_COMMAND_BUFFER, &mut params) };
         let cb = objc2::from_autoreleased(params.ret)?;
@@ -882,7 +1316,8 @@ pub unsafe trait MTLCommandBuffer: NSObjectProtocol {
         device_of(handle_of(self))
     }
     fn commandQueue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
-        retained(meta::read(handle_of(self), |e| e.map_or(0, |e| e.queue))).expect("a command buffer's queue")
+        retained(meta::read(handle_of(self), |e| e.map_or(0, |e| e.queue)))
+            .expect("a command buffer's queue")
     }
     fn retainedReferences(&self) -> bool {
         true
@@ -913,7 +1348,9 @@ pub unsafe trait MTLCommandBuffer: NSObjectProtocol {
         /// one `MTLDevice`'s queues, which every thread commits to.
         static COMMIT_ORDER: Mutex<()> = Mutex::new(());
         // Commit and retirement in one order. ponytail: one lock for every queue's commits; per queue if it shows.
-        let _order = COMMIT_ORDER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _order = COMMIT_ORDER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut params = wmt::ObjNoRet { handle: cb };
         // SAFETY: slot 12 commits a live buffer.
         unsafe { table::call(wmt::COMMAND_BUFFER_COMMIT, &mut params) };
@@ -929,27 +1366,48 @@ pub unsafe trait MTLCommandBuffer: NSObjectProtocol {
             // Marked under the pending lock, which a presented handler added now checks it under.
             let mut map = pending();
             meta::with(cb, |e| e.committed = true);
-            map.as_mut().and_then(|map| map.remove(&cb)).unwrap_or_default()
+            map.as_mut()
+                .and_then(|map| map.remove(&cb))
+                .unwrap_or_default()
         };
         if !handlers.is_empty() {
             send_retire(cb, handlers);
         }
     }
     fn presentDrawable(&self, drawable: &ProtocolObject<dyn MTLDrawable>) {
-        let mut params = wmt::ObjObjNoRet { handle: handle_of(self), arg: drawable.handle() };
+        let mut params = wmt::ObjObjNoRet {
+            handle: handle_of(self),
+            arg: drawable.handle(),
+        };
         // SAFETY: slot 47 presents a live drawable.
         unsafe { table::call(wmt::COMMAND_BUFFER_PRESENT_DRAWABLE, &mut params) };
         move_presented(handle_of(self), drawable.handle());
     }
-    fn presentDrawable_afterMinimumDuration(&self, drawable: &ProtocolObject<dyn MTLDrawable>, duration: CFTimeInterval) {
-        let mut params = wmt::ObjObjDoubleNoRet { handle: handle_of(self), arg0: drawable.handle(), arg1: duration };
+    fn presentDrawable_afterMinimumDuration(
+        &self,
+        drawable: &ProtocolObject<dyn MTLDrawable>,
+        duration: CFTimeInterval,
+    ) {
+        let mut params = wmt::ObjObjDoubleNoRet {
+            handle: handle_of(self),
+            arg0: drawable.handle(),
+            arg1: duration,
+        };
         // SAFETY: slot 48 presents a live drawable.
-        unsafe { table::call(wmt::COMMAND_BUFFER_PRESENT_DRAWABLE_AFTER_MINIMUM_DURATION, &mut params) };
+        unsafe {
+            table::call(
+                wmt::COMMAND_BUFFER_PRESENT_DRAWABLE_AFTER_MINIMUM_DURATION,
+                &mut params,
+            )
+        };
         move_presented(handle_of(self), drawable.handle());
     }
     unsafe fn addCompletedHandler(&self, block: MTLCommandBufferHandler) {
         // SAFETY: a live block (objc2's contract).
-        add_pending(handle_of(self), Handler::Completed(unsafe { Kept::from_block(block) }));
+        add_pending(
+            handle_of(self),
+            Handler::Completed(unsafe { Kept::from_block(block) }),
+        );
     }
     /// Returns once the buffer has completed and its completed handlers have run.
     ///
@@ -964,35 +1422,68 @@ pub unsafe trait MTLCommandBuffer: NSObjectProtocol {
         }
         let mut set = retiring();
         while set.as_ref().is_some_and(|s| s.contains(&cb)) {
-            set = RETIRING.1.wait(set).unwrap_or_else(std::sync::PoisonError::into_inner);
+            set = RETIRING
+                .1
+                .wait(set)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
     fn status(&self) -> MTLCommandBufferStatus {
         let cb = handle_of(self);
-        let forced = STATUS_OVERRIDE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|m| m.get(&cb).copied());
-        MTLCommandBufferStatus(forced.unwrap_or_else(|| super::query_u64(wmt::COMMAND_BUFFER_STATUS, cb)) as usize)
+        let forced = STATUS_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|m| m.get(&cb).copied());
+        MTLCommandBufferStatus(
+            forced.unwrap_or_else(|| super::query_u64(wmt::COMMAND_BUFFER_STATUS, cb)) as usize,
+        )
     }
     fn error(&self) -> Option<Retained<NSError>> {
-        let mut params = wmt::ObjObjRet { handle: handle_of(self), ret: 0 };
+        let mut params = wmt::ObjObjRet {
+            handle: handle_of(self),
+            ret: 0,
+        };
         // SAFETY: slot 89 returns an autoreleased error or 0.
         unsafe { table::call(wmt::COMMAND_BUFFER_ERROR, &mut params) };
         NSError::from_autoreleased(params.ret)
     }
     fn blitCommandEncoder(&self) -> Option<Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>> {
-        new_encoder(handle_of(self), wmt::COMMAND_BUFFER_BLIT_COMMAND_ENCODER, None, wmt::BLIT_ENCODE_COMMANDS)
+        new_encoder(
+            handle_of(self),
+            wmt::COMMAND_BUFFER_BLIT_COMMAND_ENCODER,
+            None,
+            wmt::BLIT_ENCODE_COMMANDS,
+        )
     }
     fn renderCommandEncoderWithDescriptor(
         &self,
         render_pass_descriptor: &MTLRenderPassDescriptor,
     ) -> Option<Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>> {
         let info = render_pass_descriptor.info();
-        new_encoder(handle_of(self), wmt::COMMAND_BUFFER_RENDER_COMMAND_ENCODER, Some((&raw const info) as u64), wmt::RENDER_ENCODE_COMMANDS)
+        new_encoder(
+            handle_of(self),
+            wmt::COMMAND_BUFFER_RENDER_COMMAND_ENCODER,
+            Some((&raw const info) as u64),
+            wmt::RENDER_ENCODE_COMMANDS,
+        )
     }
-    fn computeCommandEncoder(&self) -> Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> {
-        new_encoder(handle_of(self), wmt::COMMAND_BUFFER_COMPUTE_COMMAND_ENCODER, Some(0), wmt::COMPUTE_ENCODE_COMMANDS)
+    fn computeCommandEncoder(
+        &self,
+    ) -> Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> {
+        new_encoder(
+            handle_of(self),
+            wmt::COMMAND_BUFFER_COMPUTE_COMMAND_ENCODER,
+            Some(0),
+            wmt::COMPUTE_ENCODE_COMMANDS,
+        )
     }
     fn encodeWaitForEvent_value(&self, event: &ProtocolObject<dyn MTLEvent>, value: u64) {
-        let mut params = wmt::ObjObjU64NoRet { handle: handle_of(self), arg0: event.handle(), arg1: value };
+        let mut params = wmt::ObjObjU64NoRet {
+            handle: handle_of(self),
+            arg0: event.handle(),
+            arg1: value,
+        };
         // SAFETY: slot 102 on a live buffer and event.
         unsafe { table::call(wmt::COMMAND_BUFFER_ENCODE_WAIT_FOR_EVENT, &mut params) };
     }
@@ -1020,11 +1511,17 @@ fn gpu_time(cb: u64, which: u64) -> CFTimeInterval {
 fn move_presented(cb: u64, drawable: u64) {
     let mut map = pending();
     meta::with(drawable, |e| e.presented_by = cb);
-    let handlers = map.as_mut().and_then(|map| map.remove(&drawable)).unwrap_or_default();
+    let handlers = map
+        .as_mut()
+        .and_then(|map| map.remove(&drawable))
+        .unwrap_or_default();
     for handler in handlers {
         if let Handler::Presented(_, h) = handler {
             keep_drawable(drawable);
-            map.get_or_insert_with(FxHashMap::default).entry(cb).or_default().push(Handler::Presented(drawable, h));
+            map.get_or_insert_with(FxHashMap::default)
+                .entry(cb)
+                .or_default()
+                .push(Handler::Presented(drawable, h));
         }
     }
 }
@@ -1047,12 +1544,18 @@ pub unsafe trait MTLDrawable: NSObjectProtocol {
         let mut map = pending();
         let cb = meta::read(drawable, |e| e.map_or(0, |e| e.presented_by));
         if cb == 0 {
-            map.get_or_insert_with(FxHashMap::default).entry(drawable).or_default().push(Handler::Presented(drawable, handler));
+            map.get_or_insert_with(FxHashMap::default)
+                .entry(drawable)
+                .or_default()
+                .push(Handler::Presented(drawable, handler));
             return;
         }
         keep_drawable(drawable);
         if !meta::read(cb, |e| e.is_some_and(|e| e.committed)) {
-            map.get_or_insert_with(FxHashMap::default).entry(cb).or_default().push(Handler::Presented(drawable, handler));
+            map.get_or_insert_with(FxHashMap::default)
+                .entry(cb)
+                .or_default()
+                .push(Handler::Presented(drawable, handler));
             return;
         }
         drop(map);

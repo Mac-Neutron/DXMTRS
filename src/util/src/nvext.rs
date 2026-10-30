@@ -8,7 +8,11 @@ static DXMT_NVEXT_GUID: [u8; 16] = [
 
 #[cfg(windows)]
 unsafe extern "system" {
-    fn DXGIGetDebugInterface1(flags: u32, riid: *const [u8; 16], debug: *mut *mut core::ffi::c_void) -> i32;
+    fn DXGIGetDebugInterface1(
+        flags: u32,
+        riid: *const [u8; 16],
+        debug: *mut *mut core::ffi::c_void,
+    ) -> i32;
 }
 
 #[cfg(windows)]

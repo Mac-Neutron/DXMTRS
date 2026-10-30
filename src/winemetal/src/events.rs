@@ -4,8 +4,9 @@ use core::ffi::{c_char, c_void};
 
 use winemetal_wire::{
     UnixcallBootstrap, UnixcallGenericObjNoret, UnixcallGenericObjObjRet, UnixcallGenericObjRet,
-    UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret, UnixcallMtldeviceNewsharedeventwithmachport,
-    UnixcallMtlsharedeventCreatemachport, UnixcallMtlsharedeventSetevent, UnixcallMtlsharedeventSeteventatvalues,
+    UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret,
+    UnixcallMtldeviceNewsharedeventwithmachport, UnixcallMtlsharedeventCreatemachport,
+    UnixcallMtlsharedeventSetevent, UnixcallMtlsharedeventSeteventatvalues,
     UnixcallMtlsharedeventWaituntilsignaledvalue, slot,
 };
 

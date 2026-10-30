@@ -7,10 +7,12 @@
 //! dual-GPU divergence, which needs graphics switching to observe.
 
 use mtld3d_shared::mtl::PresentDebugFlags;
-use crate::mtl::objc2_metal::MTLDevice;
 
 use super::{DeviceCaps, create_command_queue, default_device_info, is_paravirtual_name};
-use crate::metal::handle::{IntoRetained, ReleaseRetain};
+use crate::{
+    metal::handle::{IntoRetained, ReleaseRetain},
+    mtl::objc2_metal::MTLDevice,
+};
 
 /// Retires the presenter and drops the retains of one `DeviceCaps`, as the destroy thunk does.
 ///

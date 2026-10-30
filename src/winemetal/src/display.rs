@@ -3,9 +3,10 @@
 use winemetal_wire::{
     UnixcallCreateMetalViewFromHwnd, UnixcallGenericObjConstptrNoret, UnixcallGenericObjNoret,
     UnixcallGenericObjObjNoret, UnixcallGenericObjObjObjNoret, UnixcallGenericObjObjObjUint64Ret,
-    UnixcallGenericObjObjRet, UnixcallGenericObjPtrNoret, UnixcallGenericObjRet, UnixcallGenericObjUint64Ret,
-    UnixcallGenericObjUint64Uint64Ret, UnixcallQueryDisplaySetting, UnixcallQueryDisplaySettingForLayer,
-    UnixcallUpdateDisplaySetting, WMTDisplayDescription, WMTEDRValue, WMTHDRMetadata, WMTLayerProps, slot,
+    UnixcallGenericObjObjRet, UnixcallGenericObjPtrNoret, UnixcallGenericObjRet,
+    UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret, UnixcallQueryDisplaySetting,
+    UnixcallQueryDisplaySettingForLayer, UnixcallUpdateDisplaySetting, WMTDisplayDescription,
+    WMTEDRValue, WMTHDRMetadata, WMTLayerProps, slot,
 };
 
 use crate::transport::{call, low_half, mem_ptr};

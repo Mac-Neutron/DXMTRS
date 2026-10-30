@@ -9,13 +9,13 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+use mtld3d_shared::mtl::ColorSpacePolicy;
 use mtld3d_shared::{
     MetalHandle, SetCursorOverlayParams,
     mtl::ClientSurfaceRequest,
     mtl_handle::{CAMetalLayerKind, MTLDeviceKind, NSViewKind},
 };
-#[cfg(test)]
-use mtld3d_shared::mtl::ColorSpacePolicy;
 
 use crate::mtl::{
     objc2::runtime::ProtocolObject,
@@ -47,8 +47,16 @@ pub struct PresentPacing {
 }
 
 fn min_present_duration(pacing: &PresentPacing) -> f64 {
-    let vsync = if pacing.vsync_requested { 1.0 / PANEL_HZ } else { 0.0 };
-    let cap = if pacing.max_fps > 0 { 1.0 / f64::from(pacing.max_fps) } else { 0.0 };
+    let vsync = if pacing.vsync_requested {
+        1.0 / PANEL_HZ
+    } else {
+        0.0
+    };
+    let cap = if pacing.max_fps > 0 {
+        1.0 / f64::from(pacing.max_fps)
+    } else {
+        0.0
+    };
     vsync.max(cap)
 }
 
@@ -84,7 +92,11 @@ pub struct DisplayCaps {
 pub fn attach_metal_layer(
     device_handle: MetalHandle<MTLDeviceKind>,
     request: LayerAttachRequest,
-) -> Option<(MetalHandle<NSViewKind>, MetalHandle<CAMetalLayerKind>, DisplayCaps)> {
+) -> Option<(
+    MetalHandle<NSViewKind>,
+    MetalHandle<CAMetalLayerKind>,
+    DisplayCaps,
+)> {
     let LayerAttachRequest {
         hwnd,
         width,
@@ -103,7 +115,8 @@ pub fn attach_metal_layer(
         return None;
     }
     // SAFETY: a live device handle from the PE side.
-    let device = unsafe { ProtocolObject::<dyn MTLDevice>::from_handle(handle_at(device_handle.raw())) };
+    let device =
+        unsafe { ProtocolObject::<dyn MTLDevice>::from_handle(handle_at(device_handle.raw())) };
     let Some((view, layer)) = create_metal_view(hwnd, device) else {
         log::warn!(target: crate::LOG_TARGET, "present: winemetal made no view for window {hwnd:#x}");
         return None;
@@ -113,10 +126,15 @@ pub fn attach_metal_layer(
     layer.setOpaque(true);
     layer.setFramebufferOnly(true);
     layer.setDisplaySyncEnabled(false);
-    layer.setDrawableSize(CGSize::new(f64::from(width.max(1)), f64::from(height.max(1))));
+    layer.setDrawableSize(CGSize::new(
+        f64::from(width.max(1)),
+        f64::from(height.max(1)),
+    ));
     layer.set_srgb();
     let contents_scale = layer.contentsScale().round();
-    let scale = (1..=8).find(|&n| f64::from(n) >= contents_scale).unwrap_or(8);
+    let scale = (1..=8)
+        .find(|&n| f64::from(n) >= contents_scale)
+        .unwrap_or(8);
     let layer_handle = crate::mtl::objc2::rc::Retained::into_raw(layer) as usize;
     let latches = AttachLatches {
         hwnd,
@@ -147,7 +165,14 @@ pub fn attach_metal_layer(
     let view_handle = unsafe { MetalHandle::new(view_addr as u64) };
     // SAFETY: the layer winemetal just made, as above.
     let layer_handle = unsafe { MetalHandle::new(layer_handle as u64) };
-    Some((view_handle, layer_handle, DisplayCaps { backing_scale: scale, software_cursor_active: false }))
+    Some((
+        view_handle,
+        layer_handle,
+        DisplayCaps {
+            backing_scale: scale,
+            software_cursor_active: false,
+        },
+    ))
 }
 
 /// Unregisters the view's record (the view itself goes at `retire_metal_view`).
@@ -164,13 +189,19 @@ pub fn retire_metal_view(view_handle: MetalHandle<NSViewKind>, record: Option<&A
     }
     if let Some(att) = record {
         // SAFETY: the +1 attach kept on the layer.
-        drop(unsafe { crate::mtl::objc2::rc::Retained::from_raw(att.layer() as *mut CAMetalLayer) });
+        drop(unsafe {
+            crate::mtl::objc2::rc::Retained::from_raw(att.layer() as *mut CAMetalLayer)
+        });
     }
     release_metal_view(handle_at(view_handle.raw()));
 }
 
 /// No client surface under the facade.
-pub const fn present_client_surface(_view_handle: MetalHandle<NSViewKind>, _reasons: ClientSurfaceRequest) {}
+pub const fn present_client_surface(
+    _view_handle: MetalHandle<NSViewKind>,
+    _reasons: ClientSurfaceRequest,
+) {
+}
 
 /// No App Nap activity: the facade's process is the VM's guest (or a loopback test), not a Mac app.
 pub const fn declare_latency_critical_activity() {}
@@ -181,8 +212,14 @@ pub const fn set_cursor_overlay(_params: &SetCursorOverlayParams, _pixels: Optio
 }
 
 /// The pacing a Reset asks for.
-pub fn set_display_sync_enabled(layer_handle: MetalHandle<CAMetalLayerKind>, pacing: &PresentPacing) {
-    if let Some(att) = usize::try_from(layer_handle.raw()).ok().and_then(attachment::find_by_layer) {
+pub fn set_display_sync_enabled(
+    layer_handle: MetalHandle<CAMetalLayerKind>,
+    pacing: &PresentPacing,
+) {
+    if let Some(att) = usize::try_from(layer_handle.raw())
+        .ok()
+        .and_then(attachment::find_by_layer)
+    {
         att.set_pacing_bits(pack_pacing(pacing));
         att.set_min_present_duration(min_present_duration(pacing));
     }
@@ -193,7 +230,9 @@ pub fn host_seconds_to_ns(secs: f64) -> u64 {
     if secs.is_nan() || secs <= 0.0 {
         return 0;
     }
-    core::time::Duration::try_from_secs_f64(secs).map_or(u64::MAX, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+    core::time::Duration::try_from_secs_f64(secs).map_or(u64::MAX, |d| {
+        u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
+    })
 }
 
 /// No cursor overlay to poll.

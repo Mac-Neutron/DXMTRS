@@ -5,8 +5,10 @@
 //! loaded from beside the image. Wine's loader runs under the hardened runtime, which ignores
 //! `DYLD_INSERT_LIBRARIES`, so the image loads the presenter itself, once in each process.
 
-use core::ffi::CStr;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    ffi::CStr,
+    sync::atomic::{AtomicU32, Ordering},
+};
 use std::io::Write;
 
 /// `DXMT_MAX_ANISOTROPY=<1..16>`: the floor on a sampler's `maxAnisotropy`, 0 for none.
@@ -20,7 +22,10 @@ pub static FORCED_MAX_ANISOTROPY: AtomicU32 = AtomicU32::new(0);
 pub fn parse_max_anisotropy(v: Option<&CStr>) -> u32 {
     // SAFETY: a NUL-terminated string.
     let n = v.map_or(0, |v| unsafe { libc::atoi(v.as_ptr()) });
-    u32::try_from(n).ok().filter(|n| (1..=16).contains(n)).unwrap_or(0)
+    u32::try_from(n)
+        .ok()
+        .filter(|n| (1..=16).contains(n))
+        .unwrap_or(0)
 }
 
 /// Whether `MACNEUTRON_PRESENT`'s value `v` asks for the presenter: exactly `"1"`.

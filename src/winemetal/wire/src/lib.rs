@@ -203,12 +203,20 @@ impl WMTTextureInfo {
 
     #[must_use]
     pub const fn mipmap_level_count(&self) -> u32 {
-        bitfield(self.bits, Self::MIPMAP_LEVEL_COUNT_SHIFT, Self::MIPMAP_LEVEL_COUNT_WIDTH)
+        bitfield(
+            self.bits,
+            Self::MIPMAP_LEVEL_COUNT_SHIFT,
+            Self::MIPMAP_LEVEL_COUNT_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn sample_count(&self) -> u32 {
-        bitfield(self.bits, Self::SAMPLE_COUNT_SHIFT, Self::SAMPLE_COUNT_WIDTH)
+        bitfield(
+            self.bits,
+            Self::SAMPLE_COUNT_SHIFT,
+            Self::SAMPLE_COUNT_WIDTH,
+        )
     }
 
     #[must_use]
@@ -1393,7 +1401,11 @@ impl WMTIndirectCommandBufferInfo {
 
     #[must_use]
     pub const fn inherit_buffers(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_BUFFERS_SHIFT, Self::INHERIT_BUFFERS_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_BUFFERS_SHIFT,
+            Self::INHERIT_BUFFERS_WIDTH,
+        )
     }
 
     #[must_use]
@@ -1403,47 +1415,83 @@ impl WMTIndirectCommandBufferInfo {
 
     #[must_use]
     pub const fn inherit_cull_mode(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_CULL_MODE_SHIFT, Self::INHERIT_CULL_MODE_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_CULL_MODE_SHIFT,
+            Self::INHERIT_CULL_MODE_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn inherit_depth_bias(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_DEPTH_BIAS_SHIFT, Self::INHERIT_DEPTH_BIAS_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_DEPTH_BIAS_SHIFT,
+            Self::INHERIT_DEPTH_BIAS_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn inherit_depth_clip_mode(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_DEPTH_CLIP_MODE_SHIFT, Self::INHERIT_DEPTH_CLIP_MODE_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_DEPTH_CLIP_MODE_SHIFT,
+            Self::INHERIT_DEPTH_CLIP_MODE_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn inherit_depth_stencil_state(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_DEPTH_STENCIL_STATE_SHIFT, Self::INHERIT_DEPTH_STENCIL_STATE_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_DEPTH_STENCIL_STATE_SHIFT,
+            Self::INHERIT_DEPTH_STENCIL_STATE_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn inherit_front_facing(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_FRONT_FACING_SHIFT, Self::INHERIT_FRONT_FACING_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_FRONT_FACING_SHIFT,
+            Self::INHERIT_FRONT_FACING_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn inherit_fill_mode(&self) -> u32 {
-        bitfield(self.bits, Self::INHERIT_FILL_MODE_SHIFT, Self::INHERIT_FILL_MODE_WIDTH)
+        bitfield(
+            self.bits,
+            Self::INHERIT_FILL_MODE_SHIFT,
+            Self::INHERIT_FILL_MODE_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn support_ray_tracing(&self) -> u32 {
-        bitfield(self.bits, Self::SUPPORT_RAY_TRACING_SHIFT, Self::SUPPORT_RAY_TRACING_WIDTH)
+        bitfield(
+            self.bits,
+            Self::SUPPORT_RAY_TRACING_SHIFT,
+            Self::SUPPORT_RAY_TRACING_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn support_dynamic_attribute_stride(&self) -> u32 {
-        bitfield(self.bits, Self::SUPPORT_DYNAMIC_ATTRIBUTE_STRIDE_SHIFT, Self::SUPPORT_DYNAMIC_ATTRIBUTE_STRIDE_WIDTH)
+        bitfield(
+            self.bits,
+            Self::SUPPORT_DYNAMIC_ATTRIBUTE_STRIDE_SHIFT,
+            Self::SUPPORT_DYNAMIC_ATTRIBUTE_STRIDE_WIDTH,
+        )
     }
 
     #[must_use]
     pub const fn support_color_attachment_mapping(&self) -> u32 {
-        bitfield(self.bits, Self::SUPPORT_COLOR_ATTACHMENT_MAPPING_SHIFT, Self::SUPPORT_COLOR_ATTACHMENT_MAPPING_WIDTH)
+        bitfield(
+            self.bits,
+            Self::SUPPORT_COLOR_ATTACHMENT_MAPPING_SHIFT,
+            Self::SUPPORT_COLOR_ATTACHMENT_MAPPING_WIDTH,
+        )
     }
 }
 

@@ -1,5 +1,4 @@
-use objc2::rc::Retained;
-use objc2::runtime::NSObject;
+use objc2::{rc::Retained, runtime::NSObject};
 use objc2_foundation::NSArray;
 use winemetal_wire::{MemPtr, UnixcallEnumerate, UnixcallGenericObjUint64Uint64Ret};
 
@@ -18,7 +17,9 @@ fn enumerate(array: &NSArray<NSObject>, start: u64, size: u64, buffer: bool) -> 
         enumerable: handle(core::ptr::from_ref(array)),
         start,
         buffer_size: size,
-        buffer: MemPtr { ptr: if buffer { handle(out.as_mut_ptr()) } else { 0 } },
+        buffer: MemPtr {
+            ptr: if buffer { handle(out.as_mut_ptr()) } else { 0 },
+        },
         ret_read: FILL,
     };
     // SAFETY: a params block of slot 91's, over a live array and a buffer of 4.
@@ -36,8 +37,14 @@ fn array_of(n: usize) -> (Retained<NSArray<NSObject>>, Vec<u64>) {
 #[test]
 fn enumerate_reads_the_window() {
     let (array, items) = array_of(5);
-    assert_eq!(enumerate(&array, 1, 2, true), (2, [items[1], items[2], FILL, FILL]));
-    assert_eq!(enumerate(&array, 4, 2, true), (1, [items[4], FILL, FILL, FILL]));
+    assert_eq!(
+        enumerate(&array, 1, 2, true),
+        (2, [items[1], items[2], FILL, FILL])
+    );
+    assert_eq!(
+        enumerate(&array, 4, 2, true),
+        (1, [items[4], FILL, FILL, FILL])
+    );
     assert_eq!(enumerate(&array, 5, 2, true), (0, [FILL; 4]));
 }
 
@@ -57,7 +64,11 @@ fn enumerate_null_buffer_writes_nothing() {
 #[test]
 fn property_of_nil_or_unknown_is_zero() {
     for arg in [0, 1, 2, 3, 99, u64::MAX] {
-        let mut p = UnixcallGenericObjUint64Uint64Ret { handle: 0, arg, ret: FILL };
+        let mut p = UnixcallGenericObjUint64Uint64Ret {
+            handle: 0,
+            arg,
+            ret: FILL,
+        };
         // SAFETY: a params block of slot 130's, with the null handle.
         unsafe { command_buffer_property(core::ptr::from_mut(&mut p).cast()) };
         assert_eq!(p.ret, 0, "arg {arg}");

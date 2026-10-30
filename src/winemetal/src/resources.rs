@@ -2,12 +2,13 @@
 
 use winemetal_wire::{
     UnixcallGenericObjNoret, UnixcallGenericObjObjNoret, UnixcallMtlbufferNewtexture,
-    UnixcallMtldeviceHeapbuffersizeandalign, UnixcallMtldeviceHeaptexturesizeandalign, UnixcallMtldeviceNewbuffer,
-    UnixcallMtldeviceNewdepthstencilstate, UnixcallMtldeviceNewheap, UnixcallMtldeviceNewicb,
-    UnixcallMtldeviceNewresidencyset, UnixcallMtldeviceNewsamplerstate, UnixcallMtldeviceNewtexture,
-    UnixcallMtlheapNewbuffer, UnixcallMtlheapNewtexture, UnixcallMtlresidencysetAddallocations,
-    UnixcallMtltextureNewtextureview, WMTBufferInfo, WMTDepthStencilInfo, WMTHeapInfo, WMTIndirectCommandBufferInfo,
-    WMTSamplerInfo, WMTSizeAndAlign, WMTTextureInfo, WMTTextureSwizzleChannels, slot,
+    UnixcallMtldeviceHeapbuffersizeandalign, UnixcallMtldeviceHeaptexturesizeandalign,
+    UnixcallMtldeviceNewbuffer, UnixcallMtldeviceNewdepthstencilstate, UnixcallMtldeviceNewheap,
+    UnixcallMtldeviceNewicb, UnixcallMtldeviceNewresidencyset, UnixcallMtldeviceNewsamplerstate,
+    UnixcallMtldeviceNewtexture, UnixcallMtlheapNewbuffer, UnixcallMtlheapNewtexture,
+    UnixcallMtlresidencysetAddallocations, UnixcallMtltextureNewtextureview, WMTBufferInfo,
+    WMTDepthStencilInfo, WMTHeapInfo, WMTIndirectCommandBufferInfo, WMTSamplerInfo,
+    WMTSizeAndAlign, WMTTextureInfo, WMTTextureSwizzleChannels, slot,
 };
 
 use crate::transport::{call, mem_ptr, write_if};

@@ -47,7 +47,6 @@ use mtld3d_shared::{
     perf::{NanosSetTimer, PipelineTimings, ShaderTimings},
     tsc::rdtsc,
 };
-use crate::mtl::objc2::rc::autoreleasepool;
 use rustc_hash::FxHashMap;
 
 use super::{
@@ -57,6 +56,7 @@ use super::{
 use crate::{
     draw::{PsSourceView, ShaderRef, VsSourceView},
     metal::handle::IntoRetained,
+    mtl::objc2::rc::autoreleasepool,
 };
 
 pub mod libraries;

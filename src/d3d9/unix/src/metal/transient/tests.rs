@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::mtl::objc2_metal::{MTLBuffer, MTLCreateSystemDefaultDevice};
-
 use super::*;
+use crate::mtl::objc2_metal::{MTLBuffer, MTLCreateSystemDefaultDevice};
 
 fn address(counter: &AtomicU64) -> u64 {
     core::ptr::from_ref(counter) as u64

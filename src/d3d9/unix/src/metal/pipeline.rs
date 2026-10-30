@@ -5,16 +5,19 @@ use mtld3d_shared::{
     mtl::{BlendOperation, VertexFormat, VertexStepFunction},
     mtl_handle::MTLRenderPipelineStateKind,
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLBlendOperation, MTLColorWriteMask, MTLDevice, MTLFunction, MTLPixelFormat,
-    MTLRenderPipelineDescriptor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
-};
 
 use super::texture::{mtl_blend_factor, mtl_pixel_format};
 use crate::{
     LOG_TARGET,
     metal::handle::{IntoRetained, ReleaseRetain},
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLBlendOperation, MTLColorWriteMask, MTLDevice, MTLFunction, MTLPixelFormat,
+            MTLRenderPipelineDescriptor, MTLVertexDescriptor, MTLVertexFormat,
+            MTLVertexStepFunction,
+        },
+    },
 };
 
 /// Build an `MTLRenderPipelineState` from pre-resolved vertex/fragment functions.
@@ -99,8 +102,9 @@ pub fn create_render_pipeline(
         } else {
             format!(" mrt={:#x}", params.extra_present_mask)
         };
-        let label =
-            crate::mtl::objc2_foundation::NSString::from_str(&format!("{vs_name} + {ps_name}{suffix}{mrt}"));
+        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+            "{vs_name} + {ps_name}{suffix}{mrt}"
+        ));
         desc.setLabel(Some(&label));
     }
 

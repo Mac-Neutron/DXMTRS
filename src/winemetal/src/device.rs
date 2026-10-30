@@ -1,8 +1,8 @@
 //! Device discovery and queries.
 
 use winemetal_wire::{
-    UnixcallGenericObjObjRet, UnixcallGenericObjRet, UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret,
-    UnixcallGenericObjUint64Uint64Ret, UnixcallGetOsVersion, slot,
+    UnixcallGenericObjObjRet, UnixcallGenericObjRet, UnixcallGenericObjUint64Noret,
+    UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret, UnixcallGetOsVersion, slot,
 };
 
 use crate::transport::{call, write_if};

@@ -53,7 +53,9 @@ pub struct Entry {
 static TABLE: Mutex<Option<FxHashMap<u64, Entry>>> = Mutex::new(None);
 
 fn lock() -> MutexGuard<'static, Option<FxHashMap<u64, Entry>>> {
-    TABLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    TABLE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A +1 from a slot: the first reference of a new object, or one more of a known one.
@@ -62,7 +64,10 @@ fn lock() -> MutexGuard<'static, Option<FxHashMap<u64, Entry>>> {
 /// to whatever had the address before: a new object there starts from nothing.
 pub fn adopt(handle: u64) {
     let mut table = lock();
-    let entry = table.get_or_insert_with(FxHashMap::default).entry(handle).or_default();
+    let entry = table
+        .get_or_insert_with(FxHashMap::default)
+        .entry(handle)
+        .or_default();
     if entry.refs == 0 {
         *entry = Entry::default();
     }
@@ -82,7 +87,11 @@ pub fn release(handle: u64) -> Option<Entry> {
     let map = table.as_mut()?;
     let entry = map.get_mut(&handle)?;
     entry.refs = entry.refs.saturating_sub(1);
-    if entry.refs == 0 { map.remove(&handle) } else { None }
+    if entry.refs == 0 {
+        map.remove(&handle)
+    } else {
+        None
+    }
 }
 
 /// The facade's count of `handle`'s references (0 for an object it holds none of).
@@ -96,7 +105,10 @@ pub fn refs(handle: u64) -> usize {
 /// Made if the object is unknown (one winemetal made, such as a drawable's texture).
 pub fn with<R>(handle: u64, f: impl FnOnce(&mut Entry) -> R) -> R {
     let mut table = lock();
-    f(table.get_or_insert_with(FxHashMap::default).entry(handle).or_default())
+    f(table
+        .get_or_insert_with(FxHashMap::default)
+        .entry(handle)
+        .or_default())
 }
 
 /// `handle`'s entry's fields, read.

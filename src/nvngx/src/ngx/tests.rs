@@ -1,5 +1,6 @@
-use super::line;
 use std::io::{self, Write};
+
+use super::line;
 
 /// A sink every write fails on, as a game's stderr pipe whose reader has gone.
 struct Broken;
@@ -17,7 +18,10 @@ impl Write for Broken {
 #[test]
 fn a_line_is_prefixed() {
     let mut out = Vec::new();
-    line(&mut out, format_args!("DLSS {}x{} answered by MetalFX", 1280, 720));
+    line(
+        &mut out,
+        format_args!("DLSS {}x{} answered by MetalFX", 1280, 720),
+    );
     assert_eq!(out, b"macneutron-dlss: DLSS 1280x720 answered by MetalFX\n");
 }
 

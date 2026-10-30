@@ -139,14 +139,20 @@ fn extract_unix_lib_by_machine(
         arch => panic!("no COFF machine known for {arch}"),
     };
     let path = format!("{out_dir}/unix_lib.o");
-    let instances = listing.lines().filter(|member| *member == "unix_lib.o").count();
+    let instances = listing
+        .lines()
+        .filter(|member| *member == "unix_lib.o")
+        .count();
     for instance in 1..=instances {
         let status = std::process::Command::new(llvm_ar)
             .current_dir(out_dir)
             .args(["xN", &instance.to_string(), archive, "unix_lib.o"])
             .status()
             .expect("ar failed");
-        assert!(status.success(), "extracting unix_lib.o #{instance} from {archive} failed");
+        assert!(
+            status.success(),
+            "extracting unix_lib.o #{instance} from {archive} failed"
+        );
         let header = std::fs::read(&path).unwrap_or_else(|err| panic!("{path}: {err}"));
         if header.len() >= 2 && u16::from_le_bytes([header[0], header[1]]) == wanted {
             return path;

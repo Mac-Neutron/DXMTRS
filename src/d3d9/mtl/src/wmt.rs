@@ -8,7 +8,6 @@
 //! (`align(8)`), as this target's `u64` aligns to 4 (MacNeutron's `mtld3d-layout32-check.sh`
 //! compares the two builds).
 
-
 /// A winemetal object.
 ///
 /// On macOS the Objective-C object's address, in the VM's guest a handle the guest picked.
@@ -36,10 +35,14 @@ impl<T> Ptr<T> {
     }
 
     #[must_use]
-    pub const fn null() -> Self { Self::new(core::ptr::null()) }
+    pub const fn null() -> Self {
+        Self::new(core::ptr::null())
+    }
 
     #[must_use]
-    pub const fn get(&self) -> *mut T { self.ptr }
+    pub const fn get(&self) -> *mut T {
+        self.ptr
+    }
 }
 
 // Slots: the entries of winemetal.so's `__wine_unix_call_funcs`, numbered as the VM guest's catalog does.
@@ -129,35 +132,80 @@ pub const SLOTS: &[(u32, &str)] = &[
     (NSARRAY_OBJECT, "_NSArray_object"),
     (NSARRAY_COUNT, "_NSArray_count"),
     (COPY_ALL_DEVICES, "_MTLCopyAllDevices"),
-    (DEVICE_RECOMMENDED_MAX_WORKING_SET_SIZE, "_MTLDevice_recommendedMaxWorkingSetSize"),
-    (DEVICE_CURRENT_ALLOCATED_SIZE, "_MTLDevice_currentAllocatedSize"),
+    (
+        DEVICE_RECOMMENDED_MAX_WORKING_SET_SIZE,
+        "_MTLDevice_recommendedMaxWorkingSetSize",
+    ),
+    (
+        DEVICE_CURRENT_ALLOCATED_SIZE,
+        "_MTLDevice_currentAllocatedSize",
+    ),
     (DEVICE_NAME, "_MTLDevice_name"),
     (NSSTRING_GET_CSTRING, "_NSString_getCString"),
-    (NSSTRING_LENGTH_OF_BYTES, "_NSString_lengthOfBytesUsingEncoding"),
+    (
+        NSSTRING_LENGTH_OF_BYTES,
+        "_NSString_lengthOfBytesUsingEncoding",
+    ),
     (DEVICE_NEW_COMMAND_QUEUE, "_MTLDevice_newCommandQueue"),
     (AUTORELEASE_POOL_ALLOC_INIT, "_NSAutoreleasePool_alloc_init"),
     (QUEUE_COMMAND_BUFFER, "_MTLCommandQueue_commandBuffer"),
     (COMMAND_BUFFER_COMMIT, "_MTLCommandBuffer_commit"),
-    (COMMAND_BUFFER_WAIT_UNTIL_COMPLETED, "_MTLCommandBuffer_waitUntilCompleted"),
+    (
+        COMMAND_BUFFER_WAIT_UNTIL_COMPLETED,
+        "_MTLCommandBuffer_waitUntilCompleted",
+    ),
     (COMMAND_BUFFER_STATUS, "_MTLCommandBuffer_status"),
     (DEVICE_NEW_SHARED_EVENT, "_MTLDevice_newSharedEvent"),
     (DEVICE_NEW_BUFFER, "_MTLDevice_newBuffer"),
     (DEVICE_NEW_SAMPLER_STATE, "_MTLDevice_newSamplerState"),
-    (DEVICE_NEW_DEPTH_STENCIL_STATE, "_MTLDevice_newDepthStencilState"),
+    (
+        DEVICE_NEW_DEPTH_STENCIL_STATE,
+        "_MTLDevice_newDepthStencilState",
+    ),
     (DEVICE_NEW_TEXTURE, "_MTLDevice_newTexture"),
     (TEXTURE_NEW_TEXTURE_VIEW, "_MTLTexture_newTextureView"),
-    (DEVICE_MIN_LINEAR_TEXTURE_ALIGNMENT, "_MTLDevice_minimumLinearTextureAlignmentForPixelFormat"),
+    (
+        DEVICE_MIN_LINEAR_TEXTURE_ALIGNMENT,
+        "_MTLDevice_minimumLinearTextureAlignmentForPixelFormat",
+    ),
     (LIBRARY_NEW_FUNCTION, "_MTLLibrary_newFunction"),
     (NSOBJECT_DESCRIPTION, "_NSObject_description"),
-    (DEVICE_NEW_COMPUTE_PIPELINE_STATE, "_MTLDevice_newComputePipelineState"),
-    (COMMAND_BUFFER_BLIT_COMMAND_ENCODER, "_MTLCommandBuffer_blitCommandEncoder"),
-    (COMMAND_BUFFER_COMPUTE_COMMAND_ENCODER, "_MTLCommandBuffer_computeCommandEncoder"),
-    (COMMAND_BUFFER_RENDER_COMMAND_ENCODER, "_MTLCommandBuffer_renderCommandEncoder"),
-    (COMMAND_ENCODER_END_ENCODING, "_MTLCommandEncoder_endEncoding"),
-    (DEVICE_NEW_RENDER_PIPELINE_STATE, "_MTLDevice_newRenderPipelineState"),
-    (BLIT_ENCODE_COMMANDS, "_MTLBlitCommandEncoder_encodeCommands"),
-    (COMPUTE_ENCODE_COMMANDS, "_MTLComputeCommandEncoder_encodeCommands"),
-    (RENDER_ENCODE_COMMANDS, "_MTLRenderCommandEncoder_encodeCommands"),
+    (
+        DEVICE_NEW_COMPUTE_PIPELINE_STATE,
+        "_MTLDevice_newComputePipelineState",
+    ),
+    (
+        COMMAND_BUFFER_BLIT_COMMAND_ENCODER,
+        "_MTLCommandBuffer_blitCommandEncoder",
+    ),
+    (
+        COMMAND_BUFFER_COMPUTE_COMMAND_ENCODER,
+        "_MTLCommandBuffer_computeCommandEncoder",
+    ),
+    (
+        COMMAND_BUFFER_RENDER_COMMAND_ENCODER,
+        "_MTLCommandBuffer_renderCommandEncoder",
+    ),
+    (
+        COMMAND_ENCODER_END_ENCODING,
+        "_MTLCommandEncoder_endEncoding",
+    ),
+    (
+        DEVICE_NEW_RENDER_PIPELINE_STATE,
+        "_MTLDevice_newRenderPipelineState",
+    ),
+    (
+        BLIT_ENCODE_COMMANDS,
+        "_MTLBlitCommandEncoder_encodeCommands",
+    ),
+    (
+        COMPUTE_ENCODE_COMMANDS,
+        "_MTLComputeCommandEncoder_encodeCommands",
+    ),
+    (
+        RENDER_ENCODE_COMMANDS,
+        "_MTLRenderCommandEncoder_encodeCommands",
+    ),
     (TEXTURE_PIXEL_FORMAT, "_MTLTexture_pixelFormat"),
     (TEXTURE_WIDTH, "_MTLTexture_width"),
     (TEXTURE_HEIGHT, "_MTLTexture_height"),
@@ -166,20 +214,44 @@ pub const SLOTS: &[(u32, &str)] = &[
     (TEXTURE_MIPMAP_LEVEL_COUNT, "_MTLTexture_mipmapLevelCount"),
     (TEXTURE_REPLACE_REGION, "_MTLTexture_replaceRegion"),
     (BUFFER_DID_MODIFY_RANGE, "_MTLBuffer_didModifyRange"),
-    (COMMAND_BUFFER_PRESENT_DRAWABLE, "_MTLCommandBuffer_presentDrawable"),
-    (COMMAND_BUFFER_PRESENT_DRAWABLE_AFTER_MINIMUM_DURATION, "_MTLCommandBuffer_presentDrawableAfterMinimumDuration"),
+    (
+        COMMAND_BUFFER_PRESENT_DRAWABLE,
+        "_MTLCommandBuffer_presentDrawable",
+    ),
+    (
+        COMMAND_BUFFER_PRESENT_DRAWABLE_AFTER_MINIMUM_DURATION,
+        "_MTLCommandBuffer_presentDrawableAfterMinimumDuration",
+    ),
     (DEVICE_SUPPORTS_FAMILY, "_MTLDevice_supportsFamily"),
-    (DEVICE_SUPPORTS_TEXTURE_SAMPLE_COUNT, "_MTLDevice_supportsTextureSampleCount"),
+    (
+        DEVICE_SUPPORTS_TEXTURE_SAMPLE_COUNT,
+        "_MTLDevice_supportsTextureSampleCount",
+    ),
     (DEVICE_HAS_UNIFIED_MEMORY, "_MTLDevice_hasUnifiedMemory"),
-    (CAPTURE_MANAGER_SHARED, "_MTLCaptureManager_sharedCaptureManager"),
-    (CAPTURE_MANAGER_START_CAPTURE, "_MTLCaptureManager_startCapture"),
-    (CAPTURE_MANAGER_STOP_CAPTURE, "_MTLCaptureManager_stopCapture"),
+    (
+        CAPTURE_MANAGER_SHARED,
+        "_MTLCaptureManager_sharedCaptureManager",
+    ),
+    (
+        CAPTURE_MANAGER_START_CAPTURE,
+        "_MTLCaptureManager_startCapture",
+    ),
+    (
+        CAPTURE_MANAGER_STOP_CAPTURE,
+        "_MTLCaptureManager_stopCapture",
+    ),
     (DEVICE_NEW_SPATIAL_SCALER, "_MTLDevice_newSpatialScaler"),
-    (COMMAND_BUFFER_ENCODE_SPATIAL_SCALE, "_MTLCommandBuffer_encodeSpatialScale"),
+    (
+        COMMAND_BUFFER_ENCODE_SPATIAL_SCALE,
+        "_MTLCommandBuffer_encodeSpatialScale",
+    ),
     (NSSTRING_ALLOC_INIT, "_NSString_alloc_init"),
     (DRAWABLE_TEXTURE, "_MetalDrawable_texture"),
     (LAYER_NEXT_DRAWABLE, "_MetalLayer_nextDrawable"),
-    (DEVICE_SUPPORTS_FX_SPATIAL_SCALER, "_MTLDevice_supportsFXSpatialScaler"),
+    (
+        DEVICE_SUPPORTS_FX_SPATIAL_SCALER,
+        "_MTLDevice_supportsFXSpatialScaler",
+    ),
     (LAYER_SET_PROPS, "_MetalLayer_setProps"),
     (LAYER_GET_PROPS, "_MetalLayer_getProps"),
     (CREATE_METAL_VIEW_FROM_HWND, "_CreateMetalViewFromHWND"),
@@ -187,65 +259,140 @@ pub const SLOTS: &[(u32, &str)] = &[
     (COMMAND_ENCODER_SET_LABEL, "_MTLCommandEncoder_setLabel"),
     (COMMAND_BUFFER_ERROR, "_MTLCommandBuffer_error"),
     (LAYER_SET_COLOR_SPACE, "_MetalLayer_setColorSpace"),
-    (COMMAND_BUFFER_ENCODE_WAIT_FOR_EVENT, "_MTLCommandBuffer_encodeWaitForEvent"),
+    (
+        COMMAND_BUFFER_ENCODE_WAIT_FOR_EVENT,
+        "_MTLCommandBuffer_encodeWaitForEvent",
+    ),
     (SHARED_EVENT_SIGNAL_VALUE, "_MTLSharedEvent_signalValue"),
     (DEVICE_REGISTRY_ID, "_MTLDevice_registryID"),
     (COMMAND_BUFFER_PROPERTY, "_MTLCommandBuffer_property"),
-    (DEVICE_NEW_LIBRARY_WITH_SOURCE, "_MTLDevice_newLibraryWithSource"),
-    (DEVICE_NEW_RENDER_PIPELINE_STATE_WITH_VERTEX_DESCRIPTOR, "_MTLDevice_newRenderPipelineStateWithVertexDescriptor"),
-    (DEVICE_NEW_LIBRARY_WITH_SOURCE_OPTIONS, "_MTLDevice_newLibraryWithSourceOptions"),
+    (
+        DEVICE_NEW_LIBRARY_WITH_SOURCE,
+        "_MTLDevice_newLibraryWithSource",
+    ),
+    (
+        DEVICE_NEW_RENDER_PIPELINE_STATE_WITH_VERTEX_DESCRIPTOR,
+        "_MTLDevice_newRenderPipelineStateWithVertexDescriptor",
+    ),
+    (
+        DEVICE_NEW_LIBRARY_WITH_SOURCE_OPTIONS,
+        "_MTLDevice_newLibraryWithSourceOptions",
+    ),
 ];
 
 // Generic parameter structs.
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjRet { pub ret: Handle }
+pub struct ObjRet {
+    pub ret: Handle,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjNoRet { pub handle: Handle }
+pub struct ObjNoRet {
+    pub handle: Handle,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjObjRet { pub handle: Handle, pub ret: Handle }
+pub struct ObjObjRet {
+    pub handle: Handle,
+    pub ret: Handle,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjU64ObjRet { pub handle: Handle, pub arg: u64, pub ret: Handle }
+pub struct ObjU64ObjRet {
+    pub handle: Handle,
+    pub arg: u64,
+    pub ret: Handle,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjU64Ret { pub handle: Handle, pub ret: u64 }
+pub struct ObjU64Ret {
+    pub handle: Handle,
+    pub ret: u64,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjU64NoRet { pub handle: Handle, pub arg: u64 }
+pub struct ObjU64NoRet {
+    pub handle: Handle,
+    pub arg: u64,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjU64U64Ret { pub handle: Handle, pub arg: u64, pub ret: u64 }
+pub struct ObjU64U64Ret {
+    pub handle: Handle,
+    pub arg: u64,
+    pub ret: u64,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjObjNoRet { pub handle: Handle, pub arg: Handle }
+pub struct ObjObjNoRet {
+    pub handle: Handle,
+    pub arg: Handle,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjObjDoubleNoRet { pub handle: Handle, pub arg0: Handle, pub arg1: f64 }
+pub struct ObjObjDoubleNoRet {
+    pub handle: Handle,
+    pub arg0: Handle,
+    pub arg1: f64,
+}
 #[repr(C)]
 #[derive(Default)]
-pub struct ObjObjU64NoRet { pub handle: Handle, pub arg0: Handle, pub arg1: u64 }
+pub struct ObjObjU64NoRet {
+    pub handle: Handle,
+    pub arg0: Handle,
+    pub arg1: u64,
+}
 #[repr(C)]
-pub struct ObjPtrNoRet { pub handle: Handle, pub arg: Ptr<core::ffi::c_void> }
+pub struct ObjPtrNoRet {
+    pub handle: Handle,
+    pub arg: Ptr<core::ffi::c_void>,
+}
 #[repr(C)]
-pub struct Memory { pub length: u64, pub ptr: Ptr<core::ffi::c_void> }
+pub struct Memory {
+    pub length: u64,
+    pub ptr: Ptr<core::ffi::c_void>,
+}
 #[repr(C)]
-pub struct ObjConstPtrNoRet { pub handle: Handle, pub arg: Ptr<core::ffi::c_void> }
+pub struct ObjConstPtrNoRet {
+    pub handle: Handle,
+    pub arg: Ptr<core::ffi::c_void>,
+}
 #[repr(C)]
-pub struct ObjCmdNoRet { pub encoder: Handle, pub cmd_head: Ptr<core::ffi::c_void> }
+pub struct ObjCmdNoRet {
+    pub encoder: Handle,
+    pub cmd_head: Ptr<core::ffi::c_void>,
+}
 
 #[repr(C, align(8))]
-pub struct NSStringGetCString { pub str: Handle, pub buffer_ptr: u64, pub max_length: u64, pub encoding: u64, pub ret: u32 }
+pub struct NSStringGetCString {
+    pub str: Handle,
+    pub buffer_ptr: u64,
+    pub max_length: u64,
+    pub encoding: u64,
+    pub ret: u32,
+}
 pub const UTF8_STRING_ENCODING: u64 = 4;
 
 #[repr(C)]
-pub struct NewWithInfo { pub device: Handle, pub info: Ptr<core::ffi::c_void>, pub ret: Handle }
+pub struct NewWithInfo {
+    pub device: Handle,
+    pub info: Ptr<core::ffi::c_void>,
+    pub ret: Handle,
+}
 #[repr(C)]
-pub struct NewWithConstInfo { pub device: Handle, pub info: Ptr<core::ffi::c_void>, pub ret: Handle }
+pub struct NewWithConstInfo {
+    pub device: Handle,
+    pub info: Ptr<core::ffi::c_void>,
+    pub ret: Handle,
+}
 #[repr(C)]
-pub struct NewPipeline { pub device: Handle, pub info: Ptr<core::ffi::c_void>, pub ret_error: Handle, pub ret_pso: Handle }
+pub struct NewPipeline {
+    pub device: Handle,
+    pub info: Ptr<core::ffi::c_void>,
+    pub ret_error: Handle,
+    pub ret_pso: Handle,
+}
 #[repr(C)]
 pub struct NewPipelineVertex {
     pub device: Handle,
@@ -255,7 +402,13 @@ pub struct NewPipelineVertex {
     pub ret_pso: Handle,
 }
 #[repr(C)]
-pub struct NewLibrarySource { pub device: Handle, pub source: Ptr<u8>, pub length: u64, pub ret_error: Handle, pub ret_library: Handle }
+pub struct NewLibrarySource {
+    pub device: Handle,
+    pub source: Ptr<u8>,
+    pub length: u64,
+    pub ret_error: Handle,
+    pub ret_library: Handle,
+}
 #[repr(C)]
 pub struct NewLibrarySourceOptions {
     pub device: Handle,
@@ -268,10 +421,20 @@ pub struct NewLibrarySourceOptions {
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct CompileOptions { pub language_version: u64, pub preserve_invariance: u8, pub math_mode: u8, pub padding: [u8; 6] }
+pub struct CompileOptions {
+    pub language_version: u64,
+    pub preserve_invariance: u8,
+    pub math_mode: u8,
+    pub padding: [u8; 6],
+}
 
 #[repr(C)]
-pub struct BufferInfo { pub length: u64, pub options: u64, pub memory: Ptr<core::ffi::c_void>, pub gpu_address: u64 }
+pub struct BufferInfo {
+    pub length: u64,
+    pub options: u64,
+    pub memory: Ptr<core::ffi::c_void>,
+    pub gpu_address: u64,
+}
 
 #[repr(C)]
 #[derive(Default)]
@@ -335,13 +498,21 @@ pub struct TextureInfo {
 impl TextureInfo {
     #[must_use]
     pub const fn pack(texture_type: u32, mip_count: u32, sample_count: u32, usage: u32) -> u32 {
-        (texture_type & 0xff) | ((mip_count & 0xff) << 8) | ((sample_count & 0xff) << 16) | ((usage & 0xff) << 24)
+        (texture_type & 0xff)
+            | ((mip_count & 0xff) << 8)
+            | ((sample_count & 0xff) << 16)
+            | ((usage & 0xff) << 24)
     }
 }
 
 #[repr(C)]
 #[derive(Default)]
-pub struct TextureSwizzleChannels { pub r: u8, pub g: u8, pub b: u8, pub a: u8 }
+pub struct TextureSwizzleChannels {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
 
 #[repr(C)]
 pub struct NewTextureView {
@@ -402,12 +573,23 @@ pub struct RenderPipelineInfo {
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VertexAttributeInfo { pub format: u32, pub offset: u32, pub buffer_index: u32 }
+pub struct VertexAttributeInfo {
+    pub format: u32,
+    pub offset: u32,
+    pub buffer_index: u32,
+}
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VertexBufferLayoutInfo { pub stride: u32, pub step_function: u32, pub step_rate: u32 }
+pub struct VertexBufferLayoutInfo {
+    pub stride: u32,
+    pub step_function: u32,
+    pub step_rate: u32,
+}
 #[repr(C)]
-pub struct VertexDescriptorInfo { pub attributes: [VertexAttributeInfo; 31], pub layouts: [VertexBufferLayoutInfo; 31] }
+pub struct VertexDescriptorInfo {
+    pub attributes: [VertexAttributeInfo; 31],
+    pub layouts: [VertexBufferLayoutInfo; 31],
+}
 
 #[repr(C)]
 pub struct ComputePipelineInfo {
@@ -423,7 +605,12 @@ pub struct ComputePipelineInfo {
 
 #[repr(C)]
 #[derive(Default)]
-pub struct ClearColor { pub r: f64, pub g: f64, pub b: f64, pub a: f64 }
+pub struct ClearColor {
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub a: f64,
+}
 
 #[repr(C)]
 #[derive(Default)]
@@ -466,10 +653,20 @@ pub struct StencilAttachmentInfo {
 }
 
 #[repr(C)]
-pub struct RenderPassSampleBufferInfo { pub sample_buffer: Handle, pub end_of_fragment_sample_index: u64, pub start_of_vertex_sample_index: u64 }
+pub struct RenderPassSampleBufferInfo {
+    pub sample_buffer: Handle,
+    pub end_of_fragment_sample_index: u64,
+    pub start_of_vertex_sample_index: u64,
+}
 
 impl Default for RenderPassSampleBufferInfo {
-    fn default() -> Self { Self { sample_buffer: 0, end_of_fragment_sample_index: !0, start_of_vertex_sample_index: !0 } }
+    fn default() -> Self {
+        Self {
+            sample_buffer: 0,
+            end_of_fragment_sample_index: !0,
+            start_of_vertex_sample_index: !0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -491,10 +688,18 @@ pub struct RenderPassInfo {
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct Origin { pub x: u64, pub y: u64, pub z: u64 }
+pub struct Origin {
+    pub x: u64,
+    pub y: u64,
+    pub z: u64,
+}
 #[repr(C)]
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub struct Size { pub width: u64, pub height: u64, pub depth: u64 }
+pub struct Size {
+    pub width: u64,
+    pub height: u64,
+    pub depth: u64,
+}
 
 #[repr(C)]
 pub struct ReplaceRegion {
@@ -508,7 +713,6 @@ pub struct ReplaceRegion {
     pub bytes_per_image: u64,
 }
 
-
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct SpatialScalerInfo {
@@ -520,11 +724,22 @@ pub struct SpatialScalerInfo {
     pub output_height: u32,
 }
 #[repr(C)]
-pub struct SpatialScale { pub cmdbuf: Handle, pub scaler: Handle, pub color: Handle, pub output: Handle, pub fence: Handle }
+pub struct SpatialScale {
+    pub cmdbuf: Handle,
+    pub scaler: Handle,
+    pub color: Handle,
+    pub output: Handle,
+    pub fence: Handle,
+}
 
 #[repr(C)]
 #[derive(Default)]
-pub struct CreateMetalView { pub hwnd: u64, pub device: Handle, pub ret_view: Handle, pub ret_layer: Handle }
+pub struct CreateMetalView {
+    pub hwnd: u64,
+    pub device: Handle,
+    pub ret_view: Handle,
+    pub ret_layer: Handle,
+}
 
 #[repr(C)]
 #[derive(Default)]

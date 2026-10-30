@@ -1,11 +1,9 @@
-use super::*;
-
 use core::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::mpsc, thread, time::Duration};
 
 use objc2_core_foundation::{CFRetained, CFRunLoop};
+
+use super::*;
 
 const LIMIT: Duration = Duration::from_secs(5);
 
@@ -44,7 +42,10 @@ fn start_after_destroy_returns() {
     // SAFETY: the handle's own destroy.
     unsafe { Listener::destroy(Listener::from_handle(h).unwrap()) };
     let (t, returned) = start_on_thread(h);
-    assert!(returned.recv_timeout(LIMIT).is_ok(), "the start ran a loop nobody stops");
+    assert!(
+        returned.recv_timeout(LIMIT).is_ok(),
+        "the start ran a loop nobody stops"
+    );
     t.join().unwrap();
 }
 
@@ -54,8 +55,12 @@ fn first_word_is_the_loop_and_a_second_start_returns() {
     let (tx, rx) = mpsc::channel();
     let (done, returned) = mpsc::channel();
     let t = thread::spawn(move || {
-        tx.send(CFRetained::as_ptr(&CFRunLoop::current().unwrap()).as_ptr().expose_provenance())
-            .unwrap();
+        tx.send(
+            CFRetained::as_ptr(&CFRunLoop::current().unwrap())
+                .as_ptr()
+                .expose_provenance(),
+        )
+        .unwrap();
         // SAFETY: a listener the test made.
         unsafe { Listener::start(Listener::from_handle(h).unwrap()) };
         done.send(()).unwrap();
@@ -66,7 +71,10 @@ fn first_word_is_the_loop_and_a_second_start_returns() {
     unsafe { Listener::start(Listener::from_handle(h).unwrap()) };
     // SAFETY: the handle's own destroy.
     unsafe { Listener::destroy(Listener::from_handle(h).unwrap()) };
-    assert!(returned.recv_timeout(LIMIT).is_ok(), "the destroy did not stop the loop");
+    assert!(
+        returned.recv_timeout(LIMIT).is_ok(),
+        "the destroy did not stop the loop"
+    );
     t.join().unwrap();
 }
 
@@ -77,7 +85,10 @@ fn a_stop_before_the_run_is_not_lost() {
         let (t, returned) = start_on_thread(h);
         // SAFETY: the handle's own destroy.
         unsafe { Listener::destroy(Listener::from_handle(h).unwrap()) };
-        assert!(returned.recv_timeout(LIMIT).is_ok(), "a start outlived its destroy");
+        assert!(
+            returned.recv_timeout(LIMIT).is_ok(),
+            "a start outlived its destroy"
+        );
         t.join().unwrap();
     }
 }
@@ -99,10 +110,16 @@ fn a_notification_before_the_start_sets_on_the_loop_thread() {
     });
     let (set, set_on) = mpsc::channel();
     let destroyed = AtomicBool::new(false);
-    owner.notify(move || set.send(thread::current().id()).unwrap(), || {
-        destroyed.store(true, Ordering::Relaxed);
-    });
-    assert_eq!(set_on.recv_timeout(LIMIT).unwrap(), loop_tid.recv_timeout(LIMIT).unwrap());
+    owner.notify(
+        move || set.send(thread::current().id()).unwrap(),
+        || {
+            destroyed.store(true, Ordering::Relaxed);
+        },
+    );
+    assert_eq!(
+        set_on.recv_timeout(LIMIT).unwrap(),
+        loop_tid.recv_timeout(LIMIT).unwrap()
+    );
     assert!(!destroyed.load(Ordering::Relaxed));
     drop(owner);
     // SAFETY: the handle's own destroy.
@@ -124,7 +141,10 @@ fn a_notification_after_the_destroy_never_sets() {
     let set = Arc::new(AtomicBool::new(false));
     let set_seen = Arc::clone(&set);
     let mut destroyed = false;
-    owner.notify(move || set_seen.store(true, Ordering::Relaxed), || destroyed = true);
+    owner.notify(
+        move || set_seen.store(true, Ordering::Relaxed),
+        || destroyed = true,
+    );
     assert!(destroyed);
     assert!(!set.load(Ordering::Relaxed));
     drop(owner);
@@ -146,10 +166,25 @@ fn a_nil_texture_describes_as_zeros() {
     };
     extract_texture_descriptor(None, &mut info);
     assert_eq!(
-        (info.pixel_format, info.width, info.height, info.depth, info.array_length, info.bits),
+        (
+            info.pixel_format,
+            info.width,
+            info.height,
+            info.depth,
+            info.array_length,
+            info.bits
+        ),
         (0, 0, 0, 0, 0, 0)
     );
-    assert_eq!((info.options, info.flags, info.mach_port, info.gpu_resource_id), (0, 0, 7, 9));
+    assert_eq!(
+        (
+            info.options,
+            info.flags,
+            info.mach_port,
+            info.gpu_resource_id
+        ),
+        (0, 0, 7, 9)
+    );
 }
 
 #[test]
@@ -167,7 +202,12 @@ fn texture_bits_cut_each_field_to_eight_bits() {
         gpu_resource_id: 0,
     };
     assert_eq!(
-        (info.r#type(), info.mipmap_level_count(), info.sample_count(), info.usage()),
+        (
+            info.r#type(),
+            info.mipmap_level_count(),
+            info.sample_count(),
+            info.usage()
+        ),
         (2, 1, 0xff, 5)
     );
 }

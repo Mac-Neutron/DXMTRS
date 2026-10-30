@@ -55,7 +55,10 @@ impl MTLFXSpatialScalerDescriptor {
     /// None (objc2-metal-fx generates it `unsafe`).
     #[must_use]
     pub unsafe fn new() -> Retained<Self> {
-        let ptr = Box::into_raw(Box::new(Self { refs: AtomicUsize::new(1), d: Mutex::new(wmt::SpatialScalerInfo::default()) }));
+        let ptr = Box::into_raw(Box::new(Self {
+            refs: AtomicUsize::new(1),
+            d: Mutex::new(wmt::SpatialScalerInfo::default()),
+        }));
         // SAFETY: a new object with its one reference.
         unsafe { Retained::from_raw(ptr).unwrap_unchecked() }
     }
@@ -63,32 +66,44 @@ impl MTLFXSpatialScalerDescriptor {
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setColorTextureFormat(&self, v: MTLPixelFormat) { lock(&self.d).color_format = v.0 as u32; }
+    pub unsafe fn setColorTextureFormat(&self, v: MTLPixelFormat) {
+        lock(&self.d).color_format = v.0 as u32;
+    }
     /// objc2's `setOutputTextureFormat`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setOutputTextureFormat(&self, v: MTLPixelFormat) { lock(&self.d).output_format = v.0 as u32; }
+    pub unsafe fn setOutputTextureFormat(&self, v: MTLPixelFormat) {
+        lock(&self.d).output_format = v.0 as u32;
+    }
     /// objc2's `setInputWidth`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setInputWidth(&self, v: NSUInteger) { lock(&self.d).input_width = v as u32; }
+    pub unsafe fn setInputWidth(&self, v: NSUInteger) {
+        lock(&self.d).input_width = v as u32;
+    }
     /// objc2's `setInputHeight`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setInputHeight(&self, v: NSUInteger) { lock(&self.d).input_height = v as u32; }
+    pub unsafe fn setInputHeight(&self, v: NSUInteger) {
+        lock(&self.d).input_height = v as u32;
+    }
     /// objc2's `setOutputWidth`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setOutputWidth(&self, v: NSUInteger) { lock(&self.d).output_width = v as u32; }
+    pub unsafe fn setOutputWidth(&self, v: NSUInteger) {
+        lock(&self.d).output_width = v as u32;
+    }
     /// objc2's `setOutputHeight`, unsafe as objc2 declares it.
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn setOutputHeight(&self, v: NSUInteger) { lock(&self.d).output_height = v as u32; }
+    pub unsafe fn setOutputHeight(&self, v: NSUInteger) {
+        lock(&self.d).output_height = v as u32;
+    }
     /// Perceptual only: winemetal's scaler has no processing mode (HDR is left out here).
     ///
     /// # Safety
@@ -98,9 +113,16 @@ impl MTLFXSpatialScalerDescriptor {
     ///
     /// # Safety
     /// objc2's contract.
-    pub unsafe fn newSpatialScalerWithDevice(&self, device: &ProtocolObject<dyn MTLDevice>) -> Option<Retained<ProtocolObject<dyn MTLFXSpatialScaler>>> {
+    pub unsafe fn newSpatialScalerWithDevice(
+        &self,
+        device: &ProtocolObject<dyn MTLDevice>,
+    ) -> Option<Retained<ProtocolObject<dyn MTLFXSpatialScaler>>> {
         let info = *lock(&self.d);
-        let mut params = wmt::NewWithConstInfo { device: device.handle(), info: wmt::Ptr::new((&raw const info).cast()), ret: 0 };
+        let mut params = wmt::NewWithConstInfo {
+            device: device.handle(),
+            info: wmt::Ptr::new((&raw const info).cast()),
+            ret: 0,
+        };
         // SAFETY: slot 57 reads the info.
         unsafe { table::call(wmt::DEVICE_NEW_SPATIAL_SCALER, &mut params) };
         let scaler = objc2::from_plus_one(params.ret)?;
@@ -113,7 +135,10 @@ impl MTLFXSpatialScalerDescriptor {
     /// # Safety
     /// objc2's contract.
     pub unsafe fn supportsDevice(device: &ProtocolObject<dyn MTLDevice>) -> bool {
-        let mut params = wmt::ObjU64Ret { handle: device.handle(), ret: 0 };
+        let mut params = wmt::ObjU64Ret {
+            handle: device.handle(),
+            ret: 0,
+        };
         // SAFETY: slot 68 queries a live device.
         unsafe { table::call(wmt::DEVICE_SUPPORTS_FX_SPATIAL_SCALER, &mut params) };
         params.ret != 0
@@ -124,7 +149,10 @@ impl MTLFXSpatialScalerDescriptor {
 static TEXTURES: Mutex<Option<FxHashMap<u64, (u64, u64)>>> = Mutex::new(None);
 
 fn textures<R>(f: impl FnOnce(&mut FxHashMap<u64, (u64, u64)>) -> R) -> R {
-    f(TEXTURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(FxHashMap::default))
+    f(TEXTURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(FxHashMap::default))
 }
 
 /// A scaler's last facade reference: its textures go with it.
@@ -180,7 +208,13 @@ pub unsafe trait MTLFXSpatialScaler: MTLFXSpatialScalerBase {
     /// objc2's contract.
     unsafe fn encodeToCommandBuffer(&self, command_buffer: &ProtocolObject<dyn MTLCommandBuffer>) {
         let (color, output) = textures(|m| m.get(&handle_of(self)).copied().unwrap_or_default());
-        let mut params = wmt::SpatialScale { cmdbuf: command_buffer.handle(), scaler: handle_of(self), color, output, fence: 0 };
+        let mut params = wmt::SpatialScale {
+            cmdbuf: command_buffer.handle(),
+            scaler: handle_of(self),
+            color,
+            output,
+            fence: 0,
+        };
         // SAFETY: slot 59 encodes the scaler into a live buffer.
         unsafe { table::call(wmt::COMMAND_BUFFER_ENCODE_SPATIAL_SCALE, &mut params) };
     }

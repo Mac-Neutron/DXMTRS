@@ -6,12 +6,16 @@
 //! and a counter sample buffer are +1. An object argument a guest sends as 0 goes out as nil:
 //! where the binding takes `&T`, the send is re-declared with `Option<&T>`.
 
-use core::ffi::c_void;
-use core::ptr::{NonNull, null_mut};
+use core::{
+    ffi::c_void,
+    ptr::{NonNull, null_mut},
+};
 
-use objc2::extern_methods;
-use objc2::rc::{Retained, autoreleasepool};
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{
+    extern_methods,
+    rc::{Retained, autoreleasepool},
+    runtime::{AnyObject, ProtocolObject},
+};
 use objc2_foundation::{NSFastEnumeration, NSFastEnumerationState, NSRange};
 use objc2_metal::{
     MTLBlitPassDescriptor, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
@@ -33,9 +37,11 @@ use winemetal_wire::{
     WMTSampleBufferAttachmentInfo, WMTSize,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, mem_slice, params};
-use crate::float_cast::{f64_to_u64, u64_to_usize};
-use crate::handle::{obj, ret_owned, ret_passthrough};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, mem_slice, params},
+    float_cast::{f64_to_u64, u64_to_usize},
+    handle::{obj, ret_owned, ret_passthrough},
+};
 
 pub mod blit;
 pub mod compute;
@@ -184,7 +190,11 @@ pub unsafe extern "C-unwind" fn command_buffer_compute_command_encoder(args: *mu
     let p = unsafe { params::<UnixcallGenericObjUint64ObjRet>(args) };
     // SAFETY: as above.
     let cb = unsafe { obj::<CommandBuffer>(p.handle) };
-    let dispatch = if p.arg == 0 { MTLDispatchType::Serial } else { MTLDispatchType::Concurrent };
+    let dispatch = if p.arg == 0 {
+        MTLDispatchType::Serial
+    } else {
+        MTLDispatchType::Concurrent
+    };
     p.ret = ret_passthrough(cb.map_or(null_mut(), |cb| cb.compute_command_encoder(dispatch)));
     STATUS_SUCCESS
 }
@@ -410,8 +420,15 @@ pub unsafe extern "C-unwind" fn counter_sample_buffer_new_timestamp_buffer(
     descriptor.setCounterSet(set.as_deref());
     // SAFETY: the C's send of the guest's count: Metal checks it when it makes the buffer.
     unsafe { descriptor.setSampleCount(p.sample_count as usize) };
-    descriptor.setStorageMode(if p.shared == 0 { MTLStorageMode::Private } else { MTLStorageMode::Shared });
-    p.ret = ret_owned(device.and_then(|d| d.newCounterSampleBufferWithDescriptor_error(&descriptor).ok()));
+    descriptor.setStorageMode(if p.shared == 0 {
+        MTLStorageMode::Private
+    } else {
+        MTLStorageMode::Shared
+    });
+    p.ret = ret_owned(device.and_then(|d| {
+        d.newCounterSampleBufferWithDescriptor_error(&descriptor)
+            .ok()
+    }));
     STATUS_SUCCESS
 }
 
@@ -464,9 +481,8 @@ pub unsafe extern "C-unwind" fn command_buffer_blit_command_encoder_with_sample_
     // SAFETY: as above.
     let cb = unsafe { obj::<CommandBuffer>(p.cmdbuf) };
     // SAFETY: as above.
-    let attachments = unsafe {
-        mem_slice::<WMTSampleBufferAttachmentInfo>(p.attachments, p.num_attachments)
-    };
+    let attachments =
+        unsafe { mem_slice::<WMTSampleBufferAttachmentInfo>(p.attachments, p.num_attachments) };
     let Some(attachments) = attachments else {
         return STATUS_SUCCESS;
     };
@@ -501,10 +517,18 @@ pub unsafe extern "C-unwind" fn command_buffer_property(args: *mut c_void) -> i3
     // SAFETY: as above.
     let cb = unsafe { obj::<CommandBuffer>(p.handle) };
     let seconds = match u32::try_from(p.arg) {
-        Ok(WMT_COMMAND_BUFFER_PROPERTY_KERNEL_START_TIME) => cb.map_or(0.0, MTLCommandBuffer::kernelStartTime),
-        Ok(WMT_COMMAND_BUFFER_PROPERTY_KERNEL_END_TIME) => cb.map_or(0.0, MTLCommandBuffer::kernelEndTime),
-        Ok(WMT_COMMAND_BUFFER_PROPERTY_GPU_START_TIME) => cb.map_or(0.0, MTLCommandBuffer::GPUStartTime),
-        Ok(WMT_COMMAND_BUFFER_PROPERTY_GPU_END_TIME) => cb.map_or(0.0, MTLCommandBuffer::GPUEndTime),
+        Ok(WMT_COMMAND_BUFFER_PROPERTY_KERNEL_START_TIME) => {
+            cb.map_or(0.0, MTLCommandBuffer::kernelStartTime)
+        }
+        Ok(WMT_COMMAND_BUFFER_PROPERTY_KERNEL_END_TIME) => {
+            cb.map_or(0.0, MTLCommandBuffer::kernelEndTime)
+        }
+        Ok(WMT_COMMAND_BUFFER_PROPERTY_GPU_START_TIME) => {
+            cb.map_or(0.0, MTLCommandBuffer::GPUStartTime)
+        }
+        Ok(WMT_COMMAND_BUFFER_PROPERTY_GPU_END_TIME) => {
+            cb.map_or(0.0, MTLCommandBuffer::GPUEndTime)
+        }
         _ => 0.0,
     };
     p.ret = f64_to_u64(seconds * 1e9);
@@ -530,9 +554,8 @@ pub unsafe extern "C-unwind" fn command_buffer_compute_command_encoder_with_samp
     // SAFETY: as above.
     let cb = unsafe { obj::<CommandBuffer>(p.cmdbuf) };
     // SAFETY: as above.
-    let attachments = unsafe {
-        mem_slice::<WMTSampleBufferAttachmentInfo>(p.attachments, p.num_attachments)
-    };
+    let attachments =
+        unsafe { mem_slice::<WMTSampleBufferAttachmentInfo>(p.attachments, p.num_attachments) };
     let Some(attachments) = attachments else {
         return STATUS_SUCCESS;
     };
@@ -553,8 +576,9 @@ pub unsafe extern "C-unwind" fn command_buffer_compute_command_encoder_with_samp
         // SAFETY: as above.
         unsafe { d.setEndOfEncoderSampleIndex(u64_to_usize(a.end_of_encoder_sample_index)) };
     }
-    p.ret =
-        ret_passthrough(cb.map_or(null_mut(), |cb| cb.compute_command_encoder_with(&descriptor)));
+    p.ret = ret_passthrough(cb.map_or(null_mut(), |cb| {
+        cb.compute_command_encoder_with(&descriptor)
+    }));
     STATUS_SUCCESS
 }
 
@@ -587,7 +611,8 @@ trait RawCommandBuffer {
     fn compute_command_encoder(&self, dispatch_type: MTLDispatchType) -> *mut AnyObject;
     fn render_command_encoder(&self, descriptor: &MTLRenderPassDescriptor) -> *mut AnyObject;
     fn blit_command_encoder_with(&self, descriptor: &MTLBlitPassDescriptor) -> *mut AnyObject;
-    fn compute_command_encoder_with(&self, descriptor: &MTLComputePassDescriptor) -> *mut AnyObject;
+    fn compute_command_encoder_with(&self, descriptor: &MTLComputePassDescriptor)
+    -> *mut AnyObject;
     fn raw_error(&self) -> *mut AnyObject;
     fn raw_logs(&self) -> *mut AnyObject;
     fn encode_signal_event(&self, event: Option<&ProtocolObject<dyn MTLEvent>>, value: u64);
@@ -800,7 +825,11 @@ const fn size(s: &WMTSize) -> MTLSize {
 
 /// A `WMTOrigin` as an `MTLOrigin`.
 const fn origin(o: &WMTOrigin) -> MTLOrigin {
-    MTLOrigin { x: u64_to_usize(o.x), y: u64_to_usize(o.y), z: u64_to_usize(o.z) }
+    MTLOrigin {
+        x: u64_to_usize(o.x),
+        y: u64_to_usize(o.y),
+        z: u64_to_usize(o.z),
+    }
 }
 
 /// A command's `location` and `length` as an `NSRange`.

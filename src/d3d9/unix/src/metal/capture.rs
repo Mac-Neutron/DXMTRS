@@ -1,9 +1,14 @@
 use log::{info, warn};
 use mtld3d_shared::{MetalHandle, mtl_handle::MTLDeviceKind};
-use crate::mtl::objc2_foundation::{NSString, NSURL};
-use crate::mtl::objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 
-use crate::{LOG_TARGET, metal::handle::IntoRetained};
+use crate::{
+    LOG_TARGET,
+    metal::handle::IntoRetained,
+    mtl::{
+        objc2_foundation::{NSString, NSURL},
+        objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager},
+    },
+};
 
 /// Where a trace goes when the process has no log directory yet.
 const FALLBACK_PATH: &str = "/tmp/mtld3d_capture.gputrace";

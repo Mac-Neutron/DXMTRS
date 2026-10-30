@@ -58,7 +58,10 @@ fn release_handle(handle: u64) {
 
 impl NSString {
     fn boxed(text: Text) -> Retained<Self> {
-        let ptr = Box::into_raw(Box::new(Self { refs: AtomicUsize::new(1), text }));
+        let ptr = Box::into_raw(Box::new(Self {
+            refs: AtomicUsize::new(1),
+            text,
+        }));
         // SAFETY: a new object with its one reference.
         unsafe { Retained::from_raw(ptr).unwrap_unchecked() }
     }
@@ -104,7 +107,11 @@ impl NSString {
 
 /// The UTF-8 text of winemetal string `handle`.
 pub fn winemetal_string(handle: u64) -> String {
-    let mut length = wmt::ObjU64U64Ret { handle, arg: wmt::UTF8_STRING_ENCODING, ret: 0 };
+    let mut length = wmt::ObjU64U64Ret {
+        handle,
+        arg: wmt::UTF8_STRING_ENCODING,
+        ret: 0,
+    };
     // SAFETY: slot 27 reads a live string.
     unsafe { table::call(wmt::NSSTRING_LENGTH_OF_BYTES, &mut length) };
     let mut buffer = vec![0u8; usize::try_from(length.ret).unwrap_or(0) + 1];
@@ -163,7 +170,10 @@ unsafe impl Message for NSError {
 
 impl NSError {
     fn boxed(text: Text) -> Retained<Self> {
-        let ptr = Box::into_raw(Box::new(Self { refs: AtomicUsize::new(1), text }));
+        let ptr = Box::into_raw(Box::new(Self {
+            refs: AtomicUsize::new(1),
+            text,
+        }));
         // SAFETY: a new object with its one reference.
         unsafe { Retained::from_raw(ptr).unwrap_unchecked() }
     }
@@ -191,10 +201,14 @@ impl NSError {
         match &self.text {
             Text::Owned(text) => NSString::from_str(text),
             Text::Handle(handle) => {
-                let mut params = wmt::ObjObjRet { handle: *handle, ret: 0 };
+                let mut params = wmt::ObjObjRet {
+                    handle: *handle,
+                    ret: 0,
+                };
                 // SAFETY: slot 28 describes a live object; its string is autoreleased.
                 unsafe { table::call(wmt::NSOBJECT_DESCRIPTION, &mut params) };
-                NSString::from_autoreleased(params.ret).unwrap_or_else(|| NSString::from_str("(no description)"))
+                NSString::from_autoreleased(params.ret)
+                    .unwrap_or_else(|| NSString::from_str("(no description)"))
             }
         }
     }
@@ -206,7 +220,9 @@ impl NSError {
     #[must_use]
     pub fn code(&self) -> NSInteger {
         let text = self.localizedDescription().to_rust();
-        let hash = text.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+        let hash = text.bytes().fold(0x811c_9dc5_u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        });
         NSInteger::try_from((hash & 0x7fff_ffff) | 1).unwrap_or(1)
     }
 }

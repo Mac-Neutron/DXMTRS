@@ -1,5 +1,7 @@
-use std::os::unix::process::ExitStatusExt;
-use std::process::{Command, Stdio};
+use std::{
+    os::unix::process::ExitStatusExt,
+    process::{Command, Stdio},
+};
 
 use super::*;
 
@@ -18,7 +20,11 @@ fn panic_under_guard_aborts() {
         return;
     }
     let status = Command::new(std::env::current_exe().expect("the test binary's path"))
-        .args(["--exact", "ffi::tests::panic_under_guard_aborts", "--test-threads=1"])
+        .args([
+            "--exact",
+            "ffi::tests::panic_under_guard_aborts",
+            "--test-threads=1",
+        ])
         .env(CHILD, "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

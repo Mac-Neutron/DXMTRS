@@ -1,29 +1,34 @@
 use std::fmt::Write;
 
-use crate::mtl::block2::RcBlock;
 use log::{Level, debug, log_enabled};
-use crate::mtl::objc2::{
-    rc::{Retained, autoreleasepool},
-    runtime::ProtocolObject,
-};
+
+use super::{BlitSite, CopyBufferEndpoint, CopyEndpoint, CopyRegion};
 #[cfg(not(mtl_facade))]
 use crate::mtl::objc2::{ProtocolType, runtime::AnyObject};
-use crate::mtl::objc2_foundation::NSError;
 #[cfg(not(mtl_facade))]
-use crate::mtl::objc2_foundation::{NSArray, NSObject, NSObjectNSKeyValueCoding, NSString, ns_string};
+use crate::mtl::objc2_foundation::{
+    NSArray, NSObject, NSObjectNSKeyValueCoding, NSString, ns_string,
+};
 #[cfg(not(mtl_facade))]
 use crate::mtl::objc2_metal::MTLCommandEncoderErrorState;
-use crate::mtl::objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue, MTLDevice,
-    MTLRenderPassAttachmentDescriptor, MTLRenderPassDescriptor, MTLResource, MTLSize, MTLTexture,
-};
 #[cfg(not(mtl_facade))]
 use crate::mtl::objc2_metal::{
     MTLCommandBufferDescriptor, MTLCommandBufferEncoderInfo, MTLCommandBufferEncoderInfoErrorKey,
     MTLCommandBufferErrorOption,
 };
-
-use super::{BlitSite, CopyBufferEndpoint, CopyEndpoint, CopyRegion};
+use crate::mtl::{
+    block2::RcBlock,
+    objc2::{
+        rc::{Retained, autoreleasepool},
+        runtime::ProtocolObject,
+    },
+    objc2_foundation::NSError,
+    objc2_metal::{
+        MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue, MTLDevice,
+        MTLRenderPassAttachmentDescriptor, MTLRenderPassDescriptor, MTLResource, MTLSize,
+        MTLTexture,
+    },
+};
 
 const LOG_TARGET: &str = "mtld3d::unix::command";
 

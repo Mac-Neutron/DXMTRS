@@ -20,11 +20,13 @@
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use mtld3d_shared::{MetalHandle, mtl_handle::CAMetalLayerKind};
-use crate::mtl::objc2::runtime::ProtocolObject;
-use crate::mtl::objc2_metal::MTLRenderCommandEncoder;
 use rustc_hash::FxHashMap;
 
-use crate::{LOG_TARGET, metal::macdrv::attachment};
+use crate::{
+    LOG_TARGET,
+    metal::macdrv::attachment,
+    mtl::{objc2::runtime::ProtocolObject, objc2_metal::MTLRenderCommandEncoder},
+};
 
 /// `u16` lanes of one table: 256 entries of R, G, B and a one.
 ///

@@ -3,12 +3,14 @@ use mtld3d_shared::{
     MetalHandle,
     mtl_handle::{MTLDeviceKind, MTLFunctionKind, MTLLibraryKind},
 };
-use crate::mtl::objc2::rc::Retained;
-use crate::mtl::objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLMathMode};
 
 use crate::{
     LOG_TARGET,
     metal::handle::{IntoRetained, ReleaseRetain},
+    mtl::{
+        objc2::rc::Retained,
+        objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLMathMode},
+    },
 };
 
 #[cfg(test)]

@@ -5,8 +5,10 @@
 //! nothing behind; a cache object holds its statement ahead of its connection, which drops the
 //! statement first, as the C's `dealloc` finalized before it closed.
 
-use core::ffi::{CStr, c_char, c_int, c_void};
-use core::ptr::{self, NonNull};
+use core::{
+    ffi::{CStr, c_char, c_int, c_void},
+    ptr::{self, NonNull},
+};
 use std::ffi::CString;
 
 /// `SQLITE_OPEN_READONLY`.
@@ -40,13 +42,20 @@ struct Sqlite3Stmt {
 // unit tests' executable too.
 #[link(name = "sqlite3")]
 unsafe extern "C" {
-    fn sqlite3_open_v2(filename: *const c_char, db: *mut *mut Sqlite3, flags: c_int, vfs: *const c_char) -> c_int;
+    fn sqlite3_open_v2(
+        filename: *const c_char,
+        db: *mut *mut Sqlite3,
+        flags: c_int,
+        vfs: *const c_char,
+    ) -> c_int;
     fn sqlite3_close(db: *mut Sqlite3) -> c_int;
     fn sqlite3_errmsg(db: *mut Sqlite3) -> *const c_char;
     fn sqlite3_exec(
         db: *mut Sqlite3,
         sql: *const c_char,
-        callback: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_char, *mut *mut c_char) -> c_int>,
+        callback: Option<
+            unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_char, *mut *mut c_char) -> c_int,
+        >,
         arg: *mut c_void,
         errmsg: *mut *mut c_char,
     ) -> c_int;
@@ -106,7 +115,15 @@ impl Db {
     pub fn exec(&self, sql: &CStr) -> Result<(), CString> {
         let mut text = ptr::null_mut();
         // SAFETY: an open connection, a NUL-terminated statement, no callback, a place for the message.
-        let rc = unsafe { sqlite3_exec(self.0.as_ptr(), sql.as_ptr(), None, ptr::null_mut(), &raw mut text) };
+        let rc = unsafe {
+            sqlite3_exec(
+                self.0.as_ptr(),
+                sql.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &raw mut text,
+            )
+        };
         if rc == OK {
             return Ok(());
         }
@@ -127,7 +144,15 @@ impl Db {
     pub fn prepare(&self, sql: &CStr) -> Result<Stmt, CString> {
         let mut stmt = ptr::null_mut();
         // SAFETY: an open connection, a NUL-terminated statement, a place for the handle, no tail.
-        let rc = unsafe { sqlite3_prepare_v2(self.0.as_ptr(), sql.as_ptr(), -1, &raw mut stmt, ptr::null_mut()) };
+        let rc = unsafe {
+            sqlite3_prepare_v2(
+                self.0.as_ptr(),
+                sql.as_ptr(),
+                -1,
+                &raw mut stmt,
+                ptr::null_mut(),
+            )
+        };
         match NonNull::new(stmt) {
             Some(stmt) if rc == OK => Ok(Stmt(stmt)),
             _ => {

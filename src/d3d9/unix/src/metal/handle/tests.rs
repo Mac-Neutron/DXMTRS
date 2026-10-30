@@ -1,13 +1,14 @@
 //! Unit tests for the handle conversions, and for which of them touch the refcount.
 
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor, MTLLanguageVersion,
-    MTLPixelFormat, MTLRenderPipelineDescriptor, MTLResourceOptions, MTLSamplerDescriptor,
-    MTLTextureDescriptor,
-};
-
 use super::*;
+use crate::mtl::{
+    objc2_foundation::NSString,
+    objc2_metal::{
+        MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
+        MTLLanguageVersion, MTLPixelFormat, MTLRenderPipelineDescriptor, MTLResourceOptions,
+        MTLSamplerDescriptor, MTLTextureDescriptor,
+    },
+};
 
 /// A trivial vertex plus fragment pair, the cheapest real render pipeline state.
 const PIPELINE_MSL: &str = "

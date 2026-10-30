@@ -4,8 +4,9 @@ use core::ffi::c_void;
 
 use winemetal_wire::{
     UnixcallGenericObjNoret, UnixcallGenericObjRet, UnixcallMtlcapturemanagerStartcapture,
-    UnixcallMtlcountersamplebufferNewtimestampbuffer, UnixcallMtlcountersamplebufferResolvecounterrange,
-    UnixcallMtldeviceSampletimestamps, WMTCaptureInfo, slot,
+    UnixcallMtlcountersamplebufferNewtimestampbuffer,
+    UnixcallMtlcountersamplebufferResolvecounterrange, UnixcallMtldeviceSampletimestamps,
+    WMTCaptureInfo, slot,
 };
 
 use crate::transport::{call, mem_ptr};

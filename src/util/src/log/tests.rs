@@ -25,7 +25,10 @@ fn each_line_prefixed() {
 
 #[test]
 fn file_name_names_the_dll() {
-    assert_eq!(file_name(Some("/tmp/x"), false, "C:\\game.exe", "nvapi.log").as_deref(), Some("/tmp/x/game_nvapi.log"));
+    assert_eq!(
+        file_name(Some("/tmp/x"), false, "C:\\game.exe", "nvapi.log").as_deref(),
+        Some("/tmp/x/game_nvapi.log")
+    );
 }
 
 #[test]
@@ -34,10 +37,22 @@ fn file_names() {
     assert_eq!(file_name(Some("none"), false, exe, "nvngx.log"), None);
     assert_eq!(file_name(None, true, exe, "nvngx.log"), None);
     assert_eq!(file_name(Some(""), true, exe, "nvngx.log"), None);
-    assert_eq!(file_name(None, false, exe, "nvngx.log").as_deref(), Some("Game_nvngx.log"));
-    assert_eq!(file_name(Some("/tmp/logs"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
-    assert_eq!(file_name(Some("/tmp/logs/"), true, exe, "nvngx.log").as_deref(), Some("/tmp/logs/Game_nvngx.log"));
-    assert_eq!(file_name(Some("/l"), true, "tool", "nvngx.log").as_deref(), Some("/l/tool_nvngx.log"));
+    assert_eq!(
+        file_name(None, false, exe, "nvngx.log").as_deref(),
+        Some("Game_nvngx.log")
+    );
+    assert_eq!(
+        file_name(Some("/tmp/logs"), true, exe, "nvngx.log").as_deref(),
+        Some("/tmp/logs/Game_nvngx.log")
+    );
+    assert_eq!(
+        file_name(Some("/tmp/logs/"), true, exe, "nvngx.log").as_deref(),
+        Some("/tmp/logs/Game_nvngx.log")
+    );
+    assert_eq!(
+        file_name(Some("/l"), true, "tool", "nvngx.log").as_deref(),
+        Some("/l/tool_nvngx.log")
+    );
 }
 
 #[test]
@@ -50,8 +65,14 @@ fn text_mode_ends_lines_in_crlf() {
 #[test]
 fn a_multibyte_name_without_exe_keeps_its_name() {
     // Its last 4 bytes start inside the euro sign: slicing there panics.
-    assert_eq!(file_name(Some("/l"), true, "C:\\a\u{20ac}bc", "nvngx.log").as_deref(), Some("/l/a\u{20ac}bc_nvngx.log"));
-    assert_eq!(file_name(Some("/l"), true, "g\u{20ac}.EXE", "nvngx.log").as_deref(), Some("/l/g\u{20ac}_nvngx.log"));
+    assert_eq!(
+        file_name(Some("/l"), true, "C:\\a\u{20ac}bc", "nvngx.log").as_deref(),
+        Some("/l/a\u{20ac}bc_nvngx.log")
+    );
+    assert_eq!(
+        file_name(Some("/l"), true, "g\u{20ac}.EXE", "nvngx.log").as_deref(),
+        Some("/l/g\u{20ac}_nvngx.log")
+    );
 }
 
 /// A fresh directory for a log file.
@@ -76,7 +97,11 @@ fn the_file_is_created_by_the_first_message_that_passes_the_level() {
     };
     let filtered = Logger::new("t.log");
     filtered.emit_with(&env("none"), &Level::Error, "dropped");
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a filtered message created the file");
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "a filtered message created the file"
+    );
     let passing = Logger::new("t.log");
     passing.emit_with(&env("warn"), &Level::Warn, "kept");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);

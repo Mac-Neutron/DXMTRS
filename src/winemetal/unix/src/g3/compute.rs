@@ -2,8 +2,7 @@
 
 use core::ffi::c_void;
 
-use objc2::extern_methods;
-use objc2::runtime::ProtocolObject;
+use objc2::{extern_methods, runtime::ProtocolObject};
 use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLBarrierScope, MTLBuffer, MTLComputeCommandEncoder, MTLComputePipelineState, MTLFence,
@@ -19,14 +18,15 @@ use winemetal_wire::{
     WMT_COMPUTE_COMMAND_WAIT_FOR_FENCE, WmtcmdBase, WmtcmdComputeDispatch,
     WmtcmdComputeDispatchIndirect, WmtcmdComputeExecutecommands, WmtcmdComputeFenceOp,
     WmtcmdComputeMemoryBarrier, WmtcmdComputeSetbuffer, WmtcmdComputeSetbufferoffset,
-    WmtcmdComputeSetbytes, WmtcmdComputeSetpso, WmtcmdComputeSettexture,
-    WmtcmdComputeUseresource,
+    WmtcmdComputeSetbytes, WmtcmdComputeSetpso, WmtcmdComputeSettexture, WmtcmdComputeUseresource,
 };
 
 use super::{body, range, raw, size};
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params};
-use crate::float_cast::u64_to_usize;
-use crate::handle::obj;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params},
+    float_cast::u64_to_usize,
+    handle::obj,
+};
 
 type Encoder = ProtocolObject<dyn MTLComputeCommandEncoder>;
 type Buffer = ProtocolObject<dyn MTLBuffer>;
@@ -52,7 +52,11 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
     let Some(encoder) = (unsafe { obj::<Encoder>(p.encoder) }) else {
         return STATUS_SUCCESS;
     };
-    let mut threadgroup = MTLSize { width: 0, height: 0, depth: 0 };
+    let mut threadgroup = MTLSize {
+        width: 0,
+        height: 0,
+        depth: 0,
+    };
     let mut at = p.cmd_head;
     // SAFETY: as above.
     while let Some(cmd) = unsafe { mem_ref::<WmtcmdBase>(at) } {
@@ -72,7 +76,11 @@ trait RawCompute {
         threads_per_threadgroup: MTLSize,
     );
     fn set_pipeline_state(&self, state: Option<&ProtocolObject<dyn MTLComputePipelineState>>);
-    fn use_resource(&self, resource: Option<&ProtocolObject<dyn MTLResource>>, usage: MTLResourceUsage);
+    fn use_resource(
+        &self,
+        resource: Option<&ProtocolObject<dyn MTLResource>>,
+        usage: MTLResourceUsage,
+    );
     unsafe fn set_bytes(&self, bytes: *const c_void, length: usize, index: usize);
     fn update_fence(&self, fence: Option<&Fence>);
     fn wait_for_fence(&self, fence: Option<&Fence>);

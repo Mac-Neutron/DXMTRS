@@ -25,7 +25,11 @@ unsafe extern "system" {
 ///
 /// Games without DLSS enabled must not see NGX.
 #[unsafe(no_mangle)]
-pub extern "system" fn DllMain(module: *mut core::ffi::c_void, reason: u32, _reserved: *mut core::ffi::c_void) -> i32 {
+pub extern "system" fn DllMain(
+    module: *mut core::ffi::c_void,
+    reason: u32,
+    _reserved: *mut core::ffi::c_void,
+) -> i32 {
     const DLL_PROCESS_ATTACH: u32 = 1;
     if reason != DLL_PROCESS_ATTACH {
         return 1;

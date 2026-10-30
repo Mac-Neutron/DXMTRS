@@ -7,13 +7,17 @@
 //! sent to, as the C sends it), and `initFileURLWithPath:` takes the nil that an output string
 //! which is not UTF-8 converts to (it raises, as the C's does).
 
-use core::ffi::{c_char, c_void};
-use core::ptr;
-use core::ptr::NonNull;
+use core::{
+    ffi::{c_char, c_void},
+    ptr,
+    ptr::NonNull,
+};
 
-use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyObject, NSObject};
-use objc2::{AnyThread, extern_class, extern_methods};
+use objc2::{
+    AnyThread, extern_class, extern_methods,
+    rc::{Allocated, Retained},
+    runtime::{AnyObject, NSObject},
+};
 use objc2_foundation::{NSError, NSString, NSURL, NSUTF8StringEncoding};
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination};
 use winemetal_wire::{
@@ -21,9 +25,11 @@ use winemetal_wire::{
     WMTCaptureInfo,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_cstr, mem_ref, params};
-use crate::float_cast::u64_to_usize;
-use crate::handle;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_cstr, mem_ref, params},
+    float_cast::u64_to_usize,
+    handle,
+};
 
 extern_class!(
     /// `MTLCaptureManager`, re-declared for the sends the C makes raw or to nil.

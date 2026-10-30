@@ -69,10 +69,19 @@ pub use upscale::is_supported as upscale_is_supported;
 #[must_use]
 pub fn alloc_pages(len: usize) -> *mut u8 {
     const ALIGN: usize = 16 * 1024;
-    let Some(total) = len.checked_add(ALIGN) else { return core::ptr::null_mut() };
+    let Some(total) = len.checked_add(ALIGN) else {
+        return core::ptr::null_mut();
+    };
     // SAFETY: an anonymous private mapping; nothing else names the range.
     let raw = unsafe {
-        libc::mmap(core::ptr::null_mut(), total, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_ANON | libc::MAP_PRIVATE, -1, 0)
+        libc::mmap(
+            core::ptr::null_mut(),
+            total,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
     };
     if raw == libc::MAP_FAILED {
         return core::ptr::null_mut();
@@ -136,7 +145,9 @@ pub fn install_page_allocator() {
     fn free(ptr: core::ptr::NonNull<u8>, len: usize) {
         free_pages(ptr.as_ptr(), len);
     }
-    mtld3d_core::page_box::set_page_allocator_source(|| Some(mtld3d_core::page_box::PageAllocator { alloc, free }));
+    mtld3d_core::page_box::set_page_allocator_source(|| {
+        Some(mtld3d_core::page_box::PageAllocator { alloc, free })
+    });
 }
 
 /// `install_page_allocator` at the library's load, a test binary's included.

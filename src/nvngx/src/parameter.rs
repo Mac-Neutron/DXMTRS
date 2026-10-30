@@ -4,10 +4,12 @@
 //! NGX SDK they were built against calls them. A value keeps the type its setter stored, and a
 //! getter of another type answers only the conversions DXMT's `nvngx_parameter.hpp` allows.
 
-use dxmt_util::float_cast::{f32_to_i32, f32_to_u32, f64_to_f32, i32_to_f32, u32_to_f32};
-use crate::ngx::{FAIL, OK};
 use core::ffi::{CStr, c_char, c_void};
 use std::collections::BTreeMap;
+
+use dxmt_util::float_cast::{f32_to_i32, f32_to_u32, f64_to_f32, i32_to_f32, u32_to_f32};
+
+use crate::ngx::{FAIL, OK};
 
 /// A stored value, by the setter that stored it.
 pub enum Value {
@@ -26,7 +28,9 @@ impl Value {
     fn as_ptr(&self) -> Option<*mut c_void> {
         match *self {
             Self::Ptr(p) | Self::D3D12(p) | Self::D3D11(p) => Some(p),
-            Self::U64(v) => Some(core::ptr::with_exposed_provenance_mut(usize::try_from(v).ok()?)),
+            Self::U64(v) => Some(core::ptr::with_exposed_provenance_mut(
+                usize::try_from(v).ok()?,
+            )),
             _ => None,
         }
     }
@@ -161,7 +165,12 @@ unsafe fn store(this: *mut Parameters, name: *const c_char, value: Value) {
 /// # Safety
 ///
 /// As `store`, and `out` writable or null.
-unsafe fn fetch<T>(this: *const Parameters, name: *const c_char, out: *mut T, convert: fn(&Value) -> Option<T>) -> u32 {
+unsafe fn fetch<T>(
+    this: *const Parameters,
+    name: *const c_char,
+    out: *mut T,
+    convert: fn(&Value) -> Option<T>,
+) -> u32 {
     if this.is_null() || name.is_null() || out.is_null() {
         return FAIL;
     }
@@ -169,11 +178,14 @@ unsafe fn fetch<T>(this: *const Parameters, name: *const c_char, out: *mut T, co
     let name = unsafe { CStr::from_ptr(name) };
     // SAFETY: the caller's: a live map.
     let map = unsafe { &*this };
-    map.values.get(name.to_bytes()).and_then(convert).map_or(FAIL, |value| {
-        // SAFETY: the caller's: `out` is writable.
-        unsafe { out.write(value) };
-        OK
-    })
+    map.values
+        .get(name.to_bytes())
+        .and_then(convert)
+        .map_or(FAIL, |value| {
+            // SAFETY: the caller's: `out` is writable.
+            unsafe { out.write(value) };
+            OK
+        })
 }
 
 macro_rules! setter {
@@ -187,7 +199,11 @@ macro_rules! setter {
 
 macro_rules! getter {
     ($name:ident, $t:ty, $convert:ident) => {
-        unsafe extern "system" fn $name(this: *const Parameters, name: *const c_char, out: *mut $t) -> u32 {
+        unsafe extern "system" fn $name(
+            this: *const Parameters,
+            name: *const c_char,
+            out: *mut $t,
+        ) -> u32 {
             // SAFETY: as the setters', and the game's `out`.
             unsafe { fetch(this, name, out, Value::$convert) }
         }
@@ -241,7 +257,10 @@ static VTBL: ParametersVtbl = ParametersVtbl {
 impl Parameters {
     /// A new, empty map, owned by whoever `destroy`s it.
     pub fn allocate() -> *mut Self {
-        Box::into_raw(Box::new(Self { vtbl: &raw const VTBL, values: BTreeMap::new() }))
+        Box::into_raw(Box::new(Self {
+            vtbl: &raw const VTBL,
+            values: BTreeMap::new(),
+        }))
     }
 
     /// Frees a map `allocate` made; null does nothing.

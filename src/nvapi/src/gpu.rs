@@ -4,16 +4,19 @@
 
 use core::ffi::c_void;
 
-use crate::ffi::{
-    MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, ObjHandle, WMTCopyAllDevices,
+use crate::{
+    ffi::{
+        MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, ObjHandle,
+        WMTCopyAllDevices,
+    },
+    nv::{
+        GPU_ARCH_IMPLEMENTATION_AD102, GPU_ARCH_INFO_VER1, GPU_ARCH_INFO_VER2,
+        GPU_ARCHITECTURE_AD100, GPU_CHIP_REV_UNKNOWN, GpuArchInfo, INCOMPATIBLE_STRUCT_VERSION,
+        INVALID_ARGUMENT, LOGICAL_GPU_DATA_VER1, LogicalGpuData, MAX_GPUS, NO_IMPLEMENTATION,
+        NOT_SUPPORTED, NVIDIA_DEVICE_NOT_FOUND, OK, SHORT_STRING_MAX, Status,
+    },
+    sys::short_string,
 };
-use crate::nv::{
-    GPU_ARCH_IMPLEMENTATION_AD102, GPU_ARCH_INFO_VER1, GPU_ARCH_INFO_VER2, GPU_ARCHITECTURE_AD100,
-    GPU_CHIP_REV_UNKNOWN, GpuArchInfo, INCOMPATIBLE_STRUCT_VERSION, INVALID_ARGUMENT, LOGICAL_GPU_DATA_VER1,
-    LogicalGpuData, MAX_GPUS, NO_IMPLEMENTATION, NOT_SUPPORTED, NVIDIA_DEVICE_NOT_FOUND, OK, SHORT_STRING_MAX,
-    Status,
-};
-use crate::sys::short_string;
 
 /// The registry IDs of the Metal devices, as `WMT::CopyAllDevices` lists them.
 ///
@@ -114,7 +117,10 @@ extern "C" fn get_full_name(_gpu: *mut c_void, name: *mut u8) -> Status {
 }
 
 /// `NvAPI_GPU_GetAdapterIdFromPhysicalGpu`: the device's LUID.
-extern "C" fn get_adapter_id_from_physical_gpu(gpu: *mut c_void, adapter_id: *mut [u8; 8]) -> Status {
+extern "C" fn get_adapter_id_from_physical_gpu(
+    gpu: *mut c_void,
+    adapter_id: *mut [u8; 8],
+) -> Status {
     if adapter_id.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -148,7 +154,11 @@ extern "C" fn get_logical_gpu_info(gpu: *mut c_void, data: *mut LogicalGpuData) 
     data.physical_gpu_handles = [core::ptr::null_mut(); MAX_GPUS];
     data.physical_gpu_handles[0] = gpu;
     // SAFETY: `os_adapter_id` is non-null and the caller's `LUID`.
-    unsafe { data.os_adapter_id.cast::<[u8; 8]>().write(luid(handle_id(gpu))) };
+    unsafe {
+        data.os_adapter_id
+            .cast::<[u8; 8]>()
+            .write(luid(handle_id(gpu)))
+    };
     OK
 }
 

@@ -284,7 +284,8 @@ pub struct PageAllocator {
 /// Process-wide by necessity: every `PageBox` constructor reads it, from any device and thread, and
 /// the Unix side's answer it follows is one per process (the `GetDeviceInfo` cache). Set once,
 /// before the first page.
-static PAGE_ALLOCATOR_SOURCE: std::sync::OnceLock<fn() -> Option<PageAllocator>> = std::sync::OnceLock::new();
+static PAGE_ALLOCATOR_SOURCE: std::sync::OnceLock<fn() -> Option<PageAllocator>> =
+    std::sync::OnceLock::new();
 
 /// The source's answer, latched at the first page after it was set.
 ///
@@ -470,7 +471,10 @@ impl PageBox {
     /// Whether the allocating runtime can park this box in its recycle pool.
     #[must_use]
     pub const fn is_native_owned(&self) -> bool {
-        matches!(self.ownership, PageOwnership::Native(_) | PageOwnership::Hooked)
+        matches!(
+            self.ownership,
+            PageOwnership::Native(_) | PageOwnership::Hooked
+        )
     }
 
     /// Address of the fixed-width reader count kept alive by a page lease.
@@ -598,7 +602,8 @@ impl Drop for PageBox {
             PageOwnership::Native(layout) => *layout,
             PageOwnership::Hooked => {
                 note_free(self.len);
-                PAGEBOX_LIVE_BYTES.fetch_sub(self.len as u64, core::sync::atomic::Ordering::Relaxed);
+                PAGEBOX_LIVE_BYTES
+                    .fetch_sub(self.len as u64, core::sync::atomic::Ordering::Relaxed);
                 if let Some(allocator) = page_allocator() {
                     (allocator.free)(self.ptr, self.len);
                 }

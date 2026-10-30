@@ -1,5 +1,4 @@
-use core::ffi::c_void;
-use core::ptr;
+use core::{ffi::c_void, ptr};
 
 use objc2_core_graphics::CGMainDisplayID;
 use winemetal_wire::{
@@ -7,8 +6,10 @@ use winemetal_wire::{
     WMTHDRMetadata,
 };
 
-use super::display::{query_display_setting, update_display_setting, xy};
-use super::*;
+use super::{
+    display::{query_display_setting, update_display_setting, xy},
+    *,
+};
 use crate::float_cast::f64_to_f32;
 
 /// An ICC `XYZ ` record: the signature, 4 reserved bytes, then X, Y and Z in s15.16.
@@ -48,7 +49,10 @@ fn colorspace_names() {
     let pq = unsafe { kCGColorSpaceITUR_2100_PQ };
     let want = [(0, srgb), (1, linear), (2, bt2020), (4, pq), (5, linear)];
     for (cs, name) in want {
-        assert!(colorspace_name(cs).is_some_and(|n| ptr::eq(n, name)), "{cs}");
+        assert!(
+            colorspace_name(cs).is_some_and(|n| ptr::eq(n, name)),
+            "{cs}"
+        );
     }
     for cs in [3, 6, 7, 8, WMT_COLOR_SPACE_INVALID] {
         assert!(colorspace_name(cs).is_none(), "{cs}");
@@ -70,7 +74,9 @@ fn query(display: u64) -> Option<(u64, u16)> {
     let mut q = UnixcallQueryDisplaySetting {
         display_id: display,
         colorspace: u64::MAX,
-        hdr_metadata: MemPtr { ptr: ptr::from_mut(&mut m).expose_provenance() as u64 },
+        hdr_metadata: MemPtr {
+            ptr: ptr::from_mut(&mut m).expose_provenance() as u64,
+        },
         ret: 7,
     };
     // SAFETY: a live params block.
@@ -90,7 +96,9 @@ fn update(display: u64, colorspace: u64, level: Option<u16>) {
         max_content_light_level: level,
         max_frame_average_light_level: 0,
     });
-    let addr = m.as_ref().map_or(0, |m| ptr::from_ref(m).expose_provenance() as u64);
+    let addr = m
+        .as_ref()
+        .map_or(0, |m| ptr::from_ref(m).expose_provenance() as u64);
     let mut u = UnixcallUpdateDisplaySetting {
         display_id: display,
         colorspace,

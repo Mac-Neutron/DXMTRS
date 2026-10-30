@@ -9,9 +9,11 @@
 
 use core::ffi::c_void;
 
-use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{NSObject, ProtocolObject};
-use objc2::{AnyThread, extern_class, extern_methods};
+use objc2::{
+    AnyThread, extern_class, extern_methods,
+    rc::{Allocated, Retained},
+    runtime::{NSObject, ProtocolObject},
+};
 use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLFence, MTLPixelFormat, MTLTexture};
 use objc2_metal_fx::{
     MTLFXFrameInterpolatableScaler, MTLFXFrameInterpolator, MTLFXSpatialScaler, MTLFXTemporalScaler,
@@ -25,9 +27,11 @@ use winemetal_wire::{
     WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps,
 };
 
-use crate::ffi::{self, AbortOnPanic, STATUS_SUCCESS};
-use crate::format::pixel_format;
-use crate::handle;
+use crate::{
+    ffi::{self, AbortOnPanic, STATUS_SUCCESS},
+    format::pixel_format,
+    handle,
+};
 
 extern_class!(
     /// `MTLFXTemporalScalerDescriptor`, re-declared to send a nil device and the macOS 27 setters.
@@ -82,9 +86,11 @@ impl TemporalDescriptor {
         #[unsafe(method(supportsDevice:))]
         fn supports_device(device: Option<&ProtocolObject<dyn MTLDevice>>) -> bool;
         #[unsafe(method(supportedInputContentMinScaleForDevice:))]
-        fn supported_input_content_min_scale(device: Option<&ProtocolObject<dyn MTLDevice>>) -> f32;
+        fn supported_input_content_min_scale(device: Option<&ProtocolObject<dyn MTLDevice>>)
+        -> f32;
         #[unsafe(method(supportedInputContentMaxScaleForDevice:))]
-        fn supported_input_content_max_scale(device: Option<&ProtocolObject<dyn MTLDevice>>) -> f32;
+        fn supported_input_content_max_scale(device: Option<&ProtocolObject<dyn MTLDevice>>)
+        -> f32;
     );
 }
 

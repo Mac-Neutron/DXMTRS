@@ -1,11 +1,11 @@
-use core::cell::Cell;
-use core::ffi::CStr;
+use core::{cell::Cell, ffi::CStr};
 
-use objc2::rc::Retained;
-use objc2::runtime::{NSObject, NSObjectProtocol};
-use objc2::define_class;
+use objc2::{
+    define_class,
+    rc::Retained,
+    runtime::{NSObject, NSObjectProtocol},
+};
 use objc2_metal::MTLCreateSystemDefaultDevice;
-
 use winemetal_wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED};
 
 use super::*;
@@ -21,7 +21,11 @@ fn handle<T>(o: &T) -> u64 {
 /// A +1 handle taken back, so the test releases it.
 fn take(h: u64) -> Option<Retained<NSObject>> {
     // SAFETY: a +1 object a handler gave back, or null.
-    unsafe { Retained::from_raw(core::ptr::with_exposed_provenance_mut::<NSObject>(u64_to_usize(h))) }
+    unsafe {
+        Retained::from_raw(core::ptr::with_exposed_provenance_mut::<NSObject>(
+            u64_to_usize(h),
+        ))
+    }
 }
 
 /// An object's retain count.
@@ -35,7 +39,9 @@ fn retain_count(h: u64) -> usize {
 
 /// A pointer to a guest-memory value.
 fn mem<T>(v: &T) -> MemPtr {
-    MemPtr { ptr: core::ptr::from_ref(v).expose_provenance() as u64 }
+    MemPtr {
+        ptr: core::ptr::from_ref(v).expose_provenance() as u64,
+    }
 }
 
 const SOURCE: &CStr = c"#include <metal_stdlib>\nusing namespace metal;\nkernel void k(device uint *b [[buffer(0)]], uint i [[thread_position_in_grid]]) { b[i] = i; }\n";
@@ -54,7 +60,10 @@ fn library_of_source() -> Option<(Device, Retained<NSObject>)> {
         ret_library: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_eq!(p.ret_error, 0);
     Some((device, take(p.ret_library)?))
 }
@@ -74,7 +83,10 @@ fn any_non_zero_byte_is_a_flag() {
     assert!(flag(2));
     assert!(flag(255));
     assert_eq!(pipeline_option(0), MTLPipelineOption::None);
-    assert_eq!(pipeline_option(7), MTLPipelineOption::FailOnBinaryArchiveMiss);
+    assert_eq!(
+        pipeline_option(7),
+        MTLPipelineOption::FailOnBinaryArchiveMiss
+    );
 }
 
 #[test]
@@ -98,9 +110,17 @@ fn lookup_archives_need_a_count_and_a_list() {
 
 #[test]
 fn nil_device_writes_a_nil_library_and_error() {
-    let mut p = UnixcallMtldeviceNewlibrary { device: 0, data: 0, ret_error: FILL, ret_library: FILL };
+    let mut p = UnixcallMtldeviceNewlibrary {
+        device: 0,
+        data: 0,
+        ret_error: FILL,
+        ret_library: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_eq!((p.ret_library, p.ret_error), (0, 0));
     let mut s = UnixcallMtldeviceNewlibrarywithsource {
         device: 0,
@@ -110,13 +130,18 @@ fn nil_device_writes_a_nil_library_and_error() {
         ret_library: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut s).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut s).cast()) },
+        0
+    );
     assert_eq!((s.ret_library, s.ret_error), (0, 0));
 }
 
 #[test]
 fn a_function_is_made_by_name() {
-    let Some((_device, library)) = library_of_source() else { return };
+    let Some((_device, library)) = library_of_source() else {
+        return;
+    };
     for (name, found) in [(c"k", true), (c"nope", false), (c"", false)] {
         let mut p = UnixcallGenericObjUint64ObjRet {
             handle: handle(&*library),
@@ -124,7 +149,10 @@ fn a_function_is_made_by_name() {
             ret: FILL,
         };
         // SAFETY: a live params block.
-        assert_eq!(unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) }, 0);
+        assert_eq!(
+            unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
+            0
+        );
         assert_eq!(p.ret != 0, found, "{name:?}");
         drop(take(p.ret));
     }
@@ -132,16 +160,27 @@ fn a_function_is_made_by_name() {
 
 #[test]
 fn a_null_name_writes_nothing() {
-    let Some((_device, library)) = library_of_source() else { return };
-    let mut p = UnixcallGenericObjUint64ObjRet { handle: handle(&*library), arg: 0, ret: FILL };
+    let Some((_device, library)) = library_of_source() else {
+        return;
+    };
+    let mut p = UnixcallGenericObjUint64ObjRet {
+        handle: handle(&*library),
+        arg: 0,
+        ret: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_eq!(p.ret, FILL);
 }
 
 #[test]
 fn a_syntax_error_gives_an_error_the_handler_retained() {
-    let Some((device, _library)) = library_of_source() else { return };
+    let Some((device, _library)) = library_of_source() else {
+        return;
+    };
     let bad = c"kernel void broken( { }\n";
     let mut p = UnixcallMtldeviceNewlibrarywithsource {
         device: handle(&*device),
@@ -151,7 +190,10 @@ fn a_syntax_error_gives_an_error_the_handler_retained() {
         ret_library: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_eq!(p.ret_library, 0);
     // Metal's autoreleased error and the handler's retain.
     assert!(retain_count(p.ret_error) >= 2);
@@ -160,7 +202,9 @@ fn a_syntax_error_gives_an_error_the_handler_retained() {
 
 #[test]
 fn an_empty_archive_cannot_be_serialized() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
     let mut a = UnixcallMtldeviceNewbinaryarchive {
         device: handle(&*device),
         url: MemPtr { ptr: 0 },
@@ -168,13 +212,23 @@ fn an_empty_archive_cannot_be_serialized() {
         ret_error: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
+        0
+    );
     assert_eq!(a.ret_error, 0);
     assert_eq!(retain_count(a.ret_archive), 1);
     let path = c"/winemetal-g4-unit/no such folder/archive.bin";
-    let mut s = UnixcallMtlbinaryarchiveSerialize { archive: a.ret_archive, url: mem(&path.to_bytes()[0]), ret_error: FILL };
+    let mut s = UnixcallMtlbinaryarchiveSerialize {
+        archive: a.ret_archive,
+        url: mem(&path.to_bytes()[0]),
+        ret_error: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
+        0
+    );
     assert_ne!(s.ret_error, 0);
     assert_ne!(s.ret_error, FILL);
     drop(take(s.ret_error));
@@ -183,7 +237,9 @@ fn an_empty_archive_cannot_be_serialized() {
 
 #[test]
 fn an_empty_path_is_a_nil_url() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
     let empty = c"";
     // The C: an empty archive with no error (112), Metal's "Invalid URL" error at +1 (113).
     let mut a = UnixcallMtldeviceNewbinaryarchive {
@@ -193,12 +249,22 @@ fn an_empty_path_is_a_nil_url() {
         ret_error: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
+        0
+    );
     assert_eq!(a.ret_error, 0);
     assert_eq!(retain_count(a.ret_archive), 1);
-    let mut s = UnixcallMtlbinaryarchiveSerialize { archive: a.ret_archive, url: mem(&empty.to_bytes_with_nul()[0]), ret_error: FILL };
+    let mut s = UnixcallMtlbinaryarchiveSerialize {
+        archive: a.ret_archive,
+        url: mem(&empty.to_bytes_with_nul()[0]),
+        ret_error: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
+        0
+    );
     assert_ne!(s.ret_error, 0);
     assert_ne!(s.ret_error, FILL);
     drop(take(s.ret_error));
@@ -207,9 +273,17 @@ fn an_empty_path_is_a_nil_url() {
 
 #[test]
 fn null_info_blocks_write_nothing() {
-    let mut c = UnixcallMtldeviceNewcomputepso { device: 0, info: MemPtr { ptr: 0 }, ret_error: FILL, ret_pso: FILL };
+    let mut c = UnixcallMtldeviceNewcomputepso {
+        device: 0,
+        info: MemPtr { ptr: 0 },
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut c).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut c).cast()) },
+        0
+    );
     assert_eq!((c.ret_pso, c.ret_error), (FILL, FILL));
     let mut o = UnixcallMtldeviceNewlibrarywithsourceOptions {
         device: 0,
@@ -220,13 +294,18 @@ fn null_info_blocks_write_nothing() {
         ret_library: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library_with_source_options(core::ptr::from_mut(&mut o).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library_with_source_options(core::ptr::from_mut(&mut o).cast()) },
+        0
+    );
     assert_eq!((o.ret_library, o.ret_error), (FILL, FILL));
 }
 
 #[test]
 fn constants_with_a_null_table_and_a_count_write_nothing() {
-    let Some((_device, library)) = library_of_source() else { return };
+    let Some((_device, library)) = library_of_source() else {
+        return;
+    };
     let mut p = UnixcallMtllibraryNewfunctionWithConstants {
         library: handle(&*library),
         name: mem(&c"k".to_bytes()[0]),
@@ -236,13 +315,18 @@ fn constants_with_a_null_table_and_a_count_write_nothing() {
         ret_error: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_eq!((p.ret, p.ret_error), (FILL, FILL));
 }
 
 #[test]
 fn no_constants_still_asks_metal() {
-    let Some((_device, library)) = library_of_source() else { return };
+    let Some((_device, library)) = library_of_source() else {
+        return;
+    };
     let mut p = UnixcallMtllibraryNewfunctionWithConstants {
         library: handle(&*library),
         name: mem(&c"k".to_bytes()[0]),
@@ -252,7 +336,10 @@ fn no_constants_still_asks_metal() {
         ret_error: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     // A function without constants is made; the pair was written, not left as the fill.
     assert_ne!(p.ret, FILL);
     assert_ne!(p.ret_error, FILL);
@@ -298,7 +385,10 @@ fn compile(device: u64, source: &CStr) -> Option<Retained<NSObject>> {
         ret_library: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_library_with_source(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     drop(take(p.ret_error));
     take(p.ret_library)
 }
@@ -311,16 +401,27 @@ fn function_in(library: &NSObject, name: &CStr) -> u64 {
         ret: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_library_new_function(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     assert_ne!(p.ret, 0, "{name:?}");
     p.ret
 }
 
 /// A fresh empty archive through slot 112.
 fn empty_archive(device: u64) -> u64 {
-    let mut a = UnixcallMtldeviceNewbinaryarchive { device, url: MemPtr { ptr: 0 }, ret_archive: FILL, ret_error: FILL };
+    let mut a = UnixcallMtldeviceNewbinaryarchive {
+        device,
+        url: MemPtr { ptr: 0 },
+        ret_archive: FILL,
+        ret_error: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_binary_archive(core::ptr::from_mut(&mut a).cast()) },
+        0
+    );
     assert_eq!(a.ret_error, 0);
     a.ret_archive
 }
@@ -343,11 +444,21 @@ fn render_info(vertex: u64, fragment: u64, archive: u64) -> WMTRenderPipelineInf
 
 /// Serialises `archive` through slot 113 into a file of the temp folder, true when it wrote one.
 fn serializes(archive: u64, name: &str) -> bool {
-    let path = std::env::temp_dir().join(format!("winemetal-g4-unit-{}-{name}.bin", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "winemetal-g4-unit-{}-{name}.bin",
+        std::process::id()
+    ));
     let c_path = std::ffi::CString::new(path.to_str().unwrap_or_default()).unwrap_or_default();
-    let mut s = UnixcallMtlbinaryarchiveSerialize { archive, url: mem(&c_path.to_bytes_with_nul()[0]), ret_error: FILL };
+    let mut s = UnixcallMtlbinaryarchiveSerialize {
+        archive,
+        url: mem(&c_path.to_bytes_with_nul()[0]),
+        ret_error: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_binary_archive_serialize(core::ptr::from_mut(&mut s).cast()) },
+        0
+    );
     drop(take(s.ret_error));
     let written = std::fs::metadata(&path).is_ok_and(|m| m.len() > 0);
     drop(std::fs::remove_file(&path));
@@ -356,9 +467,13 @@ fn serializes(archive: u64, name: &str) -> bool {
 
 #[test]
 fn each_pipeline_slot_adds_its_functions_to_the_archive() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
     let dev = handle(&*device);
-    let Some(library) = compile(dev, PIPELINE_SOURCE) else { return };
+    let Some(library) = compile(dev, PIPELINE_SOURCE) else {
+        return;
+    };
     let (kernel, vertex_fn, fragment_fn, staged_fn) = (
         function_in(&library, c"k"),
         function_in(&library, c"v"),
@@ -367,23 +482,46 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
     );
 
     let archive = empty_archive(dev);
-    assert!(!serializes(archive, "empty"), "an empty archive has nothing to write");
+    assert!(
+        !serializes(archive, "empty"),
+        "an empty archive has nothing to write"
+    );
     // SAFETY: plain data, all zeroes is a valid value.
     let mut compute: WMTComputePipelineInfo = unsafe { core::mem::zeroed() };
     compute.compute_function = kernel;
     compute.binary_archive_for_serialization = archive;
-    let mut compute_call = UnixcallMtldeviceNewcomputepso { device: dev, info: mem(&compute), ret_error: FILL, ret_pso: FILL };
+    let mut compute_call = UnixcallMtldeviceNewcomputepso {
+        device: dev,
+        info: mem(&compute),
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast()) }, 0);
+    assert_eq!(
+        unsafe {
+            mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast())
+        },
+        0
+    );
     assert_eq!(compute_call.ret_error, 0);
     assert_eq!(retain_count(compute_call.ret_pso), 1);
     assert!(serializes(archive, "compute"));
 
     let archive = empty_archive(dev);
     let render = render_info(vertex_fn, fragment_fn, archive);
-    let mut render_call = UnixcallMtldeviceNewrenderpso { device: dev, info: mem(&render), ret_error: FILL, ret_pso: FILL };
+    let mut render_call = UnixcallMtldeviceNewrenderpso {
+        device: dev,
+        info: mem(&render),
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut render_call).cast()) }, 0);
+    assert_eq!(
+        unsafe {
+            mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut render_call).cast())
+        },
+        0
+    );
     assert_eq!(render_call.ret_error, 0);
     assert_eq!(retain_count(render_call.ret_pso), 1);
     assert!(serializes(archive, "render"));
@@ -406,7 +544,14 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         ret_pso: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_render_pipeline_state_with_vertex_descriptor(core::ptr::from_mut(&mut vertex_call).cast()) }, 0);
+    assert_eq!(
+        unsafe {
+            mtl_device_new_render_pipeline_state_with_vertex_descriptor(
+                core::ptr::from_mut(&mut vertex_call).cast(),
+            )
+        },
+        0
+    );
     assert_eq!(vertex_call.ret_error, 0);
     assert_eq!(retain_count(vertex_call.ret_pso), 1);
     assert!(serializes(archive, "vertex"));
@@ -422,9 +567,21 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         mesh.mesh_function = function_in(&mesh_library, c"mshf");
         mesh.fragment_function = function_in(&mesh_library, c"mf");
         mesh.binary_archive_for_serialization = archive;
-        let mut mesh_call = UnixcallMtldeviceNewmeshrenderpso { device: dev, info: mem(&mesh), ret_error: FILL, ret_pso: FILL };
+        let mut mesh_call = UnixcallMtldeviceNewmeshrenderpso {
+            device: dev,
+            info: mem(&mesh),
+            ret_error: FILL,
+            ret_pso: FILL,
+        };
         // SAFETY: a live params block.
-        assert_eq!(unsafe { mtl_device_new_mesh_render_pipeline_state(core::ptr::from_mut(&mut mesh_call).cast()) }, 0);
+        assert_eq!(
+            unsafe {
+                mtl_device_new_mesh_render_pipeline_state(
+                    core::ptr::from_mut(&mut mesh_call).cast(),
+                )
+            },
+            0
+        );
         assert_eq!(mesh_call.ret_error, 0);
         assert_eq!(retain_count(mesh_call.ret_pso), 1);
         assert!(serializes(archive, "mesh"));
@@ -438,9 +595,21 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
         tile.color_formats[0] = WMT_PIXEL_FORMAT_BGRA8_UNORM;
         tile.raster_sample_count = 1;
         tile.binary_archive_for_serialization = archive;
-        let mut tile_call = UnixcallMtldeviceNewrenderpso { device: dev, info: mem(&tile), ret_error: FILL, ret_pso: FILL };
+        let mut tile_call = UnixcallMtldeviceNewrenderpso {
+            device: dev,
+            info: mem(&tile),
+            ret_error: FILL,
+            ret_pso: FILL,
+        };
         // SAFETY: a live params block.
-        assert_eq!(unsafe { mtl_device_new_tile_render_pipeline_state(core::ptr::from_mut(&mut tile_call).cast()) }, 0);
+        assert_eq!(
+            unsafe {
+                mtl_device_new_tile_render_pipeline_state(
+                    core::ptr::from_mut(&mut tile_call).cast(),
+                )
+            },
+            0
+        );
         assert_eq!(tile_call.ret_error, 0);
         assert_eq!(retain_count(tile_call.ret_pso), 1);
         assert!(serializes(archive, "tile"));
@@ -449,17 +618,31 @@ fn each_pipeline_slot_adds_its_functions_to_the_archive() {
 
 #[test]
 fn a_nil_device_still_adds_to_the_archive() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
     let dev = handle(&*device);
-    let Some(library) = compile(dev, PIPELINE_SOURCE) else { return };
+    let Some(library) = compile(dev, PIPELINE_SOURCE) else {
+        return;
+    };
     let archive = empty_archive(dev);
     // SAFETY: plain data, all zeroes is a valid value.
     let mut compute: WMTComputePipelineInfo = unsafe { core::mem::zeroed() };
     compute.compute_function = function_in(&library, c"k");
     compute.binary_archive_for_serialization = archive;
-    let mut compute_call = UnixcallMtldeviceNewcomputepso { device: 0, info: mem(&compute), ret_error: FILL, ret_pso: FILL };
+    let mut compute_call = UnixcallMtldeviceNewcomputepso {
+        device: 0,
+        info: mem(&compute),
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast()) }, 0);
+    assert_eq!(
+        unsafe {
+            mtl_device_new_compute_pipeline_state(core::ptr::from_mut(&mut compute_call).cast())
+        },
+        0
+    );
     assert_eq!((compute_call.ret_pso, compute_call.ret_error), (0, 0));
     assert!(serializes(archive, "nil-device"));
 }
@@ -471,8 +654,16 @@ kernel void kk(device int *o [[buffer(0)]]) { o[0] = kc; }
 ";
 
 /// Slot 98 over `library`'s `kk` with one constant of `data_type` at index 0 and no data.
-fn function_with_null_constant(library: &NSObject, data_type: u16) -> UnixcallMtllibraryNewfunctionWithConstants {
-    let constant = WMTFunctionConstant { data: MemPtr { ptr: 0 }, r#type: data_type, index: 0, reserved: 0 };
+fn function_with_null_constant(
+    library: &NSObject,
+    data_type: u16,
+) -> UnixcallMtllibraryNewfunctionWithConstants {
+    let constant = WMTFunctionConstant {
+        data: MemPtr { ptr: 0 },
+        r#type: data_type,
+        index: 0,
+        reserved: 0,
+    };
     let mut p = UnixcallMtllibraryNewfunctionWithConstants {
         library: handle(library),
         name: mem(&c"kk".to_bytes()[0]),
@@ -482,14 +673,21 @@ fn function_with_null_constant(library: &NSObject, data_type: u16) -> UnixcallMt
         ret_error: FILL,
     };
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_library_new_function_with_constants(core::ptr::from_mut(&mut p).cast()) },
+        0
+    );
     p
 }
 
 #[test]
 fn a_constant_without_data_is_sent_with_its_type() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
-    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
+    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else {
+        return;
+    };
     // Float2x2: Metal reads no bytes of it, records the type and refuses the function, whose
     // constant is an int. The C sent the null pointer as it was and got that error.
     let p = function_with_null_constant(&library, 7);
@@ -503,8 +701,12 @@ fn a_constant_without_data_is_sent_with_its_type() {
 
 #[test]
 fn a_constant_without_data_of_a_type_metal_reads_is_zero() {
-    let Some(device) = MTLCreateSystemDefaultDevice() else { return };
-    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else { return };
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        return;
+    };
+    let Some(library) = compile(handle(&*device), CONSTANT_SOURCE) else {
+        return;
+    };
     // Int: the C faulted in Metal's read of the four bytes; the handler gives it zeros.
     let p = function_with_null_constant(&library, 29);
     assert_ne!(p.ret, 0);
@@ -562,11 +764,19 @@ fn a_render_pipeline_is_written_before_the_archive_add() {
     // that raises must find them written.
     let archive = StubArchive::new();
     let render = render_info(0, 0, handle(&*archive));
-    let mut call = UnixcallMtldeviceNewrenderpso { device: 0, info: mem(&render), ret_error: FILL, ret_pso: FILL };
+    let mut call = UnixcallMtldeviceNewrenderpso {
+        device: 0,
+        info: mem(&render),
+        ret_error: FILL,
+        ret_pso: FILL,
+    };
     WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
     SEEN.set(None);
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut call).cast()) }, 0);
+    assert_eq!(
+        unsafe { mtl_device_new_render_pipeline_state(core::ptr::from_mut(&mut call).cast()) },
+        0
+    );
     assert_eq!(SEEN.get(), Some([0, 0]), "slot 34");
 
     // SAFETY: plain data, all zeroes is a valid value.
@@ -581,6 +791,13 @@ fn a_render_pipeline_is_written_before_the_archive_add() {
     WATCHED.set([&raw const call.ret_pso, &raw const call.ret_error]);
     SEEN.set(None);
     // SAFETY: a live params block.
-    assert_eq!(unsafe { mtl_device_new_render_pipeline_state_with_vertex_descriptor(core::ptr::from_mut(&mut call).cast()) }, 0);
+    assert_eq!(
+        unsafe {
+            mtl_device_new_render_pipeline_state_with_vertex_descriptor(
+                core::ptr::from_mut(&mut call).cast(),
+            )
+        },
+        0
+    );
     assert_eq!(SEEN.get(), Some([0, 0]), "slot 156");
 }

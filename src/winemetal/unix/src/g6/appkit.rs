@@ -4,9 +4,7 @@
 //! thread (CONVENTIONS, winemetal's display reads). This states what the C does, not that the
 //! getters are thread-safe.
 
-use objc2::rc::Retained;
-use objc2::runtime::NSObject;
-use objc2::{AnyThread, extern_class, extern_methods};
+use objc2::{AnyThread, extern_class, extern_methods, rc::Retained, runtime::NSObject};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 

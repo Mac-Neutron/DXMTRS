@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice;
-
 use super::*;
+use crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice;
 
 fn stamp(seq: u64, draw: &AtomicU64, upload: &AtomicU64) -> SubmitStamp {
     SubmitStamp::for_counters(seq, draw, upload)

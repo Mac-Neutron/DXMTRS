@@ -3,10 +3,9 @@ use std::sync::Arc;
 
 use log::{debug, error, info, warn};
 use mtld3d_shared::{
-    AllocPagesParams, FreePagesParams,
-    AttachMetalLayerParams, BlitTextureToBufferParams, CreateBackbufferParams,
+    AllocPagesParams, AttachMetalLayerParams, BlitTextureToBufferParams, CreateBackbufferParams,
     CreateColorTargetParams, CreateCommandQueueParams, CreateDepthTextureParams,
-    DestroyCommandQueueParams, DestroyResourcesBulkParams, DetachMetalLayerParams,
+    DestroyCommandQueueParams, DestroyResourcesBulkParams, DetachMetalLayerParams, FreePagesParams,
     GetDeviceInfoParams, InPtr, InPtrMut, LogLineKind, MetalHandle, OpenLogParams,
     PresentClientSurfaceParams, SetCursorOverlayParams, SetPresentWaitPolicyParams, WriteLogParams,
     identity,
@@ -208,7 +207,9 @@ pub extern "C" fn get_device_info_handler(args: *mut c_void) -> i32 {
         params.caps = caps;
         // MacNeutron: under the winemetal facade PageBox pages come from here (the VM's guest Metal takes no others).
         #[cfg(mtl_facade)]
-        params.caps.insert(mtld3d_shared::mtl::DeviceCapsFlags::PAGES_FROM_UNIX);
+        params
+            .caps
+            .insert(mtld3d_shared::mtl::DeviceCapsFlags::PAGES_FROM_UNIX);
 
         if params.name_ptr != 0 && params.name_buf_len > 0 {
             let buf_len =
@@ -245,7 +246,9 @@ pub extern "C" fn alloc_pages_handler(args: *mut c_void) -> i32 {
     let Some(mut params) = (unsafe { InPtrMut::<AllocPagesParams>::opt(args) }) else {
         return -1;
     };
-    params.ptr = usize::try_from(params.len).ok().map_or(0, |len| metal::alloc_pages(len) as u64);
+    params.ptr = usize::try_from(params.len)
+        .ok()
+        .map_or(0, |len| metal::alloc_pages(len) as u64);
     STATUS_SUCCESS
 }
 
@@ -559,7 +562,11 @@ pub fn malloc_in_use() -> u64 {
 #[cfg(target_os = "linux")]
 pub fn process_footprint() -> u64 {
     let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-    let resident = statm.split_whitespace().nth(1).and_then(|pages| pages.parse::<u64>().ok()).unwrap_or(0);
+    let resident = statm
+        .split_whitespace()
+        .nth(1)
+        .and_then(|pages| pages.parse::<u64>().ok())
+        .unwrap_or(0);
     // SAFETY: sysconf only answers a query.
     let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap_or(4096);
     resident.saturating_mul(page)

@@ -38,12 +38,11 @@ use mtld3d_types::{
     D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT3, D3DTTFF_PROJECTED, D3DVBF_1WEIGHTS,
     D3DVERTEXELEMENT9, render_state_defaults,
 };
-use crate::mtl::objc2::rc::Retained;
-use crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice;
 
 use super::{create_render_pipeline, destroy_render_pipeline};
-use crate::metal::{
-    compile_shader_library, destroy_function, destroy_library, handle::IntoRetained,
+use crate::{
+    metal::{compile_shader_library, destroy_function, destroy_library, handle::IntoRetained},
+    mtl::{objc2::rc::Retained, objc2_metal::MTLCreateSystemDefaultDevice},
 };
 
 const fn element(offset: u16, type_: u8, usage: u8) -> D3DVERTEXELEMENT9 {

@@ -1,5 +1,7 @@
-use core::mem::size_of;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{
+    mem::size_of,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use objc2::{define_class, extern_methods};
 use objc2_foundation::NSObject;
@@ -51,7 +53,9 @@ fn update(buffer: u64, offset: u64, data: *const u8, length: u64) -> i32 {
     let mut p = UnixcallMtlbufferUpdatecontents {
         buffer,
         offset,
-        data: winemetal_wire::MemPtr { ptr: data.expose_provenance() as u64 },
+        data: winemetal_wire::MemPtr {
+            ptr: data.expose_provenance() as u64,
+        },
         length,
     };
     // SAFETY: a params block for slot 107 whose handle is null or a live buffer, and whose data is null or
@@ -106,7 +110,9 @@ fn resource_id_is_one_word() {
     let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
     let desc = MTLSamplerDescriptor::new();
     desc.setSupportArgumentBuffers(true);
-    let sampler = device.newSamplerStateWithDescriptor(&desc).expect("a sampler");
+    let sampler = device
+        .newSamplerStateWithDescriptor(&desc)
+        .expect("a sampler");
     assert_ne!(resource_id(sampler.gpuResourceID()), 0);
 }
 
@@ -156,7 +162,10 @@ fn getters_of_the_null_handle_answer_zero() {
         texture_mipmap_level_count,
     ];
     for getter in getters {
-        let mut p = UnixcallGenericObjUint64Ret { handle: 0, ret: 0xa5a5_a5a5_a5a5_a5a5 };
+        let mut p = UnixcallGenericObjUint64Ret {
+            handle: 0,
+            ret: 0xa5a5_a5a5_a5a5_a5a5,
+        };
         // SAFETY: a params block for a getter slot whose handle is null.
         assert_eq!(unsafe { getter(core::ptr::from_mut(&mut p).cast()) }, 0);
         assert_eq!(p.ret, 0);
@@ -255,15 +264,18 @@ fn hook_memory_is_whole_pages() {
 
 #[cfg(feature = "native")]
 mod native {
-    use core::ffi::c_void;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use core::{
+        ffi::c_void,
+        sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    };
     use std::time::{Duration, Instant};
 
     use objc2_metal::MTLCreateSystemDefaultDevice;
-    use winemetal_wire::{MemPtr, WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RESOURCE_STORAGE_MODE_SHARED};
+    use winemetal_wire::{
+        MemPtr, WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RESOURCE_STORAGE_MODE_SHARED,
+    };
 
-    use super::super::*;
-    use super::shared_buffer;
+    use super::{super::*, shared_buffer};
 
     static ALLOCS: AtomicUsize = AtomicUsize::new(0);
     static FREES: AtomicUsize = AtomicUsize::new(0);
@@ -273,7 +285,8 @@ mod native {
     unsafe extern "C-unwind" fn alloc(length: u64, ctx: *mut c_void) -> *mut c_void {
         let mut memory = core::ptr::null_mut();
         // SAFETY: `memory` is a writable pointer; the alignment is a power of two.
-        let failed = unsafe { libc::posix_memalign(&raw mut memory, 16384, u64_to_usize(length)) } != 0;
+        let failed =
+            unsafe { libc::posix_memalign(&raw mut memory, 16384, u64_to_usize(length)) } != 0;
         if failed || ctx.expose_provenance() != CONTEXT {
             return core::ptr::null_mut();
         }
@@ -292,10 +305,17 @@ mod native {
 
     /// Slot 18 on `device` for a buffer of `length` bytes with `options` and the guest's `memory`.
     fn new(device: u64, options: u64, memory: u64) -> (UnixcallMtldeviceNewbuffer, WMTBufferInfo) {
-        let mut info = WMTBufferInfo { length: 100, options, memory: MemPtr { ptr: memory }, gpu_address: 0 };
+        let mut info = WMTBufferInfo {
+            length: 100,
+            options,
+            memory: MemPtr { ptr: memory },
+            gpu_address: 0,
+        };
         let mut p = UnixcallMtldeviceNewbuffer {
             device,
-            info: MemPtr { ptr: core::ptr::from_mut(&mut info).expose_provenance() as u64 },
+            info: MemPtr {
+                ptr: core::ptr::from_mut(&mut info).expose_provenance() as u64,
+            },
             ret: 0,
         };
         // SAFETY: a params block for slot 18 whose handle is a live device and whose info is live.
@@ -308,17 +328,26 @@ mod native {
         let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
         let handle = Retained::as_ptr(&device).expose_provenance() as u64;
         assert_eq!(memory_hooked(), 0);
-        set_memory_hooks(Some(alloc), Some(free), core::ptr::with_exposed_provenance_mut(CONTEXT));
+        set_memory_hooks(
+            Some(alloc),
+            Some(free),
+            core::ptr::with_exposed_provenance_mut(CONTEXT),
+        );
         assert_eq!(memory_hooked(), 1);
 
         let (p, info) = new(handle, WMT_RESOURCE_STORAGE_MODE_SHARED, 0);
         assert_eq!(ALLOCS.load(Ordering::SeqCst), 1);
         assert_eq!(LENGTH.load(Ordering::SeqCst), 16384);
         assert_ne!(info.memory.ptr, 0);
-        let ptr = core::ptr::with_exposed_provenance_mut::<ProtocolObject<dyn MTLBuffer>>(u64_to_usize(p.ret));
+        let ptr = core::ptr::with_exposed_provenance_mut::<ProtocolObject<dyn MTLBuffer>>(
+            u64_to_usize(p.ret),
+        );
         // SAFETY: the handler gave the guest a reference to a live buffer; this takes it over.
         let buffer = unsafe { Retained::from_raw(ptr) }.expect("a buffer");
-        assert_eq!(buffer.contents().as_ptr().expose_provenance() as u64, info.memory.ptr);
+        assert_eq!(
+            buffer.contents().as_ptr().expose_provenance() as u64,
+            info.memory.ptr
+        );
         assert_ne!(info.gpu_address, 0);
 
         // Private memory is Metal's, and memory the guest brought goes under the buffer as it is.
@@ -326,10 +355,17 @@ mod native {
         assert_ne!(private.ret, 0);
         assert_eq!(info.memory.ptr, 0);
         let own = shared_buffer(16384, 0);
-        let (brought, info) = new(handle, WMT_RESOURCE_STORAGE_MODE_SHARED, own.contents().as_ptr().expose_provenance() as u64);
+        let (brought, info) = new(
+            handle,
+            WMT_RESOURCE_STORAGE_MODE_SHARED,
+            own.contents().as_ptr().expose_provenance() as u64,
+        );
         assert_ne!(brought.ret, 0);
         assert_eq!(ALLOCS.load(Ordering::SeqCst), 1);
-        assert_eq!(info.memory.ptr, own.contents().as_ptr().expose_provenance() as u64);
+        assert_eq!(
+            info.memory.ptr,
+            own.contents().as_ptr().expose_provenance() as u64
+        );
 
         // Releasing the buffer gives the pages back.
         drop(buffer);

@@ -14,11 +14,11 @@ pub mod table;
 mod wmt;
 
 pub mod block2;
-pub mod objc2;
+pub mod foundation;
 pub mod metal;
 pub mod metal_fx;
+pub mod objc2;
 pub mod quartz_core;
-pub mod foundation;
 
 /// objc2-metal's names.
 pub mod objc2_metal {
@@ -53,17 +53,27 @@ pub mod memory {
     /// Null when it has none.
     #[must_use]
     pub fn alloc(len: usize) -> *mut u8 {
-        let mut params = wmt::Memory { length: len as u64, ptr: wmt::Ptr::null() };
+        let mut params = wmt::Memory {
+            length: len as u64,
+            ptr: wmt::Ptr::null(),
+        };
         // SAFETY: slot 153 writes the allocation's address, or null.
         let status = unsafe { table::call(wmt::MEMORY_ALLOC, &mut params) };
-        if status == 0 { params.ptr.get().cast() } else { core::ptr::null_mut() }
+        if status == 0 {
+            params.ptr.get().cast()
+        } else {
+            core::ptr::null_mut()
+        }
     }
 
     /// Gives back memory [`alloc`] returned (slot 154).
     ///
     /// Winemetal keeps it until no buffer is made over it.
     pub fn free(ptr: *mut u8) {
-        let mut params = wmt::Memory { length: 0, ptr: wmt::Ptr::new(ptr.cast()) };
+        let mut params = wmt::Memory {
+            length: 0,
+            ptr: wmt::Ptr::new(ptr.cast()),
+        };
         // SAFETY: slot 154 on an allocation of slot 153's.
         unsafe { table::call(wmt::MEMORY_FREE, &mut params) };
     }

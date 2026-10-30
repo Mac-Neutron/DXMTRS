@@ -5,7 +5,11 @@
 //! scaled values are C++ casts, a contract with the game's calls; the structural alternative
 //! re-implements `as` bit by bit for the same results. In range each is C++'s cast; out of
 //! range `as` saturates where C++ is undefined.
-#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 
 /// `static_cast<int>(float)`: toward zero.
 #[must_use]

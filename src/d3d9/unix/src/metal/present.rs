@@ -43,17 +43,19 @@ use mtld3d_shared::{
     mtl::PixelFormat,
     mtl_handle::{MTLLibraryKind, MTLRenderPipelineStateKind},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLCompileOptions, MTLDevice, MTLFunction, MTLLanguageVersion, MTLLibrary, MTLMathMode,
-    MTLPixelFormat, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
-};
 use rustc_hash::FxHashMap;
 
 use crate::{
     LOG_TARGET,
     metal::handle::{IntoRetained, ReleaseRetain, keep_first},
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_foundation::NSString,
+        objc2_metal::{
+            MTLCompileOptions, MTLDevice, MTLFunction, MTLLanguageVersion, MTLLibrary, MTLMathMode,
+            MTLPixelFormat, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+        },
+    },
 };
 
 /// MSL source for the present-pass library.

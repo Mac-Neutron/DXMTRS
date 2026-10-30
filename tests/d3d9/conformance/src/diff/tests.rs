@@ -401,5 +401,9 @@ fn subtest_line_names_the_tests_executed() {
     let mut cur = current_with(&[(1, 5)], false);
     cur.get_mut(&key()).unwrap().executed = 4242;
     let report = diff(&base, &classes, &cur);
-    assert!(report.text.contains("crash=0) executed=4242 ok"), "{}", report.text);
+    assert!(
+        report.text.contains("crash=0) executed=4242 ok"),
+        "{}",
+        report.text
+    );
 }

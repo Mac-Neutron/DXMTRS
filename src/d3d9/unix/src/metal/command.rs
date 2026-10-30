@@ -7,7 +7,6 @@ use std::{
     },
 };
 
-use crate::mtl::block2::RcBlock;
 use log::{debug, error, trace};
 use mtld3d_shared::{
     BlitCommand, BlitCommandType, Command, CommandType, ExtraColorDesc, MetalHandle,
@@ -22,18 +21,6 @@ use mtld3d_shared::{
     },
     perf::{CommandBufferRole, NanosSetTimer},
 };
-use crate::mtl::objc2::{Message, rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_foundation::{NSError, NSRange};
-use crate::mtl::objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLClearColor, MTLCommandBuffer,
-    MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCullMode, MTLDevice,
-    MTLDrawable, MTLIndexType, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResource, MTLResourceOptions,
-    MTLSamplerState, MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureType,
-    MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode,
-};
-use crate::mtl::objc2_metal_fx::MTLFXSpatialScalerColorProcessingMode;
-use crate::mtl::objc2_quartz_core::CAMetalDrawable;
 
 use crate::{
     LOG_TARGET,
@@ -47,6 +34,21 @@ use crate::{
         texture::mtl_pixel_format,
         transient::{SubmitStamp, UploadRing},
         upscale::UpscaleCache,
+    },
+    mtl::{
+        block2::RcBlock,
+        objc2::{Message, rc::Retained, runtime::ProtocolObject},
+        objc2_foundation::{NSError, NSRange},
+        objc2_metal::{
+            MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLClearColor, MTLCommandBuffer,
+            MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCullMode, MTLDevice,
+            MTLDrawable, MTLIndexType, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType,
+            MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResource, MTLResourceOptions,
+            MTLSamplerState, MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureType,
+            MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode,
+        },
+        objc2_metal_fx::MTLFXSpatialScalerColorProcessingMode,
+        objc2_quartz_core::CAMetalDrawable,
     },
 };
 
@@ -624,8 +626,10 @@ fn encode_frame(
         return false;
     };
     {
-        let label =
-            crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-frame-{:#x}", params.submit_seq));
+        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+            "mtld3d-frame-{:#x}",
+            params.submit_seq
+        ));
         cmd_buf.setLabel(Some(&label));
     }
 
@@ -1131,7 +1135,9 @@ fn encode_upload_cmd_buf(
         return None;
     };
     {
-        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-upload-{submit_seq:#x}"));
+        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+            "mtld3d-upload-{submit_seq:#x}"
+        ));
         upload_cb.setLabel(Some(&label));
     }
     if !blits.is_empty() {
@@ -2291,8 +2297,9 @@ fn encode_leading_blits(
     // Pure-notify frames skip encoder creation entirely.
     let mut blit = if needs_encoder {
         if let Some(b) = cmd_buf.blitCommandEncoder() {
-            let label =
-                crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-leading-blits-{site}"));
+            let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+                "mtld3d-leading-blits-{site}"
+            ));
             b.setLabel(Some(&label));
             Some(b)
         } else {
@@ -2959,7 +2966,8 @@ fn encode_pass(
         return false;
     };
     {
-        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-pass-{pass_idx}"));
+        let label =
+            crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-pass-{pass_idx}"));
         encoder.setLabel(Some(&label));
     }
 
@@ -2981,8 +2989,10 @@ fn encode_pass(
             mtld3d_shared::crumb!("pass:cmd", u64::from(cmd.cmd), i as u64);
             match CommandType::from_repr(cmd.cmd) {
                 Some(CommandType::PushDebugGroup) => {
-                    let label =
-                        crate::mtl::objc2_foundation::NSString::from_str(&format!("draw {}", cmd.param_a));
+                    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+                        "draw {}",
+                        cmd.param_a
+                    ));
                     encoder.pushDebugGroup(&label);
                     debug_group_depth += 1;
                 }
@@ -3827,7 +3837,8 @@ pub fn blit_texture_to_buffer(args: &BlitArgs<'_>) -> bool {
     // MacNeutron: under the winemetal facade the GPU writes a staging buffer of its own, copied into the caller's
     // memory once complete: in the VM the caller's pages are guest memory Metal can't be given.
     #[cfg(mtl_facade)]
-    let dst_buffer = device.newBufferWithLength_options(to_usize(dst_len), MTLResourceOptions::StorageModeShared);
+    let dst_buffer = device
+        .newBufferWithLength_options(to_usize(dst_len), MTLResourceOptions::StorageModeShared);
     // SAFETY: `ptr` is the PE-supplied dst pointer (non-null by the check
     // above); `dst_len` matches its allocation; deallocator is None so the
     // PE allocation is never freed by Metal.

@@ -15,7 +15,12 @@ fn bitfield_getters_read_their_bits() {
         gpu_resource_id: 0,
     };
     assert_eq!(
-        (texture.r#type(), texture.mipmap_level_count(), texture.sample_count(), texture.usage()),
+        (
+            texture.r#type(),
+            texture.mipmap_level_count(),
+            texture.sample_count(),
+            texture.usage()
+        ),
         (1, 2, 3, 4)
     );
 
@@ -33,7 +38,12 @@ fn bitfield_getters_read_their_bits() {
         gpu_resource_id: 0,
     };
     assert_eq!(
-        (icb.inherit_buffers(), icb.inherit_pso(), icb.inherit_cull_mode(), icb.support_ray_tracing()),
+        (
+            icb.inherit_buffers(),
+            icb.inherit_pso(),
+            icb.inherit_cull_mode(),
+            icb.support_ray_tracing()
+        ),
         (1, 0, 1, 0)
     );
     assert_eq!(icb.support_color_attachment_mapping(), 1);

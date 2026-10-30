@@ -177,8 +177,11 @@ fn new_temporal(
     device: &ProtocolObject<dyn MTLDevice>,
     info: &WMTFXTemporalScalerInfo,
 ) -> Retained<ProtocolObject<dyn MTLFXTemporalScaler>> {
-    let mut p =
-        UnixcallMtldeviceNewfxtemporalscaler { device: handle_of(device), info: mem(info), ret: 0 };
+    let mut p = UnixcallMtldeviceNewfxtemporalscaler {
+        device: handle_of(device),
+        info: mem(info),
+        ret: 0,
+    };
     assert_eq!(call(new_temporal_scaler, &mut p), 0);
     owned(p.ret)
 }
@@ -190,10 +193,16 @@ fn supports_answers_as_metalfx_does() {
     for (slot, handle, device) in [("device", handle_of(&*device), some), ("nil", 0, None)] {
         let spatial = SpatialDescriptor::supports_device(device);
         let temporal = TemporalDescriptor::supports_device(device);
-        let mut p = UnixcallGenericObjUint64Ret { handle, ret: u64::MAX };
+        let mut p = UnixcallGenericObjUint64Ret {
+            handle,
+            ret: u64::MAX,
+        };
         assert_eq!(call(supports_fx_spatial_scaler, &mut p), 0);
         assert_eq!(p.ret, u64::from(spatial), "spatial, {slot}");
-        let mut p = UnixcallGenericObjUint64Ret { handle, ret: u64::MAX };
+        let mut p = UnixcallGenericObjUint64Ret {
+            handle,
+            ret: u64::MAX,
+        };
         assert_eq!(call(supports_fx_temporal_scaler, &mut p), 0);
         assert_eq!(p.ret, u64::from(temporal), "temporal, {slot}");
     }
@@ -209,8 +218,14 @@ fn scale_range_answers_as_metalfx_does() {
             max_scale: -1.0,
         };
         assert_eq!(call(temporal_scaler_scale_range, &mut p), 0);
-        same(p.min_scale, TemporalDescriptor::supported_input_content_min_scale(device));
-        same(p.max_scale, TemporalDescriptor::supported_input_content_max_scale(device));
+        same(
+            p.min_scale,
+            TemporalDescriptor::supported_input_content_min_scale(device),
+        );
+        same(
+            p.max_scale,
+            TemporalDescriptor::supported_input_content_max_scale(device),
+        );
     }
 }
 
@@ -247,9 +262,15 @@ fn temporal_reactive_mask_format_needs_the_mask() {
     let sizes = [scaler.output_width(), scaler.output_height()];
     assert_eq!(sizes, [128, 96]);
     assert_eq!(scaler.color_texture_format(), MTLPixelFormat::RGBA16Float);
-    assert_eq!(scaler.reactive_mask_texture_format(), MTLPixelFormat::R8Unorm);
+    assert_eq!(
+        scaler.reactive_mask_texture_format(),
+        MTLPixelFormat::R8Unorm
+    );
     let scaler = new_temporal(&device, &temporal_info(false));
-    assert_eq!(scaler.reactive_mask_texture_format(), MTLPixelFormat::Invalid);
+    assert_eq!(
+        scaler.reactive_mask_texture_format(),
+        MTLPixelFormat::Invalid
+    );
 }
 
 #[test]
@@ -258,11 +279,36 @@ fn temporal_encode_sets_every_property() {
     let scaler = new_temporal(&device, &temporal_info(true));
     let queue = device.newCommandQueue().expect("a queue");
     let cmdbuf = queue.commandBuffer().expect("a command buffer");
-    let color = texture(&device, MTLPixelFormat::RGBA16Float, 64, scaler.color_texture_usage());
-    let output = texture(&device, MTLPixelFormat::RGBA16Float, 128, scaler.output_texture_usage());
-    let depth = texture(&device, MTLPixelFormat::Depth32Float, 64, scaler.depth_texture_usage());
-    let motion = texture(&device, MTLPixelFormat::RG16Float, 64, scaler.motion_texture_usage());
-    let exposure = texture(&device, MTLPixelFormat::R16Float, 1, MTLTextureUsage::ShaderRead);
+    let color = texture(
+        &device,
+        MTLPixelFormat::RGBA16Float,
+        64,
+        scaler.color_texture_usage(),
+    );
+    let output = texture(
+        &device,
+        MTLPixelFormat::RGBA16Float,
+        128,
+        scaler.output_texture_usage(),
+    );
+    let depth = texture(
+        &device,
+        MTLPixelFormat::Depth32Float,
+        64,
+        scaler.depth_texture_usage(),
+    );
+    let motion = texture(
+        &device,
+        MTLPixelFormat::RG16Float,
+        64,
+        scaler.motion_texture_usage(),
+    );
+    let exposure = texture(
+        &device,
+        MTLPixelFormat::R16Float,
+        1,
+        MTLTextureUsage::ShaderRead,
+    );
     let usage = scaler.reactive_mask_texture_usage();
     let reactive = texture(&device, MTLPixelFormat::R8Unorm, 64, usage);
     let fence = device.newFence().expect("a fence");
@@ -308,9 +354,15 @@ fn temporal_encode_sets_every_property() {
     assert!(same_object(scaler.depth_texture().as_deref(), &depth));
     assert!(same_object(scaler.motion_texture().as_deref(), &motion));
     assert!(same_object(scaler.exposure_texture().as_deref(), &exposure));
-    assert!(same_object(scaler.reactive_mask_texture().as_deref(), &reactive));
+    assert!(same_object(
+        scaler.reactive_mask_texture().as_deref(),
+        &reactive
+    ));
     assert!(same_object(scaler.fence().as_deref(), &fence));
-    assert_eq!([scaler.input_content_width(), scaler.input_content_height()], [48, 40]);
+    assert_eq!(
+        [scaler.input_content_width(), scaler.input_content_height()],
+        [48, 40]
+    );
     // `reset` is consumed by the encode: the probe pins its setter.
     assert!(scaler.depth_reversed());
     same(scaler.motion_vector_scale_x(), 48.0);
@@ -355,8 +407,18 @@ fn spatial_encode_sets_the_textures() {
     let scaler = owned::<ProtocolObject<dyn MTLFXSpatialScaler>>(made.ret);
     let queue = device.newCommandQueue().expect("a queue");
     let cmdbuf = queue.commandBuffer().expect("a command buffer");
-    let color = texture(&device, MTLPixelFormat::RGBA16Float, 64, scaler.color_texture_usage());
-    let output = texture(&device, MTLPixelFormat::RGBA16Float, 128, scaler.output_texture_usage());
+    let color = texture(
+        &device,
+        MTLPixelFormat::RGBA16Float,
+        64,
+        scaler.color_texture_usage(),
+    );
+    let output = texture(
+        &device,
+        MTLPixelFormat::RGBA16Float,
+        128,
+        scaler.output_texture_usage(),
+    );
     let fence = device.newFence().expect("a fence");
     let mut p = UnixcallMtlcommandbufferSpatialScale {
         cmdbuf: handle_of(&*cmdbuf),
@@ -393,7 +455,10 @@ fn interpolator_needs_a_supported_device() {
     let device = device();
     let info = interpolator_info(0);
     for (handle, supported) in [
-        (handle_of(&*device), InterpolatorDescriptor::supports_device(Some(&device))),
+        (
+            handle_of(&*device),
+            InterpolatorDescriptor::supports_device(Some(&device)),
+        ),
         (0, InterpolatorDescriptor::supports_device(None)),
     ] {
         let mut p = UnixcallMtldeviceNewfxframeinterpolator {
@@ -464,10 +529,19 @@ fn interpolate_encode_sets_every_property() {
     cmdbuf.waitUntilCompleted();
     assert_eq!(cmdbuf.status(), MTLCommandBufferStatus::Completed);
     assert!(same_object(interpolator.color_texture().as_deref(), &color));
-    assert!(same_object(interpolator.prev_color_texture().as_deref(), &prev));
+    assert!(same_object(
+        interpolator.prev_color_texture().as_deref(),
+        &prev
+    ));
     assert!(same_object(interpolator.depth_texture().as_deref(), &depth));
-    assert!(same_object(interpolator.motion_texture().as_deref(), &motion));
-    assert!(same_object(interpolator.output_texture().as_deref(), &output));
+    assert!(same_object(
+        interpolator.motion_texture().as_deref(),
+        &motion
+    ));
+    assert!(same_object(
+        interpolator.output_texture().as_deref(),
+        &output
+    ));
     assert!(same_object(interpolator.fence().as_deref(), &fence));
     same(interpolator.motion_vector_scale_x(), 128.0);
     same(interpolator.motion_vector_scale_y(), -128.0);
@@ -544,15 +618,25 @@ fn a_nil_scaler_receives_nothing() {
 #[test]
 fn a_null_info_makes_nothing() {
     let null = MemPtr { ptr: 0 };
-    let mut temporal =
-        UnixcallMtldeviceNewfxtemporalscaler { device: 0, info: null, ret: u64::MAX };
+    let mut temporal = UnixcallMtldeviceNewfxtemporalscaler {
+        device: 0,
+        info: null,
+        ret: u64::MAX,
+    };
     assert_eq!(call(new_temporal_scaler, &mut temporal), 0);
     assert_eq!(temporal.ret, u64::MAX);
-    let mut spatial = UnixcallMtldeviceNewfxspatialscaler { device: 0, info: null, ret: u64::MAX };
+    let mut spatial = UnixcallMtldeviceNewfxspatialscaler {
+        device: 0,
+        info: null,
+        ret: u64::MAX,
+    };
     assert_eq!(call(new_spatial_scaler, &mut spatial), 0);
     assert_eq!(spatial.ret, u64::MAX);
-    let mut interpolator =
-        UnixcallMtldeviceNewfxframeinterpolator { device: 0, info: null, ret: u64::MAX };
+    let mut interpolator = UnixcallMtldeviceNewfxframeinterpolator {
+        device: 0,
+        info: null,
+        ret: u64::MAX,
+    };
     assert_eq!(call(new_frame_interpolator, &mut interpolator), 0);
     assert_eq!(interpolator.ret, 0);
 }

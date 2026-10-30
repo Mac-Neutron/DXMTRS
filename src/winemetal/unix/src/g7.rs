@@ -1,30 +1,37 @@
 //! Shared events, the shared-event listener, fences and Mach ports.
 
-use core::ffi::{c_char, c_int, c_void};
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    ffi::{c_char, c_int, c_void},
+    ptr::NonNull,
+    sync::atomic::{AtomicU32, Ordering},
+};
 use std::sync::Arc;
 
 use block2::RcBlock;
-use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{NSObject, ProtocolObject};
-use objc2::{AnyThread, extern_class, extern_methods};
+use objc2::{
+    AnyThread, extern_class, extern_methods,
+    rc::{Allocated, Retained},
+    runtime::{NSObject, ProtocolObject},
+};
 use objc2_metal::{
     MTLDevice, MTLEvent, MTLFence, MTLResource, MTLSharedEvent, MTLTexture, MTLTextureDescriptor,
 };
 use winemetal_wire::{
     UnixcallBootstrap, UnixcallGenericObjNoret, UnixcallGenericObjObjRet, UnixcallGenericObjRet,
-    UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret, UnixcallMtldeviceNewsharedeventwithmachport,
-    UnixcallMtldeviceNewtexture, UnixcallMtlsharedeventCreatemachport, UnixcallMtlsharedeventSetevent,
-    UnixcallMtlsharedeventSeteventatvalues, UnixcallMtlsharedeventWaituntilsignaledvalue, WMTTextureInfo,
+    UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret,
+    UnixcallMtldeviceNewsharedeventwithmachport, UnixcallMtldeviceNewtexture,
+    UnixcallMtlsharedeventCreatemachport, UnixcallMtlsharedeventSetevent,
+    UnixcallMtlsharedeventSeteventatvalues, UnixcallMtlsharedeventWaituntilsignaledvalue,
+    WMTTextureInfo,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, mem_mut, mem_slice, params};
-use crate::float_cast::{u64_to_usize, usize_to_u32};
-use crate::handle::{obj, ret_owned};
-use crate::texture::fill_texture_descriptor;
-
 use self::listener::{Listener, Owner};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, mem_mut, mem_slice, params},
+    float_cast::{u64_to_usize, usize_to_u32},
+    handle::{obj, ret_owned},
+    texture::fill_texture_descriptor,
+};
 
 pub mod listener;
 
@@ -131,7 +138,9 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_signal_value(args: *mut c_void)
 ///
 /// `args` is slot 104's params block: a null or live shared event, a null or live listener.
 #[unsafe(export_name = "_MTLSharedEvent_setWin32EventAtValue")]
-pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_value(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_value(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtlsharedeventSetevent>(args) };
@@ -146,10 +155,12 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_value(args: 
     };
     // SAFETY: the caller's listener, owned by its handle.
     let owner = unsafe { Owner::new(listener) };
-    let block = RcBlock::new(move |_: NonNull<ProtocolObject<dyn MTLSharedEvent>>, _: u64| {
-        let _guard = AbortOnPanic;
-        owner.notify(move || set_and_drop(nt_event), || drop_hold(nt_event));
-    });
+    let block = RcBlock::new(
+        move |_: NonNull<ProtocolObject<dyn MTLSharedEvent>>, _: u64| {
+            let _guard = AbortOnPanic;
+            owner.notify(move || set_and_drop(nt_event), || drop_hold(nt_event));
+        },
+    );
     // SAFETY: as above.
     let events = unsafe { listener.as_ref() }.events();
     // SAFETY: a live block, which Metal copies.
@@ -302,7 +313,11 @@ pub unsafe extern "C-unwind" fn wmt_bootstrap_register(args: *mut c_void) -> i32
     let kr = unsafe { bootstrap_register2(bp, p.name.as_ptr().cast(), p.mach_port, 0) };
     // SAFETY: the bootstrap port's send right this call got.
     unsafe { mach_port_deallocate(MACH_TASK_SELF, bp) };
-    if kr == KERN_SUCCESS { STATUS_SUCCESS } else { STATUS_UNSUCCESSFUL }
+    if kr == KERN_SUCCESS {
+        STATUS_SUCCESS
+    } else {
+        STATUS_UNSUCCESSFUL
+    }
 }
 
 /// Slot 122, `WMTBootstrapLookUp`: the port registered under the name.
@@ -327,7 +342,11 @@ pub unsafe extern "C-unwind" fn wmt_bootstrap_look_up(args: *mut c_void) -> i32 
     // SAFETY: the bootstrap port's send right this call got.
     unsafe { mach_port_deallocate(MACH_TASK_SELF, bp) };
     p.mach_port = port;
-    if kr == KERN_SUCCESS { STATUS_SUCCESS } else { STATUS_UNSUCCESSFUL }
+    if kr == KERN_SUCCESS {
+        STATUS_SUCCESS
+    } else {
+        STATUS_UNSUCCESSFUL
+    }
 }
 
 /// Slot 123, `MTLSharedEvent_createMachPort`: a send right to the event's port.
@@ -363,7 +382,9 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_create_mach_port(args: *mut c_v
 ///
 /// `args` is slot 124's params block; its device is null or an `MTLDevice`.
 #[unsafe(export_name = "_MTLDevice_newSharedEventWithMachPort")]
-pub unsafe extern "C-unwind" fn mtl_device_new_shared_event_with_mach_port(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_device_new_shared_event_with_mach_port(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtldeviceNewsharedeventwithmachport>(args) };
@@ -379,7 +400,9 @@ pub unsafe extern "C-unwind" fn mtl_device_new_shared_event_with_mach_port(args:
 ///
 /// `args` is slot 126's params block; its event is null or an `MTLSharedEvent`.
 #[unsafe(export_name = "_MTLSharedEvent_waitUntilSignaledValue")]
-pub unsafe extern "C-unwind" fn mtl_shared_event_wait_until_signaled_value(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_shared_event_wait_until_signaled_value(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtlsharedeventWaituntilsignaledvalue>(args) };
@@ -401,7 +424,9 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_wait_until_signaled_value(args:
 /// `args` is slot 146's params block: `count` events (each null or a live shared event) and
 /// values, a null or live listener.
 #[unsafe(export_name = "_MTLSharedEvent_setWin32EventAtValues")]
-pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_values(args: *mut c_void) -> i32 {
+pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_values(
+    args: *mut c_void,
+) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallMtlsharedeventSeteventatvalues>(args) };
@@ -426,16 +451,20 @@ pub unsafe extern "C-unwind" fn mtl_shared_event_set_win32_event_at_values(args:
         // SAFETY: the caller's listener, owned by its handle.
         let owner = unsafe { Owner::new(listener) };
         let needed = Arc::clone(&needed);
-        let block = RcBlock::new(move |_: NonNull<ProtocolObject<dyn MTLSharedEvent>>, _: u64| {
-            let _guard = AbortOnPanic;
-            if needed.fetch_sub(1, Ordering::AcqRel) == 1 {
-                owner.notify(move || set_and_drop(nt_event), || drop_hold(nt_event));
-            }
-        });
+        let block = RcBlock::new(
+            move |_: NonNull<ProtocolObject<dyn MTLSharedEvent>>, _: u64| {
+                let _guard = AbortOnPanic;
+                if needed.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    owner.notify(move || set_and_drop(nt_event), || drop_hold(nt_event));
+                }
+            },
+        );
         // SAFETY: as above.
         let listener_events = unsafe { listener.as_ref() }.events();
         // SAFETY: a live block, which Metal copies.
-        unsafe { event.notifyListener_atValue_block(listener_events, value, RcBlock::as_ptr(&block)) };
+        unsafe {
+            event.notifyListener_atValue_block(listener_events, value, RcBlock::as_ptr(&block))
+        };
     }
     STATUS_SUCCESS
 }
@@ -517,21 +546,31 @@ fn extract_texture_descriptor(
     texture: Option<&ProtocolObject<dyn MTLTexture>>,
     info: &mut WMTTextureInfo,
 ) {
-    let [kind, format, width, height, depth, array_length, mips, samples, usage, options] =
-        texture.map_or([0; 10], |t| {
-            [
-                t.textureType().0,
-                t.pixelFormat().0,
-                t.width(),
-                t.height(),
-                t.depth(),
-                t.arrayLength(),
-                t.mipmapLevelCount(),
-                t.sampleCount(),
-                t.usage().0,
-                t.resourceOptions().0,
-            ]
-        });
+    let [
+        kind,
+        format,
+        width,
+        height,
+        depth,
+        array_length,
+        mips,
+        samples,
+        usage,
+        options,
+    ] = texture.map_or([0; 10], |t| {
+        [
+            t.textureType().0,
+            t.pixelFormat().0,
+            t.width(),
+            t.height(),
+            t.depth(),
+            t.arrayLength(),
+            t.mipmapLevelCount(),
+            t.sampleCount(),
+            t.usage().0,
+            t.resourceOptions().0,
+        ]
+    });
     info.pixel_format = usize_to_u32(format);
     info.width = usize_to_u32(width);
     info.height = usize_to_u32(height);
@@ -546,9 +585,21 @@ fn extract_texture_descriptor(
 fn texture_bits(kind: usize, mips: usize, samples: usize, usage: usize) -> u32 {
     let field = |v: usize, shift: u32, width: u32| (usize_to_u32(v) & ((1 << width) - 1)) << shift;
     field(kind, WMTTextureInfo::TYPE_SHIFT, WMTTextureInfo::TYPE_WIDTH)
-        | field(mips, WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT, WMTTextureInfo::MIPMAP_LEVEL_COUNT_WIDTH)
-        | field(samples, WMTTextureInfo::SAMPLE_COUNT_SHIFT, WMTTextureInfo::SAMPLE_COUNT_WIDTH)
-        | field(usage, WMTTextureInfo::USAGE_SHIFT, WMTTextureInfo::USAGE_WIDTH)
+        | field(
+            mips,
+            WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT,
+            WMTTextureInfo::MIPMAP_LEVEL_COUNT_WIDTH,
+        )
+        | field(
+            samples,
+            WMTTextureInfo::SAMPLE_COUNT_SHIFT,
+            WMTTextureInfo::SAMPLE_COUNT_WIDTH,
+        )
+        | field(
+            usage,
+            WMTTextureInfo::USAGE_SHIFT,
+            WMTTextureInfo::USAGE_WIDTH,
+        )
 }
 
 /// The bootstrap server's port (a send right the caller deallocates), `None` when unreachable.

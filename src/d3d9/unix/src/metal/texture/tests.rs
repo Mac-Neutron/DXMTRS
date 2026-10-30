@@ -5,20 +5,22 @@ use mtld3d_shared::{
     mtl::PixelFormat,
     mtl_handle::{MTLCommandQueueKind, MTLTextureKind},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandBufferStatus,
-    MTLCommandEncoder, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLLoadAction,
-    MTLOrigin, MTLPixelFormat, MTLRenderPassDescriptor, MTLResource, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage,
-};
 
 use super::{
     REFUSED_CREATE_BACKOFF, TRANSPARENT_BLACK, clear_new_color_textures,
     is_resolvable_color_format, mtl_pixel_format, retry_refused_create, retry_with_backoff,
     wire_pixel_format,
+};
+use crate::mtl::{
+    objc2::{rc::Retained, runtime::ProtocolObject},
+    objc2_foundation::NSString,
+    objc2_metal::{
+        MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandBufferStatus,
+        MTLCommandEncoder, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLLoadAction,
+        MTLOrigin, MTLPixelFormat, MTLRenderPassDescriptor, MTLResource, MTLResourceOptions,
+        MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    },
 };
 
 /// Every wire pixel format, in declaration order.
@@ -66,6 +68,7 @@ fn batch_creation_keeps_views_and_ordered_clears_after_pool_drain() {
         mtl::{StorageMode, Swizzle, TextureCreateFlags, TextureUsage},
         texture_views::TextureViews,
     };
+
     use crate::mtl::objc2::rc::autoreleasepool;
 
     autoreleasepool(|_| {
@@ -381,7 +384,10 @@ fn render_target_views_preserve_usage_shape_and_role_swizzles() {
             assert_eq!(sample.mipmapLevelCount(), 3);
             assert_eq!(base.textureType(), sample.textureType());
             assert_eq!(base.swizzle(), super::IDENTITY_SWIZZLE);
-            assert_eq!(sample.swizzle().alpha, crate::mtl::objc2_metal::MTLTextureSwizzle::One);
+            assert_eq!(
+                sample.swizzle().alpha,
+                crate::mtl::objc2_metal::MTLTextureSwizzle::One
+            );
             assert_eq!(base.usage(), super::texture_usage(&device, true, true));
             if format.srgb_twin().is_some() {
                 assert_eq!(views.owned_handles().count(), 4);

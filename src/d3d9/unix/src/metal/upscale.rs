@@ -43,24 +43,29 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::mtl::block2::RcBlock;
 use mtld3d_shared::{
     MetalHandle,
     mtl::PixelFormat,
     mtl_handle::{MTLDeviceKind, MTLTextureKind},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLCommandBuffer, MTLDevice, MTLPixelFormat, MTLResource, MTLStorageMode, MTLTexture,
-    MTLTextureDescriptor, MTLTextureUsage,
-};
-use crate::mtl::objc2_metal_fx::{
-    MTLFXSpatialScaler, MTLFXSpatialScalerBase, MTLFXSpatialScalerColorProcessingMode,
-    MTLFXSpatialScalerDescriptor,
-};
 use rustc_hash::FxHashMap;
 
-use crate::{LOG_TARGET, metal::handle::IntoRetained};
+use crate::{
+    LOG_TARGET,
+    metal::handle::IntoRetained,
+    mtl::{
+        block2::RcBlock,
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLCommandBuffer, MTLDevice, MTLPixelFormat, MTLResource, MTLStorageMode, MTLTexture,
+            MTLTextureDescriptor, MTLTextureUsage,
+        },
+        objc2_metal_fx::{
+            MTLFXSpatialScaler, MTLFXSpatialScalerBase, MTLFXSpatialScalerColorProcessingMode,
+            MTLFXSpatialScalerDescriptor,
+        },
+    },
+};
 
 /// Cache key: a scaler is bound to its geometry, formats and colour mode.
 ///

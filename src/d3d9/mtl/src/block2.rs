@@ -31,7 +31,11 @@ impl<A: 'static, F: Fn(A) + 'static> IntoBlock<(A,)> for F {
 impl<F: ?Sized> RcBlock<F> {
     /// A block running `closure`.
     pub fn new<A, C: IntoBlock<A, Dyn = F>>(closure: C) -> Self {
-        Self { block: Box::new(DynBlock { f: closure.into_arc() }) }
+        Self {
+            block: Box::new(DynBlock {
+                f: closure.into_arc(),
+            }),
+        }
     }
 
     /// The block, for a handler parameter.

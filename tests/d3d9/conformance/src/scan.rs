@@ -84,7 +84,11 @@ pub fn parse_subtest_output(output: &str, signaled: bool) -> SubtestResult {
     let mut executed = 0;
     for line in output.lines() {
         if let Some(idx) = line.find(SUMMARY_MARKER) {
-            executed += line[..idx].rsplit(' ').next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+            executed += line[..idx]
+                .rsplit(' ')
+                .next()
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
         }
         if want_panic_msg {
             want_panic_msg = false;

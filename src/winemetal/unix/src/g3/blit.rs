@@ -2,8 +2,7 @@
 
 use core::ffi::c_void;
 
-use objc2::extern_methods;
-use objc2::runtime::ProtocolObject;
+use objc2::{extern_methods, runtime::ProtocolObject};
 use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLCounterSampleBuffer, MTLFence,
@@ -27,9 +26,11 @@ use winemetal_wire::{
 };
 
 use super::{body, origin, range, size};
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params};
-use crate::float_cast::u64_to_usize;
-use crate::handle::obj;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params},
+    float_cast::u64_to_usize,
+    handle::obj,
+};
 
 type Encoder = ProtocolObject<dyn MTLBlitCommandEncoder>;
 type Buffer = ProtocolObject<dyn MTLBuffer>;

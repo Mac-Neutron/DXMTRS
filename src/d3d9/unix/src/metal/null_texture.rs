@@ -12,17 +12,19 @@
 use std::sync::OnceLock;
 
 use mtld3d_shared::{MetalHandle, NullTextureKind, mtl_handle::MTLSamplerStateKind};
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice, MTLLoadAction, MTLOrigin,
-    MTLPixelFormat, MTLRegion, MTLRenderPassDescriptor, MTLResource, MTLSamplerDescriptor,
-    MTLSamplerState, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor,
-    MTLTextureType, MTLTextureUsage,
-};
 
 use crate::{
     LOG_TARGET,
     metal::{device::cpu_written_texture_storage, handle::BorrowRetained},
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice, MTLLoadAction,
+            MTLOrigin, MTLPixelFormat, MTLRegion, MTLRenderPassDescriptor, MTLResource,
+            MTLSamplerDescriptor, MTLSamplerState, MTLSize, MTLStorageMode, MTLStoreAction,
+            MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+        },
+    },
 };
 
 /// Handles to the four fallback textures and their default sampler.

@@ -21,18 +21,20 @@
 //! in SDR and HDR.
 
 use mtld3d_shared::mtl::PixelFormat;
-use crate::mtl::objc2::runtime::ProtocolObject;
-use crate::mtl::objc2_metal::{
-    MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
-};
-use crate::mtl::objc2_metal_fx::{MTLFXSpatialScaler, MTLFXSpatialScalerColorProcessingMode};
 use rustc_hash::FxHashMap;
 
 use super::{
     MAX_CACHED_SCALERS, MAX_CACHED_SCRATCH, ScalerCache, ScalerEntry, ScalerKey, ScalerSlot,
     ScratchCache, ScratchEntry, ScratchKey, UpscaleCache, detach_other_outputs,
     evict_least_recently_used, scratch_in, take_evicted, take_scalers, take_scratch,
+};
+use crate::mtl::{
+    objc2::runtime::ProtocolObject,
+    objc2_metal::{
+        MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat,
+        MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
+    },
+    objc2_metal_fx::{MTLFXSpatialScaler, MTLFXSpatialScalerColorProcessingMode},
 };
 
 /// A cache's live scaler count.
@@ -632,7 +634,9 @@ fn target(
         .expect("test texture");
     crate::mtl::objc2_metal::MTLResource::setLabel(
         &*texture,
-        Some(&crate::mtl::objc2_foundation::NSString::from_str("mtld3d-test-upscale")),
+        Some(&crate::mtl::objc2_foundation::NSString::from_str(
+            "mtld3d-test-upscale",
+        )),
     );
     texture
 }
@@ -657,7 +661,9 @@ fn fill(
     texture: &ProtocolObject<dyn crate::mtl::objc2_metal::MTLTexture>,
     red: f64,
 ) {
-    use crate::mtl::objc2_metal::{MTLCommandEncoder, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction};
+    use crate::mtl::objc2_metal::{
+        MTLCommandEncoder, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction,
+    };
     let pass = MTLRenderPassDescriptor::new();
     // SAFETY: attachment zero exists on every render pass descriptor.
     let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
@@ -1056,8 +1062,7 @@ fn fallback_submission_drains_preflight_evictions() {
 /// the shader read of the copy pass.
 #[test]
 fn the_intermediate_serves_the_scaler_and_the_copy_and_invalid_input_is_refused() {
-    use crate::mtl::objc2_metal::MTLResource;
-    use crate::mtl::objc2_metal_fx::MTLFXSpatialScalerBase;
+    use crate::mtl::{objc2_metal::MTLResource, objc2_metal_fx::MTLFXSpatialScalerBase};
     let Some(device) = gpu() else { return };
     let cache = UpscaleCache::new();
     let src = target(

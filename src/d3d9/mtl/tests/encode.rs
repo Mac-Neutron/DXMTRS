@@ -10,10 +10,11 @@ use mtld3d_mtl::{
     objc2::{Retained, runtime::ProtocolObject},
     objc2_foundation::NSString,
     objc2_metal::{
-        MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
-        MTLCommandQueue, MTLCullMode, MTLDevice, MTLLibrary as _, MTLLoadAction, MTLOrigin, MTLPixelFormat,
-        MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
-        MTLResourceOptions, MTLSamplerDescriptor, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture,
+        MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandBufferStatus,
+        MTLCommandEncoder, MTLCommandQueue, MTLCullMode, MTLDevice, MTLLibrary as _, MTLLoadAction,
+        MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
+        MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLResourceOptions,
+        MTLSamplerDescriptor, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture,
         MTLTextureDescriptor, MTLTextureUsage, set_status_for_test,
     },
 };
@@ -36,7 +37,12 @@ fragment float4 fs(V in [[stage_in]], texture2d<float> ftex [[texture(0)]], samp
 }
 ";
 
-fn texture(device: &Device, width: usize, height: usize, usage: MTLTextureUsage) -> Retained<ProtocolObject<dyn MTLTexture>> {
+fn texture(
+    device: &Device,
+    width: usize,
+    height: usize,
+    usage: MTLTextureUsage,
+) -> Retained<ProtocolObject<dyn MTLTexture>> {
     let desc = MTLTextureDescriptor::new();
     desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
     // SAFETY: sizes Metal accepts.
@@ -51,9 +57,25 @@ fn texture(device: &Device, width: usize, height: usize, usage: MTLTextureUsage)
 
 fn one_pixel(device: &Device, rgba: [u8; 4]) -> Retained<ProtocolObject<dyn MTLTexture>> {
     let t = texture(device, 1, 1, MTLTextureUsage::ShaderRead);
-    let region = MTLRegion { origin: MTLOrigin { x: 0, y: 0, z: 0 }, size: MTLSize { width: 1, height: 1, depth: 1 } };
+    let region = MTLRegion {
+        origin: MTLOrigin { x: 0, y: 0, z: 0 },
+        size: MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    };
     // SAFETY: four bytes for a 1x1 RGBA8 texture.
-    unsafe { t.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(region, 0, 0, NonNull::from(&rgba).cast(), 4, 4) };
+    unsafe {
+        t.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+            region,
+            0,
+            0,
+            NonNull::from(&rgba).cast(),
+            4,
+            4,
+        )
+    };
     t
 }
 
@@ -62,18 +84,40 @@ fn one_pixel(device: &Device, rgba: [u8; 4]) -> Retained<ProtocolObject<dyn MTLT
 /// A triangle is a three-vertex position set with its cull mode. The pass binds vertex bytes, a
 /// vertex texture (red) and both samplers.
 fn draw(device: &Device, triangles: &[([f32; 6], MTLCullMode)]) -> Vec<u8> {
-    let library = device.newLibraryWithSource_options_error(&NSString::from_str(SOURCE), None).expect("a library");
+    let library = device
+        .newLibraryWithSource_options_error(&NSString::from_str(SOURCE), None)
+        .expect("a library");
     let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexFunction(library.newFunctionWithName(&NSString::from_str("vs")).as_deref());
-    desc.setFragmentFunction(library.newFunctionWithName(&NSString::from_str("fs")).as_deref());
+    desc.setVertexFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("vs"))
+            .as_deref(),
+    );
+    desc.setFragmentFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("fs"))
+            .as_deref(),
+    );
     // SAFETY: index < 8.
-    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-    let pso = device.newRenderPipelineStateWithDescriptor_error(&desc).expect("a pipeline");
-    let sampler = device.newSamplerStateWithDescriptor(&MTLSamplerDescriptor::new()).expect("a sampler");
-    let target = texture(device, 64, 64, MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }
+        .setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+    let pso = device
+        .newRenderPipelineStateWithDescriptor_error(&desc)
+        .expect("a pipeline");
+    let sampler = device
+        .newSamplerStateWithDescriptor(&MTLSamplerDescriptor::new())
+        .expect("a sampler");
+    let target = texture(
+        device,
+        64,
+        64,
+        MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
+    );
     let red = one_pixel(device, [255, 0, 0, 255]);
     let white = one_pixel(device, [255, 255, 255, 255]);
-    let readback = device.newBufferWithLength_options(64 * 64 * 4, MTLResourceOptions::StorageModeShared).expect("a buffer");
+    let readback = device
+        .newBufferWithLength_options(64 * 64 * 4, MTLResourceOptions::StorageModeShared)
+        .expect("a buffer");
 
     let queue = device.newCommandQueue().expect("a queue");
     let cb = queue.commandBuffer().expect("a command buffer");
@@ -83,8 +127,15 @@ fn draw(device: &Device, triangles: &[([f32; 6], MTLCullMode)]) -> Vec<u8> {
     color.setTexture(Some(&target));
     color.setLoadAction(MTLLoadAction::Clear);
     color.setStoreAction(MTLStoreAction::Store);
-    color.setClearColor(MTLClearColor { red: 0.0, green: 0.0, blue: 1.0, alpha: 1.0 });
-    let encoder = cb.renderCommandEncoderWithDescriptor(&pass).expect("an encoder");
+    color.setClearColor(MTLClearColor {
+        red: 0.0,
+        green: 0.0,
+        blue: 1.0,
+        alpha: 1.0,
+    });
+    let encoder = cb
+        .renderCommandEncoderWithDescriptor(&pass)
+        .expect("an encoder");
     encoder.setRenderPipelineState(&pso);
     // SAFETY: binds of live objects; the bytes are copied.
     unsafe {
@@ -114,7 +165,8 @@ fn draw(device: &Device, triangles: &[([f32; 6], MTLCullMode)]) -> Vec<u8> {
     cb.waitUntilCompleted();
     assert_eq!(cb.status(), MTLCommandBufferStatus::Completed);
     // SAFETY: the buffer's own bytes, written by the completed blit.
-    unsafe { core::slice::from_raw_parts(readback.contents().as_ptr().cast::<u8>(), 64 * 64 * 4) }.to_vec()
+    unsafe { core::slice::from_raw_parts(readback.contents().as_ptr().cast::<u8>(), 64 * 64 * 4) }
+        .to_vec()
 }
 
 fn pixel(image: &[u8], x: usize, y: usize) -> [u8; 4] {
@@ -142,21 +194,59 @@ fragment float4 fs(texture2d<float> tex [[texture(0)]], sampler s [[sampler(0)]]
 #[test]
 fn a_default_sampler_reads_normalized_coordinates() {
     let device = common::device();
-    let library = device.newLibraryWithSource_options_error(&NSString::from_str(SAMPLE_SOURCE), None).expect("a library");
+    let library = device
+        .newLibraryWithSource_options_error(&NSString::from_str(SAMPLE_SOURCE), None)
+        .expect("a library");
     let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexFunction(library.newFunctionWithName(&NSString::from_str("vs")).as_deref());
-    desc.setFragmentFunction(library.newFunctionWithName(&NSString::from_str("fs")).as_deref());
+    desc.setVertexFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("vs"))
+            .as_deref(),
+    );
+    desc.setFragmentFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("fs"))
+            .as_deref(),
+    );
     // SAFETY: index < 8.
-    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-    let pso = device.newRenderPipelineStateWithDescriptor_error(&desc).expect("a pipeline");
-    let sampler = device.newSamplerStateWithDescriptor(&MTLSamplerDescriptor::new()).expect("a sampler");
+    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }
+        .setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+    let pso = device
+        .newRenderPipelineStateWithDescriptor_error(&desc)
+        .expect("a pipeline");
+    let sampler = device
+        .newSamplerStateWithDescriptor(&MTLSamplerDescriptor::new())
+        .expect("a sampler");
     let source = texture(&device, 2, 1, MTLTextureUsage::ShaderRead);
     let texels: [u8; 8] = [255, 0, 0, 255, 0, 255, 0, 255];
-    let region = MTLRegion { origin: MTLOrigin { x: 0, y: 0, z: 0 }, size: MTLSize { width: 2, height: 1, depth: 1 } };
+    let region = MTLRegion {
+        origin: MTLOrigin { x: 0, y: 0, z: 0 },
+        size: MTLSize {
+            width: 2,
+            height: 1,
+            depth: 1,
+        },
+    };
     // SAFETY: eight bytes for a 2x1 RGBA8 texture.
-    unsafe { source.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(region, 0, 0, NonNull::from(&texels).cast(), 8, 8) };
-    let target = texture(&device, 64, 64, MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-    let readback = device.newBufferWithLength_options(64 * 64 * 4, MTLResourceOptions::StorageModeShared).expect("a buffer");
+    unsafe {
+        source.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+            region,
+            0,
+            0,
+            NonNull::from(&texels).cast(),
+            8,
+            8,
+        )
+    };
+    let target = texture(
+        &device,
+        64,
+        64,
+        MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
+    );
+    let readback = device
+        .newBufferWithLength_options(64 * 64 * 4, MTLResourceOptions::StorageModeShared)
+        .expect("a buffer");
     let queue = device.newCommandQueue().expect("a queue");
     let cb = queue.commandBuffer().expect("a command buffer");
     let pass = MTLRenderPassDescriptor::new();
@@ -165,7 +255,9 @@ fn a_default_sampler_reads_normalized_coordinates() {
     color.setTexture(Some(&target));
     color.setLoadAction(MTLLoadAction::Clear);
     color.setStoreAction(MTLStoreAction::Store);
-    let encoder = cb.renderCommandEncoderWithDescriptor(&pass).expect("an encoder");
+    let encoder = cb
+        .renderCommandEncoderWithDescriptor(&pass)
+        .expect("an encoder");
     encoder.setRenderPipelineState(&pso);
     // SAFETY: binds of live objects; one triangle over the target.
     unsafe {
@@ -185,34 +277,62 @@ fn a_default_sampler_reads_normalized_coordinates() {
     cb.commit();
     cb.waitUntilCompleted();
     // SAFETY: the buffer's own bytes, written by the completed blit.
-    let image = unsafe { core::slice::from_raw_parts(readback.contents().as_ptr().cast::<u8>(), 64 * 64 * 4) };
-    assert_eq!(pixel(image, 32, 32), [0, 255, 0, 255], "u 0.75 read the first texel: unnormalized coordinates");
+    let image = unsafe {
+        core::slice::from_raw_parts(readback.contents().as_ptr().cast::<u8>(), 64 * 64 * 4)
+    };
+    assert_eq!(
+        pixel(image, 32, 32),
+        [0, 255, 0, 255],
+        "u 0.75 read the first texel: unnormalized coordinates"
+    );
 }
 
 #[test]
 fn a_triangle_through_the_direct_binds_reads_back() {
     let device = common::device();
-    let image = draw(&device, &[([-1.0, -1.0, 0.0, 1.0, 1.0, -1.0], MTLCullMode::None)]);
-    assert_eq!(pixel(&image, 32, 40), [255, 0, 0, 255], "the triangle, red from the vertex texture");
+    let image = draw(
+        &device,
+        &[([-1.0, -1.0, 0.0, 1.0, 1.0, -1.0], MTLCullMode::None)],
+    );
+    assert_eq!(
+        pixel(&image, 32, 40),
+        [255, 0, 0, 255],
+        "the triangle, red from the vertex texture"
+    );
     assert_eq!(pixel(&image, 1, 1), [0, 0, 255, 255], "the clear");
 }
 
 #[test]
 fn cull_changes_between_draws_reach_the_gpu() {
     let device = common::device();
-    let drawn = draw(&device, &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::None)]);
+    let drawn = draw(
+        &device,
+        &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::None)],
+    );
     let right_drawn = pixel(&drawn, 56, 32);
     assert_eq!(pixel(&drawn, 8, 32), [255, 0, 0, 255]);
     assert_eq!(right_drawn, [255, 0, 0, 255]);
     // The same right triangle under each cull mode: one of Front and Back removes it, so the second draw's cull
     // reached the encoder (it was not the first draw's None).
-    let front = draw(&device, &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::Front)]);
-    let back = draw(&device, &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::Back)]);
+    let front = draw(
+        &device,
+        &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::Front)],
+    );
+    let back = draw(
+        &device,
+        &[(LEFT, MTLCullMode::None), (RIGHT_CCW, MTLCullMode::Back)],
+    );
     assert_eq!(pixel(&front, 8, 32), [255, 0, 0, 255]);
     assert_eq!(pixel(&back, 8, 32), [255, 0, 0, 255]);
     let culled = [pixel(&front, 56, 32), pixel(&back, 56, 32)];
-    assert!(culled.contains(&[0, 0, 255, 255]), "neither Front nor Back culled the right triangle: {culled:?}");
-    assert!(culled.contains(&[255, 0, 0, 255]), "both culled it: {culled:?}");
+    assert!(
+        culled.contains(&[0, 0, 255, 255]),
+        "neither Front nor Back culled the right triangle: {culled:?}"
+    );
+    assert!(
+        culled.contains(&[255, 0, 0, 255]),
+        "both culled it: {culled:?}"
+    );
 }
 
 #[test]
@@ -224,7 +344,9 @@ fn completion_handlers_run_once_each_in_commit_order() {
     for i in 0..100 {
         let cb = queue.commandBuffer().expect("a command buffer");
         let seen = Arc::clone(&seen);
-        let handler = RcBlock::new(move |_cb: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| seen.lock().unwrap().push(i));
+        let handler = RcBlock::new(move |_cb: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            seen.lock().unwrap().push(i)
+        });
         // SAFETY: a live block; the facade keeps its own reference.
         unsafe { cb.addCompletedHandler(RcBlock::as_ptr(&handler)) };
         cb.commit();
@@ -258,7 +380,10 @@ fn wait_until_completed_returns_after_its_handlers() {
     unsafe { cb.addCompletedHandler(RcBlock::as_ptr(&handler)) };
     cb.commit();
     cb.waitUntilCompleted();
-    assert!(ran.load(std::sync::atomic::Ordering::Acquire), "waitUntilCompleted returned before the handler ran");
+    assert!(
+        ran.load(std::sync::atomic::Ordering::Acquire),
+        "waitUntilCompleted returned before the handler ran"
+    );
 }
 
 /// A buffer given up uncommitted runs its handlers then.
@@ -280,13 +405,21 @@ fn an_uncommitted_buffer_runs_its_handlers_once_when_dropped() {
         unsafe { cb.addCompletedHandler(RcBlock::as_ptr(&handler)) };
         drop(cb);
     }
-    assert_eq!(runs.load(std::sync::atomic::Ordering::Acquire), 8, "each dropped buffer runs its handler once");
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::Acquire),
+        8,
+        "each dropped buffer runs its handler once"
+    );
     for _ in 0..8 {
         let cb = queue.commandBuffer().expect("a command buffer");
         cb.commit();
         cb.waitUntilCompleted();
     }
-    assert_eq!(runs.load(std::sync::atomic::Ordering::Acquire), 8, "a later buffer ran a dropped one's handler");
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::Acquire),
+        8,
+        "a later buffer ran a dropped one's handler"
+    );
 }
 
 #[test]
@@ -306,6 +439,8 @@ fn an_error_status_reaches_its_handler() {
     unsafe { cb.addCompletedHandler(RcBlock::as_ptr(&handler)) };
     drop(handler);
     cb.commit();
-    let status = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the handler ran");
+    let status = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the handler ran");
     assert_eq!(status, MTLCommandBufferStatus::Error);
 }

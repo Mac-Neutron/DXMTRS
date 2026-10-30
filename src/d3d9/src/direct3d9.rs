@@ -769,16 +769,25 @@ pub fn install_page_allocator() {
 /// Asked at the first `PageBox`, which is when the device is first queried, as it was before the
 /// hook.
 fn page_allocator() -> Option<mtld3d_core::page_box::PageAllocator> {
-    if !device_info().caps.contains(DeviceCapsFlags::PAGES_FROM_UNIX) {
+    if !device_info()
+        .caps
+        .contains(DeviceCapsFlags::PAGES_FROM_UNIX)
+    {
         return None;
     }
     fn alloc(len: usize) -> Option<core::ptr::NonNull<u8>> {
-        let mut params = mtld3d_shared::AllocPagesParams { len: len as u64, ptr: 0 };
+        let mut params = mtld3d_shared::AllocPagesParams {
+            len: len as u64,
+            ptr: 0,
+        };
         unix_call(&mut params);
         core::ptr::NonNull::new(params.ptr as usize as *mut u8)
     }
     fn free(ptr: core::ptr::NonNull<u8>, len: usize) {
-        let mut params = mtld3d_shared::FreePagesParams { ptr: ptr.as_ptr() as usize as u64, len: len as u64 };
+        let mut params = mtld3d_shared::FreePagesParams {
+            ptr: ptr.as_ptr() as usize as u64,
+            len: len as u64,
+        };
         unix_call(&mut params);
     }
     log::info!(target: LOG_TARGET, "page boxes: pages from the unix side (winemetal)");

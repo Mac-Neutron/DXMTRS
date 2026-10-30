@@ -9,21 +9,23 @@ use mtld3d_core::{
 };
 use mtld3d_shared::{MetalHandle, mtl::PixelFormat};
 use mtld3d_types::MAX_STREAMS;
-use crate::mtl::objc2::{
-    rc::Retained,
-    runtime::{NSObjectProtocol, ProtocolObject},
-};
-use crate::mtl::objc2_foundation::NSString;
-use crate::mtl::objc2_metal::{
-    MTLCreateSystemDefaultDevice, MTLDevice, MTLFunction, MTLLibrary, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState,
-};
 
 use super::{
     BufferGpuState, DepthSnapshot, DestroyKind, MipStagingBuffer, StageLibHandles, StretchScratch,
     TextureGpuState, WarmCache, cached_buffer_handles, destroy_resources_bulk,
     drain_source_scratch, staging_wrapped_bytes, take_released_buffer,
     take_released_staging_wrapper, take_source_scratch, take_staging_wrapper,
+};
+use crate::mtl::{
+    objc2::{
+        rc::Retained,
+        runtime::{NSObjectProtocol, ProtocolObject},
+    },
+    objc2_foundation::NSString,
+    objc2_metal::{
+        MTLCreateSystemDefaultDevice, MTLDevice, MTLFunction, MTLLibrary,
+        MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+    },
 };
 
 struct NativeObjects {
@@ -675,12 +677,16 @@ fn a_failed_submission_ends_the_frame_latency_wait() {
     };
 
     use mtld3d_shared::mtl::PresentDebugFlags;
-    use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-    use crate::mtl::objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
 
-    use crate::metal::{
-        DeviceRecord, FrameWait,
-        submission::{RetirementCounter, SubmitDescription},
+    use crate::{
+        metal::{
+            DeviceRecord, FrameWait,
+            submission::{RetirementCounter, SubmitDescription},
+        },
+        mtl::{
+            objc2::{rc::Retained, runtime::ProtocolObject},
+            objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice},
+        },
     };
 
     let Some(device) = MTLCreateSystemDefaultDevice() else {

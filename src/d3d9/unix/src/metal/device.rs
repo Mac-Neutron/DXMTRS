@@ -9,18 +9,22 @@ use mtld3d_shared::{
     mtl_handle::{MTLCommandQueueKind, MTLDeviceKind, MTLTextureKind, NSViewKind},
     record_handle::DeviceRecordHandle,
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily,
-    MTLPixelFormat, MTLStorageMode,
-};
 
 use super::{
     handle::{IntoRetained, ReleaseRetain},
     macdrv::{detach_metal_layer, retire_metal_view},
     record::DeviceRecord,
 };
-use crate::LOG_TARGET;
+use crate::{
+    LOG_TARGET,
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice,
+            MTLGPUFamily, MTLPixelFormat, MTLStorageMode,
+        },
+    },
+};
 
 // MTLCreateSystemDefaultDevice requires CoreGraphics to be linked.
 #[cfg(target_vendor = "apple")]

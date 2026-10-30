@@ -15,10 +15,14 @@ use mtld3d_shared::{
     mtl::{BufferKind, StorageMode},
     mtl_handle::MTLBufferKind,
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{MTLBuffer, MTLDevice, MTLResource, MTLResourceOptions};
 
-use crate::LOG_TARGET;
+use crate::{
+    LOG_TARGET,
+    mtl::{
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{MTLBuffer, MTLDevice, MTLResource, MTLResourceOptions},
+    },
+};
 
 /// Create each buffer, preserving successful outputs when another descriptor fails.
 ///
@@ -83,8 +87,10 @@ pub fn create_buffer(
             );
             return None;
         };
-        let label =
-            crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-vbib-dev-{:#x}", desc.id));
+        let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+            "mtld3d-vbib-dev-{:#x}",
+            desc.id
+        ));
         buffer.setLabel(Some(&label));
         return Some(Retained::into_raw(buffer) as u64);
     }
@@ -137,7 +143,10 @@ pub fn create_buffer(
         // satisfies match exhaustiveness.
         BufferKind::VbIbDevice => "vbib-dev",
     };
-    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-{prefix}-{:#x}", desc.id));
+    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+        "mtld3d-{prefix}-{:#x}",
+        desc.id
+    ));
     buffer.setLabel(Some(&label));
     Some(Retained::into_raw(buffer) as u64)
 }

@@ -7,15 +7,19 @@
 //! and the autorelease pool see what they saw with the C. A nil receiver answers the zeros the
 //! C's send to nil answered.
 
-use core::ffi::{c_char, c_void};
-use core::ptr::NonNull;
+use core::{
+    ffi::{c_char, c_void},
+    ptr::NonNull,
+};
 
 use block2::StackBlock;
 use dispatch2::{DispatchData, DispatchRetained, dispatch_data_applier_t};
-use objc2::ffi::{objc_release, objc_retain};
-use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{AnyThread, extern_class, extern_methods};
+use objc2::{
+    AnyThread, extern_class, extern_methods,
+    ffi::{objc_release, objc_retain},
+    rc::{Allocated, Retained},
+    runtime::{AnyObject, NSObject, ProtocolObject},
+};
 use objc2_foundation::{
     NSArray, NSAutoreleasePool, NSProcessInfo, NSString, NSStringEncoding, NSUInteger,
 };
@@ -28,10 +32,12 @@ use winemetal_wire::{
     UnixcallNsstringString,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, params};
-use crate::float_cast::{u64_to_u32, u64_to_usize};
-use crate::format::pixel_format;
-use crate::handle::{obj, ret_owned, ret_passthrough};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, params},
+    float_cast::{u64_to_u32, u64_to_usize},
+    format::pixel_format,
+    handle::{obj, ret_owned, ret_passthrough},
+};
 
 extern_class!(
     /// `NSObject`, re-declared for `-description` returned as a raw pointer.
@@ -331,7 +337,9 @@ pub unsafe extern "C-unwind" fn mtldevice_minimum_linear_texture_alignment(
     // SAFETY: a live device or 0.
     let device = unsafe { device(p.handle) };
     let format = pixel_format(u64_to_u32(p.arg));
-    p.ret = device.map_or(0, |d| d.minimumLinearTextureAlignmentForPixelFormat(format) as u64);
+    p.ret = device.map_or(0, |d| {
+        d.minimumLinearTextureAlignmentForPixelFormat(format) as u64
+    });
     STATUS_SUCCESS
 }
 
@@ -625,7 +633,11 @@ pub unsafe extern "C-unwind" fn dispatchdata_copy_bytes(args: *mut c_void) -> i3
         return STATUS_SUCCESS;
     };
     let out = raw::<u8>(p.buffer.ptr);
-    let capacity = if out.is_null() { 0 } else { u64_to_usize(p.capacity) };
+    let capacity = if out.is_null() {
+        0
+    } else {
+        u64_to_usize(p.capacity)
+    };
     // The block answers a `u8`, as `dispatch2::DispatchData::to_vec` does: `bool` is not `Encode`.
     let copy = StackBlock::new(
         move |_: NonNull<DispatchData>, offset: usize, src: NonNull<c_void>, length: usize| {

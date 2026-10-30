@@ -3,13 +3,14 @@
 //! The gamut comes from `ColorSync` (raw FFI: no binding crate covers it), the EDR values from
 //! the display's `NSScreen`, read on the calling thread ([`super::appkit`]).
 
-use core::ffi::c_void;
-use core::ptr;
+use core::{ffi::c_void, ptr};
 use std::sync::{Mutex, PoisonError};
 
-use objc2::ClassType;
-use objc2::rc::{Retained, autoreleasepool};
-use objc2::runtime::NSObjectProtocol;
+use objc2::{
+    ClassType,
+    rc::{Retained, autoreleasepool},
+    runtime::NSObjectProtocol,
+};
 use objc2_core_foundation::{CFData, CFRetained, CFString, CFType};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayMirrorsDisplay, CGGetOnlineDisplayList, CGMainDisplayID,
@@ -24,16 +25,19 @@ use winemetal_wire::{
 };
 
 use super::appkit::{Screen, View};
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params};
-use crate::float_cast::{f64_to_f32, u64_to_u32};
-use crate::handle::obj;
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params},
+    float_cast::{f64_to_f32, u64_to_u32},
+    handle::obj,
+};
 
 // SAFETY: ColorSync's declarations. A profile is a CF object; the `Create` and `Copy` functions
 // return +1 or null, which `Option<CFRetained<_>>` (a pointer, null as `None`) takes over.
 unsafe extern "C" {
     safe fn ColorSyncProfileCreateWithDisplayID(display: u32) -> Option<CFRetained<CFType>>;
     safe fn ColorSyncProfileCreateWithName(name: &CFString) -> Option<CFRetained<CFType>>;
-    safe fn ColorSyncProfileCopyTag(profile: &CFType, tag: &CFString) -> Option<CFRetained<CFData>>;
+    safe fn ColorSyncProfileCopyTag(profile: &CFType, tag: &CFString)
+    -> Option<CFRetained<CFData>>;
     safe static kColorSyncGenericRGBProfile: &'static CFString;
     safe static kColorSyncSigMediaWhitePointTag: &'static CFString;
     safe static kColorSyncSigRedColorantTag: &'static CFString;
@@ -66,8 +70,7 @@ fn gamut(profile: &CFType, desc: &mut WMTDisplayDescription) -> bool {
     ]
     .into_iter()
     .all(|(tag, out)| {
-        let Some(v) = ColorSyncProfileCopyTag(profile, tag).and_then(|d| xy(&d.to_vec()))
-        else {
+        let Some(v) = ColorSyncProfileCopyTag(profile, tag).and_then(|d| xy(&d.to_vec())) else {
             return false;
         };
         *out = v;
@@ -78,7 +81,9 @@ fn gamut(profile: &CFType, desc: &mut WMTDisplayDescription) -> bool {
 /// A screen's display ID: its `NSScreenNumber`.
 fn screen_number(screen: &Screen) -> u32 {
     let description = screen.device_description();
-    description.objectForKey(ns_string!("NSScreenNumber")).map_or(0, |n| n.unsignedIntValue())
+    description
+        .objectForKey(ns_string!("NSScreenNumber"))
+        .map_or(0, |n| n.unsignedIntValue())
 }
 
 /// The screen a layer shows on: its delegate's window's, when the delegate is a view.
@@ -164,7 +169,9 @@ pub unsafe extern "C-unwind" fn display_description(args: *mut c_void) -> i32 {
         return STATUS_SUCCESS;
     };
     let profile = ColorSyncProfileCreateWithDisplayID(id);
-    if !profile.as_deref().is_some_and(|profile| gamut(profile, desc))
+    if !profile
+        .as_deref()
+        .is_some_and(|profile| gamut(profile, desc))
         && let Some(fallback) = ColorSyncProfileCreateWithName(kColorSyncGenericRGBProfile)
     {
         gamut(&fallback, desc);
@@ -251,7 +258,11 @@ fn with_setting<R>(display: u32, f: impl FnOnce(&mut DisplaySetting) -> R) -> R 
     static SETTINGS: Mutex<[DisplaySetting; 2]> = Mutex::new([UNSET, UNSET]);
     let mut settings = SETTINGS.lock().unwrap_or_else(PoisonError::into_inner);
     let [other, main] = &mut *settings;
-    f(if display == CGMainDisplayID() { main } else { other })
+    f(if display == CGMainDisplayID() {
+        main
+    } else {
+        other
+    })
 }
 
 /// Slot 99, `_WMTQueryDisplaySetting`: a display's HDR setting, `ret` 1 when one is set.

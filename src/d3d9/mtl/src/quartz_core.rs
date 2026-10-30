@@ -64,7 +64,10 @@ impl CAMetalLayer {
 
     fn props(&self) -> wmt::LayerProps {
         let mut props = wmt::LayerProps::default();
-        let mut params = wmt::ObjPtrNoRet { handle: handle_of(self), arg: wmt::Ptr::new((&raw mut props).cast()) };
+        let mut params = wmt::ObjPtrNoRet {
+            handle: handle_of(self),
+            arg: wmt::Ptr::new((&raw mut props).cast()),
+        };
         // SAFETY: slot 71 fills the props.
         unsafe { table::call(wmt::LAYER_GET_PROPS, &mut params) };
         props
@@ -73,7 +76,10 @@ impl CAMetalLayer {
     fn set(&self, f: impl FnOnce(&mut wmt::LayerProps)) {
         let mut props = self.props();
         f(&mut props);
-        let mut params = wmt::ObjConstPtrNoRet { handle: handle_of(self), arg: wmt::Ptr::new((&raw const props).cast()) };
+        let mut params = wmt::ObjConstPtrNoRet {
+            handle: handle_of(self),
+            arg: wmt::Ptr::new((&raw const props).cast()),
+        };
         // SAFETY: slot 70 reads the props.
         unsafe { table::call(wmt::LAYER_SET_PROPS, &mut params) };
     }
@@ -128,7 +134,10 @@ impl CAMetalLayer {
 
     pub fn nextDrawable(&self) -> Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> {
         let layer = handle_of(self);
-        let mut params = wmt::ObjObjRet { handle: layer, ret: 0 };
+        let mut params = wmt::ObjObjRet {
+            handle: layer,
+            ret: 0,
+        };
         // SAFETY: slot 67 returns an autoreleased drawable or 0 (a timeout).
         unsafe { table::call(wmt::LAYER_NEXT_DRAWABLE, &mut params) };
         let drawable = objc2::from_autoreleased(params.ret)?;
@@ -147,13 +156,17 @@ impl CAMetalLayer {
 /// Implemented for the facade's drawables only, as objc2 requires.
 pub unsafe trait CAMetalDrawable: MTLDrawable {
     fn texture(&self) -> Retained<ProtocolObject<dyn MTLTexture>> {
-        let mut params = wmt::ObjObjRet { handle: handle_of(self), ret: 0 };
+        let mut params = wmt::ObjObjRet {
+            handle: handle_of(self),
+            ret: 0,
+        };
         // SAFETY: slot 66 returns the drawable's texture (autoreleased with the frame's pool).
         unsafe { table::call(wmt::DRAWABLE_TEXTURE, &mut params) };
         objc2::from_autoreleased(params.ret).expect("a drawable's texture")
     }
     fn layer(&self) -> Retained<CAMetalLayer> {
-        CAMetalLayer::from_handle(meta::read(handle_of(self), |e| e.map_or(0, |e| e.queue))).expect("a drawable's layer")
+        CAMetalLayer::from_handle(meta::read(handle_of(self), |e| e.map_or(0, |e| e.queue)))
+            .expect("a drawable's layer")
     }
 }
 
@@ -165,8 +178,16 @@ unsafe impl CAMetalDrawable for ProtocolObject<dyn CAMetalDrawable> {}
 /// Winemetal's `CreateMetalViewFromHWND` (slot 72) makes it. Returns the view's handle and its
 /// layer, or `None` when winemetal found no window data and so has no view to give.
 #[must_use]
-pub fn create_metal_view(hwnd: u64, device: &ProtocolObject<dyn MTLDevice>) -> Option<(u64, Retained<CAMetalLayer>)> {
-    let mut params = wmt::CreateMetalView { hwnd, device: device.handle(), ret_view: 0, ret_layer: 0 };
+pub fn create_metal_view(
+    hwnd: u64,
+    device: &ProtocolObject<dyn MTLDevice>,
+) -> Option<(u64, Retained<CAMetalLayer>)> {
+    let mut params = wmt::CreateMetalView {
+        hwnd,
+        device: device.handle(),
+        ret_view: 0,
+        ret_layer: 0,
+    };
     // SAFETY: slot 72 makes a view for a window handle.
     unsafe { table::call(wmt::CREATE_METAL_VIEW_FROM_HWND, &mut params) };
     if params.ret_view == 0 || params.ret_layer == 0 {
@@ -190,7 +211,11 @@ impl CAMetalLayer {
     ///
     /// The facade's only layer mode.
     pub fn set_srgb(&self) {
-        let mut params = wmt::ObjU64U64Ret { handle: handle_of(self), arg: 0, ret: 0 };
+        let mut params = wmt::ObjU64U64Ret {
+            handle: handle_of(self),
+            arg: 0,
+            ret: 0,
+        };
         // SAFETY: slot 93 on a live layer; 0 is WMTColorSpaceSRGB.
         unsafe { table::call(wmt::LAYER_SET_COLOR_SPACE, &mut params) };
     }

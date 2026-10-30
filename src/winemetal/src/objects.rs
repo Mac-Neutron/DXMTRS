@@ -3,9 +3,9 @@
 use core::ffi::{c_char, c_void};
 
 use winemetal_wire::{
-    UnixcallDispatchdataCopybytes, UnixcallEnumerate, UnixcallGenericObjObjRet, UnixcallGenericObjRet,
-    UnixcallGenericObjUint64ObjRet, UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret,
-    UnixcallNsstringGetcstring, UnixcallNsstringString, slot,
+    UnixcallDispatchdataCopybytes, UnixcallEnumerate, UnixcallGenericObjObjRet,
+    UnixcallGenericObjRet, UnixcallGenericObjUint64ObjRet, UnixcallGenericObjUint64Ret,
+    UnixcallGenericObjUint64Uint64Ret, UnixcallNsstringGetcstring, UnixcallNsstringString, slot,
 };
 
 use crate::transport::{addr, call, mem_ptr};

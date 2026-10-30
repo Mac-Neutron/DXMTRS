@@ -1,12 +1,12 @@
 //! Queues, command buffers and encoders.
 
 use winemetal_wire::{
-    UnixcallGenericObjCmdNoret, UnixcallGenericObjNoret, UnixcallGenericObjObjDoubleNoret, UnixcallGenericObjObjNoret,
-    UnixcallGenericObjObjRet, UnixcallGenericObjObjUint64Noret, UnixcallGenericObjUint64ObjRet,
-    UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret,
+    UnixcallGenericObjCmdNoret, UnixcallGenericObjNoret, UnixcallGenericObjObjDoubleNoret,
+    UnixcallGenericObjObjNoret, UnixcallGenericObjObjRet, UnixcallGenericObjObjUint64Noret,
+    UnixcallGenericObjUint64ObjRet, UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret,
     UnixcallMtlcommandbufferBlitcommandencoderwithsamplebuffers,
-    UnixcallMtlcommandbufferComputecommandencoderwithsamplebuffers, WMTRenderPassInfo, WMTSampleBufferAttachmentInfo,
-    WmtcmdBase, slot,
+    UnixcallMtlcommandbufferComputecommandencoderwithsamplebuffers, WMTRenderPassInfo,
+    WMTSampleBufferAttachmentInfo, WmtcmdBase, slot,
 };
 
 use crate::transport::{addr, call, mem_ptr};

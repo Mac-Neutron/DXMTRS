@@ -1,8 +1,17 @@
 use super::{
-    device_name_is, display_count, hdr_mode, low16, mastering_of, mastering_of_description, metadata_of, name_lookup_failure, primaries,
+    device_name_is, display_count, hdr_mode, low16, mastering_of, mastering_of_description,
+    metadata_of, name_lookup_failure, primaries,
 };
-use crate::ffi::{COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription, HdrMetadata};
-use crate::nv::{HDR_MODE_OFF, INVALID_ARGUMENT, NVIDIA_DEVICE_NOT_FOUND, HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH};
+use crate::{
+    ffi::{
+        COLOR_SPACE_HDR_PQ, COLOR_SPACE_HDR_SCRGB, COLOR_SPACE_SRGB, DisplayDescription,
+        HdrMetadata,
+    },
+    nv::{
+        HDR_MODE_OFF, HDR_MODE_UHDA, HDR_MODE_UHDA_PASSTHROUGH, INVALID_ARGUMENT,
+        NVIDIA_DEVICE_NOT_FOUND,
+    },
+};
 
 /// A P3 display with headroom 4.0, as this Mac's built-in one reports.
 const P3: DisplayDescription = DisplayDescription {
@@ -91,7 +100,10 @@ fn metadata_and_mastering_round_trip_and_narrow() {
 #[test]
 fn a_display_without_a_setting_has_its_description_and_minimum_1() {
     let m = mastering_of_description(&primaries(&P3));
-    assert_eq!((m.primary_x0, m.primary_y0, m.white_point_y), (34000, 16000, 16450));
+    assert_eq!(
+        (m.primary_x0, m.primary_y0, m.white_point_y),
+        (34000, 16000, 16450)
+    );
     assert_eq!(m.max_display_mastering_luminance, 400);
     assert_eq!(m.min_display_mastering_luminance, 1);
     assert_eq!(m.max_content_light_level, 400);
@@ -101,8 +113,17 @@ fn a_display_without_a_setting_has_its_description_and_minimum_1() {
 #[test]
 fn an_unknown_name_is_not_found_even_with_a_null_id() {
     let mut id = 0_u32;
-    assert_eq!(name_lookup_failure(false, core::ptr::null()), Some(NVIDIA_DEVICE_NOT_FOUND));
-    assert_eq!(name_lookup_failure(false, &raw const id), Some(NVIDIA_DEVICE_NOT_FOUND));
-    assert_eq!(name_lookup_failure(true, core::ptr::null()), Some(INVALID_ARGUMENT));
+    assert_eq!(
+        name_lookup_failure(false, core::ptr::null()),
+        Some(NVIDIA_DEVICE_NOT_FOUND)
+    );
+    assert_eq!(
+        name_lookup_failure(false, &raw const id),
+        Some(NVIDIA_DEVICE_NOT_FOUND)
+    );
+    assert_eq!(
+        name_lookup_failure(true, core::ptr::null()),
+        Some(INVALID_ARGUMENT)
+    );
     assert_eq!(name_lookup_failure(true, &raw mut id), None);
 }

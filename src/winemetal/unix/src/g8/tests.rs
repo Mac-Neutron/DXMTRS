@@ -1,8 +1,10 @@
-use std::ffi::CString;
-use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    ffi::CString,
+    os::unix::process::ExitStatusExt,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
 use objc2::runtime::AnyClass;
 
@@ -26,7 +28,9 @@ fn folder(name: &str) -> PathBuf {
 }
 
 fn mem(p: *const u8) -> MemPtr {
-    MemPtr { ptr: p.expose_provenance() as u64 }
+    MemPtr {
+        ptr: p.expose_provenance() as u64,
+    }
 }
 
 fn call<T>(handler: Handler, params: &mut T) {
@@ -38,7 +42,11 @@ fn call<T>(handler: Handler, params: &mut T) {
 /// Slot 115 or 117 on `path`: the object's handle, 0 when the open failed.
 fn open(handler: Handler, path: &Path, version: u64) -> u64 {
     let path = CString::new(path.to_str().expect("a UTF-8 path")).expect("no NUL");
-    let mut params = UnixcallCacheAllocInit { path: mem(path.as_ptr().cast()), version, ret_cache: FILL };
+    let mut params = UnixcallCacheAllocInit {
+        path: mem(path.as_ptr().cast()),
+        version,
+        ret_cache: FILL,
+    };
     call(handler, &mut params);
     params.ret_cache
 }
@@ -72,8 +80,12 @@ fn put(writer: u64, key: &[u8], value: &[u8]) {
 
 /// Slot 116: the value, `None` for a miss.
 fn get(reader: u64, key: &[u8]) -> Option<Vec<u8>> {
-    let mut params =
-        UnixcallCacheGet { cache: reader, key: mem(key.as_ptr()), key_length: key.len() as u64, ret_data: FILL };
+    let mut params = UnixcallCacheGet {
+        cache: reader,
+        key: mem(key.as_ptr()),
+        key_length: key.len() as u64,
+        ret_data: FILL,
+    };
     call(cache_reader_get, &mut params);
     let data = ptr::with_exposed_provenance_mut::<DispatchData>(u64_to_usize(params.ret_data));
     // SAFETY: the +1 dispatch data object the lookup made, or null.
@@ -90,7 +102,9 @@ fn rows(path: &Path, sql: &CStr) -> Vec<String> {
     while stmt.step() == sqlite::ROW {
         let mut columns = Vec::new();
         for column in 0.. {
-            let Some(text) = stmt.column_text(column) else { break };
+            let Some(text) = stmt.column_text(column) else {
+                break;
+            };
             columns.push(text.to_string_lossy().into_owned());
         }
         out.push(columns.join("/"));
@@ -147,7 +161,13 @@ fn an_empty_key_is_null_and_an_empty_value_is_refused() {
     put(w, b"key-0002", b"kept");
     release(w);
     // A NULL key (an empty NSData's bytes were NULL); the empty value never made a row.
-    assert_eq!(rows(&db, c"SELECT typeof(key), length(value) FROM cache_1 ORDER BY rowid"), ["null/19", "blob/4"]);
+    assert_eq!(
+        rows(
+            &db,
+            c"SELECT typeof(key), length(value) FROM cache_1 ORDER BY rowid"
+        ),
+        ["null/19", "blob/4"]
+    );
     let r = reader(&db, 1);
     assert_eq!(get(r, b""), None);
     assert_eq!(get(r, b"key-0001"), None);
@@ -169,18 +189,28 @@ fn a_new_version_drops_the_other_cache_tables_and_vacuums() {
         c"CREATE TABLE other(x); CREATE TABLE cachefoo(x); CREATE TABLE Cache_upper(x);
           CREATE TABLE cache_9(key BLOB PRIMARY KEY, value BLOB NOT NULL); CREATE TABLE cache_3(x);",
     );
-    let pages = rows(&db, c"PRAGMA page_count")[0].parse::<u32>().expect("a count");
+    let pages = rows(&db, c"PRAGMA page_count")[0]
+        .parse::<u32>()
+        .expect("a count");
     let w = writer(&db, 2);
     assert_ne!(w, 0);
     release(w);
     // GLOB is case-sensitive; only `cache_*` tables of another version go.
     assert_eq!(
-        rows(&db, c"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
+        rows(
+            &db,
+            c"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ),
         ["Cache_upper", "cache_2", "cachefoo", "other"]
     );
     // VACUUM ran: nothing is left on the freelist, and the file shrank.
     assert_eq!(rows(&db, c"PRAGMA freelist_count"), ["0"]);
-    assert!(rows(&db, c"PRAGMA page_count")[0].parse::<u32>().expect("a count") < pages);
+    assert!(
+        rows(&db, c"PRAGMA page_count")[0]
+            .parse::<u32>()
+            .expect("a count")
+            < pages
+    );
     assert_eq!(reader(&db, 1), 0);
     // With no table to drop, a writer leaves the file's freelist alone.
     let w = writer(&db, 2);
@@ -216,7 +246,12 @@ fn bad_paths_answer_nil() {
     // A reader never creates the file.
     assert!(!dir.join("missing.db").exists());
     // An absolute path is used as is: a trailing slash names no file.
-    for path in [Path::new("/dev/null/x/cache.db").to_path_buf(), dir.join("text.db"), dir.join("dir.db"), dir.join("trail/")] {
+    for path in [
+        Path::new("/dev/null/x/cache.db").to_path_buf(),
+        dir.join("text.db"),
+        dir.join("dir.db"),
+        dir.join("trail/"),
+    ] {
         assert_eq!(writer(&path, 1), 0, "writer {}", path.display());
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -226,7 +261,12 @@ fn bad_paths_answer_nil() {
 fn a_path_that_is_not_utf8_or_null_is_nil() {
     assert!(utf8_string(MemPtr { ptr: 0 }).is_none());
     assert!(utf8_string(mem(c"\xff\xfe".as_ptr().cast())).is_none());
-    assert_eq!(utf8_string(mem(c"/tmp/a".as_ptr().cast())).expect("valid UTF-8").to_string(), "/tmp/a");
+    assert_eq!(
+        utf8_string(mem(c"/tmp/a".as_ptr().cast()))
+            .expect("valid UTF-8")
+            .to_string(),
+        "/tmp/a"
+    );
 }
 
 #[test]
@@ -271,13 +311,24 @@ fn a_relative_path_is_under_the_user_cache_folder() {
     let unique = format!("winemetal-g8-relative-{}", std::process::id());
     let mut buf = [0 as c_char; PATH_MAX];
     // SAFETY: a buffer of its own length.
-    assert_ne!(unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr(), buf.len()) }, 0);
+    assert_ne!(
+        unsafe { libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr(), buf.len()) },
+        0
+    );
     // SAFETY: `confstr` NUL-terminated it.
-    let base = PathBuf::from(unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().expect("a UTF-8 folder"));
+    let base = PathBuf::from(
+        unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_str()
+            .expect("a UTF-8 folder"),
+    );
     let top = base.join(&unique);
     let _ = std::fs::remove_dir_all(&top);
     // The path is joined under the folder as a component: doubled and trailing slashes drop.
-    for (relative, at) in [("a/b/cache.db", "a/b/cache.db"), ("dbl//cache.db", "dbl/cache.db"), ("trail/", "trail")] {
+    for (relative, at) in [
+        ("a/b/cache.db", "a/b/cache.db"),
+        ("dbl//cache.db", "dbl/cache.db"),
+        ("trail/", "trail"),
+    ] {
         let w = writer(Path::new(&format!("{unique}/{relative}")), 1);
         assert_ne!(w, 0, "{relative}");
         release(w);
@@ -304,10 +355,20 @@ fn absolute_paths_are_used_as_they_are() {
 
 #[test]
 fn a_nil_handle_is_a_nil_send() {
-    let mut get_params = UnixcallCacheGet { cache: 0, key: mem(b"key-0001".as_ptr()), key_length: 8, ret_data: FILL };
+    let mut get_params = UnixcallCacheGet {
+        cache: 0,
+        key: mem(b"key-0001".as_ptr()),
+        key_length: 8,
+        ret_data: FILL,
+    };
     call(cache_reader_get, &mut get_params);
     assert_eq!(get_params.ret_data, 0);
-    let mut set_params = UnixcallCacheSet { cache: 0, key: mem(b"key-0001".as_ptr()), key_length: 8, value_data: FILL };
+    let mut set_params = UnixcallCacheSet {
+        cache: 0,
+        key: mem(b"key-0001".as_ptr()),
+        key_length: 8,
+        value_data: FILL,
+    };
     call(cache_writer_set, &mut set_params);
     assert_eq!(set_params.value_data, FILL);
     assert_eq!(set_params.cache, 0);
@@ -317,7 +378,10 @@ fn a_nil_handle_is_a_nil_send() {
 fn metal_cache_path_answers_whether_metal_took_it() {
     let dir = folder("metal");
     let path = CString::new(dir.to_str().expect("a UTF-8 path")).expect("no NUL");
-    let mut params = UnixcallSetmetalcachepath { path: mem(path.as_ptr().cast()), ret_success: FILL };
+    let mut params = UnixcallSetmetalcachepath {
+        path: mem(path.as_ptr().cast()),
+        ret_success: FILL,
+    };
     call(set_metal_shader_cache_path, &mut params);
     // The folder is made whatever Metal answers; the answer is 0 or 1.
     assert!(dir.is_dir());
@@ -328,9 +392,15 @@ fn metal_cache_path_answers_whether_metal_took_it() {
 /// The cache classes' names in this build, then the other build's.
 fn class_names() -> ([&'static str; 2], [&'static str; 2]) {
     if cfg!(feature = "native") {
-        (["DXMTNativeCacheReader", "DXMTNativeCacheWriter"], ["CacheReader", "CacheWriter"])
+        (
+            ["DXMTNativeCacheReader", "DXMTNativeCacheWriter"],
+            ["CacheReader", "CacheWriter"],
+        )
     } else {
-        (["CacheReader", "CacheWriter"], ["DXMTNativeCacheReader", "DXMTNativeCacheWriter"])
+        (
+            ["CacheReader", "CacheWriter"],
+            ["DXMTNativeCacheReader", "DXMTNativeCacheWriter"],
+        )
     }
 }
 
@@ -348,7 +418,11 @@ fn the_classes_carry_the_names_of_this_build() {
         return;
     }
     let status = Command::new(std::env::current_exe().expect("the test binary's path"))
-        .args(["--exact", "g8::tests::the_classes_carry_the_names_of_this_build", "--test-threads=1"])
+        .args([
+            "--exact",
+            "g8::tests::the_classes_carry_the_names_of_this_build",
+            "--test-threads=1",
+        ])
         .env(CHILD_CLASSES, "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -358,7 +432,9 @@ fn the_classes_carry_the_names_of_this_build() {
     let dir = folder("class-names");
     let w = writer(&dir.join("cache.db"), 1);
     // SAFETY: a live object.
-    let class = unsafe { handle::obj::<NSObject>(w) }.expect("an object").class();
+    let class = unsafe { handle::obj::<NSObject>(w) }
+        .expect("an object")
+        .class();
     assert_eq!(class.name().to_str().expect("a UTF-8 name"), this[1]);
     release(w);
     let _ = std::fs::remove_dir_all(&dir);
@@ -378,7 +454,12 @@ fn wrong_class_handle_raises() {
         return;
     }
     let output = Command::new(std::env::current_exe().expect("the test binary's path"))
-        .args(["--exact", "g8::tests::wrong_class_handle_raises", "--test-threads=1", "--nocapture"])
+        .args([
+            "--exact",
+            "g8::tests::wrong_class_handle_raises",
+            "--test-threads=1",
+            "--nocapture",
+        ])
         .env(CHILD, "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -386,9 +467,17 @@ fn wrong_class_handle_raises() {
         .expect("the test binary runs again");
     // The Objective-C exception leaves the handler (it is no Rust panic, so the guard does not
     // abort) and reaches the test harness's frame, which cannot catch it and aborts the child.
-    assert_eq!(output.status.signal(), Some(libc::SIGABRT), "{}", output.status);
+    assert_eq!(
+        output.status.signal(),
+        Some(libc::SIGABRT),
+        "{}",
+        output.status
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cannot catch foreign exceptions"), "{stderr}");
+    assert!(
+        stderr.contains("cannot catch foreign exceptions"),
+        "{stderr}"
+    );
 }
 
 /// Set in the child [`a_key_length_above_two_to_the_63_raises`] runs: `<call>-<handle>:<length>`.
@@ -412,11 +501,21 @@ fn absurd_key_child(case: &str, dir: &Path) {
     if call_name == "get" {
         let cache = if live { reader(&db, 1) } else { 0 };
         assert_eq!(cache != 0, live);
-        let mut params = UnixcallCacheGet { cache, key: mem(key.as_ptr()), key_length: length, ret_data: FILL };
+        let mut params = UnixcallCacheGet {
+            cache,
+            key: mem(key.as_ptr()),
+            key_length: length,
+            ret_data: FILL,
+        };
         call(cache_reader_get, &mut params);
     } else {
         let value_data = ptr::from_ref::<DispatchData>(&value).expose_provenance() as u64;
-        let mut params = UnixcallCacheSet { cache: w, key: mem(key.as_ptr()), key_length: length, value_data };
+        let mut params = UnixcallCacheSet {
+            cache: w,
+            key: mem(key.as_ptr()),
+            key_length: length,
+            value_data,
+        };
         call(cache_writer_set, &mut params);
     }
 }
@@ -431,7 +530,12 @@ fn a_key_length_above_two_to_the_63_raises() {
     let dir = folder("absurd");
     let run = |case: &str| {
         Command::new(std::env::current_exe().expect("the test binary's path"))
-            .args(["--exact", "g8::tests::a_key_length_above_two_to_the_63_raises", "--test-threads=1", "--nocapture"])
+            .args([
+                "--exact",
+                "g8::tests::a_key_length_above_two_to_the_63_raises",
+                "--test-threads=1",
+                "--nocapture",
+            ])
             .env(CHILD_ABSURD, case)
             .env(CHILD_ABSURD_DIR, &dir)
             .stdout(Stdio::null())
@@ -445,12 +549,25 @@ fn a_key_length_above_two_to_the_63_raises() {
     for which in ["get-nil", "set-nil", "get-live", "set-live"] {
         // A key of the length it has goes through.
         let output = run(&format!("{which}:8"));
-        assert!(output.status.success(), "{which}:8 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{which}:8 {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
         for length in [(1_u64 << 63) + 1, u64::MAX] {
             let output = run(&format!("{which}:{length}"));
-            assert_eq!(output.status.signal(), Some(libc::SIGABRT), "{which}:{length} {}", output.status);
+            assert_eq!(
+                output.status.signal(),
+                Some(libc::SIGABRT),
+                "{which}:{length} {}",
+                output.status
+            );
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(stderr.contains("cannot catch foreign exceptions"), "{which}:{length} {stderr}");
+            assert!(
+                stderr.contains("cannot catch foreign exceptions"),
+                "{which}:{length} {stderr}"
+            );
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

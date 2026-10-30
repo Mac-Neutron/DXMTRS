@@ -26,7 +26,11 @@ pub fn addr_of(handle: u64) -> usize {
             // An older generation of the index (a handler's handle that outlived its object) never replaces the live
             // object's.
             let newer = |old: u64| (old == 0 || handle >> 32 >= old >> 32).then_some(handle);
-            let _ = slot.try_update(core::sync::atomic::Ordering::Release, core::sync::atomic::Ordering::Relaxed, newer);
+            let _ = slot.try_update(
+                core::sync::atomic::Ordering::Release,
+                core::sync::atomic::Ordering::Relaxed,
+                newer,
+            );
         }
         index
     }
@@ -41,7 +45,9 @@ pub fn addr_of(handle: u64) -> usize {
 pub fn handle_at(addr: usize) -> u64 {
     #[cfg(target_pointer_width = "32")]
     {
-        guest_handles().get(addr).map_or(0, |slot| slot.load(core::sync::atomic::Ordering::Acquire))
+        guest_handles()
+            .get(addr)
+            .map_or(0, |slot| slot.load(core::sync::atomic::Ordering::Acquire))
     }
     #[cfg(not(target_pointer_width = "32"))]
     {
@@ -55,10 +61,11 @@ pub fn handle_at(addr: usize) -> u64 {
 /// `MN_H_MAX` indexes), as the 32-bit address space its objects' addresses come from.
 #[cfg(target_pointer_width = "32")]
 fn guest_handles() -> &'static [core::sync::atomic::AtomicU64] {
-    static HANDLES: std::sync::LazyLock<Box<[core::sync::atomic::AtomicU64]>> = std::sync::LazyLock::new(|| {
-        // SAFETY: zero is a valid AtomicU64 (no handle); the pages stay untouched until used.
-        unsafe { Box::new_zeroed_slice(1 << 20).assume_init() }
-    });
+    static HANDLES: std::sync::LazyLock<Box<[core::sync::atomic::AtomicU64]>> =
+        std::sync::LazyLock::new(|| {
+            // SAFETY: zero is a valid AtomicU64 (no handle); the pages stay untouched until used.
+            unsafe { Box::new_zeroed_slice(1 << 20).assume_init() }
+        });
     &HANDLES
 }
 
@@ -114,7 +121,10 @@ pub mod rc {
         /// # Safety
         /// `ptr` is null or holds +1 the caller gives up.
         pub unsafe fn from_raw(ptr: *mut T) -> Option<Self> {
-            NonNull::new(ptr).map(|ptr| Self { ptr, _p: PhantomData })
+            NonNull::new(ptr).map(|ptr| Self {
+                ptr,
+                _p: PhantomData,
+            })
         }
 
         /// +1 on `ptr` (objc2's `retain`).
@@ -125,7 +135,10 @@ pub mod rc {
             let ptr = NonNull::new(ptr)?;
             // SAFETY: the caller's contract.
             unsafe { T::retain_raw(ptr.as_ptr()) };
-            Some(Self { ptr, _p: PhantomData })
+            Some(Self {
+                ptr,
+                _p: PhantomData,
+            })
         }
 
         /// Gives up the reference without releasing it.
@@ -324,7 +337,9 @@ pub mod runtime {
         ///
         /// The references this process holds, which is what a retain-discipline test compares.
         fn retainCount(&self) -> usize {
-            meta::refs(super::handle_at(core::ptr::from_ref(self).cast::<u8>() as usize))
+            meta::refs(super::handle_at(
+                core::ptr::from_ref(self).cast::<u8>() as usize
+            ))
         }
     }
     impl<P: ?Sized> NSObjectProtocol for ProtocolObject<P> {}

@@ -50,7 +50,11 @@ unsafe extern "C" {
     pub fn WMTGetPrimaryDisplayId() -> u32;
     pub fn WMTGetSecondaryDisplayId() -> u32;
     pub fn WMTGetDisplayDescription(display_id: u32, desc: *mut DisplayDescription);
-    pub fn WMTQueryDisplaySetting(display_id: u32, colorspace: *mut u64, metadata: *mut HdrMetadata) -> bool;
+    pub fn WMTQueryDisplaySetting(
+        display_id: u32,
+        colorspace: *mut u64,
+        metadata: *mut HdrMetadata,
+    ) -> bool;
     pub fn WMTUpdateDisplaySetting(display_id: u32, colorspace: u64, metadata: *const HdrMetadata);
 }
 
@@ -69,9 +73,15 @@ const _: () = assert!(size_of::<MonitorInfoExW>() == 104);
 pub const MONITORINFOF_PRIMARY: u32 = 1;
 
 /// `MONITORENUMPROC`.
-pub type MonitorEnumProc = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut [i32; 4], isize) -> i32;
+pub type MonitorEnumProc =
+    unsafe extern "system" fn(*mut c_void, *mut c_void, *mut [i32; 4], isize) -> i32;
 
 unsafe extern "system" {
-    pub fn EnumDisplayMonitors(hdc: *mut c_void, clip: *const [i32; 4], callback: MonitorEnumProc, data: isize) -> i32;
+    pub fn EnumDisplayMonitors(
+        hdc: *mut c_void,
+        clip: *const [i32; 4],
+        callback: MonitorEnumProc,
+        data: isize,
+    ) -> i32;
     pub fn GetMonitorInfoW(monitor: *mut c_void, info: *mut MonitorInfoExW) -> i32;
 }

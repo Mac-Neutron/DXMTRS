@@ -14,9 +14,9 @@ use mtld3d_shared::{
     mtl::PresentDebugFlags,
     mtl_handle::{CAMetalLayerKind, MTLCommandQueueKind, MTLTextureKind},
 };
-use crate::mtl::objc2_metal::MTLPixelFormat;
 
 use super::*;
+use crate::mtl::objc2_metal::MTLPixelFormat;
 
 /// The minimum present duration of the paced presents these tests note.
 const PACING: Duration = Duration::from_millis(16);

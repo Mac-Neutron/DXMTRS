@@ -40,18 +40,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::mtl::block2::RcBlock;
 use mtld3d_shared::{
     mtl::{PRESENT_PIPELINE_DEPTH, PresentDebugFlags, PresentWaitPolicy, SnapshotFlags},
     mtl_handle::{CAMetalLayerKind, MTLCommandQueueKind, MTLTextureKind, MetalHandle},
     perf::{CommandBufferRole, NanosSetTimer},
 };
-use crate::mtl::objc2::{rc::Retained, runtime::ProtocolObject};
-use crate::mtl::objc2_metal::{
-    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
-    MTLCommandQueue, MTLDrawable, MTLOrigin, MTLPixelFormat, MTLResource, MTLSize, MTLTexture,
-};
-use crate::mtl::objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
 use super::{
     command::{self, PresentEncode, diagnostics},
@@ -61,7 +54,19 @@ use super::{
     record::DeviceRecord,
     texture,
 };
-use crate::LOG_TARGET;
+use crate::{
+    LOG_TARGET,
+    mtl::{
+        block2::RcBlock,
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
+            MTLCommandQueue, MTLDrawable, MTLOrigin, MTLPixelFormat, MTLResource, MTLSize,
+            MTLTexture,
+        },
+        objc2_quartz_core::{CAMetalDrawable, CAMetalLayer},
+    },
+};
 
 /// Slots a snapshot can copy into, per queue.
 ///
@@ -719,8 +724,9 @@ fn snapshot_into(
             return false;
         };
         if let Some(slot_texture) = handle.into_retained() {
-            let label =
-                crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-snapshot-slot-{index}"));
+            let label = crate::mtl::objc2_foundation::NSString::from_str(&format!(
+                "mtld3d-snapshot-slot-{index}"
+            ));
             slot_texture.setLabel(Some(&label));
         }
         // A replaced slot's texture stays alive in the buffers that encoded it.
@@ -745,7 +751,8 @@ fn snapshot_into(
         );
         return false;
     };
-    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-snapshot-{seq:#x}"));
+    let label =
+        crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-snapshot-{seq:#x}"));
     cb.setLabel(Some(&label));
     let Some(blit) = cb.blitCommandEncoder() else {
         mtld3d_shared::log_once_warn!(
@@ -990,7 +997,8 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
         pop_and_drop(&mut inner, state);
         return true;
     };
-    let label = crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-present-{seq:#x}"));
+    let label =
+        crate::mtl::objc2_foundation::NSString::from_str(&format!("mtld3d-present-{seq:#x}"));
     cb.setLabel(Some(&label));
     let paced = command::encode_present(
         &cb,

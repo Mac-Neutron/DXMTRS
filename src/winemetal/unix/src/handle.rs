@@ -11,9 +11,11 @@
 
 use core::ffi::CStr;
 
-use objc2::Message;
-use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{
+    Message,
+    rc::Retained,
+    runtime::{AnyClass, AnyObject},
+};
 
 use crate::float_cast::u64_to_usize;
 

@@ -1,8 +1,7 @@
 use mtld3d_shared::{MetalHandle, perf::ShaderTimings};
-use crate::mtl::objc2::rc::Retained;
-use crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice;
 
 use super::{compile_shader_library, destroy_function, destroy_library};
+use crate::mtl::{objc2::rc::Retained, objc2_metal::MTLCreateSystemDefaultDevice};
 
 fn poisoned_timings() -> ShaderTimings {
     if !mtld3d_shared::perf::perf_enabled() {

@@ -1,12 +1,15 @@
 //! NVAPI's system information, driver versions and error messages.
 
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use crate::nv::{
-    API_NOT_INITIALIZED, DISPLAY_DRIVER_VERSION_VER, DisplayDriverVersion, INCOMPATIBLE_STRUCT_VERSION,
-    INVALID_ARGUMENT, MOSAIC_NOT_ACTIVE, NOT_SUPPORTED, NVAPI_SDK_VERSION, NVIDIA_DEVICE_NOT_FOUND, OK,
-    SHORT_STRING_MAX, STEREO_NOT_INITIALIZED, Status,
+    API_NOT_INITIALIZED, DISPLAY_DRIVER_VERSION_VER, DisplayDriverVersion,
+    INCOMPATIBLE_STRUCT_VERSION, INVALID_ARGUMENT, MOSAIC_NOT_ACTIVE, NOT_SUPPORTED,
+    NVAPI_SDK_VERSION, NVIDIA_DEVICE_NOT_FOUND, OK, SHORT_STRING_MAX, STEREO_NOT_INITIALIZED,
+    Status,
 };
 
 /// How many `NvAPI_Initialize` calls `NvAPI_Unload` has yet to match.
@@ -75,7 +78,10 @@ extern "C" fn get_driver_and_branch_version(version: *mut u32, branch: *mut u8) 
 }
 
 /// `NvAPI_GetDisplayDriverVersion`.
-extern "C" fn get_display_driver_version(_display: *mut c_void, version: *mut DisplayDriverVersion) -> Status {
+extern "C" fn get_display_driver_version(
+    _display: *mut c_void,
+    version: *mut DisplayDriverVersion,
+) -> Status {
     if version.is_null() {
         return INVALID_ARGUMENT;
     }

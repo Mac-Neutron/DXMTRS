@@ -6,20 +6,21 @@ mod common;
 
 use core::ffi::{c_char, c_int, c_void};
 
-use mtld3d_mtl::{
-    objc2_foundation::NSString,
-    objc2_metal::{
-        MTLBuffer, MTLCompareFunction, MTLCompileOptions, MTLDepthStencilDescriptor, MTLDevice, MTLFunction,
-        MTLLanguageVersion, MTLLibrary, MTLPixelFormat, MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions,
-        MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLStencilDescriptor,
-        MTLStencilOperation, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle,
-        MTLTextureSwizzleChannels, MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat,
-    },
-};
 #[cfg(target_os = "linux")]
 use mtld3d_mtl::objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
 #[cfg(target_vendor = "apple")]
 use mtld3d_mtl::table::Table;
+use mtld3d_mtl::{
+    objc2_foundation::NSString,
+    objc2_metal::{
+        MTLBuffer, MTLCompareFunction, MTLCompileOptions, MTLDepthStencilDescriptor, MTLDevice,
+        MTLFunction, MTLLanguageVersion, MTLLibrary, MTLPixelFormat, MTLRenderPipelineDescriptor,
+        MTLResource, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
+        MTLSamplerMinMagFilter, MTLStencilDescriptor, MTLStencilOperation, MTLStorageMode,
+        MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle, MTLTextureSwizzleChannels,
+        MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat,
+    },
+};
 
 #[cfg(target_vendor = "apple")]
 #[repr(C)]
@@ -43,7 +44,10 @@ unsafe extern "C" {
 fn each_slot_is_the_function_the_facade_means() {
     let _ = common::device();
     let path = std::env::var("MTLD3D_WINEMETAL").unwrap();
-    let nm = std::process::Command::new("nm").args(["-a", &path]).output().expect("nm");
+    let nm = std::process::Command::new("nm")
+        .args(["-a", &path])
+        .output()
+        .expect("nm");
     let symbols: rustc_hash::FxHashMap<String, usize> = String::from_utf8_lossy(&nm.stdout)
         .lines()
         .filter_map(|line| {
@@ -56,11 +60,22 @@ fn each_slot_is_the_function_the_facade_means() {
     let table = Table::get().unwrap();
     for &(slot, name) in mtld3d_mtl::SLOTS {
         let address = table.slot_address(slot);
-        let mut info = DlInfo { fname: core::ptr::null(), fbase: core::ptr::null_mut(), sname: core::ptr::null(), saddr: core::ptr::null_mut() };
+        let mut info = DlInfo {
+            fname: core::ptr::null(),
+            fbase: core::ptr::null_mut(),
+            sname: core::ptr::null(),
+            saddr: core::ptr::null_mut(),
+        };
         // SAFETY: a lookup of an address in a loaded image.
-        assert_ne!(unsafe { dladdr(address as *const c_void, &raw mut info) }, 0, "slot {slot}");
+        assert_ne!(
+            unsafe { dladdr(address as *const c_void, &raw mut info) },
+            0,
+            "slot {slot}"
+        );
         let offset = address - info.fbase as usize;
-        let expected = symbols.get(&format!("_{name}")).unwrap_or_else(|| panic!("{path} has no {name} (slot {slot})"));
+        let expected = symbols
+            .get(&format!("_{name}"))
+            .unwrap_or_else(|| panic!("{path} has no {name} (slot {slot})"));
         assert_eq!(offset, *expected, "slot {slot} is not {name}");
     }
 }
@@ -148,7 +163,11 @@ fn autoreleased_returns_go_with_their_pool() {
         std::thread::sleep(std::time::Duration::from_millis(20));
         after = guest_live_handles();
     }
-    assert!(after < before + 100, "{} handles left of 1000 command buffers", after.saturating_sub(before));
+    assert!(
+        after < before + 100,
+        "{} handles left of 1000 command buffers",
+        after.saturating_sub(before)
+    );
 }
 
 #[test]
@@ -164,7 +183,9 @@ fn a_device_answers_its_queries() {
 #[test]
 fn a_shared_buffer_has_its_length_and_contents() {
     let device = common::device();
-    let buffer = device.newBufferWithLength_options(4096, MTLResourceOptions::StorageModeShared).expect("a buffer");
+    let buffer = device
+        .newBufferWithLength_options(4096, MTLResourceOptions::StorageModeShared)
+        .expect("a buffer");
     assert_eq!(buffer.length(), 4096);
     assert_eq!(buffer.storageMode(), MTLStorageMode::Shared);
     let contents = buffer.contents().as_ptr().cast::<u32>();
@@ -187,11 +208,25 @@ fn a_texture_and_its_view_read_back_as_described() {
         desc.setHeight(32);
         desc.setMipmapLevelCount(3);
     }
-    desc.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead | MTLTextureUsage::PixelFormatView);
+    desc.setUsage(
+        MTLTextureUsage::RenderTarget
+            | MTLTextureUsage::ShaderRead
+            | MTLTextureUsage::PixelFormatView,
+    );
     desc.setStorageMode(MTLStorageMode::Private);
     let texture = device.newTextureWithDescriptor(&desc).expect("a texture");
-    assert_eq!((texture.width(), texture.height(), texture.depth()), (64, 32, 1));
-    assert_eq!((texture.mipmapLevelCount(), texture.sampleCount(), texture.arrayLength()), (3, 1, 1));
+    assert_eq!(
+        (texture.width(), texture.height(), texture.depth()),
+        (64, 32, 1)
+    );
+    assert_eq!(
+        (
+            texture.mipmapLevelCount(),
+            texture.sampleCount(),
+            texture.arrayLength()
+        ),
+        (3, 1, 1)
+    );
     assert_eq!(texture.textureType(), MTLTextureType::Type2D);
     assert_eq!(texture.pixelFormat(), MTLPixelFormat::BGRA8Unorm);
     assert_eq!(texture.storageMode(), MTLStorageMode::Private);
@@ -213,7 +248,10 @@ fn a_texture_and_its_view_read_back_as_described() {
         )
     }
     .expect("a view");
-    assert_eq!((view.width(), view.height(), view.mipmapLevelCount()), (32, 16, 2));
+    assert_eq!(
+        (view.width(), view.height(), view.mipmapLevelCount()),
+        (32, 16, 2)
+    );
     assert_eq!(view.pixelFormat(), MTLPixelFormat::BGRA8Unorm_sRGB);
     assert_eq!(view.swizzle().red, MTLTextureSwizzle::Blue);
 }
@@ -244,20 +282,30 @@ vertex Out vs(In in [[stage_in]]) { Out o; o.pos = float4(in.pos, 0, 1); o.color
 fragment float4 fs(Out in [[stage_in]]) { return in.color; }
 ";
 
-fn library(device: &mtld3d_mtl::objc2::runtime::ProtocolObject<dyn MTLDevice>) -> mtld3d_mtl::objc2::Retained<mtld3d_mtl::objc2::runtime::ProtocolObject<dyn MTLLibrary>> {
+fn library(
+    device: &mtld3d_mtl::objc2::runtime::ProtocolObject<dyn MTLDevice>,
+) -> mtld3d_mtl::objc2::Retained<mtld3d_mtl::objc2::runtime::ProtocolObject<dyn MTLLibrary>> {
     let options = MTLCompileOptions::new();
     options.setLanguageVersion(MTLLanguageVersion::Version2_4);
     options.setPreserveInvariance(true);
-    device.newLibraryWithSource_options_error(&NSString::from_str(SOURCE), Some(&options)).expect("a library")
+    device
+        .newLibraryWithSource_options_error(&NSString::from_str(SOURCE), Some(&options))
+        .expect("a library")
 }
 
 #[test]
 fn a_source_library_with_options_gives_its_functions() {
     let device = common::device();
     let library = library(&device);
-    let vs = library.newFunctionWithName(&NSString::from_str("vs")).expect("vs");
+    let vs = library
+        .newFunctionWithName(&NSString::from_str("vs"))
+        .expect("vs");
     assert_eq!(vs.name().to_rust(), "vs");
-    assert!(library.newFunctionWithName(&NSString::from_str("absent")).is_none());
+    assert!(
+        library
+            .newFunctionWithName(&NSString::from_str("absent"))
+            .is_none()
+    );
 }
 
 #[test]
@@ -265,10 +313,19 @@ fn a_pipeline_reads_a_vertex_descriptor() {
     let device = common::device();
     let library = library(&device);
     let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexFunction(library.newFunctionWithName(&NSString::from_str("vs")).as_deref());
-    desc.setFragmentFunction(library.newFunctionWithName(&NSString::from_str("fs")).as_deref());
+    desc.setVertexFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("vs"))
+            .as_deref(),
+    );
+    desc.setFragmentFunction(
+        library
+            .newFunctionWithName(&NSString::from_str("fs"))
+            .as_deref(),
+    );
     // SAFETY: index < 8.
-    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }
+        .setPixelFormat(MTLPixelFormat::BGRA8Unorm);
     let vertex = MTLVertexDescriptor::new();
     // SAFETY: indices < 31.
     unsafe {
@@ -283,15 +340,28 @@ fn a_pipeline_reads_a_vertex_descriptor() {
         vertex.layouts().objectAtIndexedSubscript(1).setStride(12);
     }
     desc.setVertexDescriptor(Some(&vertex));
-    assert!(device.newRenderPipelineStateWithDescriptor_error(&desc).is_ok());
+    assert!(
+        device
+            .newRenderPipelineStateWithDescriptor_error(&desc)
+            .is_ok()
+    );
     // Without the vertex descriptor the [[stage_in]] function can't link: the descriptor reached Metal.
     desc.setVertexDescriptor(None);
-    assert!(device.newRenderPipelineStateWithDescriptor_error(&desc).is_err());
+    assert!(
+        device
+            .newRenderPipelineStateWithDescriptor_error(&desc)
+            .is_err()
+    );
 }
 
 #[test]
 fn a_compile_error_carries_its_text() {
     let device = common::device();
-    let error = device.newLibraryWithSource_options_error(&NSString::from_str("this is not MSL"), None).expect_err("an error");
-    assert!(error.localizedDescription().to_rust().contains("error"), "{error}");
+    let error = device
+        .newLibraryWithSource_options_error(&NSString::from_str("this is not MSL"), None)
+        .expect_err("an error");
+    assert!(
+        error.localizedDescription().to_rust().contains("error"),
+        "{error}"
+    );
 }

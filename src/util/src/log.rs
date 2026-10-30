@@ -5,12 +5,7 @@
 //! `<DXMT_LOG_PATH>/<exe>_<dll>.log`: no file when the path is `none`, or unset while Wine's output
 //! exists.
 
-use std::{
-    fmt::Write as _,
-    fs::File,
-    io::Write,
-    sync::Mutex,
-};
+use std::{fmt::Write as _, fs::File, io::Write, sync::Mutex};
 
 /// A message's level, ordered as DXMT's `LogLevel`.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -44,10 +39,12 @@ fn lines(level: &Level, message: &str) -> String {
         Level::Warn => "warn:  ",
         Level::Error | Level::None => "err:   ",
     };
-    message.split_terminator('\n').fold(String::new(), |mut text, line| {
-        let _ = writeln!(text, "{prefix}{line}");
-        text
-    })
+    message
+        .split_terminator('\n')
+        .fold(String::new(), |mut text, line| {
+            let _ = writeln!(text, "{prefix}{line}");
+            text
+        })
 }
 
 /// `text` as a text-mode stream writes it.
@@ -55,11 +52,20 @@ fn lines(level: &Level, message: &str) -> String {
 /// On Windows `std::ofstream` and `std::cerr` turn each `\n` into `\r\n`; Wine's debug output
 /// takes the `\n` form.
 fn text_mode(text: &str, crlf: bool) -> String {
-    if crlf { text.replace('\n', "\r\n") } else { text.to_owned() }
+    if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_owned()
+    }
 }
 
 /// The log file's path: `<log_path>/<exe's base name>_<file>`.
-fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &str) -> Option<String> {
+fn file_name(
+    log_path: Option<&str>,
+    wine_output: bool,
+    exe_path: &str,
+    file: &str,
+) -> Option<String> {
     let path = log_path.unwrap_or("");
     if path == "none" || (path.is_empty() && wine_output) {
         return None;
@@ -69,7 +75,11 @@ fn file_name(log_path: Option<&str>, wine_output: bool, exe_path: &str, file: &s
         Some((stem, ext)) if ext.eq_ignore_ascii_case(".exe") => stem,
         _ => exe,
     };
-    let slash = if path.is_empty() || path.ends_with('/') { "" } else { "/" };
+    let slash = if path.is_empty() || path.ends_with('/') {
+        ""
+    } else {
+        "/"
+    };
     Some(format!("{path}{slash}{base}_{file}"))
 }
 
@@ -91,9 +101,12 @@ struct Sinks {
 impl Sinks {
     fn open(file: &str, env: &impl Fn(&str) -> Option<String>) -> Self {
         let wine = wine_output();
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let path = env("DXMT_LOG_PATH");
-        let file = file_name(path.as_deref(), wine.is_some(), &exe, file).and_then(|name| File::create(name).ok());
+        let file = file_name(path.as_deref(), wine.is_some(), &exe, file)
+            .and_then(|name| File::create(name).ok());
         Self { wine, file }
     }
 }
@@ -108,14 +121,18 @@ pub struct Logger {
 fn wine_output() -> Option<WineOutput> {
     unsafe extern "system" {
         fn GetModuleHandleA(name: *const u8) -> *mut core::ffi::c_void;
-        fn GetProcAddress(module: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void;
+        fn GetProcAddress(
+            module: *mut core::ffi::c_void,
+            name: *const u8,
+        ) -> *mut core::ffi::c_void;
     }
     // SAFETY: the name is a NUL-terminated literal; a missing module gives null, not a crash.
     let ntdll = unsafe { GetModuleHandleA(c"ntdll.dll".as_ptr().cast()) };
     // SAFETY: the name is a NUL-terminated literal; a null module makes GetProcAddress fail, not crash.
     let address = unsafe { GetProcAddress(ntdll, c"__wine_dbg_output".as_ptr().cast()) };
     // SAFETY: ntdll's `__wine_dbg_output` has `WineOutput`'s signature.
-    (!address.is_null()).then(|| unsafe { core::mem::transmute::<*mut core::ffi::c_void, WineOutput>(address) })
+    (!address.is_null())
+        .then(|| unsafe { core::mem::transmute::<*mut core::ffi::c_void, WineOutput>(address) })
 }
 
 #[cfg(not(windows))]
@@ -127,7 +144,10 @@ impl Logger {
     /// A log that writes `<exe base>_<file>` (`file` is `nvngx.log`, say) once it has a message.
     #[must_use]
     pub const fn new(file: &'static str) -> Self {
-        Self { file, state: Mutex::new(None) }
+        Self {
+            file,
+            state: Mutex::new(None),
+        }
     }
 
     /// Writes `message` at `level` if the log's level lets it through.
@@ -139,12 +159,19 @@ impl Logger {
     ///
     /// As `Logger::emitMsg`, the file is created by the first message that passes the level.
     fn emit_with(&self, env: &impl Fn(&str) -> Option<String>, level: &Level, message: &str) {
-        let Ok(mut guard) = self.state.lock() else { return };
-        let state = guard.get_or_insert_with(|| State { level: level_from(env("DXMT_LOG_LEVEL").as_deref()), sinks: None });
+        let Ok(mut guard) = self.state.lock() else {
+            return;
+        };
+        let state = guard.get_or_insert_with(|| State {
+            level: level_from(env("DXMT_LOG_LEVEL").as_deref()),
+            sinks: None,
+        });
         if *level < state.level {
             return;
         }
-        let sinks = state.sinks.get_or_insert_with(|| Sinks::open(self.file, env));
+        let sinks = state
+            .sinks
+            .get_or_insert_with(|| Sinks::open(self.file, env));
         let text = lines(level, message);
         if let Some(wine) = sinks.wine {
             if let Ok(text) = std::ffi::CString::new(text.as_str()) {

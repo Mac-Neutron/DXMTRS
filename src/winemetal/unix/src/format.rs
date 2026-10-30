@@ -18,7 +18,8 @@ pub const fn pixel_format(format: u32) -> MTLPixelFormat {
 #[must_use]
 pub fn swizzle(format: u32, channels: WMTTextureSwizzleChannels) -> MTLTextureSwizzleChannels {
     let decode = |component, base: u8| {
-        let [v, ..] = decode_format_component_swizzle(format, component, u32::from(base)).to_le_bytes();
+        let [v, ..] =
+            decode_format_component_swizzle(format, component, u32::from(base)).to_le_bytes();
         MTLTextureSwizzle(v)
     };
     MTLTextureSwizzleChannels {
