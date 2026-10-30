@@ -49,19 +49,9 @@ NTSTATUS _MTLCommandBuffer_waitUntilCompleted(void *obj);
 
 NTSTATUS _MTLCommandBuffer_status(void *obj);
 
-static NTSTATUS
-_MTLDevice_newSharedEvent(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newSharedEvent];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newSharedEvent(void *obj);
 
-static NTSTATUS
-_MTLSharedEvent_signaledValue(void *obj) {
-  struct unixcall_generic_obj_uint64_ret *params = obj;
-  params->ret = [(id<MTLSharedEvent>)params->handle signaledValue];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLSharedEvent_signaledValue(void *obj);
 
 NTSTATUS _MTLCommandBuffer_encodeSignalEvent(void *obj);
 
@@ -78,20 +68,6 @@ NTSTATUS _MTLDevice_newDepthStencilState(void *obj);
 MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat);
 void fill_texture_descriptor(MTLTextureDescriptor *, struct WMTTextureInfo *);
 
-void
-extract_texture_descriptor(id<MTLTexture> desc, struct WMTTextureInfo *info) {
-  info->type = desc.textureType;
-  info->pixel_format = desc.pixelFormat;
-  info->width = desc.width;
-  info->height = desc.height;
-  info->depth = desc.depth;
-  info->array_length = desc.arrayLength;
-  info->mipmap_level_count = desc.mipmapLevelCount;
-  info->sample_count = desc.sampleCount;
-  info->usage = desc.usage;
-  info->options = (enum WMTResourceOptions)desc.resourceOptions;
-  info->flags = 0;
-};
 
 NTSTATUS _MTLDevice_newTexture(void *obj);
 
@@ -714,154 +690,22 @@ NTSTATUS _WMTQueryDisplaySettingForLayer(void *obj);
 
 NTSTATUS _MTLCommandBuffer_encodeWaitForEvent(void *obj);
 
-static NTSTATUS
-_MTLSharedEvent_signalValue(void *obj) {
-  struct unixcall_generic_obj_uint64_noret *params = obj;
-  [(id<MTLSharedEvent>)params->handle setSignaledValue:params->arg];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLSharedEvent_signalValue(void *obj);
 
-typedef struct {
-  _Atomic(CFRunLoopRef) runloop_ref;
-  MTLSharedEventListener *shared_listener;
-} *shared_event_listener_t;
+NTSTATUS _MTLSharedEvent_setWin32EventAtValue(void *obj);
 
-#ifdef DXMT_NATIVE
-/* Natively the events are src/util's (win32_native.h), set on the same listener's run loop, and held from the
- * registration to the set, as the Windows kernel holds them: the program may close one before its fence fires. */
-#include "../../util/win32_native_event.h"
-#define NtSetEvent(handle, prev_state) mn_win32_set_event(handle)
-#define EVENT_HOLD(handle) mn_win32_ref(handle)
-#define EVENT_DROP(handle) mn_win32_unref(handle)
-#else
-extern NTSTATUS NtSetEvent(void *handle, void *prev_state);
-#define EVENT_HOLD(handle) ((void)0)
-#define EVENT_DROP(handle) ((void)0)
-#endif
+NTSTATUS _MTLSharedEvent_setWin32EventAtValues(void *obj);
 
-static NTSTATUS
-_MTLSharedEvent_setWin32EventAtValue(void *obj) {
-  struct unixcall_mtlsharedevent_setevent *params = obj;
-  void *nt_event_handle = (shared_event_listener_t)params->event_handle;
-  shared_event_listener_t q = (shared_event_listener_t)params->shared_event_listener;
-  EVENT_HOLD(nt_event_handle);
-  [(id<MTLSharedEvent>)params->shared_event
-      notifyListener:q->shared_listener
-             atValue:params->value
-               block:^(id<MTLSharedEvent> _e, uint64_t _v) {
-                 // NOTE: must ensure no more notification comes after listener been destroyed.
-                 while (!atomic_load_explicit(&q->runloop_ref, memory_order_acquire)) {
-#if defined(__x86_64__)
-                   _mm_pause();
-#elif defined(__aarch64__)
-          __asm__ __volatile__("yield");
-#endif
-                 }
-                 CFRunLoopPerformBlock(q->runloop_ref, kCFRunLoopCommonModes, ^{
-                   NtSetEvent(nt_event_handle, NULL);
-                   EVENT_DROP(nt_event_handle);
-                 });
-                 CFRunLoopWakeUp(q->runloop_ref);
-               }];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _SharedEventListener_start(void *obj);
 
-static NTSTATUS
-_MTLSharedEvent_setWin32EventAtValues(void *obj) {
-  struct unixcall_mtlsharedevent_seteventatvalues *params = obj;
-  shared_event_listener_t q = (shared_event_listener_t)params->shared_event_listener;
-  const obj_handle_t *events = params->shared_events.ptr;
-  const uint64_t *values = params->values.ptr;
-  void *nt_event_handle = (void *)params->event_handle;
-  // Counts notifications down on the listener's own run loop: no thread. `refs` frees it after the last one.
-  struct countdown {
-    _Atomic uint32_t needed;
-    _Atomic uint32_t refs;
-  } *c = malloc(sizeof(*c));
-  atomic_init(&c->needed, params->needed);
-  atomic_init(&c->refs, params->count);
-  EVENT_HOLD(nt_event_handle);
-  for (uint32_t i = 0; i < params->count; i++) {
-    [(id<MTLSharedEvent>)events[i]
-        notifyListener:q->shared_listener
-               atValue:values[i]
-                 block:^(id<MTLSharedEvent> _e, uint64_t _v) {
-                   while (!atomic_load_explicit(&q->runloop_ref, memory_order_acquire)) {
-#if defined(__x86_64__)
-                     _mm_pause();
-#elif defined(__aarch64__)
-                     __asm__ __volatile__("yield");
-#endif
-                   }
-                   if (atomic_fetch_sub(&c->needed, 1) == 1) {
-                     CFRunLoopPerformBlock(q->runloop_ref, kCFRunLoopCommonModes, ^{
-                       NtSetEvent(nt_event_handle, NULL);
-                       EVENT_DROP(nt_event_handle);
-                     });
-                     CFRunLoopWakeUp(q->runloop_ref);
-                   }
-                   if (atomic_fetch_sub(&c->refs, 1) == 1)
-                     free(c);
-                 }];
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _SharedEventListener_create(void *obj);
 
-static NTSTATUS
-_SharedEventListener_start(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  shared_event_listener_t q = (shared_event_listener_t)params->handle;
-  CFRunLoopRef uninited = NULL;
-  if (q && atomic_compare_exchange_strong(&q->runloop_ref, &uninited, CFRunLoopGetCurrent())) {
-    /* Add a dummy source so the runloop stays running */
-    CFRunLoopSourceContext source_context = {0};
-    CFRunLoopSourceRef source = CFRunLoopSourceCreate(NULL, 0, &source_context);
-    CFRunLoopAddSource(q->runloop_ref, source, kCFRunLoopCommonModes);
-    CFRunLoopRun();
-  }
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_SharedEventListener_create(void *obj) {
-  struct unixcall_generic_obj_ret *params = obj;
-  shared_event_listener_t q = malloc(sizeof(*q));
-  if (q) {
-    q->runloop_ref = NULL;
-    q->shared_listener = [[MTLSharedEventListener alloc] init];
-  }
-  params->ret = (obj_handle_t)q;
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_SharedEventListener_destroy(void *obj) {
-  struct unixcall_generic_obj_noret *params = obj;
-  shared_event_listener_t q = (shared_event_listener_t)params->handle;
-  if (q && q->runloop_ref) {
-    CFRunLoopStop(q->runloop_ref);
-    q->runloop_ref = NULL;
-    [q->shared_listener release];
-    q->shared_listener = nil;
-    free(q);
-  }
-  return STATUS_SUCCESS;
-}
+NTSTATUS _SharedEventListener_destroy(void *obj);
 
 
-static NTSTATUS
-_MTLDevice_newFence(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newFence];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newFence(void *obj);
 
-static NTSTATUS
-_MTLDevice_newEvent(void *obj) {
-  struct unixcall_generic_obj_obj_ret *params = obj;
-  params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newEvent];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newEvent(void *obj);
 
 NTSTATUS _MTLBuffer_updateContents(void *obj);
 
@@ -873,118 +717,19 @@ NTSTATUS _MTLBinaryArchive_serialize(void *obj);
 
 NTSTATUS _DispatchData_alloc_init(void *obj);
 
-@interface MTLSharedTextureHandle ()
+NTSTATUS _MTLDevice_newSharedTexture(void *obj);
 
-- (MTLSharedTextureHandle *)initWithMachPort:(mach_port_t)port;
-- (mach_port_t)createMachPort;
+NTSTATUS _WMTBootstrapRegister(void *obj);
 
-@end
+NTSTATUS _WMTBootstrapLookUp(void *obj);
 
-static NTSTATUS
-_MTLDevice_newSharedTexture(void *obj) {
-  struct unixcall_mtldevice_newtexture *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  struct WMTTextureInfo *info = params->info.ptr;
+NTSTATUS _MTLSharedEvent_createMachPort(void *obj);
 
-  if (info->mach_port) {
-    MTLSharedTextureHandle *handle = [[MTLSharedTextureHandle alloc] initWithMachPort:info->mach_port];
-    id<MTLTexture> ret = [device newSharedTextureWithHandle:handle];
-    extract_texture_descriptor(ret, info);
-    params->ret = (obj_handle_t)ret;
-    info->gpu_resource_id = [ret gpuResourceID]._impl;
-    [handle release];
-  } else {
-    MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
-    fill_texture_descriptor(desc, info);
-    id<MTLTexture> ret = [device newSharedTextureWithDescriptor:desc];
-    MTLSharedTextureHandle *handle = [ret newSharedTextureHandle];
-    params->ret = (obj_handle_t)ret;
-    info->gpu_resource_id = [ret gpuResourceID]._impl;
-    info->mach_port = [handle createMachPort]; // implicitly add ref to underlying IOSurface
-    [handle release];
-    [desc release];
-  }
-
-  return STATUS_SUCCESS;
-}
-
-/* Private API to register a mach port with the bootstrap server */
-extern kern_return_t bootstrap_register2(mach_port_t bp, name_t service_name, mach_port_t sp, int flags);
-
-static NTSTATUS
-_WMTBootstrapRegister(void *obj) {
-  struct unixcall_bootstrap *params = obj;
-  mach_port_t rp = params->mach_port;
-  mach_port_t bp;
-
-  if (task_get_bootstrap_port(mach_task_self(), &bp) != KERN_SUCCESS)
-    return STATUS_UNSUCCESSFUL;
-  NTSTATUS ret = bootstrap_register2(bp, params->name, rp, 0) != KERN_SUCCESS ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
-  mach_port_deallocate(mach_task_self(), bp);
-  return ret;
-}
-
-static NTSTATUS
-_WMTBootstrapLookUp(void *obj) {
-  struct unixcall_bootstrap *params = obj;
-  mach_port_t rp = 0;
-  mach_port_t bp;
-
-  if (task_get_bootstrap_port(mach_task_self(), &bp) != KERN_SUCCESS)
-    return STATUS_UNSUCCESSFUL;
-  NTSTATUS ret = bootstrap_look_up(bp, params->name, &rp) != KERN_SUCCESS ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
-  mach_port_deallocate(mach_task_self(), bp);
-  params->mach_port = rp;
-  return ret;
-}
-
-@protocol MTLDeviceSPI <MTLDevice>
-
-- (id<MTLSharedEvent>)newSharedEventWithMachPort:(mach_port_t)machPort;
-
-@end
-
-@interface MTLSharedEventHandle ()
-
-- (mach_port_t)eventPort;
-
-@end
-
-static NTSTATUS
-_MTLSharedEvent_createMachPort(void *obj) {
-  struct unixcall_mtlsharedevent_createmachport *params = obj;
-  id<MTLSharedEvent> event = (id<MTLSharedEvent>)params->event;
-  MTLSharedEventHandle *handle = [event newSharedEventHandle];
-  mach_port_t port = [handle eventPort];
-  
-  // The eventPort method returns a send right that's owned by the handle.
-  // We need to add our own send right since we're keeping the port but releasing the handle.
-  // This increments the send right count so the port remains valid.
-  mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_SEND, 1);
-  
-  params->ret_mach_port = port;
-  [handle release];
-  return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-_MTLDevice_newSharedEventWithMachPort(void *obj) {
-  struct unixcall_mtldevice_newsharedeventwithmachport *params = obj;
-  id<MTLDevice> device = (id<MTLDevice>)params->device;
-  id<MTLDeviceSPI> deviceSPI = (id<MTLDeviceSPI>)device;
-  params->ret_event = (obj_handle_t)[deviceSPI newSharedEventWithMachPort:params->mach_port];
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLDevice_newSharedEventWithMachPort(void *obj);
 
 NTSTATUS _MTLDevice_registryID(void *obj);
 
-static NTSTATUS
-_MTLSharedEvent_waitUntilSignaledValue(void *obj) {
-  struct unixcall_mtlsharedevent_waituntilsignaledvalue *params = obj;
-  bool timeout = [(id<MTLSharedEvent>)params->event waitUntilSignaledValue:params->value timeoutMS:params->timeout_ms];
-  params->ret_timeout = timeout;
-  return STATUS_SUCCESS;
-}
+NTSTATUS _MTLSharedEvent_waitUntilSignaledValue(void *obj);
 
 NTSTATUS _MTLCounterSampleBuffer_newTimestampBuffer(void *obj);
 
