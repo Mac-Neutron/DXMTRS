@@ -8,11 +8,7 @@
 
 use core::{ffi::c_void, mem::offset_of};
 
-use dxmt_util::com::Hresult;
-
-pub const S_OK: Hresult = 0;
-pub const E_NOTIMPL: Hresult = 0x8000_4001_u32.cast_signed();
-pub const E_INVALIDARG: Hresult = 0x8007_0057_u32.cast_signed();
+pub use dxmt_util::com::{E_INVALIDARG, E_NOTIMPL, S_OK};
 
 pub const SUBOBJECT_TYPE_ROOT_SIGNATURE: u32 = 0x0;
 pub const SUBOBJECT_TYPE_VS: u32 = 0x1;
