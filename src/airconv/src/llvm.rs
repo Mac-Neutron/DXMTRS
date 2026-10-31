@@ -148,7 +148,7 @@ impl Context {
 
     /// The lines the handler wrote to stderr so far.
     #[cfg(test)]
-    fn printed(&self) -> Vec<Vec<u8>> {
+    pub fn printed(&self) -> Vec<Vec<u8>> {
         self.diagnostics().printed.borrow().clone()
     }
 

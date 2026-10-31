@@ -25,11 +25,11 @@ mod dxbc;
 mod dxil;
 mod entry;
 pub mod llvm;
-mod module;
+pub mod module;
 #[cfg(feature = "oracle")]
 pub mod oracle;
 mod shader;
-mod writer;
+pub mod writer;
 
 pub use api::{
     Error, dxil_compile_pass_through_vertex, dxil_get_entry, sm50_compile,
