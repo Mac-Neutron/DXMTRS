@@ -446,6 +446,7 @@ src/dxgi/src/abi.rs Luid Clone,Copy,Default
 src/dxgi/src/abi.rs Rational Clone,Copy,Default
 src/dxgi/src/abi.rs Rect Clone,Copy,Default
 src/dxgi/src/abi.rs SampleDesc Clone,Copy
+src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
 src/winemetal/wire/src/lib.rs MemPtr Clone,Copy
 src/winemetal/wire/src/lib.rs MemPtr Clone,Copy

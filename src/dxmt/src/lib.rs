@@ -12,6 +12,7 @@ pub mod dump;
 pub mod dynamic;
 pub mod emulated;
 pub mod encoder;
+pub mod ffi;
 pub mod format;
 pub mod hud;
 pub mod info;

@@ -2,6 +2,21 @@
 
 #include <cstdint>
 
+// The statistics live in DXMT's core (Rust, src/dxmt/src/stats.rs); these are its C entry points, which the
+// forwards below call. g_stats_on stays here and reaches the core by value at load (d3d12_stats.cpp).
+extern "C" {
+/* dxmt-abi begin */
+void dxmt_stats_init(bool on);
+void dxmt_stats_exit(void);
+unsigned dxmt_stat_id(const char *name);
+void dxmt_stat_count(unsigned id, uint64_t n);
+uint64_t dxmt_stat_begin(void);
+void dxmt_stat_end(unsigned id, uint64_t t0);
+void dxmt_stats_frame(void);
+unsigned dxmt_stats_next_pass(void);
+/* dxmt-abi end */
+}
+
 namespace dxmt {
 
 // MacNeutron: DXMT_STATS=1 (with DXMT_DXIL_DUMP=<folder>) times every D3D12 call per thread and appends a report to
@@ -19,12 +34,12 @@ inline void StatEnd(unsigned, uint64_t) {}
 #else
 extern bool g_stats_on;
 
-unsigned StatId(const char *name); // registers a name; call sites keep the id in a static
-void StatCount(unsigned id, uint64_t n = 1); // a counter: no time
-void StatsFrame();         // at each present
-unsigned StatsNextPass(); // numbers encoders from 0 at each present, as passes.txt does
-uint64_t StatBegin();
-void StatEnd(unsigned id, uint64_t t0);
+inline unsigned StatId(const char *name) { return dxmt_stat_id(name); } // registers a copy; call sites keep the id
+inline void StatCount(unsigned id, uint64_t n = 1) { dxmt_stat_count(id, n); } // a counter: no time
+inline void StatsFrame() { dxmt_stats_frame(); }                                // at each present
+inline unsigned StatsNextPass() { return dxmt_stats_next_pass(); } // numbers encoders from 0 at each present
+inline uint64_t StatBegin() { return dxmt_stat_begin(); }
+inline void StatEnd(unsigned id, uint64_t t0) { dxmt_stat_end(id, t0); }
 #endif
 
 struct StatScope {

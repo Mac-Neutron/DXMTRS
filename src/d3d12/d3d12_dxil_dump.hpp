@@ -1,8 +1,21 @@
 #pragma once
 
 #include "d3d12.h"
+#include <cstddef>
 #include <cstdint>
 #include <string>
+
+// The capture folder's file writing lives in DXMT's core (Rust, src/dxmt/src/dump.rs); these are its C entry points,
+// which the forwards below call.
+extern "C" {
+/* dxmt-abi begin */
+bool dxmt_dump_on(void);
+void dxmt_dump_save(const char *name, const void *data, size_t len);
+void dxmt_dump_save_once(const char *name, const void *data, size_t len);
+bool dxmt_dump_make_folder(const char *name);
+void dxmt_dump_append_pipeline(const char *line, size_t len);
+/* dxmt-abi end */
+}
 
 namespace dxmt {
 
@@ -17,7 +30,7 @@ void DumpDXIL(const D3D12_SHADER_BYTECODE &Bytecode);
 #ifdef DXMT_PERF_BUILD // MacNeutron's performance build never captures
 inline bool DXILCaptureMode() { return false; }
 #else
-bool DXILCaptureMode();
+inline bool DXILCaptureMode() { return dxmt_dump_on(); }
 #endif
 
 // Report what Shader Model 6 games check for (feature level 12_1, SM 6.7, binding tier 3, wave ops, 64-bit atomics):
@@ -30,12 +43,20 @@ bool SM6Caps();
 // <folder>/pipelines.txt naming its shaders' and root signature's hashes (see CaptureHash), for offline replays.
 uint64_t CaptureHash(const void *data, size_t size);
 void DumpRootSignature(const void *blob, size_t size);
-void LogPipeline(const std::string &line);
+
+#ifdef DXMT_PERF_BUILD
+inline void LogPipeline(const std::string &) {}
+inline void SaveCapture(const char *, const void *, size_t) {}
+inline bool MakeCaptureFolder(const char *) { return true; }
+#else
+inline void LogPipeline(const std::string &line) { dxmt_dump_append_pipeline(line.data(), line.size()); }
 
 // Capture mode: saves `data` as <folder>/<name>, replacing any earlier file of that name.
-void SaveCapture(const char *name, const void *data, size_t size);
-// Creates <capture folder>\<name> (MacNeutron: per-F9 dump folders).
-bool MakeCaptureFolder(const char *name); // false: the folder was already there
+inline void SaveCapture(const char *name, const void *data, size_t size) { dxmt_dump_save(name, data, size); }
+// Creates <capture folder>\<name> (MacNeutron: per-F9 dump folders). False: the folder was already there (true when
+// capture is off and on any other error, so F9's loop over folder numbers ends).
+inline bool MakeCaptureFolder(const char *name) { return dxmt_dump_make_folder(name); }
+#endif
 
 // Pixel history (MacNeutron capture mode): a render pipeline's description ("gfx vs=... ps=... blend0=..."), by its
 // Metal pipeline state handle, for naming the draws that change a pixel.
