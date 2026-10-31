@@ -19,7 +19,7 @@
 )]
 
 pub mod abi;
-mod air;
+pub mod air;
 mod api;
 mod dxbc;
 mod dxil;
