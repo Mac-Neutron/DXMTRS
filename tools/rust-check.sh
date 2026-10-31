@@ -1,8 +1,12 @@
 #!/bin/sh
-# The Rust gate of the tree; run it before every commit. No arguments. From the repository root it runs five legs and
+# The Rust gate of the tree; run it before every commit. No arguments. From the repository root it runs six legs and
 # prints each cargo command line, `rust-check: <leg> ok|FAIL` per leg and, if every leg passed, `rust-check: ok` (exit 0;
 # otherwise exit 1, every leg run):
 #   fmt     the pinned nightly's `cargo fmt --all --check` (rustfmt.toml uses unstable options)
+#   gen     tools/winemetal-layouts.sh regenerates the generated bindings into the target folder, each equal to the
+#           committed file: winemetal-wire's layouts.rs, winemetal-pe's protos.rs, winemetal-sys's decls.rs and each
+#           seam's src/dxmt/src/<seam>/abi.rs (the header its first line names, with crate::<seam>); a C declaration
+#           changed without its regeneration would otherwise still compile (needs Xcode's clang and jq)
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
 #           the same host and i686 lines with MTLD3D_PERF=1 (cfg(perf_tracking) code), in a target folder of their own,
 #           and the core's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD)
@@ -126,6 +130,36 @@ leg_fmt() {
   PATH="$NIGHTLY_BIN:$PATH" "$NIGHTLY_BIN/cargo" fmt --all --check
 }
 
+# gen_cmp <committed file> <generator arguments...>: one generated file, regenerated and compared.
+gen_cmp() {
+  f=$1; shift
+  printf 'rust-check: + sh tools/winemetal-layouts.sh %s\n' "$*"
+  sh tools/winemetal-layouts.sh "$@" "$MTLD3D_LLVM_MINGW/bin" > "$T/gen/out.rs" || return 1
+  cmp -s "$T/gen/out.rs" "$f" && return 0
+  echo "rust-check: $f is not what tools/winemetal-layouts.sh $* prints; regenerate it:" >&2
+  diff "$f" "$T/gen/out.rs" | head -10 >&2
+  return 1
+}
+
+leg_gen() {
+  rc=0
+  mkdir -p "$T/gen"
+  gen_cmp src/winemetal/wire/src/layouts.rs || rc=1
+  gen_cmp src/winemetal/src/protos.rs --protos || rc=1
+  gen_cmp src/winemetal/sys/src/decls.rs --decls || rc=1
+  for f in src/dxmt/src/*/abi.rs; do
+    h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")
+    hdr=$(git ls-files "src/*/$h")
+    case $hdr in
+      '' | *' '* | *'
+'*) echo "rust-check: $f names no one header of the tree in its first line (${h:-none})" >&2; rc=1; continue ;;
+    esac
+    seam=${f#src/dxmt/src/}
+    gen_cmp "$f" --seam-abi "$hdr" "crate::${seam%/abi.rs}" || rc=1
+  done
+  return $rc
+}
+
 leg_clippy() {
   rc=0
   lint $I686 $PE_P || rc=1
@@ -185,7 +219,7 @@ leg_audit() {
 }
 
 failed=
-for leg in fmt clippy doc test audit; do
+for leg in fmt gen clippy doc test audit; do
   if "leg_$leg"; then
     echo "rust-check: $leg ok"
   else

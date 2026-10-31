@@ -27,8 +27,9 @@ like a fix is often a divergence that was measured and kept.
 ## The gate
 
 `tools/rust-check.sh` is the gate for the Rust in the tree, and it has to be
-green before you commit. It runs the nightly `cargo fmt --check`, clippy with
-`nursery` and `pedantic` on `aarch64-apple-darwin` and on every
+green before you commit. It runs the nightly `cargo fmt --check`, the
+regeneration of the generated bindings (each must equal its committed file),
+clippy with `nursery` and `pedantic` on `aarch64-apple-darwin` and on every
 `-pc-windows-msvc` target a crate ships on, `tools/audit.sh`, `cargo doc`, and
 the host unit tests (the `MTLD3D_PERF=1` legs included, since no other leg
 compiles the perf telemetry or the tests behind `cfg(perf_tracking)`). It prints
