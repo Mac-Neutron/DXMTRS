@@ -28,7 +28,7 @@ pub mod llvm;
 pub mod module;
 #[cfg(feature = "oracle")]
 pub mod oracle;
-mod shader;
+pub mod shader;
 pub mod writer;
 
 pub use api::{

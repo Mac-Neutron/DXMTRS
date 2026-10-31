@@ -33,6 +33,16 @@ pub mod name {
 /// once per kind, are told apart by edge here.
 pub mod sb_name {
     pub const UNDEFINED: u32 = 0;
+    pub const POSITION: u32 = 1;
+    pub const CLIP_DISTANCE: u32 = 2;
+    pub const CULL_DISTANCE: u32 = 3;
+    pub const RENDER_TARGET_ARRAY_INDEX: u32 = 4;
+    pub const VIEWPORT_ARRAY_INDEX: u32 = 5;
+    pub const VERTEX_ID: u32 = 6;
+    pub const PRIMITIVE_ID: u32 = 7;
+    pub const INSTANCE_ID: u32 = 8;
+    pub const IS_FRONT_FACE: u32 = 9;
+    pub const SAMPLE_INDEX: u32 = 10;
     pub const FINAL_QUAD_U_EQ_0_EDGE_TESSFACTOR: u32 = 11;
     pub const FINAL_QUAD_V_EQ_0_EDGE_TESSFACTOR: u32 = 12;
     pub const FINAL_QUAD_U_EQ_1_EDGE_TESSFACTOR: u32 = 13;
@@ -45,6 +55,36 @@ pub mod sb_name {
     pub const FINAL_TRI_INSIDE_TESSFACTOR: u32 = 20;
     pub const FINAL_LINE_DETAIL_TESSFACTOR: u32 = 21;
     pub const FINAL_LINE_DENSITY_TESSFACTOR: u32 = 22;
+}
+
+/// `D3D10_SB_INTERPOLATION_MODE`: how a pixel shader input is interpolated.
+pub mod interpolation {
+    pub const UNDEFINED: u32 = 0;
+    pub const CONSTANT: u32 = 1;
+    pub const LINEAR: u32 = 2;
+    pub const LINEAR_CENTROID: u32 = 3;
+    pub const LINEAR_NOPERSPECTIVE: u32 = 4;
+    pub const LINEAR_NOPERSPECTIVE_CENTROID: u32 = 5;
+    pub const LINEAR_SAMPLE: u32 = 6;
+    pub const LINEAR_NOPERSPECTIVE_SAMPLE: u32 = 7;
+}
+
+/// `D3D11_SB_TESSELLATOR_DOMAIN`, `…_PARTITIONING` and `…_OUTPUT_PRIMITIVE`.
+pub mod tessellator {
+    pub const DOMAIN_UNDEFINED: u32 = 0;
+    pub const DOMAIN_ISOLINE: u32 = 1;
+    pub const DOMAIN_TRI: u32 = 2;
+    pub const DOMAIN_QUAD: u32 = 3;
+    pub const PARTITIONING_UNDEFINED: u32 = 0;
+    pub const PARTITIONING_INTEGER: u32 = 1;
+    pub const PARTITIONING_POW2: u32 = 2;
+    pub const PARTITIONING_FRACTIONAL_ODD: u32 = 3;
+    pub const PARTITIONING_FRACTIONAL_EVEN: u32 = 4;
+    pub const OUTPUT_UNDEFINED: u32 = 0;
+    pub const OUTPUT_POINT: u32 = 1;
+    pub const OUTPUT_LINE: u32 = 2;
+    pub const OUTPUT_TRIANGLE_CW: u32 = 3;
+    pub const OUTPUT_TRIANGLE_CCW: u32 = 4;
 }
 
 /// `D3D10_SB_TOKENIZED_PROGRAM_TYPE`: the stage, the high half of a program's first token.

@@ -357,7 +357,7 @@ pub unsafe extern "C" fn dxil_compile_pass_through_vertex(
 ///
 /// `shader` is a live shader handle; `out` is writable.
 #[unsafe(export_name = "DXILGetEntry")]
-pub const unsafe extern "C" fn dxil_get_entry(shader: *mut c_void, out: *mut DxilEntryInfo) {
+pub unsafe extern "C" fn dxil_get_entry(shader: *mut c_void, out: *mut DxilEntryInfo) {
     // SAFETY: a live shader handle (the caller's contract).
     let info = entry::entry_info(unsafe { shader_ref(shader) });
     // SAFETY: `out` is writable (the caller's contract).

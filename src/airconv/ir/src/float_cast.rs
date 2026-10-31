@@ -11,3 +11,27 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
+
+/// A `float` assigned to a `uint32_t` (`get_integer_factor`, `dxbc_converter_ts.cpp:84-100`).
+///
+/// Truncated toward zero; NaN is 0 and an out-of-range value saturates, as `fcvtzu` answers.
+#[must_use]
+pub const fn f32_to_u32(x: f32) -> u32 {
+    x as u32
+}
+
+/// A `double` returned as a `uint32_t` (`get_max_potential_workload_count`, `:116-118`).
+///
+/// As [`f32_to_u32`].
+#[must_use]
+pub const fn f64_to_u32(x: f64) -> u32 {
+    x as u32
+}
+
+/// A `uint32_t` assigned to a `float` (`get_final_maxtessfactor`, `:164,172`).
+///
+/// Rounded to the nearest `float`.
+#[must_use]
+pub const fn u32_to_f32(x: u32) -> f32 {
+    x as f32
+}

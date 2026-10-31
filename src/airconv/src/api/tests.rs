@@ -4,11 +4,23 @@ use core::{
 };
 
 use super::*;
-use crate::shader::Shader;
 
-/// A handle to a new shader, as `SM50Initialize` would answer one.
+/// A handle to a shader initialized from a test pixel shader, with no reflection.
 fn shader() -> *mut c_void {
-    Box::into_raw(Box::new(Shader)).cast()
+    let bytes = include_bytes!("../../ir/tests/data/render.ps.dxbc");
+    let mut out = ptr::null_mut::<c_void>();
+    // SAFETY: `bytes` holds its length, `out` is writable, the reflection and error are null.
+    let status = unsafe {
+        sm50_initialize(
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            &raw mut out,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, 0);
+    out
 }
 
 /// The text of an error handle, read through `SM50GetErrorMessage`; frees the error.
@@ -30,21 +42,34 @@ fn answer(call: impl FnOnce(*mut *mut c_void) -> i32) -> (i32, Vec<u8>) {
 }
 
 #[test]
+fn initialize_refuses_what_is_not_a_container() {
+    let bytes = [0u8; 32];
+    let mut out = ptr::null_mut::<c_void>();
+    // SAFETY: `bytes` holds its length, `out` and the error are writable.
+    let got = answer(|e| unsafe {
+        sm50_initialize(
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            &raw mut out,
+            ptr::null_mut(),
+            e,
+        )
+    });
+    assert_eq!(got, (1, b"Invalid DXBC bytecode".to_vec()));
+    assert!(out.is_null());
+}
+
+#[test]
 fn every_export_answers_not_ported() {
     let (vs, hs, gs, ps) = (shader(), shader(), shader(), shader());
     let name = c"main".as_ptr();
     let mut out = ptr::null_mut::<c_void>();
     let out = &raw mut out;
-    let bytes = [0u8; 32];
     let not_ported = (1, b"not ported".to_vec());
 
-    // Every call below: the handles are live shaders, `bytes` holds its length, the chains are
-    // null, `name` is a C string, and `out` and the error are writable.
+    // Every call below: the handles are live shaders, the chains are null, `name` is a C
+    // string, and `out` and the error are writable.
     let answers = [
-        // SAFETY: as above.
-        answer(|e| unsafe {
-            sm50_initialize(bytes.as_ptr().cast(), bytes.len(), out, ptr::null_mut(), e)
-        }),
         // SAFETY: as above.
         answer(|e| unsafe { sm50_compile(vs, ptr::null_mut(), name, out, e) }),
         // SAFETY: as above.
