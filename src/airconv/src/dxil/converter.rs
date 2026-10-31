@@ -326,7 +326,7 @@ pub fn strip_fast_math(m: &Module<'_>, kind: u32) {
 ///
 /// `DXIL: static (non-const) global <name> not supported` (the name's bytes as they are, P15),
 /// and the uses the move cannot follow.
-pub fn move_constants_to_constant_space(m: &Module<'_>) -> Result<(), Error> {
+fn move_constants_to_constant_space(m: &Module<'_>) -> Result<(), Error> {
     let cx = m.cx();
     // SAFETY: a live module.
     let mut global = unsafe { sys::get_first_global(m.raw()) };
@@ -525,17 +525,21 @@ fn lower_body<'cx>(
         vertex_outputs,
     };
     for &call in &calls {
-        lowering.lower(call)?;
+        // SAFETY: each call once; `calls` is not read after this loop.
+        unsafe { lowering.lower(call) }?;
     }
     if dxil.gs_locks != 0 {
         let [x, y, z] = dxil.entry.numthreads;
         let group = x.wrapping_mul(y).wrapping_mul(z);
         let locks = zero_group_shared_locks(conv, m, body, dxil.gs_locks, group)?;
         for &inst in &gs64 {
-            lowering.group_shared64(inst, locks)?;
+            // SAFETY: each atomic once; `gs64` is not read after this loop.
+            unsafe { lowering.group_shared64(inst, locks) }?;
         }
     }
-    Lowering::cleanup(function);
+    // SAFETY: the function being built; `calls`, which holds its handle-producing calls, is not
+    // read again.
+    unsafe { Lowering::cleanup(function) };
     conv.ir.position_at_end(ip);
     Ok(body)
 }
@@ -576,7 +580,8 @@ fn zero_group_shared_locks<'cx>(
     let rest = unsafe { sys::airconv_shim_split_block(body.raw(), first) };
     // SAFETY: the block the split made, of this context.
     let rest = unsafe { Block::new(rest) };
-    erase_terminator(body);
+    // SAFETY: `body`'s terminator is the branch the split just made, held by nothing.
+    unsafe { erase_terminator(body) };
     let looped = rest.insert_before(cx, c"");
     let after = rest.insert_before(cx, c"");
     let first = req(

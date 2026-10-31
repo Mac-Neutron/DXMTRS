@@ -331,3 +331,33 @@ fn diagnostic_warning_does_not_fail() {
         "{line}"
     );
 }
+
+#[test]
+fn constant_of_the_wrong_kind_is_undef_and_an_error() {
+    let cx = Context::new();
+    let tcx = cx.tcx();
+    let (float, int) = (tcx.float(), tcx.int(32));
+    // The kinds each maker takes still make their constants, with no error.
+    assert_eq!(cx.const_int(int, 7, false).print(), b"i32 7");
+    assert_eq!(
+        cx.const_real(tcx.vector(float, 2), 1.0).print(),
+        b"<2 x float> <float 1.000000e+00, float 1.000000e+00>"
+    );
+    assert_eq!(cx.all_ones(float).print(), b"float 0xFFFFFFFFE0000000");
+    assert!(cx.take_error().is_none());
+    // Another kind: `undef`, and the compile's next check fails it.
+    let wrong = |v: Val<'_>| {
+        assert!(
+            v.print().ends_with(b" undef"),
+            "{}",
+            String::from_utf8_lossy(&v.print())
+        );
+        let error = cx.take_error().expect("an error per wrong constant");
+        assert_eq!(error.text(), b"LLVM error: a constant of the wrong type");
+    };
+    wrong(cx.const_int(float, 1, false));
+    wrong(cx.const_int(tcx.vector(int, 2), 1, false));
+    wrong(cx.const_real(int, 1.0));
+    wrong(cx.all_ones(tcx.void()));
+    wrong(cx.null(tcx.void()));
+}

@@ -11,7 +11,7 @@ use airconv_ir::binding::TextureKind as Kind;
 
 use super::{
     bounds,
-    lower::{Handle, Lowering, const_arg, primitive_bits, replace, unsupported},
+    lower::{Handle, Lowering, const_arg, primitive_bits, unsupported},
     types::{op, resource_class, resource_kind, shader_kind},
 };
 use crate::{
@@ -38,7 +38,7 @@ impl<'cx> Lowering<'_, 'cx> {
     ///
     /// `ResolveHandle`'s refusals, the op's refusal, the C++'s other `DXIL:` texts and what the
     /// binding map refuses.
-    pub fn lower_resource(&self, opcode: u32, call: Val<'cx>) -> Result<(), Error> {
+    pub fn lower_resource(&self, opcode: u32, call: Val<'cx>) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let cx = self.cx();
@@ -47,7 +47,7 @@ impl<'cx> Lowering<'_, 'cx> {
         let i32_ty = tcx.int(32);
         if opcode == op::CHECK_ACCESS_FULLY_MAPPED {
             // (71, i32 status): every resource is fully mapped here
-            return replace(call, Some(b.icmp(sys::INT_NE, arg(1)?, self.int(0))));
+            return Ok(Some(b.icmp(sys::INT_NE, arg(1)?, self.int(0))));
         }
         let view = self.handle(call, 1)?;
         let kind = view.resource.kind;
@@ -70,7 +70,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     conv.binding
                         .constant_buffer(air, conv.function, view.range, view.index)?
                 else {
-                    return replace(call, Some(cx.null(ty)));
+                    return Ok(Some(cx.null(ty)));
                 };
                 let row_ty = air.int_ty(4);
                 let row = b.load(row_ty, b.gep(row_ty, d.pointer, &[arg(2)?]));
@@ -96,7 +96,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     };
                     fields.push(Some(b.bitcast(v, elem)));
                 }
-                replace(call, Some(self.aggregate(ty, &fields)))
+                Ok(Some(self.aggregate(ty, &fields)))
             }
             // (58, handle, i32 byteOffset, i32 alignment) -> T
             op::C_BUFFER_LOAD => {
@@ -105,7 +105,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     conv.binding
                         .constant_buffer(air, conv.function, view.range, view.index)?
                 else {
-                    return replace(call, Some(cx.null(ty)));
+                    return Ok(Some(cx.null(ty)));
                 };
                 let offset = arg(2)?;
                 let row = b.lshr(offset, self.int(4));
@@ -120,7 +120,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     64 => return Err(Error::new(b"DXIL: 64-bit cbufferLoad not supported")),
                     _ => {}
                 }
-                replace(call, Some(b.bitcast(word, ty)))
+                Ok(Some(b.bitcast(word, ty)))
             }
             // (139, handle, i32 index, i32 elementOffset, i8 mask, i32 alignment)
             op::RAW_BUFFER_LOAD => {
@@ -165,7 +165,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 let cas = opcode == op::ATOMIC_COMPARE_EXCHANGE;
                 let offset = byte_offset(if cas { 2 } else { 3 })?;
                 let Some(buffer) = self.buffer(&view)? else {
-                    return replace(call, Some(self.int(0)));
+                    return Ok(Some(self.int(0)));
                 };
                 // Null out of bounds, as loads and stores.
                 let ptr = self.element_pointer(&buffer, offset, i32_ty);
@@ -176,7 +176,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 } else {
                     air.create_atomic_rmw(atomic_op(const_arg(call, 2, 0)), ptr, arg(6)?)?
                 };
-                replace(call, Some(old))
+                Ok(Some(old))
             }
             op::TEXTURE_LOAD
             | op::TEXTURE_STORE
@@ -214,7 +214,7 @@ impl<'cx> Lowering<'_, 'cx> {
                         Some(b.extract_element_u64(pos, 1)),
                     ],
                 );
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             _ => Err(unsupported(call)),
         }
@@ -335,14 +335,14 @@ impl<'cx> Lowering<'_, 'cx> {
         view: &Handle<'_, 'cx>,
         byte_offset: Val<'cx>,
         mask: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let tcx = self.tcx();
         let buffer = self.buffer(view)?;
         let ty = call.ty();
         let elem = tcx.field(ty, 0).ok_or_else(|| unsupported(call))?;
         let Some(buffer) = buffer else {
-            return replace(call, Some(self.cx().null(ty)));
+            return Ok(Some(self.cx().null(ty)));
         };
         let mut fields = [None; 5];
         let size = primitive_bits(tcx, elem) / 8;
@@ -370,7 +370,7 @@ impl<'cx> Lowering<'_, 'cx> {
         }
         // Status: fully mapped.
         fields[4] = Some(self.int(1));
-        replace(call, Some(self.aggregate(ty, &fields)))
+        Ok(Some(self.aggregate(ty, &fields)))
     }
 
     /// The `mask` values from argument `first_value` stored, each bound-checked.
@@ -383,7 +383,7 @@ impl<'cx> Lowering<'_, 'cx> {
         byte_offset: Val<'cx>,
         first_value: u32,
         mask: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Val<'cx>>, Error> {
         if let Some(buffer) = self.buffer(view)? {
             let elem = self.arg(call, first_value)?.ty();
             let size = primitive_bits(self.tcx(), elem) / 8;
@@ -394,7 +394,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 }
             }
         }
-        replace(call, None)
+        Ok(None)
     }
 
     /// A typed buffer read (`LowerTypedBufferLoad`).
@@ -406,12 +406,12 @@ impl<'cx> Lowering<'_, 'cx> {
         call: Val<'cx>,
         view: &Handle<'_, 'cx>,
         index: Val<'cx>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let ty = call.ty();
         let Some(d) = self.texture(view)? else {
-            return replace(call, Some(self.cx().null(ty)));
+            return Ok(Some(self.cx().null(ty)));
         };
         let (tex, handle, metadata, coherent, _) = parts(d);
         let mut address = b.add(index, self.decode_low(metadata));
@@ -436,7 +436,7 @@ impl<'cx> Lowering<'_, 'cx> {
             *field = Some(self.cast(b.extract_element_u64(texel, c), elem));
         }
         fields[4] = Some(self.int(1));
-        replace(call, Some(self.aggregate(ty, &fields)))
+        Ok(Some(self.aggregate(ty, &fields)))
     }
 
     /// A typed buffer write, the values at arguments 4..7 (`LowerTypedBufferStore`).
@@ -445,7 +445,7 @@ impl<'cx> Lowering<'_, 'cx> {
         call: Val<'cx>,
         view: &Handle<'_, 'cx>,
         index: Val<'cx>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         if let Some(d) = self.texture(view)? {
@@ -469,14 +469,19 @@ impl<'cx> Lowering<'_, 'cx> {
             };
             air.create_write(&tex, handle, &at, texel, coherent)?;
         }
-        replace(call, None)
+        Ok(None)
     }
 
     /// Texture loads, stores, atomics, samples, gathers and LODs (`LowerTexture`).
     ///
     /// Coordinates, array slice and sampler choice for a texture kind, as airconv's DXBC sample
     /// lowering builds them; DXIL's c0..c3 are undef where unused.
-    fn texture_op(&self, opcode: u32, call: Val<'cx>, view: &Handle<'_, 'cx>) -> Result<(), Error> {
+    fn texture_op(
+        &self,
+        opcode: u32,
+        call: Val<'cx>,
+        view: &Handle<'_, 'cx>,
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let cx = self.cx();
@@ -485,7 +490,7 @@ impl<'cx> Lowering<'_, 'cx> {
         let ty = call.ty();
         let Some(d) = self.texture(view)? else {
             let value = (tcx.kind(ty) != TyKind::Void).then(|| cx.null(ty));
-            return replace(call, value);
+            return Ok(value);
         };
         let (tex, handle, metadata, coherent, logical) = parts(d);
         let dims = dimensions(logical);
@@ -564,25 +569,26 @@ impl<'cx> Lowering<'_, 'cx> {
         // The texel (vector or depth scalar) as the call's ResRet struct. No texel: the builder
         // has no form for this texture kind (a comparison of a 1D texture, which binds as a 2D
         // colour texture, never a depth one).
-        let result = |texel: Result<(Val<'cx>, Val<'cx>), Error>| -> Result<(), Error> {
-            let Ok((texel, _)) = texel else {
-                return Err(unsupported(call));
-            };
-            let elem = tcx.field(ty, 0).ok_or_else(|| unsupported(call))?;
-            let vector = matches!(tcx.kind(texel.ty()), TyKind::Vector(..));
-            let mut fields = [None; 5];
-            for (c, field) in (0..4_u64).zip(&mut fields) {
-                let v = if vector {
-                    b.extract_element_u64(texel, c)
-                } else {
-                    texel
+        let result =
+            |texel: Result<(Val<'cx>, Val<'cx>), Error>| -> Result<Option<Val<'cx>>, Error> {
+                let Ok((texel, _)) = texel else {
+                    return Err(unsupported(call));
                 };
-                *field = Some(self.cast(v, elem));
-            }
-            // Status: fully mapped.
-            fields[4] = Some(self.int(1));
-            replace(call, Some(self.aggregate(ty, &fields)))
-        };
+                let elem = tcx.field(ty, 0).ok_or_else(|| unsupported(call))?;
+                let vector = matches!(tcx.kind(texel.ty()), TyKind::Vector(..));
+                let mut fields = [None; 5];
+                for (c, field) in (0..4_u64).zip(&mut fields) {
+                    let v = if vector {
+                        b.extract_element_u64(texel, c)
+                    } else {
+                        texel
+                    };
+                    *field = Some(self.cast(v, elem));
+                }
+                // Status: fully mapped.
+                fields[4] = Some(self.int(1));
+                Ok(Some(self.aggregate(ty, &fields)))
+            };
 
         match opcode {
             // (66, handle, i32 mipOrSample, i32 c0, c1, c2, i32 o0, o1, o2)
@@ -625,7 +631,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     level: Some(self.int(0)),
                 };
                 air.create_write(&tex, handle, &at, texel, coherent)?;
-                return replace(call, None);
+                return Ok(None);
             }
             // (78, handle, i32 op, i32 c0, c1, c2, i32 value),
             // (79, handle, i32 c0, c1, c2, i32 compare, i32 value)
@@ -653,7 +659,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 };
                 // Not an integer texture.
                 let old = old.map_err(|_| unsupported(call))?;
-                return replace(call, Some(b.extract_element_u64(old, 0)));
+                return Ok(Some(b.extract_element_u64(old, 0)));
             }
             _ => {}
         }
@@ -668,7 +674,7 @@ impl<'cx> Lowering<'_, 'cx> {
             sampler_handle.index,
         )?
         else {
-            return replace(call, Some(cx.null(ty)));
+            return Ok(Some(cx.null(ty)));
         };
         let cube = dims == 3 && logical != Kind::Texture3d;
         let sampler = if cube {
@@ -832,7 +838,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 if !compute || cube {
                     let (lod, unclamped) =
                         air.create_calculate_lod(&tex, handle, sampler, coord)?;
-                    return replace(call, Some(if clamped { lod } else { unclamped }));
+                    return Ok(Some(if clamped { lod } else { unclamped }));
                 }
                 // Compute (spec 3.3): 0.5 log2 of the larger squared gradient in mip 0's texels;
                 // clamped to the view's mips.
@@ -866,7 +872,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     let low = air.create_fp_bin_op(FpBinOp::Fmax, lod, floor, true)?;
                     lod = air.create_fp_bin_op(FpBinOp::Fmin, low, top, true)?;
                 }
-                replace(call, Some(lod))
+                Ok(Some(lod))
             }
             _ => Err(unsupported(call)),
         }
@@ -875,7 +881,11 @@ impl<'cx> Lowering<'_, 'cx> {
     /// `%dx.types.Dimensions {width, height, depth or array size, mips or samples}`.
     ///
     /// `LowerDimensions`, as the DXBC `resinfo`/`bufinfo` lowerings answer them.
-    fn dimensions(&self, call: Val<'cx>, view: &Handle<'_, 'cx>) -> Result<(), Error> {
+    fn dimensions(
+        &self,
+        call: Val<'cx>,
+        view: &Handle<'_, 'cx>,
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let ty = call.ty();
@@ -890,16 +900,16 @@ impl<'cx> Lowering<'_, 'cx> {
                 size = b.udiv(size, self.int(view.resource.stride));
             }
             let value = self.aggregate(ty, &[Some(size), Some(zero), Some(zero), Some(zero)]);
-            return replace(call, Some(value));
+            return Ok(Some(value));
         }
         let Some(d) = self.texture(view)? else {
-            return replace(call, Some(self.cx().null(ty)));
+            return Ok(Some(self.cx().null(ty)));
         };
         let (tex, handle, metadata, _, logical) = parts(d);
         if kind == resource_kind::TYPED_BUFFER {
             let count = self.decode_high(metadata);
             let value = self.aggregate(ty, &[Some(count), Some(zero), Some(zero), Some(zero)]);
-            return replace(call, Some(value));
+            return Ok(Some(value));
         }
         let mut level = self.arg(call, 2)?;
         // SAFETY: a value of the module.
@@ -924,10 +934,10 @@ impl<'cx> Lowering<'_, 'cx> {
         } else {
             query(Query::NumMipLevels, zero)?
         };
-        replace(
-            call,
-            Some(self.aggregate(ty, &[Some(width), Some(height), Some(depth), Some(last)])),
-        )
+        Ok(Some(self.aggregate(
+            ty,
+            &[Some(width), Some(height), Some(depth), Some(last)],
+        )))
     }
 
     /// Ops 78 and 79 with the i64 overload, under a lock from the device's table (`Atomic64`).
@@ -943,7 +953,12 @@ impl<'cx> Lowering<'_, 'cx> {
     /// helper whose lock atomic were discarded could spin forever) and an out-of-bounds buffer
     /// element skip it and read 0; a texture out of bounds is left to Metal, as the 32-bit
     /// texture atomics are.
-    fn atomic64(&self, opcode: u32, call: Val<'cx>, view: &Handle<'_, 'cx>) -> Result<(), Error> {
+    fn atomic64(
+        &self,
+        opcode: u32,
+        call: Val<'cx>,
+        view: &Handle<'_, 'cx>,
+    ) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let cx = self.cx();
@@ -963,7 +978,7 @@ impl<'cx> Lowering<'_, 'cx> {
         };
         if buffer.is_none() && d.is_none() {
             // Unbound.
-            return replace(call, Some(cx.const_int(tcx.int(64), 0, false)));
+            return Ok(Some(cx.const_int(tcx.int(64), 0, false)));
         }
         if kind == resource_kind::TYPED_BUFFER
             && d.as_ref().is_some_and(|d| d.buffer_address.is_none())
@@ -1137,7 +1152,7 @@ impl<'cx> Lowering<'_, 'cx> {
         let result = b.phi(i64_ty);
         b.add_incoming(result, old, end);
         b.add_incoming(result, cx.const_int(i64_ty, 0, false), head);
-        replace(call, Some(result))
+        Ok(Some(result))
     }
 
     /// An array slice rounded, made an integer and clamped to the texture's (`ClampArrayIndex`).

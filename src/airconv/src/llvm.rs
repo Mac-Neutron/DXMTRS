@@ -6,6 +6,19 @@
 //! written to stderr as LLVM would have written it, a remark is dropped (LLVM filters remarks
 //! when it prints itself). The handles ([`Module`], [`Func`], [`Block`], [`Val`]) borrow their
 //! context, so none outlives it; every value carries its [`Ty`]. Each wrapper makes one C call.
+//!
+//! A constant maker checks its type's kind ([`Context::const_int`] an integer, …): another kind
+//! answers `undef` and an error the compile reports, since a DXIL `dx.op` declared with other
+//! types can steer one. Beyond that the wrappers check what their C calls need only as far as
+//! their types carry it, by design: a builder method takes operands of the kinds its instruction
+//! needs, as the C++'s `IRBuilder` did. LLVM is built without assertions, so a wrong kind there is
+//! undefined behaviour; the `oracle` feature checks every value's type as it is made, in the tests
+//! and the lane tools. A [`Val`], [`Func`] or [`Block`] borrows the context, not its module or
+//! instruction: it is live while what it names is. A function that erases what a `Val` or
+//! `Block` it is given names is an `unsafe fn` (DXIL's `Lowering::lower`, `group_shared64`,
+//! `erase_terminator`). The functions that take raw `sys` handles expect live ones of the
+//! compile's context, as LLVM's walkers and this module's makers answer them; the crate's
+//! modules are public, but other crates call only its exports and `abi`.
 
 pub mod builder;
 pub mod sys;
@@ -165,9 +178,13 @@ impl Context {
 
     /// The constant `value` of the integer type `ty` (`ConstantInt::get`).
     ///
-    /// Its low bits are taken; `sign_extend` widens it by its sign past 64 bits.
+    /// Its low bits are taken; `sign_extend` widens it by its sign past 64 bits. A `ty` of
+    /// another kind answers `undef` and fails the compile (the module doc).
     #[must_use]
     pub fn const_int(&self, ty: Ty, value: u64, sign_extend: bool) -> Val<'_> {
+        if !matches!(self.tcx.kind(ty), TyKind::Int(_)) {
+            return self.wrong_kind(ty);
+        }
         // SAFETY: `ty` lowers to an integer type of this context.
         let raw = unsafe { sys::const_int(self.tcx.lower(ty), value, sign_extend.into()) };
         // SAFETY: a constant of this context, of type `ty`.
@@ -175,30 +192,82 @@ impl Context {
     }
 
     /// The constant `value` of the floating-point type `ty`, rounded to it (`ConstantFP::get`).
+    ///
+    /// `ty` may be a vector of one. A `ty` of another kind answers `undef` and fails the compile
+    /// (the module doc).
     #[must_use]
     pub fn const_real(&self, ty: Ty, value: f64) -> Val<'_> {
-        // SAFETY: `ty` lowers to a floating-point type of this context.
+        if !self.is_fp(self.scalar(ty)) {
+            return self.wrong_kind(ty);
+        }
+        // SAFETY: `ty` lowers to a floating-point type (or a vector of one) of this context.
         let raw = unsafe { sys::const_real(self.tcx.lower(ty), value) };
         // SAFETY: a constant of this context, of type `ty`.
         unsafe { Val::new(raw, ty) }
     }
 
     /// The zero of `ty` (`Constant::getNullValue`).
+    ///
+    /// `void`, a function type, a label and `metadata` have none: they answer `undef` and fail
+    /// the compile (the module doc).
     #[must_use]
     pub fn null(&self, ty: Ty) -> Val<'_> {
-        // SAFETY: `ty` lowers to a type of this context.
+        if matches!(
+            self.tcx.kind(ty),
+            TyKind::Void | TyKind::Function { .. } | TyKind::Label | TyKind::Metadata
+        ) {
+            return self.wrong_kind(ty);
+        }
+        // SAFETY: `ty` lowers to a type of this context that has a zero.
         let raw = unsafe { sys::const_null(self.tcx.lower(ty)) };
         // SAFETY: a constant of this context, of type `ty`.
         unsafe { Val::new(raw, ty) }
     }
 
-    /// Every bit set, of the integer or integer vector `ty` (`Constant::getAllOnesValue`).
+    /// Every bit set, of the integer or floating-point `ty` (`Constant::getAllOnesValue`).
+    ///
+    /// `ty` may be a vector of one. A `ty` of another kind answers `undef` and fails the compile
+    /// (the module doc).
     #[must_use]
     pub fn all_ones(&self, ty: Ty) -> Val<'_> {
-        // SAFETY: `ty` lowers to an integer type (or a vector of them) of this context.
+        let scalar = self.scalar(ty);
+        if !matches!(self.tcx.kind(scalar), TyKind::Int(_)) && !self.is_fp(scalar) {
+            return self.wrong_kind(ty);
+        }
+        // SAFETY: `ty` lowers to an integer or floating-point type (or a vector of one) of this
+        // context.
         let raw = unsafe { sys::const_all_ones(self.tcx.lower(ty)) };
         // SAFETY: a constant of this context, of type `ty`.
         unsafe { Val::new(raw, ty) }
+    }
+
+    /// A constant maker's answer for a `ty` its call does not take: `undef` of `ty`, and an error.
+    ///
+    /// LLVM, built without assertions, would read `ty` as the kind it expects. The compile's next
+    /// [`Self::take_error`] reports the error (`LLVM error: a constant of the wrong type`). The
+    /// translator's own types never reach it; a DXIL `dx.op` declared with other types can.
+    fn wrong_kind(&self, ty: Ty) -> Val<'_> {
+        self.diagnostics()
+            .error
+            .borrow_mut()
+            .get_or_insert_with(|| b"a constant of the wrong type".to_vec());
+        self.undef(ty)
+    }
+
+    /// The element type of the vector `ty`, else `ty`.
+    fn scalar(&self, ty: Ty) -> Ty {
+        match self.tcx.kind(ty) {
+            TyKind::Vector(element, _) => element,
+            _ => ty,
+        }
+    }
+
+    /// Whether `ty` is `half`, `float` or `double`.
+    fn is_fp(&self, ty: Ty) -> bool {
+        matches!(
+            self.tcx.kind(ty),
+            TyKind::Half | TyKind::Float | TyKind::Double
+        )
     }
 
     /// `undef` of `ty`.

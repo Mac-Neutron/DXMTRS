@@ -4,7 +4,7 @@
 //! airconv's DXBC path uses them, and the integer, bit, dot, pack and conversion operations.
 
 use super::{
-    lower::{Lowering, replace, unsupported},
+    lower::{Lowering, unsupported},
     types::op,
 };
 use crate::{
@@ -26,14 +26,14 @@ impl<'cx> Lowering<'_, 'cx> {
     /// # Errors
     ///
     /// The op's refusal for one it does not lower, what the AIR builder refuses.
-    pub fn lower_math(&self, opcode: u32, call: Val<'cx>) -> Result<(), Error> {
+    pub fn lower_math(&self, opcode: u32, call: Val<'cx>) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let cx = self.cx();
         let tcx = self.tcx();
         let arg = |i| self.arg(call, i);
         let ty = call.ty();
-        let done = |v: Val<'cx>| replace(call, Some(v));
+        let done = |v: Val<'cx>| -> Result<Option<Val<'cx>>, Error> { Ok(Some(v)) };
         let un = |op: FpUnOp| done(air.create_fp_un_op(op, arg(1)?, true)?);
         let i32_ty = tcx.int(32);
         let int = |v: u32| self.int(v);

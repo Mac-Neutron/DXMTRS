@@ -45,7 +45,12 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     ///
     /// The op's refusal (`DXIL: <callee> (<opcode>) not supported`), the C++'s other `DXIL:`
     /// texts, and P15's for what the C++ dereferenced as null.
-    pub fn lower(&self, call: Val<'cx>) -> Result<(), Error> {
+    ///
+    /// # Safety
+    ///
+    /// `call` is erased unless it makes a handle or the lowering fails: no copy of it is used
+    /// after a call that succeeds.
+    pub unsafe fn lower(&self, call: Val<'cx>) -> Result<(), Error> {
         let opcode = op_code(call.raw());
         if matches!(
             opcode,
@@ -57,6 +62,13 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             // Resolved at each use, erased by `cleanup`.
             return Ok(());
         }
+        let value = self.lowered(opcode, call)?;
+        // SAFETY: the caller's contract: nothing uses `call` after this.
+        unsafe { replace(call, value) }
+    }
+
+    /// `call`'s replacement, made before it: `None` for a call that answers no value.
+    fn lowered(&self, opcode: u32, call: Val<'cx>) -> Result<Option<Val<'cx>>, Error> {
         self.b().position_before(call);
         if (op::F_ABS..=op::DOT4).contains(&opcode)
             || opcode == op::MAKE_DOUBLE
@@ -89,7 +101,12 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     /// Erases the handle-producing calls once nothing uses them (`Cleanup`).
     ///
     /// An `annotateHandle` uses a `createHandle*`: the walk repeats until nothing changes.
-    pub fn cleanup(function: sys::ValueRef) {
+    ///
+    /// # Safety
+    ///
+    /// `function` is a live function, and no `Val` of a handle-producing call of it is used after
+    /// the call.
+    pub unsafe fn cleanup(function: sys::ValueRef) {
         let mut erased = true;
         while erased {
             erased = false;
@@ -132,7 +149,11 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     /// # Errors
     ///
     /// What the lock path refuses (none in practice).
-    pub fn group_shared64(&self, inst: Val<'cx>, locks: Val<'cx>) -> Result<(), Error> {
+    ///
+    /// # Safety
+    ///
+    /// No copy of `inst` is used after a call that succeeds.
+    pub unsafe fn group_shared64(&self, inst: Val<'cx>, locks: Val<'cx>) -> Result<(), Error> {
         let b = self.b();
         let tcx = self.tcx();
         b.position_before(inst);
@@ -188,7 +209,8 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let cur = self.insert_block()?;
                 let tail = split(cur, at);
                 let store = tail.insert_before(self.cx(), c"");
-                erase_terminator(cur);
+                // SAFETY: `cur`'s terminator is the branch the split just made, held by nothing.
+                unsafe { erase_terminator(cur) };
                 b.position_at_end(cur);
                 b.cond_br(matched, store, tail);
                 b.position_at_end(store);
@@ -464,7 +486,8 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         };
         let head = self.insert_block()?;
         let done = split(head, at);
-        erase_terminator(head);
+        // SAFETY: `head`'s terminator is the branch the split just made, held by nothing.
+        unsafe { erase_terminator(head) };
         let block = || done.insert_before(cx, c"");
         let (first, join, looped, pending_bb, elect, spin, locked, latch) = (
             block(),
@@ -759,7 +782,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     }
 
     /// IO, IDs, control and the wave and quad operations (`LowerOther`).
-    fn lower_other(&self, opcode: u32, call: Val<'cx>) -> Result<(), Error> {
+    fn lower_other(&self, opcode: u32, call: Val<'cx>) -> Result<Option<Val<'cx>>, Error> {
         let b = self.b();
         let air = self.air();
         let cx = self.cx();
@@ -778,10 +801,10 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         let named = |base: &[u8], ty| [base, &suffix(ty, false)[..]].concat();
         match opcode {
             // (93, i32 component)
-            op::THREAD_ID => replace(call, component(res.thread_id_arg)?),
-            op::GROUP_ID => replace(call, component(res.thread_group_id_arg)?),
-            op::THREAD_ID_IN_GROUP => replace(call, component(res.thread_id_in_group_arg)?),
-            op::FLATTENED_THREAD_ID_IN_GROUP => replace(call, res.thread_id_in_group_flat_arg),
+            op::THREAD_ID => Ok(component(res.thread_id_arg)?),
+            op::GROUP_ID => Ok(component(res.thread_group_id_arg)?),
+            op::THREAD_ID_IN_GROUP => Ok(component(res.thread_id_in_group_arg)?),
+            op::FLATTENED_THREAD_ID_IN_GROUP => Ok(res.thread_id_in_group_flat_arg),
             // (4, i32 inputSigId, i32 row, i8 col, i32 gsVertexAxis)
             op::LOAD_INPUT => {
                 let id = const_arg(call, 1, 0);
@@ -792,7 +815,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     .find(|e| e.id == id)
                     .ok_or_else(|| Error::new(b"DXIL: loadInput names an undeclared input"))?;
                 if let Some(v) = self.unpacked_input(e.id) {
-                    return replace(call, Some(self.cast(v, call.ty())));
+                    return Ok(Some(self.cast(v, call.ty())));
                 }
                 let ptr = if self.entry.kind == shader_kind::GEOMETRY {
                     self.vertex_output_pointer(e, arg(2)?, const_arg(call, 3, 0), arg(4)?)?
@@ -813,7 +836,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     TyKind::Half => b.fptrunc(b.bitcast(word, tcx.float()), ty),
                     _ => self.cast(word, ty),
                 };
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (5, i32 outputSigId, i32 row, i8 col, T value)
             op::STORE_OUTPUT => {
@@ -860,13 +883,13 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                         b.store(word, ptr);
                     }
                 }
-                replace(call, None)
+                Ok(None)
             }
             // (82, i1 condition)
             op::DISCARD => {
                 let cond = arg(1)?;
                 if cond.const_u64() == Some(0) {
-                    return replace(call, None);
+                    return Ok(None);
                 }
                 // SAFETY: a condition and the call it splits before, of the function built.
                 let then = unsafe {
@@ -874,7 +897,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 };
                 b.position_before(self.val(then)?);
                 air.create_discard()?;
-                replace(call, None)
+                Ok(None)
             }
             op::DERIV_COARSE_X | op::DERIV_COARSE_Y | op::DERIV_FINE_X | op::DERIV_FINE_Y => {
                 let y = opcode == op::DERIV_COARSE_Y || opcode == op::DERIV_FINE_Y;
@@ -884,14 +907,12 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 } else {
                     air.create_derivative(arg(1)?, y)?
                 };
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // The input primitive's index in the draw (`dxbc/gs.rs`).
-            op::PRIMITIVE_ID if self.entry.kind == shader_kind::GEOMETRY => {
-                replace(call, res.patch_id)
-            }
+            op::PRIMITIVE_ID if self.entry.kind == shader_kind::GEOMETRY => Ok(res.patch_id),
             // (100)
-            op::GS_INSTANCE_ID => replace(call, res.gs_instance_id),
+            op::GS_INSTANCE_ID => Ok(res.gs_instance_id),
             // (97/98/99, i8 stream): stream 0 only (Initialize refuses others).
             op::EMIT_STREAM | op::CUT_STREAM | op::EMIT_THEN_CUT_STREAM => {
                 let geometry = self
@@ -904,7 +925,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 if opcode != op::EMIT_STREAM {
                     geometry.cut()?;
                 }
-                replace(call, None)
+                Ok(None)
             }
             op::SAMPLE_INDEX | op::COVERAGE | op::PRIMITIVE_ID => {
                 let kind = match opcode {
@@ -915,7 +936,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let v = self
                     .unpacked_input_of_kind(kind)
                     .ok_or_else(|| unsupported(call))?;
-                replace(call, Some(self.cast(v, call.ty())))
+                Ok(Some(self.cast(v, call.ty())))
             }
             op::WAVE_IS_FIRST_LANE => {
                 let value = match self.wave_lanes()? {
@@ -925,7 +946,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     }
                     None => self.simd(b"air.simd_is_first", i1, &[])?,
                 };
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             op::WAVE_GET_LANE_INDEX | op::WAVE_GET_LANE_COUNT => {
                 let index = if opcode == op::WAVE_GET_LANE_INDEX {
@@ -933,7 +954,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 } else {
                     self.dxil.lane_count_arg
                 };
-                replace(call, Some(self.param(index)?))
+                Ok(Some(self.param(index)?))
             }
             op::WAVE_ANY_TRUE | op::WAVE_ALL_TRUE => {
                 let any = opcode == op::WAVE_ANY_TRUE;
@@ -943,7 +964,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 } else {
                     b"air.simd_all"
                 };
-                replace(call, Some(self.simd(name, i1, &[v])?))
+                Ok(Some(self.simd(name, i1, &[v])?))
             }
             // (115, T)
             op::WAVE_ACTIVE_ALL_EQUAL => {
@@ -959,7 +980,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     i1,
                     &[self.masked(same, air.get_bool(true))?],
                 )?;
-                replace(call, Some(all))
+                Ok(Some(all))
             }
             // (116, i1) -> %dx.types.fouri32 {lanes 0-31, lanes 32-63, 0, 0}
             op::WAVE_ACTIVE_BALLOT => {
@@ -971,14 +992,14 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     call.ty(),
                     &[Some(low), Some(high), Some(self.int(0)), Some(self.int(0))],
                 );
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (122, T, i32 quadLane)
             op::QUAD_READ_LANE_AT => {
                 let v = arg(1)?;
                 let lane = b.trunc(arg(2)?, i16_ty);
                 let value = self.simd(&named(b"air.quad_shuffle", v.ty()), v.ty(), &[v, lane])?;
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (123, T, i8 op): read across X (0), Y (1) or the diagonal (2): the quad lane XOR 1,
             // 2 or 3.
@@ -987,17 +1008,17 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let mask = const_arg(call, 2, 0).wrapping_add(1);
                 let mask = cx.const_int(i16_ty, mask.into(), false);
                 let name = named(b"air.quad_shuffle_xor", v.ty());
-                replace(call, Some(self.simd(&name, v.ty(), &[v, mask])?))
+                Ok(Some(self.simd(&name, v.ty(), &[v, mask])?))
             }
             // (117, T, i32 lane)
             op::WAVE_READ_LANE_AT => {
                 let v = arg(1)?;
                 let lane = b.trunc(arg(2)?, i16_ty);
                 let value = self.simd(&named(b"air.simd_shuffle", v.ty()), v.ty(), &[v, lane])?;
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (118, T)
-            op::WAVE_READ_LANE_FIRST => replace(call, Some(self.read_first(arg(1)?)?)),
+            op::WAVE_READ_LANE_FIRST => Ok(Some(self.read_first(arg(1)?)?)),
             // (119/121, T, i8 op: 0 sum, 1 product, 2 min, 3 max, i8 sign: 0 signed, 1 unsigned)
             op::WAVE_ACTIVE_OP | op::WAVE_PREFIX_OP => {
                 let v = arg(1)?;
@@ -1034,7 +1055,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     (_, false) => int(0),
                 };
                 let value = self.simd(&name, ty, &[self.masked(v, identity)?])?;
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (120, T, i8 op: 0 and, 1 or, 2 xor)
             op::WAVE_ACTIVE_BIT => {
@@ -1052,7 +1073,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 };
                 let value =
                     self.simd(&named(base, v.ty()), v.ty(), &[self.masked(v, identity)?])?;
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (135/136, i1): lanes (below this one) where the value is true
             op::WAVE_ALL_BIT_COUNT | op::WAVE_PREFIX_BIT_COUNT => {
@@ -1066,7 +1087,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let lo = air.create_int_un_op(IntUnOp::Popcount, b.trunc(ballot, i32_ty))?;
                 let high = b.trunc(b.lshr(ballot, cx.const_int(i64_ty, 32, false)), i32_ty);
                 let hi = air.create_int_un_op(IntUnOp::Popcount, high)?;
-                replace(call, Some(b.add(lo, hi)))
+                Ok(Some(b.add(lo, hi)))
             }
             // (165, T) -> %dx.types.fouri32 {lanes 0-31, 0, 0, 0}: the lanes whose value equals
             // this lane's. A loop over the distinct values: each pass reads the first remaining
@@ -1113,7 +1134,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                         Some(self.int(0)),
                     ],
                 );
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (166, T, i32 mask0-3, i8 op: 0 sum, 1 and, 2 or, 3 xor, 4 product, i8 sign),
             // (167, i1, i32 mask0-3)
@@ -1127,7 +1148,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     let ballot = self.simd(b"air.simd_ballot.i64", i64_ty, &[v])?;
                     let bits = b.and(b.trunc(ballot, i32_ty), below);
                     let count = air.create_int_un_op(IntUnOp::Popcount, bits)?;
-                    return replace(call, Some(count));
+                    return Ok(Some(count));
                 }
                 let v = arg(1)?;
                 let ty = v.ty();
@@ -1165,7 +1186,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     let taken = b.icmp(sys::INT_NE, bit, self.int(0));
                     acc = b.select(taken, b.binop(bin, acc, x), acc);
                 }
-                replace(call, Some(acc))
+                Ok(Some(acc))
             }
             // (244, i32 MemoryTypeFlags, i32 SemanticFlags), (245, handle, i32 SemanticFlags):
             // the handle is a UAV, (80, i32 mode): 1 = sync threadgroup, 2 = UAV fence global,
@@ -1219,7 +1240,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 } else {
                     air.create_barrier(flags, false)?;
                 }
-                replace(call, None)
+                Ok(None)
             }
             // (221): only a pixel shader has helper lanes
             op::IS_HELPER_LANE => {
@@ -1228,7 +1249,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 } else {
                     air.get_bool(false)
                 };
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (222, i1, i8 op: 0 any, 1 all)
             op::QUAD_VOTE => {
@@ -1237,12 +1258,10 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     1 => b"air.quad_all",
                     _ => return Err(unsupported(call)),
                 };
-                replace(call, Some(self.simd(name, i1, &[arg(1)?])?))
+                Ok(Some(self.simd(name, i1, &[arg(1)?])?))
             }
             // (77)
-            op::RENDER_TARGET_GET_SAMPLE_COUNT => {
-                replace(call, Some(air.create_get_num_samples()?))
-            }
+            op::RENDER_TARGET_GET_SAMPLE_COUNT => Ok(Some(air.create_get_num_samples()?)),
             // (76, i32 index) -> {f32, f32}: D3D's standard positions (`air_samplepos`)
             op::RENDER_TARGET_GET_SAMPLE_POSITION => {
                 let count = air.create_get_num_samples()?;
@@ -1254,10 +1273,10 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                         Some(b.extract_element_u64(pos, 1)),
                     ],
                 );
-                replace(call, Some(value))
+                Ok(Some(value))
             }
             // (138): ViewInstancingTier is NOT_SUPPORTED, so the only view is 0
-            op::VIEW_ID => replace(call, Some(self.int(0))),
+            op::VIEW_ID => Ok(Some(self.int(0))),
             // (256) -> i32: the draw's StartVertexLocation, or BaseVertexLocation when indexed;
             // (257) -> i32: its StartInstanceLocation. `[[base_vertex]]` and `[[base_instance]]`
             // in a vertex function, the draw's arguments in a geometry pipeline's object
@@ -1269,7 +1288,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     res.base_instance_id
                 };
                 let v = v.ok_or_else(|| unsupported(call))?;
-                replace(call, Some(self.cast(v, call.ty())))
+                Ok(Some(self.cast(v, call.ty())))
             }
             _ => Err(unsupported(call)),
         }
@@ -1317,7 +1336,11 @@ pub fn unsupported(call: Val<'_>) -> Error {
 /// # Errors
 ///
 /// No value for a call something uses (the C++ erased it with its uses left).
-pub fn replace<'cx>(call: Val<'cx>, value: Option<Val<'cx>>) -> Result<(), Error> {
+///
+/// # Safety
+///
+/// No copy of `call` is used after a call that succeeds.
+unsafe fn replace<'cx>(call: Val<'cx>, value: Option<Val<'cx>>) -> Result<(), Error> {
     match value {
         // SAFETY: the call and its replacement, of one context.
         Some(v) => unsafe { sys::replace_all_uses_with(call.raw(), v.raw()) },
@@ -1398,7 +1421,11 @@ pub fn walk_blocks(first: sys::BasicBlockRef) -> impl Iterator<Item = sys::Basic
 }
 
 /// Erases `block`'s terminator (`getTerminator()->eraseFromParent()`); none is left alone.
-pub fn erase_terminator(block: Block<'_>) {
+///
+/// # Safety
+///
+/// No `Val` of the terminator is used after the call.
+pub unsafe fn erase_terminator(block: Block<'_>) {
     // SAFETY: a live block.
     let term = unsafe { sys::get_basic_block_terminator(block.raw()) };
     if !term.is_null() {
