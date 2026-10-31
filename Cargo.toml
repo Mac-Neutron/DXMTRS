@@ -2,6 +2,8 @@
 # Every Rust crate of the tree. A build names its package (-p) and target, so one workspace serves the PE, macOS and
 # Linux crates alike.
 members = [
+    "src/airconv",
+    "src/airconv/ir",
     "src/d3d10",
     "src/d3d9",
     "src/d3d9/core",
@@ -24,8 +26,9 @@ members = [
 # A command without -p takes the crates that build and test on the host. It leaves the PE crates out, and winemetal:
 # its unit test binary references symbols only the link of winemetal.so or the native winemetal.dylib provides
 # (NtSetEvent, sqlite3_*, SM50*), so its tests run on their own, `cargo test -p winemetal` with `-undefined
-# dynamic_lookup`.
+# dynamic_lookup`. airconv too: its build script needs AIRCONV_LLVM and AIRCONV_XCRUN (tools/rust-check.sh).
 default-members = [
+    "src/airconv/ir",
     "src/d3d9/core",
     "src/d3d9/mtl",
     "src/d3d9/shared",
@@ -47,6 +50,8 @@ license = "LGPL-2.1-or-later"
 repository = "https://github.com/Mac-Neutron/DXMTRS"
 
 [workspace.dependencies]
+airconv = { path = "src/airconv" }
+airconv-ir = { path = "src/airconv/ir" }
 dxmt-util = { path = "src/util" }
 mtld3d-core = { path = "src/d3d9/core" }
 mtld3d-mtl = { path = "src/d3d9/mtl" }

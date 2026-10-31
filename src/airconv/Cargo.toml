@@ -1,0 +1,22 @@
+[package]
+name = "airconv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "LGPL-2.1-or-later"
+description = "DXMT's shader translator: DXBC and DXIL to Metal's AIR, behind airconv_public.h"
+publish = false
+
+[features]
+# The type oracle: checks every value's type as it is made (the tests and the test tools' builds, never meson's).
+oracle = []
+
+[dependencies]
+airconv-ir = { workspace = true }
+rustc-hash = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+
+[lints]
+workspace = true

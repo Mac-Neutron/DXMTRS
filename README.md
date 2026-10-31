@@ -43,4 +43,11 @@ came from elsewhere keep their own notices, and this is where they are:
 - **`src/util/rust_pe_rt.c` is LGPL, like the rest of the tree, and is linked into D3D9's guest DLLs.** The
   Rust runtime shim for `-pc-windows-msvc` code is part of the x86_64 and i386 `d3d9.dll` and `mtld3d.dll` the VM
   guest loads, which are otherwise zlib. The source offer for that object is this repository.
+- **airconv's DXBC readers are MIT.** `src/airconv/ir`'s container, signature and token readers are ported from
+  [`libs/DXBCParser`](libs/DXBCParser) (Microsoft, MIT); each ported file keeps that notice, and the crate's manifest
+  says `LGPL-2.1-or-later AND MIT`.
+- **airconv's SHA-256 and metallib container come from DXMT's metallib writer.** `src/airconv/ir/src/sha256.rs` is
+  Brad Conte's SHA-256 as Florian Ziesche adapted it for MetalLib (`src/airconv/sha256.hpp`, "presented 'as is' without
+  any guarantees", no licence named); `src/airconv/ir/src/metallib.rs` is ported from `src/airconv/metallib_writer.cpp`,
+  which carries no notice.
 - Everything else is under the LGPL above unless the file or its folder says otherwise.

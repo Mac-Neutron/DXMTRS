@@ -18,6 +18,9 @@
 #   MTLD3D_LLVM_MINGW    llvm-mingw's root
 #   WINE_BUILD           the Mac Wine build tree (libs/winecrt0/aarch64-windows/libwinecrt0.a)
 #   GUEST_WINE_SDK       the VM guest's Wine SDK (lib/wine/{x86_64,i386}-windows/libwinecrt0.a)
+#   AIRCONV_LLVM         the LLVM 15 install airconv builds its shim against and links (include/, lib/, .complete)
+#   AIRCONV_XCRUN        xcrun, or a sh script taking xcrun's arguments, for airconv's Metal helpers (MacNeutron:
+#                        wine-arm64/tools/xcrun-metal.sh)
 #   CARGO_TARGET_DIR     optional: an absolute folder for cargo's output (default: target/ in the tree, ignored by git)
 # Linux targets are not linted here (the guest build compiles them); the unit tests run under cargo test, one process
 # per test binary, where the Makefile's nextest ran one per test.
@@ -32,12 +35,14 @@ MTLD3D_RUST=${MTLD3D_RUST:-$(sed -n "s/^option('cargo_toolchain'.*value : '\([^'
 : "${MTLD3D_LLVM_MINGW:?names the llvm-mingw root (MacNeutron: the parent of the folder sh dxmt/toolchain.sh prints)}"
 : "${WINE_BUILD:?names the Mac Wine build tree (MacNeutron: build/wine-arm64-src/wine-build)}"
 : "${GUEST_WINE_SDK:?names the VM guest Wine SDK (MacNeutron: build/eac-vm-work/guest-wine-sdk)}"
+: "${AIRCONV_LLVM:?names the LLVM 15 install airconv builds against (include/, lib/, .complete)}"
+: "${AIRCONV_XCRUN:?names xcrun, or a sh script taking its arguments (MacNeutron: wine-arm64/tools/xcrun-metal.sh)}"
 NIGHTLY_BIN=${RUST_NIGHTLY_BIN:-${RUSTUP_HOME:-$HOME/.rustup}/toolchains/nightly-aarch64-apple-darwin/bin}
 T=${CARGO_TARGET_DIR:-$root/target}
 case $T in
   /*) ;; *) echo "rust-check: CARGO_TARGET_DIR must be absolute, not $T" >&2; exit 2 ;;
 esac
-export MTLD3D_LLVM_MINGW CARGO_TARGET_DIR="$T"
+export MTLD3D_LLVM_MINGW AIRCONV_LLVM AIRCONV_XCRUN CARGO_TARGET_DIR="$T"
 unset MTLD3D_PERF
 # The toolchain's own bin folder first on PATH: a rustup proxy runs `cargo +<toolchain>`, but the subcommands (clippy, fmt)
 # are found on PATH, where Homebrew's rustup keeps no proxies for them.
@@ -48,9 +53,9 @@ case $(rustc --version) in
      exit 2 ;;
 esac
 
-PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util'
+PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir'
 PE64_P="$PE_P -p nvngx -p nvapi"
-HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core'
+HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv'
 HOST=aarch64-apple-darwin
 I686=i686-pc-windows-msvc
 
@@ -124,7 +129,7 @@ leg_clippy() {
     lint $t -p mtld3d-tests --all-targets || rc=1
   done
   lint arm64ec-pc-windows-msvc $PE64_P || rc=1
-  lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache || rc=1
+  lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache,airconv/oracle || rc=1
   lint $HOST -p mtld3d-unix --features mtld3d-unix/winemetal --all-targets || rc=1
   lint $HOST -p winemetal --features native || rc=1
   perf lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache || rc=1
@@ -155,7 +160,7 @@ leg_test() {
   rc=0
   unit_tests || rc=1
   perf unit_tests || rc=1
-  tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core \
+  tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core -p airconv-ir -p airconv --features airconv/oracle \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

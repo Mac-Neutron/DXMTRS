@@ -23,11 +23,24 @@
 # unsafe extern "C" fn the export of that name must coerce to. Each type is the C's on that target: a typedef resolved
 # to its integer (intptr_t is isize), an enum to its underlying type (u32 for one without a fixed type, after checking
 # that none of its values is negative), a struct to its winemetal-wire mirror. Fails on a type it cannot map.
+#
+# With --airconv (no other argument) it prints airconv's src/abi/layouts.rs instead, the compile-time asserts that pin
+# the crate's mirrors in src/abi.rs to airconv_public.h and dxil/dxil_public.h:
+#   sh tools/winemetal-layouts.sh --airconv > src/airconv/src/abi/layouts.rs
+# For aarch64-apple-darwin, the one target airconv builds for, from Apple clang's -fdump-record-layouts: each mirrored
+# struct's size, each field's offset (an anonymous union is the field u, its type <Struct>Union, with its own members),
+# each bitfield's shift and width; and each enumerator of the two headers, valued by an enum of probes. Names take Rust
+# casing: a struct's SCREAMING_SNAKE name becomes CamelCase (SM50_SHADER_COMMON_DATA: Sm50ShaderCommonData), fields
+# are snake_case as above, enumerators keep their names. Fails when a struct of the headers (dxil_public.h's typedef'd
+# ones included) is missing from the dump or has no mirror (a #[repr(C)] struct or union of abi.rs), when a mirror
+# names nothing in the C, on a bitfield it cannot place, and when the enumerators and abi.rs's constants differ.
 set -eu
-protos=
+protos= airconv=
 [ "${1:-}" != --protos ] || { protos=1; shift; }
-[ $# -eq 1 ] || { echo "usage: winemetal-layouts.sh [--protos] <llvm-mingw-bin>" >&2; exit 2; }
-bin=$1
+[ "${1:-}" != --airconv ] || { airconv=1; shift; }
+usage() { echo "usage: winemetal-layouts.sh [--protos] <llvm-mingw-bin> | --airconv" >&2; exit 2; }
+if [ -n "$airconv" ]; then [ $# -eq 0 ] || usage; else [ $# -eq 1 ] || usage; fi
+bin=${1:-}
 root=$(cd "$(dirname "$0")/.." && pwd)
 wm=$root/src/winemetal
 wire=$root/src/winemetal/wire/src
@@ -64,6 +77,113 @@ function rust(s,   o, i, k, w) {
 }'
 
 flags="-DDXMT_GUEST_VM -I$wm -I$root/src/airconv"
+
+if [ -n "$airconv" ]; then
+  ac=$root/src/airconv
+  abi=$ac/src/abi.rs
+  printf '#include "airconv_public.h"\n#include "dxil/dxil_public.h"\n' >"$t/tu.c"
+  apple() { xcrun clang -target aarch64-apple-darwin "-I$ac" "$@"; }
+  camel='
+  function camel(s,   o, i, k, w) {
+    k = split(s, w, "_"); o = ""
+    for (i = 1; i <= k; i++) o = o toupper(substr(w[i], 1, 1)) tolower(substr(w[i], 2))
+    return o
+  }'
+  # The headers' structs: S <c> (a struct tag), T <line> <c> (a typedef'd anonymous struct of dxil_public.h, by the
+  # line its definition opens on, which is how clang names it).
+  {
+    /usr/bin/grep -hoE '^struct [A-Za-z_][A-Za-z0-9_]* \{' "$ac/airconv_public.h" "$ac/dxil/dxil_public.h" |
+      awk '{print "S", $2}'
+    awk '/^typedef struct \{/ { open = FNR } open && /^\} [A-Za-z_][A-Za-z0-9_]*;/ {
+      n = $2; sub(/;/, "", n); print "T", open, n; open = 0 }' "$ac/dxil/dxil_public.h"
+  } >"$t/cstructs"
+  # The mirrors: abi.rs's #[repr(C)] structs and unions.
+  awk '/^#\[repr\(C\)\]/ { r = 1; next }
+    /^pub (struct|union) / { if (r) { n = $3; sub(/[<{].*/, "", n); print n }; r = 0; next }
+    !/^(#|\/\/)/ { r = 0 }' "$abi" >"$t/mirrors"
+  apple -fsyntax-only -Xclang -fdump-record-layouts-complete "$t/tu.c" >"$t/dump"
+  # Records: S <rust> <size>, F <rust> <field> <offset>, B <rust> <field> <bit> <width>, E <message>.
+  awk "$names$camel"'
+    FILENAME == ARGV[1] { if ($1 == "S") strict[$2] = 1; else { td[$2] = $3; strict[$3] = 1 }; next }
+    FILENAME == ARGV[2] { mirror[$1] = 1; next }
+    /^\*\*\* Dumping AST Record Layout/ { rec = ""; next }
+    rec == "" && /^ +0 \| / {
+      rec = "-"; line = $0; sub(/^ +0 \| /, "", line); sub(/ +$/, "", line); c = ""
+      if (line ~ /^struct [A-Za-z_][A-Za-z0-9_]*$/) { c = substr(line, 8); r = camel(c) }
+      else if (line ~ /^struct \(unnamed at .*dxil_public\.h:[0-9]+:[0-9]+\)$/) {
+        k = split(line, a, ":"); c = td[a[k - 1]]; r = camel(c)
+      } else if (line ~ /^union [A-Za-z_][A-Za-z0-9_]*::\(unnamed at /) {
+        c = substr(line, 7); sub(/::.*/, "", c); r = camel(c) "Union"
+      }
+      if (c == "" || !(c in strict) || (r in seen)) next
+      rec = r; seen[r] = 1; run = 0; after = 0
+      if (r !~ /Union$/) found[c] = 1
+      next
+    }
+    rec == "" || rec == "-" { next }
+    /\| \[sizeof=/ { s = $0; sub(/.*sizeof=/, "", s); sub(/,.*/, "", s); print "S", rec, s; rec = "-"; next }
+    /^ *[0-9:-]+ \|   [^ ]/ {
+      if ($1 ~ /:/) {
+        if (after) print "E", rec, "has two bitfield runs"
+        split($1, b, /[:-]/); print "B", rec, $NF, b[1] * 8 + b[2], b[3] - b[2] + 1; run = 1
+      } else {
+        if (run) after = 1
+        print "F", rec, ($0 ~ /\|   union [A-Za-z_][A-Za-z0-9_]*::\(anonymous at /) ? "u" : field($NF), $1
+      }
+    }
+    END {
+      for (s in strict) if (!(s in found)) print "E " s " is missing from the dump"
+      for (r in seen) if (!(r in mirror)) print "E " r " has no mirror in abi.rs"
+      for (m in mirror) if (!(m in seen)) print "E mirror " m " names no C struct"
+    }' "$t/cstructs" "$t/mirrors" "$t/dump" >"$t/facts"
+  /usr/bin/grep -m1 '^E ' "$t/facts" | sed 's/^E //' >"$t/err" || true
+  [ ! -s "$t/err" ] || fail "$(cat "$t/err")"
+
+  # Enumerators: every EnumConstantDecl of the two headers (their words), valued by an enum of probes.
+  apple -fsyntax-only -Xclang -ast-dump -fno-color-diagnostics "$t/tu.c" |
+    awk '/EnumConstantDecl/ { sub(/ '"'"'.*/, ""); print $NF }' >"$t/enumerators"
+  cat "$ac/airconv_public.h" "$ac/dxil/dxil_public.h" | tr -cs 'A-Za-z0-9_' '\n' | sort -u >"$t/words"
+  awk 'NR == FNR { w[$1] = 1; next } ($1 in w)' "$t/words" "$t/enumerators" | sort -u >"$t/consts"
+  {
+    cat "$t/tu.c"
+    echo 'enum airconv_probe : unsigned long long {'
+    awk '{ print "  airconv_" NR " = " $1 "," }' "$t/consts"
+    echo '};'
+  } >"$t/probe.c"
+  apple -fsyntax-only -Xclang -ast-dump -Xclang -ast-dump-filter -Xclang airconv_probe -fno-color-diagnostics \
+    "$t/probe.c" |
+    awk '/EnumConstantDecl/ { sub(/ '"'"'.*/, ""); n = $NF; next }
+      /value: Int / && !(n in v) { sub(/.*value: Int /, ""); v[n] = 1; print n, $1 }' >"$t/values"
+  /usr/bin/grep -oE '^pub const [A-Z0-9_]+' "$abi" | awk '{print $3}' | sort >"$t/rconsts"
+  comm -3 "$t/consts" "$t/rconsts" >"$t/cdiff"
+  [ ! -s "$t/cdiff" ] ||
+    fail "the enumerators and abi.rs's constants differ (left: the C only, right: abi.rs only): $(tr '\n\t' '  ' <"$t/cdiff")"
+
+  printf '%s\n' \
+    "//! airconv's C layouts and constants, asserted against the mirrors in \`abi.rs\`." \
+    '//!' \
+    '//! Written by `tools/winemetal-layouts.sh --airconv` from clang'"'"'s record layouts and AST:' \
+    '//! regenerate it, never edit it.' \
+    '' \
+    'use core::mem::offset_of;' \
+    '' \
+    '#[cfg(all(target_arch = "aarch64", target_os = "macos"))]' \
+    'const _: () = {'
+  awk '
+    $1 == "S" { print "    assert!(size_of::<crate::abi::" $2 ">() == " $3 ");" }
+    $1 == "F" { print "    assert!(offset_of!(crate::abi::" $2 ", " $3 ") == " $4 ");" }
+    $1 == "B" {
+      c = "crate::abi::" $2 "::" toupper($3)
+      print "    assert!(offset_of!(crate::abi::" $2 ", bits) * 8 + " c "_SHIFT as usize == " $4 ");"
+      print "    assert!(" c "_WIDTH == " $5 ");"
+    }' "$t/facts"
+  printf '%s\n' '};' '' '#[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]' \
+    'compile_error!("airconv: no layout facts for this target");' '' 'const _: () = {'
+  awk "$names"'NR == FNR { name["airconv_" FNR] = $1; next }
+    ($1 in name) { print "    assert!(crate::abi::" name[$1] " == " num($2) ");" }' "$t/consts" "$t/values" | sort
+  printf '};\n'
+  exit 0
+fi
 
 if [ -n "$protos" ]; then
   cat <<'EOF'

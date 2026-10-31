@@ -40,7 +40,8 @@ src/winemetal/unix/src/g3/blit.rs
 src/winemetal/unix/src/g3/render.rs
 src/winemetal/unix/src/g6.rs
 src/d3d9/core/src/config.rs
-src/util/src/float_cast.rs'
+src/util/src/float_cast.rs
+src/airconv/ir/src/float_cast.rs'
 
 ONCELOCK_SITES='src/d3d9/shared/src/crumb.rs
 src/d3d9/core/src/page_box.rs

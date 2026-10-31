@@ -12,6 +12,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "airconv"
+version = "0.14.1"
+dependencies = [
+ "airconv-ir",
+ "cc",
+ "rustc-hash",
+]
+
+[[package]]
+name = "airconv-ir"
+version = "0.14.1"
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
