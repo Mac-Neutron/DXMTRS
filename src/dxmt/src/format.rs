@@ -1,10 +1,2027 @@
 //! Formats: the DXGI table, the pixel-format helpers and each device's format capabilities.
+//!
+//! The helpers are keyed by `WMTPixelFormat` as a raw `u32`, with no enum conversion: D3D12 passes
+//! swizzled formats (`ENCODE_FORMAT_SWIZZLE`), which they match as they are, and only
+//! [`texel_size`] strips the swizzle. Each is also exported as a `dxmt_format_*` C function, which
+//! the C++ names (`Forget_sRGB`, `MTLQueryDXGIFormat`, ...) forward to. `dxmt_format.hpp` declares
+//! the exports; `abi.rs` pins them to that declaration on every target.
 
-/// The linear `WMTPixelFormat` of an sRGB one; any other format comes back as given.
+use std::collections::BTreeMap;
+
+use dxmt_util::float_cast::f64_to_f32;
+use winemetal_sys::{MTLDevice_supportsBCTextureCompression, MTLDevice_supportsFamily};
+use winemetal_wire::{
+    WMT_ATTRIBUTE_FORMAT_CHAR, WMT_ATTRIBUTE_FORMAT_CHAR_NORMALIZED, WMT_ATTRIBUTE_FORMAT_CHAR2,
+    WMT_ATTRIBUTE_FORMAT_CHAR2_NORMALIZED, WMT_ATTRIBUTE_FORMAT_CHAR4,
+    WMT_ATTRIBUTE_FORMAT_CHAR4_NORMALIZED, WMT_ATTRIBUTE_FORMAT_FLOAT,
+    WMT_ATTRIBUTE_FORMAT_FLOAT_RG11B10, WMT_ATTRIBUTE_FORMAT_FLOAT_RGB9E5,
+    WMT_ATTRIBUTE_FORMAT_FLOAT2, WMT_ATTRIBUTE_FORMAT_FLOAT3, WMT_ATTRIBUTE_FORMAT_FLOAT4,
+    WMT_ATTRIBUTE_FORMAT_HALF, WMT_ATTRIBUTE_FORMAT_HALF2, WMT_ATTRIBUTE_FORMAT_HALF4,
+    WMT_ATTRIBUTE_FORMAT_INT, WMT_ATTRIBUTE_FORMAT_INT2, WMT_ATTRIBUTE_FORMAT_INT3,
+    WMT_ATTRIBUTE_FORMAT_INT4, WMT_ATTRIBUTE_FORMAT_INVALID, WMT_ATTRIBUTE_FORMAT_SHORT,
+    WMT_ATTRIBUTE_FORMAT_SHORT_NORMALIZED, WMT_ATTRIBUTE_FORMAT_SHORT2,
+    WMT_ATTRIBUTE_FORMAT_SHORT2_NORMALIZED, WMT_ATTRIBUTE_FORMAT_SHORT4,
+    WMT_ATTRIBUTE_FORMAT_SHORT4_NORMALIZED, WMT_ATTRIBUTE_FORMAT_U_CHAR,
+    WMT_ATTRIBUTE_FORMAT_U_CHAR_NORMALIZED, WMT_ATTRIBUTE_FORMAT_U_CHAR2,
+    WMT_ATTRIBUTE_FORMAT_U_CHAR2_NORMALIZED, WMT_ATTRIBUTE_FORMAT_U_CHAR4,
+    WMT_ATTRIBUTE_FORMAT_U_CHAR4_NORMALIZED, WMT_ATTRIBUTE_FORMAT_U_CHAR4_NORMALIZED_BGRA,
+    WMT_ATTRIBUTE_FORMAT_U_INT, WMT_ATTRIBUTE_FORMAT_U_INT2, WMT_ATTRIBUTE_FORMAT_U_INT3,
+    WMT_ATTRIBUTE_FORMAT_U_INT4, WMT_ATTRIBUTE_FORMAT_U_INT1010102_NORMALIZED,
+    WMT_ATTRIBUTE_FORMAT_U_SHORT, WMT_ATTRIBUTE_FORMAT_U_SHORT_NORMALIZED,
+    WMT_ATTRIBUTE_FORMAT_U_SHORT2, WMT_ATTRIBUTE_FORMAT_U_SHORT2_NORMALIZED,
+    WMT_ATTRIBUTE_FORMAT_U_SHORT4, WMT_ATTRIBUTE_FORMAT_U_SHORT4_NORMALIZED,
+    WMT_PIXEL_FORMAT_A1BGR5_UNORM, WMT_PIXEL_FORMAT_A8_UNORM, WMT_PIXEL_FORMAT_ABGR4_UNORM,
+    WMT_PIXEL_FORMAT_B5G6R5_UNORM, WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB,
+    WMT_PIXEL_FORMAT_BC2_RGBA, WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB, WMT_PIXEL_FORMAT_BC3_RGBA,
+    WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB, WMT_PIXEL_FORMAT_BC4_R_SNORM, WMT_PIXEL_FORMAT_BC4_R_UNORM,
+    WMT_PIXEL_FORMAT_BC5_RG_SNORM, WMT_PIXEL_FORMAT_BC5_RG_UNORM, WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT,
+    WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT, WMT_PIXEL_FORMAT_BC7_RGBA_UNORM,
+    WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB, WMT_PIXEL_FORMAT_BGR5A1_UNORM,
+    WMT_PIXEL_FORMAT_BGR10_XR, WMT_PIXEL_FORMAT_BGR10_XR_S_RGB, WMT_PIXEL_FORMAT_BGR10A2_UNORM,
+    WMT_PIXEL_FORMAT_BGRA4_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_BGRA10_XR, WMT_PIXEL_FORMAT_BGRA10_XR_S_RGB, WMT_PIXEL_FORMAT_BGRG422,
+    WMT_PIXEL_FORMAT_BGRX8_UNORM, WMT_PIXEL_FORMAT_BGRX8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+    WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8, WMT_PIXEL_FORMAT_EAC_RGBA8,
+    WMT_PIXEL_FORMAT_EAC_RGBA8_S_RGB, WMT_PIXEL_FORMAT_ETC2_RGB8, WMT_PIXEL_FORMAT_ETC2_RGB8_S_RGB,
+    WMT_PIXEL_FORMAT_ETC2_RGB8A1, WMT_PIXEL_FORMAT_ETC2_RGB8A1_S_RGB, WMT_PIXEL_FORMAT_GBGR422,
+    WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP,
+    WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP_S_RGB, WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP,
+    WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP_S_RGB, WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP,
+    WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP_S_RGB, WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP,
+    WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP_S_RGB, WMT_PIXEL_FORMAT_R8_SINT, WMT_PIXEL_FORMAT_R8_SNORM,
+    WMT_PIXEL_FORMAT_R8_UINT, WMT_PIXEL_FORMAT_R8_UNORM, WMT_PIXEL_FORMAT_R8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_R16_FLOAT, WMT_PIXEL_FORMAT_R16_SINT, WMT_PIXEL_FORMAT_R16_SNORM,
+    WMT_PIXEL_FORMAT_R16_UINT, WMT_PIXEL_FORMAT_R16_UNORM, WMT_PIXEL_FORMAT_R32_FLOAT,
+    WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_R32X8X32,
+    WMT_PIXEL_FORMAT_RG8_SINT, WMT_PIXEL_FORMAT_RG8_SNORM, WMT_PIXEL_FORMAT_RG8_UINT,
+    WMT_PIXEL_FORMAT_RG8_UNORM, WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB, WMT_PIXEL_FORMAT_RG11B10_FLOAT,
+    WMT_PIXEL_FORMAT_RG16_FLOAT, WMT_PIXEL_FORMAT_RG16_SINT, WMT_PIXEL_FORMAT_RG16_SNORM,
+    WMT_PIXEL_FORMAT_RG16_UINT, WMT_PIXEL_FORMAT_RG16_UNORM, WMT_PIXEL_FORMAT_RG32_FLOAT,
+    WMT_PIXEL_FORMAT_RG32_SINT, WMT_PIXEL_FORMAT_RG32_UINT, WMT_PIXEL_FORMAT_RGB9E5_FLOAT,
+    WMT_PIXEL_FORMAT_RGB10A2_UINT, WMT_PIXEL_FORMAT_RGB10A2_UNORM, WMT_PIXEL_FORMAT_RGBA8_SINT,
+    WMT_PIXEL_FORMAT_RGBA8_SNORM, WMT_PIXEL_FORMAT_RGBA8_UINT, WMT_PIXEL_FORMAT_RGBA8_UNORM,
+    WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB, WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+    WMT_PIXEL_FORMAT_RGBA16_SINT, WMT_PIXEL_FORMAT_RGBA16_SNORM, WMT_PIXEL_FORMAT_RGBA16_UINT,
+    WMT_PIXEL_FORMAT_RGBA16_UNORM, WMT_PIXEL_FORMAT_RGBA32_FLOAT, WMT_PIXEL_FORMAT_RGBA32_SINT,
+    WMT_PIXEL_FORMAT_RGBA32_UINT, WMT_PIXEL_FORMAT_STENCIL8, WMT_PIXEL_FORMAT_X32_STENCIL8,
+    WMT_PIXEL_FORMAT_X32G8X32, WMTClearColor, WMTGPU_FAMILY_APPLE7, WMTGPU_FAMILY_APPLE8,
+    WMTGPU_FAMILY_APPLE9, WMTGPU_FAMILY_MAC2, original_format,
+};
+
+mod abi;
+
+/// Aborts the process when it is dropped during a Rust panic.
 ///
-/// The signature the presenter codes against; the format table's port (step 5a, S3) gives it
-/// its body, and until then every format comes back as given.
+/// Natively the exports are `extern "C-unwind"`, so that an Objective-C exception from winemetal
+/// passes to the caller's `@catch`, and each opens with `let _guard = AbortOnPanic;`: a Rust
+/// panic then aborts, as `panic = "abort"` does, instead of unwinding into the C++. A foreign
+/// unwind does not set [`std::thread::panicking`], so an exception still passes.
+#[cfg(not(windows))]
+struct AbortOnPanic;
+
+#[cfg(not(windows))]
+impl Drop for AbortOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::process::abort();
+        }
+    }
+}
+
+/// Defines a function exported to the C++ under its own name.
+///
+/// On the PE targets it is `extern "C"` (a safe one is also `const`, which its body can be);
+/// natively it is `extern "C-unwind"` and holds the abort guard. `abi.rs` asserts the result
+/// against the C declaration either way.
+macro_rules! export {
+    (
+        $(#[$meta:meta])*
+        fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block
+    ) => {
+        $(#[$meta])*
+        #[cfg(windows)]
+        #[unsafe(no_mangle)]
+        pub const extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
+
+        $(#[$meta])*
+        #[cfg(not(windows))]
+        #[unsafe(no_mangle)]
+        pub extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
+            let _guard = AbortOnPanic;
+            $body
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        unsafe fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block
+    ) => {
+        $(#[$meta])*
+        #[cfg(windows)]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
+
+        $(#[$meta])*
+        #[cfg(not(windows))]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
+            let _guard = AbortOnPanic;
+            $body
+        }
+    };
+}
+
+/// `S_OK`.
+pub const S_OK: i32 = 0;
+
+/// `E_FAIL`.
+pub const E_FAIL: i32 = 0x8000_4005_u32.cast_signed();
+
+/// `MTL_DXGI_FORMAT_TYPELESS`: a typeless DXGI format.
+pub const MTL_DXGI_FORMAT_TYPELESS: u16 = 1;
+
+/// `MTL_DXGI_FORMAT_BC`: a block-compressed DXGI format.
+pub const MTL_DXGI_FORMAT_BC: u16 = 2;
+
+/// `MTL_DXGI_FORMAT_BACKBUFFER`: a format a swap chain's back buffer may have.
+pub const MTL_DXGI_FORMAT_BACKBUFFER: u16 = 4;
+
+/// `MTL_DXGI_FORMAT_DEPTH_PLANER`: the format has a depth plane.
+pub const MTL_DXGI_FORMAT_DEPTH_PLANER: u16 = 16;
+
+/// `MTL_DXGI_FORMAT_STENCIL_PLANER`: the format has a stencil plane.
+pub const MTL_DXGI_FORMAT_STENCIL_PLANER: u16 = 32;
+
+/// `MTL_DXGI_FORMAT_EMULATED_D24`: a 24-bit depth format Metal stores as 32-bit float depth.
+pub const MTL_DXGI_FORMAT_EMULATED_D24: u16 = 256;
+
+/// `MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL`: depth and stencil kept as one linear texel.
+pub const MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL: u16 = 512;
+
+/// `FormatCapability::Atomic`.
+pub const CAP_ATOMIC: u32 = 0x1;
+
+/// `FormatCapability::Filter`.
+pub const CAP_FILTER: u32 = 0x2;
+
+/// `FormatCapability::Write`.
+pub const CAP_WRITE: u32 = 0x4;
+
+/// `FormatCapability::Color`.
+pub const CAP_COLOR: u32 = 0x8;
+
+/// `FormatCapability::Blend`.
+pub const CAP_BLEND: u32 = 0x10;
+
+/// `FormatCapability::MSAA`.
+pub const CAP_MSAA: u32 = 0x20;
+
+/// `FormatCapability::Sparse`.
+pub const CAP_SPARSE: u32 = 0x40;
+
+/// `FormatCapability::Resolve`.
+pub const CAP_RESOLVE: u32 = 0x80;
+
+/// `FormatCapability::DepthStencil`.
+pub const CAP_DEPTH_STENCIL: u32 = 0x100;
+
+/// `FormatCapability::TextureBufferRead`.
+pub const CAP_TEXTURE_BUFFER_READ: u32 = 0x200;
+
+/// `FormatCapability::TextureBufferWrite`.
+pub const CAP_TEXTURE_BUFFER_WRITE: u32 = 0x400;
+
+/// `FormatCapability::TextureBufferReadWrite`.
+pub const CAP_TEXTURE_BUFFER_READ_WRITE: u32 = 0x800;
+
+/// The `dxmt_format_capabilities` result for a device that is neither Apple7 nor Mac2.
+pub const INVALID_DEVICE: usize = usize::MAX;
+
+const ALL_CAP: u32 =
+    CAP_FILTER | CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_BLEND | CAP_SPARSE | CAP_RESOLVE;
+const TEXTURE_BUFFER_ALL_CAP: u32 =
+    CAP_TEXTURE_BUFFER_READ | CAP_TEXTURE_BUFFER_WRITE | CAP_TEXTURE_BUFFER_READ_WRITE;
+const TEXTURE_BUFFER_READ_OR_WRITE: u32 = CAP_TEXTURE_BUFFER_READ | CAP_TEXTURE_BUFFER_WRITE;
+const NO_ATOMIC_RESOLVE: u32 =
+    CAP_FILTER | CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_BLEND | CAP_SPARSE;
+const APPLE_INT_FORMAT_CAP: u32 = CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_SPARSE;
+const NONAPPLE_INT_FORMAT_CAP: u32 = CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_SPARSE;
+const APPLE_INT_FORMAT_CAP_32: u32 = CAP_WRITE | CAP_COLOR | CAP_SPARSE | CAP_ATOMIC;
+
+/// The largest value `ClampFloatRTVClearColor` lets a half-float clear colour have.
+const HALF_MAX: f32 = 65504.0;
+
+/// A DXGI format's description: `MTL_DXGI_FORMAT_DESC`.
+///
+/// `bytes_per_texel` is the C++'s union with `BlockSize`: a block-compressed format keeps its
+/// block size there.
+#[repr(C)]
+pub struct MtlDxgiFormatDesc {
+    /// A `WMTPixelFormat`.
+    pub pixel_format: u32,
+    /// A `WMTAttributeFormat`.
+    pub attribute_format: u32,
+    /// Bytes per texel, or per block for a block-compressed format.
+    pub bytes_per_texel: u32,
+    /// How many planes the format has.
+    pub planar_count: u16,
+    /// `MTL_DXGI_FORMAT_*` bits.
+    pub flag: u16,
+}
+
+/// One format and its capabilities: `struct dxmt_format_capability`.
+#[repr(C)]
+pub struct DxmtFormatCapability {
+    /// A `WMTPixelFormat`.
+    pub format: u32,
+    /// `CAP_*` bits.
+    pub caps: u32,
+}
+
+/// What `MTLQueryDXGIFormat` leaves in the description when it fails.
+const UNSUPPORTED: MtlDxgiFormatDesc = row(
+    WMT_PIXEL_FORMAT_INVALID,
+    WMT_ATTRIBUTE_FORMAT_INVALID,
+    0,
+    1,
+    0,
+);
+
+/// The DXGI formats Metal has a counterpart for, indexed by `DXGI_FORMAT`; `None` for the rest.
+///
+/// It ends at `DXGI_FORMAT_B4G4R4A4_UNORM`, the last format with a row; a format past it has none.
+static DXGI_TABLE: [Option<MtlDxgiFormatDesc>; 116] = [
+    // 0 UNKNOWN
+    None,
+    // 1 R32G32B32A32_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA32_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 2 R32G32B32A32_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA32_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT4,
+        16,
+        1,
+        0,
+    )),
+    // 3 R32G32B32A32_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA32_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_INT4,
+        16,
+        1,
+        0,
+    )),
+    // 4 R32G32B32A32_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA32_SINT,
+        WMT_ATTRIBUTE_FORMAT_INT4,
+        16,
+        1,
+        0,
+    )),
+    // 5 R32G32B32_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        12,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 6 R32G32B32_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT3,
+        12,
+        1,
+        0,
+    )),
+    // 7 R32G32B32_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_INT3,
+        12,
+        1,
+        0,
+    )),
+    // 8 R32G32B32_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_SINT,
+        WMT_ATTRIBUTE_FORMAT_INT3,
+        12,
+        1,
+        0,
+    )),
+    // 9 R16G16B16A16_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 10 R16G16B16A16_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_HALF4,
+        8,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 11 R16G16B16A16_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT4_NORMALIZED,
+        8,
+        1,
+        0,
+    )),
+    // 12 R16G16B16A16_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT4,
+        8,
+        1,
+        0,
+    )),
+    // 13 R16G16B16A16_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_SNORM,
+        WMT_ATTRIBUTE_FORMAT_SHORT4_NORMALIZED,
+        8,
+        1,
+        0,
+    )),
+    // 14 R16G16B16A16_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA16_SINT,
+        WMT_ATTRIBUTE_FORMAT_SHORT4,
+        8,
+        1,
+        0,
+    )),
+    // 15 R32G32_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RG32_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 16 R32G32_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG32_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT2,
+        8,
+        1,
+        0,
+    )),
+    // 17 R32G32_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG32_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_INT2,
+        8,
+        1,
+        0,
+    )),
+    // 18 R32G32_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG32_SINT,
+        WMT_ATTRIBUTE_FORMAT_INT2,
+        8,
+        1,
+        0,
+    )),
+    // 19 R32G8X24_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        2,
+        MTL_DXGI_FORMAT_TYPELESS
+            | MTL_DXGI_FORMAT_DEPTH_PLANER
+            | MTL_DXGI_FORMAT_STENCIL_PLANER
+            | MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL,
+    )),
+    // 20 D32_FLOAT_S8X24_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER,
+    )),
+    // 21 R32_FLOAT_X8X24_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R32X8X32,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_DEPTH_PLANER,
+    )),
+    // 22 X32_TYPELESS_G8X24_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_X32G8X32,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_STENCIL_PLANER,
+    )),
+    // 23 R10G10B10A2_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RGB10A2_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 24 R10G10B10A2_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RGB10A2_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_INT1010102_NORMALIZED,
+        4,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 25 R10G10B10A2_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGB10A2_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        0,
+    )),
+    // 26 R11G11B10_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG11B10_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT_RG11B10,
+        4,
+        1,
+        0,
+    )),
+    // 27 R8G8B8A8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 28 R8G8B8A8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR4_NORMALIZED,
+        4,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 29 R8G8B8A8_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 30 R8G8B8A8_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR4,
+        4,
+        1,
+        0,
+    )),
+    // 31 R8G8B8A8_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_SNORM,
+        WMT_ATTRIBUTE_FORMAT_CHAR4_NORMALIZED,
+        4,
+        1,
+        0,
+    )),
+    // 32 R8G8B8A8_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RGBA8_SINT,
+        WMT_ATTRIBUTE_FORMAT_CHAR4,
+        4,
+        1,
+        0,
+    )),
+    // 33 R16G16_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 34 R16G16_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_HALF2,
+        4,
+        1,
+        0,
+    )),
+    // 35 R16G16_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT2_NORMALIZED,
+        4,
+        1,
+        0,
+    )),
+    // 36 R16G16_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT2,
+        4,
+        1,
+        0,
+    )),
+    // 37 R16G16_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_SNORM,
+        WMT_ATTRIBUTE_FORMAT_SHORT2_NORMALIZED,
+        4,
+        1,
+        0,
+    )),
+    // 38 R16G16_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG16_SINT,
+        WMT_ATTRIBUTE_FORMAT_SHORT2,
+        4,
+        1,
+        0,
+    )),
+    // 39 R32_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 40 D32_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_DEPTH_PLANER,
+    )),
+    // 41 R32_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT,
+        4,
+        1,
+        0,
+    )),
+    // 42 R32_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_INT,
+        4,
+        1,
+        0,
+    )),
+    // 43 R32_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R32_SINT,
+        WMT_ATTRIBUTE_FORMAT_INT,
+        4,
+        1,
+        0,
+    )),
+    // 44 R24G8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        2,
+        MTL_DXGI_FORMAT_TYPELESS
+            | MTL_DXGI_FORMAT_DEPTH_PLANER
+            | MTL_DXGI_FORMAT_STENCIL_PLANER
+            | MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL
+            | MTL_DXGI_FORMAT_EMULATED_D24,
+    )),
+    // 45 D24_UNORM_S8_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_DEPTH_PLANER
+            | MTL_DXGI_FORMAT_STENCIL_PLANER
+            | MTL_DXGI_FORMAT_EMULATED_D24,
+    )),
+    // 46 R24_UNORM_X8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R32X8X32,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_EMULATED_D24,
+    )),
+    // 47 X24_TYPELESS_G8_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_X32G8X32,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        0,
+        2,
+        MTL_DXGI_FORMAT_STENCIL_PLANER | MTL_DXGI_FORMAT_EMULATED_D24,
+    )),
+    // 48 R8G8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_RG8_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 49 R8G8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RG8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR2_NORMALIZED,
+        2,
+        1,
+        0,
+    )),
+    // 50 R8G8_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG8_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR2,
+        2,
+        1,
+        0,
+    )),
+    // 51 R8G8_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_RG8_SNORM,
+        WMT_ATTRIBUTE_FORMAT_CHAR2_NORMALIZED,
+        2,
+        1,
+        0,
+    )),
+    // 52 R8G8_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_RG8_SINT,
+        WMT_ATTRIBUTE_FORMAT_CHAR2,
+        2,
+        1,
+        0,
+    )),
+    // 53 R16_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 54 R16_FLOAT
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_HALF,
+        2,
+        1,
+        0,
+    )),
+    // 55 D16_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_DEPTH16_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        MTL_DXGI_FORMAT_DEPTH_PLANER,
+    )),
+    // 56 R16_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT_NORMALIZED,
+        2,
+        1,
+        0,
+    )),
+    // 57 R16_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_SHORT,
+        2,
+        1,
+        0,
+    )),
+    // 58 R16_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_SNORM,
+        WMT_ATTRIBUTE_FORMAT_SHORT_NORMALIZED,
+        2,
+        1,
+        0,
+    )),
+    // 59 R16_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R16_SINT,
+        WMT_ATTRIBUTE_FORMAT_SHORT,
+        2,
+        1,
+        0,
+    )),
+    // 60 R8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_R8_UINT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        1,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 61 R8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_R8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR_NORMALIZED,
+        1,
+        1,
+        0,
+    )),
+    // 62 R8_UINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R8_UINT,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR,
+        1,
+        1,
+        0,
+    )),
+    // 63 R8_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_R8_SNORM,
+        WMT_ATTRIBUTE_FORMAT_CHAR_NORMALIZED,
+        1,
+        1,
+        0,
+    )),
+    // 64 R8_SINT
+    Some(row(
+        WMT_PIXEL_FORMAT_R8_SINT,
+        WMT_ATTRIBUTE_FORMAT_CHAR,
+        1,
+        1,
+        0,
+    )),
+    // 65 A8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_A8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        1,
+        1,
+        0,
+    )),
+    // 66 R1_UNORM
+    None,
+    // 67 R9G9B9E5_SHAREDEXP
+    Some(row(
+        WMT_PIXEL_FORMAT_RGB9E5_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_FLOAT_RGB9E5,
+        4,
+        1,
+        0,
+    )),
+    // 68 R8G8_B8G8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRG422,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        0,
+    )),
+    // 69 G8R8_G8B8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_GBGR422,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        0,
+    )),
+    // 70 BC1_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC1_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 71 BC1_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC1_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 72 BC1_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 73 BC2_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC2_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 74 BC2_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC2_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 75 BC2_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 76 BC3_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC3_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 77 BC3_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC3_RGBA,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 78 BC3_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 79 BC4_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC4_R_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 80 BC4_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC4_R_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 81 BC4_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC4_R_SNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        8,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 82 BC5_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC5_RG_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 83 BC5_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC5_RG_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 84 BC5_SNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC5_RG_SNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 85 B5G6R5_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_B5G6R5_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        0,
+    )),
+    // 86 B5G5R5A1_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BGR5A1_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        0,
+    )),
+    // 87 B8G8R8A8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_U_CHAR4_NORMALIZED_BGRA,
+        4,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 88 B8G8R8X8_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRX8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        0,
+    )),
+    // 89 R10G10B10_XR_BIAS_A2_UNORM
+    None,
+    // 90 B8G8R8A8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 91 B8G8R8A8_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_BACKBUFFER,
+    )),
+    // 92 B8G8R8X8_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRX8_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS,
+    )),
+    // 93 B8G8R8X8_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRX8_UNORM_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        4,
+        1,
+        0,
+    )),
+    // 94 BC6H_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 95 BC6H_UF16
+    Some(row(
+        WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 96 BC6H_SF16
+    Some(row(
+        WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 97 BC7_TYPELESS
+    Some(row(
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_TYPELESS | MTL_DXGI_FORMAT_BC,
+    )),
+    // 98 BC7_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 99 BC7_UNORM_SRGB
+    Some(row(
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        16,
+        1,
+        MTL_DXGI_FORMAT_BC,
+    )),
+    // 100 AYUV
+    None,
+    // 101 Y410
+    None,
+    // 102 Y416
+    None,
+    // 103 NV12
+    None,
+    // 104 P010
+    None,
+    // 105 P016
+    None,
+    // 106 420_OPAQUE
+    None,
+    // 107 YUY2
+    None,
+    // 108 Y210
+    None,
+    // 109 Y216
+    None,
+    // 110 NV11
+    None,
+    // 111 AI44
+    None,
+    // 112 IA44
+    None,
+    // 113 P8
+    None,
+    // 114 A8P8
+    None,
+    // 115 B4G4R4A4_UNORM
+    Some(row(
+        WMT_PIXEL_FORMAT_BGRA4_UNORM,
+        WMT_ATTRIBUTE_FORMAT_INVALID,
+        2,
+        1,
+        0,
+    )),
+];
+
+/// The Apple7 family's capabilities.
+static APPLE7: &[(u32, u32)] = &[
+    (WMT_PIXEL_FORMAT_A8_UNORM, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (WMT_PIXEL_FORMAT_R8_UNORM, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (WMT_PIXEL_FORMAT_R8_UNORM_S_RGB, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_R8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R8_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R8_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_UNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_SNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (WMT_PIXEL_FORMAT_R16_FLOAT, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RG8_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RG8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG8_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG8_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_B5G6R5_UNORM, NO_ATOMIC_RESOLVE),
+    (WMT_PIXEL_FORMAT_A1BGR5_UNORM, NO_ATOMIC_RESOLVE),
+    (WMT_PIXEL_FORMAT_ABGR4_UNORM, NO_ATOMIC_RESOLVE),
+    (WMT_PIXEL_FORMAT_BGR5A1_UNORM, NO_ATOMIC_RESOLVE),
+    (
+        WMT_PIXEL_FORMAT_R32_UINT,
+        APPLE_INT_FORMAT_CAP_32 | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R32_SINT,
+        APPLE_INT_FORMAT_CAP_32 | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R32_FLOAT,
+        CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_BLEND | CAP_SPARSE | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_UNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_SNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        ALL_CAP | CAP_TEXTURE_BUFFER_READ,
+    ),
+    (WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RGB10A2_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_BGR10A2_UNORM, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RGB10A2_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG11B10_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_RGB9E5_FLOAT, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RG32_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG32_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG32_FLOAT,
+        CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_BLEND | CAP_SPARSE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_UNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_SNORM,
+        NO_ATOMIC_RESOLVE | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_UINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_SINT,
+        APPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_UINT,
+        CAP_WRITE | CAP_COLOR | CAP_SPARSE | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_SINT,
+        CAP_WRITE | CAP_COLOR | CAP_SPARSE | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_FLOAT,
+        CAP_WRITE | CAP_COLOR | CAP_MSAA | CAP_SPARSE | CAP_BLEND | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (WMT_PIXEL_FORMAT_GBGR422, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BGRG422, CAP_FILTER),
+    (
+        WMT_PIXEL_FORMAT_DEPTH16_UNORM,
+        CAP_FILTER | CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (WMT_PIXEL_FORMAT_STENCIL8, CAP_MSAA | CAP_DEPTH_STENCIL),
+    (
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (WMT_PIXEL_FORMAT_X32_STENCIL8, CAP_MSAA | CAP_DEPTH_STENCIL),
+    (WMT_PIXEL_FORMAT_BGRA10_XR, ALL_CAP),
+    (WMT_PIXEL_FORMAT_BGRA10_XR_S_RGB, ALL_CAP),
+    (WMT_PIXEL_FORMAT_BGR10_XR, ALL_CAP),
+    (WMT_PIXEL_FORMAT_BGR10_XR_S_RGB, ALL_CAP),
+];
+
+/// What a device that supports BC textures adds on Apple7.
+static APPLE7_BC: &[(u32, u32)] = &[
+    (WMT_PIXEL_FORMAT_BC1_RGBA, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC2_RGBA, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC3_RGBA, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC4_R_UNORM, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC4_R_SNORM, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC5_RG_SNORM, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC5_RG_UNORM, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT, CAP_FILTER | CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_BC7_RGBA_UNORM, CAP_FILTER | CAP_SPARSE),
+    (
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB,
+        CAP_FILTER | CAP_SPARSE,
+    ),
+];
+
+/// What Apple8 adds to Apple7.
+static APPLE8: &[(u32, u32)] = &[
+    (WMT_PIXEL_FORMAT_RG32_UINT, CAP_ATOMIC),
+    (WMT_PIXEL_FORMAT_RG32_SINT, CAP_ATOMIC),
+    (WMT_PIXEL_FORMAT_DEPTH16_UNORM, CAP_SPARSE),
+    (WMT_PIXEL_FORMAT_STENCIL8, CAP_SPARSE),
+];
+
+/// What Apple9 adds to Apple8.
+static APPLE9: &[(u32, u32)] = &[
+    (WMT_PIXEL_FORMAT_R32_FLOAT, ALL_CAP),
+    (WMT_PIXEL_FORMAT_RG32_FLOAT, ALL_CAP),
+    (WMT_PIXEL_FORMAT_RGBA32_FLOAT, ALL_CAP),
+];
+
+/// The Mac2 family's capabilities, for a device that is not Apple7.
+static MAC2: &[(u32, u32)] = &[
+    (WMT_PIXEL_FORMAT_A8_UNORM, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (WMT_PIXEL_FORMAT_R8_UNORM, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_R8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R8_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R8_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R16_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (WMT_PIXEL_FORMAT_R16_FLOAT, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RG8_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG8_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG8_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R32_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP | CAP_ATOMIC,
+    ),
+    (
+        WMT_PIXEL_FORMAT_R32_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP | CAP_ATOMIC,
+    ),
+    (WMT_PIXEL_FORMAT_R32_FLOAT, ALL_CAP | TEXTURE_BUFFER_ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RG16_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG16_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
+        CAP_FILTER | CAP_COLOR | CAP_MSAA | CAP_RESOLVE | CAP_BLEND,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA8_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        ALL_CAP | CAP_TEXTURE_BUFFER_READ,
+    ),
+    (
+        WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        CAP_FILTER | CAP_COLOR | CAP_MSAA | CAP_RESOLVE | CAP_BLEND,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGB10A2_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_BGR10A2_UNORM, ALL_CAP),
+    (
+        WMT_PIXEL_FORMAT_RGB10A2_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG11B10_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (WMT_PIXEL_FORMAT_RGB9E5_FLOAT, CAP_FILTER),
+    (
+        WMT_PIXEL_FORMAT_RG32_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG32_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RG32_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_UNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_SNORM,
+        ALL_CAP | TEXTURE_BUFFER_READ_OR_WRITE,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_UINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_SINT,
+        NONAPPLE_INT_FORMAT_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_UINT,
+        CAP_WRITE | CAP_COLOR | CAP_MSAA | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_SINT,
+        CAP_WRITE | CAP_COLOR | CAP_MSAA | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (
+        WMT_PIXEL_FORMAT_RGBA32_FLOAT,
+        ALL_CAP | TEXTURE_BUFFER_ALL_CAP,
+    ),
+    (WMT_PIXEL_FORMAT_BC1_RGBA, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC2_RGBA, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC3_RGBA, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC4_R_UNORM, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC4_R_SNORM, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC5_RG_SNORM, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC5_RG_UNORM, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC7_RGBA_UNORM, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_GBGR422, CAP_FILTER),
+    (WMT_PIXEL_FORMAT_BGRG422, CAP_FILTER),
+    (
+        WMT_PIXEL_FORMAT_DEPTH16_UNORM,
+        CAP_FILTER | CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        CAP_FILTER | CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (WMT_PIXEL_FORMAT_STENCIL8, CAP_MSAA | CAP_DEPTH_STENCIL),
+    (
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        CAP_MSAA | CAP_RESOLVE | CAP_DEPTH_STENCIL,
+    ),
+    (WMT_PIXEL_FORMAT_X32_STENCIL8, CAP_MSAA | CAP_DEPTH_STENCIL),
+];
+
+/// The description of a DXGI format and the `HRESULT` `MTLQueryDXGIFormat` answers.
+///
+/// `E_FAIL` for a format Metal has no counterpart for or one past the table, with the description
+/// the C++ leaves in that case.
+#[must_use]
+pub fn query_dxgi(dxgi_format: u32) -> (i32, MtlDxgiFormatDesc) {
+    match usize::try_from(dxgi_format)
+        .ok()
+        .and_then(|index| DXGI_TABLE.get(index))
+    {
+        Some(Some(desc)) => (S_OK, MtlDxgiFormatDesc { ..*desc }),
+        _ => (E_FAIL, UNSUPPORTED),
+    }
+}
+
+/// The linear format of an sRGB one; any other format comes back as given.
 #[must_use]
 pub const fn forget_srgb(format: u32) -> u32 {
-    format
+    match format {
+        WMT_PIXEL_FORMAT_R8_UNORM_S_RGB => WMT_PIXEL_FORMAT_R8_UNORM,
+        WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB => WMT_PIXEL_FORMAT_RG8_UNORM,
+        WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB => WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB => WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_PIXEL_FORMAT_BGRX8_UNORM_S_RGB => WMT_PIXEL_FORMAT_BGRX8_UNORM,
+        WMT_PIXEL_FORMAT_BGR10_XR_S_RGB => WMT_PIXEL_FORMAT_BGR10_XR,
+        WMT_PIXEL_FORMAT_BGRA10_XR_S_RGB => WMT_PIXEL_FORMAT_BGRA10_XR,
+        WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB => WMT_PIXEL_FORMAT_BC1_RGBA,
+        WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB => WMT_PIXEL_FORMAT_BC2_RGBA,
+        WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB => WMT_PIXEL_FORMAT_BC3_RGBA,
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB => WMT_PIXEL_FORMAT_BC7_RGBA_UNORM,
+        WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP_S_RGB => WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP,
+        WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP_S_RGB => WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP,
+        WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP_S_RGB => WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP,
+        WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP_S_RGB => WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP,
+        WMT_PIXEL_FORMAT_EAC_RGBA8_S_RGB => WMT_PIXEL_FORMAT_EAC_RGBA8,
+        WMT_PIXEL_FORMAT_ETC2_RGB8_S_RGB => WMT_PIXEL_FORMAT_ETC2_RGB8,
+        WMT_PIXEL_FORMAT_ETC2_RGB8A1_S_RGB => WMT_PIXEL_FORMAT_ETC2_RGB8A1,
+        _ => format,
+    }
 }
+
+/// The sRGB format of a linear one that has one; any other format comes back as given.
+#[must_use]
+pub const fn recall_srgb(format: u32) -> u32 {
+    match format {
+        WMT_PIXEL_FORMAT_R8_UNORM => WMT_PIXEL_FORMAT_R8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_RG8_UNORM => WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_RGBA8_UNORM => WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM => WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_BGRX8_UNORM => WMT_PIXEL_FORMAT_BGRX8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_BGR10_XR => WMT_PIXEL_FORMAT_BGR10_XR_S_RGB,
+        WMT_PIXEL_FORMAT_BGRA10_XR => WMT_PIXEL_FORMAT_BGRA10_XR_S_RGB,
+        WMT_PIXEL_FORMAT_BC1_RGBA => WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB,
+        WMT_PIXEL_FORMAT_BC2_RGBA => WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB,
+        WMT_PIXEL_FORMAT_BC3_RGBA => WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB,
+        WMT_PIXEL_FORMAT_BC7_RGBA_UNORM => WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP => WMT_PIXEL_FORMAT_PVRTC_RGBA_2BPP_S_RGB,
+        WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP => WMT_PIXEL_FORMAT_PVRTC_RGBA_4BPP_S_RGB,
+        WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP => WMT_PIXEL_FORMAT_PVRTC_RGB_2BPP_S_RGB,
+        WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP => WMT_PIXEL_FORMAT_PVRTC_RGB_4BPP_S_RGB,
+        WMT_PIXEL_FORMAT_EAC_RGBA8 => WMT_PIXEL_FORMAT_EAC_RGBA8_S_RGB,
+        WMT_PIXEL_FORMAT_ETC2_RGB8 => WMT_PIXEL_FORMAT_ETC2_RGB8_S_RGB,
+        WMT_PIXEL_FORMAT_ETC2_RGB8A1 => WMT_PIXEL_FORMAT_ETC2_RGB8A1_S_RGB,
+        _ => format,
+    }
+}
+
+/// Whether a format is one of the BC formats.
+#[must_use]
+pub const fn is_bc(format: u32) -> bool {
+    matches!(
+        format,
+        WMT_PIXEL_FORMAT_BC1_RGBA
+            | WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB
+            | WMT_PIXEL_FORMAT_BC2_RGBA
+            | WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB
+            | WMT_PIXEL_FORMAT_BC3_RGBA
+            | WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB
+            | WMT_PIXEL_FORMAT_BC4_R_UNORM
+            | WMT_PIXEL_FORMAT_BC4_R_SNORM
+            | WMT_PIXEL_FORMAT_BC5_RG_UNORM
+            | WMT_PIXEL_FORMAT_BC5_RG_SNORM
+            | WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT
+            | WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT
+            | WMT_PIXEL_FORMAT_BC7_RGBA_UNORM
+            | WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB
+    )
+}
+
+/// The planes of a depth-stencil format: bit 0 for depth, bit 1 for stencil; 0 for any other.
+#[must_use]
+pub const fn depth_stencil_planar_flags(format: u32) -> u32 {
+    match format {
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8 => 3,
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT
+        | WMT_PIXEL_FORMAT_DEPTH16_UNORM
+        | WMT_PIXEL_FORMAT_R32X8X32 => 1,
+        WMT_PIXEL_FORMAT_STENCIL8 | WMT_PIXEL_FORMAT_X32_STENCIL8 | WMT_PIXEL_FORMAT_X32G8X32 => 2,
+        _ => 0,
+    }
+}
+
+/// The bytes one texel of a format takes, or one block for a BC format; 0 for any other.
+///
+/// The swizzle bits of a format are ignored. The PVRTC, EAC, ETC and ASTC formats answer 0 as
+/// the C++ does (it asserts there in debug builds only).
+#[must_use]
+pub const fn texel_size(format: u32) -> u32 {
+    match original_format(format) {
+        WMT_PIXEL_FORMAT_A8_UNORM
+        | WMT_PIXEL_FORMAT_R8_UNORM
+        | WMT_PIXEL_FORMAT_R8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_R8_SNORM
+        | WMT_PIXEL_FORMAT_R8_UINT
+        | WMT_PIXEL_FORMAT_R8_SINT
+        | WMT_PIXEL_FORMAT_GBGR422
+        | WMT_PIXEL_FORMAT_BGRG422 => 1,
+        WMT_PIXEL_FORMAT_R16_UNORM
+        | WMT_PIXEL_FORMAT_R16_SNORM
+        | WMT_PIXEL_FORMAT_R16_UINT
+        | WMT_PIXEL_FORMAT_R16_SINT
+        | WMT_PIXEL_FORMAT_R16_FLOAT
+        | WMT_PIXEL_FORMAT_RG8_UNORM
+        | WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_RG8_SNORM
+        | WMT_PIXEL_FORMAT_RG8_UINT
+        | WMT_PIXEL_FORMAT_RG8_SINT
+        | WMT_PIXEL_FORMAT_B5G6R5_UNORM
+        | WMT_PIXEL_FORMAT_A1BGR5_UNORM
+        | WMT_PIXEL_FORMAT_ABGR4_UNORM
+        | WMT_PIXEL_FORMAT_BGR5A1_UNORM
+        | WMT_PIXEL_FORMAT_DEPTH16_UNORM => 2,
+        WMT_PIXEL_FORMAT_R32_UINT
+        | WMT_PIXEL_FORMAT_R32_SINT
+        | WMT_PIXEL_FORMAT_R32_FLOAT
+        | WMT_PIXEL_FORMAT_RG16_UNORM
+        | WMT_PIXEL_FORMAT_RG16_SNORM
+        | WMT_PIXEL_FORMAT_RG16_UINT
+        | WMT_PIXEL_FORMAT_RG16_SINT
+        | WMT_PIXEL_FORMAT_RG16_FLOAT
+        | WMT_PIXEL_FORMAT_RGBA8_UNORM
+        | WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_RGBA8_SNORM
+        | WMT_PIXEL_FORMAT_RGBA8_UINT
+        | WMT_PIXEL_FORMAT_RGBA8_SINT
+        | WMT_PIXEL_FORMAT_BGRA8_UNORM
+        | WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_RGB10A2_UNORM
+        | WMT_PIXEL_FORMAT_RGB10A2_UINT
+        | WMT_PIXEL_FORMAT_RG11B10_FLOAT
+        | WMT_PIXEL_FORMAT_RGB9E5_FLOAT
+        | WMT_PIXEL_FORMAT_BGR10A2_UNORM
+        | WMT_PIXEL_FORMAT_BGR10_XR
+        | WMT_PIXEL_FORMAT_BGR10_XR_S_RGB
+        | WMT_PIXEL_FORMAT_DEPTH32_FLOAT => 4,
+        WMT_PIXEL_FORMAT_RG32_UINT
+        | WMT_PIXEL_FORMAT_RG32_SINT
+        | WMT_PIXEL_FORMAT_RG32_FLOAT
+        | WMT_PIXEL_FORMAT_RGBA16_UNORM
+        | WMT_PIXEL_FORMAT_RGBA16_SNORM
+        | WMT_PIXEL_FORMAT_RGBA16_UINT
+        | WMT_PIXEL_FORMAT_RGBA16_SINT
+        | WMT_PIXEL_FORMAT_RGBA16_FLOAT
+        | WMT_PIXEL_FORMAT_BGRA10_XR
+        | WMT_PIXEL_FORMAT_BGRA10_XR_S_RGB
+        | WMT_PIXEL_FORMAT_BC1_RGBA
+        | WMT_PIXEL_FORMAT_BC1_RGBA_S_RGB
+        | WMT_PIXEL_FORMAT_BC4_R_UNORM
+        | WMT_PIXEL_FORMAT_BC4_R_SNORM => 8,
+        WMT_PIXEL_FORMAT_RGBA32_UINT
+        | WMT_PIXEL_FORMAT_RGBA32_SINT
+        | WMT_PIXEL_FORMAT_RGBA32_FLOAT
+        | WMT_PIXEL_FORMAT_BC2_RGBA
+        | WMT_PIXEL_FORMAT_BC2_RGBA_S_RGB
+        | WMT_PIXEL_FORMAT_BC3_RGBA
+        | WMT_PIXEL_FORMAT_BC3_RGBA_S_RGB
+        | WMT_PIXEL_FORMAT_BC5_RG_UNORM
+        | WMT_PIXEL_FORMAT_BC5_RG_SNORM
+        | WMT_PIXEL_FORMAT_BC6H_RGB_FLOAT
+        | WMT_PIXEL_FORMAT_BC6H_RGB_UFLOAT
+        | WMT_PIXEL_FORMAT_BC7_RGBA_UNORM
+        | WMT_PIXEL_FORMAT_BC7_RGBA_UNORM_S_RGB => 16,
+        _ => 0,
+    }
+}
+
+/// The unsigned integer format of the same width and channels; invalid for a format without one.
+#[must_use]
+pub const fn unsigned_integer(format: u32) -> u32 {
+    match format {
+        WMT_PIXEL_FORMAT_A8_UNORM
+        | WMT_PIXEL_FORMAT_R8_UNORM
+        | WMT_PIXEL_FORMAT_R8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_R8_SNORM
+        | WMT_PIXEL_FORMAT_R8_UINT
+        | WMT_PIXEL_FORMAT_R8_SINT => WMT_PIXEL_FORMAT_R8_UINT,
+        WMT_PIXEL_FORMAT_R16_UNORM
+        | WMT_PIXEL_FORMAT_R16_SNORM
+        | WMT_PIXEL_FORMAT_R16_UINT
+        | WMT_PIXEL_FORMAT_R16_SINT
+        | WMT_PIXEL_FORMAT_R16_FLOAT => WMT_PIXEL_FORMAT_R16_UINT,
+        WMT_PIXEL_FORMAT_RG8_UNORM
+        | WMT_PIXEL_FORMAT_RG8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_RG8_SNORM
+        | WMT_PIXEL_FORMAT_RG8_UINT
+        | WMT_PIXEL_FORMAT_RG8_SINT => WMT_PIXEL_FORMAT_RG8_UINT,
+        WMT_PIXEL_FORMAT_R32_UINT | WMT_PIXEL_FORMAT_R32_SINT | WMT_PIXEL_FORMAT_R32_FLOAT => {
+            WMT_PIXEL_FORMAT_R32_UINT
+        }
+        WMT_PIXEL_FORMAT_RG16_UNORM
+        | WMT_PIXEL_FORMAT_RG16_SNORM
+        | WMT_PIXEL_FORMAT_RG16_UINT
+        | WMT_PIXEL_FORMAT_RG16_SINT
+        | WMT_PIXEL_FORMAT_RG16_FLOAT => WMT_PIXEL_FORMAT_RG16_UINT,
+        WMT_PIXEL_FORMAT_RGBA8_UNORM
+        | WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_RGBA8_SNORM
+        | WMT_PIXEL_FORMAT_RGBA8_UINT
+        | WMT_PIXEL_FORMAT_RGBA8_SINT
+        | WMT_PIXEL_FORMAT_BGRA8_UNORM
+        | WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB
+        | WMT_PIXEL_FORMAT_BGRX8_UNORM
+        | WMT_PIXEL_FORMAT_BGRX8_UNORM_S_RGB => WMT_PIXEL_FORMAT_RGBA8_UINT,
+        WMT_PIXEL_FORMAT_RGB10A2_UNORM | WMT_PIXEL_FORMAT_RGB10A2_UINT => {
+            WMT_PIXEL_FORMAT_RGB10A2_UINT
+        }
+        WMT_PIXEL_FORMAT_RG32_UINT | WMT_PIXEL_FORMAT_RG32_SINT | WMT_PIXEL_FORMAT_RG32_FLOAT => {
+            WMT_PIXEL_FORMAT_RG32_UINT
+        }
+        WMT_PIXEL_FORMAT_RGBA16_UNORM
+        | WMT_PIXEL_FORMAT_RGBA16_SNORM
+        | WMT_PIXEL_FORMAT_RGBA16_UINT
+        | WMT_PIXEL_FORMAT_RGBA16_SINT
+        | WMT_PIXEL_FORMAT_RGBA16_FLOAT => WMT_PIXEL_FORMAT_RGBA16_UINT,
+        WMT_PIXEL_FORMAT_RGBA32_UINT
+        | WMT_PIXEL_FORMAT_RGBA32_SINT
+        | WMT_PIXEL_FORMAT_RGBA32_FLOAT => WMT_PIXEL_FORMAT_RGBA32_UINT,
+        _ => WMT_PIXEL_FORMAT_INVALID,
+    }
+}
+
+/// Whether a format is an 8-bit unsigned-normalized one a render target can be cleared in as such.
+#[must_use]
+pub const fn is_unorm8_rt(format: u32) -> bool {
+    matches!(
+        format,
+        WMT_PIXEL_FORMAT_A8_UNORM
+            | WMT_PIXEL_FORMAT_R8_UNORM
+            | WMT_PIXEL_FORMAT_RG8_UNORM
+            | WMT_PIXEL_FORMAT_RGBA8_UNORM
+            | WMT_PIXEL_FORMAT_BGRA8_UNORM
+            | WMT_PIXEL_FORMAT_BGRX8_UNORM
+    )
+}
+
+/// Whether a format is an integer one.
+#[must_use]
+pub const fn is_integer(format: u32) -> bool {
+    matches!(
+        format,
+        WMT_PIXEL_FORMAT_R8_UINT
+            | WMT_PIXEL_FORMAT_R8_SINT
+            | WMT_PIXEL_FORMAT_R16_UINT
+            | WMT_PIXEL_FORMAT_R16_SINT
+            | WMT_PIXEL_FORMAT_RG8_UINT
+            | WMT_PIXEL_FORMAT_RG8_SINT
+            | WMT_PIXEL_FORMAT_R32_UINT
+            | WMT_PIXEL_FORMAT_R32_SINT
+            | WMT_PIXEL_FORMAT_RG16_UINT
+            | WMT_PIXEL_FORMAT_RG16_SINT
+            | WMT_PIXEL_FORMAT_RGBA8_UINT
+            | WMT_PIXEL_FORMAT_RGBA8_SINT
+            | WMT_PIXEL_FORMAT_RGB10A2_UINT
+            | WMT_PIXEL_FORMAT_RG32_UINT
+            | WMT_PIXEL_FORMAT_RG32_SINT
+            | WMT_PIXEL_FORMAT_RGBA16_UINT
+            | WMT_PIXEL_FORMAT_RGBA16_SINT
+            | WMT_PIXEL_FORMAT_RGBA32_UINT
+            | WMT_PIXEL_FORMAT_RGBA32_SINT
+            | WMT_PIXEL_FORMAT_STENCIL8
+    )
+}
+
+/// Clamps a clear colour to what its render target format can hold, as `SanitizeRTVClearColor`.
+///
+/// The half-float formats clamp to the half range and the integer formats to theirs, a NaN
+/// becoming 0; an infinity passes through a half-float format. The clamps take `f32`, as the
+/// C++'s `float` parameters do.
+pub fn sanitize_clear_color(format: u32, color: &mut WMTClearColor) {
+    match format {
+        WMT_PIXEL_FORMAT_R16_FLOAT
+        | WMT_PIXEL_FORMAT_RG16_FLOAT
+        | WMT_PIXEL_FORMAT_RGBA16_FLOAT => {
+            map_channels(color, |v| clamp_float(v, -HALF_MAX, HALF_MAX));
+        }
+        WMT_PIXEL_FORMAT_R8_UINT | WMT_PIXEL_FORMAT_RG8_UINT | WMT_PIXEL_FORMAT_RGBA8_UINT => {
+            map_channels(color, |v| clamp_integer(v, 0.0, f64::from(u8::MAX)));
+        }
+        WMT_PIXEL_FORMAT_R16_UINT | WMT_PIXEL_FORMAT_RG16_UINT | WMT_PIXEL_FORMAT_RGBA16_UINT => {
+            map_channels(color, |v| clamp_integer(v, 0.0, f64::from(u16::MAX)));
+        }
+        WMT_PIXEL_FORMAT_R32_UINT | WMT_PIXEL_FORMAT_RG32_UINT | WMT_PIXEL_FORMAT_RGBA32_UINT => {
+            map_channels(color, |v| clamp_integer(v, 0.0, f64::from(u32::MAX)));
+        }
+        WMT_PIXEL_FORMAT_R8_SINT | WMT_PIXEL_FORMAT_RG8_SINT | WMT_PIXEL_FORMAT_RGBA8_SINT => {
+            map_channels(color, |v| {
+                clamp_integer(v, f64::from(i8::MIN), f64::from(i8::MAX))
+            });
+        }
+        WMT_PIXEL_FORMAT_R16_SINT | WMT_PIXEL_FORMAT_RG16_SINT | WMT_PIXEL_FORMAT_RGBA16_SINT => {
+            map_channels(color, |v| {
+                clamp_integer(v, f64::from(i16::MIN), f64::from(i16::MAX))
+            });
+        }
+        WMT_PIXEL_FORMAT_R32_SINT | WMT_PIXEL_FORMAT_RG32_SINT | WMT_PIXEL_FORMAT_RGBA32_SINT => {
+            map_channels(color, |v| {
+                clamp_integer(v, f64::from(i32::MIN), f64::from(i32::MAX))
+            });
+        }
+        _ => {}
+    }
+}
+
+/// The capabilities of every format on a device, sorted by format: `(format, CAP_* bits)`.
+///
+/// `supports_family` answers `MTLDevice supportsFamily:` for a `WMTGPUFamily` and `bc`
+/// `supportsBCTextureCompression`. `None` for a device that is neither Apple7 nor Mac2, which the
+/// C++ answers by throwing `MTLD3DError("Invalid MTLDevice")`.
+#[must_use]
+pub fn capabilities(supports_family: impl Fn(u32) -> bool, bc: bool) -> Option<Vec<(u32, u32)>> {
+    let mut tables: Vec<&[(u32, u32)]> = Vec::new();
+    if supports_family(WMTGPU_FAMILY_APPLE7) {
+        tables.push(APPLE7);
+        if bc {
+            tables.push(APPLE7_BC);
+        }
+        if supports_family(WMTGPU_FAMILY_APPLE8) {
+            tables.push(APPLE8);
+            if supports_family(WMTGPU_FAMILY_APPLE9) {
+                tables.push(APPLE9);
+            }
+        }
+    } else if supports_family(WMTGPU_FAMILY_MAC2) {
+        tables.push(MAC2);
+    } else {
+        return None;
+    }
+    // A format a table lists twice, or two tables list, has its capabilities joined.
+    let mut merged = BTreeMap::new();
+    for &(format, caps) in tables.iter().copied().flatten() {
+        *merged.entry(format).or_insert(0) |= caps;
+    }
+    Some(merged.into_iter().collect())
+}
+
+export! {
+    /// `MTLQueryDXGIFormat`: writes the description of a DXGI format and returns its `HRESULT`.
+    ///
+    /// # Safety
+    ///
+    /// `out` points to a writable `MTL_DXGI_FORMAT_DESC`.
+    unsafe fn dxmt_format_query_dxgi(dxgi_format: u32, out: *mut MtlDxgiFormatDesc) -> i32 {
+        let (result, desc) = query_dxgi(dxgi_format);
+        // SAFETY: `out` is writable, by this function's contract.
+        unsafe { out.write(desc) };
+        result
+    }
+}
+
+export! {
+    /// `Forget_sRGB`.
+    fn dxmt_format_forget_srgb(format: u32) -> u32 {
+        forget_srgb(format)
+    }
+}
+
+export! {
+    /// `Recall_sRGB`.
+    fn dxmt_format_recall_srgb(format: u32) -> u32 {
+        recall_srgb(format)
+    }
+}
+
+export! {
+    /// `IsBlockCompressionFormat`.
+    fn dxmt_format_is_bc(format: u32) -> bool {
+        is_bc(format)
+    }
+}
+
+export! {
+    /// `DepthStencilPlanarFlags`.
+    fn dxmt_format_depth_stencil_planar_flags(format: u32) -> u32 {
+        depth_stencil_planar_flags(format)
+    }
+}
+
+export! {
+    /// `MTLGetTexelSize`.
+    fn dxmt_format_texel_size(format: u32) -> u32 {
+        texel_size(format)
+    }
+}
+
+export! {
+    /// `MTLGetUnsignedIntegerFormat`.
+    fn dxmt_format_unsigned_integer(format: u32) -> u32 {
+        unsigned_integer(format)
+    }
+}
+
+export! {
+    /// `IsUnorm8RenderTargetFormat`.
+    fn dxmt_format_is_unorm8_rt(format: u32) -> bool {
+        is_unorm8_rt(format)
+    }
+}
+
+export! {
+    /// `IsIntegerFormat`.
+    fn dxmt_format_is_integer(format: u32) -> bool {
+        is_integer(format)
+    }
+}
+
+export! {
+    /// `SanitizeRTVClearColor`.
+    ///
+    /// # Safety
+    ///
+    /// `color` points to a writable `WMTClearColor`.
+    unsafe fn dxmt_format_sanitize_clear_color(format: u32, color: *mut WMTClearColor) {
+        // SAFETY: `color` is writable, by this function's contract.
+        if let Some(color) = unsafe { color.as_mut() } {
+            sanitize_clear_color(format, color);
+        }
+    }
+}
+
+export! {
+    /// `FormatCapabilityInspector::Inspect`'s device queries.
+    ///
+    /// Writes the first `capacity` of the device's `(format, caps)` entries to `out`, sorted by
+    /// format, and returns how many entries there are, or [`INVALID_DEVICE`] for a device that is
+    /// neither Apple7 nor Mac2 (the C++ then throws).
+    ///
+    /// # Safety
+    ///
+    /// `device` is a live `MTLDevice` handle and `out` points to `capacity` writable entries (it
+    /// may be anything when `capacity` is 0).
+    unsafe fn dxmt_format_capabilities(
+        device: u64,
+        out: *mut DxmtFormatCapability,
+        capacity: usize
+    ) -> usize {
+        let supports_family = |family| {
+            // SAFETY: `device` is a live device handle, by this function's contract.
+            unsafe { MTLDevice_supportsFamily(device, family) }
+        };
+        // SAFETY: as above.
+        let bc = unsafe { MTLDevice_supportsBCTextureCompression(device) };
+        let Some(caps) = capabilities(supports_family, bc) else {
+            return INVALID_DEVICE;
+        };
+        let count = caps.len();
+        let entries: Vec<DxmtFormatCapability> = caps
+            .into_iter()
+            .take(capacity)
+            .map(|(format, caps)| DxmtFormatCapability { format, caps })
+            .collect();
+        if !entries.is_empty() {
+            // SAFETY: `out` has room for `capacity` entries, by this function's contract, and
+            // `entries` holds at most that many in memory of its own.
+            unsafe { core::ptr::copy_nonoverlapping(entries.as_ptr(), out, entries.len()) };
+        }
+        count
+    }
+}
+
+/// A DXGI table row.
+const fn row(
+    pixel_format: u32,
+    attribute_format: u32,
+    bytes_per_texel: u32,
+    planar_count: u16,
+    flag: u16,
+) -> MtlDxgiFormatDesc {
+    MtlDxgiFormatDesc {
+        pixel_format,
+        attribute_format,
+        bytes_per_texel,
+        planar_count,
+        flag,
+    }
+}
+
+/// `ClampFloatRTVClearColor`: clamps to the range, an infinity passing through.
+fn clamp_float(value: f32, min: f32, max: f32) -> f64 {
+    if value.is_infinite() {
+        return f64::from(value);
+    }
+    f64::from(value.clamp(min, max))
+}
+
+/// `ClampIntegerRTVClearColor`: clamps to the range, a NaN becoming 0.
+fn clamp_integer(value: f32, min: f64, max: f64) -> f64 {
+    if value.is_nan() {
+        return 0.0;
+    }
+    f64::from(value).clamp(min, max)
+}
+
+/// Replaces each channel with `clamp` of it as an `f32`, the C++'s `float` parameter.
+fn map_channels(color: &mut WMTClearColor, clamp: impl Fn(f32) -> f64) {
+    color.r = clamp(f64_to_f32(color.r));
+    color.g = clamp(f64_to_f32(color.g));
+    color.b = clamp(f64_to_f32(color.b));
+    color.a = clamp(f64_to_f32(color.a));
+}
+
+#[cfg(test)]
+mod tests;
