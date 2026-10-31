@@ -14,6 +14,7 @@ use airconv_ir::{
         MemoryAccess as Access, MslScalar, MslType, MslValue, texture_kind,
     },
     container::Container,
+    initialize::DxbcShader,
     root_signature::{self, Payload, RootSignature},
     shader_info::{
         ConstantBufferInfo, ResourceRange, SamplerInfo, ShaderFlags, ShaderInfo,
@@ -23,14 +24,20 @@ use airconv_ir::{
 };
 
 use super::{
-    binding_sm50::{get_argument, is_buffer, srv_texture, table_input, uav_texture},
+    binding_sm50::{
+        get_argument, is_buffer, setup_binding_table2, srv_texture, table_input, uav_texture,
+    },
     converter::{
         BindingMap, BufferDescriptor, ConstantBufferDescriptor, CounterDescriptor,
         SamplerDescriptor, TextureDescriptor, air_kind, lowered,
     },
 };
 use crate::{
-    abi::Sm50ShaderRootSignatureData,
+    abi::{
+        ArgChain, SM50_BINDING_INDEX_ARGUMENT_TABLE, SM50_BINDING_INDEX_CONSTANT_BUFFER,
+        SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
+        Sm50ShaderRootSignatureData,
+    },
     air::{
         builder::AirBuilder,
         signature::{Handles, build_argument_buffer},
@@ -715,6 +722,49 @@ pub fn setup_binding_rootsig<'s>(
         raster_order_group: None,
     }));
     Ok(map)
+}
+
+/// A standalone stage's bindings: the chain's root signature's when it has one, else D3D11's.
+///
+/// `setup_binding_rootsig` and `setup_binding_table2` at their default slots, as the compute,
+/// vertex and pixel compiles call them.
+///
+/// # Errors
+///
+/// An unreadable root signature and what the binding setup refuses.
+pub fn setup_bindings<'s, 'cx>(
+    shader: &'s DxbcShader,
+    desc: &mut FunctionSignatureDesc,
+    m: &Module<'_>,
+    handles: &mut Handles,
+    args: &ArgChain<'_>,
+) -> Result<Box<dyn BindingMap<'cx> + 's>, Error> {
+    Ok(match args.root_signature {
+        Some(rootsig) => {
+            // SAFETY: the chain's root signature (`SM50Compile`'s contract).
+            let bytecode = unsafe { root_signature_bytes(rootsig) };
+            Box::new(setup_binding_rootsig(
+                &shader.cfg.info,
+                desc,
+                m,
+                handles,
+                shader.program_type,
+                bytecode,
+                (
+                    SM50_BINDING_INDEX_ROOT_ARGUMENTS,
+                    SM50_BINDING_INDEX_STATIC_SAMPLERS,
+                ),
+            )?)
+        }
+        None => Box::new(setup_binding_table2(
+            shader,
+            desc,
+            m,
+            handles,
+            SM50_BINDING_INDEX_CONSTANT_BUFFER,
+            SM50_BINDING_INDEX_ARGUMENT_TABLE,
+        )?),
+    })
 }
 
 /// The root signature of a container's `RTS0` part.

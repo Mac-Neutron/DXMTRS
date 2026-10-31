@@ -3037,6 +3037,21 @@ pub const fn lowered(kind: Kind) -> Kind {
     }
 }
 
+/// An internal inconsistency or a register no declaration made.
+#[must_use]
+pub fn invalid(what: &str) -> Error {
+    Error::new(format!("invalid operation: {what}.").as_bytes())
+}
+
+/// The value, or [`invalid`]'s error naming it.
+///
+/// # Errors
+///
+/// `v` is `None`.
+pub fn req<'cx>(v: Option<Val<'cx>>, what: &str) -> Result<Val<'cx>, Error> {
+    v.ok_or_else(|| invalid(what))
+}
+
 /// What an operand index reads: an integer register's one component.
 const fn index_common(component: u8) -> SrcOperandCommon {
     SrcOperandCommon {
@@ -3115,16 +3130,6 @@ struct SampleCoord<'cx> {
     array_index: Option<Val<'cx>>,
     sampler: Val<'cx>,
     derivatives: Option<(Val<'cx>, Val<'cx>)>,
-}
-
-/// An internal inconsistency or a register no declaration made.
-fn invalid(what: &str) -> Error {
-    Error::new(format!("invalid operation: {what}.").as_bytes())
-}
-
-/// The value, or [`invalid`]'s error naming it.
-fn req<'cx>(v: Option<Val<'cx>>, what: &str) -> Result<Val<'cx>, Error> {
-    v.ok_or_else(|| invalid(what))
 }
 
 /// The lowest set bit's index (`__builtin_ctz` of a nonzero mask).

@@ -15,7 +15,7 @@ use crate::{abi::ArgChain, api::Error, dxbc, llvm::Context, module, shader::Shad
 /// # Errors
 ///
 /// What the translation refuses, the C++'s texts for a stage that is not compiled alone, or
-/// "not ported" (vertex, pixel and DXIL shaders, until their lowering lands).
+/// "not ported" (DXIL shaders, until their lowering lands).
 pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<u8>, Error> {
     let dxbc = match shader {
         Shader::Dxbc(dxbc) => dxbc,
@@ -26,7 +26,8 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
     let m = module::initialize(&cx, c"shader.air");
     match dxbc.ir.program_type {
         program_type::COMPUTE => dxbc::cs::convert(&dxbc.ir, name.to_bytes(), &m, args)?,
-        program_type::PIXEL | program_type::VERTEX => return Err(Error::not_ported()),
+        program_type::PIXEL => dxbc::ps::convert(&dxbc.ir, name.to_bytes(), &m, args)?,
+        program_type::VERTEX => dxbc::vs::convert(&dxbc.ir, name.to_bytes(), &m, args)?,
         program_type::HULL | program_type::DOMAIN => {
             return Err(Error::new(
                 b"Hull and domain shader cannot be independently converted.",

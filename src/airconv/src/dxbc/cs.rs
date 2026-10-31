@@ -6,21 +6,16 @@
 //! buffer, the thread ids the signature handlers ask for, the blocks, and the entry under
 //! `air.kernel`.
 
-use airconv_ir::{handlers::SignatureHandler, initialize::DxbcShader, tokens::program_type};
+use airconv_ir::{handlers::SignatureHandler, initialize::DxbcShader};
 
 use super::{
-    binding_rootsig::{root_signature_bytes, setup_binding_rootsig},
-    binding_sm50::setup_binding_table2,
+    binding_rootsig::setup_bindings,
     blocks,
-    converter::{BindingMap, Converter},
+    converter::Converter,
     resources::{Resources, setup_immediate_constant_buffer, setup_temp_register, setup_tgsm},
 };
 use crate::{
-    abi::{
-        ArgChain, SM50_BINDING_INDEX_ARGUMENT_TABLE, SM50_BINDING_INDEX_CONSTANT_BUFFER,
-        SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
-        SM50_SHADER_METAL_310,
-    },
+    abi::{ArgChain, SM50_SHADER_METAL_310},
     air::{
         builder::AirBuilder,
         metadata::{add_entry, set_metal_version},
@@ -55,32 +50,7 @@ pub fn convert(
     let types = AirTypes::new(tcx);
     let mut handles = Handles::default();
 
-    let binding: Box<dyn BindingMap<'_> + '_> = match args.root_signature {
-        Some(rootsig) => {
-            // SAFETY: the chain's root signature (`SM50Compile`'s contract).
-            let bytecode = unsafe { root_signature_bytes(rootsig) };
-            Box::new(setup_binding_rootsig(
-                info,
-                &mut desc,
-                m,
-                &mut handles,
-                program_type::COMPUTE,
-                bytecode,
-                (
-                    SM50_BINDING_INDEX_ROOT_ARGUMENTS,
-                    SM50_BINDING_INDEX_STATIC_SAMPLERS,
-                ),
-            )?)
-        }
-        None => Box::new(setup_binding_table2(
-            shader,
-            &mut desc,
-            m,
-            &mut handles,
-            SM50_BINDING_INDEX_CONSTANT_BUFFER,
-            SM50_BINDING_INDEX_ARGUMENT_TABLE,
-        )?),
-    };
+    let binding = setup_bindings(shader, &mut desc, m, &mut handles, args)?;
     setup_tgsm(info, &mut res, &types, m)?;
 
     let (function, entry) = create_function(m, &desc, name, false, &handles)?;

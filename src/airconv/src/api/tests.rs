@@ -69,9 +69,8 @@ fn every_export_answers_not_ported() {
 
     // Every call below: the handles are live shaders, the chains are null, `name` is a C
     // string, and `out` and the error are writable.
+    // `SM50Compile` of a DXBC pixel shader is ported (D2): `entry::tests` compile it.
     let answers = [
-        // SAFETY: as above.
-        answer(|e| unsafe { sm50_compile(vs, ptr::null_mut(), name, out, e) }),
         // SAFETY: as above.
         answer(|e| unsafe {
             sm50_compile_tessellation_pipeline_hull(vs, hs, ptr::null_mut(), name, out, e)

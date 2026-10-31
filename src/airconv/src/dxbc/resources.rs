@@ -200,6 +200,31 @@ pub fn setup_temp_register<'cx>(
     }
 }
 
+/// A vertex or pixel shader's input and output registers, each an array of `<4 x i32>`.
+///
+/// The allocas and their `<4 x float>` views, input first, with their register counts.
+pub fn setup_io_registers<'cx>(
+    res: &mut Resources<'cx>,
+    types: &AirTypes,
+    b: &Builder<'cx>,
+    max_input_register: u32,
+    max_output_register: u32,
+) {
+    let tcx = b.cx().tcx();
+    let vec4_file = |count| {
+        let ptr_int4 = b.alloca(tcx.array(types.int4, count), c"");
+        let ptr_float4 = b.bitcast(ptr_int4, tcx.ptr(tcx.array(types.float4, count), 0));
+        RegisterFile {
+            ptr_int4: Some(ptr_int4),
+            ptr_float4: Some(ptr_float4),
+        }
+    };
+    res.input = vec4_file(max_input_register);
+    res.input_element_count = max_input_register;
+    res.output = vec4_file(max_output_register);
+    res.output_element_count = max_output_register;
+}
+
 /// `len` components as an `i32` alloca and its `float` view.
 fn register_file<'cx>(b: &Builder<'cx>, types: &AirTypes, len: u32) -> RegisterFile<'cx> {
     let tcx = b.cx().tcx();
