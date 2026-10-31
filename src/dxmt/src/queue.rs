@@ -31,7 +31,7 @@ use winemetal_sys::{
 
 use crate::{
     arena::{BlockPool, Commands},
-    encoder::Encoder,
+    encoder::{Encoder, QueryBuffers},
 };
 
 /// The encode thread's name.
@@ -336,8 +336,10 @@ impl Queue {
         // A failed start drops `this`, whose `drop` stops and waits for what started.
         let shared = Arc::clone(&this.shared);
         let mut encoder = Encoder::new(device, this.config.encoder_heap);
+        // Borrowed: `drop` waits for the encode thread before the event is released.
+        let event = this.shared_event();
         this.threads.push(spawn(Some(ENCODE_THREAD), move || {
-            encode(&shared, &mut encoder);
+            encode(&shared, &mut encoder, event);
         })?);
         let shared = Arc::clone(&this.shared);
         this.threads
@@ -474,9 +476,11 @@ fn spawn(name: Option<&str>, f: impl FnOnce() + Send + 'static) -> io::Result<Jo
 }
 
 /// `dxmt-encode-thread`: each committed chunk's commands into a command buffer, in order.
-// ponytail: the capture, the resource initializer's wait and the encoder's flush join this loop
-// with the pieces that own them.
-fn encode(shared: &Shared, encoder: &mut Encoder) {
+///
+/// The encoder's flush encodes the chunk's passes and signals `event` at the chunk's value.
+// ponytail: the capture, the resource initializer's wait and the queries' readbacks (E4's: the
+// buffers the flush takes) join this loop with the pieces that own them.
+fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
     sync::set_time_critical();
     let queue = shared.queue.as_ref().map_or(0, Obj::handle);
     let mut seq = 1;
@@ -491,6 +495,10 @@ fn encode(shared: &Shared, encoder: &mut Encoder) {
         chunk.cmdbuf = unsafe { Obj::retain(cmdbuf) };
         encoder.begin_chunk(seq);
         chunk.commands.run(encoder);
+        // SAFETY: the command buffer just made, or nil; the queue's shared event, or nil, which
+        // `drop` releases only after this thread ends; the allocations the passes name are
+        // retained by the encoder until `end_chunk` hands them to the chunk.
+        unsafe { encoder.flush(cmdbuf, event, chunk.event_id, &QueryBuffers::NONE) };
         encoder.end_chunk(&mut chunk.retained);
         // SAFETY: the command buffer just made, or nil, which ignores it.
         unsafe { MTLCommandBuffer_commit(cmdbuf) };

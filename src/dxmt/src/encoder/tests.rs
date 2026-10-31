@@ -40,7 +40,7 @@ fn render_pass(args: &mut [u64]) -> Encoder {
     let len = size_of_val(args);
     // SAFETY: `args` outlives the encoder in every test and nothing else touches it meanwhile.
     let buffer = unsafe { ArgumentBuffer::new(NonNull::from(args).cast(), len, 0x77, ARGS_AT) };
-    encoder.start_pass(PassKind::Render, Some(buffer));
+    encoder.start_render_pass(0, 0, 0, Some(buffer));
     encoder
 }
 
@@ -182,10 +182,10 @@ fn a_table_past_the_buffer_stops() {
 fn track_follows_the_stage() {
     let mut encoder = Encoder::headless();
     let mut tracker = GenericAccessTracker::default();
-    encoder.start_pass(PassKind::Compute, None);
+    encoder.start_compute_pass(None);
     track::<{ stage::COMPUTE }>(encoder.pass.as_mut(), &mut tracker, Access::WRITE);
     encoder.pass = None;
-    encoder.start_pass(PassKind::Render, None);
+    encoder.start_render_pass(0, 0, 0, None);
     let pass = encoder.pass.as_mut().unwrap();
     assert_eq!((pass.id_vertex, pass.id), (257, 258));
     track::<{ stage::VERTEX }>(Some(&mut *pass), &mut tracker, Access::READ);

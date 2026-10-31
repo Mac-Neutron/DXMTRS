@@ -16,22 +16,43 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use pass::PassKind;
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
-    MTLDevice_newFence, MTLDevice_newSamplerState, Obj,
+    MTLDevice_newEvent, MTLDevice_newFence, MTLDevice_newSamplerState, Obj,
     wire::{
-        MemPtr, WMT_BLIT_COMMAND_NOP, WMT_COMPARE_FUNCTION_NEVER, WMT_COMPUTE_COMMAND_NOP,
-        WMT_RENDER_COMMAND_NOP, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        MemPtr, WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK, WMT_SAMPLER_MIN_MAG_FILTER_NEAREST,
         WMT_SAMPLER_MIP_FILTER_NOT_MIPMAPPED, WMTSamplerInfo, WmtcmdBase,
-        WmtcmdComputeSetbufferoffset, WmtcmdComputeUseresource, WmtcmdRenderSetbufferoffset,
+        WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
+        WmtcmdBlitCopyFromBufferToTextureWithblitoption, WmtcmdBlitCopyFromTextureToBuffer,
+        WmtcmdBlitCopyFromTextureToBufferWithblitoption, WmtcmdBlitCopyFromTextureToTexture,
+        WmtcmdBlitCopyTexture, WmtcmdBlitFenceOp, WmtcmdBlitFillbuffer, WmtcmdBlitGenerateMipmaps,
+        WmtcmdBlitResetcommands, WmtcmdBlitResolvecounters, WmtcmdComputeDispatch,
+        WmtcmdComputeDispatchIndirect, WmtcmdComputeExecutecommands, WmtcmdComputeFenceOp,
+        WmtcmdComputeMemoryBarrier, WmtcmdComputeSetbuffer, WmtcmdComputeSetbufferoffset,
+        WmtcmdComputeSetbytes, WmtcmdComputeSetpso, WmtcmdComputeSettexture,
+        WmtcmdComputeUseresource, WmtcmdRenderDispatchThreadsPerTile, WmtcmdRenderDraw,
+        WmtcmdRenderDrawIndexed, WmtcmdRenderDrawIndexedIndirect, WmtcmdRenderDrawIndirect,
+        WmtcmdRenderDrawMeshthreadgroups, WmtcmdRenderDrawMeshthreadgroupsIndirect,
+        WmtcmdRenderDxmtGeometryDraw, WmtcmdRenderDxmtGeometryDrawIndexed,
+        WmtcmdRenderDxmtGeometryDrawIndexedIndirect, WmtcmdRenderDxmtGeometryDrawIndirect,
+        WmtcmdRenderDxmtTessellationMeshDraw, WmtcmdRenderDxmtTessellationMeshDrawIndexed,
+        WmtcmdRenderDxmtTessellationMeshDrawIndexedIndirect,
+        WmtcmdRenderDxmtTessellationMeshDrawIndirect, WmtcmdRenderExecutecommands,
+        WmtcmdRenderFenceOp, WmtcmdRenderMemoryBarrier, WmtcmdRenderSetblendcolor,
+        WmtcmdRenderSetbuffer, WmtcmdRenderSetbufferoffset, WmtcmdRenderSetbytes,
+        WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
+        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetsampler, WmtcmdRenderSetscissorrect,
+        WmtcmdRenderSetscissorrects, WmtcmdRenderSetstencilref, WmtcmdRenderSettexture,
+        WmtcmdRenderSetviewport, WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode,
         WmtcmdRenderUseresource,
     },
 };
 
 use crate::{
     arena::{BlockPool, Commands},
-    deptrack::{Access, BarrierState, FenceSet, GenericAccessTracker, PARITY_LANE},
+    deptrack::{Access, FenceLocalityCheck, GenericAccessTracker, PARITY_LANE},
     resource::{
         Buffer, BufferAllocation, BufferAllocationFlags, BufferView, BufferViewKey, Texture,
         TextureAllocation, TextureAllocationFlags, TextureView, TextureViewKey,
@@ -39,6 +60,9 @@ use crate::{
 };
 
 mod argument;
+mod flush;
+mod optimize;
+mod pass;
 mod resident;
 
 /// Shader stages: the C++'s six bindings sets.
@@ -126,13 +150,6 @@ pub enum ResourceView {
     },
 }
 
-/// What kind of Metal pass a [`Pass`] records.
-pub enum PassKind {
-    Render,
-    Compute,
-    Blit,
-}
-
 /// A pass's slice of the argument-buffer ring: memory both the CPU and the GPU reach.
 pub struct ArgumentBuffer {
     start: NonNull<u64>,
@@ -169,40 +186,11 @@ impl ArgumentBuffer {
     }
 }
 
-/// The pass being recorded: its ids, waits, barriers, argument buffer and records.
-///
-/// The C++'s `EncoderData`, and for a render pass its vertex half's id and waits.
-pub struct Pass {
-    kind: PassKind,
-    id: u64,
-    /// The vertex half's id, `id - 1` (render passes).
-    id_vertex: u64,
-    fence_wait: FenceSet,
-    fence_wait_vertex: FenceSet,
-    barriers: BarrierState,
-    arguments: Option<ArgumentBuffer>,
-    records: Records,
-    emulated_stream_output: bool,
-}
-
-impl Pass {
-    #[must_use]
-    pub const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// Whether the pass draws through the emulated stream output (`encode_stream_output`).
-    #[must_use]
-    pub const fn uses_emulated_stream_output(&self) -> bool {
-        self.emulated_stream_output
-    }
-
-    /// The pass's first record, a no-op the others follow: what Metal's encoder is handed.
-    #[must_use]
-    pub const fn records(&self) -> NonNull<WmtcmdBase> {
-        self.records.head
-    }
-}
+pub use flush::QueryBuffers;
+pub use pass::{
+    Attachment, ColorTarget, DepthTarget, Pass, RenderTargets, RenderUses, StencilTarget, Target,
+    TemporalTextures,
+};
 
 /// The encode thread's state: bindings, the pass being recorded and the dependency tracking.
 pub struct Encoder {
@@ -221,6 +209,16 @@ pub struct Encoder {
     fences: Box<[Option<Obj>]>,
     next_id: u64,
     pass: Option<Pass>,
+    /// The passes ended in this chunk, in order: the C++'s encoder list.
+    // ponytail: a Vec whose capacity survives the flush, not the C++'s list in the encoder's
+    // memory; a pass's kind boxes only a render pass's targets.
+    passes: Vec<Pass>,
+    locality: FenceLocalityCheck,
+    /// The event a timestamp sample signals and waits on, so Metal keeps the passes in order.
+    barrier_event: Option<Obj>,
+    barrier_index: u64,
+    /// The barrier bits a pass ignores inside itself (`setIntrapassBarrierControl`).
+    intrapass_barriers: u64,
     /// The memory the passes' records live in until the chunk's next reset.
     heap: Commands,
     /// The chunk being encoded.
@@ -278,7 +276,13 @@ impl Encoder {
                 unsafe { Obj::adopt(fence) }
             })
             .collect();
-        Self::with(heap, fences, sampler, info.gpu_resource_id, Some(cbuffer))
+        // SAFETY: `device` holds a live device.
+        let event = unsafe { MTLDevice_newEvent(device.handle()) };
+        // SAFETY: `newEvent` returns a +1 handle or null.
+        let event = unsafe { Obj::adopt(event) };
+        let mut encoder = Self::with(heap, fences, sampler, info.gpu_resource_id, Some(cbuffer));
+        encoder.barrier_event = event;
+        encoder
     }
 
     /// An encoder without Metal objects: no dummies (unbound slots read address 0), no fences.
@@ -293,6 +297,9 @@ impl Encoder {
     /// Allocations the encoder tracked that died since are forgotten once enough are tracked.
     pub fn begin_chunk(&mut self, seq: u64) {
         debug_assert!(self.pass.is_none(), "a chunk ends between passes");
+        debug_assert!(self.passes.is_empty(), "the last chunk was flushed");
+        // Passes not flushed would name records the reset frees.
+        self.passes.clear();
         self.seq = seq;
         self.heap.reset();
         self.buffers_used.prune();
@@ -302,43 +309,6 @@ impl Encoder {
     /// Ends the chunk: the allocations its passes used go to `retained`, the chunk's.
     pub fn end_chunk(&mut self, retained: &mut Vec<Arc<dyn Send + Sync>>) {
         retained.append(&mut self.retained);
-    }
-
-    /// Starts a pass of `kind` with its slice of the argument buffer, if it encodes arguments.
-    ///
-    /// A render pass takes two ids, its vertex half's and then its own.
-    pub fn start_pass(&mut self, kind: PassKind, arguments: Option<ArgumentBuffer>) {
-        debug_assert!(self.pass.is_none(), "one pass at a time");
-        let id_vertex = self.next_id;
-        if matches!(kind, PassKind::Render) {
-            self.next_id += 1;
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        let r#type = match kind {
-            PassKind::Render => WMT_RENDER_COMMAND_NOP,
-            PassKind::Compute => WMT_COMPUTE_COMMAND_NOP,
-            PassKind::Blit => WMT_BLIT_COMMAND_NOP,
-        };
-        let head = place(
-            &mut self.heap,
-            WmtcmdBase {
-                r#type,
-                reserved: [0; 3],
-                next: NO_NEXT,
-            },
-        );
-        self.pass = Some(Pass {
-            kind,
-            id,
-            id_vertex,
-            fence_wait: FenceSet::EMPTY,
-            fence_wait_vertex: FenceSet::EMPTY,
-            barriers: BarrierState::default(),
-            arguments,
-            records: Records { head, tail: head },
-            emulated_stream_output: false,
-        });
     }
 
     /// The pass being recorded.
@@ -358,7 +328,7 @@ impl Encoder {
 
     /// Appends `cmd` to the render pass's records.
     pub fn encode_render_command<T: Record>(&mut self, cmd: T) {
-        self.append(cmd, |k| matches!(k, PassKind::Render));
+        self.append(cmd, |k| matches!(k, PassKind::Render(_)));
     }
 
     /// Appends `cmd` to the compute pass's records.
@@ -538,6 +508,11 @@ impl Encoder {
             fences,
             next_id: PARITY_LANE,
             pass: None,
+            passes: Vec::new(),
+            locality: FenceLocalityCheck::default(),
+            barrier_event: None,
+            barrier_index: 0,
+            intrapass_barriers: 0,
             heap: Commands::new(Arc::new(BlockPool::new(heap))),
             seq: 0,
             retained: Vec::new(),
@@ -854,10 +829,64 @@ macro_rules! records {
 }
 
 records!(
-    WmtcmdRenderUseresource,
-    WmtcmdComputeUseresource,
-    WmtcmdRenderSetbufferoffset,
+    WmtcmdBlitCopyFromBufferToBuffer,
+    WmtcmdBlitCopyFromBufferToTexture,
+    WmtcmdBlitCopyFromBufferToTextureWithblitoption,
+    WmtcmdBlitCopyFromTextureToBuffer,
+    WmtcmdBlitCopyFromTextureToBufferWithblitoption,
+    WmtcmdBlitCopyFromTextureToTexture,
+    WmtcmdBlitCopyTexture,
+    WmtcmdBlitFenceOp,
+    WmtcmdBlitFillbuffer,
+    WmtcmdBlitGenerateMipmaps,
+    WmtcmdBlitResetcommands,
+    WmtcmdBlitResolvecounters,
+    WmtcmdComputeDispatch,
+    WmtcmdComputeDispatchIndirect,
+    WmtcmdComputeExecutecommands,
+    WmtcmdComputeFenceOp,
+    WmtcmdComputeMemoryBarrier,
+    WmtcmdComputeSetbuffer,
     WmtcmdComputeSetbufferoffset,
+    WmtcmdComputeSetbytes,
+    WmtcmdComputeSetpso,
+    WmtcmdComputeSettexture,
+    WmtcmdComputeUseresource,
+    WmtcmdRenderDispatchThreadsPerTile,
+    WmtcmdRenderDraw,
+    WmtcmdRenderDrawIndexed,
+    WmtcmdRenderDrawIndexedIndirect,
+    WmtcmdRenderDrawIndirect,
+    WmtcmdRenderDrawMeshthreadgroups,
+    WmtcmdRenderDrawMeshthreadgroupsIndirect,
+    WmtcmdRenderDxmtGeometryDraw,
+    WmtcmdRenderDxmtGeometryDrawIndexed,
+    WmtcmdRenderDxmtGeometryDrawIndexedIndirect,
+    WmtcmdRenderDxmtGeometryDrawIndirect,
+    WmtcmdRenderDxmtTessellationMeshDraw,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexed,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexedIndirect,
+    WmtcmdRenderDxmtTessellationMeshDrawIndirect,
+    WmtcmdRenderExecutecommands,
+    WmtcmdRenderFenceOp,
+    WmtcmdRenderMemoryBarrier,
+    WmtcmdRenderSetblendcolor,
+    WmtcmdRenderSetbuffer,
+    WmtcmdRenderSetbufferoffset,
+    WmtcmdRenderSetbytes,
+    WmtcmdRenderSetdepthstencilstate,
+    WmtcmdRenderSetdsso,
+    WmtcmdRenderSetpso,
+    WmtcmdRenderSetrasterizerstate,
+    WmtcmdRenderSetsampler,
+    WmtcmdRenderSetscissorrect,
+    WmtcmdRenderSetscissorrects,
+    WmtcmdRenderSetstencilref,
+    WmtcmdRenderSettexture,
+    WmtcmdRenderSetviewport,
+    WmtcmdRenderSetviewports,
+    WmtcmdRenderSetvisibilitymode,
+    WmtcmdRenderUseresource,
 );
 
 #[cfg(test)]
