@@ -69,24 +69,17 @@ fn every_export_answers_not_ported() {
 
     // Every call below: the handles are live shaders, the chains are null, `name` is a C
     // string, and `out` and the error are writable.
-    // `SM50Compile` of a DXBC pixel shader is ported (D2): `entry::tests` compile it. So is the
-    // geometry pipeline of DXBC shaders (D4): pixel shaders in it are refused, below.
+    // `SM50Compile` of a DXBC pixel shader is ported (D2): `entry::tests` compile it. So are the
+    // tessellation pipeline (D3), whose corpus runs compile it, and the geometry pipeline (D4)
+    // of DXBC shaders: pixel shaders in the geometry pipeline are refused, below.
     let answers = [
-        // SAFETY: as above.
-        answer(|e| unsafe {
-            sm50_compile_tessellation_pipeline_hull(vs, hs, ptr::null_mut(), name, out, e)
-        }),
-        // SAFETY: as above.
-        answer(|e| unsafe {
-            sm50_compile_tessellation_pipeline_domain(hs, vs, ptr::null_mut(), name, out, e)
-        }),
         // SAFETY: as above.
         answer(|e| unsafe { dxil_compile_pass_through_vertex(ps, out, e) }),
     ];
     for (i, got) in answers.iter().enumerate() {
         assert_eq!(got, &not_ported, "export {i}");
     }
-    // The shaders are pixel shaders, which are no vertex or geometry shader.
+    // The shaders are pixel shaders, which are no vertex, hull, domain or geometry shader.
     let wrong_stage = (
         1,
         b"invalid operation: a geometry pipeline of shaders of other stages.".to_vec(),
@@ -101,6 +94,21 @@ fn every_export_answers_not_ported() {
         sm50_compile_geometry_pipeline_geometry(vs, gs, ptr::null_mut(), name, out, e)
     });
     assert_eq!(geometry, wrong_stage);
+    // The tessellation pipeline likewise: the vertex and hull shaders, then the domain's.
+    let wrong_stage = (
+        1,
+        b"invalid operation: a tessellation pipeline of shaders of other stages.".to_vec(),
+    );
+    // SAFETY: as above.
+    let hull = answer(|e| unsafe {
+        sm50_compile_tessellation_pipeline_hull(vs, hs, ptr::null_mut(), name, out, e)
+    });
+    assert_eq!(hull, wrong_stage);
+    // SAFETY: as above.
+    let domain = answer(|e| unsafe {
+        sm50_compile_tessellation_pipeline_domain(hs, vs, ptr::null_mut(), name, out, e)
+    });
+    assert_eq!(domain, wrong_stage);
     // SAFETY: nothing was written to `out`.
     assert!(unsafe { *out }.is_null());
     for handle in [vs, hs, gs, ps] {

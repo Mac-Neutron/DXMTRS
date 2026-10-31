@@ -9,5 +9,5 @@ pub mod gs;
 pub mod ps;
 pub mod replay;
 pub mod resources;
-mod ts;
+pub mod ts;
 pub mod vs;
