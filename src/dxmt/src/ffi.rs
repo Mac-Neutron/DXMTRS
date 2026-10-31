@@ -48,11 +48,26 @@ pub unsafe fn c_bytes<'a>(data: *const c_void, len: usize) -> Option<&'a [u8]> {
 
 /// Defines one function as a C export under its own name, for the ABI and guard of the target.
 ///
-/// `seam_export!(fn name(args) -> ret { body })`, or `unsafe fn` for one whose caller upholds a
-/// contract: `extern "C"` on Windows, natively `extern "C-unwind"` with an [`AbortOnPanic`]
+/// `seam_export!(fn name(args) -> ret { body })`, `const fn` for one whose body can be (const on
+/// Windows only, since natively it takes the guard), or `unsafe fn` for one whose caller upholds
+/// a contract: `extern "C"` on Windows, natively `extern "C-unwind"` with an [`AbortOnPanic`]
 /// taken first. Each seam's generated `abi.rs` pins the signature to its C header.
 #[macro_export]
 macro_rules! seam_export {
+    ($(#[$attr:meta])* const fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block) => {
+        $(#[$attr])*
+        #[cfg(windows)]
+        #[unsafe(no_mangle)]
+        const extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
+
+        $(#[$attr])*
+        #[cfg(not(windows))]
+        #[unsafe(no_mangle)]
+        extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
+            let _guard = $crate::ffi::AbortOnPanic;
+            $body
+        }
+    };
     ($(#[$attr:meta])* fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block) => {
         $(#[$attr])*
         #[cfg(windows)]
@@ -82,3 +97,7 @@ macro_rules! seam_export {
         }
     };
 }
+
+// The test runs its own binary again and reads the signal: it runs on the host.
+#[cfg(all(test, target_os = "macos"))]
+mod tests;

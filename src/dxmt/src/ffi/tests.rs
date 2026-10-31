@@ -1,0 +1,34 @@
+use std::{
+    os::unix::process::ExitStatusExt,
+    process::{Command, Stdio},
+};
+
+use super::*;
+
+/// Set in the child [`panic_under_guard_aborts`] runs: the child panics under the guard.
+const CHILD: &str = "DXMT_CORE_TEST_GUARDED_PANIC";
+
+fn guarded_panic() {
+    let _guard = AbortOnPanic;
+    panic!("a Rust panic under AbortOnPanic");
+}
+
+#[test]
+fn panic_under_guard_aborts() {
+    if std::env::var_os(CHILD).is_some() {
+        guarded_panic();
+        return;
+    }
+    let status = Command::new(std::env::current_exe().expect("the test binary's path"))
+        .args([
+            "--exact",
+            "ffi::tests::panic_under_guard_aborts",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("the test binary runs again");
+    assert_eq!(status.signal(), Some(libc::SIGABRT), "{status}");
+}

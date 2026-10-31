@@ -331,8 +331,8 @@ fn exports_of_an_off_store_do_nothing() {
 #[test]
 fn create_and_destroy_pair_up() {
     take();
-    // SAFETY: no precondition; the store is destroyed below.
-    let store = Raw(unsafe { dxmt_shader_cache_create(310, 7) });
+    // The store is destroyed below.
+    let store = Raw(dxmt_shader_cache_create(310, 7));
     assert!(!store.0.is_null());
     // Whatever the environment says, both sides are on or both off.
     assert_eq!(store.has_reader(), store.has_writer());

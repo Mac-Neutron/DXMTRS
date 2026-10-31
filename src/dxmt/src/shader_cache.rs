@@ -148,95 +148,59 @@ pub fn path(
     Some(format!("{folder}shaders_{metal_version}.db"))
 }
 
-/// Aborts the process when dropped during a panic.
-///
-/// Natively the exports are `"C-unwind"`, so that an Objective-C exception from winemetal reaches
-/// the caller's `@catch`; a Rust panic must not follow it into C++.
-#[cfg(not(windows))]
-struct AbortOnPanic;
-
-#[cfg(not(windows))]
-impl Drop for AbortOnPanic {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::process::abort();
-        }
-    }
-}
-
-/// Defines a C export: `extern "C"` on Windows, an aborting `extern "C-unwind"` natively.
-macro_rules! export {
-    ($(#[$meta:meta])* fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block) => {
-        $(#[$meta])*
-        #[cfg(windows)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
-
-        $(#[$meta])*
-        #[cfg(not(windows))]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
-            let _guard = AbortOnPanic;
-            $body
-        }
-    };
-}
-
-export! {
+crate::seam_export! {
     /// A store for `metal_version`, writer opened first, then reader.
     ///
-    /// # Safety
-    ///
-    /// None; the store is freed by [`dxmt_shader_cache_destroy`].
+    /// [`dxmt_shader_cache_destroy`] frees it.
     fn dxmt_shader_cache_create(metal_version: u32, version: u64) -> *mut c_void {
         Box::into_raw(Box::new(Store::new(metal_version, version))).cast::<c_void>()
     }
 }
 
-export! {
+crate::seam_export! {
     /// Releases the reader, then the writer, and frees the store.
     ///
     /// # Safety
     ///
     /// `store` is a store [`dxmt_shader_cache_create`] returned and nothing has destroyed.
-    fn dxmt_shader_cache_destroy(store: *mut c_void) {
+    unsafe fn dxmt_shader_cache_destroy(store: *mut c_void) {
         // SAFETY: the caller's promise: a live box, given back here.
         drop(unsafe { Box::from_raw(store.cast::<Store>()) });
     }
 }
 
-export! {
+crate::seam_export! {
     /// Whether the cache can be read.
     ///
     /// # Safety
     ///
     /// `store` is a live store from [`dxmt_shader_cache_create`].
-    fn dxmt_shader_cache_has_reader(store: *mut c_void) -> bool {
+    unsafe fn dxmt_shader_cache_has_reader(store: *mut c_void) -> bool {
         // SAFETY: the caller's promise.
         unsafe { &*store.cast::<Store>() }.has_reader()
     }
 }
 
-export! {
+crate::seam_export! {
     /// Whether the cache can be written.
     ///
     /// # Safety
     ///
     /// `store` is a live store from [`dxmt_shader_cache_create`].
-    fn dxmt_shader_cache_has_writer(store: *mut c_void) -> bool {
+    unsafe fn dxmt_shader_cache_has_writer(store: *mut c_void) -> bool {
         // SAFETY: the caller's promise.
         unsafe { &*store.cast::<Store>() }.has_writer()
     }
 }
 
-export! {
+crate::seam_export! {
     /// The data stored under the `len` bytes at `key` as a handle with its own reference, or 0.
     ///
     /// # Safety
     ///
     /// `store` is a live store from [`dxmt_shader_cache_create`]; `key` is readable for `len`
     /// bytes.
-    fn dxmt_shader_cache_read(store: *mut c_void, key: *const c_void, len: u64) -> u64 {
+    unsafe fn dxmt_shader_cache_read(store: *mut c_void, key: *const c_void, len: u64) -> u64 {
         let Ok(len) = usize::try_from(len) else {
             return 0;
         };
@@ -251,14 +215,14 @@ export! {
     }
 }
 
-export! {
+crate::seam_export! {
     /// Stores `data` under the `len` bytes at `key`; the caller keeps its reference to `data`.
     ///
     /// # Safety
     ///
     /// `store` is a live store from [`dxmt_shader_cache_create`]; `key` is readable for `len`
     /// bytes; `data` is a live object's handle.
-    fn dxmt_shader_cache_write(store: *mut c_void, key: *const c_void, len: u64, data: u64) {
+    unsafe fn dxmt_shader_cache_write(store: *mut c_void, key: *const c_void, len: u64, data: u64) {
         let Ok(len) = usize::try_from(len) else {
             return;
         };

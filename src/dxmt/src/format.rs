@@ -71,66 +71,6 @@ use winemetal_wire::{
 
 mod abi;
 
-/// Aborts the process when it is dropped during a Rust panic.
-///
-/// Natively the exports are `extern "C-unwind"`, so that an Objective-C exception from winemetal
-/// passes to the caller's `@catch`, and each opens with `let _guard = AbortOnPanic;`: a Rust
-/// panic then aborts, as `panic = "abort"` does, instead of unwinding into the C++. A foreign
-/// unwind does not set [`std::thread::panicking`], so an exception still passes.
-#[cfg(not(windows))]
-struct AbortOnPanic;
-
-#[cfg(not(windows))]
-impl Drop for AbortOnPanic {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::process::abort();
-        }
-    }
-}
-
-/// Defines a function exported to the C++ under its own name.
-///
-/// On the PE targets it is `extern "C"` (a safe one is also `const`, which its body can be);
-/// natively it is `extern "C-unwind"` and holds the abort guard. `abi.rs` asserts the result
-/// against the C declaration either way.
-macro_rules! export {
-    (
-        $(#[$meta:meta])*
-        fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block
-    ) => {
-        $(#[$meta])*
-        #[cfg(windows)]
-        #[unsafe(no_mangle)]
-        pub const extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
-
-        $(#[$meta])*
-        #[cfg(not(windows))]
-        #[unsafe(no_mangle)]
-        pub extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
-            let _guard = AbortOnPanic;
-            $body
-        }
-    };
-    (
-        $(#[$meta:meta])*
-        unsafe fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? $body:block
-    ) => {
-        $(#[$meta])*
-        #[cfg(windows)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name($($arg: $ty),*) $(-> $ret)? $body
-
-        $(#[$meta])*
-        #[cfg(not(windows))]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C-unwind" fn $name($($arg: $ty),*) $(-> $ret)? {
-            let _guard = AbortOnPanic;
-            $body
-        }
-    };
-}
-
 /// `S_OK`.
 pub const S_OK: i32 = 0;
 
@@ -1858,7 +1798,7 @@ pub fn capabilities(supports_family: impl Fn(u32) -> bool, bc: bool) -> Option<V
     Some(merged.into_iter().collect())
 }
 
-export! {
+crate::seam_export! {
     /// `MTLQueryDXGIFormat`: writes the description of a DXGI format and returns its `HRESULT`.
     ///
     /// # Safety
@@ -1872,63 +1812,63 @@ export! {
     }
 }
 
-export! {
+crate::seam_export! {
     /// `Forget_sRGB`.
-    fn dxmt_format_forget_srgb(format: u32) -> u32 {
+    const fn dxmt_format_forget_srgb(format: u32) -> u32 {
         forget_srgb(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `Recall_sRGB`.
-    fn dxmt_format_recall_srgb(format: u32) -> u32 {
+    const fn dxmt_format_recall_srgb(format: u32) -> u32 {
         recall_srgb(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `IsBlockCompressionFormat`.
-    fn dxmt_format_is_bc(format: u32) -> bool {
+    const fn dxmt_format_is_bc(format: u32) -> bool {
         is_bc(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `DepthStencilPlanarFlags`.
-    fn dxmt_format_depth_stencil_planar_flags(format: u32) -> u32 {
+    const fn dxmt_format_depth_stencil_planar_flags(format: u32) -> u32 {
         depth_stencil_planar_flags(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `MTLGetTexelSize`.
-    fn dxmt_format_texel_size(format: u32) -> u32 {
+    const fn dxmt_format_texel_size(format: u32) -> u32 {
         texel_size(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `MTLGetUnsignedIntegerFormat`.
-    fn dxmt_format_unsigned_integer(format: u32) -> u32 {
+    const fn dxmt_format_unsigned_integer(format: u32) -> u32 {
         unsigned_integer(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `IsUnorm8RenderTargetFormat`.
-    fn dxmt_format_is_unorm8_rt(format: u32) -> bool {
+    const fn dxmt_format_is_unorm8_rt(format: u32) -> bool {
         is_unorm8_rt(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `IsIntegerFormat`.
-    fn dxmt_format_is_integer(format: u32) -> bool {
+    const fn dxmt_format_is_integer(format: u32) -> bool {
         is_integer(format)
     }
 }
 
-export! {
+crate::seam_export! {
     /// `SanitizeRTVClearColor`.
     ///
     /// # Safety
@@ -1942,7 +1882,7 @@ export! {
     }
 }
 
-export! {
+crate::seam_export! {
     /// `FormatCapabilityInspector::Inspect`'s device queries.
     ///
     /// Writes the first `capacity` of the device's `(format, caps)` entries to `out`, sorted by
