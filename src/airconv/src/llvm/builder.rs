@@ -122,18 +122,24 @@ impl<'cx> Builder<'cx> {
     ///
     /// Every value a method makes comes through here. With the feature `oracle`, `ty` is checked
     /// against the value's LLVM type, and a difference is kept as the context's first error (the
-    /// slot of P5's handler), which every check of the context answers.
+    /// slot of P5's handler), which every check of the context answers. Without it the value is
+    /// only wrapped (a `const fn`: the two forms are two definitions).
+    #[cfg(feature = "oracle")]
     fn made(&self, op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
         // SAFETY: `raw` is what the builder of this context just answered, of type `ty` (each
         // caller derives it as `IRBuilder` types the instruction).
         let v = unsafe { self.cx.val(raw, ty) };
-        #[cfg(feature = "oracle")]
         if let Some(text) = crate::oracle::check(self.cx, op, v) {
             self.cx.diagnostics().error.borrow_mut().get_or_insert(text);
         }
-        #[cfg(not(feature = "oracle"))]
-        let _ = op;
         v
+    }
+
+    /// The value `raw` that `_op` made, of type `ty` (the feature `oracle`'s form above checks it).
+    #[cfg(not(feature = "oracle"))]
+    const fn made(&self, _op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
+        // SAFETY: as the other form's.
+        unsafe { self.cx.val(raw, ty) }
     }
 
     /// Positions the builder at the end of `block`.

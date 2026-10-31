@@ -22,6 +22,7 @@ winemetal_rust = custom_target('winemetal-native-rust',
                         native_compiler_arch == 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin',
                         'winemetal', rust_target_dir, '@OUTPUT@', 'production-unwind', 'native'],
   build_always_stale : true,
+  env                : airconv_cargo_env,
 )
 
 winemetal_dll = shared_library('winemetal', winemetal_src,

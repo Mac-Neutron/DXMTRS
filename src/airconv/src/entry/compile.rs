@@ -31,14 +31,7 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
         Shader::Dxil(d) => {
             let cx = Context::new();
             let m = dxil::converter::convert(&d.ir, name.to_bytes(), &cx, args)?;
-            let flags = d.ir.info.flags;
-            let msad = flags.contains(ShaderFlags::USE_MSAD);
-            let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
-            module::link_helpers(&m, msad, samplepos, false)?;
-            if msad || samplepos {
-                dxil::converter::strip_fast_math(&m, d.ir.entry.kind);
-            }
-            return finish(&m);
+            return finish(&m, d.ir.info.flags, Some(d.ir.entry.kind));
         }
     };
     let cx = Context::new();
@@ -59,14 +52,7 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
         }
         _ => return Err(Error::new(b"Not supported shader type")),
     }
-    let flags = dxbc.ir.cfg.info.flags;
-    module::link_helpers(
-        &m,
-        flags.contains(ShaderFlags::USE_MSAD),
-        flags.contains(ShaderFlags::USE_SAMPLEPOS),
-        false,
-    )?;
-    finish(&m)
+    finish(&m, dxbc.ir.cfg.info.flags, None)
 }
 
 /// A vertex function whose outputs are `pixel`'s inputs, so the pixel shader runs alone.
@@ -83,11 +69,22 @@ pub fn passthrough_vertex(pixel: &Shader) -> Result<Vec<u8>, Error> {
     };
     let cx = Context::new();
     let m = dxil::passthrough::build(entry, &cx)?;
-    finish(&m)
+    finish(&m, ShaderFlags::default(), None)
 }
 
-/// The pass pipeline run and the module written (checked first with the feature `oracle`).
-fn finish(m: &Module<'_>) -> Result<Vec<u8>, Error> {
+/// The Metal helpers `flags` ask for linked, the pass pipeline run and the module written.
+///
+/// A DXIL shader (its kind `dxil_kind`) keeps DXIL's float policy in the helpers. With the feature
+/// `oracle` the module is checked before it is written.
+fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<Vec<u8>, Error> {
+    let msad = flags.contains(ShaderFlags::USE_MSAD);
+    let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
+    module::link_helpers(m, msad, samplepos, false)?;
+    if let Some(kind) = dxil_kind
+        && (msad || samplepos)
+    {
+        dxil::converter::strip_fast_math(m, kind);
+    }
     module::optimize(m);
     #[cfg(feature = "oracle")]
     crate::oracle::derive(m)?;

@@ -1,17 +1,14 @@
 native_llvm_path = get_option('native_llvm_path')
 
 if not native_llvm_path.startswith('/')
-  # Meson only allows relative include paths in case the toolchains are located inside
-  # of the project source root, so handle that here.
-  llvm_include_path_darwin = include_directories(join_paths('../../..', native_llvm_path, 'include'))
   native_llvm_path = join_paths(meson.project_source_root(), native_llvm_path)
-else
-  llvm_include_path_darwin = include_directories(join_paths(native_llvm_path, 'include'))
 endif
 
+# airconv's LLVM: the crate links it unbundled (build.rs), so the image that links winemetal's static library names
+# it. -lc++ for LLVM and the shim: the images' sources are C, so meson links them with the C driver.
 llvm_ld_flags_darwin = [
   '-L'+join_paths(native_llvm_path, 'lib'),
-  '-lm', '-lz', '-lcurses', '-lxml2'
+  '-lm', '-lz', '-lcurses', '-lxml2', '-lc++'
 ]
 
 if native_llvm_path.startswith('/usr/local/opt') or native_llvm_path.startswith('/opt/homebrew/opt')
@@ -22,24 +19,11 @@ if native_llvm_path.startswith('/usr/local/opt') or native_llvm_path.startswith(
   ]
 endif
 
-airconv_lib_darwin = static_library('airconv', airconv_src,
-  include_directories : [ dxmt_include_path, llvm_include_path_darwin ],
-  cpp_args            : [ airconv_args ],
-  dependencies        : [ dxbc_parser_native_dep ],
-  link_args           : llvm_ld_flags_darwin,
-  native              : dxmt_crossbuild
-)
-
 airconv_dep_darwin = declare_dependency(
-  link_with           : [ airconv_lib_darwin ],
   include_directories : [ dxmt_include_path, include_directories('..') ],
-  link_args           : [ llvm_ld_flags_darwin, llvm_deps ] # meh
+  link_args           : [ llvm_ld_flags_darwin, llvm_deps ],
 )
 
-executable('airconv', airconv_src + airconv_cli_src,
-  include_directories : [ dxmt_include_path, llvm_include_path_darwin ],
-  cpp_args            : [ airconv_args ],
-  dependencies        : [ dxbc_parser_native_dep ],
-  link_args           : [ llvm_ld_flags_darwin, llvm_deps ],
-  native              : dxmt_crossbuild
-)
+# What airconv's build.rs reads (src/airconv/build.rs), for the custom targets that build winemetal's static library:
+# the LLVM it compiles the shim against, and the xcrun (a machine file's, which may be a script) for its Metal helpers.
+airconv_cargo_env = { 'AIRCONV_LLVM': native_llvm_path, 'AIRCONV_XCRUN': xcrun.full_path() }

@@ -19,6 +19,8 @@ native = []
 # document the headers the lanes' handlers send to. AppKit is not a dependency: the few NSScreen,
 # NSView and NSWindow getters are declared locally.
 [dependencies]
+# The shader translator: the `SM50*` handlers call it, and the images get its exports through this library.
+airconv = { workspace = true }
 block2 = { workspace = true }
 dispatch2 = { workspace = true }
 libc = { workspace = true }

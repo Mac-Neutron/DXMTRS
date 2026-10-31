@@ -816,6 +816,7 @@ dependencies = [
 name = "winemetal"
 version = "0.14.1"
 dependencies = [
+ "airconv",
  "block2",
  "dispatch2",
  "libc",

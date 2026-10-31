@@ -1,13 +1,18 @@
 //! The shader translator's thunks: the `SM50*` calls with their parameter blocks.
 //!
-//! Each handler passes its block's fields, as they are, to the `SM50*` function of the same name
-//! (airconv, the static library the link provides) and writes the answer where the C did: `ret`
+//! Each handler passes its block's fields, as they are, to airconv's function of the same name
+//! (the `airconv` crate, linked into this library) and writes the answer where the C did: `ret`
 //! for a call that answers a status, `ret_size` for an error's text, nothing for the rest. The
 //! pointers in a block are the caller's, at their natural width, and go to airconv unread. The
-//! 32-bit callers' converters stay C (`sm50_wow64.c`), which the `WoW64` table names.
+//! 32-bit callers' converters stay C (`sm50_wow64.c`), which the `WoW64` table names; they call
+//! airconv's C exports, which this library carries.
 
-use core::ffi::{c_char, c_void};
+use core::ffi::c_void;
 
+use airconv::abi::{
+    MtlShaderReflection, MtlSm50ShaderArgument, Sm50CompiledBitcode,
+    Sm50ShaderCompilationArgumentData,
+};
 use winemetal_wire::{
     Sm50CompileGeometryPipelineGeometryParams, Sm50CompileGeometryPipelineVertexParams,
     Sm50CompileParams, Sm50CompileTessellationPipelineDomainParams,
@@ -16,64 +21,23 @@ use winemetal_wire::{
     Sm50GetErrorMessageParams, Sm50InitializeParams,
 };
 
-use crate::ffi::{AbortOnPanic, STATUS_SUCCESS, params};
+use crate::{
+    ffi::{AbortOnPanic, STATUS_SUCCESS, params},
+    float_cast::u64_to_usize,
+};
 
-// airconv's API (`airconv_public.h`). A shader, bitcode or error (`sm50_shader_t`, …) is a
-// `void *` on a 64-bit target, carried as the wire's `u64`; `sysv_abi` is the C ABI on the Mac.
-// airconv builds without exceptions: nothing unwinds out of it.
-unsafe extern "C" {
-    fn SM50Initialize(
-        bytecode: *const c_void,
-        bytecode_size: usize,
-        shader: *mut u64,
-        reflection: *mut c_void,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50Destroy(shader: u64);
-    fn SM50Compile(
-        shader: u64,
-        args: *mut c_void,
-        func_name: *const c_char,
-        bitcode: *mut u64,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50GetCompiledBitcode(bitcode: u64, data_out: *mut c_void);
-    fn SM50DestroyBitcode(bitcode: u64);
-    fn SM50GetErrorMessage(error: u64, buffer: *mut c_char, buffer_size: usize) -> usize;
-    fn SM50FreeError(error: u64);
-    fn SM50CompileTessellationPipelineHull(
-        vertex: u64,
-        hull: u64,
-        hull_args: *mut c_void,
-        func_name: *const c_char,
-        bitcode: *mut u64,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50CompileTessellationPipelineDomain(
-        hull: u64,
-        domain: u64,
-        domain_args: *mut c_void,
-        func_name: *const c_char,
-        bitcode: *mut u64,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50CompileGeometryPipelineVertex(
-        vertex: u64,
-        geometry: u64,
-        vertex_args: *mut c_void,
-        func_name: *const c_char,
-        bitcode: *mut u64,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50CompileGeometryPipelineGeometry(
-        vertex: u64,
-        geometry: u64,
-        geometry_args: *mut c_void,
-        func_name: *const c_char,
-        bitcode: *mut u64,
-        error: *mut u64,
-    ) -> i32;
-    fn SM50GetArgumentsInfo(shader: u64, constant_buffers: *mut c_void, arguments: *mut c_void);
+/// A shader, bitcode or error handle (`sm50_shader_t`, …) as airconv takes it.
+///
+/// A `void *` on a 64-bit target, which the wire carries as a `u64`.
+const fn handle(v: u64) -> *mut c_void {
+    core::ptr::with_exposed_provenance_mut(u64_to_usize(v))
+}
+
+/// Where airconv writes a handle: the caller's `u64`.
+///
+/// A `u64` has a pointer's size and alignment on the 64-bit targets this library builds for.
+const fn slot(p: *mut u64) -> *mut *mut c_void {
+    p.cast()
 }
 
 /// Slot 74: a shader from DXBC bytecode, with its reflection.
@@ -88,7 +52,15 @@ pub unsafe extern "C-unwind" fn sm50_initialize(args: *mut c_void) -> i32 {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50InitializeParams>(args) };
     // SAFETY: the caller's pointers, forwarded as the C forwarded them.
-    p.ret = unsafe { SM50Initialize(p.bytecode, p.bytecode_size, p.shader, p.reflection, p.error) };
+    p.ret = unsafe {
+        airconv::sm50_initialize(
+            p.bytecode,
+            p.bytecode_size,
+            slot(p.shader),
+            p.reflection.cast::<MtlShaderReflection>(),
+            slot(p.error),
+        )
+    };
     STATUS_SUCCESS
 }
 
@@ -103,7 +75,7 @@ pub unsafe extern "C-unwind" fn sm50_destroy(args: *mut c_void) -> i32 {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50DestroyParams>(args) };
     // SAFETY: the caller's shader, forwarded as the C forwarded it.
-    unsafe { SM50Destroy(p.shader) };
+    unsafe { airconv::sm50_destroy(handle(p.shader)) };
     STATUS_SUCCESS
 }
 
@@ -118,7 +90,15 @@ pub unsafe extern "C-unwind" fn sm50_compile(args: *mut c_void) -> i32 {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileParams>(args) };
     // SAFETY: the caller's handle and pointers, forwarded as the C forwarded them.
-    p.ret = unsafe { SM50Compile(p.shader, p.args, p.func_name, p.bitcode, p.error) };
+    p.ret = unsafe {
+        airconv::sm50_compile(
+            handle(p.shader),
+            p.args.cast::<Sm50ShaderCompilationArgumentData>(),
+            p.func_name,
+            slot(p.bitcode),
+            slot(p.error),
+        )
+    };
     STATUS_SUCCESS
 }
 
@@ -134,7 +114,12 @@ pub unsafe extern "C-unwind" fn sm50_get_compiled_bitcode(args: *mut c_void) -> 
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50GetCompiledBitcodeParams>(args) };
     // SAFETY: the caller's handle and pointer, forwarded as the C forwarded them.
-    unsafe { SM50GetCompiledBitcode(p.bitcode, p.data_out) };
+    unsafe {
+        airconv::sm50_get_compiled_bitcode(
+            handle(p.bitcode),
+            p.data_out.cast::<Sm50CompiledBitcode>(),
+        );
+    };
     STATUS_SUCCESS
 }
 
@@ -150,7 +135,7 @@ pub unsafe extern "C-unwind" fn sm50_destroy_bitcode(args: *mut c_void) -> i32 {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50DestroyBitcodeParams>(args) };
     // SAFETY: the caller's bitcode, forwarded as the C forwarded it.
-    unsafe { SM50DestroyBitcode(p.bitcode) };
+    unsafe { airconv::sm50_destroy_bitcode(handle(p.bitcode)) };
     STATUS_SUCCESS
 }
 
@@ -166,7 +151,8 @@ pub unsafe extern "C-unwind" fn sm50_get_error_message(args: *mut c_void) -> i32
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50GetErrorMessageParams>(args) };
     // SAFETY: the caller's error and buffer, forwarded as the C forwarded them.
-    p.ret_size = unsafe { SM50GetErrorMessage(p.error, p.buffer, p.buffer_size) };
+    p.ret_size =
+        unsafe { airconv::sm50_get_error_message(handle(p.error), p.buffer, p.buffer_size) };
     STATUS_SUCCESS
 }
 
@@ -182,7 +168,7 @@ pub unsafe extern "C-unwind" fn sm50_free_error(args: *mut c_void) -> i32 {
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50FreeErrorParams>(args) };
     // SAFETY: the caller's error, forwarded as the C forwarded it.
-    unsafe { SM50FreeError(p.error) };
+    unsafe { airconv::sm50_free_error(handle(p.error)) };
     STATUS_SUCCESS
 }
 
@@ -199,13 +185,13 @@ pub unsafe extern "C-unwind" fn sm50_compile_geometry_pipeline_vertex(args: *mut
     let p = unsafe { params::<Sm50CompileGeometryPipelineVertexParams>(args) };
     // SAFETY: the caller's handles and pointers, forwarded as the C forwarded them.
     p.ret = unsafe {
-        SM50CompileGeometryPipelineVertex(
-            p.vertex,
-            p.geometry,
-            p.vertex_args,
+        airconv::sm50_compile_geometry_pipeline_vertex(
+            handle(p.vertex),
+            handle(p.geometry),
+            p.vertex_args.cast::<Sm50ShaderCompilationArgumentData>(),
             p.func_name,
-            p.bitcode,
-            p.error,
+            slot(p.bitcode),
+            slot(p.error),
         )
     };
     STATUS_SUCCESS
@@ -224,13 +210,13 @@ pub unsafe extern "C-unwind" fn sm50_compile_geometry_pipeline_geometry(args: *m
     let p = unsafe { params::<Sm50CompileGeometryPipelineGeometryParams>(args) };
     // SAFETY: the caller's handles and pointers, forwarded as the C forwarded them.
     p.ret = unsafe {
-        SM50CompileGeometryPipelineGeometry(
-            p.vertex,
-            p.geometry,
-            p.geometry_args,
+        airconv::sm50_compile_geometry_pipeline_geometry(
+            handle(p.vertex),
+            handle(p.geometry),
+            p.geometry_args.cast::<Sm50ShaderCompilationArgumentData>(),
             p.func_name,
-            p.bitcode,
-            p.error,
+            slot(p.bitcode),
+            slot(p.error),
         )
     };
     STATUS_SUCCESS
@@ -249,13 +235,13 @@ pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_hull(args: *m
     let p = unsafe { params::<Sm50CompileTessellationPipelineHullParams>(args) };
     // SAFETY: the caller's handles and pointers, forwarded as the C forwarded them.
     p.ret = unsafe {
-        SM50CompileTessellationPipelineHull(
-            p.vertex,
-            p.hull,
-            p.hull_args,
+        airconv::sm50_compile_tessellation_pipeline_hull(
+            handle(p.vertex),
+            handle(p.hull),
+            p.hull_args.cast::<Sm50ShaderCompilationArgumentData>(),
             p.func_name,
-            p.bitcode,
-            p.error,
+            slot(p.bitcode),
+            slot(p.error),
         )
     };
     STATUS_SUCCESS
@@ -276,13 +262,13 @@ pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_domain(
     let p = unsafe { params::<Sm50CompileTessellationPipelineDomainParams>(args) };
     // SAFETY: the caller's handles and pointers, forwarded as the C forwarded them.
     p.ret = unsafe {
-        SM50CompileTessellationPipelineDomain(
-            p.hull,
-            p.domain,
-            p.domain_args,
+        airconv::sm50_compile_tessellation_pipeline_domain(
+            handle(p.hull),
+            handle(p.domain),
+            p.domain_args.cast::<Sm50ShaderCompilationArgumentData>(),
             p.func_name,
-            p.bitcode,
-            p.error,
+            slot(p.bitcode),
+            slot(p.error),
         )
     };
     STATUS_SUCCESS
@@ -300,6 +286,12 @@ pub unsafe extern "C-unwind" fn sm50_get_arguments_info(args: *mut c_void) -> i3
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50GetArgumentsInfoParams>(args) };
     // SAFETY: the caller's shader and arrays, forwarded as the C forwarded them.
-    unsafe { SM50GetArgumentsInfo(p.shader, p.constant_buffers, p.arguments) };
+    unsafe {
+        airconv::sm50_get_arguments_info(
+            handle(p.shader),
+            p.constant_buffers.cast::<MtlSm50ShaderArgument>(),
+            p.arguments.cast::<MtlSm50ShaderArgument>(),
+        );
+    };
     STATUS_SUCCESS
 }
