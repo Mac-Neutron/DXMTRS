@@ -111,6 +111,9 @@ src/airconv/src/abi.rs MtlTessellatorReflection Clone,Copy
 src/airconv/src/air/builder.rs MemFlags Clone,Copy
 src/airconv/src/air/builder.rs MemoryAccess Clone,Copy
 src/airconv/src/air/builder.rs TextureKind Clone,Copy
+src/airconv/src/dxbc/resources.rs IndexableRegisterFile Clone,Copy
+src/airconv/src/dxbc/resources.rs Interpolant Clone,Copy
+src/airconv/src/dxbc/resources.rs RegisterFile Clone,Copy,Default
 src/airconv/src/dxil/types.rs ResourceFlags Clone,Copy
 src/airconv/src/llvm.rs Block Clone,Copy
 src/airconv/src/llvm.rs Func Clone,Copy

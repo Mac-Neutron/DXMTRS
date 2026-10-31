@@ -1,13 +1,13 @@
 //! DXBC lowering: the converter and each stage's function.
 
-mod binding_rootsig;
-mod binding_sm50;
-mod blocks;
-mod converter;
-mod cs;
+pub mod binding_rootsig;
+pub mod binding_sm50;
+pub mod blocks;
+pub mod converter;
+pub mod cs;
 mod gs;
 mod ps;
 mod replay;
-mod resources;
+pub mod resources;
 mod ts;
 mod vs;

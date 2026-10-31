@@ -21,7 +21,7 @@
 pub mod abi;
 pub mod air;
 mod api;
-mod dxbc;
+pub mod dxbc;
 pub mod dxil;
 mod entry;
 pub mod llvm;

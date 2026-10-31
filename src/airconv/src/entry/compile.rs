@@ -2,16 +2,54 @@
 
 use core::ffi::CStr;
 
-use crate::{abi::ArgChain, api::Error, shader::Shader};
+use airconv_ir::{shader_info::ShaderFlags, tokens::program_type};
+
+use crate::{abi::ArgChain, api::Error, dxbc, llvm::Context, module, shader::Shader, writer};
 
 /// Compiles `shader` as the function `name`, with the chain's arguments, into a metallib.
 ///
+/// `SM50Compile`: a context and a module per compile, the stage's lowering (`convertDXBC`), the
+/// Metal helpers it calls, the pass pipeline, then the metallib. With the feature `oracle` the
+/// optimized module's pointers are checked against the facts opaque IR keeps.
+///
 /// # Errors
 ///
-/// What the translation refuses, or "not ported".
+/// What the translation refuses, the C++'s texts for a stage that is not compiled alone, or
+/// "not ported" (vertex, pixel and DXIL shaders, until their lowering lands).
 pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<u8>, Error> {
-    let _ = (shader, args, name);
-    Err(Error::not_ported())
+    let dxbc = match shader {
+        Shader::Dxbc(dxbc) => dxbc,
+        // DXIL lowering (X2) replaces this arm.
+        Shader::Dxil(_) => return Err(Error::not_ported()),
+    };
+    let cx = Context::new();
+    let m = module::initialize(&cx, c"shader.air");
+    match dxbc.ir.program_type {
+        program_type::COMPUTE => dxbc::cs::convert(&dxbc.ir, name.to_bytes(), &m, args)?,
+        program_type::PIXEL | program_type::VERTEX => return Err(Error::not_ported()),
+        program_type::HULL | program_type::DOMAIN => {
+            return Err(Error::new(
+                b"Hull and domain shader cannot be independently converted.",
+            ));
+        }
+        program_type::GEOMETRY => {
+            return Err(Error::new(
+                b"Geometry shader cannot be independently converted.",
+            ));
+        }
+        _ => return Err(Error::new(b"Not supported shader type")),
+    }
+    let flags = dxbc.ir.cfg.info.flags;
+    module::link_helpers(
+        &m,
+        flags.contains(ShaderFlags::USE_MSAD),
+        flags.contains(ShaderFlags::USE_SAMPLEPOS),
+        false,
+    )?;
+    module::optimize(&m);
+    #[cfg(feature = "oracle")]
+    crate::oracle::derive(&m)?;
+    Ok(writer::write(&m))
 }
 
 /// A vertex function whose outputs are `pixel`'s inputs, so the pixel shader runs alone.
