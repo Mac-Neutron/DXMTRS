@@ -22,7 +22,9 @@
 #include "dxmt_texture.hpp"
 #include <cstdint>
 
-namespace dxmt {
+// D3D12's encoder types are dxmt::d3d12's: the core's context declares an EncoderData and its kin of its own in dxmt,
+// and the two sets must not share names once both are linked into one DLL.
+namespace dxmt::d3d12 {
 
 enum class EncoderType {
   Null,
@@ -180,4 +182,21 @@ struct TemporalUpscaleEncoderData : EncoderData {
   WMTFXTemporalScalerProps props;
 };
 
-}; // namespace dxmt
+}; // namespace dxmt::d3d12
+
+// D3D12's own translation units, which never see the core's, keep naming them in dxmt.
+namespace dxmt {
+using d3d12::BlitEncoderData;
+using d3d12::ClearEncoderData;
+using d3d12::ClearSlot;
+using d3d12::ComputeEncoderData;
+using d3d12::EncoderData;
+using d3d12::EncoderType;
+using d3d12::kClearDepthStencil;
+using d3d12::RenderEncoderColorAttachmentData;
+using d3d12::RenderEncoderData;
+using d3d12::RenderEncoderDepthAttachmentData;
+using d3d12::RenderEncoderStencilAttachmentData;
+using d3d12::ResolveEncoderData;
+using d3d12::TemporalUpscaleEncoderData;
+} // namespace dxmt
