@@ -5,7 +5,7 @@ pub mod binding_sm50;
 pub mod blocks;
 pub mod converter;
 pub mod cs;
-mod gs;
+pub mod gs;
 pub mod ps;
 pub mod replay;
 pub mod resources;
