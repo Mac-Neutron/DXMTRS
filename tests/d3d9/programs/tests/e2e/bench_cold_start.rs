@@ -39,8 +39,8 @@
 //! format or schema than the layer's is one the layer would wipe: it is
 //! skipped, and the `cold_start` report says so.
 //!
-//! The layer under test need not be the build of this binary: `make
-//! bench-ab` runs the candidate's binary against the base's layer too. So
+//! The layer under test need not be the build of this binary: the
+//! runner's `bench-ab` runs the candidate's binary against the base's layer too. So
 //! the format and schema a cache is judged by are the layer's, read from
 //! the header of the synthetic cache, which the priming process's layer
 //! wrote into an empty directory. The stored and appended record counts

@@ -39,8 +39,8 @@
 //!
 //! The figures also move with where the linker places the layer's
 //! functions: single setter rows have moved by 30 to 50 % in runs whose
-//! change did not touch the call, the draw rows by far less. So `make
-//! bench-ab` judges the setter rows against a 50 % floor and the
+//! change did not touch the call, the draw rows by far less. So the
+//! runner's `bench-ab` judges the setter rows against a 50 % floor and the
 //! `ns_per_call.draw_*` rows against 15 %; `RATIO_FLOOR_PER_CALL` in the
 //! runner's `compare` module has the measurements.
 

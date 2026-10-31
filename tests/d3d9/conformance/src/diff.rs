@@ -29,8 +29,8 @@ pub struct Report {
     pub regressed: bool,
     /// The baseline overstates reality: a count went down or a crash cleared.
     ///
-    /// Fails the gate like a regression, but the fix is `make
-    /// conformance-baseline`, not a code hunt.
+    /// Fails the gate like a regression, but the fix is a re-baseline
+    /// (`dxmt/mtld3d-conformance.sh --update-baseline`), not a code hunt.
     pub stale: bool,
     pub text: String,
 }

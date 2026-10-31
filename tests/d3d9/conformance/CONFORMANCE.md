@@ -1091,8 +1091,9 @@ Both pins are registry values, and a wineserver session enumerates the display
 once, when its desktop starts, and serves that geometry to every process in it
 afterwards. A pin therefore only takes effect in a session that started after
 it was written, and the session that creates a prefix predates them by
-construction, so `configure-test-prefix` ends that session once the keys are
-in. Without it the first leg in a fresh prefix runs against monitor geometry
+construction, so the prefix recipe in MacNeutron's `dxmt/mtld3d-conformance.sh`
+ends that session once the keys are in. Without it the first leg in a fresh
+prefix runs against monitor geometry
 in the point space: `test_window_position` 15039 and `test_reset_fullscreen`
 4899 fail outright, and the desktop-mode `ceiling` sites read 0 because the
 mode change the test asks for is accepted, exactly as on the CI runner's
