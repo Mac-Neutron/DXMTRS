@@ -1,4 +1,4 @@
-//! C++'s `static_cast` between floats and integers, for DXMT's NGX and NVAPI DLLs.
+//! C++'s `static_cast` between floats and integers, for DXMT's Rust DLLs.
 //!
 //! allow: the bounded-cast exception, as macdrv's `bounded_cast` (CONVENTIONS, accepted
 //! per-site exception 9). NGX's parameter conversions, DXMT's render-size math and NVAPI's
@@ -33,6 +33,12 @@ pub const fn f32_to_u16(v: f32) -> u16 {
 #[must_use]
 pub const fn f64_to_f32(v: f64) -> f32 {
     v as f32
+}
+
+/// `double(uint64_t)`: to nearest.
+#[must_use]
+pub const fn u64_to_f64(v: u64) -> f64 {
+    v as f64
 }
 
 /// `static_cast<float>(unsigned)`: to nearest.

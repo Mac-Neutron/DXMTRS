@@ -7,12 +7,9 @@
 //! end against clang's record layouts (llvm-mingw's sysroot for the four PE targets,
 //! `include/native` and `winemetal.h` natively). Natively `WCHAR` is `wchar_t`, four bytes.
 
-use core::{
-    ffi::c_void,
-    mem::offset_of,
-    sync::atomic::{AtomicU32, AtomicU64},
-};
+use core::{ffi::c_void, mem::offset_of};
 
+use dxmt_util::GammaRamp;
 pub use dxmt_util::com::{Guid, Hresult, IUnknownVtbl};
 
 /// `WCHAR`: UTF-16 on PE.
@@ -89,9 +86,6 @@ pub const REG_SZ: u32 = 1;
 pub const REG_DWORD: u32 = 4;
 #[cfg(windows)]
 pub const DLL_PROCESS_ATTACH: u32 = 1;
-
-/// `DXMT_GAMMA_CP_COUNT`: the points of `GammaRamp`'s curves.
-pub const GAMMA_CP_COUNT: usize = 1024;
 
 pub const IID_IUNKNOWN: Guid = Guid::new(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
 pub const IID_IDXGI_OBJECT: Guid = Guid::new(
@@ -685,18 +679,6 @@ pub struct QueryVideoMemoryInfo {
     pub current_reservation: u64,
 }
 
-/// `DXMTGammaRamp`: an output's gamma curves, which the presenter reads with no lock.
-///
-/// The curves are `f32`s by their bits; a writer stores them, then bumps `version`, which a
-/// reader compares with the last it saw.
-#[repr(C)]
-pub struct GammaRamp {
-    pub red: [AtomicU32; GAMMA_CP_COUNT],
-    pub green: [AtomicU32; GAMMA_CP_COUNT],
-    pub blue: [AtomicU32; GAMMA_CP_COUNT],
-    pub version: AtomicU64,
-}
-
 /// `POINT`, which `MonitorFromPoint` takes by value.
 #[cfg(windows)]
 #[derive(Default)]
@@ -1121,11 +1103,6 @@ const _: () = {
     assert!(offset_of!(GammaControlCapabilities, min_converted_value) == 8);
     assert!(offset_of!(GammaControlCapabilities, num_gamma_control_points) == 12);
     assert!(offset_of!(GammaControlCapabilities, control_point_positions) == 16);
-    assert!(size_of::<GammaRamp>() == 12296 && align_of::<GammaRamp>() == 8);
-    assert!(offset_of!(GammaRamp, red) == 0);
-    assert!(offset_of!(GammaRamp, green) == 4096);
-    assert!(offset_of!(GammaRamp, blue) == 8192);
-    assert!(offset_of!(GammaRamp, version) == 12288);
     assert!(size_of::<Luid>() == 8 && align_of::<Luid>() == 4);
     assert!(offset_of!(Luid, low_part) == 0);
     assert!(offset_of!(Luid, high_part) == 4);
@@ -1421,11 +1398,6 @@ const _: () = {
     assert!(offset_of!(GammaControlCapabilities, min_converted_value) == 8);
     assert!(offset_of!(GammaControlCapabilities, num_gamma_control_points) == 12);
     assert!(offset_of!(GammaControlCapabilities, control_point_positions) == 16);
-    assert!(size_of::<GammaRamp>() == 12296 && align_of::<GammaRamp>() == 8);
-    assert!(offset_of!(GammaRamp, red) == 0);
-    assert!(offset_of!(GammaRamp, green) == 4096);
-    assert!(offset_of!(GammaRamp, blue) == 8192);
-    assert!(offset_of!(GammaRamp, version) == 12288);
     assert!(size_of::<Luid>() == 8 && align_of::<Luid>() == 4);
     assert!(offset_of!(Luid, low_part) == 0);
     assert!(offset_of!(Luid, high_part) == 4);
@@ -1683,11 +1655,6 @@ const _: () = {
     assert!(offset_of!(GammaControlCapabilities, min_converted_value) == 8);
     assert!(offset_of!(GammaControlCapabilities, num_gamma_control_points) == 12);
     assert!(offset_of!(GammaControlCapabilities, control_point_positions) == 16);
-    assert!(size_of::<GammaRamp>() == 12296 && align_of::<GammaRamp>() == 8);
-    assert!(offset_of!(GammaRamp, red) == 0);
-    assert!(offset_of!(GammaRamp, green) == 4096);
-    assert!(offset_of!(GammaRamp, blue) == 8192);
-    assert!(offset_of!(GammaRamp, version) == 12288);
     assert!(size_of::<Luid>() == 8 && align_of::<Luid>() == 4);
     assert!(offset_of!(Luid, low_part) == 0);
     assert!(offset_of!(Luid, high_part) == 4);

@@ -13,11 +13,14 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
+use dxmt_util::ext::{
+    D3D12CommandListExtVtbl, D3D12DeviceExtVtbl, D3D12ScalerDesc, D3D12UpscaleDesc,
+    IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
+};
+
 use crate::{
     com::{
-        CommandList12Vtbl, CommandListExt12Vtbl, DeviceExt12Vtbl, IID_COMMAND_LIST_EXT_12,
-        IID_DEVICE_EXT_12, IID_ID3D12_DEVICE, Resource12Vtbl, ResourceDesc12, ScalerDesc12,
-        UpscaleDesc12, query, release, vtbl,
+        CommandList12Vtbl, IID_ID3D12_DEVICE, Resource12Vtbl, ResourceDesc12, query, release, vtbl,
     },
     ngx::{
         Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE,
@@ -48,7 +51,7 @@ struct Feature {
 /// The upscaler made for the textures last evaluated, and what it was made for.
 struct Scaler {
     scaler: *mut c_void,
-    desc: ScalerDesc12,
+    desc: D3D12ScalerDesc,
 }
 
 impl Drop for Feature {
@@ -70,7 +73,7 @@ fn init_with(device: *mut c_void) -> u32 {
         return INVALID_PARAMETER;
     }
     // SAFETY: the game's device, a live COM object.
-    let Some(ext) = (unsafe { query(device, &IID_DEVICE_EXT_12) }) else {
+    let Some(ext) = (unsafe { query(device, &IID_D3D12_DEVICE_EXT) }) else {
         once(
             &LOGGED,
             format_args!(
@@ -168,7 +171,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
         return INVALID_PARAMETER;
     }
     // SAFETY: GetDevice's new reference, released once queried.
-    let ext = unsafe { query(device, &IID_DEVICE_EXT_12) };
+    let ext = unsafe { query(device, &IID_D3D12_DEVICE_EXT) };
     // SAFETY: as above.
     unsafe { release(device) };
     let Some(ext) = ext else {
@@ -186,11 +189,11 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
         ext,
         scaler: Mutex::new(Scaler {
             scaler: core::ptr::null_mut(),
-            desc: ScalerDesc12::default(),
+            desc: D3D12ScalerDesc::default(),
         }),
     });
     // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
-    let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
+    let slots = unsafe { vtbl::<D3D12DeviceExtVtbl>(ext) };
     let made_ref = &mut *made;
     // SAFETY: the outputs are the feature's fields.
     unsafe {
@@ -412,7 +415,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     // The upscaler for these textures: the one there is if they hold the region it reads, else one
     // reading as much of them as they share (no more than the output), so that a game's dynamic
     // resolution moves only the content size.
-    let mut want = ScalerDesc12 {
+    let mut want = D3D12ScalerDesc {
         output_width: dlss.target_width,
         output_height: dlss.target_height,
         color_format: cd.format,
@@ -422,7 +425,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         auto_exposure: i32::from(flag & FLAG_AUTO_EXPOSURE != 0),
         output_resolution_motion_vectors: i32::from(flag & FLAG_MV_LOWRES == 0),
         jittered_motion_vectors: i32::from(flag & FLAG_MV_JITTERED != 0),
-        ..ScalerDesc12::default()
+        ..D3D12ScalerDesc::default()
     };
     if ow < want.output_width || oh < want.output_height {
         once(
@@ -467,7 +470,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         (want.input_width, want.input_height) = (tw, th);
         let ext = feature.ext;
         // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
-        let slots = unsafe { vtbl::<DeviceExt12Vtbl>(ext) };
+        let slots = unsafe { vtbl::<D3D12DeviceExtVtbl>(ext) };
         // SAFETY: `want` outlives the call; the new upscaler is the feature's reference.
         let hr =
             unsafe { (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
@@ -492,7 +495,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         scaler.desc = want;
     }
     // SAFETY: the game's command list, a live COM object.
-    let Some(list_ext) = (unsafe { query(list, &IID_COMMAND_LIST_EXT_12) }) else {
+    let Some(list_ext) = (unsafe { query(list, &IID_D3D12_COMMAND_LIST_EXT) }) else {
         once(
             &LOGGED_FOREIGN,
             format_args!(
@@ -502,7 +505,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         );
         return INVALID_PARAMETER;
     };
-    let d = UpscaleDesc12 {
+    let d = D3D12UpscaleDesc {
         color,
         depth,
         motion_vector: motion,
@@ -527,7 +530,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         depth_reversed: i32::from(flag & FLAG_DEPTH_INVERTED != 0),
     };
     // SAFETY: `list_ext` is DXMT's `IMTLD3D12CommandListExt`.
-    let slots = unsafe { vtbl::<CommandListExt12Vtbl>(list_ext) };
+    let slots = unsafe { vtbl::<D3D12CommandListExtVtbl>(list_ext) };
     // SAFETY: `scaler` is the feature's live upscaler; `d` and its textures outlive the call.
     let hr = unsafe { (slots.temporal_upscale)(list_ext, scaler.scaler, &raw const d) };
     // SAFETY: `query`'s new reference.

@@ -12,7 +12,7 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use dxmt_util::{com::vtbl, float_cast::u32_to_f32};
+use dxmt_util::{GAMMA_CP_COUNT, GammaRamp, com::vtbl, float_cast::u32_to_f32};
 use winemetal_wire::WMTDisplayDescription;
 
 use crate::{
@@ -21,12 +21,12 @@ use crate::{
         DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
         DXGI_ENUM_MODES_SCALING, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_MORE_DATA,
         DXGI_ERROR_NOT_FOUND, DXGI_ERROR_UNSUPPORTED, DXGI_FORMAT_UNKNOWN,
-        DXGI_MODE_ROTATION_UNSPECIFIED, E_FAIL, E_INVALIDARG, E_NOTIMPL, GAMMA_CP_COUNT,
-        GammaControl, GammaControlCapabilities, GammaRamp, Guid, Hmonitor, Hresult,
-        IID_IDXGI_OBJECT, IID_IDXGI_OUTPUT, IID_IDXGI_OUTPUT1, IID_IDXGI_OUTPUT2,
-        IID_IDXGI_OUTPUT3, IID_IDXGI_OUTPUT4, IID_IDXGI_OUTPUT5, IID_IDXGI_OUTPUT6,
-        IID_IMTL_DXGI_OUTPUT, IID_IUNKNOWN, IUnknownVtbl, ModeDesc, ModeDesc1, ObjectVtbl,
-        OutputDesc, OutputDesc1, OutputVtbl, Rational, Rect, Rgb, S_OK,
+        DXGI_MODE_ROTATION_UNSPECIFIED, E_FAIL, E_INVALIDARG, E_NOTIMPL, GammaControl,
+        GammaControlCapabilities, Guid, Hmonitor, Hresult, IID_IDXGI_OBJECT, IID_IDXGI_OUTPUT,
+        IID_IDXGI_OUTPUT1, IID_IDXGI_OUTPUT2, IID_IDXGI_OUTPUT3, IID_IDXGI_OUTPUT4,
+        IID_IDXGI_OUTPUT5, IID_IDXGI_OUTPUT6, IID_IMTL_DXGI_OUTPUT, IID_IUNKNOWN, IUnknownVtbl,
+        ModeDesc, ModeDesc1, ObjectVtbl, OutputDesc, OutputDesc1, OutputVtbl, Rational, Rect, Rgb,
+        S_OK,
     },
     com::{self, Head},
     ffi, modes,

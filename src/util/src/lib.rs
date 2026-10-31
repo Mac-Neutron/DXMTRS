@@ -1,11 +1,16 @@
 //! What DXMT's Rust DLLs (`nvngx.dll`, `nvapi64.dll`, `d3d10core.dll`, `dxgi.dll`) share.
 
 pub mod com;
+pub mod config;
 pub mod env;
+pub mod ext;
 pub mod float_cast;
+mod gamma;
 pub mod log;
 pub mod nvext;
 pub mod sync;
+
+pub use gamma::{GAMMA_CP_COUNT, GammaRamp};
 
 /// The LUID DXMT gives the Metal device with `registry_id`: the id's bytes in reverse order.
 ///

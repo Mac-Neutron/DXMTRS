@@ -2,7 +2,10 @@
 
 use core::ffi::c_void;
 
-use dxmt_util::com::{Guid, IUnknownVtbl, query as query_interface, release, vtbl};
+use dxmt_util::{
+    com::{Guid, IUnknownVtbl, query as query_interface, release, vtbl},
+    ext::{D3D11ContextExtVtbl, D3D11DeviceExtVtbl, IID_D3D11_CONTEXT_EXT, IID_D3D11_DEVICE_EXT},
+};
 
 use crate::{
     LOG,
@@ -15,20 +18,6 @@ use crate::{
     },
 };
 
-/// DXMT's `IMTLD3D11ContextExt`.
-static IID_CONTEXT_EXT: Guid = Guid::new(
-    0x43ac_e3ce,
-    0x1956,
-    0x448b,
-    [0xa4, 0xeb, 0xae, 0xe6, 0x8b, 0xde, 0xb2, 0x83],
-);
-/// DXMT's `IMTLD3D11DeviceExt`.
-static IID_DEVICE_EXT: Guid = Guid::new(
-    0xefc7_7ae6,
-    0x2179,
-    0x4c0a,
-    [0xb8, 0x44, 0x76, 0x61, 0xca, 0x0d, 0xcd, 0xe7],
-);
 /// `ID3D11Device`.
 static IID_DEVICE: Guid = Guid::new(
     0xdb6f_6ddb,
@@ -36,22 +25,6 @@ static IID_DEVICE: Guid = Guid::new(
     0x4e88,
     [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40],
 );
-
-/// `IMTLD3D11ContextExt`: `TemporalUpscale` (unused here), `BeginUAVOverlap` and `EndUAVOverlap`.
-#[repr(C)]
-struct ContextExtVtbl {
-    unknown: IUnknownVtbl,
-    _temporal_upscale: *const c_void,
-    begin_uav_overlap: unsafe extern "system" fn(*mut c_void),
-    end_uav_overlap: unsafe extern "system" fn(*mut c_void),
-}
-
-/// `IMTLD3D11DeviceExt`.
-#[repr(C)]
-struct DeviceExtVtbl {
-    unknown: IUnknownVtbl,
-    set_shader_extension_slot: unsafe extern "system" fn(*mut c_void, u32),
-}
 
 /// `ID3D11Device` up to `GetImmediateContext`, its slot 40.
 #[repr(C)]
@@ -74,7 +47,7 @@ impl Drop for Held {
 /// The `IMTLD3D11ContextExt` of a context, or of a device's immediate context.
 fn context_ext(object: *mut c_void) -> Option<Held> {
     // SAFETY: the game's live COM object.
-    if let Some(ext) = unsafe { query_interface(object, &IID_CONTEXT_EXT) } {
+    if let Some(ext) = unsafe { query_interface(object, &IID_D3D11_CONTEXT_EXT) } {
         return Some(Held(ext));
     }
     // SAFETY: as above.
@@ -86,7 +59,7 @@ fn context_ext(object: *mut c_void) -> Option<Held> {
     unsafe { (slots.get_immediate_context)(device.0, &raw mut context) };
     let context = Held(context);
     // SAFETY: the device's immediate context, or null, which `query` answers none.
-    unsafe { query_interface(context.0, &IID_CONTEXT_EXT) }.map(Held)
+    unsafe { query_interface(context.0, &IID_D3D11_CONTEXT_EXT) }.map(Held)
 }
 
 const extern "C" fn get_current_sli_state(device: *mut c_void, state: *mut SliStateV1) -> Status {
@@ -131,7 +104,7 @@ extern "C" fn begin_uav_overlap(object: *mut c_void) -> Status {
         return INVALID_ARGUMENT;
     };
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt`.
-    let slots = unsafe { vtbl::<ContextExtVtbl>(ext.0) };
+    let slots = unsafe { vtbl::<D3D11ContextExtVtbl>(ext.0) };
     // SAFETY: as above.
     unsafe { (slots.begin_uav_overlap)(ext.0) };
     OK
@@ -142,7 +115,7 @@ extern "C" fn end_uav_overlap(object: *mut c_void) -> Status {
         return INVALID_ARGUMENT;
     };
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt`.
-    let slots = unsafe { vtbl::<ContextExtVtbl>(ext.0) };
+    let slots = unsafe { vtbl::<D3D11ContextExtVtbl>(ext.0) };
     // SAFETY: as above.
     unsafe { (slots.end_uav_overlap)(ext.0) };
     OK
@@ -183,11 +156,11 @@ extern "C" fn is_extn_op_code_supported(
 
 extern "C" fn set_extn_slot(device: *mut c_void, slot: u32) -> Status {
     // SAFETY: the game's live COM object, or null.
-    let Some(ext) = (unsafe { query_interface(device, &IID_DEVICE_EXT) }).map(Held) else {
+    let Some(ext) = (unsafe { query_interface(device, &IID_D3D11_DEVICE_EXT) }).map(Held) else {
         return INVALID_ARGUMENT;
     };
     // SAFETY: `ext` is DXMT's `IMTLD3D11DeviceExt`.
-    let slots = unsafe { vtbl::<DeviceExtVtbl>(ext.0) };
+    let slots = unsafe { vtbl::<D3D11DeviceExtVtbl>(ext.0) };
     // SAFETY: as above.
     unsafe { (slots.set_shader_extension_slot)(ext.0, slot) };
     OK

@@ -5,11 +5,13 @@
 
 use core::ffi::{CStr, c_void};
 
+use dxmt_util::ext::{
+    D3D11ContextExt1Vtbl, D3D11ContextExtVtbl, D3D11UpscaleDesc, FEATURE_METALFX_TEMPORAL_SCALER,
+    IID_D3D11_CONTEXT_EXT, IID_D3D11_CONTEXT_EXT1,
+};
+
 use crate::{
-    com::{
-        ContextExt11Vtbl, FEATURE_METALFX_TEMPORAL_SCALER, IID_CONTEXT_EXT_11, IID_CONTEXT_EXT1_11,
-        UpscaleDesc11, query, release, vtbl,
-    },
+    com::{query, release, vtbl},
     ngx::{
         Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE,
         FLAG_DEPTH_INVERTED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK,
@@ -39,7 +41,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_CreateFeature(
         return INVALID_PARAMETER;
     };
     // SAFETY: the game's immediate context, a live COM object.
-    let Some(ext) = (unsafe { query(context, &IID_CONTEXT_EXT1_11) }) else {
+    let Some(ext) = (unsafe { query(context, &IID_D3D11_CONTEXT_EXT1) }) else {
         return INVALID_PARAMETER;
     };
     let ext = Held(ext);
@@ -51,7 +53,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_CreateFeature(
     }
     let mut supported = 0_i32;
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt1`.
-    let slots = unsafe { vtbl::<ContextExt11Vtbl>(ext.0) };
+    let slots = unsafe { vtbl::<D3D11ContextExt1Vtbl>(ext.0) };
     // SAFETY: the answer is a BOOL, written to the local.
     let hr = unsafe {
         (slots.check_feature_support)(
@@ -120,7 +122,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_EvaluateFeature(
         return FAIL;
     }
     // SAFETY: the game's immediate context, a live COM object.
-    let Some(ext) = (unsafe { query(context, &IID_CONTEXT_EXT_11) }) else {
+    let Some(ext) = (unsafe { query(context, &IID_D3D11_CONTEXT_EXT) }) else {
         return INVALID_PARAMETER;
     };
     let ext = Held(ext);
@@ -141,7 +143,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_EvaluateFeature(
     };
     let flag = dlss.flag.cast_unsigned();
     let float = |name: &CStr, fallback: f32| params.f32(name).unwrap_or(fallback);
-    let desc = UpscaleDesc11 {
+    let desc = D3D11UpscaleDesc {
         input_content_width: width,
         input_content_height: height,
         auto_exposure: i32::from(flag & FLAG_AUTO_EXPOSURE != 0),
@@ -161,7 +163,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_EvaluateFeature(
         ],
     };
     // SAFETY: `ext` is DXMT's `IMTLD3D11ContextExt`.
-    let slots = unsafe { vtbl::<ContextExt11Vtbl>(ext.0) };
+    let slots = unsafe { vtbl::<D3D11ContextExtVtbl>(ext.0) };
     // SAFETY: the description and its textures outlive the call.
     unsafe { (slots.temporal_upscale)(ext.0, &raw const desc) };
     OK

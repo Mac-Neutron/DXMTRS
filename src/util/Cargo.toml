@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license = "LGPL-2.1-or-later"
-description = "What DXMT's Rust DLLs (nvngx, nvapi, d3d10core, dxgi) share: the log, COM helpers, the exe's name, float casts and the NVIDIA-extension check"
+description = "What DXMT's Rust DLLs (nvngx, nvapi, d3d10core, dxgi) share: the log, COM helpers, the configuration, the exe's name, float casts, the gamma ramp, DXMT's private D3D interfaces and the NVIDIA-extension check"
 publish = false
 
 [features]
