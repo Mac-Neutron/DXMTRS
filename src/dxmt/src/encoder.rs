@@ -336,6 +336,18 @@ impl Encoder {
         self.append(cmd, |k| matches!(k, PassKind::Compute));
     }
 
+    /// Uninitialized memory of `size` bytes aligned to `align`, valid until the next chunk.
+    ///
+    /// What a record points to (a set-bytes record's bytes) lives here.
+    ///
+    /// # Panics
+    ///
+    /// When `align` is not a power of two, or `size` rounded up to it overflows `isize`.
+    pub fn allocate_cpu(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        let layout = Layout::from_size_align(size, align).expect("a valid size and alignment");
+        self.heap.allocate(layout)
+    }
+
     pub fn bind_vertex_buffer(
         &mut self,
         slot: usize,

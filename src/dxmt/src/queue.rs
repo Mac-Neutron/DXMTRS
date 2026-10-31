@@ -22,9 +22,9 @@ use std::{
 
 use dxmt_util::sync::{self, CpuFence};
 use winemetal_sys::{
-    MTLCommandBuffer_commit, MTLCommandBuffer_status, MTLCommandBuffer_waitUntilCompleted,
-    MTLCommandQueue_commandBuffer, MTLDevice_newCommandQueue, MTLDevice_newSharedEvent,
-    MTLSharedEvent_signaledValue, Obj, Pool, SharedEventListener_create,
+    MTLCommandBuffer_commit, MTLCommandBuffer_encodeWaitForEvent, MTLCommandBuffer_status,
+    MTLCommandBuffer_waitUntilCompleted, MTLCommandQueue_commandBuffer, MTLDevice_newCommandQueue,
+    MTLDevice_newSharedEvent, MTLSharedEvent_signaledValue, Obj, Pool, SharedEventListener_create,
     SharedEventListener_destroy, SharedEventListener_start,
     wire::WMT_COMMAND_BUFFER_STATUS_SCHEDULED,
 };
@@ -32,6 +32,7 @@ use winemetal_sys::{
 use crate::{
     arena::{BlockPool, Commands},
     encoder::{Encoder, QueryBuffers},
+    initializer::ResourceInitializer,
 };
 
 /// The encode thread's name.
@@ -82,6 +83,8 @@ pub struct Chunk {
     commands: Commands,
     retained: Vec<Arc<dyn Send + Sync>>,
     cmdbuf: Option<Obj>,
+    /// The resource initializer's event value the command buffer waits for, or 0.
+    initializer_wait: u64,
     id: u64,
     event_id: u64,
     frame: u64,
@@ -94,6 +97,7 @@ impl Chunk {
             commands: Commands::new(pool),
             retained: Vec::new(),
             cmdbuf: None,
+            initializer_wait: 0,
             id: 0,
             event_id: 0,
             frame: 0,
@@ -262,10 +266,11 @@ struct Shared {
     chunks: Box<[UnsafeCell<Chunk>]>,
     queue: Option<Obj>,
     frame_latency: CpuFence,
+    initializer: ResourceInitializer,
 }
 
 // SAFETY: a chunk is reached by the one thread the ring hands it to (the module's rule); the
-// rest is atomic or never written after `Queue::new`.
+// rest is atomic, locked or never written after `Queue::new`.
 unsafe impl Sync for Shared {}
 
 impl Shared {
@@ -324,6 +329,7 @@ impl Queue {
                 chunks,
                 queue,
                 frame_latency: CpuFence::new(0),
+                initializer: ResourceInitializer::new(device),
             }),
             max_latency: AtomicU32::new(config.max_latency),
             config,
@@ -357,6 +363,12 @@ impl Queue {
         &self.config
     }
 
+    /// The initializer of new resources, whose work the next committed chunk waits for.
+    #[must_use]
+    pub fn initializer(&self) -> &ResourceInitializer {
+        &self.shared.initializer
+    }
+
     /// The chunk being recorded: the recording thread's alone, which `&mut self` makes so.
     pub fn chunk(&mut self) -> &mut Chunk {
         let slot = self.shared.slot(self.shared.ring.current());
@@ -370,10 +382,12 @@ impl Queue {
         self.event_seq += 1;
         let (id, event_id) = (self.current_seq(), self.event_seq);
         let frame = self.frame.load(Ordering::Relaxed);
+        let initializer_wait = self.shared.initializer.flush_to_wait();
         let chunk = self.chunk();
         chunk.id = id;
         chunk.event_id = event_id;
         chunk.frame = frame;
+        chunk.initializer_wait = initializer_wait;
         self.shared.ring.commit();
     }
 
@@ -478,8 +492,7 @@ fn spawn(name: Option<&str>, f: impl FnOnce() + Send + 'static) -> io::Result<Jo
 /// `dxmt-encode-thread`: each committed chunk's commands into a command buffer, in order.
 ///
 /// The encoder's flush encodes the chunk's passes and signals `event` at the chunk's value.
-// ponytail: the capture, the resource initializer's wait and the queries' readbacks (E4's: the
-// buffers the flush takes) join this loop with the pieces that own them.
+// ponytail: the capture joins this loop.
 fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
     sync::set_time_critical();
     let queue = shared.queue.as_ref().map_or(0, Obj::handle);
@@ -493,6 +506,11 @@ fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
         let cmdbuf = unsafe { MTLCommandQueue_commandBuffer(queue) };
         // SAFETY: an autoreleased command buffer the pool keeps alive until here, or nil.
         chunk.cmdbuf = unsafe { Obj::retain(cmdbuf) };
+        if chunk.initializer_wait != 0 {
+            let event = shared.initializer.event();
+            // SAFETY: the command buffer just made, or nil; the initializer's live event.
+            unsafe { MTLCommandBuffer_encodeWaitForEvent(cmdbuf, event, chunk.initializer_wait) };
+        }
         encoder.begin_chunk(seq);
         chunk.commands.run(encoder);
         // SAFETY: the command buffer just made, or nil; the queue's shared event, or nil, which
