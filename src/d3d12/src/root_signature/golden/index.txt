@@ -1,0 +1,12 @@
+root 01-v10-empty version=1 hr=00000000 size=68
+root 02-v10-empty-ia version=1 hr=00000000 size=68
+root 03-v10-constants version=1 hr=00000000 size=116
+root 04-v10-root-descriptors version=1 hr=00000000 size=128
+root 05-v10-tables version=1 hr=00000000 size=188
+root 06-v10-static-samplers version=1 hr=00000000 size=172
+root 07-v10-everything version=1 hr=00000000 size=348
+root 08-v11-root-descriptor-flags version=2 hr=00000000 size=164
+root 09-v11-range-flags version=2 hr=00000000 size=276
+root 10-v11-visibilities version=2 hr=00000000 size=328
+root 11-v11-static-samplers-deny version=2 hr=00000000 size=224
+root 12-v11-everything version=2 hr=00000000 size=480

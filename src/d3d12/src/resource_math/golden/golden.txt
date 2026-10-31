@@ -1,0 +1,848 @@
+desc buf-1 dim=1 w=1 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=1
+  sub 0 off=0 fmt=0 w=1 h=1 d=1 pitch=256 rows=1 rowsize=1
+ footprints one-base1000 first=0 count=1 base=1000 total=1
+  sub 0 off=1000 fmt=0 w=1 h=1 d=1 pitch=256 rows=1 rowsize=1
+ end
+desc buf-256 dim=1 w=256 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=256
+  sub 0 off=0 fmt=0 w=256 h=1 d=1 pitch=256 rows=1 rowsize=256
+ footprints one-base1000 first=0 count=1 base=1000 total=256
+  sub 0 off=1000 fmt=0 w=256 h=1 d=1 pitch=256 rows=1 rowsize=256
+ end
+desc buf-4096 dim=1 w=4096 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=4096
+  sub 0 off=0 fmt=0 w=4096 h=1 d=1 pitch=4096 rows=1 rowsize=4096
+ footprints one-base1000 first=0 count=1 base=1000 total=4096
+  sub 0 off=1000 fmt=0 w=4096 h=1 d=1 pitch=4096 rows=1 rowsize=4096
+ end
+desc buf-65536 dim=1 w=65536 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=65536
+  sub 0 off=0 fmt=0 w=65536 h=1 d=1 pitch=65536 rows=1 rowsize=65536
+ footprints one-base1000 first=0 count=1 base=1000 total=65536
+  sub 0 off=1000 fmt=0 w=65536 h=1 d=1 pitch=65536 rows=1 rowsize=65536
+ end
+desc buf-65537 dim=1 w=65537 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=65537
+  sub 0 off=0 fmt=0 w=65537 h=1 d=1 pitch=65792 rows=1 rowsize=65537
+ footprints one-base1000 first=0 count=1 base=1000 total=65537
+  sub 0 off=1000 fmt=0 w=65537 h=1 d=1 pitch=65792 rows=1 rowsize=65537
+ end
+desc buf-1MiB dim=1 w=1048576 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=1048576 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=1048576
+  sub 0 off=0 fmt=0 w=1048576 h=1 d=1 pitch=1048576 rows=1 rowsize=1048576
+ footprints one-base1000 first=0 count=1 base=1000 total=1048576
+  sub 0 off=1000 fmt=0 w=1048576 h=1 d=1 pitch=1048576 rows=1 rowsize=1048576
+ end
+desc buf-4097-uav dim=1 w=4097 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x4
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=4097
+  sub 0 off=0 fmt=0 w=4097 h=1 d=1 pitch=4352 rows=1 rowsize=4097
+ footprints one-base1000 first=0 count=1 base=1000 total=4097
+  sub 0 off=1000 fmt=0 w=4097 h=1 d=1 pitch=4352 rows=1 rowsize=4097
+ end
+desc buf-3MiB+1 dim=1 w=3145729 h=1 depth_or_array=1 mips=1 fmt=0 samples=1 layout=1 flags=0x0
+ alloc size=3211264 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=3145729
+  sub 0 off=0 fmt=0 w=3145729 h=1 d=1 pitch=3145984 rows=1 rowsize=3145729
+ footprints one-base1000 first=0 count=1 base=1000 total=3145729
+  sub 0 off=1000 fmt=0 w=3145729 h=1 d=1 pitch=3145984 rows=1 rowsize=3145729
+ end
+desc tex1d-64-r8 dim=2 w=64 h=1 depth_or_array=1 mips=1 fmt=61 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=64
+  sub 0 off=0 fmt=61 w=64 h=1 d=1 pitch=256 rows=1 rowsize=64
+ footprints one-base1000 first=0 count=1 base=1000 total=64
+  sub 0 off=1000 fmt=61 w=64 h=1 d=1 pitch=256 rows=1 rowsize=64
+ end
+desc tex1d-300-rgba8-mips9 dim=2 w=300 h=1 depth_or_array=1 mips=9 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=9 array=1 planes=1 n=9
+ footprints all-base0 first=0 count=9 base=0 total=5636
+  sub 0 off=0 fmt=28 w=300 h=1 d=1 pitch=1280 rows=1 rowsize=1200
+  sub 1 off=1536 fmt=28 w=150 h=1 d=1 pitch=768 rows=1 rowsize=600
+  sub 2 off=2560 fmt=28 w=75 h=1 d=1 pitch=512 rows=1 rowsize=300
+  sub 3 off=3072 fmt=28 w=37 h=1 d=1 pitch=256 rows=1 rowsize=148
+  sub 4 off=3584 fmt=28 w=18 h=1 d=1 pitch=256 rows=1 rowsize=72
+  sub 5 off=4096 fmt=28 w=9 h=1 d=1 pitch=256 rows=1 rowsize=36
+  sub 6 off=4608 fmt=28 w=4 h=1 d=1 pitch=256 rows=1 rowsize=16
+  sub 7 off=5120 fmt=28 w=2 h=1 d=1 pitch=256 rows=1 rowsize=8
+  sub 8 off=5632 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=8 base=1000 total=4100
+  sub 1 off=1000 fmt=28 w=150 h=1 d=1 pitch=768 rows=1 rowsize=600
+  sub 2 off=2024 fmt=28 w=75 h=1 d=1 pitch=512 rows=1 rowsize=300
+  sub 3 off=2536 fmt=28 w=37 h=1 d=1 pitch=256 rows=1 rowsize=148
+  sub 4 off=3048 fmt=28 w=18 h=1 d=1 pitch=256 rows=1 rowsize=72
+  sub 5 off=3560 fmt=28 w=9 h=1 d=1 pitch=256 rows=1 rowsize=36
+  sub 6 off=4072 fmt=28 w=4 h=1 d=1 pitch=256 rows=1 rowsize=16
+  sub 7 off=4584 fmt=28 w=2 h=1 d=1 pitch=256 rows=1 rowsize=8
+  sub 8 off=5096 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=8 count=1 base=0 total=4
+  sub 8 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex1d-array4-mips7 dim=2 w=100 h=1 depth_or_array=4 mips=7 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=7 array=4 planes=1 n=28
+ footprints all-base0 first=0 count=28 base=0 total=13828
+  sub 0 off=0 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 1 off=512 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 2 off=1024 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 3 off=1536 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 4 off=2048 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 5 off=2560 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 6 off=3072 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 7 off=3584 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 8 off=4096 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 9 off=4608 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 10 off=5120 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 11 off=5632 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 12 off=6144 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 13 off=6656 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 14 off=7168 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 15 off=7680 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 16 off=8192 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 17 off=8704 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 18 off=9216 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 19 off=9728 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 20 off=10240 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 21 off=10752 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 22 off=11264 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 23 off=11776 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 24 off=12288 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 25 off=12800 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 26 off=13312 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 27 off=13824 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=27 base=1000 total=13316
+  sub 1 off=1000 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 2 off=1512 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 3 off=2024 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 4 off=2536 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 5 off=3048 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 6 off=3560 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 7 off=4072 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 8 off=4584 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 9 off=5096 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 10 off=5608 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 11 off=6120 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 12 off=6632 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 13 off=7144 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 14 off=7656 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 15 off=8168 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 16 off=8680 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 17 off=9192 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 18 off=9704 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 19 off=10216 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 20 off=10728 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 21 off=11240 fmt=28 w=100 h=1 d=1 pitch=512 rows=1 rowsize=400
+  sub 22 off=11752 fmt=28 w=50 h=1 d=1 pitch=256 rows=1 rowsize=200
+  sub 23 off=12264 fmt=28 w=25 h=1 d=1 pitch=256 rows=1 rowsize=100
+  sub 24 off=12776 fmt=28 w=12 h=1 d=1 pitch=256 rows=1 rowsize=48
+  sub 25 off=13288 fmt=28 w=6 h=1 d=1 pitch=256 rows=1 rowsize=24
+  sub 26 off=13800 fmt=28 w=3 h=1 d=1 pitch=256 rows=1 rowsize=12
+  sub 27 off=14312 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=27 count=1 base=0 total=4
+  sub 27 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex2d-1x1 dim=3 w=1 h=1 depth_or_array=1 mips=1 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=4
+  sub 0 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints one-base1000 first=0 count=1 base=1000 total=4
+  sub 0 off=1000 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex2d-63x63-mips6 dim=3 w=63 h=63 depth_or_array=1 mips=6 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=6 array=1 planes=1 n=6
+ footprints all-base0 first=0 count=6 base=0 total=31748
+  sub 0 off=0 fmt=28 w=63 h=63 d=1 pitch=256 rows=63 rowsize=252
+  sub 1 off=16384 fmt=28 w=31 h=31 d=1 pitch=256 rows=31 rowsize=124
+  sub 2 off=24576 fmt=28 w=15 h=15 d=1 pitch=256 rows=15 rowsize=60
+  sub 3 off=28672 fmt=28 w=7 h=7 d=1 pitch=256 rows=7 rowsize=28
+  sub 4 off=30720 fmt=28 w=3 h=3 d=1 pitch=256 rows=3 rowsize=12
+  sub 5 off=31744 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=5 base=1000 total=15364
+  sub 1 off=1000 fmt=28 w=31 h=31 d=1 pitch=256 rows=31 rowsize=124
+  sub 2 off=9192 fmt=28 w=15 h=15 d=1 pitch=256 rows=15 rowsize=60
+  sub 3 off=13288 fmt=28 w=7 h=7 d=1 pitch=256 rows=7 rowsize=28
+  sub 4 off=15336 fmt=28 w=3 h=3 d=1 pitch=256 rows=3 rowsize=12
+  sub 5 off=16360 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=5 count=1 base=0 total=4
+  sub 5 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex2d-256-chain dim=3 w=256 h=256 depth_or_array=1 mips=0 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=393216 align=65536
+ subresources mips=9 array=1 planes=1 n=9
+ footprints all-base0 first=0 count=9 base=0 total=359940
+  sub 0 off=0 fmt=28 w=256 h=256 d=1 pitch=1024 rows=256 rowsize=1024
+  sub 1 off=262144 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 2 off=327680 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 3 off=344064 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 4 off=352256 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 5 off=356352 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 6 off=358400 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 7 off=359424 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 8 off=359936 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=8 base=1000 total=97796
+  sub 1 off=1000 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 2 off=66536 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 3 off=82920 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 4 off=91112 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 5 off=95208 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 6 off=97256 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 7 off=98280 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 8 off=98792 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=8 count=1 base=0 total=4
+  sub 8 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex2d-1920x1080 dim=3 w=1920 h=1080 depth_or_array=1 mips=1 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=8519680 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=8294400
+  sub 0 off=0 fmt=28 w=1920 h=1080 d=1 pitch=7680 rows=1080 rowsize=7680
+ footprints one-base1000 first=0 count=1 base=1000 total=8294400
+  sub 0 off=1000 fmt=28 w=1920 h=1080 d=1 pitch=7680 rows=1080 rowsize=7680
+ end
+desc tex2d-1920x1080-rtv dim=3 w=1920 h=1080 depth_or_array=1 mips=1 fmt=28 samples=1 layout=0 flags=0x1
+ alloc size=8519680 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=8294400
+  sub 0 off=0 fmt=28 w=1920 h=1080 d=1 pitch=7680 rows=1080 rowsize=7680
+ footprints one-base1000 first=0 count=1 base=1000 total=8294400
+  sub 0 off=1000 fmt=28 w=1920 h=1080 d=1 pitch=7680 rows=1080 rowsize=7680
+ end
+desc tex2d-1024x512-f16-array6-mips4 dim=3 w=1024 h=512 depth_or_array=6 mips=4 fmt=10 samples=1 layout=0 flags=0x0
+ alloc size=33816576 align=65536
+ subresources mips=4 array=6 planes=1 n=24
+ footprints all-base0 first=0 count=24 base=0 total=33423360
+  sub 0 off=0 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 1 off=4194304 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 2 off=5242880 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 3 off=5505024 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 4 off=5570560 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 5 off=9764864 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 6 off=10813440 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 7 off=11075584 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 8 off=11141120 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 9 off=15335424 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 10 off=16384000 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 11 off=16646144 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 12 off=16711680 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 13 off=20905984 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 14 off=21954560 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 15 off=22216704 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 16 off=22282240 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 17 off=26476544 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 18 off=27525120 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 19 off=27787264 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 20 off=27852800 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 21 off=32047104 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 22 off=33095680 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 23 off=33357824 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+ footprints from1-base1000 first=1 count=23 base=1000 total=29229056
+  sub 1 off=1000 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 2 off=1049576 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 3 off=1311720 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 4 off=1377256 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 5 off=5571560 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 6 off=6620136 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 7 off=6882280 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 8 off=6947816 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 9 off=11142120 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 10 off=12190696 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 11 off=12452840 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 12 off=12518376 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 13 off=16712680 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 14 off=17761256 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 15 off=18023400 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 16 off=18088936 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 17 off=22283240 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 18 off=23331816 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 19 off=23593960 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+  sub 20 off=23659496 fmt=10 w=1024 h=512 d=1 pitch=8192 rows=512 rowsize=8192
+  sub 21 off=27853800 fmt=10 w=512 h=256 d=1 pitch=4096 rows=256 rowsize=4096
+  sub 22 off=28902376 fmt=10 w=256 h=128 d=1 pitch=2048 rows=128 rowsize=2048
+  sub 23 off=29164520 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+ footprints last-base0 first=23 count=1 base=0 total=65536
+  sub 23 off=0 fmt=10 w=128 h=64 d=1 pitch=1024 rows=64 rowsize=1024
+ end
+desc tex2d-cube-like-array12 dim=3 w=128 h=128 depth_or_array=12 mips=8 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=1245184 align=65536
+ subresources mips=8 array=12 planes=1 n=96
+ footprints all-base0 first=0 count=96 base=0 total=1179140
+  sub 0 off=0 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 1 off=65536 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 2 off=81920 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 3 off=90112 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 4 off=94208 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 5 off=96256 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 6 off=97280 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 7 off=97792 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 8 off=98304 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 9 off=163840 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 10 off=180224 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 11 off=188416 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 12 off=192512 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 13 off=194560 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 14 off=195584 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 15 off=196096 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 16 off=196608 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 17 off=262144 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 18 off=278528 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 19 off=286720 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 20 off=290816 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 21 off=292864 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 22 off=293888 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 23 off=294400 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 24 off=294912 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 25 off=360448 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 26 off=376832 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 27 off=385024 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 28 off=389120 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 29 off=391168 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 30 off=392192 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 31 off=392704 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 32 off=393216 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 33 off=458752 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 34 off=475136 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 35 off=483328 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 36 off=487424 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 37 off=489472 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 38 off=490496 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 39 off=491008 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 40 off=491520 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 41 off=557056 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 42 off=573440 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 43 off=581632 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 44 off=585728 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 45 off=587776 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 46 off=588800 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 47 off=589312 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 48 off=589824 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 49 off=655360 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 50 off=671744 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 51 off=679936 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 52 off=684032 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 53 off=686080 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 54 off=687104 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 55 off=687616 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 56 off=688128 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 57 off=753664 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 58 off=770048 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 59 off=778240 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 60 off=782336 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 61 off=784384 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 62 off=785408 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 63 off=785920 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 64 off=786432 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 65 off=851968 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 66 off=868352 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 67 off=876544 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 68 off=880640 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 69 off=882688 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 70 off=883712 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 71 off=884224 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 72 off=884736 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 73 off=950272 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 74 off=966656 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 75 off=974848 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 76 off=978944 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 77 off=980992 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 78 off=982016 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 79 off=982528 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 80 off=983040 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 81 off=1048576 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 82 off=1064960 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 83 off=1073152 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 84 off=1077248 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 85 off=1079296 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 86 off=1080320 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 87 off=1080832 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 88 off=1081344 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 89 off=1146880 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 90 off=1163264 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 91 off=1171456 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 92 off=1175552 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 93 off=1177600 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 94 off=1178624 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 95 off=1179136 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=95 base=1000 total=1113604
+  sub 1 off=1000 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 2 off=17384 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 3 off=25576 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 4 off=29672 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 5 off=31720 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 6 off=32744 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 7 off=33256 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 8 off=33768 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 9 off=99304 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 10 off=115688 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 11 off=123880 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 12 off=127976 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 13 off=130024 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 14 off=131048 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 15 off=131560 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 16 off=132072 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 17 off=197608 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 18 off=213992 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 19 off=222184 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 20 off=226280 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 21 off=228328 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 22 off=229352 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 23 off=229864 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 24 off=230376 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 25 off=295912 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 26 off=312296 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 27 off=320488 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 28 off=324584 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 29 off=326632 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 30 off=327656 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 31 off=328168 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 32 off=328680 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 33 off=394216 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 34 off=410600 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 35 off=418792 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 36 off=422888 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 37 off=424936 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 38 off=425960 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 39 off=426472 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 40 off=426984 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 41 off=492520 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 42 off=508904 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 43 off=517096 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 44 off=521192 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 45 off=523240 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 46 off=524264 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 47 off=524776 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 48 off=525288 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 49 off=590824 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 50 off=607208 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 51 off=615400 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 52 off=619496 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 53 off=621544 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 54 off=622568 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 55 off=623080 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 56 off=623592 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 57 off=689128 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 58 off=705512 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 59 off=713704 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 60 off=717800 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 61 off=719848 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 62 off=720872 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 63 off=721384 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 64 off=721896 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 65 off=787432 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 66 off=803816 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 67 off=812008 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 68 off=816104 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 69 off=818152 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 70 off=819176 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 71 off=819688 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 72 off=820200 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 73 off=885736 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 74 off=902120 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 75 off=910312 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 76 off=914408 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 77 off=916456 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 78 off=917480 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 79 off=917992 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 80 off=918504 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 81 off=984040 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 82 off=1000424 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 83 off=1008616 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 84 off=1012712 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 85 off=1014760 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 86 off=1015784 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 87 off=1016296 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+  sub 88 off=1016808 fmt=28 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 89 off=1082344 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+  sub 90 off=1098728 fmt=28 w=32 h=32 d=1 pitch=256 rows=32 rowsize=128
+  sub 91 off=1106920 fmt=28 w=16 h=16 d=1 pitch=256 rows=16 rowsize=64
+  sub 92 off=1111016 fmt=28 w=8 h=8 d=1 pitch=256 rows=8 rowsize=32
+  sub 93 off=1113064 fmt=28 w=4 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 94 off=1114088 fmt=28 w=2 h=2 d=1 pitch=256 rows=2 rowsize=8
+  sub 95 off=1114600 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=95 count=1 base=0 total=4
+  sub 95 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex2d-rgba32f-uav dim=3 w=333 h=77 depth_or_array=1 mips=1 fmt=2 samples=1 layout=0 flags=0x4
+ alloc size=589824 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=413904
+  sub 0 off=0 fmt=2 w=333 h=77 d=1 pitch=5376 rows=77 rowsize=5328
+ footprints one-base1000 first=0 count=1 base=1000 total=413904
+  sub 0 off=1000 fmt=2 w=333 h=77 d=1 pitch=5376 rows=77 rowsize=5328
+ end
+desc tex2d-rg8 dim=3 w=17 h=9 depth_or_array=1 mips=3 fmt=49 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=3 array=1 planes=1 n=3
+ footprints all-base0 first=0 count=3 base=0 total=3848
+  sub 0 off=0 fmt=49 w=17 h=9 d=1 pitch=256 rows=9 rowsize=34
+  sub 1 off=2560 fmt=49 w=8 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 2 off=3584 fmt=49 w=4 h=2 d=1 pitch=256 rows=2 rowsize=8
+ footprints from1-base1000 first=1 count=2 base=1000 total=1288
+  sub 1 off=1000 fmt=49 w=8 h=4 d=1 pitch=256 rows=4 rowsize=16
+  sub 2 off=2024 fmt=49 w=4 h=2 d=1 pitch=256 rows=2 rowsize=8
+ footprints last-base0 first=2 count=1 base=0 total=264
+  sub 2 off=0 fmt=49 w=4 h=2 d=1 pitch=256 rows=2 rowsize=8
+ end
+desc tex2d-r10g10b10a2 dim=3 w=100 h=100 depth_or_array=1 mips=1 fmt=24 samples=1 layout=0 flags=0x0
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=51088
+  sub 0 off=0 fmt=24 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ footprints one-base1000 first=0 count=1 base=1000 total=51088
+  sub 0 off=1000 fmt=24 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ end
+desc tex2d-r11g11b10 dim=3 w=100 h=100 depth_or_array=1 mips=1 fmt=26 samples=1 layout=0 flags=0x0
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=51088
+  sub 0 off=0 fmt=26 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ footprints one-base1000 first=0 count=1 base=1000 total=51088
+  sub 0 off=1000 fmt=26 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ end
+desc tex2d-b5g6r5 dim=3 w=100 h=100 depth_or_array=1 mips=1 fmt=85 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=25544
+  sub 0 off=0 fmt=85 w=100 h=100 d=1 pitch=256 rows=100 rowsize=200
+ footprints one-base1000 first=0 count=1 base=1000 total=25544
+  sub 0 off=1000 fmt=85 w=100 h=100 d=1 pitch=256 rows=100 rowsize=200
+ end
+desc tex2d-bc1-256 dim=3 w=256 h=256 depth_or_array=1 mips=0 fmt=71 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=9 array=1 planes=1 n=9
+ footprints all-base0 first=0 count=9 base=0 total=49672
+  sub 0 off=0 fmt=71 w=256 h=256 d=1 pitch=512 rows=64 rowsize=512
+  sub 1 off=32768 fmt=71 w=128 h=128 d=1 pitch=256 rows=32 rowsize=256
+  sub 2 off=40960 fmt=71 w=64 h=64 d=1 pitch=256 rows=16 rowsize=128
+  sub 3 off=45056 fmt=71 w=32 h=32 d=1 pitch=256 rows=8 rowsize=64
+  sub 4 off=47104 fmt=71 w=16 h=16 d=1 pitch=256 rows=4 rowsize=32
+  sub 5 off=48128 fmt=71 w=8 h=8 d=1 pitch=256 rows=2 rowsize=16
+  sub 6 off=48640 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+  sub 7 off=49152 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+  sub 8 off=49664 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+ footprints from1-base1000 first=1 count=8 base=1000 total=16904
+  sub 1 off=1000 fmt=71 w=128 h=128 d=1 pitch=256 rows=32 rowsize=256
+  sub 2 off=9192 fmt=71 w=64 h=64 d=1 pitch=256 rows=16 rowsize=128
+  sub 3 off=13288 fmt=71 w=32 h=32 d=1 pitch=256 rows=8 rowsize=64
+  sub 4 off=15336 fmt=71 w=16 h=16 d=1 pitch=256 rows=4 rowsize=32
+  sub 5 off=16360 fmt=71 w=8 h=8 d=1 pitch=256 rows=2 rowsize=16
+  sub 6 off=16872 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+  sub 7 off=17384 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+  sub 8 off=17896 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+ footprints last-base0 first=8 count=1 base=0 total=8
+  sub 8 off=0 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+ end
+desc tex2d-bc1-1x1-mips1 dim=3 w=1 h=1 depth_or_array=1 mips=1 fmt=71 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=8
+  sub 0 off=0 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+ footprints one-base1000 first=0 count=1 base=1000 total=8
+  sub 0 off=1000 fmt=71 w=4 h=4 d=1 pitch=256 rows=1 rowsize=8
+ end
+desc tex2d-bc3-130x70-mips5 dim=3 w=130 h=70 depth_or_array=1 mips=5 fmt=77 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=5 array=1 planes=1 n=5
+ footprints all-base0 first=0 count=5 base=0 total=20512
+  sub 0 off=0 fmt=77 w=132 h=72 d=1 pitch=768 rows=18 rowsize=528
+  sub 1 off=13824 fmt=77 w=68 h=36 d=1 pitch=512 rows=9 rowsize=272
+  sub 2 off=18432 fmt=77 w=32 h=20 d=1 pitch=256 rows=5 rowsize=128
+  sub 3 off=19968 fmt=77 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 4 off=20480 fmt=77 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ footprints from1-base1000 first=1 count=4 base=1000 total=6688
+  sub 1 off=1000 fmt=77 w=68 h=36 d=1 pitch=512 rows=9 rowsize=272
+  sub 2 off=5608 fmt=77 w=32 h=20 d=1 pitch=256 rows=5 rowsize=128
+  sub 3 off=7144 fmt=77 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 4 off=7656 fmt=77 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ footprints last-base0 first=4 count=1 base=0 total=32
+  sub 4 off=0 fmt=77 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ end
+desc tex2d-bc4-64 dim=3 w=64 h=64 depth_or_array=1 mips=3 fmt=80 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=3 array=1 planes=1 n=3
+ footprints all-base0 first=0 count=3 base=0 total=6944
+  sub 0 off=0 fmt=80 w=64 h=64 d=1 pitch=256 rows=16 rowsize=128
+  sub 1 off=4096 fmt=80 w=32 h=32 d=1 pitch=256 rows=8 rowsize=64
+  sub 2 off=6144 fmt=80 w=16 h=16 d=1 pitch=256 rows=4 rowsize=32
+ footprints from1-base1000 first=1 count=2 base=1000 total=2848
+  sub 1 off=1000 fmt=80 w=32 h=32 d=1 pitch=256 rows=8 rowsize=64
+  sub 2 off=3048 fmt=80 w=16 h=16 d=1 pitch=256 rows=4 rowsize=32
+ footprints last-base0 first=2 count=1 base=0 total=800
+  sub 2 off=0 fmt=80 w=16 h=16 d=1 pitch=256 rows=4 rowsize=32
+ end
+desc tex2d-bc5-array3 dim=3 w=64 h=32 depth_or_array=3 mips=4 fmt=83 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=4 array=3 planes=1 n=12
+ footprints all-base0 first=0 count=12 base=0 total=11808
+  sub 0 off=0 fmt=83 w=64 h=32 d=1 pitch=256 rows=8 rowsize=256
+  sub 1 off=2048 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 2 off=3072 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 3 off=3584 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+  sub 4 off=4096 fmt=83 w=64 h=32 d=1 pitch=256 rows=8 rowsize=256
+  sub 5 off=6144 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 6 off=7168 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 7 off=7680 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+  sub 8 off=8192 fmt=83 w=64 h=32 d=1 pitch=256 rows=8 rowsize=256
+  sub 9 off=10240 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 10 off=11264 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 11 off=11776 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ footprints from1-base1000 first=1 count=11 base=1000 total=9760
+  sub 1 off=1000 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 2 off=2024 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 3 off=2536 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+  sub 4 off=3048 fmt=83 w=64 h=32 d=1 pitch=256 rows=8 rowsize=256
+  sub 5 off=5096 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 6 off=6120 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 7 off=6632 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+  sub 8 off=7144 fmt=83 w=64 h=32 d=1 pitch=256 rows=8 rowsize=256
+  sub 9 off=9192 fmt=83 w=32 h=16 d=1 pitch=256 rows=4 rowsize=128
+  sub 10 off=10216 fmt=83 w=16 h=8 d=1 pitch=256 rows=2 rowsize=64
+  sub 11 off=10728 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ footprints last-base0 first=11 count=1 base=0 total=32
+  sub 11 off=0 fmt=83 w=8 h=4 d=1 pitch=256 rows=1 rowsize=32
+ end
+desc tex2d-bc6h dim=3 w=96 h=96 depth_or_array=1 mips=2 fmt=95 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=2 array=1 planes=1 n=2
+ footprints all-base0 first=0 count=2 base=0 total=15296
+  sub 0 off=0 fmt=95 w=96 h=96 d=1 pitch=512 rows=24 rowsize=384
+  sub 1 off=12288 fmt=95 w=48 h=48 d=1 pitch=256 rows=12 rowsize=192
+ footprints from1-base1000 first=1 count=1 base=1000 total=3008
+  sub 1 off=1000 fmt=95 w=48 h=48 d=1 pitch=256 rows=12 rowsize=192
+ footprints last-base0 first=1 count=1 base=0 total=3008
+  sub 1 off=0 fmt=95 w=48 h=48 d=1 pitch=256 rows=12 rowsize=192
+ end
+desc tex2d-bc7-srgb dim=3 w=200 h=100 depth_or_array=1 mips=4 fmt=99 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=4 array=1 planes=1 n=4
+ footprints all-base0 first=0 count=4 base=0 total=34928
+  sub 0 off=0 fmt=99 w=200 h=100 d=1 pitch=1024 rows=25 rowsize=800
+  sub 1 off=25600 fmt=99 w=100 h=52 d=1 pitch=512 rows=13 rowsize=400
+  sub 2 off=32256 fmt=99 w=52 h=28 d=1 pitch=256 rows=7 rowsize=208
+  sub 3 off=34304 fmt=99 w=28 h=12 d=1 pitch=256 rows=3 rowsize=112
+ footprints from1-base1000 first=1 count=3 base=1000 total=9328
+  sub 1 off=1000 fmt=99 w=100 h=52 d=1 pitch=512 rows=13 rowsize=400
+  sub 2 off=7656 fmt=99 w=52 h=28 d=1 pitch=256 rows=7 rowsize=208
+  sub 3 off=9704 fmt=99 w=28 h=12 d=1 pitch=256 rows=3 rowsize=112
+ footprints last-base0 first=3 count=1 base=0 total=624
+  sub 3 off=0 fmt=99 w=28 h=12 d=1 pitch=256 rows=3 rowsize=112
+ end
+desc tex2d-d32 dim=3 w=512 h=512 depth_or_array=1 mips=1 fmt=40 samples=1 layout=0 flags=0x2
+ alloc size=1114112 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=1048576
+  sub 0 off=0 fmt=40 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ footprints one-base1000 first=0 count=1 base=1000 total=1048576
+  sub 0 off=1000 fmt=40 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ end
+desc tex2d-d16 dim=3 w=512 h=512 depth_or_array=1 mips=1 fmt=55 samples=1 layout=0 flags=0x2
+ alloc size=589824 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=524288
+  sub 0 off=0 fmt=55 w=512 h=512 d=1 pitch=1024 rows=512 rowsize=1024
+ footprints one-base1000 first=0 count=1 base=1000 total=524288
+  sub 0 off=1000 fmt=55 w=512 h=512 d=1 pitch=1024 rows=512 rowsize=1024
+ end
+desc tex2d-d24s8 dim=3 w=256 h=256 depth_or_array=1 mips=1 fmt=45 samples=1 layout=0 flags=0x2
+ alloc size=393216 align=65536
+ subresources mips=1 array=1 planes=2 n=2
+ footprints all-base0 first=0 count=2 base=0 total=392960
+  sub 0 off=0 fmt=39 w=256 h=256 d=1 pitch=1024 rows=256 rowsize=1024
+  sub 1 off=262144 fmt=60 w=256 h=256 d=1 pitch=512 rows=256 rowsize=256
+ footprints from1-base1000 first=1 count=1 base=1000 total=130816
+  sub 1 off=1000 fmt=60 w=256 h=256 d=1 pitch=512 rows=256 rowsize=256
+ footprints last-base0 first=1 count=1 base=0 total=130816
+  sub 1 off=0 fmt=60 w=256 h=256 d=1 pitch=512 rows=256 rowsize=256
+ end
+desc tex2d-d32s8 dim=3 w=128 h=128 depth_or_array=1 mips=1 fmt=20 samples=1 layout=0 flags=0x2
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=2 n=2
+ footprints all-base0 first=0 count=2 base=0 total=130688
+  sub 0 off=0 fmt=39 w=128 h=128 d=1 pitch=512 rows=128 rowsize=512
+  sub 1 off=65536 fmt=60 w=128 h=128 d=1 pitch=512 rows=128 rowsize=128
+ footprints from1-base1000 first=1 count=1 base=1000 total=65152
+  sub 1 off=1000 fmt=60 w=128 h=128 d=1 pitch=512 rows=128 rowsize=128
+ footprints last-base0 first=1 count=1 base=0 total=65152
+  sub 1 off=0 fmt=60 w=128 h=128 d=1 pitch=512 rows=128 rowsize=128
+ end
+desc tex2d-d32s8-array3-mips3 dim=3 w=128 h=64 depth_or_array=3 mips=3 fmt=20 samples=1 layout=0 flags=0x2
+ alloc size=262144 align=65536
+ subresources mips=3 array=3 planes=2 n=18
+ footprints all-base0 first=0 count=18 base=0 total=343584
+  sub 0 off=0 fmt=39 w=128 h=64 d=1 pitch=512 rows=64 rowsize=512
+  sub 1 off=32768 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 2 off=49152 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 3 off=57344 fmt=39 w=128 h=64 d=1 pitch=512 rows=64 rowsize=512
+  sub 4 off=90112 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 5 off=106496 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 6 off=114688 fmt=39 w=128 h=64 d=1 pitch=512 rows=64 rowsize=512
+  sub 7 off=147456 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 8 off=163840 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 9 off=172032 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 10 off=204800 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 11 off=221184 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+  sub 12 off=229376 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 13 off=262144 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 14 off=278528 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+  sub 15 off=286720 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 16 off=319488 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 17 off=335872 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+ footprints from1-base1000 first=1 count=17 base=1000 total=310816
+  sub 1 off=1000 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 2 off=17384 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 3 off=25576 fmt=39 w=128 h=64 d=1 pitch=512 rows=64 rowsize=512
+  sub 4 off=58344 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 5 off=74728 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 6 off=82920 fmt=39 w=128 h=64 d=1 pitch=512 rows=64 rowsize=512
+  sub 7 off=115688 fmt=39 w=64 h=32 d=1 pitch=512 rows=32 rowsize=256
+  sub 8 off=132072 fmt=39 w=32 h=16 d=1 pitch=512 rows=16 rowsize=128
+  sub 9 off=140264 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 10 off=173032 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 11 off=189416 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+  sub 12 off=197608 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 13 off=230376 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 14 off=246760 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+  sub 15 off=254952 fmt=60 w=128 h=64 d=1 pitch=512 rows=64 rowsize=128
+  sub 16 off=287720 fmt=60 w=64 h=32 d=1 pitch=512 rows=32 rowsize=64
+  sub 17 off=304104 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+ footprints last-base0 first=17 count=1 base=0 total=7712
+  sub 17 off=0 fmt=60 w=32 h=16 d=1 pitch=512 rows=16 rowsize=32
+ end
+desc tex2d-d24s8-mips4 dim=3 w=100 h=100 depth_or_array=1 mips=4 fmt=45 samples=1 layout=0 flags=0x2
+ alloc size=131072 align=65536
+ subresources mips=4 array=1 planes=2 n=8
+ footprints all-base0 first=0 count=8 base=0 total=190988
+  sub 0 off=0 fmt=39 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+  sub 1 off=51200 fmt=39 w=50 h=50 d=1 pitch=512 rows=50 rowsize=200
+  sub 2 off=76800 fmt=39 w=25 h=25 d=1 pitch=512 rows=25 rowsize=100
+  sub 3 off=89600 fmt=39 w=12 h=12 d=1 pitch=512 rows=12 rowsize=48
+  sub 4 off=95744 fmt=60 w=100 h=100 d=1 pitch=512 rows=100 rowsize=100
+  sub 5 off=146944 fmt=60 w=50 h=50 d=1 pitch=512 rows=50 rowsize=50
+  sub 6 off=172544 fmt=60 w=25 h=25 d=1 pitch=512 rows=25 rowsize=25
+  sub 7 off=185344 fmt=60 w=12 h=12 d=1 pitch=512 rows=12 rowsize=12
+ footprints from1-base1000 first=1 count=7 base=1000 total=139788
+  sub 1 off=1000 fmt=39 w=50 h=50 d=1 pitch=512 rows=50 rowsize=200
+  sub 2 off=26600 fmt=39 w=25 h=25 d=1 pitch=512 rows=25 rowsize=100
+  sub 3 off=39400 fmt=39 w=12 h=12 d=1 pitch=512 rows=12 rowsize=48
+  sub 4 off=45544 fmt=60 w=100 h=100 d=1 pitch=512 rows=100 rowsize=100
+  sub 5 off=96744 fmt=60 w=50 h=50 d=1 pitch=512 rows=50 rowsize=50
+  sub 6 off=122344 fmt=60 w=25 h=25 d=1 pitch=512 rows=25 rowsize=25
+  sub 7 off=135144 fmt=60 w=12 h=12 d=1 pitch=512 rows=12 rowsize=12
+ footprints last-base0 first=7 count=1 base=0 total=5644
+  sub 7 off=0 fmt=60 w=12 h=12 d=1 pitch=512 rows=12 rowsize=12
+ end
+desc tex2d-typeless-r32 dim=3 w=100 h=100 depth_or_array=1 mips=1 fmt=39 samples=1 layout=0 flags=0x2
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=51088
+  sub 0 off=0 fmt=39 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ footprints one-base1000 first=0 count=1 base=1000 total=51088
+  sub 0 off=1000 fmt=39 w=100 h=100 d=1 pitch=512 rows=100 rowsize=400
+ end
+desc tex2d-msaa4-rtv dim=3 w=512 h=512 depth_or_array=1 mips=1 fmt=28 samples=4 layout=0 flags=0x1
+ alloc size=8388608 align=4194304
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=1048576
+  sub 0 off=0 fmt=28 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ footprints one-base1000 first=0 count=1 base=1000 total=1048576
+  sub 0 off=1000 fmt=28 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ end
+desc tex2d-msaa4-d32 dim=3 w=512 h=512 depth_or_array=1 mips=1 fmt=40 samples=4 layout=0 flags=0x2
+ alloc size=8388608 align=4194304
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=1048576
+  sub 0 off=0 fmt=40 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ footprints one-base1000 first=0 count=1 base=1000 total=1048576
+  sub 0 off=1000 fmt=40 w=512 h=512 d=1 pitch=2048 rows=512 rowsize=2048
+ end
+desc tex2d-rowmajor-64 dim=3 w=64 h=64 depth_or_array=1 mips=1 fmt=28 samples=1 layout=1 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=16384
+  sub 0 off=0 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+ footprints one-base1000 first=0 count=1 base=1000 total=16384
+  sub 0 off=1000 fmt=28 w=64 h=64 d=1 pitch=256 rows=64 rowsize=256
+ end
+desc tex3d-32-mips6 dim=4 w=32 h=32 depth_or_array=32 mips=6 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=262144 align=65536
+ subresources mips=6 array=1 planes=1 n=6
+ footprints all-base0 first=0 count=6 base=0 total=349188
+  sub 0 off=0 fmt=28 w=32 h=32 d=32 pitch=256 rows=32 rowsize=128
+  sub 1 off=262144 fmt=28 w=16 h=16 d=16 pitch=256 rows=16 rowsize=64
+  sub 2 off=327680 fmt=28 w=8 h=8 d=8 pitch=256 rows=8 rowsize=32
+  sub 3 off=344064 fmt=28 w=4 h=4 d=4 pitch=256 rows=4 rowsize=16
+  sub 4 off=348160 fmt=28 w=2 h=2 d=2 pitch=256 rows=2 rowsize=8
+  sub 5 off=349184 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=5 base=1000 total=87044
+  sub 1 off=1000 fmt=28 w=16 h=16 d=16 pitch=256 rows=16 rowsize=64
+  sub 2 off=66536 fmt=28 w=8 h=8 d=8 pitch=256 rows=8 rowsize=32
+  sub 3 off=82920 fmt=28 w=4 h=4 d=4 pitch=256 rows=4 rowsize=16
+  sub 4 off=87016 fmt=28 w=2 h=2 d=2 pitch=256 rows=2 rowsize=8
+  sub 5 off=88040 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=5 count=1 base=0 total=4
+  sub 5 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex3d-17x9x5-mips0 dim=4 w=17 h=9 depth_or_array=5 mips=0 fmt=28 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=5 array=1 planes=1 n=5
+ footprints all-base0 first=0 count=5 base=0 total=14852
+  sub 0 off=0 fmt=28 w=17 h=9 d=5 pitch=256 rows=9 rowsize=68
+  sub 1 off=11776 fmt=28 w=8 h=4 d=2 pitch=256 rows=4 rowsize=32
+  sub 2 off=13824 fmt=28 w=4 h=2 d=1 pitch=256 rows=2 rowsize=16
+  sub 3 off=14336 fmt=28 w=2 h=1 d=1 pitch=256 rows=1 rowsize=8
+  sub 4 off=14848 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints from1-base1000 first=1 count=4 base=1000 total=3076
+  sub 1 off=1000 fmt=28 w=8 h=4 d=2 pitch=256 rows=4 rowsize=32
+  sub 2 off=3048 fmt=28 w=4 h=2 d=1 pitch=256 rows=2 rowsize=16
+  sub 3 off=3560 fmt=28 w=2 h=1 d=1 pitch=256 rows=1 rowsize=8
+  sub 4 off=4072 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ footprints last-base0 first=4 count=1 base=0 total=4
+  sub 4 off=0 fmt=28 w=1 h=1 d=1 pitch=256 rows=1 rowsize=4
+ end
+desc tex3d-bc1-16x16x8 dim=4 w=16 h=16 depth_or_array=8 mips=3 fmt=71 samples=1 layout=0 flags=0x0
+ alloc size=65536 align=65536
+ subresources mips=3 array=1 planes=1 n=3
+ footprints all-base0 first=0 count=3 base=0 total=10504
+  sub 0 off=0 fmt=71 w=16 h=16 d=8 pitch=256 rows=4 rowsize=32
+  sub 1 off=8192 fmt=71 w=8 h=8 d=4 pitch=256 rows=2 rowsize=16
+  sub 2 off=10240 fmt=71 w=4 h=4 d=2 pitch=256 rows=1 rowsize=8
+ footprints from1-base1000 first=1 count=2 base=1000 total=2312
+  sub 1 off=1000 fmt=71 w=8 h=8 d=4 pitch=256 rows=2 rowsize=16
+  sub 2 off=3048 fmt=71 w=4 h=4 d=2 pitch=256 rows=1 rowsize=8
+ footprints last-base0 first=2 count=1 base=0 total=264
+  sub 2 off=0 fmt=71 w=4 h=4 d=2 pitch=256 rows=1 rowsize=8
+ end
+desc tex3d-r16f-64x32x16 dim=4 w=64 h=32 depth_or_array=16 mips=1 fmt=54 samples=1 layout=0 flags=0x0
+ alloc size=131072 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=130944
+  sub 0 off=0 fmt=54 w=64 h=32 d=16 pitch=256 rows=32 rowsize=128
+ footprints one-base1000 first=0 count=1 base=1000 total=130944
+  sub 0 off=1000 fmt=54 w=64 h=32 d=16 pitch=256 rows=32 rowsize=128
+ end
+desc tex3d-uav-rgba32f dim=4 w=8 h=8 depth_or_array=8 mips=1 fmt=2 samples=1 layout=0 flags=0x4
+ alloc size=65536 align=65536
+ subresources mips=1 array=1 planes=1 n=1
+ footprints all-base0 first=0 count=1 base=0 total=16256
+  sub 0 off=0 fmt=2 w=8 h=8 d=8 pitch=256 rows=8 rowsize=128
+ footprints one-base1000 first=0 count=1 base=1000 total=16256
+  sub 0 off=1000 fmt=2 w=8 h=8 d=8 pitch=256 rows=8 rowsize=128
+ end

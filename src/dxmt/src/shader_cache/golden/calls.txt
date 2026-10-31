@@ -1,0 +1,484 @@
+ShaderCacheVersion b5156e34459bd9bc
+== row 1: <unset>|<unset>|<unset>|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 2: <unset>|<unset>|<unset>|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 3: <unset>|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 4: <unset>|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 5: <unset>|<unset>|1|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 6: <unset>|<unset>|1|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 7: <unset>|Game.exe|<unset>|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 8: <unset>|Game.exe|<unset>|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 9: <unset>|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 10: <unset>|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 11: <unset>|Game.exe|1|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 12: <unset>|Game.exe|1|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 13: /abs|<unset>|<unset>|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 14: /abs|<unset>|<unset>|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 15: /abs|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 16: /abs|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 17: /abs|<unset>|1|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 18: /abs|<unset>|1|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 19: /abs|Game.exe|<unset>|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 20: /abs|Game.exe|<unset>|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 21: /abs|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 22: /abs|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 23: /abs|Game.exe|1|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 24: /abs|Game.exe|1|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 25: /abs/|<unset>|<unset>|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 26: /abs/|<unset>|<unset>|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 27: /abs/|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 28: /abs/|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 29: /abs/|<unset>|1|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 30: /abs/|<unset>|1|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 31: /abs/|Game.exe|<unset>|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 32: /abs/|Game.exe|<unset>|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 33: /abs/|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 34: /abs/|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 35: /abs/|Game.exe|1|310
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 36: /abs/|Game.exe|1|320
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 37: rel|<unset>|<unset>|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 38: rel|<unset>|<unset>|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 39: rel|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 40: rel|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 41: rel|<unset>|1|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 42: rel|<unset>|1|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 43: rel|Game.exe|<unset>|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 44: rel|Game.exe|<unset>|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 45: rel|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 46: rel|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 47: rel|Game.exe|1|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 48: rel|Game.exe|1|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 49: <empty>|<unset>|<unset>|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 50: <empty>|<unset>|<unset>|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 51: <empty>|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 52: <empty>|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 53: <empty>|<unset>|1|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 54: <empty>|<unset>|1|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 55: <empty>|Game.exe|<unset>|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 56: <empty>|Game.exe|<unset>|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 57: <empty>|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 58: <empty>|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 59: <empty>|Game.exe|1|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 60: <empty>|Game.exe|1|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 61: /|<unset>|<unset>|310
+CacheWriter_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 62: /|<unset>|<unset>|320
+CacheWriter_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 63: /|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 64: /|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 65: /|<unset>|1|310
+CacheWriter_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 66: /|<unset>|1|320
+CacheWriter_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 67: /|Game.exe|<unset>|310
+CacheWriter_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 68: /|Game.exe|<unset>|320
+CacheWriter_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 69: /|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 70: /|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 71: /|Game.exe|1|310
+CacheWriter_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 72: /|Game.exe|1|320
+CacheWriter_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 73: rel/|<unset>|<unset>|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 74: rel/|<unset>|<unset>|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 75: rel/|<unset>|0|310
+   writer none reader none
+-- destroyed
+== row 76: rel/|<unset>|0|320
+   writer none reader none
+-- destroyed
+== row 77: rel/|<unset>|1|310
+CacheWriter_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 78: rel/|<unset>|1|320
+CacheWriter_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt//shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 79: rel/|Game.exe|<unset>|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 80: rel/|Game.exe|<unset>|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 81: rel/|Game.exe|0|310
+   writer none reader none
+-- destroyed
+== row 82: rel/|Game.exe|0|320
+   writer none reader none
+-- destroyed
+== row 83: rel/|Game.exe|1|310
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_310.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== row 84: rel/|Game.exe|1|320
+CacheWriter_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="dxmt/Game.exe/shaders_320.db" version=b5156e34459bd9bc
+   writer open reader open
+NSObject_release reader
+NSObject_release writer
+-- destroyed
+== singleton
+ShaderCacheVersion b5156e34459bd9bc
+CacheWriter_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_310.db" version=b5156e34459bd9bc
+CacheWriter_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+CacheReader_alloc_init path="/abs/shaders_320.db" version=b5156e34459bd9bc
+same(310,310)=1 same(310,320)=0

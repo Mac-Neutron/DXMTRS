@@ -1,0 +1,25 @@
+[package]
+name = "d3d12"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DXMT's d3d12.dll and d3d12.dylib: the Rust linked into the C++ front end, DXMT's core among it"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# DXMT_PERF_BUILD (meson sets it when -DDXMT_PERF_BUILD is in cpp_args): the core's statistics and dump folder compile
+# to nothing and the log drops everything below warnings.
+perf-build = ["dxmt-core/perf-build", "dxmt-util/perf-build"]
+# The VM guest's build (meson sets it from the guest_vm option).
+guest-vm = ["dxmt-core/guest-vm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-core = { workspace = true }
+dxmt-util = { workspace = true }

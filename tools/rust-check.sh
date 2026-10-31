@@ -4,7 +4,8 @@
 # otherwise exit 1, every leg run):
 #   fmt     the pinned nightly's `cargo fmt --all --check` (rustfmt.toml uses unstable options)
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
-#           the same host and i686 lines with MTLD3D_PERF=1 (cfg(perf_tracking) code), in a target folder of their own
+#           the same host and i686 lines with MTLD3D_PERF=1 (cfg(perf_tracking) code), in a target folder of their own,
+#           and the core's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD)
 #   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 and the host
 #   test    the host unit tests, also with MTLD3D_PERF=1 (not mtld3d-mtl's integration tests: see unit_tests)
 #   audit   tools/audit.sh; refuses while an untracked .rs, .toml or .md file exists (the audit reads tracked files)
@@ -54,9 +55,13 @@ case $(rustc --version) in
      exit 2 ;;
 esac
 
-PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir'
+PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
+  -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys'
 PE64_P="$PE_P -p nvngx -p nvapi"
-HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv'
+HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
+  -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys'
+# The core's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
+CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d12/perf-build'
 HOST=aarch64-apple-darwin
 I686=i686-pc-windows-msvc
 
@@ -135,6 +140,8 @@ leg_clippy() {
   lint $HOST -p winemetal --features native || rc=1
   perf lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache || rc=1
   perf lint $I686 $PE_P || rc=1
+  lint $HOST --all-targets $CORE_PERF || rc=1
+  lint $I686 $CORE_PERF || rc=1
   return $rc
 }
 
@@ -161,7 +168,8 @@ leg_test() {
   rc=0
   unit_tests || rc=1
   perf unit_tests || rc=1
-  tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core -p airconv-ir -p airconv --features airconv/oracle \
+  tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core -p airconv-ir -p airconv \
+    -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys --features airconv/oracle \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

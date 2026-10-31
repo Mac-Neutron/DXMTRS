@@ -136,6 +136,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "d3d11"
+version = "0.14.1"
+dependencies = [
+ "dxmt-core",
+ "dxmt-util",
+]
+
+[[package]]
+name = "d3d12"
+version = "0.14.1"
+dependencies = [
+ "dxmt-core",
+ "dxmt-util",
+]
+
+[[package]]
 name = "d3d9"
 version = "0.14.1"
 dependencies = [
@@ -198,6 +214,18 @@ name = "dxgi"
 version = "0.14.1"
 dependencies = [
  "dxmt-util",
+ "winemetal-wire",
+]
+
+[[package]]
+name = "dxmt-core"
+version = "0.14.1"
+dependencies = [
+ "bitflags 2.13.2",
+ "dxmt-util",
+ "libc",
+ "rustc-hash",
+ "winemetal-sys",
  "winemetal-wire",
 ]
 
@@ -832,6 +860,13 @@ dependencies = [
 
 [[package]]
 name = "winemetal-pe"
+version = "0.14.1"
+dependencies = [
+ "winemetal-wire",
+]
+
+[[package]]
+name = "winemetal-sys"
 version = "0.14.1"
 dependencies = [
  "winemetal-wire",

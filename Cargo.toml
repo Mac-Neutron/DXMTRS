@@ -5,6 +5,8 @@ members = [
     "src/airconv",
     "src/airconv/ir",
     "src/d3d10",
+    "src/d3d11",
+    "src/d3d12",
     "src/d3d9",
     "src/d3d9/core",
     "src/d3d9/mtl",
@@ -13,10 +15,12 @@ members = [
     "src/d3d9/types",
     "src/d3d9/unix",
     "src/dxgi",
+    "src/dxmt",
     "src/nvapi",
     "src/nvngx",
     "src/util",
     "src/winemetal",
+    "src/winemetal/sys",
     "src/winemetal/unix",
     "src/winemetal/wire",
     "tests/d3d9/conformance",
@@ -52,11 +56,13 @@ repository = "https://github.com/Mac-Neutron/DXMTRS"
 [workspace.dependencies]
 airconv = { path = "src/airconv" }
 airconv-ir = { path = "src/airconv/ir" }
+dxmt-core = { path = "src/dxmt" }
 dxmt-util = { path = "src/util" }
 mtld3d-core = { path = "src/d3d9/core" }
 mtld3d-mtl = { path = "src/d3d9/mtl" }
 mtld3d-shared = { path = "src/d3d9/shared" }
 mtld3d-types = { path = "src/d3d9/types" }
+winemetal-sys = { path = "src/winemetal/sys" }
 winemetal-wire = { path = "src/winemetal/wire" }
 bitflags = "2"
 block2 = "0.6"

@@ -83,7 +83,8 @@ PE_JOIN_EXEMPT='^tests/d3d9/|/tests(\.rs$|/)'
 # The PE side: the crates that build for -pc-windows-msvc, each named by its src/ and build.rs, and the programs of
 # the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/d3d9/*.rs would also select
 # src/d3d9/unix/** and src/winemetal/*.rs its unix/ and wire/, which run on the Mac.
-PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10'
+PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10
+    src/dxmt src/d3d11 src/d3d12 src/winemetal/sys'
 is_pe() {
     for crate in $PE_CRATES; do
         case $1 in "$crate"/src/*.rs | "$crate"/build.rs) return 0 ;; esac

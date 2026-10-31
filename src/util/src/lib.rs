@@ -5,6 +5,7 @@ pub mod env;
 pub mod float_cast;
 pub mod log;
 pub mod nvext;
+pub mod sync;
 
 /// The LUID DXMT gives the Metal device with `registry_id`: the id's bytes in reverse order.
 ///

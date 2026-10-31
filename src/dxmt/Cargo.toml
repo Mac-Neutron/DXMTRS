@@ -1,0 +1,29 @@
+[package]
+name = "dxmt-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DXMT's core, which d3d11 and d3d12 share: the queue and encoder, resources, formats, the presenter and scalers, the shader cache and the statistics"
+publish = false
+
+[features]
+# DXMT_PERF_BUILD (meson sets it when -DDXMT_PERF_BUILD is in cpp_args): the statistics and the dump folder compile to
+# nothing and the log drops everything below warnings.
+perf-build = ["dxmt-util/perf-build"]
+# The VM guest's build (meson's guest_vm option): winemetal's guest-only functions.
+guest-vm = ["winemetal-sys/guest-vm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+dxmt-util = { workspace = true }
+rustc-hash = { workspace = true }
+winemetal-sys = { workspace = true }
+winemetal-wire = { workspace = true }
+
+# The statistics' thread names, thread ids and local time on macOS (proc_pidinfo, pthread_threadid_np, localtime_r).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }

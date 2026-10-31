@@ -1,0 +1,18 @@
+[package]
+name = "winemetal-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "winemetal's C API for Rust callers: its functions' declarations, generated from winemetal.h"
+publish = false
+
+[features]
+# The VM guest's build: the guest-only functions (WMTMemoryAlloc, WMTMemoryFree, WMTForward) are declared.
+guest-vm = []
+
+[lints]
+workspace = true
+
+[dependencies]
+winemetal-wire = { workspace = true }
