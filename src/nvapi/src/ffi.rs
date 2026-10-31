@@ -1,8 +1,8 @@
 //! What `nvapi64.dll` imports: winemetal's Metal and display calls, and user32's monitors.
 //!
-//! meson links winemetal and user32. Declared without `cfg(windows)`: a host test binary
-//! still links, because the linker strips what no test reaches. A function that calls one of
-//! these is out of the host tests' reach.
+//! winemetal's are winemetal-sys's declarations; meson links winemetal and user32. Declared
+//! without `cfg(windows)`: a host test binary still links, because the linker strips what no
+//! test reaches. A function that calls one of these is out of the host tests' reach.
 
 use core::ffi::c_void;
 
@@ -14,49 +14,12 @@ pub const COLOR_SPACE_SRGB: u64 = 0;
 pub const COLOR_SPACE_HDR_PQ: u64 = 0b100;
 pub const COLOR_SPACE_HDR_SCRGB: u64 = 0b101;
 
-/// `WMTDisplayDescription`.
-#[repr(C)]
-pub struct DisplayDescription {
-    pub red_primaries: [f32; 2],
-    pub blue_primaries: [f32; 2],
-    pub green_primaries: [f32; 2],
-    pub white_points: [f32; 2],
-    pub maximum_edr_color_component_value: f32,
-    pub maximum_potential_edr_color_component_value: f32,
-    pub maximum_reference_edr_color_component_value: f32,
-}
-const _: () = assert!(size_of::<DisplayDescription>() == 44);
-
-/// `WMTHDRMetadata`.
-#[repr(C)]
-pub struct HdrMetadata {
-    pub red_primary: [u16; 2],
-    pub green_primary: [u16; 2],
-    pub blue_primary: [u16; 2],
-    pub white_point: [u16; 2],
-    pub max_mastering_luminance: u32,
-    pub min_mastering_luminance: u32,
-    pub max_content_light_level: u16,
-    pub max_frame_average_light_level: u16,
-}
-const _: () = assert!(size_of::<HdrMetadata>() == 28);
-
-unsafe extern "C" {
-    pub fn WMTCopyAllDevices() -> ObjHandle;
-    pub fn NSArray_count(array: ObjHandle) -> u64;
-    pub fn NSArray_object(array: ObjHandle, index: u64) -> ObjHandle;
-    pub fn MTLDevice_registryID(device: ObjHandle) -> u64;
-    pub fn NSObject_release(object: ObjHandle);
-    pub fn WMTGetPrimaryDisplayId() -> u32;
-    pub fn WMTGetSecondaryDisplayId() -> u32;
-    pub fn WMTGetDisplayDescription(display_id: u32, desc: *mut DisplayDescription);
-    pub fn WMTQueryDisplaySetting(
-        display_id: u32,
-        colorspace: *mut u64,
-        metadata: *mut HdrMetadata,
-    ) -> bool;
-    pub fn WMTUpdateDisplaySetting(display_id: u32, colorspace: u64, metadata: *const HdrMetadata);
-}
+pub use winemetal_sys::{
+    MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, WMTCopyAllDevices,
+    WMTGetDisplayDescription, WMTGetPrimaryDisplayId, WMTGetSecondaryDisplayId,
+    WMTQueryDisplaySetting, WMTUpdateDisplaySetting,
+    wire::{WMTDisplayDescription as DisplayDescription, WMTHDRMetadata as HdrMetadata},
+};
 
 /// `MONITORINFOEXW`: `MONITORINFO` with the device name.
 #[repr(C)]

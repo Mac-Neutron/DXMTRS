@@ -214,6 +214,7 @@ name = "dxgi"
 version = "0.14.1"
 dependencies = [
  "dxmt-util",
+ "winemetal-sys",
  "winemetal-wire",
 ]
 
@@ -474,6 +475,7 @@ name = "nvapi"
 version = "0.14.1"
 dependencies = [
  "dxmt-util",
+ "winemetal-sys",
 ]
 
 [[package]]

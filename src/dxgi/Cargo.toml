@@ -19,4 +19,5 @@ workspace = true
 
 [dependencies]
 dxmt-util = { workspace = true }
+winemetal-sys = { workspace = true }
 winemetal-wire = { workspace = true }

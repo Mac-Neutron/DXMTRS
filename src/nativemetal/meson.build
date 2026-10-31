@@ -1,6 +1,7 @@
 winemetal_src = [
   '../winemetal/winemetal_thunks.c',
   'win32_event.c',
+  'win32_native.cpp',
 ]
 winemetal_link_depends = []
 

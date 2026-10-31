@@ -24,6 +24,28 @@
 # to its integer (intptr_t is isize), an enum to its underlying type (u32 for one without a fixed type, after checking
 # that none of its values is negative), a struct to its winemetal-wire mirror. Fails on a type it cannot map.
 #
+# With --decls it prints winemetal-sys's src/decls.rs, winemetal.h's functions declared for Rust callers:
+#   sh tools/winemetal-layouts.sh --decls "$(sh dxmt/toolchain.sh)" > src/winemetal/sys/src/decls.rs
+# --protos's function set, typed as --protos types it, printed once as an unsafe extern "C" block under cfg(windows)
+# and again as unsafe extern "C-unwind" under cfg(not(windows)); the functions -DDXMT_GUEST_VM adds (the guest's)
+# under cfg(feature = "guest-vm"). The block must come out the same from each Windows target's AST and from Apple
+# clang's (long is 64-bit there), else it fails. Then, compiled on macOS only, the prototype checks of the native
+# build's functions lib.rs declares by hand, printed as --seam-abi prints them: winemetal.h's WMTMemoryHooked and
+# WMTGetWsiHooks (-DDXMT_NATIVE; a pointer to a winemetal struct without a mirror, WMTWsiHooks, is a c_void pointer) and
+# the functions of src/nativemetal/win32_native.cpp's dxmt-abi block.
+#
+# With --seam-abi <header> <module path> it prints a seam's abi.rs, its C ABI asserted against its Rust exports:
+#   sh tools/winemetal-layouts.sh --seam-abi src/dxmt/dxmt_format.hpp crate::format "$(sh dxmt/toolchain.sh)" \
+#     > src/dxmt/src/format/abi.rs
+# The header's lines between /* dxmt-abi begin */ and /* dxmt-abi end */ are C (a C++ header puts its extern "C" {
+# before the begin line and its } after the end line), read after <stddef.h> and winemetal.h. Per target (the four
+# Windows ones, then aarch64-apple-darwin, whose exports are "C-unwind") each of the block's functions is printed as
+# const _: unsafe extern "C" fn(..) = <module path>::<name>; under that target's cfg. Types as --protos types them, a
+# winemetal struct as its winemetal-wire mirror, size_t and uintptr_t as usize, ptrdiff_t and intptr_t as isize, long
+# as the target's; a pointer to a struct winemetal.h doesn't define points to <module path>::<Name>, the seam's mirror
+# (a snake_case name in CamelCase, an all-capitals word capitalised: MTL_DXGI_FORMAT_DESC is MtlDxgiFormatDesc). Fails
+# on a type it cannot map and on a header with no block or no function in it.
+#
 # With --airconv (no other argument) it prints airconv's src/abi/layouts.rs instead, the compile-time asserts that pin
 # the crate's mirrors in src/abi.rs to airconv_public.h and dxil/dxil_public.h:
 #   sh tools/winemetal-layouts.sh --airconv > src/airconv/src/abi/layouts.rs
@@ -35,11 +57,18 @@
 # ones included) is missing from the dump or has no mirror (a #[repr(C)] struct or union of abi.rs), when a mirror
 # names nothing in the C, on a bitfield it cannot place, and when the enumerators and abi.rs's constants differ.
 set -eu
-protos= airconv=
-[ "${1:-}" != --protos ] || { protos=1; shift; }
-[ "${1:-}" != --airconv ] || { airconv=1; shift; }
-usage() { echo "usage: winemetal-layouts.sh [--protos] <llvm-mingw-bin> | --airconv" >&2; exit 2; }
-if [ -n "$airconv" ]; then [ $# -eq 0 ] || usage; else [ $# -eq 1 ] || usage; fi
+usage() {
+  echo "usage: winemetal-layouts.sh [--protos | --decls | --seam-abi <header> <module path>] <llvm-mingw-bin>" >&2
+  echo "       winemetal-layouts.sh --airconv" >&2
+  exit 2
+}
+case ${1:-} in
+--protos | --decls) mode=${1#--}; shift ;;
+--seam-abi) [ $# -eq 4 ] || usage; mode=seam header=$2 module=$3; shift 3 ;;
+--airconv) [ $# -eq 1 ] || usage; mode=airconv; shift ;;
+*) mode=layouts ;;
+esac
+[ "$mode" = airconv ] || [ $# -eq 1 ] || usage
 bin=${1:-}
 root=$(cd "$(dirname "$0")/.." && pwd)
 wm=$root/src/winemetal
@@ -77,8 +106,9 @@ function rust(s,   o, i, k, w) {
 }'
 
 flags="-DDXMT_GUEST_VM -I$wm -I$root/src/airconv"
+structs() { /usr/bin/grep -hoE '^struct [A-Za-z_][A-Za-z0-9_]* \{' "$@" | awk '{print $2}'; }
 
-if [ -n "$airconv" ]; then
+if [ "$mode" = airconv ]; then
   ac=$root/src/airconv
   abi=$ac/src/abi.rs
   printf '#include "airconv_public.h"\n#include "dxil/dxil_public.h"\n' >"$t/tu.c"
@@ -185,7 +215,137 @@ if [ -n "$airconv" ]; then
   exit 0
 fi
 
-if [ -n "$protos" ]; then
+if [ "$mode" != layouts ]; then
+  pe='aarch64-w64-mingw32 all(target_arch = "aarch64", target_os = "windows")
+arm64ec-w64-mingw32 all(target_arch = "arm64ec", target_os = "windows")
+x86_64-w64-mingw32 all(target_arch = "x86_64", target_os = "windows")
+i686-w64-mingw32 all(target_arch = "x86", target_os = "windows")'
+  mac='all(target_arch = "aarch64", target_os = "macos")'
+  # ast <target> <source> <clang flag>...: $t/recs, the records of clang's AST of <source> (read with jq):
+  # T <typedef>\t<type>, E <enum>\t<underlying type, or "-" when not fixed>, N <enum with a negative value>,
+  # F <function>\t<1 if dllimport, else 0>\t<return type>\t<parameter type>\t<parameter name>..., in source order.
+  ast() {
+    tgt=$1 src=$2
+    shift 2
+    case $tgt in
+    *-apple-*) xcrun clang -target "$tgt" "$@" -fsyntax-only -Xclang -ast-dump=json "$src" ;;
+    *) "$bin/$tgt-clang" -ffreestanding "$@" -fsyntax-only -Xclang -ast-dump=json "$src" ;;
+    esac >"$t/ast.json"
+    jq -r '.inner[] |
+      if .kind == "TypedefDecl" then ["T", .name, .type.qualType] | join("\t")
+      elif .kind == "EnumDecl" and .name then
+        (["E", .name, (.fixedUnderlyingType.qualType // "-")] | join("\t")),
+        (if [.. | .value? // empty | strings | select(startswith("-"))] | length > 0 then "N\t" + .name
+         else empty end)
+      elif .kind == "FunctionDecl" then
+        (["F", .name, (if ((.inner // []) | any(.kind == "DLLImportAttr")) then "1" else "0" end),
+          (.type.qualType | sub(" ?\\(.*$"; ""))] +
+          [.inner[]? | select(.kind == "ParmVarDecl") | (.type.qualType, (.name // "_"))]) | join("\t")
+      else empty end' "$t/ast.json" >"$t/recs"
+  }
+  # printer -v <var>=<value>...: the selected functions of $t/recs, one line each (out=protos: a let of protos.rs;
+  # decl: a declaration, with its parameters' names; check: a cfg-gated const of <module>::<name>). Selected: dllimport
+  # ones (imp=1), the ones between dxmt_abi_begin_ and dxmt_abi_end_ (block=1), and those named in pick (each of which
+  # must be there). guest: names gated by the guest-vm feature; want: how many there must be; lp64: long is 64-bit;
+  # wp, cp: the paths of winemetal-wire's mirrors and of c_void and c_char; local: where a struct winemetal.h doesn't
+  # define is mirrored (behind a pointer only); opaque=1: a pointer to a winemetal struct without a mirror is c_void.
+  structs "$wm/winemetal.h" >"$t/pstructs"
+  /usr/bin/grep -oE '^pub struct [A-Za-z_][A-Za-z0-9_]*' "$wire/lib.rs" | awk '{print $3}' >"$t/pmirrors"
+  printer() {
+    awk -F '\t' "$@" "$names"'
+      function local_name(s,   o, i, k, w) {
+        if (s !~ /_/) return s
+        k = split(s, w, "_"); o = ""
+        for (i = 1; i <= k; i++)
+          o = o toupper(substr(w[i], 1, 1)) (w[i] ~ /^[A-Z0-9]+$/ ? tolower(substr(w[i], 2)) : substr(w[i], 2))
+        return o
+      }
+      function base(s, ptr,   x) {
+        if (s == "intptr_t" || s == "ptrdiff_t") return "isize"
+        if (s == "uintptr_t" || s == "size_t") return "usize"
+        while (s in td) s = td[s]
+        if (s ~ /^enum /) {
+          s = substr(s, 6)
+          if (!(s in en)) bad = bad " enum " s
+          if (s in neg) bad = bad " enum " s " has a negative value"
+          s = en[s] == "-" ? "unsigned int" : en[s]
+          while (s in td) s = td[s]
+        }
+        if (s ~ /^struct /) {
+          x = substr(s, 8)
+          if (x in wms) {
+            if (rust(x) in mir) return wp rust(x)
+            if (ptr && opaque) return cp "c_void"
+            bad = bad " struct " x " (no mirror)"
+          } else if (ptr && local != "") return local "::" local_name(x)
+          else bad = bad " struct " x
+          return x
+        }
+        if (s in prim) return prim[s]
+        bad = bad " " s
+        return s
+      }
+      function rs(s, ret, ptr,   c) {
+        sub(/^ +/, "", s); sub(/ +$/, "", s)
+        if (s ~ /\*$/) {
+          sub(/ *\*$/, "", s)
+          c = s ~ /^const /
+          sub(/^const /, "", s)
+          return (c ? "*const " : "*mut ") (s == "void" ? cp "c_void" : rs(s, 0, 1))
+        }
+        sub(/^const /, "", s)
+        if (s == "void") return ret ? "" : cp "c_void"
+        return base(s, ptr)
+      }
+      BEGIN {
+        split("unsigned_long_long:u64 long_long:i64 unsigned_int:u32 int:i32 unsigned_short:u16 short:i16 " \
+          "unsigned_char:u8 signed_char:i8 bool:bool float:f32 double:f64", kv, " ")
+        for (i in kv) { split(kv[i], p, ":"); gsub(/_/, " ", p[1]); prim[p[1]] = p[2] }
+        prim["_Bool"] = "bool"
+        prim["char"] = cp "c_char"
+        prim["long"] = lp64 ? "i64" : "i32"
+        prim["unsigned long"] = lp64 ? "u64" : "u32"
+        k = split(pick, a, " "); for (i = 1; i <= k; i++) picked[a[i]] = 1
+        k = split(guest, a, " "); for (i = 1; i <= k; i++) guests[a[i]] = 1
+      }
+      FILENAME == ARGV[ARGC - 3] { wms[$1] = 1; next }
+      FILENAME == ARGV[ARGC - 2] { mir[$1] = 1; next }
+      $1 == "T" { td[$2] = $3; next }
+      $1 == "E" { en[$2] = $3; next }
+      $1 == "N" { neg[$2] = 1; next }
+      $1 == "F" && $2 == "dxmt_abi_begin_" { inblock = 1; next }
+      $1 == "F" && $2 == "dxmt_abi_end_" { inblock = 0; next }
+      $1 == "F" && ((imp && $3 == 1) || (block && inblock) || ($2 in picked)) && !seen[$2]++ {
+        args = ""
+        for (i = 5; i <= NF; i += 2)
+          args = args (i > 5 ? ", " : "") (out == "decl" ? ($(i + 1) == "_" ? "_" : field($(i + 1))) ": " : "") rs($i)
+        r = rs($4, 1)
+        sig = "(" args ")" (r == "" ? "" : " -> " r)
+        if (out == "protos") print "    let _: unsafe extern \"C\" fn" sig " = crate::" $2 ";"
+        else if (out == "decl") {
+          if ($2 in guests) print "    #[cfg(feature = \"guest-vm\")]"
+          print "    pub fn " $2 sig ";"
+        } else print "#[cfg(" cfg ")]\nconst _: unsafe extern \"" abi "\" fn" sig " = " module "::" $2 ";"
+        n++
+      }
+      END {
+        if (bad != "") { print "E cannot map:" bad; exit 1 }
+        for (q in picked) if (!(q in seen)) { print "E no function " q; exit 1 }
+        if (n == 0) { print "E no function"; exit 1 }
+        if (want != "" && n != want) { print "E " n " functions, not " want; exit 1 }
+      }' "$t/pstructs" "$t/pmirrors" "$t/recs"
+  }
+  # scratch <header>: a C file of <stddef.h>, winemetal.h and the header's dxmt-abi block between two marker functions.
+  scratch() {
+    printf '#include <stddef.h>\n#include "winemetal.h"\nvoid dxmt_abi_begin_(void);\n'
+    awk '/\/\* dxmt-abi end \*\// { f = 0 } f { print; n++ } /\/\* dxmt-abi begin \*\// { f = 1 } END { exit n == 0 }' \
+      "$1" || fail "$1 has no dxmt-abi block"
+    printf 'void dxmt_abi_end_(void);\n'
+  }
+  printf '#include "winemetal.h"\n' >"$t/api.c"
+fi
+
+if [ "$mode" = protos ]; then
   cat <<'EOF'
 //! winemetal.h's prototypes, asserted against the exports on each Windows target.
 //!
@@ -196,86 +356,91 @@ use core::ffi::{c_char, c_void};
 
 use winemetal_wire as wire;
 EOF
-  printf '#include "winemetal.h"\n' >"$t/api.c"
-  printf '%s\n' \
-    'aarch64-w64-mingw32 all(target_arch = "aarch64", target_os = "windows")' \
-    'arm64ec-w64-mingw32 all(target_arch = "arm64ec", target_os = "windows")' \
-    'x86_64-w64-mingw32 all(target_arch = "x86_64", target_os = "windows")' \
-    'i686-w64-mingw32 all(target_arch = "x86", target_os = "windows")' |
+  printf '%s\n' "$pe" |
   while read -r target cfg; do
-    "$bin/$target-clang" -ffreestanding $flags -fsyntax-only -Xclang -ast-dump=json "$t/api.c" >"$t/ast.json"
-    # Records: T <typedef>\t<type>, E <enum>\t<underlying type, or "-" when not fixed>, N <enum with a negative value>,
-    # F <function>\t<return type>\t<parameter type>...
-    jq -r '.inner[] |
-      if .kind == "TypedefDecl" then ["T", .name, .type.qualType] | join("\t")
-      elif .kind == "EnumDecl" and .name then
-        (["E", .name, (.fixedUnderlyingType.qualType // "-")] | join("\t")),
-        (if [.. | .value? // empty | strings | select(startswith("-"))] | length > 0 then "N\t" + .name
-         else empty end)
-      elif .kind == "FunctionDecl" and ((.inner // []) | any(.kind == "DLLImportAttr")) then
-        (["F", .name, (.type.qualType | sub(" ?\\(.*$"; ""))] +
-          [.inner[] | select(.kind == "ParmVarDecl") | .type.qualType]) | join("\t")
-      else empty end' "$t/ast.json" >"$t/decls"
+    ast "$target" "$t/api.c" $flags
     printf '\n#[cfg(%s)]\nconst _: () = {\n' "$cfg"
-    awk -F '\t' "$names"'
-      function base(s) {
-        if (s == "intptr_t") return "isize"
-        if (s == "uintptr_t") return "usize"
-        while (s in td) s = td[s]
-        if (s ~ /^enum /) {
-          s = substr(s, 6)
-          if (!(s in en)) bad = bad " enum " s
-          if (s in neg) bad = bad " enum " s " has a negative value"
-          s = en[s] == "-" ? "unsigned int" : en[s]
-          while (s in td) s = td[s]
-        }
-        if (s ~ /^struct /) return "wire::" rust(substr(s, 8))
-        if (s in prim) return prim[s]
-        bad = bad " " s
-        return s
-      }
-      function rs(s, ret,   c) {
-        sub(/^ +/, "", s); sub(/ +$/, "", s)
-        if (s ~ /\*$/) {
-          sub(/ *\*$/, "", s)
-          c = s ~ /^const /
-          sub(/^const /, "", s)
-          return (c ? "*const " : "*mut ") (s == "void" ? "c_void" : rs(s))
-        }
-        sub(/^const /, "", s)
-        if (s == "void") return ret ? "" : "c_void"
-        return base(s)
-      }
-      BEGIN {
-        split("unsigned_long_long:u64 long_long:i64 unsigned_long:u32 long:i32 unsigned_int:u32 int:i32 " \
-          "unsigned_short:u16 short:i16 unsigned_char:u8 signed_char:i8 char:c_char bool:bool float:f32 double:f64", \
-          kv, " ")
-        for (i in kv) { split(kv[i], p, ":"); gsub(/_/, " ", p[1]); prim[p[1]] = p[2] }
-        prim["_Bool"] = "bool"
-      }
-      $1 == "T" { td[$2] = $3; next }
-      $1 == "E" { en[$2] = $3; next }
-      $1 == "N" { neg[$2] = 1; next }
-      $1 == "F" {
-        args = ""
-        for (i = 4; i <= NF; i++) args = args (i > 4 ? ", " : "") rs($i)
-        r = rs($3, 1)
-        print "    let _: unsafe extern \"C\" fn(" args ")" (r == "" ? "" : " -> " r) " = crate::" $2 ";"
-        n++
-      }
-      END {
-        if (bad != "") { print "E cannot map:" bad; exit 1 }
-        if (n != 145) { print "E " n " WINEMETAL_API functions, not 145"; exit 1 }
-      }' "$t/decls" >"$t/out" || fail "$target: $(tail -1 "$t/out")"
+    printer -v out=protos -v imp=1 -v want=145 -v wp=wire:: >"$t/out" || fail "$target: $(tail -1 "$t/out")"
     cat "$t/out"
     printf '};\n'
   done
   exit 0
 fi
+
+if [ "$mode" = decls ]; then
+  # The set: the dllimport functions; the guest's: the ones -DDXMT_GUEST_VM adds.
+  ast x86_64-w64-mingw32 "$t/api.c" $flags
+  awk -F '\t' '$1 == "F" && $3 == 1 { print $2 }' "$t/recs" | sort -u >"$t/set"
+  ast x86_64-w64-mingw32 "$t/api.c" -I"$wm" -I"$root/src/airconv"
+  guest=$(awk -F '\t' '$1 == "F" && $3 == 1 { print $2 }' "$t/recs" | sort -u | comm -13 - "$t/set" | tr '\n' ' ')
+  [ -n "$guest" ] || fail "-DDXMT_GUEST_VM adds no function"
+  printf '%s\naarch64-apple-darwin -\n' "$pe" |
+  while read -r target cfg; do
+    case $target in
+    *-apple-*) ast "$target" "$t/api.c" $flags; set -- -v pick="$(tr '\n' ' ' <"$t/set")" -v lp64=1 ;;
+    *) ast "$target" "$t/api.c" $flags; set -- -v imp=1 ;;
+    esac
+    printer "$@" -v out=decl -v want=145 -v guest="$guest" -v wp=wire:: >"$t/body-$target" ||
+      fail "$target: $(tail -1 "$t/body-$target")"
+    [ -f "$t/body" ] || cp "$t/body-$target" "$t/body"
+    cmp -s "$t/body" "$t/body-$target" || {
+      diff "$t/body" "$t/body-$target" >&2
+      fail "the declarations differ on $target (< aarch64-w64-mingw32, > $target)"
+    }
+  done
+  scratch "$root/src/nativemetal/win32_native.cpp" >"$t/native.c"
+  ast aarch64-apple-darwin "$t/native.c" $flags -DDXMT_NATIVE
+  printer -v out=check -v block=1 -v pick="WMTMemoryHooked WMTGetWsiHooks" -v lp64=1 -v abi=C-unwind -v module=crate \
+    -v cfg="$mac" -v opaque=1 -v wp=wire:: >"$t/native" || fail "native: $(tail -1 "$t/native")"
+  cat <<'EOF'
+//! winemetal.h's functions, declared for Rust callers.
+//!
+//! Written by `tools/winemetal-layouts.sh --decls` from clang's AST: `protos.rs`'s functions,
+//! typed the same on every target, then the prototype checks of the native build's functions
+//! `lib.rs` declares by hand. Regenerate it, never edit it.
+
+use core::ffi::{c_char, c_void};
+
+use winemetal_wire as wire;
+
+#[cfg(windows)]
+unsafe extern "C" {
+EOF
+  cat "$t/body"
+  printf '}\n\n#[cfg(not(windows))]\nunsafe extern "C-unwind" {\n'
+  cat "$t/body"
+  printf '}\n\n'
+  cat "$t/native"
+  exit 0
+fi
+
+if [ "$mode" = seam ]; then
+  [ -f "$header" ] || fail "no $header"
+  scratch "$header" >"$t/abi.c"
+  cat <<EOF
+//! \`$(basename "$header")\`'s \`dxmt-abi\` block, asserted against the Rust exports.
+//!
+//! Written by \`tools/winemetal-layouts.sh --seam-abi\` from clang's AST on each target the
+//! crates build for: regenerate it, never edit it.
+EOF
+  printf '%s\naarch64-apple-darwin %s\n' "$pe" "$mac" |
+  while read -r target cfg; do
+    case $target in
+    *-apple-*) set -- -v abi=C-unwind -v lp64=1 ;;
+    *) set -- -v abi=C ;;
+    esac
+    ast "$target" "$t/abi.c" $flags
+    printer "$@" -v out=check -v block=1 -v cfg="$cfg" -v module="$module" -v local="$module" -v cp=core::ffi:: \
+      -v wp=winemetal_wire:: >"$t/out" || fail "$target: $(tail -1 "$t/out")"
+    printf '\n'
+    cat "$t/out"
+  done
+  exit 0
+fi
+
 printf '#include "winemetal_thunks.h"\n#include "airconv_thunks.h"\n' >"$t/tu.c"
 apple() { xcrun clang -target aarch64-apple-darwin $flags "$@"; }
 
-structs() { /usr/bin/grep -hoE '^struct [A-Za-z_][A-Za-z0-9_]* \{' "$@" | awk '{print $2}'; }
 structs "$wm/winemetal_thunks.h" "$wm/airconv_thunks.h" >"$t/strict"
 structs "$wm/winemetal_thunks.h" "$wm/airconv_thunks.h" "$wm/winemetal.h" | awk "$names"'{print $0, rust($0)}' >"$t/all"
 /usr/bin/grep -oE '^pub struct [A-Za-z_][A-Za-z0-9_]*' "$wire/lib.rs" | awk '{print $3}' >"$t/mirrors"
