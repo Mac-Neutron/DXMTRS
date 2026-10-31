@@ -1,0 +1,18 @@
+container ok
+parts 2
+part 0 ISGN size 8
+part 1 OSG5 size 138
+input ok
+count 0
+output_v4 fail
+output_v5 ok
+streams 4 rasterized 0
+stream 0 count 2
+p 0 stream 0 name "SV_Position" index 0 sv 1 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "A" index 0 sv 0 ct 3 reg 1 mask 15 rw 0 minprec 0
+stream 1 count 1
+p 0 stream 1 name "B" index 0 sv 0 ct 3 reg 0 mask 15 rw 0 minprec 0
+stream 2 count 0
+stream 3 count 1
+p 0 stream 3 name "C" index 0 sv 0 ct 3 reg 4 mask 15 rw 0 minprec 0
+patch_constant fail

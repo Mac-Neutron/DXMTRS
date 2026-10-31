@@ -1,0 +1,29 @@
+raw_version 2
+v1_0
+flags 0x3
+parameters 5
+param 0 type 1 visibility 1
+constants register 2 space 3 values 5
+param 1 type 2 visibility 0
+descriptor register 0 space 1
+param 2 type 3 visibility 4
+descriptor register 3 space 7
+param 3 type 4 visibility 1
+descriptor register 5 space 2
+param 4 type 2 visibility 5
+descriptor register 0 space 5
+static_samplers 0
+v1_1
+flags 0x3
+parameters 5
+param 0 type 1 visibility 1
+constants register 2 space 3 values 5
+param 1 type 2 visibility 0
+descriptor register 0 space 1 flags 0x0
+param 2 type 3 visibility 4
+descriptor register 3 space 7 flags 0x4
+param 3 type 4 visibility 1
+descriptor register 5 space 2 flags 0x8
+param 4 type 2 visibility 5
+descriptor register 0 space 5 flags 0x2
+static_samplers 0

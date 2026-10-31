@@ -1,0 +1,13 @@
+container ok
+parts 1
+part 0 OSG1 size 122
+input fail
+output_v4 fail
+output_v5 ok
+streams 2 rasterized 0
+stream 0 count 0
+stream 1 count 1
+p 0 stream 1 name "FIRST" index 0 sv 0 ct 3 reg 5 mask 15 rw 0 minprec 0
+stream 2 count 0
+stream 3 count 0
+patch_constant fail

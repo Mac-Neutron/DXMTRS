@@ -1,0 +1,24 @@
+container ok
+parts 5
+part 0 ISGN size 76
+part 1 OSGN size 80
+part 2 RDEF size 60
+part 3 SHDR size 136
+part 4 STAT size 116
+input ok
+count 2
+p 0 stream 0 name "SV_Position" index 0 sv 1 ct 3 reg 0 mask 15 rw 15 minprec 0
+p 1 stream 0 name "COLOR" index 0 sv 0 ct 3 reg 1 mask 15 rw 15 minprec 0
+output_v4 ok
+count 2
+p 0 stream 0 name "SV_Target" index 0 sv 0 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "SV_Target" index 1 sv 0 ct 3 reg 1 mask 15 rw 0 minprec 0
+output_v5 ok
+streams 1 rasterized 0
+stream 0 count 2
+p 0 stream 0 name "SV_Target" index 0 sv 0 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "SV_Target" index 1 sv 0 ct 3 reg 1 mask 15 rw 0 minprec 0
+stream 1 count 0
+stream 2 count 0
+stream 3 count 0
+patch_constant fail

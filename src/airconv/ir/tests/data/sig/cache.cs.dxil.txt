@@ -1,0 +1,21 @@
+container ok
+parts 8
+part 0 SFI0 size 8
+part 1 ISG1 size 8
+part 2 OSG1 size 8
+part 3 PSV0 size 104
+part 4 RTS0 size 48
+part 5 STAT size 1508
+part 6 HASH size 20
+part 7 DXIL size 1484
+input ok
+count 0
+output_v4 ok
+count 0
+output_v5 ok
+streams 0 rasterized 0
+stream 0 count 0
+stream 1 count 0
+stream 2 count 0
+stream 3 count 0
+patch_constant fail

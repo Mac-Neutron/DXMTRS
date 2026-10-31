@@ -1,0 +1,33 @@
+container ok
+parts 5
+part 0 ISGN size 156
+part 1 OSGN size 188
+part 2 RDEF size 92
+part 3 SHDR size 572
+part 4 STAT size 148
+input ok
+count 5
+p 0 stream 0 name "A" index 0 sv 0 ct 3 reg 0 mask 15 rw 15 minprec 0
+p 1 stream 0 name "B" index 0 sv 0 ct 3 reg 1 mask 15 rw 15 minprec 0
+p 2 stream 0 name "C" index 0 sv 0 ct 3 reg 2 mask 15 rw 15 minprec 0
+p 3 stream 0 name "D" index 0 sv 0 ct 1 reg 3 mask 15 rw 15 minprec 0
+p 4 stream 0 name "SV_VertexID" index 0 sv 6 ct 1 reg 4 mask 1 rw 1 minprec 0
+output_v4 ok
+count 5
+p 0 stream 0 name "SV_Position" index 0 sv 1 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "TEXCOORD" index 0 sv 0 ct 3 reg 1 mask 15 rw 0 minprec 0
+p 2 stream 0 name "TEXCOORD" index 1 sv 0 ct 3 reg 2 mask 15 rw 0 minprec 0
+p 3 stream 0 name "TEXCOORD" index 2 sv 0 ct 3 reg 3 mask 15 rw 0 minprec 0
+p 4 stream 0 name "TEXCOORD" index 3 sv 0 ct 3 reg 4 mask 15 rw 0 minprec 0
+output_v5 ok
+streams 1 rasterized 0
+stream 0 count 5
+p 0 stream 0 name "SV_Position" index 0 sv 1 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "TEXCOORD" index 0 sv 0 ct 3 reg 1 mask 15 rw 0 minprec 0
+p 2 stream 0 name "TEXCOORD" index 1 sv 0 ct 3 reg 2 mask 15 rw 0 minprec 0
+p 3 stream 0 name "TEXCOORD" index 2 sv 0 ct 3 reg 3 mask 15 rw 0 minprec 0
+p 4 stream 0 name "TEXCOORD" index 3 sv 0 ct 3 reg 4 mask 15 rw 0 minprec 0
+stream 1 count 0
+stream 2 count 0
+stream 3 count 0
+patch_constant fail

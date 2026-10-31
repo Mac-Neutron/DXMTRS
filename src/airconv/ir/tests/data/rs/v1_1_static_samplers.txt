@@ -1,0 +1,17 @@
+raw_version 2
+v1_0
+flags 0x0
+parameters 1
+param 0 type 2 visibility 0
+descriptor register 0 space 0
+static_samplers 2
+sampler 0 filter 21 u 1 v 1 w 1 lod_bias 0xbf000000 anisotropy 16 comparison 4 border 0 min_lod 0x00000000 max_lod 0x7f7fffff register 0 space 0 visibility 0
+sampler 1 filter 1 u 3 v 2 w 4 lod_bias 0x7fc00001 anisotropy 1 comparison 8 border 2 min_lod 0x80000000 max_lod 0x41440000 register 3 space 1 visibility 5
+v1_1
+flags 0x0
+parameters 1
+param 0 type 2 visibility 0
+descriptor register 0 space 0 flags 0x0
+static_samplers 2
+sampler 0 filter 21 u 1 v 1 w 1 lod_bias 0xbf000000 anisotropy 16 comparison 4 border 0 min_lod 0x00000000 max_lod 0x7f7fffff register 0 space 0 visibility 0
+sampler 1 filter 1 u 3 v 2 w 4 lod_bias 0x7fc00001 anisotropy 1 comparison 8 border 2 min_lod 0x80000000 max_lod 0x41440000 register 3 space 1 visibility 5

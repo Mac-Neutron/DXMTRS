@@ -1,0 +1,127 @@
+container ok
+parts 3
+part 0 ISGN size 60
+part 1 OSGN size 1124
+part 2 PCSG size 1124
+input ok
+count 2
+p 0 stream 0 name "A" index 0 sv 0 ct 3 reg 0 mask 15 rw 15 minprec 0
+p 1 stream 0 name "B" index 0 sv 0 ct 3 reg 0 mask 15 rw 15 minprec 0
+output_v4 ok
+count 36
+p 0 stream 0 name "FACTOR" index 0 sv 11 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "FACTOR" index 1 sv 12 ct 3 reg 1 mask 15 rw 0 minprec 0
+p 2 stream 0 name "FACTOR" index 2 sv 13 ct 3 reg 2 mask 15 rw 0 minprec 0
+p 3 stream 0 name "FACTOR" index 3 sv 14 ct 3 reg 3 mask 15 rw 0 minprec 0
+p 4 stream 0 name "FACTOR" index 4 sv 11 ct 3 reg 4 mask 15 rw 0 minprec 0
+p 5 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 5 mask 15 rw 0 minprec 0
+p 6 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 6 mask 15 rw 0 minprec 0
+p 7 stream 0 name "FACTOR" index 2 sv 12 ct 3 reg 7 mask 15 rw 0 minprec 0
+p 8 stream 0 name "FACTOR" index 0 sv 17 ct 3 reg 8 mask 15 rw 0 minprec 0
+p 9 stream 0 name "FACTOR" index 1 sv 18 ct 3 reg 9 mask 15 rw 0 minprec 0
+p 10 stream 0 name "FACTOR" index 2 sv 19 ct 3 reg 10 mask 15 rw 0 minprec 0
+p 11 stream 0 name "FACTOR" index 3 sv 13 ct 3 reg 11 mask 15 rw 0 minprec 0
+p 12 stream 0 name "FACTOR" index 0 sv 20 ct 3 reg 12 mask 15 rw 0 minprec 0
+p 13 stream 0 name "FACTOR" index 1 sv 14 ct 3 reg 13 mask 15 rw 0 minprec 0
+p 14 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 14 mask 15 rw 0 minprec 0
+p 15 stream 0 name "FACTOR" index 1 sv 21 ct 3 reg 15 mask 15 rw 0 minprec 0
+p 16 stream 0 name "FACTOR" index 0 sv 22 ct 3 reg 16 mask 15 rw 0 minprec 0
+p 17 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 17 mask 15 rw 0 minprec 0
+p 18 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 18 mask 15 rw 0 minprec 0
+p 19 stream 0 name "FACTOR" index 0 sv 1 ct 3 reg 19 mask 15 rw 0 minprec 0
+p 20 stream 0 name "FACTOR" index 0 sv 2 ct 3 reg 20 mask 15 rw 0 minprec 0
+p 21 stream 0 name "FACTOR" index 0 sv 3 ct 3 reg 21 mask 15 rw 0 minprec 0
+p 22 stream 0 name "FACTOR" index 0 sv 4 ct 3 reg 22 mask 15 rw 0 minprec 0
+p 23 stream 0 name "FACTOR" index 0 sv 5 ct 3 reg 23 mask 15 rw 0 minprec 0
+p 24 stream 0 name "FACTOR" index 0 sv 6 ct 3 reg 24 mask 15 rw 0 minprec 0
+p 25 stream 0 name "FACTOR" index 0 sv 7 ct 3 reg 25 mask 15 rw 0 minprec 0
+p 26 stream 0 name "FACTOR" index 0 sv 8 ct 3 reg 26 mask 15 rw 0 minprec 0
+p 27 stream 0 name "FACTOR" index 0 sv 9 ct 3 reg 27 mask 15 rw 0 minprec 0
+p 28 stream 0 name "FACTOR" index 0 sv 10 ct 3 reg 28 mask 15 rw 0 minprec 0
+p 29 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 29 mask 15 rw 0 minprec 0
+p 30 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 30 mask 15 rw 0 minprec 0
+p 31 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 31 mask 15 rw 0 minprec 0
+p 32 stream 0 name "FACTOR" index 0 sv 67 ct 3 reg 32 mask 15 rw 0 minprec 0
+p 33 stream 0 name "FACTOR" index 0 sv 68 ct 3 reg 33 mask 15 rw 0 minprec 0
+p 34 stream 0 name "FACTOR" index 0 sv 23 ct 3 reg 34 mask 15 rw 0 minprec 0
+p 35 stream 0 name "FACTOR" index 0 sv 99 ct 3 reg 35 mask 15 rw 0 minprec 0
+output_v5 ok
+streams 1 rasterized 0
+stream 0 count 36
+p 0 stream 0 name "FACTOR" index 0 sv 11 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "FACTOR" index 1 sv 12 ct 3 reg 1 mask 15 rw 0 minprec 0
+p 2 stream 0 name "FACTOR" index 2 sv 13 ct 3 reg 2 mask 15 rw 0 minprec 0
+p 3 stream 0 name "FACTOR" index 3 sv 14 ct 3 reg 3 mask 15 rw 0 minprec 0
+p 4 stream 0 name "FACTOR" index 4 sv 11 ct 3 reg 4 mask 15 rw 0 minprec 0
+p 5 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 5 mask 15 rw 0 minprec 0
+p 6 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 6 mask 15 rw 0 minprec 0
+p 7 stream 0 name "FACTOR" index 2 sv 12 ct 3 reg 7 mask 15 rw 0 minprec 0
+p 8 stream 0 name "FACTOR" index 0 sv 17 ct 3 reg 8 mask 15 rw 0 minprec 0
+p 9 stream 0 name "FACTOR" index 1 sv 18 ct 3 reg 9 mask 15 rw 0 minprec 0
+p 10 stream 0 name "FACTOR" index 2 sv 19 ct 3 reg 10 mask 15 rw 0 minprec 0
+p 11 stream 0 name "FACTOR" index 3 sv 13 ct 3 reg 11 mask 15 rw 0 minprec 0
+p 12 stream 0 name "FACTOR" index 0 sv 20 ct 3 reg 12 mask 15 rw 0 minprec 0
+p 13 stream 0 name "FACTOR" index 1 sv 14 ct 3 reg 13 mask 15 rw 0 minprec 0
+p 14 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 14 mask 15 rw 0 minprec 0
+p 15 stream 0 name "FACTOR" index 1 sv 21 ct 3 reg 15 mask 15 rw 0 minprec 0
+p 16 stream 0 name "FACTOR" index 0 sv 22 ct 3 reg 16 mask 15 rw 0 minprec 0
+p 17 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 17 mask 15 rw 0 minprec 0
+p 18 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 18 mask 15 rw 0 minprec 0
+p 19 stream 0 name "FACTOR" index 0 sv 1 ct 3 reg 19 mask 15 rw 0 minprec 0
+p 20 stream 0 name "FACTOR" index 0 sv 2 ct 3 reg 20 mask 15 rw 0 minprec 0
+p 21 stream 0 name "FACTOR" index 0 sv 3 ct 3 reg 21 mask 15 rw 0 minprec 0
+p 22 stream 0 name "FACTOR" index 0 sv 4 ct 3 reg 22 mask 15 rw 0 minprec 0
+p 23 stream 0 name "FACTOR" index 0 sv 5 ct 3 reg 23 mask 15 rw 0 minprec 0
+p 24 stream 0 name "FACTOR" index 0 sv 6 ct 3 reg 24 mask 15 rw 0 minprec 0
+p 25 stream 0 name "FACTOR" index 0 sv 7 ct 3 reg 25 mask 15 rw 0 minprec 0
+p 26 stream 0 name "FACTOR" index 0 sv 8 ct 3 reg 26 mask 15 rw 0 minprec 0
+p 27 stream 0 name "FACTOR" index 0 sv 9 ct 3 reg 27 mask 15 rw 0 minprec 0
+p 28 stream 0 name "FACTOR" index 0 sv 10 ct 3 reg 28 mask 15 rw 0 minprec 0
+p 29 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 29 mask 15 rw 0 minprec 0
+p 30 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 30 mask 15 rw 0 minprec 0
+p 31 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 31 mask 15 rw 0 minprec 0
+p 32 stream 0 name "FACTOR" index 0 sv 67 ct 3 reg 32 mask 15 rw 0 minprec 0
+p 33 stream 0 name "FACTOR" index 0 sv 68 ct 3 reg 33 mask 15 rw 0 minprec 0
+p 34 stream 0 name "FACTOR" index 0 sv 23 ct 3 reg 34 mask 15 rw 0 minprec 0
+p 35 stream 0 name "FACTOR" index 0 sv 99 ct 3 reg 35 mask 15 rw 0 minprec 0
+stream 1 count 0
+stream 2 count 0
+stream 3 count 0
+patch_constant ok
+count 36
+p 0 stream 0 name "FACTOR" index 0 sv 11 ct 3 reg 0 mask 15 rw 0 minprec 0
+p 1 stream 0 name "FACTOR" index 1 sv 12 ct 3 reg 1 mask 15 rw 0 minprec 0
+p 2 stream 0 name "FACTOR" index 2 sv 13 ct 3 reg 2 mask 15 rw 0 minprec 0
+p 3 stream 0 name "FACTOR" index 3 sv 14 ct 3 reg 3 mask 15 rw 0 minprec 0
+p 4 stream 0 name "FACTOR" index 4 sv 11 ct 3 reg 4 mask 15 rw 0 minprec 0
+p 5 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 5 mask 15 rw 0 minprec 0
+p 6 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 6 mask 15 rw 0 minprec 0
+p 7 stream 0 name "FACTOR" index 2 sv 12 ct 3 reg 7 mask 15 rw 0 minprec 0
+p 8 stream 0 name "FACTOR" index 0 sv 17 ct 3 reg 8 mask 15 rw 0 minprec 0
+p 9 stream 0 name "FACTOR" index 1 sv 18 ct 3 reg 9 mask 15 rw 0 minprec 0
+p 10 stream 0 name "FACTOR" index 2 sv 19 ct 3 reg 10 mask 15 rw 0 minprec 0
+p 11 stream 0 name "FACTOR" index 3 sv 13 ct 3 reg 11 mask 15 rw 0 minprec 0
+p 12 stream 0 name "FACTOR" index 0 sv 20 ct 3 reg 12 mask 15 rw 0 minprec 0
+p 13 stream 0 name "FACTOR" index 1 sv 14 ct 3 reg 13 mask 15 rw 0 minprec 0
+p 14 stream 0 name "FACTOR" index 0 sv 15 ct 3 reg 14 mask 15 rw 0 minprec 0
+p 15 stream 0 name "FACTOR" index 1 sv 21 ct 3 reg 15 mask 15 rw 0 minprec 0
+p 16 stream 0 name "FACTOR" index 0 sv 22 ct 3 reg 16 mask 15 rw 0 minprec 0
+p 17 stream 0 name "FACTOR" index 1 sv 16 ct 3 reg 17 mask 15 rw 0 minprec 0
+p 18 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 18 mask 15 rw 0 minprec 0
+p 19 stream 0 name "FACTOR" index 0 sv 1 ct 3 reg 19 mask 15 rw 0 minprec 0
+p 20 stream 0 name "FACTOR" index 0 sv 2 ct 3 reg 20 mask 15 rw 0 minprec 0
+p 21 stream 0 name "FACTOR" index 0 sv 3 ct 3 reg 21 mask 15 rw 0 minprec 0
+p 22 stream 0 name "FACTOR" index 0 sv 4 ct 3 reg 22 mask 15 rw 0 minprec 0
+p 23 stream 0 name "FACTOR" index 0 sv 5 ct 3 reg 23 mask 15 rw 0 minprec 0
+p 24 stream 0 name "FACTOR" index 0 sv 6 ct 3 reg 24 mask 15 rw 0 minprec 0
+p 25 stream 0 name "FACTOR" index 0 sv 7 ct 3 reg 25 mask 15 rw 0 minprec 0
+p 26 stream 0 name "FACTOR" index 0 sv 8 ct 3 reg 26 mask 15 rw 0 minprec 0
+p 27 stream 0 name "FACTOR" index 0 sv 9 ct 3 reg 27 mask 15 rw 0 minprec 0
+p 28 stream 0 name "FACTOR" index 0 sv 10 ct 3 reg 28 mask 15 rw 0 minprec 0
+p 29 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 29 mask 15 rw 0 minprec 0
+p 30 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 30 mask 15 rw 0 minprec 0
+p 31 stream 0 name "FACTOR" index 0 sv 0 ct 3 reg 31 mask 15 rw 0 minprec 0
+p 32 stream 0 name "FACTOR" index 0 sv 67 ct 3 reg 32 mask 15 rw 0 minprec 0
+p 33 stream 0 name "FACTOR" index 0 sv 68 ct 3 reg 33 mask 15 rw 0 minprec 0
+p 34 stream 0 name "FACTOR" index 0 sv 23 ct 3 reg 34 mask 15 rw 0 minprec 0
+p 35 stream 0 name "FACTOR" index 0 sv 99 ct 3 reg 35 mask 15 rw 0 minprec 0

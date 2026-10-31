@@ -1,0 +1,35 @@
+raw_version 2
+v1_0
+flags 0x4
+parameters 3
+param 0 type 0 visibility 0
+table ranges 4
+range 0 type 0 num 4 base 0 space 0 offset 0
+range 1 type 1 num 2 base 4 space 1 offset 4
+range 2 type 2 num 1 base 0 space 2 offset 4294967295
+range 3 type 0 num 4294967295 base 8 space 0 offset 0
+param 1 type 0 visibility 5
+table ranges 1
+range 0 type 3 num 16 base 0 space 0 offset 0
+param 2 type 0 visibility 0
+table ranges 2
+range 0 type 3 num 1 base 1 space 7 offset 0
+range 1 type 1 num 1 base 0 space 0 offset 1
+static_samplers 0
+v1_1
+flags 0x4
+parameters 3
+param 0 type 0 visibility 0
+table ranges 4
+range 0 type 0 num 4 base 0 space 0 offset 0 flags 0x0
+range 1 type 1 num 2 base 4 space 1 offset 4 flags 0x1
+range 2 type 2 num 1 base 0 space 2 offset 4294967295 flags 0x2
+range 3 type 0 num 4294967295 base 8 space 0 offset 0 flags 0x10000
+param 1 type 0 visibility 5
+table ranges 1
+range 0 type 3 num 16 base 0 space 0 offset 0 flags 0x0
+param 2 type 0 visibility 0
+table ranges 2
+range 0 type 3 num 1 base 1 space 7 offset 0 flags 0x1
+range 1 type 1 num 1 base 0 space 0 offset 1 flags 0x8
+static_samplers 0

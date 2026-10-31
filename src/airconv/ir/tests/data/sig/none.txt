@@ -1,0 +1,7 @@
+container ok
+parts 1
+part 0 SHDR size 8
+input fail
+output_v4 fail
+output_v5 fail
+patch_constant fail

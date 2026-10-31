@@ -1,0 +1,21 @@
+raw_version 1
+v1_0
+flags 0xc00
+parameters 2
+param 0 type 0 visibility 0
+table ranges 1
+range 0 type 0 num 1 base 0 space 0 offset 0
+param 1 type 0 visibility 0
+table ranges 1
+range 0 type 1 num 2 base 3 space 1 offset 0
+static_samplers 0
+v1_1
+flags 0xc00
+parameters 2
+param 0 type 0 visibility 0
+table ranges 1
+range 0 type 0 num 1 base 0 space 0 offset 0 flags 0x3
+param 1 type 0 visibility 0
+table ranges 1
+range 0 type 1 num 2 base 3 space 1 offset 0 flags 0x3
+static_samplers 0

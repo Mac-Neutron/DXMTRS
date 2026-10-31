@@ -1,0 +1,35 @@
+raw_version 1
+v1_0
+flags 0xc01
+parameters 5
+param 0 type 2 visibility 0
+descriptor register 0 space 0
+param 1 type 3 visibility 1
+descriptor register 2 space 1
+param 2 type 4 visibility 2
+descriptor register 3 space 2
+param 3 type 1 visibility 3
+constants register 4 space 5 values 6
+param 4 type 0 visibility 0
+table ranges 2
+range 0 type 0 num 2 base 0 space 0 offset 0
+range 1 type 3 num 1 base 2 space 0 offset 2
+static_samplers 1
+sampler 0 filter 85 u 2 v 2 w 2 lod_bias 0x3fc00000 anisotropy 8 comparison 2 border 1 min_lod 0x3f800000 max_lod 0x41000000 register 2 space 3 visibility 0
+v1_1
+flags 0xc01
+parameters 5
+param 0 type 2 visibility 0
+descriptor register 0 space 0 flags 0x2
+param 1 type 3 visibility 1
+descriptor register 2 space 1 flags 0x2
+param 2 type 4 visibility 2
+descriptor register 3 space 2 flags 0x2
+param 3 type 1 visibility 3
+constants register 4 space 5 values 6
+param 4 type 0 visibility 0
+table ranges 2
+range 0 type 0 num 2 base 0 space 0 offset 0 flags 0x3
+range 1 type 3 num 1 base 2 space 0 offset 2 flags 0x1
+static_samplers 1
+sampler 0 filter 85 u 2 v 2 w 2 lod_bias 0x3fc00000 anisotropy 8 comparison 2 border 1 min_lod 0x3f800000 max_lod 0x41000000 register 2 space 3 visibility 0
