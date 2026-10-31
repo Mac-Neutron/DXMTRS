@@ -23,3 +23,4 @@ workspace = true
 [dependencies]
 dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
+winemetal-wire = { workspace = true }

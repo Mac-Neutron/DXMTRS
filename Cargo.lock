@@ -149,6 +149,7 @@ version = "0.14.1"
 dependencies = [
  "dxmt-core",
  "dxmt-util",
+ "winemetal-wire",
 ]
 
 [[package]]
