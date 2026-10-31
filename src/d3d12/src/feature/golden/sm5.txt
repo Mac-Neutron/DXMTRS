@@ -1,0 +1,118 @@
+feat levels n=0 rc=80070057 max=0x0
+feat levels n=1 rc=00000000 max=0x9100
+feat levels n=2 rc=00000000 max=0x9200
+feat levels n=3 rc=00000000 max=0x9300
+feat levels n=4 rc=00000000 max=0xa000
+feat levels n=5 rc=00000000 max=0xa100
+feat levels n=6 rc=00000000 max=0xb000
+feat levels n=7 rc=00000000 max=0xb100
+feat levels n=8 rc=00000000 max=0xb100
+feat levels n=9 rc=00000000 max=0xb100
+feat levels only-12_0 rc=00000000 max=0xb100
+feat shader_model id=7 size=4 in=0,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=79,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=80,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=81,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=96,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=97,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=98,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=99,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=100,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=101,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=102,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=103,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=104,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=105,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=106,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=112,0 rc=00000000/00000000 data=51000000
+feat shader_model id=7 size=4 in=255,0 rc=00000000/00000000 data=51000000
+feat wide id=0 size=60 rc=00000000/00000000 data=000000000000000002000000000000000200000001000000010000000100000000000000300000000100000000000000000000000100000002000000
+feat wide id=1 size=16 rc=00000000/80070057 data=????????????????????????????????
+feat wide id=2 invalid-at-every-size
+feat wide id=3 size=12 rc=00000000/00000000 data=????????????????????????
+feat wide id=4 size=16 rc=80004005/80004005 data=????????????????0000000000000000
+feat wide id=5 size=8 rc=00000000/80004005 data=????????????????
+feat wide id=6 size=8 rc=00000000/00000000 data=3000000030000000
+feat wide id=7 size=4 rc=00000000/00000000 data=51000000
+feat wide id=8 size=24 rc=00000000/00000000 data=000000000000000000000000000000000100000000000000
+feat wide id=9 notimpl
+feat wide id=10 size=8 rc=00000000/80070057 data=????????????????
+feat wide id=11 notimpl
+feat wide id=12 invalid-at-every-size
+feat wide id=13 notimpl
+feat wide id=14 notimpl
+feat wide id=15 notimpl
+feat wide id=16 size=20 rc=00000000/80070057 data=????????????????????????????????????????
+feat wide id=17 notimpl
+feat wide id=18 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=19 size=4 rc=00000000/00000000 data=0c000000
+feat wide id=20 notimpl
+feat wide id=21 size=20 rc=00000000/00000000 data=0000000001000000000000000000000000000000
+feat wide id=22 size=4 rc=00000000/00000000 data=00000000
+feat wide id=23 size=12 rc=00000000/00000000 data=010000000000000000000000
+feat wide id=24 notimpl
+feat wide id=25 invalid-at-every-size
+feat wide id=26 notimpl
+feat wide id=27 size=12 rc=00000000/00000000 data=000000000000000000000000
+feat wide id=28 invalid-at-every-size
+feat wide id=29 notimpl
+feat wide id=30 size=20 rc=00000000/00000000 data=0000000000000000000000000000000000000000
+feat wide id=31 notimpl
+feat wide id=32 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=33 notimpl
+feat wide id=34 notimpl
+feat wide id=35 notimpl
+feat wide id=36 size=4 rc=00000000/00000000 data=00000000
+feat wide id=37 size=24 rc=00000000/00000000 data=000000000000000000000000000000000000000000000000
+feat wide id=38 notimpl
+feat wide id=39 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=40 size=4 rc=00000000/00000000 data=00000000
+feat wide id=41 size=12 rc=00000000/00000000 data=000000000100000000000000
+feat wide id=42 size=24 rc=00000000/00000000 data=000000000000000000000000000000000000000000000000
+feat wide id=43 size=12 rc=00000000/00000000 data=000000000000000000000000
+feat wide id=44 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=45 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=46 size=8 rc=00000000/00000000 data=0000000000000000
+feat wide id=47 size=4 rc=00000000/00000000 data=00000000
+feat wide id=48 size=40 rc=00000000/00000000 data=000000000000000000000000000000000000000000000000000800000008000040420f0000000000
+feat wide id=49 notimpl
+feat wide id=50 notimpl
+feat wide id=51 notimpl
+feat wide id=52 notimpl
+feat wide id=53 size=16 rc=00000000/00000000 data=000000000a0000000000000000000000
+feat wide id=54 notimpl
+feat wide id=55 notimpl
+feat wide id=56 notimpl
+feat wide id=57 notimpl
+feat wide id=58 notimpl
+feat wide id=59 notimpl
+feat wide id=60 notimpl
+feat wide id=61 notimpl
+feat wide id=62 notimpl
+feat wide id=63 notimpl
+feat wide id=64 notimpl
+feat wide id=65 size=16 rc=00000000/00000000 data=0000000000000000ffff0000ffff0000
+feat wide id=66 notimpl
+feat wide id=67 notimpl
+feat wide id=68 notimpl
+feat wide id=69 notimpl
+feat wide id=70 notimpl
+feat wide id=71 notimpl
+feat wide id=72 notimpl
+feat wide id=73 notimpl
+feat wide id=74 notimpl
+feat wide id=75 notimpl
+feat wide id=76 notimpl
+feat wide id=77 notimpl
+feat wide id=78 notimpl
+feat wide id=79 notimpl
+feat wide id=80 notimpl
+feat wide-null id=0 rc=80070057
+feat wide-null id=1 rc=80070057
+feat wide-null id=2 rc=80070057
+feat wide-null id=3 rc=80070057
+feat wide-null id=4 rc=80070057
+feat wide-null id=5 rc=80070057
+feat wide-null id=7 rc=80070057
+feat wide-null id=12 rc=80070057
+feat wide-null id=16 rc=80070057

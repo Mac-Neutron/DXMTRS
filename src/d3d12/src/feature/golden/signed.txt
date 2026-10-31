@@ -1,0 +1,54 @@
+sm6 shader_model in=00000000 rc=00000000 out=00000000
+sm6 shader_model in=00000050 rc=00000000 out=00000050
+sm6 shader_model in=00000068 rc=00000000 out=00000068
+sm6 shader_model in=00000069 rc=00000000 out=00000068
+sm6 shader_model in=0000007f rc=00000000 out=00000068
+sm6 shader_model in=00000080 rc=00000000 out=00000068
+sm6 shader_model in=000000ff rc=00000000 out=00000068
+sm6 shader_model in=00000100 rc=00000000 out=00000068
+sm6 shader_model in=7fffffff rc=00000000 out=00000068
+sm6 shader_model in=80000000 rc=00000000 out=80000000
+sm6 shader_model in=ffffffff rc=00000000 out=ffffffff
+sm6 levels n=1 v=00000000 rc=00000000 max=00000000
+sm6 levels n=2 v=00000000 rc=00000000 max=0000b000
+sm6 levels n=1 v=00009100 rc=00000000 max=00009100
+sm6 levels n=2 v=00009100 rc=00000000 max=0000b000
+sm6 levels n=1 v=0000c100 rc=00000000 max=0000c100
+sm6 levels n=2 v=0000c100 rc=00000000 max=0000c100
+sm6 levels n=1 v=0000c101 rc=00000000 max=0000c100
+sm6 levels n=2 v=0000c101 rc=00000000 max=0000c100
+sm6 levels n=1 v=0000d000 rc=00000000 max=0000c100
+sm6 levels n=2 v=0000d000 rc=00000000 max=0000c100
+sm6 levels n=1 v=7fffffff rc=00000000 max=0000c100
+sm6 levels n=2 v=7fffffff rc=00000000 max=0000c100
+sm6 levels n=1 v=80000000 rc=00000000 max=00000000
+sm6 levels n=2 v=80000000 rc=00000000 max=0000b000
+sm6 levels n=1 v=ffffffff rc=00000000 max=00000000
+sm6 levels n=2 v=ffffffff rc=00000000 max=0000b000
+sm5 shader_model in=00000000 rc=00000000 out=00000051
+sm5 shader_model in=00000050 rc=00000000 out=00000051
+sm5 shader_model in=00000068 rc=00000000 out=00000051
+sm5 shader_model in=00000069 rc=00000000 out=00000051
+sm5 shader_model in=0000007f rc=00000000 out=00000051
+sm5 shader_model in=00000080 rc=00000000 out=00000051
+sm5 shader_model in=000000ff rc=00000000 out=00000051
+sm5 shader_model in=00000100 rc=00000000 out=00000051
+sm5 shader_model in=7fffffff rc=00000000 out=00000051
+sm5 shader_model in=80000000 rc=00000000 out=00000051
+sm5 shader_model in=ffffffff rc=00000000 out=00000051
+sm5 levels n=1 v=00000000 rc=00000000 max=00000000
+sm5 levels n=2 v=00000000 rc=00000000 max=0000b000
+sm5 levels n=1 v=00009100 rc=00000000 max=00009100
+sm5 levels n=2 v=00009100 rc=00000000 max=0000b000
+sm5 levels n=1 v=0000c100 rc=00000000 max=0000b100
+sm5 levels n=2 v=0000c100 rc=00000000 max=0000b100
+sm5 levels n=1 v=0000c101 rc=00000000 max=0000b100
+sm5 levels n=2 v=0000c101 rc=00000000 max=0000b100
+sm5 levels n=1 v=0000d000 rc=00000000 max=0000b100
+sm5 levels n=2 v=0000d000 rc=00000000 max=0000b100
+sm5 levels n=1 v=7fffffff rc=00000000 max=0000b100
+sm5 levels n=2 v=7fffffff rc=00000000 max=0000b100
+sm5 levels n=1 v=80000000 rc=00000000 max=00000000
+sm5 levels n=2 v=80000000 rc=00000000 max=0000b000
+sm5 levels n=1 v=ffffffff rc=00000000 max=00000000
+sm5 levels n=2 v=ffffffff rc=00000000 max=0000b000
