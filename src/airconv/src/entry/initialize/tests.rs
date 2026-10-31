@@ -113,9 +113,99 @@ fn interior_nul_name_is_an_error() {
 }
 
 #[test]
-fn a_dxil_part_is_not_ported_yet() {
-    let error = initialize_err(include_bytes!("../../../ir/tests/data/cache.cs.dxil"));
-    assert_eq!(error, b"not ported");
+fn dxil_reflection_is_written_whole() {
+    // The C++ zeroes the whole reflection first (`*refl = {}`): no byte keeps the fill. Read once
+    // from the C++ over the C API, as above.
+    let (shader, compute) =
+        initialize_over_a5(include_bytes!("../../../ir/tests/data/cache.cs.dxil"));
+    let cxx = "ffffffff ffffffff 00000000 00000000 40000000 01000000 01000000 00000000 00000000 \
+               00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 01000000";
+    assert_eq!(compute.as_slice(), words(cxx));
+    let (cbs, args) = shader.arguments();
+    assert!(cbs.is_empty() && args.is_empty());
+    let info = entry_info(&shader);
+    assert_eq!(
+        (
+            info.is_dxil,
+            info.stage,
+            info.num_inputs,
+            info.num_outputs,
+            info.num_resources
+        ),
+        (1, 5, 0, 0, 1)
+    );
+    assert!(info.inputs.is_null() && info.outputs.is_null());
+    // SAFETY: the array holds `num_resources` resources, alive with `shader`.
+    let r = unsafe { &*info.resources };
+    assert_eq!(
+        (r.cls, r.space, r.lower_bound, r.size, r.heap),
+        (1, 0, 0, 1, 0)
+    );
+}
+
+#[test]
+fn dxil_entry_view_points_at_each_elements_indices() {
+    let element = |name: &[u8], kind, indices: Vec<u32>| crate::dxil::types::SignatureElement {
+        id: 0,
+        name: name.to_vec(),
+        rows: u32::try_from(indices.len()).unwrap(),
+        semantic_indices: indices,
+        ty: 9,
+        kind,
+        interpolation: 0,
+        cols: 4,
+        start_row: -1,
+        start_col: -1,
+    };
+    let mut entry = EntryInfo {
+        kind: 0,
+        inputs: vec![
+            element(b"TEXCOORD", 0, vec![5, 6]),
+            element(b"A", 0, vec![]),
+        ],
+        outputs: vec![element(b"SV_Target", 16, vec![2])],
+        ..EntryInfo::default()
+    };
+    let view = dxil_entry_view(&entry).unwrap_or_else(|_| panic!("view"));
+    let info = view.info();
+    assert_eq!((info.is_dxil, info.num_inputs, info.num_outputs), (1, 2, 1));
+    assert!(info.resources.is_null());
+    let elements = view.inputs.iter().chain(&view.outputs);
+    let expected: [(&CStr, &[u32]); 3] =
+        [(c"TEXCOORD", &[5, 6]), (c"A", &[]), (c"SV_Target", &[2])];
+    for (e, (name, indices)) in elements.zip(expected) {
+        // SAFETY: the name is a C string, alive with `view`.
+        assert_eq!(unsafe { CStr::from_ptr(e.name) }, name);
+        let got = if e.semantic_indices.is_null() {
+            &[][..]
+        } else {
+            // SAFETY: the element's indices, alive with `view`.
+            unsafe { core::slice::from_raw_parts(e.semantic_indices, indices.len()) }
+        };
+        assert_eq!(
+            (got, e.num_semantic_indices, e.start_row),
+            (indices, e.rows, -1)
+        );
+    }
+    entry.outputs[0].name = b"SV_\0Target".to_vec();
+    assert_eq!(
+        dxil_entry_view(&entry).err().map(|e| e.text().to_vec()),
+        Some(NAME_HOLDS_NUL.to_vec())
+    );
+}
+
+#[test]
+fn unreadable_bitcode_answers_the_readers_text() {
+    // The DXIL part's bitcode magic broken (the last one: DXC's STAT part holds a program too):
+    // the shim's `parseBitcodeFile`, never the C API's reader (which would exit), answers the
+    // C++'s text, read once from the C++ over the C API.
+    let mut bytes = include_bytes!("../../../ir/tests/data/cache.cs.dxil").to_vec();
+    let magic = bytes.windows(4).rposition(|w| w == b"BC\xc0\xde").unwrap();
+    bytes[magic] = b'X';
+    assert_eq!(
+        initialize_err(&bytes),
+        b"DXIL: can't read the bitcode: file doesn't start with bitcode header"
+    );
 }
 
 fn initialize_err(bytes: &[u8]) -> Vec<u8> {

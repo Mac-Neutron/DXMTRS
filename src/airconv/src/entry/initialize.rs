@@ -3,9 +3,13 @@
 //! The container is read first and a DXIL part sent to the DXIL front end, as `SM50Initialize`
 //! does; a DXBC shader is `airconv_ir::initialize::dxbc`'s, its reflection written here into
 //! the caller's memory one field at a time (D3D11 hands it uninitialised: nothing is read, and
-//! only the stage's part of the union is written).
+//! only the stage's part of the union is written). A DXIL shader's reflection is written whole,
+//! zeroed first, as the C++'s `*refl = {}` did.
 
-use core::{mem::offset_of, ptr};
+use core::{
+    mem::{offset_of, size_of},
+    ptr,
+};
 use std::ffi::CString;
 
 use airconv_ir::{
@@ -19,7 +23,7 @@ use airconv_ir::{
 
 use crate::{
     abi::{
-        DxilEntryElement, DxilEntryInfo, MTL_SM50_SHADER_ARGUMENT_BUFFER,
+        DxilEntryElement, DxilEntryInfo, DxilEntryResource, MTL_SM50_SHADER_ARGUMENT_BUFFER,
         MTL_SM50_SHADER_ARGUMENT_ELEMENT_WIDTH, MTL_SM50_SHADER_ARGUMENT_READ_ACCESS,
         MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET, MTL_SM50_SHADER_ARGUMENT_TEXTURE,
         MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY, MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP,
@@ -28,7 +32,11 @@ use crate::{
         MtlSm50ShaderArgument, MtlTessellatorReflection,
     },
     api::Error,
-    shader::{Dxbc, EntryView, Shader},
+    dxil::{
+        self,
+        types::{EntryInfo, ResourceFlags},
+    },
+    shader::{Dxbc, Dxil, EntryView, Shader},
 };
 
 /// A signature name that holds a NUL, which a C string cannot carry.
@@ -51,16 +59,22 @@ const _: () = {
 ///
 /// # Errors
 ///
-/// The container's refusal, the DXBC reader's, or "not ported" for DXIL.
+/// The container's refusal, the DXBC reader's or the DXIL front end's.
 ///
 /// # Safety
 ///
 /// `refl` is null or points to writable memory for one reflection, which may be uninitialised:
-/// only the stage's fields are written, nothing is read.
+/// for DXBC only the stage's fields are written, nothing is read.
 pub unsafe fn initialize(bytes: &[u8], refl: *mut MtlShaderReflection) -> Result<Shader, Error> {
     let container = Container::parse(bytes)?;
-    if dxil_part::find(&container)?.is_some() {
-        return Err(Error::not_ported());
+    if let Some(part) = dxil_part::find(&container)? {
+        let ir = dxil::initialize::initialize(&part, capture_hash(bytes))?;
+        let entry = dxil_entry_view(&ir.entry)?;
+        if !refl.is_null() {
+            // SAFETY: `refl` is non-null and writable for one reflection (the caller's contract).
+            unsafe { write_whole_reflection(refl, &ir.reflection()) };
+        }
+        return Ok(Shader::Dxil(Dxil { ir, entry }));
     }
     let mut ir = initialize::dxbc(&container)?;
     if !refl.is_null() {
@@ -80,8 +94,7 @@ pub unsafe fn initialize(bytes: &[u8], refl: *mut MtlShaderReflection) -> Result
 /// The shader's entry point as `DXILGetEntry` answers it.
 #[must_use]
 pub fn entry_info(shader: &Shader) -> DxilEntryInfo {
-    let Shader::Dxbc(dxbc) = shader;
-    dxbc.entry.info()
+    shader.entry().info()
 }
 
 /// The DXBC half of `DXILGetEntry` (`BuildEntryView`).
@@ -115,11 +128,78 @@ pub fn entry_view(ir: &DxbcShader) -> Result<EntryView, Error> {
     let inputs = rows.by_ref().take(ir.input.parameters.len()).collect();
     let outputs = rows.collect();
     Ok(EntryView {
+        is_dxil: false,
         stage: ir.program_type,
         inputs,
         outputs,
+        resources: Vec::new(),
         names,
         semantic_indices,
+    })
+}
+
+/// The DXIL half of `DXILGetEntry` (`BuildEntryView`).
+///
+/// The entry's elements, each with its rows and semantic indices, and its resource ranges (the
+/// heap ranges last).
+///
+/// # Errors
+///
+/// [`NAME_HOLDS_NUL`].
+pub fn dxil_entry_view(entry: &EntryInfo) -> Result<EntryView, Error> {
+    let elements = || entry.inputs.iter().chain(&entry.outputs);
+    let names = elements()
+        .map(|e| CString::new(e.name.as_slice()).map_err(|_| Error::new(NAME_HOLDS_NUL)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let semantic_indices: Box<[u32]> = elements()
+        .flat_map(|e| e.semantic_indices.iter().copied())
+        .collect();
+    let mut offset = 0;
+    let mut rows = elements().zip(&names).map(|(e, name)| {
+        let indices = semantic_indices
+            .get(offset..)
+            .filter(|_| !e.semantic_indices.is_empty())
+            .map_or(ptr::null(), <[u32]>::as_ptr);
+        offset += e.semantic_indices.len();
+        DxilEntryElement {
+            kind: e.kind,
+            rows: e.rows,
+            start_row: e.start_row,
+            name: name.as_ptr(),
+            num_semantic_indices: binding::count_u32(e.semantic_indices.len()),
+            semantic_indices: indices,
+        }
+    });
+    let inputs = rows.by_ref().take(entry.inputs.len()).collect();
+    let outputs = rows.collect();
+    let resources = entry
+        .resources
+        .iter()
+        .map(|r| DxilEntryResource {
+            cls: r.cls,
+            space: r.space,
+            lower_bound: r.lower_bound,
+            size: r.size,
+            heap: u32::from(r.flags.contains(ResourceFlags::HEAP)),
+        })
+        .collect();
+    Ok(EntryView {
+        is_dxil: true,
+        stage: entry.kind,
+        inputs,
+        outputs,
+        resources,
+        names,
+        semantic_indices,
+    })
+}
+
+/// FNV-1a 64 of the whole container.
+///
+/// The name D3D12's capture mode saves it under (`DXMT_PROBE` finds it by it).
+fn capture_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &b| {
+        (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
@@ -229,6 +309,19 @@ unsafe fn write_reflection(refl: *mut MtlShaderReflection, r: &Reflection) {
         offset_of!(R, argument_table_qwords),
         r.argument_table_qwords,
     );
+}
+
+/// Zeroes the whole reflection, then writes `r`'s fields (DXIL's `*refl = {}` and fields).
+///
+/// # Safety
+///
+/// `refl` is writable for one reflection; it need not be aligned or initialised.
+unsafe fn write_whole_reflection(refl: *mut MtlShaderReflection, r: &Reflection) {
+    // SAFETY: `refl` is writable for one reflection (the caller's contract).
+    let out = unsafe { out::Out::new(refl) };
+    out.put(0, [0u8; size_of::<MtlShaderReflection>()]);
+    // SAFETY: as above.
+    unsafe { write_reflection(refl, r) };
 }
 
 /// The reflection being written, behind a constructor that takes the caller's contract.

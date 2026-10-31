@@ -2,12 +2,12 @@
 
 mod bounds;
 mod converter;
-mod initialize;
+pub mod initialize;
 mod lower;
 mod lower_math;
 mod lower_resources;
 mod metadata;
 mod passthrough;
 mod probe;
-mod signature;
-mod types;
+pub mod signature;
+pub mod types;
