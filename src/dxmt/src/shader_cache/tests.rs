@@ -21,7 +21,7 @@ thread_local! {
     /// What the fakes were called with.
     ///
     /// A line per call, as the C++ golden's stubs print it. Each test runs on its own thread and
-    /// starts by emptying it.
+    /// starts by emptying it ([`start`]).
     static LOG: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
@@ -34,6 +34,12 @@ fn say(line: &str) {
 
 fn take() -> String {
     LOG.take()
+}
+
+/// Starts a test that reads the log: this thread's retains and releases go to it, and it is empty.
+fn start() {
+    crate::fakes::log_object_calls(object_call);
+    take();
 }
 
 fn who(handle: u64) -> &'static str {
@@ -102,14 +108,9 @@ extern "C-unwind" fn fake_set(writer: u64, key: *const c_void, length: u64, valu
     ));
 }
 
-#[unsafe(export_name = "NSObject_retain")]
-extern "C-unwind" fn fake_retain(object: u64) {
-    say(&format!("NSObject_retain {}", who(object)));
-}
-
-#[unsafe(export_name = "NSObject_release")]
-extern "C-unwind" fn fake_release(object: u64) {
-    say(&format!("NSObject_release {}", who(object)));
+/// The retains and releases of this thread's objects, from `crate::fakes`.
+fn object_call(name: &'static str, object: u64) {
+    say(&format!("{name} {}", who(object)));
 }
 
 /// A store the way the C++ holds one: behind the `void *` the exports take.
@@ -193,7 +194,7 @@ fn path_strings_are_the_cpps() {
 
 #[test]
 fn zero_turns_it_off() {
-    take();
+    start();
     assert_eq!(path(Some("0"), Some("/x"), "Game.exe", 310), None);
     let off = Store::open(None, 7);
     assert!(!off.has_reader() && !off.has_writer());
@@ -219,7 +220,7 @@ fn file_is_named_by_metal_version() {
 
 #[test]
 fn writer_opens_before_reader() {
-    take();
+    start();
     let store = open("/x/shaders_310.db");
     assert_eq!(
         take(),
@@ -231,7 +232,7 @@ fn writer_opens_before_reader() {
 
 #[test]
 fn drop_releases_reader_and_writer() {
-    take();
+    start();
     let store = open("/x/shaders_310.db");
     take();
     drop(store);
@@ -240,7 +241,7 @@ fn drop_releases_reader_and_writer() {
 
 #[test]
 fn a_side_that_failed_to_open_is_off() {
-    take();
+    start();
     let cold = open("/noreader/shaders_310.db");
     assert!(cold.has_writer() && !cold.has_reader());
     assert!(cold.read(&[1]).is_none());
@@ -253,7 +254,7 @@ fn a_side_that_failed_to_open_is_off() {
 
 #[test]
 fn cache_golden_replays() {
-    take();
+    start();
     let (head, rows) = GOLDEN_CALLS.split_once('\n').expect("a version line");
     let version = head
         .strip_prefix("ShaderCacheVersion ")
@@ -299,7 +300,7 @@ fn cache_golden_replays() {
 
 #[test]
 fn exports_pass_keys_and_handles() {
-    take();
+    start();
     let store = Raw::new(open("/x/shaders_310.db"));
     take();
     assert!(store.has_reader() && store.has_writer());
@@ -319,7 +320,7 @@ fn exports_pass_keys_and_handles() {
 
 #[test]
 fn exports_of_an_off_store_do_nothing() {
-    take();
+    start();
     let store = Raw::new(Store::open(None, 7));
     assert!(!store.has_reader() && !store.has_writer());
     store.write(&[1], DATA);
@@ -330,7 +331,7 @@ fn exports_of_an_off_store_do_nothing() {
 
 #[test]
 fn create_and_destroy_pair_up() {
-    take();
+    start();
     // The store is destroyed below.
     let store = Raw(dxmt_shader_cache_create(310, 7));
     assert!(!store.0.is_null());

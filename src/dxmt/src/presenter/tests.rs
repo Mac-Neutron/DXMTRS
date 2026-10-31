@@ -150,8 +150,18 @@ fn serial() -> MutexGuard<'static, ()> {
 }
 
 /// Forgets every handle and line, as the golden does at each scenario.
+///
+/// This thread's retains and releases go to the fakes' log from then on.
 fn reset() {
     *fake() = Fake::new();
+    crate::fakes::log_object_calls(object_call);
+}
+
+/// The retains and releases, from `crate::fakes`, as the C++ golden's stubs print them.
+fn object_call(name: &'static str, object: u64) {
+    let mut f = fake();
+    let line = format!("  {name} {}", f.name(object));
+    f.say(&line);
 }
 
 fn say(line: &str) {
@@ -1117,6 +1127,10 @@ fn scenario(line: &str, ramps: &[Box<DXMTGammaRamp>; 2]) {
     let (name, ops) = line.split_once('|').expect("<name> | <ops>");
     reset();
     say(&format!("== scenario {}", name.trim()));
+    // The harness's `InternalCommandLibrary`: it adopts the library (no retain) and releases it
+    // after the presenter is deleted, at the end of the scenario.
+    // SAFETY: the golden's library handle, given back once by the fakes' release.
+    let _library = unsafe { Obj::adopt(LIBRARY) };
     let mut presenter: Option<Presenter> = None;
     let mut pending: VecDeque<(u64, DXMTPresentMetadata)> = VecDeque::new();
     for op in ops.split(';') {
@@ -1191,7 +1205,10 @@ fn scenario(line: &str, ramps: &[Box<DXMTGammaRamp>; 2]) {
             "syncwait" => {
                 let got = thread::scope(|s| {
                     let queries = QUERIES.load(SeqCst);
-                    let t = s.spawn(|| p.synchronize());
+                    let t = s.spawn(|| {
+                        crate::fakes::log_object_calls(object_call);
+                        p.synchronize()
+                    });
                     while QUERIES.load(SeqCst) == queries {
                         thread::yield_now();
                     }
@@ -1300,15 +1317,10 @@ fn golden_replays() {
         scenario(line, &ramps);
         got.push_str(&take());
     }
-    // The retains and releases are the shader cache tests' fakes in this test binary; the C++
-    // golden's harness, built against the Rust, pins them.
-    let want: Vec<&str> = GOLDEN_CALLS
-        .lines()
-        .filter(|l| !l.starts_with("  NSObject_retain ") && !l.starts_with("  NSObject_release "))
-        .collect();
+    let want: Vec<&str> = GOLDEN_CALLS.lines().collect();
     let got: Vec<&str> = got.lines().collect();
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-        assert_eq!(g, w, "line {} of the filtered golden", i + 1);
+        assert_eq!(g, w, "line {} of the golden", i + 1);
     }
     assert_eq!(got.len(), want.len());
 }
