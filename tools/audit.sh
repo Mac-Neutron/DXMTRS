@@ -563,12 +563,14 @@ fi
 # could open it, and narrated its own development history.
 
 # What the rules read: the workspace crates' files (Cargo.toml's members), the root manifest and cargo config, D3D9's
-# documents, the conventions, the sample configuration and this script.
+# documents, the agent and contributor manuals, the root README, the conventions, the sample configuration and this
+# script.
 CRATES=$(sed -n '/^members = \[/,/^\]/s/^ *"\(.*\)",$/\1/p' Cargo.toml)
 # shellcheck disable=SC2086
 RELEASE=$({
     git ls-files $CRATES docs/d3d9 | grep -E '\.(rs|m|msl|md|toml|conf)$'
-    git ls-files Cargo.toml .cargo/config.toml rustfmt.toml docs/CONVENTIONS.md mtld3d.conf tools/audit.sh
+    git ls-files Cargo.toml .cargo/config.toml rustfmt.toml docs/CONVENTIONS.md mtld3d.conf tools/audit.sh \
+        CLAUDE.md CONTRIBUTING.md README.md docs/DEVELOPMENT.md
 } | grep -v '^tests/d3d9/conformance/' || true)
 
 # shellcheck disable=SC2086
