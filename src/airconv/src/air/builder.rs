@@ -1903,12 +1903,7 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
 
     /// The function `name` of type `fn_ty`, declared with `attrs` if it is new.
     fn declare(&self, name: &[u8], fn_ty: Ty, attrs: &Attrs) -> Result<Func<'cx>, Error> {
-        let cx = self.b.cx();
-        let attrs: Vec<(sys::AttributeIndex, sys::AttributeRef)> = attrs
-            .iter()
-            .filter_map(|&(index, name)| Some((index, cx.enum_attribute(name, 0)?)))
-            .collect();
-        self.m.get_or_insert_function(name, fn_ty, &attrs)
+        self.m.get_or_insert_function(name, fn_ty, attrs)
     }
 
     /// `name(converted)`: the `air.convert` of `v` to `to`.

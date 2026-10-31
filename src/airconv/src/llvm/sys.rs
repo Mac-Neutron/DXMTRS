@@ -1,13 +1,13 @@
-//! The LLVM 15 C API and the shim's functions, declared by hand with their C signatures.
+//! The LLVM 23 C API, `AIRWriter.h` and the shim's functions, declared by hand.
 //!
-//! Each declaration is the prototype of `llvm-c/{Core,Analysis,Linker}.h` in the install
+//! Each declaration is the prototype of `llvm-c/{Core,Analysis,Linker,AIRWriter}.h` in the install
 //! `AIRCONV_LLVM` names, under its snake-case name with the C name as `link_name` (`LLVMBuildGEP2`
 //! is `build_gep2`); enumerators are constants named the same way (`LLVMIntEQ` is `INT_EQ`).
 //! Only the deprecated forms are left out: the typed `2` forms (`LLVMBuildLoad2`, …) and the
 //! length-taking ones (`LLVMSetValueName2`, `LLVMMDStringInContext2`) are what the translator
 //! calls. The list is every function a later part of the translator uses; one that is missing is
 //! added here, never declared where it is called. The shim's functions (`shim/shim.cpp`, named
-//! `airconv_shim_*`) cover what this API lacks on LLVM 15.
+//! `airconv_shim_*`) cover what this API lacks on LLVM 23.
 
 use core::{
     ffi::{c_char, c_int, c_longlong, c_uint, c_ulonglong, c_void},
@@ -89,6 +89,88 @@ pub type DiagnosticHandler = Option<unsafe extern "C" fn(DiagnosticInfoRef, *mut
 /// `LLVMAttributeFunctionIndex` (-1 as an unsigned).
 pub const ATTRIBUTE_FUNCTION_INDEX: AttributeIndex = AttributeIndex::MAX;
 
+/// `LLVMAIRValueType`: a value and its typed type (`AIRWriter.h`).
+#[repr(C)]
+pub struct AirValueType {
+    /// The value (`Function *`, `GlobalVariable *` or `Value *`).
+    pub value: ValueRef,
+    /// Its typed type, built with [`air_typed_pointer_type`].
+    pub ty: TypeRef,
+}
+
+/// `LLVMAIRStructBody`: an identified struct and its typed literal body (`AIRWriter.h`).
+#[repr(C)]
+pub struct AirStructBody {
+    /// The identified struct type in the module's context.
+    pub struct_ty: TypeRef,
+    /// The typed literal struct body, with pointers built by [`air_typed_pointer_type`].
+    pub body: TypeRef,
+}
+
+/// `LLVMAIRTypes`: the typed side table for [`write_air_bitcode`] (`AIRWriter.h`).
+#[repr(C)]
+pub struct AirTypes {
+    /// Functions, globals and pointer values with their typed types.
+    pub values: *const AirValueType,
+    /// The number of entries in `values`.
+    pub num_values: usize,
+    /// Identified struct bodies whose fields hold pointers.
+    pub structs: *const AirStructBody,
+    /// The number of entries in `structs`.
+    pub num_structs: usize,
+    /// Typed bitcode buffers (`air_*.air` helpers) read for typed signatures and bodies.
+    pub typed_refs: *const MemoryBufferRef,
+    /// The number of buffers in `typed_refs`.
+    pub num_typed_refs: usize,
+}
+
+/// `LLVMAIRWriteStats`: per-module counts from [`write_air_bitcode`] (`AIRWriter.h`).
+#[repr(C)]
+pub struct AirWriteStats {
+    /// `bitcast` instructions inserted at pointer-type boundaries.
+    pub inst_casts: u32,
+    /// Constant-expression `bitcast`s made for globals and initializers.
+    pub const_casts: u32,
+    /// Pointer values typed from a use or `i8*` fallback.
+    pub use_typed: u32,
+    /// LLVM 23-only attributes dropped or weakened.
+    pub attrs_dropped: u32,
+    /// LLVM 23-only instruction flags (`nneg`, `disjoint`, `samesign`, `nuw`, `nusw`) dropped.
+    pub flags_dropped: u32,
+    /// Named symbols and structs filled from `typed_refs`.
+    pub refs_filled: u32,
+}
+
+#[cfg(target_arch = "aarch64")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<AirValueType>() == 16);
+    assert!(offset_of!(AirValueType, value) == 0);
+    assert!(offset_of!(AirValueType, ty) == 8);
+
+    assert!(size_of::<AirStructBody>() == 16);
+    assert!(offset_of!(AirStructBody, struct_ty) == 0);
+    assert!(offset_of!(AirStructBody, body) == 8);
+
+    assert!(size_of::<AirTypes>() == 48);
+    assert!(offset_of!(AirTypes, values) == 0);
+    assert!(offset_of!(AirTypes, num_values) == 8);
+    assert!(offset_of!(AirTypes, structs) == 16);
+    assert!(offset_of!(AirTypes, num_structs) == 24);
+    assert!(offset_of!(AirTypes, typed_refs) == 32);
+    assert!(offset_of!(AirTypes, num_typed_refs) == 40);
+
+    assert!(size_of::<AirWriteStats>() == 24);
+    assert!(offset_of!(AirWriteStats, inst_casts) == 0);
+    assert!(offset_of!(AirWriteStats, const_casts) == 4);
+    assert!(offset_of!(AirWriteStats, use_typed) == 8);
+    assert!(offset_of!(AirWriteStats, attrs_dropped) == 12);
+    assert!(offset_of!(AirWriteStats, flags_dropped) == 16);
+    assert!(offset_of!(AirWriteStats, refs_filled) == 20);
+
+    let _ = (air_typed_pointer_type, write_air_bitcode);
+};
+
 // `LLVMOpcode`
 pub const ADD: Opcode = 8;
 pub const F_ADD: Opcode = 9;
@@ -97,26 +179,8 @@ pub const F_MUL: Opcode = 13;
 pub const AND: Opcode = 23;
 pub const OR: Opcode = 24;
 pub const XOR: Opcode = 25;
-#[cfg(feature = "oracle")]
-pub const ALLOCA: Opcode = 26;
-#[cfg(feature = "oracle")]
-pub const LOAD: Opcode = 27;
-#[cfg(feature = "oracle")]
-pub const STORE: Opcode = 28;
-#[cfg(feature = "oracle")]
-pub const GET_ELEMENT_PTR: Opcode = 29;
 #[cfg(all(test, feature = "oracle"))]
 pub const Z_EXT: Opcode = 31;
-#[cfg(feature = "oracle")]
-pub const PHI: Opcode = 44;
-#[cfg(feature = "oracle")]
-pub const CALL: Opcode = 45;
-#[cfg(feature = "oracle")]
-pub const SELECT: Opcode = 46;
-#[cfg(feature = "oracle")]
-pub const ATOMIC_CMP_XCHG: Opcode = 56;
-#[cfg(feature = "oracle")]
-pub const ATOMIC_RMW: Opcode = 57;
 
 // `LLVMTypeKind`
 pub const VOID_TYPE_KIND: TypeKind = 0;
@@ -190,8 +254,6 @@ unsafe extern "C" {
     pub fn context_create() -> ContextRef;
     #[link_name = "LLVMContextDispose"]
     pub fn context_dispose(c: ContextRef);
-    #[link_name = "LLVMContextSetOpaquePointers"]
-    pub fn context_set_opaque_pointers(c: ContextRef, opaque_pointers: Bool);
     #[link_name = "LLVMContextSetDiagnosticHandler"]
     pub fn context_set_diagnostic_handler(
         c: ContextRef,
@@ -285,7 +347,7 @@ unsafe extern "C" {
     // Types
     #[link_name = "LLVMGetTypeKind"]
     pub fn get_type_kind(ty: TypeRef) -> TypeKind;
-    #[cfg(feature = "oracle")]
+    #[cfg(any(test, feature = "oracle"))]
     #[link_name = "LLVMPrintTypeToString"]
     pub fn print_type_to_string(val: TypeRef) -> *mut c_char;
     #[cfg(test)]
@@ -344,9 +406,6 @@ unsafe extern "C" {
     pub fn count_struct_element_types(struct_ty: TypeRef) -> c_uint;
     #[link_name = "LLVMGetStructElementTypes"]
     pub fn get_struct_element_types(struct_ty: TypeRef, dest: *mut TypeRef);
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMStructGetTypeAtIndex"]
-    pub fn struct_get_type_at_index(struct_ty: TypeRef, i: c_uint) -> TypeRef;
     #[link_name = "LLVMIsPackedStruct"]
     pub fn is_packed_struct(struct_ty: TypeRef) -> Bool;
     #[link_name = "LLVMIsOpaqueStruct"]
@@ -361,8 +420,8 @@ unsafe extern "C" {
     pub fn get_array_length(array_ty: TypeRef) -> c_uint;
     #[link_name = "LLVMPointerType"]
     pub fn pointer_type(element_type: TypeRef, address_space: c_uint) -> TypeRef;
-    #[link_name = "LLVMPointerTypeIsOpaque"]
-    pub fn pointer_type_is_opaque(ty: TypeRef) -> Bool;
+    #[link_name = "LLVMPointerTypeInContext"]
+    pub fn pointer_type_in_context(c: ContextRef, address_space: c_uint) -> TypeRef;
     #[link_name = "LLVMGetPointerAddressSpace"]
     pub fn get_pointer_address_space(pointer_ty: TypeRef) -> c_uint;
     #[link_name = "LLVMVectorType"]
@@ -473,8 +532,6 @@ unsafe extern "C" {
     pub fn const_vector(scalar_constant_vals: *mut ValueRef, size: c_uint) -> ValueRef;
     #[link_name = "LLVMGetAggregateElement"]
     pub fn get_aggregate_element(c: ValueRef, idx: c_uint) -> ValueRef;
-    #[link_name = "LLVMConstBitCast"]
-    pub fn const_bit_cast(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
     #[link_name = "LLVMConstInBoundsGEP2"]
     pub fn const_in_bounds_gep2(
         ty: TypeRef,
@@ -548,12 +605,6 @@ unsafe extern "C" {
     pub fn count_params(fn_: ValueRef) -> c_uint;
     #[link_name = "LLVMGetParam"]
     pub fn get_param(fn_: ValueRef, index: c_uint) -> ValueRef;
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMGetFirstParam"]
-    pub fn get_first_param(fn_: ValueRef) -> ValueRef;
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMGetNextParam"]
-    pub fn get_next_param(arg: ValueRef) -> ValueRef;
 
     // Basic blocks
     #[link_name = "LLVMGetBasicBlockParent"]
@@ -610,9 +661,6 @@ unsafe extern "C" {
     pub fn get_next_instruction(inst: ValueRef) -> ValueRef;
     #[link_name = "LLVMInstructionEraseFromParent"]
     pub fn instruction_erase_from_parent(inst: ValueRef);
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMGetInstructionOpcode"]
-    pub fn get_instruction_opcode(inst: ValueRef) -> Opcode;
     #[link_name = "LLVMGetNumArgOperands"]
     pub fn get_num_arg_operands(instr: ValueRef) -> c_uint;
     #[link_name = "LLVMAddCallSiteAttribute"]
@@ -623,9 +671,6 @@ unsafe extern "C" {
     pub fn get_called_value(instr: ValueRef) -> ValueRef;
     #[link_name = "LLVMSetSuccessor"]
     pub fn set_successor(term: ValueRef, i: c_uint, block: BasicBlockRef);
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMGetAllocatedType"]
-    pub fn get_allocated_type(alloca: ValueRef) -> TypeRef;
     #[link_name = "LLVMIsInBounds"]
     pub fn is_in_bounds(gep: ValueRef) -> Bool;
     #[link_name = "LLVMGetGEPSourceElementType"]
@@ -637,12 +682,6 @@ unsafe extern "C" {
         incoming_blocks: *mut BasicBlockRef,
         count: c_uint,
     );
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMCountIncoming"]
-    pub fn count_incoming(phi_node: ValueRef) -> c_uint;
-    #[cfg(feature = "oracle")]
-    #[link_name = "LLVMGetIncomingValue"]
-    pub fn get_incoming_value(phi_node: ValueRef, index: c_uint) -> ValueRef;
     #[link_name = "LLVMGetNumIndices"]
     pub fn get_num_indices(inst: ValueRef) -> c_uint;
     #[link_name = "LLVMGetIndices"]
@@ -687,7 +726,7 @@ unsafe extern "C" {
     ) -> ValueRef;
     #[link_name = "LLVMAddCase"]
     pub fn add_case(switch: ValueRef, on_val: ValueRef, dest: BasicBlockRef);
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildUnreachable"]
     pub fn build_unreachable(b: BuilderRef) -> ValueRef;
     #[link_name = "LLVMBuildAdd"]
@@ -1063,13 +1102,6 @@ unsafe extern "C" {
     ) -> ValueRef;
 
     // Memory buffers
-    #[cfg(all(test, feature = "oracle"))]
-    #[link_name = "LLVMCreateMemoryBufferWithMemoryRangeCopy"]
-    pub fn create_memory_buffer_with_memory_range_copy(
-        input_data: *const c_char,
-        input_data_length: usize,
-        buffer_name: *const c_char,
-    ) -> MemoryBufferRef;
     #[link_name = "LLVMGetBufferStart"]
     pub fn get_buffer_start(mem_buf: MemoryBufferRef) -> *const c_char;
     #[link_name = "LLVMGetBufferSize"]
@@ -1105,9 +1137,21 @@ unsafe extern "C" {
     #[cfg(test)]
     #[link_name = "LLVMLinkModules2"]
     pub fn link_modules2(dest: ModuleRef, src: ModuleRef) -> Bool;
+
+    // The AIR bitcode writer (`llvm-c/AIRWriter.h`)
+    #[link_name = "LLVMAIRTypedPointerType"]
+    pub fn air_typed_pointer_type(element_type: TypeRef, address_space: c_uint) -> TypeRef;
+    #[link_name = "LLVMWriteAIRBitcode"]
+    pub fn write_air_bitcode(
+        m: ModuleRef,
+        types: *const AirTypes,
+        out_buf: *mut MemoryBufferRef,
+        stats: *mut AirWriteStats,
+        out_error: *mut *mut c_char,
+    ) -> Bool;
 }
 
-// The shim (`shim/shim.cpp`): what LLVM 15's C API lacks. Each is `extern "C"` in C++ built
+// The shim (`shim/shim.cpp`): what LLVM 23's C API lacks. Each is `extern "C"` in C++ built
 // without exceptions, so nothing unwinds out of it.
 unsafe extern "C" {
     /// Links LLVM's core and the barrier pass through the pass's own declaration: answers 1.
@@ -1136,8 +1180,9 @@ unsafe extern "C" {
     pub fn airconv_shim_write_bitcode(module: ModuleRef) -> MemoryBufferRef;
     /// Parses `size` bytes of bitcode into a module of `context` (`parseBitcodeFile`).
     ///
-    /// The buffer is named by `name`; the module is read in full. Answers 0 and the module in
-    /// `*out`, or 1 and `toString` of the error in `*error` (`*error_len` bytes, freed with
+    /// The buffer is named by `name`; the module is read in full. When `dxil_layout` is non-zero,
+    /// its `DataLayout` callback drops the `i8:32` component. Answers 0 and the module in `*out`,
+    /// or 1 and `toString` of the error in `*error` (`*error_len` bytes, freed with
     /// `dispose_message`).
     pub fn airconv_shim_parse_bitcode(
         context: ContextRef,
@@ -1145,6 +1190,7 @@ unsafe extern "C" {
         size: usize,
         name: *const c_char,
         name_len: usize,
+        dxil_layout: Bool,
         out: *mut ModuleRef,
         error: *mut *mut c_char,
         error_len: *mut usize,
@@ -1162,6 +1208,22 @@ unsafe extern "C" {
     );
     /// Runs airconv's pass pipeline on `module`, its two passes included.
     pub fn airconv_shim_run_passes(module: ModuleRef);
+    /// Prints the pass pipeline (`ModulePassManager::printPipeline`) to `*out` (`*len` bytes).
+    ///
+    /// The buffer is freed with `dispose_message` and is built with or without the two passes.
+    #[cfg(test)]
+    pub fn airconv_shim_pipeline_text(air_passes: c_int, out: *mut *mut c_char, len: *mut usize);
+    /// `Attribute::getWithMemoryEffects` for the given location mask and `ModRefInfo`.
+    ///
+    /// `argmem_only` selects the location mask (`0`: all, `1`: `ArgMem`, `2`: `InaccessibleMem`,
+    /// `3`: both) and `mod_ref` is `ModRefInfo` (`0`: none, `1`: `Ref`, `2`: `Mod`, `3`: `ModRef`).
+    pub fn airconv_shim_memory_attribute(
+        context: ContextRef,
+        argmem_only: c_int,
+        mod_ref: c_int,
+    ) -> AttributeRef;
+    /// `Attribute::getWithCaptureInfo(CaptureInfo::none())`: `captures(none)`.
+    pub fn airconv_shim_captures_none(context: ContextRef) -> AttributeRef;
     /// Sets the module's SDK version (`Module::setSDKVersion`).
     pub fn airconv_shim_set_sdk_version(module: ModuleRef, major: c_uint, minor: c_uint);
     /// Declares (or finds) `air.simdgroup.barrier` in `module` as the barrier pass does.

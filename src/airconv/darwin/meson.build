@@ -8,7 +8,7 @@ endif
 # it. -lc++ for LLVM and the shim: the images' sources are C, so meson links them with the C driver.
 llvm_ld_flags_darwin = [
   '-L'+join_paths(native_llvm_path, 'lib'),
-  '-lm', '-lz', '-lcurses', '-lxml2', '-lc++'
+  '-lm', '-lz', '-lxml2', '-lc++'
 ]
 
 if native_llvm_path.startswith('/usr/local/opt') or native_llvm_path.startswith('/opt/homebrew/opt')

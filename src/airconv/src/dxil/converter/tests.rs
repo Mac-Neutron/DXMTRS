@@ -50,7 +50,9 @@ fn compile_on_eight_threads_matches_one() {
     let (bitcode, entries) = metallib::parse(&single).unwrap();
     assert_eq!(entries.len(), 1);
     let cx = Context::new();
-    let text = String::from_utf8(ok(module::parse(&cx, &bitcode, b"", b"")).print()).unwrap();
+    let text =
+        String::from_utf8(ok(module::parse(&cx, &bitcode, b"", b"", module::Layout::Keep)).print())
+            .unwrap();
     assert!(text.contains("!air.kernel"));
 }
 

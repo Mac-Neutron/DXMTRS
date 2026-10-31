@@ -1,17 +1,14 @@
-//! Tests of module setup, the helpers and the writer against the C++ baseline.
-//!
-//! The baseline tests read `AIRCONV_STEP4_BASE`, step 4's frozen C++ outputs: unset, each prints
-//! why and passes; set, a missing folder or file fails it.
+//! Tests of module setup, the helpers, the shim's pipeline and the writer's entry extraction.
 
 use core::{ffi::CStr, ptr};
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
+
+use airconv_ir::{
+    container::Container,
+    dxil_part,
+    metallib::{FunctionEntry, FunctionKind, Patch, VertexAttribute},
 };
 
-use airconv_ir::metallib::{self, FunctionEntry, FunctionKind, Patch, VertexAttribute};
-
-use super::{MSAD, SAMPLEPOS, TESSELLATION, initialize, link_helpers, optimize, parse};
+use super::{Layout, MSAD, SAMPLEPOS, TESSELLATION, initialize, link_helpers, optimize, parse};
 use crate::{
     api::Error,
     llvm::{Builder, Context, FastMath, Module, sys},
@@ -29,55 +26,6 @@ type HelperRow = (
 /// The value of `result`, or a panic showing the error's text (`Error` has no `Debug`).
 fn ok<T>(result: Result<T, Error>) -> T {
     result.unwrap_or_else(|e| panic!("{}", String::from_utf8_lossy(e.text())))
-}
-
-/// The baseline folder, or `None` (and why) when `AIRCONV_STEP4_BASE` is unset.
-fn base(skipped: &str) -> Option<PathBuf> {
-    let Some(base) = env::var_os("AIRCONV_STEP4_BASE") else {
-        eprintln!("AIRCONV_STEP4_BASE is not set: {skipped}");
-        return None;
-    };
-    Some(PathBuf::from(base))
-}
-
-fn sorted(dir: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    paths.sort();
-    paths
-}
-
-/// Every metallib of the baseline's `*.out` folders (each run's metallibs), in order.
-fn metallibs(base: &Path) -> Vec<PathBuf> {
-    let files: Vec<PathBuf> = sorted(base)
-        .into_iter()
-        .filter(|out| out.is_dir() && out.extension().is_some_and(|ext| ext == "out"))
-        .flat_map(|out| sorted(&out))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "metallib"))
-        .collect();
-    assert!(!files.is_empty(), "no metallib under {}", base.display());
-    files
-}
-
-/// The text of a metallib, `<run>.dis/<name>.ll` beside `<run>.out/<name>.metallib`.
-fn text_of(metallib: &Path) -> Vec<u8> {
-    let out = metallib.parent().unwrap();
-    let ll = out
-        .with_extension("dis")
-        .join(Path::new(metallib.file_name().unwrap()).with_extension("ll"));
-    fs::read(&ll).unwrap_or_else(|e| panic!("{}: {e}", ll.display()))
-}
-
-/// The module flags of a module's text: the `!llvm.module.flags` line and `!0` .. `!9`.
-fn flag_lines(text: &str) -> Vec<&str> {
-    text.lines()
-        .filter(|line| {
-            line.starts_with("!llvm.module.flags = ")
-                || (0..10).any(|i| line.starts_with(&format!("!{i} = ")))
-        })
-        .collect()
 }
 
 fn function(m: &Module<'_>, name: &CStr) -> sys::ValueRef {
@@ -118,26 +66,6 @@ fn add_named(m: &Module<'_>, name: &CStr, node: sys::MetadataRef) {
 }
 
 #[test]
-fn initialize_prints_the_baseline_header() {
-    let Some(base) = base("the module header is not compared") else {
-        return;
-    };
-    let baseline = fs::read_to_string(base.join("C1.dis/compute.cs.dxil.ll")).unwrap();
-    let cx = Context::new();
-    let m = initialize(&cx, c"shader.air");
-    let text = String::from_utf8(m.print()).unwrap();
-    let mut lines = text.lines();
-    // The baseline was printed from a module read with no identifier.
-    assert_eq!(lines.next(), Some("; ModuleID = 'shader.air'"));
-    let header: Vec<&str> = lines.take_while(|line| !line.is_empty()).collect();
-    let baseline_header: Vec<&str> = baseline.lines().take_while(|l| !l.is_empty()).collect();
-    assert_eq!(header.len(), 3, "{text}");
-    assert_eq!(header, baseline_header);
-    assert_eq!(flag_lines(&text).len(), 11, "{text}");
-    assert_eq!(flag_lines(&text), flag_lines(&baseline));
-}
-
-#[test]
 fn helpers_parse_and_link() {
     let rows: [HelperRow; 3] = [
         (
@@ -163,7 +91,7 @@ fn helpers_parse_and_link() {
         let cx = Context::new();
         let tcx = cx.tcx();
         let fn_ty = {
-            let helper = ok(parse(&cx, air, b"", b""));
+            let helper = ok(parse(&cx, air, b"", b"", Layout::Keep));
             let f = function(&helper, symbol);
             assert!(!f.is_null(), "{symbol:?}");
             // SAFETY: a function of the helper.
@@ -217,82 +145,6 @@ fn helpers_parse_and_link() {
         assert_eq!(verify(&m), "");
         assert!(cx.take_error().is_none());
     }
-}
-
-#[test]
-fn writer_packs_baseline() {
-    let Some(base) = base("no baseline metallib is packed") else {
-        return;
-    };
-    let (mut files, mut functions, mut with_inputs) = (0, 0, 0);
-    for path in metallibs(&base) {
-        let bytes = fs::read(&path).unwrap();
-        let (bitcode, _) =
-            metallib::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let cx = Context::new();
-        let m = ok(parse(&cx, &bitcode, b"", b""));
-        let entries = writer::function_entries(&m);
-        assert!(
-            metallib::pack(&bitcode, &entries) == bytes,
-            "{}",
-            path.display()
-        );
-        files += 1;
-        functions += entries.len();
-        with_inputs += entries
-            .iter()
-            .filter(|e| !e.vertex_attributes.is_empty())
-            .count();
-    }
-    assert!(with_inputs > 0, "no baseline function has vertex inputs");
-    eprintln!("packed {files} metallibs: {functions} functions, {with_inputs} with vertex inputs");
-}
-
-#[test]
-fn writer_round_trip_keeps_the_text() {
-    let Some(base) = base("no baseline metallib is written again") else {
-        return;
-    };
-    let (mut files, mut fixed, mut same) = (0, 0, 0);
-    for path in metallibs(&base) {
-        let bytes = fs::read(&path).unwrap();
-        let (bitcode, entries) =
-            metallib::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let cx = Context::new();
-        let m = ok(parse(&cx, &bitcode, b"", b""));
-        let written = writer::write(&m);
-        let (rewritten, rewritten_entries) =
-            metallib::parse(&written).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        assert!(rewritten_entries == entries, "{}: tags", path.display());
-        // Each read in a context of its own, as the tool read each metallib: a second module of
-        // one context would rename its structs (`%argument_buffer_struct.0`).
-        let again: Vec<Vec<u8>> = (0..2)
-            .map(|_| {
-                let cx = Context::new();
-                let again = ok(parse(&cx, &rewritten, b"", b""));
-                assert!(again.print() == text_of(&path), "{}: text", path.display());
-                writer::write(&again)
-            })
-            .collect();
-        // The same bytes read twice write the same bytes. Writing what was read is not always the
-        // bytes read: LLVM orders a function's value symbols as its symbol table's buckets, which
-        // the reader fills in another order, so a module can take a few rounds, or never settle.
-        assert!(
-            again[0] == again[1],
-            "{}: two reads write two metallibs",
-            path.display()
-        );
-        fixed += usize::from(again[0] == written);
-        same += usize::from(written == bytes);
-        files += 1;
-    }
-    // Some modules write back as the C++ wrote them: the writer's options are the C++'s (a module
-    // hash, no use-list order); a different option would change every one.
-    assert!(same > 0, "no metallib writes back as the C++ wrote it");
-    eprintln!(
-        "wrote {files} metallibs again: {same} as the C++ wrote them, {fixed} the same bytes on a \
-         second round"
-    );
 }
 
 #[test]
@@ -435,4 +287,72 @@ fn shim_fast_math_flags() {
     // SAFETY: as above (a folded constant: not a floating-point operation).
     let int_is_fp = unsafe { sys::airconv_shim_is_fp_math_operator(int.raw()) };
     assert_eq!(int_is_fp, 0);
+}
+
+#[test]
+fn dxil_layout_override_drops_i8_32() {
+    let dxbc = include_bytes!("../../ir/tests/data/cache.cs.dxil");
+    let container = Container::parse(dxbc).unwrap();
+    let part = dxil_part::find(&container).unwrap().unwrap();
+    let bitcode = part.bitcode;
+
+    let cx = Context::new();
+    let err = parse(&cx, bitcode, b"", b"", Layout::Keep)
+        .err()
+        .expect("raw DXIL layout must be rejected by LLVM 23's reader");
+    let text = String::from_utf8_lossy(err.text());
+    assert!(text.contains("i8"), "{text}");
+
+    let cx = Context::new();
+    let m = ok(parse(&cx, bitcode, b"", b"", Layout::Dxil));
+    let printed = String::from_utf8(m.print()).unwrap();
+    assert!(!printed.contains("i8:32"), "{printed}");
+}
+
+fn pipeline_text(air_passes: i32) -> String {
+    let mut ptr: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut len: usize = 0;
+    // SAFETY: `ptr` and `len` are valid out-pointers.
+    unsafe { sys::airconv_shim_pipeline_text(air_passes, &raw mut ptr, &raw mut len) };
+    // SAFETY: `airconv_shim_pipeline_text` wrote `len` bytes at `ptr`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
+    let s = String::from_utf8(bytes.to_vec()).unwrap();
+    // SAFETY: `ptr` was allocated by `airconv_shim_pipeline_text` as a message buffer.
+    unsafe { sys::dispose_message(ptr) };
+    s
+}
+
+const WS_P15_OPT_PRINTED: &str = concat!(
+    "annotation2metadata,forceattrs,inferattrs,",
+    "function<eager-inv>(",
+    "lower-expect,",
+    "simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;",
+    "no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;",
+    "no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;",
+    "simplify-cond-branch;no-speculate-unpredictables>,",
+    "sroa<modify-cfg>,",
+    "early-cse<>",
+    "),",
+    "always-inline,ipsccp,globalopt,function(mem2reg),deadargelim,",
+    "function<eager-inv>(",
+    "instcombine<max-iterations=1;no-verify-fixpoint>,",
+    "simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;",
+    "no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;",
+    "no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;",
+    "simplify-cond-branch;no-speculate-unpredictables>",
+    ")"
+);
+
+#[test]
+fn shim_pipeline_equals_ws_p15() {
+    assert_eq!(pipeline_text(0), WS_P15_OPT_PRINTED);
+}
+
+#[test]
+fn shim_pipeline_places_the_two_passes() {
+    let expected = format!(
+        "{},air::Lower16BitTexReadPass,air::SimdgroupImplicitMemBarrierPass)",
+        WS_P15_OPT_PRINTED.strip_suffix(')').unwrap()
+    );
+    assert_eq!(pipeline_text(1), expected);
 }

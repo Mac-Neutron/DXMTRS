@@ -437,14 +437,10 @@ impl<'a, 'cx> Converter<'a, 'cx> {
         let cx = self.ir.cx();
         let params: Vec<Ty> = args.iter().map(|a| a.ty()).collect();
         let fn_ty = cx.tcx().function(ret, &params, false);
-        let attrs: Vec<(sys::AttributeIndex, sys::AttributeRef)> = attrs
-            .iter()
-            .filter_map(|&(index, attr)| Some((index, cx.enum_attribute(attr, 0)?)))
-            .collect();
         let callee = self
             .air
             .module()
-            .get_or_insert_function(name, fn_ty, &attrs)?;
+            .get_or_insert_function(name, fn_ty, attrs)?;
         Ok(self.ir.call(callee, args))
     }
 

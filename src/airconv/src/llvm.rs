@@ -1,11 +1,11 @@
-//! LLVM 15 through its C API: the declarations, the handles and one `Ty` for every type.
+//! LLVM 23 through its C API: the declarations, the handles and one `Ty` for every type.
 //!
-//! A [`Context`] is one compile's LLVM context, with typed pointers (the AIR Metal reads) and a
-//! diagnostic handler, so nothing LLVM reports ends the process: an error is kept for
-//! [`Context::take_error`], which every parse, link and verify checks, a warning or a note is
-//! written to stderr as LLVM would have written it, a remark is dropped (LLVM filters remarks
-//! when it prints itself). The handles ([`Module`], [`Func`], [`Block`], [`Val`]) borrow their
-//! context, so none outlives it; every value carries its [`Ty`]. Each wrapper makes one C call.
+//! A [`Context`] is one compile's LLVM context, with a diagnostic handler, so nothing LLVM
+//! reports ends the process: an error is kept for [`Context::take_error`], which every parse, link
+//! and verify checks, a warning or a note is written to stderr as LLVM would have written it, a
+//! remark is dropped (LLVM filters remarks when it prints itself). The handles ([`Module`],
+//! [`Func`], [`Block`], [`Val`]) borrow their context, so none outlives it; every value carries
+//! its [`Ty`]. Each wrapper makes one C call.
 //!
 //! A constant maker checks its type's kind ([`Context::const_int`] an integer, …): another kind
 //! answers `undef` and an error the compile reports, since a DXIL `dx.op` declared with other
@@ -116,13 +116,11 @@ pub struct Context {
 }
 
 impl Context {
-    /// A context with typed pointers and the diagnostic handler installed.
+    /// A context with the diagnostic handler installed.
     #[must_use]
     pub fn new() -> Self {
         // SAFETY: creating a context has no precondition.
         let raw = unsafe { sys::context_create() };
-        // SAFETY: `raw` is the live context just made.
-        unsafe { sys::context_set_opaque_pointers(raw, 0) };
         let diagnostics = Box::into_raw(Box::<Diagnostics>::default());
         // SAFETY: `raw` is live; `diagnostics` stays allocated until after the context is
         // disposed of (`drop`), and the handler only reads through it.
@@ -208,13 +206,17 @@ impl Context {
 
     /// The zero of `ty` (`Constant::getNullValue`).
     ///
-    /// `void`, a function type, a label and `metadata` have none: they answer `undef` and fail
-    /// the compile (the module doc).
+    /// `void`, `Unknown`, a function type, a label and `metadata` have none: they answer `undef`
+    /// and fail the compile (the module doc).
     #[must_use]
     pub fn null(&self, ty: Ty) -> Val<'_> {
         if matches!(
             self.tcx.kind(ty),
-            TyKind::Void | TyKind::Function { .. } | TyKind::Label | TyKind::Metadata
+            TyKind::Void
+                | TyKind::Unknown
+                | TyKind::Function { .. }
+                | TyKind::Label
+                | TyKind::Metadata
         ) {
             return self.wrong_kind(ty);
         }
@@ -332,16 +334,88 @@ impl Context {
         unsafe { sys::md_node_in_context2(self.raw, raws.as_mut_ptr(), raws.len()) }
     }
 
-    /// The enum attribute `name` (`nounwind`, `readnone`, …) with `value` (`Attribute::get`).
+    /// The enum attribute `name` (`nounwind`, `willreturn`, …) with `value` (`Attribute::get`).
     ///
-    /// `None` for a name LLVM does not know.
-    #[must_use]
-    pub fn enum_attribute(&self, name: &[u8], value: u64) -> Option<sys::AttributeRef> {
+    /// # Errors
+    ///
+    /// `LLVM error: no attribute <name>` for a name LLVM 23 does not know.
+    pub fn enum_attribute(&self, name: &[u8], value: u64) -> Result<sys::AttributeRef, Error> {
         // SAFETY: `name` holds its length.
         let kind =
             unsafe { sys::get_enum_attribute_kind_for_name(name.as_ptr().cast(), name.len()) };
+        if kind == 0 {
+            return Err(Error::new(
+                &[&b"LLVM error: no attribute "[..], name].concat(),
+            ));
+        }
         // SAFETY: the context is live, `kind` an attribute kind LLVM named.
-        (kind != 0).then(|| unsafe { sys::create_enum_attribute(self.raw, kind, value) })
+        Ok(unsafe { sys::create_enum_attribute(self.raw, kind, value) })
+    }
+
+    /// Converts an attribute table `(index, name)` into LLVM 23 attributes.
+    ///
+    /// Upgrades function-level memory attributes and parameter `nocapture` as `BitcodeReader`
+    /// does (P20).
+    ///
+    /// # Errors
+    ///
+    /// `LLVM error: no attribute <name>` when `name` is neither a known memory/capture
+    /// attribute nor an LLVM 23 enum attribute.
+    pub fn attributes15(
+        &self,
+        attrs: &[(sys::AttributeIndex, &[u8])],
+    ) -> Result<Vec<(sys::AttributeIndex, sys::AttributeRef)>, Error> {
+        let mut out = Vec::with_capacity(attrs.len());
+        let mut has_mem = false;
+        let mut loc_mask = 7;
+        let mut mod_ref = 3;
+        for &(index, attr_name) in attrs {
+            if index == sys::ATTRIBUTE_FUNCTION_INDEX {
+                match attr_name {
+                    b"readnone" => {
+                        has_mem = true;
+                        mod_ref &= 0;
+                    }
+                    b"readonly" => {
+                        has_mem = true;
+                        mod_ref &= 1;
+                    }
+                    b"writeonly" => {
+                        has_mem = true;
+                        mod_ref &= 2;
+                    }
+                    b"argmemonly" => {
+                        has_mem = true;
+                        loc_mask &= 1;
+                    }
+                    b"inaccessiblememonly" => {
+                        has_mem = true;
+                        loc_mask &= 2;
+                    }
+                    b"inaccessiblemem_or_argmemonly" => {
+                        has_mem = true;
+                        loc_mask &= 3;
+                    }
+                    _ => out.push((index, self.enum_attribute(attr_name, 0)?)),
+                }
+            } else if attr_name == b"nocapture" {
+                // SAFETY: the context is live.
+                out.push((index, unsafe { sys::airconv_shim_captures_none(self.raw) }));
+            } else {
+                out.push((index, self.enum_attribute(attr_name, 0)?));
+            }
+        }
+        if has_mem {
+            let (argmem_only, mr) = match loc_mask {
+                0 => (0, 0),
+                1..=3 => (loc_mask, mod_ref),
+                _ => (0, mod_ref),
+            };
+            // SAFETY: the context is live.
+            let mem = unsafe { sys::airconv_shim_memory_attribute(self.raw, argmem_only, mr) };
+            out.push((sys::ATTRIBUTE_FUNCTION_INDEX, mem));
+        }
+        Ok(out)
     }
 }
 
@@ -420,18 +494,17 @@ impl<'cx> Module<'cx> {
 
     /// `Module::getOrInsertFunction`: the global named `name`, called as the function type `ty`.
     ///
-    /// When there is none, a new external declaration with `attrs` (`(index, attribute)`, not
-    /// given to an `llvm.` intrinsic, which has its own); a bitcast of it when it has
-    /// another type.
+    /// When there is none, a new external declaration with `attrs` (`(index, name)`, not given to
+    /// an `llvm.` intrinsic, which has its own); a bitcast of it when it has another type.
     ///
     /// # Errors
     ///
-    /// P15's error for a name holding a NUL.
+    /// P15's error for a name holding a NUL, or an unknown attribute name in `attrs`.
     pub fn get_or_insert_function(
         &self,
         name: &[u8],
         ty: Ty,
-        attrs: &[(sys::AttributeIndex, sys::AttributeRef)],
+        attrs: &[(sys::AttributeIndex, &[u8])],
     ) -> Result<Func<'cx>, Error> {
         let c_name = self::name(name)?;
         let tcx = self.cx.tcx();
@@ -442,12 +515,15 @@ impl<'cx> Module<'cx> {
             found = unsafe { sys::get_named_global(self.raw, c_name.as_ptr()) };
         }
         if found.is_null() {
+            let resolved = if name.starts_with(b"llvm.") {
+                Vec::new()
+            } else {
+                self.cx.attributes15(attrs)?
+            };
             let func = self.add_function(name, ty)?;
-            if !name.starts_with(b"llvm.") {
-                for &(index, attr) in attrs {
-                    // SAFETY: a function just made; `attr` an attribute of its context.
-                    unsafe { sys::add_attribute_at_index(func.val.raw, index, attr) };
-                }
+            for (index, attr) in resolved {
+                // SAFETY: a function just made; `attr` an attribute of its context.
+                unsafe { sys::add_attribute_at_index(func.val.raw, index, attr) };
             }
             return Ok(func);
         }
@@ -456,14 +532,8 @@ impl<'cx> Module<'cx> {
         // SAFETY: a global's type is a pointer type of this context.
         let addrspace = unsafe { sys::get_pointer_address_space(found_ty) };
         let ptr_ty = tcx.ptr(ty, addrspace);
-        let raw = if found_ty == tcx.lower(ptr_ty) {
-            found
-        } else {
-            // SAFETY: a global of this context, cast to a pointer type of it.
-            unsafe { sys::const_bit_cast(found, tcx.lower(ptr_ty)) }
-        };
-        // SAFETY: `raw` is the global or its bitcast, of type `ptr_ty`.
-        Ok(unsafe { Func::new(raw, ty, ptr_ty) })
+        // SAFETY: `found` is the global, of type `ptr_ty`.
+        Ok(unsafe { Func::new(found, ty, ptr_ty) })
     }
 }
 

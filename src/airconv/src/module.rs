@@ -32,7 +32,7 @@ const SOURCE_FILE_NAME: &[u8] = b"airconv_generated.metal";
 const TRIPLE: &CStr = c"air64-apple-macosx14.0.0";
 const DATA_LAYOUT: &CStr = c"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
-/// `Module::ModFlagBehavior`'s `Error` and `Max` (LLVM 15's C enum has no `Max`).
+/// `Module::ModFlagBehavior`'s `Error` and `Max` (LLVM's C enum has no `Max`).
 const FLAG_ERROR: u64 = 1;
 const FLAG_MAX: u64 = 7;
 
@@ -92,6 +92,15 @@ pub fn set_up(m: &Module<'_>) {
     }
 }
 
+/// How [`parse`] handles the bitcode module's data layout.
+#[derive(Clone, Copy)]
+pub enum Layout {
+    /// Keep the bitcode module's data layout as written.
+    Keep,
+    /// Remove DXIL's `i8:32` component so LLVM 23's reader accepts the layout (P5).
+    Dxil,
+}
+
 /// Parses `bitcode` into a module of `cx` (`parseBitcodeFile`), its buffer named `name`.
 ///
 /// # Errors
@@ -103,10 +112,12 @@ pub fn parse<'cx>(
     bitcode: &[u8],
     name: &[u8],
     prefix: &[u8],
+    layout: Layout,
 ) -> Result<Module<'cx>, Error> {
     let mut out = ptr::null_mut();
     let mut text = ptr::null_mut();
     let mut len = 0;
+    let dxil_layout = matches!(layout, Layout::Dxil).into();
     // SAFETY: the context is live; `bitcode` and `name` hold their lengths; the three outputs are
     // writable.
     let failed = unsafe {
@@ -116,6 +127,7 @@ pub fn parse<'cx>(
             bitcode.len(),
             name.as_ptr().cast(),
             name.len(),
+            dxil_layout,
             &raw mut out,
             &raw mut text,
             &raw mut len,
@@ -173,7 +185,7 @@ pub fn optimize(m: &Module<'_>) {
 
 fn link_helper(m: &Module<'_>, air: &[u8]) -> Result<(), Error> {
     let cx = m.cx();
-    let helper = parse(cx, air, b"", b"LLVM error: ")?;
+    let helper = parse(cx, air, b"", b"LLVM error: ", Layout::Keep)?;
     for name in HELPER_METADATA {
         // SAFETY: a live module; `name` holds its length.
         unsafe {

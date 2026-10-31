@@ -113,8 +113,6 @@ fn finish_dxil(m: &Module<'_>, msad: bool, samplepos: bool) -> Result<Vec<u8>, E
         dxil::converter::strip_fast_math(m, shader_kind::GEOMETRY);
     }
     module::optimize(m);
-    #[cfg(feature = "oracle")]
-    crate::oracle::derive(m)?;
     Ok(writer::write(m))
 }
 
@@ -135,7 +133,5 @@ fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
         false,
     )?;
     module::optimize(m);
-    #[cfg(feature = "oracle")]
-    crate::oracle::derive(m)?;
     Ok(writer::write(m))
 }

@@ -292,14 +292,12 @@ impl<'cx> Lowering<'_, 'cx> {
                 if tcx.kind(ty) != TyKind::Int(32) {
                     return Err(unsupported(call));
                 }
-                let attrs: Vec<_> = [&b"readnone"[..], b"nounwind", b"willreturn"]
-                    .iter()
-                    .filter_map(|name| cx.enum_attribute(name, 0).map(|a| (FN, a)))
-                    .collect();
+                let attrs: &[(sys::AttributeIndex, &[u8])] =
+                    &[(FN, b"readnone"), (FN, b"nounwind"), (FN, b"willreturn")];
                 let fn_ty = tcx.function(ty, &[ty, ty, ty], false);
-                let callee =
-                    air.module()
-                        .get_or_insert_function(b"dxmt.msad.i32", fn_ty, &attrs)?;
+                let callee = air
+                    .module()
+                    .get_or_insert_function(b"dxmt.msad.i32", fn_ty, attrs)?;
                 done(b.call(callee, &[arg(1)?, arg(2)?, arg(3)?]))
             }
             _ => Err(unsupported(call)),

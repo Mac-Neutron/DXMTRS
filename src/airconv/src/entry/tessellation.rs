@@ -71,7 +71,5 @@ fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
         true,
     )?;
     module::optimize(m);
-    #[cfg(feature = "oracle")]
-    crate::oracle::derive(m)?;
     Ok(writer::write(m))
 }

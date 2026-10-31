@@ -1,6 +1,6 @@
-//! Builds airconv's C++ and Metal against the LLVM 15 install `AIRCONV_LLVM` names.
+//! Builds airconv's C++ and Metal against the LLVM 23 install `AIRCONV_LLVM` names.
 //!
-//! The shim (`shim/shim.cpp`, what LLVM 15's C API lacks) and the two passes of `transforms/` are
+//! The shim (`shim/shim.cpp`, what LLVM 23's C API lacks) and the two passes of `transforms/` are
 //! compiled into one archive this crate bundles. The Metal helpers of `shaders/` are compiled to
 //! AIR in `OUT_DIR` (`<name>.air`) by `AIRCONV_XCRUN`: xcrun, or a `sh` script taking xcrun's
 //! arguments, run through `/bin/sh` when it is not executable (`xcrun-metal.sh` of `MacNeutron` is
@@ -66,7 +66,7 @@ fn main() {
     for lib in llvm_deps() {
         println!("cargo:rustc-link-lib=static:-bundle={lib}");
     }
-    for lib in ["z", "curses", "xml2", "c++", "m"] {
+    for lib in ["z", "xml2", "c++", "m"] {
         println!("cargo:rustc-link-lib={lib}");
     }
 }

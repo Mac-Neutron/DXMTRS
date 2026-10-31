@@ -392,6 +392,7 @@ fn load<'cx>(shader: &DxilShader, cx: &'cx Context) -> Result<(Module<'cx>, sys:
         &shader.bitcode,
         b"dxil",
         b"DXIL: can't read the bitcode: ",
+        module::Layout::Dxil,
     )?;
     let entry_name = llvm::name(&shader.entry.name)?;
     // SAFETY: a live module; a NUL-terminated name.

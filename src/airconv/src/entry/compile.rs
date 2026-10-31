@@ -19,8 +19,7 @@ use crate::{
 ///
 /// `SM50Compile`: a context and a module per compile, the stage's lowering (`convertDXBC`, or
 /// the DXIL front end's module), the Metal helpers it calls (under DXIL's float policy for a
-/// DXIL shader), the pass pipeline, then the metallib. With the feature `oracle` the optimized
-/// module's pointers are checked against the facts opaque IR keeps.
+/// DXIL shader), the pass pipeline, then the metallib.
 ///
 /// # Errors
 ///
@@ -74,8 +73,7 @@ pub fn passthrough_vertex(pixel: &Shader) -> Result<Vec<u8>, Error> {
 
 /// The Metal helpers `flags` ask for linked, the pass pipeline run and the module written.
 ///
-/// A DXIL shader (its kind `dxil_kind`) keeps DXIL's float policy in the helpers. With the feature
-/// `oracle` the module is checked before it is written.
+/// A DXIL shader (its kind `dxil_kind`) keeps DXIL's float policy in the helpers.
 fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<Vec<u8>, Error> {
     let msad = flags.contains(ShaderFlags::USE_MSAD);
     let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
@@ -86,7 +84,5 @@ fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<
         dxil::converter::strip_fast_math(m, kind);
     }
     module::optimize(m);
-    #[cfg(feature = "oracle")]
-    crate::oracle::derive(m)?;
     Ok(writer::write(m))
 }

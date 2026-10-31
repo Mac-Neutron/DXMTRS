@@ -23,8 +23,8 @@
 #   MTLD3D_LLVM_MINGW    llvm-mingw's root
 #   WINE_BUILD           the Mac Wine build tree (libs/winecrt0/aarch64-windows/libwinecrt0.a)
 #   GUEST_WINE_SDK       the VM guest's Wine SDK (lib/wine/{x86_64,i386}-windows/libwinecrt0.a)
-#   AIRCONV_LLVM         the LLVM 15 install airconv builds its shim against and links (include/, lib/, .complete;
-#                        MacNeutron: build/wine-arm64-src/llvm-arm64-nolto, which make llvm-nolto installs)
+#   AIRCONV_LLVM         the LLVM 23 install airconv builds its shim against and links (include/, lib/, .complete;
+#                        MacNeutron: build/wine-arm64-src/llvm23-arm64-nolto, which make llvm-nolto installs)
 #   AIRCONV_XCRUN        xcrun, or a sh script taking xcrun's arguments, for airconv's Metal helpers (MacNeutron:
 #                        wine-arm64/tools/xcrun-metal.sh)
 #   CARGO_TARGET_DIR     optional: an absolute folder for cargo's output (default: target/ in the tree, ignored by git)
@@ -41,7 +41,7 @@ MTLD3D_RUST=${MTLD3D_RUST:-$(sed -n "s/^option('cargo_toolchain'.*value : '\([^'
 : "${MTLD3D_LLVM_MINGW:?names the llvm-mingw root (MacNeutron: the parent of the folder sh dxmt/toolchain.sh prints)}"
 : "${WINE_BUILD:?names the Mac Wine build tree (MacNeutron: build/wine-arm64-src/wine-build)}"
 : "${GUEST_WINE_SDK:?names the VM guest Wine SDK (MacNeutron: build/eac-vm-work/guest-wine-sdk)}"
-: "${AIRCONV_LLVM:?names the LLVM 15 install airconv builds against (MacNeutron: build/wine-arm64-src/llvm-arm64-nolto, from make llvm-nolto)}"
+: "${AIRCONV_LLVM:?names the LLVM 23 install airconv builds against (MacNeutron: build/wine-arm64-src/llvm23-arm64-nolto, from make llvm-nolto)}"
 : "${AIRCONV_XCRUN:?names xcrun, or a sh script taking its arguments (MacNeutron: wine-arm64/tools/xcrun-metal.sh)}"
 NIGHTLY_BIN=${RUST_NIGHTLY_BIN:-${RUSTUP_HOME:-$HOME/.rustup}/toolchains/nightly-aarch64-apple-darwin/bin}
 T=${CARGO_TARGET_DIR:-$root/target}

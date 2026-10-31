@@ -2,15 +2,16 @@
 //!
 //! A [`Ty`] is a handle into its context's [`TyCx`]; two equal handles are one type, as LLVM's
 //! uniqued types are. The table knows each type's parts, so a pointer's pointee is a `Ty` read,
-//! never asked of LLVM, and [`TyCx::lower`]'s table is filled in one place, the only one that
-//! makes a pointer type: under LLVM 15's typed pointers `pointee*`, and only it changes when the
-//! pointers go opaque.
+//! never asked of LLVM, and [`TyCx::lower`]'s table is filled in one place, lowering every
+//! pointer to LLVM 23's opaque `ptr`, while [`TyCx::typed`] rebuilds a type with
+//! `LLVMAIRTypedPointerType` for the AIR bitcode writer.
 
 use core::{cell::RefCell, ffi::CStr, ptr};
 
 use rustc_hash::FxHashMap;
 
 use super::sys;
+use crate::api::Error;
 
 /// A type of one context, as an index into its [`TyCx`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -58,6 +59,8 @@ pub enum TyKind {
     Label,
     /// `metadata`.
     Metadata,
+    /// What a lifted opaque pointer points at: no pointee is known.
+    Unknown,
 }
 
 /// One struct of the table: its LLVM type and, once it has a body, its fields.
@@ -182,6 +185,104 @@ impl TyCx {
         self.intern(TyKind::Metadata)
     }
 
+    /// What a lifted opaque pointer points at.
+    #[must_use]
+    pub fn unknown(&self) -> Ty {
+        self.intern(TyKind::Unknown)
+    }
+
+    /// The LLVM type `ty` lowers to for `AIRWriter.h` (`LLVMAIRTypedPointerType` for pointers).
+    ///
+    /// # Errors
+    ///
+    /// `AIR writer: a type the writer cannot be told (<ty>)` when `ty` holds [`TyKind::Unknown`]
+    /// or a pointee `LLVMAIRTypedPointerType` refuses.
+    pub fn typed(&self, ty: Ty) -> Result<sys::TypeRef, Error> {
+        match self.kind(ty) {
+            TyKind::Unknown => Err(self.cannot_tell(ty)),
+            TyKind::Void
+            | TyKind::Int(_)
+            | TyKind::Half
+            | TyKind::Float
+            | TyKind::Double
+            | TyKind::Label
+            | TyKind::Metadata => Ok(self.lower(ty)),
+            TyKind::Vector(element, n) => {
+                let element = self.typed(element)?;
+                // SAFETY: `element` is a valid vector element type of this context.
+                Ok(unsafe { sys::vector_type(element, n) })
+            }
+            TyKind::Array(element, n) => {
+                let element = self.typed(element)?;
+                // SAFETY: `element` is a valid array element type of this context.
+                Ok(unsafe { sys::array_type(element, n) })
+            }
+            TyKind::Ptr { pointee, addrspace } => {
+                let pointee = self.typed(pointee)?;
+                // SAFETY: `pointee` is a non-null type of this context.
+                let raw = unsafe { sys::air_typed_pointer_type(pointee, addrspace) };
+                if raw.is_null() {
+                    return Err(self.cannot_tell(ty));
+                }
+                Ok(raw)
+            }
+            TyKind::Function {
+                ret,
+                params,
+                vararg,
+            } => {
+                let ret = self.typed(ret)?;
+                let mut raws = self.typed_all(&params)?;
+                // SAFETY: `ret` and `raws` are types of this context; `raws` holds its length.
+                Ok(unsafe {
+                    sys::function_type(ret, raws.as_mut_ptr(), count(raws.len()), vararg.into())
+                })
+            }
+            TyKind::Struct(id) => {
+                let (raw, fields) = {
+                    let table = self.table.borrow();
+                    let info = table
+                        .structs
+                        .get(id as usize)
+                        .ok_or_else(|| self.cannot_tell(ty))?;
+                    (info.raw, info.fields.clone())
+                };
+                // SAFETY: `raw` is a struct type of this context.
+                if unsafe { sys::is_literal_struct(raw) } == 0 {
+                    Ok(raw)
+                } else {
+                    let fields = fields.ok_or_else(|| self.cannot_tell(ty))?;
+                    let mut raws = self.typed_all(&fields)?;
+                    // SAFETY: `raw` is a struct of this context.
+                    let packed = unsafe { sys::is_packed_struct(raw) };
+                    // SAFETY: the context is live; `raws` are types of it.
+                    Ok(unsafe {
+                        sys::struct_type_in_context(
+                            self.cx,
+                            raws.as_mut_ptr(),
+                            count(raws.len()),
+                            packed,
+                        )
+                    })
+                }
+            }
+        }
+    }
+
+    fn typed_all(&self, tys: &[Ty]) -> Result<Vec<sys::TypeRef>, Error> {
+        tys.iter().map(|&ty| self.typed(ty)).collect()
+    }
+
+    fn cannot_tell(&self, ty: Ty) -> Error {
+        Error::new(
+            format!(
+                "AIR writer: a type the writer cannot be told ({:?})",
+                self.kind(ty)
+            )
+            .as_bytes(),
+        )
+    }
+
     /// The literal struct of `fields` (`StructType::get`).
     #[must_use]
     pub fn literal_struct(&self, fields: &[Ty], packed: bool) -> Ty {
@@ -274,11 +375,11 @@ impl TyCx {
         self.lift_raw(unsafe { RawTy::new(raw) })
     }
 
-    /// The pointee of the pointer `ty`.
+    /// The pointee of the pointer `ty` (`None` when its pointee is [`TyKind::Unknown`]).
     #[must_use]
     pub fn pointee(&self, ty: Ty) -> Option<Ty> {
         match self.kind(ty) {
-            TyKind::Ptr { pointee, .. } => Some(pointee),
+            TyKind::Ptr { pointee, .. } if self.kind(pointee) != TyKind::Unknown => Some(pointee),
             _ => None,
         }
     }
@@ -389,9 +490,6 @@ impl TyCx {
     }
 
     fn lift_raw(&self, raw: RawTy) -> Option<Ty> {
-        if let Some(&ty) = self.table.borrow().by_raw.get(&raw.0) {
-            return Some(ty);
-        }
         let ty = match raw.kind() {
             sys::VOID_TYPE_KIND => self.void(),
             sys::HALF_TYPE_KIND => self.half(),
@@ -402,9 +500,7 @@ impl TyCx {
             sys::INTEGER_TYPE_KIND => self.int(raw.int_width()),
             sys::VECTOR_TYPE_KIND => self.vector(self.lift_raw(raw.element())?, raw.vector_len()),
             sys::ARRAY_TYPE_KIND => self.array(self.lift_raw(raw.element())?, raw.array_len()),
-            sys::POINTER_TYPE_KIND if !raw.is_opaque_pointer() => {
-                self.ptr(self.lift_raw(raw.element())?, raw.addrspace())
-            }
+            sys::POINTER_TYPE_KIND => self.ptr(self.unknown(), raw.addrspace()),
             sys::FUNCTION_TYPE_KIND => {
                 let ret = self.lift_raw(raw.ret())?;
                 let params = self.lift_all(raw.params())?;
@@ -415,6 +511,9 @@ impl TyCx {
                 self.literal_struct(&fields, raw.is_packed())
             }
             sys::STRUCT_TYPE_KIND => {
+                if let Some(&ty) = self.table.borrow().by_raw.get(&raw.0) {
+                    return Some(ty);
+                }
                 // Registered before its fields, which may point back at it.
                 let (ty, id) = self.add_struct(raw.0, None);
                 if !raw.is_opaque_struct() {
@@ -455,18 +554,17 @@ impl TyCx {
         let mut table = self.table.borrow_mut();
         let ty = push(&mut table, kind.clone(), raw);
         table.interned.insert(kind, ty);
-        table.by_raw.entry(raw).or_insert(ty);
         ty
     }
 
     /// The LLVM type of `kind`, whose parts are in the table.
     ///
-    /// The only place a pointer type is made.
+    /// The only place an opaque pointer type is made.
     fn make(&self, kind: &TyKind) -> sys::TypeRef {
         let cx = self.cx;
         match *kind {
             // SAFETY: the context is live.
-            TyKind::Void => unsafe { sys::void_type_in_context(cx) },
+            TyKind::Void | TyKind::Unknown => unsafe { sys::void_type_in_context(cx) },
             // SAFETY: as above.
             TyKind::Int(bits) => unsafe { sys::int_type_in_context(cx, bits) },
             // SAFETY: as above.
@@ -483,10 +581,8 @@ impl TyCx {
             TyKind::Vector(element, n) => unsafe { sys::vector_type(self.lower(element), n) },
             // SAFETY: as above.
             TyKind::Array(element, n) => unsafe { sys::array_type(self.lower(element), n) },
-            // SAFETY: the pointee is a type of this context (the table's).
-            TyKind::Ptr { pointee, addrspace } => unsafe {
-                sys::pointer_type(self.lower(pointee), addrspace)
-            },
+            // SAFETY: the context is live.
+            TyKind::Ptr { addrspace, .. } => unsafe { sys::pointer_type_in_context(cx, addrspace) },
             TyKind::Function {
                 ret,
                 ref params,
@@ -550,11 +646,6 @@ impl RawTy {
     fn array_len(self) -> u32 {
         // SAFETY: a live array type.
         unsafe { sys::get_array_length(self.0) }
-    }
-
-    fn is_opaque_pointer(self) -> bool {
-        // SAFETY: a live pointer type.
-        unsafe { sys::pointer_type_is_opaque(self.0) != 0 }
     }
 
     fn addrspace(self) -> u32 {
@@ -621,3 +712,7 @@ const fn index(ty: Ty) -> usize {
 fn count(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
 }
+
+const _: () = {
+    let _ = TyCx::typed;
+};

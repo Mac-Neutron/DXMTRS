@@ -1067,22 +1067,20 @@ fn call_unpack<'cx>(
     src: Val<'cx>,
     dst: Ty,
 ) -> Result<Val<'cx>, Error> {
+    const FN: sys::AttributeIndex = sys::ATTRIBUTE_FUNCTION_INDEX;
     let b = air.builder();
     let cx = b.cx();
-    let attrs: Vec<_> = [
-        &b"nounwind"[..],
-        b"willreturn",
-        b"mustprogress",
-        b"nofree",
-        b"nosync",
-        b"readnone",
-    ]
-    .iter()
-    .filter_map(|name| Some((sys::ATTRIBUTE_FUNCTION_INDEX, cx.enum_attribute(name, 0)?)))
-    .collect();
+    let attrs: &[(sys::AttributeIndex, &[u8])] = &[
+        (FN, b"nounwind"),
+        (FN, b"willreturn"),
+        (FN, b"mustprogress"),
+        (FN, b"nofree"),
+        (FN, b"nosync"),
+        (FN, b"readnone"),
+    ];
     let name = [&b"air.unpack."[..], op.as_bytes()].concat();
     let fn_ty = cx.tcx().function(dst, &[src.ty()], false);
-    let callee = air.module().get_or_insert_function(&name, fn_ty, &attrs)?;
+    let callee = air.module().get_or_insert_function(&name, fn_ty, attrs)?;
     Ok(b.call(callee, &[src]))
 }
 

@@ -99,6 +99,7 @@ pub fn initialize(part: &DxilPart<'_>, capture_hash: u64) -> Result<DxilShader, 
         part.bitcode,
         b"dxil",
         b"DXIL: can't read the bitcode: ",
+        module::Layout::Dxil,
     )?;
     let mut entry = read_entry(&m)?;
     let gs_locks = group_shared_locks(&m)?;

@@ -344,26 +344,22 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     /// P15's error for a name holding a NUL (none here).
     pub fn simd(&self, name: &[u8], ret: Ty, args: &[Val<'cx>]) -> Result<Val<'cx>, Error> {
         let cx = self.cx();
-        let attrs: Vec<_> = [
-            &b"convergent"[..],
-            b"mustprogress",
-            b"nounwind",
-            b"willreturn",
-        ]
-        .iter()
-        .filter_map(|name| cx.enum_attribute(name, 0).map(|a| (FN, a)))
-        .collect();
+        let attrs: &[(sys::AttributeIndex, &[u8])] = &[
+            (FN, b"convergent"),
+            (FN, b"mustprogress"),
+            (FN, b"nounwind"),
+            (FN, b"willreturn"),
+        ];
         let params: Vec<Ty> = args.iter().map(|a| a.ty()).collect();
         let fn_ty = self.tcx().function(ret, &params, false);
         let callee = self
             .air()
             .module()
-            .get_or_insert_function(name, fn_ty, &attrs)?;
+            .get_or_insert_function(name, fn_ty, attrs)?;
         let call = self.b().call(callee, args);
-        if let Some(convergent) = cx.enum_attribute(b"convergent", 0) {
-            // SAFETY: a call just made; an attribute of its context.
-            unsafe { sys::add_call_site_attribute(call.raw(), FN, convergent) };
-        }
+        let convergent = cx.enum_attribute(b"convergent", 0)?;
+        // SAFETY: a call just made; an attribute of its context.
+        unsafe { sys::add_call_site_attribute(call.raw(), FN, convergent) };
         Ok(call)
     }
 
@@ -546,19 +542,19 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
     /// `CreateAtomicFence`; the barrier's `Device | Threadgroup` (3) is no single
     /// [`ThreadScope`] (lane a's request, D1), so the declaration is made here.
     fn fence(&self, flags: MemFlags, scope: u32) -> Result<(), Error> {
-        let cx = self.cx();
         let i32_ty = self.tcx().int(32);
-        let attrs: Vec<_> = [&b"mustprogress"[..], b"nounwind", b"willreturn"]
-            .iter()
-            .filter_map(|name| cx.enum_attribute(name, 0).map(|a| (FN, a)))
-            .collect();
+        let attrs: &[(sys::AttributeIndex, &[u8])] = &[
+            (FN, b"mustprogress"),
+            (FN, b"nounwind"),
+            (FN, b"willreturn"),
+        ];
         let fn_ty = self
             .tcx()
             .function(self.tcx().void(), &[i32_ty, i32_ty, i32_ty], false);
         let callee =
             self.air()
                 .module()
-                .get_or_insert_function(b"air.atomic.fence", fn_ty, &attrs)?;
+                .get_or_insert_function(b"air.atomic.fence", fn_ty, attrs)?;
         let _ = self.b().call(
             callee,
             &[self.int(flags.bits()), self.int(5), self.int(scope)],

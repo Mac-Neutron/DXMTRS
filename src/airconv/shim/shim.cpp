@@ -1,13 +1,15 @@
-// airconv's C++ shim: what LLVM 15's C API lacks, as extern "C" functions named airconv_shim_*. Built by build.rs
+// airconv's C++ shim: what LLVM 23's C API lacks, as extern "C" functions named airconv_shim_*. Built by build.rs
 // with the two passes of ../transforms; src/llvm/sys.rs declares each function with what it does. Each body is the
 // C++ translator's own call (airconv_context.cpp, metallib_writer.cpp, the DXIL converter), so it behaves as there.
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 
 #include "llvm-c/Core.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/FMF.h"
 #include "llvm/IR/IRBuilder.h"
@@ -18,6 +20,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/ModRef.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/Annotation2Metadata.h"
@@ -103,12 +106,29 @@ extern "C" LLVMMemoryBufferRef airconv_shim_write_bitcode(LLVMModuleRef module) 
 }
 
 extern "C" LLVMBool airconv_shim_parse_bitcode(LLVMContextRef context, const char *data, size_t size,
-                                               const char *name, size_t name_len, LLVMModuleRef *out, char **error,
-                                               size_t *error_len) {
+                                               const char *name, size_t name_len, LLVMBool dxil_layout,
+                                               LLVMModuleRef *out, char **error, size_t *error_len) {
   *out = nullptr;
   *error = nullptr;
   *error_len = 0;
-  auto module = parseBitcodeFile(MemoryBufferRef(StringRef(data, size), StringRef(name, name_len)), *unwrap(context));
+  ParserCallbacks callbacks;
+  if (dxil_layout) {
+    callbacks.DataLayout = [](StringRef, StringRef layout) -> std::optional<std::string> {
+      SmallVector<StringRef, 16> parts;
+      layout.split(parts, '-');
+      std::string kept;
+      for (StringRef part : parts) {
+        if (part == "i8:32")
+          continue;
+        if (!kept.empty())
+          kept.push_back('-');
+        kept.append(part.data(), part.size());
+      }
+      return kept;
+    };
+  }
+  auto module = parseBitcodeFile(MemoryBufferRef(StringRef(data, size), StringRef(name, name_len)), *unwrap(context),
+                                 callbacks);
   if (module) {
     *out = wrap(module->release());
     return 0;
@@ -132,6 +152,48 @@ extern "C" LLVMBool airconv_shim_link_only_needed(LLVMModuleRef dest, LLVMModule
 extern "C" void airconv_shim_erase_named_metadata(LLVMModuleRef module, const char *name, size_t name_len) {
   if (auto *md = unwrap(module)->getNamedMetadata(StringRef(name, name_len)))
     unwrap(module)->eraseNamedMetadata(md);
+}
+
+static ModulePassManager BuildPipeline(int air_passes) {
+  ModulePassManager MPM;
+
+  // Convert @llvm.global.annotations to !annotation metadata.
+  MPM.addPass(Annotation2MetadataPass());
+  // Force any function attributes we want the rest of the pipeline to observe.
+  MPM.addPass(ForceFunctionAttrsPass());
+  // Do basic inference of function attributes from known properties of system libraries and other oracles.
+  MPM.addPass(InferFunctionAttrsPass());
+
+  {
+    // Create an early function pass manager to cleanup the output of the frontend.
+    FunctionPassManager EarlyFPM;
+    // Lower llvm.expect to metadata before attempting transforms.
+    EarlyFPM.addPass(LowerExpectIntrinsicPass());
+    EarlyFPM.addPass(SimplifyCFGPass());
+    EarlyFPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+    EarlyFPM.addPass(EarlyCSEPass());
+    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(EarlyFPM), true));
+  }
+
+  MPM.addPass(AlwaysInlinerPass());
+  MPM.addPass(IPSCCPPass());
+  MPM.addPass(GlobalOptPass());
+  MPM.addPass(createModuleToFunctionPassAdaptor(PromotePass()));
+  MPM.addPass(DeadArgumentEliminationPass());
+
+  {
+    // Create a small function pass pipeline to cleanup after all the global optimizations.
+    FunctionPassManager GlobalCleanupPM;
+    GlobalCleanupPM.addPass(InstCombinePass());
+    GlobalCleanupPM.addPass(SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+    if (air_passes) {
+      GlobalCleanupPM.addPass(air::Lower16BitTexReadPass());
+      GlobalCleanupPM.addPass(air::SimdgroupImplicitMemBarrierPass());
+    }
+    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(GlobalCleanupPM), true));
+  }
+
+  return MPM;
 }
 
 // runOptimizationPasses (airconv_context.cpp), without its poke of instcombine-infinite-loop-threshold: it set the
@@ -158,43 +220,42 @@ extern "C" void airconv_shim_run_passes(LLVMModuleRef module) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  ModulePassManager MPM;
-
-  // Convert @llvm.global.annotations to !annotation metadata.
-  MPM.addPass(Annotation2MetadataPass());
-  // Force any function attributes we want the rest of the pipeline to observe.
-  MPM.addPass(ForceFunctionAttrsPass());
-  // Do basic inference of function attributes from known properties of system libraries and other oracles.
-  MPM.addPass(InferFunctionAttrsPass());
-
-  {
-    // Create an early function pass manager to cleanup the output of the frontend.
-    FunctionPassManager EarlyFPM;
-    // Lower llvm.expect to metadata before attempting transforms.
-    EarlyFPM.addPass(LowerExpectIntrinsicPass());
-    EarlyFPM.addPass(SimplifyCFGPass());
-    EarlyFPM.addPass(SROAPass());
-    EarlyFPM.addPass(EarlyCSEPass());
-    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(EarlyFPM), true));
-  }
-
-  MPM.addPass(AlwaysInlinerPass());
-  MPM.addPass(IPSCCPPass());
-  MPM.addPass(GlobalOptPass());
-  MPM.addPass(createModuleToFunctionPassAdaptor(PromotePass()));
-  MPM.addPass(DeadArgumentEliminationPass());
-
-  {
-    // Create a small function pass pipeline to cleanup after all the global optimizations.
-    FunctionPassManager GlobalCleanupPM;
-    GlobalCleanupPM.addPass(InstCombinePass());
-    GlobalCleanupPM.addPass(SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-    GlobalCleanupPM.addPass(air::Lower16BitTexReadPass());
-    GlobalCleanupPM.addPass(air::SimdgroupImplicitMemBarrierPass());
-    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(GlobalCleanupPM), true));
-  }
-
+  ModulePassManager MPM = BuildPipeline(1);
   MPM.run(*unwrap(module), MAM);
+}
+
+extern "C" void airconv_shim_pipeline_text(int air_passes, char **out, size_t *len) {
+  *out = nullptr;
+  *len = 0;
+  PassInstrumentationCallbacks PIC;
+  PassBuilder PB(nullptr, PipelineTuningOptions(), {}, &PIC);
+  ModulePassManager MPM = BuildPipeline(air_passes);
+  std::string text;
+  raw_string_ostream os(text);
+  MPM.printPipeline(os, [&PIC](StringRef ClassName) {
+    auto PassName = PIC.getPassNameForClassName(ClassName);
+    return PassName.empty() ? ClassName : PassName;
+  });
+  os.flush();
+  if (auto *copy = static_cast<char *>(malloc(text.size() + 1))) {
+    memcpy(copy, text.data(), text.size());
+    copy[text.size()] = '\0';
+    *out = copy;
+    *len = text.size();
+  }
+}
+
+extern "C" LLVMAttributeRef airconv_shim_memory_attribute(LLVMContextRef context, int argmem_only, int mod_ref) {
+  auto mr = static_cast<ModRefInfo>(mod_ref & 3);
+  MemoryEffects effects = (argmem_only == 1)   ? MemoryEffects::argMemOnly(mr)
+                          : (argmem_only == 2) ? MemoryEffects::inaccessibleMemOnly(mr)
+                          : (argmem_only == 3) ? MemoryEffects::inaccessibleOrArgMemOnly(mr)
+                                               : MemoryEffects(mr);
+  return wrap(Attribute::getWithMemoryEffects(*unwrap(context), effects));
+}
+
+extern "C" LLVMAttributeRef airconv_shim_captures_none(LLVMContextRef context) {
+  return wrap(Attribute::getWithCaptureInfo(*unwrap(context), CaptureInfo::none()));
 }
 
 extern "C" void airconv_shim_set_sdk_version(LLVMModuleRef module, unsigned major, unsigned minor) {
@@ -217,7 +278,10 @@ extern "C" LLVMValueRef airconv_shim_split_block_and_insert_if_then(LLVMValueRef
 }
 
 extern "C" LLVMValueRef airconv_shim_get_as_instruction(LLVMValueRef expr, LLVMValueRef insert_before) {
-  return wrap(unwrap<ConstantExpr>(expr)->getAsInstruction(cast_or_null<Instruction>(unwrap(insert_before))));
+  Instruction *inst = unwrap<ConstantExpr>(expr)->getAsInstruction();
+  if (auto *before = cast_or_null<Instruction>(unwrap(insert_before)))
+    inst->insertBefore(before->getIterator());
+  return wrap(inst);
 }
 
 extern "C" void airconv_shim_destroy_constant(LLVMValueRef constant) { unwrap<Constant>(constant)->destroyConstant(); }
@@ -226,11 +290,11 @@ extern "C" void airconv_shim_rename_struct(LLVMModuleRef module, const char *fro
                                            size_t to_len) {
   StringRef prefix(from, from_len), replacement(to, to_len);
   for (auto *st : unwrap(module)->getIdentifiedStructTypes())
-    if (st->getName().startswith(prefix))
+    if (st->getName().starts_with(prefix))
       st->setName(replacement.str() + st->getName().substr(prefix.size()).str());
 }
 
-// Core.cpp's mapping (static there); an operation LLVM 15 does not have answers BAD_BINOP.
+// Core.cpp's mapping (static there); an operation the C++ translator did not handle answers BAD_BINOP.
 static AtomicRMWInst::BinOp BinOp(LLVMAtomicRMWBinOp op) {
   switch (op) {
   case LLVMAtomicRMWBinOpXchg: return AtomicRMWInst::Xchg;
@@ -248,8 +312,8 @@ static AtomicRMWInst::BinOp BinOp(LLVMAtomicRMWBinOp op) {
   case LLVMAtomicRMWBinOpFSub: return AtomicRMWInst::FSub;
   case LLVMAtomicRMWBinOpFMax: return AtomicRMWInst::FMax;
   case LLVMAtomicRMWBinOpFMin: return AtomicRMWInst::FMin;
+  default: return AtomicRMWInst::BAD_BINOP;
   }
-  return AtomicRMWInst::BAD_BINOP;
 }
 
 // Null for an operation outside the C enum (buildAtomicRMWValue would reach llvm_unreachable).
