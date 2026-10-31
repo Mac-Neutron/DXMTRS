@@ -118,7 +118,7 @@ impl<'cx> BindingMap<'cx> for RootSignatureBindings<'_> {
                 let heap = get_argument(air, function, root, cb.arg_index)?;
                 let tcx = air.builder().cx().tcx();
                 let handle_ty = tcx.ptr(air.int_ty(4), 2);
-                let (pointer, metadata) = buffer_descriptor(
+                let (pointer, _) = buffer_descriptor(
                     air,
                     heap,
                     index,
@@ -126,16 +126,10 @@ impl<'cx> BindingMap<'cx> for RootSignatureBindings<'_> {
                     cb.info.range.lower_bound,
                     offset,
                 );
-                return Ok(Some(ConstantBufferDescriptor {
-                    pointer,
-                    metadata: Some(metadata),
-                }));
+                return Ok(Some(ConstantBufferDescriptor { pointer }));
             }
         };
-        Ok(Some(ConstantBufferDescriptor {
-            pointer,
-            metadata: None,
-        }))
+        Ok(Some(ConstantBufferDescriptor { pointer }))
     }
 
     fn sampler(

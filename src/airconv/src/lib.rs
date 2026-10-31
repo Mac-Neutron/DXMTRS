@@ -19,17 +19,17 @@
 )]
 
 pub mod abi;
-pub mod air;
+mod air;
 mod api;
-pub mod dxbc;
-pub mod dxil;
+mod dxbc;
+mod dxil;
 mod entry;
-pub mod llvm;
-pub mod module;
+mod llvm;
+mod module;
 #[cfg(feature = "oracle")]
-pub mod oracle;
-pub mod shader;
-pub mod writer;
+mod oracle;
+mod shader;
+mod writer;
 
 pub use api::{
     Error, dxil_compile_pass_through_vertex, dxil_get_entry, sm50_compile,

@@ -759,7 +759,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     return coarse(bias, arg(10)?, None);
                 }
                 let at = at(sample_offset()?);
-                let lod = Lod::BiasMinLod(bias, min_lod(arg(10)?)?);
+                let lod = Lod::BiasMin(bias, min_lod(arg(10)?)?);
                 result(air.create_sample(&tex, handle, sampler, &at, &lod))
             }
             // (61, ..., bias, clamp)
@@ -769,7 +769,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 }
                 let at = at(sample_offset()?);
                 let lod_bias = b.fadd(arg(10)?, bias);
-                let lod = Lod::BiasMinLod(lod_bias, min_lod(arg(11)?)?);
+                let lod = Lod::BiasMin(lod_bias, min_lod(arg(11)?)?);
                 result(air.create_sample(&tex, handle, sampler, &at, &lod))
             }
             // (62, ..., lod)
@@ -800,7 +800,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     return coarse(bias, arg(11)?, Some(arg(10)?));
                 }
                 let at = at(sample_offset()?);
-                let lod = Lod::BiasMinLod(bias, min_lod(arg(11)?)?);
+                let lod = Lod::BiasMin(bias, min_lod(arg(11)?)?);
                 result(air.create_sample_cmp(&tex, handle, sampler, &at, arg(10)?, &lod))
             }
             // (255, ..., compare, bias, clamp)
@@ -810,7 +810,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 }
                 let at = at(sample_offset()?);
                 let lod_bias = b.fadd(arg(11)?, bias);
-                let lod = Lod::BiasMinLod(lod_bias, min_lod(arg(12)?)?);
+                let lod = Lod::BiasMin(lod_bias, min_lod(arg(12)?)?);
                 result(air.create_sample_cmp(&tex, handle, sampler, &at, arg(10)?, &lod))
             }
             // (65, ..., compare)

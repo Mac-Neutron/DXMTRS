@@ -64,10 +64,7 @@ impl<'cx> BindingMap<'cx> for Sm50Bindings<'_> {
             self.constant_buffer_table_index,
             cb.arg_index,
         )?;
-        Ok(Some(ConstantBufferDescriptor {
-            pointer,
-            metadata: None,
-        }))
+        Ok(Some(ConstantBufferDescriptor { pointer }))
     }
 
     fn sampler(

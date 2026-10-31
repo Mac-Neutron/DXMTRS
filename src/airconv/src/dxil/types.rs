@@ -340,14 +340,6 @@ pub struct EntryInfo {
     pub resources: Vec<Resource>,
 }
 
-impl EntryInfo {
-    /// The resource of class `cls` and range ID `id`.
-    #[must_use]
-    pub fn find_resource(&self, cls: u32, id: u32) -> Option<&Resource> {
-        self.resources.iter().find(|r| r.cls == cls && r.id == id)
-    }
-}
-
 impl Default for EntryInfo {
     /// `EntryInfo`'s initial values: an invalid stage, one geometry shader instance.
     fn default() -> Self {

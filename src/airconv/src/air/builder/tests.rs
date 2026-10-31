@@ -12,9 +12,9 @@ use std::{
 };
 
 use super::{
-    ARRAY, AirBuilder, CUBE, DEPTH, FpBinOp, FpUnOp, Gradient, IntBinOp, IntUnOp, Lod, MIPMAPPED,
-    MS, MemFlags, MemoryAccess, Query, SampleAt, SampleType, Signedness, TexelAt, Texture,
-    TextureKind, ThreadScope, offset_width,
+    ARRAY, AirBuilder, Attrs, CUBE, Call, DEPTH, FN, FpBinOp, FpUnOp, Gradient, IntBinOp, IntUnOp,
+    Lod, MIPMAPPED, MS, MemFlags, MemoryAccess, Query, SampleAt, SampleType, Signedness, TexelAt,
+    Texture, TextureKind, ThreadScope, offset_width,
 };
 use crate::{
     abi::{SM50_SHADER_FLAG_DEFUSE_FMA, SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO},
@@ -23,6 +23,53 @@ use crate::{
     llvm::{Builder, Context, Module, Ty, TyCx, Val, sys},
     module,
 };
+
+/// The atomic fence.
+const ATOMIC_FENCE: &Attrs = &[
+    (FN, b"mustprogress"),
+    (FN, b"nounwind"),
+    (FN, b"willreturn"),
+];
+
+impl<'cx> AirBuilder<'_, 'cx> {
+    /// `air.atomic.fence`, sequentially consistent or relaxed (`CreateAtomicFence`).
+    ///
+    /// # Errors
+    ///
+    /// None in practice: only P15's name check, which the name passes.
+    pub fn create_atomic_fence(
+        &self,
+        flags: MemFlags,
+        scope: ThreadScope,
+        relaxed: bool,
+    ) -> Result<Val<'cx>, Error> {
+        let mut call = Call::new(self);
+        call.push(self.int_ty(1), self.get_int(flags.bits()));
+        call.push(self.int_ty(1), self.get_int(if relaxed { 0 } else { 5 }));
+        call.push(self.int_ty(1), self.get_int(scope as u32));
+        call.finish(b"air.atomic.fence", self.void_ty(), ATOMIC_FENCE)
+    }
+
+    /// `air.set_primitive_data_mesh` of a varying (`CreateSetMeshPrimitiveData`).
+    ///
+    /// # Errors
+    ///
+    /// A function without a mesh argument (where the C++ called with null).
+    pub fn create_set_mesh_primitive_data(
+        &self,
+        primitive: Val<'cx>,
+        data_index: Val<'cx>,
+        value: Val<'cx>,
+    ) -> Result<Val<'cx>, Error> {
+        let mut name = b"air.set_primitive_data_mesh".to_vec();
+        name.extend(self.type_overload_suffix(value.ty(), Signedness::DontCare));
+        let int = self.int_ty(1);
+        self.mesh_call(
+            &name,
+            &[(int, data_index), (int, primitive), (value.ty(), value)],
+        )
+    }
+}
 
 /// The Metal helpers `build.rs` compiles, as `module.rs` links them.
 const HELPERS: [&[u8]; 3] = [
@@ -375,7 +422,7 @@ fn emit<'cx>(
         }
         let depth_2d = matches!(tex.kind, TextureKind::Depth2d | TextureKind::Depth2dArray);
         let offset = depth_2d.then(|| p.take(air.int_ty(2)));
-        let lod = &Lod::BiasMinLod(p.take(float), p.take(float));
+        let lod = &Lod::BiasMin(p.take(float), p.take(float));
         let at = SampleAt {
             coord,
             array_index,
@@ -403,7 +450,7 @@ fn emit<'cx>(
             return two(air.create_sample_grad(&tex, handle, sampler, &at, &grad));
         }
         let offset = offset_width(tex.kind, false).map(|n| p.take(air.int_ty(n)));
-        let lod = &Lod::BiasMinLod(p.take(float), p.take(float));
+        let lod = &Lod::BiasMin(p.take(float), p.take(float));
         let at = SampleAt {
             coord,
             array_index,

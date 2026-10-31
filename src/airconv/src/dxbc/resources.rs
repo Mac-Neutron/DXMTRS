@@ -29,11 +29,10 @@ pub struct RegisterFile<'cx> {
     pub ptr_float4: Option<Val<'cx>>,
 }
 
-/// An indexable temp: `vec_size` components per register, as `i32` and as `float`.
+/// An indexable temp: `vec_size` components per register, as `i32`.
 #[derive(Clone, Copy)]
 pub struct IndexableRegisterFile<'cx> {
     pub ptr_int_vec: Val<'cx>,
-    pub ptr_float_vec: Val<'cx>,
     pub vec_size: u32,
 }
 
@@ -92,7 +91,6 @@ pub struct Resources<'cx> {
     pub hull_cp_passthrough_type: Option<Ty>,
     pub hull_cp_passthrough_src: Option<Val<'cx>>,
     pub hull_cp_passthrough_dst: Option<Val<'cx>>,
-    pub tess_factor_buffer: Option<Val<'cx>>,
 
     // Looked up often.
     pub vertex_id: Option<Val<'cx>>,
@@ -247,10 +245,9 @@ fn indexable<'cx>(
     let vec_size = mask.bit_width();
     let len = count.wrapping_mul(vec_size);
     let ptr_int_vec = b.alloca(tcx.array(types.int, len), c"");
-    let ptr_float_vec = b.bitcast(ptr_int_vec, tcx.ptr(tcx.array(types.float, len), 0));
+    let _ = b.bitcast(ptr_int_vec, tcx.ptr(tcx.array(types.float, len), 0));
     IndexableRegisterFile {
         ptr_int_vec,
-        ptr_float_vec,
         vec_size,
     }
 }

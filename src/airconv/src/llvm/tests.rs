@@ -5,8 +5,180 @@
 //! integer-index overloads make `i64` constants, `CreateConstGEP1_32` an `i32`, `CreateStructGEP`
 //! `inbounds i32 0, i32 <n>`, `CreateVectorSplat` a poison vector and two named instructions.
 
-use super::{Builder, Context, Func, Module, Ty, Val, name, sys};
+use core::slice;
+
+#[cfg(feature = "oracle")]
+use super::builder::NO_NAME;
+use super::{Builder, Context, Func, Module, Ty, Val, name, sys, take_message};
 use crate::api::Error;
+
+impl Module<'_> {
+    /// The module's text (`Module::print`).
+    #[must_use]
+    pub fn print(&self) -> Vec<u8> {
+        // SAFETY: the module is live; the answer is a message disposed of below.
+        let text = unsafe { sys::print_module_to_string(self.raw) };
+        // SAFETY: the message just made.
+        unsafe { take_message(text) }
+    }
+}
+
+impl Val<'_> {
+    /// The value's name, any bytes (`Value::getName`).
+    #[must_use]
+    pub fn name(self) -> Vec<u8> {
+        let mut len = 0;
+        // SAFETY: a live value; `len` is writable.
+        let name = unsafe { sys::get_value_name2(self.raw, &raw mut len) };
+        if name.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: LLVM answers `len` bytes at `name`, alive while the value keeps its name.
+        unsafe { slice::from_raw_parts(name.cast::<u8>(), len) }.to_vec()
+    }
+
+    /// Names the value, any bytes (`Value::setName`; a constant takes no name).
+    pub fn set_name(self, name: &[u8]) {
+        // SAFETY: a live value; `name` holds its length.
+        unsafe { sys::set_value_name2(self.raw, name.as_ptr().cast(), name.len()) };
+    }
+}
+
+impl<'cx> Builder<'cx> {
+    /// `unreachable`.
+    pub fn unreachable(&self) -> Val<'cx> {
+        // SAFETY: the builder is live.
+        let raw = unsafe { sys::build_unreachable(self.raw) };
+        self.made("unreachable", raw, self.tcx().void())
+    }
+}
+
+#[cfg(feature = "oracle")]
+impl<'cx> Builder<'cx> {
+    /// `sdiv`.
+    #[must_use]
+    pub fn sdiv(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
+        // SAFETY: as `add`.
+        let raw = unsafe { sys::build_s_div(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
+        self.made("sdiv", raw, lhs.ty())
+    }
+
+    /// `srem`.
+    #[must_use]
+    pub fn srem(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
+        // SAFETY: as `add`.
+        let raw = unsafe { sys::build_s_rem(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
+        self.made("srem", raw, lhs.ty())
+    }
+
+    /// `frem`.
+    #[must_use]
+    pub fn frem(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
+        // SAFETY: as `add`.
+        let raw = unsafe { sys::build_f_rem(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
+        self.made("frem", raw, lhs.ty())
+    }
+
+    /// The cast `op` (`IRBuilder::CreateCast`), an `Instruction::CastOps` opcode.
+    #[must_use]
+    pub fn cast(&self, op: sys::Opcode, v: Val<'cx>, to: Ty) -> Val<'cx> {
+        // SAFETY: the builder and the operand are live, `to` lowers to a type of this context;
+        // `op` is a cast opcode (the caller's).
+        let raw = unsafe {
+            sys::build_cast(
+                self.raw,
+                op,
+                v.raw(),
+                self.tcx().lower(to),
+                NO_NAME.as_ptr(),
+            )
+        };
+        self.made("cast", raw, to)
+    }
+
+    /// `fptoui`.
+    #[must_use]
+    pub fn fptoui(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
+        // SAFETY: as `cast`.
+        let raw = unsafe {
+            sys::build_fp_to_ui(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
+        };
+        self.made("fptoui", raw, to)
+    }
+
+    /// `fptosi`.
+    #[must_use]
+    pub fn fptosi(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
+        // SAFETY: as `cast`.
+        let raw = unsafe {
+            sys::build_fp_to_si(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
+        };
+        self.made("fptosi", raw, to)
+    }
+
+    /// `sitofp`.
+    #[must_use]
+    pub fn sitofp(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
+        // SAFETY: as `cast`.
+        let raw = unsafe {
+            sys::build_si_to_fp(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
+        };
+        self.made("sitofp", raw, to)
+    }
+
+    /// `addrspacecast`.
+    #[must_use]
+    pub fn addrspacecast(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
+        // SAFETY: as `cast`.
+        let raw = unsafe {
+            sys::build_addr_space_cast(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
+        };
+        self.made("addrspacecast", raw, to)
+    }
+
+    /// `IRBuilder::CreateIntCast`: an extension (by sign when `signed`) or a truncation.
+    #[must_use]
+    pub fn int_cast(&self, v: Val<'cx>, to: Ty, signed: bool) -> Val<'cx> {
+        // SAFETY: as `cast`.
+        let raw = unsafe {
+            sys::build_int_cast2(
+                self.raw,
+                v.raw(),
+                self.tcx().lower(to),
+                signed.into(),
+                NO_NAME.as_ptr(),
+            )
+        };
+        self.made("int_cast", raw, to)
+    }
+
+    /// `atomicrmw op ptr, v ordering`; the result has `v`'s type.
+    ///
+    /// Aligned to `v`'s store size, in the system scope or a single thread's.
+    #[must_use]
+    pub fn atomic_rmw(
+        &self,
+        op: sys::AtomicRMWBinOp,
+        ptr: Val<'cx>,
+        v: Val<'cx>,
+        ordering: sys::AtomicOrdering,
+        single_thread: bool,
+    ) -> Val<'cx> {
+        // SAFETY: the builder and the operands are live, of this context; `op` and `ordering`
+        // are the C API's (the caller's).
+        let raw = unsafe {
+            sys::build_atomic_rmw(
+                self.raw,
+                op,
+                ptr.raw(),
+                v.raw(),
+                ordering,
+                single_thread.into(),
+            )
+        };
+        self.made("atomic_rmw", raw, v.ty())
+    }
+}
 
 /// The value of `result`, or a panic showing the error's text (`Error` has no `Debug`).
 fn ok<T>(result: Result<T, Error>) -> T {

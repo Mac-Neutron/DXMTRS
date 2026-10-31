@@ -46,18 +46,6 @@ impl FastMath {
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
-
-    /// These flags without `other`'s.
-    #[must_use]
-    pub const fn without(self, other: Self) -> Self {
-        Self(self.0 & !other.0)
-    }
-
-    /// Whether every flag of `other` is set.
-    #[must_use]
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
 }
 
 /// Puts the builder's fast-math flags back when dropped (`IRBuilder::FastMathFlagGuard`).
@@ -74,7 +62,7 @@ impl Drop for FastMathGuard<'_, '_> {
 
 /// An instruction builder of a context, positioned where its instructions go.
 pub struct Builder<'cx> {
-    raw: sys::BuilderRef,
+    pub(super) raw: sys::BuilderRef,
     cx: &'cx Context,
     fast_math: Cell<FastMath>,
 }
@@ -87,7 +75,7 @@ impl Drop for Builder<'_> {
 }
 
 /// The empty name, the C++'s default.
-const NO_NAME: &CStr = c"";
+pub(super) const NO_NAME: &CStr = c"";
 
 impl<'cx> Builder<'cx> {
     /// A builder of `cx`, not yet positioned, with no fast-math flag.
@@ -114,7 +102,7 @@ impl<'cx> Builder<'cx> {
         self.cx
     }
 
-    const fn tcx(&self) -> &'cx TyCx {
+    pub(super) const fn tcx(&self) -> &'cx TyCx {
         self.cx.tcx()
     }
 
@@ -125,7 +113,7 @@ impl<'cx> Builder<'cx> {
     /// slot of P5's handler), which every check of the context answers. Without it the value is
     /// only wrapped (a `const fn`: the two forms are two definitions).
     #[cfg(feature = "oracle")]
-    fn made(&self, op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
+    pub(super) fn made(&self, op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
         // SAFETY: `raw` is what the builder of this context just answered, of type `ty` (each
         // caller derives it as `IRBuilder` types the instruction).
         let v = unsafe { self.cx.val(raw, ty) };
@@ -137,7 +125,7 @@ impl<'cx> Builder<'cx> {
 
     /// The value `raw` that `_op` made, of type `ty` (the feature `oracle`'s form above checks it).
     #[cfg(not(feature = "oracle"))]
-    const fn made(&self, _op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
+    pub(super) const fn made(&self, _op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
         // SAFETY: as the other form's.
         unsafe { self.cx.val(raw, ty) }
     }
@@ -223,28 +211,12 @@ impl<'cx> Builder<'cx> {
         self.made("udiv", raw, lhs.ty())
     }
 
-    /// `sdiv`.
-    #[must_use]
-    pub fn sdiv(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
-        // SAFETY: as `add`.
-        let raw = unsafe { sys::build_s_div(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
-        self.made("sdiv", raw, lhs.ty())
-    }
-
     /// `urem`.
     #[must_use]
     pub fn urem(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
         // SAFETY: as `add`.
         let raw = unsafe { sys::build_u_rem(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
         self.made("urem", raw, lhs.ty())
-    }
-
-    /// `srem`.
-    #[must_use]
-    pub fn srem(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
-        // SAFETY: as `add`.
-        let raw = unsafe { sys::build_s_rem(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
-        self.made("srem", raw, lhs.ty())
     }
 
     /// `shl`.
@@ -327,14 +299,6 @@ impl<'cx> Builder<'cx> {
         self.made("fdiv", raw, lhs.ty())
     }
 
-    /// `frem`.
-    #[must_use]
-    pub fn frem(&self, lhs: Val<'cx>, rhs: Val<'cx>) -> Val<'cx> {
-        // SAFETY: as `add`.
-        let raw = unsafe { sys::build_f_rem(self.raw, lhs.raw(), rhs.raw(), NO_NAME.as_ptr()) };
-        self.made("frem", raw, lhs.ty())
-    }
-
     /// The binary operation `op` (`IRBuilder::CreateBinOp`).
     ///
     /// `op` is an `Instruction::BinaryOps` opcode (`sys::ADD`, …).
@@ -372,27 +336,10 @@ impl<'cx> Builder<'cx> {
 
     // Casts: the result has the destination type (a no-op cast answers `v`).
 
-    /// The cast `op` (`IRBuilder::CreateCast`), an `Instruction::CastOps` opcode.
-    #[must_use]
-    pub fn cast(&self, op: sys::Opcode, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: the builder and the operand are live, `to` lowers to a type of this context;
-        // `op` is a cast opcode (the caller's).
-        let raw = unsafe {
-            sys::build_cast(
-                self.raw,
-                op,
-                v.raw(),
-                self.tcx().lower(to),
-                NO_NAME.as_ptr(),
-            )
-        };
-        self.made("cast", raw, to)
-    }
-
     /// `trunc`.
     #[must_use]
     pub fn trunc(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: the builder and the operand are live, `to` lowers to a type of this context.
         let raw =
             unsafe { sys::build_trunc(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr()) };
         self.made("trunc", raw, to)
@@ -401,7 +348,7 @@ impl<'cx> Builder<'cx> {
     /// `zext`.
     #[must_use]
     pub fn zext(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw =
             unsafe { sys::build_z_ext(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr()) };
         self.made("zext", raw, to)
@@ -410,7 +357,7 @@ impl<'cx> Builder<'cx> {
     /// `sext`.
     #[must_use]
     pub fn sext(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw =
             unsafe { sys::build_s_ext(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr()) };
         self.made("sext", raw, to)
@@ -419,7 +366,7 @@ impl<'cx> Builder<'cx> {
     /// `fptrunc`.
     #[must_use]
     pub fn fptrunc(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_fp_trunc(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
@@ -429,56 +376,26 @@ impl<'cx> Builder<'cx> {
     /// `fpext`.
     #[must_use]
     pub fn fpext(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw =
             unsafe { sys::build_fp_ext(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr()) };
         self.made("fpext", raw, to)
     }
 
-    /// `fptoui`.
-    #[must_use]
-    pub fn fptoui(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
-        let raw = unsafe {
-            sys::build_fp_to_ui(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
-        };
-        self.made("fptoui", raw, to)
-    }
-
-    /// `fptosi`.
-    #[must_use]
-    pub fn fptosi(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
-        let raw = unsafe {
-            sys::build_fp_to_si(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
-        };
-        self.made("fptosi", raw, to)
-    }
-
     /// `uitofp`.
     #[must_use]
     pub fn uitofp(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_ui_to_fp(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
         self.made("uitofp", raw, to)
     }
 
-    /// `sitofp`.
-    #[must_use]
-    pub fn sitofp(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
-        let raw = unsafe {
-            sys::build_si_to_fp(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
-        };
-        self.made("sitofp", raw, to)
-    }
-
     /// `ptrtoint`.
     #[must_use]
     pub fn ptrtoint(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_ptr_to_int(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
@@ -488,7 +405,7 @@ impl<'cx> Builder<'cx> {
     /// `inttoptr`.
     #[must_use]
     pub fn inttoptr(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_int_to_ptr(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
@@ -498,27 +415,17 @@ impl<'cx> Builder<'cx> {
     /// `bitcast`.
     #[must_use]
     pub fn bitcast(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_bit_cast(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
         self.made("bitcast", raw, to)
     }
 
-    /// `addrspacecast`.
-    #[must_use]
-    pub fn addrspacecast(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
-        let raw = unsafe {
-            sys::build_addr_space_cast(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
-        };
-        self.made("addrspacecast", raw, to)
-    }
-
     /// `IRBuilder::CreatePointerCast`: a bitcast or an address-space cast.
     #[must_use]
     pub fn pointer_cast(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_pointer_cast(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
@@ -528,27 +435,11 @@ impl<'cx> Builder<'cx> {
     /// `IRBuilder::CreateFPCast`: an extension or a truncation.
     #[must_use]
     pub fn fp_cast(&self, v: Val<'cx>, to: Ty) -> Val<'cx> {
-        // SAFETY: as `cast`.
+        // SAFETY: as `trunc`.
         let raw = unsafe {
             sys::build_fp_cast(self.raw, v.raw(), self.tcx().lower(to), NO_NAME.as_ptr())
         };
         self.made("fp_cast", raw, to)
-    }
-
-    /// `IRBuilder::CreateIntCast`: an extension (by sign when `signed`) or a truncation.
-    #[must_use]
-    pub fn int_cast(&self, v: Val<'cx>, to: Ty, signed: bool) -> Val<'cx> {
-        // SAFETY: as `cast`.
-        let raw = unsafe {
-            sys::build_int_cast2(
-                self.raw,
-                v.raw(),
-                self.tcx().lower(to),
-                signed.into(),
-                NO_NAME.as_ptr(),
-            )
-        };
-        self.made("int_cast", raw, to)
     }
 
     /// `IRBuilder::CreateZExtOrTrunc`: by the scalar widths, `v` itself when they are equal.
@@ -694,6 +585,7 @@ impl<'cx> Builder<'cx> {
 
     /// Sets the alignment of a load, store, alloca, atomic or global; anything else is left alone.
     pub fn set_alignment(&self, v: Val<'cx>, align: u32) {
+        let _ = self.raw;
         let raw = v.raw();
         let kinds: [unsafe extern "C" fn(sys::ValueRef) -> sys::ValueRef; 6] = [
             sys::is_a_load_inst,
@@ -956,6 +848,7 @@ impl<'cx> Builder<'cx> {
 
     /// Adds `value` from `block` to the phi `phi`.
     pub fn add_incoming(&self, phi: Val<'cx>, value: Val<'cx>, block: Block<'cx>) {
+        let _ = self.raw;
         let (mut value, mut block) = (value.raw(), block.raw());
         // SAFETY: `phi` is a phi of this context, `value` and `block` of it; one entry each.
         unsafe { sys::add_incoming(phi.raw(), &raw mut value, &raw mut block, 1) };
@@ -1051,47 +944,16 @@ impl<'cx> Builder<'cx> {
 
     /// Adds the case `on` (a constant) going to `dest` to the switch `switch`.
     pub fn add_case(&self, switch: Val<'cx>, on: Val<'cx>, dest: Block<'cx>) {
+        let _ = self.raw;
         // SAFETY: `switch` is a switch of this context, `on` a constant and `dest` a block of it.
         unsafe { sys::add_case(switch.raw(), on.raw(), dest.raw()) };
     }
 
-    /// `unreachable`.
-    pub fn unreachable(&self) -> Val<'cx> {
-        // SAFETY: the builder is live.
-        let raw = unsafe { sys::build_unreachable(self.raw) };
-        self.made("unreachable", raw, self.tcx().void())
-    }
-
     // Atomics.
 
-    /// `atomicrmw op ptr, v ordering`; the result has `v`'s type.
-    ///
-    /// Aligned to `v`'s store size, in the system scope or a single thread's.
-    #[must_use]
-    pub fn atomic_rmw(
-        &self,
-        op: sys::AtomicRMWBinOp,
-        ptr: Val<'cx>,
-        v: Val<'cx>,
-        ordering: sys::AtomicOrdering,
-        single_thread: bool,
-    ) -> Val<'cx> {
-        // SAFETY: the builder and the operands are live, of this context; `op` and `ordering`
-        // are the C API's (the caller's).
-        let raw = unsafe {
-            sys::build_atomic_rmw(
-                self.raw,
-                op,
-                ptr.raw(),
-                v.raw(),
-                ordering,
-                single_thread.into(),
-            )
-        };
-        self.made("atomic_rmw", raw, v.ty())
-    }
-
     /// `cmpxchg ptr, cmp, new success failure`; the result is `{ T, i1 }`.
+    ///
+    /// Aligned to `cmp`'s store size, in the system scope or a single thread's.
     #[must_use]
     pub fn atomic_cmpxchg(
         &self,
@@ -1102,7 +964,8 @@ impl<'cx> Builder<'cx> {
         failure: sys::AtomicOrdering,
         single_thread: bool,
     ) -> Val<'cx> {
-        // SAFETY: as `atomic_rmw`.
+        // SAFETY: the builder and the operands are live, of this context; `success` and
+        // `failure` are the C API's (the caller's).
         let raw = unsafe {
             sys::build_atomic_cmp_xchg(
                 self.raw,

@@ -107,16 +107,16 @@ pub enum SignatureHandler {
 
 /// The IO map's special registers a compute shader's IDs go to.
 pub enum Special {
-    ThreadId,
-    ThreadGroupId,
-    ThreadIdInGroup,
-    ThreadIdInGroupFlat,
+    Id,
+    GroupId,
+    IdInGroup,
+    IdInGroupFlat,
 }
 
 /// A geometry shader's output handler (`std::function<IREffect(MeshOutputContext &)>`).
 pub enum MeshOutputHandler {
     /// Output `reg` as the vertex's position.
-    Position { reg: u32, mask: u32 },
+    Position { reg: u32 },
     /// Output `reg` as the primitive's render target array index.
     RenderTargetArrayIndex { reg: u32, mask: u32 },
     /// Output `reg` as the primitive's viewport array index.
@@ -254,22 +254,22 @@ impl Io {
             (
                 ops.contains(&op::THREAD_ID),
                 FunctionInput::ThreadPositionInGrid,
-                Special::ThreadId,
+                Special::Id,
             ),
             (
                 ops.contains(&op::GROUP_ID),
                 FunctionInput::ThreadgroupPositionInGrid,
-                Special::ThreadGroupId,
+                Special::GroupId,
             ),
             (
                 ops.contains(&op::THREAD_ID_IN_GROUP),
                 FunctionInput::ThreadPositionInThreadgroup,
-                Special::ThreadIdInGroup,
+                Special::IdInGroup,
             ),
             (
                 ops.contains(&op::FLATTENED_THREAD_ID_IN_GROUP) || flat_index,
                 FunctionInput::ThreadIndexInThreadgroup,
-                Special::ThreadIdInGroupFlat,
+                Special::IdInGroupFlat,
             ),
         ] {
             if wanted {
@@ -499,7 +499,7 @@ impl Io {
                     fs.define_mesh_vertex_output(MeshVertexOutput::Position {
                         ty: MslValue::FLOAT4,
                     });
-                    mesh.push(MeshOutputHandler::Position { reg, mask });
+                    mesh.push(MeshOutputHandler::Position { reg });
                 }
                 semantic_kind::RENDER_TARGET_ARRAY_INDEX => {
                     fs.define_mesh_primitive_output(MeshPrimitiveOutput::RenderTargetArrayIndex);
@@ -585,10 +585,10 @@ impl Io {
                 } => steps.push(Step::Special {
                     index,
                     register: match register {
-                        Special::ThreadId => Special::ThreadId,
-                        Special::ThreadGroupId => Special::ThreadGroupId,
-                        Special::ThreadIdInGroup => Special::ThreadIdInGroup,
-                        Special::ThreadIdInGroupFlat => Special::ThreadIdInGroupFlat,
+                        Special::Id => Special::Id,
+                        Special::GroupId => Special::GroupId,
+                        Special::IdInGroup => Special::IdInGroup,
+                        Special::IdInGroupFlat => Special::IdInGroupFlat,
                     },
                 }),
                 SignatureHandler::VertexSystemValue { reg, mask, vertex } => dxbc(
@@ -765,10 +765,10 @@ impl Replay<'_> {
                 } => {
                     let value = Some(param(air, function, index)?);
                     match register {
-                        Special::ThreadId => res.thread_id_arg = value,
-                        Special::ThreadGroupId => res.thread_group_id_arg = value,
-                        Special::ThreadIdInGroup => res.thread_id_in_group_arg = value,
-                        Special::ThreadIdInGroupFlat => res.thread_id_in_group_flat_arg = value,
+                        Special::Id => res.thread_id_arg = value,
+                        Special::GroupId => res.thread_group_id_arg = value,
+                        Special::IdInGroup => res.thread_id_in_group_arg = value,
+                        Special::IdInGroupFlat => res.thread_id_in_group_flat_arg = value,
                     }
                 }
                 Step::InitShifted {

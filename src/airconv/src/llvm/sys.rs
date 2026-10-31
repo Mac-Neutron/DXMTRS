@@ -69,24 +69,16 @@ pub type Opcode = c_uint;
 pub type TypeKind = c_uint;
 /// `LLVMLinkage`.
 pub type Linkage = c_uint;
-/// `LLVMUnnamedAddr`.
-pub type UnnamedAddr = c_uint;
-/// `LLVMValueKind`.
-pub type ValueKind = c_uint;
 /// `LLVMIntPredicate`.
 pub type IntPredicate = c_uint;
 /// `LLVMRealPredicate`.
 pub type RealPredicate = c_uint;
-/// `LLVMThreadLocalMode`.
-pub type ThreadLocalMode = c_uint;
 /// `LLVMAtomicOrdering`.
 pub type AtomicOrdering = c_uint;
 /// `LLVMAtomicRMWBinOp`.
 pub type AtomicRMWBinOp = c_uint;
 /// `LLVMDiagnosticSeverity`.
 pub type DiagnosticSeverity = c_uint;
-/// `LLVMModuleFlagBehavior`.
-pub type ModuleFlagBehavior = c_uint;
 /// `LLVMVerifierFailureAction`: only `RETURN_STATUS_ACTION` neither prints nor aborts.
 pub type VerifierFailureAction = c_uint;
 /// `LLVMAttributeIndex`: the return value, the function, or a parameter from 1.
@@ -94,88 +86,43 @@ pub type AttributeIndex = c_uint;
 /// `LLVMDiagnosticHandler`.
 pub type DiagnosticHandler = Option<unsafe extern "C" fn(DiagnosticInfoRef, *mut c_void)>;
 
-/// `LLVMAttributeReturnIndex`.
-pub const ATTRIBUTE_RETURN_INDEX: AttributeIndex = 0;
 /// `LLVMAttributeFunctionIndex` (-1 as an unsigned).
 pub const ATTRIBUTE_FUNCTION_INDEX: AttributeIndex = AttributeIndex::MAX;
 
 // `LLVMOpcode`
-pub const RET: Opcode = 1;
-pub const BR: Opcode = 2;
-pub const SWITCH: Opcode = 3;
-pub const INDIRECT_BR: Opcode = 4;
-pub const INVOKE: Opcode = 5;
-pub const UNREACHABLE: Opcode = 7;
-pub const CALL_BR: Opcode = 67;
-pub const F_NEG: Opcode = 66;
 pub const ADD: Opcode = 8;
 pub const F_ADD: Opcode = 9;
-pub const SUB: Opcode = 10;
-pub const F_SUB: Opcode = 11;
 pub const MUL: Opcode = 12;
 pub const F_MUL: Opcode = 13;
-pub const U_DIV: Opcode = 14;
-pub const S_DIV: Opcode = 15;
-pub const F_DIV: Opcode = 16;
-pub const U_REM: Opcode = 17;
-pub const S_REM: Opcode = 18;
-pub const F_REM: Opcode = 19;
-pub const SHL: Opcode = 20;
-pub const L_SHR: Opcode = 21;
-pub const A_SHR: Opcode = 22;
 pub const AND: Opcode = 23;
 pub const OR: Opcode = 24;
 pub const XOR: Opcode = 25;
+#[cfg(feature = "oracle")]
 pub const ALLOCA: Opcode = 26;
+#[cfg(feature = "oracle")]
 pub const LOAD: Opcode = 27;
+#[cfg(feature = "oracle")]
 pub const STORE: Opcode = 28;
+#[cfg(feature = "oracle")]
 pub const GET_ELEMENT_PTR: Opcode = 29;
-pub const TRUNC: Opcode = 30;
+#[cfg(all(test, feature = "oracle"))]
 pub const Z_EXT: Opcode = 31;
-pub const S_EXT: Opcode = 32;
-pub const FP_TO_UI: Opcode = 33;
-pub const FP_TO_SI: Opcode = 34;
-pub const UI_TO_FP: Opcode = 35;
-pub const SI_TO_FP: Opcode = 36;
-pub const FP_TRUNC: Opcode = 37;
-pub const FP_EXT: Opcode = 38;
-pub const PTR_TO_INT: Opcode = 39;
-pub const INT_TO_PTR: Opcode = 40;
-pub const BIT_CAST: Opcode = 41;
-pub const ADDR_SPACE_CAST: Opcode = 60;
-pub const I_CMP: Opcode = 42;
-pub const F_CMP: Opcode = 43;
+#[cfg(feature = "oracle")]
 pub const PHI: Opcode = 44;
+#[cfg(feature = "oracle")]
 pub const CALL: Opcode = 45;
+#[cfg(feature = "oracle")]
 pub const SELECT: Opcode = 46;
-pub const USER_OP1: Opcode = 47;
-pub const USER_OP2: Opcode = 48;
-pub const VA_ARG: Opcode = 49;
-pub const EXTRACT_ELEMENT: Opcode = 50;
-pub const INSERT_ELEMENT: Opcode = 51;
-pub const SHUFFLE_VECTOR: Opcode = 52;
-pub const EXTRACT_VALUE: Opcode = 53;
-pub const INSERT_VALUE: Opcode = 54;
-pub const FREEZE: Opcode = 68;
-pub const FENCE: Opcode = 55;
+#[cfg(feature = "oracle")]
 pub const ATOMIC_CMP_XCHG: Opcode = 56;
+#[cfg(feature = "oracle")]
 pub const ATOMIC_RMW: Opcode = 57;
-pub const RESUME: Opcode = 58;
-pub const LANDING_PAD: Opcode = 59;
-pub const CLEANUP_RET: Opcode = 61;
-pub const CATCH_RET: Opcode = 62;
-pub const CATCH_PAD: Opcode = 63;
-pub const CLEANUP_PAD: Opcode = 64;
-pub const CATCH_SWITCH: Opcode = 65;
 
 // `LLVMTypeKind`
 pub const VOID_TYPE_KIND: TypeKind = 0;
 pub const HALF_TYPE_KIND: TypeKind = 1;
 pub const FLOAT_TYPE_KIND: TypeKind = 2;
 pub const DOUBLE_TYPE_KIND: TypeKind = 3;
-pub const X86_FP80_TYPE_KIND: TypeKind = 4;
-pub const FP128_TYPE_KIND: TypeKind = 5;
-pub const PPC_FP128_TYPE_KIND: TypeKind = 6;
 pub const LABEL_TYPE_KIND: TypeKind = 7;
 pub const INTEGER_TYPE_KIND: TypeKind = 8;
 pub const FUNCTION_TYPE_KIND: TypeKind = 9;
@@ -184,63 +131,10 @@ pub const ARRAY_TYPE_KIND: TypeKind = 11;
 pub const POINTER_TYPE_KIND: TypeKind = 12;
 pub const VECTOR_TYPE_KIND: TypeKind = 13;
 pub const METADATA_TYPE_KIND: TypeKind = 14;
-pub const X86_MMX_TYPE_KIND: TypeKind = 15;
-pub const TOKEN_TYPE_KIND: TypeKind = 16;
 pub const SCALABLE_VECTOR_TYPE_KIND: TypeKind = 17;
-pub const B_FLOAT_TYPE_KIND: TypeKind = 18;
-pub const X86_AMX_TYPE_KIND: TypeKind = 19;
 
 // `LLVMLinkage`
-pub const EXTERNAL_LINKAGE: Linkage = 0;
-pub const AVAILABLE_EXTERNALLY_LINKAGE: Linkage = 1;
-pub const LINK_ONCE_ANY_LINKAGE: Linkage = 2;
-pub const LINK_ONCE_ODR_LINKAGE: Linkage = 3;
-pub const LINK_ONCE_ODR_AUTO_HIDE_LINKAGE: Linkage = 4;
-pub const WEAK_ANY_LINKAGE: Linkage = 5;
-pub const WEAK_ODR_LINKAGE: Linkage = 6;
-pub const APPENDING_LINKAGE: Linkage = 7;
 pub const INTERNAL_LINKAGE: Linkage = 8;
-pub const PRIVATE_LINKAGE: Linkage = 9;
-pub const DLL_IMPORT_LINKAGE: Linkage = 10;
-pub const DLL_EXPORT_LINKAGE: Linkage = 11;
-pub const EXTERNAL_WEAK_LINKAGE: Linkage = 12;
-pub const GHOST_LINKAGE: Linkage = 13;
-pub const COMMON_LINKAGE: Linkage = 14;
-pub const LINKER_PRIVATE_LINKAGE: Linkage = 15;
-pub const LINKER_PRIVATE_WEAK_LINKAGE: Linkage = 16;
-
-// `LLVMUnnamedAddr`
-pub const NO_UNNAMED_ADDR: UnnamedAddr = 0;
-pub const LOCAL_UNNAMED_ADDR: UnnamedAddr = 1;
-pub const GLOBAL_UNNAMED_ADDR: UnnamedAddr = 2;
-
-// `LLVMValueKind`
-pub const ARGUMENT_VALUE_KIND: ValueKind = 0;
-pub const BASIC_BLOCK_VALUE_KIND: ValueKind = 1;
-pub const MEMORY_USE_VALUE_KIND: ValueKind = 2;
-pub const MEMORY_DEF_VALUE_KIND: ValueKind = 3;
-pub const MEMORY_PHI_VALUE_KIND: ValueKind = 4;
-pub const FUNCTION_VALUE_KIND: ValueKind = 5;
-pub const GLOBAL_ALIAS_VALUE_KIND: ValueKind = 6;
-pub const GLOBAL_I_FUNC_VALUE_KIND: ValueKind = 7;
-pub const GLOBAL_VARIABLE_VALUE_KIND: ValueKind = 8;
-pub const BLOCK_ADDRESS_VALUE_KIND: ValueKind = 9;
-pub const CONSTANT_EXPR_VALUE_KIND: ValueKind = 10;
-pub const CONSTANT_ARRAY_VALUE_KIND: ValueKind = 11;
-pub const CONSTANT_STRUCT_VALUE_KIND: ValueKind = 12;
-pub const CONSTANT_VECTOR_VALUE_KIND: ValueKind = 13;
-pub const UNDEF_VALUE_VALUE_KIND: ValueKind = 14;
-pub const CONSTANT_AGGREGATE_ZERO_VALUE_KIND: ValueKind = 15;
-pub const CONSTANT_DATA_ARRAY_VALUE_KIND: ValueKind = 16;
-pub const CONSTANT_DATA_VECTOR_VALUE_KIND: ValueKind = 17;
-pub const CONSTANT_INT_VALUE_KIND: ValueKind = 18;
-pub const CONSTANT_FP_VALUE_KIND: ValueKind = 19;
-pub const CONSTANT_POINTER_NULL_VALUE_KIND: ValueKind = 20;
-pub const CONSTANT_TOKEN_NONE_VALUE_KIND: ValueKind = 21;
-pub const METADATA_AS_VALUE_VALUE_KIND: ValueKind = 22;
-pub const INLINE_ASM_VALUE_KIND: ValueKind = 23;
-pub const INSTRUCTION_VALUE_KIND: ValueKind = 24;
-pub const POISON_VALUE_VALUE_KIND: ValueKind = 25;
 
 // `LLVMIntPredicate`
 pub const INT_EQ: IntPredicate = 32;
@@ -252,41 +146,17 @@ pub const INT_ULE: IntPredicate = 37;
 pub const INT_SGT: IntPredicate = 38;
 pub const INT_SGE: IntPredicate = 39;
 pub const INT_SLT: IntPredicate = 40;
-pub const INT_SLE: IntPredicate = 41;
 
 // `LLVMRealPredicate`
-pub const REAL_PREDICATE_FALSE: RealPredicate = 0;
 pub const REAL_OEQ: RealPredicate = 1;
 pub const REAL_OGT: RealPredicate = 2;
 pub const REAL_OGE: RealPredicate = 3;
 pub const REAL_OLT: RealPredicate = 4;
-pub const REAL_OLE: RealPredicate = 5;
-pub const REAL_ONE: RealPredicate = 6;
-pub const REAL_ORD: RealPredicate = 7;
 pub const REAL_UNO: RealPredicate = 8;
-pub const REAL_UEQ: RealPredicate = 9;
-pub const REAL_UGT: RealPredicate = 10;
-pub const REAL_UGE: RealPredicate = 11;
-pub const REAL_ULT: RealPredicate = 12;
-pub const REAL_ULE: RealPredicate = 13;
 pub const REAL_UNE: RealPredicate = 14;
-pub const REAL_PREDICATE_TRUE: RealPredicate = 15;
-
-// `LLVMThreadLocalMode`
-pub const NOT_THREAD_LOCAL: ThreadLocalMode = 0;
-pub const GENERAL_DYNAMIC_TLS_MODEL: ThreadLocalMode = 1;
-pub const LOCAL_DYNAMIC_TLS_MODEL: ThreadLocalMode = 2;
-pub const INITIAL_EXEC_TLS_MODEL: ThreadLocalMode = 3;
-pub const LOCAL_EXEC_TLS_MODEL: ThreadLocalMode = 4;
 
 // `LLVMAtomicOrdering`
-pub const ATOMIC_ORDERING_NOT_ATOMIC: AtomicOrdering = 0;
-pub const ATOMIC_ORDERING_UNORDERED: AtomicOrdering = 1;
 pub const ATOMIC_ORDERING_MONOTONIC: AtomicOrdering = 2;
-pub const ATOMIC_ORDERING_ACQUIRE: AtomicOrdering = 4;
-pub const ATOMIC_ORDERING_RELEASE: AtomicOrdering = 5;
-pub const ATOMIC_ORDERING_ACQUIRE_RELEASE: AtomicOrdering = 6;
-pub const ATOMIC_ORDERING_SEQUENTIALLY_CONSISTENT: AtomicOrdering = 7;
 
 // `LLVMAtomicRMWBinOp`
 pub const ATOMIC_RMW_BIN_OP_XCHG: AtomicRMWBinOp = 0;
@@ -308,20 +178,9 @@ pub const ATOMIC_RMW_BIN_OP_F_MIN: AtomicRMWBinOp = 14;
 // `LLVMDiagnosticSeverity`
 pub const DS_ERROR: DiagnosticSeverity = 0;
 pub const DS_WARNING: DiagnosticSeverity = 1;
-pub const DS_REMARK: DiagnosticSeverity = 2;
 pub const DS_NOTE: DiagnosticSeverity = 3;
 
-// `LLVMModuleFlagBehavior`
-pub const MODULE_FLAG_BEHAVIOR_ERROR: ModuleFlagBehavior = 0;
-pub const MODULE_FLAG_BEHAVIOR_WARNING: ModuleFlagBehavior = 1;
-pub const MODULE_FLAG_BEHAVIOR_REQUIRE: ModuleFlagBehavior = 2;
-pub const MODULE_FLAG_BEHAVIOR_OVERRIDE: ModuleFlagBehavior = 3;
-pub const MODULE_FLAG_BEHAVIOR_APPEND: ModuleFlagBehavior = 4;
-pub const MODULE_FLAG_BEHAVIOR_APPEND_UNIQUE: ModuleFlagBehavior = 5;
-
 // `LLVMVerifierFailureAction`
-pub const ABORT_PROCESS_ACTION: VerifierFailureAction = 0;
-pub const PRINT_MESSAGE_ACTION: VerifierFailureAction = 1;
 pub const RETURN_STATUS_ACTION: VerifierFailureAction = 2;
 
 unsafe extern "C" {
@@ -351,19 +210,8 @@ unsafe extern "C" {
     // Attributes
     #[link_name = "LLVMGetEnumAttributeKindForName"]
     pub fn get_enum_attribute_kind_for_name(name: *const c_char, s_len: usize) -> c_uint;
-    #[link_name = "LLVMGetLastEnumAttributeKind"]
-    pub fn get_last_enum_attribute_kind() -> c_uint;
     #[link_name = "LLVMCreateEnumAttribute"]
     pub fn create_enum_attribute(c: ContextRef, kind_id: c_uint, val: u64) -> AttributeRef;
-    #[link_name = "LLVMGetEnumAttributeKind"]
-    pub fn get_enum_attribute_kind(a: AttributeRef) -> c_uint;
-    #[link_name = "LLVMGetEnumAttributeValue"]
-    pub fn get_enum_attribute_value(a: AttributeRef) -> u64;
-    #[link_name = "LLVMCreateTypeAttribute"]
-    pub fn create_type_attribute(c: ContextRef, kind_id: c_uint, type_ref: TypeRef)
-    -> AttributeRef;
-    #[link_name = "LLVMGetTypeAttributeValue"]
-    pub fn get_type_attribute_value(a: AttributeRef) -> TypeRef;
     #[link_name = "LLVMCreateStringAttribute"]
     pub fn create_string_attribute(
         c: ContextRef,
@@ -372,16 +220,6 @@ unsafe extern "C" {
         v: *const c_char,
         v_length: c_uint,
     ) -> AttributeRef;
-    #[link_name = "LLVMGetStringAttributeKind"]
-    pub fn get_string_attribute_kind(a: AttributeRef, length: *mut c_uint) -> *const c_char;
-    #[link_name = "LLVMGetStringAttributeValue"]
-    pub fn get_string_attribute_value(a: AttributeRef, length: *mut c_uint) -> *const c_char;
-    #[link_name = "LLVMIsEnumAttribute"]
-    pub fn is_enum_attribute(a: AttributeRef) -> Bool;
-    #[link_name = "LLVMIsStringAttribute"]
-    pub fn is_string_attribute(a: AttributeRef) -> Bool;
-    #[link_name = "LLVMIsTypeAttribute"]
-    pub fn is_type_attribute(a: AttributeRef) -> Bool;
 
     // Modules
     #[link_name = "LLVMModuleCreateWithNameInContext"]
@@ -389,30 +227,13 @@ unsafe extern "C" {
     -> ModuleRef;
     #[link_name = "LLVMDisposeModule"]
     pub fn dispose_module(m: ModuleRef);
-    #[link_name = "LLVMGetModuleContext"]
-    pub fn get_module_context(m: ModuleRef) -> ContextRef;
-    #[link_name = "LLVMGetSourceFileName"]
-    pub fn get_source_file_name(m: ModuleRef, len: *mut usize) -> *const c_char;
     #[link_name = "LLVMSetSourceFileName"]
     pub fn set_source_file_name(m: ModuleRef, name: *const c_char, len: usize);
-    #[link_name = "LLVMGetDataLayoutStr"]
-    pub fn get_data_layout_str(m: ModuleRef) -> *const c_char;
     #[link_name = "LLVMSetDataLayout"]
     pub fn set_data_layout(m: ModuleRef, data_layout_str: *const c_char);
-    #[link_name = "LLVMGetTarget"]
-    pub fn get_target(m: ModuleRef) -> *const c_char;
     #[link_name = "LLVMSetTarget"]
     pub fn set_target(m: ModuleRef, triple: *const c_char);
-    #[link_name = "LLVMAddModuleFlag"]
-    pub fn add_module_flag(
-        m: ModuleRef,
-        behavior: ModuleFlagBehavior,
-        key: *const c_char,
-        key_len: usize,
-        val: MetadataRef,
-    );
-    #[link_name = "LLVMGetModuleFlag"]
-    pub fn get_module_flag(m: ModuleRef, key: *const c_char, key_len: usize) -> MetadataRef;
+    #[cfg(test)]
     #[link_name = "LLVMPrintModuleToString"]
     pub fn print_module_to_string(m: ModuleRef) -> *mut c_char;
     #[link_name = "LLVMGetTypeByName2"]
@@ -423,12 +244,9 @@ unsafe extern "C" {
     pub fn add_function(m: ModuleRef, name: *const c_char, function_ty: TypeRef) -> ValueRef;
     #[link_name = "LLVMGetFirstFunction"]
     pub fn get_first_function(m: ModuleRef) -> ValueRef;
-    #[link_name = "LLVMGetLastFunction"]
-    pub fn get_last_function(m: ModuleRef) -> ValueRef;
     #[link_name = "LLVMGetNextFunction"]
     pub fn get_next_function(fn_: ValueRef) -> ValueRef;
-    #[link_name = "LLVMGetPreviousFunction"]
-    pub fn get_previous_function(fn_: ValueRef) -> ValueRef;
+    #[cfg(test)]
     #[link_name = "LLVMAddGlobal"]
     pub fn add_global(m: ModuleRef, ty: TypeRef, name: *const c_char) -> ValueRef;
     #[link_name = "LLVMAddGlobalInAddressSpace"]
@@ -442,31 +260,18 @@ unsafe extern "C" {
     pub fn get_named_global(m: ModuleRef, name: *const c_char) -> ValueRef;
     #[link_name = "LLVMGetFirstGlobal"]
     pub fn get_first_global(m: ModuleRef) -> ValueRef;
-    #[link_name = "LLVMGetLastGlobal"]
-    pub fn get_last_global(m: ModuleRef) -> ValueRef;
     #[link_name = "LLVMGetNextGlobal"]
     pub fn get_next_global(global_var: ValueRef) -> ValueRef;
-    #[link_name = "LLVMGetPreviousGlobal"]
-    pub fn get_previous_global(global_var: ValueRef) -> ValueRef;
     #[link_name = "LLVMDeleteGlobal"]
     pub fn delete_global(global_var: ValueRef);
     #[link_name = "LLVMGetFirstNamedMetadata"]
     pub fn get_first_named_metadata(m: ModuleRef) -> NamedMDNodeRef;
-    #[link_name = "LLVMGetLastNamedMetadata"]
-    pub fn get_last_named_metadata(m: ModuleRef) -> NamedMDNodeRef;
     #[link_name = "LLVMGetNextNamedMetadata"]
     pub fn get_next_named_metadata(named_md_node: NamedMDNodeRef) -> NamedMDNodeRef;
-    #[link_name = "LLVMGetPreviousNamedMetadata"]
-    pub fn get_previous_named_metadata(named_md_node: NamedMDNodeRef) -> NamedMDNodeRef;
+    #[cfg(test)]
     #[link_name = "LLVMGetNamedMetadata"]
     pub fn get_named_metadata(m: ModuleRef, name: *const c_char, name_len: usize)
     -> NamedMDNodeRef;
-    #[link_name = "LLVMGetOrInsertNamedMetadata"]
-    pub fn get_or_insert_named_metadata(
-        m: ModuleRef,
-        name: *const c_char,
-        name_len: usize,
-    ) -> NamedMDNodeRef;
     #[link_name = "LLVMGetNamedMetadataName"]
     pub fn get_named_metadata_name(named_md: NamedMDNodeRef, name_len: *mut usize)
     -> *const c_char;
@@ -480,20 +285,16 @@ unsafe extern "C" {
     // Types
     #[link_name = "LLVMGetTypeKind"]
     pub fn get_type_kind(ty: TypeRef) -> TypeKind;
-    #[link_name = "LLVMTypeIsSized"]
-    pub fn type_is_sized(ty: TypeRef) -> Bool;
-    #[link_name = "LLVMGetTypeContext"]
-    pub fn get_type_context(ty: TypeRef) -> ContextRef;
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMPrintTypeToString"]
     pub fn print_type_to_string(val: TypeRef) -> *mut c_char;
+    #[cfg(test)]
     #[link_name = "LLVMInt1TypeInContext"]
     pub fn int1_type_in_context(c: ContextRef) -> TypeRef;
-    #[link_name = "LLVMInt8TypeInContext"]
-    pub fn int8_type_in_context(c: ContextRef) -> TypeRef;
-    #[link_name = "LLVMInt16TypeInContext"]
-    pub fn int16_type_in_context(c: ContextRef) -> TypeRef;
+    #[cfg(test)]
     #[link_name = "LLVMInt32TypeInContext"]
     pub fn int32_type_in_context(c: ContextRef) -> TypeRef;
+    #[cfg(test)]
     #[link_name = "LLVMInt64TypeInContext"]
     pub fn int64_type_in_context(c: ContextRef) -> TypeRef;
     #[link_name = "LLVMIntTypeInContext"]
@@ -543,6 +344,7 @@ unsafe extern "C" {
     pub fn count_struct_element_types(struct_ty: TypeRef) -> c_uint;
     #[link_name = "LLVMGetStructElementTypes"]
     pub fn get_struct_element_types(struct_ty: TypeRef, dest: *mut TypeRef);
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMStructGetTypeAtIndex"]
     pub fn struct_get_type_at_index(struct_ty: TypeRef, i: c_uint) -> TypeRef;
     #[link_name = "LLVMIsPackedStruct"]
@@ -577,8 +379,6 @@ unsafe extern "C" {
     // Values
     #[link_name = "LLVMTypeOf"]
     pub fn type_of(val: ValueRef) -> TypeRef;
-    #[link_name = "LLVMGetValueKind"]
-    pub fn get_value_kind(val: ValueRef) -> ValueKind;
     #[link_name = "LLVMGetValueName2"]
     pub fn get_value_name2(val: ValueRef, length: *mut usize) -> *const c_char;
     #[link_name = "LLVMSetValueName2"]
@@ -587,142 +387,48 @@ unsafe extern "C" {
     pub fn print_value_to_string(val: ValueRef) -> *mut c_char;
     #[link_name = "LLVMReplaceAllUsesWith"]
     pub fn replace_all_uses_with(old_val: ValueRef, new_val: ValueRef);
-    #[link_name = "LLVMIsConstant"]
-    pub fn is_constant(val: ValueRef) -> Bool;
-    #[link_name = "LLVMIsUndef"]
-    pub fn is_undef(val: ValueRef) -> Bool;
-    #[link_name = "LLVMIsPoison"]
-    pub fn is_poison(val: ValueRef) -> Bool;
-    #[link_name = "LLVMIsAArgument"]
-    pub fn is_a_argument(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsABasicBlock"]
-    pub fn is_a_basic_block(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAUser"]
-    pub fn is_a_user(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAConstant"]
     pub fn is_a_constant(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantAggregateZero"]
-    pub fn is_a_constant_aggregate_zero(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantArray"]
-    pub fn is_a_constant_array(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantDataSequential"]
-    pub fn is_a_constant_data_sequential(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantDataArray"]
-    pub fn is_a_constant_data_array(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantDataVector"]
-    pub fn is_a_constant_data_vector(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAConstantExpr"]
     pub fn is_a_constant_expr(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantFP"]
-    pub fn is_a_constant_fp(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAConstantInt"]
     pub fn is_a_constant_int(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantPointerNull"]
-    pub fn is_a_constant_pointer_null(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantStruct"]
-    pub fn is_a_constant_struct(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAConstantVector"]
-    pub fn is_a_constant_vector(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAGlobalValue"]
-    pub fn is_a_global_value(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAGlobalObject"]
     pub fn is_a_global_object(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAFunction"]
     pub fn is_a_function(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAGlobalVariable"]
-    pub fn is_a_global_variable(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAUndefValue"]
     pub fn is_a_undef_value(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAPoisonValue"]
-    pub fn is_a_poison_value(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAInstruction"]
     pub fn is_a_instruction(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAUnaryOperator"]
-    pub fn is_a_unary_operator(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsABinaryOperator"]
-    pub fn is_a_binary_operator(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsACallInst"]
     pub fn is_a_call_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAIntrinsicInst"]
     pub fn is_a_intrinsic_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsACmpInst"]
-    pub fn is_a_cmp_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAFCmpInst"]
     pub fn is_af_cmp_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAICmpInst"]
-    pub fn is_ai_cmp_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAExtractElementInst"]
-    pub fn is_a_extract_element_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAGetElementPtrInst"]
     pub fn is_a_get_element_ptr_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAInsertElementInst"]
-    pub fn is_a_insert_element_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAInsertValueInst"]
-    pub fn is_a_insert_value_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAPHINode"]
     pub fn is_aphi_node(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsASelectInst"]
-    pub fn is_a_select_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAShuffleVectorInst"]
-    pub fn is_a_shuffle_vector_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAStoreInst"]
     pub fn is_a_store_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsABranchInst"]
-    pub fn is_a_branch_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAReturnInst"]
     pub fn is_a_return_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsASwitchInst"]
-    pub fn is_a_switch_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAUnreachableInst"]
-    pub fn is_a_unreachable_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAUnaryInstruction"]
-    pub fn is_a_unary_instruction(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAAllocaInst"]
     pub fn is_a_alloca_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsACastInst"]
-    pub fn is_a_cast_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAAddrSpaceCastInst"]
-    pub fn is_a_addr_space_cast_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsABitCastInst"]
     pub fn is_a_bit_cast_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFPExtInst"]
-    pub fn is_afp_ext_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFPToSIInst"]
-    pub fn is_afp_to_si_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFPToUIInst"]
-    pub fn is_afp_to_ui_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFPTruncInst"]
-    pub fn is_afp_trunc_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAIntToPtrInst"]
-    pub fn is_a_int_to_ptr_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAPtrToIntInst"]
-    pub fn is_a_ptr_to_int_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsASExtInst"]
-    pub fn is_as_ext_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsASIToFPInst"]
-    pub fn is_asi_to_fp_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsATruncInst"]
-    pub fn is_a_trunc_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAUIToFPInst"]
-    pub fn is_aui_to_fp_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAZExtInst"]
-    pub fn is_az_ext_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAExtractValueInst"]
     pub fn is_a_extract_value_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsALoadInst"]
     pub fn is_a_load_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFreezeInst"]
-    pub fn is_a_freeze_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAAtomicCmpXchgInst"]
     pub fn is_a_atomic_cmp_xchg_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAAtomicRMWInst"]
     pub fn is_a_atomic_rmw_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAFenceInst"]
-    pub fn is_a_fence_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAMDNode"]
     pub fn is_amd_node(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAMDString"]
-    pub fn is_amd_string(val: ValueRef) -> ValueRef;
 
     // Uses and operands
     #[link_name = "LLVMGetFirstUse"]
@@ -731,14 +437,10 @@ unsafe extern "C" {
     pub fn get_next_use(u: UseRef) -> UseRef;
     #[link_name = "LLVMGetUser"]
     pub fn get_user(u: UseRef) -> ValueRef;
-    #[link_name = "LLVMGetUsedValue"]
-    pub fn get_used_value(u: UseRef) -> ValueRef;
     #[link_name = "LLVMGetNumOperands"]
     pub fn get_num_operands(val: ValueRef) -> c_int;
     #[link_name = "LLVMGetOperand"]
     pub fn get_operand(val: ValueRef, index: c_uint) -> ValueRef;
-    #[link_name = "LLVMGetOperandUse"]
-    pub fn get_operand_use(val: ValueRef, index: c_uint) -> UseRef;
     #[link_name = "LLVMSetOperand"]
     pub fn set_operand(user: ValueRef, index: c_uint, val: ValueRef);
 
@@ -753,48 +455,14 @@ unsafe extern "C" {
     pub fn get_poison(ty: TypeRef) -> ValueRef;
     #[link_name = "LLVMIsNull"]
     pub fn is_null(val: ValueRef) -> Bool;
-    #[link_name = "LLVMConstPointerNull"]
-    pub fn const_pointer_null(ty: TypeRef) -> ValueRef;
     #[link_name = "LLVMConstInt"]
     pub fn const_int(int_ty: TypeRef, n: c_ulonglong, sign_extend: Bool) -> ValueRef;
-    #[link_name = "LLVMConstIntOfArbitraryPrecision"]
-    pub fn const_int_of_arbitrary_precision(
-        int_ty: TypeRef,
-        num_words: c_uint,
-        words: *const u64,
-    ) -> ValueRef;
     #[link_name = "LLVMConstReal"]
     pub fn const_real(real_ty: TypeRef, n: f64) -> ValueRef;
     #[link_name = "LLVMConstIntGetZExtValue"]
     pub fn const_int_get_z_ext_value(constant_val: ValueRef) -> c_ulonglong;
     #[link_name = "LLVMConstIntGetSExtValue"]
     pub fn const_int_get_s_ext_value(constant_val: ValueRef) -> c_longlong;
-    #[link_name = "LLVMConstRealGetDouble"]
-    pub fn const_real_get_double(constant_val: ValueRef, loses_info: *mut Bool) -> f64;
-    #[link_name = "LLVMConstStringInContext"]
-    pub fn const_string_in_context(
-        c: ContextRef,
-        str: *const c_char,
-        length: c_uint,
-        dont_null_terminate: Bool,
-    ) -> ValueRef;
-    #[link_name = "LLVMIsConstantString"]
-    pub fn is_constant_string(c: ValueRef) -> Bool;
-    #[link_name = "LLVMGetAsString"]
-    pub fn get_as_string(c: ValueRef, length: *mut usize) -> *const c_char;
-    #[link_name = "LLVMConstStructInContext"]
-    pub fn const_struct_in_context(
-        c: ContextRef,
-        constant_vals: *mut ValueRef,
-        count: c_uint,
-        packed: Bool,
-    ) -> ValueRef;
-    #[link_name = "LLVMConstNamedStruct"]
-    pub fn const_named_struct(
-        struct_ty: TypeRef,
-        constant_vals: *mut ValueRef,
-        count: c_uint,
-    ) -> ValueRef;
     #[link_name = "LLVMConstArray"]
     pub fn const_array(
         element_ty: TypeRef,
@@ -805,25 +473,8 @@ unsafe extern "C" {
     pub fn const_vector(scalar_constant_vals: *mut ValueRef, size: c_uint) -> ValueRef;
     #[link_name = "LLVMGetAggregateElement"]
     pub fn get_aggregate_element(c: ValueRef, idx: c_uint) -> ValueRef;
-    #[link_name = "LLVMGetConstOpcode"]
-    pub fn get_const_opcode(constant_val: ValueRef) -> Opcode;
     #[link_name = "LLVMConstBitCast"]
     pub fn const_bit_cast(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
-    #[link_name = "LLVMConstPointerCast"]
-    pub fn const_pointer_cast(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
-    #[link_name = "LLVMConstAddrSpaceCast"]
-    pub fn const_addr_space_cast(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
-    #[link_name = "LLVMConstPtrToInt"]
-    pub fn const_ptr_to_int(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
-    #[link_name = "LLVMConstIntToPtr"]
-    pub fn const_int_to_ptr(constant_val: ValueRef, to_type: TypeRef) -> ValueRef;
-    #[link_name = "LLVMConstGEP2"]
-    pub fn const_gep2(
-        ty: TypeRef,
-        constant_val: ValueRef,
-        constant_indices: *mut ValueRef,
-        num_indices: c_uint,
-    ) -> ValueRef;
     #[link_name = "LLVMConstInBoundsGEP2"]
     pub fn const_in_bounds_gep2(
         ty: TypeRef,
@@ -841,14 +492,6 @@ unsafe extern "C" {
     pub fn get_linkage(global: ValueRef) -> Linkage;
     #[link_name = "LLVMSetLinkage"]
     pub fn set_linkage(global: ValueRef, linkage: Linkage);
-    #[link_name = "LLVMGetSection"]
-    pub fn get_section(global: ValueRef) -> *const c_char;
-    #[link_name = "LLVMSetSection"]
-    pub fn set_section(global: ValueRef, section: *const c_char);
-    #[link_name = "LLVMGetUnnamedAddress"]
-    pub fn get_unnamed_address(global: ValueRef) -> UnnamedAddr;
-    #[link_name = "LLVMSetUnnamedAddress"]
-    pub fn set_unnamed_address(global: ValueRef, unnamed_addr: UnnamedAddr);
     #[link_name = "LLVMGlobalGetValueType"]
     pub fn global_get_value_type(global: ValueRef) -> TypeRef;
     #[link_name = "LLVMGetAlignment"]
@@ -859,22 +502,10 @@ unsafe extern "C" {
     pub fn get_initializer(global_var: ValueRef) -> ValueRef;
     #[link_name = "LLVMSetInitializer"]
     pub fn set_initializer(global_var: ValueRef, constant_val: ValueRef);
-    #[link_name = "LLVMIsThreadLocal"]
-    pub fn is_thread_local(global_var: ValueRef) -> Bool;
-    #[link_name = "LLVMSetThreadLocal"]
-    pub fn set_thread_local(global_var: ValueRef, is_thread_local: Bool);
-    #[link_name = "LLVMGetThreadLocalMode"]
-    pub fn get_thread_local_mode(global_var: ValueRef) -> ThreadLocalMode;
-    #[link_name = "LLVMSetThreadLocalMode"]
-    pub fn set_thread_local_mode(global_var: ValueRef, mode: ThreadLocalMode);
     #[link_name = "LLVMIsGlobalConstant"]
     pub fn is_global_constant(global_var: ValueRef) -> Bool;
     #[link_name = "LLVMSetGlobalConstant"]
     pub fn set_global_constant(global_var: ValueRef, is_constant: Bool);
-    #[link_name = "LLVMIsExternallyInitialized"]
-    pub fn is_externally_initialized(global_var: ValueRef) -> Bool;
-    #[link_name = "LLVMSetExternallyInitialized"]
-    pub fn set_externally_initialized(global_var: ValueRef, is_ext_init: Bool);
 
     // Functions and parameters
     #[link_name = "LLVMDeleteFunction"]
@@ -897,24 +528,8 @@ unsafe extern "C" {
         param_types: *mut TypeRef,
         param_count: usize,
     ) -> TypeRef;
-    #[link_name = "LLVMIntrinsicIsOverloaded"]
-    pub fn intrinsic_is_overloaded(id: c_uint) -> Bool;
-    #[link_name = "LLVMGetFunctionCallConv"]
-    pub fn get_function_call_conv(fn_: ValueRef) -> c_uint;
-    #[link_name = "LLVMSetFunctionCallConv"]
-    pub fn set_function_call_conv(fn_: ValueRef, cc: c_uint);
     #[link_name = "LLVMAddAttributeAtIndex"]
     pub fn add_attribute_at_index(f: ValueRef, idx: AttributeIndex, a: AttributeRef);
-    #[link_name = "LLVMGetAttributeCountAtIndex"]
-    pub fn get_attribute_count_at_index(f: ValueRef, idx: AttributeIndex) -> c_uint;
-    #[link_name = "LLVMGetAttributesAtIndex"]
-    pub fn get_attributes_at_index(f: ValueRef, idx: AttributeIndex, attrs: *mut AttributeRef);
-    #[link_name = "LLVMGetEnumAttributeAtIndex"]
-    pub fn get_enum_attribute_at_index(
-        f: ValueRef,
-        idx: AttributeIndex,
-        kind_id: c_uint,
-    ) -> AttributeRef;
     #[link_name = "LLVMGetStringAttributeAtIndex"]
     pub fn get_string_attribute_at_index(
         f: ValueRef,
@@ -922,8 +537,6 @@ unsafe extern "C" {
         k: *const c_char,
         k_len: c_uint,
     ) -> AttributeRef;
-    #[link_name = "LLVMRemoveEnumAttributeAtIndex"]
-    pub fn remove_enum_attribute_at_index(f: ValueRef, idx: AttributeIndex, kind_id: c_uint);
     #[link_name = "LLVMRemoveStringAttributeAtIndex"]
     pub fn remove_string_attribute_at_index(
         f: ValueRef,
@@ -933,50 +546,28 @@ unsafe extern "C" {
     );
     #[link_name = "LLVMCountParams"]
     pub fn count_params(fn_: ValueRef) -> c_uint;
-    #[link_name = "LLVMGetParams"]
-    pub fn get_params(fn_: ValueRef, params: *mut ValueRef);
     #[link_name = "LLVMGetParam"]
     pub fn get_param(fn_: ValueRef, index: c_uint) -> ValueRef;
-    #[link_name = "LLVMGetParamParent"]
-    pub fn get_param_parent(inst: ValueRef) -> ValueRef;
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMGetFirstParam"]
     pub fn get_first_param(fn_: ValueRef) -> ValueRef;
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMGetNextParam"]
     pub fn get_next_param(arg: ValueRef) -> ValueRef;
 
     // Basic blocks
-    #[link_name = "LLVMBasicBlockAsValue"]
-    pub fn basic_block_as_value(bb: BasicBlockRef) -> ValueRef;
-    #[link_name = "LLVMValueIsBasicBlock"]
-    pub fn value_is_basic_block(val: ValueRef) -> Bool;
-    #[link_name = "LLVMValueAsBasicBlock"]
-    pub fn value_as_basic_block(val: ValueRef) -> BasicBlockRef;
-    #[link_name = "LLVMGetBasicBlockName"]
-    pub fn get_basic_block_name(bb: BasicBlockRef) -> *const c_char;
     #[link_name = "LLVMGetBasicBlockParent"]
     pub fn get_basic_block_parent(bb: BasicBlockRef) -> ValueRef;
     #[link_name = "LLVMGetBasicBlockTerminator"]
     pub fn get_basic_block_terminator(bb: BasicBlockRef) -> ValueRef;
-    #[link_name = "LLVMCountBasicBlocks"]
-    pub fn count_basic_blocks(fn_: ValueRef) -> c_uint;
-    #[link_name = "LLVMGetBasicBlocks"]
-    pub fn get_basic_blocks(fn_: ValueRef, basic_blocks: *mut BasicBlockRef);
     #[link_name = "LLVMGetFirstBasicBlock"]
     pub fn get_first_basic_block(fn_: ValueRef) -> BasicBlockRef;
     #[link_name = "LLVMGetLastBasicBlock"]
     pub fn get_last_basic_block(fn_: ValueRef) -> BasicBlockRef;
     #[link_name = "LLVMGetNextBasicBlock"]
     pub fn get_next_basic_block(bb: BasicBlockRef) -> BasicBlockRef;
-    #[link_name = "LLVMGetPreviousBasicBlock"]
-    pub fn get_previous_basic_block(bb: BasicBlockRef) -> BasicBlockRef;
     #[link_name = "LLVMGetEntryBasicBlock"]
     pub fn get_entry_basic_block(fn_: ValueRef) -> BasicBlockRef;
-    #[link_name = "LLVMInsertExistingBasicBlockAfterInsertBlock"]
-    pub fn insert_existing_basic_block_after_insert_block(builder: BuilderRef, bb: BasicBlockRef);
-    #[link_name = "LLVMAppendExistingBasicBlock"]
-    pub fn append_existing_basic_block(fn_: ValueRef, bb: BasicBlockRef);
-    #[link_name = "LLVMCreateBasicBlockInContext"]
-    pub fn create_basic_block_in_context(c: ContextRef, name: *const c_char) -> BasicBlockRef;
     #[link_name = "LLVMAppendBasicBlockInContext"]
     pub fn append_basic_block_in_context(
         c: ContextRef,
@@ -989,18 +580,10 @@ unsafe extern "C" {
         bb: BasicBlockRef,
         name: *const c_char,
     ) -> BasicBlockRef;
-    #[link_name = "LLVMDeleteBasicBlock"]
-    pub fn delete_basic_block(bb: BasicBlockRef);
-    #[link_name = "LLVMRemoveBasicBlockFromParent"]
-    pub fn remove_basic_block_from_parent(bb: BasicBlockRef);
-    #[link_name = "LLVMMoveBasicBlockBefore"]
-    pub fn move_basic_block_before(bb: BasicBlockRef, move_pos: BasicBlockRef);
     #[link_name = "LLVMMoveBasicBlockAfter"]
     pub fn move_basic_block_after(bb: BasicBlockRef, move_pos: BasicBlockRef);
     #[link_name = "LLVMGetFirstInstruction"]
     pub fn get_first_instruction(bb: BasicBlockRef) -> ValueRef;
-    #[link_name = "LLVMGetLastInstruction"]
-    pub fn get_last_instruction(bb: BasicBlockRef) -> ValueRef;
 
     // Instructions
     #[link_name = "LLVMHasMetadata"]
@@ -1019,79 +602,32 @@ unsafe extern "C" {
         entries: *mut ValueMetadataEntry,
         index: c_uint,
     ) -> c_uint;
-    #[link_name = "LLVMValueMetadataEntriesGetMetadata"]
-    pub fn value_metadata_entries_get_metadata(
-        entries: *mut ValueMetadataEntry,
-        index: c_uint,
-    ) -> MetadataRef;
     #[link_name = "LLVMDisposeValueMetadataEntries"]
     pub fn dispose_value_metadata_entries(entries: *mut ValueMetadataEntry);
     #[link_name = "LLVMGetInstructionParent"]
     pub fn get_instruction_parent(inst: ValueRef) -> BasicBlockRef;
     #[link_name = "LLVMGetNextInstruction"]
     pub fn get_next_instruction(inst: ValueRef) -> ValueRef;
-    #[link_name = "LLVMGetPreviousInstruction"]
-    pub fn get_previous_instruction(inst: ValueRef) -> ValueRef;
-    #[link_name = "LLVMInstructionRemoveFromParent"]
-    pub fn instruction_remove_from_parent(inst: ValueRef);
     #[link_name = "LLVMInstructionEraseFromParent"]
     pub fn instruction_erase_from_parent(inst: ValueRef);
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMGetInstructionOpcode"]
     pub fn get_instruction_opcode(inst: ValueRef) -> Opcode;
-    #[link_name = "LLVMGetICmpPredicate"]
-    pub fn get_i_cmp_predicate(inst: ValueRef) -> IntPredicate;
-    #[link_name = "LLVMGetFCmpPredicate"]
-    pub fn get_f_cmp_predicate(inst: ValueRef) -> RealPredicate;
-    #[link_name = "LLVMInstructionClone"]
-    pub fn instruction_clone(inst: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsATerminatorInst"]
-    pub fn is_a_terminator_inst(inst: ValueRef) -> ValueRef;
     #[link_name = "LLVMGetNumArgOperands"]
     pub fn get_num_arg_operands(instr: ValueRef) -> c_uint;
-    #[link_name = "LLVMGetInstructionCallConv"]
-    pub fn get_instruction_call_conv(instr: ValueRef) -> c_uint;
-    #[link_name = "LLVMSetInstructionCallConv"]
-    pub fn set_instruction_call_conv(instr: ValueRef, cc: c_uint);
     #[link_name = "LLVMAddCallSiteAttribute"]
     pub fn add_call_site_attribute(c: ValueRef, idx: AttributeIndex, a: AttributeRef);
-    #[link_name = "LLVMGetCallSiteAttributeCount"]
-    pub fn get_call_site_attribute_count(c: ValueRef, idx: AttributeIndex) -> c_uint;
-    #[link_name = "LLVMGetCallSiteAttributes"]
-    pub fn get_call_site_attributes(c: ValueRef, idx: AttributeIndex, attrs: *mut AttributeRef);
-    #[link_name = "LLVMGetCallSiteEnumAttribute"]
-    pub fn get_call_site_enum_attribute(
-        c: ValueRef,
-        idx: AttributeIndex,
-        kind_id: c_uint,
-    ) -> AttributeRef;
     #[link_name = "LLVMGetCalledFunctionType"]
     pub fn get_called_function_type(c: ValueRef) -> TypeRef;
     #[link_name = "LLVMGetCalledValue"]
     pub fn get_called_value(instr: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsTailCall"]
-    pub fn is_tail_call(call_inst: ValueRef) -> Bool;
-    #[link_name = "LLVMSetTailCall"]
-    pub fn set_tail_call(call_inst: ValueRef, is_tail_call: Bool);
-    #[link_name = "LLVMGetNumSuccessors"]
-    pub fn get_num_successors(term: ValueRef) -> c_uint;
-    #[link_name = "LLVMGetSuccessor"]
-    pub fn get_successor(term: ValueRef, i: c_uint) -> BasicBlockRef;
     #[link_name = "LLVMSetSuccessor"]
     pub fn set_successor(term: ValueRef, i: c_uint, block: BasicBlockRef);
-    #[link_name = "LLVMIsConditional"]
-    pub fn is_conditional(branch: ValueRef) -> Bool;
-    #[link_name = "LLVMGetCondition"]
-    pub fn get_condition(branch: ValueRef) -> ValueRef;
-    #[link_name = "LLVMSetCondition"]
-    pub fn set_condition(branch: ValueRef, cond: ValueRef);
-    #[link_name = "LLVMGetSwitchDefaultDest"]
-    pub fn get_switch_default_dest(switch_instr: ValueRef) -> BasicBlockRef;
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMGetAllocatedType"]
     pub fn get_allocated_type(alloca: ValueRef) -> TypeRef;
     #[link_name = "LLVMIsInBounds"]
     pub fn is_in_bounds(gep: ValueRef) -> Bool;
-    #[link_name = "LLVMSetIsInBounds"]
-    pub fn set_is_in_bounds(gep: ValueRef, in_bounds: Bool);
     #[link_name = "LLVMGetGEPSourceElementType"]
     pub fn get_gep_source_element_type(gep: ValueRef) -> TypeRef;
     #[link_name = "LLVMAddIncoming"]
@@ -1101,54 +637,34 @@ unsafe extern "C" {
         incoming_blocks: *mut BasicBlockRef,
         count: c_uint,
     );
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMCountIncoming"]
     pub fn count_incoming(phi_node: ValueRef) -> c_uint;
+    #[cfg(feature = "oracle")]
     #[link_name = "LLVMGetIncomingValue"]
     pub fn get_incoming_value(phi_node: ValueRef, index: c_uint) -> ValueRef;
-    #[link_name = "LLVMGetIncomingBlock"]
-    pub fn get_incoming_block(phi_node: ValueRef, index: c_uint) -> BasicBlockRef;
     #[link_name = "LLVMGetNumIndices"]
     pub fn get_num_indices(inst: ValueRef) -> c_uint;
     #[link_name = "LLVMGetIndices"]
     pub fn get_indices(inst: ValueRef) -> *const c_uint;
-    #[link_name = "LLVMGetVolatile"]
-    pub fn get_volatile(memory_access_inst: ValueRef) -> Bool;
     #[link_name = "LLVMSetVolatile"]
     pub fn set_volatile(memory_access_inst: ValueRef, is_volatile: Bool);
-    #[link_name = "LLVMGetOrdering"]
-    pub fn get_ordering(memory_access_inst: ValueRef) -> AtomicOrdering;
     #[link_name = "LLVMSetOrdering"]
     pub fn set_ordering(memory_access_inst: ValueRef, ordering: AtomicOrdering);
     #[link_name = "LLVMGetAtomicRMWBinOp"]
     pub fn get_atomic_rmw_bin_op(atomic_rmw_inst: ValueRef) -> AtomicRMWBinOp;
-    #[link_name = "LLVMIsAtomicSingleThread"]
-    pub fn is_atomic_single_thread(atomic_inst: ValueRef) -> Bool;
-    #[link_name = "LLVMGetCmpXchgSuccessOrdering"]
-    pub fn get_cmp_xchg_success_ordering(cmp_xchg_inst: ValueRef) -> AtomicOrdering;
-    #[link_name = "LLVMGetCmpXchgFailureOrdering"]
-    pub fn get_cmp_xchg_failure_ordering(cmp_xchg_inst: ValueRef) -> AtomicOrdering;
-    #[link_name = "LLVMGetNumMaskElements"]
-    pub fn get_num_mask_elements(shuffle_vector_inst: ValueRef) -> c_uint;
-    #[link_name = "LLVMGetUndefMaskElem"]
-    pub fn get_undef_mask_elem() -> c_int;
-    #[link_name = "LLVMGetMaskValue"]
-    pub fn get_mask_value(shuffle_vector_inst: ValueRef, elt: c_uint) -> c_int;
 
     // The builder
     #[link_name = "LLVMCreateBuilderInContext"]
     pub fn create_builder_in_context(c: ContextRef) -> BuilderRef;
     #[link_name = "LLVMDisposeBuilder"]
     pub fn dispose_builder(builder: BuilderRef);
-    #[link_name = "LLVMPositionBuilder"]
-    pub fn position_builder(builder: BuilderRef, block: BasicBlockRef, instr: ValueRef);
     #[link_name = "LLVMPositionBuilderBefore"]
     pub fn position_builder_before(builder: BuilderRef, instr: ValueRef);
     #[link_name = "LLVMPositionBuilderAtEnd"]
     pub fn position_builder_at_end(builder: BuilderRef, block: BasicBlockRef);
     #[link_name = "LLVMGetInsertBlock"]
     pub fn get_insert_block(builder: BuilderRef) -> BasicBlockRef;
-    #[link_name = "LLVMClearInsertionPosition"]
-    pub fn clear_insertion_position(builder: BuilderRef);
     #[link_name = "LLVMBuildRetVoid"]
     pub fn build_ret_void(b: BuilderRef) -> ValueRef;
     #[link_name = "LLVMBuildRet"]
@@ -1171,24 +687,11 @@ unsafe extern "C" {
     ) -> ValueRef;
     #[link_name = "LLVMAddCase"]
     pub fn add_case(switch: ValueRef, on_val: ValueRef, dest: BasicBlockRef);
+    #[cfg(test)]
     #[link_name = "LLVMBuildUnreachable"]
     pub fn build_unreachable(b: BuilderRef) -> ValueRef;
     #[link_name = "LLVMBuildAdd"]
     pub fn build_add(b: BuilderRef, lhs: ValueRef, rhs: ValueRef, name: *const c_char) -> ValueRef;
-    #[link_name = "LLVMBuildNSWAdd"]
-    pub fn build_nsw_add(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildNUWAdd"]
-    pub fn build_nuw_add(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
     #[link_name = "LLVMBuildFAdd"]
     pub fn build_f_add(
         b: BuilderRef,
@@ -1198,20 +701,6 @@ unsafe extern "C" {
     ) -> ValueRef;
     #[link_name = "LLVMBuildSub"]
     pub fn build_sub(b: BuilderRef, lhs: ValueRef, rhs: ValueRef, name: *const c_char) -> ValueRef;
-    #[link_name = "LLVMBuildNSWSub"]
-    pub fn build_nsw_sub(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildNUWSub"]
-    pub fn build_nuw_sub(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
     #[link_name = "LLVMBuildFSub"]
     pub fn build_f_sub(
         b: BuilderRef,
@@ -1221,20 +710,6 @@ unsafe extern "C" {
     ) -> ValueRef;
     #[link_name = "LLVMBuildMul"]
     pub fn build_mul(b: BuilderRef, lhs: ValueRef, rhs: ValueRef, name: *const c_char) -> ValueRef;
-    #[link_name = "LLVMBuildNSWMul"]
-    pub fn build_nsw_mul(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildNUWMul"]
-    pub fn build_nuw_mul(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
     #[link_name = "LLVMBuildFMul"]
     pub fn build_f_mul(
         b: BuilderRef,
@@ -1249,22 +724,9 @@ unsafe extern "C" {
         rhs: ValueRef,
         name: *const c_char,
     ) -> ValueRef;
-    #[link_name = "LLVMBuildExactUDiv"]
-    pub fn build_exact_u_div(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildSDiv"]
     pub fn build_s_div(
-        b: BuilderRef,
-        lhs: ValueRef,
-        rhs: ValueRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildExactSDiv"]
-    pub fn build_exact_s_div(
         b: BuilderRef,
         lhs: ValueRef,
         rhs: ValueRef,
@@ -1284,6 +746,7 @@ unsafe extern "C" {
         rhs: ValueRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildSRem"]
     pub fn build_s_rem(
         b: BuilderRef,
@@ -1291,6 +754,7 @@ unsafe extern "C" {
         rhs: ValueRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildFRem"]
     pub fn build_f_rem(
         b: BuilderRef,
@@ -1392,6 +856,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildFPToUI"]
     pub fn build_fp_to_ui(
         b: BuilderRef,
@@ -1399,6 +864,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildFPToSI"]
     pub fn build_fp_to_si(
         b: BuilderRef,
@@ -1413,6 +879,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildSIToFP"]
     pub fn build_si_to_fp(
         b: BuilderRef,
@@ -1455,6 +922,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildAddrSpaceCast"]
     pub fn build_addr_space_cast(
         b: BuilderRef,
@@ -1462,27 +930,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
-    #[link_name = "LLVMBuildZExtOrBitCast"]
-    pub fn build_z_ext_or_bit_cast(
-        b: BuilderRef,
-        val: ValueRef,
-        dest_ty: TypeRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildSExtOrBitCast"]
-    pub fn build_s_ext_or_bit_cast(
-        b: BuilderRef,
-        val: ValueRef,
-        dest_ty: TypeRef,
-        name: *const c_char,
-    ) -> ValueRef;
-    #[link_name = "LLVMBuildTruncOrBitCast"]
-    pub fn build_trunc_or_bit_cast(
-        b: BuilderRef,
-        val: ValueRef,
-        dest_ty: TypeRef,
-        name: *const c_char,
-    ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildCast"]
     pub fn build_cast(
         b: BuilderRef,
@@ -1498,6 +946,7 @@ unsafe extern "C" {
         dest_ty: TypeRef,
         name: *const c_char,
     ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildIntCast2"]
     pub fn build_int_cast2(
         b: BuilderRef,
@@ -1592,13 +1041,7 @@ unsafe extern "C" {
     pub fn build_is_null(b: BuilderRef, val: ValueRef, name: *const c_char) -> ValueRef;
     #[link_name = "LLVMBuildIsNotNull"]
     pub fn build_is_not_null(b: BuilderRef, val: ValueRef, name: *const c_char) -> ValueRef;
-    #[link_name = "LLVMBuildFence"]
-    pub fn build_fence(
-        b: BuilderRef,
-        ordering: AtomicOrdering,
-        single_thread: Bool,
-        name: *const c_char,
-    ) -> ValueRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMBuildAtomicRMW"]
     pub fn build_atomic_rmw(
         b: BuilderRef,
@@ -1620,13 +1063,7 @@ unsafe extern "C" {
     ) -> ValueRef;
 
     // Memory buffers
-    #[link_name = "LLVMCreateMemoryBufferWithMemoryRange"]
-    pub fn create_memory_buffer_with_memory_range(
-        input_data: *const c_char,
-        input_data_length: usize,
-        buffer_name: *const c_char,
-        requires_null_terminator: Bool,
-    ) -> MemoryBufferRef;
+    #[cfg(all(test, feature = "oracle"))]
     #[link_name = "LLVMCreateMemoryBufferWithMemoryRangeCopy"]
     pub fn create_memory_buffer_with_memory_range_copy(
         input_data: *const c_char,
@@ -1663,10 +1100,9 @@ unsafe extern "C" {
         action: VerifierFailureAction,
         out_message: *mut *mut c_char,
     ) -> Bool;
-    #[link_name = "LLVMVerifyFunction"]
-    pub fn verify_function(fn_: ValueRef, action: VerifierFailureAction) -> Bool;
 
     // The linker (the shim links the helpers; this form, with no flag, is for tests)
+    #[cfg(test)]
     #[link_name = "LLVMLinkModules2"]
     pub fn link_modules2(dest: ModuleRef, src: ModuleRef) -> Bool;
 }
@@ -1675,6 +1111,7 @@ unsafe extern "C" {
 // without exceptions, so nothing unwinds out of it.
 unsafe extern "C" {
     /// Links LLVM's core and the barrier pass through the pass's own declaration: answers 1.
+    #[cfg(test)]
     pub fn airconv_shim_probe() -> c_int;
 
     /// Sets the builder's fast-math flags (`IRBuilder::setFastMathFlags`).
@@ -1730,6 +1167,7 @@ unsafe extern "C" {
     /// Declares (or finds) `air.simdgroup.barrier` in `module` as the barrier pass does.
     ///
     /// Answers the function.
+    #[cfg(test)]
     pub fn airconv_shim_declare_simdgroup_barrier(module: ModuleRef) -> ValueRef;
 
     /// Splits `block` before `before` (`BasicBlock::splitBasicBlock`).

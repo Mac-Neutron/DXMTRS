@@ -49,11 +49,11 @@ pub struct EntryView {
     /// A DXIL shader's resource ranges, none for DXBC.
     pub resources: Vec<DxilEntryResource>,
     /// What the elements' `name` pointers point into.
-    pub names: Vec<CString>,
+    pub _names: Vec<CString>,
     /// What the elements' `semantic_indices` pointers point into, each element's in turn.
     ///
     /// One per DXBC element.
-    pub semantic_indices: Box<[u32]>,
+    pub _semantic_indices: Box<[u32]>,
 }
 
 // SAFETY: the view's raw pointers point into its own heap data, which nothing writes after the

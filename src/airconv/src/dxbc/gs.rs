@@ -1025,7 +1025,7 @@ impl<'cx> MeshOutput<'_, 'cx> {
         let tcx = self.air.builder().cx().tcx();
         for handler in handlers {
             match *handler {
-                Dxil::Position { reg, .. } => {
+                Dxil::Position { reg } => {
                     replay::pop_mesh_output_position(self.air, self.res, reg, vertex)?;
                 }
                 Dxil::RenderTargetArrayIndex { reg, mask } => {

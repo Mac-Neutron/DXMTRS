@@ -81,12 +81,6 @@ const PURE: &Attrs = &[(FN, b"nounwind"), (FN, b"willreturn"), (FN, b"readnone")
 const PLAIN: &Attrs = &[(FN, b"nounwind"), (FN, b"willreturn")];
 /// Barriers (the shim's barrier pass declares `air.simdgroup.barrier` with the same list).
 const BARRIER: &Attrs = &[(FN, b"convergent"), (FN, b"nounwind"), (FN, b"willreturn")];
-/// The atomic fence.
-const ATOMIC_FENCE: &Attrs = &[
-    (FN, b"mustprogress"),
-    (FN, b"nounwind"),
-    (FN, b"willreturn"),
-];
 /// The device-coherent load.
 const COHERENT_LOAD: &Attrs = &[
     (1, b"nocapture"),
@@ -177,8 +171,6 @@ pub enum SampleType {
     Int,
     /// `sample_uint`.
     Uint,
-    /// `sample_half`.
-    Half,
 }
 
 /// How a texture is accessed (`Texture::MemoryAccess`), the value its calls pass.
@@ -244,8 +236,6 @@ impl MemFlags {
     pub const THREADGROUP: Self = Self(2);
     /// `Texture`.
     pub const TEXTURE: Self = Self(4);
-    /// `ObjectData` (the texture bit).
-    pub const OBJECT_DATA: Self = Self(4);
 
     /// The flags of both.
     #[must_use]
@@ -263,14 +253,10 @@ impl MemFlags {
 /// The threads a fence orders against (`ThreadScope`).
 #[repr(u32)]
 pub enum ThreadScope {
-    /// `Thread`.
-    Thread = 0,
     /// `Threadgroup`.
     Threadgroup = 1,
     /// `Device`.
     Device = 2,
-    /// `Simdgroup`.
-    Simdgroup = 4,
 }
 
 /// A floating-point unary operation (`AIRBuilder::FPUnOp`).
@@ -346,15 +332,12 @@ pub enum IntBinOp {
 /// A sample's level arguments: the C++'s `sample_level`, `sample_bias` and `sample_min_lod_clamp`.
 pub enum Lod<'cx> {
     /// Neither (`CreateSample` with no tag).
+    #[cfg(test)]
     Implicit,
     /// `sample_level`.
     Level(Val<'cx>),
-    /// `sample_bias`.
-    Bias(Val<'cx>),
     /// `sample_bias` and `sample_min_lod_clamp`.
-    BiasMinLod(Val<'cx>, Val<'cx>),
-    /// `sample_min_lod_clamp`.
-    MinLod(Val<'cx>),
+    BiasMin(Val<'cx>, Val<'cx>),
 }
 
 /// Where a sample or gather reads: the coordinates, the array slice and the texel offset.
@@ -1069,24 +1052,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         call.finish(name, self.void_ty(), BARRIER)
     }
 
-    /// `air.atomic.fence`, sequentially consistent or relaxed (`CreateAtomicFence`).
-    ///
-    /// # Errors
-    ///
-    /// None in practice: only P15's name check, which the name passes.
-    pub fn create_atomic_fence(
-        &self,
-        flags: MemFlags,
-        scope: ThreadScope,
-        relaxed: bool,
-    ) -> Result<Val<'cx>, Error> {
-        let mut call = Call::new(self);
-        call.push(self.int_ty(1), self.get_int(flags.bits()));
-        call.push(self.int_ty(1), self.get_int(if relaxed { 0 } else { 5 }));
-        call.push(self.int_ty(1), self.get_int(scope as u32));
-        call.finish(b"air.atomic.fence", self.void_ty(), ATOMIC_FENCE)
-    }
-
     // Math.
 
     /// `air.fma`, or a multiply and an add when FMA is defused (`CreateFMA`).
@@ -1434,26 +1399,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         )
     }
 
-    /// `air.set_primitive_data_mesh` of a varying (`CreateSetMeshPrimitiveData`).
-    ///
-    /// # Errors
-    ///
-    /// A function without a mesh argument (where the C++ called with null).
-    pub fn create_set_mesh_primitive_data(
-        &self,
-        primitive: Val<'cx>,
-        data_index: Val<'cx>,
-        value: Val<'cx>,
-    ) -> Result<Val<'cx>, Error> {
-        let mut name = b"air.set_primitive_data_mesh".to_vec();
-        name.extend(self.type_overload_suffix(value.ty(), Signedness::DontCare));
-        let int = self.int_ty(1);
-        self.mesh_call(
-            &name,
-            &[(int, data_index), (int, primitive), (value.ty(), value)],
-        )
-    }
-
     /// `air.set_index_mesh`, the vertex as a byte (`CreateSetMeshIndex`).
     ///
     /// # Errors
@@ -1727,17 +1672,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
             .const_vector(&[self.get_int(x), self.get_int(y), self.get_int(z)])
     }
 
-    /// The `<4 x i32>` constant (`getInt4`).
-    #[must_use]
-    pub fn get_int4(&self, x: u32, y: u32, z: u32, w: u32) -> Val<'cx> {
-        self.b.cx().const_vector(&[
-            self.get_int(x),
-            self.get_int(y),
-            self.get_int(z),
-            self.get_int(w),
-        ])
-    }
-
     /// The `i1` constant (`getBool`).
     #[must_use]
     pub fn get_bool(&self, v: bool) -> Val<'cx> {
@@ -1745,12 +1679,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
     }
 
     // Types.
-
-    /// The identified struct `name`, made opaque when there is none (`getOrCreateStructType`).
-    #[must_use]
-    pub fn get_or_create_struct_type(&self, name: &CStr) -> Ty {
-        self.tcx().named_struct(name)
-    }
 
     /// `i32`, or a vector of `n` of them (`getIntTy`).
     #[must_use]
@@ -1796,8 +1724,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
     }
 
     /// A texel: one `float` for depth, else four lanes of the sample type (`getTexelType`).
-    ///
-    /// A `half` texture's texels are `float`s, where the C++ ended in `llvm_unreachable`.
     #[must_use]
     pub fn texel_type(&self, texture: &Texture) -> Ty {
         if texture.kind.info().has(DEPTH) {
@@ -1805,7 +1731,7 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         }
         match texture.sample_type {
             SampleType::Int | SampleType::Uint => self.int_ty(4),
-            SampleType::Float | SampleType::Half => self.float_ty(4),
+            SampleType::Float => self.float_ty(4),
         }
     }
 
@@ -1872,12 +1798,6 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
     #[must_use]
     pub fn mesh_handle(&self) -> Option<Val<'cx>> {
         self.function_arg(self.mesh_handle_type())
-    }
-
-    /// The current function's grid properties argument (`getMeshGridProps`).
-    #[must_use]
-    pub fn mesh_grid_props(&self) -> Option<Val<'cx>> {
-        self.function_arg(self.mesh_grid_props_type())
     }
 
     /// `v`, with its NaN lanes replaced by zero (`getNaNToZero`).
@@ -1966,11 +1886,10 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
     fn lod_args(&self, lod: &Lod<'cx>) -> (bool, Val<'cx>, Val<'cx>) {
         let zero = || self.get_float(0.0);
         match *lod {
+            #[cfg(test)]
             Lod::Implicit => (false, zero(), zero()),
             Lod::Level(level) => (true, level, zero()),
-            Lod::Bias(bias) => (false, bias, zero()),
-            Lod::BiasMinLod(bias, min_lod) => (false, bias, min_lod),
-            Lod::MinLod(min_lod) => (false, zero(), min_lod),
+            Lod::BiasMin(bias, min_lod) => (false, bias, min_lod),
         }
     }
 
@@ -2242,7 +2161,7 @@ const fn texel_sign(texture: &Texture) -> Signedness {
     match texture.sample_type {
         SampleType::Int => Signedness::Signed,
         SampleType::Uint => Signedness::Unsigned,
-        SampleType::Float | SampleType::Half => Signedness::DontCare,
+        SampleType::Float => Signedness::DontCare,
     }
 }
 

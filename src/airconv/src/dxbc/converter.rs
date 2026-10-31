@@ -68,10 +68,9 @@ const ATOMIC_FENCE: &Attrs = &[
     (FN, b"willreturn"),
 ];
 
-/// A constant buffer's address, and its descriptor's metadata where it has one.
+/// A constant buffer's address.
 pub struct ConstantBufferDescriptor<'cx> {
     pub pointer: Val<'cx>,
-    pub metadata: Option<Val<'cx>>,
 }
 
 /// A sampler, its cube variant and its metadata (the bias in the low word).
@@ -2192,7 +2191,7 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             tex.handle,
             c.sampler,
             &at,
-            &Lod::BiasMinLod(sampler.bias, min_lod),
+            &Lod::BiasMin(sampler.bias, min_lod),
         )?;
         self.store_texel(&sample.dst, value, &tex.swizzle)
     }
@@ -2243,7 +2242,7 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             tex.handle,
             c.sampler,
             &at,
-            &Lod::BiasMinLod(bias, min_lod),
+            &Lod::BiasMin(bias, min_lod),
         )?;
         self.store_texel(&sample.dst, value, &tex.swizzle)
     }
@@ -2316,7 +2315,7 @@ impl<'a, 'cx> Converter<'a, 'cx> {
         let lod = if sample.level_zero {
             Lod::Level(self.air.get_float(0.0))
         } else {
-            Lod::BiasMinLod(sampler.bias, min_lod)
+            Lod::BiasMin(sampler.bias, min_lod)
         };
         let (value, _) = self.air.create_sample_cmp(
             &tex.texture,

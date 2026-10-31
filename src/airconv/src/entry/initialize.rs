@@ -133,8 +133,8 @@ pub fn entry_view(ir: &DxbcShader) -> Result<EntryView, Error> {
         inputs,
         outputs,
         resources: Vec::new(),
-        names,
-        semantic_indices,
+        _names: names,
+        _semantic_indices: semantic_indices,
     })
 }
 
@@ -189,8 +189,8 @@ pub fn dxil_entry_view(entry: &EntryInfo) -> Result<EntryView, Error> {
         inputs,
         outputs,
         resources,
-        names,
-        semantic_indices,
+        _names: names,
+        _semantic_indices: semantic_indices,
     })
 }
 

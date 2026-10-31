@@ -59,6 +59,7 @@ pub struct DxilShader {
     /// A compute shader with 2D `numthreads` (X and Y even) that reads quads.
     ///
     /// Its thread IDs are remapped so that Metal's lane quads run D3D's 2x2 quads.
+    #[cfg(test)]
     pub quads_2d: bool,
     /// The 64-bit groupshared atomics' threadgroup lock array size, 0 without them.
     pub gs_locks: u32,
@@ -207,6 +208,7 @@ pub fn initialize(part: &DxilPart<'_>, capture_hash: u64) -> Result<DxilShader, 
         lane_index_arg,
         lane_count_arg,
         include_helper_lanes,
+        #[cfg(test)]
         quads_2d,
         gs_locks,
         capture_hash,

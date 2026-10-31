@@ -29,21 +29,20 @@ use core::{
     ffi::{CStr, c_char, c_void},
     marker::PhantomData,
     mem::ManuallyDrop,
-    slice,
 };
 use std::{
     ffi::CString,
     io::{self, Write as _},
 };
 
-pub use builder::{Builder, FastMath, FastMathGuard};
+pub use builder::{Builder, FastMath};
 pub use ty::{Ty, TyCx, TyKind};
 
 use crate::api::Error;
 
 /// A NUL-terminated copy of a name the C API takes as a C string.
 ///
-/// A name holding a NUL is P15's error; the length-taking forms ([`Val::set_name`],
+/// A name holding a NUL is P15's error; the length-taking forms (`Val::set_name`,
 /// [`Context::md_string`]) need no copy.
 ///
 /// # Errors
@@ -172,6 +171,7 @@ impl Context {
     /// `raw` is a live value of this context and `ty` (of its table) is its type.
     #[must_use]
     pub const unsafe fn val(&self, raw: sys::ValueRef, ty: Ty) -> Val<'_> {
+        let _ = self.raw;
         // SAFETY: the caller's contract.
         unsafe { Val::new(raw, ty) }
     }
@@ -317,37 +317,6 @@ impl Context {
         unsafe { Val::new(raw, ty) }
     }
 
-    /// The constant of the literal struct of `fields`' types (`ConstantStruct::getAnon`).
-    #[must_use]
-    pub fn const_struct<'cx>(&'cx self, fields: &[Val<'cx>], packed: bool) -> Val<'cx> {
-        let types: Vec<Ty> = fields.iter().map(|f| f.ty).collect();
-        let ty = self.tcx.literal_struct(&types, packed);
-        let mut raws: Vec<sys::ValueRef> = fields.iter().map(|f| f.raw).collect();
-        // SAFETY: constants of this context; `raws` holds its length.
-        let raw = unsafe {
-            sys::const_struct_in_context(
-                self.raw,
-                raws.as_mut_ptr(),
-                len_u32(raws.len()),
-                packed.into(),
-            )
-        };
-        // SAFETY: a constant of this context, of type `ty`.
-        unsafe { Val::new(raw, ty) }
-    }
-
-    /// The constant of the identified struct `ty` with `fields` (`ConstantStruct::get`).
-    #[must_use]
-    pub fn const_named_struct<'cx>(&'cx self, ty: Ty, fields: &[Val<'cx>]) -> Val<'cx> {
-        let mut raws: Vec<sys::ValueRef> = fields.iter().map(|f| f.raw).collect();
-        // SAFETY: `ty` lowers to a struct of this context, `raws` holds constants of its fields.
-        let raw = unsafe {
-            sys::const_named_struct(self.tcx.lower(ty), raws.as_mut_ptr(), len_u32(raws.len()))
-        };
-        // SAFETY: a constant of this context, of type `ty`.
-        unsafe { Val::new(raw, ty) }
-    }
-
     /// The metadata string of `bytes`, any bytes (`MDString::get`).
     #[must_use]
     pub fn md_string(&self, bytes: &[u8]) -> sys::MetadataRef {
@@ -432,15 +401,6 @@ impl<'cx> Module<'cx> {
     #[must_use]
     pub fn into_raw(self) -> sys::ModuleRef {
         ManuallyDrop::new(self).raw
-    }
-
-    /// The module's text (`Module::print`).
-    #[must_use]
-    pub fn print(&self) -> Vec<u8> {
-        // SAFETY: the module is live; the answer is a message disposed of below.
-        let text = unsafe { sys::print_module_to_string(self.raw) };
-        // SAFETY: the message just made.
-        unsafe { take_message(text) }
     }
 
     /// A new function `name` of the function type `ty`, external (`Function::Create`).
@@ -548,25 +508,6 @@ impl Val<'_> {
     #[must_use]
     pub const fn ty(self) -> Ty {
         self.ty
-    }
-
-    /// The value's name, any bytes (`Value::getName`).
-    #[must_use]
-    pub fn name(self) -> Vec<u8> {
-        let mut len = 0;
-        // SAFETY: a live value; `len` is writable.
-        let name = unsafe { sys::get_value_name2(self.raw, &raw mut len) };
-        if name.is_null() {
-            return Vec::new();
-        }
-        // SAFETY: LLVM answers `len` bytes at `name`, alive while the value keeps its name.
-        unsafe { slice::from_raw_parts(name.cast::<u8>(), len) }.to_vec()
-    }
-
-    /// Names the value, any bytes (`Value::setName`; a constant takes no name).
-    pub fn set_name(self, name: &[u8]) {
-        // SAFETY: a live value; `name` holds its length.
-        unsafe { sys::set_value_name2(self.raw, name.as_ptr().cast(), name.len()) };
     }
 
     /// The value's text (`Value::print`).
