@@ -451,6 +451,7 @@ src/dxgi/src/abi.rs Luid Clone,Copy,Default
 src/dxgi/src/abi.rs Rational Clone,Copy,Default
 src/dxgi/src/abi.rs Rect Clone,Copy,Default
 src/dxgi/src/abi.rs SampleDesc Clone,Copy
+src/dxmt/src/library.rs ResourceAccess Clone,Copy
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default
 src/dxmt/src/resource/buffer.rs BufferAllocationFlags Clone,Copy
 src/dxmt/src/resource/buffer.rs BufferViewKey Clone,Copy,PartialEq,Eq
