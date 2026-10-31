@@ -43,11 +43,6 @@ pub fn registry_ids() -> Vec<u64> {
     ids
 }
 
-/// A GPU's LUID: its registry ID with the bytes swapped, as DXGI's adapter answers.
-const fn luid(registry_id: u64) -> [u8; 8] {
-    registry_id.swap_bytes().to_ne_bytes()
-}
-
 /// A handle's registry ID.
 fn handle_id(handle: *mut c_void) -> u64 {
     handle as u64
@@ -128,7 +123,7 @@ extern "C" fn get_adapter_id_from_physical_gpu(
         return INVALID_ARGUMENT;
     }
     // SAFETY: `adapter_id` is non-null and the caller's `LUID`.
-    unsafe { adapter_id.write(luid(handle_id(gpu))) };
+    unsafe { adapter_id.write(dxmt_util::luid_from_registry_id(handle_id(gpu))) };
     OK
 }
 
@@ -157,7 +152,7 @@ extern "C" fn get_logical_gpu_info(gpu: *mut c_void, data: *mut LogicalGpuData) 
     unsafe {
         data.os_adapter_id
             .cast::<[u8; 8]>()
-            .write(luid(handle_id(gpu)));
+            .write(dxmt_util::luid_from_registry_id(handle_id(gpu)));
     };
     OK
 }

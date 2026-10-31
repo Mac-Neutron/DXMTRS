@@ -1,8 +1,9 @@
 //! COM's `IUnknown`, and the calls on it every DXMT DLL makes.
 
-use core::ffi::c_void;
+use core::{ffi::c_void, fmt};
 
 /// A COM interface ID.
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Guid {
     data1: u32,
@@ -21,6 +22,35 @@ impl Guid {
             data3,
             data4,
         }
+    }
+
+    /// Reads the GUID at `p`, which promises no alignment: none for a null pointer.
+    ///
+    /// # Safety
+    ///
+    /// `p` is null or addresses 16 readable bytes.
+    #[must_use]
+    pub unsafe fn read(p: *const Self) -> Option<Self> {
+        // SAFETY: the caller's: `p` is non-null here and addresses a GUID; the read assumes no alignment.
+        (!p.is_null()).then(|| unsafe { p.read_unaligned() })
+    }
+}
+
+/// `com_guid.cpp`'s form: lowercase hex, `00000000-0000-0000-0000-000000000000`.
+impl fmt::Display for Guid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:08x}-{:04x}-{:04x}-",
+            self.data1, self.data2, self.data3
+        )?;
+        for (i, byte) in self.data4.iter().enumerate() {
+            if i == 2 {
+                f.write_str("-")?;
+            }
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 
@@ -83,3 +113,6 @@ pub unsafe fn vtbl<'a, V>(object: *mut c_void) -> &'a V {
     // SAFETY: a live object's vtable lives as long as its module, past any use here.
     unsafe { &*head.vtbl }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,22 @@
+[package]
+name = "dxgi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DXMT's dxgi.dll and dxgi.dylib: the DXGI factory, adapter and output over Metal"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# DXMT_PERF_BUILD (meson sets it when -DDXMT_PERF_BUILD is in cpp_args): the log drops everything below warnings.
+perf-build = ["dxmt-util/perf-build"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-util = { workspace = true }
+winemetal-wire = { workspace = true }

@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license = "LGPL-2.1-or-later"
-description = "What DXMT's Rust DLLs (nvngx, nvapi) share: the log, COM helpers, float casts and the NVIDIA-extension check"
+description = "What DXMT's Rust DLLs (nvngx, nvapi, d3d10core, dxgi) share: the log, COM helpers, the exe's name, float casts and the NVIDIA-extension check"
 publish = false
+
+[features]
+# DXMT_PERF_BUILD: the log drops everything below warnings.
+perf-build = []
 
 [lints]
 workspace = true

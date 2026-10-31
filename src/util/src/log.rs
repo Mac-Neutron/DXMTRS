@@ -7,6 +7,8 @@
 
 use std::{fmt::Write as _, fs::File, io::Write, sync::Mutex};
 
+use crate::env;
+
 /// A message's level, ordered as DXMT's `LogLevel`.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
@@ -70,11 +72,7 @@ fn file_name(
     if path == "none" || (path.is_empty() && wine_output) {
         return None;
     }
-    let exe = exe_path.rsplit(['\\', '/']).next().unwrap_or(exe_path);
-    let base = match exe.split_at_checked(exe.len().saturating_sub(4)) {
-        Some((stem, ext)) if ext.eq_ignore_ascii_case(".exe") => stem,
-        _ => exe,
-    };
+    let base = env::base_of(env::name_of(exe_path));
     let slash = if path.is_empty() || path.ends_with('/') {
         ""
     } else {
@@ -101,14 +99,17 @@ struct Sinks {
 impl Sinks {
     fn open(file: &str, env: &impl Fn(&str) -> Option<String>) -> Self {
         let wine = wine_output();
-        let exe = std::env::current_exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let exe = env::exe_path();
         let path = env("DXMT_LOG_PATH");
         let file = file_name(path.as_deref(), wine.is_some(), &exe, file)
             .and_then(|name| File::create(name).ok());
         Self { wine, file }
     }
+}
+
+/// The process's environment variable `name`, if set to text.
+fn process_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 /// A DLL's log: its state lives in the value, which the DLL keeps in a `static`.
@@ -152,7 +153,14 @@ impl Logger {
 
     /// Writes `message` at `level` if the log's level lets it through.
     fn emit(&self, level: &Level, message: &str) {
-        self.emit_with(&|name| std::env::var(name).ok(), level, message);
+        self.emit_with(&process_env, level, message);
+    }
+
+    /// Writes a message below warnings, which the performance build (`perf-build`) leaves out.
+    fn below_warn(&self, env: &impl Fn(&str) -> Option<String>, level: &Level, message: &str) {
+        if cfg!(not(feature = "perf-build")) {
+            self.emit_with(env, level, message);
+        }
     }
 
     /// `emit` with the environment passed in, so a host test can steer it.
@@ -194,6 +202,21 @@ impl Logger {
     /// Logs a warning.
     pub fn warn(&self, message: &str) {
         self.emit(&Level::Warn, message);
+    }
+
+    /// Logs at info level (nothing in the performance build).
+    pub fn info(&self, message: &str) {
+        self.below_warn(&process_env, &Level::Info, message);
+    }
+
+    /// Logs at debug level (nothing in the performance build).
+    pub fn debug(&self, message: &str) {
+        self.below_warn(&process_env, &Level::Debug, message);
+    }
+
+    /// Logs at trace level (nothing in the performance build).
+    pub fn trace(&self, message: &str) {
+        self.below_warn(&process_env, &Level::Trace, message);
     }
 }
 

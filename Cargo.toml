@@ -2,6 +2,7 @@
 # Every Rust crate of the tree. A build names its package (-p) and target, so one workspace serves the PE, macOS and
 # Linux crates alike.
 members = [
+    "src/d3d10",
     "src/d3d9",
     "src/d3d9/core",
     "src/d3d9/mtl",
@@ -9,6 +10,7 @@ members = [
     "src/d3d9/shim",
     "src/d3d9/types",
     "src/d3d9/unix",
+    "src/dxgi",
     "src/nvapi",
     "src/nvngx",
     "src/util",

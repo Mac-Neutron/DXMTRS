@@ -107,3 +107,57 @@ fn the_file_is_created_by_the_first_message_that_passes_the_level() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn native_file_name_has_an_empty_exe() {
+    assert_eq!(
+        file_name(Some("/t"), false, "", "dxgi.log").as_deref(),
+        Some("/t/_dxgi.log")
+    );
+}
+
+/// The environment of a log at `level`, writing into `path`.
+fn steered(level: &'static str, path: String) -> impl Fn(&str) -> Option<String> {
+    move |name: &str| match name {
+        "DXMT_LOG_LEVEL" => Some(level.to_owned()),
+        "DXMT_LOG_PATH" => Some(path.clone()),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "perf-build"))]
+#[test]
+fn info_passes_at_info_and_debug_does_not() {
+    let dir = log_dir("info");
+    let env = steered("info", dir.to_string_lossy().into_owned());
+    let debug = Logger::new("t.log");
+    debug.below_warn(&env, &Level::Debug, "dropped");
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "debug passed at the info level"
+    );
+    let info = Logger::new("t.log");
+    info.below_warn(&env, &Level::Info, "kept");
+    let written = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(written, ["info:  kept\n"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(feature = "perf-build")]
+#[test]
+fn the_performance_build_logs_nothing_below_warn() {
+    let dir = log_dir("perf");
+    let env = steered("trace", dir.to_string_lossy().into_owned());
+    let log = Logger::new("t.log");
+    for level in [Level::Trace, Level::Debug, Level::Info] {
+        log.below_warn(&env, &level, "dropped");
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    log.emit_with(&env, &Level::Warn, "kept");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

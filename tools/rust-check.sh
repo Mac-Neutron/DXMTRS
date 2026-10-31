@@ -48,9 +48,9 @@ case $(rustc --version) in
      exit 2 ;;
 esac
 
-PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe'
-PE64_P="$PE_P -p nvngx -p nvapi -p dxmt-util"
-HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx'
+PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util'
+PE64_P="$PE_P -p nvngx -p nvapi"
+HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core'
 HOST=aarch64-apple-darwin
 I686=i686-pc-windows-msvc
 
@@ -155,7 +155,7 @@ leg_test() {
   rc=0
   unit_tests || rc=1
   perf unit_tests || rc=1
-  tst -p dxmt-util -p nvapi -p nvngx -p winemetal \
+  tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

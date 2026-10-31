@@ -82,7 +82,7 @@ PE_JOIN_EXEMPT='^tests/d3d9/|/tests(\.rs$|/)'
 # The PE side: the crates that build for -pc-windows-msvc, each named by its src/ and build.rs, and the programs of
 # the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/d3d9/*.rs would also select
 # src/d3d9/unix/** and src/winemetal/*.rs its unix/ and wire/, which run on the Mac.
-PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal'
+PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10'
 is_pe() {
     for crate in $PE_CRATES; do
         case $1 in "$crate"/src/*.rs | "$crate"/build.rs) return 0 ;; esac
@@ -112,10 +112,18 @@ API_LOCK_EXEMPT='cursor_wnd_proc'
 
 # A pointer the application hands a PE entry point promises no alignment, so
 # the entry point reaches it only through the alignment-free helpers of
-# `mtld3d_shared::ffi_boundary`. The vectored exception handler is the one
-# `extern "system" fn` whose pointers come from the system instead.
-APP_POINTER_DIR=src/d3d9/src
+# `mtld3d_shared::ffi_boundary` (D3D9) or `read_unaligned` / `write_unaligned`
+# (dxgi and d3d10core, which do not depend on it). The vectored exception
+# handler is the one `extern "system" fn` whose pointers come from the system
+# instead.
+APP_POINTER_DIR='src/d3d9/src src/dxgi/src src/d3d10/src'
 APP_POINTER_EXEMPT='src/d3d9/src/crash.rs'
+is_app_pointer_file() {
+    for dir in $APP_POINTER_DIR; do
+        case $1 in "$dir"/*.rs) return 0 ;; esac
+    done
+    return 1
+}
 APP_POINTER_INPTR="InPtr(Mut)?(::)?<('[a-z_]+, *)?(mtld3d_types::)?(D3D|Guid|LUID)"
 APP_POINTER_INPTR_MESSAGE='InPtr/InPtrMut over an application struct: read it with ValueIn, write it with OutPtr'
 
@@ -434,18 +442,14 @@ case "${1:-}" in
         banned "$E2E_SPAWN" 'Every end-to-end test names itself' "$E2E_SPAWN_MESSAGE" "$file"
         ;;
     esac
-    case $file in
-    "$APP_POINTER_DIR"/*.rs)
-        if [ "$file" != "$APP_POINTER_EXEMPT" ]; then
-            findings=$(app_pointer_derefs "$file")
-            [ -z "$findings" ] || report "An application's pointer promises no alignment" \
-                'typed access to an entry point pointer parameter: use ValueIn, OutPtr, slice_from_caller or slice_to_caller' \
-                "$findings"
-            banned "$APP_POINTER_INPTR" "An application's pointer promises no alignment" \
-                "$APP_POINTER_INPTR_MESSAGE" "$file"
-        fi
-        ;;
-    esac
+    if is_app_pointer_file "$file" && [ "$file" != "$APP_POINTER_EXEMPT" ]; then
+        findings=$(app_pointer_derefs "$file")
+        [ -z "$findings" ] || report "An application's pointer promises no alignment" \
+            'typed access to an entry point pointer parameter: use ValueIn, OutPtr, slice_from_caller or slice_to_caller' \
+            "$findings"
+        banned "$APP_POINTER_INPTR" "An application's pointer promises no alignment" \
+            "$APP_POINTER_INPTR_MESSAGE" "$file"
+    fi
     if is_pe "$file" && ! printf '%s\n' "$file" | grep -qE "$PE_JOIN_EXEMPT"; then
         banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
             "$PE_JOIN_MESSAGE" "$file"
@@ -529,7 +533,7 @@ if [ -n "$pe_sources" ]; then
         "$PE_JOIN_MESSAGE" $pe_sources
 fi
 
-app_sources=$(git ls-files "$APP_POINTER_DIR/*.rs" | grep -vxF "$APP_POINTER_EXEMPT" || true)
+app_sources=$(for dir in $APP_POINTER_DIR; do git ls-files "$dir/*.rs"; done | grep -vxF "$APP_POINTER_EXEMPT" || true)
 if [ -n "$app_sources" ]; then
     # shellcheck disable=SC2086
     findings=$(app_pointer_derefs $app_sources)

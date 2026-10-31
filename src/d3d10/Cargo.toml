@@ -1,0 +1,21 @@
+[package]
+name = "d3d10core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DXMT's d3d10core.dll and d3d10core.dylib: Direct3D 10 devices made over d3d11"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# DXMT_PERF_BUILD (meson sets it when -DDXMT_PERF_BUILD is in cpp_args): the log drops everything below warnings.
+perf-build = ["dxmt-util/perf-build"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-util = { workspace = true }
