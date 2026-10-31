@@ -24,6 +24,43 @@ struct DXMTGammaRamp {
   uint64_t version;
 };
 
+// MacNeutron (DXMTRS step 5a): the presenter is Rust (src/dxmt/src/presenter.rs); the class below forwards to these
+// functions. src/dxmt/src/presenter/abi.rs, generated from this block by tools/winemetal-layouts.sh --seam-abi, asserts
+// each Rust export against its declaration on every target; a width written differently here fails that build.
+extern "C" {
+/* dxmt-abi begin */
+struct DXMTPresentMetadata;
+struct DXMTGammaRamp;
+
+/* dxmt_presenter_encode calls each once, during the call, with ctx and the present pass's render encoder: wait before
+ * the pass's commands, update after them */
+struct dxmt_presenter_callbacks {
+  void (*wait)(void *ctx, obj_handle_t encoder);
+  void (*update)(void *ctx, obj_handle_t encoder);
+  void *ctx;
+};
+
+/* device, layer and library are borrowed: they outlive the presenter */
+void *dxmt_presenter_create(obj_handle_t device, obj_handle_t layer, obj_handle_t library, float scale_factor,
+                            uint8_t sample_count);
+void dxmt_presenter_destroy(void *p);
+bool dxmt_presenter_change_layer_properties(void *p, enum WMTPixelFormat format, enum WMTColorSpace cs, double width,
+                                            double height, uint8_t sample_count);
+bool dxmt_presenter_change_layer_color_space(void *p, enum WMTColorSpace cs);
+void dxmt_presenter_change_hdr_metadata(void *p, const struct WMTHDRMetadata *metadata);
+/* ramp is the output's live gamma ramp (null for none), read through its atomics */
+void dxmt_presenter_change_gamma_ramp(void *p, const struct DXMTGammaRamp *ramp);
+/* returns the frame id; *out gets the frame's metadata */
+uint64_t dxmt_presenter_synchronize(void *p, struct DXMTPresentMetadata *out);
+/* PresentState's destructor: the frame is done */
+void dxmt_presenter_frame_done(void *p, uint64_t frame_id);
+/* returns the drawable, +1 */
+obj_handle_t dxmt_presenter_encode(void *p, obj_handle_t cmdbuf, obj_handle_t backbuffer,
+                                   const struct DXMTPresentMetadata *metadata,
+                                   const struct dxmt_presenter_callbacks *callbacks);
+/* dxmt-abi end */
+}
+
 class Presenter : public RcObject {
 public:
   Presenter(
@@ -59,7 +96,7 @@ public:
     };
     ~PresentState() {
       if (presenter) {
-        presenter->frame_presented_.signal(frame_id);
+        dxmt_presenter_frame_done(presenter->rust_, frame_id);
         presenter = nullptr;
       }
     };
@@ -74,45 +111,6 @@ public:
   );
 
 private:
-  void buildRenderPipelineState(bool is_pq, bool with_hdr_metadata, bool is_ms, bool gamma_enable);
-#ifdef DXMT_NATIVE
-  // MacNeutron (the VM host): DXMT's presenter fetches its next drawable on a thread of its own, as the display recycles
-  // drawables (Metal only hands one back at a refresh). The frame's present then finds one ready instead of waiting up
-  // to a display frame on the game's vCPU (docs/research/2026-10-15-vm-route/README.md, M3's "upgrade"). Native DXMT on
-  // macOS is not the VM host (it has no WSI hooks: winemac's window system), so this is off there.
-  void drawableWorker();
-  void requestDrawableLocked();
-  void invalidateDrawable();
-  WMT::Reference<WMT::MetalDrawable> acquireDrawable();
-  bool prefetch_drawable_ = false;
-  dxmt::thread drawable_thread_;
-  dxmt::mutex drawable_mutex_;
-  dxmt::condition_variable drawable_cv_;
-  bool drawable_stop_ = false, drawable_wanted_ = false, drawable_busy_ = false;
-  uint64_t drawable_generation_ = 0, prefetched_generation_ = 0;
-  WMT::Reference<WMT::MetalDrawable> prefetched_drawable_;
-#endif
-
-  WMT::Device device_;
-  WMT::MetalLayer layer_;
-  InternalCommandLibrary &lib_;
-  WMTLayerProps layer_props_;
-  uint32_t sample_count_;
-  WMTColorSpace colorspace_ = WMTColorSpaceSRGB;
-  WMTHDRMetadata hdr_metadata_;
-  bool has_hdr_metadata_ = false;
-  WMTPixelFormat source_format_ = WMTPixelFormatInvalid;
-  uint64_t display_setting_version_ = 0;
-  WMTColorSpace display_colorspace_ = WMTColorSpaceSRGB;
-  WMTHDRMetadata display_hdr_metadata_;
-  WMTEDRValue display_edr_value_{0.0, 1.0};
-  uint64_t gamma_version_ = 0;
-  std::array<float, DXMT_GAMMA_CP_COUNT * 4> gamma_lut_rgba_;
-  WMT::Reference<WMT::Texture> gamma_lut_texture_;
-  WMT::Reference<WMT::RenderPipelineState> present_blit_;
-  WMT::Reference<WMT::RenderPipelineState> present_scale_;
-  std::atomic_flag pso_valid = 0;
-  uint64_t frame_requested_ = 0;
-  CpuFence frame_presented_ = 0;
+  void *rust_;
 };
 } // namespace dxmt

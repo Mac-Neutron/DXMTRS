@@ -13,10 +13,12 @@ SpatialScaler::decRef() {
     delete this;
 }
 
-SpatialScaler::SpatialScaler(WMT::Device device, const WMTFXSpatialScalerInfo &info) {
-  scaler_ = device.newSpatialScaler(info);
-  fence_ = device.newFence();
-};
+SpatialScaler::SpatialScaler(WMT::Device device, const WMTFXSpatialScalerInfo &info) :
+    rust_(dxmt_spatial_scaler_create(device, &info)) {}
+
+SpatialScaler::~SpatialScaler() {
+  dxmt_scaler_destroy(rust_);
+}
 
 void
 TemporalScaler::incRef() {
@@ -29,9 +31,12 @@ TemporalScaler::decRef() {
     delete this;
 }
 
-TemporalScaler::TemporalScaler(WMT::Device device, const WMTFXTemporalScalerInfo &info) : info_(info) {
-  scaler_ = device.newTemporalScaler(info);
-  fence_ = device.newFence();
+TemporalScaler::TemporalScaler(WMT::Device device, const WMTFXTemporalScalerInfo &info) :
+    info_(info),
+    rust_(dxmt_temporal_scaler_create(device, &info)) {}
+
+TemporalScaler::~TemporalScaler() {
+  dxmt_scaler_destroy(rust_);
 }
 
 } // namespace dxmt
