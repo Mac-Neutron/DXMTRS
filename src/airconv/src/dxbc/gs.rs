@@ -17,17 +17,18 @@ use core::ffi::CStr;
 
 use airconv_ir::{
     binding::{
-        AddressSpace, BufferBinding, FunctionInput, MemoryAccess, MeshOutputTopology,
-        MeshVertexOutput, MslScalar, MslType, MslValue, MslVector,
+        AddressSpace, BufferBinding, FunctionInput, FunctionSignatureDesc, MemoryAccess,
+        MeshOutputTopology, MeshVertexOutput, MslScalar, MslType, MslValue, MslVector,
     },
     handlers::{MeshOutputHandler, ScalarInfo},
     initialize::DxbcShader,
+    shader_info::{Declarations, ShaderInfo},
     tokens::program_type,
 };
 
 use super::{
     binding_rootsig::setup_bindings,
-    converter::{Converter, GeometryOutput, invalid, req},
+    converter::{BindingMap, Converter, GeometryOutput, invalid, req},
     replay::{self, Options, input_layout},
     resources::{Resources, setup_immediate_constant_buffer, setup_temp_register},
 };
@@ -43,7 +44,8 @@ use crate::{
         ty::AirTypes,
     },
     api::Error,
-    llvm::{Block, Builder, Module, Ty, TyCx, Val, sys},
+    dxil::{self, initialize::DxilShader},
+    llvm::{Block, Builder, Func, Module, Ty, TyCx, Val, sys},
 };
 
 /// The payload's size in bytes, as DXMT's D3D11 declares it.
@@ -81,6 +83,104 @@ pub trait ShaderBody<'cx>:
 impl<'cx, F> ShaderBody<'cx> for F where
     F: FnOnce(&Converter<'_, 'cx>, Block<'cx>) -> Result<Block<'cx>, Error>
 {
+}
+
+/// A pipeline stage's shader, DXBC's or DXIL's (`SM50ShaderInternal` of either front end).
+///
+/// What the two functions read of it: its stage, function signature, resource maps,
+/// declarations, register counts, clip distances, signature and mesh output handlers, and
+/// bindings. A DXIL shader's handlers replay through `dxil::signature`; it has no clip
+/// distances and no D3D11 argument table.
+#[derive(Clone, Copy)]
+pub enum Stage<'s> {
+    Dxbc(&'s DxbcShader),
+    Dxil(&'s DxilShader),
+}
+
+impl<'s> Stage<'s> {
+    const fn program_type(self) -> u32 {
+        match self {
+            Self::Dxbc(s) => s.program_type,
+            Self::Dxil(s) => s.program_type,
+        }
+    }
+
+    const fn func_signature(self) -> &'s FunctionSignatureDesc {
+        match self {
+            Self::Dxbc(s) => &s.io.func_signature,
+            Self::Dxil(s) => &s.io.func_signature,
+        }
+    }
+
+    const fn info(self) -> &'s ShaderInfo {
+        match self {
+            Self::Dxbc(s) => &s.cfg.info,
+            Self::Dxil(s) => &s.info,
+        }
+    }
+
+    const fn decls(self) -> &'s Declarations {
+        match self {
+            Self::Dxbc(s) => &s.cfg.decls,
+            Self::Dxil(s) => &s.decls,
+        }
+    }
+
+    const fn max_input_register(self) -> u32 {
+        match self {
+            Self::Dxbc(s) => s.io.max_input_register,
+            Self::Dxil(s) => s.io.max_input_register,
+        }
+    }
+
+    const fn max_output_register(self) -> u32 {
+        match self {
+            Self::Dxbc(s) => s.io.max_output_register,
+            Self::Dxil(s) => s.io.max_output_register,
+        }
+    }
+
+    const fn clip_distances(self) -> &'s [ScalarInfo] {
+        match self {
+            Self::Dxbc(s) => s.io.clip_distance_scalars.as_slice(),
+            Self::Dxil(_) => &[],
+        }
+    }
+
+    const fn mesh_handlers(self) -> MeshHandlers<'s> {
+        match self {
+            Self::Dxbc(s) => MeshHandlers::Dxbc(s.io.mesh_output_handlers.as_slice()),
+            Self::Dxil(s) => MeshHandlers::Dxil(s.io.mesh_output_handlers.as_slice()),
+        }
+    }
+
+    /// The handlers' pass (`SignatureContext`).
+    fn record<'a>(
+        self,
+        desc: &mut FunctionSignatureDesc,
+        options: &Options<'a>,
+    ) -> Result<StageReplay<'a>, Error> {
+        Ok(match self {
+            Self::Dxbc(s) => {
+                StageReplay::Dxbc(replay::record(&s.io.signature_handlers, desc, options)?)
+            }
+            Self::Dxil(s) => StageReplay::Dxil(s.io.record(desc, options)?),
+        })
+    }
+
+    /// The stage's bindings at the default slots.
+    fn bindings<'cx>(
+        self,
+        desc: &mut FunctionSignatureDesc,
+        m: &Module<'_>,
+        handles: &mut Handles,
+        args: &ArgChain<'_>,
+    ) -> Result<Box<dyn BindingMap<'cx> + 's>, Error> {
+        match self {
+            Self::Dxbc(s) => setup_bindings(s, desc, m, handles, args),
+            Self::Dxil(s) => dxil::converter::setup_bindings(s, desc, m, handles, args),
+        }
+    }
 }
 
 /// A warp's vertices, primitives, and vertices per primitive.
@@ -132,37 +232,35 @@ pub const fn warp_counts(primitive: u32, strip: bool) -> (u32, u32, u32) {
 /// An unreadable root signature, an output topology or (for a strip) an input primitive no
 /// mesh function handles, and what the lowering refuses.
 pub fn convert_geometry<'cx>(
-    geometry: &DxbcShader,
-    vertex: &DxbcShader,
+    geometry: Stage<'_>,
+    vertex: Stage<'_>,
     name: &[u8],
     m: &Module<'cx>,
     args: &ArgChain<'_>,
     body: impl ShaderBody<'cx>,
 ) -> Result<(), Error> {
-    if geometry.program_type != program_type::GEOMETRY
-        || vertex.program_type != program_type::VERTEX
+    if geometry.program_type() != program_type::GEOMETRY
+        || vertex.program_type() != program_type::VERTEX
     {
         return Err(invalid("a geometry pipeline of shaders of other stages"));
     }
     let cx = m.cx();
     let tcx = cx.tcx();
-    let mut desc = geometry.io.func_signature.clone();
-    let info = &geometry.cfg.info;
-    let io = &geometry.io;
-    let decls = &geometry.cfg.decls;
+    let mut desc = geometry.func_signature().clone();
+    let info = geometry.info();
+    let decls = geometry.decls();
     let is_strip = args.geometry.is_some_and(|pso| pso.strip_topology != 0);
     let (metal_version, shader_flags) = args
         .common
         .map_or((SM50_SHADER_METAL_310, 0), |c| (c.metal_version, c.flags));
-    let max_output_register = io.max_output_register;
-    let vertex_registers = vertex.io.max_output_register;
+    let max_output_register = geometry.max_output_register();
+    let vertex_registers = vertex.max_output_register();
 
     let mut res = Resources::default();
     let types = AirTypes::new(tcx);
     let mut handles = Handles::default();
 
-    let replay = replay::record(
-        &io.signature_handlers,
+    let replay = geometry.record(
         &mut desc,
         &Options {
             ia_layout: None,
@@ -171,7 +269,7 @@ pub fn convert_geometry<'cx>(
             skip_vertex_output: false,
         },
     )?;
-    let binding = setup_bindings(geometry, &mut desc, m, &mut handles, args)?;
+    let binding = geometry.bindings(&mut desc, m, &mut handles, args)?;
 
     let output_topology = match decls.gs_output_topology {
         topology::TRIANGLE_STRIP => MeshOutputTopology::Triangle,
@@ -189,9 +287,9 @@ pub fn convert_geometry<'cx>(
         topology: output_topology.clone(),
     });
     let tg_in_grid_idx = desc.define_input(FunctionInput::ThreadgroupPositionInGrid);
-    if !io.clip_distance_scalars.is_empty() {
+    if !geometry.clip_distances().is_empty() {
         desc.define_mesh_vertex_output(MeshVertexOutput::ClipDistance {
-            count: io.clip_distance_scalars.len(),
+            count: geometry.clip_distances().len(),
         });
     }
 
@@ -362,8 +460,8 @@ pub fn convert_geometry<'cx>(
         next_write_vertex,
         vertex_offset,
         primitive_count,
-        handlers: &io.mesh_output_handlers,
-        clip_distances: &io.clip_distance_scalars,
+        handlers: geometry.mesh_handlers(),
+        clip_distances: geometry.clip_distances(),
         max_output_register,
     };
     let conv = Converter {
@@ -374,7 +472,7 @@ pub fn convert_geometry<'cx>(
         res: &res,
         types: &types,
         pso_sample_mask: u32::MAX,
-        shader_type: geometry.program_type,
+        shader_type: geometry.program_type(),
         metal_version,
         geometry: Some(&output),
     };
@@ -400,24 +498,23 @@ pub fn convert_geometry<'cx>(
 /// An unreadable root signature, a vertex attribute or draw argument the lowering cannot make,
 /// a strip's input primitive no object function handles, and what the lowering refuses.
 pub fn convert_vertex<'cx>(
-    vertex: &DxbcShader,
-    geometry: &DxbcShader,
+    vertex: Stage<'_>,
+    geometry: Stage<'_>,
     name: &[u8],
     m: &Module<'cx>,
     args: &ArgChain<'_>,
     body: impl ShaderBody<'cx>,
 ) -> Result<(), Error> {
-    if geometry.program_type != program_type::GEOMETRY
-        || vertex.program_type != program_type::VERTEX
+    if geometry.program_type() != program_type::GEOMETRY
+        || vertex.program_type() != program_type::VERTEX
     {
         return Err(invalid("a geometry pipeline of shaders of other stages"));
     }
     let cx = m.cx();
     let tcx = cx.tcx();
-    let mut desc = vertex.io.func_signature.clone();
-    let info = &vertex.cfg.info;
-    let io = &vertex.io;
-    let input_primitive = geometry.cfg.decls.gs_input_primitive;
+    let mut desc = vertex.func_signature().clone();
+    let info = vertex.info();
+    let input_primitive = geometry.decls().gs_input_primitive;
     let is_strip = args.geometry.is_some_and(|pso| pso.strip_topology != 0);
     // SAFETY: the chain's layout (`SM50Compile`'s contract).
     let ia_layout = args.ia_layout.map(|ia| unsafe { input_layout(ia) });
@@ -425,8 +522,8 @@ pub fn convert_vertex<'cx>(
     let (metal_version, shader_flags) = args
         .common
         .map_or((SM50_SHADER_METAL_310, 0), |c| (c.metal_version, c.flags));
-    let max_input_register = io.max_input_register;
-    let max_output_register = io.max_output_register;
+    let max_input_register = vertex.max_input_register();
+    let max_output_register = vertex.max_output_register();
 
     let is_triadj_strip = is_strip && input_primitive == primitive::TRIANGLE_ADJ;
     let is_indexed_draw = index_buffer_format > 0;
@@ -435,8 +532,7 @@ pub fn convert_vertex<'cx>(
     let types = AirTypes::new(tcx);
     let mut handles = Handles::default();
 
-    let replay = replay::record(
-        &io.signature_handlers,
+    let replay = vertex.record(
         &mut desc,
         &Options {
             ia_layout,
@@ -445,7 +541,7 @@ pub fn convert_vertex<'cx>(
             skip_vertex_output: true,
         },
     )?;
-    let binding = setup_bindings(vertex, &mut desc, m, &mut handles, args)?;
+    let binding = vertex.bindings(&mut desc, m, &mut handles, args)?;
 
     let payload_idx = desc.define_input(FunctionInput::Payload { size: PAYLOAD_SIZE });
     // (warp_size, 1, 1)
@@ -658,7 +754,7 @@ pub fn convert_vertex<'cx>(
         res: &res,
         types: &types,
         pso_sample_mask: u32::MAX,
-        shader_type: vertex.program_type,
+        shader_type: vertex.program_type(),
         metal_version,
         geometry: None,
     };
@@ -742,7 +838,7 @@ pub fn convert_vertex<'cx>(
 
     air.create_set_mesh_properties(air.get_int3(
         warp_primitive_count,
-        geometry.cfg.decls.gs_instance_count,
+        geometry.decls().gs_instance_count,
         1,
     ))?;
 
@@ -766,7 +862,7 @@ struct MeshOutput<'a, 'cx> {
     next_write_vertex: Val<'cx>,
     vertex_offset: Val<'cx>,
     primitive_count: Val<'cx>,
-    handlers: &'a [MeshOutputHandler],
+    handlers: MeshHandlers<'a>,
     clip_distances: &'a [ScalarInfo],
     max_output_register: u32,
 }
@@ -874,7 +970,13 @@ impl<'cx> MeshOutput<'_, 'cx> {
     /// The geometry shader's output registers into the mesh vertex and primitive (the handlers).
     fn output_data(&self, vertex: Val<'cx>, primitive: Val<'cx>) -> Result<(), Error> {
         let tcx = self.air.builder().cx().tcx();
-        for handler in self.handlers {
+        let handlers = match &self.handlers {
+            MeshHandlers::Dxbc(handlers) => *handlers,
+            MeshHandlers::Dxil(handlers) => {
+                return self.dxil_output_data(handlers, vertex, primitive);
+            }
+        };
+        for handler in handlers {
             match *handler {
                 MeshOutputHandler::Position { reg, .. } => {
                     replay::pop_mesh_output_position(self.air, self.res, reg, vertex)?;
@@ -910,6 +1012,51 @@ impl<'cx> MeshOutput<'_, 'cx> {
         Ok(())
     }
 
+    /// A DXIL geometry shader's output registers into the mesh vertex and primitive.
+    ///
+    /// Its varyings are shifted to their signature's width (`MeshPopShifted`).
+    fn dxil_output_data(
+        &self,
+        handlers: &[dxil::signature::MeshOutputHandler],
+        vertex: Val<'cx>,
+        primitive: Val<'cx>,
+    ) -> Result<(), Error> {
+        use dxil::signature::MeshOutputHandler as Dxil;
+        let tcx = self.air.builder().cx().tcx();
+        for handler in handlers {
+            match *handler {
+                Dxil::Position { reg, .. } => {
+                    replay::pop_mesh_output_position(self.air, self.res, reg, vertex)?;
+                }
+                Dxil::RenderTargetArrayIndex { reg, mask } => {
+                    replay::pop_mesh_output_render_target_array_index(
+                        self.air, self.res, reg, mask, primitive,
+                    )?;
+                }
+                Dxil::ViewportArrayIndex { reg, mask } => {
+                    replay::pop_mesh_output_viewport_array_index(
+                        self.air, self.res, reg, mask, primitive,
+                    )?;
+                }
+                Dxil::Shifted {
+                    reg,
+                    col,
+                    cols,
+                    index,
+                    ty,
+                } => dxil::signature::pop_mesh_shifted(
+                    self.air,
+                    self.res,
+                    (reg, col, cols),
+                    index,
+                    vertex,
+                    value_ty(tcx, ty),
+                )?,
+            }
+        }
+        Ok(())
+    }
+
     /// The clip distances of the output registers into the mesh vertex.
     fn clip_distances(&self, vertex: Val<'cx>) -> Result<(), Error> {
         let air = self.air;
@@ -934,6 +1081,45 @@ impl<'cx> MeshOutput<'_, 'cx> {
             air.create_set_mesh_clip_distance(vertex, air.get_int(index), b.load(t.float, src))?;
         }
         Ok(())
+    }
+}
+
+/// A stage's mesh output handlers, of its front end.
+enum MeshHandlers<'a> {
+    Dxbc(&'a [MeshOutputHandler]),
+    Dxil(&'a [dxil::signature::MeshOutputHandler]),
+}
+
+/// A stage's replayed handlers, of its front end.
+enum StageReplay<'a> {
+    Dxbc(replay::Replay<'a>),
+    Dxil(dxil::signature::Replay<'a>),
+}
+
+impl StageReplay<'_> {
+    fn prologue<'cx>(
+        &self,
+        air: &AirBuilder<'_, 'cx>,
+        function: Func<'cx>,
+        res: &mut Resources<'cx>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Dxbc(r) => r.prologue(air, function, res),
+            Self::Dxil(r) => r.prologue(air, function, res),
+        }
+    }
+
+    fn epilogue<'cx>(
+        &self,
+        air: &AirBuilder<'_, 'cx>,
+        res: &Resources<'cx>,
+        value: Option<Val<'cx>>,
+        pso_sample_mask: u32,
+    ) -> Result<Option<Val<'cx>>, Error> {
+        match self {
+            Self::Dxbc(r) => r.epilogue(air, res, value, pso_sample_mask),
+            Self::Dxil(r) => r.epilogue(air, res, value, pso_sample_mask),
+        }
     }
 }
 

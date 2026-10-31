@@ -4,23 +4,42 @@ use core::ffi::CStr;
 
 use airconv_ir::{shader_info::ShaderFlags, tokens::program_type};
 
-use crate::{abi::ArgChain, api::Error, dxbc, llvm::Context, module, shader::Shader, writer};
+use crate::{
+    abi::ArgChain,
+    api::Error,
+    dxbc, dxil,
+    dxil::types::shader_kind,
+    llvm::{Context, Module},
+    module,
+    shader::Shader,
+    writer,
+};
 
 /// Compiles `shader` as the function `name`, with the chain's arguments, into a metallib.
 ///
-/// `SM50Compile`: a context and a module per compile, the stage's lowering (`convertDXBC`), the
-/// Metal helpers it calls, the pass pipeline, then the metallib. With the feature `oracle` the
-/// optimized module's pointers are checked against the facts opaque IR keeps.
+/// `SM50Compile`: a context and a module per compile, the stage's lowering (`convertDXBC`, or
+/// the DXIL front end's module), the Metal helpers it calls (under DXIL's float policy for a
+/// DXIL shader), the pass pipeline, then the metallib. With the feature `oracle` the optimized
+/// module's pointers are checked against the facts opaque IR keeps.
 ///
 /// # Errors
 ///
-/// What the translation refuses, the C++'s texts for a stage that is not compiled alone, or
-/// "not ported" (DXIL shaders, until their lowering lands).
+/// What the translation refuses, and the C++'s texts for a stage that is not compiled alone.
 pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<u8>, Error> {
     let dxbc = match shader {
         Shader::Dxbc(dxbc) => dxbc,
-        // DXIL lowering (X2) replaces this arm.
-        Shader::Dxil(_) => return Err(Error::not_ported()),
+        Shader::Dxil(d) => {
+            let cx = Context::new();
+            let m = dxil::converter::convert(&d.ir, name.to_bytes(), &cx, args)?;
+            let flags = d.ir.info.flags;
+            let msad = flags.contains(ShaderFlags::USE_MSAD);
+            let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
+            module::link_helpers(&m, msad, samplepos, false)?;
+            if msad || samplepos {
+                dxil::converter::strip_fast_math(&m, d.ir.entry.kind);
+            }
+            return finish(&m);
+        }
     };
     let cx = Context::new();
     let m = module::initialize(&cx, c"shader.air");
@@ -47,10 +66,7 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
         flags.contains(ShaderFlags::USE_SAMPLEPOS),
         false,
     )?;
-    module::optimize(&m);
-    #[cfg(feature = "oracle")]
-    crate::oracle::derive(&m)?;
-    Ok(writer::write(&m))
+    finish(&m)
 }
 
 /// A vertex function whose outputs are `pixel`'s inputs, so the pixel shader runs alone.
@@ -59,8 +75,21 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
 ///
 /// # Errors
 ///
-/// Not a DXIL pixel shader, or "not ported".
+/// `DXIL: not a DXIL pixel shader`, and an input name that is not UTF-8.
 pub fn passthrough_vertex(pixel: &Shader) -> Result<Vec<u8>, Error> {
-    let _ = pixel;
-    Err(Error::not_ported())
+    let entry = match pixel {
+        Shader::Dxil(d) if d.ir.entry.kind == shader_kind::PIXEL => &d.ir.entry,
+        _ => return Err(Error::new(b"DXIL: not a DXIL pixel shader")),
+    };
+    let cx = Context::new();
+    let m = dxil::passthrough::build(entry, &cx)?;
+    finish(&m)
+}
+
+/// The pass pipeline run and the module written (checked first with the feature `oracle`).
+fn finish(m: &Module<'_>) -> Result<Vec<u8>, Error> {
+    module::optimize(m);
+    #[cfg(feature = "oracle")]
+    crate::oracle::derive(m)?;
+    Ok(writer::write(m))
 }

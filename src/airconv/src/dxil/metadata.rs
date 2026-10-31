@@ -26,12 +26,15 @@ use crate::{
 /// took one.
 pub const MALFORMED: &[u8] = b"DXIL: malformed metadata";
 
-/// A handle's resource: `HandleInfo`'s class and range ID.
+/// A handle's resource (`HandleInfo`): its class, range ID, register and declaration.
 ///
-/// The register and the resource come with the lowering that reads them.
+/// `index` is the absolute register, as airconv's binding maps take it (null when the call
+/// lacks that argument); `resource` the declaration's place in the entry's resources.
 pub struct HandleInfo {
     pub cls: u32,
     pub range: u32,
+    pub index: sys::ValueRef,
+    pub resource: usize,
 }
 
 /// `ReadEntry`: the shader model and the first entry point.
@@ -195,18 +198,23 @@ pub fn resolve_handle(entry: &EntryInfo, handle: sys::ValueRef) -> Result<Handle
         match op_code(handle) {
             // (216, handle, %dx.types.ResourceProperties)
             op::ANNOTATE_HANDLE => {
-                if let Some((_, props)) = heap_handle(handle) {
+                if let Some((heap, props)) = heap_handle(handle) {
                     // (218, i32 index, i1 samplerHeap, i1 nonUniform): the index is the register.
-                    let resource = entry
+                    let (place, resource) = entry
                         .resources
                         .iter()
-                        .find(|r| r.flags.contains(ResourceFlags::HEAP) && r.heap_props == props)
+                        .enumerate()
+                        .find(|(_, r)| {
+                            r.flags.contains(ResourceFlags::HEAP) && r.heap_props == props
+                        })
                         .ok_or_else(|| {
                             Error::new(b"DXIL: createHandleFromHeap names an undeclared heap range")
                         })?;
                     return Ok(HandleInfo {
                         cls: resource.cls,
                         range: resource.id,
+                        index: arg(heap, 1),
+                        resource: place,
                     });
                 }
                 if seen.contains(&handle) {
@@ -219,12 +227,19 @@ pub fn resolve_handle(entry: &EntryInfo, handle: sys::ValueRef) -> Result<Handle
             op::CREATE_HANDLE => {
                 let cls = const_u32(arg(handle, 1), 0);
                 let id = const_u32(arg(handle, 2), 0);
-                if entry.find_resource(cls, id).is_none() {
-                    return Err(Error::new(
-                        b"DXIL: createHandle names an undeclared resource",
-                    ));
-                }
-                return Ok(HandleInfo { cls, range: id });
+                let place = entry
+                    .resources
+                    .iter()
+                    .position(|r| r.cls == cls && r.id == id)
+                    .ok_or_else(|| {
+                        Error::new(b"DXIL: createHandle names an undeclared resource")
+                    })?;
+                return Ok(HandleInfo {
+                    cls,
+                    range: id,
+                    index: arg(handle, 3),
+                    resource: place,
+                });
             }
             // (217, %dx.types.ResBind {i32 LB, i32 UB, i32 space, i8 class}, i32 index, i1)
             op::CREATE_HANDLE_FROM_BINDING => return from_binding(entry, handle),
@@ -312,10 +327,11 @@ fn from_binding(entry: &EntryInfo, call: sys::ValueRef) -> Result<HandleInfo, Er
     }
     let field = |i| const_u32(aggregate_element(bind, i).unwrap_or(ptr::null_mut()), 0);
     let (lower_bound, space, cls) = (field(0), field(2), field(3));
-    let resource = entry
+    let (place, resource) = entry
         .resources
         .iter()
-        .find(|r| {
+        .enumerate()
+        .find(|(_, r)| {
             r.cls == cls
                 && r.space == space
                 && lower_bound >= r.lower_bound
@@ -325,6 +341,8 @@ fn from_binding(entry: &EntryInfo, call: sys::ValueRef) -> Result<HandleInfo, Er
     Ok(HandleInfo {
         cls,
         range: resource.id,
+        index: arg(call, 2),
+        resource: place,
     })
 }
 

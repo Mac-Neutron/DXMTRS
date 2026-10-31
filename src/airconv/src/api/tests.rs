@@ -60,25 +60,21 @@ fn initialize_refuses_what_is_not_a_container() {
 }
 
 #[test]
-fn every_export_answers_not_ported() {
+fn every_export_refuses_a_shader_of_another_stage() {
     let (vs, hs, gs, ps) = (shader(), shader(), shader(), shader());
     let name = c"main".as_ptr();
     let mut out = ptr::null_mut::<c_void>();
     let out = &raw mut out;
-    let not_ported = (1, b"not ported".to_vec());
 
     // Every call below: the handles are live shaders, the chains are null, `name` is a C
     // string, and `out` and the error are writable.
     // `SM50Compile` of a DXBC pixel shader is ported (D2): `entry::tests` compile it. So are the
-    // tessellation pipeline (D3), whose corpus runs compile it, and the geometry pipeline (D4)
-    // of DXBC shaders: pixel shaders in the geometry pipeline are refused, below.
-    let answers = [
-        // SAFETY: as above.
-        answer(|e| unsafe { dxil_compile_pass_through_vertex(ps, out, e) }),
-    ];
-    for (i, got) in answers.iter().enumerate() {
-        assert_eq!(got, &not_ported, "export {i}");
-    }
+    // tessellation pipeline (D3), whose corpus runs compile it, the geometry pipeline (D4) of
+    // DXBC shaders, and DXIL (X2): pixel shaders where another stage belongs are refused, below.
+    // `DXILCompilePassThroughVertex` refuses a DXBC pixel shader as the C++.
+    // SAFETY: as above.
+    let passthrough = answer(|e| unsafe { dxil_compile_pass_through_vertex(ps, out, e) });
+    assert_eq!(passthrough, (1, b"DXIL: not a DXIL pixel shader".to_vec()));
     // The shaders are pixel shaders, which are no vertex, hull, domain or geometry shader.
     let wrong_stage = (
         1,

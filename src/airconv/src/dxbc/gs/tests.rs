@@ -3,7 +3,7 @@
 //! The functions themselves are compared with the C++'s by the lane runs of `dxil-translate`
 //! (`C6`'s `gs`, `gspt` and `gsadj` pipelines).
 
-use super::{convert_geometry, convert_vertex, warp_counts};
+use super::{Stage, convert_geometry, convert_vertex, warp_counts};
 use crate::{abi::ArgChain, api::Error, entry::initialize, llvm::Context, module, shader::Shader};
 
 /// The table's rows, from `get_vertex_primitive_count_in_warp`.
@@ -54,16 +54,16 @@ fn a_pipeline_of_other_stages_is_refused() {
         );
     };
     refused(convert_geometry(
-        &pixel.ir,
-        &pixel.ir,
+        Stage::Dxbc(&pixel.ir),
+        Stage::Dxbc(&pixel.ir),
         b"gs",
         &m,
         &args,
         |_, _| panic!("the body ran"),
     ));
     refused(convert_vertex(
-        &pixel.ir,
-        &pixel.ir,
+        Stage::Dxbc(&pixel.ir),
+        Stage::Dxbc(&pixel.ir),
         b"vs",
         &m,
         &args,

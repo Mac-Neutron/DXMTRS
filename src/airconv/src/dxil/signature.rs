@@ -10,17 +10,27 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use airconv_ir::binding::{
-    DepthArgument, FunctionInput, FunctionOutput, FunctionSignatureDesc, Interpolation, MeshData,
-    MeshPrimitiveOutput, MeshVertexOutput, MslScalar, MslValue, MslVector,
+use airconv_ir::{
+    binding::{
+        DepthArgument, FunctionInput, FunctionOutput, FunctionSignatureDesc, Interpolation,
+        MeshData, MeshPrimitiveOutput, MeshVertexOutput, MslScalar, MslValue, MslVector,
+    },
+    handlers::{SignatureHandler as DxbcHandler, msl_value},
 };
 
 use crate::{
+    air::builder::AirBuilder,
     api::Error,
+    dxbc::{
+        converter::{invalid, req},
+        replay::{self, Options, load_from_array_at},
+        resources::Resources,
+    },
     dxil::types::{
         EntryInfo, SignatureElement, UNPACKED_INSTANCE_ID, UNPACKED_VERTEX_ID, component_type,
         interpolation, op, semantic_kind, shader_kind, user_name,
     },
+    llvm::{Func, Ty, Val},
 };
 
 /// A signature handler (`std::function<void(SignatureContext &)>`), as what its lambda captured.
@@ -524,6 +534,180 @@ impl Io {
         }
         Ok(())
     }
+
+    /// The handlers' pass against a compile's options (their `SignatureContext` pass).
+    ///
+    /// Each defines what the compile adds to `desc` and leaves its prologue and epilogue steps,
+    /// in the C++'s order. A handler whose lambda is the DXBC handler's of the same body is
+    /// recorded by D2's replay (`dxbc::replay::record`), one at a time; the varyings, the
+    /// compute IDs, the render targets (whose target is the semantic index, not the register)
+    /// and the depth, coverage and stencil outputs are this front end's.
+    ///
+    /// # Errors
+    ///
+    /// A render target of an unknown component type (`UNKNOWN_COMPONENT_TYPE`, where the C++
+    /// fell off `to_msl_type`), and what D2's replay refuses.
+    pub fn record<'a>(
+        &self,
+        desc: &mut FunctionSignatureDesc,
+        options: &Options<'a>,
+    ) -> Result<Replay<'a>, Error> {
+        let (dual, no_depth, unorm_mask, formats) =
+            options.pixel.map_or((false, false, 0, [0; 8]), |p| {
+                (
+                    p.dual_source_blending != 0,
+                    p.disable_depth_output != 0,
+                    p.unorm_output_reg_mask,
+                    p.pixel_formats,
+                )
+            });
+        let skip = options.skip_vertex_output;
+        let mut steps = Vec::new();
+        for handler in &self.signature_handlers {
+            let mut dxbc =
+                |h: DxbcHandler, desc: &mut FunctionSignatureDesc| -> Result<(), Error> {
+                    steps.push(Step::Dxbc(replay::record(&[h], desc, options)?));
+                    Ok(())
+                };
+            match *handler {
+                SignatureHandler::ComputeQuads {
+                    thread_index,
+                    group,
+                    numthreads,
+                } => steps.push(Step::ComputeQuads {
+                    thread_index,
+                    group,
+                    numthreads,
+                }),
+                SignatureHandler::Special {
+                    index,
+                    ref register,
+                } => steps.push(Step::Special {
+                    index,
+                    register: match register {
+                        Special::ThreadId => Special::ThreadId,
+                        Special::ThreadGroupId => Special::ThreadGroupId,
+                        Special::ThreadIdInGroup => Special::ThreadIdInGroup,
+                        Special::ThreadIdInGroupFlat => Special::ThreadIdInGroupFlat,
+                    },
+                }),
+                SignatureHandler::VertexSystemValue { reg, mask, vertex } => dxbc(
+                    if vertex {
+                        DxbcHandler::VertexId { reg, mask }
+                    } else {
+                        DxbcHandler::InstanceId { reg, mask }
+                    },
+                    desc,
+                )?,
+                SignatureHandler::VertexInput {
+                    reg,
+                    mask,
+                    component_type,
+                    ref name,
+                } => dxbc(
+                    DxbcHandler::VertexInput {
+                        reg,
+                        mask,
+                        component_type,
+                        name: name.clone(),
+                    },
+                    desc,
+                )?,
+                SignatureHandler::PopPosition { reg, mask, index } => {
+                    dxbc(DxbcHandler::PopPosition { reg, mask, index }, desc)?;
+                }
+                SignatureHandler::PopOutput { reg, mask, index } => {
+                    dxbc(DxbcHandler::PopOutput { reg, mask, index }, desc)?;
+                }
+                SignatureHandler::PopShifted {
+                    reg,
+                    col,
+                    cols,
+                    index,
+                } => {
+                    if !skip {
+                        steps.push(Step::PopShifted {
+                            reg,
+                            col,
+                            cols,
+                            index,
+                        });
+                    }
+                }
+                SignatureHandler::InitInput {
+                    index,
+                    reg,
+                    mask,
+                    fix_w,
+                } => dxbc(
+                    DxbcHandler::InitInput {
+                        index,
+                        reg,
+                        mask,
+                        fix_w,
+                    },
+                    desc,
+                )?,
+                SignatureHandler::InitShifted {
+                    index,
+                    reg,
+                    col,
+                    cols,
+                } => steps.push(Step::InitShifted {
+                    index,
+                    reg,
+                    col,
+                    cols,
+                }),
+                // As DCL_OUTPUT in handle_signature_ps, with the semantic index as the target.
+                SignatureHandler::RenderTarget {
+                    reg,
+                    mask,
+                    target,
+                    component_type,
+                } => {
+                    // A target past the eighth reads as no format (the C++ read past its array).
+                    let format = formats.get(target as usize).copied().unwrap_or(0);
+                    let mut ty = component_type_from_pixel_format(format);
+                    if dual || ty == UNKNOWN {
+                        ty = component_type;
+                    }
+                    if dual && target > 1 {
+                        continue;
+                    }
+                    let index = desc.define_output(FunctionOutput::RenderTarget {
+                        dual_source_blending: dual,
+                        index: target,
+                        ty: msl_value(ty)?,
+                    });
+                    if ty == FLOAT && unorm_mask & 1u32.wrapping_shl(target) != 0 {
+                        steps.push(Step::FixUnorm { reg, index });
+                    } else {
+                        dxbc(DxbcHandler::PopOutput { reg, mask, index }, desc)?;
+                    }
+                }
+                // As the OUTPUT_DEPTH case in handle_signature_ps.
+                SignatureHandler::Depth { ref argument } => {
+                    steps.push(Step::Alloca(Output::Depth));
+                    if !no_depth {
+                        let index = desc.define_output(FunctionOutput::Depth {
+                            argument: argument.clone(),
+                        });
+                        steps.push(Step::Output(Output::Depth, index));
+                    }
+                }
+                SignatureHandler::Coverage { index } => {
+                    steps.push(Step::Alloca(Output::Coverage));
+                    steps.push(Step::Output(Output::Coverage, index));
+                }
+                SignatureHandler::StencilRef { index } => {
+                    steps.push(Step::Alloca(Output::Stencil));
+                    steps.push(Step::Output(Output::Stencil, index));
+                }
+            }
+        }
+        Ok(Replay { steps })
+    }
 }
 
 /// `Varying`: a vertex output row's name and type, at its signature's width.
@@ -548,7 +732,208 @@ pub fn varying(e: &SignatureElement, row: u32) -> Result<(String, MslValue), Err
     Ok((utf8(user_name(e, row))?, ty))
 }
 
+/// The handlers' steps, in their order (the C++'s prologue and epilogue effects).
+pub struct Replay<'a> {
+    steps: Vec<Step<'a>>,
+}
+
+impl Replay<'_> {
+    /// The prologue's steps at the builder's position.
+    ///
+    /// # Errors
+    ///
+    /// What D2's replay refuses, an argument or register file the compile did not make.
+    pub fn prologue<'cx>(
+        &self,
+        air: &AirBuilder<'_, 'cx>,
+        function: Func<'cx>,
+        res: &mut Resources<'cx>,
+    ) -> Result<(), Error> {
+        let b = air.builder();
+        let types = air.types();
+        for step in &self.steps {
+            match *step {
+                Step::Dxbc(ref replay) => replay.prologue(air, function, res)?,
+                Step::ComputeQuads {
+                    thread_index,
+                    group,
+                    numthreads,
+                } => compute_quads(air, function, res, thread_index, group, numthreads)?,
+                Step::Special {
+                    index,
+                    ref register,
+                } => {
+                    let value = Some(param(air, function, index)?);
+                    match register {
+                        Special::ThreadId => res.thread_id_arg = value,
+                        Special::ThreadGroupId => res.thread_group_id_arg = value,
+                        Special::ThreadIdInGroup => res.thread_id_in_group_arg = value,
+                        Special::ThreadIdInGroupFlat => res.thread_id_in_group_flat_arg = value,
+                    }
+                }
+                Step::InitShifted {
+                    index,
+                    reg,
+                    col,
+                    cols,
+                } => init_shifted(air, function, res, index, reg, col, cols)?,
+                Step::Alloca(Output::Depth) => {
+                    res.depth_output_reg = Some(b.alloca(types.float, c""));
+                }
+                Step::Alloca(Output::Coverage) => {
+                    res.coverage_mask_reg = Some(b.alloca(types.int, c""));
+                }
+                Step::Alloca(Output::Stencil) => {
+                    res.stencil_ref_reg = Some(b.alloca(types.int, c""));
+                }
+                Step::PopShifted { .. } | Step::FixUnorm { .. } | Step::Output(..) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The epilogue's steps at the builder's position, each inserting an output into `value`.
+    ///
+    /// `value` is the function's zero return value, `None` for a `void` function;
+    /// `pso_sample_mask` masks the coverage output.
+    ///
+    /// # Errors
+    ///
+    /// An output step on a `void` function (the C++ inserted into a null), what D2's replay
+    /// refuses, and a register file or output register the compile did not make.
+    pub fn epilogue<'cx>(
+        &self,
+        air: &AirBuilder<'_, 'cx>,
+        res: &Resources<'cx>,
+        mut value: Option<Val<'cx>>,
+        pso_sample_mask: u32,
+    ) -> Result<Option<Val<'cx>>, Error> {
+        let b = air.builder();
+        let types = air.types();
+        let tcx = b.cx().tcx();
+        let void = || invalid("an output of a function that returns void");
+        for step in &self.steps {
+            value = match *step {
+                Step::Dxbc(ref replay) => replay.epilogue(air, res, value, pso_sample_mask)?,
+                Step::PopShifted {
+                    reg,
+                    col,
+                    cols,
+                    index,
+                } => {
+                    let ret = value.ok_or_else(void)?;
+                    let field_ty = tcx
+                        .field(ret.ty(), index)
+                        .ok_or_else(|| invalid("an output of no return field"))?;
+                    let shifted = shifted(air, res, reg, col, cols, field_ty)?;
+                    Some(b.insert_value(ret, shifted, index))
+                }
+                // `pop_output_reg_fix_unorm`, as D2's replay pops it.
+                Step::FixUnorm { reg, index } => {
+                    let ret = value.ok_or_else(void)?;
+                    let output = req(res.output.ptr_float4, "no output register file")?;
+                    let fvec4 = load_from_array_at(air, output, air.get_int(reg))?;
+                    // The magic delta of `pop_output_reg_fix_unorm`.
+                    let delta = air.get_float(1.0 / 127_500.0);
+                    let fixed = b.fsub(fvec4, b.cx().const_vector(&[delta; 4]));
+                    Some(b.insert_value(ret, fixed, index))
+                }
+                Step::Output(ref output, index) => {
+                    let ret = value.ok_or_else(void)?;
+                    let output = match output {
+                        Output::Depth => {
+                            let reg = req(res.depth_output_reg, "no depth output")?;
+                            b.load(types.float, reg)
+                        }
+                        Output::Coverage => {
+                            let reg = req(res.coverage_mask_reg, "no coverage output")?;
+                            let mask = b.load(types.int, reg);
+                            if pso_sample_mask == u32::MAX {
+                                mask
+                            } else {
+                                b.and(mask, air.get_int(pso_sample_mask))
+                            }
+                        }
+                        Output::Stencil => {
+                            let reg = req(res.stencil_ref_reg, "no stencil output")?;
+                            b.load(types.int, reg)
+                        }
+                    };
+                    Some(b.insert_value(ret, output, index))
+                }
+                Step::ComputeQuads { .. }
+                | Step::Special { .. }
+                | Step::InitShifted { .. }
+                | Step::Alloca(..) => value,
+            };
+        }
+        Ok(value)
+    }
+}
+
+/// `Shifted`: output register `reg`'s components `[col, col + cols)` as a value of `ty`.
+///
+/// The varying's x, y, … at its signature's width (a scalar for one).
+///
+/// # Errors
+///
+/// No output register file.
+pub fn shifted<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    res: &Resources<'cx>,
+    reg: u32,
+    col: u32,
+    cols: u32,
+    ty: Ty,
+) -> Result<Val<'cx>, Error> {
+    let b = air.builder();
+    let array = req(res.output.ptr_int4, "no output register file")?;
+    let array_ty = b
+        .cx()
+        .tcx()
+        .pointee(array.ty())
+        .ok_or_else(|| invalid("a register file is not a pointer"))?;
+    let at = b.gep(array_ty, array, &[air.get_int(0), air.get_int(reg)]);
+    let row = b.load(air.types().int4, at);
+    if cols == 1 {
+        return Ok(b.bitcast(b.extract_element_u64(row, col.into()), ty));
+    }
+    let mask: Vec<i32> = (col..col.wrapping_add(cols))
+        .map(|c| i32::try_from(c).unwrap_or(-1))
+        .collect();
+    Ok(b.bitcast(b.shuffle_vector1(row, &mask), ty))
+}
+
+/// `MeshPopShifted`: a geometry shader output's varying as the mesh vertex's data `index`.
+///
+/// # Errors
+///
+/// No output register file; what the AIR builder refuses.
+pub fn pop_mesh_shifted<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    res: &Resources<'cx>,
+    (reg, col, cols): (u32, u32, u32),
+    index: u32,
+    vertex: Val<'cx>,
+    ty: Ty,
+) -> Result<(), Error> {
+    let value = shifted(air, res, reg, col, cols, ty)?;
+    air.create_set_mesh_vertex_data(vertex, air.get_int(index), value)?;
+    Ok(())
+}
+
+/// `MTLPixelFormat`s by the register type a render target of them holds.
+///
+/// D2's replay's table (`A/air_signature.hpp`), which it keeps private.
+const PIXEL_SINT: [u32; 9] = [14, 24, 34, 54, 64, 74, 104, 114, 124];
+const PIXEL_UINT: [u32; 10] = [13, 23, 33, 53, 63, 73, 91, 103, 113, 123];
+const PIXEL_FLOAT: [u32; 50] = [
+    1, 10, 11, 12, 20, 22, 25, 30, 31, 32, 40, 41, 42, 43, 55, 60, 62, 65, 70, 71, 72, 80, 81, 90,
+    92, 93, 94, 554, 555, 105, 110, 112, 115, 552, 553, 125, 130, 131, 132, 133, 134, 135, 140,
+    141, 142, 143, 150, 151, 152, 153,
+];
 /// `RegisterComponentType`'s numbers.
+const UNKNOWN: u32 = 0;
 const UINT: u32 = 1;
 const INT: u32 = 2;
 const FLOAT: u32 = 3;
@@ -591,6 +976,19 @@ fn grow(max_register: &mut u32, e: &SignatureElement) {
     }
 }
 
+/// `component_type_from_pixel_format`: a render target format's register type.
+fn component_type_from_pixel_format(format: u32) -> u32 {
+    if PIXEL_SINT.contains(&format) {
+        INT
+    } else if PIXEL_UINT.contains(&format) {
+        UINT
+    } else if PIXEL_FLOAT.contains(&format) {
+        FLOAT
+    } else {
+        UNKNOWN
+    }
+}
+
 fn utf8(name: Vec<u8>) -> Result<String, Error> {
     String::from_utf8(name).map_err(|_| Error::new(NAME_NOT_UTF8))
 }
@@ -601,6 +999,141 @@ fn unsupported(what: &[u8]) -> Error {
 
 fn unsupported_element(what: &[u8], e: &SignatureElement) -> Error {
     unsupported(&[what, &e.name].concat())
+}
+
+/// A replay step: D2's for a DXBC-shaped handler, else this front end's.
+enum Step<'a> {
+    Dxbc(replay::Replay<'a>),
+    ComputeQuads {
+        thread_index: u32,
+        group: u32,
+        numthreads: [u32; 3],
+    },
+    Special {
+        index: u32,
+        register: Special,
+    },
+    InitShifted {
+        index: u32,
+        reg: u32,
+        col: u32,
+        cols: u32,
+    },
+    PopShifted {
+        reg: u32,
+        col: u32,
+        cols: u32,
+        index: u32,
+    },
+    FixUnorm {
+        reg: u32,
+        index: u32,
+    },
+    /// The output register's alloca, in the prologue.
+    Alloca(Output),
+    /// The output register into return element `index`, in the epilogue.
+    Output(Output, u32),
+}
+
+/// A pixel shader's special output.
+enum Output {
+    Depth,
+    Coverage,
+    Stencil,
+}
+
+/// Function argument `index`.
+fn param<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    function: Func<'cx>,
+    index: u32,
+) -> Result<Val<'cx>, Error> {
+    function
+        .param(air.builder().cx().tcx(), index)
+        .ok_or_else(|| invalid("a signature handler's argument the function lacks"))
+}
+
+/// A compute shader's thread IDs remapped onto 2D quads (`AddComputeHandlers`' `quads_2d`).
+///
+/// Metal's quads are four consecutive lanes, t & ~3 .. t | 3 of its flat thread index t; D3D's
+/// 2D quads are 2x2 blocks of `SV_GroupThreadID`. Metal thread t runs D3D's thread (x, y, z),
+/// quad lane l = t & 3 at (l & 1, l >> 1) of the block, so derivatives and quad reads see D3D's
+/// quad. `SV_GroupIndex` stays D3D's flattening of (x, y, z).
+fn compute_quads<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    function: Func<'cx>,
+    res: &mut Resources<'cx>,
+    thread_index: u32,
+    group: u32,
+    numthreads: [u32; 3],
+) -> Result<(), Error> {
+    let b = air.builder();
+    let cx = b.cx();
+    let int = |v| air.get_int(v);
+    let flat = param(air, function, thread_index)?;
+    let slice = int(numthreads[0].wrapping_mul(numthreads[1]));
+    let half = int(numthreads[0] / 2);
+    let layer = b.udiv(flat, slice);
+    let in_layer = b.urem(flat, slice);
+    let quad = b.lshr(in_layer, int(2));
+    let lane = b.and(in_layer, int(3));
+    let column = b.add(b.shl(b.urem(quad, half), int(1)), b.and(lane, int(1)));
+    let row = b.add(b.shl(b.udiv(quad, half), int(1)), b.lshr(lane, int(1)));
+    let mut id = cx.undef(air.int_ty(3));
+    id = b.insert_element_u64(id, column, 0);
+    id = b.insert_element_u64(id, row, 1);
+    id = b.insert_element_u64(id, layer, 2);
+    let group_id = param(air, function, group)?;
+    res.thread_group_id_arg = Some(group_id);
+    res.thread_id_in_group_arg = Some(id);
+    let plane = b.mul(layer, slice);
+    let row_start = b.mul(row, int(numthreads[0]));
+    res.thread_id_in_group_flat_arg = Some(b.add(plane, b.add(row_start, column)));
+    let size = cx.const_vector(&numthreads.map(int));
+    res.thread_id_arg = Some(b.add(b.mul(group_id, size), id));
+    Ok(())
+}
+
+/// `InitShifted`: argument `index`'s x, y, … into input register `reg`'s `[col, col + cols)`.
+fn init_shifted<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    function: Func<'cx>,
+    res: &Resources<'cx>,
+    index: u32,
+    reg: u32,
+    col: u32,
+    cols: u32,
+) -> Result<(), Error> {
+    let b = air.builder();
+    let tcx = b.cx().tcx();
+    let array = req(res.input.ptr_int4, "no input register file")?;
+    let array_ty = tcx
+        .pointee(array.ty())
+        .ok_or_else(|| invalid("a register file is not a pointer"))?;
+    let int_ty = if cols == 1 {
+        tcx.int(32)
+    } else {
+        tcx.vector(tcx.int(32), cols)
+    };
+    let arg = b.bitcast(param(air, function, index)?, int_ty);
+    for i in 0..cols {
+        let component = if cols == 1 {
+            arg
+        } else {
+            b.extract_element_u64(arg, i.into())
+        };
+        let at = b.gep(
+            array_ty,
+            array,
+            &[
+                air.get_int(0),
+                air.get_int(reg),
+                air.get_int(col.wrapping_add(i)),
+            ],
+        );
+        b.store(component, at);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
