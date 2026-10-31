@@ -41,12 +41,3 @@ DEFINE_COM_INTERFACE("6c030003-460a-4b19-909b-38f97d203e45",
 };
 
 static constexpr IID DXMT_NVEXT_GUID = dxmt::guid::make_guid("ba0af616-4a43-4259-815c-db3b89829905");
-
-namespace dxmt {
-enum class VendorExtension {
-  None,
-  Nvidia,
-};
-
-extern VendorExtension g_extension_enabled;
-} // namespace dxmt
