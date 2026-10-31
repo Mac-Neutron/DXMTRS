@@ -4,6 +4,13 @@ src/airconv/src/abi.rs MtlGeometryShaderReflectionUnion Clone,Copy
 src/airconv/src/abi.rs MtlPixelShaderReflection Clone,Copy
 src/airconv/src/abi.rs MtlPostTessellatorReflection Clone,Copy
 src/airconv/src/abi.rs MtlTessellatorReflection Clone,Copy
+src/airconv/src/llvm.rs Block Clone,Copy
+src/airconv/src/llvm.rs Func Clone,Copy
+src/airconv/src/llvm.rs Val Clone,Copy
+src/airconv/src/llvm/builder.rs FastMath Clone,Copy
+src/airconv/src/llvm/ty.rs RawTy Clone,Copy
+src/airconv/src/llvm/ty.rs Ty Clone,Copy,PartialEq,Eq,Hash,Debug
+src/airconv/src/llvm/ty.rs TyKind Clone,PartialEq,Eq,Hash,Debug
 src/d3d9/core/src/async_compile.rs ClearPlanes Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/async_compile.rs JobTicket Clone,Copy,PartialEq,Eq,Hash,Debug
 src/d3d9/core/src/buffer_backing.rs BackingClass Debug,Clone,Copy,PartialEq,Eq

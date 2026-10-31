@@ -24,7 +24,7 @@ mod api;
 mod dxbc;
 mod dxil;
 mod entry;
-mod llvm;
+pub mod llvm;
 mod module;
 #[cfg(feature = "oracle")]
 mod oracle;
@@ -32,7 +32,7 @@ mod shader;
 mod writer;
 
 pub use api::{
-    dxil_compile_pass_through_vertex, dxil_get_entry, sm50_compile,
+    Error, dxil_compile_pass_through_vertex, dxil_get_entry, sm50_compile,
     sm50_compile_geometry_pipeline_geometry, sm50_compile_geometry_pipeline_vertex,
     sm50_compile_tessellation_pipeline_domain, sm50_compile_tessellation_pipeline_hull,
     sm50_destroy, sm50_destroy_bitcode, sm50_free_error, sm50_get_arguments_info,
