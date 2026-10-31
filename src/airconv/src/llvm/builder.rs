@@ -120,12 +120,20 @@ impl<'cx> Builder<'cx> {
 
     /// The value `raw` that `op` made, of type `ty`.
     ///
-    /// Every value a method makes comes through here.
-    const fn made(&self, op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
-        let _ = op;
+    /// Every value a method makes comes through here. With the feature `oracle`, `ty` is checked
+    /// against the value's LLVM type, and a difference is kept as the context's first error (the
+    /// slot of P5's handler), which every check of the context answers.
+    fn made(&self, op: &'static str, raw: sys::ValueRef, ty: Ty) -> Val<'cx> {
         // SAFETY: `raw` is what the builder of this context just answered, of type `ty` (each
         // caller derives it as `IRBuilder` types the instruction).
-        unsafe { self.cx.val(raw, ty) }
+        let v = unsafe { self.cx.val(raw, ty) };
+        #[cfg(feature = "oracle")]
+        if let Some(text) = crate::oracle::check(self.cx, op, v) {
+            self.cx.diagnostics().error.borrow_mut().get_or_insert(text);
+        }
+        #[cfg(not(feature = "oracle"))]
+        let _ = op;
+        v
     }
 
     /// Positions the builder at the end of `block`.

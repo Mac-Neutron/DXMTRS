@@ -27,7 +27,7 @@ mod entry;
 pub mod llvm;
 mod module;
 #[cfg(feature = "oracle")]
-mod oracle;
+pub mod oracle;
 mod shader;
 mod writer;
 
