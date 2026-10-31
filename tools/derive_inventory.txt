@@ -451,6 +451,10 @@ src/dxgi/src/abi.rs Luid Clone,Copy,Default
 src/dxgi/src/abi.rs Rational Clone,Copy,Default
 src/dxgi/src/abi.rs Rect Clone,Copy,Default
 src/dxgi/src/abi.rs SampleDesc Clone,Copy
+src/dxmt/src/resource/buffer.rs BufferAllocationFlags Clone,Copy
+src/dxmt/src/resource/buffer.rs BufferViewKey Clone,Copy,PartialEq,Eq
+src/dxmt/src/resource/texture.rs TextureAllocationFlags Clone,Copy
+src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,PartialEq,Eq,Hash,Debug
 src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
 src/winemetal/wire/src/lib.rs MemPtr Clone,Copy
