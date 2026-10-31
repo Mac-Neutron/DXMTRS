@@ -10,7 +10,10 @@
 use core::{ffi::c_void, mem::offset_of};
 
 use dxmt_util::GammaRamp;
-pub use dxmt_util::com::{Guid, Hresult, IUnknownVtbl};
+pub use dxmt_util::com::{
+    E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IUnknownVtbl,
+    S_FALSE, S_OK,
+};
 
 /// `WCHAR`: UTF-16 on PE.
 #[cfg(windows)]
@@ -29,13 +32,6 @@ pub type Hkey = *mut c_void;
 #[cfg(windows)]
 pub type MonitorEnumProc = extern "system" fn(Hmonitor, *mut c_void, *mut Rect, isize) -> i32;
 
-pub const S_OK: Hresult = 0;
-pub const S_FALSE: Hresult = 1;
-pub const E_FAIL: Hresult = 0x8000_4005_u32.cast_signed();
-pub const E_NOTIMPL: Hresult = 0x8000_4001_u32.cast_signed();
-pub const E_NOINTERFACE: Hresult = 0x8000_4002_u32.cast_signed();
-pub const E_POINTER: Hresult = 0x8000_4003_u32.cast_signed();
-pub const E_INVALIDARG: Hresult = 0x8007_0057_u32.cast_signed();
 pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 pub const DXGI_ERROR_NOT_FOUND: Hresult = 0x887a_0002_u32.cast_signed();
 pub const DXGI_ERROR_MORE_DATA: Hresult = 0x887a_0003_u32.cast_signed();

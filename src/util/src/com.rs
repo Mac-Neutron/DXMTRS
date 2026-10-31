@@ -56,6 +56,23 @@ impl fmt::Display for Guid {
 
 pub type Hresult = i32;
 
+/// `S_OK`.
+pub const S_OK: Hresult = 0;
+/// `S_FALSE`.
+pub const S_FALSE: Hresult = 1;
+/// `E_NOTIMPL`.
+pub const E_NOTIMPL: Hresult = 0x8000_4001_u32.cast_signed();
+/// `E_NOINTERFACE`.
+pub const E_NOINTERFACE: Hresult = 0x8000_4002_u32.cast_signed();
+/// `E_POINTER`.
+pub const E_POINTER: Hresult = 0x8000_4003_u32.cast_signed();
+/// `E_FAIL`.
+pub const E_FAIL: Hresult = 0x8000_4005_u32.cast_signed();
+/// `E_OUTOFMEMORY`.
+pub const E_OUTOFMEMORY: Hresult = 0x8007_000e_u32.cast_signed();
+/// `E_INVALIDARG`.
+pub const E_INVALIDARG: Hresult = 0x8007_0057_u32.cast_signed();
+
 /// `IUnknown`'s slots, which every interface starts with.
 #[repr(C)]
 pub struct IUnknownVtbl {

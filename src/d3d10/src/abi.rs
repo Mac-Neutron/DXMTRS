@@ -6,6 +6,7 @@
 
 use core::ffi::c_void;
 
+pub use dxmt_util::com::{E_INVALIDARG, E_NOTIMPL};
 use dxmt_util::com::{Guid, Hresult, IUnknownVtbl};
 
 /// `ID3D10Device`'s IID.
@@ -22,11 +23,6 @@ pub static IID_ID3D10_MULTITHREAD: Guid = Guid::new(
     0x4106,
     [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
 );
-
-/// `E_NOTIMPL`.
-pub const E_NOTIMPL: Hresult = 0x8000_4001_u32.cast_signed();
-/// `E_INVALIDARG`.
-pub const E_INVALIDARG: Hresult = 0x8007_0057_u32.cast_signed();
 
 /// `D3D10_CREATE_DEVICE_SINGLETHREADED`.
 pub const D3D10_CREATE_DEVICE_SINGLETHREADED: u32 = 1;

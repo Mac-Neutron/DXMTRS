@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use dxmt_util::float_cast::f64_to_f32;
+use dxmt_util::{com::Hresult, float_cast::f64_to_f32};
 use winemetal_sys::{MTLDevice_supportsBCTextureCompression, MTLDevice_supportsFamily};
 use winemetal_wire::{
     WMT_ATTRIBUTE_FORMAT_CHAR, WMT_ATTRIBUTE_FORMAT_CHAR_NORMALIZED, WMT_ATTRIBUTE_FORMAT_CHAR2,
@@ -71,11 +71,8 @@ use winemetal_wire::{
 
 mod abi;
 
-/// `S_OK`.
-pub const S_OK: i32 = 0;
-
-/// `E_FAIL`.
-pub const E_FAIL: i32 = 0x8000_4005_u32.cast_signed();
+// The codes `dxmt_format_query_dxgi` answers, from their home.
+pub use dxmt_util::com::{E_FAIL, S_OK};
 
 /// `MTL_DXGI_FORMAT_TYPELESS`: a typeless DXGI format.
 pub const MTL_DXGI_FORMAT_TYPELESS: u16 = 1;
@@ -1448,7 +1445,7 @@ static MAC2: &[(u32, u32)] = &[
 /// `E_FAIL` for a format Metal has no counterpart for or one past the table, with the description
 /// the C++ leaves in that case.
 #[must_use]
-pub fn query_dxgi(dxgi_format: u32) -> (i32, MtlDxgiFormatDesc) {
+pub fn query_dxgi(dxgi_format: u32) -> (Hresult, MtlDxgiFormatDesc) {
     match usize::try_from(dxgi_format)
         .ok()
         .and_then(|index| DXGI_TABLE.get(index))
@@ -1804,7 +1801,7 @@ crate::seam_export! {
     /// # Safety
     ///
     /// `out` points to a writable `MTL_DXGI_FORMAT_DESC`.
-    unsafe fn dxmt_format_query_dxgi(dxgi_format: u32, out: *mut MtlDxgiFormatDesc) -> i32 {
+    unsafe fn dxmt_format_query_dxgi(dxgi_format: u32, out: *mut MtlDxgiFormatDesc) -> Hresult {
         let (result, desc) = query_dxgi(dxgi_format);
         // SAFETY: `out` is writable, by this function's contract.
         unsafe { out.write(desc) };
