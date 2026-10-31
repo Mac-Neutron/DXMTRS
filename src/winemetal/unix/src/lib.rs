@@ -9,6 +9,7 @@ pub mod ffi;
 pub mod float_cast;
 pub mod format;
 pub mod handle;
+pub mod histogram;
 pub mod init;
 pub mod table;
 pub mod texture;

@@ -30,6 +30,7 @@ use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, params},
     float_cast::u64_to_usize,
     handle::obj,
+    histogram::{self, Kind},
 };
 
 type Encoder = ProtocolObject<dyn MTLBlitCommandEncoder>;
@@ -56,13 +57,18 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
     let Some(encoder) = (unsafe { obj::<Encoder>(p.encoder) }) else {
         return STATUS_SUCCESS;
     };
+    let mut counted = histogram::list(Kind::Blit);
     let mut at = p.cmd_head;
     // SAFETY: as above.
     while let Some(cmd) = unsafe { mem_ref::<WmtcmdBase>(at) } {
+        if let Some(list) = counted.as_mut() {
+            list.record(cmd.r#type);
+        }
         // SAFETY: as above.
         unsafe { encode(encoder, cmd.r#type, at) };
         at = cmd.next;
     }
+    histogram::finish(counted);
     STATUS_SUCCESS
 }
 

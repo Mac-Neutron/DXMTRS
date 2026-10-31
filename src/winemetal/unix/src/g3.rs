@@ -41,6 +41,7 @@ use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, mem_ref, mem_slice, params},
     float_cast::{f64_to_u64, u64_to_usize},
     handle::{obj, ret_owned, ret_passthrough},
+    histogram,
 };
 
 pub mod blit;
@@ -96,6 +97,9 @@ pub unsafe extern "C-unwind" fn queue_command_buffer(args: *mut c_void) -> i32 {
 
 /// Slot 12: commits a command buffer.
 ///
+/// With `DXMT_WMTCMD_HISTOGRAM` set, the records encoded since the last commit are written first
+/// ([`histogram`]).
+///
 /// # Safety
 ///
 /// `args` points to the slot's params block, whose handles are 0 or live objects of their kinds.
@@ -106,6 +110,7 @@ pub unsafe extern "C-unwind" fn command_buffer_commit(args: *mut c_void) -> i32 
     let p = unsafe { params::<UnixcallGenericObjNoret>(args) };
     // SAFETY: as above.
     if let Some(cb) = unsafe { obj::<CommandBuffer>(p.handle) } {
+        histogram::commit();
         cb.commit();
     }
     STATUS_SUCCESS
