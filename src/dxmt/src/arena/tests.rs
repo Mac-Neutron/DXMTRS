@@ -33,7 +33,7 @@ fn arena_drops_each_command_once() {
     // 64-byte blocks: the commands span several, and the 200-byte one needs a block of its own.
     let pool = Arc::new(BlockPool::new(64));
     let mut commands = Commands::new(Arc::clone(&pool));
-    let mut encoder = Encoder {};
+    let mut encoder = Encoder::headless();
     for _ in 0..5 {
         let (dropped, calls) = (Dropped(Arc::clone(&drops)), Arc::clone(&calls));
         commands.emit(move |_| {
@@ -97,7 +97,7 @@ fn arena_runs_in_order() {
         let raw = commands.allocate(Layout::from_size_align(24, 8).unwrap());
         assert_eq!(raw.addr().get() % 8, 0);
     }
-    commands.run(&mut Encoder {});
+    commands.run(&mut Encoder::headless());
     assert_eq!(*order.lock().unwrap(), (0..20).collect::<Vec<_>>());
 }
 
@@ -116,7 +116,7 @@ fn list_replays_twice() {
             order.lock().unwrap().push(i);
         });
     }
-    let mut encoder = Encoder {};
+    let mut encoder = Encoder::headless();
     list.run(&mut encoder);
     list.run(&mut encoder);
     assert_eq!(*order.lock().unwrap(), [0, 1, 2, 0, 1, 2]);

@@ -335,8 +335,9 @@ impl Queue {
         };
         // A failed start drops `this`, whose `drop` stops and waits for what started.
         let shared = Arc::clone(&this.shared);
+        let mut encoder = Encoder::new(device, this.config.encoder_heap);
         this.threads.push(spawn(Some(ENCODE_THREAD), move || {
-            encode(&shared, &mut Encoder {});
+            encode(&shared, &mut encoder);
         })?);
         let shared = Arc::clone(&this.shared);
         this.threads
@@ -488,7 +489,9 @@ fn encode(shared: &Shared, encoder: &mut Encoder) {
         let cmdbuf = unsafe { MTLCommandQueue_commandBuffer(queue) };
         // SAFETY: an autoreleased command buffer the pool keeps alive until here, or nil.
         chunk.cmdbuf = unsafe { Obj::retain(cmdbuf) };
+        encoder.begin_chunk(seq);
         chunk.commands.run(encoder);
+        encoder.end_chunk(&mut chunk.retained);
         // SAFETY: the command buffer just made, or nil, which ignores it.
         unsafe { MTLCommandBuffer_commit(cmdbuf) };
         shared.ring.encoded();

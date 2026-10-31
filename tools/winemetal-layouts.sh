@@ -7,7 +7,10 @@
 # four Windows targets). Once, from Apple clang: each enum value of winemetal.h and each SM50_BINDING_INDEX_*, each
 # integer macro of the headers (-E -dM), the swizzle macros on every swizzled pixel format, and each slot number
 # (winemetal_thunks.c's UNIX_CALLs, airconv_unixcalls, WMTForward's). The headers are read with -DDXMT_GUEST_VM, which
-# only adds declarations. Names take Rust casing: a struct's snake_case becomes CamelCase (WMT names stay),
+# only adds declarations. airconv_public.h's structs may be mirrored too (lib.rs mirrors the reflection pair, whose
+# anonymous union is the field u) and its MTL_SM50_SHADER_ARGUMENT_* enumerators are asserted with winemetal.h's.
+# Names take Rust casing: a struct's snake_case becomes CamelCase, an all-capitals word capitalised
+# (MTL_SM50_SHADER_ARGUMENT: MtlSm50ShaderArgument; WMT names stay),
 # WMTMemoryPointer and WMTConstMemoryPointer are MemPtr, fields are snake_case (originX: origin_x, type: r#type),
 # constants SCREAMING_SNAKE_CASE (WMTPixelFormatBGRX8Unorm: WMT_PIXEL_FORMAT_BGRX8_UNORM). A struct's bitfields are
 # one integer field, bits, with <FIELD>_SHIFT and <FIELD>_WIDTH constants. Fails when a struct of winemetal_thunks.h or
@@ -119,7 +122,8 @@ function rust(s,   o, i, k, w) {
   if (s == "WMTMemoryPointer" || s == "WMTConstMemoryPointer") return "MemPtr"
   if (s !~ /_/) return s
   k = split(s, w, "_"); o = ""
-  for (i = 1; i <= k; i++) o = o toupper(substr(w[i], 1, 1)) substr(w[i], 2)
+  for (i = 1; i <= k; i++)
+    o = o toupper(substr(w[i], 1, 1)) (w[i] ~ /^[A-Z0-9]+$/ ? tolower(substr(w[i], 2)) : substr(w[i], 2))
   return o
 }'
 
@@ -705,7 +709,8 @@ printf '#include "winemetal_thunks.h"\n#include "airconv_thunks.h"\n' >"$t/tu.c"
 apple() { xcrun clang -target aarch64-apple-darwin $flags "$@"; }
 
 structs "$wm/winemetal_thunks.h" "$wm/airconv_thunks.h" >"$t/strict"
-structs "$wm/winemetal_thunks.h" "$wm/airconv_thunks.h" "$wm/winemetal.h" | awk "$names"'{print $0, rust($0)}' >"$t/all"
+structs "$wm/winemetal_thunks.h" "$wm/airconv_thunks.h" "$wm/winemetal.h" "$root/src/airconv/airconv_public.h" |
+  awk "$names"'{print $0, rust($0)}' >"$t/all"
 /usr/bin/grep -oE '^pub struct [A-Za-z_][A-Za-z0-9_]*' "$wire/lib.rs" | awk '{print $3}' >"$t/mirrors"
 awk 'NR == FNR { c[$2] = 1; next } !($0 in c) { print "mirror " $0 " names no C struct"; exit 1 }' \
   "$t/all" "$t/mirrors" || fail "$(tail -1 "$t/mirrors")"
@@ -746,7 +751,7 @@ while read -r target cfg; do
         split($1, a, /[:-]/); print "B", rec, $NF, a[1] * 8 + a[2], a[3] - a[2] + 1; run = 1
       } else {
         if (run) after = 1
-        print "F", rec, $NF, $1
+        print "F", rec, ($0 ~ /\|   union [A-Za-z_][A-Za-z0-9_]*::\(anonymous at /) ? "u" : $NF, $1
       }
     }' "$t/dump" >"$t/facts"
   awk "$names"'
@@ -790,7 +795,7 @@ tr -cs 'A-Za-z0-9_' '\n' <"$wm/winemetal.h" | sort -u >"$t/words"
 awk "$names"'
   FILENAME == ARGV[1] { w[$1] = 1; next }
   /^unix_sm50_/ { print $1, "slot::" toupper(substr($1, 6)); next }
-  ($1 in w && $1 !~ /^WMTWsi/) || /^SM50_BINDING_INDEX_/ { print $1, screaming($1) }
+  ($1 in w && $1 !~ /^WMTWsi/) || /^(SM50_BINDING_INDEX|MTL_SM50_SHADER_ARGUMENT)_/ { print $1, screaming($1) }
 ' "$t/words" "$t/enumerators" >"$t/consts"
 apple -E -dM "$t/tu.c" | awk 'NF == 3 && $3 ~ /^[0-9]+$/ { print $2, $3 }' >"$t/defines"
 awk 'NR == FNR { d[$1] = $2; next } $1 == "#define" && ($2 in d) && !seen[$2]++ { print $2, d[$2] }' "$t/defines" \

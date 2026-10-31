@@ -463,6 +463,7 @@ src/d3d9/unix/src/metal/presenter.rs PresenterFlags Clone,Copy,Debug,Default,Par
 src/d3d9/unix/src/metal/submission.rs RetirementCounter Clone,Copy
 src/d3d9/unix/src/metal/upscale.rs ScalerKey Clone,Copy,PartialEq,Eq,Hash
 src/d3d9/unix/src/metal/upscale.rs ScratchKey Clone,Copy,PartialEq,Eq,Hash
+src/dxmt/src/deptrack.rs Access Clone,Copy
 src/dxmt/src/library.rs ResourceAccess Clone,Copy
 src/dxmt/src/presenter/framegen.rs Mode Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default

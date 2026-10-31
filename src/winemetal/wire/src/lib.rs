@@ -2392,7 +2392,43 @@ pub struct Sm50GetArgumentsInfoParams32 {
     pub arguments: u32,
 }
 
-// Enum values: winemetal.h's, and airconv_public.h's SM50_BINDING_INDEX.
+// airconv_public.h: the translator's reflection, which D3D11's encoder reads.
+
+/// `MTL_SM50_SHADER_ARGUMENT`: one argument of a shader, as its reflection lists it.
+#[repr(C)]
+pub struct MtlSm50ShaderArgument {
+    /// An `SM50BindingType`: constant buffer 0, sampler 1, SRV 2, UAV 3.
+    pub r#type: u32,
+    pub sm50_binding_slot: u32,
+    /// `MTL_SM50_SHADER_ARGUMENT_*` bits.
+    pub flags: u32,
+    /// Where the argument's first qword sits in the argument table, in qwords.
+    pub structure_ptr_offset: u32,
+}
+
+/// `MTL_SHADER_REFLECTION`: what the translator reports of a shader.
+///
+/// `u` is the C's anonymous union, read through its words: `ThreadgroupSize`, or the
+/// tessellator's, geometry shader's, post-tessellator's or pixel shader's part.
+#[repr(C)]
+pub struct MtlShaderReflection {
+    pub constantt_buffer_table_bind_index: u32,
+    pub argument_buffer_bind_index: u32,
+    pub num_constant_buffers: u32,
+    pub num_arguments: u32,
+    pub u: [u32; 3],
+    pub constant_buffer_slot_mask: u16,
+    pub sampler_slot_mask: u16,
+    pub uav_slot_mask: u64,
+    pub srv_slot_mask_hi: u64,
+    pub srv_slot_mask_lo: u64,
+    pub num_output_element: u32,
+    pub threads_per_patch: u32,
+    pub argument_table_qwords: u32,
+    pub writes_uav: u32,
+}
+
+// Enum values: winemetal.h's, and airconv_public.h's SM50_BINDING_INDEX and MTL_SM50_SHADER_ARGUMENT_FLAG.
 
 // WMTStringEncoding
 pub const WMTASCII_STRING_ENCODING: u64 = 1;
@@ -3081,3 +3117,14 @@ pub const SM50_BINDING_INDEX_CONSTANT_BUFFER2: u32 = 6;
 pub const SM50_BINDING_INDEX_ARGUMENT_TABLE2: u32 = 7;
 pub const SM50_BINDING_INDEX_ROOT_ARGUMENTS: u32 = 0;
 pub const SM50_BINDING_INDEX_STATIC_SAMPLERS: u32 = 1;
+
+// MTL_SM50_SHADER_ARGUMENT_FLAG
+pub const MTL_SM50_SHADER_ARGUMENT_BUFFER: u32 = 1;
+pub const MTL_SM50_SHADER_ARGUMENT_TEXTURE: u32 = 1 << 1;
+pub const MTL_SM50_SHADER_ARGUMENT_ELEMENT_WIDTH: u32 = 1 << 2;
+pub const MTL_SM50_SHADER_ARGUMENT_UAV_COUNTER: u32 = 1 << 3;
+pub const MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP: u32 = 1 << 4;
+pub const MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET: u32 = 1 << 5;
+pub const MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY: u32 = 1 << 6;
+pub const MTL_SM50_SHADER_ARGUMENT_READ_ACCESS: u32 = 1 << 10;
+pub const MTL_SM50_SHADER_ARGUMENT_WRITE_ACCESS: u32 = 1 << 11;
