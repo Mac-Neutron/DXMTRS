@@ -14,6 +14,7 @@ pub mod emulated;
 pub mod encoder;
 #[cfg(test)]
 mod fakes;
+pub mod fence;
 pub mod ffi;
 pub mod format;
 pub mod hud;

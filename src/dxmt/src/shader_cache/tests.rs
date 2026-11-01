@@ -2,11 +2,18 @@ use core::{
     cell::RefCell,
     ffi::{CStr, c_char, c_void},
 };
+use std::sync::{Arc, Mutex, PoisonError};
+
+use winemetal_sys::Obj;
 
 use super::{
-    Store, dxmt_shader_cache_create, dxmt_shader_cache_destroy, dxmt_shader_cache_has_reader,
-    dxmt_shader_cache_has_writer, dxmt_shader_cache_read, dxmt_shader_cache_write, path,
+    Store, close_all, dxmt_shader_cache_create, dxmt_shader_cache_destroy,
+    dxmt_shader_cache_has_reader, dxmt_shader_cache_has_writer, dxmt_shader_cache_read,
+    dxmt_shader_cache_write, instance, path, version,
 };
+
+/// Serialises tests that touch the process-wide [`instance`] map.
+static INSTANCE_LOCK: Mutex<()> = Mutex::new(());
 
 /// The handles the fakes hand out: the writer, the reader and a stored value.
 const WRITER: u64 = 0x57;
@@ -338,4 +345,65 @@ fn create_and_destroy_pair_up() {
     // Whatever the environment says, both sides are on or both off.
     assert_eq!(store.has_reader(), store.has_writer());
     store.destroy();
+}
+
+#[test]
+fn version_is_the_cpps() {
+    assert_eq!(version("71a7e5f23311", 26), 0x2591_f487_afdf_577d);
+    assert_eq!(
+        version(
+            "71a7e5f2e9c40812a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f83311",
+            26,
+        ),
+        0x14b2_9052_9359_5e99,
+    );
+    assert_eq!(version("v0.72", 26), 0x9eeb_5ed0_7b6d_0ab4);
+}
+
+#[test]
+fn one_store_per_metal_version() {
+    let _guard = INSTANCE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    close_all();
+    start();
+
+    let first_310 = instance(310, 0x1111);
+    let second_310 = instance(310, 0x1111);
+    assert!(Arc::ptr_eq(&first_310, &second_310));
+    let log_310 = take();
+    assert_eq!(log_310.matches("CacheWriter_alloc_init").count(), 1);
+    assert_eq!(log_310.matches("CacheReader_alloc_init").count(), 1);
+
+    let first_320 = instance(320, 0x1111);
+    assert!(!Arc::ptr_eq(&first_310, &first_320));
+    let log_320 = take();
+    assert_eq!(log_320.matches("CacheWriter_alloc_init").count(), 1);
+    assert_eq!(log_320.matches("CacheReader_alloc_init").count(), 1);
+
+    close_all();
+    take();
+}
+
+#[test]
+fn close_all_closes_every_store() {
+    let _guard = INSTANCE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    close_all();
+    start();
+
+    // Hold an extra Arc<Store> as a leaked device, shader or pipeline would.
+    let extra = instance(310, 0x2222);
+    assert!(extra.has_reader() && extra.has_writer());
+    take();
+
+    close_all();
+    assert_eq!(take(), "NSObject_release reader\nNSObject_release writer\n");
+    assert!(!extra.has_reader() && !extra.has_writer());
+
+    // SAFETY: a fake handle that `Obj::drop` releases into the test log.
+    let blob = unsafe { Obj::adopt(DATA) }.expect("non-zero fake handle");
+    assert!(extra.read(&[1, 2, 3]).is_none());
+    extra.write(&[1, 2, 3], &blob);
+    assert_eq!(take(), "");
+
+    drop(extra);
+    assert_eq!(take(), "");
 }

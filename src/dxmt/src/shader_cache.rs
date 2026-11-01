@@ -6,6 +6,8 @@
 //! its own destructor. Each object is used under a mutex of its own.
 
 mod abi;
+mod instance;
+mod version;
 
 use core::{
     ffi::{c_char, c_void},
@@ -17,6 +19,8 @@ use std::{
 };
 
 use dxmt_util::env::cache_exe_name;
+pub use instance::{close_all, instance};
+pub use version::version;
 use winemetal_sys::{
     CacheReader_alloc_init, CacheReader_get, CacheWriter_alloc_init, CacheWriter_set, Obj,
 };
@@ -24,8 +28,8 @@ use winemetal_sys::{
 /// The translation cache of one Metal version: a writer and a reader, each there if it opened.
 pub struct Store {
     // Fields drop in declaration order, and the C++ released the reader before the writer.
-    reader: Option<Mutex<Obj>>,
-    writer: Option<Mutex<Obj>>,
+    reader: Mutex<Option<Obj>>,
+    writer: Mutex<Option<Obj>>,
 }
 
 impl Store {
@@ -52,8 +56,8 @@ impl Store {
     fn open(file: Option<&str>, version: u64) -> Self {
         let Some(file) = file.and_then(|file| CString::new(file).ok()) else {
             return Self {
-                reader: None,
-                writer: None,
+                reader: Mutex::new(None),
+                writer: Mutex::new(None),
             };
         };
         // The writer first: it creates the database and its table, and a read-only reader opened
@@ -67,31 +71,34 @@ impl Store {
         // SAFETY: as above.
         let reader = unsafe { Obj::adopt(reader) };
         Self {
-            reader: reader.map(Mutex::new),
-            writer: writer.map(Mutex::new),
+            reader: Mutex::new(reader),
+            writer: Mutex::new(writer),
         }
     }
 
     /// Whether the cache can be read.
     #[must_use]
-    pub const fn has_reader(&self) -> bool {
-        self.reader.is_some()
+    pub fn has_reader(&self) -> bool {
+        self.reader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// Whether the cache can be written.
     #[must_use]
-    pub const fn has_writer(&self) -> bool {
-        self.writer.is_some()
+    pub fn has_writer(&self) -> bool {
+        self.writer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// The data stored under `key`, if the cache can be read and holds it.
     #[must_use]
     pub fn read(&self, key: &[u8]) -> Option<Obj> {
-        let reader = self
-            .reader
-            .as_ref()?
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let guard = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        let reader = guard.as_ref()?;
         // SAFETY: `reader` is a live reader handle, `key` is readable for its length.
         let data = unsafe {
             CacheReader_get(
@@ -100,16 +107,17 @@ impl Store {
                 key.len() as u64,
             )
         };
+        drop(guard);
         // SAFETY: a `get` handle is null or carries the one reference given here.
         unsafe { Obj::adopt(data) }
     }
 
     /// Stores `data` under `key`, if the cache can be written.
     pub fn write(&self, key: &[u8], data: &Obj) {
-        let Some(writer) = &self.writer else {
+        let guard = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(writer) = guard.as_ref() else {
             return;
         };
-        let writer = writer.lock().unwrap_or_else(PoisonError::into_inner);
         // SAFETY: `writer` is a live writer handle, `key` is readable for its length, `data` is live.
         unsafe {
             CacheWriter_set(
@@ -119,6 +127,26 @@ impl Store {
                 data.handle(),
             );
         }
+        drop(guard);
+    }
+
+    /// Releases the reader and writer (reader first, then writer, as the C++ destructor did).
+    ///
+    /// Later [`Self::read`] and [`Self::write`] calls see the cache as closed even when an
+    /// `Arc<Store>` outlives [`close_all`].
+    pub fn close(&self) {
+        let reader = self
+            .reader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        drop(reader);
+        let writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        drop(writer);
     }
 }
 
