@@ -61,6 +61,7 @@ use crate::{
 
 mod argument;
 mod flush;
+mod gaps;
 mod optimize;
 mod pass;
 mod resident;
@@ -187,6 +188,7 @@ impl ArgumentBuffer {
 }
 
 pub use flush::QueryBuffers;
+pub use gaps::TempBufferSlice;
 pub use pass::{
     Attachment, ColorTarget, DepthTarget, Pass, RenderTargets, RenderUses, StencilTarget, Target,
     TemporalTextures,

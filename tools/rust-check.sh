@@ -60,12 +60,12 @@ case $(rustc --version) in
 esac
 
 PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
-  -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys'
+  -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys --features d3d11/front-end'
 PE64_P="$PE_P -p nvngx -p nvapi"
 HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
   -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys'
 # The core's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
-CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d12/perf-build'
+CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d11/front-end,d3d12/perf-build'
 HOST=aarch64-apple-darwin
 I686=i686-pc-windows-msvc
 
@@ -165,6 +165,104 @@ leg_gen() {
     ID3D12CommandQueue ID3D12PipelineLibrary ID3D12PipelineLibrary1 \
     ID3D12Device ID3D12Device1 ID3D12Device2 ID3D12Device3 ID3D12Device4 \
     ID3D12Device5 ID3D12Device6 ID3D12Device7 ID3D12Device8 ID3D12Device9 ID3D12Device10 || rc=1
+  gen_cmp src/d3d11/src/abi/vtbl.rs --com d3d11_4.h+d3d10_1.h crate::abi::vtbl \
+    IUnknown IDXGIObject IDXGIDeviceSubObject \
+    IDXGIDevice IDXGIDevice1 IDXGIDevice2 IDXGIDevice3 \
+    IDXGIResource IDXGIResource1 IDXGISurface IDXGISurface1 IDXGISurface2 \
+    IDXGIKeyedMutex IDXGISwapChain IDXGISwapChain1 IDXGISwapChain2 IDXGISwapChain3 IDXGISwapChain4 \
+    ID3D11DeviceChild ID3D11Resource ID3D11Buffer \
+    ID3D11Texture1D ID3D11Texture2D ID3D11Texture2D1 ID3D11Texture3D ID3D11Texture3D1 \
+    ID3D11View ID3D11ShaderResourceView ID3D11ShaderResourceView1 \
+    ID3D11RenderTargetView ID3D11RenderTargetView1 ID3D11DepthStencilView \
+    ID3D11UnorderedAccessView ID3D11UnorderedAccessView1 \
+    ID3D11BlendState ID3D11BlendState1 ID3D11DepthStencilState \
+    ID3D11RasterizerState ID3D11RasterizerState1 ID3D11RasterizerState2 ID3D11SamplerState \
+    ID3D11InputLayout ID3D11VertexShader ID3D11HullShader ID3D11DomainShader \
+    ID3D11GeometryShader ID3D11PixelShader ID3D11ComputeShader \
+    ID3D11Asynchronous ID3D11Query ID3D11Query1 ID3D11Predicate ID3D11Counter \
+    ID3D11ClassInstance ID3D11ClassLinkage ID3D11CommandList ID3DDeviceContextState \
+    ID3D11DeviceContext ID3D11DeviceContext1 ID3D11DeviceContext2 ID3D11DeviceContext3 ID3D11DeviceContext4 \
+    ID3D11Fence ID3D11Device ID3D11Device1 ID3D11Device2 ID3D11Device3 ID3D11Device4 ID3D11Device5 \
+    ID3D11Multithread ID3DUserDefinedAnnotation \
+    ID3D10DeviceChild ID3D10Resource ID3D10Buffer ID3D10Texture1D ID3D10Texture2D ID3D10Texture3D \
+    ID3D10View ID3D10ShaderResourceView ID3D10ShaderResourceView1 ID3D10RenderTargetView ID3D10DepthStencilView \
+    ID3D10BlendState ID3D10BlendState1 ID3D10DepthStencilState ID3D10RasterizerState ID3D10SamplerState \
+    ID3D10InputLayout ID3D10VertexShader ID3D10GeometryShader ID3D10PixelShader \
+    ID3D10Asynchronous ID3D10Query ID3D10Predicate ID3D10Counter \
+    ID3D10Device ID3D10Device1 ID3D10Multithread || rc=1
+  gen_cmp src/d3d11/src/abi/records.rs --com d3d11_4.h+d3d10_1.h crate::abi::records --records \
+    LUID RECT POINT SECURITY_ATTRIBUTES \
+    DXGI_RATIONAL DXGI_SAMPLE_DESC DXGI_RGB DXGI_RGBA \
+    DXGI_GAMMA_CONTROL DXGI_GAMMA_CONTROL_CAPABILITIES \
+    DXGI_MODE_DESC DXGI_MODE_DESC1 DXGI_SURFACE_DESC DXGI_MAPPED_RECT \
+    DXGI_SHARED_RESOURCE DXGI_FRAME_STATISTICS \
+    DXGI_SWAP_CHAIN_DESC DXGI_SWAP_CHAIN_DESC1 DXGI_SWAP_CHAIN_FULLSCREEN_DESC \
+    DXGI_PRESENT_PARAMETERS DXGI_MATRIX_3X2_F DXGI_HDR_METADATA_HDR10 \
+    D3D11_BOX D3D11_VIEWPORT D3D11_MAPPED_SUBRESOURCE D3D11_SUBRESOURCE_DATA \
+    D3D11_BUFFER_DESC D3D11_TEXTURE1D_DESC D3D11_TEXTURE2D_DESC D3D11_TEXTURE2D_DESC1 \
+    D3D11_TEXTURE3D_DESC D3D11_TEXTURE3D_DESC1 \
+    D3D11_BUFFER_SRV D3D11_BUFFEREX_SRV \
+    D3D11_TEX1D_SRV D3D11_TEX1D_ARRAY_SRV \
+    D3D11_TEX2D_SRV D3D11_TEX2D_ARRAY_SRV D3D11_TEX2D_SRV1 D3D11_TEX2D_ARRAY_SRV1 \
+    D3D11_TEX3D_SRV D3D11_TEXCUBE_SRV D3D11_TEXCUBE_ARRAY_SRV \
+    D3D11_TEX2DMS_SRV D3D11_TEX2DMS_ARRAY_SRV \
+    D3D11_SHADER_RESOURCE_VIEW_DESC D3D11_SHADER_RESOURCE_VIEW_DESC1 \
+    D3D11_BUFFER_RTV D3D11_TEX1D_RTV D3D11_TEX1D_ARRAY_RTV \
+    D3D11_TEX2D_RTV D3D11_TEX2D_ARRAY_RTV D3D11_TEX2D_RTV1 D3D11_TEX2D_ARRAY_RTV1 \
+    D3D11_TEX2DMS_RTV D3D11_TEX2DMS_ARRAY_RTV D3D11_TEX3D_RTV \
+    D3D11_RENDER_TARGET_VIEW_DESC D3D11_RENDER_TARGET_VIEW_DESC1 \
+    D3D11_TEX1D_DSV D3D11_TEX1D_ARRAY_DSV \
+    D3D11_TEX2D_DSV D3D11_TEX2D_ARRAY_DSV \
+    D3D11_TEX2DMS_DSV D3D11_TEX2DMS_ARRAY_DSV \
+    D3D11_DEPTH_STENCIL_VIEW_DESC \
+    D3D11_BUFFER_UAV D3D11_TEX1D_UAV D3D11_TEX1D_ARRAY_UAV \
+    D3D11_TEX2D_UAV D3D11_TEX2D_ARRAY_UAV D3D11_TEX2D_UAV1 D3D11_TEX2D_ARRAY_UAV1 \
+    D3D11_TEX3D_UAV D3D11_UNORDERED_ACCESS_VIEW_DESC D3D11_UNORDERED_ACCESS_VIEW_DESC1 \
+    D3D11_RENDER_TARGET_BLEND_DESC D3D11_BLEND_DESC \
+    D3D11_RENDER_TARGET_BLEND_DESC1 D3D11_BLEND_DESC1 \
+    D3D11_DEPTH_STENCILOP_DESC D3D11_DEPTH_STENCIL_DESC \
+    D3D11_RASTERIZER_DESC D3D11_RASTERIZER_DESC1 D3D11_RASTERIZER_DESC2 \
+    D3D11_SAMPLER_DESC \
+    D3D11_INPUT_ELEMENT_DESC D3D11_SO_DECLARATION_ENTRY D3D11_CLASS_INSTANCE_DESC \
+    D3D11_QUERY_DESC D3D11_QUERY_DESC1 \
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT D3D11_QUERY_DATA_PIPELINE_STATISTICS D3D11_QUERY_DATA_SO_STATISTICS \
+    D3D11_COUNTER_DESC D3D11_COUNTER_INFO \
+    D3D11_TILED_RESOURCE_COORDINATE D3D11_TILE_REGION_SIZE D3D11_TILE_SHAPE \
+    D3D11_SUBRESOURCE_TILING D3D11_PACKED_MIP_DESC \
+    D3D11_DRAW_INSTANCED_INDIRECT_ARGS D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS \
+    D3D11_FEATURE_DATA_THREADING D3D11_FEATURE_DATA_DOUBLES \
+    D3D11_FEATURE_DATA_FORMAT_SUPPORT D3D11_FEATURE_DATA_FORMAT_SUPPORT2 \
+    D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS \
+    D3D11_FEATURE_DATA_D3D11_OPTIONS D3D11_FEATURE_DATA_ARCHITECTURE_INFO \
+    D3D11_FEATURE_DATA_D3D9_OPTIONS D3D11_FEATURE_DATA_D3D9_SHADOW_SUPPORT \
+    D3D11_FEATURE_DATA_SHADER_MIN_PRECISION_SUPPORT D3D11_FEATURE_DATA_D3D11_OPTIONS1 \
+    D3D11_FEATURE_DATA_D3D9_SIMPLE_INSTANCING_SUPPORT D3D11_FEATURE_DATA_MARKER_SUPPORT \
+    D3D11_FEATURE_DATA_D3D9_OPTIONS1 D3D11_FEATURE_DATA_D3D11_OPTIONS2 \
+    D3D11_FEATURE_DATA_D3D11_OPTIONS3 D3D11_FEATURE_DATA_D3D11_OPTIONS4 \
+    D3D11_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT D3D11_FEATURE_DATA_D3D11_OPTIONS5 \
+    D3D11_FEATURE_DATA_SHADER_CACHE \
+    D3D10_BOX D3D10_VIEWPORT D3D10_MAPPED_TEXTURE2D D3D10_MAPPED_TEXTURE3D D3D10_SUBRESOURCE_DATA \
+    D3D10_BUFFER_DESC D3D10_TEXTURE1D_DESC D3D10_TEXTURE2D_DESC D3D10_TEXTURE3D_DESC \
+    D3D10_BUFFER_SRV D3D10_TEX1D_SRV D3D10_TEX1D_ARRAY_SRV \
+    D3D10_TEX2D_SRV D3D10_TEX2D_ARRAY_SRV D3D10_TEX3D_SRV \
+    D3D10_TEXCUBE_SRV D3D10_TEXCUBE_ARRAY_SRV1 \
+    D3D10_TEX2DMS_SRV D3D10_TEX2DMS_ARRAY_SRV \
+    D3D10_SHADER_RESOURCE_VIEW_DESC D3D10_SHADER_RESOURCE_VIEW_DESC1 \
+    D3D10_BUFFER_RTV D3D10_TEX1D_RTV D3D10_TEX1D_ARRAY_RTV \
+    D3D10_TEX2D_RTV D3D10_TEX2D_ARRAY_RTV \
+    D3D10_TEX2DMS_RTV D3D10_TEX2DMS_ARRAY_RTV D3D10_TEX3D_RTV \
+    D3D10_RENDER_TARGET_VIEW_DESC \
+    D3D10_TEX1D_DSV D3D10_TEX1D_ARRAY_DSV \
+    D3D10_TEX2D_DSV D3D10_TEX2D_ARRAY_DSV \
+    D3D10_TEX2DMS_DSV D3D10_TEX2DMS_ARRAY_DSV \
+    D3D10_DEPTH_STENCIL_VIEW_DESC \
+    D3D10_BLEND_DESC D3D10_RENDER_TARGET_BLEND_DESC1 D3D10_BLEND_DESC1 \
+    D3D10_DEPTH_STENCILOP_DESC D3D10_DEPTH_STENCIL_DESC \
+    D3D10_RASTERIZER_DESC D3D10_SAMPLER_DESC \
+    D3D10_INPUT_ELEMENT_DESC D3D10_SO_DECLARATION_ENTRY \
+    D3D10_QUERY_DESC D3D10_QUERY_DATA_TIMESTAMP_DISJOINT \
+    D3D10_QUERY_DATA_PIPELINE_STATISTICS D3D10_QUERY_DATA_SO_STATISTICS \
+    D3D10_COUNTER_DESC D3D10_COUNTER_INFO || rc=1
   gen_cmp src/winemetal/sys/src/sm50/abi.rs --seam-abi src/winemetal/sys/sm50-abi.h winemetal_sys::sm50 || rc=1
   for f in src/dxmt/src/*/abi.rs; do
     h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")
@@ -188,7 +286,7 @@ leg_clippy() {
     lint $t -p mtld3d-tests --all-targets || rc=1
   done
   lint arm64ec-pc-windows-msvc $PE64_P || rc=1
-  lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache,airconv/oracle || rc=1
+  lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache,airconv/oracle,d3d11/front-end || rc=1
   lint $HOST -p mtld3d-unix --features mtld3d-unix/winemetal --all-targets || rc=1
   lint $HOST -p winemetal --features native || rc=1
   perf lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache || rc=1
@@ -202,7 +300,7 @@ leg_doc() {
   rc=0
   RUSTDOCFLAGS='-D warnings'; export RUSTDOCFLAGS
   pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 $PE_P --features mtld3d-core/disk-cache || rc=1
-  cargo_ doc --no-deps --offline --keep-going --target $HOST $HOST_P --features mtld3d-core/disk-cache || rc=1
+  cargo_ doc --no-deps --offline --keep-going --target $HOST $HOST_P --features mtld3d-core/disk-cache,d3d11/front-end || rc=1
   unset RUSTDOCFLAGS
   return $rc
 }
@@ -222,7 +320,7 @@ leg_test() {
   unit_tests || rc=1
   perf unit_tests || rc=1
   tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core -p airconv-ir -p airconv \
-    -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys --features airconv/oracle \
+    -p dxmt-core -p d3d11 -p d3d12 -p winemetal-sys --features airconv/oracle,d3d11/front-end \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

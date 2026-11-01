@@ -4,13 +4,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "DXMT's d3d11.dll and d3d11.dylib: the Rust linked into the C++ front end, DXMT's core among it"
+description = "DXMT's d3d11.dll and d3d11.dylib"
 publish = false
 
 [lib]
 crate-type = ["staticlib"]
 
 [features]
+# Enables the Rust D3D11 and D3D10 front end and its #[unsafe(no_mangle)] DLL exports.
+front-end = []
 # DXMT_PERF_BUILD (meson sets it when -DDXMT_PERF_BUILD is in cpp_args): the core's statistics and dump folder compile
 # to nothing and the log drops everything below warnings.
 perf-build = ["dxmt-core/perf-build", "dxmt-util/perf-build"]
@@ -21,5 +23,10 @@ guest-vm = ["dxmt-core/guest-vm"]
 workspace = true
 
 [dependencies]
+bitflags = { workspace = true }
 dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
+rustc-hash = { workspace = true }
+winemetal-sys = { workspace = true }
+winemetal-wire = { workspace = true }
+

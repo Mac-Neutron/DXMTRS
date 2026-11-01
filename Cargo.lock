@@ -139,8 +139,12 @@ dependencies = [
 name = "d3d11"
 version = "0.14.1"
 dependencies = [
+ "bitflags 2.13.2",
  "dxmt-core",
  "dxmt-util",
+ "rustc-hash",
+ "winemetal-sys",
+ "winemetal-wire",
 ]
 
 [[package]]
