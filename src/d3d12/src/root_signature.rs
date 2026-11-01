@@ -9,6 +9,9 @@
 //! The descriptions are the application's: every array is read with no alignment assumed, and a
 //! null array whose count is not 0 is refused where the C++ would dereference it.
 
+pub mod deserializer;
+pub mod object;
+
 use dxmt_util::com::Hresult;
 
 use crate::abi::{

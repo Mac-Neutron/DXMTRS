@@ -6,7 +6,22 @@
 //! `wmt_native_not_implemented` flag and returns a fallback value (`E_NOTIMPL` for `Hresult`, `()`
 //! for `void`, or a supplied fallback).
 
+#[cfg(test)]
+use core::cell::RefCell;
+
 use crate::com::{E_NOTIMPL, Hresult};
+
+#[cfg(test)]
+std::thread_local! {
+    static LAST_REPORTED: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Returns and clears the most recent `method` passed to [`report_with`] on the calling thread.
+#[cfg(test)]
+#[must_use]
+pub fn take_last_reported() -> Option<String> {
+    LAST_REPORTED.with(|slot| slot.borrow_mut().take())
+}
 
 #[cfg(windows)]
 unsafe extern "C" {
@@ -90,6 +105,8 @@ pub fn report_with<R>(file: &str, method: &str, line: u32, _fallback: R) -> R {
 /// Logs `<file>:<method>(<line>) is not implemented.` and sets `wmt_native_not_implemented()`.
 #[cfg(not(windows))]
 pub fn report_with<R>(file: &str, method: &str, line: u32, fallback: R) -> R {
+    #[cfg(test)]
+    LAST_REPORTED.with(|slot| *slot.borrow_mut() = Some(method.to_owned()));
     crate::LOG.err(&format!("{file}:{method}({line}) is not implemented."));
     // SAFETY: sets the calling thread's thread-local flag in `winemetal.dylib`.
     unsafe { winemetal_sys::wmt_native_not_implemented() };

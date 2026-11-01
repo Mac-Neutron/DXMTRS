@@ -11,6 +11,7 @@
 //! waits on without holding the first.
 
 mod abi;
+pub mod framegen;
 
 use core::{
     ffi::c_void,

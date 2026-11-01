@@ -1,5 +1,20 @@
 use core::{ffi::c_void, mem::size_of, ptr};
 
+#[cfg(not(windows))]
+#[unsafe(export_name = "wmt_native_not_implemented")]
+extern "C" fn fake_wmt_native_not_implemented() {}
+
+#[unsafe(export_name = "NSObject_retain")]
+extern "C-unwind" fn fake_nsobject_retain(_object: u64) {}
+
+#[unsafe(export_name = "NSObject_release")]
+extern "C-unwind" fn fake_nsobject_release(_object: u64) {}
+
+#[unsafe(export_name = "NSAutoreleasePool_alloc_init")]
+extern "C-unwind" fn fake_autorelease_pool_alloc_init() -> u64 {
+    1
+}
+
 use super::{
     D3D_FEATURE_LEVEL_11_0, D3D12CreateDevice, D3D12GetDebugInterface, D3D12GetInterface,
     abi::{

@@ -1,15 +1,32 @@
 //! DXMT's `d3d12.dll` and `d3d12.dylib`: the D3D12 front end over Metal.
 
 pub mod abi;
+pub mod allocator;
 pub mod barrier;
+pub mod blob;
+pub mod capture;
 pub mod com;
+pub mod command_signature;
+pub mod descriptor_heap;
+pub mod device;
 pub mod encoder;
 pub mod feature;
+pub mod fence;
+pub mod heap;
+pub mod list;
+pub mod pipeline;
 pub mod pipeline_stream;
+pub mod query_heap;
+pub mod queue;
+pub mod resource;
 pub mod resource_math;
 pub mod root_signature;
 pub mod sampler;
+pub mod shader;
+pub mod shader_cache;
+pub mod shared_fence;
 pub mod stats;
+pub mod swapchain;
 pub mod unimpl;
 
 use core::ffi::c_void;
@@ -194,17 +211,18 @@ extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *mut 
 /// `adapter`, `riid`, and `device` are caller-supplied COM pointers (null or valid).
 #[unsafe(no_mangle)]
 pub unsafe extern "system-unwind" fn D3D12CreateDevice(
-    _adapter: *mut c_void,
+    adapter: *mut c_void,
     minimum_feature_level: u32,
-    _riid: *const Guid,
-    _device: *mut *mut c_void,
+    riid: *const Guid,
+    device: *mut *mut c_void,
 ) -> Hresult {
     let _guard = dxmt_core::ffi::AbortOnPanic;
     ensure_init();
     if minimum_feature_level < D3D_FEATURE_LEVEL_11_0 {
         return E_INVALIDARG;
     }
-    not_implemented!("D3D12CreateDevice")
+    // SAFETY: caller forwards export arguments.
+    unsafe { device::factory::create(adapter, minimum_feature_level, riid, device) }
 }
 
 /// `D3D12GetInterface` (`d3d12.cpp:71-74`).
@@ -255,14 +273,22 @@ pub unsafe extern "system-unwind" fn D3D12GetDebugInterface(
 /// `src_data`, `deserializer_interface`, and `deserializer` are caller-supplied pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "system-unwind" fn D3D12CreateRootSignatureDeserializer(
-    _src_data: *const c_void,
-    _src_data_size_in_bytes: usize,
-    _deserializer_interface: *const Guid,
-    _deserializer: *mut *mut c_void,
+    src_data: *const c_void,
+    src_data_size_in_bytes: usize,
+    deserializer_interface: *const Guid,
+    deserializer: *mut *mut c_void,
 ) -> Hresult {
     let _guard = dxmt_core::ffi::AbortOnPanic;
     ensure_init();
-    not_implemented!("D3D12CreateRootSignatureDeserializer")
+    // SAFETY: caller forwards export arguments.
+    unsafe {
+        root_signature::deserializer::create_deserializer(
+            src_data,
+            src_data_size_in_bytes,
+            deserializer_interface,
+            deserializer,
+        )
+    }
 }
 
 /// `D3D12CreateVersionedRootSignatureDeserializer` (`d3d12_root_signature.cpp:312-328`).
@@ -272,14 +298,22 @@ pub unsafe extern "system-unwind" fn D3D12CreateRootSignatureDeserializer(
 /// `src_data`, `deserializer_interface`, and `deserializer` are caller-supplied pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "system-unwind" fn D3D12CreateVersionedRootSignatureDeserializer(
-    _src_data: *const c_void,
-    _src_data_size_in_bytes: usize,
-    _deserializer_interface: *const Guid,
-    _deserializer: *mut *mut c_void,
+    src_data: *const c_void,
+    src_data_size_in_bytes: usize,
+    deserializer_interface: *const Guid,
+    deserializer: *mut *mut c_void,
 ) -> Hresult {
     let _guard = dxmt_core::ffi::AbortOnPanic;
     ensure_init();
-    not_implemented!("D3D12CreateVersionedRootSignatureDeserializer")
+    // SAFETY: caller forwards export arguments.
+    unsafe {
+        root_signature::deserializer::create_versioned_deserializer(
+            src_data,
+            src_data_size_in_bytes,
+            deserializer_interface,
+            deserializer,
+        )
+    }
 }
 
 /// `D3D12SerializeRootSignature` (`d3d12_root_signature.cpp:229-243`).
@@ -289,14 +323,22 @@ pub unsafe extern "system-unwind" fn D3D12CreateVersionedRootSignatureDeserializ
 /// `root_signature`, `blob`, and `error_blob` are caller-supplied pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "system-unwind" fn D3D12SerializeRootSignature(
-    _root_signature: *const c_void,
-    _version: u32,
-    _blob: *mut *mut c_void,
-    _error_blob: *mut *mut c_void,
+    root_signature: *const c_void,
+    version: u32,
+    blob: *mut *mut c_void,
+    error_blob: *mut *mut c_void,
 ) -> Hresult {
     let _guard = dxmt_core::ffi::AbortOnPanic;
     ensure_init();
-    not_implemented!("D3D12SerializeRootSignature")
+    // SAFETY: caller forwards export arguments.
+    unsafe {
+        root_signature::deserializer::serialize_root_signature(
+            root_signature,
+            version,
+            blob,
+            error_blob,
+        )
+    }
 }
 
 /// `D3D12SerializeVersionedRootSignature` (`d3d12_root_signature.cpp:200-226`).
@@ -306,13 +348,20 @@ pub unsafe extern "system-unwind" fn D3D12SerializeRootSignature(
 /// `root_signature`, `blob`, and `error_blob` are caller-supplied pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "system-unwind" fn D3D12SerializeVersionedRootSignature(
-    _root_signature: *const c_void,
-    _blob: *mut *mut c_void,
-    _error_blob: *mut *mut c_void,
+    root_signature: *const c_void,
+    blob: *mut *mut c_void,
+    error_blob: *mut *mut c_void,
 ) -> Hresult {
     let _guard = dxmt_core::ffi::AbortOnPanic;
     ensure_init();
-    not_implemented!("D3D12SerializeVersionedRootSignature")
+    // SAFETY: caller forwards export arguments.
+    unsafe {
+        root_signature::deserializer::serialize_versioned_root_signature(
+            root_signature,
+            blob,
+            error_blob,
+        )
+    }
 }
 
 #[cfg(test)]

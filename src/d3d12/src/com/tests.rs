@@ -24,7 +24,7 @@ struct FakeDevice {
 }
 
 impl ComRefCounted for FakeDevice {
-    fn com_object(&self) -> &ComObject {
+    fn com(&self) -> &ComObject {
         &self.com
     }
 }

@@ -7,53 +7,12 @@
 use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
-use dxmt_core::{
-    resource::{Texture, TextureAllocation, TextureViewKey},
-    scaler::Scaler,
-};
+pub use dxmt_core::presenter::framegen::TemporalScaler;
+use dxmt_core::resource::{Texture, TextureAllocation, TextureViewKey};
 use winemetal_wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMTClearColor,
-    WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps, WmtcmdBase, WmtcmdBlitNop, WmtcmdComputeNop,
-    WmtcmdRenderNop,
+    WMTFXTemporalScalerProps, WmtcmdBase, WmtcmdBlitNop, WmtcmdComputeNop, WmtcmdRenderNop,
 };
-
-/// A `MetalFX` temporal scaler paired with its [`WMTFXTemporalScalerInfo`] (`dxmt_scaler.hpp`).
-pub struct TemporalScaler {
-    pub scaler: Scaler,
-    pub info: WMTFXTemporalScalerInfo,
-}
-
-impl TemporalScaler {
-    /// Creates a temporal scaler and its fence on `device` for `info`.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a live `MTLDevice` handle.
-    #[must_use]
-    pub unsafe fn new(device: u64, info: WMTFXTemporalScalerInfo) -> Self {
-        // SAFETY: `device` is a live `MTLDevice` and `info` is valid for the call.
-        let scaler = unsafe { Scaler::temporal(device, &info) };
-        Self { scaler, info }
-    }
-
-    /// The `MTLFXTemporalScaler` handle, or `None` when Metal made none.
-    #[must_use]
-    pub const fn scaler(&self) -> Option<&winemetal_sys::Obj> {
-        self.scaler.scaler()
-    }
-
-    /// The scaler's `MTLFence` handle, or `None` when Metal made none.
-    #[must_use]
-    pub const fn fence(&self) -> Option<&winemetal_sys::Obj> {
-        self.scaler.fence()
-    }
-
-    /// The description this scaler was created for.
-    #[must_use]
-    pub const fn info(&self) -> &WMTFXTemporalScalerInfo {
-        &self.info
-    }
-}
 
 /// Strong reference to a [`Texture`], its [`TextureAllocation`], and a cached view key.
 ///
