@@ -531,3 +531,40 @@ fn background_leave_minimises() {
         );
     });
 }
+
+#[test]
+fn foreground_from_the_hook() {
+    let hwnd: Hwnd = core::ptr::without_provenance_mut(0x1111);
+    set_hooks(Some(&SIM_HOOKS));
+
+    for (focused, process_fg) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut flags = WMT_WSI_WIN_KNOWN;
+        if focused {
+            flags |= WMT_WSI_WIN_FOCUSED;
+        }
+        if process_fg {
+            flags |= WMT_WSI_WIN_PROCESS_FG;
+        }
+        SIM.with(|sim| {
+            *sim.borrow_mut() = SimWindow {
+                monitor: FIRST,
+                width: 1280,
+                height: 720,
+                flags,
+                ..SimWindow::default()
+            };
+        });
+        assert_eq!(is_foreground(hwnd), focused);
+        assert_eq!(is_process_foreground(), process_fg);
+    }
+}
+
+#[test]
+fn no_hooks_is_headless_default_foreground() {
+    let hwnd: Hwnd = core::ptr::without_provenance_mut(0x2222);
+    for hooks in [None, Some(&EMPTY), Some(&UNKNOWN_WINDOW)] {
+        set_hooks(hooks);
+        assert!(is_foreground(hwnd));
+        assert!(is_process_foreground());
+    }
+}
