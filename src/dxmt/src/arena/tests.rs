@@ -124,3 +124,32 @@ fn list_replays_twice() {
     drop(list);
     assert_eq!(count(&drops), 3);
 }
+
+/// Captures in `Commands::emit` and values in `Commands::retain` drop at `reset`, not `run`.
+#[test]
+fn arena_drops_at_reset_not_at_run() {
+    let emit_drops = Arc::new(AtomicUsize::new(0));
+    let retain_drops = Arc::new(AtomicUsize::new(0));
+    let mut commands = Commands::new(Arc::new(BlockPool::new(128)));
+
+    let captured = Dropped(Arc::clone(&emit_drops));
+    commands.emit(move |_| {
+        let _ = &captured;
+    });
+    commands.retain(Dropped(Arc::clone(&retain_drops)));
+
+    // Neither `emit` nor `retain` dropped its value when recorded.
+    assert_eq!(count(&emit_drops), 0);
+    assert_eq!(count(&retain_drops), 0);
+
+    // Running the commands on the encode thread must not drop either value.
+    let mut encoder = Encoder::headless();
+    commands.run(&mut encoder);
+    assert_eq!(count(&emit_drops), 0);
+    assert_eq!(count(&retain_drops), 0);
+
+    // Retiring the chunk via `reset` drops both values exactly once.
+    commands.reset();
+    assert_eq!(count(&emit_drops), 1);
+    assert_eq!(count(&retain_drops), 1);
+}

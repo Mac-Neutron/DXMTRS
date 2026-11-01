@@ -159,16 +159,12 @@ struct Node<F> {
     f: F,
 }
 
-/// Calls the closure of the `Node<F>` that `node` heads, with exclusive access.
+/// No-op command callback for a retained value node (`Commands::retain`).
 ///
 /// # Safety
 ///
-/// `node` heads a live `Node<F>` nothing else reaches during the call.
-unsafe fn call_mut<F: FnMut(&mut Encoder)>(node: NonNull<Header>, encoder: &mut Encoder) {
-    // SAFETY: a live `Node<F>` (the caller's promise), its closure reached by this call alone.
-    let f = unsafe { &mut (*node.cast::<Node<F>>().as_ptr()).f };
-    f(encoder);
-}
+/// `_node` heads a live `Node<T>`.
+const unsafe fn noop_call(_node: NonNull<Header>, _encoder: &mut Encoder) {}
 
 /// Calls the closure of the `Node<F>` that `node` heads, through a shared reference.
 ///
@@ -283,8 +279,13 @@ impl Commands {
     }
 
     /// Records `f`, which runs once when the chunk is encoded and is dropped when it is retired.
-    pub fn emit<F: FnMut(&mut Encoder) + Send + 'static>(&mut self, f: F) {
-        self.list.push(&mut self.arena, f, call_mut::<F>);
+    pub fn emit<F: Fn(&mut Encoder) + Send + 'static>(&mut self, f: F) {
+        self.list.push(&mut self.arena, f, call_ref::<F>);
+    }
+
+    /// Keeps `value` in the arena until [`Self::reset`] drops it when the chunk retires.
+    pub fn retain<T: Send + 'static>(&mut self, value: T) {
+        self.list.push(&mut self.arena, value, noop_call);
     }
 
     /// Uninitialized memory for `layout`, valid until the chunk is retired.
@@ -294,7 +295,7 @@ impl Commands {
 
     /// Runs the commands in the order they were recorded.
     pub fn run(&mut self, encoder: &mut Encoder) {
-        // SAFETY: every node is `emit`'s `call_mut`, and `&mut self` keeps the list to this call.
+        // SAFETY: every node is `emit`'s `call_ref` or `retain`'s `noop_call`.
         unsafe { self.list.call(encoder) };
     }
 
