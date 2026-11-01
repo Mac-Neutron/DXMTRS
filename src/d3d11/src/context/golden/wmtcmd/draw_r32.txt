@@ -1,0 +1,2 @@
+render 20 primitive_type=3 index_type=1 index_count=3 index_buffer=#84 index_buffer_offset=16 instance_count=1 base_vertex=-3 base_instance=0
+render 20 primitive_type=4 index_type=1 index_count=7 index_buffer=#114 index_buffer_offset=0 instance_count=1 base_vertex=0 base_instance=0

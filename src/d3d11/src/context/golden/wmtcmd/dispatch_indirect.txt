@@ -1,0 +1,2 @@
+compute 3 pso=#140 threadgroup_size.width=64 threadgroup_size.height=1 threadgroup_size.depth=1
+compute 2 indirect_args_buffer=#109 indirect_args_offset=52

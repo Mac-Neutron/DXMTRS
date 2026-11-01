@@ -1,0 +1,5 @@
+render 16 dsso=#71 stencil_ref=0
+render 12 fill_mode=0 cull_mode=2 depth_clip_mode=0 winding=0 depth_bias=0x00000000 scole_scale=0x00000000 depth_bias_clamp=0x00000000
+render 17 red=0x00000000 green=0x00000000 blue=0x00000000 alpha=0x00000000 stencil_ref=0
+render 13 viewports=48B viewport_count=1 viewports[0].origin_x=0x00000000 viewports[0].origin_y=0x00000000 viewports[0].width=0x41000000 viewports[0].height=0x40800000 viewports[0].znear=0x00000000 viewports[0].zfar=0x3f800000
+render 14 scissor_rects=32B rect_count=1 scissor_rects[0].x=0 scissor_rects[0].y=0 scissor_rects[0].width=8 scissor_rects[0].height=4

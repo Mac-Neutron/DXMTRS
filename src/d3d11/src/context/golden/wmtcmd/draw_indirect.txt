@@ -1,0 +1,2 @@
+render 21 primitive_type=3 indirect_args_buffer=#109 indirect_args_offset=16
+render 22 primitive_type=3 index_type=0 index_buffer=#72 index_buffer_offset=0 indirect_args_buffer=#109 indirect_args_offset=32
