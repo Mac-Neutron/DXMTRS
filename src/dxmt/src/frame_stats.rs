@@ -85,6 +85,28 @@ impl FrameStatistics {
         self.present_latency_interval = Duration::ZERO;
         self.last_scaler_info.kind = ScalerType::None;
     }
+
+    /// Accumulates a CPU synchronization stall (`FrameStatistics::addSyncInterval`).
+    pub fn add_sync_interval(&mut self, interval: Duration) {
+        if !cfg!(feature = "perf-build") {
+            self.sync_interval += interval;
+            self.sync_count += 1;
+        }
+    }
+
+    /// Accumulates a drawable acquisition stall (`FrameStatistics::addDrawableBlockingInterval`).
+    pub fn add_drawable_blocking_interval(&mut self, interval: Duration) {
+        if !cfg!(feature = "perf-build") {
+            self.drawable_blocking_interval += interval;
+        }
+    }
+
+    /// Records a feature-compatibility flag (`FrameStatistics::setCompatibilityFlag`).
+    pub fn set_compatibility_flag(&mut self, flag: CompatibilityFlags) {
+        if !cfg!(feature = "perf-build") {
+            self.compatibility_flags |= flag;
+        }
+    }
 }
 
 /// Ring window of frame statistics (`kFrameStatisticsCount`).
@@ -125,7 +147,71 @@ impl Container {
     }
 
     /// Recomputes `max` and `average` excluding `current_frame`.
-    pub const fn compute(&mut self, current_frame: u64) {
-        let _ = current_frame;
+    pub fn compute(&mut self, current_frame: u64) {
+        if cfg!(feature = "perf-build") {
+            return;
+        }
+        self.max.reset();
+        self.average.reset();
+        let current = usize::try_from(current_frame % (FRAME_STATISTICS_COUNT as u64)).unwrap_or(0);
+        for (i, frame) in self.frames.iter().enumerate() {
+            if i == current {
+                continue;
+            }
+            self.average.command_buffer_count += frame.command_buffer_count;
+            self.max.command_buffer_count = self
+                .max
+                .command_buffer_count
+                .max(frame.command_buffer_count);
+
+            self.average.sync_count += frame.sync_count;
+            self.max.sync_count = self.max.sync_count.max(frame.sync_count);
+
+            self.average.event_stall += frame.event_stall;
+            self.max.event_stall = self.max.event_stall.max(frame.event_stall);
+
+            self.average.commit_interval += frame.commit_interval;
+            self.max.commit_interval = self.max.commit_interval.max(frame.commit_interval);
+
+            self.average.sync_interval += frame.sync_interval;
+            self.max.sync_interval = self.max.sync_interval.max(frame.sync_interval);
+
+            self.average.encode_prepare_interval += frame.encode_prepare_interval;
+            self.max.encode_prepare_interval = self
+                .max
+                .encode_prepare_interval
+                .max(frame.encode_prepare_interval);
+
+            self.average.encode_flush_interval += frame.encode_flush_interval;
+            self.max.encode_flush_interval = self
+                .max
+                .encode_flush_interval
+                .max(frame.encode_flush_interval);
+
+            self.average.drawable_blocking_interval += frame.drawable_blocking_interval;
+            self.max.drawable_blocking_interval = self
+                .max
+                .drawable_blocking_interval
+                .max(frame.drawable_blocking_interval);
+
+            self.average.present_latency_interval += frame.present_latency_interval;
+            self.max.present_latency_interval = self
+                .max
+                .present_latency_interval
+                .max(frame.present_latency_interval);
+        }
+        let window = u32::try_from(FRAME_STATISTICS_COUNT - 1).unwrap_or(15);
+        self.average.command_buffer_count /= window;
+        self.average.sync_count /= window;
+        self.average.event_stall /= window;
+        self.average.commit_interval /= window;
+        self.average.sync_interval /= window;
+        self.average.encode_prepare_interval /= window;
+        self.average.encode_flush_interval /= window;
+        self.average.drawable_blocking_interval /= window;
+        self.average.present_latency_interval /= window;
     }
 }
+
+#[cfg(test)]
+mod tests;
