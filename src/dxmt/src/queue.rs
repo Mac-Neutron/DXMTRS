@@ -16,8 +16,9 @@ use core::{
 };
 use std::{
     io,
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     thread::{self, JoinHandle},
+    time::Instant,
 };
 
 use dxmt_util::sync::{self, CpuFence};
@@ -32,7 +33,10 @@ use winemetal_sys::{
 use crate::{
     arena::{BlockPool, Commands},
     encoder::{Encoder, QueryBuffers},
+    frame_stats::{Container, FrameStatistics},
     initializer::ResourceInitializer,
+    resource::BufferAllocationFlags,
+    ring::{BlockRef, RingBump, RingConfig},
 };
 
 /// The encode thread's name.
@@ -108,13 +112,13 @@ impl Chunk {
     /// Records `f`, which the encode thread runs once.
     ///
     /// It is dropped when the chunk is retired, after the GPU finished the chunk.
-    pub fn emit<F: FnMut(&mut Encoder) + Send + 'static>(&mut self, f: F) {
+    pub fn emit<F: Fn(&mut Encoder) + Send + 'static>(&mut self, f: F) {
         self.commands.emit(f);
     }
 
-    /// Keeps `allocation` alive until the chunk is retired.
-    pub fn retain<T: Send + Sync + 'static>(&mut self, allocation: Arc<T>) {
-        self.retained.push(allocation);
+    /// Keeps `value` alive until the chunk is retired.
+    pub fn retain<T: Send + 'static>(&mut self, value: T) {
+        self.commands.retain(value);
     }
 
     /// Uninitialized memory of `size` bytes aligned to `align`, valid until the chunk is retired.
@@ -267,6 +271,7 @@ struct Shared {
     queue: Option<Obj>,
     frame_latency: CpuFence,
     initializer: ResourceInitializer,
+    statistics: Mutex<Container>,
 }
 
 // SAFETY: a chunk is reached by the one thread the ring hands it to (the module's rule); the
@@ -278,6 +283,12 @@ impl Shared {
         // Below `chunks`, a `u32`: the conversion cannot fail.
         let index = usize::try_from(seq % self.ring.chunks).unwrap_or_default();
         self.chunks[index].get()
+    }
+
+    fn statistics(&self) -> MutexGuard<'_, Container> {
+        self.statistics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -294,6 +305,7 @@ pub struct Queue {
     frame: AtomicU64,
     max_latency: AtomicU32,
     event_seq: u64,
+    staging: RingBump,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -323,6 +335,18 @@ impl Queue {
         let event = unsafe { Obj::adopt(event) };
         // SAFETY: no precondition; `drop` destroys it.
         let listener = unsafe { SharedEventListener_create() };
+        let mut staging_flags = BufferAllocationFlags::CPU_WRITE_COMBINED;
+        if cfg!(not(target_os = "macos")) {
+            staging_flags |= BufferAllocationFlags::CPU_PLACED;
+        }
+        let staging = RingBump::new(
+            device,
+            staging_flags,
+            RingConfig {
+                block: 0x40_0000,
+                lifetime: 300,
+            },
+        );
         let mut this = Self {
             shared: Arc::new(Shared {
                 ring: Ring::new(config.chunks),
@@ -330,6 +354,7 @@ impl Queue {
                 queue,
                 frame_latency: CpuFence::new(0),
                 initializer: ResourceInitializer::new(device),
+                statistics: Mutex::new(Container::default()),
             }),
             max_latency: AtomicU32::new(config.max_latency),
             config,
@@ -337,6 +362,7 @@ impl Queue {
             listener,
             frame: AtomicU64::new(0),
             event_seq: 0,
+            staging,
             threads: Vec::with_capacity(3),
         };
         // A failed start drops `this`, whose `drop` stops and waits for what started.
@@ -345,12 +371,16 @@ impl Queue {
         // Borrowed: `drop` waits for the encode thread before the event is released.
         let event = this.shared_event();
         this.threads.push(spawn(Some(ENCODE_THREAD), move || {
+            let _guard = crate::ffi::AbortOnPanic;
             encode(&shared, &mut encoder, event);
         })?);
         let shared = Arc::clone(&this.shared);
-        this.threads
-            .push(spawn(Some(FINISH_THREAD), move || finish(&shared))?);
+        this.threads.push(spawn(Some(FINISH_THREAD), move || {
+            let _guard = crate::ffi::AbortOnPanic;
+            finish(&shared);
+        })?);
         this.threads.push(spawn(None, move || {
+            let _guard = crate::ffi::AbortOnPanic;
             // SAFETY: the listener `new` created; it returns when `drop` destroys it.
             unsafe { SharedEventListener_start(listener) };
         })?);
@@ -367,6 +397,24 @@ impl Queue {
     #[must_use]
     pub fn initializer(&self) -> &ResourceInitializer {
         &self.shared.initializer
+    }
+
+    /// Rolling 16-frame statistics container (`CommandQueue::statistics`).
+    pub fn statistics(&self) -> MutexGuard<'_, Container> {
+        self.shared.statistics()
+    }
+
+    /// Mutable access to the current frame's statistics (`currentFrameStatistics`).
+    pub fn with_current_frame_statistics<R>(&self, f: impl FnOnce(&mut FrameStatistics) -> R) -> R {
+        let frame = self.frame.load(Ordering::Relaxed);
+        let mut stats = self.shared.statistics();
+        f(stats.at_mut(frame))
+    }
+
+    /// Allocates `(block, offset)` from the queue's CPU-visible staging ring.
+    pub fn allocate_staging_buffer(&mut self, size: u64, align: u64) -> (BlockRef, u64) {
+        let (seq, coherent) = (self.current_seq(), self.coherent_seq());
+        self.staging.allocate(seq, coherent, size, align)
     }
 
     /// The chunk being recorded: the recording thread's alone, which `&mut self` makes so.
@@ -388,7 +436,16 @@ impl Queue {
         chunk.event_id = event_id;
         chunk.frame = frame;
         chunk.initializer_wait = initializer_wait;
+        let t0 = Instant::now();
         self.shared.ring.commit();
+        if !cfg!(feature = "perf-build") {
+            let elapsed = t0.elapsed();
+            let mut stats = self.shared.statistics();
+            let fstats = stats.at_mut(frame);
+            fstats.command_buffer_count += 1;
+            fstats.commit_interval += elapsed;
+            drop(stats);
+        }
     }
 
     /// The chunk being recorded's sequence number.
@@ -405,7 +462,15 @@ impl Queue {
 
     /// Blocks until chunk `seq` is retired.
     pub fn wait_cpu(&self, seq: u64) {
+        let t0 = Instant::now();
         self.shared.ring.finished.wait(seq);
+        if !cfg!(feature = "perf-build") {
+            let frame = self.frame.load(Ordering::Relaxed);
+            self.shared
+                .statistics()
+                .at_mut(frame)
+                .add_sync_interval(t0.elapsed());
+        }
     }
 
     /// The next shared-event value, taken for a chunk or an event query.
@@ -450,10 +515,26 @@ impl Queue {
     /// With `wait`, blocks until the frame `max_latency` presents back is retired. A VM host
     /// passes false: its guest paces the frames.
     pub fn present_boundary(&self, wait: bool) {
-        let frame = self.frame.fetch_add(1, Ordering::Relaxed) + 1;
+        let prev = self.frame.fetch_add(1, Ordering::Relaxed);
+        let frame = prev + 1;
+        {
+            let mut stats = self.shared.statistics();
+            stats.compute(prev);
+            stats.at_mut(frame).reset();
+        }
         let latency = u64::from(self.max_latency.load(Ordering::Relaxed));
         if wait && frame > latency {
+            let t0 = Instant::now();
             self.shared.frame_latency.wait(frame - latency);
+            if !cfg!(feature = "perf-build") {
+                let mut stats = self.shared.statistics();
+                stats.at_mut(prev).present_latency_interval += t0.elapsed();
+            }
+        }
+        let completed = self.shared.frame_latency.signaled();
+        if !cfg!(feature = "perf-build") {
+            let mut stats = self.shared.statistics();
+            stats.at_mut(prev).latency = u32::try_from(prev.saturating_sub(completed)).unwrap_or(0);
         }
     }
 
