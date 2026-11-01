@@ -60,16 +60,19 @@
 # ones included) is missing from the dump or has no mirror (a #[repr(C)] struct or union of abi.rs), when a mirror
 # names nothing in the C, on a bitfield it cannot place, and when the enumerators and abi.rs's constants differ.
 #
-# With --com <header> <module path> <Interface>... <llvm-mingw-bin> it prints COM vtable mirrors and per-target asserts:
+# With --com <header> <module path> <Interface>... [--records <Record>...] <llvm-mingw-bin> it prints COM vtable
+# and C record mirrors and per-target asserts:
 #   sh tools/winemetal-layouts.sh --com dxgi1_6.h crate::dxgi_vtbl IUnknown IDXGIObject "$LM/bin"
+#   sh tools/winemetal-layouts.sh --com d3d11_4.h+d3d10_1.h crate::abi::records --records D3D11_BOX "$LM/bin"
 # Reads <header> (a file path or a +/,-separated list of system headers) with -DCINTERFACE on the four Windows targets
 # and on aarch64-apple-darwin (-DWIDL_EXPLICIT_AGGREGATE_RETURNS). Emits #[repr(C)] pub struct <I>Vtbl per interface
-# with unsafe extern "system-unwind" fn slots, referenced by-value mirrors, and per-target size, offset, and
-# stack-rounded parameter-byte asserts from clang's sizeof probe. Fails if any target disagrees on the vtable layout.
+# with unsafe extern "system-unwind" fn slots, referenced by-value mirrors, #[repr(C)] pub struct per --records entry,
+# and per-target size, offset, and stack-rounded parameter-byte asserts from clang's sizeof/offsetof probe. Fails if
+# any target disagrees on the struct definitions.
 set -eu
 usage() {
   echo "usage: winemetal-layouts.sh [--protos | --decls | --seam-abi <header> <module path>] <llvm-mingw-bin>" >&2
-  echo "       winemetal-layouts.sh --com <header> <module path> <Interface>... <llvm-mingw-bin>" >&2
+  echo "       winemetal-layouts.sh --com <header> <module path> [<Interface>...] [--records <Record>...] <llvm-mingw-bin>" >&2
   echo "       winemetal-layouts.sh --airconv" >&2
   exit 2
 }
@@ -78,13 +81,32 @@ case ${1:-} in
 --seam-abi) [ $# -eq 4 ] || usage; mode=seam header=$2 module=$3; shift 3 ;;
 --com)
   [ $# -ge 5 ] || usage
-  mode=com header=$2 module=$3
-  shift 3
+  mode=com
+  shift
+  if [ "${1:-}" = --records ]; then
+    shift
+    [ $# -ge 4 ] || usage
+    header=$1 module=$2
+    shift 2
+    in_rec=1
+  else
+    header=$1 module=$2
+    shift 2
+    in_rec=0
+  fi
   ifaces=
+  records=
   while [ $# -gt 1 ]; do
-    ifaces="${ifaces:+$ifaces }$1"
+    if [ "$1" = --records ]; then
+      in_rec=1
+    elif [ $in_rec -eq 1 ]; then
+      records="${records:+$records }$1"
+    else
+      ifaces="${ifaces:+$ifaces }$1"
+    fi
     shift
   done
+  [ -n "$ifaces$records" ] || usage
   ;;
 --airconv) [ $# -eq 1 ] || usage; mode=airconv; shift ;;
 *) mode=layouts ;;
@@ -115,6 +137,7 @@ function num(v,   o) {
 }
 function field(s) {
   s = tolower(screaming(s))
+  if (s ~ /^_[0-9]/) s = "m" s
   return s ~ /^(type|ref|in|fn|mod|use|move|match|loop|impl|self|struct|enum|where|let|mut|static|const|box)$/ ? \
     "r#" s : s
 }
@@ -496,8 +519,23 @@ if [ "$mode" = com ]; then
       elif .kind == "RecordDecl" and .completeDefinition == true and ((.name // "") | endswith("Vtbl")) then
         (["V", (.name | sub("Vtbl$"; "")),
           ([.inner[]? | select(.kind == "FieldDecl") | .name, .type.qualType] | join("\t"))] | join("\t"))
+      elif .kind == "RecordDecl" and .completeDefinition == true and (.name // "") != "" then
+        (["R", .name,
+          ([.inner[]? |
+            if .kind == "FieldDecl" and (.name // "") != "" then "F\t" + .name + "\t" + .type.qualType
+            elif .kind == "RecordDecl" and .completeDefinition == true and (.name // "") == "" then
+              "U\t" + ([.inner[]? | select(.kind == "FieldDecl" and (.name // "") != "") | (.name + ":" + .type.qualType)] | join(","))
+            else empty end
+          ] | join("\t"))] | join("\t"))
       else empty end' "$t/ast.json" >"$t/recs"
-    awk -F '\t' -v pick="$ifaces" -v probe="$t/probe-$target.c" -v meta="$t/meta-$target" "$names"'
+    awk -F '\t' -v pick="$ifaces" -v pick_rec="$records" -v probe="$t/probe-$target.c" -v meta="$t/meta-$target" "$names"'
+      function camel(s,   o, i, k, w) {
+        sub(/^_/, "", s)
+        if (s !~ /_/ && s !~ /^[A-Z0-9]+$/) return s
+        k = split(s, w, "_"); o = ""
+        for (i = 1; i <= k; i++) o = o toupper(substr(w[i], 1, 1)) tolower(substr(w[i], 2))
+        return o
+      }
       function is_usize(s) {
         return s == "SIZE_T" || s == "ULONG_PTR" || s == "UINT_PTR" || s == "DWORD_PTR" || \
           s == "size_t" || s == "uintptr_t"
@@ -507,6 +545,68 @@ if [ "$mode" = com ]; then
       }
       function is_wchar(s) {
         return s == "WCHAR" || s == "wchar_t"
+      }
+      function map_field_type(s,   arr_n, base_s, is_c, inner, tag, en) {
+        sub(/^ +/, "", s); sub(/ +$/, "", s)
+        if (match(s, /\[[0-9]+\]$/)) {
+          arr_n = substr(s, RSTART + 1, RLENGTH - 2)
+          base_s = substr(s, 1, RSTART - 1)
+          sub(/ +$/, "", base_s)
+          if (arr_n + 0 > 32) rec_no_def = 1
+          return "[" map_field_type(base_s) "; " arr_n "]"
+        }
+        if (s == "LPCSTR" || s == "PCSTR") { rec_no_def = 1; return "*const c_char" }
+        if (s == "LPSTR" || s == "PSTR") { rec_no_def = 1; return "*mut c_char" }
+        if (s == "LPCWSTR" || s == "PCWSTR") { rec_no_def = 1; return "*const u16" }
+        if (s == "LPWSTR" || s == "PWSTR") { rec_no_def = 1; return "*mut u16" }
+        if (s == "LARGE_INTEGER") return "i64"
+        if (s in rec_rs) return rec_rs[s]
+        while ((s in td) && !is_usize(s) && !is_isize(s) && !(s in fixed_int) && !(s in rec_rs)) {
+          s = td[s]
+          sub(/^ +/, "", s); sub(/ +$/, "", s)
+        }
+        if (s ~ /\*$/) {
+          rec_no_def = 1
+          sub(/ *\*$/, "", s)
+          is_c = 0
+          if (s ~ /\*const$/) { is_c = 1; sub(/ *\*const$/, " *", s) }
+          else if (s ~ /^const /) { is_c = 1; sub(/^const +/, "", s) }
+          sub(/^ +/, "", s); sub(/ +$/, "", s)
+          tag = s; sub(/^(struct|union) +/, "", tag)
+          if (tag in rec_rs) inner = rec_rs[tag]
+          else if (s == "void" || s ~ /^(struct|union) /) inner = "c_void"
+          else inner = map_field_type(s)
+          return (is_c ? "*const " : "*mut ") inner
+        }
+        sub(/^const +/, "", s)
+        if (s in rec_rs) return rec_rs[s]
+        if (is_usize(s)) return "usize"
+        if (is_isize(s)) return "isize"
+        if (s in fixed_int) return fixed_int[s]
+        while (s in td) {
+          if (s in rec_rs) return rec_rs[s]
+          if (is_usize(s)) return "usize"
+          if (is_isize(s)) return "isize"
+          if (s in fixed_int) return fixed_int[s]
+          s = td[s]
+          sub(/^ +/, "", s); sub(/ +$/, "", s)
+        }
+        if (s ~ /^enum /) {
+          en = substr(s, 6)
+          if (!(en in enums)) bad = bad " enum " en
+          if (en in neg) bad = bad " enum " en " has a negative value"
+          return "u32"
+        }
+        if (s ~ /^(struct|union) /) {
+          tag = s; sub(/^(struct|union) +/, "", tag)
+          if (tag in rec_rs) return rec_rs[tag]
+          if (tag in byval) { used_byval[byval[tag]] = 1; return byval[tag] }
+          bad = bad " record-field " s
+          return tag
+        }
+        if (s in prim) return prim[s]
+        bad = bad " " s
+        return s
       }
       function map_type(s, ret, ptr,   is_c, inner, tag, en) {
         sub(/^ +/, "", s); sub(/ +$/, "", s)
@@ -576,11 +676,38 @@ if [ "$mode" = com ]; then
         byval_def["D3d12GpuDescriptorHandle"] = "/// `D3D12_GPU_DESCRIPTOR_HANDLE`, passed by value.\n#[derive(Clone, Copy, Default, PartialEq, Eq)]\n#[repr(C)]\npub struct D3d12GpuDescriptorHandle {\n    pub ptr: u64,\n}\n"
         byval_def["DxgiSampleDesc"] = "/// `DXGI_SAMPLE_DESC`, passed by value.\n#[derive(Clone, Copy, Default, PartialEq, Eq)]\n#[repr(C)]\npub struct DxgiSampleDesc {\n    pub count: u32,\n    pub quality: u32,\n}\n"
         byval_def["Size"] = "/// `SIZE`, passed by value.\n#[derive(Clone, Copy, Default, PartialEq, Eq)]\n#[repr(C)]\npub struct Size {\n    pub cx: i32,\n    pub cy: i32,\n}\n"
+        split("UINT8:u8 BYTE:u8 UCHAR:u8 uint8_t:u8 INT8:i8 int8_t:i8 UINT16:u16 USHORT:u16 WORD:u16 uint16_t:u16 " \
+          "INT16:i16 SHORT:i16 int16_t:i16 UINT32:u32 UINT:u32 ULONG:u32 DWORD:u32 uint32_t:u32 INT32:i32 INT:i32 " \
+          "LONG:i32 BOOL:i32 WINBOOL:i32 HRESULT:i32 int32_t:i32 UINT64:u64 ULONGLONG:u64 ULONG64:u64 DWORD64:u64 " \
+          "uint64_t:u64 INT64:i64 LONGLONG:i64 LONG64:i64 int64_t:i64", fkv, " ")
+        for (i in fkv) { split(fkv[i], p, ":"); fixed_int[p[1]] = p[2] }
         n_pick = split(pick, order, " ")
+        n_rec = split(pick_rec, rec_order, " ")
+        for (i = 1; i <= n_rec; i++) rec_rs[rec_order[i]] = camel(rec_order[i])
       }
       $1 == "T" { td[$2] = $3; next }
       $1 == "E" { enums[$2] = $3; next }
       $1 == "N" { neg[$2] = 1; next }
+      $1 == "R" {
+        rname = $2
+        has_r[rname] = 1
+        r_nf[rname] = 0
+        i = 3
+        while (i <= NF) {
+          r_nf[rname]++
+          idx = r_nf[rname]
+          r_fk[rname, idx] = $i
+          if ($i == "F") {
+            r_fn[rname, idx] = $(i + 1)
+            r_ft[rname, idx] = $(i + 2)
+            i += 3
+          } else {
+            r_fn[rname, idx] = $(i + 1)
+            i += 2
+          }
+        }
+        next
+      }
       $1 == "V" {
         iface = $2
         has_v[iface] = 1
@@ -592,6 +719,93 @@ if [ "$mode" = com ]; then
         }
       }
       END {
+        for (k = 1; k <= n_rec; k++) {
+          rec = rec_order[k]
+          cur = rec
+          step = 0
+          while ((cur in td) && step++ < 8) {
+            cur = td[cur]
+            sub(/^(struct|union) +/, "", cur)
+            if (!(cur in rec_rs)) rec_rs[cur] = rec_rs[rec]
+          }
+        }
+        for (t in td) {
+          cur = t
+          step = 0
+          while ((cur in td) && step++ < 8) {
+            cur = td[cur]
+            sub(/^(struct|union) +/, "", cur)
+            if ((cur in rec_rs) && !(t in rec_rs)) rec_rs[t] = rec_rs[cur]
+          }
+        }
+        for (k = 1; k <= n_rec; k++) {
+          rec = rec_order[k]
+          tag = rec
+          step = 0
+          while (!(tag in has_r) && (tag in td) && step++ < 8) {
+            tag = td[tag]
+            sub(/^(struct|union) +/, "", tag)
+          }
+          if (!(tag in has_r)) { print "E no record " rec; exit 1 }
+          rs_name = rec_rs[rec]
+          emitted_rec[rs_name] = 1
+          c_type = (rec in td) ? rec : "struct " rec
+          rec_no_def = 0
+          ubody = ""
+          sfields = ""
+          nf = r_nf[tag]
+          p_idx++
+          sz_id = "com_p_" p_idx
+          probe_body = probe_body "  " sz_id " = sizeof(" c_type "),\n"
+          printf "M\t%s\t%s\n", rs_name, sz_id > meta
+          for (j = 1; j <= nf; j++) {
+            if (r_fk[tag, j] == "F") {
+              c_fn = r_fn[tag, j]
+              fn_rs = field(c_fn)
+              ft_rs = map_field_type(r_ft[tag, j])
+              sfields = sfields "    pub " fn_rs ": " ft_rs ",\n"
+              p_idx++
+              off_id = "com_p_" p_idx
+              probe_body = probe_body "  " off_id " = __builtin_offsetof(" c_type ", " c_fn "),\n"
+              printf "F\t%s\t%s\t%s\n", rs_name, fn_rs, off_id > meta
+            } else {
+              nu = split(r_fn[tag, j], u_items, ",")
+              same = 1
+              u0_t = ""
+              for (u = 1; u <= nu; u++) {
+                pos = index(u_items[u], ":")
+                u_fn[u] = substr(u_items[u], 1, pos - 1)
+                u_ft[u] = map_field_type(substr(u_items[u], pos + 1))
+                if (u == 1) u0_t = u_ft[u]
+                else if (u_ft[u] != u0_t) same = 0
+              }
+              if (same && u0_t ~ /^(u8|i8|u16|i16|u32|i32|u64|i64|usize|isize|f32|f64)$/) {
+                c_fn = u_fn[1]
+                fn_rs = field(c_fn)
+                sfields = sfields "    pub " fn_rs ": " u0_t ",\n"
+                p_idx++
+                off_id = "com_p_" p_idx
+                probe_body = probe_body "  " off_id " = __builtin_offsetof(" c_type ", " c_fn "),\n"
+                printf "F\t%s\t%s\t%s\n", rs_name, fn_rs, off_id > meta
+              } else {
+                rec_no_def = 1
+                uname = rs_name "Union"
+                ubody = ubody "/// `" rec "`'\''s union.\n#[derive(Clone, Copy)]\n#[repr(C)]\npub union " uname " {\n"
+                for (u = 1; u <= nu; u++) {
+                  ubody = ubody "    pub " field(u_fn[u]) ": " u_ft[u] ",\n"
+                }
+                ubody = ubody "}\n\n"
+                sfields = sfields "    pub u: " uname ",\n"
+                p_idx++
+                off_id = "com_p_" p_idx
+                probe_body = probe_body "  " off_id " = __builtin_offsetof(" c_type ", " u_fn[1] "),\n"
+                printf "F\t%s\tu\t%s\n", rs_name, off_id > meta
+              }
+            }
+          }
+          drv = rec_no_def ? "#[derive(Clone, Copy)]" : "#[derive(Clone, Copy, Default)]"
+          rec_body = rec_body ubody "/// `" rec "`.\n" drv "\n#[repr(C)]\npub struct " rs_name " {\n" sfields "}\n\n"
+        }
         for (k = 1; k <= n_pick; k++) {
           iface = order[k]
           if (!(iface in has_v)) { print "E no interface " iface "Vtbl"; exit 1 }
@@ -643,29 +857,31 @@ if [ "$mode" = com ]; then
         split("Luid D3d12CpuDescriptorHandle D3d12GpuDescriptorHandle DxgiSampleDesc Size", bv_order, " ")
         for (b = 1; b <= 5; b++) {
           bn = bv_order[b]
-          if (bn in used_byval) {
+          if ((bn in used_byval) && !(bn in emitted_rec)) {
             printf "%s\n", byval_def[bn]
             p_idx++
             probe_body = probe_body "  com_p_" p_idx " = sizeof(" byval_c[bn] "),\n"
             printf "M\t%s\tcom_p_%d\n", bn, p_idx > meta
           }
         }
-        printf "%s", body
-        printf "trait Slot {\n    const PARAMS: usize;\n}\n\n"
-        printf "const fn pad(n: usize) -> usize {\n    (n + size_of::<usize>() - 1) & !(size_of::<usize>() - 1)\n}\n\n"
-        for (ar = 0; ar <= 20; ar++) {
-          if (!(ar in arity)) continue
-          tparams = "R"; fparams = ""; sum_expr = ""
-          for (a = 0; a < ar; a++) {
-            tparams = tparams ", A" a
-            fparams = fparams (a > 0 ? ", " : "") "A" a
-            sum_expr = sum_expr (a > 0 ? " + " : "") "pad(size_of::<A" a ">())"
+        printf "%s%s", rec_body, body
+        if (n_pick > 0) {
+          printf "trait Slot {\n    const PARAMS: usize;\n}\n\n"
+          printf "const fn pad(n: usize) -> usize {\n    (n + size_of::<usize>() - 1) & !(size_of::<usize>() - 1)\n}\n\n"
+          for (ar = 0; ar <= 20; ar++) {
+            if (!(ar in arity)) continue
+            tparams = "R"; fparams = ""; sum_expr = ""
+            for (a = 0; a < ar; a++) {
+              tparams = tparams ", A" a
+              fparams = fparams (a > 0 ? ", " : "") "A" a
+              sum_expr = sum_expr (a > 0 ? " + " : "") "pad(size_of::<A" a ">())"
+            }
+            if (sum_expr == "") sum_expr = "0"
+            printf "impl<%s> Slot for unsafe extern \"system-unwind\" fn(%s) -> R {\n    const PARAMS: usize = %s;\n}\n\n", \
+              tparams, fparams, sum_expr
           }
-          if (sum_expr == "") sum_expr = "0"
-          printf "impl<%s> Slot for unsafe extern \"system-unwind\" fn(%s) -> R {\n    const PARAMS: usize = %s;\n}\n\n", \
-            tparams, fparams, sum_expr
+          printf "const fn slot_params<T, F: Slot>(_: fn(&T) -> &F) -> usize {\n    F::PARAMS\n}\n"
         }
-        printf "const fn slot_params<T, F: Slot>(_: fn(&T) -> &F) -> usize {\n    F::PARAMS\n}\n"
         printf "enum com_probe : unsigned long long {\n%s};\n", probe_body > probe
       }' "$t/recs" >"$t/structs-$target" || fail "$target: $(tail -1 "$t/structs-$target")"
     [ -f "$t/structs" ] || cp "$t/structs-$target" "$t/structs"
@@ -682,6 +898,7 @@ if [ "$mode" = com ]; then
       NR == FNR { val[$1] = $2; next }
       BEGIN { printf "\n#[cfg(%s)]\nconst _: () = {\n", cfg }
       $1 == "M" { printf "    assert!(size_of::<%s>() == %s);\n", $2, val[$3] }
+      $1 == "F" { printf "    assert!(offset_of!(%s, %s) == %s);\n", $2, $3, val[$4] }
       $1 == "I" { printf "    assert!(size_of::<%sVtbl>() == %s);\n", $2, val[$3] }
       $1 == "S" {
         printf "    assert!(offset_of!(%sVtbl, %s) == %s && slot_params::<%sVtbl, _>(|v| &v.%s) == %s);\n", \
@@ -689,15 +906,23 @@ if [ "$mode" = com ]; then
       }
       END { printf "};\n" }' "$t/vals-$target" "$t/meta-$target" >>"$t/asserts"
   done
-  use_ffi="c_void"
-  if /usr/bin/grep -q 'c_char' "$t/structs"; then use_ffi="{c_char, c_void}"; fi
+  use_line="use core::mem::offset_of;"
+  if /usr/bin/grep -q 'c_char' "$t/structs" && /usr/bin/grep -q 'c_void' "$t/structs"; then
+    use_line="use core::{ffi::{c_char, c_void}, mem::offset_of};"
+  elif /usr/bin/grep -q 'c_void' "$t/structs"; then
+    use_line="use core::{ffi::c_void, mem::offset_of};"
+  elif /usr/bin/grep -q 'c_char' "$t/structs"; then
+    use_line="use core::{ffi::c_char, mem::offset_of};"
+  fi
+  com_kind="COM vtables"
+  [ -n "$ifaces" ] || com_kind="C records"
   cat <<EOF
-//! \`$hlabel\`'s COM vtables (\`$module\`).
+//! \`$hlabel\`'s $com_kind (\`$module\`).
 //!
 //! Written by \`tools/winemetal-layouts.sh --com\` from clang's AST on each target the crates
 //! build for: regenerate it, never edit it.
 
-use core::{ffi::$use_ffi, mem::offset_of};
+$use_line
 
 EOF
   cat "$t/structs"
