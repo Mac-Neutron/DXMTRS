@@ -12,6 +12,13 @@
 pub mod deserializer;
 pub mod object;
 
+use airconv_ir::{
+    container::fourcc::RTS0,
+    root_signature::raw::{
+        RootDescriptorTable as RawRootDescriptorTable, RootParameter as RawRootParameter,
+        RootSignatureDesc as RawRootSignatureDesc,
+    },
+};
 use dxmt_util::com::Hresult;
 
 use crate::abi::{
@@ -28,12 +35,6 @@ use crate::abi::{
 
 mod md5;
 
-/// `RawRootSignatureDesc`'s size: the part's header.
-const HEADER_SIZE: usize = 24;
-/// `RawRootParameter`'s size: one parameter's record.
-const PARAMETER_SIZE: usize = 12;
-/// `RawRootDescriptorTable`'s size: a table's count and its ranges' offset.
-const TABLE_SIZE: usize = 8;
 /// The container's header, the part's offset and the part's own header before its bytes.
 const CONTAINER_HEADER_SIZE: u32 = 44;
 /// Where the container's header says the part (its fourcc) starts.
@@ -274,12 +275,12 @@ impl Part {
     ) -> Result<Self, Hresult> {
         let records = usize::try_from(num_parameters)
             .ok()
-            .and_then(|n| n.checked_mul(PARAMETER_SIZE))
+            .and_then(|n| n.checked_mul(RawRootParameter::SIZE))
             .ok_or(E_OUTOFMEMORY)?;
-        let mut part = Self(Vec::with_capacity(HEADER_SIZE + records));
+        let mut part = Self(Vec::with_capacity(RawRootSignatureDesc::SIZE + records));
         // RawRootSignatureDesc: Version, NumParameters, RootParametersOffset, NumStaticSamplers,
         // StaticSamplersOffset, Flags.
-        let parameters_at = offset(HEADER_SIZE)?;
+        let parameters_at = offset(RawRootSignatureDesc::SIZE)?;
         part.push(&[
             version,
             num_parameters,
@@ -288,7 +289,7 @@ impl Part {
             0,
             flags,
         ]);
-        part.0.resize(HEADER_SIZE + records, 0);
+        part.0.resize(RawRootSignatureDesc::SIZE + records, 0);
         Ok(part)
     }
 
@@ -297,7 +298,7 @@ impl Part {
     /// `RawRootParameter`: `ParameterType`, `ShaderVisibility`, `PayloadOffset`, which is 0 for a
     /// type without a payload, as the C++ leaves it.
     fn record(&mut self, i: usize, kind: u32, visibility: u32, payload_at: u32) {
-        let at = HEADER_SIZE + i * PARAMETER_SIZE;
+        let at = RawRootSignatureDesc::SIZE + i * RawRootParameter::SIZE;
         for (j, word) in [kind, visibility, payload_at].into_iter().enumerate() {
             self.0[at + 4 * j..at + 4 * j + 4].copy_from_slice(&word.to_le_bytes());
         }
@@ -330,7 +331,7 @@ impl Part {
         ranges: &[u8],
     ) -> Result<(), Hresult> {
         let at = offset(self.0.len())?;
-        let ranges_at = offset(self.0.len() + TABLE_SIZE)?;
+        let ranges_at = offset(self.0.len() + RawRootDescriptorTable::SIZE)?;
         self.record(i, kind, visibility, at);
         self.push(&[count, ranges_at]);
         self.0.extend_from_slice(ranges);
@@ -358,7 +359,7 @@ impl Part {
         blob.extend_from_slice(&1_u32.to_le_bytes());
         // The part's offset, then DXBCBlobHeader: its fourcc and size.
         blob.extend_from_slice(&PART_AT.to_le_bytes());
-        blob.extend_from_slice(b"RTS0");
+        blob.extend_from_slice(&RTS0.to_le_bytes());
         blob.extend_from_slice(&size.to_le_bytes());
         blob.extend_from_slice(&self.0);
         let hash = md5::dxbc_hash(&blob);

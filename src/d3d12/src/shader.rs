@@ -2,9 +2,9 @@
 //!
 //! (`d3d12_pipeline.hpp:30-113`).
 
-use winemetal_sys::sm50::{SM50Destroy, SM50DestroyBitcode, SM50FreeError};
+use winemetal_sys::sm50::{SM50Destroy, SM50DestroyBitcode, SM50FreeError, error_message};
 
-use crate::com::Hresult;
+use crate::com::{E_FAIL, E_NOTIMPL, Hresult};
 
 /// Owned `sm50_shader_t` handle (`SM50Shader`, `d3d12_pipeline.hpp:30-47`).
 pub struct Sm50Shader(pub u64);
@@ -55,6 +55,13 @@ impl Sm50Error {
     pub const fn null() -> Self {
         Self(0)
     }
+
+    /// Returns the error string from `SM50GetErrorMessage` (`d3d12_pipeline.hpp:83`).
+    #[must_use]
+    pub fn message(&self) -> String {
+        // SAFETY: `self.0` is a live `sm50_error_t` handle or `0`.
+        unsafe { error_message(self.0) }
+    }
 }
 
 impl Drop for Sm50Error {
@@ -70,6 +77,12 @@ impl Drop for Sm50Error {
 ///
 /// (`ShaderCompileFailed`, `d3d12_pipeline.hpp:108-113`).
 #[must_use]
-pub fn shader_compile_failed(_stage: &str, _error: &Sm50Error) -> Hresult {
-    crate::not_implemented!("shader::shader_compile_failed")
+pub fn shader_compile_failed(stage: &str, error: &Sm50Error) -> Hresult {
+    let msg = error.message();
+    crate::err!("Failed to compile {stage} shader: {msg}");
+    if msg.starts_with("DXIL:") {
+        E_NOTIMPL
+    } else {
+        E_FAIL
+    }
 }

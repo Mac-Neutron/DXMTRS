@@ -2,86 +2,206 @@
 //!
 //! (`d3d12_dxil_dump.{hpp,cpp}`, `d3d12_pipeline.hpp:87-104`).
 
+use std::sync::{LazyLock, Mutex, PoisonError};
+
+use rustc_hash::FxHashMap;
+
+static PIPELINE_NAMES: LazyLock<Mutex<FxHashMap<u64, String>>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
 /// Returns whether `DXMT_DXIL_DUMP` capture mode is active (`DXILCaptureMode`,
 ///
 /// `d3d12_dxil_dump.hpp:31-34`).
+#[cfg(not(feature = "perf-build"))]
 #[must_use]
 pub fn dxil_capture_mode() -> bool {
-    crate::not_implemented!("capture::dxil_capture_mode")
+    dxmt_core::dump::on()
+}
+
+/// Always `false` under `perf-build`.
+#[cfg(feature = "perf-build")]
+#[must_use]
+pub const fn dxil_capture_mode() -> bool {
+    false
 }
 
 /// Returns whether SM6 capabilities should be advertised (`SM6Caps`, `d3d12_dxil_dump.cpp:89`).
 #[must_use]
 pub fn sm6_caps() -> bool {
-    crate::not_implemented!("capture::sm6_caps")
+    static YES: LazyLock<bool> =
+        LazyLock::new(|| !std::env::var("DXMT_SM6").is_ok_and(|v| v == "0"));
+    *YES
 }
 
 /// FNV-1a 64-bit hash used in capture filenames and `pipelines.txt` (`CaptureHash`,
 ///
 /// `d3d12_dxil_dump.cpp:25`).
 #[must_use]
-pub fn capture_hash(_bytes: &[u8]) -> u64 {
-    crate::not_implemented!("capture::capture_hash")
+pub fn capture_hash(bytes: &[u8]) -> u64 {
+    let mut h = 14_695_981_039_346_656_037_u64;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(1_099_511_628_211);
+    }
+    h
+}
+
+#[cfg(not(feature = "perf-build"))]
+fn dxil_stage(bytecode: &[u8]) -> Option<&'static str> {
+    if bytecode.len() < 32 || &bytecode[..4] != b"DXBC" {
+        return None;
+    }
+    let count = usize::try_from(u32::from_le_bytes(bytecode[28..32].try_into().ok()?)).ok()?;
+    let index_end = count.checked_mul(4)?.checked_add(32)?;
+    if index_end > bytecode.len() {
+        return None;
+    }
+    for i in 0..count {
+        let off_at = 32 + i * 4;
+        let off = usize::try_from(u32::from_le_bytes(
+            bytecode[off_at..off_at + 4].try_into().ok()?,
+        ))
+        .ok()?;
+        let Some(end) = off.checked_add(16) else {
+            continue;
+        };
+        if end > bytecode.len() || &bytecode[off..off + 4] != b"DXIL" {
+            continue;
+        }
+        let ver = u16::from_le_bytes(bytecode[off + 10..off + 12].try_into().ok()?);
+        return Some(match ver >> 12 {
+            0 => "ps",
+            1 => "vs",
+            2 => "gs",
+            3 => "hs",
+            4 => "ds",
+            5 => "cs",
+            13 => "ms",
+            14 => "as",
+            _ => "sh",
+        });
+    }
+    None
 }
 
 /// Dumps a DXIL shader blob to `<DXMT_DXIL_DUMP>/<stage>-<hash>.dxil` when capture is active
 ///
 /// (`DumpDXIL`, `d3d12_dxil_dump.cpp:64`).
-pub fn dump_dxil(_bytecode: &[u8]) {
-    let (): () = crate::not_implemented!("capture::dump_dxil");
+#[cfg(not(feature = "perf-build"))]
+pub fn dump_dxil(bytecode: &[u8]) {
+    if !dxil_capture_mode() || bytecode.is_empty() {
+        return;
+    }
+    let Some(stage) = dxil_stage(bytecode) else {
+        return;
+    };
+    let name = format!("{stage}-{:016x}.dxil", capture_hash(bytecode));
+    dxmt_core::dump::save_once(&name, bytecode);
 }
+
+/// No-op under `perf-build`.
+#[cfg(feature = "perf-build")]
+pub const fn dump_dxil(_bytecode: &[u8]) {}
 
 /// Dumps a root-signature blob to `<DXMT_DXIL_DUMP>/rs-<hash>.bin` when capture is active
 ///
 /// (`DumpRootSignature`, `d3d12_dxil_dump.cpp:78`).
-pub fn dump_root_signature(_blob: &[u8]) {
-    let (): () = crate::not_implemented!("capture::dump_root_signature");
+#[cfg(not(feature = "perf-build"))]
+pub fn dump_root_signature(blob: &[u8]) {
+    if !dxil_capture_mode() || blob.is_empty() {
+        return;
+    }
+    let name = format!("rs-{:016x}.bin", capture_hash(blob));
+    dxmt_core::dump::save_once(&name, blob);
 }
+
+/// No-op under `perf-build`.
+#[cfg(feature = "perf-build")]
+pub const fn dump_root_signature(_blob: &[u8]) {}
 
 /// Appends `line` to `<DXMT_DXIL_DUMP>/pipelines.txt` (`LogPipeline`, `d3d12_dxil_dump.hpp:52`).
-pub fn log_pipeline(_line: &str) {
-    let (): () = crate::not_implemented!("capture::log_pipeline");
+#[cfg(not(feature = "perf-build"))]
+pub fn log_pipeline(line: &str) {
+    dxmt_core::dump::append_pipeline(line);
 }
+
+/// No-op under `perf-build`.
+#[cfg(feature = "perf-build")]
+pub const fn log_pipeline(_line: &str) {}
 
 /// Saves `data` to `<DXMT_DXIL_DUMP>/<name>` (`SaveCapture`, `d3d12_dxil_dump.hpp:55`).
-pub fn save_capture(_name: &str, _data: &[u8]) {
-    let (): () = crate::not_implemented!("capture::save_capture");
+#[cfg(not(feature = "perf-build"))]
+pub fn save_capture(name: &str, data: &[u8]) {
+    dxmt_core::dump::save(name, data);
 }
 
+/// No-op under `perf-build`.
+#[cfg(feature = "perf-build")]
+pub const fn save_capture(_name: &str, _data: &[u8]) {}
+
 /// Creates `<DXMT_DXIL_DUMP>/<name>` (`MakeCaptureFolder`, `d3d12_dxil_dump.hpp:58`).
+#[cfg(not(feature = "perf-build"))]
 #[must_use]
-pub fn make_capture_folder(_name: &str) -> bool {
-    crate::not_implemented!("capture::make_capture_folder")
+pub fn make_capture_folder(name: &str) -> bool {
+    dxmt_core::dump::make_folder(name)
+}
+
+/// Always `false` under `perf-build`.
+#[cfg(feature = "perf-build")]
+#[must_use]
+pub const fn make_capture_folder(_name: &str) -> bool {
+    false
 }
 
 /// Associates a human-readable pipeline description with `pso` handle (`NamePipeline`,
 ///
 /// `d3d12_dxil_dump.cpp:104`).
-pub fn name_pipeline(_pso: u64, _name: String) {
-    let (): () = crate::not_implemented!("capture::name_pipeline");
+pub fn name_pipeline(pso: u64, name: String) {
+    if pso == 0 {
+        return;
+    }
+    PIPELINE_NAMES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(pso, name);
 }
 
 /// Looks up the description recorded for `pso` handle (`PipelineName`, `d3d12_dxil_dump.cpp:112`).
 #[must_use]
-pub fn pipeline_name(_pso: u64) -> String {
-    let (): () = crate::not_implemented!("capture::pipeline_name");
-    String::new()
+pub fn pipeline_name(pso: u64) -> String {
+    if pso == 0 {
+        return String::new();
+    }
+    PIPELINE_NAMES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&pso)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Formats `" <name>=<16-hex-hash>"` for a non-empty shader bytecode (`CapturedShader`,
 ///
 /// `d3d12_pipeline.hpp:88`).
 #[must_use]
-pub fn captured_shader(_name: &str, _bytecode: &[u8]) -> String {
-    let (): () = crate::not_implemented!("capture::captured_shader");
-    String::new()
+pub fn captured_shader(name: &str, bytecode: &[u8]) -> String {
+    if bytecode.is_empty() {
+        return String::new();
+    }
+    dump_dxil(bytecode);
+    format!(" {name}={:016x}", capture_hash(bytecode))
 }
 
 /// Formats `" rs=<16-hex-hash>"` or `" rs=embedded"` (`CapturedRootSignature`,
 ///
 /// `d3d12_pipeline.hpp:96`).
 #[must_use]
-pub fn captured_root_signature(_blob: Option<&[u8]>) -> String {
-    let (): () = crate::not_implemented!("capture::captured_root_signature");
-    String::new()
+pub fn captured_root_signature(blob: Option<&[u8]>) -> String {
+    blob.filter(|b| !b.is_empty()).map_or_else(
+        || " rs=embedded".to_owned(),
+        |bytes| {
+            dump_root_signature(bytes);
+            format!(" rs={:016x}", capture_hash(bytes))
+        },
+    )
 }
