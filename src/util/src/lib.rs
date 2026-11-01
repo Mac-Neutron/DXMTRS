@@ -11,6 +11,7 @@ pub mod log;
 pub mod nvext;
 pub mod private_data;
 pub mod qpc;
+pub mod sha1;
 pub mod sync;
 pub mod wsi;
 
