@@ -10,9 +10,12 @@ mod gamma;
 pub mod log;
 pub mod nvext;
 pub mod private_data;
+pub mod qpc;
 pub mod sync;
+pub mod wsi;
 
 pub use gamma::{GAMMA_CP_COUNT, GammaRamp};
+pub use qpc::qpc;
 
 /// The LUID DXMT gives the Metal device with `registry_id`: the id's bytes in reverse order.
 ///

@@ -8,21 +8,11 @@
 
 use core::{ffi::c_void, mem::offset_of};
 
+pub use crate::wsi::{Hmonitor, Hwnd, Rational, Rect, Wchar};
 use crate::{
     GammaRamp,
     com::{Guid, Hresult, IUnknownVtbl},
 };
-
-/// `WCHAR`: UTF-16 on PE.
-#[cfg(windows)]
-pub type Wchar = u16;
-/// `WCHAR`: natively `wchar_t`, UTF-32.
-#[cfg(not(windows))]
-pub type Wchar = u32;
-/// `HWND`.
-pub type Hwnd = *mut c_void;
-/// `HMONITOR`.
-pub type Hmonitor = *mut c_void;
 
 /// DXMT's `IMTLDXGIAdapter`: `IDXGIAdapter4`, then `GetMTLDevice` and `GetLocalD3DKMT`.
 pub const IID_IMTL_DXGI_ADAPTER: Guid = Guid::new(
@@ -363,24 +353,6 @@ pub type SwapChainFactoryVtbl = IMTLSwapChainFactoryVtbl;
 pub struct Luid {
     pub low_part: u32,
     pub high_part: i32,
-}
-
-/// `RECT`.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub struct Rect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
-/// `DXGI_RATIONAL`.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub struct Rational {
-    pub numerator: u32,
-    pub denominator: u32,
 }
 
 /// `DXGI_SAMPLE_DESC`.

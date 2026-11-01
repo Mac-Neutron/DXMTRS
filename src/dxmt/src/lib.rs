@@ -33,3 +33,4 @@ pub mod scaler;
 pub mod shader_cache;
 pub mod staging;
 pub mod stats;
+pub mod swapchain;

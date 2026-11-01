@@ -1,15 +1,8 @@
-//! What dxgi calls in winemetal: its devices, its displays and, natively, the window-system hooks.
+//! What dxgi calls in winemetal: its devices and its displays.
 //!
-//! winemetal-sys declares them, but for `WMTGetWsiHooks`, declared here with the hooks' layout
-//! dxgi mirrors. meson links winemetal. A host test binary still links, with `-undefined
-//! dynamic_lookup`, and a function that calls one of these is out of the host tests' reach. A
-//! Metal object is a winemetal handle (`obj_handle_t`, a `u64`).
-
-#[cfg(not(windows))]
-unsafe extern "C" {
-    /// The hooks a VM host set, or null.
-    pub fn WMTGetWsiHooks() -> *const crate::abi::WsiHooks;
-}
+//! winemetal-sys declares them, and meson links winemetal. A host test binary still links, with
+//! `-undefined dynamic_lookup`, and a function that calls one of these is out of the host tests'
+//! reach. A Metal object is a winemetal handle (`obj_handle_t`, a `u64`).
 
 #[cfg(windows)]
 pub use winemetal_sys::WMTSetMetalShaderCachePath;

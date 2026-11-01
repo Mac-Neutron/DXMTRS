@@ -456,9 +456,10 @@ src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,PartialEq,Eq,Hash,Deb
 src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
 src/util/src/ext.rs Luid Clone,Copy,Default
-src/util/src/ext.rs Rational Clone,Copy,Default
-src/util/src/ext.rs Rect Clone,Copy,Default
 src/util/src/ext.rs SampleDesc Clone,Copy
+src/util/src/wsi.rs Rational Clone,Copy,Default,Debug,PartialEq,Eq
+src/util/src/wsi.rs Rect Clone,Copy,Default,Debug,PartialEq,Eq
+src/util/src/wsi/win32.rs Point Clone,Copy,Default
 src/winemetal/sys/src/sm50.rs MtlGeometryShaderPassThrough Clone,Copy
 src/winemetal/sys/src/sm50.rs MtlGeometryShaderReflection Clone,Copy
 src/winemetal/sys/src/sm50.rs MtlGeometryShaderReflectionUnion Clone,Copy

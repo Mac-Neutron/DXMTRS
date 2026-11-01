@@ -14,10 +14,8 @@ pub mod kmt;
 pub mod modes;
 pub mod nvext;
 pub mod output;
-pub mod wsi;
-
 use dxmt_util::log::Logger;
-pub use dxmt_util::private_data;
+pub use dxmt_util::{private_data, wsi};
 
 /// This DLL's log file.
 ///

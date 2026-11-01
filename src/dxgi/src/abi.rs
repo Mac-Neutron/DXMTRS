@@ -28,9 +28,6 @@ pub use dxmt_util::{
 /// `HKEY`.
 #[cfg(windows)]
 pub type Hkey = *mut c_void;
-/// `MONITORENUMPROC`: `EnumDisplayMonitors`' callback.
-#[cfg(windows)]
-pub type MonitorEnumProc = extern "system" fn(Hmonitor, *mut c_void, *mut Rect, isize) -> i32;
 
 pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 pub const DXGI_ERROR_UNSUPPORTED: Hresult = 0x887a_0004_u32.cast_signed();
@@ -64,10 +61,6 @@ pub const DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY: u32 = 0;
 pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: u32 = 0;
 pub const DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: u32 = 12;
 
-#[cfg(windows)]
-pub const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
-#[cfg(windows)]
-pub const DM_INTERLACED: u32 = 2;
 /// `HKEY_LOCAL_MACHINE`: `(HKEY)(ULONG_PTR)(LONG)0x80000002`, sign-extended on 64-bit.
 #[cfg(windows)]
 pub const HKEY_LOCAL_MACHINE: Hkey =
@@ -301,67 +294,6 @@ pub struct FactoryVtbl {
         unsafe extern "system" fn(*mut c_void, u32, u32, *const Guid, *mut *mut c_void) -> Hresult,
 }
 
-/// `POINT`, which `MonitorFromPoint` takes by value.
-#[cfg(windows)]
-#[derive(Default)]
-#[repr(C)]
-pub struct Point {
-    pub x: i32,
-    pub y: i32,
-}
-
-/// `MONITORINFOEXW`: `MONITORINFO` and the display's device name.
-#[cfg(windows)]
-#[derive(Default)]
-#[repr(C)]
-pub struct MonitorInfoExW {
-    pub size: u32,
-    pub monitor: Rect,
-    pub work: Rect,
-    pub flags: u32,
-    pub device: [Wchar; 32],
-}
-
-/// `DEVMODEW`, with its two unions' display arms.
-///
-/// The first union's printer arm (`dmOrientation` to `dmPrintQuality`) lies under `position`,
-/// `display_orientation` and `display_fixed_output`; the second union's `dmNup` under
-/// `display_flags`.
-#[cfg(windows)]
-#[derive(Default)]
-#[repr(C)]
-pub struct DevModeW {
-    pub device_name: [Wchar; 32],
-    pub spec_version: u16,
-    pub driver_version: u16,
-    pub size: u16,
-    pub driver_extra: u16,
-    pub fields: u32,
-    pub position: Point,
-    pub display_orientation: u32,
-    pub display_fixed_output: u32,
-    pub color: i16,
-    pub duplex: i16,
-    pub y_resolution: i16,
-    pub tt_option: i16,
-    pub collate: i16,
-    pub form_name: [Wchar; 32],
-    pub log_pixels: u16,
-    pub bits_per_pel: u32,
-    pub pels_width: u32,
-    pub pels_height: u32,
-    pub display_flags: u32,
-    pub display_frequency: u32,
-    pub icm_method: u32,
-    pub icm_intent: u32,
-    pub media_type: u32,
-    pub dither_type: u32,
-    pub reserved1: u32,
-    pub reserved2: u32,
-    pub panning_width: u32,
-    pub panning_height: u32,
-}
-
 /// `D3DKMT_OPENADAPTERFROMLUID`.
 #[cfg(windows)]
 #[derive(Default)]
@@ -377,54 +309,6 @@ pub struct D3dkmtOpenAdapterFromLuid {
 #[repr(C)]
 pub struct D3dkmtCloseAdapter {
     pub adapter: u32,
-}
-
-/// winemetal's `WMTWsiWindow`: a window's state as a VM host's guest last told it.
-#[cfg(not(windows))]
-#[derive(Default)]
-#[repr(C)]
-pub struct WsiWindow {
-    pub monitor: u64,
-    pub width: u32,
-    pub height: u32,
-    pub flags: u32,
-}
-
-/// winemetal's `WMTWsiDisplay`: a display, its rectangle and its UTF-16 name.
-#[cfg(not(windows))]
-#[derive(Default)]
-#[repr(C)]
-pub struct WsiDisplay {
-    pub monitor: u64,
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-    pub name: [u16; 32],
-}
-
-/// winemetal's `WMTWsiMode`: a display mode.
-#[cfg(not(windows))]
-#[derive(Default)]
-#[repr(C)]
-pub struct WsiHookMode {
-    pub width: u32,
-    pub height: u32,
-    pub refresh_num: u32,
-    pub refresh_den: u32,
-}
-
-/// winemetal's `WMTWsiHooks`: the window system a VM host answers for its guest.
-///
-/// Each hook answers 1 with its out-structure filled, or 0. `action` takes a `WMTWsiAction`,
-/// which dxgi never makes. A null hook is `None`.
-#[cfg(not(windows))]
-#[repr(C)]
-pub struct WsiHooks {
-    pub window: Option<unsafe extern "C" fn(u64, *mut WsiWindow) -> i32>,
-    pub display: Option<unsafe extern "C" fn(u32, *mut WsiDisplay) -> i32>,
-    pub mode: Option<unsafe extern "C" fn(u64, u32, *mut WsiHookMode) -> i32>,
-    pub action: Option<unsafe extern "C" fn(*const c_void)>,
 }
 
 /// Writes the UTF-8 in `src` to `dst` as `str::transcodeString` does: the units written.
@@ -682,36 +566,6 @@ const _: () = {
     );
     assert!(offset_of!(D3dkmtOpenAdapterFromLuid, adapter_luid) == 0);
     assert!(offset_of!(D3dkmtOpenAdapterFromLuid, adapter) == 8);
-    assert!(size_of::<DevModeW>() == 220 && align_of::<DevModeW>() == 4);
-    assert!(offset_of!(DevModeW, device_name) == 0);
-    assert!(offset_of!(DevModeW, spec_version) == 64);
-    assert!(offset_of!(DevModeW, driver_version) == 66);
-    assert!(offset_of!(DevModeW, size) == 68);
-    assert!(offset_of!(DevModeW, driver_extra) == 70);
-    assert!(offset_of!(DevModeW, fields) == 72);
-    assert!(offset_of!(DevModeW, position) == 76);
-    assert!(offset_of!(DevModeW, display_orientation) == 84);
-    assert!(offset_of!(DevModeW, display_fixed_output) == 88);
-    assert!(offset_of!(DevModeW, color) == 92);
-    assert!(offset_of!(DevModeW, duplex) == 94);
-    assert!(offset_of!(DevModeW, y_resolution) == 96);
-    assert!(offset_of!(DevModeW, tt_option) == 98);
-    assert!(offset_of!(DevModeW, collate) == 100);
-    assert!(offset_of!(DevModeW, form_name) == 102);
-    assert!(offset_of!(DevModeW, log_pixels) == 166);
-    assert!(offset_of!(DevModeW, bits_per_pel) == 168);
-    assert!(offset_of!(DevModeW, pels_width) == 172);
-    assert!(offset_of!(DevModeW, pels_height) == 176);
-    assert!(offset_of!(DevModeW, display_flags) == 180);
-    assert!(offset_of!(DevModeW, display_frequency) == 184);
-    assert!(offset_of!(DevModeW, icm_method) == 188);
-    assert!(offset_of!(DevModeW, icm_intent) == 192);
-    assert!(offset_of!(DevModeW, media_type) == 196);
-    assert!(offset_of!(DevModeW, dither_type) == 200);
-    assert!(offset_of!(DevModeW, reserved1) == 204);
-    assert!(offset_of!(DevModeW, reserved2) == 208);
-    assert!(offset_of!(DevModeW, panning_width) == 212);
-    assert!(offset_of!(DevModeW, panning_height) == 216);
     assert!(size_of::<GammaControl>() == 12324 && align_of::<GammaControl>() == 4);
     assert!(offset_of!(GammaControl, scale) == 0);
     assert!(offset_of!(GammaControl, offset) == 12);
@@ -743,12 +597,6 @@ const _: () = {
     assert!(offset_of!(ModeDesc1, scanline_ordering) == 20);
     assert!(offset_of!(ModeDesc1, scaling) == 24);
     assert!(offset_of!(ModeDesc1, stereo) == 28);
-    assert!(size_of::<MonitorInfoExW>() == 104 && align_of::<MonitorInfoExW>() == 4);
-    assert!(offset_of!(MonitorInfoExW, size) == 0);
-    assert!(offset_of!(MonitorInfoExW, monitor) == 4);
-    assert!(offset_of!(MonitorInfoExW, work) == 20);
-    assert!(offset_of!(MonitorInfoExW, flags) == 36);
-    assert!(offset_of!(MonitorInfoExW, device) == 40);
     assert!(size_of::<OutputDesc>() == 92 && align_of::<OutputDesc>() == 4);
     assert!(offset_of!(OutputDesc, device_name) == 0);
     assert!(offset_of!(OutputDesc, desktop_coordinates) == 64);
@@ -770,9 +618,6 @@ const _: () = {
     assert!(offset_of!(OutputDesc1, min_luminance) == 132);
     assert!(offset_of!(OutputDesc1, max_luminance) == 136);
     assert!(offset_of!(OutputDesc1, max_full_frame_luminance) == 140);
-    assert!(size_of::<Point>() == 8 && align_of::<Point>() == 4);
-    assert!(offset_of!(Point, x) == 0);
-    assert!(offset_of!(Point, y) == 4);
     assert!(size_of::<QueryVideoMemoryInfo>() == 32 && align_of::<QueryVideoMemoryInfo>() == 8);
     assert!(offset_of!(QueryVideoMemoryInfo, budget) == 0);
     assert!(offset_of!(QueryVideoMemoryInfo, current_usage) == 8);
@@ -977,36 +822,6 @@ const _: () = {
     );
     assert!(offset_of!(D3dkmtOpenAdapterFromLuid, adapter_luid) == 0);
     assert!(offset_of!(D3dkmtOpenAdapterFromLuid, adapter) == 8);
-    assert!(size_of::<DevModeW>() == 220 && align_of::<DevModeW>() == 4);
-    assert!(offset_of!(DevModeW, device_name) == 0);
-    assert!(offset_of!(DevModeW, spec_version) == 64);
-    assert!(offset_of!(DevModeW, driver_version) == 66);
-    assert!(offset_of!(DevModeW, size) == 68);
-    assert!(offset_of!(DevModeW, driver_extra) == 70);
-    assert!(offset_of!(DevModeW, fields) == 72);
-    assert!(offset_of!(DevModeW, position) == 76);
-    assert!(offset_of!(DevModeW, display_orientation) == 84);
-    assert!(offset_of!(DevModeW, display_fixed_output) == 88);
-    assert!(offset_of!(DevModeW, color) == 92);
-    assert!(offset_of!(DevModeW, duplex) == 94);
-    assert!(offset_of!(DevModeW, y_resolution) == 96);
-    assert!(offset_of!(DevModeW, tt_option) == 98);
-    assert!(offset_of!(DevModeW, collate) == 100);
-    assert!(offset_of!(DevModeW, form_name) == 102);
-    assert!(offset_of!(DevModeW, log_pixels) == 166);
-    assert!(offset_of!(DevModeW, bits_per_pel) == 168);
-    assert!(offset_of!(DevModeW, pels_width) == 172);
-    assert!(offset_of!(DevModeW, pels_height) == 176);
-    assert!(offset_of!(DevModeW, display_flags) == 180);
-    assert!(offset_of!(DevModeW, display_frequency) == 184);
-    assert!(offset_of!(DevModeW, icm_method) == 188);
-    assert!(offset_of!(DevModeW, icm_intent) == 192);
-    assert!(offset_of!(DevModeW, media_type) == 196);
-    assert!(offset_of!(DevModeW, dither_type) == 200);
-    assert!(offset_of!(DevModeW, reserved1) == 204);
-    assert!(offset_of!(DevModeW, reserved2) == 208);
-    assert!(offset_of!(DevModeW, panning_width) == 212);
-    assert!(offset_of!(DevModeW, panning_height) == 216);
     assert!(size_of::<GammaControl>() == 12324 && align_of::<GammaControl>() == 4);
     assert!(offset_of!(GammaControl, scale) == 0);
     assert!(offset_of!(GammaControl, offset) == 12);
@@ -1038,12 +853,6 @@ const _: () = {
     assert!(offset_of!(ModeDesc1, scanline_ordering) == 20);
     assert!(offset_of!(ModeDesc1, scaling) == 24);
     assert!(offset_of!(ModeDesc1, stereo) == 28);
-    assert!(size_of::<MonitorInfoExW>() == 104 && align_of::<MonitorInfoExW>() == 4);
-    assert!(offset_of!(MonitorInfoExW, size) == 0);
-    assert!(offset_of!(MonitorInfoExW, monitor) == 4);
-    assert!(offset_of!(MonitorInfoExW, work) == 20);
-    assert!(offset_of!(MonitorInfoExW, flags) == 36);
-    assert!(offset_of!(MonitorInfoExW, device) == 40);
     assert!(size_of::<OutputDesc>() == 96 && align_of::<OutputDesc>() == 8);
     assert!(offset_of!(OutputDesc, device_name) == 0);
     assert!(offset_of!(OutputDesc, desktop_coordinates) == 64);
@@ -1065,9 +874,6 @@ const _: () = {
     assert!(offset_of!(OutputDesc1, min_luminance) == 136);
     assert!(offset_of!(OutputDesc1, max_luminance) == 140);
     assert!(offset_of!(OutputDesc1, max_full_frame_luminance) == 144);
-    assert!(size_of::<Point>() == 8 && align_of::<Point>() == 4);
-    assert!(offset_of!(Point, x) == 0);
-    assert!(offset_of!(Point, y) == 4);
     assert!(size_of::<QueryVideoMemoryInfo>() == 32 && align_of::<QueryVideoMemoryInfo>() == 8);
     assert!(offset_of!(QueryVideoMemoryInfo, budget) == 0);
     assert!(offset_of!(QueryVideoMemoryInfo, current_usage) == 8);
@@ -1364,28 +1170,6 @@ const _: () = {
     assert!(offset_of!(SwapChainFullscreenDesc, scanline_ordering) == 8);
     assert!(offset_of!(SwapChainFullscreenDesc, scaling) == 12);
     assert!(offset_of!(SwapChainFullscreenDesc, windowed) == 16);
-    assert!(size_of::<WsiDisplay>() == 88 && align_of::<WsiDisplay>() == 8);
-    assert!(offset_of!(WsiDisplay, monitor) == 0);
-    assert!(offset_of!(WsiDisplay, left) == 8);
-    assert!(offset_of!(WsiDisplay, top) == 12);
-    assert!(offset_of!(WsiDisplay, right) == 16);
-    assert!(offset_of!(WsiDisplay, bottom) == 20);
-    assert!(offset_of!(WsiDisplay, name) == 24);
-    assert!(size_of::<WsiHookMode>() == 16 && align_of::<WsiHookMode>() == 4);
-    assert!(offset_of!(WsiHookMode, width) == 0);
-    assert!(offset_of!(WsiHookMode, height) == 4);
-    assert!(offset_of!(WsiHookMode, refresh_num) == 8);
-    assert!(offset_of!(WsiHookMode, refresh_den) == 12);
-    assert!(size_of::<WsiHooks>() == 32 && align_of::<WsiHooks>() == 8);
-    assert!(offset_of!(WsiHooks, window) == 0);
-    assert!(offset_of!(WsiHooks, display) == 8);
-    assert!(offset_of!(WsiHooks, mode) == 16);
-    assert!(offset_of!(WsiHooks, action) == 24);
-    assert!(size_of::<WsiWindow>() == 24 && align_of::<WsiWindow>() == 8);
-    assert!(offset_of!(WsiWindow, monitor) == 0);
-    assert!(offset_of!(WsiWindow, width) == 8);
-    assert!(offset_of!(WsiWindow, height) == 12);
-    assert!(offset_of!(WsiWindow, flags) == 16);
 };
 
 #[cfg(test)]
