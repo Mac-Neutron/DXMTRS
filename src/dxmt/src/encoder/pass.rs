@@ -140,6 +140,27 @@ bitflags::bitflags! {
     }
 }
 
+/// A geometry-shader indirect dispatch arguments marshal task queued for a render pass.
+pub struct GsMarshalTask {
+    pub draw_args_buf: u64,
+    pub draw_args_va: u64,
+    pub vertex_count_per_warp: u32,
+    pub max_object_threadgroups: u64,
+    pub dispatch_args_buf: u64,
+    pub dispatch_args_va: u64,
+}
+
+/// A tessellation indirect dispatch arguments marshal task queued for a render pass.
+pub struct TsMarshalTask {
+    pub draw_args_buf: u64,
+    pub draw_args_va: u64,
+    pub control_point_count: u16,
+    pub patch_per_group: u16,
+    pub max_object_threadgroups: u64,
+    pub dispatch_args_buf: u64,
+    pub dispatch_args_va: u64,
+}
+
 /// A render pass's targets and their sizes: the C++ `RenderEncoderData`'s own fields.
 ///
 /// The front end fills them after [`Encoder::start_render_pass`], as the C++'s does.
@@ -157,6 +178,10 @@ pub struct RenderTargets {
     pub dsv_readonly_flags: u8,
     pub render_target_count: u8,
     pub uses: RenderUses,
+    pub gs_marshal_tasks: Vec<GsMarshalTask>,
+    pub ts_marshal_tasks: Vec<TsMarshalTask>,
+    pub tile_barrier_pso_key: [u32; 9],
+    pub last_pso: u64,
 }
 
 /// The textures [`Encoder::upscale_temporal`] reads and writes.
@@ -211,17 +236,25 @@ impl Encoder {
             dsv_readonly_flags,
             render_target_count,
             uses: RenderUses::empty(),
+            gs_marshal_tasks: Vec::new(),
+            ts_marshal_tasks: Vec::new(),
+            tile_barrier_pso_key: [0; 9],
+            last_pso: 0,
         };
         self.begin(PassKind::Render(Box::new(targets)), arguments);
+        self.queries.begin_pass();
+        self.frame_stats.render_pass_count += 1;
     }
 
     /// Starts a compute pass with its slice of the argument buffer.
     pub fn start_compute_pass(&mut self, arguments: Option<ArgumentBuffer>) {
         self.begin(PassKind::Compute, arguments);
+        self.frame_stats.compute_pass_count += 1;
     }
 
     pub fn start_blit_pass(&mut self) {
         self.begin(PassKind::Blit, None);
+        self.frame_stats.blit_pass_count += 1;
     }
 
     /// The render pass's targets, while a render pass is being recorded.
@@ -267,6 +300,9 @@ impl Encoder {
             debug_assert!(false, "a pass to end");
             return;
         };
+        if matches!(pass.kind, PassKind::Render(_)) {
+            self.queries.end_pass();
+        }
         if pass.id != NO_ID {
             let wait = core::mem::replace(&mut pass.fence_wait, FenceSet::EMPTY);
             if matches!(pass.kind, PassKind::Render(_)) {
@@ -617,6 +653,7 @@ impl Encoder {
     /// A clear pass of `clear`, which writes `texture`'s view `key`.
     fn clear(&mut self, clear: Clear, texture: &Arc<Texture>, key: TextureViewKey) {
         self.begin(PassKind::Clear(clear), None);
+        self.frame_stats.clear_pass_count += 1;
         let attachment = self.attachment::<{ stage::COMPUTE }>(texture, key, Access::WRITE);
         if let Some(PassKind::Clear(clear)) = self.current_kind() {
             clear.attachment = attachment;

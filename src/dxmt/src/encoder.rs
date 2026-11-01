@@ -196,8 +196,10 @@ pub use pass::{
 
 /// The encode thread's state: bindings, the pass being recorded and the dependency tracking.
 pub struct Encoder {
+    device_handle: u64,
     vertex_buffers: Box<[VertexBufferBinding]>,
     index_buffer: Option<Arc<Buffer>>,
+    index_buffer_offset: u32,
     constant_buffers: Box<[ConstantBufferBinding]>,
     samplers: Box<[Option<BoundSampler>]>,
     resources: Box<[ResourceView]>,
@@ -225,6 +227,17 @@ pub struct Encoder {
     heap: Commands,
     /// The chunk being encoded.
     seq: u64,
+    coherent_seq: u64,
+    frame_id: u64,
+    frame_stats: crate::frame_stats::FrameStatistics,
+    counters: Option<crate::counter::CounterPool>,
+    queries: crate::query::Queries,
+    deferred_queries: Vec<usize>,
+    copy_temp: Option<crate::ring::RingBump>,
+    helper_psos: gaps::HelperPipelines,
+    pub tess_num_output_control_point_element: u32,
+    pub tess_threads_per_patch: u32,
+    pub max_object_threadgroups: u32,
     retained: Vec<Arc<dyn Send + Sync>>,
     buffers_used: UseTable<BufferViewKey>,
     textures_used: UseTable<TextureViewKey>,
@@ -282,7 +295,14 @@ impl Encoder {
         let event = unsafe { MTLDevice_newEvent(device.handle()) };
         // SAFETY: `newEvent` returns a +1 handle or null.
         let event = unsafe { Obj::adopt(event) };
-        let mut encoder = Self::with(heap, fences, sampler, info.gpu_resource_id, Some(cbuffer));
+        let mut encoder = Self::with(
+            device.handle(),
+            heap,
+            fences,
+            sampler,
+            info.gpu_resource_id,
+            Some(cbuffer),
+        );
         encoder.barrier_event = event;
         encoder
     }
@@ -291,7 +311,7 @@ impl Encoder {
     #[cfg(test)]
     #[must_use]
     pub fn headless() -> Self {
-        Self::with(0x1000, Box::default(), None, 0, None)
+        Self::with(0, 0x1000, Box::default(), None, 0, None)
     }
 
     /// Starts encoding chunk `seq`: the previous chunk's records are gone.
@@ -372,6 +392,7 @@ impl Encoder {
 
     pub fn bind_index_buffer(&mut self, buffer: Option<Arc<Buffer>>) {
         self.index_buffer = buffer;
+        self.index_buffer_offset = 0;
     }
 
     pub fn bind_constant_buffer<const S: u8>(
@@ -427,6 +448,7 @@ impl Encoder {
         let unbound = |n| (0..n).map(|_| ResourceView::None).collect();
         self.vertex_buffers = vertex_buffers();
         self.index_buffer = None;
+        self.index_buffer_offset = 0;
         self.constant_buffers = constant_buffers();
         self.samplers = (0..SAMPLER_SLOTS * STAGES).map(|_| None).collect();
         self.resources = unbound(RESOURCE_SLOTS * STAGES);
@@ -495,6 +517,7 @@ impl Encoder {
     }
 
     fn with(
+        device_handle: u64,
         heap: usize,
         fences: Box<[Option<Obj>]>,
         dummy_sampler: Option<Obj>,
@@ -503,8 +526,10 @@ impl Encoder {
     ) -> Self {
         let unbound = |n| (0..n).map(|_| ResourceView::None).collect();
         Self {
+            device_handle,
             vertex_buffers: vertex_buffers(),
             index_buffer: None,
+            index_buffer_offset: 0,
             constant_buffers: constant_buffers(),
             samplers: (0..SAMPLER_SLOTS * STAGES).map(|_| None).collect(),
             resources: unbound(RESOURCE_SLOTS * STAGES),
@@ -529,6 +554,17 @@ impl Encoder {
             intrapass_barriers: 0,
             heap: Commands::new(Arc::new(BlockPool::new(heap))),
             seq: 0,
+            coherent_seq: 0,
+            frame_id: 0,
+            frame_stats: crate::frame_stats::FrameStatistics::default(),
+            counters: None,
+            queries: crate::query::Queries::new(),
+            deferred_queries: Vec::new(),
+            copy_temp: None,
+            helper_psos: gaps::HelperPipelines::default(),
+            tess_num_output_control_point_element: 0,
+            tess_threads_per_patch: 0,
+            max_object_threadgroups: u32::MAX,
             retained: Vec::new(),
             buffers_used: UseTable::default(),
             textures_used: UseTable::default(),
@@ -547,6 +583,14 @@ impl Encoder {
         unsafe { (*pass.records.tail.as_ptr()).next = mem_ptr(record) };
         // SAFETY: `record` was just placed, a `Record` led by `WmtcmdBase`'s fields.
         unsafe { (*record.as_ptr()).next = NO_NEXT };
+        // SAFETY: `record` was just placed; when it is a `WmtcmdRenderSetpso`, remember its PSO.
+        if unsafe { (*record.as_ptr()).r#type } == winemetal_sys::wire::WMT_RENDER_COMMAND_SET_PSO
+            && size_of::<T>() == size_of::<WmtcmdRenderSetpso>()
+            && let PassKind::Render(targets) = &mut pass.kind
+        {
+            // SAFETY: checked `type == WMT_RENDER_COMMAND_SET_PSO` and `size_of::<T>()`.
+            targets.last_pso = unsafe { (*record.cast::<WmtcmdRenderSetpso>().as_ptr()).pso };
+        }
         pass.records.tail = record;
     }
 

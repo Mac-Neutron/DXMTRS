@@ -23,19 +23,23 @@ use winemetal_sys::{
         SM50_BINDING_INDEX_ARGUMENT_TABLE, SM50_BINDING_INDEX_ARGUMENT_TABLE2,
         SM50_BINDING_INDEX_CONSTANT_BUFFER, SM50_BINDING_INDEX_CONSTANT_BUFFER2,
         SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_STREAM_OUTPUT0,
-        SM50_BINDING_INDEX_VERTEX_BUFFER, WMT_BLIT_COMMAND_FILL_BUFFER,
+        SM50_BINDING_INDEX_VERTEX_BUFFER, WMT_BARRIER_SCOPE_BUFFERS, WMT_BLIT_COMMAND_FILL_BUFFER,
         WMT_BLIT_COMMAND_UPDATE_FENCE, WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
         WMT_COMPUTE_COMMAND_SET_BUFFER, WMT_COMPUTE_COMMAND_UPDATE_FENCE,
         WMT_COMPUTE_COMMAND_WAIT_FOR_FENCE, WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD,
-        WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_MESH_BUFFER,
-        WMT_RENDER_COMMAND_SET_OBJECT_BUFFER, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER,
-        WMT_RENDER_COMMAND_UPDATE_FENCE, WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
-        WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_PRE_RASTER, WMT_STORE_ACTION_STORE,
+        WMT_RENDER_COMMAND_MEMORY_BARRIER, WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
+        WMT_RENDER_COMMAND_SET_MESH_BUFFER, WMT_RENDER_COMMAND_SET_OBJECT_BUFFER,
+        WMT_RENDER_COMMAND_SET_VERTEX_BUFFER, WMT_RENDER_COMMAND_UPDATE_FENCE,
+        WMT_RENDER_COMMAND_USE_RESOURCE, WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
+        WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_MESH, WMT_RENDER_STAGE_OBJECT,
+        WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX, WMT_RESOURCE_USAGE_READ,
+        WMT_RESOURCE_USAGE_WRITE, WMT_STORE_ACTION_STORE,
         WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMTClearColor, WMTColorAttachmentInfo,
         WMTDepthAttachmentInfo, WMTRenderPassInfo, WMTRenderPassSampleBufferInfo,
         WMTSampleBufferAttachmentInfo, WMTStencilAttachmentInfo, WMTUTF8_STRING_ENCODING,
         WmtcmdBase, WmtcmdBlitFenceOp, WmtcmdBlitFillbuffer, WmtcmdComputeFenceOp,
-        WmtcmdComputeSetbuffer, WmtcmdRenderFenceOp, WmtcmdRenderSetbuffer,
+        WmtcmdComputeSetbuffer, WmtcmdRenderFenceOp, WmtcmdRenderMemoryBarrier,
+        WmtcmdRenderSetbuffer, WmtcmdRenderUseresource,
     },
 };
 
@@ -219,8 +223,69 @@ impl Encoder {
                 },
             );
         }
-        // ponytail: the geometry and tessellation argument marshals (E4's emulated commands)
-        // join here, before the records.
+        for task in &targets.gs_marshal_tasks {
+            chain.push(
+                heap,
+                WmtcmdRenderUseresource {
+                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    resource: task.draw_args_buf,
+                    usage: WMT_RESOURCE_USAGE_READ,
+                    stages: WMT_RENDER_STAGE_VERTEX,
+                },
+            );
+            chain.push(
+                heap,
+                WmtcmdRenderUseresource {
+                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    resource: task.dispatch_args_buf,
+                    usage: WMT_RESOURCE_USAGE_WRITE,
+                    stages: WMT_RENDER_STAGE_VERTEX,
+                },
+            );
+        }
+        for task in &targets.ts_marshal_tasks {
+            chain.push(
+                heap,
+                WmtcmdRenderUseresource {
+                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    resource: task.draw_args_buf,
+                    usage: WMT_RESOURCE_USAGE_READ,
+                    stages: WMT_RENDER_STAGE_VERTEX,
+                },
+            );
+            chain.push(
+                heap,
+                WmtcmdRenderUseresource {
+                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    resource: task.dispatch_args_buf,
+                    usage: WMT_RESOURCE_USAGE_WRITE,
+                    stages: WMT_RENDER_STAGE_VERTEX,
+                },
+            );
+        }
+        if !targets.gs_marshal_tasks.is_empty() || !targets.ts_marshal_tasks.is_empty() {
+            chain.push(
+                heap,
+                WmtcmdRenderMemoryBarrier {
+                    r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    scope: WMT_BARRIER_SCOPE_BUFFERS,
+                    stages_before: WMT_RENDER_STAGE_VERTEX,
+                    stages_after: WMT_RENDER_STAGE_VERTEX
+                        | WMT_RENDER_STAGE_MESH
+                        | WMT_RENDER_STAGE_OBJECT,
+                },
+            );
+        }
         chain.link(pass.records.head);
         // SAFETY: the encoder just made; the records live in the encoder's memory.
         unsafe { MTLRenderCommandEncoder_encodeCommands(encoder, chain.first()) };

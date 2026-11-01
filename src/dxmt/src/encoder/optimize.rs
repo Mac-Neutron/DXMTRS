@@ -37,7 +37,7 @@ impl Encoder {
                 if matches!(latter[0].kind, PassKind::Null) {
                     continue;
                 }
-                if relation(&mut former[j], &mut latter[0]) {
+                if relation(&mut former[j], &mut latter[0], &mut self.frame_stats) {
                     break;
                 }
             }
@@ -58,7 +58,11 @@ enum Merged {
 ///
 /// True when they keep their order (the C++'s `DXMT_ENCODER_LIST_OP_SYNCHRONIZE`), false when
 /// the scan goes on past `latter`.
-fn relation(former: &mut Pass, latter: &mut Pass) -> bool {
+fn relation(
+    former: &mut Pass,
+    latter: &mut Pass,
+    stats: &mut crate::frame_stats::FrameStatistics,
+) -> bool {
     if matches!(former.kind, PassKind::Null) || matches!(latter.kind, PassKind::Null) {
         return false;
     }
@@ -103,8 +107,10 @@ fn relation(former: &mut Pass, latter: &mut Pass) -> bool {
         Merged::Former => {
             if matches!(former.kind, PassKind::Render(_)) {
                 render_into_render(former, latter);
+                stats.render_pass_optimized += 1;
             } else {
                 absorb(latter, former);
+                stats.clear_pass_optimized += 1;
             }
             former.kind = PassKind::Null;
             true
@@ -112,6 +118,7 @@ fn relation(former: &mut Pass, latter: &mut Pass) -> bool {
         Merged::Latter => {
             absorb(former, latter);
             latter.kind = PassKind::Null;
+            stats.resolve_pass_optimized += 1;
             false
         }
         Merged::Nothing => depends(former, latter),
@@ -220,7 +227,7 @@ fn same_targets(r0: &RenderTargets, r1: &RenderTargets) -> bool {
 }
 
 /// `r1` loads, clears and stores as `r0` did, and uses what `r0` used.
-fn take_targets(r0: &RenderTargets, r1: &mut RenderTargets) {
+fn take_targets(r0: &mut RenderTargets, r1: &mut RenderTargets) {
     let count = usize::from(r0.render_target_count);
     for (a0, a1) in r0.colors.iter().zip(&mut r1.colors).take(count) {
         a1.target.load_action = a0.target.load_action;
@@ -233,6 +240,14 @@ fn take_targets(r0: &RenderTargets, r1: &mut RenderTargets) {
     r1.stencil.clear_stencil = r0.stencil.clear_stencil;
     r1.stencil.target.store_action = r0.stencil.target.store_action;
     r1.uses |= r0.uses;
+    if !r0.gs_marshal_tasks.is_empty() {
+        r0.gs_marshal_tasks.append(&mut r1.gs_marshal_tasks);
+        core::mem::swap(&mut r0.gs_marshal_tasks, &mut r1.gs_marshal_tasks);
+    }
+    if !r0.ts_marshal_tasks.is_empty() {
+        r0.ts_marshal_tasks.append(&mut r1.ts_marshal_tasks);
+        core::mem::swap(&mut r0.ts_marshal_tasks, &mut r1.ts_marshal_tasks);
+    }
 }
 
 /// `clear` as the load action of `render`'s target that is its view.
