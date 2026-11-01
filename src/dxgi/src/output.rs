@@ -12,7 +12,9 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use dxmt_util::{GAMMA_CP_COUNT, GammaRamp, com::vtbl, float_cast::u32_to_f32};
+use dxmt_util::{
+    GAMMA_CP_COUNT, GammaRamp, com::vtbl, float_cast::u32_to_f32, private_data::PrivateData,
+};
 use winemetal_wire::WMTDisplayDescription;
 
 use crate::{
@@ -30,7 +32,6 @@ use crate::{
     },
     com::{self, Head},
     ffi, modes,
-    private_data::PrivateData,
     wsi::{self, WsiMode},
 };
 

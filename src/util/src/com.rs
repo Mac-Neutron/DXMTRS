@@ -1,6 +1,12 @@
-//! COM's `IUnknown`, and the calls on it every DXMT DLL makes.
+//! COM's `IUnknown`, the two-count `ComObject` of `com_object.hpp`, and `QueryInterface` helpers.
 
-use core::{ffi::c_void, fmt};
+use core::{
+    ffi::c_void,
+    fmt,
+    ops::Deref,
+    sync::atomic::{AtomicU32, Ordering},
+};
+use std::sync::{Mutex, PoisonError};
 
 /// A COM interface ID.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +78,138 @@ pub const E_FAIL: Hresult = 0x8000_4005_u32.cast_signed();
 pub const E_OUTOFMEMORY: Hresult = 0x8007_000e_u32.cast_signed();
 /// `E_INVALIDARG`.
 pub const E_INVALIDARG: Hresult = 0x8007_0057_u32.cast_signed();
+/// `DXGI_ERROR_NOT_FOUND`.
+pub const DXGI_ERROR_NOT_FOUND: Hresult = 0x887a_0002_u32.cast_signed();
+/// `DXGI_ERROR_MORE_DATA`.
+pub const DXGI_ERROR_MORE_DATA: Hresult = 0x887a_0003_u32.cast_signed();
+
+/// `IUnknown`'s IID: `00000000-0000-0000-c000-000000000046`.
+pub const IID_IUNKNOWN: Guid = Guid::new(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
+
+/// The high-bit guard added to `priv_count` before a destructor runs (`com_object.hpp:64`).
+///
+/// If a destructor takes and releases a private reference on `self`, the release sees a count
+/// above `1` and does not free the object a second time.
+const DESTROYING_BIT: u32 = 0x8000_0000;
+
+/// The two-count COM reference counter of `com_object.hpp`.
+///
+/// Public references (`AddRef` and `Release`) keep one private reference alive while `pub_count`
+/// is non-zero: the 0 to 1 public transition adds a private reference, and the 1 to 0 public
+/// transition releases it. The object is freed when `priv_count` reaches 0.
+#[repr(C)]
+pub struct ComObject {
+    pub pub_count: AtomicU32,
+    pub priv_count: AtomicU32,
+}
+
+impl Default for ComObject {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ComObject {
+    /// A counter starting at 0 public and 0 private references (`ComObject` in `com_object.hpp`).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            pub_count: AtomicU32::new(0),
+            priv_count: AtomicU32::new(0),
+        }
+    }
+
+    /// A counter starting at 1 public and 1 private reference (`ComObjectWithInitialRef`).
+    #[must_use]
+    pub const fn with_initial_ref() -> Self {
+        Self {
+            pub_count: AtomicU32::new(1),
+            priv_count: AtomicU32::new(1),
+        }
+    }
+
+    /// `AddRef`: increments the public count, taking a private reference on 0 to 1.
+    pub fn add_ref(&self) -> u32 {
+        let prev = self.pub_count.fetch_add(1, Ordering::SeqCst);
+        if prev == 0 {
+            self.add_ref_private();
+        }
+        prev + 1
+    }
+
+    /// `Release`: decrements the public count, releasing the public hold's private reference at 0.
+    pub fn release(&self) -> u32 {
+        self.release_and_free().0
+    }
+
+    /// `Release`, also answering whether the last private reference was just released.
+    pub fn release_and_free(&self) -> (u32, bool) {
+        let remaining = self.pub_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        let free = if remaining == 0 {
+            self.release_private()
+        } else {
+            false
+        };
+        (remaining, free)
+    }
+
+    /// `AddRefPrivate`: increments the private count.
+    pub fn add_ref_private(&self) {
+        self.priv_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// `ReleasePrivate`: decrements the private count; `true` at 1 to 0 so the caller frees `self`.
+    #[must_use]
+    pub fn release_private(&self) -> bool {
+        let prev = self.priv_count.fetch_sub(1, Ordering::SeqCst);
+        if prev == 1 {
+            self.priv_count.fetch_add(DESTROYING_BIT, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The live private reference count (excluding the destruction-in-progress guard bit).
+    #[must_use]
+    pub fn private_count(&self) -> u32 {
+        self.priv_count.load(Ordering::SeqCst) & !DESTROYING_BIT
+    }
+
+    /// The live public reference count.
+    #[must_use]
+    pub fn public_count(&self) -> u32 {
+        self.pub_count.load(Ordering::SeqCst)
+    }
+}
+
+/// `ComObjectWithInitialRef` of `com_object.hpp`: starts with 1 public and 1 private reference.
+///
+/// `MTLDXGIObject` (and through it `MTLD3D11SwapChain` and `MTLD3D12SwapChain`) inherits from it.
+#[repr(transparent)]
+pub struct ComObjectWithInitialRef(pub ComObject);
+
+impl Default for ComObjectWithInitialRef {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ComObjectWithInitialRef {
+    /// A counter starting at 1 public and 1 private reference.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(ComObject::with_initial_ref())
+    }
+}
+
+impl Deref for ComObjectWithInitialRef {
+    type Target = ComObject;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// `IUnknown`'s slots, which every interface starts with.
 #[repr(C)]
@@ -129,6 +267,51 @@ pub unsafe fn vtbl<'a, V>(object: *mut c_void) -> &'a V {
     let head = unsafe { &*object.cast::<Object<V>>() };
     // SAFETY: a live object's vtable lives as long as its module, past any use here.
     unsafe { &*head.vtbl }
+}
+
+/// Takes a reference to `object`; null does nothing.
+///
+/// # Safety
+///
+/// `object` is a live COM object or null.
+pub unsafe fn add_ref(object: *mut c_void) {
+    if !object.is_null() {
+        // SAFETY: every COM interface starts with `IUnknown`'s slots.
+        let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+        // SAFETY: `object` is live.
+        unsafe { (unknown.add_ref)(object) };
+    }
+}
+
+/// Whether a miss of `riid` on `object` is the first, so the caller logs it.
+///
+/// `com_guid.cpp`'s `logQueryInterfaceError`.
+/// The C++'s level check before it is the log's own: a warning below `DXMT_LOG_LEVEL` is dropped
+/// by `Logger` either way.
+pub fn qi_log(object: &Guid, riid: &Guid) -> bool {
+    // ponytail: a linear scan, as the pairs are a handful per process; a set if one ever logs many.
+    /// The pairs already logged.
+    ///
+    /// A per-call-site log-once latch (`com_guid.cpp`'s `g_loggedQueryInterfaceErrors`): it carries
+    /// nothing beyond "fired", for every object of the process alike.
+    static LOGGED: Mutex<Vec<(Guid, Guid)>> = Mutex::new(Vec::new());
+    let mut logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
+    let pair = (*object, *riid);
+    if logged.contains(&pair) {
+        return false;
+    }
+    logged.push(pair);
+    true
+}
+
+/// Writes `value` to `out`, which promises no alignment.
+///
+/// # Safety
+///
+/// `out` is non-null and addresses a writable `P`; the caller checks it for null.
+pub const unsafe fn write_out<P>(out: *mut P, value: P) {
+    // SAFETY: the caller's; the write assumes no alignment.
+    unsafe { out.write_unaligned(value) };
 }
 
 #[cfg(test)]

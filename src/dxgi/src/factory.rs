@@ -10,7 +10,10 @@ use core::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use dxmt_util::com::{IUnknownVtbl, query, vtbl};
+use dxmt_util::{
+    com::{IUnknownVtbl, query, vtbl},
+    private_data::PrivateData,
+};
 
 use crate::{
     LOG,
@@ -26,9 +29,7 @@ use crate::{
     },
     adapter,
     com::{Head, add_ref, query_interface, release, write_out},
-    ffi,
-    private_data::PrivateData,
-    wsi,
+    ffi, wsi,
 };
 
 /// The IIDs the factory answers with itself.

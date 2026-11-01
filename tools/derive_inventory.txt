@@ -447,10 +447,6 @@ src/d3d9/unix/src/metal/presenter.rs PresenterFlags Clone,Copy,Debug,Default,Par
 src/d3d9/unix/src/metal/submission.rs RetirementCounter Clone,Copy
 src/d3d9/unix/src/metal/upscale.rs ScalerKey Clone,Copy,PartialEq,Eq,Hash
 src/d3d9/unix/src/metal/upscale.rs ScratchKey Clone,Copy,PartialEq,Eq,Hash
-src/dxgi/src/abi.rs Luid Clone,Copy,Default
-src/dxgi/src/abi.rs Rational Clone,Copy,Default
-src/dxgi/src/abi.rs Rect Clone,Copy,Default
-src/dxgi/src/abi.rs SampleDesc Clone,Copy
 src/dxmt/src/library.rs ResourceAccess Clone,Copy
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default
 src/dxmt/src/resource/buffer.rs BufferAllocationFlags Clone,Copy
@@ -459,6 +455,10 @@ src/dxmt/src/resource/texture.rs TextureAllocationFlags Clone,Copy
 src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,PartialEq,Eq,Hash,Debug
 src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
+src/util/src/ext.rs Luid Clone,Copy,Default
+src/util/src/ext.rs Rational Clone,Copy,Default
+src/util/src/ext.rs Rect Clone,Copy,Default
+src/util/src/ext.rs SampleDesc Clone,Copy
 src/winemetal/wire/src/lib.rs MemPtr Clone,Copy
 src/winemetal/wire/src/lib.rs MemPtr Clone,Copy
 src/winemetal/wire/src/lib.rs Sm50CompileGeometryPipelineGeometryParams Clone,Copy

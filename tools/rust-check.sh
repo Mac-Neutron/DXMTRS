@@ -147,6 +147,12 @@ leg_gen() {
   gen_cmp src/winemetal/wire/src/layouts.rs || rc=1
   gen_cmp src/winemetal/src/protos.rs --protos || rc=1
   gen_cmp src/winemetal/sys/src/decls.rs --decls || rc=1
+  gen_cmp src/util/src/dxgi_vtbl.rs --com dxgi1_6.h crate::dxgi_vtbl \
+    IUnknown IDXGIObject IDXGIDeviceSubObject \
+    IDXGISwapChain IDXGISwapChain1 IDXGISwapChain2 IDXGISwapChain3 IDXGISwapChain4 \
+    IDXGIFactory IDXGIFactory1 IDXGIFactory2 \
+    IDXGIOutput IDXGIOutput1 \
+    IDXGIAdapter IDXGIAdapter1 IDXGIAdapter2 IDXGIAdapter3 IDXGIAdapter4 || rc=1
   for f in src/dxmt/src/*/abi.rs; do
     h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")
     hdr=$(git ls-files "src/*/$h")

@@ -9,22 +9,22 @@
 
 use core::{ffi::c_void, mem::offset_of};
 
-use dxmt_util::GammaRamp;
-pub use dxmt_util::com::{
-    E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IUnknownVtbl,
-    S_FALSE, S_OK,
+pub use dxmt_util::{
+    com::{
+        DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL,
+        E_POINTER, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, S_FALSE, S_OK,
+    },
+    ext::{
+        AdapterDesc, AdapterDesc1, AdapterDesc2, AdapterDesc3, AdapterVtbl, DXMT_NVEXT_GUID,
+        GammaControl, GammaControlCapabilities, Hmonitor, Hwnd, IID_IMTL_DXGI_ADAPTER,
+        IID_IMTL_DXGI_DEVICE, IID_IMTL_DXGI_OUTPUT, IID_IMTL_SWAP_CHAIN_FACTORY,
+        IMTLDXGIAdapterVtbl, IMTLDXGIOutputVtbl, IMTLSwapChainFactoryVtbl, Luid, ModeDesc,
+        ModeDesc1, ObjectVtbl, OutputDesc, OutputDesc1, OutputVtbl, QueryVideoMemoryInfo, Rational,
+        Rect, Rgb, SampleDesc, SwapChainDesc, SwapChainDesc1, SwapChainFactoryVtbl,
+        SwapChainFullscreenDesc, Wchar,
+    },
 };
 
-/// `WCHAR`: UTF-16 on PE.
-#[cfg(windows)]
-pub type Wchar = u16;
-/// `WCHAR`: natively `wchar_t`, UTF-32.
-#[cfg(not(windows))]
-pub type Wchar = u32;
-/// `HWND`.
-pub type Hwnd = *mut c_void;
-/// `HMONITOR`.
-pub type Hmonitor = *mut c_void;
 /// `HKEY`.
 #[cfg(windows)]
 pub type Hkey = *mut c_void;
@@ -33,8 +33,6 @@ pub type Hkey = *mut c_void;
 pub type MonitorEnumProc = extern "system" fn(Hmonitor, *mut c_void, *mut Rect, isize) -> i32;
 
 pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
-pub const DXGI_ERROR_NOT_FOUND: Hresult = 0x887a_0002_u32.cast_signed();
-pub const DXGI_ERROR_MORE_DATA: Hresult = 0x887a_0003_u32.cast_signed();
 pub const DXGI_ERROR_UNSUPPORTED: Hresult = 0x887a_0004_u32.cast_signed();
 pub const DXGI_ERROR_ALREADY_EXISTS: Hresult = 0x887a_0036_u32.cast_signed();
 
@@ -83,7 +81,6 @@ pub const REG_DWORD: u32 = 4;
 #[cfg(windows)]
 pub const DLL_PROCESS_ATTACH: u32 = 1;
 
-pub const IID_IUNKNOWN: Guid = Guid::new(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
 pub const IID_IDXGI_OBJECT: Guid = Guid::new(
     0xaec2_2fb8,
     0x76f3,
@@ -228,34 +225,6 @@ pub const IID_ID3D10_DEVICE1: Guid = Guid::new(
     0x4106,
     [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
 );
-/// DXMT's `IMTLDXGIAdapter`: `IDXGIAdapter4`, then `GetMTLDevice` and `GetLocalD3DKMT`.
-pub const IID_IMTL_DXGI_ADAPTER: Guid = Guid::new(
-    0xacdf_3ef1,
-    0xb33a,
-    0x4cb6,
-    [0x97, 0xbd, 0x1c, 0x19, 0x74, 0x82, 0x7e, 0x6d],
-);
-/// DXMT's `IMTLDXGIOutput`: `IDXGIOutput6`, then `GetGammaRamp`.
-pub const IID_IMTL_DXGI_OUTPUT: Guid = Guid::new(
-    0x4c11_28cd,
-    0xb437,
-    0x4d44,
-    [0x99, 0x58, 0x5d, 0x76, 0x5b, 0xb8, 0x5a, 0x76],
-);
-/// DXMT's `IMTLDXGIDevice` (d3d11's DXGI device).
-pub const IID_IMTL_DXGI_DEVICE: Guid = Guid::new(
-    0x6bfa_1657,
-    0x9cb1,
-    0x471a,
-    [0xa4, 0xfb, 0x7c, 0xac, 0xf8, 0xa8, 0x12, 0x07],
-);
-/// DXMT's `IMTLSwapChainFactory`, which a D3D11 or D3D12 device answers.
-pub const IID_IMTL_SWAP_CHAIN_FACTORY: Guid = Guid::new(
-    0x6c03_0003,
-    0x460a,
-    0x4b19,
-    [0x90, 0x9b, 0x38, 0xf9, 0x7d, 0x20, 0x3e, 0x45],
-);
 /// Wine's private adapter interface, which the adapter refuses without a log line.
 pub const IID_WINE_DXGI_ADAPTER: Guid = Guid::new(
     0x1739_9d75,
@@ -263,30 +232,9 @@ pub const IID_WINE_DXGI_ADAPTER: Guid = Guid::new(
     0x4c03,
     [0x99, 0xf8, 0x9d, 0x4f, 0xd1, 0x96, 0xdd, 0x62],
 );
-/// DXMT's NVIDIA extension, which `DXGIGetDebugInterface1` answers when it is on.
-pub const DXMT_NVEXT_GUID: Guid = Guid::new(
-    0xba0a_f616,
-    0x4a43,
-    0x4259,
-    [0x81, 0x5c, 0xdb, 0x3b, 0x89, 0x82, 0x99, 0x05],
-);
 
 /// `0x3f`, `?`: what a byte sequence that is not UTF-8 decodes to.
 const QUESTION: u32 = 0x3f;
-
-/// `IUnknown` and `IDXGIObject`'s slots, which the factory, adapter and output start with.
-#[repr(C)]
-pub struct ObjectVtbl {
-    pub unknown: IUnknownVtbl,
-    pub set_private_data:
-        unsafe extern "system" fn(*mut c_void, *const Guid, u32, *const c_void) -> Hresult,
-    pub set_private_data_interface:
-        unsafe extern "system" fn(*mut c_void, *const Guid, *mut c_void) -> Hresult,
-    pub get_private_data:
-        unsafe extern "system" fn(*mut c_void, *const Guid, *mut u32, *mut c_void) -> Hresult,
-    pub get_parent:
-        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
-}
 
 /// `IDXGIFactory6`'s 30 slots.
 #[repr(C)]
@@ -351,328 +299,6 @@ pub struct FactoryVtbl {
         unsafe extern "system" fn(*mut c_void, u32, *mut c_void, u32) -> Hresult,
     pub enum_adapter_by_gpu_preference:
         unsafe extern "system" fn(*mut c_void, u32, u32, *const Guid, *mut *mut c_void) -> Hresult,
-}
-
-/// `IMTLDXGIAdapter`'s 21 slots: `IDXGIAdapter4`'s 19, then DXMT's two.
-#[repr(C)]
-pub struct AdapterVtbl {
-    pub object: ObjectVtbl,
-    pub enum_outputs: unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> Hresult,
-    pub get_desc: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc) -> Hresult,
-    pub check_interface_support:
-        unsafe extern "system" fn(*mut c_void, *const Guid, *mut i64) -> Hresult,
-    pub get_desc1: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc1) -> Hresult,
-    pub get_desc2: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc2) -> Hresult,
-    pub register_hardware_content_protection_teardown_status_event:
-        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut u32) -> Hresult,
-    pub unregister_hardware_content_protection_teardown_status:
-        unsafe extern "system" fn(*mut c_void, u32),
-    pub query_video_memory_info:
-        unsafe extern "system" fn(*mut c_void, u32, u32, *mut QueryVideoMemoryInfo) -> Hresult,
-    pub set_video_memory_reservation:
-        unsafe extern "system" fn(*mut c_void, u32, u32, u64) -> Hresult,
-    pub register_video_memory_budget_change_notification_event:
-        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut u32) -> Hresult,
-    pub unregister_video_memory_budget_change_notification:
-        unsafe extern "system" fn(*mut c_void, u32),
-    pub get_desc3: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc3) -> Hresult,
-    /// The Metal device, a winemetal handle the adapter keeps retained.
-    pub get_mtl_device: unsafe extern "system" fn(*mut c_void) -> u64,
-    pub get_local_d3dkmt: unsafe extern "system" fn(*mut c_void) -> u32,
-}
-
-/// `IMTLDXGIOutput`'s 30 slots: `IDXGIOutput6`'s 29, then `GetGammaRamp`.
-#[repr(C)]
-pub struct OutputVtbl {
-    pub object: ObjectVtbl,
-    pub get_desc: unsafe extern "system" fn(*mut c_void, *mut OutputDesc) -> Hresult,
-    pub get_display_mode_list:
-        unsafe extern "system" fn(*mut c_void, u32, u32, *mut u32, *mut ModeDesc) -> Hresult,
-    pub find_closest_matching_mode: unsafe extern "system" fn(
-        *mut c_void,
-        *const ModeDesc,
-        *mut ModeDesc,
-        *mut c_void,
-    ) -> Hresult,
-    pub wait_for_v_blank: unsafe extern "system" fn(*mut c_void) -> Hresult,
-    pub take_ownership: unsafe extern "system" fn(*mut c_void, *mut c_void, i32) -> Hresult,
-    pub release_ownership: unsafe extern "system" fn(*mut c_void),
-    pub get_gamma_control_capabilities:
-        unsafe extern "system" fn(*mut c_void, *mut GammaControlCapabilities) -> Hresult,
-    pub set_gamma_control: unsafe extern "system" fn(*mut c_void, *const GammaControl) -> Hresult,
-    pub get_gamma_control: unsafe extern "system" fn(*mut c_void, *mut GammaControl) -> Hresult,
-    pub set_display_surface: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Hresult,
-    pub get_display_surface_data: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Hresult,
-    /// `GetFrameStatistics`: its `DXGI_FRAME_STATISTICS` is never written (a stub).
-    pub get_frame_statistics: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Hresult,
-    pub get_display_mode_list1:
-        unsafe extern "system" fn(*mut c_void, u32, u32, *mut u32, *mut ModeDesc1) -> Hresult,
-    pub find_closest_matching_mode1: unsafe extern "system" fn(
-        *mut c_void,
-        *const ModeDesc1,
-        *mut ModeDesc1,
-        *mut c_void,
-    ) -> Hresult,
-    pub get_display_surface_data1: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Hresult,
-    pub duplicate_output:
-        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> Hresult,
-    pub supports_overlays: unsafe extern "system" fn(*mut c_void) -> i32,
-    pub check_overlay_support:
-        unsafe extern "system" fn(*mut c_void, u32, *mut c_void, *mut u32) -> Hresult,
-    pub check_overlay_color_space_support:
-        unsafe extern "system" fn(*mut c_void, u32, u32, *mut c_void, *mut u32) -> Hresult,
-    pub duplicate_output1: unsafe extern "system" fn(
-        *mut c_void,
-        *mut c_void,
-        u32,
-        u32,
-        *const u32,
-        *mut *mut c_void,
-    ) -> Hresult,
-    pub get_desc1: unsafe extern "system" fn(*mut c_void, *mut OutputDesc1) -> Hresult,
-    pub check_hardware_composition_support:
-        unsafe extern "system" fn(*mut c_void, *mut u32) -> Hresult,
-    /// The output's gamma ramp, which d3d11's swap chain reads at each fullscreen present.
-    pub get_gamma_ramp: unsafe extern "system" fn(*mut c_void) -> *const GammaRamp,
-}
-
-/// `IMTLSwapChainFactory`, at a base of a D3D11 or D3D12 device that is not its first.
-///
-/// `CreateSwapChain` is C++ that may throw, so its slot unwinds.
-#[repr(C)]
-pub struct SwapChainFactoryVtbl {
-    pub unknown: IUnknownVtbl,
-    pub create_swap_chain: unsafe extern "system-unwind" fn(
-        *mut c_void,
-        *mut c_void,
-        Hwnd,
-        *const SwapChainDesc1,
-        *const SwapChainFullscreenDesc,
-        *mut *mut c_void,
-    ) -> Hresult,
-}
-
-/// `LUID`.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub struct Luid {
-    pub low_part: u32,
-    pub high_part: i32,
-}
-
-/// `RECT`.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub struct Rect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
-/// `DXGI_RATIONAL`.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub struct Rational {
-    pub numerator: u32,
-    pub denominator: u32,
-}
-
-/// `DXGI_SAMPLE_DESC`.
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct SampleDesc {
-    pub count: u32,
-    pub quality: u32,
-}
-
-/// `DXGI_RGB`.
-#[repr(C)]
-pub struct Rgb {
-    pub red: f32,
-    pub green: f32,
-    pub blue: f32,
-}
-
-/// `DXGI_ADAPTER_DESC`.
-#[repr(C)]
-pub struct AdapterDesc {
-    pub description: [Wchar; 128],
-    pub vendor_id: u32,
-    pub device_id: u32,
-    pub sub_sys_id: u32,
-    pub revision: u32,
-    pub dedicated_video_memory: usize,
-    pub dedicated_system_memory: usize,
-    pub shared_system_memory: usize,
-    pub adapter_luid: Luid,
-}
-
-/// `DXGI_ADAPTER_DESC1`.
-#[repr(C)]
-pub struct AdapterDesc1 {
-    pub description: [Wchar; 128],
-    pub vendor_id: u32,
-    pub device_id: u32,
-    pub sub_sys_id: u32,
-    pub revision: u32,
-    pub dedicated_video_memory: usize,
-    pub dedicated_system_memory: usize,
-    pub shared_system_memory: usize,
-    pub adapter_luid: Luid,
-    pub flags: u32,
-}
-
-/// `DXGI_ADAPTER_DESC2`.
-#[repr(C)]
-pub struct AdapterDesc2 {
-    pub description: [Wchar; 128],
-    pub vendor_id: u32,
-    pub device_id: u32,
-    pub sub_sys_id: u32,
-    pub revision: u32,
-    pub dedicated_video_memory: usize,
-    pub dedicated_system_memory: usize,
-    pub shared_system_memory: usize,
-    pub adapter_luid: Luid,
-    pub flags: u32,
-    pub graphics_preemption_granularity: u32,
-    pub compute_preemption_granularity: u32,
-}
-
-/// `DXGI_ADAPTER_DESC3`.
-#[repr(C)]
-pub struct AdapterDesc3 {
-    pub description: [Wchar; 128],
-    pub vendor_id: u32,
-    pub device_id: u32,
-    pub sub_sys_id: u32,
-    pub revision: u32,
-    pub dedicated_video_memory: usize,
-    pub dedicated_system_memory: usize,
-    pub shared_system_memory: usize,
-    pub adapter_luid: Luid,
-    pub flags: u32,
-    pub graphics_preemption_granularity: u32,
-    pub compute_preemption_granularity: u32,
-}
-
-/// `DXGI_OUTPUT_DESC`.
-#[repr(C)]
-pub struct OutputDesc {
-    pub device_name: [Wchar; 32],
-    pub desktop_coordinates: Rect,
-    pub attached_to_desktop: i32,
-    pub rotation: u32,
-    pub monitor: Hmonitor,
-}
-
-/// `DXGI_OUTPUT_DESC1`.
-#[repr(C)]
-pub struct OutputDesc1 {
-    pub device_name: [Wchar; 32],
-    pub desktop_coordinates: Rect,
-    pub attached_to_desktop: i32,
-    pub rotation: u32,
-    pub monitor: Hmonitor,
-    pub bits_per_color: u32,
-    pub color_space: u32,
-    pub red_primary: [f32; 2],
-    pub green_primary: [f32; 2],
-    pub blue_primary: [f32; 2],
-    pub white_point: [f32; 2],
-    pub min_luminance: f32,
-    pub max_luminance: f32,
-    pub max_full_frame_luminance: f32,
-}
-
-/// `DXGI_MODE_DESC`.
-#[repr(C)]
-pub struct ModeDesc {
-    pub width: u32,
-    pub height: u32,
-    pub refresh_rate: Rational,
-    pub format: u32,
-    pub scanline_ordering: u32,
-    pub scaling: u32,
-}
-
-/// `DXGI_MODE_DESC1`.
-#[derive(Default)]
-#[repr(C)]
-pub struct ModeDesc1 {
-    pub width: u32,
-    pub height: u32,
-    pub refresh_rate: Rational,
-    pub format: u32,
-    pub scanline_ordering: u32,
-    pub scaling: u32,
-    pub stereo: i32,
-}
-
-/// `DXGI_SWAP_CHAIN_DESC`.
-#[repr(C)]
-pub struct SwapChainDesc {
-    pub buffer_desc: ModeDesc,
-    pub sample_desc: SampleDesc,
-    pub buffer_usage: u32,
-    pub buffer_count: u32,
-    pub output_window: Hwnd,
-    pub windowed: i32,
-    pub swap_effect: u32,
-    pub flags: u32,
-}
-
-/// `DXGI_SWAP_CHAIN_DESC1`.
-#[repr(C)]
-pub struct SwapChainDesc1 {
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub stereo: i32,
-    pub sample_desc: SampleDesc,
-    pub buffer_usage: u32,
-    pub buffer_count: u32,
-    pub scaling: u32,
-    pub swap_effect: u32,
-    pub alpha_mode: u32,
-    pub flags: u32,
-}
-
-/// `DXGI_SWAP_CHAIN_FULLSCREEN_DESC`.
-#[repr(C)]
-pub struct SwapChainFullscreenDesc {
-    pub refresh_rate: Rational,
-    pub scanline_ordering: u32,
-    pub scaling: u32,
-    pub windowed: i32,
-}
-
-/// `DXGI_GAMMA_CONTROL`.
-#[repr(C)]
-pub struct GammaControl {
-    pub scale: Rgb,
-    pub offset: Rgb,
-    pub gamma_curve: [Rgb; 1025],
-}
-
-/// `DXGI_GAMMA_CONTROL_CAPABILITIES`.
-#[repr(C)]
-pub struct GammaControlCapabilities {
-    pub scale_and_offset_supported: i32,
-    pub max_converted_value: f32,
-    pub min_converted_value: f32,
-    pub num_gamma_control_points: u32,
-    pub control_point_positions: [f32; 1025],
-}
-
-/// `DXGI_QUERY_VIDEO_MEMORY_INFO`.
-#[repr(C)]
-pub struct QueryVideoMemoryInfo {
-    pub budget: u64,
-    pub current_usage: u64,
-    pub available_for_reservation: u64,
-    pub current_reservation: u64,
 }
 
 /// `POINT`, which `MonitorFromPoint` takes by value.

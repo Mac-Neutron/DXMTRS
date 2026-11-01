@@ -13,6 +13,7 @@ ignore = [
     "src/dxmt/src/scaler/abi.rs",
     "src/dxmt/src/shader_cache/abi.rs",
     "src/dxmt/src/stats/abi.rs",
+    "src/util/src/dxgi_vtbl.rs",
     "src/winemetal/src/protos.rs",
     "src/winemetal/sys/src/decls.rs",
     "src/winemetal/wire/src/layouts.rs",

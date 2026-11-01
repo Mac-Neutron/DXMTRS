@@ -7,10 +7,9 @@
 use core::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use dxmt_util::com::{IUnknownVtbl, release, vtbl};
-
-use crate::abi::{
-    DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_INVALIDARG, Guid, Hresult, S_FALSE, S_OK,
+use crate::com::{
+    DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_INVALIDARG, Guid, Hresult, IUnknownVtbl, S_FALSE,
+    S_OK, release, vtbl,
 };
 
 /// The size of an interface entry: a pointer.

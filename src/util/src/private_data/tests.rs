@@ -3,10 +3,11 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use dxmt_util::com::IUnknownVtbl;
-
 use super::*;
-use crate::abi::{DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_INVALIDARG, S_FALSE};
+use crate::com::{
+    DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_INVALIDARG, E_NOINTERFACE, IUnknownVtbl, S_FALSE,
+    release,
+};
 
 const NAME: Guid = Guid::new(0x1234_5678, 0x9abc, 0xdef0, [1, 2, 3, 4, 5, 6, 7, 8]);
 const OTHER: Guid = Guid::new(0x1234_5678, 0x9abc, 0xdef0, [1, 2, 3, 4, 5, 6, 7, 9]);
@@ -31,7 +32,7 @@ extern "system" fn fake_query_interface(
     _: *const Guid,
     _: *mut *mut c_void,
 ) -> i32 {
-    crate::abi::E_NOINTERFACE
+    E_NOINTERFACE
 }
 
 /// The fake behind a slot's `this`.
@@ -244,7 +245,7 @@ fn two_threads_set_get_balance() {
                     let got = fake(got);
                     assert!(got.name == 'a' || got.name == 'b');
                     // SAFETY: `got` is a live fake; this gives back the reference `get_data` took.
-                    unsafe { dxmt_util::com::release(got.this()) };
+                    unsafe { release(got.this()) };
                 }
             });
         }

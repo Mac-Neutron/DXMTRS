@@ -2,12 +2,14 @@
 
 pub mod com;
 pub mod config;
+pub mod dxgi_vtbl;
 pub mod env;
 pub mod ext;
 pub mod float_cast;
 mod gamma;
 pub mod log;
 pub mod nvext;
+pub mod private_data;
 pub mod sync;
 
 pub use gamma::{GAMMA_CP_COUNT, GammaRamp};

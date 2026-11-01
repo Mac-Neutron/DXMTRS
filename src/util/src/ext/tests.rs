@@ -105,3 +105,29 @@ fn iids_are_the_cpps() {
         );
     }
 }
+
+#[test]
+fn dxgi_slots_as_step3() {
+    assert_eq!(offset_of!(IMTLDXGIAdapterVtbl, get_mtl_device), 19 * SLOT);
+    assert_eq!(offset_of!(IMTLDXGIAdapterVtbl, get_local_d3dkmt), 20 * SLOT);
+    assert_eq!(size_of::<IMTLDXGIAdapterVtbl>(), 21 * SLOT);
+    assert_eq!(offset_of!(IMTLDXGIOutputVtbl, get_gamma_ramp), 29 * SLOT);
+    assert_eq!(size_of::<IMTLDXGIOutputVtbl>(), 30 * SLOT);
+    assert_eq!(
+        offset_of!(IMTLSwapChainFactoryVtbl, create_swap_chain),
+        3 * SLOT
+    );
+    assert_eq!(size_of::<IMTLSwapChainFactoryVtbl>(), 4 * SLOT);
+
+    let dxgi = declared(include_str!("../../../dxgi/dxgi_interfaces.h"));
+    let ours = [
+        ("IMTLDXGIAdapter", &IID_IMTL_DXGI_ADAPTER),
+        ("IMTLDXGIOutput", &IID_IMTL_DXGI_OUTPUT),
+        ("IMTLDXGIDevice", &IID_IMTL_DXGI_DEVICE),
+        ("IMTLSwapChainFactory", &IID_IMTL_SWAP_CHAIN_FACTORY),
+    ];
+    assert_eq!(dxgi.len(), 4);
+    for (name, iid) in ours {
+        assert!(dxgi.contains(&(name.to_owned(), iid.to_string())), "{name}");
+    }
+}

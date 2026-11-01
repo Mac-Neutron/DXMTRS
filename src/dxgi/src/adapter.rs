@@ -10,6 +10,7 @@ use core::{
 use dxmt_util::{
     com::{IUnknownVtbl, release as release_unknown, vtbl},
     luid_from_registry_id,
+    private_data::PrivateData,
 };
 use winemetal_wire::{WMTUTF16_STRING_ENCODING, WMTUTF32_LITTLE_ENDIAN_STRING_ENCODING};
 
@@ -27,9 +28,7 @@ use crate::{
     },
     com::{self, Head},
     config::{CONFIG, Options},
-    ffi, kmt, nvext, output,
-    private_data::PrivateData,
-    wsi,
+    ffi, kmt, nvext, output, wsi,
 };
 
 /// A new adapter with one reference, on the Metal `device`.

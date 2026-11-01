@@ -8,7 +8,8 @@ use core::{
     ffi::c_void,
     sync::atomic::{AtomicU32, Ordering, fence},
 };
-use std::sync::{Mutex, PoisonError};
+
+pub use dxmt_util::com::{qi_log, write_out};
 
 use crate::abi::{E_NOINTERFACE, E_POINTER, Guid, Hresult, S_OK};
 
@@ -113,37 +114,6 @@ pub unsafe fn query_interface(
         crate::LOG.warn(&format!("{}: Unknown interface query {riid}", log_as.1));
     }
     E_NOINTERFACE
-}
-
-/// Whether a miss of `riid` on `object` is the first, so the caller logs it.
-///
-/// `com_guid.cpp`'s `logQueryInterfaceError`.
-/// The C++'s level check before it is the log's own: a warning below `DXMT_LOG_LEVEL` is dropped
-/// by `Logger` either way.
-pub fn qi_log(object: &Guid, riid: &Guid) -> bool {
-    // ponytail: a linear scan, as the pairs are a handful per process; a set if one ever logs many.
-    /// The pairs already logged.
-    ///
-    /// A per-call-site log-once latch (`com_guid.cpp`'s `g_loggedQueryInterfaceErrors`): it carries
-    /// nothing beyond "fired", for every object of the process alike.
-    static LOGGED: Mutex<Vec<(Guid, Guid)>> = Mutex::new(Vec::new());
-    let mut logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
-    let pair = (*object, *riid);
-    if logged.contains(&pair) {
-        return false;
-    }
-    logged.push(pair);
-    true
-}
-
-/// Writes `value` to `out`, which promises no alignment.
-///
-/// # Safety
-///
-/// `out` is non-null and addresses a writable `P`; the caller checks it for null.
-pub const unsafe fn write_out<P>(out: *mut P, value: P) {
-    // SAFETY: the caller's; the write assumes no alignment.
-    unsafe { out.write_unaligned(value) };
 }
 
 /// The reference count of `this`, a `T` that starts with a `Head`.
