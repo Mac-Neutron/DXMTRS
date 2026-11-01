@@ -4,15 +4,17 @@
 //! C3, C8, C11, with the root signatures the tool gives them); these pin what a lane run cannot
 //! see.
 
-use airconv_ir::metallib;
+use airconv_ir::{container::Container, dxil_part, metallib};
 
-use super::move_constants_to_constant_space;
+use super::{convert, move_constants_to_constant_space, rebuilt};
 use crate::{
     abi::ArgChain,
     api::Error,
     entry::{compile, initialize},
-    llvm::{Context, sys},
+    llvm::{Builder, Context, sys},
     module,
+    shader::Shader,
+    writer,
 };
 
 /// The value of `result`, or a panic showing the error's text (`Error` has no `Debug`).
@@ -78,4 +80,154 @@ fn static_global_name_keeps_its_bytes() {
         error.text(),
         b"DXIL: static (non-const) global g\xff not supported"
     );
+}
+
+/// 64-bit groupshared atomics (`gsatomic64.dxil`) lower on LLVM 23's opaque pointers (P4).
+#[test]
+fn groupshared64_atomics_lower_on_opaque_pointers() {
+    let bytes = include_bytes!("../../../ir/tests/data/gsatomic64.dxil");
+    // SAFETY: no reflection is asked for.
+    let shader = ok(unsafe { initialize(bytes, core::ptr::null_mut()) });
+    // SAFETY: a null chain is the empty one.
+    let args = unsafe { ArgChain::walk(core::ptr::null()) };
+    let metallib = ok(compile(&shader, &args, c"main"));
+    let (bitcode, entries) = metallib::parse(&metallib).unwrap();
+    assert_eq!(entries.len(), 1);
+    let cx = Context::new();
+    let text =
+        String::from_utf8(ok(module::parse(&cx, &bitcode, b"", b"", module::Layout::Keep)).print())
+            .unwrap();
+    assert!(text.contains("!air.kernel"), "{text}");
+    assert!(!text.contains("atomicrmw"), "{text}");
+    assert!(
+        !text
+            .lines()
+            .any(|l| l.contains("cmpxchg") && l.contains("i64")),
+        "{text}"
+    );
+}
+
+/// DXC's `.hca` pattern (`buffers.dxil`) retargets and erases a no-op bitcast.
+#[test]
+fn hca_noop_bitcast_is_retargeted_not_rebuilt() {
+    let bytes = include_bytes!("../../../ir/tests/data/buffers.dxil");
+    let container = Container::parse(bytes).unwrap();
+    let part = dxil_part::find(&container).unwrap().unwrap();
+    let raw_cx = Context::new();
+    let raw_m = ok(module::parse(
+        &raw_cx,
+        part.bitcode,
+        b"dxil",
+        b"DXIL: can't read the bitcode: ",
+        module::Layout::Dxil,
+    ));
+    // SAFETY: a live module and NUL-terminated names.
+    let hca0 = unsafe { sys::get_named_global(raw_m.raw(), c"kNeighbor.i.0.hca".as_ptr()) };
+    assert!(!hca0.is_null());
+    // SAFETY: as above.
+    let main_fn = unsafe { sys::get_named_function(raw_m.raw(), c"main".as_ptr()) };
+    // SAFETY: `@main` has an entry block and slot 125 is the reader's dead `bitcast ptr %10 to ptr`
+    // instruction from `llvm.lifetime.start.p0i8`; point it at `@kNeighbor.i.0.hca` so `retarget`
+    // sees `bitcast ptr @kNeighbor.i.0.hca to ptr`.
+    let dead_cast = unsafe { sys::airconv_shim_local_slot(main_fn, 125) };
+    assert!(!dead_cast.is_null());
+    // SAFETY: `dead_cast` is a `BitCastInst` of the module.
+    assert!(!unsafe { sys::is_a_bit_cast_inst(dead_cast) }.is_null());
+    // SAFETY: `dead_cast` has operand 0 of type `ptr`, matching `hca0`.
+    unsafe { sys::set_operand(dead_cast, 0, hca0) };
+    let before_text = String::from_utf8(raw_m.print()).unwrap();
+    assert!(
+        before_text.contains("bitcast ptr @kNeighbor.i.0.hca to ptr"),
+        "{before_text}"
+    );
+    ok(move_constants_to_constant_space(&raw_m));
+    let moved_text = String::from_utf8(raw_m.print()).unwrap();
+    assert!(
+        moved_text.contains("@kNeighbor.i.0.hca = internal addrspace(2) constant [4 x i32]"),
+        "{moved_text}"
+    );
+    assert!(
+        moved_text.contains("@kNeighbor.i.1.hca = internal addrspace(2) constant [4 x i32]"),
+        "{moved_text}"
+    );
+    assert!(
+        !moved_text.contains("bitcast ptr @kNeighbor"),
+        "{moved_text}"
+    );
+    assert_eq!(
+        moved_text
+            .lines()
+            .filter(|l| l.contains(" = load ") && l.contains(", ptr addrspace(2) "))
+            .count(),
+        4,
+        "{moved_text}"
+    );
+
+    // SAFETY: no reflection is asked for.
+    let shader = ok(unsafe { initialize(bytes, core::ptr::null_mut()) });
+    let Shader::Dxil(dxil) = &shader else {
+        panic!("expected a DXIL shader");
+    };
+    // SAFETY: a null chain is the empty one.
+    let args = unsafe { ArgChain::walk(core::ptr::null()) };
+    let conv_cx = Context::new();
+    let conv_m = ok(convert(&dxil.ir, b"main", &conv_cx, &args));
+    let metallib = ok(writer::write(&conv_m, &[]));
+    let (bitcode, entries) = metallib::parse(&metallib).unwrap();
+    assert_eq!(entries.len(), 1);
+    let out_cx = Context::new();
+    let out_text = String::from_utf8(
+        ok(module::parse(
+            &out_cx,
+            &bitcode,
+            b"",
+            b"",
+            module::Layout::Keep,
+        ))
+        .print(),
+    )
+    .unwrap();
+    assert!(
+        out_text.contains("@kNeighbor.i.0.hca = internal addrspace(2) constant [4 x i32]"),
+        "{out_text}"
+    );
+    assert!(
+        out_text.contains("@kNeighbor.i.1.hca = internal addrspace(2) constant [4 x i32]"),
+        "{out_text}"
+    );
+    assert_eq!(
+        out_text
+            .lines()
+            .filter(|l| l.contains(" = load ") && l.contains(", ptr addrspace(2) "))
+            .count(),
+        4,
+        "{out_text}"
+    );
+}
+
+/// `rebuilt` refuses a builder closure that folds to its `freeze` placeholder.
+#[test]
+fn rebuilt_refuses_a_folded_cast() {
+    let cx = Context::new();
+    let m = module::initialize(&cx, c"shader.air");
+    let tcx = cx.tcx();
+    let i32_ty = tcx.int(32);
+    let fn_ty = tcx.function(tcx.void(), &[], false);
+    let f = ok(m.add_function(b"f", fn_ty));
+    let bb = f.append_block(&cx, c"entry").unwrap();
+    let b = Builder::new(&cx);
+    b.position_at_end(bb);
+    let old = b.ret_void();
+    let to = cx.const_int(i32_ty, 7, false);
+    let Err(err) = rebuilt(&cx, old.raw(), to.raw(), |_, placeholder| placeholder) else {
+        panic!("a folded cast was accepted");
+    };
+    assert!(
+        String::from_utf8_lossy(err.text()).contains("placeholder"),
+        "{}",
+        String::from_utf8_lossy(err.text())
+    );
+    let text = String::from_utf8(m.print()).unwrap();
+    assert!(text.contains("freeze i32 7"), "{text}");
+    assert!(text.contains("ret void"), "{text}");
 }

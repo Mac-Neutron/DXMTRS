@@ -354,9 +354,13 @@ fn move_constants_to_constant_space(m: &Module<'_>) -> Result<(), Error> {
         }
         // SAFETY: a global variable of the module.
         let value_ty = unsafe { sys::global_get_value_type(gv) };
-        // SAFETY: a live module; a type of its context; the empty name.
-        let moved =
-            unsafe { sys::add_global_in_address_space(m.raw(), value_ty, c"".as_ptr(), CONSTANT) };
+        // SAFETY: a type of this context.
+        let ty = unsafe { cx.tcx().lift(value_ty) }
+            .ok_or_else(|| Error::new(b"DXIL: a global of a type the translator does not make"))?;
+        // `takeName`: the old global gives its name up first, so the new one has it exactly.
+        // SAFETY: a global of the module; the empty name holds its length.
+        unsafe { sys::set_value_name2(gv, c"".as_ptr(), 0) };
+        let moved = m.add_global(&name, ty, CONSTANT)?.raw();
         // SAFETY: the global just made, and the old one's linkage and initializer, of one module.
         unsafe {
             sys::set_global_constant(moved, 1);
@@ -367,11 +371,6 @@ fn move_constants_to_constant_space(m: &Module<'_>) -> Result<(), Error> {
         unsafe { sys::set_linkage(moved, linkage) };
         // SAFETY: as above.
         unsafe { sys::set_initializer(moved, initializer) };
-        // `takeName`: the old global gives its name up first, so the new one has it exactly.
-        // SAFETY: two globals of the module; the names hold their lengths.
-        unsafe { sys::set_value_name2(gv, c"".as_ptr(), 0) };
-        // SAFETY: as above.
-        unsafe { sys::set_value_name2(moved, name.as_ptr().cast(), name.len()) };
         // SAFETY: a global of the module.
         let align = unsafe { sys::get_alignment(gv) };
         // SAFETY: the global just made; an alignment of 0 is none, as `MaybeAlign` takes it.
@@ -562,18 +561,14 @@ fn zero_group_shared_locks<'cx>(
     let b = conv.ir;
     let i32_ty = tcx.int(32);
     let ty = tcx.array(i32_ty, n);
-    // SAFETY: a live module, a type of its context and a NUL-terminated name.
-    let raw = unsafe {
-        sys::add_global_in_address_space(m.raw(), tcx.lower(ty), c"gs_locks".as_ptr(), THREADGROUP)
-    };
+    let locks = m.add_global(b"gs_locks", ty, THREADGROUP)?;
+    let raw = locks.raw();
     // SAFETY: the global just made.
     unsafe { sys::set_linkage(raw, sys::INTERNAL_LINKAGE) };
     // SAFETY: the global and an undef of its value type.
     unsafe { sys::set_initializer(raw, cx.undef(ty).raw()) };
     // SAFETY: the global just made.
     unsafe { sys::set_alignment(raw, 4) };
-    // SAFETY: a global of this context, a pointer to `ty` in the threadgroup address space.
-    let locks = unsafe { cx.val(raw, tcx.ptr(ty, THREADGROUP)) };
     // The body's code moves on; `body` stays the entry.
     // SAFETY: the body's entry block, which holds instructions.
     let first = unsafe { sys::get_first_instruction(body.raw()) };
@@ -733,7 +728,6 @@ fn retarget(cx: &Context, from: sys::ValueRef, to: sys::ValueRef) -> Result<(), 
         unsafe { sys::airconv_shim_destroy_constant(user) };
         Ok(())
     })?;
-    let space = addrspace_of(to);
     for_each_user(from, |user| {
         // SAFETY: a user of a value of the module (each check below likewise).
         let gep = !unsafe { sys::is_a_get_element_ptr_inst(user) }.is_null();
@@ -741,8 +735,6 @@ fn retarget(cx: &Context, from: sys::ValueRef, to: sys::ValueRef) -> Result<(), 
         let cast = !unsafe { sys::is_a_bit_cast_inst(user) }.is_null();
         // SAFETY: as above.
         let load = !unsafe { sys::is_a_load_inst(user) }.is_null();
-        // SAFETY: as above.
-        let intrinsic = !unsafe { sys::is_a_intrinsic_inst(user) }.is_null();
         if gep {
             let moved = rebuilt(cx, user, to, |b, placeholder| {
                 // SAFETY: a GEP instruction.
@@ -772,38 +764,21 @@ fn retarget(cx: &Context, from: sys::ValueRef, to: sys::ValueRef) -> Result<(), 
                         c"".as_ptr(),
                     )
                 }
-            });
+            })?;
             retarget(cx, user, moved)?;
             // SAFETY: a GEP nothing uses now.
             unsafe { sys::instruction_erase_from_parent(user) };
         } else if cast {
-            let moved = rebuilt(cx, user, to, |b, placeholder| {
-                // SAFETY: a bitcast of the module.
-                let destination = unsafe { sys::type_of(user) };
-                // SAFETY: a bitcast's destination is a pointer type.
-                let element = unsafe { sys::get_element_type(destination) };
-                // SAFETY: a type of the module's context.
-                let ty = unsafe { sys::pointer_type(element, space) };
-                // SAFETY: the builder and the pointer are of one context.
-                unsafe { sys::build_bit_cast(b, placeholder, ty, c"".as_ptr()) }
-            });
-            retarget(cx, user, moved)?;
+            // LLVM 23's BitcodeReader strips lifetime markers (`AutoUpgrade.cpp`), leaving any
+            // `bitcast [N x T]* @gv.hca to i8*` that fed them as a dead `bitcast ptr @gv.hca to
+            // ptr` instruction; any remaining pointer-to-pointer bitcast is a no-op on opaque
+            // pointers.
+            retarget(cx, user, to)?;
             // SAFETY: a bitcast nothing uses now.
             unsafe { sys::instruction_erase_from_parent(user) };
-            if !has_uses(moved) {
-                // It only fed lifetime markers.
-                // SAFETY: an unused instruction.
-                unsafe { sys::instruction_erase_from_parent(moved) };
-            }
         } else if load {
             // SAFETY: a load, whose pointer is operand 0.
             unsafe { sys::set_operand(user, 0, to) };
-        } else if intrinsic && is_lifetime_marker(user) {
-            // DXC hoists a local array of constants to a global (<name>.hca) and keeps the
-            // array's lifetime markers on it (Palworld's NeighborOffset, SM 6.6): they mean
-            // nothing on a constant.
-            // SAFETY: a call nothing uses.
-            unsafe { sys::instruction_erase_from_parent(user) };
         } else {
             return Err(Error::new(
                 b"DXIL: a static const array used other than by loads",
@@ -813,22 +788,29 @@ fn retarget(cx: &Context, from: sys::ValueRef, to: sys::ValueRef) -> Result<(), 
     })
 }
 
-/// A GEP or bitcast rebuilt before `old` over `to`, named as `old` (an instruction).
+/// An instruction rebuilt before `old` over `to`, named as `old` (an instruction).
 ///
-/// `build` makes it over a `freeze` of `to`, which no builder folds, and the operand is then
-/// set to `to` itself: the C++'s constructors never fold.
+/// `build` makes it over a `freeze` of `to`, which no non-trivial instruction folds across, and
+/// the operand is then set to `to` itself: the C++'s constructors never fold.
+///
+/// # Errors
+///
+/// If `build` folded to `placeholder` (for instance, a no-op bitcast on opaque pointers).
 fn rebuilt(
     cx: &Context,
     old: sys::ValueRef,
     to: sys::ValueRef,
     build: impl FnOnce(sys::BuilderRef, sys::ValueRef) -> sys::ValueRef,
-) -> sys::ValueRef {
+) -> Result<sys::ValueRef, Error> {
     let b = Builder::new(cx);
     // SAFETY: `old` is an instruction of the module, in a block.
     unsafe { sys::position_builder_before(b.raw(), old) };
     // SAFETY: the builder and `to` are of one context.
     let placeholder = unsafe { sys::build_freeze(b.raw(), to, c"".as_ptr()) };
     let moved = build(b.raw(), placeholder);
+    if moved == placeholder {
+        return Err(invalid("a rebuilt instruction folded to its placeholder"));
+    }
     // SAFETY: the instruction just made, whose operand 0 is the placeholder, of `to`'s type.
     unsafe { sys::set_operand(moved, 0, to) };
     // SAFETY: the placeholder, unused now.
@@ -836,7 +818,7 @@ fn rebuilt(
     let name = value_name(old);
     // SAFETY: an instruction; the name holds its length.
     unsafe { sys::set_value_name2(moved, name.as_ptr().cast(), name.len()) };
-    moved
+    Ok(moved)
 }
 
 /// `user.replaceUsesOfWith(from, to)`: every operand of `user` that is `from` becomes `to`.
@@ -850,19 +832,6 @@ fn replace_uses_of_with(user: sys::ValueRef, from: sys::ValueRef, to: sys::Value
             unsafe { sys::set_operand(user, i, to) };
         }
     }
-}
-
-/// Whether the call `inst` is `llvm.lifetime.start` or `.end` (`isLifetimeStartOrEnd`).
-fn is_lifetime_marker(inst: sys::ValueRef) -> bool {
-    // SAFETY: an intrinsic call.
-    let callee = unsafe { sys::get_called_value(inst) };
-    // SAFETY: the callee of an intrinsic call is a function.
-    let id = unsafe { sys::get_intrinsic_id(callee) };
-    let lookup = |name: &[u8]| {
-        // SAFETY: the name holds its length.
-        unsafe { sys::lookup_intrinsic_id(name.as_ptr().cast(), name.len()) }
-    };
-    id != 0 && (id == lookup(b"llvm.lifetime.start") || id == lookup(b"llvm.lifetime.end"))
 }
 
 /// Calls `f` with each user of `value`, the next use taken before (`make_early_inc_range`).

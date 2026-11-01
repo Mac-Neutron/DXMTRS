@@ -177,13 +177,14 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         } else {
             Some(self.operand(inst, 1)?)
         };
+        let val_ty = compare.map_or_else(|| inst.ty(), Val::ty);
         let old = self.under_lock(
             inst,
             lock,
             MemFlags::THREADGROUP,
             ThreadScope::Threadgroup,
             |at| {
-                let value = b.aligned_load(i64_ty, ptr, align);
+                let value = b.aligned_load(val_ty, ptr, align);
                 if rmw {
                     let v = self.operand(inst, 1)?;
                     let pick = |pred| b.select(b.icmp(pred, value, v), value, v);
@@ -260,9 +261,11 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
 
     /// The parsed module's value `raw` with its type.
     ///
+    /// A pointer lifts with [`TyKind::Unknown`](crate::llvm::TyKind::Unknown) as its pointee.
+    ///
     /// # Errors
     ///
-    /// A value of a type the translator never makes (an opaque pointer, a token).
+    /// A value of a type the translator never makes (a token, bfloat, a scalable vector).
     pub fn val(&self, raw: sys::ValueRef) -> Result<Val<'cx>, Error> {
         lift(self.cx(), raw)
     }
@@ -1293,9 +1296,11 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
 
 /// The parsed module's value `raw` of `cx`, with its type.
 ///
+/// A pointer lifts with [`TyKind::Unknown`](crate::llvm::TyKind::Unknown) as its pointee.
+///
 /// # Errors
 ///
-/// A value of a type the translator never makes (an opaque pointer, a token).
+/// A value of a type the translator never makes (a token, bfloat, a scalable vector).
 pub fn lift(cx: &Context, raw: sys::ValueRef) -> Result<Val<'_>, Error> {
     // SAFETY: a value of the module, of this context.
     let ty = unsafe { sys::type_of(raw) };

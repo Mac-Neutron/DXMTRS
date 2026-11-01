@@ -416,8 +416,6 @@ unsafe extern "C" {
     pub fn array_type(element_type: TypeRef, element_count: c_uint) -> TypeRef;
     #[link_name = "LLVMGetArrayLength"]
     pub fn get_array_length(array_ty: TypeRef) -> c_uint;
-    #[link_name = "LLVMPointerType"]
-    pub fn pointer_type(element_type: TypeRef, address_space: c_uint) -> TypeRef;
     #[link_name = "LLVMPointerTypeInContext"]
     pub fn pointer_type_in_context(c: ContextRef, address_space: c_uint) -> TypeRef;
     #[link_name = "LLVMGetPointerAddressSpace"]
@@ -460,8 +458,6 @@ unsafe extern "C" {
     pub fn is_a_instruction(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsACallInst"]
     pub fn is_a_call_inst(val: ValueRef) -> ValueRef;
-    #[link_name = "LLVMIsAIntrinsicInst"]
-    pub fn is_a_intrinsic_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAFCmpInst"]
     pub fn is_af_cmp_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAGetElementPtrInst"]
@@ -565,8 +561,6 @@ unsafe extern "C" {
     // Functions and parameters
     #[link_name = "LLVMDeleteFunction"]
     pub fn delete_function(fn_: ValueRef);
-    #[link_name = "LLVMGetIntrinsicID"]
-    pub fn get_intrinsic_id(fn_: ValueRef) -> c_uint;
     #[link_name = "LLVMLookupIntrinsicID"]
     pub fn lookup_intrinsic_id(name: *const c_char, name_len: usize) -> c_uint;
     #[link_name = "LLVMGetIntrinsicDeclaration"]
