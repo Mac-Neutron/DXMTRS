@@ -23,6 +23,7 @@ guest-vm = ["dxmt-core/guest-vm"]
 workspace = true
 
 [dependencies]
+airconv-ir = { path = "../airconv/ir" }
 bitflags = { workspace = true }
 dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
