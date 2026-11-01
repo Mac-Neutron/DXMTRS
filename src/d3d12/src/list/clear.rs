@@ -377,7 +377,6 @@ impl SimpleCommandContext for ClearContext<'_> {
         // SAFETY: `ptr` was just initialized above.
         let enc = unsafe { &mut *ptr };
         enc.cmd_tail = (&raw mut enc.cmd_head).cast::<WmtcmdBase>();
-        enc.pre_tail = (&raw mut enc.pre_head).cast::<WmtcmdBase>();
         self.0.encoder_current = ptr.cast::<EncoderData>();
     }
 

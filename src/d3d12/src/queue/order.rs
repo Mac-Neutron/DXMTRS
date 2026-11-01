@@ -205,23 +205,39 @@ impl OrderState {
     }
 
     fn count_order(&self, e: &EncoderData, join: bool) {
-        crate::count!("#encoder fence waits", self.waits.len() as u64);
-        if join {
-            crate::count!("#encoder full joins", 1);
-            return;
-        }
-        let deps = self.waits.len().saturating_sub(1);
-        if deps > 0 {
-            crate::count!("#encoders with a dependency list", 1);
-            crate::count!("#encoder dependency waits", deps as u64);
-        }
-        let pos = e.position as usize;
-        if pos > 0 && pos - 1 < self.list_fences.len() {
-            let prev_fence = self.list_fences[pos - 1];
-            if !self.waits.contains(&prev_fence) {
-                crate::count!("#encoder boundaries free to overlap", 1);
+        #[cfg(not(feature = "perf-build"))]
+        {
+            static IDS: std::sync::LazyLock<[crate::stats::StatId; 5]> =
+                std::sync::LazyLock::new(|| {
+                    [
+                        crate::stats::id("#encoder full joins"),
+                        crate::stats::id("#encoders with a dependency list"),
+                        crate::stats::id("#encoder dependency waits"),
+                        crate::stats::id("#encoder fence waits"),
+                        crate::stats::id("#encoder boundaries free to overlap"),
+                    ]
+                });
+            let [joins, listed, dep_waits, fence_waits, free] = *IDS;
+            crate::stats::count_id(fence_waits, self.waits.len() as u64);
+            if join {
+                crate::stats::count_id(joins, 1);
+                return;
+            }
+            let deps = self.waits.len().saturating_sub(1);
+            if deps > 0 {
+                crate::stats::count_id(listed, 1);
+                crate::stats::count_id(dep_waits, deps as u64);
+            }
+            let pos = e.position as usize;
+            if pos > 0 && pos - 1 < self.list_fences.len() {
+                let prev_fence = self.list_fences[pos - 1];
+                if !self.waits.contains(&prev_fence) {
+                    crate::stats::count_id(free, 1);
+                }
             }
         }
+        #[cfg(feature = "perf-build")]
+        let _ = (self, e, join, Option::from(()));
     }
 
     /// Returns a 4-byte fill command for the queue's scratch buffer (`ScratchFill`,
@@ -524,6 +540,51 @@ impl OrderState {
         if !tail.is_null() {
             // SAFETY: `tail` is restored to a null `next` pointer after encoding.
             unsafe { (*tail).next = mem_ptr(ptr::null()) };
+        }
+    }
+}
+
+impl super::dump::PixelHistoryFences for OrderState {
+    fn join_blit(&mut self, blit_encoder: u64) -> usize {
+        // SAFETY: `blit_encoder` is a valid `MTLBlitCommandEncoder` supplied by `dump`.
+        usize::from(unsafe { Self::join_blit(self, blit_encoder) })
+    }
+
+    fn update_blit(&mut self, blit_encoder: u64, fence_slot: usize) {
+        let op = WmtcmdBlitFenceOp {
+            r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
+            reserved: [0; 3],
+            next: mem_ptr(ptr::null()),
+            fence: self.fence_handles.get(fence_slot).copied().unwrap_or(0),
+        };
+        // SAFETY: `blit_encoder` is a valid `MTLBlitCommandEncoder` and `op` is live on the stack.
+        unsafe {
+            MTLBlitCommandEncoder_encodeCommands(
+                blit_encoder,
+                ptr::from_ref(&op).cast::<WmtcmdBase>(),
+            );
+        }
+    }
+
+    fn join_render(&mut self, render_encoder: u64, stage: u8) -> usize {
+        // SAFETY: `render_encoder` is a valid `MTLRenderCommandEncoder` supplied by `dump`.
+        usize::from(unsafe { Self::join_render(self, render_encoder, stage) })
+    }
+
+    fn update_render(&mut self, render_encoder: u64, fence_slot: usize, stage: u8) {
+        let op = WmtcmdRenderFenceOp {
+            r#type: WMT_RENDER_COMMAND_UPDATE_FENCE,
+            reserved: [0; 3],
+            next: mem_ptr(ptr::null()),
+            fence: self.fence_handles.get(fence_slot).copied().unwrap_or(0),
+            stages: stage,
+        };
+        // SAFETY: `render_encoder` is a valid `MTLRenderCommandEncoder` and `op` is live on the stack.
+        unsafe {
+            MTLRenderCommandEncoder_encodeCommands(
+                render_encoder,
+                ptr::from_ref(&op).cast::<WmtcmdBase>(),
+            );
         }
     }
 }

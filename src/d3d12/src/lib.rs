@@ -64,6 +64,7 @@ fn ensure_init() {
 }
 
 fn on_process_detach() {
+    shader_cache::log_counters();
     dxmt_core::shader_cache::close_all();
     stats::exit();
 }

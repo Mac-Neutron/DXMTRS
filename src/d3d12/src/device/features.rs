@@ -74,14 +74,6 @@ impl crate::feature::Device for Device {
     }
 }
 
-#[cfg(test)]
-fn is_vtbl_probe(this: *mut c_void) -> bool {
-    !this.is_null() && {
-        // SAFETY: `this` points to a valid `Device` in unit tests.
-        unsafe { (*this.cast::<Device>()).min_feature_level == 0 }
-    }
-}
-
 /// `ID3D12Device::CheckFeatureSupport` (`d3d12_device.cpp:544`).
 ///
 /// # Safety
@@ -94,10 +86,6 @@ pub unsafe fn check_feature_support(
     size: u32,
 ) -> Hresult {
     crate::scope!("device.CheckFeatureSupport");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::CheckFeatureSupport", line!());
-    }
     if this.is_null() || data.is_null() {
         return E_INVALIDARG;
     }
@@ -402,15 +390,6 @@ pub unsafe fn get_resource_allocation_info(
     descs: *const c_void,
 ) -> *mut c_void {
     crate::scope!("device.GetResourceAllocationInfo");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report_with(
-            file!(),
-            "ID3D12Device::GetResourceAllocationInfo",
-            line!(),
-            ret,
-        );
-    }
     let result = if this.is_null() || num_descs == 0 || descs.is_null() {
         ResourceAllocationInfo {
             size_in_bytes: u64::MAX,
@@ -450,15 +429,6 @@ pub unsafe fn get_custom_heap_properties(
     heap_type: u32,
 ) -> *mut c_void {
     crate::scope!("device.GetCustomHeapProperties");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report_with(
-            file!(),
-            "ID3D12Device::GetCustomHeapProperties",
-            line!(),
-            ret,
-        );
-    }
     let _ = Option::from(this);
     let props = match heap_type {
         1 => HeapProperties {
@@ -568,11 +538,6 @@ pub unsafe extern "system-unwind" fn get_copyable_footprints(
     total_bytes: *mut u64,
 ) {
     crate::scope!("device.GetCopyableFootprints");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        let (): () = crate::unimpl::report(file!(), "ID3D12Device::GetCopyableFootprints", line!());
-        return;
-    }
     let _ = this;
     let d = if desc.is_null() {
         None
@@ -625,15 +590,6 @@ pub unsafe fn get_resource_allocation_info1(
     info1: *mut c_void,
 ) -> *mut c_void {
     crate::scope!("device.GetResourceAllocationInfo1");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report_with(
-            file!(),
-            "ID3D12Device::GetResourceAllocationInfo1",
-            line!(),
-            ret,
-        );
-    }
     let result = if this.is_null() || num_descs == 0 || descs.is_null() {
         ResourceAllocationInfo {
             size_in_bytes: u64::MAX,
@@ -675,15 +631,6 @@ pub unsafe fn get_resource_allocation_info2(
     info1: *mut c_void,
 ) -> *mut c_void {
     crate::scope!("device.GetResourceAllocationInfo2");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report_with(
-            file!(),
-            "ID3D12Device::GetResourceAllocationInfo2",
-            line!(),
-            ret,
-        );
-    }
     let result = if this.is_null() || num_descs == 0 || descs.is_null() {
         ResourceAllocationInfo {
             size_in_bytes: u64::MAX,
@@ -730,12 +677,6 @@ pub unsafe extern "system-unwind" fn get_copyable_footprints1(
     total_bytes: *mut u64,
 ) {
     crate::scope!("device.GetCopyableFootprints1");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        let (): () =
-            crate::unimpl::report(file!(), "ID3D12Device::GetCopyableFootprints1", line!());
-        return;
-    }
     let _ = this;
     let d = if desc.is_null() {
         None

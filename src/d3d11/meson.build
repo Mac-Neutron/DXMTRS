@@ -53,11 +53,16 @@ d3d11_cargo_args = [ dxmt_crossbuild ? 'production' : 'production-unwind' ] + (d
 # from kernel32 to ntdll. d3d12 links the same way.
 rust_crt_first_dep = declare_dependency(link_args : dxmt_crossbuild ? [ '-lkernel32', '-luser32', '-lgdi32', '-lmingwex', '-lmsvcrt' ] : [])
 
+d3d11_env = {
+  'DXMT_COMMAND_METALLIB': dxmt_command_metallib.full_path(),
+}
 d3d11_rust = []
 foreach t : rust_pe_targets
   d3d11_rust += custom_target('d3d11-rust-' + t,
     output             : 'd3d11-rust-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
     command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'd3d11', rust_target_dir, '@OUTPUT@'] + d3d11_cargo_args,
+    env                : d3d11_env,
+    depends            : [ dxmt_command_metallib ],
     build_always_stale : true,
   )
 endforeach

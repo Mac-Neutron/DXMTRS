@@ -84,13 +84,6 @@ fn retain(obj: &Obj) -> Obj {
     unsafe { Obj::retain(obj.handle()) }.expect("retaining a live Obj answers Some")
 }
 
-fn log_stderr(msg: &str) {
-    #[cfg(test)]
-    tests::capture_stderr(msg);
-    let mut err = std::io::stderr().lock();
-    let _ = writeln!(err, "{msg}");
-}
-
 /// A `MetalFX` temporal scaler paired with its [`WMTFXTemporalScalerInfo`] (`dxmt_scaler.hpp`).
 pub struct TemporalScaler {
     pub scaler: Scaler,
@@ -1179,6 +1172,13 @@ impl Drop for FrameGen {
             }
         }
     }
+}
+
+fn log_stderr(msg: &str) {
+    #[cfg(test)]
+    tests::capture_stderr(msg);
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{msg}");
 }
 
 #[cfg(test)]

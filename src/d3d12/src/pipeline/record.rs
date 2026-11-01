@@ -288,56 +288,33 @@ fn append_record(out: &mut Vec<u8>, kind: Kind, id: &Sha1Digest, payload: &[u8])
     out.extend_from_slice(payload);
 }
 
-static RECORD_DIR: LazyLock<String> = LazyLock::new(|| {
-    let v = std::env::var("DXMT_PIPELINE_RECORD").unwrap_or_default();
-    if v.is_empty() || v == "0" {
+static RECORD_PATH: LazyLock<String> = LazyLock::new(|| {
+    let mut folder = std::env::var("DXMT_PIPELINE_RECORD").unwrap_or_default();
+    if folder.is_empty() || folder == "0" {
         return String::new();
     }
-    let mut d = if v == "1" {
-        let cache_path = std::env::var("DXMT_SHADER_CACHE_PATH").unwrap_or_default();
-        if cache_path.is_empty() {
-            dxmt_core::log::warn(
-                "DXMT_PIPELINE_RECORD=1 requires DXMT_SHADER_CACHE_PATH to be set",
-            );
-            return String::new();
-        }
-        cache_path
-    } else if v.starts_with('/') || v.as_bytes().get(1) == Some(&b':') {
-        v
-    } else {
-        dxmt_core::log::warn(&format!(
-            "DXMT_PIPELINE_RECORD must be 1 or an absolute path, got '{v}'"
-        ));
-        return String::new();
-    };
-    if cache_exe_name().is_empty() {
-        dxmt_core::log::warn("DXMT_PIPELINE_RECORD: executable name is empty");
-        return String::new();
+    while folder.len() > 1 && (folder.ends_with('/') || folder.ends_with('\\')) {
+        folder.pop();
     }
-    if let Err(err) = std::fs::create_dir_all(&d) {
-        dxmt_core::log::warn(&format!(
-            "DXMT_PIPELINE_RECORD: failed to create '{d}': {err}"
-        ));
-        return String::new();
+    #[cfg(windows)]
+    if folder.starts_with('/') {
+        folder = format!("Z:{folder}");
     }
-    while d.len() > 1 && (d.ends_with('/') || d.ends_with('\\')) {
-        d.pop();
-    }
-    d
+    let _ = std::fs::create_dir(&folder);
+    let exe = cache_exe_name();
+    let exe = if exe.is_empty() { "game" } else { exe.as_str() };
+    format!("{folder}/{exe}.pipelines")
 });
 
-static RECORDER: LazyLock<Mutex<Recorder>> = LazyLock::new(|| {
-    let dir = RECORD_DIR.as_str();
-    let path = PathBuf::from(format!("{dir}/{}.pipelines", cache_exe_name()));
-    Mutex::new(Recorder::new(path))
-});
+static RECORDER: LazyLock<Mutex<Recorder>> =
+    LazyLock::new(|| Mutex::new(Recorder::new(PathBuf::from(RECORD_PATH.as_str()))));
 
 /// Returns whether `DXMT_PIPELINE_RECORD` is active (`RecordingOn`,
 ///
 /// `d3d12_pipeline_record.cpp:240`).
 #[must_use]
 pub fn recording_on() -> bool {
-    !RECORD_DIR.is_empty()
+    !RECORD_PATH.is_empty()
 }
 
 /// Stateful `.pipelines` file writer (`Recorder`, `d3d12_pipeline_record.cpp:245-327`).
@@ -364,10 +341,7 @@ impl Recorder {
 
     fn turn_off(&mut self, why: &str) -> bool {
         if !self.off {
-            dxmt_core::log::warn(&format!(
-                "DXMT_PIPELINE_RECORD: {why} '{}'",
-                self.path.display()
-            ));
+            crate::warn!("d3d12 pipeline recording off: {why}");
             self.off = true;
         }
         self.file = None;
@@ -389,7 +363,7 @@ impl Recorder {
             .truncate(false)
             .open(&self.path)
         else {
-            return self.turn_off("can't open");
+            return self.turn_off("can't open the recording");
         };
         let mut bytes = Vec::new();
         if file.read_to_end(&mut bytes).is_err() || bytes.len() > 0x7fff_ffff {
@@ -453,7 +427,7 @@ impl Recorder {
             .as_mut()
             .is_some_and(|f| f.write_all(&buf).is_ok() && f.flush().is_ok());
         if !ok {
-            self.turn_off("write failed on");
+            self.turn_off("can't write the recording");
             return;
         }
         self.ids.insert(id);

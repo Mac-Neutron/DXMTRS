@@ -425,8 +425,8 @@ pub unsafe fn copy_texture_region(
     let dst_key = unsafe { resource_key(dst_loc.resource) };
     pre_blit(alloc, dst_key, false);
 
-    let src_desc = &src_res.desc;
-    let dst_desc = &dst_res.desc;
+    let src_desc = src_res.desc_scoped();
+    let dst_desc = dst_res.desc_scoped();
     let mut src_level = 0_u32;
     let mut src_slice = 0_u32;
     let mut src_planar = 0_u32;
@@ -788,7 +788,9 @@ pub unsafe fn copy_resource(
     let dst = unsafe { &*dst_resource.cast::<Resource>() };
     // SAFETY: `src_resource` is a valid `Resource` COM pointer.
     let src = unsafe { &*src_resource.cast::<Resource>() };
-    if dst.desc.dimension != src.desc.dimension {
+    let dst_desc = dst.desc_scoped();
+    let src_desc = src.desc_scoped();
+    if dst_desc.dimension != src_desc.dimension {
         return;
     }
     // SAFETY: `dst_resource` is a valid `Resource` COM pointer.
@@ -1438,11 +1440,11 @@ pub unsafe fn prepare_pending_resolve(desc: &ResolveRegionDesc) -> Option<Pendin
         && dst_width == width
         && dst_height == height;
     if !same_size {
-        let (dst_hr, _) = query_dxgi(dst_res.desc.format);
+        let (dst_hr, _) = query_dxgi(dst_res.desc_scoped().format);
         if dst_hr < 0 {
             crate::err!(
                 "ResolveSubresourceRegion: invalid destination format {}",
-                dst_res.desc.format
+                dst_res.desc_scoped().format
             );
             return None;
         }

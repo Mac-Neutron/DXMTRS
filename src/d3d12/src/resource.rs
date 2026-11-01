@@ -172,6 +172,19 @@ impl Drop for Resource {
     }
 }
 
+impl Resource {
+    /// Returns `&self.desc` while recording `buffer.GetDesc` or `texture.GetDesc`.
+    #[must_use]
+    pub fn desc_scoped(&self) -> &ResourceDesc {
+        if self.desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+            crate::scope!("buffer.GetDesc");
+        } else {
+            crate::scope!("texture.GetDesc");
+        }
+        &self.desc
+    }
+}
+
 /// Copies a [`ResourceDesc`] by value.
 #[must_use]
 pub const fn clone_desc(d: &ResourceDesc) -> ResourceDesc {
@@ -1137,14 +1150,11 @@ fn ignore_castable_formats(num_castable_formats: u32) {
 ///
 /// `this` and `desc` are caller-supplied pointers.
 pub unsafe fn create_constant_buffer_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     desc: *const c_void,
     descriptor: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateConstantBufferView");
-    if dummy_report::<()>(this, "ID3D12Device::CreateConstantBufferView").is_some() {
-        return;
-    }
     if desc.is_null() {
         // SAFETY: `descriptor` is a caller-supplied CPU descriptor handle.
         let _ = unsafe { crate::descriptor_heap::write_cbv(descriptor, 0, 0) };
@@ -1164,15 +1174,12 @@ pub unsafe fn create_constant_buffer_view(
 ///
 /// `this`, `resource`, and `desc` are caller-supplied pointers.
 pub unsafe fn create_shader_resource_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
     descriptor: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateShaderResourceView");
-    if dummy_report::<()>(this, "ID3D12Device::CreateShaderResourceView").is_some() {
-        return;
-    }
     if resource.is_null() {
         // SAFETY: `descriptor` and `desc` are caller-supplied.
         let _ = unsafe { crate::descriptor_heap::write_srv_null(descriptor, desc) };
@@ -1196,16 +1203,13 @@ pub unsafe fn create_shader_resource_view(
 ///
 /// `this`, `resource`, `counter`, and `desc` are caller-supplied pointers.
 pub unsafe fn create_unordered_access_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     resource: *mut c_void,
     counter: *mut c_void,
     desc: *const c_void,
     descriptor: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateUnorderedAccessView");
-    if dummy_report::<()>(this, "ID3D12Device::CreateUnorderedAccessView").is_some() {
-        return;
-    }
     if resource.is_null() {
         // SAFETY: `descriptor` and `desc` are caller-supplied.
         let _ = unsafe { crate::descriptor_heap::write_uav_null(descriptor, desc) };
@@ -1229,15 +1233,12 @@ pub unsafe fn create_unordered_access_view(
 ///
 /// `this`, `resource`, and `desc` are caller-supplied pointers.
 pub unsafe fn create_render_target_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
     descriptor: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateRenderTargetView");
-    if dummy_report::<()>(this, "ID3D12Device::CreateRenderTargetView").is_some() {
-        return;
-    }
     if resource.is_null() {
         let null_rt = RenderTargetDesc {
             texture: None,
@@ -1277,15 +1278,12 @@ pub unsafe fn create_render_target_view(
 ///
 /// `this`, `resource`, and `desc` are caller-supplied pointers.
 pub unsafe fn create_depth_stencil_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
     descriptor: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateDepthStencilView");
-    if dummy_report::<()>(this, "ID3D12Device::CreateDepthStencilView").is_some() {
-        return;
-    }
     if resource.is_null() {
         let null_ds = RenderTargetDesc {
             texture: None,
@@ -1325,20 +1323,12 @@ pub unsafe fn create_depth_stencil_view(
 ///
 /// `this`, `targeted`, and `feedback` are caller-supplied pointers.
 pub unsafe fn create_sampler_feedback_unordered_access_view(
-    this: *mut c_void,
+    _this: *mut c_void,
     _targeted: *mut c_void,
     _feedback: *mut c_void,
     _dest: D3d12CpuDescriptorHandle,
 ) {
     crate::scope!("device.CreateSamplerFeedbackUnorderedAccessView");
-    if dummy_report::<()>(
-        this,
-        "ID3D12Device::CreateSamplerFeedbackUnorderedAccessView",
-    )
-    .is_some()
-    {
-        return;
-    }
     crate::warn!("CreateSamplerFeedbackUnorderedAccessView: sampler feedback not supported");
 }
 
@@ -1359,9 +1349,6 @@ pub unsafe extern "system-unwind" fn create_committed_resource(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommittedResource");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateCommittedResource") {
-        return r;
-    }
     if !resource.is_null() {
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
@@ -1440,9 +1427,6 @@ pub unsafe extern "system-unwind" fn create_placed_resource(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreatePlacedResource");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreatePlacedResource") {
-        return r;
-    }
     if !resource.is_null() {
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
@@ -1521,7 +1505,7 @@ pub unsafe extern "system-unwind" fn create_placed_resource(
 ///
 /// `this`, `desc`, `optimized_clear`, `riid`, and `resource` are caller-supplied COM pointers.
 pub unsafe fn create_reserved_resource(
-    this: *mut c_void,
+    _this: *mut c_void,
     _desc: *const c_void,
     _initial_state: u32,
     _optimized_clear: *const c_void,
@@ -1529,9 +1513,6 @@ pub unsafe fn create_reserved_resource(
     _resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateReservedResource");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateReservedResource") {
-        return r;
-    }
     E_NOTIMPL
 }
 
@@ -1553,9 +1534,6 @@ pub unsafe extern "system-unwind" fn create_committed_resource1(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommittedResource1");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateCommittedResource1") {
-        return r;
-    }
     if !protected_session.is_null() {
         return E_NOTIMPL;
     }
@@ -1581,7 +1559,7 @@ pub unsafe extern "system-unwind" fn create_committed_resource1(
 /// `this`, `desc`, `optimized_clear`, `protected_session`, `riid`, and `resource` are
 /// caller-supplied COM pointers.
 pub unsafe fn create_reserved_resource1(
-    this: *mut c_void,
+    _this: *mut c_void,
     _desc: *const c_void,
     _initial_state: u32,
     _optimized_clear: *const c_void,
@@ -1590,9 +1568,6 @@ pub unsafe fn create_reserved_resource1(
     _resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateReservedResource1");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateReservedResource1") {
-        return r;
-    }
     E_NOTIMPL
 }
 
@@ -1614,9 +1589,6 @@ pub unsafe extern "system-unwind" fn create_committed_resource2(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommittedResource2");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateCommittedResource2") {
-        return r;
-    }
     if desc.is_null() {
         return E_INVALIDARG;
     }
@@ -1655,9 +1627,6 @@ pub unsafe extern "system-unwind" fn create_placed_resource1(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreatePlacedResource1");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreatePlacedResource1") {
-        return r;
-    }
     if desc.is_null() {
         return E_INVALIDARG;
     }
@@ -1698,9 +1667,6 @@ pub unsafe extern "system-unwind" fn create_committed_resource3(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommittedResource3");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateCommittedResource3") {
-        return r;
-    }
     if !resource.is_null() {
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
@@ -1747,9 +1713,6 @@ pub unsafe extern "system-unwind" fn create_placed_resource2(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreatePlacedResource2");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreatePlacedResource2") {
-        return r;
-    }
     if !resource.is_null() {
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
@@ -1783,7 +1746,7 @@ pub unsafe extern "system-unwind" fn create_placed_resource2(
 /// `this`, `desc`, `optimized_clear`, `protected_session`, `castable_formats`, `riid`, and
 /// `resource` are caller-supplied COM pointers.
 pub unsafe extern "system-unwind" fn create_reserved_resource2(
-    this: *mut c_void,
+    _this: *mut c_void,
     _desc: *const c_void,
     _initial_layout: u32,
     _optimized_clear: *const c_void,
@@ -1794,28 +1757,11 @@ pub unsafe extern "system-unwind" fn create_reserved_resource2(
     resource: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateReservedResource2");
-    if let Some(r) = dummy_report(this, "ID3D12Device::CreateReservedResource2") {
-        return r;
-    }
     if !resource.is_null() {
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
     }
     E_NOTIMPL
-}
-
-fn dummy_report<T: crate::unimpl::NotImplementedReturn>(
-    this: *mut c_void,
-    name: &'static str,
-) -> Option<T> {
-    if !this.is_null() {
-        // SAFETY: `this` is a valid `Device` pointer from a COM vtable call.
-        let dev = unsafe { &*this.cast::<Device>() };
-        if dev.mtl.is_none() {
-            return Some(crate::unimpl::report(file!(), name, line!()));
-        }
-    }
-    None
 }
 
 #[cfg(test)]

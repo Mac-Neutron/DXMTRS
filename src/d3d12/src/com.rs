@@ -653,23 +653,29 @@ impl<T: ComRefCounted> Drop for PrivateHold<T> {
 ///
 /// # Safety
 ///
-/// `name` must be null or point to a NUL-terminated `u16` sequence.
+/// `name` must be null or point to a NUL-terminated `WCHAR` sequence.
 pub unsafe fn set_name_private_data(private_data: &PrivateData, name: *const u16) -> Hresult {
+    #[cfg(windows)]
+    type Wchar = u16;
+    #[cfg(not(windows))]
+    type Wchar = u32;
+
     if name.is_null() {
         // SAFETY: null `data` erases the entry.
         return unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, 0, ptr::null()) };
     }
+    let wide = name.cast::<Wchar>();
     let mut len = 0usize;
     loop {
-        // SAFETY: `name` is non-null and `len` has not yet reached the terminating NUL.
-        let ch_ptr = unsafe { name.add(len) };
-        // SAFETY: `ch_ptr` points within the caller-supplied NUL-terminated UTF-16 string.
+        // SAFETY: `wide` is non-null and `len` has not yet reached the terminating NUL.
+        let ch_ptr = unsafe { wide.add(len) };
+        // SAFETY: `ch_ptr` points within the caller-supplied NUL-terminated wide string.
         if unsafe { ch_ptr.read_unaligned() } == 0 {
             break;
         }
         len += 1;
     }
-    let byte_len = u32::try_from((len + 1) * size_of::<u16>()).unwrap_or(u32::MAX);
+    let byte_len = u32::try_from((len + 1) * size_of::<Wchar>()).unwrap_or(u32::MAX);
     // SAFETY: `name` points to `byte_len` readable bytes.
     unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, byte_len, name.cast()) }
 }
@@ -795,8 +801,9 @@ pub fn spawn_thread<F>(name: &str, f: F) -> std::thread::JoinHandle<()>
 where
     F: FnOnce() + Send + 'static,
 {
+    let truncated = &name[..name.floor_char_boundary(15)];
     std::thread::Builder::new()
-        .name(name.to_owned())
+        .name(truncated.to_owned())
         .stack_size(THREAD_STACK_SIZE)
         .spawn(move || {
             let _guard = dxmt_core::ffi::AbortOnPanic;

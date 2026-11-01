@@ -1,4 +1,67 @@
-use core::{ffi::c_void, mem::size_of, ptr};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    cell::Cell,
+    ffi::c_void,
+    mem::size_of,
+    ptr,
+};
+use std::alloc::System;
+
+struct CountingAlloc;
+
+thread_local! {
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+    static ALLOCS: Cell<usize> = const { Cell::new(0) };
+}
+
+// SAFETY: delegates every allocation call directly to `std::alloc::System`.
+unsafe impl GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = COUNTING.try_with(|on| {
+            if on.get() {
+                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            }
+        });
+        // SAFETY: forwarded to `System::alloc` with caller's layout.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let _ = COUNTING.try_with(|on| {
+            if on.get() {
+                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            }
+        });
+        // SAFETY: forwarded to `System::alloc_zeroed` with caller's layout.
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let _ = COUNTING.try_with(|on| {
+            if on.get() {
+                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            }
+        });
+        // SAFETY: forwarded to `System::realloc` with caller's arguments.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: forwarded to `System::dealloc` with caller's arguments.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
+
+pub fn count_allocs<F: FnOnce()>(f: F) -> usize {
+    ALLOCS.with(|c| c.set(0));
+    COUNTING.with(|on| on.set(true));
+    f();
+    COUNTING.with(|on| on.set(false));
+    ALLOCS.with(Cell::get)
+}
 
 #[cfg(not(windows))]
 #[unsafe(export_name = "wmt_native_not_implemented")]

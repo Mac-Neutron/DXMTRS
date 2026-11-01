@@ -35,7 +35,7 @@ use winemetal_sys::{
         WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDIRECT,
         WMT_RENDER_COMMAND_EXECUTE_COMMANDS_IN_BUFFER, WMT_RENDER_COMMAND_NOP,
         WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_VISIBILITY_MODE,
-        WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_OBJECT, WMT_RENDER_STAGE_VERTEX,
+        WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX,
         WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RESOURCE_STORAGE_MODE_SHARED,
         WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET,
         WMT_TEXTURE_USAGE_SHADER_READ, WMTBufferInfo, WMTCaptureInfo, WMTOrigin, WMTRenderPassInfo,
@@ -892,6 +892,7 @@ fn stage_attachment(
     src_texture: u64,
     cmdbuf: Option<&Obj>,
     mtl_device: Option<&Obj>,
+    fences: &mut Option<&mut dyn PixelHistoryFences>,
 ) {
     d.log.push_str(&meta.tag);
     let budget = if d.count > 1 {
@@ -945,17 +946,20 @@ fn stage_attachment(
     };
     // SAFETY: `cmdbuf` is a live `MTLCommandBuffer` handle.
     let blit_handle = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf.handle()) };
-    // SAFETY: `MTLCommandBuffer_blitCommandEncoder` returns a +1 retained encoder or 0.
-    if let Some(blit) = unsafe { Obj::adopt(blit_handle) } {
-        // SAFETY: `blit` is a live blit encoder and `cmd` is a single NUL-terminated command node.
+    if blit_handle != 0 {
+        let fence_slot = fences.as_mut().map(|f| f.join_blit(blit_handle));
+        // SAFETY: `blit_handle` is a live blit encoder and `cmd` is a single NUL-terminated command node.
         unsafe {
             MTLBlitCommandEncoder_encodeCommands(
-                blit.handle(),
+                blit_handle,
                 (&raw const cmd).cast::<WmtcmdBase>(),
             );
         };
-        // SAFETY: `blit` has not ended encoding yet.
-        unsafe { MTLCommandEncoder_endEncoding(blit.handle()) };
+        if let (Some(f), Some(slot)) = (fences.as_mut(), fence_slot) {
+            f.update_blit(blit_handle, slot);
+        }
+        // SAFETY: `blit_handle` has not ended encoding yet.
+        unsafe { MTLCommandEncoder_endEncoding(blit_handle) };
     }
     d.bytes += meta.size;
     d.dumps.push(PassDump {
@@ -973,6 +977,29 @@ pub fn dump_pass(
     execute_calls: u64,
     cmdbuf: Option<&Obj>,
     mtl_device: Option<&Obj>,
+) {
+    dump_pass_fenced(
+        d,
+        pass,
+        queue_index,
+        execute_calls,
+        cmdbuf,
+        mtl_device,
+        None,
+    );
+}
+
+/// Records `pass` into `d` and orders any attachment-readback blits through `fences`
+///
+/// (`DumpPass`, `d3d12_command_queue.cpp:877-915`).
+pub fn dump_pass_fenced(
+    d: &mut PassDumps,
+    pass: &EncoderData,
+    queue_index: u32,
+    execute_calls: u64,
+    cmdbuf: Option<&Obj>,
+    mtl_device: Option<&Obj>,
+    mut fences: Option<&mut dyn PixelHistoryFences>,
 ) {
     let pass_idx = d.passes;
     d.passes = d.passes.wrapping_add(1);
@@ -1002,7 +1029,15 @@ pub fn dump_pass(
                     alloc_tex: view.allocation.texture(),
                 };
                 let meta = format_attachment_meta(&spec);
-                stage_attachment(d, &spec, &meta, view.texture(), cmdbuf, mtl_device);
+                stage_attachment(
+                    d,
+                    &spec,
+                    &meta,
+                    view.texture(),
+                    cmdbuf,
+                    mtl_device,
+                    &mut fences,
+                );
             }
         }
         if let Some(view) = &data.depth.attachment {
@@ -1027,7 +1062,15 @@ pub fn dump_pass(
                 alloc_tex: view.allocation.texture(),
             };
             let meta = format_attachment_meta(&spec);
-            stage_attachment(d, &spec, &meta, view.texture(), cmdbuf, mtl_device);
+            stage_attachment(
+                d,
+                &spec,
+                &meta,
+                view.texture(),
+                cmdbuf,
+                mtl_device,
+                &mut fences,
+            );
         }
     }
     d.log.push('\n');
@@ -1440,13 +1483,12 @@ pub fn pixel_history(
 
     // SAFETY: `cmdbuf` is a live `MTLCommandBuffer` handle.
     let before_blit_raw = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf.handle()) };
-    // SAFETY: `MTLCommandBuffer_blitCommandEncoder` returns a +1 retained encoder or 0.
-    if let Some(blit) = unsafe { Obj::adopt(before_blit_raw) } {
-        let fence = fences.join_blit(blit.handle());
+    if before_blit_raw != 0 {
+        let fence = fences.join_blit(before_blit_raw);
         for w in &colors {
             for (p_idx, &(px, py)) in record.points.iter().enumerate() {
                 encode_blit_copy_tex_to_tex(
-                    blit.handle(),
+                    before_blit_raw,
                     &TexCopy {
                         src: w.texture,
                         src_slice: w.slice,
@@ -1473,7 +1515,7 @@ pub fn pixel_history(
         }
         if let Some(ref dc) = depth_copy {
             encode_blit_copy_tex_to_tex(
-                blit.handle(),
+                before_blit_raw,
                 &TexCopy {
                     src: dc.texture,
                     src_slice: dc.slice,
@@ -1489,9 +1531,9 @@ pub fn pixel_history(
                 },
             );
         }
-        fences.update_blit(blit.handle(), fence);
-        // SAFETY: `blit` has not ended encoding yet.
-        unsafe { MTLCommandEncoder_endEncoding(blit.handle()) };
+        fences.update_blit(before_blit_raw, fence);
+        // SAFETY: `before_blit_raw` has not ended encoding yet.
+        unsafe { MTLCommandEncoder_endEncoding(before_blit_raw) };
     }
 
     let mut saved_types: Vec<u16> = Vec::with_capacity(draws.len());
@@ -1506,7 +1548,7 @@ pub fn pixel_history(
     }
 
     let join_stage = if data.use_geometry {
-        WMT_RENDER_STAGE_OBJECT
+        WMT_RENDER_STAGE_PRE_RASTER
     } else {
         WMT_RENDER_STAGE_VERTEX
     };
@@ -1515,13 +1557,12 @@ pub fn pixel_history(
     for k in 0..=draws.len() {
         // SAFETY: `cmdbuf` is a live `MTLCommandBuffer` handle.
         let restore_raw = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf.handle()) };
-        // SAFETY: `MTLCommandBuffer_blitCommandEncoder` returns a +1 retained encoder or 0.
-        if let Some(blit) = unsafe { Obj::adopt(restore_raw) } {
-            let restored = fences.join_blit(blit.handle());
+        if restore_raw != 0 {
+            let restored = fences.join_blit(restore_raw);
             for w in &colors {
                 for (p_idx, &(px, py)) in record.points.iter().enumerate() {
                     encode_blit_copy_tex_to_tex(
-                        blit.handle(),
+                        restore_raw,
                         &TexCopy {
                             src: w.before.handle(),
                             src_slice: 0,
@@ -1548,7 +1589,7 @@ pub fn pixel_history(
             }
             if let Some(ref dc) = depth_copy {
                 encode_blit_copy_tex_to_tex(
-                    blit.handle(),
+                    restore_raw,
                     &TexCopy {
                         src: dc.before.handle(),
                         src_slice: 0,
@@ -1564,9 +1605,9 @@ pub fn pixel_history(
                     },
                 );
             }
-            fences.update_blit(blit.handle(), restored);
-            // SAFETY: `blit` has not ended encoding yet.
-            unsafe { MTLCommandEncoder_endEncoding(blit.handle()) };
+            fences.update_blit(restore_raw, restored);
+            // SAFETY: `restore_raw` has not ended encoding yet.
+            unsafe { MTLCommandEncoder_endEncoding(restore_raw) };
         }
 
         for (j, &draw_cmd) in draws.iter().enumerate() {
@@ -1579,32 +1620,30 @@ pub fn pixel_history(
         // SAFETY: `cmdbuf` is a live `MTLCommandBuffer` and `info` is valid for the call.
         let render_raw =
             unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf.handle(), &raw mut info) };
-        // SAFETY: `MTLCommandBuffer_renderCommandEncoder` returns a +1 retained encoder or 0.
-        if let Some(encoder) = unsafe { Obj::adopt(render_raw) } {
-            let render_fence = fences.join_render(encoder.handle(), join_stage);
-            // SAFETY: `encoder` is a live render encoder and `data.cmd_head` heads a valid chain.
+        if render_raw != 0 {
+            let render_fence = fences.join_render(render_raw, join_stage);
+            // SAFETY: `render_raw` is a live render encoder and `data.cmd_head` heads a valid chain.
             unsafe {
                 MTLRenderCommandEncoder_encodeCommands(
-                    encoder.handle(),
+                    render_raw,
                     (&raw const data.cmd_head).cast::<WmtcmdBase>(),
                 );
             };
-            fences.update_render(encoder.handle(), render_fence, frag_stage);
-            // SAFETY: `encoder` has not ended encoding yet.
-            unsafe { MTLCommandEncoder_endEncoding(encoder.handle()) };
+            fences.update_render(render_raw, render_fence, frag_stage);
+            // SAFETY: `render_raw` has not ended encoding yet.
+            unsafe { MTLCommandEncoder_endEncoding(render_raw) };
         }
 
         // SAFETY: `cmdbuf` is a live `MTLCommandBuffer` handle.
         let readback_raw = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf.handle()) };
-        // SAFETY: `MTLCommandBuffer_blitCommandEncoder` returns a +1 retained encoder or 0.
-        if let Some(readback) = unsafe { Obj::adopt(readback_raw) } {
-            let copied = fences.join_blit(readback.handle());
+        if readback_raw != 0 {
+            let copied = fences.join_blit(readback_raw);
             for (p_idx, &(px, py)) in record.points.iter().enumerate() {
                 for (i, w) in colors.iter().enumerate() {
                     let offset = u64::try_from(k).unwrap_or(0) * stride
                         + u64::try_from(p_idx * colors.len() + i).unwrap_or(0) * slot_bytes;
                     encode_blit_read_texel(
-                        readback.handle(),
+                        readback_raw,
                         w.scratch.handle(),
                         px,
                         py,
@@ -1614,9 +1653,9 @@ pub fn pixel_history(
                     );
                 }
             }
-            fences.update_blit(readback.handle(), copied);
-            // SAFETY: `readback` has not ended encoding yet.
-            unsafe { MTLCommandEncoder_endEncoding(readback.handle()) };
+            fences.update_blit(readback_raw, copied);
+            // SAFETY: `readback_raw` has not ended encoding yet.
+            unsafe { MTLCommandEncoder_endEncoding(readback_raw) };
         }
     }
 

@@ -398,95 +398,81 @@ fn fits_samples(
 }
 
 unsafe fn refuse_merge(mut e: *mut EncoderData, why: &MergeRefusal) {
-    if !crate::stats::on() {
-        return;
-    }
-    while !e.is_null() {
-        // SAFETY: `e` is a valid encoder pointer in the submission list.
-        let enc = unsafe { &*e };
-        if enc.kind == EncoderType::Null || (enc.kind == EncoderType::Blit && enc.timestamp_only) {
-            e = enc.next;
-        } else {
-            break;
+    #[cfg(not(feature = "perf-build"))]
+    {
+        static MERGE_IDS: std::sync::LazyLock<[crate::stats::StatId; 5]> =
+            std::sync::LazyLock::new(|| {
+                [
+                    crate::stats::id("#render pass merges refused (timestamps)"),
+                    crate::stats::id("#render pass merges refused (resolver)"),
+                    crate::stats::id("#render pass merges refused (barrier)"),
+                    crate::stats::id("#render pass merges refused (attachments)"),
+                    crate::stats::id("#render pass merges refused (other)"),
+                ]
+            });
+        if !crate::stats::on() {
+            return;
         }
-    }
-    if !e.is_null() {
-        // SAFETY: `e` is non-null and valid.
-        let enc = unsafe { &*e };
-        if enc.kind == EncoderType::Render {
-            match *why {
-                MergeRefusal::Timestamps => {
-                    crate::count!("#render pass merges refused (timestamps)", 1);
-                }
-                MergeRefusal::Resolver => {
-                    crate::count!("#render pass merges refused (resolver)", 1);
-                }
-                MergeRefusal::Barrier(crossing) => {
-                    crate::count!("#render pass merges refused (barrier)", 1);
-                    match crossing {
-                        0 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): UNORDERED_ACCESS",
-                                1
-                            );
-                        }
-                        1 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): a UAV barrier",
-                                1
-                            );
-                        }
-                        2 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): an aliasing barrier",
-                                1
-                            );
-                        }
-                        3 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): a split barrier's end",
-                                1
-                            );
-                        }
-                        4 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): an unknown resource",
-                                1
-                            );
-                        }
-                        5 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): simultaneous access",
-                                1
-                            );
-                        }
-                        6 => {
-                            crate::count!("#render pass merges refused (barrier): COMMON", 1);
-                        }
-                        7 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): overlap order",
-                                1
-                            );
-                        }
-                        8 => {
-                            crate::count!(
-                                "#render pass merges refused (barrier): a resource the passes write",
-                                1
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                MergeRefusal::Attachments => {
-                    crate::count!("#render pass merges refused (attachments)", 1);
-                }
-                MergeRefusal::Other => {
-                    crate::count!("#render pass merges refused (other)", 1);
-                }
+        let merge_ids = *MERGE_IDS;
+        while !e.is_null() {
+            // SAFETY: `e` is a valid encoder pointer in the submission list.
+            let enc = unsafe { &*e };
+            if enc.kind == EncoderType::Null
+                || (enc.kind == EncoderType::Blit && enc.timestamp_only)
+            {
+                e = enc.next;
+            } else {
+                break;
+            }
+        }
+        if !e.is_null() {
+            // SAFETY: `e` is non-null and valid.
+            let enc = unsafe { &*e };
+            if enc.kind == EncoderType::Render {
+                let idx = match *why {
+                    MergeRefusal::Timestamps => 0,
+                    MergeRefusal::Resolver => 1,
+                    MergeRefusal::Barrier(_) => 2,
+                    MergeRefusal::Attachments => 3,
+                    MergeRefusal::Other => 4,
+                };
+                crate::stats::count_id(merge_ids[idx], 1);
+            }
+        }
+        if let MergeRefusal::Barrier(crossing) = *why {
+            static CROSSING_IDS: std::sync::LazyLock<[crate::stats::StatId; 9]> =
+                std::sync::LazyLock::new(|| {
+                    [
+                        crate::stats::id("#render pass merges refused (barrier): UNORDERED_ACCESS"),
+                        crate::stats::id("#render pass merges refused (barrier): a UAV barrier"),
+                        crate::stats::id(
+                            "#render pass merges refused (barrier): an aliasing barrier",
+                        ),
+                        crate::stats::id(
+                            "#render pass merges refused (barrier): a split barrier's end",
+                        ),
+                        crate::stats::id(
+                            "#render pass merges refused (barrier): an unknown resource",
+                        ),
+                        crate::stats::id(
+                            "#render pass merges refused (barrier): simultaneous access",
+                        ),
+                        crate::stats::id("#render pass merges refused (barrier): COMMON"),
+                        crate::stats::id("#render pass merges refused (barrier): overlap order"),
+                        crate::stats::id(
+                            "#render pass merges refused (barrier): a resource the passes write",
+                        ),
+                    ]
+                });
+            if let Ok(idx) = usize::try_from(crossing)
+                && let Some(&id) = CROSSING_IDS.get(idx)
+            {
+                crate::stats::count_id(id, 1);
             }
         }
     }
+    #[cfg(feature = "perf-build")]
+    let _ = (&mut e, why, Option::from(()));
 }
 
 /// Returns `true` when `a` and `b` can be encoded as one Metal render pass (`SameTarget`,

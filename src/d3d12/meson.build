@@ -5,6 +5,7 @@
 d3d12_features = ('-DDXMT_PERF_BUILD' in get_option('cpp_args') ? [ 'perf-build' ] : []) + (get_option('guest_vm') ? [ 'guest-vm' ] : [])
 d3d12_cargo_args = [ dxmt_crossbuild ? 'production' : 'production-unwind' ] + (d3d12_features.length() > 0 ? [ ','.join(d3d12_features) ] : [])
 d3d12_env = {
+  'DXMT_COMMAND_METALLIB': dxmt_command_metallib.full_path(),
   'DXMT_TRANSLATOR_KEY_H': dxmt_translator_key_h.full_path(),
   'DXMT_VERSION_H': dxmt_version.full_path(),
 }
@@ -14,7 +15,7 @@ foreach t : rust_pe_targets
     output             : 'd3d12-rust-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
     command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'd3d12', rust_target_dir, '@OUTPUT@'] + d3d12_cargo_args,
     env                : d3d12_env,
-    depends            : [ dxmt_version ],
+    depends            : [ dxmt_version, dxmt_command_metallib ],
     build_always_stale : true,
   )
 endforeach

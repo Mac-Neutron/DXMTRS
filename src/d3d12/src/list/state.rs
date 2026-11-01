@@ -52,6 +52,10 @@ const D3D12_DSV_READONLY_MASK: u32 = 0x3;
 
 impl Drop for List {
     fn drop(&mut self) {
+        set_pso_graphics(self, ptr::null());
+        set_pso_compute(self, ptr::null());
+        set_root_sig_graphics(self, ptr::null());
+        set_root_sig_compute(self, ptr::null());
         if !self.allocator.is_null() {
             // SAFETY: `self.allocator` holds one private reference acquired in `reset`.
             unsafe { com::release_private_com(self.allocator) };
@@ -71,9 +75,77 @@ impl Drop for List {
     }
 }
 
+fn set_pso_graphics(list: &mut List, new_pso: *const Graphics) {
+    if ptr::eq(list.pso_graphics, new_pso) {
+        return;
+    }
+    if !new_pso.is_null() {
+        // SAFETY: `new_pso` is a live `Graphics` COM object.
+        unsafe { com::add_ref_private_com(new_pso.cast_mut()) };
+    }
+    if !list.pso_graphics.is_null() {
+        let old = list.pso_graphics.cast_mut();
+        list.pso_graphics = ptr::null();
+        // SAFETY: `old` holds one private reference owned by `list.pso_graphics`.
+        unsafe { com::release_private_com(old) };
+    }
+    list.pso_graphics = new_pso;
+}
+
+fn set_pso_compute(list: &mut List, new_pso: *const Compute) {
+    if ptr::eq(list.pso_compute, new_pso) {
+        return;
+    }
+    if !new_pso.is_null() {
+        // SAFETY: `new_pso` is a live `Compute` COM object.
+        unsafe { com::add_ref_private_com(new_pso.cast_mut()) };
+    }
+    if !list.pso_compute.is_null() {
+        let old = list.pso_compute.cast_mut();
+        list.pso_compute = ptr::null();
+        // SAFETY: `old` holds one private reference owned by `list.pso_compute`.
+        unsafe { com::release_private_com(old) };
+    }
+    list.pso_compute = new_pso;
+}
+
+fn set_root_sig_graphics(list: &mut List, new_rs: *const RootSignature) {
+    if ptr::eq(list.root_sig_graphics, new_rs) {
+        return;
+    }
+    if !new_rs.is_null() {
+        // SAFETY: `new_rs` is a live `RootSignature` COM object.
+        unsafe { com::add_ref_private_com(new_rs.cast_mut()) };
+    }
+    if !list.root_sig_graphics.is_null() {
+        let old = list.root_sig_graphics.cast_mut();
+        list.root_sig_graphics = ptr::null();
+        // SAFETY: `old` holds one private reference owned by `list.root_sig_graphics`.
+        unsafe { com::release_private_com(old) };
+    }
+    list.root_sig_graphics = new_rs;
+}
+
+fn set_root_sig_compute(list: &mut List, new_rs: *const RootSignature) {
+    if ptr::eq(list.root_sig_compute, new_rs) {
+        return;
+    }
+    if !new_rs.is_null() {
+        // SAFETY: `new_rs` is a live `RootSignature` COM object.
+        unsafe { com::add_ref_private_com(new_rs.cast_mut()) };
+    }
+    if !list.root_sig_compute.is_null() {
+        let old = list.root_sig_compute.cast_mut();
+        list.root_sig_compute = ptr::null();
+        // SAFETY: `old` holds one private reference owned by `list.root_sig_compute`.
+        unsafe { com::release_private_com(old) };
+    }
+    list.root_sig_compute = new_rs;
+}
+
 fn apply_initial_pso(list: &mut List, initial_state: *mut c_void) {
-    list.pso_graphics = ptr::null();
-    list.pso_compute = ptr::null();
+    set_pso_graphics(list, ptr::null());
+    set_pso_compute(list, ptr::null());
     if initial_state.is_null() {
         return;
     }
@@ -81,9 +153,9 @@ fn apply_initial_pso(list: &mut List, initial_state: *mut c_void) {
     // at identical struct offset.
     let is_compute = unsafe { (*initial_state.cast::<Compute>()).is_compute };
     if is_compute {
-        list.pso_compute = initial_state.cast::<Compute>();
+        set_pso_compute(list, initial_state.cast::<Compute>());
     } else {
-        list.pso_graphics = initial_state.cast::<Graphics>();
+        set_pso_graphics(list, initial_state.cast::<Graphics>());
     }
 }
 
@@ -114,9 +186,9 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.stencil_ref = 0;
     list.active_visibility_offset = u64::MAX;
     list.render_pass_visibility_buffer = 0;
-    list.root_sig_graphics = ptr::null();
+    set_root_sig_graphics(list, ptr::null());
     list.root_args_graphics = [0; 64];
-    list.root_sig_compute = ptr::null();
+    set_root_sig_compute(list, ptr::null());
     list.root_args_compute = [0; 64];
     list.bound_cbv_heap = ptr::null();
     list.bound_sampler_heap = ptr::null();
@@ -186,7 +258,6 @@ pub unsafe fn create_closed(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    crate::scope!("list.CreateCommandList");
     // SAFETY: `out` is null or a writable out-pointer.
     unsafe { com::init_out_ptr(out) };
     if out.is_null() {
@@ -222,15 +293,12 @@ pub unsafe fn create_command_list(
     list: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommandList");
-    #[cfg(test)]
-    if !this.is_null() && riid.is_null() {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateCommandList", line!());
-    }
     // SAFETY: `list` is null or a writable out-pointer.
     unsafe { com::init_out_ptr(list) };
     if allocator.is_null() || list.is_null() {
         return E_INVALIDARG;
     }
+    crate::scope!("list.CreateCommandList");
     // SAFETY: `this` is the receiver pointer or null.
     let dev_ptr = if unsafe { com::has_vtbl(this, &crate::device::vtbl::DEVICE_VTBL) } {
         this.cast::<Device>()
@@ -243,7 +311,7 @@ pub unsafe fn create_command_list(
     }
     let raw = Box::into_raw(List::new_closed(dev_ptr));
     // SAFETY: `raw` is a valid `List` in the closed state; `allocator` is non-null.
-    let reset_hr = unsafe { reset(raw.cast(), allocator, initial_state) };
+    let reset_hr = unsafe { initialize(raw.cast(), allocator, initial_state) };
     if reset_hr < 0 {
         // SAFETY: `raw` has 0 references on failure.
         drop(unsafe { Box::from_raw(raw) });
@@ -266,15 +334,16 @@ pub unsafe fn create_command_list(
 pub unsafe fn create_command_list1(
     this: *mut c_void,
     _node_mask: u32,
-    _list_type: u32,
+    list_type: u32,
     _flags: u32,
     riid: *const c_void,
     list: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommandList1");
-    #[cfg(test)]
-    if !this.is_null() && riid.is_null() {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateCommandList1", line!());
+    // SAFETY: `list` is null or a writable out-pointer.
+    unsafe { com::init_out_ptr(list) };
+    if !matches!(list_type, 0 | 2 | 3) {
+        return E_INVALIDARG;
     }
     // SAFETY: `this` is the receiver pointer or null.
     let dev_ptr = if unsafe { com::has_vtbl(this, &crate::device::vtbl::DEVICE_VTBL) } {
@@ -552,17 +621,11 @@ pub unsafe fn close(this: *mut c_void) -> Hresult {
     }
 }
 
-/// `ID3D12GraphicsCommandList::Reset` (`d3d12_command_list.cpp:355`).
-///
-/// # Safety
-///
-/// `this`, `allocator`, and `initial_state` are caller-supplied pointers.
-pub unsafe fn reset(
+unsafe fn initialize(
     this: *mut c_void,
     allocator: *mut c_void,
     initial_state: *mut c_void,
 ) -> Hresult {
-    crate::scope!("list.Reset");
     if this.is_null() || allocator.is_null() {
         return E_INVALIDARG;
     }
@@ -619,6 +682,21 @@ pub unsafe fn reset(
         }
         Err(hr) => hr,
     }
+}
+
+/// `ID3D12GraphicsCommandList::Reset` (`d3d12_command_list.cpp:355`).
+///
+/// # Safety
+///
+/// `this`, `allocator`, and `initial_state` are caller-supplied pointers.
+pub unsafe fn reset(
+    this: *mut c_void,
+    allocator: *mut c_void,
+    initial_state: *mut c_void,
+) -> Hresult {
+    crate::scope!("list.Reset");
+    // SAFETY: `this`, `allocator`, and `initial_state` are forwarded to `initialize`.
+    unsafe { initialize(this, allocator, initial_state) }
 }
 
 /// `ID3D12GraphicsCommandList::ClearState` (`d3d12_command_list.cpp:367`).
@@ -790,8 +868,8 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
     if pipeline_state.is_null() {
-        list.pso_graphics = ptr::null();
-        list.pso_compute = ptr::null();
+        set_pso_graphics(list, ptr::null());
+        set_pso_compute(list, ptr::null());
         list.dirty_state.insert(DirtyFlags::PSO);
         return;
     }
@@ -802,8 +880,8 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
         if ptr::eq(list.pso_compute, compute_pso) {
             return;
         }
-        list.pso_compute = compute_pso;
-        list.pso_graphics = ptr::null();
+        set_pso_compute(list, compute_pso);
+        set_pso_graphics(list, ptr::null());
         list.dirty_state.insert(DirtyFlags::PSO);
         return;
     }
@@ -811,14 +889,10 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
     if ptr::eq(list.pso_graphics, graphics_pso) {
         return;
     }
-    list.pso_graphics = graphics_pso;
-    list.pso_compute = ptr::null();
-    list.dirty_state.insert(
-        DirtyFlags::PSO
-            | DirtyFlags::VERTEX_BUFFERS
-            | DirtyFlags::ROOT_ARGS
-            | DirtyFlags::STATIC_SAMPLERS,
-    );
+    set_pso_graphics(list, graphics_pso);
+    set_pso_compute(list, ptr::null());
+    list.dirty_state
+        .insert(DirtyFlags::PSO | DirtyFlags::VERTEX_BUFFERS);
 }
 
 /// `ID3D12GraphicsCommandList::ExecuteBundle` (`d3d12_command_list.cpp:1405`).
@@ -859,8 +933,11 @@ pub unsafe fn set_descriptor_heaps(
                 continue;
             }
             let heap_ptr = raw.cast::<Heap>().cast_const();
-            // SAFETY: `heap_ptr` is a valid `Heap`.
-            let heap_type = unsafe { (*heap_ptr).heap_type };
+            let heap_type = {
+                crate::scope!("heap.GetDesc");
+                // SAFETY: `heap_ptr` is a valid `Heap`.
+                unsafe { (*heap_ptr).heap_type }
+            };
             if heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER {
                 list.bound_sampler_heap = heap_ptr;
             } else {
@@ -897,7 +974,7 @@ pub unsafe fn set_compute_root_signature(this: *mut c_void, root_signature: *mut
     if ptr::eq(list.root_sig_compute, rs_ptr) {
         return;
     }
-    list.root_sig_compute = rs_ptr;
+    set_root_sig_compute(list, rs_ptr);
     if !rs_ptr.is_null() {
         let mut staging = list.root_args_compute;
         stage_heap_bases(list, rs_ptr, &mut staging);
@@ -929,7 +1006,7 @@ pub unsafe fn set_graphics_root_signature(this: *mut c_void, root_signature: *mu
     if ptr::eq(list.root_sig_graphics, rs_ptr) {
         return;
     }
-    list.root_sig_graphics = rs_ptr;
+    set_root_sig_graphics(list, rs_ptr);
     if !rs_ptr.is_null() {
         let mut staging = list.root_args_graphics;
         stage_heap_bases(list, rs_ptr, &mut staging);

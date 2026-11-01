@@ -177,7 +177,10 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
     get_cached_blob: crate::slot!(
         "computepso.GetCachedBlob",
         (_this: *mut c_void, pp_blob: *mut *mut c_void) -> Hresult => {
-            // SAFETY: `pp_blob` is validated by `create_blob` (`E_POINTER` if null).
+            if pp_blob.is_null() {
+                return E_POINTER;
+            }
+            // SAFETY: `pp_blob` is non-null.
             unsafe { create_blob(Vec::new(), pp_blob) }
         }
     ),

@@ -4,12 +4,10 @@
 //! `framegen_order_joins`.
 
 use core::{
-    alloc::{GlobalAlloc, Layout},
     cell::{Cell, RefCell},
     ffi::c_void,
     ptr,
 };
-use std::alloc::System;
 
 use dxmt_core::presenter::framegen::Order as FrameGenOrderTrait;
 use winemetal_sys::{
@@ -42,64 +40,12 @@ use crate::{
         RenderEncoderStencilAttachmentData, Submission,
     },
     list::List,
+    tests::count_allocs,
 };
 
-struct CountingAlloc;
-
 thread_local! {
-    static COUNTING: Cell<bool> = const { Cell::new(false) };
-    static ALLOCS: Cell<usize> = const { Cell::new(0) };
     static RECORD_BLIT: Cell<bool> = const { Cell::new(false) };
     static BLIT_OPS: RefCell<Vec<(u64, u16, u64)>> = const { RefCell::new(Vec::new()) };
-}
-
-// SAFETY: delegates every allocation call directly to `std::alloc::System`.
-unsafe impl GlobalAlloc for CountingAlloc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::alloc` with caller's layout.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::alloc_zeroed` with caller's layout.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::realloc` with caller's arguments.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: forwarded to `System::dealloc` with caller's arguments.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
-
-fn count_allocs<F: FnOnce()>(f: F) -> usize {
-    ALLOCS.with(|c| c.set(0));
-    COUNTING.with(|on| on.set(true));
-    f();
-    COUNTING.with(|on| on.set(false));
-    ALLOCS.with(Cell::get)
 }
 
 #[unsafe(export_name = "MTLDevice_newBuffer")]
@@ -596,6 +542,10 @@ fn make_fake_list(
     blits: &mut [BlitEncoderData],
     cmds: &mut [WmtcmdBlitCopyFromBufferToBuffer],
 ) -> Box<List> {
+    if !dev.is_null() {
+        // SAFETY: `dev` is a live `Device` COM object; `List::drop` releases one reference.
+        unsafe { crate::com::add_ref_com(dev) };
+    }
     let mut list = List::new_closed(dev);
     let n = blits.len();
     for i in 0..n {

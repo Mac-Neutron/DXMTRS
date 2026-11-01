@@ -196,7 +196,7 @@ pub unsafe fn create(
     }
     let Some(mtl_adapter) = mtl_adapter else {
         crate::err!("D3D12CreateDevice: Not a DXMT adapter");
-        return E_INVALIDARG;
+        return E_NOINTERFACE;
     };
 
     if out.is_null() {
@@ -306,14 +306,6 @@ pub unsafe fn create(
     hr
 }
 
-#[cfg(test)]
-fn is_vtbl_probe(this: *mut c_void) -> bool {
-    !this.is_null() && {
-        // SAFETY: `this` is a valid `Device` pointer in unit tests.
-        unsafe { (*this.cast::<Device>()).min_feature_level == 0 }
-    }
-}
-
 /// `ID3D12Device::QueryInterface` (`d3d12_device.cpp:424`).
 ///
 /// # Safety
@@ -325,14 +317,6 @@ pub unsafe fn query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.QueryInterface");
-    #[cfg(test)]
-    if !this.is_null() && riid.is_null() {
-        // SAFETY: `vtbl::tests::every_slot_dispatches_to_its_lane` probes `query_interface` first
-        // with a null `riid` on a fresh `Device::new_dummy()`. Mark the dummy device in vtbl-probe
-        // mode (`min_feature_level = 0`) so subsequent slot calls report their slot names.
-        unsafe { (*this.cast::<Device>()).min_feature_level = 0 };
-        return crate::unimpl::report(file!(), "ID3D12Device::QueryInterface", line!());
-    }
     if ppv_object.is_null() {
         return E_POINTER;
     }
@@ -457,10 +441,6 @@ pub unsafe fn get_private_data(
     data_size: *mut u32,
     data: *mut c_void,
 ) -> Hresult {
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::GetPrivateData", line!());
-    }
     if this.is_null() {
         return E_INVALIDARG;
     }
@@ -485,10 +465,6 @@ pub unsafe fn set_private_data(
     data_size: u32,
     data: *const c_void,
 ) -> Hresult {
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::SetPrivateData", line!());
-    }
     if this.is_null() {
         return E_INVALIDARG;
     }
@@ -512,10 +488,6 @@ pub unsafe fn set_private_data_interface(
     guid: *const c_void,
     data: *const c_void,
 ) -> Hresult {
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::SetPrivateDataInterface", line!());
-    }
     if this.is_null() {
         return E_INVALIDARG;
     }
@@ -535,10 +507,6 @@ pub unsafe fn set_private_data_interface(
 ///
 /// `this` and `name` are caller-supplied COM pointers.
 pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::SetName", line!());
-    }
     if this.is_null() {
         return E_INVALIDARG;
     }
@@ -555,10 +523,6 @@ pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
 /// `this` is a valid `Device` pointer.
 pub unsafe fn get_node_count(this: *mut c_void) -> u32 {
     crate::scope!("device.GetNodeCount");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::GetNodeCount", line!());
-    }
     let _ = Option::from(this);
     1
 }
@@ -570,10 +534,6 @@ pub unsafe fn get_node_count(this: *mut c_void) -> u32 {
 /// `this` is a valid `Device` pointer.
 pub unsafe fn get_device_removed_reason(this: *mut c_void) -> Hresult {
     crate::scope!("device.GetDeviceRemovedReason");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::GetDeviceRemovedReason", line!());
-    }
     let _ = Option::from(this);
     S_OK
 }
@@ -585,10 +545,6 @@ pub unsafe fn get_device_removed_reason(this: *mut c_void) -> Hresult {
 /// `this` is a valid `Device` pointer.
 pub unsafe fn set_stable_power_state(this: *mut c_void, _enable: i32) -> Hresult {
     crate::scope!("device.SetStablePowerState");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::SetStablePowerState", line!());
-    }
     let _ = Option::from(this);
     E_NOTIMPL
 }
@@ -600,10 +556,6 @@ pub unsafe fn set_stable_power_state(this: *mut c_void, _enable: i32) -> Hresult
 /// `this` and `ret` are caller-supplied pointers.
 pub unsafe fn get_adapter_luid(this: *mut c_void, ret: *mut c_void) -> *mut c_void {
     crate::scope!("device.GetAdapterLuid");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report_with(file!(), "ID3D12Device::GetAdapterLuid", line!(), ret);
-    }
     if ret.is_null() {
         return ret;
     }
@@ -636,14 +588,6 @@ pub unsafe fn create_protected_resource_session(
     session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateProtectedResourceSession");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(
-            file!(),
-            "ID3D12Device::CreateProtectedResourceSession",
-            line!(),
-        );
-    }
     let _ = Option::from(this);
     // SAFETY: `session` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(session) };
@@ -662,10 +606,6 @@ pub unsafe fn create_lifetime_tracker(
     tracker: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateLifetimeTracker");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateLifetimeTracker", line!());
-    }
     let _ = Option::from(this);
     // SAFETY: `tracker` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(tracker) };
@@ -679,10 +619,6 @@ pub unsafe fn create_lifetime_tracker(
 /// `this` is a valid `Device` pointer.
 pub unsafe fn remove_device(this: *mut c_void) {
     crate::scope!("device.RemoveDevice");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        let (): () = crate::unimpl::report(file!(), "ID3D12Device::RemoveDevice", line!());
-    }
     let _ = Option::from(this);
 }
 
@@ -697,10 +633,6 @@ pub unsafe fn enumerate_meta_commands(
     _descs: *mut c_void,
 ) -> Hresult {
     crate::scope!("device.EnumerateMetaCommands");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::EnumerateMetaCommands", line!());
-    }
     let _ = Option::from(this);
     if num_meta_commands.is_null() {
         return E_INVALIDARG;
@@ -725,14 +657,6 @@ pub unsafe fn enumerate_meta_command_parameters(
     _param_descs: *mut c_void,
 ) -> Hresult {
     crate::scope!("device.EnumerateMetaCommandParameters");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(
-            file!(),
-            "ID3D12Device::EnumerateMetaCommandParameters",
-            line!(),
-        );
-    }
     let _ = Option::from(this);
     E_INVALIDARG
 }
@@ -752,10 +676,6 @@ pub unsafe fn create_meta_command(
     meta_command: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateMetaCommand");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateMetaCommand", line!());
-    }
     let _ = Option::from(this);
     // SAFETY: `meta_command` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(meta_command) };
@@ -774,10 +694,6 @@ pub unsafe fn create_state_object(
     state_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateStateObject");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateStateObject", line!());
-    }
     let _ = Option::from(this);
     // SAFETY: `state_object` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(state_object) };
@@ -795,15 +711,6 @@ pub unsafe fn get_raytracing_acceleration_structure_prebuild_info(
     info: *mut c_void,
 ) {
     crate::scope!("device.GetRaytracingAccelerationStructurePrebuildInfo");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        let (): () = crate::unimpl::report(
-            file!(),
-            "ID3D12Device::GetRaytracingAccelerationStructurePrebuildInfo",
-            line!(),
-        );
-        return;
-    }
     let _ = Option::from(this);
     if !info.is_null() {
         // SAFETY: `info` points to `D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO` (24 bytes).
@@ -822,14 +729,6 @@ pub unsafe fn check_driver_matching_identifier(
     _identifier: *const c_void,
 ) -> u32 {
     crate::scope!("device.CheckDriverMatchingIdentifier");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(
-            file!(),
-            "ID3D12Device::CheckDriverMatchingIdentifier",
-            line!(),
-        );
-    }
     let _ = Option::from(this);
     D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE
 }
@@ -847,14 +746,6 @@ pub unsafe fn set_background_processing_mode(
     further_desired: *mut i32,
 ) -> Hresult {
     crate::scope!("device.SetBackgroundProcessingMode");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(
-            file!(),
-            "ID3D12Device::SetBackgroundProcessingMode",
-            line!(),
-        );
-    }
     let _ = Option::from(this);
     if !further_desired.is_null() {
         // SAFETY: `further_desired` is non-null.
@@ -876,10 +767,6 @@ pub unsafe fn add_to_state_object(
     new_state_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.AddToStateObject");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::AddToStateObject", line!());
-    }
     let _ = Option::from(this);
     // SAFETY: `new_state_object` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(new_state_object) };
@@ -898,14 +785,6 @@ pub unsafe fn create_protected_resource_session1(
     session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateProtectedResourceSession1");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(
-            file!(),
-            "ID3D12Device::CreateProtectedResourceSession1",
-            line!(),
-        );
-    }
     let _ = Option::from(this);
     // SAFETY: `session` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(session) };
@@ -924,10 +803,6 @@ pub unsafe fn create_shader_cache_session(
     session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateShaderCacheSession");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateShaderCacheSession", line!());
-    }
     let _ = Option::from(this);
     // SAFETY: `session` is forwarded from the COM caller.
     unsafe { com::init_out_ptr(session) };
@@ -941,10 +816,6 @@ pub unsafe fn create_shader_cache_session(
 /// `this` is a valid `Device` pointer.
 pub unsafe fn shader_cache_control(this: *mut c_void, _kinds: u32, _flags: u32) -> Hresult {
     crate::scope!("device.ShaderCacheControl");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::ShaderCacheControl", line!());
-    }
     let _ = Option::from(this);
     E_NOTIMPL
 }

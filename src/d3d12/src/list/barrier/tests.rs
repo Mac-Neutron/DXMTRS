@@ -111,8 +111,10 @@ fn barrier_classification_as_cpp() {
     let ptr_b = (&raw mut *res_b).cast::<c_void>();
     let ptr_sim = (&raw mut *res_sim).cast::<c_void>();
     let ptr_unbacked = (&raw mut *res_unbacked).cast::<c_void>();
+    let key_a = Arc::as_ptr(res_a.buffer.as_ref().expect("backed")).cast::<c_void>();
+    let key_b = Arc::as_ptr(res_b.buffer.as_ref().expect("backed")).cast::<c_void>();
 
-    // 1. BEGIN_ONLY is ignored completely.
+    // 1. BEGIN_ONLY skips opacity/join classification, still increments call count and names resource.
     let mut list = List::new_closed(ptr::null_mut());
     let b_begin = transition_barrier(
         D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY,
@@ -123,8 +125,8 @@ fn barrier_classification_as_cpp() {
     // SAFETY: `list` and `b_begin` are valid for the call.
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_begin).cast()) };
     assert_eq!(list.submission.barrier_opaque.len(), 0);
-    assert_eq!(list.submission.barrier_names.len(), 0);
-    assert_eq!(list.submission.barrier_count, 0);
+    assert_eq!(list.submission.barrier_names, vec![(1, key_a)]);
+    assert_eq!(list.submission.barrier_count, 1);
 
     // 2. END_ONLY records SplitEnd and triggers a barrier.
     let b_end = transition_barrier(
@@ -137,11 +139,11 @@ fn barrier_classification_as_cpp() {
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_end).cast()) };
     assert_eq!(
         list.submission.barrier_opaque,
-        vec![(0, BarrierOpacity::SplitEnd)]
+        vec![(2, BarrierOpacity::SplitEnd)]
     );
-    assert_eq!(list.submission.barrier_count, 1);
+    assert_eq!(list.submission.barrier_count, 2);
 
-    // 3. UAV barrier records UavBarrier and resource pointer in barrier_names.
+    // 3. UAV barrier records UavBarrier and resource key in barrier_names.
     let b_uav = ResourceBarrier {
         r#type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
         flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -153,10 +155,10 @@ fn barrier_classification_as_cpp() {
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_uav).cast()) };
     assert_eq!(
         list.submission.barrier_opaque[1],
-        (1, BarrierOpacity::UavBarrier)
+        (3, BarrierOpacity::UavBarrier)
     );
-    assert_eq!(list.submission.barrier_names, vec![(1, ptr_a.cast_const())]);
-    assert_eq!(list.submission.barrier_count, 2);
+    assert_eq!(list.submission.barrier_names[2], (3, key_a));
+    assert_eq!(list.submission.barrier_count, 3);
 
     // 4. Aliasing with resource_after records Aliasing; without resource_after records Unknown.
     let b_alias_some = ResourceBarrier {
@@ -185,15 +187,15 @@ fn barrier_classification_as_cpp() {
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_alias_null).cast()) };
     assert_eq!(
         list.submission.barrier_opaque[2],
-        (2, BarrierOpacity::Aliasing)
+        (4, BarrierOpacity::Aliasing)
     );
     assert_eq!(
         list.submission.barrier_opaque[3],
-        (3, BarrierOpacity::Unknown)
+        (5, BarrierOpacity::Unknown)
     );
+    let _ = key_b;
 
-    // 5. Transitions: unbacked -> Unknown, simultaneous -> Simultaneous, read->read ignored,
-    // UAV state -> UavState, COMMON -> Common.
+    // 5. Transitions: each call records its single strongest opacity (`Common` > `Simultaneous` > `Unknown` > `UavState`).
     let transitions = [
         transition_barrier(
             D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -226,24 +228,22 @@ fn barrier_classification_as_cpp() {
             D3D12_RESOURCE_STATE_COPY_DEST,
         ),
     ];
-    // SAFETY: `list` and `transitions` are valid.
-    unsafe {
-        resource_barrier(
-            (&raw mut *list).cast(),
-            u32::try_from(transitions.len()).unwrap_or(0),
-            transitions.as_ptr().cast(),
-        );
+    for t in &transitions {
+        // SAFETY: `list` and `t` are valid.
+        unsafe {
+            resource_barrier((&raw mut *list).cast(), 1, ptr::from_ref(t).cast());
+        }
     }
     assert_eq!(
         &list.submission.barrier_opaque[4..],
         &[
-            (4, BarrierOpacity::Unknown),
-            (4, BarrierOpacity::Simultaneous),
-            (4, BarrierOpacity::UavState),
-            (4, BarrierOpacity::Common),
+            (6, BarrierOpacity::Unknown),
+            (7, BarrierOpacity::Simultaneous),
+            (9, BarrierOpacity::UavState),
+            (10, BarrierOpacity::Common),
         ]
     );
-    assert_eq!(list.submission.barrier_count, 5);
+    assert_eq!(list.submission.barrier_count, 10);
 
     // 6. Pure write-ends transition (RENDER_TARGET -> PIXEL_SHADER_RESOURCE) on non-simultaneous
     // resource increments barrier count without adding an opaque entry.
@@ -256,5 +256,5 @@ fn barrier_classification_as_cpp() {
     // SAFETY: `list` and `b_write_ends` are valid.
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_write_ends).cast()) };
     assert_eq!(list.submission.barrier_opaque.len(), 8);
-    assert_eq!(list.submission.barrier_count, 6);
+    assert_eq!(list.submission.barrier_count, 11);
 }

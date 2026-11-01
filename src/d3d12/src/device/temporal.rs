@@ -222,17 +222,6 @@ pub unsafe fn cast_temporal_scaler<'a>(raw: *mut c_void) -> Option<&'a TemporalS
     }
 }
 
-#[cfg(test)]
-fn is_vtbl_probe_ext(this: *mut c_void) -> bool {
-    if this.is_null() {
-        return false;
-    }
-    // SAFETY: `this` is the companion pointer at `Device::EXT_OFFSET` inside a valid `Device`.
-    let dev = unsafe { com::from_companion::<Device>(this, Device::EXT_OFFSET) };
-    // SAFETY: `dev` points to the enclosing `Device` in unit tests.
-    unsafe { (*dev).min_feature_level == 0 }
-}
-
 /// `IMTLD3D12DeviceExt::GetTemporalScalerScaleRange` (`d3d12_device.cpp:471`).
 ///
 /// # Safety
@@ -243,14 +232,6 @@ pub unsafe fn get_temporal_scaler_scale_range(
     min_scale: *mut f32,
     max_scale: *mut f32,
 ) -> Hresult {
-    #[cfg(test)]
-    if is_vtbl_probe_ext(this) {
-        return crate::unimpl::report(
-            file!(),
-            "IMTLD3D12DeviceExt::GetTemporalScalerScaleRange",
-            line!(),
-        );
-    }
     if this.is_null() || min_scale.is_null() || max_scale.is_null() {
         return E_INVALIDARG;
     }
@@ -328,10 +309,6 @@ pub unsafe fn create_temporal_scaler(
     scaler: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateTemporalScaler");
-    #[cfg(test)]
-    if is_vtbl_probe_ext(this) {
-        return crate::unimpl::report(file!(), "IMTLD3D12DeviceExt::CreateTemporalScaler", line!());
-    }
     if this.is_null() || desc.is_null() || scaler.is_null() {
         return E_INVALIDARG;
     }

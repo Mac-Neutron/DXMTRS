@@ -89,7 +89,6 @@ use crate::{
 };
 
 #[cfg(windows)]
-#[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn ReleaseSemaphore(semaphore: *mut c_void, count: i32, previous: *mut i32) -> i32;
     fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
@@ -524,9 +523,11 @@ pub struct QueueCommitState {
 
 impl QueueCommitState {
     fn new(serial: bool) -> Self {
+        let merge = !std::env::var("DXMT_D3D12_MERGE").is_ok_and(|v| v == "0");
+        let deferred_resolves = !std::env::var("DXMT_D3D12_DEFER_RESOLVES").is_ok_and(|v| v == "0");
         Self {
             order: OrderState::new(serial),
-            merge: MergePlan::new(true, true),
+            merge: MergePlan::new(merge, deferred_resolves),
             timestamps: TimestampState::new(),
             open: false,
             open_seq: 1,
@@ -555,6 +556,7 @@ pub struct Queue {
     pub pool: Arc<InflightPool>,
     pub commit: Mutex<QueueCommitState>,
     pub wait_thread: Option<JoinHandle<()>>,
+    pub queue_index: u32,
 }
 
 impl ComRefCounted for Queue {
@@ -594,6 +596,7 @@ impl Drop for Queue {
         self.pool.seq_cv.notify_one();
         if let Some(handle) = self.wait_thread.take() {
             wait_until_finished(handle);
+            dump::save_dumps();
         }
         if self.holds_device_ref && !self.device.is_null() {
             // SAFETY: `self.holds_device_ref` guarantees `self` owns one public reference to
@@ -633,15 +636,20 @@ impl Queue {
             pool: InflightPool::new(device, COMMAND_QUEUE_SLOTS),
             commit: Mutex::new(QueueCommitState::new(serial_from_env(None, None))),
             wait_thread: None,
+            queue_index: 0,
         }
     }
 
-    fn mtl_device_handle(&self) -> u64 {
+    fn mtl_device_obj(&self) -> Option<&Obj> {
         if self.device.is_null() {
-            return 0;
+            return None;
         }
         // SAFETY: `self.device` is valid for the lifetime of `self`.
-        unsafe { (*self.device).mtl.as_ref().map_or(0, Obj::handle) }
+        unsafe { (*self.device).mtl.as_ref() }
+    }
+
+    fn mtl_device_handle(&self) -> u64 {
+        self.mtl_device_obj().map_or(0, Obj::handle)
     }
 
     fn open_cmdbuf(&self, commit: &mut QueueCommitState) -> (usize, u64) {
@@ -741,7 +749,7 @@ impl Queue {
         let mut inflight = self.pool.slots[slot_idx]
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let dumping = false;
+        let dumping = dump::is_dumping();
         let serial = commit.order.serial || dumping;
         let fold_timestamps = !dumping && commit.merge.merge;
         if commit.timestamps.ring.is_none()
@@ -857,25 +865,44 @@ impl Queue {
                 }
                 let mut pass = 0u32;
                 if crate::stats::on() {
+                    #[cfg(not(feature = "perf-build"))]
+                    static IDS: std::sync::LazyLock<[crate::stats::StatId; 9]> =
+                        std::sync::LazyLock::new(|| {
+                            [
+                                crate::stats::id("#null encoders"),
+                                crate::stats::id("#clear passes"),
+                                crate::stats::id("#render passes"),
+                                crate::stats::id("#blit passes"),
+                                crate::stats::id("#compute passes"),
+                                crate::stats::id("#resolve passes"),
+                                crate::stats::id("#temporal upscale passes"),
+                                crate::stats::id("#encoder boundaries"),
+                                crate::stats::id("#encoder boundaries with no barrier"),
+                            ]
+                        });
                     pass = crate::stats::next_pass();
-                    match cur_ref.kind {
-                        EncoderType::Null => crate::count!("#null encoders", 1),
-                        EncoderType::Clear => crate::count!("#clear passes", 1),
-                        EncoderType::Render => crate::count!("#render passes", 1),
-                        EncoderType::Blit => crate::count!("#blit passes", 1),
-                        EncoderType::Compute => crate::count!("#compute passes", 1),
-                        EncoderType::Resolve => crate::count!("#resolve passes", 1),
-                        EncoderType::TemporalUpscale => {
-                            crate::count!("#temporal upscale passes", 1);
-                        }
+                    #[cfg(not(feature = "perf-build"))]
+                    {
+                        let kind_idx = match cur_ref.kind {
+                            EncoderType::Null => 0,
+                            EncoderType::Clear => 1,
+                            EncoderType::Render => 2,
+                            EncoderType::Blit => 3,
+                            EncoderType::Compute => 4,
+                            EncoderType::Resolve => 5,
+                            EncoderType::TemporalUpscale => 6,
+                        };
+                        crate::stats::count_id(IDS[kind_idx], 1);
                     }
                     if cur_ref.kind != EncoderType::Null {
                         if !previous.is_null() {
-                            crate::count!("#encoder boundaries", 1);
+                            #[cfg(not(feature = "perf-build"))]
+                            crate::stats::count_id(IDS[7], 1);
                             // SAFETY: `previous` points to an earlier valid encoder in `sub`.
                             let prev_barriers = unsafe { (*previous).barriers };
                             if cur_ref.barriers == prev_barriers {
-                                crate::count!("#encoder boundaries with no barrier", 1);
+                                #[cfg(not(feature = "perf-build"))]
+                                crate::stats::count_id(IDS[8], 1);
                             }
                         }
                         previous = current;
@@ -975,12 +1002,47 @@ impl Queue {
                                     lists,
                                     &mut render_pass_info,
                                     serial,
-                                    fold_timestamps,
+                                    ring_handle != 0,
                                 );
                             }
                         } else {
                             commit.merge.merged.clear();
                             commit.merge.deferred.clear();
+                        }
+                        if dumping {
+                            if !data.pre_tail.is_null() {
+                                let pre_fence = commit.order.order(None, true);
+                                encode_indirect_resolve(
+                                    &IndirectResolvePass {
+                                        cmdbuf: cmdbuf_handle,
+                                        pass,
+                                        fence: pre_fence,
+                                        ring_handle: 0,
+                                        start: DONT_SAMPLE,
+                                        current: current.cast::<RenderEncoderData>(),
+                                        pre_tail: data.pre_tail,
+                                    },
+                                    &mut commit.order,
+                                );
+                            }
+                            if let (Some(cmdbuf_ref), Some(mtl_dev_ref)) =
+                                (inflight.cmdbuf.as_ref(), self.mtl_device_obj())
+                            {
+                                let data_mut = current.cast::<RenderEncoderData>();
+                                let order = &mut commit.order;
+                                dump::with_pass_dumps(|d| {
+                                    // SAFETY: `data_mut` points to the live `RenderEncoderData` for
+                                    // `current`.
+                                    dump::pixel_history(
+                                        d,
+                                        cmdbuf_ref,
+                                        mtl_dev_ref,
+                                        unsafe { &mut *data_mut },
+                                        &render_pass_info,
+                                        order,
+                                    );
+                                });
+                            }
                         }
                         let mut resolver_start = DONT_SAMPLE;
                         if ring_handle != 0 {
@@ -1072,46 +1134,18 @@ impl Queue {
                         let fence = commit.order.order(Some(cur_ref), strict);
                         let early = commit.order.early;
                         if !data.pre_tail.is_null() && !dumping {
-                            crate::count!("#indirect resolve passes", 1);
-                            let mut at = WMTSampleBufferAttachmentInfo {
-                                sample_buffer: if resolver_start == DONT_SAMPLE {
-                                    0
-                                } else {
-                                    ring_handle
+                            encode_indirect_resolve(
+                                &IndirectResolvePass {
+                                    cmdbuf: cmdbuf_handle,
+                                    pass,
+                                    fence,
+                                    ring_handle,
+                                    start: resolver_start,
+                                    current: current.cast::<RenderEncoderData>(),
+                                    pre_tail: data.pre_tail,
                                 },
-                                start_of_encoder_sample_index: resolver_start,
-                                end_of_encoder_sample_index: DONT_SAMPLE,
-                            };
-                            let pre = if at.sample_buffer != 0 {
-                                // SAFETY: `cmdbuf_handle` is live and `at` is valid.
-                                unsafe {
-                                    MTLCommandBuffer_computeCommandEncoderWithSampleBuffers(
-                                        cmdbuf_handle,
-                                        true,
-                                        &raw mut at,
-                                        1,
-                                    )
-                                }
-                            } else {
-                                // SAFETY: `cmdbuf_handle` is a live `MTLCommandBuffer`.
-                                unsafe {
-                                    MTLCommandBuffer_computeCommandEncoder(cmdbuf_handle, true)
-                                }
-                            };
-                            label_pass(pre, pass, "indirect resolve", None);
-                            // SAFETY: `current` heads a valid `RenderEncoderData`.
-                            let pre_head =
-                                unsafe { &raw mut (*current.cast::<RenderEncoderData>()).pre_head }
-                                    .cast::<WmtcmdBase>();
-                            // SAFETY: `pre` is a valid `MTLComputeCommandEncoder` and
-                            // `pre_head..data.pre_tail` is a valid command chain.
-                            unsafe {
-                                commit
-                                    .order
-                                    .encode_compute(pre, fence, pre_head, data.pre_tail);
-                            }
-                            // SAFETY: `pre` is ended once.
-                            unsafe { MTLCommandEncoder_endEncoding(pre) };
+                                &mut commit.order,
+                            );
                             commit.order.waits.clear();
                             commit.order.waits.push(fence);
                         }
@@ -1680,6 +1714,24 @@ impl Queue {
                         unsafe { MTLCommandEncoder_endEncoding(end_enc) };
                     }
                 }
+                if dumping {
+                    let cmdbuf_opt = inflight.cmdbuf.as_ref();
+                    let mtl_dev_opt = self.mtl_device_obj();
+                    let queue_index = self.queue_index;
+                    let execute_calls = commit.execute_calls;
+                    let order = &mut commit.order;
+                    dump::with_pass_dumps(|d| {
+                        dump::dump_pass_fenced(
+                            d,
+                            cur_ref,
+                            queue_index,
+                            execute_calls,
+                            cmdbuf_opt,
+                            mtl_dev_opt,
+                            Some(order),
+                        );
+                    });
+                }
                 current = cur_ref.next;
             }
         }
@@ -1781,12 +1833,10 @@ impl Queue {
         refresh: f64,
     ) -> Hresult {
         let hr = self.present_frame(presenter, backbuffer, latency_waitable, after, refresh);
-        crate::stat_frame!();
-        if !self.device.is_null() {
-            // SAFETY: `self.device` is valid for the lifetime of `self`.
-            if let Some(mtl_dev) = unsafe { (*self.device).mtl.as_ref() } {
-                dump::on_present(mtl_dev);
-            }
+        if let Some(mtl_dev) = self.mtl_device_obj() {
+            dump::on_present(mtl_dev);
+        } else {
+            crate::stat_frame!();
         }
         hr
     }
@@ -1991,14 +2041,27 @@ fn sample_after(
     why: &LoneReason,
 ) {
     crate::count!("#timestamps given their own encoder", 1);
-    match why {
-        LoneReason::CounterBuffer => {
-            crate::count!("#lone timestamps (another counter buffer)", 1);
-        }
-        LoneReason::Several => crate::count!("#lone timestamps (several waiting)", 1),
-        LoneReason::NoStart => crate::count!("#lone timestamps (next encoder takes none)", 1),
-        LoneReason::End => crate::count!("#lone timestamps (end of call)", 1),
+    #[cfg(not(feature = "perf-build"))]
+    if crate::stats::on() {
+        static IDS: std::sync::LazyLock<[crate::stats::StatId; 4]> =
+            std::sync::LazyLock::new(|| {
+                [
+                    crate::stats::id("#lone timestamps (another counter buffer)"),
+                    crate::stats::id("#lone timestamps (several waiting)"),
+                    crate::stats::id("#lone timestamps (next encoder takes none)"),
+                    crate::stats::id("#lone timestamps (end of call)"),
+                ]
+            });
+        let idx = match why {
+            LoneReason::CounterBuffer => 0,
+            LoneReason::Several => 1,
+            LoneReason::NoStart => 2,
+            LoneReason::End => 3,
+        };
+        crate::stats::count_id(IDS[idx], 1);
     }
+    #[cfg(feature = "perf-build")]
+    let _ = why;
     let fill = order.scratch_fill(mtl_device);
     let mut attachment = WMTSampleBufferAttachmentInfo {
         sample_buffer,
@@ -2056,6 +2119,53 @@ fn flush_pending(
     }
     timestamps.pending_samples.clear();
     owed
+}
+
+struct IndirectResolvePass {
+    cmdbuf: u64,
+    pass: u32,
+    fence: u16,
+    ring_handle: u64,
+    start: u64,
+    current: *mut RenderEncoderData,
+    pre_tail: *mut WmtcmdBase,
+}
+
+fn encode_indirect_resolve(ctx: &IndirectResolvePass, order: &mut OrderState) {
+    crate::count!("#indirect resolve passes", 1);
+    let mut at = WMTSampleBufferAttachmentInfo {
+        sample_buffer: if ctx.start == DONT_SAMPLE {
+            0
+        } else {
+            ctx.ring_handle
+        },
+        start_of_encoder_sample_index: ctx.start,
+        end_of_encoder_sample_index: DONT_SAMPLE,
+    };
+    let pre = if at.sample_buffer != 0 {
+        // SAFETY: `ctx.cmdbuf` is live and `at` is valid.
+        unsafe {
+            MTLCommandBuffer_computeCommandEncoderWithSampleBuffers(
+                ctx.cmdbuf,
+                true,
+                &raw mut at,
+                1,
+            )
+        }
+    } else {
+        // SAFETY: `ctx.cmdbuf` is a live `MTLCommandBuffer`.
+        unsafe { MTLCommandBuffer_computeCommandEncoder(ctx.cmdbuf, true) }
+    };
+    label_pass(pre, ctx.pass, "indirect resolve", None);
+    // SAFETY: `ctx.current` heads a valid `RenderEncoderData`.
+    let pre_head = unsafe { &raw mut (*ctx.current).pre_head }.cast::<WmtcmdBase>();
+    // SAFETY: `pre` is a valid `MTLComputeCommandEncoder` and
+    // `pre_head..ctx.pre_tail` is a valid command chain.
+    unsafe {
+        order.encode_compute(pre, ctx.fence, pre_head, ctx.pre_tail);
+    }
+    // SAFETY: `pre` is ended once.
+    unsafe { MTLCommandEncoder_endEncoding(pre) };
 }
 
 struct EmptyPass<'a> {
@@ -2553,9 +2663,6 @@ pub static QUEUE_VTBL: ID3D12CommandQueueVtbl = ID3D12CommandQueueVtbl {
     get_clock_calibration: slot!(
         "queue.GetClockCalibration",
         (this: *mut c_void, gpu_timestamp: *mut u64, cpu_timestamp: *mut u64) -> Hresult => {
-            if gpu_timestamp.is_null() || cpu_timestamp.is_null() {
-                return E_INVALIDARG;
-            }
             // SAFETY: `this` is a live `Queue` COM pointer.
             let queue = unsafe { &*this.cast::<Queue>() };
             let mtl_dev = queue.mtl_device_handle();
@@ -2567,11 +2674,15 @@ pub static QUEUE_VTBL: ID3D12CommandQueueVtbl = ID3D12CommandQueueVtbl {
                 unsafe { MTLDevice_sampleTimestamps(mtl_dev, &raw mut cpu, &raw mut gpu) };
             }
             let (after, _) = qpc::now();
-            // SAFETY: `gpu_timestamp` is non-null and writable.
-            unsafe { gpu_timestamp.write_unaligned(gpu) };
-            let mid = (before + (after - before) / 2).cast_unsigned();
-            // SAFETY: `cpu_timestamp` is non-null and writable.
-            unsafe { cpu_timestamp.write_unaligned(mid) };
+            if !gpu_timestamp.is_null() {
+                // SAFETY: `gpu_timestamp` is non-null and writable.
+                unsafe { gpu_timestamp.write_unaligned(gpu) };
+            }
+            if !cpu_timestamp.is_null() {
+                let mid = (before + (after - before) / 2).cast_unsigned();
+                // SAFETY: `cpu_timestamp` is non-null and writable.
+                unsafe { cpu_timestamp.write_unaligned(mid) };
+            }
             S_OK
         }
     ),
@@ -2656,10 +2767,6 @@ pub unsafe fn create_command_queue(
     queue: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommandQueue");
-    #[cfg(test)]
-    if !this.is_null() && desc.is_null() && riid.is_null() {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateCommandQueue", line!());
-    }
     // SAFETY: `queue` is null or a writable out-pointer.
     unsafe { com::init_out_ptr(queue) };
     if this.is_null() || desc.is_null() || riid.is_null() {
@@ -2733,6 +2840,7 @@ pub unsafe fn create_command_queue(
         pool,
         commit: Mutex::new(commit_state),
         wait_thread: Some(wait_thread),
+        queue_index: dump::next_queue_index(),
     });
     let raw_queue = Box::into_raw(boxed);
     // SAFETY: `raw_queue` is a freshly allocated `Queue` and `riid`/`queue` are caller pointers.
@@ -2757,10 +2865,6 @@ pub unsafe fn create_command_queue1(
     queue: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommandQueue1");
-    #[cfg(test)]
-    if !this.is_null() && desc.is_null() && riid.is_null() {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateCommandQueue1", line!());
-    }
     // SAFETY: forwarded from caller.
     unsafe { create_command_queue(this, desc, riid, queue) }
 }

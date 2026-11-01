@@ -18,7 +18,7 @@ use crate::{
     command_signature::CommandSignature,
     device,
     encoder::RenderEncoderData,
-    list::{DirtyFlags, DrawCallStatus, List},
+    list::{DrawCallStatus, List},
     resource::Resource,
     root_signature::object::RootSignature,
 };
@@ -303,11 +303,10 @@ pub unsafe fn execute_indirect(
     }
 
     if sig.command_type == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH {
-        if sig.update_root_arguments {
-            list.dirty_state
-                .remove(DirtyFlags::COMPUTE_ROOT_ARGS | DirtyFlags::COMPUTE_STATIC_SAMPLERS);
-        }
-        if list.pre_dispatch() == DrawCallStatus::Invalid || list.pso_compute.is_null() {
+        if super::draw::pre_dispatch_with_options(list, sig.update_root_arguments)
+            == DrawCallStatus::Invalid
+            || list.pso_compute.is_null()
+        {
             return;
         }
         // SAFETY: `list.pso_compute` was checked non-null above.
@@ -342,11 +341,7 @@ pub unsafe fn execute_indirect(
     };
     let encode_binding =
         sig.update_root_arguments || sig.update_index_buffer || sig.update_vertex_buffers;
-    if encode_binding {
-        list.dirty_state
-            .remove(DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS);
-    }
-    let status = list.pre_draw();
+    let status = super::draw::pre_draw_with_options(list, encode_binding, false);
     if status == DrawCallStatus::Invalid {
         return;
     }

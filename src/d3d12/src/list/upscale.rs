@@ -56,7 +56,7 @@ fn take_texture(
     let res_obj = unsafe { &*resource.cast::<Resource>() };
     let tex = res_obj.texture.as_ref()?;
     if tex.info().r#type() != WMT_TEXTURE_TYPE2D
-        || res_obj.desc.format != format
+        || res_obj.desc_scoped().format != format
         || u64::from(x) + u64::from(w) > u64::from(tex.info().width)
         || u64::from(y) + u64::from(h) > u64::from(tex.info().height)
     {

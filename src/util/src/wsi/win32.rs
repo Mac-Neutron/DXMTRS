@@ -6,8 +6,8 @@
 use core::{ffi::c_void, mem::offset_of, ptr};
 
 use super::{
-    Hmonitor, Hwnd, Rational, Rect, Wchar, WindowState, WsiMode, current_display_mode,
-    desktop_display_mode,
+    ENUM_CURRENT_SETTINGS, ENUM_REGISTRY_SETTINGS, Hmonitor, Hwnd, Rational, Rect, Wchar,
+    WindowState, WsiMode,
 };
 
 type MonitorEnumProc = extern "system" fn(Hmonitor, *mut c_void, *mut Rect, isize) -> i32;
@@ -20,33 +20,25 @@ const DM_DISPLAYFLAGS: u32 = 0x0020_0000;
 const DM_DISPLAYFREQUENCY: u32 = 0x0040_0000;
 const DM_INTERLACED: u32 = 2;
 const CDS_FULLSCREEN: u32 = 4;
-const CDS_TEST: u32 = 2;
 const DISP_CHANGE_SUCCESSFUL: i32 = 0;
 
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
-const WS_POPUP: i32 = 0x8000_0000_u32.cast_signed();
-const WS_SYSMENU: i32 = 0x0008_0000;
+const WS_OVERLAPPEDWINDOW: i32 = 0x00cf_0000;
 const WS_VISIBLE: i32 = 0x1000_0000;
-const WS_CLIPSIBLINGS: i32 = 0x0400_0000;
-const WS_CLIPCHILDREN: i32 = 0x0200_0000;
-const WS_MAXIMIZE: i32 = 0x0100_0000;
-const WS_MINIMIZE: i32 = 0x2000_0000;
+const WS_EX_OVERLAPPEDWINDOW: i32 = 0x0000_0300;
 const WS_EX_TOPMOST: i32 = 0x0000_0008;
 
 const SW_MINIMIZE: i32 = 6;
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_FRAMECHANGED: u32 = 0x0020;
 const SWP_SHOWWINDOW: u32 = 0x0040;
-const SWP_NOACTIVATE: u32 = 0x0010;
-const SWP_NOZORDER: u32 = 0x0004;
-const SWP_NOMOVE: u32 = 0x0002;
 const HWND_TOPMOST: Hwnd = ptr::without_provenance_mut(usize::MAX);
 const HWND_NOTOPMOST: Hwnd = ptr::without_provenance_mut(usize::MAX - 1);
 
-const D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE: i32 = 0x8000_0004_u32.cast_signed();
-
-/// Whole-Hz rates `EnumDisplaySettingsW` truncates from `1000/1001` NTSC modes.
-const NTSC_REFRESH: [u32; 6] = [23, 29, 47, 59, 95, 119];
+const D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE: i32 = 0x8000_0001_u32.cast_signed();
 
 /// `POINT`, which `MonitorFromPoint` takes by value.
 #[derive(Clone, Copy, Default)]
@@ -114,16 +106,8 @@ struct D3dkmtEscape {
     context: u32,
 }
 
-/// `D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE` payload (`util_d3dkmt.h`).
-#[repr(C)]
-struct D3dkmtEscapeSetPresentRectWine {
-    window: Hwnd,
-    rect: Rect,
-}
-
 unsafe extern "system" {
     fn MonitorFromPoint(point: Point, flags: u32) -> Hmonitor;
-    fn MonitorFromWindow(window: Hwnd, flags: u32) -> Hmonitor;
     fn EnumDisplayMonitors(
         dc: *mut c_void,
         clip: *const Rect,
@@ -148,6 +132,7 @@ unsafe extern "system" {
     fn GetWindowThreadProcessId(window: Hwnd, process_id: *mut u32) -> u32;
     fn GetWindowLongW(window: Hwnd, index: i32) -> i32;
     fn SetWindowLongW(window: Hwnd, index: i32, new_long: i32) -> i32;
+    fn MoveWindow(window: Hwnd, x: i32, y: i32, width: i32, height: i32, repaint: i32) -> i32;
     fn SetWindowPos(
         window: Hwnd,
         insert_after: Hwnd,
@@ -163,19 +148,9 @@ unsafe extern "system" {
 }
 
 const fn refresh_from_hz(hz: u32) -> Rational {
-    let mut i = 0;
-    while i < NTSC_REFRESH.len() {
-        if NTSC_REFRESH[i] == hz {
-            return Rational {
-                numerator: (hz + 1) * 1000,
-                denominator: 1001,
-            };
-        }
-        i += 1;
-    }
     Rational {
-        numerator: hz,
-        denominator: 1,
+        numerator: hz.wrapping_mul(1000),
+        denominator: 1000,
     }
 }
 
@@ -252,8 +227,8 @@ pub fn is_window(window: Hwnd) -> bool {
 }
 
 pub fn is_minimized(window: Hwnd) -> bool {
-    // SAFETY: `GetWindowLongW` queries the window's style in `user32`.
-    ((unsafe { GetWindowLongW(window, GWL_STYLE) }) & WS_MINIMIZE) != 0
+    // SAFETY: `IsIconic` queries whether `window` is minimized in `user32`.
+    (unsafe { IsIconic(window) }) != 0
 }
 
 pub fn is_foreground(window: Hwnd) -> bool {
@@ -305,34 +280,31 @@ fn set_monitor_display_mode(monitor: Hmonitor, mode: &WsiMode) -> bool {
         devmode.fields |= DM_DISPLAYFREQUENCY;
         devmode.display_frequency = mode.refresh.numerator / mode.refresh.denominator.max(1);
     }
-    // SAFETY: `info.device` is NUL-terminated and `devmode` is a live `DEVMODEW` on the stack.
-    let status = unsafe {
-        ChangeDisplaySettingsExW(
-            info.device.as_ptr(),
-            &raw mut devmode,
-            ptr::null_mut(),
-            CDS_FULLSCREEN | CDS_TEST,
-            ptr::null_mut(),
-        )
+    let mut cur_mode = DevModeW {
+        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
+        ..DevModeW::default()
     };
-    if status != DISP_CHANGE_SUCCESSFUL {
-        devmode.fields &= !DM_DISPLAYFREQUENCY;
-        // SAFETY: as above.
-        let retry = unsafe {
-            ChangeDisplaySettingsExW(
-                info.device.as_ptr(),
-                &raw mut devmode,
-                ptr::null_mut(),
-                CDS_FULLSCREEN | CDS_TEST,
-                ptr::null_mut(),
-            )
-        };
-        if retry != DISP_CHANGE_SUCCESSFUL {
-            return false;
+    // SAFETY: `info.device` is NUL-terminated and `cur_mode` is a live `DEVMODEW` on the stack.
+    if unsafe {
+        EnumDisplaySettingsW(
+            info.device.as_ptr(),
+            ENUM_CURRENT_SETTINGS,
+            &raw mut cur_mode,
+        )
+    } != 0
+    {
+        let mut eq = cur_mode.pels_width == devmode.pels_width
+            && cur_mode.pels_height == devmode.pels_height
+            && cur_mode.bits_per_pel == devmode.bits_per_pel;
+        if (devmode.fields & DM_DISPLAYFREQUENCY) != 0 {
+            eq &= cur_mode.display_frequency == devmode.display_frequency;
+        }
+        if eq {
+            return true;
         }
     }
     // SAFETY: `info.device` and `devmode` are live on the stack.
-    let applied = unsafe {
+    let mut status = unsafe {
         ChangeDisplaySettingsExW(
             info.device.as_ptr(),
             &raw mut devmode,
@@ -341,107 +313,69 @@ fn set_monitor_display_mode(monitor: Hmonitor, mode: &WsiMode) -> bool {
             ptr::null_mut(),
         )
     };
-    applied == DISP_CHANGE_SUCCESSFUL
+    if status != DISP_CHANGE_SUCCESSFUL {
+        devmode.fields &= !DM_DISPLAYFREQUENCY;
+        // SAFETY: as above.
+        status = unsafe {
+            ChangeDisplaySettingsExW(
+                info.device.as_ptr(),
+                &raw mut devmode,
+                ptr::null_mut(),
+                CDS_FULLSCREEN,
+                ptr::null_mut(),
+            )
+        };
+    }
+    status == DISP_CHANGE_SUCCESSFUL
 }
 
-fn send_present_rect_escape(window: Hwnd, rect: Rect) {
-    let mut data = D3dkmtEscapeSetPresentRectWine { window, rect };
+fn send_present_rect_escape(window: Hwnd, mut rect: Rect) {
     let escape = D3dkmtEscape {
         adapter: 0,
         device: 0,
         escape_type: D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE,
         flags: 0,
-        private_driver_data: (&raw mut data).cast(),
-        private_driver_data_size: u32::try_from(size_of::<D3dkmtEscapeSetPresentRectWine>())
-            .unwrap_or(0),
-        context: 0,
+        private_driver_data: (&raw mut rect).cast(),
+        private_driver_data_size: u32::try_from(size_of::<Rect>()).unwrap_or(0),
+        context: u32::try_from(
+            u64::try_from(window.expose_provenance()).unwrap_or(0) & u64::from(u32::MAX),
+        )
+        .unwrap_or(0),
     };
-    // SAFETY: `escape` and `data` are live on the stack for the duration of the call.
+    // SAFETY: `escape` and `rect` are live on the stack for the duration of the call.
     unsafe { D3DKMTEscape(&raw const escape) };
 }
 
-pub fn set_window_mode(monitor: Hmonitor, window: Hwnd, mode: &WsiMode) -> bool {
-    if !is_window(window) {
-        return false;
-    }
-    let Some(mut idx) = Some(0_u32) else {
-        return false;
-    };
-    let mut target_mode: Option<WsiMode> = None;
-    while let Some(m) = display_mode(monitor, idx) {
-        idx += 1;
-        if m.width == mode.width && m.height == mode.height {
-            target_mode = Some(m);
-            break;
-        }
-    }
-    let Some(target) = target_mode else {
-        let Some(desktop_mode) = desktop_display_mode(monitor) else {
-            return false;
-        };
-        if !set_monitor_display_mode(monitor, &desktop_mode) {
-            return false;
-        }
-        let mut present_rect = Rect::default();
-        if mode.width * desktop_mode.height > desktop_mode.width * mode.height {
-            let scaled_h = (desktop_mode.width * mode.height / mode.width.max(1)).cast_signed();
-            present_rect.left = 0;
-            present_rect.right = desktop_mode.width.cast_signed();
-            present_rect.top = (desktop_mode.height.cast_signed() - scaled_h) / 2;
-            present_rect.bottom = i32::midpoint(desktop_mode.height.cast_signed(), scaled_h);
-        } else {
-            let scaled_w = (desktop_mode.height * mode.width / mode.height.max(1)).cast_signed();
-            present_rect.top = 0;
-            present_rect.bottom = desktop_mode.height.cast_signed();
-            present_rect.left = (desktop_mode.width.cast_signed() - scaled_w) / 2;
-            present_rect.right = i32::midpoint(desktop_mode.width.cast_signed(), scaled_w);
-        }
-        send_present_rect_escape(window, present_rect);
-        return true;
-    };
-    send_present_rect_escape(window, Rect::default());
-    set_monitor_display_mode(monitor, &target)
+pub fn set_window_mode(monitor: Hmonitor, _window: Hwnd, mode: &WsiMode) -> bool {
+    set_monitor_display_mode(monitor, mode)
 }
 
 pub fn enter_fullscreen_mode(
     monitor: Hmonitor,
     window: Hwnd,
     state: &mut WindowState,
-    mode_switch: bool,
+    _mode_switch: bool,
 ) -> bool {
-    // SAFETY: `GetWindowLongW` reads `window`'s style in `user32`.
-    let current_style = unsafe { GetWindowLongW(window, GWL_STYLE) };
-    // SAFETY: `GetWindowLongW` reads `window`'s extended style in `user32`.
-    let current_exstyle = unsafe { GetWindowLongW(window, GWL_EXSTYLE) };
-    let (style, exstyle) = if (current_style & WS_MINIMIZE) != 0 {
-        (state.style, state.exstyle)
-    } else {
+    let rect = desktop_coordinates(monitor).unwrap_or_default();
+    send_present_rect_escape(window, rect);
+    if state.style == 0 && state.exstyle == 0 && state.rect == Rect::default() {
         save_window_state(window, state);
-        (current_style, current_exstyle)
-    };
-    let Some(mut bounds) = desktop_coordinates(monitor) else {
-        return false;
-    };
-    if !mode_switch && let Some(current_mode) = current_display_mode(monitor) {
-        bounds.right = bounds.left + current_mode.width.cast_signed();
-        bounds.bottom = bounds.top + current_mode.height.cast_signed();
     }
-    let fs_style =
-        (WS_POPUP | WS_SYSMENU | WS_VISIBLE) | (style & (WS_CLIPSIBLINGS | WS_CLIPCHILDREN));
-    let fs_exstyle = exstyle & !WS_EX_TOPMOST;
+    let style = state.style & !WS_OVERLAPPEDWINDOW;
+    let exstyle = state.exstyle & !WS_EX_OVERLAPPEDWINDOW;
     // SAFETY: `SetWindowLongW` sets `window`'s style in `user32`.
-    unsafe { SetWindowLongW(window, GWL_STYLE, fs_style) };
+    unsafe { SetWindowLongW(window, GWL_STYLE, style) };
     // SAFETY: `SetWindowLongW` sets `window`'s extended style in `user32`.
-    unsafe { SetWindowLongW(window, GWL_EXSTYLE, fs_exstyle) };
+    unsafe { SetWindowLongW(window, GWL_EXSTYLE, exstyle) };
     // SAFETY: `SetWindowPos` repositions `window` in `user32`.
     unsafe {
         SetWindowPos(
             window,
             HWND_TOPMOST,
-            bounds.left,
-            bounds.top,
-            bounds.right - bounds.left,
-            bounds.bottom - bounds.top,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
             SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE,
         )
     };
@@ -449,20 +383,24 @@ pub fn enter_fullscreen_mode(
 }
 
 pub fn leave_fullscreen_mode(window: Hwnd, state: &WindowState, restore_coordinates: bool) -> bool {
-    if !is_window(window) {
-        return false;
+    // SAFETY: `GetWindowLongW` queries `window`'s current style in `user32`.
+    let cur_style = (unsafe { GetWindowLongW(window, GWL_STYLE) }) & !WS_VISIBLE;
+    // SAFETY: `GetWindowLongW` queries `window`'s current extended style in `user32`.
+    let cur_exstyle = (unsafe { GetWindowLongW(window, GWL_EXSTYLE) }) & !WS_EX_TOPMOST;
+    if cur_style == (state.style & !(WS_VISIBLE | WS_OVERLAPPEDWINDOW))
+        && cur_exstyle == (state.exstyle & !(WS_EX_TOPMOST | WS_EX_OVERLAPPEDWINDOW))
+    {
+        // SAFETY: `SetWindowLongW` restores `window`'s style in `user32`.
+        unsafe { SetWindowLongW(window, GWL_STYLE, state.style) };
+        // SAFETY: `SetWindowLongW` restores `window`'s extended style in `user32`.
+        unsafe { SetWindowLongW(window, GWL_EXSTYLE, state.exstyle) };
     }
-    let style = state.style & !(WS_MINIMIZE | WS_MAXIMIZE);
-    let exstyle = state.exstyle;
-    // SAFETY: `SetWindowLongW` restores `window`'s style in `user32`.
-    unsafe { SetWindowLongW(window, GWL_STYLE, style) };
-    // SAFETY: `SetWindowLongW` restores `window`'s extended style in `user32`.
-    unsafe { SetWindowLongW(window, GWL_EXSTYLE, exstyle) };
+    send_present_rect_escape(window, Rect::default());
     let mut flags = SWP_FRAMECHANGED | SWP_NOACTIVATE;
     if !restore_coordinates {
-        flags |= SWP_NOMOVE;
+        flags |= SWP_NOSIZE | SWP_NOMOVE;
     }
-    let insert_after = if (exstyle & WS_EX_TOPMOST) != 0 {
+    let insert_after = if (state.exstyle & WS_EX_TOPMOST) != 0 {
         HWND_TOPMOST
     } else {
         HWND_NOTOPMOST
@@ -479,7 +417,6 @@ pub fn leave_fullscreen_mode(window: Hwnd, state: &WindowState, restore_coordina
             flags,
         )
     };
-    send_present_rect_escape(window, Rect::default());
     true
 }
 
@@ -491,61 +428,46 @@ pub fn restore_display_mode() -> bool {
     result != 0 && data.0
 }
 
-pub fn resize_window(window: Hwnd, state: &WindowState, width: u32, height: u32) {
-    if !is_window(window) {
-        return;
-    }
+pub fn resize_window(window: Hwnd, _state: &WindowState, width: u32, height: u32) {
+    let mut old_rect = Rect::default();
+    // SAFETY: `old_rect` is a live `RECT` on the stack.
+    unsafe { GetWindowRect(window, &raw mut old_rect) };
     let mut new_rect = Rect {
         left: 0,
         top: 0,
         right: width.cast_signed(),
         bottom: height.cast_signed(),
     };
+    // SAFETY: `GetWindowLongW` reads `window`'s current style in `user32`.
+    let style = unsafe { GetWindowLongW(window, GWL_STYLE) };
+    // SAFETY: `GetWindowLongW` reads `window`'s current extended style in `user32`.
+    let exstyle = unsafe { GetWindowLongW(window, GWL_EXSTYLE) };
     // SAFETY: `new_rect` is a live `RECT` on the stack.
     unsafe {
         AdjustWindowRectEx(
             &raw mut new_rect,
-            state.style.cast_unsigned(),
+            style.cast_unsigned(),
             0,
-            state.exstyle.cast_unsigned(),
+            exstyle.cast_unsigned(),
         )
     };
-    // SAFETY: `SetWindowPos` resizes `window` in `user32`.
+    // SAFETY: `MoveWindow` resizes `window` at its current position in `user32`.
     unsafe {
-        SetWindowPos(
+        MoveWindow(
             window,
-            ptr::null_mut(),
-            0,
-            0,
+            old_rect.left,
+            old_rect.top,
             new_rect.right - new_rect.left,
             new_rect.bottom - new_rect.top,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE,
+            1,
         )
     };
 }
 
 pub fn update_fullscreen_window(monitor: Hmonitor, window: Hwnd, force_topmost: bool) {
-    if !is_window(window) {
-        return;
-    }
-    let Some(bounds) = desktop_coordinates(monitor) else {
-        return;
-    };
-    // SAFETY: `IsIconic` queries `window` in `user32`.
-    if (unsafe { IsIconic(window) }) != 0 {
-        // SAFETY: `SetWindowPos` moves the minimized fullscreen window without changing Z-order.
-        unsafe {
-            SetWindowPos(
-                window,
-                ptr::null_mut(),
-                bounds.left,
-                bounds.top,
-                bounds.right - bounds.left,
-                bounds.bottom - bounds.top,
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            )
-        };
-    } else if force_topmost {
+    let bounds = desktop_coordinates(monitor).unwrap_or_default();
+    send_present_rect_escape(window, bounds);
+    if force_topmost {
         // SAFETY: `SetWindowPos` brings the fullscreen window to the top of the Z-order.
         unsafe {
             SetWindowPos(
@@ -559,28 +481,17 @@ pub fn update_fullscreen_window(monitor: Hmonitor, window: Hwnd, force_topmost: 
             )
         };
     } else {
-        // SAFETY: `MonitorFromWindow` queries `window`'s current monitor in `user32`.
-        let cur_mon = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY) };
-        let mut cur_rect = Rect::default();
-        // SAFETY: `cur_rect` is a live `RECT` on the stack.
-        unsafe { GetClientRect(window, &raw mut cur_rect) };
-        if cur_mon != monitor
-            || cur_rect.right != bounds.right - bounds.left
-            || cur_rect.bottom != bounds.bottom - bounds.top
-        {
-            // SAFETY: `SetWindowPos` updates `window`'s fullscreen bounds without changing Z-order.
-            unsafe {
-                SetWindowPos(
-                    window,
-                    ptr::null_mut(),
-                    bounds.left,
-                    bounds.top,
-                    bounds.right - bounds.left,
-                    bounds.bottom - bounds.top,
-                    SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER,
-                )
-            };
-        }
+        // SAFETY: `MoveWindow` updates `window`'s fullscreen bounds in `user32`.
+        unsafe {
+            MoveWindow(
+                window,
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                1,
+            )
+        };
     }
 }
 
@@ -628,11 +539,62 @@ extern "system" fn restore(
     let Some(success) = (unsafe { success.as_mut() }) else {
         return 0;
     };
-    let Some(desktop_mode) = desktop_display_mode(monitor) else {
+    let Some(info) = monitor_info(monitor) else {
         success.0 = false;
         return 0;
     };
-    if !set_monitor_display_mode(monitor, &desktop_mode) {
+    let mut current_mode = DevModeW {
+        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
+        ..DevModeW::default()
+    };
+    let mut registry_mode = DevModeW {
+        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
+        ..DevModeW::default()
+    };
+    // SAFETY: `info.device` is NUL-terminated and `current_mode` is a live `DEVMODEW`.
+    if unsafe {
+        EnumDisplaySettingsW(
+            info.device.as_ptr(),
+            ENUM_CURRENT_SETTINGS,
+            &raw mut current_mode,
+        )
+    } == 0
+    {
+        success.0 = false;
+        return 0;
+    }
+    // SAFETY: `info.device` is NUL-terminated and `registry_mode` is a live `DEVMODEW`.
+    if unsafe {
+        EnumDisplaySettingsW(
+            info.device.as_ptr(),
+            ENUM_REGISTRY_SETTINGS,
+            &raw mut registry_mode,
+        )
+    } == 0
+    {
+        success.0 = false;
+        return 0;
+    }
+    let freq_diff = (current_mode.fields & registry_mode.fields & DM_DISPLAYFREQUENCY) != 0
+        && current_mode.display_frequency != registry_mode.display_frequency;
+    if current_mode.pels_width == registry_mode.pels_width
+        && current_mode.pels_height == registry_mode.pels_height
+        && current_mode.bits_per_pel == registry_mode.bits_per_pel
+        && !freq_diff
+    {
+        return 1;
+    }
+    // SAFETY: `info.device` is NUL-terminated; null `DEVMODEW` restores the registry mode.
+    let ret = unsafe {
+        ChangeDisplaySettingsExW(
+            info.device.as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+        )
+    };
+    if ret != DISP_CHANGE_SUCCESSFUL {
         success.0 = false;
         return 0;
     }

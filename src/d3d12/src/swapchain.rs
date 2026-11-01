@@ -595,9 +595,20 @@ impl SwapChain {
                 == DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST
                 || selected_mode.scanline_ordering == DXGI_MODE_SCANLINE_ORDER_LOWER_FIELD_FIRST,
         };
+        let hz = if wsi_mode.refresh.numerator != 0 {
+            wsi_mode.refresh.numerator / wsi_mode.refresh.denominator.max(1)
+        } else {
+            0
+        };
         if !wsi::set_window_mode(output_desc.monitor, self.hwnd, &wsi_mode) {
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
+        crate::info!(
+            "Setting display mode: {}x{}@{}",
+            wsi_mode.width,
+            wsi_mode.height,
+            hz
+        );
         *display_mode = copy_mode_desc1(&selected_mode);
         state.init_refresh_rate = f64::from(selected_mode.refresh_rate.numerator)
             / f64::from(selected_mode.refresh_rate.denominator);
@@ -641,7 +652,7 @@ impl SwapChain {
                 return E_FAIL;
             }
         }
-        let enter_ok = {
+        let (out_monitor, mut saved_window, mode_switch) = {
             let mut state = self.lock_state();
             wsi::save_window_state(self.hwnd, &mut state.saved_window);
             let mut preferred_display_mode = ModeDesc1 {
@@ -673,13 +684,16 @@ impl SwapChain {
             state.monitor = out_desc.monitor;
             // SAFETY: transfers ownership of `output` into `state.target`.
             unsafe { state.set_target(output) };
-            wsi::enter_fullscreen_mode(
-                out_desc.monitor,
-                self.hwnd,
-                &mut state.saved_window,
-                mode_switch,
-            )
+            let saved = WindowState {
+                style: state.saved_window.style,
+                exstyle: state.saved_window.exstyle,
+                rect: state.saved_window.rect,
+            };
+            drop(state);
+            (out_desc.monitor, saved, mode_switch)
         };
+        let enter_ok =
+            wsi::enter_fullscreen_mode(out_monitor, self.hwnd, &mut saved_window, mode_switch);
         if !enter_ok {
             crate::err!("DXGI: EnterFullscreenMode: Failed to enter fullscreen mode");
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
@@ -693,22 +707,19 @@ impl SwapChain {
         if guard.already_in_progress {
             return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
         }
-        let leave_ok = {
-            let mut state = self.lock_state();
-            if Self::restore_display_mode(state.monitor) < 0 {
-                crate::warn!("DXGI: LeaveFullscreenMode: Failed to restore display mode");
-            }
-            state.fullscreen_desc.windowed = 1;
-            // SAFETY: releases the held `IDXGIOutput1` reference if any.
-            unsafe { state.set_target(ptr::null_mut()) };
-            state.monitor = wsi::window_monitor(self.hwnd);
-            state.read_refresh_rate();
-            if !wsi::is_window(self.hwnd) {
-                return S_OK;
-            }
-            wsi::leave_fullscreen_mode(self.hwnd, &state.saved_window, true)
-        };
-        if !leave_ok {
+        let mut state = self.lock_state();
+        if Self::restore_display_mode(state.monitor) < 0 {
+            crate::warn!("DXGI: LeaveFullscreenMode: Failed to restore display mode");
+        }
+        state.fullscreen_desc.windowed = 1;
+        // SAFETY: releases the held `IDXGIOutput1` reference if any.
+        unsafe { state.set_target(ptr::null_mut()) };
+        state.monitor = wsi::window_monitor(self.hwnd);
+        state.read_refresh_rate();
+        if !wsi::is_window(self.hwnd) {
+            return S_OK;
+        }
+        if !wsi::leave_fullscreen_mode(self.hwnd, &state.saved_window, true) {
             crate::err!("DXGI: LeaveFullscreenMode: Failed to exit fullscreen mode");
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
@@ -722,6 +733,7 @@ impl SwapChain {
         if let Some(presenter) = self.presenter.as_ref() {
             presenter.change_gamma_ramp(None);
         }
+        drop(state);
         S_OK
     }
 }

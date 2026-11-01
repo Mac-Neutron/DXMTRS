@@ -2,9 +2,6 @@
 //!
 //! (`d3d12_command_list.cpp`).
 
-#[cfg(test)]
-mod tests;
-
 use core::{
     ffi::c_void,
     mem::{align_of, size_of},
@@ -487,7 +484,7 @@ pub fn pre_draw_with_options(
             colors: list.render_pass.colors.clone(),
             depth: list.render_pass.depth.clone(),
             stencil: list.render_pass.stencil.clone(),
-            default_raster_sample_count: 1,
+            default_raster_sample_count: 0,
             render_target_array_length: list.render_pass.render_target_array_length,
             render_target_height: list.render_pass.render_target_height,
             render_target_width: list.render_pass.render_target_width,
@@ -522,7 +519,6 @@ pub fn pre_draw_with_options(
         // SAFETY: `render_ptr` was just initialized.
         let render = unsafe { &mut *render_ptr };
         render.cmd_tail = (&raw mut render.cmd_head).cast::<WmtcmdBase>();
-        render.pre_tail = (&raw mut render.pre_head).cast::<WmtcmdBase>();
         alloc.encoder_current = render_ptr.cast::<EncoderData>();
         list.inside_render_pass = true;
 
@@ -532,9 +528,13 @@ pub fn pre_draw_with_options(
                 crate::count!("#clears folded", u64::from(folded));
             }
         }
-        if render.base.write_count == 0 && !list.pso_graphics.is_null() {
-            // SAFETY: `list.pso_graphics` is a valid `Graphics`.
-            let forced = unsafe { (*list.pso_graphics).forced_sample_count }.max(1);
+        if render.base.write_count == 0 {
+            let forced = if list.pso_graphics.is_null() {
+                1
+            } else {
+                // SAFETY: `list.pso_graphics` is a valid `Graphics`.
+                unsafe { (*list.pso_graphics).forced_sample_count }.max(1)
+            };
             render.default_raster_sample_count = u8::try_from(forced).unwrap_or(1);
         }
         list.dirty_state.insert(
@@ -614,7 +614,6 @@ pub fn pre_draw_with_options(
         }
         // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).use_geometry = true };
-        list.dirty_state.insert(DirtyFlags::PSO);
         handle
     } else {
         pso_gfx.pso.as_ref().map_or(0, Obj::handle)
@@ -622,6 +621,15 @@ pub fn pre_draw_with_options(
     if pso_gfx.writes_uav {
         // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).uav_writes = true };
+    }
+    if geometry != list.bound_geometry {
+        list.dirty_state.insert(
+            DirtyFlags::VERTEX_BUFFERS | DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS,
+        );
+        list.bound_geometry = geometry;
+    }
+    if pso_handle != list.bound_pso {
+        list.dirty_state.insert(DirtyFlags::PSO);
     }
 
     if list.dirty_state.contains(DirtyFlags::PSO) {
@@ -634,6 +642,7 @@ pub fn pre_draw_with_options(
                 pso: pso_handle,
             },
         );
+        list.bound_pso = pso_handle;
         if geometry {
             let buffer = alloc.gpu_heap_buffer.as_ref().map_or(0, Obj::handle);
             encode_render_cmd(
@@ -1310,3 +1319,6 @@ pub unsafe fn dispatch_mesh(_this: *mut c_void, _x: u32, _y: u32, _z: u32) {
         crate::warn!("DispatchMesh: mesh shaders not supported (MeshShaderTier NOT_SUPPORTED)");
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -31,10 +31,9 @@ use crate::{
     descriptor_heap,
     device::Device,
     encoder::{
-        BlitEncoderData, ClearEncoderData, ComputeEncoderData, EncoderData, EncoderSample,
-        EncoderType, RenderEncoderColorAttachmentData, RenderEncoderData,
-        RenderEncoderDepthAttachmentData, RenderEncoderStencilAttachmentData, Submission,
-        TextureViewRef,
+        ClearEncoderData, EncoderData, EncoderSample, EncoderType,
+        RenderEncoderColorAttachmentData, RenderEncoderData, RenderEncoderDepthAttachmentData,
+        RenderEncoderStencilAttachmentData, Submission, TextureViewRef,
     },
     pipeline::{Compute, Graphics},
     root_signature::object::RootSignature,
@@ -125,6 +124,8 @@ pub struct List {
     pub scissor_rects: [WMTScissorRect; 16],
     pub scissor_rect_count: u8,
     pub primitive_topology: u32,
+    pub bound_pso: u64,
+    pub bound_geometry: bool,
     pub vertex_buffers: [(u64, u32, u32); 32],
     pub index_buffer: u64,
     pub index_buffer_offset: u64,
@@ -151,12 +152,14 @@ impl List {
     /// Creates an empty `RenderEncoderData` staging state (`render_pass_`).
     #[must_use]
     pub fn empty_render_pass() -> RenderEncoderData {
+        let mut base = EncoderData::new(EncoderType::Render, 0);
+        base.writes_unknown = false;
         RenderEncoderData {
-            base: EncoderData::new(EncoderType::Render, 0),
+            base,
             colors: core::array::from_fn(|_| RenderEncoderColorAttachmentData::default()),
             depth: RenderEncoderDepthAttachmentData::default(),
             stencil: RenderEncoderStencilAttachmentData::default(),
-            default_raster_sample_count: 1,
+            default_raster_sample_count: 0,
             render_target_array_length: 0,
             render_target_height: 0,
             render_target_width: 0,
@@ -219,6 +222,8 @@ impl List {
             }; 16],
             scissor_rect_count: 0,
             primitive_topology: 0,
+            bound_pso: 0,
+            bound_geometry: false,
             vertex_buffers: [(0, 0, 0); 32],
             index_buffer: 0,
             index_buffer_offset: 0,
@@ -244,41 +249,6 @@ impl List {
         &mut self.submission
     }
 
-    /// Closes the active encoder pass on `allocator` and flushes any pending resolves
-    ///
-    /// (`InvalidateCurrentPass`, `d3d12_command_list.cpp:193`).
-    pub fn invalidate_current_pass(&mut self) {
-        let (): () = crate::not_implemented!("list::List::invalidate_current_pass");
-    }
-
-    /// Emits any deferred MSAA resolves queued during the render pass that just closed
-    ///
-    /// (`FlushPendingResolves`, `d3d12_command_list.cpp:209`).
-    pub fn flush_pending_resolves(&mut self) {
-        let (): () = crate::not_implemented!("list::List::flush_pending_resolves");
-    }
-
-    /// Returns the active [`BlitEncoderData`], opening one if needed (`EnsureBlitEncoder`,
-    ///
-    /// `d3d12_command_list.cpp:249`).
-    pub fn ensure_blit_encoder(&mut self) -> *mut BlitEncoderData {
-        crate::not_implemented!("list::List::ensure_blit_encoder")
-    }
-
-    /// Returns the active [`ComputeEncoderData`], opening one if needed (`EnsureComputeEncoder`,
-    ///
-    /// `d3d12_command_list.cpp:265`).
-    pub fn ensure_compute_encoder(&mut self) -> *mut ComputeEncoderData {
-        crate::not_implemented!("list::List::ensure_compute_encoder")
-    }
-
-    /// Returns the active [`RenderEncoderData`], opening one (and folding clears) if needed
-    ///
-    /// (`EnsureRenderEncoder`, `d3d12_command_list.cpp:283`).
-    pub fn ensure_render_encoder(&mut self) -> *mut RenderEncoderData {
-        crate::not_implemented!("list::List::ensure_render_encoder")
-    }
-
     /// Flushes dirty graphics state before a draw or graphics `ExecuteIndirect` (`PreDraw`,
     ///
     /// `d3d12_command_list.cpp:1428`).
@@ -301,8 +271,13 @@ impl List {
 /// If non-null, `raw` must point to a readable COM object pointer.
 #[must_use]
 pub unsafe fn cast_list<'a>(raw: *mut c_void) -> Option<&'a List> {
-    let _ = raw;
-    crate::not_implemented!("list::cast_list")
+    // SAFETY: If non-null, `raw` points to a COM object whose first word is its vtable pointer.
+    if unsafe { com::has_vtbl(raw, &LIST_VTBL) } {
+        // SAFETY: `raw`'s vtable is `LIST_VTBL`, so `raw` is a live `List`.
+        Some(unsafe { &*raw.cast::<List>() })
+    } else {
+        None
+    }
 }
 
 /// Primary `ID3D12GraphicsCommandList7` vtable for [`List`].

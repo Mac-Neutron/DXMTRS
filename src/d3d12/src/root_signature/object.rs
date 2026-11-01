@@ -240,10 +240,6 @@ pub unsafe fn create_root_signature(
     root_sig: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateRootSignature");
-    #[cfg(test)]
-    if blob.is_null() && length == 0 && riid.is_null() {
-        return vtbl_dispatch_probe();
-    }
     // SAFETY: `root_sig` is a caller out-pointer (or null).
     unsafe { com::init_out_ptr(root_sig) };
     if blob.is_null() || length == 0 {
@@ -379,11 +375,6 @@ pub unsafe fn create_root_signature(
         drop(unsafe { Box::from_raw(raw) });
     }
     hr
-}
-
-#[cfg(test)]
-fn vtbl_dispatch_probe() -> Hresult {
-    crate::unimpl::report(file!(), "ID3D12Device::CreateRootSignature", line!())
 }
 
 #[cfg(test)]

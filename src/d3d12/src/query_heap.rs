@@ -21,9 +21,9 @@ use crate::{
         vtbl::{ID3D12QueryHeapVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid,
-        Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE,
-        IID_ID3D12_QUERY_HEAP, IID_IUNKNOWN, S_FALSE, S_OK,
+        self, ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_QUERY_HEAP,
+        IID_IUNKNOWN, S_FALSE, S_OK,
     },
     device::Device,
     slot,
@@ -122,7 +122,7 @@ pub fn timestamp_blits() -> bool {
 }
 
 static QUERY_HEAP_VTBL: ID3D12QueryHeapVtbl = ID3D12QueryHeapVtbl {
-    query_interface: slot!((this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
+    query_interface: slot!("queryheap.QueryInterface", (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
         if ppv_object.is_null() {
             return E_POINTER;
         }
@@ -290,30 +290,24 @@ pub unsafe fn create_query_heap(
         }
         results = Some(buf_obj);
 
-        let is_timestamp = d.r#type == D3D12_QUERY_HEAP_TYPE_TIMESTAMP
-            || d.r#type == D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP;
-        if is_timestamp {
-            if timestamp_blits() {
-                aliases = vec![0u32; d.count as usize];
-                let num_buffers = d.count.div_ceil(TIMESTAMPS_PER_BUFFER).max(1);
-                counters.reserve(num_buffers as usize);
-                for _ in 0..num_buffers {
-                    // SAFETY: `mtl_dev` is a live `MTLDevice`.
-                    let csb_handle = unsafe {
-                        MTLCounterSampleBuffer_newTimestampBuffer(
-                            mtl_dev.handle(),
-                            TIMESTAMPS_PER_BUFFER,
-                            true,
-                        )
-                    };
-                    // SAFETY: `newTimestampBuffer` returns a +1 handle or 0.
-                    let Some(csb_obj) = (unsafe { Obj::adopt(csb_handle) }) else {
-                        crate::err!("CreateQueryHeap: Failed to create MTLCounterSampleBuffer");
-                        return E_FAIL;
-                    };
-                    counters.push(csb_obj);
-                }
-            } else {
+        if d.r#type == D3D12_QUERY_HEAP_TYPE_TIMESTAMP {
+            let mut first = 0u32;
+            while first < d.count {
+                let sample_count = TIMESTAMPS_PER_BUFFER.min(d.count - first);
+                // SAFETY: `mtl_dev` is a live `MTLDevice`.
+                let csb_handle = unsafe {
+                    MTLCounterSampleBuffer_newTimestampBuffer(mtl_dev.handle(), sample_count, true)
+                };
+                // SAFETY: `newTimestampBuffer` returns a +1 handle or 0.
+                let Some(csb_obj) = (unsafe { Obj::adopt(csb_handle) }) else {
+                    counters.clear();
+                    break;
+                };
+                counters.push(csb_obj);
+                first += TIMESTAMPS_PER_BUFFER;
+            }
+            aliases = vec![u32::MAX; d.count as usize];
+            if !counters.is_empty() && !timestamp_blits() {
                 values = vec![0u64; d.count as usize];
             }
         }

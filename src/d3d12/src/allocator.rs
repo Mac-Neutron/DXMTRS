@@ -72,6 +72,7 @@ pub const GPU_HEAP_SIZE: usize = 0x40_0000;
 const CPU_HEAP_ALIGN: usize = 4096;
 
 /// GPU heap block alignment (`16384`, `d3d12_command_allocator.cpp:66`).
+#[cfg(not(feature = "guest-vm"))]
 const GPU_HEAP_ALIGN: usize = 16384;
 
 /// Maximum valid `D3D12_COMMAND_LIST_TYPE` accepted by `CreateCommandAllocator` (`COPY = 3`).
@@ -433,6 +434,7 @@ impl Allocator {
         // SAFETY: `compute.cmd_tail` points to the last command in `compute`'s chain.
         unsafe { (*compute.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
         compute.cmd_tail = base_ptr;
+        compute.base.barriers_last = self.barriers;
         ptr
     }
 
@@ -448,9 +450,18 @@ impl Allocator {
         unsafe { (*base_ptr).next = null_mem_ptr() };
         // SAFETY: `self.encoder_current` is a live `RenderEncoderData`.
         let render = unsafe { &mut *self.encoder_current.cast::<RenderEncoderData>() };
+        if render.pre_tail.is_null() {
+            render.pre_head = winemetal_wire::WmtcmdComputeNop {
+                r#type: WMT_COMPUTE_COMMAND_NOP,
+                reserved: [0; 3],
+                next: null_mem_ptr(),
+            };
+            render.pre_tail = (&raw mut render.pre_head).cast::<WmtcmdBase>();
+        }
         // SAFETY: `render.pre_tail` points to the last command in `render`'s pre-pass chain.
         unsafe { (*render.pre_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
         render.pre_tail = base_ptr;
+        render.base.barriers_last = self.barriers;
         ptr
     }
 
@@ -469,6 +480,7 @@ impl Allocator {
         // SAFETY: `render.cmd_tail` points to the last command in `render`'s command chain.
         unsafe { (*render.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
         render.cmd_tail = base_ptr;
+        render.base.barriers_last = self.barriers;
         ptr
     }
 
@@ -1335,7 +1347,6 @@ impl SimpleCommandContext for Allocator {
         // SAFETY: `ptr` was just initialized above.
         let enc = unsafe { &mut *ptr };
         enc.cmd_tail = (&raw mut enc.cmd_head).cast::<WmtcmdBase>();
-        enc.pre_tail = (&raw mut enc.pre_head).cast::<WmtcmdBase>();
         self.encoder_current = ptr.cast::<EncoderData>();
     }
 
@@ -1635,10 +1646,6 @@ pub unsafe fn create_command_allocator(
     allocator: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateCommandAllocator");
-    #[cfg(test)]
-    if !this.is_null() && riid.is_null() {
-        return crate::unimpl::report(file!(), "ID3D12Device::CreateCommandAllocator", line!());
-    }
     // SAFETY: `allocator` is a caller-supplied out-pointer.
     unsafe { com::init_out_ptr(allocator) };
     if list_type > MAX_COMMAND_LIST_TYPE {

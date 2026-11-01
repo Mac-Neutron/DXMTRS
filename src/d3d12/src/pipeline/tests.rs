@@ -256,7 +256,14 @@ fn library_blob_round_trip() {
         .entries
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(key.clone(), (2, 0x1122_3344_5566_7789));
+        .insert(
+            key.clone(),
+            super::library::Entry {
+                kind: 2,
+                hash: 0x1122_3344_5566_7789,
+                pso: 0,
+            },
+        );
 
     // SAFETY: `first_lib.vtbl.get_serialized_size` is valid on `first_ptr`.
     let size = unsafe { (first_lib.vtbl.get_serialized_size)(first_ptr) };
@@ -290,7 +297,7 @@ fn library_blob_round_trip() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(entries.len(), 1);
         assert_eq!(
-            entries.get(&key).map(|&(_, h)| h),
+            entries.get(&key).map(|e| e.hash),
             Some(0x1122_3344_5566_7789)
         );
     }

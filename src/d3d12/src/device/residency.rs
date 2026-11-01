@@ -178,14 +178,6 @@ pub fn unregister_heap(device: &Device, heap: &Obj) {
     remove_allocation(device.residency.set.as_ref(), heap.handle());
 }
 
-#[cfg(test)]
-fn is_vtbl_probe(this: *mut c_void) -> bool {
-    !this.is_null() && {
-        // SAFETY: `this` points to a valid `Device` in unit tests.
-        unsafe { (*this.cast::<Device>()).min_feature_level == 0 }
-    }
-}
-
 /// `ID3D12Device::MakeResident` (`d3d12_device.cpp:1264`).
 ///
 /// # Safety
@@ -197,10 +189,6 @@ pub unsafe fn make_resident(
     _objects: *const *mut c_void,
 ) -> Hresult {
     crate::scope!("device.MakeResident");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::MakeResident", line!());
-    }
     let _ = Option::from(this);
     S_OK
 }
@@ -212,10 +200,6 @@ pub unsafe fn make_resident(
 /// `this` and `objects` are caller-supplied COM pointers.
 pub unsafe fn evict(this: *mut c_void, _num_objects: u32, _objects: *const *mut c_void) -> Hresult {
     crate::scope!("device.Evict");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::Evict", line!());
-    }
     let _ = Option::from(this);
     S_OK
 }
@@ -232,10 +216,6 @@ pub unsafe fn set_residency_priority(
     _priorities: *const u32,
 ) -> Hresult {
     crate::scope!("device.SetResidencyPriority");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::SetResidencyPriority", line!());
-    }
     let _ = Option::from(this);
     S_OK
 }
@@ -254,10 +234,6 @@ pub unsafe fn enqueue_make_resident(
     fence_value: u64,
 ) -> Hresult {
     crate::scope!("device.EnqueueMakeResident");
-    #[cfg(test)]
-    if is_vtbl_probe(this) {
-        return crate::unimpl::report(file!(), "ID3D12Device::EnqueueMakeResident", line!());
-    }
     let _ = this;
     if fence.is_null() {
         return E_INVALIDARG;

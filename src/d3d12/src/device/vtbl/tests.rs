@@ -2,7 +2,7 @@ use core::{ffi::c_void, ptr};
 
 use crate::{
     abi::vtbl::D3d12CpuDescriptorHandle,
-    com::E_NOTIMPL,
+    com::{E_FAIL, E_INVALIDARG, E_NOTIMPL, S_OK},
     device::{
         Device,
         vtbl::{DEVICE_EXT_VTBL, DEVICE_VTBL},
@@ -31,176 +31,131 @@ fn every_slot_dispatches_to_its_lane() {
     let rc_down = unsafe { (DEVICE_VTBL.release)(this) };
     assert_eq!(rc_down, 1);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid and `out` is a stack pointer; null `riid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.query_interface)(this, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::QueryInterface");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `guid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.get_private_data)(this, n, ptr::null_mut(), nm) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::GetPrivateData");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `guid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.set_private_data)(this, n, 0, n) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetPrivateData");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `guid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.set_private_data_interface)(this, n, n) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetPrivateDataInterface");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `name` clears the debug name (`S_FALSE` when none was set).
     let hr = unsafe { (DEVICE_VTBL.set_name)(this, n) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetName");
+    assert_eq!(hr, crate::com::S_FALSE);
 
-    // SAFETY: stub only logs and returns `0`.
-    let _ = unsafe { (DEVICE_VTBL.get_node_count)(this) };
-    assert_reported("ID3D12Device::GetNodeCount");
+    // SAFETY: `this` is valid.
+    assert_eq!(unsafe { (DEVICE_VTBL.get_node_count)(this) }, 1);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `desc`/`riid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_command_queue)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandQueue");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
-    let hr = unsafe { (DEVICE_VTBL.create_command_allocator)(this, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandAllocator");
+    // SAFETY: `this` is valid; out-of-range `list_type` is rejected.
+    let hr = unsafe { (DEVICE_VTBL.create_command_allocator)(this, u32::MAX, n, &raw mut out) };
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_graphics_pipeline_state)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateGraphicsPipelineState");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_compute_pipeline_state)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateComputePipelineState");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `allocator` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_command_list)(this, 0, 0, nm, nm, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandList");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `data` is rejected.
     let hr = unsafe { (DEVICE_VTBL.check_feature_support)(this, 0, nm, 0) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CheckFeatureSupport");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_descriptor_heap)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateDescriptorHeap");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `0`.
-    let _ = unsafe { (DEVICE_VTBL.get_descriptor_handle_increment_size)(this, 0) };
-    assert_reported("ID3D12Device::GetDescriptorHandleIncrementSize");
+    // SAFETY: `this` is valid.
+    assert!(unsafe { (DEVICE_VTBL.get_descriptor_handle_increment_size)(this, 0) } > 0);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `this` is valid; null/empty `blob` returns `E_FAIL`.
     let hr = unsafe { (DEVICE_VTBL.create_root_signature)(this, 0, n, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateRootSignature");
+    assert_eq!(hr, E_FAIL);
 
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor handle is a safe no-op.
     unsafe { (DEVICE_VTBL.create_constant_buffer_view)(this, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateConstantBufferView");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor handle is a safe no-op.
     unsafe { (DEVICE_VTBL.create_shader_resource_view)(this, nm, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateShaderResourceView");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor handle is a safe no-op.
     unsafe { (DEVICE_VTBL.create_unordered_access_view)(this, nm, nm, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateUnorderedAccessView");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor handle is a safe no-op.
     unsafe { (DEVICE_VTBL.create_render_target_view)(this, nm, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateRenderTargetView");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor handle is a safe no-op.
     unsafe { (DEVICE_VTBL.create_depth_stencil_view)(this, nm, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateDepthStencilView");
-
-    // SAFETY: stub only logs.
+    // SAFETY: null `desc` is a safe no-op.
     unsafe { (DEVICE_VTBL.create_sampler)(this, n, ZERO_HANDLE) };
-    assert_reported("ID3D12Device::CreateSampler");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero range count is a safe no-op.
     unsafe { (DEVICE_VTBL.copy_descriptors)(this, 0, n, ptr::null(), 0, n, ptr::null(), 0) };
-    assert_reported("ID3D12Device::CopyDescriptors");
-
-    // SAFETY: stub only logs.
+    // SAFETY: zero descriptor count is a safe no-op.
     unsafe { (DEVICE_VTBL.copy_descriptors_simple)(this, 0, ZERO_HANDLE, ZERO_HANDLE, 0) };
-    assert_reported("ID3D12Device::CopyDescriptorsSimple");
 
-    // SAFETY: stub only logs and returns `ret`.
-    let _ = unsafe { (DEVICE_VTBL.get_resource_allocation_info)(this, nm, 0, 0, n) };
-    assert_reported("ID3D12Device::GetResourceAllocationInfo");
+    // SAFETY: null `ret` and `descs` returns `ret`.
+    assert!(unsafe { (DEVICE_VTBL.get_resource_allocation_info)(this, nm, 0, 0, n) }.is_null());
+    // SAFETY: null `ret` returns `ret`.
+    assert!(unsafe { (DEVICE_VTBL.get_custom_heap_properties)(this, nm, 0, 0) }.is_null());
 
-    // SAFETY: stub only logs and returns `ret`.
-    let _ = unsafe { (DEVICE_VTBL.get_custom_heap_properties)(this, nm, 0, 0) };
-    assert_reported("ID3D12Device::GetCustomHeapProperties");
-
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `heap_props`/`desc` is rejected.
     let hr =
         unsafe { (DEVICE_VTBL.create_committed_resource)(this, n, 0, n, 0, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommittedResource");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_heap)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateHeap");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `heap`/`desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_placed_resource)(this, nm, 0, n, 0, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreatePlacedResource");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateReservedResource` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_reserved_resource)(this, n, 0, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateReservedResource");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `object` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_shared_handle)(this, nm, n, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateSharedHandle");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `handle` is rejected.
     let hr = unsafe { (DEVICE_VTBL.open_shared_handle)(this, nm, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::OpenSharedHandle");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `OpenSharedHandleByName` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.open_shared_handle_by_name)(this, n, 0, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::OpenSharedHandleByName");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `MakeResident` and `Evict` are no-ops returning `S_OK`.
     let hr = unsafe { (DEVICE_VTBL.make_resident)(this, 0, ptr::null()) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::MakeResident");
-
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    assert_eq!(hr, S_OK);
+    // SAFETY: `Evict` is a no-op returning `S_OK`.
     let hr = unsafe { (DEVICE_VTBL.evict)(this, 0, ptr::null()) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::Evict");
+    assert_eq!(hr, S_OK);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `riid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_fence)(this, 0, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateFence");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `GetDeviceRemovedReason` returns `S_OK`.
     let hr = unsafe { (DEVICE_VTBL.get_device_removed_reason)(this) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::GetDeviceRemovedReason");
+    assert_eq!(hr, S_OK);
 
-    // SAFETY: stub only logs.
+    // SAFETY: null `desc` and out-pointers is a safe no-op.
     unsafe {
         (DEVICE_VTBL.get_copyable_footprints)(
             this,
@@ -214,24 +169,20 @@ fn every_slot_dispatches_to_its_lane() {
             ptr::null_mut(),
         );
     };
-    assert_reported("ID3D12Device::GetCopyableFootprints");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_query_heap)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateQueryHeap");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `SetStablePowerState` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.set_stable_power_state)(this, 0) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetStablePowerState");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_command_signature)(this, n, nm, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandSignature");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs.
+    // SAFETY: `GetResourceTiling` is a `not_implemented!` stub.
     unsafe {
         (DEVICE_VTBL.get_resource_tiling)(
             this,
@@ -246,16 +197,15 @@ fn every_slot_dispatches_to_its_lane() {
     };
     assert_reported("ID3D12Device::GetResourceTiling");
 
-    // SAFETY: stub only logs and returns `ret`.
-    let _ = unsafe { (DEVICE_VTBL.get_adapter_luid)(this, nm) };
-    assert_reported("ID3D12Device::GetAdapterLuid");
+    // SAFETY: null `ret` returns `ret`.
+    let ret = unsafe { (DEVICE_VTBL.get_adapter_luid)(this, nm) };
+    assert!(ret.is_null());
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `riid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_pipeline_library)(this, n, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreatePipelineLibrary");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: zero fence count is a no-op returning `S_OK`.
     let hr = unsafe {
         (DEVICE_VTBL.set_event_on_multiple_fence_completion)(
             this,
@@ -266,81 +216,66 @@ fn every_slot_dispatches_to_its_lane() {
             nm,
         )
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetEventOnMultipleFenceCompletion");
+    assert_eq!(hr, S_OK);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `SetResidencyPriority` is a no-op returning `S_OK`.
     let hr = unsafe { (DEVICE_VTBL.set_residency_priority)(this, 0, ptr::null(), ptr::null()) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetResidencyPriority");
+    assert_eq!(hr, S_OK);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_pipeline_state)(this, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreatePipelineState");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `OpenExistingHeapFromAddress` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.open_existing_heap_from_address)(this, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::OpenExistingHeapFromAddress");
-
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `OpenExistingHeapFromFileMapping` returns `E_NOTIMPL`.
     let hr =
         unsafe { (DEVICE_VTBL.open_existing_heap_from_file_mapping)(this, nm, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::OpenExistingHeapFromFileMapping");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `fence` is rejected.
     let hr = unsafe { (DEVICE_VTBL.enqueue_make_resident)(this, 0, 0, ptr::null(), nm, 0) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::EnqueueMakeResident");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `riid` is rejected with `E_NOINTERFACE`.
     let hr = unsafe { (DEVICE_VTBL.create_command_list1)(this, 0, 0, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandList1");
+    assert_eq!(hr, crate::com::E_NOINTERFACE);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateProtectedResourceSession` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_protected_resource_session)(this, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateProtectedResourceSession");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `heap_props`/`desc` is rejected.
     let hr = unsafe {
         (DEVICE_VTBL.create_committed_resource1)(this, n, 0, n, 0, n, nm, n, &raw mut out)
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommittedResource1");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_heap1)(this, n, nm, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateHeap1");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateReservedResource1` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_reserved_resource1)(this, n, 0, n, nm, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateReservedResource1");
 
-    // SAFETY: stub only logs and returns `ret`.
-    let _ = unsafe { (DEVICE_VTBL.get_resource_allocation_info1)(this, nm, 0, 0, n, nm) };
-    assert_reported("ID3D12Device::GetResourceAllocationInfo1");
+    // SAFETY: null `ret` returns `ret`.
+    let ret = unsafe { (DEVICE_VTBL.get_resource_allocation_info1)(this, nm, 0, 0, n, nm) };
+    assert!(ret.is_null());
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateLifetimeTracker` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_lifetime_tracker)(this, nm, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateLifetimeTracker");
 
-    // SAFETY: stub only logs.
+    // SAFETY: `RemoveDevice` is a safe no-op.
     unsafe { (DEVICE_VTBL.remove_device)(this) };
-    assert_reported("ID3D12Device::RemoveDevice");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `num_meta_commands` is rejected.
     let hr = unsafe { (DEVICE_VTBL.enumerate_meta_commands)(this, ptr::null_mut(), nm) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::EnumerateMetaCommands");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `EnumerateMetaCommandParameters` returns `E_INVALIDARG`.
     let hr = unsafe {
         (DEVICE_VTBL.enumerate_meta_command_parameters)(
             this,
@@ -351,67 +286,56 @@ fn every_slot_dispatches_to_its_lane() {
             nm,
         )
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::EnumerateMetaCommandParameters");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateMetaCommand` returns `E_INVALIDARG`.
     let hr = unsafe { (DEVICE_VTBL.create_meta_command)(this, n, 0, n, 0, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateMetaCommand");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateStateObject` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_state_object)(this, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateStateObject");
 
-    // SAFETY: stub only logs.
+    // SAFETY: null `info` is a safe no-op.
     unsafe { (DEVICE_VTBL.get_raytracing_acceleration_structure_prebuild_info)(this, n, nm) };
-    assert_reported("ID3D12Device::GetRaytracingAccelerationStructurePrebuildInfo");
 
-    // SAFETY: stub only logs and returns `0`.
-    let _ = unsafe { (DEVICE_VTBL.check_driver_matching_identifier)(this, 0, n) };
-    assert_reported("ID3D12Device::CheckDriverMatchingIdentifier");
+    // SAFETY: returns `D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE` (`1`).
+    let id_status = unsafe { (DEVICE_VTBL.check_driver_matching_identifier)(this, 0, n) };
+    assert_eq!(id_status, 1);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `further_desired` returns `S_OK`.
     let hr =
         unsafe { (DEVICE_VTBL.set_background_processing_mode)(this, 0, 0, nm, ptr::null_mut()) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::SetBackgroundProcessingMode");
+    assert_eq!(hr, S_OK);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `AddToStateObject` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.add_to_state_object)(this, n, nm, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::AddToStateObject");
-
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateProtectedResourceSession1` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_protected_resource_session1)(this, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateProtectedResourceSession1");
 
-    // SAFETY: stub only logs and returns `ret`.
-    let _ = unsafe { (DEVICE_VTBL.get_resource_allocation_info2)(this, nm, 0, 0, n, nm) };
-    assert_reported("ID3D12Device::GetResourceAllocationInfo2");
+    // SAFETY: null `ret` returns `ret`.
+    let ret = unsafe { (DEVICE_VTBL.get_resource_allocation_info2)(this, nm, 0, 0, n, nm) };
+    assert!(ret.is_null());
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr = unsafe {
         (DEVICE_VTBL.create_committed_resource2)(this, n, 0, n, 0, n, nm, n, &raw mut out)
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommittedResource2");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr =
         unsafe { (DEVICE_VTBL.create_placed_resource1)(this, nm, 0, n, 0, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreatePlacedResource1");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs.
+    // SAFETY: logs a warning and returns.
     unsafe {
         (DEVICE_VTBL.create_sampler_feedback_unordered_access_view)(this, nm, nm, ZERO_HANDLE);
     };
-    assert_reported("ID3D12Device::CreateSamplerFeedbackUnorderedAccessView");
 
-    // SAFETY: stub only logs.
+    // SAFETY: null `desc` and out-pointers is a safe no-op.
     unsafe {
         (DEVICE_VTBL.get_copyable_footprints1)(
             this,
@@ -425,24 +349,19 @@ fn every_slot_dispatches_to_its_lane() {
             ptr::null_mut(),
         );
     };
-    assert_reported("ID3D12Device::GetCopyableFootprints1");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateShaderCacheSession` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.create_shader_cache_session)(this, n, n, &raw mut out) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateShaderCacheSession");
-
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `ShaderCacheControl` returns `E_NOTIMPL`.
     let hr = unsafe { (DEVICE_VTBL.shader_cache_control)(this, 0, 0) };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::ShaderCacheControl");
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc`/`riid` is rejected.
     let hr = unsafe { (DEVICE_VTBL.create_command_queue1)(this, n, n, n, &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommandQueue1");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `heap_props` is rejected.
     let hr = unsafe {
         (DEVICE_VTBL.create_committed_resource3)(
             this,
@@ -458,10 +377,9 @@ fn every_slot_dispatches_to_its_lane() {
             &raw mut out,
         )
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateCommittedResource3");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `heap` is rejected.
     let hr = unsafe {
         (DEVICE_VTBL.create_placed_resource2)(
             this,
@@ -476,10 +394,9 @@ fn every_slot_dispatches_to_its_lane() {
             &raw mut out,
         )
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreatePlacedResource2");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: `CreateReservedResource2` returns `E_NOTIMPL`.
     let hr = unsafe {
         (DEVICE_VTBL.create_reserved_resource2)(
             this,
@@ -494,7 +411,6 @@ fn every_slot_dispatches_to_its_lane() {
         )
     };
     assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::CreateReservedResource2");
 
     // Companion vtable (`IMTLD3D12DeviceExt`) seated at `Device::EXT_OFFSET`.
     // SAFETY: `this` points to a live `Device`; `EXT_OFFSET` is within `Device`.
@@ -507,13 +423,12 @@ fn every_slot_dispatches_to_its_lane() {
     let ext_down = unsafe { (DEVICE_EXT_VTBL.unknown.release)(ext_this) };
     assert_eq!(ext_down, 1);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `riid` is rejected.
     let hr =
         unsafe { (DEVICE_EXT_VTBL.unknown.query_interface)(ext_this, ptr::null(), &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("ID3D12Device::QueryInterface");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null out-pointers are rejected.
     let hr = unsafe {
         (DEVICE_EXT_VTBL.get_temporal_scaler_scale_range)(
             ext_this,
@@ -521,14 +436,12 @@ fn every_slot_dispatches_to_its_lane() {
             ptr::null_mut(),
         )
     };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("IMTLD3D12DeviceExt::GetTemporalScalerScaleRange");
+    assert_eq!(hr, E_INVALIDARG);
 
-    // SAFETY: stub only logs and returns `E_NOTIMPL`.
+    // SAFETY: null `desc` is rejected.
     let hr =
         unsafe { (DEVICE_EXT_VTBL.create_temporal_scaler)(ext_this, ptr::null(), &raw mut out) };
-    assert_eq!(hr, E_NOTIMPL);
-    assert_reported("IMTLD3D12DeviceExt::CreateTemporalScaler");
+    assert_eq!(hr, E_INVALIDARG);
 
     // Final release drops the boxed `Device`.
     // SAFETY: `this` has refcount 1 and was allocated by `Box::into_raw`.

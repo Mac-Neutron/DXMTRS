@@ -1,15 +1,7 @@
 //! Unit tests for command-list state, root arguments, draws, and dispatches.
 
-use core::{
-    alloc::{GlobalAlloc, Layout},
-    cell::Cell,
-    ffi::c_void,
-    ptr,
-};
-use std::{
-    alloc::{self, System},
-    sync::Mutex,
-};
+use core::{alloc::Layout, ffi::c_void, ptr};
+use std::alloc;
 
 use dxmt_util::{
     com::{ComObject, S_OK},
@@ -42,63 +34,8 @@ use crate::{
         },
     },
     pipeline::Graphics,
+    tests::count_allocs,
 };
-
-struct CountingAlloc;
-
-thread_local! {
-    static COUNTING: Cell<bool> = const { Cell::new(false) };
-    static ALLOCS: Cell<usize> = const { Cell::new(0) };
-}
-
-// SAFETY: delegates every allocation call directly to `std::alloc::System`.
-unsafe impl GlobalAlloc for CountingAlloc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::alloc` with caller's layout.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::alloc_zeroed` with caller's layout.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = COUNTING.try_with(|on| {
-            if on.get() {
-                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-            }
-        });
-        // SAFETY: forwarded to `System::realloc` with caller's arguments.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: forwarded to `System::dealloc` with caller's arguments.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
-
-fn count_allocs<F: FnOnce()>(f: F) -> usize {
-    ALLOCS.with(|c| c.set(0));
-    COUNTING.with(|on| on.set(true));
-    f();
-    COUNTING.with(|on| on.set(false));
-    ALLOCS.with(Cell::get)
-}
 
 const CPU_ALIGN: usize = 4096;
 const GPU_ALIGN: usize = 16384;
@@ -109,28 +46,7 @@ fn new_test_graphics_pso() -> Box<Graphics> {
     let vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12PipelineStateVtbl>() };
     // SAFETY: `crate::tests` provides no-op `NSObject_retain`/`NSObject_release` for unit tests.
     let pso = unsafe { Obj::adopt(1) };
-    Box::new(Graphics {
-        vtbl,
-        com: ComObject::new(),
-        private_data: PrivateData::default(),
-        device: ptr::null_mut(),
-        is_compute: false,
-        desc_hash: 0,
-        pso,
-        slot_mask: 0,
-        fill_mode: 0,
-        cull_mode: 0,
-        depth_clip_mode: 0,
-        winding: 0,
-        depth_bias: 0.0,
-        slope_scale: 0.0,
-        depth_bias_clamp: 0.0,
-        forced_sample_count: 0,
-        geometry: false,
-        writes_uav: false,
-        depth_stencil_states: [const { None }; 6],
-        geometry_variants: Mutex::new([const { None }; 6]),
-    })
+    Graphics::new_dummy(vtbl, pso)
 }
 
 fn new_test_allocator(list_type: u32) -> *mut Allocator {

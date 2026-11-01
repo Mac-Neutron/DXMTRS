@@ -1,10 +1,12 @@
 //! `ID3D12PipelineLibrary1` (`d3d12_pipeline_library.cpp`): `DXMTPLB1` serialization and loading.
 
 use core::{ffi::c_void, ptr};
-use std::sync::{Mutex, PoisonError};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, PoisonError},
+};
 
 use dxmt_util::{com::ComObject, private_data::PrivateData};
-use rustc_hash::FxHashMap;
 
 use crate::{
     abi::vtbl::{ID3D12PipelineLibrary1Vtbl, IUnknownVtbl},
@@ -39,6 +41,13 @@ const WCHAR_U16S: usize = 1;
 #[cfg(not(windows))]
 const WCHAR_U16S: usize = 2;
 
+/// Entry in `MTLD3D12PipelineLibrary::entries_` (`d3d12_pipeline_library.cpp:90`).
+pub struct Entry {
+    pub kind: u8,
+    pub hash: u64,
+    pub pso: usize,
+}
+
 /// `MTLD3D12PipelineLibrary` (`d3d12_pipeline_library.cpp:89`).
 #[repr(C)]
 pub struct PipelineLibrary {
@@ -46,8 +55,7 @@ pub struct PipelineLibrary {
     pub com: ComObject,
     pub private_data: PrivateData,
     pub device: *mut Device,
-    pub entries: Mutex<FxHashMap<Vec<u16>, (u8, u64)>>,
-    psos: Mutex<FxHashMap<Vec<u16>, usize>>,
+    pub entries: Mutex<BTreeMap<Vec<u16>, Entry>>,
 }
 
 impl ComRefCounted for PipelineLibrary {
@@ -58,16 +66,16 @@ impl ComRefCounted for PipelineLibrary {
 
 impl Drop for PipelineLibrary {
     fn drop(&mut self) {
-        let retained: Vec<usize> = {
-            let mut map = self.psos.lock().unwrap_or_else(PoisonError::into_inner);
-            map.drain().map(|(_, addr)| addr).collect()
-        };
-        for pso_addr in retained {
-            let pso_ptr = ptr::with_exposed_provenance_mut::<c_void>(pso_addr);
-            // SAFETY: `pso_ptr` is a live COM object with one reference owned by `self`.
-            let unk = unsafe { vtbl::<IUnknownVtbl>(pso_ptr) };
-            // SAFETY: Releases the reference acquired in `store_pipeline` or `load`.
-            unsafe { (unk.release)(pso_ptr) };
+        let entries =
+            core::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner));
+        for (_, entry) in entries {
+            if entry.pso != 0 {
+                let pso_ptr = ptr::with_exposed_provenance_mut::<c_void>(entry.pso);
+                // SAFETY: `pso_ptr` is a live COM object with one reference owned by `self`.
+                let unk = unsafe { vtbl::<IUnknownVtbl>(pso_ptr) };
+                // SAFETY: Releases the reference acquired in `store_pipeline` or `load`.
+                unsafe { (unk.release)(pso_ptr) };
+            }
         }
         if !self.device.is_null() {
             // SAFETY: `self.device` was `add_ref_com`'d when `self` was constructed.
@@ -118,8 +126,8 @@ unsafe fn read_wchar_name(name: *const c_void) -> Vec<u16> {
 unsafe fn initialize(
     blob: *const c_void,
     size: usize,
-) -> Result<FxHashMap<Vec<u16>, (u8, u64)>, Hresult> {
-    let mut entries = FxHashMap::default();
+) -> Result<BTreeMap<Vec<u16>, Entry>, Hresult> {
+    let mut entries = BTreeMap::new();
     if blob.is_null() || size == 0 {
         return Ok(entries);
     }
@@ -172,9 +180,46 @@ unsafe fn initialize(
             bytes[off + 7],
         ]);
         off += 8;
-        entries.insert(name, (KIND_ANY, hash));
+        entries.insert(
+            name,
+            Entry {
+                kind: KIND_ANY,
+                hash,
+                pso: 0,
+            },
+        );
     }
     Ok(entries)
+}
+
+fn load_entry<F>(
+    entries: &mut BTreeMap<Vec<u16>, Entry>,
+    name: &[u16],
+    kind: u8,
+    hash: u64,
+    create: F,
+) -> Result<*mut c_void, Hresult>
+where
+    F: FnOnce(*mut *mut c_void) -> Hresult,
+{
+    let Some(entry) = entries.get_mut(name) else {
+        return Err(E_INVALIDARG);
+    };
+    if (entry.kind != KIND_ANY && entry.kind != kind) || entry.hash != hash {
+        return Err(E_INVALIDARG);
+    }
+    if entry.pso != 0 {
+        Ok(ptr::with_exposed_provenance_mut::<c_void>(entry.pso))
+    } else {
+        let mut new_pso: *mut c_void = ptr::null_mut();
+        let hr = create(&raw mut new_pso);
+        if hr < 0 || new_pso.is_null() {
+            return Err(hr);
+        }
+        entry.kind = kind;
+        entry.pso = new_pso.expose_provenance();
+        Ok(new_pso)
+    }
 }
 
 unsafe fn load<F>(
@@ -196,39 +241,59 @@ where
     }
     // SAFETY: `name_ptr` is non-null.
     let name = unsafe { read_wchar_name(name_ptr) };
-    let entries = lib.entries.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(&(entry_kind, entry_hash)) = entries.get(&name) else {
-        return E_INVALIDARG;
+    let value = load_entry(
+        &mut lib.entries.lock().unwrap_or_else(PoisonError::into_inner),
+        &name,
+        kind,
+        hash,
+        create,
+    );
+    let pso_ptr = match value {
+        Ok(ptr) => ptr,
+        Err(hr) => return hr,
     };
-    if (entry_kind != KIND_ANY && entry_kind != kind) || entry_hash != hash {
-        return E_INVALIDARG;
-    }
-    let mut psos = lib.psos.lock().unwrap_or_else(PoisonError::into_inner);
-    let pso_ptr = if let Some(&addr) = psos.get(&name) {
-        ptr::with_exposed_provenance_mut::<c_void>(addr)
-    } else {
-        let mut new_pso: *mut c_void = ptr::null_mut();
-        let hr = create(&raw mut new_pso);
-        if hr < 0 || new_pso.is_null() {
-            return hr;
-        }
-        psos.insert(name, new_pso.expose_provenance());
-        new_pso
-    };
-    drop(psos);
-    drop(entries);
-    // SAFETY: `pso_ptr` is kept alive by `lib.psos`.
+    // SAFETY: `pso_ptr` is kept alive by `lib.entries` for the lifetime of `lib`.
     let unk = unsafe { vtbl::<IUnknownVtbl>(pso_ptr) };
     // SAFETY: Forwards `QueryInterface` to `pso_ptr`.
     unsafe { (unk.query_interface)(pso_ptr, riid, pp) }
 }
 
-fn serialized_size(entries: &FxHashMap<Vec<u16>, (u8, u64)>) -> usize {
+fn serialized_size(entries: &BTreeMap<Vec<u16>, Entry>) -> usize {
     let mut size = HEADER_SIZE;
     for name in entries.keys() {
         size += 4 + name.len() * 2 + 8;
     }
     size
+}
+
+fn serialize_entries(
+    entries: &BTreeMap<Vec<u16>, Entry>,
+    data: *mut c_void,
+    data_size_in_bytes: usize,
+) -> Hresult {
+    let needed = serialized_size(entries);
+    if data.is_null() || data_size_in_bytes < needed {
+        return E_INVALIDARG;
+    }
+    let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+    // SAFETY: `data` is non-null and writable for `needed` bytes.
+    let out = unsafe { core::slice::from_raw_parts_mut(data.cast::<u8>(), needed) };
+    out[..8].copy_from_slice(&MAGIC);
+    out[8..12].copy_from_slice(&VERSION.to_le_bytes());
+    out[12..16].copy_from_slice(&count.to_le_bytes());
+    let mut off = HEADER_SIZE;
+    for (name, entry) in entries {
+        let chars = u32::try_from(name.len() / WCHAR_U16S).unwrap_or(u32::MAX);
+        out[off..off + 4].copy_from_slice(&chars.to_le_bytes());
+        off += 4;
+        for &unit in name {
+            out[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+            off += 2;
+        }
+        out[off..off + 8].copy_from_slice(&entry.hash.to_le_bytes());
+        off += 8;
+    }
+    S_OK
 }
 
 static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
@@ -335,7 +400,7 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
                 return E_INVALIDARG;
             }
             // SAFETY: `pipeline` is non-null.
-            let Some(kind_and_hash) = (unsafe {
+            let Some((kind, hash)) = (unsafe {
                 cast_pipeline(pipeline).map(|k| match k {
                     PipelineKind::Graphics(g) => (KIND_GRAPHICS, g.desc_hash),
                     PipelineKind::Compute(c) => (KIND_COMPUTE, c.desc_hash),
@@ -353,14 +418,16 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
             }
             // SAFETY: `pipeline` is a valid `ID3D12PipelineState` COM object.
             let unk = unsafe { vtbl::<IUnknownVtbl>(pipeline) };
-            // SAFETY: Retain `pipeline` for `lib.psos`.
+            // SAFETY: Retain `pipeline` for `lib.entries`.
             unsafe { (unk.add_ref)(pipeline) };
-            entries.insert(name.clone(), kind_and_hash);
-            drop(entries);
-            lib.psos
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(name, pipeline.expose_provenance());
+            entries.insert(
+                name,
+                Entry {
+                    kind,
+                    hash,
+                    pso: pipeline.expose_provenance(),
+                },
+            );
             S_OK
         }
     ),
@@ -437,8 +504,7 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
         (this: *mut c_void) -> usize => {
             // SAFETY: `this` is a live `PipelineLibrary`.
             let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            let entries = lib.entries.lock().unwrap_or_else(PoisonError::into_inner);
-            serialized_size(&entries)
+            serialized_size(&lib.entries.lock().unwrap_or_else(PoisonError::into_inner))
         }
     ),
     serialize: crate::slot!(
@@ -446,34 +512,11 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
         (this: *mut c_void, data: *mut c_void, data_size_in_bytes: usize) -> Hresult => {
             // SAFETY: `this` is a live `PipelineLibrary`.
             let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            let entries = lib.entries.lock().unwrap_or_else(PoisonError::into_inner);
-            let needed = serialized_size(&entries);
-            if data.is_null() || data_size_in_bytes < needed {
-                return E_INVALIDARG;
-            }
-            let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
-            let mut sorted: Vec<(Vec<u16>, u64)> =
-                entries.iter().map(|(n, &(_, h))| (n.clone(), h)).collect();
-            drop(entries);
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            // SAFETY: `data` is non-null and writable for `needed` bytes.
-            let out = unsafe { core::slice::from_raw_parts_mut(data.cast::<u8>(), needed) };
-            out[..8].copy_from_slice(&MAGIC);
-            out[8..12].copy_from_slice(&VERSION.to_le_bytes());
-            out[12..16].copy_from_slice(&count.to_le_bytes());
-            let mut off = HEADER_SIZE;
-            for (name, hash) in &sorted {
-                let chars = u32::try_from(name.len() / WCHAR_U16S).unwrap_or(u32::MAX);
-                out[off..off + 4].copy_from_slice(&chars.to_le_bytes());
-                off += 4;
-                for &unit in name {
-                    out[off..off + 2].copy_from_slice(&unit.to_le_bytes());
-                    off += 2;
-                }
-                out[off..off + 8].copy_from_slice(&hash.to_le_bytes());
-                off += 8;
-            }
-            S_OK
+            serialize_entries(
+                &lib.entries.lock().unwrap_or_else(PoisonError::into_inner),
+                data,
+                data_size_in_bytes,
+            )
         }
     ),
     load_pipeline: crate::slot!(
@@ -572,7 +615,6 @@ pub unsafe fn create_pipeline_library(
         private_data: PrivateData::default(),
         device,
         entries: Mutex::new(entries),
-        psos: Mutex::new(FxHashMap::default()),
     }));
     // SAFETY: `raw` is a freshly allocated `PipelineLibrary` with 1 initial public ref.
     let hr = unsafe { (VTBL.query_interface)(raw.cast::<c_void>(), riid, library) };

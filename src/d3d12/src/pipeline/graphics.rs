@@ -338,7 +338,10 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
     get_cached_blob: crate::slot!(
         "gfxpso.GetCachedBlob",
         (_this: *mut c_void, pp_blob: *mut *mut c_void) -> Hresult => {
-            // SAFETY: `pp_blob` is validated by `create_blob` (`E_POINTER` if null).
+            if pp_blob.is_null() {
+                return E_POINTER;
+            }
+            // SAFETY: `pp_blob` is non-null.
             unsafe { create_blob(Vec::new(), pp_blob) }
         }
     ),
@@ -1581,4 +1584,35 @@ pub unsafe fn create_graphics_pipeline_state(
     // SAFETY: Release the initial ref from `ComObject::new()`.
     unsafe { release_com(raw) };
     hr
+}
+
+#[cfg(test)]
+impl Graphics {
+    /// Allocates a dummy graphics pipeline state for unit tests.
+    #[must_use]
+    pub fn new_dummy(vtbl: &'static ID3D12PipelineStateVtbl, pso: Option<Obj>) -> Box<Self> {
+        Box::new(Self {
+            vtbl,
+            com: ComObject::with_initial_ref(),
+            private_data: PrivateData::default(),
+            device: ptr::null_mut(),
+            is_compute: false,
+            desc_hash: 0,
+            pso,
+            slot_mask: 0,
+            fill_mode: 0,
+            cull_mode: 0,
+            depth_clip_mode: 0,
+            winding: 0,
+            depth_bias: 0.0,
+            slope_scale: 0.0,
+            depth_bias_clamp: 0.0,
+            forced_sample_count: 0,
+            geometry: false,
+            writes_uav: false,
+            depth_stencil_states: [const { None }; 6],
+            geometry_variants: Mutex::new([const { None }; 6]),
+            geometry_state: None,
+        })
+    }
 }

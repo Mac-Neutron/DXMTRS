@@ -285,7 +285,8 @@ unsafe extern "system-unwind" fn fence_set_event_on_completion(
     }
     // SAFETY: `this` is a live `FenceObject`.
     let obj = unsafe { &*this.cast::<FenceObject>() };
-    let completed = obj.fence.completed_value();
+    // SAFETY: `this` is a live `FenceObject`.
+    let completed = unsafe { fence_get_completed_value(this) };
     complete_or_wait(
         completed,
         value,

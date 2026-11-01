@@ -74,7 +74,9 @@ macro_rules! scope {
 #[cfg(feature = "perf-build")]
 #[macro_export]
 macro_rules! scope {
-    ($name:literal) => {};
+    ($name:literal) => {
+        let _ = ::core::option::Option::from(());
+    };
 }
 
 /// `DXMT_STAT_COUNT($name, $delta)`: increments counter `$name` by `$delta` when `DXMT_STATS=1`.

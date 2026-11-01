@@ -25,11 +25,12 @@ pub const fn dxil_capture_mode() -> bool {
     false
 }
 
-/// Returns whether SM6 capabilities should be advertised (`SM6Caps`, `d3d12_dxil_dump.cpp:89`).
+/// Returns whether SM6 capabilities should be advertised (`SM6Caps`, `d3d12_dxil_dump.cpp:42`).
 #[must_use]
 pub fn sm6_caps() -> bool {
-    static YES: LazyLock<bool> =
-        LazyLock::new(|| !std::env::var("DXMT_SM6").is_ok_and(|v| v == "0"));
+    static YES: LazyLock<bool> = LazyLock::new(|| {
+        dxil_capture_mode() || !std::env::var("DXMT_D3D12_SM6").is_ok_and(|v| v == "0")
+    });
     *YES
 }
 
@@ -48,38 +49,48 @@ pub fn capture_hash(bytes: &[u8]) -> u64 {
 
 #[cfg(not(feature = "perf-build"))]
 fn dxil_stage(bytecode: &[u8]) -> Option<&'static str> {
+    const STAGES: [&str; 16] = [
+        "ps",
+        "vs",
+        "gs",
+        "hs",
+        "ds",
+        "cs",
+        "lib",
+        "raygen",
+        "intersection",
+        "anyhit",
+        "closesthit",
+        "miss",
+        "callable",
+        "ms",
+        "as",
+        "node",
+    ];
     if bytecode.len() < 32 || &bytecode[..4] != b"DXBC" {
         return None;
     }
     let count = usize::try_from(u32::from_le_bytes(bytecode[28..32].try_into().ok()?)).ok()?;
-    let index_end = count.checked_mul(4)?.checked_add(32)?;
-    if index_end > bytecode.len() {
-        return None;
-    }
     for i in 0..count {
-        let off_at = 32 + i * 4;
+        let off_at = 32usize.checked_add(i.checked_mul(4)?)?;
+        let off_end = off_at.checked_add(4)?;
+        if off_end > bytecode.len() {
+            break;
+        }
         let off = usize::try_from(u32::from_le_bytes(
-            bytecode[off_at..off_at + 4].try_into().ok()?,
+            bytecode[off_at..off_end].try_into().ok()?,
         ))
         .ok()?;
-        let Some(end) = off.checked_add(16) else {
+        let Some(end) = off.checked_add(12) else {
             continue;
         };
         if end > bytecode.len() || &bytecode[off..off + 4] != b"DXIL" {
             continue;
         }
-        let ver = u16::from_le_bytes(bytecode[off + 10..off + 12].try_into().ok()?);
-        return Some(match ver >> 12 {
-            0 => "ps",
-            1 => "vs",
-            2 => "gs",
-            3 => "hs",
-            4 => "ds",
-            5 => "cs",
-            13 => "ms",
-            14 => "as",
-            _ => "sh",
-        });
+        let kind = usize::from(u16::from_le_bytes(
+            bytecode[off + 10..off + 12].try_into().ok()?,
+        ));
+        return Some(STAGES.get(kind).copied().unwrap_or("unknown"));
     }
     None
 }
@@ -155,9 +166,9 @@ pub const fn make_capture_folder(_name: &str) -> bool {
 
 /// Associates a human-readable pipeline description with `pso` handle (`NamePipeline`,
 ///
-/// `d3d12_dxil_dump.cpp:104`).
+/// `d3d12_dxil_dump.cpp:91`).
 pub fn name_pipeline(pso: u64, name: String) {
-    if pso == 0 {
+    if !dxil_capture_mode() || pso == 0 {
         return;
     }
     PIPELINE_NAMES
@@ -166,18 +177,15 @@ pub fn name_pipeline(pso: u64, name: String) {
         .insert(pso, name);
 }
 
-/// Looks up the description recorded for `pso` handle (`PipelineName`, `d3d12_dxil_dump.cpp:112`).
+/// Looks up the description recorded for `pso` handle (`PipelineName`, `d3d12_dxil_dump.cpp:98`).
 #[must_use]
 pub fn pipeline_name(pso: u64) -> String {
-    if pso == 0 {
-        return String::new();
-    }
     PIPELINE_NAMES
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&pso)
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_else(|| format!("pso-{pso:x}"))
 }
 
 /// Formats `" <name>=<16-hex-hash>"` for a non-empty shader bytecode (`CapturedShader`,
