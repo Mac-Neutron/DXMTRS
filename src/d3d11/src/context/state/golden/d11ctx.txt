@@ -1,0 +1,22 @@
+d11ctx imm_qi_null hr=80004003
+d11ctx imm_qi iid=IUnknown hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceChild hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceContext hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceContext1 hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceContext2 hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceContext3 hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3D11DeviceContext4 hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=ID3DUserDefinedAnnotation hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=IMTLD3D11DeviceContext hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=IMTLD3D11ContextExt hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=IMTLD3D11ContextExt1 hr=00000000 out=ptr id=1
+d11ctx imm_qi iid=IMTLD3D11ContextExt2 hr=80004002 out=null id=0
+d11ctx imm_qi iid=ID3D11VideoContext hr=80004002 out=null id=0
+d11ctx imm_qi iid=Bogus hr=80004002 out=null id=0
+d11ctx imm_getdev match=1 ref_delta=1,0
+d11ctx imm_pdata unset=887a0002 set=00000000 qsz=00000000/4 small=887a0003/4 get=00000000/abcdef01 del=00000000 after=887a0002 if_set=00000000(1->2) if_get=00000000(3) if_repl=00000000(1) if_clr=00000000(1)
+d11ctx imm_meta type=0 flags=00000000
+d11ctx bind_roundtrip vb=1/16/4 ib=1/57/8 topo=4 cb1=1/4/8 srv=1 samp=1 rtv=1 vp=16,16 sc=15,16 so=1 lod=1.0,0.0
+d11ctx clear_state topo=0 bs=0 bf=0,0,0,0 sm=ffffffff ds=0 sref=0 nvp=0
+d11ctx swap_dcs prev=1 topo_swapped=0 topo_restored=2
+d11ctx map dyn_r=80070057 dyn_w=80070057 dyn_disc=00000000 dyn_noov=00000000 stg_disc=80070057 stg_idle=00000000 stg_busy=887a000a stg_wait=00000000(11223344)
