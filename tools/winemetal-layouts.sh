@@ -592,7 +592,9 @@ if [ "$mode" = com ]; then
           iface = order[k]
           if (!(iface in has_v)) { print "E no interface " iface "Vtbl"; exit 1 }
           nf = v_nf[iface]
-          body = body "/// `" iface "Vtbl`: `" iface "`'\''s " nf " slots.\n#[repr(C)]\npub struct " iface "Vtbl {\n"
+          doc = "/// `" iface "Vtbl`: `" iface "`'\''s " nf " slots."
+          if (length(doc) > 100) doc = "/// `" iface "`'\''s " nf " slots."
+          body = body doc "\n#[repr(C)]\npub struct " iface "Vtbl {\n"
           p_idx++
           probe_body = probe_body "  com_p_" p_idx " = sizeof(struct " iface "Vtbl),\n"
           printf "I\t%s\tcom_p_%d\n", iface, p_idx > meta

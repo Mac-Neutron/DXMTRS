@@ -1,0 +1,31 @@
+t=1000 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=1250 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=1500 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=1600 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=2000 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=2000
+t=2499 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=2000
+t=2500 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=3000 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=3000
+t=3499 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=3000
+macneutron-framegen: on at 50 fps (display 120 Hz): a frame generated between each two
+t=3500 decision=1 wait=0.000000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=3600 decision=1 wait=0.002000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=4000 decision=1 wait=0.002500 learned_cap=0.000000 learned_at=0 holding_since=4000
+t=4499 decision=1 wait=0.002500 learned_cap=0.000000 learned_at=0 holding_since=4000
+t=4500 decision=1 wait=0.001000 learned_cap=0.000000 learned_at=0 holding_since=0
+t=5000 decision=1 wait=0.003000 learned_cap=0.000000 learned_at=0 holding_since=5000
+t=5499 decision=1 wait=0.003000 learned_cap=0.000000 learned_at=0 holding_since=5000
+macneutron-framegen: off at 40 fps (display 120 Hz): generating held the game back, frames presented as rendered
+t=5500 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=6000 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=6500 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=6600 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=7000 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=7500 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=7600 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=64900 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=65499 decision=0 wait=0.000000 learned_cap=0.025000 learned_at=5500 holding_since=0
+t=65500 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=5500 holding_since=65500
+t=65999 decision=0 wait=0.000000 learned_cap=0.000000 learned_at=5500 holding_since=65500
+macneutron-framegen: on at 38 fps (display 120 Hz): a frame generated between each two
+t=66000 decision=1 wait=0.000000 learned_cap=0.000000 learned_at=5500 holding_since=0

@@ -147,8 +147,13 @@ dependencies = [
 name = "d3d12"
 version = "0.14.1"
 dependencies = [
+ "airconv-ir",
+ "bitflags 2.13.2",
  "dxmt-core",
  "dxmt-util",
+ "libc",
+ "rustc-hash",
+ "winemetal-sys",
  "winemetal-wire",
 ]
 

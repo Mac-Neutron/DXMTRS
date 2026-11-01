@@ -153,6 +153,18 @@ leg_gen() {
     IDXGIFactory IDXGIFactory1 IDXGIFactory2 \
     IDXGIOutput IDXGIOutput1 \
     IDXGIAdapter IDXGIAdapter1 IDXGIAdapter2 IDXGIAdapter3 IDXGIAdapter4 || rc=1
+  gen_cmp src/d3d12/src/abi/vtbl.rs --com d3d12.h crate::abi::vtbl \
+    IUnknown ID3D10Blob ID3D12Object ID3D12DeviceChild ID3D12Pageable \
+    ID3D12RootSignature ID3D12RootSignatureDeserializer ID3D12VersionedRootSignatureDeserializer \
+    ID3D12Heap ID3D12Heap1 ID3D12Resource ID3D12Resource1 ID3D12Resource2 \
+    ID3D12CommandAllocator ID3D12Fence ID3D12Fence1 ID3D12PipelineState \
+    ID3D12DescriptorHeap ID3D12QueryHeap ID3D12CommandSignature \
+    ID3D12CommandList ID3D12GraphicsCommandList ID3D12GraphicsCommandList1 ID3D12GraphicsCommandList2 \
+    ID3D12GraphicsCommandList3 ID3D12GraphicsCommandList4 ID3D12GraphicsCommandList5 \
+    ID3D12GraphicsCommandList6 ID3D12GraphicsCommandList7 \
+    ID3D12CommandQueue ID3D12PipelineLibrary ID3D12PipelineLibrary1 \
+    ID3D12Device ID3D12Device1 ID3D12Device2 ID3D12Device3 ID3D12Device4 \
+    ID3D12Device5 ID3D12Device6 ID3D12Device7 ID3D12Device8 ID3D12Device9 ID3D12Device10 || rc=1
   gen_cmp src/winemetal/sys/src/sm50/abi.rs --seam-abi src/winemetal/sys/sm50-abi.h winemetal_sys::sm50 || rc=1
   for f in src/dxmt/src/*/abi.rs; do
     h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")

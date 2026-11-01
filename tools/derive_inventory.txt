@@ -127,6 +127,10 @@ src/airconv/src/llvm/ty.rs TyKind Clone,PartialEq,Eq,Hash,Debug
 src/airconv/src/module.rs Layout Clone,Copy
 src/d3d12/src/abi/pipeline.rs CachedPipelineState Clone,Copy
 src/d3d12/src/abi/pipeline.rs DepthStencilOpDesc Clone,Copy
+src/d3d12/src/abi/vtbl.rs D3d12CpuDescriptorHandle Clone,Copy,Default,PartialEq,Eq
+src/d3d12/src/abi/vtbl.rs D3d12GpuDescriptorHandle Clone,Copy,Default,PartialEq,Eq
+src/d3d12/src/encoder.rs BarrierOpacity Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord
+src/d3d12/src/encoder.rs EncoderType Clone,Copy,Debug,PartialEq,Eq
 src/d3d12/src/sampler/tests.rs Input Clone,Copy
 src/d3d9/core/src/async_compile.rs ClearPlanes Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/async_compile.rs JobTicket Clone,Copy,PartialEq,Eq,Hash,Debug

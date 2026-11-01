@@ -41,7 +41,7 @@ dxmt_shaders_header = hexdump_generator.process(dxmt_shaders_lib)
 translator_key_file = get_option('translator_key_file')
 translator_conf = configuration_data()
 translator_conf.set_quoted('DXMT_TRANSLATOR_KEY', translator_key_file == '' ? '' : fs.read(translator_key_file).strip())
-configure_file(output : 'dxmt_translator_key.h', configuration : translator_conf)
+dxmt_translator_key_h = configure_file(output : 'dxmt_translator_key.h', configuration : translator_conf)
 
 dxmt_lib = static_library('dxmt', dxmt_src, dxmt_shaders_header, dxmt_version,
   dependencies        : [ util_dep, airconv_forward_dep, winemetal_dep ],

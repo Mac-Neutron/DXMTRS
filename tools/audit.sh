@@ -456,6 +456,13 @@ case "${1:-}" in
         banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
             "$PE_JOIN_MESSAGE" "$file"
     fi
+    case $file in
+    src/d3d12/src/*.rs | src/dxmt/src/*.rs)
+        banned '(^|[^A-Za-z0-9_])e?println!' 'Mechanical audit' \
+            'println!/eprintln! panics on closed pipes: use LOG or let _ = writeln!(std::io::stderr().lock(), ...)' \
+            "$file"
+        ;;
+    esac
 
     exit $status
     ;;
@@ -533,6 +540,14 @@ if [ -n "$pe_sources" ]; then
     # shellcheck disable=SC2086
     banned "$PE_JOIN" 'The PE side waits for its threads, it never joins them' \
         "$PE_JOIN_MESSAGE" $pe_sources
+fi
+
+dxmt_sources=$(git ls-files 'src/d3d12/src/*.rs' 'src/dxmt/src/*.rs' || true)
+if [ -n "$dxmt_sources" ]; then
+    # shellcheck disable=SC2086
+    banned '(^|[^A-Za-z0-9_])e?println!' 'Mechanical audit' \
+        'println!/eprintln! panics on closed pipes: use LOG or let _ = writeln!(std::io::stderr().lock(), ...)' \
+        $dxmt_sources
 fi
 
 app_sources=$(for dir in $APP_POINTER_DIR; do git ls-files "$dir/*.rs"; done | grep -vxF "$APP_POINTER_EXEMPT" || true)

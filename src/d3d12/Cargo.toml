@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "DXMT's d3d12.dll and d3d12.dylib: the Rust linked into the C++ front end, DXMT's core among it"
+description = "DXMT's d3d12.dll and d3d12.dylib"
 publish = false
 
 [lib]
@@ -21,6 +21,13 @@ guest-vm = ["dxmt-core/guest-vm"]
 workspace = true
 
 [dependencies]
+airconv-ir = { workspace = true }
+bitflags = { workspace = true }
 dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
+rustc-hash = { workspace = true }
+winemetal-sys = { workspace = true }
 winemetal-wire = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
