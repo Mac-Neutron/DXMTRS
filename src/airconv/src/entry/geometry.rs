@@ -108,12 +108,12 @@ pub fn compile_gs(
 ///
 /// The helpers keep DXIL's float policy, the geometry stage's.
 fn finish_dxil(m: &Module<'_>, msad: bool, samplepos: bool) -> Result<Vec<u8>, Error> {
-    module::link_helpers(m, msad, samplepos, false)?;
+    let refs = module::link_helpers(m, msad, samplepos, false)?;
     if msad || samplepos {
         dxil::converter::strip_fast_math(m, shader_kind::GEOMETRY);
     }
     module::optimize(m);
-    Ok(writer::write(m))
+    writer::write(m, &refs)
 }
 
 /// A shader's helper flags, of either front end.
@@ -126,12 +126,12 @@ const fn flags(shader: &Shader) -> ShaderFlags {
 
 /// The geometry shader's helpers linked, the passes run and the module written.
 fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
-    module::link_helpers(
+    let refs = module::link_helpers(
         m,
         flags.contains(ShaderFlags::USE_MSAD),
         flags.contains(ShaderFlags::USE_SAMPLEPOS),
         false,
     )?;
     module::optimize(m);
-    Ok(writer::write(m))
+    writer::write(m, &refs)
 }

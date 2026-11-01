@@ -113,7 +113,8 @@ fn helpers_parse_and_link() {
         let _ = b.call(helper_fn, &args);
         b.ret_void();
 
-        ok(link_helpers(&m, msad, samplepos, tessellation));
+        let refs = ok(link_helpers(&m, msad, samplepos, tessellation));
+        assert_eq!(refs, vec![air]);
         // Silent, as the C++'s link was (the baseline's stderr is empty): the helper's module
         // flags, which would warn about its SDK version, are gone before it links.
         assert!(cx.printed().is_empty(), "{:?}", cx.printed());

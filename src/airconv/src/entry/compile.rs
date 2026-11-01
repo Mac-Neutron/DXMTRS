@@ -77,12 +77,12 @@ pub fn passthrough_vertex(pixel: &Shader) -> Result<Vec<u8>, Error> {
 fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<Vec<u8>, Error> {
     let msad = flags.contains(ShaderFlags::USE_MSAD);
     let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
-    module::link_helpers(m, msad, samplepos, false)?;
+    let refs = module::link_helpers(m, msad, samplepos, false)?;
     if let Some(kind) = dxil_kind
         && (msad || samplepos)
     {
         dxil::converter::strip_fast_math(m, kind);
     }
     module::optimize(m);
-    Ok(writer::write(m))
+    writer::write(m, &refs)
 }

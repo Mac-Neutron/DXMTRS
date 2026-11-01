@@ -155,6 +155,8 @@ pub fn parse<'cx>(
 
 /// Links the Metal helpers the module calls, each only for what it uses (`linkShader`).
 ///
+/// Answers the bitcode slices of the helpers linked (P6).
+///
 /// # Errors
 ///
 /// P15's `LLVM error: …` when a helper does not parse or link (the C++ printed a parse failure
@@ -164,7 +166,8 @@ pub fn link_helpers(
     msad: bool,
     samplepos: bool,
     tessellation: bool,
-) -> Result<(), Error> {
+) -> Result<Vec<&'static [u8]>, Error> {
+    let mut linked = Vec::new();
     for (wanted, air) in [
         (msad, MSAD),
         (samplepos, SAMPLEPOS),
@@ -172,9 +175,10 @@ pub fn link_helpers(
     ] {
         if wanted {
             link_helper(m, air)?;
+            linked.push(air);
         }
     }
-    Ok(())
+    Ok(linked)
 }
 
 /// `runOptimizationPasses`: airconv's pass pipeline, its two passes included.

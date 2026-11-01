@@ -9,19 +9,8 @@ use core::{ffi::CStr, slice};
 
 #[cfg(feature = "oracle")]
 use super::builder::NO_NAME;
-use super::{Builder, Context, Func, Module, Ty, TyKind, Val, name, sys, take_message};
+use super::{Builder, Context, Func, Module, Ty, TyKind, Val, name, sys};
 use crate::api::Error;
-
-impl Module<'_> {
-    /// The module's text (`Module::print`).
-    #[must_use]
-    pub fn print(&self) -> Vec<u8> {
-        // SAFETY: the module is live; the answer is a message disposed of below.
-        let text = unsafe { sys::print_module_to_string(self.raw) };
-        // SAFETY: the message just made.
-        unsafe { take_message(text) }
-    }
-}
 
 impl Val<'_> {
     /// The value's name, any bytes (`Value::getName`).

@@ -1172,22 +1172,15 @@ fn threadgroup_global<'cx>(
     global_name: &CStr,
     init: Val<'cx>,
 ) -> Result<Val<'cx>, Error> {
-    let tcx = m.cx().tcx();
-    // SAFETY: a live module, a type of its context and a NUL-terminated name.
-    let raw = unsafe {
-        sys::add_global_in_address_space(m.raw(), tcx.lower(ty), global_name.as_ptr(), THREADGROUP)
-    };
-    if raw.is_null() {
-        return Err(invalid("a global was not made"));
-    }
+    let g = m.add_global(global_name.to_bytes(), ty, THREADGROUP)?;
+    let raw = g.raw();
     // SAFETY: the global just made.
     unsafe { sys::set_linkage(raw, sys::INTERNAL_LINKAGE) };
     // SAFETY: the global and a constant of its value type, of one context.
     unsafe { sys::set_initializer(raw, init.raw()) };
     // SAFETY: the global just made.
     unsafe { sys::set_alignment(raw, 4) };
-    // SAFETY: a global of this context, a pointer to `ty` in the threadgroup space.
-    Ok(unsafe { m.cx().val(raw, tcx.ptr(ty, THREADGROUP)) })
+    Ok(g)
 }
 
 /// `llvm-c/Target.h`'s `LLVMTargetDataRef`.

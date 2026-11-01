@@ -121,6 +121,7 @@ src/airconv/src/llvm.rs Func Clone,Copy
 src/airconv/src/llvm.rs Val Clone,Copy
 src/airconv/src/llvm/builder.rs FastMath Clone,Copy
 src/airconv/src/llvm/ty.rs RawTy Clone,Copy
+src/airconv/src/llvm/ty.rs StructInfo Clone
 src/airconv/src/llvm/ty.rs Ty Clone,Copy,PartialEq,Eq,Hash,Debug
 src/airconv/src/llvm/ty.rs TyKind Clone,PartialEq,Eq,Hash,Debug
 src/airconv/src/module.rs Layout Clone,Copy

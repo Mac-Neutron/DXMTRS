@@ -29,8 +29,10 @@ use core::{
     ffi::{CStr, c_char, c_void},
     marker::PhantomData,
     mem::ManuallyDrop,
+    slice,
 };
 use std::{
+    collections::BTreeMap,
     ffi::CString,
     io::{self, Write as _},
 };
@@ -107,10 +109,11 @@ extern "C" fn diagnose(info: sys::DiagnosticInfoRef, state: *mut c_void) {
     diagnostics.printed.borrow_mut().push(line);
 }
 
-/// One compile's LLVM context, with its types ([`TyCx`]).
+/// One compile's LLVM context, with its types ([`TyCx`]) and recorded symbol types (P8).
 pub struct Context {
     raw: sys::ContextRef,
     tcx: TyCx,
+    recorded: RefCell<BTreeMap<Vec<u8>, Ty>>,
     /// The handler's state: a box made in [`Context::new`], freed after the context in `drop`.
     diagnostics: *mut Diagnostics,
 }
@@ -128,8 +131,28 @@ impl Context {
         Self {
             raw,
             tcx: TyCx::new(raw),
+            recorded: RefCell::default(),
             diagnostics,
         }
+    }
+
+    /// Records the function or global `name` with its [`Ty`] (P8).
+    pub fn record(&self, name: &[u8], ty: Ty) {
+        if !name.is_empty() {
+            self.recorded.borrow_mut().insert(name.to_vec(), ty);
+        }
+    }
+
+    /// The recorded [`Ty`] of the function or global `name`, or `None` if it was not recorded.
+    #[must_use]
+    pub fn recorded(&self, name: &[u8]) -> Option<Ty> {
+        self.recorded.borrow().get(name).copied()
+    }
+
+    /// The number of recorded function and global names in this context.
+    #[must_use]
+    pub fn recorded_len(&self) -> usize {
+        self.recorded.borrow().len()
     }
 
     /// The `LLVMContextRef`.
@@ -487,9 +510,46 @@ impl<'cx> Module<'cx> {
         let tcx = self.cx.tcx();
         // SAFETY: the module is live, `ty` lowers to a function type of its context.
         let raw = unsafe { sys::add_function(self.raw, c_name.as_ptr(), tcx.lower(ty)) };
+        self.cx.record(&value_name(raw), ty);
         // SAFETY: a function of this context of type `ty`, in address space 0 (AIR's data layout
         // names no program address space).
         Ok(unsafe { Func::new(raw, ty, tcx.ptr(ty, 0)) })
+    }
+
+    /// A new global `name` of the value type `ty` in `addrspace` (`new GlobalVariable`).
+    ///
+    /// # Errors
+    ///
+    /// P15's error for a name holding a NUL, or when the global could not be created.
+    pub fn add_global(&self, name: &[u8], ty: Ty, addrspace: u32) -> Result<Val<'cx>, Error> {
+        let c_name = self::name(name)?;
+        let tcx = self.cx.tcx();
+        // SAFETY: the module is live, `ty` lowers to a type of its context, `c_name` is
+        // NUL-terminated.
+        let raw = unsafe {
+            sys::add_global_in_address_space(self.raw, tcx.lower(ty), c_name.as_ptr(), addrspace)
+        };
+        if raw.is_null() {
+            return Err(Error::new(b"invalid operation: a global was not made."));
+        }
+        self.cx.record(&value_name(raw), ty);
+        // SAFETY: a global of this context, a pointer to `ty` in `addrspace`.
+        let val = unsafe { self.cx.val(raw, tcx.ptr(ty, addrspace)) };
+        #[cfg(feature = "oracle")]
+        if let Some(text) = crate::oracle::check(self.cx, "add_global", val) {
+            self.cx.diagnostics().error.borrow_mut().get_or_insert(text);
+        }
+        Ok(val)
+    }
+
+    /// The module's text (`Module::print`).
+    #[cfg(any(test, feature = "oracle"))]
+    #[must_use]
+    pub fn print(&self) -> Vec<u8> {
+        // SAFETY: the module is live; the answer is a message disposed of below.
+        let text = unsafe { sys::print_module_to_string(self.raw) };
+        // SAFETY: the message just made.
+        unsafe { take_message(text) }
     }
 
     /// `Module::getOrInsertFunction`: the global named `name`, called as the function type `ty`.
@@ -716,6 +776,18 @@ impl<'cx> Block<'cx> {
         // SAFETY: a block of this context.
         unsafe { Self::new(raw) }
     }
+}
+
+/// The name of `value` (`LLVMGetValueName2`).
+pub fn value_name(value: sys::ValueRef) -> Vec<u8> {
+    let mut len = 0;
+    // SAFETY: a live value; `len` is writable.
+    let name = unsafe { sys::get_value_name2(value, &raw mut len) };
+    if name.is_null() || len == 0 {
+        return Vec::new();
+    }
+    // SAFETY: LLVM answers `len` bytes at `name`, alive while the value keeps its name.
+    unsafe { slice::from_raw_parts(name.cast::<u8>(), len) }.to_vec()
 }
 
 /// A count the C API takes as `unsigned`: operand and element lists stay far below 2^32.

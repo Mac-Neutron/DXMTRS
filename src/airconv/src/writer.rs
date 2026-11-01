@@ -8,7 +8,10 @@ use core::{ffi::CStr, ptr, slice};
 
 use airconv_ir::metallib::{self, FunctionEntry, FunctionKind, Patch, VertexAttribute};
 
-use crate::llvm::{Module, sys};
+use crate::{
+    api::Error,
+    llvm::{Module, sys, value_name},
+};
 
 /// The named metadata listing each kind's functions, in the C++'s order.
 ///
@@ -62,13 +65,144 @@ pub fn function_entries(m: &Module<'_>) -> Vec<FunctionEntry> {
     entries
 }
 
-/// The module as a metallib: its bitcode and its function list.
+/// Writes `m` as a metallib (`LLVMWriteAIRBitcode` and `airconv_ir::metallib::pack`).
 ///
-/// The bitcode carries a module hash: `WriteBitcodeToFile(M, OS, false, nullptr, true)`.
-#[must_use]
-pub fn write(m: &Module<'_>) -> Vec<u8> {
-    // SAFETY: a live module; the answer is a buffer disposed of below.
-    let buffer = unsafe { sys::airconv_shim_write_bitcode(m.raw()) };
+/// `refs` are the bitcode slices of the Metal helpers linked into `m` (P6).
+///
+/// # Errors
+///
+/// `AIR writer: <message>` when a type cannot be lowered for the writer or `LLVMWriteAIRBitcode`
+/// fails (P7).
+pub fn write(m: &Module<'_>, refs: &[&[u8]]) -> Result<Vec<u8>, Error> {
+    #[cfg(feature = "oracle")]
+    {
+        let (metallib, stats, stale) = write_with_stats(m, refs)?;
+        if let Some(dir) = std::env::var_os("AIRCONV_ORACLE_DIR").filter(|d| !d.is_empty()) {
+            write_oracle_files(std::path::Path::new(&dir), m, &metallib, &stats, stale);
+        }
+        Ok(metallib)
+    }
+    #[cfg(not(feature = "oracle"))]
+    {
+        let (metallib, _, _) = write_with_stats(m, refs)?;
+        Ok(metallib)
+    }
+}
+
+/// Builds P8's type table for `m`.
+///
+/// Returns recorded functions and globals whose lowered type still matches their value type in `m`,
+/// identified struct bodies, and the count of stale recorded names.
+fn build_table(
+    m: &Module<'_>,
+) -> Result<(Vec<sys::AirValueType>, Vec<sys::AirStructBody>, u32), Error> {
+    let cx = m.cx();
+    let tcx = cx.tcx();
+    let mut values = Vec::new();
+    // SAFETY: a live module.
+    let mut f = unsafe { sys::get_first_function(m.raw()) };
+    while !f.is_null() {
+        let name = value_name(f);
+        if let Some(ty) = cx.recorded(&name) {
+            // SAFETY: `f` is a function of `m`.
+            let want = unsafe { sys::global_get_value_type(f) };
+            if tcx.lower(ty) == want {
+                values.push(sys::AirValueType {
+                    value: f,
+                    ty: tcx.typed(ty)?,
+                });
+            }
+        }
+        // SAFETY: `f` is a function of `m`.
+        f = unsafe { sys::get_next_function(f) };
+    }
+    // SAFETY: a live module.
+    let mut g = unsafe { sys::get_first_global(m.raw()) };
+    while !g.is_null() {
+        let name = value_name(g);
+        if let Some(ty) = cx.recorded(&name) {
+            // SAFETY: `g` is a global of `m`.
+            let want = unsafe { sys::global_get_value_type(g) };
+            if tcx.lower(ty) == want {
+                values.push(sys::AirValueType {
+                    value: g,
+                    ty: tcx.typed(ty)?,
+                });
+            }
+        }
+        // SAFETY: `g` is a global of `m`.
+        g = unsafe { sys::get_next_global(g) };
+    }
+    let stale = u32::try_from(cx.recorded_len().saturating_sub(values.len())).unwrap_or(u32::MAX);
+    let structs = tcx.struct_bodies()?;
+    Ok((values, structs, stale))
+}
+
+fn write_with_stats(
+    m: &Module<'_>,
+    refs: &[&[u8]],
+) -> Result<(Vec<u8>, sys::AirWriteStats, u32), Error> {
+    let (values, structs, stale) = build_table(m)?;
+    let ref_bufs: Vec<sys::MemoryBufferRef> = refs
+        .iter()
+        .map(|r| {
+            // SAFETY: `r` holds `r.len()` bytes; `c""` is NUL-terminated; `0` requires no NUL
+            // terminator in `r`.
+            unsafe {
+                sys::create_memory_buffer_with_memory_range(
+                    r.as_ptr().cast(),
+                    r.len(),
+                    c"".as_ptr(),
+                    0,
+                )
+            }
+        })
+        .collect();
+    let types = sys::AirTypes {
+        values: values.as_ptr(),
+        num_values: values.len(),
+        structs: structs.as_ptr(),
+        num_structs: structs.len(),
+        typed_refs: ref_bufs.as_ptr(),
+        num_typed_refs: ref_bufs.len(),
+    };
+    let mut buffer = ptr::null_mut();
+    let mut stats = sys::AirWriteStats {
+        inst_casts: 0,
+        const_casts: 0,
+        use_typed: 0,
+        attrs_dropped: 0,
+        flags_dropped: 0,
+        refs_filled: 0,
+    };
+    let mut err_msg = ptr::null_mut();
+    // SAFETY: `m` is a live module; `types` references live slices and memory buffers; the
+    // out-pointers are writable.
+    let failed = unsafe {
+        sys::write_air_bitcode(
+            m.raw(),
+            &raw const types,
+            &raw mut buffer,
+            &raw mut stats,
+            &raw mut err_msg,
+        )
+    } != 0;
+    for buf in ref_bufs {
+        // SAFETY: each memory buffer was created above and is no longer needed.
+        unsafe { sys::dispose_memory_buffer(buf) };
+    }
+    if failed {
+        let msg = if err_msg.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: `write_air_bitcode` returns a NUL-terminated message on failure.
+            let bytes = unsafe { CStr::from_ptr(err_msg) }.to_bytes().to_vec();
+            // SAFETY: the message was allocated by `write_air_bitcode`.
+            unsafe { sys::dispose_message(err_msg) };
+            bytes
+        };
+        return Err(Error::new(&[&b"AIR writer: "[..], &msg].concat()));
+    }
     // SAFETY: the buffer just made.
     let start = unsafe { sys::get_buffer_start(buffer) };
     // SAFETY: as above.
@@ -77,7 +211,36 @@ pub fn write(m: &Module<'_>) -> Vec<u8> {
     let bitcode = unsafe { slice::from_raw_parts(start.cast::<u8>(), size) }.to_vec();
     // SAFETY: the buffer, disposed of once.
     unsafe { sys::dispose_memory_buffer(buffer) };
-    metallib::pack(&bitcode, &function_entries(m))
+    let metallib = metallib::pack(&bitcode, &function_entries(m));
+    Ok((metallib, stats, stale))
+}
+
+#[cfg(feature = "oracle")]
+fn write_oracle_files(
+    dir: &std::path::Path,
+    m: &Module<'_>,
+    metallib: &[u8],
+    stats: &sys::AirWriteStats,
+    stale: u32,
+) {
+    use core::fmt::Write as _;
+    let digest = airconv_ir::sha256::digest(metallib);
+    let mut sha = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(sha, "{byte:02x}");
+    }
+    let line = format!(
+        "stats inst-casts={} const-casts={} use-typed={} attrs-dropped={} flags-dropped={} refs={} stale={}\n",
+        stats.inst_casts,
+        stats.const_casts,
+        stats.use_typed,
+        stats.attrs_dropped,
+        stats.flags_dropped,
+        stats.refs_filled,
+        stale,
+    );
+    let _ = std::fs::write(dir.join(format!("{sha}.log")), line);
+    let _ = std::fs::write(dir.join(format!("{sha}.post.ll")), m.print());
 }
 
 /// The operands of the named metadata `name` (each a node, as a metadata value).
@@ -171,3 +334,6 @@ fn vertex_input(element: sys::ValueRef) -> Option<VertexAttribute> {
         name: md_string(*element.get(8)?)?,
     })
 }
+
+#[cfg(test)]
+mod tests;

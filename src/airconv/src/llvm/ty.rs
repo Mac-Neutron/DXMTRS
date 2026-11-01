@@ -8,7 +8,7 @@
 
 use core::{cell::RefCell, ffi::CStr, ptr};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::sys;
 use crate::api::Error;
@@ -64,6 +64,7 @@ pub enum TyKind {
 }
 
 /// One struct of the table: its LLVM type and, once it has a body, its fields.
+#[derive(Clone)]
 struct StructInfo {
     raw: sys::TypeRef,
     fields: Option<Box<[Ty]>>,
@@ -271,6 +272,81 @@ impl TyCx {
 
     fn typed_all(&self, tys: &[Ty]) -> Result<Vec<sys::TypeRef>, Error> {
         tys.iter().map(|&ty| self.typed(ty)).collect()
+    }
+
+    /// The typed literal body of every identified struct with a body (P8).
+    ///
+    /// Lifted structs holding [`TyKind::Unknown`] are skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TyCx::typed`]'s error when a field cannot be lowered for the AIR writer.
+    pub fn struct_bodies(&self) -> Result<Vec<sys::AirStructBody>, Error> {
+        let structs = self.table.borrow().structs.clone();
+        let mut out = Vec::new();
+        for (i, info) in structs.into_iter().enumerate() {
+            let raw = info.raw;
+            // SAFETY: `raw` is a struct type of this context.
+            if unsafe { sys::is_literal_struct(raw) } != 0
+                // SAFETY: `raw` is a struct type of this context.
+                || unsafe { sys::is_opaque_struct(raw) } != 0
+            {
+                continue;
+            }
+            let Some(fields) = info.fields else {
+                continue;
+            };
+            let mut seen = FxHashSet::default();
+            seen.insert(count(i));
+            if fields.iter().any(|&f| self.holds_unknown(f, &mut seen)) {
+                continue;
+            }
+            let mut raws = self.typed_all(&fields)?;
+            // SAFETY: `raw` is a struct of this context.
+            let packed = unsafe { sys::is_packed_struct(raw) };
+            // SAFETY: the context is live; `raws` are types of it.
+            let body = unsafe {
+                sys::struct_type_in_context(self.cx, raws.as_mut_ptr(), count(raws.len()), packed)
+            };
+            out.push(sys::AirStructBody {
+                struct_ty: raw,
+                body,
+            });
+        }
+        Ok(out)
+    }
+
+    fn holds_unknown(&self, ty: Ty, seen: &mut FxHashSet<u32>) -> bool {
+        match self.kind(ty) {
+            TyKind::Unknown => true,
+            TyKind::Void
+            | TyKind::Int(_)
+            | TyKind::Half
+            | TyKind::Float
+            | TyKind::Double
+            | TyKind::Label
+            | TyKind::Metadata => false,
+            TyKind::Vector(element, _)
+            | TyKind::Array(element, _)
+            | TyKind::Ptr {
+                pointee: element, ..
+            } => self.holds_unknown(element, seen),
+            TyKind::Function { ret, params, .. } => {
+                self.holds_unknown(ret, seen) || params.iter().any(|&p| self.holds_unknown(p, seen))
+            }
+            TyKind::Struct(id) => {
+                if !seen.insert(id) {
+                    return false;
+                }
+                let fields = self
+                    .table
+                    .borrow()
+                    .structs
+                    .get(id as usize)
+                    .and_then(|info| info.fields.clone());
+                fields.is_some_and(|fs| fs.iter().any(|&f| self.holds_unknown(f, seen)))
+            }
+        }
     }
 
     fn cannot_tell(&self, ty: Ty) -> Error {
@@ -712,7 +788,3 @@ const fn index(ty: Ty) -> usize {
 fn count(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
 }
-
-const _: () = {
-    let _ = TyCx::typed;
-};

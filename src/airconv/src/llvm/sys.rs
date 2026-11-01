@@ -167,8 +167,6 @@ const _: () = {
     assert!(offset_of!(AirWriteStats, attrs_dropped) == 12);
     assert!(offset_of!(AirWriteStats, flags_dropped) == 16);
     assert!(offset_of!(AirWriteStats, refs_filled) == 20);
-
-    let _ = (air_typed_pointer_type, write_air_bitcode);
 };
 
 // `LLVMOpcode`
@@ -295,7 +293,7 @@ unsafe extern "C" {
     pub fn set_data_layout(m: ModuleRef, data_layout_str: *const c_char);
     #[link_name = "LLVMSetTarget"]
     pub fn set_target(m: ModuleRef, triple: *const c_char);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "oracle"))]
     #[link_name = "LLVMPrintModuleToString"]
     pub fn print_module_to_string(m: ModuleRef) -> *mut c_char;
     #[link_name = "LLVMGetTypeByName2"]
@@ -1102,6 +1100,13 @@ unsafe extern "C" {
     ) -> ValueRef;
 
     // Memory buffers
+    #[link_name = "LLVMCreateMemoryBufferWithMemoryRange"]
+    pub fn create_memory_buffer_with_memory_range(
+        input_data: *const c_char,
+        input_data_length: usize,
+        buffer_name: *const c_char,
+        requires_null_terminator: Bool,
+    ) -> MemoryBufferRef;
     #[link_name = "LLVMGetBufferStart"]
     pub fn get_buffer_start(mem_buf: MemoryBufferRef) -> *const c_char;
     #[link_name = "LLVMGetBufferSize"]
@@ -1174,10 +1179,6 @@ unsafe extern "C" {
     /// Whether `value` carries fast-math flags (`isa<FPMathOperator>`).
     pub fn airconv_shim_is_fp_math_operator(value: ValueRef) -> Bool;
 
-    /// The bitcode of `module` with its module hash, in a buffer the caller disposes.
-    ///
-    /// `WriteBitcodeToFile(M, OS, false, nullptr, true)`.
-    pub fn airconv_shim_write_bitcode(module: ModuleRef) -> MemoryBufferRef;
     /// Parses `size` bytes of bitcode into a module of `context` (`parseBitcodeFile`).
     ///
     /// The buffer is named by `name`; the module is read in full. When `dxil_layout` is non-zero,

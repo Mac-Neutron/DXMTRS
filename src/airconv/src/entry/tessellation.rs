@@ -64,12 +64,12 @@ pub fn compile_domain(
 
 /// The helpers `flags` ask for and the tessellation ones, the passes, the metallib.
 fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
-    module::link_helpers(
+    let refs = module::link_helpers(
         m,
         flags.contains(ShaderFlags::USE_MSAD),
         flags.contains(ShaderFlags::USE_SAMPLEPOS),
         true,
     )?;
     module::optimize(m);
-    Ok(writer::write(m))
+    writer::write(m, &refs)
 }

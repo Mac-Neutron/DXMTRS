@@ -8,7 +8,6 @@
 
 #include "llvm-c/Core.h"
 #include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/FMF.h"
@@ -97,14 +96,7 @@ extern "C" void airconv_shim_copy_fast_math_flags(LLVMValueRef inst, unsigned fl
 
 extern "C" LLVMBool airconv_shim_is_fp_math_operator(LLVMValueRef value) { return isa<FPMathOperator>(unwrap(value)); }
 
-// Bitcode, as MetallibWriter::Write and LoadModule read and write it.
-extern "C" LLVMMemoryBufferRef airconv_shim_write_bitcode(LLVMModuleRef module) {
-  SmallVector<char, 0> bitcode;
-  raw_svector_ostream os(bitcode);
-  WriteBitcodeToFile(*unwrap(module), os, false, nullptr, true);
-  return wrap(MemoryBuffer::getMemBufferCopy(StringRef(bitcode.data(), bitcode.size())).release());
-}
-
+// Bitcode, as LoadModule reads it.
 extern "C" LLVMBool airconv_shim_parse_bitcode(LLVMContextRef context, const char *data, size_t size,
                                                const char *name, size_t name_len, LLVMBool dxil_layout,
                                                LLVMModuleRef *out, char **error, size_t *error_len) {
