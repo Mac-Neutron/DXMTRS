@@ -1,7 +1,7 @@
 //! Win32's window system, as `wsi_monitor_win32.cpp` and `wsi_window_win32.cpp` ask it.
 //!
-//! `user32`, `gdi32` and `kernel32` functions linked via `raw-dylib`. A monitor or window handle
-//! is checked by `user32`, so a stale one fails the call rather than the process.
+//! `user32`, `gdi32` and `kernel32` functions linked by meson. A monitor or window handle is
+//! checked by `user32`, so a stale one fails the call rather than the process.
 
 use core::{ffi::c_void, mem::offset_of, ptr};
 
@@ -121,7 +121,6 @@ struct D3dkmtEscapeSetPresentRectWine {
     rect: Rect,
 }
 
-#[link(name = "user32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn MonitorFromPoint(point: Point, flags: u32) -> Hmonitor;
     fn MonitorFromWindow(window: Hwnd, flags: u32) -> Hmonitor;
@@ -159,15 +158,7 @@ unsafe extern "system" {
         flags: u32,
     ) -> i32;
     fn ShowWindowAsync(window: Hwnd, cmd_show: i32) -> i32;
-}
-
-#[link(name = "gdi32", kind = "raw-dylib")]
-unsafe extern "system" {
     fn D3DKMTEscape(escape: *const D3dkmtEscape) -> i32;
-}
-
-#[link(name = "kernel32", kind = "raw-dylib")]
-unsafe extern "system" {
     fn GetCurrentProcessId() -> u32;
 }
 

@@ -16,7 +16,6 @@ unsafe extern "C" {
 }
 
 #[cfg(windows)]
-#[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn QueryPerformanceCounter(count: *mut i64) -> i32;
     fn QueryPerformanceFrequency(frequency: *mut i64) -> i32;
