@@ -3,7 +3,7 @@
 # UNIX_LTO. Messages go to stderr.
 
 LLVM_AIR_REPO=https://github.com/Mac-Neutron/llvm-project.git
-LLVM_AIR_COMMIT=f8ae77ad2946b65daeaac3d7690c5baf0023ed71
+LLVM_AIR_COMMIT=edc723f40de7c461a3e8473d174d88a9027dcc54
 
 # LLVM 23: static, Release (-O3), no targets or tools, assertions and zstd off, for the caller's UNIX_CPU, as ThinLTO
 # bitcode when UNIX_LTO asks for it (winemetal.so's link optimizes the translator and LLVM together). Built once per
