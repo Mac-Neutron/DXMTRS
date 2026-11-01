@@ -7,11 +7,16 @@
 //! generated file. A Metal object is a `u64` handle; [`Obj`] owns one and [`Pool`] is an
 //! autorelease pool. meson links winemetal.
 
-#[cfg(not(windows))]
+extern crate self as winemetal_sys;
+
 use core::ffi::c_void;
 
 mod decls;
 mod obj;
+pub mod sm50;
+
+/// Win32 current-process pseudo-handle (`GetCurrentProcess()`: `(HANDLE)(LONG_PTR)-1`).
+pub const CURRENT_PROCESS: *mut c_void = (-1_isize) as *mut c_void;
 
 #[cfg(not(windows))]
 unsafe extern "C-unwind" {
@@ -38,6 +43,12 @@ unsafe extern "C-unwind" {
     pub fn wmt_native_open_thread(thread_id: u32) -> *mut c_void;
     /// `CloseHandle`: drops a reference; the last frees the object.
     pub fn wmt_native_close_handle(handle: *mut c_void) -> i32;
+    /// Sets the calling thread's native not-implemented flag (`MTLD3DNotImplemented`).
+    pub fn wmt_native_not_implemented();
+    /// Reads and clears the calling thread's native not-implemented flag.
+    pub fn MTLD3DNotImplemented() -> bool;
+    /// Reference count of a native Win32 handle (`0` when `handle` is null or not a handle).
+    pub fn wmt_native_handle_count(handle: *mut c_void) -> u32;
 }
 
 pub use decls::*;

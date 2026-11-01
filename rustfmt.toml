@@ -16,5 +16,6 @@ ignore = [
     "src/util/src/dxgi_vtbl.rs",
     "src/winemetal/src/protos.rs",
     "src/winemetal/sys/src/decls.rs",
+    "src/winemetal/sys/src/sm50/abi.rs",
     "src/winemetal/wire/src/layouts.rs",
 ]

@@ -153,6 +153,7 @@ leg_gen() {
     IDXGIFactory IDXGIFactory1 IDXGIFactory2 \
     IDXGIOutput IDXGIOutput1 \
     IDXGIAdapter IDXGIAdapter1 IDXGIAdapter2 IDXGIAdapter3 IDXGIAdapter4 || rc=1
+  gen_cmp src/winemetal/sys/src/sm50/abi.rs --seam-abi src/winemetal/sys/sm50-abi.h winemetal_sys::sm50 || rc=1
   for f in src/dxmt/src/*/abi.rs; do
     h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")
     hdr=$(git ls-files "src/*/$h")
