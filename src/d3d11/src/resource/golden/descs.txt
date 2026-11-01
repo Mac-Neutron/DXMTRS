@@ -1,0 +1,239 @@
+RES_UPDOWN_2D case=0 up={w=256,h=128,mip=4,arr=6,fmt=28,sc=1,sq=0,usage=0,bind=0x28,cpu=0x0,misc=0x4,layout=0} down_eq=1
+RES_UPDOWN_2D case=1 up={w=1024,h=512,mip=1,arr=1,fmt=40,sc=4,sq=0,usage=1,bind=0x40,cpu=0x20000,misc=0x0,layout=1} down_eq=1
+RES_UPDOWN_3D case=0 up={w=64,h=32,d=16,mip=5,fmt=10,usage=0,bind=0x80,cpu=0x0,misc=0x0,layout=0} down_eq=1
+RES_UPDOWN_3D case=1 up={w=16,h=16,d=8,mip=1,fmt=61,usage=2,bind=0x8,cpu=0x10000,misc=0x0,layout=2} down_eq=1
+VIEW_UPDOWN_SRV case=0 hr=0x00000000 fmt=28 dim=1 buf={first=1,num=3}
+VIEW_UPDOWN_SRV_RT case=0 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=1 hr=0x00000000 fmt=28 dim=2 tex1d={most_mip=1,mips=3}
+VIEW_UPDOWN_SRV_RT case=1 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=2 hr=0x00000000 fmt=28 dim=3 tex1darr={most_mip=1,mips=3,first_slice=2,arr_size=4}
+VIEW_UPDOWN_SRV_RT case=2 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=3 hr=0x00000000 fmt=28 dim=4 tex2d={most_mip=1,mips=3,plane=0}
+VIEW_UPDOWN_SRV_RT case=3 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=4 hr=0x00000000 fmt=28 dim=5 tex2darr={most_mip=1,mips=3,first_slice=2,arr_size=4,plane=0}
+VIEW_UPDOWN_SRV_RT case=4 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=5 hr=0x00000000 fmt=28 dim=6 tex2dms={}
+VIEW_UPDOWN_SRV_RT case=5 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=6 hr=0x00000000 fmt=28 dim=7 tex2dmsarr={first_slice=1,arr_size=3}
+VIEW_UPDOWN_SRV_RT case=6 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=7 hr=0x00000000 fmt=28 dim=8 tex3d={most_mip=1,mips=3}
+VIEW_UPDOWN_SRV_RT case=7 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=8 hr=0x00000000 fmt=28 dim=9 texcube={most_mip=1,mips=3}
+VIEW_UPDOWN_SRV_RT case=8 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=9 hr=0x00000000 fmt=28 dim=10 texcubearr={most_mip=1,mips=3,first_face=2,num_cubes=4}
+VIEW_UPDOWN_SRV_RT case=9 roundtrip_ok=1
+VIEW_UPDOWN_SRV case=10 hr=0x00000000 fmt=28 dim=11 bufex={first=1,num=3,flags=0x2}
+VIEW_UPDOWN_SRV_RT case=10 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=0 hr=0x00000000 fmt=10 dim=1 buf={first=2,num=3}
+VIEW_UPDOWN_RTV_RT case=0 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=1 hr=0x00000000 fmt=10 dim=2 tex1d={mip=2}
+VIEW_UPDOWN_RTV_RT case=1 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=2 hr=0x00000000 fmt=10 dim=3 tex1darr={mip=2,first_slice=3,arr_size=5}
+VIEW_UPDOWN_RTV_RT case=2 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=3 hr=0x00000000 fmt=10 dim=4 tex2d={mip=2,plane=0}
+VIEW_UPDOWN_RTV_RT case=3 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=4 hr=0x00000000 fmt=10 dim=5 tex2darr={mip=2,first_slice=3,arr_size=5,plane=0}
+VIEW_UPDOWN_RTV_RT case=4 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=5 hr=0x00000000 fmt=10 dim=6 tex2dms={}
+VIEW_UPDOWN_RTV_RT case=5 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=6 hr=0x00000000 fmt=10 dim=7 tex2dmsarr={first_slice=2,arr_size=3}
+VIEW_UPDOWN_RTV_RT case=6 roundtrip_ok=1
+VIEW_UPDOWN_RTV case=7 hr=0x00000000 fmt=10 dim=8 tex3d={mip=2,first_w=3,w_size=5}
+VIEW_UPDOWN_RTV_RT case=7 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=0 hr=0x00000000 fmt=42 dim=1 buf={first=10,num=20,flags=0x1}
+VIEW_UPDOWN_UAV_RT case=0 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=1 hr=0x00000000 fmt=42 dim=2 tex1d={mip=10}
+VIEW_UPDOWN_UAV_RT case=1 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=2 hr=0x00000000 fmt=42 dim=3 tex1darr={mip=10,first_slice=20,arr_size=1}
+VIEW_UPDOWN_UAV_RT case=2 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=3 hr=0x00000000 fmt=42 dim=4 tex2d={mip=10,plane=0}
+VIEW_UPDOWN_UAV_RT case=3 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=4 hr=0x00000000 fmt=42 dim=5 tex2darr={mip=10,first_slice=20,arr_size=1,plane=0}
+VIEW_UPDOWN_UAV_RT case=4 roundtrip_ok=1
+VIEW_UPDOWN_UAV case=5 hr=0x00000000 fmt=42 dim=8 tex3d={mip=10,first_w=20,w_size=1}
+VIEW_UPDOWN_UAV_RT case=5 roundtrip_ok=1
+CREATE_MTL_TEX_1D case=0 label=1d_basic_mips0 hr=0x00000000 out_mips=8 type=2 fmt=70 w=128 h=1 d=1 arr=1 mips=8 samples=1 usage=0x1 options=0x10
+CREATE_MTL_TEX_1D case=1 label=1d_array_rt_srv hr=0x00000000 out_mips=3 type=3 fmt=115 w=64 h=1 d=1 arr=4 mips=3 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_1D case=2 label=1d_dynamic hr=0x00000000 out_mips=1 type=2 fmt=55 w=256 h=1 d=1 arr=1 mips=1 samples=1 usage=0x1 options=0x1
+CREATE_MTL_TEX_1D case=3 label=1d_staging hr=0x00000000 out_mips=2 type=3 fmt=10 w=32 h=1 d=1 arr=2 mips=2 samples=1 usage=0x1 options=0x0
+CREATE_MTL_TEX_1D case=4 label=1d_immutable hr=0x00000000 out_mips=1 type=2 fmt=123 w=512 h=1 d=1 arr=1 mips=1 samples=1 usage=0x1 options=0x110
+CREATE_MTL_TEX_1D case=5 label=1d_uav_atomic_r32 hr=0x00000000 out_mips=1 type=2 fmt=53 w=64 h=1 d=1 arr=1 mips=1 samples=1 usage=0x23 options=0x10
+CREATE_MTL_TEX_1D case=6 label=1d_uav_rg32_apple8 hr=0x00000000 out_mips=1 type=2 fmt=103 w=64 h=1 d=1 arr=1 mips=1 samples=1 usage=0x23 options=0x10
+CREATE_MTL_TEX_1D case=7 label=1d_uav_rg32_apple7_no_atomic hr=0x00000000 out_mips=1 type=2 fmt=103 w=64 h=1 d=1 arr=1 mips=1 samples=1 usage=0x3 options=0x10
+CREATE_MTL_TEX_1D case=8 label=1d_rg32_sint_uav_no_atomic hr=0x00000000 out_mips=1 type=2 fmt=104 w=64 h=1 d=1 arr=1 mips=1 samples=1 usage=0x3 options=0x10
+CREATE_MTL_TEX_1D case=9 label=1d_depth_d32 hr=0x00000000 out_mips=1 type=2 fmt=252 w=128 h=1 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_1D case=10 label=1d_depth_r32_typeless hr=0x00000000 out_mips=1 type=3 fmt=252 w=128 h=1 d=1 arr=2 mips=1 samples=1 usage=0x15 options=0x10
+CREATE_MTL_TEX_1D case=11 label=1d_zero_width_fail hr=0x80070057
+CREATE_MTL_TEX_1D case=12 label=1d_zero_array_fail hr=0x80070057
+CREATE_MTL_TEX_1D case=13 label=1d_unknown_fmt_fail hr=0x80004005
+CREATE_MTL_TEX_1D case=14 label=1d_bad_bind_cb_fail hr=0x80004005
+CREATE_MTL_TEX_1D case=15 label=1d_shared_conflict_fail hr=0x80070057
+CREATE_MTL_TEX_1D case=16 label=1d_nthandle_alone_fail hr=0x00000000 out_mips=1 type=2 fmt=10 w=16 h=1 d=1 arr=1 mips=1 samples=1 usage=0x1 options=0x10
+CREATE_MTL_TEX_2D case=0 label=2d_basic_mips0 hr=0x00000000 out_mips=9 type=2 fmt=70 w=256 h=128 d=1 arr=1 mips=9 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=1 label=2d_srgb_typeless hr=0x00000000 out_mips=4 type=2 fmt=70 w=128 h=128 d=1 arr=1 mips=4 samples=1 usage=0x17 options=0x10
+CREATE_MTL_TEX_2D case=2 label=2d_array hr=0x00000000 out_mips=7 type=3 fmt=81 w=64 h=64 d=1 arr=5 mips=7 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=3 label=2d_cube hr=0x00000000 out_mips=7 type=5 fmt=115 w=64 h=64 d=1 arr=1 mips=7 samples=1 usage=0x1 options=0x10
+CREATE_MTL_TEX_2D case=4 label=2d_cube_array hr=0x00000000 out_mips=3 type=6 fmt=115 w=64 h=64 d=1 arr=2 mips=3 samples=1 usage=0x1 options=0x10
+CREATE_MTL_TEX_2D case=5 label=2d_msaa_4x hr=0x00000000 out_mips=1 type=4 fmt=70 w=256 h=256 d=1 arr=1 mips=1 samples=4 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=6 label=2d_msaa_array_8x hr=0x00000000 out_mips=1 type=8 fmt=65 w=128 h=128 d=1 arr=4 mips=1 samples=8 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=7 label=2d_msaa_mips0 hr=0x00000000 out_mips=8 type=4 fmt=70 w=128 h=128 d=1 arr=1 mips=8 samples=4 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=8 label=2d_msaa_mips2_fail hr=0x00000000 out_mips=2 type=4 fmt=70 w=128 h=128 d=1 arr=1 mips=2 samples=4 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=9 label=2d_msaa_bad_count_fail hr=0x80070057
+CREATE_MTL_TEX_2D case=10 label=2d_msaa_cube_fail hr=0x00000000 out_mips=1 type=5 fmt=70 w=64 h=64 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=11 label=2d_depth_d24s8 hr=0x00000000 out_mips=1 type=2 fmt=260 w=512 h=512 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=12 label=2d_depth_r24g8_typeless hr=0x00000000 out_mips=1 type=2 fmt=260 w=512 h=512 d=1 arr=1 mips=1 samples=1 usage=0x15 options=0x10
+CREATE_MTL_TEX_2D case=13 label=2d_depth_d32s8 hr=0x00000000 out_mips=1 type=2 fmt=260 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=14 label=2d_depth_d16 hr=0x00000000 out_mips=1 type=2 fmt=250 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=15 label=2d_depth_r16_typeless_ds hr=0x00000000 out_mips=1 type=2 fmt=250 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x15 options=0x10
+CREATE_MTL_TEX_2D case=16 label=2d_r16_typeless_no_ds hr=0x00000000 out_mips=1 type=2 fmt=23 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x15 options=0x10
+CREATE_MTL_TEX_2D case=17 label=2d_bc1_srv hr=0x00000000 out_mips=8 type=2 fmt=130 w=128 h=128 d=1 arr=1 mips=8 samples=1 usage=0x1 options=0x10
+CREATE_MTL_TEX_2D case=18 label=2d_bc7_srgb_typeless hr=0x00000000 out_mips=4 type=2 fmt=152 w=128 h=128 d=1 arr=1 mips=4 samples=1 usage=0x11 options=0x10
+CREATE_MTL_TEX_2D case=19 label=2d_shared_nthandle hr=0x00000000 out_mips=1 type=2 fmt=70 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=20 label=2d_keyedmutex_nthandle hr=0x00000000 out_mips=1 type=2 fmt=70 w=256 h=256 d=1 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_2D case=21 label=2d_r32_sint_uav hr=0x00000000 out_mips=1 type=2 fmt=54 w=64 h=64 d=1 arr=1 mips=1 samples=1 usage=0x23 options=0x10
+CREATE_MTL_TEX_2D case=22 label=2d_rg32_uint_apple8 hr=0x00000000 out_mips=1 type=2 fmt=103 w=64 h=64 d=1 arr=1 mips=1 samples=1 usage=0x23 options=0x10
+CREATE_MTL_TEX_2D case=23 label=2d_rg32_uint_apple7 hr=0x00000000 out_mips=1 type=2 fmt=103 w=64 h=64 d=1 arr=1 mips=1 samples=1 usage=0x3 options=0x10
+CREATE_MTL_TEX_3D case=0 label=3d_basic_mips0 hr=0x00000000 out_mips=7 type=7 fmt=70 w=64 h=32 d=16 arr=1 mips=7 samples=1 usage=0x7 options=0x10
+CREATE_MTL_TEX_3D case=1 label=3d_bc1 hr=0x00000000 out_mips=3 type=7 fmt=130 w=32 h=32 d=8 arr=1 mips=3 samples=1 usage=0x1 options=0x110
+CREATE_MTL_TEX_3D case=2 label=3d_rg32_apple8 hr=0x00000000 out_mips=1 type=7 fmt=103 w=16 h=16 d=4 arr=1 mips=1 samples=1 usage=0x23 options=0x10
+CREATE_MTL_TEX_3D case=3 label=3d_rg32_apple7 hr=0x00000000 out_mips=1 type=7 fmt=103 w=16 h=16 d=4 arr=1 mips=1 samples=1 usage=0x3 options=0x10
+CREATE_MTL_TEX_3D case=4 label=3d_depth_bind_fail hr=0x00000000 out_mips=1 type=7 fmt=252 w=16 h=16 d=4 arr=1 mips=1 samples=1 usage=0x5 options=0x10
+CREATE_MTL_TEX_3D case=5 label=3d_zero_depth_fail hr=0x80070057
+MIP_LINEAR_1D case=0 fmt=28 level=0 mip={w=133,h=1,d=1} aligned={hr=0x00000000,row=544,slice=544,len=544} unaligned={hr=0x00000000,row=532,slice=532,len=532}
+MIP_LINEAR_1D case=1 fmt=28 level=1 mip={w=66,h=1,d=1} aligned={hr=0x00000000,row=272,slice=272,len=272} unaligned={hr=0x00000000,row=264,slice=264,len=264}
+MIP_LINEAR_1D case=2 fmt=28 level=2 mip={w=33,h=1,d=1} aligned={hr=0x00000000,row=144,slice=144,len=144} unaligned={hr=0x00000000,row=132,slice=132,len=132}
+MIP_LINEAR_1D case=3 fmt=28 level=3 mip={w=16,h=1,d=1} aligned={hr=0x00000000,row=64,slice=64,len=64} unaligned={hr=0x00000000,row=64,slice=64,len=64}
+MIP_LINEAR_1D case=4 fmt=28 level=4 mip={w=8,h=1,d=1} aligned={hr=0x00000000,row=32,slice=32,len=32} unaligned={hr=0x00000000,row=32,slice=32,len=32}
+MIP_LINEAR_1D case=5 fmt=61 level=0 mip={w=50,h=1,d=1} aligned={hr=0x00000000,row=64,slice=64,len=64} unaligned={hr=0x00000000,row=50,slice=50,len=50}
+MIP_LINEAR_1D case=6 fmt=61 level=1 mip={w=25,h=1,d=1} aligned={hr=0x00000000,row=32,slice=32,len=32} unaligned={hr=0x00000000,row=25,slice=25,len=25}
+MIP_LINEAR_1D case=7 fmt=61 level=2 mip={w=12,h=1,d=1} aligned={hr=0x00000000,row=16,slice=16,len=16} unaligned={hr=0x00000000,row=12,slice=12,len=12}
+MIP_LINEAR_1D case=8 fmt=61 level=3 mip={w=6,h=1,d=1} aligned={hr=0x00000000,row=16,slice=16,len=16} unaligned={hr=0x00000000,row=6,slice=6,len=6}
+MIP_LINEAR_1D case=9 fmt=71 level=0 mip={w=64,h=1,d=1} aligned={hr=0x00000000,row=512,slice=512,len=512} unaligned={hr=0x00000000,row=512,slice=512,len=512}
+MIP_LINEAR_2D case=0 fmt=28 level=0 mip={w=133,h=75,d=1} aligned={hr=0x00000000,row=544,slice=40800,len=40800} unaligned={hr=0x00000000,row=532,slice=39900,len=39900}
+MIP_LINEAR_2D case=1 fmt=28 level=1 mip={w=66,h=37,d=1} aligned={hr=0x00000000,row=272,slice=10064,len=10064} unaligned={hr=0x00000000,row=264,slice=9768,len=9768}
+MIP_LINEAR_2D case=2 fmt=28 level=2 mip={w=33,h=18,d=1} aligned={hr=0x00000000,row=144,slice=2592,len=2592} unaligned={hr=0x00000000,row=132,slice=2376,len=2376}
+MIP_LINEAR_2D case=3 fmt=28 level=3 mip={w=16,h=9,d=1} aligned={hr=0x00000000,row=64,slice=576,len=576} unaligned={hr=0x00000000,row=64,slice=576,len=576}
+MIP_LINEAR_2D case=4 fmt=28 level=4 mip={w=8,h=4,d=1} aligned={hr=0x00000000,row=32,slice=128,len=128} unaligned={hr=0x00000000,row=32,slice=128,len=128}
+MIP_LINEAR_2D case=5 fmt=71 level=0 mip={w=133,h=75,d=1} aligned={hr=0x00000000,row=272,slice=5168,len=5168} unaligned={hr=0x00000000,row=272,slice=5168,len=5168}
+MIP_LINEAR_2D case=6 fmt=71 level=1 mip={w=66,h=37,d=1} aligned={hr=0x00000000,row=136,slice=1360,len=1360} unaligned={hr=0x00000000,row=136,slice=1360,len=1360}
+MIP_LINEAR_2D case=7 fmt=71 level=2 mip={w=33,h=18,d=1} aligned={hr=0x00000000,row=72,slice=360,len=360} unaligned={hr=0x00000000,row=72,slice=360,len=360}
+MIP_LINEAR_2D case=8 fmt=71 level=3 mip={w=16,h=9,d=1} aligned={hr=0x00000000,row=32,slice=96,len=96} unaligned={hr=0x00000000,row=32,slice=96,len=96}
+MIP_LINEAR_2D case=9 fmt=71 level=4 mip={w=8,h=4,d=1} aligned={hr=0x00000000,row=16,slice=16,len=16} unaligned={hr=0x00000000,row=16,slice=16,len=16}
+MIP_LINEAR_2D case=10 fmt=77 level=0 mip={w=133,h=75,d=1} aligned={hr=0x00000000,row=544,slice=10336,len=10336} unaligned={hr=0x00000000,row=544,slice=10336,len=10336}
+MIP_LINEAR_2D case=11 fmt=77 level=1 mip={w=66,h=37,d=1} aligned={hr=0x00000000,row=272,slice=2720,len=2720} unaligned={hr=0x00000000,row=272,slice=2720,len=2720}
+MIP_LINEAR_2D case=12 fmt=77 level=2 mip={w=33,h=18,d=1} aligned={hr=0x00000000,row=144,slice=720,len=720} unaligned={hr=0x00000000,row=144,slice=720,len=720}
+MIP_LINEAR_2D case=13 fmt=77 level=3 mip={w=16,h=9,d=1} aligned={hr=0x00000000,row=64,slice=192,len=192} unaligned={hr=0x00000000,row=64,slice=192,len=192}
+MIP_LINEAR_2D case=14 fmt=77 level=4 mip={w=8,h=4,d=1} aligned={hr=0x00000000,row=32,slice=32,len=32} unaligned={hr=0x00000000,row=32,slice=32,len=32}
+MIP_LINEAR_2D case=15 fmt=45 level=0 mip={w=64,h=64,d=1} aligned={hr=0x80004005,row=0,slice=0,len=0} unaligned={hr=0x80004005,row=0,slice=0,len=0}
+MIP_LINEAR_2D case=16 fmt=45 level=1 mip={w=32,h=32,d=1} aligned={hr=0x80004005,row=0,slice=0,len=0} unaligned={hr=0x80004005,row=0,slice=0,len=0}
+MIP_LINEAR_2D case=17 fmt=20 level=0 mip={w=64,h=64,d=1} aligned={hr=0x80004005,row=0,slice=0,len=0} unaligned={hr=0x80004005,row=0,slice=0,len=0}
+MIP_LINEAR_2D case=18 fmt=20 level=1 mip={w=32,h=32,d=1} aligned={hr=0x80004005,row=0,slice=0,len=0} unaligned={hr=0x80004005,row=0,slice=0,len=0}
+MIP_LINEAR_2D case=19 fmt=0 level=0 mip={w=64,h=64,d=1} aligned={hr=0x80004005,row=0,slice=0,len=0} unaligned={hr=0x80004005,row=0,slice=0,len=0}
+MIP_LINEAR_3D case=0 fmt=35 level=0 mip={w=35,h=19,d=9} aligned={hr=0x00000000,row=144,slice=2736,len=24624} unaligned={hr=0x00000000,row=140,slice=2660,len=23940}
+MIP_LINEAR_3D case=1 fmt=35 level=1 mip={w=17,h=9,d=4} aligned={hr=0x00000000,row=80,slice=720,len=2880} unaligned={hr=0x00000000,row=68,slice=612,len=2448}
+MIP_LINEAR_3D case=2 fmt=35 level=2 mip={w=8,h=4,d=2} aligned={hr=0x00000000,row=32,slice=128,len=256} unaligned={hr=0x00000000,row=32,slice=128,len=256}
+MIP_LINEAR_3D case=3 fmt=35 level=3 mip={w=4,h=2,d=1} aligned={hr=0x00000000,row=16,slice=32,len=32} unaligned={hr=0x00000000,row=16,slice=32,len=32}
+MIP_LINEAR_3D case=4 fmt=98 level=0 mip={w=35,h=19,d=9} aligned={hr=0x00000000,row=144,slice=720,len=6480} unaligned={hr=0x00000000,row=144,slice=720,len=6480}
+MIP_LINEAR_3D case=5 fmt=98 level=1 mip={w=17,h=9,d=4} aligned={hr=0x00000000,row=80,slice=240,len=960} unaligned={hr=0x00000000,row=80,slice=240,len=960}
+MIP_LINEAR_3D case=6 fmt=98 level=2 mip={w=8,h=4,d=2} aligned={hr=0x00000000,row=32,slice=32,len=64} unaligned={hr=0x00000000,row=32,slice=32,len=64}
+MIP_LINEAR_3D case=7 fmt=98 level=3 mip={w=4,h=2,d=1} aligned={hr=0x00000000,row=16,slice=16,len=16} unaligned={hr=0x00000000,row=16,slice=16,len=16}
+DEFAULT_VIEW_BUF_SRV case=0 hr=0x00000000 fmt=0 dim=1 buf={first=0,num=64}
+DEFAULT_VIEW_BUF_UAV case=0 hr=0x00000000 fmt=0 dim=1 buf={first=0,num=64,flags=0x0}
+EXTRACT_VIEW3_BUF_SRV case=0 hr=0x00000000 fmt=41 dim=1 buf={first=2,num=8}
+DEFAULT_VIEW_BUF_SRV case=1 hr=0x80004005 fmt=0 dim=0
+DEFAULT_VIEW_BUF_UAV case=1 hr=0x80004005 fmt=0 dim=0
+EXTRACT_VIEW3_BUF_SRV case=1 hr=0x00000000 fmt=41 dim=1 buf={first=2,num=8}
+DEFAULT_VIEW_1D_SRV case=0 hr=0x00000000 fmt=28 dim=2 tex1d={most_mip=0,mips=4}
+DEFAULT_VIEW_1D_UAV case=0 hr=0x00000000 fmt=28 dim=2 tex1d={mip=0}
+DEFAULT_VIEW_1D_RTV case=0 hr=0x00000000 fmt=28 dim=2 tex1d={mip=0}
+DEFAULT_VIEW_1D_DSV case=0 hr=0x00000000 fmt=28 dim=1 flags=0x0 tex1d={mip=0}
+DEFAULT_VIEW_1D_SRV case=1 hr=0x00000000 fmt=40 dim=3 tex1darr={most_mip=0,mips=3,first_slice=0,arr_size=5}
+DEFAULT_VIEW_1D_UAV case=1 hr=0x00000000 fmt=40 dim=3 tex1darr={mip=0,first_slice=0,arr_size=5}
+DEFAULT_VIEW_1D_RTV case=1 hr=0x00000000 fmt=40 dim=3 tex1darr={mip=0,first_slice=0,arr_size=5}
+DEFAULT_VIEW_1D_DSV case=1 hr=0x00000000 fmt=40 dim=2 flags=0x0 tex1darr={mip=0,first_slice=0,arr_size=5}
+DEFAULT_VIEW_2D_SRV case=0 hr=0x00000000 fmt=28 dim=4 tex2d={most_mip=0,mips=4,plane=0}
+DEFAULT_VIEW_2D_UAV case=0 hr=0x00000000 fmt=28 dim=4 tex2d={mip=0,plane=0}
+DEFAULT_VIEW_2D_RTV case=0 hr=0x00000000 fmt=28 dim=4 tex2d={mip=0,plane=0}
+DEFAULT_VIEW_2D_DSV case=0 hr=0x00000000 fmt=28 dim=3 flags=0x0 tex2d={mip=0}
+DEFAULT_VIEW_2D_SRV case=1 hr=0x00000000 fmt=28 dim=5 tex2darr={most_mip=0,mips=4,first_slice=0,arr_size=6,plane=0}
+DEFAULT_VIEW_2D_UAV case=1 hr=0x00000000 fmt=28 dim=5 tex2darr={mip=0,first_slice=0,arr_size=6,plane=0}
+DEFAULT_VIEW_2D_RTV case=1 hr=0x00000000 fmt=28 dim=5 tex2darr={mip=0,first_slice=0,arr_size=6,plane=0}
+DEFAULT_VIEW_2D_DSV case=1 hr=0x00000000 fmt=28 dim=4 flags=0x0 tex2darr={mip=0,first_slice=0,arr_size=6}
+DEFAULT_VIEW_2D_SRV case=2 hr=0x00000000 fmt=10 dim=9 texcube={most_mip=0,mips=4}
+DEFAULT_VIEW_2D_UAV case=2 hr=0x00000000 fmt=10 dim=5 tex2darr={mip=0,first_slice=0,arr_size=6,plane=0}
+DEFAULT_VIEW_2D_RTV case=2 hr=0x00000000 fmt=10 dim=5 tex2darr={mip=0,first_slice=0,arr_size=6,plane=0}
+DEFAULT_VIEW_2D_DSV case=2 hr=0x00000000 fmt=10 dim=4 flags=0x0 tex2darr={mip=0,first_slice=0,arr_size=6}
+DEFAULT_VIEW_2D_SRV case=3 hr=0x00000000 fmt=10 dim=10 texcubearr={most_mip=0,mips=4,first_face=0,num_cubes=2}
+DEFAULT_VIEW_2D_UAV case=3 hr=0x00000000 fmt=10 dim=5 tex2darr={mip=0,first_slice=0,arr_size=12,plane=0}
+DEFAULT_VIEW_2D_RTV case=3 hr=0x00000000 fmt=10 dim=5 tex2darr={mip=0,first_slice=0,arr_size=12,plane=0}
+DEFAULT_VIEW_2D_DSV case=3 hr=0x00000000 fmt=10 dim=4 flags=0x0 tex2darr={mip=0,first_slice=0,arr_size=12}
+DEFAULT_VIEW_2D_SRV case=4 hr=0x00000000 fmt=28 dim=6 tex2dms={}
+DEFAULT_VIEW_2D_UAV case=4 hr=0x80004005 fmt=28 dim=0
+DEFAULT_VIEW_2D_RTV case=4 hr=0x00000000 fmt=28 dim=6 tex2dms={}
+DEFAULT_VIEW_2D_DSV case=4 hr=0x00000000 fmt=28 dim=5 flags=0x0 tex2dms={}
+DEFAULT_VIEW_2D_SRV case=5 hr=0x00000000 fmt=40 dim=7 tex2dmsarr={first_slice=0,arr_size=3}
+DEFAULT_VIEW_2D_UAV case=5 hr=0x80004005 fmt=40 dim=0
+DEFAULT_VIEW_2D_RTV case=5 hr=0x00000000 fmt=40 dim=7 tex2dmsarr={first_slice=0,arr_size=3}
+DEFAULT_VIEW_2D_DSV case=5 hr=0x00000000 fmt=40 dim=6 flags=0x0 tex2dmsarr={first_slice=0,arr_size=3}
+DEFAULT_VIEW_3D_SRV case=0 hr=0x00000000 fmt=28 dim=8 tex3d={most_mip=0,mips=4}
+DEFAULT_VIEW_3D_UAV case=0 hr=0x00000000 fmt=28 dim=8 tex3d={mip=0,first_w=0,w_size=16}
+DEFAULT_VIEW_3D_RTV case=0 hr=0x00000000 fmt=28 dim=8 tex3d={mip=0,first_w=0,w_size=16}
+DEFAULT_VIEW_3D_DSV case=0 hr=0x80004005 fmt=0 dim=0 flags=0x0
+NORM_VIEW_SRV case=0 hr=0x00000000 fmt=28 dim=3 tex1darr={most_mip=1,mips=3,first_slice=2,arr_size=4}
+NORM_VIEW_SRV_MTL case=0 fmt=70 type=3 first_mip=1 mips=3 first_slice=2 arr_size=4
+NORM_VIEW_SRV case=1 hr=0x00000000 fmt=29 dim=2 tex1d={most_mip=2,mips=2}
+NORM_VIEW_SRV_MTL case=1 fmt=71 type=2 first_mip=2 mips=2 first_slice=0 arr_size=1
+NORM_VIEW_SRV case=2 hr=0x00000000 fmt=27 dim=3 tex1darr={most_mip=0,mips=4,first_slice=0,arr_size=6}
+NORM_VIEW_SRV_MTL case=2 fmt=70 type=3 first_mip=0 mips=4 first_slice=0 arr_size=6
+NORM_VIEW_SRV case=3 hr=0x00000000 fmt=28 dim=5 tex2darr={most_mip=1,mips=3,first_slice=1,arr_size=5,plane=0}
+NORM_VIEW_SRV_MTL case=3 fmt=70 type=3 first_mip=1 mips=3 first_slice=1 arr_size=5
+NORM_VIEW_SRV case=4 hr=0x00000000 fmt=28 dim=4 tex2d={most_mip=0,mips=1,plane=0}
+NORM_VIEW_SRV_MTL case=4 fmt=70 type=2 first_mip=0 mips=1 first_slice=0 arr_size=1
+NORM_VIEW_SRV case=5 hr=0x00000000 fmt=10 dim=10 texcubearr={most_mip=0,mips=4,first_face=0,num_cubes=2}
+NORM_VIEW_SRV_MTL case=5 fmt=115 type=6 first_mip=0 mips=4 first_slice=0 arr_size=12
+NORM_VIEW_SRV case=6 hr=0x00000000 fmt=10 dim=9 texcube={most_mip=1,mips=3}
+NORM_VIEW_SRV_MTL case=6 fmt=115 type=5 first_mip=1 mips=3 first_slice=0 arr_size=6
+NORM_VIEW_SRV case=7 hr=0x00000000 fmt=10 dim=10 texcubearr={most_mip=0,mips=2,first_face=6,num_cubes=1}
+NORM_VIEW_SRV_MTL case=7 fmt=115 type=6 first_mip=0 mips=2 first_slice=6 arr_size=6
+NORM_VIEW_SRV case=8 hr=0x80004005 fmt=28 dim=9
+NORM_VIEW_SRV case=9 hr=0x00000000 fmt=28 dim=7 tex2dmsarr={first_slice=0,arr_size=4}
+NORM_VIEW_SRV_MTL case=9 fmt=70 type=8 first_mip=0 mips=1 first_slice=0 arr_size=4
+NORM_VIEW_SRV case=10 hr=0x80004005 fmt=28 dim=6
+NORM_VIEW_SRV case=11 hr=0x80004005 fmt=28 dim=4
+NORM_VIEW_SRV case=12 hr=0x00000000 fmt=28 dim=7 tex2dmsarr={first_slice=1,arr_size=5}
+NORM_VIEW_SRV_MTL case=12 fmt=70 type=3 first_mip=0 mips=1 first_slice=1 arr_size=5
+NORM_VIEW_SRV case=13 hr=0x00000000 fmt=41 dim=5 tex2darr={most_mip=0,mips=2,first_slice=0,arr_size=2,plane=0}
+NORM_VIEW_SRV_MTL case=13 fmt=252 type=3 first_mip=0 mips=2 first_slice=0 arr_size=2
+NORM_VIEW_SRV case=14 hr=0x00000000 fmt=56 dim=4 tex2d={most_mip=0,mips=2,plane=0}
+NORM_VIEW_SRV_MTL case=14 fmt=250 type=2 first_mip=0 mips=2 first_slice=0 arr_size=1
+NORM_VIEW_SRV case=15 hr=0x00000000 fmt=28 dim=8 tex3d={most_mip=0,mips=4}
+NORM_VIEW_SRV_MTL case=15 fmt=70 type=7 first_mip=0 mips=4 first_slice=0 arr_size=1
+NORM_VIEW_SRV case=16 hr=0x00000000 fmt=28 dim=8 tex3d={most_mip=1,mips=2}
+NORM_VIEW_SRV_MTL case=16 fmt=70 type=7 first_mip=1 mips=2 first_slice=0 arr_size=1
+NORM_VIEW_SRV case=17 hr=0x80004005 fmt=28 dim=4
+NORM_VIEW_UAV case=0 hr=0x00000000 fmt=28 dim=5 tex2darr={mip=1,first_slice=2,arr_size=4,plane=0}
+NORM_VIEW_UAV_MTL case=0 fmt=70 type=3 first_mip=1 mips=1 first_slice=2 arr_size=4
+NORM_VIEW_UAV case=1 hr=0x00000000 fmt=28 dim=8 tex3d={mip=1,first_w=0,w_size=8}
+NORM_VIEW_UAV_MTL case=1 fmt=70 type=7 first_mip=1 mips=1 first_slice=0 arr_size=1
+NORM_VIEW_UAV case=2 hr=0x80004005 fmt=28 dim=8
+NORM_VIEW_RTV case=0 hr=0x00000000 fmt=29 dim=5 tex2darr={mip=2,first_slice=1,arr_size=5,plane=0}
+NORM_VIEW_RTV_MTL case=0 fmt=71 type=3 first_mip=2 mips=1 first_slice=1 arr_size=5
+NORM_VIEW_RTV_ATTACH case=0 rt_arr_len=5 samples=1 depth_plane=0 w=64 h=32
+NORM_VIEW_RTV case=1 hr=0x00000000 fmt=28 dim=8 tex3d={mip=2,first_w=2,w_size=1}
+NORM_VIEW_RTV_MTL case=1 fmt=70 type=7 first_mip=2 mips=1 first_slice=0 arr_size=1
+NORM_VIEW_RTV_ATTACH case=1 rt_arr_len=0 samples=1 depth_plane=2 w=16 h=8
+NORM_VIEW_RTV case=2 hr=0x00000000 fmt=28 dim=8 tex3d={mip=2,first_w=0,w_size=4}
+NORM_VIEW_RTV_MTL case=2 fmt=70 type=7 first_mip=2 mips=1 first_slice=0 arr_size=1
+NORM_VIEW_RTV_ATTACH case=2 rt_arr_len=4 samples=1 depth_plane=0 w=16 h=8
+NORM_VIEW_DSV case=0 hr=0x00000000 fmt=40 dim=4 flags=0x1 tex2darr={mip=1,first_slice=0,arr_size=2}
+NORM_VIEW_DSV_MTL case=0 fmt=252 type=3 first_mip=1 mips=1 first_slice=0 arr_size=2
+NORM_VIEW_DSV_ATTACH case=0 rt_arr_len=2 samples=1 depth_plane=0 w=128 h=128
+NORM_VIEW_DSV case=1 hr=0x00000000 fmt=55 dim=3 flags=0x0 tex2d={mip=0}
+NORM_VIEW_DSV_MTL case=1 fmt=250 type=2 first_mip=0 mips=1 first_slice=0 arr_size=1
+NORM_VIEW_DSV_ATTACH case=1 rt_arr_len=0 samples=1 depth_plane=0 w=256 h=256
+NORM_VIEW_DSV case=2 hr=0x80004005 fmt=0 dim=0 flags=0x0
+CALC_BUF_VIEW case=0 offset=0 size=64
+CALC_BUF_VIEW case=1 offset=16 size=32
+CALC_BUF_VIEW case=2 offset=40 size=80
+CALC_BUF_VIEW case=3 offset=192 size=64
+CALC_BUF_VIEW case=4 offset=0 size=0
