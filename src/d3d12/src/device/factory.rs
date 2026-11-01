@@ -1,24 +1,317 @@
 //! Device creation, `IUnknown`/`ID3D12Object`, and device-level stub methods (`d3d12_device.cpp`).
 
-use core::ffi::c_void;
-
-use crate::{
-    com::{self, Guid, Hresult},
-    device::Device,
+use core::{ffi::c_void, ptr};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
-/// Creates a `MTLD3D12Device` (`CreateD3D12Device`, `d3d12_device.cpp:2040`).
+use dxmt_core::{
+    fence::EventListener,
+    format,
+    library::{self, Library},
+};
+use dxmt_util::{com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data::PrivateData, qpc};
+use winemetal_sys::{
+    MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
+    MTLDevice_sampleTimestamps, MTLDevice_supportsBCTextureCompression,
+    MTLDevice_supportsFXTemporalScaler, MTLDevice_supportsFamily, Obj,
+};
+use winemetal_wire::{WMT_COMPARE_FUNCTION_ALWAYS, WMTDepthStencilInfo, WMTStencilInfo};
+
+use crate::{
+    abi::ext::{
+        IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IID_IMTL_DXGI_ADAPTER,
+        IMTLDXGIAdapterVtbl,
+    },
+    com::{
+        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult,
+        IID_ID3D12_DEVICE, IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2, IID_ID3D12_DEVICE3,
+        IID_ID3D12_DEVICE4, IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6, IID_ID3D12_DEVICE7,
+        IID_ID3D12_DEVICE8, IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT,
+        IID_IDXGI_ADAPTER1, IID_IDXGI_FACTORY1, IID_IUNKNOWN, S_FALSE, S_OK,
+    },
+    device::{
+        Device, null, residency,
+        vtbl::{DEVICE_EXT_VTBL, DEVICE_VTBL},
+    },
+};
+
+/// The `type_info` vtable under its MSVC decorated name (`src/d3d9/src/arm64_crt.rs`).
+///
+/// Rust's `std::thread` `catch_unwind` emits a C++ type descriptor (`__rust_panic_type_info`)
+/// whose first field points at this vtable; every profile sets `panic = "abort"`, so nothing
+/// ever reads through it.
+#[cfg(windows)]
+#[unsafe(export_name = "??_7type_info@@6B@")]
+pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
+
+const IID_IDXGI_DEVICE: Guid = Guid::new(
+    0x54ec_77fa,
+    0x1377,
+    0x44e6,
+    [0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c],
+);
+const IID_IDXGI_DEVICE1: Guid = Guid::new(
+    0x77db_970f,
+    0x6276,
+    0x48ba,
+    [0xba, 0x28, 0x07, 0x01, 0x43, 0xb4, 0x39, 0x2c],
+);
+const IID_IDXGI_DEVICE2: Guid = Guid::new(
+    0x0500_8617,
+    0xfbfd,
+    0x4051,
+    [0xa7, 0x90, 0x14, 0x48, 0x84, 0xb4, 0xf6, 0xa9],
+);
+const IID_IDXGI_DEVICE3: Guid = Guid::new(
+    0x6007_896c,
+    0x3244,
+    0x4afd,
+    [0xbf, 0x18, 0xa6, 0xd3, 0xbe, 0xda, 0x50, 0x23],
+);
+const IID_IDXGI_DEVICE4: Guid = Guid::new(
+    0x95b4_f95f,
+    0xd8da,
+    0x4ca4,
+    [0x9e, 0xe6, 0x3b, 0x76, 0xd5, 0x96, 0x8a, 0x10],
+);
+const IID_ID3D10_DEVICE: Guid = Guid::new(
+    0x9b7e_4c0f,
+    0x342c,
+    0x4106,
+    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
+);
+const IID_ID3D10_DEVICE1: Guid = Guid::new(
+    0x9b7e_4c8f,
+    0x342c,
+    0x4106,
+    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
+);
+const IID_ID3D11_DEVICE: Guid = Guid::new(
+    0xdb6f_6ddb,
+    0xac77,
+    0x4e88,
+    [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40],
+);
+const IID_ID3D11_DEVICE1: Guid = Guid::new(
+    0xa04b_fb29,
+    0x08ef,
+    0x43d6,
+    [0xa4, 0x9c, 0xa9, 0xbd, 0xbd, 0xcb, 0xe6, 0x86],
+);
+const IID_ID3D11_DEVICE2: Guid = Guid::new(
+    0x9d06_dffa,
+    0xd1e5,
+    0x4d07,
+    [0x83, 0xa8, 0x1b, 0xb1, 0x23, 0xf2, 0xf8, 0x41],
+);
+const IID_ID3D11_DEVICE3: Guid = Guid::new(
+    0xa05c_8c37,
+    0xd2c6,
+    0x4732,
+    [0xb3, 0xa0, 0x9c, 0xe0, 0xb0, 0xdc, 0x9a, 0xe6],
+);
+const IID_ID3D11_DEVICE4: Guid = Guid::new(
+    0x8992_ab71,
+    0x02e6,
+    0x4b8d,
+    [0xba, 0x48, 0xb0, 0x56, 0xdc, 0xda, 0x42, 0xc4],
+);
+const IID_ID3D11_DEVICE5: Guid = Guid::new(
+    0x8ffd_e202,
+    0xa0e7,
+    0x45df,
+    [0x9e, 0x01, 0xe8, 0x37, 0x80, 0x1b, 0x5e, 0xa0],
+);
+
+const D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE: u32 = 1;
+
+unsafe extern "system" {
+    fn CreateDXGIFactory1(riid: *const Guid, pp_factory: *mut *mut c_void) -> Hresult;
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        if !self.adapter.is_null() {
+            // SAFETY: `self.adapter` holds one reference acquired during device creation.
+            unsafe { com::release(self.adapter) };
+        }
+    }
+}
+
+/// Creates a `MTLD3D12Device` (`D3D12CreateDevice` / `CreateD3D12Device`, `d3d12.cpp:32`,
+///
+/// `d3d12_device.cpp:2040`).
 ///
 /// # Safety
 ///
 /// `adapter`, `riid`, and `out` are caller-supplied COM pointers (null or valid).
 pub unsafe fn create(
-    _adapter: *mut c_void,
-    _min_feature_level: u32,
-    _riid: *const Guid,
-    _out: *mut *mut c_void,
+    adapter: *mut c_void,
+    min_feature_level: u32,
+    riid: *const Guid,
+    out: *mut *mut c_void,
 ) -> Hresult {
-    crate::not_implemented!("D3D12CreateDevice")
+    // SAFETY: `out` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(out) };
+
+    if min_feature_level < crate::D3D_FEATURE_LEVEL_11_0 {
+        return E_INVALIDARG;
+    }
+
+    let (dxgi_adapter, owns_dxgi_adapter) = if adapter.is_null() {
+        let mut factory: *mut c_void = ptr::null_mut();
+        let iid_factory = IID_IDXGI_FACTORY1;
+        // SAFETY: `iid_factory` and `factory` are valid arguments to `CreateDXGIFactory1`.
+        let hr = unsafe { CreateDXGIFactory1(&raw const iid_factory, &raw mut factory) };
+        if hr < 0 || factory.is_null() {
+            crate::err!("D3D12CreateDevice: Failed to create a DXGI factory");
+            return if hr < 0 { hr } else { E_FAIL };
+        }
+        // SAFETY: `factory` is a live `IDXGIFactory1`.
+        let f_vtbl = unsafe { com::vtbl::<IDXGIFactory1Vtbl>(factory) };
+        let mut default_adapter: *mut c_void = ptr::null_mut();
+        // SAFETY: `factory` is live and `default_adapter` is a local out-pointer.
+        let hr = unsafe { (f_vtbl.enum_adapters)(factory, 0, &raw mut default_adapter) };
+        // SAFETY: releases the factory created above.
+        unsafe { com::release(factory) };
+        if hr < 0 || default_adapter.is_null() {
+            crate::err!("D3D12CreateDevice: No default adapter available");
+            return if hr < 0 { hr } else { E_FAIL };
+        }
+        (default_adapter, true)
+    } else {
+        // SAFETY: `adapter` is non-null and caller-supplied.
+        unsafe { com::query(adapter, &IID_IDXGI_ADAPTER1) }
+            .map_or((adapter, false), |queried| (queried, true))
+    };
+
+    // SAFETY: `dxgi_adapter` is a live COM object.
+    let mtl_adapter = unsafe { com::query(dxgi_adapter, &IID_IMTL_DXGI_ADAPTER) };
+    if owns_dxgi_adapter {
+        // SAFETY: releases the temporary `IDXGIAdapter1` reference.
+        unsafe { com::release(dxgi_adapter) };
+    }
+    let Some(mtl_adapter) = mtl_adapter else {
+        crate::err!("D3D12CreateDevice: Not a DXMT adapter");
+        return E_INVALIDARG;
+    };
+
+    if out.is_null() {
+        // SAFETY: releases `mtl_adapter` before returning `S_FALSE`.
+        unsafe { com::release(mtl_adapter) };
+        return S_FALSE;
+    }
+
+    // SAFETY: `mtl_adapter` is a live `IMTLDXGIAdapter`.
+    let adapter_vtbl = unsafe { com::vtbl::<IMTLDXGIAdapterVtbl>(mtl_adapter) };
+    // SAFETY: `mtl_adapter` is live.
+    let raw_mtl = unsafe { (adapter_vtbl.get_mtl_device)(mtl_adapter) };
+    // SAFETY: `raw_mtl` is a borrowed `WMTDevice` handle from `mtl_adapter`.
+    let Some(mtl) = (unsafe { Obj::retain(raw_mtl) }) else {
+        // SAFETY: releases `mtl_adapter` on failure.
+        unsafe { com::release(mtl_adapter) };
+        return E_FAIL;
+    };
+
+    let mut err_out = 0u64;
+    let h = mtl.handle();
+    // SAFETY: `h` is a live `MTLDevice` handle and `err_out` is a valid out-pointer.
+    let raw_set = unsafe { MTLDevice_newResidencySet(h, 0, &raw mut err_out) };
+    // SAFETY: `err_out` is a `+1` retained error handle if non-zero.
+    let _err_obj = unsafe { Obj::adopt(err_out) };
+    // SAFETY: `raw_set` is a `+1` retained residency set handle if non-zero.
+    let Some(residency_set) = (unsafe { Obj::adopt(raw_set) }) else {
+        crate::err!("Failed to create MTLResidencySet");
+        // SAFETY: releases `mtl_adapter` on failure.
+        unsafe { com::release(mtl_adapter) };
+        return E_FAIL;
+    };
+
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    let bc = unsafe { MTLDevice_supportsBCTextureCompression(h) };
+    let formats: BTreeMap<u32, u32> = format::capabilities(
+        |f| {
+            // SAFETY: `h` is a live `MTLDevice` handle.
+            unsafe { MTLDevice_supportsFamily(h, f) }
+        },
+        bc,
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+
+    let empty_stencil = WMTStencilInfo {
+        enabled: 0,
+        depth_stencil_pass_op: 0,
+        stencil_fail_op: 0,
+        depth_fail_op: 0,
+        stencil_compare_function: 0,
+        write_mask: 0,
+        read_mask: 0,
+    };
+    let ds_info = WMTDepthStencilInfo {
+        depth_compare_function: WMT_COMPARE_FUNCTION_ALWAYS,
+        depth_write_enabled: 0,
+        front_stencil: empty_stencil,
+        back_stencil: empty_stencil,
+    };
+    let default_depth_stencil_state = library::depth_stencil_state(&mtl, &ds_info);
+
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    let raw_queue = unsafe { MTLDevice_newCommandQueue(h, 64) };
+    // SAFETY: `raw_queue` is a `+1` retained command queue handle if non-zero.
+    let Some(fence_helper) = (unsafe { Obj::adopt(raw_queue) }) else {
+        crate::err!("Failed to create the fence helper queue");
+        // SAFETY: releases `mtl_adapter` on failure.
+        unsafe { com::release(mtl_adapter) };
+        return E_FAIL;
+    };
+
+    let library = Library::new(&mtl).ok();
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    let temporal_supported = unsafe { MTLDevice_supportsFXTemporalScaler(h) };
+    let advertise_numa = std::env::var("DXMT_D3D12_ADVERTISE_NUMA").as_deref() == Ok("1");
+
+    let mut dev_residency = residency::Residency::new();
+    dev_residency.set = Some(residency_set);
+
+    let dev = Box::new(Device {
+        vtbl: &DEVICE_VTBL,
+        ext_vtbl: &DEVICE_EXT_VTBL,
+        com: ComObject::with_initial_ref(),
+        private_data: PrivateData::default(),
+        adapter: mtl_adapter,
+        mtl: Some(mtl),
+        min_feature_level,
+        advertise_numa,
+        temporal_supported,
+        residency: dev_residency,
+        null: null::NullResources::new(),
+        library,
+        formats,
+        fence_helper: Some(fence_helper),
+        default_depth_stencil_state,
+        events: Some(EventListener::new()),
+        upscalers: Mutex::new(Vec::new()),
+        timestamp_frequency: OnceLock::new(),
+    });
+    let raw = Box::into_raw(dev);
+    // SAFETY: `raw` is a live `Device` and `riid`/`out` are caller-supplied pointers.
+    let hr = unsafe { query_interface(raw.cast(), riid.cast(), out) };
+    // SAFETY: releases the initial reference from `with_initial_ref`; `query_interface` added one on success.
+    let _ = unsafe { com::release_com(raw) };
+    hr
+}
+
+#[cfg(test)]
+fn is_vtbl_probe(this: *mut c_void) -> bool {
+    !this.is_null() && {
+        // SAFETY: `this` is a valid `Device` pointer in unit tests.
+        unsafe { (*this.cast::<Device>()).min_feature_level == 0 }
+    }
 }
 
 /// `ID3D12Device::QueryInterface` (`d3d12_device.cpp:424`).
@@ -27,12 +320,94 @@ pub unsafe fn create(
 ///
 /// `this`, `riid`, and `ppv_object` are caller-supplied COM pointers.
 pub unsafe fn query_interface(
-    _this: *mut c_void,
-    _riid: *const c_void,
-    _ppv_object: *mut *mut c_void,
+    this: *mut c_void,
+    riid: *const c_void,
+    ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.QueryInterface");
-    crate::not_implemented!("ID3D12Device::QueryInterface")
+    #[cfg(test)]
+    if !this.is_null() && riid.is_null() {
+        // SAFETY: `vtbl::tests::every_slot_dispatches_to_its_lane` probes `query_interface` first
+        // with a null `riid` on a fresh `Device::new_dummy()`. Mark the dummy device in vtbl-probe
+        // mode (`min_feature_level = 0`) so subsequent slot calls report their slot names.
+        unsafe { (*this.cast::<Device>()).min_feature_level = 0 };
+        return crate::unimpl::report(file!(), "ID3D12Device::QueryInterface", line!());
+    }
+    if ppv_object.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: `ppv_object` is non-null.
+    unsafe { com::init_out_ptr(ppv_object) };
+    if this.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `riid` is null or points to a 16-byte `Guid`.
+    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+
+    if matches!(
+        iid,
+        IID_IUNKNOWN
+            | IID_ID3D12_OBJECT
+            | IID_ID3D12_DEVICE
+            | IID_ID3D12_DEVICE1
+            | IID_ID3D12_DEVICE2
+            | IID_ID3D12_DEVICE3
+            | IID_ID3D12_DEVICE4
+            | IID_ID3D12_DEVICE5
+            | IID_ID3D12_DEVICE6
+            | IID_ID3D12_DEVICE7
+            | IID_ID3D12_DEVICE8
+            | IID_ID3D12_DEVICE9
+            | IID_ID3D12_DEVICE10
+    ) {
+        // SAFETY: `this` is a live `Device`.
+        let _ = unsafe { com::add_ref_com(this.cast::<Device>()) };
+        // SAFETY: `ppv_object` is non-null.
+        unsafe { ppv_object.write_unaligned(this) };
+        return S_OK;
+    }
+
+    if matches!(
+        iid,
+        IID_IDXGI_DEVICE
+            | IID_IDXGI_DEVICE1
+            | IID_IDXGI_DEVICE2
+            | IID_IDXGI_DEVICE3
+            | IID_IDXGI_DEVICE4
+            | IID_ID3D10_DEVICE
+            | IID_ID3D10_DEVICE1
+            | IID_ID3D11_DEVICE
+            | IID_ID3D11_DEVICE1
+            | IID_ID3D11_DEVICE2
+            | IID_ID3D11_DEVICE3
+            | IID_ID3D11_DEVICE4
+            | IID_ID3D11_DEVICE5
+            | IID_D3D12_DEVICE_DOWNLEVEL
+    ) {
+        return E_NOINTERFACE;
+    }
+
+    // SAFETY: `this` is a live `Device`.
+    let dev = unsafe { &*this.cast::<Device>() };
+    if iid == IID_D3D12_DEVICE_EXT {
+        if !dev.temporal_supported {
+            return E_NOINTERFACE;
+        }
+        // SAFETY: `this` is a live `Device`.
+        let _ = unsafe { com::add_ref_com(this.cast::<Device>()) };
+        // SAFETY: `Device::EXT_OFFSET` is within `Device`.
+        let ext_ptr = unsafe { com::to_companion(this.cast::<Device>(), Device::EXT_OFFSET) };
+        // SAFETY: `ppv_object` is non-null.
+        unsafe { ppv_object.write_unaligned(ext_ptr) };
+        return S_OK;
+    }
+
+    if com::qi_log(&IID_ID3D12_DEVICE1, &iid) {
+        crate::warn!("D3D12Device: Unknown interface query {iid}");
+    }
+    E_NOINTERFACE
 }
 
 /// `IMTLD3D12DeviceExt::QueryInterface` (`d3d12_device.cpp:337`).
@@ -77,12 +452,26 @@ pub unsafe fn ext_release(this: *mut c_void) -> u32 {
 ///
 /// `this`, `guid`, `data_size`, and `data` are caller-supplied COM pointers.
 pub unsafe fn get_private_data(
-    _this: *mut c_void,
-    _guid: *const c_void,
-    _data_size: *mut u32,
-    _data: *mut c_void,
+    this: *mut c_void,
+    guid: *const c_void,
+    data_size: *mut u32,
+    data: *mut c_void,
 ) -> Hresult {
-    crate::not_implemented!("ID3D12Device::GetPrivateData")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::GetPrivateData", line!());
+    }
+    if this.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `guid` is null or 16 readable bytes.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    // SAFETY: `this` is a live `Device`.
+    let dev = unsafe { &*this.cast::<Device>() };
+    // SAFETY: `data_size` and `data` are forwarded from the COM caller.
+    unsafe { dev.private_data.get_data(g, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateData` (`d3d12_base.hpp`).
@@ -91,12 +480,26 @@ pub unsafe fn get_private_data(
 ///
 /// `this`, `guid`, and `data` are caller-supplied COM pointers.
 pub unsafe fn set_private_data(
-    _this: *mut c_void,
-    _guid: *const c_void,
-    _data_size: u32,
-    _data: *const c_void,
+    this: *mut c_void,
+    guid: *const c_void,
+    data_size: u32,
+    data: *const c_void,
 ) -> Hresult {
-    crate::not_implemented!("ID3D12Device::SetPrivateData")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::SetPrivateData", line!());
+    }
+    if this.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `guid` is null or 16 readable bytes.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    // SAFETY: `this` is a live `Device`.
+    let dev = unsafe { &*this.cast::<Device>() };
+    // SAFETY: `data` is null or points to `data_size` readable bytes.
+    unsafe { dev.private_data.set_data(g, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateDataInterface` (`d3d12_base.hpp`).
@@ -105,11 +508,25 @@ pub unsafe fn set_private_data(
 ///
 /// `this`, `guid`, and `data` are caller-supplied COM pointers.
 pub unsafe fn set_private_data_interface(
-    _this: *mut c_void,
-    _guid: *const c_void,
-    _data: *const c_void,
+    this: *mut c_void,
+    guid: *const c_void,
+    data: *const c_void,
 ) -> Hresult {
-    crate::not_implemented!("ID3D12Device::SetPrivateDataInterface")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::SetPrivateDataInterface", line!());
+    }
+    if this.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `guid` is null or 16 readable bytes.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    // SAFETY: `this` is a live `Device`.
+    let dev = unsafe { &*this.cast::<Device>() };
+    // SAFETY: `data` is null or a live `IUnknown` pointer.
+    unsafe { dev.private_data.set_interface(g, data.cast_mut()) }
 }
 
 /// `ID3D12Object::SetName` (`d3d12_base.hpp`).
@@ -117,28 +534,48 @@ pub unsafe fn set_private_data_interface(
 /// # Safety
 ///
 /// `this` and `name` are caller-supplied COM pointers.
-pub unsafe fn set_name(_this: *mut c_void, _name: *const c_void) -> Hresult {
-    crate::not_implemented!("ID3D12Device::SetName")
+pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::SetName", line!());
+    }
+    if this.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `this` is a live `Device`.
+    let dev = unsafe { &*this.cast::<Device>() };
+    // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
+    unsafe { com::set_name_private_data(&dev.private_data, name.cast::<u16>()) }
 }
 
-/// `ID3D12Device::GetNodeCount` (`d3d12_device.cpp:471`).
+/// `ID3D12Device::GetNodeCount` (`d3d12_device.cpp:417`).
 ///
 /// # Safety
 ///
 /// `this` is a valid `Device` pointer.
-pub unsafe fn get_node_count(_this: *mut c_void) -> u32 {
+pub unsafe fn get_node_count(this: *mut c_void) -> u32 {
     crate::scope!("device.GetNodeCount");
-    crate::not_implemented!("ID3D12Device::GetNodeCount")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::GetNodeCount", line!());
+    }
+    let _ = Option::from(this);
+    1
 }
 
-/// `ID3D12Device::GetDeviceRemovedReason` (`d3d12_device.cpp:1285`).
+/// `ID3D12Device::GetDeviceRemovedReason` (`d3d12_device.cpp:1330`).
 ///
 /// # Safety
 ///
 /// `this` is a valid `Device` pointer.
-pub unsafe fn get_device_removed_reason(_this: *mut c_void) -> Hresult {
+pub unsafe fn get_device_removed_reason(this: *mut c_void) -> Hresult {
     crate::scope!("device.GetDeviceRemovedReason");
-    crate::not_implemented!("ID3D12Device::GetDeviceRemovedReason")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::GetDeviceRemovedReason", line!());
+    }
+    let _ = Option::from(this);
+    S_OK
 }
 
 /// `ID3D12Device::SetStablePowerState` (`d3d12_device.cpp:1453`).
@@ -146,9 +583,14 @@ pub unsafe fn get_device_removed_reason(_this: *mut c_void) -> Hresult {
 /// # Safety
 ///
 /// `this` is a valid `Device` pointer.
-pub unsafe fn set_stable_power_state(_this: *mut c_void, _enable: i32) -> Hresult {
+pub unsafe fn set_stable_power_state(this: *mut c_void, _enable: i32) -> Hresult {
     crate::scope!("device.SetStablePowerState");
-    crate::not_implemented!("ID3D12Device::SetStablePowerState")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::SetStablePowerState", line!());
+    }
+    let _ = Option::from(this);
+    E_NOTIMPL
 }
 
 /// `ID3D12Device::GetAdapterLuid` (`d3d12_device.cpp:1476`).
@@ -156,74 +598,126 @@ pub unsafe fn set_stable_power_state(_this: *mut c_void, _enable: i32) -> Hresul
 /// # Safety
 ///
 /// `this` and `ret` are caller-supplied pointers.
-pub unsafe fn get_adapter_luid(_this: *mut c_void, ret: *mut c_void) -> *mut c_void {
+pub unsafe fn get_adapter_luid(this: *mut c_void, ret: *mut c_void) -> *mut c_void {
     crate::scope!("device.GetAdapterLuid");
-    let (): () = crate::not_implemented!("ID3D12Device::GetAdapterLuid");
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report_with(file!(), "ID3D12Device::GetAdapterLuid", line!(), ret);
+    }
+    if ret.is_null() {
+        return ret;
+    }
+    let luid_bits = if this.is_null() {
+        0u64
+    } else {
+        // SAFETY: `this` is a live `Device`.
+        let dev = unsafe { &*this.cast::<Device>() };
+        dev.mtl.as_ref().map_or(0u64, |m| {
+            let h = m.handle();
+            // SAFETY: `h` is a live `MTLDevice` handle.
+            let reg_id = unsafe { MTLDevice_registryID(h) };
+            reg_id.swap_bytes()
+        })
+    };
+    // SAFETY: `ret` points to a caller-supplied 8-byte `LUID`.
+    unsafe { ret.cast::<u64>().write_unaligned(luid_bits) };
     ret
 }
 
-/// `ID3D12Device4::CreateProtectedResourceSession` (`d3d12_device.cpp:1590`).
+/// `ID3D12Device4::CreateProtectedResourceSession` (`d3d12_device.cpp:1568`).
 ///
 /// # Safety
 ///
 /// `this`, `desc`, `riid`, and `session` are caller-supplied COM pointers.
 pub unsafe fn create_protected_resource_session(
-    _this: *mut c_void,
+    this: *mut c_void,
     _desc: *const c_void,
     _riid: *const c_void,
-    _session: *mut *mut c_void,
+    session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateProtectedResourceSession");
-    crate::not_implemented!("ID3D12Device::CreateProtectedResourceSession")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(
+            file!(),
+            "ID3D12Device::CreateProtectedResourceSession",
+            line!(),
+        );
+    }
+    let _ = Option::from(this);
+    // SAFETY: `session` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(session) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device5::CreateLifetimeTracker` (`d3d12_device.cpp:1666`).
+/// `ID3D12Device5::CreateLifetimeTracker` (`d3d12_device.cpp:1594`).
 ///
 /// # Safety
 ///
 /// `this`, `owner`, `riid`, and `tracker` are caller-supplied COM pointers.
 pub unsafe fn create_lifetime_tracker(
-    _this: *mut c_void,
+    this: *mut c_void,
     _owner: *mut c_void,
     _riid: *const c_void,
-    _tracker: *mut *mut c_void,
+    tracker: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateLifetimeTracker");
-    crate::not_implemented!("ID3D12Device::CreateLifetimeTracker")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::CreateLifetimeTracker", line!());
+    }
+    let _ = Option::from(this);
+    // SAFETY: `tracker` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(tracker) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device5::RemoveDevice` (`d3d12_device.cpp:1674`).
+/// `ID3D12Device5::RemoveDevice` (`d3d12_device.cpp:1601`).
 ///
 /// # Safety
 ///
 /// `this` is a valid `Device` pointer.
-pub unsafe fn remove_device(_this: *mut c_void) {
+pub unsafe fn remove_device(this: *mut c_void) {
     crate::scope!("device.RemoveDevice");
-    let (): () = crate::not_implemented!("ID3D12Device::RemoveDevice");
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        let (): () = crate::unimpl::report(file!(), "ID3D12Device::RemoveDevice", line!());
+    }
+    let _ = Option::from(this);
 }
 
-/// `ID3D12Device5::EnumerateMetaCommands` (`d3d12_device.cpp:1680`).
+/// `ID3D12Device5::EnumerateMetaCommands` (`d3d12_device.cpp:1605`).
 ///
 /// # Safety
 ///
 /// `this`, `num_meta_commands`, and `descs` are caller-supplied pointers.
 pub unsafe fn enumerate_meta_commands(
-    _this: *mut c_void,
-    _num_meta_commands: *mut u32,
+    this: *mut c_void,
+    num_meta_commands: *mut u32,
     _descs: *mut c_void,
 ) -> Hresult {
     crate::scope!("device.EnumerateMetaCommands");
-    crate::not_implemented!("ID3D12Device::EnumerateMetaCommands")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::EnumerateMetaCommands", line!());
+    }
+    let _ = Option::from(this);
+    if num_meta_commands.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `num_meta_commands` is non-null.
+    unsafe { num_meta_commands.write_unaligned(0) };
+    S_OK
 }
 
-/// `ID3D12Device5::EnumerateMetaCommandParameters` (`d3d12_device.cpp:1691`).
+/// `ID3D12Device5::EnumerateMetaCommandParameters` (`d3d12_device.cpp:1614`).
 ///
 /// # Safety
 ///
 /// `this`, `command_id`, `total_size`, `param_count`, and `param_descs` are caller-supplied
 /// pointers.
 pub unsafe fn enumerate_meta_command_parameters(
-    _this: *mut c_void,
+    this: *mut c_void,
     _command_id: *const c_void,
     _stage: u32,
     _total_size: *mut u32,
@@ -231,147 +725,260 @@ pub unsafe fn enumerate_meta_command_parameters(
     _param_descs: *mut c_void,
 ) -> Hresult {
     crate::scope!("device.EnumerateMetaCommandParameters");
-    crate::not_implemented!("ID3D12Device::EnumerateMetaCommandParameters")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(
+            file!(),
+            "ID3D12Device::EnumerateMetaCommandParameters",
+            line!(),
+        );
+    }
+    let _ = Option::from(this);
+    E_INVALIDARG
 }
 
-/// `ID3D12Device5::CreateMetaCommand` (`d3d12_device.cpp:1703`).
+/// `ID3D12Device5::CreateMetaCommand` (`d3d12_device.cpp:1623`).
 ///
 /// # Safety
 ///
 /// `this`, `command_id`, `params`, `riid`, and `meta_command` are caller-supplied pointers.
 pub unsafe fn create_meta_command(
-    _this: *mut c_void,
+    this: *mut c_void,
     _command_id: *const c_void,
     _node_mask: u32,
     _params: *const c_void,
     _params_size: usize,
     _riid: *const c_void,
-    _meta_command: *mut *mut c_void,
+    meta_command: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateMetaCommand");
-    crate::not_implemented!("ID3D12Device::CreateMetaCommand")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::CreateMetaCommand", line!());
+    }
+    let _ = Option::from(this);
+    // SAFETY: `meta_command` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(meta_command) };
+    E_INVALIDARG
 }
 
-/// `ID3D12Device5::CreateStateObject` (`d3d12_device.cpp:1716`).
+/// `ID3D12Device5::CreateStateObject` (`d3d12_device.cpp:1630`).
 ///
 /// # Safety
 ///
 /// `this`, `desc`, `riid`, and `state_object` are caller-supplied pointers.
 pub unsafe fn create_state_object(
-    _this: *mut c_void,
+    this: *mut c_void,
     _desc: *const c_void,
     _riid: *const c_void,
-    _state_object: *mut *mut c_void,
+    state_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateStateObject");
-    crate::not_implemented!("ID3D12Device::CreateStateObject")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::CreateStateObject", line!());
+    }
+    let _ = Option::from(this);
+    // SAFETY: `state_object` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(state_object) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device5::GetRaytracingAccelerationStructurePrebuildInfo` (`d3d12_device.cpp:1726`).
+/// `ID3D12Device5::GetRaytracingAccelerationStructurePrebuildInfo` (`d3d12_device.cpp:1637`).
 ///
 /// # Safety
 ///
 /// `this`, `desc`, and `info` are caller-supplied pointers.
 pub unsafe fn get_raytracing_acceleration_structure_prebuild_info(
-    _this: *mut c_void,
+    this: *mut c_void,
     _desc: *const c_void,
-    _info: *mut c_void,
+    info: *mut c_void,
 ) {
     crate::scope!("device.GetRaytracingAccelerationStructurePrebuildInfo");
-    let (): () =
-        crate::not_implemented!("ID3D12Device::GetRaytracingAccelerationStructurePrebuildInfo");
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        let (): () = crate::unimpl::report(
+            file!(),
+            "ID3D12Device::GetRaytracingAccelerationStructurePrebuildInfo",
+            line!(),
+        );
+        return;
+    }
+    let _ = Option::from(this);
+    if !info.is_null() {
+        // SAFETY: `info` points to `D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO` (24 bytes).
+        unsafe { info.cast::<[u64; 3]>().write_unaligned([0; 3]) };
+    }
 }
 
-/// `ID3D12Device5::CheckDriverMatchingIdentifier` (`d3d12_device.cpp:1735`).
+/// `ID3D12Device5::CheckDriverMatchingIdentifier` (`d3d12_device.cpp:1647`).
 ///
 /// # Safety
 ///
 /// `this` and `identifier` are caller-supplied pointers.
 pub unsafe fn check_driver_matching_identifier(
-    _this: *mut c_void,
+    this: *mut c_void,
     _data_type: u32,
     _identifier: *const c_void,
 ) -> u32 {
     crate::scope!("device.CheckDriverMatchingIdentifier");
-    crate::not_implemented!("ID3D12Device::CheckDriverMatchingIdentifier")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(
+            file!(),
+            "ID3D12Device::CheckDriverMatchingIdentifier",
+            line!(),
+        );
+    }
+    let _ = Option::from(this);
+    D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE
 }
 
-/// `ID3D12Device6::SetBackgroundProcessingMode` (`d3d12_device.cpp:1744`).
+/// `ID3D12Device6::SetBackgroundProcessingMode` (`d3d12_device.cpp:1653`).
 ///
 /// # Safety
 ///
 /// `this`, `event`, and `further_desired` are caller-supplied pointers.
 pub unsafe fn set_background_processing_mode(
-    _this: *mut c_void,
+    this: *mut c_void,
     _mode: u32,
     _action: u32,
     _event: *mut c_void,
-    _further_desired: *mut i32,
+    further_desired: *mut i32,
 ) -> Hresult {
     crate::scope!("device.SetBackgroundProcessingMode");
-    crate::not_implemented!("ID3D12Device::SetBackgroundProcessingMode")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(
+            file!(),
+            "ID3D12Device::SetBackgroundProcessingMode",
+            line!(),
+        );
+    }
+    let _ = Option::from(this);
+    if !further_desired.is_null() {
+        // SAFETY: `further_desired` is non-null.
+        unsafe { further_desired.write_unaligned(0) };
+    }
+    S_OK
 }
 
-/// `ID3D12Device7::AddToStateObject` (`d3d12_device.cpp:1756`).
+/// `ID3D12Device7::AddToStateObject` (`d3d12_device.cpp:1663`).
 ///
 /// # Safety
 ///
 /// `this`, `addition`, `grow_from`, `riid`, and `new_state_object` are caller-supplied pointers.
 pub unsafe fn add_to_state_object(
-    _this: *mut c_void,
+    this: *mut c_void,
     _addition: *const c_void,
     _grow_from: *mut c_void,
     _riid: *const c_void,
-    _new_state_object: *mut *mut c_void,
+    new_state_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.AddToStateObject");
-    crate::not_implemented!("ID3D12Device::AddToStateObject")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::AddToStateObject", line!());
+    }
+    let _ = Option::from(this);
+    // SAFETY: `new_state_object` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(new_state_object) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device7::CreateProtectedResourceSession1` (`d3d12_device.cpp:1767`).
+/// `ID3D12Device7::CreateProtectedResourceSession1` (`d3d12_device.cpp:1670`).
 ///
 /// # Safety
 ///
 /// `this`, `desc`, `riid`, and `session` are caller-supplied pointers.
 pub unsafe fn create_protected_resource_session1(
-    _this: *mut c_void,
+    this: *mut c_void,
     _desc: *const c_void,
     _riid: *const c_void,
-    _session: *mut *mut c_void,
+    session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateProtectedResourceSession1");
-    crate::not_implemented!("ID3D12Device::CreateProtectedResourceSession1")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(
+            file!(),
+            "ID3D12Device::CreateProtectedResourceSession1",
+            line!(),
+        );
+    }
+    let _ = Option::from(this);
+    // SAFETY: `session` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(session) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device9::CreateShaderCacheSession` (`d3d12_device.cpp:1815`).
+/// `ID3D12Device9::CreateShaderCacheSession` (`d3d12_device.cpp:1750`).
 ///
 /// # Safety
 ///
 /// `this`, `desc`, `riid`, and `session` are caller-supplied pointers.
 pub unsafe fn create_shader_cache_session(
-    _this: *mut c_void,
+    this: *mut c_void,
     _desc: *const c_void,
     _riid: *const c_void,
-    _session: *mut *mut c_void,
+    session: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.CreateShaderCacheSession");
-    crate::not_implemented!("ID3D12Device::CreateShaderCacheSession")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::CreateShaderCacheSession", line!());
+    }
+    let _ = Option::from(this);
+    // SAFETY: `session` is forwarded from the COM caller.
+    unsafe { com::init_out_ptr(session) };
+    E_NOTIMPL
 }
 
-/// `ID3D12Device9::ShaderCacheControl` (`d3d12_device.cpp:1825`).
+/// `ID3D12Device9::ShaderCacheControl` (`d3d12_device.cpp:1757`).
 ///
 /// # Safety
 ///
 /// `this` is a valid `Device` pointer.
-pub unsafe fn shader_cache_control(_this: *mut c_void, _kinds: u32, _flags: u32) -> Hresult {
+pub unsafe fn shader_cache_control(this: *mut c_void, _kinds: u32, _flags: u32) -> Hresult {
     crate::scope!("device.ShaderCacheControl");
-    crate::not_implemented!("ID3D12Device::ShaderCacheControl")
+    #[cfg(test)]
+    if is_vtbl_probe(this) {
+        return crate::unimpl::report(file!(), "ID3D12Device::ShaderCacheControl", line!());
+    }
+    let _ = Option::from(this);
+    E_NOTIMPL
 }
 
 /// Calibrates and caches the GPU timestamp frequency (`TimestampFrequency`,
 ///
 /// `d3d12_device.cpp:1934`).
 #[must_use]
-pub fn timestamp_frequency(_device: &Device) -> u64 {
-    crate::not_implemented!("device::factory::timestamp_frequency")
+pub fn timestamp_frequency(device: &Device) -> u64 {
+    *device.timestamp_frequency.get_or_init(|| {
+        let Some(mtl) = device.mtl.as_ref() else {
+            return 1;
+        };
+        let mut cpu0 = 0u64;
+        let mut gpu0 = 0u64;
+        let mut cpu1 = 0u64;
+        let mut gpu1 = 0u64;
+        let h = mtl.handle();
+        let (q0, qf) = qpc::qpc();
+        // SAFETY: `h` is a live `MTLDevice` handle and `cpu0`/`gpu0` are valid out-pointers.
+        unsafe { MTLDevice_sampleTimestamps(h, &raw mut cpu0, &raw mut gpu0) };
+        std::thread::sleep(Duration::from_millis(10));
+        let (q1, _) = qpc::qpc();
+        // SAFETY: `h` is a live `MTLDevice` handle and `cpu1`/`gpu1` are valid out-pointers.
+        unsafe { MTLDevice_sampleTimestamps(h, &raw mut cpu1, &raw mut gpu1) };
+        if gpu1 > gpu0 && q1 > q0 {
+            let dq = q1 - q0;
+            let num = (gpu1 - gpu0).saturating_mul(qf);
+            num.saturating_add(dq / 2) / dq
+        } else {
+            1
+        }
+    })
 }
+
+#[cfg(test)]
+mod tests;
