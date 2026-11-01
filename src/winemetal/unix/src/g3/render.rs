@@ -87,6 +87,8 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
         return STATUS_SUCCESS;
     };
     let mut counted = histogram::list(Kind::Render);
+    // SAFETY: the caller's contract.
+    unsafe { histogram::dump(&Kind::Render, p.cmd_head) };
     let mut at = p.cmd_head;
     // SAFETY: as above.
     while let Some(cmd) = unsafe { mem_ref::<WmtcmdBase>(at) } {

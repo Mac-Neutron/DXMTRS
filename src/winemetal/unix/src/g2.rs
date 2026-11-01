@@ -42,6 +42,7 @@ use crate::{
     float_cast::{u64_to_usize, usize_to_u32},
     format::{pixel_format, swizzle},
     handle::{obj, ret_owned},
+    histogram,
     init::FORCED_MAX_ANISOTROPY,
     texture::fill_texture_descriptor,
 };
@@ -470,6 +471,7 @@ pub unsafe extern "C-unwind" fn new_buffer(args: *mut c_void) -> i32 {
         {
             let buffer = hooked_buffer(device, info, &hooks);
             info.gpu_address = buffer.as_deref().map_or(0, MTLBuffer::gpuAddress);
+            histogram::record_buffer(info.gpu_address, info.length);
             p.ret = ret_owned(buffer);
             return STATUS_SUCCESS;
         }
@@ -488,6 +490,7 @@ pub unsafe extern "C-unwind" fn new_buffer(args: *mut c_void) -> i32 {
         buffer
     };
     info.gpu_address = buffer.as_deref().map_or(0, MTLBuffer::gpuAddress);
+    histogram::record_buffer(info.gpu_address, info.length);
     p.ret = ret_owned(buffer);
     STATUS_SUCCESS
 }
@@ -1055,6 +1058,7 @@ pub unsafe extern "C-unwind" fn heap_new_buffer(args: *mut c_void) -> i32 {
         buffer_memory(buffer.as_deref())
     };
     info.gpu_address = buffer.as_deref().map_or(0, MTLBuffer::gpuAddress);
+    histogram::record_buffer(info.gpu_address, info.length);
     p.ret = ret_owned(buffer);
     STATUS_SUCCESS
 }
