@@ -227,3 +227,30 @@ fn blend_desc_roundtrip() {
     assert_eq!(back.blend_op_alpha, d10.blend_op_alpha);
     assert_eq!(back.render_target_write_mask, d10.render_target_write_mask);
 }
+
+#[test]
+fn shader_wrappers_unwrap_d3d11() {
+    use super::{GEOMETRY_SHADER_VTBL, PIXEL_SHADER_VTBL, VERTEX_SHADER_VTBL};
+
+    let mut vertex_raw = 0x11_u64;
+    let mut pixel_raw = 0x22_u64;
+    let mut geom_raw = 0x33_u64;
+    let vertex_ptr = (&raw mut vertex_raw).cast::<c_void>();
+    let pixel_ptr = (&raw mut pixel_raw).cast::<c_void>();
+    let geom_ptr = (&raw mut geom_raw).cast::<c_void>();
+
+    let mut vertex_wrap = Wrapper::new(&VERTEX_SHADER_VTBL, vertex_ptr, ptr::null_mut());
+    let mut pixel_wrap = Wrapper::new(&PIXEL_SHADER_VTBL, pixel_ptr, ptr::null_mut());
+    let mut geom_wrap = Wrapper::new(&GEOMETRY_SHADER_VTBL, geom_ptr, ptr::null_mut());
+
+    // SAFETY: `vertex_wrap` is a live `Wrapper<ID3D10VertexShaderVtbl>`.
+    let vertex_out = unsafe { d3d11_of((&raw mut vertex_wrap).cast::<c_void>()) };
+    // SAFETY: `pixel_wrap` is a live `Wrapper<ID3D10PixelShaderVtbl>`.
+    let pixel_out = unsafe { d3d11_of((&raw mut pixel_wrap).cast::<c_void>()) };
+    // SAFETY: `geom_wrap` is a live `Wrapper<ID3D10GeometryShaderVtbl>`.
+    let geom_out = unsafe { d3d11_of((&raw mut geom_wrap).cast::<c_void>()) };
+
+    assert_eq!(vertex_out, vertex_ptr);
+    assert_eq!(pixel_out, pixel_ptr);
+    assert_eq!(geom_out, geom_ptr);
+}
