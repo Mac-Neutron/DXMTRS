@@ -8,12 +8,10 @@ format_code_in_doc_comments = true
 ignore = [
     "src/airconv/src/abi/layouts.rs",
     "src/d3d12/src/abi/vtbl.rs",
-    "src/dxmt/src/dump/abi.rs",
     "src/dxmt/src/format/abi.rs",
     "src/dxmt/src/presenter/abi.rs",
     "src/dxmt/src/scaler/abi.rs",
     "src/dxmt/src/shader_cache/abi.rs",
-    "src/dxmt/src/stats/abi.rs",
     "src/util/src/dxgi_vtbl.rs",
     "src/winemetal/src/protos.rs",
     "src/winemetal/sys/src/decls.rs",

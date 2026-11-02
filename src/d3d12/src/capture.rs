@@ -1,6 +1,4 @@
-//! DXIL shader dumping, SM6 capability reporting, and capture pipeline naming
-//!
-//! (`d3d12_dxil_dump.{hpp,cpp}`, `d3d12_pipeline.hpp:87-104`).
+//! DXIL shader dumping, SM6 capability reporting, and capture pipeline naming.
 
 use std::sync::{LazyLock, Mutex, PoisonError};
 
@@ -9,9 +7,7 @@ use rustc_hash::FxHashMap;
 static PIPELINE_NAMES: LazyLock<Mutex<FxHashMap<u64, String>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
-/// Returns whether `DXMT_DXIL_DUMP` capture mode is active (`DXILCaptureMode`,
-///
-/// `d3d12_dxil_dump.hpp:31-34`).
+/// Returns whether `DXMT_DXIL_DUMP` capture mode is active (`DXILCaptureMode`).
 #[cfg(not(feature = "perf-build"))]
 #[must_use]
 pub fn dxil_capture_mode() -> bool {
@@ -25,7 +21,7 @@ pub const fn dxil_capture_mode() -> bool {
     false
 }
 
-/// Returns whether SM6 capabilities should be advertised (`SM6Caps`, `d3d12_dxil_dump.cpp:42`).
+/// Returns whether SM6 capabilities should be advertised (`SM6Caps`).
 #[must_use]
 pub fn sm6_caps() -> bool {
     static YES: LazyLock<bool> = LazyLock::new(|| {
@@ -34,9 +30,7 @@ pub fn sm6_caps() -> bool {
     *YES
 }
 
-/// FNV-1a 64-bit hash used in capture filenames and `pipelines.txt` (`CaptureHash`,
-///
-/// `d3d12_dxil_dump.cpp:25`).
+/// FNV-1a 64-bit hash used in capture filenames and `pipelines.txt` (`CaptureHash`).
 #[must_use]
 pub fn capture_hash(bytes: &[u8]) -> u64 {
     let mut h = 14_695_981_039_346_656_037_u64;
@@ -97,7 +91,7 @@ fn dxil_stage(bytecode: &[u8]) -> Option<&'static str> {
 
 /// Dumps a DXIL shader blob to `<DXMT_DXIL_DUMP>/<stage>-<hash>.dxil` when capture is active
 ///
-/// (`DumpDXIL`, `d3d12_dxil_dump.cpp:64`).
+/// (`DumpDXIL`).
 #[cfg(not(feature = "perf-build"))]
 pub fn dump_dxil(bytecode: &[u8]) {
     if !dxil_capture_mode() || bytecode.is_empty() {
@@ -116,7 +110,7 @@ pub const fn dump_dxil(_bytecode: &[u8]) {}
 
 /// Dumps a root-signature blob to `<DXMT_DXIL_DUMP>/rs-<hash>.bin` when capture is active
 ///
-/// (`DumpRootSignature`, `d3d12_dxil_dump.cpp:78`).
+/// (`DumpRootSignature`).
 #[cfg(not(feature = "perf-build"))]
 pub fn dump_root_signature(blob: &[u8]) {
     if !dxil_capture_mode() || blob.is_empty() {
@@ -130,7 +124,7 @@ pub fn dump_root_signature(blob: &[u8]) {
 #[cfg(feature = "perf-build")]
 pub const fn dump_root_signature(_blob: &[u8]) {}
 
-/// Appends `line` to `<DXMT_DXIL_DUMP>/pipelines.txt` (`LogPipeline`, `d3d12_dxil_dump.hpp:52`).
+/// Appends `line` to `<DXMT_DXIL_DUMP>/pipelines.txt` (`LogPipeline`).
 #[cfg(not(feature = "perf-build"))]
 pub fn log_pipeline(line: &str) {
     dxmt_core::dump::append_pipeline(line);
@@ -140,7 +134,7 @@ pub fn log_pipeline(line: &str) {
 #[cfg(feature = "perf-build")]
 pub const fn log_pipeline(_line: &str) {}
 
-/// Saves `data` to `<DXMT_DXIL_DUMP>/<name>` (`SaveCapture`, `d3d12_dxil_dump.hpp:55`).
+/// Saves `data` to `<DXMT_DXIL_DUMP>/<name>` (`SaveCapture`).
 #[cfg(not(feature = "perf-build"))]
 pub fn save_capture(name: &str, data: &[u8]) {
     dxmt_core::dump::save(name, data);
@@ -150,7 +144,7 @@ pub fn save_capture(name: &str, data: &[u8]) {
 #[cfg(feature = "perf-build")]
 pub const fn save_capture(_name: &str, _data: &[u8]) {}
 
-/// Creates `<DXMT_DXIL_DUMP>/<name>` (`MakeCaptureFolder`, `d3d12_dxil_dump.hpp:58`).
+/// Creates `<DXMT_DXIL_DUMP>/<name>` (`MakeCaptureFolder`).
 #[cfg(not(feature = "perf-build"))]
 #[must_use]
 pub fn make_capture_folder(name: &str) -> bool {
@@ -164,9 +158,7 @@ pub const fn make_capture_folder(_name: &str) -> bool {
     false
 }
 
-/// Associates a human-readable pipeline description with `pso` handle (`NamePipeline`,
-///
-/// `d3d12_dxil_dump.cpp:91`).
+/// Associates a human-readable pipeline description with `pso` handle (`NamePipeline`).
 pub fn name_pipeline(pso: u64, name: String) {
     if !dxil_capture_mode() || pso == 0 {
         return;
@@ -177,7 +169,7 @@ pub fn name_pipeline(pso: u64, name: String) {
         .insert(pso, name);
 }
 
-/// Looks up the description recorded for `pso` handle (`PipelineName`, `d3d12_dxil_dump.cpp:98`).
+/// Looks up the description recorded for `pso` handle (`PipelineName`).
 #[must_use]
 pub fn pipeline_name(pso: u64) -> String {
     PIPELINE_NAMES
@@ -188,9 +180,7 @@ pub fn pipeline_name(pso: u64) -> String {
         .unwrap_or_else(|| format!("pso-{pso:x}"))
 }
 
-/// Formats `" <name>=<16-hex-hash>"` for a non-empty shader bytecode (`CapturedShader`,
-///
-/// `d3d12_pipeline.hpp:88`).
+/// Formats `" <name>=<16-hex-hash>"` for a non-empty shader bytecode (`CapturedShader`).
 #[must_use]
 pub fn captured_shader(name: &str, bytecode: &[u8]) -> String {
     if bytecode.is_empty() {

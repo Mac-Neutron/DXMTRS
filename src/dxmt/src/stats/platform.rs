@@ -1,8 +1,7 @@
 //! The system calls the statistics make: the CPU's counter, thread ids and names, local time.
 //!
-//! On Windows kernel32's, as `d3d12_stats.cpp` makes them; natively libc's, the calls
-//! `win32_native.h` makes for the same functions (`pthread_threadid_np`, `proc_pidinfo` with
-//! `PROC_PIDTHREADID64INFO`, `localtime_r`).
+//! On Windows kernel32's; natively libc's, the calls `win32_native.h` makes for the same
+//! functions (`pthread_threadid_np`, `proc_pidinfo` with `PROC_PIDTHREADID64INFO`, `localtime_r`).
 
 #[cfg(windows)]
 use core::ffi::c_void;

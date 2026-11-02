@@ -1,4 +1,4 @@
-use std::ffi::{CString, c_uint, c_ulong, c_ulonglong};
+use std::ffi::{CString, c_char, c_uint, c_ulong, c_ulonglong};
 
 use super::*;
 
@@ -313,14 +313,12 @@ fn ids_past_the_last_share_it() {
     stats.record(ids[MAX_STATS + 5], 4);
     stats.enter();
     stats.record(ids[MAX_STATS - 1], 2);
-    stats.enter();
-    stats.record(StatId::from_raw(u32::MAX), 1);
     let snapshot = registry.snapshot(1, names);
     let lines = &snapshot.threads[0].timed;
     assert_eq!(lines.len(), 1);
     assert_eq!(
         (lines[0].name.as_str(), lines[0].calls, lines[0].ticks),
-        ("call1023", 3, 7)
+        ("call1023", 2, 6)
     );
 }
 
@@ -435,12 +433,13 @@ fn next_pass_restarts_each_frame() {
 
 #[test]
 fn stat_id_copies_the_name() {
-    let name = c_text("#copied");
-    // SAFETY: a NUL-terminated string.
-    let id = unsafe { dxmt_stat_id(name.as_ptr()) };
+    let name = String::from("#copied");
+    let stat = id(&name);
     drop(name);
-    assert_eq!(registry().names[usize::try_from(id).unwrap()], "#copied");
-    // SAFETY: null is an empty name.
-    let empty = unsafe { dxmt_stat_id(core::ptr::null()) };
-    assert_eq!(registry().names[usize::try_from(empty).unwrap()], "");
+    assert_eq!(
+        registry().names[usize::try_from(stat.0).unwrap()],
+        "#copied"
+    );
+    let empty = id("");
+    assert_eq!(registry().names[usize::try_from(empty.0).unwrap()], "");
 }

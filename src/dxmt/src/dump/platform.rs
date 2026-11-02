@@ -1,8 +1,8 @@
 //! The file calls the dump folder makes, on paths in Wine's form.
 //!
-//! On Windows they are the kernel32 calls `d3d12_dxil_dump.cpp` made, with its flags; natively the
-//! path is mapped as `win32_native.h`'s `mn_win32_utf8` maps it (a leading `Z:` drive dropped,
-//! each backslash a slash) and the files get its modes (0644, folders 0755).
+//! On Windows they are kernel32 file calls; natively the path is mapped as `win32_native.h`'s
+//! `mn_win32_utf8` maps it (a leading `Z:` drive dropped, each backslash a slash) and the files
+//! get its modes (0644, folders 0755).
 
 #[cfg(windows)]
 use core::ffi::c_void;

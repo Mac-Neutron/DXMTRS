@@ -1,6 +1,4 @@
-//! `ID3D10Blob` (`src/d3d10/d3d10_blob.cpp`): byte buffers returned by root-signature serialization
-//!
-//! and pipeline libraries.
+//! `ID3D10Blob`: byte buffers returned by root-signature serialization and pipeline libraries.
 
 use core::ffi::c_void;
 
@@ -15,7 +13,7 @@ use crate::{
     slot,
 };
 
-/// `ID3D10Blob` COM object (`src/d3d10/d3d10_blob.cpp`).
+/// `ID3D10Blob` COM object.
 #[repr(C)]
 pub struct Blob {
     pub vtbl: &'static ID3D10BlobVtbl,

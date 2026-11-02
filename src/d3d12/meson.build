@@ -35,7 +35,7 @@ endif
 
 d3d12_dll = shared_library('d3d12',
   name_prefix         : '',
-  dependencies        : [ dxgi_dep, airconv_forward_dep, winemetal_dep, rust_runtime_dep ],
+  dependencies        : [ dxgi_dep, winemetal_dep, rust_runtime_dep ],
   link_with           : d3d12_rust,
   include_directories : [ dxmt_include_path ],
   install             : true,

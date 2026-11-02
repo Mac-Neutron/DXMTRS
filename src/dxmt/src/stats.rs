@@ -1,19 +1,17 @@
 //! `DXMT_STATS`: per-thread counters and timed calls, and the `stats.txt` report.
 //!
-//! `d3d12_stats.cpp` in Rust. Every call site registers a name once and keeps its id; a timed call
-//! adds its counter ticks to its thread's slot, a counter (a name starting with `#`) its count.
-//! Every 5 s of presents, and once at exit, the report appends to `<dump folder>/stats.txt`: per
-//! thread the time spent in outermost calls and the 30 calls that took longest, then the counters
-//! summed by name. The counter is the CPU's, calibrated against the clock at each report. The
-//! C++ keeps `g_stats_on` (`DXMT_STATS=1`) and passes it to `dxmt_stats_init` at load. The
-//! performance build has none of it.
+//! Every call site registers a name once and keeps its id; a timed call adds its counter ticks to
+//! its thread's slot, a counter (a name starting with `#`) its count. Every 5 s of presents, and
+//! once at exit, the report appends to `<dump folder>/stats.txt`: per thread the time spent in
+//! outermost calls and the 30 calls that took longest, then the counters summed by name. The
+//! counter is the CPU's, calibrated against the clock at each report. [`init`] latches whether
+//! `DXMT_STATS=1` is active at load. The performance build has none of it.
 #![cfg(not(feature = "perf-build"))]
 
 use std::{
     cell::Cell,
     cmp::Reverse,
     collections::BTreeMap,
-    ffi::c_char,
     sync::{
         LazyLock, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed},
@@ -23,21 +21,18 @@ use std::{
 
 use dxmt_util::float_cast::u64_to_f64;
 
-use crate::ffi::c_str;
-
-mod abi;
 mod platform;
 
 /// The ids there are; names registered past the last share it.
 const MAX_STATS: usize = 1024;
 /// How many timed lines a thread's block prints: those that took longest.
 const TOP: usize = 30;
-/// How much of a piece the C++'s 512-byte `snprintf` buffer keeps.
+/// How much of a piece the 512-byte line buffer keeps.
 const LINE_MAX: usize = 511;
 /// How often presents report.
 const PERIOD: Duration = Duration::from_secs(5);
 
-/// Whether `DXMT_STATS` is on, set at load by [`dxmt_stats_init`] from the C++'s `g_stats_on`.
+/// Whether `DXMT_STATS` is on, set at load by [`init`].
 ///
 /// A static: a process-wide fact, latched once at load and only read after.
 static ON: AtomicBool = AtomicBool::new(false);
@@ -138,73 +133,19 @@ pub fn next_pass() -> u32 {
     PASS.fetch_add(1, Relaxed)
 }
 
-crate::seam_export! {
-    /// The C++ load-time object's constructor: `on` is its `g_stats_on`.
-    ///
-    /// When on, the dump folder is made first (the C++'s `DXILCaptureMode` call) and the clock
-    /// starts.
-    fn dxmt_stats_init(on: bool) {
-        ON.store(on, Relaxed);
-        if on {
-            let _ = crate::dump::on();
-            registry().start(Instant::now(), platform::counter());
-        }
+/// Latches whether `DXMT_STATS` is on at load; when on, makes the dump folder and starts the clock.
+pub fn init(on: bool) {
+    ON.store(on, Relaxed);
+    if on {
+        let _ = crate::dump::on();
+        registry().start(Instant::now(), platform::counter());
     }
 }
 
-crate::seam_export! {
-    /// The C++ load-time object's destructor: the exit report.
-    fn dxmt_stats_exit() {
-        if on() {
-            report_now(&mut registry(), "exit");
-        }
-    }
-}
-
-crate::seam_export! {
-    /// `StatId`; ids past the last share it.
-    ///
-    /// # Safety
-    ///
-    /// `name` is null (an empty name) or a NUL-terminated string.
-    unsafe fn dxmt_stat_id(name: *const c_char) -> u32 {
-        // SAFETY: the caller's contract.
-        id(&unsafe { c_str(name) }.unwrap_or_default()).0
-    }
-}
-
-crate::seam_export! {
-    /// `StatCount`.
-    fn dxmt_stat_count(id: u32, n: u64) {
-        count(StatId::from_raw(id), n);
-    }
-}
-
-crate::seam_export! {
-    /// `StatBegin`.
-    fn dxmt_stat_begin() -> u64 {
-        begin()
-    }
-}
-
-crate::seam_export! {
-    /// `StatEnd`.
-    fn dxmt_stat_end(id: u32, t0: u64) {
-        end(StatId::from_raw(id), t0);
-    }
-}
-
-crate::seam_export! {
-    /// `StatsFrame`.
-    fn dxmt_stats_frame() {
-        frame();
-    }
-}
-
-crate::seam_export! {
-    /// `StatsNextPass`.
-    fn dxmt_stats_next_pass() -> u32 {
-        next_pass()
+/// Writes the exit report when `DXMT_STATS` is on.
+pub fn exit() {
+    if on() {
+        report_now(&mut registry(), "exit");
     }
 }
 
@@ -212,11 +153,6 @@ impl StatId {
     /// The id of slot `index`: past the last slot, the last.
     fn clamped(index: usize) -> Self {
         Self(u32::try_from(index.min(MAX_STATS - 1)).unwrap_or(0))
-    }
-
-    /// The id the C++ passes back, clamped as [`Self::clamped`].
-    fn from_raw(id: u32) -> Self {
-        Self::clamped(usize::try_from(id).unwrap_or(MAX_STATS))
     }
 }
 

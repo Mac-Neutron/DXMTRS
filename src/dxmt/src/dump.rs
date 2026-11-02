@@ -1,22 +1,19 @@
 //! The DXIL dump folder (`DXMT_DXIL_DUMP`): a game's shaders and pipelines, written as files.
 //!
-//! `d3d12_dxil_dump.cpp`'s file writing: the folder is the variable's value as Wine names it (a
-//! Mac path gets Wine's `Z:` drive), made on first use and kept when that fails; a file is
-//! `<folder>\<name>`, written under `<name>.tmp` and renamed, so a game killed mid-write never
-//! leaves a capture under its final name. Natively the path is mapped as `win32_native.h`'s file
-//! shims map it. Any failure only means a file isn't written: capturing never changes what the
-//! game gets. The performance build has none of it.
+//! The folder is the variable's value as Wine names it (a Mac path gets Wine's `Z:` drive), made
+//! on first use and kept when that fails; a file is `<folder>\<name>`, written under `<name>.tmp`
+//! and renamed, so a game killed mid-write never leaves a capture under its final name. Natively
+//! the path is mapped as `win32_native.h`'s file shims map it. Any failure only means a file
+//! isn't written: capturing never changes what the game gets. The performance build has none of
+//! it.
 #![cfg(not(feature = "perf-build"))]
 
 use std::{
-    ffi::{OsStr, OsString, c_char, c_void},
+    ffi::{OsStr, OsString},
     path::Path,
     sync::{LazyLock, Mutex, PoisonError},
 };
 
-use crate::ffi::{c_bytes, c_str};
-
-mod abi;
 mod platform;
 
 /// The capture folder in Wine's form, `None` when `DXMT_DXIL_DUMP` is unset or empty.
@@ -65,73 +62,6 @@ pub fn make_folder(name: &str) -> bool {
 /// Appends `line` and a newline to `<folder>\pipelines.txt` (`LogPipeline`).
 pub fn append_pipeline(line: &str) {
     append_line(line.as_bytes());
-}
-
-crate::seam_export! {
-    /// `DXILCaptureMode`.
-    fn dxmt_dump_on() -> bool {
-        on()
-    }
-}
-
-crate::seam_export! {
-    /// `SaveCapture`.
-    ///
-    /// # Safety
-    ///
-    /// `name` is null or a NUL-terminated string; `data` is null or `len` readable bytes.
-    unsafe fn dxmt_dump_save(name: *const c_char, data: *const c_void, len: usize) {
-        // SAFETY: the caller's contract.
-        let name = unsafe { c_str(name) };
-        // SAFETY: the caller's contract.
-        let data = unsafe { c_bytes(data, len) };
-        if let (Some(name), Some(data)) = (name, data) {
-            save(&name, data);
-        }
-    }
-}
-
-crate::seam_export! {
-    /// `SaveOnce`.
-    ///
-    /// # Safety
-    ///
-    /// `name` is null or a NUL-terminated string; `data` is null or `len` readable bytes.
-    unsafe fn dxmt_dump_save_once(name: *const c_char, data: *const c_void, len: usize) {
-        // SAFETY: the caller's contract.
-        let name = unsafe { c_str(name) };
-        // SAFETY: the caller's contract.
-        let data = unsafe { c_bytes(data, len) };
-        if let (Some(name), Some(data)) = (name, data) {
-            save_once(&name, data);
-        }
-    }
-}
-
-crate::seam_export! {
-    /// `MakeCaptureFolder`.
-    ///
-    /// # Safety
-    ///
-    /// `name` is null or a NUL-terminated string.
-    unsafe fn dxmt_dump_make_folder(name: *const c_char) -> bool {
-        // SAFETY: the caller's contract.
-        unsafe { c_str(name) }.is_none_or(|name| make_folder(&name))
-    }
-}
-
-crate::seam_export! {
-    /// `LogPipeline`.
-    ///
-    /// # Safety
-    ///
-    /// `line` is null or `len` readable bytes.
-    unsafe fn dxmt_dump_append_pipeline(line: *const c_char, len: usize) {
-        // SAFETY: the caller's contract.
-        if let Some(line) = unsafe { c_bytes(line.cast(), len) } {
-            append_line(line);
-        }
-    }
 }
 
 /// The folder `value` names, made if it isn't there; `None` for no value or an empty one.

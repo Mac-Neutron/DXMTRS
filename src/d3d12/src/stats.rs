@@ -1,34 +1,16 @@
-//! Per-call timing and counter instrumentation (`d3d12_stats.hpp`), backed by `dxmt_core::stats`.
+//! Per-call timing and counter instrumentation, backed by `dxmt_core::stats`.
 //!
 //! Under `perf-build` (`DXMT_PERF_BUILD`), every macro and function compiles away to nothing so
 //! `d3d12.dll` and `d3d12.dylib` carry no stat names or `dxmt_core::stats` symbols.
 
 #[cfg(not(feature = "perf-build"))]
-pub use dxmt_core::stats::{Scope, StatId, count as count_id, frame, id, next_pass, on};
-
-#[cfg(not(feature = "perf-build"))]
-unsafe extern "C" {
-    fn dxmt_stats_init(on: bool);
-    fn dxmt_stats_exit();
-}
-
-/// Initializes `DXMT_STATS=1` collection at `DllMain(DLL_PROCESS_ATTACH)` or first native call.
-#[cfg(not(feature = "perf-build"))]
-pub fn init(on: bool) {
-    // SAFETY: `dxmt_stats_init` takes a `bool` by value and latches the atomic flag.
-    unsafe { dxmt_stats_init(on) };
-}
+pub use dxmt_core::stats::{
+    Scope, StatId, count as count_id, exit, frame, id, init, next_pass, on,
+};
 
 /// No-op under `perf-build`.
 #[cfg(feature = "perf-build")]
 pub const fn init(_on: bool) {}
-
-/// Writes the `DXMT_STATS=1` summary at `DllMain(DLL_PROCESS_DETACH)` or `atexit`.
-#[cfg(not(feature = "perf-build"))]
-pub fn exit() {
-    // SAFETY: `dxmt_stats_exit` reads the global stat tables and writes the exit report.
-    unsafe { dxmt_stats_exit() };
-}
 
 /// No-op under `perf-build`.
 #[cfg(feature = "perf-build")]
