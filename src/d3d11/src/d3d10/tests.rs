@@ -110,3 +110,48 @@ fn buffer_desc_roundtrip() {
     assert_eq!(back.cpu_access_flags, d10.cpu_access_flags);
     assert_eq!(back.misc_flags, d10.misc_flags);
 }
+
+#[test]
+fn texture_unwrap_reads_the_buffer_layout() {
+    use super::{TEXTURE1D_VTBL, TEXTURE2D_VTBL, TEXTURE3D_VTBL};
+    use crate::abi::vtbl::{
+        ID3D10BufferVtbl, ID3D10Texture1DVtbl, ID3D10Texture2DVtbl, ID3D10Texture3DVtbl,
+    };
+
+    assert_eq!(
+        offset_of!(Wrapper<ID3D10Texture1DVtbl>, d3d11),
+        offset_of!(Wrapper<ID3D10BufferVtbl>, d3d11)
+    );
+    assert_eq!(
+        offset_of!(Wrapper<ID3D10Texture2DVtbl>, d3d11),
+        offset_of!(Wrapper<ID3D10BufferVtbl>, d3d11)
+    );
+    assert_eq!(
+        offset_of!(Wrapper<ID3D10Texture3DVtbl>, d3d11),
+        offset_of!(Wrapper<ID3D10BufferVtbl>, d3d11)
+    );
+
+    let mut tex1d_inner = 0x1010_u64;
+    let mut tex2d_inner = 0x2020_u64;
+    let mut tex3d_inner = 0x3030_u64;
+    let mut ctx = 0x9999_u64;
+    let p1 = (&raw mut tex1d_inner).cast::<c_void>();
+    let p2 = (&raw mut tex2d_inner).cast::<c_void>();
+    let p3 = (&raw mut tex3d_inner).cast::<c_void>();
+    let ctx_ptr = (&raw mut ctx).cast::<c_void>();
+
+    let mut w1 = Wrapper::new(&TEXTURE1D_VTBL, p1, ctx_ptr);
+    let mut w2 = Wrapper::new(&TEXTURE2D_VTBL, p2, ctx_ptr);
+    let mut w3 = Wrapper::new(&TEXTURE3D_VTBL, p3, ctx_ptr);
+
+    // SAFETY: `w1`, `w2`, `w3` are live `Wrapper<V>` instances.
+    let u1 = unsafe { d3d11_of((&raw mut w1).cast::<c_void>()) };
+    // SAFETY: `w2` is a live `Wrapper<ID3D10Texture2DVtbl>`.
+    let u2 = unsafe { d3d11_of((&raw mut w2).cast::<c_void>()) };
+    // SAFETY: `w3` is a live `Wrapper<ID3D10Texture3DVtbl>`.
+    let u3 = unsafe { d3d11_of((&raw mut w3).cast::<c_void>()) };
+
+    assert_eq!(u1, p1);
+    assert_eq!(u2, p2);
+    assert_eq!(u3, p3);
+}
