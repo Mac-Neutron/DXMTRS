@@ -284,3 +284,407 @@ fn query_desc_roundtrip() {
     assert_eq!(back.query, 2);
     assert_eq!(back.misc_flags, 1);
 }
+
+#[test]
+fn descs_as_the_probe() {
+    use super::util::{
+        d10_to_d11_buffer_desc, d10_to_d11_query_desc, d10_to_d11_sampler_desc,
+        d10_to_d11_tex1d_desc, d10_to_d11_tex2d_desc, d10_to_d11_tex3d_desc, d11_to_d10_blend_desc,
+        d11_to_d10_buffer_desc, d11_to_d10_query_desc, d11_to_d10_rtv_desc,
+        d11_to_d10_sampler_desc, d11_to_d10_srv_desc, d11_to_d10_tex1d_desc, d11_to_d10_tex2d_desc,
+        d11_to_d10_tex3d_desc,
+    };
+    use crate::abi::records::{
+        D3d10BufferDesc, D3d10DepthStencilDesc, D3d10DepthStencilopDesc, D3d10QueryDesc,
+        D3d10RasterizerDesc, D3d10SamplerDesc, D3d10Texture1dDesc, D3d10Texture2dDesc,
+        D3d10Texture3dDesc, D3d11BlendDesc, D3d11DepthStencilDesc, D3d11RasterizerDesc,
+        D3d11RenderTargetBlendDesc, D3d11RenderTargetViewDesc, D3d11RenderTargetViewDescUnion,
+        D3d11ShaderResourceViewDesc, D3d11ShaderResourceViewDescUnion, D3d11Tex2dRtv,
+        D3d11Tex2dSrv, DxgiSampleDesc,
+    };
+
+    let golden = include_str!("golden/d10.txt");
+    let expected: Vec<&str> = golden
+        .lines()
+        .filter(|line| line.starts_with("d10 desc_"))
+        .collect();
+    assert_eq!(expected.len(), 11);
+
+    // 1. desc_buf
+    let buf_in = D3d10BufferDesc {
+        byte_width: 64,
+        usage: 2,
+        bind_flags: 9,
+        cpu_access_flags: 0x10000,
+        misc_flags: 1,
+    };
+    let buf_d11 = d10_to_d11_buffer_desc(&buf_in);
+    let buf_d10 = d11_to_d10_buffer_desc(&buf_d11);
+    let line_buffer = format!(
+        "d10 desc_buf hr=00000000 d10={},{},{:x},{:x},{:x} d11={},{},{:x},{:x},{:x},{}",
+        buf_d10.byte_width,
+        buf_d10.usage,
+        buf_d10.bind_flags,
+        buf_d10.cpu_access_flags,
+        buf_d10.misc_flags,
+        buf_d11.byte_width,
+        buf_d11.usage,
+        buf_d11.bind_flags,
+        buf_d11.cpu_access_flags,
+        buf_d11.misc_flags,
+        buf_d11.structure_byte_stride,
+    );
+
+    // 2. desc_tex1d
+    let t1d = D3d10Texture1dDesc {
+        width: 32,
+        mip_levels: 0,
+        array_size: 2,
+        format: 28,
+        usage: 0,
+        bind_flags: 8,
+        cpu_access_flags: 0,
+        misc_flags: 0,
+    };
+    let mut got_t1d11 = d10_to_d11_tex1d_desc(&t1d);
+    if got_t1d11.mip_levels == 0 {
+        got_t1d11.mip_levels = 32 - got_t1d11.width.leading_zeros();
+    }
+    let got_t1d10 = d11_to_d10_tex1d_desc(&got_t1d11);
+    let line_tex1d = format!(
+        "d10 desc_tex1d hr=00000000 d10={},{},{},{},{},{:x} d11={},{},{},{},{},{:x}",
+        got_t1d10.width,
+        got_t1d10.mip_levels,
+        got_t1d10.array_size,
+        got_t1d10.format,
+        got_t1d10.usage,
+        got_t1d10.bind_flags,
+        got_t1d11.width,
+        got_t1d11.mip_levels,
+        got_t1d11.array_size,
+        got_t1d11.format,
+        got_t1d11.usage,
+        got_t1d11.bind_flags,
+    );
+
+    // 3. desc_tex2d
+    let td = D3d10Texture2dDesc {
+        width: 16,
+        height: 16,
+        mip_levels: 1,
+        array_size: 1,
+        format: 28,
+        sample_desc: DxgiSampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        usage: 0,
+        bind_flags: 0x28,
+        cpu_access_flags: 0,
+        misc_flags: 0,
+    };
+    let got_t2d11 = d10_to_d11_tex2d_desc(&td);
+    let got_t2d10 = d11_to_d10_tex2d_desc(&got_t2d11);
+    let line_tex2d = format!(
+        "d10 desc_tex2d hr=00000000 d10={},{},{},{},{},{},{:x} d11={},{},{},{},{},{},{:x}",
+        got_t2d10.width,
+        got_t2d10.height,
+        got_t2d10.mip_levels,
+        got_t2d10.array_size,
+        got_t2d10.format,
+        got_t2d10.usage,
+        got_t2d10.bind_flags,
+        got_t2d11.width,
+        got_t2d11.height,
+        got_t2d11.mip_levels,
+        got_t2d11.array_size,
+        got_t2d11.format,
+        got_t2d11.usage,
+        got_t2d11.bind_flags,
+    );
+
+    // 4. desc_tex3d
+    let t3d = D3d10Texture3dDesc {
+        width: 8,
+        height: 8,
+        depth: 4,
+        mip_levels: 1,
+        format: 28,
+        usage: 0,
+        bind_flags: 8,
+        cpu_access_flags: 0,
+        misc_flags: 0,
+    };
+    let got_t3d11 = d10_to_d11_tex3d_desc(&t3d);
+    let got_t3d10 = d11_to_d10_tex3d_desc(&got_t3d11);
+    let line_tex3d = format!(
+        "d10 desc_tex3d hr=00000000 d10={},{},{},{},{},{},{:x} d11={},{},{},{},{},{},{:x}",
+        got_t3d10.width,
+        got_t3d10.height,
+        got_t3d10.depth,
+        got_t3d10.mip_levels,
+        got_t3d10.format,
+        got_t3d10.usage,
+        got_t3d10.bind_flags,
+        got_t3d11.width,
+        got_t3d11.height,
+        got_t3d11.depth,
+        got_t3d11.mip_levels,
+        got_t3d11.format,
+        got_t3d11.usage,
+        got_t3d11.bind_flags,
+    );
+
+    // 5. desc_srv
+    let got_srv11 = D3d11ShaderResourceViewDesc {
+        format: got_t2d11.format,
+        view_dimension: 4,
+        u: D3d11ShaderResourceViewDescUnion {
+            texture2d: D3d11Tex2dSrv {
+                most_detailed_mip: 0,
+                mip_levels: got_t2d11.mip_levels,
+            },
+        },
+    };
+    let got_srv10 = d11_to_d10_srv_desc(&got_srv11);
+    // SAFETY: `view_dimension == 4` selects `texture2d`.
+    let srv10_t2d = unsafe { got_srv10.u.texture2d };
+    // SAFETY: `view_dimension == 4` selects `texture2d`.
+    let srv11_t2d = unsafe { got_srv11.u.texture2d };
+    let line_srv = format!(
+        "d10 desc_srv hr=00000000 d10={},{},{},{} d11={},{},{},{}",
+        got_srv10.format,
+        got_srv10.view_dimension,
+        srv10_t2d.most_detailed_mip,
+        srv10_t2d.mip_levels,
+        got_srv11.format,
+        got_srv11.view_dimension,
+        srv11_t2d.most_detailed_mip,
+        srv11_t2d.mip_levels,
+    );
+
+    // 6. desc_rtv
+    let got_rtv11 = D3d11RenderTargetViewDesc {
+        format: got_t2d11.format,
+        view_dimension: 4,
+        u: D3d11RenderTargetViewDescUnion {
+            texture2d: D3d11Tex2dRtv { mip_slice: 0 },
+        },
+    };
+    let got_rtv10 = d11_to_d10_rtv_desc(&got_rtv11);
+    // SAFETY: `view_dimension == 4` selects `texture2d`.
+    let rtv10_t2d = unsafe { got_rtv10.u.texture2d };
+    // SAFETY: `view_dimension == 4` selects `texture2d`.
+    let rtv11_t2d = unsafe { got_rtv11.u.texture2d };
+    let line_rtv = format!(
+        "d10 desc_rtv hr=00000000 d10={},{},{} d11={},{},{}",
+        got_rtv10.format,
+        got_rtv10.view_dimension,
+        rtv10_t2d.mip_slice,
+        got_rtv11.format,
+        got_rtv11.view_dimension,
+        rtv11_t2d.mip_slice,
+    );
+
+    // 7. desc_bs
+    let mut rt = [D3d11RenderTargetBlendDesc {
+        blend_enable: 0,
+        src_blend: 0,
+        dest_blend: 0,
+        blend_op: 0,
+        src_blend_alpha: 0,
+        dest_blend_alpha: 0,
+        blend_op_alpha: 0,
+        render_target_write_mask: 0,
+    }; 8];
+    rt[0] = D3d11RenderTargetBlendDesc {
+        blend_enable: 1,
+        src_blend: 5,
+        dest_blend: 6,
+        blend_op: 1,
+        src_blend_alpha: 2,
+        dest_blend_alpha: 1,
+        blend_op_alpha: 1,
+        render_target_write_mask: 0xf,
+    };
+    let blend_d11_1 = D3d11BlendDesc {
+        alpha_to_coverage_enable: 1,
+        independent_blend_enable: 0,
+        render_target: rt,
+    };
+    let blend_d10_1 = blend_d11_1;
+    let blend_d10 = d11_to_d10_blend_desc(&blend_d11_1);
+    let line_blend = format!(
+        "d10 desc_bs hr=00000000 d10={},{},{},{},{},{:x} d10_1={},{},{},{},{:x} d11_1={},{},{},{},{:x}",
+        blend_d10.alpha_to_coverage_enable,
+        blend_d10.blend_enable[0],
+        blend_d10.src_blend,
+        blend_d10.dest_blend,
+        blend_d10.blend_op,
+        blend_d10.render_target_write_mask[0],
+        blend_d10_1.alpha_to_coverage_enable,
+        blend_d10_1.render_target[0].blend_enable,
+        blend_d10_1.render_target[0].src_blend,
+        blend_d10_1.render_target[0].dest_blend,
+        blend_d10_1.render_target[0].render_target_write_mask,
+        blend_d11_1.alpha_to_coverage_enable,
+        blend_d11_1.render_target[0].blend_enable,
+        blend_d11_1.render_target[0].src_blend,
+        blend_d11_1.render_target[0].dest_blend,
+        blend_d11_1.render_target[0].render_target_write_mask,
+    );
+
+    // 8. desc_ds
+    let face = D3d10DepthStencilopDesc {
+        stencil_fail_op: 1,
+        stencil_depth_fail_op: 1,
+        stencil_pass_op: 1,
+        stencil_func: 8,
+    };
+    let depth_in = D3d10DepthStencilDesc {
+        depth_enable: 1,
+        depth_write_mask: 1,
+        depth_func: 4,
+        stencil_enable: 0,
+        stencil_read_mask: 0xff,
+        stencil_write_mask: 0xff,
+        front_face: face,
+        back_face: face,
+    };
+    // SAFETY: `D3D10_DEPTH_STENCIL_DESC` and `D3D11_DEPTH_STENCIL_DESC` have identical layout.
+    let depth_d11: D3d11DepthStencilDesc = unsafe { *(&raw const depth_in).cast() };
+    // SAFETY: `D3D11_DEPTH_STENCIL_DESC` and `D3D10_DEPTH_STENCIL_DESC` have identical layout.
+    let depth_d10: D3d10DepthStencilDesc = unsafe { *(&raw const depth_d11).cast() };
+    let line_depth = format!(
+        "d10 desc_ds hr=00000000 d10={},{},{} d11={},{},{}",
+        depth_d10.depth_enable,
+        depth_d10.depth_write_mask,
+        depth_d10.depth_func,
+        depth_d11.depth_enable,
+        depth_d11.depth_write_mask,
+        depth_d11.depth_func,
+    );
+
+    // 9. desc_rs
+    let rast_in = D3d10RasterizerDesc {
+        fill_mode: 3,
+        cull_mode: 3,
+        front_counter_clockwise: 0,
+        depth_bias: 0,
+        depth_bias_clamp: 0.0,
+        slope_scaled_depth_bias: 0.0,
+        depth_clip_enable: 1,
+        scissor_enable: 0,
+        multisample_enable: 0,
+        antialiased_line_enable: 0,
+    };
+    // SAFETY: `D3D10_RASTERIZER_DESC` and `D3D11_RASTERIZER_DESC` have identical layout.
+    let rast_d11: D3d11RasterizerDesc = unsafe { *(&raw const rast_in).cast() };
+    // SAFETY: `D3D11_RASTERIZER_DESC` and `D3D10_RASTERIZER_DESC` have identical layout.
+    let rast_d10: D3d10RasterizerDesc = unsafe { *(&raw const rast_d11).cast() };
+    let line_rast = format!(
+        "d10 desc_rs hr=00000000 d10={},{},{} d11={},{},{}",
+        rast_d10.fill_mode,
+        rast_d10.cull_mode,
+        rast_d10.depth_clip_enable,
+        rast_d11.fill_mode,
+        rast_d11.cull_mode,
+        rast_d11.depth_clip_enable,
+    );
+
+    // 10. desc_ss
+    let sampler_in = D3d10SamplerDesc {
+        filter: 0x15,
+        address_u: 1,
+        address_v: 3,
+        address_w: 2,
+        mip_lod_bias: 0.0,
+        max_anisotropy: 4,
+        comparison_func: 1,
+        border_color: [0.0; 4],
+        min_lod: 0.0,
+        max_lod: f32::MAX,
+    };
+    let sampler_d11 = d10_to_d11_sampler_desc(&sampler_in);
+    let sampler_d10 = d11_to_d10_sampler_desc(&sampler_d11);
+    let line_sampler = format!(
+        "d10 desc_ss hr=00000000 d10={:x},{},{},{},{} d11={:x},{},{},{},{}",
+        sampler_d10.filter,
+        sampler_d10.address_u,
+        sampler_d10.address_v,
+        sampler_d10.address_w,
+        sampler_d10.max_anisotropy,
+        sampler_d11.filter,
+        sampler_d11.address_u,
+        sampler_d11.address_v,
+        sampler_d11.address_w,
+        sampler_d11.max_anisotropy,
+    );
+
+    // 11. desc_q
+    let query_in = D3d10QueryDesc {
+        query: 0,
+        misc_flags: 0,
+    };
+    let query_d11 = d10_to_d11_query_desc(&query_in);
+    let query_d10 = d11_to_d10_query_desc(&query_d11);
+    let line_query = format!(
+        "d10 desc_q hr=00000000 d10={},{:x} d11={},{:x}",
+        query_d10.query, query_d10.misc_flags, query_d11.query, query_d11.misc_flags,
+    );
+
+    let actual = [
+        line_buffer.as_str(),
+        line_tex1d.as_str(),
+        line_tex2d.as_str(),
+        line_tex3d.as_str(),
+        line_srv.as_str(),
+        line_rtv.as_str(),
+        line_blend.as_str(),
+        line_depth.as_str(),
+        line_rast.as_str(),
+        line_sampler.as_str(),
+        line_query.as_str(),
+    ];
+    assert_eq!(actual.as_slice(), expected.as_slice());
+}
+
+#[test]
+fn device_layout_and_local_methods() {
+    use dxmt_util::com::E_NOTIMPL;
+
+    use super::{DEVICE_VTBL, Device};
+    use crate::abi::records::D3d10CounterInfo;
+
+    assert_eq!(offset_of!(Device, vtbl), 0);
+    assert_eq!(offset_of!(Device, d3d11), size_of::<*const u8>());
+    assert_eq!(offset_of!(Device, context), 2 * size_of::<*const u8>());
+
+    let mut fake_dev = 0x1234_u64;
+    let mut fake_ctx = 0x5678_u64;
+    let mut dev = Device::new(
+        (&raw mut fake_dev).cast::<c_void>(),
+        (&raw mut fake_ctx).cast::<c_void>(),
+    );
+    let dev_ptr = (&raw mut *dev).cast::<c_void>();
+
+    let mut info = D3d10CounterInfo::default();
+    // SAFETY: `dev_ptr` is a live `Device` and `info` is a local `D3d10CounterInfo`.
+    unsafe { (DEVICE_VTBL.check_counter_info)(dev_ptr, (&raw mut info).cast()) };
+    assert_eq!(info.last_device_dependent_counter, 0x4000_0000);
+    assert_eq!(info.num_simultaneous_counters, 0);
+    assert_eq!(info.num_detectable_parallel_units, 0);
+
+    let mut counter_out: *mut c_void = ptr::dangling_mut();
+    // SAFETY: `dev_ptr` is a live `Device` and `counter_out` is a writable pointer slot.
+    let hr = unsafe { (DEVICE_VTBL.create_counter)(dev_ptr, ptr::null(), &raw mut counter_out) };
+    assert_eq!(hr, E_NOTIMPL);
+    assert!(counter_out.is_null());
+
+    let mut w = 99_u32;
+    let mut h = 99_u32;
+    // SAFETY: `dev_ptr` is a live `Device` and `w`, `h` are writable `u32` slots.
+    unsafe { (DEVICE_VTBL.get_text_filter_size)(dev_ptr, &raw mut w, &raw mut h) };
+    assert_eq!(w, 0);
+    assert_eq!(h, 0);
+}
