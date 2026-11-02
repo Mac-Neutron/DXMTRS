@@ -266,3 +266,21 @@ fn input_layout_wrapper_unwraps_d3d11() {
     let out = unsafe { d3d11_of((&raw mut wrap).cast::<c_void>()) };
     assert_eq!(out, il_ptr);
 }
+
+#[test]
+fn query_desc_roundtrip() {
+    use super::util::{d10_to_d11_query_desc, d11_to_d10_query_desc};
+    use crate::abi::records::D3d10QueryDesc;
+
+    let d10 = D3d10QueryDesc {
+        query: 2, // D3D10_QUERY_TIMESTAMP
+        misc_flags: 1,
+    };
+    let d11 = d10_to_d11_query_desc(&d10);
+    assert_eq!(d11.query, 2);
+    assert_eq!(d11.misc_flags, 1);
+
+    let back = d11_to_d10_query_desc(&d11);
+    assert_eq!(back.query, 2);
+    assert_eq!(back.misc_flags, 1);
+}
