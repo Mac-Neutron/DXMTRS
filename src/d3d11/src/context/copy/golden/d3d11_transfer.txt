@@ -1,0 +1,14 @@
+blit 4 src=#2 src_slice=0 src_level=0 src_origin.x=0 src_origin.y=0 src_origin.z=0 src_size.width=32 src_size.height=32 src_size.depth=1 dst=#4 dst_slice=0 dst_level=0 dst_origin.x=0 dst_origin.y=0 dst_origin.z=0
+blit 3 src=#4 slice=0 level=0 origin.x=0 origin.y=0 origin.z=0 size.width=32 size.height=32 size.depth=1 dst=#71 offset=0 bytes_per_row=128 bytes_per_image=4096
+blit 1 src=#71 src_offset=100 dst=#74 dst_offset=52 copy_length=200
+blit 1 src=#74 src_offset=0 dst=#77 dst_offset=0 copy_length=512
+blit 4 src=#2 src_slice=0 src_level=0 src_origin.x=8 src_origin.y=8 src_origin.z=0 src_size.width=16 src_size.height=8 src_size.depth=1 dst=#79 dst_slice=0 dst_level=0 dst_origin.x=0 dst_origin.y=4 dst_origin.z=0
+blit 1 src=#85 src_offset=0 dst=#77 dst_offset=64 copy_length=128
+blit 2 src=#85 src_offset=128 bytes_per_row=64 bytes_per_image=512 size.width=16 size.height=8 size.depth=1 dst=#90 slice=0 level=0 origin.x=4 origin.y=4 origin.z=0
+blit 2 src=#85 src_offset=640 bytes_per_row=8 bytes_per_image=64 size.width=8 size.height=8 size.depth=4 dst=#95 slice=0 level=0 origin.x=2 origin.y=2 origin.z=1
+blit 2 src=#85 src_offset=896 bytes_per_row=32 bytes_per_image=256 size.width=8 size.height=8 size.depth=1 dst=#100 slice=1 level=2 origin.x=0 origin.y=0 origin.z=0
+blit 2 src=#85 src_offset=1152 bytes_per_row=32 bytes_per_image=128 size.width=16 size.height=16 size.depth=1 dst=#105 slice=0 level=0 origin.x=8 origin.y=8 origin.z=0
+blit 2 src=#85 src_offset=1280 bytes_per_row=16 bytes_per_image=16 size.width=2 size.height=2 size.depth=1 dst=#120 slice=0 level=2 origin.x=0 origin.y=0 origin.z=0
+blit 3 src=#128 slice=0 level=0 origin.x=0 origin.y=0 origin.z=0 size.width=2 size.height=2 size.depth=1 dst=#129 offset=0 bytes_per_row=16 bytes_per_image=32
+blit 1 src=#85 src_offset=1296 dst=#118 dst_offset=65520 copy_length=16
+blit 2 src=#85 src_offset=1312 bytes_per_row=16 bytes_per_image=64 size.width=4 size.height=4 size.depth=4 dst=#128 slice=0 level=0 origin.x=0 origin.y=0 origin.z=0
