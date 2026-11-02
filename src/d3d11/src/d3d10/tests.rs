@@ -82,3 +82,31 @@ fn wrapper_layout_is_vtbl_then_d3d11() {
     let null_unwrapped = unsafe { d3d11_of(ptr::null_mut()) };
     assert!(null_unwrapped.is_null());
 }
+
+#[test]
+fn buffer_desc_roundtrip() {
+    use super::util::{d10_to_d11_buffer_desc, d11_to_d10_buffer_desc};
+    use crate::abi::records::D3d10BufferDesc;
+
+    let d10 = D3d10BufferDesc {
+        byte_width: 4096,
+        usage: 2,
+        bind_flags: 1,
+        cpu_access_flags: 0x10000,
+        misc_flags: D3D10_RESOURCE_MISC_SHARED,
+    };
+    let d11 = d10_to_d11_buffer_desc(&d10);
+    assert_eq!(d11.byte_width, 4096);
+    assert_eq!(d11.usage, 2);
+    assert_eq!(d11.bind_flags, 1);
+    assert_eq!(d11.cpu_access_flags, 0x10000);
+    assert_eq!(d11.misc_flags, D3D11_RESOURCE_MISC_SHARED);
+    assert_eq!(d11.structure_byte_stride, 0);
+
+    let back = d11_to_d10_buffer_desc(&d11);
+    assert_eq!(back.byte_width, d10.byte_width);
+    assert_eq!(back.usage, d10.usage);
+    assert_eq!(back.bind_flags, d10.bind_flags);
+    assert_eq!(back.cpu_access_flags, d10.cpu_access_flags);
+    assert_eq!(back.misc_flags, d10.misc_flags);
+}
