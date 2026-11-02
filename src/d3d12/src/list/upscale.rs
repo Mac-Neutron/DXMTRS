@@ -87,6 +87,10 @@ fn check_view_use_format(texture: &Texture, format: u32) -> TextureViewKey {
     }
 }
 
+fn consume_reset(desc_reset: i32, fresh: &core::sync::atomic::AtomicBool) -> u8 {
+    u8::from(desc_reset != 0 || fresh.swap(false, Ordering::SeqCst))
+}
+
 /// `IMTLD3D12CommandListExt::TemporalUpscale` (`d3d12_command_list.cpp:2382`).
 ///
 /// # Safety
@@ -211,11 +215,10 @@ pub unsafe fn temporal_upscale(
         return E_INVALIDARG;
     }
 
-    let fresh = scaler.fresh.swap(false, Ordering::SeqCst);
     let mut props = WMTFXTemporalScalerProps {
         input_content_width: d.input_content_width,
         input_content_height: d.input_content_height,
-        reset: u8::from(d.reset != 0 || fresh),
+        reset: consume_reset(d.reset, &scaler.fresh),
         depth_reversed: u8::from(d.depth_reversed != 0),
         motion_vector_scale_x: d.motion_vector_scale[0],
         motion_vector_scale_y: d.motion_vector_scale[1],
@@ -418,3 +421,6 @@ pub unsafe fn temporal_upscale(
 
     S_OK
 }
+
+#[cfg(test)]
+mod tests;

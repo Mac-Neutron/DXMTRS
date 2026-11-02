@@ -933,11 +933,8 @@ pub unsafe fn set_descriptor_heaps(
                 continue;
             }
             let heap_ptr = raw.cast::<Heap>().cast_const();
-            let heap_type = {
-                crate::scope!("heap.GetDesc");
-                // SAFETY: `heap_ptr` is a valid `Heap`.
-                unsafe { (*heap_ptr).heap_type }
-            };
+            // SAFETY: `heap_ptr` is a valid `Heap`.
+            let heap_type = crate::descriptor_heap::desc_of(unsafe { &*heap_ptr }).r#type;
             if heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER {
                 list.bound_sampler_heap = heap_ptr;
             } else {

@@ -24,9 +24,9 @@ use crate::{
         vtbl::{ID3D12RootSignatureDeserializerVtbl, ID3D12VersionedRootSignatureDeserializerVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid,
-        Hresult, IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER,
-        IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER, IID_IUNKNOWN, S_OK,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, Guid, Hresult,
+        IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER, IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER,
+        IID_IUNKNOWN, S_OK,
     },
     slot,
 };
@@ -305,30 +305,26 @@ impl ComRefCounted for RootSignatureDeserializer {
     }
 }
 
+unsafe fn add_ref_deserializer(this: *mut c_void) {
+    // SAFETY: `this` is a live `RootSignatureDeserializer`.
+    unsafe { com::add_ref_com(this.cast::<RootSignatureDeserializer>()) };
+}
+
 static DESERIALIZER_VTBL: ID3D12RootSignatureDeserializerVtbl =
     ID3D12RootSignatureDeserializerVtbl {
         query_interface: slot!(
-            "rootsig.QueryInterface",
             (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
-                if ppv_object.is_null() {
-                    return E_POINTER;
+                // SAFETY: `this` is a live `RootSignatureDeserializer`.
+                unsafe {
+                    super::object::query_interface(
+                        this,
+                        riid,
+                        ppv_object,
+                        &[IID_IUNKNOWN, IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER],
+                        add_ref_deserializer,
+                        false,
+                    )
                 }
-                // SAFETY: `ppv_object` is non-null.
-                unsafe { *ppv_object = ptr::null_mut() };
-                let Some(iid) = (
-                    // SAFETY: `riid` is an IID pointer when non-null.
-                    unsafe { riid.cast::<Guid>().as_ref() }
-                ) else {
-                    return E_NOINTERFACE;
-                };
-                if *iid == IID_IUNKNOWN || *iid == IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER {
-                    // SAFETY: `this` is a live `RootSignatureDeserializer`.
-                    unsafe { com::add_ref_com(this.cast::<RootSignatureDeserializer>()) };
-                    // SAFETY: `ppv_object` is non-null.
-                    unsafe { *ppv_object = this };
-                    return S_OK;
-                }
-                E_NOINTERFACE
             }
         ),
         add_ref: slot!((this: *mut c_void) -> u32 => {
@@ -365,30 +361,26 @@ impl ComRefCounted for VersionedRootSignatureDeserializer {
     }
 }
 
+unsafe fn add_ref_versioned_deserializer(this: *mut c_void) {
+    // SAFETY: `this` is a live `VersionedRootSignatureDeserializer`.
+    unsafe { com::add_ref_com(this.cast::<VersionedRootSignatureDeserializer>()) };
+}
+
 static VERSIONED_DESERIALIZER_VTBL: ID3D12VersionedRootSignatureDeserializerVtbl =
     ID3D12VersionedRootSignatureDeserializerVtbl {
         query_interface: slot!(
-            "rootsig.QueryInterface",
             (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
-                if ppv_object.is_null() {
-                    return E_POINTER;
+                // SAFETY: `this` is a live `VersionedRootSignatureDeserializer`.
+                unsafe {
+                    super::object::query_interface(
+                        this,
+                        riid,
+                        ppv_object,
+                        &[IID_IUNKNOWN, IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER],
+                        add_ref_versioned_deserializer,
+                        false,
+                    )
                 }
-                // SAFETY: `ppv_object` is non-null.
-                unsafe { *ppv_object = ptr::null_mut() };
-                let Some(iid) = (
-                    // SAFETY: `riid` is an IID pointer when non-null.
-                    unsafe { riid.cast::<Guid>().as_ref() }
-                ) else {
-                    return E_NOINTERFACE;
-                };
-                if *iid == IID_IUNKNOWN || *iid == IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER {
-                    // SAFETY: `this` is a live `VersionedRootSignatureDeserializer`.
-                    unsafe { com::add_ref_com(this.cast::<VersionedRootSignatureDeserializer>()) };
-                    // SAFETY: `ppv_object` is non-null.
-                    unsafe { *ppv_object = this };
-                    return S_OK;
-                }
-                E_NOINTERFACE
             }
         ),
         add_ref: slot!((this: *mut c_void) -> u32 => {

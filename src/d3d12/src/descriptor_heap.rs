@@ -344,17 +344,24 @@ unsafe extern "system-unwind" fn get_device_fn(
     unsafe { (unk.query_interface)(dev, riid, ppv_device) }
 }
 
-unsafe extern "system-unwind" fn get_desc_fn(this: *mut c_void, out: *mut c_void) -> *mut c_void {
+/// Returns `heap`'s `D3D12_DESCRIPTOR_HEAP_DESC` while recording `heap.GetDesc`.
+#[inline(never)]
+#[must_use]
+pub fn desc_of(heap: &Heap) -> DescriptorHeapDesc {
     crate::scope!("heap.GetDesc");
+    DescriptorHeapDesc {
+        r#type: heap.heap_type,
+        num_descriptors: heap.num_descriptors,
+        flags: heap.flags,
+        node_mask: 0,
+    }
+}
+
+unsafe extern "system-unwind" fn get_desc_fn(this: *mut c_void, out: *mut c_void) -> *mut c_void {
     // SAFETY: `this` is a valid `Heap` pointer.
     let heap = unsafe { &*this.cast::<Heap>() };
+    let desc = desc_of(heap);
     if !out.is_null() {
-        let desc = DescriptorHeapDesc {
-            r#type: heap.heap_type,
-            num_descriptors: heap.num_descriptors,
-            flags: heap.flags,
-            node_mask: 0,
-        };
         // SAFETY: `out` is non-null caller output storage.
         unsafe { write_unaligned(out.cast::<DescriptorHeapDesc>(), desc) };
     }

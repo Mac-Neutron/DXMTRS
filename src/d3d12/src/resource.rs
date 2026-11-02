@@ -173,15 +173,30 @@ impl Drop for Resource {
 }
 
 impl Resource {
+    /// Returns `&self.desc` while recording `buffer.GetDesc`.
+    #[inline(never)]
+    #[must_use]
+    pub fn buffer_desc(&self) -> &ResourceDesc {
+        crate::scope!("buffer.GetDesc");
+        &self.desc
+    }
+
+    /// Returns `&self.desc` while recording `texture.GetDesc`.
+    #[inline(never)]
+    #[must_use]
+    pub fn texture_desc(&self) -> &ResourceDesc {
+        crate::scope!("texture.GetDesc");
+        &self.desc
+    }
+
     /// Returns `&self.desc` while recording `buffer.GetDesc` or `texture.GetDesc`.
     #[must_use]
     pub fn desc_scoped(&self) -> &ResourceDesc {
         if self.desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
-            crate::scope!("buffer.GetDesc");
+            self.buffer_desc()
         } else {
-            crate::scope!("texture.GetDesc");
+            self.texture_desc()
         }
-        &self.desc
     }
 }
 

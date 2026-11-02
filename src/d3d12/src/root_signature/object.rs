@@ -115,34 +115,71 @@ impl RootSignature {
     }
 }
 
+/// Shared `rootsig.QueryInterface` implementation.
+///
+/// Used by `ID3D12RootSignature`, `ID3D12RootSignatureDeserializer`, and
+/// `ID3D12VersionedRootSignatureDeserializer`.
+///
+/// # Safety
+///
+/// `this` must be a live COM object whose `ComObject` is reachable via `add_ref`; `riid` and
+/// `ppv_object` are caller-supplied `QueryInterface` arguments.
+#[inline(never)]
+pub unsafe fn query_interface(
+    this: *mut c_void,
+    riid: *const c_void,
+    ppv_object: *mut *mut c_void,
+    accepted: &[Guid],
+    add_ref: unsafe fn(*mut c_void),
+    warn_unknown: bool,
+) -> Hresult {
+    crate::scope!("rootsig.QueryInterface");
+    if ppv_object.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: `ppv_object` is non-null.
+    unsafe { *ppv_object = ptr::null_mut() };
+    // SAFETY: `riid` is an IID pointer when non-null.
+    let Some(iid) = (unsafe { riid.cast::<Guid>().as_ref() }) else {
+        return E_NOINTERFACE;
+    };
+    if accepted.contains(iid) {
+        // SAFETY: `this` is a live COM object of the caller's type.
+        unsafe { add_ref(this) };
+        // SAFETY: `ppv_object` is non-null.
+        unsafe { *ppv_object = this };
+        return S_OK;
+    }
+    if warn_unknown {
+        crate::warn!("D3D12RootSignature: Unknown interface query {iid}");
+    }
+    E_NOINTERFACE
+}
+
+unsafe fn add_ref_root_signature(this: *mut c_void) {
+    // SAFETY: `this` is a live `RootSignature`.
+    unsafe { com::add_ref_com(this.cast::<RootSignature>()) };
+}
+
 static ROOT_SIGNATURE_VTBL: ID3D12RootSignatureVtbl = ID3D12RootSignatureVtbl {
     query_interface: slot!(
-        "rootsig.QueryInterface",
         (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
-            if ppv_object.is_null() {
-                return E_POINTER;
+            // SAFETY: `this` is a live `RootSignature`.
+            unsafe {
+                query_interface(
+                    this,
+                    riid,
+                    ppv_object,
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D12_OBJECT,
+                        IID_ID3D12_DEVICE_CHILD,
+                        IID_ID3D12_ROOT_SIGNATURE,
+                    ],
+                    add_ref_root_signature,
+                    true,
+                )
             }
-            // SAFETY: `ppv_object` is non-null.
-            unsafe { *ppv_object = ptr::null_mut() };
-            let Some(iid) = (
-                // SAFETY: `riid` is an IID pointer when non-null.
-                unsafe { riid.cast::<Guid>().as_ref() }
-            ) else {
-                return E_NOINTERFACE;
-            };
-            if *iid == IID_IUNKNOWN
-                || *iid == IID_ID3D12_OBJECT
-                || *iid == IID_ID3D12_DEVICE_CHILD
-                || *iid == IID_ID3D12_ROOT_SIGNATURE
-            {
-                // SAFETY: `this` is a live `RootSignature`.
-                unsafe { com::add_ref_com(this.cast::<RootSignature>()) };
-                // SAFETY: `ppv_object` is non-null.
-                unsafe { *ppv_object = this };
-                return S_OK;
-            }
-            crate::warn!("D3D12RootSignature: Unknown interface query {iid}");
-            E_NOINTERFACE
         }
     ),
     add_ref: slot!((this: *mut c_void) -> u32 => {

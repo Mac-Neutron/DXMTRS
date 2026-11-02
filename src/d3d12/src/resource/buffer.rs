@@ -105,12 +105,11 @@ pub static BUFFER_VTBL: ID3D12Resource2Vtbl = ID3D12Resource2Vtbl {
         (_this: *mut c_void, _subresource: u32, _written_range: *const c_void) => {}
     ),
     get_desc: slot!(
-        "buffer.GetDesc",
         (this: *mut c_void, out: *mut c_void) -> *mut c_void => {
             // SAFETY: `this` is a valid `Resource` COM pointer.
             let res = unsafe { &*this.cast::<Resource>() };
             // SAFETY: `out` points to a caller-provided `D3D12_RESOURCE_DESC`.
-            unsafe { *out.cast::<ResourceDesc>() = super::clone_desc(&res.desc) };
+            unsafe { *out.cast::<ResourceDesc>() = super::clone_desc(res.buffer_desc()) };
             out
         }
     ),
