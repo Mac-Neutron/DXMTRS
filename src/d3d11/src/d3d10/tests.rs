@@ -188,3 +188,42 @@ fn dsv_desc_roundtrip() {
     assert_eq!(arr.first_array_slice, 2);
     assert_eq!(arr.array_size, 4);
 }
+
+#[test]
+fn blend_desc_roundtrip() {
+    use super::util::{d10_to_d11_blend_desc, d11_to_d10_blend_desc};
+    use crate::abi::records::D3d10BlendDesc;
+
+    let d10 = D3d10BlendDesc {
+        alpha_to_coverage_enable: 1,
+        blend_enable: [1, 0, 1, 0, 0, 1, 0, 1],
+        src_blend: 5,
+        dest_blend: 6,
+        blend_op: 1,
+        src_blend_alpha: 2,
+        dest_blend_alpha: 1,
+        blend_op_alpha: 1,
+        render_target_write_mask: [0xf, 0x7, 0x3, 0x1, 0xe, 0xc, 0x8, 0x0],
+    };
+    let d11 = d10_to_d11_blend_desc(&d10);
+    assert_eq!(d11.alpha_to_coverage_enable, 1);
+    assert_eq!(d11.independent_blend_enable, 1);
+    for i in 0..8 {
+        assert_eq!(d11.render_target[i].blend_enable, d10.blend_enable[i]);
+        assert_eq!(
+            d11.render_target[i].render_target_write_mask,
+            d10.render_target_write_mask[i]
+        );
+    }
+
+    let back = d11_to_d10_blend_desc(&d11);
+    assert_eq!(back.alpha_to_coverage_enable, d10.alpha_to_coverage_enable);
+    assert_eq!(back.blend_enable, d10.blend_enable);
+    assert_eq!(back.src_blend, d10.src_blend);
+    assert_eq!(back.dest_blend, d10.dest_blend);
+    assert_eq!(back.blend_op, d10.blend_op);
+    assert_eq!(back.src_blend_alpha, d10.src_blend_alpha);
+    assert_eq!(back.dest_blend_alpha, d10.dest_blend_alpha);
+    assert_eq!(back.blend_op_alpha, d10.blend_op_alpha);
+    assert_eq!(back.render_target_write_mask, d10.render_target_write_mask);
+}
