@@ -1,0 +1,5 @@
+render 0
+render 18 offset=0 mode=2
+render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 base_instance=0
+render 18 offset=8 mode=2
+render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 base_instance=0
