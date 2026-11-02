@@ -155,3 +155,36 @@ fn texture_unwrap_reads_the_buffer_layout() {
     assert_eq!(u2, p2);
     assert_eq!(u3, p3);
 }
+
+#[test]
+fn dsv_desc_roundtrip() {
+    use super::util::{d10_to_d11_dsv_desc, d11_to_d10_dsv_desc};
+    use crate::abi::records::{
+        D3d10DepthStencilViewDesc, D3d10DepthStencilViewDescUnion, D3d10Tex2dArrayDsv,
+    };
+
+    let d10 = D3d10DepthStencilViewDesc {
+        format: 45,
+        view_dimension: 4, // D3D10_DSV_DIMENSION_TEXTURE2DARRAY
+        u: D3d10DepthStencilViewDescUnion {
+            texture2d_array: D3d10Tex2dArrayDsv {
+                mip_slice: 1,
+                first_array_slice: 2,
+                array_size: 4,
+            },
+        },
+    };
+    let d11 = d10_to_d11_dsv_desc(&d10);
+    assert_eq!(d11.format, 45);
+    assert_eq!(d11.view_dimension, 4);
+    assert_eq!(d11.flags, 0);
+
+    let back = d11_to_d10_dsv_desc(&d11);
+    assert_eq!(back.format, 45);
+    assert_eq!(back.view_dimension, 4);
+    // SAFETY: `view_dimension == 4` selects the `texture2d_array` union arm.
+    let arr = unsafe { back.u.texture2d_array };
+    assert_eq!(arr.mip_slice, 1);
+    assert_eq!(arr.first_array_slice, 2);
+    assert_eq!(arr.array_size, 4);
+}
