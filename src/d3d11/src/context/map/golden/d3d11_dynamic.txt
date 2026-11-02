@@ -1,0 +1,6 @@
+render 0
+render 1 resource=#69 usage=1 stages=2
+render 5 offset=0 index=0
+render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 base_instance=0
+render 5 offset=32 index=0
+render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 base_instance=0
