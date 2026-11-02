@@ -1,0 +1,13 @@
+d11sc validate null_desc=887a0001 null_out=887a0001
+d11sc sc_qi_null hr=80004003
+d11sc sc_qi iid=IUnknown hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGIObject hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGIDeviceSubObject hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGISwapChain hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGISwapChain1 hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGISwapChain2 hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGISwapChain3 hr=00000000 out=ptr id=1
+d11sc sc_qi iid=IDXGISwapChain4 hr=00000000 out=ptr id=1
+d11sc sc_qi iid=Bogus hr=80004002 out=null id=0
+d11sc hidden create=00000000 bb_tex=00000000 bb_surf=00000000 same_bb=1 wait=1 resize=00000000(64x64) ptest=00000000 p0=00000000 p5=887a0001
+d11sc iconic=1 disc_p0=087a0001(fast=1) disc_test=087a0001 disc_p5=887a0001 flip_p0=00000000 flip_p5=887a0001 zero_rsz=00000000(0x0) zero_p0=087a0001 zero_test=087a0001
