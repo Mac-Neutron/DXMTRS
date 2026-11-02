@@ -254,3 +254,15 @@ fn shader_wrappers_unwrap_d3d11() {
     assert_eq!(pixel_out, pixel_ptr);
     assert_eq!(geom_out, geom_ptr);
 }
+
+#[test]
+fn input_layout_wrapper_unwraps_d3d11() {
+    use super::INPUT_LAYOUT_VTBL;
+
+    let mut raw_il = 0x44_u64;
+    let il_ptr = (&raw mut raw_il).cast::<c_void>();
+    let mut wrap = Wrapper::new(&INPUT_LAYOUT_VTBL, il_ptr, ptr::null_mut());
+    // SAFETY: `wrap` is a live `Wrapper<ID3D10InputLayoutVtbl>`.
+    let out = unsafe { d3d11_of((&raw mut wrap).cast::<c_void>()) };
+    assert_eq!(out, il_ptr);
+}
