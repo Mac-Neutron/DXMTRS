@@ -420,12 +420,60 @@ pub fn leave_fullscreen_mode(window: Hwnd, state: &WindowState, restore_coordina
     true
 }
 
-pub fn restore_display_mode() -> bool {
-    let mut data = Success(true);
-    let param = (&raw mut data).expose_provenance().cast_signed();
-    // SAFETY: `restore` reaches `data` through `param`, which outlives the enumeration.
-    let result = unsafe { EnumDisplayMonitors(ptr::null_mut(), ptr::null(), restore, param) };
-    result != 0 && data.0
+pub fn restore_display_mode(monitor: Hmonitor) -> bool {
+    let Some(info) = monitor_info(monitor) else {
+        return false;
+    };
+    let mut current_mode = DevModeW {
+        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
+        ..DevModeW::default()
+    };
+    let mut registry_mode = DevModeW {
+        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
+        ..DevModeW::default()
+    };
+    // SAFETY: `info.device` is NUL-terminated and `current_mode` is a live `DEVMODEW`.
+    if unsafe {
+        EnumDisplaySettingsW(
+            info.device.as_ptr(),
+            ENUM_CURRENT_SETTINGS,
+            &raw mut current_mode,
+        )
+    } == 0
+    {
+        return false;
+    }
+    // SAFETY: `info.device` is NUL-terminated and `registry_mode` is a live `DEVMODEW`.
+    if unsafe {
+        EnumDisplaySettingsW(
+            info.device.as_ptr(),
+            ENUM_REGISTRY_SETTINGS,
+            &raw mut registry_mode,
+        )
+    } == 0
+    {
+        return false;
+    }
+    let freq_diff = (current_mode.fields & registry_mode.fields & DM_DISPLAYFREQUENCY) != 0
+        && current_mode.display_frequency != registry_mode.display_frequency;
+    if current_mode.pels_width == registry_mode.pels_width
+        && current_mode.pels_height == registry_mode.pels_height
+        && current_mode.bits_per_pel == registry_mode.bits_per_pel
+        && !freq_diff
+    {
+        return true;
+    }
+    // SAFETY: `info.device` is NUL-terminated; null `DEVMODEW` restores the registry mode.
+    let ret = unsafe {
+        ChangeDisplaySettingsExW(
+            info.device.as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+        )
+    };
+    ret == DISP_CHANGE_SUCCESSFUL
 }
 
 pub fn resize_window(window: Hwnd, _state: &WindowState, width: u32, height: u32) {
@@ -501,8 +549,6 @@ struct Search {
     found: Hmonitor,
 }
 
-struct Success(bool);
-
 /// `EnumDisplayMonitors`' callback: counts `data`'s `Search` down to its monitor, then stops.
 ///
 /// One word for a name, so that the i686 callee-pop check, which pairs `<class>_<method>` names
@@ -525,80 +571,6 @@ const extern "system" fn countdown(
     }
     search.found = monitor;
     0
-}
-
-/// `EnumDisplayMonitors`' callback for `restore_display_mode`.
-extern "system" fn restore(
-    monitor: Hmonitor,
-    _dc: *mut c_void,
-    _rect: *mut Rect,
-    data: isize,
-) -> i32 {
-    let success = ptr::with_exposed_provenance_mut::<Success>(data.cast_unsigned());
-    // SAFETY: `data` is the `Success` `restore_display_mode` passed, alive during enumeration.
-    let Some(success) = (unsafe { success.as_mut() }) else {
-        return 0;
-    };
-    let Some(info) = monitor_info(monitor) else {
-        success.0 = false;
-        return 0;
-    };
-    let mut current_mode = DevModeW {
-        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
-        ..DevModeW::default()
-    };
-    let mut registry_mode = DevModeW {
-        size: u16::try_from(size_of::<DevModeW>()).unwrap_or(0),
-        ..DevModeW::default()
-    };
-    // SAFETY: `info.device` is NUL-terminated and `current_mode` is a live `DEVMODEW`.
-    if unsafe {
-        EnumDisplaySettingsW(
-            info.device.as_ptr(),
-            ENUM_CURRENT_SETTINGS,
-            &raw mut current_mode,
-        )
-    } == 0
-    {
-        success.0 = false;
-        return 0;
-    }
-    // SAFETY: `info.device` is NUL-terminated and `registry_mode` is a live `DEVMODEW`.
-    if unsafe {
-        EnumDisplaySettingsW(
-            info.device.as_ptr(),
-            ENUM_REGISTRY_SETTINGS,
-            &raw mut registry_mode,
-        )
-    } == 0
-    {
-        success.0 = false;
-        return 0;
-    }
-    let freq_diff = (current_mode.fields & registry_mode.fields & DM_DISPLAYFREQUENCY) != 0
-        && current_mode.display_frequency != registry_mode.display_frequency;
-    if current_mode.pels_width == registry_mode.pels_width
-        && current_mode.pels_height == registry_mode.pels_height
-        && current_mode.bits_per_pel == registry_mode.bits_per_pel
-        && !freq_diff
-    {
-        return 1;
-    }
-    // SAFETY: `info.device` is NUL-terminated; null `DEVMODEW` restores the registry mode.
-    let ret = unsafe {
-        ChangeDisplaySettingsExW(
-            info.device.as_ptr(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            0,
-            ptr::null_mut(),
-        )
-    };
-    if ret != DISP_CHANGE_SUCCESSFUL {
-        success.0 = false;
-        return 0;
-    }
-    1
 }
 
 /// `monitor`'s `MONITORINFOEXW`, or none.

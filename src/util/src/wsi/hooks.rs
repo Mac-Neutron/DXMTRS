@@ -27,14 +27,14 @@ pub const WMT_WSI_WIN_FOCUSED: u32 = 2;
 pub const WMT_WSI_WIN_KNOWN: u32 = 4;
 pub const WMT_WSI_WIN_PROCESS_FG: u32 = 8;
 
-pub const WMT_WSI_SET_MODE: u32 = 1;
-pub const WMT_WSI_ENTER_FULLSCREEN: u32 = 2;
-pub const WMT_WSI_LEAVE_FULLSCREEN: u32 = 3;
-pub const WMT_WSI_RESTORE_DISPLAY: u32 = 4;
-pub const WMT_WSI_MINIMIZE_WINDOW: u32 = 5;
+pub const WMT_WSI_SAVE_WINDOW: u32 = 1;
+pub const WMT_WSI_SET_MODE: u32 = 2;
+pub const WMT_WSI_ENTER_FULLSCREEN: u32 = 3;
+pub const WMT_WSI_LEAVE_FULLSCREEN: u32 = 4;
+pub const WMT_WSI_RESTORE_DISPLAY: u32 = 5;
 pub const WMT_WSI_RESIZE_WINDOW: u32 = 6;
 pub const WMT_WSI_UPDATE_FULLSCREEN: u32 = 7;
-pub const WMT_WSI_SAVE_WINDOW: u32 = 8;
+pub const WMT_WSI_MINIMIZE_WINDOW: u32 = 8;
 
 /// winemetal's `WMTWsiWindow`: a window's state as a VM host's guest last told it.
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -73,13 +73,15 @@ pub struct WsiHookMode {
 #[repr(C)]
 pub struct WsiAction {
     pub kind: u32,
+    pub arg: u32,
     pub window: u64,
     pub monitor: u64,
     pub width: u32,
     pub height: u32,
     pub refresh_num: u32,
     pub refresh_den: u32,
-    pub flags: u32,
+    pub bits_per_pixel: u32,
+    pub interlaced: u32,
 }
 
 /// winemetal's `WMTWsiHooks`: the window system a VM host answers for its guest.
@@ -136,11 +138,13 @@ fn hooks() -> Option<&'static WsiHooks> {
 }
 
 /// Sends `act` to the VM guest if an action hook is installed.
-fn send_action(act: &WsiAction) {
-    if let Some(action) = hooks().and_then(|hooks| hooks.action) {
-        // SAFETY: `act` is a live `WsiAction` on the stack for the duration of the call.
-        unsafe { action(core::ptr::from_ref(act)) };
-    }
+fn send_action(act: &WsiAction) -> bool {
+    let Some(action) = hooks().and_then(|hooks| hooks.action) else {
+        return false;
+    };
+    // SAFETY: `act` is a live `WsiAction` on the stack for the duration of the call.
+    unsafe { action(core::ptr::from_ref(act)) };
+    true
 }
 
 /// The hooks' display `index`, if they have one.
@@ -242,7 +246,7 @@ pub fn window_size(window: Hwnd) -> (u32, u32) {
     (state.width, state.height)
 }
 
-/// `window`'s monitor, or the primary monitor.
+/// `window`'s monitor, or null if the hooks do not know `window`.
 pub fn window_monitor(window: Hwnd) -> Hmonitor {
     if let Some(hook) = hooks().and_then(|hooks| hooks.window) {
         let mut win = WsiWindow::default();
@@ -254,7 +258,7 @@ pub fn window_monitor(window: Hwnd) -> Hmonitor {
             return mon;
         }
     }
-    default_monitor().unwrap_or(core::ptr::null_mut())
+    core::ptr::null_mut()
 }
 
 /// Whether `window` is a valid window.
@@ -315,7 +319,7 @@ pub fn is_process_foreground() -> bool {
 
 /// Minimises `window`.
 pub fn minimize_window(window: Hwnd) {
-    send_action(&WsiAction {
+    let _ = send_action(&WsiAction {
         kind: WMT_WSI_MINIMIZE_WINDOW,
         window: window as u64,
         ..WsiAction::default()
@@ -324,7 +328,7 @@ pub fn minimize_window(window: Hwnd) {
 
 /// Saves `window`'s windowed state.
 pub fn save_window_state(window: Hwnd, _state: &mut WindowState) {
-    send_action(&WsiAction {
+    let _ = send_action(&WsiAction {
         kind: WMT_WSI_SAVE_WINDOW,
         window: window as u64,
         ..WsiAction::default()
@@ -341,9 +345,10 @@ pub fn set_window_mode(monitor: Hmonitor, window: Hwnd, mode: &WsiMode) -> bool 
         height: mode.height,
         refresh_num: mode.refresh.numerator,
         refresh_den: mode.refresh.denominator,
-        flags: u32::from(mode.interlaced),
-    });
-    true
+        bits_per_pixel: mode.bits_per_pixel,
+        interlaced: u32::from(mode.interlaced),
+        ..WsiAction::default()
+    })
 }
 
 /// Moves `window` to fullscreen on `monitor`.
@@ -355,12 +360,11 @@ pub fn enter_fullscreen_mode(
 ) -> bool {
     send_action(&WsiAction {
         kind: WMT_WSI_ENTER_FULLSCREEN,
+        arg: u32::from(mode_switch),
         window: window as u64,
         monitor: monitor_id(monitor),
-        flags: u32::from(mode_switch),
         ..WsiAction::default()
-    });
-    true
+    })
 }
 
 /// Restores `window` from fullscreen.
@@ -371,25 +375,24 @@ pub fn leave_fullscreen_mode(
 ) -> bool {
     send_action(&WsiAction {
         kind: WMT_WSI_LEAVE_FULLSCREEN,
+        arg: u32::from(restore_coordinates),
         window: window as u64,
-        flags: u32::from(restore_coordinates),
         ..WsiAction::default()
-    });
-    true
+    })
 }
 
-/// Restores the desktop display mode.
-pub fn restore_display_mode() -> bool {
+/// Restores `monitor`'s desktop display mode.
+pub fn restore_display_mode(monitor: Hmonitor) -> bool {
     send_action(&WsiAction {
         kind: WMT_WSI_RESTORE_DISPLAY,
+        monitor: monitor_id(monitor),
         ..WsiAction::default()
-    });
-    true
+    })
 }
 
 /// Resizes `window`'s client area to `width` by `height`.
 pub fn resize_window(window: Hwnd, _state: &WindowState, width: u32, height: u32) {
-    send_action(&WsiAction {
+    let _ = send_action(&WsiAction {
         kind: WMT_WSI_RESIZE_WINDOW,
         window: window as u64,
         width,
@@ -400,11 +403,11 @@ pub fn resize_window(window: Hwnd, _state: &WindowState, width: u32, height: u32
 
 /// Updates a fullscreen `window`'s bounds on `monitor`.
 pub fn update_fullscreen_window(monitor: Hmonitor, window: Hwnd, force_topmost: bool) {
-    send_action(&WsiAction {
+    let _ = send_action(&WsiAction {
         kind: WMT_WSI_UPDATE_FULLSCREEN,
+        arg: u32::from(force_topmost),
         window: window as u64,
         monitor: monitor_id(monitor),
-        flags: u32::from(force_topmost),
         ..WsiAction::default()
     });
 }
@@ -412,13 +415,15 @@ pub fn update_fullscreen_window(monitor: Hmonitor, window: Hwnd, force_topmost: 
 const _: () = {
     assert!(size_of::<WsiAction>() == 48 && align_of::<WsiAction>() == 8);
     assert!(offset_of!(WsiAction, kind) == 0);
+    assert!(offset_of!(WsiAction, arg) == 4);
     assert!(offset_of!(WsiAction, window) == 8);
     assert!(offset_of!(WsiAction, monitor) == 16);
     assert!(offset_of!(WsiAction, width) == 24);
     assert!(offset_of!(WsiAction, height) == 28);
     assert!(offset_of!(WsiAction, refresh_num) == 32);
     assert!(offset_of!(WsiAction, refresh_den) == 36);
-    assert!(offset_of!(WsiAction, flags) == 40);
+    assert!(offset_of!(WsiAction, bits_per_pixel) == 40);
+    assert!(offset_of!(WsiAction, interlaced) == 44);
     assert!(size_of::<WsiDisplay>() == 88 && align_of::<WsiDisplay>() == 8);
     assert!(offset_of!(WsiDisplay, monitor) == 0);
     assert!(offset_of!(WsiDisplay, left) == 8);

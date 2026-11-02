@@ -237,7 +237,7 @@ extern "C" fn sim_action(action: *const WsiAction) {
                 sim.height = 1080;
             }
             WMT_WSI_LEAVE_FULLSCREEN => {
-                if act.flags != 0 {
+                if act.arg != 0 {
                     sim.width = sim.saved_width;
                     sim.height = sim.saved_height;
                 }
@@ -445,13 +445,14 @@ fn fullscreen_round_trip_restores_state() {
 
     assert!(leave_fullscreen_mode(hwnd, &state, true));
     assert_eq!(window_size(hwnd), (1280, 720));
-    assert!(restore_display_mode());
+    assert!(restore_display_mode(monitor(SECOND)));
 
     resize_window(hwnd, &state, 1024, 768);
     assert_eq!(window_size(hwnd), (1024, 768));
 
     SIM.with(|sim| {
-        let kinds: Vec<u32> = sim.borrow().actions.iter().map(|a| a.kind).collect();
+        let actions = &sim.borrow().actions;
+        let kinds: Vec<u32> = actions.iter().map(|a| a.kind).collect();
         assert_eq!(
             kinds,
             vec![
@@ -464,6 +465,12 @@ fn fullscreen_round_trip_restores_state() {
                 WMT_WSI_RESIZE_WINDOW,
             ]
         );
+        assert_eq!(kinds, vec![1, 3, 2, 7, 4, 5, 6]);
+        assert_eq!(actions[1].arg, 1);
+        assert_eq!((actions[2].bits_per_pixel, actions[2].interlaced), (32, 0));
+        assert_eq!(actions[3].arg, 1);
+        assert_eq!(actions[4].arg, 1);
+        assert_eq!(actions[5].monitor, SECOND);
     });
 }
 

@@ -303,16 +303,16 @@ pub fn leave_fullscreen_mode(window: Hwnd, state: &WindowState, restore_coordina
     }
 }
 
-/// `wsi::restoreDisplayMode()`.
+/// `wsi::restoreDisplayMode(hMonitor)`.
 #[must_use]
-pub fn restore_display_mode() -> bool {
+pub fn restore_display_mode(monitor: Hmonitor) -> bool {
     #[cfg(windows)]
     {
-        win32::restore_display_mode()
+        win32::restore_display_mode(monitor)
     }
     #[cfg(not(windows))]
     {
-        hooks::restore_display_mode()
+        hooks::restore_display_mode(monitor)
     }
 }
 
