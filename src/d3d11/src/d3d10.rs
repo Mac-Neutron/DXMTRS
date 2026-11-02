@@ -12,6 +12,9 @@ pub mod texture;
 pub mod util;
 pub mod view;
 
+#[cfg(test)]
+mod tests;
+
 pub use buffer::BUFFER_VTBL;
 pub use device::Device;
 pub use input_layout::INPUT_LAYOUT_VTBL;
