@@ -31,11 +31,6 @@ extern "C-unwind" fn fake_new_sampler_state(_device: u64, info: *mut WMTSamplerI
     0x7201
 }
 
-#[unsafe(export_name = "MTLDevice_newFence")]
-extern "C-unwind" fn fake_new_fence(_device: u64) -> u64 {
-    0x7300
-}
-
 #[unsafe(export_name = "MTLCommandBuffer_status")]
 extern "C-unwind" fn fake_cmdbuf_status(_cmdbuf: u64) -> u64 {
     WMT_COMMAND_BUFFER_STATUS_COMPLETED

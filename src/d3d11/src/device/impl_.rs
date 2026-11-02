@@ -130,7 +130,7 @@ unsafe extern "system-unwind" fn device_release(this: *mut c_void) -> u32 {
     unsafe { container_release(container) }
 }
 
-const unsafe extern "system-unwind" fn create_buffer(
+unsafe extern "system-unwind" fn create_buffer(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -158,7 +158,7 @@ const unsafe extern "system-unwind" fn create_buffer(
     crate::resource::create_buffer(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_texture1d(
+unsafe extern "system-unwind" fn create_texture1d(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -182,7 +182,7 @@ const unsafe extern "system-unwind" fn create_texture1d(
     crate::resource::create_texture1d(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_texture2d(
+unsafe extern "system-unwind" fn create_texture2d(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -206,7 +206,7 @@ const unsafe extern "system-unwind" fn create_texture2d(
     crate::resource::create_texture2d(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_texture3d(
+unsafe extern "system-unwind" fn create_texture3d(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -230,7 +230,7 @@ const unsafe extern "system-unwind" fn create_texture3d(
     crate::resource::create_texture3d(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_shader_resource_view(
+unsafe extern "system-unwind" fn create_shader_resource_view(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -244,7 +244,7 @@ const unsafe extern "system-unwind" fn create_shader_resource_view(
     )
 }
 
-const unsafe extern "system-unwind" fn create_unordered_access_view(
+unsafe extern "system-unwind" fn create_unordered_access_view(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -258,7 +258,7 @@ const unsafe extern "system-unwind" fn create_unordered_access_view(
     )
 }
 
-const unsafe extern "system-unwind" fn create_render_target_view(
+unsafe extern "system-unwind" fn create_render_target_view(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -272,7 +272,7 @@ const unsafe extern "system-unwind" fn create_render_target_view(
     )
 }
 
-const unsafe extern "system-unwind" fn create_depth_stencil_view(
+unsafe extern "system-unwind" fn create_depth_stencil_view(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -286,7 +286,7 @@ const unsafe extern "system-unwind" fn create_depth_stencil_view(
     )
 }
 
-const unsafe extern "system-unwind" fn create_input_layout(
+unsafe extern "system-unwind" fn create_input_layout(
     this: *mut c_void,
     descs: *const c_void,
     count: u32,
@@ -304,7 +304,7 @@ const unsafe extern "system-unwind" fn create_input_layout(
     )
 }
 
-const unsafe extern "system-unwind" fn create_vertex_shader(
+unsafe extern "system-unwind" fn create_vertex_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -314,7 +314,7 @@ const unsafe extern "system-unwind" fn create_vertex_shader(
     crate::shader::create_vertex_shader(this, bytecode, len, linkage, out)
 }
 
-const unsafe extern "system-unwind" fn create_geometry_shader(
+unsafe extern "system-unwind" fn create_geometry_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -324,7 +324,7 @@ const unsafe extern "system-unwind" fn create_geometry_shader(
     crate::shader::create_geometry_shader(this, bytecode, len, linkage, out)
 }
 
-const unsafe extern "system-unwind" fn create_geometry_shader_with_stream_output(
+unsafe extern "system-unwind" fn create_geometry_shader_with_stream_output(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -347,7 +347,7 @@ const unsafe extern "system-unwind" fn create_geometry_shader_with_stream_output
     )
 }
 
-const unsafe extern "system-unwind" fn create_pixel_shader(
+unsafe extern "system-unwind" fn create_pixel_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -357,7 +357,7 @@ const unsafe extern "system-unwind" fn create_pixel_shader(
     crate::shader::create_pixel_shader(this, bytecode, len, linkage, out)
 }
 
-const unsafe extern "system-unwind" fn create_hull_shader(
+unsafe extern "system-unwind" fn create_hull_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -367,7 +367,7 @@ const unsafe extern "system-unwind" fn create_hull_shader(
     crate::shader::create_hull_shader(this, bytecode, len, linkage, out)
 }
 
-const unsafe extern "system-unwind" fn create_domain_shader(
+unsafe extern "system-unwind" fn create_domain_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -377,7 +377,7 @@ const unsafe extern "system-unwind" fn create_domain_shader(
     crate::shader::create_domain_shader(this, bytecode, len, linkage, out)
 }
 
-const unsafe extern "system-unwind" fn create_compute_shader(
+unsafe extern "system-unwind" fn create_compute_shader(
     this: *mut c_void,
     bytecode: *const c_void,
     len: usize,
@@ -395,7 +395,7 @@ unsafe extern "system-unwind" fn create_class_linkage(
     unsafe { crate::class_linkage::create_class_linkage(this, out) }
 }
 
-const unsafe extern "system-unwind" fn create_blend_state(
+unsafe extern "system-unwind" fn create_blend_state(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -403,7 +403,7 @@ const unsafe extern "system-unwind" fn create_blend_state(
     crate::state::create_blend_state(this, desc.cast::<D3d11BlendDesc>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_depth_stencil_state(
+unsafe extern "system-unwind" fn create_depth_stencil_state(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -411,7 +411,7 @@ const unsafe extern "system-unwind" fn create_depth_stencil_state(
     crate::state::create_depth_stencil_state(this, desc.cast::<D3d11DepthStencilDesc>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_rasterizer_state(
+unsafe extern "system-unwind" fn create_rasterizer_state(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -419,7 +419,7 @@ const unsafe extern "system-unwind" fn create_rasterizer_state(
     crate::state::create_rasterizer_state(this, desc.cast::<D3d11RasterizerDesc>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_sampler_state(
+unsafe extern "system-unwind" fn create_sampler_state(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -427,7 +427,7 @@ const unsafe extern "system-unwind" fn create_sampler_state(
     crate::state::create_sampler_state(this, desc.cast::<D3d11SamplerDesc>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_query(
+unsafe extern "system-unwind" fn create_query(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -435,7 +435,7 @@ const unsafe extern "system-unwind" fn create_query(
     crate::query::create_query(this, desc.cast::<D3d11QueryDesc>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_predicate(
+unsafe extern "system-unwind" fn create_predicate(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -458,7 +458,7 @@ unsafe extern "system-unwind" fn create_counter(
     E_NOTIMPL
 }
 
-const unsafe extern "system-unwind" fn create_deferred_context(
+unsafe extern "system-unwind" fn create_deferred_context(
     this: *mut c_void,
     flags: u32,
     out: *mut *mut c_void,
@@ -466,7 +466,7 @@ const unsafe extern "system-unwind" fn create_deferred_context(
     crate::context::deferred::create_deferred(this, flags, out)
 }
 
-const unsafe extern "system-unwind" fn open_shared_resource(
+unsafe extern "system-unwind" fn open_shared_resource(
     this: *mut c_void,
     handle: *mut c_void,
     riid: *const c_void,
@@ -639,7 +639,7 @@ unsafe extern "system-unwind" fn get_immediate_context1(this: *mut c_void, out: 
     query_immediate_context(this, &IID_ID3D11_DEVICE_CONTEXT_1, out);
 }
 
-const unsafe extern "system-unwind" fn create_deferred_context1(
+unsafe extern "system-unwind" fn create_deferred_context1(
     this: *mut c_void,
     flags: u32,
     out: *mut *mut c_void,
@@ -647,7 +647,7 @@ const unsafe extern "system-unwind" fn create_deferred_context1(
     crate::context::deferred::create_deferred(this, flags, out)
 }
 
-const unsafe extern "system-unwind" fn create_blend_state1(
+unsafe extern "system-unwind" fn create_blend_state1(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -655,7 +655,7 @@ const unsafe extern "system-unwind" fn create_blend_state1(
     crate::state::create_blend_state1(this, desc.cast::<D3d11BlendDesc1>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_rasterizer_state1(
+unsafe extern "system-unwind" fn create_rasterizer_state1(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -663,7 +663,7 @@ const unsafe extern "system-unwind" fn create_rasterizer_state1(
     crate::state::create_rasterizer_state1(this, desc.cast::<D3d11RasterizerDesc1>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_device_context_state(
+unsafe extern "system-unwind" fn create_device_context_state(
     this: *mut c_void,
     flags: u32,
     levels: *const u32,
@@ -684,7 +684,7 @@ const unsafe extern "system-unwind" fn create_device_context_state(
     )
 }
 
-const unsafe extern "system-unwind" fn open_shared_resource1(
+unsafe extern "system-unwind" fn open_shared_resource1(
     this: *mut c_void,
     handle: *mut c_void,
     riid: *const c_void,
@@ -714,7 +714,7 @@ unsafe extern "system-unwind" fn get_immediate_context2(this: *mut c_void, out: 
     query_immediate_context(this, &IID_ID3D11_DEVICE_CONTEXT_2, out);
 }
 
-const unsafe extern "system-unwind" fn create_deferred_context2(
+unsafe extern "system-unwind" fn create_deferred_context2(
     this: *mut c_void,
     flags: u32,
     out: *mut *mut c_void,
@@ -748,7 +748,7 @@ unsafe extern "system-unwind" fn check_multisample_quality_levels1(
         .check_multisample_quality_levels(format, sample_count, flags, out)
 }
 
-const unsafe extern "system-unwind" fn create_texture2d1(
+unsafe extern "system-unwind" fn create_texture2d1(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -772,7 +772,7 @@ const unsafe extern "system-unwind" fn create_texture2d1(
     crate::resource::create_texture2d1(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_texture3d1(
+unsafe extern "system-unwind" fn create_texture3d1(
     this: *mut c_void,
     desc: *const c_void,
     init: *const c_void,
@@ -796,7 +796,7 @@ const unsafe extern "system-unwind" fn create_texture3d1(
     crate::resource::create_texture3d1(this, desc_typed, init.cast::<D3d11SubresourceData>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_rasterizer_state2(
+unsafe extern "system-unwind" fn create_rasterizer_state2(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -804,7 +804,7 @@ const unsafe extern "system-unwind" fn create_rasterizer_state2(
     crate::state::create_rasterizer_state2(this, desc.cast::<D3d11RasterizerDesc2>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_shader_resource_view1(
+unsafe extern "system-unwind" fn create_shader_resource_view1(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -818,7 +818,7 @@ const unsafe extern "system-unwind" fn create_shader_resource_view1(
     )
 }
 
-const unsafe extern "system-unwind" fn create_unordered_access_view1(
+unsafe extern "system-unwind" fn create_unordered_access_view1(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -832,7 +832,7 @@ const unsafe extern "system-unwind" fn create_unordered_access_view1(
     )
 }
 
-const unsafe extern "system-unwind" fn create_render_target_view1(
+unsafe extern "system-unwind" fn create_render_target_view1(
     this: *mut c_void,
     resource: *mut c_void,
     desc: *const c_void,
@@ -846,7 +846,7 @@ const unsafe extern "system-unwind" fn create_render_target_view1(
     )
 }
 
-const unsafe extern "system-unwind" fn create_query1(
+unsafe extern "system-unwind" fn create_query1(
     this: *mut c_void,
     desc: *const c_void,
     out: *mut *mut c_void,
@@ -858,7 +858,7 @@ unsafe extern "system-unwind" fn get_immediate_context3(this: *mut c_void, out: 
     query_immediate_context(this, &IID_ID3D11_DEVICE_CONTEXT_3, out);
 }
 
-const unsafe extern "system-unwind" fn create_deferred_context3(
+unsafe extern "system-unwind" fn create_deferred_context3(
     this: *mut c_void,
     flags: u32,
     out: *mut *mut c_void,
@@ -890,7 +890,7 @@ unsafe extern "system-unwind" fn read_from_subresource(
     LOG.err("ReadFromSubresource: Not implemented");
 }
 
-const unsafe extern "system-unwind" fn open_shared_fence(
+unsafe extern "system-unwind" fn open_shared_fence(
     this: *mut c_void,
     handle: *mut c_void,
     riid: *const c_void,
@@ -899,7 +899,7 @@ const unsafe extern "system-unwind" fn open_shared_fence(
     crate::fence::open_shared_fence(this, handle, riid.cast::<Guid>(), out)
 }
 
-const unsafe extern "system-unwind" fn create_fence(
+unsafe extern "system-unwind" fn create_fence(
     this: *mut c_void,
     initial_value: u64,
     flags: u32,

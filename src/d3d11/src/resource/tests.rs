@@ -154,7 +154,13 @@ extern "C-unwind" fn fake_new_buffer(_device: u64, info: *mut WMTBufferInfo) -> 
     let info = unsafe { &mut *info };
     info.gpu_address = n << 32;
     if info.memory.ptr == 0 {
-        info.memory.ptr = n * 0x1_0000;
+        if tid == 0 && info.length > 0 {
+            let len = usize::try_from(info.length).unwrap_or(64).max(64);
+            let mem = Box::leak(vec![0u8; len].into_boxed_slice());
+            info.memory.ptr = mem.as_mut_ptr() as usize as u64;
+        } else {
+            info.memory.ptr = n * 0x1_0000;
+        }
     }
     FIRST_BUFFER + n
 }

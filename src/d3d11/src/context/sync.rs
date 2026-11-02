@@ -488,8 +488,8 @@ impl<M: Mode> Context<M> {
             return E_INVALIDARG;
         }
         let raw_ev = Fence::from_iface(fence).map_or_else(
-            // SAFETY: Standalone tests pass a pointer to `Fence` or raw `u64` event handle.
-            || unsafe { (*fence.cast::<Fence>()).event().max(1) },
+            // SAFETY: Standalone tests pass a pointer to a raw `u64` event handle.
+            || unsafe { (*fence.cast::<u64>()).max(1) },
             |f| f.event().max(1),
         );
         self.finish_pass(false);
@@ -509,8 +509,8 @@ impl<M: Mode> Context<M> {
             return E_INVALIDARG;
         }
         let raw_ev = Fence::from_iface(fence).map_or_else(
-            // SAFETY: Standalone tests pass a pointer to `Fence` or raw `u64` event handle.
-            || unsafe { (*fence.cast::<Fence>()).event().max(1) },
+            // SAFETY: Standalone tests pass a pointer to a raw `u64` event handle.
+            || unsafe { (*fence.cast::<u64>()).max(1) },
             |f| f.event().max(1),
         );
         self.finish_pass(false);

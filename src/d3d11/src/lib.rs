@@ -35,6 +35,11 @@ pub mod view;
 /// This DLL's log file (`Logger::s_instance("d3d11.log")`).
 pub static LOG: Logger = Logger::new("d3d11.log");
 
+/// The `type_info` vtable under its MSVC decorated name (`std::thread::spawn` landing pad).
+#[cfg(windows)]
+#[unsafe(export_name = "??_7type_info@@6B@")]
+pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
+
 /// The core's log writer (`dxmt_core::log`), forwarding to [`LOG`].
 #[cfg(feature = "front-end")]
 #[unsafe(export_name = "dxmt_log")]

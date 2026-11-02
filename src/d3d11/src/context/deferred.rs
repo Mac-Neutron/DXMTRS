@@ -19,7 +19,12 @@ use dxmt_core::{
 use dxmt_util::private_data::PrivateData;
 use rustc_hash::FxHashMap;
 
-use super::{Context, Mode, encode::CommandBufferState, state::DirtyFlags, vtbl::DEFERRED_VTBL};
+use super::{
+    Context, Mode,
+    encode::CommandBufferState,
+    state::DirtyFlags,
+    vtbl::{DEFERRED_ANNOTATION_VTBL, DEFERRED_EXT_VTBL, DEFERRED_VTBL},
+};
 use crate::{
     abi::ext::IMTLD3D11DeviceContextVtbl,
     com::{E_INVALIDARG, Hresult, Managed, S_OK, iface_of},
@@ -281,8 +286,8 @@ impl Context<Deferred> {
         }
         Box::new(Self {
             vtbl: (&raw const DEFERRED_VTBL).cast::<IMTLD3D11DeviceContextVtbl>(),
-            ext_vtbl: ptr::null(),
-            annotation_vtbl: ptr::null(),
+            ext_vtbl: &raw const DEFERRED_EXT_VTBL,
+            annotation_vtbl: &raw const DEFERRED_ANNOTATION_VTBL,
             refs,
             private_data: PrivateData::default(),
             device,

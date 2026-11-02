@@ -13,8 +13,8 @@ use dxmt_util::com::{
 use winemetal_sys::{
     Obj,
     wire::{
-        WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo, WMTGPU_FAMILY_APPLE7,
-        WMTGPU_FAMILY_APPLE8, WMTSamplerInfo,
+        WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTGPU_FAMILY_APPLE7, WMTGPU_FAMILY_APPLE8,
+        WMTSamplerInfo,
     },
 };
 
@@ -34,12 +34,6 @@ use crate::abi::{
     records::D3d11BufferDesc,
     vtbl::ID3D11Device5Vtbl,
 };
-
-#[unsafe(export_name = "NSObject_retain")]
-extern "C-unwind" fn fake_retain(_object: u64) {}
-
-#[unsafe(export_name = "NSObject_release")]
-extern "C-unwind" fn fake_release(_object: u64) {}
 
 #[unsafe(export_name = "NSAutoreleasePool_alloc_init")]
 extern "C-unwind" fn fake_autorelease_pool() -> u64 {
@@ -119,13 +113,6 @@ extern "C-unwind" fn fake_new_sampler_state(_device: u64, info: *mut WMTSamplerI
 #[unsafe(export_name = "MTLDevice_newFence")]
 extern "C-unwind" fn fake_new_fence(_device: u64) -> u64 {
     0x7300
-}
-
-#[unsafe(export_name = "MTLDevice_newBuffer")]
-extern "C-unwind" fn fake_new_buffer(_device: u64, info: *mut WMTBufferInfo) -> u64 {
-    // SAFETY: `Buffer::allocate` passes a valid local `WMTBufferInfo`.
-    unsafe { (*info).gpu_address = 0x1_0000_0000 };
-    0x7400
 }
 
 #[unsafe(export_name = "MTLCommandQueue_commandBuffer")]

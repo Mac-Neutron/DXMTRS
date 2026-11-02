@@ -416,12 +416,6 @@ impl<M: Mode> Context<M> {
         if self.as_immediate().is_some() {
             return DXGI_ERROR_INVALID_CALL;
         }
-        let saved_state = super::state::ContextState {
-            sample_mask: self.state.sample_mask,
-            stencil_ref: self.state.stencil_ref,
-            blend_factor: self.state.blend_factor,
-            topology: self.state.topology,
-        };
 
         // End all queries left open on this deferred context before sealing the command list.
         let open_queries = if let Some(def) = self.as_deferred_mut() {
@@ -469,13 +463,8 @@ impl<M: Mode> Context<M> {
         list.has_promoted_flush = mem::replace(&mut def.mode.has_promoted_flush, false);
 
         if restore_deferred_context_state == 0 {
-            def.state = super::state::ContextState {
-                sample_mask: 0xffff_ffff,
-                ..super::state::ContextState::default()
-            };
             def.clear_state();
         } else {
-            def.state = saved_state;
             def.dirty = DirtyFlags::all();
         }
 
@@ -490,12 +479,6 @@ impl<M: Mode> Context<M> {
     pub fn execute_command_list(&mut self, command_list: *mut c_void, restore_context_state: i32) {
         let Some(list) = CommandList::from_iface(command_list) else {
             return;
-        };
-        let saved_state = super::state::ContextState {
-            sample_mask: self.state.sample_mask,
-            stencil_ref: self.state.stencil_ref,
-            blend_factor: self.state.blend_factor,
-            topology: self.state.topology,
         };
 
         self.finish_pass(list.has_promoted_flush);
@@ -584,13 +567,8 @@ impl<M: Mode> Context<M> {
         self.finish_pass(list.has_promoted_flush);
 
         if restore_context_state == 0 {
-            self.state = super::state::ContextState {
-                sample_mask: 0xffff_ffff,
-                ..super::state::ContextState::default()
-            };
             self.clear_state();
         } else {
-            self.state = saved_state;
             self.dirty = DirtyFlags::all();
         }
     }

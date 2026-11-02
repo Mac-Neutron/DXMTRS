@@ -11,12 +11,28 @@ use dxmt_util::private_data::PrivateData;
 
 use crate::{
     abi::{
-        ext::{IMTLD3D11ContextExt2Vtbl, IMTLD3D11DeviceContextVtbl},
+        IID_ID3D_USER_DEFINED_ANNOTATION, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_DEVICE_CONTEXT,
+        IID_ID3D11_DEVICE_CONTEXT_1, IID_ID3D11_DEVICE_CONTEXT_2, IID_ID3D11_DEVICE_CONTEXT_3,
+        IID_ID3D11_DEVICE_CONTEXT_4,
+        ext::{
+            IID_D3D11_CONTEXT_EXT, IID_D3D11_CONTEXT_EXT1, IID_D3D11_CONTEXT_EXT2,
+            IMTLD3D11ContextExt2Vtbl, IMTLD3D11DeviceContextVtbl,
+        },
         vtbl::ID3DUserDefinedAnnotationVtbl,
     },
-    com::{E_NOINTERFACE, E_NOTIMPL, Hresult, Managed},
+    com::{
+        E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, Managed, S_OK,
+        iface_of, qi_log,
+    },
     state::Defaults,
 };
+
+const IID_IMTL_D3D11_DEVICE_CONTEXT: Guid = Guid::new(
+    0x3a3f_085a,
+    0xd0fe,
+    0x4324,
+    [0xb0, 0xae, 0xfe, 0x04, 0xde, 0x18, 0x57, 0x1c],
+);
 
 pub mod binding_set;
 pub mod clear;
@@ -94,8 +110,59 @@ impl<M: Mode> Context<M> {
     }
 
     /// `IUnknown::QueryInterface`.
-    pub const fn query_interface(&mut self, riid: *const c_void, out: *mut *mut c_void) -> Hresult {
-        let _ = (riid, out);
+    pub(super) fn query_interface(
+        &mut self,
+        riid: *const c_void,
+        out: *mut *mut c_void,
+    ) -> Hresult {
+        if out.is_null() {
+            return E_POINTER;
+        }
+        // SAFETY: `out` was verified non-null.
+        unsafe {
+            out.write_unaligned(core::ptr::null_mut());
+        }
+        if riid.is_null() {
+            return E_NOINTERFACE;
+        }
+        // SAFETY: `riid` was verified non-null.
+        let iid = unsafe { riid.cast::<Guid>().read_unaligned() };
+        if iid == IID_IUNKNOWN
+            || iid == IID_ID3D11_DEVICE_CHILD
+            || iid == IID_ID3D11_DEVICE_CONTEXT
+            || iid == IID_ID3D11_DEVICE_CONTEXT_1
+            || iid == IID_ID3D11_DEVICE_CONTEXT_2
+            || iid == IID_ID3D11_DEVICE_CONTEXT_3
+            || iid == IID_ID3D11_DEVICE_CONTEXT_4
+            || iid == IID_IMTL_D3D11_DEVICE_CONTEXT
+        {
+            self.add_ref();
+            // SAFETY: `out` was verified non-null.
+            unsafe {
+                out.write_unaligned(iface_of(&self.vtbl));
+            }
+            return S_OK;
+        }
+        if iid == IID_D3D11_CONTEXT_EXT
+            || iid == IID_D3D11_CONTEXT_EXT1
+            || iid == IID_D3D11_CONTEXT_EXT2
+        {
+            self.add_ref();
+            // SAFETY: `out` was verified non-null.
+            unsafe {
+                out.write_unaligned(iface_of(&self.ext_vtbl));
+            }
+            return S_OK;
+        }
+        if iid == IID_ID3D_USER_DEFINED_ANNOTATION {
+            self.add_ref();
+            // SAFETY: `out` was verified non-null.
+            unsafe {
+                out.write_unaligned(iface_of(&self.annotation_vtbl));
+            }
+            return S_OK;
+        }
+        let _ = qi_log(&IID_ID3D11_DEVICE_CONTEXT_4, &iid);
         E_NOINTERFACE
     }
 
@@ -108,43 +175,73 @@ impl<M: Mode> Context<M> {
     /// `IUnknown::Release`.
     pub fn release(&self) -> u32 {
         // SAFETY: `self.device` is the parent device pointer or null in unit tests.
-        unsafe { self.refs.release(self.device).0 }
+        let (rem, destroy) = unsafe { self.refs.release(self.device) };
+        if destroy {
+            // SAFETY: `self` was heap-allocated via `Box::into_raw` and its final reference dropped.
+            drop(unsafe { Box::from_raw(core::ptr::from_ref(self).cast_mut()) });
+        }
+        rem
     }
 
     /// `ID3D11DeviceChild::GetDevice`.
-    pub const fn get_device(&self, out: *mut *mut c_void) {
-        let _ = out;
+    pub(super) fn get_device(&self, out: *mut *mut c_void) {
+        if out.is_null() {
+            return;
+        }
+        // SAFETY: `self.device` is a live COM device pointer or null.
+        unsafe {
+            crate::com::add_ref(self.device);
+        }
+        // SAFETY: `out` was verified non-null.
+        unsafe {
+            out.write_unaligned(self.device);
+        }
     }
 
     /// `ID3D11DeviceChild::GetPrivateData`.
-    pub const fn get_private_data(
+    pub(super) fn get_private_data(
         &self,
         guid: *const c_void,
         data_size: *mut u32,
         data: *mut c_void,
     ) -> Hresult {
-        let _ = (guid, data_size, data);
-        E_NOTIMPL
+        if guid.is_null() {
+            return E_INVALIDARG;
+        }
+        // SAFETY: `guid` was verified non-null.
+        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
+        // SAFETY: `data_size` and `data` are forwarded from the COM caller.
+        unsafe { self.private_data.get_data(g, data_size, data) }
     }
 
     /// `ID3D11DeviceChild::SetPrivateData`.
-    pub const fn set_private_data(
+    pub(super) fn set_private_data(
         &mut self,
         guid: *const c_void,
         data_size: u32,
         data: *const c_void,
     ) -> Hresult {
-        let _ = (guid, data_size, data);
-        E_NOTIMPL
+        if guid.is_null() {
+            return E_INVALIDARG;
+        }
+        // SAFETY: `guid` was verified non-null.
+        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
+        // SAFETY: `data` and `data_size` are forwarded from the COM caller.
+        unsafe { self.private_data.set_data(g, data_size, data) }
     }
 
     /// `ID3D11DeviceChild::SetPrivateDataInterface`.
-    pub const fn set_private_data_interface(
+    pub(super) fn set_private_data_interface(
         &mut self,
         guid: *const c_void,
         object: *const c_void,
     ) -> Hresult {
-        let _ = (guid, object);
-        E_NOTIMPL
+        if guid.is_null() {
+            return E_INVALIDARG;
+        }
+        // SAFETY: `guid` was verified non-null.
+        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
+        // SAFETY: `object` is forwarded from the COM caller.
+        unsafe { self.private_data.set_interface(g, object.cast_mut()) }
     }
 }

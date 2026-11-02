@@ -151,18 +151,22 @@ pub struct Device {
     pipeline_cache: PipelineCache,
     caches: StateCaches,
     d3d10: Option<Box<d3d10::Device>>,
-    d3d10_tear_off: TearOff<IUnknownVtbl>,
     on_drop_after_drain: Option<DropHook>,
 }
 
 impl Device {
     /// Recovers `&Device` from an `ID3D11Device*` interface pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        if iface.is_null() {
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() || !iface.cast::<*const ID3D11Device5Vtbl>().is_aligned() {
             return None;
         }
-        // SAFETY: Any non-null `ID3D11Device*` created by this crate points to `Device`.
+        // SAFETY: `iface` is a non-null, aligned COM interface pointer.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11Device5Vtbl>() };
+        if !ptr::eq(vtbl, &raw const impl_::VTBL) {
+            return None;
+        }
+        // SAFETY: `vtbl` matches `impl_::VTBL`, so `iface` points to a live `Device`.
         Some(unsafe { &*iface.cast::<Self>() })
     }
 
@@ -249,6 +253,12 @@ impl Drop for Device {
         self.core.queue_mut().commit();
         self.core.queue().wait_cpu(seq);
         let _ = crate::scheduler::wait_idle(u32::MAX);
+        if !self.immediate.is_null() {
+            let imm = self.immediate;
+            self.immediate = ptr::null_mut();
+            // SAFETY: `imm` was allocated with `Box::into_raw` in `create_with_core`.
+            drop(unsafe { Box::from_raw(imm) });
+        }
         if let Some(hook) = self.on_drop_after_drain.take() {
             hook(&self.core, &self.caches);
         }
@@ -354,9 +364,8 @@ fn create_with_core(
             inspection: Inspection::new(mtl_handle),
             immediate: ptr::null_mut(),
             pipeline_cache: PipelineCache::default(),
-            caches: StateCaches,
+            caches: StateCaches::default(),
             d3d10: None,
-            d3d10_tear_off: TearOff::new(&D3D10_TEAR_OFF_VTBL, ptr::null_mut()),
             on_drop_after_drain: None,
         },
     });
@@ -367,20 +376,14 @@ fn create_with_core(
     dev.container = raw;
     dev.ext.outer = dxgi_iface;
     dev.swap_chain_factory.outer = dxgi_iface;
-    dev.d3d10_tear_off.outer = dxgi_iface;
     let mutex_ptr = &raw const dev.mutex;
     dev.multithread.init(dxgi_iface, mutex_ptr);
 
     let d3d11_iface = ptr::from_mut(dev).cast::<c_void>();
+    dev.immediate = Box::into_raw(Context::new_immediate(d3d11_iface));
     dev.d3d10 = Some(d3d10::Device::new(d3d11_iface, dev.immediate.cast()));
     raw
 }
-
-static D3D10_TEAR_OFF_VTBL: IUnknownVtbl = IUnknownVtbl {
-    query_interface: TearOff::<()>::query_interface,
-    add_ref: TearOff::<()>::add_ref,
-    release: TearOff::<()>::release,
-};
 
 /// Creates a new `IMTLDXGIDevice` instance bound to `adapter` (`dxmt::CreateD3D11Device`).
 ///
@@ -482,9 +485,12 @@ pub unsafe fn container_query_interface(
 
     if iid == IID_ID3D10_DEVICE || iid == IID_ID3D10_DEVICE1 {
         // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+        let Some(d3d10_dev) = (unsafe { (*raw).d3d11.d3d10.as_deref() }) else {
+            return E_NOINTERFACE;
+        };
+        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
         unsafe { (*raw).refs.add_ref() };
-        // SAFETY: Projecting `d3d10_tear_off` on `raw`.
-        let iface = unsafe { (*raw).d3d11.d3d10_tear_off.as_iface() };
+        let iface = ptr::from_ref(d3d10_dev).cast_mut().cast::<c_void>();
         // SAFETY: `out` is non-null.
         unsafe {
             write_out(out, iface);

@@ -98,6 +98,7 @@ fn new_test_context() -> Context<TestMode> {
             stencil_ref: 0,
             blend_factor: [0.0; 4],
             topology: 4,
+            ..ContextState::default()
         },
         cmdbuf_state: CommandBufferState::Idle,
         dirty: DirtyFlags::empty(),

@@ -5,7 +5,16 @@
 use core::ffi::c_void;
 
 use super::{Context, Deferred, Immediate, Mode};
-use crate::abi::{ext::IMTLD3D11DeviceContextVtbl, vtbl::ID3D11DeviceContext4Vtbl};
+use crate::{
+    abi::{
+        ext::{
+            D3D11Piece, D3D11UpscaleDesc, IMTLD3D11ContextExt1Vtbl, IMTLD3D11ContextExt2Vtbl,
+            IMTLD3D11ContextExtVtbl, IMTLD3D11DeviceContextVtbl,
+        },
+        vtbl::{ID3D11DeviceContext4Vtbl, ID3DUserDefinedAnnotationVtbl, IUnknownVtbl},
+    },
+    com::container_of,
+};
 
 macro_rules! slot {
     ($name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty) => {{
@@ -795,3 +804,168 @@ pub static IMMEDIATE_VTBL: IMTLD3D11DeviceContextVtbl = context_vtbl::<Immediate
 
 /// Static vtable for [`Context<Deferred>`] (`ID3D11DeviceContext4`).
 pub static DEFERRED_VTBL: ID3D11DeviceContext4Vtbl = context_vtbl::<Deferred>().base;
+
+/// Builds an [`IMTLD3D11ContextExt2Vtbl`] for `Context<M>::ext_vtbl`.
+#[must_use]
+pub const fn ext_vtbl<M: Mode>() -> IMTLD3D11ContextExt2Vtbl {
+    unsafe extern "system-unwind" fn query_interface<M: Mode>(
+        this: *mut c_void,
+        riid: *const c_void,
+        out: *mut *mut c_void,
+    ) -> i32 {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.query_interface(riid, out)
+    }
+
+    unsafe extern "system-unwind" fn add_ref<M: Mode>(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &*container_of!(this, Context<M>, ext_vtbl) };
+        ctx.add_ref()
+    }
+
+    unsafe extern "system-unwind" fn release<M: Mode>(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &*container_of!(this, Context<M>, ext_vtbl) };
+        ctx.release()
+    }
+
+    unsafe extern "system-unwind" fn temporal_upscale<M: Mode>(
+        this: *mut c_void,
+        desc: *const D3D11UpscaleDesc,
+    ) {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.temporal_upscale(desc);
+    }
+
+    unsafe extern "system-unwind" fn begin_uav_overlap<M: Mode>(this: *mut c_void) {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.begin_uav_overlap();
+    }
+
+    unsafe extern "system-unwind" fn end_uav_overlap<M: Mode>(this: *mut c_void) {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.end_uav_overlap();
+    }
+
+    unsafe extern "system-unwind" fn check_feature_support<M: Mode>(
+        this: *mut c_void,
+        feature: u32,
+        feature_data: *mut c_void,
+        feature_data_size: u32,
+    ) -> i32 {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.check_ext_feature_support(feature, feature_data, feature_data_size)
+    }
+
+    unsafe extern "system-unwind" fn get_pieces<M: Mode>(
+        this: *mut c_void,
+        resource: *mut c_void,
+        subresource: u32,
+        count: u32,
+        pieces: *mut D3D11Piece,
+    ) -> i32 {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.get_pieces(resource, subresource, count, pieces)
+    }
+
+    unsafe extern "system-unwind" fn use_piece<M: Mode>(
+        this: *mut c_void,
+        resource: *mut c_void,
+        subresource: u32,
+        piece_id: u64,
+    ) {
+        // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        ctx.use_piece(resource, subresource, piece_id);
+    }
+
+    IMTLD3D11ContextExt2Vtbl {
+        base: IMTLD3D11ContextExt1Vtbl {
+            base: IMTLD3D11ContextExtVtbl {
+                unknown: IUnknownVtbl {
+                    query_interface: query_interface::<M>,
+                    add_ref: add_ref::<M>,
+                    release: release::<M>,
+                },
+                temporal_upscale: temporal_upscale::<M>,
+                begin_uav_overlap: begin_uav_overlap::<M>,
+                end_uav_overlap: end_uav_overlap::<M>,
+            },
+            check_feature_support: check_feature_support::<M>,
+        },
+        get_pieces: get_pieces::<M>,
+        use_piece: use_piece::<M>,
+    }
+}
+
+/// Builds an [`ID3DUserDefinedAnnotationVtbl`] for `Context<M>::annotation_vtbl`.
+#[must_use]
+pub const fn annotation_vtbl<M: Mode>() -> ID3DUserDefinedAnnotationVtbl {
+    unsafe extern "system-unwind" fn query_interface<M: Mode>(
+        this: *mut c_void,
+        riid: *const c_void,
+        out: *mut *mut c_void,
+    ) -> i32 {
+        // SAFETY: `this` points to `Context::<M>::annotation_vtbl`.
+        let ctx = unsafe { &mut *container_of!(this, Context<M>, annotation_vtbl) };
+        ctx.query_interface(riid, out)
+    }
+
+    unsafe extern "system-unwind" fn add_ref<M: Mode>(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to `Context::<M>::annotation_vtbl`.
+        let ctx = unsafe { &*container_of!(this, Context<M>, annotation_vtbl) };
+        ctx.add_ref()
+    }
+
+    unsafe extern "system-unwind" fn release<M: Mode>(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to `Context::<M>::annotation_vtbl`.
+        let ctx = unsafe { &*container_of!(this, Context<M>, annotation_vtbl) };
+        ctx.release()
+    }
+
+    const unsafe extern "system-unwind" fn begin_event(
+        _this: *mut c_void,
+        _name: *const c_void,
+    ) -> i32 {
+        -1
+    }
+
+    const unsafe extern "system-unwind" fn end_event(_this: *mut c_void) -> i32 {
+        -1
+    }
+
+    const unsafe extern "system-unwind" fn set_marker(_this: *mut c_void, _name: *const c_void) {}
+
+    const unsafe extern "system-unwind" fn get_status(_this: *mut c_void) -> i32 {
+        0
+    }
+
+    ID3DUserDefinedAnnotationVtbl {
+        query_interface: query_interface::<M>,
+        add_ref: add_ref::<M>,
+        release: release::<M>,
+        begin_event,
+        end_event,
+        set_marker,
+        get_status,
+    }
+}
+
+/// Static `IMTLD3D11ContextExt2` vtable for [`Context<Immediate>`].
+pub static IMMEDIATE_EXT_VTBL: IMTLD3D11ContextExt2Vtbl = ext_vtbl::<Immediate>();
+
+/// Static `IMTLD3D11ContextExt2` vtable for [`Context<Deferred>`].
+pub static DEFERRED_EXT_VTBL: IMTLD3D11ContextExt2Vtbl = ext_vtbl::<Deferred>();
+
+/// Static `ID3DUserDefinedAnnotation` vtable for [`Context<Immediate>`].
+pub static IMMEDIATE_ANNOTATION_VTBL: ID3DUserDefinedAnnotationVtbl =
+    annotation_vtbl::<Immediate>();
+
+/// Static `ID3DUserDefinedAnnotation` vtable for [`Context<Deferred>`].
+pub static DEFERRED_ANNOTATION_VTBL: ID3DUserDefinedAnnotationVtbl = annotation_vtbl::<Deferred>();

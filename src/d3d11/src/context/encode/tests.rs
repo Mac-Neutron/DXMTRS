@@ -59,6 +59,7 @@ fn new_test_context() -> Context<Immediate> {
             stencil_ref: 0,
             blend_factor: [0.0; 4],
             topology: D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            ..ContextState::default()
         },
         cmdbuf_state: CommandBufferState::Idle,
         dirty: DirtyFlags::empty(),

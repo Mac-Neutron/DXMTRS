@@ -25,7 +25,12 @@ use dxmt_util::private_data::PrivateData;
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 
-use super::{Context, Mode, encode::CommandBufferState, state::DirtyFlags, vtbl::IMMEDIATE_VTBL};
+use super::{
+    Context, Mode,
+    encode::CommandBufferState,
+    state::DirtyFlags,
+    vtbl::{IMMEDIATE_ANNOTATION_VTBL, IMMEDIATE_EXT_VTBL, IMMEDIATE_VTBL},
+};
 use crate::{com::Managed, resource, state::Defaults};
 
 type InFlightCallback = Box<dyn FnOnce(u64) + Send>;
@@ -216,13 +221,6 @@ impl Mode for Immediate {
     }
 }
 
-fn add_device_ref(refs: &Managed, device: *mut c_void) {
-    // SAFETY: `device` is null or a valid COM device pointer.
-    unsafe {
-        refs.add_ref(device);
-    }
-}
-
 const fn write_so_target(targets: *mut *mut c_void, index: usize) {
     // SAFETY: Caller provides an array of at least `index + 1` target slots.
     let slot = unsafe { targets.add(index) };
@@ -246,11 +244,11 @@ impl Context<Immediate> {
     #[must_use]
     pub fn new_immediate(device: *mut c_void) -> Box<Self> {
         let refs = Managed::new();
-        add_device_ref(&refs, device);
+        refs.add_ref_private();
         let mut ctx = Box::new(Self {
             vtbl: &raw const IMMEDIATE_VTBL,
-            ext_vtbl: ptr::null(),
-            annotation_vtbl: ptr::null(),
+            ext_vtbl: &raw const IMMEDIATE_EXT_VTBL,
+            annotation_vtbl: &raw const IMMEDIATE_ANNOTATION_VTBL,
             refs,
             private_data: PrivateData::default(),
             device,
@@ -382,7 +380,7 @@ impl<M: Mode> Context<M> {
             return;
         }
         self.finish_pass(false);
-        self.switch_to_render_encoder();
+        self.cmdbuf_state = CommandBufferState::RenderEncoderActive;
         M::emit_st(self, |enc| {
             enc.start_render_pass(0, 0, 0, None);
             push_encoder_trace(enc, "RenderPass:start");
@@ -395,7 +393,7 @@ impl<M: Mode> Context<M> {
             return;
         }
         self.finish_pass(false);
-        self.switch_to_compute_encoder();
+        self.cmdbuf_state = CommandBufferState::ComputeEncoderActive;
         M::emit_st(self, |enc| {
             enc.start_compute_pass(None);
             push_encoder_trace(enc, "ComputePass:start");

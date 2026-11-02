@@ -366,13 +366,21 @@ const fn wsi_leave_fullscreen_mode(
     true
 }
 
+const fn copy_window_state(w: &WindowState) -> WindowState {
+    WindowState {
+        style: w.style,
+        exstyle: w.exstyle,
+        rect: w.rect,
+    }
+}
+
 #[cfg(not(test))]
-fn wsi_restore_display_mode() -> bool {
-    wsi::restore_display_mode()
+fn wsi_restore_display_mode(monitor: *mut c_void) -> bool {
+    wsi::restore_display_mode(monitor)
 }
 
 #[cfg(test)]
-const fn wsi_restore_display_mode() -> bool {
+const fn wsi_restore_display_mode(_monitor: *mut c_void) -> bool {
     true
 }
 
@@ -926,24 +934,33 @@ impl SwapChain {
             target_arg
         };
 
-        let mut st = self.lock_state();
-        wsi_save_window_state(self.hwnd, &mut st.window_state);
-        let mut preferred = DxgiModeDesc1 {
-            width: st.desc.width,
-            height: st.desc.height,
-            refresh_rate: st.fullscreen_desc.refresh_rate,
-            format: st.desc.format,
-            scanline_ordering: 0,
-            scaling: 0,
-            stereo: 0,
+        let (mut saved, mut preferred, flags, format) = {
+            let st = self.lock_state();
+            (
+                copy_window_state(&st.window_state),
+                DxgiModeDesc1 {
+                    width: st.desc.width,
+                    height: st.desc.height,
+                    refresh_rate: st.fullscreen_desc.refresh_rate,
+                    format: st.desc.format,
+                    scanline_ordering: 0,
+                    scaling: 0,
+                    stereo: 0,
+                },
+                st.desc.flags,
+                st.desc.format,
+            )
         };
+        wsi_save_window_state(self.hwnd, &mut saved);
+        self.lock_state().window_state = copy_window_state(&saved);
         let (monitor, new_rate, mode_hr) =
-            self.change_display_mode(output, &mut preferred, st.desc.flags, st.desc.format);
+            self.change_display_mode(output, &mut preferred, flags, format);
         if mode_hr < 0 {
             // SAFETY: `output` was retained above.
             unsafe { crate::com::release(output) };
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
+        let mut st = self.lock_state();
         if let Some(r) = new_rate {
             st.init_refresh_rate = r;
         }
@@ -975,7 +992,6 @@ impl SwapChain {
             unsafe { crate::com::release(st.target) };
         }
         st.target = output;
-        let mut saved = core::mem::take(&mut st.window_state);
         drop(st);
 
         let ok = wsi_enter_fullscreen_mode(monitor, self.hwnd, &mut saved, mode_switch);
@@ -996,31 +1012,37 @@ impl SwapChain {
     }
 
     fn leave_fullscreen_inner(&self, switching_output: bool) -> Hresult {
-        let mut st = self.lock_state();
-        if !st.monitor.is_null() && wsi_restore_display_mode() {
-            st.init_refresh_rate = f64::MAX;
-        }
-        st.fullscreen_desc.windowed = 1;
-        if !st.target.is_null() {
-            // SAFETY: `st.target` was retained when entering fullscreen.
-            unsafe { crate::com::release(st.target) };
-            st.target = ptr::null_mut();
-        }
-        if !st.gamma_output.is_null() {
-            // SAFETY: `st.gamma_output` was retained when entering fullscreen.
-            unsafe { crate::com::release(st.gamma_output) };
-            st.gamma_output = ptr::null_mut();
-        }
-        st.monitor = wsi_window_monitor(self.hwnd);
+        let old_monitor = self.lock_state().monitor;
+        let restored = !old_monitor.is_null() && wsi_restore_display_mode(old_monitor);
+        let new_monitor = wsi_window_monitor(self.hwnd);
+        let window_state = {
+            let mut st = self.lock_state();
+            if restored {
+                st.init_refresh_rate = f64::MAX;
+            }
+            st.fullscreen_desc.windowed = 1;
+            if !st.target.is_null() {
+                // SAFETY: `st.target` was retained when entering fullscreen.
+                unsafe { crate::com::release(st.target) };
+                st.target = ptr::null_mut();
+            }
+            if !st.gamma_output.is_null() {
+                // SAFETY: `st.gamma_output` was retained when entering fullscreen.
+                unsafe { crate::com::release(st.gamma_output) };
+                st.gamma_output = ptr::null_mut();
+            }
+            st.monitor = new_monitor;
+            copy_window_state(&st.window_state)
+        };
         if !wsi_is_window(self.hwnd) {
             return S_OK;
         }
-        let ok = wsi_leave_fullscreen_mode(self.hwnd, &st.window_state, true);
-        drop(st);
+        let ok = wsi_leave_fullscreen_mode(self.hwnd, &window_state, true);
         if !ok {
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
         if !switching_output && !wsi_is_process_foreground() {
+            crate::LOG.info("Leaving fullscreen in the background: minimising");
             wsi_minimize_window(self.hwnd);
         }
         if let Some(presenter) = &self.presenter {
@@ -1813,27 +1835,44 @@ unsafe extern "system-unwind" fn sc_resize_target(
         scaling: p.scaling,
         stereo: 0,
     };
-    let mut st = sc.lock_state();
-    if new_mode.refresh_rate.numerator != 0 {
-        st.fullscreen_desc.refresh_rate = new_mode.refresh_rate;
-    }
-    st.fullscreen_desc.scanline_ordering = new_mode.scanline_ordering;
-    st.fullscreen_desc.scaling = new_mode.scaling;
-    if st.fullscreen_desc.windowed != 0 {
-        let ws = core::mem::take(&mut st.window_state);
-        drop(st);
-        wsi_resize_window(sc.hwnd, &ws, new_mode.width, new_mode.height);
-        sc.lock_state().window_state = ws;
-    } else {
-        let target = st.target;
-        let flags = st.desc.flags;
-        let fmt = st.desc.format;
-        let (_, new_rate, _) = sc.change_display_mode(target, &mut new_mode, flags, fmt);
-        if let Some(r) = new_rate {
-            st.init_refresh_rate = r;
+    let (windowed, ws, target, flags, fmt) = {
+        let mut st = sc.lock_state();
+        if new_mode.refresh_rate.numerator != 0 {
+            st.fullscreen_desc.refresh_rate = new_mode.refresh_rate;
         }
-        let monitor = st.monitor;
-        drop(st);
+        st.fullscreen_desc.scanline_ordering = new_mode.scanline_ordering;
+        st.fullscreen_desc.scaling = new_mode.scaling;
+        if !st.target.is_null() {
+            // SAFETY: retains `st.target` across the unlocked `change_display_mode` call.
+            unsafe { crate::com::add_ref(st.target) };
+        }
+        (
+            st.fullscreen_desc.windowed != 0,
+            copy_window_state(&st.window_state),
+            st.target,
+            st.desc.flags,
+            st.desc.format,
+        )
+    };
+    if windowed {
+        if !target.is_null() {
+            // SAFETY: releases the temporary `target` reference.
+            unsafe { crate::com::release(target) };
+        }
+        wsi_resize_window(sc.hwnd, &ws, new_mode.width, new_mode.height);
+    } else {
+        let (_, new_rate, _) = sc.change_display_mode(target, &mut new_mode, flags, fmt);
+        if !target.is_null() {
+            // SAFETY: releases the temporary `target` reference.
+            unsafe { crate::com::release(target) };
+        }
+        let monitor = {
+            let mut st = sc.lock_state();
+            if let Some(r) = new_rate {
+                st.init_refresh_rate = r;
+            }
+            st.monitor
+        };
         wsi_update_fullscreen_window(monitor, sc.hwnd, false);
     }
     S_OK

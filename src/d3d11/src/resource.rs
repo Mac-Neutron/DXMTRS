@@ -289,20 +289,22 @@ impl Resource {
     }
 }
 
+fn is_resource_vtbl(vtbl: *const c_void) -> bool {
+    core::ptr::eq(vtbl, (&raw const BUFFER_VTBL).cast())
+        || core::ptr::eq(vtbl, (&raw const TEXTURE1D_VTBL).cast())
+        || core::ptr::eq(vtbl, (&raw const TEXTURE2D_VTBL).cast())
+        || core::ptr::eq(vtbl, (&raw const TEXTURE3D_VTBL).cast())
+}
+
 fn add_ref_private_inner(resource: *mut c_void) {
-    if !resource.is_null() {
-        // SAFETY: `resource` is a live `Resource` pointer.
-        let res = unsafe { Resource::from_ptr(resource) };
+    if let Some(res) = resource_from_iface(resource) {
         res.refs.add_ref_private();
     }
 }
 
 fn release_private_inner(resource: *mut c_void) {
-    if !resource.is_null() {
-        // SAFETY: `resource` is a live `Resource` pointer.
-        let free = unsafe { Resource::from_ptr(resource) }
-            .refs
-            .release_private();
+    if let Some(res) = resource_from_iface(resource) {
+        let free = res.refs.release_private();
         if free {
             // SAFETY: the last private reference was just released.
             drop(unsafe { Box::from_raw(resource.cast::<Resource>()) });
@@ -310,22 +312,23 @@ fn release_private_inner(resource: *mut c_void) {
     }
 }
 
-const fn resource_from_iface(resource: *mut c_void) -> Option<&'static Resource> {
-    if resource.is_null() {
+fn resource_from_iface(resource: *mut c_void) -> Option<&'static Resource> {
+    if resource.is_null() || !resource.cast::<*const c_void>().is_aligned() {
         return None;
     }
-    // SAFETY: non-null `ID3D11Resource*` pointers in the Rust front end are `Resource` instances.
+    // SAFETY: `resource` is a non-null, pointer-aligned COM interface pointer.
+    let vtbl = unsafe { *resource.cast::<*const c_void>() };
+    if !is_resource_vtbl(vtbl) {
+        return None;
+    }
+    // SAFETY: `vtbl` matches one of `Resource`'s static primary vtables.
     Some(unsafe { Resource::from_ptr(resource) })
 }
 
 /// Recovers `&Common` from an `ID3D11Resource*` pointer (`GetCommonResource`).
 #[must_use]
-pub const fn common(resource: *mut c_void) -> Option<&'static Common> {
-    if resource.is_null() {
-        return None;
-    }
-    // SAFETY: non-null `ID3D11Resource*` pointers in the Rust front end are `Resource` instances.
-    Some(unsafe { &(*resource.cast::<Resource>()).common })
+pub fn common(resource: *mut c_void) -> Option<&'static Common> {
+    Some(&resource_from_iface(resource)?.common)
 }
 
 /// Returns the [`DynamicBuffer`] for `resource` (`GetDynamicBuffer`).
@@ -342,10 +345,8 @@ pub fn dynamic_texture(resource: *mut c_void) -> Option<&'static Arc<DynamicLine
 
 /// Returns `(bytes_per_row, bytes_per_image)` for a dynamic linear texture.
 #[must_use]
-pub const fn dynamic_linear_texture_layout(resource: *mut c_void) -> Option<(u32, u32)> {
-    let Some(res) = resource_from_iface(resource) else {
-        return None;
-    };
+pub fn dynamic_linear_texture_layout(resource: *mut c_void) -> Option<(u32, u32)> {
+    let res = resource_from_iface(resource)?;
     if res.common.dynamic_texture.is_some() {
         Some((res.linear_bytes_per_row, res.linear_bytes_per_image))
     } else {
@@ -366,11 +367,8 @@ pub fn dynamic_texture_subresource(
 
 /// Returns the [`RenamableTexturePool`] for a renameable DSV resource, if any.
 #[must_use]
-pub const fn renamable(resource: *mut c_void) -> Option<&'static Arc<Mutex<RenamableTexturePool>>> {
-    let Some(res) = resource_from_iface(resource) else {
-        return None;
-    };
-    res.renamable.as_ref()
+pub fn renamable(resource: *mut c_void) -> Option<&'static Arc<Mutex<RenamableTexturePool>>> {
+    resource_from_iface(resource)?.renamable.as_ref()
 }
 
 /// Returns the [`Staging`] buffer for `subresource` of `resource` (`GetStagingResource`).
