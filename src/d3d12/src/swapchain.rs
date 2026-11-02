@@ -455,6 +455,14 @@ const fn copy_fullscreen_desc(d: &SwapChainFullscreenDesc) -> SwapChainFullscree
     }
 }
 
+const fn copy_window_state(w: &WindowState) -> WindowState {
+    WindowState {
+        style: w.style,
+        exstyle: w.exstyle,
+        rect: w.rect,
+    }
+}
+
 impl SwapChain {
     fn lock_state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -538,21 +546,24 @@ impl SwapChain {
     /// `ChangeDisplayMode` (`d3d12_swapchain.cpp:431-481`).
     unsafe fn change_display_mode(
         &self,
-        state: &mut State,
         output: *mut c_void,
         display_mode: &mut ModeDesc1,
     ) -> Hresult {
         if output.is_null() {
             return DXGI_ERROR_INVALID_CALL;
         }
+        let (desc_flags, desc_format) = {
+            let state = self.lock_state();
+            (state.desc.flags, state.desc.format)
+        };
         let mut preferred_mode = copy_mode_desc1(display_mode);
         let mut selected_mode = ModeDesc1::default();
-        if state.desc.flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH == 0 {
+        if desc_flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH == 0 {
             preferred_mode.width = 0;
             preferred_mode.height = 0;
         }
         if preferred_mode.format == DXGI_FORMAT_UNKNOWN {
-            preferred_mode.format = state.desc.format;
+            preferred_mode.format = desc_format;
         }
         // SAFETY: `output` is a live `IDXGIOutput1` pointer.
         let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
@@ -610,7 +621,7 @@ impl SwapChain {
             hz
         );
         *display_mode = copy_mode_desc1(&selected_mode);
-        state.init_refresh_rate = f64::from(selected_mode.refresh_rate.numerator)
+        self.lock_state().init_refresh_rate = f64::from(selected_mode.refresh_rate.numerator)
             / f64::from(selected_mode.refresh_rate.denominator);
         S_OK
     }
@@ -620,7 +631,7 @@ impl SwapChain {
         if monitor.is_null() {
             return DXGI_ERROR_INVALID_CALL;
         }
-        if !wsi::restore_display_mode() {
+        if !wsi::restore_display_mode(monitor) {
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
         S_OK
@@ -652,10 +663,12 @@ impl SwapChain {
                 return E_FAIL;
             }
         }
-        let (out_monitor, mut saved_window, mode_switch) = {
+        let mut saved_window = copy_window_state(&self.lock_state().saved_window);
+        wsi::save_window_state(self.hwnd, &mut saved_window);
+        let mut preferred_display_mode = {
             let mut state = self.lock_state();
-            wsi::save_window_state(self.hwnd, &mut state.saved_window);
-            let mut preferred_display_mode = ModeDesc1 {
+            state.saved_window = copy_window_state(&saved_window);
+            ModeDesc1 {
                 width: state.desc.width,
                 height: state.desc.height,
                 refresh_rate: state.fullscreen_desc.refresh_rate,
@@ -663,37 +676,33 @@ impl SwapChain {
                 scanline_ordering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
                 scaling: DXGI_MODE_SCALING_UNSPECIFIED,
                 stereo: 0,
-            };
-            // SAFETY: `output` is a non-null `IDXGIOutput1` owned by this scope.
-            let mode_hr = unsafe {
-                self.change_display_mode(&mut state, output, &mut preferred_display_mode)
-            };
-            if mode_hr < 0 {
-                crate::err!("DXGI: EnterFullscreenMode: Failed to change display mode");
-                // SAFETY: releases `output` on error.
-                unsafe { dxmt_util::com::release(output) };
-                return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
             }
+        };
+        // SAFETY: `output` is a non-null `IDXGIOutput1` owned by this scope.
+        let mode_hr = unsafe { self.change_display_mode(output, &mut preferred_display_mode) };
+        if mode_hr < 0 {
+            crate::err!("DXGI: EnterFullscreenMode: Failed to change display mode");
+            // SAFETY: releases `output` on error.
+            unsafe { dxmt_util::com::release(output) };
+            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+        }
+        let mut out_desc = empty_output_desc();
+        // SAFETY: `output` is a live `IDXGIOutput1`.
+        let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
+        // SAFETY: `output` is live and `out_desc` is a local `OutputDesc`.
+        unsafe { (output_vtbl.get_desc)(output, &raw mut out_desc) };
+        let mode_switch = {
+            let mut state = self.lock_state();
             state.fullscreen_desc.windowed = 0;
             let mode_switch = (state.desc.flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) != 0;
-            let mut out_desc = empty_output_desc();
-            // SAFETY: `output` is a live `IDXGIOutput1`.
-            let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
-            // SAFETY: `output` is live and `out_desc` is a local `OutputDesc`.
-            unsafe { (output_vtbl.get_desc)(output, &raw mut out_desc) };
             state.monitor = out_desc.monitor;
             // SAFETY: transfers ownership of `output` into `state.target`.
             unsafe { state.set_target(output) };
-            let saved = WindowState {
-                style: state.saved_window.style,
-                exstyle: state.saved_window.exstyle,
-                rect: state.saved_window.rect,
-            };
-            drop(state);
-            (out_desc.monitor, saved, mode_switch)
+            mode_switch
         };
         let enter_ok =
-            wsi::enter_fullscreen_mode(out_monitor, self.hwnd, &mut saved_window, mode_switch);
+            wsi::enter_fullscreen_mode(out_desc.monitor, self.hwnd, &mut saved_window, mode_switch);
+        self.lock_state().saved_window = saved_window;
         if !enter_ok {
             crate::err!("DXGI: EnterFullscreenMode: Failed to enter fullscreen mode");
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
@@ -707,19 +716,24 @@ impl SwapChain {
         if guard.already_in_progress {
             return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
         }
-        let mut state = self.lock_state();
-        if Self::restore_display_mode(state.monitor) < 0 {
+        let old_monitor = self.lock_state().monitor;
+        if Self::restore_display_mode(old_monitor) < 0 {
             crate::warn!("DXGI: LeaveFullscreenMode: Failed to restore display mode");
         }
-        state.fullscreen_desc.windowed = 1;
-        // SAFETY: releases the held `IDXGIOutput1` reference if any.
-        unsafe { state.set_target(ptr::null_mut()) };
-        state.monitor = wsi::window_monitor(self.hwnd);
-        state.read_refresh_rate();
+        let new_monitor = wsi::window_monitor(self.hwnd);
+        let saved_window = {
+            let mut state = self.lock_state();
+            state.fullscreen_desc.windowed = 1;
+            // SAFETY: releases the held `IDXGIOutput1` reference if any.
+            unsafe { state.set_target(ptr::null_mut()) };
+            state.monitor = new_monitor;
+            state.read_refresh_rate();
+            copy_window_state(&state.saved_window)
+        };
         if !wsi::is_window(self.hwnd) {
             return S_OK;
         }
-        if !wsi::leave_fullscreen_mode(self.hwnd, &state.saved_window, true) {
+        if !wsi::leave_fullscreen_mode(self.hwnd, &saved_window, true) {
             crate::err!("DXGI: LeaveFullscreenMode: Failed to exit fullscreen mode");
             return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
         }
@@ -733,7 +747,6 @@ impl SwapChain {
         if let Some(presenter) = self.presenter.as_ref() {
             presenter.change_gamma_ramp(None);
         }
-        drop(state);
         S_OK
     }
 }
@@ -1129,30 +1142,39 @@ unsafe fn resize_target(this: *mut c_void, desc_ptr: *const c_void) -> Hresult {
         scaling: desc.scaling,
         stereo: 0,
     };
-    let monitor = {
+    let (windowed, saved_window, target, monitor) = {
         let mut state = sc.lock_state();
         if new_display_mode.refresh_rate.numerator != 0 {
             state.fullscreen_desc.refresh_rate = new_display_mode.refresh_rate;
         }
         state.fullscreen_desc.scanline_ordering = new_display_mode.scanline_ordering;
         state.fullscreen_desc.scaling = new_display_mode.scaling;
-        if state.fullscreen_desc.windowed != 0 {
-            wsi::resize_window(
-                sc.hwnd,
-                &state.saved_window,
-                new_display_mode.width,
-                new_display_mode.height,
-            );
-            None
-        } else {
-            let target = state.target;
-            // SAFETY: `target` is kept alive by `state`.
-            let _ = unsafe { sc.change_display_mode(&mut state, target, &mut new_display_mode) };
-            Some(state.monitor)
+        if !state.target.is_null() {
+            // SAFETY: retains `state.target` across the unlocked `change_display_mode` call.
+            unsafe { dxmt_util::com::add_ref(state.target) };
         }
+        (
+            state.fullscreen_desc.windowed != 0,
+            copy_window_state(&state.saved_window),
+            state.target,
+            state.monitor,
+        )
     };
-    if let Some(mon) = monitor {
-        wsi::update_fullscreen_window(mon, sc.hwnd, false);
+    if windowed {
+        // SAFETY: releases the temporary `target` reference if any.
+        unsafe { dxmt_util::com::release(target) };
+        wsi::resize_window(
+            sc.hwnd,
+            &saved_window,
+            new_display_mode.width,
+            new_display_mode.height,
+        );
+    } else {
+        // SAFETY: `target` was retained above for the duration of this call.
+        let _ = unsafe { sc.change_display_mode(target, &mut new_display_mode) };
+        // SAFETY: releases the temporary `target` reference.
+        unsafe { dxmt_util::com::release(target) };
+        wsi::update_fullscreen_window(monitor, sc.hwnd, false);
     }
     S_OK
 }
