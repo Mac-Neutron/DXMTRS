@@ -21,7 +21,7 @@ fn iids_match_headers() {
     );
     assert_eq!(
         IID_IMTL_MIN_LOD_CLAMPABLE.to_string(),
-        "102d11a1-5be7-46c9-a19a-56b036c26f78"
+        "9a6f6549-d4b1-45ea-8794-8503d190d3d1"
     );
 }
 

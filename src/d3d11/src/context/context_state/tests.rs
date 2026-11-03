@@ -6,7 +6,7 @@ use crate::{
         IID_ID3D_DEVICE_CONTEXT_STATE, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_DEVICE_CONTEXT,
         IID_ID3D11_DEVICE_CONTEXT_1, IID_IUNKNOWN, vtbl::ID3DDeviceContextStateVtbl,
     },
-    com::{E_INVALIDARG, E_NOINTERFACE, Guid, S_FALSE, S_OK, release},
+    com::{E_NOINTERFACE, Guid, S_FALSE, S_OK, release},
 };
 
 #[test]
@@ -16,37 +16,8 @@ fn create_device_context_state_validation_and_com_interfaces() {
     let mut out: *mut c_void = ptr::null_mut();
     let iid_ctx = IID_ID3D11_DEVICE_CONTEXT;
     let iid_ctx1 = IID_ID3D11_DEVICE_CONTEXT_1;
-    let iid_unk = IID_IUNKNOWN;
 
-    // Null feature levels -> E_INVALIDARG.
-    assert_eq!(
-        create_device_context_state(
-            ptr::null_mut(),
-            0,
-            (ptr::null(), 1),
-            7,
-            (&raw const iid_ctx).cast(),
-            &raw mut chosen,
-            &raw mut out,
-        ),
-        E_INVALIDARG
-    );
-
-    // Unsupported emulated IID -> E_INVALIDARG.
-    assert_eq!(
-        create_device_context_state(
-            ptr::null_mut(),
-            0,
-            (&raw const fl, 1),
-            7,
-            (&raw const iid_unk).cast(),
-            &raw mut chosen,
-            &raw mut out,
-        ),
-        E_INVALIDARG
-    );
-
-    // Null output pointer -> S_FALSE and populates chosen feature level.
+    // Null output pointer -> S_FALSE.
     assert_eq!(
         create_device_context_state(
             ptr::null_mut(),
@@ -59,7 +30,7 @@ fn create_device_context_state_validation_and_com_interfaces() {
         ),
         S_FALSE
     );
-    assert_eq!(chosen, 0xb000);
+    assert_eq!(chosen, 0);
 
     // Valid creation -> S_OK.
     assert_eq!(

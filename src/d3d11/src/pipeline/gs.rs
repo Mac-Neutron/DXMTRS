@@ -1,5 +1,7 @@
 //! Geometry-shader emulation via Metal mesh render pipeline (`d3d11_pipeline_gs.cpp`).
 
+use winemetal_wire::WMTRenderPipelineBlendInfo;
+
 use crate::{
     pipeline::{
         GS_PAYLOAD_MEMORY_LENGTH, GraphicsDesc, IMMUTABLE_FRAGMENT_BUFFERS,
@@ -13,6 +15,7 @@ pub struct GeometryPipelineSpec {
     pub vs_variant: ShaderVariant,
     pub gs_variant: ShaderVariant,
     pub ps_variant: Option<ShaderVariant>,
+    pub blend_info: WMTRenderPipelineBlendInfo,
     pub payload_memory_length: u16,
     pub immutable_object_buffers: u32,
     pub immutable_mesh_buffers: u32,
@@ -73,6 +76,28 @@ pub fn build_geometry_pipeline(desc: &GraphicsDesc) -> GeometryPipelineSpec {
         unorm_output_reg_mask,
     });
 
+    let valid_rt_mask = desc.pixel_shader.as_ref().map_or(0, |ps| {
+        // SAFETY: `ps` is a pixel shader so `u.ps_valid_render_targets` is initialized.
+        unsafe { ps.reflection.u.ps_valid_render_targets }
+    });
+
+    let mut blend_info: WMTRenderPipelineBlendInfo = super::default_blend_info();
+    for (i, &fmt) in desc.color_attachment_formats[..num_rtvs].iter().enumerate() {
+        blend_info.colors[i].pixel_format = fmt;
+    }
+    if let Some(bs) = desc.blend_state
+        && !bs.is_null()
+    {
+        // SAFETY: `bs` points to a valid `BlendState`.
+        unsafe {
+            (*bs).setup_metal_pipeline_descriptor(
+                &mut blend_info,
+                u32::try_from(num_rtvs).unwrap_or(0),
+                valid_rt_mask,
+            );
+        }
+    }
+
     let (depth_pixel_format, stencil_pixel_format) =
         depth_stencil_planes(desc.depth_stencil_format);
 
@@ -80,6 +105,7 @@ pub fn build_geometry_pipeline(desc: &GraphicsDesc) -> GeometryPipelineSpec {
         vs_variant,
         gs_variant,
         ps_variant,
+        blend_info,
         payload_memory_length: GS_PAYLOAD_MEMORY_LENGTH,
         immutable_object_buffers: IMMUTABLE_GS_OBJECT_BUFFERS,
         immutable_mesh_buffers: IMMUTABLE_FRAGMENT_BUFFERS,

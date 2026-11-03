@@ -15,6 +15,7 @@ use crate::queue::{Queue, QueueConfig};
 pub struct Device {
     mtl: Obj,
     queue: Queue,
+    cmd_library: Option<crate::library::Library>,
     metal_version: u32,
     max_object_threadgroups: u32,
 }
@@ -43,9 +44,15 @@ impl Device {
             unsafe { MTLDevice_setShouldMaximizeConcurrentCompilation(mtl.handle(), true) };
         }
         let queue = Queue::new(&mtl, QueueConfig::default()).expect("command queue threads");
+        let cmd_library = if mtl.handle() > 0x1000 {
+            crate::library::Library::new(&mtl).ok()
+        } else {
+            None
+        };
         Self {
             mtl,
             queue,
+            cmd_library,
             metal_version,
             max_object_threadgroups,
         }
@@ -55,6 +62,14 @@ impl Device {
     #[must_use]
     pub const fn device(&self) -> &Obj {
         &self.mtl
+    }
+
+    /// Raw handle to the internal `dxmt_command.metal` library, or `0` on unit-test devices.
+    #[must_use]
+    pub fn cmd_library_handle(&self) -> u64 {
+        self.cmd_library
+            .as_ref()
+            .map_or(0, crate::library::Library::handle)
     }
 
     /// The command queue.

@@ -80,6 +80,13 @@ pub trait Mode: Sized + 'static {
 
     /// Current buffer allocation for `dynamic` in this context (`GetDynamicBufferLatestName`).
     fn dynamic_name(ctx: &mut Context<Self>, dynamic: &DynamicBuffer) -> Arc<BufferAllocation>;
+
+    /// Acquires the device multithread lock before dereferencing `this`, when applicable.
+    #[must_use]
+    fn lock_iface(this: *mut c_void) -> Option<crate::multithread::DeviceLockGuard<'static>> {
+        let _ = this;
+        None
+    }
 }
 
 /// Shared D3D11 context (`MTLD3D11DeviceContextImplBase`).
@@ -145,7 +152,7 @@ impl<M: Mode> Context<M> {
         }
         if iid == IID_D3D11_CONTEXT_EXT
             || iid == IID_D3D11_CONTEXT_EXT1
-            || iid == IID_D3D11_CONTEXT_EXT2
+            || (cfg!(not(target_os = "windows")) && iid == IID_D3D11_CONTEXT_EXT2)
         {
             self.add_ref();
             // SAFETY: `out` was verified non-null.
@@ -162,7 +169,21 @@ impl<M: Mode> Context<M> {
             }
             return S_OK;
         }
-        let _ = qi_log(&IID_ID3D11_DEVICE_CONTEXT_4, &iid);
+        if iid == crate::abi::IID_ID3D11_MULTITHREAD
+            && let Some(imm) = self.as_immediate_mut()
+        {
+            imm.add_ref();
+            // SAFETY: `out` was verified non-null.
+            unsafe {
+                out.write_unaligned(imm.mode.multithread.as_iface());
+            }
+            return S_OK;
+        }
+        if qi_log(&IID_ID3D11_DEVICE_CONTEXT_4, &iid) {
+            crate::LOG.warn(&format!(
+                "D3D11DeviceContext: Unknown interface query {iid}"
+            ));
+        }
         E_NOINTERFACE
     }
 

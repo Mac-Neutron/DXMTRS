@@ -221,6 +221,9 @@ impl Inspection {
             return E_INVALIDARG;
         }
         if flags != 0 {
+            crate::LOG.err(&format!(
+                "CheckMultisampleQualityLevels1: unsupported flags {flags}"
+            ));
             return E_INVALIDARG;
         }
         // SAFETY: `p_num_quality_levels` was checked non-null above.
@@ -259,12 +262,9 @@ impl Inspection {
         p_feature_support_data: *mut c_void,
         feature_support_data_size: u32,
     ) -> Hresult {
-        if p_feature_support_data.is_null() {
-            return E_INVALIDARG;
-        }
         match feature {
             D3D11_FEATURE_FORMAT_SUPPORT => {
-                if feature_support_data_size != 8 {
+                if p_feature_support_data.is_null() || feature_support_data_size != 8 {
                     return E_INVALIDARG;
                 }
                 let words = p_feature_support_data.cast::<u32>();
@@ -275,7 +275,7 @@ impl Inspection {
                 self.check_format_support(in_format, out_ptr)
             }
             D3D11_FEATURE_FORMAT_SUPPORT2 => {
-                if feature_support_data_size != 8 {
+                if p_feature_support_data.is_null() || feature_support_data_size != 8 {
                     return E_INVALIDARG;
                 }
                 let words = p_feature_support_data.cast::<u32>();
@@ -326,7 +326,10 @@ impl Inspection {
             D3D11_FEATURE_SHADER_CACHE => {
                 write_words(p_feature_support_data, feature_support_data_size, &[3])
             }
-            _ => E_INVALIDARG,
+            _ => {
+                crate::LOG.err(&format!("Not supported feature: {feature}"));
+                E_INVALIDARG
+            }
         }
     }
 
@@ -371,7 +374,7 @@ fn write_words(dst: *mut c_void, size: u32, words: &[u32]) -> Hresult {
     let Ok(expected) = u32::try_from(core::mem::size_of_val(words)) else {
         return E_INVALIDARG;
     };
-    if size != expected {
+    if dst.is_null() || size != expected {
         return E_INVALIDARG;
     }
     let out = dst.cast::<u32>();

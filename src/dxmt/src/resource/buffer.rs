@@ -434,7 +434,7 @@ impl BufferViewDescriptor {
 }
 
 /// A buffer view: its descriptor, as the key a front end keeps.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct BufferViewKey {
     format: u32,
     texel_size: u32,

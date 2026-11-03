@@ -52,6 +52,7 @@ pub const DEFAULT_BLEND_FACTOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 /// Pipeline shader stage index (`ShaderStage` in `d3d11_context_state.hpp`).
 #[repr(usize)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ShaderStage {
     Vertex = 0,
     Pixel = 1,
@@ -67,26 +68,7 @@ impl ShaderStage {
     pub const fn index(self) -> usize {
         self as usize
     }
-
-    const fn borrowed_index(&self) -> usize {
-        match self {
-            Self::Vertex => 0,
-            Self::Pixel => 1,
-            Self::Geometry => 2,
-            Self::Hull => 3,
-            Self::Domain => 4,
-            Self::Compute => 5,
-        }
-    }
 }
-
-impl PartialEq for ShaderStage {
-    fn eq(&self, other: &Self) -> bool {
-        self.borrowed_index() == other.borrowed_index()
-    }
-}
-
-impl Eq for ShaderStage {}
 
 impl fmt::Debug for ShaderStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -304,6 +286,10 @@ pub struct OutputMergerState {
     pub dsv: ComPtr,
     pub uavs: BindingSet<UnorderedAccessViewEntry, UAV_SLOTS>,
     pub num_rtvs: u32,
+    pub sample_count: u32,
+    pub array_length: u32,
+    pub render_target_width: u32,
+    pub render_target_height: u32,
     pub blend_state: ComPtr,
     pub blend_factor: [f32; 4],
     pub sample_mask: u32,
@@ -318,6 +304,10 @@ impl Default for OutputMergerState {
             dsv: ComPtr::null(),
             uavs: BindingSet::new(),
             num_rtvs: 0,
+            sample_count: 1,
+            array_length: 0,
+            render_target_width: 0,
+            render_target_height: 0,
             blend_state: ComPtr::null(),
             blend_factor: [0.0; 4],
             sample_mask: DEFAULT_SAMPLE_MASK,
@@ -421,15 +411,20 @@ impl<M: Mode> Context<M> {
     pub fn reset_encoding_context_state(&mut self) {
         match self.cmdbuf_state {
             CommandBufferState::RenderEncoderActive | CommandBufferState::ComputeEncoderActive => {
-                M::emit_st(self, |enc| {
-                    enc.clear_state();
-                });
+                self.invalidate_current_pass(true);
             }
             CommandBufferState::Idle | CommandBufferState::BlitEncoderActive => {}
             CommandBufferState::RenderPipelineReady | CommandBufferState::ComputePipelineReady => {
                 self.cmdbuf_state = CommandBufferState::Idle;
             }
         }
+        M::emit_st(self, |enc| {
+            enc.clear_state();
+        });
+        self.update_encode_snapshot(|snap| {
+            snap.render_pipeline_valid = false;
+            snap.compute_pipeline_valid = false;
+        });
         self.dirty = DirtyFlags::all();
         for stage in &mut self.state.shader_stages {
             stage.constant_buffers.set_all_dirty();

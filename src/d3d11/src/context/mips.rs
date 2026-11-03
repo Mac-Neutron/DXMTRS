@@ -2,7 +2,10 @@
 
 use core::ffi::c_void;
 
-use dxmt_core::{deptrack::Access, encoder::NO_NEXT};
+use dxmt_core::{
+    deptrack::Access,
+    encoder::{NO_NEXT, stage},
+};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_GENERATE_MIPMAPS, WMT_PIXEL_FORMAT_A8_UNORM, WMT_PIXEL_FORMAT_R8_UNORM,
     WmtcmdBlitGenerateMipmaps,
@@ -35,7 +38,11 @@ impl<M: Mode> Context<M> {
                 view_key
             };
             let view_tex = enc
-                .access_texture_view::<0>(&texture, fixed_view, Access::READ | Access::WRITE)
+                .access_texture_view::<{ stage::COMPUTE }>(
+                    &texture,
+                    fixed_view,
+                    Access::READ | Access::WRITE,
+                )
                 .map_or(0, |v| v.texture);
             if fixed_view.mip_count() > 1 {
                 let cmd = WmtcmdBlitGenerateMipmaps {

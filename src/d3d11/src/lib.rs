@@ -33,7 +33,11 @@ pub mod swapchain;
 pub mod view;
 
 /// This DLL's log file (`Logger::s_instance("d3d11.log")`).
-pub static LOG: Logger = Logger::new("d3d11.log");
+pub static LOG: Logger = Logger::new(if cfg!(test) {
+    "no_test_log/d3d11.log"
+} else {
+    "d3d11.log"
+});
 
 /// The `type_info` vtable under its MSVC decorated name (`std::thread::spawn` landing pad).
 #[cfg(windows)]

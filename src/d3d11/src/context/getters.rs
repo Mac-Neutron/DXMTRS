@@ -4,9 +4,7 @@ use core::{ffi::c_void, ptr};
 
 use super::{
     Context, Mode,
-    state::{
-        RENDER_TARGET_SLOTS, REQ_CONSTANT_BUFFER_ELEMENTS, ShaderStage, VIEWPORT_AND_SCISSOR_SLOTS,
-    },
+    state::{REQ_CONSTANT_BUFFER_ELEMENTS, ShaderStage, VIEWPORT_AND_SCISSOR_SLOTS},
 };
 use crate::{
     abi::{
@@ -421,8 +419,10 @@ impl<M: Mode> Context<M> {
         if !render_target_views.is_null() {
             let bound_count = self.state.output_merger.num_rtvs as usize;
             for i in 0..(num_rtvs as usize) {
-                let ptr = if i < bound_count && i < RENDER_TARGET_SLOTS {
-                    self.state.output_merger.rtvs[i].get_add_ref()
+                let ptr = if i < bound_count
+                    && let Some(slot) = self.state.output_merger.rtvs.get(i)
+                {
+                    slot.get_add_ref()
                 } else {
                     ptr::null_mut()
                 };

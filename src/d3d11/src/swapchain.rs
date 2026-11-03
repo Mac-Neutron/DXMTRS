@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use dxmt_core::{
     frame_stats::{CompatibilityFlags, Container, ScalerType},
     hud::Hud,
-    presenter::Presenter,
+    presenter::{Presenter, PresenterDesc},
     scaler::Scaler,
 };
 #[cfg(not(test))]
@@ -405,6 +405,130 @@ const fn wsi_update_fullscreen_window(
 ) {
 }
 
+const DUPLICATE_SAME_ACCESS: u32 = 2;
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn CreateSemaphoreA(
+        attributes: *mut c_void,
+        initial_count: i32,
+        maximum_count: i32,
+        name: *const u8,
+    ) -> *mut c_void;
+    fn ReleaseSemaphore(
+        semaphore: *mut c_void,
+        release_count: i32,
+        previous_count: *mut i32,
+    ) -> i32;
+    fn CloseHandle(object: *mut c_void) -> i32;
+    fn GetCurrentProcess() -> *mut c_void;
+    fn DuplicateHandle(
+        source_process_handle: *mut c_void,
+        source_handle: *mut c_void,
+        target_process_handle: *mut c_void,
+        target_handle: *mut *mut c_void,
+        desired_access: u32,
+        inherit_handle: i32,
+        options: u32,
+    ) -> i32;
+}
+
+fn create_semaphore(initial: i32, max: i32) -> *mut c_void {
+    #[cfg(windows)]
+    {
+        // SAFETY: null security attributes and name create an unnamed semaphore.
+        unsafe { CreateSemaphoreA(ptr::null_mut(), initial, max, ptr::null()) }
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(test) {
+            return ptr::without_provenance_mut(1);
+        }
+        // SAFETY: creates a native Win32 semaphore with `initial` and `max` counts.
+        unsafe { winemetal_sys::wmt_native_create_semaphore(initial, max) }
+    }
+}
+
+fn release_semaphore(handle: *mut c_void, count: i32) {
+    if handle.is_null() {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: `handle` is the swapchain's valid `present_semaphore`.
+        let _ = unsafe { ReleaseSemaphore(handle, count, ptr::null_mut()) };
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(test) {
+            return;
+        }
+        // SAFETY: `handle` is the swapchain's valid native semaphore handle.
+        let _ =
+            unsafe { winemetal_sys::wmt_native_release_semaphore(handle, count, ptr::null_mut()) };
+    }
+}
+
+fn duplicate_same_access(handle: *mut c_void) -> *mut c_void {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    #[cfg(windows)]
+    {
+        let mut result: *mut c_void = ptr::null_mut();
+        // SAFETY: `GetCurrentProcess` takes no arguments and returns a pseudo-handle.
+        let proc = unsafe { GetCurrentProcess() };
+        // SAFETY: `proc` and `handle` are valid handles; `result` is a writable output slot.
+        let ok = unsafe {
+            DuplicateHandle(
+                proc,
+                handle,
+                proc,
+                &raw mut result,
+                0,
+                0,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if ok == 0 { ptr::null_mut() } else { result }
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(test) {
+            return handle;
+        }
+        let mut result: *mut c_void = ptr::null_mut();
+        // SAFETY: `handle` is a native semaphore handle and `result` is a writable output slot.
+        let ok = unsafe {
+            winemetal_sys::wmt_native_duplicate_handle(
+                handle,
+                &raw mut result,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if ok == 0 { ptr::null_mut() } else { result }
+    }
+}
+
+fn close_handle(handle: *mut c_void) {
+    if handle.is_null() {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: `handle` is a live kernel handle owned by the swapchain.
+        let _ = unsafe { CloseHandle(handle) };
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(test) {
+            return;
+        }
+        // SAFETY: `handle` is a live native handle owned by the swapchain.
+        let _ = unsafe { winemetal_sys::wmt_native_close_handle(handle) };
+    }
+}
+
 /// Captures the frame-latency fence for a present command and signals on drop (`SyncFrameState`).
 ///
 /// The present command closure stored in the chunk arena owns a [`SyncFrameState`], so `Drop`
@@ -682,6 +806,7 @@ pub struct SwapChain {
     native_view: u64,
     layer_weak: u64,
     presenter: Option<Arc<Presenter>>,
+    present_semaphore: *mut c_void,
     frame_latency_fence: Option<Arc<CpuFence>>,
     modeset_in_progress: AtomicBool,
     private_data: PrivateData,
@@ -1200,13 +1325,25 @@ impl SwapChain {
                     st.upscaled_backbuffer = up_bb;
                 }
                 if let Some(dev) = Device::from_iface(self.device) {
+                    let color_format = resource::common(bb)
+                        .and_then(|c| c.texture.as_ref())
+                        .map_or_else(
+                            || convert_swapchain_format(st.desc.format),
+                            |t| t.info().pixel_format,
+                        );
+                    let output_format = resource::common(up_bb)
+                        .and_then(|c| c.texture.as_ref())
+                        .map_or_else(
+                            || convert_swapchain_format(st.desc.format),
+                            |t| t.info().pixel_format,
+                        );
                     let info = WMTFXSpatialScalerInfo {
                         input_height: st.desc.height,
                         input_width: st.desc.width,
                         output_height: up_desc.height,
                         output_width: up_desc.width,
-                        color_format: convert_swapchain_format(st.desc.format),
-                        output_format: convert_swapchain_format(st.desc.format),
+                        color_format,
+                        output_format,
                     };
                     // SAFETY: `dev.core().device()` is a live `MTLDevice`.
                     let scaler = unsafe { Scaler::spatial(dev.core().device().handle(), &info) };
@@ -1275,7 +1412,16 @@ impl SwapChain {
         }
 
         let paces = guest_paces();
-        let (frame_id, latency, _vsync_duration, gamma_output) = {
+        let (
+            frame_id,
+            latency,
+            vsync_duration,
+            gamma_output,
+            backbuffer,
+            upscaled_backbuffer,
+            enable_metalfx,
+            scaler,
+        ) = {
             let mut st = self.lock_state();
             st.presentation_count = st.presentation_count.wrapping_add(1);
             let vsync = compute_vsync_duration(
@@ -1288,6 +1434,10 @@ impl SwapChain {
                 st.frame_latency,
                 vsync,
                 st.gamma_output,
+                st.backbuffer,
+                st.upscaled_backbuffer,
+                st.enable_metalfx,
+                st.metalfx_scaler.clone(),
             )
         };
 
@@ -1304,7 +1454,41 @@ impl SwapChain {
             }
         }
 
-        let _sync_state = sync_frame(self.frame_latency_fence.as_ref(), frame_id, latency, paces);
+        let sync_state = sync_frame(self.frame_latency_fence.as_ref(), frame_id, latency, paces);
+
+        if let Some(dev) = Device::from_iface(self.device)
+            && dev.core().device().handle() > 0x1000
+            && let Some(presenter) = self.presenter.clone()
+            && let Some(bb_common) = resource::common(backbuffer)
+            && let Some(bb_tex) = bb_common.texture.clone()
+        {
+            // SAFETY: `self.device` is a live `Device` while locked by `dev.mutex`.
+            let dev_mut = unsafe { &mut *self.device.cast::<Device>() };
+            let frame_seq = dev_mut.core().queue().current_frame_seq();
+            dev_mut
+                .core_mut()
+                .queue_mut()
+                .chunk()
+                .signal_frame_latency(frame_seq);
+            let (pres_frame_id, metadata) = presenter.synchronize();
+            dev_mut.core_mut().queue_mut().chunk().retain(sync_state);
+            let up_tex = if enable_metalfx {
+                resource::common(upscaled_backbuffer).and_then(|c| c.texture.clone())
+            } else {
+                None
+            };
+            let sem_addr = self.present_semaphore.expose_provenance();
+            dev_mut.core_mut().queue_mut().chunk().emit(move |enc| {
+                if let (Some(up), Some(sc)) = (&up_tex, &scaler) {
+                    enc.upscale(&bb_tex, up, sc.clone());
+                    enc.present(up, presenter.clone(), vsync_duration, metadata);
+                } else {
+                    enc.present(&bb_tex, presenter.clone(), vsync_duration, metadata);
+                }
+                release_semaphore(ptr::with_exposed_provenance_mut(sem_addr), 1);
+                presenter.frame_done(pres_frame_id);
+            });
+        }
 
         if !self.device_context.is_null() {
             // SAFETY: `self.device_context` is a live `IMTLD3D11DeviceContext`.
@@ -1346,6 +1530,7 @@ impl Drop for SwapChain {
             // SAFETY: `self.native_view` was created by `CreateMetalViewFromHWND`.
             unsafe { ReleaseMetalView(self.native_view) };
         }
+        close_handle(self.present_semaphore);
         // SAFETY: `self.device_context` is null or a valid COM pointer.
         unsafe { crate::com::release(self.device_context) };
         // SAFETY: `self.dxgi_device` is null or a valid COM pointer.
@@ -1474,6 +1659,27 @@ fn create_impl(
     };
 
     let enable_metalfx = std::env::var("DXMT_METALFX_SPATIAL_SWAPCHAIN").as_deref() == Ok("1");
+    let scale_factor = if enable_metalfx { 2.0 } else { 1.0 };
+    let presenter = if let Some(dev) = Device::from_iface(device)
+        && layer_weak != 0
+        && dev.core().device().handle() > 0x1000
+    {
+        let pdesc = PresenterDesc {
+            device: dev.core().device().handle(),
+            layer: layer_weak,
+            library: dev.core().cmd_library_handle(),
+            scale_factor,
+            sample_count: u8::try_from(d.sample_desc.count.max(1)).unwrap_or(1),
+        };
+        // SAFETY: `device`, `layer`, and `library` are live Metal handles.
+        Some(Arc::new(unsafe { Presenter::new(&pdesc) }))
+    } else {
+        None
+    };
+    let present_semaphore = create_semaphore(
+        DEFAULT_SWAPCHAIN_LATENCY.cast_signed(),
+        DXGI_MAX_SWAP_CHAIN_BUFFERS.cast_signed(),
+    );
     let frame_latency_fence = ((d.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) != 0)
         .then(|| Arc::new(CpuFence::new(0)));
 
@@ -1492,7 +1698,8 @@ fn create_impl(
         hwnd,
         native_view,
         layer_weak,
-        presenter: None,
+        presenter,
+        present_semaphore,
         frame_latency_fence,
         modeset_in_progress: AtomicBool::new(false),
         private_data: PrivateData::default(),
@@ -1582,6 +1789,9 @@ unsafe extern "system-unwind" fn sc_query_interface(
         // SAFETY: `ppv_object` is non-null.
         unsafe { *ppv_object = this };
         return S_OK;
+    }
+    if crate::com::qi_log(&IID_IDXGI_SWAP_CHAIN_1, &iid) {
+        crate::LOG.warn(&format!("DXGISwapChain: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }
@@ -2111,7 +2321,13 @@ unsafe extern "system-unwind" fn sc_set_maximum_frame_latency(
     }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    sc.lock_state().frame_latency = max_latency;
+    let mut st = sc.lock_state();
+    if max_latency > st.frame_latency {
+        let delta = i32::try_from(max_latency - st.frame_latency).unwrap_or(0);
+        release_semaphore(sc.present_semaphore, delta);
+    }
+    st.frame_latency = max_latency;
+    drop(st);
     S_OK
 }
 
@@ -2138,7 +2354,7 @@ unsafe extern "system-unwind" fn sc_get_frame_latency_waitable_object(
     if (flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) == 0 {
         return ptr::null_mut();
     }
-    ptr::null_mut()
+    duplicate_same_access(sc.present_semaphore)
 }
 
 const unsafe extern "system-unwind" fn sc_set_matrix_transform(

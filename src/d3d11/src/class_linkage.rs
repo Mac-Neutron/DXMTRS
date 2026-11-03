@@ -111,9 +111,8 @@ unsafe extern "system-unwind" fn query_interface(
         return S_OK;
     }
     if qi_log(&IID_ID3D11_CLASS_LINKAGE, &iid) {
-        LOG.warn(&format!(
-            "D3D11ClassLinkage::QueryInterface: Unknown interface query {iid}"
-        ));
+        LOG.warn("D3D11ClassLinkage::QueryInterface: Unknown interface query");
+        LOG.warn(&format!("{iid}"));
     }
     E_NOINTERFACE
 }
@@ -205,7 +204,7 @@ unsafe extern "system-unwind" fn get_class_instance(
     _idx: u32,
     _out: *mut *mut c_void,
 ) -> Hresult {
-    LOG.err("GetClassInstance: Stub");
+    LOG.err("Not implemented yet");
     E_NOTIMPL
 }
 
@@ -224,6 +223,6 @@ unsafe extern "system-unwind" fn create_class_instance(
             write_out(out, ptr::null_mut());
         }
     }
-    LOG.err("CreateClassInstance: Stub");
+    LOG.err("Not implemented yet");
     E_NOTIMPL
 }

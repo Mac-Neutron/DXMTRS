@@ -312,6 +312,7 @@ src/d3d11/src/abi/records.rs Point Clone,Copy,Default
 src/d3d11/src/abi/records.rs Rect Clone,Copy,Default
 src/d3d11/src/abi/records.rs SecurityAttributes Clone,Copy
 src/d3d11/src/context/state.rs DirtyFlags Clone,Copy,Default,PartialEq,Eq
+src/d3d11/src/context/state.rs ShaderStage Clone,Copy,PartialEq,Eq
 src/d3d11/src/input_layout.rs InputLayoutElement Clone,Copy,Default
 src/d3d11/src/input_layout.rs StreamOutputElement Clone,Copy,Default
 src/d3d11/src/subresource.rs ResourceSubset Clone,Copy,Default,PartialEq,Eq
@@ -654,15 +655,17 @@ src/d3d9/unix/src/metal/submission.rs RetirementCounter Clone,Copy
 src/d3d9/unix/src/metal/upscale.rs ScalerKey Clone,Copy,PartialEq,Eq,Hash
 src/d3d9/unix/src/metal/upscale.rs ScratchKey Clone,Copy,PartialEq,Eq,Hash
 src/dxmt/src/deptrack.rs Access Clone,Copy
+src/dxmt/src/encoder.rs BufferSlice Clone,Copy,Default
 src/dxmt/src/encoder/pass.rs RenderUses Clone,Copy
 src/dxmt/src/frame_stats.rs CompatibilityFlags Clone,Copy,Default,PartialEq,Eq
 src/dxmt/src/library.rs ResourceAccess Clone,Copy
+src/dxmt/src/presenter.rs DXMTPresentMetadata Clone,Copy
 src/dxmt/src/presenter/framegen.rs Mode Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default
 src/dxmt/src/resource/buffer.rs BufferAllocationFlags Clone,Copy
-src/dxmt/src/resource/buffer.rs BufferViewKey Clone,Copy,PartialEq,Eq
+src/dxmt/src/resource/buffer.rs BufferViewKey Clone,Copy,Default,PartialEq,Eq,Debug
 src/dxmt/src/resource/texture.rs TextureAllocationFlags Clone,Copy
-src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,PartialEq,Eq,Hash,Debug
+src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,Default,PartialEq,Eq,Hash,Debug
 src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
 src/util/src/ext.rs Luid Clone,Copy,Default

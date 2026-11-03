@@ -88,6 +88,12 @@ impl Library {
         }
     }
 
+    /// Raw `MTLLibrary` handle.
+    #[must_use]
+    pub const fn handle(&self) -> u64 {
+        self.library.handle()
+    }
+
     /// The function `name`, or `None` when the library has none.
     #[must_use]
     pub fn function(&self, name: &CStr) -> Option<Obj> {

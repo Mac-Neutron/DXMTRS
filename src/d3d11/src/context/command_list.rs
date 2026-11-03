@@ -23,10 +23,9 @@ use super::{
 use crate::{
     abi::vtbl::ID3D11CommandListVtbl,
     com::{
-        E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, IID_IUNKNOWN, Managed, S_OK, container_of,
-        iface_of,
+        E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, Managed, S_OK,
+        add_ref, container_of, iface_of,
     },
-    device::Device,
     query::Query,
 };
 
@@ -130,6 +129,7 @@ pub struct CommandList {
     pub dynamic_textures: Vec<DeferredDynamicTexture>,
     pub dynamic_texture_history: Vec<DeferredDynamicTexture>,
     pub written_stagings: Vec<Arc<Staging>>,
+    pub read_stagings: Vec<Arc<Staging>>,
     pub visibility_queries: Vec<Arc<VisibilityQuery>>,
     pub reissued_queries: Vec<DeferredIssuedQuery>,
     pub has_promoted_flush: bool,
@@ -148,15 +148,23 @@ static COMMAND_LIST_VTBL: ID3D11CommandListVtbl = ID3D11CommandListVtbl {
     get_context_flags: cmdlist_get_context_flags,
 };
 
+fn live_dev(device: *mut c_void) -> *mut c_void {
+    if crate::device::Device::from_iface(device).is_some() {
+        device
+    } else {
+        ptr::null_mut()
+    }
+}
+
 impl CommandList {
     /// Allocates a new boxed [`CommandList`].
     #[must_use]
     pub fn new_boxed(device: *mut c_void, context_flags: u32) -> Box<Self> {
         let block = usize::try_from(DEFERRED_BLOCK).unwrap_or(0x10_0000);
         let refs = Managed::new();
-        // SAFETY: `device` is null or a valid COM device pointer.
+        // SAFETY: `live_dev(device)` is either null (in unit tests) or a live COM device pointer.
         unsafe {
-            refs.add_ref(ptr::null_mut());
+            refs.add_ref(live_dev(device));
         }
         Box::new(Self {
             vtbl: &raw const COMMAND_LIST_VTBL,
@@ -172,6 +180,7 @@ impl CommandList {
             dynamic_textures: Vec::new(),
             dynamic_texture_history: Vec::new(),
             written_stagings: Vec::new(),
+            read_stagings: Vec::new(),
             visibility_queries: Vec::new(),
             reissued_queries: Vec::new(),
             has_promoted_flush: false,
@@ -199,9 +208,9 @@ impl CommandList {
         self.clear_payload();
         self.device = device;
         self.context_flags = context_flags;
-        // SAFETY: Null device pointer for internal pool reuse refcount.
+        // SAFETY: `live_dev(device)` is either null or a live COM device pointer.
         unsafe {
-            self.refs.add_ref(ptr::null_mut());
+            self.refs.add_ref(live_dev(device));
         }
     }
 
@@ -214,6 +223,7 @@ impl CommandList {
         self.dynamic_textures.clear();
         self.dynamic_texture_history.clear();
         self.written_stagings.clear();
+        self.read_stagings.clear();
         self.visibility_queries.clear();
         self.reissued_queries.clear();
         self.has_promoted_flush = false;
@@ -226,7 +236,7 @@ unsafe extern "system-unwind" fn cmdlist_query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     if ppv_object.is_null() {
-        return E_INVALIDARG;
+        return E_POINTER;
     }
     // SAFETY: `ppv_object` was checked for null above.
     unsafe {
@@ -241,9 +251,9 @@ unsafe extern "system-unwind" fn cmdlist_query_interface(
     // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
     let list = unsafe { &*raw };
     if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D11_COMMAND_LIST {
-        // SAFETY: `list.device` is the parent device or null.
+        // SAFETY: `live_dev(list.device)` is the live parent device or null.
         unsafe {
-            list.refs.add_ref(list.device);
+            list.refs.add_ref(live_dev(list.device));
         }
         let iface = iface_of(&list.vtbl);
         // SAFETY: `ppv_object` was checked for null above.
@@ -252,6 +262,9 @@ unsafe extern "system-unwind" fn cmdlist_query_interface(
         }
         return S_OK;
     }
+    if crate::com::qi_log(&IID_ID3D11_COMMAND_LIST, &iid) {
+        crate::LOG.warn(&format!("D3D11CommandList: Unknown interface query {iid}"));
+    }
     E_NOINTERFACE
 }
 
@@ -259,16 +272,16 @@ unsafe extern "system-unwind" fn cmdlist_add_ref(this: *mut c_void) -> u32 {
     let raw = container_of!(this, CommandList, vtbl);
     // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
     let list = unsafe { &*raw };
-    // SAFETY: `list.device` is the parent device or null.
-    unsafe { list.refs.add_ref(list.device) }
+    // SAFETY: `live_dev(list.device)` is the live parent device or null.
+    unsafe { list.refs.add_ref(live_dev(list.device)) }
 }
 
 unsafe extern "system-unwind" fn cmdlist_release(this: *mut c_void) -> u32 {
     let raw = container_of!(this, CommandList, vtbl);
     // SAFETY: `this` is the `vtbl` pointer of a live `CommandList`.
     let list = unsafe { &*raw };
-    let dev = list.device;
-    // SAFETY: `dev` is the parent device or null.
+    let dev = live_dev(list.device);
+    // SAFETY: `dev` is the live parent device or null.
     let (remaining, destroy) = unsafe { list.refs.release(dev) };
     if destroy {
         // SAFETY: Both public and private refcounts reached zero.
@@ -287,8 +300,9 @@ unsafe extern "system-unwind" fn cmdlist_get_device(
     let raw = container_of!(this, CommandList, vtbl);
     // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
     let list = unsafe { &*raw };
-    if let Some(dev) = Device::from_iface(list.device) {
-        let _ = dev;
+    // SAFETY: `live_dev(list.device)` is the live parent device or null.
+    unsafe {
+        add_ref(live_dev(list.device));
     }
     // SAFETY: `pp_device` was checked for null above.
     unsafe {
@@ -363,33 +377,67 @@ const fn write_cmdlist_out(out: *mut *mut c_void, val: *mut c_void) {
     }
 }
 
+struct LiveCommandListCleanup {
+    device: usize,
+    raw_list: usize,
+    dyn_buf_history: Vec<DeferredDynamicBuffer>,
+    dyn_tex_history: Vec<DeferredDynamicTexture>,
+    recycled_counter: Arc<AtomicUsize>,
+}
+
+impl Drop for LiveCommandListCleanup {
+    fn drop(&mut self) {
+        let completed_seq = super::immediate::live_device(self.device as *mut c_void)
+            .map_or(0, |d| d.core().queue().coherent_seq());
+        for entry in self.dyn_buf_history.drain(..) {
+            entry.dynamic.recycle(completed_seq, entry.allocation);
+            self.recycled_counter.fetch_add(1, Ordering::Relaxed);
+        }
+        for entry in self.dyn_tex_history.drain(..) {
+            entry.dynamic.recycle(completed_seq, entry.allocation);
+            self.recycled_counter.fetch_add(1, Ordering::Relaxed);
+        }
+        let raw = self.raw_list as *mut CommandList;
+        // SAFETY: `add_ref_private` in `execute_command_list` keeps `raw` alive until drop.
+        let destroy = unsafe { (*raw).refs.release_private() };
+        if destroy {
+            // SAFETY: Both public and private refcounts reached zero.
+            let _ = unsafe { Box::from_raw(raw) };
+        }
+    }
+}
+
 /// Re-issues a deferred query onto `imm` during `ExecuteCommandList`.
 fn reissue_deferred_query(imm: &mut Context<Immediate>, query: &DeferredIssuedQuery) {
-    let seq = imm.mode.current_seq();
+    let seq = imm.active_seq();
     imm.mode.has_dirty_op = true;
     match query {
         DeferredIssuedQuery::Event { query_ptr } => {
             if let Some(cq) = ContextQuery::from_ptr(*query_ptr as *mut c_void) {
                 cq.seq = seq;
                 cq.state = QueryState::Issued;
-            } else if let Some(q) = Query::from_iface(*query_ptr as *mut c_void) {
-                q.end(ptr::from_mut(imm).cast());
+            } else if Query::from_iface(*query_ptr as *mut c_void).is_some() {
+                imm.end(*query_ptr as *mut c_void);
             }
         }
         DeferredIssuedQuery::Visibility { query_ptr, vq } => {
-            let offset = imm.mode.visibility_offset;
-            vq.begin(seq, offset);
-            vq.end(seq, offset);
-            imm.mode.visibility_offset += 1;
-            imm.mode.active_visibility_queries.push((
-                seq,
-                imm.mode.visibility_offset,
-                Arc::clone(vq),
-            ));
+            if !imm.is_live() {
+                let offset = imm.mode.visibility_offset;
+                vq.begin(seq, offset);
+                vq.end(seq, offset);
+                imm.mode.visibility_offset += 1;
+                imm.mode.active_visibility_queries.push((
+                    seq,
+                    imm.mode.visibility_offset,
+                    Arc::clone(vq),
+                ));
+            }
             if let Some(cq) = ContextQuery::from_ptr(*query_ptr as *mut c_void) {
                 cq.seq = seq;
                 cq.visibility = Some(Arc::clone(vq));
                 cq.state = QueryState::Issued;
+            } else if let Some(q) = Query::from_iface(*query_ptr as *mut c_void) {
+                q.do_deferred_query(Arc::clone(vq));
             }
         }
         DeferredIssuedQuery::Timestamp { query_ptr, tq } => {
@@ -397,6 +445,8 @@ fn reissue_deferred_query(imm: &mut Context<Immediate>, query: &DeferredIssuedQu
                 cq.seq = seq;
                 cq.timestamp = Some(Arc::clone(tq));
                 cq.state = QueryState::Issued;
+            } else if Query::from_iface(*query_ptr as *mut c_void).is_some() {
+                imm.end(*query_ptr as *mut c_void);
             }
         }
     }
@@ -457,6 +507,7 @@ impl<M: Mode> Context<M> {
             .collect();
         list.dynamic_texture_history = mem::take(&mut def.mode.dynamic_texture_history);
         list.written_stagings = mem::take(&mut def.mode.written_stagings);
+        list.read_stagings = mem::take(&mut def.mode.read_stagings);
         list.visibility_queries = mem::take(&mut def.mode.visibility_queries);
         def.mode.active_visibility_offsets.clear();
         list.reissued_queries = mem::take(&mut def.mode.reissued_queries);
@@ -466,6 +517,7 @@ impl<M: Mode> Context<M> {
             def.clear_state();
         } else {
             def.dirty = DirtyFlags::all();
+            def.restore_encoding_context_state();
         }
 
         let raw = Box::into_raw(list);
@@ -477,6 +529,17 @@ impl<M: Mode> Context<M> {
 
     /// `ID3D11DeviceContext::ExecuteCommandList`.
     pub fn execute_command_list(&mut self, command_list: *mut c_void, restore_context_state: i32) {
+        if self.as_deferred().is_some() {
+            crate::LOG.err("ExecuteCommandList: not supported on deferred context");
+            #[cfg(all(not(windows), not(test)))]
+            {
+                // SAFETY: Recording not-implemented call for native probe diagnostic.
+                unsafe {
+                    winemetal_sys::wmt_native_not_implemented();
+                }
+            }
+            return;
+        }
         let Some(list) = CommandList::from_iface(command_list) else {
             return;
         };
@@ -484,16 +547,17 @@ impl<M: Mode> Context<M> {
         self.finish_pass(list.has_promoted_flush);
 
         if let Some(imm) = self.as_immediate_mut() {
-            let seq = imm.mode.current_seq();
+            let seq = imm.active_seq();
             imm.mode.has_dirty_op = true;
 
+            for staging in &list.read_stagings {
+                staging.use_copy_source(seq);
+            }
             for staging in &list.written_stagings {
                 staging.use_copy_destination(seq);
-                imm.mode.active_stagings.push((seq, Arc::clone(staging)));
-            }
-
-            for query in &list.reissued_queries {
-                reissue_deferred_query(imm, query);
+                if !imm.is_live() {
+                    imm.mode.active_stagings.push((seq, Arc::clone(staging)));
+                }
             }
 
             for entry in &list.dynamic_buffers {
@@ -507,18 +571,8 @@ impl<M: Mode> Context<M> {
                     .update_immediate_name(seq, Arc::clone(&entry.allocation), true);
             }
 
-            let vq_ptr = if list.visibility_queries.is_empty() {
-                ptr::null()
-            } else {
-                list.visibility_queries.as_ptr()
-            };
-            let enc = imm.mode.encoder_mut();
-            if !vq_ptr.is_null() {
-                enc.push_deferred_visibility_queries(vq_ptr);
-            }
-            list.commands.run(enc);
-            if !vq_ptr.is_null() {
-                enc.pop_deferred_visibility_queries();
+            for vq in &list.visibility_queries {
+                vq.reset();
             }
 
             list.execution_count.fetch_add(1, Ordering::Relaxed);
@@ -528,40 +582,71 @@ impl<M: Mode> Context<M> {
             let dyn_tex_history = list.dynamic_texture_history.clone();
             let recycled_counter = Arc::clone(&list.recycled_allocations);
 
-            imm.register_in_flight(seq, move |completed_seq| {
-                for entry in dyn_buf_history {
-                    entry.dynamic.recycle(completed_seq, entry.allocation);
-                    recycled_counter.fetch_add(1, Ordering::Relaxed);
+            if let Some(dev) = super::immediate::live_device(imm.device) {
+                let vq_list = list.visibility_queries.clone();
+                dev.core_mut().queue_mut().chunk().emit(move |enc| {
+                    // SAFETY: `raw_list` is kept alive by `LiveCommandListCleanup` in the chunk.
+                    let l = unsafe { &*(raw_list as *const CommandList) };
+                    let vq_ptr = if vq_list.is_empty() {
+                        ptr::null()
+                    } else {
+                        vq_list.as_ptr()
+                    };
+                    if !vq_ptr.is_null() {
+                        enc.push_deferred_visibility_queries(vq_ptr);
+                    }
+                    l.commands.run(enc);
+                    if !vq_ptr.is_null() {
+                        enc.pop_deferred_visibility_queries();
+                    }
+                });
+                dev.core_mut()
+                    .queue_mut()
+                    .chunk()
+                    .retain(LiveCommandListCleanup {
+                        device: imm.device as usize,
+                        raw_list,
+                        dyn_buf_history,
+                        dyn_tex_history,
+                        recycled_counter,
+                    });
+            } else {
+                let vq_ptr = if list.visibility_queries.is_empty() {
+                    ptr::null()
+                } else {
+                    list.visibility_queries.as_ptr()
+                };
+                let enc = imm.mode.encoder_mut();
+                if !vq_ptr.is_null() {
+                    enc.push_deferred_visibility_queries(vq_ptr);
                 }
-                for entry in dyn_tex_history {
-                    entry.dynamic.recycle(completed_seq, entry.allocation);
-                    recycled_counter.fetch_add(1, Ordering::Relaxed);
+                list.commands.run(enc);
+                if !vq_ptr.is_null() {
+                    enc.pop_deferred_visibility_queries();
                 }
-                let raw = raw_list as *mut CommandList;
-                // SAFETY: `add_ref_private` above keeps `raw` alive until this callback runs.
-                let destroy = unsafe { (*raw).refs.release_private() };
-                if destroy {
-                    // SAFETY: Both public and private refcounts reached zero.
-                    let _ = unsafe { Box::from_raw(raw) };
-                }
-            });
-        } else if let Some(def) = self.as_deferred_mut() {
-            if list.has_promoted_flush {
-                def.mode.has_promoted_flush = true;
+
+                imm.register_in_flight(seq, move |completed_seq| {
+                    for entry in dyn_buf_history {
+                        entry.dynamic.recycle(completed_seq, entry.allocation);
+                        recycled_counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                    for entry in dyn_tex_history {
+                        entry.dynamic.recycle(completed_seq, entry.allocation);
+                        recycled_counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let raw = raw_list as *mut CommandList;
+                    // SAFETY: `add_ref_private` above keeps `raw` alive until this callback runs.
+                    let destroy = unsafe { (*raw).refs.release_private() };
+                    if destroy {
+                        // SAFETY: Both public and private refcounts reached zero.
+                        let _ = unsafe { Box::from_raw(raw) };
+                    }
+                });
             }
-            for staging in &list.written_stagings {
-                def.mode.record_staging_write(staging);
-            }
+
             for query in &list.reissued_queries {
-                def.mode.reissued_queries.push(query.clone());
+                reissue_deferred_query(imm, query);
             }
-            let raw_list = ptr::from_ref(list) as usize;
-            list.refs.add_ref_private();
-            def.mode.commands_mut().emit_fn(move |enc| {
-                // SAFETY: `raw_list` is kept alive by `add_ref_private`.
-                let l = unsafe { &*(raw_list as *const CommandList) };
-                l.commands.run(enc);
-            });
         }
 
         self.finish_pass(list.has_promoted_flush);
@@ -570,6 +655,7 @@ impl<M: Mode> Context<M> {
             self.clear_state();
         } else {
             self.dirty = DirtyFlags::all();
+            self.restore_encoding_context_state();
         }
     }
 }

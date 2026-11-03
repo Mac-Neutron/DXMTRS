@@ -79,13 +79,12 @@ pub fn build_graphics_pipeline(desc: &GraphicsDesc) -> GraphicsPipelineSpec {
         unorm_output_reg_mask,
     });
 
-    let valid_rt_mask = desc.pixel_shader.as_ref().map_or(0xff, |ps| {
+    let valid_rt_mask = desc.pixel_shader.as_ref().map_or(0, |ps| {
         // SAFETY: `ps` is a pixel shader so `u.ps_valid_render_targets` is initialized.
         unsafe { ps.reflection.u.ps_valid_render_targets }
     });
 
-    // SAFETY: `WMTRenderPipelineBlendInfo` is a C ABI struct of plain integers.
-    let mut blend_info: WMTRenderPipelineBlendInfo = unsafe { core::mem::zeroed() };
+    let mut blend_info: WMTRenderPipelineBlendInfo = super::default_blend_info();
     for (i, &fmt) in desc.color_attachment_formats[..num_rt].iter().enumerate() {
         blend_info.colors[i].pixel_format = fmt;
     }

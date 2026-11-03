@@ -246,6 +246,7 @@ impl<M: Mode> Context<M> {
 
         self.invalidate_current_pass(true);
         self.switch_to_compute_encoder();
+        let is_live = self.is_live();
 
         if let Some(buffer) = uav.buffer.clone() {
             let byte_offset = uav.slice.byte_offset;
@@ -257,32 +258,51 @@ impl<M: Mode> Context<M> {
             // C++ closure (`ClearUnorderedAccessViewUint` buffer, d3d11_context_impl.cpp:718).
             M::emit_op(self, move |enc| {
                 if uav_format == DXGI_FORMAT_UNKNOWN || buffer_view.is_none() {
-                    if let Some((alloc, sub_off)) = enc.access_buffer_in::<{ stage::COMPUTE }, 0>(
-                        &buffer,
-                        byte_offset,
-                        byte_length,
-                        Access::WRITE,
-                    ) {
-                        encode_clear_buffer_uint(
-                            enc,
-                            alloc.buffer(),
-                            u64::from(byte_offset) + sub_off,
-                            byte_length >> 2,
-                            uint_vals,
-                        );
+                    if let Some((alloc, sub_off)) =
+                        enc.access_buffer::<{ stage::COMPUTE }>(&buffer, Access::WRITE)
+                    {
+                        if is_live {
+                            let buf_h = alloc.buffer();
+                            let off = u64::from(byte_offset) + sub_off;
+                            let elems = u64::from(byte_length >> 2);
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_buffer_uint(enc, buf_h, off, elems, uint_vals);
+                            });
+                        } else {
+                            encode_clear_buffer_uint(
+                                enc,
+                                alloc.buffer(),
+                                u64::from(byte_offset) + sub_off,
+                                byte_length >> 2,
+                                uint_vals,
+                            );
+                        }
                     }
                 } else if let Some(view_key) = buffer_view
                     && let Some((view, texel_offset)) = enc
                         .access_buffer_view::<{ stage::COMPUTE }>(&buffer, view_key, Access::WRITE)
                 {
                     let offset = first_element + u32::try_from(texel_offset).unwrap_or(0);
-                    encode_clear_texture_buffer(
-                        enc,
-                        view.texture,
-                        offset,
-                        element_count,
-                        uint_vals,
-                    );
+                    if is_live {
+                        let tex_h = view.texture;
+                        enc.with_emulated(|emu, enc| {
+                            emu.clear_texture_buffer_uint(
+                                enc,
+                                tex_h,
+                                offset,
+                                element_count,
+                                uint_vals,
+                            );
+                        });
+                    } else {
+                        encode_clear_texture_buffer(
+                            enc,
+                            view.texture,
+                            offset,
+                            element_count,
+                            uint_vals,
+                        );
+                    }
                 }
             });
         } else if let (Some(texture), Some(view_key)) = (uav.texture.clone(), uav.texture_view) {
@@ -309,16 +329,50 @@ impl<M: Mode> Context<M> {
                     return;
                 };
                 let [w, h, d] = texture.view_size(view_checked);
+                let tex_h = view.texture;
                 match view_checked.texture_type() {
                     WMT_TEXTURE_TYPE1D | WMT_TEXTURE_TYPE2D => {
-                        encode_clear_texture(enc, view.texture, [w, h, 1], value);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_2d_uint(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h)],
+                                    value,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, 1], value);
+                        }
                     }
                     WMT_TEXTURE_TYPE1D_ARRAY | WMT_TEXTURE_TYPE2D_ARRAY => {
                         let slices = view_checked.array_size();
-                        encode_clear_texture(enc, view.texture, [w, h, slices], value);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_2d_array_uint(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h), u64::from(slices)],
+                                    value,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, slices], value);
+                        }
                     }
                     WMT_TEXTURE_TYPE3D => {
-                        encode_clear_texture(enc, view.texture, [w, h, d], value);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_3d_uint(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h), u64::from(d)],
+                                    value,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, d], value);
+                        }
                     }
                     _ => {}
                 }
@@ -344,6 +398,7 @@ impl<M: Mode> Context<M> {
 
         self.invalidate_current_pass(true);
         self.switch_to_compute_encoder();
+        let is_live = self.is_live();
 
         if let Some(buffer) = uav.buffer.clone() {
             let byte_offset = uav.slice.byte_offset;
@@ -355,26 +410,45 @@ impl<M: Mode> Context<M> {
             // C++ closure (`ClearUnorderedAccessViewFloat` buffer, d3d11_context_impl.cpp:788).
             M::emit_op(self, move |enc| {
                 if uav_format == DXGI_FORMAT_UNKNOWN || buffer_view.is_none() {
-                    if let Some((alloc, sub_off)) = enc.access_buffer_in::<{ stage::COMPUTE }, 0>(
-                        &buffer,
-                        byte_offset,
-                        byte_length,
-                        Access::WRITE,
-                    ) {
-                        encode_clear_buffer_uint(
-                            enc,
-                            alloc.buffer(),
-                            u64::from(byte_offset) + sub_off,
-                            byte_length >> 2,
-                            bits,
-                        );
+                    if let Some((alloc, sub_off)) =
+                        enc.access_buffer::<{ stage::COMPUTE }>(&buffer, Access::WRITE)
+                    {
+                        if is_live {
+                            let buf_h = alloc.buffer();
+                            let off = u64::from(byte_offset) + sub_off;
+                            let elems = u64::from(byte_length >> 2);
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_buffer_float(enc, buf_h, off, elems, raw_vals);
+                            });
+                        } else {
+                            encode_clear_buffer_uint(
+                                enc,
+                                alloc.buffer(),
+                                u64::from(byte_offset) + sub_off,
+                                byte_length >> 2,
+                                bits,
+                            );
+                        }
                     }
                 } else if let Some(view_key) = buffer_view
                     && let Some((view, texel_offset)) = enc
                         .access_buffer_view::<{ stage::COMPUTE }>(&buffer, view_key, Access::WRITE)
                 {
                     let offset = first_element + u32::try_from(texel_offset).unwrap_or(0);
-                    encode_clear_texture_buffer(enc, view.texture, offset, element_count, bits);
+                    if is_live {
+                        let tex_h = view.texture;
+                        enc.with_emulated(|emu, enc| {
+                            emu.clear_texture_buffer_float(
+                                enc,
+                                tex_h,
+                                offset,
+                                element_count,
+                                raw_vals,
+                            );
+                        });
+                    } else {
+                        encode_clear_texture_buffer(enc, view.texture, offset, element_count, bits);
+                    }
                 }
             });
         } else if let (Some(texture), Some(view_key)) = (uav.texture.clone(), uav.texture_view) {
@@ -388,16 +462,50 @@ impl<M: Mode> Context<M> {
                     return;
                 };
                 let [w, h, d] = texture.view_size(view_key);
+                let tex_h = view.texture;
                 match view_key.texture_type() {
                     WMT_TEXTURE_TYPE1D | WMT_TEXTURE_TYPE2D => {
-                        encode_clear_texture(enc, view.texture, [w, h, 1], bits);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_2d_float(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h)],
+                                    raw_vals,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, 1], bits);
+                        }
                     }
                     WMT_TEXTURE_TYPE1D_ARRAY | WMT_TEXTURE_TYPE2D_ARRAY => {
                         let slices = view_key.array_size();
-                        encode_clear_texture(enc, view.texture, [w, h, slices], bits);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_2d_array_float(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h), u64::from(slices)],
+                                    raw_vals,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, slices], bits);
+                        }
                     }
                     WMT_TEXTURE_TYPE3D => {
-                        encode_clear_texture(enc, view.texture, [w, h, d], bits);
+                        if is_live {
+                            enc.with_emulated(|emu, enc| {
+                                emu.clear_texture_3d_float(
+                                    enc,
+                                    tex_h,
+                                    [u64::from(w), u64::from(h), u64::from(d)],
+                                    raw_vals,
+                                );
+                            });
+                        } else {
+                            encode_clear_texture(enc, tex_h, [w, h, d], bits);
+                        }
                     }
                     _ => {}
                 }
@@ -422,11 +530,22 @@ impl<M: Mode> Context<M> {
         let (Some(texture), Some(view_key)) = (dsv.texture.clone(), dsv.texture_view) else {
             return;
         };
+        let renamable = if self.is_live() {
+            crate::view::DsvObject::from_iface(depth_stencil_view).and_then(|o| o.renamable.clone())
+        } else {
+            None
+        };
         let array_length = dsv.array_length;
         let masked_flags = clear_flags & 0b11;
         self.invalidate_current_pass(false);
         // C++ closure (`ClearDepthStencilView`, d3d11_context_impl.cpp:4405).
         M::emit_op(self, move |enc| {
+            if let Some(dyn_tex) = renamable.as_ref()
+                && masked_flags == format::depth_stencil_planar_flags(texture.info().pixel_format)
+                && let Ok(mut pool) = dyn_tex.lock()
+            {
+                let _ = texture.rename(pool.next_allocation(enc.current_frame_id()));
+            }
             enc.clear_depth_stencil(
                 &texture,
                 view_key,
@@ -500,6 +619,48 @@ impl<M: Mode> Context<M> {
             }
         }
         self.invalidate_current_pass(true);
+        let depth_plane =
+            crate::view::RtvObject::from_iface(view).map_or(0, |o| o.pass_desc.depth_plane);
+        let array_length = rtv.array_length;
+        if self.is_live() {
+            let tex_begin = texture;
+            M::emit_st(self, move |enc| {
+                let tex = tex_begin.clone();
+                enc.with_clear_rtv(|crtv, enc| {
+                    crtv.begin(enc, tex, view_key, depth_plane, 0);
+                });
+            });
+            for r in rects {
+                let rect_offset_x = r.left.max(0).cast_unsigned();
+                let rect_offset_y = r.top.max(0).cast_unsigned();
+                let rect_width = r.right - rect_offset_x.cast_signed();
+                let rect_height = r.bottom - rect_offset_y.cast_signed();
+                if rect_height <= 0 || rect_width <= 0 {
+                    continue;
+                }
+                let w_u = rect_width.cast_unsigned();
+                let h_u = rect_height.cast_unsigned();
+                M::emit_op(self, move |enc| {
+                    enc.with_clear_rtv(|crtv, enc| {
+                        crtv.clear_color(
+                            enc,
+                            WMTScissorRect {
+                                x: u64::from(rect_offset_x),
+                                y: u64::from(rect_offset_y),
+                                width: u64::from(w_u),
+                                height: u64::from(h_u),
+                            },
+                            array_length,
+                            rgba,
+                        );
+                    });
+                });
+            }
+            M::emit_st(self, move |enc| {
+                enc.with_clear_rtv(dxmt_core::library::ClearRtv::end);
+            });
+            return;
+        }
         let tex_begin = texture;
         // C++ closure (`ClearView` RTV begin, d3d11_context_impl.cpp:866).
         M::emit_st(self, move |enc| {
@@ -543,7 +704,6 @@ impl<M: Mode> Context<M> {
                 depth_stencil_state: 0,
             });
         });
-        let array_length = rtv.array_length;
         let color_bits = rgba.map(f32::to_bits);
         for r in rects {
             let rect_offset_x = r.left.max(0).cast_unsigned();
@@ -615,6 +775,46 @@ impl<M: Mode> Context<M> {
             }
         }
         self.invalidate_current_pass(true);
+        let depth_val = rgba[0];
+        if self.is_live() {
+            let tex_begin = texture;
+            M::emit_st(self, move |enc| {
+                let tex = tex_begin.clone();
+                enc.with_clear_rtv(|crtv, enc| {
+                    crtv.begin(enc, tex, view_key, 0, D3D11_CLEAR_DEPTH);
+                });
+            });
+            for r in rects {
+                let rect_offset_x = r.left.max(0).cast_unsigned();
+                let rect_offset_y = r.top.max(0).cast_unsigned();
+                let rect_width = r.right - rect_offset_x.cast_signed();
+                let rect_height = r.bottom - rect_offset_y.cast_signed();
+                if rect_height <= 0 || rect_width <= 0 {
+                    continue;
+                }
+                let w_u = rect_width.cast_unsigned();
+                let h_u = rect_height.cast_unsigned();
+                M::emit_op(self, move |enc| {
+                    enc.with_clear_rtv(|crtv, enc| {
+                        crtv.clear_depth_stencil(
+                            enc,
+                            WMTScissorRect {
+                                x: u64::from(rect_offset_x),
+                                y: u64::from(rect_offset_y),
+                                width: u64::from(w_u),
+                                height: u64::from(h_u),
+                            },
+                            depth_val,
+                            0,
+                        );
+                    });
+                });
+            }
+            M::emit_st(self, move |enc| {
+                enc.with_clear_rtv(dxmt_core::library::ClearRtv::end);
+            });
+            return;
+        }
         let tex_begin = texture;
         // C++ closure (`ClearView` DSV begin, d3d11_context_impl.cpp:907).
         M::emit_st(self, move |enc| {
@@ -658,7 +858,6 @@ impl<M: Mode> Context<M> {
                 depth_stencil_state: 0,
             });
         });
-        let depth_val = rgba[0];
         let array_slices = view_key.array_size().max(1);
         for r in rects {
             let rect_offset_x = r.left.max(0).cast_unsigned();
@@ -710,6 +909,75 @@ impl<M: Mode> Context<M> {
 
     fn clear_view_uav(&mut self, uav: &Uav, rgba: [f32; 4], rects: &[Rect]) {
         self.invalidate_current_pass(true);
+        if self.is_live() {
+            let tex_opt = uav.texture.clone();
+            let tex_vk = uav.texture_view;
+            let buf_opt = uav.buffer.clone();
+            let buf_vk = uav.buffer_view;
+            if let (Some(tex), Some(vk)) = (tex_opt, tex_vk) {
+                let is_int = format::is_integer(vk.format());
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "D3D11 ClearView converts non-negative f32 components to u32"
+                )]
+                let uint_color = rgba.map(|v| v.max(0.0) as u32);
+                M::emit_st(self, move |enc| {
+                    enc.with_clear_uav(|cuav, enc| {
+                        if is_int {
+                            cuav.begin_texture_u32(enc, uint_color, &tex, vk);
+                        } else {
+                            cuav.begin_texture_f32(enc, rgba, &tex, vk);
+                        }
+                    });
+                });
+            } else if let (Some(buf), Some(vk)) = (buf_opt.clone(), buf_vk) {
+                let is_int = format::is_integer(vk.format());
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "D3D11 ClearView converts non-negative f32 components to u32"
+                )]
+                let uint_color = rgba.map(|v| v.max(0.0) as u32);
+                M::emit_st(self, move |enc| {
+                    enc.with_clear_uav(|cuav, enc| {
+                        if is_int {
+                            cuav.begin_texel_buffer_u32(enc, uint_color, &buf, vk);
+                        } else {
+                            cuav.begin_texel_buffer_f32(enc, rgba, &buf, vk);
+                        }
+                    });
+                });
+            } else if let Some(buf) = buf_opt {
+                M::emit_st(self, move |enc| {
+                    enc.with_clear_uav(|cuav, enc| {
+                        cuav.begin_buffer_f32(enc, rgba, &buf);
+                    });
+                });
+            } else {
+                return;
+            }
+            for r in rects {
+                let rect_offset_x = r.left.max(0).cast_unsigned();
+                let rect_offset_y = r.top.max(0).cast_unsigned();
+                let rect_width = r.right - rect_offset_x.cast_signed();
+                let rect_height = r.bottom - rect_offset_y.cast_signed();
+                if rect_height <= 0 || rect_width <= 0 {
+                    continue;
+                }
+                let w_u = rect_width.cast_unsigned();
+                let h_u = rect_height.cast_unsigned();
+                M::emit_op(self, move |enc| {
+                    enc.with_clear_uav(|cuav, enc| {
+                        cuav.clear(enc, rect_offset_x, rect_offset_y, w_u, h_u);
+                    });
+                });
+            }
+            M::emit_st(self, move |enc| {
+                enc.with_clear_uav(dxmt_core::library::ClearUav::end);
+            });
+            return;
+        }
         let color_bits = rgba.map(f32::to_bits);
         if uav.buffer.is_none() {
             // C++ closure (`ClearView` UAV texture begin, d3d11_context_impl.cpp:935).
@@ -794,12 +1062,7 @@ impl<M: Mode> Context<M> {
                     });
                 } else if let Some(buf) = &buf_opt {
                     let handle = enc
-                        .access_buffer_in::<{ stage::COMPUTE }, 0>(
-                            buf,
-                            rect_offset_x,
-                            w_u,
-                            Access::WRITE,
-                        )
+                        .access_buffer::<{ stage::COMPUTE }>(buf, Access::WRITE)
                         .map_or(0, |(a, _)| a.buffer());
                     enc.encode_compute_command(WmtcmdComputeSetbuffer {
                         r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,

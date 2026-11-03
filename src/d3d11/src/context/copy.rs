@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use dxmt_core::{
     deptrack::Access,
-    encoder::NO_NEXT,
+    encoder::{NO_NEXT, stage},
     format::{
-        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-        MtlDxgiFormatDesc, forget_srgb, query_dxgi,
+        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_D24,
+        MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL, MtlDxgiFormatDesc, forget_srgb, query_dxgi,
     },
     resource::{Buffer, Texture},
     staging::Staging,
@@ -46,10 +46,6 @@ pub(super) const D3D11_RESOURCE_DIMENSION_TEXTURE1D: u32 = 2;
 pub(super) const D3D11_RESOURCE_DIMENSION_TEXTURE2D: u32 = 3;
 /// `D3D11_RESOURCE_DIMENSION_TEXTURE3D`.
 pub(super) const D3D11_RESOURCE_DIMENSION_TEXTURE3D: u32 = 4;
-
-/// `MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL` (`DEPTH_PLANER | STENCIL_PLANER`).
-const MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL: u16 =
-    MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER;
 
 /// Aligns `v` up to the next multiple of 4 (`align(v, 4u)`).
 pub(super) const fn align4(v: u32) -> u32 {
@@ -502,13 +498,13 @@ impl BufferRef {
     pub(super) fn access(
         &self,
         enc: &mut dxmt_core::encoder::Encoder,
-        offset: u32,
-        length: u32,
+        _offset: u32,
+        _length: u32,
         access: Access,
     ) -> (u64, u64) {
         match self {
             Self::Live(buf) => enc
-                .access_buffer_in::<0, 0>(buf, offset, length, access)
+                .access_buffer::<{ stage::COMPUTE }>(buf, access)
                 .map_or((0, 0), |(alloc, sub_off)| (alloc.buffer(), sub_off)),
             #[cfg(test)]
             Self::Test { handle, offset } => (*handle, *offset),
@@ -538,7 +534,8 @@ impl TextureRef {
     ) {
         match self {
             Self::Live(tex) => {
-                let _ = enc.access_texture_subresource::<0>(tex, level, slice, access);
+                let _ =
+                    enc.access_texture_subresource::<{ stage::COMPUTE }>(tex, level, slice, access);
             }
             #[cfg(test)]
             Self::Test { .. } => {}
@@ -585,7 +582,7 @@ impl TextureRef {
         access: Access,
     ) -> u64 {
         match self {
-            Self::Live(tex) => enc.access_texture::<0>(tex, level, slice, access),
+            Self::Live(tex) => enc.access_texture::<{ stage::COMPUTE }>(tex, level, slice, access),
             #[cfg(test)]
             Self::Test { handle, .. } => *handle,
         }
@@ -608,7 +605,7 @@ impl StagingRef {
     pub(super) fn access_buffer(&self, enc: &mut dxmt_core::encoder::Encoder, access: Access) {
         match self {
             Self::Live(s) => {
-                let _ = enc.access_buffer::<0>(s.buffer(), access);
+                let _ = enc.access_buffer::<{ stage::COMPUTE }>(s.buffer(), access);
             }
             #[cfg(test)]
             Self::Test { .. } => {}
@@ -621,16 +618,47 @@ impl StagingRef {
         dst: &TextureRef,
         dst_mip: u32,
         dst_slice: u32,
-        dst_origin: [u32; 3],
-        src_size: [u32; 3],
+        from_d24s8: bool,
     ) {
         match (self, dst) {
             (Self::Live(src), TextureRef::Live(dst_tex)) => {
-                enc.depth_stencil_copy_from_buffer(
-                    (src.buffer(), 0, src.bytes_per_row(), src.bytes_per_image()),
-                    (dst_tex, dst_mip, dst_slice, 3),
-                    dst_origin,
-                    src_size,
+                enc.ds_copy_from_buffer(
+                    (
+                        src.buffer(),
+                        0,
+                        src.length(),
+                        src.bytes_per_row(),
+                        src.bytes_per_image(),
+                    ),
+                    (dst_tex, dst_mip, dst_slice),
+                    from_d24s8,
+                );
+            }
+            #[cfg(test)]
+            _ => {}
+        }
+    }
+
+    pub(super) fn depth_stencil_copy_from(
+        &self,
+        enc: &mut dxmt_core::encoder::Encoder,
+        src: &TextureRef,
+        src_mip: u32,
+        src_slice: u32,
+        to_d24s8: bool,
+    ) {
+        match (self, src) {
+            (Self::Live(dst), TextureRef::Live(src_tex)) => {
+                enc.ds_copy_from_texture(
+                    (src_tex, src_mip, src_slice),
+                    (
+                        dst.buffer(),
+                        0,
+                        dst.length(),
+                        dst.bytes_per_row(),
+                        dst.bytes_per_image(),
+                    ),
+                    to_d24s8,
                 );
             }
             #[cfg(test)]
@@ -672,17 +700,32 @@ impl StagingRef {
         }
     }
 
-    pub(super) fn use_copy_destination(&self, seq: u64) {
+    pub(super) fn use_copy_destination<M: Mode>(&self, ctx: &mut Context<M>) {
         match self {
-            Self::Live(s) => s.use_copy_destination(seq),
+            Self::Live(s) => {
+                if let Some(def) = ctx.as_deferred_mut() {
+                    def.mode.record_staging_write(s);
+                    def.mode.has_promoted_flush = true;
+                } else {
+                    let seq = ctx.active_seq_any();
+                    s.use_copy_destination(seq);
+                }
+            }
             #[cfg(test)]
             Self::Test { .. } => {}
         }
     }
 
-    pub(super) fn use_copy_source(&self, seq: u64) {
+    pub(super) fn use_copy_source<M: Mode>(&self, ctx: &mut Context<M>) {
         match self {
-            Self::Live(s) => s.use_copy_source(seq),
+            Self::Live(s) => {
+                if let Some(def) = ctx.as_deferred_mut() {
+                    def.mode.record_staging_read(s);
+                } else {
+                    let seq = ctx.active_seq_any();
+                    s.use_copy_source(seq);
+                }
+            }
             #[cfg(test)]
             Self::Test { .. } => {}
         }
@@ -691,13 +734,13 @@ impl StagingRef {
     pub(super) fn access(
         &self,
         enc: &mut dxmt_core::encoder::Encoder,
-        offset: u32,
-        length: u32,
+        _offset: u32,
+        _length: u32,
         access: Access,
     ) -> (u64, u64) {
         match self {
             Self::Live(s) => enc
-                .access_buffer_in::<0, 0>(s.buffer(), offset, length, access)
+                .access_buffer::<{ stage::COMPUTE }>(s.buffer(), access)
                 .map_or((0, 0), |(alloc, sub_off)| (alloc.buffer(), sub_off)),
             #[cfg(test)]
             Self::Test { handle, .. } => (*handle, 0),
@@ -829,13 +872,13 @@ impl<M: Mode> Context<M> {
 
         if let Some(staging_dst) = get_staging_ref(dst_buffer, 0) {
             self.switch_to_blit_encoder();
-            staging_dst.use_copy_destination(0);
+            staging_dst.use_copy_destination(self);
             // C++ closure #1 (`CopyStructureCount` staging destination, d3d11_context_impl.cpp:1162).
             M::emit_op(self, move |enc| {
                 let (dst_h, dst_off) =
                     staging_dst.access(enc, dst_aligned_byte_offset, 4, Access::WRITE);
                 let (counter_h, counter_off) = enc
-                    .access_counter::<0>(&counter, uav_buf.as_ref())
+                    .access_counter::<{ stage::COMPUTE }>(&counter, uav_buf.as_ref())
                     .map_or((0, 0), |(alloc, off)| (alloc.buffer(), off));
                 let cmd = WmtcmdBlitCopyFromBufferToBuffer {
                     r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
@@ -856,7 +899,7 @@ impl<M: Mode> Context<M> {
                 let (dst_h, dst_off) =
                     dst_buf.access(enc, dst_aligned_byte_offset, 4, Access::WRITE);
                 let (counter_h, counter_off) = enc
-                    .access_counter::<0>(&counter, uav_buf.as_ref())
+                    .access_counter::<{ stage::COMPUTE }>(&counter, uav_buf.as_ref())
                     .map_or((0, 0), |(alloc, off)| (alloc.buffer(), off));
                 let cmd = WmtcmdBlitCopyFromBufferToBuffer {
                     r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
@@ -959,8 +1002,8 @@ impl<M: Mode> Context<M> {
         if let Some(staging_dst) = get_staging_ref(dst_obj.p_resource, dst_subresource) {
             if let Some(staging_src) = get_staging_ref(src_obj.p_resource, src_subresource) {
                 self.switch_to_blit_encoder();
-                staging_dst.use_copy_destination(0);
-                staging_src.use_copy_source(0);
+                staging_dst.use_copy_destination(self);
+                staging_src.use_copy_source(self);
                 #[cfg(test)]
                 if let (Some(src_h), Some(dst_h)) =
                     (staging_src.test_handle(), staging_dst.test_handle())
@@ -991,7 +1034,7 @@ impl<M: Mode> Context<M> {
                 });
             } else if let Some(src_buf) = get_buffer_ref(src_obj.p_resource) {
                 self.switch_to_blit_encoder();
-                staging_dst.use_copy_destination(0);
+                staging_dst.use_copy_destination(self);
                 #[cfg(test)]
                 if let (Some((src_h, src_off)), Some(dst_h)) =
                     (src_buf.test_handle(), staging_dst.test_handle())
@@ -1024,7 +1067,7 @@ impl<M: Mode> Context<M> {
         } else if let Some(dst_buf) = get_buffer_ref(dst_obj.p_resource) {
             if let Some(staging_src) = get_staging_ref(src_obj.p_resource, src_subresource) {
                 self.switch_to_blit_encoder();
-                staging_src.use_copy_source(0);
+                staging_src.use_copy_source(self);
                 #[cfg(test)]
                 if let (Some(src_h), Some((dst_h, dst_off))) =
                     (staging_src.test_handle(), dst_buf.test_handle())
@@ -1115,11 +1158,12 @@ impl<M: Mode> Context<M> {
         let dst_bpt = cmd.dst_bytes_per_texel;
         let dim_incompat = cmd.dimension_incompatible;
 
+        let is_live = self.is_live();
         if let Some(staging_dst) = get_staging_ref(cmd.p_dst, cmd.dst_subresource) {
             if let Some(staging_src) = get_staging_ref(cmd.p_src, cmd.src_subresource) {
                 self.switch_to_blit_encoder();
-                staging_dst.use_copy_destination(0);
-                staging_src.use_copy_source(0);
+                staging_dst.use_copy_destination(self);
+                staging_src.use_copy_source(self);
                 let src_len = u32::try_from(staging_src.length()).unwrap_or(u32::MAX);
                 let dst_len = u32::try_from(staging_dst.length()).unwrap_or(u32::MAX);
                 // C++ closure #7 (`CopyTextureBitcast` staging -> staging, d3d11_context_impl.cpp:3933).
@@ -1158,17 +1202,24 @@ impl<M: Mode> Context<M> {
                 });
             } else if let Some(src_tex) = get_texture_ref(cmd.p_src) {
                 if (dst_format_flag & MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL) != 0 {
+                    let to_d24s8 = (dst_format_flag & MTL_DXGI_FORMAT_EMULATED_D24) != 0;
                     self.invalidate_current_pass(true);
-                    staging_dst.use_copy_destination(0);
+                    staging_dst.use_copy_destination(self);
                     // C++ closure #8 (`CopyTextureBitcast` depth-stencil to staging, d3d11_context_impl.cpp:3964).
                     M::emit_op(self, move |enc| {
-                        src_tex.access_subresource(enc, src_mip, src_slice, Access::READ);
-                        staging_dst.access_buffer(enc, Access::WRITE);
+                        if is_live {
+                            staging_dst.depth_stencil_copy_from(
+                                enc, &src_tex, src_mip, src_slice, to_d24s8,
+                            );
+                        } else {
+                            src_tex.access_subresource(enc, src_mip, src_slice, Access::READ);
+                            staging_dst.access_buffer(enc, Access::WRITE);
+                        }
                     });
                     return;
                 }
                 self.switch_to_blit_encoder();
-                staging_dst.use_copy_destination(0);
+                staging_dst.use_copy_destination(self);
                 let dst_row_pitch = staging_dst.bytes_per_row();
                 let dst_image_pitch = staging_dst.bytes_per_image();
                 let dst_len = u32::try_from(staging_dst.length()).unwrap_or(u32::MAX);
@@ -1218,18 +1269,18 @@ impl<M: Mode> Context<M> {
         } else if let Some(dst_tex) = get_texture_ref(cmd.p_dst) {
             if let Some(staging_src) = get_staging_ref(cmd.p_src, cmd.src_subresource) {
                 if (src_format_flag & MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL) != 0 {
+                    let from_d24s8 = (src_format_flag & MTL_DXGI_FORMAT_EMULATED_D24) != 0;
                     self.invalidate_current_pass(true);
-                    staging_src.use_copy_source(0);
+                    staging_src.use_copy_source(self);
                     // C++ closure #10 (`CopyTextureBitcast` staging -> depth-stencil, d3d11_context_impl.cpp:4003).
                     M::emit_op(self, move |enc| {
-                        staging_src.depth_stencil_copy_to(
-                            enc, &dst_tex, dst_mip, dst_slice, dst_origin, src_size,
-                        );
+                        staging_src
+                            .depth_stencil_copy_to(enc, &dst_tex, dst_mip, dst_slice, from_d24s8);
                     });
                     return;
                 }
                 self.switch_to_blit_encoder();
-                staging_src.use_copy_source(0);
+                staging_src.use_copy_source(self);
                 let src_row_pitch = staging_src.bytes_per_row();
                 let src_image_pitch = staging_src.bytes_per_image();
                 let src_len = u32::try_from(staging_src.length()).unwrap_or(u32::MAX);

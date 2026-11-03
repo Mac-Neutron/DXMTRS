@@ -32,11 +32,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DXMT_VERSION_H");
 
     let key = env::var_os("DXMT_TRANSLATOR_KEY_H")
-        .map(|p| extract_quoted_define(Path::new(&p), "DXMT_TRANSLATOR_KEY"))
-        .unwrap_or_default();
+        .map_or_default(|p| extract_quoted_define(Path::new(&p), "DXMT_TRANSLATOR_KEY"));
     let ver = env::var_os("DXMT_VERSION_H")
-        .map(|p| extract_quoted_define(Path::new(&p), "DXMT_GIT_VERSION"))
-        .unwrap_or_default();
+        .map(|p| extract_quoted_define(Path::new(&p), "DXMT_VERSION"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "dev".to_owned());
 
+    println!("cargo:rustc-env=DXMT_TRANSLATOR_KEY={key}");
+    println!("cargo:rustc-env=DXMT_VERSION={ver}");
     println!("cargo:rustc-env=DXMT_SHADER_CACHE_VERSION={key}+{ver}");
 }

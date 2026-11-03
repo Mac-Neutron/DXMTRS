@@ -13,44 +13,51 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
-    MTLDevice_newComputePipelineState, Obj,
+    MTLDevice_newComputePipelineState, MTLDevice_newTileRenderPipelineState, Obj,
     wire::{
-        MemPtr, WMT_COLOR_WRITE_MASK_NONE, WMT_COMPARE_FUNCTION_ALWAYS,
-        WMT_COMPUTE_COMMAND_DISPATCH_THREADS, WMT_COMPUTE_COMMAND_SET_BYTES,
-        WMT_COMPUTE_COMMAND_SET_PSO, WMT_COMPUTE_COMMAND_SET_TEXTURE, WMT_LOAD_ACTION_LOAD,
-        WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
-        WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8, WMT_PIXEL_FORMAT_INVALID,
-        WMT_PIXEL_FORMAT_STENCIL8, WMT_PIXEL_FORMAT_X32_STENCIL8, WMT_PRIMITIVE_TYPE_TRIANGLE,
+        MemPtr, WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
+        WMT_COMPUTE_COMMAND_SET_BUFFER, WMT_COMPUTE_COMMAND_SET_BYTES, WMT_COMPUTE_COMMAND_SET_PSO,
+        WMT_COMPUTE_COMMAND_SET_TEXTURE, WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_DEPTH16_UNORM,
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_STENCIL8, WMT_PIXEL_FORMAT_X32_STENCIL8,
+        WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE, WMT_PRIMITIVE_TYPE_TRIANGLE,
         WMT_RENDER_COMMAND_DISPATCH_THREADS_PER_TILE, WMT_RENDER_COMMAND_DRAW,
-        WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE, WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
-        WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMT_RENDER_COMMAND_SET_PSO,
-        WMT_RENDER_COMMAND_SET_SCISSOR_RECT, WMT_RENDER_COMMAND_SET_STENCIL_REF,
-        WMT_RENDER_COMMAND_SET_VIEWPORT, WMT_RENDER_COMMAND_USE_RESOURCE,
-        WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_REPLACE, WMT_STORE_ACTION_STORE,
-        WMT_TEXTURE_TYPE2D_ARRAY, WMTComputePipelineInfo, WMTDepthStencilInfo, WMTScissorRect,
-        WMTSize, WMTStencilInfo, WMTViewport, WmtcmdComputeDispatch, WmtcmdComputeSetbytes,
+        WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE, WMT_RENDER_COMMAND_SET_DSSO,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
+        WMT_RENDER_COMMAND_SET_STENCIL_REF, WMT_RENDER_COMMAND_SET_VIEWPORT,
+        WMT_RENDER_COMMAND_USE_RESOURCE, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_REPLACE,
+        WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE_CUBE_ARRAY,
+        WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE3D, WMTComputePipelineInfo,
+        WMTDepthStencilInfo, WMTScissorRect, WMTSize, WMTStencilInfo, WMTTileRenderPipelineInfo,
+        WMTViewport, WmtcmdComputeDispatch, WmtcmdComputeSetbuffer, WmtcmdComputeSetbytes,
         WmtcmdComputeSetpso, WmtcmdComputeSettexture, WmtcmdRenderDispatchThreadsPerTile,
         WmtcmdRenderDraw, WmtcmdRenderSetbuffer, WmtcmdRenderSetbytes,
-        WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetpso, WmtcmdRenderSetscissorrect,
-        WmtcmdRenderSetstencilref, WmtcmdRenderSetviewport, WmtcmdRenderUseresource,
+        WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
+        WmtcmdRenderSetscissorrect, WmtcmdRenderSetstencilref, WmtcmdRenderSetviewport,
+        WmtcmdRenderUseresource,
     },
 };
 
 use super::{
-    Encoder, NO_NEXT, RenderUses,
+    ArgumentBuffer, Encoder, NO_NEXT, RenderUses,
     pass::{GsMarshalTask, TsMarshalTask},
     stage,
 };
 use crate::{
     counter::{Counter, CounterPool},
     deptrack::Access,
+    emulated::EmulatedContext,
     format,
     frame_stats::{CompatibilityFlags, FrameStatistics},
-    library::{Library, depth_stencil_state, render_pipeline, render_pipeline_info},
+    library::{
+        CUSTOM_BUFFER_ARGUMENT_INDEX_0, ClearRtv, ClearUav, Library, ResourceAccess,
+        SimpleCommandContext, depth_stencil_state, render_pipeline, render_pipeline_info,
+    },
     query::{TimestampQuery, VisibilityQuery},
     resource::{
-        Buffer, BufferAllocation, BufferAllocationFlags, Texture, TextureAllocation,
-        TextureViewDescriptor,
+        Buffer, BufferAllocation, BufferAllocationFlags, BufferViewKey, Texture, TextureAllocation,
+        TextureViewDescriptor, TextureViewKey,
     },
     ring::{DEFERRED_BLOCK, LIFETIME, RingBump, RingConfig},
     staging::Staging,
@@ -67,6 +74,9 @@ pub(super) struct HelperPipelines {
     ds_states: [u64; 3],
     ds_buffer_psos: FxHashMap<(u32, u8), u64>,
     ds_tex_psos: [u64; 3],
+    ds_copy_from_buf_psos: [u64; 2],
+    ds_copy_to_buf_psos: [u64; 2],
+    ds_copy_dss: u64,
     mv_scale_pso: u64,
     tile_barrier_psos: FxHashMap<[u32; 9], u64>,
     next_fake: u64,
@@ -81,6 +91,9 @@ impl Default for HelperPipelines {
             ds_states: [0; 3],
             ds_buffer_psos: FxHashMap::default(),
             ds_tex_psos: [0; 3],
+            ds_copy_from_buf_psos: [0; 2],
+            ds_copy_to_buf_psos: [0; 2],
+            ds_copy_dss: 0,
             mv_scale_pso: 0,
             tile_barrier_psos: FxHashMap::default(),
             next_fake: FAKE_HELPER_BASE,
@@ -235,7 +248,7 @@ impl HelperPipelines {
             return self.mv_scale_pso;
         }
         self.ensure_library(device_handle);
-        let pso = self.compute_pso(device_handle, c"cs_metalfx_mv_scale");
+        let pso = self.compute_pso(device_handle, c"cs_downscale_dilated_mv");
         self.mv_scale_pso = pso;
         pso
     }
@@ -248,25 +261,36 @@ impl HelperPipelines {
         let pso = if let (Some(lib), true) = (&self.library, device_handle != 0) {
             // SAFETY: `device_handle` is a borrowed live `MTLDevice` handle.
             let dev = ManuallyDrop::new(unsafe { Obj::adopt(device_handle) });
-            let kernel = lib.function(c"kernel_tile_barrier");
-            let mut info = render_pipeline_info();
-            for (out, &fmt) in info.colors.iter_mut().zip(&key[..8]) {
-                out.pixel_format = fmt;
-                out.write_mask = WMT_COLOR_WRITE_MASK_NONE;
-            }
-            if key[8] != WMT_PIXEL_FORMAT_INVALID {
-                let flags = format::depth_stencil_planar_flags(key[8]);
-                if flags & 1 != 0 {
-                    info.depth_pixel_format = key[8];
+            let kernel = lib.function(c"tile_barrier");
+            let mut color_formats = [WMT_PIXEL_FORMAT_INVALID; 8];
+            color_formats.copy_from_slice(&key[..8]);
+            let info = WMTTileRenderPipelineInfo {
+                color_formats,
+                tile_function: kernel.as_ref().map_or(0, Obj::handle),
+                immutable_tile_buffers: 0,
+                raster_sample_count: u8::try_from(key[8]).unwrap_or(1).max(1),
+                tgsize_matches_tile_size: 1,
+                binary_archive_for_serialization: 0,
+                binary_archives_for_lookup: NO_NEXT,
+                num_binary_archives_for_lookup: 0,
+                fail_on_binary_archive_miss: 0,
+                padding: [0; 6],
+            };
+            let mut error = 0;
+            let handle = dev.as_ref().map_or(0, |d| {
+                // SAFETY: `d` is a live `MTLDevice`; `info` and `error` are valid for the call.
+                unsafe {
+                    MTLDevice_newTileRenderPipelineState(
+                        d.handle(),
+                        &raw const info,
+                        &raw mut error,
+                    )
                 }
-                if flags & 2 != 0 {
-                    info.stencil_pixel_format = key[8];
-                }
-            }
-            // Note: `render_pipeline_info` is shared with ordinary render pipelines; when tile
-            // barrier compilation falls back, `next_fake_handle` still provides a non-zero handle.
-            let _ = kernel;
-            if let Some(obj) = dev.as_ref().and_then(|d| render_pipeline(d, &info)) {
+            });
+            // SAFETY: any error returned is a +1 handle.
+            drop(unsafe { Obj::adopt(error) });
+            // SAFETY: `newTileRenderPipelineState` returns a +1 handle or 0.
+            if let Some(obj) = unsafe { Obj::adopt(handle) } {
                 let h = obj.handle();
                 self.owned.push(obj);
                 h
@@ -278,6 +302,94 @@ impl HelperPipelines {
         };
         self.tile_barrier_psos.insert(key, pso);
         pso
+    }
+
+    fn ds_copy_from_buf_pso(&mut self, device_handle: u64, from_d24s8: bool) -> u64 {
+        let idx = usize::from(from_d24s8);
+        if self.ds_copy_from_buf_psos[idx] != 0 {
+            return self.ds_copy_from_buf_psos[idx];
+        }
+        self.ensure_library(device_handle);
+        let pso = if let (Some(lib), true) = (&self.library, device_handle != 0) {
+            // SAFETY: `device_handle` is a borrowed live `MTLDevice` handle.
+            let dev = ManuallyDrop::new(unsafe { Obj::adopt(device_handle) });
+            let vs = lib.function(c"vs_present_quad");
+            let fs = lib.function(if from_d24s8 {
+                c"fs_copy_from_buffer_d24s8"
+            } else {
+                c"fs_copy_from_buffer_d32s8"
+            });
+            let mut info = render_pipeline_info();
+            info.vertex_function = vs.as_ref().map_or(0, Obj::handle);
+            info.fragment_function = fs.as_ref().map_or(0, Obj::handle);
+            info.depth_pixel_format = WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8;
+            info.stencil_pixel_format = WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8;
+            info.rasterization_enabled = 1;
+            info.input_primitive_topology = WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE;
+            if let Some(obj) = dev.as_ref().and_then(|d| render_pipeline(d, &info)) {
+                let h = obj.handle();
+                self.owned.push(obj);
+                h
+            } else {
+                self.next_fake_handle()
+            }
+        } else {
+            self.next_fake_handle()
+        };
+        self.ds_copy_from_buf_psos[idx] = pso;
+        pso
+    }
+
+    fn ds_copy_to_buf_pso(&mut self, device_handle: u64, to_d24s8: bool) -> u64 {
+        let idx = usize::from(to_d24s8);
+        if self.ds_copy_to_buf_psos[idx] != 0 {
+            return self.ds_copy_to_buf_psos[idx];
+        }
+        self.ensure_library(device_handle);
+        let name: &CStr = if to_d24s8 {
+            c"cs_copy_to_buffer_d24s8"
+        } else {
+            c"cs_copy_to_buffer_d32s8"
+        };
+        let pso = self.compute_pso(device_handle, name);
+        self.ds_copy_to_buf_psos[idx] = pso;
+        pso
+    }
+
+    fn ds_copy_dss(&mut self, device_handle: u64) -> u64 {
+        if self.ds_copy_dss != 0 {
+            return self.ds_copy_dss;
+        }
+        let handle = if device_handle == 0 {
+            self.next_fake_handle()
+        } else {
+            // SAFETY: `device_handle` is a borrowed live `MTLDevice` handle.
+            let dev = ManuallyDrop::new(unsafe { Obj::adopt(device_handle) });
+            let stencil = WMTStencilInfo {
+                enabled: 1,
+                depth_stencil_pass_op: WMT_STENCIL_OPERATION_REPLACE,
+                depth_fail_op: WMT_STENCIL_OPERATION_REPLACE,
+                stencil_fail_op: WMT_STENCIL_OPERATION_REPLACE,
+                stencil_compare_function: WMT_COMPARE_FUNCTION_ALWAYS,
+                write_mask: 0xFF,
+                read_mask: 0,
+            };
+            let info = WMTDepthStencilInfo {
+                depth_compare_function: WMT_COMPARE_FUNCTION_ALWAYS,
+                depth_write_enabled: 1,
+                front_stencil: stencil,
+                back_stencil: stencil,
+            };
+            if let Some(obj) = dev.as_ref().and_then(|d| depth_stencil_state(d, &info)) {
+                let h = obj.handle();
+                self.owned.push(obj);
+                h
+            } else {
+                self.next_fake_handle()
+            }
+        };
+        self.ds_copy_dss = handle;
+        handle
     }
 
     fn compute_pso(&mut self, device_handle: u64, name: &CStr) -> u64 {
@@ -364,8 +476,9 @@ impl Encoder {
         let already = slot.check_retained(self.seq);
         self.retain(&slot, already);
         let buffer = Arc::clone(slot.buffer());
+        let already_buf = buffer.check_retained(self.seq);
+        self.retain(&buffer, already_buf);
         let offset = u64::from(slot.offset());
-        self.track_buffer::<S>(&buffer, Access::READ | Access::WRITE | Access::UAV);
         if let Some(uav) = uav_buf {
             let _ = self.access_buffer::<S>(uav, Access::READ | Access::WRITE | Access::UAV);
         }
@@ -430,6 +543,105 @@ impl Encoder {
             buffer: alloc.buffer,
             offset,
             gpu_address: alloc.gpu_address + offset,
+        }
+    }
+
+    /// Allocates an [`ArgumentBuffer`] of `size` bytes from the encoder's argument-buffer ring.
+    pub fn allocate_argument_buffer(&mut self, size: usize) -> ArgumentBuffer {
+        let seq = self.seq;
+        let coherent = self.coherent_seq;
+        if self.device_handle != 0 {
+            let (block, offset) = self
+                .argbuf_ring_mut()
+                .allocate(seq, coherent, size as u64, 64);
+            let off = usize::try_from(offset).unwrap_or(0);
+            // SAFETY: `off + size` is inside the mapped block, aligned to 64.
+            let mapped = unsafe { block.mapped.add(off) };
+            // SAFETY: `mapped` is non-null since `block.mapped` is non-null.
+            let ptr = unsafe { NonNull::new_unchecked(mapped) };
+            // SAFETY: `ptr` is valid for `size` bytes until the chunk retires.
+            unsafe { ArgumentBuffer::new(ptr, size, block.buffer, offset) }
+        } else {
+            let alloc_size = size.max(8);
+            let ptr = self.allocate_cpu(alloc_size, 64);
+            // SAFETY: `ptr` is valid for `alloc_size` bytes in the encoder's CPU heap.
+            unsafe { ArgumentBuffer::new(ptr, alloc_size, 0, 0) }
+        }
+    }
+
+    /// Runs `f` with the encoder's lazily initialized [`EmulatedContext`].
+    pub fn with_emulated<R>(
+        &mut self,
+        f: impl FnOnce(&EmulatedContext, &mut Self) -> R,
+    ) -> Option<R> {
+        self.ensure_emulated();
+        let em = self.emulated.take()?;
+        let res = f(&em, self);
+        self.emulated = Some(em);
+        Some(res)
+    }
+
+    /// Runs `f` with the encoder's lazily initialized [`ClearRtv`].
+    pub fn with_clear_rtv<R>(
+        &mut self,
+        f: impl FnOnce(&mut ClearRtv, &mut Self) -> R,
+    ) -> Option<R> {
+        self.ensure_clear_rtv();
+        let mut rtv = self.clear_rtv.take()?;
+        let res = f(&mut rtv, self);
+        self.clear_rtv = Some(rtv);
+        Some(res)
+    }
+
+    /// Runs `f` with the encoder's lazily initialized [`ClearUav`].
+    pub fn with_clear_uav<R>(
+        &mut self,
+        f: impl FnOnce(&mut ClearUav, &mut Self) -> R,
+    ) -> Option<R> {
+        self.ensure_clear_uav();
+        let mut uav = self.clear_uav.take()?;
+        let res = f(&mut uav, self);
+        self.clear_uav = Some(uav);
+        Some(res)
+    }
+
+    fn ensure_emulated(&mut self) {
+        if self.emulated.is_some() || self.device_handle == 0 {
+            return;
+        }
+        self.helper_psos.ensure_library(self.device_handle);
+        if let Some(lib) = &self.helper_psos.library {
+            // SAFETY: `device_handle` is a borrowed live `MTLDevice` handle.
+            let dev = ManuallyDrop::new(unsafe { Obj::adopt(self.device_handle) });
+            if let Some(dev) = dev.as_ref() {
+                self.emulated = Some(EmulatedContext::new(dev, lib));
+            }
+        }
+    }
+
+    fn ensure_clear_rtv(&mut self) {
+        if self.clear_rtv.is_some() || self.device_handle == 0 {
+            return;
+        }
+        self.helper_psos.ensure_library(self.device_handle);
+        if self.helper_psos.library.is_some() {
+            // SAFETY: `device_handle` is a borrowed live `MTLDevice` handle.
+            let dev = ManuallyDrop::new(unsafe { Obj::adopt(self.device_handle) });
+            if let Some(dev) = dev.as_ref() {
+                let rtv = ClearRtv::new(dev, self);
+                self.clear_rtv = Some(rtv);
+            }
+        }
+    }
+
+    fn ensure_clear_uav(&mut self) {
+        if self.clear_uav.is_some() || self.device_handle == 0 {
+            return;
+        }
+        self.helper_psos.ensure_library(self.device_handle);
+        if self.helper_psos.library.is_some() {
+            let uav = ClearUav::new(self);
+            self.clear_uav = Some(uav);
         }
     }
 
@@ -629,7 +841,8 @@ impl Encoder {
             .ds_buffer_pso(dev_handle, pixel_format, valid_flags);
         let dss = self.helper_psos.ds_state(dev_handle, valid_flags);
 
-        self.start_render_pass(format_flags, !valid_flags & 3, 0, None);
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_render_pass(format_flags, !valid_flags & 3, 0, Some(argbuf));
         let Some((src_alloc, sub_off)) =
             self.access_buffer::<{ stage::PIXEL }>(src_buf, Access::READ)
         else {
@@ -818,7 +1031,8 @@ impl Encoder {
         let dev_handle = self.device_handle;
         let pso = self.helper_psos.ds_tex_pso(dev_handle, valid_flags);
 
-        self.start_compute_pass(None);
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_compute_pass(Some(argbuf));
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
@@ -936,7 +1150,8 @@ impl Encoder {
         let dev_handle = self.device_handle;
         let pso = self.helper_psos.mv_scale(dev_handle);
 
-        self.start_compute_pass(None);
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_compute_pass(Some(argbuf));
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
@@ -982,6 +1197,282 @@ impl Encoder {
             size: WMTSize {
                 width: u64::from(dst.info().width),
                 height: u64::from(dst.info().height),
+                depth: 1,
+            },
+        });
+        self.end_pass();
+    }
+
+    /// Scales a motion-vector texture view via `MetalFX` MV scale (`MTLFXMVScaleContext`).
+    pub fn mv_scale_dispatch_views(
+        &mut self,
+        src: &Arc<Texture>,
+        src_view_key: TextureViewKey,
+        dst: &Arc<Texture>,
+        dst_view_key: TextureViewKey,
+        scale_x: f32,
+        scale_y: f32,
+    ) {
+        let dev_handle = self.device_handle;
+        let pso = self.helper_psos.mv_scale(dev_handle);
+
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_compute_pass(Some(argbuf));
+        self.encode_compute_command(WmtcmdComputeSetpso {
+            r#type: WMT_COMPUTE_COMMAND_SET_PSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            pso,
+            threadgroup_size: WMTSize {
+                width: 8,
+                height: 4,
+                depth: 1,
+            },
+        });
+
+        let src_view = self
+            .access_texture_view::<{ stage::COMPUTE }>(src, src_view_key, Access::READ)
+            .map_or(0, |v| v.texture);
+        let dst_view = self
+            .access_texture_view::<{ stage::COMPUTE }>(
+                dst,
+                dst_view_key,
+                Access::WRITE | Access::UAV,
+            )
+            .map_or(0, |v| v.texture);
+
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: src_view,
+            index: 0,
+        });
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: dst_view,
+            index: 1,
+        });
+        self.set_compute_bytes_inline(&[scale_x.to_bits(), scale_y.to_bits()], 0);
+        self.encode_compute_command(WmtcmdComputeDispatch {
+            r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            size: WMTSize {
+                width: u64::from(dst.info().width),
+                height: u64::from(dst.info().height),
+                depth: 1,
+            },
+        });
+        self.end_pass();
+    }
+
+    /// Copies a depth-stencil image from `src` buffer to `dst` (`copyFromBuffer`).
+    pub fn ds_copy_from_buffer(
+        &mut self,
+        src: (&Buffer, u64, u64, u32, u32),
+        dst: (&Arc<Texture>, u32, u32),
+        from_d24s8: bool,
+    ) {
+        let (src, src_offset, src_length, bytes_per_row, bytes_per_image) = src;
+        let (depth_stencil, level, slice) = dst;
+        let _ = src_length;
+        match depth_stencil.info().r#type() {
+            WMT_TEXTURE_TYPE2D
+            | WMT_TEXTURE_TYPE2D_ARRAY
+            | WMT_TEXTURE_TYPE_CUBE
+            | WMT_TEXTURE_TYPE_CUBE_ARRAY => {}
+            _ => return,
+        }
+        let view_key = TextureViewDescriptor {
+            format: depth_stencil.info().pixel_format,
+            texture_type: WMT_TEXTURE_TYPE2D,
+            first_mip: level,
+            mip_count: 1,
+            first_slice: slice,
+            array_size: 1,
+        }
+        .key();
+        let [width, height, _] = depth_stencil.view_size(view_key);
+        let dev_handle = self.device_handle;
+        let pso = self
+            .helper_psos
+            .ds_copy_from_buf_pso(dev_handle, from_d24s8);
+        let dsso = self.helper_psos.ds_copy_dss(dev_handle);
+
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_render_pass(0b11, 0, 0, Some(argbuf));
+        let depth_att = self.attachment::<{ stage::PIXEL }>(depth_stencil, view_key, Access::WRITE);
+        let stencil_att =
+            self.attachment::<{ stage::PIXEL }>(depth_stencil, view_key, Access::WRITE);
+        let Some((src_alloc, src_sub_offset)) =
+            self.access_buffer::<{ stage::PIXEL }>(src, Access::READ)
+        else {
+            self.end_pass();
+            return;
+        };
+        if let Some(targets) = self.render_targets() {
+            targets.depth.target.attachment = depth_att;
+            targets.depth.target.depth_plane = 0;
+            targets.depth.target.load_action = WMT_LOAD_ACTION_LOAD;
+            targets.depth.target.store_action = WMT_STORE_ACTION_STORE;
+            targets.stencil.target.attachment = stencil_att;
+            targets.stencil.target.depth_plane = 0;
+            targets.stencil.target.load_action = WMT_LOAD_ACTION_LOAD;
+            targets.stencil.target.store_action = WMT_STORE_ACTION_STORE;
+            targets.render_target_width = width;
+            targets.render_target_height = height;
+            targets.render_target_array_length = 0;
+            targets.default_raster_sample_count =
+                u8::try_from(depth_stencil.info().sample_count()).unwrap_or(1);
+        }
+        self.encode_render_command(WmtcmdRenderSetpso {
+            r#type: WMT_RENDER_COMMAND_SET_PSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            pso,
+        });
+        self.encode_render_command(WmtcmdRenderSetviewport {
+            r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            viewport: WMTViewport {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: f64::from(width),
+                height: f64::from(height),
+                znear: 0.0,
+                zfar: 1.0,
+            },
+        });
+        self.encode_render_command(WmtcmdRenderSetdsso {
+            r#type: WMT_RENDER_COMMAND_SET_DSSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            dsso,
+            stencil_ref: 0,
+        });
+        self.encode_render_command(WmtcmdRenderSetbuffer {
+            r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            buffer: src_alloc.buffer(),
+            offset: src_offset + src_sub_offset,
+            index: u8::try_from(CUSTOM_BUFFER_ARGUMENT_INDEX_0).unwrap_or(30),
+        });
+        self.set_fragment_bytes_inline(
+            &[bytes_per_row, bytes_per_image],
+            u8::try_from(CUSTOM_BUFFER_ARGUMENT_INDEX_0 + 1).unwrap_or(31),
+        );
+        self.encode_render_command(WmtcmdRenderDraw {
+            r#type: WMT_RENDER_COMMAND_DRAW,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
+            vertex_start: 0,
+            vertex_count: 3,
+            instance_count: 1,
+            base_instance: 0,
+        });
+        self.end_pass();
+    }
+
+    /// Copies a depth-stencil image from `src` texture to `dst` (`copyFromTexture`).
+    pub fn ds_copy_from_texture(
+        &mut self,
+        src: (&Arc<Texture>, u32, u32),
+        dst: (&Buffer, u64, u64, u32, u32),
+        to_d24s8: bool,
+    ) {
+        let (depth_stencil, level, slice) = src;
+        let (dst, dst_offset, dst_length, bytes_per_row, bytes_per_image) = dst;
+        let _ = dst_length;
+        match depth_stencil.info().r#type() {
+            WMT_TEXTURE_TYPE2D
+            | WMT_TEXTURE_TYPE2D_ARRAY
+            | WMT_TEXTURE_TYPE_CUBE
+            | WMT_TEXTURE_TYPE_CUBE_ARRAY => {}
+            _ => return,
+        }
+        let depth_view = TextureViewDescriptor {
+            format: WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+            texture_type: WMT_TEXTURE_TYPE2D,
+            first_mip: level,
+            mip_count: 1,
+            first_slice: slice,
+            array_size: 1,
+        }
+        .key();
+        let stencil_view = TextureViewDescriptor {
+            format: WMT_PIXEL_FORMAT_X32_STENCIL8,
+            texture_type: WMT_TEXTURE_TYPE2D,
+            first_mip: level,
+            mip_count: 1,
+            first_slice: slice,
+            array_size: 1,
+        }
+        .key();
+        let dev_handle = self.device_handle;
+        let pso = self.helper_psos.ds_copy_to_buf_pso(dev_handle, to_d24s8);
+
+        let argbuf = self.allocate_argument_buffer(0);
+        self.start_compute_pass(Some(argbuf));
+        let tex_depth = self
+            .access_texture_view::<{ stage::COMPUTE }>(depth_stencil, depth_view, Access::READ)
+            .map_or(0, |v| v.texture);
+        let tex_stencil = self
+            .access_texture_view::<{ stage::COMPUTE }>(depth_stencil, stencil_view, Access::READ)
+            .map_or(0, |v| v.texture);
+        let Some((dst_alloc, dst_sub_offset)) =
+            self.access_buffer::<{ stage::COMPUTE }>(dst, Access::WRITE)
+        else {
+            self.end_pass();
+            return;
+        };
+        self.encode_compute_command(WmtcmdComputeSetpso {
+            r#type: WMT_COMPUTE_COMMAND_SET_PSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            pso,
+            threadgroup_size: WMTSize {
+                width: 8,
+                height: 4,
+                depth: 1,
+            },
+        });
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: tex_depth,
+            index: 0,
+        });
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: tex_stencil,
+            index: 1,
+        });
+        self.encode_compute_command(WmtcmdComputeSetbuffer {
+            r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            buffer: dst_alloc.buffer(),
+            offset: dst_offset + dst_sub_offset,
+            index: 0,
+        });
+        self.set_compute_bytes_inline(&[bytes_per_row, bytes_per_image], 1);
+        let [width, height, _] = depth_stencil.view_size(depth_view);
+        self.encode_compute_command(WmtcmdComputeDispatch {
+            r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            size: WMTSize {
+                width: u64::from(width),
+                height: u64::from(height),
                 depth: 1,
             },
         });
@@ -1041,7 +1532,7 @@ impl Encoder {
         self.frame_stats.set_compatibility_flag(flag);
     }
 
-    fn counters_mut(&mut self) -> &mut CounterPool {
+    pub(super) fn counters_mut(&mut self) -> &mut CounterPool {
         let handle = if self.device_handle != 0 {
             self.device_handle
         } else {
@@ -1068,6 +1559,30 @@ impl Encoder {
                 BufferAllocationFlags::GPU_PRIVATE,
                 RingConfig {
                     block: DEFERRED_BLOCK,
+                    lifetime: LIFETIME,
+                },
+            )
+        })
+    }
+
+    fn argbuf_ring_mut(&mut self) -> &mut RingBump {
+        let handle = if self.device_handle != 0 {
+            self.device_handle
+        } else {
+            0xDEAD
+        };
+        self.argbuf_ring.get_or_insert_with(|| {
+            // SAFETY: `handle` is borrowed for `RingBump::new`, which retains its own copy.
+            let dev = ManuallyDrop::new(unsafe { Obj::adopt(handle) }.expect("non-zero"));
+            let mut flags = BufferAllocationFlags::CPU_WRITE_COMBINED;
+            if cfg!(not(target_os = "macos")) {
+                flags |= BufferAllocationFlags::CPU_PLACED;
+            }
+            RingBump::new(
+                &dev,
+                flags,
+                RingConfig {
+                    block: 0x40_0000,
                     lifetime: LIFETIME,
                 },
             )
@@ -1119,6 +1634,328 @@ fn raw_mem_ptr(addr: usize) -> MemPtr {
     MemPtr {
         ptr: u32::try_from(addr).unwrap_or(0),
         high: 0,
+    }
+}
+
+const fn to_access(ra: ResourceAccess) -> Access {
+    let mut out = Access::empty();
+    if ra.contains(ResourceAccess::READ) {
+        out = out.union(Access::READ);
+    }
+    if ra.contains(ResourceAccess::WRITE) {
+        out = out.union(Access::WRITE);
+    }
+    if ra.contains(ResourceAccess::UAV) {
+        out = out.union(Access::UAV);
+    }
+    out
+}
+
+impl SimpleCommandContext for Encoder {
+    fn compute_pipeline(&mut self, name: &CStr) -> Option<Obj> {
+        let dev_handle = self.device_handle;
+        self.helper_psos.ensure_library(dev_handle);
+        let lib = self.helper_psos.library.as_ref()?;
+        let func = lib.function(name)?;
+        // SAFETY: `dev_handle` is a borrowed live `MTLDevice` handle.
+        let dev = ManuallyDrop::new(unsafe { Obj::adopt(dev_handle) });
+        let dev = dev.as_ref()?;
+        let info = WMTComputePipelineInfo {
+            compute_function: func.handle(),
+            binary_archives_for_lookup: NO_NEXT,
+            binary_archive_for_serialization: 0,
+            num_binary_archives_for_lookup: 0,
+            fail_on_binary_archive_miss: 0,
+            support_indirect_command_buffers: 0,
+            tgsize_is_multiple_of_sgwidth: 0,
+            immutable_buffers: 0,
+        };
+        let mut error = 0;
+        // SAFETY: `dev` is a live `MTLDevice`; `info` and `error` are valid for the call.
+        let handle = unsafe {
+            MTLDevice_newComputePipelineState(dev.handle(), &raw const info, &raw mut error)
+        };
+        // SAFETY: any error returned is a +1 handle.
+        drop(unsafe { Obj::adopt(error) });
+        // SAFETY: `newComputePipelineState` returns a +1 handle or 0.
+        unsafe { Obj::adopt(handle) }
+    }
+
+    fn start_compute_pass(&mut self) {
+        let argbuf = self.allocate_argument_buffer(0);
+        Self::start_compute_pass(self, Some(argbuf));
+    }
+
+    fn end_pass(&mut self) {
+        Self::end_pass(self);
+    }
+
+    fn set_compute_pso(&mut self, pso: &Obj, threadgroup_size: WMTSize) {
+        self.encode_compute_command(WmtcmdComputeSetpso {
+            r#type: WMT_COMPUTE_COMMAND_SET_PSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            pso: pso.handle(),
+            threadgroup_size,
+        });
+    }
+
+    fn dispatch(&mut self, size: WMTSize) {
+        self.encode_compute_command(WmtcmdComputeDispatch {
+            r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            size,
+        });
+    }
+
+    fn set_compute_texture(
+        &mut self,
+        index: u32,
+        texture: &Arc<Texture>,
+        view: TextureViewKey,
+        access: ResourceAccess,
+    ) {
+        let Some(v) =
+            self.access_texture_view::<{ stage::COMPUTE }>(texture, view, to_access(access))
+        else {
+            return;
+        };
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: v.texture,
+            index: u8::try_from(index).unwrap_or(0),
+        });
+    }
+
+    fn set_compute_texel_buffer(
+        &mut self,
+        index: u32,
+        buffer: &Arc<Buffer>,
+        view: BufferViewKey,
+        access: ResourceAccess,
+    ) {
+        let Some((v, _)) =
+            self.access_buffer_view::<{ stage::COMPUTE }>(buffer, view, to_access(access))
+        else {
+            return;
+        };
+        self.encode_compute_command(WmtcmdComputeSettexture {
+            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            texture: v.texture,
+            index: u8::try_from(index).unwrap_or(0),
+        });
+    }
+
+    fn set_compute_buffer(
+        &mut self,
+        index: u32,
+        buffer: &Arc<Buffer>,
+        offset: u32,
+        length: u32,
+        access: ResourceAccess,
+    ) {
+        let _ = (offset, length);
+        let Some((alloc, _)) = self.access_buffer::<{ stage::COMPUTE }>(buffer, to_access(access))
+        else {
+            return;
+        };
+        self.encode_compute_command(WmtcmdComputeSetbuffer {
+            r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            buffer: alloc.buffer(),
+            offset: 0,
+            index: u8::try_from(index).unwrap_or(0),
+        });
+    }
+
+    fn set_compute_bytes(&mut self, index: u32, bytes: &[u8]) {
+        let dst = self.allocate_cpu(bytes.len().max(1), 16);
+        // SAFETY: `dst` has at least `bytes.len()` bytes.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), dst.as_ptr(), bytes.len());
+        }
+        self.encode_compute_command(WmtcmdComputeSetbytes {
+            r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            length: bytes.len() as u64,
+            index: u8::try_from(index).unwrap_or(0),
+        });
+    }
+
+    fn default_library(&self) -> &Library {
+        self.helper_psos
+            .library
+            .as_ref()
+            .expect("default library initialized")
+    }
+
+    fn start_render_pass(&mut self) {
+        let argbuf = self.allocate_argument_buffer(0);
+        Self::start_render_pass(self, 0, 0, 0, Some(argbuf));
+        if let Some(targets) = self.render_targets() {
+            targets.render_target_width = 16384;
+            targets.render_target_height = 16384;
+            targets.render_target_array_length = 0;
+            targets.default_raster_sample_count = 1;
+        }
+    }
+
+    fn set_color_attachment(
+        &mut self,
+        index: u32,
+        texture: &Arc<Texture>,
+        view: TextureViewKey,
+        depth_plane: u32,
+    ) {
+        let attachment = self.attachment::<{ stage::PIXEL }>(texture, view, Access::WRITE);
+        let [w, h, d] = texture.view_size(view);
+        let array_len = if texture.info().r#type() == WMT_TEXTURE_TYPE3D {
+            d.saturating_sub(depth_plane)
+        } else {
+            view.array_size()
+        };
+        let samples = u8::try_from(texture.info().sample_count()).unwrap_or(1);
+        let Some(targets) = self.render_targets() else {
+            return;
+        };
+        let idx = index as usize;
+        if let Some(color) = targets.colors.get_mut(idx) {
+            color.target.attachment = attachment;
+            color.target.depth_plane = depth_plane;
+            color.target.load_action = WMT_LOAD_ACTION_LOAD;
+            color.target.store_action = WMT_STORE_ACTION_STORE;
+        }
+        targets.render_target_count = targets
+            .render_target_count
+            .max(u8::try_from(index + 1).unwrap_or(8));
+        targets.render_target_width = targets.render_target_width.min(w);
+        targets.render_target_height = targets.render_target_height.min(h);
+        targets.render_target_array_length = u16::try_from(array_len).unwrap_or(0);
+        targets.default_raster_sample_count = samples;
+    }
+
+    fn set_depth_stencil_attachment(
+        &mut self,
+        texture: &Arc<Texture>,
+        view: TextureViewKey,
+        dsv_flag: u32,
+    ) {
+        let depth_att = (dsv_flag & 1 != 0)
+            .then(|| self.attachment::<{ stage::PIXEL }>(texture, view, Access::WRITE))
+            .flatten();
+        let stencil_att = (dsv_flag & 2 != 0)
+            .then(|| self.attachment::<{ stage::PIXEL }>(texture, view, Access::WRITE))
+            .flatten();
+        let [w, h, _] = texture.view_size(view);
+        let array_len = view.array_size();
+        let samples = u8::try_from(texture.info().sample_count()).unwrap_or(1);
+        let Some(targets) = self.render_targets() else {
+            return;
+        };
+        if dsv_flag & 1 != 0 {
+            targets.depth.target.attachment = depth_att;
+            targets.depth.target.load_action = WMT_LOAD_ACTION_LOAD;
+            targets.depth.target.store_action = WMT_STORE_ACTION_STORE;
+        }
+        if dsv_flag & 2 != 0 {
+            targets.stencil.target.attachment = stencil_att;
+            targets.stencil.target.load_action = WMT_LOAD_ACTION_LOAD;
+            targets.stencil.target.store_action = WMT_STORE_ACTION_STORE;
+        }
+        targets.dsv_planar_flags = u8::try_from(dsv_flag).unwrap_or(0);
+        targets.render_target_width = targets.render_target_width.min(w);
+        targets.render_target_height = targets.render_target_height.min(h);
+        targets.render_target_array_length = u16::try_from(array_len).unwrap_or(0);
+        targets.default_raster_sample_count = samples;
+    }
+
+    fn set_render_pso(&mut self, pso: &Obj) {
+        self.encode_render_command(WmtcmdRenderSetpso {
+            r#type: WMT_RENDER_COMMAND_SET_PSO,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            pso: pso.handle(),
+        });
+    }
+
+    fn set_viewport(&mut self, viewport: WMTViewport) {
+        self.encode_render_command(WmtcmdRenderSetviewport {
+            r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            viewport,
+        });
+    }
+
+    fn set_depth_stencil_state(&mut self, state: &Obj) {
+        self.encode_render_command(WmtcmdRenderSetdepthstencilstate {
+            r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            depth_stencil_state: state.handle(),
+        });
+    }
+
+    fn set_scissor_rect(&mut self, rect: WMTScissorRect) {
+        self.encode_render_command(WmtcmdRenderSetscissorrect {
+            r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            scissor_rect: rect,
+        });
+    }
+
+    fn set_stencil_reference(&mut self, stencil_ref: u8) {
+        self.encode_render_command(WmtcmdRenderSetstencilref {
+            r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            stencil_ref,
+        });
+    }
+
+    fn set_fragment_bytes(&mut self, index: u32, bytes: &[u8]) {
+        let dst = self.allocate_cpu(bytes.len().max(1), 16);
+        // SAFETY: `dst` has at least `bytes.len()` bytes.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), dst.as_ptr(), bytes.len());
+        }
+        self.encode_render_command(WmtcmdRenderSetbytes {
+            r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            length: bytes.len() as u64,
+            index: u8::try_from(index).unwrap_or(0),
+        });
+    }
+
+    fn draw(
+        &mut self,
+        primitive: u8,
+        vertex_start: u32,
+        vertex_count: u32,
+        base_instance: i32,
+        instance_count: u32,
+    ) {
+        self.encode_render_command(WmtcmdRenderDraw {
+            r#type: WMT_RENDER_COMMAND_DRAW,
+            reserved: [0; 3],
+            next: NO_NEXT,
+            primitive_type: primitive,
+            vertex_start: u64::from(vertex_start),
+            vertex_count: u64::from(vertex_count),
+            instance_count,
+            base_instance: base_instance.cast_unsigned(),
+        });
     }
 }
 

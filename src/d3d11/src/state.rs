@@ -22,6 +22,8 @@ use winemetal_sys::{
 
 use crate::{
     abi::{
+        IID_ID3D10_BLEND_STATE, IID_ID3D10_BLEND_STATE_1, IID_ID3D10_DEPTH_STENCIL_STATE,
+        IID_ID3D10_DEVICE_CHILD, IID_ID3D10_RASTERIZER_STATE, IID_ID3D10_SAMPLER_STATE,
         IID_ID3D11_BLEND_STATE, IID_ID3D11_BLEND_STATE_1, IID_ID3D11_DEPTH_STENCIL_STATE,
         IID_ID3D11_DEVICE_CHILD, IID_ID3D11_RASTERIZER_STATE, IID_ID3D11_RASTERIZER_STATE_1,
         IID_ID3D11_RASTERIZER_STATE_2, IID_ID3D11_SAMPLER_STATE, IID_IUNKNOWN,
@@ -59,7 +61,8 @@ static FALLBACK_CACHES: LazyLock<Mutex<FxHashMap<usize, Arc<StateCaches>>>> =
 
 fn caches_for_device(device: *mut c_void) -> (&'static StateCaches, Option<&'static Obj>) {
     if let Some(dev) = Device::from_iface(device) {
-        return (dev.caches(), Some(dev.core().device()));
+        let mtl = (dev.core().device().handle() > 0x1000).then(|| dev.core().device());
+        return (dev.caches(), mtl);
     }
     let arc = FALLBACK_CACHES
         .lock()
@@ -190,8 +193,7 @@ pub fn translate_blend_state(desc: &D3d11BlendDesc1) -> Result<BlendState, Hresu
     } else {
         1
     };
-    for i in 0..num_targets {
-        let rt = &desc.render_target[i];
+    for rt in desc.render_target.iter().take(num_targets) {
         if rt.logic_op_enable != 0 && rt.blend_enable != 0 {
             return Err(E_INVALIDARG);
         }
@@ -312,7 +314,7 @@ impl BlendState {
         valid_rt: u32,
     ) {
         let count = (num_rt as usize).min(8);
-        for rt in 0..count {
+        for (rt, attachment_desc) in blend_info.colors.iter_mut().enumerate().take(count) {
             if (valid_rt & (1 << rt)) == 0 {
                 continue;
             }
@@ -322,7 +324,6 @@ impl BlendState {
                 0
             };
             let render_target = &self.desc.render_target[i];
-            let attachment_desc = &mut blend_info.colors[rt];
             attachment_desc.write_mask =
                 COLOR_WRITE_MASK_MAP[(render_target.render_target_write_mask & 0x0f) as usize];
             if render_target.blend_enable != 0 && attachment_desc.pixel_format != 0 {
@@ -819,7 +820,7 @@ pub fn translate_sampler_state(
         lod_bias: desc.mip_lod_bias,
         primary_info,
         cube_info,
-        _core: core_sampler,
+        core: core_sampler,
     })
 }
 
@@ -833,7 +834,7 @@ pub struct SamplerState {
     pub lod_bias: f32,
     pub primary_info: WMTSamplerInfo,
     pub cube_info: WMTSamplerInfo,
-    _core: Option<Arc<CoreSampler>>,
+    core: Option<Arc<CoreSampler>>,
 }
 
 impl SamplerState {
@@ -846,6 +847,21 @@ impl SamplerState {
         let obj = iface.cast::<DeviceChildStateObject<ID3D11SamplerStateVtbl, Self>>();
         // SAFETY: `iface` is a valid `ID3D11SamplerState` pointer created by `StateCaches::sampler`.
         Some(unsafe { &(*obj).inner })
+    }
+
+    /// Converts this sampler state into an encoder [`dxmt_core::encoder::BoundSampler`].
+    #[must_use]
+    pub fn to_bound_sampler(&self) -> dxmt_core::encoder::BoundSampler {
+        let owner: Arc<dyn Send + Sync> = match self.core.as_ref() {
+            Some(c) => Arc::clone(c) as Arc<dyn Send + Sync>,
+            None => Arc::new(()),
+        };
+        dxmt_core::encoder::BoundSampler {
+            state: self.argument,
+            cube_state: self.argument_cube,
+            lod_bias: self.lod_bias,
+            owner,
+        }
     }
 }
 
@@ -952,6 +968,22 @@ unsafe extern "system-unwind" fn blend_qi(
         unsafe { *out = this };
         return S_OK;
     }
+    if iid == IID_ID3D10_DEVICE_CHILD
+        || iid == IID_ID3D10_BLEND_STATE
+        || iid == IID_ID3D10_BLEND_STATE_1
+    {
+        // SAFETY: `this` is a valid `DeviceChildStateObject`.
+        unsafe { state_add_ref::<ID3D11BlendState1Vtbl, BlendState>(this) };
+        let obj = this.cast::<DeviceChildStateObject<ID3D11BlendState1Vtbl, BlendState>>();
+        // SAFETY: `obj` is valid.
+        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = d3d10_ptr };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_BLEND_STATE, &iid) {
+        crate::LOG.warn(&format!("D3D11BlendState: Unknown interface query {iid}"));
+    }
     E_NOINTERFACE
 }
 
@@ -1012,6 +1044,22 @@ unsafe extern "system-unwind" fn rasterizer_qi(
         // SAFETY: `out` is non-null.
         unsafe { *out = this };
         return S_OK;
+    }
+    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_RASTERIZER_STATE {
+        // SAFETY: `this` is a valid `DeviceChildStateObject`.
+        unsafe { state_add_ref::<ID3D11RasterizerState2Vtbl, RasterizerState>(this) };
+        let obj =
+            this.cast::<DeviceChildStateObject<ID3D11RasterizerState2Vtbl, RasterizerState>>();
+        // SAFETY: `obj` is valid.
+        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = d3d10_ptr };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_RASTERIZER_STATE, &iid) {
+        crate::LOG.warn(&format!(
+            "D3D11RasterizerState: Unknown interface query {iid}"
+        ));
     }
     E_NOINTERFACE
 }
@@ -1115,6 +1163,22 @@ unsafe extern "system-unwind" fn depth_stencil_qi(
         unsafe { *out = this };
         return S_OK;
     }
+    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_DEPTH_STENCIL_STATE {
+        // SAFETY: `this` is a valid `DeviceChildStateObject`.
+        unsafe { state_add_ref::<ID3D11DepthStencilStateVtbl, DepthStencilState>(this) };
+        let obj =
+            this.cast::<DeviceChildStateObject<ID3D11DepthStencilStateVtbl, DepthStencilState>>();
+        // SAFETY: `obj` is valid.
+        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = d3d10_ptr };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_DEPTH_STENCIL_STATE, &iid) {
+        crate::LOG.warn(&format!(
+            "D3D11DepthStencilState: Unknown interface query {iid}"
+        ));
+    }
     E_NOINTERFACE
 }
 
@@ -1162,6 +1226,19 @@ unsafe extern "system-unwind" fn sampler_qi(
         // SAFETY: `out` is non-null.
         unsafe { *out = this };
         return S_OK;
+    }
+    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_SAMPLER_STATE {
+        // SAFETY: `this` is a valid `DeviceChildStateObject`.
+        unsafe { state_add_ref::<ID3D11SamplerStateVtbl, SamplerState>(this) };
+        let obj = this.cast::<DeviceChildStateObject<ID3D11SamplerStateVtbl, SamplerState>>();
+        // SAFETY: `obj` is valid.
+        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = d3d10_ptr };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_SAMPLER_STATE, &iid) {
+        crate::LOG.warn(&format!("D3D11SamplerState: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }
@@ -1301,56 +1378,75 @@ impl Defaults {
     /// Creates default state objects for `device`.
     #[must_use]
     pub fn new(device: *mut c_void) -> Self {
-        let (_, metal_device) = caches_for_device(device);
-        let (caches, _) = caches_for_device(ptr::null_mut());
+        let (caches, metal_device) = caches_for_device(device);
 
         let blend_desc = default_blend_desc1();
         let blend = caches
             .blend
             .get_or_create(CanonicalBlendKey::from_desc(&blend_desc), || {
-                Ok(DeviceChildStateObject::new(
+                Ok(DeviceChildStateObject::new_with_d3d10(
                     &BLEND_STATE_VTBL,
-                    ptr::null_mut(),
+                    &crate::d3d10::BLEND_STATE_VTBL,
+                    device,
                     translate_blend_state(&blend_desc)?,
                 ))
             })
-            .map_or(ptr::null_mut(), <*mut _>::cast);
+            .map_or(ptr::null_mut(), |ptr| {
+                // SAFETY: `get_or_create` returned a +1 reference; `Defaults` holds a non-owning pointer.
+                unsafe { (*ptr).release() };
+                ptr.cast()
+            });
 
         let rast_desc = default_rasterizer_desc2();
         let rasterizer = caches
             .rasterizer
             .get_or_create(CanonicalRasterizerKey::from_desc(&rast_desc), || {
-                Ok(DeviceChildStateObject::new(
+                Ok(DeviceChildStateObject::new_with_d3d10(
                     &RASTERIZER_STATE_VTBL,
-                    ptr::null_mut(),
+                    &crate::d3d10::RASTERIZER_STATE_VTBL,
+                    device,
                     translate_rasterizer_state(&rast_desc)?,
                 ))
             })
-            .map_or(ptr::null_mut(), <*mut _>::cast);
+            .map_or(ptr::null_mut(), |ptr| {
+                // SAFETY: `get_or_create` returned a +1 reference; `Defaults` holds a non-owning pointer.
+                unsafe { (*ptr).release() };
+                ptr.cast()
+            });
 
         let ds_desc = default_depth_stencil_desc();
         let depth_stencil = caches
             .depth_stencil
             .get_or_create(CanonicalDepthStencilKey::from_desc(&ds_desc), || {
-                Ok(DeviceChildStateObject::new(
+                Ok(DeviceChildStateObject::new_with_d3d10(
                     &DEPTH_STENCIL_STATE_VTBL,
-                    ptr::null_mut(),
+                    &crate::d3d10::DEPTH_STENCIL_STATE_VTBL,
+                    device,
                     translate_depth_stencil_state(&ds_desc, metal_device)?,
                 ))
             })
-            .map_or(ptr::null_mut(), <*mut _>::cast);
+            .map_or(ptr::null_mut(), |ptr| {
+                // SAFETY: `get_or_create` returned a +1 reference; `Defaults` holds a non-owning pointer.
+                unsafe { (*ptr).release() };
+                ptr.cast()
+            });
 
         let samp_desc = default_sampler_desc();
         let sampler = caches
             .sampler
             .get_or_create(CanonicalSamplerKey::from_desc(&samp_desc), || {
-                Ok(DeviceChildStateObject::new(
+                Ok(DeviceChildStateObject::new_with_d3d10(
                     &SAMPLER_STATE_VTBL,
-                    ptr::null_mut(),
+                    &crate::d3d10::SAMPLER_STATE_VTBL,
+                    device,
                     translate_sampler_state(&samp_desc, metal_device)?,
                 ))
             })
-            .map_or(ptr::null_mut(), <*mut _>::cast);
+            .map_or(ptr::null_mut(), |ptr| {
+                // SAFETY: `get_or_create` returned a +1 reference; `Defaults` holds a non-owning pointer.
+                unsafe { (*ptr).release() };
+                ptr.cast()
+            });
 
         Self {
             blend,
@@ -1407,8 +1503,9 @@ fn create_blend_state1_impl(
     let (caches, _) = caches_for_device(device);
     let key = CanonicalBlendKey::from_desc(d);
     match caches.blend.get_or_create(key, || {
-        Ok(DeviceChildStateObject::new(
+        Ok(DeviceChildStateObject::new_with_d3d10(
             &BLEND_STATE_VTBL,
+            &crate::d3d10::BLEND_STATE_VTBL,
             device,
             translated,
         ))
@@ -1499,8 +1596,9 @@ fn create_rasterizer_state2_impl(
     let (caches, _) = caches_for_device(device);
     let key = CanonicalRasterizerKey::from_desc(d);
     match caches.rasterizer.get_or_create(key, || {
-        Ok(DeviceChildStateObject::new(
+        Ok(DeviceChildStateObject::new_with_d3d10(
             &RASTERIZER_STATE_VTBL,
+            &crate::d3d10::RASTERIZER_STATE_VTBL,
             device,
             translated,
         ))
@@ -1544,8 +1642,9 @@ fn create_depth_stencil_state_impl(
     let key = CanonicalDepthStencilKey::from_desc(d);
     match caches.depth_stencil.get_or_create(key, || {
         let translated = translate_depth_stencil_state(d, metal_device)?;
-        Ok(DeviceChildStateObject::new(
+        Ok(DeviceChildStateObject::new_with_d3d10(
             &DEPTH_STENCIL_STATE_VTBL,
+            &crate::d3d10::DEPTH_STENCIL_STATE_VTBL,
             device,
             translated,
         ))
@@ -1589,8 +1688,9 @@ fn create_sampler_state_impl(
     let key = CanonicalSamplerKey::from_desc(d);
     match caches.sampler.get_or_create(key, || {
         let translated = translate_sampler_state(d, metal_device)?;
-        Ok(DeviceChildStateObject::new(
+        Ok(DeviceChildStateObject::new_with_d3d10(
             &SAMPLER_STATE_VTBL,
+            &crate::d3d10::SAMPLER_STATE_VTBL,
             device,
             translated,
         ))

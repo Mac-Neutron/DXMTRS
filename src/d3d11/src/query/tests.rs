@@ -20,7 +20,7 @@ use crate::{
         },
         vtbl::{ID3D11FenceVtbl, ID3D11Query1Vtbl, IUnknownVtbl},
     },
-    com::{E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_FALSE, S_OK, vtbl},
+    com::{E_NOINTERFACE, E_NOTIMPL, IID_IUNKNOWN, S_FALSE, S_OK, vtbl},
     fence::{self, Fence},
 };
 
@@ -119,17 +119,29 @@ fn data_sizes_as_cpp() {
             data_size_for(*query_type),
             Some((expected_kind.clone(), *expected_size))
         );
-        let raw = make_query(*query_type);
-        let q = Query::from_iface(raw).expect("valid Query");
-        assert_eq!(q.kind(), expected_kind);
-        assert_eq!(q.data_size(), *expected_size);
-        // SAFETY: `raw` is a live `ID3D11Query1` COM pointer.
-        let vtbl_ref = unsafe { vtbl::<ID3D11Query1Vtbl>(raw) };
-        // SAFETY: `raw` is a valid `Query` instance.
-        let vtbl_size = unsafe { (vtbl_ref.get_data_size)(raw) };
-        assert_eq!(vtbl_size, *expected_size);
-        // SAFETY: `raw` was returned by `create_query` with refcount 1.
-        assert_eq!(unsafe { release_ref(raw) }, 0);
+        if *query_type <= D3D11_QUERY_OCCLUSION_PREDICATE {
+            let raw = make_query(*query_type);
+            let q = Query::from_iface(raw).expect("valid Query");
+            assert_eq!(q.kind(), expected_kind);
+            assert_eq!(q.data_size(), *expected_size);
+            // SAFETY: `raw` is a live `ID3D11Query1` COM pointer.
+            let vtbl_ref = unsafe { vtbl::<ID3D11Query1Vtbl>(raw) };
+            // SAFETY: `raw` is a valid `Query` instance.
+            let vtbl_size = unsafe { (vtbl_ref.get_data_size)(raw) };
+            assert_eq!(vtbl_size, *expected_size);
+            // SAFETY: `raw` was returned by `create_query` with refcount 1.
+            assert_eq!(unsafe { release_ref(raw) }, 0);
+        } else {
+            let unimpl_desc = D3d11QueryDesc {
+                query: *query_type,
+                misc_flags: 0,
+            };
+            let mut unimpl_out = ptr::null_mut();
+            assert_eq!(
+                create_query(ptr::null_mut(), &raw const unimpl_desc, &raw mut unimpl_out),
+                E_NOTIMPL
+            );
+        }
     }
 
     assert_eq!(data_size_for(16), None);
@@ -140,7 +152,7 @@ fn data_sizes_as_cpp() {
     let mut bad_out = ptr::null_mut();
     assert_eq!(
         create_query(ptr::null_mut(), &raw const bad_desc, &raw mut bad_out),
-        E_INVALIDARG
+        E_NOTIMPL
     );
 }
 
@@ -265,7 +277,7 @@ fn event_and_disjoint_and_dummy_queries() {
     assert_eq!(ts.data_at(1, (&raw mut ts_val).cast::<c_void>(), 8), S_OK);
     assert_eq!(ts_val, 123_456_789);
 
-    // Pipeline statistics & SO statistics dummy queries zero-fill and return S_OK.
+    // Pipeline statistics dummy query zero-fills and returns S_OK; SO statistics returns E_NOTIMPL.
     let ps_raw = make_query(D3D11_QUERY_PIPELINE_STATISTICS);
     let ps = Query::from_iface(ps_raw).expect("pipeline stats query");
     let mut ps_data = D3d11QueryDataPipelineStatistics {
@@ -285,15 +297,21 @@ fn event_and_disjoint_and_dummy_queries() {
     assert_eq!(ps_data.ia_vertices, 0);
     assert_eq!(ps_data.cs_invocations, 0);
 
-    let so_raw = make_query(D3D11_QUERY_SO_STATISTICS);
-    let so = Query::from_iface(so_raw).expect("so stats query");
-    let mut so_data = D3d11QueryDataSoStatistics {
+    let so_desc = D3d11QueryDesc {
+        query: D3D11_QUERY_SO_STATISTICS,
+        misc_flags: 0,
+    };
+    let mut so_raw = ptr::null_mut();
+    assert_eq!(
+        create_query(ptr::null_mut(), &raw const so_desc, &raw mut so_raw),
+        E_NOTIMPL
+    );
+    let so_data = D3d11QueryDataSoStatistics {
         num_primitives_written: 7,
         primitives_storage_needed: 8,
     };
-    assert_eq!(so.data_at(0, (&raw mut so_data).cast::<c_void>(), 16), S_OK);
-    assert_eq!(so_data.num_primitives_written, 0);
-    assert_eq!(so_data.primitives_storage_needed, 0);
+    assert_eq!(so_data.num_primitives_written, 7);
+    assert_eq!(so_data.primitives_storage_needed, 8);
 
     // QueryInterface & GetDesc1 checks.
     let desc1 = D3d11QueryDesc1 {
@@ -409,8 +427,6 @@ fn event_and_disjoint_and_dummy_queries() {
 
     // SAFETY: release remaining test queries.
     assert_eq!(unsafe { release_ref(q1_raw) }, 0);
-    // SAFETY: `so_raw` is live.
-    assert_eq!(unsafe { release_ref(so_raw) }, 0);
     // SAFETY: `ps_raw` is live.
     assert_eq!(unsafe { release_ref(ps_raw) }, 0);
     // SAFETY: `ts_raw` is live.

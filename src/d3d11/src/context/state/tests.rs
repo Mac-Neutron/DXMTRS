@@ -127,6 +127,11 @@ static MOCK_VTBL: IUnknownVtbl = IUnknownVtbl {
 };
 
 static CLAMP_VTBL: IMTLMinLODClampableVtbl = IMTLMinLODClampableVtbl {
+    unknown: IUnknownVtbl {
+        query_interface: mock_qi,
+        add_ref: mock_add_ref,
+        release: mock_release,
+    },
     set_min_lod: clamp_set_min_lod,
     get_min_lod: clamp_get_min_lod,
 };

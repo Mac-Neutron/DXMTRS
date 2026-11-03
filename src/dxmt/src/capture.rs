@@ -1,8 +1,51 @@
 //! The Metal frame capture a developer starts with a key or a frame number.
 
+use std::ffi::CString;
+
 use dxmt_util::env;
+use winemetal_sys::{
+    MTLCaptureManager_sharedCaptureManager, MTLCaptureManager_startCapture,
+    MTLCaptureManager_stopCapture, Obj,
+    wire::{MemPtr, WMT_CAPTURE_DESTINATION_GPU_TRACE_DOCUMENT, WMTCaptureInfo},
+};
 
 use crate::log;
+
+/// Starts a Metal GPU trace capture for `device` at `frame`.
+pub fn start_capture(device: &Obj, frame: u64) {
+    let exe = env::exe_base_name();
+    let path = format!("{exe}_F.{frame}.gputrace");
+    log::warn(&format!("A new capture will be saved to {path}"));
+    let Ok(cpath) = CString::new(path) else {
+        return;
+    };
+    #[cfg(target_pointer_width = "64")]
+    let output_url = MemPtr {
+        ptr: cpath.as_ptr().expose_provenance() as u64,
+    };
+    #[cfg(target_pointer_width = "32")]
+    let output_url = MemPtr {
+        ptr: u32::try_from(cpath.as_ptr().expose_provenance()).unwrap_or(0),
+        high: 0,
+    };
+    let mut info = WMTCaptureInfo {
+        capture_object: device.handle(),
+        output_url,
+        destination: WMT_CAPTURE_DESTINATION_GPU_TRACE_DOCUMENT,
+    };
+    // SAFETY: `sharedCaptureManager` returns the process singleton.
+    let mgr = unsafe { MTLCaptureManager_sharedCaptureManager() };
+    // SAFETY: `mgr` is the singleton; `info` and `cpath` outlive `startCapture`.
+    let _ = unsafe { MTLCaptureManager_startCapture(mgr, &raw mut info) };
+}
+
+/// Stops an active Metal GPU trace capture.
+pub fn stop_capture() {
+    // SAFETY: `sharedCaptureManager` returns the process singleton.
+    let mgr = unsafe { MTLCaptureManager_sharedCaptureManager() };
+    // SAFETY: `mgr` is the singleton.
+    unsafe { MTLCaptureManager_stopCapture(mgr) };
+}
 
 /// What the encode thread does about a capture at a frame.
 #[derive(PartialEq, Eq, Debug)]

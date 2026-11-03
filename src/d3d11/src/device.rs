@@ -115,6 +115,10 @@ pub struct DxgiDevice {
 
 impl Drop for DxgiDevice {
     fn drop(&mut self) {
+        if self.local_kmt != 0 {
+            crate::kmt::destroy_device(self.local_kmt);
+            self.local_kmt = 0;
+        }
         if !self.adapter.is_null() {
             // SAFETY: `self.adapter` was retained with `add_ref` on creation.
             unsafe {
@@ -380,6 +384,7 @@ fn create_with_core(
     dev.multithread.init(dxgi_iface, mutex_ptr);
 
     let d3d11_iface = ptr::from_mut(dev).cast::<c_void>();
+    dev.pipeline_cache.set_device(d3d11_iface);
     dev.immediate = Box::into_raw(Context::new_immediate(d3d11_iface));
     dev.d3d10 = Some(d3d10::Device::new(d3d11_iface, dev.immediate.cast()));
     raw
@@ -410,15 +415,17 @@ pub unsafe fn create_d3d11_device(
     let mtl_handle = unsafe { get_mtl(adapter) };
     // SAFETY: Calling `GetLocalD3DKMT` on `adapter`.
     let adapter_kmt = unsafe { get_kmt(adapter) };
+    let local_kmt = crate::kmt::create_device(adapter_kmt);
 
     // Retain the adapter's Metal device handle for `CoreDevice`.
     // SAFETY: `mtl_handle` is a live `WMTDevice` handle owned by `adapter`.
     let Some(mtl_obj) = (unsafe { Obj::retain(mtl_handle) }) else {
+        crate::kmt::destroy_device(local_kmt);
         return E_INVALIDARG;
     };
     let metal_version_opt = CONFIG.get_i32("dxmt.shaderMetalVersion", 0);
     let core = CoreDevice::new(mtl_obj, metal_version_opt);
-    let raw = create_with_core(adapter, adapter_kmt, core, feature_level, flags);
+    let raw = create_with_core(adapter, local_kmt, core, feature_level, flags);
     // SAFETY: `out` was checked non-null above.
     unsafe {
         write_out(out, raw.cast::<c_void>());
@@ -545,9 +552,7 @@ pub unsafe fn container_query_interface(
     }
 
     if qi_log(&IID_IMTL_DXGI_DEVICE, &iid) {
-        LOG.warn(&format!(
-            "D3D11DXGIDevice::QueryInterface: Unknown interface query {iid}"
-        ));
+        LOG.warn(&format!("D3D11Device: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }

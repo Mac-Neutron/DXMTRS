@@ -6,7 +6,11 @@
 
 use core::{ffi::c_void, ptr};
 
-use dxmt_core::encoder::{NO_NEXT, kind};
+use dxmt_core::{
+    deptrack::Access,
+    encoder::{Encoder, NO_NEXT, kind, stage},
+    frame_stats::CompatibilityFlags,
+};
 use winemetal_sys::wire::{
     WMT_INDEX_TYPE_U_INT16, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE,
     WMT_PRIMITIVE_TYPE_LINE_STRIP, WMT_PRIMITIVE_TYPE_POINT, WMT_PRIMITIVE_TYPE_TRIANGLE,
@@ -19,6 +23,21 @@ use super::{Context, Mode};
 
 /// `DXGI_FORMAT_R32_UINT` (`42`).
 const DXGI_FORMAT_R32_UINT: u32 = 42;
+
+/// Converts a D3D11 primitive topology to a Metal `WMTPrimitiveTopologyClass` (`1..=3`).
+pub(super) const fn to_metal_primitive_topology(topology: u32) -> u32 {
+    match topology {
+        1 => 1,
+        2 | 3 | 10 | 11 => 2,
+        4 | 5 | 12 | 13 | 33..=64 => 3,
+        _ => 0,
+    }
+}
+
+/// Returns `true` if `topology` is a line-strip or triangle-strip topology.
+pub(super) const fn is_strip_topology(topology: u32) -> bool {
+    matches!(topology, 3 | 5 | 11 | 13)
+}
 
 /// Converts a D3D11 primitive topology to a Metal `WMTPrimitiveType`.
 const fn to_metal_primitive_type(topology: u32) -> Option<u8> {
@@ -42,18 +61,44 @@ const fn index_type_and_stride(format: u32) -> (u8, u64) {
 }
 
 impl<M: Mode> Context<M> {
+    /// Active pipeline kind (`ORDINARY`, `GEOMETRY`, or `TESSELLATION`) for draw dispatch routing.
+    fn active_draw_pipeline_kind(&self) -> u8 {
+        if self.is_live() {
+            let hs = self.state.shader_stages[super::state::ShaderStage::Hull.index()]
+                .shader
+                .as_ptr();
+            let ds = self.state.shader_stages[super::state::ShaderStage::Domain.index()]
+                .shader
+                .as_ptr();
+            let gs = self.state.shader_stages[super::state::ShaderStage::Geometry.index()]
+                .shader
+                .as_ptr();
+            if !hs.is_null() && !ds.is_null() {
+                kind::TESSELLATION
+            } else if !gs.is_null()
+                && crate::input_layout::StreamOutputLayout::from_iface(gs).is_none()
+            {
+                kind::GEOMETRY
+            } else {
+                kind::ORDINARY
+            }
+        } else {
+            self.encode_snapshot().pipeline_kind
+        }
+    }
+
     /// `ID3D11DeviceContext::Draw` (`d3d11_context_impl.cpp:2287-2315`).
     pub fn draw(&mut self, vertex_count: u32, start_vertex: u32) {
         if vertex_count == 0 {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_full(vertex_count, 1, ptr::null_mut(), 0);
+            self.ts_draw_full_with_args(vertex_count, 1, start_vertex, 0, ptr::null_mut(), 0);
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_full(vertex_count, 1, ptr::null_mut(), 0);
+            self.gs_draw_full_with_args(vertex_count, 1, start_vertex, 0, ptr::null_mut(), 0);
             return;
         }
         if !self.pre_draw() {
@@ -62,6 +107,7 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        let is_live = self.is_live();
         // C++ closure #19 (`Draw`, d3d11_context_impl.cpp:2310):
         // emits `WmtcmdRenderDraw` (`render 19`).
         let cmd = WmtcmdRenderDraw {
@@ -76,6 +122,9 @@ impl<M: Mode> Context<M> {
         };
         self.emit_render_cmd(cmd, move |enc| {
             enc.bump_visibility_result_offset();
+            if is_live {
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+            }
             enc.encode_render_command(cmd);
         });
     }
@@ -85,13 +134,29 @@ impl<M: Mode> Context<M> {
         if index_count == 0 {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_indexed_full(index_count, 1, ptr::null_mut(), 0);
+            self.ts_draw_indexed_full_with_args(
+                index_count,
+                1,
+                start_index,
+                base_vertex,
+                0,
+                ptr::null_mut(),
+                0,
+            );
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_indexed_full(index_count, 1, ptr::null_mut(), 0);
+            self.gs_draw_indexed_full_with_args(
+                index_count,
+                1,
+                start_index,
+                base_vertex,
+                0,
+                ptr::null_mut(),
+                0,
+            );
             return;
         }
         if !self.pre_draw_indexed() {
@@ -100,6 +165,35 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        if self.is_live() {
+            let (index_type, stride) =
+                index_type_and_stride(self.state.input_assembler.index_buffer_format);
+            let start_byte_offset = u64::from(start_index) * stride
+                + u64::from(self.state.input_assembler.index_buffer_offset);
+            let base = WmtcmdRenderDrawIndexed {
+                r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                primitive_type,
+                index_type,
+                index_count: u64::from(index_count),
+                index_buffer: 0,
+                index_buffer_offset: start_byte_offset,
+                instance_count: 1,
+                base_vertex,
+                base_instance: 0,
+            };
+            self.emit_render_cmd(base, move |enc| {
+                let (ib_handle, ib_sub_off) = enc.current_index_buffer().unwrap_or((0, 0));
+                let mut cmd = base;
+                cmd.index_buffer = ib_handle;
+                cmd.index_buffer_offset = start_byte_offset + ib_sub_off;
+                enc.bump_visibility_result_offset();
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+                enc.encode_render_command(cmd);
+            });
+            return;
+        }
         let snap = self.encode_snapshot();
         let (index_type, stride) = index_type_and_stride(snap.index_format);
         let index_sub_offset = u64::from(snap.index_sub_offset);
@@ -137,20 +231,24 @@ impl<M: Mode> Context<M> {
         if vertex_count_per_instance == 0 || instance_count == 0 {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_full(
+            self.ts_draw_full_with_args(
                 vertex_count_per_instance,
                 instance_count,
+                start_vertex,
+                start_instance,
                 ptr::null_mut(),
                 0,
             );
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_full(
+            self.gs_draw_full_with_args(
                 vertex_count_per_instance,
                 instance_count,
+                start_vertex,
+                start_instance,
                 ptr::null_mut(),
                 0,
             );
@@ -162,6 +260,7 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        let is_live = self.is_live();
         // C++ closure #21 (`DrawInstanced`, d3d11_context_impl.cpp:2377):
         // emits `WmtcmdRenderDraw` (`render 19`).
         let cmd = WmtcmdRenderDraw {
@@ -176,6 +275,9 @@ impl<M: Mode> Context<M> {
         };
         self.emit_render_cmd(cmd, move |enc| {
             enc.bump_visibility_result_offset();
+            if is_live {
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+            }
             enc.encode_render_command(cmd);
         });
     }
@@ -192,13 +294,29 @@ impl<M: Mode> Context<M> {
         if index_count_per_instance == 0 || instance_count == 0 {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_indexed_full(index_count_per_instance, instance_count, ptr::null_mut(), 0);
+            self.ts_draw_indexed_full_with_args(
+                index_count_per_instance,
+                instance_count,
+                start_index,
+                base_vertex,
+                start_instance,
+                ptr::null_mut(),
+                0,
+            );
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_indexed_full(index_count_per_instance, instance_count, ptr::null_mut(), 0);
+            self.gs_draw_indexed_full_with_args(
+                index_count_per_instance,
+                instance_count,
+                start_index,
+                base_vertex,
+                start_instance,
+                ptr::null_mut(),
+                0,
+            );
             return;
         }
         if !self.pre_draw_indexed() {
@@ -207,6 +325,35 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        if self.is_live() {
+            let (index_type, stride) =
+                index_type_and_stride(self.state.input_assembler.index_buffer_format);
+            let start_byte_offset = u64::from(start_index) * stride
+                + u64::from(self.state.input_assembler.index_buffer_offset);
+            let base = WmtcmdRenderDrawIndexed {
+                r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                primitive_type,
+                index_type,
+                index_count: u64::from(index_count_per_instance),
+                index_buffer: 0,
+                index_buffer_offset: start_byte_offset,
+                instance_count,
+                base_vertex,
+                base_instance: start_instance,
+            };
+            self.emit_render_cmd(base, move |enc| {
+                let (ib_handle, ib_sub_off) = enc.current_index_buffer().unwrap_or((0, 0));
+                let mut cmd = base;
+                cmd.index_buffer = ib_handle;
+                cmd.index_buffer_offset = start_byte_offset + ib_sub_off;
+                enc.bump_visibility_result_offset();
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+                enc.encode_render_command(cmd);
+            });
+            return;
+        }
         let snap = self.encode_snapshot();
         let (index_type, stride) = index_type_and_stride(snap.index_format);
         let index_sub_offset = u64::from(snap.index_sub_offset);
@@ -235,6 +382,9 @@ impl<M: Mode> Context<M> {
 
     /// `ID3D11DeviceContext::DrawAuto` (`d3d11_context_impl.cpp:2515-2517`).
     pub fn draw_auto(&mut self) {
+        M::emit_st(self, |enc| {
+            enc.set_compatibility_flag(CompatibilityFlags::UNSUPPORTED_DRAW_AUTO);
+        });
         crate::LOG.err("DrawAuto: not implemented.");
     }
 
@@ -247,13 +397,13 @@ impl<M: Mode> Context<M> {
         if buffer_for_args.is_null() {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_full(0, 0, buffer_for_args, aligned_byte_offset_for_args);
+            self.ts_draw_full_with_args(0, 0, 0, 0, buffer_for_args, aligned_byte_offset_for_args);
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_full(0, 0, buffer_for_args, aligned_byte_offset_for_args);
+            self.gs_draw_full_with_args(0, 0, 0, 0, buffer_for_args, aligned_byte_offset_for_args);
             return;
         }
         if !self.pre_draw() {
@@ -262,6 +412,35 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        if self.is_live() {
+            let Some(arg_buf) =
+                crate::resource::common(buffer_for_args).and_then(|c| c.buffer.clone())
+            else {
+                return;
+            };
+            let base = WmtcmdRenderDrawIndirect {
+                r#type: WMT_RENDER_COMMAND_DRAW_INDIRECT,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                primitive_type,
+                indirect_args_buffer: 0,
+                indirect_args_offset: u64::from(aligned_byte_offset_for_args),
+            };
+            self.emit_render_cmd(base, move |enc| {
+                let Some((alloc, sub_off)) =
+                    enc.access_buffer::<{ stage::VERTEX }>(&arg_buf, Access::READ)
+                else {
+                    return;
+                };
+                let mut cmd = base;
+                cmd.indirect_args_buffer = alloc.buffer();
+                cmd.indirect_args_offset = u64::from(aligned_byte_offset_for_args) + sub_off;
+                enc.bump_visibility_result_offset();
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+                enc.encode_render_command(cmd);
+            });
+            return;
+        }
         let Some((indirect_args_buffer, sub_off)) = Self::resolve_indirect_buffer(buffer_for_args)
         else {
             return;
@@ -293,13 +472,29 @@ impl<M: Mode> Context<M> {
         if buffer_for_args.is_null() {
             return;
         }
-        let pipeline_kind = self.encode_snapshot().pipeline_kind;
+        let pipeline_kind = self.active_draw_pipeline_kind();
         if pipeline_kind == kind::TESSELLATION {
-            self.ts_draw_indexed_full(0, 0, buffer_for_args, aligned_byte_offset_for_args);
+            self.ts_draw_indexed_full_with_args(
+                0,
+                0,
+                0,
+                0,
+                0,
+                buffer_for_args,
+                aligned_byte_offset_for_args,
+            );
             return;
         }
         if pipeline_kind == kind::GEOMETRY {
-            self.gs_draw_indexed_full(0, 0, buffer_for_args, aligned_byte_offset_for_args);
+            self.gs_draw_indexed_full_with_args(
+                0,
+                0,
+                0,
+                0,
+                0,
+                buffer_for_args,
+                aligned_byte_offset_for_args,
+            );
             return;
         }
         if !self.pre_draw_indexed() {
@@ -308,6 +503,44 @@ impl<M: Mode> Context<M> {
         let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
             return;
         };
+        if self.is_live() {
+            let Some(arg_buf) =
+                crate::resource::common(buffer_for_args).and_then(|c| c.buffer.clone())
+            else {
+                return;
+            };
+            let (index_type, _) =
+                index_type_and_stride(self.state.input_assembler.index_buffer_format);
+            let ib_offset = u64::from(self.state.input_assembler.index_buffer_offset);
+            let base = WmtcmdRenderDrawIndexedIndirect {
+                r#type: WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                primitive_type,
+                index_type,
+                index_buffer: 0,
+                index_buffer_offset: ib_offset,
+                indirect_args_buffer: 0,
+                indirect_args_offset: u64::from(aligned_byte_offset_for_args),
+            };
+            self.emit_render_cmd(base, move |enc| {
+                let Some((alloc, sub_off)) =
+                    enc.access_buffer::<{ stage::VERTEX }>(&arg_buf, Access::READ)
+                else {
+                    return;
+                };
+                let (ib_handle, ib_sub_off) = enc.current_index_buffer().unwrap_or((0, 0));
+                let mut cmd = base;
+                cmd.index_buffer = ib_handle;
+                cmd.index_buffer_offset = ib_offset + ib_sub_off;
+                cmd.indirect_args_buffer = alloc.buffer();
+                cmd.indirect_args_offset = u64::from(aligned_byte_offset_for_args) + sub_off;
+                enc.bump_visibility_result_offset();
+                enc.resolve_render_pass_barrier(Encoder::dispatch_tile_barrier);
+                enc.encode_render_command(cmd);
+            });
+            return;
+        }
         let Some((indirect_args_buffer, sub_off)) = Self::resolve_indirect_buffer(buffer_for_args)
         else {
             return;

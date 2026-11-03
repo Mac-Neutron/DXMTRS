@@ -1,33 +1,74 @@
 //! D3D11 shader objects (`d3d11_shader.{hpp,cpp}`).
 
-use core::{ffi::c_void, mem::MaybeUninit, ptr};
-use std::sync::{Arc, Mutex};
+use core::{ffi::c_void, fmt::Write as _, mem::MaybeUninit, ptr};
+use std::{
+    ffi::CString,
+    sync::{Arc, Mutex},
+};
 
 use dxmt_util::{private_data::PrivateData, sha1::Sha1};
 use rustc_hash::FxHashMap;
-use winemetal_sys::sm50::{
-    MtlShaderReflection, MtlSm50ShaderArgument, SM50Destroy, SM50FreeError, SM50GetArgumentsInfo,
-    SM50Initialize, error_message,
+use winemetal_sys::{
+    DispatchData_alloc_init, MTLDevice_newLibrary, MTLLibrary_newFunction, Obj,
+    sm50::{
+        AIRCONV_VERSION, MtlShaderReflection, SM50Compile, SM50CompileGeometryPipelineGeometry,
+        SM50CompileGeometryPipelineVertex, SM50CompileTessellationPipelineDomain,
+        SM50CompileTessellationPipelineHull, SM50Destroy, SM50DestroyBitcode, SM50FreeError,
+        SM50GetArgumentsInfo, SM50GetCompiledBitcode, SM50Initialize, Sm50CompiledBitcode,
+        error_message,
+    },
+    wire::MtlSm50ShaderArgument,
 };
 
 use crate::{
     LOG,
     abi::{
-        IID_ID3D11_COMPUTE_SHADER, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_DOMAIN_SHADER,
-        IID_ID3D11_GEOMETRY_SHADER, IID_ID3D11_HULL_SHADER, IID_ID3D11_PIXEL_SHADER,
-        IID_ID3D11_VERTEX_SHADER, IID_IUNKNOWN,
+        IID_ID3D10_DEVICE_CHILD, IID_ID3D10_GEOMETRY_SHADER, IID_ID3D10_PIXEL_SHADER,
+        IID_ID3D10_VERTEX_SHADER, IID_ID3D11_COMPUTE_SHADER, IID_ID3D11_DEVICE_CHILD,
+        IID_ID3D11_DOMAIN_SHADER, IID_ID3D11_GEOMETRY_SHADER, IID_ID3D11_HULL_SHADER,
+        IID_ID3D11_PIXEL_SHADER, IID_ID3D11_VERTEX_SHADER, IID_IUNKNOWN,
         vtbl::{
             ID3D11ComputeShaderVtbl, ID3D11DomainShaderVtbl, ID3D11GeometryShaderVtbl,
             ID3D11HullShaderVtbl, ID3D11PixelShaderVtbl, ID3D11VertexShaderVtbl,
         },
     },
-    com::{E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, Managed, S_FALSE, S_OK, add_ref},
+    com::{
+        E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, Managed, S_FALSE, S_OK,
+        add_ref,
+    },
+    d3d10,
     device::Device,
     input_layout::StreamOutputLayout,
-    shader::args::ShaderVariant,
+    shader::args::{
+        CompileArgsChain, FLAGS, IaLayoutChainInput, ShaderVariant, SoLayoutChainInput,
+    },
 };
 
 pub mod args;
+
+/// `IID_IMTLD3D11Shader` (`d3d11_shader.hpp:78`): `e95ba1c7-e43f-49c3-a907-4ac669c9fb42`.
+pub const IID_IMTL_D3D11_SHADER: Guid = Guid::new(
+    0xe95b_a1c7,
+    0xe43f,
+    0x49c3,
+    [0xa9, 0x07, 0x4a, 0xc6, 0x69, 0xc9, 0xfb, 0x42],
+);
+
+/// Returns the 64-bit FNV-1a shader cache table version (`ShaderCacheVersion`).
+#[must_use]
+pub const fn shader_cache_version() -> u64 {
+    let key = if env!("DXMT_TRANSLATOR_KEY").is_empty() {
+        env!("DXMT_VERSION")
+    } else {
+        env!("DXMT_TRANSLATOR_KEY")
+    };
+    dxmt_core::shader_cache::version(key, AIRCONV_VERSION)
+}
+
+struct CompiledVariantEntry {
+    handle: u64,
+    _obj: Option<Obj>,
+}
 
 /// Deduplicated shader representation owned by [`crate::pipeline::PipelineCache`] (`dxmt::Shader`).
 pub struct ManagedShader {
@@ -37,7 +78,7 @@ pub struct ManagedShader {
     pub constant_buffers: Vec<MtlSm50ShaderArgument>,
     pub arguments: Vec<MtlSm50ShaderArgument>,
     pub bytecode: Vec<u8>,
-    variants: Mutex<FxHashMap<ShaderVariant, u64>>,
+    variants: Mutex<FxHashMap<ShaderVariant, CompiledVariantEntry>>,
 }
 
 impl Drop for ManagedShader {
@@ -81,20 +122,21 @@ impl ManagedShader {
                 // SAFETY: `err` is freed once here.
                 unsafe { SM50FreeError(err) };
             }
-            return Err(E_INVALIDARG);
+            return Err(E_FAIL);
         }
         // SAFETY: `SM50Initialize` succeeded and initialized `reflection`.
         let reflection = unsafe { reflection.assume_init() };
         let cb_len = reflection.num_constant_buffers as usize;
         let arg_len = reflection.num_arguments as usize;
-        let zero_arg = MtlSm50ShaderArgument {
+        let make_zero = || MtlSm50ShaderArgument {
             r#type: 0,
             sm50_binding_slot: 0,
             flags: 0,
             structure_ptr_offset: 0,
         };
-        let mut constant_buffers = vec![zero_arg; cb_len];
-        let mut arguments = vec![zero_arg; arg_len];
+        let mut constant_buffers: Vec<MtlSm50ShaderArgument> =
+            (0..cb_len).map(|_| make_zero()).collect();
+        let mut arguments: Vec<MtlSm50ShaderArgument> = (0..arg_len).map(|_| make_zero()).collect();
         if handle != 0 {
             // SAFETY: `handle` is live and both slices are sized to `reflection.num_*`.
             unsafe {
@@ -103,12 +145,12 @@ impl ManagedShader {
                     if cb_len == 0 {
                         ptr::null_mut()
                     } else {
-                        constant_buffers.as_mut_ptr()
+                        constant_buffers.as_mut_ptr().cast()
                     },
                     if arg_len == 0 {
                         ptr::null_mut()
                     } else {
-                        arguments.as_mut_ptr()
+                        arguments.as_mut_ptr().cast()
                     },
                 );
             }
@@ -147,11 +189,251 @@ impl ManagedShader {
             .variants
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(&h) = map.get(&variant) {
-            return h;
+        if let Some(entry) = map.get(&variant) {
+            return entry.handle;
         }
         let h = create();
-        map.insert(variant, h);
+        map.insert(
+            variant,
+            CompiledVariantEntry {
+                handle: h,
+                _obj: None,
+            },
+        );
+        h
+    }
+
+    /// Dumps raw DXBC bytecode when `debug_assertions` is enabled (`CachedSM50Shader::dump`).
+    pub fn dump(&self) {
+        if cfg!(debug_assertions) && !self.bytecode.is_empty() {
+            let mut hex = String::with_capacity(40);
+            for &b in &self.sha1 {
+                let _ = write!(hex, "{b:02x}");
+            }
+            let path = format!("shader_dump_{hex}.cso");
+            let _ = std::fs::write(&path, &self.bytecode);
+            LOG.warn(&format!("shader dumped to ./{path}"));
+        }
+    }
+
+    /// Compiles (or loads from [`dxmt_core::shader_cache`]) a Metal function for `variant`.
+    #[must_use]
+    pub fn compile_variant(
+        &self,
+        dev: &Device,
+        variant: &ShaderVariant,
+        ia_input: Option<IaLayoutChainInput<'_>>,
+        so_input: Option<SoLayoutChainInput<'_>>,
+        companion: Option<&Self>,
+    ) -> u64 {
+        {
+            let map = self
+                .variants
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(entry) = map.get(variant) {
+                return entry.handle;
+            }
+        }
+
+        let flags = *FLAGS;
+        let metal_version = dev.core().metal_version();
+        let (variant_digest, func_name) = variant.digest_and_name(&self.sha1, flags);
+        let c_func_name = CString::new(func_name.as_str()).unwrap_or_default();
+        let mut cache_key = [0u8; 40];
+        cache_key[..20].copy_from_slice(&self.sha1);
+        cache_key[20..].copy_from_slice(&variant_digest);
+
+        let mtl_dev = dev.core().device().handle();
+        let scache = dxmt_core::shader_cache::instance(metal_version, shader_cache_version());
+
+        if let Some(lib_data) = scache.read(&cache_key) {
+            let mut err_raw = 0u64;
+            // SAFETY: `mtl_dev` and `lib_data` are live handles; `err_raw` is writable.
+            let lib_raw =
+                unsafe { MTLDevice_newLibrary(mtl_dev, lib_data.handle(), &raw mut err_raw) };
+            // SAFETY: adopts returned references from `MTLDevice_newLibrary`.
+            let err_obj = unsafe { Obj::adopt(err_raw) };
+            // SAFETY: adopts returned library reference.
+            let lib_obj = unsafe { Obj::adopt(lib_raw) };
+            if err_obj.is_none()
+                && let Some(lib) = lib_obj
+            {
+                // SAFETY: `lib` is live and `c_func_name` is NUL-terminated.
+                let fn_raw = unsafe { MTLLibrary_newFunction(lib.handle(), c_func_name.as_ptr()) };
+                // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
+                if let Some(fn_obj) = unsafe { Obj::adopt(fn_raw) } {
+                    let h = fn_obj.handle();
+                    self.variants
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(
+                            variant.clone(),
+                            CompiledVariantEntry {
+                                handle: h,
+                                _obj: Some(fn_obj),
+                            },
+                        );
+                    return h;
+                }
+                LOG.err(&format!(
+                    "Failed to create MTLFunction from cache: {func_name}"
+                ));
+            } else {
+                LOG.err("Failed to create MTLLibrary from cache");
+            }
+        }
+
+        if self.handle == 0 {
+            return 0;
+        }
+
+        let chain = CompileArgsChain::build_with_version(
+            variant,
+            &self.sha1,
+            metal_version,
+            flags,
+            ia_input,
+            so_input,
+        );
+        let mut compile_result = 0u64;
+        let mut sm50_err = 0u64;
+        let companion_handle = companion.map_or(0, |s| s.handle);
+        let status = match *variant {
+            ShaderVariant::Default
+            | ShaderVariant::Vertex { .. }
+            | ShaderVariant::Pixel { .. }
+            | ShaderVariant::VertexStreamOutput { .. } => {
+                // SAFETY: `self.handle` and `chain` are valid for `SM50Compile`.
+                unsafe {
+                    SM50Compile(
+                        self.handle,
+                        chain.head_ptr(),
+                        chain.func_name_cstr(),
+                        &raw mut compile_result,
+                        &raw mut sm50_err,
+                    )
+                }
+            }
+            ShaderVariant::TessellationVertexHull { .. } => {
+                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
+                unsafe {
+                    SM50CompileTessellationPipelineHull(
+                        companion_handle,
+                        self.handle,
+                        chain.head_ptr(),
+                        chain.func_name_cstr(),
+                        &raw mut compile_result,
+                        &raw mut sm50_err,
+                    )
+                }
+            }
+            ShaderVariant::TessellationDomain { .. } => {
+                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
+                unsafe {
+                    SM50CompileTessellationPipelineDomain(
+                        companion_handle,
+                        self.handle,
+                        chain.head_ptr(),
+                        chain.func_name_cstr(),
+                        &raw mut compile_result,
+                        &raw mut sm50_err,
+                    )
+                }
+            }
+            ShaderVariant::GeometryVertex { .. } => {
+                // SAFETY: `self.handle`, `companion_handle`, and `chain` are valid.
+                unsafe {
+                    SM50CompileGeometryPipelineVertex(
+                        self.handle,
+                        companion_handle,
+                        chain.head_ptr(),
+                        chain.func_name_cstr(),
+                        &raw mut compile_result,
+                        &raw mut sm50_err,
+                    )
+                }
+            }
+            ShaderVariant::Geometry { .. } => {
+                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
+                unsafe {
+                    SM50CompileGeometryPipelineGeometry(
+                        companion_handle,
+                        self.handle,
+                        chain.head_ptr(),
+                        chain.func_name_cstr(),
+                        &raw mut compile_result,
+                        &raw mut sm50_err,
+                    )
+                }
+            }
+        };
+
+        if status != 0 || compile_result == 0 {
+            if sm50_err != 0 {
+                // SAFETY: `sm50_err` was returned by `SM50Compile*`.
+                let msg = unsafe { error_message(sm50_err) };
+                LOG.err(&format!("Failed to compile shader: {msg}"));
+                // SAFETY: freed once here.
+                unsafe { SM50FreeError(sm50_err) };
+            }
+            return 0;
+        }
+
+        let mut bitcode = Sm50CompiledBitcode { data: 0, size: 0 };
+        // SAFETY: `compile_result` is a valid bitcode handle.
+        unsafe { SM50GetCompiledBitcode(compile_result, &raw mut bitcode) };
+        // SAFETY: `bitcode.data` is valid for `bitcode.size` bytes while `compile_result` is alive.
+        let lib_data_raw = unsafe { DispatchData_alloc_init(bitcode.data, bitcode.size) };
+        // SAFETY: adopts +1 reference from `DispatchData_alloc_init`.
+        let lib_data = unsafe { Obj::adopt(lib_data_raw) };
+
+        let mut err_raw = 0u64;
+        // SAFETY: `mtl_dev` and `lib_data_raw` are valid handles.
+        let lib_raw = unsafe { MTLDevice_newLibrary(mtl_dev, lib_data_raw, &raw mut err_raw) };
+        // SAFETY: adopts returned error reference if non-zero.
+        let err_obj = unsafe { Obj::adopt(err_raw) };
+        // SAFETY: adopts returned library reference if non-zero.
+        let lib_obj = unsafe { Obj::adopt(lib_raw) };
+
+        if err_obj.is_some() || lib_obj.is_none() {
+            LOG.err("Failed to create MTLLibrary");
+            self.dump();
+            // SAFETY: `compile_result` is destroyed once here.
+            unsafe { SM50DestroyBitcode(compile_result) };
+            return 0;
+        }
+
+        if let Some(ref ld) = lib_data {
+            scache.write(&cache_key, ld);
+        }
+        // SAFETY: `compile_result` is destroyed once here.
+        unsafe { SM50DestroyBitcode(compile_result) };
+
+        let Some(lib) = lib_obj else {
+            return 0;
+        };
+        // SAFETY: `lib` is live and `chain.func_name_cstr()` is NUL-terminated.
+        let fn_raw = unsafe { MTLLibrary_newFunction(lib.handle(), chain.func_name_cstr()) };
+        // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
+        let Some(fn_obj) = (unsafe { Obj::adopt(fn_raw) }) else {
+            LOG.err(&format!("Failed to create MTLFunction: {func_name}"));
+            self.dump();
+            return 0;
+        };
+
+        let h = fn_obj.handle();
+        let mut map = self
+            .variants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.insert(
+            variant.clone(),
+            CompiledVariantEntry {
+                handle: h,
+                _obj: Some(fn_obj),
+            },
+        );
         h
     }
 }
@@ -169,6 +451,7 @@ pub struct ShaderObject<V: 'static> {
     pub refs: Managed,
     pub device: *mut c_void,
     pub private_data: PrivateData,
+    pub d3d10: d3d10::Wrapper<u8>,
     pub inner: Shader,
 }
 
@@ -177,6 +460,17 @@ impl Shader {
     #[must_use]
     pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
         if iface.is_null() {
+            return None;
+        }
+        // SAFETY: `iface` is a non-null COM interface pointer.
+        let vtbl = unsafe { *iface.cast::<*const c_void>() };
+        if !ptr::eq(vtbl, (&raw const VS_VTBL).cast())
+            && !ptr::eq(vtbl, (&raw const PS_VTBL).cast())
+            && !ptr::eq(vtbl, (&raw const GS_VTBL).cast())
+            && !ptr::eq(vtbl, (&raw const HS_VTBL).cast())
+            && !ptr::eq(vtbl, (&raw const DS_VTBL).cast())
+            && !ptr::eq(vtbl, (&raw const CS_VTBL).cast())
+        {
             return None;
         }
         let obj = iface.cast::<ShaderObject<ID3D11VertexShaderVtbl>>();
@@ -273,7 +567,7 @@ unsafe extern "system-unwind" fn shader_set_private_data_interface<V: 'static>(
 }
 
 macro_rules! define_shader_vtbl {
-    ($vtbl_static:ident, $VtblTy:ident, $qi_fn:ident, $iid:ident) => {
+    ($vtbl_static:ident, $VtblTy:ident, $qi_fn:ident, $iid:ident $(, $d3d10_iid:ident)?) => {
         unsafe extern "system-unwind" fn $qi_fn(
             this: *mut c_void,
             riid: *const c_void,
@@ -288,12 +582,32 @@ macro_rules! define_shader_vtbl {
             let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
                 return E_INVALIDARG;
             };
-            if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == $iid {
+            if iid == IID_IUNKNOWN
+                || iid == IID_ID3D11_DEVICE_CHILD
+                || iid == $iid
+                || iid == IID_IMTL_D3D11_SHADER
+            {
                 // SAFETY: `this` is a valid `ShaderObject`.
                 unsafe { shader_add_ref::<$VtblTy>(this) };
                 // SAFETY: `out` is non-null.
                 unsafe { *out = this };
                 return S_OK;
+            }
+            $(
+                if iid == IID_ID3D10_DEVICE_CHILD || iid == $d3d10_iid {
+                    let obj = this.cast::<ShaderObject<$VtblTy>>();
+                    // SAFETY: `this` is a valid `ShaderObject`.
+                    unsafe { shader_add_ref::<$VtblTy>(this) };
+                    // SAFETY: `out` is non-null and `d3d10` is an embedded wrapper.
+                    unsafe { *out = (&raw mut (*obj).d3d10).cast::<c_void>() };
+                    return S_OK;
+                }
+            )?
+            if iid == crate::input_layout::IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT {
+                return E_NOINTERFACE;
+            }
+            if crate::com::qi_log(&$iid, &iid) {
+                LOG.warn(&format!("D3D11Shader: Unknown interface query {iid}"));
             }
             E_NOINTERFACE
         }
@@ -314,19 +628,22 @@ define_shader_vtbl!(
     VS_VTBL,
     ID3D11VertexShaderVtbl,
     vs_qi,
-    IID_ID3D11_VERTEX_SHADER
+    IID_ID3D11_VERTEX_SHADER,
+    IID_ID3D10_VERTEX_SHADER
 );
 define_shader_vtbl!(
     PS_VTBL,
     ID3D11PixelShaderVtbl,
     ps_qi,
-    IID_ID3D11_PIXEL_SHADER
+    IID_ID3D11_PIXEL_SHADER,
+    IID_ID3D10_PIXEL_SHADER
 );
 define_shader_vtbl!(
     GS_VTBL,
     ID3D11GeometryShaderVtbl,
     gs_qi,
-    IID_ID3D11_GEOMETRY_SHADER
+    IID_ID3D11_GEOMETRY_SHADER,
+    IID_ID3D10_GEOMETRY_SHADER
 );
 define_shader_vtbl!(HS_VTBL, ID3D11HullShaderVtbl, hs_qi, IID_ID3D11_HULL_SHADER);
 define_shader_vtbl!(
@@ -342,26 +659,38 @@ define_shader_vtbl!(
     IID_ID3D11_COMPUTE_SHADER
 );
 
+static DUMMY_D3D10_VTBL: u8 = 0;
+
 fn allocate_shader_object<V: 'static>(
     vtbl: &'static V,
+    d3d10_vtbl: &'static u8,
     device: *mut c_void,
     managed: Arc<ManagedShader>,
     so_layout: Option<StreamOutputLayout>,
 ) -> *mut c_void {
+    let imm_ctx =
+        Device::from_iface(device).map_or(ptr::null_mut(), |d| d.immediate().cast::<c_void>());
     let boxed = Box::new(ShaderObject {
         vtbl,
         refs: Managed::new(),
         device,
         private_data: PrivateData::default(),
+        d3d10: d3d10::Wrapper::new(d3d10_vtbl, ptr::null_mut(), imm_ctx),
         inner: Shader { managed, so_layout },
     });
     // SAFETY: `device` is null or a live COM device pointer.
     unsafe { boxed.refs.add_ref(device) };
-    Box::into_raw(boxed).cast()
+    let raw = Box::into_raw(boxed);
+    // SAFETY: `raw` is a valid heap allocation; point `d3d10.d3d11` at its D3D11 interface.
+    unsafe {
+        (*raw).d3d10.d3d11 = raw.cast::<c_void>();
+    }
+    raw.cast()
 }
 
 fn create_shader_common<V: 'static>(
     vtbl: &'static V,
+    d3d10_vtbl: &'static u8,
     device: *mut c_void,
     bytecode: *const c_void,
     length: usize,
@@ -394,7 +723,7 @@ fn create_shader_common<V: 'static>(
     if out.is_null() {
         return S_FALSE;
     }
-    let iface = allocate_shader_object(vtbl, device, managed, None);
+    let iface = allocate_shader_object(vtbl, d3d10_vtbl, device, managed, None);
     // SAFETY: `out` is non-null.
     unsafe { *out = iface };
     S_OK
@@ -408,7 +737,18 @@ pub fn create_vertex_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&VS_VTBL, device, bytecode, length, class_linkage, out)
+    let d3d10_vtbl =
+        // SAFETY: `VERTEX_SHADER_VTBL` is a static vtable.
+        unsafe { &*(&raw const d3d10::VERTEX_SHADER_VTBL).cast::<u8>() };
+    create_shader_common(
+        &VS_VTBL,
+        d3d10_vtbl,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }
 
 /// `ID3D11Device::CreatePixelShader` (`d3d11_device.cpp`).
@@ -419,7 +759,18 @@ pub fn create_pixel_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&PS_VTBL, device, bytecode, length, class_linkage, out)
+    let d3d10_vtbl =
+        // SAFETY: `PIXEL_SHADER_VTBL` is a static vtable.
+        unsafe { &*(&raw const d3d10::PIXEL_SHADER_VTBL).cast::<u8>() };
+    create_shader_common(
+        &PS_VTBL,
+        d3d10_vtbl,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }
 
 /// `ID3D11Device::CreateGeometryShader` (`d3d11_device.cpp`).
@@ -430,7 +781,18 @@ pub fn create_geometry_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&GS_VTBL, device, bytecode, length, class_linkage, out)
+    let d3d10_vtbl =
+        // SAFETY: `GEOMETRY_SHADER_VTBL` is a static vtable.
+        unsafe { &*(&raw const d3d10::GEOMETRY_SHADER_VTBL).cast::<u8>() };
+    create_shader_common(
+        &GS_VTBL,
+        d3d10_vtbl,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }
 
 /// `ID3D11Device::CreateHullShader` (`d3d11_device.cpp`).
@@ -441,7 +803,15 @@ pub fn create_hull_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&HS_VTBL, device, bytecode, length, class_linkage, out)
+    create_shader_common(
+        &HS_VTBL,
+        &DUMMY_D3D10_VTBL,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }
 
 /// `ID3D11Device::CreateDomainShader` (`d3d11_device.cpp`).
@@ -452,7 +822,15 @@ pub fn create_domain_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&DS_VTBL, device, bytecode, length, class_linkage, out)
+    create_shader_common(
+        &DS_VTBL,
+        &DUMMY_D3D10_VTBL,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }
 
 /// `ID3D11Device::CreateComputeShader` (`d3d11_device.cpp`).
@@ -463,5 +841,13 @@ pub fn create_compute_shader(
     class_linkage: *mut c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    create_shader_common(&CS_VTBL, device, bytecode, length, class_linkage, out)
+    create_shader_common(
+        &CS_VTBL,
+        &DUMMY_D3D10_VTBL,
+        device,
+        bytecode,
+        length,
+        class_linkage,
+        out,
+    )
 }

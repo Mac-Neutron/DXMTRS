@@ -9,21 +9,26 @@ use core::{
     ffi::c_void,
     fmt,
     ptr::{self, NonNull},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use dxmt_core::{
     arena::{BlockPool, Commands},
-    encoder::{Encoder, NO_NEXT, Record, kind},
+    deptrack::Access,
+    encoder::{Encoder, NO_NEXT, Record, kind, stage},
+    resource::{Texture, TextureViewKey},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     MemPtr, WMT_BLIT_COMMAND_NOP, WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_PSO,
-    WMT_RENDER_COMMAND_NOP, WMT_RENDER_COMMAND_SET_PSO, WMTScissorRect, WMTSize, WMTViewport,
+    WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_INVALID, WMT_RENDER_COMMAND_NOP,
+    WMT_RENDER_COMMAND_SET_PSO, WMT_STORE_ACTION_STORE, WMTScissorRect, WMTSize, WMTViewport,
     WmtcmdBase, WmtcmdComputeSetpso, WmtcmdRenderSetpso,
 };
 
 use super::{Context, Mode, state::DirtyFlags};
+use crate::view::Dsv;
 
 /// Record alignment in the chunk arena (`RECORD_ALIGN`).
 const RECORD_ALIGN: usize = 16;
@@ -164,6 +169,8 @@ pub(super) struct EncodeSnapshot {
     pub index_format: u32,
     pub index_sub_offset: u32,
     pub stage_dirty_masks: [u32; 6],
+    pub render_argbuf_size: Option<Arc<AtomicU64>>,
+    pub compute_argbuf_size: Option<Arc<AtomicU64>>,
 }
 
 impl Clone for EncodeSnapshot {
@@ -197,6 +204,8 @@ impl Clone for EncodeSnapshot {
             index_format: self.index_format,
             index_sub_offset: self.index_sub_offset,
             stage_dirty_masks: self.stage_dirty_masks,
+            render_argbuf_size: self.render_argbuf_size.clone(),
+            compute_argbuf_size: self.compute_argbuf_size.clone(),
         }
     }
 }
@@ -236,6 +245,8 @@ impl Default for EncodeSnapshot {
             index_format: 57,
             index_sub_offset: 0,
             stage_dirty_masks: [0; 6],
+            render_argbuf_size: None,
+            compute_argbuf_size: None,
         }
     }
 }
@@ -350,6 +361,12 @@ pub(super) fn slice_mem_ptr<T>(ptr: NonNull<T>) -> MemPtr {
 }
 
 impl<M: Mode> Context<M> {
+    /// Active command queue sequence number if immediate, or `0` if deferred.
+    pub(super) fn active_seq_any(&mut self) -> u64 {
+        self.as_immediate_mut()
+            .map_or(0, super::Context::<super::Immediate>::active_seq)
+    }
+
     /// Returns a clone of the current encoding state snapshot.
     pub(super) fn encode_snapshot(&self) -> EncodeSnapshot {
         with_session(self, |s| s.snap.clone())
@@ -378,38 +395,139 @@ impl<M: Mode> Context<M> {
         })
     }
 
-    /// Records a render command into the active pass and emits its [`Encoder`] closure.
-    pub(super) fn emit_render_cmd<T, F>(&self, cmd: T, encode_fn: F)
-    where
-        T: Record + Copy + Send + 'static,
-        F: Fn(&mut Encoder) + Send + 'static,
-    {
-        with_session(self, |s| {
-            s.append_record(cmd);
-            s.commands.emit(encode_fn);
+    /// Pre-allocates space in the active pass argument buffer (`PreAllocateArgumentBuffer`).
+    pub(super) fn pre_allocate_argument_buffer(
+        &self,
+        is_compute: bool,
+        size: u64,
+        alignment: u64,
+    ) -> u64 {
+        let cell = with_session(self, |s| {
+            if is_compute {
+                s.snap.compute_argbuf_size.clone()
+            } else {
+                s.snap.render_argbuf_size.clone()
+            }
         });
+        let Some(counter) = cell else {
+            return 0;
+        };
+        let cur = counter.load(Ordering::Relaxed);
+        let align = alignment.max(1);
+        let aligned = (cur + align - 1) & !(align - 1);
+        counter.store(aligned + size, Ordering::Relaxed);
+        aligned
     }
 
-    /// Records a compute command into the active pass and emits its [`Encoder`] closure.
-    pub(super) fn emit_compute_cmd<T, F>(&self, cmd: T, encode_fn: F)
+    /// Invalidates a ready render pipeline to `RenderEncoderActive` (`InvalidateRenderPipeline`).
+    pub(super) fn invalidate_render_pipeline(&mut self) {
+        if self.cmdbuf_state == CommandBufferState::RenderPipelineReady {
+            self.cmdbuf_state = CommandBufferState::RenderEncoderActive;
+        }
+    }
+
+    /// Invalidates a ready compute pipeline (`InvalidateComputePipeline`).
+    pub(super) fn invalidate_compute_pipeline(&mut self) {
+        if self.cmdbuf_state == CommandBufferState::ComputePipelineReady {
+            self.cmdbuf_state = CommandBufferState::ComputeEncoderActive;
+        }
+    }
+
+    /// Records a render state command into the active pass and emits `encode_fn` via `emit_st`.
+    pub(super) fn emit_render_state_cmd<T, F>(&mut self, cmd: T, encode_fn: F)
     where
         T: Record + Copy + Send + 'static,
         F: Fn(&mut Encoder) + Send + 'static,
     {
-        with_session(self, |s| {
-            s.append_record(cmd);
-            s.commands.emit(encode_fn);
-        });
+        if self.is_live() {
+            with_session(self, |s| {
+                s.append_record(cmd);
+            });
+            M::emit_st(self, encode_fn);
+        } else {
+            with_session(self, |s| {
+                s.append_record(cmd);
+                s.commands.emit(encode_fn);
+            });
+        }
+    }
+
+    /// Records a render draw command into the active pass and emits `encode_fn` via `emit_op`.
+    pub(super) fn emit_render_cmd<T, F>(&mut self, cmd: T, encode_fn: F)
+    where
+        T: Record + Copy + Send + 'static,
+        F: Fn(&mut Encoder) + Send + 'static,
+    {
+        if self.is_live() {
+            with_session(self, |s| {
+                s.append_record(cmd);
+            });
+            M::emit_op(self, encode_fn);
+        } else {
+            with_session(self, |s| {
+                s.append_record(cmd);
+                s.commands.emit(encode_fn);
+            });
+        }
+    }
+
+    /// Records a compute state command into the active pass and emits `encode_fn` via `emit_st`.
+    pub(super) fn emit_compute_state_cmd<T, F>(&mut self, cmd: T, encode_fn: F)
+    where
+        T: Record + Copy + Send + 'static,
+        F: Fn(&mut Encoder) + Send + 'static,
+    {
+        if self.is_live() {
+            with_session(self, |s| {
+                s.append_record(cmd);
+            });
+            M::emit_st(self, encode_fn);
+        } else {
+            with_session(self, |s| {
+                s.append_record(cmd);
+                s.commands.emit(encode_fn);
+            });
+        }
+    }
+
+    /// Records a compute dispatch command into the active pass and emits `encode_fn` via `emit_op`.
+    pub(super) fn emit_compute_cmd<T, F>(&mut self, cmd: T, encode_fn: F)
+    where
+        T: Record + Copy + Send + 'static,
+        F: Fn(&mut Encoder) + Send + 'static,
+    {
+        if self.is_live() {
+            with_session(self, |s| {
+                s.append_record(cmd);
+            });
+            M::emit_op(self, encode_fn);
+        } else {
+            with_session(self, |s| {
+                s.append_record(cmd);
+                s.commands.emit(encode_fn);
+            });
+        }
     }
 
     /// Emits a general [`Encoder`] closure into the active command chunk.
-    pub(super) fn emit_encoder<F>(&self, encode_fn: F)
+    pub(super) fn emit_encoder<F>(&mut self, encode_fn: F)
     where
-        F: Fn(&mut Encoder) + Send + 'static,
+        F: FnOnce(&mut Encoder) + Send + 'static,
     {
-        with_session(self, |s| {
-            s.commands.emit(encode_fn);
-        });
+        let cell = Mutex::new(Some(encode_fn));
+        let wrapped = move |enc: &mut Encoder| {
+            let f_opt = cell.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(f) = f_opt {
+                f(enc);
+            }
+        };
+        if self.is_live() {
+            M::emit_st(self, wrapped);
+        } else {
+            with_session(self, |s| {
+                s.commands.emit(wrapped);
+            });
+        }
     }
 
     /// Resolves an indirect argument buffer pointer to its Metal handle and base offset.
@@ -434,41 +552,249 @@ impl<M: Mode> Context<M> {
 
     /// Ends the current Metal encoder pass and returns to idle/ready (`InvalidateCurrentPass`).
     pub fn invalidate_current_pass(&mut self, promote_flush: bool) {
+        let live = self.is_live();
         match self.cmdbuf_state {
             CommandBufferState::RenderEncoderActive => {
                 with_session(self, |s| {
                     s.end_pass();
-                    s.commands.emit(Encoder::end_pass);
+                    if !live {
+                        s.commands.emit(Encoder::end_pass);
+                    }
                 });
-                self.cmdbuf_state = CommandBufferState::RenderPipelineReady;
+                if live {
+                    M::emit_st(self, Encoder::end_pass);
+                }
+                self.cmdbuf_state = if live {
+                    CommandBufferState::Idle
+                } else {
+                    CommandBufferState::RenderPipelineReady
+                };
+            }
+            CommandBufferState::RenderPipelineReady => {
+                if live {
+                    with_session(self, |s| {
+                        s.end_pass();
+                    });
+                    M::emit_st(self, Encoder::end_pass);
+                    self.cmdbuf_state = CommandBufferState::Idle;
+                }
             }
             CommandBufferState::ComputeEncoderActive => {
                 with_session(self, |s| {
                     s.end_pass();
-                    s.commands.emit(Encoder::end_pass);
+                    if !live {
+                        s.commands.emit(Encoder::end_pass);
+                    }
                 });
-                self.cmdbuf_state = CommandBufferState::ComputePipelineReady;
+                if live {
+                    M::emit_st(self, Encoder::end_pass);
+                }
+                self.cmdbuf_state = if live {
+                    CommandBufferState::Idle
+                } else {
+                    CommandBufferState::ComputePipelineReady
+                };
+            }
+            CommandBufferState::ComputePipelineReady => {
+                if live {
+                    with_session(self, |s| {
+                        s.end_pass();
+                    });
+                    M::emit_st(self, Encoder::end_pass);
+                    self.cmdbuf_state = CommandBufferState::Idle;
+                }
             }
             CommandBufferState::BlitEncoderActive => {
                 with_session(self, |s| {
                     s.end_pass();
-                    s.commands.emit(Encoder::end_pass);
+                    if !live {
+                        s.commands.emit(Encoder::end_pass);
+                    }
                 });
+                if live {
+                    M::emit_st(self, Encoder::end_pass);
+                }
                 self.cmdbuf_state = CommandBufferState::Idle;
             }
-            CommandBufferState::Idle
-            | CommandBufferState::RenderPipelineReady
-            | CommandBufferState::ComputePipelineReady => {}
+            CommandBufferState::Idle => {}
         }
         if promote_flush && !self.has_open_pass() {
             with_session(self, |s| {
                 s.promote_flush_count += 1;
             });
+            if live {
+                if let Some(imm) = self.as_immediate_mut() {
+                    imm.mode.has_dirty_op = true;
+                } else if let Some(def) = self.as_deferred_mut() {
+                    def.mode.has_promoted_flush = true;
+                }
+            }
         }
     }
 
     /// Transitions to an active render command encoder (`SwitchToRenderEncoder`).
     pub fn switch_to_render_encoder(&mut self) {
+        struct RtvAttachment {
+            index: usize,
+            texture: Arc<Texture>,
+            view: TextureViewKey,
+            depth_plane: u32,
+            pixel_format: u32,
+        }
+        if self.is_live() {
+            if matches!(
+                self.cmdbuf_state,
+                CommandBufferState::RenderEncoderActive | CommandBufferState::RenderPipelineReady
+            ) {
+                return;
+            }
+            self.invalidate_current_pass(false);
+            for stage in self.state.shader_stages.iter_mut().take(5) {
+                stage.constant_buffers.set_all_dirty();
+                stage.samplers.set_all_dirty();
+                stage.srvs.set_all_dirty();
+            }
+            self.state.input_assembler.vertex_buffers.set_all_dirty();
+            if self.state.stream_output.targets.any_bound() {
+                self.state.stream_output.targets.set_all_dirty();
+            }
+            self.state.output_merger.uavs.set_all_dirty();
+            self.dirty = DirtyFlags::all();
+
+            let num_rtvs = (self.state.output_merger.num_rtvs as usize).min(8);
+            let mut rtv_list = Vec::with_capacity(num_rtvs);
+            for (i, rtv_slot) in self
+                .state
+                .output_merger
+                .rtvs
+                .iter()
+                .enumerate()
+                .take(num_rtvs)
+            {
+                if let Some(rtv_obj) = crate::view::RtvObject::from_iface(rtv_slot.as_ptr())
+                    && let Some(tex) = rtv_obj.inner.texture.clone()
+                    && rtv_obj.inner.pixel_format != WMT_PIXEL_FORMAT_INVALID
+                {
+                    rtv_list.push(RtvAttachment {
+                        index: i,
+                        texture: tex,
+                        view: rtv_obj.inner.texture_view.unwrap_or_default(),
+                        depth_plane: rtv_obj.pass_desc.depth_plane,
+                        pixel_format: rtv_obj.inner.pixel_format,
+                    });
+                }
+            }
+            let effective_rt = rtv_list.len();
+            let dsv_attachment =
+                Dsv::from_iface(self.state.output_merger.dsv.as_ptr()).and_then(|dsv| {
+                    dsv.texture.clone().map(|tex| {
+                        (
+                            tex,
+                            dsv.texture_view.unwrap_or_default(),
+                            dsv.planar_flags,
+                            dsv.readonly_flags,
+                        )
+                    })
+                });
+            let mut rt_width = self.state.output_merger.render_target_width;
+            let mut rt_height = self.state.output_merger.render_target_height;
+            let mut sample_count = self.state.output_merger.sample_count.max(1);
+            let rt_array = self.state.output_merger.array_length;
+            let uav_only = if dsv_attachment.is_none() && effective_rt == 0 {
+                if !self.state.output_merger.uavs.any_bound() {
+                    return;
+                }
+                if self.state.rasterizer.num_viewports == 0 {
+                    return;
+                }
+                let vp = &self.state.rasterizer.viewports[0];
+                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    rt_width = vp.width.max(0.0) as u32;
+                    rt_height = vp.height.max(0.0) as u32;
+                }
+                if rt_width == 0 || rt_height == 0 {
+                    return;
+                }
+                let rs_ptr = if self.state.rasterizer.rasterizer_state.is_null() {
+                    self.defaults.rasterizer
+                } else {
+                    self.state.rasterizer.rasterizer_state.as_ptr()
+                };
+                sample_count = crate::state::RasterizerState::from_iface(rs_ptr)
+                    .map_or(1, |rs| rs.uav_only_sample_count().max(1));
+                true
+            } else {
+                false
+            };
+            let argbuf_size = Arc::new(AtomicU64::new(0));
+            let argbuf_clone = Arc::clone(&argbuf_size);
+            with_session(self, |s| {
+                s.snap.render_argbuf_size = Some(argbuf_size);
+                s.begin_pass(RecordedPassKind::Render);
+            });
+            let rtv_count = u8::try_from(num_rtvs).unwrap_or(0);
+            M::emit_st(self, move |enc| {
+                let (dsv_planar, dsv_ro) = dsv_attachment
+                    .as_ref()
+                    .map_or((0, 0), |(_, _, p, r)| (*p, *r));
+                let sz = usize::try_from(argbuf_clone.load(Ordering::Relaxed)).unwrap_or(0);
+                let argbuf = enc.allocate_argument_buffer(sz);
+                enc.start_render_pass(dsv_planar, dsv_ro, rtv_count, Some(argbuf));
+                let mut color_attachments = Vec::with_capacity(rtv_list.len());
+                for rtv in &rtv_list {
+                    let att = enc.attachment::<{ stage::PIXEL }>(
+                        &rtv.texture,
+                        rtv.view,
+                        Access::READ | Access::WRITE,
+                    );
+                    color_attachments.push((rtv.index, att, rtv.depth_plane, rtv.pixel_format));
+                }
+                let depth_att = dsv_attachment.as_ref().and_then(|(tex, view, planar, _)| {
+                    ((planar & 1) != 0)
+                        .then(|| enc.attachment::<{ stage::PIXEL }>(tex, *view, Access::READ))
+                        .flatten()
+                });
+                let stencil_att = dsv_attachment.as_ref().and_then(|(tex, view, planar, _)| {
+                    ((planar & 2) != 0)
+                        .then(|| enc.attachment::<{ stage::PIXEL }>(tex, *view, Access::READ))
+                        .flatten()
+                });
+                let Some(info) = enc.render_targets() else {
+                    return;
+                };
+                for (index, att, depth_plane, pixel_format) in color_attachments {
+                    let color = &mut info.colors[index];
+                    color.target.attachment = att;
+                    color.target.depth_plane = depth_plane;
+                    color.target.load_action = WMT_LOAD_ACTION_LOAD;
+                    color.target.store_action = WMT_STORE_ACTION_STORE;
+                    info.tile_barrier_pso_key[index] = pixel_format;
+                }
+                info.tile_barrier_pso_key[8] = sample_count;
+                if let Some((_, _, planar, _)) = dsv_attachment {
+                    if (planar & 1) != 0 {
+                        info.depth.target.attachment = depth_att;
+                        info.depth.target.load_action = WMT_LOAD_ACTION_LOAD;
+                        info.depth.target.store_action = WMT_STORE_ACTION_STORE;
+                    }
+                    if (planar & 2) != 0 {
+                        info.stencil.target.attachment = stencil_att;
+                        info.stencil.target.load_action = WMT_LOAD_ACTION_LOAD;
+                        info.stencil.target.store_action = WMT_STORE_ACTION_STORE;
+                    }
+                }
+                if effective_rt == 0 && uav_only {
+                    info.default_raster_sample_count = u8::try_from(sample_count).unwrap_or(1);
+                }
+                info.render_target_width = rt_width;
+                info.render_target_height = rt_height;
+                info.render_target_array_length = u16::try_from(rt_array).unwrap_or(0);
+            });
+            self.cmdbuf_state = CommandBufferState::RenderEncoderActive;
+            return;
+        }
+
         match self.cmdbuf_state {
             CommandBufferState::RenderEncoderActive => return,
             CommandBufferState::ComputeEncoderActive | CommandBufferState::BlitEncoderActive => {
@@ -503,7 +829,7 @@ impl<M: Mode> Context<M> {
             next: NO_NEXT,
             pso,
         };
-        self.emit_render_cmd(cmd, move |enc| {
+        self.emit_render_state_cmd(cmd, move |enc| {
             enc.encode_render_command(cmd);
         });
 
@@ -513,6 +839,37 @@ impl<M: Mode> Context<M> {
 
     /// Transitions to an active compute command encoder (`SwitchToComputeEncoder`).
     pub fn switch_to_compute_encoder(&mut self) {
+        if self.is_live() {
+            if matches!(
+                self.cmdbuf_state,
+                CommandBufferState::ComputeEncoderActive | CommandBufferState::ComputePipelineReady
+            ) {
+                return;
+            }
+            self.invalidate_current_pass(false);
+            let cs_idx = super::state::ShaderStage::Compute.index();
+            self.state.shader_stages[cs_idx]
+                .constant_buffers
+                .set_all_dirty();
+            self.state.shader_stages[cs_idx].samplers.set_all_dirty();
+            self.state.shader_stages[cs_idx].srvs.set_all_dirty();
+            self.state.compute_stage_uav.uavs.set_all_dirty();
+
+            let argbuf_size = Arc::new(AtomicU64::new(0));
+            let argbuf_clone = Arc::clone(&argbuf_size);
+            with_session(self, |s| {
+                s.snap.compute_argbuf_size = Some(argbuf_size);
+                s.begin_pass(RecordedPassKind::Compute);
+            });
+            M::emit_st(self, move |enc| {
+                let sz = usize::try_from(argbuf_clone.load(Ordering::Relaxed)).unwrap_or(0);
+                let argbuf = enc.allocate_argument_buffer(sz);
+                enc.start_compute_pass(Some(argbuf));
+            });
+            self.cmdbuf_state = CommandBufferState::ComputeEncoderActive;
+            return;
+        }
+
         match self.cmdbuf_state {
             CommandBufferState::ComputeEncoderActive => return,
             CommandBufferState::RenderEncoderActive | CommandBufferState::BlitEncoderActive => {
@@ -550,7 +907,7 @@ impl<M: Mode> Context<M> {
             pso,
             threadgroup_size,
         };
-        self.emit_compute_cmd(cmd, move |enc| {
+        self.emit_compute_state_cmd(cmd, move |enc| {
             enc.encode_compute_command(cmd);
         });
 
@@ -561,17 +918,24 @@ impl<M: Mode> Context<M> {
     pub fn switch_to_blit_encoder(&mut self) {
         match self.cmdbuf_state {
             CommandBufferState::BlitEncoderActive => return,
-            CommandBufferState::RenderEncoderActive | CommandBufferState::ComputeEncoderActive => {
+            CommandBufferState::RenderEncoderActive
+            | CommandBufferState::ComputeEncoderActive
+            | CommandBufferState::RenderPipelineReady
+            | CommandBufferState::ComputePipelineReady => {
                 self.invalidate_current_pass(false);
             }
-            CommandBufferState::RenderPipelineReady
-            | CommandBufferState::ComputePipelineReady
-            | CommandBufferState::Idle => {}
+            CommandBufferState::Idle => {}
         }
+        let live = self.is_live();
         with_session(self, |s| {
             s.begin_pass(RecordedPassKind::Blit);
-            s.commands.emit(Encoder::start_blit_pass);
+            if !live {
+                s.commands.emit(Encoder::start_blit_pass);
+            }
         });
+        if live {
+            M::emit_st(self, Encoder::start_blit_pass);
+        }
         self.cmdbuf_state = CommandBufferState::BlitEncoderActive;
     }
 

@@ -120,6 +120,7 @@ pub struct Deferred {
     pub dynamic_buffer_history: Vec<DeferredDynamicBuffer>,
     pub dynamic_texture_history: Vec<DeferredDynamicTexture>,
     pub written_stagings: Vec<Arc<Staging>>,
+    pub read_stagings: Vec<Arc<Staging>>,
     pub visibility_queries: Vec<Arc<VisibilityQuery>>,
     pub active_visibility_offsets: FxHashMap<usize, u32>,
     pub open_queries: Vec<*mut c_void>,
@@ -214,6 +215,18 @@ impl Deferred {
             self.written_stagings.push(Arc::clone(staging));
         }
     }
+
+    /// Records that `staging` was read from as a copy source in this command list.
+    pub fn record_staging_read(&mut self, staging: &Arc<Staging>) {
+        let ptr = Arc::as_ptr(staging);
+        if !self
+            .read_stagings
+            .iter()
+            .any(|existing| ptr::eq(Arc::as_ptr(existing), ptr))
+        {
+            self.read_stagings.push(Arc::clone(staging));
+        }
+    }
 }
 
 impl Mode for Deferred {
@@ -250,6 +263,9 @@ impl Mode for Deferred {
     fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64) {
         if let Some(ring) = ctx.mode.staging_allocator.as_mut() {
             let (block, offset) = ring.allocate(0, 0, size.max(1), align.max(1));
+            if block.buffer != 0 {
+                return (block.buffer, offset);
+            }
             return (block.gpu_address + offset, offset);
         }
         let (_, gpu_addr) = Self::alloc(
@@ -274,9 +290,20 @@ impl Context<Deferred> {
     #[must_use]
     pub(super) fn new_deferred(device: *mut c_void, context_flags: u32) -> Box<Self> {
         let block = usize::try_from(DEFERRED_BLOCK).unwrap_or(0x10_0000);
+        let staging_allocator = super::immediate::live_device(device).map(|dev| {
+            RingBump::new(
+                dev.core().device(),
+                dxmt_core::resource::BufferAllocationFlags::CPU_WRITE_COMBINED,
+                dxmt_core::ring::RingConfig {
+                    block: DEFERRED_BLOCK,
+                    lifetime: 0,
+                },
+            )
+        });
         let mode = Deferred {
             context_flags,
             commands: Some(ArenaCommandList::new(block)),
+            staging_allocator,
             ..Deferred::default()
         };
         let refs = Managed::new();
@@ -294,7 +321,7 @@ impl Context<Deferred> {
             state: super::state::ContextState::default(),
             cmdbuf_state: CommandBufferState::Idle,
             dirty: DirtyFlags::all(),
-            defaults: Defaults::default(),
+            defaults: Defaults::new(device),
             mode,
         })
     }

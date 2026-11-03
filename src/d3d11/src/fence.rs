@@ -15,11 +15,13 @@ use crate::{
     abi::{IID_ID3D11_DEVICE_CHILD, IID_ID3D11_FENCE, vtbl::ID3D11FenceVtbl},
     com::{
         ComObject, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN,
-        S_FALSE, S_OK,
+        S_OK,
     },
     device::Device,
 };
 
+/// `D3D11_FENCE_FLAG_NONE`.
+pub const D3D11_FENCE_FLAG_NONE: u32 = 0x1;
 /// `D3D11_FENCE_FLAG_SHARED`.
 pub const D3D11_FENCE_FLAG_SHARED: u32 = 0x2;
 /// `D3D11_FENCE_FLAG_SHARED_CROSS_ADAPTER`.
@@ -27,7 +29,8 @@ pub const D3D11_FENCE_FLAG_SHARED_CROSS_ADAPTER: u32 = 0x4;
 /// `D3D11_FENCE_FLAG_NON_MONITORED`.
 pub const D3D11_FENCE_FLAG_NON_MONITORED: u32 = 0x8;
 
-const VALID_FENCE_FLAGS: u32 = D3D11_FENCE_FLAG_SHARED
+const VALID_FENCE_FLAGS: u32 = D3D11_FENCE_FLAG_NONE
+    | D3D11_FENCE_FLAG_SHARED
     | D3D11_FENCE_FLAG_SHARED_CROSS_ADAPTER
     | D3D11_FENCE_FLAG_NON_MONITORED;
 
@@ -192,7 +195,7 @@ fn create_impl(
         return E_NOINTERFACE;
     }
     if out.is_null() {
-        return S_FALSE;
+        return E_POINTER;
     }
     let fence = Box::into_raw(Fence::new_box(device, initial_value, 0));
     // SAFETY: `out` was checked non-null above.
@@ -233,12 +236,23 @@ fn open_shared_impl(
         // SAFETY: `out` is non-null and writable by the caller.
         unsafe { *out = ptr::null_mut() };
     }
-    if handle.is_null() || (handle.addr() & 0xc000_0000) != 0 || riid.is_null() {
+    if (handle.addr() & 0xc000_0000) != 0 {
+        crate::LOG.warn("OpenSharedFence: Invalid shared handle type");
+        return E_INVALIDARG;
+    }
+    if handle.is_null() || riid.is_null() {
+        if handle.is_null() && !riid.is_null() && !out.is_null() {
+            crate::LOG.warn("OpenSharedFence: Failed to query resource: 0");
+        }
         return E_INVALIDARG;
     }
     if out.is_null() {
-        return S_FALSE;
+        return E_POINTER;
     }
+    crate::LOG.warn(&format!(
+        "OpenSharedFence: Failed to query resource: {:x}",
+        handle.addr()
+    ));
     E_INVALIDARG
 }
 
@@ -283,6 +297,9 @@ unsafe extern "system-unwind" fn fence_query_interface(
         // SAFETY: `ppv_object` is non-null.
         unsafe { *ppv_object = this };
         return S_OK;
+    }
+    if crate::com::qi_log(&crate::abi::IID_ID3D11_QUERY, &iid) {
+        crate::LOG.warn(&format!("D3D11Fence: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }

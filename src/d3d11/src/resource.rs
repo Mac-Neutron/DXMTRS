@@ -495,6 +495,18 @@ unsafe extern "system-unwind" fn res_query_interface(
         return S_OK;
     }
 
+    let (base_iid, debug_name) = match res.desc {
+        ResourceDesc::Buffer(_) => (&IID_ID3D11_BUFFER, "buffer"),
+        ResourceDesc::Texture1d(_) => (&IID_ID3D11_TEXTURE_1D, "tex1d"),
+        ResourceDesc::Texture2d(_) => (&IID_ID3D11_TEXTURE_2D, "tex2d"),
+        ResourceDesc::Texture3d(_) => (&IID_ID3D11_TEXTURE_3D, "tex3d"),
+    };
+    if crate::com::qi_log(base_iid, &iid) {
+        crate::LOG.warn(&format!(
+            "D3D11Resource({debug_name}): Unknown interface query {iid}"
+        ));
+    }
+
     E_NOINTERFACE
 }
 
@@ -702,6 +714,28 @@ static TEXTURE3D_VTBL: ID3D11Texture3D1Vtbl = ID3D11Texture3D1Vtbl {
 
 // --- `IMTLMinLODClampable` tear-off ---
 
+unsafe extern "system-unwind" fn min_lod_query_interface(
+    this: *mut c_void,
+    riid: *const c_void,
+    out: *mut *mut c_void,
+) -> Hresult {
+    let res_ptr = container_of!(this, Resource, min_lod_vtbl);
+    // SAFETY: `this` is `&Resource::min_lod_vtbl`.
+    unsafe { res_query_interface(res_ptr.cast(), riid, out) }
+}
+
+unsafe extern "system-unwind" fn min_lod_add_ref(this: *mut c_void) -> u32 {
+    let res_ptr = container_of!(this, Resource, min_lod_vtbl);
+    // SAFETY: `this` is `&Resource::min_lod_vtbl`.
+    unsafe { res_add_ref(res_ptr.cast()) }
+}
+
+unsafe extern "system-unwind" fn min_lod_release(this: *mut c_void) -> u32 {
+    let res_ptr = container_of!(this, Resource, min_lod_vtbl);
+    // SAFETY: `this` is `&Resource::min_lod_vtbl`.
+    unsafe { res_release(res_ptr.cast()) }
+}
+
 unsafe extern "system-unwind" fn min_lod_set(this: *mut c_void, min_lod: f32) {
     let res_ptr = container_of!(this, Resource, min_lod_vtbl);
     // SAFETY: `this` is `&Resource::min_lod_vtbl`.
@@ -715,6 +749,11 @@ unsafe extern "system-unwind" fn min_lod_get(this: *mut c_void) -> f32 {
 }
 
 static MIN_LOD_VTBL: IMTLMinLODClampableVtbl = IMTLMinLODClampableVtbl {
+    unknown: IUnknownVtbl {
+        query_interface: min_lod_query_interface,
+        add_ref: min_lod_add_ref,
+        release: min_lod_release,
+    },
     set_min_lod: min_lod_set,
     get_min_lod: min_lod_get,
 };

@@ -19,17 +19,18 @@ pub use dxmt_util::ext::{
 use super::vtbl::{ID3D11DeviceContext4Vtbl, IUnknownVtbl};
 use crate::com::{Guid, Hresult};
 
-/// `IMTLMinLODClampable`'s IID (`d3d11_resource.hpp:132`): `102d11a1-5be7-46c9-a19a-56b036c26f78`.
+/// `IMTLMinLODClampable`'s IID (`d3d11_resource.hpp:23`): `9a6f6549-d4b1-45ea-8794-8503d190d3d1`.
 pub const IID_IMTL_MIN_LOD_CLAMPABLE: Guid = Guid::new(
-    0x102d_11a1,
-    0x5be7,
-    0x46c9,
-    [0xa1, 0x9a, 0x56, 0xb0, 0x36, 0xc2, 0x6f, 0x78],
+    0x9a6f_6549,
+    0xd4b1,
+    0x45ea,
+    [0x87, 0x94, 0x85, 0x03, 0xd1, 0x90, 0xd3, 0xd1],
 );
 
-/// `IMTLMinLODClampable`'s 2 slots (`d3d11_resource.hpp:126-130`).
+/// `IMTLMinLODClampable` vtable (`IUnknown` + `SetMinLOD` + `GetMinLOD`, `d3d11_resource.hpp`).
 #[repr(C)]
 pub struct IMTLMinLODClampableVtbl {
+    pub unknown: IUnknownVtbl,
     pub set_min_lod: unsafe extern "system-unwind" fn(*mut c_void, f32),
     pub get_min_lod: unsafe extern "system-unwind" fn(*mut c_void) -> f32,
 }

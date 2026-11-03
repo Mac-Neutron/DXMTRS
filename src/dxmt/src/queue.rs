@@ -32,9 +32,11 @@ use winemetal_sys::{
 
 use crate::{
     arena::{BlockPool, Commands},
+    capture::{CaptureState, NextAction},
     encoder::{Encoder, QueryBuffers},
     frame_stats::{Container, FrameStatistics},
     initializer::ResourceInitializer,
+    query::Readbacks,
     resource::BufferAllocationFlags,
     ring::{BlockRef, RingBump, RingConfig},
 };
@@ -87,6 +89,7 @@ pub struct Chunk {
     commands: Commands,
     retained: Vec<Arc<dyn Send + Sync>>,
     cmdbuf: Option<Obj>,
+    readbacks: Readbacks,
     /// The resource initializer's event value the command buffer waits for, or 0.
     initializer_wait: u64,
     id: u64,
@@ -101,6 +104,7 @@ impl Chunk {
             commands: Commands::new(pool),
             retained: Vec::new(),
             cmdbuf: None,
+            readbacks: Readbacks::default(),
             initializer_wait: 0,
             id: 0,
             event_id: 0,
@@ -156,6 +160,7 @@ impl Chunk {
 
     fn reset(&mut self) {
         self.frame_latency = NO_FRAME;
+        self.readbacks = Readbacks::default();
         self.commands.reset();
         self.retained.clear();
         self.cmdbuf = None;
@@ -268,6 +273,7 @@ impl Ring {
 struct Shared {
     ring: Ring,
     chunks: Box<[UnsafeCell<Chunk>]>,
+    device: Option<Obj>,
     queue: Option<Obj>,
     frame_latency: CpuFence,
     initializer: ResourceInitializer,
@@ -351,6 +357,8 @@ impl Queue {
             shared: Arc::new(Shared {
                 ring: Ring::new(config.chunks),
                 chunks,
+                // SAFETY: `device` is a live `MTLDevice` handle, or 0 in headless tests.
+                device: unsafe { Obj::retain(device.handle()) },
                 queue,
                 frame_latency: CpuFence::new(0),
                 initializer: ResourceInitializer::new(device),
@@ -417,6 +425,11 @@ impl Queue {
         self.staging.allocate(seq, coherent, size, align)
     }
 
+    /// Frees retired staging-ring blocks up to `coherent`.
+    pub fn free_staging_blocks(&mut self, coherent: u64) {
+        self.staging.free_blocks(coherent);
+    }
+
     /// The chunk being recorded: the recording thread's alone, which `&mut self` makes so.
     pub fn chunk(&mut self) -> &mut Chunk {
         let slot = self.shared.slot(self.shared.ring.current());
@@ -438,6 +451,7 @@ impl Queue {
         chunk.initializer_wait = initializer_wait;
         let t0 = Instant::now();
         self.shared.ring.commit();
+        self.staging.free_blocks(self.coherent_seq());
         if !cfg!(feature = "perf-build") {
             let elapsed = t0.elapsed();
             let mut stats = self.shared.statistics();
@@ -573,16 +587,33 @@ fn spawn(name: Option<&str>, f: impl FnOnce() + Send + 'static) -> io::Result<Jo
 /// `dxmt-encode-thread`: each committed chunk's commands into a command buffer, in order.
 ///
 /// The encoder's flush encodes the chunk's passes and signals `event` at the chunk's value.
-// ponytail: the capture joins this loop.
 fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
     sync::set_time_critical();
     let queue = shared.queue.as_ref().map_or(0, Obj::handle);
+    let mut capture = CaptureState::from_env();
+    if let Ok(val) = std::env::var("DXMT_CAPTURE_FRAME")
+        && let Ok(frame) = val.trim().parse::<u64>()
+        && frame > 0
+    {
+        capture.schedule(frame);
+    }
     let mut seq = 1;
     while shared.ring.wait_committed(seq) {
         let slot = shared.slot(seq);
         // SAFETY: chunk `seq` is committed and not counted encoded: the encode thread's alone.
         let chunk = unsafe { &mut *slot };
         let _pool = Pool::new();
+        match capture.next_action(chunk.frame) {
+            NextAction::StartCapture => {
+                if let Some(dev) = &shared.device {
+                    crate::capture::start_capture(dev, chunk.frame);
+                }
+            }
+            NextAction::StopCapture => {
+                crate::capture::stop_capture();
+            }
+            NextAction::Nothing => {}
+        }
         // SAFETY: a live command queue, or nil, which answers nil.
         let cmdbuf = unsafe { MTLCommandQueue_commandBuffer(queue) };
         // SAFETY: an autoreleased command buffer the pool keeps alive until here, or nil.
@@ -592,15 +623,50 @@ fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
             // SAFETY: the command buffer just made, or nil; the initializer's live event.
             unsafe { MTLCommandBuffer_encodeWaitForEvent(cmdbuf, event, chunk.initializer_wait) };
         }
+        encoder.set_current_frame(chunk.frame, shared.ring.coherent());
+        if let Some(fstats) = encoder.current_frame_statistics() {
+            *fstats = FrameStatistics::default();
+        }
         encoder.begin_chunk(seq);
+        let t0 = Instant::now();
         chunk.commands.run(encoder);
+        let t1 = Instant::now();
+        chunk.readbacks = shared
+            .device
+            .as_ref()
+            .map_or_else(Readbacks::default, |dev| {
+                encoder.queries_readbacks(dev, seq, cmdbuf)
+            });
+        let query_buffers = QueryBuffers {
+            visibility: chunk.readbacks.visibility_buffer(),
+            timestamps: 0,
+        };
         // SAFETY: the command buffer just made, or nil; the queue's shared event, or nil, which
         // `drop` releases only after this thread ends; the allocations the passes name are
         // retained by the encoder until `end_chunk` hands them to the chunk.
-        unsafe { encoder.flush(cmdbuf, event, chunk.event_id, &QueryBuffers::NONE) };
+        unsafe { encoder.flush(cmdbuf, event, chunk.event_id, &query_buffers) };
+        let t2 = Instant::now();
         encoder.end_chunk(&mut chunk.retained);
         // SAFETY: the command buffer just made, or nil, which ignores it.
         unsafe { MTLCommandBuffer_commit(cmdbuf) };
+        if !cfg!(feature = "perf-build") {
+            let (drawable_blocking, compat_flags) = encoder.current_frame_statistics().map_or(
+                (
+                    core::time::Duration::ZERO,
+                    crate::frame_stats::CompatibilityFlags::empty(),
+                ),
+                |s| (s.drawable_blocking_interval, s.compatibility_flags),
+            );
+            {
+                let mut stats = shared.statistics();
+                let fstats = stats.at_mut(chunk.frame);
+                fstats.encode_prepare_interval += t1.duration_since(t0);
+                fstats.encode_flush_interval += t2.duration_since(t1);
+                fstats.drawable_blocking_interval += drawable_blocking;
+                fstats.set_compatibility_flag(compat_flags);
+                drop(stats);
+            }
+        }
         shared.ring.encoded();
         seq += 1;
     }

@@ -23,7 +23,7 @@ use dxmt_core::{
 };
 use dxmt_util::private_data::PrivateData;
 use rustc_hash::FxHashMap;
-use winemetal_sys::Obj;
+use winemetal_sys::{MTLSharedEvent_setWin32EventAtValue, Obj};
 
 use super::{
     Context, Mode,
@@ -85,6 +85,8 @@ pub struct Immediate {
     pub commit_count: u64,
     pub in_flight_callbacks: VecDeque<(u64, InFlightCallback)>,
     pub hw_protection_enabled: bool,
+    pub multithread: crate::multithread::Multithread,
+    pub local_mutex: crate::multithread::DeviceMutex,
 }
 
 impl Immediate {
@@ -157,6 +159,17 @@ impl Drop for Immediate {
     }
 }
 
+/// Resolves `&mut Device` when `device` points to a live Metal-backed [`crate::device::Device`].
+pub(super) fn live_device(device: *mut c_void) -> Option<&'static mut crate::device::Device> {
+    let dev = crate::device::Device::from_iface(device)?;
+    if dev.core().device().handle() > 0x1000 {
+        // SAFETY: `from_iface` verified `device` is a live `Device`.
+        Some(unsafe { &mut *device.cast::<crate::device::Device>() })
+    } else {
+        None
+    }
+}
+
 /// Resolves `&resource::Common` from a resource pointer.
 ///
 /// Uses `resource::common` when linked with the resource table, and falls back to casting
@@ -174,23 +187,45 @@ pub(super) fn resource_common<'a>(resource: *mut c_void) -> Option<&'a resource:
 
 impl Mode for Immediate {
     fn emit_st(ctx: &mut Context<Self>, f: impl Fn(&mut Encoder) + Send + 'static) {
+        if let Some(dev) = live_device(ctx.device) {
+            dev.core_mut().queue_mut().chunk().emit(f);
+            return;
+        }
         let _ = ctx.mode.current_seq();
         f(ctx.mode.encoder_mut());
     }
 
     fn emit_op(ctx: &mut Context<Self>, f: impl Fn(&mut Encoder) + Send + 'static) {
+        if let Some(dev) = live_device(ctx.device) {
+            ctx.mode.has_dirty_op = true;
+            dev.core_mut().queue_mut().chunk().emit(f);
+            return;
+        }
         let _ = ctx.mode.current_seq();
         ctx.mode.has_dirty_op = true;
         f(ctx.mode.encoder_mut());
     }
 
     fn retain<T: Send + 'static>(ctx: &mut Context<Self>, t: T) {
+        if let Some(dev) = live_device(ctx.device) {
+            dev.core_mut().queue_mut().chunk().retain(t);
+            return;
+        }
         ctx.mode.retained.push(Arc::new(Mutex::new(Some(t))));
     }
 
     fn alloc(ctx: &mut Context<Self>, size: usize, align: usize) -> (*mut u8, u64) {
         let len = size.max(1);
         let alignment = align.max(1);
+        if let Some(dev) = live_device(ctx.device) {
+            let ptr = dev
+                .core_mut()
+                .queue_mut()
+                .chunk()
+                .allocate_cpu(len, alignment)
+                .as_ptr();
+            return (ptr, ptr as usize as u64);
+        }
         if let Ok(layout) = core::alloc::Layout::from_size_align(len, alignment) {
             let ptr = ctx.mode.commands_mut().allocate(layout).as_ptr();
             (ptr, ptr as usize as u64)
@@ -200,6 +235,13 @@ impl Mode for Immediate {
     }
 
     fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64) {
+        if let Some(dev) = live_device(ctx.device) {
+            let (block, offset) = dev
+                .core_mut()
+                .queue_mut()
+                .allocate_staging_buffer(size.max(1), align.max(1));
+            return (block.buffer, offset);
+        }
         let seq = ctx.mode.current_seq();
         let coherent = ctx.mode.coherent_seq();
         if let Some(ring) = ctx.mode.staging_allocator.as_mut() {
@@ -218,6 +260,19 @@ impl Mode for Immediate {
     fn dynamic_name(ctx: &mut Context<Self>, dynamic: &DynamicBuffer) -> Arc<BufferAllocation> {
         let _ = ctx;
         dynamic.immediate_name()
+    }
+
+    fn lock_iface(this: *mut c_void) -> Option<crate::multithread::DeviceLockGuard<'static>> {
+        if this.is_null() {
+            return None;
+        }
+        // SAFETY: `this` points to a live `Context<Immediate>`; `multithread.mutex` is initialized once at creation.
+        let mutex_ptr = unsafe { (*this.cast::<Context<Self>>()).mode.multithread.mutex };
+        if mutex_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: `mutex_ptr` points to the owning device's `DeviceMutex` (or `local_mutex`), valid for the call.
+        Some(unsafe { (*mutex_ptr).lock_guard() })
     }
 }
 
@@ -245,6 +300,8 @@ impl Context<Immediate> {
     pub fn new_immediate(device: *mut c_void) -> Box<Self> {
         let refs = Managed::new();
         refs.add_ref_private();
+        let mut mode = Immediate::default();
+        mode.ignore_no_wait = crate::device::CONFIG.get_bool("d3d11.ignoreMapFlagNoWait", false);
         let mut ctx = Box::new(Self {
             vtbl: &raw const IMMEDIATE_VTBL,
             ext_vtbl: &raw const IMMEDIATE_EXT_VTBL,
@@ -255,18 +312,70 @@ impl Context<Immediate> {
             state: super::state::ContextState::default(),
             cmdbuf_state: CommandBufferState::Idle,
             dirty: DirtyFlags::all(),
-            defaults: Defaults::default(),
-            mode: Immediate::default(),
+            defaults: Defaults::new(device),
+            mode,
         });
-        let _ = ctx.mode.current_seq();
+        if live_device(device).is_none() {
+            let _ = ctx.mode.current_seq();
+        }
+        let outer = crate::com::iface_of(&ctx.vtbl);
+        let mutex_ptr = crate::device::Device::from_iface(device)
+            .map_or(&raw const ctx.mode.local_mutex, |dev| &raw const dev.mutex);
+        ctx.mode.multithread.init(outer, mutex_ptr);
         ctx
+    }
+
+    /// Active command queue sequence number (`CurrentSeqId`).
+    pub fn active_seq(&mut self) -> u64 {
+        if let Some(dev) = live_device(self.device) {
+            dev.core().queue().current_seq()
+        } else {
+            self.mode.current_seq()
+        }
+    }
+
+    /// Highest GPU-completed command queue sequence number (`CoherentSeqId`).
+    #[must_use]
+    pub fn active_coherent_seq(&self) -> u64 {
+        live_device(self.device).map_or_else(
+            || self.mode.coherent_seq(),
+            |dev| dev.core().queue().coherent_seq(),
+        )
     }
 
     /// Commits the current command buffer chunk and optionally signals `win32_event` afterwards.
     pub fn commit_internal(&mut self, win32_event: Option<*mut c_void>) {
         self.finish_pass(false);
+        if let Some(dev) = live_device(self.device) {
+            if self.mode.has_dirty_op {
+                dev.core_mut().queue_mut().commit();
+                self.mode.has_dirty_op = false;
+                self.mode.commit_count += 1;
+                self.dirty = DirtyFlags::all();
+            }
+            if let Some(ev) = win32_event
+                && !ev.is_null()
+            {
+                let q = dev.core().queue();
+                // SAFETY: `q.shared_event()` and `q.shared_event_listener()` are live Metal handles.
+                unsafe {
+                    MTLSharedEvent_setWin32EventAtValue(
+                        q.shared_event(),
+                        q.shared_event_listener(),
+                        ev,
+                        q.current_event_seq(),
+                    );
+                }
+            }
+            return;
+        }
         if !self.mode.has_dirty_op && win32_event.is_none() {
             return;
+        }
+        if crate::device::Device::from_iface(self.device).is_some() {
+            // SAFETY: `from_iface` verified `self.device` is a live `Device`.
+            let dev_mut = unsafe { &mut *self.device.cast::<crate::device::Device>() };
+            dev_mut.core_mut().queue_mut().commit();
         }
         let committed_seq = self.mode.current_seq();
         self.mode.encoder_mut().signal_queue_event(committed_seq);
@@ -298,6 +407,16 @@ impl Context<Immediate> {
     /// Waits for `target_seq` to finish on the GPU, retiring completed resources and callbacks.
     pub fn wait_for_seq(&mut self, target_seq: u64) {
         if target_seq == 0 {
+            return;
+        }
+        if let Some(dev) = live_device(self.device) {
+            let current = dev.core().queue().current_seq();
+            if target_seq >= current
+                && (self.mode.has_dirty_op || self.cmdbuf_state != CommandBufferState::Idle)
+            {
+                self.commit_internal(None);
+            }
+            dev.core().queue().wait_cpu(target_seq);
             return;
         }
         let current = self.mode.current_seq();
@@ -352,6 +471,12 @@ impl Context<Immediate> {
 }
 
 impl<M: Mode> Context<M> {
+    /// Whether this context is backed by a live Metal device.
+    #[must_use]
+    pub(super) fn is_live(&self) -> bool {
+        live_device(self.device).is_some()
+    }
+
     /// Downcasts `&self` to `&Context<Immediate>` when `M` is [`Immediate`].
     #[must_use]
     pub fn as_immediate(&self) -> Option<&Context<Immediate>> {
@@ -422,6 +547,18 @@ impl<M: Mode> Context<M> {
     /// `IMTLD3D11DeviceContext::WaitUntilGPUIdle`.
     pub fn wait_until_gpu_idle(&mut self) {
         if let Some(imm) = self.as_immediate_mut() {
+            if crate::device::Device::from_iface(imm.device).is_some() {
+                // SAFETY: `from_iface` verified `imm.device` is a live `Device`.
+                let dev = unsafe { &mut *imm.device.cast::<crate::device::Device>() };
+                let seq = dev.core().queue().current_seq();
+                imm.finish_pass(false);
+                dev.core_mut().queue_mut().commit();
+                imm.mode.has_dirty_op = false;
+                dev.core().queue().wait_cpu(seq);
+                if dev.core().device().handle() > 0x1000 {
+                    return;
+                }
+            }
             if imm.mode.has_dirty_op || imm.cmdbuf_state != CommandBufferState::Idle {
                 imm.commit_internal(None);
             }
@@ -472,16 +609,26 @@ impl<M: Mode> Context<M> {
             return;
         };
         let raw_ev = km.shared_event().max(1);
+        let live = self.is_live();
         let _ = km.acquire(
             |val| {
-                self.finish_pass(false);
+                self.finish_pass(true);
                 M::emit_op(self, move |enc| {
-                    // SAFETY: `raw_ev` is a non-zero shared-event handle.
-                    if let Some(ev) = unsafe { Obj::adopt(raw_ev) } {
+                    let ev = if raw_ev > 0x1000 {
+                        // SAFETY: `raw_ev` is a live `MTLSharedEvent`.
+                        unsafe { Obj::retain(raw_ev) }
+                    } else {
+                        // SAFETY: `raw_ev` is a non-zero test sentinel handle.
+                        unsafe { Obj::adopt(raw_ev) }
+                    };
+                    if let Some(ev) = ev {
                         enc.wait_event(ev, val);
                     }
                     push_encoder_trace(enc, format!("WaitEvent({val})"));
                 });
+                if live {
+                    self.flush();
+                }
             },
             key,
             u32::MAX,
@@ -497,16 +644,26 @@ impl<M: Mode> Context<M> {
             return;
         };
         let raw_ev = km.shared_event().max(1);
+        let live = self.is_live();
         let _ = km.release(
             |val| {
-                self.finish_pass(false);
+                self.finish_pass(true);
                 M::emit_op(self, move |enc| {
-                    // SAFETY: `raw_ev` is a non-zero shared-event handle.
-                    if let Some(ev) = unsafe { Obj::adopt(raw_ev) } {
+                    let ev = if raw_ev > 0x1000 {
+                        // SAFETY: `raw_ev` is a live `MTLSharedEvent`.
+                        unsafe { Obj::retain(raw_ev) }
+                    } else {
+                        // SAFETY: `raw_ev` is a non-zero test sentinel handle.
+                        unsafe { Obj::adopt(raw_ev) }
+                    };
+                    if let Some(ev) = ev {
                         enc.signal_event(ev, val);
                     }
                     push_encoder_trace(enc, format!("SignalEvent({val})"));
                 });
+                if live {
+                    self.flush();
+                }
             },
             key,
         );

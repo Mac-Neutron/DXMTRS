@@ -10,9 +10,8 @@ use super::{
 };
 use crate::{
     abi::{
-        IID_ID3D_DEVICE_CONTEXT_STATE, IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1,
-        IID_ID3D11_DEVICE_CHILD, IID_ID3D11_DEVICE_CONTEXT, IID_ID3D11_DEVICE_CONTEXT_1,
-        IID_IUNKNOWN, vtbl::ID3DDeviceContextStateVtbl,
+        IID_ID3D_DEVICE_CONTEXT_STATE, IID_ID3D11_DEVICE_CHILD, IID_IUNKNOWN,
+        vtbl::ID3DDeviceContextStateVtbl,
     },
     com::{
         E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, Managed, S_FALSE, S_OK, add_ref,
@@ -53,6 +52,11 @@ unsafe extern "system-unwind" fn dcs_query_interface(
         // SAFETY: `out` was checked non-null.
         unsafe { *out = this };
         return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D_DEVICE_CONTEXT_STATE, &iid) {
+        crate::LOG.warn(&format!(
+            "D3DDeviceContextState: Unknown interface query {iid}"
+        ));
     }
     E_NOINTERFACE
 }
@@ -153,16 +157,6 @@ const fn write_opt<T: Copy>(out: *mut T, value: T) {
     }
 }
 
-const fn read_first_u32(ptr: *const u32) -> u32 {
-    // SAFETY: caller verified `ptr` is non-null and `count > 0`.
-    unsafe { *ptr }
-}
-
-fn read_guid(ptr: *const c_void) -> Option<Guid> {
-    // SAFETY: `ptr` is the caller's `REFIID`.
-    unsafe { Guid::read(ptr.cast::<Guid>()) }
-}
-
 fn add_initial_device_ref(refs: &Managed, device: *mut c_void) {
     // SAFETY: `device` is either null or a live `ID3D11Device` whose public refcount we bump
     // on the 0 -> 1 transition (`ref(new MTLD3D11DeviceContextState(this))`).
@@ -196,25 +190,14 @@ pub fn create_device_context_state(
     chosen_feature_level: *mut u32,
     out: *mut *mut c_void,
 ) -> Hresult {
-    let _ = (flags, sdk_version);
+    let _ = (
+        flags,
+        feature_levels,
+        sdk_version,
+        emulated_interface,
+        chosen_feature_level,
+    );
     write_opt(out, ptr::null_mut());
-    let (fl_ptr, fl_count) = feature_levels;
-    if fl_ptr.is_null() || fl_count == 0 {
-        return E_INVALIDARG;
-    }
-    let Some(iid) = read_guid(emulated_interface) else {
-        return E_INVALIDARG;
-    };
-    if iid != IID_ID3D11_DEVICE_CONTEXT
-        && iid != IID_ID3D11_DEVICE_CONTEXT_1
-        && iid != IID_ID3D10_DEVICE
-        && iid != IID_ID3D10_DEVICE1
-    {
-        return E_INVALIDARG;
-    }
-    if !chosen_feature_level.is_null() {
-        write_opt(chosen_feature_level, read_first_u32(fl_ptr));
-    }
     if out.is_null() {
         return S_FALSE;
     }
@@ -251,6 +234,7 @@ impl<M: Mode> Context<M> {
                 write_opt(previous_state, prev_dcs.cast());
             }
             self.state.active_state_object = ComPtr::from_owned_raw(prev_dcs.cast());
+            self.restore_encoding_context_state();
             return;
         }
 
@@ -271,6 +255,7 @@ impl<M: Mode> Context<M> {
         self.state = core::mem::take(&mut next_ref.state);
         let _ = self.state.active_state_object.set(state);
         self.reset_encoding_context_state();
+        self.restore_encoding_context_state();
     }
 
     /// `ID3D11DeviceContext1::SwapDeviceContextState`.

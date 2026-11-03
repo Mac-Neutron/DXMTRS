@@ -454,7 +454,7 @@ unsafe extern "system-unwind" fn create_counter(
             write_out(out, ptr::null_mut());
         }
     }
-    LOG.warn("CreateCounter: Counter is not supported");
+    LOG.warn("CreateCounter: not supported");
     E_NOTIMPL
 }
 
@@ -523,7 +523,7 @@ unsafe extern "system-unwind" fn check_counter(
     _desc_str: *mut c_char,
     _desc_str_len: *mut u32,
 ) -> Hresult {
-    LOG.warn("CheckCounter: Counter is not supported.");
+    LOG.warn("CheckCounter: not supported");
     E_NOTIMPL
 }
 
@@ -627,11 +627,12 @@ unsafe extern "system-unwind" fn get_immediate_context(this: *mut c_void, out: *
 }
 
 unsafe extern "system-unwind" fn set_exception_mode(_this: *mut c_void, _flags: u32) -> Hresult {
-    LOG.err("SetExceptionMode: Not implemented");
+    LOG.err("Not implemented");
     E_NOTIMPL
 }
 
-const unsafe extern "system-unwind" fn get_exception_mode(_this: *mut c_void) -> u32 {
+unsafe extern "system-unwind" fn get_exception_mode(_this: *mut c_void) -> u32 {
+    LOG.err("Not implemented");
     0
 }
 
@@ -690,24 +691,17 @@ unsafe extern "system-unwind" fn open_shared_resource1(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    crate::resource::open_shared(this, handle, riid.cast::<Guid>(), out)
+    crate::resource::open_shared1(this, handle, riid.cast::<Guid>(), out)
 }
 
 unsafe extern "system-unwind" fn open_shared_resource_by_name(
-    _this: *mut c_void,
-    _name: *const c_void,
-    _access: u32,
-    _riid: *const c_void,
+    this: *mut c_void,
+    name: *const c_void,
+    access: u32,
+    riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if !out.is_null() {
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, ptr::null_mut());
-        }
-    }
-    LOG.err("OpenSharedResourceByName: Not implemented");
-    E_NOTIMPL
+    crate::resource::open_shared_by_name(this, name.cast::<u16>(), access, riid.cast::<Guid>(), out)
 }
 
 unsafe extern "system-unwind" fn get_immediate_context2(this: *mut c_void, out: *mut *mut c_void) {
@@ -733,6 +727,13 @@ unsafe extern "system-unwind" fn get_resource_tiling(
     _tilings: *mut c_void,
 ) {
     LOG.err("GetResourceTiling: Not implemented");
+    #[cfg(all(not(windows), not(test)))]
+    {
+        // SAFETY: Recording not-implemented call for native probe diagnostic.
+        unsafe {
+            winemetal_sys::wmt_native_not_implemented();
+        }
+    }
 }
 
 unsafe extern "system-unwind" fn check_multisample_quality_levels1(
@@ -876,6 +877,13 @@ unsafe extern "system-unwind" fn write_to_subresource(
     _src_depth_pitch: u32,
 ) {
     LOG.err("WriteToSubresource: Not implemented");
+    #[cfg(all(not(windows), not(test)))]
+    {
+        // SAFETY: Recording not-implemented call for native probe diagnostic.
+        unsafe {
+            winemetal_sys::wmt_native_not_implemented();
+        }
+    }
 }
 
 unsafe extern "system-unwind" fn read_from_subresource(
@@ -888,6 +896,13 @@ unsafe extern "system-unwind" fn read_from_subresource(
     _src_box: *const c_void,
 ) {
     LOG.err("ReadFromSubresource: Not implemented");
+    #[cfg(all(not(windows), not(test)))]
+    {
+        // SAFETY: Recording not-implemented call for native probe diagnostic.
+        unsafe {
+            winemetal_sys::wmt_native_not_implemented();
+        }
+    }
 }
 
 unsafe extern "system-unwind" fn open_shared_fence(

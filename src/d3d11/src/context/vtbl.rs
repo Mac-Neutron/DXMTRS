@@ -16,7 +16,7 @@ use crate::{
     com::container_of,
 };
 
-macro_rules! slot {
+macro_rules! slot_unlocked {
     ($name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty) => {{
         unsafe extern "system-unwind" fn thunk<M: Mode>(
             this: *mut c_void,
@@ -41,28 +41,55 @@ macro_rules! slot {
     }};
 }
 
+macro_rules! slot {
+    ($name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty) => {{
+        unsafe extern "system-unwind" fn thunk<M: Mode>(
+            this: *mut c_void,
+            $($arg: $ty),*
+        ) -> $ret {
+            let _guard = M::lock_iface(this);
+            // SAFETY: `this` is a valid `Context<M>` COM interface pointer.
+            let ctx = unsafe { Context::<M>::from_iface(this) };
+            ctx.$name($($arg),*)
+        }
+        thunk::<M>
+    }};
+    ($name:ident ( $($arg:ident : $ty:ty),* $(,)? )) => {{
+        unsafe extern "system-unwind" fn thunk<M: Mode>(
+            this: *mut c_void,
+            $($arg: $ty),*
+        ) {
+            let _guard = M::lock_iface(this);
+            // SAFETY: `this` is a valid `Context<M>` COM interface pointer.
+            let ctx = unsafe { Context::<M>::from_iface(this) };
+            ctx.$name($($arg),*);
+        }
+        thunk::<M>
+    }};
+}
+
 /// Builds an [`IMTLD3D11DeviceContextVtbl`] for `Context<M>`.
 #[must_use]
 pub const fn context_vtbl<M: Mode>() -> IMTLD3D11DeviceContextVtbl {
     IMTLD3D11DeviceContextVtbl {
         base: ID3D11DeviceContext4Vtbl {
-            query_interface: slot!(
+            query_interface: slot_unlocked!(
                 query_interface(riid: *const c_void, out: *mut *mut c_void) -> i32
             ),
-            add_ref: slot!(add_ref() -> u32),
-            release: slot!(release() -> u32),
-            get_device: slot!(get_device(out: *mut *mut c_void)),
-            get_private_data: slot!(
+            add_ref: slot_unlocked!(add_ref() -> u32),
+            release: slot_unlocked!(release() -> u32),
+            get_device: slot_unlocked!(get_device(out: *mut *mut c_void)),
+            get_private_data: slot_unlocked!(
                 get_private_data(
                     guid: *const c_void,
                     data_size: *mut u32,
                     data: *mut c_void,
                 ) -> i32
             ),
-            set_private_data: slot!(
+            set_private_data: slot_unlocked!(
                 set_private_data(guid: *const c_void, data_size: u32, data: *const c_void) -> i32
             ),
-            set_private_data_interface: slot!(
+            set_private_data_interface: slot_unlocked!(
                 set_private_data_interface(guid: *const c_void, object: *const c_void) -> i32
             ),
             vs_set_constant_buffers: slot!(
@@ -834,20 +861,26 @@ pub const fn ext_vtbl<M: Mode>() -> IMTLD3D11ContextExt2Vtbl {
         this: *mut c_void,
         desc: *const D3D11UpscaleDesc,
     ) {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.temporal_upscale(desc);
     }
 
     unsafe extern "system-unwind" fn begin_uav_overlap<M: Mode>(this: *mut c_void) {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.begin_uav_overlap();
     }
 
     unsafe extern "system-unwind" fn end_uav_overlap<M: Mode>(this: *mut c_void) {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.end_uav_overlap();
     }
 
@@ -857,8 +890,10 @@ pub const fn ext_vtbl<M: Mode>() -> IMTLD3D11ContextExt2Vtbl {
         feature_data: *mut c_void,
         feature_data_size: u32,
     ) -> i32 {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.check_ext_feature_support(feature, feature_data, feature_data_size)
     }
 
@@ -869,8 +904,10 @@ pub const fn ext_vtbl<M: Mode>() -> IMTLD3D11ContextExt2Vtbl {
         count: u32,
         pieces: *mut D3D11Piece,
     ) -> i32 {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.get_pieces(resource, subresource, count, pieces)
     }
 
@@ -880,8 +917,10 @@ pub const fn ext_vtbl<M: Mode>() -> IMTLD3D11ContextExt2Vtbl {
         subresource: u32,
         piece_id: u64,
     ) {
+        let raw = container_of!(this, Context<M>, ext_vtbl);
+        let _guard = M::lock_iface(raw.cast());
         // SAFETY: `this` points to `Context::<M>::ext_vtbl`.
-        let ctx = unsafe { &mut *container_of!(this, Context<M>, ext_vtbl) };
+        let ctx = unsafe { &mut *raw };
         ctx.use_piece(resource, subresource, piece_id);
     }
 

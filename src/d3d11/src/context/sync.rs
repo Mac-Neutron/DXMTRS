@@ -6,7 +6,9 @@ use std::sync::Arc;
 use dxmt_core::query::{TimestampQuery, VisibilityQuery};
 use winemetal_sys::Obj;
 
-use super::{Context, Mode, deferred::DeferredIssuedQuery, immediate::push_encoder_trace};
+use super::{
+    Context, Immediate, Mode, deferred::DeferredIssuedQuery, immediate::push_encoder_trace,
+};
 use crate::{
     abi::records::{D3d11QueryDataPipelineStatistics, D3d11QueryDataTimestampDisjoint},
     com::{E_INVALIDARG, Hresult, S_FALSE, S_OK},
@@ -128,7 +130,43 @@ impl<M: Mode> Context<M> {
             def.mode.open_queries.push(r#async);
         }
         if let Some(q) = Query::from_iface(r#async) {
-            q.begin(ptr::from_mut(self).cast());
+            let prev_state = q.state();
+            q.begin_query();
+            if matches!(
+                q.kind(),
+                crate::query::Kind::Occlusion { predicate: false }
+                    | crate::query::Kind::OcclusionPredicate
+            ) && prev_state != crate::query::State::Building
+            {
+                if let Some(imm) = self.as_immediate_mut() {
+                    if let Some(vq) = q.visibility().cloned() {
+                        if imm.is_live() {
+                            Immediate::emit_st(imm, move |enc| {
+                                enc.begin_visibility_query(Arc::clone(&vq));
+                            });
+                        } else {
+                            let seq = imm.mode.current_seq();
+                            let offset = imm.mode.visibility_offset;
+                            vq.begin(seq, offset);
+                            imm.mode
+                                .encoder_mut()
+                                .begin_visibility_query(Arc::clone(&vq));
+                        }
+                    }
+                } else if let Some(def) = self.as_deferred_mut() {
+                    let query_id = u32::try_from(def.mode.visibility_queries.len()).unwrap_or(0);
+                    let vq = Arc::new(VisibilityQuery::new());
+                    def.mode.visibility_queries.push(vq);
+                    def.mode
+                        .active_visibility_offsets
+                        .insert(r#async as usize, query_id);
+                    def.mode.commands_mut().emit_fn(move |enc| {
+                        if let Some(active) = enc.current_deferred_visibility_query(query_id) {
+                            enc.begin_visibility_query(active);
+                        }
+                    });
+                }
+            }
             return;
         }
         let Some(cq) = ContextQuery::from_ptr(r#async) else {
@@ -182,11 +220,115 @@ impl<M: Mode> Context<M> {
             def.mode.open_queries.retain(|&p| p != r#async);
         }
         if let Some(q) = Query::from_iface(r#async) {
-            q.end(ptr::from_mut(self).cast());
-            if let Some(def) = self.as_deferred_mut() {
-                def.mode.reissued_queries.push(DeferredIssuedQuery::Event {
-                    query_ptr: r#async as usize,
-                });
+            if let Some(imm) = self.as_immediate_mut() {
+                match q.kind() {
+                    crate::query::Kind::Event | crate::query::Kind::TimestampDisjoint => {
+                        if let Some(dev) = super::immediate::live_device(imm.device) {
+                            if imm.mode.has_dirty_op || imm.has_open_pass() {
+                                let event_seq = dev.core_mut().queue_mut().next_event_seq();
+                                q.end_at(event_seq);
+                                imm.finish_pass(true);
+                                Immediate::emit_op(imm, move |enc| {
+                                    enc.signal_queue_event(event_seq);
+                                });
+                            } else {
+                                let event_seq = dev.core().queue().current_event_seq();
+                                q.end_at(event_seq);
+                            }
+                        } else {
+                            let seq = imm.mode.current_seq();
+                            imm.mode.has_dirty_op = true;
+                            q.end_at(seq);
+                        }
+                    }
+                    crate::query::Kind::Timestamp => {
+                        q.end_at(0);
+                        if let Some(tq) = q.timestamp().cloned() {
+                            if imm.is_live() {
+                                imm.finish_pass(true);
+                                Immediate::emit_op(imm, move |enc| {
+                                    enc.sample_timestamp_query(Arc::clone(&tq));
+                                });
+                            } else {
+                                imm.mode.has_dirty_op = true;
+                                imm.mode
+                                    .encoder_mut()
+                                    .sample_timestamp_query(Arc::clone(&tq));
+                            }
+                        }
+                    }
+                    crate::query::Kind::Occlusion { predicate: false }
+                    | crate::query::Kind::OcclusionPredicate => {
+                        let was_building = q.state() == crate::query::State::Building;
+                        q.end_at(0);
+                        if was_building && let Some(vq) = q.visibility().cloned() {
+                            if imm.is_live() {
+                                imm.mode.has_dirty_op = true;
+                                Immediate::emit_st(imm, move |enc| {
+                                    enc.end_visibility_query(Arc::clone(&vq));
+                                });
+                            } else {
+                                let seq = imm.mode.current_seq();
+                                let offset = imm.mode.visibility_offset;
+                                vq.end(seq, offset);
+                                imm.mode.encoder_mut().end_visibility_query(Arc::clone(&vq));
+                                imm.mode.visibility_offset += 1;
+                                imm.mode.active_visibility_queries.push((
+                                    seq,
+                                    imm.mode.visibility_offset,
+                                    Arc::clone(&vq),
+                                ));
+                                imm.mode.has_dirty_op = true;
+                            }
+                        }
+                    }
+                    _ => {
+                        q.end_at(0);
+                    }
+                }
+            } else if let Some(def) = self.as_deferred_mut() {
+                q.end_at(0);
+                def.mode.has_promoted_flush = true;
+                match q.kind() {
+                    crate::query::Kind::Occlusion { predicate: false }
+                    | crate::query::Kind::OcclusionPredicate => {
+                        if let Some(query_id) = def
+                            .mode
+                            .active_visibility_offsets
+                            .remove(&(r#async as usize))
+                        {
+                            let vq = Arc::clone(&def.mode.visibility_queries[query_id as usize]);
+                            def.mode.commands_mut().emit_fn(move |enc| {
+                                if let Some(active) =
+                                    enc.current_deferred_visibility_query(query_id)
+                                {
+                                    enc.end_visibility_query(active);
+                                }
+                            });
+                            def.mode
+                                .reissued_queries
+                                .push(DeferredIssuedQuery::Visibility {
+                                    query_ptr: r#async as usize,
+                                    vq,
+                                });
+                        }
+                    }
+                    crate::query::Kind::Timestamp => {
+                        if let Some(tq) = q.timestamp().cloned() {
+                            def.mode
+                                .reissued_queries
+                                .push(DeferredIssuedQuery::Timestamp {
+                                    query_ptr: r#async as usize,
+                                    tq,
+                                });
+                        }
+                    }
+                    _ => {
+                        def.mode.reissued_queries.push(DeferredIssuedQuery::Event {
+                            query_ptr: r#async as usize,
+                        });
+                    }
+                }
             }
             return;
         }
@@ -310,7 +452,19 @@ impl<M: Mode> Context<M> {
             return E_INVALIDARG;
         }
         if let Some(q) = Query::from_iface(r#async) {
-            return q.data(ptr::from_mut(self).cast(), data, data_size, get_data_flags);
+            let coherent_seq = self.as_immediate().map_or(0, |imm| {
+                super::immediate::live_device(imm.device).map_or_else(
+                    || imm.mode.coherent_seq(),
+                    |dev| dev.core().queue().signaled_event_seq(),
+                )
+            });
+            let hr = q.data_at(coherent_seq, data, data_size);
+            if hr == S_FALSE
+                && ((get_data_flags & D3D11_ASYNC_GETDATA_DONOTFLUSH) == 0 || q.is_stalled())
+            {
+                self.flush();
+            }
+            return hr;
         }
         let Some(cq) = ContextQuery::from_ptr(r#async) else {
             return E_INVALIDARG;
@@ -487,19 +641,25 @@ impl<M: Mode> Context<M> {
         if fence.is_null() || self.as_deferred().is_some() {
             return E_INVALIDARG;
         }
-        let raw_ev = Fence::from_iface(fence).map_or_else(
-            // SAFETY: Standalone tests pass a pointer to a raw `u64` event handle.
-            || unsafe { (*fence.cast::<u64>()).max(1) },
-            |f| f.event().max(1),
-        );
+        let (raw_ev, keep_ev) = retain_fence_event(fence);
         self.finish_pass(false);
         M::emit_op(self, move |enc| {
-            // SAFETY: `raw_ev` is a non-zero shared-event handle.
-            if let Some(ev) = unsafe { Obj::adopt(raw_ev) } {
+            let _keep = &keep_ev;
+            let ev = if raw_ev > 0x1000 {
+                // SAFETY: `raw_ev` is kept alive by `keep_ev`.
+                unsafe { Obj::retain(raw_ev) }
+            } else {
+                // SAFETY: `raw_ev` is a non-zero test sentinel handle.
+                unsafe { Obj::adopt(raw_ev) }
+            };
+            if let Some(ev) = ev {
                 enc.signal_event(ev, value);
             }
             push_encoder_trace(enc, format!("SignalEvent({value})"));
         });
+        if self.is_live() {
+            self.flush();
+        }
         S_OK
     }
 
@@ -508,21 +668,45 @@ impl<M: Mode> Context<M> {
         if fence.is_null() || self.as_deferred().is_some() {
             return E_INVALIDARG;
         }
-        let raw_ev = Fence::from_iface(fence).map_or_else(
-            // SAFETY: Standalone tests pass a pointer to a raw `u64` event handle.
-            || unsafe { (*fence.cast::<u64>()).max(1) },
-            |f| f.event().max(1),
-        );
-        self.finish_pass(false);
+        let (raw_ev, keep_ev) = retain_fence_event(fence);
+        if self.is_live() {
+            self.flush();
+        } else {
+            self.finish_pass(false);
+        }
         M::emit_op(self, move |enc| {
-            // SAFETY: `raw_ev` is a non-zero shared-event handle.
-            if let Some(ev) = unsafe { Obj::adopt(raw_ev) } {
+            let _keep = &keep_ev;
+            let ev = if raw_ev > 0x1000 {
+                // SAFETY: `raw_ev` is kept alive by `keep_ev`.
+                unsafe { Obj::retain(raw_ev) }
+            } else {
+                // SAFETY: `raw_ev` is a non-zero test sentinel handle.
+                unsafe { Obj::adopt(raw_ev) }
+            };
+            if let Some(ev) = ev {
                 enc.wait_event(ev, value);
             }
             push_encoder_trace(enc, format!("WaitEvent({value})"));
         });
         S_OK
     }
+}
+
+fn retain_fence_event(fence: *mut c_void) -> (u64, Option<Obj>) {
+    if let Some(f) = Fence::from_iface(fence) {
+        let ev = f.shared_event();
+        let raw = ev.as_ref().map_or(1, Obj::handle);
+        return (raw, ev);
+    }
+    // SAFETY: Standalone tests pass a pointer to a raw `u64` event handle.
+    let raw = unsafe { (*fence.cast::<u64>()).max(1) };
+    let ev = if raw > 0x1000 {
+        // SAFETY: `raw` is a live `MTLSharedEvent`.
+        unsafe { Obj::retain(raw) }
+    } else {
+        None
+    };
+    (raw, ev)
 }
 
 fn write_hw_protection(out: *mut i32, enabled: bool) {

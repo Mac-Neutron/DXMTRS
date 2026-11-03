@@ -19,13 +19,15 @@ use crate::{
     },
 };
 
-/// `IMTLDXGIDevice` vtable (`IDXGIDevice3` + `GetMTLDevice` + `CreateSwapChain`).
+/// `IMTLDXGIDevice` vtable (`IDXGIDevice3` + `GetMTLDevice` + `GetLocalD3DKMT` + `CreateSwapChain`)
 #[repr(C)]
 pub struct IMTLDXGIDeviceVtbl {
     /// Base `IDXGIDevice3` vtable (18 slots).
     pub base: IDXGIDevice3Vtbl,
     /// `IMTLDXGIDevice::GetMTLDevice`.
     pub get_mtl_device: unsafe extern "system-unwind" fn(*mut c_void) -> u64,
+    /// `IMTLDXGIDevice::GetLocalD3DKMT`.
+    pub get_local_d3dkmt: unsafe extern "system-unwind" fn(*mut c_void) -> u32,
     /// `IMTLDXGIDevice::CreateSwapChain`.
     pub create_swap_chain: unsafe extern "system-unwind" fn(
         *mut c_void,
@@ -60,6 +62,7 @@ pub static VTBL: IMTLDXGIDeviceVtbl = IMTLDXGIDeviceVtbl {
         trim,
     },
     get_mtl_device,
+    get_local_d3dkmt,
     create_swap_chain,
 };
 
@@ -187,6 +190,13 @@ unsafe extern "system-unwind" fn create_surface(
         }
     }
     LOG.err("CreateSurface: not implemented");
+    #[cfg(all(not(windows), not(test)))]
+    {
+        // SAFETY: Recording not-implemented call for native probe diagnostic.
+        unsafe {
+            winemetal_sys::wmt_native_not_implemented();
+        }
+    }
     E_NOTIMPL
 }
 
@@ -306,6 +316,12 @@ unsafe extern "system-unwind" fn get_mtl_device(this: *mut c_void) -> u64 {
     // SAFETY: `this` is a valid `DxgiDevice` pointer.
     let dev = unsafe { &*this.cast::<DxgiDevice>() };
     dev.d3d11.core().device().handle()
+}
+
+unsafe extern "system-unwind" fn get_local_d3dkmt(this: *mut c_void) -> u32 {
+    // SAFETY: `this` is a valid `DxgiDevice` pointer.
+    let dev = unsafe { &*this.cast::<DxgiDevice>() };
+    dev.local_kmt
 }
 
 unsafe extern "system-unwind" fn create_swap_chain(

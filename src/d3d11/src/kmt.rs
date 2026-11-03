@@ -143,6 +143,22 @@ pub fn make_unique_shared_name() -> SharedName {
     out
 }
 
+/// Creates a D3DKMT device handle from `adapter_kmt` (`D3DKMTCreateDevice`).
+#[must_use]
+pub fn create_device(adapter_kmt: u32) -> u32 {
+    if adapter_kmt == 0 {
+        return 0;
+    }
+    platform::create_device(adapter_kmt)
+}
+
+/// Destroys a D3DKMT device handle (`D3DKMTDestroyDevice`).
+pub fn destroy_device(local_kmt: u32) {
+    if local_kmt != 0 {
+        platform::destroy_device(local_kmt);
+    }
+}
+
 /// Destroys a D3DKMT resource allocation (`D3DKMTDestroyAllocation`).
 pub fn destroy_allocation(kmt_device: u32, local_kmt: u32) {
     if local_kmt != 0 {
@@ -298,11 +314,51 @@ mod platform {
     }
 
     #[repr(C)]
+    struct D3dkmtCreateDevice {
+        adapter: usize,
+        flags: u32,
+        device: u32,
+        command_buffer: *mut c_void,
+        command_buffer_size: u32,
+        allocation_list: *mut c_void,
+        allocation_list_size: u32,
+        patch_location_list: *mut c_void,
+        patch_location_list_size: u32,
+    }
+
+    #[repr(C)]
+    struct D3dkmtDestroyDevice {
+        device: u32,
+    }
+
+    #[repr(C)]
+    struct D3dkmtDestroySynchronizationObject {
+        sync_object: u32,
+    }
+
+    #[repr(C)]
     struct D3dkmtDestroyAllocation {
         device: u32,
         resource: u32,
         allocation_list: *const u32,
         allocation_count: u32,
+    }
+
+    #[repr(C)]
+    struct D3dkmtCreateStandardAllocation {
+        r#type: u32,
+        existing_heap_size: usize,
+        flags: u32,
+    }
+
+    #[repr(C)]
+    struct D3dddiAllocationInfo {
+        allocation: u32,
+        sys_mem: *const c_void,
+        private_driver_data: *mut c_void,
+        private_driver_data_size: u32,
+        vid_pn_source_id: u32,
+        flags: u32,
     }
 
     #[repr(C)]
@@ -456,6 +512,11 @@ mod platform {
     }
 
     unsafe extern "system" {
+        fn D3DKMTCreateDevice(desc: *mut D3dkmtCreateDevice) -> i32;
+        fn D3DKMTDestroyDevice(desc: *const D3dkmtDestroyDevice) -> i32;
+        fn D3DKMTDestroySynchronizationObject(
+            desc: *const D3dkmtDestroySynchronizationObject,
+        ) -> i32;
         fn D3DKMTDestroyAllocation(desc: *const D3dkmtDestroyAllocation) -> i32;
         fn D3DKMTCreateAllocation2(desc: *mut D3dkmtCreateAllocation) -> i32;
         fn D3DKMTShareObjects(
@@ -516,6 +577,31 @@ mod platform {
         Some(len)
     }
 
+    pub fn create_device(adapter_kmt: u32) -> u32 {
+        let mut create = D3dkmtCreateDevice {
+            adapter: adapter_kmt as usize,
+            flags: 0,
+            device: 0,
+            command_buffer: ptr::null_mut(),
+            command_buffer_size: 0,
+            allocation_list: ptr::null_mut(),
+            allocation_list_size: 0,
+            patch_location_list: ptr::null_mut(),
+            patch_location_list_size: 0,
+        };
+        // SAFETY: `create` is a valid local `D3DKMT_CREATEDEVICE`.
+        if unsafe { D3DKMTCreateDevice(&raw mut create) } != 0 {
+            return 0;
+        }
+        create.device
+    }
+
+    pub fn destroy_device(local_kmt: u32) {
+        let destroy = D3dkmtDestroyDevice { device: local_kmt };
+        // SAFETY: `destroy` is a valid local `D3DKMT_DESTROYDEVICE`.
+        unsafe { D3DKMTDestroyDevice(&raw const destroy) };
+    }
+
     pub fn destroy_allocation(kmt_device: u32, local_kmt: u32) {
         let desc = D3dkmtDestroyAllocation {
             device: kmt_device,
@@ -535,9 +621,17 @@ mod platform {
         if (kmt_device & 0xc000_0000) == 0 {
             return None;
         }
-        let mut alloc_info = D3dddiAllocationInfo2 {
+        let system_mem = D3dddiAllocationInfo {
             allocation: 0,
             sys_mem: ptr::null(),
+            private_driver_data: ptr::null_mut(),
+            private_driver_data_size: 0,
+            vid_pn_source_id: 0,
+            flags: 0,
+        };
+        let mut alloc_info = D3dddiAllocationInfo2 {
+            allocation: 0,
+            sys_mem: (&raw const system_mem).cast(),
             private_driver_data: ptr::null_mut(),
             private_driver_data_size: 0,
             vid_pn_source_id: 0,
@@ -546,22 +640,28 @@ mod platform {
             priority: 0,
             reserved: [0; 5],
         };
-        // CreateResource (bit 0) | CreateShared (bit 1) | NtSecuritySharing (bit 6).
-        let flags = 0b11u32 | (u32::from(nt_security_sharing) << 6);
+        let standard_alloc = D3dkmtCreateStandardAllocation {
+            r#type: 1, // D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP
+            existing_heap_size: 0,
+            flags: 0,
+        };
+        // CreateResource (bit 0) | CreateShared (bit 1) | ExistingSysMem (bit 5)
+        // | NtSecuritySharing (bit 6) | StandardAllocation (bit 16).
+        let flags = 0b11u32 | (1u32 << 5) | (u32::from(nt_security_sharing) << 6) | (1u32 << 16);
         let mut create = D3dkmtCreateAllocation {
             device: kmt_device,
             resource: 0,
             global_share: 0,
             private_runtime_data: from_ref(runtime_data).cast(),
             private_runtime_data_size: u32::try_from(size_of::<SharedResourceData>()).unwrap_or(0),
-            private_driver_data: ptr::null(),
+            private_driver_data: (&raw const standard_alloc).cast(),
             private_driver_data_size: 0,
             num_allocations: 1,
             allocation_info2: &raw mut alloc_info,
             flags,
             private_runtime_resource_handle: ptr::null_mut(),
         };
-        // SAFETY: `create` and `alloc_info` are valid local structs.
+        // SAFETY: `create`, `alloc_info`, `standard_alloc`, and `system_mem` are valid local structs.
         let status = unsafe { D3DKMTCreateAllocation2(&raw mut create) };
         (status == 0).then_some((create.resource, create.global_share))
     }
@@ -616,11 +716,12 @@ mod platform {
         global_handle: u32,
     ) -> Option<SharedResourceData> {
         let expected_size = u32::try_from(size_of::<SharedResourceData>()).unwrap_or(0);
+        let mut runtime_data = SharedResourceData::default();
         let mut query = D3dkmtQueryResourceInfo {
             device: kmt_device,
             global_share: global_handle,
-            private_runtime_data: ptr::null_mut(),
-            private_runtime_data_size: 0,
+            private_runtime_data: (&raw mut runtime_data).cast(),
+            private_runtime_data_size: expected_size,
             total_private_driver_data_size: 0,
             resource_private_driver_data_size: 0,
             num_allocations: 0,
@@ -632,19 +733,14 @@ mod platform {
         if query.private_runtime_data_size != expected_size {
             return None;
         }
-        let mut allocs = Vec::new();
-        allocs.resize_with(
-            query.num_allocations as usize,
-            D3dddiOpenAllocationInfo2::default,
-        );
-        let mut runtime_data = SharedResourceData::default();
+        let mut alloc = D3dddiOpenAllocationInfo2::default();
         let mut open = D3dkmtOpenResource {
             device: kmt_device,
             global_share: global_handle,
-            num_allocations: query.num_allocations,
-            open_allocation_info2: allocs.as_mut_ptr(),
+            num_allocations: 1,
+            open_allocation_info2: &raw mut alloc,
             private_runtime_data: (&raw mut runtime_data).cast(),
-            private_runtime_data_size: expected_size,
+            private_runtime_data_size: query.private_runtime_data_size,
             resource_private_driver_data: ptr::null_mut(),
             resource_private_driver_data_size: 0,
             total_private_driver_data_buffer: ptr::null_mut(),
@@ -665,11 +761,12 @@ mod platform {
         nt_handle: *mut c_void,
     ) -> Option<SharedResourceData> {
         let expected_size = u32::try_from(size_of::<SharedResourceData>()).unwrap_or(0);
+        let mut runtime_data = SharedResourceData::default();
         let mut query = D3dkmtQueryResourceInfoFromNtHandle {
             device: kmt_device,
             nt_handle,
-            private_runtime_data: ptr::null_mut(),
-            private_runtime_data_size: 0,
+            private_runtime_data: (&raw mut runtime_data).cast(),
+            private_runtime_data_size: expected_size,
             total_private_driver_data_size: 0,
             resource_private_driver_data_size: 0,
             num_allocations: 0,
@@ -681,28 +778,23 @@ mod platform {
         if query.private_runtime_data_size != expected_size {
             return None;
         }
-        let mut allocs = Vec::new();
-        allocs.resize_with(
-            query.num_allocations as usize,
-            D3dddiOpenAllocationInfo2::default,
-        );
-        let mut runtime_data = SharedResourceData::default();
-        let mut mutex_data: SharedName = [0; SHARED_NAME_LEN];
+        let mut alloc = D3dddiOpenAllocationInfo2::default();
+        let mut dummy = 0u8;
         let mut open = D3dkmtOpenResourceFromNtHandle {
             device: kmt_device,
             nt_handle,
-            num_allocations: query.num_allocations,
-            open_allocation_info2: allocs.as_mut_ptr(),
-            private_runtime_data_size: expected_size,
+            num_allocations: 1,
+            open_allocation_info2: &raw mut alloc,
+            private_runtime_data_size: query.private_runtime_data_size,
             private_runtime_data: (&raw mut runtime_data).cast(),
             resource_private_driver_data_size: 0,
             resource_private_driver_data: ptr::null_mut(),
             total_private_driver_data_buffer_size: 0,
-            total_private_driver_data_buffer: ptr::null_mut(),
+            total_private_driver_data_buffer: (&raw mut dummy).cast(),
             resource: 0,
             keyed_mutex: 0,
-            keyed_mutex_private_runtime_data: mutex_data.as_mut_ptr().cast(),
-            keyed_mutex_private_runtime_data_size: u32::try_from(SHARED_NAME_LEN).unwrap_or(0),
+            keyed_mutex_private_runtime_data: ptr::null_mut(),
+            keyed_mutex_private_runtime_data_size: 0,
             sync_object: 0,
         };
         // SAFETY: `open` and its buffers are valid local allocations.
@@ -711,6 +803,16 @@ mod platform {
             return None;
         }
         destroy_allocation(kmt_device, open.resource);
+        if open.sync_object != 0 {
+            let destroy_sync = D3dkmtDestroySynchronizationObject {
+                sync_object: open.sync_object,
+            };
+            // SAFETY: `destroy_sync` is a valid local `D3DKMT_DESTROYSYNCHRONIZATIONOBJECT`.
+            unsafe { D3DKMTDestroySynchronizationObject(&raw const destroy_sync) };
+        }
+        if open.keyed_mutex != 0 {
+            destroy_keyed_mutex(open.keyed_mutex);
+        }
         Some(runtime_data)
     }
 
@@ -840,6 +942,17 @@ mod platform {
 
     fn touch() {
         let _ = SHARED_NAME_SEQ.load(Ordering::Relaxed);
+    }
+
+    pub fn create_device(adapter_kmt: u32) -> u32 {
+        touch();
+        let _ = adapter_kmt;
+        0
+    }
+
+    pub fn destroy_device(local_kmt: u32) {
+        touch();
+        let _ = local_kmt;
     }
 
     pub fn destroy_allocation(kmt_device: u32, local_kmt: u32) {

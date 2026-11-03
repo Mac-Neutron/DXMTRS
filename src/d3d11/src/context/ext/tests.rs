@@ -9,7 +9,7 @@ use winemetal_sys::Obj;
 
 use crate::{
     abi::ext::{D3D11Piece, D3D11UpscaleDesc, FEATURE_METALFX_TEMPORAL_SCALER},
-    com::{E_FAIL, E_INVALIDARG, S_OK},
+    com::{E_INVALIDARG, E_NOTIMPL, S_OK},
     context::{Context, immediate::encoder_trace},
     resource::Common,
 };
@@ -46,7 +46,7 @@ fn pieces_refused_on_deferred() {
 
     let mut def = Context::new_deferred(ptr::null_mut(), 0);
     let mut piece = zero_piece();
-    assert_eq!(def.get_pieces(res_ptr, 0, 1, &raw mut piece), E_FAIL);
+    assert_eq!(def.get_pieces(res_ptr, 0, 1, &raw mut piece), E_NOTIMPL);
 
     // On immediate context, GetPieces lends pieces and UsePiece switches the active piece.
     let mut imm = Context::new_immediate(ptr::null_mut());
@@ -57,11 +57,15 @@ fn pieces_refused_on_deferred() {
     assert!(!pieces[1].cpu.is_null());
 
     imm.use_piece(res_ptr, 0, pieces[1].id);
-    assert_eq!(dyn_buf.immediate_piece(), pieces[1].id);
+    assert_eq!(dyn_buf.immediate_piece(), pieces[1].id >> 16);
     assert_eq!(
         dyn_buf.immediate_mapped_memory().cast::<c_void>(),
         pieces[1].cpu
     );
+    let mut current = zero_piece();
+    assert_eq!(imm.get_pieces(res_ptr, 0, 0, &raw mut current), S_OK);
+    assert_eq!(current.id, pieces[1].id);
+    assert_eq!(current.cpu, pieces[1].cpu);
 }
 
 #[test]

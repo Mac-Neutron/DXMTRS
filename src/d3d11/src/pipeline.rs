@@ -9,12 +9,26 @@ use std::sync::{Arc, Mutex};
 
 use dxmt_core::format::{depth_stencil_planar_flags, is_unorm8_rt};
 use rustc_hash::FxHashMap;
+use winemetal_sys::{
+    MTLDevice_newComputePipelineState, MTLDevice_newMeshRenderPipelineState,
+    MTLDevice_newRenderPipelineState, MTLDevice_supportsFamily, Obj,
+    wire::{
+        WMTColorAttachmentBlendInfo, WMTComputePipelineInfo, WMTGPU_FAMILY_APPLE7,
+        WMTGPU_FAMILY_APPLE9, WMTMeshRenderPipelineInfo, WMTRenderPipelineBlendInfo,
+        WMTRenderPipelineInfo,
+    },
+};
 
 use crate::{
+    LOG,
     com::Hresult,
+    device::Device,
     input_layout::{InputLayout, StreamOutputLayout},
     scheduler::CompileJob,
-    shader::{ManagedShader, args::EMPTY_SHA1},
+    shader::{
+        ManagedShader,
+        args::{EMPTY_SHA1, IaLayoutChainInput, SoLayoutChainInput},
+    },
     state::BlendState,
 };
 
@@ -27,7 +41,10 @@ use self::{
     compute::{ComputePipelineSpec, build_compute_pipeline},
     graphics::{GraphicsPipelineSpec, build_graphics_pipeline},
     gs::{GeometryPipelineSpec, build_geometry_pipeline},
-    ts::{TessellationPipelineSpec, build_tessellation_pipeline},
+    ts::{
+        TessellationPipelineSpec, build_tessellation_pipeline,
+        build_tessellation_pipeline_with_caps,
+    },
 };
 
 /// Immutable vertex buffer bitmask for graphics PSOs: slots 16, 29 and 30 (`d3d11_pipeline.cpp`).
@@ -75,6 +92,28 @@ pub const fn depth_stencil_planes(format: u32) -> (u32, u32) {
 #[must_use]
 pub const fn is_unorm8_render_target_format(pixel_format: u32) -> bool {
     is_unorm8_rt(pixel_format)
+}
+
+/// Default `WMTRenderPipelineBlendInfo` (`WMT::InitializeRenderPipelineInfo` in `Metal.hpp`).
+#[must_use]
+pub const fn default_blend_info() -> WMTRenderPipelineBlendInfo {
+    const ATTACHMENT: WMTColorAttachmentBlendInfo = WMTColorAttachmentBlendInfo {
+        pixel_format: 0,
+        blending_enabled: 0,
+        write_mask: 15,
+        rgb_blend_operation: 0,
+        alpha_blend_operation: 0,
+        src_rgb_blend_factor: 1,
+        dst_rgb_blend_factor: 0,
+        src_alpha_blend_factor: 1,
+        dst_alpha_blend_factor: 0,
+    };
+    WMTRenderPipelineBlendInfo {
+        colors: [ATTACHMENT; 8],
+        alpha_to_coverage_enabled: 0,
+        logic_operation_enabled: 0,
+        logic_operation: 0,
+    }
 }
 
 static NEXT_PSO_HANDLE: AtomicU64 = AtomicU64::new(1);
@@ -176,6 +215,8 @@ impl GraphicsKey {
 }
 
 /// Specialization path chosen for a graphics pipeline.
+static TS_GLOBAL_MUTEX: Mutex<()> = Mutex::new(());
+
 pub enum GraphicsPipelineKind {
     Standard(Box<GraphicsPipelineSpec>),
     GeometryMesh(Box<GeometryPipelineSpec>),
@@ -185,6 +226,7 @@ pub enum GraphicsPipelineKind {
 /// Compiled graphics pipeline state (`MTLCompiledGraphicsPipeline`).
 pub struct CompiledGraphics {
     handle: AtomicU64,
+    _pso_obj: Option<Obj>,
     job: Option<CompileJob>,
     pub kind: GraphicsPipelineKind,
 }
@@ -194,6 +236,7 @@ impl Default for CompiledGraphics {
         let desc = GraphicsDesc::default();
         Self {
             handle: AtomicU64::new(0),
+            _pso_obj: None,
             job: None,
             kind: GraphicsPipelineKind::Standard(Box::new(build_graphics_pipeline(&desc))),
         }
@@ -219,6 +262,7 @@ impl CompiledGraphics {
 /// Compiled compute pipeline state (`MTLCompiledComputePipeline`).
 pub struct CompiledCompute {
     handle: AtomicU64,
+    _pso_obj: Option<Obj>,
     job: Option<CompileJob>,
     pub spec: ComputePipelineSpec,
 }
@@ -227,6 +271,7 @@ impl Default for CompiledCompute {
     fn default() -> Self {
         Self {
             handle: AtomicU64::new(0),
+            _pso_obj: None,
             job: None,
             spec: ComputePipelineSpec {
                 variant: crate::shader::args::ShaderVariant::Default,
@@ -254,7 +299,7 @@ impl CompiledCompute {
 
 /// Per-device shader and pipeline state cache (`MTLD3D11PipelineCache`).
 pub struct PipelineCache {
-    _device: *mut c_void,
+    device: *mut c_void,
     shaders: Mutex<FxHashMap<[u8; 20], Arc<ManagedShader>>>,
     graphics_psos: Mutex<FxHashMap<GraphicsKey, Arc<CompiledGraphics>>>,
     compute_psos: Mutex<FxHashMap<[u8; 20], Arc<CompiledCompute>>>,
@@ -276,10 +321,23 @@ impl PipelineCache {
     #[must_use]
     pub fn new(device: *mut c_void) -> Self {
         Self {
-            _device: device,
+            device,
             shaders: Mutex::new(FxHashMap::default()),
             graphics_psos: Mutex::new(FxHashMap::default()),
             compute_psos: Mutex::new(FxHashMap::default()),
+        }
+    }
+
+    /// Associates `device` with this pipeline cache and opens the shader cache DB if live.
+    pub fn set_device(&mut self, device: *mut c_void) {
+        self.device = device;
+        if let Some(dev) = Device::from_iface(device)
+            && dev.core().device().handle() > 0x1000
+        {
+            let _ = dxmt_core::shader_cache::instance(
+                dev.core().metal_version(),
+                crate::shader::shader_cache_version(),
+            );
         }
     }
 
@@ -287,7 +345,7 @@ impl PipelineCache {
     ///
     /// # Errors
     ///
-    /// Returns `E_INVALIDARG` if `ManagedShader::from_bytecode` fails.
+    /// Returns `E_INVALIDARG` or `E_FAIL` if `ManagedShader::from_bytecode` fails.
     pub fn get_or_create_shader(&self, bytes: &[u8]) -> Result<Arc<ManagedShader>, Hresult> {
         let sha1 = dxmt_util::sha1::Sha1::compute(bytes).0;
         let mut map = self
@@ -315,16 +373,40 @@ impl PipelineCache {
             return Arc::clone(existing);
         }
 
+        let live_dev =
+            Device::from_iface(self.device).filter(|dev| dev.core().device().handle() > 0x1000);
+
         let kind = if desc.hull_shader.is_some() && desc.domain_shader.is_some() {
-            GraphicsPipelineKind::Tessellation(Box::new(build_tessellation_pipeline(desc)))
+            let spec = live_dev.map_or_else(
+                || build_tessellation_pipeline(desc),
+                |dev| {
+                    let mtl = dev.core().device().handle();
+                    // SAFETY: `mtl` is a live `WMTDevice` handle.
+                    let a7 = unsafe { MTLDevice_supportsFamily(mtl, WMTGPU_FAMILY_APPLE7) };
+                    // SAFETY: `mtl` is a live `WMTDevice` handle.
+                    let a9 = unsafe { MTLDevice_supportsFamily(mtl, WMTGPU_FAMILY_APPLE9) };
+                    build_tessellation_pipeline_with_caps(desc, a7, a9)
+                },
+            );
+            GraphicsPipelineKind::Tessellation(Box::new(spec))
         } else if desc.geometry_shader.is_some() {
             GraphicsPipelineKind::GeometryMesh(Box::new(build_geometry_pipeline(desc)))
         } else {
             GraphicsPipelineKind::Standard(Box::new(build_graphics_pipeline(desc)))
         };
 
+        let (handle_val, pso_obj) = live_dev.map_or_else(
+            || (next_pso_handle(), None),
+            |dev| {
+                let obj = compile_graphics_pso(dev, desc, &kind);
+                let h = obj.as_ref().map_or(0, Obj::handle);
+                (h, obj)
+            },
+        );
+
         let compiled = Arc::new(CompiledGraphics {
-            handle: AtomicU64::new(next_pso_handle()),
+            handle: AtomicU64::new(handle_val),
+            _pso_obj: pso_obj,
             job: None,
             kind,
         });
@@ -343,14 +425,261 @@ impl PipelineCache {
             return Arc::clone(existing);
         }
         let spec = build_compute_pipeline(shader);
+
+        let live_dev =
+            Device::from_iface(self.device).filter(|dev| dev.core().device().handle() > 0x1000);
+        let (handle_val, pso_obj) = live_dev.map_or_else(
+            || (next_pso_handle(), None),
+            |dev| {
+                let obj = compile_compute_pso(dev, shader, &spec);
+                let h = obj.as_ref().map_or(0, Obj::handle);
+                (h, obj)
+            },
+        );
+
         let compiled = Arc::new(CompiledCompute {
-            handle: AtomicU64::new(next_pso_handle()),
+            handle: AtomicU64::new(handle_val),
+            _pso_obj: pso_obj,
             job: None,
             spec,
         });
         map.insert(shader.sha1, Arc::clone(&compiled));
         compiled
     }
+}
+
+fn compile_graphics_pso(
+    dev: &Device,
+    desc: &GraphicsDesc,
+    kind: &GraphicsPipelineKind,
+) -> Option<Obj> {
+    let mtl_dev = dev.core().device().handle();
+    let ia_input = desc.input_layout.and_then(|il| {
+        if il.is_null() {
+            None
+        } else {
+            // SAFETY: `il` points to a valid `InputLayout`.
+            let il_ref = unsafe { &*il };
+            Some(IaLayoutChainInput {
+                slot_mask: il_ref.slot_mask(),
+                elements: il_ref.elements(),
+            })
+        }
+    });
+    let so_input = desc.so_layout.and_then(|so| {
+        if so.is_null() {
+            None
+        } else {
+            // SAFETY: `so` points to a valid `StreamOutputLayout`.
+            let so_ref = unsafe { &*so };
+            Some(SoLayoutChainInput {
+                elements: &so_ref.elements,
+                strides: so_ref.strides,
+            })
+        }
+    });
+
+    match *kind {
+        GraphicsPipelineKind::Standard(ref spec) => {
+            let vs_fn = desc.vertex_shader.as_ref().map_or(0, |vs| {
+                vs.compile_variant(dev, &spec.vs_variant, ia_input, so_input, None)
+            });
+            if vs_fn == 0 {
+                return None;
+            }
+            let ps_fn = match (desc.pixel_shader.as_ref(), spec.ps_variant.as_ref()) {
+                (Some(ps), Some(pv)) => {
+                    let h = ps.compile_variant(dev, pv, None, None, None);
+                    if h == 0 {
+                        return None;
+                    }
+                    h
+                }
+                _ => 0,
+            };
+            // SAFETY: `WMTRenderPipelineInfo` is a C ABI struct of plain integers.
+            let mut info: WMTRenderPipelineInfo = unsafe { core::mem::zeroed() };
+            info.colors = spec.blend_info.colors;
+            info.alpha_to_coverage_enabled = spec.blend_info.alpha_to_coverage_enabled;
+            info.vertex_function = vs_fn;
+            info.fragment_function = ps_fn;
+            info.rasterization_enabled = u8::from(desc.rasterization_enabled);
+            info.depth_pixel_format = spec.depth_pixel_format;
+            info.stencil_pixel_format = spec.stencil_pixel_format;
+            info.input_primitive_topology = desc.topology_class;
+            info.raster_sample_count = desc.sample_count;
+            info.immutable_vertex_buffers = spec.immutable_vertex_buffers;
+            info.immutable_fragment_buffers = spec.immutable_fragment_buffers;
+            info.max_tessellation_factor = 16;
+            info.tessellation_factor_step = 1;
+
+            let mut err_raw = 0u64;
+            // SAFETY: `mtl_dev` is live and `info` is valid.
+            let pso_raw = unsafe {
+                MTLDevice_newRenderPipelineState(mtl_dev, &raw mut info, &raw mut err_raw)
+            };
+            // SAFETY: adopts returned error reference if non-zero.
+            let _err_obj = unsafe { Obj::adopt(err_raw) };
+            // SAFETY: adopts +1 reference from `MTLDevice_newRenderPipelineState`.
+            let pso_obj = unsafe { Obj::adopt(pso_raw) };
+            if pso_obj.is_none() {
+                LOG.err("Failed to create PSO");
+            }
+            pso_obj
+        }
+        GraphicsPipelineKind::GeometryMesh(ref spec) => {
+            let (Some(vs), Some(gs)) = (desc.vertex_shader.as_ref(), desc.geometry_shader.as_ref())
+            else {
+                return None;
+            };
+            let vs_fn = vs.compile_variant(dev, &spec.vs_variant, ia_input, None, Some(gs));
+            if vs_fn == 0 {
+                LOG.err("Failed to create mesh PSO: Invalid vertex shader.");
+                return None;
+            }
+            let gs_fn = gs.compile_variant(dev, &spec.gs_variant, None, None, Some(vs));
+            if gs_fn == 0 {
+                LOG.err("Failed to create mesh PSO: Invalid geometry shader.");
+                return None;
+            }
+            let ps_fn = match (desc.pixel_shader.as_ref(), spec.ps_variant.as_ref()) {
+                (Some(ps), Some(pv)) => {
+                    let h = ps.compile_variant(dev, pv, None, None, None);
+                    if h == 0 {
+                        LOG.err("Failed to create mesh PSO: Invalid pixel shader.");
+                        return None;
+                    }
+                    h
+                }
+                _ => 0,
+            };
+            // SAFETY: `WMTMeshRenderPipelineInfo` is a C ABI struct of plain integers.
+            let mut info: WMTMeshRenderPipelineInfo = unsafe { core::mem::zeroed() };
+            info.colors = spec.blend_info.colors;
+            info.alpha_to_coverage_enabled = spec.blend_info.alpha_to_coverage_enabled;
+            info.object_function = vs_fn;
+            info.mesh_function = gs_fn;
+            info.fragment_function = ps_fn;
+            info.payload_memory_length = spec.payload_memory_length;
+            info.immutable_object_buffers = spec.immutable_object_buffers;
+            info.immutable_mesh_buffers = spec.immutable_mesh_buffers;
+            info.immutable_fragment_buffers = spec.immutable_fragment_buffers;
+            info.rasterization_enabled = u8::from(desc.rasterization_enabled);
+            info.depth_pixel_format = spec.depth_pixel_format;
+            info.stencil_pixel_format = spec.stencil_pixel_format;
+            info.raster_sample_count = desc.sample_count;
+
+            let mut err_raw = 0u64;
+            // SAFETY: `mtl_dev` is live and `info` is valid.
+            let pso_raw = unsafe {
+                MTLDevice_newMeshRenderPipelineState(mtl_dev, &raw mut info, &raw mut err_raw)
+            };
+            // SAFETY: adopts returned error reference if non-zero.
+            let _err_obj = unsafe { Obj::adopt(err_raw) };
+            // SAFETY: adopts +1 reference from `MTLDevice_newMeshRenderPipelineState`.
+            let pso_obj = unsafe { Obj::adopt(pso_raw) };
+            if pso_obj.is_none() {
+                LOG.err("Failed to create mesh PSO");
+            }
+            pso_obj
+        }
+        GraphicsPipelineKind::Tessellation(ref spec) => {
+            let (Some(vs), Some(hs), Some(ds)) = (
+                desc.vertex_shader.as_ref(),
+                desc.hull_shader.as_ref(),
+                desc.domain_shader.as_ref(),
+            ) else {
+                return None;
+            };
+            let vhs_fn = hs.compile_variant(dev, &spec.vshs_variant, ia_input, None, Some(vs));
+            if vhs_fn == 0 {
+                LOG.err("Failed to create tess-mesh PSO: Invalid vertex-hull shader.");
+                return None;
+            }
+            let ds_fn = ds.compile_variant(dev, &spec.ds_variant, None, None, Some(hs));
+            if ds_fn == 0 {
+                LOG.err("Failed to create tess-mesh PSO: Invalid domain shader.");
+                return None;
+            }
+            let ps_fn = match (desc.pixel_shader.as_ref(), spec.ps_variant.as_ref()) {
+                (Some(ps), Some(pv)) => {
+                    let h = ps.compile_variant(dev, pv, None, None, None);
+                    if h == 0 {
+                        LOG.err("Failed to create mesh PSO: Invalid pixel shader.");
+                        return None;
+                    }
+                    h
+                }
+                _ => 0,
+            };
+            // SAFETY: `WMTMeshRenderPipelineInfo` is a C ABI struct of plain integers.
+            let mut info: WMTMeshRenderPipelineInfo = unsafe { core::mem::zeroed() };
+            info.colors = spec.blend_info.colors;
+            info.alpha_to_coverage_enabled = spec.blend_info.alpha_to_coverage_enabled;
+            info.object_function = vhs_fn;
+            info.mesh_function = ds_fn;
+            info.fragment_function = ps_fn;
+            info.payload_memory_length = spec.payload_memory_length;
+            info.immutable_object_buffers = spec.immutable_object_buffers;
+            info.immutable_mesh_buffers = spec.immutable_mesh_buffers;
+            info.immutable_fragment_buffers = spec.immutable_fragment_buffers;
+            info.rasterization_enabled = u8::from(desc.rasterization_enabled);
+            info.depth_pixel_format = spec.depth_pixel_format;
+            info.stencil_pixel_format = spec.stencil_pixel_format;
+            info.raster_sample_count = desc.sample_count;
+            info.mesh_tgsize_is_multiple_of_sgwidth = 1;
+            info.object_tgsize_is_multiple_of_sgwidth = 1;
+
+            let mut err_raw = 0u64;
+            let pso_raw = {
+                let _lock = TS_GLOBAL_MUTEX
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // SAFETY: `mtl_dev` is live and `info` is valid.
+                unsafe {
+                    MTLDevice_newMeshRenderPipelineState(mtl_dev, &raw mut info, &raw mut err_raw)
+                }
+            };
+            // SAFETY: adopts returned error reference if non-zero.
+            let _err_obj = unsafe { Obj::adopt(err_raw) };
+            // SAFETY: adopts +1 reference from `MTLDevice_newMeshRenderPipelineState`.
+            let pso_obj = unsafe { Obj::adopt(pso_raw) };
+            if pso_obj.is_none() {
+                LOG.err("Failed to create tessellation raster PSO");
+            }
+            pso_obj
+        }
+    }
+}
+
+fn compile_compute_pso(
+    dev: &Device,
+    shader: &ManagedShader,
+    spec: &ComputePipelineSpec,
+) -> Option<Obj> {
+    let cs_fn = shader.compile_variant(dev, &spec.variant, None, None, None);
+    if cs_fn == 0 {
+        return None;
+    }
+    let mtl_dev = dev.core().device().handle();
+    let total_tg = spec.threadgroup_size[0] * spec.threadgroup_size[1] * spec.threadgroup_size[2];
+    // SAFETY: `WMTComputePipelineInfo` is a C ABI struct of plain integers.
+    let mut info: WMTComputePipelineInfo = unsafe { core::mem::zeroed() };
+    info.compute_function = cs_fn;
+    info.tgsize_is_multiple_of_sgwidth = u8::from(total_tg.is_multiple_of(32));
+    info.immutable_buffers = IMMUTABLE_FRAGMENT_BUFFERS;
+    let mut err_raw = 0u64;
+    // SAFETY: `mtl_dev` is live and `info` is valid.
+    let pso_raw =
+        unsafe { MTLDevice_newComputePipelineState(mtl_dev, &raw mut info, &raw mut err_raw) };
+    // SAFETY: adopts returned error reference if non-zero.
+    let _err_obj = unsafe { Obj::adopt(err_raw) };
+    // SAFETY: adopts +1 reference from `MTLDevice_newComputePipelineState`.
+    let pso_obj = unsafe { Obj::adopt(pso_raw) };
+    if pso_obj.is_none() {
+        LOG.err("Failed to create compute PSO");
+    }
+    pso_obj
 }
 
 #[cfg(test)]

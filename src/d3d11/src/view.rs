@@ -30,8 +30,8 @@ use crate::{
         },
     },
     com::{
-        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult,
-        S_OK, add_ref, vtbl,
+        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, S_OK,
+        add_ref, vtbl,
     },
     d3d10,
     device::Device,
@@ -56,12 +56,8 @@ pub struct Srv {
 impl Srv {
     /// Recovers `&Srv` from an `ID3D11ShaderResourceView*` pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        if iface.is_null() {
-            return None;
-        }
-        // SAFETY: non-null `ID3D11ShaderResourceView*` pointers are `SrvObject` instances.
-        Some(unsafe { &(*iface.cast::<SrvObject>()).inner })
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        SrvObject::from_iface(iface).map(|o| &o.inner)
     }
 }
 
@@ -85,12 +81,8 @@ pub struct Rtv {
 impl Rtv {
     /// Recovers `&Rtv` from an `ID3D11RenderTargetView*` pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        if iface.is_null() {
-            return None;
-        }
-        // SAFETY: non-null `ID3D11RenderTargetView*` pointers are `RtvObject` instances.
-        Some(unsafe { &(*iface.cast::<RtvObject>()).inner })
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        RtvObject::from_iface(iface).map(|o| &o.inner)
     }
 }
 
@@ -112,12 +104,8 @@ pub struct Dsv {
 impl Dsv {
     /// Recovers `&Dsv` from an `ID3D11DepthStencilView*` pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        if iface.is_null() {
-            return None;
-        }
-        // SAFETY: non-null `ID3D11DepthStencilView*` pointers are `DsvObject` instances.
-        Some(unsafe { &(*iface.cast::<DsvObject>()).inner })
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        DsvObject::from_iface(iface).map(|o| &o.inner)
     }
 }
 
@@ -137,12 +125,8 @@ pub struct Uav {
 impl Uav {
     /// Recovers `&Uav` from an `ID3D11UnorderedAccessView*` pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        if iface.is_null() {
-            return None;
-        }
-        // SAFETY: non-null `ID3D11UnorderedAccessView*` pointers are `UavObject` instances.
-        Some(unsafe { &(*iface.cast::<UavObject>()).inner })
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        UavObject::from_iface(iface).map(|o| &o.inner)
     }
 }
 
@@ -168,6 +152,21 @@ impl Drop for SrvObject {
 }
 
 impl SrvObject {
+    /// Recovers `&SrvObject` from an `ID3D11ShaderResourceView*` pointer if the vtable matches.
+    #[must_use]
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() || iface.addr() <= 0x1000 || !iface.cast::<Self>().is_aligned() {
+            return None;
+        }
+        // SAFETY: `iface` is non-null, above the low-page sentinel range, and aligned.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11ShaderResourceView1Vtbl>() };
+        if !core::ptr::eq(vtbl, &raw const SRV_VTBL) {
+            return None;
+        }
+        // SAFETY: vtable matched `SRV_VTBL`.
+        Some(unsafe { &*iface.cast::<Self>() })
+    }
+
     /// Allocates a heap `SrvObject` with 1 public ref and 1 private ref on `inner.resource`.
     #[must_use]
     pub fn into_raw(
@@ -218,6 +217,21 @@ impl Drop for RtvObject {
 }
 
 impl RtvObject {
+    /// Recovers `&RtvObject` from an `ID3D11RenderTargetView*` pointer if the vtable matches.
+    #[must_use]
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() || iface.addr() <= 0x1000 || !iface.cast::<Self>().is_aligned() {
+            return None;
+        }
+        // SAFETY: `iface` is non-null, above the low-page sentinel range, and aligned.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11RenderTargetView1Vtbl>() };
+        if !core::ptr::eq(vtbl, &raw const RTV_VTBL) {
+            return None;
+        }
+        // SAFETY: vtable matched `RTV_VTBL`.
+        Some(unsafe { &*iface.cast::<Self>() })
+    }
+
     /// Allocates a heap `RtvObject` with 1 public ref and 1 private ref on `inner.resource`.
     #[must_use]
     pub fn into_raw(
@@ -271,6 +285,21 @@ impl Drop for DsvObject {
 }
 
 impl DsvObject {
+    /// Recovers `&DsvObject` from an `ID3D11DepthStencilView*` pointer if the vtable matches.
+    #[must_use]
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() || iface.addr() <= 0x1000 || !iface.cast::<Self>().is_aligned() {
+            return None;
+        }
+        // SAFETY: `iface` is non-null, above the low-page sentinel range, and aligned.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11DepthStencilViewVtbl>() };
+        if !core::ptr::eq(vtbl, &raw const DSV_VTBL) {
+            return None;
+        }
+        // SAFETY: vtable matched `DSV_VTBL`.
+        Some(unsafe { &*iface.cast::<Self>() })
+    }
+
     /// Allocates a heap `DsvObject` with 1 public ref and 1 private ref on `inner.resource`.
     #[must_use]
     pub fn into_raw(
@@ -323,6 +352,21 @@ impl Drop for UavObject {
 }
 
 impl UavObject {
+    /// Recovers `&UavObject` from an `ID3D11UnorderedAccessView*` pointer if the vtable matches.
+    #[must_use]
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() || iface.addr() <= 0x1000 || !iface.cast::<Self>().is_aligned() {
+            return None;
+        }
+        // SAFETY: `iface` is non-null, above the low-page sentinel range, and aligned.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11UnorderedAccessView1Vtbl>() };
+        if !core::ptr::eq(vtbl, &raw const UAV_VTBL) {
+            return None;
+        }
+        // SAFETY: vtable matched `UAV_VTBL`.
+        Some(unsafe { &*iface.cast::<Self>() })
+    }
+
     /// Allocates a heap `UavObject` with 1 public ref and 1 private ref on `inner.resource`.
     #[must_use]
     pub fn into_raw(
@@ -399,6 +443,9 @@ unsafe extern "system-unwind" fn srv_query_interface(
         // SAFETY: `out` is non-null.
         unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
         return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_SHADER_RESOURCE_VIEW, &iid) {
+        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }
@@ -558,6 +605,9 @@ unsafe extern "system-unwind" fn rtv_query_interface(
         unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
         return S_OK;
     }
+    if crate::com::qi_log(&IID_ID3D11_RENDER_TARGET_VIEW, &iid) {
+        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
+    }
     E_NOINTERFACE
 }
 
@@ -715,6 +765,9 @@ unsafe extern "system-unwind" fn dsv_query_interface(
         unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
         return S_OK;
     }
+    if crate::com::qi_log(&IID_ID3D11_DEPTH_STENCIL_VIEW, &iid) {
+        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
+    }
     E_NOINTERFACE
 }
 
@@ -851,6 +904,9 @@ unsafe extern "system-unwind" fn uav_query_interface(
         // SAFETY: `out` is non-null.
         unsafe { *out = this };
         return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_UNORDERED_ACCESS_VIEW, &iid) {
+        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }
@@ -1099,7 +1155,6 @@ fn create_rtv1_inner(
     // SAFETY: `resource` is a live `Resource`.
     let res = unsafe { Resource::from_ptr(resource) };
     match (&res.kind, &res.desc) {
-        (ResourceKind::DefaultBuffer, ResourceDesc::Buffer(_)) => E_NOTIMPL,
         (ResourceKind::DeviceTexture, ResourceDesc::Texture1d(_)) => {
             resource::texture::create_texture_rtv_1d(device, resource, desc, out)
         }

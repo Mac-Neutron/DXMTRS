@@ -1988,6 +1988,7 @@ fn import_shared_texture_inner(
     }
     let handle_u32 = u32::try_from((handle.expose_provenance() as u64) & 0xffff_ffff).unwrap_or(0);
     if (handle_u32 & 0xc000_0000) == 0 {
+        crate::LOG.warn("ImportSharedTexture: Invalid shared handle type");
         return E_INVALIDARG;
     }
     if out.is_null() {
@@ -2021,6 +2022,7 @@ fn import_shared_texture_from_nt_handle_inner(
         unsafe { *out = ptr::null_mut() };
     }
     if (handle.expose_provenance() & 0xc000_0000) != 0 {
+        crate::LOG.warn("ImportSharedTextureFromNtHandle: Invalid shared handle type");
         return E_INVALIDARG;
     }
     if out.is_null() {
@@ -2028,6 +2030,10 @@ fn import_shared_texture_from_nt_handle_inner(
     }
     let kmt_device = kmt::device_local_kmt(device);
     let Some(runtime_data) = kmt::open_shared_from_nt_handle(kmt_device, handle) else {
+        crate::LOG.warn(&format!(
+            "ImportSharedTextureFromNtHandle: Failed to query resource: {:x}",
+            handle.expose_provenance()
+        ));
         return E_INVALIDARG;
     };
     import_from_runtime_data(device, &runtime_data, riid, out)
@@ -2053,6 +2059,25 @@ fn import_shared_texture_by_name_inner(
 ) -> Hresult {
     let nt_handle = kmt::open_nt_handle_from_name(name, access);
     if nt_handle.is_null() {
+        if !name.is_null() {
+            let mut len = 0usize;
+            loop {
+                // SAFETY: `name` is a NUL-terminated UTF-16 `LPCWSTR`.
+                let p = unsafe { name.add(len) };
+                // SAFETY: `p` points within the NUL-terminated UTF-16 string.
+                let ch = unsafe { *p };
+                if ch == 0 {
+                    break;
+                }
+                len += 1;
+            }
+            // SAFETY: `name` has `len` valid `u16` units before NUL.
+            let slice = unsafe { core::slice::from_raw_parts(name, len) };
+            let name_str = String::from_utf16_lossy(slice);
+            crate::LOG.warn(&format!(
+                "ImportSharedTextureByName: Failed to open NT handle from name: {name_str}"
+            ));
+        }
         if !out.is_null() {
             // SAFETY: `out` was checked non-null.
             unsafe { *out = ptr::null_mut() };

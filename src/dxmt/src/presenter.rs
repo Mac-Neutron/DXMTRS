@@ -57,6 +57,7 @@ use winemetal_sys::{
 use crate::format::forget_srgb;
 
 /// `DXMTPresentMetadata`: what the present pass's fragment function reads as its bytes.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct DXMTPresentMetadata {
     pub edr_scale: f32,

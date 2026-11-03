@@ -477,7 +477,7 @@ impl TextureViewDescriptor {
 }
 
 /// A texture view: its descriptor's encoding, read without the texture.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub struct TextureViewKey(u64);
 
 impl TextureViewKey {

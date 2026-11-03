@@ -93,7 +93,11 @@ pub unsafe extern "system" fn d3d11_core_create_device(
     ));
 
     let Some(selected_fl) = select_feature_level(levels_slice, max_fl) else {
-        LOG.err("Minimum required feature level not supported");
+        let min_fl = levels_slice.last().copied().unwrap_or(0);
+        LOG.err(&format!(
+            "Minimum required feature level {} not supported",
+            feature_level_name(min_fl)
+        ));
         // SAFETY: Releasing `mtl_adapter` before returning.
         unsafe {
             release(mtl_adapter);

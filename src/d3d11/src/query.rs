@@ -8,8 +8,7 @@ use dxmt_util::private_data::PrivateData;
 
 use crate::{
     abi::{
-        IID_ID3D10_ASYNCHRONOUS, IID_ID3D10_DEVICE_CHILD, IID_ID3D10_PREDICATE, IID_ID3D10_QUERY,
-        IID_ID3D11_ASYNCHRONOUS, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_PREDICATE, IID_ID3D11_QUERY,
+        IID_ID3D10_DEVICE_CHILD, IID_ID3D10_QUERY, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_QUERY,
         IID_ID3D11_QUERY_1,
         records::{
             D3d11QueryDataPipelineStatistics, D3d11QueryDataSoStatistics,
@@ -18,8 +17,8 @@ use crate::{
         vtbl::{ID3D10QueryVtbl, ID3D11Query1Vtbl},
     },
     com::{
-        ComObject, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, S_FALSE,
-        S_OK,
+        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IID_IUNKNOWN,
+        S_FALSE, S_OK,
     },
     device::Device,
 };
@@ -469,6 +468,12 @@ impl Query {
         Self::step_event_state(&mut inner, coherent_seq)
     }
 
+    /// Whether the event query has hit `EVENT_STALL_THRESHOLD` and requires a forced flush.
+    #[must_use]
+    pub fn is_stalled(&self) -> bool {
+        self.lock().stall_counter == u32::MAX
+    }
+
     const fn step_event_state(inner: &mut QueryInner, coherent_seq: u64) -> EventState {
         if !inner.has_been_issued {
             return EventState::Invalid;
@@ -750,33 +755,7 @@ fn create_predicate_impl(
     desc: *const D3d11QueryDesc,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if !out.is_null() {
-        // SAFETY: `out` is non-null and writable.
-        unsafe { *out = ptr::null_mut() };
-    }
-    if desc.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `desc` is non-null.
-    let d = unsafe { *desc };
-    let is_predicate_type = matches!(
-        d.query,
-        D3D11_QUERY_OCCLUSION_PREDICATE
-            | D3D11_QUERY_SO_OVERFLOW_PREDICATE
-            | D3D11_QUERY_SO_OVERFLOW_PREDICATE_STREAM0
-            | D3D11_QUERY_SO_OVERFLOW_PREDICATE_STREAM1
-            | D3D11_QUERY_SO_OVERFLOW_PREDICATE_STREAM2
-            | D3D11_QUERY_SO_OVERFLOW_PREDICATE_STREAM3
-    );
-    if !is_predicate_type {
-        return E_INVALIDARG;
-    }
-    let desc1 = D3d11QueryDesc1 {
-        query: d.query,
-        misc_flags: d.misc_flags,
-        context_type: 0,
-    };
-    create_query_internal(device, desc1, true, out)
+    create_query_impl(device, desc, out)
 }
 
 /// `ID3D11Device::CreatePredicate`.
@@ -794,16 +773,24 @@ fn create_query_internal(
     is_predicate: bool,
     out: *mut *mut c_void,
 ) -> Hresult {
+    let _ = is_predicate;
+    if out.is_null() {
+        return S_FALSE;
+    }
+    if desc.query > D3D11_QUERY_OCCLUSION_PREDICATE {
+        crate::LOG.err(&format!(
+            "CreateQuery1: query type not implemented: {}",
+            desc.query
+        ));
+        return E_NOTIMPL;
+    }
     if data_size_for(desc.query).is_none()
         || (desc.misc_flags & !D3D11_QUERY_MISC_PREDICATEHINT) != 0
         || desc.context_type > 4
     {
         return E_INVALIDARG;
     }
-    if out.is_null() {
-        return S_FALSE;
-    }
-    let query = Query::new_raw(device, desc, is_predicate);
+    let query = Query::new_raw(device, desc, false);
     // SAFETY: `out` is non-null.
     unsafe { *out = query.cast::<c_void>() };
     S_OK
@@ -826,28 +813,27 @@ unsafe extern "system-unwind" fn query_query_interface(
     let iid = unsafe { *riid.cast::<Guid>() };
     // SAFETY: `this` is a live `Query`.
     let q = unsafe { &mut *this.cast::<Query>() };
+    let _ = q.is_predicate;
     if iid == IID_IUNKNOWN
         || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_ASYNCHRONOUS
         || iid == IID_ID3D11_QUERY
         || iid == IID_ID3D11_QUERY_1
-        || (q.is_predicate && iid == IID_ID3D11_PREDICATE)
     {
         let _ = q.refs.add_ref();
         // SAFETY: `ppv_object` is non-null.
         unsafe { *ppv_object = this };
         return S_OK;
     }
-    if iid == IID_ID3D10_DEVICE_CHILD
-        || iid == IID_ID3D10_ASYNCHRONOUS
-        || iid == IID_ID3D10_QUERY
-        || (q.is_predicate && iid == IID_ID3D10_PREDICATE)
-    {
+    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_QUERY {
         let _ = q.refs.add_ref();
         let d3d10_ptr = (&raw mut q.d3d10).cast::<c_void>();
         // SAFETY: `ppv_object` is non-null.
         unsafe { *ppv_object = d3d10_ptr };
         return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_QUERY, &iid) {
+        crate::LOG.warn("D3D11Query::QueryInterface: Unknown interface query");
+        crate::LOG.warn(&format!("{iid}"));
     }
     E_NOINTERFACE
 }

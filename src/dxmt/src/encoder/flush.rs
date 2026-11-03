@@ -223,57 +223,122 @@ impl Encoder {
                 },
             );
         }
-        for task in &targets.gs_marshal_tasks {
+        if self.device_handle != 0
+            && (!targets.gs_marshal_tasks.is_empty() || !targets.ts_marshal_tasks.is_empty())
+        {
+            if !targets.gs_marshal_tasks.is_empty() {
+                for task in &targets.gs_marshal_tasks {
+                    chain.push(
+                        &mut self.heap,
+                        WmtcmdRenderUseresource {
+                            r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            resource: task.draw_args_buf,
+                            usage: WMT_RESOURCE_USAGE_READ,
+                            stages: WMT_RENDER_STAGE_VERTEX,
+                        },
+                    );
+                    chain.push(
+                        &mut self.heap,
+                        WmtcmdRenderUseresource {
+                            r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            resource: task.dispatch_args_buf,
+                            usage: WMT_RESOURCE_USAGE_WRITE,
+                            stages: WMT_RENDER_STAGE_VERTEX,
+                        },
+                    );
+                }
+                // SAFETY: the encoder just made; the records live in the encoder's memory.
+                unsafe { render_chain(encoder, &chain) };
+                chain = Chain::new();
+                let count = targets.gs_marshal_tasks.len();
+                let arg = self.allocate_argument_buffer(
+                    count * size_of::<crate::emulated::RawGsMarshalTask>(),
+                );
+                let out = arg.mapping().cast::<crate::emulated::RawGsMarshalTask>();
+                for (i, t) in targets.gs_marshal_tasks.iter().enumerate() {
+                    // SAFETY: `arg` has space for `count` `RawGsMarshalTask` entries.
+                    let dst = unsafe { out.add(i) };
+                    // SAFETY: `dst` points to entry `i` in `arg`.
+                    unsafe {
+                        dst.write(crate::emulated::RawGsMarshalTask {
+                            draw_arguments: t.draw_args_va,
+                            dispatch_arguments: t.dispatch_args_va,
+                            max_object_threadgroups: t.max_object_threadgroups,
+                            vertex_count_per_warp: t.vertex_count_per_warp,
+                            end_of_command: u32::from(i + 1 == count),
+                        });
+                    }
+                }
+                let _ = self.with_emulated(|em, _| {
+                    em.marshal_gs(
+                        encoder,
+                        arg.buffer(),
+                        u32::try_from(arg.offset()).unwrap_or(0),
+                    );
+                });
+            }
+            if !targets.ts_marshal_tasks.is_empty() {
+                for task in &targets.ts_marshal_tasks {
+                    chain.push(
+                        &mut self.heap,
+                        WmtcmdRenderUseresource {
+                            r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            resource: task.draw_args_buf,
+                            usage: WMT_RESOURCE_USAGE_READ,
+                            stages: WMT_RENDER_STAGE_VERTEX,
+                        },
+                    );
+                    chain.push(
+                        &mut self.heap,
+                        WmtcmdRenderUseresource {
+                            r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            resource: task.dispatch_args_buf,
+                            usage: WMT_RESOURCE_USAGE_WRITE,
+                            stages: WMT_RENDER_STAGE_VERTEX,
+                        },
+                    );
+                }
+                // SAFETY: the encoder just made; the records live in the encoder's memory.
+                unsafe { render_chain(encoder, &chain) };
+                chain = Chain::new();
+                let count = targets.ts_marshal_tasks.len();
+                let arg = self.allocate_argument_buffer(
+                    count * size_of::<crate::emulated::RawTsMarshalTask>(),
+                );
+                let out = arg.mapping().cast::<crate::emulated::RawTsMarshalTask>();
+                for (i, t) in targets.ts_marshal_tasks.iter().enumerate() {
+                    // SAFETY: `arg` has space for `count` `RawTsMarshalTask` entries.
+                    let dst = unsafe { out.add(i) };
+                    // SAFETY: `dst` points to entry `i` in `arg`.
+                    unsafe {
+                        dst.write(crate::emulated::RawTsMarshalTask {
+                            draw_arguments: t.draw_args_va,
+                            dispatch_arguments: t.dispatch_args_va,
+                            max_object_threadgroups: t.max_object_threadgroups,
+                            control_point_count: t.control_point_count,
+                            patch_per_group: t.patch_per_group,
+                            end_of_command: u32::from(i + 1 == count),
+                        });
+                    }
+                }
+                let _ = self.with_emulated(|em, _| {
+                    em.marshal_ts(
+                        encoder,
+                        arg.buffer(),
+                        u32::try_from(arg.offset()).unwrap_or(0),
+                    );
+                });
+            }
             chain.push(
-                heap,
-                WmtcmdRenderUseresource {
-                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
-                    reserved: [0; 3],
-                    next: NO_NEXT,
-                    resource: task.draw_args_buf,
-                    usage: WMT_RESOURCE_USAGE_READ,
-                    stages: WMT_RENDER_STAGE_VERTEX,
-                },
-            );
-            chain.push(
-                heap,
-                WmtcmdRenderUseresource {
-                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
-                    reserved: [0; 3],
-                    next: NO_NEXT,
-                    resource: task.dispatch_args_buf,
-                    usage: WMT_RESOURCE_USAGE_WRITE,
-                    stages: WMT_RENDER_STAGE_VERTEX,
-                },
-            );
-        }
-        for task in &targets.ts_marshal_tasks {
-            chain.push(
-                heap,
-                WmtcmdRenderUseresource {
-                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
-                    reserved: [0; 3],
-                    next: NO_NEXT,
-                    resource: task.draw_args_buf,
-                    usage: WMT_RESOURCE_USAGE_READ,
-                    stages: WMT_RENDER_STAGE_VERTEX,
-                },
-            );
-            chain.push(
-                heap,
-                WmtcmdRenderUseresource {
-                    r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
-                    reserved: [0; 3],
-                    next: NO_NEXT,
-                    resource: task.dispatch_args_buf,
-                    usage: WMT_RESOURCE_USAGE_WRITE,
-                    stages: WMT_RENDER_STAGE_VERTEX,
-                },
-            );
-        }
-        if !targets.gs_marshal_tasks.is_empty() || !targets.ts_marshal_tasks.is_empty() {
-            chain.push(
-                heap,
+                &mut self.heap,
                 WmtcmdRenderMemoryBarrier {
                     r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
                     reserved: [0; 3],
@@ -285,11 +350,75 @@ impl Encoder {
                         | WMT_RENDER_STAGE_OBJECT,
                 },
             );
+        } else {
+            for task in &targets.gs_marshal_tasks {
+                chain.push(
+                    heap,
+                    WmtcmdRenderUseresource {
+                        r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                        reserved: [0; 3],
+                        next: NO_NEXT,
+                        resource: task.draw_args_buf,
+                        usage: WMT_RESOURCE_USAGE_READ,
+                        stages: WMT_RENDER_STAGE_VERTEX,
+                    },
+                );
+                chain.push(
+                    heap,
+                    WmtcmdRenderUseresource {
+                        r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                        reserved: [0; 3],
+                        next: NO_NEXT,
+                        resource: task.dispatch_args_buf,
+                        usage: WMT_RESOURCE_USAGE_WRITE,
+                        stages: WMT_RENDER_STAGE_VERTEX,
+                    },
+                );
+            }
+            for task in &targets.ts_marshal_tasks {
+                chain.push(
+                    heap,
+                    WmtcmdRenderUseresource {
+                        r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                        reserved: [0; 3],
+                        next: NO_NEXT,
+                        resource: task.draw_args_buf,
+                        usage: WMT_RESOURCE_USAGE_READ,
+                        stages: WMT_RENDER_STAGE_VERTEX,
+                    },
+                );
+                chain.push(
+                    heap,
+                    WmtcmdRenderUseresource {
+                        r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
+                        reserved: [0; 3],
+                        next: NO_NEXT,
+                        resource: task.dispatch_args_buf,
+                        usage: WMT_RESOURCE_USAGE_WRITE,
+                        stages: WMT_RENDER_STAGE_VERTEX,
+                    },
+                );
+            }
+            if !targets.gs_marshal_tasks.is_empty() || !targets.ts_marshal_tasks.is_empty() {
+                chain.push(
+                    heap,
+                    WmtcmdRenderMemoryBarrier {
+                        r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
+                        reserved: [0; 3],
+                        next: NO_NEXT,
+                        scope: WMT_BARRIER_SCOPE_BUFFERS,
+                        stages_before: WMT_RENDER_STAGE_VERTEX,
+                        stages_after: WMT_RENDER_STAGE_VERTEX
+                            | WMT_RENDER_STAGE_MESH
+                            | WMT_RENDER_STAGE_OBJECT,
+                    },
+                );
+            }
         }
         chain.link(pass.records.head);
         // SAFETY: the encoder just made; the records live in the encoder's memory.
         unsafe { MTLRenderCommandEncoder_encodeCommands(encoder, chain.first()) };
-        let updates = render_updates(heap, fences, pass);
+        let updates = render_updates(&mut self.heap, &self.fences, pass);
         // SAFETY: the same encoder; the records live in the encoder's memory.
         unsafe { render_chain(encoder, &updates) };
         // SAFETY: the same encoder, ended once after its commands.
@@ -488,14 +617,17 @@ impl Encoder {
         let wait = |encoder| unsafe { render_chain(encoder, &waits) };
         // SAFETY: as above.
         let update = |encoder| unsafe { render_chain(encoder, &updates) };
+        let t0 = std::time::Instant::now();
         // SAFETY: the caller's promise for the command buffer and the backbuffer.
         let drawable = unsafe {
             present
                 .presenter
                 .encode(cmdbuf, present.backbuffer, &present.metadata, wait, update)
         };
+        if !cfg!(feature = "perf-build") {
+            self.frame_stats.drawable_blocking_interval += t0.elapsed();
+        }
         let drawable = drawable.as_ref().map_or(0, Obj::handle);
-        // ponytail: the time `encode` waited for the drawable is FrameStatistics', 5b's.
         if present.after > 0.0 {
             // SAFETY: the caller's promise; the drawable is alive until the end of the scope.
             unsafe {

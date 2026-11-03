@@ -17,16 +17,40 @@ use winemetal_wire::WMT_ATTRIBUTE_FORMAT_INVALID;
 use crate::{
     LOG,
     abi::{
-        IID_ID3D11_DEVICE_CHILD, IID_ID3D11_INPUT_LAYOUT, IID_IUNKNOWN,
+        IID_ID3D10_DEVICE_CHILD, IID_ID3D10_INPUT_LAYOUT, IID_ID3D11_DEVICE_CHILD,
+        IID_ID3D11_GEOMETRY_SHADER, IID_ID3D11_INPUT_LAYOUT, IID_IUNKNOWN,
         records::{D3d11InputElementDesc, D3d11SoDeclarationEntry},
-        vtbl::ID3D11InputLayoutVtbl,
+        vtbl::{
+            ID3D10GeometryShaderVtbl, ID3D10InputLayoutVtbl, ID3D11GeometryShaderVtbl,
+            ID3D11InputLayoutVtbl,
+        },
     },
     com::{
         E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid, Hresult, Managed,
         S_FALSE, S_OK, add_ref,
     },
-    shader::args::{input_layout_digest, stream_output_layout_digest},
+    device::Device,
+    shader::{
+        IID_IMTL_D3D11_SHADER,
+        args::{input_layout_digest, stream_output_layout_digest},
+    },
 };
+
+/// `IID_IMTLD3D11InputLayout` (`d3d11_input_layout.hpp:10`).
+pub const IID_IMTL_D3D11_INPUT_LAYOUT: Guid = Guid::new(
+    0xb56c_6a99,
+    0x80cf,
+    0x4c7f,
+    [0xa7, 0x56, 0x9e, 0x9c, 0xeb, 0x38, 0x73, 0x0f],
+);
+
+/// `IID_IMTLD3D11StreamOutputLayout` (`d3d11_input_layout.hpp:18`).
+pub const IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT: Guid = Guid::new(
+    0xfd58_f76b,
+    0x7c22,
+    0x4605,
+    [0xb4, 0x3c, 0x28, 0x04, 0x8c, 0x8b, 0x4a, 0x64],
+);
 
 /// `D3D11_APPEND_ALIGNED_ELEMENT` (`0xffffffff`).
 pub const D3D11_APPEND_ALIGNED_ELEMENT: u32 = 0xffff_ffff;
@@ -159,8 +183,13 @@ impl InputLayout {
         if iface.is_null() {
             return None;
         }
+        // SAFETY: `iface` is non-null; its first word is the COM vtable pointer.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11InputLayoutVtbl>() };
+        if !ptr::eq(vtbl, &raw const INPUT_LAYOUT_VTBL) {
+            return None;
+        }
         let obj = iface.cast::<InputLayoutObject>();
-        // SAFETY: `iface` was allocated by `create_input_layout`.
+        // SAFETY: `vtbl` matches `INPUT_LAYOUT_VTBL`, so `iface` was allocated by `create_input_layout`.
         Some(unsafe { &(*obj).inner })
     }
 
@@ -228,9 +257,18 @@ impl StreamOutputLayout {
 
     /// Recovers `&StreamOutputLayout` from an `ID3D11GeometryShader*` interface pointer.
     #[must_use]
-    pub const fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
-        let _ = iface;
-        None
+    pub fn from_iface(iface: *mut c_void) -> Option<&'static Self> {
+        if iface.is_null() {
+            return None;
+        }
+        // SAFETY: `iface` is non-null; its first word is the COM vtable pointer.
+        let vtbl = unsafe { *iface.cast::<*const ID3D11GeometryShaderVtbl>() };
+        if !ptr::eq(vtbl, &raw const SO_LAYOUT_VTBL) {
+            return None;
+        }
+        let obj = iface.cast::<StreamOutputLayoutObject>();
+        // SAFETY: `vtbl` matches `SO_LAYOUT_VTBL`, so `iface` was allocated by `create_gs_with_so`.
+        Some(unsafe { &(*obj).inner })
     }
 }
 
@@ -458,6 +496,18 @@ pub struct InputLayoutObject {
     device: *mut c_void,
     private_data: PrivateData,
     pub inner: InputLayout,
+    d3d10: crate::d3d10::Wrapper<ID3D10InputLayoutVtbl>,
+}
+
+/// Heap-allocated COM wrapper for emulated `IMTLD3D11StreamOutputLayout` (`ID3D11GeometryShader`).
+#[repr(C)]
+pub struct StreamOutputLayoutObject {
+    vtbl: &'static ID3D11GeometryShaderVtbl,
+    refs: Managed,
+    device: *mut c_void,
+    private_data: PrivateData,
+    pub inner: StreamOutputLayout,
+    d3d10: crate::d3d10::Wrapper<ID3D10GeometryShaderVtbl>,
 }
 
 unsafe extern "system-unwind" fn il_query_interface(
@@ -474,12 +524,29 @@ unsafe extern "system-unwind" fn il_query_interface(
     let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
         return E_INVALIDARG;
     };
-    if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D11_INPUT_LAYOUT {
+    if iid == IID_IUNKNOWN
+        || iid == IID_ID3D11_DEVICE_CHILD
+        || iid == IID_ID3D11_INPUT_LAYOUT
+        || iid == IID_IMTL_D3D11_INPUT_LAYOUT
+    {
         // SAFETY: `this` is a valid `InputLayoutObject`.
         unsafe { il_add_ref(this) };
         // SAFETY: `out` is non-null.
         unsafe { *out = this };
         return S_OK;
+    }
+    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_INPUT_LAYOUT {
+        // SAFETY: `this` is a valid `InputLayoutObject`.
+        unsafe { il_add_ref(this) };
+        let obj = this.cast::<InputLayoutObject>();
+        // SAFETY: `obj` is a valid `InputLayoutObject`.
+        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = d3d10_ptr };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_ID3D11_INPUT_LAYOUT, &iid) {
+        log_warn(&format!("D3D311InputLayout: Unknown interface query {iid}"));
     }
     E_NOINTERFACE
 }
@@ -606,18 +673,27 @@ fn create_input_layout_impl(
         Err(hr) => return hr,
     };
 
+    let immediate_ctx =
+        Device::from_iface(device).map_or(ptr::null_mut(), |d| d.immediate().cast::<c_void>());
     let boxed = Box::new(InputLayoutObject {
         vtbl: &INPUT_LAYOUT_VTBL,
         refs: Managed::new(),
         device,
         private_data: PrivateData::default(),
         inner: layout,
+        d3d10: crate::d3d10::Wrapper::new(
+            &crate::d3d10::INPUT_LAYOUT_VTBL,
+            ptr::null_mut(),
+            immediate_ctx,
+        ),
     });
     // SAFETY: `device` is null or a live COM device pointer.
     unsafe { boxed.refs.add_ref(device) };
-    let raw = Box::into_raw(boxed).cast::<c_void>();
+    let raw = Box::into_raw(boxed);
+    // SAFETY: `raw` was just allocated by `Box::into_raw`.
+    unsafe { (*raw).d3d10.d3d11 = raw.cast::<c_void>() };
     // SAFETY: `out` is non-null.
-    unsafe { *out = raw };
+    unsafe { *out = raw.cast::<c_void>() };
     S_OK
 }
 
@@ -640,6 +716,134 @@ pub fn create_input_layout(
     )
 }
 
+unsafe extern "system-unwind" fn so_query_interface(
+    this: *mut c_void,
+    riid: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: `out` is non-null.
+    unsafe { *out = ptr::null_mut() };
+    // SAFETY: reads `riid`.
+    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    if iid == IID_IUNKNOWN
+        || iid == IID_ID3D11_DEVICE_CHILD
+        || iid == IID_ID3D11_GEOMETRY_SHADER
+        || iid == IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT
+        || iid == IID_IMTL_D3D11_SHADER
+    {
+        // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+        unsafe { so_add_ref(this) };
+        // SAFETY: `out` is non-null.
+        unsafe { *out = this };
+        return S_OK;
+    }
+    if crate::com::qi_log(&IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT, &iid) {
+        log_warn(&format!(
+            "IMTLD3D11StreamOutputLayout: Unknown interface query {iid}"
+        ));
+    }
+    E_NOINTERFACE
+}
+
+unsafe extern "system-unwind" fn so_add_ref(this: *mut c_void) -> u32 {
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let obj_ref = unsafe { &*obj };
+    // SAFETY: `obj_ref.device` is null or a valid device pointer.
+    unsafe { obj_ref.refs.add_ref(obj_ref.device) }
+}
+
+unsafe extern "system-unwind" fn so_release(this: *mut c_void) -> u32 {
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let obj_ref = unsafe { &*obj };
+    // SAFETY: `obj_ref.device` is null or a valid device pointer.
+    let (remaining, recycle) = unsafe { obj_ref.refs.release(obj_ref.device) };
+    if recycle {
+        // SAFETY: both ref counts reached zero.
+        drop(unsafe { Box::from_raw(obj) });
+    }
+    remaining
+}
+
+unsafe extern "system-unwind" fn so_get_device(this: *mut c_void, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let dev = unsafe { (*obj).device };
+    // SAFETY: `dev` is null or a valid device pointer.
+    unsafe { add_ref(dev) };
+    // SAFETY: `out` is non-null and writable.
+    unsafe { *out = dev };
+}
+
+unsafe extern "system-unwind" fn so_get_private_data(
+    this: *mut c_void,
+    guid: *const c_void,
+    size: *mut u32,
+    data: *mut c_void,
+) -> i32 {
+    // SAFETY: reads `guid`.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let pd = unsafe { &(*obj).private_data };
+    // SAFETY: forwards COM arguments.
+    unsafe { pd.get_data(g, size, data) }
+}
+
+unsafe extern "system-unwind" fn so_set_private_data(
+    this: *mut c_void,
+    guid: *const c_void,
+    size: u32,
+    data: *const c_void,
+) -> i32 {
+    // SAFETY: reads `guid`.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let pd = unsafe { &(*obj).private_data };
+    // SAFETY: forwards COM arguments.
+    unsafe { pd.set_data(g, size, data) }
+}
+
+unsafe extern "system-unwind" fn so_set_private_data_interface(
+    this: *mut c_void,
+    guid: *const c_void,
+    iface: *const c_void,
+) -> i32 {
+    // SAFETY: reads `guid`.
+    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
+        return E_INVALIDARG;
+    };
+    let obj = this.cast::<StreamOutputLayoutObject>();
+    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
+    let pd = unsafe { &(*obj).private_data };
+    // SAFETY: forwards COM arguments.
+    unsafe { pd.set_interface(g, iface.cast_mut()) }
+}
+
+static SO_LAYOUT_VTBL: ID3D11GeometryShaderVtbl = ID3D11GeometryShaderVtbl {
+    query_interface: so_query_interface,
+    add_ref: so_add_ref,
+    release: so_release,
+    get_device: so_get_device,
+    get_private_data: so_get_private_data,
+    set_private_data: so_set_private_data,
+    set_private_data_interface: so_set_private_data_interface,
+};
+
 fn create_gs_with_so_impl(
     device: *mut c_void,
     bytecode: *const c_void,
@@ -649,7 +853,6 @@ fn create_gs_with_so_impl(
     rasterized_stream: u32,
     out: *mut *mut c_void,
 ) -> Hresult {
-    let _ = device;
     if !out.is_null() {
         // SAFETY: `out` is non-null.
         unsafe { *out = ptr::null_mut() };
@@ -657,29 +860,60 @@ fn create_gs_with_so_impl(
     if bytecode.is_null() || bytecode_length == 0 {
         return E_INVALIDARG;
     }
-    if out.is_null() {
-        return S_FALSE;
-    }
     let (entries_ptr, num_entries) = entries;
     let (strides_ptr, num_strides) = strides;
-    let entry_slice = if entries_ptr.is_null() || num_entries == 0 {
-        &[][..]
-    } else {
-        // SAFETY: `entries_ptr` is valid for `num_entries` elements.
-        unsafe { core::slice::from_raw_parts(entries_ptr, num_entries as usize) }
-    };
-    let stride_slice = if strides_ptr.is_null() || num_strides == 0 {
-        &[][..]
-    } else {
-        // SAFETY: `strides_ptr` is valid for `num_strides` elements.
-        unsafe { core::slice::from_raw_parts(strides_ptr, num_strides as usize) }
-    };
     // SAFETY: `bytecode` is valid for `bytecode_length` bytes.
     let bytes = unsafe { core::slice::from_raw_parts(bytecode.cast::<u8>(), bytecode_length) };
-    match parse_stream_output_layout(bytes, entry_slice, stride_slice, rasterized_stream) {
-        Ok(_) => S_OK,
-        Err(_) => E_FAIL,
+    if num_entries > 0
+        && rasterized_stream == 0xffff_ffff
+        && bytes.len() >= 4
+        && &bytes[..4] == b"DXBC"
+    {
+        log_warn("Emulate stream output");
+        if out.is_null() {
+            return S_FALSE;
+        }
+        let entry_slice = if entries_ptr.is_null() {
+            &[][..]
+        } else {
+            // SAFETY: `entries_ptr` is valid for `num_entries` elements.
+            unsafe { core::slice::from_raw_parts(entries_ptr, num_entries as usize) }
+        };
+        let stride_slice = if strides_ptr.is_null() || num_strides == 0 {
+            &[][..]
+        } else {
+            // SAFETY: `strides_ptr` is valid for `num_strides` elements.
+            unsafe { core::slice::from_raw_parts(strides_ptr, num_strides as usize) }
+        };
+        if let Ok(so_layout) =
+            parse_stream_output_layout(bytes, entry_slice, stride_slice, rasterized_stream)
+        {
+            let immediate_ctx = Device::from_iface(device)
+                .map_or(ptr::null_mut(), |d| d.immediate().cast::<c_void>());
+            let boxed = Box::new(StreamOutputLayoutObject {
+                vtbl: &SO_LAYOUT_VTBL,
+                refs: Managed::new(),
+                device,
+                private_data: PrivateData::default(),
+                inner: so_layout,
+                d3d10: crate::d3d10::Wrapper::new(
+                    &crate::d3d10::GEOMETRY_SHADER_VTBL,
+                    ptr::null_mut(),
+                    immediate_ctx,
+                ),
+            });
+            // SAFETY: `device` is null or a live COM device pointer.
+            unsafe { boxed.refs.add_ref(device) };
+            let raw = Box::into_raw(boxed);
+            // SAFETY: `raw` was just allocated by `Box::into_raw`.
+            unsafe { (*raw).d3d10.d3d11 = raw.cast::<c_void>() };
+            // SAFETY: `out` is non-null.
+            unsafe { *out = raw.cast::<c_void>() };
+            return S_OK;
+        }
     }
+    log_err("CreateGeometryShaderWithStreamOutput: not supported, expect problem");
+    crate::shader::create_geometry_shader(device, bytecode, bytecode_length, ptr::null_mut(), out)
 }
 
 /// `ID3D11Device::CreateGeometryShaderWithStreamOutput` (`d3d11_device.cpp:264-292`).

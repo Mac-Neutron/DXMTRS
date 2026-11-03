@@ -3,7 +3,11 @@
 use core::{ffi::c_void, slice};
 use std::sync::Arc;
 
-use dxmt_core::{deptrack::Access, encoder::NO_NEXT, resource::Buffer};
+use dxmt_core::{
+    deptrack::Access,
+    encoder::{NO_NEXT, stage},
+    resource::Buffer,
+};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
     WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
@@ -130,19 +134,67 @@ impl<M: Mode> Context<M> {
             }
 
             if let Some(dynamic) = crate::resource::dynamic_buffer(dst_resource) {
+                let bind_flags = desc.bind_flags;
                 if is_discard {
-                    if dynamic.next_suballocation() == 0 {
-                        let new_alloc = dynamic.allocate(0);
-                        dynamic.update_immediate_name(0, new_alloc, 0, false);
+                    if (bind_flags & 0x1) != 0 {
+                        self.dirty.insert(super::state::DirtyFlags::VERTEX_BUFFERS);
+                        self.state.input_assembler.vertex_buffers.set_all_dirty();
                     }
-                    let alloc = M::dynamic_name(self, dynamic);
-                    let sub = alloc.current_suballocation();
-                    alloc.update_contents(u64::from(copy_offset), src_slice, sub);
+                    if (bind_flags & 0x2) != 0 {
+                        self.dirty.insert(super::state::DirtyFlags::INDEX_BUFFER);
+                    }
+                    if (bind_flags & 0x4) != 0 {
+                        for stage in &mut self.state.shader_stages {
+                            stage.constant_buffers.set_all_dirty();
+                        }
+                    }
+                    if (bind_flags & 0x8) != 0 {
+                        for stage in &mut self.state.shader_stages {
+                            stage.srvs.set_all_dirty();
+                        }
+                    }
+                    if let Some(imm) = self.as_immediate_mut() {
+                        let next_sub = dynamic.next_suballocation();
+                        let (alloc, sub) = if next_sub != 0 {
+                            dynamic.use_immediate_suballocation(next_sub);
+                            let a = dynamic.immediate_name();
+                            let a_emit = Arc::clone(&a);
+                            super::Immediate::emit_st(imm, move |_enc| {
+                                a_emit.use_suballocation(next_sub);
+                            });
+                            (a, next_sub)
+                        } else {
+                            let coherent = imm.active_coherent_seq();
+                            let seq = imm.active_seq();
+                            let new_alloc = dynamic.allocate(coherent);
+                            dynamic.update_immediate_name(seq, Arc::clone(&new_alloc), 0, false);
+                            let a_emit = Arc::clone(&new_alloc);
+                            let buf = Arc::clone(dynamic.buffer());
+                            super::Immediate::emit_st(imm, move |_enc| {
+                                a_emit.use_suballocation(0);
+                                let _ = buf.rename(Arc::clone(&a_emit));
+                            });
+                            (new_alloc, 0)
+                        };
+                        alloc.update_contents(u64::from(copy_offset), src_slice, sub);
+                    } else if let Some(def) = self.as_deferred_mut() {
+                        let new_alloc = def.mode.rotate_dynamic_buffer(dynamic);
+                        let a_emit = Arc::clone(&new_alloc);
+                        let buf = Arc::clone(dynamic.buffer());
+                        super::Deferred::emit_st(def, move |_enc| {
+                            a_emit.use_suballocation(0);
+                            let _ = buf.rename(Arc::clone(&a_emit));
+                        });
+                        new_alloc.update_contents(u64::from(copy_offset), src_slice, 0);
+                    }
                     return;
                 }
                 if is_no_overwrite {
-                    let alloc = M::dynamic_name(self, dynamic);
-                    let sub = alloc.current_suballocation();
+                    let (alloc, sub) = if let Some(def) = self.as_deferred_mut() {
+                        (def.mode.get_or_alloc_dynamic_buffer(dynamic), 0)
+                    } else {
+                        (dynamic.immediate_name(), dynamic.immediate_suballocation())
+                    };
                     alloc.update_contents(u64::from(copy_offset), src_slice, sub);
                     return;
                 }
@@ -317,11 +369,10 @@ impl<M: Mode> Context<M> {
         let dst_origin = cmd.dst_origin;
         let dst_size = cmd.dst_size;
         self.switch_to_blit_encoder();
-        let src_len = u32::try_from(src.length()).unwrap_or(u32::MAX);
         // C++ closure #17 (`UpdateTexture` from Buffer, d3d11_context_impl.cpp:4275).
         M::emit_op(self, move |enc| {
             let (src_h, src_offset) = enc
-                .access_buffer_in::<0, 0>(&src, 0, src_len, Access::READ)
+                .access_buffer::<{ stage::COMPUTE }>(&src, Access::READ)
                 .map_or((0, 0), |(alloc, off)| (alloc.buffer(), off));
             let texture = dst_tex.access(enc, dst_mip, dst_slice, Access::WRITE);
             let cmd_cptex = WmtcmdBlitCopyFromBufferToTexture {

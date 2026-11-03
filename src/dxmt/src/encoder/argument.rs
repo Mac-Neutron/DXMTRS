@@ -172,6 +172,11 @@ impl Encoder {
         } else {
             &mut self.pixel_uavs
         });
+        let uav_counters = core::mem::take(if S == stage::COMPUTE {
+            &mut self.compute_uav_counters
+        } else {
+            &mut self.pixel_uav_counters
+        });
         for arg in arguments {
             let at = index(arg.structure_ptr_offset);
             let slot = index(arg.sm50_binding_slot);
@@ -202,9 +207,17 @@ impl Encoder {
                     access.set(Access::WRITE, arg.flags >> ACCESS_SHIFT & 2 != 0);
                     self.encode_view::<S, K>(&table, at, arg.flags, uavs.get(slot), access);
                     if arg.flags & MTL_SM50_SHADER_ARGUMENT_UAV_COUNTER != 0 {
-                        // ponytail: the counter's address comes with the counter pool (the
-                        // queries' lane); 0 is what the C++ writes for a view bound without one.
-                        table.set(at + 2, 0);
+                        if let Some(Some(counter)) = uav_counters.get(slot) {
+                            let slot_alloc = self.counters_mut().current(counter);
+                            let already = slot_alloc.check_retained(self.seq);
+                            self.retain(&slot_alloc, already);
+                            let buffer = std::sync::Arc::clone(slot_alloc.buffer());
+                            let offset = u64::from(slot_alloc.offset());
+                            self.make_allocation_resident::<S, K>(&buffer, true, true);
+                            table.set(at + 2, buffer.gpu_address() + offset);
+                        } else {
+                            table.set(at + 2, 0);
+                        }
                     }
                 }
                 _ => debug_assert!(false, "a constant buffer among the arguments"),
@@ -214,8 +227,10 @@ impl Encoder {
         self.resources = resources;
         if S == stage::COMPUTE {
             self.compute_uavs = uavs;
+            self.compute_uav_counters = uav_counters;
         } else {
             self.pixel_uavs = uavs;
+            self.pixel_uav_counters = uav_counters;
         }
         self.set_buffer_offset::<S, K>(
             offset,
@@ -373,6 +388,26 @@ impl Encoder {
             offset,
             index: binding_index(index),
         });
+    }
+
+    /// Writes `dwords` at byte `offset` of the argument buffer and returns its final offset.
+    #[must_use]
+    pub fn write_argument_dwords(&self, offset: u64, dwords: &[u32]) -> u64 {
+        let Some(arguments) = self.pass.as_ref().and_then(|p| p.arguments.as_ref()) else {
+            return offset;
+        };
+        let byte_cap = arguments.qwords * 8;
+        let byte_off = usize::try_from(offset).unwrap_or(usize::MAX);
+        let byte_len = dwords.len() * 4;
+        if byte_off.saturating_add(byte_len) <= byte_cap {
+            // SAFETY: `byte_off + byte_len <= byte_cap`, within `arguments.start` allocation.
+            let dst = unsafe { arguments.start.as_ptr().cast::<u8>().add(byte_off) };
+            // SAFETY: `dst` and `dwords` are non-overlapping and valid for `byte_len` bytes.
+            unsafe {
+                core::ptr::copy_nonoverlapping(dwords.as_ptr().cast::<u8>(), dst, byte_len);
+            }
+        }
+        arguments.offset + offset
     }
 }
 

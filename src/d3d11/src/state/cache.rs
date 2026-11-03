@@ -36,25 +36,51 @@ pub struct DeviceChildStateObject<V: 'static, T> {
     pub device: *mut c_void,
     pub private_data: PrivateData,
     pub inner: T,
+    pub d3d10: crate::d3d10::Wrapper<u8>,
 }
 
+#[expect(
+    clippy::non_send_fields_in_send_ty,
+    reason = "d3d10::Wrapper holds an immutable pointer back to the enclosing state object"
+)]
 // SAFETY: cached state objects are immutable after construction; `refcount` is atomic and
 // `private_data` is internally synchronized.
 unsafe impl<V: 'static + Sync, T: Send + Sync> Send for DeviceChildStateObject<V, T> {}
 // SAFETY: see above.
 unsafe impl<V: 'static + Sync, T: Send + Sync> Sync for DeviceChildStateObject<V, T> {}
 
+static DUMMY_D3D10_VTBL: u8 = 0;
+
 impl<V: 'static, T> DeviceChildStateObject<V, T> {
     /// Allocates a new cached state object with `refcount == 0`.
     #[must_use]
     pub fn new(vtbl: &'static V, device: *mut c_void, inner: T) -> Box<Self> {
-        Box::new(Self {
+        Self::new_with_d3d10(vtbl, &DUMMY_D3D10_VTBL, device, inner)
+    }
+
+    /// Allocates a new cached state object with `refcount == 0` and an embedded D3D10 wrapper.
+    #[must_use]
+    pub fn new_with_d3d10<D: 'static>(
+        vtbl: &'static V,
+        d3d10_vtbl: &'static D,
+        device: *mut c_void,
+        inner: T,
+    ) -> Box<Self> {
+        let imm_ctx = crate::device::Device::from_iface(device)
+            .map_or(ptr::null_mut(), |d| d.immediate().cast::<c_void>());
+        // SAFETY: `d3d10_vtbl` is a `'static` vtable reference; `Wrapper<u8>` stores its address.
+        let vtbl_u8 = unsafe { &*ptr::from_ref(d3d10_vtbl).cast::<u8>() };
+        let mut boxed = Box::new(Self {
             vtbl,
             refcount: AtomicU32::new(0),
             device,
             private_data: PrivateData::default(),
             inner,
-        })
+            d3d10: crate::d3d10::Wrapper::new(vtbl_u8, ptr::null_mut(), imm_ctx),
+        });
+        let self_ptr = ptr::from_mut::<Self>(&mut *boxed).cast::<c_void>();
+        boxed.d3d10.d3d11 = self_ptr;
+        boxed
     }
 
     /// Raw COM interface pointer for this state object.

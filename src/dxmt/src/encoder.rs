@@ -129,6 +129,7 @@ pub struct BoundSampler {
 }
 
 /// The part of a buffer a shader resource or unordered-access view sees: the C++'s `BufferSlice`.
+#[derive(Clone, Copy, Default)]
 pub struct BufferSlice {
     pub byte_offset: u32,
     pub byte_length: u32,
@@ -185,6 +186,18 @@ impl ArgumentBuffer {
     pub const fn buffer(&self) -> u64 {
         self.buffer
     }
+
+    /// The CPU mapping at the start of the slice.
+    #[must_use]
+    pub const fn mapping(&self) -> NonNull<u8> {
+        self.start.cast()
+    }
+
+    /// The byte offset of the slice inside its Metal buffer.
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
 }
 
 pub use flush::QueryBuffers;
@@ -204,7 +217,9 @@ pub struct Encoder {
     samplers: Box<[Option<BoundSampler>]>,
     resources: Box<[ResourceView]>,
     pixel_uavs: Box<[ResourceView]>,
+    pixel_uav_counters: Box<[Option<Arc<crate::counter::Counter>>]>,
     compute_uavs: Box<[ResourceView]>,
+    compute_uav_counters: Box<[Option<Arc<crate::counter::Counter>>]>,
     stream_outputs: Box<[StreamOutputBinding]>,
     _dummy_sampler: Option<Obj>,
     dummy_sampler_id: u64,
@@ -233,7 +248,11 @@ pub struct Encoder {
     counters: Option<crate::counter::CounterPool>,
     queries: crate::query::Queries,
     deferred_queries: Vec<usize>,
+    argbuf_ring: Option<crate::ring::RingBump>,
     copy_temp: Option<crate::ring::RingBump>,
+    emulated: Option<crate::emulated::EmulatedContext>,
+    clear_rtv: Option<crate::library::ClearRtv>,
+    clear_uav: Option<crate::library::ClearUav>,
     helper_psos: gaps::HelperPipelines,
     pub tess_num_output_control_point_element: u32,
     pub tess_threads_per_patch: u32,
@@ -326,11 +345,34 @@ impl Encoder {
         self.heap.reset();
         self.buffers_used.prune();
         self.textures_used.prune();
+        let coherent = self.coherent_seq;
+        if let Some(ring) = &mut self.argbuf_ring {
+            ring.free_blocks(coherent);
+        }
+        if let Some(ring) = &mut self.copy_temp {
+            ring.free_blocks(coherent);
+        }
+    }
+
+    /// The encoder's `MTLDevice` handle, or 0 in headless tests.
+    #[must_use]
+    pub const fn device_handle(&self) -> u64 {
+        self.device_handle
     }
 
     /// Ends the chunk: the allocations its passes used go to `retained`, the chunk's.
     pub fn end_chunk(&mut self, retained: &mut Vec<Arc<dyn Send + Sync>>) {
         retained.append(&mut self.retained);
+    }
+
+    /// Builds query readbacks for chunk `seq` on `device` and `cmdbuf`.
+    pub(super) fn queries_readbacks(
+        &mut self,
+        device: &Obj,
+        seq: u64,
+        cmdbuf: u64,
+    ) -> crate::query::Readbacks {
+        self.queries.readbacks(device, seq, cmdbuf)
     }
 
     /// The pass being recorded.
@@ -420,10 +462,22 @@ impl Encoder {
 
     /// Binds an unordered-access view: the compute stage's, or the pixel stage's for the others.
     pub fn bind_unordered_access<const S: u8>(&mut self, slot: usize, view: ResourceView) {
+        self.bind_unordered_access_with_counter::<S>(slot, view, None);
+    }
+
+    /// Binds an unordered-access view and its structured/append counter.
+    pub fn bind_unordered_access_with_counter<const S: u8>(
+        &mut self,
+        slot: usize,
+        view: ResourceView,
+        counter: Option<Arc<crate::counter::Counter>>,
+    ) {
         if S == stage::COMPUTE {
             self.compute_uavs[slot] = view;
+            self.compute_uav_counters[slot] = counter;
         } else {
             self.pixel_uavs[slot] = view;
+            self.pixel_uav_counters[slot] = counter;
         }
     }
 
@@ -453,7 +507,9 @@ impl Encoder {
         self.samplers = (0..SAMPLER_SLOTS * STAGES).map(|_| None).collect();
         self.resources = unbound(RESOURCE_SLOTS * STAGES);
         self.pixel_uavs = unbound(UAV_SLOTS);
+        self.pixel_uav_counters = (0..UAV_SLOTS).map(|_| None).collect();
         self.compute_uavs = unbound(UAV_SLOTS);
+        self.compute_uav_counters = (0..UAV_SLOTS).map(|_| None).collect();
     }
 
     /// The index buffer's Metal buffer and current suballocation's offset, read by stage vertex.
@@ -534,7 +590,9 @@ impl Encoder {
             samplers: (0..SAMPLER_SLOTS * STAGES).map(|_| None).collect(),
             resources: unbound(RESOURCE_SLOTS * STAGES),
             pixel_uavs: unbound(UAV_SLOTS),
+            pixel_uav_counters: (0..UAV_SLOTS).map(|_| None).collect(),
             compute_uavs: unbound(UAV_SLOTS),
+            compute_uav_counters: (0..UAV_SLOTS).map(|_| None).collect(),
             stream_outputs: (0..STREAM_OUTPUT_SLOTS)
                 .map(|_| StreamOutputBinding {
                     buffer: None,
@@ -560,7 +618,11 @@ impl Encoder {
             counters: None,
             queries: crate::query::Queries::new(),
             deferred_queries: Vec::new(),
+            argbuf_ring: None,
             copy_temp: None,
+            emulated: None,
+            clear_rtv: None,
+            clear_uav: None,
             helper_psos: gaps::HelperPipelines::default(),
             tess_num_output_control_point_element: 0,
             tess_threads_per_patch: 0,

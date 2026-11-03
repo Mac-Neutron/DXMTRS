@@ -63,6 +63,27 @@ pub struct EmulatedContext {
     ts_marshal: Option<Obj>,
 }
 
+/// Raw GPU task struct for `gs_draw_arguments_marshal` (`GS_MARSHAL_TASK`).
+#[repr(C)]
+pub struct RawGsMarshalTask {
+    pub draw_arguments: u64,
+    pub dispatch_arguments: u64,
+    pub max_object_threadgroups: u64,
+    pub vertex_count_per_warp: u32,
+    pub end_of_command: u32,
+}
+
+/// Raw GPU task struct for `ts_draw_arguments_marshal` (`TS_MARSHAL_TASK`).
+#[repr(C)]
+pub struct RawTsMarshalTask {
+    pub draw_arguments: u64,
+    pub dispatch_arguments: u64,
+    pub max_object_threadgroups: u64,
+    pub control_point_count: u16,
+    pub patch_per_group: u16,
+    pub end_of_command: u32,
+}
+
 impl EmulatedContext {
     /// The pipelines of `library`'s kernels on `device`.
     ///
