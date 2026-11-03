@@ -3,45 +3,27 @@
 use core::ffi::c_void;
 use std::sync::LazyLock;
 
-use dxmt_core::format::{CAP_ATOMIC, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_TYPELESS, query_dxgi};
 use winemetal_sys::{
     MTLDevice_heapBufferSizeAndAlign, MTLDevice_heapTextureSizeAndAlign,
     MTLDevice_supportsTextureSampleCount,
 };
-use winemetal_wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_RGBA8_UNORM,
-    WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
-    WMT_TEXTURE_TYPE1D, WMT_TEXTURE_TYPE1D_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
-    WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
-    WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
-    WMTTextureInfo,
-};
+use winemetal_wire::WMTTextureInfo;
 
 use crate::{
     abi::resource::{
         D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
         D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
-        D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT,
-        D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, D3D12_MEMORY_POOL_L0,
+        D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, D3D12_MEMORY_POOL_L0, D3D12_MEMORY_POOL_L1,
         D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_DIMENSION_BUFFER,
         D3D12_RESOURCE_DIMENSION_TEXTURE1D, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
-        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
-        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_TEXTURE_LAYOUT_UNKNOWN, HeapProperties,
-        PlacedSubresourceFootprint, ResourceAllocationInfo, ResourceAllocationInfo1, ResourceDesc,
-        ResourceDesc1,
+        D3D12_RESOURCE_DIMENSION_TEXTURE3D, HeapProperties, PlacedSubresourceFootprint,
+        ResourceAllocationInfo, ResourceAllocationInfo1, ResourceDesc, ResourceDesc1,
     },
-    com::{E_INVALIDARG, E_NOTIMPL, Hresult},
+    com::{E_INVALIDARG, E_NOTIMPL, Hresult, S_OK},
     device::Device,
     resource_math::{self, HeapSizeAndAlign, plain_desc},
 };
 
-const D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE: u32 = 0x8;
-const D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE: u32 = 2;
-const D3D12_TEXTURE_LAYOUT_64KB_STANDARD_SWIZZLE: u32 = 3;
-const D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT: u64 = 4096;
-const D3D12_SMALL_MSAA_RESOURCE_PLACEMENT_ALIGNMENT: u64 = 65536;
 const D3D12_HEAP_TYPE_CUSTOM: u32 = 4;
 
 impl crate::feature::Device for Device {
@@ -104,197 +86,6 @@ pub unsafe fn check_feature_support(
     hr
 }
 
-/// Translates a D3D12 texture [`ResourceDesc`] into a [`WMTTextureInfo`].
-///
-/// Mirrors `PopulateWMTTextureInfo` (`d3d12_texture.cpp:29-181`).
-///
-/// # Errors
-///
-/// Returns `E_INVALIDARG` when the texture dimensions, mip count, sample count, format, flags,
-/// layout, or alignment are invalid.
-pub fn populate_wmt_texture_info(
-    device: &Device,
-    desc: &ResourceDesc,
-) -> Result<WMTTextureInfo, Hresult> {
-    let Ok(width) = u32::try_from(desc.width) else {
-        return Err(E_INVALIDARG);
-    };
-    if width == 0 || desc.height == 0 || desc.depth_or_array_size == 0 {
-        return Err(E_INVALIDARG);
-    }
-
-    let tex_type: u32;
-    let mut height: u32 = 1;
-    let mut depth: u32 = 1;
-    let mut array_length: u32 = 1;
-    let mut sample_count: u32 = 1;
-
-    match desc.dimension {
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
-            if desc.sample_desc.count > 1 || desc.sample_desc.quality != 0 || desc.height != 1 {
-                return Err(E_INVALIDARG);
-            }
-            if desc.depth_or_array_size > 1 {
-                tex_type = WMT_TEXTURE_TYPE1D_ARRAY;
-                array_length = u32::from(desc.depth_or_array_size);
-            } else {
-                tex_type = WMT_TEXTURE_TYPE1D;
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            height = desc.height;
-            if desc.sample_desc.count > 1 {
-                if !crate::feature::Device::supports_texture_sample_count(
-                    device,
-                    desc.sample_desc.count,
-                ) {
-                    return Err(E_INVALIDARG);
-                }
-                if desc.mip_levels != 1
-                    || (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0
-                {
-                    return Err(E_INVALIDARG);
-                }
-                sample_count = desc.sample_desc.count;
-                if desc.depth_or_array_size > 1 {
-                    tex_type = WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY;
-                    array_length = u32::from(desc.depth_or_array_size);
-                } else {
-                    tex_type = WMT_TEXTURE_TYPE2D_MULTISAMPLE;
-                }
-            } else {
-                if desc.sample_desc.count == 0 || desc.sample_desc.quality != 0 {
-                    return Err(E_INVALIDARG);
-                }
-                if desc.depth_or_array_size > 1 {
-                    tex_type = WMT_TEXTURE_TYPE2D_ARRAY;
-                    array_length = u32::from(desc.depth_or_array_size);
-                } else {
-                    tex_type = WMT_TEXTURE_TYPE2D;
-                }
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            if desc.sample_desc.count != 1 || desc.sample_desc.quality != 0 {
-                return Err(E_INVALIDARG);
-            }
-            tex_type = WMT_TEXTURE_TYPE3D;
-            height = desc.height;
-            depth = u32::from(desc.depth_or_array_size);
-        }
-        _ => return Err(E_INVALIDARG),
-    }
-
-    let max_dim = width.max(height).max(depth);
-    let max_mip = 32 - max_dim.leading_zeros();
-    let mip_levels = if desc.mip_levels == 0 {
-        max_mip
-    } else {
-        let m = u32::from(desc.mip_levels);
-        if m > max_mip {
-            return Err(E_INVALIDARG);
-        }
-        m
-    };
-
-    let (hr, fmt) = query_dxgi(desc.format);
-    if hr < 0 || fmt.pixel_format == WMT_PIXEL_FORMAT_INVALID {
-        return Err(E_INVALIDARG);
-    }
-
-    let mut usage = WMT_TEXTURE_USAGE_SHADER_READ;
-    if (fmt.flag & MTL_DXGI_FORMAT_TYPELESS) != 0 {
-        usage |= WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
-    }
-
-    let block_size: u32 = if (fmt.flag & MTL_DXGI_FORMAT_BC) != 0 {
-        4
-    } else {
-        1
-    };
-    if !width.is_multiple_of(block_size) || !height.is_multiple_of(block_size) {
-        return Err(E_INVALIDARG);
-    }
-
-    if (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) != 0 {
-        usage |= WMT_TEXTURE_USAGE_RENDER_TARGET;
-    }
-    if (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0 {
-        if (desc.flags
-            & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
-                | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
-                | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS))
-            != 0
-        {
-            return Err(E_INVALIDARG);
-        }
-        usage |= WMT_TEXTURE_USAGE_RENDER_TARGET;
-        if (desc.flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) == 0
-            && (fmt.flag & MTL_DXGI_FORMAT_TYPELESS) == 0
-        {
-            return Err(E_INVALIDARG);
-        }
-    } else if (desc.flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) != 0 {
-        return Err(E_INVALIDARG);
-    }
-
-    if (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0 {
-        usage |= WMT_TEXTURE_USAGE_SHADER_WRITE;
-        if (device.format_capability(fmt.pixel_format) & CAP_ATOMIC) != 0 {
-            usage |= WMT_TEXTURE_USAGE_SHADER_ATOMIC;
-        }
-        if fmt.pixel_format == WMT_PIXEL_FORMAT_RGBA8_UNORM
-            || fmt.pixel_format == WMT_PIXEL_FORMAT_BGRA8_UNORM
-        {
-            usage |= WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
-        }
-    }
-
-    if !matches!(
-        desc.layout,
-        D3D12_TEXTURE_LAYOUT_UNKNOWN
-            | D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE
-            | D3D12_TEXTURE_LAYOUT_64KB_STANDARD_SWIZZLE
-    ) {
-        return Err(E_INVALIDARG);
-    }
-
-    let valid_alignment = if desc.sample_desc.count > 1 {
-        matches!(
-            desc.alignment,
-            0 | D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT
-                | D3D12_SMALL_MSAA_RESOURCE_PLACEMENT_ALIGNMENT
-        )
-    } else {
-        matches!(
-            desc.alignment,
-            0 | D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT
-                | D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT
-        )
-    };
-    if !valid_alignment {
-        return Err(E_INVALIDARG);
-    }
-
-    let bits = (tex_type & 0xff)
-        | ((mip_levels & 0xff) << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-        | ((sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-        | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
-
-    Ok(WMTTextureInfo {
-        pixel_format: fmt.pixel_format,
-        width,
-        height,
-        depth,
-        array_length,
-        bits,
-        options: WMT_RESOURCE_STORAGE_MODE_PRIVATE | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-        flags: 0,
-        mach_port: 0,
-        gpu_resource_id: 0,
-    })
-}
-
 unsafe fn compute_allocation_info(
     device: &Device,
     descs: &[ResourceDesc],
@@ -323,11 +114,9 @@ unsafe fn compute_allocation_info(
                     })
                 },
                 |mtl| {
-                    let options = WMT_RESOURCE_STORAGE_MODE_PRIVATE
-                        | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED;
                     let h = mtl.handle();
                     // SAFETY: `h` is a live `MTLDevice` handle.
-                    let sa = unsafe { MTLDevice_heapBufferSizeAndAlign(h, d.width, options) };
+                    let sa = unsafe { MTLDevice_heapBufferSizeAndAlign(h, d.width, 0) };
                     Some(HeapSizeAndAlign {
                         size: sa.size,
                         align: sa.align,
@@ -338,10 +127,22 @@ unsafe fn compute_allocation_info(
         D3D12_RESOURCE_DIMENSION_TEXTURE1D
         | D3D12_RESOURCE_DIMENSION_TEXTURE2D
         | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            let Ok(mut tex_info) = populate_wmt_texture_info(device, d) else {
+            let mut tex_info = WMTTextureInfo {
+                pixel_format: 0,
+                width: 0,
+                height: 0,
+                depth: 0,
+                array_length: 0,
+                bits: 0,
+                options: 0,
+                flags: 0,
+                mach_port: 0,
+                gpu_resource_id: 0,
+            };
+            if crate::resource::populate_wmt_texture_info(device, d, &mut tex_info) != S_OK {
                 crate::debug!("GetResourceAllocationInfo: invalid texture descriptor\n");
                 return None;
-            };
+            }
             device.mtl.as_ref().map_or(
                 Some(HeapSizeAndAlign {
                     size: 4096,
@@ -429,12 +230,21 @@ pub unsafe fn get_custom_heap_properties(
     heap_type: u32,
 ) -> *mut c_void {
     crate::scope!("device.GetCustomHeapProperties");
-    let _ = Option::from(this);
+    let advertise_numa = if this.is_null() {
+        false
+    } else {
+        // SAFETY: `this` is a non-null `Device` pointer.
+        unsafe { (*this.cast::<Device>()).advertise_numa }
+    };
     let props = match heap_type {
         1 => HeapProperties {
             r#type: D3D12_HEAP_TYPE_CUSTOM,
             cpu_page_property: D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE,
-            memory_pool_preference: D3D12_MEMORY_POOL_L0,
+            memory_pool_preference: if advertise_numa {
+                D3D12_MEMORY_POOL_L1
+            } else {
+                D3D12_MEMORY_POOL_L0
+            },
             creation_node_mask: 1,
             visible_node_mask: 1,
         },

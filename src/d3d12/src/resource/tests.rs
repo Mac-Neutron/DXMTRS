@@ -622,11 +622,41 @@ fn view_descs_as_cpp() {
     FAKE_TEX_SIZE.with(|c| c.set(16384));
     assert_eq!(populate_wmt_texture_info(&dev, &small_tex, &mut info), S_OK);
     assert_eq!(info.flags, 0);
+    let mut alloc_info = crate::abi::resource::ResourceAllocationInfo {
+        size_in_bytes: 0,
+        alignment: 0,
+    };
+    // SAFETY: `dev` and `small_tex` are valid stack/box references.
+    unsafe {
+        crate::device::features::get_resource_allocation_info(
+            ptr::from_ref::<Device>(&*dev).cast_mut().cast::<c_void>(),
+            (&raw mut alloc_info).cast::<c_void>(),
+            0,
+            1,
+            (&raw const small_tex).cast::<c_void>(),
+        );
+    }
+    assert_eq!(alloc_info.size_in_bytes, 16384);
+    assert_eq!(
+        alloc_info.alignment,
+        D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT
+    );
     FAKE_TEX_SIZE.with(|c| c.set(131_072));
     assert_eq!(
         populate_wmt_texture_info(&dev, &small_tex, &mut info),
         E_INVALIDARG
     );
+    // SAFETY: `dev` and `small_tex` are valid stack/box references.
+    unsafe {
+        crate::device::features::get_resource_allocation_info(
+            ptr::from_ref::<Device>(&*dev).cast_mut().cast::<c_void>(),
+            (&raw mut alloc_info).cast::<c_void>(),
+            0,
+            1,
+            (&raw const small_tex).cast::<c_void>(),
+        );
+    }
+    assert_eq!(alloc_info.size_in_bytes, u64::MAX);
 
     // `encode_component_mapping` preserves identity swizzle for `D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING`.
     assert_eq!(
