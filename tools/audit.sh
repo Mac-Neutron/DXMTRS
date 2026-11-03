@@ -84,7 +84,7 @@ PE_JOIN_EXEMPT='^tests/d3d9/|/tests(\.rs$|/)'
 # the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/d3d9/*.rs would also select
 # src/d3d9/unix/** and src/winemetal/*.rs its unix/ and wire/, which run on the Mac.
 PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10
-    src/dxmt src/d3d11 src/d3d12 src/winemetal/sys'
+    src/dxmt src/d3d11 src/d3d12 src/replay src/winemetal/sys'
 is_pe() {
     for crate in $PE_CRATES; do
         case $1 in "$crate"/src/*.rs | "$crate"/build.rs) return 0 ;; esac
@@ -567,6 +567,18 @@ fi
 modules=$(git ls-files '*/mod.rs' || true)
 if [ -n "$modules" ]; then
     report 'Module style: foo.rs + foo/, not foo/mod.rs' 'mod.rs file' "$modules"
+fi
+
+CPP_SOURCES='src/airconv/shim/shim.cpp
+src/airconv/transforms/lower_16bit_texread.cpp
+src/airconv/transforms/simdgroup_implicit_membarrier.cpp
+src/nativemetal/win32_native.cpp
+src/util/wsi_monitor_win32.cpp
+src/util/wsi_window_win32.cpp'
+# shellcheck disable=SC2046
+cpp_strays=$(outside "$CPP_SOURCES" $(git ls-files 'src/*.cpp'))
+if [ -n "$cpp_strays" ]; then
+    report 'Mechanical audit' 'unexpected C++ source file in src/' "$cpp_strays"
 fi
 
 findings=$(coverage_matrix)

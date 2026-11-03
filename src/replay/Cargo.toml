@@ -1,0 +1,17 @@
+[package]
+name = "dxmt-replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DXMT's dxmt-replay.exe and dxmt-replay: replays recorded D3D12 pipelines"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rustc-hash = { workspace = true }

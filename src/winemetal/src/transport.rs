@@ -9,11 +9,13 @@ use winemetal_wire::{self as wire, MemPtr};
 
 // winecrt0's (libwinecrt0.a): the Unix library's handle, which `__wine_init_unix_call` sets, and the dispatcher, a
 // stub that finds ntdll's on first use.
+#[cfg(windows)]
 unsafe extern "C" {
     static __wine_unixlib_handle: u64;
     static __wine_unix_call_dispatcher: unsafe extern "system" fn(u64, u32, *mut c_void) -> i32;
 }
 
+#[cfg(windows)]
 unsafe extern "system" {
     fn __wine_init_unix_call() -> i32;
     fn DisableThreadLibraryCalls(module: *mut c_void) -> i32;
@@ -22,6 +24,7 @@ unsafe extern "system" {
 /// `DllMain`: on process attach, no thread notifications and the Unix side loaded.
 ///
 /// False when the Unix side does not load.
+#[cfg(windows)]
 #[unsafe(export_name = "DllMain")]
 pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *mut c_void) -> i32 {
     const DLL_PROCESS_ATTACH: u32 = 1;
@@ -34,6 +37,7 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *
 /// `DLL_PROCESS_ATTACH`'s work.
 ///
 /// Private, so that the exported `dll_main` passes no pointer argument to an unsafe call itself.
+#[cfg(windows)]
 fn attach(instance: *mut c_void) -> i32 {
     // SAFETY: `instance` is the module handle the loader passed to `DllMain`.
     unsafe { DisableThreadLibraryCalls(instance) };
@@ -43,6 +47,7 @@ fn attach(instance: *mut c_void) -> i32 {
 }
 
 /// `WINE_UNIX_CALL`: winemetal.so's handler `slot` called with `args`; its status.
+#[cfg(windows)]
 pub fn unix_call(slot: u32, args: *mut c_void) -> i32 {
     // SAFETY: winecrt0's handle: read only, set by `DllMain` before any thunk runs.
     let handle = unsafe { __wine_unixlib_handle };
@@ -50,6 +55,23 @@ pub fn unix_call(slot: u32, args: *mut c_void) -> i32 {
     let dispatcher = unsafe { __wine_unix_call_dispatcher };
     // SAFETY: `args` is the params structure of `slot` (or the caller's own pointer, which `WMTForward` passes on).
     unsafe { dispatcher(handle, slot, args) }
+}
+
+#[cfg(not(windows))]
+type UnixCallHandler = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
+
+#[cfg(not(windows))]
+unsafe extern "C" {
+    static __wine_unix_call_funcs: [Option<UnixCallHandler>; 158];
+}
+
+/// Native `UNIX_CALL`: calls `winemetal`'s `__wine_unix_call_funcs[slot]` directly with `args`.
+#[cfg(not(windows))]
+pub fn unix_call(slot: u32, args: *mut c_void) -> i32 {
+    // SAFETY: `slot` is a `winemetal_wire::slot` constant in `0..158` whose handler is populated.
+    let handler = unsafe { __wine_unix_call_funcs[slot as usize].unwrap_unchecked() };
+    // SAFETY: `args` is the params structure of `slot` (or the caller's own pointer for `WMTForward`).
+    unsafe { handler(args) }
 }
 
 /// A params structure of the wire: integers, floats, `MemPtr`s and arrays of them.
@@ -187,6 +209,7 @@ pub fn mem_ptr<T>(p: *const T) -> MemPtr {
 }
 
 /// A `MemPtr`'s pointer (`.ptr`; a 32-bit process ignores the high half, as the C did).
+#[cfg(windows)]
 pub const fn ptr_of(m: MemPtr) -> *mut c_void {
     core::ptr::with_exposed_provenance_mut(usize::from_ne_bytes(m.ptr.to_ne_bytes()))
 }

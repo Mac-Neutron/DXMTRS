@@ -1,7 +1,3 @@
-winemetal_unix_src = [
-  'sm50_wow64.c',
-]
-
 if wine_build_path != ''
   winemac_so = join_paths(wine_build_path, 'dlls/winemac.drv/winemac.so')
   ntdll_so = join_paths(wine_build_path, 'dlls/ntdll/ntdll.so')
@@ -43,7 +39,7 @@ winemetal_unix_ld_args = [
 ] + (get_option('debug') ? [] : ['-Wl,-S'])
 winemetal_unix_link_depends = [winemetal_unix_rust]
 
-shared_library('winemetal', winemetal_unix_src,
+shared_library('winemetal', files('../../util/rust_pe_rt.c'),
   name_prefix         : '',
   dependencies        : [ airconv_dep_darwin ],
   include_directories : dxmt_include_path,

@@ -1,11 +1,22 @@
 winemetal_src = [
-  '../winemetal/winemetal_thunks.c',
   'win32_event.c',
   'win32_native.cpp',
 ]
 winemetal_link_depends = []
 
 winemetal_ld_args = [
+  '-Wl,-u,___wine_unix_call_funcs',
+  '-Wl,-u,_NSObject_retain',
+  '-Wl,-u,_MTLTexture_pixelFormat',
+  '-Wl,-u,_CacheReader_alloc_init',
+  '-Wl,-u,_MTLCaptureManager_sharedCaptureManager',
+  '-Wl,-u,_MTLCommandBuffer_commit',
+  '-Wl,-u,_WMTCopyAllDevices',
+  '-Wl,-u,_WMTGetPrimaryDisplayId',
+  '-Wl,-u,_MTLSharedEvent_signaledValue',
+  '-Wl,-u,_MTLDevice_newTemporalScaler',
+  '-Wl,-u,_MTLDevice_newComputePipelineState',
+  '-Wl,-u,_MTLDevice_newBuffer',
   '-weak_framework', 'CoreFoundation', '-weak_framework', 'Metal',
   '-framework', 'MetalFX', '-weak_framework', 'Foundation',
   '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',

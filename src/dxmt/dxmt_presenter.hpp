@@ -1,11 +1,5 @@
 #pragma once
-#include "Metal.hpp"
-#include "dxmt_command.hpp"
-#include "rc/util_rc.hpp"
-#include "thread.hpp"
-#include "util_cpu_fence.hpp"
 #include "winemetal.h"
-#include <atomic>
 
 namespace dxmt {
 
@@ -24,8 +18,8 @@ struct DXMTGammaRamp {
   uint64_t version;
 };
 
-// MacNeutron (DXMTRS step 5a): the presenter is Rust (src/dxmt/src/presenter.rs); the class below forwards to these
-// functions. src/dxmt/src/presenter/abi.rs, generated from this block by tools/winemetal-layouts.sh --seam-abi, asserts
+// MacNeutron (DXMTRS step 5a): the presenter is Rust (src/dxmt/src/presenter.rs).
+// src/dxmt/src/presenter/abi.rs, generated from this block by tools/winemetal-layouts.sh --seam-abi, asserts
 // each Rust export against its declaration on every target; a width written differently here fails that build.
 extern "C" {
 /* dxmt-abi begin */
@@ -61,56 +55,4 @@ obj_handle_t dxmt_presenter_encode(void *p, obj_handle_t cmdbuf, obj_handle_t ba
 /* dxmt-abi end */
 }
 
-class Presenter : public RcObject {
-public:
-  Presenter(
-      WMT::Device device, WMT::MetalLayer layer, InternalCommandLibrary &lib, float scale_factor, uint8_t sample_count
-  );
-  ~Presenter();
-
-  bool changeLayerProperties(
-      WMTPixelFormat format, WMTColorSpace colorspace, double width, double height, uint8_t sample_count
-  );
-
-  bool changeLayerColorSpace(WMTColorSpace colorspace);
-
-  void changeHDRMetadata(const WMTHDRMetadata *metadata);
-
-  void changeGammaRamp(const DXMTGammaRamp *gamma_ramp);
-
-  class PresentState {
-  public:
-    DXMTPresentMetadata metadata;
-    uint64_t frame_id;
-    Presenter *presenter;
-    PresentState(DXMTPresentMetadata metadata, uint64_t frame_id, Presenter *presenter) :
-        metadata(metadata),
-        frame_id(frame_id),
-        presenter(presenter) {}
-    PresentState(const PresentState &copy) = delete;
-    PresentState(PresentState &&move)  {
-      metadata = move.metadata;
-      frame_id = move.frame_id;
-      presenter = move.presenter;
-      move.presenter = nullptr;
-    };
-    ~PresentState() {
-      if (presenter) {
-        dxmt_presenter_frame_done(presenter->rust_, frame_id);
-        presenter = nullptr;
-      }
-    };
-  };
-
-  PresentState synchronizeLayerProperties();
-
-  WMT::Reference<WMT::MetalDrawable> encodeCommands(
-      WMT::CommandBuffer cmdbuf, WMT::Texture backbuffer, DXMTPresentMetadata metadata,
-      std::function<void(WMT::RenderCommandEncoder)> &&wait_fences,
-      std::function<void(WMT::RenderCommandEncoder)> &&update_fences
-  );
-
-private:
-  void *rust_;
-};
 } // namespace dxmt

@@ -1,17 +1,23 @@
-# dxmt-replay.exe (MacNeutron): rebuilds a game's recorded D3D12 pipelines; see dxmt_replay.cpp.
+# DXMT's dxmt-replay.exe and dxmt-replay, in Rust (src/replay): linked from the crate's static library.
+replay_rust = []
+foreach t : rust_pe_targets
+  replay_rust += custom_target('dxmt-replay-' + t,
+    output             : 'dxmt-replay-' + t + (t.endswith('-msvc') ? '.lib' : '.a'),
+    command            : [cargo_staticlib, get_option('cargo_toolchain'), t, 'dxmt-replay', rust_target_dir, '@OUTPUT@'],
+    build_always_stale : true,
+  )
+endforeach
+
 if dxmt_crossbuild
-executable('dxmt-replay', [ 'dxmt_replay.cpp', '../d3d12/d3d12_pipeline_record.cpp' ],
-  dependencies        : [ util_dep ],
-  include_directories : [ dxmt_include_path, include_directories('../d3d12') ],
-  link_args           : [ '-municode' ],
-  install             : true,
-  install_dir         : windows_native_install_dir,
-)
+  replay_ld_args = [ '-municode' ]
 else
-# MacNeutron, natively: a VM host replays a game's recordings before its VM boots, into native DXMT's cache.
-executable('dxmt-replay', [ 'dxmt_replay.cpp', 'native_main.cpp', '../d3d12/d3d12_pipeline_record.cpp' ],
-  dependencies        : [ util_dep ],
-  include_directories : [ dxmt_include_path, include_directories('../d3d12') ],
-  install             : false,
-)
+  replay_ld_args = [ '-Wl,-u,_main', '-Wl,-dead_strip' ] + (get_option('debug') ? [] : [ '-Wl,-S' ])
 endif
+
+executable('dxmt-replay',
+  dependencies : [ rust_runtime_dep ],
+  link_with    : replay_rust,
+  link_args    : replay_ld_args,
+  install      : dxmt_crossbuild,
+  install_dir  : windows_native_install_dir,
+)

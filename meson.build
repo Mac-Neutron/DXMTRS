@@ -18,7 +18,6 @@ cpu_family = host_machine.cpu_family()
 
 dxmt_include_dirs = [
   './include',
-  './libs'
 ]
 
 # include/native/d3d12 first: the D3D12 headers the PE build compiles against (llvm-mingw's, dxmt/pins in MacNeutron),
@@ -241,7 +240,6 @@ rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll'] 
   dependencies : rust_pe_wine_ntdll,
   sources : files('src/util/rust_pe_rt.c'))
 
-subdir('libs')
 subdir('src')
 
 if get_option('enable_tests')

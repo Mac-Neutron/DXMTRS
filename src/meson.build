@@ -1,4 +1,3 @@
-subdir('util')
 subdir('airconv')
 
 if not dxmt_crossbuild

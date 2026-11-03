@@ -1,42 +1,8 @@
 #pragma once
 
-#include "Metal.hpp"
-#include <map>
+#include "winemetal.h"
 
 namespace dxmt {
-enum class FormatCapability : int {
-  None = 0,
-  Atomic = 0x1,
-  Filter = 0x2,
-  Write = 0x4,
-  Color = 0x8,
-  Blend = 0x10,
-  MSAA = 0x20,
-  Sparse = 0x40,
-  Resolve = 0x80,
-  DepthStencil = 0x100,
-  TextureBufferRead = 0x200,
-  TextureBufferWrite = 0x400,
-  TextureBufferReadWrite = 0x800
-};
-
-class FormatCapabilityInspector {
-public:
-  std::map<WMTPixelFormat, FormatCapability> textureCapabilities{};
-  void Inspect(WMT::Device device);
-};
-
-WMTPixelFormat Forget_sRGB(WMTPixelFormat format);
-WMTPixelFormat Recall_sRGB(WMTPixelFormat format);
-
-inline bool
-Is_sRGBVariant(WMTPixelFormat format) {
-  return Forget_sRGB(format) != format;
-}
-
-bool IsBlockCompressionFormat(WMTPixelFormat format);
-
-uint32_t DepthStencilPlanarFlags(WMTPixelFormat format);
 
 enum MTL_DXGI_FORMAT_FLAG {
   MTL_DXGI_FORMAT_TYPELESS = 1,
@@ -59,20 +25,8 @@ struct MTL_DXGI_FORMAT_DESC {
   uint16_t Flag;
 };
 
-int32_t MTLQueryDXGIFormat(WMT::Device device, uint32_t format, MTL_DXGI_FORMAT_DESC &description);
-
-uint32_t MTLGetTexelSize(WMTPixelFormat format);
-
-WMTPixelFormat MTLGetUnsignedIntegerFormat(WMTPixelFormat format);
-
-bool IsUnorm8RenderTargetFormat(WMTPixelFormat format);
-
-bool IsIntegerFormat(WMTPixelFormat format);
-
-void SanitizeRTVClearColor(WMTPixelFormat format, WMTClearColor &color);
-
-// MacNeutron (DXMTRS step 5a): the functions above forward to the Rust core (src/dxmt/src/format.rs), which exports
-// these. src/dxmt/src/format/abi.rs, generated from this block by tools/winemetal-layouts.sh --seam-abi, asserts each
+// MacNeutron (DXMTRS step 5a): the Rust core (src/dxmt/src/format.rs) exports these.
+// src/dxmt/src/format/abi.rs, generated from this block by tools/winemetal-layouts.sh --seam-abi, asserts each
 // Rust export against its declaration on every target; a width written differently here fails that build.
 extern "C" {
 /* dxmt-abi begin */

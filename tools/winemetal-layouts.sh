@@ -6,7 +6,7 @@
 # each bitfield's shift and width (Apple clang for aarch64-apple-darwin; llvm-mingw's clang, -ffreestanding, for the
 # four Windows targets). Once, from Apple clang: each enum value of winemetal.h and each SM50_BINDING_INDEX_*, each
 # integer macro of the headers (-E -dM), the swizzle macros on every swizzled pixel format, and each slot number
-# (winemetal_thunks.c's UNIX_CALLs, airconv_unixcalls, WMTForward's). The headers are read with -DDXMT_GUEST_VM, which
+# (src/winemetal/src/*.rs's calls, airconv_unixcalls, WMTForward's). The headers are read with -DDXMT_GUEST_VM, which
 # only adds declarations. airconv_public.h's structs may be mirrored too (lib.rs mirrors the reflection pair, whose
 # anonymous union is the field u) and its MTL_SM50_SHADER_ARGUMENT_* enumerators are asserted with winemetal.h's.
 # Names take Rust casing: a struct's snake_case becomes CamelCase, an all-capitals word capitalised
@@ -1040,9 +1040,10 @@ apple -fsyntax-only -Xclang -ast-dump -Xclang -ast-dump-filter -Xclang wire_prob
   awk '/EnumConstantDecl/ { sub(/ '"'"'.*/, ""); n = $NF; next }
     /value: Int / && !(n in v) { sub(/.*value: Int /, ""); v[n] = 1; print n, $1 }' \
   >"$t/values"
-awk '/^[A-Za-z_]/ && match($0, /[A-Za-z_][A-Za-z0-9_]*\(/) { f = substr($0, RSTART, RLENGTH - 1) }
-  match($0, /UNIX_CALL\([0-9]+,|call != [0-9]+/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print f, s }
-' "$wm/winemetal_thunks.c" >"$t/slots"
+awk 'FILENAME == ARGV[1] && /^pub const / { sub(/:/, "", $3); sub(/;/, "", $NF); num[$3] = $NF; next }
+  /^[[:space:]]*fn [A-Za-z_][A-Za-z0-9_]*\(/ { s = $0; sub(/^[[:space:]]*fn /, "", s); sub(/\(.*/, "", s); f = s }
+  match($0, /slot::[A-Z0-9_]+/) { c = substr($0, RSTART + 6, RLENGTH - 6); print f, num[c] }
+' "$wire/slot.rs" "$wm"/src/*.rs >"$t/slots"
 
 printf '\nconst _: () = {\n'
 awk "$names"'

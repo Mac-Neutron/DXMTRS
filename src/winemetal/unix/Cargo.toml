@@ -12,8 +12,8 @@ crate-type = ["staticlib"]
 
 [features]
 # The native winemetal.dylib's code (DXMT_NATIVE in the C): the memory, present and WSI hooks, the
-# native event functions and the native cache class names.
-native = []
+# native event functions, the native cache class names and winemetal.h's C entry points.
+native = ["dep:winemetal-pe"]
 
 # The framework crates keep their default features, which enable every header; the feature lists
 # document the headers the lanes' handlers send to. AppKit is not a dependency: the few NSScreen,
@@ -89,6 +89,7 @@ objc2-quartz-core = { workspace = true, features = [
     "objc2-core-graphics",
     "objc2-metal",
 ] }
+winemetal-pe = { workspace = true, optional = true }
 winemetal-wire = { workspace = true }
 
 [lints]

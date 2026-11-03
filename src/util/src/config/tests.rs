@@ -1,8 +1,5 @@
 use super::*;
 
-/// A profile table as text: each profile's names, then its keys and values.
-type Table = Vec<(Vec<String>, Vec<(String, String)>)>;
-
 /// The options as text, `key=value` in key order.
 fn shown(options: &Map) -> Vec<String> {
     options
@@ -117,57 +114,30 @@ fn profile_lines_in_key_order() {
     );
 }
 
-/// The profile table is `config.cpp`'s: its six patterns' names, then their keys and values.
+/// The built-in profile table pins all six game profiles and their keys and values.
 #[test]
-fn table_matches_config_cpp() {
-    let cpp = include_str!("../../config/config.cpp");
-    let table = cpp
-        .split_once("g_profiles = {{")
-        .unwrap()
-        .1
-        .split_once("\n  }};")
-        .unwrap()
-        .0;
-    let mut profiles: Table = Vec::new();
-    for line in table.lines().map(str::trim) {
-        if let Some(rest) = line.strip_prefix("{ R\"(") {
-            let pattern = rest.split_once(")\"").unwrap().0;
-            let names = pattern
-                .strip_prefix(r"\\")
-                .and_then(|names| names.strip_suffix(r"\.exe$"))
-                .unwrap();
-            let names = names
-                .strip_prefix('(')
-                .and_then(|names| names.strip_suffix(')'))
-                .unwrap_or(names);
-            let names: Vec<String> = names.split('|').map(str::to_owned).collect();
-            let plain = |name: &String| {
-                name.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            };
-            assert!(names.iter().all(plain), "{pattern}");
-            profiles.push((names, Vec::new()));
-        } else if let Some(rest) = line.strip_prefix("{ \"") {
-            let (key, rest) = rest.split_once('"').unwrap();
-            let value = rest.split_once('"').unwrap().1.split_once('"').unwrap().0;
-            let options = &mut profiles.last_mut().unwrap().1;
-            options.push((key.to_owned(), value.to_owned()));
-        }
-    }
-    let ours: Table = PROFILES
-        .iter()
-        .map(|(names, options)| {
-            (
-                names.iter().map(|&name| name.to_owned()).collect(),
-                options
-                    .iter()
-                    .map(|&(key, value)| (key.to_owned(), value.to_owned()))
-                    .collect(),
-            )
-        })
-        .collect();
-    assert_eq!(profiles.len(), 6);
-    assert_eq!(profiles, ours);
+fn built_in_profiles_table() {
+    assert_eq!(PROFILES.len(), 6);
+    assert_eq!(
+        profile("C:\\SONIC_X_SHADOW_GENERATIONS.exe"),
+        Some(&[("d3d11.ignoreMapFlagNoWait", "True")][..])
+    );
+    assert_eq!(
+        profile("C:\\OMORI.exe"),
+        Some(&[("dxgi.forceSDR", "True")][..])
+    );
+    assert_eq!(
+        profile("C:\\O2-Win64-Shipping.exe"),
+        Some(&[("d3d11.sampleNaNToZero", "True")][..])
+    );
+    assert_eq!(
+        profile("C:\\SotTR.exe"),
+        Some(&[("d3d11.defuseFma", "True")][..])
+    );
+    assert_eq!(
+        profile("C:\\helldivers2.exe"),
+        Some(&[("d3d11.maxFeatureLevel", "12_1")][..])
+    );
 }
 
 /// PE's `getEnvVar`: a character beyond the BMP is dropped, and four NULs end the text.

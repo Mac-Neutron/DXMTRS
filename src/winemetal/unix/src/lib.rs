@@ -24,3 +24,6 @@ pub mod g6;
 pub mod g7;
 pub mod g8;
 pub mod g9;
+
+#[cfg(feature = "native")]
+pub use winemetal_pe;

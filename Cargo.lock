@@ -242,6 +242,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxmt-replay"
+version = "0.14.1"
+dependencies = [
+ "rustc-hash",
+]
+
+[[package]]
 name = "dxmt-util"
 version = "0.14.1"
 
@@ -868,6 +875,7 @@ dependencies = [
  "objc2-metal",
  "objc2-metal-fx",
  "objc2-quartz-core",
+ "winemetal-pe",
  "winemetal-wire",
 ]
 

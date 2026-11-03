@@ -187,20 +187,6 @@ const FUNCS: [Option<Handler>; 158] = [
 #[unsafe(export_name = "__wine_unix_call_funcs")]
 pub static UNIX_CALL_FUNCS: [Option<Handler>; 158] = FUNCS;
 
-// sm50_wow64.c's converters, which widen a 32-bit caller's translator params (the Wine build only).
-#[cfg(not(feature = "native"))]
-unsafe extern "C-unwind" {
-    fn thunk32_SM50Initialize(args: *mut c_void) -> i32;
-    fn thunk32_SM50Compile(args: *mut c_void) -> i32;
-    fn thunk32_SM50GetCompiledBitcode(args: *mut c_void) -> i32;
-    fn thunk32_SM50GetErrorMessage(args: *mut c_void) -> i32;
-    fn thunk32_SM50CompileGeometryPipelineVertex(args: *mut c_void) -> i32;
-    fn thunk32_SM50CompileGeometryPipelineGeometry(args: *mut c_void) -> i32;
-    fn thunk32_SM50CompileTessellationPipelineHull(args: *mut c_void) -> i32;
-    fn thunk32_SM50CompileTessellationPipelineDomain(args: *mut c_void) -> i32;
-    fn thunk32_SM50GetArgumentsInfo(args: *mut c_void) -> i32;
-}
-
 /// The `WoW64` Unix-call table, in the Wine build only.
 ///
 /// Slots 0-152 of the 64-bit table, with a 32-bit caller's translator thunks (74, 76, 77, 79, 81,
@@ -209,14 +195,14 @@ unsafe extern "C-unwind" {
 #[unsafe(export_name = "__wine_unix_call_wow64_funcs")]
 pub static UNIX_CALL_WOW64_FUNCS: [Option<Handler>; 153] = {
     let [mut t @ .., _, _, _, _, _] = FUNCS;
-    t[74] = Some(thunk32_SM50Initialize);
-    t[76] = Some(thunk32_SM50Compile);
-    t[77] = Some(thunk32_SM50GetCompiledBitcode);
-    t[79] = Some(thunk32_SM50GetErrorMessage);
-    t[81] = Some(thunk32_SM50CompileGeometryPipelineVertex);
-    t[82] = Some(thunk32_SM50CompileGeometryPipelineGeometry);
-    t[84] = Some(thunk32_SM50CompileTessellationPipelineHull);
-    t[85] = Some(thunk32_SM50CompileTessellationPipelineDomain);
-    t[88] = Some(thunk32_SM50GetArgumentsInfo);
+    t[74] = Some(g10::sm50_initialize_32);
+    t[76] = Some(g10::sm50_compile_32);
+    t[77] = Some(g10::sm50_get_compiled_bitcode_32);
+    t[79] = Some(g10::sm50_get_error_message_32);
+    t[81] = Some(g10::sm50_compile_geometry_pipeline_vertex_32);
+    t[82] = Some(g10::sm50_compile_geometry_pipeline_geometry_32);
+    t[84] = Some(g10::sm50_compile_tessellation_pipeline_hull_32);
+    t[85] = Some(g10::sm50_compile_tessellation_pipeline_domain_32);
+    t[88] = Some(g10::sm50_get_arguments_info_32);
     t
 };

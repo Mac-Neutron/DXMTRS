@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license = "LGPL-2.1-or-later"
-description = "DXMT's winemetal.dll (Wine builds): the C API of winemetal.h as thunks to winemetal.so"
+description = "DXMT's winemetal.h C API: thunks to winemetal.so (Wine) or __wine_unix_call_funcs (native)"
 publish = false
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["rlib", "staticlib"]
 
 [lints]
 workspace = true
