@@ -159,6 +159,7 @@ impl Texture {
         if self.bytes_per_image == 0 {
             let device = self.device.handle();
             let created = if flags.contains(TextureAllocationFlags::SHARED) {
+                info.flags &= !WMT_TEXTURE_FLAG_LOSSLESS;
                 // SAFETY: `device` is held live by `self`; `info` is a texture description
                 // winemetal fills in.
                 unsafe { MTLDevice_newSharedTexture(device, &raw mut info) }

@@ -39,6 +39,11 @@ pub static LOG: Logger = Logger::new(if cfg!(test) {
     "d3d11.log"
 });
 
+/// Native Rust allocations in `d3d11.dylib` and `d3d10core.dylib` use `snmalloc`.
+#[cfg(all(target_os = "macos", not(test)))]
+#[global_allocator]
+static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
 /// The `type_info` vtable under its MSVC decorated name (`std::thread::spawn` landing pad).
 #[cfg(windows)]
 #[unsafe(export_name = "??_7type_info@@6B@")]

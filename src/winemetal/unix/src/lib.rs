@@ -27,3 +27,8 @@ pub mod g9;
 
 #[cfg(feature = "native")]
 pub use winemetal_pe;
+
+/// Native Rust allocations in `winemetal.so` and `winemetal.dylib` use `snmalloc`.
+#[cfg(all(target_os = "macos", not(test)))]
+#[global_allocator]
+static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;

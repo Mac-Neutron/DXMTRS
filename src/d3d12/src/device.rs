@@ -8,13 +8,11 @@ pub mod temporal;
 pub mod vtbl;
 
 use core::{ffi::c_void, mem::offset_of, ptr};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use dxmt_core::{fence::EventListener, library::Library, presenter::framegen::TemporalScaler};
 use dxmt_util::{com::ComObject, private_data::PrivateData};
+use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::WMTFXTemporalScalerInfo;
 
@@ -41,9 +39,10 @@ pub struct Device {
     pub residency: residency::Residency,
     pub null: null::NullResources,
     pub library: Option<Library>,
-    pub formats: BTreeMap<u32, u32>,
+    pub formats: FxHashMap<u32, u32>,
     pub fence_helper: Option<Obj>,
     pub default_depth_stencil_state: Option<Obj>,
+    pub depth_stencil_states: Mutex<FxHashMap<[u8; 16], Obj>>,
     pub events: Option<EventListener>,
     pub upscalers: Mutex<Vec<(WMTFXTemporalScalerInfo, Arc<TemporalScaler>)>>,
     pub timestamp_frequency: OnceLock<u64>,
@@ -80,9 +79,10 @@ impl Device {
             residency: residency::Residency::new(),
             null: null::NullResources::new(),
             library: None,
-            formats: BTreeMap::new(),
+            formats: FxHashMap::default(),
             fence_helper: None,
             default_depth_stencil_state: None,
+            depth_stencil_states: Mutex::new(FxHashMap::default()),
             events: None,
             upscalers: Mutex::new(Vec::new()),
             timestamp_frequency: OnceLock::new(),

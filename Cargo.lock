@@ -144,6 +144,7 @@ dependencies = [
  "dxmt-core",
  "dxmt-util",
  "rustc-hash",
+ "snmalloc-rs",
  "winemetal-sys",
  "winemetal-wire",
 ]
@@ -158,6 +159,7 @@ dependencies = [
  "dxmt-util",
  "libc",
  "rustc-hash",
+ "snmalloc-rs",
  "winemetal-sys",
  "winemetal-wire",
 ]
@@ -225,6 +227,7 @@ name = "dxgi"
 version = "0.14.1"
 dependencies = [
  "dxmt-util",
+ "snmalloc-rs",
  "winemetal-sys",
  "winemetal-wire",
 ]
@@ -875,6 +878,7 @@ dependencies = [
  "objc2-metal",
  "objc2-metal-fx",
  "objc2-quartz-core",
+ "snmalloc-rs",
  "winemetal-pe",
  "winemetal-wire",
 ]

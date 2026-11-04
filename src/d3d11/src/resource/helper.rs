@@ -1,17 +1,20 @@
 //! Resource description validation and upgrade helpers (`d3d11_resource_helper.cpp`).
 
+use std::sync::LazyLock;
+
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-        MTL_DXGI_FORMAT_TYPELESS, query_dxgi,
+        MTL_DXGI_FORMAT_TYPELESS, query_dxgi, texel_size,
     },
     resource::BufferAllocationFlags,
 };
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_INVALID,
-    WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RG32_UINT,
-    WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-    WMT_RESOURCE_STORAGE_MODE_MANAGED, WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_TEXTURE_TYPE_CUBE,
+    WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT,
+    WMT_PIXEL_FORMAT_RG32_UINT, WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED,
+    WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_MANAGED,
+    WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE_CUBE,
     WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
     WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
     WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
@@ -54,7 +57,14 @@ const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;
 const D3D11_RESOURCE_MISC_TEXTURECUBE: u32 = 0x4;
 const D3D11_RESOURCE_MISC_BUFFER_STRUCTURED: u32 = 0x40;
 const D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX: u32 = 0x100;
+const D3D11_RESOURCE_MISC_SHARED_NTHANDLE: u32 = 0x800;
 const D3D11_RESOURCE_MISC_TILE_POOL: u32 = 0x20000;
+
+fn compression_mode() -> &'static str {
+    static COMPRESSION: LazyLock<String> =
+        LazyLock::new(|| std::env::var("DXMT_D3D11_COMPRESSION").unwrap_or_default());
+    COMPRESSION.as_str()
+}
 
 const DXGI_FORMAT_R32_TYPELESS: u32 = 39;
 const DXGI_FORMAT_D32_FLOAT: u32 = 40;
@@ -312,6 +322,26 @@ fn create_mtl_texture_descriptor_internal(
         | ((mipmap_level_count & 0xff) << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
         | ((out_sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
         | ((metal_usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
+
+    let comp = compression_mode();
+    let pf = mtl_desc.pixel_format;
+    let r32_view = texel_size(pf) == 4
+        && pf != WMT_PIXEL_FORMAT_R32_UINT
+        && pf != WMT_PIXEL_FORMAT_R32_SINT
+        && pf != WMT_PIXEL_FORMAT_R32_FLOAT;
+    let uav = (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0;
+    let any_shared = D3D11_RESOURCE_MISC_SHARED
+        | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
+        | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+    mtl_desc.flags = if comp != "0"
+        && matches!(usage, D3D11_USAGE_DEFAULT | D3D11_USAGE_IMMUTABLE)
+        && (misc_flags & any_shared) == 0
+        && !(uav && (comp == "rt" || r32_view))
+    {
+        WMT_TEXTURE_FLAG_LOSSLESS
+    } else {
+        0
+    };
     S_OK
 }
 

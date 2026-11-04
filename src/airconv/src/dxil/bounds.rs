@@ -9,11 +9,13 @@
 use std::{env, ffi::OsStr, sync::LazyLock};
 
 /// `DxilBoundsPerComponent`: `DXMT_DXIL_BOUNDS=component`.
+#[must_use]
 pub fn per_component() -> bool {
     mode() == Some(OsStr::new("component"))
 }
 
 /// `DxilBoundsOff`: `DXMT_DXIL_BOUNDS=off`.
+#[must_use]
 pub fn off() -> bool {
     mode() == Some(OsStr::new("off"))
 }

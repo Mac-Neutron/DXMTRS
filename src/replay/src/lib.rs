@@ -886,7 +886,6 @@ fn run_replay(arg_os: &OsString) -> i32 {
     let failed = AtomicUsize::new(0);
     let nthreads = std::thread::available_parallelism()
         .map_or(1, usize::from)
-        .min(8)
         .min(jobs.len());
     let dev = DevicePtr(device);
     let total = jobs.len();

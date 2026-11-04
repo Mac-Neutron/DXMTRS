@@ -31,3 +31,6 @@ rustc-hash = { workspace = true }
 winemetal-sys = { workspace = true }
 winemetal-wire = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+snmalloc-rs = { workspace = true }
+

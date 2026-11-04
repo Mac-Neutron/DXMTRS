@@ -3,10 +3,9 @@
 #[cfg(windows)]
 use core::mem;
 use core::{ffi::c_void, ptr};
-use std::{
-    collections::BTreeMap,
-    sync::{LazyLock, Mutex, PoisonError},
-};
+use std::sync::{LazyLock, Mutex, PoisonError};
+
+use rustc_hash::FxHashMap;
 
 use crate::{
     abi::{
@@ -166,13 +165,13 @@ struct Entry {
 }
 
 struct SharedFenceTable {
-    entries: BTreeMap<usize, Entry>,
+    entries: FxHashMap<usize, Entry>,
 }
 
 impl SharedFenceTable {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
-            entries: BTreeMap::new(),
+            entries: FxHashMap::default(),
         }
     }
 

@@ -827,7 +827,11 @@ fn initialize_pso_fields(
     S_OK
 }
 
-fn initialize_dsso(metal: &Obj, desc: &GraphicsPipelineStateDesc) -> [Option<Obj>; 6] {
+fn initialize_dsso(
+    dev: &Device,
+    metal: &Obj,
+    desc: &GraphicsPipelineStateDesc,
+) -> [Option<Obj>; 6] {
     let ds = &desc.depth_stencil_state;
     let empty_stencil = WMTStencilInfo {
         enabled: 0,
@@ -870,10 +874,52 @@ fn initialize_dsso(metal: &Obj, desc: &GraphicsPipelineStateDesc) -> [Option<Obj
     }
 
     let make = |d: &WMTDepthStencilInfo| -> Option<Obj> {
-        // SAFETY: `metal` is a live `MTLDevice` and `d` is valid.
-        let h = unsafe { MTLDevice_newDepthStencilState(metal.handle(), &raw const *d) };
+        let key = [
+            d.depth_compare_function,
+            d.depth_write_enabled,
+            d.front_stencil.enabled,
+            d.front_stencil.depth_stencil_pass_op,
+            d.front_stencil.stencil_fail_op,
+            d.front_stencil.depth_fail_op,
+            d.front_stencil.stencil_compare_function,
+            d.front_stencil.write_mask,
+            d.front_stencil.read_mask,
+            d.back_stencil.enabled,
+            d.back_stencil.depth_stencil_pass_op,
+            d.back_stencil.stencil_fail_op,
+            d.back_stencil.depth_fail_op,
+            d.back_stencil.stencil_compare_function,
+            d.back_stencil.write_mask,
+            d.back_stencil.read_mask,
+        ];
+        let cache = dev
+            .depth_stencil_states
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(existing) = cache.get(&key) {
+            let h = existing.handle();
+            drop(cache);
+            // SAFETY: `h` is a live `MTLDepthStencilState` handle cached on `dev`.
+            return unsafe { Obj::retain(h) };
+        }
+        drop(cache);
+        let metal_h = metal.handle();
+        let desc_ptr = &raw const *d;
+        // SAFETY: `metal_h` is a live `MTLDevice` and `desc_ptr` is valid.
+        let h = unsafe { MTLDevice_newDepthStencilState(metal_h, desc_ptr) };
         // SAFETY: `h` is 0 or a newly retained `MTLDepthStencilState` handle.
-        unsafe { Obj::adopt(h) }
+        let obj = unsafe { Obj::adopt(h) };
+        if let Some(ref created) = obj {
+            let created_h = created.handle();
+            // SAFETY: `created_h` is a live `MTLDepthStencilState` handle.
+            if let Some(cached) = unsafe { Obj::retain(created_h) } {
+                dev.depth_stencil_states
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key, cached);
+            }
+        }
+        obj
     };
 
     let dsso = make(&info);
@@ -1517,7 +1563,7 @@ pub unsafe fn create_graphics_pipeline_state(
         Err(hr) => return hr,
     };
 
-    let depth_stencil_states = initialize_dsso(metal, d);
+    let depth_stencil_states = initialize_dsso(dev, metal, d);
     // SAFETY: `desc` is valid.
     let desc_hash = unsafe { hash_graphics_desc(desc) };
     if recording_on() {

@@ -6,16 +6,14 @@ use core::{
     ffi::c_void,
     ptr::{self, read_unaligned, write_unaligned},
 };
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, LazyLock, Mutex, PoisonError},
-};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use dxmt_core::{
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     sampler::Sampler,
 };
 use dxmt_util::{com::ComObject, private_data::PrivateData};
+use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_ADDRESS_MODE_REPEAT,
     WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE, WMT_SAMPLER_MIN_MAG_FILTER_NEAREST,
@@ -56,12 +54,13 @@ use crate::{
 /// `DXGI_FORMAT_UNKNOWN` (`0`).
 const DXGI_FORMAT_UNKNOWN: u32 = 0;
 
-type SamplerMap = BTreeMap<(usize, u32), Arc<Sampler>>;
+type SamplerMap = FxHashMap<(usize, u32), Arc<Sampler>>;
 
 /// Retains live `Arc<Sampler>` handles indexed by `(heap_addr, descriptor_index)`.
 ///
 /// Keeps underlying `MTLSamplerState` objects valid while stored in a sampler descriptor heap.
-static SAMPLER_OBJECTS: LazyLock<Mutex<SamplerMap>> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static SAMPLER_OBJECTS: LazyLock<Mutex<SamplerMap>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 /// Buffer subrange descriptor (`dxmt::BufferSlice`, `dxmt_buffer.hpp:44-50`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

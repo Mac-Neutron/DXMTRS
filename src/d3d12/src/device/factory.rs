@@ -2,7 +2,6 @@
 
 use core::{ffi::c_void, ptr};
 use std::{
-    collections::BTreeMap,
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -13,6 +12,7 @@ use dxmt_core::{
     library::{self, Library},
 };
 use dxmt_util::{com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data::PrivateData, qpc};
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
     MTLDevice_sampleTimestamps, MTLDevice_supportsBCTextureCompression,
@@ -232,7 +232,7 @@ pub unsafe fn create(
 
     // SAFETY: `h` is a live `MTLDevice` handle.
     let bc = unsafe { MTLDevice_supportsBCTextureCompression(h) };
-    let formats: BTreeMap<u32, u32> = format::capabilities(
+    let formats: FxHashMap<u32, u32> = format::capabilities(
         |f| {
             // SAFETY: `h` is a live `MTLDevice` handle.
             unsafe { MTLDevice_supportsFamily(h, f) }
@@ -294,6 +294,7 @@ pub unsafe fn create(
         formats,
         fence_helper: Some(fence_helper),
         default_depth_stencil_state,
+        depth_stencil_states: Mutex::new(FxHashMap::default()),
         events: Some(EventListener::new()),
         upscalers: Mutex::new(Vec::new()),
         timestamp_frequency: OnceLock::new(),

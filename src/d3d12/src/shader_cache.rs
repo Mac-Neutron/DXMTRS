@@ -10,11 +10,13 @@ use core::{
 };
 use std::{
     ffi::CString,
-    sync::{Arc, LazyLock, Once},
+    sync::{Arc, LazyLock, Mutex, Once, PoisonError},
 };
 
 use airconv_ir::container::Container;
 use dxmt_core::shader_cache::Store;
+use dxmt_util::sha1::Sha1;
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     DispatchData_alloc_init, DispatchData_copyBytes, MTLDevice_newLibrary, MTLLibrary_newFunction,
     Obj,
@@ -52,110 +54,8 @@ pub enum FunctionKind {
     GeometryMesh,
 }
 
-struct Sha1 {
-    state: [u32; 5],
-    len_bytes: u64,
-    buf: [u8; 64],
-    buf_len: usize,
-}
-
-impl Sha1 {
-    const fn new() -> Self {
-        Self {
-            state: [
-                0x6745_2301,
-                0xefcd_ab89,
-                0x98ba_dcfe,
-                0x1032_5476,
-                0xc3d2_e1f0,
-            ],
-            len_bytes: 0,
-            buf: [0; 64],
-            buf_len: 0,
-        }
-    }
-
-    fn update(&mut self, mut data: &[u8]) {
-        self.len_bytes = self.len_bytes.wrapping_add(data.len() as u64);
-        if self.buf_len > 0 {
-            let take = (64 - self.buf_len).min(data.len());
-            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[..take]);
-            self.buf_len += take;
-            data = &data[take..];
-            if self.buf_len == 64 {
-                let block = self.buf;
-                self.compress(&block);
-                self.buf_len = 0;
-            }
-        }
-        let (chunks, rem) = data.as_chunks::<64>();
-        for chunk in chunks {
-            self.compress(chunk);
-        }
-        if !rem.is_empty() {
-            self.buf[..rem.len()].copy_from_slice(rem);
-            self.buf_len = rem.len();
-        }
-    }
-
-    fn finalize(mut self) -> Sha1Digest {
-        let bit_len = self.len_bytes.wrapping_mul(8);
-        self.buf[self.buf_len] = 0x80;
-        self.buf_len += 1;
-        if self.buf_len > 56 {
-            self.buf[self.buf_len..64].fill(0);
-            let block = self.buf;
-            self.compress(&block);
-            self.buf_len = 0;
-        }
-        self.buf[self.buf_len..56].fill(0);
-        self.buf[56..64].copy_from_slice(&bit_len.to_be_bytes());
-        let block = self.buf;
-        self.compress(&block);
-
-        let mut out = [0_u8; 20];
-        for (i, word) in self.state.into_iter().enumerate() {
-            out[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
-        }
-        out
-    }
-
-    fn compress(&mut self, block: &[u8; 64]) {
-        let mut words = [0_u32; 80];
-        for (idx, &chunk) in block.as_chunks::<4>().0.iter().enumerate() {
-            words[idx] = u32::from_be_bytes(chunk);
-        }
-        for idx in 16..80 {
-            words[idx] = (words[idx - 3] ^ words[idx - 8] ^ words[idx - 14] ^ words[idx - 16])
-                .rotate_left(1);
-        }
-        let [mut s0, mut s1, mut s2, mut s3, mut s4] = self.state;
-        for (idx, &word) in words.iter().enumerate() {
-            let (func, konst) = match idx {
-                0..=19 => ((s1 & s2) | ((!s1) & s3), 0x5a82_7999_u32),
-                20..=39 => (s1 ^ s2 ^ s3, 0x6ed9_eba1_u32),
-                40..=59 => ((s1 & s2) | (s1 & s3) | (s2 & s3), 0x8f1b_bcdc_u32),
-                _ => (s1 ^ s2 ^ s3, 0xca62_c1d6_u32),
-            };
-            let temp = s0
-                .rotate_left(5)
-                .wrapping_add(func)
-                .wrapping_add(s4)
-                .wrapping_add(konst)
-                .wrapping_add(word);
-            s4 = s3;
-            s3 = s2;
-            s2 = s1.rotate_left(30);
-            s1 = s0;
-            s0 = temp;
-        }
-        self.state[0] = self.state[0].wrapping_add(s0);
-        self.state[1] = self.state[1].wrapping_add(s1);
-        self.state[2] = self.state[2].wrapping_add(s2);
-        self.state[3] = self.state[3].wrapping_add(s3);
-        self.state[4] = self.state[4].wrapping_add(s4);
-    }
-}
+static REFLECTION_MEM_CACHE: LazyLock<Mutex<FxHashMap<Sha1Digest, MtlShaderReflection>>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 fn store() -> &'static Store {
     static STORE: LazyLock<Arc<Store>> = LazyLock::new(|| {
@@ -182,9 +82,7 @@ fn count_function_lookup() {
 /// Computes the 20-byte SHA-1 digest of `bytes`.
 #[must_use]
 pub fn sha1(bytes: &[u8]) -> Sha1Digest {
-    let mut h = Sha1::new();
-    h.update(bytes);
-    h.finalize()
+    Sha1::compute(bytes).0
 }
 
 /// Computes the 40-byte reflection cache key (`d3d12_shader_cache.cpp:97`).
@@ -272,6 +170,18 @@ impl CachedShader {
     /// `d3d12_shader_cache.cpp:95-119`).
     pub fn reflection(&mut self, out: &mut MtlShaderReflection) -> Hresult {
         if !self.reflected {
+            let mem_hit = REFLECTION_MEM_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&self.digest)
+                .copied();
+            if let Some(mem_refl) = mem_hit {
+                self.reflection = mem_refl;
+                self.reflected = true;
+                REFLECTION_HITS.fetch_add(1, Ordering::Relaxed);
+                *out = self.reflection;
+                return S_OK;
+            }
             let cache = store();
             let enabled = cache.has_reader();
             let key = reflection_key(&self.digest);
@@ -313,6 +223,10 @@ impl CachedShader {
                     }
                 }
             }
+            REFLECTION_MEM_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(self.digest, self.reflection);
         }
         *out = self.reflection;
         S_OK
@@ -431,7 +345,7 @@ pub unsafe fn hash_compile_args(
         }
         cur = node.next.cast::<Sm50ShaderCompilationArgumentData>();
     }
-    Some(h.finalize())
+    Some(h.finalize().0)
 }
 
 /// Computes the 40-byte function cache key (`d3d12_shader_cache.cpp:180-190`).
@@ -450,7 +364,7 @@ pub fn function_key_from_digests(
     if let Some(sec) = second {
         shaders.update(sec);
     }
-    let shaders_digest = shaders.finalize();
+    let shaders_digest = shaders.finalize().0;
 
     let mut ver = Sha1::new();
     ver.update(&*TAG);
@@ -459,7 +373,7 @@ pub fn function_key_from_digests(
     if !bounds.is_empty() {
         ver.update(bounds.as_bytes());
     }
-    let ver_digest = ver.finalize();
+    let ver_digest = ver.finalize().0;
 
     let mut key = [0_u8; 40];
     key[..20].copy_from_slice(&shaders_digest);

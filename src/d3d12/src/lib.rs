@@ -36,6 +36,11 @@ use dxmt_util::log::Logger;
 
 use crate::com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult};
 
+/// Native Rust allocations in `d3d12.dylib` use `snmalloc`.
+#[cfg(all(target_os = "macos", not(test)))]
+#[global_allocator]
+static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
 /// `D3D_FEATURE_LEVEL_11_0` (`0xb000`), the minimum feature level `D3D12CreateDevice` accepts.
 pub const D3D_FEATURE_LEVEL_11_0: u32 = 0xb000;
 

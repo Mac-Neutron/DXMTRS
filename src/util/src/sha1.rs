@@ -121,6 +121,144 @@ impl Sha1 {
 }
 
 /// Hashes one 512-bit block into `state` (`SHA1Transform` in `sha1.c`).
+#[cfg(target_arch = "aarch64")]
+fn transform(state: &mut [u32; 5], buffer: &[u8; BLOCK_LENGTH]) {
+    use core::arch::aarch64::{
+        uint32x4_t, vaddq_u32, vdupq_n_u32, vgetq_lane_u32, vld1q_u32, vsha1cq_u32, vsha1h_u32,
+        vsha1mq_u32, vsha1pq_u32, vsha1su0q_u32, vsha1su1q_u32, vst1q_u32,
+    };
+
+    fn load4(slice: &[u32]) -> uint32x4_t {
+        let ptr = slice.as_ptr();
+        // SAFETY: `slice` has at least 4 `u32` elements and `aarch64` has NEON.
+        unsafe { vld1q_u32(ptr) }
+    }
+
+    fn dup(val: u32) -> uint32x4_t {
+        // SAFETY: `aarch64` guarantees NEON.
+        unsafe { vdupq_n_u32(val) }
+    }
+
+    fn sched(w0: uint32x4_t, w1: uint32x4_t, w2: uint32x4_t, w3: uint32x4_t) -> uint32x4_t {
+        // SAFETY: `aarch64` on Apple Silicon and ARMv8+ guarantees SHA-1 (`vsha1su0q_u32`).
+        let s0 = unsafe { vsha1su0q_u32(w0, w1, w2) };
+        // SAFETY: `aarch64` on Apple Silicon and ARMv8+ guarantees SHA-1 (`vsha1su1q_u32`).
+        unsafe { vsha1su1q_u32(s0, w3) }
+    }
+
+    fn step_c(abcd: &mut uint32x4_t, e_in: u32, w: uint32x4_t, k: uint32x4_t) -> u32 {
+        // SAFETY: `aarch64` guarantees NEON.
+        let a = unsafe { vgetq_lane_u32::<0>(*abcd) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1h_u32`).
+        let e_out = unsafe { vsha1h_u32(a) };
+        // SAFETY: `aarch64` guarantees NEON.
+        let wk = unsafe { vaddq_u32(w, k) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1cq_u32`).
+        *abcd = unsafe { vsha1cq_u32(*abcd, e_in, wk) };
+        e_out
+    }
+
+    fn step_p(abcd: &mut uint32x4_t, e_in: u32, w: uint32x4_t, k: uint32x4_t) -> u32 {
+        // SAFETY: `aarch64` guarantees NEON.
+        let a = unsafe { vgetq_lane_u32::<0>(*abcd) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1h_u32`).
+        let e_out = unsafe { vsha1h_u32(a) };
+        // SAFETY: `aarch64` guarantees NEON.
+        let wk = unsafe { vaddq_u32(w, k) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1pq_u32`).
+        *abcd = unsafe { vsha1pq_u32(*abcd, e_in, wk) };
+        e_out
+    }
+
+    fn step_m(abcd: &mut uint32x4_t, e_in: u32, w: uint32x4_t, k: uint32x4_t) -> u32 {
+        // SAFETY: `aarch64` guarantees NEON.
+        let a = unsafe { vgetq_lane_u32::<0>(*abcd) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1h_u32`).
+        let e_out = unsafe { vsha1h_u32(a) };
+        // SAFETY: `aarch64` guarantees NEON.
+        let wk = unsafe { vaddq_u32(w, k) };
+        // SAFETY: `aarch64` guarantees SHA-1 (`vsha1mq_u32`).
+        *abcd = unsafe { vsha1mq_u32(*abcd, e_in, wk) };
+        e_out
+    }
+
+    let mut words = [0_u32; 16];
+    let mut idx = 0;
+    while idx < 16 {
+        let base = idx * 4;
+        words[idx] = u32::from_be_bytes([
+            buffer[base],
+            buffer[base + 1],
+            buffer[base + 2],
+            buffer[base + 3],
+        ]);
+        idx += 1;
+    }
+
+    let abcd_orig = load4(&state[0..4]);
+    let mut abcd = abcd_orig;
+    let mut e0 = state[4];
+
+    let mut w0 = load4(&words[0..4]);
+    let mut w1 = load4(&words[4..8]);
+    let mut w2 = load4(&words[8..12]);
+    let mut w3 = load4(&words[12..16]);
+
+    let k0 = dup(0x5a82_7999);
+    let k1 = dup(0x6ed9_eba1);
+    let k2 = dup(0x8f1b_bcdc);
+    let k3 = dup(0xca62_c1d6);
+
+    let mut e1 = step_c(&mut abcd, e0, w0, k0);
+    w0 = sched(w0, w1, w2, w3);
+    e0 = step_c(&mut abcd, e1, w1, k0);
+    w1 = sched(w1, w2, w3, w0);
+    e1 = step_c(&mut abcd, e0, w2, k0);
+    w2 = sched(w2, w3, w0, w1);
+    e0 = step_c(&mut abcd, e1, w3, k0);
+    w3 = sched(w3, w0, w1, w2);
+    e1 = step_c(&mut abcd, e0, w0, k0);
+    w0 = sched(w0, w1, w2, w3);
+
+    e0 = step_p(&mut abcd, e1, w1, k1);
+    w1 = sched(w1, w2, w3, w0);
+    e1 = step_p(&mut abcd, e0, w2, k1);
+    w2 = sched(w2, w3, w0, w1);
+    e0 = step_p(&mut abcd, e1, w3, k1);
+    w3 = sched(w3, w0, w1, w2);
+    e1 = step_p(&mut abcd, e0, w0, k1);
+    w0 = sched(w0, w1, w2, w3);
+    e0 = step_p(&mut abcd, e1, w1, k1);
+    w1 = sched(w1, w2, w3, w0);
+
+    e1 = step_m(&mut abcd, e0, w2, k2);
+    w2 = sched(w2, w3, w0, w1);
+    e0 = step_m(&mut abcd, e1, w3, k2);
+    w3 = sched(w3, w0, w1, w2);
+    e1 = step_m(&mut abcd, e0, w0, k2);
+    w0 = sched(w0, w1, w2, w3);
+    e0 = step_m(&mut abcd, e1, w1, k2);
+    w1 = sched(w1, w2, w3, w0);
+    e1 = step_m(&mut abcd, e0, w2, k2);
+    w2 = sched(w2, w3, w0, w1);
+
+    e0 = step_p(&mut abcd, e1, w3, k3);
+    w3 = sched(w3, w0, w1, w2);
+    e1 = step_p(&mut abcd, e0, w0, k3);
+    e0 = step_p(&mut abcd, e1, w1, k3);
+    e1 = step_p(&mut abcd, e0, w2, k3);
+    e0 = step_p(&mut abcd, e1, w3, k3);
+
+    // SAFETY: `aarch64` guarantees NEON.
+    let sum = unsafe { vaddq_u32(abcd, abcd_orig) };
+    let dst = state.as_mut_ptr();
+    // SAFETY: `state` has 5 `u32` elements, so writing 4 `u32` lanes at `dst` is in bounds.
+    unsafe { vst1q_u32(dst, sum) };
+    state[4] = state[4].wrapping_add(e0);
+}
+
+/// Hashes one 512-bit block into `state` (`SHA1Transform` in `sha1.c`).
+#[cfg(not(target_arch = "aarch64"))]
 const fn transform(state: &mut [u32; 5], buffer: &[u8; BLOCK_LENGTH]) {
     let mut words = [0_u32; 16];
     let mut idx = 0;

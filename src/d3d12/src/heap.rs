@@ -1,10 +1,7 @@
 //! `ID3D12Heap` (`d3d12_heap.cpp`): Metal heaps and native hooked CPU heaps.
 
 use core::{ffi::c_void, ptr};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, LazyLock, Mutex},
-};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use dxmt_core::resource::Buffer;
 #[cfg(not(windows))]
@@ -13,6 +10,7 @@ use dxmt_util::{
     com::{ComObject, Guid},
     private_data::PrivateData,
 };
+use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::{
     WMT_HEAP_TYPE_PLACEMENT, WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RESOURCE_STORAGE_MODE_SHARED,
@@ -43,8 +41,8 @@ use crate::{
     device::Device,
 };
 
-static HEAP_DESCS: LazyLock<Mutex<BTreeMap<usize, HeapDesc>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static HEAP_DESCS: LazyLock<Mutex<FxHashMap<usize, HeapDesc>>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 /// `MTLD3D12HeapImpl` (`d3d12_heap.cpp:26`, `d3d12_device.hpp:167-177`).
 #[repr(C)]

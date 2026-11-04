@@ -521,6 +521,10 @@ pub fn pre_draw_with_options(
         render.cmd_tail = (&raw mut render.cmd_head).cast::<WmtcmdBase>();
         alloc.encoder_current = render_ptr.cast::<EncoderData>();
         list.inside_render_pass = true;
+        list.bound_pso = 0;
+        list.bound_dss = u64::MAX;
+        list.bound_rasterizer = [u32::MAX; 7];
+        list.bound_geometry = false;
 
         if !alloc.encoder_last.is_null() && !alloc.clears_from.is_null() {
             let folded = alloc.fold_clears(render);
@@ -666,30 +670,45 @@ pub fn pre_draw_with_options(
             )
         };
         let dss_handle = get_depth_stencil_state(pso_gfx, dsv_planar, dsv_ro);
-        encode_render_cmd(
-            alloc,
-            WmtcmdRenderSetdepthstencilstate {
-                r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
-                reserved: [0; 3],
-                next: null_mem_ptr(),
-                depth_stencil_state: dss_handle,
-            },
-        );
-        encode_render_cmd(
-            alloc,
-            WmtcmdRenderSetrasterizerstate {
-                r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-                reserved: [0; 3],
-                next: null_mem_ptr(),
-                fill_mode: u8::try_from(pso_gfx.fill_mode).unwrap_or(0),
-                cull_mode: u8::try_from(pso_gfx.cull_mode).unwrap_or(0),
-                depth_clip_mode: u8::try_from(pso_gfx.depth_clip_mode).unwrap_or(0),
-                winding: u8::try_from(pso_gfx.winding).unwrap_or(0),
-                depth_bias: pso_gfx.depth_bias,
-                scole_scale: pso_gfx.slope_scale,
-                depth_bias_clamp: pso_gfx.depth_bias_clamp,
-            },
-        );
+        if dss_handle != list.bound_dss {
+            encode_render_cmd(
+                alloc,
+                WmtcmdRenderSetdepthstencilstate {
+                    r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
+                    reserved: [0; 3],
+                    next: null_mem_ptr(),
+                    depth_stencil_state: dss_handle,
+                },
+            );
+            list.bound_dss = dss_handle;
+        }
+        let rast_key = [
+            pso_gfx.fill_mode,
+            pso_gfx.cull_mode,
+            pso_gfx.depth_clip_mode,
+            pso_gfx.winding,
+            pso_gfx.depth_bias.to_bits(),
+            pso_gfx.slope_scale.to_bits(),
+            pso_gfx.depth_bias_clamp.to_bits(),
+        ];
+        if rast_key != list.bound_rasterizer {
+            encode_render_cmd(
+                alloc,
+                WmtcmdRenderSetrasterizerstate {
+                    r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
+                    reserved: [0; 3],
+                    next: null_mem_ptr(),
+                    fill_mode: u8::try_from(pso_gfx.fill_mode).unwrap_or(0),
+                    cull_mode: u8::try_from(pso_gfx.cull_mode).unwrap_or(0),
+                    depth_clip_mode: u8::try_from(pso_gfx.depth_clip_mode).unwrap_or(0),
+                    winding: u8::try_from(pso_gfx.winding).unwrap_or(0),
+                    depth_bias: pso_gfx.depth_bias,
+                    scole_scale: pso_gfx.slope_scale,
+                    depth_bias_clamp: pso_gfx.depth_bias_clamp,
+                },
+            );
+            list.bound_rasterizer = rast_key;
+        }
         list.dirty_state.remove(DirtyFlags::PSO);
     }
 
@@ -727,14 +746,16 @@ pub fn pre_draw_with_options(
         if !list.root_sig_graphics.is_null() {
             // SAFETY: `list.root_sig_graphics` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_graphics };
-            let offset = encode_static_samplers(alloc, rs);
-            bind_render_heap_buffer(
-                alloc,
-                geometry,
-                u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
-                offset as u64,
-                false,
-            );
+            if !rs.encoded_static_samplers().is_empty() {
+                let offset = encode_static_samplers(alloc, rs);
+                bind_render_heap_buffer(
+                    alloc,
+                    geometry,
+                    u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
+                    offset as u64,
+                    false,
+                );
+            }
         }
         list.dirty_state.remove(DirtyFlags::STATIC_SAMPLERS);
     }
@@ -956,18 +977,20 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
         if !list.root_sig_compute.is_null() {
             // SAFETY: `list.root_sig_compute` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_compute };
-            let offset = encode_static_samplers(alloc, rs);
-            encode_compute_cmd(
-                alloc,
-                WmtcmdComputeSetbuffer {
-                    r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
-                    reserved: [0; 3],
-                    next: null_mem_ptr(),
-                    buffer: gpu_buf,
-                    offset: offset as u64,
-                    index: u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
-                },
-            );
+            if !rs.encoded_static_samplers().is_empty() {
+                let offset = encode_static_samplers(alloc, rs);
+                encode_compute_cmd(
+                    alloc,
+                    WmtcmdComputeSetbuffer {
+                        r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
+                        reserved: [0; 3],
+                        next: null_mem_ptr(),
+                        buffer: gpu_buf,
+                        offset: offset as u64,
+                        index: u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
+                    },
+                );
+            }
         }
         list.dirty_state.remove(DirtyFlags::COMPUTE_STATIC_SAMPLERS);
     }

@@ -1364,14 +1364,33 @@ impl<'a, 'cx> Converter<'a, 'cx> {
 
     /// A buffer's `i32` element, null past its byte length (`CreateGEPInt32WithBoundCheck`).
     fn gep_int32_with_bound_check(&self, buffer: &BufferHandle<'cx>, index: Val<'cx>) -> Val<'cx> {
+        self.gep_int32_run_with_bound_check(buffer, index, 1)
+    }
+
+    /// A run of `count` `i32` words starting at `index`, null if the run crosses the buffer's end.
+    fn gep_int32_run_with_bound_check(
+        &self,
+        buffer: &BufferHandle<'cx>,
+        index: Val<'cx>,
+        count: u32,
+    ) -> Val<'cx> {
         let addr = self.ir.gep(self.types.int, buffer.pointer, &[index]);
         let Some(metadata) = buffer.metadata else {
             return addr;
         };
+        if crate::dxil::bounds::off() {
+            return addr;
+        }
         let byte_length = self.decode_raw_buffer_byte_length(metadata);
-        let in_bounds = self
-            .ir
-            .icmp(sys::INT_ULT, index, self.lshr_imm(byte_length, 2));
+        let word_len = self.lshr_imm(byte_length, 2);
+        let in_bounds = if count <= 1 {
+            self.ir.icmp(sys::INT_ULT, index, word_len)
+        } else {
+            let n = self.int(count);
+            let fits = self.ir.icmp(sys::INT_UGE, word_len, n);
+            let inside = self.ir.icmp(sys::INT_ULE, index, self.ir.sub(word_len, n));
+            self.ir.and(fits, inside)
+        };
         self.ir
             .select(in_bounds, addr, self.ir.cx().null(addr.ty()))
     }
@@ -2594,9 +2613,24 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             return self.store_operand(dst, self.mask_swizzle(v, mask, &SWIZZLE_IDENTITY), false);
         }
         let mut v = self.ir.cx().poison(self.types.int4);
-        for (comp, _) in components(memory_access_mask(mask, &buf.swizzle)) {
-            let element = element(comp)?;
-            v = self.ir.insert_element_u64(v, element, comp.into());
+        let access_mask = memory_access_mask(mask, &buf.swizzle);
+        if crate::dxil::bounds::per_component() {
+            for (comp, _) in components(access_mask) {
+                let element = element(comp)?;
+                v = self.ir.insert_element_u64(v, element, comp.into());
+            }
+        } else {
+            let count = 32 - access_mask.leading_zeros();
+            let base = self.gep_int32_run_with_bound_check(buf, index, count);
+            for (comp, _) in components(access_mask) {
+                let ptr = self.ir.const_gep1_32(self.types.int, base, comp);
+                let val = if buf.global_coherent {
+                    self.air.create_device_coherent_load(self.types.int, ptr)?
+                } else {
+                    self.load(self.types.int, ptr, volatile)
+                };
+                v = self.ir.insert_element_u64(v, val, comp.into());
+            }
         }
         self.store_operand(dst, self.mask_swizzle(v, mask, &buf.swizzle), false)
     }

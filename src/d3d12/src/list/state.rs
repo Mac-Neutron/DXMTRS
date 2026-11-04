@@ -166,6 +166,10 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.deferred_clears.clear();
     list.pending_resolves.clear();
     list.primitive_topology = 0;
+    list.bound_pso = 0;
+    list.bound_dss = u64::MAX;
+    list.bound_rasterizer = [u32::MAX; 7];
+    list.bound_geometry = false;
     list.viewport_count = 0;
     list.viewports = [WMTViewport {
         origin_x: 0.0,

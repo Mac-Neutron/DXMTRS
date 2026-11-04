@@ -32,6 +32,12 @@ lib=$(echo "$3" | tr - _)
 link= f=lib$lib.a
 case $2 in *-windows-msvc) f=$lib.lib ;; esac
 case $2/$5 in *-apple-darwin/*.so) link=', "-C", "link-arg=-Wl,-S"' f=lib$lib.dylib ;; esac
+case $2/${MACNEUTRON_CPU:-generic} in
+  aarch64-*/?*|arm64ec-*/?*)
+    if [ "${MACNEUTRON_CPU:-generic}" != generic ]; then
+      link="$link, \"-C\", \"target-cpu=$MACNEUTRON_CPU\""
+    fi ;;
+esac
 remap="target.'cfg(all())'.rustflags=[\"--remap-path-prefix=$HOME=~\", \"--remap-path-prefix=$ch/registry/src=crates\", \
 \"--remap-path-prefix=$root=dxmtrs\"$link]"
 case $2 in *-linux-gnu)

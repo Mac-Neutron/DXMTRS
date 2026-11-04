@@ -91,6 +91,7 @@ objc2-quartz-core = { workspace = true, features = [
 ] }
 winemetal-pe = { workspace = true, optional = true }
 winemetal-wire = { workspace = true }
+snmalloc-rs = { workspace = true }
 
 [lints]
 workspace = true
