@@ -1306,6 +1306,80 @@ fn fence(encoder: u64, kind: u16, fence: u64, stages: u8) {
 }
 
 #[test]
+fn prefetched_drawable_acquired_and_invalidated_on_layer_change() {
+    let _serial = serial();
+    reset();
+    let desc = PresenterDesc {
+        device: DEVICE,
+        layer: LAYER,
+        library: LIBRARY,
+        scale_factor: 1.0,
+        sample_count: 1,
+    };
+    // SAFETY: the fakes' objects, alive for the test.
+    let p = unsafe { Presenter::with_prefetch(&desc, true) };
+    let _ = p.change_layer_properties(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_COLOR_SPACE_SRGB,
+        1920.0,
+        1080.0,
+        1,
+    );
+    let (frame_1, metadata) = p.synchronize();
+    assert_eq!(frame_1, 1);
+    let d1 = encode(&p, &metadata);
+    assert!(d1.is_some());
+    let d1_handle = d1.as_ref().map_or(0, Obj::handle);
+    p.frame_done(frame_1);
+
+    // Wait briefly so the worker thread prefetches the next drawable before the resize.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        let prefetched = p
+            .prefetcher
+            .as_ref()
+            .and_then(|pf| pf.shared.state.lock().ok().map(|s| s.prefetched.is_some()))
+            .unwrap_or(false);
+        if prefetched {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    let stale_handle = p
+        .prefetcher
+        .as_ref()
+        .and_then(|pf| {
+            pf.shared
+                .state
+                .lock()
+                .ok()
+                .and_then(|s| s.prefetched.as_ref().map(Obj::handle))
+        })
+        .unwrap_or(0);
+    assert_ne!(stale_handle, 0);
+    assert_ne!(stale_handle, d1_handle);
+
+    // Changing layer properties invalidates the stale prefetched drawable so the next encode
+    // acquires a fresh drawable instead of presenting into the pre-resize one.
+    assert!(!p.change_layer_properties(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_COLOR_SPACE_SRGB,
+        2560.0,
+        1440.0,
+        1,
+    ));
+    let (frame_2, metadata_2) = p.synchronize();
+    let d2 = encode(&p, &metadata_2);
+    let d2_handle = d2.as_ref().map_or(0, Obj::handle);
+    assert_ne!(d2_handle, 0);
+    assert_ne!(d2_handle, stale_handle);
+    p.frame_done(frame_2);
+    drop(d1);
+    drop(d2);
+    drop(p);
+}
+
+#[test]
 fn golden_replays() {
     let _serial = serial();
     let ramps = [ramp(false), ramp(true)];

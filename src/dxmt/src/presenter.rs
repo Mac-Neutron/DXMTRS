@@ -22,7 +22,11 @@ use core::{
         Ordering::{Acquire, Relaxed},
     },
 };
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::{
+    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
 use dxmt_util::{
     GAMMA_CP_COUNT, GammaRamp as DXMTGammaRamp,
@@ -92,6 +96,8 @@ pub struct PresenterDesc {
 
 /// A swapchain's presenter (`dxmt_presenter.cpp`).
 pub struct Presenter {
+    // Dropped first so a drawable worker joins before the layer or pipelines go away.
+    prefetcher: Option<DrawablePrefetcher>,
     device: u64,
     layer: u64,
     library: u64,
@@ -103,16 +109,37 @@ pub struct Presenter {
     frame_done: Condvar,
 }
 
+/// Whether the VM host installed WSI hooks (`WMTGetWsiHooks`), enabling drawable prefetch.
+#[cfg(any(windows, test))]
+const fn should_prefetch_drawables() -> bool {
+    false
+}
+
+/// Whether the VM host installed WSI hooks (`WMTGetWsiHooks`), enabling drawable prefetch.
+#[cfg(all(not(windows), not(test)))]
+fn should_prefetch_drawables() -> bool {
+    dxmt_util::wsi::hooked()
+}
+
 impl Presenter {
     /// The presenter of `desc.layer`.
-    ///
-    /// It takes the layer's properties and makes its lookup texture.
     ///
     /// # Safety
     ///
     /// `desc`'s device, layer and library are live and outlive the presenter.
     #[must_use]
     pub unsafe fn new(desc: &PresenterDesc) -> Self {
+        // SAFETY: the caller's promise.
+        unsafe { Self::with_prefetch(desc, should_prefetch_drawables()) }
+    }
+
+    /// The presenter of `desc.layer`, optionally prefetching drawables on a worker thread.
+    ///
+    /// # Safety
+    ///
+    /// `desc`'s device, layer and library are live and outlive the presenter.
+    #[must_use]
+    pub unsafe fn with_prefetch(desc: &PresenterDesc, prefetch_drawable: bool) -> Self {
         let mut layer_props = WMTLayerProps {
             device: 0,
             contents_scale: 0.0,
@@ -148,7 +175,15 @@ impl Presenter {
         };
         // SAFETY: a live device (the caller's promise); the info is alive for the call.
         let texture = unsafe { MTLDevice_newTexture(desc.device, &raw mut info) };
+        // SAFETY: `newTexture` answers +1 or null.
+        let gamma_lut_texture = unsafe { Obj::adopt(texture) };
+        let prefetcher = if prefetch_drawable {
+            DrawablePrefetcher::new(desc.layer)
+        } else {
+            None
+        };
         Self {
+            prefetcher,
             device: desc.device,
             layer: desc.layer,
             library: desc.library,
@@ -171,17 +206,13 @@ impl Presenter {
                 pipelines_valid: false,
                 frame_requested: 0,
             }),
-            // SAFETY: `newTexture` answers +1 or null.
-            gamma_lut_texture: unsafe { Obj::adopt(texture) },
+            gamma_lut_texture,
             presented: Mutex::new(0),
             frame_done: Condvar::new(),
         }
     }
 
-    /// The backbuffer's format, colour space, size and sample count.
-    ///
-    /// True when the pipelines are rebuilt at the next [`Presenter::synchronize`], else the layer
-    /// takes the new size now.
+    /// The backbuffer's format, colour space, size and sample count (`changeLayerProperties`).
     pub fn change_layer_properties(
         &self,
         format: u32,
@@ -206,6 +237,8 @@ impl Presenter {
             // SAFETY: a live layer (`new`'s promise); the props are alive for the call.
             unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
         }
+        drop(state);
+        self.invalidate_drawable();
         invalidated
     }
 
@@ -217,6 +250,8 @@ impl Presenter {
         if invalidated {
             state.pipelines_valid = false;
         }
+        drop(state);
+        self.invalidate_drawable();
         invalidated
     }
 
@@ -320,10 +355,18 @@ impl Presenter {
             unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
             // SAFETY: a live layer.
             unsafe { MetalLayer_setColorSpace(self.layer, colorspace) };
+            self.invalidate_drawable();
         }
         let metadata = present_metadata(colorspace, guard.display_edr_value, hdr_metadata);
         guard.frame_requested += 1;
         (guard.frame_requested, metadata)
+    }
+
+    /// Drops a prefetched drawable after a layer property or colour-space change.
+    fn invalidate_drawable(&self) {
+        if let Some(prefetcher) = &self.prefetcher {
+            prefetcher.invalidate();
+        }
     }
 
     /// The frame `frame_id` is done (the C++'s `PresentState` died).
@@ -371,10 +414,15 @@ impl Presenter {
                 state.layer_props.drawable_height,
             )
         };
-        // SAFETY: a live layer (`new`'s promise).
-        let next = unsafe { MetalLayer_nextDrawable(self.layer) };
-        // SAFETY: null or the drawable the layer just handed out, autoreleased.
-        let drawable = unsafe { Obj::retain(next) };
+        let drawable = self.prefetcher.as_ref().map_or_else(
+            || {
+                // SAFETY: a live layer (`new`'s promise).
+                let next = unsafe { MetalLayer_nextDrawable(self.layer) };
+                // SAFETY: null or the drawable the layer just handed out, autoreleased.
+                unsafe { Obj::retain(next) }
+            },
+            DrawablePrefetcher::acquire,
+        );
         // SAFETY: the drawable or null.
         let texture = unsafe { MetalDrawable_texture(drawable.as_ref().map_or(0, Obj::handle)) };
         let mut info = render_pass(texture);
@@ -537,6 +585,160 @@ impl Presenter {
         let pso = unsafe { MTLDevice_newRenderPipelineState(self.device, info, error) };
         // SAFETY: +1 or null.
         unsafe { Obj::adopt(pso) }.map(Arc::new)
+    }
+}
+
+/// Background worker that prefetches the next `CAMetalLayer` drawable for the VM host.
+struct DrawablePrefetcher {
+    shared: Arc<DrawableShared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+struct DrawableShared {
+    state: Mutex<DrawableState>,
+    cv: Condvar,
+}
+
+struct DrawableState {
+    stop: bool,
+    wanted: bool,
+    busy: bool,
+    generation: u64,
+    prefetched_generation: u64,
+    prefetched: Option<Obj>,
+}
+
+impl DrawablePrefetcher {
+    fn new(layer: u64) -> Option<Self> {
+        let shared = Arc::new(DrawableShared {
+            state: Mutex::new(DrawableState {
+                stop: false,
+                wanted: false,
+                busy: false,
+                generation: 0,
+                prefetched_generation: 0,
+                prefetched: None,
+            }),
+            cv: Condvar::new(),
+        });
+        let worker_shared = Arc::clone(&shared);
+        let thread = thread::Builder::new()
+            .spawn(move || drawable_worker(layer, &worker_shared))
+            .ok()?;
+        Some(Self {
+            shared,
+            thread: Some(thread),
+        })
+    }
+
+    fn request_locked(state: &mut DrawableState, cv: &Condvar) {
+        if state.stop || state.wanted || state.busy || state.prefetched.is_some() {
+            return;
+        }
+        state.wanted = true;
+        cv.notify_all();
+    }
+
+    fn invalidate(&self) {
+        let discarded = {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            state.generation += 1;
+            state.prefetched.take()
+        };
+        drop(discarded);
+        self.shared.cv.notify_all();
+    }
+
+    fn acquire(&self) -> Option<Obj> {
+        loop {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.stop {
+                return None;
+            }
+            if state.prefetched.is_some() && state.prefetched_generation == state.generation {
+                let drawable = state.prefetched.take();
+                Self::request_locked(&mut state, &self.shared.cv);
+                return drawable;
+            }
+            let discarded = state.prefetched.take();
+            Self::request_locked(&mut state, &self.shared.cv);
+            drop(discarded);
+            state = self
+                .shared
+                .cv
+                .wait_while(state, |s| s.prefetched.is_none() && !s.stop)
+                .unwrap_or_else(PoisonError::into_inner);
+            drop(state);
+        }
+    }
+}
+
+impl Drop for DrawablePrefetcher {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let discarded = {
+                let mut state = self
+                    .shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                state.stop = true;
+                state.prefetched.take()
+            };
+            drop(discarded);
+            self.shared.cv.notify_all();
+            while !thread.is_finished() {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+fn drawable_worker(layer: u64, shared: &DrawableShared) {
+    loop {
+        let generation = {
+            let state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = shared
+                .cv
+                .wait_while(state, |s| !s.stop && !s.wanted)
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.stop {
+                return;
+            }
+            state.wanted = false;
+            state.busy = true;
+            state.generation
+        };
+        let drawable = {
+            let _pool = Pool::new();
+            // SAFETY: `layer` is live until `Presenter` drops, which waits for this worker first.
+            let next = unsafe { MetalLayer_nextDrawable(layer) };
+            // SAFETY: null or the drawable the layer just handed out, autoreleased in `_pool`.
+            unsafe { Obj::retain(next) }
+        };
+        if drawable.is_none() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let mut discarded = None;
+        let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.busy = false;
+        if !state.stop && generation == state.generation && state.prefetched.is_none() {
+            state.prefetched = drawable;
+            state.prefetched_generation = generation;
+        } else {
+            discarded = drawable;
+        }
+        drop(state);
+        drop(discarded);
+        shared.cv.notify_all();
     }
 }
 
