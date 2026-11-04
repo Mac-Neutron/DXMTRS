@@ -3,7 +3,7 @@
 use core::ffi::c_void;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use dxmt_core::resource::{Buffer, BufferAllocationFlags, Texture, TextureAllocationFlags};
@@ -20,7 +20,8 @@ use crate::{
 /// Device residency set and GPU virtual-address map (`d3d12_device.cpp:365-366`).
 pub struct Residency {
     pub set: Option<Obj>,
-    pub va_map: Mutex<BTreeMap<u64, Vec<Arc<Buffer>>>>,
+    pub set_dirty: Mutex<bool>,
+    pub va_map: RwLock<BTreeMap<u64, Vec<Arc<Buffer>>>>,
 }
 
 impl Residency {
@@ -29,7 +30,8 @@ impl Residency {
     pub const fn new() -> Self {
         Self {
             set: None,
-            va_map: Mutex::new(BTreeMap::new()),
+            set_dirty: Mutex::new(false),
+            va_map: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -40,31 +42,53 @@ impl Default for Residency {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+fn lock_set(mutex: &Mutex<bool>) -> MutexGuard<'_, bool> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn add_allocation(set: Option<&Obj>, allocation: u64) {
-    if let Some(set) = set
+fn read_va<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    rwlock.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn write_va<T>(rwlock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    rwlock.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn add_allocation(residency: &Residency, allocation: u64) {
+    if let Some(ref set) = residency.set
         && allocation != 0
     {
+        let mut dirty = lock_set(&residency.set_dirty);
         let h = set.handle();
         // SAFETY: `h` is a live `MTLResidencySet` handle and `allocation` is a live `MTLAllocation` handle.
         unsafe { MTLResidencySet_addAllocations(h, &raw const allocation, 1) };
-        // SAFETY: `h` is a live `MTLResidencySet` handle.
-        unsafe { MTLResidencySet_commit(h) };
+        *dirty = true;
     }
 }
 
-fn remove_allocation(set: Option<&Obj>, allocation: u64) {
-    if let Some(set) = set
+fn remove_allocation(residency: &Residency, allocation: u64) {
+    if let Some(ref set) = residency.set
         && allocation != 0
     {
+        let mut dirty = lock_set(&residency.set_dirty);
         let h = set.handle();
         // SAFETY: `h` is a live `MTLResidencySet` handle and `allocation` is a live `MTLAllocation` handle.
         unsafe { MTLResidencySet_removeAllocations(h, &raw const allocation, 1) };
-        // SAFETY: `h` is a live `MTLResidencySet` handle.
-        unsafe { MTLResidencySet_commit(h) };
+        *dirty = true;
+    }
+}
+
+/// Commits any pending residency set additions or removals before command buffer execution.
+pub fn flush(device: &Device) {
+    if let Some(ref set) = device.residency.set {
+        let mut dirty = lock_set(&device.residency.set_dirty);
+        if *dirty {
+            *dirty = false;
+            drop(dirty);
+            let h = set.handle();
+            // SAFETY: `h` is a live `MTLResidencySet` handle.
+            unsafe { MTLResidencySet_commit(h) };
+        }
     }
 }
 
@@ -96,40 +120,46 @@ fn lookup_va<T>(map: &BTreeMap<u64, Vec<Arc<T>>>, address: u64) -> Option<(Arc<T
 
 /// Registers `buffer` in the device's Metal residency set (`d3d12_device.cpp:1998`).
 pub fn register(device: &Device, buffer: &Arc<Buffer>) {
-    let _guard = lock(&device.residency.va_map);
     if let Some(alloc) = buffer.current()
         && !alloc
             .flags()
             .contains(BufferAllocationFlags::ALLOCATED_ON_HEAP)
     {
-        add_allocation(device.residency.set.as_ref(), alloc.buffer());
+        add_allocation(&device.residency, alloc.buffer());
     }
 }
 
 /// Registers `buffer` in the residency set and GPU VA lookup table (`d3d12_device.cpp:2009`).
 pub fn register_with_va(device: &Device, buffer: &Arc<Buffer>) {
-    let mut map = lock(&device.residency.va_map);
     if let Some(alloc) = buffer.current() {
-        if !alloc
+        let va = alloc.gpu_address();
+        let buf_handle = if alloc
             .flags()
             .contains(BufferAllocationFlags::ALLOCATED_ON_HEAP)
         {
-            add_allocation(device.residency.set.as_ref(), alloc.buffer());
+            0
+        } else {
+            alloc.buffer()
+        };
+        drop(alloc);
+        if buf_handle != 0 {
+            add_allocation(&device.residency, buf_handle);
         }
-        insert_va(&mut map, alloc.gpu_address(), Arc::clone(buffer));
+        let mut map = write_va(&device.residency.va_map);
+        insert_va(&mut map, va, Arc::clone(buffer));
     }
 }
 
 /// Unregisters `buffer` from the residency set and GPU VA lookup table (`d3d12_device.cpp:2017`).
 pub fn unregister(device: &Device, buffer: &Arc<Buffer>, gpu_va: u64) {
-    let mut map = lock(&device.residency.va_map);
     if let Some(alloc) = buffer.current()
         && !alloc
             .flags()
             .contains(BufferAllocationFlags::ALLOCATED_ON_HEAP)
     {
-        remove_allocation(device.residency.set.as_ref(), alloc.buffer());
+        remove_allocation(&device.residency, alloc.buffer());
     }
+    let mut map = write_va(&device.residency.va_map);
     remove_va(&mut map, gpu_va, buffer);
 }
 
@@ -138,44 +168,40 @@ pub fn unregister(device: &Device, buffer: &Arc<Buffer>, gpu_va: u64) {
 /// Returns `(buffer, byte_offset)`.
 #[must_use]
 pub fn lookup_buffer_by_va(device: &Device, address: u64) -> Option<(Arc<Buffer>, u64)> {
-    let map = lock(&device.residency.va_map);
+    let map = read_va(&device.residency.va_map);
     lookup_va(&map, address)
 }
 
 /// Registers `texture` in the device's Metal residency set (`d3d12_device.cpp:1998`).
 pub fn register_texture(device: &Device, texture: &Arc<Texture>) {
-    let _guard = lock(&device.residency.va_map);
     if let Some(alloc) = texture.current()
         && !alloc
             .flags()
             .contains(TextureAllocationFlags::ALLOCATED_ON_HEAP)
     {
-        add_allocation(device.residency.set.as_ref(), alloc.texture());
+        add_allocation(&device.residency, alloc.texture());
     }
 }
 
 /// Unregisters `texture` from the device's Metal residency set (`d3d12_device.cpp:2004`).
 pub fn unregister_texture(device: &Device, texture: &Arc<Texture>) {
-    let _guard = lock(&device.residency.va_map);
     if let Some(alloc) = texture.current()
         && !alloc
             .flags()
             .contains(TextureAllocationFlags::ALLOCATED_ON_HEAP)
     {
-        remove_allocation(device.residency.set.as_ref(), alloc.texture());
+        remove_allocation(&device.residency, alloc.texture());
     }
 }
 
 /// Registers a `MTLHeap` in the device's Metal residency set (`d3d12_device.cpp:1998`).
 pub fn register_heap(device: &Device, heap: &Obj) {
-    let _guard = lock(&device.residency.va_map);
-    add_allocation(device.residency.set.as_ref(), heap.handle());
+    add_allocation(&device.residency, heap.handle());
 }
 
 /// Unregisters a `MTLHeap` from the device's Metal residency set (`d3d12_device.cpp:2004`).
 pub fn unregister_heap(device: &Device, heap: &Obj) {
-    let _guard = lock(&device.residency.va_map);
-    remove_allocation(device.residency.set.as_ref(), heap.handle());
+    remove_allocation(&device.residency, heap.handle());
 }
 
 /// `ID3D12Device::MakeResident` (`d3d12_device.cpp:1264`).

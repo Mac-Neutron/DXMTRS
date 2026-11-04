@@ -169,6 +169,7 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.bound_pso = 0;
     list.bound_dss = u64::MAX;
     list.bound_rasterizer = [u32::MAX; 7];
+    list.bound_vb_slot_mask = u32::MAX;
     list.bound_geometry = false;
     list.viewport_count = 0;
     list.viewports = [WMTViewport {
@@ -197,6 +198,8 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.bound_cbv_heap = ptr::null();
     list.bound_sampler_heap = ptr::null();
     list.vertex_buffers = [(0, 0, 0); 32];
+    list.ib_cache = [(0, 0, 0); 4];
+    list.ib_cache_next = 0;
     list.index_buffer = 0;
     list.index_buffer_offset = 0;
     list.index_buffer_size = 0;
@@ -206,7 +209,7 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.inside_render_pass = false;
 }
 
-fn stage_heap_bases(list: &List, root_sig: *const RootSignature, staging: &mut [u64; 64]) {
+const fn stage_heap_bases(list: &List, root_sig: *const RootSignature, staging: &mut [u64; 64]) {
     if root_sig.is_null() {
         return;
     }
@@ -757,14 +760,16 @@ pub unsafe fn rs_set_viewports(this: *mut c_void, num_viewports: u32, viewports:
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    list.viewport_count = u8::try_from(num_viewports).unwrap_or(0);
+    let new_count = u8::try_from(num_viewports).unwrap_or(0);
+    let mut changed = list.viewport_count != new_count;
+    list.viewport_count = new_count;
     let vp_ptr = viewports.cast::<D3d12Viewport>();
     for i in 0..(num_viewports as usize) {
         // SAFETY: `i < num_viewports`, so `vp_ptr.add(i)` is in-bounds.
         let elem = unsafe { vp_ptr.add(i) };
         // SAFETY: `elem` points to a readable `D3d12Viewport`.
         let vp = unsafe { elem.read_unaligned() };
-        list.viewports[i] = WMTViewport {
+        let next = WMTViewport {
             origin_x: f64::from(vp.top_left_x),
             origin_y: f64::from(vp.top_left_y),
             width: f64::from(vp.width),
@@ -772,8 +777,21 @@ pub unsafe fn rs_set_viewports(this: *mut c_void, num_viewports: u32, viewports:
             znear: f64::from(vp.min_depth),
             zfar: f64::from(vp.max_depth),
         };
+        let cur = &list.viewports[i];
+        if cur.origin_x.to_bits() != next.origin_x.to_bits()
+            || cur.origin_y.to_bits() != next.origin_y.to_bits()
+            || cur.width.to_bits() != next.width.to_bits()
+            || cur.height.to_bits() != next.height.to_bits()
+            || cur.znear.to_bits() != next.znear.to_bits()
+            || cur.zfar.to_bits() != next.zfar.to_bits()
+        {
+            list.viewports[i] = next;
+            changed = true;
+        }
     }
-    list.dirty_state.insert(DirtyFlags::VIEWPORT);
+    if changed {
+        list.dirty_state.insert(DirtyFlags::VIEWPORT);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::RSSetScissorRects` (`d3d12_command_list.cpp:1284`).
@@ -793,7 +811,9 @@ pub unsafe fn rs_set_scissor_rects(this: *mut c_void, num_rects: u32, rects: *co
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    list.scissor_rect_count = u8::try_from(num_rects).unwrap_or(0);
+    let new_count = u8::try_from(num_rects).unwrap_or(0);
+    let mut changed = list.scissor_rect_count != new_count;
+    list.scissor_rect_count = new_count;
     let rect_ptr = rects.cast::<D3d12Rect>();
     for i in 0..(num_rects as usize) {
         // SAFETY: `i < num_rects`, so `rect_ptr.add(i)` is in-bounds.
@@ -804,14 +824,25 @@ pub unsafe fn rs_set_scissor_rects(this: *mut c_void, num_rects: u32, rects: *co
         let top = r.top.clamp(0, MAX_SCISSOR_COORD);
         let right = r.right.clamp(left, MAX_SCISSOR_COORD);
         let bottom = r.bottom.clamp(top, MAX_SCISSOR_COORD);
-        list.scissor_rects[i] = WMTScissorRect {
+        let next = WMTScissorRect {
             x: u64::try_from(left).unwrap_or(0),
             y: u64::try_from(top).unwrap_or(0),
             width: u64::try_from(right - left).unwrap_or(0),
             height: u64::try_from(bottom - top).unwrap_or(0),
         };
+        let cur = &list.scissor_rects[i];
+        if cur.x != next.x
+            || cur.y != next.y
+            || cur.width != next.width
+            || cur.height != next.height
+        {
+            list.scissor_rects[i] = next;
+            changed = true;
+        }
     }
-    list.dirty_state.insert(DirtyFlags::SCISSOR);
+    if changed {
+        list.dirty_state.insert(DirtyFlags::SCISSOR);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::OMSetBlendFactor` (`d3d12_command_list.cpp:1296`).
@@ -826,17 +857,26 @@ pub unsafe fn om_set_blend_factor(this: *mut c_void, blend_factor: *const f32) {
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    if blend_factor.is_null() {
-        list.blend_factor = [1.0, 1.0, 1.0, 1.0];
+    let next = if blend_factor.is_null() {
+        [1.0, 1.0, 1.0, 1.0]
     } else {
-        for i in 0..4 {
+        let mut arr = [0.0f32; 4];
+        for (i, dst) in arr.iter_mut().enumerate() {
             // SAFETY: `blend_factor` points to 4 `f32` values when non-null.
             let elem = unsafe { blend_factor.add(i) };
             // SAFETY: `elem` points to a readable `f32`.
-            list.blend_factor[i] = unsafe { elem.read_unaligned() };
+            *dst = unsafe { elem.read_unaligned() };
         }
+        arr
+    };
+    if list.blend_factor[0].to_bits() != next[0].to_bits()
+        || list.blend_factor[1].to_bits() != next[1].to_bits()
+        || list.blend_factor[2].to_bits() != next[2].to_bits()
+        || list.blend_factor[3].to_bits() != next[3].to_bits()
+    {
+        list.blend_factor = next;
+        list.dirty_state.insert(DirtyFlags::BLEND_FACTOR);
     }
-    list.dirty_state.insert(DirtyFlags::BLEND_FACTOR);
 }
 
 /// `ID3D12GraphicsCommandList::OMSetStencilRef` (`d3d12_command_list.cpp:1310`).
@@ -895,8 +935,14 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
     }
     set_pso_graphics(list, graphics_pso);
     set_pso_compute(list, ptr::null());
-    list.dirty_state
-        .insert(DirtyFlags::PSO | DirtyFlags::VERTEX_BUFFERS);
+    // SAFETY: `graphics_pso` is a non-null `Graphics` pointer.
+    let new_slot_mask = unsafe { (*graphics_pso).slot_mask };
+    if new_slot_mask == list.bound_vb_slot_mask {
+        list.dirty_state.insert(DirtyFlags::PSO);
+    } else {
+        list.dirty_state
+            .insert(DirtyFlags::PSO | DirtyFlags::VERTEX_BUFFERS);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::ExecuteBundle` (`d3d12_command_list.cpp:1405`).
@@ -1358,20 +1404,43 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
     if !view.is_null() && !list.device.is_null() {
         // SAFETY: `view` points to a readable `D3d12IndexBufferView`.
         let ibv = unsafe { view.cast::<D3d12IndexBufferView>().read_unaligned() };
-        // SAFETY: `list.device` is a valid `Device`.
-        let dev = unsafe { &*list.device };
-        if let Some((buf, offset)) = residency::lookup_buffer_by_va(dev, ibv.buffer_location) {
-            list.index_buffer_size = ibv.buffer_location;
-            list.index_buffer = buf.current().map_or(0, |a| a.buffer());
-            list.index_buffer_offset = offset;
-            list.index_buffer_format = if ibv.format == DXGI_FORMAT_R32_UINT {
-                u32::from(WMT_INDEX_TYPE_U_INT32)
-            } else {
-                u32::from(WMT_INDEX_TYPE_U_INT16)
-            };
-            list.sm50_index_buffer_format = ibv.format;
-            list.dirty_state.insert(DirtyFlags::INDEX_BUFFER);
-            return;
+        let va = ibv.buffer_location;
+        if va != 0 {
+            let mut found: Option<(u64, u64)> = None;
+            for &(base_va, end_va, mtl_buf) in &list.ib_cache {
+                if base_va != 0 && va >= base_va && va < end_va {
+                    found = Some((mtl_buf, va - base_va));
+                    break;
+                }
+            }
+            if found.is_none() {
+                // SAFETY: `list.device` is a valid `Device`.
+                let dev = unsafe { &*list.device };
+                if let Some((buf, offset)) = residency::lookup_buffer_by_va(dev, va) {
+                    let mtl_buf = buf.current().map_or(0, |a| a.buffer());
+                    let base_va = va.wrapping_sub(offset);
+                    let end_va = base_va.saturating_add(buf.length());
+                    if mtl_buf != 0 && end_va > base_va {
+                        let slot = usize::from(list.ib_cache_next) & 3;
+                        list.ib_cache[slot] = (base_va, end_va, mtl_buf);
+                        list.ib_cache_next = list.ib_cache_next.wrapping_add(1);
+                    }
+                    found = Some((mtl_buf, offset));
+                }
+            }
+            if let Some((mtl_buf, offset)) = found {
+                list.index_buffer_size = va;
+                list.index_buffer = mtl_buf;
+                list.index_buffer_offset = offset;
+                list.index_buffer_format = if ibv.format == DXGI_FORMAT_R32_UINT {
+                    u32::from(WMT_INDEX_TYPE_U_INT32)
+                } else {
+                    u32::from(WMT_INDEX_TYPE_U_INT16)
+                };
+                list.sm50_index_buffer_format = ibv.format;
+                list.dirty_state.insert(DirtyFlags::INDEX_BUFFER);
+                return;
+            }
         }
     }
     list.index_buffer_size = 0;
@@ -1403,18 +1472,26 @@ pub unsafe fn ia_set_vertex_buffers(
         .saturating_add(num_views as usize)
         .min(list.vertex_buffers.len());
     let vbv_ptr = views.cast::<D3d12VertexBufferView>();
+    let mut changed = false;
     for slot in start..end {
-        if vbv_ptr.is_null() {
-            list.vertex_buffers[slot] = (0, 0, 0);
+        let next = if vbv_ptr.is_null() {
+            (0, 0, 0)
         } else {
             // SAFETY: `slot - start < num_views`, so `vbv_ptr.add(slot - start)` is in-bounds.
             let elem = unsafe { vbv_ptr.add(slot - start) };
             // SAFETY: `elem` points to a readable `D3d12VertexBufferView`.
             let v = unsafe { elem.read_unaligned() };
-            list.vertex_buffers[slot] = (v.buffer_location, v.stride_in_bytes, v.size_in_bytes);
+            (v.buffer_location, v.stride_in_bytes, v.size_in_bytes)
+        };
+        if list.vertex_buffers[slot] != next {
+            list.vertex_buffers[slot] = next;
+            changed = true;
         }
     }
-    list.dirty_state.insert(DirtyFlags::VERTEX_BUFFERS);
+    if changed {
+        list.bound_vb_slot_mask = u32::MAX;
+        list.dirty_state.insert(DirtyFlags::VERTEX_BUFFERS);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::SOSetTargets` (`d3d12_command_list.cpp:1622`).

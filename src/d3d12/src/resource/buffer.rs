@@ -359,7 +359,7 @@ pub unsafe fn create_srv(
         };
         // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
         return unsafe {
-            crate::descriptor_heap::write_srv_buffer(descriptor, resource.buffer.clone(), slice)
+            crate::descriptor_heap::write_srv_buffer(descriptor, resource.buffer.as_deref(), slice)
         };
     }
 
@@ -387,7 +387,7 @@ pub unsafe fn create_srv(
     unsafe {
         crate::descriptor_heap::write_srv_texel_buffer(
             descriptor,
-            resource.buffer.clone(),
+            resource.buffer.as_deref(),
             view,
             slice,
         )

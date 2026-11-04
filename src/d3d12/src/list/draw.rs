@@ -524,6 +524,7 @@ pub fn pre_draw_with_options(
         list.bound_pso = 0;
         list.bound_dss = u64::MAX;
         list.bound_rasterizer = [u32::MAX; 7];
+        list.bound_vb_slot_mask = u32::MAX;
         list.bound_geometry = false;
 
         if !alloc.encoder_last.is_null() && !alloc.clears_from.is_null() {
@@ -627,6 +628,7 @@ pub fn pre_draw_with_options(
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).uav_writes = true };
     }
     if geometry != list.bound_geometry {
+        list.bound_vb_slot_mask = u32::MAX;
         list.dirty_state.insert(
             DirtyFlags::VERTEX_BUFFERS | DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS,
         );
@@ -713,6 +715,7 @@ pub fn pre_draw_with_options(
     }
 
     if list.dirty_state.contains(DirtyFlags::VERTEX_BUFFERS) {
+        let slot_mask = pso_gfx.slot_mask;
         let (offset, stride) = populate_vertex_buffer_table(list, 1, 0);
         if stride != 0 {
             bind_render_heap_buffer(
@@ -723,6 +726,7 @@ pub fn pre_draw_with_options(
                 true,
             );
         }
+        list.bound_vb_slot_mask = slot_mask;
         list.dirty_state.remove(DirtyFlags::VERTEX_BUFFERS);
     }
 

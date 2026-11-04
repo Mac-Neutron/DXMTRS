@@ -230,7 +230,7 @@ fn resolve_index_buffer_va(list: &List) -> u64 {
     if !list.device.is_null() {
         // SAFETY: `list.device` is a valid `Device` pointer when non-null.
         let dev = unsafe { &*list.device };
-        if let Ok(map) = dev.residency.va_map.lock() {
+        if let Ok(map) = dev.residency.va_map.read() {
             for (&base_va, buffers) in map.iter() {
                 for buf in buffers {
                     if let Some(alloc) = buf.current()

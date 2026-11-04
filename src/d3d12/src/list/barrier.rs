@@ -88,7 +88,7 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
 
     let mut join = false;
     let mut opaque: Option<BarrierOpacity> = None;
-    let mut transitioned: Vec<*const c_void> = Vec::new();
+    list.barrier_scratch.clear();
 
     for b in slice {
         if join && opaque.is_some_and(|o| o >= BarrierOpacity::ALWAYS) {
@@ -157,7 +157,7 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
             join = true;
             continue;
         }
-        transitioned.push(key);
+        list.barrier_scratch.push(key);
     }
 
     let call = if list.allocator.is_null() {
@@ -166,7 +166,7 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
     } else {
         // SAFETY: `list.allocator` is a valid `Allocator` while recording.
         let alloc = unsafe { &mut *list.allocator };
-        alloc.barrier(join, &transitioned);
+        alloc.barrier(join, &list.barrier_scratch);
         alloc.barrier_calls()
     };
     if let Some(why) = opaque {

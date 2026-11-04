@@ -33,6 +33,30 @@ type Encoder = ProtocolObject<dyn MTLComputeCommandEncoder>;
 type Buffer = ProtocolObject<dyn MTLBuffer>;
 type Fence = ProtocolObject<dyn MTLFence>;
 
+/// Cached encoder state across a compute command list.
+///
+/// Elides redundant Objective-C sends and turns same-buffer rebinds into lightweight
+/// `setBufferOffset:atIndex:` updates.
+struct ComputeState {
+    buffers: [(u64, usize); 32],
+    pso: u64,
+    threadgroup: MTLSize,
+}
+
+impl ComputeState {
+    const fn new() -> Self {
+        Self {
+            buffers: [(u64::MAX, usize::MAX); 32],
+            pso: u64::MAX,
+            threadgroup: MTLSize {
+                width: 0,
+                height: 0,
+                depth: 0,
+            },
+        }
+    }
+}
+
 /// Slot 37: each command of the list on the encoder, in order.
 ///
 /// The threadgroup size of a dispatch is the last `SetPSO`'s of the same call, zero before one.
@@ -53,11 +77,7 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
     let Some(encoder) = (unsafe { obj::<Encoder>(p.encoder) }) else {
         return STATUS_SUCCESS;
     };
-    let mut threadgroup = MTLSize {
-        width: 0,
-        height: 0,
-        depth: 0,
-    };
+    let mut state = ComputeState::new();
     let mut counted = histogram::list(Kind::Compute);
     // SAFETY: the caller's contract.
     unsafe { histogram::dump(&Kind::Compute, p.cmd_head) };
@@ -68,7 +88,7 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
             list.record(cmd.r#type);
         }
         // SAFETY: as above.
-        unsafe { encode(encoder, cmd.r#type, at, &mut threadgroup) };
+        unsafe { encode(encoder, &mut state, cmd.r#type, at) };
         at = cmd.next;
     }
     histogram::finish(counted);
@@ -157,17 +177,17 @@ impl RawCompute for Encoder {
 ///
 /// `at` points to a live node of type `ty`, of the structure the type names, whose handles are 0
 /// or live objects of their kinds.
-unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr, threadgroup: &mut MTLSize) {
+unsafe fn encode(encoder: &Encoder, state: &mut ComputeState, ty: u16, at: MemPtr) {
     match ty {
         WMT_COMPUTE_COMMAND_DISPATCH => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeDispatch>(at) };
-            encoder.dispatchThreadgroups_threadsPerThreadgroup(size(&c.size), *threadgroup);
+            encoder.dispatchThreadgroups_threadsPerThreadgroup(size(&c.size), state.threadgroup);
         }
         WMT_COMPUTE_COMMAND_DISPATCH_THREADS => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeDispatch>(at) };
-            encoder.dispatchThreads_threadsPerThreadgroup(size(&c.size), *threadgroup);
+            encoder.dispatchThreads_threadsPerThreadgroup(size(&c.size), state.threadgroup);
         }
         WMT_COMPUTE_COMMAND_DISPATCH_INDIRECT => {
             // SAFETY: the caller's contract.
@@ -176,21 +196,36 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr, threadgroup: &mut MTLSi
             let buffer = unsafe { obj(c.indirect_args_buffer) };
             let offset = u64_to_usize(c.indirect_args_offset);
             // SAFETY: the C's send of the guest's values: Metal takes them as the C's.
-            unsafe { encoder.dispatch_threadgroups_indirect(buffer, offset, *threadgroup) };
+            unsafe { encoder.dispatch_threadgroups_indirect(buffer, offset, state.threadgroup) };
         }
         WMT_COMPUTE_COMMAND_SET_PSO => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeSetpso>(at) };
-            // SAFETY: as above.
-            encoder.set_pipeline_state(unsafe { obj(c.pso) });
-            *threadgroup = size(&c.threadgroup_size);
+            if state.pso != c.pso {
+                state.pso = c.pso;
+                // SAFETY: as above.
+                encoder.set_pipeline_state(unsafe { obj(c.pso) });
+            }
+            state.threadgroup = size(&c.threadgroup_size);
         }
         WMT_COMPUTE_COMMAND_SET_BUFFER => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeSetbuffer>(at) };
+            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.buffers.get_mut(index) {
+                if *slot == (c.buffer, offset) {
+                    return;
+                }
+                if slot.0 == c.buffer && c.buffer != 0 {
+                    slot.1 = offset;
+                    // SAFETY: the C's send of the guest's values, as above.
+                    unsafe { encoder.setBufferOffset_atIndex(offset, index) };
+                    return;
+                }
+                *slot = (c.buffer, offset);
+            }
             // SAFETY: as above.
             let buffer = unsafe { obj(c.buffer) };
-            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setBuffer_offset_atIndex(buffer, offset, index) };
         }
@@ -198,6 +233,12 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr, threadgroup: &mut MTLSi
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeSetbufferoffset>(at) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.buffers.get_mut(index) {
+                if slot.0 != u64::MAX && slot.1 == offset {
+                    return;
+                }
+                slot.1 = offset;
+            }
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setBufferOffset_atIndex(offset, index) };
         }
@@ -212,6 +253,9 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr, threadgroup: &mut MTLSi
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdComputeSetbytes>(at) };
             let (length, index) = (u64_to_usize(c.length), usize::from(c.index));
+            if let Some(slot) = state.buffers.get_mut(index) {
+                *slot = (u64::MAX, usize::MAX);
+            }
             // SAFETY: the guest's `length` bytes at `bytes`, as the C passed them.
             unsafe { encoder.set_bytes(raw(c.bytes), length, index) };
         }

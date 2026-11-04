@@ -127,8 +127,11 @@ pub struct List {
     pub bound_pso: u64,
     pub bound_dss: u64,
     pub bound_rasterizer: [u32; 7],
+    pub bound_vb_slot_mask: u32,
     pub bound_geometry: bool,
     pub vertex_buffers: [(u64, u32, u32); 32],
+    pub ib_cache: [(u64, u64, u64); 4],
+    pub ib_cache_next: u8,
     pub index_buffer: u64,
     pub index_buffer_offset: u64,
     pub index_buffer_size: u64,
@@ -138,6 +141,7 @@ pub struct List {
     pub stencil_ref: u32,
     pub dirty_state: DirtyFlags,
     pub retained_objects: Vec<RetainedObject>,
+    pub barrier_scratch: Vec<*const c_void>,
     pub inside_render_pass: bool,
 }
 
@@ -227,8 +231,11 @@ impl List {
             bound_pso: 0,
             bound_dss: u64::MAX,
             bound_rasterizer: [u32::MAX; 7],
+            bound_vb_slot_mask: u32::MAX,
             bound_geometry: false,
             vertex_buffers: [(0, 0, 0); 32],
+            ib_cache: [(0, 0, 0); 4],
+            ib_cache_next: 0,
             index_buffer: 0,
             index_buffer_offset: 0,
             index_buffer_size: 0,
@@ -238,6 +245,7 @@ impl List {
             stencil_ref: 0,
             dirty_state: DirtyFlags::empty(),
             retained_objects: Vec::new(),
+            barrier_scratch: Vec::with_capacity(16),
             inside_render_pass: false,
         })
     }

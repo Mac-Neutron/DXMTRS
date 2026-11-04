@@ -5,6 +5,7 @@
 use core::{
     ffi::c_void,
     ptr::{self, read_unaligned, write_unaligned},
+    sync::atomic::{AtomicBool, Ordering},
 };
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
@@ -186,6 +187,10 @@ pub struct Heap {
     pub num_descriptors: u32,
     pub flags: u32,
     pub gpu_buffer: Option<Arc<Buffer>>,
+    pub gpu_mapped_ptr: *mut [u64; 4],
+    pub gpu_base_address: u64,
+    pub cpu_words_ptr: *mut [u64; 4],
+    pub has_cpu_descriptors: AtomicBool,
     pub cpu_descriptors: Mutex<Vec<ShaderVisibleDescriptor>>,
     pub samplers: Mutex<Vec<[u64; 4]>>,
     pub render_targets: Mutex<Vec<RenderTargetDesc>>,
@@ -417,34 +422,35 @@ impl Heap {
     }
 
     /// Returns the GPU virtual address of the heap's backing buffer (`0` when not shader-visible).
+    #[inline]
     #[must_use]
-    pub fn gpu_address(&self) -> u64 {
-        self.gpu_buffer
-            .as_ref()
-            .and_then(|b| b.current())
-            .map_or(0, |a| a.gpu_address())
+    pub const fn gpu_address(&self) -> u64 {
+        self.gpu_base_address
+    }
+
+    /// Returns the base pointer to the heap's 32-byte-per-descriptor `[u64; 4]` backing array.
+    ///
+    /// Returns the mapped Metal buffer pointer when shader-visible, or CPU `samplers` storage.
+    #[inline]
+    #[must_use]
+    pub const fn words_ptr(&self) -> *mut [u64; 4] {
+        if self.gpu_mapped_ptr.is_null() {
+            self.cpu_words_ptr
+        } else {
+            self.gpu_mapped_ptr
+        }
     }
 }
 
-/// Writes a 32-byte (`[u64; 4]`) GPU descriptor slot in CPU mirror storage and mapped Metal buffer.
-fn write_gpu_entry(heap: &Heap, index: u32, words: [u64; 4]) {
-    let slot = index as usize;
-    {
-        let mut guard = heap.samplers.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(dst) = guard.get_mut(slot) {
-            *dst = words;
-        }
-    }
-    if let Some(ref buf) = heap.gpu_buffer
-        && let Some(alloc) = buf.current()
-    {
-        let base = alloc.mapped_memory(0);
-        if !base.is_null() && index < heap.num_descriptors {
-            // SAFETY: `gpu_buffer` was allocated with `num_descriptors * 32` bytes and `slot` is in bounds.
-            let dst = unsafe { base.add(slot * 32) };
-            // SAFETY: `dst` points to a 32-byte slot in the mapped descriptor buffer.
-            unsafe { write_unaligned(dst.cast::<c_void>().cast::<[u64; 4]>(), words) };
-        }
+/// Writes a 32-byte (`[u64; 4]`) GPU descriptor slot in CPU mirror storage or mapped Metal buffer.
+#[inline]
+const fn write_gpu_entry(heap: &Heap, index: u32, words: [u64; 4]) {
+    let base = heap.words_ptr();
+    if !base.is_null() && index < heap.num_descriptors {
+        // SAFETY: `base` points to `heap.num_descriptors` `[u64; 4]` slots.
+        let dst = unsafe { base.add(index as usize) };
+        // SAFETY: `dst` points to a 32-byte slot in the descriptor buffer.
+        unsafe { write_unaligned(dst, words) };
     }
 }
 
@@ -554,13 +560,14 @@ pub unsafe fn write_cbv(handle: D3d12CpuDescriptorHandle, va: u64, size_in_bytes
         return E_INVALIDARG;
     };
     let size = u64::from(size_in_bytes);
-    {
+    if heap.gpu_mapped_ptr.is_null() {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::ConstantBuffer { address: va, size };
+            heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
         }
     }
     write_gpu_entry(heap, index, [va, size, 0, 0]);
@@ -577,7 +584,7 @@ pub unsafe fn write_cbv(handle: D3d12CpuDescriptorHandle, va: u64, size_in_bytes
 #[must_use]
 pub unsafe fn write_srv_texture(
     handle: D3d12CpuDescriptorHandle,
-    texture: Option<Arc<Texture>>,
+    texture: Option<&Texture>,
     view: TextureViewKey,
     min_lod_clamp: f32,
 ) -> Hresult {
@@ -585,18 +592,18 @@ pub unsafe fn write_srv_texture(
     let Some((heap, index)) = (unsafe { shader_visible(handle) }) else {
         return E_INVALIDARG;
     };
-    let (res_id, meta) = texture.as_ref().map_or((0, 0), |tex| {
+    let (res_id, meta) = texture.map_or((0, 0), |tex| {
         let gpu_id = tex.current().map_or(0, |a| a.view(view).gpu_resource_id);
         let arr_len = u64::from(view.array_size());
         (gpu_id, (arr_len << 32) | u64::from(min_lod_clamp.to_bits()))
     });
-    {
+    if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
-            *slot = ShaderVisibleDescriptor::SrvTexture { texture, view };
+            *slot = ShaderVisibleDescriptor::Null;
         }
     }
     write_gpu_entry(heap, index, [res_id, meta, 0, 0]);
@@ -613,7 +620,7 @@ pub unsafe fn write_srv_texture(
 #[must_use]
 pub unsafe fn write_srv_texel_buffer(
     handle: D3d12CpuDescriptorHandle,
-    buffer: Option<Arc<Buffer>>,
+    buffer: Option<&Buffer>,
     view: BufferViewKey,
     slice: BufferSlice,
 ) -> Hresult {
@@ -621,24 +628,20 @@ pub unsafe fn write_srv_texel_buffer(
     let Some((heap, index)) = (unsafe { shader_visible(handle) }) else {
         return E_INVALIDARG;
     };
-    let (res_id, meta) = buffer.as_ref().map_or((0, 0), |buf| {
+    let (res_id, meta) = buffer.map_or((0, 0), |buf| {
         let gpu_id = buf
             .current()
             .map_or(0, |a| buf.view(&a, view).gpu_resource_id);
         let packed = (u64::from(slice.element_count) << 32) | (slice.first_element & 0xffff_ffff);
         (gpu_id, packed)
     });
-    {
+    if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
-            *slot = ShaderVisibleDescriptor::SrvTexelBuffer {
-                buffer,
-                view,
-                slice,
-            };
+            *slot = ShaderVisibleDescriptor::Null;
         }
     }
     write_gpu_entry(heap, index, [res_id, meta, 0, 0]);
@@ -655,26 +658,26 @@ pub unsafe fn write_srv_texel_buffer(
 #[must_use]
 pub unsafe fn write_srv_buffer(
     handle: D3d12CpuDescriptorHandle,
-    buffer: Option<Arc<Buffer>>,
+    buffer: Option<&Buffer>,
     slice: BufferSlice,
 ) -> Hresult {
     // SAFETY: Caller guarantees `handle` comes from a live CBV/SRV/UAV `Heap`.
     let Some((heap, index)) = (unsafe { shader_visible(handle) }) else {
         return E_INVALIDARG;
     };
-    let (ptr_val, meta) = buffer.as_ref().map_or((0, 0), |buf| {
+    let (ptr_val, meta) = buffer.map_or((0, 0), |buf| {
         let va = buf
             .current()
             .map_or(0, |a| a.gpu_address().wrapping_add(slice.byte_offset));
         (va, slice.byte_length)
     });
-    {
+    if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
-            *slot = ShaderVisibleDescriptor::SrvBuffer { buffer, slice };
+            *slot = ShaderVisibleDescriptor::Null;
         }
     }
     write_gpu_entry(heap, index, [ptr_val, meta, 0, 0]);
@@ -730,7 +733,7 @@ pub unsafe fn write_srv_null(handle: D3d12CpuDescriptorHandle, desc: *const c_vo
             if let Some((buf, view)) = crate::device::null::null_texel_buffer(dev) {
                 // SAFETY: `handle` is valid.
                 return unsafe {
-                    write_srv_texel_buffer(handle, Some(buf), view, BufferSlice::default())
+                    write_srv_texel_buffer(handle, Some(&buf), view, BufferSlice::default())
                 };
             }
         }
@@ -741,12 +744,12 @@ pub unsafe fn write_srv_null(handle: D3d12CpuDescriptorHandle, desc: *const c_vo
             let dev = unsafe { &*heap.device };
             if let Some((tex, view)) = crate::device::null::null_texture(dev, tex_type) {
                 // SAFETY: `handle` is valid.
-                return unsafe { write_srv_texture(handle, Some(tex), view, 0.0) };
+                return unsafe { write_srv_texture(handle, Some(&tex), view, 0.0) };
             }
         }
     }
 
-    {
+    if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
@@ -787,13 +790,14 @@ pub unsafe fn write_uav_texture(
         };
         (gpu_id, arr_len, atom)
     });
-    {
+    if heap.gpu_mapped_ptr.is_null() {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::UavTexture { texture, view };
+            heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
         }
     }
     write_gpu_entry(heap, index, [res_id, meta, atomic_id, 0]);
@@ -832,7 +836,7 @@ pub unsafe fn write_uav_texel_buffer(
         let addr = alloc.as_ref().map_or(0, |a| a.gpu_address());
         [gpu_id, packed, atom, addr]
     });
-    {
+    if heap.gpu_mapped_ptr.is_null() {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
@@ -843,6 +847,7 @@ pub unsafe fn write_uav_texel_buffer(
                 view,
                 slice,
             };
+            heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
         }
     }
     write_gpu_entry(heap, index, words);
@@ -877,13 +882,14 @@ pub unsafe fn write_uav_buffer(
             .map_or(0, |a| a.gpu_address().wrapping_add(slice.byte_offset));
         [va, slice.byte_length, ctr_va, 0]
     });
-    {
+    if heap.gpu_mapped_ptr.is_null() {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::UavBuffer { buffer, slice };
+            heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
         }
     }
     write_gpu_entry(heap, index, words);
@@ -927,7 +933,7 @@ pub unsafe fn write_uav_null(handle: D3d12CpuDescriptorHandle, desc: *const c_vo
         }
     }
 
-    {
+    if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
         let mut cpu = heap
             .cpu_descriptors
             .lock()
@@ -1102,6 +1108,8 @@ pub unsafe fn create_descriptor_heap(
 
     let device_ptr = this.cast::<Device>();
     let mut gpu_buffer: Option<Arc<Buffer>> = None;
+    let mut gpu_mapped_ptr: *mut [u64; 4] = ptr::null_mut();
+    let mut gpu_base_address: u64 = 0;
     if is_shader_visible {
         #[cfg(target_pointer_width = "32")]
         let (): () = crate::not_implemented!("DescriptorHeap::CreateShaderVisible");
@@ -1124,6 +1132,8 @@ pub unsafe fn create_descriptor_heap(
                     // SAFETY: Zero-initializing the newly allocated descriptor buffer.
                     unsafe { ptr::write_bytes(mapped.cast::<u8>(), 0, len) };
                 }
+                gpu_mapped_ptr = mapped.cast::<c_void>().cast::<[u64; 4]>();
+                gpu_base_address = alloc.gpu_address();
                 let _ = buf.rename(alloc);
                 crate::device::residency::register(dev, &buf);
                 gpu_buffer = Some(buf);
@@ -1132,13 +1142,25 @@ pub unsafe fn create_descriptor_heap(
     }
 
     let count = heap_desc.num_descriptors as usize;
-    let (cpu_descriptors, samplers, render_targets) = match heap_desc.r#type {
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV => (
-            vec![ShaderVisibleDescriptor::Null; count],
-            vec![[0u64; 4]; count],
-            Vec::new(),
-        ),
-        D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER => (Vec::new(), vec![[0u64; 4]; count], Vec::new()),
+    let (cpu_descriptors, mut samplers, render_targets) = match heap_desc.r#type {
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV => {
+            if gpu_mapped_ptr.is_null() {
+                (
+                    vec![ShaderVisibleDescriptor::Null; count],
+                    vec![[0u64; 4]; count],
+                    Vec::new(),
+                )
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            }
+        }
+        D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER => {
+            if gpu_mapped_ptr.is_null() {
+                (Vec::new(), vec![[0u64; 4]; count], Vec::new())
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            }
+        }
         D3D12_DESCRIPTOR_HEAP_TYPE_RTV | D3D12_DESCRIPTOR_HEAP_TYPE_DSV => {
             let empty_rt = RenderTargetDesc {
                 texture: None,
@@ -1161,6 +1183,11 @@ pub unsafe fn create_descriptor_heap(
         }
         _ => (Vec::new(), Vec::new(), Vec::new()),
     };
+    let cpu_words_ptr = if samplers.is_empty() {
+        ptr::null_mut()
+    } else {
+        samplers.as_mut_ptr()
+    };
 
     if !device_ptr.is_null() {
         // SAFETY: Retaining parent `Device` for the lifetime of `Heap`.
@@ -1176,6 +1203,10 @@ pub unsafe fn create_descriptor_heap(
         num_descriptors: heap_desc.num_descriptors,
         flags: heap_desc.flags,
         gpu_buffer,
+        gpu_mapped_ptr,
+        gpu_base_address,
+        cpu_words_ptr,
+        has_cpu_descriptors: AtomicBool::new(false),
         cpu_descriptors: Mutex::new(cpu_descriptors),
         samplers: Mutex::new(samplers),
         render_targets: Mutex::new(render_targets),
@@ -1231,72 +1262,134 @@ pub unsafe fn create_sampler(
     let _ = unsafe { write_sampler(dest_descriptor, sampler_desc) };
 }
 
-/// Copies a single descriptor from `(src_heap, src_idx)` to `(dst_heap, dst_idx)` for `heap_type`.
-fn copy_single_descriptor(
+/// Copies `count` contiguous descriptors from `(src_heap, src_idx)` to `(dst_heap, dst_idx)`.
+fn copy_descriptor_range(
     dst_heap: &Heap,
     dst_idx: u32,
     src_heap: &Heap,
     src_idx: u32,
+    count: u32,
     heap_type: u32,
 ) {
-    if dst_idx >= dst_heap.num_descriptors || src_idx >= src_heap.num_descriptors {
+    if count == 0 || dst_idx >= dst_heap.num_descriptors || src_idx >= src_heap.num_descriptors {
         return;
     }
+    let avail_u32 = (dst_heap.num_descriptors - dst_idx)
+        .min(src_heap.num_descriptors - src_idx)
+        .min(count);
+    let avail = avail_u32 as usize;
+    if avail == 0 {
+        return;
+    }
+    let src_start = src_idx as usize;
+    let dst_start = dst_idx as usize;
     match heap_type {
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV => {
-            let desc = src_heap.descriptor(src_idx);
-            let words = {
-                let guard = src_heap
-                    .samplers
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                guard.get(src_idx as usize).copied().unwrap_or([0; 4])
-            };
-            {
-                let mut dst_cpu = dst_heap
-                    .cpu_descriptors
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                if let Some(slot) = dst_cpu.get_mut(dst_idx as usize) {
-                    *slot = desc;
+            let src_words = src_heap.words_ptr();
+            let dst_words = dst_heap.words_ptr();
+            if !src_words.is_null() && !dst_words.is_null() {
+                // SAFETY: `src_start + avail <= src_heap.num_descriptors`.
+                let src_ptr = unsafe { src_words.add(src_start) };
+                // SAFETY: `dst_start + avail <= dst_heap.num_descriptors`.
+                let dst_ptr = unsafe { dst_words.add(dst_start) };
+                if ptr::eq(src_words, dst_words) {
+                    // SAFETY: Both ranges are valid within the same descriptor array.
+                    unsafe { ptr::copy(src_ptr, dst_ptr, avail) };
+                } else {
+                    // SAFETY: Different descriptor arrays do not overlap.
+                    unsafe { ptr::copy_nonoverlapping(src_ptr, dst_ptr, avail) };
                 }
             }
-            write_gpu_entry(dst_heap, dst_idx, words);
+            if dst_heap.gpu_mapped_ptr.is_null()
+                && (src_heap.has_cpu_descriptors.load(Ordering::Relaxed)
+                    || dst_heap.has_cpu_descriptors.load(Ordering::Relaxed))
+            {
+                if ptr::eq(src_heap, dst_heap) {
+                    let mut cpu = dst_heap
+                        .cpu_descriptors
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    for i in 0..avail {
+                        if let Some(val) = cpu.get(src_start + i).cloned()
+                            && let Some(slot) = cpu.get_mut(dst_start + i)
+                        {
+                            *slot = val;
+                        }
+                    }
+                } else {
+                    let src_cpu = src_heap
+                        .cpu_descriptors
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    let mut dst_cpu = dst_heap
+                        .cpu_descriptors
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if let Some(src_slice) = src_cpu.get(src_start..src_start + avail)
+                        && let Some(dst_slice) = dst_cpu.get_mut(dst_start..dst_start + avail)
+                    {
+                        dst_slice.clone_from_slice(src_slice);
+                        dst_heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
         }
         D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER => {
-            let words = {
-                let guard = src_heap
-                    .samplers
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                guard.get(src_idx as usize).copied().unwrap_or([0; 4])
-            };
+            let src_words = src_heap.words_ptr();
+            let dst_words = dst_heap.words_ptr();
+            if !src_words.is_null() && !dst_words.is_null() {
+                // SAFETY: `src_start + avail <= src_heap.num_descriptors`.
+                let src_ptr = unsafe { src_words.add(src_start) };
+                // SAFETY: `dst_start + avail <= dst_heap.num_descriptors`.
+                let dst_ptr = unsafe { dst_words.add(dst_start) };
+                if ptr::eq(src_words, dst_words) {
+                    // SAFETY: Both ranges are valid within the same descriptor array.
+                    unsafe { ptr::copy(src_ptr, dst_ptr, avail) };
+                } else {
+                    // SAFETY: Different descriptor arrays do not overlap.
+                    unsafe { ptr::copy_nonoverlapping(src_ptr, dst_ptr, avail) };
+                }
+            }
             let src_addr = ptr::from_ref(src_heap).expose_provenance();
             let dst_addr = ptr::from_ref(dst_heap).expose_provenance();
             if let Ok(mut map) = SAMPLER_OBJECTS.lock() {
-                if let Some(samp) = map.get(&(src_addr, src_idx)).cloned() {
-                    map.insert((dst_addr, dst_idx), samp);
-                } else {
-                    map.remove(&(dst_addr, dst_idx));
+                for i in 0..avail_u32 {
+                    let s_idx = src_idx.wrapping_add(i);
+                    let d_idx = dst_idx.wrapping_add(i);
+                    if let Some(samp) = map.get(&(src_addr, s_idx)).cloned() {
+                        map.insert((dst_addr, d_idx), samp);
+                    } else {
+                        map.remove(&(dst_addr, d_idx));
+                    }
                 }
             }
-            write_gpu_entry(dst_heap, dst_idx, words);
         }
         D3D12_DESCRIPTOR_HEAP_TYPE_RTV | D3D12_DESCRIPTOR_HEAP_TYPE_DSV => {
-            let rt = {
-                let guard = src_heap
+            if ptr::eq(src_heap, dst_heap) {
+                let mut rts = dst_heap
                     .render_targets
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                guard.get(src_idx as usize).cloned()
-            };
-            if let Some(rt_desc) = rt {
+                for i in 0..avail {
+                    if let Some(rt_desc) = rts.get(src_start + i).cloned()
+                        && let Some(slot) = rts.get_mut(dst_start + i)
+                    {
+                        *slot = rt_desc;
+                    }
+                }
+            } else {
+                let src_rts = src_heap
+                    .render_targets
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 let mut dst_rts = dst_heap
                     .render_targets
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                if let Some(slot) = dst_rts.get_mut(dst_idx as usize) {
-                    *slot = rt_desc;
+                if let Some(src_slice) = src_rts.get(src_start..src_start + avail)
+                    && let Some(dst_slice) = dst_rts.get_mut(dst_start..dst_start + avail)
+                {
+                    dst_slice.clone_from_slice(src_slice);
                 }
             }
         }
@@ -1360,6 +1453,8 @@ pub unsafe extern "system-unwind" fn copy_descriptors(
             continue;
         }
 
+        let run_len = (dst_range_len - dst_offset).min(src_range_len - src_offset);
+
         // SAFETY: `dst_range_idx < num_dest` and `dst_handles` is non-null.
         let dst_base_ptr = unsafe { dst_handles.add(dst_range_idx as usize) };
         // SAFETY: Reading destination start handle.
@@ -1376,17 +1471,18 @@ pub unsafe extern "system-unwind" fn copy_descriptors(
             let dst_heap = unsafe { &*dst_heap_ptr };
             // SAFETY: Both handles come from live `Heap` allocations.
             let src_heap = unsafe { &*src_heap_ptr };
-            copy_single_descriptor(
+            copy_descriptor_range(
                 dst_heap,
                 dst_base_idx.wrapping_add(dst_offset),
                 src_heap,
                 src_base_idx.wrapping_add(src_offset),
+                run_len,
                 heap_type,
             );
         }
 
-        dst_offset += 1;
-        src_offset += 1;
+        dst_offset += run_len;
+        src_offset += run_len;
     }
 }
 
@@ -1396,7 +1492,7 @@ pub unsafe extern "system-unwind" fn copy_descriptors(
 ///
 /// `this` is a valid `Device` pointer.
 pub unsafe fn copy_descriptors_simple(
-    this: *mut c_void,
+    _this: *mut c_void,
     num_descriptors: u32,
     dest_start: D3d12CpuDescriptorHandle,
     src_start: D3d12CpuDescriptorHandle,
@@ -1406,16 +1502,19 @@ pub unsafe fn copy_descriptors_simple(
     if num_descriptors == 0 {
         return;
     }
-    // SAFETY: Forwarding single-range copy to `copy_descriptors`.
-    unsafe {
-        copy_descriptors(
-            this,
-            1,
-            (&raw const dest_start).cast(),
-            &raw const num_descriptors,
-            1,
-            (&raw const src_start).cast(),
-            &raw const num_descriptors,
+    let (dst_heap_ptr, dst_idx) = EmbeddedDescriptorHandle::unpack(dest_start);
+    let (src_heap_ptr, src_idx) = EmbeddedDescriptorHandle::unpack(src_start);
+    if !dst_heap_ptr.is_null() && !src_heap_ptr.is_null() {
+        // SAFETY: Both handles come from live `Heap` allocations.
+        let dst_heap = unsafe { &*dst_heap_ptr };
+        // SAFETY: Both handles come from live `Heap` allocations.
+        let src_heap = unsafe { &*src_heap_ptr };
+        copy_descriptor_range(
+            dst_heap,
+            dst_idx,
+            src_heap,
+            src_idx,
+            num_descriptors,
             heap_type,
         );
     }

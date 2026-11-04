@@ -711,6 +711,10 @@ impl Queue {
         }
         crate::scope!("queue.(commit)");
         crate::count!("#command buffers committed", 1);
+        if !self.device.is_null() {
+            // SAFETY: `self.device` is a live `Device` pointer for the lifetime of `Queue`.
+            crate::device::residency::flush(unsafe { &*self.device });
+        }
         let cmdbuf_handle = inflight.cmdbuf.as_ref().map_or(0, Obj::handle);
         // SAFETY: `cmdbuf_handle` is 0 or a live `MTLCommandBuffer` handle.
         unsafe { MTLCommandBuffer_commit(cmdbuf_handle) };

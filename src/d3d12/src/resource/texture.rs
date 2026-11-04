@@ -754,7 +754,12 @@ pub unsafe fn create_srv(
     let clamp = i32_to_f32(f32_to_i32(min_lod).wrapping_sub((first_mip & 0xf).cast_signed()));
     // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
     unsafe {
-        crate::descriptor_heap::write_srv_texture(descriptor, resource.texture.clone(), view, clamp)
+        crate::descriptor_heap::write_srv_texture(
+            descriptor,
+            resource.texture.as_deref(),
+            view,
+            clamp,
+        )
     }
 }
 

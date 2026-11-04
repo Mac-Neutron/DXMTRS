@@ -705,6 +705,9 @@ unsafe fn render_pass_descriptor(info: &WMTRenderPassInfo) -> Retained<MTLRender
     let descriptor = MTLRenderPassDescriptor::new();
     let colors = descriptor.colorAttachments();
     for (i, c) in info.colors.iter().enumerate() {
+        if c.texture == 0 && c.resolve_texture == 0 && c.load_action == 0 && c.store_action == 0 {
+            continue;
+        }
         // SAFETY: one of the descriptor's 8 colour attachments.
         let a = unsafe { colors.objectAtIndexedSubscript(i) };
         a.setClearColor(MTLClearColor {
@@ -720,11 +723,13 @@ unsafe fn render_pass_descriptor(info: &WMTRenderPassInfo) -> Retained<MTLRender
         a.setTexture(unsafe { obj(c.texture) });
         a.setLoadAction(MTLLoadAction(c.load_action as usize));
         a.setStoreAction(MTLStoreAction(c.store_action as usize));
-        // SAFETY: as above.
-        a.setResolveTexture(unsafe { obj(c.resolve_texture) });
-        a.setResolveLevel(usize::from(c.resolve_level));
-        a.setResolveSlice(usize::from(c.resolve_slice));
-        a.setResolveDepthPlane(c.resolve_depth_plane as usize);
+        if c.resolve_texture != 0 {
+            // SAFETY: as above.
+            a.setResolveTexture(unsafe { obj(c.resolve_texture) });
+            a.setResolveLevel(usize::from(c.resolve_level));
+            a.setResolveSlice(usize::from(c.resolve_slice));
+            a.setResolveDepthPlane(c.resolve_depth_plane as usize);
+        }
     }
     let depth = &info.depth;
     if depth.texture != 0 {
@@ -750,12 +755,18 @@ unsafe fn render_pass_descriptor(info: &WMTRenderPassInfo) -> Retained<MTLRender
         a.setLoadAction(MTLLoadAction(stencil.load_action as usize));
         a.setStoreAction(MTLStoreAction(stencil.store_action as usize));
     }
-    descriptor.setDefaultRasterSampleCount(usize::from(info.default_raster_sample_count));
-    descriptor.setRenderTargetArrayLength(usize::from(info.render_target_array_length));
+    if info.default_raster_sample_count != 0 {
+        descriptor.setDefaultRasterSampleCount(usize::from(info.default_raster_sample_count));
+    }
+    if info.render_target_array_length != 0 {
+        descriptor.setRenderTargetArrayLength(usize::from(info.render_target_array_length));
+    }
     descriptor.setRenderTargetHeight(info.render_target_height as usize);
     descriptor.setRenderTargetWidth(info.render_target_width as usize);
-    // SAFETY: as above.
-    descriptor.setVisibilityResultBuffer(unsafe { obj(info.visibility_buffer) });
+    if info.visibility_buffer != 0 {
+        // SAFETY: as above.
+        descriptor.setVisibilityResultBuffer(unsafe { obj(info.visibility_buffer) });
+    }
     // Timestamps at the pass's end.
     let samples = descriptor.sampleBufferAttachments();
     for (i, s) in info.sample_buffers.iter().enumerate() {

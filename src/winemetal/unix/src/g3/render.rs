@@ -67,6 +67,44 @@ type Encoder = ProtocolObject<dyn MTLRenderCommandEncoder>;
 type Buffer = ProtocolObject<dyn MTLBuffer>;
 type Fence = ProtocolObject<dyn MTLFence>;
 
+/// Cached encoder state across a render command list.
+///
+/// Elides redundant Objective-C sends and turns same-buffer rebinds into lightweight
+/// `*BufferOffset:atIndex:` updates.
+struct RenderState {
+    vertex_buffers: [(u64, usize); 32],
+    fragment_buffers: [(u64, usize); 32],
+    mesh_buffers: [(u64, usize); 32],
+    object_buffers: [(u64, usize); 32],
+    pso: u64,
+    dss: u64,
+    stencil_ref: u32,
+    fill_mode: u8,
+    cull_mode: u8,
+    depth_clip_mode: u8,
+    winding: u8,
+    depth_bias_bits: [u32; 3],
+}
+
+impl RenderState {
+    const fn new() -> Self {
+        Self {
+            vertex_buffers: [(u64::MAX, usize::MAX); 32],
+            fragment_buffers: [(u64::MAX, usize::MAX); 32],
+            mesh_buffers: [(u64::MAX, usize::MAX); 32],
+            object_buffers: [(u64::MAX, usize::MAX); 32],
+            pso: u64::MAX,
+            dss: u64::MAX,
+            stencil_ref: u32::MAX,
+            fill_mode: u8::MAX,
+            cull_mode: u8::MAX,
+            depth_clip_mode: u8::MAX,
+            winding: u8::MAX,
+            depth_bias_bits: [u32::MAX; 3],
+        }
+    }
+}
+
 /// Slot 38: each command of the list on the encoder, in order.
 ///
 /// Nop and unknown types are skipped and the walk goes on. A nil encoder sends nothing, as the
@@ -86,6 +124,7 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
     let Some(encoder) = (unsafe { obj::<Encoder>(p.encoder) }) else {
         return STATUS_SUCCESS;
     };
+    let mut state = RenderState::new();
     let mut counted = histogram::list(Kind::Render);
     // SAFETY: the caller's contract.
     unsafe { histogram::dump(&Kind::Render, p.cmd_head) };
@@ -96,7 +135,7 @@ pub unsafe extern "C-unwind" fn encode_commands(args: *mut c_void) -> i32 {
             list.record(cmd.r#type);
         }
         // SAFETY: as above.
-        unsafe { encode(encoder, cmd.r#type, at) };
+        unsafe { encode(encoder, &mut state, cmd.r#type, at) };
         at = cmd.next;
     }
     histogram::finish(counted);
@@ -274,7 +313,7 @@ impl RawRender for Encoder {
 ///
 /// `at` points to a live node of type `ty`, of the structure the type names, whose handles are 0
 /// or live objects of their kinds.
-unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
+unsafe fn encode(encoder: &Encoder, state: &mut RenderState, ty: u16, at: MemPtr) {
     match ty {
         WMT_RENDER_COMMAND_USE_RESOURCE => {
             // SAFETY: the caller's contract.
@@ -287,9 +326,21 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
         WMT_RENDER_COMMAND_SET_VERTEX_BUFFER => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbuffer>(at) };
+            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.vertex_buffers.get_mut(index) {
+                if *slot == (c.buffer, offset) {
+                    return;
+                }
+                if slot.0 == c.buffer && c.buffer != 0 {
+                    slot.1 = offset;
+                    // SAFETY: the C's send of the guest's values: Metal takes them as the C's.
+                    unsafe { encoder.setVertexBufferOffset_atIndex(offset, index) };
+                    return;
+                }
+                *slot = (c.buffer, offset);
+            }
             // SAFETY: as above.
             let buffer = unsafe { obj(c.buffer) };
-            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
             // SAFETY: the C's send of the guest's values: Metal takes them as the C's.
             unsafe { encoder.setVertexBuffer_offset_atIndex(buffer, offset, index) };
         }
@@ -297,15 +348,33 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbufferoffset>(at) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.vertex_buffers.get_mut(index) {
+                if slot.0 != u64::MAX && slot.1 == offset {
+                    return;
+                }
+                slot.1 = offset;
+            }
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setVertexBufferOffset_atIndex(offset, index) };
         }
         WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbuffer>(at) };
+            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.fragment_buffers.get_mut(index) {
+                if *slot == (c.buffer, offset) {
+                    return;
+                }
+                if slot.0 == c.buffer && c.buffer != 0 {
+                    slot.1 = offset;
+                    // SAFETY: the C's send of the guest's values, as above.
+                    unsafe { encoder.setFragmentBufferOffset_atIndex(offset, index) };
+                    return;
+                }
+                *slot = (c.buffer, offset);
+            }
             // SAFETY: as above.
             let buffer = unsafe { obj(c.buffer) };
-            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setFragmentBuffer_offset_atIndex(buffer, offset, index) };
         }
@@ -313,15 +382,33 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbufferoffset>(at) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.fragment_buffers.get_mut(index) {
+                if slot.0 != u64::MAX && slot.1 == offset {
+                    return;
+                }
+                slot.1 = offset;
+            }
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setFragmentBufferOffset_atIndex(offset, index) };
         }
         WMT_RENDER_COMMAND_SET_MESH_BUFFER => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbuffer>(at) };
+            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.mesh_buffers.get_mut(index) {
+                if *slot == (c.buffer, offset) {
+                    return;
+                }
+                if slot.0 == c.buffer && c.buffer != 0 {
+                    slot.1 = offset;
+                    // SAFETY: the C's send of the guest's values, as above.
+                    unsafe { encoder.setMeshBufferOffset_atIndex(offset, index) };
+                    return;
+                }
+                *slot = (c.buffer, offset);
+            }
             // SAFETY: as above.
             let buffer = unsafe { obj(c.buffer) };
-            let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setMeshBuffer_offset_atIndex(buffer, offset, index) };
         }
@@ -329,29 +416,36 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbufferoffset>(at) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
+            if let Some(slot) = state.mesh_buffers.get_mut(index) {
+                if slot.0 != u64::MAX && slot.1 == offset {
+                    return;
+                }
+                slot.1 = offset;
+            }
             // SAFETY: the C's send of the guest's values, as above.
             unsafe { encoder.setMeshBufferOffset_atIndex(offset, index) };
         }
         WMT_RENDER_COMMAND_SET_OBJECT_BUFFER => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbuffer>(at) };
-            // SAFETY: as above.
-            let buffer = unsafe { obj(c.buffer) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
-            // SAFETY: the C's send of the guest's values, as above.
-            unsafe { encoder.setObjectBuffer_offset_atIndex(buffer, offset, index) };
+            // SAFETY: as above.
+            unsafe { set_object_buffer_cached(encoder, state, c.buffer, offset, index) };
         }
         WMT_RENDER_COMMAND_SET_OBJECT_BUFFER_OFFSET => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbufferoffset>(at) };
             let (offset, index) = (u64_to_usize(c.offset), usize::from(c.index));
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { encoder.setObjectBufferOffset_atIndex(offset, index) };
+            unsafe { set_object_buffer_offset_cached(encoder, state, offset, index) };
         }
         WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbytes>(at) };
             let (length, index) = (u64_to_usize(c.length), usize::from(c.index));
+            if let Some(slot) = state.fragment_buffers.get_mut(index) {
+                *slot = (u64::MAX, usize::MAX);
+            }
             // SAFETY: the guest's `length` bytes at `bytes`, as the C passed them.
             unsafe { encoder.set_fragment_bytes(raw(c.bytes), length, index) };
         }
@@ -366,11 +460,35 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
         WMT_RENDER_COMMAND_SET_RASTERIZER_STATE => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetrasterizerstate>(at) };
-            encoder.setTriangleFillMode(MTLTriangleFillMode(usize::from(c.fill_mode)));
-            encoder.setCullMode(MTLCullMode(usize::from(c.cull_mode)));
-            encoder.setDepthClipMode(MTLDepthClipMode(usize::from(c.depth_clip_mode)));
-            encoder.setDepthBias_slopeScale_clamp(c.depth_bias, c.scole_scale, c.depth_bias_clamp);
-            encoder.setFrontFacingWinding(MTLWinding(usize::from(c.winding)));
+            if state.fill_mode != c.fill_mode {
+                state.fill_mode = c.fill_mode;
+                encoder.setTriangleFillMode(MTLTriangleFillMode(usize::from(c.fill_mode)));
+            }
+            if state.cull_mode != c.cull_mode {
+                state.cull_mode = c.cull_mode;
+                encoder.setCullMode(MTLCullMode(usize::from(c.cull_mode)));
+            }
+            if state.depth_clip_mode != c.depth_clip_mode {
+                state.depth_clip_mode = c.depth_clip_mode;
+                encoder.setDepthClipMode(MTLDepthClipMode(usize::from(c.depth_clip_mode)));
+            }
+            let bias_bits = [
+                c.depth_bias.to_bits(),
+                c.scole_scale.to_bits(),
+                c.depth_bias_clamp.to_bits(),
+            ];
+            if state.depth_bias_bits != bias_bits {
+                state.depth_bias_bits = bias_bits;
+                encoder.setDepthBias_slopeScale_clamp(
+                    c.depth_bias,
+                    c.scole_scale,
+                    c.depth_bias_clamp,
+                );
+            }
+            if state.winding != c.winding {
+                state.winding = c.winding;
+                encoder.setFrontFacingWinding(MTLWinding(usize::from(c.winding)));
+            }
         }
         WMT_RENDER_COMMAND_SET_VIEWPORTS => {
             // SAFETY: the caller's contract.
@@ -387,26 +505,42 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
         WMT_RENDER_COMMAND_SET_PSO => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetpso>(at) };
-            // SAFETY: as above.
-            encoder.set_pipeline_state(unsafe { obj(c.pso) });
+            if state.pso != c.pso {
+                state.pso = c.pso;
+                // SAFETY: as above.
+                encoder.set_pipeline_state(unsafe { obj(c.pso) });
+            }
         }
         WMT_RENDER_COMMAND_SET_DSSO => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetdsso>(at) };
-            // SAFETY: as above.
-            encoder.setDepthStencilState(unsafe { obj(c.dsso) });
-            encoder.setStencilReferenceValue(u32::from(c.stencil_ref));
+            if state.dss != c.dsso {
+                state.dss = c.dsso;
+                // SAFETY: as above.
+                encoder.setDepthStencilState(unsafe { obj(c.dsso) });
+            }
+            let sref = u32::from(c.stencil_ref);
+            if state.stencil_ref != sref {
+                state.stencil_ref = sref;
+                encoder.setStencilReferenceValue(sref);
+            }
         }
         WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetdepthstencilstate>(at) };
-            // SAFETY: as above.
-            encoder.setDepthStencilState(unsafe { obj(c.depth_stencil_state) });
+            if state.dss != c.depth_stencil_state {
+                state.dss = c.depth_stencil_state;
+                // SAFETY: as above.
+                encoder.setDepthStencilState(unsafe { obj(c.depth_stencil_state) });
+            }
         }
         WMT_RENDER_COMMAND_SET_VERTEX_BYTES => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetbytes>(at) };
             let (length, index) = (u64_to_usize(c.length), usize::from(c.index));
+            if let Some(slot) = state.vertex_buffers.get_mut(index) {
+                *slot = (u64::MAX, usize::MAX);
+            }
             // SAFETY: the guest's `length` bytes at `bytes`, as the C passed them.
             unsafe { encoder.set_vertex_bytes(raw(c.bytes), length, index) };
         }
@@ -438,7 +572,11 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetblendcolor>(at) };
             encoder.setBlendColorRed_green_blue_alpha(c.red, c.green, c.blue, c.alpha);
-            encoder.setStencilReferenceValue(u32::from(c.stencil_ref));
+            let sref = u32::from(c.stencil_ref);
+            if state.stencil_ref != sref {
+                state.stencil_ref = sref;
+                encoder.setStencilReferenceValue(sref);
+            }
         }
         WMT_RENDER_COMMAND_SET_BLEND_FACTOR => {
             // SAFETY: the caller's contract.
@@ -448,7 +586,11 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
         WMT_RENDER_COMMAND_SET_STENCIL_REF => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderSetstencilref>(at) };
-            encoder.setStencilReferenceValue(u32::from(c.stencil_ref));
+            let sref = u32::from(c.stencil_ref);
+            if state.stencil_ref != sref {
+                state.stencil_ref = sref;
+                encoder.setStencilReferenceValue(sref);
+            }
         }
         WMT_RENDER_COMMAND_SET_VISIBILITY_MODE => {
             // SAFETY: the caller's contract.
@@ -556,57 +698,59 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtGeometryDraw>(at) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_draw_arguments_offset(encoder, c.draw_arguments_offset) };
+            unsafe { set_draw_arguments_offset(encoder, state, c.draw_arguments_offset) };
             geometry_draw(encoder, c.warp_count, c.instance_count, c.vertex_per_warp);
         }
         WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtGeometryDrawIndexed>(at) };
-            // SAFETY: as above.
-            let index_buffer = unsafe { obj(c.index_buffer) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_index_buffer(encoder, index_buffer, c.index_buffer_offset) };
+            unsafe { set_index_buffer(encoder, state, c.index_buffer, c.index_buffer_offset) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments_offset(encoder, c.draw_arguments_offset) };
+            unsafe { set_draw_arguments_offset(encoder, state, c.draw_arguments_offset) };
             geometry_draw(encoder, c.warp_count, c.instance_count, c.vertex_per_warp);
         }
         WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDIRECT => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtGeometryDrawIndirect>(at) };
             // SAFETY: as above.
-            let indirect = unsafe { obj(c.indirect_args_buffer) };
-            // SAFETY: as above.
             let dispatch = unsafe { obj(c.dispatch_args_buffer) };
-            // SAFETY: as above.
-            let draw_arguments = unsafe { obj(c.imm_draw_arguments) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_indirect_arguments(encoder, indirect, c.indirect_args_offset) };
+            unsafe {
+                set_indirect_arguments(
+                    encoder,
+                    state,
+                    c.indirect_args_buffer,
+                    c.indirect_args_offset,
+                );
+            }
             let object = threads(c.vertex_per_warp as usize, 1);
             // SAFETY: as above.
             unsafe { mesh_indirect(encoder, dispatch, c.dispatch_args_offset, object, 1) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments(encoder, draw_arguments) };
+            unsafe { set_draw_arguments(encoder, state, c.imm_draw_arguments) };
         }
         WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED_INDIRECT => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtGeometryDrawIndexedIndirect>(at) };
             // SAFETY: as above.
-            let index_buffer = unsafe { obj(c.index_buffer) };
-            // SAFETY: as above.
-            let indirect = unsafe { obj(c.indirect_args_buffer) };
-            // SAFETY: as above.
             let dispatch = unsafe { obj(c.dispatch_args_buffer) };
-            // SAFETY: as above.
-            let draw_arguments = unsafe { obj(c.imm_draw_arguments) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_index_buffer(encoder, index_buffer, c.index_buffer_offset) };
+            unsafe { set_index_buffer(encoder, state, c.index_buffer, c.index_buffer_offset) };
             // SAFETY: as above.
-            unsafe { set_indirect_arguments(encoder, indirect, c.indirect_args_offset) };
+            unsafe {
+                set_indirect_arguments(
+                    encoder,
+                    state,
+                    c.indirect_args_buffer,
+                    c.indirect_args_offset,
+                );
+            }
             let object = threads(c.vertex_per_warp as usize, 1);
             // SAFETY: as above.
             unsafe { mesh_indirect(encoder, dispatch, c.dispatch_args_offset, object, 1) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments(encoder, draw_arguments) };
+            unsafe { set_draw_arguments(encoder, state, c.imm_draw_arguments) };
         }
         WMT_RENDER_COMMAND_WAIT_FOR_FENCE => {
             // SAFETY: the caller's contract.
@@ -650,7 +794,7 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtTessellationMeshDraw>(at) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_draw_arguments_offset(encoder, c.draw_arguments_offset) };
+            unsafe { set_draw_arguments_offset(encoder, state, c.draw_arguments_offset) };
             tessellation_draw(
                 encoder,
                 c.patch_per_mesh_instance,
@@ -662,12 +806,10 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
         WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtTessellationMeshDrawIndexed>(at) };
-            // SAFETY: as above.
-            let index_buffer = unsafe { obj(c.index_buffer) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_index_buffer(encoder, index_buffer, c.index_buffer_offset) };
+            unsafe { set_index_buffer(encoder, state, c.index_buffer, c.index_buffer_offset) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments_offset(encoder, c.draw_arguments_offset) };
+            unsafe { set_draw_arguments_offset(encoder, state, c.draw_arguments_offset) };
             tessellation_draw(
                 encoder,
                 c.patch_per_mesh_instance,
@@ -680,39 +822,43 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtTessellationMeshDrawIndirect>(at) };
             // SAFETY: as above.
-            let indirect = unsafe { obj(c.indirect_args_buffer) };
-            // SAFETY: as above.
             let dispatch = unsafe { obj(c.dispatch_args_buffer) };
-            // SAFETY: as above.
-            let draw_arguments = unsafe { obj(c.imm_draw_arguments) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_indirect_arguments(encoder, indirect, c.indirect_args_offset) };
+            unsafe {
+                set_indirect_arguments(
+                    encoder,
+                    state,
+                    c.indirect_args_buffer,
+                    c.indirect_args_offset,
+                );
+            }
             let object = threads(c.threads_per_patch as usize, c.patch_per_group as usize);
             // SAFETY: as above.
             unsafe { mesh_indirect(encoder, dispatch, c.dispatch_args_offset, object, 32) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments(encoder, draw_arguments) };
+            unsafe { set_draw_arguments(encoder, state, c.imm_draw_arguments) };
         }
         WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED_INDIRECT => {
             // SAFETY: the caller's contract.
             let c = unsafe { body::<WmtcmdRenderDxmtTessellationMeshDrawIndexedIndirect>(at) };
             // SAFETY: as above.
-            let index_buffer = unsafe { obj(c.index_buffer) };
-            // SAFETY: as above.
-            let indirect = unsafe { obj(c.indirect_args_buffer) };
-            // SAFETY: as above.
             let dispatch = unsafe { obj(c.dispatch_args_buffer) };
-            // SAFETY: as above.
-            let draw_arguments = unsafe { obj(c.imm_draw_arguments) };
             // SAFETY: the C's send of the guest's values, as above.
-            unsafe { set_index_buffer(encoder, index_buffer, c.index_buffer_offset) };
+            unsafe { set_index_buffer(encoder, state, c.index_buffer, c.index_buffer_offset) };
             // SAFETY: as above.
-            unsafe { set_indirect_arguments(encoder, indirect, c.indirect_args_offset) };
+            unsafe {
+                set_indirect_arguments(
+                    encoder,
+                    state,
+                    c.indirect_args_buffer,
+                    c.indirect_args_offset,
+                );
+            }
             let object = threads(c.threads_per_patch as usize, c.patch_per_group as usize);
             // SAFETY: as above.
             unsafe { mesh_indirect(encoder, dispatch, c.dispatch_args_offset, object, 32) };
             // SAFETY: as above.
-            unsafe { set_draw_arguments(encoder, draw_arguments) };
+            unsafe { set_draw_arguments(encoder, state, c.imm_draw_arguments) };
         }
         WMT_RENDER_COMMAND_DISPATCH_THREADS_PER_TILE => {
             // SAFETY: the caller's contract.
@@ -732,15 +878,66 @@ unsafe fn encode(encoder: &Encoder, ty: u16, at: MemPtr) {
     }
 }
 
+/// Binds an object buffer at `index` with `(buffer, offset)` state deduplication.
+///
+/// # Safety
+///
+/// `buffer` is 0 or a live `MTLBuffer` handle; Metal takes `offset` and `index` as C's send did.
+unsafe fn set_object_buffer_cached(
+    encoder: &Encoder,
+    state: &mut RenderState,
+    buffer: u64,
+    offset: usize,
+    index: usize,
+) {
+    if let Some(slot) = state.object_buffers.get_mut(index) {
+        if *slot == (buffer, offset) {
+            return;
+        }
+        if slot.0 == buffer && buffer != 0 {
+            slot.1 = offset;
+            // SAFETY: the caller's contract.
+            unsafe { encoder.setObjectBufferOffset_atIndex(offset, index) };
+            return;
+        }
+        *slot = (buffer, offset);
+    }
+    // SAFETY: the caller's contract.
+    let buf_obj = unsafe { obj(buffer) };
+    // SAFETY: the caller's contract.
+    unsafe { encoder.setObjectBuffer_offset_atIndex(buf_obj, offset, index) };
+}
+
+/// Updates the object buffer offset at `index` with state deduplication.
+///
+/// # Safety
+///
+/// Metal takes `offset` and `index` as the C's send did.
+unsafe fn set_object_buffer_offset_cached(
+    encoder: &Encoder,
+    state: &mut RenderState,
+    offset: usize,
+    index: usize,
+) {
+    if let Some(slot) = state.object_buffers.get_mut(index) {
+        if slot.0 != u64::MAX && slot.1 == offset {
+            return;
+        }
+        slot.1 = offset;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { encoder.setObjectBufferOffset_atIndex(offset, index) };
+}
+
 /// The geometry draws' object buffer at `SM50_BINDING_INDEX_INDEX_BUFFER`: the index buffer.
 ///
 /// # Safety
 ///
-/// Metal takes `offset` as the C's send did.
-unsafe fn set_index_buffer(encoder: &Encoder, buffer: Option<&Buffer>, offset: u64) {
+/// `buffer` is 0 or a live `MTLBuffer` handle; Metal takes `offset` as the C's send did.
+unsafe fn set_index_buffer(encoder: &Encoder, state: &mut RenderState, buffer: u64, offset: u64) {
     let index = SM50_BINDING_INDEX_INDEX_BUFFER as usize;
     // SAFETY: the caller's contract.
-    unsafe { encoder.setObjectBuffer_offset_atIndex(buffer, u64_to_usize(offset), index) };
+    unsafe { set_object_buffer_cached(encoder, state, buffer, u64_to_usize(offset), index) };
 }
 
 /// The draw arguments' offset at `SM50_BINDING_INDEX_DRAW_ARGUMENTS`.
@@ -748,32 +945,37 @@ unsafe fn set_index_buffer(encoder: &Encoder, buffer: Option<&Buffer>, offset: u
 /// # Safety
 ///
 /// Metal takes `offset` as the C's send did.
-unsafe fn set_draw_arguments_offset(encoder: &Encoder, offset: u64) {
+unsafe fn set_draw_arguments_offset(encoder: &Encoder, state: &mut RenderState, offset: u64) {
     let index = SM50_BINDING_INDEX_DRAW_ARGUMENTS as usize;
     // SAFETY: the caller's contract.
-    unsafe { encoder.setObjectBufferOffset_atIndex(u64_to_usize(offset), index) };
+    unsafe { set_object_buffer_offset_cached(encoder, state, u64_to_usize(offset), index) };
 }
 
 /// The indirect arguments at `SM50_BINDING_INDEX_INDIRECT_ARGUMENTS`.
 ///
 /// # Safety
 ///
-/// Metal takes `offset` as the C's send did.
-unsafe fn set_indirect_arguments(encoder: &Encoder, buffer: Option<&Buffer>, offset: u64) {
+/// `buffer` is 0 or a live `MTLBuffer` handle; Metal takes `offset` as the C's send did.
+unsafe fn set_indirect_arguments(
+    encoder: &Encoder,
+    state: &mut RenderState,
+    buffer: u64,
+    offset: u64,
+) {
     let index = SM50_BINDING_INDEX_INDIRECT_ARGUMENTS as usize;
     // SAFETY: the caller's contract.
-    unsafe { encoder.setObjectBuffer_offset_atIndex(buffer, u64_to_usize(offset), index) };
+    unsafe { set_object_buffer_cached(encoder, state, buffer, u64_to_usize(offset), index) };
 }
 
 /// The immediate draw arguments at `SM50_BINDING_INDEX_DRAW_ARGUMENTS`, offset 0.
 ///
 /// # Safety
 ///
-/// As the C's send.
-unsafe fn set_draw_arguments(encoder: &Encoder, buffer: Option<&Buffer>) {
+/// `buffer` is 0 or a live `MTLBuffer` handle.
+unsafe fn set_draw_arguments(encoder: &Encoder, state: &mut RenderState, buffer: u64) {
     let index = SM50_BINDING_INDEX_DRAW_ARGUMENTS as usize;
     // SAFETY: the caller's contract.
-    unsafe { encoder.setObjectBuffer_offset_atIndex(buffer, 0, index) };
+    unsafe { set_object_buffer_cached(encoder, state, buffer, 0, index) };
 }
 
 /// An indirect mesh draw with `mesh_width` threads per mesh threadgroup.
