@@ -13,7 +13,8 @@ use rustc_hash::FxHasher;
 use winemetal_sys::{
     MTLDevice_newComputePipelineState, Obj,
     sm50::{
-        MtlShaderReflection, SM50_SHADER_COMMON, SM50_SHADER_METAL_310, SM50_SHADER_ROOT_SIGNATURE,
+        MtlShaderReflection, SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
+        SM50_SHADER_COMMON, SM50_SHADER_METAL_310, SM50_SHADER_ROOT_SIGNATURE,
         Sm50ShaderCommonData, Sm50ShaderRootSignatureData,
     },
 };
@@ -300,6 +301,10 @@ unsafe fn initialize_compute(
     }?;
     let digest_cs = *cs_mut.digest();
 
+    let total_tg = threadgroup_size
+        .width
+        .saturating_mul(threadgroup_size.height)
+        .saturating_mul(threadgroup_size.depth);
     let info = WMTComputePipelineInfo {
         compute_function: cs_func.handle(),
         binary_archives_for_lookup: NULL_PTR,
@@ -307,8 +312,9 @@ unsafe fn initialize_compute(
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,
         support_indirect_command_buffers: 1,
-        tgsize_is_multiple_of_sgwidth: 0,
-        immutable_buffers: 0,
+        tgsize_is_multiple_of_sgwidth: u8::from(total_tg != 0 && total_tg.is_multiple_of(32)),
+        immutable_buffers: (1 << SM50_BINDING_INDEX_ROOT_ARGUMENTS)
+            | (1 << SM50_BINDING_INDEX_STATIC_SAMPLERS),
     };
     let mut err_handle = 0u64;
     // SAFETY: `metal` is a live `MTLDevice`; `info` and `err_handle` are valid for the call.

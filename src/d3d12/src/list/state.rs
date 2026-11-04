@@ -200,6 +200,11 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.vertex_buffers = [(0, 0, 0); 32];
     list.ib_cache = [(0, 0, 0); 4];
     list.ib_cache_next = 0;
+    list.static_sampler_cache = [(ptr::null(), 0); 4];
+    list.static_sampler_cache_next = 0;
+    list.gpu_vb_table_cache = None;
+    list.gpu_graphics_root_args_offset = None;
+    list.gpu_compute_root_args_offset = None;
     list.index_buffer = 0;
     list.index_buffer_offset = 0;
     list.index_buffer_size = 0;
@@ -239,20 +244,44 @@ const fn stage_heap_bases(list: &List, root_sig: *const RootSignature, staging: 
     staging[idx + 1] = sampler_base;
 }
 
-fn record_pass_write(list: &mut List, resource: *const c_void) {
+fn record_pass_write(render_pass: &mut RenderEncoderData, resource: *const c_void) {
     if resource.is_null() {
         return;
     }
-    let count = usize::from(list.render_pass.base.write_count);
-    if count >= list.render_pass.base.writes.len() {
-        list.render_pass.base.writes_unknown = true;
+    let count = usize::from(render_pass.base.write_count);
+    if count >= render_pass.base.writes.len() {
+        render_pass.base.writes_unknown = true;
         return;
     }
-    if list.render_pass.base.writes[..count].contains(&resource) {
+    if render_pass.base.writes[..count].contains(&resource) {
         return;
     }
-    list.render_pass.base.writes[count] = resource;
-    list.render_pass.base.write_count += 1;
+    render_pass.base.writes[count] = resource;
+    render_pass.base.write_count += 1;
+}
+
+fn same_render_pass_targets(a: &RenderEncoderData, b: &RenderEncoderData) -> bool {
+    if a.render_target_count != b.render_target_count
+        || a.dsv_planar_flags != b.dsv_planar_flags
+        || a.dsv_readonly_flags != b.dsv_readonly_flags
+        || a.render_target_width != b.render_target_width
+        || a.render_target_height != b.render_target_height
+        || a.render_target_array_length != b.render_target_array_length
+        || a.depth.attachment != b.depth.attachment
+        || a.depth.depth_plane != b.depth.depth_plane
+        || a.stencil.attachment != b.stencil.attachment
+        || a.stencil.depth_plane != b.stencil.depth_plane
+    {
+        return false;
+    }
+    for i in 0..8 {
+        if a.colors[i].attachment != b.colors[i].attachment
+            || a.colors[i].depth_plane != b.colors[i].depth_plane
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Creates a closed command list (`CreateClosedCommandList`, `d3d12_command_list.cpp:2513`).
@@ -971,8 +1000,8 @@ pub unsafe fn set_descriptor_heaps(
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    list.bound_cbv_heap = ptr::null();
-    list.bound_sampler_heap = ptr::null();
+    let mut new_cbv: *const Heap = ptr::null();
+    let mut new_sampler: *const Heap = ptr::null();
     if num_descriptor_heaps > 0 && !descriptor_heaps.is_null() {
         for i in 0..(num_descriptor_heaps as usize) {
             // SAFETY: `i < num_descriptor_heaps`, so `descriptor_heaps.add(i)` is in-bounds.
@@ -986,12 +1015,17 @@ pub unsafe fn set_descriptor_heaps(
             // SAFETY: `heap_ptr` is a valid `Heap`.
             let heap_type = crate::descriptor_heap::desc_of(unsafe { &*heap_ptr }).r#type;
             if heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER {
-                list.bound_sampler_heap = heap_ptr;
+                new_sampler = heap_ptr;
             } else {
-                list.bound_cbv_heap = heap_ptr;
+                new_cbv = heap_ptr;
             }
         }
     }
+    if ptr::eq(new_cbv, list.bound_cbv_heap) && ptr::eq(new_sampler, list.bound_sampler_heap) {
+        return;
+    }
+    list.bound_cbv_heap = new_cbv;
+    list.bound_sampler_heap = new_sampler;
     let mut comp_staging = list.root_args_compute;
     stage_heap_bases(list, list.root_sig_compute, &mut comp_staging);
     list.root_args_compute = comp_staging;
@@ -1000,6 +1034,8 @@ pub unsafe fn set_descriptor_heaps(
     stage_heap_bases(list, list.root_sig_graphics, &mut gfx_staging);
     list.root_args_graphics = gfx_staging;
 
+    list.gpu_compute_root_args_offset = None;
+    list.gpu_graphics_root_args_offset = None;
     list.dirty_state.insert(
         DirtyFlags::COMPUTE_ROOT_ARGS | DirtyFlags::ROOT_ARGS | DirtyFlags::DESCRIPTOR_HEAP,
     );
@@ -1033,6 +1069,7 @@ pub unsafe fn set_compute_root_signature(this: *mut c_void, root_signature: *mut
         }
         list.root_args_compute = staging;
     }
+    list.gpu_compute_root_args_offset = None;
     list.dirty_state
         .insert(DirtyFlags::COMPUTE_ROOT_ARGS | DirtyFlags::COMPUTE_STATIC_SAMPLERS);
 }
@@ -1065,6 +1102,7 @@ pub unsafe fn set_graphics_root_signature(this: *mut c_void, root_signature: *mu
         }
         list.root_args_graphics = staging;
     }
+    list.gpu_graphics_root_args_offset = None;
     list.dirty_state
         .insert(DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS);
 }
@@ -1099,8 +1137,10 @@ pub unsafe fn set_compute_root_descriptor_table(
     let Some(qword) = slot_qword_offset(list.root_sig_compute, root_parameter_index) else {
         return;
     };
-    if qword < list.root_args_compute.len() {
+    if qword < list.root_args_compute.len() && list.root_args_compute[qword] != base_descriptor.ptr
+    {
         list.root_args_compute[qword] = base_descriptor.ptr;
+        list.gpu_compute_root_args_offset = None;
         list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
     }
 }
@@ -1124,23 +1164,36 @@ pub unsafe fn set_graphics_root_descriptor_table(
     let Some(qword) = slot_qword_offset(list.root_sig_graphics, root_parameter_index) else {
         return;
     };
-    if qword < list.root_args_graphics.len() {
+    if qword < list.root_args_graphics.len()
+        && list.root_args_graphics[qword] != base_descriptor.ptr
+    {
         list.root_args_graphics[qword] = base_descriptor.ptr;
+        list.gpu_graphics_root_args_offset = None;
         list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
     }
 }
 
-fn write_u32_in_qwords(staging: &mut [u64; 64], qword_base: usize, dword_offset: u32, value: u32) {
+fn write_u32_in_qwords(
+    staging: &mut [u64; 64],
+    qword_base: usize,
+    dword_offset: u32,
+    value: u32,
+) -> bool {
     let total_dword = qword_base
         .saturating_mul(2)
         .saturating_add(dword_offset as usize);
     let qword_idx = total_dword / 2;
     if qword_idx >= staging.len() {
-        return;
+        return false;
     }
     let shift = (total_dword % 2) * 32;
     let mask = !(0xffff_ffff_u64 << shift);
-    staging[qword_idx] = (staging[qword_idx] & mask) | (u64::from(value) << shift);
+    let next = (staging[qword_idx] & mask) | (u64::from(value) << shift);
+    if staging[qword_idx] == next {
+        return false;
+    }
+    staging[qword_idx] = next;
+    true
 }
 
 /// `ID3D12GraphicsCommandList::SetComputeRoot32BitConstant` (`d3d12_command_list.cpp:1480`).
@@ -1163,13 +1216,15 @@ pub unsafe fn set_compute_root32_bit_constant(
     let Some(qword) = slot_qword_offset(list.root_sig_compute, root_parameter_index) else {
         return;
     };
-    write_u32_in_qwords(
+    if write_u32_in_qwords(
         &mut list.root_args_compute,
         qword,
         dest_offset_in32_bit_values,
         src_data,
-    );
-    list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
+    ) {
+        list.gpu_compute_root_args_offset = None;
+        list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstant` (`d3d12_command_list.cpp:1492`).
@@ -1192,13 +1247,15 @@ pub unsafe fn set_graphics_root32_bit_constant(
     let Some(qword) = slot_qword_offset(list.root_sig_graphics, root_parameter_index) else {
         return;
     };
-    write_u32_in_qwords(
+    if write_u32_in_qwords(
         &mut list.root_args_graphics,
         qword,
         dest_offset_in32_bit_values,
         src_data,
-    );
-    list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
+    ) {
+        list.gpu_graphics_root_args_offset = None;
+        list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::SetComputeRoot32BitConstants` (`d3d12_command_list.cpp:1504`).
@@ -1223,19 +1280,25 @@ pub unsafe fn set_compute_root32_bit_constants(
         return;
     };
     let src_u32 = src_data.cast::<u32>();
+    let mut changed = false;
     for i in 0..num32_bit_values_to_set {
         // SAFETY: `i < num32_bit_values_to_set`, so `src_u32.add(i as usize)` is in-bounds.
         let elem = unsafe { src_u32.add(i as usize) };
         // SAFETY: `elem` points to a readable `u32`.
         let val = unsafe { elem.read_unaligned() };
-        write_u32_in_qwords(
+        if write_u32_in_qwords(
             &mut list.root_args_compute,
             qword,
             dest_offset_in32_bit_values.saturating_add(i),
             val,
-        );
+        ) {
+            changed = true;
+        }
     }
-    list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
+    if changed {
+        list.gpu_compute_root_args_offset = None;
+        list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
+    }
 }
 
 /// `ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstants` (`d3d12_command_list.cpp:1519`).
@@ -1260,19 +1323,25 @@ pub unsafe fn set_graphics_root32_bit_constants(
         return;
     };
     let src_u32 = src_data.cast::<u32>();
+    let mut changed = false;
     for i in 0..num32_bit_values_to_set {
         // SAFETY: `i < num32_bit_values_to_set`, so `src_u32.add(i as usize)` is in-bounds.
         let elem = unsafe { src_u32.add(i as usize) };
         // SAFETY: `elem` points to a readable `u32`.
         let val = unsafe { elem.read_unaligned() };
-        write_u32_in_qwords(
+        if write_u32_in_qwords(
             &mut list.root_args_graphics,
             qword,
             dest_offset_in32_bit_values.saturating_add(i),
             val,
-        );
+        ) {
+            changed = true;
+        }
     }
-    list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
+    if changed {
+        list.gpu_graphics_root_args_offset = None;
+        list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
+    }
 }
 
 fn set_compute_root_va(this: *mut c_void, index: u32, va: u64) {
@@ -1284,8 +1353,9 @@ fn set_compute_root_va(this: *mut c_void, index: u32, va: u64) {
     let Some(qword) = slot_qword_offset(list.root_sig_compute, index) else {
         return;
     };
-    if qword < list.root_args_compute.len() {
+    if qword < list.root_args_compute.len() && list.root_args_compute[qword] != va {
         list.root_args_compute[qword] = va;
+        list.gpu_compute_root_args_offset = None;
         list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
     }
 }
@@ -1299,8 +1369,9 @@ fn set_graphics_root_va(this: *mut c_void, index: u32, va: u64) {
     let Some(qword) = slot_qword_offset(list.root_sig_graphics, index) else {
         return;
     };
-    if qword < list.root_args_graphics.len() {
+    if qword < list.root_args_graphics.len() && list.root_args_graphics[qword] != va {
         list.root_args_graphics[qword] = va;
+        list.gpu_graphics_root_args_offset = None;
         list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
     }
 }
@@ -1406,6 +1477,12 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
         let ibv = unsafe { view.cast::<D3d12IndexBufferView>().read_unaligned() };
         let va = ibv.buffer_location;
         if va != 0 {
+            if va == list.index_buffer_size
+                && list.index_buffer != 0
+                && ibv.format == list.sm50_index_buffer_format
+            {
+                return;
+            }
             let mut found: Option<(u64, u64)> = None;
             for &(base_va, end_va, mtl_buf) in &list.ib_cache {
                 if base_va != 0 && va >= base_va && va < end_va {
@@ -1490,6 +1567,7 @@ pub unsafe fn ia_set_vertex_buffers(
     }
     if changed {
         list.bound_vb_slot_mask = u32::MAX;
+        list.gpu_vb_table_cache = None;
         list.dirty_state.insert(DirtyFlags::VERTEX_BUFFERS);
     }
 }
@@ -1528,19 +1606,11 @@ pub unsafe fn om_set_render_targets(
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    if !list.allocator.is_null() {
-        // SAFETY: `list.allocator` is valid while recording.
-        let alloc = unsafe { &mut *list.allocator };
-        if !alloc.encoder_current.is_null() {
-            alloc.invalidate_current_pass();
-        }
-    }
-    list.inside_render_pass = false;
-    list.render_pass = List::empty_render_pass();
+    let mut new_pass = List::empty_render_pass();
 
     let count =
         (num_render_target_descriptors as usize).min(D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT);
-    list.render_pass.render_target_count = u8::try_from(count).unwrap_or(0);
+    new_pass.render_target_count = u8::try_from(count).unwrap_or(0);
 
     let mut width = DEFAULT_RENDER_TARGET_DIM;
     let mut height = DEFAULT_RENDER_TARGET_DIM;
@@ -1571,8 +1641,8 @@ pub unsafe fn om_set_render_targets(
             let Some(tex) = desc.texture else {
                 continue;
             };
-            record_pass_write(list, Arc::as_ptr(&tex).cast::<c_void>());
-            let color = &mut list.render_pass.colors[i];
+            record_pass_write(&mut new_pass, Arc::as_ptr(&tex).cast::<c_void>());
+            let color = &mut new_pass.colors[i];
             color.attachment = TextureViewRef::from_texture(&tex, desc.view);
             color.depth_plane = desc.depth_plane;
             color.load_action = WMT_LOAD_ACTION_LOAD;
@@ -1595,24 +1665,24 @@ pub unsafe fn om_set_render_targets(
             if let Some(desc) = unsafe { descriptor_heap::render_target(dsv) }
                 && let Some(tex) = desc.texture
             {
-                record_pass_write(list, Arc::as_ptr(&tex).cast::<c_void>());
+                record_pass_write(&mut new_pass, Arc::as_ptr(&tex).cast::<c_void>());
                 let planar =
                     u8::try_from(depth_stencil_planar_flags(desc.view.format())).unwrap_or(0);
                 let view_ref = TextureViewRef::from_texture(&tex, desc.view);
                 if (planar & 1) != 0 {
-                    list.render_pass.depth.attachment.clone_from(&view_ref);
-                    list.render_pass.depth.depth_plane = 0;
-                    list.render_pass.depth.load_action = WMT_LOAD_ACTION_LOAD;
-                    list.render_pass.depth.store_action = WMT_STORE_ACTION_STORE;
+                    new_pass.depth.attachment.clone_from(&view_ref);
+                    new_pass.depth.depth_plane = 0;
+                    new_pass.depth.load_action = WMT_LOAD_ACTION_LOAD;
+                    new_pass.depth.store_action = WMT_STORE_ACTION_STORE;
                 }
                 if (planar & 2) != 0 {
-                    list.render_pass.stencil.attachment = view_ref;
-                    list.render_pass.stencil.depth_plane = 0;
-                    list.render_pass.stencil.load_action = WMT_LOAD_ACTION_LOAD;
-                    list.render_pass.stencil.store_action = WMT_STORE_ACTION_STORE;
+                    new_pass.stencil.attachment = view_ref;
+                    new_pass.stencil.depth_plane = 0;
+                    new_pass.stencil.load_action = WMT_LOAD_ACTION_LOAD;
+                    new_pass.stencil.store_action = WMT_STORE_ACTION_STORE;
                 }
-                list.render_pass.dsv_planar_flags = planar;
-                list.render_pass.dsv_readonly_flags =
+                new_pass.dsv_planar_flags = planar;
+                new_pass.dsv_readonly_flags =
                     u8::try_from(desc.flags & D3D12_DSV_READONLY_MASK).unwrap_or(0);
                 width = width.min(desc.width);
                 height = height.min(desc.height);
@@ -1621,9 +1691,34 @@ pub unsafe fn om_set_render_targets(
         }
     }
 
-    list.render_pass.render_target_width = width;
-    list.render_pass.render_target_height = height;
-    list.render_pass.render_target_array_length = u16::try_from(array_length).unwrap_or(u16::MAX);
+    new_pass.render_target_width = width;
+    new_pass.render_target_height = height;
+    new_pass.render_target_array_length = u16::try_from(array_length).unwrap_or(u16::MAX);
+
+    if list.inside_render_pass
+        && list.deferred_clears.is_empty()
+        && !list.allocator.is_null()
+        && same_render_pass_targets(&list.render_pass, &new_pass)
+    {
+        // SAFETY: `list.allocator` is valid while recording.
+        let alloc = unsafe { &*list.allocator };
+        if !alloc.encoder_current.is_null()
+            // SAFETY: `alloc.encoder_current` is a valid `EncoderData`.
+            && unsafe { (*alloc.encoder_current).kind } == crate::encoder::EncoderType::Render
+        {
+            return;
+        }
+    }
+
+    if !list.allocator.is_null() {
+        // SAFETY: `list.allocator` is valid while recording.
+        let alloc = unsafe { &mut *list.allocator };
+        if !alloc.encoder_current.is_null() {
+            alloc.invalidate_current_pass();
+        }
+    }
+    list.inside_render_pass = false;
+    list.render_pass = new_pass;
 }
 
 /// `ID3D12GraphicsCommandList::SetPredication` (`d3d12_command_list.cpp:1977`).

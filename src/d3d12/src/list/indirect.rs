@@ -145,17 +145,8 @@ fn encode_root_argument(
     offset as u64
 }
 
-fn encode_static_samplers(alloc: &mut Allocator, root_sig: &RootSignature) -> u64 {
-    let samplers = root_sig.encoded_static_samplers();
-    let byte_len = core::mem::size_of_val(samplers);
-    let (ptr, offset) = alloc.allocate_gpu_heap(byte_len, 64);
-    if !ptr.is_null() && byte_len > 0 {
-        // SAFETY: `ptr` has `byte_len` writable bytes in the GPU heap.
-        unsafe {
-            ptr::copy_nonoverlapping(samplers.as_ptr().cast::<u8>(), ptr, byte_len);
-        }
-    }
-    offset as u64
+fn encode_static_samplers(list: &mut List, alloc: &mut Allocator, root_sig: &RootSignature) -> u64 {
+    super::draw::encode_static_samplers_cached(list, alloc, root_sig) as u64
 }
 
 fn populate_vertex_buffer_table(
@@ -330,7 +321,7 @@ pub unsafe fn execute_indirect(
             let qwords_off = encode_root_argument(alloc, root_sig, &staging, max_command_count);
             cmd.rootsig_qwords = alloc.gpu_heap_buffer_address.wrapping_add(qwords_off);
             cmd.rootsig_qwords_stride = root_sig.upload_qwords();
-            let samplers_off = encode_static_samplers(alloc, root_sig);
+            let samplers_off = encode_static_samplers(list, alloc, root_sig);
             cmd.static_samplers = alloc.gpu_heap_buffer_address.wrapping_add(samplers_off);
         }
         return;
@@ -428,7 +419,7 @@ pub unsafe fn execute_indirect(
         let qwords_off = encode_root_argument(alloc, root_sig, &staging, max_command_count);
         cmd.rootsig_qwords = alloc.gpu_heap_buffer_address.wrapping_add(qwords_off);
         cmd.rootsig_qwords_stride = root_sig.upload_qwords();
-        let samplers_off = encode_static_samplers(alloc, root_sig);
+        let samplers_off = encode_static_samplers(list, alloc, root_sig);
         cmd.static_samplers = alloc.gpu_heap_buffer_address.wrapping_add(samplers_off);
     }
     cmd.null_vertex_buffer = if list.device.is_null() {

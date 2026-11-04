@@ -20,11 +20,13 @@ use winemetal_sys::{
     MTLDevice_newDepthStencilState, MTLDevice_newMeshRenderPipelineState,
     MTLDevice_newRenderPipelineState, Obj,
     sm50::{
-        MtlShaderReflection, SM50_INDEX_BUFFER_FORMAT_NONE, SM50_SHADER_COMMON,
-        SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_METAL_310, SM50_SHADER_PSO_GEOMETRY_SHADER,
-        SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_ROOT_SIGNATURE, Sm50IaInputElement,
-        Sm50ShaderCommonData, Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData,
-        Sm50ShaderPsoPixelShaderData, Sm50ShaderRootSignatureData,
+        MtlShaderReflection, SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
+        SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
+        SM50_INDEX_BUFFER_FORMAT_NONE, SM50_SHADER_COMMON, SM50_SHADER_IA_INPUT_LAYOUT,
+        SM50_SHADER_METAL_310, SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER,
+        SM50_SHADER_ROOT_SIGNATURE, Sm50IaInputElement, Sm50ShaderCommonData,
+        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        Sm50ShaderRootSignatureData,
     },
 };
 use winemetal_wire::{
@@ -419,6 +421,13 @@ const fn blend_factor_is_dual_source(factor: u32) -> bool {
     factor >= 16 && factor <= 19
 }
 
+const IMMUTABLE_ROOT_BUFFERS: u32 =
+    (1 << SM50_BINDING_INDEX_ROOT_ARGUMENTS) | (1 << SM50_BINDING_INDEX_STATIC_SAMPLERS);
+const IMMUTABLE_VERTEX_BUFFERS: u32 =
+    IMMUTABLE_ROOT_BUFFERS | (1 << SM50_BINDING_INDEX_VERTEX_BUFFER);
+const IMMUTABLE_GS_OBJECT_BUFFERS: u32 =
+    IMMUTABLE_VERTEX_BUFFERS | (1 << SM50_BINDING_INDEX_DRAW_ARGUMENTS);
+
 const fn mesh_render_pipeline_info() -> WMTMeshRenderPipelineInfo {
     let color = WMTColorAttachmentBlendInfo {
         pixel_format: WMT_PIXEL_FORMAT_INVALID,
@@ -443,9 +452,9 @@ const fn mesh_render_pipeline_info() -> WMTMeshRenderPipelineInfo {
         object_function: 0,
         mesh_function: 0,
         fragment_function: 0,
-        immutable_object_buffers: 0,
-        immutable_mesh_buffers: 0,
-        immutable_fragment_buffers: 0,
+        immutable_object_buffers: IMMUTABLE_GS_OBJECT_BUFFERS,
+        immutable_mesh_buffers: IMMUTABLE_ROOT_BUFFERS,
+        immutable_fragment_buffers: IMMUTABLE_ROOT_BUFFERS,
         payload_memory_length: 0,
         mesh_tgsize_is_multiple_of_sgwidth: 0,
         object_tgsize_is_multiple_of_sgwidth: 0,
@@ -1433,6 +1442,8 @@ unsafe fn build_vertex_pso(
 
     info.vertex_function = vs_func.handle();
     info.fragment_function = ps_func.as_ref().map_or(0, Obj::handle);
+    info.immutable_vertex_buffers = IMMUTABLE_VERTEX_BUFFERS;
+    info.immutable_fragment_buffers = IMMUTABLE_ROOT_BUFFERS;
     let mut err_handle = 0u64;
     // SAFETY: `metal` is a live `MTLDevice`; `info` and `err_handle` are valid for the call.
     let pso_handle = unsafe {

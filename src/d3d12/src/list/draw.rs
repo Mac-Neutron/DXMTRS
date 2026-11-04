@@ -319,6 +319,26 @@ pub fn encode_static_samplers(alloc: &mut Allocator, root_sig: &RootSignature) -
     offset
 }
 
+/// Returns the GPU-heap offset of `root_sig`'s encoded static samplers, reusing a per-list
+/// 4-entry cache when `root_sig` was already uploaded during this command list's recording.
+pub fn encode_static_samplers_cached(
+    list: &mut List,
+    alloc: &mut Allocator,
+    root_sig: &RootSignature,
+) -> usize {
+    let rs_ptr = ptr::from_ref(root_sig);
+    for &(cached_rs, cached_off) in &list.static_sampler_cache {
+        if !cached_rs.is_null() && ptr::eq(cached_rs, rs_ptr) {
+            return usize::try_from(cached_off).unwrap_or(0);
+        }
+    }
+    let offset = encode_static_samplers(alloc, root_sig);
+    let slot = usize::from(list.static_sampler_cache_next) & 3;
+    list.static_sampler_cache[slot] = (rs_ptr, offset as u64);
+    list.static_sampler_cache_next = list.static_sampler_cache_next.wrapping_add(1);
+    offset
+}
+
 /// Builds `count` vertex buffer binding tables in the GPU heap (`PopulateVertexBufferTable`,
 ///
 /// `d3d12_command_list.cpp:374`).
@@ -334,6 +354,12 @@ pub fn populate_vertex_buffer_table(
     let slot_mask = unsafe { (*list.pso_graphics).slot_mask };
     if slot_mask == 0 {
         return (0, 0);
+    }
+    if count == 1
+        && let Some((cached_mask, cached_off, cached_stride)) = list.gpu_vb_table_cache
+        && cached_mask == slot_mask
+    {
+        return (usize::try_from(cached_off).unwrap_or(0), cached_stride);
     }
     let max_slot = (32 - slot_mask.leading_zeros()) as usize;
     let stride = (size_of::<VertexBufferEntry>() * max_slot).next_multiple_of(16);
@@ -379,7 +405,11 @@ pub fn populate_vertex_buffer_table(
             index += 1;
         }
     }
-    (offset, u32::try_from(stride).unwrap_or(0))
+    let stride_u32 = u32::try_from(stride).unwrap_or(0);
+    if count == 1 {
+        list.gpu_vb_table_cache = Some((slot_mask, offset as u64, stride_u32));
+    }
+    (offset, stride_u32)
 }
 
 fn bind_render_heap_buffer(
@@ -734,12 +764,20 @@ pub fn pre_draw_with_options(
         if !list.root_sig_graphics.is_null() {
             // SAFETY: `list.root_sig_graphics` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_graphics };
-            let offset = encode_root_argument(alloc, rs, &list.root_args_graphics, 1);
+            let offset = if let Some((cached_rs, cached_off)) = list.gpu_graphics_root_args_offset
+                && ptr::eq(cached_rs, rs)
+            {
+                cached_off
+            } else {
+                let off = encode_root_argument(alloc, rs, &list.root_args_graphics, 1) as u64;
+                list.gpu_graphics_root_args_offset = Some((ptr::from_ref(rs), off));
+                off
+            };
             bind_render_heap_buffer(
                 alloc,
                 geometry,
                 u8::try_from(SM50_BINDING_INDEX_ROOT_ARGUMENTS).unwrap_or(0),
-                offset as u64,
+                offset,
                 false,
             );
         }
@@ -751,7 +789,7 @@ pub fn pre_draw_with_options(
             // SAFETY: `list.root_sig_graphics` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_graphics };
             if !rs.encoded_static_samplers().is_empty() {
-                let offset = encode_static_samplers(alloc, rs);
+                let offset = encode_static_samplers_cached(list, alloc, rs);
                 bind_render_heap_buffer(
                     alloc,
                     geometry,
@@ -957,7 +995,15 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
         if !list.root_sig_compute.is_null() {
             // SAFETY: `list.root_sig_compute` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_compute };
-            let offset = encode_root_argument(alloc, rs, &list.root_args_compute, 1);
+            let offset = if let Some((cached_rs, cached_off)) = list.gpu_compute_root_args_offset
+                && ptr::eq(cached_rs, rs)
+            {
+                cached_off
+            } else {
+                let off = encode_root_argument(alloc, rs, &list.root_args_compute, 1) as u64;
+                list.gpu_compute_root_args_offset = Some((ptr::from_ref(rs), off));
+                off
+            };
             encode_compute_cmd(
                 alloc,
                 WmtcmdComputeSetbuffer {
@@ -965,7 +1011,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
                     reserved: [0; 3],
                     next: null_mem_ptr(),
                     buffer: gpu_buf,
-                    offset: offset as u64,
+                    offset,
                     index: u8::try_from(SM50_BINDING_INDEX_ROOT_ARGUMENTS).unwrap_or(0),
                 },
             );
@@ -982,7 +1028,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
             // SAFETY: `list.root_sig_compute` is a valid `RootSignature`.
             let rs = unsafe { &*list.root_sig_compute };
             if !rs.encoded_static_samplers().is_empty() {
-                let offset = encode_static_samplers(alloc, rs);
+                let offset = encode_static_samplers_cached(list, alloc, rs);
                 encode_compute_cmd(
                     alloc,
                     WmtcmdComputeSetbuffer {
