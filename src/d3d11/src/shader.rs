@@ -3,7 +3,7 @@
 use core::{ffi::c_void, fmt::Write as _, mem::MaybeUninit, ptr};
 use std::{
     ffi::CString,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
 use dxmt_util::{private_data::PrivateData, sha1::Sha1};
@@ -70,6 +70,15 @@ struct CompiledVariantEntry {
     _obj: Option<Obj>,
 }
 
+/// One in-flight compilation of a shader variant.
+///
+/// Other threads wait on it instead of translating and loading the same Metal library a second
+/// time.
+struct VariantGate {
+    done: Mutex<bool>,
+    finished: Condvar,
+}
+
 /// Deduplicated shader representation owned by [`crate::pipeline::PipelineCache`] (`dxmt::Shader`).
 pub struct ManagedShader {
     pub sha1: [u8; 20],
@@ -79,6 +88,7 @@ pub struct ManagedShader {
     pub arguments: Vec<MtlSm50ShaderArgument>,
     pub bytecode: Vec<u8>,
     variants: Mutex<FxHashMap<ShaderVariant, CompiledVariantEntry>>,
+    compiling: Mutex<FxHashMap<ShaderVariant, Arc<VariantGate>>>,
 }
 
 impl Drop for ManagedShader {
@@ -97,10 +107,19 @@ impl ManagedShader {
     ///
     /// Returns `E_INVALIDARG` if `SM50Initialize` fails on `bytes`.
     pub fn from_bytecode(bytes: &[u8]) -> Result<Arc<Self>, Hresult> {
+        let sha1 = Sha1::compute(bytes).0;
+        Self::from_bytecode_with_sha1(bytes, sha1)
+    }
+
+    /// Creates a `ManagedShader` from raw DXBC `bytes` and an already-computed SHA-1.
+    ///
+    /// # Errors
+    ///
+    /// Returns `E_INVALIDARG` if `SM50Initialize` fails on `bytes`.
+    pub fn from_bytecode_with_sha1(bytes: &[u8], sha1: [u8; 20]) -> Result<Arc<Self>, Hresult> {
         if bytes.is_empty() {
             return Err(E_INVALIDARG);
         }
-        let sha1 = Sha1::compute(bytes).0;
         let mut handle = 0u64;
         let mut reflection = MaybeUninit::<MtlShaderReflection>::zeroed();
         let mut err = 0u64;
@@ -163,6 +182,7 @@ impl ManagedShader {
             arguments,
             bytecode: bytes.to_vec(),
             variants: Mutex::new(FxHashMap::default()),
+            compiling: Mutex::new(FxHashMap::default()),
         }))
     }
 
@@ -177,6 +197,7 @@ impl ManagedShader {
             arguments: Vec::new(),
             bytecode: Vec::new(),
             variants: Mutex::new(FxHashMap::default()),
+            compiling: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -236,6 +257,69 @@ impl ManagedShader {
             }
         }
 
+        let gate = {
+            let mut compiling = self
+                .compiling
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            compiling.get(variant).map(Arc::clone).map_or_else(
+                || {
+                    let gate = Arc::new(VariantGate {
+                        done: Mutex::new(false),
+                        finished: Condvar::new(),
+                    });
+                    compiling.insert(variant.clone(), Arc::clone(&gate));
+                    None
+                },
+                Some,
+            )
+        };
+        if let Some(gate) = gate {
+            let mut done = gate
+                .done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while !*done {
+                done = gate
+                    .finished
+                    .wait(done)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            drop(done);
+            return self
+                .variants
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(variant)
+                .map_or(0, |entry| entry.handle);
+        }
+
+        let handle = self.compile_variant_uncached(dev, variant, ia_input, so_input, companion);
+        let removed = {
+            let mut compiling = self
+                .compiling
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            compiling.remove(variant)
+        };
+        if let Some(gate) = removed {
+            *gate
+                .done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            gate.finished.notify_all();
+        }
+        handle
+    }
+
+    fn compile_variant_uncached(
+        &self,
+        dev: &Device,
+        variant: &ShaderVariant,
+        ia_input: Option<IaLayoutChainInput<'_>>,
+        so_input: Option<SoLayoutChainInput<'_>>,
+        companion: Option<&Self>,
+    ) -> u64 {
         let flags = *FLAGS;
         let metal_version = dev.core().metal_version();
         let (variant_digest, func_name) = variant.digest_and_name(&self.sha1, flags);

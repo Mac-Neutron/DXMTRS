@@ -393,6 +393,13 @@ extern "C-unwind" fn fake_replace_region(
     f.say(&line);
 }
 
+#[unsafe(export_name = "MTLTexture_pixelFormat")]
+extern "C-unwind" fn fake_pixel_format(texture: u64) -> u32 {
+    // The golden replay exercises the render path; different formats keep the blit fast path
+    // out of it while still answering the query the presenter makes.
+    u32::from(texture != BACKBUFFER)
+}
+
 #[unsafe(export_name = "MTLTexture_width")]
 extern "C-unwind" fn fake_width(texture: u64) -> u64 {
     if texture == BACKBUFFER {

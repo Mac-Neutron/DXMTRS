@@ -16,12 +16,12 @@ use winemetal_sys::{
     MTLDevice_heapTextureSizeAndAlign, MTLTexture_getBytes, MTLTexture_replaceRegion,
     wire::{
         MemPtr, WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
-        WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT, WMT_TEXTURE_FLAG_LOSSLESS,
-        WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D,
-        WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE2D_MULTISAMPLE,
-        WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D, WMTOrigin, WMTSize,
-        WMTTextureInfo, encode_format_swizzle, get_swizzle_alpha, get_swizzle_blue,
-        get_swizzle_green, get_swizzle_red,
+        WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_RESOURCE_STORAGE_MODE_MEMORYLESS, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE_CUBE,
+        WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
+        WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
+        WMTOrigin, WMTSize, WMTTextureInfo, encode_format_swizzle, get_swizzle_alpha,
+        get_swizzle_blue, get_swizzle_green, get_swizzle_red,
     },
 };
 
@@ -29,9 +29,9 @@ use crate::{
     abi::{
         resource::{
             D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT,
-            D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, D3D12_RESOURCE_DIMENSION_TEXTURE3D,
-            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-            D3d12Box, HeapProperties, ResourceDesc,
+            D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            D3D12_RESOURCE_DIMENSION_TEXTURE3D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3d12Box, HeapProperties, ResourceDesc,
         },
         views::{
             D3D12_DSV_DIMENSION_TEXTURE1D, D3D12_DSV_DIMENSION_TEXTURE1DARRAY,
@@ -458,6 +458,23 @@ pub unsafe fn create(
         return hr;
     }
 
+    // Opt-in: a depth-only, single-sample target whose contents are not shader-visible and
+    // cannot be copied can live entirely in tile memory. The fallback below keeps a rejected
+    // allocation working on a device without memoryless depth.
+    let memoryless = placed.is_none()
+        && super::memoryless_enabled()
+        && desc.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && (desc.flags
+            & (D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
+                | super::D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))
+            == (D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
+                | super::D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
+        && desc.sample_desc.count <= 1;
+    if memoryless {
+        texture_info.options = WMT_RESOURCE_STORAGE_MODE_MEMORYLESS;
+        texture_info.flags &= !WMT_TEXTURE_FLAG_LOSSLESS;
+    }
+
     let mut norm_desc = super::clone_desc(desc);
     if norm_desc.mip_levels == 0 {
         norm_desc.mip_levels = u16::try_from(texture_info.mipmap_level_count()).unwrap_or(1);
@@ -511,7 +528,9 @@ pub unsafe fn create(
     let texture = if let Some(mtl_dev) = mtl {
         let tex = Arc::new(Texture::new(texture_info, mtl_dev));
         let mut flags = TextureAllocationFlags::empty();
-        if is_private_heap(heap_props, super::private_heap_enabled()) {
+        if memoryless {
+            flags |= TextureAllocationFlags::MEMORYLESS;
+        } else if is_private_heap(heap_props, super::private_heap_enabled()) {
             flags |= TextureAllocationFlags::CPU_INVISIBLE;
         }
         if let Some((heap_ptr, offset)) = placed
@@ -528,7 +547,14 @@ pub unsafe fn create(
             unsafe { com::add_ref_private_com(heap_ptr) };
             placed_heap = heap_ptr;
         } else {
-            let _ = tex.rename(tex.allocate(flags));
+            let mut allocation = tex.allocate(flags);
+            if memoryless && allocation.texture() == 0 {
+                // Metal on this GPU declined the storage mode; use the ordinary private
+                // allocation rather than losing the target.
+                flags.remove(TextureAllocationFlags::MEMORYLESS);
+                allocation = tex.allocate(flags);
+            }
+            let _ = tex.rename(allocation);
             // SAFETY: `device` is non-null when `mtl` is `Some`.
             let dev_ref = unsafe { &*device };
             crate::device::residency::register_texture(dev_ref, &tex);

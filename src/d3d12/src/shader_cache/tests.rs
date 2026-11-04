@@ -20,9 +20,9 @@ use winemetal_sys::{
 };
 
 use super::{
-    CachedShader, CompileEnv, FunctionKind, Sha1Digest, compile_function_with_env,
-    decode_reflection, encode_reflection, function_key_from_digests, hash_compile_args,
-    reflection_key, sha1,
+    CachedShader, CompileEnv, FunctionKind, Sha1Digest, ShaderFunctionCache,
+    compile_function_with_env, decode_reflection, encode_reflection, function_key_from_digests,
+    hash_compile_args, reflection_key, sha1,
 };
 
 static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -425,6 +425,7 @@ fn probe_bypasses_the_cache() {
     let probed_fn = unsafe {
         compile_function_with_env(
             &device,
+            None,
             FunctionKind::Shader,
             &mut shader,
             None,
@@ -450,6 +451,7 @@ fn probe_bypasses_the_cache() {
     let cached_fn = unsafe {
         compile_function_with_env(
             &device,
+            None,
             FunctionKind::Shader,
             &mut shader,
             None,
@@ -468,4 +470,16 @@ fn probe_bypasses_the_cache() {
     assert_eq!(WRITER_SET_CALLS.load(Ordering::Relaxed), 0);
     assert_eq!(SM50_COMPILE_CALLS.load(Ordering::Relaxed), 1);
     assert_eq!(NEW_LIBRARY_CALLS.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn function_cache_retains_a_live_function() {
+    let cache = ShaderFunctionCache::new();
+    let key = [0x5a; 40];
+    assert!(cache.get(&key).is_none());
+    // SAFETY: fake retained object handle; the test fakes `NSObject_retain`/`_release`.
+    let function = unsafe { Obj::adopt(0x9100) }.expect("non-null");
+    cache.insert(key, &function);
+    let cached = cache.get(&key).expect("cached");
+    assert_eq!(cached.handle(), 0x9100);
 }

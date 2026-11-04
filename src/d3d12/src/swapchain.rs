@@ -363,6 +363,8 @@ pub struct SwapChain {
     modeset_in_progress: AtomicBool,
     library: Option<Library>,
     state: Mutex<State>,
+    /// Present calls are serialised even while the queue lock is released for their waits.
+    present_serial: Mutex<()>,
 }
 
 // SAFETY: `SwapChain` synchronises mutable state with `Mutex`/`AtomicBool`, and its raw pointers
@@ -1321,6 +1323,10 @@ unsafe fn present1(
     let _ = size_of::<PresentParameters>();
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
+    let _present = sc
+        .present_serial
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     let (mut hr, init_refresh_rate, backbuffer) = {
         let mut state = sc.lock_state();
         let hr = if state.desc.width == 0 || state.desc.height == 0 {
@@ -1880,6 +1886,7 @@ pub unsafe fn create(
         modeset_in_progress: AtomicBool::new(false),
         library,
         state: Mutex::new(state),
+        present_serial: Mutex::new(()),
     }));
 
     // SAFETY: `raw_sc` is a live `SwapChain` allocated above.

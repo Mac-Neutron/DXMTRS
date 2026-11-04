@@ -1070,6 +1070,9 @@ pub unsafe fn set_compute_root_signature(this: *mut c_void, root_signature: *mut
         list.root_args_compute = staging;
     }
     list.gpu_compute_root_args_offset = None;
+    // See the graphics setter: the cache is keyed by the signature's address.
+    list.static_sampler_cache = [(ptr::null(), 0); 4];
+    list.static_sampler_cache_next = 0;
     list.dirty_state
         .insert(DirtyFlags::COMPUTE_ROOT_ARGS | DirtyFlags::COMPUTE_STATIC_SAMPLERS);
 }
@@ -1103,6 +1106,10 @@ pub unsafe fn set_graphics_root_signature(this: *mut c_void, root_signature: *mu
         list.root_args_graphics = staging;
     }
     list.gpu_graphics_root_args_offset = None;
+    // The cache is keyed by the root signature's address; an address can be reused after the
+    // signature is released, so a new signature must not find an old signature's samplers.
+    list.static_sampler_cache = [(ptr::null(), 0); 4];
+    list.static_sampler_cache_next = 0;
     list.dirty_state
         .insert(DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS);
 }
@@ -1280,6 +1287,29 @@ pub unsafe fn set_compute_root32_bit_constants(
         return;
     };
     let src_u32 = src_data.cast::<u32>();
+    let count = usize::try_from(num32_bit_values_to_set).unwrap_or(0);
+    let start = qword
+        .saturating_mul(2)
+        .saturating_add(dest_offset_in32_bit_values as usize);
+    if count > 0
+        && start
+            .checked_add(count)
+            .is_some_and(|end| end <= list.root_args_compute.len() * 2)
+    {
+        // SAFETY: `src_u32` is valid for `count` u32 values (the caller's array).
+        let src = unsafe { core::slice::from_raw_parts(src_u32, count) };
+        let base = list.root_args_compute.as_mut_ptr().cast::<u32>();
+        // SAFETY: the bounds check above keeps `start..start + count` inside the qword array.
+        let dst_ptr = unsafe { base.add(start) };
+        // SAFETY: `dst_ptr` points at `count` consecutive u32 values in `root_args_compute`.
+        let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, count) };
+        if dst != src {
+            dst.copy_from_slice(src);
+            list.gpu_compute_root_args_offset = None;
+            list.dirty_state.insert(DirtyFlags::COMPUTE_ROOT_ARGS);
+        }
+        return;
+    }
     let mut changed = false;
     for i in 0..num32_bit_values_to_set {
         // SAFETY: `i < num32_bit_values_to_set`, so `src_u32.add(i as usize)` is in-bounds.
@@ -1323,6 +1353,29 @@ pub unsafe fn set_graphics_root32_bit_constants(
         return;
     };
     let src_u32 = src_data.cast::<u32>();
+    let count = usize::try_from(num32_bit_values_to_set).unwrap_or(0);
+    let start = qword
+        .saturating_mul(2)
+        .saturating_add(dest_offset_in32_bit_values as usize);
+    if count > 0
+        && start
+            .checked_add(count)
+            .is_some_and(|end| end <= list.root_args_graphics.len() * 2)
+    {
+        // SAFETY: `src_u32` is valid for `count` u32 values (the caller's array).
+        let src = unsafe { core::slice::from_raw_parts(src_u32, count) };
+        let base = list.root_args_graphics.as_mut_ptr().cast::<u32>();
+        // SAFETY: the bounds check above keeps `start..start + count` inside the qword array.
+        let dst_ptr = unsafe { base.add(start) };
+        // SAFETY: `dst_ptr` points at `count` consecutive u32 values in `root_args_graphics`.
+        let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, count) };
+        if dst != src {
+            dst.copy_from_slice(src);
+            list.gpu_graphics_root_args_offset = None;
+            list.dirty_state.insert(DirtyFlags::ROOT_ARGS);
+        }
+        return;
+    }
     let mut changed = false;
     for i in 0..num32_bit_values_to_set {
         // SAFETY: `i < num32_bit_values_to_set`, so `src_u32.add(i as usize)` is in-bounds.

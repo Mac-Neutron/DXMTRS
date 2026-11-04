@@ -147,6 +147,7 @@ pub struct List {
     pub dirty_state: DirtyFlags,
     pub retained_objects: Vec<RetainedObject>,
     pub barrier_scratch: Vec<*const c_void>,
+    pub legacy_barriers: Vec<crate::abi::barrier::ResourceBarrier>,
     pub inside_render_pass: bool,
 }
 
@@ -256,6 +257,7 @@ impl List {
             dirty_state: DirtyFlags::empty(),
             retained_objects: Vec::new(),
             barrier_scratch: Vec::with_capacity(16),
+            legacy_barriers: Vec::new(),
             inside_render_pass: false,
         })
     }

@@ -811,6 +811,8 @@ pub struct SwapChain {
     modeset_in_progress: AtomicBool,
     private_data: PrivateData,
     state: Mutex<SwapChainState>,
+    /// Present calls are serialised even while the device lock is released for their waits.
+    present_serial: Mutex<()>,
 }
 
 impl SwapChain {
@@ -1360,6 +1362,10 @@ impl SwapChain {
         present_flags: u32,
         _present_parameters: *const DxgiPresentParameters,
     ) -> Hresult {
+        let _present = self
+            .present_serial
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let window_minimized = wsi_is_minimized(self.hwnd);
         let is_fg = wsi_is_foreground(self.hwnd);
         let (width, height, swap_effect, handle_alt_tab, windowed) = {
@@ -1387,6 +1393,86 @@ impl SwapChain {
             let _ = self.set_fullscreen_state_impl(0, ptr::null_mut());
         }
 
+        let paces = guest_paces();
+        let occluded = hr == DXGI_STATUS_OCCLUDED;
+        let mut sync_state = None;
+        let mut present = None;
+        if !occluded {
+            let (
+                frame_id,
+                latency,
+                vsync_duration,
+                gamma_output,
+                backbuffer,
+                upscaled_backbuffer,
+                enable_metalfx,
+                scaler,
+            ) = {
+                let mut st = self.lock_state();
+                st.presentation_count = st.presentation_count.wrapping_add(1);
+                let vsync = compute_vsync_duration(
+                    sync_interval,
+                    st.preferred_max_frame_rate,
+                    st.init_refresh_rate,
+                );
+                (
+                    u64::from(st.presentation_count),
+                    st.frame_latency,
+                    vsync,
+                    st.gamma_output,
+                    st.backbuffer,
+                    st.upscaled_backbuffer,
+                    st.enable_metalfx,
+                    st.metalfx_scaler.clone(),
+                )
+            };
+
+            if !gamma_output.is_null()
+                && let Some(presenter) = &self.presenter
+            {
+                // SAFETY: `gamma_output` is a live `IMTLDXGIOutput` COM pointer.
+                let g_vtbl = unsafe { crate::com::vtbl::<IMTLDXGIOutputVtbl>(gamma_output) };
+                // SAFETY: `gamma_output` is valid.
+                let ramp_ptr = unsafe { (g_vtbl.get_gamma_ramp)(gamma_output) }.cast::<GammaRamp>();
+                if !ramp_ptr.is_null() {
+                    // SAFETY: `ramp_ptr` points to a valid `GammaRamp` owned by the output.
+                    presenter.change_gamma_ramp(Some(unsafe { &*ramp_ptr }));
+                }
+            }
+
+            // Both waits can block for a whole frame. Do them before taking the device
+            // lock so a waiter parks instead of keeping every other immediate-context
+            // thread out of the device.
+            sync_state = Some(sync_frame(
+                self.frame_latency_fence.as_ref(),
+                frame_id,
+                latency,
+                paces,
+            ));
+
+            if let Some(dev) = Device::from_iface(self.device)
+                && dev.core().device().handle() > 0x1000
+                && let Some(presenter) = self.presenter.clone()
+                && let Some(bb_tex) = resource::common(backbuffer).and_then(|c| c.texture.clone())
+            {
+                let (pres_frame_id, metadata) = presenter.synchronize();
+                let up_tex = if enable_metalfx {
+                    resource::common(upscaled_backbuffer).and_then(|c| c.texture.clone())
+                } else {
+                    None
+                };
+                present = Some((
+                    presenter,
+                    pres_frame_id,
+                    metadata,
+                    bb_tex,
+                    up_tex,
+                    scaler,
+                    vsync_duration,
+                ));
+            }
+        }
+
         if let Some(dev) = Device::from_iface(self.device) {
             dev.mutex.lock();
         }
@@ -1396,7 +1482,7 @@ impl SwapChain {
                 unsafe { crate::com::vtbl::<IMTLD3D11DeviceContextVtbl>(self.device_context) };
             // SAFETY: `self.device_context` is valid.
             unsafe { (ctx_vtbl.prepare_flush)(self.device_context) };
-            if hr == DXGI_STATUS_OCCLUDED {
+            if occluded {
                 // SAFETY: `self.device_context` is valid.
                 unsafe { (ctx_vtbl.commit)(self.device_context) };
                 if let Some(dev) = Device::from_iface(self.device) {
@@ -1404,63 +1490,15 @@ impl SwapChain {
                 }
                 return hr;
             }
-        } else if hr == DXGI_STATUS_OCCLUDED {
+        } else if occluded {
             if let Some(dev) = Device::from_iface(self.device) {
                 dev.mutex.unlock();
             }
             return hr;
         }
 
-        let paces = guest_paces();
-        let (
-            frame_id,
-            latency,
-            vsync_duration,
-            gamma_output,
-            backbuffer,
-            upscaled_backbuffer,
-            enable_metalfx,
-            scaler,
-        ) = {
-            let mut st = self.lock_state();
-            st.presentation_count = st.presentation_count.wrapping_add(1);
-            let vsync = compute_vsync_duration(
-                sync_interval,
-                st.preferred_max_frame_rate,
-                st.init_refresh_rate,
-            );
-            (
-                u64::from(st.presentation_count),
-                st.frame_latency,
-                vsync,
-                st.gamma_output,
-                st.backbuffer,
-                st.upscaled_backbuffer,
-                st.enable_metalfx,
-                st.metalfx_scaler.clone(),
-            )
-        };
-
-        if !gamma_output.is_null()
-            && let Some(presenter) = &self.presenter
-        {
-            // SAFETY: `gamma_output` is a live `IMTLDXGIOutput` COM pointer.
-            let g_vtbl = unsafe { crate::com::vtbl::<IMTLDXGIOutputVtbl>(gamma_output) };
-            // SAFETY: `gamma_output` is valid.
-            let ramp_ptr = unsafe { (g_vtbl.get_gamma_ramp)(gamma_output) }.cast::<GammaRamp>();
-            if !ramp_ptr.is_null() {
-                // SAFETY: `ramp_ptr` points to a valid `GammaRamp` owned by the output.
-                presenter.change_gamma_ramp(Some(unsafe { &*ramp_ptr }));
-            }
-        }
-
-        let sync_state = sync_frame(self.frame_latency_fence.as_ref(), frame_id, latency, paces);
-
-        if let Some(dev) = Device::from_iface(self.device)
-            && dev.core().device().handle() > 0x1000
-            && let Some(presenter) = self.presenter.clone()
-            && let Some(bb_common) = resource::common(backbuffer)
-            && let Some(bb_tex) = bb_common.texture.clone()
+        if let Some((presenter, pres_frame_id, metadata, bb_tex, up_tex, scaler, vsync_duration)) =
+            present
         {
             // SAFETY: `self.device` is a live `Device` while locked by `dev.mutex`.
             let dev_mut = unsafe { &mut *self.device.cast::<Device>() };
@@ -1470,13 +1508,11 @@ impl SwapChain {
                 .queue_mut()
                 .chunk()
                 .signal_frame_latency(frame_seq);
-            let (pres_frame_id, metadata) = presenter.synchronize();
-            dev_mut.core_mut().queue_mut().chunk().retain(sync_state);
-            let up_tex = if enable_metalfx {
-                resource::common(upscaled_backbuffer).and_then(|c| c.texture.clone())
-            } else {
-                None
-            };
+            dev_mut
+                .core_mut()
+                .queue_mut()
+                .chunk()
+                .retain(sync_state.take().unwrap_or_else(SyncFrameState::none));
             let sem_addr = self.present_semaphore.expose_provenance();
             dev_mut.core_mut().queue_mut().chunk().emit(move |enc| {
                 if let (Some(up), Some(sc)) = (&up_tex, &scaler) {
@@ -1703,6 +1739,7 @@ fn create_impl(
         frame_latency_fence,
         modeset_in_progress: AtomicBool::new(false),
         private_data: PrivateData::default(),
+        present_serial: Mutex::new(()),
         state: Mutex::new(SwapChainState {
             desc: d,
             fullscreen_desc: fs_desc,

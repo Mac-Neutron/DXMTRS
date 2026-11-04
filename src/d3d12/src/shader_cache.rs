@@ -393,6 +393,66 @@ fn bounds_env() -> &'static str {
     &BOUNDS
 }
 
+/// Per-device cache of compiled Metal functions.
+///
+/// A PSO names functions by shader digest, entry point and compile arguments, not by PSO. Games
+/// create many PSOs from the same handful of shaders; the disk cache still has to build a Metal
+/// library and function object for each use unless those objects are shared here.
+#[derive(Default)]
+pub struct ShaderFunctionCache {
+    functions: Mutex<FxHashMap<[u8; 40], Obj>>,
+}
+
+impl ShaderFunctionCache {
+    /// An empty cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the cached function for `key`, with a reference of its own.
+    #[must_use]
+    pub fn get(&self, key: &[u8; 40]) -> Option<Obj> {
+        let handle = {
+            let functions = self
+                .functions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            functions.get(key)?.handle()
+        };
+        // SAFETY: the handle belongs to a live cached object; the returned `Obj` owns its reference.
+        unsafe { Obj::retain(handle) }
+    }
+
+    /// Drops every cached function, before the Metal device they belong to.
+    pub fn clear(&self) {
+        self.functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Caches `function` under `key`, keeping a reference of its own.
+    pub fn insert(&self, key: [u8; 40], function: &Obj) {
+        // SAFETY: `function` is live; the cache owns the reference it takes.
+        let Some(cached) = (unsafe { Obj::retain(function.handle()) }) else {
+            return;
+        };
+        self.functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, cached);
+    }
+}
+
+/// The entry point a shader function is compiled under.
+pub struct CompileTarget<'a> {
+    /// Metal entry-point name.
+    pub name: &'a str,
+    /// Shader stage, for error messages.
+    pub stage: &'a str,
+}
+
 /// Environment overrides for [`compile_function_with_env`].
 pub struct CompileEnv<'a> {
     pub name: &'a str,
@@ -413,6 +473,7 @@ pub struct CompileEnv<'a> {
 /// `args` must be null or a valid `SM50_SHADER_COMPILATION_ARGUMENT_DATA` linked list.
 pub unsafe fn compile_function_with_env(
     device: &Obj,
+    cache: Option<&ShaderFunctionCache>,
     kind: FunctionKind,
     first: &mut CachedShader,
     second: Option<&mut CachedShader>,
@@ -437,9 +498,14 @@ pub unsafe fn compile_function_with_env(
     };
 
     if let Some(ref key) = key {
-        let cache = store();
-        let enabled = cache.has_reader();
-        if let Some(data) = cache.read(key) {
+        if let Some(function) = cache.and_then(|cache| cache.get(key)) {
+            FUNCTION_HITS.fetch_add(1, Ordering::Relaxed);
+            count_function_lookup();
+            return Ok(function);
+        }
+        let disk = store();
+        let enabled = disk.has_reader();
+        if let Some(data) = disk.read(key) {
             static REJECTED_ONCE: Once = Once::new();
             // SAFETY: `device` and `data` are valid handles.
             let raw_lib =
@@ -455,6 +521,9 @@ pub unsafe fn compile_function_with_env(
             if let Some(func) = func {
                 FUNCTION_HITS.fetch_add(1, Ordering::Relaxed);
                 count_function_lookup();
+                if let Some(cache) = cache {
+                    cache.insert(*key, &func);
+                }
                 return Ok(func);
             }
             REJECTED_ONCE.call_once(|| {
@@ -539,9 +608,12 @@ pub unsafe fn compile_function_with_env(
     let func = unsafe { Obj::adopt(raw_func) }.ok_or(E_FAIL)?;
 
     if let Some(ref key) = key {
-        let cache = store();
-        if cache.has_writer() {
-            cache.write(key, &data);
+        let disk = store();
+        if disk.has_writer() {
+            disk.write(key, &data);
+        }
+        if let Some(cache) = cache {
+            cache.insert(*key, &func);
         }
     }
 
@@ -562,24 +634,25 @@ pub unsafe fn compile_function_with_env(
 /// `args` must be null or a valid `SM50_SHADER_COMPILATION_ARGUMENT_DATA` linked list.
 pub unsafe fn compile_function(
     device: &Obj,
+    cache: &ShaderFunctionCache,
     kind: FunctionKind,
     first: &mut CachedShader,
     second: Option<&mut CachedShader>,
     args: *mut Sm50ShaderCompilationArgumentData,
-    name: &str,
-    stage: &str,
+    target: &CompileTarget<'_>,
 ) -> Result<Obj, Hresult> {
     // SAFETY: caller guarantees `args` is null or a valid compilation argument chain.
     unsafe {
         compile_function_with_env(
             device,
+            Some(cache),
             kind,
             first,
             second,
             args,
             &CompileEnv {
-                name,
-                stage,
+                name: target.name,
+                stage: target.stage,
                 probe: probe_on(),
                 bounds: bounds_env(),
             },

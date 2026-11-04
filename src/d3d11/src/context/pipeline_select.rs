@@ -226,8 +226,8 @@ impl<M: Mode> Context<M> {
             return None;
         }
 
-        let (num_cp_elem, threads_per_patch) = match compiled.kind {
-            GraphicsPipelineKind::Tessellation(ref spec) => {
+        let (num_cp_elem, threads_per_patch) = match &*compiled.kind {
+            GraphicsPipelineKind::Tessellation(spec) => {
                 (spec.num_output_element, spec.threads_per_patch)
             }
             _ => (0, 0),

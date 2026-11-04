@@ -220,7 +220,10 @@ pub unsafe fn barrier(this: *mut c_void, num_barrier_groups: u32, barrier_groups
     if this.is_null() || num_barrier_groups == 0 || barrier_groups.is_null() {
         return;
     }
-    let mut legacy = Vec::new();
+    // SAFETY: `this` is a live `List` pointer.
+    let list = unsafe { &mut *this.cast::<List>() };
+    let mut legacy = core::mem::take(&mut list.legacy_barriers);
+    legacy.clear();
     // SAFETY: `barrier_groups` points to `num_barrier_groups` `BarrierGroup` entries whose nested
     // barrier arrays are valid for the duration of the call.
     unsafe {
@@ -234,6 +237,8 @@ pub unsafe fn barrier(this: *mut c_void, num_barrier_groups: u32, barrier_groups
         // SAFETY: `this` is valid and `b` is a valid `ResourceBarrier`.
         unsafe { resource_barrier(this, 1, (&raw const *b).cast()) };
     }
+    // Keep the allocation for the next enhanced barrier on this list.
+    list.legacy_barriers = legacy;
 }
 
 #[cfg(test)]

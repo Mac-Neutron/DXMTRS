@@ -6,7 +6,7 @@ use core::{
     mem::zeroed,
     ptr,
 };
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use dxmt_util::{com::ComObject, private_data::PrivateData};
 use rustc_hash::FxHasher;
@@ -41,7 +41,7 @@ use crate::{
         root_blob, shader_blob,
     },
     root_signature::object::cast_root_signature,
-    shader_cache::{CachedShader, FunctionKind, Sha1Digest, compile_function},
+    shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -181,8 +181,10 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
             if pp_blob.is_null() {
                 return E_POINTER;
             }
+            // SAFETY: `_this` is a live `Compute` PSO.
+            let pso = unsafe { &*_this.cast::<Compute>() };
             // SAFETY: `pp_blob` is non-null.
-            unsafe { create_blob(Vec::new(), pp_blob) }
+            unsafe { create_blob(super::cached_pso_blob(pso.desc_hash), pp_blob) }
         }
     ),
 };
@@ -291,12 +293,15 @@ unsafe fn initialize_compute(
     let cs_func = unsafe {
         compile_function(
             metal,
+            &dev.shader_functions,
             FunctionKind::Shader,
             cs_mut,
             None,
             (&raw mut common).cast(),
-            "cs_main",
-            "cs",
+            &CompileTarget {
+                name: "cs_main",
+                stage: "cs",
+            },
         )
     }?;
     let digest_cs = *cs_mut.digest();
@@ -336,6 +341,13 @@ unsafe fn initialize_compute(
 ///
 /// `d3d12_pipeline_compute.cpp:140`).
 ///
+/// A Metal compute pipeline shared by PSOs with the same descriptor.
+pub struct CachedComputePso {
+    pub pso: Obj,
+    pub threadgroup_size: WMTSize,
+    pub digest: Sha1Digest,
+}
+
 /// # Safety
 ///
 /// `this`, `desc`, `riid`, and `pso` are caller-supplied COM pointers.
@@ -356,13 +368,47 @@ pub unsafe fn create_compute_pipeline_state(
     let dev = unsafe { &*device_ptr };
     // SAFETY: `desc` is non-null and points to a `ComputePipelineStateDesc`.
     let d = unsafe { &*desc.cast::<ComputePipelineStateDesc>() };
-    // SAFETY: `dev` and `d` are valid.
-    let (mtl_pso, threadgroup_size, digest_cs) = match unsafe { initialize_compute(dev, d) } {
-        Ok(res) => res,
-        Err(hr) => return hr,
-    };
+    let desc_hash = super::cached_desc_hash(
+        d.cached_pso.cached_blob,
+        d.cached_pso.cached_blob_size_in_bytes,
+    )
     // SAFETY: `desc` is valid.
-    let desc_hash = unsafe { hash_compute_desc(desc) };
+    .unwrap_or_else(|| unsafe { hash_compute_desc(desc) });
+    let cached = {
+        let cache = dev
+            .compute_psos
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cache.get(&desc_hash).map(|cached| {
+            // SAFETY: the cached `Obj` holds a live Metal pipeline.
+            let pso = unsafe { Obj::retain(cached.pso.handle()) };
+            (pso, cached.threadgroup_size, cached.digest)
+        })
+    };
+    let (mtl_pso, threadgroup_size, digest_cs) = if let Some((Some(pso), tg, digest)) = cached {
+        (pso, tg, digest)
+    } else {
+        // SAFETY: `dev` and `d` are valid.
+        let (pso, tg, digest) = match unsafe { initialize_compute(dev, d) } {
+            Ok(res) => res,
+            Err(hr) => return hr,
+        };
+        // SAFETY: `pso` is live; the cache takes a reference of its own.
+        if let Some(cached_pso) = unsafe { Obj::retain(pso.handle()) } {
+            dev.compute_psos
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(
+                    desc_hash,
+                    CachedComputePso {
+                        pso: cached_pso,
+                        threadgroup_size: tg,
+                        digest,
+                    },
+                );
+        }
+        (pso, tg, digest)
+    };
     if recording_on() {
         // SAFETY: `d.root_signature` is null or a valid `ID3D12RootSignature`.
         let root_rec = unsafe { root_blob(d.root_signature) };

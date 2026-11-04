@@ -29,6 +29,7 @@ dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
 rustc-hash = { workspace = true }
 winemetal-sys = { workspace = true }
+xxhash-rust = { workspace = true }
 winemetal-wire = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

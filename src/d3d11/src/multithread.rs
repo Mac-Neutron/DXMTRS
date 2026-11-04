@@ -3,8 +3,9 @@
 use core::{
     ffi::c_void,
     ptr,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
 };
+use std::sync::{Condvar, Mutex, PoisonError};
 
 use crate::{abi::vtbl::ID3D11MultithreadVtbl, com::TearOff};
 
@@ -23,22 +24,35 @@ fn current_thread_id() -> usize {
 /// Recursive device lock controlled by `ID3D11Multithread` (`d3d11_multithread.hpp`).
 ///
 /// When `protected` is `false`, `lock` and `unlock` are no-ops. When `protected`
-/// is `true`, `lock` acquires a recursive lock owned by the calling thread.
-#[derive(Default)]
+/// is `true`, the lock is recursive and owned by the calling thread; a waiter
+/// parks on its condition variable instead of spinning, so a long Present wait
+/// does not burn the CPU of every other immediate-context thread.
 pub struct DeviceMutex {
     protected: AtomicBool,
-    owner: AtomicUsize,
-    depth: AtomicU32,
+    state: Mutex<LockState>,
+    released: Condvar,
+}
+
+#[derive(Default)]
+struct LockState {
+    owner: usize,
+    depth: u32,
+}
+
+impl Default for DeviceMutex {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeviceMutex {
     /// Creates an unprotected `DeviceMutex`.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             protected: AtomicBool::new(false),
-            owner: AtomicUsize::new(0),
-            depth: AtomicU32::new(0),
+            state: Mutex::new(LockState::default()),
+            released: Condvar::new(),
         }
     }
 
@@ -48,24 +62,24 @@ impl DeviceMutex {
             return;
         }
         let me = current_thread_id();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if !self.protected.load(Ordering::Acquire) {
                 return;
             }
-            match self
-                .owner
-                .compare_exchange_weak(0, me, Ordering::Acquire, Ordering::Relaxed)
-            {
-                Ok(_) => {
-                    self.depth.store(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(cur) if cur == me => {
-                    self.depth.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(_) => core::hint::spin_loop(),
+            if state.owner == me {
+                state.depth = state.depth.saturating_add(1);
+                return;
             }
+            if state.owner == 0 {
+                state.owner = me;
+                state.depth = 1;
+                return;
+            }
+            state = self
+                .released
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 
@@ -75,13 +89,18 @@ impl DeviceMutex {
             return;
         }
         let me = current_thread_id();
-        if self.owner.load(Ordering::Relaxed) != me {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.owner != me {
             return;
         }
-        let prev = self.depth.fetch_sub(1, Ordering::Relaxed);
-        if prev <= 1 {
-            self.owner.store(0, Ordering::Release);
+        if state.depth > 1 {
+            state.depth -= 1;
+            return;
         }
+        state.owner = 0;
+        state.depth = 0;
+        drop(state);
+        self.released.notify_one();
     }
 
     /// Acquires the lock and returns an RAII guard that unlocks on drop.
@@ -95,8 +114,11 @@ impl DeviceMutex {
     pub fn set_protected(&self, protected: bool) -> bool {
         let prev = self.protected.swap(protected, Ordering::AcqRel);
         if prev && !protected {
-            self.depth.store(0, Ordering::Release);
-            self.owner.store(0, Ordering::Release);
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.owner = 0;
+            state.depth = 0;
+            drop(state);
+            self.released.notify_all();
         }
         prev
     }

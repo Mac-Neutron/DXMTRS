@@ -5,7 +5,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicU64, Ordering},
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use dxmt_core::format::{depth_stencil_planar_flags, is_unorm8_rt};
 use rustc_hash::FxHashMap;
@@ -24,7 +24,7 @@ use crate::{
     com::Hresult,
     device::Device,
     input_layout::{InputLayout, StreamOutputLayout},
-    scheduler::CompileJob,
+    scheduler::{CompileJob, CompileScheduler},
     shader::{
         ManagedShader,
         args::{EMPTY_SHA1, IaLayoutChainInput, SoLayoutChainInput},
@@ -153,7 +153,7 @@ pub struct GraphicsKey {
     pub ds_sha1: [u8; 20],
     pub gs_sha1: [u8; 20],
     pub ps_sha1: [u8; 20],
-    pub blend_state_addr: usize,
+    pub blend_state_hash: u64,
     pub input_layout_sha1: [u8; 20],
     pub so_layout_sha1: [u8; 20],
     pub num_color_attachments: u32,
@@ -197,7 +197,35 @@ impl GraphicsKey {
             ds_sha1: shader_sha1(&desc.domain_shader),
             gs_sha1: shader_sha1(&desc.geometry_shader),
             ps_sha1: shader_sha1(&desc.pixel_shader),
-            blend_state_addr: desc.blend_state.map_or(0, |p| p as usize),
+            blend_state_hash: desc.blend_state.map_or(0, |p| {
+                if p.is_null() {
+                    return 0;
+                }
+                // SAFETY: `GraphicsDesc::blend_state` is a live `BlendState` pointer while this
+                // descriptor is being turned into a key. Hashing the description, rather than the
+                // address, keeps the key valid if an allocator reuses the object's address and
+                // lets two equivalent states share a pipeline.
+                let blend = unsafe { &*p.cast::<BlendState>() };
+                // Copy field by field into zeroed storage: hashing the original record would
+                // include its padding bytes, which the application's structure need not define.
+                // SAFETY: `D3d11BlendDesc1` is a POD record of integers for which all zero bits
+                // are a valid value.
+                let mut desc =
+                    unsafe { core::mem::zeroed::<crate::abi::records::D3d11BlendDesc1>() };
+                desc.alpha_to_coverage_enable = blend.desc.alpha_to_coverage_enable;
+                desc.independent_blend_enable = blend.desc.independent_blend_enable;
+                for (dst, src) in desc.render_target.iter_mut().zip(&blend.desc.render_target) {
+                    *dst = *src;
+                }
+                // SAFETY: `desc` is a plain record of exactly this many bytes, fully initialized.
+                let bytes = unsafe {
+                    core::slice::from_raw_parts(
+                        (&raw const desc).cast::<u8>(),
+                        core::mem::size_of::<crate::abi::records::D3d11BlendDesc1>(),
+                    )
+                };
+                xxhash_rust::xxh3::xxh3_64(bytes)
+            }),
             input_layout_sha1,
             so_layout_sha1,
             num_color_attachments: desc.num_color_attachments,
@@ -226,9 +254,9 @@ pub enum GraphicsPipelineKind {
 /// Compiled graphics pipeline state (`MTLCompiledGraphicsPipeline`).
 pub struct CompiledGraphics {
     handle: AtomicU64,
-    _pso_obj: Option<Obj>,
-    job: Option<CompileJob>,
-    pub kind: GraphicsPipelineKind,
+    pso: Mutex<Option<Obj>>,
+    job: Mutex<Option<CompileJob>>,
+    pub kind: Arc<GraphicsPipelineKind>,
 }
 
 impl Default for CompiledGraphics {
@@ -236,9 +264,11 @@ impl Default for CompiledGraphics {
         let desc = GraphicsDesc::default();
         Self {
             handle: AtomicU64::new(0),
-            _pso_obj: None,
-            job: None,
-            kind: GraphicsPipelineKind::Standard(Box::new(build_graphics_pipeline(&desc))),
+            pso: Mutex::new(None),
+            job: Mutex::new(None),
+            kind: Arc::new(GraphicsPipelineKind::Standard(Box::new(
+                build_graphics_pipeline(&desc),
+            ))),
         }
     }
 }
@@ -251,7 +281,12 @@ impl CompiledGraphics {
         if h != 0 {
             return Some(h);
         }
-        if let Some(ref job) = self.job {
+        let job = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(job) = job {
             job.wait();
         }
         let h2 = self.handle.load(Ordering::Acquire);
@@ -262,21 +297,21 @@ impl CompiledGraphics {
 /// Compiled compute pipeline state (`MTLCompiledComputePipeline`).
 pub struct CompiledCompute {
     handle: AtomicU64,
-    _pso_obj: Option<Obj>,
-    job: Option<CompileJob>,
-    pub spec: ComputePipelineSpec,
+    pso: Mutex<Option<Obj>>,
+    job: Mutex<Option<CompileJob>>,
+    pub spec: Arc<ComputePipelineSpec>,
 }
 
 impl Default for CompiledCompute {
     fn default() -> Self {
         Self {
             handle: AtomicU64::new(0),
-            _pso_obj: None,
-            job: None,
-            spec: ComputePipelineSpec {
+            pso: Mutex::new(None),
+            job: Mutex::new(None),
+            spec: Arc::new(ComputePipelineSpec {
                 variant: crate::shader::args::ShaderVariant::Default,
                 threadgroup_size: [1, 1, 1],
-            },
+            }),
         }
     }
 }
@@ -289,7 +324,12 @@ impl CompiledCompute {
         if h != 0 {
             return Some(h);
         }
-        if let Some(ref job) = self.job {
+        let job = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(job) = job {
             job.wait();
         }
         let h2 = self.handle.load(Ordering::Acquire);
@@ -303,6 +343,7 @@ pub struct PipelineCache {
     shaders: Mutex<FxHashMap<[u8; 20], Arc<ManagedShader>>>,
     graphics_psos: Mutex<FxHashMap<GraphicsKey, Arc<CompiledGraphics>>>,
     compute_psos: Mutex<FxHashMap<[u8; 20], Arc<CompiledCompute>>>,
+    scheduler: OnceLock<CompileScheduler>,
 }
 
 // SAFETY: `PipelineCache` synchronizes all internal maps via `Mutex`.
@@ -325,6 +366,7 @@ impl PipelineCache {
             shaders: Mutex::new(FxHashMap::default()),
             graphics_psos: Mutex::new(FxHashMap::default()),
             compute_psos: Mutex::new(FxHashMap::default()),
+            scheduler: OnceLock::new(),
         }
     }
 
@@ -348,6 +390,18 @@ impl PipelineCache {
     /// Returns `E_INVALIDARG` or `E_FAIL` if `ManagedShader::from_bytecode` fails.
     pub fn get_or_create_shader(&self, bytes: &[u8]) -> Result<Arc<ManagedShader>, Hresult> {
         let sha1 = dxmt_util::sha1::Sha1::compute(bytes).0;
+        {
+            let map = self
+                .shaders
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = map.get(&sha1) {
+                return Ok(Arc::clone(existing));
+            }
+        }
+        // Parse outside the map lock: two creators may race, but the second one is
+        // discarded by the insert below and no unrelated shader waits behind the parse.
+        let created = ManagedShader::from_bytecode_with_sha1(bytes, sha1)?;
         let mut map = self
             .shaders
             .lock()
@@ -355,7 +409,6 @@ impl PipelineCache {
         if let Some(existing) = map.get(&sha1) {
             return Ok(Arc::clone(existing));
         }
-        let created = ManagedShader::from_bytecode(bytes)?;
         map.insert(sha1, Arc::clone(&created));
         drop(map);
         Ok(created)
@@ -365,12 +418,14 @@ impl PipelineCache {
     #[must_use]
     pub fn graphics(&self, desc: &GraphicsDesc) -> Arc<CompiledGraphics> {
         let key = GraphicsKey::from_desc(desc);
-        let mut map = self
-            .graphics_psos
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = map.get(&key) {
-            return Arc::clone(existing);
+        {
+            let map = self
+                .graphics_psos
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = map.get(&key) {
+                return Arc::clone(existing);
+            }
         }
 
         let live_dev =
@@ -394,29 +449,137 @@ impl PipelineCache {
         } else {
             GraphicsPipelineKind::Standard(Box::new(build_graphics_pipeline(desc)))
         };
+        let kind = Arc::new(kind);
 
-        let (handle_val, pso_obj) = live_dev.map_or_else(
-            || (next_pso_handle(), None),
-            |dev| {
-                let obj = compile_graphics_pso(dev, desc, &kind);
-                let h = obj.as_ref().map_or(0, Obj::handle);
-                (h, obj)
-            },
-        );
+        let compiled = if live_dev.is_some() {
+            let data = GraphicsCompileData::from_desc(desc);
+            let compiled = Arc::new(CompiledGraphics {
+                handle: AtomicU64::new(0),
+                pso: Mutex::new(None),
+                job: Mutex::new(None),
+                kind: Arc::clone(&kind),
+            });
+            let job = {
+                let weak = Arc::downgrade(&compiled);
+                let device_ptr = self.device as usize;
+                let kind = Arc::clone(&kind);
+                CompileJob::from_fn(move || {
+                    let Some(compiled) = weak.upgrade() else {
+                        return;
+                    };
+                    // SAFETY: the pipeline cache's owner waits for schedulers to become idle
+                    // before the device (and this raw pointer) is dropped.
+                    let Some(dev) = Device::from_iface(device_ptr as *mut c_void) else {
+                        return;
+                    };
+                    let pso = data.compile(dev, &kind);
+                    let handle = pso.as_ref().map_or(0, Obj::handle);
+                    *compiled
+                        .pso
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = pso;
+                    compiled.handle.store(handle, Ordering::Release);
+                })
+            };
+            *compiled
+                .job
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+            compiled
+        } else {
+            Arc::new(CompiledGraphics {
+                handle: AtomicU64::new(next_pso_handle()),
+                pso: Mutex::new(None),
+                job: Mutex::new(None),
+                kind,
+            })
+        };
 
-        let compiled = Arc::new(CompiledGraphics {
-            handle: AtomicU64::new(handle_val),
-            _pso_obj: pso_obj,
-            job: None,
-            kind,
-        });
+        // The entry is visible only after its job is installed, so a cache hit never observes a
+        // placeholder that `ready` cannot wait on.
+        let mut map = self
+            .graphics_psos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = map.get(&key) {
+            return Arc::clone(existing);
+        }
+        let job = compiled
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         map.insert(key, Arc::clone(&compiled));
+        drop(map);
+        if let Some(job) = job {
+            self.scheduler().submit(job);
+        }
         compiled
+    }
+
+    fn scheduler(&self) -> &CompileScheduler {
+        self.scheduler.get_or_init(CompileScheduler::default)
     }
 
     /// Looks up or enqueues a compute pipeline for `shader` (`GetComputePipeline`).
     #[must_use]
-    pub fn compute(&self, shader: &ManagedShader) -> Arc<CompiledCompute> {
+    pub fn compute(&self, shader: &Arc<ManagedShader>) -> Arc<CompiledCompute> {
+        {
+            let map = self
+                .compute_psos
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = map.get(&shader.sha1) {
+                return Arc::clone(existing);
+            }
+        }
+        let spec = Arc::new(build_compute_pipeline(shader));
+
+        let live_dev =
+            Device::from_iface(self.device).filter(|dev| dev.core().device().handle() > 0x1000);
+        let compiled = if live_dev.is_some() {
+            let compiled = Arc::new(CompiledCompute {
+                handle: AtomicU64::new(0),
+                pso: Mutex::new(None),
+                job: Mutex::new(None),
+                spec: Arc::clone(&spec),
+            });
+            let job = {
+                let weak = Arc::downgrade(&compiled);
+                let device_ptr = self.device as usize;
+                let shader = Arc::clone(shader);
+                let spec = Arc::clone(&spec);
+                CompileJob::from_fn(move || {
+                    let Some(compiled) = weak.upgrade() else {
+                        return;
+                    };
+                    // SAFETY: as in `graphics`: device teardown waits for scheduler idle.
+                    let Some(dev) = Device::from_iface(device_ptr as *mut c_void) else {
+                        return;
+                    };
+                    let pso = compile_compute_pso(dev, &shader, &spec);
+                    let handle = pso.as_ref().map_or(0, Obj::handle);
+                    *compiled
+                        .pso
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = pso;
+                    compiled.handle.store(handle, Ordering::Release);
+                })
+            };
+            *compiled
+                .job
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+            compiled
+        } else {
+            Arc::new(CompiledCompute {
+                handle: AtomicU64::new(next_pso_handle()),
+                pso: Mutex::new(None),
+                job: Mutex::new(None),
+                spec,
+            })
+        };
+
         let mut map = self
             .compute_psos
             .lock()
@@ -424,27 +587,120 @@ impl PipelineCache {
         if let Some(existing) = map.get(&shader.sha1) {
             return Arc::clone(existing);
         }
-        let spec = build_compute_pipeline(shader);
-
-        let live_dev =
-            Device::from_iface(self.device).filter(|dev| dev.core().device().handle() > 0x1000);
-        let (handle_val, pso_obj) = live_dev.map_or_else(
-            || (next_pso_handle(), None),
-            |dev| {
-                let obj = compile_compute_pso(dev, shader, &spec);
-                let h = obj.as_ref().map_or(0, Obj::handle);
-                (h, obj)
-            },
-        );
-
-        let compiled = Arc::new(CompiledCompute {
-            handle: AtomicU64::new(handle_val),
-            _pso_obj: pso_obj,
-            job: None,
-            spec,
-        });
+        let job = compiled
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         map.insert(shader.sha1, Arc::clone(&compiled));
+        drop(map);
+        if let Some(job) = job {
+            self.scheduler().submit(job);
+        }
         compiled
+    }
+
+    /// Releases every cached Metal object before the device's Metal device goes away.
+    pub fn clear(&self) {
+        self.graphics_psos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.compute_psos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.shaders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+/// A copy of the parts of [`GraphicsDesc`] a background compile may touch.
+///
+/// The descriptor itself carries application pointers for its input and stream-output layouts;
+/// a worker cannot use those after the caller returns, so it owns clones of the two small layout
+/// records and rebuilds a descriptor that points at them while it runs.
+struct GraphicsCompileData {
+    vertex_shader: Option<Arc<ManagedShader>>,
+    hull_shader: Option<Arc<ManagedShader>>,
+    domain_shader: Option<Arc<ManagedShader>>,
+    geometry_shader: Option<Arc<ManagedShader>>,
+    pixel_shader: Option<Arc<ManagedShader>>,
+    input_layout: Option<InputLayout>,
+    so_layout: Option<StreamOutputLayout>,
+    num_color_attachments: u32,
+    color_attachment_formats: [u32; 8],
+    depth_stencil_format: u32,
+    topology_class: u32,
+    rasterization_enabled: bool,
+    sample_count: u8,
+    gs_strip_topology: bool,
+    index_buffer_format: u32,
+    sample_mask: u32,
+    gs_passthrough: u32,
+}
+
+impl GraphicsCompileData {
+    fn from_desc(desc: &GraphicsDesc) -> Self {
+        // SAFETY: the caller keeps each layout alive for the duration of `graphics`; the clone is
+        // taken here, before the descriptor can be reused.
+        let input_layout = desc
+            .input_layout
+            .filter(|layout| !layout.is_null())
+            .map(|layout| unsafe { (*layout).clone() });
+        // SAFETY: as above.
+        let so_layout = desc
+            .so_layout
+            .filter(|layout| !layout.is_null())
+            .map(|layout| unsafe { (*layout).clone() });
+        Self {
+            vertex_shader: desc.vertex_shader.clone(),
+            hull_shader: desc.hull_shader.clone(),
+            domain_shader: desc.domain_shader.clone(),
+            geometry_shader: desc.geometry_shader.clone(),
+            pixel_shader: desc.pixel_shader.clone(),
+            input_layout,
+            so_layout,
+            num_color_attachments: desc.num_color_attachments,
+            color_attachment_formats: desc.color_attachment_formats,
+            depth_stencil_format: desc.depth_stencil_format,
+            topology_class: desc.topology_class,
+            rasterization_enabled: desc.rasterization_enabled,
+            sample_count: desc.sample_count,
+            gs_strip_topology: desc.gs_strip_topology,
+            index_buffer_format: desc.index_buffer_format,
+            sample_mask: desc.sample_mask,
+            gs_passthrough: desc.gs_passthrough,
+        }
+    }
+
+    fn desc(&self) -> GraphicsDesc {
+        GraphicsDesc {
+            vertex_shader: self.vertex_shader.clone(),
+            hull_shader: self.hull_shader.clone(),
+            domain_shader: self.domain_shader.clone(),
+            geometry_shader: self.geometry_shader.clone(),
+            pixel_shader: self.pixel_shader.clone(),
+            blend_state: None,
+            input_layout: self.input_layout.as_ref().map(core::ptr::from_ref),
+            so_layout: self.so_layout.as_ref().map(core::ptr::from_ref),
+            num_color_attachments: self.num_color_attachments,
+            color_attachment_formats: self.color_attachment_formats,
+            depth_stencil_format: self.depth_stencil_format,
+            topology_class: self.topology_class,
+            rasterization_enabled: self.rasterization_enabled,
+            sample_count: self.sample_count,
+            gs_strip_topology: self.gs_strip_topology,
+            index_buffer_format: self.index_buffer_format,
+            sample_mask: self.sample_mask,
+            gs_passthrough: self.gs_passthrough,
+        }
+    }
+
+    fn compile(&self, dev: &Device, kind: &GraphicsPipelineKind) -> Option<Obj> {
+        compile_graphics_pso(dev, &self.desc(), kind)
     }
 }
 

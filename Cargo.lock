@@ -147,6 +147,7 @@ dependencies = [
  "snmalloc-rs",
  "winemetal-sys",
  "winemetal-wire",
+ "xxhash-rust",
 ]
 
 [[package]]

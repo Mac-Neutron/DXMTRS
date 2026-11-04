@@ -52,6 +52,10 @@ pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 /// Internal flag passed by `CreateD3D10Device` to select DirectX 10 behavior.
 pub const D3D11_CREATE_DEVICE_D3D10_INTERNAL: u32 = 0x8000_0000;
+/// `D3D11_CREATE_DEVICE_SINGLETHREADED`: the application promises not to use the device
+///
+/// from more than one thread, so `ID3D11Multithread` protection starts off.
+pub const D3D11_CREATE_DEVICE_SINGLETHREADED: u32 = 0x20;
 
 /// Default feature level sequence when `pFeatureLevels` is null or empty.
 pub const DEFAULT_FEATURE_LEVELS: [u32; 6] = [
@@ -257,6 +261,8 @@ impl Drop for Device {
         self.core.queue_mut().commit();
         self.core.queue().wait_cpu(seq);
         let _ = crate::scheduler::wait_idle(u32::MAX);
+        // Release cached Metal objects while the core's MTLDevice is still alive.
+        self.pipeline_cache.clear();
         if !self.immediate.is_null() {
             let imm = self.immediate;
             self.immediate = ptr::null_mut();
@@ -382,6 +388,10 @@ fn create_with_core(
     dev.swap_chain_factory.outer = dxgi_iface;
     let mutex_ptr = &raw const dev.mutex;
     dev.multithread.init(dxgi_iface, mutex_ptr);
+    // D3D11 devices are multithread protected unless the application opted out at
+    // creation. The D3D10 wrapper applies the same rule after it creates this device.
+    dev.mutex
+        .set_protected((flags & D3D11_CREATE_DEVICE_SINGLETHREADED) == 0);
 
     let d3d11_iface = ptr::from_mut(dev).cast::<c_void>();
     dev.pipeline_cache.set_device(d3d11_iface);

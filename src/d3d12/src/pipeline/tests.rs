@@ -458,3 +458,17 @@ fn input_signature_from_airconv_ir() {
     let missing_res = unsafe { extract_input_layout(&dxbc, &elements[..1]) };
     assert_eq!(missing_res.err(), Some(E_INVALIDARG));
 }
+
+#[test]
+fn cached_pso_blob_round_trips_its_hash() {
+    let hash = 0x0123_4567_89ab_cdef;
+    let blob = super::cached_pso_blob(hash);
+    let parsed = super::cached_desc_hash(blob.as_ptr().cast(), blob.len());
+    assert_eq!(parsed, Some(hash));
+    let mut damaged = blob;
+    damaged[0] ^= 0xff;
+    assert_eq!(
+        super::cached_desc_hash(damaged.as_ptr().cast(), damaged.len()),
+        None
+    );
+}

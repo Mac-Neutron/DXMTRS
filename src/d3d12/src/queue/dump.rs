@@ -1755,6 +1755,14 @@ static PASS_DUMPS: LazyLock<Mutex<PassDumps>> = LazyLock::new(|| Mutex::new(Pass
 static CAPTURE_SCHEDULE: LazyLock<Mutex<CaptureSchedule>> =
     LazyLock::new(|| Mutex::new(CaptureSchedule::from_env()));
 
+fn capture_enabled() -> bool {
+    static ENABLED: LazyLock<bool> = LazyLock::new(|| {
+        std::env::var_os("MTL_CAPTURE_ENABLED").is_some()
+            || std::env::var_os("DXMT_CAPTURE_FRAME").is_some()
+    });
+    *ENABLED
+}
+
 /// Allocates the next process-wide queue index (`Dumps().queues++`,
 ///
 /// `d3d12_command_queue.cpp:826`).
@@ -1811,10 +1819,12 @@ pub fn on_present(mtl_device: &Obj) {
         }
     }
 
-    let (action, presented_frames) = {
+    let (action, presented_frames) = if capture_enabled() {
         let mut sched = lock(&CAPTURE_SCHEDULE);
         let action = sched.step_present(key_down(VK_F10));
         (action, sched.presented_frames())
+    } else {
+        (NextAction::Nothing, 0)
     };
     match action {
         NextAction::StartCapture => {

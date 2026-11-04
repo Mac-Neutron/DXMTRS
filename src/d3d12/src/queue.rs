@@ -97,6 +97,12 @@ unsafe extern "system" {
 /// Default and maximum number of in-flight command buffer slots (`kCommandQueueSlots = 64`).
 pub const COMMAND_QUEUE_SLOTS: u32 = 64;
 
+/// How many `ExecuteCommandLists` calls may share one Metal command buffer before it is committed.
+///
+/// Queue operations that a CPU thread can observe (`Signal`, `Wait`, `Present`) commit on their
+/// own; this only joins back-to-back executes, where Metal has no ordering boundary to preserve.
+const EXECUTE_BATCH_LIMIT: u32 = 8;
+
 const IID_ID3D10_DEVICE: Guid = Guid::new(
     0x9b7e_4c0f,
     0x342c,
@@ -519,6 +525,7 @@ pub struct QueueCommitState {
     pub open_seq: u64,
     pub execute_calls: u64,
     pub custom_resolves: bool,
+    pending_executes: u32,
 }
 
 impl QueueCommitState {
@@ -533,6 +540,7 @@ impl QueueCommitState {
             open_seq: 1,
             execute_calls: 0,
             custom_resolves: false,
+            pending_executes: 0,
         }
     }
 }
@@ -711,6 +719,7 @@ impl Queue {
         }
         crate::scope!("queue.(commit)");
         crate::count!("#command buffers committed", 1);
+        commit.pending_executes = 0;
         if !self.device.is_null() {
             // SAFETY: `self.device` is a live `Device` pointer for the lifetime of `Queue`.
             crate::device::residency::flush(unsafe { &*self.device });
@@ -744,6 +753,9 @@ impl Queue {
     /// `d3d12_command_queue.cpp:1604`).
     pub fn execute(&self, lists: &[&List]) {
         crate::scope!("queue.ExecuteCommandLists");
+        if lists.is_empty() {
+            return;
+        }
         let _pool = Pool::new();
         let mtl_device = self.mtl_device_handle();
         let mut commit_guard = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1753,7 +1765,10 @@ impl Queue {
         }
         commit.timestamps.pending_join = false;
         commit.timestamps.taken = false;
-        self.commit_open_cmdbuf(commit_guard, inflight);
+        commit.pending_executes = commit.pending_executes.saturating_add(1);
+        if commit.pending_executes >= EXECUTE_BATCH_LIMIT {
+            self.commit_open_cmdbuf(commit_guard, inflight);
+        }
     }
 
     /// Encodes a GPU signal on `fence` to `value` (`Signal`, `d3d12_command_queue.cpp:2039`).
@@ -1823,7 +1838,9 @@ impl Queue {
         }
         self.pool.owe(&mut inflight);
         inflight.waits.push((generation.shared, value));
-        drop(inflight);
+        // A CPU thread can wait on the fence this precedes; make the wait visible now rather
+        // than leaving it in a command buffer that only a later Execute would commit.
+        self.commit_open_cmdbuf(commit, inflight);
         S_OK
     }
 
@@ -1854,6 +1871,15 @@ impl Queue {
         refresh: f64,
     ) -> Hresult {
         let mut handed = false;
+        let fg_on = framegen::mode() != framegen::Mode::Off;
+        // These can wait for the display or rebuild presenter pipelines. Do them before the
+        // queue lock so a drawable wait does not block every Execute/Signal on this queue.
+        let (frame_id, metadata) = presenter.synchronize();
+        let mut pre_acquired = if fg_on && after <= 0.0 {
+            None
+        } else {
+            presenter.acquire_drawable()
+        };
         {
             let _pool = Pool::new();
             let mtl_device = self.mtl_device_handle();
@@ -1866,8 +1892,6 @@ impl Queue {
                 .texture()
                 .and_then(|t| t.current().map(|a| a.view(t.full_view()).texture))
                 .unwrap_or(0);
-            let (frame_id, metadata) = presenter.synchronize();
-            let fg_on = framegen::mode() != framegen::Mode::Off;
             if fg_on && after <= 0.0 {
                 // SAFETY: `view_handle` is 0 or a live `MTLTexture` handle owned by `backbuffer`.
                 let frame_obj = unsafe { Obj::retain(view_handle) };
@@ -1922,9 +1946,17 @@ impl Queue {
                         );
                     }
                 };
+                let drawable = pre_acquired.take().or_else(|| presenter.acquire_drawable());
                 // SAFETY: `cmdbuf_handle` and `view_handle` are live Metal handles.
                 let drawable = unsafe {
-                    presenter.encode(cmdbuf_handle, view_handle, &metadata, wait_fn, update_fn)
+                    presenter.encode_with_drawable(
+                        drawable,
+                        cmdbuf_handle,
+                        view_handle,
+                        &metadata,
+                        wait_fn,
+                        update_fn,
+                    )
                 };
                 let drawable_handle = drawable.as_ref().map_or(0, Obj::handle);
                 if after > 0.0 {

@@ -1,7 +1,7 @@
 //! Textures, their allocations and their views.
 
 use core::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use winemetal_sys::{
     MTLBuffer_newTexture, MTLDevice_newBuffer, MTLDevice_newSharedTexture, MTLDevice_newTexture,
@@ -54,6 +54,8 @@ bitflags::bitflags! {
         const SHADER_READONLY = 1 << 6;
         /// On a Metal heap.
         const ALLOCATED_ON_HEAP = 1 << 7;
+        /// Metal memoryless storage: the tile's contents cannot leave the pass.
+        const MEMORYLESS = 1 << 8;
     }
 }
 
@@ -64,7 +66,7 @@ pub struct Texture {
     bytes_per_image: u32,
     bytes_per_row: u32,
     device: Obj,
-    current: Mutex<Option<Arc<TextureAllocation>>>,
+    current: RwLock<Option<Arc<TextureAllocation>>>,
 }
 
 impl Texture {
@@ -76,7 +78,7 @@ impl Texture {
             bytes_per_image: 0,
             bytes_per_row: 0,
             device: another_ref(device),
-            current: Mutex::new(None),
+            current: RwLock::new(None),
         }
     }
 
@@ -142,12 +144,18 @@ impl Texture {
     /// The allocation [`Self::rename`] last made current.
     #[must_use]
     pub fn current(&self) -> Option<Arc<TextureAllocation>> {
-        lock(&self.current).clone()
+        self.current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Makes `allocation` current and returns the one it replaces.
     pub fn rename(&self, allocation: Arc<TextureAllocation>) -> Option<Arc<TextureAllocation>> {
-        lock(&self.current).replace(allocation)
+        self.current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(allocation)
     }
 
     /// A new allocation; a linear texture's in a buffer of its own.
@@ -619,9 +627,18 @@ fn put(value: u32, (shift, width): (u32, u32)) -> u64 {
 }
 
 const fn options(flags: TextureAllocationFlags) -> u64 {
-    storage_options(
-        flags.contains(TextureAllocationFlags::CPU_WRITE_COMBINED),
-        flags.contains(TextureAllocationFlags::CPU_INVISIBLE),
-        flags.contains(TextureAllocationFlags::GPU_MANAGED),
-    )
+    let mut storage = 0u8;
+    if flags.contains(TextureAllocationFlags::CPU_WRITE_COMBINED) {
+        storage |= super::STORAGE_CPU_WRITE_COMBINED;
+    }
+    if flags.contains(TextureAllocationFlags::CPU_INVISIBLE) {
+        storage |= super::STORAGE_PRIVATE;
+    }
+    if flags.contains(TextureAllocationFlags::GPU_MANAGED) {
+        storage |= super::STORAGE_MANAGED;
+    }
+    if flags.contains(TextureAllocationFlags::MEMORYLESS) {
+        storage |= super::STORAGE_MEMORYLESS;
+    }
+    storage_options(storage)
 }

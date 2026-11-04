@@ -24,7 +24,7 @@ use winemetal_sys::{
     wire::{
         MemPtr, WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED,
         WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_MANAGED,
-        WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        WMT_RESOURCE_STORAGE_MODE_MEMORYLESS, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
     },
 };
 
@@ -128,15 +128,22 @@ struct CachedView<K> {
 }
 
 /// `WMTResourceOptions` for an allocation's flags, whose storage bits buffers and textures share.
-const fn storage_options(cpu_write_combined: bool, private: bool, managed: bool) -> u64 {
+const STORAGE_CPU_WRITE_COMBINED: u8 = 1;
+const STORAGE_PRIVATE: u8 = 1 << 1;
+const STORAGE_MANAGED: u8 = 1 << 2;
+const STORAGE_MEMORYLESS: u8 = 1 << 3;
+
+const fn storage_options(flags: u8) -> u64 {
     let mut options = WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED;
-    if cpu_write_combined {
+    if flags & STORAGE_CPU_WRITE_COMBINED != 0 {
         options |= WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED;
     }
-    if private {
+    if flags & STORAGE_MEMORYLESS != 0 {
+        options |= WMT_RESOURCE_STORAGE_MODE_MEMORYLESS;
+    } else if flags & STORAGE_PRIVATE != 0 {
         options |= WMT_RESOURCE_STORAGE_MODE_PRIVATE;
     }
-    if managed {
+    if flags & STORAGE_MANAGED != 0 {
         options |= WMT_RESOURCE_STORAGE_MODE_MANAGED;
     }
     options

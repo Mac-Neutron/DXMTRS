@@ -2,7 +2,7 @@
 
 use core::{ffi::c_void, ptr};
 use std::{
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 
@@ -134,6 +134,20 @@ unsafe extern "system" {
 
 impl Drop for Device {
     fn drop(&mut self) {
+        // Release every Metal object held by a cache while the MTLDevice that owns it is alive.
+        self.shader_functions.clear();
+        self.graphics_psos
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.compute_psos
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.depth_stencil_states
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         if !self.adapter.is_null() {
             // SAFETY: `self.adapter` holds one reference acquired during device creation.
             unsafe { com::release(self.adapter) };
@@ -295,6 +309,9 @@ pub unsafe fn create(
         fence_helper: Some(fence_helper),
         default_depth_stencil_state,
         depth_stencil_states: Mutex::new(FxHashMap::default()),
+        shader_functions: crate::shader_cache::ShaderFunctionCache::new(),
+        graphics_psos: Mutex::new(FxHashMap::default()),
+        compute_psos: Mutex::new(FxHashMap::default()),
         events: Some(EventListener::new()),
         upscalers: Mutex::new(Vec::new()),
         timestamp_frequency: OnceLock::new(),

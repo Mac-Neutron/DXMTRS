@@ -4,7 +4,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicU32, Ordering},
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use winemetal_sys::{
     MTLBuffer_newTexture, MTLBuffer_updateContents, MTLDevice_newBuffer, MTLDevice_supportsFamily,
@@ -59,7 +59,7 @@ bitflags::bitflags! {
 pub struct Buffer {
     length: u64,
     device: Obj,
-    current: Mutex<Option<Arc<BufferAllocation>>>,
+    current: RwLock<Option<Arc<BufferAllocation>>>,
 }
 
 impl Buffer {
@@ -69,7 +69,7 @@ impl Buffer {
         Self {
             length,
             device: another_ref(device),
-            current: Mutex::new(None),
+            current: RwLock::new(None),
         }
     }
 
@@ -81,12 +81,18 @@ impl Buffer {
     /// The allocation [`Self::rename`] last made current.
     #[must_use]
     pub fn current(&self) -> Option<Arc<BufferAllocation>> {
-        lock(&self.current).clone()
+        self.current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Makes `allocation` current and returns the one it replaces.
     pub fn rename(&self, allocation: Arc<BufferAllocation>) -> Option<Arc<BufferAllocation>> {
-        lock(&self.current).replace(allocation)
+        self.current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(allocation)
     }
 
     /// A new allocation of the buffer's length in its own memory.
@@ -521,9 +527,15 @@ pub fn over_info(length: u64, flags: BufferAllocationFlags, external: &External)
 }
 
 const fn options(flags: BufferAllocationFlags) -> u64 {
-    storage_options(
-        flags.contains(BufferAllocationFlags::CPU_WRITE_COMBINED),
-        flags.contains(BufferAllocationFlags::CPU_INVISIBLE),
-        flags.contains(BufferAllocationFlags::GPU_MANAGED),
-    )
+    let mut storage = 0u8;
+    if flags.contains(BufferAllocationFlags::CPU_WRITE_COMBINED) {
+        storage |= super::STORAGE_CPU_WRITE_COMBINED;
+    }
+    if flags.contains(BufferAllocationFlags::CPU_INVISIBLE) {
+        storage |= super::STORAGE_PRIVATE;
+    }
+    if flags.contains(BufferAllocationFlags::GPU_MANAGED) {
+        storage |= super::STORAGE_MANAGED;
+    }
+    storage_options(storage)
 }

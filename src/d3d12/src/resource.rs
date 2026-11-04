@@ -245,6 +245,14 @@ pub const fn clone_box(b: &D3d12Box) -> D3d12Box {
     }
 }
 
+/// Whether an opt-in experiment uses memoryless storage for transient depth targets.
+#[must_use]
+pub fn memoryless_enabled() -> bool {
+    static MEMORYLESS: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("DXMT_D3D12_MEMORYLESS").as_deref() == Ok("1"));
+    *MEMORYLESS
+}
+
 /// Whether `DXMT_D3D12_PRIVATE` is enabled (defaults to `true` unless set to `"0"`).
 #[must_use]
 pub fn private_heap_enabled() -> bool {

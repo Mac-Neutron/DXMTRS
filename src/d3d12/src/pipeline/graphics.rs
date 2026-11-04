@@ -82,7 +82,7 @@ use crate::{
         root_blob, shader_blob,
     },
     root_signature::object::cast_root_signature,
-    shader_cache::{CachedShader, FunctionKind, Sha1Digest, compile_function},
+    shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -190,7 +190,14 @@ impl Graphics {
         };
         // SAFETY: `state` holds valid shader/layout buffers for the duration of the compile.
         if let Ok(pso) = unsafe {
-            compile_geometry_variant(metal, self.slot_mask, &mut state, strip, index_format)
+            compile_geometry_variant(
+                metal,
+                &dev.shader_functions,
+                self.slot_mask,
+                &mut state,
+                strip,
+                index_format,
+            )
         } {
             let handle = pso.handle();
             variants[idx] = Some(pso);
@@ -343,8 +350,10 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
             if pp_blob.is_null() {
                 return E_POINTER;
             }
+            // SAFETY: `_this` is a live `Graphics` PSO.
+            let pso = unsafe { &*_this.cast::<Graphics>() };
             // SAFETY: `pp_blob` is non-null.
-            unsafe { create_blob(Vec::new(), pp_blob) }
+            unsafe { create_blob(super::cached_pso_blob(pso.desc_hash), pp_blob) }
         }
     ),
 };
@@ -971,6 +980,7 @@ fn initialize_dsso(
 
 unsafe fn compile_pixel_shader(
     metal: &Obj,
+    cache: &crate::shader_cache::ShaderFunctionCache,
     desc: &GraphicsPipelineStateDesc,
     shader_ps: &mut CachedShader,
     colors: &[WMTColorAttachmentBlendInfo; 8],
@@ -1016,18 +1026,22 @@ unsafe fn compile_pixel_shader(
     unsafe {
         compile_function(
             metal,
+            cache,
             FunctionKind::Shader,
             shader_ps,
             None,
             (&raw mut rootsig).cast(),
-            &ps_name,
-            "ps",
+            &CompileTarget {
+                name: &ps_name,
+                stage: "ps",
+            },
         )
     }
 }
 
 unsafe fn compile_geometry_variant(
     metal: &Obj,
+    cache: &crate::shader_cache::ShaderFunctionCache,
     slot_mask: u32,
     state: &mut GeometryState,
     strip: bool,
@@ -1075,24 +1089,30 @@ unsafe fn compile_geometry_variant(
     let object_function = unsafe {
         compile_function(
             metal,
+            cache,
             FunctionKind::GeometryVertex,
             vs_mut,
             Some(gs_mut),
             (&raw mut object_args).cast(),
-            "vsgs_main",
-            "vs (geometry pipeline)",
+            &CompileTarget {
+                name: "vsgs_main",
+                stage: "vs (geometry pipeline)",
+            },
         )
     }?;
     // SAFETY: `mesh_args` is a valid null-terminated `SM50_SHADER_COMPILATION_ARGUMENT_DATA` chain.
     let mesh_function = unsafe {
         compile_function(
             metal,
+            cache,
             FunctionKind::GeometryMesh,
             vs_mut,
             Some(gs_mut),
             (&raw mut mesh_args).cast(),
-            "gs_main",
-            "gs",
+            &CompileTarget {
+                name: "gs_main",
+                stage: "gs",
+            },
         )
     }?;
 
@@ -1190,6 +1210,15 @@ fn reflect_optional_ps(
     Ok((Some(pixel_shader), pixel_refl))
 }
 
+/// A Metal graphics pipeline shared by PSOs with the same descriptor.
+pub struct CachedGraphicsPso {
+    pub pso: Obj,
+    pub slot_mask: u32,
+    pub writes_uav: bool,
+    pub vertex_digest: Sha1Digest,
+    pub pixel_digest: Sha1Digest,
+}
+
 struct CompiledPipeline {
     slot_mask: u32,
     writes_uav: bool,
@@ -1281,7 +1310,16 @@ unsafe fn build_geometry_pso(
     let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
         let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
         // SAFETY: `metal`, `d`, `ps_mut`, and `geo_info.colors` are valid.
-        let f = unsafe { compile_pixel_shader(metal, d, ps_mut, &geo_info.colors, dual_source) }?;
+        let f = unsafe {
+            compile_pixel_shader(
+                metal,
+                &dev.shader_functions,
+                d,
+                ps_mut,
+                &geo_info.colors,
+                dual_source,
+            )
+        }?;
         pixel_digest = *ps_mut.digest();
         Some(f)
     } else {
@@ -1308,6 +1346,7 @@ unsafe fn build_geometry_pso(
     let default_variant = unsafe {
         compile_geometry_variant(
             metal,
+            &dev.shader_functions,
             slot_mask,
             &mut state,
             false,
@@ -1392,12 +1431,15 @@ unsafe fn build_vertex_pso(
     let vs_func = unsafe {
         compile_function(
             metal,
+            &dev.shader_functions,
             FunctionKind::Shader,
             vs_mut,
             None,
             (&raw mut rootsig).cast(),
-            "vs_main",
-            "vs",
+            &CompileTarget {
+                name: "vs_main",
+                stage: "vs",
+            },
         )
     }?;
     let vertex_digest = *vs_mut.digest();
@@ -1433,7 +1475,16 @@ unsafe fn build_vertex_pso(
     let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
         let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
         // SAFETY: `metal`, `d`, `ps_mut`, and `info.colors` are valid.
-        let f = unsafe { compile_pixel_shader(metal, d, ps_mut, &info.colors, dual_source) }?;
+        let f = unsafe {
+            compile_pixel_shader(
+                metal,
+                &dev.shader_functions,
+                d,
+                ps_mut,
+                &info.colors,
+                dual_source,
+            )
+        }?;
         pixel_digest = *ps_mut.digest();
         Some(f)
     } else {
@@ -1562,21 +1613,81 @@ pub unsafe fn create_graphics_pipeline_state(
             }
         };
 
-    let compiled = if d.gs.shader_bytecode.is_null() {
-        // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
-        unsafe { build_vertex_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
+    let desc_hash = super::cached_desc_hash(
+        d.cached_pso.cached_blob,
+        d.cached_pso.cached_blob_size_in_bytes,
+    )
+    // SAFETY: `desc` is valid.
+    .unwrap_or_else(|| unsafe { hash_graphics_desc(desc) });
+    let standard = d.gs.shader_bytecode.is_null()
+        && d.hs.shader_bytecode.is_null()
+        && d.ds.shader_bytecode.is_null();
+    let cached = if standard {
+        let cache = dev
+            .graphics_psos
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cache.get(&desc_hash).map(|cached| {
+            // SAFETY: the cached `Obj` holds a live Metal pipeline.
+            let pso = unsafe { Obj::retain(cached.pso.handle()) };
+            (
+                pso,
+                cached.slot_mask,
+                cached.writes_uav,
+                cached.vertex_digest,
+                cached.pixel_digest,
+            )
+        })
     } else {
-        // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
-        unsafe { build_geometry_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
+        None
     };
-    let compiled = match compiled {
-        Ok(c) => c,
-        Err(hr) => return hr,
+
+    let compiled = if let Some((pso, slot_mask, writes_uav, vertex_digest, pixel_digest)) = cached {
+        CompiledPipeline {
+            slot_mask,
+            writes_uav,
+            geometry: false,
+            mtl_pso: pso,
+            geometry_variants: [const { None }; 6],
+            geometry_state: None,
+            vertex_digest,
+            pixel_digest,
+            geometry_digest: [0; 20],
+        }
+    } else {
+        let compiled = if standard {
+            // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
+            unsafe { build_vertex_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
+        } else {
+            // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
+            unsafe { build_geometry_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
+        };
+        let compiled = match compiled {
+            Ok(c) => c,
+            Err(hr) => return hr,
+        };
+        if standard && let Some(pso) = compiled.mtl_pso.as_ref() {
+            // SAFETY: `pso` is live; the cache takes a reference of its own.
+            if let Some(cached_pso) = unsafe { Obj::retain(pso.handle()) } {
+                dev.graphics_psos
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        desc_hash,
+                        CachedGraphicsPso {
+                            pso: cached_pso,
+                            slot_mask: compiled.slot_mask,
+                            writes_uav: compiled.writes_uav,
+                            vertex_digest: compiled.vertex_digest,
+                            pixel_digest: compiled.pixel_digest,
+                        },
+                    );
+            }
+        }
+        compiled
     };
 
     let depth_stencil_states = initialize_dsso(dev, metal, d);
-    // SAFETY: `desc` is valid.
-    let desc_hash = unsafe { hash_graphics_desc(desc) };
     if recording_on() {
         // SAFETY: `d.root_signature` is null or a valid `ID3D12RootSignature`.
         let root_rec = unsafe { root_blob(d.root_signature) };

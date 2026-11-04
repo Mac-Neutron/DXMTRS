@@ -177,15 +177,15 @@
   WMTQueryDisplaySettingForLayer layer -> version=0 cs=sRGB hdr={r=0,0 g=0,0 b=0,0 w=0,0 maxmaster=0 minmaster=0 maxcll=0 maxfall=0} edr=1/1
   NSAutoreleasePool_alloc_init -> pool#1
   MTLLibrary_newFunction library "vs_present_quad" -> function#1
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
-  MTLDevice_newRenderPipelineState device c0={fmt=0x50 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
-  MTLDevice_newRenderPipelineState device c0={fmt=0x50 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
+  MTLDevice_newRenderPipelineState device c0={fmt=0x51 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
+  MTLDevice_newRenderPipelineState device c0={fmt=0x51 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
   NSObject_release function#3
   NSObject_release function#2
   NSObject_release function#1
   NSObject_release pool#1
-  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x50}
+  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x51}
   MetalLayer_setColorSpace layer sRGB
   -> frame_id=1 metadata={edr_scale=1 max_content_luminance=10000 max_display_luminance=100} bits=3f800000,461c4000,42c80000
 > encode bb=1920x1080
@@ -219,15 +219,15 @@
   WMTQueryDisplaySettingForLayer layer -> version=0 cs=sRGB hdr={r=0,0 g=0,0 b=0,0 w=0,0 maxmaster=0 minmaster=0 maxcll=0 maxfall=0} edr=1/1
   NSAutoreleasePool_alloc_init -> pool#1
   MTLLibrary_newFunction library "vs_present_quad" -> function#1
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
-  MTLDevice_newRenderPipelineState device c0={fmt=0x46 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
-  MTLDevice_newRenderPipelineState device c0={fmt=0x46 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
+  MTLDevice_newRenderPipelineState device c0={fmt=0x47 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
+  MTLDevice_newRenderPipelineState device c0={fmt=0x47 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
   NSObject_release function#3
   NSObject_release function#2
   NSObject_release function#1
   NSObject_release pool#1
-  MetalLayer_setProps layer {device=device contents_scale=2 drawable=800x600 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x46}
+  MetalLayer_setProps layer {device=device contents_scale=2 drawable=800x600 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x47}
   MetalLayer_setColorSpace layer sRGB
   -> frame_id=1 metadata={edr_scale=1 max_content_luminance=10000 max_display_luminance=100} bits=3f800000,461c4000,42c80000
 > encode bb=800x600
@@ -261,15 +261,15 @@
   WMTQueryDisplaySettingForLayer layer -> version=0 cs=sRGB hdr={r=0,0 g=0,0 b=0,0 w=0,0 maxmaster=0 minmaster=0 maxcll=0 maxfall=0} edr=1/1
   NSAutoreleasePool_alloc_init -> pool#1
   MTLLibrary_newFunction library "vs_present_quad" -> function#1
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
-  MTLDevice_newRenderPipelineState device c0={fmt=0x2050 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
-  MTLDevice_newRenderPipelineState device c0={fmt=0x2050 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#2
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#3
+  MTLDevice_newRenderPipelineState device c0={fmt=0x2051 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#2 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#1
+  MTLDevice_newRenderPipelineState device c0={fmt=0x2051 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#1 fs=function#3 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#2
   NSObject_release function#3
   NSObject_release function#2
   NSObject_release function#1
   NSObject_release pool#1
-  MetalLayer_setProps layer {device=device contents_scale=2 drawable=640x480 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x2050}
+  MetalLayer_setProps layer {device=device contents_scale=2 drawable=640x480 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x2051}
   MetalLayer_setColorSpace layer sRGB
   -> frame_id=1 metadata={edr_scale=1 max_content_luminance=10000 max_display_luminance=100} bits=3f800000,461c4000,42c80000
 > encode bb=640x480
@@ -1283,17 +1283,17 @@
   WMTQueryDisplaySettingForLayer layer -> version=0 cs=sRGB hdr={r=0,0 g=0,0 b=0,0 w=0,0 maxmaster=0 minmaster=0 maxcll=0 maxfall=0} edr=1/1
   NSAutoreleasePool_alloc_init -> pool#2
   MTLLibrary_newFunction library "vs_present_quad" -> function#4
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#5
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#6
-  MTLDevice_newRenderPipelineState device c0={fmt=0x50 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#4 fs=function#5 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#3
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#5
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#6
+  MTLDevice_newRenderPipelineState device c0={fmt=0x51 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#4 fs=function#5 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#3
   NSObject_release pso#1
-  MTLDevice_newRenderPipelineState device c0={fmt=0x50 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#4 fs=function#6 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#4
+  MTLDevice_newRenderPipelineState device c0={fmt=0x51 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#4 fs=function#6 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#4
   NSObject_release pso#2
   NSObject_release function#6
   NSObject_release function#5
   NSObject_release function#4
   NSObject_release pool#2
-  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x50}
+  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x51}
   MetalLayer_setColorSpace layer sRGB
   -> frame_id=2 metadata={edr_scale=1 max_content_luminance=10000 max_display_luminance=100} bits=3f800000,461c4000,42c80000
 > encode bb=1920x1080
@@ -1317,17 +1317,17 @@
   WMTQueryDisplaySettingForLayer layer -> version=0 cs=sRGB hdr={r=0,0 g=0,0 b=0,0 w=0,0 maxmaster=0 minmaster=0 maxcll=0 maxfall=0} edr=1/1
   NSAutoreleasePool_alloc_init -> pool#3
   MTLLibrary_newFunction library "vs_present_quad" -> function#7
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#8
-  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=1] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#9
-  MTLDevice_newRenderPipelineState device c0={fmt=0x46 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#7 fs=function#8 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#5
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=1] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#8
+  MTLLibrary_newFunctionWithConstants library "fs_present_quad" n=6 [index=0x100 type=53 value=0] [index=0x101 type=53 value=0] [index=0x102 type=53 value=0] [index=0x103 type=53 value=0] [index=0x104 type=53 value=0] [index=0x105 type=53 value=0] -> function#9
+  MTLDevice_newRenderPipelineState device c0={fmt=0x47 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#7 fs=function#8 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#5
   NSObject_release pso#3
-  MTLDevice_newRenderPipelineState device c0={fmt=0x46 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#7 fs=function#9 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#6
+  MTLDevice_newRenderPipelineState device c0={fmt=0x47 rgb_op=0 alpha_op=0 src_rgb=1 dst_rgb=0 src_a=1 dst_a=0 mask=15 blend=0} alpha_to_coverage=0 logic=0/0 raster=1 samples=1 depth_fmt=0x0 stencil_fmt=0x0 vs=function#7 fs=function#9 immutable_vb=0 immutable_fb=0 topology=0 tess=0/16/0/0 archive=null lookup=0/0 fail_on_miss=0 icb=0 -> pso#6
   NSObject_release pso#4
   NSObject_release function#9
   NSObject_release function#8
   NSObject_release function#7
   NSObject_release pool#3
-  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x46}
+  MetalLayer_setProps layer {device=device contents_scale=2 drawable=1920x1080 opaque=1 display_sync=0 framebuffer_only=0 pixel_format=0x47}
   MetalLayer_setColorSpace layer sRGB
   -> frame_id=3 metadata={edr_scale=1 max_content_luminance=10000 max_display_luminance=100} bits=3f800000,461c4000,42c80000
 > encode bb=1920x1080

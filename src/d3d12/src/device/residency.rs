@@ -3,7 +3,7 @@
 use core::ffi::c_void;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use dxmt_core::resource::{Buffer, BufferAllocationFlags, Texture, TextureAllocationFlags};
@@ -20,8 +20,16 @@ use crate::{
 /// Device residency set and GPU virtual-address map (`d3d12_device.cpp:365-366`).
 pub struct Residency {
     pub set: Option<Obj>,
-    pub set_dirty: Mutex<bool>,
+    /// Additions and removals accumulated until the next command buffer commit.
+    pub pending: Mutex<PendingResidency>,
     pub va_map: RwLock<BTreeMap<u64, Vec<Arc<Buffer>>>>,
+}
+
+/// The allocations one commit will add and remove, in one lock.
+#[derive(Default)]
+pub struct PendingResidency {
+    add: Vec<u64>,
+    remove: Vec<u64>,
 }
 
 impl Residency {
@@ -30,7 +38,10 @@ impl Residency {
     pub const fn new() -> Self {
         Self {
             set: None,
-            set_dirty: Mutex::new(false),
+            pending: Mutex::new(PendingResidency {
+                add: Vec::new(),
+                remove: Vec::new(),
+            }),
             va_map: RwLock::new(BTreeMap::new()),
         }
     }
@@ -42,10 +53,6 @@ impl Default for Residency {
     }
 }
 
-fn lock_set(mutex: &Mutex<bool>) -> MutexGuard<'_, bool> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn read_va<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     rwlock.read().unwrap_or_else(PoisonError::into_inner)
 }
@@ -55,41 +62,63 @@ fn write_va<T>(rwlock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 }
 
 fn add_allocation(residency: &Residency, allocation: u64) {
-    if let Some(ref set) = residency.set
-        && allocation != 0
-    {
-        let mut dirty = lock_set(&residency.set_dirty);
-        let h = set.handle();
-        // SAFETY: `h` is a live `MTLResidencySet` handle and `allocation` is a live `MTLAllocation` handle.
-        unsafe { MTLResidencySet_addAllocations(h, &raw const allocation, 1) };
-        *dirty = true;
+    if residency.set.is_some() && allocation != 0 {
+        let mut pending = residency
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(at) = pending.remove.iter().position(|&a| a == allocation) {
+            pending.remove.swap_remove(at);
+        } else if !pending.add.contains(&allocation) {
+            pending.add.push(allocation);
+        }
     }
 }
 
 fn remove_allocation(residency: &Residency, allocation: u64) {
-    if let Some(ref set) = residency.set
-        && allocation != 0
-    {
-        let mut dirty = lock_set(&residency.set_dirty);
-        let h = set.handle();
-        // SAFETY: `h` is a live `MTLResidencySet` handle and `allocation` is a live `MTLAllocation` handle.
-        unsafe { MTLResidencySet_removeAllocations(h, &raw const allocation, 1) };
-        *dirty = true;
+    if residency.set.is_some() && allocation != 0 {
+        let mut pending = residency
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(at) = pending.add.iter().position(|&a| a == allocation) {
+            pending.add.swap_remove(at);
+        } else if !pending.remove.contains(&allocation) {
+            pending.remove.push(allocation);
+        }
     }
 }
 
 /// Commits any pending residency set additions or removals before command buffer execution.
 pub fn flush(device: &Device) {
-    if let Some(ref set) = device.residency.set {
-        let mut dirty = lock_set(&device.residency.set_dirty);
-        if *dirty {
-            *dirty = false;
-            drop(dirty);
-            let h = set.handle();
-            // SAFETY: `h` is a live `MTLResidencySet` handle.
-            unsafe { MTLResidencySet_commit(h) };
+    let Some(ref set) = device.residency.set else {
+        return;
+    };
+    let (add, remove) = {
+        let mut pending = device
+            .residency
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if pending.add.is_empty() && pending.remove.is_empty() {
+            return;
         }
+        (
+            core::mem::take(&mut pending.add),
+            core::mem::take(&mut pending.remove),
+        )
+    };
+    let h = set.handle();
+    if !remove.is_empty() {
+        // SAFETY: `h` is a live `MTLResidencySet` and `remove` is a live array of allocation handles.
+        unsafe { MTLResidencySet_removeAllocations(h, remove.as_ptr(), remove.len() as u64) };
     }
+    if !add.is_empty() {
+        // SAFETY: `h` is a live `MTLResidencySet` and `add` is a live array of allocation handles.
+        unsafe { MTLResidencySet_addAllocations(h, add.as_ptr(), add.len() as u64) };
+    }
+    // SAFETY: `h` is a live `MTLResidencySet` handle.
+    unsafe { MTLResidencySet_commit(h) };
 }
 
 fn insert_va<T>(map: &mut BTreeMap<u64, Vec<Arc<T>>>, gpu_va: u64, item: Arc<T>) {

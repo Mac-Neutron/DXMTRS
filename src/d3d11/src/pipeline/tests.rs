@@ -56,7 +56,7 @@ fn pipeline_cache_dedupes_graphics_and_compute() {
     assert!(Arc::ptr_eq(&pso1, &pso2));
     assert!(pso1.ready().is_some());
 
-    let GraphicsPipelineKind::Standard(ref spec) = pso1.kind else {
+    let GraphicsPipelineKind::Standard(spec) = &*pso1.kind else {
         panic!("expected standard graphics pipeline");
     };
     assert_eq!(spec.immutable_vertex_buffers, IMMUTABLE_VERTEX_BUFFERS);
@@ -71,7 +71,7 @@ fn pipeline_cache_dedupes_graphics_and_compute() {
         })
     );
 
-    let cs = ManagedShader::new_synthetic([9u8; 20], dummy_reflection());
+    let cs = Arc::new(ManagedShader::new_synthetic([9u8; 20], dummy_reflection()));
     let c1 = cache.compute(&cs);
     let c2 = cache.compute(&cs);
     assert!(Arc::ptr_eq(&c1, &c2));
@@ -95,7 +95,7 @@ fn gs_and_ts_dispatch_to_mesh_pipeline_specs() {
         ..GraphicsDesc::default()
     };
     let gs_pso = cache.graphics(&gs_desc);
-    let GraphicsPipelineKind::GeometryMesh(ref gs_spec) = gs_pso.kind else {
+    let GraphicsPipelineKind::GeometryMesh(gs_spec) = &*gs_pso.kind else {
         panic!("expected geometry mesh pipeline");
     };
     assert_eq!(gs_spec.payload_memory_length, GS_PAYLOAD_MEMORY_LENGTH);
@@ -115,7 +115,7 @@ fn gs_and_ts_dispatch_to_mesh_pipeline_specs() {
         ..GraphicsDesc::default()
     };
     let ts_pso = cache.graphics(&ts_desc);
-    let GraphicsPipelineKind::Tessellation(ref ts_spec) = ts_pso.kind else {
+    let GraphicsPipelineKind::Tessellation(ts_spec) = &*ts_pso.kind else {
         panic!("expected tessellation mesh pipeline");
     };
     assert_eq!(ts_spec.payload_memory_length, MESH_PAYLOAD_MEMORY_LENGTH);
