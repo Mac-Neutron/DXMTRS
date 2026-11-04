@@ -37,7 +37,7 @@ use crate::{
     },
     descriptor_heap::{self, Heap},
     device::{Device, null, residency},
-    encoder::{EncoderData, EncoderType, TextureViewRef},
+    encoder::{EncoderData, EncoderType, RenderEncoderData, TextureViewRef},
     list::{DirtyFlags, List},
     pipeline::{Compute, Graphics},
     root_signature::object::RootSignature,
@@ -1704,7 +1704,7 @@ pub unsafe fn om_set_render_targets(
         let alloc = unsafe { &*list.allocator };
         if !alloc.encoder_current.is_null()
             // SAFETY: `alloc.encoder_current` is a valid `EncoderData`.
-            && unsafe { (*alloc.encoder_current).kind } == crate::encoder::EncoderType::Render
+            && unsafe { (*alloc.encoder_current).kind } == EncoderType::Render
         {
             return;
         }

@@ -319,8 +319,7 @@ pub fn encode_static_samplers(alloc: &mut Allocator, root_sig: &RootSignature) -
     offset
 }
 
-/// Returns the GPU-heap offset of `root_sig`'s encoded static samplers, reusing a per-list
-/// 4-entry cache when `root_sig` was already uploaded during this command list's recording.
+/// Returns the cached GPU-heap offset of `root_sig`'s encoded static samplers.
 pub fn encode_static_samplers_cached(
     list: &mut List,
     alloc: &mut Allocator,
