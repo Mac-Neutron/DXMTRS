@@ -1,11 +1,16 @@
 //! D3D11 shader objects (`d3d11_shader.{hpp,cpp}`).
 
-use core::{ffi::c_void, fmt::Write as _, mem::MaybeUninit, ptr};
+use core::{
+    ffi::{CStr, c_void},
+    fmt::Write as _,
+    ptr,
+};
 use std::{
     ffi::CString,
     sync::{Arc, Condvar, Mutex},
 };
 
+use dxmt_core::shader::{Entry, LoadError, Sm50Shader};
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
     private_data::{
@@ -16,14 +21,8 @@ use dxmt_util::{
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
-    DispatchData_alloc_init, MTLDevice_newLibrary, MTLLibrary_newFunction, Obj,
-    sm50::{
-        AIRCONV_VERSION, MtlShaderReflection, SM50Compile, SM50CompileGeometryPipelineGeometry,
-        SM50CompileGeometryPipelineVertex, SM50CompileTessellationPipelineDomain,
-        SM50CompileTessellationPipelineHull, SM50Destroy, SM50DestroyBitcode, SM50FreeError,
-        SM50GetArgumentsInfo, SM50GetCompiledBitcode, SM50Initialize, Sm50CompiledBitcode,
-        error_message,
-    },
+    Obj,
+    sm50::{AIRCONV_VERSION, MtlShaderReflection, SM50GetArgumentsInfo},
     wire::MtlSm50ShaderArgument,
 };
 
@@ -87,21 +86,14 @@ struct VariantGate {
 pub struct ManagedShader {
     pub sha1: [u8; 20],
     pub reflection: MtlShaderReflection,
+    /// `_shader`'s handle, 0 for none.
     pub handle: u64,
+    _shader: Sm50Shader,
     pub constant_buffers: Vec<MtlSm50ShaderArgument>,
     pub arguments: Vec<MtlSm50ShaderArgument>,
     pub bytecode: Vec<u8>,
     variants: Mutex<FxHashMap<ShaderVariant, CompiledVariantEntry>>,
     compiling: Mutex<FxHashMap<ShaderVariant, Arc<VariantGate>>>,
-}
-
-impl Drop for ManagedShader {
-    fn drop(&mut self) {
-        if self.handle != 0 {
-            // SAFETY: `self.handle` is a live `sm50_shader_t` returned by `SM50Initialize`.
-            unsafe { SM50Destroy(self.handle) };
-        }
-    }
 }
 
 impl ManagedShader {
@@ -124,31 +116,19 @@ impl ManagedShader {
         if bytes.is_empty() {
             return Err(E_INVALIDARG);
         }
-        let mut handle = 0u64;
-        let mut reflection = MaybeUninit::<MtlShaderReflection>::zeroed();
-        let mut err = 0u64;
-        // SAFETY: `bytes` is a valid slice, and output pointers are valid local variables.
-        let status = unsafe {
-            SM50Initialize(
-                bytes.as_ptr().cast(),
-                bytes.len(),
-                &raw mut handle,
-                reflection.as_mut_ptr(),
-                &raw mut err,
-            )
-        };
-        if status != 0 {
-            if err != 0 {
-                // SAFETY: `err` was returned by `SM50Initialize`.
-                let msg = unsafe { error_message(err) };
-                dxmt_util::err!(LOG, "Failed to initialize shader: {msg}");
-                // SAFETY: `err` is freed once here.
-                unsafe { SM50FreeError(err) };
+        // SAFETY: `MtlShaderReflection` is a `#[repr(C)]` struct of integers, for which zero is valid.
+        let mut reflection: MtlShaderReflection = unsafe { core::mem::zeroed() };
+        let shader = match dxmt_core::shader::initialize(bytes, &mut reflection) {
+            Ok(shader) => shader,
+            Err(error) => {
+                if error.0 != 0 {
+                    let msg = error.message();
+                    dxmt_util::err!(LOG, "Failed to initialize shader: {msg}");
+                }
+                return Err(E_FAIL);
             }
-            return Err(E_FAIL);
-        }
-        // SAFETY: `SM50Initialize` succeeded and initialized `reflection`.
-        let reflection = unsafe { reflection.assume_init() };
+        };
+        let handle = shader.0;
         let cb_len = reflection.num_constant_buffers as usize;
         let arg_len = reflection.num_arguments as usize;
         let make_zero = || MtlSm50ShaderArgument {
@@ -182,6 +162,7 @@ impl ManagedShader {
             sha1,
             reflection,
             handle,
+            _shader: shader,
             constant_buffers,
             arguments,
             bytecode: bytes.to_vec(),
@@ -197,6 +178,7 @@ impl ManagedShader {
             sha1,
             reflection,
             handle: 0,
+            _shader: Sm50Shader(0),
             constant_buffers: Vec::new(),
             arguments: Vec::new(),
             bytecode: Vec::new(),
@@ -311,25 +293,12 @@ impl ManagedShader {
         cache_key[..20].copy_from_slice(&self.sha1);
         cache_key[20..].copy_from_slice(&variant_digest);
 
-        let mtl_dev = dev.core().device().handle();
+        let mtl_dev = dev.core().device();
         let scache = dxmt_core::shader_cache::instance(metal_version, shader_cache_version());
 
         if let Some(lib_data) = scache.read(&cache_key) {
-            let mut err_raw = 0u64;
-            // SAFETY: `mtl_dev` and `lib_data` are live handles; `err_raw` is writable.
-            let lib_raw =
-                unsafe { MTLDevice_newLibrary(mtl_dev, lib_data.handle(), &raw mut err_raw) };
-            // SAFETY: adopts returned references from `MTLDevice_newLibrary`.
-            let err_obj = unsafe { Obj::adopt(err_raw) };
-            // SAFETY: adopts returned library reference.
-            let lib_obj = unsafe { Obj::adopt(lib_raw) };
-            if err_obj.is_none()
-                && let Some(lib) = lib_obj
-            {
-                // SAFETY: `lib` is live and `c_func_name` is NUL-terminated.
-                let fn_raw = unsafe { MTLLibrary_newFunction(lib.handle(), c_func_name.as_ptr()) };
-                // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
-                if let Some(fn_obj) = unsafe { Obj::adopt(fn_raw) } {
+            match dxmt_core::shader::load_function(mtl_dev, &lib_data, &c_func_name) {
+                Ok(fn_obj) => {
                     let h = fn_obj.handle();
                     lock(&self.variants).insert(
                         variant.clone(),
@@ -340,9 +309,10 @@ impl ManagedShader {
                     );
                     return h;
                 }
-                dxmt_util::err!(LOG, "Failed to create MTLFunction from cache: {func_name}");
-            } else {
-                LOG.err("Failed to create MTLLibrary from cache");
+                Err(LoadError::Function) => {
+                    dxmt_util::err!(LOG, "Failed to create MTLFunction from cache: {func_name}");
+                }
+                Err(LoadError::Library) => LOG.err("Failed to create MTLLibrary from cache"),
             }
         }
 
@@ -358,127 +328,55 @@ impl ManagedShader {
             ia_input,
             so_input,
         );
-        let mut compile_result = 0u64;
-        let mut sm50_err = 0u64;
         let companion_handle = companion.map_or(0, |s| s.handle);
-        let status = match *variant {
+        let (entry, first, second) = match *variant {
             ShaderVariant::Default
             | ShaderVariant::Vertex { .. }
             | ShaderVariant::Pixel { .. }
-            | ShaderVariant::VertexStreamOutput { .. } => {
-                // SAFETY: `self.handle` and `chain` are valid for `SM50Compile`.
-                unsafe {
-                    SM50Compile(
-                        self.handle,
-                        chain.head_ptr(),
-                        chain.func_name_cstr(),
-                        &raw mut compile_result,
-                        &raw mut sm50_err,
-                    )
-                }
-            }
+            | ShaderVariant::VertexStreamOutput { .. } => (Entry::Shader, self.handle, 0),
             ShaderVariant::TessellationVertexHull { .. } => {
-                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
-                unsafe {
-                    SM50CompileTessellationPipelineHull(
-                        companion_handle,
-                        self.handle,
-                        chain.head_ptr(),
-                        chain.func_name_cstr(),
-                        &raw mut compile_result,
-                        &raw mut sm50_err,
-                    )
-                }
+                (Entry::TessellationHull, companion_handle, self.handle)
             }
             ShaderVariant::TessellationDomain { .. } => {
-                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
-                unsafe {
-                    SM50CompileTessellationPipelineDomain(
-                        companion_handle,
-                        self.handle,
-                        chain.head_ptr(),
-                        chain.func_name_cstr(),
-                        &raw mut compile_result,
-                        &raw mut sm50_err,
-                    )
-                }
+                (Entry::TessellationDomain, companion_handle, self.handle)
             }
             ShaderVariant::GeometryVertex { .. } => {
-                // SAFETY: `self.handle`, `companion_handle`, and `chain` are valid.
-                unsafe {
-                    SM50CompileGeometryPipelineVertex(
-                        self.handle,
-                        companion_handle,
-                        chain.head_ptr(),
-                        chain.func_name_cstr(),
-                        &raw mut compile_result,
-                        &raw mut sm50_err,
-                    )
-                }
+                (Entry::GeometryVertex, self.handle, companion_handle)
             }
-            ShaderVariant::Geometry { .. } => {
-                // SAFETY: `companion_handle`, `self.handle`, and `chain` are valid.
-                unsafe {
-                    SM50CompileGeometryPipelineGeometry(
-                        companion_handle,
-                        self.handle,
-                        chain.head_ptr(),
-                        chain.func_name_cstr(),
-                        &raw mut compile_result,
-                        &raw mut sm50_err,
-                    )
+            ShaderVariant::Geometry { .. } => (Entry::Geometry, companion_handle, self.handle),
+        };
+        // SAFETY: `chain` built the NUL-terminated name and lives across the compile.
+        let chain_name = unsafe { CStr::from_ptr(chain.func_name_cstr()) };
+        // SAFETY: `self.handle` and `companion_handle` are live shaders (the variant has its
+        // companion), and `chain`'s head is a valid argument chain.
+        let bitcode = match unsafe {
+            dxmt_core::shader::compile(&entry, first, second, chain.head_ptr(), chain_name)
+        } {
+            Ok(bitcode) => bitcode,
+            Err(error) => {
+                if error.0 != 0 {
+                    let msg = error.message();
+                    dxmt_util::err!(LOG, "Failed to compile shader: {msg}");
                 }
+                return 0;
             }
         };
 
-        if status != 0 || compile_result == 0 {
-            if sm50_err != 0 {
-                // SAFETY: `sm50_err` was returned by `SM50Compile*`.
-                let msg = unsafe { error_message(sm50_err) };
-                dxmt_util::err!(LOG, "Failed to compile shader: {msg}");
-                // SAFETY: freed once here.
-                unsafe { SM50FreeError(sm50_err) };
-            }
-            return 0;
-        }
-
-        let mut bitcode = Sm50CompiledBitcode { data: 0, size: 0 };
-        // SAFETY: `compile_result` is a valid bitcode handle.
-        unsafe { SM50GetCompiledBitcode(compile_result, &raw mut bitcode) };
-        // SAFETY: `bitcode.data` is valid for `bitcode.size` bytes while `compile_result` is alive.
-        let lib_data_raw = unsafe { DispatchData_alloc_init(bitcode.data, bitcode.size) };
-        // SAFETY: adopts +1 reference from `DispatchData_alloc_init`.
-        let lib_data = unsafe { Obj::adopt(lib_data_raw) };
-
-        let mut err_raw = 0u64;
-        // SAFETY: `mtl_dev` and `lib_data_raw` are valid handles.
-        let lib_raw = unsafe { MTLDevice_newLibrary(mtl_dev, lib_data_raw, &raw mut err_raw) };
-        // SAFETY: adopts returned error reference if non-zero.
-        let err_obj = unsafe { Obj::adopt(err_raw) };
-        // SAFETY: adopts returned library reference if non-zero.
-        let lib_obj = unsafe { Obj::adopt(lib_raw) };
-
-        if err_obj.is_some() || lib_obj.is_none() {
+        let lib_data = dxmt_core::shader::compiled_data(&bitcode);
+        let Some(lib) = lib_data
+            .as_ref()
+            .and_then(|data| dxmt_core::shader::new_library(mtl_dev, data))
+        else {
             LOG.err("Failed to create MTLLibrary");
             self.dump();
-            // SAFETY: `compile_result` is destroyed once here.
-            unsafe { SM50DestroyBitcode(compile_result) };
             return 0;
-        }
-
+        };
         if let Some(ref ld) = lib_data {
             scache.write(&cache_key, ld);
         }
-        // SAFETY: `compile_result` is destroyed once here.
-        unsafe { SM50DestroyBitcode(compile_result) };
+        drop(bitcode);
 
-        let Some(lib) = lib_obj else {
-            return 0;
-        };
-        // SAFETY: `lib` is live and `chain.func_name_cstr()` is NUL-terminated.
-        let fn_raw = unsafe { MTLLibrary_newFunction(lib.handle(), chain.func_name_cstr()) };
-        // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
-        let Some(fn_obj) = (unsafe { Obj::adopt(fn_raw) }) else {
+        let Some(fn_obj) = dxmt_core::shader::new_function(&lib, chain_name) else {
             dxmt_util::err!(LOG, "Failed to create MTLFunction: {func_name}");
             self.dump();
             return 0;

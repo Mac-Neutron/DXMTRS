@@ -14,25 +14,23 @@ use std::{
 };
 
 use airconv_ir::container::Container;
-use dxmt_core::shader_cache::Store;
+use dxmt_core::{shader::Entry, shader_cache::Store};
 use dxmt_util::{sha1::Sha1, sync::lock};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
-    DispatchData_alloc_init, DispatchData_copyBytes, MTLDevice_newLibrary, MTLLibrary_newFunction,
-    Obj,
+    DispatchData_alloc_init, DispatchData_copyBytes, Obj,
     sm50::{
         AIRCONV_VERSION, MtlShaderReflection, SM50_SHADER_COMMON, SM50_SHADER_IA_INPUT_LAYOUT,
         SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_ROOT_SIGNATURE,
-        SM50Compile, SM50CompileGeometryPipelineGeometry, SM50CompileGeometryPipelineVertex,
-        SM50GetCompiledBitcode, SM50Initialize, Sm50CompiledBitcode, Sm50IaInputElement,
-        Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData, Sm50ShaderIaInputLayoutData,
-        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData, Sm50ShaderRootSignatureData,
+        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData,
+        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        Sm50ShaderRootSignatureData,
     },
 };
 
 use crate::{
     com::{E_FAIL, Hresult, S_OK},
-    shader::{Sm50Bitcode, Sm50Error, Sm50Shader},
+    shader::Sm50Shader,
 };
 
 const D3D12_CACHE_MAGIC: u32 = 310;
@@ -234,26 +232,18 @@ impl CachedShader {
         if let Some(ref s) = self.shader {
             return Ok(s.0);
         }
-        let mut handle = 0_u64;
-        let mut err_handle = 0_u64;
-        // SAFETY: `self.bytecode` is valid for its length; `handle`, `self.reflection`, and `err_handle` are writable.
-        let rc = unsafe {
-            SM50Initialize(
-                self.bytecode.as_ptr().cast::<c_void>(),
-                self.bytecode.len(),
-                &raw mut handle,
-                &raw mut self.reflection,
-                &raw mut err_handle,
-            )
-        };
-        let error = Sm50Error(err_handle);
-        if rc != 0 {
-            crate::err!("Failed to initialize shader: {}", error.message());
-            return Err(E_FAIL);
+        match dxmt_core::shader::initialize(&self.bytecode, &mut self.reflection) {
+            Ok(shader) => {
+                let handle = shader.0;
+                self.shader = Some(shader);
+                self.reflected = true;
+                Ok(handle)
+            }
+            Err(error) => {
+                crate::err!("Failed to initialize shader: {}", error.message());
+                Err(E_FAIL)
+            }
         }
-        self.shader = Some(Sm50Shader(handle));
-        self.reflected = true;
-        Ok(handle)
     }
 }
 
@@ -491,18 +481,7 @@ pub unsafe fn compile_function_with_env(
         let enabled = disk.has_reader();
         if let Some(data) = disk.read(key) {
             static REJECTED_ONCE: Once = Once::new();
-            // SAFETY: `device` and `data` are valid handles.
-            let raw_lib =
-                unsafe { MTLDevice_newLibrary(device.handle(), data.handle(), ptr::null_mut()) };
-            // SAFETY: `MTLDevice_newLibrary` returns a +1 retained `MTLLibrary` handle or 0.
-            let lib = unsafe { Obj::adopt(raw_lib) };
-            let func = lib.and_then(|lib| {
-                // SAFETY: `lib` is a live `MTLLibrary` and `c_name` is a NUL-terminated C string.
-                let raw_fn = unsafe { MTLLibrary_newFunction(lib.handle(), c_name.as_ptr()) };
-                // SAFETY: `MTLLibrary_newFunction` returns a +1 retained `MTLFunction` handle or 0.
-                unsafe { Obj::adopt(raw_fn) }
-            });
-            if let Some(func) = func {
+            if let Ok(func) = dxmt_core::shader::load_function(device, &data, &c_name) {
                 FUNCTION_HITS.fetch_add(1, Ordering::Relaxed);
                 count_function_lookup();
                 if let Some(cache) = cache {
@@ -526,70 +505,17 @@ pub unsafe fn compile_function_with_env(
         None => 0,
     };
 
-    let mut raw_bitcode = 0_u64;
-    let mut raw_err = 0_u64;
-    let rc = match kind {
-        FunctionKind::Shader => {
-            // SAFETY: `s0`, `args`, `c_name`, `raw_bitcode`, and `raw_err` are valid arguments for `SM50Compile`.
-            unsafe {
-                SM50Compile(
-                    s0,
-                    args,
-                    c_name.as_ptr(),
-                    &raw mut raw_bitcode,
-                    &raw mut raw_err,
-                )
-            }
-        }
-        FunctionKind::GeometryVertex => {
-            // SAFETY: `s0`, `s1`, `args`, `c_name`, `raw_bitcode`, and `raw_err` are valid for `SM50CompileGeometryPipelineVertex`.
-            unsafe {
-                SM50CompileGeometryPipelineVertex(
-                    s0,
-                    s1,
-                    args,
-                    c_name.as_ptr(),
-                    &raw mut raw_bitcode,
-                    &raw mut raw_err,
-                )
-            }
-        }
-        FunctionKind::GeometryMesh => {
-            // SAFETY: `s0`, `s1`, `args`, `c_name`, `raw_bitcode`, and `raw_err` are valid for `SM50CompileGeometryPipelineGeometry`.
-            unsafe {
-                SM50CompileGeometryPipelineGeometry(
-                    s0,
-                    s1,
-                    args,
-                    c_name.as_ptr(),
-                    &raw mut raw_bitcode,
-                    &raw mut raw_err,
-                )
-            }
-        }
+    let entry = match kind {
+        FunctionKind::Shader => Entry::Shader,
+        FunctionKind::GeometryVertex => Entry::GeometryVertex,
+        FunctionKind::GeometryMesh => Entry::Geometry,
     };
-    let bitcode = Sm50Bitcode(raw_bitcode);
-    let error = Sm50Error(raw_err);
-    if rc != 0 {
-        return Err(crate::shader::shader_compile_failed(stage, &error));
-    }
-
-    let mut compiled = Sm50CompiledBitcode { data: 0, size: 0 };
-    // SAFETY: `bitcode.0` was produced by `SM50Compile*` and `compiled` is writable.
-    unsafe { SM50GetCompiledBitcode(bitcode.0, &raw mut compiled) };
-    // SAFETY: `compiled.data` is valid for `compiled.size` bytes while `bitcode` is alive.
-    let raw_data = unsafe { DispatchData_alloc_init(compiled.data, compiled.size) };
-    // SAFETY: `DispatchData_alloc_init` returns a +1 retained `DispatchData` handle or 0.
-    let data = unsafe { Obj::adopt(raw_data) }.ok_or(E_FAIL)?;
-
-    // SAFETY: `device` and `data` are valid handles.
-    let raw_lib = unsafe { MTLDevice_newLibrary(device.handle(), data.handle(), ptr::null_mut()) };
-    // SAFETY: `MTLDevice_newLibrary` returns a +1 retained `MTLLibrary` handle or 0.
-    let lib = unsafe { Obj::adopt(raw_lib) }.ok_or(E_FAIL)?;
-    // SAFETY: `lib` is a live `MTLLibrary` and `c_name` is a NUL-terminated C string.
-    let raw_func = unsafe { MTLLibrary_newFunction(lib.handle(), c_name.as_ptr()) };
-    // SAFETY: `MTLLibrary_newFunction` returns a +1 retained `MTLFunction` handle or 0.
-    let func = unsafe { Obj::adopt(raw_func) }.ok_or(E_FAIL)?;
+    // SAFETY: `s0` and `s1` are live shader handles (`s1` is unused for one shader); the caller
+    // guarantees `args`.
+    let bitcode = unsafe { dxmt_core::shader::compile(&entry, s0, s1, args, &c_name) }
+        .map_err(|error| crate::shader::shader_compile_failed(stage, &error))?;
+    let data = dxmt_core::shader::compiled_data(&bitcode).ok_or(E_FAIL)?;
+    let func = dxmt_core::shader::load_function(device, &data, &c_name).map_err(|_| E_FAIL)?;
 
     if let Some(ref key) = key {
         let disk = store();
