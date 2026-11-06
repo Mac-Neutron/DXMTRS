@@ -9,6 +9,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use dxmt_core::topology;
 use winemetal_sys::{
     Obj,
     sm50::{
@@ -20,36 +21,27 @@ use winemetal_wire::{
     MemPtr, SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
     SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
     WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_BUFFER,
-    WMT_COMPUTE_COMMAND_SET_PSO, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE,
-    WMT_PRIMITIVE_TYPE_LINE_STRIP, WMT_PRIMITIVE_TYPE_POINT, WMT_PRIMITIVE_TYPE_TRIANGLE,
-    WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
-    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
-    WMT_RENDER_COMMAND_NOP, WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
-    WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE, WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
-    WMT_RENDER_COMMAND_SET_MESH_BUFFER, WMT_RENDER_COMMAND_SET_OBJECT_BUFFER,
-    WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-    WMT_RENDER_COMMAND_SET_SCISSOR_RECTS, WMT_RENDER_COMMAND_SET_STENCIL_REF,
-    WMT_RENDER_COMMAND_SET_VERTEX_BUFFER, WMT_RENDER_COMMAND_SET_VIEWPORTS,
-    WMT_RENDER_COMMAND_SET_VISIBILITY_MODE, WMT_VISIBILITY_RESULT_MODE_BOOLEAN,
-    WMT_VISIBILITY_RESULT_MODE_COUNTING, WMT_VISIBILITY_RESULT_MODE_DISABLED, WMTScissorRect,
-    WMTSize, WMTViewport, WmtcmdBase, WmtcmdComputeDispatch, WmtcmdComputeNop,
-    WmtcmdComputeSetbuffer, WmtcmdComputeSetpso, WmtcmdRenderDraw, WmtcmdRenderDrawIndexed,
-    WmtcmdRenderDxmtGeometryDraw, WmtcmdRenderDxmtGeometryDrawIndexed, WmtcmdRenderNop,
-    WmtcmdRenderSetblendcolor, WmtcmdRenderSetbuffer, WmtcmdRenderSetdepthstencilstate,
-    WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects,
-    WmtcmdRenderSetstencilref, WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode,
+    WMT_COMPUTE_COMMAND_SET_PSO, WMT_INDEX_TYPE_U_INT32, WMT_RENDER_COMMAND_DRAW,
+    WMT_RENDER_COMMAND_DRAW_INDEXED, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW,
+    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED, WMT_RENDER_COMMAND_NOP,
+    WMT_RENDER_COMMAND_SET_BLEND_FACTOR, WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
+    WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_MESH_BUFFER,
+    WMT_RENDER_COMMAND_SET_OBJECT_BUFFER, WMT_RENDER_COMMAND_SET_PSO,
+    WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+    WMT_RENDER_COMMAND_SET_STENCIL_REF, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER,
+    WMT_RENDER_COMMAND_SET_VIEWPORTS, WMT_RENDER_COMMAND_SET_VISIBILITY_MODE,
+    WMT_VISIBILITY_RESULT_MODE_BOOLEAN, WMT_VISIBILITY_RESULT_MODE_COUNTING,
+    WMT_VISIBILITY_RESULT_MODE_DISABLED, WMTScissorRect, WMTSize, WMTViewport, WmtcmdBase,
+    WmtcmdComputeDispatch, WmtcmdComputeNop, WmtcmdComputeSetbuffer, WmtcmdComputeSetpso,
+    WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderDxmtGeometryDraw,
+    WmtcmdRenderDxmtGeometryDrawIndexed, WmtcmdRenderNop, WmtcmdRenderSetblendcolor,
+    WmtcmdRenderSetbuffer, WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetpso,
+    WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects, WmtcmdRenderSetstencilref,
+    WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode,
 };
 
 use crate::{
-    abi::list_state::{
-        D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST,
-        D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST, D3D_PRIMITIVE_TOPOLOGY_LINELIST,
-        D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ, D3D_PRIMITIVE_TOPOLOGY_LINESTRIP,
-        D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ, D3D_PRIMITIVE_TOPOLOGY_POINTLIST,
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ,
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ,
-        D3d12DrawArguments, D3d12DrawIndexedArguments,
-    },
+    abi::list_state::{D3d12DrawArguments, D3d12DrawIndexedArguments},
     allocator::{Allocator, CPU_HEAP_SIZE, GPU_HEAP_SIZE},
     device::null,
     encoder::{ComputeEncoderData, EncoderData, EncoderType, RenderEncoderData},
@@ -168,59 +160,14 @@ pub fn encode_compute_cmd<T>(alloc: &mut Allocator, cmd: T) -> *mut T {
     ptr
 }
 
-/// Maps a `D3D12_PRIMITIVE_TOPOLOGY` to `(WMTPrimitiveType, control_point_count)`
-///
-/// (`to_metal_primitive_type`, `d3d12_command_list.cpp:71`).
-#[must_use]
-pub const fn to_metal_primitive_type(topo: u32) -> Option<(u8, u32)> {
-    match topo {
-        D3D_PRIMITIVE_TOPOLOGY_LINELIST => Some((WMT_PRIMITIVE_TYPE_LINE, 0)),
-        D3D_PRIMITIVE_TOPOLOGY_LINESTRIP => Some((WMT_PRIMITIVE_TYPE_LINE_STRIP, 0)),
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST => Some((WMT_PRIMITIVE_TYPE_TRIANGLE, 0)),
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP => Some((WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP, 0)),
-        D3D_PRIMITIVE_TOPOLOGY_POINTLIST
-        | D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ
-        | D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ
-        | D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ
-        | D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ => Some((WMT_PRIMITIVE_TYPE_POINT, 0)),
-        t if t >= D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST
-            && t <= D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST =>
-        {
-            Some((WMT_PRIMITIVE_TYPE_POINT, t - 32))
-        }
-        _ => None,
-    }
-}
-
-/// Returns `true` when `topo` is a line-strip or triangle-strip topology (`is_strip_topology`,
-///
-/// `d3d12_command_list.cpp:65`).
-#[must_use]
-pub const fn is_strip_topology(topo: u32) -> bool {
-    matches!(
-        topo,
-        D3D_PRIMITIVE_TOPOLOGY_LINESTRIP
-            | D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ
-            | D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
-            | D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ
-    )
-}
-
 /// Object threadgroup size and vertex step for geometry shader draws (`geometry_warp`,
 ///
-/// `d3d12_command_list.cpp:49`).
-#[must_use]
-pub const fn geometry_warp(topo: u32) -> (u32, u32) {
-    match topo {
-        D3D_PRIMITIVE_TOPOLOGY_POINTLIST
-        | D3D_PRIMITIVE_TOPOLOGY_LINELIST
-        | D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ => (32, 32),
-        D3D_PRIMITIVE_TOPOLOGY_LINESTRIP => (32, 31),
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST | D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ => (30, 30),
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP => (32, 30),
-        D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ => (32, 29),
-        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ => (32, 28),
-        _ => (0, 0),
+/// `d3d12_command_list.cpp:49`): the fixed 32-wide table, `(0, 0)` where no geometry form exists.
+const fn geometry_warp(topo: u32) -> (u32, u32) {
+    if topology::is_geometry_topology(topo) {
+        topology::geometry_warp(topo, 0)
+    } else {
+        (0, 0)
     }
 }
 
@@ -617,7 +564,7 @@ pub fn pre_draw_with_options(
         } else {
             SM50_INDEX_BUFFER_FORMAT_UINT16
         };
-        let handle = pso_gfx.geometry_pipeline(is_strip_topology(list.primitive_topology), format);
+        let handle = pso_gfx.geometry_pipeline(topology::is_strip(list.primitive_topology), format);
         if handle == 0 {
             return DrawCallStatus::Invalid;
         }
@@ -1047,7 +994,8 @@ pub unsafe fn draw_instanced(
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    let Some((primitive_type, _cp_count)) = to_metal_primitive_type(list.primitive_topology) else {
+    let Some((primitive_type, _cp_count)) = topology::draw_primitive(list.primitive_topology)
+    else {
         return;
     };
     let status = pre_draw_with_options(list, false, false);
@@ -1127,7 +1075,8 @@ pub unsafe fn draw_indexed_instanced(
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
-    let Some((primitive_type, _cp_count)) = to_metal_primitive_type(list.primitive_topology) else {
+    let Some((primitive_type, _cp_count)) = topology::draw_primitive(list.primitive_topology)
+    else {
         return;
     };
     let status = pre_draw_with_options(list, false, true);

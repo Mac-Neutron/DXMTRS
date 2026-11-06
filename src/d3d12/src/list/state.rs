@@ -9,11 +9,11 @@ use core::{
 };
 use std::sync::Arc;
 
-use dxmt_core::format::depth_stencil_planar_flags;
-use dxmt_util::{dxgi_consts::DXGI_FORMAT_R32_UINT, private_data};
+use dxmt_core::{format::depth_stencil_planar_flags, topology};
+use dxmt_util::private_data;
 use winemetal_wire::{
-    WMT_INDEX_TYPE_U_INT16, WMT_INDEX_TYPE_U_INT32, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE,
-    WMTScissorRect, WMTViewport,
+    WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTScissorRect,
+    WMTViewport,
 };
 
 use crate::{
@@ -1552,11 +1552,7 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
                 list.index_buffer_size = va;
                 list.index_buffer = mtl_buf;
                 list.index_buffer_offset = offset;
-                list.index_buffer_format = if ibv.format == DXGI_FORMAT_R32_UINT {
-                    u32::from(WMT_INDEX_TYPE_U_INT32)
-                } else {
-                    u32::from(WMT_INDEX_TYPE_U_INT16)
-                };
+                list.index_buffer_format = u32::from(topology::index_type_and_stride(ibv.format).0);
                 list.sm50_index_buffer_format = ibv.format;
                 list.dirty_state.insert(DirtyFlags::INDEX_BUFFER);
                 return;

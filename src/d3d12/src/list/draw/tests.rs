@@ -3,6 +3,7 @@
 use core::{alloc::Layout, ffi::c_void, ptr};
 use std::alloc;
 
+use dxmt_core::topology;
 use dxmt_util::{
     com::{ComObject, S_OK},
     private_data::PrivateData,
@@ -14,7 +15,7 @@ use winemetal_wire::{
     WmtcmdRenderSetblendcolor,
 };
 
-use super::draw_instanced;
+use super::{draw_instanced, geometry_warp};
 use crate::{
     abi::{
         list_state::{
@@ -368,4 +369,81 @@ fn recording_allocates_only_in_the_heap() {
     unsafe { release_com::<List>(raw_list.cast()) };
     // SAFETY: `alloc` was created by `new_test_allocator`.
     unsafe { free_test_allocator(alloc) };
+}
+
+/// The fixed D3D12 geometry-shader table, and `(0, 0)` where no geometry form exists.
+#[test]
+fn geometry_warp_table_as_cpp() {
+    let table = [
+        (topology::POINTLIST, (32, 32)),
+        (topology::LINELIST, (32, 32)),
+        (topology::LINELIST_ADJ, (32, 32)),
+        (topology::LINESTRIP, (32, 31)),
+        (topology::TRIANGLELIST, (30, 30)),
+        (topology::TRIANGLELIST_ADJ, (30, 30)),
+        (topology::TRIANGLESTRIP, (32, 30)),
+        (topology::LINESTRIP_ADJ, (32, 29)),
+        (topology::TRIANGLESTRIP_ADJ, (32, 28)),
+        (0, (0, 0)),
+        (topology::PATCHLIST_1, (0, 0)),
+        (topology::PATCHLIST_32, (0, 0)),
+        (65, (0, 0)),
+    ];
+    for (topo, expected) in table {
+        assert_eq!(geometry_warp(topo), expected, "topology {topo}");
+    }
+}
+
+/// Every topology draws as the C++'s `to_metal_primitive_type` said, and strips as it said.
+#[test]
+fn draw_primitive_and_strip_as_cpp() {
+    use winemetal_wire::{
+        WMT_PRIMITIVE_TYPE_LINE, WMT_PRIMITIVE_TYPE_LINE_STRIP, WMT_PRIMITIVE_TYPE_POINT,
+        WMT_PRIMITIVE_TYPE_TRIANGLE, WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP,
+    };
+
+    for (topo, expected) in [
+        (0, None),
+        (topology::POINTLIST, Some((WMT_PRIMITIVE_TYPE_POINT, 0))),
+        (topology::LINELIST, Some((WMT_PRIMITIVE_TYPE_LINE, 0))),
+        (
+            topology::LINESTRIP,
+            Some((WMT_PRIMITIVE_TYPE_LINE_STRIP, 0)),
+        ),
+        (
+            topology::TRIANGLELIST,
+            Some((WMT_PRIMITIVE_TYPE_TRIANGLE, 0)),
+        ),
+        (
+            topology::TRIANGLESTRIP,
+            Some((WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP, 0)),
+        ),
+        (6, None),
+        (9, None),
+        (topology::LINELIST_ADJ, Some((WMT_PRIMITIVE_TYPE_POINT, 0))),
+        (
+            topology::TRIANGLESTRIP_ADJ,
+            Some((WMT_PRIMITIVE_TYPE_POINT, 0)),
+        ),
+        (14, None),
+        (32, None),
+        (topology::PATCHLIST_1, Some((WMT_PRIMITIVE_TYPE_POINT, 1))),
+        (topology::PATCHLIST_32, Some((WMT_PRIMITIVE_TYPE_POINT, 32))),
+        (65, None),
+    ] {
+        assert_eq!(topology::draw_primitive(topo), expected, "topology {topo}");
+    }
+    let strips = [
+        topology::LINESTRIP,
+        topology::LINESTRIP_ADJ,
+        topology::TRIANGLESTRIP,
+        topology::TRIANGLESTRIP_ADJ,
+    ];
+    for topo in 0..70 {
+        assert_eq!(
+            topology::is_strip(topo),
+            strips.contains(&topo),
+            "topology {topo}"
+        );
+    }
 }

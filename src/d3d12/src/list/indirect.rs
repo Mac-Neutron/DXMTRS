@@ -2,13 +2,15 @@
 
 use core::{ffi::c_void, mem::size_of, ptr};
 
-use dxmt_core::settings::{Flags, settings};
+use dxmt_core::{
+    settings::{Flags, settings},
+    topology,
+};
 use dxmt_util::dxgi_consts::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT};
 use winemetal_wire::{
-    MemPtr, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE, WMT_PRIMITIVE_TYPE_LINE_STRIP,
-    WMT_PRIMITIVE_TYPE_POINT, WMT_PRIMITIVE_TYPE_TRIANGLE, WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP,
-    WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT, WMT_RENDER_COMMAND_DRAW_INDIRECT, WmtcmdBase,
-    WmtcmdRenderDrawIndexedIndirect, WmtcmdRenderDrawIndirect,
+    MemPtr, WMT_INDEX_TYPE_U_INT32, WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT,
+    WMT_RENDER_COMMAND_DRAW_INDIRECT, WmtcmdBase, WmtcmdRenderDrawIndexedIndirect,
+    WmtcmdRenderDrawIndirect,
 };
 
 use crate::{
@@ -54,17 +56,6 @@ fn encode_render_cmd<T>(alloc: &mut Allocator, mut cmd: T) {
     unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
     enc.cmd_tail = storage_base;
     enc.base.barriers_last = alloc.barriers;
-}
-
-const fn to_metal_primitive_type(topology: u32) -> Option<u8> {
-    match topology {
-        1 | 10..=13 | 33..=64 => Some(WMT_PRIMITIVE_TYPE_POINT),
-        2 => Some(WMT_PRIMITIVE_TYPE_LINE),
-        3 => Some(WMT_PRIMITIVE_TYPE_LINE_STRIP),
-        4 => Some(WMT_PRIMITIVE_TYPE_TRIANGLE),
-        5 => Some(WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP),
-        _ => None,
-    }
 }
 
 fn build_root_arg_staging(list: &List, root_sig: &RootSignature, args: &[u64; 64]) -> [u64; 67] {
@@ -297,7 +288,7 @@ pub unsafe fn execute_indirect(
         return;
     }
 
-    let Some(primitive_type) = to_metal_primitive_type(list.primitive_topology) else {
+    let Some((primitive_type, _)) = topology::draw_primitive(list.primitive_topology) else {
         return;
     };
     let encode_binding =
