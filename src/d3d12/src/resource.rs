@@ -278,33 +278,40 @@ pub unsafe fn query_interface(
     out: *mut *mut c_void,
     class_name: &'static str,
 ) -> Hresult {
-    if out.is_null() {
-        return com::E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null above.
-    unsafe { com::init_out_ptr(out) };
-    // SAFETY: `riid` is a caller-supplied `REFIID`.
-    let Some(iid) = (unsafe { com::Guid::read(riid.cast()) }) else {
-        return E_INVALIDARG;
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Once {
+            object: &com::IID_ID3D12_RESOURCE,
+            name: class_name,
+        },
     };
-    if iid == com::IID_IUNKNOWN
-        || iid == com::IID_ID3D12_OBJECT
-        || iid == com::IID_ID3D12_DEVICE_CHILD
-        || iid == com::IID_ID3D12_PAGEABLE
-        || iid == com::IID_ID3D12_RESOURCE
-        || iid == com::IID_ID3D12_RESOURCE1
-        || iid == com::IID_ID3D12_RESOURCE2
-    {
+    let add_ref = || {
         // SAFETY: `this` is a valid `Resource` pointer.
         unsafe { com::add_ref_com(this.cast::<Resource>()) };
-        // SAFETY: `out` was checked non-null above.
-        unsafe { *out = this };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid; `this` is a live `Resource`.
+    unsafe {
+        com::qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    com::IID_IUNKNOWN,
+                    com::IID_ID3D12_OBJECT,
+                    com::IID_ID3D12_DEVICE_CHILD,
+                    com::IID_ID3D12_PAGEABLE,
+                    com::IID_ID3D12_RESOURCE,
+                    com::IID_ID3D12_RESOURCE1,
+                    com::IID_ID3D12_RESOURCE2,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    if com::qi_log(&com::IID_ID3D12_RESOURCE, &iid) {
-        crate::warn!("{}: Unknown interface query {}", class_name, iid);
-    }
-    com::E_NOINTERFACE
 }
 
 /// Shared `ID3D12Object::GetPrivateData` for `Resource`.

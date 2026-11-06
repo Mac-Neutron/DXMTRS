@@ -26,14 +26,14 @@ use crate::{
         IMTLDXGIAdapterVtbl,
     },
     com::{
-        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult,
-        IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1,
-        IID_ID3D11_DEVICE2, IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5,
-        IID_ID3D12_DEVICE, IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2, IID_ID3D12_DEVICE3,
-        IID_ID3D12_DEVICE4, IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6, IID_ID3D12_DEVICE7,
-        IID_ID3D12_DEVICE8, IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT,
-        IID_IDXGI_ADAPTER1, IID_IDXGI_DEVICE, IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2,
-        IID_IDXGI_DEVICE3, IID_IDXGI_DEVICE4, IID_IDXGI_FACTORY1, IID_IUNKNOWN, S_FALSE, S_OK,
+        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Guid, Hresult, IID_ID3D10_DEVICE,
+        IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2,
+        IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_DEVICE,
+        IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2, IID_ID3D12_DEVICE3, IID_ID3D12_DEVICE4,
+        IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6, IID_ID3D12_DEVICE7, IID_ID3D12_DEVICE8,
+        IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT, IID_IDXGI_ADAPTER1,
+        IID_IDXGI_DEVICE, IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2, IID_IDXGI_DEVICE3,
+        IID_IDXGI_DEVICE4, IID_IDXGI_FACTORY1, IID_IUNKNOWN, S_FALSE, S_OK,
     },
     device::{
         Device, null, residency,
@@ -250,81 +250,80 @@ pub unsafe fn query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("device.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { com::init_out_ptr(ppv_object) };
     if this.is_null() {
-        return E_INVALIDARG;
+        // SAFETY: `ppv_object` is null or writable.
+        return unsafe { com::qi_refuse(ppv_object, E_INVALIDARG) };
     }
-    // SAFETY: `riid` is null or points to a 16-byte `Guid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-
-    if matches!(
-        iid,
-        IID_IUNKNOWN
-            | IID_ID3D12_OBJECT
-            | IID_ID3D12_DEVICE
-            | IID_ID3D12_DEVICE1
-            | IID_ID3D12_DEVICE2
-            | IID_ID3D12_DEVICE3
-            | IID_ID3D12_DEVICE4
-            | IID_ID3D12_DEVICE5
-            | IID_ID3D12_DEVICE6
-            | IID_ID3D12_DEVICE7
-            | IID_ID3D12_DEVICE8
-            | IID_ID3D12_DEVICE9
-            | IID_ID3D12_DEVICE10
-    ) {
-        // SAFETY: `this` is a live `Device`.
-        let _ = unsafe { com::add_ref_com(this.cast::<Device>()) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { ppv_object.write_unaligned(this) };
-        return S_OK;
-    }
-
-    if matches!(
-        iid,
-        IID_IDXGI_DEVICE
-            | IID_IDXGI_DEVICE1
-            | IID_IDXGI_DEVICE2
-            | IID_IDXGI_DEVICE3
-            | IID_IDXGI_DEVICE4
-            | IID_ID3D10_DEVICE
-            | IID_ID3D10_DEVICE1
-            | IID_ID3D11_DEVICE
-            | IID_ID3D11_DEVICE1
-            | IID_ID3D11_DEVICE2
-            | IID_ID3D11_DEVICE3
-            | IID_ID3D11_DEVICE4
-            | IID_ID3D11_DEVICE5
-            | IID_D3D12_DEVICE_DOWNLEVEL
-    ) {
-        return E_NOINTERFACE;
-    }
-
     // SAFETY: `this` is a live `Device`.
     let dev = unsafe { &*this.cast::<Device>() };
-    if iid == IID_D3D12_DEVICE_EXT {
-        if !dev.temporal_supported {
-            return E_NOINTERFACE;
-        }
+    // SAFETY: `Device::EXT_OFFSET` is within `Device`.
+    let ext_ptr = unsafe { com::to_companion(this.cast::<Device>(), Device::EXT_OFFSET) };
+    // Refused without a line; `IID_D3D12_DEVICE_EXT`, last, only while temporal scaling is off.
+    let silent = [
+        IID_IDXGI_DEVICE,
+        IID_IDXGI_DEVICE1,
+        IID_IDXGI_DEVICE2,
+        IID_IDXGI_DEVICE3,
+        IID_IDXGI_DEVICE4,
+        IID_ID3D10_DEVICE,
+        IID_ID3D10_DEVICE1,
+        IID_ID3D11_DEVICE,
+        IID_ID3D11_DEVICE1,
+        IID_ID3D11_DEVICE2,
+        IID_ID3D11_DEVICE3,
+        IID_ID3D11_DEVICE4,
+        IID_ID3D11_DEVICE5,
+        IID_D3D12_DEVICE_DOWNLEVEL,
+        IID_D3D12_DEVICE_EXT,
+    ];
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &silent[..silent.len() - usize::from(dev.temporal_supported)],
+        log: &crate::LOG,
+        miss: com::QiMiss::Once {
+            object: &IID_ID3D12_DEVICE1,
+            name: "D3D12Device",
+        },
+    };
+    let ext: &[Guid] = if dev.temporal_supported {
+        &[IID_D3D12_DEVICE_EXT]
+    } else {
+        &[]
+    };
+    let add_ref = || {
         // SAFETY: `this` is a live `Device`.
-        let _ = unsafe { com::add_ref_com(this.cast::<Device>()) };
-        // SAFETY: `Device::EXT_OFFSET` is within `Device`.
-        let ext_ptr = unsafe { com::to_companion(this.cast::<Device>(), Device::EXT_OFFSET) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { ppv_object.write_unaligned(ext_ptr) };
-        return S_OK;
+        unsafe { com::add_ref_com(this.cast::<Device>()) };
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `Device`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv_object,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D12_OBJECT,
+                        IID_ID3D12_DEVICE,
+                        IID_ID3D12_DEVICE1,
+                        IID_ID3D12_DEVICE2,
+                        IID_ID3D12_DEVICE3,
+                        IID_ID3D12_DEVICE4,
+                        IID_ID3D12_DEVICE5,
+                        IID_ID3D12_DEVICE6,
+                        IID_ID3D12_DEVICE7,
+                        IID_ID3D12_DEVICE8,
+                        IID_ID3D12_DEVICE9,
+                        IID_ID3D12_DEVICE10,
+                    ],
+                    this,
+                ),
+                (ext, ext_ptr),
+            ],
+            add_ref,
+            &qi,
+        )
     }
-
-    if com::qi_log(&IID_ID3D12_DEVICE1, &iid) {
-        crate::warn!("D3D12Device: Unknown interface query {iid}");
-    }
-    E_NOINTERFACE
 }
 
 /// `IMTLD3D12DeviceExt::QueryInterface` (`d3d12_device.cpp:337`).

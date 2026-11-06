@@ -49,8 +49,8 @@ use winemetal_wire::{
 use crate::{
     abi::vtbl::ID3D12CommandAllocatorVtbl,
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid,
-        Hresult, IID_ID3D12_COMMAND_ALLOCATOR, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, Guid, Hresult,
+        IID_ID3D12_COMMAND_ALLOCATOR, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
         IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
     command_signature::CommandSignature,
@@ -1468,29 +1468,35 @@ unsafe extern "system-unwind" fn allocator_query_interface(
     ppv_object: *mut *mut c_void,
 ) -> i32 {
     crate::scope!("allocator.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` was checked non-null above.
-    unsafe { com::init_out_ptr(ppv_object) };
-    // SAFETY: `riid` is null or points to a caller-supplied 16-byte GUID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
+    let qi = com::Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Every("ID3D12CommandAllocator::QueryInterface"),
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D12_OBJECT
-        || iid == IID_ID3D12_DEVICE_CHILD
-        || iid == IID_ID3D12_PAGEABLE
-        || iid == IID_ID3D12_COMMAND_ALLOCATOR
-    {
+    let add_ref = || {
         // SAFETY: `this` is a valid `Allocator` COM object.
         unsafe { com::add_ref_com::<Allocator>(this.cast()) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = this };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a valid `Allocator`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv_object,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D12_OBJECT,
+                    IID_ID3D12_DEVICE_CHILD,
+                    IID_ID3D12_PAGEABLE,
+                    IID_ID3D12_COMMAND_ALLOCATOR,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    crate::warn!("ID3D12CommandAllocator::QueryInterface: Unknown interface query {iid}");
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn allocator_add_ref(this: *mut c_void) -> u32 {

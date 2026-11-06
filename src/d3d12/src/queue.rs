@@ -71,11 +71,10 @@ use crate::{
         vtbl::{ID3D12CommandQueueVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
-        IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1,
-        IID_ID3D11_DEVICE2, IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5,
-        IID_ID3D12_COMMAND_QUEUE, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE,
-        IID_IUNKNOWN, S_OK,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, Guid, Hresult, IID_ID3D10_DEVICE,
+        IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2,
+        IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_COMMAND_QUEUE,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
     device::Device,
     encoder::{
@@ -2350,53 +2349,54 @@ unsafe fn query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("queue.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { com::init_out_ptr(ppv_object) };
-    // SAFETY: `riid` is null or 16 readable bytes.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     let queue_ptr = this.cast::<Queue>();
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D12_OBJECT
-        || iid == IID_ID3D12_DEVICE_CHILD
-        || iid == IID_ID3D12_PAGEABLE
-        || iid == IID_ID3D12_COMMAND_QUEUE
-    {
+    // SAFETY: `Queue::FACTORY_OFFSET` is `offset_of!(Queue, swapchain_factory_vtbl)`.
+    let factory = unsafe { com::to_companion(queue_ptr, Queue::FACTORY_OFFSET) };
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[
+            IID_ID3D10_DEVICE,
+            IID_ID3D10_DEVICE1,
+            IID_ID3D11_DEVICE,
+            IID_ID3D11_DEVICE1,
+            IID_ID3D11_DEVICE2,
+            IID_ID3D11_DEVICE3,
+            IID_ID3D11_DEVICE4,
+            IID_ID3D11_DEVICE5,
+            IID_D3D12_COMMAND_QUEUE_DOWNLEVEL,
+        ],
+        log: &crate::LOG,
+        miss: com::QiMiss::Once {
+            object: &IID_ID3D12_COMMAND_QUEUE,
+            name: "D3D12CommandQueue",
+        },
+    };
+    let add_ref = || {
         // SAFETY: `queue_ptr` is a live `Queue`.
         unsafe { com::add_ref_com(queue_ptr) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { com::write_out(ppv_object, this) };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `Queue`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv_object,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D12_OBJECT,
+                        IID_ID3D12_DEVICE_CHILD,
+                        IID_ID3D12_PAGEABLE,
+                        IID_ID3D12_COMMAND_QUEUE,
+                    ],
+                    this,
+                ),
+                (&[IID_IMTL_SWAP_CHAIN_FACTORY], factory),
+            ],
+            add_ref,
+            &qi,
+        )
     }
-    if iid == IID_IMTL_SWAP_CHAIN_FACTORY {
-        // SAFETY: `queue_ptr` is a live `Queue`.
-        unsafe { com::add_ref_com(queue_ptr) };
-        // SAFETY: `Queue::FACTORY_OFFSET` is `offset_of!(Queue, swapchain_factory_vtbl)`.
-        let companion = unsafe { com::to_companion(queue_ptr, Queue::FACTORY_OFFSET) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { com::write_out(ppv_object, companion) };
-        return S_OK;
-    }
-    if iid == IID_ID3D10_DEVICE
-        || iid == IID_ID3D10_DEVICE1
-        || iid == IID_ID3D11_DEVICE
-        || iid == IID_ID3D11_DEVICE1
-        || iid == IID_ID3D11_DEVICE2
-        || iid == IID_ID3D11_DEVICE3
-        || iid == IID_ID3D11_DEVICE4
-        || iid == IID_ID3D11_DEVICE5
-        || iid == IID_D3D12_COMMAND_QUEUE_DOWNLEVEL
-    {
-        return E_NOINTERFACE;
-    }
-    if com::qi_log(&IID_ID3D12_COMMAND_QUEUE, &iid) {
-        crate::warn!("D3D12CommandQueue: Unknown interface query {iid}");
-    }
-    E_NOINTERFACE
 }
 
 /// Primary `ID3D12CommandQueue` vtable for [`Queue`].

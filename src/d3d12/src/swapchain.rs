@@ -16,7 +16,7 @@ use dxmt_core::{
     swapchain::{convert_color_space, convert_format, monitor_format_bpp, render_scale},
 };
 use dxmt_util::{
-    com::{ComObject, Guid, IID_IUNKNOWN, IUnknownVtbl, qi_log, vtbl, write_out},
+    com::{ComObject, Guid, IID_IUNKNOWN, IUnknownVtbl, vtbl, write_out},
     config::Config,
     dxgi_vtbl::IDXGISwapChain4Vtbl,
     private_data::PrivateData,
@@ -761,34 +761,41 @@ unsafe fn query_interface(
     out: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("swapchain.QueryInterface");
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was just checked non-null.
-    unsafe { init_out_ptr(out) };
-    // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
+    let qi = com::Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Once {
+            object: &IID_IDXGI_SWAP_CHAIN1,
+            name: "DXGISwapChain",
+        },
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_IDXGI_OBJECT
-        || iid == IID_IDXGI_DEVICE_SUB_OBJECT
-        || iid == IID_IDXGI_SWAP_CHAIN
-        || iid == IID_IDXGI_SWAP_CHAIN1
-        || iid == IID_IDXGI_SWAP_CHAIN2
-        || iid == IID_IDXGI_SWAP_CHAIN3
-        || iid == IID_IDXGI_SWAP_CHAIN4
-    {
+    let add_ref = || {
         // SAFETY: `this` is a live `SwapChain` pointer.
         unsafe { com::add_ref_com(this.cast::<SwapChain>()) };
-        // SAFETY: `out` is non-null.
-        unsafe { write_out(out, this) };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid; `this` is a live `SwapChain`.
+    unsafe {
+        com::qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_IDXGI_OBJECT,
+                    IID_IDXGI_DEVICE_SUB_OBJECT,
+                    IID_IDXGI_SWAP_CHAIN,
+                    IID_IDXGI_SWAP_CHAIN1,
+                    IID_IDXGI_SWAP_CHAIN2,
+                    IID_IDXGI_SWAP_CHAIN3,
+                    IID_IDXGI_SWAP_CHAIN4,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    if qi_log(&IID_IDXGI_SWAP_CHAIN1, &iid) {
-        crate::warn!("DXGISwapChain: Unknown interface query {iid}");
-    }
-    E_NOINTERFACE
 }
 
 /// `IDXGIObject::SetPrivateData` (`dxgi_object.hpp:16-19`).

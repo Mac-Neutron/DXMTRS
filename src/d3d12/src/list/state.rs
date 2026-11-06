@@ -29,8 +29,8 @@ use crate::{
     },
     allocator::Allocator,
     com::{
-        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
-        IID_ID3D12_COMMAND_LIST, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_GRAPHICS_COMMAND_LIST,
+        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, IID_ID3D12_COMMAND_LIST,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_GRAPHICS_COMMAND_LIST,
         IID_ID3D12_GRAPHICS_COMMAND_LIST1, IID_ID3D12_GRAPHICS_COMMAND_LIST2,
         IID_ID3D12_GRAPHICS_COMMAND_LIST3, IID_ID3D12_GRAPHICS_COMMAND_LIST4,
         IID_ID3D12_GRAPHICS_COMMAND_LIST5, IID_ID3D12_GRAPHICS_COMMAND_LIST6,
@@ -402,53 +402,55 @@ pub unsafe fn query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("list.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { com::init_out_ptr(ppv_object) };
     if this.is_null() {
-        return E_INVALIDARG;
+        // SAFETY: `ppv_object` is null or writable.
+        return unsafe { com::qi_refuse(ppv_object, E_INVALIDARG) };
     }
-    // SAFETY: `riid` is null or points to a 16-byte `Guid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     let list_ptr = this.cast::<List>();
-    if matches!(
-        iid,
-        IID_IUNKNOWN
-            | IID_ID3D12_OBJECT
-            | IID_ID3D12_DEVICE_CHILD
-            | IID_ID3D12_COMMAND_LIST
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST1
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST2
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST3
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST4
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST5
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST6
-            | IID_ID3D12_GRAPHICS_COMMAND_LIST7
-    ) {
+    // SAFETY: `List::EXT_OFFSET` is within `List`.
+    let ext_ptr = unsafe { com::to_companion(list_ptr, List::EXT_OFFSET) };
+    let qi = com::Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Once {
+            object: &IID_ID3D12_GRAPHICS_COMMAND_LIST,
+            name: "D3D12GraphicsCommandList",
+        },
+    };
+    let add_ref = || {
         // SAFETY: `list_ptr` is a live `List`.
         unsafe { com::add_ref_com(list_ptr) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { ppv_object.write_unaligned(this) };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `List`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv_object,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D12_OBJECT,
+                        IID_ID3D12_DEVICE_CHILD,
+                        IID_ID3D12_COMMAND_LIST,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST1,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST2,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST3,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST4,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST5,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST6,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST7,
+                    ],
+                    this,
+                ),
+                (&[IID_D3D12_COMMAND_LIST_EXT], ext_ptr),
+            ],
+            add_ref,
+            &qi,
+        )
     }
-    if iid == IID_D3D12_COMMAND_LIST_EXT {
-        // SAFETY: `list_ptr` is a live `List`.
-        unsafe { com::add_ref_com(list_ptr) };
-        // SAFETY: `List::EXT_OFFSET` is within `List`.
-        let ext_ptr = unsafe { com::to_companion(list_ptr, List::EXT_OFFSET) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { ppv_object.write_unaligned(ext_ptr) };
-        return S_OK;
-    }
-    if com::qi_log(&IID_ID3D12_GRAPHICS_COMMAND_LIST, &iid) {
-        crate::warn!("D3D12GraphicsCommandList: Unknown interface query {iid}");
-    }
-    E_NOINTERFACE
 }
 
 /// `IMTLD3D12CommandListExt::QueryInterface` (`d3d12_command_list.cpp:41`).

@@ -34,9 +34,9 @@ use crate::{
         vtbl::{ID3D12CommandSignatureVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid,
-        Hresult, IID_ID3D12_COMMAND_SIGNATURE, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
-        IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_FALSE, S_OK,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOTIMPL, Guid, Hresult,
+        IID_ID3D12_COMMAND_SIGNATURE, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
+        IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_FALSE,
     },
     device::Device,
 };
@@ -158,31 +158,39 @@ unsafe extern "system-unwind" fn cmdsig_query_interface(
     out: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("cmdsig.QueryInterface");
-    if out.is_null() {
-        return E_POINTER;
+    if this.is_null() {
+        // SAFETY: the out pointer is null or writable.
+        return unsafe { com::qi_refuse(out, E_INVALIDARG) };
     }
-    // SAFETY: `out` was just checked non-null.
-    unsafe { *out = ptr::null_mut() };
-    if this.is_null() || riid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `riid` is a non-null `GUID` pointer from the caller.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Quiet,
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D12_OBJECT
-        || iid == IID_ID3D12_DEVICE_CHILD
-        || iid == IID_ID3D12_PAGEABLE
-        || iid == IID_ID3D12_COMMAND_SIGNATURE
-    {
+    let add_ref = || {
         // SAFETY: `this` is a live `CommandSignature`.
         unsafe { com::add_ref_com(this.cast::<CommandSignature>()) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and out pointer, null or valid; `this` is a live `CommandSignature`.
+    unsafe {
+        com::qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D12_OBJECT,
+                    IID_ID3D12_DEVICE_CHILD,
+                    IID_ID3D12_PAGEABLE,
+                    IID_ID3D12_COMMAND_SIGNATURE,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn cmdsig_add_ref(this: *mut c_void) -> u32 {

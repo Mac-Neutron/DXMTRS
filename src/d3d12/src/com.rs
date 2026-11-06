@@ -4,8 +4,8 @@ use core::{ffi::c_void, ops::Deref, ptr, ptr::NonNull};
 
 pub use dxmt_util::{
     com::{
-        ComObject, ComObjectWithInitialRef, Guid, Hresult, Object, add_ref, hresult::*, iid::*,
-        qi_log, query, release, vtbl, write_out,
+        ComObject, ComObjectWithInitialRef, Guid, Hresult, Object, Qi, QiMiss, add_ref, hresult::*,
+        iid::*, qi_log, qi_refuse, qi_table, query, release, vtbl, write_out,
     },
     private_data::{PrivateData, WKPDID_D3D_DEBUG_OBJECT_NAME_W},
 };

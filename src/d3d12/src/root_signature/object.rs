@@ -24,8 +24,8 @@ use crate::{
         vtbl::{ID3D12RootSignatureVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
-        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_ROOT_SIGNATURE, IID_IUNKNOWN, S_OK,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_ROOT_SIGNATURE, IID_IUNKNOWN,
     },
     device::Device,
     root_signature::{
@@ -131,26 +131,23 @@ pub unsafe fn query_interface(
     warn_unknown: bool,
 ) -> Hresult {
     crate::scope!("rootsig.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { *ppv_object = ptr::null_mut() };
-    // SAFETY: `riid` is an IID pointer when non-null.
-    let Some(iid) = (unsafe { riid.cast::<Guid>().as_ref() }) else {
-        return E_NOINTERFACE;
+    let qi = com::Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: if warn_unknown {
+            com::QiMiss::Every("D3D12RootSignature")
+        } else {
+            com::QiMiss::Quiet
+        },
     };
-    if accepted.contains(iid) {
+    let add_ref = || {
         // SAFETY: `this` is a live COM object of the caller's type.
         unsafe { add_ref(this) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = this };
-        return S_OK;
-    }
-    if warn_unknown {
-        crate::warn!("D3D12RootSignature: Unknown interface query {iid}");
-    }
-    E_NOINTERFACE
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live COM object
+    // of the caller's type.
+    unsafe { com::qi_table(riid, ppv_object, &[(accepted, this)], add_ref, &qi) }
 }
 
 unsafe fn add_ref_root_signature(this: *mut c_void) {

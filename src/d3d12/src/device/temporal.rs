@@ -45,8 +45,8 @@ use crate::{
         vtbl::IUnknownVtbl,
     },
     com::{
-        self, ComRefCounted, DXGI_ERROR_UNSUPPORTED, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY,
-        E_POINTER, Guid, Hresult, IID_IUNKNOWN, S_OK,
+        self, ComRefCounted, DXGI_ERROR_UNSUPPORTED, E_INVALIDARG, E_OUTOFMEMORY, Hresult,
+        IID_IUNKNOWN, S_OK,
     },
     device::Device,
     slot,
@@ -98,23 +98,26 @@ unsafe fn scaler_query_interface(
     riid: *const c_void,
     ppv: *mut *mut c_void,
 ) -> Hresult {
-    if ppv.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv` is non-null.
-    unsafe { com::init_out_ptr(ppv) };
-    // SAFETY: `riid` is null or points to a 16-byte `Guid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Quiet,
     };
-    if iid == IID_IUNKNOWN || iid == IID_D3D12_TEMPORAL_SCALER {
+    let add_ref = || {
         // SAFETY: `this` is a live `TemporalScalerObject`.
-        let _ = unsafe { com::add_ref_com(this.cast::<TemporalScalerObject>()) };
-        // SAFETY: `ppv` is non-null.
-        unsafe { ppv.write_unaligned(this) };
-        return S_OK;
+        unsafe { com::add_ref_com(this.cast::<TemporalScalerObject>()) };
+    };
+    // SAFETY: the application's `riid` and `ppv`, null or valid; `this` is a live `TemporalScalerObject`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv,
+            &[(&[IID_IUNKNOWN, IID_D3D12_TEMPORAL_SCALER], this)],
+            add_ref,
+            &qi,
+        )
     }
-    E_NOINTERFACE
 }
 
 static TEMPORAL_SCALER_VTBL: D3D12TemporalScalerVtbl = D3D12TemporalScalerVtbl {

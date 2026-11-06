@@ -21,9 +21,8 @@ use crate::{
         vtbl::{ID3D12QueryHeapVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
-        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_QUERY_HEAP,
-        IID_IUNKNOWN, S_FALSE, S_OK,
+        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, Guid, Hresult, IID_ID3D12_DEVICE_CHILD,
+        IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_QUERY_HEAP, IID_IUNKNOWN, S_FALSE,
     },
     device::Device,
     slot,
@@ -123,31 +122,38 @@ pub fn timestamp_blits() -> bool {
 
 static QUERY_HEAP_VTBL: ID3D12QueryHeapVtbl = ID3D12QueryHeapVtbl {
     query_interface: slot!("queryheap.QueryInterface", (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
-        if ppv_object.is_null() {
-            return E_POINTER;
-        }
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { com::init_out_ptr(ppv_object) };
-        // SAFETY: `riid` is a caller-supplied GUID pointer.
-        let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
+        let qi = com::Qi {
+            null_riid: E_INVALIDARG,
+            silent: &[],
+            log: &crate::LOG,
+            miss: com::QiMiss::Once {
+                object: &IID_ID3D12_QUERY_HEAP,
+                name: "ID3D12QueryHeap::QueryInterface",
+            },
         };
-        if iid == IID_IUNKNOWN
-            || iid == IID_ID3D12_OBJECT
-            || iid == IID_ID3D12_DEVICE_CHILD
-            || iid == IID_ID3D12_PAGEABLE
-            || iid == IID_ID3D12_QUERY_HEAP
-        {
+        let add_ref = || {
             // SAFETY: `this` is a live `QueryHeap`.
             unsafe { com::add_ref_com(this.cast::<QueryHeap>()) };
-            // SAFETY: `ppv_object` is non-null and writable.
-            unsafe { ppv_object.write_unaligned(this) };
-            return S_OK;
+        };
+        // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `QueryHeap`.
+        unsafe {
+            com::qi_table(
+                riid,
+                ppv_object,
+                &[(
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D12_OBJECT,
+                        IID_ID3D12_DEVICE_CHILD,
+                        IID_ID3D12_PAGEABLE,
+                        IID_ID3D12_QUERY_HEAP,
+                    ],
+                    this,
+                )],
+                add_ref,
+                &qi,
+            )
         }
-        if com::qi_log(&IID_ID3D12_QUERY_HEAP, &iid) {
-            crate::warn!("ID3D12QueryHeap::QueryInterface: Unknown interface query {iid}");
-        }
-        E_NOINTERFACE
     }),
     add_ref: slot!((this: *mut c_void) -> u32 => {
         // SAFETY: `this` is a live `QueryHeap`.

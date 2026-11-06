@@ -47,7 +47,7 @@ use crate::{
         },
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
+        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
         IID_ID3D12_DESCRIPTOR_HEAP, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
         IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
@@ -242,29 +242,35 @@ unsafe extern "system-unwind" fn query_interface(
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("heap.QueryInterface");
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: Caller passed a non-null output pointer.
-    unsafe { write_unaligned(ppv_object, ptr::null_mut()) };
-    // SAFETY: Reading caller-supplied IID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Every("DescriptorHeap::QueryInterface"),
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D12_OBJECT
-        || iid == IID_ID3D12_DEVICE_CHILD
-        || iid == IID_ID3D12_PAGEABLE
-        || iid == IID_ID3D12_DESCRIPTOR_HEAP
-    {
+    let add_ref = || {
         // SAFETY: `this` is a valid `Heap` COM pointer.
         unsafe { com::add_ref_com(this.cast::<Heap>()) };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { write_unaligned(ppv_object, this) };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `Heap`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv_object,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D12_OBJECT,
+                    IID_ID3D12_DEVICE_CHILD,
+                    IID_ID3D12_PAGEABLE,
+                    IID_ID3D12_DESCRIPTOR_HEAP,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    crate::warn!("DescriptorHeap::QueryInterface: Unknown interface query {iid}");
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn heap_add_ref(this: *mut c_void) -> u32 {

@@ -8,8 +8,8 @@ use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
 use crate::{
     abi::vtbl::{ID3D12PipelineLibrary1Vtbl, IUnknownVtbl},
     com::{
-        ComRefCounted, D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, E_NOINTERFACE, E_POINTER,
-        Guid, Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
+        ComRefCounted, D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, E_NOINTERFACE, Guid,
+        Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
         IID_ID3D12_PIPELINE_LIBRARY1, IID_ID3D12_PIPELINE_STATE, IID_IUNKNOWN, S_FALSE, S_OK,
         add_ref_com, init_out_ptr, release_com, set_name_private_data, vtbl,
     },
@@ -287,30 +287,34 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
     query_interface: crate::slot!(
         "library.QueryInterface",
         (this: *mut c_void, riid: *const c_void, object: *mut *mut c_void) -> Hresult => {
-            if object.is_null() {
-                return E_POINTER;
-            }
-            // SAFETY: `object` is non-null.
-            unsafe { init_out_ptr(object) };
-            // SAFETY: `riid` is null or points to a `Guid`.
-            let Some(guid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
+            let qi = crate::com::Qi {
+                null_riid: E_INVALIDARG,
+                silent: &[],
+                log: &crate::LOG,
+                miss: crate::com::QiMiss::Quiet,
             };
-            if matches!(
-                guid,
-                IID_IUNKNOWN
-                    | IID_ID3D12_OBJECT
-                    | IID_ID3D12_DEVICE_CHILD
-                    | IID_ID3D12_PIPELINE_LIBRARY
-                    | IID_ID3D12_PIPELINE_LIBRARY1
-            ) {
+            let add_ref = || {
                 // SAFETY: `this` is a live `PipelineLibrary`.
                 unsafe { add_ref_com(this.cast::<PipelineLibrary>()) };
-                // SAFETY: `object` is non-null and writable.
-                unsafe { object.write_unaligned(this) };
-                S_OK
-            } else {
-                E_NOINTERFACE
+            };
+            // SAFETY: the application's `riid` and `object`, null or valid; `this` is a live `PipelineLibrary`.
+            unsafe {
+                crate::com::qi_table(
+                    riid,
+                    object,
+                    &[(
+                        &[
+                            IID_IUNKNOWN,
+                            IID_ID3D12_OBJECT,
+                            IID_ID3D12_DEVICE_CHILD,
+                            IID_ID3D12_PIPELINE_LIBRARY,
+                            IID_ID3D12_PIPELINE_LIBRARY1,
+                        ],
+                        this,
+                    )],
+                    add_ref,
+                    &qi,
+                )
             }
         }
     ),

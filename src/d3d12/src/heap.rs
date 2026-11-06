@@ -34,8 +34,8 @@ use crate::{
         vtbl::{ID3D12HeapVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER,
-        Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_HEAP, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE,
+        self, ComRefCounted, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, Hresult,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_HEAP, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE,
         IID_IUNKNOWN, S_FALSE, S_OK, init_out_ptr,
     },
     device::Device,
@@ -101,31 +101,39 @@ unsafe extern "system-unwind" fn heap_query_interface(
     ppv: *mut *mut c_void,
 ) -> Hresult {
     crate::scope!("memheap.QueryInterface");
-    if ppv.is_null() {
-        return E_POINTER;
+    if this.is_null() {
+        // SAFETY: the out pointer is null or writable.
+        return unsafe { com::qi_refuse(ppv, E_INVALIDARG) };
     }
-    // SAFETY: `ppv` was checked non-null above.
-    unsafe { *ppv = ptr::null_mut() };
-    if this.is_null() || riid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `riid` is a valid non-null `GUID` pointer.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let qi = com::Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: com::QiMiss::Quiet,
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D12_OBJECT
-        || iid == IID_ID3D12_DEVICE_CHILD
-        || iid == IID_ID3D12_PAGEABLE
-        || iid == IID_ID3D12_HEAP
-    {
-        // SAFETY: `this` is a valid `HeapObject` COM pointer.
-        let _ = unsafe { com::add_ref_com(this.cast::<HeapObject>()) };
-        // SAFETY: `ppv` was checked non-null above.
-        unsafe { *ppv = this };
-        return S_OK;
+    let add_ref = || {
+        // SAFETY: `this` is a live `HeapObject`.
+        unsafe { com::add_ref_com(this.cast::<HeapObject>()) };
+    };
+    // SAFETY: the application's `riid` and out pointer, null or valid; `this` is a live `HeapObject`.
+    unsafe {
+        com::qi_table(
+            riid,
+            ppv,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D12_OBJECT,
+                    IID_ID3D12_DEVICE_CHILD,
+                    IID_ID3D12_PAGEABLE,
+                    IID_ID3D12_HEAP,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn heap_add_ref(this: *mut c_void) -> u32 {

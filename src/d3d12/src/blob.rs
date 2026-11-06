@@ -6,10 +6,7 @@ use dxmt_util::com::ComObject;
 
 use crate::{
     abi::vtbl::ID3D10BlobVtbl,
-    com::{
-        self, ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
-        IID_ID3D10_BLOB, IID_IUNKNOWN, S_OK,
-    },
+    com::{self, ComRefCounted, E_INVALIDARG, Hresult, IID_ID3D10_BLOB, IID_IUNKNOWN, S_OK},
     slot,
 };
 
@@ -29,26 +26,29 @@ impl ComRefCounted for Blob {
 
 static BLOB_VTBL: ID3D10BlobVtbl = ID3D10BlobVtbl {
     query_interface: slot!((this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
-        if ppv_object.is_null() {
-            return E_POINTER;
-        }
-        // SAFETY: `ppv_object` was checked non-null above.
-        unsafe { com::init_out_ptr(ppv_object) };
-        // SAFETY: `riid` is a caller-supplied GUID pointer.
-        let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
+        let qi = com::Qi {
+            null_riid: E_INVALIDARG,
+            silent: &[],
+            log: &crate::LOG,
+            miss: com::QiMiss::Once {
+                object: &IID_ID3D10_BLOB,
+                name: "ID3D10Blob::QueryInterface",
+            },
         };
-        if iid == IID_IUNKNOWN || iid == IID_ID3D10_BLOB {
+        let add_ref = || {
             // SAFETY: `this` is a live `Blob`.
             unsafe { com::add_ref_com(this.cast::<Blob>()) };
-            // SAFETY: `ppv_object` is non-null and writable.
-            unsafe { ppv_object.write_unaligned(this) };
-            return S_OK;
+        };
+        // SAFETY: the application's `riid` and `ppv_object`, null or valid; `this` is a live `Blob`.
+        unsafe {
+            com::qi_table(
+                riid,
+                ppv_object,
+                &[(&[IID_IUNKNOWN, IID_ID3D10_BLOB], this)],
+                add_ref,
+                &qi,
+            )
         }
-        if com::qi_log(&IID_ID3D10_BLOB, &iid) {
-            crate::warn!("ID3D10Blob::QueryInterface: Unknown interface query {iid}");
-        }
-        E_NOINTERFACE
     }),
     add_ref: slot!((this: *mut c_void) -> u32 => {
         // SAFETY: `this` is a live `Blob`.
