@@ -294,6 +294,9 @@ const fn write_so_offset(offsets: *mut u32, index: usize) {
     }
 }
 
+/// The results of a visibility query that retired with nothing counted, up to any real length.
+const RETIRED_QUERY_ZEROS: [u64; 256] = [0; 256];
+
 impl Context<Immediate> {
     /// Allocates and initializes a new immediate context (`MTLD3D11ImmediateContext`).
     #[must_use]
@@ -438,8 +441,13 @@ impl Context<Immediate> {
             if self.mode.active_visibility_queries[i].0 <= target_seq {
                 let (seq, count, vq) = self.mode.active_visibility_queries.swap_remove(i);
                 let len = usize::try_from(count).unwrap_or(0).max(1);
-                let zeros = vec![0u64; len];
-                vq.issue(seq, &zeros);
+                // A retired query adds nothing: zeros of its length, from a constant unless it
+                // is longer than any real one.
+                if let Some(zeros) = RETIRED_QUERY_ZEROS.get(..len) {
+                    vq.issue(seq, zeros);
+                } else {
+                    vq.issue(seq, &vec![0u64; len]);
+                }
             } else {
                 i += 1;
             }
