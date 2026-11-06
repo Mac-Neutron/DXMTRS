@@ -8,7 +8,7 @@ use core::{
 };
 
 use dxmt_util::{
-    com::{IUnknownVtbl, release as release_unknown, vtbl},
+    com::{IUnknownVtbl, Qi, QiMiss, qi_table, release as release_unknown, vtbl},
     luid_from_registry_id,
     private_data::PrivateData,
 };
@@ -21,10 +21,11 @@ use crate::{
         DXGI_ADAPTER_FLAG3_NONE, DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY, DXGI_ERROR_NOT_FOUND,
         DXGI_ERROR_UNSUPPORTED, DXGI_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY,
         DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, E_INVALIDARG,
-        E_NOTIMPL, Guid, Hresult, IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_IDXGI_ADAPTER,
-        IID_IDXGI_ADAPTER1, IID_IDXGI_ADAPTER2, IID_IDXGI_ADAPTER3, IID_IDXGI_ADAPTER4,
-        IID_IDXGI_DEVICE, IID_IDXGI_OBJECT, IID_IMTL_DXGI_ADAPTER, IID_IUNKNOWN,
-        IID_WINE_DXGI_ADAPTER, Luid, ObjectVtbl, QueryVideoMemoryInfo, S_OK, Wchar, transcode_into,
+        E_NOTIMPL, E_POINTER, Guid, Hresult, IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1,
+        IID_IDXGI_ADAPTER, IID_IDXGI_ADAPTER1, IID_IDXGI_ADAPTER2, IID_IDXGI_ADAPTER3,
+        IID_IDXGI_ADAPTER4, IID_IDXGI_DEVICE, IID_IDXGI_OBJECT, IID_IMTL_DXGI_ADAPTER,
+        IID_IUNKNOWN, IID_WINE_DXGI_ADAPTER, Luid, ObjectVtbl, QueryVideoMemoryInfo, S_OK, Wchar,
+        transcode_into,
     },
     com::{self, Head},
     config::{CONFIG, Options},
@@ -336,17 +337,26 @@ extern "system" fn adapter_query_interface(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> Hresult {
+    let qi = Qi {
+        null_riid: E_POINTER,
+        silent: &[IID_WINE_DXGI_ADAPTER],
+        log: &LOG,
+        miss: QiMiss::Once {
+            object: &IID_IDXGI_ADAPTER,
+            name: "DXGIAdapter",
+        },
+    };
     // SAFETY: a live adapter, whose `AddRef` is `adapter_add_ref`; `riid` and `out` are the
     // application's, each null or valid, with no alignment promised.
     unsafe {
-        com::query_interface(
-            this,
-            riid,
+        qi_table(
+            riid.cast(),
             out,
-            &ANSWERED,
-            &[IID_WINE_DXGI_ADAPTER],
-            (&IID_IDXGI_ADAPTER, "DXGIAdapter"),
-            adapter_add_ref,
+            &[(&ANSWERED, this)],
+            || {
+                adapter_add_ref(this);
+            },
+            &qi,
         )
     }
 }
@@ -363,50 +373,37 @@ extern "system" fn adapter_release(this: *mut c_void) -> u32 {
 
 extern "system" fn adapter_set_private_data(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     size: u32,
     data: *const c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or readable.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: a live adapter.
-    let adapter = unsafe { adapter_of(this) };
-    // SAFETY: the application's `data`, null or `size` readable bytes.
-    unsafe { adapter.private.set_data(guid, size, data) }
+    // SAFETY: the slot's `this` is a live adapter.
+    let private = &unsafe { adapter_of(this) }.private;
+    // SAFETY: the application's `name` and `data` are null or valid, the GUID read unaligned.
+    unsafe { private.set_ffi(name.cast(), size, data) }
 }
 
 extern "system" fn adapter_set_private_data_interface(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     unknown: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or readable.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: a live adapter.
-    let adapter = unsafe { adapter_of(this) };
-    // SAFETY: the application's interface, null or a live COM object.
-    unsafe { adapter.private.set_interface(guid, unknown) }
+    // SAFETY: the slot's `this` is a live adapter.
+    let private = &unsafe { adapter_of(this) }.private;
+    // SAFETY: the application's `name` is null or a GUID and `unknown` null or a live COM object.
+    unsafe { private.set_interface_ffi(name.cast(), unknown) }
 }
 
 extern "system" fn adapter_get_private_data(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     size: *mut u32,
     data: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or readable.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: a live adapter.
-    let adapter = unsafe { adapter_of(this) };
-    // SAFETY: the application's `size` and `data`, each null or valid for the call, with no
-    // alignment promised.
-    unsafe { adapter.private.get_data(guid, size, data) }
+    // SAFETY: the slot's `this` is a live adapter.
+    let private = &unsafe { adapter_of(this) }.private;
+    // SAFETY: the application's `name`, `size` and `data` are null or valid, with no alignment promised.
+    unsafe { private.get_ffi(name.cast(), size, data) }
 }
 
 /// `GetParent`: the factory's `QueryInterface`, which answers a null `riid` itself.

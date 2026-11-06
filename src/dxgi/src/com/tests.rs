@@ -1,7 +1,6 @@
 use std::sync::{Arc, atomic::AtomicU32};
 
 use super::*;
-use crate::abi::{E_NOINTERFACE, E_POINTER, S_OK};
 
 /// A test object: its `Head`, then a count of its drops.
 #[repr(C)]
@@ -23,12 +22,6 @@ fn probe(drops: &Arc<AtomicU32>) -> *mut c_void {
         drops: Arc::clone(drops),
     }))
     .cast()
-}
-
-/// `Probe`'s `AddRef` slot.
-extern "system" fn probe_add_ref(this: *mut c_void) -> u32 {
-    // SAFETY: the slot's `this` is a live `Probe`.
-    unsafe { add_ref::<Probe>(this) }
 }
 
 #[test]
@@ -100,58 +93,4 @@ fn eight_threads_balance() {
     // SAFETY: the test's reference to a live `Probe`, from `Box::into_raw`.
     assert_eq!(unsafe { release::<Probe>(this) }, 0);
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn query_interface_answers_this_and_nulls_the_rest() {
-    const ANSWERED: Guid = Guid::new(0x5e1f_0001, 0, 0, [0; 8]);
-    const SILENT: Guid = Guid::new(0x5e1f_0002, 0, 0, [0; 8]);
-    const OTHER: Guid = Guid::new(0x5e1f_0003, 0, 0, [0; 8]);
-    // Logged already, so the miss below writes no log file beside the test.
-    assert!(qi_log(&ANSWERED, &OTHER));
-    let drops = Arc::default();
-    let this = probe(&drops);
-    let ask = |riid: *const Guid, out: *mut *mut c_void| {
-        let log_as = (&ANSWERED, "Probe");
-        // SAFETY: `this` is a live `Probe`; `riid` and `out` are null or the test's locals.
-        unsafe {
-            query_interface(
-                this,
-                riid,
-                out,
-                &[ANSWERED],
-                &[SILENT],
-                log_as,
-                probe_add_ref,
-            )
-        }
-    };
-    assert_eq!(
-        ask(core::ptr::from_ref(&ANSWERED), core::ptr::null_mut()),
-        E_POINTER
-    );
-    let mut out = this;
-    assert_eq!(ask(core::ptr::null(), &raw mut out), E_POINTER);
-    assert!(out.is_null());
-    assert_eq!(ask(core::ptr::from_ref(&ANSWERED), &raw mut out), S_OK);
-    assert_eq!(out, this);
-    for riid in [SILENT, OTHER] {
-        assert_eq!(ask(&raw const riid, &raw mut out), E_NOINTERFACE);
-        assert!(out.is_null());
-    }
-    // SAFETY: `this` is a live `Probe`: the reference QueryInterface took.
-    assert_eq!(unsafe { release::<Probe>(this) }, 1);
-    // SAFETY: as above, the last one, from `Box::into_raw`.
-    assert_eq!(unsafe { release::<Probe>(this) }, 0);
-}
-
-#[test]
-fn a_miss_is_logged_once_per_pair() {
-    const OBJECT: Guid = Guid::new(0x5e1f_0010, 0, 0, [0; 8]);
-    const ASKED: Guid = Guid::new(0x5e1f_0011, 0, 0, [0; 8]);
-    const ELSE: Guid = Guid::new(0x5e1f_0012, 0, 0, [0; 8]);
-    assert!(qi_log(&OBJECT, &ASKED));
-    assert!(!qi_log(&OBJECT, &ASKED));
-    assert!(qi_log(&OBJECT, &ELSE));
-    assert!(qi_log(&ELSE, &ASKED));
 }

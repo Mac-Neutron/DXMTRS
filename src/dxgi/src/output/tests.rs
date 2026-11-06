@@ -1,8 +1,7 @@
+use dxmt_util::com::qi_log;
+
 use super::*;
-use crate::{
-    abi::{DXGI_FORMAT_R8G8B8A8_UNORM, E_NOINTERFACE, E_POINTER, IID_IDXGI_FACTORY},
-    com::qi_log,
-};
+use crate::abi::{DXGI_FORMAT_R8G8B8A8_UNORM, E_NOINTERFACE, E_POINTER, IID_IDXGI_FACTORY};
 
 /// A stand-in adapter: an `IUnknown` with a count, which the output holds a reference to.
 #[repr(C)]

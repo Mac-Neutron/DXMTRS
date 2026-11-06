@@ -9,9 +9,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering, fence},
 };
 
-pub use dxmt_util::com::{qi_log, write_out};
-
-use crate::abi::{E_NOINTERFACE, E_POINTER, Guid, Hresult, S_OK};
+pub use dxmt_util::com::write_out;
 
 /// An object's first field: its vtable, then its reference count, from 1.
 #[repr(C)]
@@ -72,48 +70,6 @@ pub unsafe fn release<T>(this: *mut c_void) -> u32 {
         Ok(count) => count - 1,
         Err(_) => 0,
     }
-}
-
-/// `QueryInterface` on an object that answers `answered` with itself.
-///
-/// A null `out` is `E_POINTER`; otherwise `*out` is nulled first, and a null `riid` is `E_POINTER`
-/// too (the C++ reads through it). A match takes a reference to `this` through `add_ref` (the
-/// object's slot) and writes it. Any other IID is `E_NOINTERFACE`, logged at warn once per object
-/// and IID as `<name>: Unknown interface query <iid>` unless it is in `silent`; `log_as` is the
-/// object's IID and name for that line.
-///
-/// # Safety
-///
-/// `this` is a live object whose `AddRef` is `add_ref`; `riid` is null or addresses a GUID; `out`
-/// is null or addresses a writable pointer. Neither of the last two needs to be aligned.
-pub unsafe fn query_interface(
-    this: *mut c_void,
-    riid: *const Guid,
-    out: *mut *mut c_void,
-    answered: &[Guid],
-    silent: &[Guid],
-    log_as: (&Guid, &str),
-    add_ref: extern "system" fn(*mut c_void) -> u32,
-) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: the caller's: `out` is non-null here and writable.
-    unsafe { write_out(out, core::ptr::null_mut()) };
-    // SAFETY: the caller's: `riid` is null or addresses a GUID.
-    let Some(riid) = (unsafe { Guid::read(riid) }) else {
-        return E_POINTER;
-    };
-    if answered.contains(&riid) {
-        add_ref(this);
-        // SAFETY: as above.
-        unsafe { write_out(out, this) };
-        return S_OK;
-    }
-    if !silent.contains(&riid) && qi_log(log_as.0, &riid) {
-        crate::LOG.warn(&format!("{}: Unknown interface query {riid}", log_as.1));
-    }
-    E_NOINTERFACE
 }
 
 /// The reference count of `this`, a `T` that starts with a `Head`.

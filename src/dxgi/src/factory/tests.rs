@@ -245,7 +245,7 @@ fn qi_answers_factory_one_to_six() {
 #[test]
 fn qi_refuses_factory_seven() {
     // Logged already, so the miss writes no log file beside the test.
-    crate::com::qi_log(&IID_IDXGI_FACTORY2, &IID_IDXGI_FACTORY7);
+    dxmt_util::com::qi_log(&IID_IDXGI_FACTORY2, &IID_IDXGI_FACTORY7);
     let factory = create(0);
     let mut out = factory;
     let riid = ptr::from_ref(&IID_IDXGI_FACTORY7);
@@ -278,6 +278,34 @@ fn add_ref_release_count() {
     assert_eq!(add_ref_slot(factory), 3);
     assert_eq!(release_slot(factory), 2);
     assert_eq!(release_slot(factory), 1);
+    assert_eq!(release_slot(factory), 0);
+}
+
+#[test]
+fn private_data_round_trips_through_the_slots() {
+    let factory = create(0);
+    let object = &slots(factory).object;
+    let name = IID_IDXGI_FACTORY;
+    let data = [7_u8, 8, 9];
+    // SAFETY: a live factory; `name` and `data` are the test's locals.
+    let set =
+        unsafe { (object.set_private_data)(factory, &raw const name, 3, data.as_ptr().cast()) };
+    assert_eq!(set, S_OK);
+    let mut size = 3_u32;
+    let mut got = [0_u8; 3];
+    // SAFETY: as above; `size` and `got` are the test's locals.
+    let hr = unsafe {
+        (object.get_private_data)(
+            factory,
+            &raw const name,
+            &raw mut size,
+            got.as_mut_ptr().cast(),
+        )
+    };
+    assert_eq!((hr, size, got), (S_OK, 3, data));
+    // SAFETY: a null name is the case under test.
+    let hr = unsafe { (object.set_private_data)(factory, ptr::null(), 3, data.as_ptr().cast()) };
+    assert_eq!(hr, E_INVALIDARG);
     assert_eq!(release_slot(factory), 0);
 }
 

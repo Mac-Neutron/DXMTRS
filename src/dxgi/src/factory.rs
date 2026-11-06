@@ -11,7 +11,7 @@ use core::{
 };
 
 use dxmt_util::{
-    com::{IUnknownVtbl, query, vtbl},
+    com::{IUnknownVtbl, Qi, QiMiss, qi_table, query, vtbl},
     private_data::PrivateData,
 };
 
@@ -28,7 +28,7 @@ use crate::{
         SwapChainDesc1, SwapChainFactoryVtbl, SwapChainFullscreenDesc,
     },
     adapter,
-    com::{Head, add_ref, query_interface, release, write_out},
+    com::{Head, add_ref, release, write_out},
     ffi, wsi,
 };
 
@@ -152,10 +152,28 @@ extern "system" fn factory_query_interface(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> Hresult {
-    let log_as = (&IID_IDXGI_FACTORY2, "DXGIFactory");
+    let qi = Qi {
+        null_riid: E_POINTER,
+        silent: &[],
+        log: &LOG,
+        miss: QiMiss::Once {
+            object: &IID_IDXGI_FACTORY2,
+            name: "DXGIFactory",
+        },
+    };
     // SAFETY: the slot's `this` is a live factory whose `AddRef` is `factory_add_ref`; `riid` and
-    // `out` are the application's, null or valid, which `query_interface` reads unaligned.
-    unsafe { query_interface(this, riid, out, &ANSWERED, &[], log_as, factory_add_ref) }
+    // `out` are the application's, null or valid, which `qi_table` reads unaligned.
+    unsafe {
+        qi_table(
+            riid.cast(),
+            out,
+            &[(&ANSWERED, this)],
+            || {
+                factory_add_ref(this);
+            },
+            &qi,
+        )
+    }
 }
 
 extern "system" fn factory_add_ref(this: *mut c_void) -> u32 {
@@ -174,14 +192,10 @@ extern "system" fn factory_set_private_data(
     size: u32,
     data: *const c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or 16 bytes; the read assumes no alignment.
-    let Some(name) = (unsafe { Guid::read(name) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live factory.
-    let factory = unsafe { factory(this) };
-    // SAFETY: the application's `data`, null or `size` readable bytes.
-    unsafe { factory.private_data.set_data(name, size, data) }
+    let private = &unsafe { factory(this) }.private_data;
+    // SAFETY: the application's `name` and `data` are null or valid, the GUID read unaligned.
+    unsafe { private.set_ffi(name.cast(), size, data) }
 }
 
 extern "system" fn factory_set_private_data_interface(
@@ -189,14 +203,10 @@ extern "system" fn factory_set_private_data_interface(
     name: *const Guid,
     unknown: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or 16 bytes; the read assumes no alignment.
-    let Some(name) = (unsafe { Guid::read(name) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live factory.
-    let factory = unsafe { factory(this) };
-    // SAFETY: the application's interface, null or a live COM object.
-    unsafe { factory.private_data.set_interface(name, unknown) }
+    let private = &unsafe { factory(this) }.private_data;
+    // SAFETY: the application's `name` is null or a GUID and `unknown` null or a live COM object.
+    unsafe { private.set_interface_ffi(name.cast(), unknown) }
 }
 
 extern "system" fn factory_get_private_data(
@@ -205,15 +215,10 @@ extern "system" fn factory_get_private_data(
     size: *mut u32,
     data: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID, null or 16 bytes; the read assumes no alignment.
-    let Some(name) = (unsafe { Guid::read(name) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live factory.
-    let factory = unsafe { factory(this) };
-    // SAFETY: the application's `size` and `data`, null or valid, which `get_data` reaches
-    // unaligned.
-    unsafe { factory.private_data.get_data(name, size, data) }
+    let private = &unsafe { factory(this) }.private_data;
+    // SAFETY: the application's `name`, `size` and `data` are null or valid, with no alignment promised.
+    unsafe { private.get_ffi(name.cast(), size, data) }
 }
 
 extern "system" fn factory_get_parent(

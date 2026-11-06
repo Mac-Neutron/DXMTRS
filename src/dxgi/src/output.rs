@@ -13,7 +13,10 @@ use core::{
 };
 
 use dxmt_util::{
-    GAMMA_CP_COUNT, GammaRamp, com::vtbl, float_cast::u32_to_f32, private_data::PrivateData,
+    GAMMA_CP_COUNT, GammaRamp,
+    com::{Qi, QiMiss, qi_table, vtbl},
+    float_cast::u32_to_f32,
+    private_data::PrivateData,
 };
 use winemetal_wire::WMTDisplayDescription;
 
@@ -23,7 +26,7 @@ use crate::{
         DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
         DXGI_ENUM_MODES_SCALING, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_MORE_DATA,
         DXGI_ERROR_NOT_FOUND, DXGI_ERROR_UNSUPPORTED, DXGI_FORMAT_UNKNOWN,
-        DXGI_MODE_ROTATION_UNSPECIFIED, E_FAIL, E_INVALIDARG, E_NOTIMPL, GammaControl,
+        DXGI_MODE_ROTATION_UNSPECIFIED, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, GammaControl,
         GammaControlCapabilities, Guid, Hmonitor, Hresult, IID_IDXGI_OBJECT, IID_IDXGI_OUTPUT,
         IID_IDXGI_OUTPUT1, IID_IDXGI_OUTPUT2, IID_IDXGI_OUTPUT3, IID_IDXGI_OUTPUT4,
         IID_IDXGI_OUTPUT5, IID_IDXGI_OUTPUT6, IID_IMTL_DXGI_OUTPUT, IID_IUNKNOWN, IUnknownVtbl,
@@ -475,10 +478,28 @@ extern "system" fn output_query_interface(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> Hresult {
-    let log_as = (&IID_IDXGI_OUTPUT, "DXGIOutput");
+    let qi = Qi {
+        null_riid: E_POINTER,
+        silent: &[],
+        log: &LOG,
+        miss: QiMiss::Once {
+            object: &IID_IDXGI_OUTPUT,
+            name: "DXGIOutput",
+        },
+    };
     // SAFETY: the slot's `this` is a live output, whose `AddRef` is `output_add_ref`; `riid` and
     // `out` are the application's, null or valid, with no alignment promised.
-    unsafe { com::query_interface(this, riid, out, &ANSWERED, &[], log_as, output_add_ref) }
+    unsafe {
+        qi_table(
+            riid.cast(),
+            out,
+            &[(&ANSWERED, this)],
+            || {
+                output_add_ref(this);
+            },
+            &qi,
+        )
+    }
 }
 
 extern "system" fn output_add_ref(this: *mut c_void) -> u32 {
@@ -493,49 +514,37 @@ extern "system" fn output_release(this: *mut c_void) -> u32 {
 
 extern "system" fn output_set_private_data(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     size: u32,
     data: *const c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID pointer: null or a GUID, with no alignment promised.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live output.
-    let output = unsafe { Output::from_this(this) };
-    // SAFETY: the application's `data`: null or `size` readable bytes.
-    unsafe { output.private_data.set_data(guid, size, data) }
+    let private = &unsafe { Output::from_this(this) }.private_data;
+    // SAFETY: the application's `name` and `data` are null or valid, the GUID read unaligned.
+    unsafe { private.set_ffi(name.cast(), size, data) }
 }
 
 extern "system" fn output_set_private_data_interface(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     unknown: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID pointer: null or a GUID, with no alignment promised.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live output.
-    let output = unsafe { Output::from_this(this) };
-    // SAFETY: the application's `unknown`: null or a live COM object.
-    unsafe { output.private_data.set_interface(guid, unknown) }
+    let private = &unsafe { Output::from_this(this) }.private_data;
+    // SAFETY: the application's `name` is null or a GUID and `unknown` null or a live COM object.
+    unsafe { private.set_interface_ffi(name.cast(), unknown) }
 }
 
 extern "system" fn output_get_private_data(
     this: *mut c_void,
-    guid: *const Guid,
+    name: *const Guid,
     size: *mut u32,
     data: *mut c_void,
 ) -> Hresult {
-    // SAFETY: the application's GUID pointer: null or a GUID, with no alignment promised.
-    let Some(guid) = (unsafe { Guid::read(guid) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: the slot's `this` is a live output.
-    let output = unsafe { Output::from_this(this) };
-    // SAFETY: the application's `size` and `data`: each null or valid for `*size` bytes.
-    unsafe { output.private_data.get_data(guid, size, data) }
+    let private = &unsafe { Output::from_this(this) }.private_data;
+    // SAFETY: the application's `name`, `size` and `data` are null or valid, with no alignment promised.
+    unsafe { private.get_ffi(name.cast(), size, data) }
 }
 
 extern "system" fn output_get_parent(
