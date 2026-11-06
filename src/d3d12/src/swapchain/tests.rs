@@ -1,6 +1,8 @@
 use core::cell::Cell;
 
-use super::{leave_fullscreen_background, max_frame_rate_interval, minimised_sleep};
+use dxmt_core::swapchain::vsync_duration;
+
+use super::{leave_fullscreen_background, minimised_sleep};
 use crate::abi::swapchain::Hwnd;
 
 #[test]
@@ -15,14 +17,14 @@ fn minimised_skip_sleeps_without_hooks() {
 }
 
 #[test]
-fn max_frame_rate_interval_as_cpp() {
-    assert!((max_frame_rate_interval(0, 0, 60.0) - 0.0).abs() < 1e-12);
-    assert!((max_frame_rate_interval(1, 0, 60.0) - (1.0 / 60.0)).abs() < 1e-12);
-    assert!((max_frame_rate_interval(2, 0, 60.0) - (2.0 / 60.0)).abs() < 1e-12);
-    assert!((max_frame_rate_interval(0, 120, 60.0) - (1.0 / 120.0)).abs() < 1e-12);
-    assert!((max_frame_rate_interval(1, 120, 60.0) - (1.0 / 120.0)).abs() < 1e-12);
-    assert!((max_frame_rate_interval(2, 120, 60.0) - (2.0 / 120.0)).abs() < 1e-12);
-    assert!((max_frame_rate_interval(1, 0, f64::MAX) - (1.0 / f64::MAX)).abs() < 1e-300);
+fn vsync_duration_as_cpp() {
+    assert!((vsync_duration(0, 0, 60.0) - 0.0).abs() < 1e-12);
+    assert!((vsync_duration(1, 0, 60.0) - (1.0 / 60.0)).abs() < 1e-12);
+    assert!((vsync_duration(2, 0, 60.0) - (2.0 / 60.0)).abs() < 1e-12);
+    assert!((vsync_duration(0, 120, 60.0) - (1.0 / 120.0)).abs() < 1e-12);
+    assert!((vsync_duration(1, 120, 60.0) - (1.0 / 120.0)).abs() < 1e-12);
+    assert!((vsync_duration(2, 120, 60.0) - (2.0 / 120.0)).abs() < 1e-12);
+    assert!((vsync_duration(1, 0, f64::MAX) - (1.0 / f64::MAX)).abs() < 1e-300);
 }
 
 #[test]

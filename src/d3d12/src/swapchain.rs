@@ -205,26 +205,6 @@ fn minimised_sleep<F: FnOnce(u32)>(without_hooks: bool, sleep: F) {
     }
 }
 
-/// Frame pacing interval (`vsync_duration`) in seconds (`d3d12_swapchain.cpp:803-806`).
-#[must_use]
-fn max_frame_rate_interval(
-    sync_interval: u32,
-    preferred_max_frame_rate: i32,
-    init_refresh_rate: f64,
-) -> f64 {
-    let rate = if preferred_max_frame_rate != 0 {
-        f64::from(preferred_max_frame_rate)
-    } else {
-        init_refresh_rate
-    };
-    let min_interval = if preferred_max_frame_rate != 0 {
-        1.0 / f64::from(preferred_max_frame_rate)
-    } else {
-        0.0
-    };
-    (f64::from(sync_interval) / rate).max(min_interval)
-}
-
 /// Minimises `hwnd` when leaving fullscreen in the background (`d3d12_swapchain.cpp:420-423`).
 fn leave_fullscreen_background<IsFg, Log, Min>(
     hwnd: Hwnd,
@@ -1305,7 +1285,7 @@ unsafe fn present1(
         let bb = state.backbuffers[idx].clone();
         (hr, state.init_refresh_rate, bb)
     };
-    let vsync_duration = max_frame_rate_interval(
+    let vsync_duration = dxmt_core::swapchain::vsync_duration(
         sync_interval,
         sc.preferred_max_frame_rate,
         init_refresh_rate,
