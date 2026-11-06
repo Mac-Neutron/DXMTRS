@@ -10,13 +10,9 @@
 
 use core::fmt;
 
+use dxmt_core::state_map;
 use winemetal_wire::{
-    WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_EQUAL, WMT_COMPARE_FUNCTION_GREATER,
-    WMT_COMPARE_FUNCTION_GREATER_EQUAL, WMT_COMPARE_FUNCTION_LESS, WMT_COMPARE_FUNCTION_LESS_EQUAL,
-    WMT_COMPARE_FUNCTION_NEVER, WMT_COMPARE_FUNCTION_NOT_EQUAL,
-    WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-    WMT_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE, WMT_SAMPLER_ADDRESS_MODE_MIRROR_REPEAT,
-    WMT_SAMPLER_ADDRESS_MODE_REPEAT, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
+    WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
     WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE, WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK,
     WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMT_SAMPLER_MIN_MAG_FILTER_NEAREST,
     WMT_SAMPLER_MIP_FILTER_LINEAR, WMT_SAMPLER_MIP_FILTER_NEAREST, WMTSamplerInfo,
@@ -24,23 +20,9 @@ use winemetal_wire::{
 
 use crate::abi::sampler::{
     STATIC_BORDER_COLOR_OPAQUE_BLACK, STATIC_BORDER_COLOR_TRANSPARENT_BLACK, SamplerDesc,
-    StaticSamplerDesc, TEXTURE_ADDRESS_MODE_BORDER, TEXTURE_ADDRESS_MODE_CLAMP,
-    TEXTURE_ADDRESS_MODE_MIRROR, TEXTURE_ADDRESS_MODE_MIRROR_ONCE, TEXTURE_ADDRESS_MODE_WRAP,
-    decode_is_anisotropic_filter, decode_is_comparison_filter, decode_mag_filter,
-    decode_min_filter, decode_mip_filter,
+    StaticSamplerDesc, TEXTURE_ADDRESS_MODE_BORDER, decode_is_anisotropic_filter,
+    decode_is_comparison_filter, decode_mag_filter, decode_min_filter, decode_mip_filter,
 };
-
-/// Metal's compare function for each `D3D12_COMPARISON_FUNC`, from `NEVER` (1) to `ALWAYS` (8).
-const COMPARE_FUNCTIONS: [u8; 8] = [
-    WMT_COMPARE_FUNCTION_NEVER,
-    WMT_COMPARE_FUNCTION_LESS,
-    WMT_COMPARE_FUNCTION_EQUAL,
-    WMT_COMPARE_FUNCTION_LESS_EQUAL,
-    WMT_COMPARE_FUNCTION_GREATER,
-    WMT_COMPARE_FUNCTION_NOT_EQUAL,
-    WMT_COMPARE_FUNCTION_GREATER_EQUAL,
-    WMT_COMPARE_FUNCTION_ALWAYS,
-];
 
 /// The largest anisotropy Metal takes.
 const MAX_ANISOTROPY: u32 = 16;
@@ -80,18 +62,6 @@ struct Common {
     max_lod: f32,
 }
 
-/// Metal's address mode for a `D3D12_TEXTURE_ADDRESS_MODE`, none for a value outside it.
-const fn address_mode(mode: u32) -> Option<u8> {
-    match mode {
-        TEXTURE_ADDRESS_MODE_WRAP => Some(WMT_SAMPLER_ADDRESS_MODE_REPEAT),
-        TEXTURE_ADDRESS_MODE_MIRROR => Some(WMT_SAMPLER_ADDRESS_MODE_MIRROR_REPEAT),
-        TEXTURE_ADDRESS_MODE_CLAMP => Some(WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
-        TEXTURE_ADDRESS_MODE_BORDER => Some(WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR),
-        TEXTURE_ADDRESS_MODE_MIRROR_ONCE => Some(WMT_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE),
-        _ => None,
-    }
-}
-
 /// Metal's min or mag filter for a `D3D12_FILTER_TYPE` bit field, linear for any bit set.
 const fn min_mag_filter(filter_type: u32) -> u8 {
     if filter_type == 0 {
@@ -119,20 +89,22 @@ fn populate_common(info: &mut WMTSamplerInfo, common: &Common, warn: &mut impl F
     } else {
         1
     };
-    if let Some(mode) = address_mode(common.address[0]) {
+    if let Some(mode) = state_map::address_mode(common.address[0]) {
         info.s_address_mode = mode;
     }
-    if let Some(mode) = address_mode(common.address[1]) {
+    if let Some(mode) = state_map::address_mode(common.address[1]) {
         info.t_address_mode = mode;
     }
-    if let Some(mode) = address_mode(common.address[2]) {
+    if let Some(mode) = state_map::address_mode(common.address[2]) {
         info.r_address_mode = mode;
     }
     info.compare_function = WMT_COMPARE_FUNCTION_NEVER;
     if decode_is_comparison_filter(filter) {
-        let slot = common.comparison_func.wrapping_sub(1) as usize;
-        match COMPARE_FUNCTIONS.get(slot) {
-            Some(&function) => info.compare_function = function,
+        // `NEVER` (1) to `ALWAYS` (8); state_map also answers 0 as `NEVER`, which D3D12 refuses.
+        match state_map::compare_func(common.comparison_func)
+            .filter(|_| common.comparison_func != 0)
+        {
+            Some(function) => info.compare_function = function,
             None => warn(Warning::InvalidComparisonFunc),
         }
     }

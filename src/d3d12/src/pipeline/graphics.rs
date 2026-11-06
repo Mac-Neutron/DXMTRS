@@ -13,7 +13,7 @@ use airconv_ir::{
     container::{Code, Container, Error as IrError},
     signature::{self, Signature},
 };
-use dxmt_core::library::render_pipeline_info;
+use dxmt_core::{library::render_pipeline_info, state_map};
 use dxmt_util::{
     com::ComObject,
     float_cast::i32_to_f32,
@@ -35,31 +35,16 @@ use winemetal_sys::{
     },
 };
 use winemetal_wire::{
-    MemPtr, WMT_BLEND_FACTOR_BLEND_ALPHA, WMT_BLEND_FACTOR_BLEND_COLOR,
-    WMT_BLEND_FACTOR_DESTINATION_ALPHA, WMT_BLEND_FACTOR_DESTINATION_COLOR, WMT_BLEND_FACTOR_ONE,
-    WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR,
-    WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR,
-    WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR,
-    WMT_BLEND_FACTOR_ONE_MINUS_SOURCE1_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_SOURCE1_COLOR,
-    WMT_BLEND_FACTOR_SOURCE_ALPHA, WMT_BLEND_FACTOR_SOURCE_ALPHA_SATURATED,
-    WMT_BLEND_FACTOR_SOURCE_COLOR, WMT_BLEND_FACTOR_SOURCE1_ALPHA, WMT_BLEND_FACTOR_SOURCE1_COLOR,
-    WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD, WMT_BLEND_OPERATION_MAX,
-    WMT_BLEND_OPERATION_MIN, WMT_BLEND_OPERATION_REVERSE_SUBTRACT, WMT_BLEND_OPERATION_SUBTRACT,
-    WMT_COLOR_WRITE_MASK_ALL, WMT_COLOR_WRITE_MASK_ALPHA, WMT_COLOR_WRITE_MASK_BLUE,
-    WMT_COLOR_WRITE_MASK_GREEN, WMT_COLOR_WRITE_MASK_NONE, WMT_COLOR_WRITE_MASK_RED,
-    WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_EQUAL, WMT_COMPARE_FUNCTION_GREATER,
-    WMT_COMPARE_FUNCTION_GREATER_EQUAL, WMT_COMPARE_FUNCTION_LESS, WMT_COMPARE_FUNCTION_LESS_EQUAL,
-    WMT_COMPARE_FUNCTION_NEVER, WMT_COMPARE_FUNCTION_NOT_EQUAL, WMT_CULL_MODE_BACK,
+    MemPtr, WMT_BLEND_FACTOR_ONE, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
+    WMT_COLOR_WRITE_MASK_ALL, WMT_COLOR_WRITE_MASK_ALPHA, WMT_COLOR_WRITE_MASK_NONE,
+    WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_NEVER, WMT_CULL_MODE_BACK,
     WMT_CULL_MODE_FRONT, WMT_CULL_MODE_NONE, WMT_DEPTH_CLIP_MODE_CLAMP, WMT_DEPTH_CLIP_MODE_CLIP,
     WMT_LOGIC_OPERATION_CLEAR, WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_RGB9E5_FLOAT,
     WMT_PRIMITIVE_TOPOLOGY_CLASS_LINE, WMT_PRIMITIVE_TOPOLOGY_CLASS_POINT,
-    WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE, WMT_STENCIL_OPERATION_DECREMENT_CLAMP,
-    WMT_STENCIL_OPERATION_DECREMENT_WRAP, WMT_STENCIL_OPERATION_INCREMENT_CLAMP,
-    WMT_STENCIL_OPERATION_INCREMENT_WRAP, WMT_STENCIL_OPERATION_INVERT, WMT_STENCIL_OPERATION_KEEP,
-    WMT_STENCIL_OPERATION_REPLACE, WMT_STENCIL_OPERATION_ZERO, WMT_TRIANGLE_FILL_MODE_FILL,
-    WMT_TRIANGLE_FILL_MODE_LINES, WMT_WINDING_CLOCKWISE, WMT_WINDING_COUNTER_CLOCKWISE,
-    WMTColorAttachmentBlendInfo, WMTDepthStencilInfo, WMTMeshRenderPipelineInfo, WMTStencilInfo,
-    original_format,
+    WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO,
+    WMT_TRIANGLE_FILL_MODE_FILL, WMT_TRIANGLE_FILL_MODE_LINES, WMT_WINDING_CLOCKWISE,
+    WMT_WINDING_COUNTER_CLOCKWISE, WMTColorAttachmentBlendInfo, WMTDepthStencilInfo,
+    WMTMeshRenderPipelineInfo, WMTStencilInfo, original_format,
 };
 
 use crate::{
@@ -89,25 +74,6 @@ use crate::{
     root_signature::object::cast_root_signature,
     shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
-
-const COLOR_WRITE_MASK_MAP: [u8; 16] = [
-    WMT_COLOR_WRITE_MASK_NONE,
-    WMT_COLOR_WRITE_MASK_RED,
-    WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_RED | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_BLUE,
-    WMT_COLOR_WRITE_MASK_BLUE | WMT_COLOR_WRITE_MASK_RED,
-    WMT_COLOR_WRITE_MASK_BLUE | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_BLUE | WMT_COLOR_WRITE_MASK_RED | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_ALPHA,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_RED,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_RED | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_BLUE,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_BLUE | WMT_COLOR_WRITE_MASK_RED,
-    WMT_COLOR_WRITE_MASK_ALPHA | WMT_COLOR_WRITE_MASK_BLUE | WMT_COLOR_WRITE_MASK_GREEN,
-    WMT_COLOR_WRITE_MASK_ALL,
-];
 
 struct GeometryState {
     vertex_shader: Arc<CachedShader>,
@@ -327,76 +293,32 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
     ),
 };
 
-const fn compare_func(func: u32) -> u8 {
-    match func {
-        2 => WMT_COMPARE_FUNCTION_LESS,
-        3 => WMT_COMPARE_FUNCTION_EQUAL,
-        4 => WMT_COMPARE_FUNCTION_LESS_EQUAL,
-        5 => WMT_COMPARE_FUNCTION_GREATER,
-        6 => WMT_COMPARE_FUNCTION_NOT_EQUAL,
-        7 => WMT_COMPARE_FUNCTION_GREATER_EQUAL,
-        8 => WMT_COMPARE_FUNCTION_ALWAYS,
-        _ => WMT_COMPARE_FUNCTION_NEVER,
+/// `state_map`'s answer, or `fallback` for a value outside the enum (D3D12 clamps, D3D11 uses 0).
+const fn or_else(mapped: Option<u8>, fallback: u8) -> u8 {
+    match mapped {
+        Some(value) => value,
+        None => fallback,
     }
 }
 
-const fn stencil_op(op: u32) -> u8 {
-    match op {
-        1 => WMT_STENCIL_OPERATION_KEEP,
-        3 => WMT_STENCIL_OPERATION_REPLACE,
-        4 => WMT_STENCIL_OPERATION_INCREMENT_CLAMP,
-        5 => WMT_STENCIL_OPERATION_DECREMENT_CLAMP,
-        6 => WMT_STENCIL_OPERATION_INVERT,
-        7 => WMT_STENCIL_OPERATION_INCREMENT_WRAP,
-        8 => WMT_STENCIL_OPERATION_DECREMENT_WRAP,
-        _ => WMT_STENCIL_OPERATION_ZERO,
-    }
+pub(super) const fn compare_func(func: u32) -> u8 {
+    or_else(state_map::compare_func(func), WMT_COMPARE_FUNCTION_NEVER)
 }
 
-const fn blend_op(op: u32) -> u8 {
-    match op {
-        2 => WMT_BLEND_OPERATION_SUBTRACT,
-        3 => WMT_BLEND_OPERATION_REVERSE_SUBTRACT,
-        4 => WMT_BLEND_OPERATION_MIN,
-        5 => WMT_BLEND_OPERATION_MAX,
-        _ => WMT_BLEND_OPERATION_ADD,
-    }
+pub(super) const fn stencil_op(op: u32) -> u8 {
+    or_else(state_map::stencil_op(op), WMT_STENCIL_OPERATION_ZERO)
 }
 
-const fn blend_factor(factor: u32) -> u8 {
-    match factor {
-        2 => WMT_BLEND_FACTOR_ONE,
-        3 => WMT_BLEND_FACTOR_SOURCE_COLOR,
-        4 => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR,
-        5 => WMT_BLEND_FACTOR_SOURCE_ALPHA,
-        6 => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA,
-        7 => WMT_BLEND_FACTOR_DESTINATION_ALPHA,
-        8 => WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA,
-        9 => WMT_BLEND_FACTOR_DESTINATION_COLOR,
-        10 => WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR,
-        11 => WMT_BLEND_FACTOR_SOURCE_ALPHA_SATURATED,
-        14 => WMT_BLEND_FACTOR_BLEND_COLOR,
-        15 => WMT_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR,
-        16 => WMT_BLEND_FACTOR_SOURCE1_COLOR,
-        17 => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE1_COLOR,
-        18 => WMT_BLEND_FACTOR_SOURCE1_ALPHA,
-        19 => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE1_ALPHA,
-        20 => WMT_BLEND_FACTOR_BLEND_ALPHA,
-        21 => WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA,
-        _ => WMT_BLEND_FACTOR_ZERO,
-    }
+pub(super) const fn blend_op(op: u32) -> u8 {
+    or_else(state_map::blend_op(op), WMT_BLEND_OPERATION_ADD)
 }
 
-const fn blend_alpha_factor(factor: u32) -> u8 {
-    match factor {
-        14 => WMT_BLEND_FACTOR_BLEND_ALPHA,
-        15 => WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA,
-        other => blend_factor(other),
-    }
+pub(super) const fn blend_factor(factor: u32) -> u8 {
+    or_else(state_map::blend_factor(factor), WMT_BLEND_FACTOR_ZERO)
 }
 
-const fn blend_factor_is_dual_source(factor: u32) -> bool {
-    factor >= 16 && factor <= 19
+pub(super) const fn blend_alpha_factor(factor: u32) -> u8 {
+    or_else(state_map::blend_alpha_factor(factor), WMT_BLEND_FACTOR_ZERO)
 }
 
 const IMMUTABLE_ROOT_BUFFERS: u32 =
@@ -733,8 +655,10 @@ fn initialize_color_targets(
         if desc.blend_state.independent_blend_enable != 0 && render_target.logic_op_enable != 0 {
             return E_INVALIDARG;
         }
-        rt.write_mask =
-            COLOR_WRITE_MASK_MAP[(render_target.render_target_write_mask & 0xf) as usize];
+        rt.write_mask = or_else(
+            state_map::color_write_mask(u32::from(render_target.render_target_write_mask & 0xf)),
+            WMT_COLOR_WRITE_MASK_NONE,
+        );
         if rt.pixel_format == WMT_PIXEL_FORMAT_RGB9E5_FLOAT {
             rt.write_mask = if (rt.write_mask & !WMT_COLOR_WRITE_MASK_ALPHA) != 0 {
                 WMT_COLOR_WRITE_MASK_ALL
@@ -751,10 +675,10 @@ fn initialize_color_targets(
                 );
                 return E_INVALIDARG;
             }
-            if blend_factor_is_dual_source(render_target.src_blend_alpha)
-                || blend_factor_is_dual_source(render_target.src_blend)
-                || blend_factor_is_dual_source(render_target.dest_blend_alpha)
-                || blend_factor_is_dual_source(render_target.dest_blend)
+            if state_map::blend_factor_is_dual_source(render_target.src_blend_alpha)
+                || state_map::blend_factor_is_dual_source(render_target.src_blend)
+                || state_map::blend_factor_is_dual_source(render_target.dest_blend_alpha)
+                || state_map::blend_factor_is_dual_source(render_target.dest_blend)
             {
                 *dual_source_blending = true;
             }

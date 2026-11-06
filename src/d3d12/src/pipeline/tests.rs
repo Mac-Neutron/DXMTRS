@@ -12,7 +12,10 @@ use crate::{
     },
     com::{E_INVALIDARG, IID_ID3D12_PIPELINE_LIBRARY1, S_OK},
     pipeline::{
-        graphics::{extract_input_layout, parse_input_signature},
+        graphics::{
+            blend_alpha_factor, blend_factor, blend_op, compare_func, extract_input_layout,
+            parse_input_signature, stencil_op,
+        },
         library::{PipelineLibrary, create_pipeline_library},
         record::{
             Blob, HEADER_SIZE, Kind, MAGIC, Recorder, checksum, serialize_compute,
@@ -465,4 +468,41 @@ fn cached_pso_blob_round_trips_its_hash() {
         super::cached_desc_hash(damaged.as_ptr().cast(), damaged.len()),
         None
     );
+}
+
+/// The D3D12 enum maps clamp a value outside the enum as they did before `state_map`.
+#[test]
+fn blend_and_depth_maps_clamp_out_of_range_as_before() {
+    use winemetal_wire::{
+        WMT_BLEND_FACTOR_BLEND_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA,
+        WMT_BLEND_FACTOR_SOURCE1_COLOR, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
+        WMT_BLEND_OPERATION_MAX, WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_NEVER,
+        WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO,
+    };
+
+    for out_of_range in [0, 22, u32::MAX] {
+        assert_eq!(blend_factor(out_of_range), WMT_BLEND_FACTOR_ZERO);
+        assert_eq!(blend_alpha_factor(out_of_range), WMT_BLEND_FACTOR_ZERO);
+    }
+    assert_eq!(blend_factor(1), WMT_BLEND_FACTOR_ZERO);
+    assert_eq!(blend_factor(12), WMT_BLEND_FACTOR_ZERO);
+    assert_eq!(blend_factor(16), WMT_BLEND_FACTOR_SOURCE1_COLOR);
+    assert_eq!(blend_factor(20), WMT_BLEND_FACTOR_BLEND_ALPHA);
+    assert_eq!(blend_alpha_factor(14), WMT_BLEND_FACTOR_BLEND_ALPHA);
+    assert_eq!(
+        blend_alpha_factor(15),
+        WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA
+    );
+    for op in [0, 1, 6, u32::MAX] {
+        assert_eq!(blend_op(op), WMT_BLEND_OPERATION_ADD);
+    }
+    assert_eq!(blend_op(5), WMT_BLEND_OPERATION_MAX);
+    for func in [0, 1, 9, u32::MAX] {
+        assert_eq!(compare_func(func), WMT_COMPARE_FUNCTION_NEVER);
+    }
+    assert_eq!(compare_func(8), WMT_COMPARE_FUNCTION_ALWAYS);
+    for op in [0, 2, 9, u32::MAX] {
+        assert_eq!(stencil_op(op), WMT_STENCIL_OPERATION_ZERO);
+    }
+    assert_eq!(stencil_op(1), WMT_STENCIL_OPERATION_KEEP);
 }
