@@ -5,7 +5,7 @@ use core::{
     ffi::c_void,
     ptr,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use dxmt_core::{
     arena::CommandList as ArenaCommandList,
@@ -239,7 +239,7 @@ impl Mode for Deferred {
     }
 
     fn retain<T: Send + 'static>(ctx: &mut Context<Self>, t: T) {
-        ctx.mode.retained.push(Box::new(Mutex::new(Some(t))));
+        ctx.mode.retained.push(Box::new(t));
     }
 
     fn alloc(ctx: &mut Context<Self>, size: usize, align: usize) -> (*mut u8, u64) {

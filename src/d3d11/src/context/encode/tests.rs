@@ -700,3 +700,20 @@ fn a_destroyed_deferred_context_takes_its_session_with_it() {
     // The global session map kept the closure, and the arena under it, for the process's life.
     assert_eq!(std::sync::Arc::strong_count(&held), 1);
 }
+
+#[test]
+fn an_emitted_fn_once_runs_once_however_often_its_commands_run() {
+    let runs = std::sync::Arc::new(core::sync::atomic::AtomicU32::new(0));
+    let mut ctx = new_test_context();
+    let counter = std::sync::Arc::clone(&runs);
+    ctx.emit_encoder(move |_| {
+        counter.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    });
+    let mut imm = Context::new_immediate(ptr::null_mut());
+    ctx.encode.commands.run(imm.mode.encoder_mut());
+    ctx.encode.commands.run(imm.mode.encoder_mut());
+    assert_eq!(runs.load(core::sync::atomic::Ordering::Relaxed), 1);
+    drop(ctx);
+    // The closure (and the counter it held) went with its first run.
+    assert_eq!(std::sync::Arc::strong_count(&runs), 1);
+}

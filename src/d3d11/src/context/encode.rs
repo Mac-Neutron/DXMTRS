@@ -6,12 +6,13 @@
 
 use core::{
     alloc::Layout,
+    cell::Cell,
     ffi::c_void,
     fmt,
     ptr::{self, NonNull},
     sync::atomic::{AtomicU64, Ordering},
 };
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use dxmt_core::{
     arena::{BlockPool, Commands},
@@ -467,10 +468,11 @@ impl<M: Mode> Context<M> {
     where
         F: FnOnce(&mut Encoder) + Send + 'static,
     {
-        let cell = Mutex::new(Some(encode_fn));
+        // `emit` wants `Fn + Send`, not `Sync`: a `Cell` holds the `FnOnce`, taken at the first
+        // run (a replayed command list runs it once, as before), with no lock.
+        let cell = Cell::new(Some(encode_fn));
         let wrapped = move |enc: &mut Encoder| {
-            let f_opt = cell.lock().unwrap_or_else(PoisonError::into_inner).take();
-            if let Some(f) = f_opt {
+            if let Some(f) = cell.take() {
                 f(enc);
             }
         };
