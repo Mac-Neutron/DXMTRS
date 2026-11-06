@@ -432,7 +432,10 @@ impl<M: Mode> Context<M> {
         F: FnOnce(&mut Encoder) + Send + 'static,
     {
         // `emit` wants `Fn + Send`, not `Sync`: a `Cell` holds the `FnOnce`, taken at the first
-        // run (a replayed command list runs it once, as before), with no lock.
+        // run (a replayed command list runs it once, as before), with no lock. The `Cell` is
+        // never touched from two threads at once: a device has one encode thread, the only
+        // caller of every emitted closure, and `ExecuteCommandList` runs a list's closures on it
+        // through a raw `&CommandList` (`command_list.rs`), which is how they escape `Sync`.
         let cell = Cell::new(Some(encode_fn));
         let wrapped = move |enc: &mut Encoder| {
             if let Some(f) = cell.take() {
