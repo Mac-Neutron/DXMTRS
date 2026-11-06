@@ -18,6 +18,7 @@ pub mod private_data;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod qpc;
 pub mod sha1;
+pub mod stats_report;
 pub mod sync;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod wsi;

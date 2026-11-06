@@ -2664,6 +2664,16 @@ pub struct EncoderPerfState {
     prev_major_faults: u64,
     /// Whether the frame being encoded runs its phase timers, as the API thread drew it.
     frame_timed: bool,
+    /// The window the summary last closed, for `stats.txt`; taken once.
+    stats_window: Option<StatsWindow>,
+}
+
+/// A closed perf window as `stats.txt` reports it: its span, its frames and its `_total` counters.
+#[cfg(perf_tracking)]
+pub struct StatsWindow {
+    pub seconds: f64,
+    pub frames: u64,
+    pub counters: std::collections::BTreeMap<String, u64>,
 }
 
 #[cfg(perf_tracking)]
@@ -2693,7 +2703,13 @@ impl EncoderPerfState {
             prev_minor_faults: 0,
             prev_major_faults: 0,
             frame_timed: false,
+            stats_window: None,
         }
+    }
+
+    /// The window [`Self::log_frame_summary`] last closed with the summary on, once.
+    pub const fn take_stats_window(&mut self) -> Option<StatsWindow> {
+        self.stats_window.take()
     }
 
     /// True when the 2 s summary window has expired and the next `log_frame_summary` will emit.
@@ -3264,6 +3280,11 @@ impl EncoderPerfState {
                 Summary::render(&self.perf_window, &self.count_window, caches, window_secs);
             let mut kv = render_kv(&self.perf_window, &self.count_window, caches, window_secs);
             self.compilation.append_kv(&mut kv);
+            self.stats_window = Some(StatsWindow {
+                seconds: window_secs,
+                frames: u64::from(self.count_window.frames),
+                counters: core::mem::take(&mut kv.totals).into_iter().collect(),
+            });
             self.compilation.append_window(
                 &mut rendered,
                 self.count_window.frames,
@@ -6747,6 +6768,8 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(perf_tracking)]
 struct KvLine {
     out: String,
+    /// Every `<base>_total` key the line carries, with its value, for `stats.txt`.
+    totals: Vec<(String, u64)>,
     /// Every frame of the window, at least 1: the divisor of the all-frame times.
     frames: f64,
     /// The timed frames of the window, at least 1: the divisor of the timer rows.
@@ -6763,6 +6786,7 @@ impl KvLine {
         );
         Self {
             out,
+            totals: Vec::new(),
             frames: f64::from(frames.max(1)),
             timed: f64::from(timed_frames.max(1)),
         }
@@ -6807,6 +6831,7 @@ impl KvLine {
     /// `<base>_total`: the window total of a count, never averaged.
     fn total(&mut self, base: impl Display, total: u64) {
         let _ = write!(self.out, " {base}_total={total}");
+        self.totals.push((format!("{base}_total"), total));
     }
 
     /// `<base>_bytes`: a byte gauge.

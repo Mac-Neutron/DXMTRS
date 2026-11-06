@@ -2299,3 +2299,12 @@ fn the_in_flight_gauge_saturates_at_its_window() {
         "91 to 101 outstanding"
     );
 }
+
+/// The `_total` keys a window wrote, kept for `stats.txt`; other kinds are not totals.
+#[test]
+fn kv_totals_are_recorded() {
+    let mut kv = KvLine::new(2.0, 10, 1);
+    kv.total("draws", 5);
+    kv.count("x", 1);
+    assert_eq!(kv.totals, [("draws_total".to_owned(), 5)]);
+}

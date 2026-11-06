@@ -659,6 +659,101 @@ fn prune(dir: &Path, ext: &str, keep: usize) {
     }
 }
 
+/// Append `text` to this process's statistics, `<dir>/<stem>-<pid>.stats.txt` beside the log.
+///
+/// The text is dropped until `OpenLog` names the location. Before the file
+/// is first created the folder keeps the [`KEEP`] newest statistics, this
+/// one included ([`prune_stats`]).
+#[cfg(perf_tracking)]
+pub fn append_stats(text: &[u8]) {
+    let Some((dir, stem, pid)) = TRACE_BASE
+        .lock()
+        .expect("trace base mutex poisoned")
+        .as_ref()
+        .cloned()
+    else {
+        return;
+    };
+    let path = dir.join(dxmt_util::log::paths::stats_file_name(&stem, pid));
+    if !path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "stats: cannot create {}: {e}, statistics dropped",
+                dir.display()
+            );
+            return;
+        }
+        prune_stats(&dir, KEEP - 1);
+    }
+    let written = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(text));
+    if let Err(e) = written {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "stats: cannot write {}: {e}, statistics dropped",
+            path.display()
+        );
+    }
+}
+
+/// Remove the oldest statistics in `dir` beyond the newest `keep`.
+///
+/// Only regular files whose name has `stats_file_name`'s shape
+/// (`<stem>-<digits>.stats.txt`) count: never a directory, a link or another
+/// name, whatever else shares the folder. Age is the modification time.
+#[cfg(perf_tracking)]
+fn prune_stats(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut aged: Vec<(SystemTime, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(dxmt_util::log::paths::is_stats_file_name)
+        })
+        .filter_map(|e| {
+            let path = e.path();
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((meta.modified().ok()?, path))
+        })
+        .collect();
+    if aged.len() <= keep {
+        return;
+    }
+    aged.sort();
+    let doomed = aged.len() - keep;
+    for (_, path) in aged.into_iter().take(doomed) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// The wall clock's local hour, minute and second, for a `stats.txt` header.
+#[cfg(perf_tracking)]
+pub fn local_hms() -> [u16; 3] {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let Ok(seconds) = libc::time_t::try_from(secs) else {
+        return [0; 3];
+    };
+    // SAFETY: every field of `libc::tm` is an integer or a nullable pointer, so all zeros is one.
+    let mut tm: libc::tm = unsafe { core::mem::zeroed() };
+    // SAFETY: both pointers name live locals of the right types for the call.
+    if unsafe { libc::localtime_r(&raw const seconds, &raw mut tm) }.is_null() {
+        return [0; 3];
+    }
+    [tm.tm_hour, tm.tm_min, tm.tm_sec].map(|v| u16::try_from(v).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests;
 

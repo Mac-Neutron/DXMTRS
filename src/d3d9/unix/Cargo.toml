@@ -23,6 +23,7 @@ winemetal = ["dep:mtld3d-mtl"]
 mtld3d-core = { workspace = true, features = ["disk-cache"] }
 mtld3d-types = { workspace = true }
 bitflags = { workspace = true }
+dxmt-util = { workspace = true }
 libc = { workspace = true }
 mtld3d-shared = { workspace = true }
 mtld3d-mtl = { workspace = true, optional = true }

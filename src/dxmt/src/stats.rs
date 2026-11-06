@@ -19,7 +19,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dxmt_util::{float_cast::u64_to_f64, sync::lock};
+// The tests' printf oracle converts as the report does.
+#[cfg(all(test, target_os = "macos"))]
+use dxmt_util::float_cast::u64_to_f64;
+use dxmt_util::{
+    stats_report::{Block, Snapshot, Timed, report},
+    sync::lock,
+};
 
 mod platform;
 
@@ -27,8 +33,6 @@ mod platform;
 const MAX_STATS: usize = 1024;
 /// How many timed lines a thread's block prints: those that took longest.
 const TOP: usize = 30;
-/// How much of a piece the 512-byte line buffer keeps.
-const LINE_MAX: usize = 511;
 /// How often presents report.
 const PERIOD: Duration = Duration::from_secs(5);
 
@@ -360,116 +364,6 @@ impl Registry {
         self.last = now;
         &self.text
     }
-}
-
-/// A report's figures, in its order.
-struct Snapshot {
-    /// The counter's ticks over the window.
-    ticks: u64,
-    /// The threads with timed calls, in the order they first called.
-    threads: Vec<Block>,
-    /// The counters by name (no `#`), in byte order.
-    counters: BTreeMap<String, u64>,
-}
-
-/// A thread's block: its time in outermost calls and its longest calls, longest first.
-struct Block {
-    name: String,
-    tid: u32,
-    outer: u64,
-    timed: Vec<Timed>,
-}
-
-/// A timed call's line.
-struct Timed {
-    name: String,
-    calls: u64,
-    ticks: u64,
-    max: u64,
-}
-
-/// The report of a window of `seconds` and `frames`, as the C++'s `snprintf` lines print it.
-fn report(snapshot: &Snapshot, seconds: f64, frames: u64, why: &str, hms: [u16; 3]) -> Vec<u8> {
-    let [hour, minute, second] = hms;
-    let per_us = if seconds > 0.0 {
-        u64_to_f64(snapshot.ticks) / (seconds * 1e6)
-    } else {
-        1.0
-    };
-    let per_frame = u64_to_f64(frames);
-    let fps = if seconds > 0.0 {
-        per_frame / seconds
-    } else {
-        0.0
-    };
-    let mut out = Vec::new();
-    put(
-        &mut out,
-        &format!(
-            "# {hour:02}:{minute:02}:{second:02} {seconds:.1} s, {frames} frames ({fps:.1} fps), \
-             {why}\n"
-        ),
-    );
-    for block in &snapshot.threads {
-        let outer = u64_to_f64(block.outer) / per_us;
-        put(
-            &mut out,
-            &format!(
-                "thread {} ({}): {outer:.0} us in D3D12",
-                block.name, block.tid
-            ),
-        );
-        if frames != 0 {
-            put(&mut out, &format!(", {:.1} us/frame", outer / per_frame));
-        }
-        out.push(b'\n');
-        for line in &block.timed {
-            let us = u64_to_f64(line.ticks) / per_us;
-            let max = u64_to_f64(line.max) / per_us;
-            put(
-                &mut out,
-                &format!(
-                    "  {} calls {} us {us:.1} max-us {max:.1}",
-                    line.name, line.calls
-                ),
-            );
-            if frames != 0 {
-                let calls = u64_to_f64(line.calls) / per_frame;
-                put(
-                    &mut out,
-                    &format!(" | per frame: calls {calls:.1} us {:.1}", us / per_frame),
-                );
-            }
-            out.push(b'\n');
-        }
-    }
-    out.extend_from_slice(b"counters:\n");
-    for (name, &n) in &snapshot.counters {
-        put(&mut out, &format!("  {name} {n}"));
-        if frames != 0 {
-            put(
-                &mut out,
-                &format!(" ({:.1} per frame)", u64_to_f64(n) / per_frame),
-            );
-        }
-        out.push(b'\n');
-    }
-    let total = |name: &str| snapshot.counters.get(name).copied().unwrap_or(0);
-    put(
-        &mut out,
-        &format!(
-            "  encoder boundaries {}, {} with no barrier\n",
-            total("encoder boundaries"),
-            total("encoder boundaries with no barrier")
-        ),
-    );
-    out
-}
-
-/// Appends `piece` as the C++'s `snprintf` into its 512-byte line keeps it.
-fn put(out: &mut Vec<u8>, piece: &str) {
-    let bytes = piece.as_bytes();
-    out.extend_from_slice(bytes.get(..LINE_MAX).unwrap_or(bytes));
 }
 
 /// Adds to a counter its own thread writes: a load and a store, no read-modify-write.

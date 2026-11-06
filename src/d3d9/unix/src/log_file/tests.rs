@@ -17,6 +17,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(perf_tracking)]
+use super::prune_stats;
 use super::{fall_back_to_stderr, open, prune};
 
 /// Set in the re-executed child that writes a crash report before `OpenLog`; names the early dir.
@@ -236,4 +238,26 @@ fn a_fault_report_before_the_location_opens_nothing() {
         "a first-chance report created the early location"
     );
     assert!(!stderr.contains(REPORT_LINE), "{stderr}");
+}
+
+/// The stats prune removes only `<stem>-<digits>.stats.txt` files, never a directory.
+#[cfg(perf_tracking)]
+#[test]
+fn a_stats_prune_leaves_other_files() {
+    let scratch = Scratch::new("stats");
+    scratch.file("readme.txt", 100);
+    scratch.bundle("x-1.stats.txt", 100);
+    for n in 0..12 {
+        scratch.file(&format!("game-{n}.stats.txt"), 50 - n);
+    }
+    prune_stats(&scratch.0, 9);
+    let names = scratch.names();
+    let stats = names.iter().filter(|n| n.starts_with("game-")).count();
+    assert_eq!(stats, 9, "{names:?}");
+    assert!(
+        !names.contains(&"game-0.stats.txt".to_owned()),
+        "the oldest goes first"
+    );
+    assert!(names.contains(&"readme.txt".to_owned()));
+    assert!(names.contains(&"x-1.stats.txt".to_owned()));
 }

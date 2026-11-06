@@ -824,6 +824,9 @@ impl PsSamplerDecls {
 }
 
 pub struct FrameEncoder {
+    /// `DXMT_STATS=1` at construction: each closed perf window also goes to `stats.txt`.
+    #[cfg(perf_tracking)]
+    stats: bool,
     cache_path: Option<PathBuf>,
     compile_threads: Vec<thread::JoinHandle<()>>,
     submit_thread: Option<thread::JoinHandle<()>>,
@@ -1704,6 +1707,8 @@ impl FrameEncoder {
         // names the encoder among the live ones.
         let hud = crate::hud_state::HudReporter::new(Arc::as_ptr(&clock) as u64);
         Ok(Self {
+            #[cfg(perf_tracking)]
+            stats: std::env::var_os("DXMT_STATS").is_some_and(|v| v == "1"),
             cache_path,
             compile_threads,
             submit_thread: Some(submit_thread),
@@ -2521,6 +2526,23 @@ impl FrameEncoder {
             cmd_vec_realloc_bytes,
             task_faults,
         );
+        #[cfg(perf_tracking)]
+        if self.stats
+            && let Some(window) = self.perf.take_stats_window()
+        {
+            let snapshot = dxmt_util::stats_report::Snapshot {
+                ticks: 0,
+                threads: Vec::new(),
+                counters: window.counters,
+            };
+            crate::log_file::append_stats(&dxmt_util::stats_report::report(
+                &snapshot,
+                window.seconds,
+                window.frames,
+                "every 2 s",
+                crate::log_file::local_hms(),
+            ));
+        }
     }
 
     /// Cache-length snapshot handed to `EncoderPerfState::log_frame_summary`.

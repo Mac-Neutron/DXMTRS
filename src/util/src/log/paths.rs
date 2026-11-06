@@ -19,5 +19,21 @@ pub fn trace_file_name(stem: &str, pid: u32, index: u32) -> String {
     format!("{stem}-{pid}-{index}.gputrace")
 }
 
+/// The statistics of that process (D3D9's perf-tracking builds): `<stem>-<pid>.stats.txt`.
+#[must_use]
+pub fn stats_file_name(stem: &str, pid: u32) -> String {
+    format!("{stem}-{pid}.stats.txt")
+}
+
+/// Whether `name` has [`stats_file_name`]'s shape: a stem, `-`, ASCII digits, `.stats.txt`.
+#[must_use]
+pub fn is_stats_file_name(name: &str) -> bool {
+    name.strip_suffix(".stats.txt")
+        .and_then(|rest| rest.rsplit_once('-'))
+        .is_some_and(|(stem, pid)| {
+            !stem.is_empty() && !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 #[cfg(test)]
 mod tests;

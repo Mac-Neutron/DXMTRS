@@ -258,14 +258,16 @@ static PERF_TRACKING_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(perf_tracking)]
 static PAIR_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Latch `PERF_TRACKING_ENABLED` and `PAIR_STATS_ENABLED` from `RUST_LOG`.
+/// Latch `PERF_TRACKING_ENABLED` and `PAIR_STATS_ENABLED` from the log filter and `DXMT_STATS`.
 ///
 /// Call once per cdylib after `env_logger::try_init` — each cdylib has its
 /// own `log` statics, so the cache is per-runtime. `d3d9.dll` calls this
 /// from `init_logger`; `mtld3d.so` calls it from `init_logger_handler`.
 #[cfg(perf_tracking)]
 pub fn init_tracking_enabled() {
-    let on = log_enabled!(target: "mtld3d::perf", Level::Info);
+    // `DXMT_STATS=1` runs the timers whatever the log level: its windows go to `stats.txt`.
+    let on = log_enabled!(target: "mtld3d::perf", Level::Info)
+        || std::env::var_os("DXMT_STATS").is_some_and(|v| v == "1");
     PERF_TRACKING_ENABLED.store(on, Ordering::Relaxed);
     let passes_on = log_enabled!(target: "mtld3d::d3d9::passes", Level::Trace);
     PAIR_STATS_ENABLED.store(passes_on, Ordering::Relaxed);
