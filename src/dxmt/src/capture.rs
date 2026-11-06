@@ -9,7 +9,7 @@ use winemetal_sys::{
     wire::{MemPtr, WMT_CAPTURE_DESTINATION_GPU_TRACE_DOCUMENT, WMTCaptureInfo},
 };
 
-use crate::log;
+use crate::{log, settings::settings};
 
 /// Starts a Metal GPU trace capture for `device` at `frame`.
 pub fn start_capture(device: &Obj, frame: u64) {
@@ -84,11 +84,11 @@ impl CaptureState {
     /// `MTL_CAPTURE_ENABLED` is `1` and this program is the one `DXMT_CAPTURE_EXECUTABLE` names.
     #[must_use]
     pub fn from_env() -> Self {
-        let var = |name: &str| std::env::var(name).ok();
+        let settings = settings();
         Self::new(enabled_by(
-            var("MTL_CAPTURE_ENABLED").as_deref(),
+            settings.mtl_capture_enabled.as_deref(),
             &env::exe_base_name(),
-            var("DXMT_CAPTURE_EXECUTABLE").as_deref(),
+            settings.capture_executable.as_deref(),
         ))
     }
 

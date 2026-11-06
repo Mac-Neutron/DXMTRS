@@ -239,7 +239,8 @@ pub fn depth_stencil_state(device: &Obj, info: &WMTDepthStencilInfo) -> Option<O
 }
 
 /// An Objective-C object's description, such as an error's.
-fn description(object: &Obj) -> String {
+#[must_use]
+pub fn description(object: &Obj) -> String {
     let _pool = Pool::new();
     // SAFETY: `object` is live; the description is an autoreleased string, valid under the pool.
     let text = unsafe { NSObject_description(object.handle()) };

@@ -39,6 +39,7 @@ use crate::{
     query::Readbacks,
     resource::BufferAllocationFlags,
     ring::{BlockRef, RingBump, RingConfig},
+    settings::settings,
 };
 
 /// The encode thread's name.
@@ -589,10 +590,7 @@ fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
     sync::set_time_critical();
     let queue = shared.queue.as_ref().map_or(0, Obj::handle);
     let mut capture = CaptureState::from_env();
-    if let Ok(val) = std::env::var("DXMT_CAPTURE_FRAME")
-        && let Ok(frame) = val.trim().parse::<u64>()
-        && frame > 0
-    {
+    if let Some(frame) = settings().capture_frame {
         capture.schedule(frame);
     }
     let mut seq = 1;
