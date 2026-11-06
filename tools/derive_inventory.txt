@@ -664,8 +664,12 @@ src/dxmt/src/presenter/framegen.rs Mode Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default
 src/dxmt/src/resource/buffer.rs BufferAllocationFlags Clone,Copy
 src/dxmt/src/resource/buffer.rs BufferViewKey Clone,Copy,Default,PartialEq,Eq,Debug
+src/dxmt/src/resource/dims.rs Decomposed Clone,Copy,Debug,PartialEq,Eq
+src/dxmt/src/resource/dims.rs LinearLayout Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/resource/texture.rs TextureAllocationFlags Clone,Copy
 src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,Default,PartialEq,Eq,Hash,Debug
+src/dxmt/src/settings.rs Compression Clone,Copy,Debug,PartialEq,Eq
+src/dxmt/src/settings.rs Flags Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/stats.rs StatId Clone,Copy
 src/util/src/com.rs Guid Clone,Copy,PartialEq,Eq
 src/util/src/ext.rs Luid Clone,Copy,Default

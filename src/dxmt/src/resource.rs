@@ -27,7 +27,10 @@ use winemetal_sys::{
 };
 
 mod buffer;
+pub mod dims;
 mod texture;
+pub mod texture_info;
+pub mod view;
 
 /// The page suballocations share and placed memory aligns to: meson's `DXMT_PAGE_SIZE`.
 const PAGE_SIZE: u64 = 4096;

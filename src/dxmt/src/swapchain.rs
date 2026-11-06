@@ -18,6 +18,8 @@ use winemetal_wire::{
     WMT_PIXEL_FORMAT_RGB10A2_UNORM, WMT_PIXEL_FORMAT_RGBA16_FLOAT,
 };
 
+pub mod fullscreen;
+
 /// Maps a DXGI swap-chain format to its `WMTPixelFormat`, or `WMTPixelFormatInvalid` (0).
 ///
 /// Both `B8G8R8A8` and `R8G8B8A8` map to `BGRA8` in the Metal presenter.

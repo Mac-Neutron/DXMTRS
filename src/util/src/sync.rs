@@ -1,4 +1,4 @@
-//! Waiting on an address and thread priority, for both front ends.
+//! Poison-ignoring locks, waiting on an address and thread priority, for both front ends.
 //!
 //! The queue's threads hand chunks to each other through counters they wait on, as the C++'s
 //! `std::atomic::wait` and `CpuFence` (`util_cpu_fence.hpp`) do: `WaitOnAddress` on Windows,
