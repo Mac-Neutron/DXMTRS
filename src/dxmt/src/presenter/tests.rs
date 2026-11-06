@@ -1304,7 +1304,7 @@ fn fence(encoder: u64, kind: u16, fence: u64, stages: u8) {
     let record = WmtcmdRenderFenceOp {
         r#type: kind,
         reserved: [0; 3],
-        next: mem(null::<u8>()),
+        next: MemPtr::from_ptr(null::<u8>()),
         fence,
         stages,
     };

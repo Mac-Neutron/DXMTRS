@@ -86,11 +86,9 @@ const BINDING_SRV: u32 = 2;
 const BINDING_UAV: u32 = 3;
 
 /// A null `next` for a record: [`Encoder::encode_render_command`] links it.
-#[cfg(target_pointer_width = "64")]
-pub const NO_NEXT: MemPtr = MemPtr { ptr: 0 };
-/// A null `next` for a record: [`Encoder::encode_render_command`] links it.
-#[cfg(target_pointer_width = "32")]
-pub const NO_NEXT: MemPtr = MemPtr { ptr: 0, high: 0 };
+///
+/// [`MemPtr::NULL`] under its old name, until `d3d11`'s encode code uses that.
+pub const NO_NEXT: MemPtr = MemPtr::NULL;
 
 /// The shader stages, the const generic argument `S` of the per-stage calls.
 pub mod stage {
@@ -642,9 +640,9 @@ impl Encoder {
         let record = place(&mut self.heap, cmd).cast::<WmtcmdBase>();
         // SAFETY: `tail` is the pass's last record, in `heap` until its next reset (between
         // chunks, with no pass open); a record starts with `WmtcmdBase`'s fields (`Record`).
-        unsafe { (*pass.records.tail.as_ptr()).next = mem_ptr(record) };
+        unsafe { (*pass.records.tail.as_ptr()).next = MemPtr::from_ptr(record.as_ptr()) };
         // SAFETY: `record` was just placed, a `Record` led by `WmtcmdBase`'s fields.
-        unsafe { (*record.as_ptr()).next = NO_NEXT };
+        unsafe { (*record.as_ptr()).next = MemPtr::NULL };
         // SAFETY: `record` was just placed; when it is a `WmtcmdRenderSetpso`, remember its PSO.
         if unsafe { (*record.as_ptr()).r#type } == winemetal_sys::wire::WMT_RENDER_COMMAND_SET_PSO
             && size_of::<T>() == size_of::<WmtcmdRenderSetpso>()
@@ -900,23 +898,6 @@ fn place<T>(heap: &mut Commands, value: T) -> NonNull<T> {
     // SAFETY: fresh memory of `T`'s size, aligned at least as `T`.
     unsafe { p.write(value) };
     p
-}
-
-/// `record`'s address as a `next` of `winemetal.h`.
-#[cfg(target_pointer_width = "64")]
-fn mem_ptr(record: NonNull<WmtcmdBase>) -> MemPtr {
-    MemPtr {
-        ptr: record.as_ptr().expose_provenance() as u64,
-    }
-}
-
-/// `record`'s address as a `next` of `winemetal.h`: a 32-bit address and a high half of 0.
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(record: NonNull<WmtcmdBase>) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(record.as_ptr().expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
 }
 
 fn vertex_buffers() -> Box<[VertexBufferBinding]> {

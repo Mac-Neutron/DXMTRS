@@ -19,15 +19,7 @@ pub fn start_capture(device: &Obj, frame: u64) {
     let Ok(cpath) = CString::new(path) else {
         return;
     };
-    #[cfg(target_pointer_width = "64")]
-    let output_url = MemPtr {
-        ptr: cpath.as_ptr().expose_provenance() as u64,
-    };
-    #[cfg(target_pointer_width = "32")]
-    let output_url = MemPtr {
-        ptr: u32::try_from(cpath.as_ptr().expose_provenance()).unwrap_or(0),
-        high: 0,
-    };
+    let output_url = MemPtr::from_ptr(cpath.as_ptr());
     let mut info = WMTCaptureInfo {
         capture_object: device.handle(),
         output_url,

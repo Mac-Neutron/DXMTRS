@@ -43,6 +43,63 @@ pub struct MemPtr {
     pub high: u32,
 }
 
+impl MemPtr {
+    /// The null pointer.
+    #[cfg(target_pointer_width = "64")]
+    pub const NULL: Self = Self { ptr: 0 };
+
+    /// The null pointer.
+    #[cfg(target_pointer_width = "32")]
+    pub const NULL: Self = Self { ptr: 0, high: 0 };
+
+    /// `addr` as a pointer of `winemetal.h`'s structures.
+    #[cfg(target_pointer_width = "64")]
+    #[must_use]
+    pub const fn from_addr(addr: usize) -> Self {
+        Self { ptr: addr as u64 }
+    }
+
+    /// `addr` as a pointer of `winemetal.h`'s structures: a 32-bit address and a high half of 0.
+    #[cfg(target_pointer_width = "32")]
+    #[must_use]
+    pub const fn from_addr(addr: usize) -> Self {
+        Self {
+            ptr: addr as u32,
+            high: 0,
+        }
+    }
+
+    /// `p`'s address as a pointer of `winemetal.h`'s structures; the address is exposed.
+    #[must_use]
+    pub fn from_ptr<T: ?Sized>(p: *const T) -> Self {
+        Self::from_addr(p.expose_provenance())
+    }
+
+    /// The pointer winemetal wrote into a structure, or null where this process cannot reach it.
+    ///
+    /// The C++'s `get_accessible_or_null`: a 32-bit process cannot reach a high half.
+    #[cfg(target_pointer_width = "64")]
+    #[must_use]
+    pub fn as_ptr<T>(self) -> *mut T {
+        usize::try_from(self.ptr).map_or(
+            core::ptr::null_mut(),
+            core::ptr::with_exposed_provenance_mut,
+        )
+    }
+
+    /// The pointer winemetal wrote into a structure, or null where this process cannot reach it.
+    ///
+    /// The C++'s `get_accessible_or_null`: a 32-bit process cannot reach a high half.
+    #[cfg(target_pointer_width = "32")]
+    #[must_use]
+    pub fn as_ptr<T>(self) -> *mut T {
+        if self.high != 0 {
+            return core::ptr::null_mut();
+        }
+        core::ptr::with_exposed_provenance_mut(self.ptr as usize)
+    }
+}
+
 /// The `NULL_OBJECT_HANDLE` of `winemetal.h`.
 pub const NULL_OBJECT_HANDLE: u64 = 0;
 

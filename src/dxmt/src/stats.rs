@@ -13,13 +13,13 @@ use std::{
     cmp::Reverse,
     collections::BTreeMap,
     sync::{
-        LazyLock, Mutex, MutexGuard, PoisonError,
+        LazyLock, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed},
     },
     time::{Duration, Instant},
 };
 
-use dxmt_util::float_cast::u64_to_f64;
+use dxmt_util::{float_cast::u64_to_f64, sync::lock};
 
 mod platform;
 
@@ -478,7 +478,7 @@ fn add(counter: &AtomicU64, n: u64) {
 }
 
 fn registry() -> MutexGuard<'static, Registry> {
-    REGISTRY.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&REGISTRY)
 }
 
 /// The calling thread's counters, made and registered at its first call.

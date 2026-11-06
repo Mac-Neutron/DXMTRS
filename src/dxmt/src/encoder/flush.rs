@@ -42,9 +42,10 @@ use winemetal_sys::{
         WmtcmdRenderSetbuffer, WmtcmdRenderUseresource,
     },
 };
+use winemetal_wire::MemPtr;
 
 use super::{
-    Encoder, NO_NEXT, Record, binding_index, mem_ptr,
+    Encoder, Record, binding_index,
     pass::{
         Clear, Pass, PassKind, Present, RenderTargets, RenderUses, Resolve, Target, argument_buffer,
     },
@@ -216,7 +217,7 @@ impl Encoder {
                 WmtcmdRenderSetbuffer {
                     r#type,
                     reserved: [0; 3],
-                    next: NO_NEXT,
+                    next: MemPtr::NULL,
                     buffer,
                     offset: 0,
                     index: binding_index(index),
@@ -233,7 +234,7 @@ impl Encoder {
                         WmtcmdRenderUseresource {
                             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                             reserved: [0; 3],
-                            next: NO_NEXT,
+                            next: MemPtr::NULL,
                             resource: task.draw_args_buf,
                             usage: WMT_RESOURCE_USAGE_READ,
                             stages: WMT_RENDER_STAGE_VERTEX,
@@ -244,7 +245,7 @@ impl Encoder {
                         WmtcmdRenderUseresource {
                             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                             reserved: [0; 3],
-                            next: NO_NEXT,
+                            next: MemPtr::NULL,
                             resource: task.dispatch_args_buf,
                             usage: WMT_RESOURCE_USAGE_WRITE,
                             stages: WMT_RENDER_STAGE_VERTEX,
@@ -288,7 +289,7 @@ impl Encoder {
                         WmtcmdRenderUseresource {
                             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                             reserved: [0; 3],
-                            next: NO_NEXT,
+                            next: MemPtr::NULL,
                             resource: task.draw_args_buf,
                             usage: WMT_RESOURCE_USAGE_READ,
                             stages: WMT_RENDER_STAGE_VERTEX,
@@ -299,7 +300,7 @@ impl Encoder {
                         WmtcmdRenderUseresource {
                             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                             reserved: [0; 3],
-                            next: NO_NEXT,
+                            next: MemPtr::NULL,
                             resource: task.dispatch_args_buf,
                             usage: WMT_RESOURCE_USAGE_WRITE,
                             stages: WMT_RENDER_STAGE_VERTEX,
@@ -342,7 +343,7 @@ impl Encoder {
                 WmtcmdRenderMemoryBarrier {
                     r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
                     reserved: [0; 3],
-                    next: NO_NEXT,
+                    next: MemPtr::NULL,
                     scope: WMT_BARRIER_SCOPE_BUFFERS,
                     stages_before: WMT_RENDER_STAGE_VERTEX,
                     stages_after: WMT_RENDER_STAGE_VERTEX
@@ -357,7 +358,7 @@ impl Encoder {
                     WmtcmdRenderUseresource {
                         r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                         reserved: [0; 3],
-                        next: NO_NEXT,
+                        next: MemPtr::NULL,
                         resource: task.draw_args_buf,
                         usage: WMT_RESOURCE_USAGE_READ,
                         stages: WMT_RENDER_STAGE_VERTEX,
@@ -368,7 +369,7 @@ impl Encoder {
                     WmtcmdRenderUseresource {
                         r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                         reserved: [0; 3],
-                        next: NO_NEXT,
+                        next: MemPtr::NULL,
                         resource: task.dispatch_args_buf,
                         usage: WMT_RESOURCE_USAGE_WRITE,
                         stages: WMT_RENDER_STAGE_VERTEX,
@@ -381,7 +382,7 @@ impl Encoder {
                     WmtcmdRenderUseresource {
                         r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                         reserved: [0; 3],
-                        next: NO_NEXT,
+                        next: MemPtr::NULL,
                         resource: task.draw_args_buf,
                         usage: WMT_RESOURCE_USAGE_READ,
                         stages: WMT_RENDER_STAGE_VERTEX,
@@ -392,7 +393,7 @@ impl Encoder {
                     WmtcmdRenderUseresource {
                         r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                         reserved: [0; 3],
-                        next: NO_NEXT,
+                        next: MemPtr::NULL,
                         resource: task.dispatch_args_buf,
                         usage: WMT_RESOURCE_USAGE_WRITE,
                         stages: WMT_RENDER_STAGE_VERTEX,
@@ -405,7 +406,7 @@ impl Encoder {
                     WmtcmdRenderMemoryBarrier {
                         r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
                         reserved: [0; 3],
-                        next: NO_NEXT,
+                        next: MemPtr::NULL,
                         scope: WMT_BARRIER_SCOPE_BUFFERS,
                         stages_before: WMT_RENDER_STAGE_VERTEX,
                         stages_after: WMT_RENDER_STAGE_VERTEX
@@ -450,7 +451,7 @@ impl Encoder {
                 WmtcmdComputeSetbuffer {
                     r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
                     reserved: [0; 3],
-                    next: NO_NEXT,
+                    next: MemPtr::NULL,
                     buffer,
                     offset: 0,
                     index: binding_index(index),
@@ -708,7 +709,7 @@ impl Encoder {
         let fill = WmtcmdBlitFillbuffer {
             r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: self.dummy_cbuffer.as_ref().map_or(0, |b| b.buffer()),
             offset: 0,
             length: 4,
@@ -762,7 +763,7 @@ impl Chain {
     fn link(&mut self, record: NonNull<WmtcmdBase>) {
         match self.tail {
             // SAFETY: the chain's last record, in the encoder's memory until its next reset.
-            Some(tail) => unsafe { (*tail.as_ptr()).next = mem_ptr(record) },
+            Some(tail) => unsafe { (*tail.as_ptr()).next = MemPtr::from_ptr(record.as_ptr()) },
             None => self.head = Some(record),
         }
         self.tail = Some(record);
@@ -991,7 +992,7 @@ fn compute_fences(
             WmtcmdComputeFenceOp {
                 r#type,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 fence: handle(fences, slot),
             },
         );
@@ -1012,7 +1013,7 @@ const fn render_fence(r#type: u16, fence: u64, stages: u8) -> WmtcmdRenderFenceO
     WmtcmdRenderFenceOp {
         r#type,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         fence,
         stages,
     }
@@ -1022,7 +1023,7 @@ const fn blit_fence(r#type: u16, fence: u64) -> WmtcmdBlitFenceOp {
     WmtcmdBlitFenceOp {
         r#type,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         fence,
     }
 }

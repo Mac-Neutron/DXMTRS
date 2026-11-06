@@ -96,7 +96,7 @@ fn allocate_over_rounds_to_16k() {
             WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED
                 | WMT_RESOURCE_OPTION_CPU_CACHE_MODE_WRITE_COMBINED
         );
-        assert_eq!(accessible(info.memory), ptr);
+        assert_eq!(info.memory.as_ptr::<u8>(), ptr);
         assert_eq!(
             Suballocation::of(info.length, BufferAllocationFlags::empty()).info_length,
             rounded

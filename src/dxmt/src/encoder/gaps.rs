@@ -40,7 +40,7 @@ use winemetal_sys::{
 };
 
 use super::{
-    ArgumentBuffer, Encoder, NO_NEXT, RenderUses,
+    ArgumentBuffer, Encoder, RenderUses,
     pass::{GsMarshalTask, TsMarshalTask},
     stage,
 };
@@ -271,7 +271,7 @@ impl HelperPipelines {
                 raster_sample_count: u8::try_from(key[8]).unwrap_or(1).max(1),
                 tgsize_matches_tile_size: 1,
                 binary_archive_for_serialization: 0,
-                binary_archives_for_lookup: NO_NEXT,
+                binary_archives_for_lookup: MemPtr::NULL,
                 num_binary_archives_for_lookup: 0,
                 fail_on_binary_archive_miss: 0,
                 padding: [0; 6],
@@ -399,7 +399,7 @@ impl HelperPipelines {
             let func = lib.function(name);
             let info = WMTComputePipelineInfo {
                 compute_function: func.as_ref().map_or(0, Obj::handle),
-                binary_archives_for_lookup: NO_NEXT,
+                binary_archives_for_lookup: MemPtr::NULL,
                 binary_archive_for_serialization: 0,
                 num_binary_archives_for_lookup: 0,
                 fail_on_binary_archive_miss: 0,
@@ -519,7 +519,7 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderUseresource {
             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             resource,
             usage,
             stages,
@@ -875,19 +875,19 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
         });
         self.encode_render_command(WmtcmdRenderSetdepthstencilstate {
             r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             depth_stencil_state: dss,
         });
         self.encode_render_command(WmtcmdRenderSetviewport {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             viewport: WMTViewport {
                 origin_x: f64::from(offset[0]),
                 origin_y: f64::from(offset[1]),
@@ -900,7 +900,7 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetscissorrect {
             r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             scissor_rect: WMTScissorRect {
                 x: u64::from(offset[0]),
                 y: u64::from(offset[1]),
@@ -911,7 +911,7 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetbuffer {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: src_alloc.buffer(),
             offset: src_offset + sub_off,
             index: 0,
@@ -925,19 +925,19 @@ impl Encoder {
             self.encode_render_command(WmtcmdRenderSetpso {
                 r#type: WMT_RENDER_COMMAND_SET_PSO,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 pso: depth_pso,
             });
             self.encode_render_command(WmtcmdRenderSetdepthstencilstate {
                 r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 depth_stencil_state: depth_dss,
             });
             self.encode_render_command(WmtcmdRenderDraw {
                 r#type: WMT_RENDER_COMMAND_DRAW,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
                 vertex_start: 0,
                 vertex_count: 3,
@@ -949,13 +949,13 @@ impl Encoder {
             self.encode_render_command(WmtcmdRenderSetpso {
                 r#type: WMT_RENDER_COMMAND_SET_PSO,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 pso: stencil_pso,
             });
             self.encode_render_command(WmtcmdRenderSetdepthstencilstate {
                 r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 depth_stencil_state: stencil_dss,
             });
         }
@@ -966,7 +966,7 @@ impl Encoder {
             self.encode_render_command(WmtcmdRenderSetstencilref {
                 r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 stencil_ref: 0x80,
             });
             for bit in 0..8_u32 {
@@ -974,7 +974,7 @@ impl Encoder {
                 self.encode_render_command(WmtcmdRenderDraw {
                     r#type: WMT_RENDER_COMMAND_DRAW,
                     reserved: [0; 3],
-                    next: NO_NEXT,
+                    next: MemPtr::NULL,
                     primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
                     vertex_start: 0,
                     vertex_count: 3,
@@ -986,7 +986,7 @@ impl Encoder {
             self.encode_render_command(WmtcmdRenderDraw {
                 r#type: WMT_RENDER_COMMAND_DRAW,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
                 vertex_start: 0,
                 vertex_count: 3,
@@ -1036,7 +1036,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
             threadgroup_size: WMTSize {
                 width: 8,
@@ -1071,7 +1071,7 @@ impl Encoder {
             self.encode_compute_command(WmtcmdComputeSettexture {
                 r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 texture: src_view,
                 index: 0,
             });
@@ -1092,7 +1092,7 @@ impl Encoder {
             self.encode_compute_command(WmtcmdComputeSettexture {
                 r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 texture: src_view,
                 index: 1,
             });
@@ -1121,7 +1121,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: dst_view,
             index: 2,
         });
@@ -1129,7 +1129,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: u64::from(src_size[0]),
                 height: u64::from(src_size[1]),
@@ -1155,7 +1155,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
             threadgroup_size: WMTSize {
                 width: 8,
@@ -1178,14 +1178,14 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: src_view,
             index: 0,
         });
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: dst_view,
             index: 1,
         });
@@ -1193,7 +1193,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: u64::from(dst.info().width),
                 height: u64::from(dst.info().height),
@@ -1221,7 +1221,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
             threadgroup_size: WMTSize {
                 width: 8,
@@ -1244,14 +1244,14 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: src_view,
             index: 0,
         });
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: dst_view,
             index: 1,
         });
@@ -1259,7 +1259,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: u64::from(dst.info().width),
                 height: u64::from(dst.info().height),
@@ -1331,13 +1331,13 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
         });
         self.encode_render_command(WmtcmdRenderSetviewport {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             viewport: WMTViewport {
                 origin_x: 0.0,
                 origin_y: 0.0,
@@ -1350,14 +1350,14 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetdsso {
             r#type: WMT_RENDER_COMMAND_SET_DSSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             dsso,
             stencil_ref: 0,
         });
         self.encode_render_command(WmtcmdRenderSetbuffer {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: src_alloc.buffer(),
             offset: src_offset + src_sub_offset,
             index: u8::try_from(CUSTOM_BUFFER_ARGUMENT_INDEX_0).unwrap_or(30),
@@ -1369,7 +1369,7 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
             vertex_start: 0,
             vertex_count: 3,
@@ -1434,7 +1434,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso,
             threadgroup_size: WMTSize {
                 width: 8,
@@ -1445,21 +1445,21 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: tex_depth,
             index: 0,
         });
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: tex_stencil,
             index: 1,
         });
         self.encode_compute_command(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: dst_alloc.buffer(),
             offset: dst_offset + dst_sub_offset,
             index: 0,
@@ -1469,7 +1469,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: u64::from(width),
                 height: u64::from(height),
@@ -1492,20 +1492,20 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso: barrier_pso,
         });
         self.encode_render_command(WmtcmdRenderDispatchThreadsPerTile {
             r#type: WMT_RENDER_COMMAND_DISPATCH_THREADS_PER_TILE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             width: 16,
             height: 16,
         });
         self.encode_render_command(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso: recover_pso,
         });
     }
@@ -1599,8 +1599,8 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetbytes {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
             reserved: [0; 3],
-            next: NO_NEXT,
-            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_addr(dst.as_ptr().expose_provenance()),
             length: byte_len as u64,
             index,
         });
@@ -1616,24 +1616,11 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeSetbytes {
             r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
             reserved: [0; 3],
-            next: NO_NEXT,
-            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_addr(dst.as_ptr().expose_provenance()),
             length: byte_len as u64,
             index,
         });
-    }
-}
-
-#[cfg(target_pointer_width = "64")]
-const fn raw_mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn raw_mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
     }
 }
 
@@ -1662,7 +1649,7 @@ impl SimpleCommandContext for Encoder {
         let dev = dev.as_ref()?;
         let info = WMTComputePipelineInfo {
             compute_function: func.handle(),
-            binary_archives_for_lookup: NO_NEXT,
+            binary_archives_for_lookup: MemPtr::NULL,
             binary_archive_for_serialization: 0,
             num_binary_archives_for_lookup: 0,
             fail_on_binary_archive_miss: 0,
@@ -1694,7 +1681,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso: pso.handle(),
             threadgroup_size,
         });
@@ -1704,7 +1691,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             size,
         });
     }
@@ -1724,7 +1711,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: v.texture,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1745,7 +1732,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             texture: v.texture,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1767,7 +1754,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: alloc.buffer(),
             offset: 0,
             index: u8::try_from(index).unwrap_or(0),
@@ -1783,8 +1770,8 @@ impl SimpleCommandContext for Encoder {
         self.encode_compute_command(WmtcmdComputeSetbytes {
             r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
             reserved: [0; 3],
-            next: NO_NEXT,
-            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_addr(dst.as_ptr().expose_provenance()),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1881,7 +1868,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso: pso.handle(),
         });
     }
@@ -1890,7 +1877,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetviewport {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             viewport,
         });
     }
@@ -1899,7 +1886,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetdepthstencilstate {
             r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             depth_stencil_state: state.handle(),
         });
     }
@@ -1908,7 +1895,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetscissorrect {
             r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             scissor_rect: rect,
         });
     }
@@ -1917,7 +1904,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetstencilref {
             r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             stencil_ref,
         });
     }
@@ -1931,8 +1918,8 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderSetbytes {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
             reserved: [0; 3],
-            next: NO_NEXT,
-            bytes: raw_mem_ptr(dst.as_ptr().expose_provenance()),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_addr(dst.as_ptr().expose_provenance()),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1949,7 +1936,7 @@ impl SimpleCommandContext for Encoder {
         self.encode_render_command(WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             primitive_type: primitive,
             vertex_start: u64::from(vertex_start),
             vertex_count: u64::from(vertex_count),

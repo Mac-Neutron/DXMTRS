@@ -31,6 +31,7 @@ use std::{
 use dxmt_util::{
     GAMMA_CP_COUNT, GammaRamp as DXMTGammaRamp,
     float_cast::{f32_to_u32, f64_to_f32, u32_to_f32, u64_to_f64},
+    sync::lock,
 };
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLCommandBuffer_blitCommandEncoder,
@@ -307,7 +308,7 @@ impl Presenter {
                 },
                 0,
                 0,
-                mem(lut.as_ptr()),
+                MemPtr::from_ptr(lut.as_ptr()),
                 1024 * 16,
                 0,
             );
@@ -394,10 +395,7 @@ impl Presenter {
     ///
     /// A rebuild waiting for it goes on. The count never moves back.
     pub fn frame_done(&self, frame_id: u64) {
-        let mut presented = self
-            .presented
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut presented = lock(&self.presented);
         if frame_id <= *presented {
             return;
         }
@@ -537,7 +535,7 @@ impl Presenter {
             let copy = WmtcmdBlitCopyFromTextureToTexture {
                 r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
                 reserved: [0; 3],
-                next: mem(null::<u8>()),
+                next: MemPtr::from_ptr(null::<u8>()),
                 src: backbuffer,
                 src_slice: 0,
                 src_level: 0,
@@ -587,7 +585,7 @@ impl Presenter {
         let draw = WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: mem(null::<u8>()),
+            next: MemPtr::from_ptr(null::<u8>()),
             primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
             vertex_start: 0,
             vertex_count: 3,
@@ -597,35 +595,35 @@ impl Presenter {
         let viewports = WmtcmdRenderSetviewports {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
             reserved: [0; 3],
-            next: mem(from_ref(&draw)),
-            viewports: mem(from_ref(&viewport)),
+            next: MemPtr::from_ptr(from_ref(&draw)),
+            viewports: MemPtr::from_ptr(from_ref(&viewport)),
             viewport_count: 1,
         };
         let pso = WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: mem(from_ref(&viewports)),
+            next: MemPtr::from_ptr(from_ref(&viewports)),
             pso: pipeline.as_deref().map_or(0, Obj::handle),
         };
         let bytes = WmtcmdRenderSetbytes {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
             reserved: [0; 3],
-            next: mem(from_ref(&pso)),
-            bytes: mem(from_ref(metadata)),
+            next: MemPtr::from_ptr(from_ref(&pso)),
+            bytes: MemPtr::from_ptr(from_ref(metadata)),
             length: 12,
             index: 0,
         };
         let lut = WmtcmdRenderSettexture {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
             reserved: [0; 3],
-            next: mem(from_ref(&bytes)),
+            next: MemPtr::from_ptr(from_ref(&bytes)),
             texture: self.gamma_lut_texture.as_ref().map_or(0, Obj::handle),
             index: 1,
         };
         let source = WmtcmdRenderSettexture {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
             reserved: [0; 3],
-            next: mem(from_ref(&lut)),
+            next: MemPtr::from_ptr(from_ref(&lut)),
             texture: backbuffer,
             index: 0,
         };
@@ -641,14 +639,11 @@ impl Presenter {
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     fn wait_presented(&self, frame_id: u64) {
-        let presented = self
-            .presented
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let presented = lock(&self.presented);
         drop(
             self.frame_done
                 .wait_while(presented, |presented| *presented < frame_id)
@@ -674,7 +669,7 @@ impl Presenter {
             let data = values.map(u32::from);
             let mut constants: [WMTFunctionConstant; 6] = core::array::from_fn(|i| {
                 WMTFunctionConstant {
-                    data: mem(from_ref(&data[i])),
+                    data: MemPtr::from_ptr(from_ref(&data[i])),
                     r#type: WMT_DATA_TYPE_BOOL,
                     // kPresentFCIndex_*: 0x100 + the position.
                     index: 0x100 + u16::try_from(i).unwrap_or(0),
@@ -687,7 +682,7 @@ impl Presenter {
             let vs = unsafe { Obj::adopt(vs) };
             let fs = self.present_function(&constants, &mut error);
             let unmatched = 0_u32;
-            constants[0].data = mem(from_ref(&unmatched));
+            constants[0].data = MemPtr::from_ptr(from_ref(&unmatched));
             let fs_scaled = self.present_function(&constants, &mut error);
             let handle = |f: &Option<Obj>| f.as_ref().map_or(0, Obj::handle);
             let mut info = pipeline_info(state.layer_props.pixel_format);
@@ -782,11 +777,7 @@ impl DrawablePrefetcher {
 
     fn invalidate(&self) {
         let discarded = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut state = lock(&self.shared.state);
             state.generation += 1;
             state.prefetched.take()
         };
@@ -796,11 +787,7 @@ impl DrawablePrefetcher {
 
     fn acquire(&self) -> Option<Obj> {
         loop {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut state = lock(&self.shared.state);
             if state.stop {
                 return None;
             }
@@ -826,11 +813,7 @@ impl Drop for DrawablePrefetcher {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
             let discarded = {
-                let mut state = self
-                    .shared
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut state = lock(&self.shared.state);
                 state.stop = true;
                 state.prefetched.take()
             };
@@ -846,7 +829,7 @@ impl Drop for DrawablePrefetcher {
 fn drawable_worker(layer: u64, shared: &DrawableShared) {
     loop {
         let generation = {
-            let state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let state = lock(&shared.state);
             let mut state = shared
                 .cv
                 .wait_while(state, |s| !s.stop && !s.wanted)
@@ -869,7 +852,7 @@ fn drawable_worker(layer: u64, shared: &DrawableShared) {
             thread::sleep(Duration::from_millis(1));
         }
         let mut discarded = None;
-        let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&shared.state);
         state.busy = false;
         if !state.stop && generation == state.generation && state.prefetched.is_none() {
             state.prefetched = drawable;
@@ -1066,7 +1049,7 @@ fn pipeline_info(format: u32) -> WMTRenderPipelineInfo {
         tessellation_output_winding_order: WMT_WINDING_CLOCKWISE,
         tessellation_factor_step: WMT_TESSELLATION_FACTOR_STEP_FUNCTION_CONSTANT,
         binary_archive_for_serialization: 0,
-        binary_archives_for_lookup: mem(null::<u8>()),
+        binary_archives_for_lookup: MemPtr::from_ptr(null::<u8>()),
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,
         support_indirect_command_buffers: 0,
@@ -1086,23 +1069,6 @@ fn same(length: u64, size: f64) -> bool {
         size.abs() < 1.0
     } else {
         (length_f..length_f + 1.0).contains(&size)
-    }
-}
-
-/// `WMTMemoryPointer` of a pointer: eight bytes, the high half 0 in a 32-bit process.
-#[cfg(target_pointer_width = "64")]
-fn mem<T>(p: *const T) -> MemPtr {
-    MemPtr {
-        ptr: p.expose_provenance() as u64,
-    }
-}
-
-/// `WMTMemoryPointer` of a pointer: eight bytes, the high half 0 in a 32-bit process.
-#[cfg(target_pointer_width = "32")]
-fn mem<T>(p: *const T) -> MemPtr {
-    MemPtr {
-        ptr: u32::from_ne_bytes(p.expose_provenance().to_ne_bytes()),
-        high: 0,
     }
 }
 

@@ -3,27 +3,20 @@
 //! Mirrors `ConvertSwapChainFormat`, `ConvertColorSpace`, `GetMonitorFormatBpp` and `RenderScale`
 //! in `d3d11_swapchain.cpp` and `d3d12_swapchain.cpp`.
 
+use dxmt_util::dxgi_consts::{
+    DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8X8_UNORM,
+    DXGI_FORMAT_B8G8R8X8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+    DXGI_FORMAT_R16G16B16A16_FLOAT,
+};
 use winemetal_wire::{
     WMT_COLOR_SPACE_BT2020, WMT_COLOR_SPACE_HDR_PQ, WMT_COLOR_SPACE_HDR_SC_RGB,
     WMT_COLOR_SPACE_INVALID, WMT_COLOR_SPACE_SRGB, WMT_COLOR_SPACE_SRGB_LINEAR,
     WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_PIXEL_FORMAT_INVALID,
     WMT_PIXEL_FORMAT_RGB10A2_UNORM, WMT_PIXEL_FORMAT_RGBA16_FLOAT,
 };
-
-pub const DXGI_FORMAT_R16G16B16A16_FLOAT: u32 = 10;
-pub const DXGI_FORMAT_R10G10B10A2_UNORM: u32 = 24;
-pub const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
-pub const DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: u32 = 29;
-pub const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
-pub const DXGI_FORMAT_B8G8R8X8_UNORM: u32 = 88;
-pub const DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM: u32 = 89;
-pub const DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: u32 = 91;
-pub const DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: u32 = 93;
-
-pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: u32 = 0;
-pub const DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709: u32 = 1;
-pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020: u32 = 10;
-pub const DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: u32 = 12;
 
 /// Maps a DXGI swap-chain format to its `WMTPixelFormat`, or `WMTPixelFormatInvalid` (0).
 ///
@@ -83,6 +76,26 @@ pub fn monitor_format_bpp(format: u32) -> u32 {
             32
         }
     }
+}
+
+/// The frame pacing interval in seconds (`vsync_duration`).
+///
+/// `sync_interval` refreshes at `init_refresh_rate`, no shorter than the application's
+/// `preferred_max_frame_rate` allows. `d3d11_swapchain.cpp:797-801` and
+/// `d3d12_swapchain.cpp:803-806`.
+#[must_use]
+pub fn vsync_duration(
+    sync_interval: u32,
+    preferred_max_frame_rate: i32,
+    init_refresh_rate: f64,
+) -> f64 {
+    let (rate, floor) = if preferred_max_frame_rate == 0 {
+        (init_refresh_rate, 0.0)
+    } else {
+        let preferred = f64::from(preferred_max_frame_rate);
+        (preferred, 1.0 / preferred)
+    };
+    (f64::from(sync_interval) / rate).max(floor)
 }
 
 /// Parses a `DXMT_RENDER_SCALE` value, clamping positive numbers to `[0.25, 1.0]`.

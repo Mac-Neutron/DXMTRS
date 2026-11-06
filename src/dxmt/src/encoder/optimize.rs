@@ -15,9 +15,10 @@ use winemetal_sys::wire::{
     WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE,
     WMT_STORE_ACTION_STORE, WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE,
 };
+use winemetal_wire::MemPtr;
 
 use super::{
-    Encoder, NO_NEXT,
+    Encoder,
     pass::{Clear, Pass, PassKind, RenderTargets, Resolve, argument_buffer, same},
 };
 
@@ -170,7 +171,7 @@ fn render_into_render(r0: &mut Pass, r1: &mut Pass) {
             r1.records.tail = r0.records.tail;
         }
         // SAFETY: as above.
-        unsafe { (*r0.records.head.as_ptr()).next = NO_NEXT };
+        unsafe { (*r0.records.head.as_ptr()).next = MemPtr::NULL };
         r0.records.tail = r0.records.head;
     }
     r1.emulated_stream_output |= r0.emulated_stream_output;

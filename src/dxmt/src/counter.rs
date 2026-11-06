@@ -10,8 +10,9 @@
 //! `d3d12.dll`, which are its first callers.
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use dxmt_util::sync::lock;
 use winemetal_sys::Obj;
 
 use crate::resource::{Buffer, BufferAllocation, BufferAllocationFlags};
@@ -40,7 +41,7 @@ impl Counter {
     }
 
     fn lock(&self) -> MutexGuard<'_, Option<Arc<CounterAllocation>>> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.current)
     }
 }
 

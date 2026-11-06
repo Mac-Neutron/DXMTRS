@@ -8,9 +8,10 @@
 
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
 };
 
+use dxmt_util::sync::lock;
 use winemetal_sys::Obj;
 
 use crate::resource::{Buffer, BufferAllocation, BufferAllocationFlags};
@@ -139,7 +140,7 @@ impl Staging {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 }
 

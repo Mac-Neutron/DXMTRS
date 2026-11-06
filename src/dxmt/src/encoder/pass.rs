@@ -19,8 +19,9 @@ use winemetal_sys::{
         WmtcmdComputeMemoryBarrier, WmtcmdRenderMemoryBarrier,
     },
 };
+use winemetal_wire::MemPtr;
 
-use super::{ArgumentBuffer, Encoder, NO_NEXT, Record, Records, place, stage};
+use super::{ArgumentBuffer, Encoder, Record, Records, place, stage};
 use crate::{
     deptrack::{Access, BarrierState, FenceSet},
     format,
@@ -538,7 +539,7 @@ impl Encoder {
         self.encode_compute_command(WmtcmdComputeMemoryBarrier {
             r#type: WMT_COMPUTE_COMMAND_MEMORY_BARRIER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             scope: WMT_BARRIER_SCOPE_BUFFERS | WMT_BARRIER_SCOPE_TEXTURES,
         });
     }
@@ -620,7 +621,7 @@ impl Encoder {
             WmtcmdBase {
                 r#type,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
             },
         );
         self.pass = Some(Pass {
@@ -779,7 +780,7 @@ const fn memory_barrier(before: u8) -> WmtcmdRenderMemoryBarrier {
     WmtcmdRenderMemoryBarrier {
         r#type: WMT_RENDER_COMMAND_MEMORY_BARRIER,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         scope: WMT_BARRIER_SCOPE_BUFFERS | WMT_BARRIER_SCOPE_TEXTURES,
         stages_before: before,
         stages_after: WMT_RENDER_STAGE_PRE_RASTER,

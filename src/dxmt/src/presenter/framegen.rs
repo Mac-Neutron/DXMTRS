@@ -12,7 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dxmt_util::float_cast::{f64_to_f32, u32_to_f32};
+use dxmt_util::{
+    float_cast::{f64_to_f32, u32_to_f32},
+    sync::lock,
+};
 pub use winemetal_sys::wire::{
     WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps,
     WMTFXTemporalScalerProps as WmtFxTemporalScalerProps,
@@ -34,6 +37,7 @@ use winemetal_sys::{
         WMTTextureInfo, WmtcmdBase, WmtcmdBlitCopyTexture, WmtcmdBlitFenceOp,
     },
 };
+use winemetal_wire::MemPtr;
 
 pub use super::{DXMTPresentMetadata as PresentMetadata, Presenter};
 use crate::scaler::Scaler;
@@ -212,7 +216,7 @@ pub fn record_upscale(
     motion: &Obj,
     props: &WmtFxTemporalScalerProps,
 ) {
-    let mut slot = SLOT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slot = lock(&SLOT);
     slot.scaler = scaler.scaler().map(|s| RecordedScaler {
         handle: retain(s),
         info: *scaler.info(),
@@ -230,7 +234,7 @@ fn take_slot() -> (
     Option<Obj>,
     WmtFxTemporalScalerProps,
 ) {
-    let mut slot = SLOT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slot = lock(&SLOT);
     let fresh = slot.fresh;
     slot.fresh = false;
     (
@@ -293,7 +297,7 @@ impl Shared {
     }
 
     fn lock(&self) -> MutexGuard<'_, PacerState> {
-        self.mutex.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.mutex)
     }
 }
 
@@ -460,7 +464,7 @@ impl Backend for ProdBackend {
         let cmd = WmtcmdBlitFenceOp {
             r#type: WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
             reserved: [0; 3],
-            next: super::mem(null::<u8>()),
+            next: MemPtr::from_ptr(null::<u8>()),
             fence: fence.handle(),
         };
         // SAFETY: `enc` is a live `MTLBlitCommandEncoder` and `cmd` is a single-node command list.
@@ -473,7 +477,7 @@ impl Backend for ProdBackend {
         let cmd = WmtcmdBlitFenceOp {
             r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
             reserved: [0; 3],
-            next: super::mem(null::<u8>()),
+            next: MemPtr::from_ptr(null::<u8>()),
             fence: fence.handle(),
         };
         // SAFETY: `enc` is a live `MTLBlitCommandEncoder` and `cmd` is a single-node command list.
@@ -486,7 +490,7 @@ impl Backend for ProdBackend {
         let copy = WmtcmdBlitCopyTexture {
             r#type: WMT_BLIT_COMMAND_COPY_TEXTURE,
             reserved: [0; 3],
-            next: super::mem(null::<u8>()),
+            next: MemPtr::from_ptr(null::<u8>()),
             src: src.handle(),
             dst: dst.handle(),
         };

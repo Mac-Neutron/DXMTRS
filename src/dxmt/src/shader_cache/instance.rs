@@ -1,9 +1,10 @@
 //! Process-wide [`Store`] instances, one per Metal version (`ShaderCache::getInstance`).
 
-#[cfg(not(windows))]
 use core::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex};
 
+#[cfg(not(windows))]
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 
 use super::Store;
@@ -46,7 +47,7 @@ pub fn instance(metal_version: u32, version: u64) -> Arc<Store> {
     #[cfg(not(windows))]
     register_atexit_once();
 
-    let mut caches = CACHES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut caches = lock(&CACHES);
     Arc::clone(
         caches
             .entry(metal_version)
@@ -61,7 +62,7 @@ pub fn instance(metal_version: u32, version: u64) -> Arc<Store> {
 /// writes see the cache as off.
 pub fn close_all() {
     let stores: Vec<Arc<Store>> = {
-        let mut caches = CACHES.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut caches = lock(&CACHES);
         caches.drain().map(|(_, store)| store).collect()
     };
     for store in stores {

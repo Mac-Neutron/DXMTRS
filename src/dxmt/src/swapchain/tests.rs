@@ -12,7 +12,7 @@ use super::{
     DXGI_FORMAT_B8G8R8X8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
     DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
     DXGI_FORMAT_R16G16B16A16_FLOAT, convert_color_space, convert_format, monitor_format_bpp,
-    parse_render_scale, render_scale,
+    parse_render_scale, render_scale, vsync_duration,
 };
 
 #[test]
@@ -106,4 +106,14 @@ fn render_scale_parses_as_cpp() {
     assert_eq!(parse_render_scale("0.1"), 0.25);
     assert_eq!(parse_render_scale("2.0"), 1.0);
     assert_eq!(render_scale(), 1.0);
+}
+
+/// The interval d3d11 and d3d12 each computed: refreshes over the rate, floored by the preferred.
+#[test]
+fn vsync_duration_as_cpp() {
+    assert!((vsync_duration(0, 0, 60.0) - 0.0).abs() < 1e-12);
+    assert!((vsync_duration(1, 0, 60.0) - (1.0 / 60.0)).abs() < 1e-12);
+    assert!((vsync_duration(2, 0, 60.0) - (2.0 / 60.0)).abs() < 1e-12);
+    assert!((vsync_duration(0, 120, 60.0) - (1.0 / 120.0)).abs() < 1e-12);
+    assert!((vsync_duration(1, 30, 60.0) - (1.0 / 30.0)).abs() < 1e-12);
 }

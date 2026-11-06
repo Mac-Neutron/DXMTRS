@@ -16,12 +16,13 @@ use winemetal_sys::{
         WmtcmdRenderSetvisibilitymode, WmtcmdRenderUseresource,
     },
 };
+use winemetal_wire::MemPtr;
 
 use crate::{
     counter::Counter,
     deptrack::Access,
     encoder::{
-        ArgumentBuffer, Encoder, NO_NEXT, RenderUses, kind,
+        ArgumentBuffer, Encoder, RenderUses, kind,
         pass::{Pass, PassKind},
         stage,
     },
@@ -431,7 +432,7 @@ fn dispatch_tile_barrier_encodes_and_recovers_pso() {
     enc.encode_render_command(WmtcmdRenderSetpso {
         r#type: WMT_RENDER_COMMAND_SET_PSO,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         pso: 0x4242,
     });
     enc.dispatch_tile_barrier();

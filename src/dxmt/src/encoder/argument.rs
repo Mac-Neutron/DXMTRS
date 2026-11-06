@@ -18,10 +18,11 @@ use winemetal_sys::wire::{
     WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WmtcmdComputeSetbufferoffset,
     WmtcmdRenderSetbufferoffset,
 };
+use winemetal_wire::MemPtr;
 
 use super::{
-    BINDING_SAMPLER, BINDING_SRV, BINDING_UAV, CONSTANT_BUFFER_SLOTS, Encoder, NO_NEXT,
-    RESOURCE_SLOTS, ResourceView, SAMPLER_SLOTS, binding_index, kind, resident, stage,
+    BINDING_SAMPLER, BINDING_SRV, BINDING_UAV, CONSTANT_BUFFER_SLOTS, Encoder, RESOURCE_SLOTS,
+    ResourceView, SAMPLER_SLOTS, binding_index, kind, resident, stage,
 };
 use crate::deptrack::Access;
 
@@ -362,7 +363,7 @@ impl Encoder {
             self.encode_compute_command(WmtcmdComputeSetbufferoffset {
                 r#type: WMT_COMPUTE_COMMAND_SET_BUFFER_OFFSET,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 offset,
                 index: binding_index(index),
             });
@@ -384,7 +385,7 @@ impl Encoder {
         self.encode_render_command(WmtcmdRenderSetbufferoffset {
             r#type,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             offset,
             index: binding_index(index),
         });

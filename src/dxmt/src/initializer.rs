@@ -15,10 +15,10 @@
 use core::{alloc::Layout as MemLayout, ptr::NonNull};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
-use dxmt_util::float_cast::u32_to_f32;
+use dxmt_util::{float_cast::u32_to_f32, sync::lock};
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLBuffer_updateContents,
     MTLCommandBuffer_blitCommandEncoder, MTLCommandBuffer_commit,
@@ -41,7 +41,6 @@ use winemetal_sys::{
 
 use crate::{
     arena::{BlockPool, Commands},
-    encoder::NO_NEXT,
     format::{self, MTL_DXGI_FORMAT_EMULATED_D24},
     resource::{BufferAllocation, BufferAllocationFlags, Texture, TextureAllocation},
     ring::{LIFETIME, RingBump, RingConfig},
@@ -136,7 +135,7 @@ impl ResourceInitializer {
         batch.blit(WmtcmdBlitFillbuffer {
             r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             buffer: allocation.buffer(),
             offset,
             length,
@@ -220,7 +219,7 @@ impl ResourceInitializer {
     }
 
     fn lock(&self) -> MutexGuard<'_, Batch> {
-        self.batch.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.batch)
     }
 
     /// Commits the batch to the GPU, signalling its event value, which it answers.
@@ -258,7 +257,7 @@ impl ResourceInitializer {
                 length: len,
                 options: WMT_RESOURCE_STORAGE_MODE_PRIVATE
                     | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-                memory: mem_ptr(0),
+                memory: MemPtr::from_addr(0),
                 gpu_address: 0,
             };
             // SAFETY: a live device; `info` is a buffer description winemetal fills in.
@@ -269,7 +268,7 @@ impl ResourceInitializer {
             batch.blit(WmtcmdBlitFillbuffer {
                 r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 buffer,
                 offset: 0,
                 length: len,
@@ -374,7 +373,7 @@ impl ResourceInitializer {
             batch.blit(WmtcmdBlitCopyFromBufferToTextureWithblitoption {
                 r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 src,
                 src_offset,
                 bytes_per_row,
@@ -443,7 +442,7 @@ impl Batch {
             let nop = WmtcmdBase {
                 r#type: WMT_BLIT_COMMAND_NOP,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
             };
             let head = place(&mut self.records, nop);
             (head, head)
@@ -451,7 +450,7 @@ impl Batch {
         let record = place(&mut self.records, cmd).cast::<WmtcmdBase>();
         // SAFETY: `tail` is the last blit record, in `records` until the next reset; a record
         // starts with `WmtcmdBase`'s fields (`Blit`).
-        unsafe { (*tail.as_ptr()).next = mem_ptr(record.as_ptr().expose_provenance()) };
+        unsafe { (*tail.as_ptr()).next = MemPtr::from_addr(record.as_ptr().expose_provenance()) };
         self.blits = Some((head, record));
     }
 
@@ -462,7 +461,7 @@ impl Batch {
             .upload
             .allocate(self.seq, self.coherent, len, UPLOAD_ALIGN);
         if len > 0 && block.buffer != 0 {
-            let src = mem_ptr(bytes.as_ptr().expose_provenance());
+            let src = MemPtr::from_addr(bytes.as_ptr().expose_provenance());
             // SAFETY: a live block of the ring with `len` bytes free at `offset`; `src` is valid
             // for `len` bytes during the call.
             unsafe { MTLBuffer_updateContents(block.buffer, offset, src, len) };
@@ -572,7 +571,7 @@ impl Layout {
         WmtcmdBlitCopyFromBufferToTexture {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             src,
             src_offset,
             bytes_per_row: u32::try_from(self.bytes_per_row).unwrap_or(u32::MAX),
@@ -715,21 +714,6 @@ fn place<T>(records: &mut Commands, value: T) -> NonNull<T> {
     // SAFETY: fresh memory of `T`'s size and alignment.
     unsafe { p.write(value) };
     p
-}
-
-/// `addr` as a pointer of `winemetal.h`'s structures.
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-/// `addr` as a pointer of `winemetal.h`'s structures: a 32-bit address and a high half of 0.
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
 }
 
 #[cfg(test)]

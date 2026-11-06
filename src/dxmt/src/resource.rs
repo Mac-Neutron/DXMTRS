@@ -14,17 +14,15 @@ use core::{
     ptr,
     sync::atomic::{AtomicU64, Ordering},
 };
-use std::{
-    alloc::{self, Layout},
-    sync::{Mutex, MutexGuard, PoisonError},
-};
+use std::alloc::{self, Layout};
 
+use dxmt_util::sync::lock;
 use winemetal_sys::{
     Obj,
     wire::{
-        MemPtr, WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED,
-        WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_MANAGED,
-        WMT_RESOURCE_STORAGE_MODE_MEMORYLESS, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+        WMT_RESOURCE_STORAGE_MODE_MANAGED, WMT_RESOURCE_STORAGE_MODE_MEMORYLESS,
+        WMT_RESOURCE_STORAGE_MODE_PRIVATE,
     },
 };
 
@@ -149,32 +147,6 @@ const fn storage_options(flags: u8) -> u64 {
     options
 }
 
-/// `addr` as a pointer of `winemetal.h`'s structures.
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-/// `addr` as a pointer of `winemetal.h`'s structures: a 32-bit address and a high half of 0.
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
-/// The pointer winemetal wrote into a structure, or null where this process cannot reach it.
-///
-/// The C++'s `get_accessible_or_null`: a 32-bit process cannot reach an address with a high half.
-fn accessible(m: MemPtr) -> *mut u8 {
-    #[cfg(target_pointer_width = "32")]
-    if m.high != 0 {
-        return ptr::null_mut();
-    }
-    usize::try_from(m.ptr).map_or(ptr::null_mut(), ptr::with_exposed_provenance_mut)
-}
-
 /// A reference of its own to the object `obj` holds one to.
 fn another_ref(obj: &Obj) -> Obj {
     // SAFETY: `obj` holds a reference, so its handle is a live object's.
@@ -185,10 +157,6 @@ fn another_ref(obj: &Obj) -> Obj {
 /// The handle `obj` holds, or the null handle.
 fn handle(obj: Option<&Obj>) -> u64 {
     obj.map_or(0, Obj::handle)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

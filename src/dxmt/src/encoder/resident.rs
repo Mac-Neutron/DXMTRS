@@ -10,8 +10,9 @@ use winemetal_sys::wire::{
     WMT_RESOURCE_USAGE_READ, WMT_RESOURCE_USAGE_WRITE, WmtcmdComputeUseresource,
     WmtcmdRenderUseresource,
 };
+use winemetal_wire::MemPtr;
 
-use super::{Encoder, NO_NEXT, buffer_trackers, kind, stage, texture_trackers};
+use super::{Encoder, buffer_trackers, kind, stage, texture_trackers};
 use crate::resource::{Buffer, BufferAllocation, BufferViewKey, TextureAllocation, TextureViewKey};
 
 const VERTEX_READ: u32 = 1;
@@ -108,7 +109,7 @@ impl Encoder {
             self.encode_compute_command(WmtcmdComputeUseresource {
                 r#type: WMT_COMPUTE_COMMAND_USE_RESOURCE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 resource,
                 usage: usage(mask),
             });
@@ -116,7 +117,7 @@ impl Encoder {
             self.encode_render_command(WmtcmdRenderUseresource {
                 r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
                 reserved: [0; 3],
-                next: NO_NEXT,
+                next: MemPtr::NULL,
                 resource,
                 usage: usage(mask),
                 stages: stages(mask),

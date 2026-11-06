@@ -11,11 +11,12 @@ use core::{
     sync::atomic::{Ordering, fence},
 };
 use std::{
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
+use dxmt_util::sync::lock;
 #[cfg(not(test))]
 use winemetal_sys::Pool;
 use winemetal_sys::{
@@ -156,9 +157,7 @@ impl Fence {
     }
 
     fn lock(&self) -> MutexGuard<'_, Generation> {
-        self.generation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock(&self.generation)
     }
 }
 

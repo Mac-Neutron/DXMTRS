@@ -1,4 +1,4 @@
-use crate::{WMTIndirectCommandBufferInfo, WMTTextureInfo};
+use crate::{MemPtr, WMTIndirectCommandBufferInfo, WMTTextureInfo};
 
 #[test]
 fn bitfield_getters_read_their_bits() {
@@ -47,4 +47,19 @@ fn bitfield_getters_read_their_bits() {
         (1, 0, 1, 0)
     );
     assert_eq!(icb.support_color_attachment_mapping(), 1);
+}
+
+/// `MemPtr` round-trips a reachable address and answers null for the null pointer.
+#[test]
+fn mem_ptr_round_trips_addresses() {
+    let value = 7_u32;
+    let p = core::ptr::from_ref(&value);
+    assert_eq!(MemPtr::from_ptr(p).as_ptr::<u32>().cast_const(), p);
+    assert_eq!(MemPtr::from_addr(p.addr()).as_ptr::<u32>().cast_const(), p);
+    assert!(MemPtr::NULL.as_ptr::<u8>().is_null());
+    assert!(
+        MemPtr::from_ptr(core::ptr::null::<u8>())
+            .as_ptr::<u8>()
+            .is_null()
+    );
 }

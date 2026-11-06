@@ -13,8 +13,9 @@
 //! its first callers.
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use dxmt_util::sync::lock;
 use winemetal_sys::{
     MTLCommandBuffer_property, Obj,
     wire::{
@@ -23,11 +24,9 @@ use winemetal_sys::{
         WmtcmdRenderSetvisibilitymode,
     },
 };
+use winemetal_wire::MemPtr;
 
-use crate::{
-    encoder::NO_NEXT,
-    resource::{Buffer, BufferAllocation, BufferAllocationFlags},
-};
+use crate::resource::{Buffer, BufferAllocation, BufferAllocationFlags};
 
 /// The write offset that turns counting off.
 pub const NO_OFFSET: u64 = u64::MAX;
@@ -214,7 +213,7 @@ impl VisibilityQuery {
     }
 
     fn lock(&self) -> MutexGuard<'_, Visibility> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 }
 
@@ -414,7 +413,7 @@ impl Queries {
         Some(WmtcmdRenderSetvisibilitymode {
             r#type: WMT_RENDER_COMMAND_SET_VISIBILITY_MODE,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             offset,
             mode,
         })

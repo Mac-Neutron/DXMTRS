@@ -38,11 +38,6 @@ pub const CUSTOM_BUFFER_ARGUMENT_INDEX_0: u32 = 30;
 /// The metallib `build.rs` took from `$DXMT_COMMAND_METALLIB`, or nothing when that was unset.
 const METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dxmt_command.metallib"));
 
-#[cfg(target_pointer_width = "64")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0 };
-#[cfg(target_pointer_width = "32")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0, high: 0 };
-
 bitflags::bitflags! {
     /// How a pass uses a resource: the C++'s `ResourceAccess` bits.
     #[derive(Clone, Copy)]
@@ -214,7 +209,7 @@ pub const fn render_pipeline_info() -> WMTRenderPipelineInfo {
         tessellation_output_winding_order: WMT_WINDING_CLOCKWISE,
         tessellation_factor_step: WMT_TESSELLATION_FACTOR_STEP_FUNCTION_CONSTANT,
         binary_archive_for_serialization: 0,
-        binary_archives_for_lookup: NULL_PTR,
+        binary_archives_for_lookup: MemPtr::NULL,
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,
         support_indirect_command_buffers: 0,

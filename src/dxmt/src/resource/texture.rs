@@ -1,8 +1,9 @@
 //! Textures, their allocations and their views.
 
 use core::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
+use dxmt_util::sync::{read, write};
 use winemetal_sys::{
     MTLBuffer_newTexture, MTLDevice_newBuffer, MTLDevice_newSharedTexture, MTLDevice_newTexture,
     MTLHeap_newTexture, MTLTexture_newTextureView, Obj,
@@ -17,10 +18,9 @@ use winemetal_sys::{
         WMTTextureInfo, WMTTextureSwizzleChannels, original_format,
     },
 };
+use winemetal_wire::MemPtr;
 
-use super::{
-    CachedView, Placed, Retained, accessible, another_ref, handle, lock, mem_ptr, storage_options,
-};
+use super::{CachedView, Placed, Retained, another_ref, handle, lock, storage_options};
 
 /// A view descriptor's fields in its key: (shift, width), from the low bits up.
 const FORMAT: (u32, u32) = (0, 24);
@@ -144,18 +144,12 @@ impl Texture {
     /// The allocation [`Self::rename`] last made current.
     #[must_use]
     pub fn current(&self) -> Option<Arc<TextureAllocation>> {
-        self.current
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        read(&self.current).clone()
     }
 
     /// Makes `allocation` current and returns the one it replaces.
     pub fn rename(&self, allocation: Arc<TextureAllocation>) -> Option<Arc<TextureAllocation>> {
-        self.current
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(allocation)
+        write(&self.current).replace(allocation)
     }
 
     /// A new allocation; a linear texture's in a buffer of its own.
@@ -190,7 +184,7 @@ impl Texture {
         let mut buffer_info = WMTBufferInfo {
             length: u64::from(self.bytes_per_image),
             options: info.options,
-            memory: mem_ptr(placed.as_ref().map_or(0, Placed::addr)),
+            memory: MemPtr::from_addr(placed.as_ref().map_or(0, Placed::addr)),
             gpu_address: 0,
         };
         // SAFETY: `device` is held live by `self`; `buffer_info` is a buffer description winemetal
@@ -207,7 +201,7 @@ impl Texture {
             // SAFETY: `newTexture` returns a +1 handle or null.
             unsafe { Obj::adopt(created) }
         });
-        let mapped = accessible(buffer_info.memory).expose_provenance();
+        let mapped = buffer_info.memory.as_ptr::<u8>().expose_provenance();
         self.finish(texture, &info, flags, buffer, mapped, placed)
     }
 

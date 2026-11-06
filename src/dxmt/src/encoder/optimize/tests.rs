@@ -10,6 +10,7 @@ use winemetal_sys::{
         WmtcmdRenderSetbufferoffset,
     },
 };
+use winemetal_wire::MemPtr;
 
 use super::*;
 use crate::{
@@ -82,7 +83,7 @@ fn draw(encoder: &mut Encoder, texture: &Arc<Texture>, load: u32, values: &[u64]
         encoder.encode_render_command(WmtcmdRenderSetbufferoffset {
             r#type: WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             offset,
             index: 0,
         });

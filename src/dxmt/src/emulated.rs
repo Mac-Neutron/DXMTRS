@@ -23,7 +23,7 @@ use winemetal_sys::{
 };
 
 use crate::{
-    encoder::{Encoder, NO_NEXT},
+    encoder::Encoder,
     library::{CUSTOM_BUFFER_ARGUMENT_INDEX_0, Library, render_pipeline, render_pipeline_info},
 };
 
@@ -288,7 +288,7 @@ impl EmulatedContext {
         encoder.encode_compute_command(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: NO_NEXT,
+            next: MemPtr::NULL,
             pso: handle(self.compute[kernel].as_ref()),
             threadgroup_size: WMTSize {
                 width,
@@ -334,7 +334,7 @@ fn compute_pipeline(device: &Obj, library: &Library, name: &CStr) -> Option<Obj>
     let function = library.function(name);
     let info = WMTComputePipelineInfo {
         compute_function: function.as_ref().map_or(0, Obj::handle),
-        binary_archives_for_lookup: NO_NEXT,
+        binary_archives_for_lookup: MemPtr::NULL,
         binary_archive_for_serialization: 0,
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,
@@ -361,7 +361,7 @@ fn set_buffer(encoder: &mut Encoder, buffer: u64, offset: u64, index: u8) {
     encoder.encode_compute_command(WmtcmdComputeSetbuffer {
         r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         buffer,
         offset,
         index,
@@ -372,7 +372,7 @@ fn set_texture(encoder: &mut Encoder, texture: u64, index: u8) {
     encoder.encode_compute_command(WmtcmdComputeSettexture {
         r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         texture,
         index,
     });
@@ -386,8 +386,8 @@ fn set_bytes(encoder: &mut Encoder, bytes: &[u8], index: u8) {
     encoder.encode_compute_command(WmtcmdComputeSetbytes {
         r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
         reserved: [0; 3],
-        next: NO_NEXT,
-        bytes: mem_ptr(copy.as_ptr().expose_provenance()),
+        next: MemPtr::NULL,
+        bytes: MemPtr::from_addr(copy.as_ptr().expose_provenance()),
         length: bytes.len() as u64,
         index,
     });
@@ -397,7 +397,7 @@ fn dispatch(encoder: &mut Encoder, [width, height, depth]: [u64; 3]) {
     encoder.encode_compute_command(WmtcmdComputeDispatch {
         r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         size: WMTSize {
             width,
             height,
@@ -420,7 +420,7 @@ fn marshal(pso: u64, encoder: u64, commands: u64, offset: u32) {
     let unbind = WmtcmdRenderSetbuffer {
         r#type: WMT_RENDER_COMMAND_SET_VERTEX_BUFFER,
         reserved: [0; 3],
-        next: NO_NEXT,
+        next: MemPtr::NULL,
         buffer: 0,
         offset: 0,
         index,
@@ -457,22 +457,7 @@ fn marshal(pso: u64, encoder: u64, commands: u64, offset: u32) {
 
 /// `record`'s address as a `next`.
 fn link<T>(record: &T) -> MemPtr {
-    mem_ptr(core::ptr::from_ref(record).expose_provenance())
-}
-
-/// `addr` as a pointer of `winemetal.h`'s structures.
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-/// `addr` as a pointer of `winemetal.h`'s structures: a 32-bit address and a high half of 0.
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
+    MemPtr::from_addr(core::ptr::from_ref(record).expose_provenance())
 }
 
 #[cfg(test)]

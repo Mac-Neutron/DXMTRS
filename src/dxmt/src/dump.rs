@@ -11,8 +11,10 @@
 use std::{
     ffi::{OsStr, OsString},
     path::Path,
-    sync::{LazyLock, Mutex, PoisonError},
+    sync::{LazyLock, Mutex},
 };
+
+use dxmt_util::sync::lock;
 
 mod platform;
 
@@ -136,7 +138,7 @@ fn append_line(line: &[u8]) {
     let Some(folder) = FOLDER.as_deref() else {
         return;
     };
-    let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
+    let _writer = lock(&WRITER);
     append_in(folder, line);
 }
 

@@ -9,7 +9,9 @@
 //! retired, so blocks are held by the chunks in flight rather than by every chunk of the ring.
 
 use core::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
+
+use dxmt_util::sync::lock;
 
 use crate::encoder::Encoder;
 
@@ -80,21 +82,14 @@ impl BlockPool {
     }
 
     fn take(&self) -> Block {
-        let reused = self
-            .free
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop();
+        let reused = lock(&self.free).pop();
         reused.unwrap_or_else(|| Block::new(self.size))
     }
 
     /// Keeps `block` for reuse when it is one of the pool's own size; frees a larger one.
     fn give(&self, block: Block) {
         if block.len() == self.size {
-            self.free
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(block);
+            lock(&self.free).push(block);
         }
     }
 }

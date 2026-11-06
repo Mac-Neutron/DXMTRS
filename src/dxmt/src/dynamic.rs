@@ -11,9 +11,10 @@
 use core::mem;
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex},
 };
 
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 
 use crate::resource::{
@@ -271,10 +272,6 @@ impl<A> Renames<A> {
         }
         self.name_piece
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -16,12 +16,12 @@ use core::{
 };
 use std::{
     io,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard},
     thread::{self, JoinHandle},
     time::Instant,
 };
 
-use dxmt_util::sync::{self, CpuFence};
+use dxmt_util::sync::{self, CpuFence, lock};
 use winemetal_sys::{
     MTLCommandBuffer_commit, MTLCommandBuffer_encodeWaitForEvent, MTLCommandBuffer_status,
     MTLCommandBuffer_waitUntilCompleted, MTLCommandQueue_commandBuffer, MTLDevice_newCommandQueue,
@@ -292,9 +292,7 @@ impl Shared {
     }
 
     fn statistics(&self) -> MutexGuard<'_, Container> {
-        self.statistics
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock(&self.statistics)
     }
 }
 

@@ -4,8 +4,9 @@ use core::{
     ptr,
     sync::atomic::{AtomicU32, Ordering},
 };
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
+use dxmt_util::sync::{read, write};
 use winemetal_sys::{
     MTLBuffer_newTexture, MTLBuffer_updateContents, MTLDevice_newBuffer, MTLDevice_supportsFamily,
     MTLHeap_newBuffer, Obj,
@@ -17,11 +18,9 @@ use winemetal_sys::{
         WMT_TEXTURE_USAGE_SHADER_WRITE, WMTBufferInfo, WMTGPU_FAMILY_APPLE8, WMTTextureInfo,
     },
 };
+use winemetal_wire::MemPtr;
 
-use super::{
-    CachedView, PAGE_SIZE, Placed, Retained, accessible, another_ref, handle, lock, mem_ptr,
-    storage_options,
-};
+use super::{CachedView, PAGE_SIZE, Placed, Retained, another_ref, handle, lock, storage_options};
 
 /// The smallest buffer an allocation makes, so a texture can view it.
 const MIN_LENGTH: u64 = 256;
@@ -81,18 +80,12 @@ impl Buffer {
     /// The allocation [`Self::rename`] last made current.
     #[must_use]
     pub fn current(&self) -> Option<Arc<BufferAllocation>> {
-        self.current
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        read(&self.current).clone()
     }
 
     /// Makes `allocation` current and returns the one it replaces.
     pub fn rename(&self, allocation: Arc<BufferAllocation>) -> Option<Arc<BufferAllocation>> {
-        self.current
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(allocation)
+        write(&self.current).replace(allocation)
     }
 
     /// A new allocation of the buffer's length in its own memory.
@@ -101,7 +94,7 @@ impl Buffer {
         let info = WMTBufferInfo {
             length: self.length,
             options: options(flags),
-            memory: mem_ptr(0),
+            memory: MemPtr::from_addr(0),
             gpu_address: 0,
         };
         Arc::new(BufferAllocation::new(&self.device, info, flags))
@@ -126,7 +119,7 @@ impl Buffer {
         let mut info = WMTBufferInfo {
             length: self.length,
             options: options(flags),
-            memory: mem_ptr(0),
+            memory: MemPtr::from_addr(0),
             gpu_address: 0,
         };
         // SAFETY: `heap` holds a live `MTLHeap`; `info` is a buffer description winemetal fills in.
@@ -354,7 +347,7 @@ impl BufferAllocation {
             return;
         }
         if let Some(obj) = &self.obj {
-            let src = mem_ptr(data.as_ptr().expose_provenance());
+            let src = MemPtr::from_addr(data.as_ptr().expose_provenance());
             // SAFETY: `obj` holds a live `MTLBuffer`; `src` is valid for `len` bytes during the
             // call; the range lies in the buffer (checked above).
             unsafe { MTLBuffer_updateContents(obj.handle(), start, src, len) };
@@ -382,7 +375,7 @@ impl BufferAllocation {
             None
         };
         if let Some(p) = &placed {
-            info.memory = mem_ptr(p.addr());
+            info.memory = MemPtr::from_addr(p.addr());
         }
         // SAFETY: `device` holds a live `MTLDevice`; `info` is a buffer description winemetal fills
         // in; placed memory stays allocated until the buffer is released (`_placed` drops last).
@@ -403,7 +396,7 @@ impl BufferAllocation {
             obj,
             options: info.options,
             flags,
-            mapped: accessible(info.memory).expose_provenance(),
+            mapped: info.memory.as_ptr::<u8>().expose_provenance(),
             gpu_address: info.gpu_address,
             sub,
             current_suballocation: AtomicU32::new(0),
@@ -521,7 +514,7 @@ pub fn over_info(length: u64, flags: BufferAllocationFlags, external: &External)
     WMTBufferInfo {
         length: length.next_multiple_of(NO_COPY_PAGE),
         options,
-        memory: mem_ptr(external.ptr.expose_provenance()),
+        memory: MemPtr::from_addr(external.ptr.expose_provenance()),
         gpu_address: 0,
     }
 }
