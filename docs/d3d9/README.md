@@ -118,8 +118,15 @@ profiles and the reason for each setting they make.
 ## Logs, games and bug reports
 
 Every process writes `mtld3d-logs/<exe>-<pid>.log` next to the executable,
-never to the standard streams. `RUST_LOG` filters it: unset, everything logs
-at `info`, and `RUST_LOG=mtld3d=warn` quiets the whole project. The log
+never to the standard streams. `DXMT_LOG_LEVEL` sets its base level, as it
+does for Direct3D 10 to 12: `trace`, `debug`, `info` (the default), `warn`,
+`error` or `none`, which writes no ordinary line (crash and fault reports
+still do). `RUST_LOG` refines it per target, so `RUST_LOG=mtld3d=warn` quiets
+the whole project and `DXMT_LOG_LEVEL=none RUST_LOG=mtld3d::perf=info` keeps
+only the perf lines. `debug` and `trace` also switch on D3D9's debug-only
+work, as `RUST_LOG` at those levels does: Metal command buffers with error
+reporting, the creation-clear observers, the state trace with the pass and
+pair statistics, and the address-space breakdown. The log
 targets, the levels and the Ctrl+Shift+P frame capture are described in
 [`ARCHITECTURE.md`](ARCHITECTURE.md#logging). The capture hotkey
 is a letter chord because no Ctrl+Shift function-key chord is free: a bare

@@ -13,6 +13,16 @@ fn level_names_and_default() {
 }
 
 #[test]
+fn directive_names_env_loggers_levels() {
+    assert_eq!(Level::Trace.directive(), "trace");
+    assert_eq!(Level::Debug.directive(), "debug");
+    assert_eq!(Level::Info.directive(), "info");
+    assert_eq!(Level::Warn.directive(), "warn");
+    assert_eq!(Level::Error.directive(), "error");
+    assert_eq!(Level::None.directive(), "off");
+}
+
+#[test]
 fn each_line_prefixed() {
     assert_eq!(lines(&Level::Warn, "a\nb"), "warn:  a\nwarn:  b\n");
     assert_eq!(lines(&Level::Error, "x\n"), "err:   x\n");

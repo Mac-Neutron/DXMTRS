@@ -196,7 +196,7 @@ The following environment variables can be used for **debugging** purposes.
 - `MTL_CAPTURE_ENABLED=1` Enable Metal frame capture
 - `DXMT_CAPTURE_EXECUTABLE="the executable name without extension"` Must be set to enable Metal frame capture. Press F10 to generate a capture. The captured result will be stored in the same directory as the executable.
 - `DXMT_CAPTURE_FRAME=n` Automatically capture n-th frame. Useful for debugging a replay.
-- `DXMT_LOG_LEVEL=none|error|warn|info|debug` Controls message logging.
+- `DXMT_LOG_LEVEL=none|error|warn|info|debug` Controls message logging, Direct3D 9's included (its base level, which `RUST_LOG` refines per target).
 - `DXMT_LOG_PATH=/some/directory` Changes path where log files are stored. Set to `none` to disable log file creation entirely, without disabling logging.
 - `DXMT_SHADER_CACHE=0`: Disables the internal shader cache.
 - `DXMT_SHADER_CACHE_PATH=/some/absolute/darwin/directory`: Path to internal shader cache files. Default to `$(getconf DARWIN_USER_CACHE_DIR)/dxmt/<executable name with extension>`.

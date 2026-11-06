@@ -20,8 +20,24 @@ pub enum Level {
     None,
 }
 
-/// The level `DXMT_LOG_LEVEL`'s value names.
-fn level_from(value: Option<&str>) -> Level {
+impl Level {
+    /// The level's name in an `env_logger` filter (D3D9's log): `off` for [`Level::None`].
+    #[must_use]
+    pub const fn directive(&self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+            Self::None => "off",
+        }
+    }
+}
+
+/// The level `DXMT_LOG_LEVEL`'s value names: `info` unless it is another level's name.
+#[must_use]
+pub fn level_from(value: Option<&str>) -> Level {
     match value {
         Some("trace") => Level::Trace,
         Some("debug") => Level::Debug,
@@ -298,6 +314,7 @@ macro_rules! err_once {
 }
 
 mod once;
+pub mod paths;
 
 #[cfg(test)]
 mod tests;
