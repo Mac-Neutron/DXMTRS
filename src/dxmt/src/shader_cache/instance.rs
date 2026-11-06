@@ -1,9 +1,9 @@
 //! Process-wide [`Store`] instances, one per Metal version (`ShaderCache::getInstance`).
 
+#[cfg(not(windows))]
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-#[cfg(not(windows))]
 use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 

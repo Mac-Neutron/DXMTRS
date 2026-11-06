@@ -64,7 +64,7 @@ impl MemPtr {
     #[must_use]
     pub const fn from_addr(addr: usize) -> Self {
         Self {
-            ptr: addr as u32,
+            ptr: u32::from_ne_bytes(addr.to_ne_bytes()),
             high: 0,
         }
     }
@@ -80,11 +80,8 @@ impl MemPtr {
     /// The C++'s `get_accessible_or_null`: a 32-bit process cannot reach a high half.
     #[cfg(target_pointer_width = "64")]
     #[must_use]
-    pub fn as_ptr<T>(self) -> *mut T {
-        usize::try_from(self.ptr).map_or(
-            core::ptr::null_mut(),
-            core::ptr::with_exposed_provenance_mut,
-        )
+    pub const fn as_ptr<T>(self) -> *mut T {
+        core::ptr::with_exposed_provenance_mut(usize::from_ne_bytes(self.ptr.to_ne_bytes()))
     }
 
     /// The pointer winemetal wrote into a structure, or null where this process cannot reach it.
@@ -92,7 +89,7 @@ impl MemPtr {
     /// The C++'s `get_accessible_or_null`: a 32-bit process cannot reach a high half.
     #[cfg(target_pointer_width = "32")]
     #[must_use]
-    pub fn as_ptr<T>(self) -> *mut T {
+    pub const fn as_ptr<T>(self) -> *mut T {
         if self.high != 0 {
             return core::ptr::null_mut();
         }
