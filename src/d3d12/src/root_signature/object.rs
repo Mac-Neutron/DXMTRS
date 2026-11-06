@@ -9,7 +9,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use airconv_ir::root_signature::Payload;
 use dxmt_core::sampler::Sampler;
-use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+    sync::lock,
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::WMTSamplerInfo;
@@ -155,6 +159,13 @@ unsafe fn add_ref_root_signature(this: *mut c_void) {
     unsafe { com::add_ref_com(this.cast::<RootSignature>()) };
 }
 
+impl HasPrivateData for RootSignature {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `RootSignature`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static ROOT_SIGNATURE_VTBL: ID3D12RootSignatureVtbl = ID3D12RootSignatureVtbl {
     query_interface: slot!(
         (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
@@ -184,48 +195,10 @@ static ROOT_SIGNATURE_VTBL: ID3D12RootSignatureVtbl = ID3D12RootSignatureVtbl {
         // SAFETY: `this` is a live `RootSignature`.
         unsafe { com::release_com(this.cast::<RootSignature>()) }
     }),
-    get_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `RootSignature`.
-            let private_data = unsafe { &(*this.cast::<RootSignature>()).private_data };
-            // SAFETY: `data_size` and `data` are caller pointers.
-            unsafe { private_data.get_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `RootSignature`.
-            let private_data = unsafe { &(*this.cast::<RootSignature>()).private_data };
-            // SAFETY: `data` is a caller pointer.
-            unsafe { private_data.set_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `RootSignature`.
-            let private_data = unsafe { &(*this.cast::<RootSignature>()).private_data };
-            // SAFETY: `data` is a caller `IUnknown` pointer.
-            unsafe { private_data.set_interface(guid, data.cast_mut()) }
-        }
-    ),
-    set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: `this` is a live `RootSignature`.
-        let private_data = unsafe { &(*this.cast::<RootSignature>()).private_data };
-        // SAFETY: `name` is a caller UTF-16 string pointer.
-        unsafe { com::set_name_private_data(private_data, name.cast()) }
-    }),
+    get_private_data: private_data::get_private_data::<RootSignature>,
+    set_private_data: private_data::set_private_data::<RootSignature>,
+    set_private_data_interface: private_data::set_private_data_interface::<RootSignature>,
+    set_name: private_data::set_name::<RootSignature>,
     get_device: slot!(
         (this: *mut c_void, riid: *const c_void, ppv_device: *mut *mut c_void) -> Hresult => {
             // SAFETY: `this` is a live `RootSignature`.

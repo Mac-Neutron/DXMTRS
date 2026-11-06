@@ -8,7 +8,10 @@ use core::{
     ptr,
 };
 
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+};
 use winemetal_sys::{
     MTLDevice_newComputePipelineState, MTLDevice_newLibraryWithSource, MTLLibrary_newFunction, Obj,
     wire::{
@@ -34,7 +37,7 @@ use crate::{
         vtbl::{ID3D12CommandSignatureVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOTIMPL, Guid, Hresult,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOTIMPL, Hresult,
         IID_ID3D12_COMMAND_SIGNATURE, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
         IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_FALSE,
     },
@@ -141,14 +144,21 @@ impl Drop for CommandSignature {
     }
 }
 
+impl HasPrivateData for CommandSignature {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `CommandSignature`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static COMMAND_SIGNATURE_VTBL: ID3D12CommandSignatureVtbl = ID3D12CommandSignatureVtbl {
     query_interface: cmdsig_query_interface,
     add_ref: cmdsig_add_ref,
     release: cmdsig_release,
-    get_private_data: cmdsig_get_private_data,
-    set_private_data: cmdsig_set_private_data,
-    set_private_data_interface: cmdsig_set_private_data_interface,
-    set_name: cmdsig_set_name,
+    get_private_data: private_data::get_private_data::<CommandSignature>,
+    set_private_data: private_data::set_private_data::<CommandSignature>,
+    set_private_data_interface: private_data::set_private_data_interface::<CommandSignature>,
+    set_name: private_data::set_name::<CommandSignature>,
     get_device: cmdsig_get_device,
 };
 
@@ -201,75 +211,6 @@ unsafe extern "system-unwind" fn cmdsig_add_ref(this: *mut c_void) -> u32 {
 unsafe extern "system-unwind" fn cmdsig_release(this: *mut c_void) -> u32 {
     // SAFETY: `this` is a valid `CommandSignature` pointer.
     unsafe { com::release_com(this.cast::<CommandSignature>()) }
-}
-
-unsafe extern "system-unwind" fn cmdsig_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `CommandSignature`.
-    let sig = unsafe { &*this.cast::<CommandSignature>() };
-    // SAFETY: the caller owns `size` and `data`.
-    unsafe { sig.private_data.get_data(guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn cmdsig_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `CommandSignature`.
-    let sig = unsafe { &*this.cast::<CommandSignature>() };
-    // SAFETY: the caller owns `data`.
-    unsafe { sig.private_data.set_data(guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn cmdsig_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `CommandSignature`.
-    let sig = unsafe { &*this.cast::<CommandSignature>() };
-    // SAFETY: the caller owns `data`.
-    unsafe { sig.private_data.set_interface(guid, data.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn cmdsig_set_name(
-    this: *mut c_void,
-    name: *const c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `this` is a live `CommandSignature`.
-    let sig = unsafe { &*this.cast::<CommandSignature>() };
-    // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&sig.private_data, name.cast()) }
 }
 
 unsafe extern "system-unwind" fn cmdsig_get_device(

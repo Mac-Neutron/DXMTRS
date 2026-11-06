@@ -11,7 +11,9 @@ use dxmt_core::{
     format,
     library::{self, Library},
 };
-use dxmt_util::{com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data::PrivateData, qpc};
+use dxmt_util::{
+    com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data, private_data::PrivateData, qpc,
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
@@ -376,14 +378,10 @@ pub unsafe fn get_private_data(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `Device`.
     let dev = unsafe { &*this.cast::<Device>() };
-    // SAFETY: `data_size` and `data` are forwarded from the COM caller.
-    unsafe { dev.private_data.get_data(g, data_size, data) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { dev.private_data.get_ffi(guid, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateData` (`d3d12_base.hpp`).
@@ -400,14 +398,10 @@ pub unsafe fn set_private_data(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `Device`.
     let dev = unsafe { &*this.cast::<Device>() };
-    // SAFETY: `data` is null or points to `data_size` readable bytes.
-    unsafe { dev.private_data.set_data(g, data_size, data) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { dev.private_data.set_ffi(guid, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateDataInterface` (`d3d12_base.hpp`).
@@ -423,14 +417,10 @@ pub unsafe fn set_private_data_interface(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `Device`.
     let dev = unsafe { &*this.cast::<Device>() };
-    // SAFETY: `data` is null or a live `IUnknown` pointer.
-    unsafe { dev.private_data.set_interface(g, data.cast_mut()) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { dev.private_data.set_interface_ffi(guid, data) }
 }
 
 /// `ID3D12Object::SetName` (`d3d12_base.hpp`).
@@ -445,7 +435,7 @@ pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
     // SAFETY: `this` is a live `Device`.
     let dev = unsafe { &*this.cast::<Device>() };
     // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&dev.private_data, name.cast::<u16>()) }
+    unsafe { private_data::set_debug_name(&dev.private_data, name.cast::<u16>()) }
 }
 
 /// `ID3D12Device::GetNodeCount` (`d3d12_device.cpp:417`).

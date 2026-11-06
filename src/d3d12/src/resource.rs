@@ -18,7 +18,10 @@ use dxmt_core::{
     },
     resource::{Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor},
 };
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{HasPrivateData, PrivateData},
+};
 use winemetal_sys::{
     MTLDevice_heapTextureSizeAndAlign, MTLDevice_supportsFamily,
     wire::{
@@ -314,78 +317,11 @@ pub unsafe fn query_interface(
     }
 }
 
-/// Shared `ID3D12Object::GetPrivateData` for `Resource`.
-///
-/// # Safety
-///
-/// `this` is a valid `Resource` pointer; `guid`, `data_size`, and `data` are caller-supplied.
-pub unsafe fn get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `this` is a valid `Resource` pointer.
-    let res = unsafe { &*this.cast::<Resource>() };
-    // SAFETY: `guid` is a caller-supplied GUID pointer (`REFGUID`).
-    let Some(g) = (unsafe { com::Guid::read(guid.cast()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `data_size` and `data` are caller-supplied pointers.
-    unsafe { res.private_data.get_data(g, data_size, data.cast()) }
-}
-
-/// Shared `ID3D12Object::SetPrivateData` for `Resource`.
-///
-/// # Safety
-///
-/// `this` is a valid `Resource` pointer; `guid` and `data` are caller-supplied.
-pub unsafe fn set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a valid `Resource` pointer.
-    let res = unsafe { &*this.cast::<Resource>() };
-    // SAFETY: `guid` is a caller-supplied GUID pointer (`REFGUID`).
-    let Some(g) = (unsafe { com::Guid::read(guid.cast()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `data` is a caller-supplied buffer of `data_size` bytes.
-    unsafe { res.private_data.set_data(g, data_size, data.cast()) }
-}
-
-/// Shared `ID3D12Object::SetPrivateDataInterface` for `Resource`.
-///
-/// # Safety
-///
-/// `this` is a valid `Resource` pointer; `guid` and `data` are caller-supplied.
-pub unsafe fn set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a valid `Resource` pointer.
-    let res = unsafe { &*this.cast::<Resource>() };
-    // SAFETY: `guid` is a caller-supplied GUID pointer (`REFGUID`).
-    let Some(g) = (unsafe { com::Guid::read(guid.cast()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `data` is a caller-supplied `IUnknown` pointer (or null).
-    unsafe { res.private_data.set_interface(g, data.cast_mut().cast()) }
-}
-
-/// Shared `ID3D12Object::SetName` for `Resource`.
-///
-/// # Safety
-///
-/// `this` is a valid `Resource` pointer; `name` is null or a null-terminated UTF-16 string.
-pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
-    // SAFETY: `this` is a valid `Resource` pointer.
-    let res = unsafe { &*this.cast::<Resource>() };
-    // SAFETY: `name` is null or a null-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&res.private_data, name.cast()) }
+impl HasPrivateData for Resource {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Resource`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 /// Shared `ID3D12DeviceChild::GetDevice` for `Resource`.

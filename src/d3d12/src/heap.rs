@@ -7,8 +7,8 @@ use dxmt_core::resource::Buffer;
 #[cfg(not(windows))]
 use dxmt_core::resource::BufferAllocationFlags;
 use dxmt_util::{
-    com::{ComObject, Guid},
-    private_data::PrivateData,
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
@@ -83,14 +83,21 @@ impl Drop for HeapObject {
     }
 }
 
+impl HasPrivateData for HeapObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `HeapObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static HEAP_VTBL: ID3D12HeapVtbl = ID3D12HeapVtbl {
     query_interface: heap_query_interface,
     add_ref: heap_add_ref,
     release: heap_release,
-    get_private_data: heap_get_private_data,
-    set_private_data: heap_set_private_data,
-    set_private_data_interface: heap_set_private_data_interface,
-    set_name: heap_set_name,
+    get_private_data: private_data::get_private_data::<HeapObject>,
+    set_private_data: private_data::set_private_data::<HeapObject>,
+    set_private_data_interface: private_data::set_private_data_interface::<HeapObject>,
+    set_name: private_data::set_name::<HeapObject>,
     get_device: heap_get_device,
     get_desc: heap_get_desc,
 };
@@ -144,60 +151,6 @@ unsafe extern "system-unwind" fn heap_add_ref(this: *mut c_void) -> u32 {
 unsafe extern "system-unwind" fn heap_release(this: *mut c_void) -> u32 {
     // SAFETY: `this` is a valid `HeapObject` COM pointer allocated via `Box::into_raw`.
     unsafe { com::release_com(this.cast::<HeapObject>()) }
-}
-
-unsafe extern "system-unwind" fn heap_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `HeapObject`.
-    let obj = unsafe { &*this.cast::<HeapObject>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { obj.private_data.get_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn heap_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `HeapObject`.
-    let obj = unsafe { &*this.cast::<HeapObject>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { obj.private_data.set_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn heap_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `HeapObject`.
-    let obj = unsafe { &*this.cast::<HeapObject>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { obj.private_data.set_interface(guid, data.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn heap_set_name(this: *mut c_void, name: *const c_void) -> Hresult {
-    // SAFETY: `this` is a live `HeapObject`.
-    let obj = unsafe { &*this.cast::<HeapObject>() };
-    // SAFETY: `name` is forwarded.
-    unsafe { com::set_name_private_data(&obj.private_data, name.cast()) }
 }
 
 unsafe extern "system-unwind" fn heap_get_device(

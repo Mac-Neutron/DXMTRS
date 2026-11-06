@@ -325,6 +325,67 @@ fn allocator_holds_device_and_counts_across_qi() {
     drop(unsafe { Box::from_raw(dev) });
 }
 
+/// The generic private-data slots store, read back and erase on a real object.
+#[test]
+fn allocator_private_data_and_name_go_through_the_generic_slots() {
+    use crate::{
+        abi::vtbl::ID3D12CommandAllocatorVtbl,
+        allocator::create_command_allocator,
+        com::{IID_ID3D12_COMMAND_ALLOCATOR, WKPDID_D3D_DEBUG_OBJECT_NAME_W},
+    };
+
+    let mut raw: *mut c_void = ptr::null_mut();
+    // SAFETY: a null device is the headless form; `raw` and the IID are valid.
+    let hr = unsafe {
+        create_command_allocator(
+            ptr::null_mut(),
+            0,
+            ptr::from_ref(&IID_ID3D12_COMMAND_ALLOCATOR).cast(),
+            &raw mut raw,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `raw` is a live allocator.
+    let table = unsafe { vtbl::<ID3D12CommandAllocatorVtbl>(raw) };
+    let guid = Guid::new(1, 2, 3, [4; 8]);
+    let guid_ptr = ptr::from_ref(&guid).cast::<c_void>();
+    let payload = [7_u8, 8, 9];
+    // SAFETY: `guid_ptr` and `payload` are valid for the call.
+    let hr = unsafe { (table.set_private_data)(raw, guid_ptr, 3, payload.as_ptr().cast()) };
+    assert_eq!(hr, S_OK);
+    let mut size = 3_u32;
+    let mut out = [0_u8; 3];
+    // SAFETY: `size` and `out` are valid for the call.
+    let hr =
+        unsafe { (table.get_private_data)(raw, guid_ptr, &raw mut size, out.as_mut_ptr().cast()) };
+    assert_eq!((hr, size, out), (S_OK, 3, payload));
+    // SAFETY: a null GUID is the case under test.
+    let hr = unsafe { (table.set_private_data)(raw, ptr::null(), 3, payload.as_ptr().cast()) };
+    assert_eq!(hr, crate::com::E_INVALIDARG);
+
+    #[cfg(not(windows))]
+    let name = [u32::from(b'a'), u32::from(b'b'), 0];
+    #[cfg(windows)]
+    let name = [u16::from(b'a'), u16::from(b'b'), 0];
+    // SAFETY: `name` is NUL-terminated.
+    assert_eq!(unsafe { (table.set_name)(raw, name.as_ptr().cast()) }, S_OK);
+    let mut size = 0_u32;
+    // SAFETY: a null `data` asks for the size only.
+    let hr = unsafe {
+        (table.get_private_data)(
+            raw,
+            ptr::from_ref(&WKPDID_D3D_DEBUG_OBJECT_NAME_W).cast(),
+            &raw mut size,
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        (hr, size),
+        (S_OK, u32::try_from(size_of_val(&name)).unwrap_or(0))
+    );
+    assert_eq!(release_of(raw), 0);
+}
+
 /// A command list's companion interface shares the list's count.
 ///
 /// A `QueryInterface` through either pointer, and `AddRef` and `Release` on the companion, move

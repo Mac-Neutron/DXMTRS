@@ -3,7 +3,11 @@
 use core::{ffi::c_void, mem::size_of, ptr};
 use std::sync::{LazyLock, Mutex};
 
-use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+    sync::lock,
+};
 use winemetal_sys::{
     MTLCounterSampleBuffer_newTimestampBuffer, MTLDevice_newBuffer, Obj,
     wire::{MemPtr, WMT_RESOURCE_STORAGE_MODE_SHARED, WMTBufferInfo},
@@ -21,7 +25,7 @@ use crate::{
         vtbl::{ID3D12QueryHeapVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, Guid, Hresult, IID_ID3D12_DEVICE_CHILD,
+        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, Hresult, IID_ID3D12_DEVICE_CHILD,
         IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_QUERY_HEAP, IID_IUNKNOWN, S_FALSE,
     },
     device::Device,
@@ -120,6 +124,13 @@ pub fn timestamp_blits() -> bool {
     *ON
 }
 
+impl HasPrivateData for QueryHeap {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `QueryHeap`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static QUERY_HEAP_VTBL: ID3D12QueryHeapVtbl = ID3D12QueryHeapVtbl {
     query_interface: slot!("queryheap.QueryInterface", (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
         let qi = com::Qi {
@@ -163,42 +174,10 @@ static QUERY_HEAP_VTBL: ID3D12QueryHeapVtbl = ID3D12QueryHeapVtbl {
         // SAFETY: `this` is a live `QueryHeap`.
         unsafe { com::release_com(this.cast::<QueryHeap>()) }
     }),
-    get_private_data: slot!((this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-        // SAFETY: `guid` is a caller-supplied GUID pointer.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: `this` is a live `QueryHeap`.
-        let qh = unsafe { &*this.cast::<QueryHeap>() };
-        // SAFETY: `data_size` and `data` are caller-supplied.
-        unsafe { qh.private_data.get_data(guid, data_size, data) }
-    }),
-    set_private_data: slot!((this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-        // SAFETY: `guid` is a caller-supplied GUID pointer.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: `this` is a live `QueryHeap`.
-        let qh = unsafe { &*this.cast::<QueryHeap>() };
-        // SAFETY: `data` is caller-supplied.
-        unsafe { qh.private_data.set_data(guid, data_size, data) }
-    }),
-    set_private_data_interface: slot!((this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-        // SAFETY: `guid` is a caller-supplied GUID pointer.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: `this` is a live `QueryHeap`.
-        let qh = unsafe { &*this.cast::<QueryHeap>() };
-        // SAFETY: `data` is caller-supplied.
-        unsafe { qh.private_data.set_interface(guid, data.cast_mut()) }
-    }),
-    set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: `this` is a live `QueryHeap`.
-        let qh = unsafe { &*this.cast::<QueryHeap>() };
-        // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-        unsafe { com::set_name_private_data(&qh.private_data, name.cast::<u16>()) }
-    }),
+    get_private_data: private_data::get_private_data::<QueryHeap>,
+    set_private_data: private_data::set_private_data::<QueryHeap>,
+    set_private_data_interface: private_data::set_private_data_interface::<QueryHeap>,
+    set_name: private_data::set_name::<QueryHeap>,
     get_device: slot!((this: *mut c_void, riid: *const c_void, ppv_device: *mut *mut c_void) -> Hresult => {
         // SAFETY: `this` is a live `QueryHeap`.
         let dev = unsafe { (*this.cast::<QueryHeap>()).device }.cast::<c_void>();

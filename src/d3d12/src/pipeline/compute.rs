@@ -8,7 +8,11 @@ use core::{
 };
 use std::sync::Arc;
 
-use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+    sync::lock,
+};
 use rustc_hash::FxHasher;
 use winemetal_sys::{
     MTLDevice_newComputePipelineState, Obj,
@@ -30,9 +34,9 @@ use crate::{
         captured_root_signature, captured_shader, dump_dxil, dxil_capture_mode, log_pipeline,
     },
     com::{
-        ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
+        ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Hresult,
         IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_PIPELINE_STATE,
-        IID_IUNKNOWN, add_ref_com, init_out_ptr, release_com, set_name_private_data, vtbl,
+        IID_IUNKNOWN, add_ref_com, init_out_ptr, release_com, vtbl,
     },
     device::Device,
     pipeline::{
@@ -69,6 +73,13 @@ impl Drop for Compute {
             // SAFETY: `self.device` was `add_ref_com`'d when `self` was constructed.
             unsafe { release_com(self.device) };
         }
+    }
+}
+
+impl HasPrivateData for Compute {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Compute`.
+        &unsafe { &*this.cast::<Self>() }.private_data
     }
 }
 
@@ -115,48 +126,10 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
         // SAFETY: `this` is a live `Compute`.
         unsafe { release_com(this.cast::<Compute>()) }
     }),
-    get_private_data: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: `this` is a live `Compute`.
-            let pso = unsafe { &*this.cast::<Compute>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { pso.private_data.get_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: `this` is a live `Compute`.
-            let pso = unsafe { &*this.cast::<Compute>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { pso.private_data.set_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: `this` is a live `Compute`.
-            let pso = unsafe { &*this.cast::<Compute>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { pso.private_data.set_interface(guid, data.cast_mut()) }
-        }
-    ),
-    set_name: crate::slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: `this` is a live `Compute`.
-        let pso = unsafe { &*this.cast::<Compute>() };
-        // SAFETY: Forwarded from COM slot.
-        unsafe { set_name_private_data(&pso.private_data, name.cast::<u16>()) }
-    }),
+    get_private_data: private_data::get_private_data::<Compute>,
+    set_private_data: private_data::set_private_data::<Compute>,
+    set_private_data_interface: private_data::set_private_data_interface::<Compute>,
+    set_name: private_data::set_name::<Compute>,
     get_device: crate::slot!(
         (this: *mut c_void, riid: *const c_void, pp_device: *mut *mut c_void) -> Hresult => {
             // SAFETY: `this` is a live `Compute`.

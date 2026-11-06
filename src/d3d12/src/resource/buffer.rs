@@ -4,7 +4,7 @@ use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
 use dxmt_core::resource::{Buffer, BufferAllocationFlags, BufferViewDescriptor, External};
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, private_data, private_data::PrivateData};
 use winemetal_sys::{
     MTLDevice_heapBufferSizeAndAlign,
     wire::{WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT},
@@ -49,28 +49,10 @@ pub static BUFFER_VTBL: ID3D12Resource2Vtbl = ID3D12Resource2Vtbl {
         // SAFETY: `this` is a valid `Resource` COM pointer.
         unsafe { com::release_com(this.cast::<Resource>()) }
     }),
-    get_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: forwarded from COM slot.
-            unsafe { super::get_private_data(this, guid, data_size, data) }
-        }
-    ),
-    set_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: forwarded from COM slot.
-            unsafe { super::set_private_data(this, guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: forwarded from COM slot.
-            unsafe { super::set_private_data_interface(this, guid, data) }
-        }
-    ),
-    set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: forwarded from COM slot.
-        unsafe { super::set_name(this, name) }
-    }),
+    get_private_data: private_data::get_private_data::<Resource>,
+    set_private_data: private_data::set_private_data::<Resource>,
+    set_private_data_interface: private_data::set_private_data_interface::<Resource>,
+    set_name: private_data::set_name::<Resource>,
     get_device: slot!(
         (this: *mut c_void, riid: *const c_void, out: *mut *mut c_void) -> Hresult => {
             // SAFETY: forwarded from COM slot.

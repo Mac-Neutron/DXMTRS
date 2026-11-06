@@ -7,7 +7,7 @@ pub use dxmt_util::{
         ComObject, ComObjectWithInitialRef, Guid, Hresult, Object, Qi, QiMiss, add_ref, hresult::*,
         iid::*, qi_log, qi_refuse, qi_table, query, release, vtbl, write_out,
     },
-    private_data::{PrivateData, WKPDID_D3D_DEBUG_OBJECT_NAME_W},
+    private_data::{PrivateData, WKPDID_D3D_DEBUG_OBJECT_NAME_W, set_debug_name},
 };
 
 use crate::abi::vtbl::IUnknownVtbl;
@@ -273,37 +273,6 @@ impl<T: ComRefCounted> Drop for PrivateHold<T> {
     }
 }
 
-/// Stores `name` under [`WKPDID_D3D_DEBUG_OBJECT_NAME_W`] in `private_data`.
-///
-/// # Safety
-///
-/// `name` must be null or point to a NUL-terminated `WCHAR` sequence.
-pub unsafe fn set_name_private_data(private_data: &PrivateData, name: *const u16) -> Hresult {
-    #[cfg(windows)]
-    type Wchar = u16;
-    #[cfg(not(windows))]
-    type Wchar = u32;
-
-    if name.is_null() {
-        // SAFETY: null `data` erases the entry.
-        return unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, 0, ptr::null()) };
-    }
-    let wide = name.cast::<Wchar>();
-    let mut len = 0usize;
-    loop {
-        // SAFETY: `wide` is non-null and `len` has not yet reached the terminating NUL.
-        let ch_ptr = unsafe { wide.add(len) };
-        // SAFETY: `ch_ptr` points within the caller-supplied NUL-terminated wide string.
-        if unsafe { ch_ptr.read_unaligned() } == 0 {
-            break;
-        }
-        len += 1;
-    }
-    let byte_len = u32::try_from((len + 1) * size_of::<Wchar>()).unwrap_or(u32::MAX);
-    // SAFETY: `name` points to `byte_len` readable bytes.
-    unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, byte_len, name.cast()) }
-}
-
 /// Common header for `MTLD3D12DeviceChild` classes (`d3d12_device_child.hpp`).
 #[repr(C)]
 pub struct DeviceChild<D: ComRefCounted> {
@@ -341,12 +310,8 @@ impl<D: ComRefCounted> DeviceChild<D> {
         data_size: *mut u32,
         data: *mut c_void,
     ) -> Hresult {
-        // SAFETY: `guid` is null or 16 readable bytes.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: forwarded from COM slot with caller's pointers.
-        unsafe { self.private_data.get_data(guid, data_size, data) }
+        // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM slot.
+        unsafe { self.private_data.get_ffi(guid, data_size, data) }
     }
 
     /// `ID3D12Object::SetPrivateData`.
@@ -361,12 +326,8 @@ impl<D: ComRefCounted> DeviceChild<D> {
         data_size: u32,
         data: *const c_void,
     ) -> Hresult {
-        // SAFETY: `guid` is null or 16 readable bytes.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: forwarded from COM slot with caller's pointers.
-        unsafe { self.private_data.set_data(guid, data_size, data) }
+        // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM slot.
+        unsafe { self.private_data.set_ffi(guid, data_size, data) }
     }
 
     /// `ID3D12Object::SetPrivateDataInterface`.
@@ -379,12 +340,8 @@ impl<D: ComRefCounted> DeviceChild<D> {
         guid: *const c_void,
         unknown: *const c_void,
     ) -> Hresult {
-        // SAFETY: `guid` is null or 16 readable bytes.
-        let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-            return E_INVALIDARG;
-        };
-        // SAFETY: forwarded from COM slot with caller's pointers.
-        unsafe { self.private_data.set_interface(guid, unknown.cast_mut()) }
+        // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM slot.
+        unsafe { self.private_data.set_interface_ffi(guid, unknown) }
     }
 
     /// `ID3D12Object::SetName` (`d3d12_device_child.hpp:50-56`).
@@ -394,7 +351,7 @@ impl<D: ComRefCounted> DeviceChild<D> {
     /// `name` must be null or point to a NUL-terminated UTF-16 string.
     pub unsafe fn set_name(&self, name: *const u16) -> Hresult {
         // SAFETY: forwarded from COM slot with caller's pointer.
-        unsafe { set_name_private_data(&self.private_data, name) }
+        unsafe { set_debug_name(&self.private_data, name) }
     }
 
     /// `ID3D12DeviceChild::GetDevice`: forwards to the parent device's `QueryInterface`.

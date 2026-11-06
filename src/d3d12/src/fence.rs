@@ -4,7 +4,10 @@ use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
 use dxmt_core::fence::Fence;
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+};
 
 use crate::{
     abi::{
@@ -12,7 +15,7 @@ use crate::{
         vtbl::{ID3D12Fence1Vtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, Guid, Hresult, IID_ID3D12_DEVICE_CHILD,
+        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, Hresult, IID_ID3D12_DEVICE_CHILD,
         IID_ID3D12_FENCE, IID_ID3D12_FENCE1, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_IUNKNOWN,
         S_FALSE, S_OK,
     },
@@ -120,14 +123,21 @@ impl Drop for FenceObject {
     }
 }
 
+impl HasPrivateData for FenceObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `FenceObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static FENCE_VTBL: ID3D12Fence1Vtbl = ID3D12Fence1Vtbl {
     query_interface: fence_query_interface,
     add_ref: fence_add_ref,
     release: fence_release,
-    get_private_data: fence_get_private_data,
-    set_private_data: fence_set_private_data,
-    set_private_data_interface: fence_set_private_data_interface,
-    set_name: fence_set_name,
+    get_private_data: private_data::get_private_data::<FenceObject>,
+    set_private_data: private_data::set_private_data::<FenceObject>,
+    set_private_data_interface: private_data::set_private_data_interface::<FenceObject>,
+    set_name: private_data::set_name::<FenceObject>,
     get_device: fence_get_device,
     get_completed_value: fence_get_completed_value,
     set_event_on_completion: fence_set_event_on_completion,
@@ -185,72 +195,6 @@ unsafe extern "system-unwind" fn fence_add_ref(this: *mut c_void) -> u32 {
 unsafe extern "system-unwind" fn fence_release(this: *mut c_void) -> u32 {
     // SAFETY: `this` is a valid `FenceObject` pointer.
     unsafe { com::release_com(this.cast::<FenceObject>()) }
-}
-
-unsafe extern "system-unwind" fn fence_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `FenceObject`.
-    let obj = unsafe { &*this.cast::<FenceObject>() };
-    // SAFETY: the caller owns `size` and `data`.
-    unsafe { obj.private_data.get_data(guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn fence_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `FenceObject`.
-    let obj = unsafe { &*this.cast::<FenceObject>() };
-    // SAFETY: the caller owns `data`.
-    unsafe { obj.private_data.set_data(guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn fence_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `FenceObject`.
-    let obj = unsafe { &*this.cast::<FenceObject>() };
-    // SAFETY: the caller owns `data`.
-    unsafe { obj.private_data.set_interface(guid, data.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn fence_set_name(this: *mut c_void, name: *const c_void) -> Hresult {
-    if this.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `this` is a live `FenceObject`.
-    let obj = unsafe { &*this.cast::<FenceObject>() };
-    // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&obj.private_data, name.cast()) }
 }
 
 unsafe extern "system-unwind" fn fence_get_device(

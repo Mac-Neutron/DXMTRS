@@ -17,7 +17,10 @@ use dxmt_core::{
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     ring::{LIFETIME, RingBump, RingConfig, STAGING_BLOCK},
 };
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newBuffer, MTLDevice_newComputePipelineState, MTLDevice_newIndirectCommandBuffer,
@@ -49,7 +52,7 @@ use winemetal_wire::{
 use crate::{
     abi::vtbl::ID3D12CommandAllocatorVtbl,
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, Guid, Hresult,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, Hresult,
         IID_ID3D12_COMMAND_ALLOCATOR, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
         IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
@@ -1509,60 +1512,6 @@ unsafe extern "system-unwind" fn allocator_release(this: *mut c_void) -> u32 {
     unsafe { com::release_com::<Allocator>(this.cast()) }
 }
 
-unsafe extern "system-unwind" fn allocator_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> i32 {
-    // SAFETY: `this` is a valid `Allocator` COM object.
-    let alloc = unsafe { &*this.cast::<Allocator>() };
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarding caller pointers to `PrivateData::get_data`.
-    unsafe { alloc.private_data.get_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn allocator_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: `this` is a valid `Allocator` COM object.
-    let alloc = unsafe { &*this.cast::<Allocator>() };
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarding caller pointers to `PrivateData::set_data`.
-    unsafe { alloc.private_data.set_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn allocator_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: `this` is a valid `Allocator` COM object.
-    let alloc = unsafe { &*this.cast::<Allocator>() };
-    // SAFETY: `guid` is null or 16 readable bytes.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarding caller pointers to `PrivateData::set_interface`.
-    unsafe { alloc.private_data.set_interface(guid, data.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn allocator_set_name(this: *mut c_void, name: *const c_void) -> i32 {
-    // SAFETY: `this` is a valid `Allocator` COM object.
-    let alloc = unsafe { &*this.cast::<Allocator>() };
-    // SAFETY: forwarding `name` to `com::set_name_private_data`.
-    unsafe { com::set_name_private_data(&alloc.private_data, name.cast()) }
-}
-
 unsafe extern "system-unwind" fn allocator_get_device(
     this: *mut c_void,
     riid: *const c_void,
@@ -1588,14 +1537,21 @@ unsafe extern "system-unwind" fn allocator_reset(this: *mut c_void) -> i32 {
     alloc.reset_impl()
 }
 
+impl HasPrivateData for Allocator {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Allocator`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static ALLOCATOR_VTBL: ID3D12CommandAllocatorVtbl = ID3D12CommandAllocatorVtbl {
     query_interface: allocator_query_interface,
     add_ref: allocator_add_ref,
     release: allocator_release,
-    get_private_data: allocator_get_private_data,
-    set_private_data: allocator_set_private_data,
-    set_private_data_interface: allocator_set_private_data_interface,
-    set_name: allocator_set_name,
+    get_private_data: private_data::get_private_data::<Allocator>,
+    set_private_data: private_data::set_private_data::<Allocator>,
+    set_private_data_interface: private_data::set_private_data_interface::<Allocator>,
+    set_name: private_data::set_name::<Allocator>,
     get_device: allocator_get_device,
     reset: allocator_reset,
 };

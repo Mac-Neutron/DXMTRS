@@ -10,7 +10,7 @@ use core::{
 use std::sync::Arc;
 
 use dxmt_core::format::depth_stencil_planar_flags;
-use dxmt_util::dxgi_consts::DXGI_FORMAT_R32_UINT;
+use dxmt_util::{dxgi_consts::DXGI_FORMAT_R32_UINT, private_data};
 use winemetal_wire::{
     WMT_INDEX_TYPE_U_INT16, WMT_INDEX_TYPE_U_INT32, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE,
     WMTScissorRect, WMTViewport,
@@ -29,7 +29,7 @@ use crate::{
     },
     allocator::Allocator,
     com::{
-        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, IID_ID3D12_COMMAND_LIST,
+        self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, Hresult, IID_ID3D12_COMMAND_LIST,
         IID_ID3D12_DEVICE_CHILD, IID_ID3D12_GRAPHICS_COMMAND_LIST,
         IID_ID3D12_GRAPHICS_COMMAND_LIST1, IID_ID3D12_GRAPHICS_COMMAND_LIST2,
         IID_ID3D12_GRAPHICS_COMMAND_LIST3, IID_ID3D12_GRAPHICS_COMMAND_LIST4,
@@ -503,14 +503,10 @@ pub unsafe fn get_private_data(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or points to a `Guid`.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &*this.cast::<List>() };
-    // SAFETY: caller supplies `data_size` and `data`.
-    unsafe { list.private_data.get_data(guid, data_size, data) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { list.private_data.get_ffi(guid, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateData`.
@@ -527,14 +523,10 @@ pub unsafe fn set_private_data(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or points to a `Guid`.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &*this.cast::<List>() };
-    // SAFETY: caller supplies `data` of `data_size` bytes.
-    unsafe { list.private_data.set_data(guid, data_size, data) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { list.private_data.set_ffi(guid, data_size, data) }
 }
 
 /// `ID3D12Object::SetPrivateDataInterface`.
@@ -550,14 +542,10 @@ pub unsafe fn set_private_data_interface(
     if this.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `guid` is null or points to a `Guid`.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &*this.cast::<List>() };
-    // SAFETY: caller supplies `data` as an `IUnknown` pointer or null.
-    unsafe { list.private_data.set_interface(guid, data.cast_mut()) }
+    // SAFETY: `guid` is null or 16 readable bytes; the rest is forwarded from the COM caller.
+    unsafe { list.private_data.set_interface_ffi(guid, data) }
 }
 
 /// `ID3D12Object::SetName`.
@@ -572,7 +560,7 @@ pub unsafe fn set_name(this: *mut c_void, name: *const c_void) -> Hresult {
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &*this.cast::<List>() };
     // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&list.private_data, name.cast::<u16>()) }
+    unsafe { private_data::set_debug_name(&list.private_data, name.cast::<u16>()) }
 }
 
 /// `ID3D12DeviceChild::GetDevice`.

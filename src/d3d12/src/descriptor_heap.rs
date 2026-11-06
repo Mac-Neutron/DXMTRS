@@ -14,7 +14,10 @@ use dxmt_core::{
     sampler::Sampler,
 };
 use dxmt_util::{
-    com::ComObject, dxgi_consts::DXGI_FORMAT_UNKNOWN, private_data::PrivateData, sync::lock,
+    com::ComObject,
+    dxgi_consts::DXGI_FORMAT_UNKNOWN,
+    private_data::{self, HasPrivateData, PrivateData},
+    sync::lock,
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
@@ -47,7 +50,7 @@ use crate::{
         },
     },
     com::{
-        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
+        self, ComRefCounted, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, Hresult,
         IID_ID3D12_DESCRIPTOR_HEAP, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
         IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
@@ -222,14 +225,21 @@ impl Drop for Heap {
     }
 }
 
+impl HasPrivateData for Heap {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Heap`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static VTBL: ID3D12DescriptorHeapVtbl = ID3D12DescriptorHeapVtbl {
     query_interface,
     add_ref: heap_add_ref,
     release: heap_release,
-    get_private_data: get_private_data_fn,
-    set_private_data: set_private_data_fn,
-    set_private_data_interface: set_private_data_interface_fn,
-    set_name: set_name_fn,
+    get_private_data: private_data::get_private_data::<Heap>,
+    set_private_data: private_data::set_private_data::<Heap>,
+    set_private_data_interface: private_data::set_private_data_interface::<Heap>,
+    set_name: private_data::set_name::<Heap>,
     get_device: get_device_fn,
     get_desc: get_desc_fn,
     get_cpu_descriptor_handle_for_heap_start,
@@ -281,60 +291,6 @@ unsafe extern "system-unwind" fn heap_add_ref(this: *mut c_void) -> u32 {
 unsafe extern "system-unwind" fn heap_release(this: *mut c_void) -> u32 {
     // SAFETY: `this` is a valid `Heap` COM pointer.
     unsafe { com::release_com(this.cast::<Heap>()) }
-}
-
-unsafe extern "system-unwind" fn get_private_data_fn(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Heap` pointer.
-    let heap = unsafe { &*this.cast::<Heap>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { heap.private_data.get_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data_fn(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Heap` pointer.
-    let heap = unsafe { &*this.cast::<Heap>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { heap.private_data.set_data(guid, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data_interface_fn(
-    this: *mut c_void,
-    guid: *const c_void,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a caller-supplied GUID pointer.
-    let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Heap` pointer.
-    let heap = unsafe { &*this.cast::<Heap>() };
-    // SAFETY: caller arguments are forwarded.
-    unsafe { heap.private_data.set_interface(guid, data.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn set_name_fn(this: *mut c_void, name: *const c_void) -> Hresult {
-    // SAFETY: `this` is a valid `Heap` pointer.
-    let heap = unsafe { &*this.cast::<Heap>() };
-    // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-    unsafe { com::set_name_private_data(&heap.private_data, name.cast()) }
 }
 
 unsafe extern "system-unwind" fn get_device_fn(

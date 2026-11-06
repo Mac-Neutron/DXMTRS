@@ -3,15 +3,19 @@
 use core::{ffi::c_void, ptr};
 use std::{collections::BTreeMap, sync::Mutex};
 
-use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+    sync::lock,
+};
 
 use crate::{
     abi::vtbl::{ID3D12PipelineLibrary1Vtbl, IUnknownVtbl},
     com::{
-        ComRefCounted, D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, E_NOINTERFACE, Guid,
-        Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
+        ComRefCounted, D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, E_NOINTERFACE, Hresult,
+        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
         IID_ID3D12_PIPELINE_LIBRARY1, IID_ID3D12_PIPELINE_STATE, IID_IUNKNOWN, S_FALSE, S_OK,
-        add_ref_com, init_out_ptr, release_com, set_name_private_data, vtbl,
+        add_ref_com, init_out_ptr, release_com, vtbl,
     },
     device::Device,
     pipeline::{
@@ -283,6 +287,13 @@ fn serialize_entries(
     S_OK
 }
 
+impl HasPrivateData for PipelineLibrary {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `PipelineLibrary`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
     query_interface: crate::slot!(
         "library.QueryInterface",
@@ -326,48 +337,10 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
         // SAFETY: `this` is a live `PipelineLibrary`.
         unsafe { release_com(this.cast::<PipelineLibrary>()) }
     }),
-    get_private_data: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: `this` is a live `PipelineLibrary`.
-            let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { lib.private_data.get_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: `this` is a live `PipelineLibrary`.
-            let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { lib.private_data.set_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: crate::slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: `this` is a live `PipelineLibrary`.
-            let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: Forwarded from COM slot.
-            unsafe { lib.private_data.set_interface(guid, data.cast_mut()) }
-        }
-    ),
-    set_name: crate::slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: `this` is a live `PipelineLibrary`.
-        let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-        // SAFETY: Forwarded from COM slot.
-        unsafe { set_name_private_data(&lib.private_data, name.cast::<u16>()) }
-    }),
+    get_private_data: private_data::get_private_data::<PipelineLibrary>,
+    set_private_data: private_data::set_private_data::<PipelineLibrary>,
+    set_private_data_interface: private_data::set_private_data_interface::<PipelineLibrary>,
+    set_name: private_data::set_name::<PipelineLibrary>,
     get_device: crate::slot!(
         (this: *mut c_void, riid: *const c_void, pp_device: *mut *mut c_void) -> Hresult => {
             // SAFETY: `this` is a live `PipelineLibrary`.

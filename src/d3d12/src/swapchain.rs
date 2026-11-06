@@ -19,7 +19,7 @@ use dxmt_util::{
     com::{ComObject, Guid, IID_IUNKNOWN, IUnknownVtbl, vtbl, write_out},
     config::Config,
     dxgi_vtbl::IDXGISwapChain4Vtbl,
-    private_data::PrivateData,
+    private_data::{self, HasPrivateData, PrivateData},
     sync::lock,
     wsi::{self, Rational as WsiRational, Rect, WindowState, WsiMode},
 };
@@ -798,56 +798,6 @@ unsafe fn query_interface(
     }
 }
 
-/// `IDXGIObject::SetPrivateData` (`dxgi_object.hpp:16-19`).
-unsafe fn set_private_data(
-    this: *mut c_void,
-    name: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
-    let Some(guid) = (unsafe { Guid::read(name.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarded from COM slot.
-    unsafe { sc.private_data.set_data(guid, data_size, data) }
-}
-
-/// `IDXGIObject::SetPrivateDataInterface` (`dxgi_object.hpp:22-24`).
-unsafe fn set_private_data_interface(
-    this: *mut c_void,
-    name: *const c_void,
-    unknown: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
-    let Some(guid) = (unsafe { Guid::read(name.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarded from COM slot.
-    unsafe { sc.private_data.set_interface(guid, unknown.cast_mut()) }
-}
-
-/// `IDXGIObject::GetPrivateData` (`dxgi_object.hpp:11-14`).
-unsafe fn get_private_data(
-    this: *mut c_void,
-    name: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
-    let Some(guid) = (unsafe { Guid::read(name.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: forwarded from COM slot.
-    unsafe { sc.private_data.get_data(guid, data_size, data) }
-}
-
 /// `IDXGIObject::GetParent` (`d3d12_swapchain.cpp:280-283`).
 unsafe fn get_parent(this: *mut c_void, riid: *const c_void, parent: *mut *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetParent");
@@ -1513,6 +1463,13 @@ unsafe fn set_color_space1(this: *mut c_void, color_space: u32) -> Hresult {
 }
 
 /// Static `IDXGISwapChain4` vtable for [`SwapChain`].
+impl HasPrivateData for SwapChain {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `SwapChain`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 pub static SWAPCHAIN_VTBL: IDXGISwapChain4Vtbl = IDXGISwapChain4Vtbl {
     query_interface: slot!(
         (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
@@ -1528,24 +1485,9 @@ pub static SWAPCHAIN_VTBL: IDXGISwapChain4Vtbl = IDXGISwapChain4Vtbl {
         // SAFETY: `this` is a live `SwapChain` COM pointer.
         unsafe { com::release_com(this.cast::<SwapChain>()) }
     }),
-    set_private_data: slot!(
-        (this: *mut c_void, name: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { set_private_data(this, name, data_size, data) }
-        }
-    ),
-    set_private_data_interface: slot!(
-        (this: *mut c_void, name: *const c_void, unknown: *const c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { set_private_data_interface(this, name, unknown) }
-        }
-    ),
-    get_private_data: slot!(
-        (this: *mut c_void, name: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { get_private_data(this, name, data_size, data) }
-        }
-    ),
+    set_private_data: private_data::set_private_data::<SwapChain>,
+    set_private_data_interface: private_data::set_private_data_interface::<SwapChain>,
+    get_private_data: private_data::get_private_data::<SwapChain>,
     get_parent: slot!(
         (this: *mut c_void, riid: *const c_void, parent: *mut *mut c_void) -> Hresult => {
             // SAFETY: caller forwards COM slot arguments.

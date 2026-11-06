@@ -28,7 +28,12 @@ use dxmt_core::{
         framegen::{self, FrameGen},
     },
 };
-use dxmt_util::{com::ComObject, private_data::PrivateData, qpc, sync::lock};
+use dxmt_util::{
+    com::ComObject,
+    private_data::{self, HasPrivateData, PrivateData},
+    qpc,
+    sync::lock,
+};
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLCommandBuffer_blitCommandEncoder,
     MTLCommandBuffer_blitCommandEncoderWithSampleBuffers, MTLCommandBuffer_commit,
@@ -71,10 +76,10 @@ use crate::{
         vtbl::{ID3D12CommandQueueVtbl, IUnknownVtbl},
     },
     com::{
-        self, ComRefCounted, E_FAIL, E_INVALIDARG, Guid, Hresult, IID_ID3D10_DEVICE,
-        IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2,
-        IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_COMMAND_QUEUE,
-        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
+        self, ComRefCounted, E_FAIL, E_INVALIDARG, Hresult, IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1,
+        IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2, IID_ID3D11_DEVICE3,
+        IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_COMMAND_QUEUE, IID_ID3D12_DEVICE_CHILD,
+        IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_IUNKNOWN, S_OK,
     },
     device::Device,
     encoder::{
@@ -2400,6 +2405,13 @@ unsafe fn query_interface(
 }
 
 /// Primary `ID3D12CommandQueue` vtable for [`Queue`].
+impl HasPrivateData for Queue {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Queue`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
+}
+
 pub static QUEUE_VTBL: ID3D12CommandQueueVtbl = ID3D12CommandQueueVtbl {
     query_interface: slot!(
         (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
@@ -2415,48 +2427,10 @@ pub static QUEUE_VTBL: ID3D12CommandQueueVtbl = ID3D12CommandQueueVtbl {
         // SAFETY: `this` is a live `Queue` COM pointer.
         unsafe { com::release_com(this.cast::<Queue>()) }
     }),
-    get_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `Queue` COM pointer.
-            let queue = unsafe { &*this.cast::<Queue>() };
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { queue.private_data.get_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `Queue` COM pointer.
-            let queue = unsafe { &*this.cast::<Queue>() };
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { queue.private_data.set_data(guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: `guid` is null or 16 readable bytes.
-            let Some(guid) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
-            };
-            // SAFETY: `this` is a live `Queue` COM pointer.
-            let queue = unsafe { &*this.cast::<Queue>() };
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { queue.private_data.set_interface(guid, data.cast_mut()) }
-        }
-    ),
-    set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: `this` is a live `Queue` COM pointer.
-        let queue = unsafe { &*this.cast::<Queue>() };
-        // SAFETY: `name` is null or a NUL-terminated UTF-16 string.
-        unsafe { com::set_name_private_data(&queue.private_data, name.cast::<u16>()) }
-    }),
+    get_private_data: private_data::get_private_data::<Queue>,
+    set_private_data: private_data::set_private_data::<Queue>,
+    set_private_data_interface: private_data::set_private_data_interface::<Queue>,
+    set_name: private_data::set_name::<Queue>,
     get_device: slot!(
         (this: *mut c_void, riid: *const c_void, out_device: *mut *mut c_void) -> Hresult => {
             // SAFETY: `this` is a live `Queue` COM pointer.
