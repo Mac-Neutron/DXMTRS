@@ -13,6 +13,30 @@ pub use dxmt_util::{
     com::{
         DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL,
         E_POINTER, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, S_FALSE, S_OK,
+        hresult::{DXGI_ERROR_ALREADY_EXISTS, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_UNSUPPORTED},
+        iid::{
+            IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_IDXGI_ADAPTER, IID_IDXGI_ADAPTER1,
+            IID_IDXGI_ADAPTER2, IID_IDXGI_ADAPTER3, IID_IDXGI_ADAPTER4, IID_IDXGI_DEVICE,
+            IID_IDXGI_FACTORY, IID_IDXGI_FACTORY1, IID_IDXGI_FACTORY2, IID_IDXGI_FACTORY3,
+            IID_IDXGI_FACTORY4, IID_IDXGI_FACTORY5, IID_IDXGI_FACTORY6, IID_IDXGI_FACTORY7,
+            IID_IDXGI_OBJECT, IID_IDXGI_OUTPUT, IID_IDXGI_OUTPUT1, IID_IDXGI_OUTPUT2,
+            IID_IDXGI_OUTPUT3, IID_IDXGI_OUTPUT4, IID_IDXGI_OUTPUT5, IID_IDXGI_OUTPUT6,
+            IID_WINE_DXGI_ADAPTER,
+        },
+    },
+    dxgi_consts::{
+        DXGI_ADAPTER_FLAG3_NONE, DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+        DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY,
+        DXGI_ENUM_MODES_INTERLACED, DXGI_ENUM_MODES_SCALING, DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8X8_UNORM,
+        DXGI_FORMAT_B8G8R8X8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM,
+        DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN,
+        DXGI_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+        DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_MODE_ROTATION_UNSPECIFIED,
+        DXGI_MODE_SCALING_UNSPECIFIED, DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE,
+        DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST,
+        DXGI_SCALING_STRETCH,
     },
     ext::{
         AdapterDesc, AdapterDesc1, AdapterDesc2, AdapterDesc3, AdapterVtbl, DXMT_NVEXT_GUID,
@@ -29,38 +53,6 @@ pub use dxmt_util::{
 #[cfg(windows)]
 pub type Hkey = *mut c_void;
 
-pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
-pub const DXGI_ERROR_UNSUPPORTED: Hresult = 0x887a_0004_u32.cast_signed();
-pub const DXGI_ERROR_ALREADY_EXISTS: Hresult = 0x887a_0036_u32.cast_signed();
-
-pub const DXGI_FORMAT_UNKNOWN: u32 = 0;
-pub const DXGI_FORMAT_R16G16B16A16_FLOAT: u32 = 10;
-pub const DXGI_FORMAT_R10G10B10A2_UNORM: u32 = 24;
-pub const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
-pub const DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: u32 = 29;
-pub const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
-pub const DXGI_FORMAT_B8G8R8X8_UNORM: u32 = 88;
-pub const DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM: u32 = 89;
-pub const DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: u32 = 91;
-pub const DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: u32 = 93;
-pub const DXGI_ENUM_MODES_INTERLACED: u32 = 1;
-pub const DXGI_ENUM_MODES_SCALING: u32 = 2;
-pub const DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED: u32 = 0;
-pub const DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE: u32 = 1;
-pub const DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST: u32 = 2;
-pub const DXGI_MODE_SCALING_UNSPECIFIED: u32 = 0;
-pub const DXGI_MODE_ROTATION_UNSPECIFIED: u32 = 0;
-pub const DXGI_SCALING_STRETCH: u32 = 0;
-pub const DXGI_ALPHA_MODE_IGNORE: u32 = 3;
-pub const DXGI_FEATURE_PRESENT_ALLOW_TEARING: u32 = 0;
-pub const DXGI_MEMORY_SEGMENT_GROUP_LOCAL: u32 = 0;
-pub const DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL: u32 = 1;
-pub const DXGI_ADAPTER_FLAG3_NONE: u32 = 0;
-pub const DXGI_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY: u32 = 0;
-pub const DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY: u32 = 0;
-pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: u32 = 0;
-pub const DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: u32 = 12;
-
 /// `HKEY_LOCAL_MACHINE`: `(HKEY)(ULONG_PTR)(LONG)0x80000002`, sign-extended on 64-bit.
 #[cfg(windows)]
 pub const HKEY_LOCAL_MACHINE: Hkey =
@@ -73,158 +65,6 @@ pub const REG_SZ: u32 = 1;
 pub const REG_DWORD: u32 = 4;
 #[cfg(windows)]
 pub const DLL_PROCESS_ATTACH: u32 = 1;
-
-pub const IID_IDXGI_OBJECT: Guid = Guid::new(
-    0xaec2_2fb8,
-    0x76f3,
-    0x4639,
-    [0x9b, 0xe0, 0x28, 0xeb, 0x43, 0xa6, 0x7a, 0x2e],
-);
-pub const IID_IDXGI_FACTORY: Guid = Guid::new(
-    0x7b71_66ec,
-    0x21c7,
-    0x44ae,
-    [0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69],
-);
-pub const IID_IDXGI_FACTORY1: Guid = Guid::new(
-    0x770a_ae78,
-    0xf26f,
-    0x4dba,
-    [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87],
-);
-pub const IID_IDXGI_FACTORY2: Guid = Guid::new(
-    0x50c8_3a1c,
-    0xe072,
-    0x4c48,
-    [0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0],
-);
-pub const IID_IDXGI_FACTORY3: Guid = Guid::new(
-    0x2548_3823,
-    0xcd46,
-    0x4c7d,
-    [0x86, 0xca, 0x47, 0xaa, 0x95, 0xb8, 0x37, 0xbd],
-);
-pub const IID_IDXGI_FACTORY4: Guid = Guid::new(
-    0x1bc6_ea02,
-    0xef36,
-    0x464f,
-    [0xbf, 0x0c, 0x21, 0xca, 0x39, 0xe5, 0x16, 0x8a],
-);
-pub const IID_IDXGI_FACTORY5: Guid = Guid::new(
-    0x7632_e1f5,
-    0xee65,
-    0x4dca,
-    [0x87, 0xfd, 0x84, 0xcd, 0x75, 0xf8, 0x83, 0x8d],
-);
-pub const IID_IDXGI_FACTORY6: Guid = Guid::new(
-    0xc1b6_694f,
-    0xff09,
-    0x44a9,
-    [0xb0, 0x3c, 0x77, 0x90, 0x0a, 0x0a, 0x1d, 0x17],
-);
-pub const IID_IDXGI_FACTORY7: Guid = Guid::new(
-    0xa496_6eed,
-    0x76db,
-    0x44da,
-    [0x84, 0xc1, 0xee, 0x9a, 0x7a, 0xfb, 0x20, 0xa8],
-);
-pub const IID_IDXGI_ADAPTER: Guid = Guid::new(
-    0x2411_e7e1,
-    0x12ac,
-    0x4ccf,
-    [0xbd, 0x14, 0x97, 0x98, 0xe8, 0x53, 0x4d, 0xc0],
-);
-pub const IID_IDXGI_ADAPTER1: Guid = Guid::new(
-    0x2903_8f61,
-    0x3839,
-    0x4626,
-    [0x91, 0xfd, 0x08, 0x68, 0x79, 0x01, 0x1a, 0x05],
-);
-pub const IID_IDXGI_ADAPTER2: Guid = Guid::new(
-    0x0aa1_ae0a,
-    0xfa0e,
-    0x4b84,
-    [0x86, 0x44, 0xe0, 0x5f, 0xf8, 0xe5, 0xac, 0xb5],
-);
-pub const IID_IDXGI_ADAPTER3: Guid = Guid::new(
-    0x6459_67a4,
-    0x1392,
-    0x4310,
-    [0xa7, 0x98, 0x80, 0x53, 0xce, 0x3e, 0x93, 0xfd],
-);
-pub const IID_IDXGI_ADAPTER4: Guid = Guid::new(
-    0x3c8d_99d1,
-    0x4fbf,
-    0x4181,
-    [0xa8, 0x2c, 0xaf, 0x66, 0xbf, 0x7b, 0xd2, 0x4e],
-);
-pub const IID_IDXGI_OUTPUT: Guid = Guid::new(
-    0xae02_eedb,
-    0xc735,
-    0x4690,
-    [0x8d, 0x52, 0x5a, 0x8d, 0xc2, 0x02, 0x13, 0xaa],
-);
-pub const IID_IDXGI_OUTPUT1: Guid = Guid::new(
-    0x00cd_dea8,
-    0x939b,
-    0x4b83,
-    [0xa3, 0x40, 0xa6, 0x85, 0x22, 0x66, 0x66, 0xcc],
-);
-pub const IID_IDXGI_OUTPUT2: Guid = Guid::new(
-    0x595e_39d1,
-    0x2724,
-    0x4663,
-    [0x99, 0xb1, 0xda, 0x96, 0x9d, 0xe2, 0x83, 0x64],
-);
-pub const IID_IDXGI_OUTPUT3: Guid = Guid::new(
-    0x8a6b_b301,
-    0x7e7e,
-    0x41f4,
-    [0xa8, 0xe0, 0x5b, 0x32, 0xf7, 0xf9, 0x9b, 0x18],
-);
-pub const IID_IDXGI_OUTPUT4: Guid = Guid::new(
-    0xdc7d_ca35,
-    0x2196,
-    0x414d,
-    [0x9f, 0x53, 0x61, 0x78, 0x84, 0x03, 0x2a, 0x60],
-);
-pub const IID_IDXGI_OUTPUT5: Guid = Guid::new(
-    0x80a0_7424,
-    0xab52,
-    0x42eb,
-    [0x83, 0x3c, 0x0c, 0x42, 0xfd, 0x28, 0x2d, 0x98],
-);
-pub const IID_IDXGI_OUTPUT6: Guid = Guid::new(
-    0x0683_46e8,
-    0xaaec,
-    0x4b84,
-    [0xad, 0xd7, 0x13, 0x7f, 0x51, 0x3f, 0x77, 0xa1],
-);
-pub const IID_IDXGI_DEVICE: Guid = Guid::new(
-    0x54ec_77fa,
-    0x1377,
-    0x44e6,
-    [0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c],
-);
-pub const IID_ID3D10_DEVICE: Guid = Guid::new(
-    0x9b7e_4c0f,
-    0x342c,
-    0x4106,
-    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
-);
-pub const IID_ID3D10_DEVICE1: Guid = Guid::new(
-    0x9b7e_4c8f,
-    0x342c,
-    0x4106,
-    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
-);
-/// Wine's private adapter interface, which the adapter refuses without a log line.
-pub const IID_WINE_DXGI_ADAPTER: Guid = Guid::new(
-    0x1739_9d75,
-    0x964e,
-    0x4c03,
-    [0x99, 0xf8, 0x9d, 0x4f, 0xd1, 0x96, 0xdd, 0x62],
-);
 
 /// `0x3f`, `?`: what a byte sequence that is not UTF-8 decodes to.
 const QUESTION: u32 = 0x3f;
