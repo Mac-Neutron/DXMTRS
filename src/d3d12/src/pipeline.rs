@@ -7,11 +7,6 @@ pub mod record;
 
 use core::{ffi::c_void, ptr};
 
-use winemetal_sys::{
-    NSObject_description, NSString_getCString, NSString_lengthOfBytesUsingEncoding, Obj, Pool,
-    wire::WMTUTF8_STRING_ENCODING,
-};
-
 pub use self::{compute::Compute, graphics::Graphics};
 use crate::{
     abi::{
@@ -54,30 +49,6 @@ pub unsafe fn cast_pipeline<'a>(raw: *mut c_void) -> Option<PipelineKind<'a>> {
     } else {
         None
     }
-}
-
-pub(super) fn obj_description(object: &Obj) -> String {
-    let _pool = Pool::new();
-    // SAFETY: `object` is live; the description is an autoreleased string, valid under `_pool`.
-    let text = unsafe { NSObject_description(object.handle()) };
-    if text == 0 {
-        return String::new();
-    }
-    // SAFETY: `text` is a live `NSString` handle.
-    let length = unsafe { NSString_lengthOfBytesUsingEncoding(text, WMTUTF8_STRING_ENCODING) };
-    let length = usize::try_from(length).unwrap_or(0);
-    let mut buffer = vec![0u8; length + 1];
-    // SAFETY: `buffer` has room for `length` bytes and the trailing NUL byte.
-    unsafe {
-        NSString_getCString(
-            text,
-            buffer.as_mut_ptr().cast(),
-            u64::try_from(buffer.len()).unwrap_or(0),
-            WMTUTF8_STRING_ENCODING,
-        );
-    }
-    buffer.truncate(length);
-    String::from_utf8_lossy(&buffer).into_owned()
 }
 
 pub(super) unsafe fn root_blob<'a>(root_signature: *mut c_void) -> record::Blob<'a> {

@@ -8,6 +8,7 @@ use core::{
 };
 use std::sync::Arc;
 
+use dxmt_core::library;
 use dxmt_util::{
     com::ComObject,
     private_data::{self, HasPrivateData, PrivateData},
@@ -40,7 +41,6 @@ use crate::{
     },
     device::Device,
     pipeline::{
-        obj_description,
         record::{record_compute, recording_on},
         root_blob, shader_blob,
     },
@@ -301,7 +301,9 @@ unsafe fn initialize_compute(
     let err_obj = unsafe { Obj::adopt(err_handle) };
     // SAFETY: `pso_handle` is 0 or a newly retained `MTLComputePipelineState` handle.
     let Some(pso) = (unsafe { Obj::adopt(pso_handle) }) else {
-        let msg = err_obj.as_ref().map_or_else(String::new, obj_description);
+        let msg = err_obj
+            .as_ref()
+            .map_or_else(String::new, library::description);
         crate::err!("Failed to create compute PSO: {msg}");
         return Err(E_FAIL);
     };

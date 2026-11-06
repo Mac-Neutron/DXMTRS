@@ -13,7 +13,7 @@ use std::{
 };
 
 use dxmt_core::{
-    library::{ClearRtv, ClearUav, Library, ResourceAccess, SimpleCommandContext},
+    library::{self, ClearRtv, ClearUav, Library, ResourceAccess, SimpleCommandContext},
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     ring::{LIFETIME, RingBump, RingConfig, STAGING_BLOCK},
     settings::{Flags, settings},
@@ -24,8 +24,7 @@ use dxmt_util::{
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
-    MTLDevice_newBuffer, MTLDevice_newComputePipelineState, MTLDevice_newIndirectCommandBuffer,
-    NSObject_description, NSString_getCString, NSString_lengthOfBytesUsingEncoding, Obj, Pool,
+    MTLDevice_newBuffer, MTLDevice_newComputePipelineState, MTLDevice_newIndirectCommandBuffer, Obj,
 };
 use winemetal_wire::{
     MemPtr, WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
@@ -42,8 +41,8 @@ use winemetal_wire::{
     WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
     WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_RESOURCE_USAGE_READ, WMT_RESOURCE_USAGE_WRITE,
     WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE3D, WMTBufferInfo, WMTComputePipelineInfo,
-    WMTIndirectCommandBufferInfo, WMTScissorRect, WMTSize, WMTUTF8_STRING_ENCODING, WMTViewport,
-    WmtcmdBase, WmtcmdComputeDispatch, WmtcmdComputeExecutecommands, WmtcmdComputeSetbuffer,
+    WMTIndirectCommandBufferInfo, WMTScissorRect, WMTSize, WMTViewport, WmtcmdBase,
+    WmtcmdComputeDispatch, WmtcmdComputeExecutecommands, WmtcmdComputeSetbuffer,
     WmtcmdComputeSetbytes, WmtcmdComputeSetpso, WmtcmdComputeSettexture, WmtcmdComputeUseresource,
     WmtcmdRenderDraw, WmtcmdRenderExecutecommands, WmtcmdRenderSetbytes,
     WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetpso, WmtcmdRenderSetscissorrect,
@@ -277,31 +276,6 @@ fn fold_clear_into_render(c: &ClearEncoderData, r: &mut RenderEncoderData, apply
         r.colors[idx].clear_color = c.color;
     }
     true
-}
-
-fn obj_description(object: &Obj) -> String {
-    let _pool = Pool::new();
-    // SAFETY: `object` is a live Objective-C object; `NSObject_description` returns an
-    // autoreleased `NSString` valid for the lifetime of `_pool`.
-    let text = unsafe { NSObject_description(object.handle()) };
-    if text == 0 {
-        return String::new();
-    }
-    // SAFETY: `text` is a live `NSString` handle.
-    let length = unsafe { NSString_lengthOfBytesUsingEncoding(text, WMTUTF8_STRING_ENCODING) };
-    let length = usize::try_from(length).unwrap_or(0);
-    let mut buffer = vec![0u8; length + 1];
-    // SAFETY: `buffer` has space for `length` UTF-8 bytes plus the trailing NUL terminator.
-    unsafe {
-        NSString_getCString(
-            text,
-            buffer.as_mut_ptr().cast(),
-            u64::try_from(buffer.len()).unwrap_or(0),
-            WMTUTF8_STRING_ENCODING,
-        );
-    }
-    buffer.truncate(length);
-    String::from_utf8_lossy(&buffer).into_owned()
 }
 
 impl Allocator {
@@ -1130,7 +1104,7 @@ impl SimpleCommandContext for Allocator {
         if let Some(err_obj) = unsafe { Obj::adopt(err) } {
             crate::err!(
                 "Failed to create compute PSO: {}",
-                obj_description(&err_obj)
+                library::description(&err_obj)
             );
         }
         // SAFETY: `MTLDevice_newComputePipelineState` returns a +1 retained PSO or 0.

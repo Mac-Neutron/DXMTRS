@@ -13,7 +13,10 @@ use airconv_ir::{
     container::{Code, Container, Error as IrError},
     signature::{self, Signature},
 };
-use dxmt_core::{library::render_pipeline_info, state_map};
+use dxmt_core::{
+    library::{self, render_pipeline_info},
+    state_map,
+};
 use dxmt_util::{
     com::ComObject,
     float_cast::i32_to_f32,
@@ -67,7 +70,6 @@ use crate::{
     },
     device::Device,
     pipeline::{
-        obj_description,
         record::{record_graphics, recording_on},
         root_blob, shader_blob,
     },
@@ -1015,7 +1017,9 @@ unsafe fn compile_geometry_variant(
     let err_obj = unsafe { Obj::adopt(err_handle) };
     // SAFETY: `pso_handle` is 0 or a newly retained `MTLRenderPipelineState` handle.
     let Some(pso) = (unsafe { Obj::adopt(pso_handle) }) else {
-        let msg = err_obj.as_ref().map_or_else(String::new, obj_description);
+        let msg = err_obj
+            .as_ref()
+            .map_or_else(String::new, library::description);
         crate::err!("Failed to create geometry PSO: {msg}");
         return Err(E_FAIL);
     };
@@ -1391,7 +1395,9 @@ unsafe fn build_vertex_pso(
     let err_obj = unsafe { Obj::adopt(err_handle) };
     // SAFETY: `pso_handle` is 0 or a newly retained `MTLRenderPipelineState` handle.
     let Some(p) = (unsafe { Obj::adopt(pso_handle) }) else {
-        let msg = err_obj.as_ref().map_or_else(String::new, obj_description);
+        let msg = err_obj
+            .as_ref()
+            .map_or_else(String::new, library::description);
         crate::err!("Failed to create PSO: {msg}");
         return Err(E_FAIL);
     };
