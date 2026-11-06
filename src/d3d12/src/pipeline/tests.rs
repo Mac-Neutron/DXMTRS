@@ -480,25 +480,26 @@ fn input_signature_from_airconv_ir() {
     assert_eq!(missing_res.err(), Some(E_INVALIDARG));
 }
 
+/// `GetCachedBlob` hands out an empty blob, as `D3DMetal` and DXMT's C++ do.
+///
+/// check.sh's `d3d12_api cachedblob` and `d3d12_probe`'s `gcache`/`ccache`: no PSO state survives
+/// a process through a blob, and a blob passed back to `Create*` is ignored.
 #[test]
-fn cached_pso_blob_round_trips_its_hash() {
-    let hash = 0x0123_4567_89ab_cdef;
-    let blob = super::cached_pso_blob(hash);
-    let parsed = super::cached_desc_hash(blob.as_ptr().cast(), blob.len());
-    assert_eq!(parsed, Some(hash));
-    let mut damaged = blob.clone();
-    damaged[0] ^= 0xff;
-    assert_eq!(
-        super::cached_desc_hash(damaged.as_ptr().cast(), damaged.len()),
-        None
-    );
-    // A blob of the padding-reading hash is ignored.
-    let mut old = blob;
-    old[..8].copy_from_slice(b"DXMTCPS1");
-    assert_eq!(
-        super::cached_desc_hash(old.as_ptr().cast(), old.len()),
-        None
-    );
+fn cached_blobs_are_empty() {
+    for vtbl in [&super::graphics::VTBL, &super::compute::VTBL] {
+        let mut raw: *mut c_void = ptr::null_mut();
+        // SAFETY: GetCachedBlob reads no PSO state; `raw` is a writable out-pointer.
+        let hr = unsafe { (vtbl.get_cached_blob)(ptr::null_mut(), &raw mut raw) };
+        assert_eq!(hr, S_OK);
+        // SAFETY: `raw` is the new `ID3D10Blob`, whose first word is its vtable.
+        let blob_vtbl = unsafe { *raw.cast::<*const crate::abi::vtbl::ID3D10BlobVtbl>() };
+        // SAFETY: a blob's vtable is a static.
+        let blob = unsafe { &*blob_vtbl };
+        // SAFETY: `raw` is a live blob.
+        assert_eq!(unsafe { (blob.get_buffer_size)(raw) }, 0);
+        // SAFETY: as above; this drops the only reference.
+        unsafe { (blob.release)(raw) };
+    }
 }
 
 /// A graphics description with no pointers to follow.

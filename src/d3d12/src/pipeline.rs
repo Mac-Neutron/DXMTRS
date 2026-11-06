@@ -141,31 +141,3 @@ pub unsafe fn create_pipeline_state(
 
 #[cfg(test)]
 mod tests;
-
-/// The magic in a cached pipeline-state blob this driver produced.
-///
-/// `DXMTCPS2` since the description hash skips padding: a `DXMTCPS1` blob is ignored.
-const CACHED_PSO_MAGIC: [u8; 8] = *b"DXMTCPS2";
-
-/// The descriptor hash a cached blob carries, if it is one of ours and complete.
-fn cached_desc_hash(blob: *const c_void, size: usize) -> Option<u64> {
-    if blob.is_null() || size != 16 {
-        return None;
-    }
-    // SAFETY: the caller promises `size` readable bytes at `blob`; `size` is 16.
-    let bytes = unsafe { core::slice::from_raw_parts(blob.cast::<u8>(), 16) };
-    if bytes[..8] != CACHED_PSO_MAGIC {
-        return None;
-    }
-    let mut hash = [0u8; 8];
-    hash.copy_from_slice(&bytes[8..]);
-    Some(u64::from_ne_bytes(hash))
-}
-
-/// A cached pipeline-state blob carrying `hash`.
-fn cached_pso_blob(hash: u64) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(16);
-    blob.extend_from_slice(&CACHED_PSO_MAGIC);
-    blob.extend_from_slice(&hash.to_ne_bytes());
-    blob
-}

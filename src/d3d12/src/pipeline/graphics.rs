@@ -286,10 +286,8 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
             if pp_blob.is_null() {
                 return E_POINTER;
             }
-            // SAFETY: `_this` is a live `Graphics` PSO.
-            let pso = unsafe { &*_this.cast::<Graphics>() };
             // SAFETY: `pp_blob` is non-null.
-            unsafe { create_blob(super::cached_pso_blob(pso.desc_hash), pp_blob) }
+            unsafe { create_blob(Vec::new(), pp_blob) }
         }
     ),
 };
@@ -571,8 +569,8 @@ fn hash_depth_stencil(ds: &DepthStencilDesc, hasher: &mut FxHasher) {
 /// (`HashGraphicsDesc`, `d3d12_pipeline_library.cpp:36`).
 ///
 /// The fixed-function descriptions are hashed field by field, never their padding, which an
-/// application leaves uninitialised. Pipeline libraries and cached blobs store this hash, so a
-/// change here bumps `library::VERSION` and `CACHED_PSO_MAGIC`.
+/// application leaves uninitialised. Pipeline libraries store this hash, so a change here bumps
+/// `library::VERSION`.
 ///
 /// # Safety
 ///
@@ -1452,12 +1450,8 @@ pub unsafe fn create_graphics_pipeline_state(
             }
         };
 
-    let desc_hash = super::cached_desc_hash(
-        d.cached_pso.cached_blob,
-        d.cached_pso.cached_blob_size_in_bytes,
-    )
     // SAFETY: `desc` is valid.
-    .unwrap_or_else(|| unsafe { hash_graphics_desc(desc) });
+    let desc_hash = unsafe { hash_graphics_desc(desc) };
     let standard = d.gs.shader_bytecode.is_null()
         && d.hs.shader_bytecode.is_null()
         && d.ds.shader_bytecode.is_null();

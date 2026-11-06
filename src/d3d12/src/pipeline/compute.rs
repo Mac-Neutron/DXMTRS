@@ -152,10 +152,8 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
             if pp_blob.is_null() {
                 return E_POINTER;
             }
-            // SAFETY: `_this` is a live `Compute` PSO.
-            let pso = unsafe { &*_this.cast::<Compute>() };
             // SAFETY: `pp_blob` is non-null.
-            unsafe { create_blob(super::cached_pso_blob(pso.desc_hash), pp_blob) }
+            unsafe { create_blob(Vec::new(), pp_blob) }
         }
     ),
 };
@@ -341,12 +339,8 @@ pub unsafe fn create_compute_pipeline_state(
     let dev = unsafe { &*device_ptr };
     // SAFETY: `desc` is non-null and points to a `ComputePipelineStateDesc`.
     let d = unsafe { &*desc.cast::<ComputePipelineStateDesc>() };
-    let desc_hash = super::cached_desc_hash(
-        d.cached_pso.cached_blob,
-        d.cached_pso.cached_blob_size_in_bytes,
-    )
     // SAFETY: `desc` is valid.
-    .unwrap_or_else(|| unsafe { hash_compute_desc(desc) });
+    let desc_hash = unsafe { hash_compute_desc(desc) };
     let cached = {
         let cache = lock(&dev.compute_psos);
         cache.get(&desc_hash).map(|cached| {
