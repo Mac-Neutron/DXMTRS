@@ -11,7 +11,6 @@ use winemetal_sys::{
     MTLBuffer_newTexture, MTLBuffer_updateContents, MTLDevice_newBuffer, MTLDevice_supportsFamily,
     MTLHeap_newBuffer, Obj,
     wire::{
-        WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RG32_UINT,
         WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
         WMT_RESOURCE_OPTION_CPU_CACHE_MODE_WRITE_COMBINED, WMT_TEXTURE_TYPE_TEXTURE_BUFFER,
         WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ,
@@ -191,10 +190,7 @@ impl Buffer {
                 .intersects(BufferAllocationFlags::GPU_MANAGED | BufferAllocationFlags::GPU_PRIVATE)
         {
             usage |= WMT_TEXTURE_USAGE_SHADER_WRITE;
-            if format == WMT_PIXEL_FORMAT_R32_UINT
-                || format == WMT_PIXEL_FORMAT_R32_SINT
-                || (format == WMT_PIXEL_FORMAT_RG32_UINT && self.supports_apple8())
-            {
+            if super::texture_info::atomic_ok(format, || self.supports_apple8()) {
                 usage |= WMT_TEXTURE_USAGE_SHADER_ATOMIC;
             }
         }
@@ -204,10 +200,7 @@ impl Buffer {
             height: 1,
             depth: 1,
             array_length: 1,
-            bits: (WMT_TEXTURE_TYPE_TEXTURE_BUFFER << WMTTextureInfo::TYPE_SHIFT)
-                | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-                | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-                | (usage << WMTTextureInfo::USAGE_SHIFT),
+            bits: super::texture_info::info_bits(WMT_TEXTURE_TYPE_TEXTURE_BUFFER, 1, 1, usage),
             options: allocation.options,
             flags: 0,
             mach_port: 0,

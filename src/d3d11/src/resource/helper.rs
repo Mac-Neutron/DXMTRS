@@ -3,13 +3,14 @@
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER, MTL_DXGI_FORMAT_TYPELESS,
-        query_dxgi_ref, texel_size,
+        query_dxgi_ref,
     },
     resource::{
         BufferAllocationFlags,
         dims::{linear_layout, linear_row_pitch, mip_count_wh, mip_extent},
+        texture_info::{Dimension, atomic_ok, info_bits, lossless, texture_type},
     },
-    settings::{Compression, settings},
+    settings::settings,
 };
 use dxmt_util::dxgi_consts::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_INDEX_BUFFER,
@@ -19,15 +20,14 @@ use dxmt_util::dxgi_consts::{
     DXGI_FORMAT_R32_TYPELESS,
 };
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_R32_FLOAT,
-    WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RG32_UINT,
+    WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
     WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
     WMT_RESOURCE_STORAGE_MODE_MANAGED, WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_TEXTURE_FLAG_LOSSLESS,
-    WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D,
-    WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-    WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
-    WMTGPU_FAMILY_APPLE8, WMTTextureInfo, original_format,
+    WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE2D_MULTISAMPLE,
+    WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+    WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_ATOMIC,
+    WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTGPU_FAMILY_APPLE8,
+    WMTTextureInfo, original_format,
 };
 
 use crate::{
@@ -54,13 +54,6 @@ const D3D11_RESOURCE_MISC_BUFFER_STRUCTURED: u32 = 0x40;
 const D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX: u32 = 0x100;
 const D3D11_RESOURCE_MISC_SHARED_NTHANDLE: u32 = 0x800;
 const D3D11_RESOURCE_MISC_TILE_POOL: u32 = 0x20000;
-
-#[derive(PartialEq, Eq)]
-enum TexDim {
-    Tex1d,
-    Tex2d,
-    Tex3d,
-}
 
 const fn validate_buffer_desc_inner(desc: *const D3d11BufferDesc) -> Hresult {
     // SAFETY: Caller passes either null or a valid pointer to `D3d11BufferDesc`.
@@ -151,7 +144,7 @@ pub const fn downgrade_texture3d_desc(src: &D3d11Texture3dDesc1) -> D3d11Texture
 }
 
 struct MtlTexDescParams {
-    dim: TexDim,
+    dim: Dimension,
     width: u32,
     height: u32,
     depth: u32,
@@ -165,7 +158,7 @@ struct MtlTexDescParams {
 }
 
 fn create_mtl_texture_descriptor_internal(
-    p: MtlTexDescParams,
+    p: &MtlTexDescParams,
     mtl_desc: &mut WMTTextureInfo,
     supports_family: impl Fn(u32) -> bool,
 ) -> Hresult {
@@ -181,7 +174,7 @@ fn create_mtl_texture_descriptor_internal(
         usage,
         mip_levels,
         format,
-    } = p;
+    } = *p;
     if width == 0 || height == 0 || depth == 0 || array_size == 0 || sample_count == 0 {
         return E_INVALIDARG;
     }
@@ -225,10 +218,7 @@ fn create_mtl_texture_descriptor_internal(
     }
     if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 {
         metal_usage |= WMT_TEXTURE_USAGE_SHADER_READ | WMT_TEXTURE_USAGE_SHADER_WRITE;
-        if pixel_format == WMT_PIXEL_FORMAT_R32_UINT
-            || pixel_format == WMT_PIXEL_FORMAT_R32_SINT
-            || (pixel_format == WMT_PIXEL_FORMAT_RG32_UINT && supports_family(WMTGPU_FAMILY_APPLE8))
-        {
+        if atomic_ok(pixel_format, || supports_family(WMTGPU_FAMILY_APPLE8)) {
             metal_usage |= WMT_TEXTURE_USAGE_SHADER_ATOMIC;
         }
     }
@@ -258,69 +248,33 @@ fn create_mtl_texture_descriptor_internal(
         mip_levels
     };
 
-    let mut out_sample_count = 1u32;
-    let mut out_array_length = 1u32;
-    let tex_type = match dim {
-        TexDim::Tex1d => {
-            if array_size > 1 {
-                out_array_length = array_size;
-                WMT_TEXTURE_TYPE2D_ARRAY
-            } else {
-                WMT_TEXTURE_TYPE2D
-            }
-        }
-        TexDim::Tex2d => {
-            if (misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) != 0 {
-                if (array_size / 6) > 1 {
-                    out_array_length = array_size / 6;
-                    WMT_TEXTURE_TYPE_CUBE_ARRAY
-                } else {
-                    WMT_TEXTURE_TYPE_CUBE
-                }
-            } else if sample_count > 1 {
-                if !matches!(sample_count, 1 | 2 | 4 | 8) {
-                    return E_INVALIDARG;
-                }
-                out_sample_count = sample_count;
-                if array_size > 1 {
-                    out_array_length = array_size;
-                    WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY
-                } else {
-                    WMT_TEXTURE_TYPE2D_MULTISAMPLE
-                }
-            } else if array_size > 1 {
-                out_array_length = array_size;
-                WMT_TEXTURE_TYPE2D_ARRAY
-            } else {
-                WMT_TEXTURE_TYPE2D
-            }
-        }
-        TexDim::Tex3d => WMT_TEXTURE_TYPE3D,
+    let is_2d = matches!(dim, Dimension::Texture2D);
+    let cube = is_2d && (misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) != 0;
+    if is_2d && !cube && sample_count > 1 && !matches!(sample_count, 1 | 2 | 4 | 8) {
+        return E_INVALIDARG;
+    }
+    let tex_type = texture_type(dim, array_size, sample_count, cube);
+    let (out_array_length, out_sample_count) = match tex_type {
+        WMT_TEXTURE_TYPE2D_ARRAY => (array_size, 1),
+        WMT_TEXTURE_TYPE_CUBE_ARRAY => (array_size / 6, 1),
+        WMT_TEXTURE_TYPE2D_MULTISAMPLE => (1, sample_count),
+        WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY => (array_size, sample_count),
+        _ => (1, 1),
     };
 
     mtl_desc.width = width;
     mtl_desc.height = height;
     mtl_desc.depth = depth;
     mtl_desc.array_length = out_array_length;
-    mtl_desc.bits = (tex_type & 0xff)
-        | ((mipmap_level_count & 0xff) << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-        | ((out_sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-        | ((metal_usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
+    mtl_desc.bits = info_bits(tex_type, mipmap_level_count, out_sample_count, metal_usage);
 
-    let comp = settings().d3d11_compression;
-    let pf = mtl_desc.pixel_format;
-    let r32_view = texel_size(pf) == 4
-        && pf != WMT_PIXEL_FORMAT_R32_UINT
-        && pf != WMT_PIXEL_FORMAT_R32_SINT
-        && pf != WMT_PIXEL_FORMAT_R32_FLOAT;
-    let uav = (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0;
     let any_shared = D3D11_RESOURCE_MISC_SHARED
         | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
         | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-    mtl_desc.flags = if comp != Compression::Off
-        && matches!(usage, D3D11_USAGE_DEFAULT | D3D11_USAGE_IMMUTABLE)
+    let uav = (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0;
+    mtl_desc.flags = if matches!(usage, D3D11_USAGE_DEFAULT | D3D11_USAGE_IMMUTABLE)
         && (misc_flags & any_shared) == 0
-        && !(uav && (comp == Compression::RenderTargets || r32_view))
+        && lossless(settings().d3d11_compression, mtl_desc.pixel_format, uav)
     {
         WMT_TEXTURE_FLAG_LOSSLESS
     } else {
@@ -340,8 +294,8 @@ pub fn create_mtl_texture_descriptor_1d(
 ) -> Hresult {
     let _ = supports_bc;
     let hr = create_mtl_texture_descriptor_internal(
-        MtlTexDescParams {
-            dim: TexDim::Tex1d,
+        &MtlTexDescParams {
+            dim: Dimension::Texture1D,
             width: desc.width,
             height: 1,
             depth: 1,
@@ -374,8 +328,8 @@ pub fn create_mtl_texture_descriptor_2d(
 ) -> Hresult {
     let _ = supports_bc;
     let hr = create_mtl_texture_descriptor_internal(
-        MtlTexDescParams {
-            dim: TexDim::Tex2d,
+        &MtlTexDescParams {
+            dim: Dimension::Texture2D,
             width: desc.width,
             height: desc.height,
             depth: 1,
@@ -408,8 +362,8 @@ pub fn create_mtl_texture_descriptor_3d(
 ) -> Hresult {
     let _ = supports_bc;
     let hr = create_mtl_texture_descriptor_internal(
-        MtlTexDescParams {
-            dim: TexDim::Tex3d,
+        &MtlTexDescParams {
+            dim: Dimension::Texture3D,
             width: desc.width,
             height: desc.height,
             depth: desc.depth,

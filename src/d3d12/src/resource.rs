@@ -13,13 +13,14 @@ use std::sync::Arc;
 
 use dxmt_core::{
     format::{
-        CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
-        MTL_DXGI_FORMAT_STENCIL_PLANER, texel_size,
+        CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
     },
     resource::{
-        Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor, dims::clamped_mip_count,
+        Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor,
+        dims::clamped_mip_count,
+        texture_info::{Dimension, atomic_ok, info_bits, lossless, texture_type},
     },
-    settings::{Compression, Flags, settings},
+    settings::{Flags, settings},
 };
 use dxmt_util::{
     com::ComObject,
@@ -31,13 +32,11 @@ use winemetal_sys::{
         WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_R16_FLOAT,
         WMT_PIXEL_FORMAT_R16_SINT, WMT_PIXEL_FORMAT_R16_SNORM, WMT_PIXEL_FORMAT_R16_UINT,
         WMT_PIXEL_FORMAT_R16_UNORM, WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_SINT,
-        WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RG32_UINT,
-        WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE2D,
-        WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE2D_MULTISAMPLE,
-        WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
-        WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-        WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ,
-        WMT_TEXTURE_USAGE_SHADER_WRITE, WMTGPU_FAMILY_APPLE8, WMTTextureInfo,
+        WMT_PIXEL_FORMAT_R32_UINT, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+        WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+        WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_ATOMIC,
+        WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTGPU_FAMILY_APPLE8,
+        WMTTextureInfo,
     },
 };
 
@@ -926,12 +925,10 @@ pub unsafe fn populate_texture_info_opt(
             info.height = 1;
             info.depth = 1;
             info.array_length = u32::from(desc.depth_or_array_size);
-            let t = if desc.depth_or_array_size > 1 {
-                WMT_TEXTURE_TYPE2D_ARRAY
-            } else {
-                WMT_TEXTURE_TYPE2D
-            };
-            (t, 1u32)
+            (
+                texture_type(Dimension::Texture1D, info.array_length, 1, false),
+                1u32,
+            )
         }
         D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
             info.width = (desc.width & 0xffff_ffff) as u32;
@@ -941,28 +938,16 @@ pub unsafe fn populate_texture_info_opt(
             if desc.sample_desc.count == 0 {
                 return E_INVALIDARG;
             }
-            if desc.sample_desc.count > 1 {
-                let t = if desc.depth_or_array_size > 1 {
-                    WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY
-                } else {
-                    WMT_TEXTURE_TYPE2D_MULTISAMPLE
-                };
-                (t, desc.sample_desc.count)
-            } else {
-                let t = if desc.depth_or_array_size > 1 {
-                    WMT_TEXTURE_TYPE2D_ARRAY
-                } else {
-                    WMT_TEXTURE_TYPE2D
-                };
-                (t, 1u32)
-            }
+            let samples = desc.sample_desc.count;
+            let t = texture_type(Dimension::Texture2D, info.array_length, samples, false);
+            (t, if samples > 1 { samples } else { 1 })
         }
         D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
             info.width = (desc.width & 0xffff_ffff) as u32;
             info.height = desc.height;
             info.depth = u32::from(desc.depth_or_array_size);
             info.array_length = 1;
-            (WMT_TEXTURE_TYPE3D, 1u32)
+            (texture_type(Dimension::Texture3D, 1, 1, false), 1u32)
         }
         _ => return E_INVALIDARG,
     };
@@ -987,14 +972,13 @@ pub unsafe fn populate_texture_info_opt(
     }
     if (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0 {
         usage |= WMT_TEXTURE_USAGE_SHADER_READ | WMT_TEXTURE_USAGE_SHADER_WRITE;
-        if fmt.pixel_format == WMT_PIXEL_FORMAT_R32_UINT
-            || fmt.pixel_format == WMT_PIXEL_FORMAT_R32_SINT
-            || (fmt.pixel_format == WMT_PIXEL_FORMAT_RG32_UINT
-                && mtl_opt.is_some_and(|m| {
-                    // SAFETY: `m` holds a live `MTLDevice`.
-                    unsafe { MTLDevice_supportsFamily(m.handle(), WMTGPU_FAMILY_APPLE8) }
-                }))
-        {
+        let supports_apple8 = || {
+            mtl_opt.is_some_and(|m| {
+                // SAFETY: `m` holds a live `MTLDevice`.
+                unsafe { MTLDevice_supportsFamily(m.handle(), WMTGPU_FAMILY_APPLE8) }
+            })
+        };
+        if atomic_ok(fmt.pixel_format, supports_apple8) {
             usage |= WMT_TEXTURE_USAGE_SHADER_ATOMIC;
         }
         let gpu_only = HeapProperties {
@@ -1017,22 +1001,12 @@ pub unsafe fn populate_texture_info_opt(
         usage |= WMT_TEXTURE_USAGE_SHADER_READ;
     }
 
-    info.bits = ((tex_type & 0xff) << WMTTextureInfo::TYPE_SHIFT)
-        | ((mip_count & 0xff) << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-        | ((sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-        | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
+    info.bits = info_bits(tex_type, mip_count, sample_count, usage);
     info.options = WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED;
 
-    let comp = settings().d3d12_compression;
-    let format = info.pixel_format;
-    let r32_view = texel_size(format) == 4
-        && format != WMT_PIXEL_FORMAT_R32_UINT
-        && format != WMT_PIXEL_FORMAT_R32_SINT
-        && format != WMT_PIXEL_FORMAT_R32_FLOAT;
     let uav = (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0;
     info.flags = 0;
-    if comp != Compression::Off
-        && !(uav && (comp == Compression::RenderTargets || r32_view))
+    if lossless(settings().d3d12_compression, info.pixel_format, uav)
         && (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER) == 0
         && desc.layout == D3D12_TEXTURE_LAYOUT_UNKNOWN
         && desc.alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT
@@ -1064,10 +1038,7 @@ pub unsafe fn populate_texture_info_opt(
             }
             if let Some(mtl_dev) = mtl_opt {
                 let mut info_one_slice = *info;
-                info_one_slice.bits = ((tex_type & 0xff) << WMTTextureInfo::TYPE_SHIFT)
-                    | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-                    | ((sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-                    | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
+                info_one_slice.bits = info_bits(tex_type, 1, sample_count, usage);
                 info_one_slice.array_length = 1;
                 // SAFETY: `mtl_dev` holds a live `MTLDevice`.
                 let size_and_align = unsafe {
