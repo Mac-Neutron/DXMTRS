@@ -25,7 +25,7 @@ use winemetal_wire::{
     WMT_STENCIL_OPERATION_DECREMENT_CLAMP, WMT_STENCIL_OPERATION_DECREMENT_WRAP,
     WMT_STENCIL_OPERATION_INCREMENT_CLAMP, WMT_STENCIL_OPERATION_INCREMENT_WRAP,
     WMT_STENCIL_OPERATION_INVERT, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_REPLACE,
-    WMT_STENCIL_OPERATION_ZERO,
+    WMT_STENCIL_OPERATION_ZERO, WMTDepthStencilInfo, WMTStencilInfo,
 };
 
 /// Metal's `WMTBlendFactor` for a `D3D*_BLEND` (0 to 21), `ZERO` for the unused 0, 12 and 13.
@@ -161,6 +161,80 @@ pub const fn color_write_mask(mask: u32) -> Option<u8> {
         bit += 1;
     }
     Some(out)
+}
+
+/// One face's stencil operations, as D3D11 and D3D12 both describe them.
+pub struct StencilFace {
+    pub fail_op: u32,
+    pub depth_fail_op: u32,
+    pub pass_op: u32,
+    pub func: u32,
+}
+
+/// A depth-stencil description, as D3D11 and D3D12 both give it, its `BOOL`s read.
+pub struct DepthStencilDesc {
+    pub depth_enable: bool,
+    /// `DEPTH_WRITE_MASK_ALL`.
+    pub depth_write: bool,
+    pub depth_func: u32,
+    pub stencil_enable: bool,
+    pub read_mask: u8,
+    pub write_mask: u8,
+    pub front: StencilFace,
+    pub back: StencilFace,
+}
+
+/// Metal's description of `desc`.
+///
+/// Depth off is `ALWAYS` without writes, stencil off a zeroed face. A comparison outside the enum
+/// is `NEVER`; a stencil operation outside it is `stencil_op_fallback`, which differs per API
+/// (D3D11 `KEEP`, D3D12 `ZERO`).
+#[must_use]
+pub const fn depth_stencil_info(
+    desc: &DepthStencilDesc,
+    stencil_op_fallback: u8,
+) -> WMTDepthStencilInfo {
+    const OFF: WMTStencilInfo = WMTStencilInfo {
+        enabled: 0,
+        depth_stencil_pass_op: 0,
+        stencil_fail_op: 0,
+        depth_fail_op: 0,
+        stencil_compare_function: 0,
+        write_mask: 0,
+        read_mask: 0,
+    };
+    const fn or(mapped: Option<u8>, fallback: u8) -> u8 {
+        match mapped {
+            Some(value) => value,
+            None => fallback,
+        }
+    }
+    const fn face(desc: &DepthStencilDesc, face: &StencilFace, fallback: u8) -> WMTStencilInfo {
+        WMTStencilInfo {
+            enabled: 1,
+            depth_stencil_pass_op: or(stencil_op(face.pass_op), fallback),
+            stencil_fail_op: or(stencil_op(face.fail_op), fallback),
+            depth_fail_op: or(stencil_op(face.depth_fail_op), fallback),
+            stencil_compare_function: or(compare_func(face.func), WMT_COMPARE_FUNCTION_NEVER),
+            write_mask: desc.write_mask,
+            read_mask: desc.read_mask,
+        }
+    }
+    let mut info = WMTDepthStencilInfo {
+        depth_compare_function: WMT_COMPARE_FUNCTION_ALWAYS,
+        depth_write_enabled: 0,
+        front_stencil: OFF,
+        back_stencil: OFF,
+    };
+    if desc.depth_enable {
+        info.depth_compare_function = or(compare_func(desc.depth_func), WMT_COMPARE_FUNCTION_NEVER);
+        info.depth_write_enabled = if desc.depth_write { 1 } else { 0 };
+    }
+    if desc.stencil_enable {
+        info.front_stencil = face(desc, &desc.front, stencil_op_fallback);
+        info.back_stencil = face(desc, &desc.back, stencil_op_fallback);
+    }
+    info
 }
 
 #[cfg(test)]

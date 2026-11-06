@@ -8,8 +8,9 @@ use winemetal_wire::{
 };
 
 use super::{
-    address_mode, blend_alpha_factor, blend_factor, blend_factor_is_dual_source, blend_op,
-    color_write_mask, compare_func, stencil_op,
+    DepthStencilDesc, StencilFace, address_mode, blend_alpha_factor, blend_factor,
+    blend_factor_is_dual_source, blend_op, color_write_mask, compare_func, depth_stencil_info,
+    stencil_op,
 };
 
 const D3D11_BLEND_FACTOR_MAP: [u8; 20] = [
@@ -127,5 +128,74 @@ fn color_write_mask_is_the_four_bits_reversed() {
     ];
     for (mask, expected) in one_bit {
         assert_eq!(color_write_mask(mask), Some(expected));
+    }
+}
+
+/// Depth off is `ALWAYS` without writes, stencil off a zeroed face; out-of-range answers per API.
+#[test]
+fn depth_stencil_info_as_both_apis() {
+    use winemetal_wire::{
+        WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_LESS, WMT_COMPARE_FUNCTION_NEVER,
+        WMT_STENCIL_OPERATION_INVERT, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_REPLACE,
+        WMT_STENCIL_OPERATION_ZERO,
+    };
+    let face = |pass_op| StencilFace {
+        fail_op: 3,
+        depth_fail_op: 6,
+        pass_op,
+        func: u32::MAX,
+    };
+    let mut desc = DepthStencilDesc {
+        depth_enable: false,
+        depth_write: true,
+        depth_func: 2,
+        stencil_enable: false,
+        read_mask: 0x5a,
+        write_mask: 0xa5,
+        front: face(9),
+        back: face(1),
+    };
+    let off = depth_stencil_info(&desc, WMT_STENCIL_OPERATION_ZERO);
+    assert_eq!(
+        (off.depth_compare_function, off.depth_write_enabled),
+        (WMT_COMPARE_FUNCTION_ALWAYS, 0)
+    );
+    assert_eq!(
+        (off.front_stencil.enabled, off.front_stencil.read_mask),
+        (0, 0)
+    );
+
+    desc.depth_enable = true;
+    desc.stencil_enable = true;
+    for (fallback, out_of_range) in [
+        (WMT_STENCIL_OPERATION_ZERO, WMT_STENCIL_OPERATION_ZERO),
+        (WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_KEEP),
+    ] {
+        let on = depth_stencil_info(&desc, fallback);
+        assert_eq!(
+            (on.depth_compare_function, on.depth_write_enabled),
+            (WMT_COMPARE_FUNCTION_LESS, 1)
+        );
+        let f = on.front_stencil;
+        assert_eq!(
+            (
+                f.enabled,
+                f.stencil_fail_op,
+                f.depth_fail_op,
+                f.depth_stencil_pass_op
+            ),
+            (
+                1,
+                WMT_STENCIL_OPERATION_REPLACE,
+                WMT_STENCIL_OPERATION_INVERT,
+                out_of_range
+            )
+        );
+        assert_eq!(f.stencil_compare_function, WMT_COMPARE_FUNCTION_NEVER);
+        assert_eq!((f.read_mask, f.write_mask), (0x5a, 0xa5));
+        assert_eq!(
+            on.back_stencil.depth_stencil_pass_op,
+            WMT_STENCIL_OPERATION_KEEP
+        );
     }
 }

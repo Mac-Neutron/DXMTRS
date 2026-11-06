@@ -17,8 +17,8 @@ use crate::{
     com::{D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, IID_ID3D12_PIPELINE_LIBRARY1, S_OK},
     pipeline::{
         graphics::{
-            blend_alpha_factor, blend_factor, blend_op, compare_func, extract_input_layout,
-            hash_graphics_desc, parse_input_signature, stencil_op,
+            blend_alpha_factor, blend_factor, blend_op, extract_input_layout, hash_graphics_desc,
+            parse_input_signature,
         },
         library::{PipelineLibrary, create_pipeline_library},
         record::{
@@ -608,14 +608,15 @@ fn graphics_hash_skips_padding() {
     assert_ne!(a, c);
 }
 
-/// The D3D12 enum maps clamp a value outside the enum as they did before `state_map`.
+/// The D3D12 blend maps clamp a value outside the enum as they did before `state_map`.
+///
+/// The comparison and stencil fallbacks are `dxmt_core::state_map::depth_stencil_info`'s.
 #[test]
-fn blend_and_depth_maps_clamp_out_of_range_as_before() {
+fn blend_maps_clamp_out_of_range_as_before() {
     use winemetal_wire::{
         WMT_BLEND_FACTOR_BLEND_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA,
         WMT_BLEND_FACTOR_SOURCE1_COLOR, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
-        WMT_BLEND_OPERATION_MAX, WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_NEVER,
-        WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO,
+        WMT_BLEND_OPERATION_MAX,
     };
 
     for out_of_range in [0, 22, u32::MAX] {
@@ -635,12 +636,4 @@ fn blend_and_depth_maps_clamp_out_of_range_as_before() {
         assert_eq!(blend_op(op), WMT_BLEND_OPERATION_ADD);
     }
     assert_eq!(blend_op(5), WMT_BLEND_OPERATION_MAX);
-    for func in [0, 1, 9, u32::MAX] {
-        assert_eq!(compare_func(func), WMT_COMPARE_FUNCTION_NEVER);
-    }
-    assert_eq!(compare_func(8), WMT_COMPARE_FUNCTION_ALWAYS);
-    for op in [0, 2, 9, u32::MAX] {
-        assert_eq!(stencil_op(op), WMT_STENCIL_OPERATION_ZERO);
-    }
-    assert_eq!(stencil_op(1), WMT_STENCIL_OPERATION_KEEP);
 }

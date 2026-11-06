@@ -25,8 +25,7 @@ use dxmt_util::{
 };
 use rustc_hash::FxHasher;
 use winemetal_sys::{
-    MTLDevice_newDepthStencilState, MTLDevice_newMeshRenderPipelineState,
-    MTLDevice_newRenderPipelineState, Obj,
+    MTLDevice_newMeshRenderPipelineState, MTLDevice_newRenderPipelineState, Obj,
     sm50::{
         MtlShaderReflection, SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
         SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
@@ -40,14 +39,13 @@ use winemetal_sys::{
 use winemetal_wire::{
     MemPtr, WMT_BLEND_FACTOR_ONE, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
     WMT_COLOR_WRITE_MASK_ALL, WMT_COLOR_WRITE_MASK_ALPHA, WMT_COLOR_WRITE_MASK_NONE,
-    WMT_COMPARE_FUNCTION_ALWAYS, WMT_COMPARE_FUNCTION_NEVER, WMT_CULL_MODE_BACK,
-    WMT_CULL_MODE_FRONT, WMT_CULL_MODE_NONE, WMT_DEPTH_CLIP_MODE_CLAMP, WMT_DEPTH_CLIP_MODE_CLIP,
-    WMT_LOGIC_OPERATION_CLEAR, WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_RGB9E5_FLOAT,
-    WMT_PRIMITIVE_TOPOLOGY_CLASS_LINE, WMT_PRIMITIVE_TOPOLOGY_CLASS_POINT,
-    WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO,
-    WMT_TRIANGLE_FILL_MODE_FILL, WMT_TRIANGLE_FILL_MODE_LINES, WMT_WINDING_CLOCKWISE,
-    WMT_WINDING_COUNTER_CLOCKWISE, WMTColorAttachmentBlendInfo, WMTDepthStencilInfo,
-    WMTMeshRenderPipelineInfo, WMTStencilInfo, original_format,
+    WMT_CULL_MODE_BACK, WMT_CULL_MODE_FRONT, WMT_CULL_MODE_NONE, WMT_DEPTH_CLIP_MODE_CLAMP,
+    WMT_DEPTH_CLIP_MODE_CLIP, WMT_LOGIC_OPERATION_CLEAR, WMT_PIXEL_FORMAT_INVALID,
+    WMT_PIXEL_FORMAT_RGB9E5_FLOAT, WMT_PRIMITIVE_TOPOLOGY_CLASS_LINE,
+    WMT_PRIMITIVE_TOPOLOGY_CLASS_POINT, WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE,
+    WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO, WMT_TRIANGLE_FILL_MODE_FILL,
+    WMT_TRIANGLE_FILL_MODE_LINES, WMT_WINDING_CLOCKWISE, WMT_WINDING_COUNTER_CLOCKWISE,
+    WMTColorAttachmentBlendInfo, WMTDepthStencilInfo, WMTMeshRenderPipelineInfo, original_format,
 };
 
 use crate::{
@@ -302,14 +300,6 @@ const fn or_else(mapped: Option<u8>, fallback: u8) -> u8 {
         Some(value) => value,
         None => fallback,
     }
-}
-
-pub(super) const fn compare_func(func: u32) -> u8 {
-    or_else(state_map::compare_func(func), WMT_COMPARE_FUNCTION_NEVER)
-}
-
-pub(super) const fn stencil_op(op: u32) -> u8 {
-    or_else(state_map::stencil_op(op), WMT_STENCIL_OPERATION_ZERO)
 }
 
 pub(super) const fn blend_op(op: u32) -> u8 {
@@ -779,88 +769,26 @@ fn initialize_dsso(
     desc: &GraphicsPipelineStateDesc,
 ) -> [Option<Obj>; 6] {
     let ds = &desc.depth_stencil_state;
-    let empty_stencil = WMTStencilInfo {
-        enabled: 0,
-        depth_stencil_pass_op: 0,
-        stencil_fail_op: 0,
-        depth_fail_op: 0,
-        stencil_compare_function: 0,
-        write_mask: 0,
-        read_mask: 0,
+    let face = |f: &crate::abi::pipeline::DepthStencilOpDesc| state_map::StencilFace {
+        fail_op: f.stencil_fail_op,
+        depth_fail_op: f.stencil_depth_fail_op,
+        pass_op: f.stencil_pass_op,
+        func: f.stencil_func,
     };
-    let mut info = WMTDepthStencilInfo {
-        depth_compare_function: WMT_COMPARE_FUNCTION_ALWAYS,
-        depth_write_enabled: 0,
-        front_stencil: empty_stencil,
-        back_stencil: empty_stencil,
-    };
-    if ds.depth_enable != 0 {
-        info.depth_compare_function = compare_func(ds.depth_func);
-        info.depth_write_enabled = u8::from(ds.depth_write_mask == DEPTH_WRITE_MASK_ALL);
-    }
-    if ds.stencil_enable != 0 {
-        info.front_stencil = WMTStencilInfo {
-            enabled: 1,
-            depth_stencil_pass_op: stencil_op(ds.front_face.stencil_pass_op),
-            stencil_fail_op: stencil_op(ds.front_face.stencil_fail_op),
-            depth_fail_op: stencil_op(ds.front_face.stencil_depth_fail_op),
-            stencil_compare_function: compare_func(ds.front_face.stencil_func),
-            write_mask: ds.stencil_write_mask,
+    let info = state_map::depth_stencil_info(
+        &state_map::DepthStencilDesc {
+            depth_enable: ds.depth_enable != 0,
+            depth_write: ds.depth_write_mask == DEPTH_WRITE_MASK_ALL,
+            depth_func: ds.depth_func,
+            stencil_enable: ds.stencil_enable != 0,
             read_mask: ds.stencil_read_mask,
-        };
-        info.back_stencil = WMTStencilInfo {
-            enabled: 1,
-            depth_stencil_pass_op: stencil_op(ds.back_face.stencil_pass_op),
-            stencil_fail_op: stencil_op(ds.back_face.stencil_fail_op),
-            depth_fail_op: stencil_op(ds.back_face.stencil_depth_fail_op),
-            stencil_compare_function: compare_func(ds.back_face.stencil_func),
             write_mask: ds.stencil_write_mask,
-            read_mask: ds.stencil_read_mask,
-        };
-    }
-
-    let make = |d: &WMTDepthStencilInfo| -> Option<Obj> {
-        let key = [
-            d.depth_compare_function,
-            d.depth_write_enabled,
-            d.front_stencil.enabled,
-            d.front_stencil.depth_stencil_pass_op,
-            d.front_stencil.stencil_fail_op,
-            d.front_stencil.depth_fail_op,
-            d.front_stencil.stencil_compare_function,
-            d.front_stencil.write_mask,
-            d.front_stencil.read_mask,
-            d.back_stencil.enabled,
-            d.back_stencil.depth_stencil_pass_op,
-            d.back_stencil.stencil_fail_op,
-            d.back_stencil.depth_fail_op,
-            d.back_stencil.stencil_compare_function,
-            d.back_stencil.write_mask,
-            d.back_stencil.read_mask,
-        ];
-        let cache = lock(&dev.depth_stencil_states);
-        if let Some(existing) = cache.get(&key) {
-            let h = existing.handle();
-            drop(cache);
-            // SAFETY: `h` is a live `MTLDepthStencilState` handle cached on `dev`.
-            return unsafe { Obj::retain(h) };
-        }
-        drop(cache);
-        let metal_h = metal.handle();
-        let desc_ptr = &raw const *d;
-        // SAFETY: `metal_h` is a live `MTLDevice` and `desc_ptr` is valid.
-        let h = unsafe { MTLDevice_newDepthStencilState(metal_h, desc_ptr) };
-        // SAFETY: `h` is 0 or a newly retained `MTLDepthStencilState` handle.
-        let obj = unsafe { Obj::adopt(h) };
-        if let Some(ref created) = obj {
-            let created_h = created.handle();
-            // SAFETY: `created_h` is a live `MTLDepthStencilState` handle.
-            if let Some(cached) = unsafe { Obj::retain(created_h) } {
-                lock(&dev.depth_stencil_states).insert(key, cached);
-            }
-        }
-        obj
-    };
+            front: face(&ds.front_face),
+            back: face(&ds.back_face),
+        },
+        WMT_STENCIL_OPERATION_ZERO,
+    );
+    let make = |d: &WMTDepthStencilInfo| dev.depth_stencil_states.get(metal, d);
 
     let dsso = make(&info);
 

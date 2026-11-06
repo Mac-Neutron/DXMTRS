@@ -6,8 +6,13 @@
 //! Behaviour is the C++'s (`dxmt_command.cpp`, `dxmt_command_clear.hpp`). Written ahead for the
 //! switches of `d3d11.dll` and `d3d12.dll`, which are its first callers.
 
-use std::{ffi::CStr, sync::Arc};
+use std::{
+    ffi::CStr,
+    sync::{Arc, Mutex, PoisonError},
+};
 
+use dxmt_util::sync::lock;
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     DispatchData_alloc_init, MTLDevice_newDepthStencilState, MTLDevice_newLibrary,
     MTLDevice_newRenderPipelineState, MTLLibrary_newFunction, NSObject_description,
@@ -236,6 +241,67 @@ pub fn depth_stencil_state(device: &Obj, info: &WMTDepthStencilInfo) -> Option<O
     let state = unsafe { MTLDevice_newDepthStencilState(device.handle(), info) };
     // SAFETY: a new state's handle carries its reference.
     unsafe { Obj::adopt(state) }
+}
+
+/// Metal depth-stencil states by their description, each made once per device.
+///
+/// One lock covers the lookup and the insert, and a miss makes the Metal state under it: pipeline
+/// creation only, never a draw.
+#[derive(Default)]
+pub struct DepthStencilCache {
+    states: Mutex<FxHashMap<[u8; 16], Obj>>,
+}
+
+impl DepthStencilCache {
+    /// The state `info` describes on `device`, a reference of the caller's own.
+    ///
+    /// The cached state, or a new one the cache keeps too; `None` when Metal makes none.
+    #[must_use]
+    pub fn get(&self, device: &Obj, info: &WMTDepthStencilInfo) -> Option<Obj> {
+        let key = depth_stencil_key(info);
+        let mut states = lock(&self.states);
+        if let Some(state) = states.get(&key) {
+            // SAFETY: a cached state is live while the cache holds it.
+            return unsafe { Obj::retain(state.handle()) };
+        }
+        let state = depth_stencil_state(device, info)?;
+        // SAFETY: `state` is live.
+        if let Some(cached) = unsafe { Obj::retain(state.handle()) } {
+            states.insert(key, cached);
+        }
+        drop(states);
+        Some(state)
+    }
+
+    /// Releases every cached state.
+    pub fn clear(&mut self) {
+        self.states
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+}
+
+/// The cache's key: `info`'s sixteen bytes, field by field.
+const fn depth_stencil_key(d: &WMTDepthStencilInfo) -> [u8; 16] {
+    [
+        d.depth_compare_function,
+        d.depth_write_enabled,
+        d.front_stencil.enabled,
+        d.front_stencil.depth_stencil_pass_op,
+        d.front_stencil.stencil_fail_op,
+        d.front_stencil.depth_fail_op,
+        d.front_stencil.stencil_compare_function,
+        d.front_stencil.write_mask,
+        d.front_stencil.read_mask,
+        d.back_stencil.enabled,
+        d.back_stencil.depth_stencil_pass_op,
+        d.back_stencil.stencil_fail_op,
+        d.back_stencil.depth_fail_op,
+        d.back_stencil.stencil_compare_function,
+        d.back_stencil.write_mask,
+        d.back_stencil.read_mask,
+    ]
 }
 
 /// An Objective-C object's description, such as an error's.

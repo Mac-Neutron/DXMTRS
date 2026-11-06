@@ -54,10 +54,7 @@ impl Drop for Device {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-        self.depth_stencil_states
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        self.depth_stencil_states.clear();
         if !self.adapter.is_null() {
             // SAFETY: `self.adapter` holds one reference acquired during device creation.
             unsafe { com::release(self.adapter) };
@@ -197,7 +194,7 @@ pub unsafe fn create(
         formats,
         fence_helper: Some(fence_helper),
         default_depth_stencil_state,
-        depth_stencil_states: Mutex::new(FxHashMap::default()),
+        depth_stencil_states: dxmt_core::library::DepthStencilCache::default(),
         shader_functions: crate::shader_cache::ShaderFunctionCache::new(),
         graphics_psos: Mutex::new(FxHashMap::default()),
         compute_psos: Mutex::new(FxHashMap::default()),

@@ -7,10 +7,7 @@ use core::{
 };
 use std::sync::{Arc, LazyLock, Mutex};
 
-use dxmt_core::{
-    library::depth_stencil_state as create_metal_depth_stencil, sampler::Sampler as CoreSampler,
-    state_map,
-};
+use dxmt_core::{library::DepthStencilCache, sampler::Sampler as CoreSampler, state_map};
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
     private_data::{
@@ -23,8 +20,9 @@ use winemetal_sys::{
     Obj,
     wire::{
         WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMTColorAttachmentBlendInfo, WMTDepthStencilInfo,
-        WMTRenderPipelineBlendInfo, WMTSamplerInfo, WMTStencilInfo, WmtcmdRenderSetrasterizerstate,
+        WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMT_STENCIL_OPERATION_KEEP, WMTColorAttachmentBlendInfo,
+        WMTDepthStencilInfo, WMTRenderPipelineBlendInfo, WMTSamplerInfo,
+        WmtcmdRenderSetrasterizerstate,
     },
 };
 
@@ -471,22 +469,6 @@ impl RasterizerState {
     }
 }
 
-fn translate_stencil_face(
-    face: &D3d11DepthStencilopDesc,
-    read_mask: u8,
-    write_mask: u8,
-) -> WMTStencilInfo {
-    WMTStencilInfo {
-        enabled: 1,
-        depth_stencil_pass_op: state_map::stencil_op(face.stencil_pass_op).unwrap_or(0),
-        stencil_fail_op: state_map::stencil_op(face.stencil_fail_op).unwrap_or(0),
-        depth_fail_op: state_map::stencil_op(face.stencil_depth_fail_op).unwrap_or(0),
-        stencil_compare_function: state_map::compare_func(face.stencil_func).unwrap_or(0),
-        write_mask,
-        read_mask,
-    }
-}
-
 /// Validates and translates `desc` into a [`DepthStencilState`].
 ///
 /// # Errors
@@ -494,45 +476,32 @@ fn translate_stencil_face(
 /// Returns `E_INVALIDARG` on invalid depth-stencil state parameters.
 pub fn translate_depth_stencil_state(
     desc: &D3d11DepthStencilDesc,
-    metal_device: Option<&Obj>,
+    metal: Option<(&Obj, &DepthStencilCache)>,
 ) -> Result<DepthStencilState, Hresult> {
-    let zero_stencil = WMTStencilInfo {
-        enabled: 0,
-        depth_stencil_pass_op: 0,
-        stencil_fail_op: 0,
-        depth_fail_op: 0,
-        stencil_compare_function: 0,
-        write_mask: 0,
-        read_mask: 0,
+    let face = |f: &D3d11DepthStencilopDesc| state_map::StencilFace {
+        fail_op: f.stencil_fail_op,
+        depth_fail_op: f.stencil_depth_fail_op,
+        pass_op: f.stencil_pass_op,
+        func: f.stencil_func,
     };
-    let mut info = WMTDepthStencilInfo {
-        depth_compare_function: 7,
-        depth_write_enabled: 0,
-        front_stencil: zero_stencil,
-        back_stencil: zero_stencil,
-    };
-
-    if desc.depth_enable != 0 {
-        info.depth_compare_function = state_map::compare_func(desc.depth_func).unwrap_or(0);
-        info.depth_write_enabled = u8::from(desc.depth_write_mask == 1);
-    }
-    if desc.stencil_enable != 0 {
-        info.front_stencil = translate_stencil_face(
-            &desc.front_face,
-            desc.stencil_read_mask,
-            desc.stencil_write_mask,
-        );
-        info.back_stencil = translate_stencil_face(
-            &desc.back_face,
-            desc.stencil_read_mask,
-            desc.stencil_write_mask,
-        );
-    }
+    let mut info = state_map::depth_stencil_info(
+        &state_map::DepthStencilDesc {
+            depth_enable: desc.depth_enable != 0,
+            depth_write: desc.depth_write_mask == 1,
+            depth_func: desc.depth_func,
+            stencil_enable: desc.stencil_enable != 0,
+            read_mask: desc.stencil_read_mask,
+            write_mask: desc.stencil_write_mask,
+            front: face(&desc.front_face),
+            back: face(&desc.back_face),
+        },
+        WMT_STENCIL_OPERATION_KEEP,
+    );
 
     let mut objs = Vec::with_capacity(4);
     let mut make_state = |info: &WMTDepthStencilInfo| -> u64 {
-        if let Some(dev) = metal_device
-            && let Some(obj) = create_metal_depth_stencil(dev, info)
+        if let Some((dev, cache)) = metal
+            && let Some(obj) = cache.get(dev, info)
         {
             let h = obj.handle();
             objs.push(obj);
@@ -1321,7 +1290,10 @@ impl Defaults {
                     &DEPTH_STENCIL_STATE_VTBL,
                     &crate::d3d10::DEPTH_STENCIL_STATE_VTBL,
                     device,
-                    translate_depth_stencil_state(&ds_desc, metal_device)?,
+                    translate_depth_stencil_state(
+                        &ds_desc,
+                        metal_device.map(|dev| (dev, &caches.metal_depth_stencil)),
+                    )?,
                 ))
             })
             .map_or(ptr::null_mut(), |ptr| {
@@ -1540,7 +1512,8 @@ fn create_depth_stencil_state_impl(
     }
     let key = CanonicalDepthStencilKey::from_desc(d);
     match caches.depth_stencil.get_or_create(key, || {
-        let translated = translate_depth_stencil_state(d, metal_device)?;
+        let metal = metal_device.map(|dev| (dev, &caches.metal_depth_stencil));
+        let translated = translate_depth_stencil_state(d, metal)?;
         Ok(DeviceChildStateObject::new_with_d3d10(
             &DEPTH_STENCIL_STATE_VTBL,
             &crate::d3d10::DEPTH_STENCIL_STATE_VTBL,

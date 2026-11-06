@@ -410,6 +410,8 @@ impl CanonicalSamplerKey {
 }
 
 /// Per-device caches of blend, rasterizer, depth-stencil and sampler state objects.
+///
+/// Also of the Metal depth-stencil states those objects use, which equal descriptions share.
 #[derive(Default)]
 pub struct StateCaches {
     pub blend: StateObjectCache<CanonicalBlendKey, ID3D11BlendState1Vtbl, BlendState>,
@@ -418,4 +420,6 @@ pub struct StateCaches {
     pub depth_stencil:
         StateObjectCache<CanonicalDepthStencilKey, ID3D11DepthStencilStateVtbl, DepthStencilState>,
     pub sampler: StateObjectCache<CanonicalSamplerKey, ID3D11SamplerStateVtbl, SamplerState>,
+    /// The Metal depth-stencil states behind `depth_stencil`, shared across state objects.
+    pub metal_depth_stencil: dxmt_core::library::DepthStencilCache,
 }

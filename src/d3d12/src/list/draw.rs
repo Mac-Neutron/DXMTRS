@@ -46,7 +46,6 @@ use crate::{
     device::null,
     encoder::{ComputeEncoderData, EncoderData, EncoderType, RenderEncoderData},
     list::{DirtyFlags, DrawCallStatus, List},
-    pipeline::Graphics,
     root_signature::object::RootSignature,
 };
 
@@ -169,35 +168,6 @@ const fn geometry_warp(topo: u32) -> (u32, u32) {
     } else {
         (0, 0)
     }
-}
-
-fn get_depth_stencil_state(pso: &Graphics, dsv_planar: u32, dsv_readonly_flags: u32) -> u64 {
-    if dsv_planar == 0 {
-        if pso.device.is_null() {
-            return 0;
-        }
-        // SAFETY: `pso.device` is a valid `Device`.
-        let dev = unsafe { &*pso.device };
-        return dev
-            .default_depth_stencil_state
-            .as_ref()
-            .map_or(0, Obj::handle);
-    }
-    if dsv_planar == 1 {
-        let idx = if (dsv_readonly_flags & 1) != 0 { 5 } else { 4 };
-        return pso.depth_stencil_states[idx]
-            .as_ref()
-            .map_or(0, Obj::handle);
-    }
-    let idx = match dsv_readonly_flags {
-        3 => 3,
-        2 => 2,
-        1 => 1,
-        _ => 0,
-    };
-    pso.depth_stencil_states[idx]
-        .as_ref()
-        .map_or(0, Obj::handle)
 }
 
 /// Uploads `count` copies of `staging` (`root_sig.upload_qwords()` qwords each) to the GPU heap
@@ -622,7 +592,7 @@ pub fn pre_draw_with_options(
                 u32::from(r.dsv_readonly_flags),
             )
         };
-        let dss_handle = get_depth_stencil_state(pso_gfx, dsv_planar, dsv_ro);
+        let dss_handle = pso_gfx.depth_stencil_state(dsv_planar, dsv_ro);
         if dss_handle != list.bound_dss {
             encode_render_cmd(
                 alloc,
