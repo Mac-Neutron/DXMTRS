@@ -97,7 +97,7 @@ impl<T> NotImplementedReturn for Result<T, Hresult> {
 /// Logs `<file>:<method>(<line>) is not implemented.` and aborts via the CRT (`windows`).
 #[cfg(windows)]
 pub fn report_with<R>(file: &str, method: &str, line: u32, _fallback: R) -> R {
-    crate::LOG.err(&format!("{file}:{method}({line}) is not implemented."));
+    crate::err!("{file}:{method}({line}) is not implemented.");
     // SAFETY: CRT `abort()` terminates the process as C++ `IMPLEMENT_ME` does.
     unsafe { abort() }
 }
@@ -107,7 +107,7 @@ pub fn report_with<R>(file: &str, method: &str, line: u32, _fallback: R) -> R {
 pub fn report_with<R>(file: &str, method: &str, line: u32, fallback: R) -> R {
     #[cfg(test)]
     LAST_REPORTED.with(|slot| *slot.borrow_mut() = Some(method.to_owned()));
-    crate::LOG.err(&format!("{file}:{method}({line}) is not implemented."));
+    crate::err!("{file}:{method}({line}) is not implemented.");
     // SAFETY: sets the calling thread's thread-local flag in `winemetal.dylib`.
     unsafe { winemetal_sys::wmt_native_not_implemented() };
     fallback

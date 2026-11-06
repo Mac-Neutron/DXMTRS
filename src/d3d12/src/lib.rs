@@ -32,24 +32,12 @@ pub mod unimpl;
 use core::ffi::c_void;
 use std::sync::LazyLock;
 
-use dxmt_util::log::Logger;
-
 use crate::com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult};
-
-/// Native Rust allocations in `d3d12.dylib` use `snmalloc`.
-#[cfg(all(target_os = "macos", not(test)))]
-#[global_allocator]
-static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// `D3D_FEATURE_LEVEL_11_0` (`0xb000`), the minimum feature level `D3D12CreateDevice` accepts.
 pub const D3D_FEATURE_LEVEL_11_0: u32 = 0xb000;
 
-/// Process-wide logger for `d3d12.dll` (`Logger::s_instance("d3d12.log")` in `d3d12.cpp:29`).
-pub static LOG: Logger = Logger::new(if cfg!(test) {
-    "no_test_log/d3d12.log"
-} else {
-    "d3d12.log"
-});
+dxmt_util::dxmt_dll!(pub log "d3d12.log", allocator, type_info);
 
 /// One-time process initialization: latches `DXMT_STATS=1` and registers `atexit` natively.
 static INIT: LazyLock<()> = LazyLock::new(|| {
@@ -78,7 +66,7 @@ fn on_process_detach() {
 #[macro_export]
 macro_rules! err {
     ($($arg:tt)*) => {
-        $crate::LOG.err(&format!($($arg)*))
+        ::dxmt_util::err!($crate::LOG, $($arg)*)
     };
 }
 
@@ -86,80 +74,40 @@ macro_rules! err {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
-        $crate::LOG.warn(&format!($($arg)*))
+        ::dxmt_util::warn!($crate::LOG, $($arg)*)
     };
 }
 
 /// Logs an info message to `d3d12.log` (compiled out under `perf-build`).
-#[cfg(not(feature = "perf-build"))]
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::LOG.info(&format!($($arg)*))
-    };
-}
-
-/// No-op under `perf-build`.
-#[cfg(feature = "perf-build")]
-#[macro_export]
-macro_rules! info {
-    ($($arg:tt)*) => {
-        if false {
-            let _ = format_args!($($arg)*);
-        }
+        ::dxmt_util::info!($crate::LOG, $($arg)*)
     };
 }
 
 /// Logs a debug message to `d3d12.log` (compiled out under `perf-build`).
-#[cfg(not(feature = "perf-build"))]
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
-        $crate::LOG.debug(&format!($($arg)*))
-    };
-}
-
-/// No-op under `perf-build`.
-#[cfg(feature = "perf-build")]
-#[macro_export]
-macro_rules! debug {
-    ($($arg:tt)*) => {
-        if false {
-            let _ = format_args!($($arg)*);
-        }
+        ::dxmt_util::debug!($crate::LOG, $($arg)*)
     };
 }
 
 /// Logs a trace message to `d3d12.log` (compiled out under `perf-build`).
-#[cfg(not(feature = "perf-build"))]
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => {
-        $crate::LOG.trace(&format!($($arg)*))
+        ::dxmt_util::trace!($crate::LOG, $($arg)*)
     };
 }
 
-/// No-op under `perf-build`.
-#[cfg(feature = "perf-build")]
-#[macro_export]
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        if false {
-            let _ = format_args!($($arg)*);
-        }
-    };
-}
-
-/// Logs an error message once per call site.
+/// Logs an error message to `d3d12.log` once per call site.
 #[macro_export]
 macro_rules! err_once {
-    ($($arg:tt)*) => {{
-        use ::core::sync::atomic::{AtomicBool, Ordering};
-        static LOGGED: AtomicBool = AtomicBool::new(false);
-        if !LOGGED.swap(true, Ordering::Relaxed) {
-            $crate::LOG.err(&format!($($arg)*));
-        }
-    }};
+    ($($arg:tt)*) => {
+        ::dxmt_util::err_once!($crate::LOG, $($arg)*)
+    };
 }
 
 /// Log sink called by `dxmt_core::log` (`src/dxmt/src/log.rs:24`).
@@ -246,7 +194,7 @@ pub unsafe extern "system-unwind" fn D3D12GetInterface(
     ensure_init();
     // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
     if let Some(iid) = unsafe { Guid::read(riid) } {
-        LOG.warn(&format!("D3D12GetInterface: Unknown interface query {iid}"));
+        crate::warn!("D3D12GetInterface: Unknown interface query {iid}");
     }
     E_NOINTERFACE
 }
@@ -265,9 +213,7 @@ pub unsafe extern "system-unwind" fn D3D12GetDebugInterface(
     ensure_init();
     // SAFETY: `Guid::read` checks for null and uses `read_unaligned`.
     if let Some(iid) = unsafe { Guid::read(riid) } {
-        LOG.warn(&format!(
-            "D3D12GetDebugInterface: Unknown interface query {iid}"
-        ));
+        crate::warn!("D3D12GetDebugInterface: Unknown interface query {iid}");
     }
     E_NOINTERFACE
 }

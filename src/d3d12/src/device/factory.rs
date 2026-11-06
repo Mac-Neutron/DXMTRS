@@ -41,15 +41,6 @@ use crate::{
     },
 };
 
-/// The `type_info` vtable under its MSVC decorated name (`src/d3d9/src/arm64_crt.rs`).
-///
-/// Rust's `std::thread` `catch_unwind` emits a C++ type descriptor (`__rust_panic_type_info`)
-/// whose first field points at this vtable; every profile sets `panic = "abort"`, so nothing
-/// ever reads through it.
-#[cfg(windows)]
-#[unsafe(export_name = "??_7type_info@@6B@")]
-pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
-
 const D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE: u32 = 1;
 
 unsafe extern "system" {
