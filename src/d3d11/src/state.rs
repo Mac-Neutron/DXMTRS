@@ -87,6 +87,21 @@ const fn is_dual_source_factor(factor: u32) -> bool {
     factor >= 16
 }
 
+/// One past `D3D11_BLEND`'s last value: 20 and 21 are D3D12's, which D3D11 answers as 0.
+const D3D11_BLEND_END: u32 = 20;
+
+/// A render target's blend factors and operations for [`state_map::fill_blend`].
+const fn rt_blend(rt: &D3d11RenderTargetBlendDesc1) -> state_map::RtBlend {
+    state_map::RtBlend {
+        src: rt.src_blend,
+        dest: rt.dest_blend,
+        op: rt.blend_op,
+        src_alpha: rt.src_blend_alpha,
+        dest_alpha: rt.dest_blend_alpha,
+        op_alpha: rt.blend_op_alpha,
+    }
+}
+
 /// Promotes a D3D11 `D3D11_BLEND_DESC` into `D3D11_BLEND_DESC1`.
 #[must_use]
 pub const fn promote_blend_desc(desc: &D3d11BlendDesc) -> D3d11BlendDesc1 {
@@ -218,20 +233,7 @@ pub fn translate_blend_state(desc: &D3d11BlendDesc1) -> Result<BlendState, Hresu
         d.blending_enabled = u8::from(s.blend_enable != 0);
         d.write_mask =
             state_map::color_write_mask(u32::from(s.render_target_write_mask & 0x0f)).unwrap_or(0);
-        d.src_rgb_blend_factor = state_map::blend_factor(s.src_blend)
-            .filter(|_| s.src_blend < 20)
-            .unwrap_or(0);
-        d.dst_rgb_blend_factor = state_map::blend_factor(s.dest_blend)
-            .filter(|_| s.dest_blend < 20)
-            .unwrap_or(0);
-        d.rgb_blend_operation = state_map::blend_op(s.blend_op).unwrap_or(0);
-        d.src_alpha_blend_factor = state_map::blend_alpha_factor(s.src_blend_alpha)
-            .filter(|_| s.src_blend_alpha < 20)
-            .unwrap_or(0);
-        d.dst_alpha_blend_factor = state_map::blend_alpha_factor(s.dest_blend_alpha)
-            .filter(|_| s.dest_blend_alpha < 20)
-            .unwrap_or(0);
-        d.alpha_blend_operation = state_map::blend_op(s.blend_op_alpha).unwrap_or(0);
+        state_map::fill_blend(d, &rt_blend(s), D3D11_BLEND_END);
     }
 
     let rt0 = &desc_normalized.render_target[0];
@@ -305,27 +307,8 @@ impl BlendState {
                 if dxmt_core::format::is_integer(attachment_desc.pixel_format) {
                     continue;
                 }
-                attachment_desc.alpha_blend_operation =
-                    state_map::blend_op(render_target.blend_op_alpha).unwrap_or(0);
-                attachment_desc.rgb_blend_operation =
-                    state_map::blend_op(render_target.blend_op).unwrap_or(0);
                 attachment_desc.blending_enabled = u8::from(render_target.blend_enable != 0);
-                attachment_desc.src_alpha_blend_factor =
-                    state_map::blend_alpha_factor(render_target.src_blend_alpha)
-                        .filter(|_| render_target.src_blend_alpha < 20)
-                        .unwrap_or(0);
-                attachment_desc.src_rgb_blend_factor =
-                    state_map::blend_factor(render_target.src_blend)
-                        .filter(|_| render_target.src_blend < 20)
-                        .unwrap_or(0);
-                attachment_desc.dst_alpha_blend_factor =
-                    state_map::blend_alpha_factor(render_target.dest_blend_alpha)
-                        .filter(|_| render_target.dest_blend_alpha < 20)
-                        .unwrap_or(0);
-                attachment_desc.dst_rgb_blend_factor =
-                    state_map::blend_factor(render_target.dest_blend)
-                        .filter(|_| render_target.dest_blend < 20)
-                        .unwrap_or(0);
+                state_map::fill_blend(attachment_desc, &rt_blend(render_target), D3D11_BLEND_END);
             }
         }
         if self.desc.independent_blend_enable == 0

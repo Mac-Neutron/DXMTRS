@@ -8,9 +8,9 @@ use winemetal_wire::{
 };
 
 use super::{
-    DepthStencilDesc, StencilFace, address_mode, blend_alpha_factor, blend_factor,
+    DepthStencilDesc, RtBlend, StencilFace, address_mode, blend_alpha_factor, blend_factor,
     blend_factor_is_dual_source, blend_op, color_write_mask, compare_func, depth_stencil_info,
-    stencil_op,
+    fill_blend, stencil_op,
 };
 
 const D3D11_BLEND_FACTOR_MAP: [u8; 20] = [
@@ -198,4 +198,80 @@ fn depth_stencil_info_as_both_apis() {
             WMT_STENCIL_OPERATION_KEEP
         );
     }
+}
+
+/// Out-of-range blend values answer `ADD` and `ZERO` as both front ends did, 20 and 21 per API.
+#[test]
+fn fill_blend_as_both_apis() {
+    use winemetal_wire::{
+        WMT_BLEND_FACTOR_BLEND_ALPHA, WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA,
+        WMT_BLEND_FACTOR_SOURCE1_COLOR, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
+        WMT_BLEND_OPERATION_MAX, WMTColorAttachmentBlendInfo,
+    };
+    let fill = |rt: &RtBlend, end| {
+        let mut a = WMTColorAttachmentBlendInfo {
+            pixel_format: 0,
+            rgb_blend_operation: 0xa5,
+            alpha_blend_operation: 0xa5,
+            src_rgb_blend_factor: 0xa5,
+            dst_rgb_blend_factor: 0xa5,
+            src_alpha_blend_factor: 0xa5,
+            dst_alpha_blend_factor: 0xa5,
+            write_mask: 0xa5,
+            blending_enabled: 0xa5,
+        };
+        fill_blend(&mut a, rt, end);
+        assert_eq!((a.write_mask, a.blending_enabled), (0xa5, 0xa5));
+        a
+    };
+    for end in [20, 22] {
+        for bad in [0, 22, u32::MAX] {
+            let rt = RtBlend {
+                src: bad,
+                dest: bad,
+                op: 6,
+                src_alpha: bad,
+                dest_alpha: bad,
+                op_alpha: u32::MAX,
+            };
+            let a = fill(&rt, end);
+            assert_eq!(
+                [
+                    a.src_rgb_blend_factor,
+                    a.dst_rgb_blend_factor,
+                    a.src_alpha_blend_factor,
+                    a.dst_alpha_blend_factor
+                ],
+                [WMT_BLEND_FACTOR_ZERO; 4]
+            );
+            assert_eq!(
+                (a.rgb_blend_operation, a.alpha_blend_operation),
+                (WMT_BLEND_OPERATION_ADD, WMT_BLEND_OPERATION_ADD)
+            );
+        }
+    }
+    let rt = RtBlend {
+        src: 16,
+        dest: 20,
+        op: 5,
+        src_alpha: 14,
+        dest_alpha: 15,
+        op_alpha: 1,
+    };
+    let d3d12 = fill(&rt, 22);
+    assert_eq!(
+        (d3d12.src_rgb_blend_factor, d3d12.dst_rgb_blend_factor),
+        (WMT_BLEND_FACTOR_SOURCE1_COLOR, WMT_BLEND_FACTOR_BLEND_ALPHA)
+    );
+    assert_eq!(
+        (d3d12.src_alpha_blend_factor, d3d12.dst_alpha_blend_factor),
+        (
+            WMT_BLEND_FACTOR_BLEND_ALPHA,
+            WMT_BLEND_FACTOR_ONE_MINUS_BLEND_ALPHA
+        )
+    );
+    assert_eq!(d3d12.rgb_blend_operation, WMT_BLEND_OPERATION_MAX);
+    let d3d11 = fill(&rt, 20);
+    assert_eq!(d3d11.dst_rgb_blend_factor, WMT_BLEND_FACTOR_ZERO);
+    assert_eq!(d3d11.src_alpha_blend_factor, WMT_BLEND_FACTOR_BLEND_ALPHA);
 }

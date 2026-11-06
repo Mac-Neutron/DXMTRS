@@ -25,7 +25,7 @@ use winemetal_wire::{
     WMT_STENCIL_OPERATION_DECREMENT_CLAMP, WMT_STENCIL_OPERATION_DECREMENT_WRAP,
     WMT_STENCIL_OPERATION_INCREMENT_CLAMP, WMT_STENCIL_OPERATION_INCREMENT_WRAP,
     WMT_STENCIL_OPERATION_INVERT, WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_REPLACE,
-    WMT_STENCIL_OPERATION_ZERO, WMTDepthStencilInfo, WMTStencilInfo,
+    WMT_STENCIL_OPERATION_ZERO, WMTColorAttachmentBlendInfo, WMTDepthStencilInfo, WMTStencilInfo,
 };
 
 /// Metal's `WMTBlendFactor` for a `D3D*_BLEND` (0 to 21), `ZERO` for the unused 0, 12 and 13.
@@ -203,12 +203,6 @@ pub const fn depth_stencil_info(
         write_mask: 0,
         read_mask: 0,
     };
-    const fn or(mapped: Option<u8>, fallback: u8) -> u8 {
-        match mapped {
-            Some(value) => value,
-            None => fallback,
-        }
-    }
     const fn face(desc: &DepthStencilDesc, face: &StencilFace, fallback: u8) -> WMTStencilInfo {
         WMTStencilInfo {
             enabled: 1,
@@ -235,6 +229,49 @@ pub const fn depth_stencil_info(
         info.back_stencil = face(desc, &desc.back, stencil_op_fallback);
     }
     info
+}
+
+/// One render target's blend factors and operations, as D3D11 and D3D12 both give them.
+pub struct RtBlend {
+    pub src: u32,
+    pub dest: u32,
+    pub op: u32,
+    pub src_alpha: u32,
+    pub dest_alpha: u32,
+    pub op_alpha: u32,
+}
+
+/// Sets `attachment`'s blend operations and factors from `rt`.
+///
+/// A value outside an enum is `ADD` or `ZERO`, and so is a factor from `factor_end` up: D3D11
+/// passes 20 (its `D3D11_BLEND` ends at 19), D3D12 22. The write mask and the enable byte are
+/// the caller's.
+pub const fn fill_blend(
+    attachment: &mut WMTColorAttachmentBlendInfo,
+    rt: &RtBlend,
+    factor_end: u32,
+) {
+    const ADD: u8 = WMT_BLEND_OPERATION_ADD;
+    const ZERO: u8 = WMT_BLEND_FACTOR_ZERO;
+    /// `factor`, or a value outside the enum from `end` up.
+    const fn below(factor: u32, end: u32) -> u32 {
+        if factor < end { factor } else { u32::MAX }
+    }
+    let end = factor_end;
+    attachment.rgb_blend_operation = or(blend_op(rt.op), ADD);
+    attachment.alpha_blend_operation = or(blend_op(rt.op_alpha), ADD);
+    attachment.src_rgb_blend_factor = or(blend_factor(below(rt.src, end)), ZERO);
+    attachment.dst_rgb_blend_factor = or(blend_factor(below(rt.dest, end)), ZERO);
+    attachment.src_alpha_blend_factor = or(blend_alpha_factor(below(rt.src_alpha, end)), ZERO);
+    attachment.dst_alpha_blend_factor = or(blend_alpha_factor(below(rt.dest_alpha, end)), ZERO);
+}
+
+/// `mapped`, or `fallback` for a value outside the enum.
+const fn or(mapped: Option<u8>, fallback: u8) -> u8 {
+    match mapped {
+        Some(value) => value,
+        None => fallback,
+    }
 }
 
 #[cfg(test)]

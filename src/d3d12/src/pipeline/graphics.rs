@@ -294,25 +294,8 @@ pub(super) static VTBL: ID3D12PipelineStateVtbl = ID3D12PipelineStateVtbl {
     ),
 };
 
-/// `state_map`'s answer, or `fallback` for a value outside the enum (D3D12 clamps, D3D11 uses 0).
-const fn or_else(mapped: Option<u8>, fallback: u8) -> u8 {
-    match mapped {
-        Some(value) => value,
-        None => fallback,
-    }
-}
-
-pub(super) const fn blend_op(op: u32) -> u8 {
-    or_else(state_map::blend_op(op), WMT_BLEND_OPERATION_ADD)
-}
-
-pub(super) const fn blend_factor(factor: u32) -> u8 {
-    or_else(state_map::blend_factor(factor), WMT_BLEND_FACTOR_ZERO)
-}
-
-pub(super) const fn blend_alpha_factor(factor: u32) -> u8 {
-    or_else(state_map::blend_alpha_factor(factor), WMT_BLEND_FACTOR_ZERO)
-}
+/// One past `D3D12_BLEND`'s last value, `INV_ALPHA_FACTOR` (21).
+const D3D12_BLEND_END: u32 = 22;
 
 const IMMUTABLE_ROOT_BUFFERS: u32 =
     (1 << SM50_BINDING_INDEX_ROOT_ARGUMENTS) | (1 << SM50_BINDING_INDEX_STATIC_SAMPLERS);
@@ -680,10 +663,9 @@ fn initialize_color_targets(
         if desc.blend_state.independent_blend_enable != 0 && render_target.logic_op_enable != 0 {
             return E_INVALIDARG;
         }
-        rt.write_mask = or_else(
-            state_map::color_write_mask(u32::from(render_target.render_target_write_mask & 0xf)),
-            WMT_COLOR_WRITE_MASK_NONE,
-        );
+        rt.write_mask =
+            state_map::color_write_mask(u32::from(render_target.render_target_write_mask & 0xf))
+                .unwrap_or(WMT_COLOR_WRITE_MASK_NONE);
         if rt.pixel_format == WMT_PIXEL_FORMAT_RGB9E5_FLOAT {
             rt.write_mask = if (rt.write_mask & !WMT_COLOR_WRITE_MASK_ALPHA) != 0 {
                 WMT_COLOR_WRITE_MASK_ALL
@@ -707,13 +689,16 @@ fn initialize_color_targets(
             {
                 *dual_source_blending = true;
             }
-            rt.alpha_blend_operation = blend_op(render_target.blend_op_alpha);
-            rt.rgb_blend_operation = blend_op(render_target.blend_op);
             rt.blending_enabled = u8::try_from(render_target.blend_enable).unwrap_or(1);
-            rt.src_alpha_blend_factor = blend_alpha_factor(render_target.src_blend_alpha);
-            rt.src_rgb_blend_factor = blend_factor(render_target.src_blend);
-            rt.dst_alpha_blend_factor = blend_alpha_factor(render_target.dest_blend_alpha);
-            rt.dst_rgb_blend_factor = blend_factor(render_target.dest_blend);
+            let blend = state_map::RtBlend {
+                src: render_target.src_blend,
+                dest: render_target.dest_blend,
+                op: render_target.blend_op,
+                src_alpha: render_target.src_blend_alpha,
+                dest_alpha: render_target.dest_blend_alpha,
+                op_alpha: render_target.blend_op_alpha,
+            };
+            state_map::fill_blend(rt, &blend, D3D12_BLEND_END);
         }
         if i < 2 {
             effective_dual_source_rtvs += 1;
