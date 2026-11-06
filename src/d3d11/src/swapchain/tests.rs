@@ -9,7 +9,7 @@ use dxmt_core::{
     arena::{BlockPool, Commands},
     swapchain::{convert_color_space, convert_format, vsync_duration},
 };
-use dxmt_util::sync::CpuFence;
+use dxmt_util::{dxgi_vtbl::IDXGISwapChain4Vtbl, sync::CpuFence};
 use winemetal_sys::wire::{
     WMT_COLOR_SPACE_BT2020, WMT_COLOR_SPACE_HDR_PQ, WMT_COLOR_SPACE_HDR_SC_RGB,
     WMT_COLOR_SPACE_INVALID, WMT_COLOR_SPACE_SRGB, WMT_COLOR_SPACE_SRGB_LINEAR,
@@ -35,7 +35,7 @@ use crate::{
             DxgiFrameStatistics, DxgiRational, DxgiRgba, DxgiSampleDesc, DxgiSwapChainDesc,
             DxgiSwapChainDesc1,
         },
-        vtbl::{IDXGISwapChain4Vtbl, IUnknownVtbl},
+        vtbl::IUnknownVtbl,
     },
     com::{E_INVALIDARG, Hresult, S_OK, vtbl},
 };

@@ -169,7 +169,7 @@ leg_gen() {
     IUnknown IDXGIObject IDXGIDeviceSubObject \
     IDXGIDevice IDXGIDevice1 IDXGIDevice2 IDXGIDevice3 \
     IDXGIResource IDXGIResource1 IDXGISurface IDXGISurface1 IDXGISurface2 \
-    IDXGIKeyedMutex IDXGISwapChain IDXGISwapChain1 IDXGISwapChain2 IDXGISwapChain3 IDXGISwapChain4 \
+    IDXGIKeyedMutex \
     ID3D11DeviceChild ID3D11Resource ID3D11Buffer \
     ID3D11Texture1D ID3D11Texture2D ID3D11Texture2D1 ID3D11Texture3D ID3D11Texture3D1 \
     ID3D11View ID3D11ShaderResourceView ID3D11ShaderResourceView1 \

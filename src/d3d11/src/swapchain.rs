@@ -18,7 +18,7 @@ use dxmt_util::wsi;
 use dxmt_util::{
     GammaRamp,
     com::{Qi, QiMiss, qi_table},
-    dxgi_vtbl::{IDXGIAdapterVtbl, IDXGIOutput1Vtbl},
+    dxgi_vtbl::{IDXGIAdapterVtbl, IDXGIOutput1Vtbl, IDXGISwapChain4Vtbl},
     ext::{IID_IMTL_DXGI_DEVICE, IID_IMTL_DXGI_OUTPUT, IMTLDXGIOutputVtbl},
     private_data::{
         HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
@@ -68,7 +68,7 @@ use crate::{
             DxgiPresentParameters, DxgiRational, DxgiRgba, DxgiSwapChainDesc, DxgiSwapChainDesc1,
             DxgiSwapChainFullscreenDesc,
         },
-        vtbl::{ID3D11Device5Vtbl, IDXGIDevice3Vtbl, IDXGISwapChain4Vtbl, IUnknownVtbl},
+        vtbl::{ID3D11Device5Vtbl, IDXGIDevice3Vtbl, IUnknownVtbl},
     },
     com::{
         ComObject, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult,
