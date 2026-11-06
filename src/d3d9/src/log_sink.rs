@@ -56,14 +56,11 @@ use std::{
     },
 };
 
+use dxmt_util::crash::veh::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExA};
 use log::warn;
 use mtld3d_shared::{LogLineKind, OpenLogParams, WriteLogParams, log_once_warn};
 
-use crate::{
-    LOG_TARGET,
-    crash::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExA},
-    unix_call::unix_call,
-};
+use crate::{LOG_TARGET, unix_call::unix_call};
 
 unsafe extern "system" {
     fn FreeLibrary(module: *mut c_void) -> i32;

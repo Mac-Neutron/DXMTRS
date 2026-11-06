@@ -33,8 +33,9 @@ at it.
   `aarch64` and run under Wine. They used to link against the Windows SDK
   libraries that xwin supplied; this tree no longer fetches xwin, so the programs
   compile (`cargo check` and clippy cover them) but do not link, and the
-  runner's own unit tests run in the gate. They are built again, with llvm-mingw,
-  when D3D9 moves onto the shared core. Until then the sections "Reading a test
+  runner's own unit tests run in the gate. They are built again with llvm-mingw
+  in a later step; SC-2 moved D3D9's crash reporter onto the shared core without
+  them. Until then the sections "Reading a test
   run" and "Benchmarks" describe what the runner does when it is given built
   programs.
 

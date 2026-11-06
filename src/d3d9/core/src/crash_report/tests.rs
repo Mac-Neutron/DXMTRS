@@ -7,9 +7,10 @@
 //! The segment tests build Mach-O headers by hand: the layout Wine's loader
 //! links with, whose zero-fill segments `dladdr` attributes guest addresses
 //! to, a slid image, so the slide is applied, and a shared-cache image, whose
-//! `__TEXT` maps no file offset 0. The panic-line tests pin std's wording,
-//! the stand-in for a payload that is not a string, the cut of a message
-//! too long for the buffer, and that a finished line takes no more text.
+//! `__TEXT` maps no file offset 0. The crash-line tests pin D3D9's literals
+//! in the lines `dxmt_util::crash` builds.
+
+use dxmt_util::crash::{PanicLine, base_line, fatal_line, foreign_line};
 
 use super::*;
 
@@ -301,89 +302,49 @@ fn no_report_waits_for_a_busy_sink() {
 }
 
 #[test]
-fn a_panic_line_words_the_report_as_the_default_hook_does() {
-    let location = Location::caller();
-    let line = PanicLine::new("[t] PANIC: ", "worker", 2180, Some(location), Some("boom"));
+fn a_fatal_line_is_d3d9s() {
     assert_eq!(
-        core::str::from_utf8(line.bytes()).expect("the line is UTF-8"),
-        format!("[t] PANIC: thread 'worker' (2180) panicked at {location}:\nboom\n")
+        fatal_line(FATAL_PREFIX, 0xC000_0005, 0x1234, (16, 8)).bytes(),
+        b"[mtld3d::d3d9] FATAL: code=0x00000000c0000005 addr=0x0000000000001234 free_mib=0x0000000000000010 largest_free_mib=0x0000000000000008\n"
     );
 }
 
 #[test]
-fn a_panic_line_names_a_payload_that_is_not_a_string_and_a_missing_location() {
-    let line = PanicLine::new("", "<unnamed>", 7, None, None);
+fn a_foreign_fault_names_its_module_or_a_question_mark() {
+    let path: Vec<u16> = "C:\\game\\x.dll".encode_utf16().collect();
     assert_eq!(
-        core::str::from_utf8(line.bytes()).expect("the line is UTF-8"),
-        "thread '<unnamed>' (7) panicked at an unknown location:\nBox<dyn Any>\n"
+        foreign_line(
+            FOREIGN_PREFIX,
+            0xC000_0005,
+            0x10,
+            Some((path.as_slice(), 0x40_0000)),
+            (1, 1)
+        )
+        .bytes(),
+        b"[mtld3d::d3d9] fault outside d3d9.dll: code=0x00000000c0000005 addr=0x0000000000000010 module=C:\\game\\x.dll base=0x0000000000400000 free_mib=0x0000000000000001 largest_free_mib=0x0000000000000001\n"
     );
-}
-
-#[test]
-fn a_panic_line_cuts_a_long_message_at_a_character_boundary_and_marks_it() {
-    // Two-byte characters, so the room left over is odd for one of the
-    // two prefixes and the cut has to step back off half a character.
-    let message = "\u{e9}".repeat(PANIC_LINE_CAPACITY);
-    for prefix in ["p", "pp"] {
-        let line = PanicLine::new(prefix, "t", 1, None, Some(&message));
-        let text = core::str::from_utf8(line.bytes()).expect("the cut keeps the line UTF-8");
-        assert!(line.bytes().len() <= PANIC_LINE_CAPACITY);
-        assert!(
-            line.bytes().len() > PANIC_LINE_CAPACITY - PANIC_LINE_TRUNCATED.len() - 2,
-            "the line fills the buffer up to the marker"
-        );
-        assert!(text.ends_with("\u{e9} [truncated]\n"), "{text}");
-        assert!(text.starts_with(&format!("{prefix}thread 't' (1) panicked at ")));
-    }
-}
-
-#[test]
-fn a_full_cursor_refuses_more_text_and_still_ends_the_line() {
-    let mut buf = [0; PANIC_LINE_CAPACITY];
-    let mut cursor = LineCursor::new(&mut buf);
-    let fill = "x".repeat(PANIC_LINE_CAPACITY);
-    assert!(cursor.write_str(&fill).is_err(), "the fill does not fit");
     assert!(
-        cursor.write_str("more").is_err(),
-        "a full cursor takes nothing"
+        foreign_line(FOREIGN_PREFIX, 1, 2, None, (0, 0))
+            .bytes()
+            .windows(9)
+            .any(|w| w == b"module=? ")
     );
-    assert!(cursor.write_str("").is_ok(), "an empty write fits anywhere");
-    let len = cursor.finish();
-    assert_eq!(len, PANIC_LINE_CAPACITY);
-    assert!(buf.ends_with(PANIC_LINE_TRUNCATED.as_bytes()));
 }
-
-/// Asks whether `T` implements [`Write`]: a method call on `&WriteProbe<T>` picks [`ViaWrite`].
-///
-/// [`ViaWrite`] is implemented for the probe itself and so applies to the
-/// call's receiver as written when `T` is [`Write`]; [`NotWrite`], on the
-/// probe's reference, is reached only by the extra borrow the compiler tries
-/// next, so it answers for every other `T`.
-struct WriteProbe<T>(core::marker::PhantomData<T>);
-
-/// The answer for a probed type that implements [`Write`].
-trait ViaWrite {
-    fn implements_write(&self) -> bool {
-        true
-    }
-}
-
-impl<T: Write> ViaWrite for WriteProbe<T> {}
-
-/// The answer for a probed type that does not.
-trait NotWrite {
-    fn implements_write(&self) -> bool {
-        false
-    }
-}
-
-impl<T> NotWrite for &WriteProbe<T> {}
 
 #[test]
-fn a_finished_panic_line_takes_no_more_text() {
-    // Only the private cursor writes; the finished line has no writer of its own.
-    let line = &WriteProbe::<PanicLine>(core::marker::PhantomData);
-    assert!(!line.implements_write());
-    let cursor = &WriteProbe::<LineCursor<'_>>(core::marker::PhantomData);
-    assert!(cursor.implements_write());
+fn the_base_line_is_d3d9s() {
+    assert_eq!(
+        base_line(BASE_PREFIX, 0x7b6e_0000).bytes(),
+        b"[mtld3d::d3d9] d3d9.dll base=0x000000007b6e0000\n"
+    );
+}
+
+#[test]
+fn the_panic_literals_are_d3d9s() {
+    let line = PanicLine::new(PANIC_PREFIX, "main", 7, None, Some("boom"));
+    assert!(line.bytes().starts_with(b"[mtld3d::d3d9] PANIC: "));
+    assert_eq!(
+        PANIC_HEADING,
+        b"[mtld3d::d3d9] PANIC - dumping crumb trail:\n"
+    );
 }

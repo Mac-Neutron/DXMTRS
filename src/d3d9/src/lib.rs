@@ -46,6 +46,9 @@ use core::{
 };
 use std::sync::Arc;
 
+use dxmt_util::crash::veh::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExA,
+};
 use mtld3d_shared::{InitLoggerParams, identity};
 // HRESULT codes live in `mtld3d_types` (shared with the integration-test
 // harness); re-exported under the crate root so every in-crate
@@ -55,13 +58,7 @@ use mtld3d_types::{
     S_FALSE,
 };
 
-use crate::{
-    crash::{
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExA,
-    },
-    direct3d9::Direct3D9,
-    unix_call::unix_call,
-};
+use crate::{direct3d9::Direct3D9, unix_call::unix_call};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_PROCESS_DETACH: u32 = 0;
@@ -161,7 +158,7 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
         // A FreeLibrary before any device, which the process survives (or
         // process exit before any device): take the process-wide pointers
         // into this image down with it.
-        crash::uninstall();
+        dxmt_util::crash::veh::uninstall();
         mode_list_hook::uninstall();
         exit_code_hook::uninstall();
     }
@@ -369,7 +366,7 @@ fn init_logger(instance: *mut c_void) {
     // into the same `/tmp/mtld3d-crumb.bin` file so PE+unix events
     // interleave by seq.
     mtld3d_shared::crumb::init();
-    crash::install(instance);
+    dxmt_util::crash::veh::install(instance, &crash::REPORTER);
     mtld3d_shared::crumb::set_write_sink(log_sink::write_fault);
     // The resolved filter, which the unix side takes verbatim.
     let level = std::env::var("DXMT_LOG_LEVEL").ok();

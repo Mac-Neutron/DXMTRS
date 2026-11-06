@@ -46,7 +46,7 @@ came from elsewhere keep their own notices, and this is where they are:
 - **dxmt-util is LGPL and is linked into every D3D9 binary** (`d3d9.dll`, `mtld3d.dll`, `mtld3d.so`, the Mac's and the
   VM's), which are LGPL combined works; the source offer is this repository. Its files from mtld3d keep the zlib notice:
   `src/util/src/log/once.rs` (+tests), `src/util/src/log/paths.rs` (+tests),
-  `src/util/src/config/mtld3d.rs` (+tests).
+  `src/util/src/config/mtld3d.rs` (+tests), `src/util/src/crash.rs` (+tests), `src/util/src/crash/veh.rs`.
 - **airconv's DXBC readers are MIT.** `src/airconv/ir`'s container, signature and token readers are ported from
   [`libs/DXBCParser`](libs/DXBCParser) (Microsoft, MIT); each ported file keeps that notice, and the crate's manifest
   says `LGPL-2.1-or-later AND MIT`.

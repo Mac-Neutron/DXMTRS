@@ -3,6 +3,7 @@
 pub mod boot;
 pub mod com;
 pub mod config;
+pub mod crash;
 pub mod dxgi_consts;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod dxgi_vtbl;
