@@ -6,7 +6,7 @@ use core::{
 
 use super::{
     ComObject, E_NOINTERFACE, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, Managed, S_OK, TearOff,
-    iface_of, write_out,
+    container_of, iface_of, write_out,
 };
 
 #[repr(C)]

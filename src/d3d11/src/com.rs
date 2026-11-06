@@ -1,35 +1,24 @@
 //! COM reference-counting and interface helpers for the D3D11 front end (`crate::com`).
 //!
-//! Re-exports [`dxmt_util::com`]'s `Guid`, `Hresult`, `ComObject` and `IUnknown` helpers, and
-//! provides [`Managed`] (`ManagedDeviceChild` of `d3d11_device_child.hpp`), [`TearOff`],
-//! [`SendPtr`], [`container_of!`] and [`iface_of`].
+//! Re-exports [`dxmt_util::com`]'s `Guid`, `Hresult`, `ComObject` and `IUnknown` helpers, and its
+//! `TearOff`, `container_of!` and `iface_of`; provides [`Managed`] (`ManagedDeviceChild` of
+//! `d3d11_device_child.hpp`) and [`SendPtr`].
 
 use core::{
     ffi::c_void,
     sync::atomic::{AtomicU32, Ordering},
 };
 
-pub use dxmt_util::com::{
-    ComObject, ComObjectWithInitialRef, DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_FAIL,
-    E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, Guid, Hresult, IID_IUNKNOWN,
-    IUnknownVtbl, Object, S_FALSE, S_OK, add_ref, qi_log, query, release, vtbl, write_out,
+pub use dxmt_util::{
+    com::{
+        ComObject, ComObjectWithInitialRef, DXGI_ERROR_MORE_DATA, DXGI_ERROR_NOT_FOUND, E_FAIL,
+        E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, Guid, Hresult,
+        IID_IUNKNOWN, IUnknownVtbl, Object, S_FALSE, S_OK, add_ref,
+        companion::{TearOff, iface_of},
+        qi_log, query, release, vtbl, write_out,
+    },
+    container_of,
 };
-
-/// Recovers a pointer to outer `#[repr(C)]` `$Container` from a pointer `$ptr` to `$field`.
-#[macro_export]
-macro_rules! container_of {
-    ($ptr:expr, $Container:ty, $field:ident) => {
-        $ptr.wrapping_byte_sub(core::mem::offset_of!($Container, $field))
-            .cast::<$Container>()
-    };
-}
-pub use container_of;
-
-/// Returns a raw COM interface pointer to a vtable field inside `&self`.
-#[must_use]
-pub const fn iface_of<V>(vtbl_field: &*const V) -> *mut c_void {
-    core::ptr::from_ref(vtbl_field).cast_mut().cast()
-}
 
 /// [`Send`] + [`Sync`] raw pointer wrapper for COM objects or mapped GPU memory in closures.
 #[repr(transparent)]
@@ -132,79 +121,6 @@ impl Managed {
     #[must_use]
     pub fn private_count(&self) -> u32 {
         self.priv_count.load(Ordering::SeqCst)
-    }
-}
-
-/// A tear-off COM sub-object embedded by value inside `outer` (`P6`).
-///
-/// Its first field is `vtbl`, so a pointer to `TearOff<V>` is a valid COM interface pointer; its
-/// [`Self::query_interface`], [`Self::add_ref`] and [`Self::release`] thunks forward `IUnknown`
-/// calls directly to `outer`.
-#[repr(C)]
-pub struct TearOff<V> {
-    pub vtbl: *const V,
-    pub outer: *mut c_void,
-}
-
-impl<V> TearOff<V> {
-    /// Creates a tear-off with `vtbl` forwarding `IUnknown` to `outer`.
-    #[must_use]
-    pub const fn new(vtbl: &'static V, outer: *mut c_void) -> Self {
-        Self { vtbl, outer }
-    }
-
-    /// Raw COM interface pointer for this tear-off.
-    #[must_use]
-    pub const fn as_iface(&self) -> *mut c_void {
-        core::ptr::from_ref(self).cast_mut().cast()
-    }
-}
-
-impl TearOff<()> {
-    /// Forwards `IUnknown::QueryInterface` to the tear-off's `outer` container.
-    ///
-    /// # Safety
-    ///
-    /// `this` is a valid pointer to a [`TearOff<V>`] whose `outer` is a live COM object.
-    pub unsafe extern "system-unwind" fn query_interface(
-        this: *mut c_void,
-        riid: *const c_void,
-        out: *mut *mut c_void,
-    ) -> Hresult {
-        // SAFETY: `this` points to a live `TearOff<V>`.
-        let outer = unsafe { (*this.cast::<Self>()).outer };
-        // SAFETY: `outer` is a live COM object whose vtable starts with `IUnknownVtbl`.
-        let unk = unsafe { vtbl::<IUnknownVtbl>(outer) };
-        // SAFETY: forwards the caller's `riid` and `out` to `outer`.
-        unsafe { (unk.query_interface)(outer, riid.cast::<Guid>(), out) }
-    }
-
-    /// Forwards `IUnknown::AddRef` to the tear-off's `outer` container.
-    ///
-    /// # Safety
-    ///
-    /// `this` is a valid pointer to a [`TearOff<V>`] whose `outer` is a live COM object.
-    pub unsafe extern "system-unwind" fn add_ref(this: *mut c_void) -> u32 {
-        // SAFETY: `this` points to a live `TearOff<V>`.
-        let outer = unsafe { (*this.cast::<Self>()).outer };
-        // SAFETY: `outer` is a live COM object whose vtable starts with `IUnknownVtbl`.
-        let unk = unsafe { vtbl::<IUnknownVtbl>(outer) };
-        // SAFETY: `outer` is live.
-        unsafe { (unk.add_ref)(outer) }
-    }
-
-    /// Forwards `IUnknown::Release` to the tear-off's `outer` container.
-    ///
-    /// # Safety
-    ///
-    /// `this` is a valid pointer to a [`TearOff<V>`] whose `outer` is a live COM object.
-    pub unsafe extern "system-unwind" fn release(this: *mut c_void) -> u32 {
-        // SAFETY: `this` points to a live `TearOff<V>`.
-        let outer = unsafe { (*this.cast::<Self>()).outer };
-        // SAFETY: `outer` is a live COM object whose vtable starts with `IUnknownVtbl`.
-        let unk = unsafe { vtbl::<IUnknownVtbl>(outer) };
-        // SAFETY: `outer` is live.
-        unsafe { (unk.release)(outer) }
     }
 }
 
