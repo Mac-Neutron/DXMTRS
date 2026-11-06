@@ -4,21 +4,14 @@ mod abi;
 
 use core::{ffi::c_void, ptr};
 
-use dxmt_util::{
-    com::{self, Hresult, IUnknownVtbl},
-    log::Logger,
-};
+use dxmt_util::com::{self, Hresult, IUnknownVtbl};
 
 use crate::abi::{
     AdapterCheckVtbl, D3D10_CREATE_DEVICE_SINGLETHREADED, DXMT_D3D10_DEVICE, E_INVALIDARG,
     E_NOTIMPL, IID_ID3D10_DEVICE, IID_ID3D10_MULTITHREAD, MultithreadVtbl,
 };
 
-/// This DLL's log file.
-///
-/// Process-wide resource: one log file per DLL, opened by the first message that passes the
-/// level, and the exports have no object to hold it. It is DXMT's `Logger::s_instance`.
-static LOG: Logger = Logger::new("d3d10core.log");
+dxmt_util::dxmt_dll!(log "d3d10core.log");
 
 unsafe extern "system" {
     /// DXMT's d3d11 device constructor, which `d3d11.dll` and `d3d11.dylib` export.

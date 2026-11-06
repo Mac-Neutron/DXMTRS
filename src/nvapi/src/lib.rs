@@ -9,13 +9,7 @@ pub mod sys;
 
 use core::ffi::c_void;
 
-use dxmt_util::log::Logger;
-
-/// This DLL's log file.
-///
-/// Process-wide resource: one log file per DLL, opened by the first message that passes the
-/// level, and the exports have no object to hold it. It is DXMT's `Logger::s_instance`.
-static LOG: Logger = Logger::new("nvapi.log");
+dxmt_util::dxmt_dll!(log "nvapi.log");
 
 /// NVIDIA's table of function names and IDs.
 const INTERFACE_TABLE: &str = include_str!("../../../external/nvapi/nvapi_interface.h");

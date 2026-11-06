@@ -14,16 +14,6 @@ pub mod kmt;
 pub mod modes;
 pub mod nvext;
 pub mod output;
-use dxmt_util::log::Logger;
 pub use dxmt_util::{private_data, wsi};
 
-/// This DLL's log file.
-///
-/// Process-wide resource: one log file per DLL, opened by the first message that passes the
-/// level, and the exports have no object to hold it. It is DXMT's `Logger::s_instance`.
-static LOG: Logger = Logger::new("dxgi.log");
-
-/// Native Rust allocations in `dxgi.dylib` use `snmalloc`.
-#[cfg(all(target_os = "macos", not(test)))]
-#[global_allocator]
-static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+dxmt_util::dxmt_dll!(log "dxgi.log", allocator);

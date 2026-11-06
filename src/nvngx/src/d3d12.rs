@@ -13,9 +13,12 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use dxmt_util::ext::{
-    D3D12CommandListExtVtbl, D3D12DeviceExtVtbl, D3D12ScalerDesc, D3D12UpscaleDesc,
-    IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
+use dxmt_util::{
+    ext::{
+        D3D12CommandListExtVtbl, D3D12DeviceExtVtbl, D3D12ScalerDesc, D3D12UpscaleDesc,
+        IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
+    },
+    sync::lock,
 };
 
 use crate::{
@@ -276,9 +279,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_EvaluateFeature(
     }
     // SAFETY: a Direct3D 12 feature, live until ReleaseFeature.
     let feature = unsafe { &*handle.cast::<c_void>().cast::<Feature>() };
-    let Ok(mut scaler) = feature.scaler.lock() else {
-        return FAIL;
-    };
+    let mut scaler = lock(&feature.scaler);
     evaluate(feature, &mut scaler, list, params)
 }
 
