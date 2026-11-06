@@ -19,8 +19,8 @@ use winemetal_sys::{
 };
 
 use super::{
-    D3D11_CREATE_DEVICE_D3D10_INTERNAL, D3D11_CREATE_DEVICE_SINGLETHREADED, DEFAULT_FEATURE_LEVELS,
-    DxgiDevice, create_with_core, max_feature_level_from_config, select_feature_level,
+    D3D11_CREATE_DEVICE_D3D10_INTERNAL, DEFAULT_FEATURE_LEVELS, DxgiDevice, create_with_core,
+    max_feature_level_from_config, select_feature_level,
 };
 use crate::abi::{
     IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D10_MULTITHREAD, IID_ID3D11_DEVICE,
@@ -421,15 +421,13 @@ fn invalid_usage_is_invalid_arg() {
     }
 }
 
+/// A D3D11 device starts unprotected.
+///
+/// As DXMT's C++ (`d3d11_device_mutex::protected_ = false`) and 11067f9: the application turns
+/// protection on with `SetMultithreadProtected`.
 #[test]
-fn multithread_protection_follows_the_create_flag() {
+fn multithread_protection_starts_off() {
     let raw = new_test_device(0xb000, 0);
-    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-    assert!(unsafe { &(*raw).d3d11 }.mutex.get_protected());
-    // SAFETY: Releasing the initial ref on `raw`.
-    unsafe { release(raw.cast::<c_void>()) };
-
-    let raw = new_test_device(0xb000, D3D11_CREATE_DEVICE_SINGLETHREADED);
     // SAFETY: `raw` is a valid `DxgiDevice` pointer.
     assert!(!unsafe { &(*raw).d3d11 }.mutex.get_protected());
     // SAFETY: Releasing the initial ref on `raw`.
