@@ -8,7 +8,9 @@ use std::{
 
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
     sha1::Sha1,
     sync::lock,
 };
@@ -575,54 +577,11 @@ unsafe extern "system-unwind" fn shader_get_device<V: 'static>(
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn shader_get_private_data<V: 'static>(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<ShaderObject<V>>();
-    // SAFETY: `this` is valid.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn shader_set_private_data<V: 'static>(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<ShaderObject<V>>();
-    // SAFETY: `this` is valid.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn shader_set_private_data_interface<V: 'static>(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<ShaderObject<V>>();
-    // SAFETY: `this` is valid.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_interface(g, iface.cast_mut()) }
+impl<V: 'static> HasPrivateData for ShaderObject<V> {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `ShaderObject<V>`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 macro_rules! define_shader_vtbl {
@@ -678,9 +637,9 @@ macro_rules! define_shader_vtbl {
             add_ref: shader_add_ref::<$VtblTy>,
             release: shader_release::<$VtblTy>,
             get_device: shader_get_device::<$VtblTy>,
-            get_private_data: shader_get_private_data::<$VtblTy>,
-            set_private_data: shader_set_private_data::<$VtblTy>,
-            set_private_data_interface: shader_set_private_data_interface::<$VtblTy>,
+            get_private_data: get_private_data::<ShaderObject<$VtblTy>>,
+            set_private_data: set_private_data::<ShaderObject<$VtblTy>>,
+            set_private_data_interface: set_private_data_interface::<ShaderObject<$VtblTy>>,
         };
     };
 }

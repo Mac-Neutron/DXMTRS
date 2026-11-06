@@ -8,6 +8,9 @@ use core::{
 use dxmt_util::{
     com::{E_FAIL, E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_OK, add_ref, write_out},
     dxgi_consts::D3D11_USAGE_STAGING,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -68,9 +71,9 @@ pub static VTBL: ID3D11Device5Vtbl = ID3D11Device5Vtbl {
     check_counter_info,
     check_counter,
     check_feature_support,
-    get_private_data,
-    set_private_data,
-    set_private_data_interface,
+    get_private_data: get_private_data::<Device>,
+    set_private_data: set_private_data::<Device>,
+    set_private_data_interface: set_private_data_interface::<Device>,
     get_feature_level,
     get_creation_flags,
     get_device_removed_reason,
@@ -538,57 +541,13 @@ unsafe extern "system-unwind" fn check_feature_support(
     dev.inspection().check_feature_support(feature, data, size)
 }
 
-unsafe extern "system-unwind" fn get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Device` pointer.
-    let container = unsafe { (*this.cast::<Device>()).container };
-    // SAFETY: `container` is the enclosing `DxgiDevice`.
-    let dxgi = unsafe { &*container };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::get_data`.
-    unsafe { dxgi.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Device` pointer.
-    let container = unsafe { (*this.cast::<Device>()).container };
-    // SAFETY: `container` is the enclosing `DxgiDevice`.
-    let dxgi = unsafe { &*container };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_data`.
-    unsafe { dxgi.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    unknown: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `Device` pointer.
-    let container = unsafe { (*this.cast::<Device>()).container };
-    // SAFETY: `container` is the enclosing `DxgiDevice`.
-    let dxgi = unsafe { &*container };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_interface`.
-    unsafe { dxgi.private_data.set_interface(g, unknown.cast_mut()) }
+impl HasPrivateData for Device {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a valid `Device` pointer.
+        let container = unsafe { (*this.cast::<Self>()).container };
+        // SAFETY: `container` is the enclosing `DxgiDevice`.
+        &unsafe { &*container }.private_data
+    }
 }
 
 const unsafe extern "system-unwind" fn get_feature_level(this: *mut c_void) -> u32 {

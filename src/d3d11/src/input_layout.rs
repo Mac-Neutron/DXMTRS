@@ -13,7 +13,9 @@ use airconv_ir::{
 use dxmt_core::format::query_dxgi;
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 use winemetal_wire::WMT_ATTRIBUTE_FORMAT_INVALID;
 
@@ -589,54 +591,11 @@ unsafe extern "system-unwind" fn il_get_device(this: *mut c_void, out: *mut *mut
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn il_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<InputLayoutObject>();
-    // SAFETY: `this` is a valid `InputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn il_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<InputLayoutObject>();
-    // SAFETY: `this` is a valid `InputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn il_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<InputLayoutObject>();
-    // SAFETY: `this` is a valid `InputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for InputLayoutObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `InputLayoutObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 static INPUT_LAYOUT_VTBL: ID3D11InputLayoutVtbl = ID3D11InputLayoutVtbl {
@@ -644,9 +603,9 @@ static INPUT_LAYOUT_VTBL: ID3D11InputLayoutVtbl = ID3D11InputLayoutVtbl {
     add_ref: il_add_ref,
     release: il_release,
     get_device: il_get_device,
-    get_private_data: il_get_private_data,
-    set_private_data: il_set_private_data,
-    set_private_data_interface: il_set_private_data_interface,
+    get_private_data: get_private_data::<InputLayoutObject>,
+    set_private_data: set_private_data::<InputLayoutObject>,
+    set_private_data_interface: set_private_data_interface::<InputLayoutObject>,
 };
 
 fn create_input_layout_impl(
@@ -793,54 +752,11 @@ unsafe extern "system-unwind" fn so_get_device(this: *mut c_void, out: *mut *mut
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn so_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<StreamOutputLayoutObject>();
-    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn so_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<StreamOutputLayoutObject>();
-    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn so_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> i32 {
-    // SAFETY: reads `guid`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<StreamOutputLayoutObject>();
-    // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: forwards COM arguments.
-    unsafe { pd.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for StreamOutputLayoutObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `StreamOutputLayoutObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 static SO_LAYOUT_VTBL: ID3D11GeometryShaderVtbl = ID3D11GeometryShaderVtbl {
@@ -848,9 +764,9 @@ static SO_LAYOUT_VTBL: ID3D11GeometryShaderVtbl = ID3D11GeometryShaderVtbl {
     add_ref: so_add_ref,
     release: so_release,
     get_device: so_get_device,
-    get_private_data: so_get_private_data,
-    set_private_data: so_set_private_data,
-    set_private_data_interface: so_set_private_data_interface,
+    get_private_data: get_private_data::<StreamOutputLayoutObject>,
+    set_private_data: set_private_data::<StreamOutputLayoutObject>,
+    set_private_data_interface: set_private_data_interface::<StreamOutputLayoutObject>,
 };
 
 fn create_gs_with_so_impl(

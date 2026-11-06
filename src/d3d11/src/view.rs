@@ -10,7 +10,9 @@ use dxmt_core::{
 };
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -32,7 +34,7 @@ use crate::{
             ID3D11UnorderedAccessView1Vtbl, IUnknownVtbl,
         },
     },
-    com::{ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, add_ref, vtbl},
+    com::{ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, Hresult, add_ref, vtbl},
     d3d10,
     device::Device,
     resource::{self, Resource, ResourceDesc, ResourceKind},
@@ -486,51 +488,11 @@ unsafe extern "system-unwind" fn srv_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn srv_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `SrvObject`.
-    let obj = unsafe { &*this.cast::<SrvObject>() };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn srv_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `SrvObject`.
-    let obj = unsafe { &*this.cast::<SrvObject>() };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn srv_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `SrvObject`.
-    let obj = unsafe { &*this.cast::<SrvObject>() };
-    // SAFETY: forwards `iface` to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for SrvObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `SrvObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn srv_get_resource(this: *mut c_void, out: *mut *mut c_void) {
@@ -566,9 +528,9 @@ static SRV_VTBL: ID3D11ShaderResourceView1Vtbl = ID3D11ShaderResourceView1Vtbl {
     add_ref: srv_add_ref,
     release: srv_release,
     get_device: srv_get_device,
-    get_private_data: srv_get_private_data,
-    set_private_data: srv_set_private_data,
-    set_private_data_interface: srv_set_private_data_interface,
+    get_private_data: get_private_data::<SrvObject>,
+    set_private_data: set_private_data::<SrvObject>,
+    set_private_data_interface: set_private_data_interface::<SrvObject>,
     get_resource: srv_get_resource,
     get_desc: srv_get_desc,
     get_desc1: srv_get_desc1,
@@ -654,51 +616,11 @@ unsafe extern "system-unwind" fn rtv_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn rtv_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `RtvObject`.
-    let obj = unsafe { &*this.cast::<RtvObject>() };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn rtv_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `RtvObject`.
-    let obj = unsafe { &*this.cast::<RtvObject>() };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn rtv_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `RtvObject`.
-    let obj = unsafe { &*this.cast::<RtvObject>() };
-    // SAFETY: forwards `iface` to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for RtvObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `RtvObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn rtv_get_resource(this: *mut c_void, out: *mut *mut c_void) {
@@ -734,9 +656,9 @@ static RTV_VTBL: ID3D11RenderTargetView1Vtbl = ID3D11RenderTargetView1Vtbl {
     add_ref: rtv_add_ref,
     release: rtv_release,
     get_device: rtv_get_device,
-    get_private_data: rtv_get_private_data,
-    set_private_data: rtv_set_private_data,
-    set_private_data_interface: rtv_set_private_data_interface,
+    get_private_data: get_private_data::<RtvObject>,
+    set_private_data: set_private_data::<RtvObject>,
+    set_private_data_interface: set_private_data_interface::<RtvObject>,
     get_resource: rtv_get_resource,
     get_desc: rtv_get_desc,
     get_desc1: rtv_get_desc1,
@@ -821,51 +743,11 @@ unsafe extern "system-unwind" fn dsv_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn dsv_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DsvObject`.
-    let obj = unsafe { &*this.cast::<DsvObject>() };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn dsv_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DsvObject`.
-    let obj = unsafe { &*this.cast::<DsvObject>() };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn dsv_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DsvObject`.
-    let obj = unsafe { &*this.cast::<DsvObject>() };
-    // SAFETY: forwards `iface` to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for DsvObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `DsvObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn dsv_get_resource(this: *mut c_void, out: *mut *mut c_void) {
@@ -890,9 +772,9 @@ static DSV_VTBL: ID3D11DepthStencilViewVtbl = ID3D11DepthStencilViewVtbl {
     add_ref: dsv_add_ref,
     release: dsv_release,
     get_device: dsv_get_device,
-    get_private_data: dsv_get_private_data,
-    set_private_data: dsv_set_private_data,
-    set_private_data_interface: dsv_set_private_data_interface,
+    get_private_data: get_private_data::<DsvObject>,
+    set_private_data: set_private_data::<DsvObject>,
+    set_private_data_interface: set_private_data_interface::<DsvObject>,
     get_resource: dsv_get_resource,
     get_desc: dsv_get_desc,
 };
@@ -967,51 +849,11 @@ unsafe extern "system-unwind" fn uav_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn uav_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `UavObject`.
-    let obj = unsafe { &*this.cast::<UavObject>() };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn uav_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `UavObject`.
-    let obj = unsafe { &*this.cast::<UavObject>() };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn uav_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `UavObject`.
-    let obj = unsafe { &*this.cast::<UavObject>() };
-    // SAFETY: forwards `iface` to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for UavObject {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `UavObject`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn uav_get_resource(this: *mut c_void, out: *mut *mut c_void) {
@@ -1047,9 +889,9 @@ static UAV_VTBL: ID3D11UnorderedAccessView1Vtbl = ID3D11UnorderedAccessView1Vtbl
     add_ref: uav_add_ref,
     release: uav_release,
     get_device: uav_get_device,
-    get_private_data: uav_get_private_data,
-    set_private_data: uav_set_private_data,
-    set_private_data_interface: uav_set_private_data_interface,
+    get_private_data: get_private_data::<UavObject>,
+    set_private_data: set_private_data::<UavObject>,
+    set_private_data_interface: set_private_data_interface::<UavObject>,
     get_resource: uav_get_resource,
     get_desc: uav_get_desc,
     get_desc1: uav_get_desc1,

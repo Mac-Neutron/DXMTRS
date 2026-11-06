@@ -5,6 +5,9 @@ use core::ffi::c_void;
 use dxmt_util::{
     com::{Qi, QiMiss, hresult::DXGI_ERROR_INVALID_CALL, qi_table},
     dxgi_consts::{DXGI_FORMAT_UNKNOWN, DXGI_MAP_DISCARD, DXGI_MAP_READ, DXGI_MAP_WRITE},
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -21,7 +24,7 @@ use crate::{
         ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Hresult, S_OK, TearOff,
         add_ref, release, vtbl,
     },
-    resource::{Resource, ResourceDesc},
+    resource::{Resource, ResourceDesc, ResourceTearOff},
 };
 
 const D3D11_MAP_READ: u32 = 1;
@@ -79,41 +82,6 @@ pub fn create_subresource_surface(
     out: *mut *mut c_void,
 ) -> Hresult {
     create_subresource_surface_inner(resource, index, out)
-}
-
-unsafe fn resource_set_private_data(
-    resource: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `resource` is a live `ID3D11Resource`.
-    let rv = unsafe { vtbl::<ID3D11ResourceVtbl>(resource) };
-    // SAFETY: forwards to `ID3D11DeviceChild::SetPrivateData`.
-    unsafe { (rv.set_private_data)(resource, guid, size, data) }
-}
-
-unsafe fn resource_set_private_data_interface(
-    resource: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `resource` is a live `ID3D11Resource`.
-    let rv = unsafe { vtbl::<ID3D11ResourceVtbl>(resource) };
-    // SAFETY: forwards to `ID3D11DeviceChild::SetPrivateDataInterface`.
-    unsafe { (rv.set_private_data_interface)(resource, guid, iface) }
-}
-
-unsafe fn resource_get_private_data(
-    resource: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `resource` is a live `ID3D11Resource`.
-    let rv = unsafe { vtbl::<ID3D11ResourceVtbl>(resource) };
-    // SAFETY: forwards to `ID3D11DeviceChild::GetPrivateData`.
-    unsafe { (rv.get_private_data)(resource, guid, size, data) }
 }
 
 unsafe fn resource_get_device(
@@ -375,41 +343,6 @@ unsafe fn surface_get_resource(
 
 // --- Tear-off thunks (`Resource::dxgi_surface`) ---
 
-unsafe extern "system-unwind" fn tearoff_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a `TearOff<IDXGISurface2Vtbl>`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGISurface2Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { resource_set_private_data(outer, guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn tearoff_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a `TearOff<IDXGISurface2Vtbl>`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGISurface2Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { resource_set_private_data_interface(outer, guid, iface) }
-}
-
-unsafe extern "system-unwind" fn tearoff_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `this` is a `TearOff<IDXGISurface2Vtbl>`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGISurface2Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { resource_get_private_data(outer, guid, size, data) }
-}
-
 unsafe extern "system-unwind" fn tearoff_get_device(
     this: *mut c_void,
     riid: *const c_void,
@@ -478,9 +411,9 @@ pub static SURFACE_VTBL: IDXGISurface2Vtbl = IDXGISurface2Vtbl {
     query_interface: TearOff::query_interface,
     add_ref: TearOff::add_ref,
     release: TearOff::release,
-    set_private_data: tearoff_set_private_data,
-    set_private_data_interface: tearoff_set_private_data_interface,
-    get_private_data: tearoff_get_private_data,
+    set_private_data: set_private_data::<ResourceTearOff>,
+    set_private_data_interface: set_private_data_interface::<ResourceTearOff>,
+    get_private_data: get_private_data::<ResourceTearOff>,
     get_parent: tearoff_get_device,
     get_device: tearoff_get_device,
     get_desc: tearoff_get_desc,
@@ -546,39 +479,13 @@ unsafe extern "system-unwind" fn sub_release(this: *mut c_void) -> u32 {
     rem
 }
 
-unsafe extern "system-unwind" fn sub_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SubresourceSurface`.
-    let res = unsafe { (*this.cast::<SubresourceSurface>()).resource };
-    // SAFETY: forwards to `res`.
-    unsafe { resource_set_private_data(res, guid, size, data) }
-}
-
-unsafe extern "system-unwind" fn sub_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SubresourceSurface`.
-    let res = unsafe { (*this.cast::<SubresourceSurface>()).resource };
-    // SAFETY: forwards to `res`.
-    unsafe { resource_set_private_data_interface(res, guid, iface) }
-}
-
-unsafe extern "system-unwind" fn sub_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `this` is a live `SubresourceSurface`.
-    let res = unsafe { (*this.cast::<SubresourceSurface>()).resource };
-    // SAFETY: forwards to `res`.
-    unsafe { resource_get_private_data(res, guid, size, data) }
+impl HasPrivateData for SubresourceSurface {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `SubresourceSurface`.
+        let resource = unsafe { (*this.cast::<Self>()).resource };
+        // SAFETY: `resource` is a live `Resource`.
+        &unsafe { Resource::from_ptr(resource) }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn sub_get_device(
@@ -642,9 +549,9 @@ pub static SUBRESOURCE_SURFACE_VTBL: IDXGISurface2Vtbl = IDXGISurface2Vtbl {
     query_interface: sub_query_interface,
     add_ref: sub_add_ref,
     release: sub_release,
-    set_private_data: sub_set_private_data,
-    set_private_data_interface: sub_set_private_data_interface,
-    get_private_data: sub_get_private_data,
+    set_private_data: set_private_data::<SubresourceSurface>,
+    set_private_data_interface: set_private_data_interface::<SubresourceSurface>,
+    get_private_data: get_private_data::<SubresourceSurface>,
     get_parent: sub_get_device,
     get_device: sub_get_device,
     get_desc: sub_get_desc,

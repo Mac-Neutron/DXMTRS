@@ -206,7 +206,7 @@ mod refcount {
             IID_ID3D11_TEXTURE_2D, IID_IDXGI_KEYED_MUTEX, IID_IDXGI_SURFACE,
             ext::IID_IMTL_MIN_LOD_CLAMPABLE,
             records::{D3d11BufferDesc, D3d11InputElementDesc, D3d11Texture2dDesc1},
-            vtbl::IDXGIResource1Vtbl,
+            vtbl::{ID3D11ResourceVtbl, IDXGIResource1Vtbl, IDXGISurface2Vtbl},
         },
         com::{E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, S_OK, vtbl},
         input_layout::create_input_layout,
@@ -476,5 +476,41 @@ mod refcount {
             crate::keyed_mutex::release_sync_for_resource(&common, 0),
             invalid_call
         );
+    }
+
+    #[test]
+    fn private_data_is_one_store_for_a_resource_and_its_tear_offs() {
+        let res = texture2d(0);
+        let obj = res.cast::<c_void>();
+        // SAFETY: `res` is live until the release below.
+        let surface = unsafe { (*res).dxgi_surface.as_iface() };
+        let guid = Guid::new(0x2222_2222, 0x3333, 0x4444, [0x55; 8]);
+        let data = [7u8, 8, 9];
+        // SAFETY: `obj` is a live resource; `guid` and `data` are valid.
+        let set = unsafe { vtbl::<ID3D11ResourceVtbl>(obj) }.set_private_data;
+        // SAFETY: as above.
+        let stored = unsafe { set(obj, (&raw const guid).cast(), 3, data.as_ptr().cast()) };
+        assert_eq!(stored, S_OK);
+        // A null GUID is an invalid argument, not a fault.
+        // SAFETY: as above, with the null GUID under test.
+        let refused = unsafe { set(obj, ptr::null(), 3, data.as_ptr().cast()) };
+        assert_eq!(refused, crate::com::E_INVALIDARG);
+
+        // The surface tear-off reads what the resource stored.
+        // SAFETY: `surface` is the live tear-off.
+        let get = unsafe { vtbl::<IDXGISurface2Vtbl>(surface) }.get_private_data;
+        let mut size = 3u32;
+        let mut out = [0u8; 3];
+        // SAFETY: `surface` is live; `guid`, `size` and `out` are valid.
+        let hr = unsafe {
+            get(
+                surface,
+                (&raw const guid).cast(),
+                &raw mut size,
+                out.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!((hr, size, out), (S_OK, 3, data));
+        assert_eq!(release(obj), 0);
     }
 }

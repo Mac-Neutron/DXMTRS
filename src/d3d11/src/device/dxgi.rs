@@ -2,9 +2,14 @@
 
 use core::{ffi::c_void, ptr};
 
-use dxmt_util::com::{
-    E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IUnknownVtbl, S_OK,
-    add_ref, write_out,
+use dxmt_util::{
+    com::{
+        E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IUnknownVtbl,
+        S_OK, add_ref, write_out,
+    },
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -45,9 +50,9 @@ pub static VTBL: IMTLDXGIDeviceVtbl = IMTLDXGIDeviceVtbl {
         query_interface,
         add_ref: dxgi_add_ref,
         release: dxgi_release,
-        set_private_data,
-        set_private_data_interface,
-        get_private_data,
+        set_private_data: set_private_data::<DxgiDevice>,
+        set_private_data_interface: set_private_data_interface::<DxgiDevice>,
+        get_private_data: get_private_data::<DxgiDevice>,
         get_parent,
         get_adapter,
         create_surface,
@@ -85,51 +90,11 @@ unsafe extern "system-unwind" fn dxgi_release(this: *mut c_void) -> u32 {
     unsafe { container_release(this.cast::<DxgiDevice>()) }
 }
 
-unsafe extern "system-unwind" fn set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `DxgiDevice` pointer.
-    let dev = unsafe { &*this.cast::<DxgiDevice>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_data`.
-    unsafe { dev.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    unknown: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `DxgiDevice` pointer.
-    let dev = unsafe { &*this.cast::<DxgiDevice>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_interface`.
-    unsafe { dev.private_data.set_interface(g, unknown.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `DxgiDevice` pointer.
-    let dev = unsafe { &*this.cast::<DxgiDevice>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::get_data`.
-    unsafe { dev.private_data.get_data(g, size, data) }
+impl HasPrivateData for DxgiDevice {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a valid `DxgiDevice` pointer.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn get_parent(

@@ -7,7 +7,9 @@ use dxmt_core::query::{TimestampQuery, VisibilityQuery};
 pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
     sync::lock,
 };
 
@@ -22,8 +24,7 @@ use crate::{
         vtbl::{ID3D10QueryVtbl, ID3D11Query1Vtbl},
     },
     com::{
-        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Guid, Hresult, IID_IUNKNOWN, S_FALSE,
-        S_OK,
+        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Hresult, IID_IUNKNOWN, S_FALSE, S_OK,
     },
     device::Device,
 };
@@ -231,9 +232,9 @@ static QUERY_VTBL: ID3D11Query1Vtbl = ID3D11Query1Vtbl {
     add_ref: query_add_ref,
     release: query_release,
     get_device: query_get_device,
-    get_private_data: query_get_private_data,
-    set_private_data: query_set_private_data,
-    set_private_data_interface: query_set_private_data_interface,
+    get_private_data: get_private_data::<Query>,
+    set_private_data: set_private_data::<Query>,
+    set_private_data_interface: set_private_data_interface::<Query>,
     get_data_size: query_get_data_size,
     get_desc: query_get_desc,
     get_desc1: query_get_desc1,
@@ -869,54 +870,11 @@ unsafe extern "system-unwind" fn query_get_device(this: *mut c_void, pp_device: 
     unsafe { *pp_device = dev };
 }
 
-unsafe extern "system-unwind" fn query_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data_size: *mut u32,
-    p_data: *mut c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
+impl HasPrivateData for Query {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Query`.
+        &unsafe { &*this.cast::<Self>() }.private_data
     }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Query`.
-    let pd = unsafe { &(*this.cast::<Query>()).private_data };
-    // SAFETY: `p_data_size` and `p_data` are forwarded from the COM caller.
-    unsafe { pd.get_data(g, p_data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn query_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Query`.
-    let pd = unsafe { &(*this.cast::<Query>()).private_data };
-    // SAFETY: `p_data` and `data_size` are forwarded from the COM caller.
-    unsafe { pd.set_data(g, data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn query_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Query`.
-    let pd = unsafe { &(*this.cast::<Query>()).private_data };
-    // SAFETY: `p_data` is forwarded from the COM caller.
-    unsafe { pd.set_interface(g, p_data.cast_mut()) }
 }
 
 unsafe extern "system-unwind" fn query_get_data_size(this: *mut c_void) -> u32 {

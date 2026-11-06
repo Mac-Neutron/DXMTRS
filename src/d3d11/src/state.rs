@@ -12,6 +12,9 @@ use dxmt_core::{
 };
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
     sync::lock,
 };
 use rustc_hash::FxHashMap;
@@ -895,54 +898,11 @@ unsafe extern "system-unwind" fn state_get_device<V: 'static, T>(
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn state_get_private_data<V: 'static, T>(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> i32 {
-    // SAFETY: reads caller's GUID pointer.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<DeviceChildStateObject<V, T>>();
-    // SAFETY: `this` is a valid `DeviceChildStateObject<V, T>`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: `PrivateData::get_data` validates `size` and `data`.
-    unsafe { pd.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn state_set_private_data<V: 'static, T>(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> i32 {
-    // SAFETY: reads caller's GUID pointer.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<DeviceChildStateObject<V, T>>();
-    // SAFETY: `this` is a valid `DeviceChildStateObject<V, T>`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: `PrivateData::set_data` reads `size` bytes from `data`.
-    unsafe { pd.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn state_set_private_data_interface<V: 'static, T>(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> i32 {
-    // SAFETY: reads caller's GUID pointer.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    let obj = this.cast::<DeviceChildStateObject<V, T>>();
-    // SAFETY: `this` is a valid `DeviceChildStateObject<V, T>`.
-    let pd = unsafe { &(*obj).private_data };
-    // SAFETY: `iface` is null or a live COM interface.
-    unsafe { pd.set_interface(g, iface.cast_mut()) }
+impl<V: 'static, T> HasPrivateData for DeviceChildStateObject<V, T> {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `DeviceChildStateObject<V, T>`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 /// `QueryInterface` of a cached state object.
@@ -1041,9 +1001,11 @@ static BLEND_STATE_VTBL: ID3D11BlendState1Vtbl = ID3D11BlendState1Vtbl {
     add_ref: state_add_ref::<ID3D11BlendState1Vtbl, BlendState>,
     release: state_release::<ID3D11BlendState1Vtbl, BlendState>,
     get_device: state_get_device::<ID3D11BlendState1Vtbl, BlendState>,
-    get_private_data: state_get_private_data::<ID3D11BlendState1Vtbl, BlendState>,
-    set_private_data: state_set_private_data::<ID3D11BlendState1Vtbl, BlendState>,
-    set_private_data_interface: state_set_private_data_interface::<ID3D11BlendState1Vtbl, BlendState>,
+    get_private_data: get_private_data::<DeviceChildStateObject<ID3D11BlendState1Vtbl, BlendState>>,
+    set_private_data: set_private_data::<DeviceChildStateObject<ID3D11BlendState1Vtbl, BlendState>>,
+    set_private_data_interface: set_private_data_interface::<
+        DeviceChildStateObject<ID3D11BlendState1Vtbl, BlendState>,
+    >,
     get_desc: blend_get_desc,
     get_desc1: blend_get_desc1,
 };
@@ -1137,11 +1099,14 @@ static RASTERIZER_STATE_VTBL: ID3D11RasterizerState2Vtbl = ID3D11RasterizerState
     add_ref: state_add_ref::<ID3D11RasterizerState2Vtbl, RasterizerState>,
     release: state_release::<ID3D11RasterizerState2Vtbl, RasterizerState>,
     get_device: state_get_device::<ID3D11RasterizerState2Vtbl, RasterizerState>,
-    get_private_data: state_get_private_data::<ID3D11RasterizerState2Vtbl, RasterizerState>,
-    set_private_data: state_set_private_data::<ID3D11RasterizerState2Vtbl, RasterizerState>,
-    set_private_data_interface: state_set_private_data_interface::<
-        ID3D11RasterizerState2Vtbl,
-        RasterizerState,
+    get_private_data: get_private_data::<
+        DeviceChildStateObject<ID3D11RasterizerState2Vtbl, RasterizerState>,
+    >,
+    set_private_data: set_private_data::<
+        DeviceChildStateObject<ID3D11RasterizerState2Vtbl, RasterizerState>,
+    >,
+    set_private_data_interface: set_private_data_interface::<
+        DeviceChildStateObject<ID3D11RasterizerState2Vtbl, RasterizerState>,
     >,
     get_desc: rasterizer_get_desc,
     get_desc1: rasterizer_get_desc1,
@@ -1186,11 +1151,14 @@ static DEPTH_STENCIL_STATE_VTBL: ID3D11DepthStencilStateVtbl = ID3D11DepthStenci
     add_ref: state_add_ref::<ID3D11DepthStencilStateVtbl, DepthStencilState>,
     release: state_release::<ID3D11DepthStencilStateVtbl, DepthStencilState>,
     get_device: state_get_device::<ID3D11DepthStencilStateVtbl, DepthStencilState>,
-    get_private_data: state_get_private_data::<ID3D11DepthStencilStateVtbl, DepthStencilState>,
-    set_private_data: state_set_private_data::<ID3D11DepthStencilStateVtbl, DepthStencilState>,
-    set_private_data_interface: state_set_private_data_interface::<
-        ID3D11DepthStencilStateVtbl,
-        DepthStencilState,
+    get_private_data: get_private_data::<
+        DeviceChildStateObject<ID3D11DepthStencilStateVtbl, DepthStencilState>,
+    >,
+    set_private_data: set_private_data::<
+        DeviceChildStateObject<ID3D11DepthStencilStateVtbl, DepthStencilState>,
+    >,
+    set_private_data_interface: set_private_data_interface::<
+        DeviceChildStateObject<ID3D11DepthStencilStateVtbl, DepthStencilState>,
     >,
     get_desc: depth_stencil_get_desc,
 };
@@ -1233,11 +1201,14 @@ static SAMPLER_STATE_VTBL: ID3D11SamplerStateVtbl = ID3D11SamplerStateVtbl {
     add_ref: state_add_ref::<ID3D11SamplerStateVtbl, SamplerState>,
     release: state_release::<ID3D11SamplerStateVtbl, SamplerState>,
     get_device: state_get_device::<ID3D11SamplerStateVtbl, SamplerState>,
-    get_private_data: state_get_private_data::<ID3D11SamplerStateVtbl, SamplerState>,
-    set_private_data: state_set_private_data::<ID3D11SamplerStateVtbl, SamplerState>,
-    set_private_data_interface: state_set_private_data_interface::<
-        ID3D11SamplerStateVtbl,
-        SamplerState,
+    get_private_data: get_private_data::<
+        DeviceChildStateObject<ID3D11SamplerStateVtbl, SamplerState>,
+    >,
+    set_private_data: set_private_data::<
+        DeviceChildStateObject<ID3D11SamplerStateVtbl, SamplerState>,
+    >,
+    set_private_data_interface: set_private_data_interface::<
+        DeviceChildStateObject<ID3D11SamplerStateVtbl, SamplerState>,
     >,
     get_desc: sampler_get_desc,
 };

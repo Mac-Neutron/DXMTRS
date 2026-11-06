@@ -20,7 +20,9 @@ use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
     dxgi_vtbl::{IDXGIAdapterVtbl, IDXGIOutput1Vtbl},
     ext::{IID_IMTL_DXGI_DEVICE, IID_IMTL_DXGI_OUTPUT, IMTLDXGIOutputVtbl},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
     sync::{CpuFence, lock},
     wsi::{Rational as WsiRational, WindowState, WsiMode},
 };
@@ -660,9 +662,9 @@ static SWAPCHAIN_VTBL: IDXGISwapChain4Vtbl = IDXGISwapChain4Vtbl {
     query_interface: sc_query_interface,
     add_ref: sc_add_ref,
     release: sc_release,
-    set_private_data: sc_set_private_data,
-    set_private_data_interface: sc_set_private_data_interface,
-    get_private_data: sc_get_private_data,
+    set_private_data: set_private_data::<SwapChain>,
+    set_private_data_interface: set_private_data_interface::<SwapChain>,
+    get_private_data: get_private_data::<SwapChain>,
     get_parent: sc_get_parent,
     get_device: sc_get_device,
     present: sc_present,
@@ -1768,54 +1770,11 @@ unsafe extern "system-unwind" fn sc_release(this: *mut c_void) -> u32 {
     rem
 }
 
-unsafe extern "system-unwind" fn sc_set_private_data(
-    this: *mut c_void,
-    name: *const c_void,
-    data_size: u32,
-    p_data: *const c_void,
-) -> Hresult {
-    if name.is_null() {
-        return E_INVALIDARG;
+impl HasPrivateData for SwapChain {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `SwapChain`.
+        &unsafe { &*this.cast::<Self>() }.private_data
     }
-    // SAFETY: `name` is non-null and points to a `Guid`.
-    let g = unsafe { *name.cast::<Guid>() };
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `p_data` and `data_size` are forwarded from the COM caller.
-    unsafe { sc.private_data.set_data(g, data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn sc_set_private_data_interface(
-    this: *mut c_void,
-    name: *const c_void,
-    p_unknown: *const c_void,
-) -> Hresult {
-    if name.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `name` is non-null and points to a `Guid`.
-    let g = unsafe { *name.cast::<Guid>() };
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `p_unknown` is forwarded from the COM caller.
-    unsafe { sc.private_data.set_interface(g, p_unknown.cast_mut()) }
-}
-
-unsafe extern "system-unwind" fn sc_get_private_data(
-    this: *mut c_void,
-    name: *const c_void,
-    p_data_size: *mut u32,
-    p_data: *mut c_void,
-) -> Hresult {
-    if name.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `name` is non-null and points to a `Guid`.
-    let g = unsafe { *name.cast::<Guid>() };
-    // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `p_data_size` and `p_data` are forwarded from the COM caller.
-    unsafe { sc.private_data.get_data(g, p_data_size, p_data) }
 }
 
 unsafe extern "system-unwind" fn sc_get_parent(

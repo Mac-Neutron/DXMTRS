@@ -17,7 +17,9 @@ use dxmt_util::{
         DXGI_RESOURCE_PRIORITY_NORMAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, DXGI_USAGE_SHADER_INPUT,
         DXGI_USAGE_UNORDERED_ACCESS,
     },
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -543,51 +545,11 @@ unsafe extern "system-unwind" fn res_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = dev };
 }
 
-unsafe extern "system-unwind" fn res_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `Resource`.
-    let res = unsafe { Resource::from_ptr(this) };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { res.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn res_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `Resource`.
-    let res = unsafe { Resource::from_ptr(this) };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { res.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn res_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` addresses a GUID.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `Resource`.
-    let res = unsafe { Resource::from_ptr(this) };
-    // SAFETY: forwards `iface` to `PrivateData::set_interface`.
-    unsafe { res.private_data.set_interface(g, iface.cast_mut()) }
+impl HasPrivateData for Resource {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Resource`.
+        &unsafe { Self::from_ptr(this) }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn res_get_type(this: *mut c_void, out: *mut u32) {
@@ -665,9 +627,9 @@ static BUFFER_VTBL: ID3D11BufferVtbl = ID3D11BufferVtbl {
     add_ref: res_add_ref,
     release: res_release,
     get_device: res_get_device,
-    get_private_data: res_get_private_data,
-    set_private_data: res_set_private_data,
-    set_private_data_interface: res_set_private_data_interface,
+    get_private_data: get_private_data::<Resource>,
+    set_private_data: set_private_data::<Resource>,
+    set_private_data_interface: set_private_data_interface::<Resource>,
     get_type: res_get_type,
     set_eviction_priority: res_set_eviction_priority,
     get_eviction_priority: res_get_eviction_priority,
@@ -679,9 +641,9 @@ static TEXTURE1D_VTBL: ID3D11Texture1DVtbl = ID3D11Texture1DVtbl {
     add_ref: res_add_ref,
     release: res_release,
     get_device: res_get_device,
-    get_private_data: res_get_private_data,
-    set_private_data: res_set_private_data,
-    set_private_data_interface: res_set_private_data_interface,
+    get_private_data: get_private_data::<Resource>,
+    set_private_data: set_private_data::<Resource>,
+    set_private_data_interface: set_private_data_interface::<Resource>,
     get_type: res_get_type,
     set_eviction_priority: res_set_eviction_priority,
     get_eviction_priority: res_get_eviction_priority,
@@ -693,9 +655,9 @@ static TEXTURE2D_VTBL: ID3D11Texture2D1Vtbl = ID3D11Texture2D1Vtbl {
     add_ref: res_add_ref,
     release: res_release,
     get_device: res_get_device,
-    get_private_data: res_get_private_data,
-    set_private_data: res_set_private_data,
-    set_private_data_interface: res_set_private_data_interface,
+    get_private_data: get_private_data::<Resource>,
+    set_private_data: set_private_data::<Resource>,
+    set_private_data_interface: set_private_data_interface::<Resource>,
     get_type: res_get_type,
     set_eviction_priority: res_set_eviction_priority,
     get_eviction_priority: res_get_eviction_priority,
@@ -708,9 +670,9 @@ static TEXTURE3D_VTBL: ID3D11Texture3D1Vtbl = ID3D11Texture3D1Vtbl {
     add_ref: res_add_ref,
     release: res_release,
     get_device: res_get_device,
-    get_private_data: res_get_private_data,
-    set_private_data: res_set_private_data,
-    set_private_data_interface: res_set_private_data_interface,
+    get_private_data: get_private_data::<Resource>,
+    set_private_data: set_private_data::<Resource>,
+    set_private_data_interface: set_private_data_interface::<Resource>,
     get_type: res_get_type,
     set_eviction_priority: res_set_eviction_priority,
     get_eviction_priority: res_get_eviction_priority,
@@ -766,39 +728,16 @@ static MIN_LOD_VTBL: IMTLMinLODClampableVtbl = IMTLMinLODClampableVtbl {
 
 // --- `IDXGIResource1` tear-off ---
 
-unsafe extern "system-unwind" fn dxgi_res_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is `Resource::dxgi_resource`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGIResource1Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { res_set_private_data(outer, guid, size, data) }
-}
+/// A [`Resource`]'s tear-off (DXGI resource, surface, keyed mutex), for its private data.
+pub struct ResourceTearOff;
 
-unsafe extern "system-unwind" fn dxgi_res_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    iface: *const c_void,
-) -> Hresult {
-    // SAFETY: `this` is `Resource::dxgi_resource`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGIResource1Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { res_set_private_data_interface(outer, guid, iface) }
-}
-
-unsafe extern "system-unwind" fn dxgi_res_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `this` is `Resource::dxgi_resource`.
-    let outer = unsafe { (*this.cast::<TearOff<IDXGIResource1Vtbl>>()).outer };
-    // SAFETY: forwards to `outer`.
-    unsafe { res_get_private_data(outer, guid, size, data) }
+impl HasPrivateData for ResourceTearOff {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a `TearOff` whose `outer` is a live `Resource`.
+        let outer = unsafe { (*this.cast::<TearOff<()>>()).outer };
+        // SAFETY: `outer` is a live `Resource`.
+        &unsafe { Resource::from_ptr(outer) }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn dxgi_res_get_device(
@@ -967,9 +906,9 @@ static DXGI_RESOURCE_VTBL: IDXGIResource1Vtbl = IDXGIResource1Vtbl {
     query_interface: TearOff::query_interface,
     add_ref: TearOff::add_ref,
     release: TearOff::release,
-    set_private_data: dxgi_res_set_private_data,
-    set_private_data_interface: dxgi_res_set_private_data_interface,
-    get_private_data: dxgi_res_get_private_data,
+    set_private_data: set_private_data::<ResourceTearOff>,
+    set_private_data_interface: set_private_data_interface::<ResourceTearOff>,
+    get_private_data: get_private_data::<ResourceTearOff>,
     get_parent: dxgi_res_get_device,
     get_device: dxgi_res_get_device,
     get_shared_handle: dxgi_res_get_shared_handle,
@@ -1002,9 +941,9 @@ static KEYED_MUTEX_VTBL: IDXGIKeyedMutexVtbl = IDXGIKeyedMutexVtbl {
     query_interface: TearOff::query_interface,
     add_ref: TearOff::add_ref,
     release: TearOff::release,
-    set_private_data: dxgi_res_set_private_data,
-    set_private_data_interface: dxgi_res_set_private_data_interface,
-    get_private_data: dxgi_res_get_private_data,
+    set_private_data: set_private_data::<ResourceTearOff>,
+    set_private_data_interface: set_private_data_interface::<ResourceTearOff>,
+    get_private_data: get_private_data::<ResourceTearOff>,
     get_parent: dxgi_res_get_device,
     get_device: dxgi_res_get_device,
     acquire_sync: km_acquire_sync,

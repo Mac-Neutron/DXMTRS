@@ -10,7 +10,9 @@ use std::sync::Arc;
 use dxmt_core::fence::Fence as CoreFence;
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 use winemetal_sys::{MTLSharedEvent_setWin32EventAtValue, MTLSharedEvent_signalValue, Obj};
 
@@ -42,9 +44,9 @@ static FENCE_VTBL: ID3D11FenceVtbl = ID3D11FenceVtbl {
     add_ref: fence_add_ref,
     release: fence_release,
     get_device: fence_get_device,
-    get_private_data: fence_get_private_data,
-    set_private_data: fence_set_private_data,
-    set_private_data_interface: fence_set_private_data_interface,
+    get_private_data: get_private_data::<Fence>,
+    set_private_data: set_private_data::<Fence>,
+    set_private_data_interface: set_private_data_interface::<Fence>,
     create_shared_handle: fence_create_shared_handle,
     get_completed_value: fence_get_completed_value,
     set_event_on_completion: fence_set_event_on_completion,
@@ -332,54 +334,11 @@ unsafe extern "system-unwind" fn fence_get_device(this: *mut c_void, pp_device: 
     unsafe { *pp_device = dev };
 }
 
-unsafe extern "system-unwind" fn fence_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data_size: *mut u32,
-    p_data: *mut c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
+impl HasPrivateData for Fence {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `Fence`.
+        &unsafe { &*this.cast::<Self>() }.private_data
     }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Fence`.
-    let pd = unsafe { &(*this.cast::<Fence>()).private_data };
-    // SAFETY: `p_data_size` and `p_data` are forwarded from the COM caller.
-    unsafe { pd.get_data(g, p_data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn fence_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Fence`.
-    let pd = unsafe { &(*this.cast::<Fence>()).private_data };
-    // SAFETY: `p_data` and `data_size` are forwarded from the COM caller.
-    unsafe { pd.set_data(g, data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn fence_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `guid` is non-null and points to a `Guid`.
-    let g = unsafe { *guid.cast::<Guid>() };
-    // SAFETY: `this` is a live `Fence`.
-    let pd = unsafe { &(*this.cast::<Fence>()).private_data };
-    // SAFETY: `p_data` is forwarded from the COM caller.
-    unsafe { pd.set_interface(g, p_data.cast_mut()) }
 }
 
 unsafe extern "system-unwind" fn fence_create_shared_handle(

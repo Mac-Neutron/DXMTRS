@@ -7,10 +7,12 @@ use core::{
 
 use dxmt_util::{
     com::{
-        ComObject, E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IID_IUNKNOWN, Qi, QiMiss, S_OK, add_ref,
+        ComObject, E_INVALIDARG, E_NOTIMPL, Hresult, IID_IUNKNOWN, Qi, QiMiss, S_OK, add_ref,
         qi_table, release, write_out,
     },
-    private_data::PrivateData,
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
 };
 
 use crate::{
@@ -77,9 +79,9 @@ static VTBL: ID3D11ClassLinkageVtbl = ID3D11ClassLinkageVtbl {
     add_ref: linkage_add_ref,
     release: linkage_release,
     get_device,
-    get_private_data,
-    set_private_data,
-    set_private_data_interface,
+    get_private_data: get_private_data::<ClassLinkage>,
+    set_private_data: set_private_data::<ClassLinkage>,
+    set_private_data_interface: set_private_data_interface::<ClassLinkage>,
     get_class_instance,
     create_class_instance,
 };
@@ -155,51 +157,11 @@ unsafe extern "system-unwind" fn get_device(this: *mut c_void, out: *mut *mut c_
     }
 }
 
-unsafe extern "system-unwind" fn get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `ClassLinkage` pointer.
-    let obj = unsafe { &*this.cast::<ClassLinkage>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `ClassLinkage` pointer.
-    let obj = unsafe { &*this.cast::<ClassLinkage>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, size, data) }
-}
-
-unsafe extern "system-unwind" fn set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    unknown: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is a `GUID` pointer passed by the COM caller.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a valid `ClassLinkage` pointer.
-    let obj = unsafe { &*this.cast::<ClassLinkage>() };
-    // SAFETY: Forwarding COM caller pointers to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, unknown.cast_mut()) }
+impl HasPrivateData for ClassLinkage {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `ClassLinkage`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 unsafe extern "system-unwind" fn get_class_instance(
