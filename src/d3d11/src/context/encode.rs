@@ -173,43 +173,6 @@ pub(super) struct EncodeSnapshot {
     pub compute_argbuf_size: Option<Arc<AtomicU64>>,
 }
 
-impl Clone for EncodeSnapshot {
-    fn clone(&self) -> Self {
-        Self {
-            render_pipeline_valid: self.render_pipeline_valid,
-            render_pso: self.render_pso,
-            pipeline_kind: self.pipeline_kind,
-            gs_vertex_per_warp: self.gs_vertex_per_warp,
-            gs_object_buffer_offset: self.gs_object_buffer_offset,
-            gs_mesh_buffer_offset: self.gs_mesh_buffer_offset,
-            gs_draw_arguments_offset: self.gs_draw_arguments_offset,
-            gs_imm_draw_args_handle: self.gs_imm_draw_args_handle,
-            gs_dispatch_args_handle: self.gs_dispatch_args_handle,
-            gs_dispatch_args_offset: self.gs_dispatch_args_offset,
-            ts_threads_per_patch: self.ts_threads_per_patch,
-            ts_patch_per_group: self.ts_patch_per_group,
-            ts_patch_per_mesh_instance: self.ts_patch_per_mesh_instance,
-            ts_draw_arguments_offset: self.ts_draw_arguments_offset,
-            ts_imm_draw_args_handle: self.ts_imm_draw_args_handle,
-            ts_dispatch_args_handle: self.ts_dispatch_args_handle,
-            ts_dispatch_args_offset: self.ts_dispatch_args_offset,
-            compute_pipeline_valid: self.compute_pipeline_valid,
-            compute_pso: self.compute_pso,
-            compute_threadgroup_size: self.compute_threadgroup_size,
-            dsso: self.dsso,
-            rasterizer: self.rasterizer.copy_cmd(),
-            viewports: self.viewports.clone(),
-            scissor_rects: self.scissor_rects.clone(),
-            index_buffer: self.index_buffer,
-            index_format: self.index_format,
-            index_sub_offset: self.index_sub_offset,
-            stage_dirty_masks: self.stage_dirty_masks,
-            render_argbuf_size: self.render_argbuf_size.clone(),
-            compute_argbuf_size: self.compute_argbuf_size.clone(),
-        }
-    }
-}
-
 impl Default for EncodeSnapshot {
     fn default() -> Self {
         Self {

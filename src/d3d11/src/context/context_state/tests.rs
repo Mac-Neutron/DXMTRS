@@ -6,7 +6,7 @@ use crate::{
         IID_ID3D_DEVICE_CONTEXT_STATE, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_DEVICE_CONTEXT,
         IID_ID3D11_DEVICE_CONTEXT_1, IID_IUNKNOWN, vtbl::ID3DDeviceContextStateVtbl,
     },
-    com::{E_NOINTERFACE, Guid, S_FALSE, S_OK, release},
+    com::{E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, S_FALSE, S_OK, release},
 };
 
 #[test]
@@ -75,4 +75,60 @@ fn create_device_context_state_validation_and_com_interfaces() {
 
     // SAFETY: releases the initial reference from `create_device_context_state`.
     unsafe { release(out) };
+}
+
+#[test]
+fn query_interface_counts_as_add_ref() {
+    let fl = 0xb000_u32;
+    let iid_ctx = IID_ID3D11_DEVICE_CONTEXT;
+    let mut this: *mut c_void = ptr::null_mut();
+    assert_eq!(
+        create_device_context_state(
+            ptr::null_mut(),
+            0,
+            (&raw const fl, 1),
+            7,
+            (&raw const iid_ctx).cast(),
+            ptr::null_mut(),
+            &raw mut this,
+        ),
+        S_OK
+    );
+    // SAFETY: `this` is a live `DeviceContextState` whose first word is its vtable.
+    let vtbl_ptr = unsafe { *this.cast::<*const ID3DDeviceContextStateVtbl>() };
+    // SAFETY: `vtbl_ptr` is `DCS_VTBL`, a static.
+    let vtbl = unsafe { &*vtbl_ptr };
+    let mut out: *mut c_void = ptr::null_mut();
+    // SAFETY: `this` is live; `out` is null or writable.
+    let qi = |riid: *const Guid, out: *mut *mut c_void| unsafe {
+        (vtbl.query_interface)(this, riid.cast(), out)
+    };
+    // SAFETY: `this` is live and holds a reference.
+    let add_ref = || unsafe { (vtbl.add_ref)(this) };
+    // SAFETY: as above.
+    let release = || unsafe { (vtbl.release)(this) };
+    let base = add_ref() - 1;
+    assert_eq!(release(), base);
+
+    for iid in [
+        IID_IUNKNOWN,
+        IID_ID3D11_DEVICE_CHILD,
+        IID_ID3D_DEVICE_CONTEXT_STATE,
+    ] {
+        assert_eq!(qi(&raw const iid, &raw mut out), S_OK);
+        assert_eq!(out, this);
+        assert_eq!(add_ref(), base + 2);
+        assert_eq!(release(), base + 1);
+        assert_eq!(release(), base);
+    }
+    out = this;
+    assert_eq!(qi(ptr::null(), &raw mut out), E_INVALIDARG);
+    assert!(out.is_null());
+    let iunknown = IID_IUNKNOWN;
+    assert_eq!(qi(&raw const iunknown, ptr::null_mut()), E_POINTER);
+    assert_eq!(add_ref(), base + 1);
+    assert_eq!(release(), base);
+
+    // SAFETY: releases the initial reference from `create_device_context_state`.
+    unsafe { crate::com::release(this) };
 }

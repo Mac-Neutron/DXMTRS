@@ -18,7 +18,7 @@ use winemetal_sys::{
 
 use super::*;
 use crate::{
-    com::{S_FALSE, S_OK},
+    com::{E_NOINTERFACE, E_POINTER, Guid, S_FALSE, S_OK},
     context::{
         Deferred,
         sync::{ContextQuery, D3D11_QUERY_OCCLUSION, QueryState},
@@ -358,4 +358,45 @@ fn finish_ends_open_queries() {
     assert_eq!(samples, 0);
 
     release_cmd_list(raw_list);
+}
+
+#[test]
+fn query_interface_counts_as_add_ref() {
+    let raw = Box::into_raw(CommandList::new_boxed(ptr::null_mut(), 0));
+    // SAFETY: `raw` was just allocated.
+    let this = unsafe { iface_of(&(*raw).vtbl) };
+    let vtbl = &COMMAND_LIST_VTBL;
+    let mut out: *mut c_void = ptr::null_mut();
+    // SAFETY: `this` is a live command list; `out` is writable.
+    let qi = |riid: *const Guid, out: *mut *mut c_void| unsafe {
+        (vtbl.query_interface)(this, riid.cast(), out)
+    };
+    // SAFETY: `this` is a live command list holding a reference.
+    let add_ref = || unsafe { (vtbl.add_ref)(this) };
+    // SAFETY: as above.
+    let release = || unsafe { (vtbl.release)(this) };
+
+    for iid in [
+        IID_IUNKNOWN,
+        IID_ID3D11_DEVICE_CHILD,
+        IID_ID3D11_COMMAND_LIST,
+    ] {
+        assert_eq!(qi(&raw const iid, &raw mut out), S_OK);
+        assert_eq!(out, this);
+        assert_eq!(add_ref(), 3);
+        assert_eq!(release(), 2);
+        assert_eq!(release(), 1);
+    }
+    let unknown = Guid::new(0x1111_1111, 0x2222, 0x3333, [0x44; 8]);
+    out = this;
+    assert_eq!(qi(&raw const unknown, &raw mut out), E_NOINTERFACE);
+    assert!(out.is_null());
+    out = this;
+    assert_eq!(qi(ptr::null(), &raw mut out), E_INVALIDARG);
+    assert!(out.is_null());
+    let iunknown = IID_IUNKNOWN;
+    assert_eq!(qi(&raw const iunknown, ptr::null_mut()), E_POINTER);
+    assert_eq!(add_ref(), 2);
+    assert_eq!(release(), 1);
+    assert_eq!(release(), 0);
 }
