@@ -1,5 +1,7 @@
 //! Names of the files one process writes into its log directory.
 //!
+//! From mtld3d (zlib, README.md's list).
+//!
 //! Both sides agree on them: the PE side names the directory, the unix side
 //! opens the files. One log per process, so a launch never overwrites the
 //! log of the one before it, and the GPU traces of a process sit next to

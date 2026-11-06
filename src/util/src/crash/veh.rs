@@ -1,5 +1,7 @@
 //! Always-on PE-side crash diagnostics, for a DLL that installs them (D3D9 does).
 //!
+//! From mtld3d (zlib, README.md's list).
+//!
 //! Installed once from the DLL's `DllMain` `PROCESS_ATTACH`, and
 //! the vectored handler is removed again on a `PROCESS_DETACH` the process
 //! survives: a VEH registration is a process-wide pointer into this image, and
