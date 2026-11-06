@@ -462,4 +462,19 @@ mod refcount {
         assert_eq!(usage, (1 << 10) | (1 << 4));
         assert_eq!(release(res.cast()), 0);
     }
+
+    #[test]
+    fn keyed_mutex_calls_without_a_mutex_answer_dxgi_invalid_call() {
+        let common = Common::default();
+        // `DXGI_ERROR_INVALID_CALL` is 0x887a0001.
+        let invalid_call = 0x887a_0001_u32.cast_signed();
+        assert_eq!(
+            crate::keyed_mutex::acquire_sync_for_resource(&common, 0, 0),
+            invalid_call
+        );
+        assert_eq!(
+            crate::keyed_mutex::release_sync_for_resource(&common, 0),
+            invalid_call
+        );
+    }
 }

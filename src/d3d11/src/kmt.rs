@@ -22,7 +22,7 @@ use crate::{
     com::{E_FAIL, E_INVALIDARG, Hresult},
 };
 
-const DXGI_ERROR_INVALID_CALL: Hresult = -0x7789_ffff;
+const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 #[cfg(test)]
 mod tests;

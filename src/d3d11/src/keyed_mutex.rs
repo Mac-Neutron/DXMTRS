@@ -16,7 +16,7 @@ use crate::{
     resource::Common,
 };
 
-const DXGI_ERROR_INVALID_CALL: Hresult = -0x7789_ffff;
+const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 /// `D3D11_RESOURCE_MISC_SHARED`.
 pub const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;
