@@ -8,7 +8,7 @@ use core::{
 use super::{
     ComObject, ComRefCounted, DeviceChild, E_NOINTERFACE, E_POINTER, Guid, Hresult,
     IID_ID3D12_DEVICE, IID_IUNKNOWN, PrivateHold, S_OK, add_ref_com, cast_com, from_companion,
-    init_out_ptr, release_com, to_companion, write_out,
+    init_out_ptr, release_com, to_companion, vtbl, write_out,
 };
 use crate::abi::{
     ext::{D3D12DeviceExtVtbl, D3D12ScalerDesc, IID_D3D12_DEVICE_EXT},
@@ -215,6 +215,169 @@ fn companion_vtbl_round_trips_to_self() {
     // SAFETY: `dev` is a valid primary pointer.
     assert_eq!(unsafe { release_com(dev) }, 0);
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+}
+
+/// Calls `QueryInterface` of the COM object at `object` for `iid`.
+fn query(object: *mut c_void, iid: &Guid, out: &mut *mut c_void) -> Hresult {
+    // SAFETY: `object` is a live COM object, which starts with its `IUnknown` vtable pointer.
+    let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+    // SAFETY: `object` is live; `iid` and `out` are valid references.
+    unsafe { (unknown.query_interface)(object, ptr::from_ref(iid).cast(), out) }
+}
+
+/// Calls `AddRef` of the COM object at `object`.
+fn add_ref_of(object: *mut c_void) -> u32 {
+    // SAFETY: `object` is a live COM object, which starts with its `IUnknown` vtable pointer.
+    let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+    // SAFETY: `object` is live.
+    unsafe { (unknown.add_ref)(object) }
+}
+
+/// Calls `Release` of the COM object at `object`.
+fn release_of(object: *mut c_void) -> u32 {
+    // SAFETY: `object` is a live COM object, which starts with its `IUnknown` vtable pointer.
+    let unknown = unsafe { vtbl::<IUnknownVtbl>(object) };
+    // SAFETY: `object` holds a reference of the caller's.
+    unsafe { (unknown.release)(object) }
+}
+
+/// An allocator keeps its device for life.
+///
+/// Each `QueryInterface` answer is one more reference on the allocator alone.
+#[test]
+fn allocator_holds_device_and_counts_across_qi() {
+    use crate::{
+        allocator::create_command_allocator,
+        com::{
+            IID_ID3D12_COMMAND_ALLOCATOR, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT,
+            IID_ID3D12_PAGEABLE, IID_ID3D12_RESOURCE,
+        },
+        device::Device,
+    };
+
+    let dev = Box::into_raw(Device::new_dummy());
+    // SAFETY: `dev` is live until the end of the test.
+    let dev_count = || unsafe { (*dev).com.public_count() };
+    assert_eq!(dev_count(), 1);
+
+    let mut raw: *mut c_void = ptr::null_mut();
+    // SAFETY: `dev` is a live `Device`; `raw` and the IID are valid stack variables.
+    let hr = unsafe {
+        create_command_allocator(
+            dev.cast(),
+            0,
+            ptr::from_ref(&IID_ID3D12_COMMAND_ALLOCATOR).cast(),
+            &raw mut raw,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    assert_eq!(dev_count(), 2, "the allocator holds its device");
+
+    let mut got: *mut c_void = ptr::null_mut();
+    for (n, iid) in [
+        IID_IUNKNOWN,
+        IID_ID3D12_OBJECT,
+        IID_ID3D12_DEVICE_CHILD,
+        IID_ID3D12_PAGEABLE,
+        IID_ID3D12_COMMAND_ALLOCATOR,
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(query(raw, iid, &mut got), S_OK);
+        assert_eq!(got, raw);
+        assert_eq!(
+            dev_count(),
+            2,
+            "QueryInterface does not touch the device (IID {n})"
+        );
+    }
+    // Five answers and the creation reference: five `Release` calls leave one.
+    for left in (1..=5).rev() {
+        assert_eq!(release_of(raw), left);
+    }
+
+    got = raw;
+    assert_eq!(query(raw, &IID_ID3D12_RESOURCE, &mut got), E_NOINTERFACE);
+    assert!(got.is_null(), "a miss nulls the out pointer");
+    assert_eq!(add_ref_of(raw), 2);
+    assert_eq!(release_of(raw), 1);
+
+    got = raw;
+    // SAFETY: `raw` is a live allocator, which starts with its `IUnknown` vtable pointer.
+    let unknown = unsafe { vtbl::<IUnknownVtbl>(raw) };
+    // SAFETY: as above; `got` is a valid out pointer.
+    let hr = unsafe { (unknown.query_interface)(raw, ptr::null(), &raw mut got) };
+    assert_eq!(
+        hr, E_NOINTERFACE,
+        "the allocator answers a null riid with E_NOINTERFACE"
+    );
+    assert!(got.is_null());
+    // SAFETY: as above; a null out pointer is the case under test.
+    let hr = unsafe {
+        (unknown.query_interface)(raw, ptr::from_ref(&IID_IUNKNOWN).cast(), ptr::null_mut())
+    };
+    assert_eq!(hr, E_POINTER);
+
+    assert_eq!(release_of(raw), 0);
+    assert_eq!(dev_count(), 1, "the last release lets the device go");
+    // SAFETY: `dev` was allocated by `Box::into_raw` and nothing else holds it.
+    drop(unsafe { Box::from_raw(dev) });
+}
+
+/// A command list's companion interface shares the list's count.
+///
+/// A `QueryInterface` through either pointer, and `AddRef` and `Release` on the companion, move
+/// the list's count only.
+#[test]
+fn list_companion_shares_the_list_count() {
+    use crate::{
+        abi::ext::IID_D3D12_COMMAND_LIST_EXT, com::IID_ID3D12_GRAPHICS_COMMAND_LIST7,
+        device::Device, list::List,
+    };
+
+    let dev = Box::into_raw(Device::new_dummy());
+    // SAFETY: `dev` is live; the list releases this reference when it drops.
+    unsafe { add_ref_com(dev) };
+    let list = Box::into_raw(List::new_closed(dev));
+    // SAFETY: `list` was just allocated.
+    let list_count = || unsafe { (*list).com.public_count() };
+    // SAFETY: `dev` is live until the end of the test.
+    let dev_count = || unsafe { (*dev).com.public_count() };
+    assert_eq!(dev_count(), 2);
+    // SAFETY: `list` was just allocated.
+    assert_eq!(unsafe { add_ref_com(list) }, 1);
+    let primary = list.cast::<c_void>();
+
+    let mut ext: *mut c_void = ptr::null_mut();
+    assert_eq!(query(primary, &IID_D3D12_COMMAND_LIST_EXT, &mut ext), S_OK);
+    assert_eq!(ext.addr(), primary.addr() + List::EXT_OFFSET);
+    assert_eq!(list_count(), 2);
+
+    assert_eq!(add_ref_of(ext), 3);
+    assert_eq!(release_of(ext), 2);
+
+    let mut again: *mut c_void = ptr::null_mut();
+    assert_eq!(query(ext, &IID_IUNKNOWN, &mut again), S_OK);
+    assert_eq!(
+        again, primary,
+        "IUnknown through the companion is the primary pointer"
+    );
+    assert_eq!(list_count(), 3);
+    assert_eq!(
+        query(ext, &IID_ID3D12_GRAPHICS_COMMAND_LIST7, &mut again),
+        S_OK
+    );
+    assert_eq!(list_count(), 4);
+
+    assert_eq!(release_of(again), 3);
+    assert_eq!(release_of(primary), 2);
+    assert_eq!(release_of(ext), 1);
+    assert_eq!(dev_count(), 2, "the list holds its device while it lives");
+    assert_eq!(release_of(primary), 0);
+    assert_eq!(dev_count(), 1, "the list's last release lets the device go");
+    // SAFETY: `dev` was allocated by `Box::into_raw` and nothing else holds it.
+    drop(unsafe { Box::from_raw(dev) });
 }
 
 #[cfg(target_os = "macos")]
