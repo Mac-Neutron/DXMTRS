@@ -9,9 +9,10 @@
 //! Every case here passes no app profile; the profile layer and its precedence against these
 //! two live in `app_profile/tests.rs`, where a profile can be built.
 
+use dxmt_util::config::Sources;
 use mtld3d_shared::mtl::{ColorSpacePolicy, SoftwareCursorPolicy};
 
-use super::{AdapterSpoof, CursorScale, Mtld3dConfig, parse};
+use super::{AdapterSpoof, CursorScale, Mtld3dConfig, foreign_key, parse, parse_sources};
 
 #[test]
 fn empty_input_returns_defaults() {
@@ -658,4 +659,78 @@ fn adapter_spoof_rejects_unknown_vendor() {
 fn df_formats_defaults_on_and_parses_off() {
     assert!(parse(None, "", None).df_formats);
     assert!(!parse(None, "caps.dfFormats = false\n", None).df_formats);
+}
+
+fn sources(dxmt_env: &str, mtld3d_env: &str) -> Sources {
+    Sources {
+        dxmt_env: dxmt_env.into(),
+        mtld3d_env: mtld3d_env.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn dxmt_config_sets_a_d3d9_key() {
+    assert_eq!(
+        parse_sources(None, &sources("present.maxFps=60", ""), b"").present_max_fps,
+        60
+    );
+}
+
+#[test]
+fn mtld3d_config_beats_dxmt_config() {
+    assert_eq!(
+        parse_sources(
+            None,
+            &sources("present.maxFps=30", "present.maxFps=60"),
+            b""
+        )
+        .present_max_fps,
+        60
+    );
+}
+
+#[test]
+fn dxmt_namespaces_are_foreign() {
+    assert!(
+        foreign_key("d3d11.maxFeatureLevel")
+            && foreign_key("dxgi.forceSDR")
+            && foreign_key("dxmt.shaderMetalVersion")
+    );
+    assert!(!foreign_key("present.maxFps") && !foreign_key("d3d11"));
+}
+
+#[test]
+fn dxmt_keys_from_mtld3d_sources_are_skipped() {
+    assert_eq!(
+        parse_sources(None, &sources("", "d3d11.x=1;present.maxFps=60"), b"").present_max_fps,
+        60
+    );
+}
+
+#[test]
+fn a_launcher_log_dir_with_spaces_survives() {
+    let cfg = parse_sources(
+        None,
+        &sources(
+            "",
+            "log.dir=Z:/Users/a b/Library/Logs/MacNeutron/mtld3d;present.maxFps=60",
+        ),
+        b"",
+    );
+    assert_eq!(cfg.log_dir, "Z:/Users/a b/Library/Logs/MacNeutron/mtld3d");
+}
+
+#[test]
+fn mtld3d_config_keeps_a_non_bmp_char() {
+    let cfg = parse_sources(
+        None,
+        &sources(
+            "",
+            "log.dir=Z:/Users/a/\u{1F3AE} Games/logs;present.maxFps=60",
+        ),
+        b"",
+    );
+    assert_eq!(cfg.log_dir, "Z:/Users/a/\u{1F3AE} Games/logs");
+    assert_eq!(cfg.present_max_fps, 60);
 }

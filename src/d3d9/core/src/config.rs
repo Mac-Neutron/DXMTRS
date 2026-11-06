@@ -1,11 +1,12 @@
-//! `mtld3d.conf` parser.
+//! D3D9's options, resolved from what `dxmt_util::config` read.
 //!
-//! Pure-string in, typed config out — no I/O, no env reads. The
-//! PE-side wrapper in `src/d3d9/src/config.rs` does the
-//! EXE-relative file lookup and feeds the file body to [`parse`];
-//! this module is host-testable through `cargo test -p mtld3d-core
-//! --target x86_64-apple-darwin`.
+//! Sources in, typed config out — no I/O, no env reads. The PE-side
+//! wrapper in `src/d3d9/src/config.rs` reads the four sources
+//! (`dxmt_util::config::Sources::read`) and feeds them to
+//! [`parse_sources`]; this module is host-testable through
+//! `cargo test -p mtld3d-core --target aarch64-apple-darwin`.
 
+use dxmt_util::config::{Item, Sources, mtld3d};
 use log::info;
 use mtld3d_shared::{
     log_once_warn,
@@ -422,55 +423,69 @@ impl Default for Mtld3dConfig {
     }
 }
 
-/// Resolve the three configuration layers into a [`Mtld3dConfig`].
+/// Resolve the configuration layers into a [`Mtld3dConfig`].
 ///
 /// Weakest first: the [`Default`] values, then the built-in
-/// [`AppProfile`] for this application if it has one, then the
-/// `mtld3d.conf` body, then the `MTLD3D_CONFIG` env override. A key set
-/// by a later layer wins, so a user can always take one option back
-/// from a profile without losing the rest of it.
-///
-/// `file_src` is the file body (newline-separated `key = value`),
-/// `env_override` is the env-var body (semicolon-separated
-/// `key=value`), and a profile's settings use the env form. All three
-/// flow through the same per-entry decode. Missing keys keep the value
-/// the layer below left.
+/// [`AppProfile`] for this application if it has one, then each entry of
+/// `sources` in their order (`dxmt.conf`, `mtld3d.conf`, `DXMT_CONFIG`,
+/// `MTLD3D_CONFIG`, each in its own grammar; `exe_name` is the name a
+/// `[section]` of DXMT's grammar has to match). A key set by a later layer
+/// wins, so a user can always take one option back from a profile without
+/// losing the rest of it. A profile's settings use `MTLD3D_CONFIG`'s form.
+/// A key in DXMT's namespaces (`d3d10.`, `d3d11.`, `d3d12.`, `dxgi.`,
+/// `dxmt.`) is skipped silently, from every source.
 ///
 /// Unrecognised keys, malformed entries, and unparseable values fire
 /// `log_once_warn!` (tagged with `mtld3d.conf line N` for file input,
 /// `MTLD3D_CONFIG` for env input, and the profile's name for a profile)
-/// so a typo doesn't silently no-op, then parsing continues. The
-/// pure-string interface keeps the parser host-testable.
+/// so a typo doesn't silently no-op, then parsing continues.
+#[must_use]
+pub fn parse_sources(
+    profile: Option<&AppProfile>,
+    sources: &Sources,
+    exe_name: &[u8],
+) -> Mtld3dConfig {
+    let mut cfg = Mtld3dConfig::default();
+    if let Some(profile) = profile {
+        let source = format!("app profile '{}'", profile.name());
+        for segment in profile.settings().split(';') {
+            if let Some(item) = mtld3d::item(segment) {
+                apply_item(&mut cfg, item, &source, None);
+            }
+        }
+    }
+    for entry in sources.entries(exe_name) {
+        apply_item(&mut cfg, entry.item, entry.source.label(), entry.line);
+    }
+    cfg
+}
+
+/// [`parse_sources`] over `mtld3d.conf` and `MTLD3D_CONFIG` alone.
+///
+/// `file_src` is the file's body, `env_override` the variable's text.
 #[must_use]
 pub fn parse(
     profile: Option<&AppProfile>,
     file_src: &str,
     env_override: Option<&str>,
 ) -> Mtld3dConfig {
-    let mut cfg = Mtld3dConfig::default();
-    if let Some(profile) = profile {
-        let source = format!("app profile '{}'", profile.name());
-        for segment in profile.settings().split(';') {
-            apply_line(&mut cfg, segment, &source, None);
-        }
-    }
-    for (lineno, raw_line) in file_src.lines().enumerate() {
-        apply_line(&mut cfg, raw_line, "mtld3d.conf", Some(lineno));
-    }
-    if let Some(env) = env_override {
-        for segment in env.split(';') {
-            apply_line(&mut cfg, segment, "MTLD3D_CONFIG", None);
-        }
-    }
-    cfg
+    let sources = Sources {
+        mtld3d_file: Some(("mtld3d.conf".into(), Ok(file_src.as_bytes().to_vec()))),
+        mtld3d_env: env_override.unwrap_or_default().as_bytes().to_vec(),
+        ..Sources::default()
+    };
+    parse_sources(profile, &sources, b"")
 }
 
-fn apply_line(cfg: &mut Mtld3dConfig, raw: &str, source: &str, lineno: Option<usize>) {
-    let line = raw.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return;
-    }
-    let Some(eq) = line.find('=') else {
+/// Whether `key` is in one of DXMT's namespaces, which D3D9 leaves to D3D10-12.
+fn foreign_key(key: &str) -> bool {
+    ["d3d10.", "d3d11.", "d3d12.", "dxgi.", "dxmt."]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+fn apply_item(cfg: &mut Mtld3dConfig, item: Item, source: &str, lineno: Option<usize>) {
+    let Item::Pair { key, value } = item else {
         if let Some(n) = lineno {
             log_once_warn!(
                 target: crate::LOG_TARGET,
@@ -485,9 +500,11 @@ fn apply_line(cfg: &mut Mtld3dConfig, raw: &str, source: &str, lineno: Option<us
         }
         return;
     };
-    let key = line[..eq].trim();
-    let value = unquote(line[eq + 1..].trim());
-    apply(cfg, source, key, value);
+    let key = String::from_utf8_lossy(&key);
+    if foreign_key(&key) {
+        return;
+    }
+    apply(cfg, source, &key, &String::from_utf8_lossy(&value));
 }
 
 /// Emit one `info!` line per resolved option.
@@ -897,14 +914,6 @@ fn parse_hex_list(value: &str) -> Vec<u64> {
             u64::from_str_radix(s, 16).ok()
         })
         .collect()
-}
-
-fn unquote(value: &str) -> &str {
-    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    }
 }
 
 #[cfg(test)]

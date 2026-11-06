@@ -12,6 +12,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 bitflags = { workspace = true }
+dxmt-util = { workspace = true }
 mtld3d-core = { workspace = true }
 mtld3d-shared = { workspace = true }
 mtld3d-types = { workspace = true }

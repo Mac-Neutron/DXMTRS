@@ -1,9 +1,12 @@
-//! DXMT's configuration, read the way `util/config/config.cpp` reads it.
+//! The configuration reader every API shares, DXMT's read the way `util/config/config.cpp` does.
 //!
-//! The user's file (`DXMT_CONFIG_FILE`, else `dxmt.conf` in the working folder), then
-//! `DXMT_CONFIG` split on `;`, then the exe's built-in profile for the keys neither set. Lines
-//! and values are bytes, never checked for UTF-8, as the C++'s `std::string`s. The typed getters
-//! parse a value as `Config::parseOptionValue` does and take the fallback when it doesn't.
+//! Four sources, weakest first ([`Sources`]): DXMT's file (`DXMT_CONFIG_FILE`, else `dxmt.conf`
+//! in the working folder), D3D9's `mtld3d.conf` beside the exe, `DXMT_CONFIG` split on `;`, then
+//! `MTLD3D_CONFIG` split on `;`; for DXMT then the exe's built-in profile for the keys none set.
+//! Each file keeps its grammar and each variable its file's: DXMT's below (`parse_line`: lines
+//! and values are bytes, never checked for UTF-8, as the C++'s `std::string`s), mtld3d's in
+//! [`mtld3d`]. The typed getters parse a value as `Config::parseOptionValue` does and take the
+//! fallback when it doesn't.
 
 use std::{collections::BTreeMap, fs::File, io::Read, path::PathBuf};
 
@@ -12,6 +15,157 @@ use crate::{
     float_cast::{f64_to_f32, u64_to_f64},
     log::Logger,
 };
+
+pub mod mtld3d;
+
+/// Where a configuration entry came from.
+pub enum Source {
+    /// DXMT's file, `DXMT_CONFIG_FILE` or `dxmt.conf`.
+    DxmtFile,
+    /// D3D9's file, `mtld3d.conf` beside the exe.
+    Mtld3dFile,
+    /// The `DXMT_CONFIG` variable.
+    DxmtEnv,
+    /// The `MTLD3D_CONFIG` variable.
+    Mtld3dEnv,
+}
+
+impl Source {
+    /// The source's name, as D3D9's warnings name it.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::DxmtFile => "dxmt.conf",
+            Self::Mtld3dFile => "mtld3d.conf",
+            Self::DxmtEnv => "DXMT_CONFIG",
+            Self::Mtld3dEnv => "MTLD3D_CONFIG",
+        }
+    }
+}
+
+/// What one line or part says.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Item {
+    /// `key = value`.
+    Pair { key: Vec<u8>, value: Vec<u8> },
+    /// A line of mtld3d's grammar without `=`, which D3D9 warns about.
+    Malformed,
+}
+
+/// One item of the configuration, with where it came from.
+pub struct Entry {
+    pub source: Source,
+    /// The 0-based line in a file; `None` for a variable's part.
+    pub line: Option<usize>,
+    pub item: Item,
+}
+
+/// The configuration's four sources, as read.
+#[derive(Default)]
+pub struct Sources {
+    /// DXMT's file when it opened: the path as named, the text as a text-mode stream reads it.
+    pub dxmt_file: Option<(Vec<u8>, Vec<u8>)>,
+    /// `mtld3d.conf`'s path and the read's result.
+    ///
+    /// `None` when the exe has no folder to look in, and always natively: the native dylibs read
+    /// no file beside the VM host's binary.
+    pub mtld3d_file: Option<(PathBuf, std::io::Result<Vec<u8>>)>,
+    /// `DXMT_CONFIG`, as the C++ reads it; empty when unset.
+    pub dxmt_env: Vec<u8>,
+    /// `MTLD3D_CONFIG` as UTF-8; empty when unset or not Unicode, as D3D9 read it.
+    pub mtld3d_env: Vec<u8>,
+}
+
+impl Sources {
+    /// Reads the four sources now.
+    ///
+    /// Never latched: D3D9 reads them at each `Direct3DCreate9`; DXMT's DLLs latch the
+    /// [`Config`] they make.
+    #[must_use]
+    pub fn read() -> Self {
+        let mut path = env_var("DXMT_CONFIG_FILE");
+        if path.is_empty() {
+            path = b"dxmt.conf".to_vec();
+        }
+        let dxmt_file = read_file(&path).map(|text| (path, text_mode(text, cfg!(windows))));
+        Self {
+            dxmt_file,
+            mtld3d_file: mtld3d_file(),
+            dxmt_env: env_var("DXMT_CONFIG"),
+            mtld3d_env: std::env::var("MTLD3D_CONFIG")
+                .unwrap_or_default()
+                .into_bytes(),
+        }
+    }
+
+    /// Every item of the four sources, weakest first.
+    ///
+    /// DXMT's file by line, `mtld3d.conf` by line (its text read as UTF-8, a bad byte as
+    /// U+FFFD), `DXMT_CONFIG` by `;`, `MTLD3D_CONFIG` by `;`. A `[section]` of DXMT's file makes
+    /// the DXMT lines after it count only when it names `exe_name` exactly, and that context
+    /// carries into `DXMT_CONFIG`, not into the mtld3d sources.
+    #[must_use]
+    pub fn entries(&self, exe_name: &[u8]) -> Vec<Entry> {
+        let mut entries = Vec::new();
+        let mut active = true;
+        if let Some((_, text)) = &self.dxmt_file {
+            for (n, line) in text.split(|&b| b == b'\n').enumerate() {
+                if let Some(item) = parse_line(&mut active, line, exe_name) {
+                    entries.push(Entry {
+                        source: Source::DxmtFile,
+                        line: Some(n),
+                        item,
+                    });
+                }
+            }
+        }
+        if let Some((_, Ok(text))) = &self.mtld3d_file {
+            for (n, line) in String::from_utf8_lossy(text).lines().enumerate() {
+                if let Some(item) = mtld3d::item(line) {
+                    entries.push(Entry {
+                        source: Source::Mtld3dFile,
+                        line: Some(n),
+                        item,
+                    });
+                }
+            }
+        }
+        for part in self.dxmt_env.split(|&b| b == b';') {
+            if let Some(item) = parse_line(&mut active, part, exe_name) {
+                entries.push(Entry {
+                    source: Source::DxmtEnv,
+                    line: None,
+                    item,
+                });
+            }
+        }
+        for part in String::from_utf8_lossy(&self.mtld3d_env).split(';') {
+            if let Some(item) = mtld3d::item(part) {
+                entries.push(Entry {
+                    source: Source::Mtld3dEnv,
+                    line: None,
+                    item,
+                });
+            }
+        }
+        entries
+    }
+}
+
+/// `mtld3d.conf` beside the exe, as D3D9 finds it: `current_exe`'s folder (no 260-unit cut).
+#[cfg(windows)]
+fn mtld3d_file() -> Option<(PathBuf, std::io::Result<Vec<u8>>)> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.parent()?.join("mtld3d.conf");
+    let text = std::fs::read(&path);
+    Some((path, text))
+}
+
+/// Natively no `mtld3d.conf`: the native dylibs keep reading no file beside the VM host's binary.
+#[cfg(not(windows))]
+const fn mtld3d_file() -> Option<(PathBuf, std::io::Result<Vec<u8>>)> {
+    None
+}
 
 /// The configuration: the user's options, then those of the exe's built-in profile.
 pub struct Config {
@@ -31,27 +185,25 @@ impl Config {
     ///
     /// A machine fact, latched once and immutable after: each DLL keeps the result in a `static`
     /// that reads it at the first use (`Config::getInstance`), never under the loader lock.
+    ///
+    /// It names DXMT's file and `DXMT_CONFIG` and nothing for the two mtld3d sources: no user
+    /// path or value of D3D9's in every DLL's Wine output.
     #[must_use]
     pub fn load(log: &Logger) -> Self {
-        let mut path = env_var("DXMT_CONFIG_FILE");
-        if path.is_empty() {
-            path = b"dxmt.conf".to_vec();
-        }
-        let line = env_var("DXMT_CONFIG");
-        let file = read_file(&path).map(|text| text_mode(text, cfg!(windows)));
-        if file.is_some() {
+        let sources = Sources::read();
+        if let Some((path, _)) = &sources.dxmt_file {
             log.info(&format!(
                 "Found config file: {}",
-                String::from_utf8_lossy(&path)
+                String::from_utf8_lossy(path)
             ));
         }
-        if !line.is_empty() {
+        if !sources.dxmt_env.is_empty() {
             log.info(&format!(
                 "Found config env: {}",
-                String::from_utf8_lossy(&line)
+                String::from_utf8_lossy(&sources.dxmt_env)
             ));
         }
-        let mut options = user(file.as_deref(), &line, env::exe_name().as_bytes());
+        let mut options = pairs(sources.entries(env::exe_name().as_bytes()));
         if let Some(profile) = profile(&env::exe_path()) {
             for line in profile_lines(profile) {
                 log.info(&line);
@@ -68,6 +220,14 @@ impl Config {
     pub fn from_user(file: Option<&[u8]>, env: &[u8], exe_name: &[u8]) -> Self {
         Self {
             options: user(file, env, exe_name),
+        }
+    }
+
+    /// The options `sources` set (no built-in profile), a later source winning.
+    #[must_use]
+    pub fn from_sources(sources: &Sources, exe_name: &[u8]) -> Self {
+        Self {
+            options: pairs(sources.entries(exe_name)),
         }
     }
 
@@ -157,23 +317,32 @@ const PROFILES: [Profile; 6] = [
 /// A `[section]` line makes the lines after it count only when it names `exe_name` exactly, and
 /// that context carries from the file into the variable.
 fn user(file: Option<&[u8]>, env: &[u8], exe_name: &[u8]) -> Map {
+    let sources = Sources {
+        dxmt_file: file.map(|text| (Vec::new(), text.to_vec())),
+        dxmt_env: env.to_vec(),
+        ..Sources::default()
+    };
+    pairs(sources.entries(exe_name))
+}
+
+/// The pairs of `entries` by key, a later one winning; malformed lines change nothing.
+fn pairs(entries: Vec<Entry>) -> Map {
     let mut options = Map::new();
-    let mut active = true;
-    let lines = file
-        .into_iter()
-        .flat_map(|text| text.split(|&b| b == b'\n'));
-    for line in lines.chain(env.split(|&b| b == b';')) {
-        parse_line(&mut options, &mut active, line, exe_name);
+    for entry in entries {
+        if let Item::Pair { key, value } = entry.item {
+            options.insert(key, value);
+        }
     }
     options
 }
 
-/// One line of the user's configuration (`parseUserConfigLine`).
+/// One line of DXMT's grammar (`parseUserConfigLine`): its pair, if it sets one.
 ///
-/// A section's name runs from its `[` to the line's last `]` (none: an empty name). A key is
-/// `[0-9A-Za-z._]*`, then `=`; the value runs to the first space, tab or CR outside double
-/// quotes, the quotes dropped. Anything else changes nothing.
-fn parse_line(options: &mut Map, active: &mut bool, line: &[u8], exe_name: &[u8]) {
+/// A section's name runs from its `[` to the line's last `]` (none: an empty name), and sets
+/// `active`. A key is `[0-9A-Za-z._]*`, then `=`; the value runs to the first space, tab or CR
+/// outside double quotes, the quotes dropped. A pair outside the active section, and anything
+/// else, yields nothing.
+fn parse_line(active: &mut bool, line: &[u8], exe_name: &[u8]) -> Option<Item> {
     let line = skip_whitespace(line);
     if let Some(section) = line.strip_prefix(b"[") {
         let name = section
@@ -181,16 +350,14 @@ fn parse_line(options: &mut Map, active: &mut bool, line: &[u8], exe_name: &[u8]
             .rposition(|&b| b == b']')
             .map_or(&[][..], |end| section.split_at(end).0);
         *active = name == exe_name;
-        return;
+        return None;
     }
     let key_end = line
         .iter()
         .position(|&b| !is_key_char(b))
         .unwrap_or(line.len());
     let (key, rest) = line.split_at(key_end);
-    let Some(rest) = skip_whitespace(rest).strip_prefix(b"=") else {
-        return;
-    };
+    let rest = skip_whitespace(rest).strip_prefix(b"=")?;
     let mut value = Vec::new();
     let mut quoted = false;
     for &b in skip_whitespace(rest) {
@@ -203,9 +370,10 @@ fn parse_line(options: &mut Map, active: &mut bool, line: &[u8], exe_name: &[u8]
             value.push(b);
         }
     }
-    if *active {
-        options.insert(key.to_vec(), value);
-    }
+    active.then(|| Item::Pair {
+        key: key.to_vec(),
+        value,
+    })
 }
 
 /// `config.cpp`'s whitespace: space, tab and CR.

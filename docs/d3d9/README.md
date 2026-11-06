@@ -100,14 +100,20 @@ shows how to keep a fullscreen game's mode change virtual.
 mtld3d reads `mtld3d.conf` from the directory of the game's `.exe` at every
 `Direct3DCreate9` and keeps it for that interface and its devices. A missing
 file means defaults. The `MTLD3D_CONFIG` environment variable takes the same
-entries, separated by semicolons.
+entries, separated by semicolons. Like every API of DXMT it also reads
+`dxmt.conf` (`DXMT_CONFIG_FILE`, else the working folder) and `DXMT_CONFIG`,
+each in DXMT's syntax (a value ends at its first unquoted space; `[game.exe]`
+sections apply), and ignores DXMT's keys (`d3d10.`, `d3d11.`, `d3d12.`,
+`dxgi.`, `dxmt.`) from all four. The log names each source it read.
 
-Each option is resolved from four layers. A later layer wins, key by key:
+Each option is resolved from these layers. A later layer wins, key by key:
 
 1. The built-in default.
 2. The built-in profile for the running game, if there is one.
-3. `mtld3d.conf`.
-4. `MTLD3D_CONFIG`.
+3. `dxmt.conf`.
+4. `mtld3d.conf`.
+5. `DXMT_CONFIG`.
+6. `MTLD3D_CONFIG`.
 
 A profile matches on the executable name plus the version resource its
 vendor linked in, and the log names the profile that matched. The

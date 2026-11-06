@@ -245,3 +245,50 @@ fn bad_value_takes_fallback() {
     assert_eq!(config.get_str("s"), "text");
     assert_eq!(config.get_str("unset"), "");
 }
+
+/// Each of the four sources set: their entries come weakest first.
+#[test]
+fn entries_come_in_source_order() {
+    let sources = Sources {
+        dxmt_file: Some((b"dxmt.conf".to_vec(), b"a=1".to_vec())),
+        mtld3d_file: Some((PathBuf::from("mtld3d.conf"), Ok(b"a=1".to_vec()))),
+        dxmt_env: b"a=1".to_vec(),
+        mtld3d_env: b"a=1".to_vec(),
+    };
+    let labels: Vec<_> = sources
+        .entries(b"x.exe")
+        .iter()
+        .map(|entry| entry.source.label())
+        .collect();
+    assert_eq!(
+        labels,
+        ["dxmt.conf", "mtld3d.conf", "DXMT_CONFIG", "MTLD3D_CONFIG"]
+    );
+}
+
+/// `MTLD3D_CONFIG` reaches DXMT's options too.
+#[test]
+fn mtld3d_config_sets_a_dxmt_key() {
+    let sources = Sources {
+        mtld3d_env: b"d3d11.maxFeatureLevel=12_1".to_vec(),
+        ..Default::default()
+    };
+    assert_eq!(
+        Config::from_sources(&sources, b"x.exe").get("d3d11.maxFeatureLevel"),
+        b"12_1"
+    );
+}
+
+/// A `[section]` of `dxmt.conf` reaches `DXMT_CONFIG`, not `mtld3d.conf`.
+#[test]
+fn dxmt_section_context_skips_the_mtld3d_file() {
+    let sources = Sources {
+        dxmt_file: Some((b"dxmt.conf".to_vec(), b"[other.exe]\n".to_vec())),
+        mtld3d_file: Some((PathBuf::from("mtld3d.conf"), Ok(b"d3d11.a=1".to_vec()))),
+        dxmt_env: b"d3d11.b=2".to_vec(),
+        ..Default::default()
+    };
+    let config = Config::from_sources(&sources, b"x.exe");
+    assert_eq!(config.get("d3d11.a"), b"1");
+    assert_eq!(config.get("d3d11.b"), b"");
+}

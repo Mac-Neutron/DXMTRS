@@ -1,24 +1,27 @@
 //! The [`Mtld3dConfig`] an `IDirect3D9` resolves at `Direct3DCreate9`.
 //!
-//! Three lookups feed it. The built-in [`AppProfile`] for this application, if
-//! it has one, comes from the executable's name plus the version resource of the
-//! image the loader mapped. The optional `mtld3d.conf` is
-//! `std::env::current_exe()` -> strip basename -> join `mtld3d.conf`; a missing
-//! file is fine. The `MTLD3D_CONFIG` env var, when set, beats both. See
-//! `mtld3d.conf` at the repo root for the user-facing sample with documented
-//! keys and defaults.
+//! Its lookups: the built-in [`AppProfile`] for this application, if it has
+//! one, from the executable's name plus the version resource of the image the
+//! loader mapped; then the four sources every API reads
+//! ([`Sources::read`]): `dxmt.conf` (`DXMT_CONFIG_FILE` or the working
+//! folder), the optional `mtld3d.conf` beside the executable
+//! (`std::env::current_exe()`'s folder; a missing file is fine),
+//! `DXMT_CONFIG` and `MTLD3D_CONFIG`, a later one winning. See `mtld3d.conf`
+//! at the repo root for the user-facing sample with documented keys and
+//! defaults.
 //!
 //! Resolved at the top of `Direct3DCreate9`, once per interface, so option
 //! resolution and the per-key info log fire before the interface answers
 //! anything; the interface owns the result and hands it to each device it
 //! creates.
 
-use std::{ffi::c_void, path::PathBuf, ptr};
+use std::{ffi::c_void, ptr};
 
+use dxmt_util::config::Sources;
 use log::info;
 use mtld3d_core::{
     app_profile::{AppIdentity, AppProfile},
-    config::{Mtld3dConfig, log_options, parse},
+    config::{Mtld3dConfig, log_options, parse_sources},
 };
 use mtld3d_shared::identity::version_blob;
 
@@ -30,23 +33,14 @@ unsafe extern "system" {
 
 /// Resolve the configuration for a new `IDirect3D9`.
 ///
-/// Reads the profile, the file and the environment afresh each time, so a
+/// Reads the profile, the files and the environment afresh each time, so a
 /// process that creates several interfaces gives each the options in force
 /// when it was created.
 pub fn load() -> Mtld3dConfig {
-    let env_override = std::env::var("MTLD3D_CONFIG")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
     let profile = app_profile();
-    let file_src = read_conf_file();
-    if let Some(env) = &env_override {
-        info!(target: LOG_TARGET, "mtld3d.conf: applying MTLD3D_CONFIG overrides: {env}");
-    }
-    let cfg = parse(
-        profile,
-        file_src.as_deref().unwrap_or(""),
-        env_override.as_deref(),
-    );
+    let sources = Sources::read();
+    log_sources(&sources);
+    let cfg = parse_sources(profile, &sources, dxmt_util::env::exe_name().as_bytes());
     log_options(&cfg);
     cfg
 }
@@ -65,32 +59,35 @@ fn app_profile() -> Option<&'static AppProfile> {
     mtld3d_core::app_profile::lookup(&AppIdentity::new(name, blob.as_deref()))
 }
 
-fn read_conf_file() -> Option<String> {
-    let Some(path) = conf_path() else {
-        info!(
+/// Name in D3D9's log what was read: `mtld3d.conf`, `dxmt.conf` and the two variables.
+fn log_sources(sources: &Sources) {
+    match &sources.mtld3d_file {
+        None => info!(
             target: LOG_TARGET,
             "mtld3d.conf: current_exe() unavailable — using defaults"
-        );
-        return None;
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(src) => {
+        ),
+        Some((path, Ok(_))) => {
             info!(target: LOG_TARGET, "mtld3d.conf: loaded from {}", path.display());
-            Some(src)
         }
-        Err(e) => {
-            info!(
-                target: LOG_TARGET,
-                "mtld3d.conf: not loaded from {} ({e}) — using defaults",
-                path.display()
-            );
-            None
-        }
+        Some((path, Err(e))) => info!(
+            target: LOG_TARGET,
+            "mtld3d.conf: not loaded from {} ({e}) — using defaults",
+            path.display()
+        ),
     }
-}
-
-fn conf_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let parent = exe.parent()?;
-    Some(parent.join("mtld3d.conf"))
+    if let Some((path, _)) = &sources.dxmt_file {
+        info!(
+            target: LOG_TARGET,
+            "mtld3d.conf: dxmt.conf loaded from {}",
+            String::from_utf8_lossy(path)
+        );
+    }
+    let dxmt_env = String::from_utf8_lossy(&sources.dxmt_env);
+    if !dxmt_env.trim().is_empty() {
+        info!(target: LOG_TARGET, "mtld3d.conf: applying DXMT_CONFIG overrides: {dxmt_env}");
+    }
+    let mtld3d_env = String::from_utf8_lossy(&sources.mtld3d_env);
+    if !mtld3d_env.trim().is_empty() {
+        info!(target: LOG_TARGET, "mtld3d.conf: applying MTLD3D_CONFIG overrides: {mtld3d_env}");
+    }
 }

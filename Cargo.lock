@@ -170,6 +170,7 @@ name = "d3d9"
 version = "0.14.1"
 dependencies = [
  "bitflags 2.13.2",
+ "dxmt-util",
  "log",
  "mtld3d-core",
  "mtld3d-shared",
@@ -406,6 +407,7 @@ name = "mtld3d-core"
 version = "0.14.1"
 dependencies = [
  "bitflags 2.13.2",
+ "dxmt-util",
  "log",
  "mtld3d-shared",
  "mtld3d-types",
