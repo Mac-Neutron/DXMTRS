@@ -19,10 +19,8 @@ use rustc_hash::FxHashMap;
 use winemetal_sys::{
     Obj,
     wire::{
-        WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMT_STENCIL_OPERATION_KEEP, WMTColorAttachmentBlendInfo,
-        WMTDepthStencilInfo, WMTRenderPipelineBlendInfo, WMTSamplerInfo,
-        WmtcmdRenderSetrasterizerstate,
+        WMT_STENCIL_OPERATION_KEEP, WMTColorAttachmentBlendInfo, WMTDepthStencilInfo,
+        WMTRenderPipelineBlendInfo, WMTSamplerInfo, WmtcmdRenderSetrasterizerstate,
     },
 };
 
@@ -606,24 +604,6 @@ impl DepthStencilState {
     }
 }
 
-/// Produces the cube-texture twin `WMTSamplerInfo` for `info` (`dxmt::Sampler` cube twin).
-#[must_use]
-pub const fn cube_sampler_info(info: &WMTSamplerInfo) -> WMTSamplerInfo {
-    let mode = if info.min_filter == WMT_SAMPLER_MIN_MAG_FILTER_LINEAR
-        && info.mag_filter == WMT_SAMPLER_MIN_MAG_FILTER_LINEAR
-    {
-        WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR
-    } else {
-        WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-    };
-    WMTSamplerInfo {
-        r_address_mode: mode,
-        s_address_mode: mode,
-        t_address_mode: mode,
-        ..*info
-    }
-}
-
 /// Validates and translates `desc` into a [`SamplerState`].
 ///
 /// # Errors
@@ -633,76 +613,39 @@ pub fn translate_sampler_state(
     desc: &D3d11SamplerDesc,
     metal_device: Option<&Obj>,
 ) -> Result<SamplerState, Hresult> {
-    let compare_function = if (desc.filter & 0x80) != 0 && (1..=8).contains(&desc.comparison_func) {
-        state_map::compare_func(desc.comparison_func).unwrap_or(0)
-    } else {
-        0
-    };
-    let s_address_mode = if (1..=5).contains(&desc.address_u) {
-        state_map::address_mode(desc.address_u).unwrap_or(0)
-    } else {
-        0
-    };
-    let t_address_mode = if (1..=5).contains(&desc.address_v) {
-        state_map::address_mode(desc.address_v).unwrap_or(0)
-    } else {
-        0
-    };
-    let r_address_mode = if (1..=5).contains(&desc.address_w) {
-        state_map::address_mode(desc.address_w).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let mut border_color = 2u8;
-    if desc.address_u == 4 || desc.address_v == 4 || desc.address_w == 4 {
-        if desc.border_color[0] == 0.0
-            && desc.border_color[1] == 0.0
-            && desc.border_color[2] == 0.0
-            && desc.border_color[3] == 0.0
-        {
-            border_color = 0;
-        } else if desc.border_color[0] == 0.0
-            && desc.border_color[1] == 0.0
-            && desc.border_color[2] == 0.0
-            && desc.border_color[3].to_bits() == 1.0_f32.to_bits()
-        {
-            border_color = 1;
-        } else {
-            border_color = 2;
-        }
-    }
-
-    let lod_min_clamp = desc.min_lod;
-    let lod_max_clamp = desc.max_lod;
-    let is_anisotropic = ((desc.filter & 0x40) != 0)
-        && (((desc.filter >> 4) & 3) == 1)
-        && (((desc.filter >> 2) & 3) == 1)
-        && ((desc.filter & 3) == 1);
-    let max_anisotroy = if is_anisotropic {
-        desc.max_anisotropy.clamp(1, 16)
-    } else {
-        1
-    };
-
-    let primary_info = WMTSamplerInfo {
-        min_filter: u8::from(((desc.filter >> 4) & 3) != 0),
-        mag_filter: u8::from(((desc.filter >> 2) & 3) != 0),
-        mip_filter: if (desc.filter & 3) != 0 { 2 } else { 1 },
-        r_address_mode,
-        s_address_mode,
-        t_address_mode,
-        border_color,
-        compare_function,
-        lod_min_clamp,
-        lod_max_clamp,
-        max_anisotroy,
-        normalized_coords: 1,
+    let mut primary_info = WMTSamplerInfo {
+        min_filter: 0,
+        mag_filter: 0,
+        mip_filter: 0,
+        r_address_mode: 0,
+        s_address_mode: 0,
+        t_address_mode: 0,
+        border_color: 0,
+        compare_function: 0,
+        lod_min_clamp: 0.0,
+        lod_max_clamp: 0.0,
+        max_anisotroy: 0,
+        normalized_coords: 0,
         lod_average: 0,
-        support_argument_buffers: 1,
+        support_argument_buffers: 0,
         gpu_resource_id: 0,
     };
-    let cube_info = cube_sampler_info(&primary_info);
+    // D3D11 reads any filter with the 0x80 bit as comparing; what D3D12 warns of passes silently.
+    dxmt_core::sampler::populate(
+        &mut primary_info,
+        &dxmt_core::sampler::SamplerDesc {
+            filter: desc.filter,
+            address: [desc.address_u, desc.address_v, desc.address_w],
+            comparison: desc.filter & 0x80 != 0,
+            comparison_func: desc.comparison_func,
+            max_anisotropy: desc.max_anisotropy,
+            min_lod: desc.min_lod,
+            max_lod: desc.max_lod,
+            border_color: Some(desc.border_color),
+        },
+        &mut |_| {},
+    );
+    let cube_info = dxmt_core::sampler::cube_info(&primary_info);
 
     let (handle, argument, handle_cube, argument_cube, core_sampler) = if let Some(dev) =
         metal_device

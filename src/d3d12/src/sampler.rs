@@ -1,116 +1,24 @@
 //! Sampler descriptions as Metal samplers.
 //!
 //! D3D12 describes a sampler twice: `D3D12_SAMPLER_DESC` for `CreateSampler` and
-//! `D3D12_STATIC_SAMPLER_DESC` in a root signature. Both fill winemetal's `WMTSamplerInfo` the way
-//! DXMT's C++ `PopulateWMTSamplerInfo` does: into a description the caller owns, leaving a field
-//! alone where the C++ does (an address mode outside 1 to 5, `gpu_resource_id`).
+//! `D3D12_STATIC_SAMPLER_DESC` in a root signature. Both fill winemetal's `WMTSamplerInfo` through
+//! [`dxmt_core::sampler::populate`], into a description the caller owns; a static sampler's border
+//! colour is its enumeration's.
 //!
 //! What the C++ logs on the way is reported to the caller as a [`Warning`], so the front end
 //! writes it through its own log.
 
-use core::fmt;
-
-use dxmt_core::state_map;
+pub use dxmt_core::sampler::Warning;
+use dxmt_core::sampler::{self as core_sampler, populate};
 use winemetal_wire::{
-    WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
-    WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE, WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK,
-    WMT_SAMPLER_MIN_MAG_FILTER_LINEAR, WMT_SAMPLER_MIN_MAG_FILTER_NEAREST,
-    WMT_SAMPLER_MIP_FILTER_LINEAR, WMT_SAMPLER_MIP_FILTER_NEAREST, WMTSamplerInfo,
+    WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE,
+    WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK, WMTSamplerInfo,
 };
 
 use crate::abi::sampler::{
     STATIC_BORDER_COLOR_OPAQUE_BLACK, STATIC_BORDER_COLOR_TRANSPARENT_BLACK, SamplerDesc,
-    StaticSamplerDesc, TEXTURE_ADDRESS_MODE_BORDER, decode_is_anisotropic_filter,
-    decode_is_comparison_filter, decode_mag_filter, decode_min_filter, decode_mip_filter,
+    StaticSamplerDesc, decode_is_comparison_filter,
 };
-
-/// The largest anisotropy Metal takes.
-const MAX_ANISOTROPY: u32 = 16;
-
-/// A line the C++ logs as a warning while it fills a description.
-#[derive(Debug, PartialEq)]
-pub enum Warning {
-    /// A comparison filter with a `ComparisonFunc` outside `NEVER` to `ALWAYS`.
-    InvalidComparisonFunc,
-    /// A dynamic sampler's border colour that is none of the three Metal has, with its components.
-    UnsupportedBorderColor([f32; 4]),
-}
-
-impl fmt::Display for Warning {
-    /// The C++'s message.
-    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidComparisonFunc => {
-                out.write_str("CreateSamplerState: invalid ComparisonFunc")
-            }
-            Self::UnsupportedBorderColor([r, g, b, a]) => write!(
-                out,
-                "CreateSamplerState: Unsupported border color ({r}, {g}, {b}, {a})"
-            ),
-        }
-    }
-}
-
-/// What both descriptions say alike.
-struct Common {
-    filter: u32,
-    /// The U, V and W address modes.
-    address: [u32; 3],
-    comparison_func: u32,
-    max_anisotropy: u32,
-    min_lod: f32,
-    max_lod: f32,
-}
-
-/// Metal's min or mag filter for a `D3D12_FILTER_TYPE` bit field, linear for any bit set.
-const fn min_mag_filter(filter_type: u32) -> u8 {
-    if filter_type == 0 {
-        WMT_SAMPLER_MIN_MAG_FILTER_NEAREST
-    } else {
-        WMT_SAMPLER_MIN_MAG_FILTER_LINEAR
-    }
-}
-
-/// Everything but the border colour, which the two descriptions give differently.
-fn populate_common(info: &mut WMTSamplerInfo, common: &Common, warn: &mut impl FnMut(Warning)) {
-    let filter = common.filter;
-    info.lod_average = 0;
-    info.min_filter = min_mag_filter(decode_min_filter(filter));
-    info.mag_filter = min_mag_filter(decode_mag_filter(filter));
-    info.mip_filter = if decode_mip_filter(filter) == 0 {
-        WMT_SAMPLER_MIP_FILTER_NEAREST
-    } else {
-        WMT_SAMPLER_MIP_FILTER_LINEAR
-    };
-    info.lod_min_clamp = common.min_lod;
-    info.lod_max_clamp = common.max_lod;
-    info.max_anisotroy = if decode_is_anisotropic_filter(filter) {
-        common.max_anisotropy.clamp(1, MAX_ANISOTROPY)
-    } else {
-        1
-    };
-    if let Some(mode) = state_map::address_mode(common.address[0]) {
-        info.s_address_mode = mode;
-    }
-    if let Some(mode) = state_map::address_mode(common.address[1]) {
-        info.t_address_mode = mode;
-    }
-    if let Some(mode) = state_map::address_mode(common.address[2]) {
-        info.r_address_mode = mode;
-    }
-    info.compare_function = WMT_COMPARE_FUNCTION_NEVER;
-    if decode_is_comparison_filter(filter) {
-        // `NEVER` (1) to `ALWAYS` (8); state_map also answers 0 as `NEVER`, which D3D12 refuses.
-        match state_map::compare_func(common.comparison_func)
-            .filter(|_| common.comparison_func != 0)
-        {
-            Some(function) => info.compare_function = function,
-            None => warn(Warning::InvalidComparisonFunc),
-        }
-    }
-    info.support_argument_buffers = 1;
-    info.normalized_coords = 1;
-}
 
 /// Fills `info` from a root signature's static sampler.
 ///
@@ -120,15 +28,17 @@ pub fn populate_static_sampler_info(
     desc: &StaticSamplerDesc,
     warn: &mut impl FnMut(Warning),
 ) {
-    let common = Common {
+    let common = core_sampler::SamplerDesc {
         filter: desc.filter,
         address: [desc.address_u, desc.address_v, desc.address_w],
+        comparison: decode_is_comparison_filter(desc.filter),
         comparison_func: desc.comparison_func,
         max_anisotropy: desc.max_anisotropy,
         min_lod: desc.min_lod,
         max_lod: desc.max_lod,
+        border_color: None,
     };
-    populate_common(info, &common, warn);
+    populate(info, &common, warn);
     info.border_color = match desc.border_color {
         STATIC_BORDER_COLOR_TRANSPARENT_BLACK => WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK,
         STATIC_BORDER_COLOR_OPAQUE_BLACK => WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
@@ -145,24 +55,17 @@ pub fn populate_sampler_info(
     desc: &SamplerDesc,
     warn: &mut impl FnMut(Warning),
 ) {
-    let common = Common {
+    let common = core_sampler::SamplerDesc {
         filter: desc.filter,
         address: [desc.address_u, desc.address_v, desc.address_w],
+        comparison: decode_is_comparison_filter(desc.filter),
         comparison_func: desc.comparison_func,
         max_anisotropy: desc.max_anisotropy,
         min_lod: desc.min_lod,
         max_lod: desc.max_lod,
+        border_color: Some(desc.border_color),
     };
-    populate_common(info, &common, warn);
-    info.border_color = WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE;
-    if common.address.contains(&TEXTURE_ADDRESS_MODE_BORDER) {
-        match desc.border_color {
-            [0.0, 0.0, 0.0, 0.0] => info.border_color = WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK,
-            [0.0, 0.0, 0.0, 1.0] => info.border_color = WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
-            [1.0, 1.0, 1.0, 1.0] => info.border_color = WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE,
-            other => warn(Warning::UnsupportedBorderColor(other)),
-        }
-    }
+    populate(info, &common, warn);
 }
 
 #[cfg(test)]
