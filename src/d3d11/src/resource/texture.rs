@@ -89,19 +89,6 @@ const fn zero_tex_info() -> WMTTextureInfo {
     }
 }
 
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
 /// Texture resource wrapper (`MTLD3D11Texture1D`, `MTLD3D11Texture2D`, `MTLD3D11Texture3D`).
 pub struct TextureResource {
     pub common: Common,
@@ -135,7 +122,7 @@ fn initialize_texture_data_1d_inner(
             let sub = unsafe { &*sub_ptr };
             if !sub.p_sys_mem.is_null() {
                 let row_pitch = u64::from(sub.sys_mem_pitch.max(bpr));
-                let data = mem_ptr(sub.p_sys_mem.expose_provenance());
+                let data = MemPtr::from_addr(sub.p_sys_mem.expose_provenance());
                 // SAFETY: `target_handle` is a live `MTLTexture` and `data` points to subresource bytes.
                 unsafe {
                     MTLTexture_replaceRegion(
@@ -188,7 +175,7 @@ fn initialize_texture_data_2d_inner(
             let sub = unsafe { &*sub_ptr };
             if !sub.p_sys_mem.is_null() {
                 let row_pitch = u64::from(sub.sys_mem_pitch.max(bpr));
-                let data = mem_ptr(sub.p_sys_mem.expose_provenance());
+                let data = MemPtr::from_addr(sub.p_sys_mem.expose_provenance());
                 // SAFETY: `target_handle` is a live `MTLTexture` and `data` points to subresource bytes.
                 unsafe {
                     MTLTexture_replaceRegion(
@@ -240,7 +227,7 @@ fn initialize_texture_data_3d_inner(
         // SAFETY: `sub_ptr` is a valid element of the initial data array.
         let sub = unsafe { &*sub_ptr };
         if !sub.p_sys_mem.is_null() {
-            let data = mem_ptr(sub.p_sys_mem.expose_provenance());
+            let data = MemPtr::from_addr(sub.p_sys_mem.expose_provenance());
             // SAFETY: `target_handle` is a live `MTLTexture` and `data` points to subresource bytes.
             unsafe {
                 MTLTexture_replaceRegion(
