@@ -1,6 +1,6 @@
 //! Every `HRESULT` code the Rust front ends name.
 //!
-//! The generic COM codes are defined in `com.rs` (next to [`Hresult`](super::Hresult)); this
+//! The generic COM codes are defined in `com.rs` (next to [`Hresult`]); this
 //! module re-exports them beside the `DXGI_*` and `D3D12_*` ones, so a front end imports its
 //! codes from here and defines none itself.
 
