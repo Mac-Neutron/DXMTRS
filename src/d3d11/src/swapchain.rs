@@ -8,8 +8,6 @@ use core::{
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use dxmt_core::{
-    frame_stats::{CompatibilityFlags, Container, ScalerType},
-    hud::Hud,
     presenter::{Presenter, PresenterDesc},
     scaler::Scaler,
     settings::{Flags, settings},
@@ -488,118 +486,6 @@ pub const fn evaluate_present_prelude(
         return (hr, false, true);
     }
     (hr, should_exit_fs, false)
-}
-
-/// Writes per-frame HUD lines from `statistics` for `frame_id` (`UpdateStatistics`).
-pub fn update_statistics(hud: &mut Hud, statistics: &Container, frame_id: u64) {
-    hud.begin();
-    let frame = statistics.at(frame_id.wrapping_sub(1));
-    let average = statistics.average();
-    let max = statistics.max();
-    let flags = frame.compatibility_flags;
-    let mut text = *b"---------------------------";
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_GEOMETRY_DRAW) {
-        text[3] = b'G';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_TESSELLATION_OUTPUT_PRIMITIVE) {
-        text[5] = b'T';
-        text[6] = b'O';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_INDIRECT_TESSELLATION_DRAW) {
-        text[8] = b'I';
-        text[9] = b'T';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_GEOMETRY_TESSELLATION_DRAW) {
-        text[11] = b'G';
-        text[12] = b'T';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_DRAW_AUTO) {
-        text[14] = b'A';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_PREDICATION) {
-        text[16] = b'P';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_STREAM_OUTPUT_APPENDING) {
-        text[18] = b'S';
-        text[19] = b'A';
-    }
-    if flags.contains(CompatibilityFlags::UNSUPPORTED_MULTIPLE_STREAM_OUTPUT) {
-        text[21] = b'M';
-        text[22] = b'S';
-    }
-    if let Ok(line) = core::str::from_utf8(&text) {
-        hud.print_line(line);
-    }
-    let avg_commit = (average.commit_interval.as_secs_f64() * 1000.0).min(99.9);
-    let max_commit = (max.commit_interval.as_secs_f64() * 1000.0).min(99.9);
-    hud.print_line(&format!(
-        "Commit: {:2} -{:4.1} -{:4.1}",
-        frame.command_buffer_count.min(99),
-        avg_commit,
-        max_commit,
-    ));
-    let avg_sync = (average.sync_interval.as_secs_f64() * 1000.0).min(99.9);
-    let avg_lat = (average.present_latency_interval.as_secs_f64() * 1000.0).min(99.9);
-    hud.print_line(&format!(
-        "Sync:   {:2} {:4.1}  {:2} {:4.1} {:2}",
-        frame.sync_count.min(99),
-        avg_sync,
-        max.event_stall.min(99),
-        avg_lat,
-        frame.latency,
-    ));
-    let prep = (average.encode_prepare_interval.as_secs_f64() * 1000.0).min(99.9);
-    let flush_non_block = (average
-        .encode_flush_interval
-        .saturating_sub(average.drawable_blocking_interval)
-        .as_secs_f64()
-        * 1000.0)
-        .min(99.9);
-    let block = (average.drawable_blocking_interval.as_secs_f64() * 1000.0).min(99.9);
-    let total = ((average.encode_prepare_interval + average.encode_flush_interval).as_secs_f64()
-        * 1000.0)
-        .min(99.9);
-    hud.print_line(&format!(
-        "Encode: {prep:4.1}+{flush_non_block:4.1}+{block:4.1}={total:4.1}"
-    ));
-    hud.print_line(&format!(
-        "Render:{:3}+{:<3} Clear:{:3}+{:<2}",
-        frame
-            .render_pass_count
-            .saturating_sub(frame.render_pass_optimized)
-            .min(999),
-        frame.render_pass_optimized.min(999),
-        frame
-            .clear_pass_count
-            .saturating_sub(frame.clear_pass_optimized)
-            .min(999),
-        frame.clear_pass_optimized.min(99),
-    ));
-    let info = &frame.last_scaler_info;
-    match info.kind {
-        ScalerType::Temporal => {
-            let aexp = if info.auto_exposure { "AEXP" } else { "" };
-            let hmv = if info.motion_vector_highres {
-                "HMV"
-            } else {
-                ""
-            };
-            hud.print_line(&format!("MetalFX: Temporal {aexp} {hmv}"));
-            hud.print_line(&format!(
-                "Scale: {:4}x{:4}->{:4}x{:4}",
-                info.input_width, info.input_height, info.output_width, info.output_height
-            ));
-        }
-        ScalerType::Spatial => {
-            hud.print_line("MetalFX: Spatial");
-            hud.print_line(&format!(
-                "Scale: {:4}x{:4}->{:4}x{:4}",
-                info.input_width, info.input_height, info.output_width, info.output_height
-            ));
-        }
-        ScalerType::None => {}
-    }
-    hud.end();
 }
 
 static SWAPCHAIN_VTBL: IDXGISwapChain4Vtbl = IDXGISwapChain4Vtbl {
