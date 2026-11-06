@@ -220,5 +220,80 @@ impl Logger {
     }
 }
 
+/// Whether a message at `level` is formatted at all.
+///
+/// The performance build (`perf-build`, compiled into this crate) drops everything below
+/// warnings, so its callers' `format!` never runs.
+/// The log macros ([`err!`](crate::err) and its siblings) ask it, so the gate is this crate's
+/// feature and not the calling crate's.
+#[must_use]
+#[inline]
+pub const fn enabled(level: &Level) -> bool {
+    cfg!(not(feature = "perf-build")) || matches!(level, Level::Warn | Level::Error | Level::None)
+}
+
+/// Logs an error to `$log`, a DLL's [`Logger`], with `format!`'s arguments.
+#[macro_export]
+macro_rules! err {
+    ($log:expr, $($arg:tt)*) => {
+        if $crate::log::enabled(&$crate::log::Level::Error) {
+            $log.err(&::std::format!($($arg)*));
+        }
+    };
+}
+
+/// Logs a warning to `$log`, a DLL's [`Logger`], with `format!`'s arguments.
+#[macro_export]
+macro_rules! warn {
+    ($log:expr, $($arg:tt)*) => {
+        if $crate::log::enabled(&$crate::log::Level::Warn) {
+            $log.warn(&::std::format!($($arg)*));
+        }
+    };
+}
+
+/// Logs at info level to `$log`; the performance build formats nothing.
+#[macro_export]
+macro_rules! info {
+    ($log:expr, $($arg:tt)*) => {
+        if $crate::log::enabled(&$crate::log::Level::Info) {
+            $log.info(&::std::format!($($arg)*));
+        }
+    };
+}
+
+/// Logs at debug level to `$log`; the performance build formats nothing.
+#[macro_export]
+macro_rules! debug {
+    ($log:expr, $($arg:tt)*) => {
+        if $crate::log::enabled(&$crate::log::Level::Debug) {
+            $log.debug(&::std::format!($($arg)*));
+        }
+    };
+}
+
+/// Logs at trace level to `$log`; the performance build formats nothing.
+#[macro_export]
+macro_rules! trace {
+    ($log:expr, $($arg:tt)*) => {
+        if $crate::log::enabled(&$crate::log::Level::Trace) {
+            $log.trace(&::std::format!($($arg)*));
+        }
+    };
+}
+
+/// Logs an error to `$log` the first time this call site runs, and never again.
+///
+/// The latch is a per-call-site `static` that carries nothing beyond "fired".
+#[macro_export]
+macro_rules! err_once {
+    ($log:expr, $($arg:tt)*) => {{
+        static LOGGED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
+            $crate::err!($log, $($arg)*);
+        }
+    }};
+}
+
 #[cfg(test)]
 mod tests;

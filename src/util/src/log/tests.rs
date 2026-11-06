@@ -161,3 +161,35 @@ fn the_performance_build_logs_nothing_below_warn() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn enabled_drops_below_warnings_only_in_the_performance_build() {
+    let full = cfg!(not(feature = "perf-build"));
+    assert_eq!(super::enabled(&Level::Trace), full);
+    assert_eq!(super::enabled(&Level::Debug), full);
+    assert_eq!(super::enabled(&Level::Info), full);
+    assert!(super::enabled(&Level::Warn));
+    assert!(super::enabled(&Level::Error));
+}
+
+#[test]
+fn macros_format_only_what_passes() {
+    static LOG: Logger = Logger::new("no_test_log/util.log");
+    let formatted = core::cell::Cell::new(0);
+    let count = || {
+        formatted.set(formatted.get() + 1);
+        ""
+    };
+    crate::err!(LOG, "e{}", count());
+    crate::warn!(LOG, "w{}", count());
+    crate::info!(LOG, "i{}", count());
+    crate::debug!(LOG, "d{}", count());
+    crate::trace!(LOG, "t{}", count());
+    let below_warn = if cfg!(feature = "perf-build") { 0 } else { 3 };
+    assert_eq!(formatted.get(), 2 + below_warn);
+    // One line per call site: the second pass through the same site formats nothing.
+    for _ in 0..2 {
+        crate::err_once!(LOG, "o{}", count());
+    }
+    assert_eq!(formatted.get(), 3 + below_warn);
+}

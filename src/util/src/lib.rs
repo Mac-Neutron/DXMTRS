@@ -1,5 +1,6 @@
 //! What DXMT's Rust DLLs (`nvngx.dll`, `nvapi64.dll`, `d3d10core.dll`, `dxgi.dll`) share.
 
+pub mod boot;
 pub mod com;
 pub mod config;
 pub mod dxgi_consts;
