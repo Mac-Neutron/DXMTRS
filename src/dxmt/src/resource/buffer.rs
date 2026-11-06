@@ -175,7 +175,7 @@ impl Buffer {
             };
         };
         let mut views = lock(&allocation.views);
-        if let Some(v) = views.iter().find(|v| v.key == key) {
+        if let Some((_, v)) = views.iter().find(|(k, _)| *k == key) {
             return BufferView {
                 texture: handle(v.texture.as_ref()),
                 gpu_resource_id: v.gpu_resource_id,
@@ -223,11 +223,13 @@ impl Buffer {
             gpu_resource_id: info.gpu_resource_id,
             suballocation_texel,
         };
-        views.push(CachedView {
+        views.push((
             key,
-            texture,
-            gpu_resource_id: info.gpu_resource_id,
-        });
+            CachedView {
+                texture,
+                gpu_resource_id: info.gpu_resource_id,
+            },
+        ));
         view
     }
 
@@ -248,7 +250,7 @@ pub struct BufferAllocation {
     sub: Suballocation,
     current_suballocation: AtomicU32,
     retained: Retained,
-    views: Mutex<Vec<CachedView<BufferViewKey>>>,
+    views: Mutex<Vec<(BufferViewKey, CachedView)>>,
     /// Dropped last, after the buffer and its views.
     _placed: Option<Placed>,
 }

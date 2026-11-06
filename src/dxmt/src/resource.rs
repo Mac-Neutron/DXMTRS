@@ -121,9 +121,8 @@ impl Drop for Placed {
     }
 }
 
-/// A Metal view an allocation made, by its key.
-struct CachedView<K> {
-    key: K,
+/// A Metal view an allocation made.
+struct CachedView {
     texture: Option<Obj>,
     gpu_resource_id: u64,
 }

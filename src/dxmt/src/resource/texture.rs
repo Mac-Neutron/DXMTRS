@@ -4,6 +4,7 @@ use core::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, RwLock};
 
 use dxmt_util::sync::{read, write};
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLBuffer_newTexture, MTLDevice_newBuffer, MTLDevice_newSharedTexture, MTLDevice_newTexture,
     MTLHeap_newTexture, MTLTexture_newTextureView, Obj,
@@ -291,7 +292,7 @@ impl Texture {
             array_length: self.array_length(),
             mip_level_count: self.info.mipmap_level_count(),
             retained: Retained::default(),
-            views: Mutex::new(Vec::new()),
+            views: Mutex::new(FxHashMap::default()),
             _placed: placed,
         })
     }
@@ -311,7 +312,7 @@ pub struct TextureAllocation {
     array_length: u32,
     mip_level_count: u32,
     retained: Retained,
-    views: Mutex<Vec<CachedView<TextureViewKey>>>,
+    views: Mutex<FxHashMap<TextureViewKey, CachedView>>,
     /// Dropped last, after the buffer and its texture.
     _placed: Option<Placed>,
 }
@@ -390,7 +391,7 @@ impl TextureAllocation {
             };
         };
         let mut views = lock(&self.views);
-        if let Some(v) = views.iter().find(|v| v.key == key) {
+        if let Some(v) = views.get(&key) {
             return TextureView {
                 texture: handle(v.texture.as_ref()),
                 gpu_resource_id: v.gpu_resource_id,
@@ -430,11 +431,13 @@ impl TextureAllocation {
             texture: handle(texture.as_ref()),
             gpu_resource_id,
         };
-        views.push(CachedView {
+        views.insert(
             key,
-            texture,
-            gpu_resource_id,
-        });
+            CachedView {
+                texture,
+                gpu_resource_id,
+            },
+        );
         view
     }
 
