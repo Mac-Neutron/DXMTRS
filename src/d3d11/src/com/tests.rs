@@ -190,3 +190,253 @@ fn tear_off_forwards() {
     assert_eq!(unsafe { (TEAR_OFF_VTBL.release)(iface) }, 1);
     assert_eq!(dev.count(), 1);
 }
+
+// --- Reference counts across AddRef, QueryInterface and Release, one object of each model ---
+
+mod refcount {
+    use core::{ffi::c_void, ptr};
+
+    use airconv_ir::container::{build, fourcc};
+
+    use super::FakeDevice;
+    use crate::{
+        abi::{
+            IID_ID3D10_DEVICE_CHILD, IID_ID3D10_INPUT_LAYOUT, IID_ID3D10_RASTERIZER_STATE,
+            IID_ID3D11_DEVICE_CHILD, IID_ID3D11_INPUT_LAYOUT, IID_ID3D11_RASTERIZER_STATE_2,
+            IID_ID3D11_TEXTURE_2D, IID_IDXGI_KEYED_MUTEX, IID_IDXGI_SURFACE,
+            ext::IID_IMTL_MIN_LOD_CLAMPABLE,
+            records::{D3d11InputElementDesc, D3d11Texture2dDesc1},
+        },
+        com::{E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, S_OK, vtbl},
+        input_layout::create_input_layout,
+        resource::{Common, Resource, ResourceDesc, ResourceKind},
+        state::{create_rasterizer_state2, default_rasterizer_desc2},
+    };
+
+    fn unknown<'a>(obj: *mut c_void) -> &'a IUnknownVtbl {
+        // SAFETY: `obj` is a live COM object.
+        unsafe { vtbl::<IUnknownVtbl>(obj) }
+    }
+
+    /// `QueryInterface(iid)` on `obj`: the answer and the pointer written (null on a miss).
+    fn qi(obj: *mut c_void, iid: &Guid) -> (Hresult, *mut c_void) {
+        let mut out = ptr::dangling_mut::<c_void>();
+        // SAFETY: `obj` is a live COM object; `iid` and `out` are valid.
+        let hr = unsafe { (unknown(obj).query_interface)(obj, iid, &raw mut out) };
+        (hr, out)
+    }
+
+    fn add_ref(obj: *mut c_void) -> u32 {
+        // SAFETY: `obj` is a live COM object.
+        unsafe { (unknown(obj).add_ref)(obj) }
+    }
+
+    fn release(obj: *mut c_void) -> u32 {
+        // SAFETY: `obj` is a live COM object the caller holds a reference to.
+        unsafe { (unknown(obj).release)(obj) }
+    }
+
+    fn null_riid_and_out(obj: *mut c_void, null_riid: Hresult) {
+        let mut out = ptr::dangling_mut::<c_void>();
+        // SAFETY: a null `riid` is the case under test; `out` is valid.
+        let hr = unsafe { (unknown(obj).query_interface)(obj, ptr::null(), &raw mut out) };
+        assert_eq!(hr, null_riid);
+        assert!(out.is_null());
+        let iid = IID_IUNKNOWN;
+        // SAFETY: a null `out` is the case under test; `iid` is valid.
+        let hr = unsafe { (unknown(obj).query_interface)(obj, &raw const iid, ptr::null_mut()) };
+        assert_eq!(hr, E_POINTER);
+    }
+
+    fn texture2d(misc_flags: u32) -> *mut Resource {
+        Resource::into_raw(
+            Common {
+                misc_flags,
+                ..Common::default()
+            },
+            ResourceKind::DeviceTexture,
+            ResourceDesc::Texture2d(D3d11Texture2dDesc1 {
+                array_size: 1,
+                mip_levels: 1,
+                ..D3d11Texture2dDesc1::default()
+            }),
+        )
+    }
+
+    #[test]
+    fn resource_and_its_tear_offs_share_one_count() {
+        let res = texture2d(0);
+        let obj = res.cast::<c_void>();
+        // SAFETY: `res` is live until its last release below.
+        let count = || unsafe { (*res).refs.public_count() };
+        assert_eq!(count(), 1);
+        assert_eq!(add_ref(obj), 2);
+
+        assert_eq!(qi(obj, &IID_IUNKNOWN), (S_OK, obj));
+        assert_eq!(count(), 3);
+        assert_eq!(qi(obj, &IID_ID3D11_TEXTURE_2D), (S_OK, obj));
+        assert_eq!(count(), 4);
+
+        // A one-subresource texture answers the DXGI surface from its tear-off, which counts on the outer.
+        // SAFETY: `res` is live.
+        let surface = unsafe { (*res).dxgi_surface.as_iface() };
+        assert_eq!(qi(obj, &IID_IDXGI_SURFACE), (S_OK, surface));
+        assert_eq!(count(), 5);
+        assert_eq!(add_ref(surface), 6);
+        assert_eq!(count(), 6);
+        // The tear-off's own QueryInterface forwards to the outer, so its answer takes the outer's count.
+        assert_eq!(qi(surface, &IID_IUNKNOWN), (S_OK, obj));
+        assert_eq!(count(), 7);
+        for expected in (1..7).rev() {
+            assert_eq!(release(surface), expected);
+        }
+        assert_eq!(count(), 1);
+
+        // The min-LOD tear-off of a device texture.
+        // SAFETY: `res` is live.
+        let min_lod = unsafe { (&raw const (*res).min_lod_vtbl).cast_mut().cast::<c_void>() };
+        assert_eq!(qi(obj, &IID_IMTL_MIN_LOD_CLAMPABLE), (S_OK, min_lod));
+        assert_eq!(count(), 2);
+        assert_eq!(release(min_lod), 1);
+
+        // Misses take no reference and write null: the keyed mutex without the flag, an unknown IID.
+        assert_eq!(
+            qi(obj, &IID_IDXGI_KEYED_MUTEX),
+            (E_NOINTERFACE, ptr::null_mut())
+        );
+        let unknown = Guid::new(0x1111_1111, 0x2222, 0x3333, [0x44; 8]);
+        assert_eq!(qi(obj, &unknown), (E_NOINTERFACE, ptr::null_mut()));
+        assert_eq!(count(), 1);
+        null_riid_and_out(obj, E_NOINTERFACE);
+        assert_eq!(count(), 1);
+
+        assert_eq!(release(obj), 0);
+    }
+
+    #[test]
+    fn keyed_mutex_tear_off_counts_on_the_resource() {
+        let res = texture2d(0x100);
+        let obj = res.cast::<c_void>();
+        // SAFETY: `res` is live until its last release below.
+        let mutex = unsafe { (*res).keyed_mutex_tearoff.as_iface() };
+        assert_eq!(qi(obj, &IID_IDXGI_KEYED_MUTEX), (S_OK, mutex));
+        // SAFETY: `res` is live.
+        assert_eq!(unsafe { (*res).refs.public_count() }, 2);
+        assert_eq!(add_ref(mutex), 3);
+        assert_eq!(release(mutex), 2);
+        assert_eq!(release(mutex), 1);
+        assert_eq!(release(obj), 0);
+    }
+
+    #[test]
+    fn cached_state_object_lives_at_zero_and_holds_the_device_while_referenced() {
+        let dev = FakeDevice::new();
+        let dev_ptr = dev.as_iface();
+        let mut desc = default_rasterizer_desc2();
+        desc.depth_bias = 4321;
+        let mut state = ptr::null_mut();
+        assert_eq!(
+            create_rasterizer_state2(dev_ptr, &raw const desc, &raw mut state),
+            S_OK
+        );
+        assert_eq!(dev.count(), 2);
+
+        // The 0 -> 1 transition took the device; further references do not.
+        assert_eq!(qi(state, &IID_ID3D11_RASTERIZER_STATE_2), (S_OK, state));
+        assert_eq!(qi(state, &IID_ID3D11_DEVICE_CHILD), (S_OK, state));
+        assert_eq!(dev.count(), 2);
+        // The D3D10 interface is the embedded wrapper, counted on the same object.
+        let (hr, d3d10) = qi(state, &IID_ID3D10_RASTERIZER_STATE);
+        assert_eq!(hr, S_OK);
+        assert_ne!(d3d10, state);
+        assert_eq!(qi(state, &IID_ID3D10_DEVICE_CHILD).1, d3d10);
+        assert_eq!(dev.count(), 2);
+
+        // Misses take nothing and write null.
+        let unknown = Guid::new(0x1111_1111, 0x2222, 0x3333, [0x44; 8]);
+        assert_eq!(qi(state, &unknown), (E_NOINTERFACE, ptr::null_mut()));
+        assert_eq!(dev.count(), 2);
+        null_riid_and_out(state, crate::com::E_INVALIDARG);
+
+        // 1 (create) + 4 answers: releasing through either interface counts down; the last gives the device back.
+        assert_eq!(release(d3d10), 4);
+        assert_eq!(release(d3d10), 3);
+        assert_eq!(release(state), 2);
+        assert_eq!(release(state), 1);
+        assert_eq!(dev.count(), 2);
+        assert_eq!(release(state), 0);
+        assert_eq!(dev.count(), 1);
+
+        // The object stays in the cache at 0: a new create finds it and takes the device again.
+        let mut again = ptr::null_mut();
+        assert_eq!(
+            create_rasterizer_state2(dev_ptr, &raw const desc, &raw mut again),
+            S_OK
+        );
+        assert_eq!(again, state);
+        assert_eq!(dev.count(), 2);
+        assert_eq!(release(again), 0);
+        assert_eq!(dev.count(), 1);
+    }
+
+    /// A `VSIA`-less minimum: an `ISGN` of one `POSITION` parameter.
+    fn position_signature() -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&8u32.to_le_bytes());
+        blob.extend_from_slice(&32u32.to_le_bytes()); // name offset
+        for field in [0u32, 0, 3, 0] {
+            blob.extend_from_slice(&field.to_le_bytes());
+        }
+        blob.extend_from_slice(&[0x7, 0x7, 0, 0]);
+        blob.extend_from_slice(b"POSITION\0\0\0\0");
+        build(&[(fourcc::ISGN, &blob)]).expect("container fits in 32 bits")
+    }
+
+    #[test]
+    fn managed_object_takes_the_device_on_the_first_public_reference_only() {
+        let dev = FakeDevice::new();
+        let dev_ptr = dev.as_iface();
+        let element = D3d11InputElementDesc {
+            semantic_name: c"POSITION".as_ptr(),
+            semantic_index: 0,
+            format: 6,
+            input_slot: 0,
+            aligned_byte_offset: 0,
+            input_slot_class: 0,
+            instance_data_step_rate: 0,
+        };
+        let dxbc = position_signature();
+        let mut layout = ptr::null_mut();
+        assert_eq!(
+            create_input_layout(
+                dev_ptr,
+                &raw const element,
+                1,
+                dxbc.as_ptr().cast(),
+                dxbc.len(),
+                &raw mut layout,
+            ),
+            S_OK
+        );
+        assert_eq!(dev.count(), 2);
+
+        assert_eq!(qi(layout, &IID_ID3D11_INPUT_LAYOUT), (S_OK, layout));
+        assert_eq!(dev.count(), 2);
+        let (hr, d3d10) = qi(layout, &IID_ID3D10_INPUT_LAYOUT);
+        assert_eq!(hr, S_OK);
+        assert_ne!(d3d10, layout);
+        let unknown = Guid::new(0x1111_1111, 0x2222, 0x3333, [0x44; 8]);
+        assert_eq!(qi(layout, &unknown), (E_NOINTERFACE, ptr::null_mut()));
+        null_riid_and_out(layout, crate::com::E_INVALIDARG);
+        assert_eq!(add_ref(layout), 4);
+
+        assert_eq!(release(d3d10), 3);
+        assert_eq!(release(layout), 2);
+        assert_eq!(release(layout), 1);
+        assert_eq!(dev.count(), 2);
+        // The last release gives the device back and frees the object (both counts reach zero).
+        assert_eq!(release(layout), 0);
+        assert_eq!(dev.count(), 1);
+    }
+}
