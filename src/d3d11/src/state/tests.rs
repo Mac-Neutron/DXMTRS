@@ -1106,3 +1106,70 @@ fn nan_desc_never_equals() {
     assert_ne!(ps1, ps2);
     assert_eq!(caches.sampler.len(), 2);
 }
+
+// The lookup tables d3d11 used before it took dxmt_core::state_map's functions, as the oracle: each
+// in-range value, and 0 for everything past the end.
+#[test]
+fn state_map_answers_as_the_old_tables_did() {
+    use dxmt_core::state_map;
+
+    const BLEND_FACTOR: [u8; 20] = [
+        0, 0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 0, 0, 11, 12, 15, 16, 17, 18,
+    ];
+    const BLEND_ALPHA_FACTOR: [u8; 20] = [
+        0, 0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 0, 0, 13, 14, 15, 16, 17, 18,
+    ];
+    const COLOR_WRITE_MASK: [u8; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
+    const BLEND_OP: [u8; 6] = [0, 0, 1, 2, 3, 4];
+    const COMPARE_FUNC: [u8; 9] = [0, 0, 1, 2, 3, 4, 5, 6, 7];
+    const STENCIL_OP: [u8; 9] = [1, 0, 1, 2, 3, 4, 5, 6, 7];
+    const ADDRESS_MODE: [u8; 6] = [0, 2, 3, 0, 5, 1];
+
+    for i in 0..64u32 {
+        let at = |table: &[u8]| table.get(i as usize).copied().unwrap_or(0);
+        assert_eq!(
+            state_map::blend_factor(i).filter(|_| i < 20).unwrap_or(0),
+            at(&BLEND_FACTOR),
+            "blend factor {i}"
+        );
+        assert_eq!(
+            state_map::blend_alpha_factor(i)
+                .filter(|_| i < 20)
+                .unwrap_or(0),
+            at(&BLEND_ALPHA_FACTOR),
+            "blend alpha factor {i}"
+        );
+        assert_eq!(
+            state_map::blend_op(i).unwrap_or(0),
+            at(&BLEND_OP),
+            "blend op {i}"
+        );
+        assert_eq!(
+            state_map::compare_func(i).unwrap_or(0),
+            at(&COMPARE_FUNC),
+            "compare {i}"
+        );
+        assert_eq!(
+            state_map::stencil_op(i).unwrap_or(0),
+            at(&STENCIL_OP),
+            "stencil {i}"
+        );
+        // The sampler guarded 1..=5 itself and indexed the table inside; the write mask was masked.
+        if (1..=5).contains(&i) {
+            assert_eq!(
+                state_map::address_mode(i).unwrap_or(0),
+                ADDRESS_MODE[i as usize],
+                "address {i}"
+            );
+        }
+        if i < 16 {
+            assert_eq!(
+                state_map::color_write_mask(i).unwrap_or(0),
+                COLOR_WRITE_MASK[i as usize],
+                "write mask {i}"
+            );
+        }
+    }
+    // The old tables' address entry for 0 was never reached (the sampler guarded 1..=5).
+    assert_eq!(state_map::address_mode(0), None);
+}

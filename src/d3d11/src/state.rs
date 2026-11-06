@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use dxmt_core::{
     library::depth_stencil_state as create_metal_depth_stencil, sampler::Sampler as CoreSampler,
+    state_map,
 };
 use dxmt_util::{
     com::{Qi, QiMiss, qi_table},
@@ -81,33 +82,8 @@ fn caches_for_device(device: *mut c_void) -> (&'static StateCaches, Option<&'sta
     (unsafe { &*ptr }, None)
 }
 
-/// D3D11 `D3D11_BLEND` (`0..=19`) to `WMTBlendFactor` RGB mapping (`d3d11_state_object.cpp`).
-pub const BLEND_FACTOR_MAP: [u8; 20] = [
-    0, 0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 0, 0, 11, 12, 15, 16, 17, 18,
-];
-
-/// D3D11 `D3D11_BLEND` (`0..=19`) to `WMTBlendFactor` alpha mapping (`d3d11_state_object.cpp`).
-pub const BLEND_ALPHA_FACTOR_MAP: [u8; 20] = [
-    0, 0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 0, 0, 13, 14, 15, 16, 17, 18,
-];
-
-/// D3D11 `D3D11_COLOR_WRITE_ENABLE` (`0..=15`) to `WMTColorWriteMask` (`d3d11_state_object.cpp`).
-pub const COLOR_WRITE_MASK_MAP: [u8; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
-
-/// D3D11 `D3D11_BLEND_OP` (`0..=5`) to `WMTBlendOperation` (`d3d11_state_object.cpp`).
-pub const BLEND_OP_MAP: [u8; 6] = [0, 0, 1, 2, 3, 4];
-
 /// D3D11 `D3D11_LOGIC_OP` (`0..=15`) to `WMTLogicOperation` (`d3d11_state_object.cpp`).
 pub const LOGIC_OP_MAP: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-
-/// D3D11 `D3D11_COMPARISON_FUNC` (`0..=8`) to `WMTCompareFunction` (`d3d11_state_object.cpp`).
-pub const COMPARE_FUNC_MAP: [u8; 9] = [0, 0, 1, 2, 3, 4, 5, 6, 7];
-
-/// D3D11 `D3D11_STENCIL_OP` (`0..=8`) to `WMTStencilOperation` (`d3d11_state_object.cpp`).
-pub const STENCIL_OP_MAP: [u8; 9] = [1, 0, 1, 2, 3, 4, 5, 6, 7];
-
-/// D3D11 `D3D11_TEXTURE_ADDRESS_MODE` (`0..=5`) to `WMTSamplerAddressMode` mapping.
-pub const ADDRESS_MODE_MAP: [u8; 6] = [0, 2, 3, 0, 5, 1];
 
 const fn is_dual_source_factor(factor: u32) -> bool {
     factor >= 16
@@ -242,28 +218,22 @@ pub fn translate_blend_state(desc: &D3d11BlendDesc1) -> Result<BlendState, Hresu
         };
         let d = &mut info.colors[rt];
         d.blending_enabled = u8::from(s.blend_enable != 0);
-        d.write_mask = COLOR_WRITE_MASK_MAP[(s.render_target_write_mask & 0x0f) as usize];
-        d.src_rgb_blend_factor = BLEND_FACTOR_MAP
-            .get(s.src_blend as usize)
-            .copied()
+        d.write_mask =
+            state_map::color_write_mask(u32::from(s.render_target_write_mask & 0x0f)).unwrap_or(0);
+        d.src_rgb_blend_factor = state_map::blend_factor(s.src_blend)
+            .filter(|_| s.src_blend < 20)
             .unwrap_or(0);
-        d.dst_rgb_blend_factor = BLEND_FACTOR_MAP
-            .get(s.dest_blend as usize)
-            .copied()
+        d.dst_rgb_blend_factor = state_map::blend_factor(s.dest_blend)
+            .filter(|_| s.dest_blend < 20)
             .unwrap_or(0);
-        d.rgb_blend_operation = BLEND_OP_MAP.get(s.blend_op as usize).copied().unwrap_or(0);
-        d.src_alpha_blend_factor = BLEND_ALPHA_FACTOR_MAP
-            .get(s.src_blend_alpha as usize)
-            .copied()
+        d.rgb_blend_operation = state_map::blend_op(s.blend_op).unwrap_or(0);
+        d.src_alpha_blend_factor = state_map::blend_alpha_factor(s.src_blend_alpha)
+            .filter(|_| s.src_blend_alpha < 20)
             .unwrap_or(0);
-        d.dst_alpha_blend_factor = BLEND_ALPHA_FACTOR_MAP
-            .get(s.dest_blend_alpha as usize)
-            .copied()
+        d.dst_alpha_blend_factor = state_map::blend_alpha_factor(s.dest_blend_alpha)
+            .filter(|_| s.dest_blend_alpha < 20)
             .unwrap_or(0);
-        d.alpha_blend_operation = BLEND_OP_MAP
-            .get(s.blend_op_alpha as usize)
-            .copied()
-            .unwrap_or(0);
+        d.alpha_blend_operation = state_map::blend_op(s.blend_op_alpha).unwrap_or(0);
     }
 
     let rt0 = &desc_normalized.render_target[0];
@@ -329,37 +299,35 @@ impl BlendState {
                 0
             };
             let render_target = &self.desc.render_target[i];
-            attachment_desc.write_mask =
-                COLOR_WRITE_MASK_MAP[(render_target.render_target_write_mask & 0x0f) as usize];
+            attachment_desc.write_mask = state_map::color_write_mask(u32::from(
+                render_target.render_target_write_mask & 0x0f,
+            ))
+            .unwrap_or(0);
             if render_target.blend_enable != 0 && attachment_desc.pixel_format != 0 {
                 if dxmt_core::format::is_integer(attachment_desc.pixel_format) {
                     continue;
                 }
-                attachment_desc.alpha_blend_operation = BLEND_OP_MAP
-                    .get(render_target.blend_op_alpha as usize)
-                    .copied()
-                    .unwrap_or(0);
-                attachment_desc.rgb_blend_operation = BLEND_OP_MAP
-                    .get(render_target.blend_op as usize)
-                    .copied()
-                    .unwrap_or(0);
+                attachment_desc.alpha_blend_operation =
+                    state_map::blend_op(render_target.blend_op_alpha).unwrap_or(0);
+                attachment_desc.rgb_blend_operation =
+                    state_map::blend_op(render_target.blend_op).unwrap_or(0);
                 attachment_desc.blending_enabled = u8::from(render_target.blend_enable != 0);
-                attachment_desc.src_alpha_blend_factor = BLEND_ALPHA_FACTOR_MAP
-                    .get(render_target.src_blend_alpha as usize)
-                    .copied()
-                    .unwrap_or(0);
-                attachment_desc.src_rgb_blend_factor = BLEND_FACTOR_MAP
-                    .get(render_target.src_blend as usize)
-                    .copied()
-                    .unwrap_or(0);
-                attachment_desc.dst_alpha_blend_factor = BLEND_ALPHA_FACTOR_MAP
-                    .get(render_target.dest_blend_alpha as usize)
-                    .copied()
-                    .unwrap_or(0);
-                attachment_desc.dst_rgb_blend_factor = BLEND_FACTOR_MAP
-                    .get(render_target.dest_blend as usize)
-                    .copied()
-                    .unwrap_or(0);
+                attachment_desc.src_alpha_blend_factor =
+                    state_map::blend_alpha_factor(render_target.src_blend_alpha)
+                        .filter(|_| render_target.src_blend_alpha < 20)
+                        .unwrap_or(0);
+                attachment_desc.src_rgb_blend_factor =
+                    state_map::blend_factor(render_target.src_blend)
+                        .filter(|_| render_target.src_blend < 20)
+                        .unwrap_or(0);
+                attachment_desc.dst_alpha_blend_factor =
+                    state_map::blend_alpha_factor(render_target.dest_blend_alpha)
+                        .filter(|_| render_target.dest_blend_alpha < 20)
+                        .unwrap_or(0);
+                attachment_desc.dst_rgb_blend_factor =
+                    state_map::blend_factor(render_target.dest_blend)
+                        .filter(|_| render_target.dest_blend < 20)
+                        .unwrap_or(0);
             }
         }
         if self.desc.independent_blend_enable == 0
@@ -510,22 +478,10 @@ fn translate_stencil_face(
 ) -> WMTStencilInfo {
     WMTStencilInfo {
         enabled: 1,
-        depth_stencil_pass_op: STENCIL_OP_MAP
-            .get(face.stencil_pass_op as usize)
-            .copied()
-            .unwrap_or(0),
-        stencil_fail_op: STENCIL_OP_MAP
-            .get(face.stencil_fail_op as usize)
-            .copied()
-            .unwrap_or(0),
-        depth_fail_op: STENCIL_OP_MAP
-            .get(face.stencil_depth_fail_op as usize)
-            .copied()
-            .unwrap_or(0),
-        stencil_compare_function: COMPARE_FUNC_MAP
-            .get(face.stencil_func as usize)
-            .copied()
-            .unwrap_or(0),
+        depth_stencil_pass_op: state_map::stencil_op(face.stencil_pass_op).unwrap_or(0),
+        stencil_fail_op: state_map::stencil_op(face.stencil_fail_op).unwrap_or(0),
+        depth_fail_op: state_map::stencil_op(face.stencil_depth_fail_op).unwrap_or(0),
+        stencil_compare_function: state_map::compare_func(face.stencil_func).unwrap_or(0),
         write_mask,
         read_mask,
     }
@@ -557,10 +513,7 @@ pub fn translate_depth_stencil_state(
     };
 
     if desc.depth_enable != 0 {
-        info.depth_compare_function = COMPARE_FUNC_MAP
-            .get(desc.depth_func as usize)
-            .copied()
-            .unwrap_or(0);
+        info.depth_compare_function = state_map::compare_func(desc.depth_func).unwrap_or(0);
         info.depth_write_enabled = u8::from(desc.depth_write_mask == 1);
     }
     if desc.stencil_enable != 0 {
@@ -729,22 +682,22 @@ pub fn translate_sampler_state(
     metal_device: Option<&Obj>,
 ) -> Result<SamplerState, Hresult> {
     let compare_function = if (desc.filter & 0x80) != 0 && (1..=8).contains(&desc.comparison_func) {
-        COMPARE_FUNC_MAP[desc.comparison_func as usize]
+        state_map::compare_func(desc.comparison_func).unwrap_or(0)
     } else {
         0
     };
     let s_address_mode = if (1..=5).contains(&desc.address_u) {
-        ADDRESS_MODE_MAP[desc.address_u as usize]
+        state_map::address_mode(desc.address_u).unwrap_or(0)
     } else {
         0
     };
     let t_address_mode = if (1..=5).contains(&desc.address_v) {
-        ADDRESS_MODE_MAP[desc.address_v as usize]
+        state_map::address_mode(desc.address_v).unwrap_or(0)
     } else {
         0
     };
     let r_address_mode = if (1..=5).contains(&desc.address_w) {
-        ADDRESS_MODE_MAP[desc.address_w as usize]
+        state_map::address_mode(desc.address_w).unwrap_or(0)
     } else {
         0
     };
