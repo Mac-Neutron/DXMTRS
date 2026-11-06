@@ -4,6 +4,7 @@ use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
 use dxmt_core::query::{TimestampQuery, VisibilityQuery};
+use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
 use winemetal_sys::Obj;
 
 use super::{
@@ -15,9 +16,6 @@ use crate::{
     fence::Fence,
     query::Query,
 };
-
-/// `DXGI_ERROR_INVALID_CALL`.
-pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887A_0001_u32.cast_signed();
 
 /// `D3D11_DEVICE_CONTEXT_IMMEDIATE`.
 pub const D3D11_DEVICE_CONTEXT_IMMEDIATE: u32 = 0;

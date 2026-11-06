@@ -9,7 +9,9 @@ use std::sync::Arc;
 use dxmt_core::{
     encoder::{NO_NEXT, kind, stage},
     frame_stats::CompatibilityFlags,
+    topology::{is_strip, topology_class},
 };
+use dxmt_util::dxgi_consts::DXGI_FORMAT_R32_UINT;
 use winemetal_sys::{
     sm50::{
         MTL_TESSELLATOR_OUTPUT_LINE, MTL_TESSELLATOR_OUTPUT_POINT, SM50_INDEX_BUFFER_FORMAT_NONE,
@@ -31,7 +33,6 @@ use winemetal_sys::{
 
 use super::{
     CommandBufferState, Context, Mode,
-    draw::{is_strip_topology, to_metal_primitive_topology},
     encode::slice_mem_ptr,
     state::{DirtyFlags, RENDER_TARGET_SLOTS, STREAM_OUTPUT_SLOTS, ShaderStage},
 };
@@ -45,7 +46,6 @@ use crate::{
 };
 
 const D3D11_SO_NO_RASTERIZED_STREAM: u32 = 0xffff_ffff;
-const DXGI_FORMAT_R32_UINT: u32 = 42;
 
 impl<M: Mode> Context<M> {
     fn managed_shader(&self, stage: ShaderStage) -> Option<Arc<ManagedShader>> {
@@ -86,7 +86,7 @@ impl<M: Mode> Context<M> {
             .map_or(WMT_PIXEL_FORMAT_INVALID, |dsv| dsv.format);
 
         let topology = self.state.input_assembler.topology;
-        let topology_class = to_metal_primitive_topology(topology);
+        let topology_class = topology_class(topology);
 
         let ds_ptr = if self.state.output_merger.depth_stencil_state.is_null() {
             self.defaults.depth_stencil
@@ -110,7 +110,7 @@ impl<M: Mode> Context<M> {
         });
         let (geometry_shader, gs_strip_topology) =
             if gs_passthrough == u32::MAX && gs.is_some() && so_layout.is_none() {
-                (gs, is_strip_topology(topology))
+                (gs, is_strip(topology))
             } else {
                 (None, false)
             };

@@ -6,46 +6,33 @@ use core::{
     mem, ptr,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use dxmt_core::{
     arena::CommandList as ArenaCommandList, query::VisibilityQuery, ring::DEFERRED_BLOCK,
     staging::Staging,
 };
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, hresult::DXGI_ERROR_INVALID_CALL, qi_table},
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
+    sync::lock,
+};
 
 use super::{
     Context, Immediate, Mode,
     deferred::{DeferredDynamicBuffer, DeferredDynamicTexture, DeferredIssuedQuery},
     state::DirtyFlags,
-    sync::{ContextQuery, DXGI_ERROR_INVALID_CALL, QueryState},
+    sync::{ContextQuery, QueryState},
 };
 use crate::{
-    abi::vtbl::ID3D11CommandListVtbl,
-    com::{
-        E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, Managed, S_OK,
-        add_ref, container_of, iface_of,
-    },
+    abi::{IID_ID3D11_COMMAND_LIST, IID_ID3D11_DEVICE_CHILD, vtbl::ID3D11CommandListVtbl},
+    com::{E_INVALIDARG, Hresult, IID_IUNKNOWN, Managed, S_OK, add_ref, container_of, iface_of},
     query::Query,
 };
 
 const COMMAND_LIST_MAGIC: u64 = 0x4433_4431_3143_4D44;
-
-/// `IID_ID3D11DeviceChild`: `1841e5c8-16b0-489b-bcc8-44cfb0d5deae`.
-pub const IID_ID3D11_DEVICE_CHILD: Guid = Guid::new(
-    0x1841_e5c8,
-    0x16b0,
-    0x489b,
-    [0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae],
-);
-
-/// `IID_ID3D11CommandList`: `a24bc4d1-769e-43f7-8013-98ff566c18e2`.
-pub const IID_ID3D11_COMMAND_LIST: Guid = Guid::new(
-    0xa24b_c4d1,
-    0x769e,
-    0x43f7,
-    [0x80, 19, 0x98, 0xff, 0x56, 0x6c, 0x18, 0xe2],
-);
 
 /// Device-owned pool of reusable [`CommandList`] instances (`MTLD3D11CommandListPool`).
 #[derive(Default)]
@@ -58,11 +45,7 @@ impl CommandListPool {
     /// Acquires a [`CommandList`] from the pool or allocates a fresh one.
     #[must_use]
     pub fn acquire(&self, device: *mut c_void, context_flags: u32) -> Box<CommandList> {
-        let popped = self
-            .free_lists
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop();
+        let popped = lock(&self.free_lists).pop();
         if let Some(raw) = popped {
             // SAFETY: `raw` was produced by `Box::into_raw` in `recycle`.
             let mut list = unsafe { Box::from_raw(raw as *mut CommandList) };
@@ -77,20 +60,13 @@ impl CommandListPool {
         list.clear_payload();
         self.recycled_total.fetch_add(1, Ordering::Relaxed);
         let raw = Box::into_raw(list) as usize;
-        let mut free = self
-            .free_lists
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        free.push(raw);
+        lock(&self.free_lists).push(raw);
     }
 
     /// Number of free command lists currently sitting in the pool.
     #[must_use]
     pub fn free_count(&self) -> usize {
-        self.free_lists
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+        lock(&self.free_lists).len()
     }
 
     /// Total number of command list recycle operations completed on this pool.
@@ -102,10 +78,7 @@ impl CommandListPool {
 
 impl Drop for CommandListPool {
     fn drop(&mut self) {
-        let mut free = self
-            .free_lists
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut free = lock(&self.free_lists);
         for raw in free.drain(..) {
             // SAFETY: `raw` was produced by `Box::into_raw` in `recycle`.
             let _ = unsafe { Box::from_raw(raw as *mut CommandList) };
@@ -142,9 +115,9 @@ static COMMAND_LIST_VTBL: ID3D11CommandListVtbl = ID3D11CommandListVtbl {
     add_ref: cmdlist_add_ref,
     release: cmdlist_release,
     get_device: cmdlist_get_device,
-    get_private_data: cmdlist_get_private_data,
-    set_private_data: cmdlist_set_private_data,
-    set_private_data_interface: cmdlist_set_private_data_interface,
+    get_private_data: get_private_data::<CommandList>,
+    set_private_data: set_private_data::<CommandList>,
+    set_private_data_interface: set_private_data_interface::<CommandList>,
     get_context_flags: cmdlist_get_context_flags,
 };
 
@@ -235,37 +208,41 @@ unsafe extern "system-unwind" fn cmdlist_query_interface(
     riid: *const c_void,
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` was checked for null above.
-    unsafe {
-        ppv_object.write_unaligned(ptr::null_mut());
-    }
-    if riid.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `riid` was checked for null above.
-    let iid = unsafe { riid.cast::<Guid>().read_unaligned() };
     let raw = container_of!(this, CommandList, vtbl);
     // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
     let list = unsafe { &*raw };
-    if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D11_COMMAND_LIST {
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_COMMAND_LIST,
+            name: "D3D11CommandList",
+        },
+    };
+    let add_ref = || {
         // SAFETY: `live_dev(list.device)` is the live parent device or null.
         unsafe {
             list.refs.add_ref(live_dev(list.device));
         }
-        let iface = iface_of(&list.vtbl);
-        // SAFETY: `ppv_object` was checked for null above.
-        unsafe {
-            ppv_object.write_unaligned(iface);
-        }
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            ppv_object,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_COMMAND_LIST,
+                ],
+                iface_of(&list.vtbl),
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    if crate::com::qi_log(&IID_ID3D11_COMMAND_LIST, &iid) {
-        crate::LOG.warn(&format!("D3D11CommandList: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn cmdlist_add_ref(this: *mut c_void) -> u32 {
@@ -310,57 +287,11 @@ unsafe extern "system-unwind" fn cmdlist_get_device(
     }
 }
 
-unsafe extern "system-unwind" fn cmdlist_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data_size: *mut u32,
-    p_data: *mut c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
+impl HasPrivateData for CommandList {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is the `vtbl` pointer of a live `CommandList`.
+        &unsafe { &*container_of!(this, Self, vtbl) }.private_data
     }
-    let raw = container_of!(this, CommandList, vtbl);
-    // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
-    let list = unsafe { &*raw };
-    // SAFETY: `guid` was checked for null above.
-    let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-    // SAFETY: Forwards caller's `p_data_size` and `p_data` pointers to `PrivateData::get_data`.
-    unsafe { list.private_data.get_data(g, p_data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn cmdlist_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    let raw = container_of!(this, CommandList, vtbl);
-    // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
-    let list = unsafe { &*raw };
-    // SAFETY: `guid` was checked for null above.
-    let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-    // SAFETY: Forwards caller's `p_data` and `data_size` to `PrivateData::set_data`.
-    unsafe { list.private_data.set_data(g, data_size, p_data) }
-}
-
-unsafe extern "system-unwind" fn cmdlist_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    p_data: *const c_void,
-) -> Hresult {
-    if guid.is_null() {
-        return E_INVALIDARG;
-    }
-    let raw = container_of!(this, CommandList, vtbl);
-    // SAFETY: `this` is the `vtbl` pointer of `CommandList`.
-    let list = unsafe { &*raw };
-    // SAFETY: `guid` was checked for null above.
-    let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-    // SAFETY: Forwards caller's `p_data` interface pointer to `PrivateData::set_interface`.
-    unsafe { list.private_data.set_interface(g, p_data.cast_mut()) }
 }
 
 unsafe extern "system-unwind" fn cmdlist_get_context_flags(this: *mut c_void) -> u32 {

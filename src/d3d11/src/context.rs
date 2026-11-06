@@ -23,7 +23,7 @@ use crate::{
         },
         vtbl::ID3DUserDefinedAnnotationVtbl,
     },
-    com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, IID_IUNKNOWN, Managed, iface_of},
+    com::{E_NOINTERFACE, Guid, Hresult, IID_IUNKNOWN, Managed, iface_of},
     state::Defaults,
 };
 
@@ -225,13 +225,8 @@ impl<M: Mode> Context<M> {
         data_size: *mut u32,
         data: *mut c_void,
     ) -> Hresult {
-        if guid.is_null() {
-            return E_INVALIDARG;
-        }
-        // SAFETY: `guid` was verified non-null.
-        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-        // SAFETY: `data_size` and `data` are forwarded from the COM caller.
-        unsafe { self.private_data.get_data(g, data_size, data) }
+        // SAFETY: the application's `guid`, `data_size` and `data`, forwarded.
+        unsafe { self.private_data.get_ffi(guid, data_size, data) }
     }
 
     /// `ID3D11DeviceChild::SetPrivateData`.
@@ -241,13 +236,8 @@ impl<M: Mode> Context<M> {
         data_size: u32,
         data: *const c_void,
     ) -> Hresult {
-        if guid.is_null() {
-            return E_INVALIDARG;
-        }
-        // SAFETY: `guid` was verified non-null.
-        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-        // SAFETY: `data` and `data_size` are forwarded from the COM caller.
-        unsafe { self.private_data.set_data(g, data_size, data) }
+        // SAFETY: the application's `guid` and `data`, forwarded.
+        unsafe { self.private_data.set_ffi(guid, data_size, data) }
     }
 
     /// `ID3D11DeviceChild::SetPrivateDataInterface`.
@@ -256,12 +246,7 @@ impl<M: Mode> Context<M> {
         guid: *const c_void,
         object: *const c_void,
     ) -> Hresult {
-        if guid.is_null() {
-            return E_INVALIDARG;
-        }
-        // SAFETY: `guid` was verified non-null.
-        let g = unsafe { guid.cast::<Guid>().read_unaligned() };
-        // SAFETY: `object` is forwarded from the COM caller.
-        unsafe { self.private_data.set_interface(g, object.cast_mut()) }
+        // SAFETY: the application's `guid` and `object`, forwarded.
+        unsafe { self.private_data.set_interface_ffi(guid, object) }
     }
 }

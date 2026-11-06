@@ -39,15 +39,7 @@ fn update_staging_contents(handle: u64, offset: u64, data: &[u8]) {
     write_test_staging_slice(handle, offset, data);
     #[cfg(not(test))]
     if handle != 0 && !data.is_empty() {
-        #[cfg(target_pointer_width = "64")]
-        let mem = winemetal_sys::wire::MemPtr {
-            ptr: data.as_ptr().expose_provenance() as u64,
-        };
-        #[cfg(target_pointer_width = "32")]
-        let mem = winemetal_sys::wire::MemPtr {
-            ptr: u32::try_from(data.as_ptr().expose_provenance()).unwrap_or(0),
-            high: 0,
-        };
+        let mem = winemetal_sys::wire::MemPtr::from_addr(data.as_ptr().expose_provenance());
         // SAFETY: `handle` is a live `MTLBuffer` from `M::staging` with room for `data.len()`.
         unsafe {
             winemetal_sys::MTLBuffer_updateContents(handle, offset, mem, data.len() as u64);

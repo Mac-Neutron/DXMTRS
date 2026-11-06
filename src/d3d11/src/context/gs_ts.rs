@@ -8,6 +8,7 @@ use core::ffi::c_void;
 use dxmt_core::{
     deptrack::Access,
     encoder::{NO_NEXT, stage},
+    topology::geometry_warp,
 };
 use winemetal_sys::wire::{
     WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
@@ -24,42 +25,6 @@ use winemetal_sys::wire::{
 };
 
 use super::{Context, Mode};
-
-/// Computes `(vertex_per_warp, vertex_increment_per_warp)` for indirect geometry-shader draws.
-const fn gs_indirect_vertex_counts(topology: u32, raw_vpw: u32) -> (u32, u32) {
-    let vpw = if raw_vpw < 6 { 32 } else { raw_vpw };
-    match topology {
-        2 => {
-            let s = if (vpw & !1) < 2 { 2 } else { vpw & !1 };
-            (s, s)
-        }
-        3 => (vpw, vpw.saturating_sub(1)),
-        4 => {
-            let s = 3 * (vpw / 3);
-            let s = if s < 3 { 3 } else { s };
-            (s, s)
-        }
-        5 => {
-            let s = if (vpw & !1) < 4 { 4 } else { vpw & !1 };
-            (s, s - 2)
-        }
-        10 => {
-            let s = if (vpw & !3) < 4 { 4 } else { vpw & !3 };
-            (s, s)
-        }
-        11 => (vpw, vpw.saturating_sub(3)),
-        12 => {
-            let s = 6 * (vpw / 6);
-            let s = if s < 6 { 6 } else { s };
-            (s, s)
-        }
-        13 => {
-            let s = if (vpw & !1) < 6 { 6 } else { vpw & !1 };
-            (s, s - 4)
-        }
-        _ => (vpw, vpw),
-    }
-}
 
 /// Computes `(vertex_per_warp, warp_count)` for a geometry-shader draw (`GsDraw`).
 fn gs_warp_metrics(topology: u32, raw_vpw: u32, count: u32) -> Option<(u32, u32)> {
@@ -199,7 +164,7 @@ impl<M: Mode> Context<M> {
                 else {
                     return;
                 };
-                let (vertex_per_warp, vertex_inc) = gs_indirect_vertex_counts(topo, 32);
+                let (vertex_per_warp, vertex_inc) = geometry_warp(topo, 32);
                 let base = WmtcmdRenderDxmtGeometryDrawIndirect {
                     r#type: WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDIRECT,
                     reserved: [0; 3],
@@ -372,7 +337,7 @@ impl<M: Mode> Context<M> {
                 else {
                     return;
                 };
-                let (vertex_per_warp, vertex_inc) = gs_indirect_vertex_counts(topo, 32);
+                let (vertex_per_warp, vertex_inc) = geometry_warp(topo, 32);
                 let base = WmtcmdRenderDxmtGeometryDrawIndexedIndirect {
                     r#type: WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED_INDIRECT,
                     reserved: [0; 3],

@@ -10,55 +10,15 @@ use dxmt_core::{
     deptrack::Access,
     encoder::{Encoder, NO_NEXT, kind, stage},
     frame_stats::CompatibilityFlags,
+    topology::{index_type_and_stride, primitive_type},
 };
 use winemetal_sys::wire::{
-    WMT_INDEX_TYPE_U_INT16, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE,
-    WMT_PRIMITIVE_TYPE_LINE_STRIP, WMT_PRIMITIVE_TYPE_POINT, WMT_PRIMITIVE_TYPE_TRIANGLE,
-    WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
+    WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
     WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT, WMT_RENDER_COMMAND_DRAW_INDIRECT, WmtcmdRenderDraw,
     WmtcmdRenderDrawIndexed, WmtcmdRenderDrawIndexedIndirect, WmtcmdRenderDrawIndirect,
 };
 
 use super::{Context, Mode};
-
-/// `DXGI_FORMAT_R32_UINT` (`42`).
-const DXGI_FORMAT_R32_UINT: u32 = 42;
-
-/// Converts a D3D11 primitive topology to a Metal `WMTPrimitiveTopologyClass` (`1..=3`).
-pub(super) const fn to_metal_primitive_topology(topology: u32) -> u32 {
-    match topology {
-        1 => 1,
-        2 | 3 | 10 | 11 => 2,
-        4 | 5 | 12 | 13 | 33..=64 => 3,
-        _ => 0,
-    }
-}
-
-/// Returns `true` if `topology` is a line-strip or triangle-strip topology.
-pub(super) const fn is_strip_topology(topology: u32) -> bool {
-    matches!(topology, 3 | 5 | 11 | 13)
-}
-
-/// Converts a D3D11 primitive topology to a Metal `WMTPrimitiveType`.
-const fn to_metal_primitive_type(topology: u32) -> Option<u8> {
-    match topology {
-        1 => Some(WMT_PRIMITIVE_TYPE_POINT),
-        2 => Some(WMT_PRIMITIVE_TYPE_LINE),
-        3 => Some(WMT_PRIMITIVE_TYPE_LINE_STRIP),
-        4 => Some(WMT_PRIMITIVE_TYPE_TRIANGLE),
-        5 => Some(WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP),
-        _ => None,
-    }
-}
-
-/// Converts a DXGI index buffer format (`R16_UINT` or `R32_UINT`) to `(WMTIndexType, stride)`.
-const fn index_type_and_stride(format: u32) -> (u8, u64) {
-    if format == DXGI_FORMAT_R32_UINT {
-        (WMT_INDEX_TYPE_U_INT32, 4)
-    } else {
-        (WMT_INDEX_TYPE_U_INT16, 2)
-    }
-}
 
 impl<M: Mode> Context<M> {
     /// Active pipeline kind (`ORDINARY`, `GEOMETRY`, or `TESSELLATION`) for draw dispatch routing.
@@ -104,7 +64,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         let is_live = self.is_live();
@@ -162,7 +122,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw_indexed() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         if self.is_live() {
@@ -257,7 +217,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         let is_live = self.is_live();
@@ -322,7 +282,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw_indexed() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         if self.is_live() {
@@ -409,7 +369,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         if self.is_live() {
@@ -500,7 +460,7 @@ impl<M: Mode> Context<M> {
         if !self.pre_draw_indexed() {
             return;
         }
-        let Some(primitive_type) = to_metal_primitive_type(self.state.topology) else {
+        let Some(primitive_type) = primitive_type(self.state.topology) else {
             return;
         };
         if self.is_live() {

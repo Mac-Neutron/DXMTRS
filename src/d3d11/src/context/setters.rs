@@ -8,6 +8,11 @@ use dxmt_core::{
     frame_stats::CompatibilityFlags,
     resource::Buffer,
 };
+use dxmt_util::dxgi_consts::{
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_INDEX_BUFFER,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_STREAM_OUTPUT,
+    D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_VERTEX_BUFFER,
+};
 
 use super::{
     CommandBufferState, Context, Mode,
@@ -30,15 +35,6 @@ use crate::{
     subresource::ResourceSubset,
     view::{Dsv, Rtv, Srv, Uav},
 };
-
-const D3D11_BIND_VERTEX_BUFFER: u32 = 0x1;
-const D3D11_BIND_INDEX_BUFFER: u32 = 0x2;
-const D3D11_BIND_CONSTANT_BUFFER: u32 = 0x4;
-const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
-const D3D11_BIND_STREAM_OUTPUT: u32 = 0x10;
-const D3D11_BIND_RENDER_TARGET: u32 = 0x20;
-const D3D11_BIND_DEPTH_STENCIL: u32 = 0x40;
-const D3D11_BIND_UNORDERED_ACCESS: u32 = 0x80;
 
 const fn viewport_eq(a: D3d11Viewport, b: D3d11Viewport) -> bool {
     a.top_left_x.to_bits() == b.top_left_x.to_bits()

@@ -2,7 +2,12 @@
 
 use core::{ffi::c_void, ptr};
 
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::{
+        HasPrivateData, PrivateData, get_private_data, set_private_data, set_private_data_interface,
+    },
+};
 
 use super::{
     Context, Mode,
@@ -13,10 +18,7 @@ use crate::{
         IID_ID3D_DEVICE_CONTEXT_STATE, IID_ID3D11_DEVICE_CHILD, IID_IUNKNOWN,
         vtbl::ID3DDeviceContextStateVtbl,
     },
-    com::{
-        E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, Managed, S_FALSE, S_OK, add_ref,
-        release,
-    },
+    com::{E_INVALIDARG, Hresult, Managed, S_FALSE, S_OK, add_ref, release},
 };
 
 /// `ID3DDeviceContextState` implementation (`MTLD3D11DeviceContextState`).
@@ -34,31 +36,38 @@ unsafe extern "system-unwind" fn dcs_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: `riid` is the caller's `REFIID`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D_DEVICE_CONTEXT_STATE,
+            name: "D3DDeviceContextState",
+        },
     };
-    if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D_DEVICE_CONTEXT_STATE
-    {
+    let add_ref = || {
         // SAFETY: `this` is a live `DeviceContextState`.
         let obj = unsafe { &*this.cast::<DeviceContextState>() };
         // SAFETY: `obj.device` is either null or the owning device.
         let _ = unsafe { obj.refs.add_ref(obj.device) };
-        // SAFETY: `out` was checked non-null.
-        unsafe { *out = this };
-        return S_OK;
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D_DEVICE_CONTEXT_STATE,
+                ],
+                this,
+            )],
+            add_ref,
+            &qi,
+        )
     }
-    if crate::com::qi_log(&IID_ID3D_DEVICE_CONTEXT_STATE, &iid) {
-        crate::LOG.warn(&format!(
-            "D3DDeviceContextState: Unknown interface query {iid}"
-        ));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn dcs_add_ref(this: *mut c_void) -> u32 {
@@ -93,51 +102,11 @@ unsafe extern "system-unwind" fn dcs_get_device(this: *mut c_void, out: *mut *mu
     unsafe { *out = obj.device };
 }
 
-unsafe extern "system-unwind" fn dcs_get_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: *mut u32,
-    data: *mut c_void,
-) -> Hresult {
-    // SAFETY: `guid` is the caller's `REFGUID`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DeviceContextState`.
-    let obj = unsafe { &*this.cast::<DeviceContextState>() };
-    // SAFETY: forwards caller buffers to `PrivateData::get_data`.
-    unsafe { obj.private_data.get_data(g, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn dcs_set_private_data(
-    this: *mut c_void,
-    guid: *const c_void,
-    data_size: u32,
-    data: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is the caller's `REFGUID`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DeviceContextState`.
-    let obj = unsafe { &*this.cast::<DeviceContextState>() };
-    // SAFETY: forwards caller buffer to `PrivateData::set_data`.
-    unsafe { obj.private_data.set_data(g, data_size, data) }
-}
-
-unsafe extern "system-unwind" fn dcs_set_private_data_interface(
-    this: *mut c_void,
-    guid: *const c_void,
-    object: *const c_void,
-) -> Hresult {
-    // SAFETY: `guid` is the caller's `REFGUID`.
-    let Some(g) = (unsafe { Guid::read(guid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `this` is a live `DeviceContextState`.
-    let obj = unsafe { &*this.cast::<DeviceContextState>() };
-    // SAFETY: forwards `object` to `PrivateData::set_interface`.
-    unsafe { obj.private_data.set_interface(g, object.cast_mut()) }
+impl HasPrivateData for DeviceContextState {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: `this` is a live `DeviceContextState`.
+        &unsafe { &*this.cast::<Self>() }.private_data
+    }
 }
 
 static DCS_VTBL: ID3DDeviceContextStateVtbl = ID3DDeviceContextStateVtbl {
@@ -145,9 +114,9 @@ static DCS_VTBL: ID3DDeviceContextStateVtbl = ID3DDeviceContextStateVtbl {
     add_ref: dcs_add_ref,
     release: dcs_release,
     get_device: dcs_get_device,
-    get_private_data: dcs_get_private_data,
-    set_private_data: dcs_set_private_data,
-    set_private_data_interface: dcs_set_private_data_interface,
+    get_private_data: get_private_data::<DeviceContextState>,
+    set_private_data: set_private_data::<DeviceContextState>,
+    set_private_data_interface: set_private_data_interface::<DeviceContextState>,
 };
 
 const fn write_opt<T: Copy>(out: *mut T, value: T) {

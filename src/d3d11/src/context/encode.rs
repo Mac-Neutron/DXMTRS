@@ -312,7 +312,7 @@ impl EncodeSession {
         unsafe { (*record.as_ptr()).next = NO_NEXT };
         if let Some(pass) = self.active_pass.as_mut() {
             // SAFETY: `pass.tail` is a live record in `self.commands`.
-            unsafe { (*pass.tail.as_ptr()).next = record_mem_ptr(record) };
+            unsafe { (*pass.tail.as_ptr()).next = slice_mem_ptr(record) };
             pass.tail = record;
         }
     }
@@ -330,34 +330,11 @@ fn with_session<M: Mode, R>(ctx: &Context<M>, f: impl FnOnce(&mut EncodeSession)
         .or_insert_with(EncodeSession::new))
 }
 
-#[cfg(target_pointer_width = "64")]
-fn record_mem_ptr(record: NonNull<WmtcmdBase>) -> MemPtr {
-    MemPtr {
-        ptr: record.as_ptr().expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn record_mem_ptr(record: NonNull<WmtcmdBase>) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(record.as_ptr().expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
-#[cfg(target_pointer_width = "64")]
+/// `ptr` as a pointer of `winemetal.h`'s structures.
+///
+/// Its provenance is exposed for [`Context::recorded_passes`] to read back.
 pub(super) fn slice_mem_ptr<T>(ptr: NonNull<T>) -> MemPtr {
-    MemPtr {
-        ptr: ptr.as_ptr().expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-pub(super) fn slice_mem_ptr<T>(ptr: NonNull<T>) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(ptr.as_ptr().expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
+    MemPtr::from_addr(ptr.as_ptr().expose_provenance())
 }
 
 impl<M: Mode> Context<M> {

@@ -8,6 +8,7 @@ use dxmt_core::{
     format,
     library::CUSTOM_BUFFER_ARGUMENT_INDEX_0,
 };
+use dxmt_util::dxgi_consts::DXGI_FORMAT_UNKNOWN;
 use winemetal_sys::wire::{
     MemPtr, WMT_COMPUTE_COMMAND_DISPATCH_THREADS, WMT_COMPUTE_COMMAND_SET_BUFFER,
     WMT_COMPUTE_COMMAND_SET_BYTES, WMT_COMPUTE_COMMAND_SET_PSO, WMT_COMPUTE_COMMAND_SET_TEXTURE,
@@ -29,8 +30,6 @@ use crate::{
     view::{Dsv, Rtv, Uav},
 };
 
-/// `DXGI_FORMAT_UNKNOWN`.
-const DXGI_FORMAT_UNKNOWN: u32 = 0;
 /// `D3D11_CLEAR_DEPTH`.
 const D3D11_CLEAR_DEPTH: u32 = 1;
 
@@ -48,19 +47,6 @@ const TILE_GROUP: WMTSize = WMTSize {
     depth: 1,
 };
 
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
 /// Binds a copy of `words` at compute buffer slot `index`.
 fn set_compute_words<const N: usize>(enc: &mut Encoder, words: &[u32; N], index: u8) {
     let byte_len = N * 4;
@@ -73,7 +59,7 @@ fn set_compute_words<const N: usize>(enc: &mut Encoder, words: &[u32; N], index:
         r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
         reserved: [0; 3],
         next: NO_NEXT,
-        bytes: mem_ptr(copy.as_ptr().expose_provenance()),
+        bytes: MemPtr::from_addr(copy.as_ptr().expose_provenance()),
         length: byte_len as u64,
         index,
     });
@@ -91,7 +77,7 @@ fn set_fragment_words<const N: usize>(enc: &mut Encoder, words: &[u32; N], index
         r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
         reserved: [0; 3],
         next: NO_NEXT,
-        bytes: mem_ptr(copy.as_ptr().expose_provenance()),
+        bytes: MemPtr::from_addr(copy.as_ptr().expose_provenance()),
         length: byte_len as u64,
         index,
     });

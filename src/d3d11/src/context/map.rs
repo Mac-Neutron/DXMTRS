@@ -4,6 +4,13 @@ use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
 use dxmt_core::staging::MapResult;
+use dxmt_util::{
+    com::hresult::DXGI_ERROR_WAS_STILL_DRAWING,
+    dxgi_consts::{
+        D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_SHADER_RESOURCE,
+        D3D11_BIND_VERTEX_BUFFER,
+    },
+};
 
 use super::{
     Context, Mode,
@@ -29,14 +36,6 @@ pub const D3D11_MAP_WRITE_NO_OVERWRITE: u32 = 5;
 
 /// `D3D11_MAP_FLAG_DO_NOT_WAIT`.
 pub const D3D11_MAP_FLAG_DO_NOT_WAIT: u32 = 0x0010_0000;
-
-/// `DXGI_ERROR_WAS_STILL_DRAWING`.
-pub const DXGI_ERROR_WAS_STILL_DRAWING: Hresult = 0x887A_000A_u32.cast_signed();
-
-const D3D11_BIND_VERTEX_BUFFER: u32 = 0x1;
-const D3D11_BIND_INDEX_BUFFER: u32 = 0x2;
-const D3D11_BIND_CONSTANT_BUFFER: u32 = 0x4;
-const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
 
 impl<M: Mode> Context<M> {
     /// `ID3D11DeviceContext::Map`.

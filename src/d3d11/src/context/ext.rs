@@ -9,6 +9,10 @@ use dxmt_core::{
     resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
     scaler::Scaler,
 };
+use dxmt_util::dxgi_consts::{
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BIND_VERTEX_BUFFER,
+};
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_RG16_FLOAT, WMT_PIXEL_FORMAT_RG16_SINT,
     WMT_PIXEL_FORMAT_RG16_SNORM, WMT_PIXEL_FORMAT_RG16_UINT, WMT_PIXEL_FORMAT_RG16_UNORM,
@@ -29,11 +33,6 @@ use crate::{
     abi::ext::{D3D11Piece, D3D11UpscaleDesc, FEATURE_METALFX_TEMPORAL_SCALER},
     com::{E_INVALIDARG, E_NOTIMPL, Hresult, S_OK},
 };
-
-const D3D11_BIND_VERTEX_BUFFER: u32 = 0x1;
-const D3D11_BIND_INDEX_BUFFER: u32 = 0x2;
-const D3D11_BIND_CONSTANT_BUFFER: u32 = 0x4;
-const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
 
 fn piece_id(allocation: u64, suballocation: u32) -> u64 {
     (allocation << 16) | u64::from(suballocation)
