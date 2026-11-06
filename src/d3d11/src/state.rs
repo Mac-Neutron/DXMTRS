@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use dxmt_core::{
     library::depth_stencil_state as create_metal_depth_stencil, sampler::Sampler as CoreSampler,
 };
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     Obj,
@@ -64,9 +65,7 @@ fn caches_for_device(device: *mut c_void) -> (&'static StateCaches, Option<&'sta
         let mtl = (dev.core().device().handle() > 0x1000).then(|| dev.core().device());
         return (dev.caches(), mtl);
     }
-    let arc = FALLBACK_CACHES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    let arc = lock(&FALLBACK_CACHES)
         .entry(device as usize)
         .or_insert_with(|| Arc::new(StateCaches::default()))
         .clone();

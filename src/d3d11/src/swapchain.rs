@@ -5,7 +5,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, Ordering},
 };
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use dxmt_core::{
     frame_stats::{CompatibilityFlags, Container, ScalerType},
@@ -20,7 +20,7 @@ use dxmt_util::{
     dxgi_vtbl::{IDXGIAdapterVtbl, IDXGIOutput1Vtbl},
     ext::{IID_IMTL_DXGI_DEVICE, IID_IMTL_DXGI_OUTPUT, IMTLDXGIOutputVtbl},
     private_data::PrivateData,
-    sync::CpuFence,
+    sync::{CpuFence, lock},
     wsi::{Rational as WsiRational, WindowState, WsiMode},
 };
 pub use dxmt_util::{
@@ -759,7 +759,7 @@ impl SwapChain {
     }
 
     fn lock_state(&self) -> MutexGuard<'_, SwapChainState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     fn layer_support_edr(&self) -> bool {
@@ -1289,10 +1289,7 @@ impl SwapChain {
         present_flags: u32,
         _present_parameters: *const DxgiPresentParameters,
     ) -> Hresult {
-        let _present = self
-            .present_serial
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _present = lock(&self.present_serial);
         let window_minimized = wsi_is_minimized(self.hwnd);
         let is_fg = wsi_is_foreground(self.hwnd);
         let (width, height, swap_effect, handle_alt_tab, windowed) = {

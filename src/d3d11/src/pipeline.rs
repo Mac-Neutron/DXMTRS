@@ -8,6 +8,7 @@ use core::{
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dxmt_core::format::{depth_stencil_planar_flags, is_unorm8_rt};
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newComputePipelineState, MTLDevice_newMeshRenderPipelineState,
@@ -281,11 +282,7 @@ impl CompiledGraphics {
         if h != 0 {
             return Some(h);
         }
-        let job = self
-            .job
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let job = lock(&self.job).clone();
         if let Some(job) = job {
             job.wait();
         }
@@ -324,11 +321,7 @@ impl CompiledCompute {
         if h != 0 {
             return Some(h);
         }
-        let job = self
-            .job
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let job = lock(&self.job).clone();
         if let Some(job) = job {
             job.wait();
         }
@@ -391,10 +384,7 @@ impl PipelineCache {
     pub fn get_or_create_shader(&self, bytes: &[u8]) -> Result<Arc<ManagedShader>, Hresult> {
         let sha1 = dxmt_util::sha1::Sha1::compute(bytes).0;
         {
-            let map = self
-                .shaders
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let map = lock(&self.shaders);
             if let Some(existing) = map.get(&sha1) {
                 return Ok(Arc::clone(existing));
             }
@@ -402,10 +392,7 @@ impl PipelineCache {
         // Parse outside the map lock: two creators may race, but the second one is
         // discarded by the insert below and no unrelated shader waits behind the parse.
         let created = ManagedShader::from_bytecode_with_sha1(bytes, sha1)?;
-        let mut map = self
-            .shaders
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.shaders);
         if let Some(existing) = map.get(&sha1) {
             return Ok(Arc::clone(existing));
         }
@@ -419,10 +406,7 @@ impl PipelineCache {
     pub fn graphics(&self, desc: &GraphicsDesc) -> Arc<CompiledGraphics> {
         let key = GraphicsKey::from_desc(desc);
         {
-            let map = self
-                .graphics_psos
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let map = lock(&self.graphics_psos);
             if let Some(existing) = map.get(&key) {
                 return Arc::clone(existing);
             }
@@ -474,17 +458,11 @@ impl PipelineCache {
                     };
                     let pso = data.compile(dev, &kind);
                     let handle = pso.as_ref().map_or(0, Obj::handle);
-                    *compiled
-                        .pso
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = pso;
+                    *lock(&compiled.pso) = pso;
                     compiled.handle.store(handle, Ordering::Release);
                 })
             };
-            *compiled
-                .job
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+            *lock(&compiled.job) = Some(job);
             compiled
         } else {
             Arc::new(CompiledGraphics {
@@ -497,18 +475,11 @@ impl PipelineCache {
 
         // The entry is visible only after its job is installed, so a cache hit never observes a
         // placeholder that `ready` cannot wait on.
-        let mut map = self
-            .graphics_psos
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.graphics_psos);
         if let Some(existing) = map.get(&key) {
             return Arc::clone(existing);
         }
-        let job = compiled
-            .job
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let job = lock(&compiled.job).clone();
         map.insert(key, Arc::clone(&compiled));
         drop(map);
         if let Some(job) = job {
@@ -525,10 +496,7 @@ impl PipelineCache {
     #[must_use]
     pub fn compute(&self, shader: &Arc<ManagedShader>) -> Arc<CompiledCompute> {
         {
-            let map = self
-                .compute_psos
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let map = lock(&self.compute_psos);
             if let Some(existing) = map.get(&shader.sha1) {
                 return Arc::clone(existing);
             }
@@ -559,17 +527,11 @@ impl PipelineCache {
                     };
                     let pso = compile_compute_pso(dev, &shader, &spec);
                     let handle = pso.as_ref().map_or(0, Obj::handle);
-                    *compiled
-                        .pso
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = pso;
+                    *lock(&compiled.pso) = pso;
                     compiled.handle.store(handle, Ordering::Release);
                 })
             };
-            *compiled
-                .job
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+            *lock(&compiled.job) = Some(job);
             compiled
         } else {
             Arc::new(CompiledCompute {
@@ -580,18 +542,11 @@ impl PipelineCache {
             })
         };
 
-        let mut map = self
-            .compute_psos
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.compute_psos);
         if let Some(existing) = map.get(&shader.sha1) {
             return Arc::clone(existing);
         }
-        let job = compiled
-            .job
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let job = lock(&compiled.job).clone();
         map.insert(shader.sha1, Arc::clone(&compiled));
         drop(map);
         if let Some(job) = job {
@@ -602,18 +557,9 @@ impl PipelineCache {
 
     /// Releases every cached Metal object before the device's Metal device goes away.
     pub fn clear(&self) {
-        self.graphics_psos
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        self.compute_psos
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        self.shaders
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        lock(&self.graphics_psos).clear();
+        lock(&self.compute_psos).clear();
+        lock(&self.shaders).clear();
     }
 }
 
@@ -888,9 +834,7 @@ fn compile_graphics_pso(
 
             let mut err_raw = 0u64;
             let pso_raw = {
-                let _lock = TS_GLOBAL_MUTEX
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _lock = lock(&TS_GLOBAL_MUTEX);
                 // SAFETY: `mtl_dev` is live and `info` is valid.
                 unsafe {
                     MTLDevice_newMeshRenderPipelineState(mtl_dev, &raw mut info, &raw mut err_raw)

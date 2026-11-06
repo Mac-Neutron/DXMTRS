@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use dxmt_util::{private_data::PrivateData, sha1::Sha1};
+use dxmt_util::{private_data::PrivateData, sha1::Sha1, sync::lock};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     DispatchData_alloc_init, MTLDevice_newLibrary, MTLLibrary_newFunction, Obj,
@@ -206,10 +206,7 @@ impl ManagedShader {
     where
         F: FnOnce() -> u64,
     {
-        let mut map = self
-            .variants
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.variants);
         if let Some(entry) = map.get(&variant) {
             return entry.handle;
         }
@@ -248,20 +245,14 @@ impl ManagedShader {
         companion: Option<&Self>,
     ) -> u64 {
         {
-            let map = self
-                .variants
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let map = lock(&self.variants);
             if let Some(entry) = map.get(variant) {
                 return entry.handle;
             }
         }
 
         let gate = {
-            let mut compiling = self
-                .compiling
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut compiling = lock(&self.compiling);
             compiling.get(variant).map(Arc::clone).map_or_else(
                 || {
                     let gate = Arc::new(VariantGate {
@@ -275,10 +266,7 @@ impl ManagedShader {
             )
         };
         if let Some(gate) = gate {
-            let mut done = gate
-                .done
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut done = lock(&gate.done);
             while !*done {
                 done = gate
                     .finished
@@ -286,27 +274,18 @@ impl ManagedShader {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             drop(done);
-            return self
-                .variants
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            return lock(&self.variants)
                 .get(variant)
                 .map_or(0, |entry| entry.handle);
         }
 
         let handle = self.compile_variant_uncached(dev, variant, ia_input, so_input, companion);
         let removed = {
-            let mut compiling = self
-                .compiling
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut compiling = lock(&self.compiling);
             compiling.remove(variant)
         };
         if let Some(gate) = removed {
-            *gate
-                .done
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            *lock(&gate.done) = true;
             gate.finished.notify_all();
         }
         handle
@@ -348,16 +327,13 @@ impl ManagedShader {
                 // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
                 if let Some(fn_obj) = unsafe { Obj::adopt(fn_raw) } {
                     let h = fn_obj.handle();
-                    self.variants
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(
-                            variant.clone(),
-                            CompiledVariantEntry {
-                                handle: h,
-                                _obj: Some(fn_obj),
-                            },
-                        );
+                    lock(&self.variants).insert(
+                        variant.clone(),
+                        CompiledVariantEntry {
+                            handle: h,
+                            _obj: Some(fn_obj),
+                        },
+                    );
                     return h;
                 }
                 LOG.err(&format!(
@@ -507,10 +483,7 @@ impl ManagedShader {
         };
 
         let h = fn_obj.handle();
-        let mut map = self
-            .variants
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.variants);
         map.insert(
             variant.clone(),
             CompiledVariantEntry {

@@ -9,7 +9,7 @@ use core::{
 };
 use std::sync::Mutex;
 
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{private_data::PrivateData, sync::lock};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -144,10 +144,7 @@ impl<K: Eq + Hash, V: 'static, T> StateObjectCache<K, V, T> {
     where
         F: FnOnce() -> Result<Box<DeviceChildStateObject<V, T>>, Hresult>,
     {
-        let mut map = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = lock(&self.entries);
         if let Some(existing) = map.get(&key) {
             existing.add_ref();
             return Ok(ptr::from_ref::<DeviceChildStateObject<V, T>>(&**existing).cast_mut());
@@ -163,10 +160,7 @@ impl<K: Eq + Hash, V: 'static, T> StateObjectCache<K, V, T> {
     /// Number of distinct state objects currently stored in this cache.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+        lock(&self.entries).len()
     }
 
     /// Returns `true` when the cache holds no entries.

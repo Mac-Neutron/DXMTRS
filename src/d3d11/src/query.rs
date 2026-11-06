@@ -1,11 +1,11 @@
 //! D3D11 queries and predicates (`MTLD3DQueryBase`, `d3d11_query.hpp`, `d3d11_query.cpp`).
 
 use core::{ffi::c_void, fmt, ptr};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use dxmt_core::query::{TimestampQuery, VisibilityQuery};
 pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{private_data::PrivateData, sync::lock};
 
 use crate::{
     abi::{
@@ -330,7 +330,7 @@ impl Query {
     }
 
     fn lock(&self) -> MutexGuard<'_, QueryInner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.inner)
     }
 
     /// Recovers `&Query` from an `ID3D11Asynchronous*` / `ID3D11Query*` / `ID3D11Predicate*`.

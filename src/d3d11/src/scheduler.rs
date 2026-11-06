@@ -11,6 +11,8 @@ use std::{
     time::Instant,
 };
 
+use dxmt_util::sync::lock;
+
 /// Process-wide list of active scheduler instances (`dxmt_tasks.cpp:11-12`).
 pub static SCHEDULERS: LazyLock<Mutex<Vec<usize>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
@@ -18,10 +20,7 @@ pub static SCHEDULERS: LazyLock<Mutex<Vec<usize>>> = LazyLock::new(|| Mutex::new
 #[must_use]
 pub fn wait_idle(timeout_ms: u32) -> bool {
     let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
-    let ptrs = SCHEDULERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let ptrs = lock(&SCHEDULERS).clone();
     for addr in ptrs {
         let sched = addr as *const SchedulerInner;
         // SAFETY: `SCHEDULERS` holds addresses of live `SchedulerInner` allocations, which remove
@@ -117,11 +116,7 @@ impl CompileJob {
         if self.is_done() {
             return;
         }
-        let mut guard = self
-            .inner
-            .step
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = lock(&self.inner.step);
         while !self.inner.done.load(Ordering::Acquire) {
             guard = self
                 .inner
@@ -137,19 +132,11 @@ impl CompileJob {
             return None;
         }
         let mut step_fn = {
-            let mut guard = self
-                .inner
-                .step
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut guard = lock(&self.inner.step);
             guard.take()?
         };
         let next = step_fn();
-        let mut guard = self
-            .inner
-            .step
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = lock(&self.inner.step);
         if next.is_some() && !self.inner.done.load(Ordering::Acquire) {
             *guard = Some(step_fn);
             drop(guard);
@@ -181,10 +168,7 @@ struct SchedulerInner {
 impl SchedulerInner {
     fn wait_idle(&self, timeout_ms: u32) -> bool {
         let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
-        let mut guard = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = lock(&self.state);
         while !guard.queue.is_empty() || guard.in_flight > 0 {
             let now = Instant::now();
             if now >= deadline {
@@ -209,10 +193,7 @@ fn spawn_worker(inner: &Arc<SchedulerInner>) {
         let _abort = ProcessAbortGuard;
         loop {
             let job = {
-                let mut st = inner_cl
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut st = lock(&inner_cl.state);
                 while st.queue.is_empty() && !st.stop {
                     st = inner_cl
                         .work_cv
@@ -231,10 +212,7 @@ fn spawn_worker(inner: &Arc<SchedulerInner>) {
 
             let continuation = job.run_step();
 
-            let mut st = inner_cl
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut st = lock(&inner_cl.state);
             st.in_flight -= 1;
             if let Some(dep) = continuation {
                 if !dep.is_done() {
@@ -248,11 +226,7 @@ fn spawn_worker(inner: &Arc<SchedulerInner>) {
             drop(st);
         }
     });
-    inner
-        .workers
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(handle);
+    lock(&inner.workers).push(handle);
 }
 
 /// Multi-worker thread pool for asynchronous shader/pipeline compilation (`task_scheduler`).
@@ -289,10 +263,7 @@ impl CompileScheduler {
             workers: Mutex::new(Vec::with_capacity(max_workers)),
         });
         let addr = Arc::as_ptr(&inner) as usize;
-        SCHEDULERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(addr);
+        lock(&SCHEDULERS).push(addr);
 
         for _ in 0..init_workers {
             spawn_worker(&inner);
@@ -311,21 +282,13 @@ impl CompileScheduler {
     /// Returns the current number of spawned worker threads.
     #[must_use]
     pub fn worker_count(&self) -> usize {
-        self.inner
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .worker_count
+        lock(&self.inner.state).worker_count
     }
 
     /// Submits `job` to the worker queue (`submit`), spawning a worker if demand exceeds supply.
     pub fn submit(&self, job: CompileJob) {
         let should_spawn = {
-            let mut st = self
-                .inner
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut st = lock(&self.inner.state);
             st.queue.push_back(job);
             if st.queue.len() + st.in_flight > st.worker_count
                 && st.worker_count < self.inner.max_threads
@@ -352,26 +315,13 @@ impl CompileScheduler {
 impl Drop for CompileScheduler {
     fn drop(&mut self) {
         let addr = Arc::as_ptr(&self.inner) as usize;
-        SCHEDULERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|&a| a != addr);
+        lock(&SCHEDULERS).retain(|&a| a != addr);
         {
-            let mut st = self
-                .inner
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut st = lock(&self.inner.state);
             st.stop = true;
         }
         self.inner.work_cv.notify_all();
-        let handles = core::mem::take(
-            &mut *self
-                .inner
-                .workers
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        let handles = core::mem::take(&mut *lock(&self.inner.workers));
         for h in handles {
             while !h.is_finished() {
                 thread::yield_now();

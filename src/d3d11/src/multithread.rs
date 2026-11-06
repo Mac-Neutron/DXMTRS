@@ -7,6 +7,8 @@ use core::{
 };
 use std::sync::{Condvar, Mutex, PoisonError};
 
+use dxmt_util::sync::lock;
+
 use crate::{abi::vtbl::ID3D11MultithreadVtbl, com::TearOff};
 
 #[cfg(test)]
@@ -62,7 +64,7 @@ impl DeviceMutex {
             return;
         }
         let me = current_thread_id();
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         loop {
             if !self.protected.load(Ordering::Acquire) {
                 return;
@@ -89,7 +91,7 @@ impl DeviceMutex {
             return;
         }
         let me = current_thread_id();
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         if state.owner != me {
             return;
         }
@@ -114,7 +116,7 @@ impl DeviceMutex {
     pub fn set_protected(&self, protected: bool) -> bool {
         let prev = self.protected.swap(protected, Ordering::AcqRel);
         if prev && !protected {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = lock(&self.state);
             state.owner = 0;
             state.depth = 0;
             drop(state);
