@@ -99,7 +99,7 @@ pub(super) struct BlitObject {
     pub p_resource: *mut c_void,
     pub dimension: u32,
     pub desc: BlitObjectDesc,
-    pub format_desc: MtlDxgiFormatDesc,
+    pub format_desc: &'static MtlDxgiFormatDesc,
 }
 
 impl BlitObject {

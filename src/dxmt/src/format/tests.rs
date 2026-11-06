@@ -84,7 +84,7 @@ fn dxgi_table_is_the_golden() {
     for line in DXGI.lines().filter(|line| !line.starts_with('#')) {
         let field: Vec<&str> = line.split_whitespace().collect();
         let format: u32 = field[0].parse().expect("a format");
-        let (result, desc) = query_dxgi_ref(format);
+        let (result, desc) = query_dxgi(format);
         let got = format!(
             "{format} {result} 0x{:08x} {} {} {} {}",
             desc.pixel_format,

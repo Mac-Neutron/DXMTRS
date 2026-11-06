@@ -14,7 +14,7 @@
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-        query_dxgi_ref,
+        query_dxgi,
     },
     resource::dims::{self, full_mip_count, mip_extent_wrapping},
 };
@@ -374,7 +374,7 @@ fn planes(desc: &ResourceDesc) -> Option<Planes> {
             return None;
         }
     } else {
-        let (hr, format) = query_dxgi_ref(desc.format);
+        let (hr, format) = query_dxgi(desc.format);
         if hr < 0 {
             return None;
         }

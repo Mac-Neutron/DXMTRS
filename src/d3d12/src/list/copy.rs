@@ -544,7 +544,7 @@ pub unsafe fn copy_texture_region(
                     alloc,
                     &CopyReinterpretSide {
                         texture: src_tex,
-                        format: &src_format,
+                        format: src_format,
                         level: src_level,
                         slice: src_slice,
                         origin: src_origin,
@@ -552,7 +552,7 @@ pub unsafe fn copy_texture_region(
                     src_size,
                     &CopyReinterpretSide {
                         texture: dst_tex,
-                        format: &dst_format,
+                        format: dst_format,
                         level: dst_level,
                         slice: dst_slice,
                         origin: dst_origin,
@@ -823,7 +823,7 @@ pub unsafe fn copy_resource(
                     alloc,
                     &CopyReinterpretSide {
                         texture: src_tex,
-                        format: &src_format,
+                        format: src_format,
                         level,
                         slice,
                         origin: WMTOrigin { x: 0, y: 0, z: 0 },
@@ -835,7 +835,7 @@ pub unsafe fn copy_resource(
                     },
                     &CopyReinterpretSide {
                         texture: dst_tex,
-                        format: &dst_format,
+                        format: dst_format,
                         level,
                         slice,
                         origin: WMTOrigin { x: 0, y: 0, z: 0 },
@@ -1540,7 +1540,7 @@ pub fn execute_pending_resolve(list: &mut List, pending: &PendingResolve) {
         alloc,
         &CopyReinterpretSide {
             texture: &scratch,
-            format: &format_desc,
+            format: format_desc,
             level: 0,
             slice: 0,
             origin: WMTOrigin {
@@ -1556,7 +1556,7 @@ pub fn execute_pending_resolve(list: &mut List, pending: &PendingResolve) {
         },
         &CopyReinterpretSide {
             texture: &dst_view.descriptor,
-            format: &dst_format,
+            format: dst_format,
             level: dst_level,
             slice: dst_slice,
             origin: WMTOrigin {

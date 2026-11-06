@@ -5,7 +5,7 @@ use core::ffi::c_void;
 use dxmt_core::format::{
     FORMAT_SUPPORT_BUFFER, FORMAT_SUPPORT_CPU_LOCKABLE, FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE,
     FORMAT_SUPPORT2_UAV_TYPED_LOAD, FORMAT_SUPPORT2_UAV_TYPED_STORE, MtlDxgiFormatDesc,
-    capability_map, device_capability_map, format_support1, format_support2, query_dxgi_ref,
+    capability_map, device_capability_map, format_support1, format_support2, query_dxgi,
     supports_sample_count,
 };
 use dxmt_util::com::{E_INVALIDARG, Hresult, S_OK};
@@ -38,7 +38,7 @@ const D3D11_FEATURE_D3D11_OPTIONS5: u32 = 19;
 
 /// Resolved DXGI format descriptor together with its Metal format capability bits.
 pub struct FormatInfo {
-    /// Base DXGI format descriptor from `dxmt_core::format::query_dxgi_ref`.
+    /// Base DXGI format descriptor from `dxmt_core::format::query_dxgi`.
     pub desc: &'static MtlDxgiFormatDesc,
     /// Combined `CAP_*` capability mask for `desc.pixel_format`.
     pub capability: u32,
@@ -91,7 +91,7 @@ impl Inspection {
     /// Queries the DXGI format descriptor and its capability mask.
     #[must_use]
     pub fn query_dxgi_format(&self, format: u32) -> Option<FormatInfo> {
-        let (hr, desc) = query_dxgi_ref(format);
+        let (hr, desc) = query_dxgi(format);
         if hr < 0 {
             return None;
         }

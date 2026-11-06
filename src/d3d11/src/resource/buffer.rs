@@ -7,7 +7,7 @@ use dxmt_core::{
     counter::Counter,
     dynamic::DynamicBuffer,
     encoder::BufferSlice,
-    format::query_dxgi_ref,
+    format::query_dxgi,
     resource::{Buffer, BufferAllocationFlags, BufferViewDescriptor},
 };
 use dxmt_util::dxgi_consts::{
@@ -221,7 +221,7 @@ fn create_buffer_srv_inner(
                 num_elements,
             )
         } else {
-            let (hr, fmt_desc) = query_dxgi_ref(final_desc.format);
+            let (hr, fmt_desc) = query_dxgi(final_desc.format);
             if hr < 0 || fmt_desc.bytes_per_texel == 0 {
                 return E_FAIL;
             }
@@ -352,7 +352,7 @@ fn create_buffer_uav_inner(
                 num_elements,
             )
         } else {
-            let (hr, fmt_desc) = query_dxgi_ref(final_desc.format);
+            let (hr, fmt_desc) = query_dxgi(final_desc.format);
             if hr < 0 || fmt_desc.bytes_per_texel == 0 {
                 return E_FAIL;
             }

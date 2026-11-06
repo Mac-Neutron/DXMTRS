@@ -240,7 +240,7 @@ unsafe fn validate_subresource_box(
     if b.left == b.right || b.top == b.bottom || b.front == b.back {
         return Ok(None);
     }
-    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(res.desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi(res.desc.format);
     if hr != S_OK {
         return Err(E_INVALIDARG);
     }
@@ -742,7 +742,7 @@ pub fn srv_view(
     texture: Option<&Texture>,
     view_desc: &ShaderResourceViewDesc,
 ) -> Result<(TextureViewKey, f32), Hresult> {
-    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         return Err(hr);
     }
@@ -866,7 +866,7 @@ pub fn uav_views(
     desc: &ResourceDesc,
     view_desc: &UnorderedAccessViewDesc,
 ) -> Result<(TextureViewKey, Option<TextureViewKey>), Hresult> {
-    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         return Err(hr);
     }
@@ -943,7 +943,7 @@ pub fn rtv_target(
     texture: Option<&Arc<Texture>>,
     view_desc: &RenderTargetViewDesc,
 ) -> Result<RenderTargetDesc, Hresult> {
-    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         return Err(hr);
     }
@@ -1065,7 +1065,7 @@ pub fn dsv_target(
     texture: Option<&Arc<Texture>>,
     view_desc: &DepthStencilViewDesc,
 ) -> Result<RenderTargetDesc, Hresult> {
-    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         return Err(hr);
     }

@@ -1449,7 +1449,7 @@ static MAC2: &[(u32, u32)] = &[
 /// `E_FAIL` for a format Metal has no counterpart for or one past the table, with the description
 /// the C++ leaves in that case. The description is the table's own row, not a copy.
 #[must_use]
-pub fn query_dxgi_ref(dxgi_format: u32) -> (Hresult, &'static MtlDxgiFormatDesc) {
+pub fn query_dxgi(dxgi_format: u32) -> (Hresult, &'static MtlDxgiFormatDesc) {
     match usize::try_from(dxgi_format)
         .ok()
         .and_then(|index| DXGI_TABLE.get(index))
@@ -1457,13 +1457,6 @@ pub fn query_dxgi_ref(dxgi_format: u32) -> (Hresult, &'static MtlDxgiFormatDesc)
         Some(Some(desc)) => (S_OK, desc),
         _ => (E_FAIL, &UNSUPPORTED),
     }
-}
-
-/// [`query_dxgi_ref`] with a copy of the description, for callers that keep one.
-#[must_use]
-pub fn query_dxgi(dxgi_format: u32) -> (Hresult, MtlDxgiFormatDesc) {
-    let (result, desc) = query_dxgi_ref(dxgi_format);
-    (result, MtlDxgiFormatDesc { ..*desc })
 }
 
 /// The linear format of an sRGB one; any other format comes back as given.
@@ -2000,7 +1993,7 @@ crate::seam_export! {
     unsafe fn dxmt_format_query_dxgi(dxgi_format: u32, out: *mut MtlDxgiFormatDesc) -> Hresult {
         let (result, desc) = query_dxgi(dxgi_format);
         // SAFETY: `out` is writable, by this function's contract.
-        unsafe { out.write(desc) };
+        unsafe { out.write(MtlDxgiFormatDesc { ..*desc }) };
         result
     }
 }

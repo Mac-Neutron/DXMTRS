@@ -11,7 +11,7 @@
 
 use core::mem::{offset_of, size_of};
 
-use dxmt_core::format::{E_FAIL, query_dxgi_ref};
+use dxmt_core::format::{E_FAIL, query_dxgi};
 use dxmt_util::com::Hresult;
 
 use crate::abi::{
@@ -163,7 +163,7 @@ fn multisample_quality_levels(device: &impl Device, data: &mut [u8]) -> Hresult 
         return S_OK;
     }
     put(data, flags, 0);
-    if query_dxgi_ref(format).0 >= 0 {
+    if query_dxgi(format).0 >= 0 {
         put(
             data,
             levels,
@@ -255,7 +255,7 @@ pub unsafe fn check_feature_support(
                 put_u8(data, plane_count, 1);
                 return S_OK;
             }
-            let (hr, desc) = query_dxgi_ref(format);
+            let (hr, desc) = query_dxgi(format);
             if hr < 0 {
                 return E_FAIL;
             }

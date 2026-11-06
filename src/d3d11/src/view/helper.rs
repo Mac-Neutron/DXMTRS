@@ -1,7 +1,7 @@
 //! View descriptor validation and default-view constructors (`d3d11_resource_view_helper.cpp`).
 
 use dxmt_core::{
-    format::query_dxgi_ref,
+    format::query_dxgi,
     resource::{
         TextureViewDescriptor,
         dims::mip_extent,
@@ -859,7 +859,7 @@ pub fn initialize_and_normalize_srv_descriptor(
     tex_info: &WMTTextureInfo,
     view_desc: &mut D3d11ShaderResourceViewDesc1,
 ) -> Result<TextureViewDescriptor, Hresult> {
-    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = query_dxgi(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
@@ -890,7 +890,7 @@ pub fn initialize_and_normalize_uav_descriptor(
     view_desc: &mut D3d11UnorderedAccessViewDesc1,
 ) -> Result<TextureViewDescriptor, Hresult> {
     let _ = mip_levels;
-    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = query_dxgi(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
@@ -916,7 +916,7 @@ pub fn initialize_and_normalize_rtv_descriptor(
     view_desc: &mut D3d11RenderTargetViewDesc1,
 ) -> Result<(RenderPassAttachmentDesc, TextureViewDescriptor), Hresult> {
     let _ = mip_levels;
-    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = query_dxgi(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
@@ -943,7 +943,7 @@ pub fn initialize_and_normalize_dsv_descriptor(
     view_desc: &mut D3d11DepthStencilViewDesc,
 ) -> Result<(RenderPassAttachmentDesc, TextureViewDescriptor), Hresult> {
     let _ = mip_levels;
-    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
+    let (hr, metal_format) = query_dxgi(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }

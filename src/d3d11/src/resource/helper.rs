@@ -3,7 +3,7 @@
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER, MTL_DXGI_FORMAT_TYPELESS,
-        query_dxgi_ref,
+        query_dxgi,
     },
     resource::{
         BufferAllocationFlags,
@@ -180,7 +180,7 @@ fn create_mtl_texture_descriptor_internal(
         return E_INVALIDARG;
     }
 
-    let (hr, metal_format) = query_dxgi_ref(format);
+    let (hr, metal_format) = query_dxgi(format);
     if hr < 0 {
         return E_FAIL;
     }
@@ -422,7 +422,7 @@ pub fn get_linear_texture_layout_1d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi_ref(desc.format);
+    let (hr, metal_format) = query_dxgi(desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
@@ -462,7 +462,7 @@ fn linear_texture_layout(
     (w, h, d): (u32, u32, u32),
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi_ref(format);
+    let (hr, metal_format) = query_dxgi(format);
     if hr < 0 {
         return Err(E_FAIL);
     }

@@ -345,7 +345,7 @@ pub unsafe fn create_srv(
         };
     }
 
-    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         crate::err!(
             "D3D12Buffer::CreateShaderResourceView: not an ordinary or packed format: {}",
@@ -438,7 +438,7 @@ pub unsafe fn create_uav(
         };
     }
 
-    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(view_desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi(view_desc.format);
     if hr != S_OK {
         crate::err!(
             "D3D12Buffer::CreateUnorderedAccessView: not an ordinary or packed format: {}",
