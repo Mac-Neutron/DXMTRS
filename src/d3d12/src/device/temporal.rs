@@ -11,7 +11,18 @@ use dxmt_core::{
     presenter::framegen::TemporalScaler,
     resource::{Texture, TextureAllocationFlags},
 };
-use dxmt_util::{com::ComObject, float_cast::u32_to_f32, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    dxgi_consts::{
+        DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS,
+        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS,
+        DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT,
+        DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_UNKNOWN,
+    },
+    float_cast::u32_to_f32,
+    private_data::PrivateData,
+};
 use winemetal_sys::MTLDevice_temporalScalerScaleRange;
 use winemetal_wire::{
     WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
@@ -39,18 +50,6 @@ use crate::{
     device::Device,
     slot,
 };
-
-const DXGI_FORMAT_UNKNOWN: u32 = 0;
-const DXGI_FORMAT_R32G32B32A32_TYPELESS: u32 = 1;
-const DXGI_FORMAT_R32G32B32A32_FLOAT: u32 = 2;
-const DXGI_FORMAT_R16G16B16A16_TYPELESS: u32 = 9;
-const DXGI_FORMAT_R16G16B16A16_FLOAT: u32 = 10;
-const DXGI_FORMAT_R10G10B10A2_TYPELESS: u32 = 23;
-const DXGI_FORMAT_R10G10B10A2_UNORM: u32 = 24;
-const DXGI_FORMAT_R8G8B8A8_TYPELESS: u32 = 27;
-const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
-const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
-const DXGI_FORMAT_B8G8R8A8_TYPELESS: u32 = 90;
 
 /// Which scratch texture a temporal upscale needs (`MTLD3D12TemporalScaler::Scratch`,
 ///

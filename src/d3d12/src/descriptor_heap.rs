@@ -13,7 +13,7 @@ use dxmt_core::{
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     sampler::Sampler,
 };
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, dxgi_consts::DXGI_FORMAT_UNKNOWN, private_data::PrivateData};
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -51,9 +51,6 @@ use crate::{
     },
     device::Device,
 };
-
-/// `DXGI_FORMAT_UNKNOWN` (`0`).
-const DXGI_FORMAT_UNKNOWN: u32 = 0;
 
 type SamplerMap = FxHashMap<(usize, u32), Arc<Sampler>>;
 

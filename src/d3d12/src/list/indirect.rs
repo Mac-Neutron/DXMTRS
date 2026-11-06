@@ -3,6 +3,7 @@
 use core::{ffi::c_void, mem::size_of, ptr};
 use std::sync::LazyLock;
 
+use dxmt_util::dxgi_consts::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT};
 use winemetal_wire::{
     MemPtr, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE, WMT_PRIMITIVE_TYPE_LINE_STRIP,
     WMT_PRIMITIVE_TYPE_POINT, WMT_PRIMITIVE_TYPE_TRIANGLE, WMT_PRIMITIVE_TYPE_TRIANGLE_STRIP,
@@ -32,9 +33,6 @@ const fn null_mem_ptr() -> MemPtr {
 const fn null_mem_ptr() -> MemPtr {
     MemPtr { ptr: 0, high: 0 }
 }
-
-const DXGI_FORMAT_R32_UINT: u32 = 42;
-const DXGI_FORMAT_R16_UINT: u32 = 57;
 
 static NATIVE_INDIRECT: LazyLock<bool> =
     LazyLock::new(|| std::env::var("DXMT_D3D12_INDIRECT").as_deref() != Ok("icb"));

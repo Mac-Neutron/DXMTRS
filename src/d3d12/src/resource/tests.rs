@@ -1,6 +1,13 @@
 use core::{cell::Cell, ffi::c_void, mem::size_of, ptr};
 
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject,
+    dxgi_consts::{
+        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R32_TYPELESS,
+        DXGI_FORMAT_UNKNOWN,
+    },
+    private_data::PrivateData,
+};
 use winemetal_sys::{
     Obj,
     wire::{
@@ -55,11 +62,6 @@ use crate::{
     heap::HeapObject,
     slot,
 };
-
-const DXGI_FORMAT_UNKNOWN: u32 = 0;
-const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
-const DXGI_FORMAT_R32_TYPELESS: u32 = 39;
-const DXGI_FORMAT_R16_TYPELESS: u32 = 53;
 
 thread_local! {
     static FAKE_BACKING_PTR: Cell<usize> = const { Cell::new(0) };

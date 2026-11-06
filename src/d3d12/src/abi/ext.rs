@@ -10,15 +10,15 @@ use core::{
     mem::{align_of, offset_of, size_of},
 };
 
-pub use dxmt_util::ext::{
-    D3D12ScalerDesc, D3D12UpscaleDesc, Hwnd, IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
-    IID_D3D12_TEMPORAL_SCALER, IID_IMTL_DXGI_ADAPTER, IID_IMTL_SWAP_CHAIN_FACTORY,
-    IMTLDXGIAdapterVtbl, Luid, Rational, Rect, SampleDesc, SwapChainDesc, SwapChainDesc1,
-    SwapChainFullscreenDesc,
-};
-use dxmt_util::{
-    com::{Guid, Hresult},
-    ext as util_ext,
+use dxmt_util::{com::Hresult, ext as util_ext};
+pub use dxmt_util::{
+    com::iid::{IID_D3D12_COMMAND_QUEUE_DOWNLEVEL, IID_D3D12_DEVICE_DOWNLEVEL},
+    ext::{
+        D3D12ScalerDesc, D3D12UpscaleDesc, Hwnd, IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
+        IID_D3D12_TEMPORAL_SCALER, IID_IMTL_DXGI_ADAPTER, IID_IMTL_SWAP_CHAIN_FACTORY,
+        IMTLDXGIAdapterVtbl, Luid, Rational, Rect, SampleDesc, SwapChainDesc, SwapChainDesc1,
+        SwapChainFullscreenDesc,
+    },
 };
 
 use crate::abi::vtbl::IUnknownVtbl;
@@ -69,22 +69,6 @@ pub struct IMTLSwapChainFactoryVtbl {
         out: *mut *mut c_void,
     ) -> Hresult,
 }
-
-/// Downlevel device query UUID (`d3d12_device.cpp:40`), refused silently without a warning.
-pub const IID_D3D12_DEVICE_DOWNLEVEL: Guid = Guid::new(
-    0x74ea_ee3f,
-    0x2f4b,
-    0x476d,
-    [0x82, 0xba, 0x2b, 0x85, 0xcb, 0x49, 0xe3, 0x10],
-);
-
-/// Downlevel command-queue query UUID (`d3d12_command_queue.cpp:40`), refused silently.
-pub const IID_D3D12_COMMAND_QUEUE_DOWNLEVEL: Guid = Guid::new(
-    0x38a8_c5ef,
-    0x7ccb,
-    0x4e81,
-    [0x91, 0x4f, 0xa6, 0xe9, 0xd0, 0x72, 0xc4, 0x94],
-);
 
 const _: () = {
     assert!(size_of::<D3D12DeviceExtVtbl>() == size_of::<util_ext::D3D12DeviceExtVtbl>());

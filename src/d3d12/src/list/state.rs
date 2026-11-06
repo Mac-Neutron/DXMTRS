@@ -10,6 +10,7 @@ use core::{
 use std::sync::Arc;
 
 use dxmt_core::format::depth_stencil_planar_flags;
+use dxmt_util::dxgi_consts::DXGI_FORMAT_R32_UINT;
 use winemetal_wire::{
     WMT_INDEX_TYPE_U_INT16, WMT_INDEX_TYPE_U_INT32, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE,
     WMTScissorRect, WMTViewport,
@@ -43,7 +44,6 @@ use crate::{
     root_signature::object::RootSignature,
 };
 
-const DXGI_FORMAT_R32_UINT: u32 = 42;
 const D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER: u32 = 1;
 const RTV_DSV_HEAP_INCREMENTAL_SIZE: usize = 32;
 const MAX_SCISSOR_COORD: i32 = 16384;

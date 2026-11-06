@@ -72,6 +72,8 @@ use crate::{
     },
     com::{
         self, ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
+        IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1,
+        IID_ID3D11_DEVICE2, IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5,
         IID_ID3D12_COMMAND_QUEUE, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE,
         IID_IUNKNOWN, S_OK,
     },
@@ -102,55 +104,6 @@ pub const COMMAND_QUEUE_SLOTS: u32 = 64;
 /// Queue operations that a CPU thread can observe (`Signal`, `Wait`, `Present`) commit on their
 /// own; this only joins back-to-back executes, where Metal has no ordering boundary to preserve.
 const EXECUTE_BATCH_LIMIT: u32 = 8;
-
-const IID_ID3D10_DEVICE: Guid = Guid::new(
-    0x9b7e_4c0f,
-    0x342c,
-    0x4106,
-    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
-);
-const IID_ID3D10_DEVICE1: Guid = Guid::new(
-    0x9b7e_4c8f,
-    0x342c,
-    0x4106,
-    [0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0],
-);
-const IID_ID3D11_DEVICE: Guid = Guid::new(
-    0xdb6f_6ddb,
-    0xac77,
-    0x4e88,
-    [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0x14, 0x0e],
-);
-const IID_ID3D11_DEVICE1: Guid = Guid::new(
-    0xa04b_fb29,
-    0x08ef,
-    0x43d6,
-    [0xa4, 0x9c, 0xa9, 0xbd, 0xbd, 0xcb, 0xe6, 0x86],
-);
-const IID_ID3D11_DEVICE2: Guid = Guid::new(
-    0x9d06_dffa,
-    0xd1e5,
-    0x4d07,
-    [0x83, 0xa8, 0x1b, 0xb1, 0x23, 0xf2, 0xf8, 0x41],
-);
-const IID_ID3D11_DEVICE3: Guid = Guid::new(
-    0xa05c_8c37,
-    0xd2c6,
-    0x4732,
-    [0xb3, 0xa0, 0x9c, 0xe0, 0xb0, 0xdc, 0x9a, 0xe6],
-);
-const IID_ID3D11_DEVICE4: Guid = Guid::new(
-    0x8992_ab71,
-    0x02e6,
-    0x4b8d,
-    [0xba, 0x48, 0xb0, 0x56, 0xdc, 0xda, 0x42, 0xc4],
-);
-const IID_ID3D11_DEVICE5: Guid = Guid::new(
-    0x8ffd_e202,
-    0xa0e7,
-    0x45df,
-    [0x9e, 0x01, 0xe8, 0x37, 0x80, 0x1b, 0x5e, 0xa0],
-);
 
 #[cfg(target_pointer_width = "64")]
 fn mem_ptr(ptr: *const u8) -> MemPtr {

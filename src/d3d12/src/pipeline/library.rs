@@ -11,8 +11,8 @@ use dxmt_util::{com::ComObject, private_data::PrivateData};
 use crate::{
     abi::vtbl::{ID3D12PipelineLibrary1Vtbl, IUnknownVtbl},
     com::{
-        ComRefCounted, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult,
-        IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
+        ComRefCounted, D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, E_NOINTERFACE, E_POINTER,
+        Guid, Hresult, IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PIPELINE_LIBRARY,
         IID_ID3D12_PIPELINE_LIBRARY1, IID_ID3D12_PIPELINE_STATE, IID_IUNKNOWN, S_FALSE, S_OK,
         add_ref_com, init_out_ptr, release_com, set_name_private_data, vtbl,
     },
@@ -28,9 +28,6 @@ use crate::{
 const MAGIC: [u8; 8] = *b"DXMTPLB1";
 const VERSION: u32 = 1;
 const HEADER_SIZE: usize = 16;
-
-/// `D3D12_ERROR_DRIVER_VERSION_MISMATCH` (`0x887e0002`, `d3d12_pipeline_library.cpp:32`).
-pub const D3D12_ERROR_DRIVER_VERSION_MISMATCH: Hresult = 0x887e_0002_u32.cast_signed();
 
 const KIND_ANY: u8 = 0;
 const KIND_GRAPHICS: u8 = 1;
