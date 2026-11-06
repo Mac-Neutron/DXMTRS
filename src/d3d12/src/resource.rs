@@ -19,6 +19,7 @@ use dxmt_core::{
         Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor,
         dims::clamped_mip_count,
         texture_info::{Dimension, atomic_ok, info_bits, lossless, texture_type},
+        view::{ResourceShape, ViewDesc, ViewDimension, ViewKind, entire_view},
     },
     settings::{Flags, settings},
 };
@@ -66,6 +67,7 @@ use crate::{
             D3D12_SRV_DIMENSION_TEXTURE1DARRAY, D3D12_SRV_DIMENSION_TEXTURE2D,
             D3D12_SRV_DIMENSION_TEXTURE2DARRAY, D3D12_SRV_DIMENSION_TEXTURE2DMS,
             D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY, D3D12_SRV_DIMENSION_TEXTURE3D,
+            D3D12_SRV_DIMENSION_TEXTURECUBE, D3D12_SRV_DIMENSION_TEXTURECUBEARRAY,
             D3D12_UAV_DIMENSION_TEXTURE1D, D3D12_UAV_DIMENSION_TEXTURE1DARRAY,
             D3D12_UAV_DIMENSION_TEXTURE2D, D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
             D3D12_UAV_DIMENSION_TEXTURE3D, D3d12HeapDesc, DepthStencilViewDesc,
@@ -74,7 +76,8 @@ use crate::{
             Tex1dArraySrv, Tex1dArrayUav, Tex1dDsv, Tex1dRtv, Tex1dSrv, Tex1dUav, Tex2dArrayDsv,
             Tex2dArrayRtv, Tex2dArraySrv, Tex2dArrayUav, Tex2dDsv, Tex2dRtv, Tex2dSrv, Tex2dUav,
             Tex2dmsArrayDsv, Tex2dmsArrayRtv, Tex2dmsArraySrv, Tex2dmsDsv, Tex2dmsRtv, Tex2dmsSrv,
-            Tex3dRtv, Tex3dSrv, Tex3dUav, UnorderedAccessViewDesc, UnorderedAccessViewDescBody,
+            Tex3dRtv, Tex3dSrv, Tex3dUav, TexCubeArraySrv, TexCubeSrv, UnorderedAccessViewDesc,
+            UnorderedAccessViewDescBody,
         },
         vtbl::{D3d12CpuDescriptorHandle, ID3D12Resource2Vtbl},
     },
@@ -500,123 +503,348 @@ pub unsafe fn cast_resource<'a>(raw: *mut c_void) -> Option<&'a Resource> {
     }
 }
 
+/// D3D12's shape of a texture for its whole-resource views.
+///
+/// An array past one slice, multisampled past one sample, never a cube; none for a buffer or an
+/// unknown dimension.
+fn shape(desc: &ResourceDesc) -> Option<ResourceShape> {
+    let dimension = match desc.dimension {
+        D3D12_RESOURCE_DIMENSION_TEXTURE1D => Dimension::Texture1D,
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D => Dimension::Texture2D,
+        D3D12_RESOURCE_DIMENSION_TEXTURE3D => Dimension::Texture3D,
+        _ => return None,
+    };
+    Some(ResourceShape {
+        dimension,
+        mip_levels: u32::from(desc.mip_levels),
+        array_size: u32::from(desc.depth_or_array_size),
+        is_array: desc.depth_or_array_size > 1,
+        multisampled: desc.sample_desc.count > 1,
+        cube: false,
+    })
+}
+
+/// `view` as a `D3D12_SHADER_RESOURCE_VIEW_DESC` in `format`, default mapping and no LOD clamp.
+const fn srv_desc(format: u32, view: &ViewDesc) -> ShaderResourceViewDesc {
+    let (mip, mips) = (view.first_mip, view.mip_count);
+    let (first, size) = (view.first_slice, view.array_size);
+    let (view_dimension, body) = match view.dimension {
+        ViewDimension::Texture1D => (
+            D3D12_SRV_DIMENSION_TEXTURE1D,
+            ShaderResourceViewDescBody {
+                texture_1d: ManuallyDrop::new(Tex1dSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            D3D12_SRV_DIMENSION_TEXTURE1DARRAY,
+            ShaderResourceViewDescBody {
+                texture_1d_array: ManuallyDrop::new(Tex1dArraySrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first_array_slice: first,
+                    array_size: size,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2D => (
+            D3D12_SRV_DIMENSION_TEXTURE2D,
+            ShaderResourceViewDescBody {
+                texture_2d: ManuallyDrop::new(Tex2dSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    plane_slice: 0,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+            ShaderResourceViewDescBody {
+                texture_2d_array: ManuallyDrop::new(Tex2dArraySrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMS => (
+            D3D12_SRV_DIMENSION_TEXTURE2DMS,
+            ShaderResourceViewDescBody {
+                texture_2dms: ManuallyDrop::new(Tex2dmsSrv {
+                    unused_field_nothing_to_define: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMSArray => (
+            D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY,
+            ShaderResourceViewDescBody {
+                texture_2dms_array: ManuallyDrop::new(Tex2dmsArraySrv {
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture3D => (
+            D3D12_SRV_DIMENSION_TEXTURE3D,
+            ShaderResourceViewDescBody {
+                texture_3d: ManuallyDrop::new(Tex3dSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::TextureCube => (
+            D3D12_SRV_DIMENSION_TEXTURECUBE,
+            ShaderResourceViewDescBody {
+                texture_cube: ManuallyDrop::new(TexCubeSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+        ViewDimension::TextureCubeArray => (
+            D3D12_SRV_DIMENSION_TEXTURECUBEARRAY,
+            ShaderResourceViewDescBody {
+                texture_cube_array: ManuallyDrop::new(TexCubeArraySrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first_2d_array_face: first,
+                    num_cubes: size / 6,
+                    resource_min_lod_clamp: 0.0,
+                }),
+            },
+        ),
+    };
+    ShaderResourceViewDesc {
+        format,
+        view_dimension,
+        shader_4_component_mapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        view: body,
+    }
+}
+
+/// `view` as a `D3D12_UNORDERED_ACCESS_VIEW_DESC` in `format`; none for a dimension it lacks.
+const fn uav_desc(format: u32, view: &ViewDesc) -> Option<UnorderedAccessViewDesc> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, body) = match view.dimension {
+        ViewDimension::Texture1D => (
+            D3D12_UAV_DIMENSION_TEXTURE1D,
+            UnorderedAccessViewDescBody {
+                texture_1d: ManuallyDrop::new(Tex1dUav { mip_slice: mip }),
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            D3D12_UAV_DIMENSION_TEXTURE1DARRAY,
+            UnorderedAccessViewDescBody {
+                texture_1d_array: ManuallyDrop::new(Tex1dArrayUav {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture2D => (
+            D3D12_UAV_DIMENSION_TEXTURE2D,
+            UnorderedAccessViewDescBody {
+                texture_2d: ManuallyDrop::new(Tex2dUav {
+                    mip_slice: mip,
+                    plane_slice: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+            UnorderedAccessViewDescBody {
+                texture_2d_array: ManuallyDrop::new(Tex2dArrayUav {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture3D => (
+            D3D12_UAV_DIMENSION_TEXTURE3D,
+            UnorderedAccessViewDescBody {
+                texture_3d: ManuallyDrop::new(Tex3dUav {
+                    mip_slice: mip,
+                    first_w_slice: first,
+                    w_size: size,
+                }),
+            },
+        ),
+        _ => return None,
+    };
+    Some(UnorderedAccessViewDesc {
+        format,
+        view_dimension,
+        view: body,
+    })
+}
+
+/// `view` as a `D3D12_RENDER_TARGET_VIEW_DESC` in `format`; none for a dimension it lacks.
+const fn rtv_desc(format: u32, view: &ViewDesc) -> Option<RenderTargetViewDesc> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, body) = match view.dimension {
+        ViewDimension::Texture1D => (
+            D3D12_RTV_DIMENSION_TEXTURE1D,
+            RenderTargetViewDescBody {
+                texture_1d: ManuallyDrop::new(Tex1dRtv { mip_slice: mip }),
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            D3D12_RTV_DIMENSION_TEXTURE1DARRAY,
+            RenderTargetViewDescBody {
+                texture_1d_array: ManuallyDrop::new(Tex1dArrayRtv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture2D => (
+            D3D12_RTV_DIMENSION_TEXTURE2D,
+            RenderTargetViewDescBody {
+                texture_2d: ManuallyDrop::new(Tex2dRtv {
+                    mip_slice: mip,
+                    plane_slice: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            D3D12_RTV_DIMENSION_TEXTURE2DARRAY,
+            RenderTargetViewDescBody {
+                texture_2d_array: ManuallyDrop::new(Tex2dArrayRtv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMS => (
+            D3D12_RTV_DIMENSION_TEXTURE2DMS,
+            RenderTargetViewDescBody {
+                texture_2dms: ManuallyDrop::new(Tex2dmsRtv {
+                    unused_field_nothing_to_define: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMSArray => (
+            D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY,
+            RenderTargetViewDescBody {
+                texture_2dms_array: ManuallyDrop::new(Tex2dmsArrayRtv {
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture3D => (
+            D3D12_RTV_DIMENSION_TEXTURE3D,
+            RenderTargetViewDescBody {
+                texture_3d: ManuallyDrop::new(Tex3dRtv {
+                    mip_slice: mip,
+                    first_w_slice: first,
+                    w_size: size,
+                }),
+            },
+        ),
+        _ => return None,
+    };
+    Some(RenderTargetViewDesc {
+        format,
+        view_dimension,
+        view: body,
+    })
+}
+
+/// `view` as a `D3D12_DEPTH_STENCIL_VIEW_DESC` in `format`; none for a dimension it lacks.
+const fn dsv_desc(format: u32, view: &ViewDesc) -> Option<DepthStencilViewDesc> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, body) = match view.dimension {
+        ViewDimension::Texture1D => (
+            D3D12_DSV_DIMENSION_TEXTURE1D,
+            DepthStencilViewDescBody {
+                texture_1d: ManuallyDrop::new(Tex1dDsv { mip_slice: mip }),
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            D3D12_DSV_DIMENSION_TEXTURE1DARRAY,
+            DepthStencilViewDescBody {
+                texture_1d_array: ManuallyDrop::new(Tex1dArrayDsv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture2D => (
+            D3D12_DSV_DIMENSION_TEXTURE2D,
+            DepthStencilViewDescBody {
+                texture_2d: ManuallyDrop::new(Tex2dDsv { mip_slice: mip }),
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            D3D12_DSV_DIMENSION_TEXTURE2DARRAY,
+            DepthStencilViewDescBody {
+                texture_2d_array: ManuallyDrop::new(Tex2dArrayDsv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMS => (
+            D3D12_DSV_DIMENSION_TEXTURE2DMS,
+            DepthStencilViewDescBody {
+                texture_2dms: ManuallyDrop::new(Tex2dmsDsv {
+                    unused_field_nothing_to_define: 0,
+                }),
+            },
+        ),
+        ViewDimension::Texture2DMSArray => (
+            D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY,
+            DepthStencilViewDescBody {
+                texture_2dms_array: ManuallyDrop::new(Tex2dmsArrayDsv {
+                    first_array_slice: first,
+                    array_size: size,
+                }),
+            },
+        ),
+        _ => return None,
+    };
+    Some(DepthStencilViewDesc {
+        format,
+        view_dimension,
+        flags: D3D12_DSV_FLAG_NONE,
+        view: body,
+    })
+}
+
 /// Extracts a default `D3D12_SHADER_RESOURCE_VIEW_DESC` (`d3d12_resource_helper.cpp:145-217`).
 ///
 /// # Errors
 ///
 /// Returns `E_FAIL` for buffer resources or `E_INVALIDARG` for unknown dimensions.
 pub fn extract_entire_srv(desc: &ResourceDesc) -> Result<ShaderResourceViewDesc, Hresult> {
-    let mapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    let mips = u32::from(desc.mip_levels);
-    let array_size = u32::from(desc.depth_or_array_size);
-    match desc.dimension {
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            crate::err!("Unsupported buffer SRV");
-            Err(E_FAIL)
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
-            if desc.depth_or_array_size > 1 {
-                Ok(ShaderResourceViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_SRV_DIMENSION_TEXTURE1DARRAY,
-                    shader_4_component_mapping: mapping,
-                    view: ShaderResourceViewDescBody {
-                        texture_1d_array: ManuallyDrop::new(Tex1dArraySrv {
-                            most_detailed_mip: 0,
-                            mip_levels: mips,
-                            first_array_slice: 0,
-                            array_size,
-                            resource_min_lod_clamp: 0.0,
-                        }),
-                    },
-                })
-            } else {
-                Ok(ShaderResourceViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_SRV_DIMENSION_TEXTURE1D,
-                    shader_4_component_mapping: mapping,
-                    view: ShaderResourceViewDescBody {
-                        texture_1d: ManuallyDrop::new(Tex1dSrv {
-                            most_detailed_mip: 0,
-                            mip_levels: mips,
-                            resource_min_lod_clamp: 0.0,
-                        }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            if desc.sample_desc.count > 1 {
-                if desc.depth_or_array_size > 1 {
-                    Ok(ShaderResourceViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY,
-                        shader_4_component_mapping: mapping,
-                        view: ShaderResourceViewDescBody {
-                            texture_2dms_array: ManuallyDrop::new(Tex2dmsArraySrv {
-                                first_array_slice: 0,
-                                array_size,
-                            }),
-                        },
-                    })
-                } else {
-                    Ok(ShaderResourceViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_SRV_DIMENSION_TEXTURE2DMS,
-                        shader_4_component_mapping: mapping,
-                        view: ShaderResourceViewDescBody {
-                            texture_2dms: ManuallyDrop::new(Tex2dmsSrv {
-                                unused_field_nothing_to_define: 0,
-                            }),
-                        },
-                    })
-                }
-            } else if desc.depth_or_array_size > 1 {
-                Ok(ShaderResourceViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
-                    shader_4_component_mapping: mapping,
-                    view: ShaderResourceViewDescBody {
-                        texture_2d_array: ManuallyDrop::new(Tex2dArraySrv {
-                            most_detailed_mip: 0,
-                            mip_levels: mips,
-                            first_array_slice: 0,
-                            array_size,
-                            plane_slice: 0,
-                            resource_min_lod_clamp: 0.0,
-                        }),
-                    },
-                })
-            } else {
-                Ok(ShaderResourceViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_SRV_DIMENSION_TEXTURE2D,
-                    shader_4_component_mapping: mapping,
-                    view: ShaderResourceViewDescBody {
-                        texture_2d: ManuallyDrop::new(Tex2dSrv {
-                            most_detailed_mip: 0,
-                            mip_levels: mips,
-                            plane_slice: 0,
-                            resource_min_lod_clamp: 0.0,
-                        }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D => Ok(ShaderResourceViewDesc {
-            format: desc.format,
-            view_dimension: D3D12_SRV_DIMENSION_TEXTURE3D,
-            shader_4_component_mapping: mapping,
-            view: ShaderResourceViewDescBody {
-                texture_3d: ManuallyDrop::new(Tex3dSrv {
-                    most_detailed_mip: 0,
-                    mip_levels: mips,
-                    resource_min_lod_clamp: 0.0,
-                }),
-            },
-        }),
-        _ => Err(E_INVALIDARG),
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        crate::err!("Unsupported buffer SRV");
+        return Err(E_FAIL);
     }
+    let resource = shape(desc).ok_or(E_INVALIDARG)?;
+    entire_view(ViewKind::ShaderResource, &resource)
+        .map(|v| srv_desc(desc.format, &v))
+        .ok_or(E_FAIL)
 }
 
 /// Extracts a default `D3D12_UNORDERED_ACCESS_VIEW_DESC` (`d3d12_resource_helper.cpp:221-270`).
@@ -625,78 +853,14 @@ pub fn extract_entire_srv(desc: &ResourceDesc) -> Result<ShaderResourceViewDesc,
 ///
 /// Returns `E_FAIL` for buffer or MSAA resources, or `E_INVALIDARG` for unknown dimensions.
 pub fn extract_entire_uav(desc: &ResourceDesc) -> Result<UnorderedAccessViewDesc, Hresult> {
-    let array_size = u32::from(desc.depth_or_array_size);
-    match desc.dimension {
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            crate::err!("Unsupported buffer UAV");
-            Err(E_FAIL)
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
-            if desc.depth_or_array_size > 1 {
-                Ok(UnorderedAccessViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_UAV_DIMENSION_TEXTURE1DARRAY,
-                    view: UnorderedAccessViewDescBody {
-                        texture_1d_array: ManuallyDrop::new(Tex1dArrayUav {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                        }),
-                    },
-                })
-            } else {
-                Ok(UnorderedAccessViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_UAV_DIMENSION_TEXTURE1D,
-                    view: UnorderedAccessViewDescBody {
-                        texture_1d: ManuallyDrop::new(Tex1dUav { mip_slice: 0 }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            if desc.sample_desc.count > 1 {
-                return Err(E_FAIL);
-            }
-            if desc.depth_or_array_size > 1 {
-                Ok(UnorderedAccessViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
-                    view: UnorderedAccessViewDescBody {
-                        texture_2d_array: ManuallyDrop::new(Tex2dArrayUav {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                            plane_slice: 0,
-                        }),
-                    },
-                })
-            } else {
-                Ok(UnorderedAccessViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_UAV_DIMENSION_TEXTURE2D,
-                    view: UnorderedAccessViewDescBody {
-                        texture_2d: ManuallyDrop::new(Tex2dUav {
-                            mip_slice: 0,
-                            plane_slice: 0,
-                        }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D => Ok(UnorderedAccessViewDesc {
-            format: desc.format,
-            view_dimension: D3D12_UAV_DIMENSION_TEXTURE3D,
-            view: UnorderedAccessViewDescBody {
-                texture_3d: ManuallyDrop::new(Tex3dUav {
-                    mip_slice: 0,
-                    first_w_slice: 0,
-                    w_size: array_size,
-                }),
-            },
-        }),
-        _ => Err(E_INVALIDARG),
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        crate::err!("Unsupported buffer UAV");
+        return Err(E_FAIL);
     }
+    let resource = shape(desc).ok_or(E_INVALIDARG)?;
+    entire_view(ViewKind::UnorderedAccess, &resource)
+        .and_then(|v| uav_desc(desc.format, &v))
+        .ok_or(E_FAIL)
 }
 
 /// Extracts a default `D3D12_RENDER_TARGET_VIEW_DESC` (`d3d12_resource_helper.cpp:84-141`).
@@ -705,98 +869,14 @@ pub fn extract_entire_uav(desc: &ResourceDesc) -> Result<UnorderedAccessViewDesc
 ///
 /// Returns `E_FAIL` for buffer resources or `E_INVALIDARG` for unknown dimensions.
 pub fn extract_entire_rtv(desc: &ResourceDesc) -> Result<RenderTargetViewDesc, Hresult> {
-    let array_size = u32::from(desc.depth_or_array_size);
-    match desc.dimension {
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            crate::err!("Unsupported buffer RTV");
-            Err(E_FAIL)
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
-            if desc.depth_or_array_size > 1 {
-                Ok(RenderTargetViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_RTV_DIMENSION_TEXTURE1DARRAY,
-                    view: RenderTargetViewDescBody {
-                        texture_1d_array: ManuallyDrop::new(Tex1dArrayRtv {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                        }),
-                    },
-                })
-            } else {
-                Ok(RenderTargetViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_RTV_DIMENSION_TEXTURE1D,
-                    view: RenderTargetViewDescBody {
-                        texture_1d: ManuallyDrop::new(Tex1dRtv { mip_slice: 0 }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            if desc.sample_desc.count > 1 {
-                if desc.depth_or_array_size > 1 {
-                    Ok(RenderTargetViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY,
-                        view: RenderTargetViewDescBody {
-                            texture_2dms_array: ManuallyDrop::new(Tex2dmsArrayRtv {
-                                first_array_slice: 0,
-                                array_size,
-                            }),
-                        },
-                    })
-                } else {
-                    Ok(RenderTargetViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_RTV_DIMENSION_TEXTURE2DMS,
-                        view: RenderTargetViewDescBody {
-                            texture_2dms: ManuallyDrop::new(Tex2dmsRtv {
-                                unused_field_nothing_to_define: 0,
-                            }),
-                        },
-                    })
-                }
-            } else if desc.depth_or_array_size > 1 {
-                Ok(RenderTargetViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_RTV_DIMENSION_TEXTURE2DARRAY,
-                    view: RenderTargetViewDescBody {
-                        texture_2d_array: ManuallyDrop::new(Tex2dArrayRtv {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                            plane_slice: 0,
-                        }),
-                    },
-                })
-            } else {
-                Ok(RenderTargetViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-                    view: RenderTargetViewDescBody {
-                        texture_2d: ManuallyDrop::new(Tex2dRtv {
-                            mip_slice: 0,
-                            plane_slice: 0,
-                        }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D => Ok(RenderTargetViewDesc {
-            format: desc.format,
-            view_dimension: D3D12_RTV_DIMENSION_TEXTURE3D,
-            view: RenderTargetViewDescBody {
-                texture_3d: ManuallyDrop::new(Tex3dRtv {
-                    mip_slice: 0,
-                    first_w_slice: 0,
-                    w_size: array_size,
-                }),
-            },
-        }),
-        _ => Err(E_INVALIDARG),
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        crate::err!("Unsupported buffer RTV");
+        return Err(E_FAIL);
     }
+    let resource = shape(desc).ok_or(E_INVALIDARG)?;
+    entire_view(ViewKind::RenderTarget, &resource)
+        .and_then(|v| rtv_desc(desc.format, &v))
+        .ok_or(E_FAIL)
 }
 
 /// Extracts a default `D3D12_DEPTH_STENCIL_VIEW_DESC` (`d3d12_resource_helper.cpp:27-80`).
@@ -805,93 +885,18 @@ pub fn extract_entire_rtv(desc: &ResourceDesc) -> Result<RenderTargetViewDesc, H
 ///
 /// Returns `E_FAIL` for buffer or 3D texture resources, or `E_INVALIDARG` for unknown dimensions.
 pub fn extract_entire_dsv(desc: &ResourceDesc) -> Result<DepthStencilViewDesc, Hresult> {
-    let array_size = u32::from(desc.depth_or_array_size);
-    match desc.dimension {
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            crate::err!("Unsupported buffer DSV");
-            Err(E_FAIL)
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
-            if desc.depth_or_array_size > 1 {
-                Ok(DepthStencilViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_DSV_DIMENSION_TEXTURE1DARRAY,
-                    flags: D3D12_DSV_FLAG_NONE,
-                    view: DepthStencilViewDescBody {
-                        texture_1d_array: ManuallyDrop::new(Tex1dArrayDsv {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                        }),
-                    },
-                })
-            } else {
-                Ok(DepthStencilViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_DSV_DIMENSION_TEXTURE1D,
-                    flags: D3D12_DSV_FLAG_NONE,
-                    view: DepthStencilViewDescBody {
-                        texture_1d: ManuallyDrop::new(Tex1dDsv { mip_slice: 0 }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            if desc.sample_desc.count > 1 {
-                if desc.depth_or_array_size > 1 {
-                    Ok(DepthStencilViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY,
-                        flags: D3D12_DSV_FLAG_NONE,
-                        view: DepthStencilViewDescBody {
-                            texture_2dms_array: ManuallyDrop::new(Tex2dmsArrayDsv {
-                                first_array_slice: 0,
-                                array_size,
-                            }),
-                        },
-                    })
-                } else {
-                    Ok(DepthStencilViewDesc {
-                        format: desc.format,
-                        view_dimension: D3D12_DSV_DIMENSION_TEXTURE2DMS,
-                        flags: D3D12_DSV_FLAG_NONE,
-                        view: DepthStencilViewDescBody {
-                            texture_2dms: ManuallyDrop::new(Tex2dmsDsv {
-                                unused_field_nothing_to_define: 0,
-                            }),
-                        },
-                    })
-                }
-            } else if desc.depth_or_array_size > 1 {
-                Ok(DepthStencilViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_DSV_DIMENSION_TEXTURE2DARRAY,
-                    flags: D3D12_DSV_FLAG_NONE,
-                    view: DepthStencilViewDescBody {
-                        texture_2d_array: ManuallyDrop::new(Tex2dArrayDsv {
-                            mip_slice: 0,
-                            first_array_slice: 0,
-                            array_size,
-                        }),
-                    },
-                })
-            } else {
-                Ok(DepthStencilViewDesc {
-                    format: desc.format,
-                    view_dimension: D3D12_DSV_DIMENSION_TEXTURE2D,
-                    flags: D3D12_DSV_FLAG_NONE,
-                    view: DepthStencilViewDescBody {
-                        texture_2d: ManuallyDrop::new(Tex2dDsv { mip_slice: 0 }),
-                    },
-                })
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            crate::err!("Unsupported 3d DSV");
-            Err(E_FAIL)
-        }
-        _ => Err(E_INVALIDARG),
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        crate::err!("Unsupported buffer DSV");
+        return Err(E_FAIL);
     }
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D {
+        crate::err!("Unsupported 3d DSV");
+        return Err(E_FAIL);
+    }
+    let resource = shape(desc).ok_or(E_INVALIDARG)?;
+    entire_view(ViewKind::DepthStencil, &resource)
+        .and_then(|v| dsv_desc(desc.format, &v))
+        .ok_or(E_FAIL)
 }
 
 /// Populates a `WMTTextureInfo` from a `D3D12_RESOURCE_DESC` (`d3d12_texture.cpp:28-181`).

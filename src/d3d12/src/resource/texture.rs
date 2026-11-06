@@ -6,8 +6,9 @@ use std::sync::Arc;
 use dxmt_core::{
     format::MTL_DXGI_FORMAT_BC,
     resource::{
-        Texture, TextureAllocationFlags, TextureViewDescriptor, TextureViewKey,
+        Texture, TextureAllocationFlags, TextureViewKey,
         dims::{mip_extent, mip_extent_wrapping},
+        view::{ALL, ViewDesc, ViewDimension, all_saturating, texture_view},
     },
 };
 use dxmt_util::{
@@ -21,11 +22,9 @@ use winemetal_sys::{
     wire::{
         MemPtr, WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
         WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT,
-        WMT_RESOURCE_STORAGE_MODE_MEMORYLESS, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE_CUBE,
-        WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
-        WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
-        WMTOrigin, WMTSize, WMTTextureInfo, encode_format_swizzle, get_swizzle_alpha,
-        get_swizzle_blue, get_swizzle_green, get_swizzle_red,
+        WMT_RESOURCE_STORAGE_MODE_MEMORYLESS, WMT_TEXTURE_FLAG_LOSSLESS, WMTOrigin, WMTSize,
+        WMTTextureInfo, encode_format_swizzle, get_swizzle_alpha, get_swizzle_blue,
+        get_swizzle_green, get_swizzle_red,
     },
 };
 
@@ -711,7 +710,28 @@ pub unsafe fn create_dsv(
     unsafe { crate::descriptor_heap::write_dsv(descriptor, rt_desc) }
 }
 
+/// A view of `dimension` from its numbers.
+///
+/// Levels `first_mip` and `mip_count`, slices `first_slice` and `array_size`.
+const fn view(
+    dimension: ViewDimension,
+    first_mip: u32,
+    mip_count: u32,
+    first_slice: u32,
+    array_size: u32,
+) -> ViewDesc {
+    ViewDesc {
+        dimension,
+        first_mip,
+        mip_count,
+        first_slice,
+        array_size,
+    }
+}
+
 /// The Metal view and LOD clamp of a texture SRV `view_desc` describes (format already filled).
+///
+/// "All the rest" counts saturate at 0; a cube array starts at slice 0 whatever its first face.
 ///
 /// # Errors
 ///
@@ -727,164 +747,111 @@ pub fn srv_view(
         return Err(hr);
     }
 
-    let mut format = encode_component_mapping(
-        view_desc.shader_4_component_mapping,
-        metal_format.pixel_format,
-    );
+    let mapping = view_desc.shader_4_component_mapping;
+    let mut format = encode_component_mapping(mapping, metal_format.pixel_format);
     let tex_pf = texture.map_or_else(
         || super::resource_pixel_format(desc),
         |t| t.info().pixel_format,
     );
     if tex_pf == WMT_PIXEL_FORMAT_DEPTH32_FLOAT || tex_pf == WMT_PIXEL_FORMAT_DEPTH16_UNORM {
-        format = encode_component_mapping(view_desc.shader_4_component_mapping, tex_pf);
+        format = encode_component_mapping(mapping, tex_pf);
     }
 
     let mip_levels = u32::from(desc.mip_levels);
     let depth_or_array = u32::from(desc.depth_or_array_size);
-    let mut min_lod = 0.0f32;
-    let (texture_type, first_mip, mip_count, first_slice, array_size) =
-        match view_desc.view_dimension {
-            D3D12_SRV_DIMENSION_TEXTURE1D => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE1D` selects `texture_1d`.
-                let v = unsafe { &*view_desc.view.texture_1d };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                (WMT_TEXTURE_TYPE2D, v.most_detailed_mip, count, 0, 1)
-            }
-            D3D12_SRV_DIMENSION_TEXTURE1DARRAY => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE1DARRAY` selects `texture_1d_array`.
-                let v = unsafe { &*view_desc.view.texture_1d_array };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                let slices = if v.array_size == u32::MAX {
-                    depth_or_array.saturating_sub(v.first_array_slice)
-                } else {
-                    v.array_size
-                };
-                (
-                    WMT_TEXTURE_TYPE2D_ARRAY,
-                    v.most_detailed_mip,
-                    count,
-                    v.first_array_slice,
-                    slices,
-                )
-            }
-            D3D12_SRV_DIMENSION_TEXTURE2D => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2D` selects `texture_2d`.
-                let v = unsafe { &*view_desc.view.texture_2d };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                (WMT_TEXTURE_TYPE2D, v.most_detailed_mip, count, 0, 1)
-            }
-            D3D12_SRV_DIMENSION_TEXTURE2DARRAY => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY` selects `texture_2d_array`.
-                let v = unsafe { &*view_desc.view.texture_2d_array };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                let slices = if v.array_size == u32::MAX {
-                    depth_or_array.saturating_sub(v.first_array_slice)
-                } else {
-                    v.array_size
-                };
-                (
-                    WMT_TEXTURE_TYPE2D_ARRAY,
-                    v.most_detailed_mip,
-                    count,
-                    v.first_array_slice,
-                    slices,
-                )
-            }
-            D3D12_SRV_DIMENSION_TEXTURECUBE => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURECUBE` selects `texture_cube`.
-                let v = unsafe { &*view_desc.view.texture_cube };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                (WMT_TEXTURE_TYPE_CUBE, v.most_detailed_mip, count, 0, 6)
-            }
-            D3D12_SRV_DIMENSION_TEXTURECUBEARRAY => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY` selects `texture_cube_array`.
-                let v = unsafe { &*view_desc.view.texture_cube_array };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                let slices = if v.num_cubes == u32::MAX {
-                    depth_or_array.saturating_sub(v.first_2d_array_face)
-                } else {
-                    v.num_cubes * 6
-                };
-                (
-                    WMT_TEXTURE_TYPE_CUBE_ARRAY,
-                    v.most_detailed_mip,
-                    count,
-                    0,
-                    slices,
-                )
-            }
-            D3D12_SRV_DIMENSION_TEXTURE2DMS => (WMT_TEXTURE_TYPE2D_MULTISAMPLE, 0, 1, 0, 1),
-            D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY` selects `texture_2dms_array`.
-                let v = unsafe { &*view_desc.view.texture_2dms_array };
-                let slices = if v.array_size == u32::MAX {
-                    depth_or_array.saturating_sub(v.first_array_slice)
-                } else {
-                    v.array_size
-                };
-                (
-                    WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                    0,
-                    1,
-                    v.first_array_slice,
-                    slices,
-                )
-            }
-            D3D12_SRV_DIMENSION_TEXTURE3D => {
-                // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE3D` selects `texture_3d`.
-                let v = unsafe { &*view_desc.view.texture_3d };
-                min_lod = v.resource_min_lod_clamp;
-                let count = if v.mip_levels == u32::MAX {
-                    mip_levels.saturating_sub(v.most_detailed_mip)
-                } else {
-                    v.mip_levels
-                };
-                (WMT_TEXTURE_TYPE3D, v.most_detailed_mip, count, 0, 1)
-            }
-            _ => return Err(E_INVALIDARG),
-        };
+    let mips = |first, count| all_saturating(count, mip_levels, first);
+    let slices = |first, count| all_saturating(count, depth_or_array, first);
+    let (v, min_lod) = match view_desc.view_dimension {
+        D3D12_SRV_DIMENSION_TEXTURE1D => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE1D` selects `texture_1d`.
+            let v = unsafe { &*view_desc.view.texture_1d };
+            let mip = v.most_detailed_mip;
+            let dim = ViewDimension::Texture1D;
+            (
+                view(dim, mip, mips(mip, v.mip_levels), 0, 1),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURE1DARRAY => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE1DARRAY` selects `texture_1d_array`.
+            let v = unsafe { &*view_desc.view.texture_1d_array };
+            let (mip, first) = (v.most_detailed_mip, v.first_array_slice);
+            let dim = ViewDimension::Texture1DArray;
+            let count = slices(first, v.array_size);
+            (
+                view(dim, mip, mips(mip, v.mip_levels), first, count),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURE2D => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2D` selects `texture_2d`.
+            let v = unsafe { &*view_desc.view.texture_2d };
+            let mip = v.most_detailed_mip;
+            let dim = ViewDimension::Texture2D;
+            (
+                view(dim, mip, mips(mip, v.mip_levels), 0, 1),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURE2DARRAY => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY` selects `texture_2d_array`.
+            let v = unsafe { &*view_desc.view.texture_2d_array };
+            let (mip, first) = (v.most_detailed_mip, v.first_array_slice);
+            let dim = ViewDimension::Texture2DArray;
+            let count = slices(first, v.array_size);
+            (
+                view(dim, mip, mips(mip, v.mip_levels), first, count),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURECUBE => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURECUBE` selects `texture_cube`.
+            let v = unsafe { &*view_desc.view.texture_cube };
+            let mip = v.most_detailed_mip;
+            let dim = ViewDimension::TextureCube;
+            (
+                view(dim, mip, mips(mip, v.mip_levels), 0, 6),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURECUBEARRAY => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY` selects `texture_cube_array`.
+            let v = unsafe { &*view_desc.view.texture_cube_array };
+            let mip = v.most_detailed_mip;
+            let faces = if v.num_cubes == ALL {
+                depth_or_array.saturating_sub(v.first_2d_array_face)
+            } else {
+                v.num_cubes.wrapping_mul(6)
+            };
+            let dim = ViewDimension::TextureCubeArray;
+            (
+                view(dim, mip, mips(mip, v.mip_levels), 0, faces),
+                v.resource_min_lod_clamp,
+            )
+        }
+        D3D12_SRV_DIMENSION_TEXTURE2DMS => (view(ViewDimension::Texture2DMS, 0, 1, 0, 1), 0.0),
+        D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY` selects `texture_2dms_array`.
+            let v = unsafe { &*view_desc.view.texture_2dms_array };
+            let first = v.first_array_slice;
+            let dim = ViewDimension::Texture2DMSArray;
+            (view(dim, 0, 1, first, slices(first, v.array_size)), 0.0)
+        }
+        D3D12_SRV_DIMENSION_TEXTURE3D => {
+            // SAFETY: `view_dimension == D3D12_SRV_DIMENSION_TEXTURE3D` selects `texture_3d`.
+            let v = unsafe { &*view_desc.view.texture_3d };
+            let mip = v.most_detailed_mip;
+            let dim = ViewDimension::Texture3D;
+            (
+                view(dim, mip, mips(mip, v.mip_levels), 0, 1),
+                v.resource_min_lod_clamp,
+            )
+        }
+        _ => return Err(E_INVALIDARG),
+    };
 
-    let view = TextureViewDescriptor {
-        format,
-        texture_type,
-        first_mip,
-        mip_count,
-        first_slice,
-        array_size,
-    }
-    .key();
-    let clamp = i32_to_f32(f32_to_i32(min_lod).wrapping_sub((first_mip & 0xf).cast_signed()));
-    Ok((view, clamp))
+    let clamp = i32_to_f32(f32_to_i32(min_lod).wrapping_sub((v.first_mip & 0xf).cast_signed()));
+    Ok((texture_view(format, &v).key(), clamp))
 }
 
 /// The Metal view of a texture UAV `view_desc` describes (format already filled).
@@ -905,45 +872,40 @@ pub fn uav_views(
     }
 
     let depth_or_array = u32::from(desc.depth_or_array_size);
-    let (texture_type, first_mip, first_slice, array_size) = match view_desc.view_dimension {
+    let slices = |first, count| all_saturating(count, depth_or_array, first);
+    let v = match view_desc.view_dimension {
         D3D12_UAV_DIMENSION_TEXTURE1D => {
             // SAFETY: `view_dimension == D3D12_UAV_DIMENSION_TEXTURE1D` selects `texture_1d`.
             let v = unsafe { &*view_desc.view.texture_1d };
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture1D, v.mip_slice, 1, 0, 1)
         }
         D3D12_UAV_DIMENSION_TEXTURE2D => {
             // SAFETY: `view_dimension == D3D12_UAV_DIMENSION_TEXTURE2D` selects `texture_2d`.
             let v = unsafe { &*view_desc.view.texture_2d };
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture2D, v.mip_slice, 1, 0, 1)
         }
         D3D12_UAV_DIMENSION_TEXTURE1DARRAY => {
             // SAFETY: `view_dimension == D3D12_UAV_DIMENSION_TEXTURE1DARRAY` selects `texture_1d_array`.
             let v = unsafe { &*view_desc.view.texture_1d_array };
-            let slices = if v.array_size == u32::MAX {
-                depth_or_array.saturating_sub(v.first_array_slice)
-            } else {
-                v.array_size
-            };
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture1DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                slices(s, v.array_size),
             )
         }
         D3D12_UAV_DIMENSION_TEXTURE2DARRAY => {
             // SAFETY: `view_dimension == D3D12_UAV_DIMENSION_TEXTURE2DARRAY` selects `texture_2d_array`.
             let v = unsafe { &*view_desc.view.texture_2d_array };
-            let slices = if v.array_size == u32::MAX {
-                depth_or_array.saturating_sub(v.first_array_slice)
-            } else {
-                v.array_size
-            };
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture2DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                slices(s, v.array_size),
             )
         }
         D3D12_UAV_DIMENSION_TEXTURE3D => {
@@ -952,32 +914,22 @@ pub fn uav_views(
             if v.first_w_slice > 0 {
                 crate::err!("3D UAV with WSlice unsupported");
             }
-            (WMT_TEXTURE_TYPE3D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture3D, v.mip_slice, 1, 0, 1)
         }
         _ => return Err(E_INVALIDARG),
     };
 
-    let view = TextureViewDescriptor {
-        format: metal_format.pixel_format,
-        texture_type,
-        first_mip,
-        mip_count: 1,
-        first_slice,
-        array_size,
-    }
-    .key();
-    let atomic_view = (metal_format.pixel_format == WMT_PIXEL_FORMAT_R32_FLOAT).then(|| {
-        TextureViewDescriptor {
-            format: WMT_PIXEL_FORMAT_R32_UINT,
-            texture_type,
-            first_mip,
-            mip_count: 1,
-            first_slice,
-            array_size,
-        }
-        .key()
-    });
+    let view = texture_view(metal_format.pixel_format, &v).key();
+    let atomic_view = (metal_format.pixel_format == WMT_PIXEL_FORMAT_R32_FLOAT)
+        .then(|| texture_view(WMT_PIXEL_FORMAT_R32_UINT, &v).key());
     Ok((view, atomic_view))
+}
+
+/// The layer and slice count of a render-target array view.
+///
+/// "All" is every slice of the texture, whatever the first one.
+const fn layers(count: u32, texture_slices: u32) -> u32 {
+    if count == ALL { texture_slices } else { count }
 }
 
 /// The render-pass attachment a texture RTV `view_desc` describes (format already filled).
@@ -1001,26 +953,23 @@ pub fn rtv_target(
     let mut depth_plane = 0u32;
     let mut rt_array_len = 0u32;
 
-    let (texture_type, first_mip, first_slice, array_size) = match view_desc.view_dimension {
+    let v = match view_desc.view_dimension {
         D3D12_RTV_DIMENSION_TEXTURE1D => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE1D` selects `texture_1d`.
             let v = unsafe { &*view_desc.view.texture_1d };
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture1D, v.mip_slice, 1, 0, 1)
         }
         D3D12_RTV_DIMENSION_TEXTURE1DARRAY => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE1DARRAY` selects `texture_1d_array`.
             let v = unsafe { &*view_desc.view.texture_1d_array };
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture1DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                rt_array_len,
             )
         }
         D3D12_RTV_DIMENSION_TEXTURE2D => {
@@ -1029,7 +978,7 @@ pub fn rtv_target(
             if v.plane_slice != 0 {
                 let (): () = crate::not_implemented!("Texture::CreateRenderTargetView");
             }
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture2D, v.mip_slice, 1, 0, 1)
         }
         D3D12_RTV_DIMENSION_TEXTURE2DARRAY => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE2DARRAY` selects `texture_2d_array`.
@@ -1037,75 +986,72 @@ pub fn rtv_target(
             if v.plane_slice != 0 {
                 let (): () = crate::not_implemented!("Texture::CreateRenderTargetView");
             }
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture2DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                rt_array_len,
             )
         }
-        D3D12_RTV_DIMENSION_TEXTURE2DMS => (WMT_TEXTURE_TYPE2D_MULTISAMPLE, 0, 0, 1),
+        D3D12_RTV_DIMENSION_TEXTURE2DMS => view(ViewDimension::Texture2DMS, 0, 1, 0, 1),
         D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY` selects `texture_2dms_array`.
             let v = unsafe { &*view_desc.view.texture_2dms_array };
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                0,
-                v.first_array_slice,
-                slices,
-            )
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(ViewDimension::Texture2DMSArray, 0, 1, s, rt_array_len)
         }
         D3D12_RTV_DIMENSION_TEXTURE3D => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE3D` selects `texture_3d`.
             let v = unsafe { &*view_desc.view.texture_3d };
             let mip_depth = mip_extent_wrapping(u32::from(desc.depth_or_array_size), v.mip_slice);
             depth_plane = v.first_w_slice;
-            rt_array_len = if v.w_size == u32::MAX {
-                mip_depth
-            } else {
-                v.w_size
-            };
-            (WMT_TEXTURE_TYPE3D, v.mip_slice, 0, 1)
+            rt_array_len = layers(v.w_size, mip_depth);
+            view(ViewDimension::Texture3D, v.mip_slice, 1, 0, 1)
         }
         _ => return Err(E_INVALIDARG),
     };
 
-    let view = TextureViewDescriptor {
-        format: metal_format.pixel_format,
-        texture_type,
-        first_mip,
-        mip_count: 1,
-        first_slice,
-        array_size,
-    }
-    .key();
-    let mip_shift = first_mip & 0xf;
+    Ok(render_target(
+        desc,
+        texture,
+        &v,
+        metal_format.pixel_format,
+        [depth_plane, rt_array_len],
+        0,
+    ))
+}
+
+/// The render-pass attachment of `v` in `format` over the resource.
+///
+/// Its size is the view's level of the texture's (or, with no texture, the description's)
+/// extent.
+fn render_target(
+    desc: &ResourceDesc,
+    texture: Option<&Arc<Texture>>,
+    v: &ViewDesc,
+    format: u32,
+    [depth_plane, render_target_array_length]: [u32; 2],
+    flags: u32,
+) -> RenderTargetDesc {
+    let mip_shift = v.first_mip & 0xf;
     let base_w = texture.map_or_else(
         || u32::try_from(desc.width).unwrap_or(1),
         |t| t.info().width,
     );
     let base_h = texture.map_or(desc.height, |t| t.info().height);
-    Ok(RenderTargetDesc {
+    RenderTargetDesc {
         texture: texture.cloned(),
-        view,
+        view: texture_view(format, v).key(),
         width: mip_extent(base_w, mip_shift),
         height: mip_extent(base_h, mip_shift),
         depth_plane,
-        render_target_array_length: rt_array_len,
-        flags: 0,
-    })
+        render_target_array_length,
+        flags,
+    }
 }
 
 /// The render-pass attachment a texture DSV `view_desc` describes (format already filled).
@@ -1128,93 +1074,63 @@ pub fn dsv_target(
         texture.map_or_else(|| u32::from(desc.depth_or_array_size), |t| t.array_length());
     let mut rt_array_len = 0u32;
 
-    let (texture_type, first_mip, first_slice, array_size) = match view_desc.view_dimension {
+    let v = match view_desc.view_dimension {
         D3D12_DSV_DIMENSION_TEXTURE1D => {
             // SAFETY: `view_dimension == D3D12_DSV_DIMENSION_TEXTURE1D` selects `texture_1d`.
             let v = unsafe { &*view_desc.view.texture_1d };
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture1D, v.mip_slice, 1, 0, 1)
         }
         D3D12_DSV_DIMENSION_TEXTURE1DARRAY => {
             // SAFETY: `view_dimension == D3D12_DSV_DIMENSION_TEXTURE1DARRAY` selects `texture_1d_array`.
             let v = unsafe { &*view_desc.view.texture_1d_array };
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture1DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                rt_array_len,
             )
         }
         D3D12_DSV_DIMENSION_TEXTURE2D => {
             // SAFETY: `view_dimension == D3D12_DSV_DIMENSION_TEXTURE2D` selects `texture_2d`.
             let v = unsafe { &*view_desc.view.texture_2d };
-            (WMT_TEXTURE_TYPE2D, v.mip_slice, 0, 1)
+            view(ViewDimension::Texture2D, v.mip_slice, 1, 0, 1)
         }
         D3D12_DSV_DIMENSION_TEXTURE2DARRAY => {
             // SAFETY: `view_dimension == D3D12_DSV_DIMENSION_TEXTURE2DARRAY` selects `texture_2d_array`.
             let v = unsafe { &*view_desc.view.texture_2d_array };
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_ARRAY,
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(
+                ViewDimension::Texture2DArray,
                 v.mip_slice,
-                v.first_array_slice,
-                slices,
+                1,
+                s,
+                rt_array_len,
             )
         }
-        D3D12_DSV_DIMENSION_TEXTURE2DMS => (WMT_TEXTURE_TYPE2D_MULTISAMPLE, 0, 0, 1),
+        D3D12_DSV_DIMENSION_TEXTURE2DMS => view(ViewDimension::Texture2DMS, 0, 1, 0, 1),
         D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY => {
             // SAFETY: `view_dimension == D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY` selects `texture_2dms_array`.
             let v = unsafe { &*view_desc.view.texture_2dms_array };
-            let slices = if v.array_size == u32::MAX {
-                tex_array_len
-            } else {
-                v.array_size
-            };
-            rt_array_len = slices;
-            (
-                WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                0,
-                v.first_array_slice,
-                slices,
-            )
+            rt_array_len = layers(v.array_size, tex_array_len);
+            let s = v.first_array_slice;
+            view(ViewDimension::Texture2DMSArray, 0, 1, s, rt_array_len)
         }
         _ => return Err(E_INVALIDARG),
     };
 
-    let view = TextureViewDescriptor {
-        format: metal_format.pixel_format,
-        texture_type,
-        first_mip,
-        mip_count: 1,
-        first_slice,
-        array_size,
-    }
-    .key();
-    let mip_shift = first_mip & 0xf;
-    let base_w = texture.map_or_else(
-        || u32::try_from(desc.width).unwrap_or(1),
-        |t| t.info().width,
-    );
-    let base_h = texture.map_or(desc.height, |t| t.info().height);
-    Ok(RenderTargetDesc {
-        texture: texture.cloned(),
-        view,
-        width: mip_extent(base_w, mip_shift),
-        height: mip_extent(base_h, mip_shift),
-        depth_plane: 0,
-        render_target_array_length: rt_array_len,
-        flags: view_desc.flags,
-    })
+    let layers = [0, rt_array_len];
+    Ok(render_target(
+        desc,
+        texture,
+        &v,
+        metal_format.pixel_format,
+        layers,
+        view_desc.flags,
+    ))
 }
 
 /// `MTLD3D12Texture::GetResourceTiling` (`d3d12_texture.cpp:901-907`).
