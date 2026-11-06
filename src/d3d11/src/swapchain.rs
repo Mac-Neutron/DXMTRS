@@ -12,6 +12,7 @@ use dxmt_core::{
     hud::Hud,
     presenter::{Presenter, PresenterDesc},
     scaler::Scaler,
+    settings::{Flags, settings},
 };
 #[cfg(not(test))]
 use dxmt_util::wsi;
@@ -1622,7 +1623,7 @@ fn create_impl(
         f64::MAX
     };
 
-    let enable_metalfx = std::env::var("DXMT_METALFX_SPATIAL_SWAPCHAIN").as_deref() == Ok("1");
+    let enable_metalfx = settings().enabled(Flags::METALFX_SPATIAL_SWAPCHAIN);
     let scale_factor = if enable_metalfx { 2.0 } else { 1.0 };
     let presenter = if let Some(dev) = Device::from_iface(device)
         && layer_weak != 0

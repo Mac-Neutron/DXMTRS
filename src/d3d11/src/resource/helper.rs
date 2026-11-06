@@ -1,13 +1,12 @@
 //! Resource description validation and upgrade helpers (`d3d11_resource_helper.cpp`).
 
-use std::sync::LazyLock;
-
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
         MTL_DXGI_FORMAT_TYPELESS, query_dxgi, texel_size,
     },
     resource::BufferAllocationFlags,
+    settings::{Compression, settings},
 };
 use dxmt_util::dxgi_consts::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_INDEX_BUFFER,
@@ -53,12 +52,6 @@ const D3D11_RESOURCE_MISC_BUFFER_STRUCTURED: u32 = 0x40;
 const D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX: u32 = 0x100;
 const D3D11_RESOURCE_MISC_SHARED_NTHANDLE: u32 = 0x800;
 const D3D11_RESOURCE_MISC_TILE_POOL: u32 = 0x20000;
-
-fn compression_mode() -> &'static str {
-    static COMPRESSION: LazyLock<String> =
-        LazyLock::new(|| std::env::var("DXMT_D3D11_COMPRESSION").unwrap_or_default());
-    COMPRESSION.as_str()
-}
 
 #[derive(PartialEq, Eq)]
 enum TexDim {
@@ -312,7 +305,7 @@ fn create_mtl_texture_descriptor_internal(
         | ((out_sample_count & 0xff) << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
         | ((metal_usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
 
-    let comp = compression_mode();
+    let comp = settings().d3d11_compression;
     let pf = mtl_desc.pixel_format;
     let r32_view = texel_size(pf) == 4
         && pf != WMT_PIXEL_FORMAT_R32_UINT
@@ -322,10 +315,10 @@ fn create_mtl_texture_descriptor_internal(
     let any_shared = D3D11_RESOURCE_MISC_SHARED
         | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
         | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-    mtl_desc.flags = if comp != "0"
+    mtl_desc.flags = if comp != Compression::Off
         && matches!(usage, D3D11_USAGE_DEFAULT | D3D11_USAGE_IMMUTABLE)
         && (misc_flags & any_shared) == 0
-        && !(uav && (comp == "rt" || r32_view))
+        && !(uav && (comp == Compression::RenderTargets || r32_view))
     {
         WMT_TEXTURE_FLAG_LOSSLESS
     } else {
