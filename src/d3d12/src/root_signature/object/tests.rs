@@ -4,12 +4,9 @@ use core::{
     ptr,
     sync::atomic::{AtomicU64, Ordering},
 };
-use std::{
-    io::Write,
-    path::PathBuf,
-    sync::{Mutex, PoisonError},
-};
+use std::{io::Write, path::PathBuf, sync::Mutex};
 
+use dxmt_util::sync::lock;
 use winemetal_wire::{
     WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR, WMT_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
     WMT_SAMPLER_ADDRESS_MODE_REPEAT, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
@@ -55,10 +52,7 @@ extern "C-unwind" fn fake_new_sampler_state(_device: u64, info: *mut WMTSamplerI
     // SAFETY: `Sampler::create` passes a valid mutable `WMTSamplerInfo` pointer.
     let info_ref = unsafe { &mut *info };
     info_ref.gpu_resource_id = 0x9000 + id;
-    SAMPLER_INFOS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(*info_ref);
+    lock(&SAMPLER_INFOS).push(*info_ref);
     0x5000 + id
 }
 
@@ -216,7 +210,7 @@ rs-fcfbaa72666c9e78.bin hr=0x00000000 upload=4 params=3 slots=[0,1,2] heap=-1 lo
 
 #[test]
 fn smite_root_signatures_as_cpp() {
-    let _guard = SAMPLER_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let _guard = lock(&SAMPLER_LOCK);
     let empty_desc = VersionedRootSignatureDesc {
         version: D3D_ROOT_SIGNATURE_VERSION_1_0,
         desc: VersionedDesc {
@@ -369,11 +363,8 @@ fn mixed_sampler_table_refused() {
 
 #[test]
 fn static_samplers_as_cpp() {
-    let _guard = SAMPLER_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-    SAMPLER_INFOS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clear();
+    let _guard = lock(&SAMPLER_LOCK);
+    lock(&SAMPLER_INFOS).clear();
     NEXT_SAMPLER_ID.store(1, Ordering::Relaxed);
 
     let samplers = [
@@ -454,10 +445,7 @@ fn static_samplers_as_cpp() {
         ]
     );
 
-    let recorded = SAMPLER_INFOS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let recorded = lock(&SAMPLER_INFOS).clone();
     assert_eq!(recorded.len(), 4);
     assert_eq!(recorded[0].min_filter, WMT_SAMPLER_MIN_MAG_FILTER_LINEAR);
     assert_eq!(recorded[0].mag_filter, WMT_SAMPLER_MIN_MAG_FILTER_LINEAR);

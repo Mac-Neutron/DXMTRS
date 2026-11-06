@@ -1,7 +1,8 @@
 //! DXIL shader dumping, SM6 capability reporting, and capture pipeline naming.
 
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 
 static PIPELINE_NAMES: LazyLock<Mutex<FxHashMap<u64, String>>> =
@@ -163,18 +164,13 @@ pub fn name_pipeline(pso: u64, name: String) {
     if !dxil_capture_mode() || pso == 0 {
         return;
     }
-    PIPELINE_NAMES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(pso, name);
+    lock(&PIPELINE_NAMES).insert(pso, name);
 }
 
 /// Looks up the description recorded for `pso` handle (`PipelineName`).
 #[must_use]
 pub fn pipeline_name(pso: u64) -> String {
-    PIPELINE_NAMES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    lock(&PIPELINE_NAMES)
         .get(&pso)
         .cloned()
         .unwrap_or_else(|| format!("pso-{pso:x}"))

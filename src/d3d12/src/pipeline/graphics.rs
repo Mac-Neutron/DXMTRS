@@ -7,14 +7,14 @@ use core::{
     mem::zeroed,
     ptr,
 };
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use airconv_ir::{
     container::{Code, Container, Error as IrError},
     signature::{self, Signature},
 };
 use dxmt_core::library::render_pipeline_info;
-use dxmt_util::{com::ComObject, float_cast::i32_to_f32, private_data::PrivateData};
+use dxmt_util::{com::ComObject, float_cast::i32_to_f32, private_data::PrivateData, sync::lock};
 use rustc_hash::FxHasher;
 use winemetal_sys::{
     MTLDevice_newDepthStencilState, MTLDevice_newMeshRenderPipelineState,
@@ -168,17 +168,14 @@ impl Graphics {
     #[must_use]
     pub fn geometry_pipeline(&self, strip: bool, index_format: u32) -> u64 {
         let idx = (usize::from(strip) * 3) + (index_format as usize).min(2);
-        let mut variants = self
-            .geometry_variants
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut variants = lock(&self.geometry_variants);
         if let Some(obj) = variants[idx].as_ref() {
             return obj.handle();
         }
         let Some(state_mu) = self.geometry_state.as_ref() else {
             return 0;
         };
-        let mut state = state_mu.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(state_mu);
         if state.failed[idx] || self.device.is_null() {
             return 0;
         }
@@ -910,10 +907,7 @@ fn initialize_dsso(
             d.back_stencil.write_mask,
             d.back_stencil.read_mask,
         ];
-        let cache = dev
-            .depth_stencil_states
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let cache = lock(&dev.depth_stencil_states);
         if let Some(existing) = cache.get(&key) {
             let h = existing.handle();
             drop(cache);
@@ -931,10 +925,7 @@ fn initialize_dsso(
             let created_h = created.handle();
             // SAFETY: `created_h` is a live `MTLDepthStencilState` handle.
             if let Some(cached) = unsafe { Obj::retain(created_h) } {
-                dev.depth_stencil_states
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(key, cached);
+                lock(&dev.depth_stencil_states).insert(key, cached);
             }
         }
         obj
@@ -1623,10 +1614,7 @@ pub unsafe fn create_graphics_pipeline_state(
         && d.hs.shader_bytecode.is_null()
         && d.ds.shader_bytecode.is_null();
     let cached = if standard {
-        let cache = dev
-            .graphics_psos
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let cache = lock(&dev.graphics_psos);
         cache.get(&desc_hash).map(|cached| {
             // SAFETY: the cached `Obj` holds a live Metal pipeline.
             let pso = unsafe { Obj::retain(cached.pso.handle()) };
@@ -1669,19 +1657,16 @@ pub unsafe fn create_graphics_pipeline_state(
         if standard && let Some(pso) = compiled.mtl_pso.as_ref() {
             // SAFETY: `pso` is live; the cache takes a reference of its own.
             if let Some(cached_pso) = unsafe { Obj::retain(pso.handle()) } {
-                dev.graphics_psos
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(
-                        desc_hash,
-                        CachedGraphicsPso {
-                            pso: cached_pso,
-                            slot_mask: compiled.slot_mask,
-                            writes_uav: compiled.writes_uav,
-                            vertex_digest: compiled.vertex_digest,
-                            pixel_digest: compiled.pixel_digest,
-                        },
-                    );
+                lock(&dev.graphics_psos).insert(
+                    desc_hash,
+                    CachedGraphicsPso {
+                        pso: cached_pso,
+                        slot_mask: compiled.slot_mask,
+                        writes_uav: compiled.writes_uav,
+                        vertex_digest: compiled.vertex_digest,
+                        pixel_digest: compiled.pixel_digest,
+                    },
+                );
             }
         }
         compiled

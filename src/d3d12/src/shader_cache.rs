@@ -10,12 +10,12 @@ use core::{
 };
 use std::{
     ffi::CString,
-    sync::{Arc, LazyLock, Mutex, Once, PoisonError},
+    sync::{Arc, LazyLock, Mutex, Once},
 };
 
 use airconv_ir::container::Container;
 use dxmt_core::shader_cache::Store;
-use dxmt_util::sha1::Sha1;
+use dxmt_util::{sha1::Sha1, sync::lock};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     DispatchData_alloc_init, DispatchData_copyBytes, MTLDevice_newLibrary, MTLLibrary_newFunction,
@@ -170,11 +170,7 @@ impl CachedShader {
     /// `d3d12_shader_cache.cpp:95-119`).
     pub fn reflection(&mut self, out: &mut MtlShaderReflection) -> Hresult {
         if !self.reflected {
-            let mem_hit = REFLECTION_MEM_CACHE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&self.digest)
-                .copied();
+            let mem_hit = lock(&REFLECTION_MEM_CACHE).get(&self.digest).copied();
             if let Some(mem_refl) = mem_hit {
                 self.reflection = mem_refl;
                 self.reflected = true;
@@ -223,10 +219,7 @@ impl CachedShader {
                     }
                 }
             }
-            REFLECTION_MEM_CACHE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(self.digest, self.reflection);
+            lock(&REFLECTION_MEM_CACHE).insert(self.digest, self.reflection);
         }
         *out = self.reflection;
         S_OK
@@ -414,10 +407,7 @@ impl ShaderFunctionCache {
     #[must_use]
     pub fn get(&self, key: &[u8; 40]) -> Option<Obj> {
         let handle = {
-            let functions = self
-                .functions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let functions = lock(&self.functions);
             functions.get(key)?.handle()
         };
         // SAFETY: the handle belongs to a live cached object; the returned `Obj` owns its reference.
@@ -426,10 +416,7 @@ impl ShaderFunctionCache {
 
     /// Drops every cached function, before the Metal device they belong to.
     pub fn clear(&self) {
-        self.functions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        lock(&self.functions).clear();
     }
 
     /// Caches `function` under `key`, keeping a reference of its own.
@@ -438,10 +425,7 @@ impl ShaderFunctionCache {
         let Some(cached) = (unsafe { Obj::retain(function.handle()) }) else {
             return;
         };
-        self.functions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key, cached);
+        lock(&self.functions).insert(key, cached);
     }
 }
 

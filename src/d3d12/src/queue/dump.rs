@@ -3,13 +3,13 @@
 //! (`d3d12_command_queue.cpp:61-80, 730-1226, 1510-1516, 2128-2157`).
 
 use core::{fmt::Write, ptr};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex};
 
 use dxmt_core::{
     capture::{CaptureState, NextAction},
     format::texel_size,
 };
-use dxmt_util::env;
+use dxmt_util::{env, sync::lock};
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLCaptureManager_sharedCaptureManager,
     MTLCaptureManager_startCapture, MTLCaptureManager_stopCapture,
@@ -229,10 +229,6 @@ fn unix_path(path: &str) -> String {
 #[cfg(not(windows))]
 fn unix_path(path: &str) -> String {
     path.to_owned()
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn parse_leading_u64(s: &str) -> Option<u64> {

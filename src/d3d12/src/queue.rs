@@ -28,7 +28,7 @@ use dxmt_core::{
         framegen::{self, FrameGen},
     },
 };
-use dxmt_util::{com::ComObject, private_data::PrivateData, qpc};
+use dxmt_util::{com::ComObject, private_data::PrivateData, qpc, sync::lock};
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLCommandBuffer_blitCommandEncoder,
     MTLCommandBuffer_blitCommandEncoderWithSampleBuffers, MTLCommandBuffer_commit,
@@ -288,7 +288,7 @@ impl InflightPool {
         let mut sample_scratch_values = Vec::<u64>::new();
         loop {
             {
-                let mut sync = self.sync.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut sync = lock(&self.sync);
                 while sync.seq == internal_seq {
                     sync = self
                         .seq_cv
@@ -304,9 +304,7 @@ impl InflightPool {
                 usize::try_from(internal_seq % u64::from(self.cmdbuf_slots)).unwrap_or(0);
             {
                 let _pool = Pool::new();
-                let mut inflight = self.slots[slot_idx]
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut inflight = lock(&self.slots[slot_idx]);
                 let cmdbuf_handle = inflight.cmdbuf.as_ref().map_or(0, Obj::handle);
                 if cmdbuf_handle != 0 {
                     // SAFETY: `cmdbuf_handle` is a live `MTLCommandBuffer`.
@@ -460,7 +458,7 @@ impl InflightPool {
             }
 
             {
-                let mut sync = self.sync.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut sync = lock(&self.sync);
                 sync.count -= 1;
             }
             self.count_cv.notify_one();
@@ -534,22 +532,16 @@ impl Drop for Queue {
             fg.drain();
         }
         {
-            let commit = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
+            let commit = lock(&self.commit);
             if commit.open {
                 let slot_idx = usize::try_from(commit.open_seq % u64::from(self.pool.cmdbuf_slots))
                     .unwrap_or(0);
-                let inflight = self.pool.slots[slot_idx]
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let inflight = lock(&self.pool.slots[slot_idx]);
                 self.commit_open_cmdbuf(commit, inflight);
             } else {
                 drop(commit);
             }
-            let mut sync = self
-                .pool
-                .sync
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut sync = lock(&self.pool.sync);
             let stop_seq = sync.seq;
             sync.stop = stop_seq;
             sync.seq = stop_seq + 1;
@@ -617,9 +609,7 @@ impl Queue {
         if commit.open {
             let slot_idx =
                 usize::try_from(commit.open_seq % u64::from(self.pool.cmdbuf_slots)).unwrap_or(0);
-            let handle = self.pool.slots[slot_idx]
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+            let handle = lock(&self.pool.slots[slot_idx])
                 .cmdbuf
                 .as_ref()
                 .map_or(0, Obj::handle);
@@ -627,11 +617,7 @@ impl Queue {
         }
         let seq = {
             crate::scope!("queue.(wait for a command buffer slot)");
-            let mut sync = self
-                .pool
-                .sync
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut sync = lock(&self.pool.sync);
             while sync.count >= self.pool.cmdbuf_slots {
                 sync = self
                     .pool
@@ -650,9 +636,7 @@ impl Queue {
         let cmdbuf_obj = unsafe { Obj::retain(raw_cmdbuf) };
         let handle = cmdbuf_obj.as_ref().map_or(0, Obj::handle);
         {
-            let mut inflight = self.pool.slots[slot_idx]
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut inflight = lock(&self.pool.slots[slot_idx]);
             inflight.cmdbuf = cmdbuf_obj;
         }
         commit.open = true;
@@ -689,11 +673,7 @@ impl Queue {
         }
         drop(inflight);
         {
-            let mut sync = self
-                .pool
-                .sync
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut sync = lock(&self.pool.sync);
             sync.seq += 1;
             sync.count += 1;
         }
@@ -711,13 +691,11 @@ impl Queue {
         }
         let _pool = Pool::new();
         let mtl_device = self.mtl_device_handle();
-        let mut commit_guard = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut commit_guard = lock(&self.commit);
         let commit = &mut *commit_guard;
         commit.execute_calls += 1;
         let (slot_idx, cmdbuf_handle) = self.open_cmdbuf(commit);
-        let mut inflight = self.pool.slots[slot_idx]
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut inflight = lock(&self.pool.slots[slot_idx]);
         let dumping = dump::is_dumping();
         let serial = commit.order.serial || dumping;
         let fold_timestamps = !dumping && commit.merge.merge;
@@ -1728,11 +1706,9 @@ impl Queue {
     pub fn signal(&self, fence: &FenceObject, value: u64) -> Hresult {
         crate::scope!("queue.Signal");
         let _pool = Pool::new();
-        let mut commit = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut commit = lock(&self.commit);
         let (slot_idx, cmdbuf_handle) = self.open_cmdbuf(&mut commit);
-        let mut inflight = self.pool.slots[slot_idx]
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut inflight = lock(&self.pool.slots[slot_idx]);
         let generation = fence.fence.ask(value);
         let owes = self.pool.cpu_work.load(Ordering::Acquire) != 0;
         let hold = owes && commit.custom_resolves;
@@ -1779,11 +1755,9 @@ impl Queue {
         }
         crate::count!("#queue waits on the GPU event", 1);
         let _pool = Pool::new();
-        let mut commit = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut commit = lock(&self.commit);
         let (slot_idx, cmdbuf_handle) = self.open_cmdbuf(&mut commit);
-        let mut inflight = self.pool.slots[slot_idx]
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut inflight = lock(&self.pool.slots[slot_idx]);
         // SAFETY: `cmdbuf_handle` is a live `MTLCommandBuffer` and `generation.gpu` is a live
         // `MTLEvent`.
         unsafe {
@@ -1836,11 +1810,9 @@ impl Queue {
         {
             let _pool = Pool::new();
             let mtl_device = self.mtl_device_handle();
-            let mut commit = self.commit.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut commit = lock(&self.commit);
             let (slot_idx, cmdbuf_handle) = self.open_cmdbuf(&mut commit);
-            let mut inflight = self.pool.slots[slot_idx]
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut inflight = lock(&self.pool.slots[slot_idx]);
             let view_handle = backbuffer
                 .texture()
                 .and_then(|t| t.current().map(|a| a.view(t.full_view()).texture))
@@ -1851,10 +1823,7 @@ impl Queue {
                 if let (Some(cmdbuf_ref), Some(frame_ref)) =
                     (inflight.cmdbuf.as_ref(), frame_obj.as_ref())
                 {
-                    let mut fg = self
-                        .frame_gen
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
+                    let mut fg = lock(&self.frame_gen);
                     let mut fg_order = FrameGenOrder::new(&mut commit.order, mtl_device);
                     handed = fg.present(
                         cmdbuf_ref,
@@ -1868,10 +1837,7 @@ impl Queue {
             }
             if !handed {
                 if fg_on {
-                    let fg = self
-                        .frame_gen
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
+                    let fg = lock(&self.frame_gen);
                     if fg.running() {
                         fg.drain();
                     }
@@ -1931,10 +1897,7 @@ impl Queue {
             self.commit_open_cmdbuf(commit, inflight);
         }
         if handed {
-            let fg = self
-                .frame_gen
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let fg = lock(&self.frame_gen);
             fg.notify();
         }
         S_OK

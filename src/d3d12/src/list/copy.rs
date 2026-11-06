@@ -6,7 +6,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, Ordering},
 };
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use dxmt_core::{
     format::{
@@ -15,6 +15,7 @@ use dxmt_core::{
     },
     resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
 };
+use dxmt_util::sync::lock;
 use winemetal_sys::Obj;
 use winemetal_wire::{
     MemPtr, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
@@ -1059,7 +1060,7 @@ fn end_timestamp(list: &mut List, heap: &QueryHeap, index: u32) {
         unsafe { (*current).kind == EncoderType::Render }
     };
     {
-        let mut aliases = heap.aliases.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut aliases = lock(&heap.aliases);
         if let Some(slot) = aliases.get_mut(index as usize) {
             *slot = u32::MAX;
         }
@@ -1205,7 +1206,7 @@ pub unsafe fn resolve_query_data(
         && !dst_memory.is_null()
         && dst_readable
     {
-        let aliases_guard = heap.aliases.lock().unwrap_or_else(PoisonError::into_inner);
+        let aliases_guard = lock(&heap.aliases);
         let mut i = start_index;
         let end = start_index.saturating_add(num_queries);
         while i < end {

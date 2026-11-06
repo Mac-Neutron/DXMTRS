@@ -1,11 +1,12 @@
 //! Device-wide null resources and atomic lock table (`d3d12_device.cpp:1903-1996`).
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use dxmt_core::resource::{
     Buffer, BufferAllocationFlags, BufferViewDescriptor, BufferViewKey, Texture,
     TextureAllocationFlags, TextureViewKey,
 };
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 use winemetal_sys::MTLTexture_replaceRegion;
 use winemetal_wire::{
@@ -48,10 +49,6 @@ impl Default for NullResources {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(target_pointer_width = "64")]

@@ -1,6 +1,7 @@
 use core::{ffi::c_void, ptr};
 
 use airconv_ir::container::{build, fourcc};
+use dxmt_util::sync::lock;
 use winemetal_sys::sm50::Sm50IaInputElement;
 
 use crate::{
@@ -252,18 +253,14 @@ fn library_blob_round_trip() {
     } else {
         b"pso_a".iter().flat_map(|&c| [u16::from(c), 0]).collect()
     };
-    first_lib
-        .entries
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(
-            key.clone(),
-            super::library::Entry {
-                kind: 2,
-                hash: 0x1122_3344_5566_7789,
-                pso: 0,
-            },
-        );
+    lock(&first_lib.entries).insert(
+        key.clone(),
+        super::library::Entry {
+            kind: 2,
+            hash: 0x1122_3344_5566_7789,
+            pso: 0,
+        },
+    );
 
     // SAFETY: `first_lib.vtbl.get_serialized_size` is valid on `first_ptr`.
     let size = unsafe { (first_lib.vtbl.get_serialized_size)(first_ptr) };
@@ -291,10 +288,7 @@ fn library_blob_round_trip() {
     // SAFETY: `reloaded_ptr` was returned by `create_pipeline_library`.
     let reloaded_lib = unsafe { &*reloaded_ptr.cast::<PipelineLibrary>() };
     {
-        let entries = reloaded_lib
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entries = lock(&reloaded_lib.entries);
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries.get(&key).map(|e| e.hash),

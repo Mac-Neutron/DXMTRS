@@ -1,12 +1,9 @@
 //! `ID3D12PipelineLibrary1` (`d3d12_pipeline_library.cpp`): `DXMTPLB1` serialization and loading.
 
 use core::{ffi::c_void, ptr};
-use std::{
-    collections::BTreeMap,
-    sync::{Mutex, PoisonError},
-};
+use std::{collections::BTreeMap, sync::Mutex};
 
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
 
 use crate::{
     abi::vtbl::{ID3D12PipelineLibrary1Vtbl, IUnknownVtbl},
@@ -63,8 +60,7 @@ impl ComRefCounted for PipelineLibrary {
 
 impl Drop for PipelineLibrary {
     fn drop(&mut self) {
-        let entries =
-            core::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner));
+        let entries = core::mem::take(&mut *lock(&self.entries));
         for (_, entry) in entries {
             if entry.pso != 0 {
                 let pso_ptr = ptr::with_exposed_provenance_mut::<c_void>(entry.pso);
@@ -238,13 +234,7 @@ where
     }
     // SAFETY: `name_ptr` is non-null.
     let name = unsafe { read_wchar_name(name_ptr) };
-    let value = load_entry(
-        &mut lib.entries.lock().unwrap_or_else(PoisonError::into_inner),
-        &name,
-        kind,
-        hash,
-        create,
-    );
+    let value = load_entry(&mut lock(&lib.entries), &name, kind, hash, create);
     let pso_ptr = match value {
         Ok(ptr) => ptr,
         Err(hr) => return hr,
@@ -409,7 +399,7 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
             let lib = unsafe { &*this.cast::<PipelineLibrary>() };
             // SAFETY: `name_ptr` is non-null.
             let name = unsafe { read_wchar_name(name_ptr) };
-            let mut entries = lib.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut entries = lock(&lib.entries);
             if entries.contains_key(&name) {
                 return E_INVALIDARG;
             }
@@ -501,7 +491,7 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
         (this: *mut c_void) -> usize => {
             // SAFETY: `this` is a live `PipelineLibrary`.
             let lib = unsafe { &*this.cast::<PipelineLibrary>() };
-            serialized_size(&lib.entries.lock().unwrap_or_else(PoisonError::into_inner))
+            serialized_size(&lock(&lib.entries))
         }
     ),
     serialize: crate::slot!(
@@ -510,7 +500,7 @@ static VTBL: ID3D12PipelineLibrary1Vtbl = ID3D12PipelineLibrary1Vtbl {
             // SAFETY: `this` is a live `PipelineLibrary`.
             let lib = unsafe { &*this.cast::<PipelineLibrary>() };
             serialize_entries(
-                &lib.entries.lock().unwrap_or_else(PoisonError::into_inner),
+                &lock(&lib.entries),
                 data,
                 data_size_in_bytes,
             )

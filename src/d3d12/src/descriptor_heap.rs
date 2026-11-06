@@ -7,13 +7,15 @@ use core::{
     ptr::{self, read_unaligned, write_unaligned},
     sync::atomic::{AtomicBool, Ordering},
 };
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use dxmt_core::{
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     sampler::Sampler,
 };
-use dxmt_util::{com::ComObject, dxgi_consts::DXGI_FORMAT_UNKNOWN, private_data::PrivateData};
+use dxmt_util::{
+    com::ComObject, dxgi_consts::DXGI_FORMAT_UNKNOWN, private_data::PrivateData, sync::lock,
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     WMT_COMPARE_FUNCTION_NEVER, WMT_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -408,10 +410,7 @@ impl Heap {
     /// `d3d12_descriptor_heap.hpp:160`).
     #[must_use]
     pub fn descriptor(&self, index: u32) -> ShaderVisibleDescriptor {
-        let guard = self
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let guard = lock(&self.cpu_descriptors);
         guard
             .get(index as usize)
             .cloned()
@@ -514,10 +513,7 @@ pub unsafe fn render_target(handle: D3d12CpuDescriptorHandle) -> Option<RenderTa
     {
         return None;
     }
-    let guard = heap
-        .render_targets
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let guard = lock(&heap.render_targets);
     guard.get(index as usize).cloned()
 }
 
@@ -558,10 +554,7 @@ pub unsafe fn write_cbv(handle: D3d12CpuDescriptorHandle, va: u64, size_in_bytes
     };
     let size = u64::from(size_in_bytes);
     if heap.gpu_mapped_ptr.is_null() {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::ConstantBuffer { address: va, size };
             heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
@@ -595,10 +588,7 @@ pub unsafe fn write_srv_texture(
         (gpu_id, (arr_len << 32) | u64::from(min_lod_clamp.to_bits()))
     });
     if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::Null;
         }
@@ -633,10 +623,7 @@ pub unsafe fn write_srv_texel_buffer(
         (gpu_id, packed)
     });
     if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::Null;
         }
@@ -669,10 +656,7 @@ pub unsafe fn write_srv_buffer(
         (va, slice.byte_length)
     });
     if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::Null;
         }
@@ -747,10 +731,7 @@ pub unsafe fn write_srv_null(handle: D3d12CpuDescriptorHandle, desc: *const c_vo
     }
 
     if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::Null;
         }
@@ -788,10 +769,7 @@ pub unsafe fn write_uav_texture(
         (gpu_id, arr_len, atom)
     });
     if heap.gpu_mapped_ptr.is_null() {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::UavTexture { texture, view };
             heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
@@ -834,10 +812,7 @@ pub unsafe fn write_uav_texel_buffer(
         [gpu_id, packed, atom, addr]
     });
     if heap.gpu_mapped_ptr.is_null() {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::UavTexelBuffer {
                 buffer,
@@ -880,10 +855,7 @@ pub unsafe fn write_uav_buffer(
         [va, slice.byte_length, ctr_va, 0]
     });
     if heap.gpu_mapped_ptr.is_null() {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::UavBuffer { buffer, slice };
             heap.has_cpu_descriptors.store(true, Ordering::Relaxed);
@@ -931,10 +903,7 @@ pub unsafe fn write_uav_null(handle: D3d12CpuDescriptorHandle, desc: *const c_vo
     }
 
     if heap.has_cpu_descriptors.load(Ordering::Relaxed) {
-        let mut cpu = heap
-            .cpu_descriptors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut cpu = lock(&heap.cpu_descriptors);
         if let Some(slot) = cpu.get_mut(index as usize) {
             *slot = ShaderVisibleDescriptor::Null;
         }
@@ -959,10 +928,7 @@ pub unsafe fn write_rtv(handle: D3d12CpuDescriptorHandle, desc: RenderTargetDesc
     if heap.heap_type != D3D12_DESCRIPTOR_HEAP_TYPE_RTV || index >= heap.num_descriptors {
         return E_INVALIDARG;
     }
-    let mut rts = heap
-        .render_targets
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut rts = lock(&heap.render_targets);
     if let Some(slot) = rts.get_mut(index as usize) {
         *slot = desc;
     }
@@ -986,10 +952,7 @@ pub unsafe fn write_dsv(handle: D3d12CpuDescriptorHandle, desc: RenderTargetDesc
     if heap.heap_type != D3D12_DESCRIPTOR_HEAP_TYPE_DSV || index >= heap.num_descriptors {
         return E_INVALIDARG;
     }
-    let mut rts = heap
-        .render_targets
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut rts = lock(&heap.render_targets);
     if let Some(slot) = rts.get_mut(index as usize) {
         *slot = desc;
     }
@@ -1302,10 +1265,7 @@ fn copy_descriptor_range(
                     || dst_heap.has_cpu_descriptors.load(Ordering::Relaxed))
             {
                 if ptr::eq(src_heap, dst_heap) {
-                    let mut cpu = dst_heap
-                        .cpu_descriptors
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
+                    let mut cpu = lock(&dst_heap.cpu_descriptors);
                     for i in 0..avail {
                         if let Some(val) = cpu.get(src_start + i).cloned()
                             && let Some(slot) = cpu.get_mut(dst_start + i)
@@ -1314,14 +1274,8 @@ fn copy_descriptor_range(
                         }
                     }
                 } else {
-                    let src_cpu = src_heap
-                        .cpu_descriptors
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
-                    let mut dst_cpu = dst_heap
-                        .cpu_descriptors
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
+                    let src_cpu = lock(&src_heap.cpu_descriptors);
+                    let mut dst_cpu = lock(&dst_heap.cpu_descriptors);
                     if let Some(src_slice) = src_cpu.get(src_start..src_start + avail)
                         && let Some(dst_slice) = dst_cpu.get_mut(dst_start..dst_start + avail)
                     {
@@ -1363,10 +1317,7 @@ fn copy_descriptor_range(
         }
         D3D12_DESCRIPTOR_HEAP_TYPE_RTV | D3D12_DESCRIPTOR_HEAP_TYPE_DSV => {
             if ptr::eq(src_heap, dst_heap) {
-                let mut rts = dst_heap
-                    .render_targets
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut rts = lock(&dst_heap.render_targets);
                 for i in 0..avail {
                     if let Some(rt_desc) = rts.get(src_start + i).cloned()
                         && let Some(slot) = rts.get_mut(dst_start + i)
@@ -1375,14 +1326,8 @@ fn copy_descriptor_range(
                     }
                 }
             } else {
-                let src_rts = src_heap
-                    .render_targets
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                let mut dst_rts = dst_heap
-                    .render_targets
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let src_rts = lock(&src_heap.render_targets);
+                let mut dst_rts = lock(&dst_heap.render_targets);
                 if let Some(src_slice) = src_rts.get(src_start..src_start + avail)
                     && let Some(dst_slice) = dst_rts.get_mut(dst_start..dst_start + avail)
                 {

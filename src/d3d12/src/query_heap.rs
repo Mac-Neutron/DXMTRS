@@ -1,9 +1,9 @@
 //! `ID3D12QueryHeap` (`d3d12_query_heap.cpp`): occlusion, timestamp, and statistics query heaps.
 
 use core::{ffi::c_void, mem::size_of, ptr};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
 use winemetal_sys::{
     MTLCounterSampleBuffer_newTimestampBuffer, MTLDevice_newBuffer, Obj,
     wire::{MemPtr, WMT_RESOURCE_STORAGE_MODE_SHARED, WMTBufferInfo},
@@ -67,7 +67,7 @@ impl QueryHeap {
     /// `d3d12_query_heap.cpp:117`).
     #[must_use]
     pub fn allocate_timestamp(&self, target: u32) -> (Option<Obj>, u32) {
-        let mut aliases = self.aliases.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut aliases = lock(&self.aliases);
         let t = target as usize;
         if let Some(slot) = aliases.get_mut(t) {
             *slot += 1;

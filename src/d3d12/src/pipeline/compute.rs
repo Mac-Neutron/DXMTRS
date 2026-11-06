@@ -6,9 +6,9 @@ use core::{
     mem::zeroed,
     ptr,
 };
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
 use rustc_hash::FxHasher;
 use winemetal_sys::{
     MTLDevice_newComputePipelineState, Obj,
@@ -375,10 +375,7 @@ pub unsafe fn create_compute_pipeline_state(
     // SAFETY: `desc` is valid.
     .unwrap_or_else(|| unsafe { hash_compute_desc(desc) });
     let cached = {
-        let cache = dev
-            .compute_psos
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let cache = lock(&dev.compute_psos);
         cache.get(&desc_hash).map(|cached| {
             // SAFETY: the cached `Obj` holds a live Metal pipeline.
             let pso = unsafe { Obj::retain(cached.pso.handle()) };
@@ -395,17 +392,14 @@ pub unsafe fn create_compute_pipeline_state(
         };
         // SAFETY: `pso` is live; the cache takes a reference of its own.
         if let Some(cached_pso) = unsafe { Obj::retain(pso.handle()) } {
-            dev.compute_psos
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(
-                    desc_hash,
-                    CachedComputePso {
-                        pso: cached_pso,
-                        threadgroup_size: tg,
-                        digest,
-                    },
-                );
+            lock(&dev.compute_psos).insert(
+                desc_hash,
+                CachedComputePso {
+                    pso: cached_pso,
+                    threadgroup_size: tg,
+                    digest,
+                },
+            );
         }
         (pso, tg, digest)
     };

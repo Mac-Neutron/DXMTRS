@@ -3,8 +3,9 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
+use dxmt_util::sync::lock;
 use winemetal_sys::{
     Obj,
     sm50::{
@@ -392,9 +393,7 @@ fn reflection_record_is_the_golden() {
 
 #[test]
 fn probe_bypasses_the_cache() {
-    let _guard = CACHE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _guard = lock(&CACHE_TEST_LOCK);
     dxmt_core::shader_cache::close_all();
 
     CACHE_HIT.store(true, Ordering::Relaxed);

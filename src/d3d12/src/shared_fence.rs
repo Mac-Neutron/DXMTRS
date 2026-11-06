@@ -3,8 +3,9 @@
 #[cfg(windows)]
 use core::mem;
 use core::{ffi::c_void, ptr};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 
+use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -295,9 +296,7 @@ pub unsafe fn create_shared_handle(
         unsafe { com::release(fence_ptr) };
         return E_OUTOFMEMORY;
     };
-    let mut guard = global_table()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut guard = lock(global_table());
     guard.insert(
         client_h.expose_provenance(),
         ours_h.expose_provenance(),
@@ -330,9 +329,7 @@ pub unsafe fn open_shared_handle(
         return E_INVALIDARG;
     }
     let fence_raw = {
-        let mut guard = global_table()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut guard = lock(global_table());
         guard.get(nt_handle.expose_provenance(), &mut real_ops)
     };
     let Some(fence_raw) = fence_raw else {

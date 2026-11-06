@@ -5,10 +5,10 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, SeekFrom, Write as _},
     path::PathBuf,
-    sync::{LazyLock, Mutex, PoisonError},
+    sync::{LazyLock, Mutex},
 };
 
-use dxmt_util::env::cache_exe_name;
+use dxmt_util::{env::cache_exe_name, sync::lock};
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -455,10 +455,7 @@ pub unsafe fn record_graphics(
     let desc_ref = unsafe { &*desc.cast::<GraphicsPipelineStateDesc>() };
     // SAFETY: `desc_ref.input_layout` is part of the valid `GraphicsPipelineStateDesc`.
     let bytes = unsafe { serialize_graphics(desc_ref, &root.id, &vs.id, &ps.id, &gs.id) };
-    RECORDER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .append(Kind::Graphics, &bytes, &[root, vs, ps, gs]);
+    lock(&RECORDER).append(Kind::Graphics, &bytes, &[root, vs, ps, gs]);
 }
 
 /// Appends a compute pipeline and any unrecorded blobs to `<DXMT_PIPELINE_RECORD>/<exe>.pipelines`
@@ -475,8 +472,5 @@ pub unsafe fn record_compute(desc: *const c_void, root: Blob<'_>, cs: Blob<'_>) 
     // SAFETY: Caller guarantees non-null `desc` is a valid `ComputePipelineStateDesc`.
     let desc_ref = unsafe { &*desc.cast::<ComputePipelineStateDesc>() };
     let bytes = serialize_compute(desc_ref, &root.id, &cs.id);
-    RECORDER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .append(Kind::Compute, &bytes, &[root, cs]);
+    lock(&RECORDER).append(Kind::Compute, &bytes, &[root, cs]);
 }

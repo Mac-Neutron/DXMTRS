@@ -3,10 +3,11 @@
 use core::ffi::c_void;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use dxmt_core::resource::{Buffer, BufferAllocationFlags, Texture, TextureAllocationFlags};
+use dxmt_util::sync::{lock, read, write};
 use winemetal_sys::{
     MTLResidencySet_addAllocations, MTLResidencySet_commit, MTLResidencySet_removeAllocations, Obj,
 };
@@ -53,20 +54,9 @@ impl Default for Residency {
     }
 }
 
-fn read_va<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    rwlock.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn write_va<T>(rwlock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    rwlock.write().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn add_allocation(residency: &Residency, allocation: u64) {
     if residency.set.is_some() && allocation != 0 {
-        let mut pending = residency
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut pending = lock(&residency.pending);
         if let Some(at) = pending.remove.iter().position(|&a| a == allocation) {
             pending.remove.swap_remove(at);
         } else if !pending.add.contains(&allocation) {
@@ -77,10 +67,7 @@ fn add_allocation(residency: &Residency, allocation: u64) {
 
 fn remove_allocation(residency: &Residency, allocation: u64) {
     if residency.set.is_some() && allocation != 0 {
-        let mut pending = residency
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut pending = lock(&residency.pending);
         if let Some(at) = pending.add.iter().position(|&a| a == allocation) {
             pending.add.swap_remove(at);
         } else if !pending.remove.contains(&allocation) {
@@ -95,11 +82,7 @@ pub fn flush(device: &Device) {
         return;
     };
     let (add, remove) = {
-        let mut pending = device
-            .residency
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut pending = lock(&device.residency.pending);
         if pending.add.is_empty() && pending.remove.is_empty() {
             return;
         }
@@ -174,7 +157,7 @@ pub fn register_with_va(device: &Device, buffer: &Arc<Buffer>) {
         if buf_handle != 0 {
             add_allocation(&device.residency, buf_handle);
         }
-        let mut map = write_va(&device.residency.va_map);
+        let mut map = write(&device.residency.va_map);
         insert_va(&mut map, va, Arc::clone(buffer));
     }
 }
@@ -188,7 +171,7 @@ pub fn unregister(device: &Device, buffer: &Arc<Buffer>, gpu_va: u64) {
     {
         remove_allocation(&device.residency, alloc.buffer());
     }
-    let mut map = write_va(&device.residency.va_map);
+    let mut map = write(&device.residency.va_map);
     remove_va(&mut map, gpu_va, buffer);
 }
 
@@ -197,7 +180,7 @@ pub fn unregister(device: &Device, buffer: &Arc<Buffer>, gpu_va: u64) {
 /// Returns `(buffer, byte_offset)`.
 #[must_use]
 pub fn lookup_buffer_by_va(device: &Device, address: u64) -> Option<(Arc<Buffer>, u64)> {
-    let map = read_va(&device.residency.va_map);
+    let map = read(&device.residency.va_map);
     lookup_va(&map, address)
 }
 

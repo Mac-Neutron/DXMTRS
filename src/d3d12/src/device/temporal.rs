@@ -1,7 +1,7 @@
 //! `IMTLD3D12DeviceExt` and `MTLD3D12TemporalScalerImpl` (`d3d12_device.cpp:267-321, 470-615`).
 
 use core::{ffi::c_void, sync::atomic::AtomicBool};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use dxmt_core::{
     format::{
@@ -22,6 +22,7 @@ use dxmt_util::{
     },
     float_cast::u32_to_f32,
     private_data::PrivateData,
+    sync::lock,
 };
 use winemetal_sys::MTLDevice_temporalScalerScaleRange;
 use winemetal_wire::{
@@ -90,10 +91,6 @@ impl Drop for TemporalScalerObject {
             let _ = unsafe { com::release_com(self.device) };
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 unsafe fn scaler_query_interface(

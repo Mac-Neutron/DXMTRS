@@ -20,6 +20,7 @@ use dxmt_util::{
     config::Config,
     dxgi_vtbl::IDXGISwapChain4Vtbl,
     private_data::PrivateData,
+    sync::lock,
     wsi::{self, Rational as WsiRational, Rect, WindowState, WsiMode},
 };
 use winemetal_sys::{
@@ -467,7 +468,7 @@ const fn copy_window_state(w: &WindowState) -> WindowState {
 
 impl SwapChain {
     fn lock_state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     /// `LayerSupportEDR` (`d3d12_swapchain.cpp:176-180`).
@@ -1323,10 +1324,7 @@ unsafe fn present1(
     let _ = size_of::<PresentParameters>();
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let _present = sc
-        .present_serial
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _present = lock(&sc.present_serial);
     let (mut hr, init_refresh_rate, backbuffer) = {
         let mut state = sc.lock_state();
         let hr = if state.desc.width == 0 || state.desc.height == 0 {

@@ -5,11 +5,11 @@ use core::{
     mem::{ManuallyDrop, zeroed},
     ptr,
 };
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use airconv_ir::root_signature::Payload;
 use dxmt_core::sampler::Sampler;
-use dxmt_util::{com::ComObject, private_data::PrivateData};
+use dxmt_util::{com::ComObject, private_data::PrivateData, sync::lock};
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::WMTSamplerInfo;
@@ -66,10 +66,7 @@ impl ComRefCounted for RootSignature {
 
 impl Drop for RootSignature {
     fn drop(&mut self) {
-        LIVE_SAMPLERS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&ptr::from_ref(self).addr());
+        lock(&LIVE_SAMPLERS).remove(&ptr::from_ref(self).addr());
         if !self.device.is_null() {
             // SAFETY: `self.device` was retained by `add_ref_com` when `RootSignature` was created.
             unsafe { com::release_com(self.device) };
@@ -399,10 +396,7 @@ pub unsafe fn create_root_signature(
         sha1,
     }));
     if !live_samplers.is_empty() {
-        LIVE_SAMPLERS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(raw.addr(), live_samplers.into_boxed_slice());
+        lock(&LIVE_SAMPLERS).insert(raw.addr(), live_samplers.into_boxed_slice());
     }
 
     // SAFETY: `raw` is a valid `RootSignature`; `riid` and `root_sig` are caller pointers.
