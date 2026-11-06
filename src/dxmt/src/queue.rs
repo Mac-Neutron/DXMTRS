@@ -32,14 +32,13 @@ use winemetal_sys::{
 
 use crate::{
     arena::{BlockPool, Commands},
-    capture::{CaptureState, NextAction},
+    capture::NextAction,
     encoder::{Encoder, QueryBuffers},
     frame_stats::{Container, FrameStatistics},
     initializer::ResourceInitializer,
     query::Readbacks,
     resource::BufferAllocationFlags,
     ring::{BlockRef, RingBump, RingConfig},
-    settings::settings,
 };
 
 /// The encode thread's name.
@@ -589,10 +588,7 @@ fn spawn(name: Option<&str>, f: impl FnOnce() + Send + 'static) -> io::Result<Jo
 fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
     sync::set_time_critical();
     let queue = shared.queue.as_ref().map_or(0, Obj::handle);
-    let mut capture = CaptureState::from_env();
-    if let Some(frame) = settings().capture_frame {
-        capture.schedule(frame);
-    }
+    let mut capture = crate::capture::schedule_from_env();
     let mut seq = 1;
     while shared.ring.wait_committed(seq) {
         let slot = shared.slot(seq);

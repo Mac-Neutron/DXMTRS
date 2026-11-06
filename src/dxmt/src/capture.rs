@@ -142,7 +142,7 @@ impl CaptureState {
 #[must_use]
 pub fn schedule_from_env() -> CaptureState {
     let mut capture = CaptureState::from_env();
-    if let Some(frame) = capture_frame(std::env::var("DXMT_CAPTURE_FRAME").ok().as_deref()) {
+    if let Some(frame) = crate::settings::settings().capture_frame {
         capture.schedule(frame);
     }
     capture
@@ -150,7 +150,7 @@ pub fn schedule_from_env() -> CaptureState {
 
 /// The frame `DXMT_CAPTURE_FRAME`'s `value` names: a whole number above 0, trimmed, or none.
 #[must_use]
-fn capture_frame(value: Option<&str>) -> Option<u64> {
+pub fn capture_frame(value: Option<&str>) -> Option<u64> {
     value?.trim().parse().ok().filter(|frame| *frame > 0)
 }
 

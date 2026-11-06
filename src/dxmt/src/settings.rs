@@ -111,10 +111,7 @@ impl Settings {
             flags,
             d3d11_compression: Compression::parse(var("DXMT_D3D11_COMPRESSION").as_deref()),
             d3d12_compression: Compression::parse(var("DXMT_D3D12_COMPRESSION").as_deref()),
-            capture_frame: capture_frame
-                .as_deref()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .filter(|frame| *frame > 0),
+            capture_frame: crate::capture::capture_frame(capture_frame.as_deref()),
             mtl_capture_enabled: var("MTL_CAPTURE_ENABLED"),
             capture_executable: var("DXMT_CAPTURE_EXECUTABLE"),
         }

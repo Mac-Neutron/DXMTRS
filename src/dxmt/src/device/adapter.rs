@@ -7,27 +7,13 @@
 use core::{ffi::c_void, ptr};
 
 use dxmt_util::{
-    com::{self, Guid, Hresult},
+    com::{
+        self, Guid, Hresult,
+        iid::{IID_IDXGI_ADAPTER1, IID_IDXGI_FACTORY1},
+    },
     dxgi_vtbl::IDXGIFactory1Vtbl,
     ext::IID_IMTL_DXGI_ADAPTER,
 };
-
-// ponytail: restated here until lane 0a's `dxmt_util::com::iid` lands; the merge points these
-// at it.
-/// `IDXGIFactory1`.
-const IID_IDXGI_FACTORY1: Guid = Guid::new(
-    0x770a_ae78,
-    0xf26f,
-    0x4dba,
-    [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87],
-);
-/// `IDXGIAdapter1`.
-const IID_IDXGI_ADAPTER1: Guid = Guid::new(
-    0x2903_8f61,
-    0x3839,
-    0x4626,
-    [0x91, 0xfd, 0x08, 0x68, 0x79, 0x01, 0x1a, 0x05],
-);
 
 unsafe extern "system" {
     fn CreateDXGIFactory1(riid: *const Guid, factory: *mut *mut c_void) -> Hresult;
