@@ -464,6 +464,7 @@ pub struct OutputDesc1 {
 }
 
 /// `DXGI_MODE_DESC`.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct ModeDesc {
     pub width: u32,
@@ -475,7 +476,7 @@ pub struct ModeDesc {
 }
 
 /// `DXGI_MODE_DESC1`.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct ModeDesc1 {
     pub width: u32,
@@ -501,6 +502,7 @@ pub struct SwapChainDesc {
 }
 
 /// `DXGI_SWAP_CHAIN_DESC1`.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SwapChainDesc1 {
     pub width: u32,
@@ -517,12 +519,24 @@ pub struct SwapChainDesc1 {
 }
 
 /// `DXGI_SWAP_CHAIN_FULLSCREEN_DESC`.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SwapChainFullscreenDesc {
     pub refresh_rate: Rational,
     pub scanline_ordering: u32,
     pub scaling: u32,
     pub windowed: i32,
+}
+
+/// `DXGI_FRAME_STATISTICS`.
+#[derive(Default)]
+#[repr(C)]
+pub struct FrameStatistics {
+    pub present_count: u32,
+    pub present_refresh_count: u32,
+    pub sync_refresh_count: u32,
+    pub sync_qpc_time: i64,
+    pub sync_gpu_time: i64,
 }
 
 /// `DXGI_GAMMA_CONTROL`.
@@ -555,6 +569,13 @@ pub struct QueryVideoMemoryInfo {
 const _: () = {
     let slot = size_of::<usize>();
     let wide = slot == 8;
+    // `DXGI_FRAME_STATISTICS`, as clang lays it out on every target.
+    assert!(size_of::<FrameStatistics>() == 32 && align_of::<FrameStatistics>() == 8);
+    assert!(offset_of!(FrameStatistics, present_count) == 0);
+    assert!(offset_of!(FrameStatistics, present_refresh_count) == 4);
+    assert!(offset_of!(FrameStatistics, sync_refresh_count) == 8);
+    assert!(offset_of!(FrameStatistics, sync_qpc_time) == 16);
+    assert!(offset_of!(FrameStatistics, sync_gpu_time) == 24);
     // The descriptions hold pointers: their offsets after the first one move with the width.
     assert!(offset_of!(D3D11UpscaleDesc, color) == 24);
     assert!(offset_of!(D3D11UpscaleDesc, motion_vector_scale) == 24 + 4 * slot);

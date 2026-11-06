@@ -27,25 +27,14 @@ pub use dxmt_util::{
         DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_USAGE_UNORDERED_ACCESS,
     },
     ext::{
-        AdapterVtbl, Hmonitor, Hwnd, ModeDesc, ModeDesc1, OutputDesc, OutputDesc1, OutputVtbl,
-        Rational, Rect, Rgb, SampleDesc, SwapChainDesc, SwapChainDesc1, SwapChainFullscreenDesc,
-        Wchar,
+        AdapterVtbl, FrameStatistics, Hmonitor, Hwnd, ModeDesc, ModeDesc1, OutputDesc, OutputDesc1,
+        OutputVtbl, Rational, Rect, Rgb, SampleDesc, SwapChainDesc, SwapChainDesc1,
+        SwapChainFullscreenDesc, Wchar,
     },
 };
 
 /// `D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES`.
 pub const D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES: u32 = 0x84;
-
-/// `DXGI_FRAME_STATISTICS`.
-#[derive(Default)]
-#[repr(C)]
-pub struct FrameStatistics {
-    pub present_count: u32,
-    pub present_refresh_count: u32,
-    pub sync_refresh_count: u32,
-    pub sync_qpc_time: i64,
-    pub sync_gpu_time: i64,
-}
 
 /// `DXGI_PRESENT_PARAMETERS`.
 #[repr(C)]
@@ -82,12 +71,6 @@ pub struct Rgba {
 // structure's size, alignment, and field offsets across all five targets.
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 const _: () = {
-    assert!(size_of::<FrameStatistics>() == 32 && align_of::<FrameStatistics>() == 8);
-    assert!(offset_of!(FrameStatistics, present_count) == 0);
-    assert!(offset_of!(FrameStatistics, present_refresh_count) == 4);
-    assert!(offset_of!(FrameStatistics, sync_refresh_count) == 8);
-    assert!(offset_of!(FrameStatistics, sync_qpc_time) == 16);
-    assert!(offset_of!(FrameStatistics, sync_gpu_time) == 24);
     assert!(size_of::<Matrix3x2f>() == 24 && align_of::<Matrix3x2f>() == 4);
     assert!(offset_of!(Matrix3x2f, m11) == 0);
     assert!(offset_of!(Matrix3x2f, m12) == 4);

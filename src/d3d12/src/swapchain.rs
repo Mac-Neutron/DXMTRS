@@ -2,31 +2,32 @@
 //!
 //! [`dxmt_core::presenter::Presenter`].
 
-use core::{
-    ffi::c_void,
-    ptr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{ffi::c_void, ptr};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
+#[cfg(test)]
+use dxmt_core::swapchain::fullscreen::leave_fullscreen_background;
 use dxmt_core::{
     hud::Hud,
     library::Library,
     presenter::{Presenter, PresenterDesc},
-    swapchain::{convert_color_space, convert_format, monitor_format_bpp, render_scale},
+    swapchain::{
+        Core, State as CoreState, convert_color_space, convert_format,
+        fullscreen::{self, Host},
+        mode_refresh_rate, render_scale,
+    },
 };
 use dxmt_util::{
-    com::{ComObject, Guid, IID_IUNKNOWN, IUnknownVtbl, vtbl, write_out},
+    com::{ComObject, Guid, IID_IUNKNOWN, IUnknownVtbl, vtbl},
     config::Config,
     dxgi_vtbl::IDXGISwapChain4Vtbl,
+    log::Logger,
     private_data::{self, HasPrivateData, PrivateData},
     sync::lock,
-    wsi::{self, Rational as WsiRational, Rect, WindowState, WsiMode},
+    wsi::{self, Rational as WsiRational, WindowState},
 };
 use winemetal_sys::{
-    CGColorSpace_checkColorSpaceSupported, CreateMetalViewFromHWND, MetalLayer_getEDRValue, Obj,
-    ReleaseMetalView,
-    wire::{WMT_PIXEL_FORMAT_INVALID, WMTEDRValue},
+    CreateMetalViewFromHWND, Obj, ReleaseMetalView, wire::WMT_PIXEL_FORMAT_INVALID,
 };
 
 use crate::{
@@ -39,27 +40,19 @@ use crate::{
             D3D12_TEXTURE_LAYOUT_UNKNOWN, DXGI_FORMAT_UNKNOWN, HeapProperties, ResourceDesc,
         },
         swapchain::{
-            AdapterVtbl, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
-            DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-            DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_FORMAT_R16G16B16A16_FLOAT,
-            DXGI_MAX_SWAP_CHAIN_BUFFERS, DXGI_MODE_SCALING_UNSPECIFIED,
-            DXGI_MODE_SCANLINE_ORDER_LOWER_FIELD_FIRST, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-            DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST, DXGI_PRESENT_TEST,
-            DXGI_STATUS_MODE_CHANGE_IN_PROGRESS, DXGI_STATUS_OCCLUDED,
-            DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
-            DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
+            D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            DXGI_MAX_SWAP_CHAIN_BUFFERS, DXGI_PRESENT_TEST, DXGI_STATUS_OCCLUDED,
             DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_USAGE_UNORDERED_ACCESS,
-            FrameStatistics, Hmonitor, Hwnd, IID_IDXGI_ADAPTER, IID_IDXGI_OUTPUT1, Matrix3x2f,
-            ModeDesc, ModeDesc1, OutputDesc, OutputVtbl, PresentParameters, Rgba, SwapChainDesc,
-            SwapChainDesc1, SwapChainFullscreenDesc,
+            IID_IDXGI_ADAPTER, Matrix3x2f, PresentParameters, Rgba, SwapChainDesc1,
+            SwapChainFullscreenDesc,
         },
     },
     com::{
         self, ComRefCounted, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_NOT_FOUND, E_FAIL, E_INVALIDARG,
         E_NOINTERFACE, E_NOTIMPL, E_POINTER, Hresult, IID_ID3D12_RESOURCE,
         IID_IDXGI_DEVICE_SUB_OBJECT, IID_IDXGI_OBJECT, IID_IDXGI_SWAP_CHAIN, IID_IDXGI_SWAP_CHAIN1,
-        IID_IDXGI_SWAP_CHAIN2, IID_IDXGI_SWAP_CHAIN3, IID_IDXGI_SWAP_CHAIN4, S_OK, init_out_ptr,
-        release_com,
+        IID_IDXGI_SWAP_CHAIN2, IID_IDXGI_SWAP_CHAIN3, IID_IDXGI_SWAP_CHAIN4, S_OK, release_com,
     },
     device::{self, Device},
     queue::Queue,
@@ -72,9 +65,6 @@ const SWAPCHAIN_LATENCY: u32 = 1;
 
 /// `DUPLICATE_SAME_ACCESS` (`winnt.h`).
 const DUPLICATE_SAME_ACCESS: u32 = 2;
-
-/// Log message emitted when leaving fullscreen while the process is in the background.
-const BACKGROUND_LEAVE_LOG: &str = "Leaving fullscreen in the background: minimising";
 
 #[cfg(windows)]
 unsafe extern "system" {
@@ -205,48 +195,6 @@ fn minimised_sleep<F: FnOnce(u32)>(without_hooks: bool, sleep: F) {
     }
 }
 
-/// Minimises `hwnd` when leaving fullscreen in the background (`d3d12_swapchain.cpp:420-423`).
-fn leave_fullscreen_background<IsFg, Log, Min>(
-    hwnd: Hwnd,
-    switching_output: bool,
-    is_foreground: IsFg,
-    log: Log,
-    minimize: Min,
-) where
-    IsFg: FnOnce() -> bool,
-    Log: FnOnce(&'static str),
-    Min: FnOnce(Hwnd),
-{
-    if !switching_output && !is_foreground() {
-        log(BACKGROUND_LEAVE_LOG);
-        minimize(hwnd);
-    }
-}
-
-/// RAII guard for `ModeSetGuard` (`d3d12_swapchain.cpp:124-144`).
-struct ModeSetInProgress<'a> {
-    flag: &'a AtomicBool,
-    already_in_progress: bool,
-}
-
-impl<'a> ModeSetInProgress<'a> {
-    fn enter(flag: &'a AtomicBool) -> Self {
-        let already_in_progress = flag.swap(true, Ordering::SeqCst);
-        Self {
-            flag,
-            already_in_progress,
-        }
-    }
-}
-
-impl Drop for ModeSetInProgress<'_> {
-    fn drop(&mut self) {
-        if !self.already_in_progress {
-            self.flag.store(false, Ordering::SeqCst);
-        }
-    }
-}
-
 /// Retained swap-chain backbuffer [`Resource`] (`Com<Resource>` in `d3d12_swapchain.cpp:173`).
 struct Backbuffer(*mut Resource);
 
@@ -284,43 +232,21 @@ impl Drop for Backbuffer {
     }
 }
 
-/// Mutable swap-chain state protected by `SwapChain::state`.
-struct State {
-    monitor: Hmonitor,
-    target: *mut c_void,
-    saved_window: WindowState,
-    presentation_count: u32,
-    desc: SwapChainDesc1,
+/// D3D12's part of the swap-chain state: the backbuffers.
+pub struct Api {
     backbuffer_desc: ResourceDesc,
-    fullscreen_desc: SwapChainFullscreenDesc,
-    frame_latency: u32,
-    colorspace: u32,
-    init_refresh_rate: f64,
     backbuffers: Vec<Backbuffer>,
 }
 
-// SAFETY: `monitor` and `target` are thread-safe OS/COM handles protected by `SwapChain::state`.
-unsafe impl Send for State {}
+/// The swap chain's state behind its lock.
+type State = CoreState<Api>;
 
-impl State {
-    /// Updates `init_refresh_rate` from `monitor`'s current display mode (`ReadRefreshRate`,
-    ///
-    /// `d3d12_swapchain.cpp:488-492`).
-    fn read_refresh_rate(&mut self) {
-        if let Some(mode) = wsi::current_display_mode(self.monitor)
-            && mode.refresh.denominator != 0
-            && mode.refresh.numerator != 0
-        {
-            self.init_refresh_rate =
-                f64::from(mode.refresh.numerator) / f64::from(mode.refresh.denominator);
-        }
-    }
-
-    /// Replaces `self.target`, releasing the previous `IDXGIOutput1` reference if any.
-    unsafe fn set_target(&mut self, new_target: *mut c_void) {
-        let old = core::mem::replace(&mut self.target, new_target);
-        // SAFETY: `self.target` owns a COM reference when non-null.
-        unsafe { dxmt_util::com::release(old) };
+/// Updates `init_refresh_rate` from the monitor's current display mode.
+///
+/// `ReadRefreshRate`, `d3d12_swapchain.cpp:488-492`.
+fn read_refresh_rate(state: &mut State) {
+    if let Some(rate) = mode_refresh_rate(wsi::current_display_mode(state.monitor)) {
+        state.init_refresh_rate = rate;
     }
 }
 
@@ -332,24 +258,24 @@ pub struct SwapChain {
     pub private_data: PrivateData,
     pub device: *mut Device,
     pub queue: *const Queue,
-    pub presenter: Option<Arc<Presenter>>,
+    /// The shared part, declared before `library`.
+    ///
+    /// Its presenter drops while the library it was made with is alive.
+    core: Core<Api>,
     pub hud: Option<Hud>,
     factory: *mut c_void,
-    hwnd: Hwnd,
     native_view: u64,
-    layer_weak: u64,
     present_semaphore: *mut c_void,
     render_scale: f64,
     preferred_max_frame_rate: i32,
-    modeset_in_progress: AtomicBool,
     library: Option<Library>,
-    state: Mutex<State>,
     /// Present calls are serialised even while the queue lock is released for their waits.
     present_serial: Mutex<()>,
 }
 
 // SAFETY: `SwapChain` synchronises mutable state with `Mutex`/`AtomicBool`, and its raw pointers
-// (`device`, `queue`, `factory`, `hwnd`, `present_semaphore`) are thread-safe COM/OS handles.
+// (`device`, `queue`, `factory`, `present_semaphore`, the core's `hwnd`) are thread-safe COM/OS
+// handles.
 unsafe impl Send for SwapChain {}
 // SAFETY: see `Send` above.
 unsafe impl Sync for SwapChain {}
@@ -368,7 +294,11 @@ impl Drop for SwapChain {
             self.native_view = 0;
         }
         close_handle(self.present_semaphore);
-        let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
+        let state = self
+            .core
+            .state
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
         // SAFETY: `state.target` owns a COM reference when non-null.
         unsafe { state.set_target(ptr::null_mut()) };
         // SAFETY: `self.factory` was retained with `add_ref` in `create`.
@@ -386,80 +316,9 @@ const fn library_handle(lib: &Library) -> u64 {
     unsafe { (*ptr::from_ref(lib).cast::<Obj>()).handle() }
 }
 
-const fn empty_output_desc() -> OutputDesc {
-    OutputDesc {
-        device_name: [0; 32],
-        desktop_coordinates: Rect {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        attached_to_desktop: 0,
-        rotation: 0,
-        monitor: ptr::null_mut(),
-    }
-}
-
-const fn copy_mode_desc1(m: &ModeDesc1) -> ModeDesc1 {
-    ModeDesc1 {
-        width: m.width,
-        height: m.height,
-        refresh_rate: m.refresh_rate,
-        format: m.format,
-        scanline_ordering: m.scanline_ordering,
-        scaling: m.scaling,
-        stereo: m.stereo,
-    }
-}
-
-const fn copy_desc1(d: &SwapChainDesc1) -> SwapChainDesc1 {
-    SwapChainDesc1 {
-        width: d.width,
-        height: d.height,
-        format: d.format,
-        stereo: d.stereo,
-        sample_desc: d.sample_desc,
-        buffer_usage: d.buffer_usage,
-        buffer_count: d.buffer_count,
-        scaling: d.scaling,
-        swap_effect: d.swap_effect,
-        alpha_mode: d.alpha_mode,
-        flags: d.flags,
-    }
-}
-
-const fn copy_fullscreen_desc(d: &SwapChainFullscreenDesc) -> SwapChainFullscreenDesc {
-    SwapChainFullscreenDesc {
-        refresh_rate: d.refresh_rate,
-        scanline_ordering: d.scanline_ordering,
-        scaling: d.scaling,
-        windowed: d.windowed,
-    }
-}
-
-const fn copy_window_state(w: &WindowState) -> WindowState {
-    WindowState {
-        style: w.style,
-        exstyle: w.exstyle,
-        rect: w.rect,
-    }
-}
-
 impl SwapChain {
     fn lock_state(&self) -> std::sync::MutexGuard<'_, State> {
-        lock(&self.state)
-    }
-
-    /// `LayerSupportEDR` (`d3d12_swapchain.cpp:176-180`).
-    fn layer_support_edr(&self) -> bool {
-        let mut edr_value = WMTEDRValue {
-            maximum_edr_color_component_value: 1.0,
-            maximum_potential_edr_color_component_value: 1.0,
-        };
-        // SAFETY: `self.layer_weak` is the Metal layer handle from `CreateMetalViewFromHWND`.
-        unsafe { MetalLayer_getEDRValue(self.layer_weak, &raw mut edr_value) };
-        edr_value.maximum_potential_edr_color_component_value > 1.0
+        self.core.lock()
     }
 
     /// `ApplyLayerProps` (`d3d12_swapchain.cpp:647-658`).
@@ -467,10 +326,10 @@ impl SwapChain {
         let cs = if state.desc.format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
         } else {
-            state.colorspace
+            state.color_space
         };
-        let target_color_space = convert_color_space(cs, self.layer_support_edr());
-        if let Some(presenter) = self.presenter.as_ref() {
+        let target_color_space = convert_color_space(cs, self.core.layer_support_edr());
+        if let Some(presenter) = self.core.presenter.as_ref() {
             let _ = presenter.change_layer_properties(
                 convert_format(state.desc.format),
                 target_color_space,
@@ -480,257 +339,30 @@ impl SwapChain {
             );
         }
     }
+}
 
-    /// `GetOutputFromMonitor` (`d3d12_swapchain.cpp:660-683`).
-    unsafe fn get_output_from_monitor(&self, monitor: Hmonitor, out: *mut *mut c_void) -> Hresult {
-        if out.is_null() {
-            return DXGI_ERROR_INVALID_CALL;
-        }
+impl Host for SwapChain {
+    type Api = Api;
+
+    fn core(&self) -> &Core<Api> {
+        &self.core
+    }
+
+    fn adapter(&self) -> Option<*mut c_void> {
         // SAFETY: `self.device` points to the parent `Device`.
         let dev = unsafe { &*self.device };
         // SAFETY: `dev.adapter` is the device's `IMTLDXGIAdapter` COM pointer.
-        let Some(adapter) = (unsafe { dxmt_util::com::query(dev.adapter, &IID_IDXGI_ADAPTER) })
-        else {
-            return E_FAIL;
-        };
-        let mut index = 0_u32;
-        let hr = loop {
-            let mut output: *mut c_void = ptr::null_mut();
-            // SAFETY: `adapter` is a live `IDXGIAdapter` queried above.
-            let adapter_vtbl = unsafe { vtbl::<AdapterVtbl>(adapter) };
-            // SAFETY: `adapter` is live and `output` is a local output pointer.
-            let enum_hr = unsafe { (adapter_vtbl.enum_outputs)(adapter, index, &raw mut output) };
-            if enum_hr < 0 || output.is_null() {
-                break DXGI_ERROR_NOT_FOUND;
-            }
-            let mut desc = empty_output_desc();
-            // SAFETY: `output` is a live `IDXGIOutput` returned by `enum_outputs`.
-            let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
-            // SAFETY: `output` is live and `desc` is a local `OutputDesc`.
-            unsafe { (output_vtbl.get_desc)(output, &raw mut desc) };
-            if desc.monitor == monitor {
-                // SAFETY: `output` is live and `out` is the caller's non-null output slot.
-                let qi_hr = unsafe {
-                    (output_vtbl.object.unknown.query_interface)(output, &IID_IDXGI_OUTPUT1, out)
-                };
-                // SAFETY: releases the `enum_outputs` reference on `output`.
-                unsafe { dxmt_util::com::release(output) };
-                break qi_hr;
-            }
-            // SAFETY: releases the `enum_outputs` reference on `output`.
-            unsafe { dxmt_util::com::release(output) };
-            index = index.wrapping_add(1);
-        };
-        // SAFETY: releases the `query` reference on `adapter`.
-        unsafe { dxmt_util::com::release(adapter) };
-        hr
+        unsafe { dxmt_util::com::query(dev.adapter, &IID_IDXGI_ADAPTER) }
     }
 
-    /// `ChangeDisplayMode` (`d3d12_swapchain.cpp:431-481`).
-    unsafe fn change_display_mode(
-        &self,
-        output: *mut c_void,
-        display_mode: &mut ModeDesc1,
-    ) -> Hresult {
-        if output.is_null() {
-            return DXGI_ERROR_INVALID_CALL;
-        }
-        let (desc_flags, desc_format) = {
-            let state = self.lock_state();
-            (state.desc.flags, state.desc.format)
-        };
-        let mut preferred_mode = copy_mode_desc1(display_mode);
-        let mut selected_mode = ModeDesc1::default();
-        if desc_flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH == 0 {
-            preferred_mode.width = 0;
-            preferred_mode.height = 0;
-        }
-        if preferred_mode.format == DXGI_FORMAT_UNKNOWN {
-            preferred_mode.format = desc_format;
-        }
-        // SAFETY: `output` is a live `IDXGIOutput1` pointer.
-        let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
-        // SAFETY: `output` is live; `preferred_mode` and `selected_mode` are local structs.
-        let hr = unsafe {
-            (output_vtbl.find_closest_matching_mode1)(
-                output,
-                &raw const preferred_mode,
-                &raw mut selected_mode,
-                ptr::null_mut(),
-            )
-        };
-        if hr < 0 {
-            let hz = preferred_mode.refresh_rate.numerator
-                / preferred_mode.refresh_rate.denominator.max(1);
-            crate::err!(
-                "DXGI: Failed to query closest mode:\n  Format: {}\n  Mode:   {}x{}@{}",
-                preferred_mode.format,
-                preferred_mode.width,
-                preferred_mode.height,
-                hz
-            );
-            return hr;
-        }
-        if selected_mode.refresh_rate.denominator == 0 {
-            selected_mode.refresh_rate.denominator = 1;
-        }
-        let mut output_desc = empty_output_desc();
-        // SAFETY: `output` is live and `output_desc` is a local `OutputDesc`.
-        unsafe { (output_vtbl.get_desc)(output, &raw mut output_desc) };
-        let wsi_mode = WsiMode {
-            width: selected_mode.width,
-            height: selected_mode.height,
-            refresh: WsiRational {
-                numerator: selected_mode.refresh_rate.numerator,
-                denominator: selected_mode.refresh_rate.denominator,
-            },
-            bits_per_pixel: monitor_format_bpp(selected_mode.format),
-            interlaced: selected_mode.scanline_ordering
-                == DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST
-                || selected_mode.scanline_ordering == DXGI_MODE_SCANLINE_ORDER_LOWER_FIELD_FIRST,
-        };
-        let hz = if wsi_mode.refresh.numerator != 0 {
-            wsi_mode.refresh.numerator / wsi_mode.refresh.denominator.max(1)
-        } else {
-            0
-        };
-        if !wsi::set_window_mode(output_desc.monitor, self.hwnd, &wsi_mode) {
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        crate::info!(
-            "Setting display mode: {}x{}@{}",
-            wsi_mode.width,
-            wsi_mode.height,
-            hz
-        );
-        *display_mode = copy_mode_desc1(&selected_mode);
-        self.lock_state().init_refresh_rate = f64::from(selected_mode.refresh_rate.numerator)
-            / f64::from(selected_mode.refresh_rate.denominator);
-        S_OK
+    fn log() -> &'static Logger {
+        &crate::LOG
     }
 
-    /// `RestoreDisplayMode` (`d3d12_swapchain.cpp:494-503`).
-    fn restore_display_mode(monitor: Hmonitor) -> Hresult {
-        if monitor.is_null() {
-            return DXGI_ERROR_INVALID_CALL;
-        }
-        if !wsi::restore_display_mode(monitor) {
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        S_OK
-    }
+    const DIAGNOSTICS: bool = true;
 
-    /// `EnterFullscreenMode` (`d3d12_swapchain.cpp:331-387`).
-    ///
-    /// Consumes the caller's reference on `target_in` (when non-null).
-    unsafe fn enter_fullscreen_mode(&self, target_in: *mut c_void) -> Hresult {
-        let guard = ModeSetInProgress::enter(&self.modeset_in_progress);
-        if guard.already_in_progress {
-            // SAFETY: drops the caller's reference on `target_in`.
-            unsafe { dxmt_util::com::release(target_in) };
-            return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
-        }
-        if !wsi::is_window(self.hwnd) {
-            // SAFETY: drops the caller's reference on `target_in`.
-            unsafe { dxmt_util::com::release(target_in) };
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        let mut output = target_in;
-        if output.is_null() {
-            // SAFETY: `output` is a local pointer receiving a new `IDXGIOutput1` reference.
-            let hr = unsafe {
-                self.get_output_from_monitor(wsi::window_monitor(self.hwnd), &raw mut output)
-            };
-            if hr < 0 {
-                crate::err!("DXGI: EnterFullscreenMode: Cannot query containing output");
-                return E_FAIL;
-            }
-        }
-        let mut saved_window = copy_window_state(&self.lock_state().saved_window);
-        wsi::save_window_state(self.hwnd, &mut saved_window);
-        let mut preferred_display_mode = {
-            let mut state = self.lock_state();
-            state.saved_window = copy_window_state(&saved_window);
-            ModeDesc1 {
-                width: state.desc.width,
-                height: state.desc.height,
-                refresh_rate: state.fullscreen_desc.refresh_rate,
-                format: state.desc.format,
-                scanline_ordering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-                scaling: DXGI_MODE_SCALING_UNSPECIFIED,
-                stereo: 0,
-            }
-        };
-        // SAFETY: `output` is a non-null `IDXGIOutput1` owned by this scope.
-        let mode_hr = unsafe { self.change_display_mode(output, &mut preferred_display_mode) };
-        if mode_hr < 0 {
-            crate::err!("DXGI: EnterFullscreenMode: Failed to change display mode");
-            // SAFETY: releases `output` on error.
-            unsafe { dxmt_util::com::release(output) };
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        let mut out_desc = empty_output_desc();
-        // SAFETY: `output` is a live `IDXGIOutput1`.
-        let output_vtbl = unsafe { vtbl::<OutputVtbl>(output) };
-        // SAFETY: `output` is live and `out_desc` is a local `OutputDesc`.
-        unsafe { (output_vtbl.get_desc)(output, &raw mut out_desc) };
-        let mode_switch = {
-            let mut state = self.lock_state();
-            state.fullscreen_desc.windowed = 0;
-            let mode_switch = (state.desc.flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) != 0;
-            state.monitor = out_desc.monitor;
-            // SAFETY: transfers ownership of `output` into `state.target`.
-            unsafe { state.set_target(output) };
-            mode_switch
-        };
-        let enter_ok =
-            wsi::enter_fullscreen_mode(out_desc.monitor, self.hwnd, &mut saved_window, mode_switch);
-        self.lock_state().saved_window = saved_window;
-        if !enter_ok {
-            crate::err!("DXGI: EnterFullscreenMode: Failed to enter fullscreen mode");
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        S_OK
-    }
-
-    /// `LeaveFullscreenMode` (`d3d12_swapchain.cpp:390-428`).
-    unsafe fn leave_fullscreen_mode(&self, switching_output: bool) -> Hresult {
-        let guard = ModeSetInProgress::enter(&self.modeset_in_progress);
-        if guard.already_in_progress {
-            return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
-        }
-        let old_monitor = self.lock_state().monitor;
-        if Self::restore_display_mode(old_monitor) < 0 {
-            crate::warn!("DXGI: LeaveFullscreenMode: Failed to restore display mode");
-        }
-        let new_monitor = wsi::window_monitor(self.hwnd);
-        let saved_window = {
-            let mut state = self.lock_state();
-            state.fullscreen_desc.windowed = 1;
-            // SAFETY: releases the held `IDXGIOutput1` reference if any.
-            unsafe { state.set_target(ptr::null_mut()) };
-            state.monitor = new_monitor;
-            state.read_refresh_rate();
-            copy_window_state(&state.saved_window)
-        };
-        if !wsi::is_window(self.hwnd) {
-            return S_OK;
-        }
-        if !wsi::leave_fullscreen_mode(self.hwnd, &saved_window, true) {
-            crate::err!("DXGI: LeaveFullscreenMode: Failed to exit fullscreen mode");
-            return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-        }
-        leave_fullscreen_background(
-            self.hwnd,
-            switching_output,
-            wsi::is_process_foreground,
-            |msg| crate::info!("{msg}"),
-            wsi::minimize_window,
-        );
-        if let Some(presenter) = self.presenter.as_ref() {
-            presenter.change_gamma_ramp(None);
-        }
-        S_OK
+    fn left(&self, state: &mut State, _restored: bool) {
+        read_refresh_rate(state);
     }
 }
 
@@ -834,54 +466,12 @@ unsafe fn get_buffer(
 }
 
 /// `IDXGISwapChain::SetFullscreenState` (`d3d12_swapchain.cpp:305-328`).
-unsafe fn set_fullscreen_state(
-    this: *mut c_void,
-    fullscreen: i32,
-    target_in: *mut c_void,
-) -> Hresult {
+unsafe fn set_fullscreen_state(this: *mut c_void, fullscreen: i32, target: *mut c_void) -> Hresult {
     crate::scope!("swapchain.SetFullscreenState");
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let want_fullscreen = fullscreen != 0;
-    let mut target: *mut c_void = ptr::null_mut();
-    if !target_in.is_null() {
-        // SAFETY: `target_in` is a caller-supplied `IDXGIOutput` COM pointer.
-        if let Some(q) = unsafe { dxmt_util::com::query(target_in, &IID_IDXGI_OUTPUT1) } {
-            target = q;
-            let mut desc = empty_output_desc();
-            // SAFETY: `target` is a live `IDXGIOutput1`.
-            let output_vtbl = unsafe { vtbl::<OutputVtbl>(target) };
-            // SAFETY: `target` is live and `desc` is a local `OutputDesc`.
-            unsafe { (output_vtbl.get_desc)(target, &raw mut desc) };
-            let need_switch = {
-                let state = sc.lock_state();
-                state.fullscreen_desc.windowed == 0
-                    && want_fullscreen
-                    && state.monitor != desc.monitor
-            };
-            if need_switch {
-                // SAFETY: `sc` is live.
-                let hr = unsafe { sc.leave_fullscreen_mode(true) };
-                if hr < 0 {
-                    // SAFETY: drops the queried `target` reference on early return.
-                    unsafe { dxmt_util::com::release(target) };
-                    return hr;
-                }
-            }
-        }
-    }
-    let currently_windowed = sc.lock_state().fullscreen_desc.windowed != 0;
-    if currently_windowed && want_fullscreen {
-        // SAFETY: `enter_fullscreen_mode` adopts ownership of `target`.
-        return unsafe { sc.enter_fullscreen_mode(target) };
-    }
-    // SAFETY: drops `target` when not entering fullscreen.
-    unsafe { dxmt_util::com::release(target) };
-    if !currently_windowed && !want_fullscreen {
-        // SAFETY: `sc` is live.
-        return unsafe { sc.leave_fullscreen_mode(false) };
-    }
-    S_OK
+    // SAFETY: `target` is null or the application's live output.
+    unsafe { fullscreen::set_fullscreen_state(sc, fullscreen, target) }
 }
 
 /// `IDXGISwapChain::GetFullscreenState` (`d3d12_swapchain.cpp:507-518`).
@@ -893,52 +483,17 @@ unsafe fn get_fullscreen_state(
     crate::scope!("swapchain.GetFullscreenState");
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let state = sc.lock_state();
-    if !fullscreen.is_null() {
-        let is_fs = i32::from(state.fullscreen_desc.windowed == 0);
-        // SAFETY: `fullscreen` is non-null.
-        unsafe { write_out(fullscreen, is_fs) };
-    }
-    if !target.is_null() {
-        // SAFETY: `state.target` is null or a live `IDXGIOutput1`.
-        unsafe { dxmt_util::com::add_ref(state.target) };
-        // SAFETY: `target` is non-null.
-        unsafe { write_out(target, state.target) };
-    }
-    S_OK
+    // SAFETY: the pointers are the application's.
+    unsafe { sc.core.get_fullscreen_state(fullscreen, target) }
 }
 
 /// `IDXGISwapChain::GetDesc` (`d3d12_swapchain.cpp:522-541`).
 unsafe fn get_desc(this: *mut c_void, desc: *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetDesc");
-    if desc.is_null() {
-        return E_INVALIDARG;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let out = {
-        let state = sc.lock_state();
-        SwapChainDesc {
-            buffer_desc: ModeDesc {
-                width: state.desc.width,
-                height: state.desc.height,
-                refresh_rate: state.fullscreen_desc.refresh_rate,
-                format: state.desc.format,
-                scanline_ordering: state.fullscreen_desc.scanline_ordering,
-                scaling: state.fullscreen_desc.scaling,
-            },
-            sample_desc: state.desc.sample_desc,
-            buffer_usage: state.desc.buffer_usage,
-            buffer_count: state.desc.buffer_count,
-            output_window: sc.hwnd,
-            windowed: state.fullscreen_desc.windowed,
-            swap_effect: state.desc.swap_effect,
-            flags: state.desc.flags,
-        }
-    };
-    // SAFETY: `desc` was checked non-null.
-    unsafe { write_out(desc.cast::<SwapChainDesc>(), out) };
-    S_OK
+    // SAFETY: `desc` is the application's.
+    unsafe { sc.core.get_desc(desc) }
 }
 
 /// Scales `dimension` by `scale`, rounding to the nearest integer and clamping to `>= 1`
@@ -980,11 +535,11 @@ unsafe fn resize_buffers(
             | (state.desc.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
     }
     if state.fullscreen_desc.windowed != 0 {
-        state.monitor = wsi::window_monitor(sc.hwnd);
+        state.monitor = wsi::window_monitor(sc.core.hwnd);
     }
-    state.read_refresh_rate();
+    read_refresh_rate(&mut state);
     if width == 0 || height == 0 {
-        let (w, h) = wsi::window_size(sc.hwnd);
+        let (w, h) = wsi::window_size(sc.core.hwnd);
         state.desc.width = w;
         state.desc.height = h;
     } else {
@@ -1063,99 +618,19 @@ unsafe fn resize_buffers(
 /// `IDXGISwapChain::ResizeTarget` (`d3d12_swapchain.cpp:609-644`).
 unsafe fn resize_target(this: *mut c_void, desc_ptr: *const c_void) -> Hresult {
     crate::scope!("swapchain.ResizeTarget");
-    if desc_ptr.is_null() {
-        return DXGI_ERROR_INVALID_CALL;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    if !wsi::is_window(sc.hwnd) {
-        return DXGI_ERROR_INVALID_CALL;
-    }
-    // SAFETY: `desc_ptr` was checked non-null.
-    let desc = unsafe { desc_ptr.cast::<ModeDesc>().read_unaligned() };
-    let mut new_display_mode = ModeDesc1 {
-        width: desc.width,
-        height: desc.height,
-        refresh_rate: desc.refresh_rate,
-        format: desc.format,
-        scanline_ordering: desc.scanline_ordering,
-        scaling: desc.scaling,
-        stereo: 0,
-    };
-    let (windowed, saved_window, target, monitor) = {
-        let mut state = sc.lock_state();
-        if new_display_mode.refresh_rate.numerator != 0 {
-            state.fullscreen_desc.refresh_rate = new_display_mode.refresh_rate;
-        }
-        state.fullscreen_desc.scanline_ordering = new_display_mode.scanline_ordering;
-        state.fullscreen_desc.scaling = new_display_mode.scaling;
-        if !state.target.is_null() {
-            // SAFETY: retains `state.target` across the unlocked `change_display_mode` call.
-            unsafe { dxmt_util::com::add_ref(state.target) };
-        }
-        (
-            state.fullscreen_desc.windowed != 0,
-            copy_window_state(&state.saved_window),
-            state.target,
-            state.monitor,
-        )
-    };
-    if windowed {
-        // SAFETY: releases the temporary `target` reference if any.
-        unsafe { dxmt_util::com::release(target) };
-        wsi::resize_window(
-            sc.hwnd,
-            &saved_window,
-            new_display_mode.width,
-            new_display_mode.height,
-        );
-    } else {
-        // SAFETY: `target` was retained above for the duration of this call.
-        let _ = unsafe { sc.change_display_mode(target, &mut new_display_mode) };
-        // SAFETY: releases the temporary `target` reference.
-        unsafe { dxmt_util::com::release(target) };
-        wsi::update_fullscreen_window(monitor, sc.hwnd, false);
-    }
-    S_OK
+    // SAFETY: `desc_ptr` is null or the application's `DXGI_MODE_DESC`.
+    unsafe { fullscreen::resize_target(sc, desc_ptr) }
 }
 
 /// `IDXGISwapChain::GetContainingOutput` (`d3d12_swapchain.cpp:687-707`).
 unsafe fn get_containing_output(this: *mut c_void, out: *mut *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetContainingOutput");
-    // SAFETY: `init_out_ptr` checks for null.
-    unsafe { init_out_ptr(out) };
-    if out.is_null() {
-        return E_INVALIDARG;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    if !wsi::is_window(sc.hwnd) {
-        return DXGI_ERROR_INVALID_CALL;
-    }
-    let existing_target = {
-        let state = sc.lock_state();
-        if state.target.is_null() {
-            None
-        } else {
-            // SAFETY: `state.target` is a live `IDXGIOutput1`.
-            unsafe { dxmt_util::com::add_ref(state.target) };
-            Some(state.target)
-        }
-    };
-    if let Some(target) = existing_target {
-        // SAFETY: `out` was checked non-null.
-        unsafe { write_out(out, target) };
-        return S_OK;
-    }
-    let mut output: *mut c_void = ptr::null_mut();
-    // SAFETY: `output` is a local pointer.
-    let hr = unsafe { sc.get_output_from_monitor(wsi::window_monitor(sc.hwnd), &raw mut output) };
-    if hr < 0 {
-        return hr;
-    }
-    // SAFETY: `out` was checked non-null; transfers `output`'s reference to `*out`.
-    unsafe { write_out(out, output) };
-    S_OK
+    // SAFETY: `out` is null or the application's.
+    unsafe { fullscreen::get_containing_output(sc, out, E_INVALIDARG) }
 }
 
 /// `IDXGISwapChain::GetFrameStatistics` (`d3d12_swapchain.cpp:711-720`).
@@ -1167,72 +642,45 @@ unsafe fn get_frame_statistics(this: *mut c_void, stats: *mut c_void) -> Hresult
     }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let count = sc.lock_state().presentation_count;
-    let out = FrameStatistics {
-        present_count: count,
-        present_refresh_count: count,
-        sync_refresh_count: count,
-        sync_qpc_time: 0,
-        sync_gpu_time: 0,
-    };
-    // SAFETY: `stats` was checked non-null.
-    unsafe { write_out(stats.cast::<FrameStatistics>(), out) };
+    // SAFETY: `stats` is the application's, non-null.
+    unsafe { sc.core.write_frame_statistics(stats) };
     S_OK
 }
 
 /// `IDXGISwapChain::GetLastPresentCount` (`d3d12_swapchain.cpp:724-731`).
 unsafe fn get_last_present_count(this: *mut c_void, last_present_count: *mut u32) -> Hresult {
     crate::scope!("swapchain.GetLastPresentCount");
-    if last_present_count.is_null() {
-        return E_POINTER;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let count = sc.lock_state().presentation_count;
-    // SAFETY: `last_present_count` was checked non-null.
-    unsafe { write_out(last_present_count, count) };
-    S_OK
+    // SAFETY: the pointer is the application's.
+    unsafe { sc.core.get_last_present_count(last_present_count) }
 }
 
 /// `IDXGISwapChain1::GetDesc1` (`d3d12_swapchain.cpp:735-742`).
 unsafe fn get_desc1(this: *mut c_void, desc: *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetDesc1");
-    if desc.is_null() {
-        return E_POINTER;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let d = copy_desc1(&sc.lock_state().desc);
-    // SAFETY: `desc` was checked non-null.
-    unsafe { write_out(desc.cast::<SwapChainDesc1>(), d) };
-    S_OK
+    // SAFETY: `desc` is the application's.
+    unsafe { sc.core.get_desc1(desc) }
 }
 
 /// `IDXGISwapChain1::GetFullscreenDesc` (`d3d12_swapchain.cpp:746-753`).
 unsafe fn get_fullscreen_desc(this: *mut c_void, desc: *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetFullscreenDesc");
-    if desc.is_null() {
-        return E_POINTER;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let d = copy_fullscreen_desc(&sc.lock_state().fullscreen_desc);
-    // SAFETY: `desc` was checked non-null.
-    unsafe { write_out(desc.cast::<SwapChainFullscreenDesc>(), d) };
-    S_OK
+    // SAFETY: `desc` is the application's.
+    unsafe { sc.core.get_fullscreen_desc(desc) }
 }
 
 /// `IDXGISwapChain1::GetHwnd` (`d3d12_swapchain.cpp:757-764`).
 unsafe fn get_hwnd(this: *mut c_void, hwnd: *mut *mut c_void) -> Hresult {
     crate::scope!("swapchain.GetHwnd");
-    if hwnd.is_null() {
-        return E_POINTER;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    // SAFETY: `hwnd` was checked non-null.
-    unsafe { write_out(hwnd, sc.hwnd) };
-    S_OK
+    // SAFETY: `hwnd` is the application's.
+    unsafe { sc.core.get_hwnd(hwnd) }
 }
 
 /// `IDXGISwapChain1::GetCoreWindow` (`d3d12_swapchain.cpp:768`).
@@ -1272,7 +720,7 @@ unsafe fn present1(
         if present_flags & DXGI_PRESENT_TEST != 0 {
             return hr;
         }
-        if wsi::is_minimized(sc.hwnd) {
+        if wsi::is_minimized(sc.core.hwnd) {
             crate::count!("#presents skipped (window minimised)", 1);
             release_semaphore(sc.present_semaphore, 1);
             state.presentation_count = state.presentation_count.wrapping_add(1);
@@ -1295,7 +743,7 @@ unsafe fn present1(
     } else {
         0.0
     };
-    if let Some(presenter) = sc.presenter.as_ref() {
+    if let Some(presenter) = sc.core.presenter.as_ref() {
         // SAFETY: `sc.queue` points to the parent `Queue`.
         let queue = unsafe { &*sc.queue };
         hr = queue.present(
@@ -1357,31 +805,20 @@ fn get_source_size(_this: *mut c_void, _width: *mut u32, _height: *mut u32) -> H
 /// `IDXGISwapChain2::SetMaximumFrameLatency` (`d3d12_swapchain.cpp:873-884`).
 unsafe fn set_maximum_frame_latency(this: *mut c_void, max_latency: u32) -> Hresult {
     crate::scope!("swapchain.SetMaximumFrameLatency");
-    if max_latency == 0 || max_latency > DXGI_MAX_SWAP_CHAIN_BUFFERS {
-        return E_INVALIDARG;
-    }
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let mut state = sc.lock_state();
-    if max_latency > state.frame_latency {
-        let delta = i32::try_from(max_latency - state.frame_latency).unwrap_or(0);
+    sc.core.set_maximum_frame_latency(max_latency, |delta| {
         release_semaphore(sc.present_semaphore, delta);
-    }
-    state.frame_latency = max_latency;
-    S_OK
+    })
 }
 
 /// `IDXGISwapChain2::GetMaximumFrameLatency` (`d3d12_swapchain.cpp:887-893`).
 unsafe fn get_maximum_frame_latency(this: *mut c_void, max_latency: *mut u32) -> Hresult {
     crate::scope!("swapchain.GetMaximumFrameLatency");
-    if !max_latency.is_null() {
-        // SAFETY: `this` is a live `SwapChain`.
-        let sc = unsafe { &*this.cast::<SwapChain>() };
-        let latency = sc.lock_state().frame_latency;
-        // SAFETY: `max_latency` is non-null.
-        unsafe { write_out(max_latency, latency) };
-    }
-    S_OK
+    // SAFETY: `this` is a live `SwapChain`.
+    let sc = unsafe { &*this.cast::<SwapChain>() };
+    // SAFETY: the pointer is the application's.
+    unsafe { sc.core.get_maximum_frame_latency(max_latency) }
 }
 
 /// `IDXGISwapChain2::GetFrameLatencyWaitableObject` (`d3d12_swapchain.cpp:896-910`).
@@ -1389,11 +826,8 @@ unsafe fn get_frame_latency_waitable_object(this: *mut c_void) -> *mut c_void {
     crate::scope!("swapchain.GetFrameLatencyWaitableObject");
     // SAFETY: `this` is a live `SwapChain`.
     let sc = unsafe { &*this.cast::<SwapChain>() };
-    let flags = sc.lock_state().desc.flags;
-    if flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT == 0 {
-        return ptr::null_mut();
-    }
-    duplicate_same_access(sc.present_semaphore)
+    sc.core
+        .frame_latency_waitable_object(|| duplicate_same_access(sc.present_semaphore))
 }
 
 /// `IDXGISwapChain3::GetCurrentBackBufferIndex` (`d3d12_swapchain.cpp:936-939`).
@@ -1413,32 +847,17 @@ unsafe fn check_color_space_support(
     color_space_support: *mut u32,
 ) -> Hresult {
     crate::scope!("swapchain.CheckColorSpaceSupport");
-    if color_space_support.is_null() {
-        return E_INVALIDARG;
-    }
-    // SAFETY: `CGColorSpace_checkColorSpaceSupported` queries CoreGraphics for `WMTColorSpace`.
-    let supported =
-        unsafe { CGColorSpace_checkColorSpaceSupported(convert_color_space(color_space, false)) };
-    let flags = if supported {
-        DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT
-    } else {
-        0
-    };
-    // SAFETY: `color_space_support` was checked non-null.
-    unsafe { write_out(color_space_support, flags) };
-    S_OK
+    // SAFETY: `color_space_support` is null or the application's.
+    unsafe { dxmt_core::swapchain::check_color_space_support(color_space, color_space_support) }
 }
 
 /// `IDXGISwapChain3::SetColorSpace1` (`d3d12_swapchain.cpp:953-961`).
 unsafe fn set_color_space1(this: *mut c_void, color_space: u32) -> Hresult {
     crate::scope!("swapchain.SetColorSpace1");
     // SAFETY: `this` is a live `SwapChain`.
-    let sc = unsafe { &*this.cast::<SwapChain>() };
-    let target_color_space = convert_color_space(color_space, sc.layer_support_edr());
-    if let Some(presenter) = sc.presenter.as_ref() {
-        let _ = presenter.change_layer_color_space(target_color_space);
-    }
-    sc.lock_state().colorspace = color_space;
+    let _ = unsafe { &*this.cast::<SwapChain>() }
+        .core
+        .set_color_space1(color_space);
     S_OK
 }
 
@@ -1780,17 +1199,19 @@ pub unsafe fn create(
     let mut state = State {
         monitor: wsi::window_monitor(hwnd),
         target: ptr::null_mut(),
-        saved_window: WindowState::default(),
+        window_state: WindowState::default(),
         presentation_count: 0,
         desc: sc_desc,
-        backbuffer_desc,
         fullscreen_desc: fs_desc,
         frame_latency: SWAPCHAIN_LATENCY,
-        colorspace: DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+        color_space: DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
         init_refresh_rate: f64::MAX,
-        backbuffers: Vec::new(),
+        api: Api {
+            backbuffer_desc,
+            backbuffers: Vec::new(),
+        },
     };
-    state.read_refresh_rate();
+    read_refresh_rate(&mut state);
 
     // SAFETY: retains `factory` for the swapchain's lifetime (`Com<IDXGIFactory1> factory_`).
     unsafe { dxmt_util::com::add_ref(factory) };
@@ -1801,18 +1222,14 @@ pub unsafe fn create(
         private_data: PrivateData::default(),
         device: ptr::from_ref(device).cast_mut(),
         queue: ptr::from_ref(queue),
-        presenter,
         hud: Some(hud),
         factory,
-        hwnd,
         native_view,
-        layer_weak,
         present_semaphore,
         render_scale: render_scale(),
         preferred_max_frame_rate,
-        modeset_in_progress: AtomicBool::new(false),
         library,
-        state: Mutex::new(state),
+        core: Core::new(hwnd, layer_weak, presenter, state),
         present_serial: Mutex::new(()),
     }));
 

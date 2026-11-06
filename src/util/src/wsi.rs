@@ -55,7 +55,7 @@ pub struct WsiMode {
 }
 
 /// `DXMTWindowState` in `wsi_platform_win32.hpp`: a window's saved windowed styles and rectangle.
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct WindowState {
     pub style: i32,
