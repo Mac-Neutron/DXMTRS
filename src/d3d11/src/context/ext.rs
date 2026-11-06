@@ -23,9 +23,11 @@ use winemetal_sys::wire::{
     WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps, WMTTextureInfo,
 };
 
+#[cfg(test)]
+use super::immediate::push_encoder_trace;
 use super::{
     Context, Mode,
-    immediate::{live_device, push_encoder_trace, resource_common},
+    immediate::{live_device, resource_common},
     state::DirtyFlags,
 };
 use crate::{
@@ -100,14 +102,16 @@ impl<M: Mode> Context<M> {
                 || d.motion_vector_in_display_res != 0;
             if need_mv_scale {
                 self.begin_compute_pass();
-                M::emit_op(self, move |enc| {
-                    push_encoder_trace(enc, "MvScale");
-                });
+                #[cfg(test)]
+                M::emit_op(self, move |enc| push_encoder_trace(enc, "MvScale"));
+                #[cfg(not(test))]
+                M::emit_op(self, |_| {});
             }
             self.finish_pass(false);
-            M::emit_op(self, move |enc| {
-                push_encoder_trace(enc, "UpscaleTemporal");
-            });
+            #[cfg(test)]
+            M::emit_op(self, move |enc| push_encoder_trace(enc, "UpscaleTemporal"));
+            #[cfg(not(test))]
+            M::emit_op(self, |_| {});
             return;
         };
 
@@ -242,6 +246,7 @@ impl<M: Mode> Context<M> {
     pub fn begin_uav_overlap(&mut self) {
         M::emit_op(self, |enc| {
             enc.set_intrapass_barrier_control(1);
+            #[cfg(test)]
             push_encoder_trace(enc, "BarrierControl(0)");
         });
     }
@@ -250,6 +255,7 @@ impl<M: Mode> Context<M> {
     pub fn end_uav_overlap(&mut self) {
         M::emit_op(self, |enc| {
             enc.set_intrapass_barrier_control(0);
+            #[cfg(test)]
             push_encoder_trace(enc, "BarrierControl(1)");
         });
     }

@@ -7,9 +7,11 @@ use core::{
     ptr,
     sync::atomic::{AtomicU64, Ordering},
 };
+#[cfg(test)]
+use std::sync::LazyLock;
 use std::{
     collections::VecDeque,
-    sync::{Arc, LazyLock, Mutex, PoisonError},
+    sync::{Arc, Mutex},
 };
 
 use dxmt_core::{
@@ -22,6 +24,7 @@ use dxmt_core::{
     staging::Staging,
 };
 use dxmt_util::private_data::PrivateData;
+#[cfg(test)]
 use rustc_hash::FxHashMap;
 use winemetal_sys::{MTLSharedEvent_setWin32EventAtValue, Obj};
 
@@ -35,34 +38,33 @@ use crate::{com::Managed, resource, state::Defaults};
 
 type InFlightCallback = Box<dyn FnOnce(u64) + Send>;
 
+/// Per-encoder trace lines the unit tests read back; the DLL builds none of it.
+#[cfg(test)]
 static ENCODER_TRACES: LazyLock<Mutex<FxHashMap<usize, Vec<String>>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 /// Appends a trace record associated with `enc`.
+#[cfg(test)]
 pub fn push_encoder_trace(enc: &Encoder, entry: impl Into<String>) {
     let key = ptr::from_ref(enc).addr();
-    let mut map = ENCODER_TRACES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut map = dxmt_util::sync::lock(&ENCODER_TRACES);
     map.entry(key).or_default().push(entry.into());
 }
 
 /// Returns a snapshot of the trace records recorded on `enc`.
+#[cfg(test)]
 #[must_use]
 pub fn encoder_trace(enc: &Encoder) -> Vec<String> {
     let key = ptr::from_ref(enc).addr();
-    let map = ENCODER_TRACES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let map = dxmt_util::sync::lock(&ENCODER_TRACES);
     map.get(&key).cloned().unwrap_or_default()
 }
 
 /// Clears trace records associated with `enc`.
+#[cfg(test)]
 pub fn clear_encoder_trace(enc: &Encoder) {
     let key = ptr::from_ref(enc).addr();
-    let mut map = ENCODER_TRACES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut map = dxmt_util::sync::lock(&ENCODER_TRACES);
     map.remove(&key);
 }
 
@@ -151,6 +153,7 @@ impl Immediate {
     }
 }
 
+#[cfg(test)]
 impl Drop for Immediate {
     fn drop(&mut self) {
         if let Some(enc) = self.encoder.as_ref() {
@@ -303,8 +306,6 @@ impl Context<Immediate> {
     pub fn new_immediate(device: *mut c_void) -> Box<Self> {
         let refs = Managed::new();
         refs.add_ref_private();
-        let mut mode = Immediate::default();
-        mode.ignore_no_wait = crate::device::CONFIG.get_bool("d3d11.ignoreMapFlagNoWait", false);
         let mut ctx = Box::new(Self {
             vtbl: &raw const IMMEDIATE_VTBL,
             ext_vtbl: &raw const IMMEDIATE_EXT_VTBL,
@@ -316,8 +317,10 @@ impl Context<Immediate> {
             cmdbuf_state: CommandBufferState::Idle,
             dirty: DirtyFlags::all(),
             defaults: Defaults::new(device),
-            mode,
+            mode: Immediate::default(),
         });
+        ctx.mode.ignore_no_wait =
+            crate::device::CONFIG.get_bool("d3d11.ignoreMapFlagNoWait", false);
         if live_device(device).is_none() {
             let _ = ctx.mode.current_seq();
         }
@@ -516,6 +519,7 @@ impl<M: Mode> Context<M> {
         self.cmdbuf_state = CommandBufferState::RenderEncoderActive;
         M::emit_st(self, |enc| {
             enc.start_render_pass(0, 0, 0, None);
+            #[cfg(test)]
             push_encoder_trace(enc, "RenderPass:start");
         });
     }
@@ -529,6 +533,7 @@ impl<M: Mode> Context<M> {
         self.cmdbuf_state = CommandBufferState::ComputeEncoderActive;
         M::emit_st(self, |enc| {
             enc.start_compute_pass(None);
+            #[cfg(test)]
             push_encoder_trace(enc, "ComputePass:start");
         });
     }
@@ -547,6 +552,7 @@ impl<M: Mode> Context<M> {
                 if enc.pass().is_some() {
                     enc.end_pass();
                 }
+                #[cfg(test)]
                 push_encoder_trace(enc, "Pass:end");
             });
         }
@@ -632,6 +638,7 @@ impl<M: Mode> Context<M> {
                     if let Some(ev) = ev {
                         enc.wait_event(ev, val);
                     }
+                    #[cfg(test)]
                     push_encoder_trace(enc, format!("WaitEvent({val})"));
                 });
                 if live {
@@ -667,6 +674,7 @@ impl<M: Mode> Context<M> {
                     if let Some(ev) = ev {
                         enc.signal_event(ev, val);
                     }
+                    #[cfg(test)]
                     push_encoder_trace(enc, format!("SignalEvent({val})"));
                 });
                 if live {

@@ -12,12 +12,9 @@ use dxmt_util::{
     },
 };
 
-use super::{
-    Context, Mode,
-    encode::CommandBufferState,
-    immediate::{push_encoder_trace, resource_common},
-    state::DirtyFlags,
-};
+use super::{Context, Mode, immediate::resource_common, state::DirtyFlags};
+#[cfg(test)]
+use super::{encode::CommandBufferState, immediate::push_encoder_trace};
 use crate::{
     abi::records::D3d11MappedSubresource,
     com::{E_FAIL, E_INVALIDARG, E_NOTIMPL, Hresult, S_OK},
@@ -117,6 +114,7 @@ impl<M: Mode> Context<M> {
                             let _ = buf.rename(Arc::clone(&alloc));
                         });
                     }
+                    #[cfg(test)]
                     if !is_dyn_tex_sub
                         && (bind_flags & D3D11_BIND_VERTEX_BUFFER) != 0
                         && imm.cmdbuf_state == CommandBufferState::RenderEncoderActive
@@ -141,6 +139,7 @@ impl<M: Mode> Context<M> {
                 return S_OK;
             } else if let Some(def) = self.as_deferred_mut() {
                 let alloc = if map_type == D3D11_MAP_WRITE_DISCARD {
+                    #[cfg(test)]
                     if !is_dyn_tex_sub
                         && (bind_flags & D3D11_BIND_VERTEX_BUFFER) != 0
                         && def.cmdbuf_state == CommandBufferState::RenderEncoderActive

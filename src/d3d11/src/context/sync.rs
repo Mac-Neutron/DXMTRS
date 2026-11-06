@@ -7,9 +7,9 @@ use dxmt_core::query::{TimestampQuery, VisibilityQuery};
 use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
 use winemetal_sys::Obj;
 
-use super::{
-    Context, Immediate, Mode, deferred::DeferredIssuedQuery, immediate::push_encoder_trace,
-};
+#[cfg(test)]
+use super::immediate::push_encoder_trace;
+use super::{Context, Immediate, Mode, deferred::DeferredIssuedQuery};
 use crate::{
     abi::records::{D3d11QueryDataPipelineStatistics, D3d11QueryDataTimestampDisjoint},
     com::{E_INVALIDARG, Hresult, S_FALSE, S_OK},
@@ -653,6 +653,7 @@ impl<M: Mode> Context<M> {
             if let Some(ev) = ev {
                 enc.signal_event(ev, value);
             }
+            #[cfg(test)]
             push_encoder_trace(enc, format!("SignalEvent({value})"));
         });
         if self.is_live() {
@@ -684,6 +685,7 @@ impl<M: Mode> Context<M> {
             if let Some(ev) = ev {
                 enc.wait_event(ev, value);
             }
+            #[cfg(test)]
             push_encoder_trace(enc, format!("WaitEvent({value})"));
         });
         S_OK
