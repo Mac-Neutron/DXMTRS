@@ -5,7 +5,10 @@ use core::{
 };
 use std::{sync::Arc, thread, time::Duration};
 
-use dxmt_core::arena::{BlockPool, Commands};
+use dxmt_core::{
+    arena::{BlockPool, Commands},
+    swapchain::{convert_color_space, convert_format, vsync_duration},
+};
 use dxmt_util::sync::CpuFence;
 use winemetal_sys::wire::{
     WMT_COLOR_SPACE_BT2020, WMT_COLOR_SPACE_HDR_PQ, WMT_COLOR_SPACE_HDR_SC_RGB,
@@ -23,8 +26,7 @@ use super::{
     DXGI_MAX_SWAP_CHAIN_BUFFERS, DXGI_MODE_ROTATION_IDENTITY, DXGI_PRESENT_TEST,
     DXGI_STATUS_OCCLUDED, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
     DXGI_SWAP_EFFECT_DISCARD, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_SWAP_EFFECT_SEQUENTIAL, SwapChain, compute_vsync_duration, convert_color_space,
-    convert_swapchain_format, create, evaluate_present_prelude, sync_frame,
+    DXGI_SWAP_EFFECT_SEQUENTIAL, SwapChain, create, evaluate_present_prelude, sync_frame,
 };
 use crate::{
     abi::{
@@ -501,7 +503,7 @@ fn vsync_duration_as_cpp() {
     ];
 
     for &(sync_interval, pref_rate, init_rate, expected) in cases {
-        let got = compute_vsync_duration(sync_interval, pref_rate, init_rate);
+        let got = vsync_duration(sync_interval, pref_rate, init_rate);
         assert!(
             (got - expected).abs() <= 1e-15,
             "mismatch for ({sync_interval}, {pref_rate}, {init_rate}): got {got}, expected {expected}"
@@ -587,30 +589,30 @@ fn frame_latency_fence_signals_at_retire() {
 #[test]
 fn swapchain_com_methods_and_format_helpers() {
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB),
+        convert_format(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB),
         WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB
     );
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB),
+        convert_format(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB),
         WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB
     );
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_B8G8R8A8_UNORM),
+        convert_format(DXGI_FORMAT_B8G8R8A8_UNORM),
         WMT_PIXEL_FORMAT_BGRA8_UNORM
     );
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_R8G8B8A8_UNORM),
+        convert_format(DXGI_FORMAT_R8G8B8A8_UNORM),
         WMT_PIXEL_FORMAT_BGRA8_UNORM
     );
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_R10G10B10A2_UNORM),
+        convert_format(DXGI_FORMAT_R10G10B10A2_UNORM),
         WMT_PIXEL_FORMAT_RGB10A2_UNORM
     );
     assert_eq!(
-        convert_swapchain_format(DXGI_FORMAT_R16G16B16A16_FLOAT),
+        convert_format(DXGI_FORMAT_R16G16B16A16_FLOAT),
         WMT_PIXEL_FORMAT_RGBA16_FLOAT
     );
-    assert_eq!(convert_swapchain_format(999), WMT_PIXEL_FORMAT_INVALID);
+    assert_eq!(convert_format(999), WMT_PIXEL_FORMAT_INVALID);
 
     assert_eq!(
         convert_color_space(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, false),

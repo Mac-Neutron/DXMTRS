@@ -13,6 +13,7 @@ use dxmt_core::{
     presenter::{Presenter, PresenterDesc},
     scaler::Scaler,
     settings::{Flags, settings},
+    swapchain::{convert_color_space, convert_format, vsync_duration},
 };
 #[cfg(not(test))]
 use dxmt_util::wsi;
@@ -55,13 +56,7 @@ pub use dxmt_util::{
 use winemetal_sys::{
     CGColorSpace_checkColorSpaceSupported, CreateMetalViewFromHWND, MetalLayer_getEDRValue,
     ReleaseMetalView,
-    wire::{
-        WMT_COLOR_SPACE_BT2020, WMT_COLOR_SPACE_HDR_PQ, WMT_COLOR_SPACE_HDR_SC_RGB,
-        WMT_COLOR_SPACE_INVALID, WMT_COLOR_SPACE_SRGB, WMT_COLOR_SPACE_SRGB_LINEAR,
-        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_PIXEL_FORMAT_INVALID,
-        WMT_PIXEL_FORMAT_RGB10A2_UNORM, WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMTEDRValue,
-        WMTFXSpatialScalerInfo, WMTHDRMetadata,
-    },
+    wire::{WMT_PIXEL_FORMAT_INVALID, WMTEDRValue, WMTFXSpatialScalerInfo, WMTHDRMetadata},
 };
 
 use crate::{
@@ -88,38 +83,6 @@ use crate::{
 /// Default swapchain maximum frame latency (`kSwapchainLatency`).
 pub const DEFAULT_SWAPCHAIN_LATENCY: u32 = 1;
 
-/// Converts a `DXGI_FORMAT` to its Metal swapchain pixel format (`ConvertSwapChainFormat`).
-#[must_use]
-pub const fn convert_swapchain_format(format: u32) -> u32 {
-    match format {
-        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB => {
-            WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB
-        }
-        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM => WMT_PIXEL_FORMAT_BGRA8_UNORM,
-        DXGI_FORMAT_R10G10B10A2_UNORM => WMT_PIXEL_FORMAT_RGB10A2_UNORM,
-        DXGI_FORMAT_R16G16B16A16_FLOAT => WMT_PIXEL_FORMAT_RGBA16_FLOAT,
-        _ => WMT_PIXEL_FORMAT_INVALID,
-    }
-}
-
-/// Converts a `DXGI_COLOR_SPACE_TYPE` to its Metal color space (`ConvertColorSpace`).
-#[must_use]
-pub const fn convert_color_space(color_space: u32, hdr: bool) -> u64 {
-    match color_space {
-        DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 => WMT_COLOR_SPACE_SRGB,
-        DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 => {
-            if hdr {
-                WMT_COLOR_SPACE_HDR_SC_RGB
-            } else {
-                WMT_COLOR_SPACE_SRGB_LINEAR
-            }
-        }
-        DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 => WMT_COLOR_SPACE_HDR_PQ,
-        DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020 => WMT_COLOR_SPACE_BT2020,
-        _ => WMT_COLOR_SPACE_INVALID,
-    }
-}
-
 /// Returns monitor bits-per-pixel for `format` (`GetMonitorFormatBpp`).
 #[must_use]
 pub const fn get_monitor_format_bpp(format: u32) -> u32 {
@@ -127,26 +90,6 @@ pub const fn get_monitor_format_bpp(format: u32) -> u32 {
         DXGI_FORMAT_R16G16B16A16_FLOAT => 64,
         _ => 32,
     }
-}
-
-/// Computes `vsync_duration` exactly as `d3d11_swapchain.cpp:797-801` does.
-#[must_use]
-pub fn compute_vsync_duration(
-    sync_interval: u32,
-    preferred_max_frame_rate: i32,
-    init_refresh_rate: f64,
-) -> f64 {
-    let rate = if preferred_max_frame_rate != 0 {
-        f64::from(preferred_max_frame_rate)
-    } else {
-        init_refresh_rate
-    };
-    let floor = if preferred_max_frame_rate != 0 {
-        1.0 / f64::from(preferred_max_frame_rate)
-    } else {
-        0.0
-    };
-    (f64::from(sync_interval) / rate).max(floor)
 }
 
 /// Returns `true` when the VM guest paces its own frames (`GuestPaces`).
@@ -809,7 +752,7 @@ impl SwapChain {
         let scaled_h = f64::from(st.desc.height) * f64::from(scale);
         let sample_count = u8::try_from(st.desc.sample_desc.count.max(1)).unwrap_or(1);
         let changed = presenter.change_layer_properties(
-            convert_swapchain_format(st.desc.format),
+            convert_format(st.desc.format),
             target_cs,
             scaled_w,
             scaled_h,
@@ -1187,9 +1130,7 @@ impl SwapChain {
             st.desc.width = width;
             st.desc.height = height;
         }
-        if format != DXGI_FORMAT_UNKNOWN
-            && convert_swapchain_format(format) != WMT_PIXEL_FORMAT_INVALID
-        {
+        if format != DXGI_FORMAT_UNKNOWN && convert_format(format) != WMT_PIXEL_FORMAT_INVALID {
             st.desc.format = format;
         }
         if !st.backbuffer.is_null() {
@@ -1260,16 +1201,10 @@ impl SwapChain {
                 if let Some(dev) = Device::from_iface(self.device) {
                     let color_format = resource::common(bb)
                         .and_then(|c| c.texture.as_ref())
-                        .map_or_else(
-                            || convert_swapchain_format(st.desc.format),
-                            |t| t.info().pixel_format,
-                        );
+                        .map_or_else(|| convert_format(st.desc.format), |t| t.info().pixel_format);
                     let output_format = resource::common(up_bb)
                         .and_then(|c| c.texture.as_ref())
-                        .map_or_else(
-                            || convert_swapchain_format(st.desc.format),
-                            |t| t.info().pixel_format,
-                        );
+                        .map_or_else(|| convert_format(st.desc.format), |t| t.info().pixel_format);
                     let info = WMTFXSpatialScalerInfo {
                         input_height: st.desc.height,
                         input_width: st.desc.width,
@@ -1338,7 +1273,7 @@ impl SwapChain {
             ) = {
                 let mut st = self.lock_state();
                 st.presentation_count = st.presentation_count.wrapping_add(1);
-                let vsync = compute_vsync_duration(
+                let vsync = vsync_duration(
                     sync_interval,
                     st.preferred_max_frame_rate,
                     st.init_refresh_rate,
