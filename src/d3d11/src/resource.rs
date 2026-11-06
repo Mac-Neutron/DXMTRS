@@ -9,7 +9,7 @@ use dxmt_core::{
     staging::Staging,
 };
 use dxmt_util::{
-    com::hresult::DXGI_ERROR_INVALID_CALL,
+    com::{Qi, QiMiss, hresult::DXGI_ERROR_INVALID_CALL, qi_table},
     dxgi_consts::{
         D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET,
         D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_STREAM_OUTPUT, D3D11_BIND_UNORDERED_ACCESS,
@@ -40,8 +40,8 @@ use crate::{
         },
     },
     com::{
-        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, S_FALSE,
-        S_OK, TearOff, add_ref, container_of, iface_of, vtbl,
+        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, S_FALSE, S_OK,
+        TearOff, add_ref, container_of, iface_of, vtbl,
     },
     d3d10,
     device::Device,
@@ -384,122 +384,136 @@ unsafe extern "system-unwind" fn res_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` is a GUID pointer passed to `QueryInterface`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     // SAFETY: `this` is a live `Resource`.
     let res = unsafe { Resource::from_ptr(this) };
-
-    if res.kind == ResourceKind::DeviceTexture && iid == IID_IMTL_MIN_LOD_CLAMPABLE {
-        res.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = iface_of(&res.min_lod_vtbl) };
-        return S_OK;
-    }
-
-    let is_primary = iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_RESOURCE
-        || match res.desc {
-            ResourceDesc::Buffer(_) => iid == IID_ID3D11_BUFFER,
-            ResourceDesc::Texture1d(_) => iid == IID_ID3D11_TEXTURE_1D,
-            ResourceDesc::Texture2d(_) => {
-                iid == IID_ID3D11_TEXTURE_2D || iid == IID_ID3D11_TEXTURE_2D1
-            }
-            ResourceDesc::Texture3d(_) => {
-                iid == IID_ID3D11_TEXTURE_3D || iid == IID_ID3D11_TEXTURE_3D1
-            }
+    // The D3D11 interfaces, the D3D10 ones with their wrapper, the base IID and the miss line's name.
+    let (d3d11, d3d10, d3d10_iface, base_iid, name): (&[Guid], &[Guid], *mut c_void, &Guid, &str) =
+        match res.desc {
+            ResourceDesc::Buffer(_) => (
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_RESOURCE,
+                    IID_ID3D11_BUFFER,
+                ],
+                &[
+                    IID_ID3D10_DEVICE_CHILD,
+                    IID_ID3D10_RESOURCE,
+                    IID_ID3D10_BUFFER,
+                ],
+                core::ptr::from_ref(&res.d3d10_buffer).cast_mut().cast(),
+                &IID_ID3D11_BUFFER,
+                "D3D11Resource(buffer)",
+            ),
+            ResourceDesc::Texture1d(_) => (
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_RESOURCE,
+                    IID_ID3D11_TEXTURE_1D,
+                ],
+                &[
+                    IID_ID3D10_DEVICE_CHILD,
+                    IID_ID3D10_RESOURCE,
+                    IID_ID3D10_TEXTURE_1D,
+                ],
+                core::ptr::from_ref(&res.d3d10_tex1d).cast_mut().cast(),
+                &IID_ID3D11_TEXTURE_1D,
+                "D3D11Resource(tex1d)",
+            ),
+            ResourceDesc::Texture2d(_) => (
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_RESOURCE,
+                    IID_ID3D11_TEXTURE_2D,
+                    IID_ID3D11_TEXTURE_2D1,
+                ],
+                &[
+                    IID_ID3D10_DEVICE_CHILD,
+                    IID_ID3D10_RESOURCE,
+                    IID_ID3D10_TEXTURE_2D,
+                ],
+                core::ptr::from_ref(&res.d3d10_tex2d).cast_mut().cast(),
+                &IID_ID3D11_TEXTURE_2D,
+                "D3D11Resource(tex2d)",
+            ),
+            ResourceDesc::Texture3d(_) => (
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_RESOURCE,
+                    IID_ID3D11_TEXTURE_3D,
+                    IID_ID3D11_TEXTURE_3D1,
+                ],
+                &[
+                    IID_ID3D10_DEVICE_CHILD,
+                    IID_ID3D10_RESOURCE,
+                    IID_ID3D10_TEXTURE_3D,
+                ],
+                core::ptr::from_ref(&res.d3d10_tex3d).cast_mut().cast(),
+                &IID_ID3D11_TEXTURE_3D,
+                "D3D11Resource(tex3d)",
+            ),
         };
-    if is_primary {
-        res.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
-    }
-
-    let is_d3d10_common = iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_RESOURCE;
-    match res.desc {
-        ResourceDesc::Buffer(_) if is_d3d10_common || iid == IID_ID3D10_BUFFER => {
-            res.refs.add_ref();
-            // SAFETY: `out` is non-null.
-            unsafe { *out = core::ptr::from_ref(&res.d3d10_buffer).cast_mut().cast() };
-            return S_OK;
-        }
-        ResourceDesc::Texture1d(_) if is_d3d10_common || iid == IID_ID3D10_TEXTURE_1D => {
-            res.refs.add_ref();
-            // SAFETY: `out` is non-null.
-            unsafe { *out = core::ptr::from_ref(&res.d3d10_tex1d).cast_mut().cast() };
-            return S_OK;
-        }
-        ResourceDesc::Texture2d(_) if is_d3d10_common || iid == IID_ID3D10_TEXTURE_2D => {
-            res.refs.add_ref();
-            // SAFETY: `out` is non-null.
-            unsafe { *out = core::ptr::from_ref(&res.d3d10_tex2d).cast_mut().cast() };
-            return S_OK;
-        }
-        ResourceDesc::Texture3d(_) if is_d3d10_common || iid == IID_ID3D10_TEXTURE_3D => {
-            res.refs.add_ref();
-            // SAFETY: `out` is non-null.
-            unsafe { *out = core::ptr::from_ref(&res.d3d10_tex3d).cast_mut().cast() };
-            return S_OK;
-        }
-        _ => {}
-    }
-
-    if iid == IID_IDXGI_OBJECT
-        || iid == IID_IDXGI_DEVICE_SUB_OBJECT
-        || iid == IID_IDXGI_RESOURCE
-        || iid == IID_IDXGI_RESOURCE_1
-    {
-        res.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = res.dxgi_resource.as_iface() };
-        return S_OK;
-    }
-
-    if iid == IID_IDXGI_SURFACE || iid == IID_IDXGI_SURFACE_1 || iid == IID_IDXGI_SURFACE_2 {
-        let single_subresource = match res.desc {
-            ResourceDesc::Texture1d(d) => d.array_size.saturating_mul(d.mip_levels) == 1,
-            ResourceDesc::Texture2d(d) => d.array_size.saturating_mul(d.mip_levels) == 1,
-            ResourceDesc::Buffer(_) | ResourceDesc::Texture3d(_) => false,
-        };
-        if single_subresource {
-            res.refs.add_ref();
-            // SAFETY: `out` is non-null.
-            unsafe { *out = res.dxgi_surface.as_iface() };
-            return S_OK;
-        }
-    }
-
-    if iid == IID_IDXGI_KEYED_MUTEX {
-        if (res.common.misc_flags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) == 0 {
-            return E_NOINTERFACE;
-        }
-        res.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = res.keyed_mutex_tearoff.as_iface() };
-        return S_OK;
-    }
-
-    let (base_iid, debug_name) = match res.desc {
-        ResourceDesc::Buffer(_) => (&IID_ID3D11_BUFFER, "buffer"),
-        ResourceDesc::Texture1d(_) => (&IID_ID3D11_TEXTURE_1D, "tex1d"),
-        ResourceDesc::Texture2d(_) => (&IID_ID3D11_TEXTURE_2D, "tex2d"),
-        ResourceDesc::Texture3d(_) => (&IID_ID3D11_TEXTURE_3D, "tex3d"),
+    let min_lod: &[Guid] = if res.kind == ResourceKind::DeviceTexture {
+        &[IID_IMTL_MIN_LOD_CLAMPABLE]
+    } else {
+        &[]
     };
-    if crate::com::qi_log(base_iid, &iid) {
-        crate::LOG.warn(&format!(
-            "D3D11Resource({debug_name}): Unknown interface query {iid}"
-        ));
+    // A surface answers for one subresource only.
+    let single_subresource = match res.desc {
+        ResourceDesc::Texture1d(d) => d.array_size.saturating_mul(d.mip_levels) == 1,
+        ResourceDesc::Texture2d(d) => d.array_size.saturating_mul(d.mip_levels) == 1,
+        ResourceDesc::Buffer(_) | ResourceDesc::Texture3d(_) => false,
+    };
+    let surface: &[Guid] = if single_subresource {
+        &[IID_IDXGI_SURFACE, IID_IDXGI_SURFACE_1, IID_IDXGI_SURFACE_2]
+    } else {
+        &[]
+    };
+    let keyed = (res.common.misc_flags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) != 0;
+    let (keyed_mutex, silent): (&[Guid], &[Guid]) = if keyed {
+        (&[IID_IDXGI_KEYED_MUTEX], &[])
+    } else {
+        (&[], &[IID_IDXGI_KEYED_MUTEX])
+    };
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent,
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: base_iid,
+            name,
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (min_lod, iface_of(&res.min_lod_vtbl)),
+                (d3d11, this),
+                (d3d10, d3d10_iface),
+                (
+                    &[
+                        IID_IDXGI_OBJECT,
+                        IID_IDXGI_DEVICE_SUB_OBJECT,
+                        IID_IDXGI_RESOURCE,
+                        IID_IDXGI_RESOURCE_1,
+                    ],
+                    res.dxgi_resource.as_iface(),
+                ),
+                (surface, res.dxgi_surface.as_iface()),
+                (keyed_mutex, res.keyed_mutex_tearoff.as_iface()),
+            ],
+            || {
+                res.refs.add_ref();
+            },
+            &qi,
+        )
     }
-
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn res_add_ref(this: *mut c_void) -> u32 {

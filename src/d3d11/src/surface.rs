@@ -3,7 +3,7 @@
 use core::ffi::c_void;
 
 use dxmt_util::{
-    com::hresult::DXGI_ERROR_INVALID_CALL,
+    com::{Qi, QiMiss, hresult::DXGI_ERROR_INVALID_CALL, qi_table},
     dxgi_consts::{DXGI_FORMAT_UNKNOWN, DXGI_MAP_DISCARD, DXGI_MAP_READ, DXGI_MAP_WRITE},
 };
 
@@ -18,8 +18,8 @@ use crate::{
         },
     },
     com::{
-        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, S_OK,
-        TearOff, add_ref, release, vtbl,
+        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Hresult, S_OK, TearOff,
+        add_ref, release, vtbl,
     },
     resource::{Resource, ResourceDesc},
 };
@@ -498,29 +498,36 @@ unsafe extern "system-unwind" fn sub_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` is a GUID pointer passed to `QueryInterface`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
-    if iid == IID_IUNKNOWN
-        || iid == IID_IDXGI_OBJECT
-        || iid == IID_IDXGI_DEVICE_SUB_OBJECT
-        || iid == IID_IDXGI_SURFACE
-        || iid == IID_IDXGI_SURFACE_1
-        || iid == IID_IDXGI_SURFACE_2
-    {
+    let take_ref = || {
         // SAFETY: `this` is a live `SubresourceSurface`.
         unsafe { sub_add_ref(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    };
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Quiet,
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_IDXGI_OBJECT,
+                    IID_IDXGI_DEVICE_SUB_OBJECT,
+                    IID_IDXGI_SURFACE,
+                    IID_IDXGI_SURFACE_1,
+                    IID_IDXGI_SURFACE_2,
+                ],
+                this,
+            )],
+            take_ref,
+            &qi,
+        )
     }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn sub_add_ref(this: *mut c_void) -> u32 {

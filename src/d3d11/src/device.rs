@@ -6,8 +6,7 @@ use std::sync::LazyLock;
 use dxmt_core::{device::Device as CoreDevice, queue::Queue};
 use dxmt_util::{
     com::{
-        ComObject, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, S_OK,
-        add_ref, qi_log, release, write_out,
+        ComObject, E_INVALIDARG, Guid, Hresult, IID_IUNKNOWN, S_OK, add_ref, release, write_out,
     },
     config::Config,
     private_data::PrivateData,
@@ -19,8 +18,10 @@ use winemetal_wire::WMTGPU_FAMILY_APPLE7;
 pub static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load(&crate::LOG));
 
 pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
-use dxmt_util::com::iid::{
-    IID_GPA, IID_ID3D11_DEBUG, IID_ID3D11_INFO_QUEUE, IID_PIX, IID_RENDERDOC,
+use dxmt_util::com::{
+    Qi, QiMiss,
+    iid::{IID_GPA, IID_ID3D11_DEBUG, IID_ID3D11_INFO_QUEUE, IID_PIX, IID_RENDERDOC},
+    qi_table,
 };
 
 pub use crate::multithread::DeviceMutex;
@@ -414,6 +415,30 @@ pub unsafe fn create_d3d11_device(
     S_OK
 }
 
+/// The IIDs the device refuses with no log line.
+///
+/// The debug layer, the info queue, the context extension and the capture tools.
+const REFUSED: [Guid; 6] = [
+    IID_ID3D11_DEBUG,
+    IID_ID3D11_INFO_QUEUE,
+    IID_D3D11_CONTEXT_EXT,
+    IID_RENDERDOC,
+    IID_PIX,
+    IID_GPA,
+];
+
+/// [`REFUSED`] and the D3D10 device's IIDs, for a device created without one.
+const REFUSED_WITHOUT_D3D10: [Guid; 8] = [
+    IID_ID3D11_DEBUG,
+    IID_ID3D11_INFO_QUEUE,
+    IID_D3D11_CONTEXT_EXT,
+    IID_RENDERDOC,
+    IID_PIX,
+    IID_GPA,
+    IID_ID3D10_DEVICE,
+    IID_ID3D10_DEVICE1,
+];
+
 /// Shared `QueryInterface` implementation for [`DxgiDevice`], [`Device`], and all device tear-offs.
 ///
 /// # Safety
@@ -424,118 +449,74 @@ pub unsafe fn container_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` is non-null.
-    unsafe {
-        write_out(out, ptr::null_mut());
-    }
-    // SAFETY: `riid` is a `GUID` pointer passed by the COM caller.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return DXGI_ERROR_INVALID_CALL;
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer; only the field's address is taken.
+    let d3d11 = unsafe { (&raw mut (*raw).d3d11).cast::<c_void>() };
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+    let d3d10_device = unsafe { (*raw).d3d11.d3d10.as_deref() };
+    let d3d10 = d3d10_device.map_or(ptr::null_mut(), |d| ptr::from_ref(d).cast_mut().cast());
+    // Without a D3D10 device its IIDs are refused with no line, like the debug layer and the tools.
+    let (d3d10_iids, silent): (&[Guid], &[Guid]) = if d3d10_device.is_some() {
+        (&[IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1], &REFUSED)
+    } else {
+        (&[], &REFUSED_WITHOUT_D3D10)
     };
-
-    if iid == IID_IUNKNOWN
-        || iid == IID_IDXGI_OBJECT
-        || iid == IID_IDXGI_DEVICE
-        || iid == IID_IDXGI_DEVICE_1
-        || iid == IID_IDXGI_DEVICE_2
-        || iid == IID_IDXGI_DEVICE_3
-        || iid == IID_IMTL_DXGI_DEVICE
-    {
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+    let factory = unsafe { (*raw).d3d11.swap_chain_factory.as_iface() };
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+    let ext = unsafe { (*raw).d3d11.ext.as_iface() };
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+    let multithread = unsafe { (*raw).d3d11.multithread.as_iface() };
+    let take_ref = || {
         // SAFETY: `raw` is a valid `DxgiDevice` pointer.
         unsafe { (*raw).refs.add_ref() };
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, raw.cast::<c_void>());
-        }
-        return S_OK;
+    };
+    let qi = Qi {
+        null_riid: DXGI_ERROR_INVALID_CALL,
+        silent,
+        log: &LOG,
+        miss: QiMiss::Once {
+            object: &IID_IMTL_DXGI_DEVICE,
+            name: "D3D11Device",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_IDXGI_OBJECT,
+                        IID_IDXGI_DEVICE,
+                        IID_IDXGI_DEVICE_1,
+                        IID_IDXGI_DEVICE_2,
+                        IID_IDXGI_DEVICE_3,
+                        IID_IMTL_DXGI_DEVICE,
+                    ],
+                    raw.cast::<c_void>(),
+                ),
+                (
+                    &[
+                        IID_ID3D11_DEVICE,
+                        IID_ID3D11_DEVICE_1,
+                        IID_ID3D11_DEVICE_2,
+                        IID_ID3D11_DEVICE_3,
+                        IID_ID3D11_DEVICE_4,
+                        IID_ID3D11_DEVICE_5,
+                    ],
+                    d3d11,
+                ),
+                (d3d10_iids, d3d10),
+                (&[IID_IMTL_SWAP_CHAIN_FACTORY], factory),
+                (&[IID_D3D11_DEVICE_EXT], ext),
+                (&[IID_ID3D11_MULTITHREAD], multithread),
+            ],
+            take_ref,
+            &qi,
+        )
     }
-
-    if iid == IID_ID3D11_DEVICE
-        || iid == IID_ID3D11_DEVICE_1
-        || iid == IID_ID3D11_DEVICE_2
-        || iid == IID_ID3D11_DEVICE_3
-        || iid == IID_ID3D11_DEVICE_4
-        || iid == IID_ID3D11_DEVICE_5
-    {
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        unsafe { (*raw).refs.add_ref() };
-        // SAFETY: Projecting the `d3d11` field of `raw`.
-        let iface = unsafe { (&raw mut (*raw).d3d11).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, iface);
-        }
-        return S_OK;
-    }
-
-    if iid == IID_ID3D10_DEVICE || iid == IID_ID3D10_DEVICE1 {
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        let Some(d3d10_dev) = (unsafe { (*raw).d3d11.d3d10.as_deref() }) else {
-            return E_NOINTERFACE;
-        };
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        unsafe { (*raw).refs.add_ref() };
-        let iface = ptr::from_ref(d3d10_dev).cast_mut().cast::<c_void>();
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, iface);
-        }
-        return S_OK;
-    }
-
-    if iid == IID_IMTL_SWAP_CHAIN_FACTORY {
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        unsafe { (*raw).refs.add_ref() };
-        // SAFETY: Projecting `swap_chain_factory` on `raw`.
-        let iface = unsafe { (*raw).d3d11.swap_chain_factory.as_iface() };
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, iface);
-        }
-        return S_OK;
-    }
-
-    if iid == IID_D3D11_DEVICE_EXT {
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        unsafe { (*raw).refs.add_ref() };
-        // SAFETY: Projecting `ext` on `raw`.
-        let iface = unsafe { (*raw).d3d11.ext.as_iface() };
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, iface);
-        }
-        return S_OK;
-    }
-
-    if iid == IID_ID3D11_MULTITHREAD {
-        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-        unsafe { (*raw).refs.add_ref() };
-        // SAFETY: Projecting `multithread` on `raw`.
-        let iface = unsafe { (*raw).d3d11.multithread.as_iface() };
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, iface);
-        }
-        return S_OK;
-    }
-
-    if iid == IID_ID3D11_DEBUG
-        || iid == IID_ID3D11_INFO_QUEUE
-        || iid == IID_D3D11_CONTEXT_EXT
-        || iid == IID_RENDERDOC
-        || iid == IID_PIX
-        || iid == IID_GPA
-    {
-        return E_NOINTERFACE;
-    }
-
-    if qi_log(&IID_IMTL_DXGI_DEVICE, &iid) {
-        LOG.warn(&format!("D3D11Device: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 /// Increments the shared container reference count.

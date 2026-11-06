@@ -6,7 +6,12 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use dxmt_util::{private_data::PrivateData, sha1::Sha1, sync::lock};
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+    sha1::Sha1,
+    sync::lock,
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     DispatchData_alloc_init, MTLDevice_newLibrary, MTLLibrary_newFunction, Obj,
@@ -32,10 +37,7 @@ use crate::{
             ID3D11HullShaderVtbl, ID3D11PixelShaderVtbl, ID3D11VertexShaderVtbl,
         },
     },
-    com::{
-        E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, Managed, S_FALSE, S_OK,
-        add_ref,
-    },
+    com::{E_FAIL, E_INVALIDARG, Guid, Hresult, Managed, S_FALSE, S_OK, add_ref},
     d3d10,
     device::Device,
     input_layout::StreamOutputLayout,
@@ -624,49 +626,51 @@ unsafe extern "system-unwind" fn shader_set_private_data_interface<V: 'static>(
 }
 
 macro_rules! define_shader_vtbl {
-    ($vtbl_static:ident, $VtblTy:ident, $qi_fn:ident, $iid:ident $(, $d3d10_iid:ident)?) => {
+    ($vtbl_static:ident, $VtblTy:ident, $qi_fn:ident, $iid:ident, $d3d10:expr) => {
         unsafe extern "system-unwind" fn $qi_fn(
             this: *mut c_void,
             riid: *const c_void,
             out: *mut *mut c_void,
         ) -> i32 {
-            if out.is_null() {
-                return E_POINTER;
-            }
-            // SAFETY: `out` is non-null.
-            unsafe { *out = ptr::null_mut() };
-            // SAFETY: reads `riid`.
-            let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-                return E_INVALIDARG;
+            // SAFETY: `this` is a valid `ShaderObject`; only the field's address is taken.
+            let d3d10 = unsafe {
+                (&raw mut (*this.cast::<ShaderObject<$VtblTy>>()).d3d10).cast::<c_void>()
             };
-            if iid == IID_IUNKNOWN
-                || iid == IID_ID3D11_DEVICE_CHILD
-                || iid == $iid
-                || iid == IID_IMTL_D3D11_SHADER
-            {
+            let take_ref = || {
                 // SAFETY: `this` is a valid `ShaderObject`.
                 unsafe { shader_add_ref::<$VtblTy>(this) };
-                // SAFETY: `out` is non-null.
-                unsafe { *out = this };
-                return S_OK;
+            };
+            let qi = Qi {
+                null_riid: E_INVALIDARG,
+                // A stream-output layout is a geometry shader to the runtime, not to us.
+                silent: &[crate::input_layout::IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT],
+                log: &LOG,
+                miss: QiMiss::Once {
+                    object: &$iid,
+                    name: "D3D11Shader",
+                },
+            };
+            // SAFETY: the application's `riid` and `out`, null or valid.
+            unsafe {
+                qi_table(
+                    riid,
+                    out,
+                    &[
+                        (
+                            &[
+                                IID_IUNKNOWN,
+                                IID_ID3D11_DEVICE_CHILD,
+                                $iid,
+                                IID_IMTL_D3D11_SHADER,
+                            ] as &[Guid],
+                            this,
+                        ),
+                        ($d3d10 as &[Guid], d3d10),
+                    ],
+                    take_ref,
+                    &qi,
+                )
             }
-            $(
-                if iid == IID_ID3D10_DEVICE_CHILD || iid == $d3d10_iid {
-                    let obj = this.cast::<ShaderObject<$VtblTy>>();
-                    // SAFETY: `this` is a valid `ShaderObject`.
-                    unsafe { shader_add_ref::<$VtblTy>(this) };
-                    // SAFETY: `out` is non-null and `d3d10` is an embedded wrapper.
-                    unsafe { *out = (&raw mut (*obj).d3d10).cast::<c_void>() };
-                    return S_OK;
-                }
-            )?
-            if iid == crate::input_layout::IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT {
-                return E_NOINTERFACE;
-            }
-            if crate::com::qi_log(&$iid, &iid) {
-                LOG.warn(&format!("D3D11Shader: Unknown interface query {iid}"));
-            }
-            E_NOINTERFACE
         }
 
         static $vtbl_static: $VtblTy = $VtblTy {
@@ -686,34 +690,42 @@ define_shader_vtbl!(
     ID3D11VertexShaderVtbl,
     vs_qi,
     IID_ID3D11_VERTEX_SHADER,
-    IID_ID3D10_VERTEX_SHADER
+    &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_VERTEX_SHADER]
 );
 define_shader_vtbl!(
     PS_VTBL,
     ID3D11PixelShaderVtbl,
     ps_qi,
     IID_ID3D11_PIXEL_SHADER,
-    IID_ID3D10_PIXEL_SHADER
+    &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_PIXEL_SHADER]
 );
 define_shader_vtbl!(
     GS_VTBL,
     ID3D11GeometryShaderVtbl,
     gs_qi,
     IID_ID3D11_GEOMETRY_SHADER,
-    IID_ID3D10_GEOMETRY_SHADER
+    &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_GEOMETRY_SHADER]
 );
-define_shader_vtbl!(HS_VTBL, ID3D11HullShaderVtbl, hs_qi, IID_ID3D11_HULL_SHADER);
+define_shader_vtbl!(
+    HS_VTBL,
+    ID3D11HullShaderVtbl,
+    hs_qi,
+    IID_ID3D11_HULL_SHADER,
+    &[]
+);
 define_shader_vtbl!(
     DS_VTBL,
     ID3D11DomainShaderVtbl,
     ds_qi,
-    IID_ID3D11_DOMAIN_SHADER
+    IID_ID3D11_DOMAIN_SHADER,
+    &[]
 );
 define_shader_vtbl!(
     CS_VTBL,
     ID3D11ComputeShaderVtbl,
     cs_qi,
-    IID_ID3D11_COMPUTE_SHADER
+    IID_ID3D11_COMPUTE_SHADER,
+    &[]
 );
 
 static DUMMY_D3D10_VTBL: u8 = 0;

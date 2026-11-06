@@ -17,6 +17,7 @@ use dxmt_core::{
 use dxmt_util::wsi;
 use dxmt_util::{
     GammaRamp,
+    com::{Qi, QiMiss, qi_table},
     dxgi_vtbl::{IDXGIAdapterVtbl, IDXGIOutput1Vtbl},
     ext::{IID_IMTL_DXGI_DEVICE, IID_IMTL_DXGI_OUTPUT, IMTLDXGIOutputVtbl},
     private_data::PrivateData,
@@ -1502,16 +1503,17 @@ impl Drop for SwapChain {
     }
 }
 
-fn supports_swapchain_iid(iid: &Guid) -> bool {
-    *iid == IID_IUNKNOWN
-        || *iid == IID_IDXGI_OBJECT
-        || *iid == IID_IDXGI_DEVICE_SUB_OBJECT
-        || *iid == IID_IDXGI_SWAP_CHAIN
-        || *iid == IID_IDXGI_SWAP_CHAIN_1
-        || *iid == IID_IDXGI_SWAP_CHAIN_2
-        || *iid == IID_IDXGI_SWAP_CHAIN_3
-        || *iid == IID_IDXGI_SWAP_CHAIN_4
-}
+/// The IIDs a swap chain answers.
+const SWAPCHAIN_IIDS: [Guid; 8] = [
+    IID_IUNKNOWN,
+    IID_IDXGI_OBJECT,
+    IID_IDXGI_DEVICE_SUB_OBJECT,
+    IID_IDXGI_SWAP_CHAIN,
+    IID_IDXGI_SWAP_CHAIN_1,
+    IID_IDXGI_SWAP_CHAIN_2,
+    IID_IDXGI_SWAP_CHAIN_3,
+    IID_IDXGI_SWAP_CHAIN_4,
+];
 
 fn create_impl(
     factory: *mut c_void,
@@ -1734,27 +1736,21 @@ unsafe extern "system-unwind" fn sc_query_interface(
     riid: *const c_void,
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { *ppv_object = ptr::null_mut() };
-    if riid.is_null() {
-        return E_NOINTERFACE;
-    }
-    // SAFETY: `riid` is non-null and points to a `Guid`.
-    let iid = unsafe { *riid.cast::<Guid>() };
-    if supports_swapchain_iid(&iid) {
+    let take_ref = || {
         // SAFETY: `this` is a live `SwapChain`.
         let _ = unsafe { (*this.cast::<SwapChain>()).refs.add_ref() };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = this };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_IDXGI_SWAP_CHAIN_1, &iid) {
-        crate::LOG.warn(&format!("DXGISwapChain: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
+    };
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_IDXGI_SWAP_CHAIN_1,
+            name: "DXGISwapChain",
+        },
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid.
+    unsafe { qi_table(riid, ppv_object, &[(&SWAPCHAIN_IIDS, this)], take_ref, &qi) }
 }
 
 unsafe extern "system-unwind" fn sc_add_ref(this: *mut c_void) -> u32 {

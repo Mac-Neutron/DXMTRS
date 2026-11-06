@@ -7,8 +7,8 @@ use core::{
 
 use dxmt_util::{
     com::{
-        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IID_IUNKNOWN,
-        S_OK, add_ref, qi_log, release, write_out,
+        ComObject, E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IID_IUNKNOWN, Qi, QiMiss, S_OK, add_ref,
+        qi_table, release, write_out,
     },
     private_data::PrivateData,
 };
@@ -89,32 +89,36 @@ unsafe extern "system-unwind" fn query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` is non-null.
-    unsafe {
-        write_out(out, ptr::null_mut());
-    }
-    // SAFETY: `riid` is a `GUID` pointer passed by the COM caller.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    // SAFETY: `this` is a valid `ClassLinkage` pointer.
+    let obj = unsafe { &*this.cast::<ClassLinkage>() };
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &LOG,
+        miss: QiMiss::OnceSplit {
+            object: &IID_ID3D11_CLASS_LINKAGE,
+            name: "D3D11ClassLinkage::QueryInterface",
+        },
     };
-    if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D11_CLASS_LINKAGE {
-        // SAFETY: `this` is a valid `ClassLinkage` pointer.
-        let obj = unsafe { &*this.cast::<ClassLinkage>() };
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe {
-            write_out(out, this);
-        }
-        return S_OK;
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_CLASS_LINKAGE,
+                ],
+                this,
+            )],
+            || {
+                obj.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if qi_log(&IID_ID3D11_CLASS_LINKAGE, &iid) {
-        LOG.warn("D3D11ClassLinkage::QueryInterface: Unknown interface query");
-        LOG.warn(&format!("{iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn linkage_add_ref(this: *mut c_void) -> u32 {

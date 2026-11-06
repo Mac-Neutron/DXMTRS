@@ -8,7 +8,10 @@ use core::{
 use std::sync::Arc;
 
 use dxmt_core::fence::Fence as CoreFence;
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+};
 use winemetal_sys::{MTLSharedEvent_setWin32EventAtValue, MTLSharedEvent_signalValue, Obj};
 
 use crate::{
@@ -167,8 +170,11 @@ impl Drop for Fence {
     }
 }
 
+/// The IIDs a fence answers.
+const FENCE_IIDS: [Guid; 3] = [IID_IUNKNOWN, IID_ID3D11_DEVICE_CHILD, IID_ID3D11_FENCE];
+
 fn supports_iid(iid: &Guid) -> bool {
-    *iid == IID_IUNKNOWN || *iid == IID_ID3D11_DEVICE_CHILD || *iid == IID_ID3D11_FENCE
+    FENCE_IIDS.contains(iid)
 }
 
 fn create_impl(
@@ -281,27 +287,22 @@ unsafe extern "system-unwind" fn fence_query_interface(
     riid: *const c_void,
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null and writable.
-    unsafe { *ppv_object = ptr::null_mut() };
-    if riid.is_null() {
-        return E_NOINTERFACE;
-    }
-    // SAFETY: `riid` is non-null and points to a `Guid`.
-    let iid = unsafe { *riid.cast::<Guid>() };
-    if supports_iid(&iid) {
+    let take_ref = || {
         // SAFETY: `this` is a live `Fence`.
         let _ = unsafe { (*this.cast::<Fence>()).refs.add_ref() };
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = this };
-        return S_OK;
-    }
-    if crate::com::qi_log(&crate::abi::IID_ID3D11_QUERY, &iid) {
-        crate::LOG.warn(&format!("D3D11Fence: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
+    };
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        // The latch is the query's: a fence and a query miss on the same pair log once.
+        miss: QiMiss::Once {
+            object: &crate::abi::IID_ID3D11_QUERY,
+            name: "D3D11Fence",
+        },
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid.
+    unsafe { qi_table(riid, ppv_object, &[(&FENCE_IIDS, this)], take_ref, &qi) }
 }
 
 unsafe extern "system-unwind" fn fence_add_ref(this: *mut c_void) -> u32 {

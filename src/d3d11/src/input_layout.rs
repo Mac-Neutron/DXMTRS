@@ -11,7 +11,10 @@ use airconv_ir::{
     tokens::sb_name,
 };
 use dxmt_core::format::query_dxgi;
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+};
 use winemetal_wire::WMT_ATTRIBUTE_FORMAT_INVALID;
 
 use crate::{
@@ -25,10 +28,7 @@ use crate::{
             ID3D11InputLayoutVtbl,
         },
     },
-    com::{
-        E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Guid, Hresult, Managed,
-        S_FALSE, S_OK, add_ref,
-    },
+    com::{E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, Guid, Hresult, Managed, S_FALSE, S_OK, add_ref},
     device::Device,
     shader::{
         IID_IMTL_D3D11_SHADER,
@@ -515,40 +515,44 @@ unsafe extern "system-unwind" fn il_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
+    let obj = this.cast::<InputLayoutObject>();
+    // SAFETY: `this` is a valid `InputLayoutObject`; only the field's address is taken.
+    let d3d10 = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+    let take_ref = || {
+        // SAFETY: `this` is a valid `InputLayoutObject`.
+        unsafe { il_add_ref(this) };
     };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_INPUT_LAYOUT
-        || iid == IID_IMTL_D3D11_INPUT_LAYOUT
-    {
-        // SAFETY: `this` is a valid `InputLayoutObject`.
-        unsafe { il_add_ref(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &LOG,
+        // The name is the C++'s, typo included.
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_INPUT_LAYOUT,
+            name: "D3D311InputLayout",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D11_DEVICE_CHILD,
+                        IID_ID3D11_INPUT_LAYOUT,
+                        IID_IMTL_D3D11_INPUT_LAYOUT,
+                    ],
+                    this,
+                ),
+                (&[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_INPUT_LAYOUT], d3d10),
+            ],
+            take_ref,
+            &qi,
+        )
     }
-    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_INPUT_LAYOUT {
-        // SAFETY: `this` is a valid `InputLayoutObject`.
-        unsafe { il_add_ref(this) };
-        let obj = this.cast::<InputLayoutObject>();
-        // SAFETY: `obj` is a valid `InputLayoutObject`.
-        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_INPUT_LAYOUT, &iid) {
-        log_warn(&format!("D3D311InputLayout: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn il_add_ref(this: *mut c_void) -> u32 {
@@ -721,33 +725,38 @@ unsafe extern "system-unwind" fn so_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_GEOMETRY_SHADER
-        || iid == IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT
-        || iid == IID_IMTL_D3D11_SHADER
-    {
+    let take_ref = || {
         // SAFETY: `this` is a valid `StreamOutputLayoutObject`.
         unsafe { so_add_ref(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    };
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &LOG,
+        miss: QiMiss::Once {
+            object: &IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT,
+            name: "IMTLD3D11StreamOutputLayout",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_GEOMETRY_SHADER,
+                    IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT,
+                    IID_IMTL_D3D11_SHADER,
+                ],
+                this,
+            )],
+            take_ref,
+            &qi,
+        )
     }
-    if crate::com::qi_log(&IID_IMTL_D3D11_STREAM_OUTPUT_LAYOUT, &iid) {
-        log_warn(&format!(
-            "IMTLD3D11StreamOutputLayout: Unknown interface query {iid}"
-        ));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn so_add_ref(this: *mut c_void) -> u32 {

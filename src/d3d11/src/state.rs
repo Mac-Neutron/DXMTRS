@@ -10,7 +10,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 use dxmt_core::{
     library::depth_stencil_state as create_metal_depth_stencil, sampler::Sampler as CoreSampler,
 };
-use dxmt_util::sync::lock;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    sync::lock,
+};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     Obj,
@@ -38,7 +41,7 @@ use crate::{
             ID3D11SamplerStateVtbl,
         },
     },
-    com::{E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, S_FALSE, S_OK, add_ref},
+    com::{E_INVALIDARG, Guid, Hresult, S_FALSE, S_OK, add_ref},
     device::Device,
 };
 
@@ -942,48 +945,75 @@ unsafe extern "system-unwind" fn state_set_private_data_interface<V: 'static, T>
     unsafe { pd.set_interface(g, iface.cast_mut()) }
 }
 
+/// `QueryInterface` of a cached state object.
+///
+/// Its D3D11 interfaces answer `this`, its D3D10 ones the embedded wrapper; `object` and `name`
+/// are the miss line's.
+///
+/// # Safety
+///
+/// `this` is a live `DeviceChildStateObject<V, T>`; `riid` and `out` are the application's, null or
+/// valid.
+unsafe fn state_query_interface<V: 'static, T>(
+    this: *mut c_void,
+    riid: *const c_void,
+    out: *mut *mut c_void,
+    d3d11: &[Guid],
+    d3d10: &[Guid],
+    object: &Guid,
+    name: &str,
+) -> i32 {
+    let obj = this.cast::<DeviceChildStateObject<V, T>>();
+    // SAFETY: `this` is a live state object; only the field's address is taken.
+    let d3d10_iface = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
+    let take_ref = || {
+        // SAFETY: `this` is a live state object.
+        unsafe { state_add_ref::<V, T>(this) };
+    };
+    let qi = Qi {
+        null_riid: E_INVALIDARG,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once { object, name },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid; `this` is live.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(d3d11, this), (d3d10, d3d10_iface)],
+            take_ref,
+            &qi,
+        )
+    }
+}
+
 unsafe extern "system-unwind" fn blend_qi(
     this: *mut c_void,
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
+    // SAFETY: `this` is a live `DeviceChildStateObject`; `riid` and `out` are the application's.
+    unsafe {
+        state_query_interface::<ID3D11BlendState1Vtbl, BlendState>(
+            this,
+            riid,
+            out,
+            &[
+                IID_IUNKNOWN,
+                IID_ID3D11_DEVICE_CHILD,
+                IID_ID3D11_BLEND_STATE,
+                IID_ID3D11_BLEND_STATE_1,
+            ],
+            &[
+                IID_ID3D10_DEVICE_CHILD,
+                IID_ID3D10_BLEND_STATE,
+                IID_ID3D10_BLEND_STATE_1,
+            ],
+            &IID_ID3D11_BLEND_STATE,
+            "D3D11BlendState",
+        )
     }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_BLEND_STATE
-        || iid == IID_ID3D11_BLEND_STATE_1
-    {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11BlendState1Vtbl, BlendState>(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
-    }
-    if iid == IID_ID3D10_DEVICE_CHILD
-        || iid == IID_ID3D10_BLEND_STATE
-        || iid == IID_ID3D10_BLEND_STATE_1
-    {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11BlendState1Vtbl, BlendState>(this) };
-        let obj = this.cast::<DeviceChildStateObject<ID3D11BlendState1Vtbl, BlendState>>();
-        // SAFETY: `obj` is valid.
-        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_BLEND_STATE, &iid) {
-        crate::LOG.warn(&format!("D3D11BlendState: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn blend_get_desc(this: *mut c_void, desc: *mut c_void) {
@@ -1023,44 +1053,24 @@ unsafe extern "system-unwind" fn rasterizer_qi(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
+    // SAFETY: `this` is a live `DeviceChildStateObject`; `riid` and `out` are the application's.
+    unsafe {
+        state_query_interface::<ID3D11RasterizerState2Vtbl, RasterizerState>(
+            this,
+            riid,
+            out,
+            &[
+                IID_IUNKNOWN,
+                IID_ID3D11_DEVICE_CHILD,
+                IID_ID3D11_RASTERIZER_STATE,
+                IID_ID3D11_RASTERIZER_STATE_1,
+                IID_ID3D11_RASTERIZER_STATE_2,
+            ],
+            &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_RASTERIZER_STATE],
+            &IID_ID3D11_RASTERIZER_STATE,
+            "D3D11RasterizerState",
+        )
     }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_RASTERIZER_STATE
-        || iid == IID_ID3D11_RASTERIZER_STATE_1
-        || iid == IID_ID3D11_RASTERIZER_STATE_2
-    {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11RasterizerState2Vtbl, RasterizerState>(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
-    }
-    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_RASTERIZER_STATE {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11RasterizerState2Vtbl, RasterizerState>(this) };
-        let obj =
-            this.cast::<DeviceChildStateObject<ID3D11RasterizerState2Vtbl, RasterizerState>>();
-        // SAFETY: `obj` is valid.
-        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_RASTERIZER_STATE, &iid) {
-        crate::LOG.warn(&format!(
-            "D3D11RasterizerState: Unknown interface query {iid}"
-        ));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn rasterizer_get_desc(this: *mut c_void, desc: *mut c_void) {
@@ -1143,42 +1153,22 @@ unsafe extern "system-unwind" fn depth_stencil_qi(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
+    // SAFETY: `this` is a live `DeviceChildStateObject`; `riid` and `out` are the application's.
+    unsafe {
+        state_query_interface::<ID3D11DepthStencilStateVtbl, DepthStencilState>(
+            this,
+            riid,
+            out,
+            &[
+                IID_IUNKNOWN,
+                IID_ID3D11_DEVICE_CHILD,
+                IID_ID3D11_DEPTH_STENCIL_STATE,
+            ],
+            &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_DEPTH_STENCIL_STATE],
+            &IID_ID3D11_DEPTH_STENCIL_STATE,
+            "D3D11DepthStencilState",
+        )
     }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_DEPTH_STENCIL_STATE
-    {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11DepthStencilStateVtbl, DepthStencilState>(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
-    }
-    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_DEPTH_STENCIL_STATE {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11DepthStencilStateVtbl, DepthStencilState>(this) };
-        let obj =
-            this.cast::<DeviceChildStateObject<ID3D11DepthStencilStateVtbl, DepthStencilState>>();
-        // SAFETY: `obj` is valid.
-        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_DEPTH_STENCIL_STATE, &iid) {
-        crate::LOG.warn(&format!(
-            "D3D11DepthStencilState: Unknown interface query {iid}"
-        ));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn depth_stencil_get_desc(this: *mut c_void, desc: *mut c_void) {
@@ -1210,36 +1200,22 @@ unsafe extern "system-unwind" fn sampler_qi(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
+    // SAFETY: `this` is a live `DeviceChildStateObject`; `riid` and `out` are the application's.
+    unsafe {
+        state_query_interface::<ID3D11SamplerStateVtbl, SamplerState>(
+            this,
+            riid,
+            out,
+            &[
+                IID_IUNKNOWN,
+                IID_ID3D11_DEVICE_CHILD,
+                IID_ID3D11_SAMPLER_STATE,
+            ],
+            &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_SAMPLER_STATE],
+            &IID_ID3D11_SAMPLER_STATE,
+            "D3D11SamplerState",
+        )
     }
-    // SAFETY: `out` is non-null.
-    unsafe { *out = ptr::null_mut() };
-    // SAFETY: reads `riid`.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_INVALIDARG;
-    };
-    if iid == IID_IUNKNOWN || iid == IID_ID3D11_DEVICE_CHILD || iid == IID_ID3D11_SAMPLER_STATE {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11SamplerStateVtbl, SamplerState>(this) };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
-    }
-    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_SAMPLER_STATE {
-        // SAFETY: `this` is a valid `DeviceChildStateObject`.
-        unsafe { state_add_ref::<ID3D11SamplerStateVtbl, SamplerState>(this) };
-        let obj = this.cast::<DeviceChildStateObject<ID3D11SamplerStateVtbl, SamplerState>>();
-        // SAFETY: `obj` is valid.
-        let d3d10_ptr = unsafe { (&raw mut (*obj).d3d10).cast::<c_void>() };
-        // SAFETY: `out` is non-null.
-        unsafe { *out = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_SAMPLER_STATE, &iid) {
-        crate::LOG.warn(&format!("D3D11SamplerState: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn sampler_get_desc(this: *mut c_void, desc: *mut c_void) {

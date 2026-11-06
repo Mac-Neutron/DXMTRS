@@ -5,7 +5,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use dxmt_core::query::{TimestampQuery, VisibilityQuery};
 pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
-use dxmt_util::{private_data::PrivateData, sync::lock};
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+    sync::lock,
+};
 
 use crate::{
     abi::{
@@ -18,8 +22,8 @@ use crate::{
         vtbl::{ID3D10QueryVtbl, ID3D11Query1Vtbl},
     },
     com::{
-        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, Guid, Hresult, IID_IUNKNOWN,
-        S_FALSE, S_OK,
+        ComObject, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Guid, Hresult, IID_IUNKNOWN, S_FALSE,
+        S_OK,
     },
     device::Device,
 };
@@ -799,41 +803,43 @@ unsafe extern "system-unwind" fn query_query_interface(
     riid: *const c_void,
     ppv_object: *mut *mut c_void,
 ) -> Hresult {
-    if ppv_object.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `ppv_object` is non-null.
-    unsafe { *ppv_object = ptr::null_mut() };
-    if riid.is_null() {
-        return E_NOINTERFACE;
-    }
-    // SAFETY: `riid` is non-null and points to a `Guid`.
-    let iid = unsafe { *riid.cast::<Guid>() };
     // SAFETY: `this` is a live `Query`.
     let q = unsafe { &mut *this.cast::<Query>() };
-    let _ = q.is_predicate;
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_QUERY
-        || iid == IID_ID3D11_QUERY_1
-    {
-        let _ = q.refs.add_ref();
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::OnceSplit {
+            object: &IID_ID3D11_QUERY,
+            name: "D3D11Query::QueryInterface",
+        },
+    };
+    // SAFETY: the application's `riid` and `ppv_object`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            ppv_object,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D11_DEVICE_CHILD,
+                        IID_ID3D11_QUERY,
+                        IID_ID3D11_QUERY_1,
+                    ],
+                    this,
+                ),
+                (
+                    &[IID_ID3D10_DEVICE_CHILD, IID_ID3D10_QUERY],
+                    (&raw mut q.d3d10).cast::<c_void>(),
+                ),
+            ],
+            || {
+                let _ = q.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if iid == IID_ID3D10_DEVICE_CHILD || iid == IID_ID3D10_QUERY {
-        let _ = q.refs.add_ref();
-        let d3d10_ptr = (&raw mut q.d3d10).cast::<c_void>();
-        // SAFETY: `ppv_object` is non-null.
-        unsafe { *ppv_object = d3d10_ptr };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_QUERY, &iid) {
-        crate::LOG.warn("D3D11Query::QueryInterface: Unknown interface query");
-        crate::LOG.warn(&format!("{iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn query_add_ref(this: *mut c_void) -> u32 {

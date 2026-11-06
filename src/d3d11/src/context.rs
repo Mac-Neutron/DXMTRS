@@ -7,7 +7,10 @@ use core::ffi::c_void;
 use std::sync::Arc;
 
 use dxmt_core::{dynamic::DynamicBuffer, encoder::Encoder, resource::BufferAllocation};
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+};
 
 use crate::{
     abi::{
@@ -20,10 +23,7 @@ use crate::{
         },
         vtbl::ID3DUserDefinedAnnotationVtbl,
     },
-    com::{
-        E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, Managed, S_OK,
-        iface_of, qi_log,
-    },
+    com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, IID_IUNKNOWN, Managed, iface_of},
     state::Defaults,
 };
 
@@ -122,69 +122,68 @@ impl<M: Mode> Context<M> {
         riid: *const c_void,
         out: *mut *mut c_void,
     ) -> Hresult {
-        if out.is_null() {
-            return E_POINTER;
-        }
-        // SAFETY: `out` was verified non-null.
+        let (context, ext, annotation) = (
+            iface_of(&self.vtbl),
+            iface_of(&self.ext_vtbl),
+            iface_of(&self.annotation_vtbl),
+        );
+        // `IMTLD3D11DeviceContextExt2` is not offered on Windows.
+        let ext_iids: &[Guid] = if cfg!(not(target_os = "windows")) {
+            &[
+                IID_D3D11_CONTEXT_EXT,
+                IID_D3D11_CONTEXT_EXT1,
+                IID_D3D11_CONTEXT_EXT2,
+            ]
+        } else {
+            &[IID_D3D11_CONTEXT_EXT, IID_D3D11_CONTEXT_EXT1]
+        };
+        // Only the immediate context is multithread-protected.
+        let (multithread_iids, multithread): (&[Guid], *mut c_void) = match self.as_immediate_mut()
+        {
+            Some(imm) => (
+                &[crate::abi::IID_ID3D11_MULTITHREAD],
+                imm.mode.multithread.as_iface(),
+            ),
+            None => (&[], core::ptr::null_mut()),
+        };
+        let qi = Qi {
+            null_riid: E_NOINTERFACE,
+            silent: &[],
+            log: &crate::LOG,
+            miss: QiMiss::Once {
+                object: &IID_ID3D11_DEVICE_CONTEXT_4,
+                name: "D3D11DeviceContext",
+            },
+        };
+        // SAFETY: the application's `riid` and `out`, null or valid.
         unsafe {
-            out.write_unaligned(core::ptr::null_mut());
+            qi_table(
+                riid,
+                out,
+                &[
+                    (
+                        &[
+                            IID_IUNKNOWN,
+                            IID_ID3D11_DEVICE_CHILD,
+                            IID_ID3D11_DEVICE_CONTEXT,
+                            IID_ID3D11_DEVICE_CONTEXT_1,
+                            IID_ID3D11_DEVICE_CONTEXT_2,
+                            IID_ID3D11_DEVICE_CONTEXT_3,
+                            IID_ID3D11_DEVICE_CONTEXT_4,
+                            IID_IMTL_D3D11_DEVICE_CONTEXT,
+                        ],
+                        context,
+                    ),
+                    (ext_iids, ext),
+                    (&[IID_ID3D_USER_DEFINED_ANNOTATION], annotation),
+                    (multithread_iids, multithread),
+                ],
+                || {
+                    self.add_ref();
+                },
+                &qi,
+            )
         }
-        if riid.is_null() {
-            return E_NOINTERFACE;
-        }
-        // SAFETY: `riid` was verified non-null.
-        let iid = unsafe { riid.cast::<Guid>().read_unaligned() };
-        if iid == IID_IUNKNOWN
-            || iid == IID_ID3D11_DEVICE_CHILD
-            || iid == IID_ID3D11_DEVICE_CONTEXT
-            || iid == IID_ID3D11_DEVICE_CONTEXT_1
-            || iid == IID_ID3D11_DEVICE_CONTEXT_2
-            || iid == IID_ID3D11_DEVICE_CONTEXT_3
-            || iid == IID_ID3D11_DEVICE_CONTEXT_4
-            || iid == IID_IMTL_D3D11_DEVICE_CONTEXT
-        {
-            self.add_ref();
-            // SAFETY: `out` was verified non-null.
-            unsafe {
-                out.write_unaligned(iface_of(&self.vtbl));
-            }
-            return S_OK;
-        }
-        if iid == IID_D3D11_CONTEXT_EXT
-            || iid == IID_D3D11_CONTEXT_EXT1
-            || (cfg!(not(target_os = "windows")) && iid == IID_D3D11_CONTEXT_EXT2)
-        {
-            self.add_ref();
-            // SAFETY: `out` was verified non-null.
-            unsafe {
-                out.write_unaligned(iface_of(&self.ext_vtbl));
-            }
-            return S_OK;
-        }
-        if iid == IID_ID3D_USER_DEFINED_ANNOTATION {
-            self.add_ref();
-            // SAFETY: `out` was verified non-null.
-            unsafe {
-                out.write_unaligned(iface_of(&self.annotation_vtbl));
-            }
-            return S_OK;
-        }
-        if iid == crate::abi::IID_ID3D11_MULTITHREAD
-            && let Some(imm) = self.as_immediate_mut()
-        {
-            imm.add_ref();
-            // SAFETY: `out` was verified non-null.
-            unsafe {
-                out.write_unaligned(imm.mode.multithread.as_iface());
-            }
-            return S_OK;
-        }
-        if qi_log(&IID_ID3D11_DEVICE_CONTEXT_4, &iid) {
-            crate::LOG.warn(&format!(
-                "D3D11DeviceContext: Unknown interface query {iid}"
-            ));
-        }
-        E_NOINTERFACE
     }
 
     /// `IUnknown::AddRef`.

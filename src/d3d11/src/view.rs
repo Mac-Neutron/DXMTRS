@@ -8,7 +8,10 @@ use dxmt_core::{
     encoder::BufferSlice,
     resource::{Buffer, BufferViewKey, RenamableTexturePool, Texture, TextureViewKey},
 };
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::{Qi, QiMiss, qi_table},
+    private_data::PrivateData,
+};
 
 use crate::{
     abi::{
@@ -29,10 +32,7 @@ use crate::{
             ID3D11UnorderedAccessView1Vtbl, IUnknownVtbl,
         },
     },
-    com::{
-        ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Guid, Hresult, S_OK,
-        add_ref, vtbl,
-    },
+    com::{ComObjectWithInitialRef, E_INVALIDARG, E_NOINTERFACE, Guid, Hresult, add_ref, vtbl},
     d3d10,
     device::Device,
     resource::{self, Resource, ResourceDesc, ResourceKind},
@@ -412,42 +412,49 @@ unsafe extern "system-unwind" fn srv_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` addresses a GUID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     // SAFETY: `this` is a live `SrvObject`.
     let obj = unsafe { &*this.cast::<SrvObject>() };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_VIEW
-        || iid == IID_ID3D11_SHADER_RESOURCE_VIEW
-        || iid == IID_ID3D11_SHADER_RESOURCE_VIEW_1
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_SHADER_RESOURCE_VIEW,
+            name: "D3D11View",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D11_DEVICE_CHILD,
+                        IID_ID3D11_VIEW,
+                        IID_ID3D11_SHADER_RESOURCE_VIEW,
+                        IID_ID3D11_SHADER_RESOURCE_VIEW_1,
+                    ],
+                    this,
+                ),
+                (
+                    &[
+                        IID_ID3D10_DEVICE_CHILD,
+                        IID_ID3D10_VIEW,
+                        IID_ID3D10_SHADER_RESOURCE_VIEW,
+                        IID_ID3D10_SHADER_RESOURCE_VIEW_1,
+                    ],
+                    core::ptr::from_ref(&obj.d3d10).cast_mut().cast(),
+                ),
+            ],
+            || {
+                obj.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if iid == IID_ID3D10_DEVICE_CHILD
-        || iid == IID_ID3D10_VIEW
-        || iid == IID_ID3D10_SHADER_RESOURCE_VIEW
-        || iid == IID_ID3D10_SHADER_RESOURCE_VIEW_1
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_SHADER_RESOURCE_VIEW, &iid) {
-        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn srv_add_ref(this: *mut c_void) -> u32 {
@@ -574,41 +581,48 @@ unsafe extern "system-unwind" fn rtv_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` addresses a GUID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     // SAFETY: `this` is a live `RtvObject`.
     let obj = unsafe { &*this.cast::<RtvObject>() };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_VIEW
-        || iid == IID_ID3D11_RENDER_TARGET_VIEW
-        || iid == IID_ID3D11_RENDER_TARGET_VIEW_1
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_RENDER_TARGET_VIEW,
+            name: "D3D11View",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D11_DEVICE_CHILD,
+                        IID_ID3D11_VIEW,
+                        IID_ID3D11_RENDER_TARGET_VIEW,
+                        IID_ID3D11_RENDER_TARGET_VIEW_1,
+                    ],
+                    this,
+                ),
+                (
+                    &[
+                        IID_ID3D10_DEVICE_CHILD,
+                        IID_ID3D10_VIEW,
+                        IID_ID3D10_RENDER_TARGET_VIEW,
+                    ],
+                    core::ptr::from_ref(&obj.d3d10).cast_mut().cast(),
+                ),
+            ],
+            || {
+                obj.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if iid == IID_ID3D10_DEVICE_CHILD
-        || iid == IID_ID3D10_VIEW
-        || iid == IID_ID3D10_RENDER_TARGET_VIEW
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_RENDER_TARGET_VIEW, &iid) {
-        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn rtv_add_ref(this: *mut c_void) -> u32 {
@@ -735,40 +749,47 @@ unsafe extern "system-unwind" fn dsv_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` addresses a GUID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     // SAFETY: `this` is a live `DsvObject`.
     let obj = unsafe { &*this.cast::<DsvObject>() };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_VIEW
-        || iid == IID_ID3D11_DEPTH_STENCIL_VIEW
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_DEPTH_STENCIL_VIEW,
+            name: "D3D11View",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[
+                (
+                    &[
+                        IID_IUNKNOWN,
+                        IID_ID3D11_DEVICE_CHILD,
+                        IID_ID3D11_VIEW,
+                        IID_ID3D11_DEPTH_STENCIL_VIEW,
+                    ],
+                    this,
+                ),
+                (
+                    &[
+                        IID_ID3D10_DEVICE_CHILD,
+                        IID_ID3D10_VIEW,
+                        IID_ID3D10_DEPTH_STENCIL_VIEW,
+                    ],
+                    core::ptr::from_ref(&obj.d3d10).cast_mut().cast(),
+                ),
+            ],
+            || {
+                obj.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if iid == IID_ID3D10_DEVICE_CHILD
-        || iid == IID_ID3D10_VIEW
-        || iid == IID_ID3D10_DEPTH_STENCIL_VIEW
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = core::ptr::from_ref(&obj.d3d10).cast_mut().cast() };
-        return S_OK;
-    }
-    if crate::com::qi_log(&IID_ID3D11_DEPTH_STENCIL_VIEW, &iid) {
-        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn dsv_add_ref(this: *mut c_void) -> u32 {
@@ -883,32 +904,38 @@ unsafe extern "system-unwind" fn uav_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    // SAFETY: `out` was checked non-null.
-    unsafe { *out = core::ptr::null_mut() };
-    // SAFETY: `riid` addresses a GUID.
-    let Some(iid) = (unsafe { Guid::read(riid.cast::<Guid>()) }) else {
-        return E_NOINTERFACE;
-    };
     // SAFETY: `this` is a live `UavObject`.
     let obj = unsafe { &*this.cast::<UavObject>() };
-    if iid == IID_IUNKNOWN
-        || iid == IID_ID3D11_DEVICE_CHILD
-        || iid == IID_ID3D11_VIEW
-        || iid == IID_ID3D11_UNORDERED_ACCESS_VIEW
-        || iid == IID_ID3D11_UNORDERED_ACCESS_VIEW_1
-    {
-        obj.refs.add_ref();
-        // SAFETY: `out` is non-null.
-        unsafe { *out = this };
-        return S_OK;
+    let qi = Qi {
+        null_riid: E_NOINTERFACE,
+        silent: &[],
+        log: &crate::LOG,
+        miss: QiMiss::Once {
+            object: &IID_ID3D11_UNORDERED_ACCESS_VIEW,
+            name: "D3D11View",
+        },
+    };
+    // SAFETY: the application's `riid` and `out`, null or valid.
+    unsafe {
+        qi_table(
+            riid,
+            out,
+            &[(
+                &[
+                    IID_IUNKNOWN,
+                    IID_ID3D11_DEVICE_CHILD,
+                    IID_ID3D11_VIEW,
+                    IID_ID3D11_UNORDERED_ACCESS_VIEW,
+                    IID_ID3D11_UNORDERED_ACCESS_VIEW_1,
+                ],
+                this,
+            )],
+            || {
+                obj.refs.add_ref();
+            },
+            &qi,
+        )
     }
-    if crate::com::qi_log(&IID_ID3D11_UNORDERED_ACCESS_VIEW, &iid) {
-        crate::LOG.warn(&format!("D3D11View: Unknown interface query {iid}"));
-    }
-    E_NOINTERFACE
 }
 
 unsafe extern "system-unwind" fn uav_add_ref(this: *mut c_void) -> u32 {
