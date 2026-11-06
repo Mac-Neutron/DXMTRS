@@ -253,6 +253,9 @@ impl Default for EncodeSnapshot {
 /// Per-context encoding session holding the command arena, active pass, and state snapshot.
 ///
 /// A field of its [`Context`], so it lives and dies with it and is reached without a lookup.
+/// Only a context without a live device (the unit tests') records passes and commands here; a
+/// live context keeps the snapshot and argument-buffer counters, and its commands go to the
+/// queue's chunk or the deferred command list.
 pub struct EncodeSession {
     commands: Commands,
     active_pass: Option<ActivePass>,
@@ -410,7 +413,6 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            self.encode.append_record(cmd);
             M::emit_st(self, encode_fn);
         } else {
             self.encode.append_record(cmd);
@@ -425,7 +427,6 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            self.encode.append_record(cmd);
             M::emit_op(self, encode_fn);
         } else {
             self.encode.append_record(cmd);
@@ -440,7 +441,6 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            self.encode.append_record(cmd);
             M::emit_st(self, encode_fn);
         } else {
             self.encode.append_record(cmd);
@@ -455,7 +455,6 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            self.encode.append_record(cmd);
             M::emit_op(self, encode_fn);
         } else {
             self.encode.append_record(cmd);
@@ -507,12 +506,11 @@ impl<M: Mode> Context<M> {
         let live = self.is_live();
         match self.cmdbuf_state {
             CommandBufferState::RenderEncoderActive => {
-                self.encode.end_pass();
-                if !live {
-                    self.encode.commands.emit(Encoder::end_pass);
-                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
+                } else {
+                    self.encode.end_pass();
+                    self.encode.commands.emit(Encoder::end_pass);
                 }
                 self.cmdbuf_state = if live {
                     CommandBufferState::Idle
@@ -521,12 +519,11 @@ impl<M: Mode> Context<M> {
                 };
             }
             CommandBufferState::ComputeEncoderActive => {
-                self.encode.end_pass();
-                if !live {
-                    self.encode.commands.emit(Encoder::end_pass);
-                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
+                } else {
+                    self.encode.end_pass();
+                    self.encode.commands.emit(Encoder::end_pass);
                 }
                 self.cmdbuf_state = if live {
                     CommandBufferState::Idle
@@ -536,18 +533,16 @@ impl<M: Mode> Context<M> {
             }
             CommandBufferState::RenderPipelineReady | CommandBufferState::ComputePipelineReady => {
                 if live {
-                    self.encode.end_pass();
                     M::emit_st(self, Encoder::end_pass);
                     self.cmdbuf_state = CommandBufferState::Idle;
                 }
             }
             CommandBufferState::BlitEncoderActive => {
-                self.encode.end_pass();
-                if !live {
-                    self.encode.commands.emit(Encoder::end_pass);
-                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
+                } else {
+                    self.encode.end_pass();
+                    self.encode.commands.emit(Encoder::end_pass);
                 }
                 self.cmdbuf_state = CommandBufferState::Idle;
             }
@@ -663,7 +658,6 @@ impl<M: Mode> Context<M> {
             let argbuf_size = Arc::new(AtomicU64::new(0));
             let argbuf_clone = Arc::clone(&argbuf_size);
             self.encode.snap.render_argbuf_size = Some(argbuf_size);
-            self.encode.begin_pass(RecordedPassKind::Render);
             let rtv_count = u8::try_from(num_rtvs).unwrap_or(0);
             M::emit_st(self, move |enc| {
                 let (dsv_planar, dsv_ro) = dsv_attachment
@@ -787,7 +781,6 @@ impl<M: Mode> Context<M> {
             let argbuf_size = Arc::new(AtomicU64::new(0));
             let argbuf_clone = Arc::clone(&argbuf_size);
             self.encode.snap.compute_argbuf_size = Some(argbuf_size);
-            self.encode.begin_pass(RecordedPassKind::Compute);
             M::emit_st(self, move |enc| {
                 let sz = usize::try_from(argbuf_clone.load(Ordering::Relaxed)).unwrap_or(0);
                 let argbuf = enc.allocate_argument_buffer(sz);
@@ -851,13 +844,11 @@ impl<M: Mode> Context<M> {
             }
             CommandBufferState::Idle => {}
         }
-        let live = self.is_live();
-        self.encode.begin_pass(RecordedPassKind::Blit);
-        if !live {
-            self.encode.commands.emit(Encoder::start_blit_pass);
-        }
-        if live {
+        if self.is_live() {
             M::emit_st(self, Encoder::start_blit_pass);
+        } else {
+            self.encode.begin_pass(RecordedPassKind::Blit);
+            self.encode.commands.emit(Encoder::start_blit_pass);
         }
         self.cmdbuf_state = CommandBufferState::BlitEncoderActive;
     }
