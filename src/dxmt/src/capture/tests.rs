@@ -1,4 +1,4 @@
-use super::{CaptureState, NextAction, enabled_by};
+use super::{CaptureState, NextAction, capture_frame, enabled_by};
 use crate::log::take_captured;
 
 #[test]
@@ -72,4 +72,16 @@ fn enabled_as_cpp() {
     // The native dylibs have no program name, which an unset target also reads as.
     assert!(enabled_by(Some("1"), "", None));
     assert!(enabled_by(Some("1"), "", Some("")));
+}
+
+#[test]
+fn capture_frame_parse_is_strict() {
+    assert_eq!(capture_frame(None), None);
+    assert_eq!(capture_frame(Some("5")), Some(5));
+    assert_eq!(capture_frame(Some(" 12\n")), Some(12));
+    // Frame 0 is never captured, and a number must be the whole value.
+    assert_eq!(capture_frame(Some("0")), None);
+    assert_eq!(capture_frame(Some("5x")), None);
+    assert_eq!(capture_frame(Some("")), None);
+    assert_eq!(capture_frame(Some("-3")), None);
 }

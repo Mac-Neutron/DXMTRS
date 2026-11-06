@@ -11,6 +11,8 @@ use winemetal_sys::{
 
 use crate::queue::{Queue, QueueConfig};
 
+pub mod adapter;
+
 /// The core device (`dxmt::Device`).
 pub struct Device {
     mtl: Obj,

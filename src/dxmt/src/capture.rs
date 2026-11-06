@@ -134,6 +134,26 @@ impl CaptureState {
     }
 }
 
+/// The capture the environment asks for, with the frame `DXMT_CAPTURE_FRAME` names scheduled.
+///
+/// [`CaptureState::from_env`], scheduled as the core's encode thread reads the variable.
+/// The frame is the variable's whole value, spaces around it aside, and above 0: anything else
+/// schedules nothing.
+#[must_use]
+pub fn schedule_from_env() -> CaptureState {
+    let mut capture = CaptureState::from_env();
+    if let Some(frame) = capture_frame(std::env::var("DXMT_CAPTURE_FRAME").ok().as_deref()) {
+        capture.schedule(frame);
+    }
+    capture
+}
+
+/// The frame `DXMT_CAPTURE_FRAME`'s `value` names: a whole number above 0, trimmed, or none.
+#[must_use]
+fn capture_frame(value: Option<&str>) -> Option<u64> {
+    value?.trim().parse().ok().filter(|frame| *frame > 0)
+}
+
 /// Whether the capture is enabled: `mtl_capture_enabled` is `1` and `exe` is `target`.
 ///
 /// An unset variable reads as the empty string, as the C++'s `getEnvVar` returns it, so a program
