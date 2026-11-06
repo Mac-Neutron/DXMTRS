@@ -252,39 +252,45 @@ impl<M: Mode> Context<M> {
     }
 
     fn resolve_cs_srv_hazard(&mut self, resource: *mut c_void, subset: ResourceSubset) {
-        let cs_idx = ShaderStage::Compute.index();
-        let mut to_unbind = Vec::new();
-        for slot in 0..SRV_SLOTS {
-            if let Some(entry) = self.state.shader_stages[cs_idx].srvs.get(slot)
-                && let Some(srv) = Srv::from_iface(entry.srv.as_ptr())
-                && srv.resource == resource
-                && srv.subset.overlaps(subset)
-            {
-                to_unbind.push(slot);
-            }
-        }
-        for slot in to_unbind {
-            self.state.shader_stages[cs_idx].srvs.unbind(slot);
-            self.emit_unbind_srv(cs_idx, slot);
-        }
+        self.unbind_overlapping_srvs(ShaderStage::Compute.index(), resource, subset);
     }
 
     fn resolve_om_srv_hazard(&mut self, resource: *mut c_void, subset: ResourceSubset) {
         for stage_idx in 0..5 {
-            let mut to_unbind = Vec::new();
-            for slot in 0..SRV_SLOTS {
-                if let Some(entry) = self.state.shader_stages[stage_idx].srvs.get(slot)
-                    && let Some(srv) = Srv::from_iface(entry.srv.as_ptr())
-                    && srv.resource == resource
-                    && srv.subset.overlaps(subset)
-                {
-                    to_unbind.push(slot);
-                }
+            self.unbind_overlapping_srvs(stage_idx, resource, subset);
+        }
+    }
+
+    /// Unbinds the SRVs of stage `stage_idx` that view `subset` of `resource`.
+    ///
+    /// The stage's bound-slot mask is the pre-filter: only bound slots are looked at, not all
+    /// 128. Each candidate is then checked exactly, subresource by subresource, so a view of
+    /// another mip or slice of the same resource stays bound.
+    fn unbind_overlapping_srvs(
+        &mut self,
+        stage_idx: usize,
+        resource: *mut c_void,
+        subset: ResourceSubset,
+    ) {
+        let srvs = &self.state.shader_stages[stage_idx].srvs;
+        let mut candidates = srvs.bound_mask();
+        let mut hits = 0_u128;
+        while candidates != 0 {
+            let bit = candidates.isolate_lowest_one();
+            candidates ^= bit;
+            if let Some(entry) = srvs.get(bit.trailing_zeros() as usize)
+                && let Some(srv) = Srv::from_iface(entry.srv.as_ptr())
+                && srv.resource == resource
+                && srv.subset.overlaps(subset)
+            {
+                hits |= bit;
             }
-            for slot in to_unbind {
-                self.state.shader_stages[stage_idx].srvs.unbind(slot);
-                self.emit_unbind_srv(stage_idx, slot);
-            }
+        }
+        while hits != 0 {
+            let slot = hits.trailing_zeros() as usize;
+            hits &= hits - 1;
+            self.state.shader_stages[stage_idx].srvs.unbind(slot);
+            self.emit_unbind_srv(stage_idx, slot);
         }
     }
 

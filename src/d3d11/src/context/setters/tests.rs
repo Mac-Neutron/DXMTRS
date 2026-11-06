@@ -4,14 +4,23 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use dxmt_core::encoder::BufferSlice;
+
 use crate::{
-    abi::vtbl::IUnknownVtbl,
+    abi::{
+        records::{
+            D3d11ShaderResourceViewDesc1, D3d11ShaderResourceViewDesc1Union, D3d11Tex2dSrv1,
+        },
+        vtbl::IUnknownVtbl,
+    },
     com::{E_NOINTERFACE, Hresult},
     context::{
         CommandBufferState, Context, Immediate,
         state::{ContextState, DirtyFlags, ShaderStage},
     },
     state::Defaults,
+    subresource::ResourceSubset,
+    view::{Srv, SrvObject},
 };
 
 #[repr(C)]
@@ -165,4 +174,70 @@ fn all_six_shader_stages_and_null_blend_factor() {
     assert_eq!(ctx.state.output_merger.blend_factor, [1.0, 1.0, 1.0, 1.0]);
 
     ctx.clear_state();
+}
+
+/// An SRV of `subset` of `resource`, as `CreateShaderResourceView` would build it.
+fn srv_of(resource: *mut c_void, subset: ResourceSubset) -> *mut c_void {
+    let inner = Srv {
+        resource,
+        buffer: None,
+        texture: None,
+        buffer_view: None,
+        texture_view: None,
+        slice: BufferSlice::default(),
+        subset,
+        format: 0,
+    };
+    let desc = D3d11ShaderResourceViewDesc1 {
+        format: 0,
+        view_dimension: 4,
+        u: D3d11ShaderResourceViewDesc1Union {
+            texture2d: D3d11Tex2dSrv1::default(),
+        },
+    };
+    SrvObject::into_raw(inner, ptr::null_mut(), 0, desc)
+}
+
+/// Mip `level` of a one-slice, one-plane texture (the per-subresource bitmask encoding).
+const fn mip(level: u32) -> ResourceSubset {
+    ResourceSubset(0b11 | (1 << (2 + level)))
+}
+
+#[test]
+fn om_bind_unbinds_srvs_of_its_mip_only() {
+    let mut texture = DummyCom::new();
+    let mut other = DummyCom::new();
+    let views = [
+        srv_of(texture.as_ptr(), mip(0)),
+        srv_of(texture.as_ptr(), mip(1)),
+        srv_of(other.as_ptr(), mip(1)),
+    ];
+    let mut ctx = new_ctx();
+    ctx.set_shader_resource(ShaderStage::Pixel, 3, 3, views.as_ptr());
+    ctx.set_shader_resource(ShaderStage::Compute, 0, 3, views.as_ptr());
+    let srvs = |ctx: &Context<Immediate>, stage: ShaderStage| {
+        ctx.state.shader_stages[stage.index()].srvs.bound_mask()
+    };
+
+    // A render target on mip 1 (mip generation's pattern: read mip 0, write mip 1).
+    ctx.resolve_om_srv_hazard(texture.as_ptr(), mip(1));
+    assert_eq!(srvs(&ctx, ShaderStage::Pixel), 0b101 << 3);
+    // The compute stage is not the output merger's.
+    assert_eq!(srvs(&ctx, ShaderStage::Compute), 0b111);
+
+    // A compute UAV on mip 0.
+    ctx.resolve_cs_srv_hazard(texture.as_ptr(), mip(0));
+    assert_eq!(srvs(&ctx, ShaderStage::Compute), 0b110);
+
+    // The whole resource, as a buffer bind does.
+    ctx.resolve_om_srv_hazard(texture.as_ptr(), ResourceSubset::WHOLE);
+    assert_eq!(srvs(&ctx, ShaderStage::Pixel), 0b100 << 3);
+
+    for stage in [ShaderStage::Pixel, ShaderStage::Compute] {
+        ctx.state.shader_stages[stage.index()].srvs.clear();
+    }
+    for view in views {
+        // SAFETY: the creation reference of a live `SrvObject`.
+        unsafe { crate::com::release(view) };
+    }
 }
