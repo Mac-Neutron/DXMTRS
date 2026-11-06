@@ -2,6 +2,7 @@
 
 use core::{ffi::c_void, ptr, slice};
 
+use dxmt_core::device::adapter::{Failure, default_adapter};
 use dxmt_util::{
     com::{
         E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_FALSE, S_OK,
@@ -231,24 +232,22 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
                 "D3D11CreateDevice: Unsupported driver type {driver_type}"
             );
         }
-        let hr_fac = create_default_dxgi_factory(&raw mut dxgi_factory);
-        if hr_fac < 0 || dxgi_factory.is_null() {
-            LOG.err("D3D11CreateDevice: Failed to create a DXGI factory");
-            return hr_fac;
-        }
-        // SAFETY: `dxgi_factory` is a valid `IDXGIFactory1*`.
-        let fac_vtbl = unsafe { *dxgi_factory.cast::<*const IDXGIFactory1Vtbl>() };
-        // SAFETY: `fac_vtbl` is a valid `IDXGIFactory1Vtbl`.
-        let enum_adapters = unsafe { (*fac_vtbl).enum_adapters };
-        // SAFETY: Enumerating adapter 0 from `dxgi_factory`.
-        let hr_adp = unsafe { enum_adapters(dxgi_factory, 0, &raw mut owned_adapter) };
-        if hr_adp < 0 || owned_adapter.is_null() {
-            LOG.err("D3D11CreateDevice: No default adapter available");
-            // SAFETY: Releasing `dxgi_factory`.
-            unsafe {
-                release(dxgi_factory);
+        // SAFETY: `CreateDXGIFactory1` resolves to DXMT's `dxgi.dll` or `dxgi.dylib`.
+        match unsafe { default_adapter() } {
+            Ok((factory, adapter)) => {
+                dxgi_factory = factory;
+                owned_adapter = adapter;
             }
-            return hr_adp;
+            Err(Failure::Factory(hr)) => {
+                LOG.err("D3D11CreateDevice: Failed to create a DXGI factory");
+                return hr;
+            }
+            Err(Failure::NoAdapter(hr)) => {
+                LOG.err("D3D11CreateDevice: No default adapter available");
+                return hr;
+            }
+            // `default_adapter` never asks whether the adapter is DXMT's.
+            Err(Failure::NotDxmt) => return E_INVALIDARG,
         }
         owned_adapter
     } else {
@@ -376,15 +375,6 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
     }
 
     S_OK
-}
-
-fn create_default_dxgi_factory(out_factory: *mut *mut c_void) -> Hresult {
-    unsafe extern "system" {
-        fn CreateDXGIFactory1(riid: *const Guid, out: *mut *mut c_void) -> Hresult;
-    }
-    let iid = IID_IDXGIFACTORY1;
-    // SAFETY: Calling `CreateDXGIFactory1` with `IID_IDXGIFACTORY1`.
-    unsafe { CreateDXGIFactory1(&raw const iid, out_factory) }
 }
 
 /// `D3D11On12CreateDevice`: zeroes out-parameters and returns `E_NOTIMPL` (`d3d11.cpp:219-228`).
