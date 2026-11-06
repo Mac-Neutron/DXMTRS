@@ -1,5 +1,8 @@
 //! COM's `IUnknown`, the two-count `ComObject` of `com_object.hpp`, and `QueryInterface` helpers.
 
+pub mod hresult;
+pub mod iid;
+
 use core::{
     ffi::c_void,
     fmt,

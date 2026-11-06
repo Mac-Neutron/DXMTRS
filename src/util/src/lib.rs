@@ -2,6 +2,7 @@
 
 pub mod com;
 pub mod config;
+pub mod dxgi_consts;
 pub mod dxgi_vtbl;
 pub mod env;
 pub mod ext;

@@ -10,9 +10,28 @@ use core::{
     sync::atomic::{AtomicU64, Ordering, fence},
 };
 use std::{
+    sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
     thread::{self, JoinHandle},
     time::Duration,
 };
+
+/// Locks `mutex`, ignoring poison: a panic elsewhere under the lock leaves the data as it was.
+///
+/// DXMT's DLLs build with `panic = "abort"`, so a mutex is poisoned only in a unit test; the
+/// state it guards is still the right one to continue with.
+pub fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Read-locks `rwlock`, ignoring poison like [`lock`].
+pub fn read<T: ?Sized>(rwlock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    rwlock.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Write-locks `rwlock`, ignoring poison like [`lock`].
+pub fn write<T: ?Sized>(rwlock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    rwlock.write().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// `THREAD_PRIORITY_TIME_CRITICAL`.
 #[cfg(windows)]
