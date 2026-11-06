@@ -2015,10 +2015,11 @@ fn import_shared_texture_from_nt_handle_inner(
     }
     let kmt_device = kmt::device_local_kmt(device);
     let Some(runtime_data) = kmt::open_shared_from_nt_handle(kmt_device, handle) else {
-        crate::LOG.warn(&format!(
+        dxmt_util::warn!(
+            crate::LOG,
             "ImportSharedTextureFromNtHandle: Failed to query resource: {:x}",
             handle.expose_provenance()
-        ));
+        );
         return E_INVALIDARG;
     };
     import_from_runtime_data(device, &runtime_data, riid, out)
@@ -2059,9 +2060,10 @@ fn import_shared_texture_by_name_inner(
             // SAFETY: `name` has `len` valid `u16` units before NUL.
             let slice = unsafe { core::slice::from_raw_parts(name, len) };
             let name_str = String::from_utf16_lossy(slice);
-            crate::LOG.warn(&format!(
+            dxmt_util::warn!(
+                crate::LOG,
                 "ImportSharedTextureByName: Failed to open NT handle from name: {name_str}"
-            ));
+            );
         }
         if !out.is_null() {
             // SAFETY: `out` was checked non-null.

@@ -141,7 +141,7 @@ impl ManagedShader {
             if err != 0 {
                 // SAFETY: `err` was returned by `SM50Initialize`.
                 let msg = unsafe { error_message(err) };
-                LOG.err(&format!("Failed to initialize shader: {msg}"));
+                dxmt_util::err!(LOG, "Failed to initialize shader: {msg}");
                 // SAFETY: `err` is freed once here.
                 unsafe { SM50FreeError(err) };
             }
@@ -234,7 +234,7 @@ impl ManagedShader {
             }
             let path = format!("shader_dump_{hex}.cso");
             let _ = std::fs::write(&path, &self.bytecode);
-            LOG.warn(&format!("shader dumped to ./{path}"));
+            dxmt_util::warn!(LOG, "shader dumped to ./{path}");
         }
     }
 
@@ -340,9 +340,7 @@ impl ManagedShader {
                     );
                     return h;
                 }
-                LOG.err(&format!(
-                    "Failed to create MTLFunction from cache: {func_name}"
-                ));
+                dxmt_util::err!(LOG, "Failed to create MTLFunction from cache: {func_name}");
             } else {
                 LOG.err("Failed to create MTLLibrary from cache");
             }
@@ -437,7 +435,7 @@ impl ManagedShader {
             if sm50_err != 0 {
                 // SAFETY: `sm50_err` was returned by `SM50Compile*`.
                 let msg = unsafe { error_message(sm50_err) };
-                LOG.err(&format!("Failed to compile shader: {msg}"));
+                dxmt_util::err!(LOG, "Failed to compile shader: {msg}");
                 // SAFETY: freed once here.
                 unsafe { SM50FreeError(sm50_err) };
             }
@@ -481,7 +479,7 @@ impl ManagedShader {
         let fn_raw = unsafe { MTLLibrary_newFunction(lib.handle(), chain.func_name_cstr()) };
         // SAFETY: adopts +1 reference from `MTLLibrary_newFunction`.
         let Some(fn_obj) = (unsafe { Obj::adopt(fn_raw) }) else {
-            LOG.err(&format!("Failed to create MTLFunction: {func_name}"));
+            dxmt_util::err!(LOG, "Failed to create MTLFunction: {func_name}");
             self.dump();
             return 0;
         };

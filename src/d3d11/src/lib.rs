@@ -4,7 +4,6 @@
 //! calls while `front-end` is off.
 
 use dxmt_core as _;
-use dxmt_util::log::Logger;
 
 pub mod abi;
 pub mod annotation;
@@ -32,22 +31,7 @@ pub mod surface;
 pub mod swapchain;
 pub mod view;
 
-/// This DLL's log file (`Logger::s_instance("d3d11.log")`).
-pub static LOG: Logger = Logger::new(if cfg!(test) {
-    "no_test_log/d3d11.log"
-} else {
-    "d3d11.log"
-});
-
-/// Native Rust allocations in `d3d11.dylib` and `d3d10core.dylib` use `snmalloc`.
-#[cfg(all(target_os = "macos", not(test)))]
-#[global_allocator]
-static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
-
-/// The `type_info` vtable under its MSVC decorated name (`std::thread::spawn` landing pad).
-#[cfg(windows)]
-#[unsafe(export_name = "??_7type_info@@6B@")]
-pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
+dxmt_util::dxmt_dll!(pub log "d3d11.log", allocator, type_info);
 
 /// The core's log writer (`dxmt_core::log`), forwarding to [`LOG`].
 #[cfg(feature = "front-end")]

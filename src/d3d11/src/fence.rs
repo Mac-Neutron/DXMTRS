@@ -257,10 +257,11 @@ fn open_shared_impl(
     if out.is_null() {
         return E_POINTER;
     }
-    crate::LOG.warn(&format!(
+    dxmt_util::warn!(
+        crate::LOG,
         "OpenSharedFence: Failed to query resource: {:x}",
         handle.addr()
-    ));
+    );
     E_INVALIDARG
 }
 

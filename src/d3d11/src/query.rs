@@ -781,10 +781,11 @@ fn create_query_internal(
         return S_FALSE;
     }
     if desc.query > D3D11_QUERY_OCCLUSION_PREDICATE {
-        crate::LOG.err(&format!(
+        dxmt_util::err!(
+            crate::LOG,
             "CreateQuery1: query type not implemented: {}",
             desc.query
-        ));
+        );
         return E_NOTIMPL;
     }
     if data_size_for(desc.query).is_none()

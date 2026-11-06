@@ -94,9 +94,10 @@ pub fn build_tessellation_pipeline_with_caps(
     )]
     let max_tess_f32 = max_potential_tess_factor as f32;
     if max_tess_f32 < expected_tess_factor {
-        LOG.warn(&format!(
+        dxmt_util::warn!(
+            LOG,
             "maxtessfactor({expected_tess_factor}) is too large for a mesh pipeline. Clamping to {max_potential_tess_factor}"
-        ));
+        );
     }
 
     let vshs_variant = ShaderVariant::TessellationVertexHull {

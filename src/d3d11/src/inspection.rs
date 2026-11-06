@@ -221,9 +221,10 @@ impl Inspection {
             return E_INVALIDARG;
         }
         if flags != 0 {
-            crate::LOG.err(&format!(
+            dxmt_util::err!(
+                crate::LOG,
                 "CheckMultisampleQualityLevels1: unsupported flags {flags}"
-            ));
+            );
             return E_INVALIDARG;
         }
         // SAFETY: `p_num_quality_levels` was checked non-null above.
@@ -327,7 +328,7 @@ impl Inspection {
                 write_words(p_feature_support_data, feature_support_data_size, &[3])
             }
             _ => {
-                crate::LOG.err(&format!("Not supported feature: {feature}"));
+                dxmt_util::err!(crate::LOG, "Not supported feature: {feature}");
                 E_INVALIDARG
             }
         }

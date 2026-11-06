@@ -81,17 +81,19 @@ pub unsafe extern "system" fn d3d11_core_create_device(
     let cfg_fl = crate::device::CONFIG.get_str("d3d11.maxFeatureLevel");
     let max_fl = max_feature_level_from_config(&cfg_fl, supports_apple7);
 
-    LOG.info(&format!(
+    dxmt_util::info!(
+        LOG,
         "Maximum supported feature level: {}",
         feature_level_name(max_fl)
-    ));
+    );
 
     let Some(selected_fl) = select_feature_level(levels_slice, max_fl) else {
         let min_fl = levels_slice.last().copied().unwrap_or(0);
-        LOG.err(&format!(
+        dxmt_util::err!(
+            LOG,
             "Minimum required feature level {} not supported",
             feature_level_name(min_fl)
-        ));
+        );
         // SAFETY: Releasing `mtl_adapter` before returning.
         unsafe {
             release(mtl_adapter);
@@ -99,10 +101,11 @@ pub unsafe extern "system" fn d3d11_core_create_device(
         return E_INVALIDARG;
     };
 
-    LOG.info(&format!(
+    dxmt_util::info!(
+        LOG,
         "Using feature level {}",
         feature_level_name(selected_fl)
-    ));
+    );
 
     let mut dxgi_device: *mut c_void = ptr::null_mut();
     // SAFETY: `mtl_adapter` is a valid `IMTLDXGIAdapter*` and `dxgi_device` is a local out-ptr.
@@ -223,9 +226,10 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
     let mut owned_adapter: *mut c_void = ptr::null_mut();
     let active_adapter = if adapter.is_null() {
         if driver_type != D3D_DRIVER_TYPE_HARDWARE {
-            LOG.warn(&format!(
+            dxmt_util::warn!(
+                LOG,
                 "D3D11CreateDevice: Unsupported driver type {driver_type}"
-            ));
+            );
         }
         let hr_fac = create_default_dxgi_factory(&raw mut dxgi_factory);
         if hr_fac < 0 || dxgi_factory.is_null() {
