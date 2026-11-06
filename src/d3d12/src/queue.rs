@@ -104,12 +104,6 @@ unsafe extern "system" {
 /// Default and maximum number of in-flight command buffer slots (`kCommandQueueSlots = 64`).
 pub const COMMAND_QUEUE_SLOTS: u32 = 64;
 
-/// How many `ExecuteCommandLists` calls may share one Metal command buffer before it is committed.
-///
-/// Queue operations that a CPU thread can observe (`Signal`, `Wait`, `Present`) commit on their
-/// own; this only joins back-to-back executes, where Metal has no ordering boundary to preserve.
-const EXECUTE_BATCH_LIMIT: u32 = 8;
-
 /// Clamps `DXMT_D3D12_CMDBUF_SLOTS` to `1..=64`, defaulting to `64` (`SlotsFromEnv`,
 ///
 /// `d3d12_command_queue.cpp:1494-1504`).
@@ -468,7 +462,6 @@ pub struct QueueCommitState {
     pub open_seq: u64,
     pub execute_calls: u64,
     pub custom_resolves: bool,
-    pending_executes: u32,
 }
 
 impl QueueCommitState {
@@ -483,7 +476,6 @@ impl QueueCommitState {
             open_seq: 1,
             execute_calls: 0,
             custom_resolves: false,
-            pending_executes: 0,
         }
     }
 }
@@ -648,7 +640,6 @@ impl Queue {
         }
         crate::scope!("queue.(commit)");
         crate::count!("#command buffers committed", 1);
-        commit.pending_executes = 0;
         if !self.device.is_null() {
             // SAFETY: `self.device` is a live `Device` pointer for the lifetime of `Queue`.
             crate::device::residency::flush(unsafe { &*self.device });
@@ -678,9 +669,6 @@ impl Queue {
     /// `d3d12_command_queue.cpp:1604`).
     pub fn execute(&self, lists: &[&List]) {
         crate::scope!("queue.ExecuteCommandLists");
-        if lists.is_empty() {
-            return;
-        }
         let _pool = Pool::new();
         let mtl_device = self.mtl_device_handle();
         let mut commit_guard = lock(&self.commit);
@@ -1688,10 +1676,7 @@ impl Queue {
         }
         commit.timestamps.pending_join = false;
         commit.timestamps.taken = false;
-        commit.pending_executes = commit.pending_executes.saturating_add(1);
-        if commit.pending_executes >= EXECUTE_BATCH_LIMIT {
-            self.commit_open_cmdbuf(commit_guard, inflight);
-        }
+        self.commit_open_cmdbuf(commit_guard, inflight);
     }
 
     /// Encodes a GPU signal on `fence` to `value` (`Signal`, `d3d12_command_queue.cpp:2039`).
@@ -1757,9 +1742,8 @@ impl Queue {
         }
         self.pool.owe(&mut inflight);
         inflight.waits.push((generation.shared, value));
-        // A CPU thread can wait on the fence this precedes; make the wait visible now rather
-        // than leaving it in a command buffer that only a later Execute would commit.
-        self.commit_open_cmdbuf(commit, inflight);
+        // The wait rides in the next ExecuteCommandLists' (or Signal's) command buffer.
+        drop(inflight);
         S_OK
     }
 

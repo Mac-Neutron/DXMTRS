@@ -634,6 +634,38 @@ fn execute_allocates_as_cpp() {
     drop(unsafe { Box::from_raw(dev) });
 }
 
+/// Every `ExecuteCommandLists` commits its command buffer before it returns.
+///
+/// The GPU starts on it at once (GPU overlap spec §3.10; check.sh "a Wait rides in its
+/// `ExecuteCommandLists`' command buffer, which commits at once": `d3d12_hazards queues` commits
+/// 6). a284b01 held up to 8 executes in one open buffer until a `Signal`, `Wait` or `Present`.
+#[test]
+fn execute_commits_at_once() {
+    let dev = Box::into_raw(Device::new_dummy());
+    let mut blits = (0..1).map(make_blit_encoder).collect::<Vec<_>>();
+    let mut cmds = vec![
+        WmtcmdBlitCopyFromBufferToBuffer {
+            r#type: 0,
+            reserved: [0; 3],
+            next: MemPtr::NULL,
+            src: 0,
+            src_offset: 0,
+            dst: 0,
+            dst_offset: 0,
+            copy_length: 0,
+        };
+        1
+    ];
+    let list = make_fake_list(dev, &mut blits, &mut cmds);
+    let queue = Queue::new_for_test(dev);
+    queue.execute(&[&list]);
+    assert!(!dxmt_util::sync::lock(&queue.commit).open);
+    drop(queue);
+    drop(list);
+    // SAFETY: `dev` was allocated by `Box::into_raw(Device::new_dummy())`.
+    drop(unsafe { Box::from_raw(dev) });
+}
+
 #[test]
 fn framegen_order_joins() {
     let mut state = OrderState::new(false);
