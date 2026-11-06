@@ -2,6 +2,7 @@
 
 use std::sync::{LazyLock, Mutex};
 
+use dxmt_core::settings::{Flags, settings};
 use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 
@@ -25,10 +26,7 @@ pub const fn dxil_capture_mode() -> bool {
 /// Returns whether SM6 capabilities should be advertised (`SM6Caps`).
 #[must_use]
 pub fn sm6_caps() -> bool {
-    static YES: LazyLock<bool> = LazyLock::new(|| {
-        dxil_capture_mode() || !std::env::var("DXMT_D3D12_SM6").is_ok_and(|v| v == "0")
-    });
-    *YES
+    dxil_capture_mode() || settings().enabled(Flags::SM6)
 }
 
 /// FNV-1a 64-bit hash used in capture filenames and `pipelines.txt` (`CaptureHash`).

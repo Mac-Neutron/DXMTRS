@@ -10,6 +10,7 @@ use dxmt_core::{
     fence::EventListener,
     format,
     library::{self, Library},
+    settings::{Flags, settings},
 };
 use dxmt_util::{
     com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data, private_data::PrivateData, qpc,
@@ -204,7 +205,7 @@ pub unsafe fn create(
     let library = Library::new(&mtl).ok();
     // SAFETY: `h` is a live `MTLDevice` handle.
     let temporal_supported = unsafe { MTLDevice_supportsFXTemporalScaler(h) };
-    let advertise_numa = std::env::var("DXMT_D3D12_ADVERTISE_NUMA").as_deref() == Ok("1");
+    let advertise_numa = settings().enabled(Flags::ADVERTISE_NUMA);
 
     let mut dev_residency = residency::Residency::new();
     dev_residency.set = Some(residency_set);

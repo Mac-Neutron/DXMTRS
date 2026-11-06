@@ -10,6 +10,7 @@ use dxmt_core::{
     },
     presenter::framegen::TemporalScaler,
     resource::{Texture, TextureAllocationFlags},
+    settings::{Compression, settings},
 };
 use dxmt_util::{
     com::ComObject,
@@ -178,7 +179,7 @@ impl TemporalScalerObject {
             | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
             | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
             | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
-        let lossless = std::env::var("DXMT_D3D12_COMPRESSION").as_deref() != Ok("0");
+        let lossless = settings().d3d12_compression != Compression::Off;
         let info = WMTTextureInfo {
             pixel_format: format,
             width,

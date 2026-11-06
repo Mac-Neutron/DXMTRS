@@ -9,13 +9,14 @@ use core::{
 };
 use std::{
     alloc::{self, Layout},
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
 use dxmt_core::{
     library::{ClearRtv, ClearUav, Library, ResourceAccess, SimpleCommandContext},
     resource::{Buffer, BufferAllocationFlags, BufferViewKey, Texture, TextureViewKey},
     ring::{LIFETIME, RingBump, RingConfig, STAGING_BLOCK},
+    settings::{Flags, settings},
 };
 use dxmt_util::{
     com::ComObject,
@@ -83,10 +84,6 @@ const MAX_COMMAND_LIST_TYPE: u32 = 3;
 
 /// `D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED` (`d3d12.idl`).
 const D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED: u32 = 1;
-
-/// Cached `DXMT_D3D12_MERGE` environment variable (`d3d12_command_allocator.hpp:181-183`).
-static MERGE_ENABLED: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("DXMT_D3D12_MERGE").map_or(true, |val| val != "0"));
 
 /// Compute `ExecuteIndirect` resolver argument struct (`IndirectComputeCommandData`,
 ///
@@ -581,7 +578,7 @@ impl Allocator {
     ///
     /// `d3d12_command_allocator.hpp:181`).
     pub fn fold_clears(&mut self, r: &mut RenderEncoderData) -> u32 {
-        if !*MERGE_ENABLED || self.encoder_last.is_null() {
+        if !settings().enabled(Flags::MERGE) || self.encoder_last.is_null() {
             return 0;
         }
         // SAFETY: `self.encoder_last` is non-null and valid while recording.

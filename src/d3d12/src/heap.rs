@@ -200,12 +200,6 @@ const fn is_private_heap(props: &HeapProperties, private_on: bool) -> bool {
     private_on && !is_cpu_visible_heap(props)
 }
 
-fn private_heap_enabled() -> bool {
-    static ENABLED: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("DXMT_D3D12_PRIVATE").as_deref() != Ok("0"));
-    *ENABLED
-}
-
 const fn align_up(value: u64, alignment: u64) -> u64 {
     if value == 0 {
         0
@@ -387,7 +381,10 @@ pub unsafe fn create_heap(
             E_OUTOFMEMORY
         };
     };
-    let is_private = is_private_heap(&normalized.properties, private_heap_enabled());
+    let is_private = is_private_heap(
+        &normalized.properties,
+        crate::resource::private_heap_enabled(),
+    );
 
     #[cfg(not(windows))]
     {

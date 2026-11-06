@@ -27,6 +27,7 @@ use dxmt_core::{
         Presenter,
         framegen::{self, FrameGen},
     },
+    settings::{Flags, settings},
 };
 use dxmt_util::{
     com::ComObject,
@@ -472,8 +473,8 @@ pub struct QueueCommitState {
 
 impl QueueCommitState {
     fn new(serial: bool) -> Self {
-        let merge = !std::env::var("DXMT_D3D12_MERGE").is_ok_and(|v| v == "0");
-        let deferred_resolves = !std::env::var("DXMT_D3D12_DEFER_RESOLVES").is_ok_and(|v| v == "0");
+        let merge = settings().enabled(Flags::MERGE);
+        let deferred_resolves = settings().enabled(Flags::DEFER_RESOLVES);
         Self {
             order: OrderState::new(serial),
             merge: MergePlan::new(merge, deferred_resolves),

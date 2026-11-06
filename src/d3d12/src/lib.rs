@@ -32,6 +32,8 @@ pub mod unimpl;
 use core::ffi::c_void;
 use std::sync::LazyLock;
 
+use dxmt_core::settings::{Flags, settings};
+
 use crate::com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult};
 
 /// `D3D_FEATURE_LEVEL_11_0` (`0xb000`), the minimum feature level `D3D12CreateDevice` accepts.
@@ -41,7 +43,7 @@ dxmt_util::dxmt_dll!(pub log "d3d12.log", allocator, type_info);
 
 /// One-time process initialization: latches `DXMT_STATS=1` and registers `atexit` natively.
 static INIT: LazyLock<()> = LazyLock::new(|| {
-    stats::init(std::env::var("DXMT_STATS").as_deref() == Ok("1"));
+    stats::init(settings().enabled(Flags::STATS));
     #[cfg(not(windows))]
     {
         extern "C" fn on_exit() {

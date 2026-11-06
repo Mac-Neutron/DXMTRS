@@ -9,7 +9,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, Ordering},
 };
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use dxmt_core::{
     format::{
@@ -17,6 +17,7 @@ use dxmt_core::{
         MTL_DXGI_FORMAT_STENCIL_PLANER, texel_size,
     },
     resource::{Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor},
+    settings::{Compression, Flags, settings},
 };
 use dxmt_util::{
     com::ComObject,
@@ -251,23 +252,13 @@ pub const fn clone_box(b: &D3d12Box) -> D3d12Box {
 /// Whether an opt-in experiment uses memoryless storage for transient depth targets.
 #[must_use]
 pub fn memoryless_enabled() -> bool {
-    static MEMORYLESS: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("DXMT_D3D12_MEMORYLESS").as_deref() == Ok("1"));
-    *MEMORYLESS
+    settings().enabled(Flags::MEMORYLESS)
 }
 
 /// Whether `DXMT_D3D12_PRIVATE` is enabled (defaults to `true` unless set to `"0"`).
 #[must_use]
 pub fn private_heap_enabled() -> bool {
-    static PRIVATE_ON: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("DXMT_D3D12_PRIVATE").as_deref() != Ok("0"));
-    *PRIVATE_ON
-}
-
-fn compression_mode() -> &'static str {
-    static COMPRESSION: LazyLock<String> =
-        LazyLock::new(|| std::env::var("DXMT_D3D12_COMPRESSION").unwrap_or_default());
-    COMPRESSION.as_str()
+    settings().enabled(Flags::PRIVATE_HEAP)
 }
 
 /// Shared `IUnknown::QueryInterface` for `ID3D12Resource2` (`d3d12_buffer.cpp:88-107`).
@@ -1033,7 +1024,7 @@ pub unsafe fn populate_texture_info_opt(
         | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
     info.options = WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED;
 
-    let comp = compression_mode();
+    let comp = settings().d3d12_compression;
     let format = info.pixel_format;
     let r32_view = texel_size(format) == 4
         && format != WMT_PIXEL_FORMAT_R32_UINT
@@ -1041,8 +1032,8 @@ pub unsafe fn populate_texture_info_opt(
         && format != WMT_PIXEL_FORMAT_R32_FLOAT;
     let uav = (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0;
     info.flags = 0;
-    if comp != "0"
-        && !(uav && (comp == "rt" || r32_view))
+    if comp != Compression::Off
+        && !(uav && (comp == Compression::RenderTargets || r32_view))
         && (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER) == 0
         && desc.layout == D3D12_TEXTURE_LAYOUT_UNKNOWN
         && desc.alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT

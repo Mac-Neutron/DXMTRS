@@ -8,6 +8,7 @@ use std::sync::{LazyLock, Mutex};
 use dxmt_core::{
     capture::{CaptureState, NextAction},
     format::texel_size,
+    settings::{Flags, settings},
 };
 use dxmt_util::{env, sync::lock};
 use winemetal_sys::{
@@ -1717,11 +1718,7 @@ static CAPTURE_SCHEDULE: LazyLock<Mutex<CaptureSchedule>> =
     LazyLock::new(|| Mutex::new(CaptureSchedule::from_env()));
 
 fn capture_enabled() -> bool {
-    static ENABLED: LazyLock<bool> = LazyLock::new(|| {
-        std::env::var_os("MTL_CAPTURE_ENABLED").is_some()
-            || std::env::var_os("DXMT_CAPTURE_FRAME").is_some()
-    });
-    *ENABLED
+    settings().mtl_capture_enabled.is_some() || settings().enabled(Flags::CAPTURE_FRAME_SET)
 }
 
 /// Allocates the next process-wide queue index (`Dumps().queues++`,

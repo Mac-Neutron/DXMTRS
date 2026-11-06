@@ -3,6 +3,7 @@
 use core::ffi::c_void;
 use std::sync::LazyLock;
 
+use dxmt_core::settings::{Flags, settings};
 use winemetal_sys::{
     MTLDevice_heapBufferSizeAndAlign, MTLDevice_heapTextureSizeAndAlign,
     MTLDevice_supportsTextureSampleCount,
@@ -33,7 +34,7 @@ impl crate::feature::Device for Device {
             if dxmt_core::dump::on() {
                 return true;
             }
-            std::env::var("DXMT_D3D12_SM6").as_deref() != Ok("0")
+            settings().enabled(Flags::SM6)
         });
         *SM6
     }

@@ -1,8 +1,8 @@
 //! `ExecuteIndirect` (`d3d12_command_list.cpp:1992`): fast direct path and ICB resolver path.
 
 use core::{ffi::c_void, mem::size_of, ptr};
-use std::sync::LazyLock;
 
+use dxmt_core::settings::{Flags, settings};
 use dxmt_util::dxgi_consts::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT};
 use winemetal_wire::{
     MemPtr, WMT_INDEX_TYPE_U_INT32, WMT_PRIMITIVE_TYPE_LINE, WMT_PRIMITIVE_TYPE_LINE_STRIP,
@@ -23,9 +23,6 @@ use crate::{
     resource::Resource,
     root_signature::object::RootSignature,
 };
-
-static NATIVE_INDIRECT: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("DXMT_D3D12_INDIRECT").as_deref() != Ok("icb"));
 
 #[repr(C)]
 struct VertexBufferEntry {
@@ -314,7 +311,8 @@ pub unsafe fn execute_indirect(
         return;
     }
 
-    if *NATIVE_INDIRECT && !encode_binding && count_buffer.is_null() {
+    if settings().enabled(Flags::INDIRECT_WITHOUT_ICB) && !encode_binding && count_buffer.is_null()
+    {
         let indexed = sig.command_type == D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
         if indexed && list.index_buffer == 0 {
             return;

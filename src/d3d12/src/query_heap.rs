@@ -1,8 +1,9 @@
 //! `ID3D12QueryHeap` (`d3d12_query_heap.cpp`): occlusion, timestamp, and statistics query heaps.
 
 use core::{ffi::c_void, mem::size_of, ptr};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
+use dxmt_core::settings::{Flags, settings};
 use dxmt_util::{
     com::ComObject,
     private_data::{self, HasPrivateData, PrivateData},
@@ -119,9 +120,7 @@ pub const fn query_stride(heap_type: u32) -> Option<u32> {
 /// `d3d12_device.hpp:242`).
 #[must_use]
 pub fn timestamp_blits() -> bool {
-    static ON: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("DXMT_D3D12_TIMESTAMP_BLITS").as_deref() == Ok("1"));
-    *ON
+    settings().enabled(Flags::TIMESTAMP_BLITS)
 }
 
 impl HasPrivateData for QueryHeap {
