@@ -1,11 +1,18 @@
 //! COM base types, `DeviceChild` ownership, companion vtables, `slot!`, and D3D12 IIDs.
 
-use core::{ffi::c_void, ops::Deref, ptr, ptr::NonNull};
+use core::{ffi::c_void, ptr, ptr::NonNull};
 
 pub use dxmt_util::{
     com::{
-        ComObject, ComObjectWithInitialRef, Guid, Hresult, Object, Qi, QiMiss, add_ref, hresult::*,
-        iid::*, qi_log, qi_refuse, qi_table, query, release, vtbl, write_out,
+        ComObject, ComObjectWithInitialRef, Guid, Hresult, Object, Qi, QiMiss, add_ref,
+        companion::{companion_add_ref, companion_release, from_companion, to_companion},
+        hold::{
+            ComHold, ComRefCounted, PrivateHold, add_ref_com, add_ref_private_com, release_com,
+            release_private_com,
+        },
+        hresult::*,
+        iid::*,
+        qi_log, qi_refuse, qi_table, query, release, vtbl, write_out,
     },
     private_data::{PrivateData, WKPDID_D3D_DEBUG_OBJECT_NAME_W, set_debug_name},
 };
@@ -53,223 +60,6 @@ pub unsafe fn cast_com<'a, T, V>(ptr: *const c_void, expected_vtbl: &'static V) 
         Some(unsafe { &*ptr.cast::<T>() })
     } else {
         None
-    }
-}
-
-/// Adjusts a primary COM object pointer `this` forward by `ext_offset` bytes.
-///
-/// # Safety
-///
-/// `this` must be a non-null pointer to `T`, and `ext_offset` must be `offset_of!(T, <ext_vtbl>)`.
-#[must_use]
-pub const unsafe fn to_companion<T>(this: *mut T, ext_offset: usize) -> *mut c_void {
-    // SAFETY: `ext_offset` is within the same allocation `T`.
-    unsafe { this.cast::<c_void>().byte_add(ext_offset) }
-}
-
-/// Adjusts a companion interface pointer `ext_this` backward by `ext_offset` bytes.
-///
-/// # Safety
-///
-/// `ext_this` must point to the companion vtable field at byte offset `ext_offset` inside a live
-/// `T`.
-#[must_use]
-pub const unsafe fn from_companion<T>(ext_this: *mut c_void, ext_offset: usize) -> *mut T {
-    // SAFETY: `ext_this` was produced by adding `ext_offset` to a `*mut T` within the same
-    // allocation.
-    unsafe { ext_this.byte_sub(ext_offset).cast::<T>() }
-}
-
-/// A heap-allocated COM implementation struct backed by [`ComObject`].
-pub trait ComRefCounted: Sized {
-    /// Returns the object's two-count reference counter.
-    fn com(&self) -> &ComObject;
-}
-
-/// Increments the public reference count of `this` (`AddRef`).
-///
-/// # Safety
-///
-/// `this` must point to a live `Box<T>`.
-pub unsafe fn add_ref_com<T: ComRefCounted>(this: *mut T) -> u32 {
-    // SAFETY: `this` is a live `T`.
-    let obj = unsafe { &*this };
-    obj.com().add_ref()
-}
-
-/// Decrements the public reference count of `this` (`Release`).
-///
-/// # Safety
-///
-/// `this` must point to a live `Box<T>` whose caller owns one public reference.
-pub unsafe fn release_com<T: ComRefCounted>(this: *mut T) -> u32 {
-    // SAFETY: `this` is a live `T`.
-    let (remaining, free) = unsafe { (*this).com().release_and_free() };
-    if free {
-        // SAFETY: the last private reference was just released and `DESTROYING_BIT` is set.
-        unsafe { drop(Box::from_raw(this)) };
-    }
-    remaining
-}
-
-/// Increments the public reference count of `this` through a companion pointer at `OFFSET`.
-///
-/// # Safety
-///
-/// `this` must point to the companion vtable field at byte offset `OFFSET` inside a live `Box<T>`.
-pub unsafe fn companion_add_ref<T: ComRefCounted, const OFFSET: usize>(this: *mut c_void) -> u32 {
-    // SAFETY: `this` is at byte offset `OFFSET` inside a live `T`.
-    let base = unsafe { from_companion::<T>(this, OFFSET) };
-    // SAFETY: `base` points to a live `Box<T>`.
-    unsafe { add_ref_com(base) }
-}
-
-/// Decrements the public reference count of `this` through a companion pointer at `OFFSET`.
-///
-/// # Safety
-///
-/// `this` must point to the companion vtable field at byte offset `OFFSET` inside a live `Box<T>`
-/// whose caller owns one public reference.
-pub unsafe fn companion_release<T: ComRefCounted, const OFFSET: usize>(this: *mut c_void) -> u32 {
-    // SAFETY: `this` is at byte offset `OFFSET` inside a live `T`.
-    let base = unsafe { from_companion::<T>(this, OFFSET) };
-    // SAFETY: `base` points to a live `Box<T>`.
-    unsafe { release_com(base) }
-}
-
-/// Increments the private reference count of `this` (`AddRefPrivate`).
-///
-/// # Safety
-///
-/// `this` must point to a live `Box<T>`.
-pub unsafe fn add_ref_private_com<T: ComRefCounted>(this: *mut T) {
-    // SAFETY: `this` is a live `T`.
-    let obj = unsafe { &*this };
-    obj.com().add_ref_private();
-}
-
-/// Decrements the private reference count of `this` (`ReleasePrivate`).
-///
-/// # Safety
-///
-/// `this` must point to a live `Box<T>` whose caller owns one private reference.
-pub unsafe fn release_private_com<T: ComRefCounted>(this: *mut T) {
-    // SAFETY: `this` is a live `T`.
-    let free = unsafe { (*this).com().release_private() };
-    if free {
-        // SAFETY: the last private reference was just released and `DESTROYING_BIT` is set.
-        unsafe { drop(Box::from_raw(this)) };
-    }
-}
-
-/// Smart pointer holding a public reference to a [`ComRefCounted`] COM object (`Com<T>`).
-pub struct ComHold<T: ComRefCounted> {
-    ptr: NonNull<T>,
-}
-
-// SAFETY: `T` is a COM object with atomic reference counts; sharing or sending `ComHold<T>`
-// requires `T: Send + Sync`.
-unsafe impl<T: ComRefCounted + Send + Sync> Send for ComHold<T> {}
-// SAFETY: see `Send` above.
-unsafe impl<T: ComRefCounted + Send + Sync> Sync for ComHold<T> {}
-
-impl<T: ComRefCounted> ComHold<T> {
-    /// Acquires a new public reference to `ptr`.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must point to a live `Box<T>`.
-    #[must_use]
-    pub unsafe fn new(ptr: NonNull<T>) -> Self {
-        // SAFETY: `ptr` points to a live `Box<T>`.
-        unsafe { add_ref_com(ptr.as_ptr()) };
-        Self { ptr }
-    }
-
-    /// Raw pointer to the held `T`.
-    #[must_use]
-    pub const fn as_ptr(&self) -> *mut T {
-        self.ptr.as_ptr()
-    }
-}
-
-impl<T: ComRefCounted> Clone for ComHold<T> {
-    fn clone(&self) -> Self {
-        // SAFETY: `self.ptr` is kept alive by `self`.
-        unsafe { Self::new(self.ptr) }
-    }
-}
-
-impl<T: ComRefCounted> Deref for ComHold<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: `self` holds a live public reference to `self.ptr`.
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl<T: ComRefCounted> Drop for ComHold<T> {
-    fn drop(&mut self) {
-        // SAFETY: `self` owns one public reference acquired in `new`.
-        unsafe { release_com(self.ptr.as_ptr()) };
-    }
-}
-
-/// Smart pointer holding a private reference to a [`ComRefCounted`] COM object (`Com<T, false>`).
-///
-/// Used by placed resources (`heap_`) and command lists (`allocator_`, `pso_*`, `rootsig_*`) so an
-/// internal hold keeps the target allocation alive after its last public `Release`.
-pub struct PrivateHold<T: ComRefCounted> {
-    ptr: NonNull<T>,
-}
-
-// SAFETY: `T` is a COM object with atomic reference counts; sharing or sending `PrivateHold<T>`
-// requires `T: Send + Sync`.
-unsafe impl<T: ComRefCounted + Send + Sync> Send for PrivateHold<T> {}
-// SAFETY: see `Send` above.
-unsafe impl<T: ComRefCounted + Send + Sync> Sync for PrivateHold<T> {}
-
-impl<T: ComRefCounted> PrivateHold<T> {
-    /// Acquires a new private reference to `ptr`.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must point to a live `Box<T>`.
-    #[must_use]
-    pub unsafe fn new(ptr: NonNull<T>) -> Self {
-        // SAFETY: `ptr` points to a live `Box<T>`.
-        unsafe { add_ref_private_com(ptr.as_ptr()) };
-        Self { ptr }
-    }
-
-    /// Raw pointer to the held `T`.
-    #[must_use]
-    pub const fn as_ptr(&self) -> *mut T {
-        self.ptr.as_ptr()
-    }
-}
-
-impl<T: ComRefCounted> Clone for PrivateHold<T> {
-    fn clone(&self) -> Self {
-        // SAFETY: `self.ptr` is kept alive by `self`.
-        unsafe { Self::new(self.ptr) }
-    }
-}
-
-impl<T: ComRefCounted> Deref for PrivateHold<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: `self` holds a live private reference to `self.ptr`.
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl<T: ComRefCounted> Drop for PrivateHold<T> {
-    fn drop(&mut self) {
-        // SAFETY: `self` owns one private reference acquired in `new`.
-        unsafe { release_private_com(self.ptr.as_ptr()) };
     }
 }
 
