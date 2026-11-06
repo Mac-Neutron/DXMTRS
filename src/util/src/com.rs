@@ -11,6 +11,9 @@ use core::{
 };
 use std::sync::{Mutex, PoisonError};
 
+pub mod companion;
+pub mod hold;
+
 /// A COM interface ID.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -315,6 +318,106 @@ pub fn qi_log(object: &Guid, riid: &Guid) -> bool {
 pub const unsafe fn write_out<P>(out: *mut P, value: P) {
     // SAFETY: the caller's; the write assumes no alignment.
     unsafe { out.write_unaligned(value) };
+}
+
+/// The line a `QueryInterface` miss writes to the calling DLL's log, as each object has it.
+pub enum QiMiss<'a> {
+    /// `<name>: Unknown interface query <riid>` at warn, once per `object` and `riid` (`qi_log`).
+    Once { object: &'a Guid, name: &'a str },
+    /// `<name>: Unknown interface query` and then `<riid>`, two warnings, once per pair.
+    OnceSplit { object: &'a Guid, name: &'a str },
+    /// `<name>: Unknown interface query <riid>` at warn, at every miss.
+    Every(&'a str),
+    /// No line.
+    Quiet,
+}
+
+/// What an object's `QueryInterface` does besides its table, each object's own choice.
+///
+/// `null_riid` is the answer to a null `riid` (`E_NOINTERFACE`, `E_INVALIDARG`, `E_POINTER` or
+/// `DXGI_ERROR_INVALID_CALL`: each body has its own); `silent` lists the IIDs refused with
+/// `E_NOINTERFACE` and no line; `log` is the calling DLL's log, where `miss` writes.
+pub struct Qi<'a> {
+    pub null_riid: Hresult,
+    pub silent: &'a [Guid],
+    pub log: &'a crate::log::Logger,
+    pub miss: QiMiss<'a>,
+}
+
+/// `QueryInterface` over `entries`, a table the caller builds per call.
+///
+/// A null `out` is `E_POINTER`; otherwise `*out` is nulled first, and a null `riid` answers
+/// `qi.null_riid`. The first entry whose IIDs hold `riid` takes a reference through `add_ref` and
+/// writes its pointer; an entry the object answers only sometimes is listed with no IIDs when it
+/// does not. Any other IID is `E_NOINTERFACE`, logged as `qi.miss` says unless it is in
+/// `qi.silent`. `riid` and `out` are read and written unaligned.
+///
+/// # Safety
+///
+/// `riid` is null or addresses a GUID; `out` is null or addresses a writable pointer.
+pub unsafe fn qi_table(
+    riid: *const c_void,
+    out: *mut *mut c_void,
+    entries: &[(&[Guid], *mut c_void)],
+    add_ref: impl FnOnce(),
+    qi: &Qi<'_>,
+) -> Hresult {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: the caller's: `out` is non-null here and writable; the write assumes no alignment.
+    unsafe { write_out(out, core::ptr::null_mut()) };
+    // SAFETY: the caller's: `riid` is null or addresses a GUID; the read assumes no alignment.
+    let Some(riid) = (unsafe { Guid::read(riid.cast()) }) else {
+        return qi.null_riid;
+    };
+    if let Some(&(_, iface)) = entries.iter().find(|(iids, _)| iids.contains(&riid)) {
+        add_ref();
+        // SAFETY: as above.
+        unsafe { write_out(out, iface) };
+        return S_OK;
+    }
+    if !qi.silent.contains(&riid) {
+        qi.miss.log(qi.log, &riid);
+    }
+    E_NOINTERFACE
+}
+
+/// `QueryInterface` refusing before its table (a null `this`, say): `hr`, with `*out` nulled.
+///
+/// A null `out` is `E_POINTER`, as in [`qi_table`].
+///
+/// # Safety
+///
+/// `out` is null or addresses a writable pointer, with no alignment promised.
+pub const unsafe fn qi_refuse(out: *mut *mut c_void, hr: Hresult) -> Hresult {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: the caller's: `out` is non-null here and writable; the write assumes no alignment.
+    unsafe { write_out(out, core::ptr::null_mut()) };
+    hr
+}
+
+impl QiMiss<'_> {
+    /// Writes the line for a miss of `riid` to `log`.
+    fn log(&self, log: &crate::log::Logger, riid: &Guid) {
+        match *self {
+            Self::Once { object, name } => {
+                if qi_log(object, riid) {
+                    log.warn(&format!("{name}: Unknown interface query {riid}"));
+                }
+            }
+            Self::OnceSplit { object, name } => {
+                if qi_log(object, riid) {
+                    log.warn(&format!("{name}: Unknown interface query"));
+                    log.warn(&riid.to_string());
+                }
+            }
+            Self::Every(name) => log.warn(&format!("{name}: Unknown interface query {riid}")),
+            Self::Quiet => {}
+        }
+    }
 }
 
 #[cfg(test)]

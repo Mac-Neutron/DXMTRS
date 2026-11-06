@@ -117,12 +117,14 @@ API_LOCK_EXEMPT='cursor_wnd_proc'
 # `mtld3d_shared::ffi_boundary` (D3D9) or `read_unaligned` / `write_unaligned`
 # (dxgi and d3d10core, which do not depend on it). The vectored exception
 # handler is the one `extern "system" fn` whose pointers come from the system
-# instead.
-APP_POINTER_DIR='src/d3d9/src src/dxgi/src src/d3d10/src'
+# instead. dxmt-util's COM and private-data helpers are checked too: their
+# `QueryInterface` and private-data slots are every front end's entry points.
+# An entry names a folder, or a module: its `.rs` file and its folder.
+APP_POINTER_DIR='src/d3d9/src src/dxgi/src src/d3d10/src src/util/src/com src/util/src/private_data'
 APP_POINTER_EXEMPT='src/d3d9/src/crash.rs'
 is_app_pointer_file() {
     for dir in $APP_POINTER_DIR; do
-        case $1 in "$dir"/*.rs) return 0 ;; esac
+        case $1 in "$dir"/*.rs | "$dir".rs) return 0 ;; esac
     done
     return 1
 }
@@ -550,7 +552,7 @@ if [ -n "$dxmt_sources" ]; then
         $dxmt_sources
 fi
 
-app_sources=$(for dir in $APP_POINTER_DIR; do git ls-files "$dir/*.rs"; done | grep -vxF "$APP_POINTER_EXEMPT" || true)
+app_sources=$(for dir in $APP_POINTER_DIR; do git ls-files "$dir/*.rs" "$dir.rs"; done | grep -vxF "$APP_POINTER_EXEMPT" || true)
 if [ -n "$app_sources" ]; then
     # shellcheck disable=SC2086
     findings=$(app_pointer_derefs $app_sources)
