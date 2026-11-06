@@ -27,7 +27,8 @@ use crate::{
 };
 
 const MAGIC: [u8; 8] = *b"DXMTPLB1";
-const VERSION: u32 = 1;
+/// 2 since the description hash skips padding: a version-1 library is refused at open.
+const VERSION: u32 = 2;
 const HEADER_SIZE: usize = 16;
 
 const KIND_ANY: u8 = 0;

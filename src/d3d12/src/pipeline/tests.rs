@@ -1,4 +1,8 @@
-use core::{ffi::c_void, ptr};
+use core::{
+    ffi::c_void,
+    mem::{MaybeUninit, offset_of},
+    ptr,
+};
 
 use airconv_ir::container::{build, fourcc};
 use dxmt_util::sync::lock;
@@ -10,11 +14,11 @@ use crate::{
         DepthStencilOpDesc, GraphicsPipelineStateDesc, InputElementDesc, InputLayoutDesc,
         RasterizerDesc, RenderTargetBlendDesc, SampleDesc, ShaderBytecode, StreamOutputDesc,
     },
-    com::{E_INVALIDARG, IID_ID3D12_PIPELINE_LIBRARY1, S_OK},
+    com::{D3D12_ERROR_DRIVER_VERSION_MISMATCH, E_INVALIDARG, IID_ID3D12_PIPELINE_LIBRARY1, S_OK},
     pipeline::{
         graphics::{
             blend_alpha_factor, blend_factor, blend_op, compare_func, extract_input_layout,
-            parse_input_signature, stencil_op,
+            hash_graphics_desc, parse_input_signature, stencil_op,
         },
         library::{PipelineLibrary, create_pipeline_library},
         record::{
@@ -309,11 +313,34 @@ fn library_blob_round_trip() {
     }
 }
 
+/// A version-1 library, whose hashes read padding, is refused at open with the documented error.
 #[test]
-fn library_cpp_blob_loads_then_refuses_by_hash() {
+fn library_version_1_is_refused() {
     let mut blob = Vec::new();
     blob.extend_from_slice(b"DXMTPLB1");
     blob.extend_from_slice(&1u32.to_le_bytes());
+    blob.extend_from_slice(&0u32.to_le_bytes());
+    let iid = IID_ID3D12_PIPELINE_LIBRARY1;
+    let mut lib_ptr: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob` is a valid buffer of `blob.len()` bytes.
+    let hr = unsafe {
+        create_pipeline_library(
+            ptr::null_mut(),
+            blob.as_ptr().cast::<c_void>(),
+            blob.len(),
+            (&raw const iid).cast::<c_void>(),
+            &raw mut lib_ptr,
+        )
+    };
+    assert_eq!(hr, D3D12_ERROR_DRIVER_VERSION_MISMATCH);
+    assert!(lib_ptr.is_null());
+}
+
+#[test]
+fn library_blob_loads_then_refuses_by_hash() {
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"DXMTPLB1");
+    blob.extend_from_slice(&2u32.to_le_bytes());
     blob.extend_from_slice(&1u32.to_le_bytes());
     let name_ascii = b"comp0";
     let chars = u32::try_from(name_ascii.len()).expect("len fits u32");
@@ -462,12 +489,123 @@ fn cached_pso_blob_round_trips_its_hash() {
     let blob = super::cached_pso_blob(hash);
     let parsed = super::cached_desc_hash(blob.as_ptr().cast(), blob.len());
     assert_eq!(parsed, Some(hash));
-    let mut damaged = blob;
+    let mut damaged = blob.clone();
     damaged[0] ^= 0xff;
     assert_eq!(
         super::cached_desc_hash(damaged.as_ptr().cast(), damaged.len()),
         None
     );
+    // A blob of the padding-reading hash is ignored.
+    let mut old = blob;
+    old[..8].copy_from_slice(b"DXMTCPS1");
+    assert_eq!(
+        super::cached_desc_hash(old.as_ptr().cast(), old.len()),
+        None
+    );
+}
+
+/// A graphics description with no pointers to follow.
+fn plain_graphics_desc() -> GraphicsPipelineStateDesc {
+    let mut rts = [ZERO_RT_BLEND; 8];
+    rts[0].render_target_write_mask = 0x0f;
+    GraphicsPipelineStateDesc {
+        root_signature: ptr::null_mut(),
+        vs: EMPTY_BYTECODE,
+        ps: EMPTY_BYTECODE,
+        ds: EMPTY_BYTECODE,
+        hs: EMPTY_BYTECODE,
+        gs: EMPTY_BYTECODE,
+        stream_output: StreamOutputDesc {
+            so_declaration: ptr::null(),
+            num_entries: 0,
+            buffer_strides: ptr::null(),
+            num_strides: 0,
+            rasterized_stream: 0,
+        },
+        blend_state: BlendDesc {
+            alpha_to_coverage_enable: 0,
+            independent_blend_enable: 0,
+            render_target: rts,
+        },
+        sample_mask: u32::MAX,
+        rasterizer_state: RasterizerDesc {
+            fill_mode: 3,
+            cull_mode: 1,
+            front_counter_clockwise: 0,
+            depth_bias: 0,
+            depth_bias_clamp: 0.5,
+            slope_scaled_depth_bias: -1.0,
+            depth_clip_enable: 1,
+            multisample_enable: 0,
+            antialiased_line_enable: 0,
+            forced_sample_count: 0,
+            conservative_raster: 0,
+        },
+        depth_stencil_state: DepthStencilDesc {
+            depth_enable: 1,
+            depth_write_mask: 1,
+            depth_func: 2,
+            stencil_enable: 1,
+            stencil_read_mask: 0xff,
+            stencil_write_mask: 0xff,
+            front_face: ZERO_DS_OP,
+            back_face: ZERO_DS_OP,
+        },
+        input_layout: InputLayoutDesc {
+            input_element_descs: ptr::null(),
+            num_elements: 0,
+        },
+        ib_strip_cut_value: 0,
+        primitive_topology_type: 3,
+        num_render_targets: 1,
+        rtv_formats: [2, 0, 0, 0, 0, 0, 0, 0],
+        dsv_format: 0,
+        sample_desc: SampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        node_mask: 0,
+        cached_pso: EMPTY_CACHED_PSO,
+        flags: 0,
+    }
+}
+
+/// Two descriptions that differ only in their padding bytes hash alike; a field still counts.
+#[test]
+fn graphics_hash_skips_padding() {
+    type Desc = GraphicsPipelineStateDesc;
+    let rt_size = size_of::<RenderTargetBlendDesc>();
+    let rt_mask_end = offset_of!(RenderTargetBlendDesc, render_target_write_mask) + 1;
+    let ds_mask_end = offset_of!(DepthStencilDesc, stencil_write_mask) + 1;
+    assert_eq!(rt_size - rt_mask_end, 3);
+    assert_eq!(offset_of!(DepthStencilDesc, front_face) - ds_mask_end, 2);
+
+    let clean = plain_graphics_desc();
+    let mut dirty = MaybeUninit::new(plain_graphics_desc());
+    let base = dirty.as_mut_ptr().cast::<u8>();
+    let targets = offset_of!(Desc, blend_state) + offset_of!(BlendDesc, render_target);
+    let mut padding: Vec<usize> = (0..8)
+        .flat_map(|i| (targets + i * rt_size + rt_mask_end)..(targets + (i + 1) * rt_size))
+        .collect();
+    let ds = offset_of!(Desc, depth_stencil_state);
+    padding.extend((ds + ds_mask_end)..(ds + offset_of!(DepthStencilDesc, front_face)));
+    for at in padding {
+        // SAFETY: `at` is a padding byte inside `dirty`.
+        let byte = unsafe { base.add(at) };
+        // SAFETY: as above; padding takes any byte.
+        unsafe { byte.write(0xa5) };
+    }
+    // SAFETY: both descriptions are valid and hold no pointer to follow.
+    let a = unsafe { hash_graphics_desc((&raw const clean).cast()) };
+    // SAFETY: as above.
+    let b = unsafe { hash_graphics_desc(dirty.as_ptr().cast()) };
+    assert_eq!(a, b);
+
+    let mut other = plain_graphics_desc();
+    other.rasterizer_state.depth_bias_clamp = 0.25;
+    // SAFETY: as above.
+    let c = unsafe { hash_graphics_desc((&raw const other).cast()) };
+    assert_ne!(a, c);
 }
 
 /// The D3D12 enum maps clamp a value outside the enum as they did before `state_map`.

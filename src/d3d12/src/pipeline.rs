@@ -143,7 +143,9 @@ pub unsafe fn create_pipeline_state(
 mod tests;
 
 /// The magic in a cached pipeline-state blob this driver produced.
-const CACHED_PSO_MAGIC: [u8; 8] = *b"DXMTCPS1";
+///
+/// `DXMTCPS2` since the description hash skips padding: a `DXMTCPS1` blob is ignored.
+const CACHED_PSO_MAGIC: [u8; 8] = *b"DXMTCPS2";
 
 /// The descriptor hash a cached blob carries, if it is one of ours and complete.
 fn cached_desc_hash(blob: *const c_void, size: usize) -> Option<u64> {

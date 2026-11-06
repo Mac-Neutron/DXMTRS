@@ -53,8 +53,9 @@ use winemetal_wire::{
 use crate::{
     abi::{
         pipeline::{
-            DEPTH_WRITE_MASK_ALL, E_NOTIMPL, FILL_MODE_SOLID, GraphicsPipelineStateDesc,
-            InputElementDesc, InputLayoutDesc, StreamOutputDesc,
+            BlendDesc, DEPTH_WRITE_MASK_ALL, DepthStencilDesc, E_NOTIMPL, FILL_MODE_SOLID,
+            GraphicsPipelineStateDesc, InputElementDesc, InputLayoutDesc, RasterizerDesc,
+            StreamOutputDesc,
         },
         vtbl::{ID3D12PipelineStateVtbl, IUnknownVtbl},
     },
@@ -543,9 +544,62 @@ unsafe fn hash_input_layout(il: &InputLayoutDesc, hasher: &mut FxHasher) {
     }
 }
 
+/// The blend description, field by field: each target's write mask is followed by 3 padding bytes.
+fn hash_blend(b: &BlendDesc, hasher: &mut FxHasher) {
+    b.alpha_to_coverage_enable.hash(hasher);
+    b.independent_blend_enable.hash(hasher);
+    for rt in &b.render_target {
+        rt.blend_enable.hash(hasher);
+        rt.logic_op_enable.hash(hasher);
+        rt.src_blend.hash(hasher);
+        rt.dest_blend.hash(hasher);
+        rt.blend_op.hash(hasher);
+        rt.src_blend_alpha.hash(hasher);
+        rt.dest_blend_alpha.hash(hasher);
+        rt.blend_op_alpha.hash(hasher);
+        rt.logic_op.hash(hasher);
+        rt.render_target_write_mask.hash(hasher);
+    }
+}
+
+/// The rasterizer description, field by field, its floats by their bits.
+fn hash_rasterizer(r: &RasterizerDesc, hasher: &mut FxHasher) {
+    r.fill_mode.hash(hasher);
+    r.cull_mode.hash(hasher);
+    r.front_counter_clockwise.hash(hasher);
+    r.depth_bias.hash(hasher);
+    r.depth_bias_clamp.to_bits().hash(hasher);
+    r.slope_scaled_depth_bias.to_bits().hash(hasher);
+    r.depth_clip_enable.hash(hasher);
+    r.multisample_enable.hash(hasher);
+    r.antialiased_line_enable.hash(hasher);
+    r.forced_sample_count.hash(hasher);
+    r.conservative_raster.hash(hasher);
+}
+
+/// The depth-stencil description, field by field: 2 padding bytes follow the stencil masks.
+fn hash_depth_stencil(ds: &DepthStencilDesc, hasher: &mut FxHasher) {
+    ds.depth_enable.hash(hasher);
+    ds.depth_write_mask.hash(hasher);
+    ds.depth_func.hash(hasher);
+    ds.stencil_enable.hash(hasher);
+    ds.stencil_read_mask.hash(hasher);
+    ds.stencil_write_mask.hash(hasher);
+    for face in [&ds.front_face, &ds.back_face] {
+        face.stencil_fail_op.hash(hasher);
+        face.stencil_depth_fail_op.hash(hasher);
+        face.stencil_pass_op.hash(hasher);
+        face.stencil_func.hash(hasher);
+    }
+}
+
 /// Computes the build-local description hash for a `D3D12_GRAPHICS_PIPELINE_STATE_DESC`
 ///
 /// (`HashGraphicsDesc`, `d3d12_pipeline_library.cpp:36`).
+///
+/// The fixed-function descriptions are hashed field by field, never their padding, which an
+/// application leaves uninitialised. Pipeline libraries and cached blobs store this hash, so a
+/// change here bumps `library::VERSION` and `CACHED_PSO_MAGIC`.
 ///
 /// # Safety
 ///
@@ -574,31 +628,10 @@ pub unsafe fn hash_graphics_desc(desc: *const c_void) -> u64 {
     }
     // SAFETY: `d.stream_output` pointers are valid per caller contract.
     unsafe { hash_stream_output(&d.stream_output, &mut hasher) };
-    // SAFETY: `blend_state` is a POD struct.
-    let blend_bytes = unsafe {
-        core::slice::from_raw_parts(
-            (&raw const d.blend_state).cast::<u8>(),
-            size_of_val(&d.blend_state),
-        )
-    };
-    blend_bytes.hash(&mut hasher);
+    hash_blend(&d.blend_state, &mut hasher);
     d.sample_mask.hash(&mut hasher);
-    // SAFETY: `rasterizer_state` is a POD struct.
-    let rast_bytes = unsafe {
-        core::slice::from_raw_parts(
-            (&raw const d.rasterizer_state).cast::<u8>(),
-            size_of_val(&d.rasterizer_state),
-        )
-    };
-    rast_bytes.hash(&mut hasher);
-    // SAFETY: `depth_stencil_state` is a POD struct.
-    let ds_bytes = unsafe {
-        core::slice::from_raw_parts(
-            (&raw const d.depth_stencil_state).cast::<u8>(),
-            size_of_val(&d.depth_stencil_state),
-        )
-    };
-    ds_bytes.hash(&mut hasher);
+    hash_rasterizer(&d.rasterizer_state, &mut hasher);
+    hash_depth_stencil(&d.depth_stencil_state, &mut hasher);
     // SAFETY: `d.input_layout` pointers are valid per caller contract.
     unsafe { hash_input_layout(&d.input_layout, &mut hasher) };
     d.ib_strip_cut_value.hash(&mut hasher);
