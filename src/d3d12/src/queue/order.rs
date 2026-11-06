@@ -39,19 +39,6 @@ const _: () = assert!(FENCE_COUNT == FENCE_COUNT_U16 as usize);
 /// Sentinel for an absent fence index (`kNoFence = 0xffff`).
 pub const NO_FENCE: u16 = 0xffff;
 
-#[cfg(target_pointer_width = "64")]
-fn mem_ptr(p: *const u8) -> MemPtr {
-    MemPtr { ptr: p as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(p: *const u8) -> MemPtr {
-    MemPtr {
-        ptr: p as u32,
-        high: 0,
-    }
-}
-
 /// Reads the strict-serial flag from `DXMT_D3D12_OVERLAP` and `DXMT_D3D12_SERIAL`
 ///
 /// (`d3d12_command_queue.cpp:132`).
@@ -249,7 +236,7 @@ impl OrderState {
                 length: 16,
                 options: WMT_RESOURCE_STORAGE_MODE_PRIVATE
                     | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-                memory: mem_ptr(ptr::null()),
+                memory: MemPtr::NULL,
                 gpu_address: 0,
             };
             // SAFETY: `mtl_device` is a live `MTLDevice` handle (or faked in tests) and `info` is
@@ -262,7 +249,7 @@ impl OrderState {
         WmtcmdBlitFillbuffer {
             r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
             reserved: [0; 3],
-            next: mem_ptr(ptr::null()),
+            next: MemPtr::NULL,
             buffer,
             offset: 0,
             length: 4,
@@ -284,7 +271,7 @@ impl OrderState {
             let op = WmtcmdBlitFenceOp {
                 r#type: WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: self.fence_handles[usize::from(wait)],
             };
             // SAFETY: `encoder` is a valid `MTLBlitCommandEncoder` and `op` is live on the stack.
@@ -312,7 +299,7 @@ impl OrderState {
             let op = WmtcmdRenderFenceOp {
                 r#type: WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: self.fence_handles[usize::from(wait)],
                 stages: before,
             };
@@ -352,7 +339,7 @@ impl OrderState {
             WmtcmdRenderFenceOp {
                 r#type: 0,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: 0,
                 stages: 0,
             },
@@ -375,7 +362,7 @@ impl OrderState {
                     WMT_RENDER_COMMAND_UPDATE_FENCE
                 },
                 reserved: [0; 3],
-                next: mem_ptr(next_ptr),
+                next: MemPtr::from_ptr(next_ptr),
                 fence: self.fence_handles[usize::from(fence_idx)],
                 stages: if i == n {
                     WMT_RENDER_STAGE_FRAGMENT
@@ -387,11 +374,11 @@ impl OrderState {
         let update_ptr = ptr::from_mut(&mut self.render_ops[n]).cast::<WmtcmdBase>();
         let body = if head.is_null() { update_ptr } else { head };
         if n > 0 {
-            self.render_ops[n - 1].next = mem_ptr(body.cast::<u8>());
+            self.render_ops[n - 1].next = MemPtr::from_ptr(body.cast::<u8>());
         }
         if !tail.is_null() {
             // SAFETY: `tail` is a valid command node in the caller's render command list.
-            unsafe { (*tail).next = mem_ptr(update_ptr.cast::<u8>()) };
+            unsafe { (*tail).next = MemPtr::from_ptr(update_ptr.cast::<u8>()) };
         }
         let start = if n > 0 {
             self.render_ops.as_ptr().cast::<WmtcmdBase>()
@@ -403,7 +390,7 @@ impl OrderState {
         unsafe { MTLRenderCommandEncoder_encodeCommands(encoder, start) };
         if !tail.is_null() {
             // SAFETY: `tail` is restored to a null `next` pointer after encoding.
-            unsafe { (*tail).next = mem_ptr(ptr::null()) };
+            unsafe { (*tail).next = MemPtr::NULL };
         }
     }
 
@@ -430,7 +417,7 @@ impl OrderState {
             WmtcmdBlitFenceOp {
                 r#type: 0,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: 0,
             },
         );
@@ -448,18 +435,18 @@ impl OrderState {
                     WMT_BLIT_COMMAND_UPDATE_FENCE
                 },
                 reserved: [0; 3],
-                next: mem_ptr(next_ptr),
+                next: MemPtr::from_ptr(next_ptr),
                 fence: self.fence_handles[usize::from(fence_idx)],
             };
         }
         let update_ptr = ptr::from_mut(&mut self.blit_ops[n]).cast::<WmtcmdBase>();
         let body = if head.is_null() { update_ptr } else { head };
         if n > 0 {
-            self.blit_ops[n - 1].next = mem_ptr(body.cast::<u8>());
+            self.blit_ops[n - 1].next = MemPtr::from_ptr(body.cast::<u8>());
         }
         if !tail.is_null() {
             // SAFETY: `tail` is a valid command node in the caller's blit command list.
-            unsafe { (*tail).next = mem_ptr(update_ptr.cast::<u8>()) };
+            unsafe { (*tail).next = MemPtr::from_ptr(update_ptr.cast::<u8>()) };
         }
         let start = if n > 0 {
             self.blit_ops.as_ptr().cast::<WmtcmdBase>()
@@ -471,7 +458,7 @@ impl OrderState {
         unsafe { MTLBlitCommandEncoder_encodeCommands(encoder, start) };
         if !tail.is_null() {
             // SAFETY: `tail` is restored to a null `next` pointer after encoding.
-            unsafe { (*tail).next = mem_ptr(ptr::null()) };
+            unsafe { (*tail).next = MemPtr::NULL };
         }
     }
 
@@ -498,7 +485,7 @@ impl OrderState {
             WmtcmdComputeFenceOp {
                 r#type: 0,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: 0,
             },
         );
@@ -516,18 +503,18 @@ impl OrderState {
                     WMT_COMPUTE_COMMAND_UPDATE_FENCE
                 },
                 reserved: [0; 3],
-                next: mem_ptr(next_ptr),
+                next: MemPtr::from_ptr(next_ptr),
                 fence: self.fence_handles[usize::from(fence_idx)],
             };
         }
         let update_ptr = ptr::from_mut(&mut self.compute_ops[n]).cast::<WmtcmdBase>();
         let body = if head.is_null() { update_ptr } else { head };
         if n > 0 {
-            self.compute_ops[n - 1].next = mem_ptr(body.cast::<u8>());
+            self.compute_ops[n - 1].next = MemPtr::from_ptr(body.cast::<u8>());
         }
         if !tail.is_null() {
             // SAFETY: `tail` is a valid command node in the caller's compute command list.
-            unsafe { (*tail).next = mem_ptr(update_ptr.cast::<u8>()) };
+            unsafe { (*tail).next = MemPtr::from_ptr(update_ptr.cast::<u8>()) };
         }
         let start = if n > 0 {
             self.compute_ops.as_ptr().cast::<WmtcmdBase>()
@@ -539,7 +526,7 @@ impl OrderState {
         unsafe { MTLComputeCommandEncoder_encodeCommands(encoder, start) };
         if !tail.is_null() {
             // SAFETY: `tail` is restored to a null `next` pointer after encoding.
-            unsafe { (*tail).next = mem_ptr(ptr::null()) };
+            unsafe { (*tail).next = MemPtr::NULL };
         }
     }
 }
@@ -554,7 +541,7 @@ impl super::dump::PixelHistoryFences for OrderState {
         let op = WmtcmdBlitFenceOp {
             r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
             reserved: [0; 3],
-            next: mem_ptr(ptr::null()),
+            next: MemPtr::NULL,
             fence: self.fence_handles.get(fence_slot).copied().unwrap_or(0),
         };
         // SAFETY: `blit_encoder` is a valid `MTLBlitCommandEncoder` and `op` is live on the stack.
@@ -575,7 +562,7 @@ impl super::dump::PixelHistoryFences for OrderState {
         let op = WmtcmdRenderFenceOp {
             r#type: WMT_RENDER_COMMAND_UPDATE_FENCE,
             reserved: [0; 3],
-            next: mem_ptr(ptr::null()),
+            next: MemPtr::NULL,
             fence: self.fence_handles.get(fence_slot).copied().unwrap_or(0),
             stages: stage,
         };
@@ -619,7 +606,7 @@ impl framegen::Order for FrameGenOrder<'_> {
             let op = WmtcmdBlitFenceOp {
                 r#type: WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
                 reserved: [0; 3],
-                next: mem_ptr(ptr::null()),
+                next: MemPtr::NULL,
                 fence: self.state.fence_handles[usize::from(wait)],
             };
             // SAFETY: `begin` is a valid `MTLBlitCommandEncoder` and `op` is live on the stack.
@@ -643,7 +630,7 @@ impl framegen::Order for FrameGenOrder<'_> {
         let op = WmtcmdBlitFenceOp {
             r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
             reserved: [0; 3],
-            next: mem_ptr(ptr::null()),
+            next: MemPtr::NULL,
             fence: self.state.fence_handles[usize::from(self.done)],
         };
         // SAFETY: `end` is a valid `MTLBlitCommandEncoder` and `op` is live on the stack.

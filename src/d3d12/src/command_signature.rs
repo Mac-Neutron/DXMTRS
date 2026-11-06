@@ -110,11 +110,6 @@ struct dxmt_render_command_data {
 
 ";
 
-#[cfg(target_pointer_width = "64")]
-const NULL_MEM_PTR: MemPtr = MemPtr { ptr: 0 };
-#[cfg(target_pointer_width = "32")]
-const NULL_MEM_PTR: MemPtr = MemPtr { ptr: 0, high: 0 };
-
 /// `MTLD3D12CommandSignatureImpl` (`d3d12_command_signature.cpp:94`, `d3d12_device.hpp:207-220`).
 #[repr(C)]
 pub struct CommandSignature {
@@ -590,7 +585,7 @@ fn compile_resolver(mtl: &Obj, source: &str) -> Result<Obj, Hresult> {
     };
     let info = WMTComputePipelineInfo {
         compute_function: function.handle(),
-        binary_archives_for_lookup: NULL_MEM_PTR,
+        binary_archives_for_lookup: MemPtr::NULL,
         binary_archive_for_serialization: NULL_OBJECT_HANDLE,
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,

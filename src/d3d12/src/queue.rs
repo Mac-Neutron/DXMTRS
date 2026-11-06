@@ -105,19 +105,6 @@ pub const COMMAND_QUEUE_SLOTS: u32 = 64;
 /// own; this only joins back-to-back executes, where Metal has no ordering boundary to preserve.
 const EXECUTE_BATCH_LIMIT: u32 = 8;
 
-#[cfg(target_pointer_width = "64")]
-fn mem_ptr(ptr: *const u8) -> MemPtr {
-    MemPtr { ptr: ptr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(ptr: *const u8) -> MemPtr {
-    MemPtr {
-        ptr: ptr as u32,
-        high: 0,
-    }
-}
-
 /// Clamps `DXMT_D3D12_CMDBUF_SLOTS` to `1..=64`, defaulting to `64` (`SlotsFromEnv`,
 ///
 /// `d3d12_command_queue.cpp:1494-1504`).
@@ -1121,7 +1108,7 @@ impl Queue {
                                 let next_head =
                                     unsafe { &raw mut (*m_render).cmd_head }.cast::<u8>();
                                 // SAFETY: `tail` is the tail node of the preceding render pass.
-                                unsafe { (*tail).next = mem_ptr(next_head) };
+                                unsafe { (*tail).next = MemPtr::from_ptr(next_head) };
                                 // SAFETY: `m_render` is a valid `RenderEncoderData`.
                                 tail = unsafe { (*m_render).cmd_tail };
                             }
@@ -1148,7 +1135,7 @@ impl Queue {
                             // SAFETY: `m` is a valid encoder header in `lists`.
                             if unsafe { (*m).kind } == EncoderType::Render {
                                 // SAFETY: `tail` was linked above; restore its `next` to null.
-                                unsafe { (*tail).next = mem_ptr(ptr::null()) };
+                                unsafe { (*tail).next = MemPtr::NULL };
                                 let m_render = m.cast::<RenderEncoderData>();
                                 // SAFETY: `m_render` is a valid `RenderEncoderData`.
                                 tail = unsafe { (*m_render).cmd_tail };
@@ -1537,7 +1524,7 @@ impl Queue {
                             let op = WmtcmdBlitFenceOp {
                                 r#type: WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
                                 reserved: [0; 3],
-                                next: mem_ptr(ptr::null()),
+                                next: MemPtr::NULL,
                                 fence: commit.order.fence_handles[usize::from(wait)],
                             };
                             // SAFETY: `begin` is valid and `op` is live on the stack.
@@ -1558,7 +1545,7 @@ impl Queue {
                         let update_scaler = WmtcmdBlitFenceOp {
                             r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
                             reserved: [0; 3],
-                            next: mem_ptr(ptr::null()),
+                            next: MemPtr::NULL,
                             fence: scaler_fence,
                         };
                         // SAFETY: `begin` is valid and `update_scaler` is live on the stack.
@@ -1627,7 +1614,7 @@ impl Queue {
                         let wait_scaler = WmtcmdBlitFenceOp {
                             r#type: WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
                             reserved: [0; 3],
-                            next: mem_ptr(ptr::null()),
+                            next: MemPtr::NULL,
                             fence: scaler_fence,
                         };
                         // SAFETY: `end_enc` is valid and `wait_scaler` is live on the stack.
@@ -1647,7 +1634,7 @@ impl Queue {
                         let update_done = WmtcmdBlitFenceOp {
                             r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
                             reserved: [0; 3],
-                            next: mem_ptr(ptr::null()),
+                            next: MemPtr::NULL,
                             fence: commit.order.fence_handles[usize::from(fence)],
                         };
                         // SAFETY: `end_enc` is valid and `update_done` is live on the stack.
@@ -1853,7 +1840,7 @@ impl Queue {
                     let op = WmtcmdRenderFenceOp {
                         r#type: WMT_RENDER_COMMAND_UPDATE_FENCE,
                         reserved: [0; 3],
-                        next: mem_ptr(ptr::null()),
+                        next: MemPtr::NULL,
                         fence: fence_handle.get(),
                         stages: WMT_RENDER_STAGE_FRAGMENT,
                     };
@@ -2033,7 +2020,7 @@ fn sample_after(
     let update = WmtcmdBlitFenceOp {
         r#type: WMT_BLIT_COMMAND_UPDATE_FENCE,
         reserved: [0; 3],
-        next: mem_ptr(ptr::null()),
+        next: MemPtr::NULL,
         fence: order.fence_handles[usize::from(fence)],
     };
     // SAFETY: `blit` is valid and `update` is live on the stack.

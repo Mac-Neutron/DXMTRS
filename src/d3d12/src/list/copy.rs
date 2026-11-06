@@ -59,39 +59,6 @@ use crate::{
     resource_math::{decompose_subresource, resource_extent},
 };
 
-/// Returns a null [`MemPtr`] on both 32-bit and 64-bit targets.
-#[cfg(target_pointer_width = "64")]
-#[must_use]
-pub const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-/// Returns a null [`MemPtr`] on both 32-bit and 64-bit targets.
-#[cfg(target_pointer_width = "32")]
-#[must_use]
-pub const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-/// Converts a host pointer into a [`MemPtr`].
-#[cfg(target_pointer_width = "64")]
-#[must_use]
-pub fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: ptr.expose_provenance() as u64,
-    }
-}
-
-/// Converts a host pointer into a [`MemPtr`].
-#[cfg(target_pointer_width = "32")]
-#[must_use]
-pub fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(ptr.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
 /// Resource identity for encoder dependency tracking (`ResourceKey`).
 ///
 /// # Safety
@@ -146,7 +113,7 @@ pub fn pre_blit(
                     cmd_head: WmtcmdBlitNop {
                         r#type: WMT_BLIT_COMMAND_NOP,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                     },
                     cmd_tail: ptr::null_mut(),
                 },
@@ -182,11 +149,11 @@ pub fn encode_blit_cmd<T>(alloc: &mut Allocator, cmd: T) -> *mut T {
     unsafe { ptr::write(storage, cmd) };
     let base_ptr = storage.cast::<WmtcmdBase>();
     // SAFETY: every blit command struct begins with `WmtcmdBase` (`type` + `next`).
-    unsafe { (*base_ptr).next = null_mem_ptr() };
+    unsafe { (*base_ptr).next = MemPtr::NULL };
     // SAFETY: `blit` has a valid `cmd_tail` pointing into the CPU arena.
     let tail = unsafe { (*blit).cmd_tail };
     // SAFETY: `tail` points to the previous command's `WmtcmdBase` header.
-    unsafe { (*tail).next = ptr_to_mem_ptr(storage.cast::<u8>()) };
+    unsafe { (*tail).next = MemPtr::from_ptr(storage.cast::<u8>()) };
     // SAFETY: `blit` is the active `BlitEncoderData`.
     unsafe { (*blit).cmd_tail = base_ptr };
     // SAFETY: `blit` is the active `BlitEncoderData`.
@@ -247,7 +214,7 @@ pub fn copy_reinterpret(
             WmtcmdBlitCopyFromTextureToTexture {
                 r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 src: src_handle,
                 src_level: src.level,
                 src_slice: src.slice,
@@ -280,7 +247,7 @@ pub fn copy_reinterpret(
         WmtcmdBlitCopyFromTextureToBufferWithblitoption {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER_WITH_BLIT_OPTION,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             src: src_handle,
             slice: src.slice,
             level: u16::try_from(src.level).unwrap_or(0),
@@ -311,7 +278,7 @@ pub fn copy_reinterpret(
         WmtcmdBlitCopyFromBufferToTextureWithblitoption {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             src: temp,
             src_offset: temp_offset,
             bytes_per_row,
@@ -376,7 +343,7 @@ pub unsafe fn copy_buffer_region(
         WmtcmdBlitCopyFromBufferToBuffer {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             src: src_handle,
             src_offset,
             dst: dst_handle,
@@ -527,7 +494,7 @@ pub unsafe fn copy_texture_region(
                 WmtcmdBlitCopyFromBufferToTextureWithblitoption {
                     r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     src: src_buf.current().map_or(0, |a| a.buffer()),
                     src_offset,
                     bytes_per_row: pf.footprint.row_pitch,
@@ -621,7 +588,7 @@ pub unsafe fn copy_texture_region(
                     WmtcmdBlitCopyFromTextureToBufferWithblitoption {
                         r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER_WITH_BLIT_OPTION,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                         src: src_tex.current().map_or(0, |a| a.texture()),
                         slice: src_slice,
                         level: u16::try_from(src_level).unwrap_or(0),
@@ -648,7 +615,7 @@ pub unsafe fn copy_texture_region(
                     WmtcmdBlitCopyFromBufferToTextureWithblitoption {
                         r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                         src: temp_buffer,
                         src_offset: temp_buffer_offset,
                         bytes_per_row,
@@ -668,7 +635,7 @@ pub unsafe fn copy_texture_region(
                 WmtcmdBlitCopyFromTextureToTexture {
                     r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     src: src_tex.current().map_or(0, |a| a.texture()),
                     src_level,
                     src_slice,
@@ -733,7 +700,7 @@ pub unsafe fn copy_texture_region(
                 WmtcmdBlitCopyFromTextureToBufferWithblitoption {
                     r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER_WITH_BLIT_OPTION,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     src: src_tex.current().map_or(0, |a| a.texture()),
                     slice: src_slice,
                     level: u16::try_from(src_level).unwrap_or(0),
@@ -814,7 +781,7 @@ pub unsafe fn copy_resource(
             WmtcmdBlitCopyFromBufferToBuffer {
                 r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 src: src_handle,
                 src_offset: 0,
                 dst: dst_handle,
@@ -884,7 +851,7 @@ pub unsafe fn copy_resource(
         WmtcmdBlitCopyTexture {
             r#type: WMT_BLIT_COMMAND_COPY_TEXTURE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             src: src_tex.current().map_or(0, |a| a.texture()),
             dst: dst_tex.current().map_or(0, |a| a.texture()),
         },
@@ -1098,7 +1065,7 @@ fn end_timestamp(list: &mut List, heap: &QueryHeap, index: u32) {
             WmtcmdBlitFillbuffer {
                 r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 buffer: heap.results.as_ref().map_or(0, Obj::handle),
                 offset: u64::from(index) * 8,
                 length: 4,
@@ -1267,7 +1234,7 @@ pub unsafe fn resolve_query_data(
         WmtcmdBlitCopyFromBufferToBuffer {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             src: results_handle,
             src_offset,
             dst: dst_handle,
@@ -1283,7 +1250,7 @@ pub unsafe fn resolve_query_data(
         WmtcmdBlitFillbuffer {
             r#type: WMT_BLIT_COMMAND_FILL_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer: results_handle,
             offset: src_offset,
             length: copy_length,

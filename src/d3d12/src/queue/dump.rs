@@ -83,41 +83,6 @@ const BLIT_OPS: [&str; 14] = [
     "copytex",
 ];
 
-#[cfg(target_pointer_width = "64")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
-fn accessible_ptr<T>(m: MemPtr) -> *mut T {
-    #[cfg(target_pointer_width = "32")]
-    if m.high != 0 {
-        return ptr::null_mut();
-    }
-    usize::try_from(m.ptr).map_or(ptr::null_mut(), ptr::with_exposed_provenance_mut)
-}
-
-fn accessible(m: MemPtr) -> *mut u8 {
-    accessible_ptr::<u8>(m)
-}
-
 #[cfg(not(feature = "perf-build"))]
 fn dump_on() -> bool {
     dxmt_core::dump::on()
@@ -592,7 +557,7 @@ impl PassDumps {
             String::new()
         };
         for dump in &self.dumps {
-            let ptr = accessible(dump.info.memory);
+            let ptr = dump.info.memory.as_ptr::<u8>();
             let len = usize::try_from(dump.info.length).unwrap_or(0);
             if !ptr.is_null() && len > 0 {
                 // SAFETY: `dump.buffer` is a live shared Metal buffer of `dump.info.length` bytes.
@@ -626,7 +591,7 @@ impl PassDumps {
     pub fn format_pixel_history(&self) -> String {
         let mut text = self.pixel_notes.clone();
         for p in &self.pixel_passes {
-            let ptr = accessible(p.info.memory);
+            let ptr = p.info.memory.as_ptr::<u8>();
             let total_len = usize::try_from(p.info.length).unwrap_or(0);
             if ptr.is_null() || total_len == 0 {
                 continue;
@@ -796,7 +761,7 @@ fn append_pass_details(out: &mut String, pass_name: &str, pass: &EncoderData) {
         if pass.query_resolve_only {
             out.push_str(" query-resolve");
         }
-        let mut cmd = accessible_ptr::<WmtcmdBase>(data.cmd_head.next);
+        let mut cmd = data.cmd_head.next.as_ptr::<WmtcmdBase>();
         while !cmd.is_null() {
             // SAFETY: `cmd` points to a command node inside the allocator arena.
             let header = unsafe { *cmd };
@@ -815,7 +780,7 @@ fn append_pass_details(out: &mut String, pass_name: &str, pass: &EncoderData) {
                 let copy_len = unsafe { ptr::read_unaligned(copy_ptr).copy_length };
                 let _ = write!(out, ":{copy_len}");
             }
-            cmd = accessible_ptr::<WmtcmdBase>(header.next);
+            cmd = header.next.as_ptr::<WmtcmdBase>();
         }
     } else if pass.kind == EncoderType::Render {
         // SAFETY: `pass.kind == EncoderType::Render` guarantees `pass` heads a `RenderEncoderData`.
@@ -905,7 +870,7 @@ fn stage_attachment(
     let mut info = WMTBufferInfo {
         length: meta.size,
         options: WMT_RESOURCE_STORAGE_MODE_SHARED,
-        memory: null_mem_ptr(),
+        memory: MemPtr::NULL,
         gpu_address: 0,
     };
     // SAFETY: `mtl_device` is a live `MTLDevice` handle and `info` is valid for the call.
@@ -914,13 +879,13 @@ fn stage_attachment(
     let Some(buffer) = (unsafe { Obj::adopt(buf_handle) }) else {
         return;
     };
-    if accessible(info.memory).is_null() {
+    if info.memory.as_ptr::<u8>().is_null() {
         return;
     }
     let cmd = WmtcmdBlitCopyFromTextureToBufferWithblitoption {
         r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER_WITH_BLIT_OPTION,
         reserved: [0; 3],
-        next: null_mem_ptr(),
+        next: MemPtr::NULL,
         src: src_texture,
         slice: meta.slice,
         level: u16::try_from(meta.level).unwrap_or(0),
@@ -1173,7 +1138,7 @@ fn encode_blit_copy_tex_to_tex(blit_handle: u64, copy: &TexCopy) {
     let cmd = WmtcmdBlitCopyFromTextureToTexture {
         r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
         reserved: [0; 3],
-        next: null_mem_ptr(),
+        next: MemPtr::NULL,
         src: copy.src,
         src_slice: copy.src_slice,
         src_level: copy.src_level,
@@ -1202,7 +1167,7 @@ fn encode_blit_read_texel(
     let cmd = WmtcmdBlitCopyFromTextureToBufferWithblitoption {
         r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER_WITH_BLIT_OPTION,
         reserved: [0; 3],
-        next: null_mem_ptr(),
+        next: MemPtr::NULL,
         src,
         slice: 0,
         level: 0,
@@ -1288,7 +1253,7 @@ pub fn pixel_history(
             draws.push(cmd);
             names.push(pipeline.clone());
         }
-        cmd = accessible_ptr::<WmtcmdBase>(header.next);
+        cmd = header.next.as_ptr::<WmtcmdBase>();
     }
     if draws.is_empty() {
         return;
@@ -1320,7 +1285,7 @@ pub fn pixel_history(
         info: WMTBufferInfo {
             length: 0,
             options: 0,
-            memory: null_mem_ptr(),
+            memory: MemPtr::NULL,
             gpu_address: 0,
         },
     };
@@ -1462,7 +1427,7 @@ pub fn pixel_history(
         * u64::try_from(record.points.len()).unwrap_or(0);
     record.info.length = stride * u64::try_from(draws.len() + 1).unwrap_or(0);
     record.info.options = WMT_RESOURCE_STORAGE_MODE_SHARED;
-    record.info.memory = null_mem_ptr();
+    record.info.memory = MemPtr::NULL;
     // SAFETY: `mtl_device` is a live `MTLDevice` handle and `record.info` is valid for the call.
     let buf_raw = unsafe { MTLDevice_newBuffer(mtl_device.handle(), &raw mut record.info) };
     // SAFETY: `MTLDevice_newBuffer` returns a +1 retained buffer or 0.
@@ -1470,7 +1435,7 @@ pub fn pixel_history(
         skip(&mut d.pixel_notes, "no readback buffer");
         return;
     };
-    if accessible(record.info.memory).is_null() {
+    if record.info.memory.as_ptr::<u8>().is_null() {
         skip(&mut d.pixel_notes, "no readback buffer");
         return;
     }
@@ -1836,7 +1801,7 @@ pub fn on_present(mtl_device: &Obj) {
             file_c.push('\0');
             let mut info = WMTCaptureInfo {
                 capture_object: mtl_device.handle(),
-                output_url: mem_ptr(file_c.as_ptr().expose_provenance()),
+                output_url: MemPtr::from_ptr(file_c.as_ptr()),
                 destination: WMT_CAPTURE_DESTINATION_GPU_TRACE_DOCUMENT,
             };
             // SAFETY: `MTLCaptureManager_sharedCaptureManager` has no preconditions.

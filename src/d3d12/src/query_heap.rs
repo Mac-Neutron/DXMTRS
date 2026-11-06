@@ -217,21 +217,6 @@ pub unsafe fn cast_query_heap<'a>(raw: *mut c_void) -> Option<&'a QueryHeap> {
     unsafe { com::cast_com::<QueryHeap, ID3D12QueryHeapVtbl>(raw, &QUERY_HEAP_VTBL) }
 }
 
-const fn zero_mem_ptr() -> MemPtr {
-    #[cfg(target_pointer_width = "64")]
-    {
-        MemPtr { ptr: 0 }
-    }
-    #[cfg(target_pointer_width = "32")]
-    {
-        MemPtr { ptr: 0, high: 0 }
-    }
-}
-
-fn mem_ptr_to_mut(mem: MemPtr) -> *mut u8 {
-    usize::try_from(mem.ptr).map_or(ptr::null_mut(), ptr::with_exposed_provenance_mut)
-}
-
 /// `ID3D12Device::CreateQueryHeap` (`d3d12_device.cpp:1443`).
 ///
 /// # Safety
@@ -272,7 +257,7 @@ pub unsafe fn create_query_heap(
         let mut info = WMTBufferInfo {
             length: byte_len,
             options: WMT_RESOURCE_STORAGE_MODE_SHARED,
-            memory: zero_mem_ptr(),
+            memory: MemPtr::NULL,
             gpu_address: 0,
         };
         // SAFETY: `mtl_dev` is a live `MTLDevice` and `info` is a valid buffer descriptor.
@@ -281,7 +266,7 @@ pub unsafe fn create_query_heap(
         let Some(buf_obj) = (unsafe { Obj::adopt(buf_handle) }) else {
             return E_OUTOFMEMORY;
         };
-        let mapped = mem_ptr_to_mut(info.memory);
+        let mapped = info.memory.as_ptr::<u8>();
         if !mapped.is_null()
             && let Ok(len) = usize::try_from(byte_len)
         {

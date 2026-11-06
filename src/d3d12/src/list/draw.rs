@@ -70,31 +70,6 @@ struct VertexBufferEntry {
     length: u32,
 }
 
-#[cfg(target_pointer_width = "64")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-#[cfg(target_pointer_width = "64")]
-fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: ptr.expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(ptr.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
 /// Inline bump allocation from `alloc`'s CPU command arena (`AllocateCPUHeap`,
 ///
 /// `d3d12_command_allocator.hpp:273`).
@@ -162,11 +137,11 @@ pub fn encode_render_cmd<T>(alloc: &mut Allocator, cmd: T) -> *mut T {
     unsafe { ptr::write(ptr, cmd) };
     let base_ptr = ptr.cast::<WmtcmdBase>();
     // SAFETY: `T` is a `WmtcmdRender*` struct with `WmtcmdBase` at offset 0.
-    unsafe { (*base_ptr).next = null_mem_ptr() };
+    unsafe { (*base_ptr).next = MemPtr::NULL };
     // SAFETY: `alloc.encoder_current` is a live `RenderEncoderData`.
     let render = unsafe { &mut *alloc.encoder_current.cast::<RenderEncoderData>() };
     // SAFETY: `render.cmd_tail` points to the last command in `render`'s chain.
-    unsafe { (*render.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
+    unsafe { (*render.cmd_tail).next = MemPtr::from_ptr(base_ptr.cast::<u8>()) };
     render.cmd_tail = base_ptr;
     render.base.barriers_last = alloc.barriers;
     ptr
@@ -183,11 +158,11 @@ pub fn encode_compute_cmd<T>(alloc: &mut Allocator, cmd: T) -> *mut T {
     unsafe { ptr::write(ptr, cmd) };
     let base_ptr = ptr.cast::<WmtcmdBase>();
     // SAFETY: `T` is a `WmtcmdCompute*` struct with `WmtcmdBase` at offset 0.
-    unsafe { (*base_ptr).next = null_mem_ptr() };
+    unsafe { (*base_ptr).next = MemPtr::NULL };
     // SAFETY: `alloc.encoder_current` is a live `ComputeEncoderData`.
     let compute = unsafe { &mut *alloc.encoder_current.cast::<ComputeEncoderData>() };
     // SAFETY: `compute.cmd_tail` points to the last command in `compute`'s chain.
-    unsafe { (*compute.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
+    unsafe { (*compute.cmd_tail).next = MemPtr::from_ptr(base_ptr.cast::<u8>()) };
     compute.cmd_tail = base_ptr;
     compute.base.barriers_last = alloc.barriers;
     ptr
@@ -429,7 +404,7 @@ fn bind_render_heap_buffer(
         WmtcmdRenderSetbuffer {
             r#type: first_stage,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer,
             offset,
             index,
@@ -444,7 +419,7 @@ fn bind_render_heap_buffer(
             WmtcmdRenderSetbuffer {
                 r#type: WMT_RENDER_COMMAND_SET_MESH_BUFFER,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 buffer,
                 offset,
                 index,
@@ -456,7 +431,7 @@ fn bind_render_heap_buffer(
         WmtcmdRenderSetbuffer {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer,
             offset,
             index,
@@ -520,7 +495,7 @@ pub fn pre_draw_with_options(
             cmd_head: WmtcmdRenderNop {
                 r#type: WMT_RENDER_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
             dsv_planar_flags: list.render_pass.dsv_planar_flags,
@@ -534,7 +509,7 @@ pub fn pre_draw_with_options(
             pre_head: WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             pre_tail: ptr::null_mut(),
         };
@@ -619,7 +594,7 @@ pub fn pre_draw_with_options(
                 WmtcmdRenderSetvisibilitymode {
                     r#type: WMT_RENDER_COMMAND_SET_VISIBILITY_MODE,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     offset,
                     mode,
                 },
@@ -673,7 +648,7 @@ pub fn pre_draw_with_options(
             WmtcmdRenderSetpso {
                 r#type: WMT_RENDER_COMMAND_SET_PSO,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 pso: pso_handle,
             },
         );
@@ -685,7 +660,7 @@ pub fn pre_draw_with_options(
                 WmtcmdRenderSetbuffer {
                     r#type: WMT_RENDER_COMMAND_SET_OBJECT_BUFFER,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     buffer,
                     offset: 0,
                     index: u8::try_from(SM50_BINDING_INDEX_DRAW_ARGUMENTS).unwrap_or(0),
@@ -707,7 +682,7 @@ pub fn pre_draw_with_options(
                 WmtcmdRenderSetdepthstencilstate {
                     r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     depth_stencil_state: dss_handle,
                 },
             );
@@ -728,7 +703,7 @@ pub fn pre_draw_with_options(
                 WmtcmdRenderSetrasterizerstate {
                     r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     fill_mode: u8::try_from(pso_gfx.fill_mode).unwrap_or(0),
                     cull_mode: u8::try_from(pso_gfx.cull_mode).unwrap_or(0),
                     depth_clip_mode: u8::try_from(pso_gfx.depth_clip_mode).unwrap_or(0),
@@ -821,8 +796,8 @@ pub fn pre_draw_with_options(
             WmtcmdRenderSetviewports {
                 r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
-                viewports: ptr_to_mem_ptr(vp_ptr),
+                next: MemPtr::NULL,
+                viewports: MemPtr::from_ptr(vp_ptr),
                 viewport_count: list.viewport_count,
             },
         );
@@ -864,8 +839,8 @@ pub fn pre_draw_with_options(
             WmtcmdRenderSetscissorrects {
                 r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
-                scissor_rects: ptr_to_mem_ptr(sc_ptr),
+                next: MemPtr::NULL,
+                scissor_rects: MemPtr::from_ptr(sc_ptr),
                 rect_count: list.viewport_count,
             },
         );
@@ -878,7 +853,7 @@ pub fn pre_draw_with_options(
             WmtcmdRenderSetblendcolor {
                 r#type: WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 red: list.blend_factor[0],
                 green: list.blend_factor[1],
                 blue: list.blend_factor[2],
@@ -895,7 +870,7 @@ pub fn pre_draw_with_options(
             WmtcmdRenderSetstencilref {
                 r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 stencil_ref: u8::try_from(list.stencil_ref & 0xff).unwrap_or(0),
             },
         );
@@ -953,7 +928,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
             cmd_head: WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
         };
@@ -980,7 +955,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
             WmtcmdComputeSetpso {
                 r#type: WMT_COMPUTE_COMMAND_SET_PSO,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 pso: pso_comp.pso.as_ref().map_or(0, Obj::handle),
                 threadgroup_size: pso_comp.threadgroup_size,
             },
@@ -1008,7 +983,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
                 WmtcmdComputeSetbuffer {
                     r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
                     reserved: [0; 3],
-                    next: null_mem_ptr(),
+                    next: MemPtr::NULL,
                     buffer: gpu_buf,
                     offset,
                     index: u8::try_from(SM50_BINDING_INDEX_ROOT_ARGUMENTS).unwrap_or(0),
@@ -1033,7 +1008,7 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
                     WmtcmdComputeSetbuffer {
                         r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                         buffer: gpu_buf,
                         offset: offset as u64,
                         index: u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
@@ -1108,7 +1083,7 @@ pub unsafe fn draw_instanced(
             WmtcmdRenderDxmtGeometryDraw {
                 r#type: WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 draw_arguments_offset: offset as u64,
                 warp_count: (vertex_count_per_instance - 1) / increment + 1,
                 instance_count,
@@ -1123,7 +1098,7 @@ pub unsafe fn draw_instanced(
         WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             primitive_type,
             vertex_start: u64::from(start_vertex_location),
             vertex_count: u64::from(vertex_count_per_instance),
@@ -1191,7 +1166,7 @@ pub unsafe fn draw_indexed_instanced(
             WmtcmdRenderDxmtGeometryDrawIndexed {
                 r#type: WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
                 draw_arguments_offset: offset as u64,
                 index_buffer: list.index_buffer,
                 index_buffer_offset: list.index_buffer_offset,
@@ -1213,7 +1188,7 @@ pub unsafe fn draw_indexed_instanced(
         WmtcmdRenderDrawIndexed {
             r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             primitive_type,
             index_type: u8::try_from(list.index_buffer_format).unwrap_or(0),
             index_count: u64::from(index_count_per_instance),
@@ -1250,7 +1225,7 @@ pub unsafe fn dispatch(this: *mut c_void, x: u32, y: u32, z: u32) {
         WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: u64::from(x),
                 height: u64::from(y),

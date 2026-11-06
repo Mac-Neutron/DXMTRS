@@ -51,19 +51,6 @@ impl Default for NullResources {
     }
 }
 
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
 const fn null_texture_info(texture_type: u32) -> WMTTextureInfo {
     let multisample = texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE
         || texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY;
@@ -139,7 +126,7 @@ pub fn null_texture(device: &Device, texture_type: u32) -> Option<(Arc<Texture>,
             height: 1,
             depth: 1,
         };
-        let data = mem_ptr(zero.as_ptr().expose_provenance());
+        let data = MemPtr::from_ptr(zero.as_ptr());
         for slice in 0..slices {
             // SAFETY: `alloc.texture()` is a live 1x1 `RGBA32Float` shared `MTLTexture` and `zero` is 16 bytes.
             unsafe {

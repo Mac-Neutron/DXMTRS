@@ -53,31 +53,6 @@ use crate::{
     list::{List, copy, state},
 };
 
-#[cfg(target_pointer_width = "64")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-#[cfg(target_pointer_width = "64")]
-fn ptr_to_mem_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: p.expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn ptr_to_mem_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(p.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
 fn obj_description(obj: &Obj) -> String {
     let _pool = Pool::new();
     // SAFETY: `obj` holds a live Objective-C object; `NSObject_description` returns an
@@ -122,12 +97,12 @@ impl ClearContext<'_> {
             .cast::<T>();
         // SAFETY: `cmd` starts with `WmtcmdBase` at offset 0.
         let base = unsafe { &mut *(&raw mut cmd).cast::<WmtcmdBase>() };
-        base.next = null_mem_ptr();
+        base.next = MemPtr::NULL;
         // SAFETY: `storage` points to freshly allocated aligned CPU heap storage for `T`.
         unsafe { ptr::write(storage, cmd) };
         let storage_base = storage.cast::<WmtcmdBase>();
         // SAFETY: `enc.cmd_tail` points to a valid command node in the CPU heap.
-        unsafe { (*enc.cmd_tail).next = ptr_to_mem_ptr(storage_base) };
+        unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
         enc.cmd_tail = storage_base;
         enc.base.barriers_last = self.0.barriers;
     }
@@ -143,12 +118,12 @@ impl ClearContext<'_> {
             .cast::<T>();
         // SAFETY: `cmd` starts with `WmtcmdBase` at offset 0.
         let base = unsafe { &mut *(&raw mut cmd).cast::<WmtcmdBase>() };
-        base.next = null_mem_ptr();
+        base.next = MemPtr::NULL;
         // SAFETY: `storage` points to freshly allocated aligned CPU heap storage for `T`.
         unsafe { ptr::write(storage, cmd) };
         let storage_base = storage.cast::<WmtcmdBase>();
         // SAFETY: `enc.cmd_tail` points to a valid command node in the CPU heap.
-        unsafe { (*enc.cmd_tail).next = ptr_to_mem_ptr(storage_base) };
+        unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
         enc.cmd_tail = storage_base;
         enc.base.barriers_last = self.0.barriers;
     }
@@ -165,7 +140,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         let func = dev.library.as_ref()?.function(name)?;
         let info = WMTComputePipelineInfo {
             compute_function: func.handle(),
-            binary_archives_for_lookup: null_mem_ptr(),
+            binary_archives_for_lookup: MemPtr::NULL,
             binary_archive_for_serialization: 0,
             num_binary_archives_for_lookup: 0,
             fail_on_binary_archive_miss: 0,
@@ -209,7 +184,7 @@ impl SimpleCommandContext for ClearContext<'_> {
             cmd_head: WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
         };
@@ -230,7 +205,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: pso.handle(),
             threadgroup_size,
         });
@@ -240,7 +215,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             size,
         });
     }
@@ -258,7 +233,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             texture: handle,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -277,7 +252,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             texture: handle,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -295,7 +270,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer: handle,
             offset: 0,
             index: u8::try_from(index).unwrap_or(0),
@@ -311,8 +286,8 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_compute_cmd(WmtcmdComputeSetbytes {
             r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
             reserved: [0; 3],
-            next: null_mem_ptr(),
-            bytes: ptr_to_mem_ptr(temp),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_ptr(temp),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -353,7 +328,7 @@ impl SimpleCommandContext for ClearContext<'_> {
             cmd_head: WmtcmdRenderNop {
                 r#type: WMT_RENDER_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
             dsv_planar_flags: 0,
@@ -367,7 +342,7 @@ impl SimpleCommandContext for ClearContext<'_> {
             pre_head: WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             pre_tail: ptr::null_mut(),
         };
@@ -441,7 +416,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: pso.handle(),
         });
     }
@@ -450,7 +425,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetviewport {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             viewport,
         });
     }
@@ -459,7 +434,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetdepthstencilstate {
             r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             depth_stencil_state: state.handle(),
         });
     }
@@ -468,7 +443,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetscissorrect {
             r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             scissor_rect: rect,
         });
     }
@@ -477,7 +452,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetstencilref {
             r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             stencil_ref,
         });
     }
@@ -491,8 +466,8 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderSetbytes {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
             reserved: [0; 3],
-            next: null_mem_ptr(),
-            bytes: ptr_to_mem_ptr(temp),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_ptr(temp),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -509,7 +484,7 @@ impl SimpleCommandContext for ClearContext<'_> {
         self.encode_render_cmd(WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             primitive_type: primitive,
             vertex_start: u64::from(vertex_start),
             vertex_count: u64::from(vertex_count),

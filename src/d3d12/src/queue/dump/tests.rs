@@ -16,31 +16,6 @@ use crate::encoder::{
     RenderEncoderDepthAttachmentData, RenderEncoderStencilAttachmentData,
 };
 
-#[cfg(target_pointer_width = "64")]
-const fn null_wire_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_wire_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-#[cfg(target_pointer_width = "64")]
-fn wire_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: p.expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn wire_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(p.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
 fn empty_render(id: u64) -> RenderEncoderData {
     RenderEncoderData {
         base: EncoderData::new(EncoderType::Render, id),
@@ -54,7 +29,7 @@ fn empty_render(id: u64) -> RenderEncoderData {
         cmd_head: WmtcmdRenderNop {
             r#type: 0,
             reserved: [0; 3],
-            next: null_wire_ptr(),
+            next: MemPtr::NULL,
         },
         cmd_tail: ptr::null_mut(),
         dsv_planar_flags: 0,
@@ -68,7 +43,7 @@ fn empty_render(id: u64) -> RenderEncoderData {
         pre_head: WmtcmdComputeNop {
             r#type: 0,
             reserved: [0; 3],
-            next: null_wire_ptr(),
+            next: MemPtr::NULL,
         },
         pre_tail: ptr::null_mut(),
     }
@@ -85,20 +60,20 @@ fn passes_txt_as_cpp() {
     let mut mips = WmtcmdBlitGenerateMipmaps {
         r#type: WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
         reserved: [0; 3],
-        next: null_wire_ptr(),
+        next: MemPtr::NULL,
         texture: 30,
     };
     let mut copy_tex = WmtcmdBlitCopyTexture {
         r#type: WMT_BLIT_COMMAND_COPY_TEXTURE,
         reserved: [0; 3],
-        next: wire_ptr(&raw mut mips),
+        next: MemPtr::from_ptr(&raw mut mips),
         src: 10,
         dst: 20,
     };
     let mut copy_buf = WmtcmdBlitCopyFromBufferToBuffer {
         r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
         reserved: [0; 3],
-        next: wire_ptr(&raw mut copy_tex),
+        next: MemPtr::from_ptr(&raw mut copy_tex),
         src: 1,
         src_offset: 0,
         dst: 2,
@@ -111,7 +86,7 @@ fn passes_txt_as_cpp() {
         cmd_head: WmtcmdBlitNop {
             r#type: 0,
             reserved: [0; 3],
-            next: wire_ptr(&raw mut copy_buf),
+            next: MemPtr::from_ptr(&raw mut copy_buf),
         },
         cmd_tail: ptr::null_mut(),
     };
@@ -121,7 +96,7 @@ fn passes_txt_as_cpp() {
         cmd_head: WmtcmdBlitNop {
             r#type: 0,
             reserved: [0; 3],
-            next: null_wire_ptr(),
+            next: MemPtr::NULL,
         },
         cmd_tail: ptr::null_mut(),
     };
@@ -247,7 +222,7 @@ fn passes_txt_as_cpp() {
         info: WMTBufferInfo {
             length: 48,
             options: 0,
-            memory: wire_ptr(raw_slots.as_mut_ptr()),
+            memory: MemPtr::from_ptr(raw_slots.as_mut_ptr()),
             gpu_address: 0,
         },
     });

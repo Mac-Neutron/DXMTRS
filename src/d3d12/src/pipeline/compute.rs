@@ -44,11 +44,6 @@ use crate::{
     shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
 
-#[cfg(target_pointer_width = "64")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0 };
-#[cfg(target_pointer_width = "32")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0, high: 0 };
-
 /// `MTLD3D12ComputePipelineState` (`d3d12_device.hpp:276-283`).
 #[repr(C)]
 pub struct Compute {
@@ -312,7 +307,7 @@ unsafe fn initialize_compute(
         .saturating_mul(threadgroup_size.depth);
     let info = WMTComputePipelineInfo {
         compute_function: cs_func.handle(),
-        binary_archives_for_lookup: NULL_PTR,
+        binary_archives_for_lookup: MemPtr::NULL,
         binary_archive_for_serialization: 0,
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,

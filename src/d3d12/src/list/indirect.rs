@@ -24,16 +24,6 @@ use crate::{
     root_signature::object::RootSignature,
 };
 
-#[cfg(target_pointer_width = "64")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
 static NATIVE_INDIRECT: LazyLock<bool> =
     LazyLock::new(|| std::env::var("DXMT_D3D12_INDIRECT").as_deref() != Ok("icb"));
 
@@ -42,21 +32,6 @@ struct VertexBufferEntry {
     buffer_handle: u64,
     stride: u32,
     length: u32,
-}
-
-#[cfg(target_pointer_width = "64")]
-fn ptr_to_mem_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: p.expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn ptr_to_mem_ptr<T>(p: *mut T) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(p.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
 }
 
 fn encode_render_cmd<T>(alloc: &mut Allocator, mut cmd: T) {
@@ -74,12 +49,12 @@ fn encode_render_cmd<T>(alloc: &mut Allocator, mut cmd: T) {
     }
     // SAFETY: `cmd` starts with `WmtcmdBase` at offset 0.
     let base = unsafe { &mut *(&raw mut cmd).cast::<WmtcmdBase>() };
-    base.next = null_mem_ptr();
+    base.next = MemPtr::NULL;
     // SAFETY: `storage` points to freshly allocated aligned CPU heap storage for `T`.
     unsafe { ptr::write(storage, cmd) };
     let storage_base = storage.cast::<WmtcmdBase>();
     // SAFETY: `enc.cmd_tail` points to a valid command node in the CPU heap.
-    unsafe { (*enc.cmd_tail).next = ptr_to_mem_ptr(storage_base) };
+    unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
     enc.cmd_tail = storage_base;
     enc.base.barriers_last = alloc.barriers;
 }
@@ -357,7 +332,7 @@ pub unsafe fn execute_indirect(
                     WmtcmdRenderDrawIndexedIndirect {
                         r#type: WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                         primitive_type,
                         index_type: u8::try_from(list.index_buffer_format).unwrap_or(0),
                         index_buffer: list.index_buffer,
@@ -372,7 +347,7 @@ pub unsafe fn execute_indirect(
                     WmtcmdRenderDrawIndirect {
                         r#type: WMT_RENDER_COMMAND_DRAW_INDIRECT,
                         reserved: [0; 3],
-                        next: null_mem_ptr(),
+                        next: MemPtr::NULL,
                         primitive_type,
                         indirect_args_buffer: args,
                         indirect_args_offset: offset,

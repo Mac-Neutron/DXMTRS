@@ -225,19 +225,6 @@ pub static TEXTURE_VTBL: ID3D12Resource2Vtbl = ID3D12Resource2Vtbl {
     ),
 };
 
-#[cfg(target_pointer_width = "64")]
-const fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr { ptr: addr as u64 }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn mem_ptr(addr: usize) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(addr).unwrap_or(0),
-        high: 0,
-    }
-}
-
 unsafe fn validate_subresource_box(
     res: &Resource,
     subresource: u32,
@@ -323,7 +310,7 @@ unsafe fn write_to_subresource(
                     },
                     u64::from(level),
                     u64::from(slice),
-                    mem_ptr(src_data.expose_provenance()),
+                    MemPtr::from_ptr(src_data),
                     u64::from(src_row_pitch),
                     u64::from(slice_pitch),
                 );
@@ -376,7 +363,7 @@ unsafe fn read_from_subresource(
                     },
                     u64::from(level),
                     u64::from(slice),
-                    mem_ptr(dst_data.expose_provenance()),
+                    MemPtr::from_ptr(dst_data),
                     u64::from(dst_row_pitch),
                     u64::from(slice_pitch),
                 );

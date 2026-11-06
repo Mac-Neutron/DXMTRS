@@ -200,31 +200,6 @@ impl Drop for Allocator {
     }
 }
 
-#[cfg(target_pointer_width = "64")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0 }
-}
-
-#[cfg(target_pointer_width = "32")]
-const fn null_mem_ptr() -> MemPtr {
-    MemPtr { ptr: 0, high: 0 }
-}
-
-#[cfg(target_pointer_width = "64")]
-fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: ptr.expose_provenance() as u64,
-    }
-}
-
-#[cfg(target_pointer_width = "32")]
-fn ptr_to_mem_ptr(ptr: *mut u8) -> MemPtr {
-    MemPtr {
-        ptr: u32::try_from(ptr.expose_provenance()).unwrap_or(0),
-        high: 0,
-    }
-}
-
 fn alloc_cpu_block() -> *mut u8 {
     let Ok(layout) = Layout::from_size_align(CPU_HEAP_SIZE, CPU_HEAP_ALIGN) else {
         return ptr::null_mut();
@@ -354,7 +329,7 @@ impl Allocator {
                 let mut buffer_info = WMTBufferInfo {
                     length: GPU_HEAP_SIZE as u64,
                     options: WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-                    memory: ptr_to_mem_ptr(self.gpu_heap),
+                    memory: MemPtr::from_ptr(self.gpu_heap),
                     gpu_address: 0,
                 };
                 // SAFETY: `mtl` is a live `MTLDevice`, `buffer_info` references `self.gpu_heap`
@@ -428,11 +403,11 @@ impl Allocator {
         // SAFETY: `T` is a `WmtcmdCompute*` struct with `WmtcmdBase` at offset 0.
         let base_ptr = ptr.cast::<WmtcmdBase>();
         // SAFETY: `base_ptr` was just initialized above.
-        unsafe { (*base_ptr).next = null_mem_ptr() };
+        unsafe { (*base_ptr).next = MemPtr::NULL };
         // SAFETY: `self.encoder_current` is a live `ComputeEncoderData`.
         let compute = unsafe { &mut *self.encoder_current.cast::<ComputeEncoderData>() };
         // SAFETY: `compute.cmd_tail` points to the last command in `compute`'s chain.
-        unsafe { (*compute.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
+        unsafe { (*compute.cmd_tail).next = MemPtr::from_ptr(base_ptr.cast::<u8>()) };
         compute.cmd_tail = base_ptr;
         compute.base.barriers_last = self.barriers;
         ptr
@@ -447,19 +422,19 @@ impl Allocator {
         // SAFETY: `T` is a `WmtcmdCompute*` struct with `WmtcmdBase` at offset 0.
         let base_ptr = ptr.cast::<WmtcmdBase>();
         // SAFETY: `base_ptr` was just initialized above.
-        unsafe { (*base_ptr).next = null_mem_ptr() };
+        unsafe { (*base_ptr).next = MemPtr::NULL };
         // SAFETY: `self.encoder_current` is a live `RenderEncoderData`.
         let render = unsafe { &mut *self.encoder_current.cast::<RenderEncoderData>() };
         if render.pre_tail.is_null() {
             render.pre_head = winemetal_wire::WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             };
             render.pre_tail = (&raw mut render.pre_head).cast::<WmtcmdBase>();
         }
         // SAFETY: `render.pre_tail` points to the last command in `render`'s pre-pass chain.
-        unsafe { (*render.pre_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
+        unsafe { (*render.pre_tail).next = MemPtr::from_ptr(base_ptr.cast::<u8>()) };
         render.pre_tail = base_ptr;
         render.base.barriers_last = self.barriers;
         ptr
@@ -474,11 +449,11 @@ impl Allocator {
         // SAFETY: `T` is a `WmtcmdRender*` struct with `WmtcmdBase` at offset 0.
         let base_ptr = ptr.cast::<WmtcmdBase>();
         // SAFETY: `base_ptr` was just initialized above.
-        unsafe { (*base_ptr).next = null_mem_ptr() };
+        unsafe { (*base_ptr).next = MemPtr::NULL };
         // SAFETY: `self.encoder_current` is a live `RenderEncoderData`.
         let render = unsafe { &mut *self.encoder_current.cast::<RenderEncoderData>() };
         // SAFETY: `render.cmd_tail` points to the last command in `render`'s command chain.
-        unsafe { (*render.cmd_tail).next = ptr_to_mem_ptr(base_ptr.cast::<u8>()) };
+        unsafe { (*render.cmd_tail).next = MemPtr::from_ptr(base_ptr.cast::<u8>()) };
         render.cmd_tail = base_ptr;
         render.base.barriers_last = self.barriers;
         ptr
@@ -950,14 +925,14 @@ impl Allocator {
         self.encode_compute_cmd(WmtcmdComputeUseresource {
             r#type: WMT_COMPUTE_COMMAND_USE_RESOURCE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             resource: icb_handle,
             usage: WMT_RESOURCE_USAGE_READ | WMT_RESOURCE_USAGE_WRITE,
         });
         self.encode_compute_cmd(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: cmd_sig.compute_resolver.as_ref().map_or(0, Obj::handle),
             threadgroup_size: WMTSize {
                 width: 1,
@@ -968,7 +943,7 @@ impl Allocator {
         self.encode_compute_cmd(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer: gpu_buf_handle,
             offset: offset as u64,
             index: 30,
@@ -976,7 +951,7 @@ impl Allocator {
         self.encode_compute_cmd(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: 1,
                 height: 1,
@@ -986,14 +961,14 @@ impl Allocator {
         self.encode_compute_cmd(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: pso.pso.as_ref().map_or(0, Obj::handle),
             threadgroup_size: pso.threadgroup_size,
         });
         self.encode_compute_cmd(WmtcmdComputeExecutecommands {
             r#type: WMT_COMPUTE_COMMAND_EXECUTE_COMMANDS_IN_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             indirect_command_buffer: icb_handle,
             location: 0,
             length: u32::try_from(max_count).unwrap_or(u32::MAX),
@@ -1071,14 +1046,14 @@ impl Allocator {
         self.encode_render_pre_cmd(WmtcmdComputeUseresource {
             r#type: WMT_COMPUTE_COMMAND_USE_RESOURCE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             resource: icb_handle,
             usage: WMT_RESOURCE_USAGE_WRITE,
         });
         self.encode_render_pre_cmd(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: cmd_sig.render_resolver.as_ref().map_or(0, Obj::handle),
             threadgroup_size: WMTSize {
                 width: 1,
@@ -1089,7 +1064,7 @@ impl Allocator {
         self.encode_render_pre_cmd(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer: gpu_buf_handle,
             offset: offset as u64,
             index: 30,
@@ -1097,7 +1072,7 @@ impl Allocator {
         self.encode_render_pre_cmd(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             size: WMTSize {
                 width: 1,
                 height: 1,
@@ -1108,7 +1083,7 @@ impl Allocator {
         self.encode_render_cmd(WmtcmdRenderUseresource {
             r#type: WMT_RENDER_COMMAND_USE_RESOURCE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             resource: icb_handle,
             usage: WMT_RESOURCE_USAGE_READ,
             stages: WMT_RENDER_STAGE_VERTEX,
@@ -1116,7 +1091,7 @@ impl Allocator {
         self.encode_render_cmd(WmtcmdRenderExecutecommands {
             r#type: WMT_RENDER_COMMAND_EXECUTE_COMMANDS_IN_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             indirect_command_buffer: icb_handle,
             location: 0,
             length: u32::try_from(max_count).unwrap_or(u32::MAX),
@@ -1137,7 +1112,7 @@ impl SimpleCommandContext for Allocator {
         let func = dev.library.as_ref()?.function(name)?;
         let info = WMTComputePipelineInfo {
             compute_function: func.handle(),
-            binary_archives_for_lookup: null_mem_ptr(),
+            binary_archives_for_lookup: MemPtr::NULL,
             binary_archive_for_serialization: 0,
             num_binary_archives_for_lookup: 0,
             fail_on_binary_archive_miss: 0,
@@ -1180,7 +1155,7 @@ impl SimpleCommandContext for Allocator {
             cmd_head: winemetal_wire::WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
         };
@@ -1201,7 +1176,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeSetpso {
             r#type: WMT_COMPUTE_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: pso.handle(),
             threadgroup_size,
         });
@@ -1211,7 +1186,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeDispatch {
             r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             size,
         });
     }
@@ -1229,7 +1204,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             texture: handle,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1248,7 +1223,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeSettexture {
             r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             texture: handle,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1266,7 +1241,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeSetbuffer {
             r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             buffer: handle,
             offset: 0,
             index: u8::try_from(index).unwrap_or(0),
@@ -1282,8 +1257,8 @@ impl SimpleCommandContext for Allocator {
         self.encode_compute_cmd(WmtcmdComputeSetbytes {
             r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
             reserved: [0; 3],
-            next: null_mem_ptr(),
-            bytes: ptr_to_mem_ptr(temp),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_ptr(temp),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1323,7 +1298,7 @@ impl SimpleCommandContext for Allocator {
             cmd_head: winemetal_wire::WmtcmdRenderNop {
                 r#type: WMT_RENDER_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             cmd_tail: ptr::null_mut(),
             dsv_planar_flags: 0,
@@ -1337,7 +1312,7 @@ impl SimpleCommandContext for Allocator {
             pre_head: winemetal_wire::WmtcmdComputeNop {
                 r#type: WMT_COMPUTE_COMMAND_NOP,
                 reserved: [0; 3],
-                next: null_mem_ptr(),
+                next: MemPtr::NULL,
             },
             pre_tail: ptr::null_mut(),
         };
@@ -1409,7 +1384,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetpso {
             r#type: WMT_RENDER_COMMAND_SET_PSO,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             pso: pso.handle(),
         });
     }
@@ -1418,7 +1393,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetviewport {
             r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             viewport,
         });
     }
@@ -1427,7 +1402,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetdepthstencilstate {
             r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             depth_stencil_state: state.handle(),
         });
     }
@@ -1436,7 +1411,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetscissorrect {
             r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             scissor_rect: rect,
         });
     }
@@ -1445,7 +1420,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetstencilref {
             r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             stencil_ref,
         });
     }
@@ -1459,8 +1434,8 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderSetbytes {
             r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
             reserved: [0; 3],
-            next: null_mem_ptr(),
-            bytes: ptr_to_mem_ptr(temp),
+            next: MemPtr::NULL,
+            bytes: MemPtr::from_ptr(temp),
             length: bytes.len() as u64,
             index: u8::try_from(index).unwrap_or(0),
         });
@@ -1477,7 +1452,7 @@ impl SimpleCommandContext for Allocator {
         self.encode_render_cmd(WmtcmdRenderDraw {
             r#type: WMT_RENDER_COMMAND_DRAW,
             reserved: [0; 3],
-            next: null_mem_ptr(),
+            next: MemPtr::NULL,
             primitive_type: primitive,
             vertex_start: u64::from(vertex_start),
             vertex_count: u64::from(vertex_count),

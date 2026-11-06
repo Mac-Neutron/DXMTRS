@@ -200,7 +200,7 @@ fn make_render_encoder(position: u32, join: bool) -> RenderEncoderData {
         cmd_head: WmtcmdRenderNop {
             r#type: 0,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
         },
         cmd_tail: ptr::null_mut(),
         dsv_planar_flags: 0,
@@ -214,7 +214,7 @@ fn make_render_encoder(position: u32, join: bool) -> RenderEncoderData {
         pre_head: WmtcmdComputeNop {
             r#type: 0,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
         },
         pre_tail: ptr::null_mut(),
     }
@@ -229,7 +229,7 @@ fn make_blit_encoder(position: u32) -> BlitEncoderData {
         cmd_head: WmtcmdBlitNop {
             r#type: 0,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
         },
         cmd_tail: ptr::null_mut(),
     }
@@ -247,7 +247,7 @@ fn order_as_cpp() {
     let mut draw_cmd = WmtcmdRenderDraw {
         r#type: WMT_RENDER_COMMAND_DRAW,
         reserved: [0; 3],
-        next: MemPtr { ptr: 0 },
+        next: MemPtr::NULL,
         primitive_type: 3,
         vertex_start: 0,
         vertex_count: 3,
@@ -552,7 +552,7 @@ fn make_fake_list(
         cmds[i] = WmtcmdBlitCopyFromBufferToBuffer {
             r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
             src: 0x1000,
             src_offset: 0,
             dst: 0x2000,
@@ -586,7 +586,7 @@ fn execute_allocates_as_cpp() {
         WmtcmdBlitCopyFromBufferToBuffer {
             r#type: 0,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
             src: 0,
             src_offset: 0,
             dst: 0,
@@ -600,7 +600,7 @@ fn execute_allocates_as_cpp() {
         WmtcmdBlitCopyFromBufferToBuffer {
             r#type: 0,
             reserved: [0; 3],
-            next: MemPtr { ptr: 0 },
+            next: MemPtr::NULL,
             src: 0,
             src_offset: 0,
             dst: 0,

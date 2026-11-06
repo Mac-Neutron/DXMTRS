@@ -85,11 +85,6 @@ use crate::{
     shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
 
-#[cfg(target_pointer_width = "64")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0 };
-#[cfg(target_pointer_width = "32")]
-const NULL_PTR: MemPtr = MemPtr { ptr: 0, high: 0 };
-
 const COLOR_WRITE_MASK_MAP: [u8; 16] = [
     WMT_COLOR_WRITE_MASK_NONE,
     WMT_COLOR_WRITE_MASK_RED,
@@ -465,7 +460,7 @@ const fn mesh_render_pipeline_info() -> WMTMeshRenderPipelineInfo {
         mesh_tgsize_is_multiple_of_sgwidth: 0,
         object_tgsize_is_multiple_of_sgwidth: 0,
         binary_archive_for_serialization: 0,
-        binary_archives_for_lookup: NULL_PTR,
+        binary_archives_for_lookup: MemPtr::NULL,
         num_binary_archives_for_lookup: 0,
         fail_on_binary_archive_miss: 0,
         support_indirect_command_buffers: 0,
