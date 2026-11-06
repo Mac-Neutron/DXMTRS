@@ -238,7 +238,7 @@ unsafe fn validate_subresource_box(
     if b.left == b.right || b.top == b.bottom || b.front == b.back {
         return Ok(None);
     }
-    let (hr, fmt) = dxmt_core::format::query_dxgi(res.desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(res.desc.format);
     if hr != S_OK {
         return Err(E_INVALIDARG);
     }
@@ -586,7 +586,7 @@ pub unsafe fn create_srv(
         v
     };
 
-    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
         return hr;
     }
@@ -785,7 +785,7 @@ pub unsafe fn create_uav(
         v
     };
 
-    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
         return hr;
     }
@@ -899,7 +899,7 @@ pub unsafe fn create_rtv(
         v
     };
 
-    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
         return hr;
     }
@@ -1048,7 +1048,7 @@ pub unsafe fn create_dsv(
         v
     };
 
-    let (hr, metal_format) = dxmt_core::format::query_dxgi(view_desc.format);
+    let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
         return hr;
     }

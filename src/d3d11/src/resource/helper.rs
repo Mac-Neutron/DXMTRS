@@ -3,7 +3,7 @@
 use dxmt_core::{
     format::{
         MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-        MTL_DXGI_FORMAT_TYPELESS, query_dxgi, texel_size,
+        MTL_DXGI_FORMAT_TYPELESS, query_dxgi_ref, texel_size,
     },
     resource::BufferAllocationFlags,
     settings::{Compression, settings},
@@ -184,10 +184,11 @@ fn create_mtl_texture_descriptor_internal(
         return E_INVALIDARG;
     }
 
-    let (hr, mut metal_format) = query_dxgi(format);
+    let (hr, metal_format) = query_dxgi_ref(format);
     if hr < 0 {
         return E_FAIL;
     }
+    let mut pixel_format = metal_format.pixel_format;
 
     let shared_flag = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
     if (misc_flags & shared_flag) == shared_flag {
@@ -197,15 +198,15 @@ fn create_mtl_texture_descriptor_internal(
     if (bind_flags & D3D11_BIND_DEPTH_STENCIL) != 0 {
         match format {
             DXGI_FORMAT_R32_TYPELESS | DXGI_FORMAT_D32_FLOAT => {
-                metal_format.pixel_format = WMT_PIXEL_FORMAT_DEPTH32_FLOAT;
+                pixel_format = WMT_PIXEL_FORMAT_DEPTH32_FLOAT;
             }
             DXGI_FORMAT_R16_TYPELESS | DXGI_FORMAT_D16_UNORM => {
-                metal_format.pixel_format = WMT_PIXEL_FORMAT_DEPTH16_UNORM;
+                pixel_format = WMT_PIXEL_FORMAT_DEPTH16_UNORM;
             }
             _ => {}
         }
     }
-    mtl_desc.pixel_format = original_format(metal_format.pixel_format);
+    mtl_desc.pixel_format = original_format(pixel_format);
 
     let mut metal_usage = WMT_TEXTURE_USAGE_SHADER_READ;
     if (bind_flags
@@ -222,10 +223,9 @@ fn create_mtl_texture_descriptor_internal(
     }
     if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 {
         metal_usage |= WMT_TEXTURE_USAGE_SHADER_READ | WMT_TEXTURE_USAGE_SHADER_WRITE;
-        if metal_format.pixel_format == WMT_PIXEL_FORMAT_R32_UINT
-            || metal_format.pixel_format == WMT_PIXEL_FORMAT_R32_SINT
-            || (metal_format.pixel_format == WMT_PIXEL_FORMAT_RG32_UINT
-                && supports_family(WMTGPU_FAMILY_APPLE8))
+        if pixel_format == WMT_PIXEL_FORMAT_R32_UINT
+            || pixel_format == WMT_PIXEL_FORMAT_R32_SINT
+            || (pixel_format == WMT_PIXEL_FORMAT_RG32_UINT && supports_family(WMTGPU_FAMILY_APPLE8))
         {
             metal_usage |= WMT_TEXTURE_USAGE_SHADER_ATOMIC;
         }
@@ -468,7 +468,7 @@ pub fn get_linear_texture_layout_1d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi(desc.format);
+    let (hr, metal_format) = query_dxgi_ref(desc.format);
     if hr < 0
         || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
         || metal_format.bytes_per_texel == 0
@@ -503,7 +503,7 @@ pub fn get_linear_texture_layout_2d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi(desc.format);
+    let (hr, metal_format) = query_dxgi_ref(desc.format);
     if hr < 0
         || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
         || metal_format.bytes_per_texel == 0
@@ -542,7 +542,7 @@ pub fn get_linear_texture_layout_3d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi(desc.format);
+    let (hr, metal_format) = query_dxgi_ref(desc.format);
     if hr < 0
         || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
         || metal_format.bytes_per_texel == 0

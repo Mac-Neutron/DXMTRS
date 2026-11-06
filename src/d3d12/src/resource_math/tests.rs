@@ -524,7 +524,7 @@ fn the_format_table_has_what_the_footprints_rely_on() {
     // A format with a Metal counterpart that is not planar has a texel size (the C++ aborts or
     // throws on 0), and no format has more than the two planes the footprint arrays hold.
     for format in (0..=192).chain([0x7fff_ffff, 0xffff_fffe, 0xffff_ffff]) {
-        let (hr, desc) = query_dxgi(format);
+        let (hr, desc) = query_dxgi_ref(format);
         if hr >= 0 {
             assert!(desc.planar_count <= 2, "format {format}");
             assert!(

@@ -6,7 +6,7 @@ use dxmt_core::format::{
     CAP_ATOMIC, CAP_BLEND, CAP_COLOR, CAP_DEPTH_STENCIL, CAP_MSAA, CAP_RESOLVE, CAP_SPARSE,
     CAP_TEXTURE_BUFFER_READ, CAP_TEXTURE_BUFFER_READ_WRITE, CAP_TEXTURE_BUFFER_WRITE, CAP_WRITE,
     MTL_DXGI_FORMAT_BACKBUFFER, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
-    MTL_DXGI_FORMAT_STENCIL_PLANER, MtlDxgiFormatDesc, capabilities, query_dxgi,
+    MTL_DXGI_FORMAT_STENCIL_PLANER, MtlDxgiFormatDesc, capabilities, query_dxgi_ref,
 };
 use dxmt_util::com::{E_INVALIDARG, Hresult, S_OK};
 use rustc_hash::FxHashMap;
@@ -87,8 +87,8 @@ const FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE: u32 = D3D11_FORMAT_SUPPORT2_UAV
 
 /// Resolved DXGI format descriptor together with its Metal format capability bits.
 pub struct FormatInfo {
-    /// Base DXGI format descriptor from `dxmt_core::format::query_dxgi`.
-    pub desc: MtlDxgiFormatDesc,
+    /// Base DXGI format descriptor from `dxmt_core::format::query_dxgi_ref`.
+    pub desc: &'static MtlDxgiFormatDesc,
     /// Combined `CAP_*` capability mask for `desc.pixel_format`.
     pub capability: u32,
 }
@@ -148,7 +148,7 @@ impl Inspection {
     /// Queries the DXGI format descriptor and its capability mask.
     #[must_use]
     pub fn query_dxgi_format(&self, format: u32) -> Option<FormatInfo> {
-        let (hr, desc) = query_dxgi(format);
+        let (hr, desc) = query_dxgi_ref(format);
         if hr < 0 {
             return None;
         }

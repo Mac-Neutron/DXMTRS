@@ -454,7 +454,7 @@ pub unsafe fn get_desc1(this: *mut c_void, out: *mut c_void) -> *mut c_void {
 /// Resolves the `WMTPixelFormat` a texture resource uses (`d3d12_texture.cpp:35-54`).
 #[must_use]
 pub fn resource_pixel_format(desc: &ResourceDesc) -> u32 {
-    let (hr, fmt) = dxmt_core::format::query_dxgi(desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(desc.format);
     if hr != S_OK {
         return 0;
     }
@@ -903,7 +903,7 @@ pub unsafe fn populate_texture_info_opt(
     desc: &ResourceDesc,
     info: &mut WMTTextureInfo,
 ) -> Hresult {
-    let (hr, fmt) = dxmt_core::format::query_dxgi(desc.format);
+    let (hr, fmt) = dxmt_core::format::query_dxgi_ref(desc.format);
     if hr != S_OK {
         return hr;
     }

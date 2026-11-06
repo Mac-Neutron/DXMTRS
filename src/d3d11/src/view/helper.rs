@@ -1,6 +1,6 @@
 //! View descriptor validation and default-view constructors (`d3d11_resource_view_helper.cpp`).
 
-use dxmt_core::{format::query_dxgi, resource::TextureViewDescriptor};
+use dxmt_core::{format::query_dxgi_ref, resource::TextureViewDescriptor};
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_TEXTURE_TYPE_CUBE,
     WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
@@ -458,11 +458,12 @@ pub fn initialize_and_normalize_srv_descriptor(
     tex_info: &WMTTextureInfo,
     view_desc: &mut D3d11ShaderResourceViewDesc1,
 ) -> Result<TextureViewDescriptor, Hresult> {
-    let (hr, mut metal_format) = query_dxgi(view_desc.format);
+    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
-    fix_depth_stencil_format(tex_info.pixel_format, &mut metal_format.pixel_format);
+    let mut pixel_format = metal_format.pixel_format;
+    fix_depth_stencil_format(tex_info.pixel_format, &mut pixel_format);
     let texture_type = tex_info.r#type();
     match view_desc.view_dimension {
         2 => {
@@ -474,7 +475,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -495,7 +496,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             view_desc.u.texture1d_array = t;
             if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -519,7 +520,7 @@ pub fn initialize_and_normalize_srv_descriptor(
                     | WMT_TEXTURE_TYPE_CUBE_ARRAY
             ) {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -546,7 +547,7 @@ pub fn initialize_and_normalize_srv_descriptor(
                     | WMT_TEXTURE_TYPE_CUBE_ARRAY
             ) {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -558,7 +559,7 @@ pub fn initialize_and_normalize_srv_descriptor(
         6 => {
             if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE,
                     first_mip: 0,
                     mip_count: 1,
@@ -568,7 +569,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: 0,
                     mip_count: 1,
@@ -586,7 +587,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
                     first_mip: 0,
                     mip_count: 1,
@@ -596,7 +597,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
                     first_mip: 0,
                     mip_count: 1,
@@ -606,7 +607,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: 0,
                     mip_count: 1,
@@ -616,7 +617,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: 0,
                     mip_count: 1,
@@ -634,7 +635,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE3D {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE3D,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -653,7 +654,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             if texture_type == WMT_TEXTURE_TYPE_CUBE || texture_type == WMT_TEXTURE_TYPE_CUBE_ARRAY
             {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE_CUBE,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -675,7 +676,7 @@ pub fn initialize_and_normalize_srv_descriptor(
             if texture_type == WMT_TEXTURE_TYPE_CUBE || texture_type == WMT_TEXTURE_TYPE_CUBE_ARRAY
             {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE_CUBE_ARRAY,
                     first_mip: t.most_detailed_mip,
                     mip_count: t.mip_levels,
@@ -701,11 +702,12 @@ pub fn initialize_and_normalize_uav_descriptor(
     view_desc: &mut D3d11UnorderedAccessViewDesc1,
 ) -> Result<TextureViewDescriptor, Hresult> {
     let _ = mip_levels;
-    let (hr, mut metal_format) = query_dxgi(view_desc.format);
+    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
-    fix_depth_stencil_format(tex_info.pixel_format, &mut metal_format.pixel_format);
+    let mut pixel_format = metal_format.pixel_format;
+    fix_depth_stencil_format(tex_info.pixel_format, &mut pixel_format);
     let texture_type = tex_info.r#type();
     match view_desc.view_dimension {
         2 => {
@@ -713,7 +715,7 @@ pub fn initialize_and_normalize_uav_descriptor(
             let t = unsafe { view_desc.u.texture1d };
             if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: t.mip_slice,
                     mip_count: 1,
@@ -731,7 +733,7 @@ pub fn initialize_and_normalize_uav_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: t.mip_slice,
                     mip_count: 1,
@@ -748,7 +750,7 @@ pub fn initialize_and_normalize_uav_descriptor(
                 WMT_TEXTURE_TYPE2D | WMT_TEXTURE_TYPE2D_ARRAY | WMT_TEXTURE_TYPE_CUBE
             ) {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: t.mip_slice,
                     mip_count: 1,
@@ -772,7 +774,7 @@ pub fn initialize_and_normalize_uav_descriptor(
                     | WMT_TEXTURE_TYPE_CUBE_ARRAY
             ) {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
                     first_mip: t.mip_slice,
                     mip_count: 1,
@@ -791,7 +793,7 @@ pub fn initialize_and_normalize_uav_descriptor(
             }
             if texture_type == WMT_TEXTURE_TYPE3D && t.first_w_slice == 0 {
                 return Ok(TextureViewDescriptor {
-                    format: metal_format.pixel_format,
+                    format: pixel_format,
                     texture_type: WMT_TEXTURE_TYPE3D,
                     first_mip: t.mip_slice,
                     mip_count: 1,
@@ -817,7 +819,7 @@ pub fn initialize_and_normalize_rtv_descriptor(
     view_desc: &mut D3d11RenderTargetViewDesc1,
 ) -> Result<(RenderPassAttachmentDesc, TextureViewDescriptor), Hresult> {
     let _ = mip_levels;
-    let (hr, metal_format) = query_dxgi(view_desc.format);
+    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }
@@ -1067,7 +1069,7 @@ pub fn initialize_and_normalize_dsv_descriptor(
     view_desc: &mut D3d11DepthStencilViewDesc,
 ) -> Result<(RenderPassAttachmentDesc, TextureViewDescriptor), Hresult> {
     let _ = mip_levels;
-    let (hr, metal_format) = query_dxgi(view_desc.format);
+    let (hr, metal_format) = query_dxgi_ref(view_desc.format);
     if hr < 0 {
         return Err(E_FAIL);
     }

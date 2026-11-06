@@ -12,7 +12,8 @@
 //! application's memory, one unaligned read each.
 
 use dxmt_core::format::{
-    MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER, query_dxgi,
+    MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
+    query_dxgi_ref,
 };
 use dxmt_util::com::Hresult;
 
@@ -374,7 +375,7 @@ fn planes(desc: &ResourceDesc) -> Option<Planes> {
             return None;
         }
     } else {
-        let (hr, format) = query_dxgi(desc.format);
+        let (hr, format) = query_dxgi_ref(desc.format);
         if hr < 0 {
             return None;
         }

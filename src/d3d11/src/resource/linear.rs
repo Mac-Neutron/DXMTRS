@@ -6,7 +6,7 @@ use std::sync::Arc;
 use dxmt_core::{
     dynamic::DynamicLinearTexture,
     encoder::BufferSlice,
-    format::{MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL, query_dxgi},
+    format::{MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL, query_dxgi_ref},
     resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
 };
 use dxmt_util::dxgi_consts::{D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE};
@@ -108,7 +108,7 @@ fn create_dynamic_linear_texture_1d_inner(
         return E_INVALIDARG;
     };
     let mtl = dev.core().device();
-    let (hr, fmt_desc) = query_dxgi(desc.format);
+    let (hr, fmt_desc) = query_dxgi_ref(desc.format);
     if hr < 0 {
         return E_FAIL;
     }
@@ -217,7 +217,7 @@ fn create_dynamic_linear_texture_2d_inner(
         return E_INVALIDARG;
     };
     let mtl = dev.core().device();
-    let (hr, fmt_desc) = query_dxgi(desc.format);
+    let (hr, fmt_desc) = query_dxgi_ref(desc.format);
     if hr < 0 {
         return E_FAIL;
     }
@@ -348,7 +348,7 @@ fn create_linear_texture_srv_1d_inner(
     if out.is_null() {
         return S_FALSE;
     }
-    let (hr, fmt_desc) = query_dxgi(final_desc.format);
+    let (hr, fmt_desc) = query_dxgi_ref(final_desc.format);
     if hr < 0 {
         return E_FAIL;
     }
@@ -439,7 +439,7 @@ fn create_linear_texture_srv_2d_inner(
     if out.is_null() {
         return S_FALSE;
     }
-    let (hr, fmt_desc) = query_dxgi(final_desc.format);
+    let (hr, fmt_desc) = query_dxgi_ref(final_desc.format);
     if hr < 0 {
         return E_FAIL;
     }

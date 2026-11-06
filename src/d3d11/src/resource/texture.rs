@@ -7,7 +7,8 @@ use dxmt_core::{
     dynamic::DynamicBuffer,
     encoder::BufferSlice,
     format::{
-        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_D24, depth_stencil_planar_flags, query_dxgi,
+        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_D24, depth_stencil_planar_flags,
+        query_dxgi_ref,
     },
     initializer::SubresourceData,
     resource::{
@@ -494,7 +495,7 @@ fn create_device_texture_1d_inner(
         && info.array_length == 1
         && (final_desc.misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) == 0;
     let texture = Arc::new(Texture::new(info, mtl));
-    let (_, fmt_desc) = query_dxgi(final_desc.format);
+    let (_, fmt_desc) = query_dxgi_ref(final_desc.format);
     let subs = enumerate_subresources_1d(&final_desc);
     let initialize = |alloc: Arc<TextureAllocation>| {
         let _ = texture.rename(Arc::clone(&alloc));
@@ -617,7 +618,7 @@ fn create_device_texture_2d_inner(
         && info.array_length == 1
         && (final_desc.misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) == 0;
     let texture = Arc::new(Texture::new(info, mtl));
-    let (_, fmt_desc) = query_dxgi(final_desc.format);
+    let (_, fmt_desc) = query_dxgi_ref(final_desc.format);
     let subs = enumerate_subresources_2d(&final_desc);
     let initialize = |alloc: Arc<TextureAllocation>| {
         let _ = texture.rename(Arc::clone(&alloc));
@@ -740,7 +741,7 @@ fn create_device_texture_3d_inner(
         && info.array_length == 1
         && (final_desc.misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) == 0;
     let texture = Arc::new(Texture::new(info, mtl));
-    let (_, fmt_desc) = query_dxgi(final_desc.format);
+    let (_, fmt_desc) = query_dxgi_ref(final_desc.format);
     let subs = enumerate_subresources_3d(&final_desc);
     let initialize = |alloc: Arc<TextureAllocation>| {
         let _ = texture.rename(Arc::clone(&alloc));
