@@ -10,7 +10,7 @@ use dxmt_core::{
         MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_D24,
         MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL, MtlDxgiFormatDesc, forget_srgb, query_dxgi,
     },
-    resource::{Buffer, Texture},
+    resource::{Buffer, Texture, dims::mip_extent},
     staging::Staging,
 };
 use winemetal_sys::wire::{
@@ -236,7 +236,7 @@ pub(super) struct Subresource {
 }
 
 impl Subresource {
-    pub(super) fn from_blit(obj: &BlitObject, subresource: u32) -> Option<Self> {
+    pub(super) const fn from_blit(obj: &BlitObject, subresource: u32) -> Option<Self> {
         match &obj.desc {
             BlitObjectDesc::Texture1d(d) => {
                 let total = d.mip_levels.saturating_mul(d.array_size);
@@ -245,7 +245,7 @@ impl Subresource {
                 }
                 let mip_level = subresource % d.mip_levels;
                 let array_slice = subresource / d.mip_levels;
-                let width = d.width.checked_shr(mip_level).unwrap_or(0).max(1);
+                let width = mip_extent(d.width, mip_level);
                 Some(Self {
                     mip_level,
                     array_slice,
@@ -261,8 +261,8 @@ impl Subresource {
                 }
                 let mip_level = subresource % d.mip_levels;
                 let array_slice = subresource / d.mip_levels;
-                let width = d.width.checked_shr(mip_level).unwrap_or(0).max(1);
-                let height = d.height.checked_shr(mip_level).unwrap_or(0).max(1);
+                let width = mip_extent(d.width, mip_level);
+                let height = mip_extent(d.height, mip_level);
                 Some(Self {
                     mip_level,
                     array_slice,
@@ -276,9 +276,9 @@ impl Subresource {
                     return None;
                 }
                 let mip_level = subresource;
-                let width = d.width.checked_shr(mip_level).unwrap_or(0).max(1);
-                let height = d.height.checked_shr(mip_level).unwrap_or(0).max(1);
-                let depth = d.depth.checked_shr(mip_level).unwrap_or(0).max(1);
+                let width = mip_extent(d.width, mip_level);
+                let height = mip_extent(d.height, mip_level);
+                let depth = mip_extent(d.depth, mip_level);
                 Some(Self {
                     mip_level,
                     array_slice: 0,
@@ -1516,8 +1516,8 @@ impl<M: Mode> Context<M> {
                         u64::from(bytes_per_image) * u64::from(src_size[2]),
                         256,
                     );
-                    let dst_mip_w = dst_tex.width().checked_shr(dst_mip).unwrap_or(0).max(1);
-                    let dst_mip_h = dst_tex.height().checked_shr(dst_mip).unwrap_or(0).max(1);
+                    let dst_mip_w = mip_extent(dst_tex.width(), dst_mip);
+                    let dst_mip_h = mip_extent(dst_tex.height(), dst_mip);
                     let clamped_src_width =
                         (src_size[0] << 2).min(dst_mip_w.saturating_sub(dst_origin[0]));
                     let clamped_src_height =
