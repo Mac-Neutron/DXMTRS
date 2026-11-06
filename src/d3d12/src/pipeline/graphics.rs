@@ -64,7 +64,7 @@ use crate::{
         name_pipeline,
     },
     com::{
-        ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_POINTER, Hresult,
+        ComRefCounted, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, Hresult,
         IID_ID3D12_DEVICE_CHILD, IID_ID3D12_OBJECT, IID_ID3D12_PAGEABLE, IID_ID3D12_PIPELINE_STATE,
         IID_IUNKNOWN, S_OK, add_ref_com, init_out_ptr, release_com, vtbl,
     },
@@ -373,7 +373,7 @@ const fn ir_err_to_hr(err: &IrError) -> Hresult {
     match err.code {
         Code::Fail => E_FAIL,
         Code::InvalidArg => E_INVALIDARG,
-        Code::OutOfMemory => 0x8007_000e_u32.cast_signed(),
+        Code::OutOfMemory => E_OUTOFMEMORY,
     }
 }
 
