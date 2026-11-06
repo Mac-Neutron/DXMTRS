@@ -3,32 +3,14 @@
 //! (`d3d12_command_list.cpp`).
 
 use core::{
-    ffi::{CStr, c_void},
+    ffi::c_void,
     mem::{align_of, size_of},
     ptr,
 };
 use std::sync::Arc;
 
-use dxmt_core::{
-    format,
-    library::{self, Library, ResourceAccess, SimpleCommandContext},
-    resource::{Buffer, BufferViewKey, Texture, TextureViewKey},
-};
-use winemetal_sys::{MTLDevice_newComputePipelineState, Obj};
-use winemetal_wire::{
-    MemPtr, WMT_COMPUTE_COMMAND_DISPATCH_THREADS, WMT_COMPUTE_COMMAND_NOP,
-    WMT_COMPUTE_COMMAND_SET_BUFFER, WMT_COMPUTE_COMMAND_SET_BYTES, WMT_COMPUTE_COMMAND_SET_PSO,
-    WMT_COMPUTE_COMMAND_SET_TEXTURE, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW,
-    WMT_RENDER_COMMAND_NOP, WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
-    WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMT_RENDER_COMMAND_SET_PSO,
-    WMT_RENDER_COMMAND_SET_SCISSOR_RECT, WMT_RENDER_COMMAND_SET_STENCIL_REF,
-    WMT_RENDER_COMMAND_SET_VIEWPORT, WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE3D, WMTClearColor,
-    WMTComputePipelineInfo, WMTScissorRect, WMTSize, WMTViewport, WmtcmdBase,
-    WmtcmdComputeDispatch, WmtcmdComputeNop, WmtcmdComputeSetbuffer, WmtcmdComputeSetbytes,
-    WmtcmdComputeSetpso, WmtcmdComputeSettexture, WmtcmdRenderDraw, WmtcmdRenderNop,
-    WmtcmdRenderSetbytes, WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetpso,
-    WmtcmdRenderSetscissorrect, WmtcmdRenderSetstencilref, WmtcmdRenderSetviewport,
-};
+use dxmt_core::format;
+use winemetal_wire::{WMTClearColor, WMTScissorRect};
 
 use crate::{
     abi::{
@@ -41,425 +23,10 @@ use crate::{
         },
         vtbl::{D3d12CpuDescriptorHandle, D3d12GpuDescriptorHandle},
     },
-    allocator::Allocator,
     descriptor_heap::{self, ShaderVisibleDescriptor},
-    encoder::{
-        ClearEncoderData, ComputeEncoderData, EncoderData, EncoderType, RenderEncoderData,
-        RenderEncoderDepthAttachmentData, RenderEncoderStencilAttachmentData, TextureViewRef,
-    },
+    encoder::{ClearEncoderData, EncoderData, EncoderType, TextureViewRef},
     list::{List, copy, state},
 };
-
-struct ClearContext<'a>(&'a mut Allocator);
-
-impl ClearContext<'_> {
-    fn encode_compute_cmd<T>(&mut self, mut cmd: T) {
-        // SAFETY: `self.0.encoder_current` is a `ComputeEncoderData` initialized by
-        // `start_compute_pass`.
-        let enc = unsafe { &mut *self.0.encoder_current.cast::<ComputeEncoderData>() };
-        let storage = self
-            .0
-            .allocate_cpu_heap(size_of::<T>(), 16)
-            .cast::<c_void>()
-            .cast::<T>();
-        // SAFETY: `cmd` starts with `WmtcmdBase` at offset 0.
-        let base = unsafe { &mut *(&raw mut cmd).cast::<WmtcmdBase>() };
-        base.next = MemPtr::NULL;
-        // SAFETY: `storage` points to freshly allocated aligned CPU heap storage for `T`.
-        unsafe { ptr::write(storage, cmd) };
-        let storage_base = storage.cast::<WmtcmdBase>();
-        // SAFETY: `enc.cmd_tail` points to a valid command node in the CPU heap.
-        unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
-        enc.cmd_tail = storage_base;
-        enc.base.barriers_last = self.0.barriers;
-    }
-
-    fn encode_render_cmd<T>(&mut self, mut cmd: T) {
-        // SAFETY: `self.0.encoder_current` is a `RenderEncoderData` initialized by
-        // `start_render_pass`.
-        let enc = unsafe { &mut *self.0.encoder_current.cast::<RenderEncoderData>() };
-        let storage = self
-            .0
-            .allocate_cpu_heap(size_of::<T>(), 16)
-            .cast::<c_void>()
-            .cast::<T>();
-        // SAFETY: `cmd` starts with `WmtcmdBase` at offset 0.
-        let base = unsafe { &mut *(&raw mut cmd).cast::<WmtcmdBase>() };
-        base.next = MemPtr::NULL;
-        // SAFETY: `storage` points to freshly allocated aligned CPU heap storage for `T`.
-        unsafe { ptr::write(storage, cmd) };
-        let storage_base = storage.cast::<WmtcmdBase>();
-        // SAFETY: `enc.cmd_tail` points to a valid command node in the CPU heap.
-        unsafe { (*enc.cmd_tail).next = MemPtr::from_ptr(storage_base) };
-        enc.cmd_tail = storage_base;
-        enc.base.barriers_last = self.0.barriers;
-    }
-}
-
-impl SimpleCommandContext for ClearContext<'_> {
-    fn compute_pipeline(&mut self, name: &CStr) -> Option<Obj> {
-        if self.0.device.is_null() {
-            return None;
-        }
-        // SAFETY: `self.0.device` is retained by `self.0`.
-        let dev = unsafe { &*self.0.device };
-        let mtl = dev.mtl.as_ref()?;
-        let func = dev.library.as_ref()?.function(name)?;
-        let info = WMTComputePipelineInfo {
-            compute_function: func.handle(),
-            binary_archives_for_lookup: MemPtr::NULL,
-            binary_archive_for_serialization: 0,
-            num_binary_archives_for_lookup: 0,
-            fail_on_binary_archive_miss: 0,
-            support_indirect_command_buffers: 0,
-            tgsize_is_multiple_of_sgwidth: 0,
-            immutable_buffers: 0,
-        };
-        let mut err = 0u64;
-        // SAFETY: `mtl` and `func` are live Metal objects; `info` and `err` are valid stack
-        // pointers.
-        let pso = unsafe {
-            MTLDevice_newComputePipelineState(mtl.handle(), &raw const info, &raw mut err)
-        };
-        // SAFETY: `MTLDevice_newComputePipelineState` returns a +1 retained error or 0.
-        if let Some(err_obj) = unsafe { Obj::adopt(err) } {
-            crate::err!(
-                "Failed to create compute PSO: {}",
-                library::description(&err_obj)
-            );
-        }
-        // SAFETY: `MTLDevice_newComputePipelineState` returns a +1 retained PSO or 0.
-        unsafe { Obj::adopt(pso) }
-    }
-
-    fn start_compute_pass(&mut self) {
-        self.0.invalidate_current_pass();
-        let barriers = self.0.barriers;
-        let ptr = self
-            .0
-            .allocate_cpu_heap(
-                size_of::<ComputeEncoderData>(),
-                align_of::<ComputeEncoderData>(),
-            )
-            .cast::<c_void>()
-            .cast::<ComputeEncoderData>();
-        let mut base = EncoderData::new(EncoderType::Compute, 0);
-        base.barriers = barriers;
-        base.barriers_last = barriers;
-        let init = ComputeEncoderData {
-            base,
-            cmd_head: WmtcmdComputeNop {
-                r#type: WMT_COMPUTE_COMMAND_NOP,
-                reserved: [0; 3],
-                next: MemPtr::NULL,
-            },
-            cmd_tail: ptr::null_mut(),
-        };
-        // SAFETY: `ptr` points to freshly allocated aligned CPU heap storage for
-        // `ComputeEncoderData`.
-        unsafe { ptr::write(ptr, init) };
-        // SAFETY: `ptr` was just initialized above.
-        let enc = unsafe { &mut *ptr };
-        enc.cmd_tail = (&raw mut enc.cmd_head).cast::<WmtcmdBase>();
-        self.0.encoder_current = ptr.cast::<EncoderData>();
-    }
-
-    fn end_pass(&mut self) {
-        self.0.invalidate_current_pass();
-    }
-
-    fn set_compute_pso(&mut self, pso: &Obj, threadgroup_size: WMTSize) {
-        self.encode_compute_cmd(WmtcmdComputeSetpso {
-            r#type: WMT_COMPUTE_COMMAND_SET_PSO,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            pso: pso.handle(),
-            threadgroup_size,
-        });
-    }
-
-    fn dispatch(&mut self, size: WMTSize) {
-        self.encode_compute_cmd(WmtcmdComputeDispatch {
-            r#type: WMT_COMPUTE_COMMAND_DISPATCH_THREADS,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            size,
-        });
-    }
-
-    fn set_compute_texture(
-        &mut self,
-        index: u32,
-        texture: &Arc<Texture>,
-        view: TextureViewKey,
-        _access: ResourceAccess,
-    ) {
-        let handle = texture
-            .current()
-            .map_or(0, |alloc| alloc.view(view).texture);
-        self.encode_compute_cmd(WmtcmdComputeSettexture {
-            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            texture: handle,
-            index: u8::try_from(index).unwrap_or(0),
-        });
-    }
-
-    fn set_compute_texel_buffer(
-        &mut self,
-        index: u32,
-        buffer: &Arc<Buffer>,
-        view: BufferViewKey,
-        _access: ResourceAccess,
-    ) {
-        let handle = buffer
-            .current()
-            .map_or(0, |alloc| buffer.view(&alloc, view).texture);
-        self.encode_compute_cmd(WmtcmdComputeSettexture {
-            r#type: WMT_COMPUTE_COMMAND_SET_TEXTURE,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            texture: handle,
-            index: u8::try_from(index).unwrap_or(0),
-        });
-    }
-
-    fn set_compute_buffer(
-        &mut self,
-        index: u32,
-        buffer: &Arc<Buffer>,
-        _offset: u32,
-        _length: u32,
-        _access: ResourceAccess,
-    ) {
-        let handle = buffer.current().map_or(0, |alloc| alloc.buffer());
-        self.encode_compute_cmd(WmtcmdComputeSetbuffer {
-            r#type: WMT_COMPUTE_COMMAND_SET_BUFFER,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            buffer: handle,
-            offset: 0,
-            index: u8::try_from(index).unwrap_or(0),
-        });
-    }
-
-    fn set_compute_bytes(&mut self, index: u32, bytes: &[u8]) {
-        let temp = self.0.allocate_cpu_heap(bytes.len(), 16);
-        if !temp.is_null() && !bytes.is_empty() {
-            // SAFETY: `temp` has `bytes.len()` writable bytes in the CPU heap.
-            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), temp, bytes.len()) };
-        }
-        self.encode_compute_cmd(WmtcmdComputeSetbytes {
-            r#type: WMT_COMPUTE_COMMAND_SET_BYTES,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            bytes: MemPtr::from_ptr(temp),
-            length: bytes.len() as u64,
-            index: u8::try_from(index).unwrap_or(0),
-        });
-    }
-
-    fn default_library(&self) -> &Library {
-        // SAFETY: `default_library` is only called when `self.0.device` is non-null and has an
-        // initialized `Library`.
-        let dev = unsafe { &*self.0.device };
-        dev.library
-            .as_ref()
-            .unwrap_or_else(|| unreachable!("Device has an internal Library"))
-    }
-
-    fn start_render_pass(&mut self) {
-        self.0.invalidate_current_pass();
-        let barriers = self.0.barriers;
-        let ptr = self
-            .0
-            .allocate_cpu_heap(
-                size_of::<RenderEncoderData>(),
-                align_of::<RenderEncoderData>(),
-            )
-            .cast::<c_void>()
-            .cast::<RenderEncoderData>();
-        let mut base = EncoderData::new(EncoderType::Render, 0);
-        base.barriers = barriers;
-        base.barriers_last = barriers;
-        let init = RenderEncoderData {
-            base,
-            colors: Default::default(),
-            depth: RenderEncoderDepthAttachmentData::default(),
-            stencil: RenderEncoderStencilAttachmentData::default(),
-            default_raster_sample_count: 1,
-            render_target_array_length: 0,
-            render_target_height: 16384,
-            render_target_width: 16384,
-            cmd_head: WmtcmdRenderNop {
-                r#type: WMT_RENDER_COMMAND_NOP,
-                reserved: [0; 3],
-                next: MemPtr::NULL,
-            },
-            cmd_tail: ptr::null_mut(),
-            dsv_planar_flags: 0,
-            dsv_readonly_flags: 0,
-            render_target_count: 0,
-            use_visibility_result: false,
-            visibility_buffer: 0,
-            use_tessellation: false,
-            use_geometry: false,
-            uav_writes: false,
-            pre_head: WmtcmdComputeNop {
-                r#type: WMT_COMPUTE_COMMAND_NOP,
-                reserved: [0; 3],
-                next: MemPtr::NULL,
-            },
-            pre_tail: ptr::null_mut(),
-        };
-        // SAFETY: `ptr` points to freshly allocated aligned CPU heap storage for
-        // `RenderEncoderData`.
-        unsafe { ptr::write(ptr, init) };
-        // SAFETY: `ptr` was just initialized above.
-        let enc = unsafe { &mut *ptr };
-        enc.cmd_tail = (&raw mut enc.cmd_head).cast::<WmtcmdBase>();
-        self.0.encoder_current = ptr.cast::<EncoderData>();
-    }
-
-    fn set_color_attachment(
-        &mut self,
-        index: u32,
-        texture: &Arc<Texture>,
-        view: TextureViewKey,
-        depth_plane: u32,
-    ) {
-        let idx = usize::try_from(index).unwrap_or(0);
-        // SAFETY: `self.0.encoder_current` is a `RenderEncoderData` initialized by
-        // `start_render_pass`.
-        let enc = unsafe { &mut *self.0.encoder_current.cast::<RenderEncoderData>() };
-        enc.colors[idx].attachment = TextureViewRef::from_texture(texture, view);
-        enc.colors[idx].depth_plane = depth_plane;
-        enc.colors[idx].load_action = WMT_LOAD_ACTION_LOAD;
-        enc.colors[idx].store_action = WMT_STORE_ACTION_STORE;
-        let next_count = u8::try_from(index + 1).unwrap_or(u8::MAX);
-        enc.render_target_count = enc.render_target_count.max(next_count);
-        let [width, height, depth] = texture.view_size(view);
-        enc.render_target_width = enc.render_target_width.min(width);
-        enc.render_target_height = enc.render_target_height.min(height);
-        let array_len = if texture.info().r#type() == WMT_TEXTURE_TYPE3D {
-            depth.saturating_sub(depth_plane)
-        } else {
-            view.array_size()
-        };
-        enc.render_target_array_length = u16::try_from(array_len).unwrap_or(u16::MAX);
-        enc.default_raster_sample_count = u8::try_from(texture.info().sample_count()).unwrap_or(1);
-    }
-
-    fn set_depth_stencil_attachment(
-        &mut self,
-        texture: &Arc<Texture>,
-        view: TextureViewKey,
-        dsv_flag: u32,
-    ) {
-        // SAFETY: `self.0.encoder_current` is a `RenderEncoderData` initialized by
-        // `start_render_pass`.
-        let enc = unsafe { &mut *self.0.encoder_current.cast::<RenderEncoderData>() };
-        let view_ref = TextureViewRef::from_texture(texture, view);
-        if (dsv_flag & 1) != 0 {
-            enc.depth.attachment.clone_from(&view_ref);
-            enc.depth.load_action = WMT_LOAD_ACTION_LOAD;
-            enc.depth.store_action = WMT_STORE_ACTION_STORE;
-        }
-        if (dsv_flag & 2) != 0 {
-            enc.stencil.attachment = view_ref;
-            enc.stencil.load_action = WMT_LOAD_ACTION_LOAD;
-            enc.stencil.store_action = WMT_STORE_ACTION_STORE;
-        }
-        enc.dsv_planar_flags = u8::try_from(dsv_flag).unwrap_or(0);
-        let [width, height, _] = texture.view_size(view);
-        enc.render_target_width = enc.render_target_width.min(width);
-        enc.render_target_height = enc.render_target_height.min(height);
-        enc.render_target_array_length = u16::try_from(view.array_size()).unwrap_or(u16::MAX);
-        enc.default_raster_sample_count = u8::try_from(texture.info().sample_count()).unwrap_or(1);
-    }
-
-    fn set_render_pso(&mut self, pso: &Obj) {
-        self.encode_render_cmd(WmtcmdRenderSetpso {
-            r#type: WMT_RENDER_COMMAND_SET_PSO,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            pso: pso.handle(),
-        });
-    }
-
-    fn set_viewport(&mut self, viewport: WMTViewport) {
-        self.encode_render_cmd(WmtcmdRenderSetviewport {
-            r#type: WMT_RENDER_COMMAND_SET_VIEWPORT,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            viewport,
-        });
-    }
-
-    fn set_depth_stencil_state(&mut self, state: &Obj) {
-        self.encode_render_cmd(WmtcmdRenderSetdepthstencilstate {
-            r#type: WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            depth_stencil_state: state.handle(),
-        });
-    }
-
-    fn set_scissor_rect(&mut self, rect: WMTScissorRect) {
-        self.encode_render_cmd(WmtcmdRenderSetscissorrect {
-            r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            scissor_rect: rect,
-        });
-    }
-
-    fn set_stencil_reference(&mut self, stencil_ref: u8) {
-        self.encode_render_cmd(WmtcmdRenderSetstencilref {
-            r#type: WMT_RENDER_COMMAND_SET_STENCIL_REF,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            stencil_ref,
-        });
-    }
-
-    fn set_fragment_bytes(&mut self, index: u32, bytes: &[u8]) {
-        let temp = self.0.allocate_cpu_heap(bytes.len(), 16);
-        if !temp.is_null() && !bytes.is_empty() {
-            // SAFETY: `temp` has `bytes.len()` writable bytes in the CPU heap.
-            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), temp, bytes.len()) };
-        }
-        self.encode_render_cmd(WmtcmdRenderSetbytes {
-            r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            bytes: MemPtr::from_ptr(temp),
-            length: bytes.len() as u64,
-            index: u8::try_from(index).unwrap_or(0),
-        });
-    }
-
-    fn draw(
-        &mut self,
-        primitive: u8,
-        vertex_start: u32,
-        vertex_count: u32,
-        base_instance: i32,
-        instance_count: u32,
-    ) {
-        self.encode_render_cmd(WmtcmdRenderDraw {
-            r#type: WMT_RENDER_COMMAND_DRAW,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            primitive_type: primitive,
-            vertex_start: u64::from(vertex_start),
-            vertex_count: u64::from(vertex_count),
-            instance_count,
-            base_instance: base_instance.cast_unsigned(),
-        });
-    }
-}
 
 /// `ID3D12GraphicsCommandList::ClearDepthStencilView` (`d3d12_command_list.cpp:1645`).
 ///
@@ -502,8 +69,7 @@ pub unsafe fn clear_depth_stencil_view(
         let Some(mut clear_rtv) = alloc.clear_rtv.take() else {
             return;
         };
-        let mut ctx = ClearContext(alloc);
-        clear_rtv.begin(&mut ctx, texture, attachment_desc.view, 0, checked_flags);
+        clear_rtv.begin(alloc, texture, attachment_desc.view, 0, checked_flags);
         let rect_ptr = rects.cast::<Rect>();
         for i in 0..num_rects {
             // SAFETY: `rect_ptr` has `num_rects` readable `Rect` elements.
@@ -518,7 +84,7 @@ pub unsafe fn clear_depth_stencil_view(
                 continue;
             }
             clear_rtv.clear_depth_stencil(
-                &mut ctx,
+                alloc,
                 WMTScissorRect {
                     x: u64::from(rect_offset_x),
                     y: u64::from(rect_offset_y),
@@ -529,7 +95,7 @@ pub unsafe fn clear_depth_stencil_view(
                 stencil,
             );
         }
-        clear_rtv.end(&mut ctx);
+        clear_rtv.end(alloc);
         alloc.clear_rtv = Some(clear_rtv);
         return;
     }
@@ -609,9 +175,8 @@ pub unsafe fn clear_render_target_view(
         let Some(mut clear_rtv) = alloc.clear_rtv.take() else {
             return;
         };
-        let mut ctx = ClearContext(alloc);
         clear_rtv.begin(
-            &mut ctx,
+            alloc,
             texture,
             attachment_desc.view,
             attachment_desc.depth_plane,
@@ -631,7 +196,7 @@ pub unsafe fn clear_render_target_view(
                 continue;
             }
             clear_rtv.clear_color(
-                &mut ctx,
+                alloc,
                 WMTScissorRect {
                     x: u64::from(rect_offset_x),
                     y: u64::from(rect_offset_y),
@@ -642,7 +207,7 @@ pub unsafe fn clear_render_target_view(
                 color,
             );
         }
-        clear_rtv.end(&mut ctx);
+        clear_rtv.end(alloc);
         alloc.clear_rtv = Some(clear_rtv);
         return;
     }
@@ -721,14 +286,13 @@ pub unsafe fn clear_unordered_access_view_uint(
     let Some(mut clear_uav) = alloc.clear_uav.take() else {
         return;
     };
-    let mut ctx = ClearContext(alloc);
 
     let full_rect = match descriptor {
         ShaderVisibleDescriptor::UavBuffer {
             buffer: Some(buffer),
             slice,
         } => {
-            clear_uav.begin_buffer_u32(&mut ctx, color, &buffer);
+            clear_uav.begin_buffer_u32(alloc, color, &buffer);
             Rect {
                 left: i32::try_from(slice.byte_offset >> 2).unwrap_or(i32::MAX),
                 top: 0,
@@ -741,7 +305,7 @@ pub unsafe fn clear_unordered_access_view_uint(
             texture: Some(texture),
             view,
         } => {
-            clear_uav.begin_texture_u32(&mut ctx, color, &texture, view);
+            clear_uav.begin_texture_u32(alloc, color, &texture, view);
             let [w, h, _] = texture.view_size(view);
             Rect {
                 left: 0,
@@ -755,7 +319,7 @@ pub unsafe fn clear_unordered_access_view_uint(
             view,
             slice,
         } => {
-            clear_uav.begin_texel_buffer_u32(&mut ctx, color, &buffer, view);
+            clear_uav.begin_texel_buffer_u32(alloc, color, &buffer, view);
             Rect {
                 left: i32::try_from(slice.first_element).unwrap_or(i32::MAX),
                 top: 0,
@@ -769,7 +333,7 @@ pub unsafe fn clear_unordered_access_view_uint(
             }
         }
         _ => {
-            clear_uav.end(&mut ctx);
+            clear_uav.end(alloc);
             alloc.clear_uav = Some(clear_uav);
             return;
         }
@@ -792,7 +356,7 @@ pub unsafe fn clear_unordered_access_view_uint(
             continue;
         }
         clear_uav.clear(
-            &mut ctx,
+            alloc,
             rect.left.cast_unsigned(),
             rect.top.cast_unsigned(),
             width.cast_unsigned(),
@@ -800,7 +364,7 @@ pub unsafe fn clear_unordered_access_view_uint(
         );
     }
 
-    clear_uav.end(&mut ctx);
+    clear_uav.end(alloc);
     alloc.clear_uav = Some(clear_uav);
 }
 
@@ -840,14 +404,13 @@ pub unsafe fn clear_unordered_access_view_float(
     let Some(mut clear_uav) = alloc.clear_uav.take() else {
         return;
     };
-    let mut ctx = ClearContext(alloc);
 
     let full_rect = match descriptor {
         ShaderVisibleDescriptor::UavBuffer {
             buffer: Some(buffer),
             slice,
         } => {
-            clear_uav.begin_buffer_f32(&mut ctx, color, &buffer);
+            clear_uav.begin_buffer_f32(alloc, color, &buffer);
             Rect {
                 left: i32::try_from(slice.byte_offset >> 2).unwrap_or(i32::MAX),
                 top: 0,
@@ -860,7 +423,7 @@ pub unsafe fn clear_unordered_access_view_float(
             texture: Some(texture),
             view,
         } => {
-            clear_uav.begin_texture_f32(&mut ctx, color, &texture, view);
+            clear_uav.begin_texture_f32(alloc, color, &texture, view);
             let [w, h, _] = texture.view_size(view);
             Rect {
                 left: 0,
@@ -874,7 +437,7 @@ pub unsafe fn clear_unordered_access_view_float(
             view,
             slice,
         } => {
-            clear_uav.begin_texel_buffer_f32(&mut ctx, color, &buffer, view);
+            clear_uav.begin_texel_buffer_f32(alloc, color, &buffer, view);
             Rect {
                 left: i32::try_from(slice.first_element).unwrap_or(i32::MAX),
                 top: 0,
@@ -888,7 +451,7 @@ pub unsafe fn clear_unordered_access_view_float(
             }
         }
         _ => {
-            clear_uav.end(&mut ctx);
+            clear_uav.end(alloc);
             alloc.clear_uav = Some(clear_uav);
             return;
         }
@@ -911,7 +474,7 @@ pub unsafe fn clear_unordered_access_view_float(
             continue;
         }
         clear_uav.clear(
-            &mut ctx,
+            alloc,
             rect.left.cast_unsigned(),
             rect.top.cast_unsigned(),
             width.cast_unsigned(),
@@ -919,7 +482,7 @@ pub unsafe fn clear_unordered_access_view_float(
         );
     }
 
-    clear_uav.end(&mut ctx);
+    clear_uav.end(alloc);
     alloc.clear_uav = Some(clear_uav);
 }
 
