@@ -62,6 +62,7 @@ fn new_test_context() -> Context<Immediate> {
             ..ContextState::default()
         },
         cmdbuf_state: CommandBufferState::Idle,
+        encode: crate::context::encode::EncodeSession::default(),
         dirty: DirtyFlags::empty(),
         defaults: Defaults::default(),
         mode: Immediate::default(),
@@ -684,4 +685,18 @@ fn records_as_the_dump() {
             acc
         });
     assert_eq!(gs_lines, GOLDEN_GS);
+}
+
+#[test]
+fn a_destroyed_deferred_context_takes_its_session_with_it() {
+    let held = std::sync::Arc::new(());
+    let mut ctx = Context::new_deferred(ptr::null_mut(), 0);
+    assert_eq!(ctx.recorded_passes().len(), 0);
+    assert_eq!(ctx.promote_flush_count(), 0);
+    let in_closure = std::sync::Arc::clone(&held);
+    ctx.emit_encoder(move |_| drop(in_closure));
+    assert_eq!(std::sync::Arc::strong_count(&held), 2);
+    drop(ctx);
+    // The global session map kept the closure, and the arena under it, for the process's life.
+    assert_eq!(std::sync::Arc::strong_count(&held), 1);
 }

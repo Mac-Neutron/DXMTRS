@@ -39,6 +39,7 @@ fn new_test_context() -> Context<Immediate> {
         device: ptr::null_mut(),
         state: super::ContextState::default(),
         cmdbuf_state: crate::context::CommandBufferState::Idle,
+        encode: crate::context::encode::EncodeSession::default(),
         dirty: DirtyFlags::empty(),
         defaults: Defaults::default(),
         mode: Immediate::default(),

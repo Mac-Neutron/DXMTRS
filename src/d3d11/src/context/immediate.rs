@@ -315,6 +315,7 @@ impl Context<Immediate> {
             device,
             state: super::state::ContextState::default(),
             cmdbuf_state: CommandBufferState::Idle,
+            encode: super::encode::EncodeSession::default(),
             dirty: DirtyFlags::all(),
             defaults: Defaults::new(device),
             mode: Immediate::default(),

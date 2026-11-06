@@ -11,7 +11,7 @@ use core::{
     ptr::{self, NonNull},
     sync::atomic::{AtomicU64, Ordering},
 };
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use dxmt_core::{
     arena::{BlockPool, Commands},
@@ -19,7 +19,6 @@ use dxmt_core::{
     encoder::{Encoder, NO_NEXT, Record, kind, stage},
     resource::{Texture, TextureViewKey},
 };
-use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     MemPtr, WMT_BLIT_COMMAND_NOP, WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_PSO,
     WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_INVALID, WMT_RENDER_COMMAND_NOP,
@@ -252,7 +251,9 @@ impl Default for EncodeSnapshot {
 }
 
 /// Per-context encoding session holding the command arena, active pass, and state snapshot.
-struct EncodeSession {
+///
+/// A field of its [`Context`], so it lives and dies with it and is reached without a lookup.
+pub struct EncodeSession {
     commands: Commands,
     active_pass: Option<ActivePass>,
     completed_passes: Vec<(RecordedPassKind, usize)>,
@@ -260,8 +261,8 @@ struct EncodeSession {
     snap: EncodeSnapshot,
 }
 
-impl EncodeSession {
-    fn new() -> Self {
+impl Default for EncodeSession {
+    fn default() -> Self {
         Self {
             commands: Commands::new(Arc::new(BlockPool::new(ARENA_BLOCK_SIZE))),
             active_pass: None,
@@ -270,7 +271,9 @@ impl EncodeSession {
             snap: EncodeSnapshot::default(),
         }
     }
+}
 
+impl EncodeSession {
     fn allocate_record<T>(&mut self, value: T) -> NonNull<T> {
         let layout = Layout::new::<T>()
             .align_to(RECORD_ALIGN)
@@ -318,18 +321,6 @@ impl EncodeSession {
     }
 }
 
-static SESSIONS: LazyLock<Mutex<FxHashMap<usize, EncodeSession>>> =
-    LazyLock::new(|| Mutex::new(FxHashMap::default()));
-
-fn with_session<M: Mode, R>(ctx: &Context<M>, f: impl FnOnce(&mut EncodeSession) -> R) -> R {
-    let key = ptr::from_ref(ctx).addr();
-    f(SESSIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .entry(key)
-        .or_insert_with(EncodeSession::new))
-}
-
 /// `ptr` as a pointer of `winemetal.h`'s structures.
 ///
 /// Its provenance is exposed for [`Context::recorded_passes`] to read back.
@@ -344,32 +335,35 @@ impl<M: Mode> Context<M> {
             .map_or(0, super::Context::<super::Immediate>::active_seq)
     }
 
-    /// Returns a clone of the current encoding state snapshot.
-    pub(super) fn encode_snapshot(&self) -> EncodeSnapshot {
-        with_session(self, |s| s.snap.clone())
+    /// The current encoding state snapshot.
+    pub(super) const fn encode_snapshot(&self) -> &EncodeSnapshot {
+        &self.encode.snap
     }
 
     /// Mutates the current encoding state snapshot.
-    pub(super) fn update_encode_snapshot(&self, f: impl FnOnce(&mut EncodeSnapshot)) {
-        with_session(self, |s| f(&mut s.snap));
+    pub(super) fn update_encode_snapshot(&mut self, f: impl FnOnce(&mut EncodeSnapshot)) {
+        f(&mut self.encode.snap);
     }
 
-    /// Allocates and initializes a contiguous slice copy in the current command chunk arena.
-    pub(super) fn allocate_chunk_slice<T: Copy>(&self, items: &[T]) -> NonNull<T> {
-        with_session(self, |s| {
-            let byte_len = size_of_val(items).max(1);
-            let align = align_of::<T>().max(8);
-            let layout = Layout::from_size_align(byte_len, align)
-                .unwrap_or_else(|_| Layout::from_size_align(byte_len, 8).expect("valid layout"));
-            let dst = s.commands.allocate(layout).cast::<T>();
-            if !items.is_empty() {
-                // SAFETY: `dst` has space for `items.len()` elements of `T` and does not overlap.
-                unsafe {
-                    ptr::copy_nonoverlapping(items.as_ptr(), dst.as_ptr(), items.len());
-                }
+    /// Copies the snapshot's slice `pick` into the session's command arena: its address and length.
+    pub(super) fn allocate_snapshot_slice<T: Copy>(
+        &mut self,
+        pick: fn(&EncodeSnapshot) -> &[T],
+    ) -> (NonNull<T>, usize) {
+        let s = &mut self.encode;
+        let items = pick(&s.snap);
+        let byte_len = size_of_val(items).max(1);
+        let align = align_of::<T>().max(8);
+        let layout = Layout::from_size_align(byte_len, align)
+            .unwrap_or_else(|_| Layout::from_size_align(byte_len, 8).expect("valid layout"));
+        let dst = s.commands.allocate(layout).cast::<T>();
+        if !items.is_empty() {
+            // SAFETY: `dst` has space for `items.len()` elements of `T` and does not overlap.
+            unsafe {
+                ptr::copy_nonoverlapping(items.as_ptr(), dst.as_ptr(), items.len());
             }
-            dst
-        })
+        }
+        (dst, items.len())
     }
 
     /// Pre-allocates space in the active pass argument buffer (`PreAllocateArgumentBuffer`).
@@ -379,13 +373,12 @@ impl<M: Mode> Context<M> {
         size: u64,
         alignment: u64,
     ) -> u64 {
-        let cell = with_session(self, |s| {
-            if is_compute {
-                s.snap.compute_argbuf_size.clone()
-            } else {
-                s.snap.render_argbuf_size.clone()
-            }
-        });
+        let snap = &self.encode.snap;
+        let cell = if is_compute {
+            &snap.compute_argbuf_size
+        } else {
+            &snap.render_argbuf_size
+        };
         let Some(counter) = cell else {
             return 0;
         };
@@ -417,15 +410,11 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            with_session(self, |s| {
-                s.append_record(cmd);
-            });
+            self.encode.append_record(cmd);
             M::emit_st(self, encode_fn);
         } else {
-            with_session(self, |s| {
-                s.append_record(cmd);
-                s.commands.emit(encode_fn);
-            });
+            self.encode.append_record(cmd);
+            self.encode.commands.emit(encode_fn);
         }
     }
 
@@ -436,15 +425,11 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            with_session(self, |s| {
-                s.append_record(cmd);
-            });
+            self.encode.append_record(cmd);
             M::emit_op(self, encode_fn);
         } else {
-            with_session(self, |s| {
-                s.append_record(cmd);
-                s.commands.emit(encode_fn);
-            });
+            self.encode.append_record(cmd);
+            self.encode.commands.emit(encode_fn);
         }
     }
 
@@ -455,15 +440,11 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            with_session(self, |s| {
-                s.append_record(cmd);
-            });
+            self.encode.append_record(cmd);
             M::emit_st(self, encode_fn);
         } else {
-            with_session(self, |s| {
-                s.append_record(cmd);
-                s.commands.emit(encode_fn);
-            });
+            self.encode.append_record(cmd);
+            self.encode.commands.emit(encode_fn);
         }
     }
 
@@ -474,15 +455,11 @@ impl<M: Mode> Context<M> {
         F: Fn(&mut Encoder) + Send + 'static,
     {
         if self.is_live() {
-            with_session(self, |s| {
-                s.append_record(cmd);
-            });
+            self.encode.append_record(cmd);
             M::emit_op(self, encode_fn);
         } else {
-            with_session(self, |s| {
-                s.append_record(cmd);
-                s.commands.emit(encode_fn);
-            });
+            self.encode.append_record(cmd);
+            self.encode.commands.emit(encode_fn);
         }
     }
 
@@ -501,9 +478,7 @@ impl<M: Mode> Context<M> {
         if self.is_live() {
             M::emit_st(self, wrapped);
         } else {
-            with_session(self, |s| {
-                s.commands.emit(wrapped);
-            });
+            self.encode.commands.emit(wrapped);
         }
     }
 
@@ -532,12 +507,10 @@ impl<M: Mode> Context<M> {
         let live = self.is_live();
         match self.cmdbuf_state {
             CommandBufferState::RenderEncoderActive => {
-                with_session(self, |s| {
-                    s.end_pass();
-                    if !live {
-                        s.commands.emit(Encoder::end_pass);
-                    }
-                });
+                self.encode.end_pass();
+                if !live {
+                    self.encode.commands.emit(Encoder::end_pass);
+                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
                 }
@@ -547,22 +520,11 @@ impl<M: Mode> Context<M> {
                     CommandBufferState::RenderPipelineReady
                 };
             }
-            CommandBufferState::RenderPipelineReady => {
-                if live {
-                    with_session(self, |s| {
-                        s.end_pass();
-                    });
-                    M::emit_st(self, Encoder::end_pass);
-                    self.cmdbuf_state = CommandBufferState::Idle;
-                }
-            }
             CommandBufferState::ComputeEncoderActive => {
-                with_session(self, |s| {
-                    s.end_pass();
-                    if !live {
-                        s.commands.emit(Encoder::end_pass);
-                    }
-                });
+                self.encode.end_pass();
+                if !live {
+                    self.encode.commands.emit(Encoder::end_pass);
+                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
                 }
@@ -572,22 +534,18 @@ impl<M: Mode> Context<M> {
                     CommandBufferState::ComputePipelineReady
                 };
             }
-            CommandBufferState::ComputePipelineReady => {
+            CommandBufferState::RenderPipelineReady | CommandBufferState::ComputePipelineReady => {
                 if live {
-                    with_session(self, |s| {
-                        s.end_pass();
-                    });
+                    self.encode.end_pass();
                     M::emit_st(self, Encoder::end_pass);
                     self.cmdbuf_state = CommandBufferState::Idle;
                 }
             }
             CommandBufferState::BlitEncoderActive => {
-                with_session(self, |s| {
-                    s.end_pass();
-                    if !live {
-                        s.commands.emit(Encoder::end_pass);
-                    }
-                });
+                self.encode.end_pass();
+                if !live {
+                    self.encode.commands.emit(Encoder::end_pass);
+                }
                 if live {
                     M::emit_st(self, Encoder::end_pass);
                 }
@@ -596,9 +554,7 @@ impl<M: Mode> Context<M> {
             CommandBufferState::Idle => {}
         }
         if promote_flush && !self.has_open_pass() {
-            with_session(self, |s| {
-                s.promote_flush_count += 1;
-            });
+            self.encode.promote_flush_count += 1;
             if live {
                 if let Some(imm) = self.as_immediate_mut() {
                     imm.mode.has_dirty_op = true;
@@ -706,10 +662,8 @@ impl<M: Mode> Context<M> {
             };
             let argbuf_size = Arc::new(AtomicU64::new(0));
             let argbuf_clone = Arc::clone(&argbuf_size);
-            with_session(self, |s| {
-                s.snap.render_argbuf_size = Some(argbuf_size);
-                s.begin_pass(RecordedPassKind::Render);
-            });
+            self.encode.snap.render_argbuf_size = Some(argbuf_size);
+            self.encode.begin_pass(RecordedPassKind::Render);
             let rtv_count = u8::try_from(num_rtvs).unwrap_or(0);
             M::emit_st(self, move |enc| {
                 let (dsv_planar, dsv_ro) = dsv_attachment
@@ -791,11 +745,9 @@ impl<M: Mode> Context<M> {
         }
 
         let pso = self.encode_snapshot().render_pso;
-        with_session(self, |s| {
-            s.begin_pass(RecordedPassKind::Render);
-            s.commands.emit(|enc| {
-                enc.start_render_pass(0, 0, 0, None);
-            });
+        self.encode.begin_pass(RecordedPassKind::Render);
+        self.encode.commands.emit(|enc| {
+            enc.start_render_pass(0, 0, 0, None);
         });
 
         // C++ closure #1 (`SwitchToRenderEncoder`, d3d11_context_impl.cpp:2663):
@@ -834,10 +786,8 @@ impl<M: Mode> Context<M> {
 
             let argbuf_size = Arc::new(AtomicU64::new(0));
             let argbuf_clone = Arc::clone(&argbuf_size);
-            with_session(self, |s| {
-                s.snap.compute_argbuf_size = Some(argbuf_size);
-                s.begin_pass(RecordedPassKind::Compute);
-            });
+            self.encode.snap.compute_argbuf_size = Some(argbuf_size);
+            self.encode.begin_pass(RecordedPassKind::Compute);
             M::emit_st(self, move |enc| {
                 let sz = usize::try_from(argbuf_clone.load(Ordering::Relaxed)).unwrap_or(0);
                 let argbuf = enc.allocate_argument_buffer(sz);
@@ -868,11 +818,9 @@ impl<M: Mode> Context<M> {
         let snap = self.encode_snapshot();
         let pso = snap.compute_pso;
         let threadgroup_size = snap.compute_threadgroup_size;
-        with_session(self, |s| {
-            s.begin_pass(RecordedPassKind::Compute);
-            s.commands.emit(|enc| {
-                enc.start_compute_pass(None);
-            });
+        self.encode.begin_pass(RecordedPassKind::Compute);
+        self.encode.commands.emit(|enc| {
+            enc.start_compute_pass(None);
         });
 
         // C++ closure #2 (`SwitchToComputeEncoder`, d3d11_context_impl.cpp:2688):
@@ -904,12 +852,10 @@ impl<M: Mode> Context<M> {
             CommandBufferState::Idle => {}
         }
         let live = self.is_live();
-        with_session(self, |s| {
-            s.begin_pass(RecordedPassKind::Blit);
-            if !live {
-                s.commands.emit(Encoder::start_blit_pass);
-            }
-        });
+        self.encode.begin_pass(RecordedPassKind::Blit);
+        if !live {
+            self.encode.commands.emit(Encoder::start_blit_pass);
+        }
         if live {
             M::emit_st(self, Encoder::start_blit_pass);
         }
@@ -1018,14 +964,15 @@ impl<M: Mode> Context<M> {
 
     /// Returns the number of times `invalidate_current_pass(true)` promoted a flush.
     #[must_use]
-    pub fn promote_flush_count(&self) -> u32 {
-        with_session(self, |s| s.promote_flush_count)
+    pub const fn promote_flush_count(&self) -> u32 {
+        self.encode.promote_flush_count
     }
 
     /// Returns the recorded passes (`(kind, head_ptr)`) for this context.
     #[must_use]
     pub fn recorded_passes(&self) -> Vec<(RecordedPassKind, *const WmtcmdBase)> {
-        with_session(self, |s| {
+        let s = &self.encode;
+        {
             let mut out: Vec<(RecordedPassKind, *const WmtcmdBase)> = s
                 .completed_passes
                 .iter()
@@ -1040,16 +987,14 @@ impl<M: Mode> Context<M> {
                 out.push((active.kind.copy_kind(), active.head.as_ptr().cast_const()));
             }
             out
-        })
+        }
     }
 
     /// Clears recorded passes for this context.
     pub fn clear_recorded_passes(&mut self) {
-        with_session(self, |s| {
-            s.active_pass = None;
-            s.completed_passes.clear();
-            s.commands.reset();
-        });
+        self.encode.active_pass = None;
+        self.encode.completed_passes.clear();
+        self.encode.commands.reset();
     }
 }
 

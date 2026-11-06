@@ -19,6 +19,7 @@ fn new_ctx() -> Context<Immediate> {
         device: ptr::null_mut(),
         state: ContextState::default(),
         cmdbuf_state: CommandBufferState::Idle,
+        encode: crate::context::encode::EncodeSession::default(),
         dirty: DirtyFlags::empty(),
         defaults: Defaults::default(),
         mode: Immediate::default(),

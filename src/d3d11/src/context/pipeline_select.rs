@@ -33,7 +33,7 @@ use winemetal_sys::{
 
 use super::{
     CommandBufferState, Context, Mode,
-    encode::slice_mem_ptr,
+    encode::{EncodeSnapshot, slice_mem_ptr},
     state::{DirtyFlags, RENDER_TARGET_SLOTS, STREAM_OUTPUT_SLOTS, ShaderStage},
 };
 use crate::{
@@ -766,6 +766,16 @@ impl<M: Mode> Context<M> {
         if indexed && snap.index_buffer == 0 {
             return false;
         }
+        let rasterizer = snap.rasterizer.copy_cmd();
+        let EncodeSnapshot {
+            dsso,
+            index_sub_offset,
+            stage_dirty_masks,
+            pipeline_kind,
+            gs_object_buffer_offset,
+            gs_mesh_buffer_offset,
+            ..
+        } = *snap;
 
         let stencil_ref = u8::try_from(self.state.stencil_ref & 0xff).unwrap_or(0);
 
@@ -776,7 +786,7 @@ impl<M: Mode> Context<M> {
                 r#type: WMT_RENDER_COMMAND_SET_DSSO,
                 reserved: [0; 3],
                 next: NO_NEXT,
-                dsso: snap.dsso,
+                dsso,
                 stencil_ref,
             };
             self.emit_render_state_cmd(cmd, move |enc| {
@@ -787,7 +797,7 @@ impl<M: Mode> Context<M> {
         if self.dirty.contains(DirtyFlags::RASTERIZER_STATE) {
             // Delegated state closure #2 (`SetupRasterizerState`, d3d11_context_impl.cpp:2981):
             // emits `WmtcmdRenderSetrasterizerstate` (`render 12`).
-            let rs = &snap.rasterizer;
+            let rs = &rasterizer;
             let cmd = WmtcmdRenderSetrasterizerstate {
                 r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
                 reserved: [0; 3],
@@ -830,8 +840,8 @@ impl<M: Mode> Context<M> {
         if self.dirty.contains(DirtyFlags::VIEWPORTS) {
             // C++ closure #4 (`PreDraw` viewports, d3d11_context_impl.cpp:3006):
             // copies viewports into chunk memory and emits `WmtcmdRenderSetviewports` (`render 13`).
-            let vp_ptr = self.allocate_chunk_slice(&snap.viewports);
-            let viewport_count = u8::try_from(snap.viewports.len()).unwrap_or(0);
+            let (vp_ptr, viewports) = self.allocate_snapshot_slice(|snap| &snap.viewports);
+            let viewport_count = u8::try_from(viewports).unwrap_or(0);
             let cmd = WmtcmdRenderSetviewports {
                 r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
                 reserved: [0; 3],
@@ -847,8 +857,8 @@ impl<M: Mode> Context<M> {
         if self.dirty.contains(DirtyFlags::SCISSOR_RECTS) {
             // C++ closure #5 (`PreDraw` scissor rects, d3d11_context_impl.cpp:3022):
             // copies scissor rects into chunk memory and emits `WmtcmdRenderSetscissorrects` (`render 14`).
-            let sc_ptr = self.allocate_chunk_slice(&snap.scissor_rects);
-            let rect_count = u8::try_from(snap.scissor_rects.len()).unwrap_or(0);
+            let (sc_ptr, rects) = self.allocate_snapshot_slice(|snap| &snap.scissor_rects);
+            let rect_count = u8::try_from(rects).unwrap_or(0);
             let cmd = WmtcmdRenderSetscissorrects {
                 r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
                 reserved: [0; 3],
@@ -862,14 +872,14 @@ impl<M: Mode> Context<M> {
         }
 
         if self.dirty.contains(DirtyFlags::INDEX_BUFFER) {
-            let sub_offset = snap.index_sub_offset;
+            let sub_offset = index_sub_offset;
             self.emit_encoder(move |enc| {
                 enc.bind_index_buffer_offset(sub_offset);
             });
         }
 
         if self.dirty.contains(DirtyFlags::VERTEX_BUFFERS) {
-            let vb_mask = snap.stage_dirty_masks[usize::from(stage::VERTEX)];
+            let vb_mask = stage_dirty_masks[usize::from(stage::VERTEX)];
             if vb_mask != 0 {
                 self.emit_encoder(move |enc| {
                     enc.encode_vertex_buffers::<{ kind::ORDINARY }>(vb_mask, 0);
@@ -878,8 +888,8 @@ impl<M: Mode> Context<M> {
         }
 
         // C++ closure #6 (`PreDraw` vertex stage resources, d3d11_context_impl.cpp:3106).
-        if let Some((offset, index)) = snap.gs_object_buffer_offset
-            && snap.pipeline_kind == kind::GEOMETRY
+        if let Some((offset, index)) = gs_object_buffer_offset
+            && pipeline_kind == kind::GEOMETRY
         {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_OBJECT_BUFFER_OFFSET,
@@ -891,7 +901,7 @@ impl<M: Mode> Context<M> {
             self.emit_render_state_cmd(cmd, move |enc| {
                 enc.encode_render_command(cmd);
             });
-        } else if snap.stage_dirty_masks[usize::from(stage::VERTEX)] != 0 {
+        } else if stage_dirty_masks[usize::from(stage::VERTEX)] != 0 {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET,
                 reserved: [0; 3],
@@ -905,8 +915,8 @@ impl<M: Mode> Context<M> {
         }
 
         // C++ closure #7 (`PreDraw` pixel stage resources, d3d11_context_impl.cpp:3120).
-        if let Some((offset, index)) = snap.gs_mesh_buffer_offset
-            && snap.pipeline_kind == kind::GEOMETRY
+        if let Some((offset, index)) = gs_mesh_buffer_offset
+            && pipeline_kind == kind::GEOMETRY
         {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER_OFFSET,
@@ -918,7 +928,7 @@ impl<M: Mode> Context<M> {
             self.emit_render_state_cmd(cmd, move |enc| {
                 enc.encode_render_command(cmd);
             });
-        } else if snap.stage_dirty_masks[usize::from(stage::PIXEL)] != 0 {
+        } else if stage_dirty_masks[usize::from(stage::PIXEL)] != 0 {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER_OFFSET,
                 reserved: [0; 3],
@@ -932,9 +942,9 @@ impl<M: Mode> Context<M> {
         }
 
         // C++ closure #8 (`PreDraw` hull + domain stage resources, d3d11_context_impl.cpp:3133).
-        if snap.pipeline_kind == kind::TESSELLATION
-            && (snap.stage_dirty_masks[usize::from(stage::HULL)] != 0
-                || snap.stage_dirty_masks[usize::from(stage::DOMAIN)] != 0)
+        if pipeline_kind == kind::TESSELLATION
+            && (stage_dirty_masks[usize::from(stage::HULL)] != 0
+                || stage_dirty_masks[usize::from(stage::DOMAIN)] != 0)
         {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_MESH_BUFFER_OFFSET,
@@ -949,9 +959,7 @@ impl<M: Mode> Context<M> {
         }
 
         // C++ closure #9 (`PreDraw` geometry stage resources, d3d11_context_impl.cpp:3148).
-        if snap.pipeline_kind == kind::GEOMETRY
-            && snap.stage_dirty_masks[usize::from(stage::GEOMETRY)] != 0
-        {
+        if pipeline_kind == kind::GEOMETRY && stage_dirty_masks[usize::from(stage::GEOMETRY)] != 0 {
             let cmd = WmtcmdRenderSetbufferoffset {
                 r#type: WMT_RENDER_COMMAND_SET_MESH_BUFFER_OFFSET,
                 reserved: [0; 3],

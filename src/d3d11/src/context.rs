@@ -100,6 +100,15 @@ pub struct Context<M: Mode> {
     pub device: *mut c_void,
     pub state: state::ContextState,
     pub cmdbuf_state: CommandBufferState,
+    /// The encode session: snapshot, pass records and their arena.
+    ///
+    /// It needs no lock of its own: it is reached through `&mut Context` like every other
+    /// field. D3D11 forbids calling one context from two threads at once unless the application
+    /// turned on `ID3D11Multithread::SetMultithreadProtected`, and then the immediate context's
+    /// slots take the device's reentrant mutex (`Mode::lock_iface`) for the whole call. A deferred
+    /// context is single-threaded by the API. The global session map this replaces serialised
+    /// only the session, never `state` or `cmdbuf_state`, so no caller relied on more.
+    pub encode: encode::EncodeSession,
     pub dirty: state::DirtyFlags,
     pub defaults: Defaults,
     pub mode: M,
