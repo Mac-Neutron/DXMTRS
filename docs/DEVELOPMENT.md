@@ -159,8 +159,8 @@ SSE4.2 ceiling neither costs nor buys anything measurable.
 
 The Rust gate. It runs, from the root, the nightly `cargo fmt --check`, the generated bindings' regeneration (each
 compared with its committed file), clippy with `nursery` and `pedantic` and warnings denied (1.99.0, on `aarch64-apple-darwin` and on every `-pc-windows-msvc` target a crate ships on, plus the
-`MTLD3D_PERF=1` build in a target directory of its own, `clippy-perf`), `cargo doc` with rustdoc warnings denied,
-the host unit tests with `cargo test` (the `test-unit-perf` leg on the perf build, the `mtld3d-core/disk-cache`
+host and i686 lines with D3D9's `perf-tracking` feature, and D3D9's and the core's `perf-build` lines), `cargo doc`
+with rustdoc warnings denied, the host unit tests with `cargo test` (D3D9's again with `perf-tracking`, the `mtld3d-core/disk-cache`
 feature, and `winemetal`'s tests with `-undefined dynamic_lookup`), and `tools/audit.sh`. It prints `rust-check: ok`
 and exits 0 when every leg passed. Run it from a clean checkout: its audit
 leg refuses while `git ls-files --others --exclude-standard` lists a `.rs`, `.toml` or `.md` file, since the audit

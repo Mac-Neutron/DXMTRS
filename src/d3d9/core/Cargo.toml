@@ -22,6 +22,7 @@ zstd = { workspace = true, optional = true }
 # its zstd framing. Only the Unix dylib reads and writes the cache, so it and the
 # host tests enable it; the PE DLLs leave it off and link no zstd.
 [features]
+perf-tracking = ["mtld3d-shared/perf-tracking"]
 disk-cache = ["dep:zstd"]
 
 [[example]]

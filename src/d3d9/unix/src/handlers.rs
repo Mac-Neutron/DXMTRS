@@ -153,6 +153,13 @@ fn borrowed_utf8<'a>(ptr: u64, len: u32) -> Result<Option<&'a str>, ()> {
     std::str::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
+/// The identity line's level: warn in the performance build, which compiles out every info line.
+const IDENTITY_LEVEL: log::Level = if cfg!(feature = "perf-build") {
+    log::Level::Warn
+} else {
+    log::Level::Info
+};
+
 /// Name this build in the log, as the first line the unix side emits.
 ///
 /// [`identity::BUILD`] says which release the source came from; the image ID is
@@ -170,7 +177,7 @@ fn log_identity() {
     } else {
         ""
     };
-    info!(target: LOG_TARGET, "mtld3d.so {build} {id} initialized as {arch}{rosetta}");
+    log::log!(target: LOG_TARGET, IDENTITY_LEVEL, "mtld3d.so {build} {id} initialized as {arch}{rosetta}");
     #[cfg(target_vendor = "apple")]
     log_core_foundation();
 }

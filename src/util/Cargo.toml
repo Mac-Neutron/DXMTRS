@@ -8,8 +8,9 @@ description = "What DXMT's Rust DLLs (nvngx, nvapi, d3d10core, dxgi) and Direct3
 publish = false
 
 [features]
-# DXMT_PERF_BUILD: the log drops everything below warnings.
-perf-build = []
+# DXMT_PERF_BUILD: the log drops everything below warnings, the `log` crate's lines included
+# (D3D9's, through max_level_warn).
+perf-build = ["log/max_level_warn"]
 
 [dependencies]
 log = { workspace = true }

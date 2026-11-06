@@ -308,7 +308,8 @@ state keys still parses: its state mix prints as not reported and is not judged.
 Run it by hand when building or reshaping a scene that stands for a game; it is
 no gate.
 
-Bench numbers come from production-profile builds with `MTLD3D_PERF=1` only:
+Bench numbers come from production-profile builds with D3D9's perf-tracking only
+(`-Dd3d9_perf_tracking=true`, or the cargo features `d3d9/perf-tracking` and `mtld3d-unix/perf-tracking`):
 `release` carries debug assertions that cost more than the frame does. Nothing
 else may run on the machine during a benchmark: no test leg, no conformance run,
 no build in another worktree, no game. Each of them takes the same cores and GPU

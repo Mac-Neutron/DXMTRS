@@ -11,6 +11,10 @@ authors = ["Alexander Theissen <alex.theissen@me.com>"]
 crate-type = ["cdylib"]
 
 [features]
+# D3D9's developer timers; d3d9.dll needs the same (meson's d3d9_perf_tracking sets both).
+perf-tracking = ["mtld3d-core/perf-tracking", "mtld3d-shared/perf-tracking"]
+# DXMT_PERF_BUILD: lines below warnings compiled out.
+perf-build = ["mtld3d-shared/perf-build"]
 # MacNeutron: every Metal call through winemetal's Unix-call table (the `mtl` facade), as in the VM; the window code
 # only macOS's Wine has is left out. The Linux build always has it.
 winemetal = ["dep:mtld3d-mtl"]

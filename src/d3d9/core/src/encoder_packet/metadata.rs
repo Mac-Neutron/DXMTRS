@@ -301,7 +301,12 @@ impl<'a> FrameView<'a> {
             return Err(WireError::InvalidValue);
         }
         let view = Self { header };
-        view.perf()?;
+        view.perf().inspect_err(|_| {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "frame metadata: PERF attachment rejected: d3d9.dll and mtld3d.so were built with different perf-tracking"
+            );
+        })?;
         Ok(view)
     }
     /// Reborrow a header already checked for this packet.

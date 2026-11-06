@@ -44,3 +44,9 @@ fn submit_timings_layout_is_stable() {
     let present = &timings.gpu[CommandBufferRole::Present as usize];
     assert_eq!((present.ns, present.buffers), (0, 0));
 }
+
+/// The developer timers' cfg is the `perf-tracking` feature's, in both configurations.
+#[test]
+fn perf_tracking_follows_the_feature() {
+    assert_eq!(cfg!(perf_tracking), cfg!(feature = "perf-tracking"));
+}

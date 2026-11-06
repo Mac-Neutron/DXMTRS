@@ -3,6 +3,17 @@
 # and today's flags: tools/cargo-staticlib.sh takes them from tools/mingw-cc.sh when MTLD3D_LLVM_MINGW names
 # llvm-mingw's root, which only these targets pass. Meson keeps the cross file's bare compiler name; llvm-mingw's bin
 # holds it.
+# Features, one rule for both halves: perf-build (DXMT_PERF_BUILD in cpp_args) on d3d9, mtld3d and mtld3d-unix;
+# perf-tracking (-Dd3d9_perf_tracking=true) on d3d9 and mtld3d-unix, never on the shim.
+d3d9_perf_build = '-DDXMT_PERF_BUILD' in get_option('cpp_args')
+if get_option('d3d9_perf_tracking') and d3d9_perf_build
+  error('d3d9_perf_tracking with DXMT_PERF_BUILD: perf-build compiles out the timers\' info lines, so they would cost time and report nothing')
+endif
+d3d9_features = {
+  'd3d9'   : (d3d9_perf_build ? ['perf-build'] : []) + (get_option('d3d9_perf_tracking') ? ['perf-tracking'] : []),
+  'mtld3d' : d3d9_perf_build ? ['perf-build'] : [],
+}
+
 d3d9_llvm_mingw = fs.parent(fs.parent(find_program(cc.cmd_array()[0]).full_path()))
 if not d3d9_llvm_mingw.startswith('/')
   error('d3d9: llvm-mingw\'s root must be absolute, found ' + d3d9_llvm_mingw)
@@ -32,7 +43,8 @@ foreach crate : ['d3d9', 'mtld3d']
   foreach t : rust_pe_targets
     libs += custom_target(crate + '-' + t,
       output             : crate + '-' + t + '.lib',
-      command            : [cargo_staticlib, get_option('cargo_toolchain'), t, crate, rust_target_dir, '@OUTPUT@'],
+      command            : [cargo_staticlib, get_option('cargo_toolchain'), t, crate, rust_target_dir, '@OUTPUT@',
+                            'production', ','.join(d3d9_features[crate])],
       env                : d3d9_env,
       build_always_stale : true,
     )

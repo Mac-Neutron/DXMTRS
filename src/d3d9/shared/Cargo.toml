@@ -7,6 +7,12 @@ license = "Zlib"
 description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
 authors = ["Alexander Theissen <alex.theissen@me.com>"]
 
+[features]
+# D3D9's developer timers (the 2 s perf grid, perf-kv): sets cfg(perf_tracking). Never in a release.
+perf-tracking = []
+# DXMT_PERF_BUILD: lines below warnings compiled out.
+perf-build = ["dxmt-util/perf-build"]
+
 [dependencies]
 bitflags = { workspace = true }
 dxmt-util = { workspace = true }

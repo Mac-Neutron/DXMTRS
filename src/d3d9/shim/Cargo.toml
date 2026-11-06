@@ -10,6 +10,10 @@ authors = ["Alexander Theissen <alex.theissen@me.com>"]
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+# DXMT_PERF_BUILD: lines below warnings compiled out.
+perf-build = ["mtld3d-shared/perf-build"]
+
 [dependencies]
 mtld3d-shared = { workspace = true }
 log = { workspace = true }

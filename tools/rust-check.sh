@@ -8,10 +8,10 @@
 #           seam's src/dxmt/src/<seam>/abi.rs (the header its first line names, with crate::<seam>); a C declaration
 #           changed without its regeneration would otherwise still compile (needs Xcode's clang and jq)
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
-#           the same host and i686 lines with MTLD3D_PERF=1 (cfg(perf_tracking) code), in a target folder of their own,
-#           and the core's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD)
+#           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), and the core's
+#           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD)
 #   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 and the host
-#   test    the host unit tests, also with MTLD3D_PERF=1 (not mtld3d-mtl's integration tests: see unit_tests)
+#   test    the host unit tests, D3D9's also with perf-tracking (not mtld3d-mtl's integration tests: see unit_tests)
 #   audit   tools/audit.sh; refuses while an untracked .rs, .toml or .md file exists (the audit reads tracked files)
 # The PE legs compile build scripts that need C and Wine's archives, so the inputs are variables (docs/DEVELOPMENT.md,
 # "tools/rust-check.sh"); MacNeutron sets them from its pins. cargo runs offline: fetch the locked crates first.
@@ -49,7 +49,6 @@ case $T in
   /*) ;; *) echo "rust-check: CARGO_TARGET_DIR must be absolute, not $T" >&2; exit 2 ;;
 esac
 export MTLD3D_LLVM_MINGW AIRCONV_LLVM AIRCONV_XCRUN CARGO_TARGET_DIR="$T"
-unset MTLD3D_PERF
 # The toolchain's own bin folder first on PATH: a rustup proxy runs `cargo +<toolchain>`, but the subcommands (clippy, fmt)
 # are found on PATH, where Homebrew's rustup keeps no proxies for them.
 if sysroot=$(rustc "+$MTLD3D_RUST" --print sysroot 2>/dev/null); then PATH="$sysroot/bin:$PATH"; fi
@@ -71,7 +70,7 @@ I686=i686-pc-windows-msvc
 
 # cargo; the line it runs is printed.
 cargo_() {
-  printf 'rust-check: + %scargo %s\n' "${MTLD3D_PERF:+MTLD3D_PERF=1 }" "$*"
+  printf 'rust-check: + cargo %s\n' "$*"
   cargo "$@"
 }
 
@@ -102,10 +101,6 @@ pe() {
     "$@"
   )
 }
-
-# perf <command...>: run <command> as the MTLD3D_PERF=1 build, in a cargo folder of its own (a crate whose build script
-# reads the variable rebuilds, with everything above it, whenever the value changes).
-perf() { ( MTLD3D_PERF=1 CARGO_TARGET_DIR=$T/perf; export MTLD3D_PERF CARGO_TARGET_DIR; "$@" ); }
 
 # lint <target> <cargo clippy args...>
 lint() {
@@ -289,10 +284,12 @@ leg_clippy() {
   lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache,airconv/oracle,d3d11/front-end || rc=1
   lint $HOST -p mtld3d-unix --features mtld3d-unix/winemetal --all-targets || rc=1
   lint $HOST -p winemetal --features native || rc=1
-  perf lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache || rc=1
-  perf lint $I686 $PE_P || rc=1
+  lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache,mtld3d-unix/perf-tracking || rc=1
+  lint $I686 $PE_P,d3d9/perf-tracking || rc=1
   lint $HOST --all-targets $CORE_PERF || rc=1
   lint $I686 $CORE_PERF || rc=1
+  lint $I686 -p d3d9 -p mtld3d --features d3d9/perf-build,mtld3d/perf-build || rc=1
+  lint $HOST -p mtld3d-unix --features mtld3d-unix/perf-build || rc=1
   return $rc
 }
 
@@ -307,10 +304,14 @@ leg_doc() {
 
 # The facade's integration tests (mtld3d-mtl's tests/) need a winemetal.so beside stand-ins for the Wine libraries it
 # links, which MacNeutron's dxmt/mtld3d-facade-test.sh builds and runs; here only its unit tests run.
+# unit_tests [perf]: with perf, D3D9's perf-tracking feature. The perf run's --features names the topmost D3D9 crate of
+# each line, so no crate built without the cfg links one built with it; mtld3d-mtl has no perf cfg.
 unit_tests() {
   r=0
-  tst -p mtld3d-core -p mtld3d-types --features mtld3d-core/disk-cache || r=1
-  tst -p mtld3d-unix -p mtld3d-shared -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire || r=1
+  core=mtld3d-core/disk-cache unix=
+  if [ "${1:-}" = perf ]; then core=$core,mtld3d-core/perf-tracking unix='--features mtld3d-unix/perf-tracking'; fi
+  tst -p mtld3d-core -p mtld3d-types --features $core || r=1
+  tst -p mtld3d-unix -p mtld3d-shared -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire $unix || r=1
   tst -p mtld3d-mtl --lib || r=1
   return $r
 }
@@ -318,7 +319,7 @@ unit_tests() {
 leg_test() {
   rc=0
   unit_tests || rc=1
-  perf unit_tests || rc=1
+  unit_tests perf || rc=1
   tst -p dxmt-util -p nvapi -p nvngx -p winemetal -p dxgi -p d3d10core -p airconv-ir -p airconv \
     -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys --features airconv/oracle,d3d11/front-end \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1

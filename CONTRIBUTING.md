@@ -31,7 +31,7 @@ green before you commit. It runs the nightly `cargo fmt --check`, the
 regeneration of the generated bindings (each must equal its committed file),
 clippy with `nursery` and `pedantic` on `aarch64-apple-darwin` and on every
 `-pc-windows-msvc` target a crate ships on, `tools/audit.sh`, `cargo doc`, and
-the host unit tests (the `MTLD3D_PERF=1` legs included, since no other leg
+the host unit tests (the `perf-tracking` legs included, since no other leg
 compiles the perf telemetry or the tests behind `cfg(perf_tracking)`). It prints
 `rust-check: ok` when every leg passed. The variables it reads, the toolchains
 and the Wine trees, are listed in

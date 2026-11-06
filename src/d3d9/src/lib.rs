@@ -393,6 +393,13 @@ fn init_logger(instance: *mut c_void) {
     unix_call(&mut params);
 }
 
+/// The identity line's level: warn in the performance build, which compiles out every info line.
+const IDENTITY_LEVEL: log::Level = if cfg!(feature = "perf-build") {
+    log::Level::Warn
+} else {
+    log::Level::Info
+};
+
 /// Name this build in the log, as the first line the logger emits.
 ///
 /// [`identity::BUILD`] says which release the source came from; the image ID is
@@ -406,7 +413,7 @@ fn log_identity(instance: *mut c_void) {
     let build = identity::BUILD;
     let arch = identity::ARCH;
     let base = instance as usize;
-    log::info!(target: LOG_TARGET, "d3d9.dll {build} {id} loaded at {base:#x} as {arch}");
+    log::log!(target: LOG_TARGET, IDENTITY_LEVEL, "d3d9.dll {build} {id} loaded at {base:#x} as {arch}");
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
     guest_mem::log_route();
 }
