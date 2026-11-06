@@ -256,3 +256,122 @@ fn two_threads_set_get_balance() {
     let count = |what: &str| log.iter().filter(|line| line.ends_with(what)).count();
     assert_eq!(count("AddRef"), count("Release"));
 }
+
+/// An object holding private data, its interfaces' `this` being its address.
+struct Holder {
+    data: PrivateData,
+}
+
+impl HasPrivateData for Holder {
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData {
+        // SAFETY: the caller's: `this` is a live `Holder`.
+        unsafe { &(*this.cast::<Self>()).data }
+    }
+}
+
+/// `NAME` at an odd address, as an application may pass it.
+#[repr(align(8))]
+struct OddGuid([u8; 24]);
+
+impl OddGuid {
+    fn new(guid: Guid) -> Self {
+        let mut bytes = Self([0; 24]);
+        // SAFETY: bytes 1..17 of the 24 hold the GUID; the write assumes no alignment.
+        unsafe {
+            bytes.0[1..]
+                .as_mut_ptr()
+                .cast::<Guid>()
+                .write_unaligned(guid);
+        }
+        bytes
+    }
+
+    fn ptr(&self) -> *const c_void {
+        self.0[1..].as_ptr().cast()
+    }
+}
+
+#[test]
+fn slots_read_the_guid_unaligned_and_refuse_a_null_one() {
+    let holder = Holder {
+        data: PrivateData::default(),
+    };
+    let this = core::ptr::from_ref(&holder).cast_mut().cast();
+    let guid = OddGuid::new(NAME);
+    let bytes = [7_u8, 8, 9];
+    // SAFETY: `this` is a live `Holder`; `bytes` has 3 readable bytes.
+    let hr = unsafe { set_private_data::<Holder>(this, guid.ptr(), 3, bytes.as_ptr().cast()) };
+    assert_eq!(hr, S_OK);
+    let mut size = 8_u32;
+    let mut out = [0_u8; 8];
+    // SAFETY: as above; `size` and `out` are locals with room for 8 bytes.
+    let hr = unsafe {
+        get_private_data::<Holder>(this, guid.ptr(), &raw mut size, out.as_mut_ptr().cast())
+    };
+    assert_eq!((hr, size, &out[..3]), (S_OK, 3, &bytes[..]));
+
+    // A null GUID is `E_INVALIDARG` from each slot, before anything else is touched.
+    let null = core::ptr::null();
+    // SAFETY: as above.
+    let hr = unsafe { set_private_data::<Holder>(this, null, 3, bytes.as_ptr().cast()) };
+    assert_eq!(hr, E_INVALIDARG);
+    // SAFETY: as above.
+    let hr = unsafe { get_private_data::<Holder>(this, null, &raw mut size, null.cast_mut()) };
+    assert_eq!(hr, E_INVALIDARG);
+    // SAFETY: as above.
+    let hr = unsafe { set_private_data_interface::<Holder>(this, null, null) };
+    assert_eq!(hr, E_INVALIDARG);
+}
+
+#[test]
+fn interface_slot_takes_and_gives_back_a_reference() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let a = Fake::new('a', &log);
+    let holder = Holder {
+        data: PrivateData::default(),
+    };
+    let this = core::ptr::from_ref(&holder).cast_mut().cast();
+    let guid = OddGuid::new(NAME);
+    // SAFETY: `this` is a live `Holder`; `a` is a live fake.
+    let hr = unsafe { set_private_data_interface::<Holder>(this, guid.ptr(), a.this().cast()) };
+    assert_eq!((hr, a.refs()), (S_OK, 2));
+    // SAFETY: as above; a null interface replaces `a`'s entry, giving its reference back.
+    let hr = unsafe { holder.data.set_interface_ffi(guid.ptr(), core::ptr::null()) };
+    assert_eq!((hr, a.refs()), (S_OK, 1));
+}
+
+#[test]
+fn set_name_stores_the_wide_name_with_its_nul() {
+    #[cfg(windows)]
+    type Wchar = u16;
+    #[cfg(not(windows))]
+    type Wchar = u32;
+    let holder = Holder {
+        data: PrivateData::default(),
+    };
+    let this = core::ptr::from_ref(&holder).cast_mut().cast();
+    let name: [Wchar; 3] = [Wchar::from(b'h'), Wchar::from(b'i'), 0];
+    // SAFETY: `this` is a live `Holder`; `name` is NUL-terminated.
+    let hr = unsafe { set_name::<Holder>(this, name.as_ptr().cast()) };
+    assert_eq!(hr, S_OK);
+    let size = u32::try_from(size_of_val(&name)).unwrap();
+    let mut out = [0 as Wchar; 3];
+    let got = get(
+        &holder.data,
+        WKPDID_D3D_DEBUG_OBJECT_NAME_W,
+        size,
+        out.as_mut_ptr().cast(),
+    );
+    assert_eq!((got, out), ((S_OK, size), name));
+    // A null name erases it.
+    // SAFETY: a null name is the erase case.
+    let hr = unsafe { set_debug_name(&holder.data, core::ptr::null()) };
+    assert_eq!(hr, S_OK);
+    let got = get(
+        &holder.data,
+        WKPDID_D3D_DEBUG_OBJECT_NAME_W,
+        0,
+        core::ptr::null_mut(),
+    );
+    assert_eq!(got, (DXGI_ERROR_NOT_FOUND, 0));
+}

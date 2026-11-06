@@ -4,7 +4,7 @@
 //! `AddRef` and `Release` run outside it (a `Release` may call back into this object), but for the
 //! `AddRef` that hands an entry out, which must happen while the entry still holds its reference.
 
-use core::ffi::c_void;
+use core::{ffi::c_void, ptr};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::com::{
@@ -14,6 +14,29 @@ use crate::com::{
 
 /// The size of an interface entry: a pointer.
 const POINTER_SIZE: u32 = if size_of::<*mut c_void>() == 4 { 4 } else { 8 };
+
+/// `WKPDID_D3DDebugObjectNameW`: the name `SetName` stores (`d3d12_device_child.hpp:26`).
+pub const WKPDID_D3D_DEBUG_OBJECT_NAME_W: Guid = Guid::new(
+    0x4cca_5fd8,
+    0x921f,
+    0x42c8,
+    [0x85, 0x66, 0x70, 0xca, 0xf2, 0xa9, 0xb7, 0x41],
+);
+
+/// An object whose interfaces answer the private-data slots from one [`PrivateData`].
+///
+/// The slots are `GetPrivateData`, `SetPrivateData`, `SetPrivateDataInterface` and `SetName`.
+///
+/// The four slot functions below ([`get_private_data`] and its siblings) are generic over it, so
+/// a vtable names `get_private_data::<Resource>` where it had a thunk of its own.
+pub trait HasPrivateData {
+    /// The private data of the object `this` is an interface pointer of.
+    ///
+    /// # Safety
+    ///
+    /// `this` is a live interface pointer of a `Self`, which outlives `'a`.
+    unsafe fn private_data<'a>(this: *mut c_void) -> &'a PrivateData;
+}
 
 /// One object's private data: its entries in the order they were first set.
 #[derive(Default)]
@@ -100,6 +123,59 @@ impl PrivateData {
         hr
     }
 
+    /// `GetPrivateData` from its slot: the application's GUID, then [`Self::get_data`].
+    ///
+    /// A null `guid` is `E_INVALIDARG`. The GUID is read unaligned.
+    ///
+    /// # Safety
+    ///
+    /// `guid` is null or addresses 16 readable bytes; `size` and `data` as [`Self::get_data`].
+    pub unsafe fn get_ffi(
+        &self,
+        guid: *const c_void,
+        size: *mut u32,
+        data: *mut c_void,
+    ) -> Hresult {
+        // SAFETY: the caller's: null or 16 readable bytes; the read assumes no alignment.
+        let Some(guid) = (unsafe { Guid::read(guid.cast()) }) else {
+            return E_INVALIDARG;
+        };
+        // SAFETY: the caller's.
+        unsafe { self.get_data(guid, size, data) }
+    }
+
+    /// `SetPrivateData` from its slot: the application's GUID, then [`Self::set_data`].
+    ///
+    /// A null `guid` is `E_INVALIDARG`. The GUID is read unaligned.
+    ///
+    /// # Safety
+    ///
+    /// `guid` is null or addresses 16 readable bytes; `data` as [`Self::set_data`].
+    pub unsafe fn set_ffi(&self, guid: *const c_void, size: u32, data: *const c_void) -> Hresult {
+        // SAFETY: the caller's: null or 16 readable bytes; the read assumes no alignment.
+        let Some(guid) = (unsafe { Guid::read(guid.cast()) }) else {
+            return E_INVALIDARG;
+        };
+        // SAFETY: the caller's.
+        unsafe { self.set_data(guid, size, data) }
+    }
+
+    /// `SetPrivateDataInterface` from its slot: the GUID, then [`Self::set_interface`].
+    ///
+    /// A null `guid` is `E_INVALIDARG`. The GUID is read unaligned.
+    ///
+    /// # Safety
+    ///
+    /// `guid` is null or addresses 16 readable bytes; `unknown` is null or a live COM object.
+    pub unsafe fn set_interface_ffi(&self, guid: *const c_void, unknown: *const c_void) -> Hresult {
+        // SAFETY: the caller's: null or 16 readable bytes; the read assumes no alignment.
+        let Some(guid) = (unsafe { Guid::read(guid.cast()) }) else {
+            return E_INVALIDARG;
+        };
+        // SAFETY: the caller's.
+        unsafe { self.set_interface(guid, unknown.cast_mut()) }
+    }
+
     /// The entries, whatever a thread that panicked holding them left.
     fn lock(&self) -> MutexGuard<'_, Vec<Entry>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
@@ -114,6 +190,106 @@ impl PrivateData {
         entries.push(Entry { guid, value });
         None
     }
+}
+
+/// `GetPrivateData`'s slot for a `T`.
+///
+/// # Safety
+///
+/// `this` is a live interface pointer of a `T`; the rest as [`PrivateData::get_ffi`].
+pub unsafe extern "system-unwind" fn get_private_data<T: HasPrivateData>(
+    this: *mut c_void,
+    guid: *const c_void,
+    size: *mut u32,
+    data: *mut c_void,
+) -> Hresult {
+    // SAFETY: the caller's: `this` is a live `T`'s interface.
+    let private_data = unsafe { T::private_data(this) };
+    // SAFETY: the caller's.
+    unsafe { private_data.get_ffi(guid, size, data) }
+}
+
+/// `SetPrivateData`'s slot for a `T`.
+///
+/// # Safety
+///
+/// `this` is a live interface pointer of a `T`; the rest as [`PrivateData::set_ffi`].
+pub unsafe extern "system-unwind" fn set_private_data<T: HasPrivateData>(
+    this: *mut c_void,
+    guid: *const c_void,
+    size: u32,
+    data: *const c_void,
+) -> Hresult {
+    // SAFETY: the caller's: `this` is a live `T`'s interface.
+    let private_data = unsafe { T::private_data(this) };
+    // SAFETY: the caller's.
+    unsafe { private_data.set_ffi(guid, size, data) }
+}
+
+/// `SetPrivateDataInterface`'s slot for a `T`.
+///
+/// # Safety
+///
+/// `this` is a live interface pointer of a `T`; the rest as [`PrivateData::set_interface_ffi`].
+pub unsafe extern "system-unwind" fn set_private_data_interface<T: HasPrivateData>(
+    this: *mut c_void,
+    guid: *const c_void,
+    unknown: *const c_void,
+) -> Hresult {
+    // SAFETY: the caller's: `this` is a live `T`'s interface.
+    let private_data = unsafe { T::private_data(this) };
+    // SAFETY: the caller's.
+    unsafe { private_data.set_interface_ffi(guid, unknown) }
+}
+
+/// `ID3D12Object::SetName`'s slot for a `T`: [`set_debug_name`].
+///
+/// # Safety
+///
+/// `this` is a live interface pointer of a `T`; `name` is null or a NUL-terminated `WCHAR` string.
+pub unsafe extern "system-unwind" fn set_name<T: HasPrivateData>(
+    this: *mut c_void,
+    name: *const c_void,
+) -> Hresult {
+    // SAFETY: the caller's: `this` is a live `T`'s interface.
+    let private_data = unsafe { T::private_data(this) };
+    // SAFETY: the caller's.
+    unsafe { set_debug_name(private_data, name.cast()) }
+}
+
+/// Stores `name` under [`WKPDID_D3D_DEBUG_OBJECT_NAME_W`], its terminating NUL included.
+///
+/// A null `name` erases the entry (`d3d12_device_child.hpp:50-56`).
+///
+/// `WCHAR` is two bytes on Windows and four natively, where `wchar_t` is.
+///
+/// # Safety
+///
+/// `name` is null or a NUL-terminated `WCHAR` string, with no alignment promised.
+pub unsafe fn set_debug_name(private_data: &PrivateData, name: *const u16) -> Hresult {
+    #[cfg(windows)]
+    type Wchar = u16;
+    #[cfg(not(windows))]
+    type Wchar = u32;
+
+    if name.is_null() {
+        // SAFETY: a null `data` erases the entry.
+        return unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, 0, ptr::null()) };
+    }
+    let wide = name.cast::<Wchar>();
+    let mut len = 0usize;
+    loop {
+        // SAFETY: `wide` is non-null and `len` has not yet reached the terminating NUL.
+        let ch_ptr = unsafe { wide.add(len) };
+        // SAFETY: `ch_ptr` points within the caller-supplied NUL-terminated wide string.
+        if unsafe { ch_ptr.read_unaligned() } == 0 {
+            break;
+        }
+        len += 1;
+    }
+    let byte_len = u32::try_from((len + 1) * size_of::<Wchar>()).unwrap_or(u32::MAX);
+    // SAFETY: `name` points to `byte_len` readable bytes.
+    unsafe { private_data.set_data(WKPDID_D3D_DEBUG_OBJECT_NAME_W, byte_len, name.cast()) }
 }
 
 /// An entry: its GUID and what it holds.
