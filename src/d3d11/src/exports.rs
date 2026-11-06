@@ -4,7 +4,8 @@ use core::{ffi::c_void, ptr, slice};
 
 use dxmt_util::{
     com::{
-        E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_FALSE, S_OK, release, write_out,
+        E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_FALSE, S_OK,
+        iid::IID_IDXGIFACTORY1, release, write_out,
     },
     dxgi_vtbl::{IDXGIFactory1Vtbl, IDXGIObjectVtbl},
 };
@@ -21,13 +22,6 @@ use crate::{
     },
     names::feature_level_name,
 };
-
-const IID_IDXGIFACTORY1: Guid = Guid::new(
-    0x770a_ae78,
-    0xf26f,
-    0x4dba,
-    [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87],
-);
 
 const D3D_DRIVER_TYPE_UNKNOWN: u32 = 0;
 const D3D_DRIVER_TYPE_HARDWARE: u32 = 1;

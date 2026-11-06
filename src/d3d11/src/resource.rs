@@ -8,7 +8,17 @@ use dxmt_core::{
     resource::{Buffer, RenamableTexturePool, Texture},
     staging::Staging,
 };
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{
+    com::hresult::DXGI_ERROR_INVALID_CALL,
+    dxgi_consts::{
+        D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_STREAM_OUTPUT, D3D11_BIND_UNORDERED_ACCESS,
+        D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING,
+        DXGI_RESOURCE_PRIORITY_NORMAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, DXGI_USAGE_SHADER_INPUT,
+        DXGI_USAGE_UNORDERED_ACCESS,
+    },
+    private_data::PrivateData,
+};
 
 use crate::{
     abi::{
@@ -54,25 +64,7 @@ const D3D11_RESOURCE_DIMENSION_TEXTURE1D: u32 = 2;
 const D3D11_RESOURCE_DIMENSION_TEXTURE2D: u32 = 3;
 const D3D11_RESOURCE_DIMENSION_TEXTURE3D: u32 = 4;
 
-const D3D11_USAGE_DEFAULT: u32 = 0;
-const D3D11_USAGE_IMMUTABLE: u32 = 1;
-const D3D11_USAGE_DYNAMIC: u32 = 2;
-const D3D11_USAGE_STAGING: u32 = 3;
-
-const D3D11_BIND_CONSTANT_BUFFER: u32 = 0x4;
-const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
-const D3D11_BIND_STREAM_OUTPUT: u32 = 0x10;
-const D3D11_BIND_RENDER_TARGET: u32 = 0x20;
-const D3D11_BIND_DEPTH_STENCIL: u32 = 0x40;
-const D3D11_BIND_UNORDERED_ACCESS: u32 = 0x80;
-
 const D3D11_RESOURCE_MISC_GENERATE_MIPS: u32 = 0x1;
-
-const DXGI_USAGE_SHADER_INPUT: u32 = 1 << 4;
-const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 1 << 5;
-const DXGI_USAGE_UNORDERED_ACCESS: u32 = 1 << 10;
-const DXGI_RESOURCE_PRIORITY_NORMAL: u32 = 0x7800_0000;
-const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 /// Shared resource fields accessed across lanes (`MTLResourceCommon`).
 pub struct Common {

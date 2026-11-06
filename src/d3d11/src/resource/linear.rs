@@ -9,6 +9,7 @@ use dxmt_core::{
     format::{MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_EMULATED_LINEAR_DEPTH_STENCIL, query_dxgi},
     resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
 };
+use dxmt_util::dxgi_consts::{D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE};
 use winemetal_sys::wire::{WMT_PIXEL_FORMAT_INVALID, WMT_TEXTURE_TYPE2D, WMTTextureInfo};
 
 use super::{
@@ -28,8 +29,6 @@ use crate::{
     view::{Srv, SrvObject},
 };
 
-const D3D11_USAGE_IMMUTABLE: u32 = 1;
-const D3D11_USAGE_DYNAMIC: u32 = 2;
 const D3D11_RESOURCE_MISC_TEXTURECUBE: u32 = 0x4;
 
 const D3D11_SRV_DIMENSION_TEXTURE1D: u32 = 2;

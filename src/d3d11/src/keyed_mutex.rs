@@ -3,6 +3,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
 use winemetal_sys::{
     MTLDevice_newSharedEvent, MTLDevice_newSharedEventWithMachPort, MTLSharedEvent_createMachPort,
     Obj, WMTBootstrapLookUp, WMTBootstrapRegister,
@@ -15,8 +16,6 @@ use crate::{
     kmt,
     resource::Common,
 };
-
-const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 /// `D3D11_RESOURCE_MISC_SHARED`.
 pub const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;

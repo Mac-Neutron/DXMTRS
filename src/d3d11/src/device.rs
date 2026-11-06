@@ -18,6 +18,11 @@ use winemetal_wire::WMTGPU_FAMILY_APPLE7;
 /// Process-wide configuration (`Config::getInstance`).
 pub static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load(&crate::LOG));
 
+pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
+use dxmt_util::com::iid::{
+    IID_GPA, IID_ID3D11_DEBUG, IID_ID3D11_INFO_QUEUE, IID_PIX, IID_RENDERDOC,
+};
+
 pub use crate::multithread::DeviceMutex;
 use crate::{
     LOG,
@@ -47,9 +52,6 @@ pub mod impl_;
 #[cfg(test)]
 mod tests;
 
-/// `DXGI_ERROR_INVALID_CALL` (`0x887a0001`).
-pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
-
 /// Internal flag passed by `CreateD3D10Device` to select DirectX 10 behavior.
 pub const D3D11_CREATE_DEVICE_D3D10_INTERNAL: u32 = 0x8000_0000;
 /// `D3D11_CREATE_DEVICE_SINGLETHREADED`: the application promises not to use the device
@@ -66,37 +68,6 @@ pub const DEFAULT_FEATURE_LEVELS: [u32; 6] = [
     0x9200, // D3D_FEATURE_LEVEL_9_2
     0x9100, // D3D_FEATURE_LEVEL_9_1
 ];
-
-const IID_ID3D11_DEBUG: Guid = Guid::new(
-    0x79cf_2233,
-    0x7536,
-    0x4948,
-    [0x9d, 0x36, 0x1e, 0x46, 0x92, 0xdc, 0x57, 0x60],
-);
-const IID_ID3D11_INFO_QUEUE: Guid = Guid::new(
-    0x6543_dbb6,
-    0x1b48,
-    0x42f5,
-    [0xab, 0x82, 0xe9, 0x7e, 0xc7, 0x43, 0x26, 0xf6],
-);
-const IID_RENDERDOC: Guid = Guid::new(
-    0xa7aa_6116,
-    0x9c8d,
-    0x4bba,
-    [0x90, 0x83, 0xb4, 0xd8, 0x16, 0xb7, 0x1b, 0x78],
-);
-const IID_PIX: Guid = Guid::new(
-    0x9f25_1514,
-    0x9d4d,
-    0x4902,
-    [0x9d, 0x60, 0x18, 0x98, 0x8a, 0xb7, 0xd4, 0xb5],
-);
-const IID_GPA: Guid = Guid::new(
-    0xccff_ef16,
-    0x7b69,
-    0x468f,
-    [0xbc, 0xe3, 0xcd, 0x95, 0x33, 0x69, 0xa3, 0x9a],
-);
 
 type DropHook = Box<dyn FnOnce(&CoreDevice, &StateCaches) + Send>;
 

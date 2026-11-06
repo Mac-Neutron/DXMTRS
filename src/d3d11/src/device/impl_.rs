@@ -5,8 +5,9 @@ use core::{
     ptr,
 };
 
-use dxmt_util::com::{
-    E_FAIL, E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_OK, add_ref, write_out,
+use dxmt_util::{
+    com::{E_FAIL, E_INVALIDARG, E_NOTIMPL, Guid, Hresult, IUnknownVtbl, S_OK, add_ref, write_out},
+    dxgi_consts::D3D11_USAGE_STAGING,
 };
 
 use crate::{
@@ -29,7 +30,6 @@ use crate::{
 };
 
 const D3D11_RESOURCE_MISC_TILE_POOL: u32 = 0x0002_0000;
-const D3D11_USAGE_STAGING: u32 = 3;
 const D3D11_CREATE_DEVICE_VIDEO_SUPPORT: u32 = 0x0000_0800;
 
 /// `ID3D11Device5` vtable for [`Device`].

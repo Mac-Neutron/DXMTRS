@@ -15,6 +15,10 @@ use dxmt_core::{
         TextureAllocationFlags,
     },
 };
+use dxmt_util::dxgi_consts::{
+    D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET, D3D11_BIND_UNORDERED_ACCESS,
+    D3D11_USAGE_IMMUTABLE,
+};
 use winemetal_sys::{
     MTLTexture_replaceRegion, WMTBootstrapLookUp, WMTBootstrapRegister,
     wire::{MemPtr, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8, WMTOrigin, WMTSize, WMTTextureInfo},
@@ -61,12 +65,6 @@ use crate::{
 const D3D11_RESOURCE_DIMENSION_TEXTURE1D: u32 = 2;
 const D3D11_RESOURCE_DIMENSION_TEXTURE2D: u32 = 3;
 const D3D11_RESOURCE_DIMENSION_TEXTURE3D: u32 = 4;
-
-const D3D11_USAGE_IMMUTABLE: u32 = 1;
-
-const D3D11_BIND_RENDER_TARGET: u32 = 0x20;
-const D3D11_BIND_DEPTH_STENCIL: u32 = 0x40;
-const D3D11_BIND_UNORDERED_ACCESS: u32 = 0x80;
 
 const D3D11_RESOURCE_MISC_TEXTURECUBE: u32 = 0x4;
 

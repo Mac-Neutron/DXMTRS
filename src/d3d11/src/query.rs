@@ -4,6 +4,7 @@ use core::{ffi::c_void, fmt, ptr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use dxmt_core::query::{TimestampQuery, VisibilityQuery};
+pub use dxmt_util::com::hresult::DXGI_ERROR_INVALID_CALL;
 use dxmt_util::private_data::PrivateData;
 
 use crate::{
@@ -58,9 +59,6 @@ pub const D3D11_QUERY_SO_OVERFLOW_PREDICATE_STREAM3: u32 = 15;
 
 /// `D3D11_QUERY_MISC_PREDICATEHINT`.
 pub const D3D11_QUERY_MISC_PREDICATEHINT: u32 = 0x1;
-
-/// `DXGI_ERROR_INVALID_CALL`.
-pub const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 /// Stall threshold before `GetData` flushes (`kEventStallThreshold`).
 pub const EVENT_STALL_THRESHOLD: u32 = 64;

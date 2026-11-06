@@ -2,6 +2,11 @@
 
 use core::ffi::c_void;
 
+use dxmt_util::{
+    com::hresult::DXGI_ERROR_INVALID_CALL,
+    dxgi_consts::{DXGI_FORMAT_UNKNOWN, DXGI_MAP_DISCARD, DXGI_MAP_READ, DXGI_MAP_WRITE},
+};
+
 use crate::{
     abi::{
         IID_IDXGI_DEVICE_SUB_OBJECT, IID_IDXGI_OBJECT, IID_IDXGI_SURFACE, IID_IDXGI_SURFACE_1,
@@ -18,13 +23,6 @@ use crate::{
     },
     resource::{Resource, ResourceDesc},
 };
-
-const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
-const DXGI_FORMAT_UNKNOWN: u32 = 0;
-
-const DXGI_MAP_READ: u32 = 1;
-const DXGI_MAP_WRITE: u32 = 2;
-const DXGI_MAP_DISCARD: u32 = 4;
 
 const D3D11_MAP_READ: u32 = 1;
 const D3D11_MAP_WRITE: u32 = 2;

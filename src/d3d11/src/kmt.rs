@@ -10,7 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use dxmt_util::ext::IID_IMTL_DXGI_DEVICE;
+use dxmt_util::{com::hresult::DXGI_ERROR_INVALID_CALL, ext::IID_IMTL_DXGI_DEVICE};
 
 use crate::{
     abi::{
@@ -21,8 +21,6 @@ use crate::{
     },
     com::{E_FAIL, E_INVALIDARG, Hresult},
 };
-
-const DXGI_ERROR_INVALID_CALL: Hresult = 0x887a_0001_u32.cast_signed();
 
 #[cfg(test)]
 mod tests;
