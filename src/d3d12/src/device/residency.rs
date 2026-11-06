@@ -21,16 +21,46 @@ use crate::{
 /// Device residency set and GPU virtual-address map (`d3d12_device.cpp:365-366`).
 pub struct Residency {
     pub set: Option<Obj>,
-    /// Additions and removals accumulated until the next command buffer commit.
+    /// Additions batched until the next command buffer commit, and whether one is owed.
     pub pending: Mutex<PendingResidency>,
     pub va_map: RwLock<BTreeMap<u64, Vec<Arc<Buffer>>>>,
 }
 
-/// The allocations one commit will add and remove, in one lock.
+/// The additions the next commit sends, and whether the set changed since the last commit.
+///
+/// Removals are never batched: the caller releases the allocation right after unregistering it,
+/// so a removal queued for the next flush would reach `removeAllocations` as a dead handle.
 #[derive(Default)]
 pub struct PendingResidency {
     add: Vec<u64>,
-    remove: Vec<u64>,
+    dirty: bool,
+}
+
+impl PendingResidency {
+    /// Queues `allocation` for the next flush.
+    fn add(&mut self, allocation: u64) {
+        if !self.add.contains(&allocation) {
+            self.add.push(allocation);
+        }
+        self.dirty = true;
+    }
+
+    /// Forgets a queued `allocation`.
+    ///
+    /// `true` when a flush already sent it, so it must leave the Metal set now.
+    fn remove(&mut self, allocation: u64) -> bool {
+        if let Some(at) = self.add.iter().position(|&a| a == allocation) {
+            self.add.swap_remove(at);
+            return false;
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// The queued additions, which the caller sends now.
+    fn take_adds(&mut self) -> Vec<u64> {
+        core::mem::take(&mut self.add)
+    }
 }
 
 impl Residency {
@@ -41,7 +71,7 @@ impl Residency {
             set: None,
             pending: Mutex::new(PendingResidency {
                 add: Vec::new(),
-                remove: Vec::new(),
+                dirty: false,
             }),
             va_map: RwLock::new(BTreeMap::new()),
         }
@@ -56,22 +86,19 @@ impl Default for Residency {
 
 fn add_allocation(residency: &Residency, allocation: u64) {
     if residency.set.is_some() && allocation != 0 {
-        let mut pending = lock(&residency.pending);
-        if let Some(at) = pending.remove.iter().position(|&a| a == allocation) {
-            pending.remove.swap_remove(at);
-        } else if !pending.add.contains(&allocation) {
-            pending.add.push(allocation);
-        }
+        lock(&residency.pending).add(allocation);
     }
 }
 
 fn remove_allocation(residency: &Residency, allocation: u64) {
-    if residency.set.is_some() && allocation != 0 {
+    if let Some(ref set) = residency.set
+        && allocation != 0
+    {
         let mut pending = lock(&residency.pending);
-        if let Some(at) = pending.add.iter().position(|&a| a == allocation) {
-            pending.add.swap_remove(at);
-        } else if !pending.remove.contains(&allocation) {
-            pending.remove.push(allocation);
+        if pending.remove(allocation) {
+            // SAFETY: `set` is a live `MTLResidencySet`; `allocation` is live until our caller
+            // releases it, after this returns.
+            unsafe { MTLResidencySet_removeAllocations(set.handle(), &raw const allocation, 1) };
         }
     }
 }
@@ -81,25 +108,20 @@ pub fn flush(device: &Device) {
     let Some(ref set) = device.residency.set else {
         return;
     };
-    let (add, remove) = {
-        let mut pending = lock(&device.residency.pending);
-        if pending.add.is_empty() && pending.remove.is_empty() {
-            return;
-        }
-        (
-            core::mem::take(&mut pending.add),
-            core::mem::take(&mut pending.remove),
-        )
-    };
     let h = set.handle();
-    if !remove.is_empty() {
-        // SAFETY: `h` is a live `MTLResidencySet` and `remove` is a live array of allocation handles.
-        unsafe { MTLResidencySet_removeAllocations(h, remove.as_ptr(), remove.len() as u64) };
+    let mut pending = lock(&device.residency.pending);
+    if !pending.dirty {
+        return;
     }
+    pending.dirty = false;
+    let add = pending.take_adds();
     if !add.is_empty() {
-        // SAFETY: `h` is a live `MTLResidencySet` and `add` is a live array of allocation handles.
+        // Under the lock, so a removal of one of these cannot run before it is added.
+        // SAFETY: `h` is a live `MTLResidencySet` and `add` holds live allocation handles
+        // (a released one was taken out by its removal).
         unsafe { MTLResidencySet_addAllocations(h, add.as_ptr(), add.len() as u64) };
     }
+    drop(pending);
     // SAFETY: `h` is a live `MTLResidencySet` handle.
     unsafe { MTLResidencySet_commit(h) };
 }

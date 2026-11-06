@@ -40,3 +40,21 @@ fn va_lookup_takes_newest_alias() {
     assert!(Arc::ptr_eq(&found, &higher));
     assert_eq!(offset, 0x10);
 }
+
+#[test]
+fn a_removal_leaves_the_set_before_its_handle_can_die() {
+    use super::PendingResidency;
+    let mut pending = PendingResidency::default();
+    // An addition no flush has sent yet: dropping it is the whole removal.
+    pending.add(0xa);
+    assert!(!pending.remove(0xa));
+    assert_eq!(pending.take_adds(), []);
+    // One a flush sent: it leaves the Metal set now, since the caller may release the handle
+    // before the next flush (a284b01 queued it there: a dead handle at removeAllocations).
+    pending.add(0xb);
+    assert_eq!(pending.take_adds(), [0xb]);
+    assert!(pending.remove(0xb));
+    assert_eq!(pending.take_adds(), []);
+    // The removal still needs the next flush's commit.
+    assert!(pending.dirty);
+}
