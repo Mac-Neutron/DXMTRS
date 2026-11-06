@@ -2,7 +2,11 @@
 
 use dxmt_core::{
     format::query_dxgi_ref,
-    resource::{TextureViewDescriptor, dims::mip_extent},
+    resource::{
+        TextureViewDescriptor,
+        dims::mip_extent,
+        view::{ALL, ViewDesc, ViewDimension, ViewKind, all_wrapping, texture_view},
+    },
 };
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_TEXTURE_TYPE_CUBE,
@@ -13,9 +17,9 @@ use winemetal_sys::wire::{
 
 use crate::{
     abi::records::{
-        D3d11DepthStencilViewDesc, D3d11RenderTargetViewDesc, D3d11RenderTargetViewDesc1,
-        D3d11RenderTargetViewDesc1Union, D3d11RenderTargetViewDescUnion,
-        D3d11ShaderResourceViewDesc, D3d11ShaderResourceViewDesc1,
+        D3d11DepthStencilViewDesc, D3d11DepthStencilViewDescUnion, D3d11RenderTargetViewDesc,
+        D3d11RenderTargetViewDesc1, D3d11RenderTargetViewDesc1Union,
+        D3d11RenderTargetViewDescUnion, D3d11ShaderResourceViewDesc, D3d11ShaderResourceViewDesc1,
         D3d11ShaderResourceViewDesc1Union, D3d11ShaderResourceViewDescUnion, D3d11Tex2dArrayRtv,
         D3d11Tex2dArrayRtv1, D3d11Tex2dArraySrv, D3d11Tex2dArraySrv1, D3d11Tex2dArrayUav,
         D3d11Tex2dArrayUav1, D3d11Tex2dRtv, D3d11Tex2dRtv1, D3d11Tex2dSrv, D3d11Tex2dSrv1,
@@ -433,13 +437,415 @@ const fn fix_depth_stencil_format(tex_pixel_format: u32, pixel_format: &mut u32)
     }
 }
 
-const fn set_render_target_size(
+/// Whether a `kind` view may view a texture of `texture_type`, and the view it is then.
+///
+/// D3D11's `InitializeAndNormalizeViewDescriptor` rule. A multisampled view over a texture of one
+/// sample is a 2D view of its one level (a shader-resource or render-target view over a 2D
+/// texture, a depth-stencil view over a 2D, 2D-array or cube one); a multisampled array over a
+/// multisampled texture is one slice of it, over a 2D array a 2D array.
+const fn d3d11_view(kind: ViewKind, view: &mut ViewDesc, texture_type: u32) -> bool {
+    let flat = matches!(texture_type, WMT_TEXTURE_TYPE2D | WMT_TEXTURE_TYPE2D_ARRAY);
+    let planes = matches!(
+        texture_type,
+        WMT_TEXTURE_TYPE2D
+            | WMT_TEXTURE_TYPE2D_ARRAY
+            | WMT_TEXTURE_TYPE_CUBE
+            | WMT_TEXTURE_TYPE_CUBE_ARRAY
+    );
+    match (kind, view.dimension) {
+        (_, ViewDimension::Texture1D | ViewDimension::Texture1DArray) => flat,
+        (ViewKind::UnorderedAccess, ViewDimension::Texture2D) => {
+            flat || texture_type == WMT_TEXTURE_TYPE_CUBE
+        }
+        (_, ViewDimension::Texture2D | ViewDimension::Texture2DArray) => planes,
+        (ViewKind::ShaderResource | ViewKind::RenderTarget, ViewDimension::Texture2DMS) => {
+            match texture_type {
+                WMT_TEXTURE_TYPE2D_MULTISAMPLE => true,
+                WMT_TEXTURE_TYPE2D => {
+                    view.dimension = ViewDimension::Texture2D;
+                    true
+                }
+                _ => false,
+            }
+        }
+        (ViewKind::DepthStencil, ViewDimension::Texture2DMS) => match texture_type {
+            WMT_TEXTURE_TYPE2D_MULTISAMPLE | WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY => true,
+            WMT_TEXTURE_TYPE2D | WMT_TEXTURE_TYPE2D_ARRAY | WMT_TEXTURE_TYPE_CUBE => {
+                view.dimension = ViewDimension::Texture2D;
+                true
+            }
+            _ => false,
+        },
+        (_, ViewDimension::Texture2DMSArray) => match texture_type {
+            WMT_TEXTURE_TYPE2D_MULTISAMPLE => {
+                view.first_slice = 0;
+                view.array_size = 1;
+                true
+            }
+            WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY => true,
+            WMT_TEXTURE_TYPE2D if matches!(kind, ViewKind::ShaderResource) => {
+                view.dimension = ViewDimension::Texture2DArray;
+                view.first_slice = 0;
+                view.array_size = 1;
+                true
+            }
+            WMT_TEXTURE_TYPE2D_ARRAY => {
+                view.dimension = ViewDimension::Texture2DArray;
+                true
+            }
+            _ => false,
+        },
+        (ViewKind::ShaderResource, ViewDimension::Texture3D) => texture_type == WMT_TEXTURE_TYPE3D,
+        (ViewKind::UnorderedAccess, ViewDimension::Texture3D) => {
+            texture_type == WMT_TEXTURE_TYPE3D && view.first_slice == 0
+        }
+        (ViewKind::RenderTarget, ViewDimension::Texture3D) => {
+            texture_type == WMT_TEXTURE_TYPE3D && (view.array_size == 1 || view.first_slice == 0)
+        }
+        (
+            ViewKind::ShaderResource,
+            ViewDimension::TextureCube | ViewDimension::TextureCubeArray,
+        ) => {
+            matches!(
+                texture_type,
+                WMT_TEXTURE_TYPE_CUBE | WMT_TEXTURE_TYPE_CUBE_ARRAY
+            )
+        }
+        _ => false,
+    }
+}
+
+/// The view a shader-resource `view_dimension` selects.
+///
+/// Its "all the rest" counts resolve against the texture's and are written back into `u`.
+fn srv_view_desc(
+    view_dimension: u32,
+    u: &mut D3d11ShaderResourceViewDesc1Union,
+    mip_levels: u32,
+    array_size: u32,
+) -> Option<ViewDesc> {
+    let view = |dimension, first_mip, mip_count, first_slice, array_size| ViewDesc {
+        dimension,
+        first_mip,
+        mip_count,
+        first_slice,
+        array_size,
+    };
+    Some(match view_dimension {
+        2 => {
+            // SAFETY: `view_dimension == 2` selects `texture1d`.
+            let mut t = unsafe { u.texture1d };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            u.texture1d = t;
+            view(
+                ViewDimension::Texture1D,
+                t.most_detailed_mip,
+                t.mip_levels,
+                0,
+                1,
+            )
+        }
+        3 => {
+            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
+            let mut t = unsafe { u.texture1d_array };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture1d_array = t;
+            let d = ViewDimension::Texture1DArray;
+            view(
+                d,
+                t.most_detailed_mip,
+                t.mip_levels,
+                t.first_array_slice,
+                t.array_size,
+            )
+        }
+        4 => {
+            // SAFETY: `view_dimension == 4` selects `texture2d`.
+            let mut t = unsafe { u.texture2d };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            u.texture2d = t;
+            view(
+                ViewDimension::Texture2D,
+                t.most_detailed_mip,
+                t.mip_levels,
+                0,
+                1,
+            )
+        }
+        5 => {
+            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
+            let mut t = unsafe { u.texture2d_array };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2d_array = t;
+            let d = ViewDimension::Texture2DArray;
+            view(
+                d,
+                t.most_detailed_mip,
+                t.mip_levels,
+                t.first_array_slice,
+                t.array_size,
+            )
+        }
+        6 => view(ViewDimension::Texture2DMS, 0, 1, 0, 1),
+        7 => {
+            // SAFETY: `view_dimension == 7` selects `texture2dms_array`.
+            let mut t = unsafe { u.texture2dms_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2dms_array = t;
+            view(
+                ViewDimension::Texture2DMSArray,
+                0,
+                1,
+                t.first_array_slice,
+                t.array_size,
+            )
+        }
+        8 => {
+            // SAFETY: `view_dimension == 8` selects `texture3d`.
+            let mut t = unsafe { u.texture3d };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            u.texture3d = t;
+            view(
+                ViewDimension::Texture3D,
+                t.most_detailed_mip,
+                t.mip_levels,
+                0,
+                1,
+            )
+        }
+        9 => {
+            // SAFETY: `view_dimension == 9` selects `texture_cube`.
+            let mut t = unsafe { u.texture_cube };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            u.texture_cube = t;
+            view(
+                ViewDimension::TextureCube,
+                t.most_detailed_mip,
+                t.mip_levels,
+                0,
+                6,
+            )
+        }
+        10 => {
+            // SAFETY: `view_dimension == 10` selects `texture_cube_array`.
+            let mut t = unsafe { u.texture_cube_array };
+            t.mip_levels = all_wrapping(t.mip_levels, mip_levels, t.most_detailed_mip);
+            if t.num_cubes == ALL {
+                t.num_cubes = array_size.wrapping_sub(t.first2d_array_face) / 6;
+            }
+            u.texture_cube_array = t;
+            let faces = t.num_cubes.wrapping_mul(6);
+            let d = ViewDimension::TextureCubeArray;
+            view(
+                d,
+                t.most_detailed_mip,
+                t.mip_levels,
+                t.first2d_array_face,
+                faces,
+            )
+        }
+        _ => return None,
+    })
+}
+
+/// A view of `dimension` at `mip_slice`, with slices `first` and `size`.
+const fn level_view(dimension: ViewDimension, mip_slice: u32, first: u32, size: u32) -> ViewDesc {
+    ViewDesc {
+        dimension,
+        first_mip: mip_slice,
+        mip_count: 1,
+        first_slice: first,
+        array_size: size,
+    }
+}
+
+/// The view an unordered-access `view_dimension` selects, as [`srv_view_desc`].
+///
+/// A 3D view's W slices resolve against its level's depth.
+const fn uav_view_desc(
+    view_dimension: u32,
+    u: &mut D3d11UnorderedAccessViewDesc1Union,
+    array_size: u32,
+) -> Option<ViewDesc> {
+    Some(match view_dimension {
+        2 => {
+            // SAFETY: `view_dimension == 2` selects `texture1d`.
+            let t = unsafe { u.texture1d };
+            level_view(ViewDimension::Texture1D, t.mip_slice, 0, 1)
+        }
+        3 => {
+            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
+            let mut t = unsafe { u.texture1d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture1d_array = t;
+            let d = ViewDimension::Texture1DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        4 => {
+            // SAFETY: `view_dimension == 4` selects `texture2d`.
+            let t = unsafe { u.texture2d };
+            level_view(ViewDimension::Texture2D, t.mip_slice, 0, 1)
+        }
+        5 => {
+            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
+            let mut t = unsafe { u.texture2d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2d_array = t;
+            let d = ViewDimension::Texture2DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        8 => {
+            // SAFETY: `view_dimension == 8` selects `texture3d`.
+            let mut t = unsafe { u.texture3d };
+            let depth = mip_extent(array_size, t.mip_slice);
+            t.w_size = all_wrapping(t.w_size, depth, t.first_w_slice);
+            u.texture3d = t;
+            level_view(
+                ViewDimension::Texture3D,
+                t.mip_slice,
+                t.first_w_slice,
+                t.w_size,
+            )
+        }
+        _ => return None,
+    })
+}
+
+/// The view a render-target `view_dimension` selects, as [`uav_view_desc`].
+const fn rtv_view_desc(
+    view_dimension: u32,
+    u: &mut D3d11RenderTargetViewDesc1Union,
+    array_size: u32,
+) -> Option<ViewDesc> {
+    Some(match view_dimension {
+        2 => {
+            // SAFETY: `view_dimension == 2` selects `texture1d`.
+            let t = unsafe { u.texture1d };
+            level_view(ViewDimension::Texture1D, t.mip_slice, 0, 1)
+        }
+        3 => {
+            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
+            let mut t = unsafe { u.texture1d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture1d_array = t;
+            let d = ViewDimension::Texture1DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        4 => {
+            // SAFETY: `view_dimension == 4` selects `texture2d`.
+            let t = unsafe { u.texture2d };
+            level_view(ViewDimension::Texture2D, t.mip_slice, 0, 1)
+        }
+        5 => {
+            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
+            let mut t = unsafe { u.texture2d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2d_array = t;
+            let d = ViewDimension::Texture2DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        6 => level_view(ViewDimension::Texture2DMS, 0, 0, 1),
+        7 => {
+            // SAFETY: `view_dimension == 7` selects `texture2dms_array`.
+            let mut t = unsafe { u.texture2dms_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2dms_array = t;
+            let d = ViewDimension::Texture2DMSArray;
+            level_view(d, 0, t.first_array_slice, t.array_size)
+        }
+        8 => {
+            // SAFETY: `view_dimension == 8` selects `texture3d`.
+            let mut t = unsafe { u.texture3d };
+            let depth = mip_extent(array_size, t.mip_slice);
+            t.w_size = all_wrapping(t.w_size, depth, t.first_w_slice);
+            u.texture3d = t;
+            level_view(
+                ViewDimension::Texture3D,
+                t.mip_slice,
+                t.first_w_slice,
+                t.w_size,
+            )
+        }
+        _ => return None,
+    })
+}
+
+/// The view a depth-stencil `view_dimension` selects, as [`uav_view_desc`].
+const fn dsv_view_desc(
+    view_dimension: u32,
+    u: &mut D3d11DepthStencilViewDescUnion,
+    array_size: u32,
+) -> Option<ViewDesc> {
+    Some(match view_dimension {
+        1 => {
+            // SAFETY: `view_dimension == 1` selects `texture1d`.
+            let t = unsafe { u.texture1d };
+            level_view(ViewDimension::Texture1D, t.mip_slice, 0, 1)
+        }
+        2 => {
+            // SAFETY: `view_dimension == 2` selects `texture1d_array`.
+            let mut t = unsafe { u.texture1d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture1d_array = t;
+            let d = ViewDimension::Texture1DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        3 => {
+            // SAFETY: `view_dimension == 3` selects `texture2d`.
+            let t = unsafe { u.texture2d };
+            level_view(ViewDimension::Texture2D, t.mip_slice, 0, 1)
+        }
+        4 => {
+            // SAFETY: `view_dimension == 4` selects `texture2d_array`.
+            let mut t = unsafe { u.texture2d_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2d_array = t;
+            let d = ViewDimension::Texture2DArray;
+            level_view(d, t.mip_slice, t.first_array_slice, t.array_size)
+        }
+        5 => level_view(ViewDimension::Texture2DMS, 0, 0, 1),
+        6 => {
+            // SAFETY: `view_dimension == 6` selects `texture2dms_array`.
+            let mut t = unsafe { u.texture2dms_array };
+            t.array_size = all_wrapping(t.array_size, array_size, t.first_array_slice);
+            u.texture2dms_array = t;
+            let d = ViewDimension::Texture2DMSArray;
+            level_view(d, 0, t.first_array_slice, t.array_size)
+        }
+        _ => return None,
+    })
+}
+
+/// The render-pass attachment of `view` over `tex_info`.
+///
+/// An array view renders its slices as layers; a 3D view one W slice as its depth plane, or the
+/// level's whole depth as layers from W slice 0.
+const fn attachment(
+    view: &ViewDesc,
     tex_info: &WMTTextureInfo,
-    level: u32,
-    attach: &mut RenderPassAttachmentDesc,
-) {
-    attach.width = mip_extent(tex_info.width, level);
-    attach.height = mip_extent(tex_info.height, level);
+    depth: u32,
+) -> RenderPassAttachmentDesc {
+    let mut attach = RenderPassAttachmentDesc {
+        render_target_array_length: 0,
+        sample_count: tex_info.sample_count(),
+        depth_plane: 0,
+        width: mip_extent(tex_info.width, view.first_mip),
+        height: mip_extent(tex_info.height, view.first_mip),
+        slice: 0,
+        level: 0,
+    };
+    if view.dimension.is_array() {
+        attach.render_target_array_length = view.array_size;
+    } else if matches!(view.dimension, ViewDimension::Texture3D) {
+        if view.array_size == 1 {
+            attach.depth_plane = view.first_slice;
+        } else {
+            attach.render_target_array_length = mip_extent(depth, view.first_mip);
+        }
+    }
+    attach
 }
 
 /// Validates and normalizes an SRV description (`InitializeAndNormalizeViewDescriptor`).
@@ -459,230 +865,17 @@ pub fn initialize_and_normalize_srv_descriptor(
     }
     let mut pixel_format = metal_format.pixel_format;
     fix_depth_stencil_format(tex_info.pixel_format, &mut pixel_format);
-    let texture_type = tex_info.r#type();
-    match view_desc.view_dimension {
-        2 => {
-            // SAFETY: `view_dimension == 2` selects `texture1d`.
-            let mut t = unsafe { view_desc.u.texture1d };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-                view_desc.u.texture1d = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        3 => {
-            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
-            let mut t = unsafe { view_desc.u.texture1d_array };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-            }
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-            }
-            view_desc.u.texture1d_array = t;
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-        }
-        4 => {
-            // SAFETY: `view_dimension == 4` selects `texture2d`.
-            let mut t = unsafe { view_desc.u.texture2d };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-                view_desc.u.texture2d = t;
-            }
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        5 => {
-            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
-            let mut t = unsafe { view_desc.u.texture2d_array };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-            }
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-            }
-            view_desc.u.texture2d_array = t;
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-        }
-        6 => {
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        7 => {
-            // SAFETY: `view_dimension == 7` selects `texture2dms_array`.
-            let mut t = unsafe { view_desc.u.texture2dms_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2dms_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: 0,
-                    mip_count: 1,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-        }
-        8 => {
-            // SAFETY: `view_dimension == 8` selects `texture3d`.
-            let mut t = unsafe { view_desc.u.texture3d };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-                view_desc.u.texture3d = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE3D {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE3D,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        9 => {
-            // SAFETY: `view_dimension == 9` selects `texture_cube`.
-            let mut t = unsafe { view_desc.u.texture_cube };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-                view_desc.u.texture_cube = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE_CUBE || texture_type == WMT_TEXTURE_TYPE_CUBE_ARRAY
-            {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE_CUBE,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: 0,
-                    array_size: 6,
-                });
-            }
-        }
-        10 => {
-            // SAFETY: `view_dimension == 10` selects `texture_cube_array`.
-            let mut t = unsafe { view_desc.u.texture_cube_array };
-            if !t.mip_levels == 0 {
-                t.mip_levels = mip_levels.wrapping_sub(t.most_detailed_mip);
-            }
-            if !t.num_cubes == 0 {
-                t.num_cubes = array_size.wrapping_sub(t.first2d_array_face) / 6;
-            }
-            view_desc.u.texture_cube_array = t;
-            if texture_type == WMT_TEXTURE_TYPE_CUBE || texture_type == WMT_TEXTURE_TYPE_CUBE_ARRAY
-            {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE_CUBE_ARRAY,
-                    first_mip: t.most_detailed_mip,
-                    mip_count: t.mip_levels,
-                    first_slice: t.first2d_array_face,
-                    array_size: t.num_cubes * 6,
-                });
-            }
-        }
-        _ => {}
+    let mut view = srv_view_desc(
+        view_desc.view_dimension,
+        &mut view_desc.u,
+        mip_levels,
+        array_size,
+    )
+    .ok_or(E_FAIL)?;
+    if !d3d11_view(ViewKind::ShaderResource, &mut view, tex_info.r#type()) {
+        return Err(E_FAIL);
     }
-    Err(E_FAIL)
+    Ok(texture_view(pixel_format, &view))
 }
 
 /// Validates and normalizes a UAV description (`InitializeAndNormalizeViewDescriptor`).
@@ -703,103 +896,12 @@ pub fn initialize_and_normalize_uav_descriptor(
     }
     let mut pixel_format = metal_format.pixel_format;
     fix_depth_stencil_format(tex_info.pixel_format, &mut pixel_format);
-    let texture_type = tex_info.r#type();
-    match view_desc.view_dimension {
-        2 => {
-            // SAFETY: `view_dimension == 2` selects `texture1d`.
-            let t = unsafe { view_desc.u.texture1d };
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D,
-                    first_mip: t.mip_slice,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        3 => {
-            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
-            let mut t = unsafe { view_desc.u.texture1d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture1d_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: t.mip_slice,
-                    mip_count: 1,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-        }
-        4 => {
-            // SAFETY: `view_dimension == 4` selects `texture2d`.
-            let t = unsafe { view_desc.u.texture2d };
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D | WMT_TEXTURE_TYPE2D_ARRAY | WMT_TEXTURE_TYPE_CUBE
-            ) {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D,
-                    first_mip: t.mip_slice,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        5 => {
-            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
-            let mut t = unsafe { view_desc.u.texture2d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2d_array = t;
-            }
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                    first_mip: t.mip_slice,
-                    mip_count: 1,
-                    first_slice: t.first_array_slice,
-                    array_size: t.array_size,
-                });
-            }
-        }
-        8 => {
-            // SAFETY: `view_dimension == 8` selects `texture3d`.
-            let mut t = unsafe { view_desc.u.texture3d };
-            let mip_depth = mip_extent(array_size, t.mip_slice);
-            if !t.w_size == 0 {
-                t.w_size = mip_depth.wrapping_sub(t.first_w_slice);
-                view_desc.u.texture3d = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE3D && t.first_w_slice == 0 {
-                return Ok(TextureViewDescriptor {
-                    format: pixel_format,
-                    texture_type: WMT_TEXTURE_TYPE3D,
-                    first_mip: t.mip_slice,
-                    mip_count: 1,
-                    first_slice: 0,
-                    array_size: 1,
-                });
-            }
-        }
-        _ => {}
+    let mut view =
+        uav_view_desc(view_desc.view_dimension, &mut view_desc.u, array_size).ok_or(E_FAIL)?;
+    if !d3d11_view(ViewKind::UnorderedAccess, &mut view, tex_info.r#type()) {
+        return Err(E_FAIL);
     }
-    Err(E_FAIL)
+    Ok(texture_view(pixel_format, &view))
 }
 
 /// Validates and normalizes an RTV description (`InitializeAndNormalizeViewDescriptor`).
@@ -818,238 +920,15 @@ pub fn initialize_and_normalize_rtv_descriptor(
     if hr < 0 {
         return Err(E_FAIL);
     }
-    let mut attach = RenderPassAttachmentDesc {
-        render_target_array_length: 0,
-        sample_count: tex_info.sample_count(),
-        depth_plane: 0,
-        width: 0,
-        height: 0,
-        slice: 0,
-        level: 0,
-    };
-    let texture_type = tex_info.r#type();
-    match view_desc.view_dimension {
-        2 => {
-            // SAFETY: `view_dimension == 2` selects `texture1d`.
-            let t = unsafe { view_desc.u.texture1d };
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        3 => {
-            // SAFETY: `view_dimension == 3` selects `texture1d_array`.
-            let mut t = unsafe { view_desc.u.texture1d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture1d_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        4 => {
-            // SAFETY: `view_dimension == 4` selects `texture2d`.
-            let t = unsafe { view_desc.u.texture2d };
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        5 => {
-            // SAFETY: `view_dimension == 5` selects `texture2d_array`.
-            let mut t = unsafe { view_desc.u.texture2d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2d_array = t;
-            }
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        6 => {
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D {
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        7 => {
-            // SAFETY: `view_dimension == 7` selects `texture2dms_array`.
-            let mut t = unsafe { view_desc.u.texture2dms_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2dms_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
-                attach.render_target_array_length = 1;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        8 => {
-            // SAFETY: `view_dimension == 8` selects `texture3d`.
-            let mut t = unsafe { view_desc.u.texture3d };
-            let mip_depth = mip_extent(array_size, t.mip_slice);
-            if !t.w_size == 0 {
-                t.w_size = mip_depth.wrapping_sub(t.first_w_slice);
-                view_desc.u.texture3d = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE3D {
-                if t.w_size == 1 {
-                    attach.depth_plane = t.first_w_slice;
-                    set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                    return Ok((
-                        attach,
-                        TextureViewDescriptor {
-                            format: metal_format.pixel_format,
-                            texture_type: WMT_TEXTURE_TYPE3D,
-                            first_mip: t.mip_slice,
-                            mip_count: 1,
-                            first_slice: 0,
-                            array_size: 1,
-                        },
-                    ));
-                }
-                if t.first_w_slice == 0 {
-                    attach.render_target_array_length = mip_depth;
-                    set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                    return Ok((
-                        attach,
-                        TextureViewDescriptor {
-                            format: metal_format.pixel_format,
-                            texture_type: WMT_TEXTURE_TYPE3D,
-                            first_mip: t.mip_slice,
-                            mip_count: 1,
-                            first_slice: 0,
-                            array_size: 1,
-                        },
-                    ));
-                }
-            }
-        }
-        _ => {}
+    let mut view =
+        rtv_view_desc(view_desc.view_dimension, &mut view_desc.u, array_size).ok_or(E_FAIL)?;
+    if !d3d11_view(ViewKind::RenderTarget, &mut view, tex_info.r#type()) {
+        return Err(E_FAIL);
     }
-    Err(E_FAIL)
+    Ok((
+        attachment(&view, tex_info, array_size),
+        texture_view(metal_format.pixel_format, &view),
+    ))
 }
 
 /// Validates and normalizes a DSV description (`InitializeAndNormalizeViewDescriptor`).
@@ -1069,202 +948,15 @@ pub fn initialize_and_normalize_dsv_descriptor(
         return Err(E_FAIL);
     }
     view_desc.flags &= 3;
-    let mut attach = RenderPassAttachmentDesc {
-        render_target_array_length: 0,
-        sample_count: tex_info.sample_count(),
-        depth_plane: 0,
-        width: 0,
-        height: 0,
-        slice: 0,
-        level: 0,
-    };
-    let texture_type = tex_info.r#type();
-    match view_desc.view_dimension {
-        1 => {
-            // SAFETY: `view_dimension == 1` selects `texture1d`.
-            let t = unsafe { view_desc.u.texture1d };
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        2 => {
-            // SAFETY: `view_dimension == 2` selects `texture1d_array`.
-            let mut t = unsafe { view_desc.u.texture1d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture1d_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D || texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        3 => {
-            // SAFETY: `view_dimension == 3` selects `texture2d`.
-            let t = unsafe { view_desc.u.texture2d };
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        4 => {
-            // SAFETY: `view_dimension == 4` selects `texture2d_array`.
-            let mut t = unsafe { view_desc.u.texture2d_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2d_array = t;
-            }
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D
-                    | WMT_TEXTURE_TYPE2D_ARRAY
-                    | WMT_TEXTURE_TYPE_CUBE
-                    | WMT_TEXTURE_TYPE_CUBE_ARRAY
-            ) {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, t.mip_slice, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: t.mip_slice,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        5 => {
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE
-                || texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY
-            {
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-            if matches!(
-                texture_type,
-                WMT_TEXTURE_TYPE2D | WMT_TEXTURE_TYPE2D_ARRAY | WMT_TEXTURE_TYPE_CUBE
-            ) {
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-        }
-        6 => {
-            // SAFETY: `view_dimension == 6` selects `texture2dms_array`.
-            let mut t = unsafe { view_desc.u.texture2dms_array };
-            if !t.array_size == 0 {
-                t.array_size = array_size.wrapping_sub(t.first_array_slice);
-                view_desc.u.texture2dms_array = t;
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE {
-                attach.render_target_array_length = 1;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: 0,
-                        array_size: 1,
-                    },
-                ));
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-            if texture_type == WMT_TEXTURE_TYPE2D_ARRAY {
-                attach.render_target_array_length = t.array_size;
-                set_render_target_size(tex_info, 0, &mut attach);
-                return Ok((
-                    attach,
-                    TextureViewDescriptor {
-                        format: metal_format.pixel_format,
-                        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
-                        first_mip: 0,
-                        mip_count: 1,
-                        first_slice: t.first_array_slice,
-                        array_size: t.array_size,
-                    },
-                ));
-            }
-        }
-        _ => {}
+    let mut view =
+        dsv_view_desc(view_desc.view_dimension, &mut view_desc.u, array_size).ok_or(E_FAIL)?;
+    if !d3d11_view(ViewKind::DepthStencil, &mut view, tex_info.r#type()) {
+        return Err(E_FAIL);
     }
-    Err(E_FAIL)
+    Ok((
+        attachment(&view, tex_info, array_size),
+        texture_view(metal_format.pixel_format, &view),
+    ))
 }
 
 #[cfg(test)]

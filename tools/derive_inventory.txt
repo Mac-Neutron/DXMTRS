@@ -669,6 +669,8 @@ src/dxmt/src/resource/dims.rs LinearLayout Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/resource/texture.rs TextureAllocationFlags Clone,Copy
 src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,Default,PartialEq,Eq,Hash,Debug
 src/dxmt/src/resource/texture_info.rs Dimension Clone,Copy
+src/dxmt/src/resource/view.rs ViewDimension Clone,Copy
+src/dxmt/src/resource/view.rs ViewKind Clone,Copy
 src/dxmt/src/settings.rs Compression Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/settings.rs Flags Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/stats.rs StatId Clone,Copy

@@ -9,6 +9,7 @@ use dxmt_core::{
         BufferAllocationFlags,
         dims::{linear_layout, linear_row_pitch, mip_count_wh, mip_extent},
         texture_info::{Dimension, atomic_ok, info_bits, lossless, texture_type},
+        view::{ResourceShape, ViewDesc, ViewDimension, ViewKind, entire_view},
     },
     settings::settings,
 };
@@ -568,545 +569,572 @@ pub const fn extract_entire_dsv_buffer(
     }
 }
 
-/// Extracts or populates a 1D texture SRV description (`ExtractEntireResourceViewDescription`).
+/// D3D11's shape of a texture for its whole-resource views.
 ///
-/// # Errors
-///
-/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_srv_1d(
-    desc: &D3d11Texture1dDesc,
-    view_in: Option<&D3d11ShaderResourceViewDesc1>,
-) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
+/// An array unless it has exactly one slice, multisampled unless it has exactly one sample.
+const fn shape(
+    dimension: Dimension,
+    mip_levels: u32,
+    array_size: u32,
+    sample_count: u32,
+    misc_flags: u32,
+) -> ResourceShape {
+    ResourceShape {
+        dimension,
+        mip_levels,
+        array_size,
+        is_array: array_size != 1,
+        multisampled: sample_count != 1,
+        cube: misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE != 0,
     }
-    if desc.array_size == 1 {
-        Ok(D3d11ShaderResourceViewDesc1 {
-            format: desc.format,
-            view_dimension: 2,
-            u: D3d11ShaderResourceViewDesc1Union {
+}
+
+const fn shape_1d(desc: &D3d11Texture1dDesc) -> ResourceShape {
+    shape(
+        Dimension::Texture1D,
+        desc.mip_levels,
+        desc.array_size,
+        1,
+        desc.misc_flags,
+    )
+}
+
+const fn shape_2d(desc: &D3d11Texture2dDesc1) -> ResourceShape {
+    let samples = desc.sample_desc.count;
+    shape(
+        Dimension::Texture2D,
+        desc.mip_levels,
+        desc.array_size,
+        samples,
+        desc.misc_flags,
+    )
+}
+
+const fn shape_3d(desc: &D3d11Texture3dDesc1) -> ResourceShape {
+    shape(
+        Dimension::Texture3D,
+        desc.mip_levels,
+        desc.depth,
+        1,
+        desc.misc_flags,
+    )
+}
+
+/// `view` as a `D3D11_SHADER_RESOURCE_VIEW_DESC1` in `format`.
+const fn srv_desc(format: u32, view: &ViewDesc) -> D3d11ShaderResourceViewDesc1 {
+    let (mip, mips) = (view.first_mip, view.mip_count);
+    let (first, size) = (view.first_slice, view.array_size);
+    let (view_dimension, u) = match view.dimension {
+        ViewDimension::Texture1D => (
+            2,
+            D3d11ShaderResourceViewDesc1Union {
                 texture1d: D3d11Tex1dSrv {
-                    most_detailed_mip: 0,
-                    mip_levels: desc.mip_levels,
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
                 },
             },
-        })
-    } else {
-        Ok(D3d11ShaderResourceViewDesc1 {
-            format: desc.format,
-            view_dimension: 3,
-            u: D3d11ShaderResourceViewDesc1Union {
+        ),
+        ViewDimension::Texture1DArray => (
+            3,
+            D3d11ShaderResourceViewDesc1Union {
                 texture1d_array: D3d11Tex1dArraySrv {
-                    most_detailed_mip: 0,
-                    mip_levels: desc.mip_levels,
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first_array_slice: first,
+                    array_size: size,
                 },
             },
-        })
-    }
-}
-
-/// Extracts or populates a 1D texture UAV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_uav_1d(
-    desc: &D3d11Texture1dDesc,
-    view_in: Option<&D3d11UnorderedAccessViewDesc1>,
-) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.array_size == 1 {
-        Ok(D3d11UnorderedAccessViewDesc1 {
-            format: desc.format,
-            view_dimension: 2,
-            u: D3d11UnorderedAccessViewDesc1Union {
-                texture1d: D3d11Tex1dUav { mip_slice: 0 },
-            },
-        })
-    } else {
-        Ok(D3d11UnorderedAccessViewDesc1 {
-            format: desc.format,
-            view_dimension: 3,
-            u: D3d11UnorderedAccessViewDesc1Union {
-                texture1d_array: D3d11Tex1dArrayUav {
-                    mip_slice: 0,
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+        ),
+        ViewDimension::Texture2D => (
+            4,
+            D3d11ShaderResourceViewDesc1Union {
+                texture2d: D3d11Tex2dSrv1 {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    plane_slice: 0,
                 },
             },
-        })
-    }
-}
-
-/// Extracts or populates a 1D texture RTV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_rtv_1d(
-    desc: &D3d11Texture1dDesc,
-    view_in: Option<&D3d11RenderTargetViewDesc1>,
-) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.array_size == 1 {
-        Ok(D3d11RenderTargetViewDesc1 {
-            format: desc.format,
-            view_dimension: 2,
-            u: D3d11RenderTargetViewDesc1Union {
-                texture1d: D3d11Tex1dRtv { mip_slice: 0 },
-            },
-        })
-    } else {
-        Ok(D3d11RenderTargetViewDesc1 {
-            format: desc.format,
-            view_dimension: 3,
-            u: D3d11RenderTargetViewDesc1Union {
-                texture1d_array: D3d11Tex1dArrayRtv {
-                    mip_slice: 0,
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+        ),
+        ViewDimension::Texture2DArray => (
+            5,
+            D3d11ShaderResourceViewDesc1Union {
+                texture2d_array: D3d11Tex2dArraySrv1 {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
                 },
             },
-        })
-    }
-}
-
-/// Extracts or populates a 1D texture DSV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_dsv_1d(
-    desc: &D3d11Texture1dDesc,
-    view_in: Option<&D3d11DepthStencilViewDesc>,
-) -> Result<D3d11DepthStencilViewDesc, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.array_size == 1 {
-        Ok(D3d11DepthStencilViewDesc {
-            format: desc.format,
-            view_dimension: 1,
-            flags: 0,
-            u: D3d11DepthStencilViewDescUnion {
-                texture1d: D3d11Tex1dDsv { mip_slice: 0 },
-            },
-        })
-    } else {
-        Ok(D3d11DepthStencilViewDesc {
-            format: desc.format,
-            view_dimension: 2,
-            flags: 0,
-            u: D3d11DepthStencilViewDescUnion {
-                texture1d_array: D3d11Tex1dArrayDsv {
-                    mip_slice: 0,
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
-                },
-            },
-        })
-    }
-}
-
-/// Extracts or populates a 2D texture SRV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_srv_2d(
-    desc: &D3d11Texture2dDesc1,
-    view_in: Option<&D3d11ShaderResourceViewDesc1>,
-) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.sample_desc.count == 1 {
-        if desc.array_size == 1 {
-            Ok(D3d11ShaderResourceViewDesc1 {
-                format: desc.format,
-                view_dimension: 4,
-                u: D3d11ShaderResourceViewDesc1Union {
-                    texture2d: D3d11Tex2dSrv1 {
-                        most_detailed_mip: 0,
-                        mip_levels: desc.mip_levels,
-                        plane_slice: 0,
-                    },
-                },
-            })
-        } else if (desc.misc_flags & D3D11_RESOURCE_MISC_TEXTURECUBE) != 0 {
-            let num_cubes = desc.array_size / 6;
-            if num_cubes > 1 {
-                Ok(D3d11ShaderResourceViewDesc1 {
-                    format: desc.format,
-                    view_dimension: 10,
-                    u: D3d11ShaderResourceViewDesc1Union {
-                        texture_cube_array: D3d11TexcubeArraySrv {
-                            most_detailed_mip: 0,
-                            mip_levels: desc.mip_levels,
-                            first2d_array_face: 0,
-                            num_cubes,
-                        },
-                    },
-                })
-            } else {
-                Ok(D3d11ShaderResourceViewDesc1 {
-                    format: desc.format,
-                    view_dimension: 9,
-                    u: D3d11ShaderResourceViewDesc1Union {
-                        texture_cube: D3d11TexcubeSrv {
-                            most_detailed_mip: 0,
-                            mip_levels: desc.mip_levels,
-                        },
-                    },
-                })
-            }
-        } else {
-            Ok(D3d11ShaderResourceViewDesc1 {
-                format: desc.format,
-                view_dimension: 5,
-                u: D3d11ShaderResourceViewDesc1Union {
-                    texture2d_array: D3d11Tex2dArraySrv1 {
-                        most_detailed_mip: 0,
-                        mip_levels: desc.mip_levels,
-                        first_array_slice: 0,
-                        array_size: desc.array_size,
-                        plane_slice: 0,
-                    },
-                },
-            })
-        }
-    } else if desc.array_size == 1 {
-        Ok(D3d11ShaderResourceViewDesc1 {
-            format: desc.format,
-            view_dimension: 6,
-            u: D3d11ShaderResourceViewDesc1Union {
+        ),
+        ViewDimension::Texture2DMS => (
+            6,
+            D3d11ShaderResourceViewDesc1Union {
                 texture2dms: D3d11Tex2dmsSrv {
                     unused_field_nothing_to_define: 0,
                 },
             },
-        })
-    } else {
-        Ok(D3d11ShaderResourceViewDesc1 {
-            format: desc.format,
-            view_dimension: 7,
-            u: D3d11ShaderResourceViewDesc1Union {
+        ),
+        ViewDimension::Texture2DMSArray => (
+            7,
+            D3d11ShaderResourceViewDesc1Union {
                 texture2dms_array: D3d11Tex2dmsArraySrv {
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+                    first_array_slice: first,
+                    array_size: size,
                 },
             },
-        })
+        ),
+        ViewDimension::Texture3D => (
+            8,
+            D3d11ShaderResourceViewDesc1Union {
+                texture3d: D3d11Tex3dSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                },
+            },
+        ),
+        ViewDimension::TextureCube => (
+            9,
+            D3d11ShaderResourceViewDesc1Union {
+                texture_cube: D3d11TexcubeSrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                },
+            },
+        ),
+        ViewDimension::TextureCubeArray => (
+            10,
+            D3d11ShaderResourceViewDesc1Union {
+                texture_cube_array: D3d11TexcubeArraySrv {
+                    most_detailed_mip: mip,
+                    mip_levels: mips,
+                    first2d_array_face: first,
+                    num_cubes: size / 6,
+                },
+            },
+        ),
+    };
+    D3d11ShaderResourceViewDesc1 {
+        format,
+        view_dimension,
+        u,
     }
 }
 
-/// Extracts or populates a 2D texture UAV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Returns [`E_FAIL`] if `view_in` is `None` and the texture is multisampled.
-pub const fn extract_entire_uav_2d(
-    desc: &D3d11Texture2dDesc1,
-    view_in: Option<&D3d11UnorderedAccessViewDesc1>,
-) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.sample_desc.count == 1 {
-        if desc.array_size == 1 {
-            Ok(D3d11UnorderedAccessViewDesc1 {
-                format: desc.format,
-                view_dimension: 4,
-                u: D3d11UnorderedAccessViewDesc1Union {
-                    texture2d: D3d11Tex2dUav1 {
-                        mip_slice: 0,
-                        plane_slice: 0,
-                    },
+/// `view` as a `D3D11_UNORDERED_ACCESS_VIEW_DESC1` in `format`; none for a dimension it lacks.
+const fn uav_desc(format: u32, view: &ViewDesc) -> Option<D3d11UnorderedAccessViewDesc1> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, u) = match view.dimension {
+        ViewDimension::Texture1D => (
+            2,
+            D3d11UnorderedAccessViewDesc1Union {
+                texture1d: D3d11Tex1dUav { mip_slice: mip },
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            3,
+            D3d11UnorderedAccessViewDesc1Union {
+                texture1d_array: D3d11Tex1dArrayUav {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
                 },
-            })
-        } else {
-            Ok(D3d11UnorderedAccessViewDesc1 {
-                format: desc.format,
-                view_dimension: 5,
-                u: D3d11UnorderedAccessViewDesc1Union {
-                    texture2d_array: D3d11Tex2dArrayUav1 {
-                        mip_slice: 0,
-                        first_array_slice: 0,
-                        array_size: desc.array_size,
-                        plane_slice: 0,
-                    },
+            },
+        ),
+        ViewDimension::Texture2D => (
+            4,
+            D3d11UnorderedAccessViewDesc1Union {
+                texture2d: D3d11Tex2dUav1 {
+                    mip_slice: mip,
+                    plane_slice: 0,
                 },
-            })
-        }
-    } else {
-        Err(E_FAIL)
-    }
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            5,
+            D3d11UnorderedAccessViewDesc1Union {
+                texture2d_array: D3d11Tex2dArrayUav1 {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
+                },
+            },
+        ),
+        ViewDimension::Texture3D => (
+            8,
+            D3d11UnorderedAccessViewDesc1Union {
+                texture3d: D3d11Tex3dUav {
+                    mip_slice: mip,
+                    first_w_slice: first,
+                    w_size: size,
+                },
+            },
+        ),
+        _ => return None,
+    };
+    Some(D3d11UnorderedAccessViewDesc1 {
+        format,
+        view_dimension,
+        u,
+    })
 }
 
-/// Extracts or populates a 2D texture RTV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_rtv_2d(
-    desc: &D3d11Texture2dDesc1,
-    view_in: Option<&D3d11RenderTargetViewDesc1>,
-) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.sample_desc.count == 1 {
-        if desc.array_size == 1 {
-            Ok(D3d11RenderTargetViewDesc1 {
-                format: desc.format,
-                view_dimension: 4,
-                u: D3d11RenderTargetViewDesc1Union {
-                    texture2d: D3d11Tex2dRtv1 {
-                        mip_slice: 0,
-                        plane_slice: 0,
-                    },
+/// `view` as a `D3D11_RENDER_TARGET_VIEW_DESC1` in `format`; none for a dimension it lacks.
+const fn rtv_desc(format: u32, view: &ViewDesc) -> Option<D3d11RenderTargetViewDesc1> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, u) = match view.dimension {
+        ViewDimension::Texture1D => (
+            2,
+            D3d11RenderTargetViewDesc1Union {
+                texture1d: D3d11Tex1dRtv { mip_slice: mip },
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            3,
+            D3d11RenderTargetViewDesc1Union {
+                texture1d_array: D3d11Tex1dArrayRtv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
                 },
-            })
-        } else {
-            Ok(D3d11RenderTargetViewDesc1 {
-                format: desc.format,
-                view_dimension: 5,
-                u: D3d11RenderTargetViewDesc1Union {
-                    texture2d_array: D3d11Tex2dArrayRtv1 {
-                        mip_slice: 0,
-                        first_array_slice: 0,
-                        array_size: desc.array_size,
-                        plane_slice: 0,
-                    },
+            },
+        ),
+        ViewDimension::Texture2D => (
+            4,
+            D3d11RenderTargetViewDesc1Union {
+                texture2d: D3d11Tex2dRtv1 {
+                    mip_slice: mip,
+                    plane_slice: 0,
                 },
-            })
-        }
-    } else if desc.array_size == 1 {
-        Ok(D3d11RenderTargetViewDesc1 {
-            format: desc.format,
-            view_dimension: 6,
-            u: D3d11RenderTargetViewDesc1Union {
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            5,
+            D3d11RenderTargetViewDesc1Union {
+                texture2d_array: D3d11Tex2dArrayRtv1 {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
+                    plane_slice: 0,
+                },
+            },
+        ),
+        ViewDimension::Texture2DMS => (
+            6,
+            D3d11RenderTargetViewDesc1Union {
                 texture2dms: D3d11Tex2dmsRtv {
                     unused_field_nothing_to_define: 0,
                 },
             },
-        })
-    } else {
-        Ok(D3d11RenderTargetViewDesc1 {
-            format: desc.format,
-            view_dimension: 7,
-            u: D3d11RenderTargetViewDesc1Union {
+        ),
+        ViewDimension::Texture2DMSArray => (
+            7,
+            D3d11RenderTargetViewDesc1Union {
                 texture2dms_array: D3d11Tex2dmsArrayRtv {
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+                    first_array_slice: first,
+                    array_size: size,
                 },
             },
-        })
-    }
+        ),
+        ViewDimension::Texture3D => (
+            8,
+            D3d11RenderTargetViewDesc1Union {
+                texture3d: D3d11Tex3dRtv {
+                    mip_slice: mip,
+                    first_w_slice: first,
+                    w_size: size,
+                },
+            },
+        ),
+        _ => return None,
+    };
+    Some(D3d11RenderTargetViewDesc1 {
+        format,
+        view_dimension,
+        u,
+    })
 }
 
-/// Extracts or populates a 2D texture DSV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_dsv_2d(
-    desc: &D3d11Texture2dDesc1,
-    view_in: Option<&D3d11DepthStencilViewDesc>,
-) -> Result<D3d11DepthStencilViewDesc, Hresult> {
-    if let Some(v) = view_in {
-        let mut out = *v;
-        if out.format == 0 {
-            out.format = desc.format;
-        }
-        return Ok(out);
-    }
-    if desc.sample_desc.count == 1 {
-        if desc.array_size == 1 {
-            Ok(D3d11DepthStencilViewDesc {
-                format: desc.format,
-                view_dimension: 3,
-                flags: 0,
-                u: D3d11DepthStencilViewDescUnion {
-                    texture2d: D3d11Tex2dDsv { mip_slice: 0 },
+/// `view` as a `D3D11_DEPTH_STENCIL_VIEW_DESC` in `format`; none for a dimension it lacks.
+const fn dsv_desc(format: u32, view: &ViewDesc) -> Option<D3d11DepthStencilViewDesc> {
+    let (mip, first, size) = (view.first_mip, view.first_slice, view.array_size);
+    let (view_dimension, u) = match view.dimension {
+        ViewDimension::Texture1D => (
+            1,
+            D3d11DepthStencilViewDescUnion {
+                texture1d: D3d11Tex1dDsv { mip_slice: mip },
+            },
+        ),
+        ViewDimension::Texture1DArray => (
+            2,
+            D3d11DepthStencilViewDescUnion {
+                texture1d_array: D3d11Tex1dArrayDsv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
                 },
-            })
-        } else {
-            Ok(D3d11DepthStencilViewDesc {
-                format: desc.format,
-                view_dimension: 4,
-                flags: 0,
-                u: D3d11DepthStencilViewDescUnion {
-                    texture2d_array: D3d11Tex2dArrayDsv {
-                        mip_slice: 0,
-                        first_array_slice: 0,
-                        array_size: desc.array_size,
-                    },
+            },
+        ),
+        ViewDimension::Texture2D => (
+            3,
+            D3d11DepthStencilViewDescUnion {
+                texture2d: D3d11Tex2dDsv { mip_slice: mip },
+            },
+        ),
+        ViewDimension::Texture2DArray => (
+            4,
+            D3d11DepthStencilViewDescUnion {
+                texture2d_array: D3d11Tex2dArrayDsv {
+                    mip_slice: mip,
+                    first_array_slice: first,
+                    array_size: size,
                 },
-            })
-        }
-    } else if desc.array_size == 1 {
-        Ok(D3d11DepthStencilViewDesc {
-            format: desc.format,
-            view_dimension: 5,
-            flags: 0,
-            u: D3d11DepthStencilViewDescUnion {
+            },
+        ),
+        ViewDimension::Texture2DMS => (
+            5,
+            D3d11DepthStencilViewDescUnion {
                 texture2dms: D3d11Tex2dmsDsv {
                     unused_field_nothing_to_define: 0,
                 },
             },
-        })
-    } else {
-        Ok(D3d11DepthStencilViewDesc {
-            format: desc.format,
-            view_dimension: 6,
-            flags: 0,
-            u: D3d11DepthStencilViewDescUnion {
+        ),
+        ViewDimension::Texture2DMSArray => (
+            6,
+            D3d11DepthStencilViewDescUnion {
                 texture2dms_array: D3d11Tex2dmsArrayDsv {
-                    first_array_slice: 0,
-                    array_size: desc.array_size,
+                    first_array_slice: first,
+                    array_size: size,
                 },
             },
-        })
-    }
+        ),
+        _ => return None,
+    };
+    Some(D3d11DepthStencilViewDesc {
+        format,
+        view_dimension,
+        flags: 0,
+        u,
+    })
 }
 
-/// Extracts or populates a 3D texture SRV description (`ExtractEntireResourceViewDescription`).
+/// The application's SRV description with its format filled in, or the whole resource's.
 ///
-/// # Errors
-///
-/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_srv_3d(
-    desc: &D3d11Texture3dDesc1,
+/// `ExtractEntireResourceViewDescription`, as are the other `extract_entire_*`.
+fn entire_srv(
     view_in: Option<&D3d11ShaderResourceViewDesc1>,
+    format: u32,
+    resource: &ResourceShape,
 ) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
     if let Some(v) = view_in {
         let mut out = *v;
         if out.format == 0 {
-            out.format = desc.format;
+            out.format = format;
         }
         return Ok(out);
     }
-    Ok(D3d11ShaderResourceViewDesc1 {
-        format: desc.format,
-        view_dimension: 8,
-        u: D3d11ShaderResourceViewDesc1Union {
-            texture3d: D3d11Tex3dSrv {
-                most_detailed_mip: 0,
-                mip_levels: desc.mip_levels,
-            },
-        },
-    })
+    entire_view(ViewKind::ShaderResource, resource)
+        .map(|v| srv_desc(format, &v))
+        .ok_or(E_FAIL)
 }
 
-/// Extracts or populates a 3D texture UAV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_uav_3d(
-    desc: &D3d11Texture3dDesc1,
+/// [`entire_srv`] for a UAV: none for a multisampled texture.
+fn entire_uav(
     view_in: Option<&D3d11UnorderedAccessViewDesc1>,
+    format: u32,
+    resource: &ResourceShape,
 ) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
     if let Some(v) = view_in {
         let mut out = *v;
         if out.format == 0 {
-            out.format = desc.format;
+            out.format = format;
         }
         return Ok(out);
     }
-    Ok(D3d11UnorderedAccessViewDesc1 {
-        format: desc.format,
-        view_dimension: 8,
-        u: D3d11UnorderedAccessViewDesc1Union {
-            texture3d: D3d11Tex3dUav {
-                mip_slice: 0,
-                first_w_slice: 0,
-                w_size: desc.depth,
-            },
-        },
-    })
+    entire_view(ViewKind::UnorderedAccess, resource)
+        .and_then(|v| uav_desc(format, &v))
+        .ok_or(E_FAIL)
 }
 
-/// Extracts or populates a 3D texture RTV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
-pub const fn extract_entire_rtv_3d(
-    desc: &D3d11Texture3dDesc1,
+/// [`entire_srv`] for an RTV.
+fn entire_rtv(
     view_in: Option<&D3d11RenderTargetViewDesc1>,
+    format: u32,
+    resource: &ResourceShape,
 ) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
     if let Some(v) = view_in {
         let mut out = *v;
         if out.format == 0 {
-            out.format = desc.format;
+            out.format = format;
         }
         return Ok(out);
     }
-    Ok(D3d11RenderTargetViewDesc1 {
-        format: desc.format,
-        view_dimension: 8,
-        u: D3d11RenderTargetViewDesc1Union {
-            texture3d: D3d11Tex3dRtv {
-                mip_slice: 0,
-                first_w_slice: 0,
-                w_size: desc.depth,
-            },
-        },
-    })
+    entire_view(ViewKind::RenderTarget, resource)
+        .and_then(|v| rtv_desc(format, &v))
+        .ok_or(E_FAIL)
 }
 
-/// Extracts or populates a 3D texture DSV description (`ExtractEntireResourceViewDescription`).
-///
-/// # Errors
-///
-/// Returns [`E_FAIL`] if `view_in` is `None`.
-pub const fn extract_entire_dsv_3d(
-    desc: &D3d11Texture3dDesc1,
+/// [`entire_srv`] for a DSV: none for a 3D texture.
+fn entire_dsv(
     view_in: Option<&D3d11DepthStencilViewDesc>,
+    format: u32,
+    resource: &ResourceShape,
 ) -> Result<D3d11DepthStencilViewDesc, Hresult> {
     if let Some(v) = view_in {
         let mut out = *v;
         if out.format == 0 {
-            out.format = desc.format;
+            out.format = format;
         }
         return Ok(out);
     }
-    Err(E_FAIL)
+    entire_view(ViewKind::DepthStencil, resource)
+        .and_then(|v| dsv_desc(format, &v))
+        .ok_or(E_FAIL)
+}
+
+/// The 1D texture SRV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_srv_1d(
+    desc: &D3d11Texture1dDesc,
+    view_in: Option<&D3d11ShaderResourceViewDesc1>,
+) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
+    entire_srv(view_in, desc.format, &shape_1d(desc))
+}
+
+/// The 1D texture UAV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_uav_1d(
+    desc: &D3d11Texture1dDesc,
+    view_in: Option<&D3d11UnorderedAccessViewDesc1>,
+) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
+    entire_uav(view_in, desc.format, &shape_1d(desc))
+}
+
+/// The 1D texture RTV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_rtv_1d(
+    desc: &D3d11Texture1dDesc,
+    view_in: Option<&D3d11RenderTargetViewDesc1>,
+) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
+    entire_rtv(view_in, desc.format, &shape_1d(desc))
+}
+
+/// The 1D texture DSV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 1D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_dsv_1d(
+    desc: &D3d11Texture1dDesc,
+    view_in: Option<&D3d11DepthStencilViewDesc>,
+) -> Result<D3d11DepthStencilViewDesc, Hresult> {
+    entire_dsv(view_in, desc.format, &shape_1d(desc))
+}
+
+/// The 2D texture SRV `view_in` describes, or the whole texture's (a cube's as a cube).
+///
+/// # Errors
+///
+/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_srv_2d(
+    desc: &D3d11Texture2dDesc1,
+    view_in: Option<&D3d11ShaderResourceViewDesc1>,
+) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
+    entire_srv(view_in, desc.format, &shape_2d(desc))
+}
+
+/// The 2D texture UAV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Returns [`E_FAIL`] if `view_in` is `None` and the texture is multisampled.
+pub fn extract_entire_uav_2d(
+    desc: &D3d11Texture2dDesc1,
+    view_in: Option<&D3d11UnorderedAccessViewDesc1>,
+) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
+    entire_uav(view_in, desc.format, &shape_2d(desc))
+}
+
+/// The 2D texture RTV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_rtv_2d(
+    desc: &D3d11Texture2dDesc1,
+    view_in: Option<&D3d11RenderTargetViewDesc1>,
+) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
+    entire_rtv(view_in, desc.format, &shape_2d(desc))
+}
+
+/// The 2D texture DSV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 2D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_dsv_2d(
+    desc: &D3d11Texture2dDesc1,
+    view_in: Option<&D3d11DepthStencilViewDesc>,
+) -> Result<D3d11DepthStencilViewDesc, Hresult> {
+    entire_dsv(view_in, desc.format, &shape_2d(desc))
+}
+
+/// The 3D texture SRV `view_in` describes, or the whole texture's.
+///
+/// # Errors
+///
+/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_srv_3d(
+    desc: &D3d11Texture3dDesc1,
+    view_in: Option<&D3d11ShaderResourceViewDesc1>,
+) -> Result<D3d11ShaderResourceViewDesc1, Hresult> {
+    entire_srv(view_in, desc.format, &shape_3d(desc))
+}
+
+/// The 3D texture UAV `view_in` describes, or the whole texture's (every W slice).
+///
+/// # Errors
+///
+/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_uav_3d(
+    desc: &D3d11Texture3dDesc1,
+    view_in: Option<&D3d11UnorderedAccessViewDesc1>,
+) -> Result<D3d11UnorderedAccessViewDesc1, Hresult> {
+    entire_uav(view_in, desc.format, &shape_3d(desc))
+}
+
+/// The 3D texture RTV `view_in` describes, or the whole texture's (every W slice).
+///
+/// # Errors
+///
+/// Infallible for 3D textures; returns [`Result`] for symmetry with the other view helpers.
+pub fn extract_entire_rtv_3d(
+    desc: &D3d11Texture3dDesc1,
+    view_in: Option<&D3d11RenderTargetViewDesc1>,
+) -> Result<D3d11RenderTargetViewDesc1, Hresult> {
+    entire_rtv(view_in, desc.format, &shape_3d(desc))
+}
+
+/// The 3D texture DSV `view_in` describes.
+///
+/// # Errors
+///
+/// Returns [`E_FAIL`] if `view_in` is `None`.
+pub fn extract_entire_dsv_3d(
+    desc: &D3d11Texture3dDesc1,
+    view_in: Option<&D3d11DepthStencilViewDesc>,
+) -> Result<D3d11DepthStencilViewDesc, Hresult> {
+    entire_dsv(view_in, desc.format, &shape_3d(desc))
 }
 
 /// Computes `(offset, size)` in bytes for a buffer view (`CalculateBufferViewOffsetAndSize`).
