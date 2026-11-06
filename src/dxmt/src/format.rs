@@ -9,7 +9,11 @@
 use std::collections::BTreeMap;
 
 use dxmt_util::{com::Hresult, float_cast::f64_to_f32};
-use winemetal_sys::{MTLDevice_supportsBCTextureCompression, MTLDevice_supportsFamily};
+use rustc_hash::FxHashMap;
+use winemetal_sys::{
+    MTLDevice_supportsBCTextureCompression, MTLDevice_supportsFamily,
+    MTLDevice_supportsTextureSampleCount,
+};
 use winemetal_wire::{
     WMT_ATTRIBUTE_FORMAT_CHAR, WMT_ATTRIBUTE_FORMAT_CHAR_NORMALIZED, WMT_ATTRIBUTE_FORMAT_CHAR2,
     WMT_ATTRIBUTE_FORMAT_CHAR2_NORMALIZED, WMT_ATTRIBUTE_FORMAT_CHAR4,
@@ -1800,6 +1804,191 @@ pub fn capabilities(supports_family: impl Fn(u32) -> bool, bc: bool) -> Option<V
         *merged.entry(format).or_insert(0) |= caps;
     }
     Some(merged.into_iter().collect())
+}
+
+/// [`capabilities`] as a map from `WMTPixelFormat` to `CAP_*` bits.
+///
+/// Empty for a device that is neither Apple7 nor Mac2.
+#[must_use]
+pub fn capability_map(supports_family: impl Fn(u32) -> bool, bc: bool) -> FxHashMap<u32, u32> {
+    capabilities(supports_family, bc)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// [`capability_map`] of the device `device` names.
+///
+/// # Safety
+///
+/// `device` is a live `MTLDevice` handle.
+#[must_use]
+pub unsafe fn device_capability_map(device: u64) -> FxHashMap<u32, u32> {
+    let supports_family = |family| {
+        // SAFETY: `device` is a live device handle, by this function's contract.
+        unsafe { MTLDevice_supportsFamily(device, family) }
+    };
+    // SAFETY: as above.
+    let bc = unsafe { MTLDevice_supportsBCTextureCompression(device) };
+    capability_map(supports_family, bc)
+}
+
+/// Whether the device `device` names renders `sample_count` samples per pixel.
+///
+/// With no device (the null handle) 1, 2, 4 and 8 do; a count past a byte does not.
+///
+/// # Safety
+///
+/// `device` is the null handle or a live `MTLDevice` handle.
+#[must_use]
+pub unsafe fn supports_sample_count(device: u64, sample_count: u32) -> bool {
+    if device == 0 {
+        return matches!(sample_count, 1 | 2 | 4 | 8);
+    }
+    let Ok(count) = u8::try_from(sample_count) else {
+        return false;
+    };
+    // SAFETY: `device` is a live device handle, by this function's contract.
+    unsafe { MTLDevice_supportsTextureSampleCount(device, count) }
+}
+
+/// `D3D11_FORMAT_SUPPORT` bits; `D3D12_FORMAT_SUPPORT1` has the same.
+pub const FORMAT_SUPPORT_BUFFER: u32 = 0x0000_0001;
+pub const FORMAT_SUPPORT_IA_VERTEX_BUFFER: u32 = 0x0000_0002;
+pub const FORMAT_SUPPORT_IA_INDEX_BUFFER: u32 = 0x0000_0004;
+pub const FORMAT_SUPPORT_SO_BUFFER: u32 = 0x0000_0008;
+pub const FORMAT_SUPPORT_TEXTURE1D: u32 = 0x0000_0010;
+pub const FORMAT_SUPPORT_TEXTURE2D: u32 = 0x0000_0020;
+pub const FORMAT_SUPPORT_TEXTURE3D: u32 = 0x0000_0040;
+pub const FORMAT_SUPPORT_TEXTURECUBE: u32 = 0x0000_0080;
+pub const FORMAT_SUPPORT_SHADER_LOAD: u32 = 0x0000_0100;
+pub const FORMAT_SUPPORT_SHADER_SAMPLE: u32 = 0x0000_0200;
+pub const FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON: u32 = 0x0000_0400;
+pub const FORMAT_SUPPORT_MIP: u32 = 0x0000_1000;
+pub const FORMAT_SUPPORT_MIP_AUTOGEN: u32 = 0x0000_2000;
+pub const FORMAT_SUPPORT_RENDER_TARGET: u32 = 0x0000_4000;
+pub const FORMAT_SUPPORT_BLENDABLE: u32 = 0x0000_8000;
+pub const FORMAT_SUPPORT_DEPTH_STENCIL: u32 = 0x0001_0000;
+pub const FORMAT_SUPPORT_CPU_LOCKABLE: u32 = 0x0002_0000;
+pub const FORMAT_SUPPORT_MULTISAMPLE_RESOLVE: u32 = 0x0004_0000;
+pub const FORMAT_SUPPORT_DISPLAY: u32 = 0x0008_0000;
+pub const FORMAT_SUPPORT_CAST_WITHIN_BIT_LAYOUT: u32 = 0x0010_0000;
+pub const FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET: u32 = 0x0020_0000;
+pub const FORMAT_SUPPORT_MULTISAMPLE_LOAD: u32 = 0x0040_0000;
+pub const FORMAT_SUPPORT_SHADER_GATHER: u32 = 0x0080_0000;
+pub const FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW: u32 = 0x0200_0000;
+pub const FORMAT_SUPPORT_SHADER_GATHER_COMPARISON: u32 = 0x0400_0000;
+
+/// `D3D11_FORMAT_SUPPORT2` bits; `D3D12_FORMAT_SUPPORT2` has the same.
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_ADD: u32 = 0x0000_0001;
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_BITWISE_OPS: u32 = 0x0000_0002;
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_COMPARE_STORE_OR_COMPARE_EXCHANGE: u32 = 0x0000_0004;
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE: u32 = 0x0000_0008;
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_SIGNED_MIN_OR_MAX: u32 = 0x0000_0010;
+pub const FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX: u32 = 0x0000_0020;
+pub const FORMAT_SUPPORT2_UAV_TYPED_LOAD: u32 = 0x0000_0040;
+pub const FORMAT_SUPPORT2_UAV_TYPED_STORE: u32 = 0x0000_0080;
+pub const FORMAT_SUPPORT2_OUTPUT_MERGER_LOGIC_OP: u32 = 0x0000_0100;
+pub const FORMAT_SUPPORT2_TILED: u32 = 0x0000_0200;
+pub const FORMAT_SUPPORT2_SHAREABLE: u32 = 0x0000_0400;
+
+/// Every atomic `FORMAT_SUPPORT2` bit, and shareable.
+pub const FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE: u32 = FORMAT_SUPPORT2_UAV_ATOMIC_ADD
+    | FORMAT_SUPPORT2_UAV_ATOMIC_BITWISE_OPS
+    | FORMAT_SUPPORT2_UAV_ATOMIC_COMPARE_STORE_OR_COMPARE_EXCHANGE
+    | FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE
+    | FORMAT_SUPPORT2_UAV_ATOMIC_SIGNED_MIN_OR_MAX
+    | FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX
+    | FORMAT_SUPPORT2_SHAREABLE;
+
+/// The `FORMAT_SUPPORT` bits of DXGI format `dxgi_format`.
+///
+/// `desc` describes the format and `cap` holds the `CAP_*` bits of its pixel format.
+#[must_use]
+pub const fn format_support1(dxgi_format: u32, desc: &MtlDxgiFormatDesc, cap: u32) -> u32 {
+    let mut out = 0;
+    if desc.pixel_format != WMT_PIXEL_FORMAT_INVALID {
+        out |= FORMAT_SUPPORT_SHADER_LOAD
+            | FORMAT_SUPPORT_SHADER_SAMPLE
+            | FORMAT_SUPPORT_SHADER_GATHER
+            | FORMAT_SUPPORT_MULTISAMPLE_LOAD
+            | FORMAT_SUPPORT_CPU_LOCKABLE
+            | FORMAT_SUPPORT_TEXTURE1D
+            | FORMAT_SUPPORT_TEXTURE2D
+            | FORMAT_SUPPORT_TEXTURE3D
+            | FORMAT_SUPPORT_TEXTURECUBE
+            | FORMAT_SUPPORT_MIP
+            | FORMAT_SUPPORT_CAST_WITHIN_BIT_LAYOUT;
+        if desc.flag
+            & (MTL_DXGI_FORMAT_BC | MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)
+            == 0
+        {
+            out |= FORMAT_SUPPORT_BUFFER | FORMAT_SUPPORT_MIP_AUTOGEN;
+        }
+        if desc.flag & MTL_DXGI_FORMAT_BACKBUFFER != 0 {
+            out |= FORMAT_SUPPORT_DISPLAY;
+        }
+    }
+    if desc.attribute_format != 0 {
+        out |= FORMAT_SUPPORT_IA_VERTEX_BUFFER;
+    }
+    if desc.pixel_format == WMT_PIXEL_FORMAT_R32_UINT
+        || desc.pixel_format == WMT_PIXEL_FORMAT_R16_UINT
+    {
+        out |= FORMAT_SUPPORT_IA_INDEX_BUFFER;
+    }
+    if cap & CAP_COLOR != 0 {
+        out |= FORMAT_SUPPORT_RENDER_TARGET;
+    }
+    if cap & CAP_BLEND != 0 {
+        out |= FORMAT_SUPPORT_BLENDABLE;
+    }
+    if cap & CAP_DEPTH_STENCIL != 0 {
+        out |= FORMAT_SUPPORT_DEPTH_STENCIL
+            | FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON
+            | FORMAT_SUPPORT_SHADER_GATHER_COMPARISON;
+    }
+    if cap & CAP_RESOLVE != 0 {
+        out |= FORMAT_SUPPORT_MULTISAMPLE_RESOLVE;
+    }
+    if cap & CAP_MSAA != 0 {
+        out |= FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
+    }
+    if cap & CAP_WRITE != 0 {
+        out |= FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
+    }
+    if matches!(
+        dxgi_format,
+        2 | 3 | 4 | 6 | 7 | 8 | 16 | 17 | 18 | 41 | 42 | 43
+    ) {
+        out |= FORMAT_SUPPORT_SO_BUFFER;
+    }
+    out
+}
+
+/// The `FORMAT_SUPPORT2` bits of a pixel format with the `CAP_*` bits `cap`.
+#[must_use]
+pub const fn format_support2(cap: u32) -> u32 {
+    let mut out = 0;
+    if cap & CAP_TEXTURE_BUFFER_READ != 0 {
+        out |= FORMAT_SUPPORT2_UAV_TYPED_LOAD;
+    }
+    if cap & CAP_TEXTURE_BUFFER_WRITE != 0 {
+        out |= FORMAT_SUPPORT2_UAV_TYPED_STORE;
+    }
+    if cap & CAP_TEXTURE_BUFFER_READ_WRITE != 0 {
+        out |= FORMAT_SUPPORT2_UAV_TYPED_LOAD | FORMAT_SUPPORT2_UAV_TYPED_STORE;
+    }
+    if cap & CAP_ATOMIC != 0 {
+        out |= FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE;
+    }
+    if cap & CAP_BLEND != 0 {
+        out |= FORMAT_SUPPORT2_OUTPUT_MERGER_LOGIC_OP;
+    }
+    if cap & CAP_SPARSE != 0 {
+        out |= FORMAT_SUPPORT2_TILED;
+    }
+    out
 }
 
 crate::seam_export! {

@@ -300,3 +300,21 @@ fn sanitize_export_writes_the_color() {
     unsafe { dxmt_format_sanitize_clear_color(WMT_PIXEL_FORMAT_RGBA8_UINT, &raw mut color) };
     assert_eq!((color.r, color.g, color.b, color.a), (255.0, 0.0, 0.0, 0.5));
 }
+
+#[test]
+fn no_device_samples_one_to_eight() {
+    let counts: Vec<u32> = (0..=16)
+        .filter(|&n| {
+            // SAFETY: the null handle names no device.
+            unsafe { supports_sample_count(0, n) }
+        })
+        .collect();
+    assert_eq!(counts, [1, 2, 4, 8]);
+    let apple7 = |family| family == WMTGPU_FAMILY_APPLE7;
+    let map = capability_map(apple7, false);
+    assert_eq!(
+        map.len(),
+        capabilities(apple7, false).map_or(0, |c| c.len())
+    );
+    assert!(capability_map(|_| false, true).is_empty());
+}

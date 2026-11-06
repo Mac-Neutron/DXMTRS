@@ -17,8 +17,7 @@ use dxmt_util::{com::ComObject, private_data, private_data::PrivateData, qpc};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
-    MTLDevice_sampleTimestamps, MTLDevice_supportsBCTextureCompression,
-    MTLDevice_supportsFXTemporalScaler, MTLDevice_supportsFamily, Obj,
+    MTLDevice_sampleTimestamps, MTLDevice_supportsFXTemporalScaler, Obj,
 };
 use winemetal_wire::{WMT_COMPARE_FUNCTION_ALWAYS, WMTDepthStencilInfo, WMTStencilInfo};
 
@@ -131,17 +130,7 @@ pub unsafe fn create(
     };
 
     // SAFETY: `h` is a live `MTLDevice` handle.
-    let bc = unsafe { MTLDevice_supportsBCTextureCompression(h) };
-    let formats: FxHashMap<u32, u32> = format::capabilities(
-        |f| {
-            // SAFETY: `h` is a live `MTLDevice` handle.
-            unsafe { MTLDevice_supportsFamily(h, f) }
-        },
-        bc,
-    )
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
+    let formats = unsafe { format::device_capability_map(h) };
 
     let empty_stencil = WMTStencilInfo {
         enabled: 0,

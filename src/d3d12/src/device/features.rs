@@ -4,10 +4,7 @@ use core::ffi::c_void;
 use std::sync::LazyLock;
 
 use dxmt_core::settings::{Flags, settings};
-use winemetal_sys::{
-    MTLDevice_heapBufferSizeAndAlign, MTLDevice_heapTextureSizeAndAlign,
-    MTLDevice_supportsTextureSampleCount,
-};
+use winemetal_sys::{MTLDevice_heapBufferSizeAndAlign, MTLDevice_heapTextureSizeAndAlign, Obj};
 use winemetal_wire::WMTTextureInfo;
 
 use crate::{
@@ -44,16 +41,9 @@ impl crate::feature::Device for Device {
     }
 
     fn supports_texture_sample_count(&self, count: u32) -> bool {
-        if let Some(mtl) = &self.mtl {
-            let Ok(c) = u8::try_from(count) else {
-                return false;
-            };
-            let h = mtl.handle();
-            // SAFETY: `h` is a live `MTLDevice` handle.
-            unsafe { MTLDevice_supportsTextureSampleCount(h, c) }
-        } else {
-            matches!(count, 1 | 2 | 4 | 8)
-        }
+        let device = self.mtl.as_ref().map_or(0, Obj::handle);
+        // SAFETY: `device` is the null handle or the live `MTLDevice` `self` holds.
+        unsafe { dxmt_core::format::supports_sample_count(device, count) }
     }
 }
 

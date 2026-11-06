@@ -3,20 +3,17 @@
 use core::ffi::c_void;
 
 use dxmt_core::format::{
-    CAP_ATOMIC, CAP_BLEND, CAP_COLOR, CAP_DEPTH_STENCIL, CAP_MSAA, CAP_RESOLVE, CAP_SPARSE,
-    CAP_TEXTURE_BUFFER_READ, CAP_TEXTURE_BUFFER_READ_WRITE, CAP_TEXTURE_BUFFER_WRITE, CAP_WRITE,
-    MTL_DXGI_FORMAT_BACKBUFFER, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
-    MTL_DXGI_FORMAT_STENCIL_PLANER, MtlDxgiFormatDesc, capabilities, query_dxgi_ref,
+    FORMAT_SUPPORT_BUFFER, FORMAT_SUPPORT_CPU_LOCKABLE, FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE,
+    FORMAT_SUPPORT2_UAV_TYPED_LOAD, FORMAT_SUPPORT2_UAV_TYPED_STORE, MtlDxgiFormatDesc,
+    capability_map, device_capability_map, format_support1, format_support2, query_dxgi_ref,
+    supports_sample_count,
 };
 use dxmt_util::com::{E_INVALIDARG, Hresult, S_OK};
 use rustc_hash::FxHashMap;
-use winemetal_sys::{
-    MTLDevice_hasUnifiedMemory, MTLDevice_supportsBCTextureCompression, MTLDevice_supportsFamily,
-    MTLDevice_supportsTextureSampleCount,
-};
+use winemetal_sys::MTLDevice_hasUnifiedMemory;
 use winemetal_wire::{
-    WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_R16_UINT, WMT_PIXEL_FORMAT_R32_UINT,
-    WMTGPU_FAMILY_APPLE7, WMTGPU_FAMILY_APPLE8, WMTGPU_FAMILY_APPLE9, original_format,
+    WMT_PIXEL_FORMAT_INVALID, WMTGPU_FAMILY_APPLE7, WMTGPU_FAMILY_APPLE8, WMTGPU_FAMILY_APPLE9,
+    original_format,
 };
 
 #[cfg(test)]
@@ -38,52 +35,6 @@ const D3D11_FEATURE_D3D11_OPTIONS3: u32 = 15;
 const D3D11_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT: u32 = 16;
 const D3D11_FEATURE_SHADER_CACHE: u32 = 18;
 const D3D11_FEATURE_D3D11_OPTIONS5: u32 = 19;
-
-const D3D11_FORMAT_SUPPORT_BUFFER: u32 = 0x0000_0001;
-const D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER: u32 = 0x0000_0002;
-const D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER: u32 = 0x0000_0004;
-const D3D11_FORMAT_SUPPORT_SO_BUFFER: u32 = 0x0000_0008;
-const D3D11_FORMAT_SUPPORT_TEXTURE1D: u32 = 0x0000_0010;
-const D3D11_FORMAT_SUPPORT_TEXTURE2D: u32 = 0x0000_0020;
-const D3D11_FORMAT_SUPPORT_TEXTURE3D: u32 = 0x0000_0040;
-const D3D11_FORMAT_SUPPORT_TEXTURECUBE: u32 = 0x0000_0080;
-const D3D11_FORMAT_SUPPORT_SHADER_LOAD: u32 = 0x0000_0100;
-const D3D11_FORMAT_SUPPORT_SHADER_SAMPLE: u32 = 0x0000_0200;
-const D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON: u32 = 0x0000_0400;
-const D3D11_FORMAT_SUPPORT_MIP: u32 = 0x0000_1000;
-const D3D11_FORMAT_SUPPORT_MIP_AUTOGEN: u32 = 0x0000_2000;
-const D3D11_FORMAT_SUPPORT_RENDER_TARGET: u32 = 0x0000_4000;
-const D3D11_FORMAT_SUPPORT_BLENDABLE: u32 = 0x0000_8000;
-const D3D11_FORMAT_SUPPORT_DEPTH_STENCIL: u32 = 0x0001_0000;
-const D3D11_FORMAT_SUPPORT_CPU_LOCKABLE: u32 = 0x0002_0000;
-const D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE: u32 = 0x0004_0000;
-const D3D11_FORMAT_SUPPORT_DISPLAY: u32 = 0x0008_0000;
-const D3D11_FORMAT_SUPPORT_CAST_WITHIN_BIT_LAYOUT: u32 = 0x0010_0000;
-const D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET: u32 = 0x0020_0000;
-const D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD: u32 = 0x0040_0000;
-const D3D11_FORMAT_SUPPORT_SHADER_GATHER: u32 = 0x0080_0000;
-const D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW: u32 = 0x0200_0000;
-const D3D11_FORMAT_SUPPORT_SHADER_GATHER_COMPARISON: u32 = 0x0400_0000;
-
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_ADD: u32 = 0x0000_0001;
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_BITWISE_OPS: u32 = 0x0000_0002;
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_COMPARE_STORE_OR_COMPARE_EXCHANGE: u32 = 0x0000_0004;
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE: u32 = 0x0000_0008;
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_SIGNED_MIN_OR_MAX: u32 = 0x0000_0010;
-const D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX: u32 = 0x0000_0020;
-const D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD: u32 = 0x0000_0040;
-const D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE: u32 = 0x0000_0080;
-const D3D11_FORMAT_SUPPORT2_OUTPUT_MERGER_LOGIC_OP: u32 = 0x0000_0100;
-const D3D11_FORMAT_SUPPORT2_TILED: u32 = 0x0000_0200;
-const D3D11_FORMAT_SUPPORT2_SHAREABLE: u32 = 0x0000_0400;
-
-const FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE: u32 = D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_ADD
-    | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_BITWISE_OPS
-    | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_COMPARE_STORE_OR_COMPARE_EXCHANGE
-    | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE
-    | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_SIGNED_MIN_OR_MAX
-    | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX
-    | D3D11_FORMAT_SUPPORT2_SHAREABLE;
 
 /// Resolved DXGI format descriptor together with its Metal format capability bits.
 pub struct FormatInfo {
@@ -110,16 +61,10 @@ impl Inspection {
         if metal_device == 0 {
             return Self::default_apple8_profile();
         }
-        let supports_family = |family| {
-            // SAFETY: `metal_device` is a valid non-zero `WMTDevice` handle.
-            unsafe { MTLDevice_supportsFamily(metal_device, family) }
-        };
-        // SAFETY: `metal_device` is a valid non-zero `WMTDevice` handle.
-        let bc = unsafe { MTLDevice_supportsBCTextureCompression(metal_device) };
         // SAFETY: `metal_device` is a valid non-zero `WMTDevice` handle.
         let unified_memory = unsafe { MTLDevice_hasUnifiedMemory(metal_device) };
-        let pairs = capabilities(supports_family, bc).unwrap_or_default();
-        let caps = pairs.into_iter().collect();
+        // SAFETY: as above.
+        let caps = unsafe { device_capability_map(metal_device) };
         Self {
             metal_device,
             caps,
@@ -136,11 +81,9 @@ impl Inspection {
                 WMTGPU_FAMILY_APPLE7 | WMTGPU_FAMILY_APPLE8 | WMTGPU_FAMILY_APPLE9
             )
         };
-        let pairs = capabilities(supports_family, true).unwrap_or_default();
-        let caps = pairs.into_iter().collect();
         Self {
             metal_device: 0,
-            caps,
+            caps: capability_map(supports_family, true),
             unified_memory: true,
         }
     }
@@ -174,8 +117,7 @@ impl Inspection {
             if !p_format_support.is_null() {
                 // SAFETY: `p_format_support` is non-null.
                 unsafe {
-                    *p_format_support =
-                        D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_CPU_LOCKABLE;
+                    *p_format_support = FORMAT_SUPPORT_BUFFER | FORMAT_SUPPORT_CPU_LOCKABLE;
                 }
             }
             return S_OK;
@@ -183,7 +125,7 @@ impl Inspection {
         let Some(metal_format) = self.query_dxgi_format(format) else {
             return E_INVALIDARG;
         };
-        let out_support = compute_format_support1(format, &metal_format);
+        let out_support = format_support1(format, metal_format.desc, metal_format.capability);
         if !p_format_support.is_null() {
             // SAFETY: `p_format_support` is non-null.
             unsafe {
@@ -343,15 +285,15 @@ impl Inspection {
             // SAFETY: `out_ptr` is non-null.
             unsafe {
                 *out_ptr = FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE
-                    | D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD
-                    | D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
+                    | FORMAT_SUPPORT2_UAV_TYPED_LOAD
+                    | FORMAT_SUPPORT2_UAV_TYPED_STORE;
             }
             return S_OK;
         }
         let Some(metal_format) = self.query_dxgi_format(in_format) else {
             return E_INVALIDARG;
         };
-        let out_support2 = compute_format_support2(&metal_format);
+        let out_support2 = format_support2(metal_format.capability);
         // SAFETY: `out_ptr` is non-null.
         unsafe {
             *out_ptr = out_support2;
@@ -360,14 +302,8 @@ impl Inspection {
     }
 
     fn supports_sample_count(&self, sample_count: u32) -> bool {
-        if self.metal_device == 0 {
-            return matches!(sample_count, 1 | 2 | 4 | 8);
-        }
-        let Ok(sc) = u8::try_from(sample_count) else {
-            return false;
-        };
-        // SAFETY: `self.metal_device` is a valid non-zero `WMTDevice` handle.
-        unsafe { MTLDevice_supportsTextureSampleCount(self.metal_device, sc) }
+        // SAFETY: `self.metal_device` is 0 or a live `WMTDevice` handle.
+        unsafe { supports_sample_count(self.metal_device, sample_count) }
     }
 }
 
@@ -388,87 +324,4 @@ fn write_words(dst: *mut c_void, size: u32, words: &[u32]) -> Hresult {
         }
     }
     S_OK
-}
-
-const fn compute_format_support1(format: u32, metal_format: &FormatInfo) -> u32 {
-    let mut out = 0;
-    if metal_format.desc.pixel_format != WMT_PIXEL_FORMAT_INVALID {
-        out |= D3D11_FORMAT_SUPPORT_SHADER_LOAD
-            | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE
-            | D3D11_FORMAT_SUPPORT_SHADER_GATHER
-            | D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD
-            | D3D11_FORMAT_SUPPORT_CPU_LOCKABLE
-            | D3D11_FORMAT_SUPPORT_TEXTURE1D
-            | D3D11_FORMAT_SUPPORT_TEXTURE2D
-            | D3D11_FORMAT_SUPPORT_TEXTURE3D
-            | D3D11_FORMAT_SUPPORT_TEXTURECUBE
-            | D3D11_FORMAT_SUPPORT_MIP
-            | D3D11_FORMAT_SUPPORT_CAST_WITHIN_BIT_LAYOUT;
-        if (metal_format.desc.flag
-            & (MTL_DXGI_FORMAT_BC | MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER))
-            == 0
-        {
-            out |= D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN;
-        }
-        if (metal_format.desc.flag & MTL_DXGI_FORMAT_BACKBUFFER) != 0 {
-            out |= D3D11_FORMAT_SUPPORT_DISPLAY;
-        }
-    }
-    if metal_format.desc.attribute_format != 0 {
-        out |= D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER;
-    }
-    if metal_format.desc.pixel_format == WMT_PIXEL_FORMAT_R32_UINT
-        || metal_format.desc.pixel_format == WMT_PIXEL_FORMAT_R16_UINT
-    {
-        out |= D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER;
-    }
-    let cap = metal_format.capability;
-    if (cap & CAP_COLOR) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_RENDER_TARGET;
-    }
-    if (cap & CAP_BLEND) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_BLENDABLE;
-    }
-    if (cap & CAP_DEPTH_STENCIL) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_DEPTH_STENCIL
-            | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON
-            | D3D11_FORMAT_SUPPORT_SHADER_GATHER_COMPARISON;
-    }
-    if (cap & CAP_RESOLVE) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE;
-    }
-    if (cap & CAP_MSAA) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
-    }
-    if (cap & CAP_WRITE) != 0 {
-        out |= D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
-    }
-    if matches!(format, 2 | 3 | 4 | 6 | 7 | 8 | 16 | 17 | 18 | 41 | 42 | 43) {
-        out |= D3D11_FORMAT_SUPPORT_SO_BUFFER;
-    }
-    out
-}
-
-const fn compute_format_support2(metal_format: &FormatInfo) -> u32 {
-    let mut out = 0;
-    let cap = metal_format.capability;
-    if (cap & CAP_TEXTURE_BUFFER_READ) != 0 {
-        out |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD;
-    }
-    if (cap & CAP_TEXTURE_BUFFER_WRITE) != 0 {
-        out |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
-    }
-    if (cap & CAP_TEXTURE_BUFFER_READ_WRITE) != 0 {
-        out |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD | D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
-    }
-    if (cap & CAP_ATOMIC) != 0 {
-        out |= FORMAT_SUPPORT2_ALL_ATOMICS_AND_SHAREABLE;
-    }
-    if (cap & CAP_BLEND) != 0 {
-        out |= D3D11_FORMAT_SUPPORT2_OUTPUT_MERGER_LOGIC_OP;
-    }
-    if (cap & CAP_SPARSE) != 0 {
-        out |= D3D11_FORMAT_SUPPORT2_TILED;
-    }
-    out
 }
