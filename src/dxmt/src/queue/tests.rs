@@ -74,6 +74,62 @@ fn ring_blocks_at_31_in_flight() {
     assert_eq!(ring.coherent(), 1);
 }
 
+/// A chunk retired before its commit returns never wraps `in_flight` below zero.
+///
+/// Wrapped, the recorder would wait on `u64::MAX` for a finish that never comes (`d3d11_draw
+/// perf`'s stalls). Two chunks make the commit wait at one in flight, so every commit races its
+/// own chunk's finish.
+#[test]
+fn a_chunk_finished_before_its_commit_returns_never_stalls_the_ring() {
+    const COMMITS: u64 = 200_000;
+    let ring = Arc::new(Ring::new(2));
+    let encode = {
+        let ring = Arc::clone(&ring);
+        thread::spawn(move || {
+            let mut seq = 1;
+            while ring.wait_committed(seq) {
+                ring.encoded();
+                seq += 1;
+            }
+        })
+    };
+    let finish = {
+        let ring = Arc::clone(&ring);
+        thread::spawn(move || {
+            let mut seq = 1;
+            while ring.wait_encoded(seq) {
+                ring.finish(seq);
+                seq += 1;
+            }
+        })
+    };
+    let recorder = {
+        let ring = Arc::clone(&ring);
+        thread::spawn(move || {
+            for _ in 0..COMMITS {
+                ring.commit();
+            }
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !recorder.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stalled = !recorder.is_finished();
+    let in_flight = ring.in_flight.load(Ordering::Acquire);
+    // Unblock a stalled recorder (it waits on in_flight) so the threads can be joined.
+    ring.in_flight.store(0, Ordering::Release);
+    super::sync::wake_all(&ring.in_flight);
+    recorder.join().unwrap();
+    ring.stop();
+    encode.join().unwrap();
+    finish.join().unwrap();
+    assert!(
+        !stalled,
+        "the recorder stalled with in_flight = {in_flight:#x}"
+    );
+}
+
 #[test]
 fn encode_thread_panic_aborts() {
     if env::var_os(ENCODE_PANIC_ENV).is_some() {

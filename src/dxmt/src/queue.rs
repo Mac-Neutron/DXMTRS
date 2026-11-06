@@ -208,18 +208,20 @@ impl Ring {
 
     /// The recording thread: hands the current chunk to the encode thread.
     ///
-    /// Then waits while `chunks - 1` chunks are in flight.
+    /// Then waits while it and `chunks - 1` more are in flight. The chunk is counted before it is
+    /// handed on: its finish can come before this returns, and counted after, `in_flight` would
+    /// wrap below zero and this wait would never end.
     fn commit(&self) {
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
         self.recording.fetch_add(1, Ordering::Release);
         sync::wake_all(&self.recording);
         loop {
             let in_flight = self.in_flight.load(Ordering::Acquire);
-            if in_flight < self.chunks - 1 {
+            if in_flight < self.chunks {
                 break;
             }
             sync::wait(&self.in_flight, in_flight);
         }
-        self.in_flight.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The encode thread: waits until chunk `seq` is committed; false once the ring stopped.
