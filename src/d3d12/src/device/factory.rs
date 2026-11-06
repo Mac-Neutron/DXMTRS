@@ -1,20 +1,19 @@
 //! Device creation, `IUnknown`/`ID3D12Object`, and device-level stub methods (`d3d12_device.cpp`).
 
-use core::{ffi::c_void, ptr};
+use core::ffi::c_void;
 use std::{
     sync::{Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 
 use dxmt_core::{
+    device::adapter::{self, Failure},
     fence::EventListener,
     format,
     library::{self, Library},
     settings::{Flags, settings},
 };
-use dxmt_util::{
-    com::ComObject, dxgi_vtbl::IDXGIFactory1Vtbl, private_data, private_data::PrivateData, qpc,
-};
+use dxmt_util::{com::ComObject, private_data, private_data::PrivateData, qpc};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
@@ -24,19 +23,16 @@ use winemetal_sys::{
 use winemetal_wire::{WMT_COMPARE_FUNCTION_ALWAYS, WMTDepthStencilInfo, WMTStencilInfo};
 
 use crate::{
-    abi::ext::{
-        IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IID_IMTL_DXGI_ADAPTER,
-        IMTLDXGIAdapterVtbl,
-    },
+    abi::ext::{IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IMTLDXGIAdapterVtbl},
     com::{
         self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Guid, Hresult, IID_ID3D10_DEVICE,
         IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2,
         IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_DEVICE,
         IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2, IID_ID3D12_DEVICE3, IID_ID3D12_DEVICE4,
         IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6, IID_ID3D12_DEVICE7, IID_ID3D12_DEVICE8,
-        IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT, IID_IDXGI_ADAPTER1,
-        IID_IDXGI_DEVICE, IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2, IID_IDXGI_DEVICE3,
-        IID_IDXGI_DEVICE4, IID_IDXGI_FACTORY1, IID_IUNKNOWN, S_FALSE, S_OK,
+        IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT, IID_IDXGI_DEVICE,
+        IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2, IID_IDXGI_DEVICE3, IID_IDXGI_DEVICE4, IID_IUNKNOWN,
+        S_FALSE, S_OK,
     },
     device::{
         Device, null, residency,
@@ -45,10 +41,6 @@ use crate::{
 };
 
 const D3D12_DRIVER_MATCHING_IDENTIFIER_UNSUPPORTED_TYPE: u32 = 1;
-
-unsafe extern "system" {
-    fn CreateDXGIFactory1(riid: *const Guid, pp_factory: *mut *mut c_void) -> Hresult;
-}
 
 impl Drop for Device {
     fn drop(&mut self) {
@@ -93,42 +85,21 @@ pub unsafe fn create(
         return E_INVALIDARG;
     }
 
-    let (dxgi_adapter, owns_dxgi_adapter) = if adapter.is_null() {
-        let mut factory: *mut c_void = ptr::null_mut();
-        let iid_factory = IID_IDXGI_FACTORY1;
-        // SAFETY: `iid_factory` and `factory` are valid arguments to `CreateDXGIFactory1`.
-        let hr = unsafe { CreateDXGIFactory1(&raw const iid_factory, &raw mut factory) };
-        if hr < 0 || factory.is_null() {
+    // SAFETY: `adapter` is null or a caller-supplied COM object.
+    let mtl_adapter = match unsafe { adapter::resolve(adapter) } {
+        Ok(mtl_adapter) => mtl_adapter,
+        Err(Failure::Factory(hr)) => {
             crate::err!("D3D12CreateDevice: Failed to create a DXGI factory");
             return if hr < 0 { hr } else { E_FAIL };
         }
-        // SAFETY: `factory` is a live `IDXGIFactory1`.
-        let f_vtbl = unsafe { com::vtbl::<IDXGIFactory1Vtbl>(factory) };
-        let mut default_adapter: *mut c_void = ptr::null_mut();
-        // SAFETY: `factory` is live and `default_adapter` is a local out-pointer.
-        let hr = unsafe { (f_vtbl.enum_adapters)(factory, 0, &raw mut default_adapter) };
-        // SAFETY: releases the factory created above.
-        unsafe { com::release(factory) };
-        if hr < 0 || default_adapter.is_null() {
+        Err(Failure::NoAdapter(hr)) => {
             crate::err!("D3D12CreateDevice: No default adapter available");
             return if hr < 0 { hr } else { E_FAIL };
         }
-        (default_adapter, true)
-    } else {
-        // SAFETY: `adapter` is non-null and caller-supplied.
-        unsafe { com::query(adapter, &IID_IDXGI_ADAPTER1) }
-            .map_or((adapter, false), |queried| (queried, true))
-    };
-
-    // SAFETY: `dxgi_adapter` is a live COM object.
-    let mtl_adapter = unsafe { com::query(dxgi_adapter, &IID_IMTL_DXGI_ADAPTER) };
-    if owns_dxgi_adapter {
-        // SAFETY: releases the temporary `IDXGIAdapter1` reference.
-        unsafe { com::release(dxgi_adapter) };
-    }
-    let Some(mtl_adapter) = mtl_adapter else {
-        crate::err!("D3D12CreateDevice: Not a DXMT adapter");
-        return E_NOINTERFACE;
+        Err(Failure::NotDxmt) => {
+            crate::err!("D3D12CreateDevice: Not a DXMT adapter");
+            return E_NOINTERFACE;
+        }
     };
 
     if out.is_null() {
