@@ -205,7 +205,8 @@ mod refcount {
             IID_ID3D11_DEVICE_CHILD, IID_ID3D11_INPUT_LAYOUT, IID_ID3D11_RASTERIZER_STATE_2,
             IID_ID3D11_TEXTURE_2D, IID_IDXGI_KEYED_MUTEX, IID_IDXGI_SURFACE,
             ext::IID_IMTL_MIN_LOD_CLAMPABLE,
-            records::{D3d11InputElementDesc, D3d11Texture2dDesc1},
+            records::{D3d11BufferDesc, D3d11InputElementDesc, D3d11Texture2dDesc1},
+            vtbl::IDXGIResource1Vtbl,
         },
         com::{E_NOINTERFACE, E_POINTER, Guid, Hresult, IID_IUNKNOWN, IUnknownVtbl, S_OK, vtbl},
         input_layout::create_input_layout,
@@ -438,5 +439,27 @@ mod refcount {
         // The last release gives the device back and frees the object (both counts reach zero).
         assert_eq!(release(layout), 0);
         assert_eq!(dev.count(), 1);
+    }
+
+    #[test]
+    fn dxgi_resource_usage_reports_the_uav_bit_as_the_sdk_has_it() {
+        let res = Resource::into_raw(
+            Common {
+                bind_flags: 0x80 | 0x8,
+                ..Common::default()
+            },
+            ResourceKind::DefaultBuffer,
+            ResourceDesc::Buffer(D3d11BufferDesc::default()),
+        );
+        // SAFETY: `res` is live until the release below.
+        let iface = unsafe { (*res).dxgi_resource.as_iface() };
+        let mut usage = 0;
+        // SAFETY: `iface` is the resource's live `IDXGIResource1` tear-off.
+        let get_usage = unsafe { vtbl::<IDXGIResource1Vtbl>(iface) }.get_usage;
+        // SAFETY: `iface` is live; `usage` is a valid out pointer.
+        assert_eq!(unsafe { get_usage(iface, &raw mut usage) }, S_OK);
+        // `DXGI_USAGE_UNORDERED_ACCESS` is `1 << 10` and `DXGI_USAGE_SHADER_INPUT` `1 << 4`.
+        assert_eq!(usage, (1 << 10) | (1 << 4));
+        assert_eq!(release(res.cast()), 0);
     }
 }
