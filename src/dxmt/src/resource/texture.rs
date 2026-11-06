@@ -139,7 +139,8 @@ impl Texture {
     #[must_use]
     pub fn view_size(&self, key: TextureViewKey) -> [u32; 3] {
         let level = key.first_mip();
-        [self.info.width, self.info.height, self.info.depth].map(|v| (v >> level).max(1))
+        [self.info.width, self.info.height, self.info.depth]
+            .map(|v| super::dims::mip_extent(v, level))
     }
 
     /// The allocation [`Self::rename`] last made current.

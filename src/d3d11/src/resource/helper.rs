@@ -2,10 +2,13 @@
 
 use dxmt_core::{
     format::{
-        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-        MTL_DXGI_FORMAT_TYPELESS, query_dxgi_ref, texel_size,
+        MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER, MTL_DXGI_FORMAT_TYPELESS,
+        query_dxgi_ref, texel_size,
     },
-    resource::BufferAllocationFlags,
+    resource::{
+        BufferAllocationFlags,
+        dims::{linear_layout, linear_row_pitch, mip_count_wh, mip_extent},
+    },
     settings::{Compression, settings},
 };
 use dxmt_util::dxgi_consts::{
@@ -16,14 +19,13 @@ use dxmt_util::dxgi_consts::{
     DXGI_FORMAT_R32_TYPELESS,
 };
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_INVALID,
-    WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT,
-    WMT_PIXEL_FORMAT_RG32_UINT, WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED,
-    WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_MANAGED,
-    WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE_CUBE,
-    WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
-    WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY, WMT_TEXTURE_TYPE3D,
-    WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
+    WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_R32_FLOAT,
+    WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RG32_UINT,
+    WMT_RESOURCE_CPU_CACHE_MODE_WRITE_COMBINED, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+    WMT_RESOURCE_STORAGE_MODE_MANAGED, WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_TEXTURE_FLAG_LOSSLESS,
+    WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D,
+    WMT_TEXTURE_TYPE2D_ARRAY, WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE2D_MULTISAMPLE_ARRAY,
+    WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
     WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
     WMTGPU_FAMILY_APPLE8, WMTTextureInfo, original_format,
 };
@@ -251,7 +253,7 @@ fn create_mtl_texture_descriptor_internal(
     mtl_desc.options = options;
 
     let mipmap_level_count = if mip_levels == 0 {
-        32 - (width | height).leading_zeros()
+        mip_count_wh(width, height)
     } else {
         mip_levels
     };
@@ -429,32 +431,29 @@ pub fn create_mtl_texture_descriptor_3d(
     hr
 }
 
-const fn mip_dim(base: u32, level: u32) -> u32 {
-    match base.checked_shr(level) {
-        Some(shifted) if shifted > 1 => shifted,
-        _ => 1,
-    }
-}
-
 /// Computes `(width, height, depth)` at `level` of a 1D texture (`GetMipmapSize`).
 #[must_use]
 pub const fn get_mipmap_size_1d(desc: &D3d11Texture1dDesc, level: u32) -> (u32, u32, u32) {
-    (mip_dim(desc.width, level), 1, 1)
+    (mip_extent(desc.width, level), 1, 1)
 }
 
 /// Computes `(width, height, depth)` at `level` of a 2D texture (`GetMipmapSize`).
 #[must_use]
 pub const fn get_mipmap_size_2d(desc: &D3d11Texture2dDesc1, level: u32) -> (u32, u32, u32) {
-    (mip_dim(desc.width, level), mip_dim(desc.height, level), 1)
+    (
+        mip_extent(desc.width, level),
+        mip_extent(desc.height, level),
+        1,
+    )
 }
 
 /// Computes `(width, height, depth)` at `level` of a 3D texture (`GetMipmapSize`).
 #[must_use]
 pub const fn get_mipmap_size_3d(desc: &D3d11Texture3dDesc1, level: u32) -> (u32, u32, u32) {
     (
-        mip_dim(desc.width, level),
-        mip_dim(desc.height, level),
-        mip_dim(desc.depth, level),
+        mip_extent(desc.width, level),
+        mip_extent(desc.height, level),
+        mip_extent(desc.depth, level),
     )
 }
 
@@ -469,28 +468,12 @@ pub fn get_linear_texture_layout_1d(
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
     let (hr, metal_format) = query_dxgi_ref(desc.format);
-    if hr < 0
-        || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
-        || metal_format.bytes_per_texel == 0
-    {
+    if hr < 0 {
         return Err(E_FAIL);
     }
     let (w, _, _) = get_mipmap_size_1d(desc, level);
-    let bytes_per_row_unaligned = metal_format.bytes_per_texel * w;
-    let alignment = if aligned
-        && (metal_format.flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER))
-            == 0
-    {
-        16
-    } else {
-        metal_format.bytes_per_texel.max(1)
-    };
-    let aligned_bytes_per_row = bytes_per_row_unaligned.div_ceil(alignment) * alignment;
-    Ok((
-        aligned_bytes_per_row,
-        aligned_bytes_per_row,
-        aligned_bytes_per_row,
-    ))
+    let row = linear_row_pitch(metal_format, w, aligned).ok_or(E_FAIL)?;
+    Ok((row, row, row))
 }
 
 /// Computes `(bytes_per_row, bytes_per_image, bytes_per_slice)` for a 2D texture.
@@ -503,33 +486,7 @@ pub fn get_linear_texture_layout_2d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi_ref(desc.format);
-    if hr < 0
-        || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
-        || metal_format.bytes_per_texel == 0
-    {
-        return Err(E_FAIL);
-    }
-    let (w, h, _) = get_mipmap_size_2d(desc, level);
-    if (metal_format.flag & MTL_DXGI_FORMAT_BC) != 0 {
-        let w_physical = w.div_ceil(4) * 4;
-        let h_physical = h.div_ceil(4) * 4;
-        let aligned_bytes_per_row = (metal_format.bytes_per_texel * w_physical) >> 2;
-        let slice = (aligned_bytes_per_row * h_physical) >> 2;
-        return Ok((aligned_bytes_per_row, slice, slice));
-    }
-    let bytes_per_row_unaligned = metal_format.bytes_per_texel * w;
-    let alignment = if aligned
-        && (metal_format.flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER))
-            == 0
-    {
-        16
-    } else {
-        metal_format.bytes_per_texel.max(1)
-    };
-    let aligned_bytes_per_row = bytes_per_row_unaligned.div_ceil(alignment) * alignment;
-    let slice = aligned_bytes_per_row * h;
-    Ok((aligned_bytes_per_row, slice, slice))
+    linear_texture_layout(desc.format, get_mipmap_size_2d(desc, level), aligned)
 }
 
 /// Computes `(bytes_per_row, bytes_per_image, bytes_per_slice)` for a 3D texture.
@@ -542,35 +499,24 @@ pub fn get_linear_texture_layout_3d(
     level: u32,
     aligned: bool,
 ) -> Result<(u32, u32, u32), Hresult> {
-    let (hr, metal_format) = query_dxgi_ref(desc.format);
-    if hr < 0
-        || metal_format.pixel_format == WMT_PIXEL_FORMAT_INVALID
-        || metal_format.bytes_per_texel == 0
-    {
+    linear_texture_layout(desc.format, get_mipmap_size_3d(desc, level), aligned)
+}
+
+fn linear_texture_layout(
+    format: u32,
+    (w, h, d): (u32, u32, u32),
+    aligned: bool,
+) -> Result<(u32, u32, u32), Hresult> {
+    let (hr, metal_format) = query_dxgi_ref(format);
+    if hr < 0 {
         return Err(E_FAIL);
     }
-    let (w, h, d) = get_mipmap_size_3d(desc, level);
-    if (metal_format.flag & MTL_DXGI_FORMAT_BC) != 0 {
-        let w_physical = w.div_ceil(4) * 4;
-        let h_physical = h.div_ceil(4) * 4;
-        let aligned_bytes_per_row = (metal_format.bytes_per_texel * w_physical) >> 2;
-        let image = (aligned_bytes_per_row * h_physical) >> 2;
-        let slice = (aligned_bytes_per_row * h_physical * d) >> 2;
-        return Ok((aligned_bytes_per_row, image, slice));
-    }
-    let bytes_per_row_unaligned = metal_format.bytes_per_texel * w;
-    let alignment = if aligned
-        && (metal_format.flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER))
-            == 0
-    {
-        16
-    } else {
-        metal_format.bytes_per_texel.max(1)
-    };
-    let aligned_bytes_per_row = bytes_per_row_unaligned.div_ceil(alignment) * alignment;
-    let image = aligned_bytes_per_row * h;
-    let slice = image * d;
-    Ok((aligned_bytes_per_row, image, slice))
+    let layout = linear_layout(metal_format, w, h, d, aligned).ok_or(E_FAIL)?;
+    Ok((
+        layout.bytes_per_row,
+        layout.bytes_per_image,
+        layout.bytes_per_slice,
+    ))
 }
 
 /// Extracts or populates a buffer SRV description (`ExtractEntireResourceViewDescription`).

@@ -13,7 +13,7 @@ use dxmt_core::{
     initializer::SubresourceData,
     resource::{
         Buffer, BufferAllocationFlags, RenamableTexturePool, Texture, TextureAllocation,
-        TextureAllocationFlags,
+        TextureAllocationFlags, dims::calc_subresource,
     },
 };
 use dxmt_util::dxgi_consts::{
@@ -51,7 +51,7 @@ use crate::{
     },
     kmt::{self, SharedResourceData, SharedResourceDesc},
     subresource::{
-        ResourceSubset, calc_subresource, enumerate_subresources_1d, enumerate_subresources_2d,
+        ResourceSubset, enumerate_subresources_1d, enumerate_subresources_2d,
         enumerate_subresources_3d,
     },
     view::{

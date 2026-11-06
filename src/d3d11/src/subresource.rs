@@ -1,6 +1,6 @@
 //! 64-bit resource subset state and subresource enumeration (`dxmt_subresource.hpp`).
 
-use dxmt_core::resource::TextureViewDescriptor;
+use dxmt_core::resource::{TextureViewDescriptor, dims::calc_subresource};
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH24_UNORM_STENCIL8, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
     WMT_PIXEL_FORMAT_R32X8X32, WMT_PIXEL_FORMAT_X24_STENCIL8, WMT_PIXEL_FORMAT_X32_STENCIL8,
@@ -155,12 +155,6 @@ impl ResourceSubset {
             _ => true,
         }
     }
-}
-
-/// Computes `D3D11CalcSubresource(mip_slice, array_slice, mip_levels)`.
-#[must_use]
-pub const fn calc_subresource(mip_slice: u32, array_slice: u32, mip_levels: u32) -> u32 {
-    mip_slice.wrapping_add(array_slice.wrapping_mul(mip_levels))
 }
 
 /// Coordinates of one subresource (`SUBRESOURCE_ENTRY` in `d3d11_enumerable.hpp`).

@@ -16,7 +16,9 @@ use dxmt_core::{
         CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
         MTL_DXGI_FORMAT_STENCIL_PLANER, texel_size,
     },
-    resource::{Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor},
+    resource::{
+        Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor, dims::clamped_mip_count,
+    },
     settings::{Compression, Flags, settings},
 };
 use dxmt_util::{
@@ -965,15 +967,12 @@ pub unsafe fn populate_texture_info_opt(
         _ => return E_INVALIDARG,
     };
 
-    let extent_or = info.width | info.height | info.depth;
-    let mut mip_count = if extent_or == 0 {
-        1
-    } else {
-        32 - extent_or.leading_zeros()
-    };
-    if desc.mip_levels != 0 {
-        mip_count = mip_count.min(u32::from(desc.mip_levels));
-    }
+    let mip_count = clamped_mip_count(
+        info.width,
+        info.height,
+        info.depth,
+        u32::from(desc.mip_levels),
+    );
 
     // SAFETY: if non-null, `device` is a valid `Device` pointer.
     let dev_opt = unsafe { device.as_ref() };

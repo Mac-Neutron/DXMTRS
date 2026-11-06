@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use dxmt_core::{
     format::MTL_DXGI_FORMAT_BC,
-    resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
+    resource::{
+        Texture, TextureAllocationFlags, TextureViewDescriptor,
+        dims::{mip_extent, mip_extent_wrapping},
+    },
 };
 use dxmt_util::{
     com::ComObject,
@@ -980,7 +983,8 @@ pub unsafe fn create_rtv(
         D3D12_RTV_DIMENSION_TEXTURE3D => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE3D` selects `texture_3d`.
             let v = unsafe { &*view_desc.view.texture_3d };
-            let mip_depth = (u32::from(resource.desc.depth_or_array_size) >> v.mip_slice).max(1);
+            let mip_depth =
+                mip_extent_wrapping(u32::from(resource.desc.depth_or_array_size), v.mip_slice);
             depth_plane = v.first_w_slice;
             rt_array_len = if v.w_size == u32::MAX {
                 mip_depth
@@ -1013,8 +1017,8 @@ pub unsafe fn create_rtv(
     let rt_desc = RenderTargetDesc {
         texture: resource.texture.clone(),
         view,
-        width: (base_w >> mip_shift).max(1),
-        height: (base_h >> mip_shift).max(1),
+        width: mip_extent(base_w, mip_shift),
+        height: mip_extent(base_h, mip_shift),
         depth_plane,
         render_target_array_length: rt_array_len,
         flags: 0,
@@ -1143,8 +1147,8 @@ pub unsafe fn create_dsv(
     let rt_desc = RenderTargetDesc {
         texture: resource.texture.clone(),
         view,
-        width: (base_w >> mip_shift).max(1),
-        height: (base_h >> mip_shift).max(1),
+        width: mip_extent(base_w, mip_shift),
+        height: mip_extent(base_h, mip_shift),
         depth_plane: 0,
         render_target_array_length: rt_array_len,
         flags: view_desc.flags,

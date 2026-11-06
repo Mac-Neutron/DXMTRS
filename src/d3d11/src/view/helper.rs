@@ -1,6 +1,9 @@
 //! View descriptor validation and default-view constructors (`d3d11_resource_view_helper.cpp`).
 
-use dxmt_core::{format::query_dxgi_ref, resource::TextureViewDescriptor};
+use dxmt_core::{
+    format::query_dxgi_ref,
+    resource::{TextureViewDescriptor, dims::mip_extent},
+};
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_TEXTURE_TYPE_CUBE,
     WMT_TEXTURE_TYPE_CUBE_ARRAY, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY,
@@ -435,16 +438,8 @@ const fn set_render_target_size(
     level: u32,
     attach: &mut RenderPassAttachmentDesc,
 ) {
-    let w = match tex_info.width.checked_shr(level) {
-        Some(v) if v > 1 => v,
-        _ => 1,
-    };
-    let h = match tex_info.height.checked_shr(level) {
-        Some(v) if v > 1 => v,
-        _ => 1,
-    };
-    attach.width = w;
-    attach.height = h;
+    attach.width = mip_extent(tex_info.width, level);
+    attach.height = mip_extent(tex_info.height, level);
 }
 
 /// Validates and normalizes an SRV description (`InitializeAndNormalizeViewDescriptor`).
@@ -786,7 +781,7 @@ pub fn initialize_and_normalize_uav_descriptor(
         8 => {
             // SAFETY: `view_dimension == 8` selects `texture3d`.
             let mut t = unsafe { view_desc.u.texture3d };
-            let mip_depth = array_size.checked_shr(t.mip_slice).unwrap_or(0).max(1);
+            let mip_depth = mip_extent(array_size, t.mip_slice);
             if !t.w_size == 0 {
                 t.w_size = mip_depth.wrapping_sub(t.first_w_slice);
                 view_desc.u.texture3d = t;
@@ -1014,7 +1009,7 @@ pub fn initialize_and_normalize_rtv_descriptor(
         8 => {
             // SAFETY: `view_dimension == 8` selects `texture3d`.
             let mut t = unsafe { view_desc.u.texture3d };
-            let mip_depth = array_size.checked_shr(t.mip_slice).unwrap_or(0).max(1);
+            let mip_depth = mip_extent(array_size, t.mip_slice);
             if !t.w_size == 0 {
                 t.w_size = mip_depth.wrapping_sub(t.first_w_slice);
                 view_desc.u.texture3d = t;

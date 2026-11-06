@@ -11,9 +11,12 @@
 //! `DXMT_D3D12_PRIVATE`. The descriptions are values the front end has read out of the
 //! application's memory, one unaligned read each.
 
-use dxmt_core::format::{
-    MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
-    query_dxgi_ref,
+use dxmt_core::{
+    format::{
+        MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
+        query_dxgi_ref,
+    },
+    resource::dims::{self, full_mip_count, mip_extent_wrapping},
 };
 use dxmt_util::com::Hresult;
 
@@ -123,17 +126,16 @@ pub fn resource_extent(desc: &ResourceDesc, mip_slice: u32) -> D3d12Box {
         bottom: 1,
         back: 1,
     };
-    let depth = u32::from(desc.depth_or_array_size).wrapping_shr(mip_slice);
-    let height = desc.height.wrapping_shr(mip_slice);
+    // The 64-bit width shifts before it is cut, so it does not take `mip_extent_wrapping`.
     let width = low32(desc.width.wrapping_shr(mip_slice));
     match desc.dimension {
         D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            extent.back = depth.max(1);
-            extent.bottom = height.max(1);
+            extent.back = mip_extent_wrapping(u32::from(desc.depth_or_array_size), mip_slice);
+            extent.bottom = mip_extent_wrapping(desc.height, mip_slice);
             extent.right = width.max(1);
         }
         D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
-            extent.bottom = height.max(1);
+            extent.bottom = mip_extent_wrapping(desc.height, mip_slice);
             extent.right = width.max(1);
         }
         D3D12_RESOURCE_DIMENSION_BUFFER | D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
@@ -170,21 +172,18 @@ pub fn decompose_subresource(desc: &ResourceDesc, subresource: u32) -> Decompose
             };
         }
     };
+    // An empty extent has 0 levels here, where the texture info's count has 1.
     let mip_levels = if desc.mip_levels == 0 {
-        32 - extent_or.leading_zeros()
+        full_mip_count(extent_or)
     } else {
         u32::from(desc.mip_levels)
     };
+    let d = dims::decompose_subresource(subresource, mip_levels, array_size);
     DecomposedSubresource {
         mip_levels,
-        mip_slice: subresource.checked_rem(mip_levels).unwrap_or(0),
-        array_slice: subresource
-            .checked_div(mip_levels)
-            .and_then(|slice| slice.checked_rem(array_size))
-            .unwrap_or(0),
-        plane_slice: subresource
-            .checked_div(mip_levels.wrapping_mul(array_size))
-            .unwrap_or(0),
+        mip_slice: d.mip_slice,
+        array_slice: d.array_slice,
+        plane_slice: d.plane_slice,
     }
 }
 
