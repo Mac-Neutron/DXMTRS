@@ -1,0 +1,2656 @@
+SRV r=0 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=0 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=0 f=0 c=0 dim=2 m=0 fmt=0x46 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=2 m=1 fmt=0x163046 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=2 m=2 fmt=0x4d8046 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=3 m=0 fmt=0x46 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=3 m=1 fmt=0x163046 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=3 m=2 fmt=0x4d8046 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=4 m=0 fmt=0x46 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=4 m=1 fmt=0x163046 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=4 m=2 fmt=0x4d8046 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=5 m=0 fmt=0x46 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=5 m=1 fmt=0x163046 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=5 m=2 fmt=0x4d8046 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=8 m=0 fmt=0x46 type=7 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=8 m=1 fmt=0x163046 type=7 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=8 m=2 fmt=0x4d8046 type=7 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=9 m=0 fmt=0x46 type=5 mip=0+7 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=0 dim=9 m=1 fmt=0x163046 type=5 mip=0+7 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=0 dim=9 m=2 fmt=0x4d8046 type=5 mip=0+7 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=0 dim=10 m=0 fmt=0x46 type=6 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=10 m=1 fmt=0x163046 type=6 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=10 m=2 fmt=0x4d8046 type=6 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=0 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=0 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=0 f=0 c=0 dim=0 hr=0x80070057
+UAV r=0 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=0 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+1
+UAV r=0 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=0 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+1
+UAV r=0 f=0 c=0 dim=6 hr=0x80070057
+UAV r=0 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1
+UAV r=0 f=0 c=0 dim=99 hr=0x80070057
+RTV r=0 f=0 c=0 dim=0 hr=0x80070057
+RTV r=0 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=0 dim=99 hr=0x80070057
+DSV r=0 f=0 c=0 dim=0 hr=0x80070057
+DSV r=0 f=0 c=0 dim=1 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=2 fmt=0x46 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=3 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=4 fmt=0x46 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=0 c=0 dim=99 hr=0x80070057
+SRV r=0 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=0 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=0 f=0 c=1 dim=2 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=2 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=2 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=3 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=3 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=3 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=4 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=4 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=4 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=5 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=5 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=5 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=0 f=0 c=1 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=1 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=1 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=1 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=0 f=0 c=1 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=0 f=0 c=1 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=0 f=0 c=1 dim=8 m=0 fmt=0x46 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=8 m=1 fmt=0x163046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=8 m=2 fmt=0x4d8046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=0 f=0 c=1 dim=9 m=0 fmt=0x46 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=0 f=0 c=1 dim=9 m=1 fmt=0x163046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=0 f=0 c=1 dim=9 m=2 fmt=0x4d8046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=0 f=0 c=1 dim=10 m=0 fmt=0x46 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=0 f=0 c=1 dim=10 m=1 fmt=0x163046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=0 f=0 c=1 dim=10 m=2 fmt=0x4d8046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=0 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=0 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=0 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=0 f=0 c=1 dim=0 hr=0x80070057
+UAV r=0 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=0 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=0 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=0 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=0 f=0 c=1 dim=6 hr=0x80070057
+UAV r=0 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=0 f=0 c=1 dim=99 hr=0x80070057
+RTV r=0 f=0 c=1 dim=0 hr=0x80070057
+RTV r=0 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=7 fmt=0x46 type=8 mip=0+1 slice=2+3 size=64x1 plane=0 layers=3 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=32x1 plane=2 layers=3 flags=0 tex=false
+RTV r=0 f=0 c=1 dim=99 hr=0x80070057
+DSV r=0 f=0 c=1 dim=0 hr=0x80070057
+DSV r=0 f=0 c=1 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=2 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=4 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=6 fmt=0x46 type=8 mip=0+1 slice=2+3 size=64x1 plane=0 layers=3 flags=1 tex=false
+DSV r=0 f=0 c=1 dim=99 hr=0x80070057
+SRV r=0 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=2 dim=2 m=0 fmt=0x46 type=2 mip=5+2 slice=0+1 clamp=-5.0
+SRV r=0 f=0 c=2 dim=3 m=0 fmt=0x46 type=3 mip=5+2 slice=7+0 clamp=-5.0
+SRV r=0 f=0 c=2 dim=4 m=0 fmt=0x46 type=2 mip=5+2 slice=0+1 clamp=-5.0
+SRV r=0 f=0 c=2 dim=5 m=0 fmt=0x46 type=3 mip=5+2 slice=7+0 clamp=-5.0
+SRV r=0 f=0 c=2 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=2 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=0 f=0 c=2 dim=8 m=0 fmt=0x46 type=7 mip=5+2 slice=0+1 clamp=-5.0
+SRV r=0 f=0 c=2 dim=9 m=0 fmt=0x46 type=5 mip=5+2 slice=0+6 clamp=-5.0
+SRV r=0 f=0 c=2 dim=10 m=0 fmt=0x46 type=6 mip=5+2 slice=0+0 clamp=-5.0
+SRV r=0 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=0 f=0 c=2 dim=0 hr=0x80070057
+UAV r=0 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=0 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=0 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=0 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=0 f=0 c=2 dim=6 hr=0x80070057
+UAV r=0 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1
+UAV r=0 f=0 c=2 dim=99 hr=0x80070057
+RTV r=0 f=0 c=2 dim=0 hr=0x80070057
+RTV r=0 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=7 fmt=0x46 type=8 mip=0+1 slice=7+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1 size=2x1 plane=7 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=2 dim=99 hr=0x80070057
+DSV r=0 f=0 c=2 dim=0 hr=0x80070057
+DSV r=0 f=0 c=2 dim=1 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=2 fmt=0x46 type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=3 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=4 fmt=0x46 type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=6 fmt=0x46 type=8 mip=0+1 slice=7+1 size=64x1 plane=0 layers=1 flags=2 tex=false
+DSV r=0 f=0 c=2 dim=99 hr=0x80070057
+SRV r=0 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=3 dim=2 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=3 dim=3 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=0 f=0 c=3 dim=4 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=3 dim=5 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=0 f=0 c=3 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=3 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=0 f=0 c=3 dim=8 m=0 fmt=0x46 type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=3 dim=9 m=0 fmt=0x46 type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=3 dim=10 m=0 fmt=0x46 type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=0 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=0 f=0 c=3 dim=0 hr=0x80070057
+UAV r=0 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=0 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=0 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=0 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=0 f=0 c=3 dim=6 hr=0x80070057
+UAV r=0 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1
+UAV r=0 f=0 c=3 dim=99 hr=0x80070057
+RTV r=0 f=0 c=3 dim=0 hr=0x80070057
+RTV r=0 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=7 fmt=0x46 type=8 mip=0+1 slice=20+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=3 dim=99 hr=0x80070057
+DSV r=0 f=0 c=3 dim=0 hr=0x80070057
+DSV r=0 f=0 c=3 dim=1 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=2 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=3 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=4 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=6 fmt=0x46 type=8 mip=0+1 slice=20+1 size=64x1 plane=0 layers=1 flags=3 tex=false
+DSV r=0 f=0 c=3 dim=99 hr=0x80070057
+SRV r=0 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=4 dim=2 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=0 f=0 c=4 dim=3 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=0 f=0 c=4 dim=4 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=0 f=0 c=4 dim=5 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=0 f=0 c=4 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=4 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=0 f=0 c=4 dim=8 m=0 fmt=0x46 type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=0 f=0 c=4 dim=9 m=0 fmt=0x46 type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=0 f=0 c=4 dim=10 m=0 fmt=0x46 type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=0 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=0 f=0 c=4 dim=0 hr=0x80070057
+UAV r=0 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=0 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=0 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=0 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=0 f=0 c=4 dim=6 hr=0x80070057
+UAV r=0 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1
+UAV r=0 f=0 c=4 dim=99 hr=0x80070057
+RTV r=0 f=0 c=4 dim=0 hr=0x80070057
+RTV r=0 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=7 fmt=0x46 type=8 mip=0+1 slice=1+0 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1 size=8x1 plane=1 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=4 dim=99 hr=0x80070057
+DSV r=0 f=0 c=4 dim=0 hr=0x80070057
+DSV r=0 f=0 c=4 dim=1 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=2 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=3 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=4 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=6 fmt=0x46 type=8 mip=0+1 slice=1+0 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=0 c=4 dim=99 hr=0x80070057
+SRV r=0 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=0 f=0 c=5 dim=2 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=3 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=4 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=5 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=8 m=0 fmt=0x46 type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=0 f=0 c=5 dim=9 m=0 fmt=0x46 type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=5 dim=10 m=0 fmt=0x46 type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=0 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=0 f=0 c=5 dim=0 hr=0x80070057
+UAV r=0 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=0 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=0 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=0 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=0 f=0 c=5 dim=6 hr=0x80070057
+UAV r=0 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=0 f=0 c=5 dim=99 hr=0x80070057
+RTV r=0 f=0 c=5 dim=0 hr=0x80070057
+RTV r=0 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=0 c=5 dim=99 hr=0x80070057
+DSV r=0 f=0 c=5 dim=0 hr=0x80070057
+DSV r=0 f=0 c=5 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=2 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=4 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=1 tex=false
+DSV r=0 f=0 c=5 dim=99 hr=0x80070057
+SRV r=0 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=0 f=1 c=0 dim=2 m=0 fmt=0x37 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=3 m=0 fmt=0x37 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=4 m=0 fmt=0x37 type=2 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=5 m=0 fmt=0x37 type=3 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=6 m=0 fmt=0x37 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=7 m=0 fmt=0x37 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=8 m=0 fmt=0x37 type=7 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=9 m=0 fmt=0x37 type=5 mip=0+7 slice=0+6 clamp=0.0
+SRV r=0 f=1 c=0 dim=10 m=0 fmt=0x37 type=6 mip=0+7 slice=0+1 clamp=0.0
+SRV r=0 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=0 f=1 c=0 dim=0 hr=0x80070057
+UAV r=0 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=0 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=0 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=0 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=0 f=1 c=0 dim=6 hr=0x80070057
+UAV r=0 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=0 f=1 c=0 dim=99 hr=0x80070057
+RTV r=0 f=1 c=0 dim=0 hr=0x80070057
+RTV r=0 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=0 f=1 c=0 dim=99 hr=0x80070057
+DSV r=0 f=1 c=0 dim=0 hr=0x80070057
+DSV r=0 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+DSV r=0 f=1 c=0 dim=99 hr=0x80070057
+SRV r=0 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=0 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=0 f=2 c=0 dim=0 hr=0x80004005
+UAV r=0 f=2 c=0 dim=2 hr=0x80004005
+UAV r=0 f=2 c=0 dim=3 hr=0x80004005
+UAV r=0 f=2 c=0 dim=4 hr=0x80004005
+UAV r=0 f=2 c=0 dim=5 hr=0x80004005
+UAV r=0 f=2 c=0 dim=6 hr=0x80004005
+UAV r=0 f=2 c=0 dim=8 hr=0x80004005
+UAV r=0 f=2 c=0 dim=99 hr=0x80004005
+RTV r=0 f=2 c=0 dim=0 hr=0x80004005
+RTV r=0 f=2 c=0 dim=2 hr=0x80004005
+RTV r=0 f=2 c=0 dim=3 hr=0x80004005
+RTV r=0 f=2 c=0 dim=4 hr=0x80004005
+RTV r=0 f=2 c=0 dim=5 hr=0x80004005
+RTV r=0 f=2 c=0 dim=6 hr=0x80004005
+RTV r=0 f=2 c=0 dim=7 hr=0x80004005
+RTV r=0 f=2 c=0 dim=8 hr=0x80004005
+RTV r=0 f=2 c=0 dim=99 hr=0x80004005
+DSV r=0 f=2 c=0 dim=0 hr=0x80004005
+DSV r=0 f=2 c=0 dim=1 hr=0x80004005
+DSV r=0 f=2 c=0 dim=2 hr=0x80004005
+DSV r=0 f=2 c=0 dim=3 hr=0x80004005
+DSV r=0 f=2 c=0 dim=4 hr=0x80004005
+DSV r=0 f=2 c=0 dim=5 hr=0x80004005
+DSV r=0 f=2 c=0 dim=6 hr=0x80004005
+DSV r=0 f=2 c=0 dim=99 hr=0x80004005
+SRV r=1 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=1 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=1 f=0 c=0 dim=2 m=0 fmt=0x46 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=2 m=1 fmt=0x163046 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=2 m=2 fmt=0x4d8046 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=3 m=0 fmt=0x46 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=3 m=1 fmt=0x163046 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=3 m=2 fmt=0x4d8046 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=4 m=0 fmt=0x46 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=4 m=1 fmt=0x163046 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=4 m=2 fmt=0x4d8046 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=5 m=0 fmt=0x46 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=5 m=1 fmt=0x163046 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=5 m=2 fmt=0x4d8046 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=8 m=0 fmt=0x46 type=7 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=8 m=1 fmt=0x163046 type=7 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=8 m=2 fmt=0x4d8046 type=7 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=0 dim=9 m=0 fmt=0x46 type=5 mip=0+3 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=0 dim=9 m=1 fmt=0x163046 type=5 mip=0+3 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=0 dim=9 m=2 fmt=0x4d8046 type=5 mip=0+3 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=0 dim=10 m=0 fmt=0x46 type=6 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=10 m=1 fmt=0x163046 type=6 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=10 m=2 fmt=0x4d8046 type=6 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=1 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=1 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=1 f=0 c=0 dim=0 hr=0x80070057
+UAV r=1 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=1 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+4
+UAV r=1 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=1 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+4
+UAV r=1 f=0 c=0 dim=6 hr=0x80070057
+UAV r=1 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1
+UAV r=1 f=0 c=0 dim=99 hr=0x80070057
+RTV r=1 f=0 c=0 dim=0 hr=0x80070057
+RTV r=1 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=0 dim=99 hr=0x80070057
+DSV r=1 f=0 c=0 dim=0 hr=0x80070057
+DSV r=1 f=0 c=0 dim=1 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=2 fmt=0x46 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=3 fmt=0x46 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=4 fmt=0x46 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=0 c=0 dim=99 hr=0x80070057
+SRV r=1 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=1 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=1 f=0 c=1 dim=2 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=2 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=2 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=3 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=3 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=3 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=4 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=4 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=4 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=5 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=5 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=5 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=1 f=0 c=1 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=1 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=1 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=1 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=1 f=0 c=1 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=1 f=0 c=1 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=1 f=0 c=1 dim=8 m=0 fmt=0x46 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=8 m=1 fmt=0x163046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=8 m=2 fmt=0x4d8046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=1 f=0 c=1 dim=9 m=0 fmt=0x46 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=1 f=0 c=1 dim=9 m=1 fmt=0x163046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=1 f=0 c=1 dim=9 m=2 fmt=0x4d8046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=1 f=0 c=1 dim=10 m=0 fmt=0x46 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=1 f=0 c=1 dim=10 m=1 fmt=0x163046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=1 f=0 c=1 dim=10 m=2 fmt=0x4d8046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=1 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=1 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=1 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=1 f=0 c=1 dim=0 hr=0x80070057
+UAV r=1 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=1 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=1 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=1 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=1 f=0 c=1 dim=6 hr=0x80070057
+UAV r=1 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=1 f=0 c=1 dim=99 hr=0x80070057
+RTV r=1 f=0 c=1 dim=0 hr=0x80070057
+RTV r=1 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=7 fmt=0x46 type=8 mip=0+1 slice=2+3 size=64x1 plane=0 layers=3 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=32x1 plane=2 layers=3 flags=0 tex=false
+RTV r=1 f=0 c=1 dim=99 hr=0x80070057
+DSV r=1 f=0 c=1 dim=0 hr=0x80070057
+DSV r=1 f=0 c=1 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=2 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=4 fmt=0x46 type=3 mip=1+1 slice=2+3 size=32x1 plane=0 layers=3 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=6 fmt=0x46 type=8 mip=0+1 slice=2+3 size=64x1 plane=0 layers=3 flags=1 tex=false
+DSV r=1 f=0 c=1 dim=99 hr=0x80070057
+SRV r=1 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=2 dim=2 m=0 fmt=0x46 type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=1 f=0 c=2 dim=3 m=0 fmt=0x46 type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=1 f=0 c=2 dim=4 m=0 fmt=0x46 type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=1 f=0 c=2 dim=5 m=0 fmt=0x46 type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=1 f=0 c=2 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=2 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=1 f=0 c=2 dim=8 m=0 fmt=0x46 type=7 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=1 f=0 c=2 dim=9 m=0 fmt=0x46 type=5 mip=5+0 slice=0+6 clamp=-5.0
+SRV r=1 f=0 c=2 dim=10 m=0 fmt=0x46 type=6 mip=5+0 slice=0+0 clamp=-5.0
+SRV r=1 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=1 f=0 c=2 dim=0 hr=0x80070057
+UAV r=1 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=1 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=1 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=1 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=1 f=0 c=2 dim=6 hr=0x80070057
+UAV r=1 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1
+UAV r=1 f=0 c=2 dim=99 hr=0x80070057
+RTV r=1 f=0 c=2 dim=0 hr=0x80070057
+RTV r=1 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+4 size=2x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+4 size=2x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=7 fmt=0x46 type=8 mip=0+1 slice=7+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1 size=2x1 plane=7 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=2 dim=99 hr=0x80070057
+DSV r=1 f=0 c=2 dim=0 hr=0x80070057
+DSV r=1 f=0 c=2 dim=1 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=2 fmt=0x46 type=3 mip=5+1 slice=7+4 size=2x1 plane=0 layers=4 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=3 fmt=0x46 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=4 fmt=0x46 type=3 mip=5+1 slice=7+4 size=2x1 plane=0 layers=4 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=6 fmt=0x46 type=8 mip=0+1 slice=7+4 size=64x1 plane=0 layers=4 flags=2 tex=false
+DSV r=1 f=0 c=2 dim=99 hr=0x80070057
+SRV r=1 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=3 dim=2 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=3 dim=3 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=1 f=0 c=3 dim=4 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=3 dim=5 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=1 f=0 c=3 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=3 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=1 f=0 c=3 dim=8 m=0 fmt=0x46 type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=3 dim=9 m=0 fmt=0x46 type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=3 dim=10 m=0 fmt=0x46 type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=1 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=1 f=0 c=3 dim=0 hr=0x80070057
+UAV r=1 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=1 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=1 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=1 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=1 f=0 c=3 dim=6 hr=0x80070057
+UAV r=1 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1
+UAV r=1 f=0 c=3 dim=99 hr=0x80070057
+RTV r=1 f=0 c=3 dim=0 hr=0x80070057
+RTV r=1 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+4 size=1x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+4 size=1x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=7 fmt=0x46 type=8 mip=0+1 slice=20+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=3 dim=99 hr=0x80070057
+DSV r=1 f=0 c=3 dim=0 hr=0x80070057
+DSV r=1 f=0 c=3 dim=1 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=2 fmt=0x46 type=3 mip=9+1 slice=20+4 size=1x1 plane=0 layers=4 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=3 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=4 fmt=0x46 type=3 mip=9+1 slice=20+4 size=1x1 plane=0 layers=4 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=6 fmt=0x46 type=8 mip=0+1 slice=20+4 size=64x1 plane=0 layers=4 flags=3 tex=false
+DSV r=1 f=0 c=3 dim=99 hr=0x80070057
+SRV r=1 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=4 dim=2 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=1 f=0 c=4 dim=3 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=1 f=0 c=4 dim=4 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=1 f=0 c=4 dim=5 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=1 f=0 c=4 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=4 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=1 f=0 c=4 dim=8 m=0 fmt=0x46 type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=1 f=0 c=4 dim=9 m=0 fmt=0x46 type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=1 f=0 c=4 dim=10 m=0 fmt=0x46 type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=1 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=1 f=0 c=4 dim=0 hr=0x80070057
+UAV r=1 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=1 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=1 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=1 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=1 f=0 c=4 dim=6 hr=0x80070057
+UAV r=1 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1
+UAV r=1 f=0 c=4 dim=99 hr=0x80070057
+RTV r=1 f=0 c=4 dim=0 hr=0x80070057
+RTV r=1 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=7 fmt=0x46 type=8 mip=0+1 slice=1+0 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1 size=8x1 plane=1 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=4 dim=99 hr=0x80070057
+DSV r=1 f=0 c=4 dim=0 hr=0x80070057
+DSV r=1 f=0 c=4 dim=1 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=2 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=3 fmt=0x46 type=2 mip=3+1 slice=0+1 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=4 fmt=0x46 type=3 mip=3+1 slice=1+0 size=8x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=6 fmt=0x46 type=8 mip=0+1 slice=1+0 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=0 c=4 dim=99 hr=0x80070057
+SRV r=1 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=1 f=0 c=5 dim=2 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=3 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=4 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=5 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=8 m=0 fmt=0x46 type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=1 f=0 c=5 dim=9 m=0 fmt=0x46 type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=5 dim=10 m=0 fmt=0x46 type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=1 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=1 f=0 c=5 dim=0 hr=0x80070057
+UAV r=1 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=1 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=1 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=1 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=1 f=0 c=5 dim=6 hr=0x80070057
+UAV r=1 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=1 f=0 c=5 dim=99 hr=0x80070057
+RTV r=1 f=0 c=5 dim=0 hr=0x80070057
+RTV r=1 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=0 tex=false
+RTV r=1 f=0 c=5 dim=99 hr=0x80070057
+DSV r=1 f=0 c=5 dim=0 hr=0x80070057
+DSV r=1 f=0 c=5 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=2 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=32x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=4 fmt=0x46 type=3 mip=1+1 slice=0+1 size=32x1 plane=0 layers=1 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=64x1 plane=0 layers=1 flags=1 tex=false
+DSV r=1 f=0 c=5 dim=99 hr=0x80070057
+SRV r=1 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=1 f=1 c=0 dim=2 m=0 fmt=0x37 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=1 c=0 dim=3 m=0 fmt=0x37 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=1 c=0 dim=4 m=0 fmt=0x37 type=2 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=1 c=0 dim=5 m=0 fmt=0x37 type=3 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=1 c=0 dim=6 m=0 fmt=0x37 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=1 f=1 c=0 dim=7 m=0 fmt=0x37 type=8 mip=0+1 slice=0+4 clamp=0.0
+SRV r=1 f=1 c=0 dim=8 m=0 fmt=0x37 type=7 mip=0+3 slice=0+1 clamp=0.0
+SRV r=1 f=1 c=0 dim=9 m=0 fmt=0x37 type=5 mip=0+3 slice=0+6 clamp=0.0
+SRV r=1 f=1 c=0 dim=10 m=0 fmt=0x37 type=6 mip=0+3 slice=0+4 clamp=0.0
+SRV r=1 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=1 f=1 c=0 dim=0 hr=0x80070057
+UAV r=1 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=1 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+4 atomic fmt=0x35 type=3 mip=0+1 slice=0+4
+UAV r=1 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=1 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+4 atomic fmt=0x35 type=3 mip=0+1 slice=0+4
+UAV r=1 f=1 c=0 dim=6 hr=0x80070057
+UAV r=1 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=1 f=1 c=0 dim=99 hr=0x80070057
+RTV r=1 f=1 c=0 dim=0 hr=0x80070057
+RTV r=1 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=64x1 plane=0 layers=4 flags=0 tex=false
+RTV r=1 f=1 c=0 dim=99 hr=0x80070057
+DSV r=1 f=1 c=0 dim=0 hr=0x80070057
+DSV r=1 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x1 plane=0 layers=0 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+4 size=64x1 plane=0 layers=4 flags=0 tex=false
+DSV r=1 f=1 c=0 dim=99 hr=0x80070057
+SRV r=1 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=1 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=1 f=2 c=0 dim=0 hr=0x80004005
+UAV r=1 f=2 c=0 dim=2 hr=0x80004005
+UAV r=1 f=2 c=0 dim=3 hr=0x80004005
+UAV r=1 f=2 c=0 dim=4 hr=0x80004005
+UAV r=1 f=2 c=0 dim=5 hr=0x80004005
+UAV r=1 f=2 c=0 dim=6 hr=0x80004005
+UAV r=1 f=2 c=0 dim=8 hr=0x80004005
+UAV r=1 f=2 c=0 dim=99 hr=0x80004005
+RTV r=1 f=2 c=0 dim=0 hr=0x80004005
+RTV r=1 f=2 c=0 dim=2 hr=0x80004005
+RTV r=1 f=2 c=0 dim=3 hr=0x80004005
+RTV r=1 f=2 c=0 dim=4 hr=0x80004005
+RTV r=1 f=2 c=0 dim=5 hr=0x80004005
+RTV r=1 f=2 c=0 dim=6 hr=0x80004005
+RTV r=1 f=2 c=0 dim=7 hr=0x80004005
+RTV r=1 f=2 c=0 dim=8 hr=0x80004005
+RTV r=1 f=2 c=0 dim=99 hr=0x80004005
+DSV r=1 f=2 c=0 dim=0 hr=0x80004005
+DSV r=1 f=2 c=0 dim=1 hr=0x80004005
+DSV r=1 f=2 c=0 dim=2 hr=0x80004005
+DSV r=1 f=2 c=0 dim=3 hr=0x80004005
+DSV r=1 f=2 c=0 dim=4 hr=0x80004005
+DSV r=1 f=2 c=0 dim=5 hr=0x80004005
+DSV r=1 f=2 c=0 dim=6 hr=0x80004005
+DSV r=1 f=2 c=0 dim=99 hr=0x80004005
+SRV r=2 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=2 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=2 f=0 c=0 dim=2 m=0 fmt=0x46 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=2 m=1 fmt=0x163046 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=2 m=2 fmt=0x4d8046 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=3 m=0 fmt=0x46 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=3 m=1 fmt=0x163046 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=3 m=2 fmt=0x4d8046 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=4 m=0 fmt=0x46 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=4 m=1 fmt=0x163046 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=4 m=2 fmt=0x4d8046 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=5 m=0 fmt=0x46 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=5 m=1 fmt=0x163046 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=5 m=2 fmt=0x4d8046 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=8 m=0 fmt=0x46 type=7 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=8 m=1 fmt=0x163046 type=7 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=8 m=2 fmt=0x4d8046 type=7 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=9 m=0 fmt=0x46 type=5 mip=0+8 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=0 dim=9 m=1 fmt=0x163046 type=5 mip=0+8 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=0 dim=9 m=2 fmt=0x4d8046 type=5 mip=0+8 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=0 dim=10 m=0 fmt=0x46 type=6 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=10 m=1 fmt=0x163046 type=6 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=10 m=2 fmt=0x4d8046 type=6 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=2 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=2 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=2 f=0 c=0 dim=0 hr=0x80070057
+UAV r=2 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=2 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+1
+UAV r=2 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=2 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+1
+UAV r=2 f=0 c=0 dim=6 hr=0x80070057
+UAV r=2 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1
+UAV r=2 f=0 c=0 dim=99 hr=0x80070057
+RTV r=2 f=0 c=0 dim=0 hr=0x80070057
+RTV r=2 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=0 dim=99 hr=0x80070057
+DSV r=2 f=0 c=0 dim=0 hr=0x80070057
+DSV r=2 f=0 c=0 dim=1 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=2 fmt=0x46 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=3 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=4 fmt=0x46 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=0 c=0 dim=99 hr=0x80070057
+SRV r=2 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=2 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=2 f=0 c=1 dim=2 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=2 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=2 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=3 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=3 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=3 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=4 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=4 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=4 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=5 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=5 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=5 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=2 f=0 c=1 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=1 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=1 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=1 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=2 f=0 c=1 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=2 f=0 c=1 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=2 f=0 c=1 dim=8 m=0 fmt=0x46 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=8 m=1 fmt=0x163046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=8 m=2 fmt=0x4d8046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=2 f=0 c=1 dim=9 m=0 fmt=0x46 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=2 f=0 c=1 dim=9 m=1 fmt=0x163046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=2 f=0 c=1 dim=9 m=2 fmt=0x4d8046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=2 f=0 c=1 dim=10 m=0 fmt=0x46 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=2 f=0 c=1 dim=10 m=1 fmt=0x163046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=2 f=0 c=1 dim=10 m=2 fmt=0x4d8046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=2 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=2 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=2 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=2 f=0 c=1 dim=0 hr=0x80070057
+UAV r=2 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=2 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=2 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=2 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=2 f=0 c=1 dim=6 hr=0x80070057
+UAV r=2 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=2 f=0 c=1 dim=99 hr=0x80070057
+RTV r=2 f=0 c=1 dim=0 hr=0x80070057
+RTV r=2 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=7 fmt=0x46 type=8 mip=0+1 slice=2+3 size=128x64 plane=0 layers=3 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=64x32 plane=2 layers=3 flags=0 tex=false
+RTV r=2 f=0 c=1 dim=99 hr=0x80070057
+DSV r=2 f=0 c=1 dim=0 hr=0x80070057
+DSV r=2 f=0 c=1 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=2 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=4 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=6 fmt=0x46 type=8 mip=0+1 slice=2+3 size=128x64 plane=0 layers=3 flags=1 tex=false
+DSV r=2 f=0 c=1 dim=99 hr=0x80070057
+SRV r=2 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=2 dim=2 m=0 fmt=0x46 type=2 mip=5+3 slice=0+1 clamp=-5.0
+SRV r=2 f=0 c=2 dim=3 m=0 fmt=0x46 type=3 mip=5+3 slice=7+0 clamp=-5.0
+SRV r=2 f=0 c=2 dim=4 m=0 fmt=0x46 type=2 mip=5+3 slice=0+1 clamp=-5.0
+SRV r=2 f=0 c=2 dim=5 m=0 fmt=0x46 type=3 mip=5+3 slice=7+0 clamp=-5.0
+SRV r=2 f=0 c=2 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=2 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=2 f=0 c=2 dim=8 m=0 fmt=0x46 type=7 mip=5+3 slice=0+1 clamp=-5.0
+SRV r=2 f=0 c=2 dim=9 m=0 fmt=0x46 type=5 mip=5+3 slice=0+6 clamp=-5.0
+SRV r=2 f=0 c=2 dim=10 m=0 fmt=0x46 type=6 mip=5+3 slice=0+0 clamp=-5.0
+SRV r=2 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=2 f=0 c=2 dim=0 hr=0x80070057
+UAV r=2 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=2 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=2 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=2 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+0
+UAV r=2 f=0 c=2 dim=6 hr=0x80070057
+UAV r=2 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1
+UAV r=2 f=0 c=2 dim=99 hr=0x80070057
+RTV r=2 f=0 c=2 dim=0 hr=0x80070057
+RTV r=2 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+1 size=4x2 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+1 size=4x2 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=7 fmt=0x46 type=8 mip=0+1 slice=7+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1 size=4x2 plane=7 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=2 dim=99 hr=0x80070057
+DSV r=2 f=0 c=2 dim=0 hr=0x80070057
+DSV r=2 f=0 c=2 dim=1 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=2 fmt=0x46 type=3 mip=5+1 slice=7+1 size=4x2 plane=0 layers=1 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=3 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=4 fmt=0x46 type=3 mip=5+1 slice=7+1 size=4x2 plane=0 layers=1 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=6 fmt=0x46 type=8 mip=0+1 slice=7+1 size=128x64 plane=0 layers=1 flags=2 tex=false
+DSV r=2 f=0 c=2 dim=99 hr=0x80070057
+SRV r=2 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=3 dim=2 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=3 dim=3 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=2 f=0 c=3 dim=4 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=3 dim=5 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=2 f=0 c=3 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=3 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=2 f=0 c=3 dim=8 m=0 fmt=0x46 type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=3 dim=9 m=0 fmt=0x46 type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=3 dim=10 m=0 fmt=0x46 type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=2 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=2 f=0 c=3 dim=0 hr=0x80070057
+UAV r=2 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=2 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=2 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=2 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=2 f=0 c=3 dim=6 hr=0x80070057
+UAV r=2 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1
+UAV r=2 f=0 c=3 dim=99 hr=0x80070057
+RTV r=2 f=0 c=3 dim=0 hr=0x80070057
+RTV r=2 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=7 fmt=0x46 type=8 mip=0+1 slice=20+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=3 dim=99 hr=0x80070057
+DSV r=2 f=0 c=3 dim=0 hr=0x80070057
+DSV r=2 f=0 c=3 dim=1 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=2 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=3 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=4 fmt=0x46 type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=6 fmt=0x46 type=8 mip=0+1 slice=20+1 size=128x64 plane=0 layers=1 flags=3 tex=false
+DSV r=2 f=0 c=3 dim=99 hr=0x80070057
+SRV r=2 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=4 dim=2 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=2 f=0 c=4 dim=3 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=2 f=0 c=4 dim=4 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=2 f=0 c=4 dim=5 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=2 f=0 c=4 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=4 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=2 f=0 c=4 dim=8 m=0 fmt=0x46 type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=2 f=0 c=4 dim=9 m=0 fmt=0x46 type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=2 f=0 c=4 dim=10 m=0 fmt=0x46 type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=2 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=2 f=0 c=4 dim=0 hr=0x80070057
+UAV r=2 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=2 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=2 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=2 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=2 f=0 c=4 dim=6 hr=0x80070057
+UAV r=2 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1
+UAV r=2 f=0 c=4 dim=99 hr=0x80070057
+RTV r=2 f=0 c=4 dim=0 hr=0x80070057
+RTV r=2 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=7 fmt=0x46 type=8 mip=0+1 slice=1+0 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1 size=16x8 plane=1 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=4 dim=99 hr=0x80070057
+DSV r=2 f=0 c=4 dim=0 hr=0x80070057
+DSV r=2 f=0 c=4 dim=1 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=2 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=3 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=4 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=6 fmt=0x46 type=8 mip=0+1 slice=1+0 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=0 c=4 dim=99 hr=0x80070057
+SRV r=2 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=2 f=0 c=5 dim=2 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=3 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=4 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=5 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=8 m=0 fmt=0x46 type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=2 f=0 c=5 dim=9 m=0 fmt=0x46 type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=5 dim=10 m=0 fmt=0x46 type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=2 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=2 f=0 c=5 dim=0 hr=0x80070057
+UAV r=2 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=2 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=2 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=2 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=2 f=0 c=5 dim=6 hr=0x80070057
+UAV r=2 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=2 f=0 c=5 dim=99 hr=0x80070057
+RTV r=2 f=0 c=5 dim=0 hr=0x80070057
+RTV r=2 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=0 c=5 dim=99 hr=0x80070057
+DSV r=2 f=0 c=5 dim=0 hr=0x80070057
+DSV r=2 f=0 c=5 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=2 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=4 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=1 tex=false
+DSV r=2 f=0 c=5 dim=99 hr=0x80070057
+SRV r=2 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=2 f=1 c=0 dim=2 m=0 fmt=0x37 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=3 m=0 fmt=0x37 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=4 m=0 fmt=0x37 type=2 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=5 m=0 fmt=0x37 type=3 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=6 m=0 fmt=0x37 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=7 m=0 fmt=0x37 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=8 m=0 fmt=0x37 type=7 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=9 m=0 fmt=0x37 type=5 mip=0+8 slice=0+6 clamp=0.0
+SRV r=2 f=1 c=0 dim=10 m=0 fmt=0x37 type=6 mip=0+8 slice=0+1 clamp=0.0
+SRV r=2 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=2 f=1 c=0 dim=0 hr=0x80070057
+UAV r=2 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=2 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=2 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=2 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=2 f=1 c=0 dim=6 hr=0x80070057
+UAV r=2 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=2 f=1 c=0 dim=99 hr=0x80070057
+RTV r=2 f=1 c=0 dim=0 hr=0x80070057
+RTV r=2 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=2 f=1 c=0 dim=99 hr=0x80070057
+DSV r=2 f=1 c=0 dim=0 hr=0x80070057
+DSV r=2 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+DSV r=2 f=1 c=0 dim=99 hr=0x80070057
+SRV r=2 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=2 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=2 f=2 c=0 dim=0 hr=0x80004005
+UAV r=2 f=2 c=0 dim=2 hr=0x80004005
+UAV r=2 f=2 c=0 dim=3 hr=0x80004005
+UAV r=2 f=2 c=0 dim=4 hr=0x80004005
+UAV r=2 f=2 c=0 dim=5 hr=0x80004005
+UAV r=2 f=2 c=0 dim=6 hr=0x80004005
+UAV r=2 f=2 c=0 dim=8 hr=0x80004005
+UAV r=2 f=2 c=0 dim=99 hr=0x80004005
+RTV r=2 f=2 c=0 dim=0 hr=0x80004005
+RTV r=2 f=2 c=0 dim=2 hr=0x80004005
+RTV r=2 f=2 c=0 dim=3 hr=0x80004005
+RTV r=2 f=2 c=0 dim=4 hr=0x80004005
+RTV r=2 f=2 c=0 dim=5 hr=0x80004005
+RTV r=2 f=2 c=0 dim=6 hr=0x80004005
+RTV r=2 f=2 c=0 dim=7 hr=0x80004005
+RTV r=2 f=2 c=0 dim=8 hr=0x80004005
+RTV r=2 f=2 c=0 dim=99 hr=0x80004005
+DSV r=2 f=2 c=0 dim=0 hr=0x80004005
+DSV r=2 f=2 c=0 dim=1 hr=0x80004005
+DSV r=2 f=2 c=0 dim=2 hr=0x80004005
+DSV r=2 f=2 c=0 dim=3 hr=0x80004005
+DSV r=2 f=2 c=0 dim=4 hr=0x80004005
+DSV r=2 f=2 c=0 dim=5 hr=0x80004005
+DSV r=2 f=2 c=0 dim=6 hr=0x80004005
+DSV r=2 f=2 c=0 dim=99 hr=0x80004005
+SRV r=3 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=3 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=3 f=0 c=0 dim=2 m=0 fmt=0x46 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=2 m=1 fmt=0x163046 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=2 m=2 fmt=0x4d8046 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=3 m=0 fmt=0x46 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=3 m=1 fmt=0x163046 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=3 m=2 fmt=0x4d8046 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=4 m=0 fmt=0x46 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=4 m=1 fmt=0x163046 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=4 m=2 fmt=0x4d8046 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=5 m=0 fmt=0x46 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=5 m=1 fmt=0x163046 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=5 m=2 fmt=0x4d8046 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=8 m=0 fmt=0x46 type=7 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=8 m=1 fmt=0x163046 type=7 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=8 m=2 fmt=0x4d8046 type=7 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=0 dim=9 m=0 fmt=0x46 type=5 mip=0+4 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=0 dim=9 m=1 fmt=0x163046 type=5 mip=0+4 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=0 dim=9 m=2 fmt=0x4d8046 type=5 mip=0+4 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=0 dim=10 m=0 fmt=0x46 type=6 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=10 m=1 fmt=0x163046 type=6 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=10 m=2 fmt=0x4d8046 type=6 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=3 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=3 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=3 f=0 c=0 dim=0 hr=0x80070057
+UAV r=3 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=3 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+12
+UAV r=3 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=3 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+12
+UAV r=3 f=0 c=0 dim=6 hr=0x80070057
+UAV r=3 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1
+UAV r=3 f=0 c=0 dim=99 hr=0x80070057
+RTV r=3 f=0 c=0 dim=0 hr=0x80070057
+RTV r=3 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=0 dim=99 hr=0x80070057
+DSV r=3 f=0 c=0 dim=0 hr=0x80070057
+DSV r=3 f=0 c=0 dim=1 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=2 fmt=0x46 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=3 fmt=0x46 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=4 fmt=0x46 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=0 c=0 dim=99 hr=0x80070057
+SRV r=3 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=3 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=3 f=0 c=1 dim=2 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=2 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=2 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=3 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=3 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=3 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=4 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=4 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=4 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=5 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=5 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=5 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=3 f=0 c=1 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=1 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=1 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=1 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=3 f=0 c=1 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=3 f=0 c=1 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=3 f=0 c=1 dim=8 m=0 fmt=0x46 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=8 m=1 fmt=0x163046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=8 m=2 fmt=0x4d8046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=3 f=0 c=1 dim=9 m=0 fmt=0x46 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=3 f=0 c=1 dim=9 m=1 fmt=0x163046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=3 f=0 c=1 dim=9 m=2 fmt=0x4d8046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=3 f=0 c=1 dim=10 m=0 fmt=0x46 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=3 f=0 c=1 dim=10 m=1 fmt=0x163046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=3 f=0 c=1 dim=10 m=2 fmt=0x4d8046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=3 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=3 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=3 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=3 f=0 c=1 dim=0 hr=0x80070057
+UAV r=3 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=3 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=3 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=3 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=3 f=0 c=1 dim=6 hr=0x80070057
+UAV r=3 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=3 f=0 c=1 dim=99 hr=0x80070057
+RTV r=3 f=0 c=1 dim=0 hr=0x80070057
+RTV r=3 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=7 fmt=0x46 type=8 mip=0+1 slice=2+3 size=128x64 plane=0 layers=3 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=64x32 plane=2 layers=3 flags=0 tex=false
+RTV r=3 f=0 c=1 dim=99 hr=0x80070057
+DSV r=3 f=0 c=1 dim=0 hr=0x80070057
+DSV r=3 f=0 c=1 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=2 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=4 fmt=0x46 type=3 mip=1+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=6 fmt=0x46 type=8 mip=0+1 slice=2+3 size=128x64 plane=0 layers=3 flags=1 tex=false
+DSV r=3 f=0 c=1 dim=99 hr=0x80070057
+SRV r=3 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=2 dim=2 m=0 fmt=0x46 type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=3 f=0 c=2 dim=3 m=0 fmt=0x46 type=3 mip=5+0 slice=7+5 clamp=-5.0
+SRV r=3 f=0 c=2 dim=4 m=0 fmt=0x46 type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=3 f=0 c=2 dim=5 m=0 fmt=0x46 type=3 mip=5+0 slice=7+5 clamp=-5.0
+SRV r=3 f=0 c=2 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=2 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=7+5 clamp=0.0
+SRV r=3 f=0 c=2 dim=8 m=0 fmt=0x46 type=7 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=3 f=0 c=2 dim=9 m=0 fmt=0x46 type=5 mip=5+0 slice=0+6 clamp=-5.0
+SRV r=3 f=0 c=2 dim=10 m=0 fmt=0x46 type=6 mip=5+0 slice=0+5 clamp=-5.0
+SRV r=3 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=3 f=0 c=2 dim=0 hr=0x80070057
+UAV r=3 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=3 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+5
+UAV r=3 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=3 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+5
+UAV r=3 f=0 c=2 dim=6 hr=0x80070057
+UAV r=3 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1
+UAV r=3 f=0 c=2 dim=99 hr=0x80070057
+RTV r=3 f=0 c=2 dim=0 hr=0x80070057
+RTV r=3 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+12 size=4x2 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+12 size=4x2 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=7 fmt=0x46 type=8 mip=0+1 slice=7+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1 size=4x2 plane=7 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=2 dim=99 hr=0x80070057
+DSV r=3 f=0 c=2 dim=0 hr=0x80070057
+DSV r=3 f=0 c=2 dim=1 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=2 fmt=0x46 type=3 mip=5+1 slice=7+12 size=4x2 plane=0 layers=12 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=3 fmt=0x46 type=2 mip=5+1 slice=0+1 size=4x2 plane=0 layers=0 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=4 fmt=0x46 type=3 mip=5+1 slice=7+12 size=4x2 plane=0 layers=12 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=6 fmt=0x46 type=8 mip=0+1 slice=7+12 size=128x64 plane=0 layers=12 flags=2 tex=false
+DSV r=3 f=0 c=2 dim=99 hr=0x80070057
+SRV r=3 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=3 dim=2 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=3 dim=3 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=3 f=0 c=3 dim=4 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=3 dim=5 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=3 f=0 c=3 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=3 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=3 f=0 c=3 dim=8 m=0 fmt=0x46 type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=3 dim=9 m=0 fmt=0x46 type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=3 dim=10 m=0 fmt=0x46 type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=3 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=3 f=0 c=3 dim=0 hr=0x80070057
+UAV r=3 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=3 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=3 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=3 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=3 f=0 c=3 dim=6 hr=0x80070057
+UAV r=3 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1
+UAV r=3 f=0 c=3 dim=99 hr=0x80070057
+RTV r=3 f=0 c=3 dim=0 hr=0x80070057
+RTV r=3 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+12 size=1x1 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+12 size=1x1 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=7 fmt=0x46 type=8 mip=0+1 slice=20+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=3 dim=99 hr=0x80070057
+DSV r=3 f=0 c=3 dim=0 hr=0x80070057
+DSV r=3 f=0 c=3 dim=1 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=2 fmt=0x46 type=3 mip=9+1 slice=20+12 size=1x1 plane=0 layers=12 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=3 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=4 fmt=0x46 type=3 mip=9+1 slice=20+12 size=1x1 plane=0 layers=12 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=6 fmt=0x46 type=8 mip=0+1 slice=20+12 size=128x64 plane=0 layers=12 flags=3 tex=false
+DSV r=3 f=0 c=3 dim=99 hr=0x80070057
+SRV r=3 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=4 dim=2 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=3 f=0 c=4 dim=3 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=3 f=0 c=4 dim=4 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=3 f=0 c=4 dim=5 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=3 f=0 c=4 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=4 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=3 f=0 c=4 dim=8 m=0 fmt=0x46 type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=3 f=0 c=4 dim=9 m=0 fmt=0x46 type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=3 f=0 c=4 dim=10 m=0 fmt=0x46 type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=3 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=3 f=0 c=4 dim=0 hr=0x80070057
+UAV r=3 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=3 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=3 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=3 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=3 f=0 c=4 dim=6 hr=0x80070057
+UAV r=3 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1
+UAV r=3 f=0 c=4 dim=99 hr=0x80070057
+RTV r=3 f=0 c=4 dim=0 hr=0x80070057
+RTV r=3 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=7 fmt=0x46 type=8 mip=0+1 slice=1+0 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1 size=16x8 plane=1 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=4 dim=99 hr=0x80070057
+DSV r=3 f=0 c=4 dim=0 hr=0x80070057
+DSV r=3 f=0 c=4 dim=1 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=2 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=3 fmt=0x46 type=2 mip=3+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=4 fmt=0x46 type=3 mip=3+1 slice=1+0 size=16x8 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=6 fmt=0x46 type=8 mip=0+1 slice=1+0 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=0 c=4 dim=99 hr=0x80070057
+SRV r=3 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=3 f=0 c=5 dim=2 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=3 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=4 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=5 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=8 m=0 fmt=0x46 type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=3 f=0 c=5 dim=9 m=0 fmt=0x46 type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=5 dim=10 m=0 fmt=0x46 type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=3 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=3 f=0 c=5 dim=0 hr=0x80070057
+UAV r=3 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=3 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=3 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=3 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=3 f=0 c=5 dim=6 hr=0x80070057
+UAV r=3 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=3 f=0 c=5 dim=99 hr=0x80070057
+RTV r=3 f=0 c=5 dim=0 hr=0x80070057
+RTV r=3 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=3 f=0 c=5 dim=99 hr=0x80070057
+DSV r=3 f=0 c=5 dim=0 hr=0x80070057
+DSV r=3 f=0 c=5 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=2 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=4 fmt=0x46 type=3 mip=1+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=128x64 plane=0 layers=1 flags=1 tex=false
+DSV r=3 f=0 c=5 dim=99 hr=0x80070057
+SRV r=3 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=3 f=1 c=0 dim=2 m=0 fmt=0x37 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=1 c=0 dim=3 m=0 fmt=0x37 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=1 c=0 dim=4 m=0 fmt=0x37 type=2 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=1 c=0 dim=5 m=0 fmt=0x37 type=3 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=1 c=0 dim=6 m=0 fmt=0x37 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=3 f=1 c=0 dim=7 m=0 fmt=0x37 type=8 mip=0+1 slice=0+12 clamp=0.0
+SRV r=3 f=1 c=0 dim=8 m=0 fmt=0x37 type=7 mip=0+4 slice=0+1 clamp=0.0
+SRV r=3 f=1 c=0 dim=9 m=0 fmt=0x37 type=5 mip=0+4 slice=0+6 clamp=0.0
+SRV r=3 f=1 c=0 dim=10 m=0 fmt=0x37 type=6 mip=0+4 slice=0+12 clamp=0.0
+SRV r=3 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=3 f=1 c=0 dim=0 hr=0x80070057
+UAV r=3 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=3 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+12 atomic fmt=0x35 type=3 mip=0+1 slice=0+12
+UAV r=3 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=3 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+12 atomic fmt=0x35 type=3 mip=0+1 slice=0+12
+UAV r=3 f=1 c=0 dim=6 hr=0x80070057
+UAV r=3 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=3 f=1 c=0 dim=99 hr=0x80070057
+RTV r=3 f=1 c=0 dim=0 hr=0x80070057
+RTV r=3 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=128x64 plane=0 layers=12 flags=0 tex=false
+RTV r=3 f=1 c=0 dim=99 hr=0x80070057
+DSV r=3 f=1 c=0 dim=0 hr=0x80070057
+DSV r=3 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=128x64 plane=0 layers=0 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+12 size=128x64 plane=0 layers=12 flags=0 tex=false
+DSV r=3 f=1 c=0 dim=99 hr=0x80070057
+SRV r=3 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=3 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=3 f=2 c=0 dim=0 hr=0x80004005
+UAV r=3 f=2 c=0 dim=2 hr=0x80004005
+UAV r=3 f=2 c=0 dim=3 hr=0x80004005
+UAV r=3 f=2 c=0 dim=4 hr=0x80004005
+UAV r=3 f=2 c=0 dim=5 hr=0x80004005
+UAV r=3 f=2 c=0 dim=6 hr=0x80004005
+UAV r=3 f=2 c=0 dim=8 hr=0x80004005
+UAV r=3 f=2 c=0 dim=99 hr=0x80004005
+RTV r=3 f=2 c=0 dim=0 hr=0x80004005
+RTV r=3 f=2 c=0 dim=2 hr=0x80004005
+RTV r=3 f=2 c=0 dim=3 hr=0x80004005
+RTV r=3 f=2 c=0 dim=4 hr=0x80004005
+RTV r=3 f=2 c=0 dim=5 hr=0x80004005
+RTV r=3 f=2 c=0 dim=6 hr=0x80004005
+RTV r=3 f=2 c=0 dim=7 hr=0x80004005
+RTV r=3 f=2 c=0 dim=8 hr=0x80004005
+RTV r=3 f=2 c=0 dim=99 hr=0x80004005
+DSV r=3 f=2 c=0 dim=0 hr=0x80004005
+DSV r=3 f=2 c=0 dim=1 hr=0x80004005
+DSV r=3 f=2 c=0 dim=2 hr=0x80004005
+DSV r=3 f=2 c=0 dim=3 hr=0x80004005
+DSV r=3 f=2 c=0 dim=4 hr=0x80004005
+DSV r=3 f=2 c=0 dim=5 hr=0x80004005
+DSV r=3 f=2 c=0 dim=6 hr=0x80004005
+DSV r=3 f=2 c=0 dim=99 hr=0x80004005
+SRV r=4 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=4 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=4 f=0 c=0 dim=2 m=0 fmt=0xfc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=2 m=1 fmt=0x1630fc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=2 m=2 fmt=0x4d80fc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=3 m=0 fmt=0xfc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=3 m=1 fmt=0x1630fc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=3 m=2 fmt=0x4d80fc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=4 m=0 fmt=0xfc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=4 m=1 fmt=0x1630fc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=4 m=2 fmt=0x4d80fc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=5 m=0 fmt=0xfc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=5 m=1 fmt=0x1630fc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=5 m=2 fmt=0x4d80fc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=6 m=1 fmt=0x1630fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=6 m=2 fmt=0x4d80fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=7 m=1 fmt=0x1630fc type=8 mip=0+1 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=7 m=2 fmt=0x4d80fc type=8 mip=0+1 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=8 m=0 fmt=0xfc type=7 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=8 m=1 fmt=0x1630fc type=7 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=8 m=2 fmt=0x4d80fc type=7 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=0 dim=9 m=0 fmt=0xfc type=5 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=9 m=1 fmt=0x1630fc type=5 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=9 m=2 fmt=0x4d80fc type=5 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=10 m=0 fmt=0xfc type=6 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=10 m=1 fmt=0x1630fc type=6 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=10 m=2 fmt=0x4d80fc type=6 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=4 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=4 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=4 f=0 c=0 dim=0 hr=0x80070057
+UAV r=4 f=0 c=0 dim=2 fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=4 f=0 c=0 dim=3 fmt=0x35 type=3 mip=0+1 slice=0+6
+UAV r=4 f=0 c=0 dim=4 fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=4 f=0 c=0 dim=5 fmt=0x35 type=3 mip=0+1 slice=0+6
+UAV r=4 f=0 c=0 dim=6 hr=0x80070057
+UAV r=4 f=0 c=0 dim=8 fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=4 f=0 c=0 dim=99 hr=0x80070057
+RTV r=4 f=0 c=0 dim=0 hr=0x80070057
+RTV r=4 f=0 c=0 dim=2 fmt=0x35 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=3 fmt=0x35 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=4 fmt=0x35 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=5 fmt=0x35 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=7 fmt=0x35 type=8 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=8 fmt=0x35 type=7 mip=0+1 slice=0+1 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=0 dim=99 hr=0x80070057
+DSV r=4 f=0 c=0 dim=0 hr=0x80070057
+DSV r=4 f=0 c=0 dim=1 fmt=0x35 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=2 fmt=0x35 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=3 fmt=0x35 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=4 fmt=0x35 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=6 fmt=0x35 type=8 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=0 c=0 dim=99 hr=0x80070057
+SRV r=4 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=4 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=4 f=0 c=1 dim=2 m=0 fmt=0xfc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=2 m=1 fmt=0x1630fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=2 m=2 fmt=0x4d80fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=3 m=0 fmt=0xfc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=3 m=1 fmt=0x1630fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=3 m=2 fmt=0x4d80fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=4 m=0 fmt=0xfc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=4 m=1 fmt=0x1630fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=4 m=2 fmt=0x4d80fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=5 m=0 fmt=0xfc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=5 m=1 fmt=0x1630fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=5 m=2 fmt=0x4d80fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=4 f=0 c=1 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=1 dim=6 m=1 fmt=0x1630fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=1 dim=6 m=2 fmt=0x4d80fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=1 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=4 f=0 c=1 dim=7 m=1 fmt=0x1630fc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=4 f=0 c=1 dim=7 m=2 fmt=0x4d80fc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=4 f=0 c=1 dim=8 m=0 fmt=0xfc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=8 m=1 fmt=0x1630fc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=8 m=2 fmt=0x4d80fc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=4 f=0 c=1 dim=9 m=0 fmt=0xfc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=4 f=0 c=1 dim=9 m=1 fmt=0x1630fc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=4 f=0 c=1 dim=9 m=2 fmt=0x4d80fc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=4 f=0 c=1 dim=10 m=0 fmt=0xfc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=4 f=0 c=1 dim=10 m=1 fmt=0x1630fc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=4 f=0 c=1 dim=10 m=2 fmt=0x4d80fc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=4 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=4 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=4 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=4 f=0 c=1 dim=0 hr=0x80070057
+UAV r=4 f=0 c=1 dim=2 fmt=0x35 type=2 mip=1+1 slice=0+1
+UAV r=4 f=0 c=1 dim=3 fmt=0x35 type=3 mip=1+1 slice=2+3
+UAV r=4 f=0 c=1 dim=4 fmt=0x35 type=2 mip=1+1 slice=0+1
+UAV r=4 f=0 c=1 dim=5 fmt=0x35 type=3 mip=1+1 slice=2+3
+UAV r=4 f=0 c=1 dim=6 hr=0x80070057
+UAV r=4 f=0 c=1 dim=8 fmt=0x35 type=7 mip=1+1 slice=0+1
+UAV r=4 f=0 c=1 dim=99 hr=0x80070057
+RTV r=4 f=0 c=1 dim=0 hr=0x80070057
+RTV r=4 f=0 c=1 dim=2 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=3 fmt=0x35 type=3 mip=1+1 slice=2+3 size=128x128 plane=0 layers=3 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=4 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=5 fmt=0x35 type=3 mip=1+1 slice=2+3 size=128x128 plane=0 layers=3 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=7 fmt=0x35 type=8 mip=0+1 slice=2+3 size=256x256 plane=0 layers=3 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=8 fmt=0x35 type=7 mip=1+1 slice=0+1 size=128x128 plane=2 layers=3 flags=0 tex=false
+RTV r=4 f=0 c=1 dim=99 hr=0x80070057
+DSV r=4 f=0 c=1 dim=0 hr=0x80070057
+DSV r=4 f=0 c=1 dim=1 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=2 fmt=0x35 type=3 mip=1+1 slice=2+3 size=128x128 plane=0 layers=3 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=3 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=4 fmt=0x35 type=3 mip=1+1 slice=2+3 size=128x128 plane=0 layers=3 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=6 fmt=0x35 type=8 mip=0+1 slice=2+3 size=256x256 plane=0 layers=3 flags=1 tex=false
+DSV r=4 f=0 c=1 dim=99 hr=0x80070057
+SRV r=4 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=2 dim=2 m=0 fmt=0xfc type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=4 f=0 c=2 dim=3 m=0 fmt=0xfc type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=4 f=0 c=2 dim=4 m=0 fmt=0xfc type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=4 f=0 c=2 dim=5 m=0 fmt=0xfc type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=4 f=0 c=2 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=2 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=4 f=0 c=2 dim=8 m=0 fmt=0xfc type=7 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=4 f=0 c=2 dim=9 m=0 fmt=0xfc type=5 mip=5+0 slice=0+6 clamp=-5.0
+SRV r=4 f=0 c=2 dim=10 m=0 fmt=0xfc type=6 mip=5+0 slice=0+0 clamp=-5.0
+SRV r=4 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=4 f=0 c=2 dim=0 hr=0x80070057
+UAV r=4 f=0 c=2 dim=2 fmt=0x35 type=2 mip=5+1 slice=0+1
+UAV r=4 f=0 c=2 dim=3 fmt=0x35 type=3 mip=5+1 slice=7+0
+UAV r=4 f=0 c=2 dim=4 fmt=0x35 type=2 mip=5+1 slice=0+1
+UAV r=4 f=0 c=2 dim=5 fmt=0x35 type=3 mip=5+1 slice=7+0
+UAV r=4 f=0 c=2 dim=6 hr=0x80070057
+UAV r=4 f=0 c=2 dim=8 fmt=0x35 type=7 mip=5+1 slice=0+1
+UAV r=4 f=0 c=2 dim=99 hr=0x80070057
+RTV r=4 f=0 c=2 dim=0 hr=0x80070057
+RTV r=4 f=0 c=2 dim=2 fmt=0x35 type=2 mip=5+1 slice=0+1 size=8x8 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=3 fmt=0x35 type=3 mip=5+1 slice=7+6 size=8x8 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=4 fmt=0x35 type=2 mip=5+1 slice=0+1 size=8x8 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=5 fmt=0x35 type=3 mip=5+1 slice=7+6 size=8x8 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=7 fmt=0x35 type=8 mip=0+1 slice=7+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=8 fmt=0x35 type=7 mip=5+1 slice=0+1 size=8x8 plane=7 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=2 dim=99 hr=0x80070057
+DSV r=4 f=0 c=2 dim=0 hr=0x80070057
+DSV r=4 f=0 c=2 dim=1 fmt=0x35 type=2 mip=5+1 slice=0+1 size=8x8 plane=0 layers=0 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=2 fmt=0x35 type=3 mip=5+1 slice=7+6 size=8x8 plane=0 layers=6 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=3 fmt=0x35 type=2 mip=5+1 slice=0+1 size=8x8 plane=0 layers=0 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=4 fmt=0x35 type=3 mip=5+1 slice=7+6 size=8x8 plane=0 layers=6 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=6 fmt=0x35 type=8 mip=0+1 slice=7+6 size=256x256 plane=0 layers=6 flags=2 tex=false
+DSV r=4 f=0 c=2 dim=99 hr=0x80070057
+SRV r=4 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=3 dim=2 m=0 fmt=0xfc type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=3 dim=3 m=0 fmt=0xfc type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=4 f=0 c=3 dim=4 m=0 fmt=0xfc type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=3 dim=5 m=0 fmt=0xfc type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=4 f=0 c=3 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=3 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=4 f=0 c=3 dim=8 m=0 fmt=0xfc type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=3 dim=9 m=0 fmt=0xfc type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=3 dim=10 m=0 fmt=0xfc type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=4 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=4 f=0 c=3 dim=0 hr=0x80070057
+UAV r=4 f=0 c=3 dim=2 fmt=0x35 type=2 mip=9+1 slice=0+1
+UAV r=4 f=0 c=3 dim=3 fmt=0x35 type=3 mip=9+1 slice=20+0
+UAV r=4 f=0 c=3 dim=4 fmt=0x35 type=2 mip=9+1 slice=0+1
+UAV r=4 f=0 c=3 dim=5 fmt=0x35 type=3 mip=9+1 slice=20+0
+UAV r=4 f=0 c=3 dim=6 hr=0x80070057
+UAV r=4 f=0 c=3 dim=8 fmt=0x35 type=7 mip=9+1 slice=0+1
+UAV r=4 f=0 c=3 dim=99 hr=0x80070057
+RTV r=4 f=0 c=3 dim=0 hr=0x80070057
+RTV r=4 f=0 c=3 dim=2 fmt=0x35 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=3 fmt=0x35 type=3 mip=9+1 slice=20+6 size=1x1 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=4 fmt=0x35 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=5 fmt=0x35 type=3 mip=9+1 slice=20+6 size=1x1 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=7 fmt=0x35 type=8 mip=0+1 slice=20+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=8 fmt=0x35 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=3 dim=99 hr=0x80070057
+DSV r=4 f=0 c=3 dim=0 hr=0x80070057
+DSV r=4 f=0 c=3 dim=1 fmt=0x35 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=2 fmt=0x35 type=3 mip=9+1 slice=20+6 size=1x1 plane=0 layers=6 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=3 fmt=0x35 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=4 fmt=0x35 type=3 mip=9+1 slice=20+6 size=1x1 plane=0 layers=6 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=6 fmt=0x35 type=8 mip=0+1 slice=20+6 size=256x256 plane=0 layers=6 flags=3 tex=false
+DSV r=4 f=0 c=3 dim=99 hr=0x80070057
+SRV r=4 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=4 dim=2 m=0 fmt=0xfc type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=4 f=0 c=4 dim=3 m=0 fmt=0xfc type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=4 f=0 c=4 dim=4 m=0 fmt=0xfc type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=4 f=0 c=4 dim=5 m=0 fmt=0xfc type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=4 f=0 c=4 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=4 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=4 f=0 c=4 dim=8 m=0 fmt=0xfc type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=4 f=0 c=4 dim=9 m=0 fmt=0xfc type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=4 f=0 c=4 dim=10 m=0 fmt=0xfc type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=4 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=4 f=0 c=4 dim=0 hr=0x80070057
+UAV r=4 f=0 c=4 dim=2 fmt=0x35 type=2 mip=3+1 slice=0+1
+UAV r=4 f=0 c=4 dim=3 fmt=0x35 type=3 mip=3+1 slice=1+0
+UAV r=4 f=0 c=4 dim=4 fmt=0x35 type=2 mip=3+1 slice=0+1
+UAV r=4 f=0 c=4 dim=5 fmt=0x35 type=3 mip=3+1 slice=1+0
+UAV r=4 f=0 c=4 dim=6 hr=0x80070057
+UAV r=4 f=0 c=4 dim=8 fmt=0x35 type=7 mip=3+1 slice=0+1
+UAV r=4 f=0 c=4 dim=99 hr=0x80070057
+RTV r=4 f=0 c=4 dim=0 hr=0x80070057
+RTV r=4 f=0 c=4 dim=2 fmt=0x35 type=2 mip=3+1 slice=0+1 size=32x32 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=3 fmt=0x35 type=3 mip=3+1 slice=1+0 size=32x32 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=4 fmt=0x35 type=2 mip=3+1 slice=0+1 size=32x32 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=5 fmt=0x35 type=3 mip=3+1 slice=1+0 size=32x32 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=7 fmt=0x35 type=8 mip=0+1 slice=1+0 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=8 fmt=0x35 type=7 mip=3+1 slice=0+1 size=32x32 plane=1 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=4 dim=99 hr=0x80070057
+DSV r=4 f=0 c=4 dim=0 hr=0x80070057
+DSV r=4 f=0 c=4 dim=1 fmt=0x35 type=2 mip=3+1 slice=0+1 size=32x32 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=2 fmt=0x35 type=3 mip=3+1 slice=1+0 size=32x32 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=3 fmt=0x35 type=2 mip=3+1 slice=0+1 size=32x32 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=4 fmt=0x35 type=3 mip=3+1 slice=1+0 size=32x32 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=6 fmt=0x35 type=8 mip=0+1 slice=1+0 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=0 c=4 dim=99 hr=0x80070057
+SRV r=4 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=4 f=0 c=5 dim=2 m=0 fmt=0xfc type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=3 m=0 fmt=0xfc type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=4 m=0 fmt=0xfc type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=5 m=0 fmt=0xfc type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=8 m=0 fmt=0xfc type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=4 f=0 c=5 dim=9 m=0 fmt=0xfc type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=5 dim=10 m=0 fmt=0xfc type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=4 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=4 f=0 c=5 dim=0 hr=0x80070057
+UAV r=4 f=0 c=5 dim=2 fmt=0x35 type=2 mip=1+1 slice=0+1
+UAV r=4 f=0 c=5 dim=3 fmt=0x35 type=3 mip=1+1 slice=0+1
+UAV r=4 f=0 c=5 dim=4 fmt=0x35 type=2 mip=1+1 slice=0+1
+UAV r=4 f=0 c=5 dim=5 fmt=0x35 type=3 mip=1+1 slice=0+1
+UAV r=4 f=0 c=5 dim=6 hr=0x80070057
+UAV r=4 f=0 c=5 dim=8 fmt=0x35 type=7 mip=1+1 slice=0+1
+UAV r=4 f=0 c=5 dim=99 hr=0x80070057
+RTV r=4 f=0 c=5 dim=0 hr=0x80070057
+RTV r=4 f=0 c=5 dim=2 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=3 fmt=0x35 type=3 mip=1+1 slice=0+1 size=128x128 plane=0 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=4 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=5 fmt=0x35 type=3 mip=1+1 slice=0+1 size=128x128 plane=0 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=6 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=7 fmt=0x35 type=8 mip=0+1 slice=0+1 size=256x256 plane=0 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=8 fmt=0x35 type=7 mip=1+1 slice=0+1 size=128x128 plane=0 layers=1 flags=0 tex=false
+RTV r=4 f=0 c=5 dim=99 hr=0x80070057
+DSV r=4 f=0 c=5 dim=0 hr=0x80070057
+DSV r=4 f=0 c=5 dim=1 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=2 fmt=0x35 type=3 mip=1+1 slice=0+1 size=128x128 plane=0 layers=1 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=3 fmt=0x35 type=2 mip=1+1 slice=0+1 size=128x128 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=4 fmt=0x35 type=3 mip=1+1 slice=0+1 size=128x128 plane=0 layers=1 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=5 fmt=0x35 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=6 fmt=0x35 type=8 mip=0+1 slice=0+1 size=256x256 plane=0 layers=1 flags=1 tex=false
+DSV r=4 f=0 c=5 dim=99 hr=0x80070057
+SRV r=4 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=4 f=1 c=0 dim=2 m=0 fmt=0xfc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=1 c=0 dim=3 m=0 fmt=0xfc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=1 c=0 dim=4 m=0 fmt=0xfc type=2 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=1 c=0 dim=5 m=0 fmt=0xfc type=3 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=1 c=0 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=4 f=1 c=0 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+6 clamp=0.0
+SRV r=4 f=1 c=0 dim=8 m=0 fmt=0xfc type=7 mip=0+0 slice=0+1 clamp=0.0
+SRV r=4 f=1 c=0 dim=9 m=0 fmt=0xfc type=5 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=1 c=0 dim=10 m=0 fmt=0xfc type=6 mip=0+0 slice=0+6 clamp=0.0
+SRV r=4 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=4 f=1 c=0 dim=0 hr=0x80070057
+UAV r=4 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=4 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+6 atomic fmt=0x35 type=3 mip=0+1 slice=0+6
+UAV r=4 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=4 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+6 atomic fmt=0x35 type=3 mip=0+1 slice=0+6
+UAV r=4 f=1 c=0 dim=6 hr=0x80070057
+UAV r=4 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=4 f=1 c=0 dim=99 hr=0x80070057
+RTV r=4 f=1 c=0 dim=0 hr=0x80070057
+RTV r=4 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=256x256 plane=0 layers=6 flags=0 tex=false
+RTV r=4 f=1 c=0 dim=99 hr=0x80070057
+DSV r=4 f=1 c=0 dim=0 hr=0x80070057
+DSV r=4 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=256x256 plane=0 layers=0 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+6 size=256x256 plane=0 layers=6 flags=0 tex=false
+DSV r=4 f=1 c=0 dim=99 hr=0x80070057
+SRV r=4 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=4 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=4 f=2 c=0 dim=0 hr=0x80004005
+UAV r=4 f=2 c=0 dim=2 hr=0x80004005
+UAV r=4 f=2 c=0 dim=3 hr=0x80004005
+UAV r=4 f=2 c=0 dim=4 hr=0x80004005
+UAV r=4 f=2 c=0 dim=5 hr=0x80004005
+UAV r=4 f=2 c=0 dim=6 hr=0x80004005
+UAV r=4 f=2 c=0 dim=8 hr=0x80004005
+UAV r=4 f=2 c=0 dim=99 hr=0x80004005
+RTV r=4 f=2 c=0 dim=0 hr=0x80004005
+RTV r=4 f=2 c=0 dim=2 hr=0x80004005
+RTV r=4 f=2 c=0 dim=3 hr=0x80004005
+RTV r=4 f=2 c=0 dim=4 hr=0x80004005
+RTV r=4 f=2 c=0 dim=5 hr=0x80004005
+RTV r=4 f=2 c=0 dim=6 hr=0x80004005
+RTV r=4 f=2 c=0 dim=7 hr=0x80004005
+RTV r=4 f=2 c=0 dim=8 hr=0x80004005
+RTV r=4 f=2 c=0 dim=99 hr=0x80004005
+DSV r=4 f=2 c=0 dim=0 hr=0x80004005
+DSV r=4 f=2 c=0 dim=1 hr=0x80004005
+DSV r=4 f=2 c=0 dim=2 hr=0x80004005
+DSV r=4 f=2 c=0 dim=3 hr=0x80004005
+DSV r=4 f=2 c=0 dim=4 hr=0x80004005
+DSV r=4 f=2 c=0 dim=5 hr=0x80004005
+DSV r=4 f=2 c=0 dim=6 hr=0x80004005
+DSV r=4 f=2 c=0 dim=99 hr=0x80004005
+SRV r=5 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=5 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=5 f=0 c=0 dim=2 m=0 fmt=0xfc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=2 m=1 fmt=0x1630fc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=2 m=2 fmt=0x4d80fc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=3 m=0 fmt=0xfc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=3 m=1 fmt=0x1630fc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=3 m=2 fmt=0x4d80fc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=4 m=0 fmt=0xfc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=4 m=1 fmt=0x1630fc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=4 m=2 fmt=0x4d80fc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=5 m=0 fmt=0xfc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=5 m=1 fmt=0x1630fc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=5 m=2 fmt=0x4d80fc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=6 m=1 fmt=0x1630fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=6 m=2 fmt=0x4d80fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=7 m=1 fmt=0x1630fc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=7 m=2 fmt=0x4d80fc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=8 m=0 fmt=0xfc type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=8 m=1 fmt=0x1630fc type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=8 m=2 fmt=0x4d80fc type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=9 m=0 fmt=0xfc type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=0 dim=9 m=1 fmt=0x1630fc type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=0 dim=9 m=2 fmt=0x4d80fc type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=0 dim=10 m=0 fmt=0xfc type=6 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=10 m=1 fmt=0x1630fc type=6 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=10 m=2 fmt=0x4d80fc type=6 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=5 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=5 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=5 f=0 c=0 dim=0 hr=0x80070057
+UAV r=5 f=0 c=0 dim=2 fmt=0xfc type=2 mip=0+1 slice=0+1
+UAV r=5 f=0 c=0 dim=3 fmt=0xfc type=3 mip=0+1 slice=0+1
+UAV r=5 f=0 c=0 dim=4 fmt=0xfc type=2 mip=0+1 slice=0+1
+UAV r=5 f=0 c=0 dim=5 fmt=0xfc type=3 mip=0+1 slice=0+1
+UAV r=5 f=0 c=0 dim=6 hr=0x80070057
+UAV r=5 f=0 c=0 dim=8 fmt=0xfc type=7 mip=0+1 slice=0+1
+UAV r=5 f=0 c=0 dim=99 hr=0x80070057
+RTV r=5 f=0 c=0 dim=0 hr=0x80070057
+RTV r=5 f=0 c=0 dim=2 fmt=0xfc type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=3 fmt=0xfc type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=4 fmt=0xfc type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=5 fmt=0xfc type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=7 fmt=0xfc type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=8 fmt=0xfc type=7 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=0 dim=99 hr=0x80070057
+DSV r=5 f=0 c=0 dim=0 hr=0x80070057
+DSV r=5 f=0 c=0 dim=1 fmt=0xfc type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=2 fmt=0xfc type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=3 fmt=0xfc type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=4 fmt=0xfc type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=6 fmt=0xfc type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=0 c=0 dim=99 hr=0x80070057
+SRV r=5 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=5 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=5 f=0 c=1 dim=2 m=0 fmt=0xfc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=2 m=1 fmt=0x1630fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=2 m=2 fmt=0x4d80fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=3 m=0 fmt=0xfc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=3 m=1 fmt=0x1630fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=3 m=2 fmt=0x4d80fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=4 m=0 fmt=0xfc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=4 m=1 fmt=0x1630fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=4 m=2 fmt=0x4d80fc type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=5 m=0 fmt=0xfc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=5 m=1 fmt=0x1630fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=5 m=2 fmt=0x4d80fc type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=5 f=0 c=1 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=1 dim=6 m=1 fmt=0x1630fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=1 dim=6 m=2 fmt=0x4d80fc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=1 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=5 f=0 c=1 dim=7 m=1 fmt=0x1630fc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=5 f=0 c=1 dim=7 m=2 fmt=0x4d80fc type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=5 f=0 c=1 dim=8 m=0 fmt=0xfc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=8 m=1 fmt=0x1630fc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=8 m=2 fmt=0x4d80fc type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=5 f=0 c=1 dim=9 m=0 fmt=0xfc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=5 f=0 c=1 dim=9 m=1 fmt=0x1630fc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=5 f=0 c=1 dim=9 m=2 fmt=0x4d80fc type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=5 f=0 c=1 dim=10 m=0 fmt=0xfc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=5 f=0 c=1 dim=10 m=1 fmt=0x1630fc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=5 f=0 c=1 dim=10 m=2 fmt=0x4d80fc type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=5 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=5 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=5 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=5 f=0 c=1 dim=0 hr=0x80070057
+UAV r=5 f=0 c=1 dim=2 fmt=0xfc type=2 mip=1+1 slice=0+1
+UAV r=5 f=0 c=1 dim=3 fmt=0xfc type=3 mip=1+1 slice=2+3
+UAV r=5 f=0 c=1 dim=4 fmt=0xfc type=2 mip=1+1 slice=0+1
+UAV r=5 f=0 c=1 dim=5 fmt=0xfc type=3 mip=1+1 slice=2+3
+UAV r=5 f=0 c=1 dim=6 hr=0x80070057
+UAV r=5 f=0 c=1 dim=8 fmt=0xfc type=7 mip=1+1 slice=0+1
+UAV r=5 f=0 c=1 dim=99 hr=0x80070057
+RTV r=5 f=0 c=1 dim=0 hr=0x80070057
+RTV r=5 f=0 c=1 dim=2 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=3 fmt=0xfc type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=4 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=5 fmt=0xfc type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=7 fmt=0xfc type=8 mip=0+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=8 fmt=0xfc type=7 mip=1+1 slice=0+1 size=32x16 plane=2 layers=3 flags=0 tex=false
+RTV r=5 f=0 c=1 dim=99 hr=0x80070057
+DSV r=5 f=0 c=1 dim=0 hr=0x80070057
+DSV r=5 f=0 c=1 dim=1 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=2 fmt=0xfc type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=3 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=4 fmt=0xfc type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=6 fmt=0xfc type=8 mip=0+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=5 f=0 c=1 dim=99 hr=0x80070057
+SRV r=5 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=2 dim=2 m=0 fmt=0xfc type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=5 f=0 c=2 dim=3 m=0 fmt=0xfc type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=5 f=0 c=2 dim=4 m=0 fmt=0xfc type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=5 f=0 c=2 dim=5 m=0 fmt=0xfc type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=5 f=0 c=2 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=2 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=5 f=0 c=2 dim=8 m=0 fmt=0xfc type=7 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=5 f=0 c=2 dim=9 m=0 fmt=0xfc type=5 mip=5+0 slice=0+6 clamp=-5.0
+SRV r=5 f=0 c=2 dim=10 m=0 fmt=0xfc type=6 mip=5+0 slice=0+0 clamp=-5.0
+SRV r=5 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=5 f=0 c=2 dim=0 hr=0x80070057
+UAV r=5 f=0 c=2 dim=2 fmt=0xfc type=2 mip=5+1 slice=0+1
+UAV r=5 f=0 c=2 dim=3 fmt=0xfc type=3 mip=5+1 slice=7+0
+UAV r=5 f=0 c=2 dim=4 fmt=0xfc type=2 mip=5+1 slice=0+1
+UAV r=5 f=0 c=2 dim=5 fmt=0xfc type=3 mip=5+1 slice=7+0
+UAV r=5 f=0 c=2 dim=6 hr=0x80070057
+UAV r=5 f=0 c=2 dim=8 fmt=0xfc type=7 mip=5+1 slice=0+1
+UAV r=5 f=0 c=2 dim=99 hr=0x80070057
+RTV r=5 f=0 c=2 dim=0 hr=0x80070057
+RTV r=5 f=0 c=2 dim=2 fmt=0xfc type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=3 fmt=0xfc type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=4 fmt=0xfc type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=5 fmt=0xfc type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=7 fmt=0xfc type=8 mip=0+1 slice=7+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=8 fmt=0xfc type=7 mip=5+1 slice=0+1 size=2x1 plane=7 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=2 dim=99 hr=0x80070057
+DSV r=5 f=0 c=2 dim=0 hr=0x80070057
+DSV r=5 f=0 c=2 dim=1 fmt=0xfc type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=2 fmt=0xfc type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=3 fmt=0xfc type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=4 fmt=0xfc type=3 mip=5+1 slice=7+1 size=2x1 plane=0 layers=1 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=6 fmt=0xfc type=8 mip=0+1 slice=7+1 size=64x32 plane=0 layers=1 flags=2 tex=false
+DSV r=5 f=0 c=2 dim=99 hr=0x80070057
+SRV r=5 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=3 dim=2 m=0 fmt=0xfc type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=3 dim=3 m=0 fmt=0xfc type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=5 f=0 c=3 dim=4 m=0 fmt=0xfc type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=3 dim=5 m=0 fmt=0xfc type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=5 f=0 c=3 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=3 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=5 f=0 c=3 dim=8 m=0 fmt=0xfc type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=3 dim=9 m=0 fmt=0xfc type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=3 dim=10 m=0 fmt=0xfc type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=5 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=5 f=0 c=3 dim=0 hr=0x80070057
+UAV r=5 f=0 c=3 dim=2 fmt=0xfc type=2 mip=9+1 slice=0+1
+UAV r=5 f=0 c=3 dim=3 fmt=0xfc type=3 mip=9+1 slice=20+0
+UAV r=5 f=0 c=3 dim=4 fmt=0xfc type=2 mip=9+1 slice=0+1
+UAV r=5 f=0 c=3 dim=5 fmt=0xfc type=3 mip=9+1 slice=20+0
+UAV r=5 f=0 c=3 dim=6 hr=0x80070057
+UAV r=5 f=0 c=3 dim=8 fmt=0xfc type=7 mip=9+1 slice=0+1
+UAV r=5 f=0 c=3 dim=99 hr=0x80070057
+RTV r=5 f=0 c=3 dim=0 hr=0x80070057
+RTV r=5 f=0 c=3 dim=2 fmt=0xfc type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=3 fmt=0xfc type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=4 fmt=0xfc type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=5 fmt=0xfc type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=7 fmt=0xfc type=8 mip=0+1 slice=20+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=8 fmt=0xfc type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=3 dim=99 hr=0x80070057
+DSV r=5 f=0 c=3 dim=0 hr=0x80070057
+DSV r=5 f=0 c=3 dim=1 fmt=0xfc type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=2 fmt=0xfc type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=3 fmt=0xfc type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=4 fmt=0xfc type=3 mip=9+1 slice=20+1 size=1x1 plane=0 layers=1 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=6 fmt=0xfc type=8 mip=0+1 slice=20+1 size=64x32 plane=0 layers=1 flags=3 tex=false
+DSV r=5 f=0 c=3 dim=99 hr=0x80070057
+SRV r=5 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=4 dim=2 m=0 fmt=0xfc type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=5 f=0 c=4 dim=3 m=0 fmt=0xfc type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=5 f=0 c=4 dim=4 m=0 fmt=0xfc type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=5 f=0 c=4 dim=5 m=0 fmt=0xfc type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=5 f=0 c=4 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=4 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=5 f=0 c=4 dim=8 m=0 fmt=0xfc type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=5 f=0 c=4 dim=9 m=0 fmt=0xfc type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=5 f=0 c=4 dim=10 m=0 fmt=0xfc type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=5 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=5 f=0 c=4 dim=0 hr=0x80070057
+UAV r=5 f=0 c=4 dim=2 fmt=0xfc type=2 mip=3+1 slice=0+1
+UAV r=5 f=0 c=4 dim=3 fmt=0xfc type=3 mip=3+1 slice=1+0
+UAV r=5 f=0 c=4 dim=4 fmt=0xfc type=2 mip=3+1 slice=0+1
+UAV r=5 f=0 c=4 dim=5 fmt=0xfc type=3 mip=3+1 slice=1+0
+UAV r=5 f=0 c=4 dim=6 hr=0x80070057
+UAV r=5 f=0 c=4 dim=8 fmt=0xfc type=7 mip=3+1 slice=0+1
+UAV r=5 f=0 c=4 dim=99 hr=0x80070057
+RTV r=5 f=0 c=4 dim=0 hr=0x80070057
+RTV r=5 f=0 c=4 dim=2 fmt=0xfc type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=3 fmt=0xfc type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=4 fmt=0xfc type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=5 fmt=0xfc type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=7 fmt=0xfc type=8 mip=0+1 slice=1+0 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=8 fmt=0xfc type=7 mip=3+1 slice=0+1 size=8x4 plane=1 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=4 dim=99 hr=0x80070057
+DSV r=5 f=0 c=4 dim=0 hr=0x80070057
+DSV r=5 f=0 c=4 dim=1 fmt=0xfc type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=2 fmt=0xfc type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=3 fmt=0xfc type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=4 fmt=0xfc type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=6 fmt=0xfc type=8 mip=0+1 slice=1+0 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=0 c=4 dim=99 hr=0x80070057
+SRV r=5 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=5 f=0 c=5 dim=2 m=0 fmt=0xfc type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=3 m=0 fmt=0xfc type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=4 m=0 fmt=0xfc type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=5 m=0 fmt=0xfc type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=8 m=0 fmt=0xfc type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=5 f=0 c=5 dim=9 m=0 fmt=0xfc type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=5 dim=10 m=0 fmt=0xfc type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=5 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=5 f=0 c=5 dim=0 hr=0x80070057
+UAV r=5 f=0 c=5 dim=2 fmt=0xfc type=2 mip=1+1 slice=0+1
+UAV r=5 f=0 c=5 dim=3 fmt=0xfc type=3 mip=1+1 slice=0+1
+UAV r=5 f=0 c=5 dim=4 fmt=0xfc type=2 mip=1+1 slice=0+1
+UAV r=5 f=0 c=5 dim=5 fmt=0xfc type=3 mip=1+1 slice=0+1
+UAV r=5 f=0 c=5 dim=6 hr=0x80070057
+UAV r=5 f=0 c=5 dim=8 fmt=0xfc type=7 mip=1+1 slice=0+1
+UAV r=5 f=0 c=5 dim=99 hr=0x80070057
+RTV r=5 f=0 c=5 dim=0 hr=0x80070057
+RTV r=5 f=0 c=5 dim=2 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=3 fmt=0xfc type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=4 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=5 fmt=0xfc type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=6 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=7 fmt=0xfc type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=8 fmt=0xfc type=7 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=0 c=5 dim=99 hr=0x80070057
+DSV r=5 f=0 c=5 dim=0 hr=0x80070057
+DSV r=5 f=0 c=5 dim=1 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=2 fmt=0xfc type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=3 fmt=0xfc type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=4 fmt=0xfc type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=5 fmt=0xfc type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=6 fmt=0xfc type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=5 f=0 c=5 dim=99 hr=0x80070057
+SRV r=5 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=5 f=1 c=0 dim=2 m=0 fmt=0xfc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=3 m=0 fmt=0xfc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=4 m=0 fmt=0xfc type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=5 m=0 fmt=0xfc type=3 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=6 m=0 fmt=0xfc type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=7 m=0 fmt=0xfc type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=8 m=0 fmt=0xfc type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=9 m=0 fmt=0xfc type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=5 f=1 c=0 dim=10 m=0 fmt=0xfc type=6 mip=0+1 slice=0+1 clamp=0.0
+SRV r=5 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=5 f=1 c=0 dim=0 hr=0x80070057
+UAV r=5 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=5 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=5 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=5 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 atomic fmt=0x35 type=3 mip=0+1 slice=0+1
+UAV r=5 f=1 c=0 dim=6 hr=0x80070057
+UAV r=5 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=5 f=1 c=0 dim=99 hr=0x80070057
+RTV r=5 f=1 c=0 dim=0 hr=0x80070057
+RTV r=5 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=5 f=1 c=0 dim=99 hr=0x80070057
+DSV r=5 f=1 c=0 dim=0 hr=0x80070057
+DSV r=5 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+DSV r=5 f=1 c=0 dim=99 hr=0x80070057
+SRV r=5 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=5 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=5 f=2 c=0 dim=0 hr=0x80004005
+UAV r=5 f=2 c=0 dim=2 hr=0x80004005
+UAV r=5 f=2 c=0 dim=3 hr=0x80004005
+UAV r=5 f=2 c=0 dim=4 hr=0x80004005
+UAV r=5 f=2 c=0 dim=5 hr=0x80004005
+UAV r=5 f=2 c=0 dim=6 hr=0x80004005
+UAV r=5 f=2 c=0 dim=8 hr=0x80004005
+UAV r=5 f=2 c=0 dim=99 hr=0x80004005
+RTV r=5 f=2 c=0 dim=0 hr=0x80004005
+RTV r=5 f=2 c=0 dim=2 hr=0x80004005
+RTV r=5 f=2 c=0 dim=3 hr=0x80004005
+RTV r=5 f=2 c=0 dim=4 hr=0x80004005
+RTV r=5 f=2 c=0 dim=5 hr=0x80004005
+RTV r=5 f=2 c=0 dim=6 hr=0x80004005
+RTV r=5 f=2 c=0 dim=7 hr=0x80004005
+RTV r=5 f=2 c=0 dim=8 hr=0x80004005
+RTV r=5 f=2 c=0 dim=99 hr=0x80004005
+DSV r=5 f=2 c=0 dim=0 hr=0x80004005
+DSV r=5 f=2 c=0 dim=1 hr=0x80004005
+DSV r=5 f=2 c=0 dim=2 hr=0x80004005
+DSV r=5 f=2 c=0 dim=3 hr=0x80004005
+DSV r=5 f=2 c=0 dim=4 hr=0x80004005
+DSV r=5 f=2 c=0 dim=5 hr=0x80004005
+DSV r=5 f=2 c=0 dim=6 hr=0x80004005
+DSV r=5 f=2 c=0 dim=99 hr=0x80004005
+SRV r=6 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=6 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=6 f=0 c=0 dim=2 m=0 fmt=0xfa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=2 m=1 fmt=0x1630fa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=2 m=2 fmt=0x4d80fa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=3 m=0 fmt=0xfa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=3 m=1 fmt=0x1630fa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=3 m=2 fmt=0x4d80fa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=4 m=0 fmt=0xfa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=4 m=1 fmt=0x1630fa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=4 m=2 fmt=0x4d80fa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=5 m=0 fmt=0xfa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=5 m=1 fmt=0x1630fa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=5 m=2 fmt=0x4d80fa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=6 m=1 fmt=0x1630fa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=6 m=2 fmt=0x4d80fa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=7 m=1 fmt=0x1630fa type=8 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=7 m=2 fmt=0x4d80fa type=8 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=8 m=0 fmt=0xfa type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=8 m=1 fmt=0x1630fa type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=8 m=2 fmt=0x4d80fa type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=0 dim=9 m=0 fmt=0xfa type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=0 dim=9 m=1 fmt=0x1630fa type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=0 dim=9 m=2 fmt=0x4d80fa type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=0 dim=10 m=0 fmt=0xfa type=6 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=10 m=1 fmt=0x1630fa type=6 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=10 m=2 fmt=0x4d80fa type=6 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=6 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=6 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=6 f=0 c=0 dim=0 hr=0x80070057
+UAV r=6 f=0 c=0 dim=2 fmt=0x17 type=2 mip=0+1 slice=0+1
+UAV r=6 f=0 c=0 dim=3 fmt=0x17 type=3 mip=0+1 slice=0+3
+UAV r=6 f=0 c=0 dim=4 fmt=0x17 type=2 mip=0+1 slice=0+1
+UAV r=6 f=0 c=0 dim=5 fmt=0x17 type=3 mip=0+1 slice=0+3
+UAV r=6 f=0 c=0 dim=6 hr=0x80070057
+UAV r=6 f=0 c=0 dim=8 fmt=0x17 type=7 mip=0+1 slice=0+1
+UAV r=6 f=0 c=0 dim=99 hr=0x80070057
+RTV r=6 f=0 c=0 dim=0 hr=0x80070057
+RTV r=6 f=0 c=0 dim=2 fmt=0x17 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=3 fmt=0x17 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=4 fmt=0x17 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=5 fmt=0x17 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=7 fmt=0x17 type=8 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=8 fmt=0x17 type=7 mip=0+1 slice=0+1 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=0 dim=99 hr=0x80070057
+DSV r=6 f=0 c=0 dim=0 hr=0x80070057
+DSV r=6 f=0 c=0 dim=1 fmt=0x17 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=2 fmt=0x17 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=3 fmt=0x17 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=4 fmt=0x17 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=6 fmt=0x17 type=8 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=0 c=0 dim=99 hr=0x80070057
+SRV r=6 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=6 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=6 f=0 c=1 dim=2 m=0 fmt=0xfa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=2 m=1 fmt=0x1630fa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=2 m=2 fmt=0x4d80fa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=3 m=0 fmt=0xfa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=3 m=1 fmt=0x1630fa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=3 m=2 fmt=0x4d80fa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=4 m=0 fmt=0xfa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=4 m=1 fmt=0x1630fa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=4 m=2 fmt=0x4d80fa type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=5 m=0 fmt=0xfa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=5 m=1 fmt=0x1630fa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=5 m=2 fmt=0x4d80fa type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=6 f=0 c=1 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=1 dim=6 m=1 fmt=0x1630fa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=1 dim=6 m=2 fmt=0x4d80fa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=1 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=6 f=0 c=1 dim=7 m=1 fmt=0x1630fa type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=6 f=0 c=1 dim=7 m=2 fmt=0x4d80fa type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=6 f=0 c=1 dim=8 m=0 fmt=0xfa type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=8 m=1 fmt=0x1630fa type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=8 m=2 fmt=0x4d80fa type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=6 f=0 c=1 dim=9 m=0 fmt=0xfa type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=6 f=0 c=1 dim=9 m=1 fmt=0x1630fa type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=6 f=0 c=1 dim=9 m=2 fmt=0x4d80fa type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=6 f=0 c=1 dim=10 m=0 fmt=0xfa type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=6 f=0 c=1 dim=10 m=1 fmt=0x1630fa type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=6 f=0 c=1 dim=10 m=2 fmt=0x4d80fa type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=6 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=6 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=6 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=6 f=0 c=1 dim=0 hr=0x80070057
+UAV r=6 f=0 c=1 dim=2 fmt=0x17 type=2 mip=1+1 slice=0+1
+UAV r=6 f=0 c=1 dim=3 fmt=0x17 type=3 mip=1+1 slice=2+3
+UAV r=6 f=0 c=1 dim=4 fmt=0x17 type=2 mip=1+1 slice=0+1
+UAV r=6 f=0 c=1 dim=5 fmt=0x17 type=3 mip=1+1 slice=2+3
+UAV r=6 f=0 c=1 dim=6 hr=0x80070057
+UAV r=6 f=0 c=1 dim=8 fmt=0x17 type=7 mip=1+1 slice=0+1
+UAV r=6 f=0 c=1 dim=99 hr=0x80070057
+RTV r=6 f=0 c=1 dim=0 hr=0x80070057
+RTV r=6 f=0 c=1 dim=2 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=3 fmt=0x17 type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=4 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=5 fmt=0x17 type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=7 fmt=0x17 type=8 mip=0+1 slice=2+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=8 fmt=0x17 type=7 mip=1+1 slice=0+1 size=32x16 plane=2 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=1 dim=99 hr=0x80070057
+DSV r=6 f=0 c=1 dim=0 hr=0x80070057
+DSV r=6 f=0 c=1 dim=1 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=2 fmt=0x17 type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=3 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=4 fmt=0x17 type=3 mip=1+1 slice=2+3 size=32x16 plane=0 layers=3 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=6 fmt=0x17 type=8 mip=0+1 slice=2+3 size=64x32 plane=0 layers=3 flags=1 tex=false
+DSV r=6 f=0 c=1 dim=99 hr=0x80070057
+SRV r=6 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=2 dim=2 m=0 fmt=0xfa type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=6 f=0 c=2 dim=3 m=0 fmt=0xfa type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=6 f=0 c=2 dim=4 m=0 fmt=0xfa type=2 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=6 f=0 c=2 dim=5 m=0 fmt=0xfa type=3 mip=5+0 slice=7+0 clamp=-5.0
+SRV r=6 f=0 c=2 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=2 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=7+0 clamp=0.0
+SRV r=6 f=0 c=2 dim=8 m=0 fmt=0xfa type=7 mip=5+0 slice=0+1 clamp=-5.0
+SRV r=6 f=0 c=2 dim=9 m=0 fmt=0xfa type=5 mip=5+0 slice=0+6 clamp=-5.0
+SRV r=6 f=0 c=2 dim=10 m=0 fmt=0xfa type=6 mip=5+0 slice=0+0 clamp=-5.0
+SRV r=6 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=6 f=0 c=2 dim=0 hr=0x80070057
+UAV r=6 f=0 c=2 dim=2 fmt=0x17 type=2 mip=5+1 slice=0+1
+UAV r=6 f=0 c=2 dim=3 fmt=0x17 type=3 mip=5+1 slice=7+0
+UAV r=6 f=0 c=2 dim=4 fmt=0x17 type=2 mip=5+1 slice=0+1
+UAV r=6 f=0 c=2 dim=5 fmt=0x17 type=3 mip=5+1 slice=7+0
+UAV r=6 f=0 c=2 dim=6 hr=0x80070057
+UAV r=6 f=0 c=2 dim=8 fmt=0x17 type=7 mip=5+1 slice=0+1
+UAV r=6 f=0 c=2 dim=99 hr=0x80070057
+RTV r=6 f=0 c=2 dim=0 hr=0x80070057
+RTV r=6 f=0 c=2 dim=2 fmt=0x17 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=3 fmt=0x17 type=3 mip=5+1 slice=7+3 size=2x1 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=4 fmt=0x17 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=5 fmt=0x17 type=3 mip=5+1 slice=7+3 size=2x1 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=7 fmt=0x17 type=8 mip=0+1 slice=7+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=8 fmt=0x17 type=7 mip=5+1 slice=0+1 size=2x1 plane=7 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=2 dim=99 hr=0x80070057
+DSV r=6 f=0 c=2 dim=0 hr=0x80070057
+DSV r=6 f=0 c=2 dim=1 fmt=0x17 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=2 fmt=0x17 type=3 mip=5+1 slice=7+3 size=2x1 plane=0 layers=3 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=3 fmt=0x17 type=2 mip=5+1 slice=0+1 size=2x1 plane=0 layers=0 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=4 fmt=0x17 type=3 mip=5+1 slice=7+3 size=2x1 plane=0 layers=3 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=6 fmt=0x17 type=8 mip=0+1 slice=7+3 size=64x32 plane=0 layers=3 flags=2 tex=false
+DSV r=6 f=0 c=2 dim=99 hr=0x80070057
+SRV r=6 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=3 dim=2 m=0 fmt=0xfa type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=3 dim=3 m=0 fmt=0xfa type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=6 f=0 c=3 dim=4 m=0 fmt=0xfa type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=3 dim=5 m=0 fmt=0xfa type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=6 f=0 c=3 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=3 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=6 f=0 c=3 dim=8 m=0 fmt=0xfa type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=3 dim=9 m=0 fmt=0xfa type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=3 dim=10 m=0 fmt=0xfa type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=6 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=6 f=0 c=3 dim=0 hr=0x80070057
+UAV r=6 f=0 c=3 dim=2 fmt=0x17 type=2 mip=9+1 slice=0+1
+UAV r=6 f=0 c=3 dim=3 fmt=0x17 type=3 mip=9+1 slice=20+0
+UAV r=6 f=0 c=3 dim=4 fmt=0x17 type=2 mip=9+1 slice=0+1
+UAV r=6 f=0 c=3 dim=5 fmt=0x17 type=3 mip=9+1 slice=20+0
+UAV r=6 f=0 c=3 dim=6 hr=0x80070057
+UAV r=6 f=0 c=3 dim=8 fmt=0x17 type=7 mip=9+1 slice=0+1
+UAV r=6 f=0 c=3 dim=99 hr=0x80070057
+RTV r=6 f=0 c=3 dim=0 hr=0x80070057
+RTV r=6 f=0 c=3 dim=2 fmt=0x17 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=3 fmt=0x17 type=3 mip=9+1 slice=20+3 size=1x1 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=4 fmt=0x17 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=5 fmt=0x17 type=3 mip=9+1 slice=20+3 size=1x1 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=7 fmt=0x17 type=8 mip=0+1 slice=20+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=8 fmt=0x17 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=3 dim=99 hr=0x80070057
+DSV r=6 f=0 c=3 dim=0 hr=0x80070057
+DSV r=6 f=0 c=3 dim=1 fmt=0x17 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=2 fmt=0x17 type=3 mip=9+1 slice=20+3 size=1x1 plane=0 layers=3 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=3 fmt=0x17 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=4 fmt=0x17 type=3 mip=9+1 slice=20+3 size=1x1 plane=0 layers=3 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=6 fmt=0x17 type=8 mip=0+1 slice=20+3 size=64x32 plane=0 layers=3 flags=3 tex=false
+DSV r=6 f=0 c=3 dim=99 hr=0x80070057
+SRV r=6 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=4 dim=2 m=0 fmt=0xfa type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=6 f=0 c=4 dim=3 m=0 fmt=0xfa type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=6 f=0 c=4 dim=4 m=0 fmt=0xfa type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=6 f=0 c=4 dim=5 m=0 fmt=0xfa type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=6 f=0 c=4 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=4 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=6 f=0 c=4 dim=8 m=0 fmt=0xfa type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=6 f=0 c=4 dim=9 m=0 fmt=0xfa type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=6 f=0 c=4 dim=10 m=0 fmt=0xfa type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=6 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=6 f=0 c=4 dim=0 hr=0x80070057
+UAV r=6 f=0 c=4 dim=2 fmt=0x17 type=2 mip=3+1 slice=0+1
+UAV r=6 f=0 c=4 dim=3 fmt=0x17 type=3 mip=3+1 slice=1+0
+UAV r=6 f=0 c=4 dim=4 fmt=0x17 type=2 mip=3+1 slice=0+1
+UAV r=6 f=0 c=4 dim=5 fmt=0x17 type=3 mip=3+1 slice=1+0
+UAV r=6 f=0 c=4 dim=6 hr=0x80070057
+UAV r=6 f=0 c=4 dim=8 fmt=0x17 type=7 mip=3+1 slice=0+1
+UAV r=6 f=0 c=4 dim=99 hr=0x80070057
+RTV r=6 f=0 c=4 dim=0 hr=0x80070057
+RTV r=6 f=0 c=4 dim=2 fmt=0x17 type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=3 fmt=0x17 type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=4 fmt=0x17 type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=5 fmt=0x17 type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=7 fmt=0x17 type=8 mip=0+1 slice=1+0 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=8 fmt=0x17 type=7 mip=3+1 slice=0+1 size=8x4 plane=1 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=4 dim=99 hr=0x80070057
+DSV r=6 f=0 c=4 dim=0 hr=0x80070057
+DSV r=6 f=0 c=4 dim=1 fmt=0x17 type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=2 fmt=0x17 type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=3 fmt=0x17 type=2 mip=3+1 slice=0+1 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=4 fmt=0x17 type=3 mip=3+1 slice=1+0 size=8x4 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=6 fmt=0x17 type=8 mip=0+1 slice=1+0 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=0 c=4 dim=99 hr=0x80070057
+SRV r=6 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=6 f=0 c=5 dim=2 m=0 fmt=0xfa type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=3 m=0 fmt=0xfa type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=4 m=0 fmt=0xfa type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=5 m=0 fmt=0xfa type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=8 m=0 fmt=0xfa type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=6 f=0 c=5 dim=9 m=0 fmt=0xfa type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=5 dim=10 m=0 fmt=0xfa type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=6 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=6 f=0 c=5 dim=0 hr=0x80070057
+UAV r=6 f=0 c=5 dim=2 fmt=0x17 type=2 mip=1+1 slice=0+1
+UAV r=6 f=0 c=5 dim=3 fmt=0x17 type=3 mip=1+1 slice=0+1
+UAV r=6 f=0 c=5 dim=4 fmt=0x17 type=2 mip=1+1 slice=0+1
+UAV r=6 f=0 c=5 dim=5 fmt=0x17 type=3 mip=1+1 slice=0+1
+UAV r=6 f=0 c=5 dim=6 hr=0x80070057
+UAV r=6 f=0 c=5 dim=8 fmt=0x17 type=7 mip=1+1 slice=0+1
+UAV r=6 f=0 c=5 dim=99 hr=0x80070057
+RTV r=6 f=0 c=5 dim=0 hr=0x80070057
+RTV r=6 f=0 c=5 dim=2 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=3 fmt=0x17 type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=4 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=5 fmt=0x17 type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=6 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=7 fmt=0x17 type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=8 fmt=0x17 type=7 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=6 f=0 c=5 dim=99 hr=0x80070057
+DSV r=6 f=0 c=5 dim=0 hr=0x80070057
+DSV r=6 f=0 c=5 dim=1 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=2 fmt=0x17 type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=3 fmt=0x17 type=2 mip=1+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=4 fmt=0x17 type=3 mip=1+1 slice=0+1 size=32x16 plane=0 layers=1 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=5 fmt=0x17 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=6 fmt=0x17 type=8 mip=0+1 slice=0+1 size=64x32 plane=0 layers=1 flags=1 tex=false
+DSV r=6 f=0 c=5 dim=99 hr=0x80070057
+SRV r=6 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=6 f=1 c=0 dim=2 m=0 fmt=0xfa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=1 c=0 dim=3 m=0 fmt=0xfa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=1 c=0 dim=4 m=0 fmt=0xfa type=2 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=1 c=0 dim=5 m=0 fmt=0xfa type=3 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=1 c=0 dim=6 m=0 fmt=0xfa type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=1 c=0 dim=7 m=0 fmt=0xfa type=8 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=1 c=0 dim=8 m=0 fmt=0xfa type=7 mip=0+1 slice=0+1 clamp=0.0
+SRV r=6 f=1 c=0 dim=9 m=0 fmt=0xfa type=5 mip=0+1 slice=0+6 clamp=0.0
+SRV r=6 f=1 c=0 dim=10 m=0 fmt=0xfa type=6 mip=0+1 slice=0+3 clamp=0.0
+SRV r=6 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=6 f=1 c=0 dim=0 hr=0x80070057
+UAV r=6 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=6 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+3 atomic fmt=0x35 type=3 mip=0+1 slice=0+3
+UAV r=6 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=6 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+3 atomic fmt=0x35 type=3 mip=0+1 slice=0+3
+UAV r=6 f=1 c=0 dim=6 hr=0x80070057
+UAV r=6 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=6 f=1 c=0 dim=99 hr=0x80070057
+RTV r=6 f=1 c=0 dim=0 hr=0x80070057
+RTV r=6 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=64x32 plane=0 layers=3 flags=0 tex=false
+RTV r=6 f=1 c=0 dim=99 hr=0x80070057
+DSV r=6 f=1 c=0 dim=0 hr=0x80070057
+DSV r=6 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=64x32 plane=0 layers=0 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+3 size=64x32 plane=0 layers=3 flags=0 tex=false
+DSV r=6 f=1 c=0 dim=99 hr=0x80070057
+SRV r=6 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=6 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=6 f=2 c=0 dim=0 hr=0x80004005
+UAV r=6 f=2 c=0 dim=2 hr=0x80004005
+UAV r=6 f=2 c=0 dim=3 hr=0x80004005
+UAV r=6 f=2 c=0 dim=4 hr=0x80004005
+UAV r=6 f=2 c=0 dim=5 hr=0x80004005
+UAV r=6 f=2 c=0 dim=6 hr=0x80004005
+UAV r=6 f=2 c=0 dim=8 hr=0x80004005
+UAV r=6 f=2 c=0 dim=99 hr=0x80004005
+RTV r=6 f=2 c=0 dim=0 hr=0x80004005
+RTV r=6 f=2 c=0 dim=2 hr=0x80004005
+RTV r=6 f=2 c=0 dim=3 hr=0x80004005
+RTV r=6 f=2 c=0 dim=4 hr=0x80004005
+RTV r=6 f=2 c=0 dim=5 hr=0x80004005
+RTV r=6 f=2 c=0 dim=6 hr=0x80004005
+RTV r=6 f=2 c=0 dim=7 hr=0x80004005
+RTV r=6 f=2 c=0 dim=8 hr=0x80004005
+RTV r=6 f=2 c=0 dim=99 hr=0x80004005
+DSV r=6 f=2 c=0 dim=0 hr=0x80004005
+DSV r=6 f=2 c=0 dim=1 hr=0x80004005
+DSV r=6 f=2 c=0 dim=2 hr=0x80004005
+DSV r=6 f=2 c=0 dim=3 hr=0x80004005
+DSV r=6 f=2 c=0 dim=4 hr=0x80004005
+DSV r=6 f=2 c=0 dim=5 hr=0x80004005
+DSV r=6 f=2 c=0 dim=6 hr=0x80004005
+DSV r=6 f=2 c=0 dim=99 hr=0x80004005
+SRV r=7 f=0 c=0 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=0 dim=0 m=1 hr=0x80070057
+SRV r=7 f=0 c=0 dim=0 m=2 hr=0x80070057
+SRV r=7 f=0 c=0 dim=2 m=0 fmt=0x46 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=2 m=1 fmt=0x163046 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=2 m=2 fmt=0x4d8046 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=3 m=0 fmt=0x46 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=3 m=1 fmt=0x163046 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=3 m=2 fmt=0x4d8046 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=4 m=0 fmt=0x46 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=4 m=1 fmt=0x163046 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=4 m=2 fmt=0x4d8046 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=5 m=0 fmt=0x46 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=5 m=1 fmt=0x163046 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=5 m=2 fmt=0x4d8046 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=8 m=0 fmt=0x46 type=7 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=8 m=1 fmt=0x163046 type=7 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=8 m=2 fmt=0x4d8046 type=7 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=0 dim=9 m=0 fmt=0x46 type=5 mip=0+6 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=0 dim=9 m=1 fmt=0x163046 type=5 mip=0+6 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=0 dim=9 m=2 fmt=0x4d8046 type=5 mip=0+6 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=0 dim=10 m=0 fmt=0x46 type=6 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=10 m=1 fmt=0x163046 type=6 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=10 m=2 fmt=0x4d8046 type=6 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=0 c=0 dim=99 m=0 hr=0x80070057
+SRV r=7 f=0 c=0 dim=99 m=1 hr=0x80070057
+SRV r=7 f=0 c=0 dim=99 m=2 hr=0x80070057
+UAV r=7 f=0 c=0 dim=0 hr=0x80070057
+UAV r=7 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=7 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+8
+UAV r=7 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1
+UAV r=7 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+8
+UAV r=7 f=0 c=0 dim=6 hr=0x80070057
+UAV r=7 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1
+UAV r=7 f=0 c=0 dim=99 hr=0x80070057
+RTV r=7 f=0 c=0 dim=0 hr=0x80070057
+RTV r=7 f=0 c=0 dim=2 fmt=0x46 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=3 fmt=0x46 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=4 fmt=0x46 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=5 fmt=0x46 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=8 fmt=0x46 type=7 mip=0+1 slice=0+1 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=0 dim=99 hr=0x80070057
+DSV r=7 f=0 c=0 dim=0 hr=0x80070057
+DSV r=7 f=0 c=0 dim=1 fmt=0x46 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=2 fmt=0x46 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=3 fmt=0x46 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=4 fmt=0x46 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=0 c=0 dim=99 hr=0x80070057
+SRV r=7 f=0 c=1 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=1 dim=0 m=1 hr=0x80070057
+SRV r=7 f=0 c=1 dim=0 m=2 hr=0x80070057
+SRV r=7 f=0 c=1 dim=2 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=2 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=2 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=3 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=3 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=3 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=4 m=0 fmt=0x46 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=4 m=1 fmt=0x163046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=4 m=2 fmt=0x4d8046 type=2 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=5 m=0 fmt=0x46 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=5 m=1 fmt=0x163046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=5 m=2 fmt=0x4d8046 type=3 mip=1+2 slice=2+3 clamp=1.0
+SRV r=7 f=0 c=1 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=1 dim=6 m=1 fmt=0x163046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=1 dim=6 m=2 fmt=0x4d8046 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=1 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=7 f=0 c=1 dim=7 m=1 fmt=0x163046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=7 f=0 c=1 dim=7 m=2 fmt=0x4d8046 type=8 mip=0+1 slice=2+3 clamp=0.0
+SRV r=7 f=0 c=1 dim=8 m=0 fmt=0x46 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=8 m=1 fmt=0x163046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=8 m=2 fmt=0x4d8046 type=7 mip=1+2 slice=0+1 clamp=1.0
+SRV r=7 f=0 c=1 dim=9 m=0 fmt=0x46 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=7 f=0 c=1 dim=9 m=1 fmt=0x163046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=7 f=0 c=1 dim=9 m=2 fmt=0x4d8046 type=5 mip=1+2 slice=0+6 clamp=1.0
+SRV r=7 f=0 c=1 dim=10 m=0 fmt=0x46 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=7 f=0 c=1 dim=10 m=1 fmt=0x163046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=7 f=0 c=1 dim=10 m=2 fmt=0x4d8046 type=6 mip=1+2 slice=0+18 clamp=1.0
+SRV r=7 f=0 c=1 dim=99 m=0 hr=0x80070057
+SRV r=7 f=0 c=1 dim=99 m=1 hr=0x80070057
+SRV r=7 f=0 c=1 dim=99 m=2 hr=0x80070057
+UAV r=7 f=0 c=1 dim=0 hr=0x80070057
+UAV r=7 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=7 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=7 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=7 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3
+UAV r=7 f=0 c=1 dim=6 hr=0x80070057
+UAV r=7 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=7 f=0 c=1 dim=99 hr=0x80070057
+RTV r=7 f=0 c=1 dim=0 hr=0x80070057
+RTV r=7 f=0 c=1 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=3 fmt=0x46 type=3 mip=1+1 slice=2+3 size=16x8 plane=0 layers=3 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=5 fmt=0x46 type=3 mip=1+1 slice=2+3 size=16x8 plane=0 layers=3 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=7 fmt=0x46 type=8 mip=0+1 slice=2+3 size=32x16 plane=0 layers=3 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=16x8 plane=2 layers=3 flags=0 tex=false
+RTV r=7 f=0 c=1 dim=99 hr=0x80070057
+DSV r=7 f=0 c=1 dim=0 hr=0x80070057
+DSV r=7 f=0 c=1 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=2 fmt=0x46 type=3 mip=1+1 slice=2+3 size=16x8 plane=0 layers=3 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=4 fmt=0x46 type=3 mip=1+1 slice=2+3 size=16x8 plane=0 layers=3 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=6 fmt=0x46 type=8 mip=0+1 slice=2+3 size=32x16 plane=0 layers=3 flags=1 tex=false
+DSV r=7 f=0 c=1 dim=99 hr=0x80070057
+SRV r=7 f=0 c=2 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=2 dim=2 m=0 fmt=0x46 type=2 mip=5+1 slice=0+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=3 m=0 fmt=0x46 type=3 mip=5+1 slice=7+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=4 m=0 fmt=0x46 type=2 mip=5+1 slice=0+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=5 m=0 fmt=0x46 type=3 mip=5+1 slice=7+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=2 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=7+1 clamp=0.0
+SRV r=7 f=0 c=2 dim=8 m=0 fmt=0x46 type=7 mip=5+1 slice=0+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=9 m=0 fmt=0x46 type=5 mip=5+1 slice=0+6 clamp=-5.0
+SRV r=7 f=0 c=2 dim=10 m=0 fmt=0x46 type=6 mip=5+1 slice=0+1 clamp=-5.0
+SRV r=7 f=0 c=2 dim=99 m=0 hr=0x80070057
+UAV r=7 f=0 c=2 dim=0 hr=0x80070057
+UAV r=7 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=7 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+1
+UAV r=7 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1
+UAV r=7 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+1
+UAV r=7 f=0 c=2 dim=6 hr=0x80070057
+UAV r=7 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1
+UAV r=7 f=0 c=2 dim=99 hr=0x80070057
+RTV r=7 f=0 c=2 dim=0 hr=0x80070057
+RTV r=7 f=0 c=2 dim=2 fmt=0x46 type=2 mip=5+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=3 fmt=0x46 type=3 mip=5+1 slice=7+8 size=1x1 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=4 fmt=0x46 type=2 mip=5+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=5 fmt=0x46 type=3 mip=5+1 slice=7+8 size=1x1 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=7 fmt=0x46 type=8 mip=0+1 slice=7+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=8 fmt=0x46 type=7 mip=5+1 slice=0+1 size=1x1 plane=7 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=2 dim=99 hr=0x80070057
+DSV r=7 f=0 c=2 dim=0 hr=0x80070057
+DSV r=7 f=0 c=2 dim=1 fmt=0x46 type=2 mip=5+1 slice=0+1 size=1x1 plane=0 layers=0 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=2 fmt=0x46 type=3 mip=5+1 slice=7+8 size=1x1 plane=0 layers=8 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=3 fmt=0x46 type=2 mip=5+1 slice=0+1 size=1x1 plane=0 layers=0 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=4 fmt=0x46 type=3 mip=5+1 slice=7+8 size=1x1 plane=0 layers=8 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=6 fmt=0x46 type=8 mip=0+1 slice=7+8 size=32x16 plane=0 layers=8 flags=2 tex=false
+DSV r=7 f=0 c=2 dim=99 hr=0x80070057
+SRV r=7 f=0 c=3 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=3 dim=2 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=3 dim=3 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=7 f=0 c=3 dim=4 m=0 fmt=0x46 type=2 mip=9+0 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=3 dim=5 m=0 fmt=0x46 type=3 mip=9+0 slice=20+0 clamp=0.0
+SRV r=7 f=0 c=3 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=3 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=20+0 clamp=0.0
+SRV r=7 f=0 c=3 dim=8 m=0 fmt=0x46 type=7 mip=9+0 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=3 dim=9 m=0 fmt=0x46 type=5 mip=9+0 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=3 dim=10 m=0 fmt=0x46 type=6 mip=9+0 slice=0+0 clamp=0.0
+SRV r=7 f=0 c=3 dim=99 m=0 hr=0x80070057
+UAV r=7 f=0 c=3 dim=0 hr=0x80070057
+UAV r=7 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=7 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=7 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1
+UAV r=7 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+0
+UAV r=7 f=0 c=3 dim=6 hr=0x80070057
+UAV r=7 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1
+UAV r=7 f=0 c=3 dim=99 hr=0x80070057
+RTV r=7 f=0 c=3 dim=0 hr=0x80070057
+RTV r=7 f=0 c=3 dim=2 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=3 fmt=0x46 type=3 mip=9+1 slice=20+8 size=1x1 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=4 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=5 fmt=0x46 type=3 mip=9+1 slice=20+8 size=1x1 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=7 fmt=0x46 type=8 mip=0+1 slice=20+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=8 fmt=0x46 type=7 mip=9+1 slice=0+1 size=1x1 plane=20 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=3 dim=99 hr=0x80070057
+DSV r=7 f=0 c=3 dim=0 hr=0x80070057
+DSV r=7 f=0 c=3 dim=1 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=2 fmt=0x46 type=3 mip=9+1 slice=20+8 size=1x1 plane=0 layers=8 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=3 fmt=0x46 type=2 mip=9+1 slice=0+1 size=1x1 plane=0 layers=0 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=4 fmt=0x46 type=3 mip=9+1 slice=20+8 size=1x1 plane=0 layers=8 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=6 fmt=0x46 type=8 mip=0+1 slice=20+8 size=32x16 plane=0 layers=8 flags=3 tex=false
+DSV r=7 f=0 c=3 dim=99 hr=0x80070057
+SRV r=7 f=0 c=4 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=4 dim=2 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=7 f=0 c=4 dim=3 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=7 f=0 c=4 dim=4 m=0 fmt=0x46 type=2 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=7 f=0 c=4 dim=5 m=0 fmt=0x46 type=3 mip=3+0 slice=1+0 clamp=-4.0
+SRV r=7 f=0 c=4 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=4 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=1+0 clamp=0.0
+SRV r=7 f=0 c=4 dim=8 m=0 fmt=0x46 type=7 mip=3+0 slice=0+1 clamp=-4.0
+SRV r=7 f=0 c=4 dim=9 m=0 fmt=0x46 type=5 mip=3+0 slice=0+6 clamp=-4.0
+SRV r=7 f=0 c=4 dim=10 m=0 fmt=0x46 type=6 mip=3+0 slice=0+0 clamp=-4.0
+SRV r=7 f=0 c=4 dim=99 m=0 hr=0x80070057
+UAV r=7 f=0 c=4 dim=0 hr=0x80070057
+UAV r=7 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=7 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=7 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1
+UAV r=7 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0
+UAV r=7 f=0 c=4 dim=6 hr=0x80070057
+UAV r=7 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1
+UAV r=7 f=0 c=4 dim=99 hr=0x80070057
+RTV r=7 f=0 c=4 dim=0 hr=0x80070057
+RTV r=7 f=0 c=4 dim=2 fmt=0x46 type=2 mip=3+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=3 fmt=0x46 type=3 mip=3+1 slice=1+0 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=4 fmt=0x46 type=2 mip=3+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=5 fmt=0x46 type=3 mip=3+1 slice=1+0 size=4x2 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=7 fmt=0x46 type=8 mip=0+1 slice=1+0 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=8 fmt=0x46 type=7 mip=3+1 slice=0+1 size=4x2 plane=1 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=4 dim=99 hr=0x80070057
+DSV r=7 f=0 c=4 dim=0 hr=0x80070057
+DSV r=7 f=0 c=4 dim=1 fmt=0x46 type=2 mip=3+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=2 fmt=0x46 type=3 mip=3+1 slice=1+0 size=4x2 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=3 fmt=0x46 type=2 mip=3+1 slice=0+1 size=4x2 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=4 fmt=0x46 type=3 mip=3+1 slice=1+0 size=4x2 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=6 fmt=0x46 type=8 mip=0+1 slice=1+0 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=0 c=4 dim=99 hr=0x80070057
+SRV r=7 f=0 c=5 dim=0 m=0 hr=0x80070057
+SRV r=7 f=0 c=5 dim=2 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=3 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=4 m=0 fmt=0x46 type=2 mip=1+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=5 m=0 fmt=0x46 type=3 mip=1+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=6 m=0 fmt=0x46 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=7 m=0 fmt=0x46 type=8 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=8 m=0 fmt=0x46 type=7 mip=1+1 slice=0+1 clamp=0.0
+SRV r=7 f=0 c=5 dim=9 m=0 fmt=0x46 type=5 mip=1+1 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=5 dim=10 m=0 fmt=0x46 type=6 mip=1+1 slice=0+6 clamp=0.0
+SRV r=7 f=0 c=5 dim=99 m=0 hr=0x80070057
+UAV r=7 f=0 c=5 dim=0 hr=0x80070057
+UAV r=7 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=7 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=7 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1
+UAV r=7 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1
+UAV r=7 f=0 c=5 dim=6 hr=0x80070057
+UAV r=7 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1
+UAV r=7 f=0 c=5 dim=99 hr=0x80070057
+RTV r=7 f=0 c=5 dim=0 hr=0x80070057
+RTV r=7 f=0 c=5 dim=2 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=3 fmt=0x46 type=3 mip=1+1 slice=0+1 size=16x8 plane=0 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=4 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=5 fmt=0x46 type=3 mip=1+1 slice=0+1 size=16x8 plane=0 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=6 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=7 fmt=0x46 type=8 mip=0+1 slice=0+1 size=32x16 plane=0 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=8 fmt=0x46 type=7 mip=1+1 slice=0+1 size=16x8 plane=0 layers=1 flags=0 tex=false
+RTV r=7 f=0 c=5 dim=99 hr=0x80070057
+DSV r=7 f=0 c=5 dim=0 hr=0x80070057
+DSV r=7 f=0 c=5 dim=1 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=2 fmt=0x46 type=3 mip=1+1 slice=0+1 size=16x8 plane=0 layers=1 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=3 fmt=0x46 type=2 mip=1+1 slice=0+1 size=16x8 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=4 fmt=0x46 type=3 mip=1+1 slice=0+1 size=16x8 plane=0 layers=1 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=5 fmt=0x46 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=6 fmt=0x46 type=8 mip=0+1 slice=0+1 size=32x16 plane=0 layers=1 flags=1 tex=false
+DSV r=7 f=0 c=5 dim=99 hr=0x80070057
+SRV r=7 f=1 c=0 dim=0 m=0 hr=0x80070057
+SRV r=7 f=1 c=0 dim=2 m=0 fmt=0x37 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=1 c=0 dim=3 m=0 fmt=0x37 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=1 c=0 dim=4 m=0 fmt=0x37 type=2 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=1 c=0 dim=5 m=0 fmt=0x37 type=3 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=1 c=0 dim=6 m=0 fmt=0x37 type=4 mip=0+1 slice=0+1 clamp=0.0
+SRV r=7 f=1 c=0 dim=7 m=0 fmt=0x37 type=8 mip=0+1 slice=0+8 clamp=0.0
+SRV r=7 f=1 c=0 dim=8 m=0 fmt=0x37 type=7 mip=0+6 slice=0+1 clamp=0.0
+SRV r=7 f=1 c=0 dim=9 m=0 fmt=0x37 type=5 mip=0+6 slice=0+6 clamp=0.0
+SRV r=7 f=1 c=0 dim=10 m=0 fmt=0x37 type=6 mip=0+6 slice=0+8 clamp=0.0
+SRV r=7 f=1 c=0 dim=99 m=0 hr=0x80070057
+UAV r=7 f=1 c=0 dim=0 hr=0x80070057
+UAV r=7 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=7 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+8 atomic fmt=0x35 type=3 mip=0+1 slice=0+8
+UAV r=7 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 atomic fmt=0x35 type=2 mip=0+1 slice=0+1
+UAV r=7 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+8 atomic fmt=0x35 type=3 mip=0+1 slice=0+8
+UAV r=7 f=1 c=0 dim=6 hr=0x80070057
+UAV r=7 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 atomic fmt=0x35 type=7 mip=0+1 slice=0+1
+UAV r=7 f=1 c=0 dim=99 hr=0x80070057
+RTV r=7 f=1 c=0 dim=0 hr=0x80070057
+RTV r=7 f=1 c=0 dim=2 fmt=0x37 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=3 fmt=0x37 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=4 fmt=0x37 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=5 fmt=0x37 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=6 fmt=0x37 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=7 fmt=0x37 type=8 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=8 fmt=0x37 type=7 mip=0+1 slice=0+1 size=32x16 plane=0 layers=8 flags=0 tex=false
+RTV r=7 f=1 c=0 dim=99 hr=0x80070057
+DSV r=7 f=1 c=0 dim=0 hr=0x80070057
+DSV r=7 f=1 c=0 dim=1 fmt=0x37 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=2 fmt=0x37 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=3 fmt=0x37 type=2 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=4 fmt=0x37 type=3 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=5 fmt=0x37 type=4 mip=0+1 slice=0+1 size=32x16 plane=0 layers=0 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=6 fmt=0x37 type=8 mip=0+1 slice=0+8 size=32x16 plane=0 layers=8 flags=0 tex=false
+DSV r=7 f=1 c=0 dim=99 hr=0x80070057
+SRV r=7 f=2 c=0 dim=0 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=2 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=3 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=4 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=5 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=6 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=7 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=8 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=9 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=10 m=0 hr=0x80004005
+SRV r=7 f=2 c=0 dim=99 m=0 hr=0x80004005
+UAV r=7 f=2 c=0 dim=0 hr=0x80004005
+UAV r=7 f=2 c=0 dim=2 hr=0x80004005
+UAV r=7 f=2 c=0 dim=3 hr=0x80004005
+UAV r=7 f=2 c=0 dim=4 hr=0x80004005
+UAV r=7 f=2 c=0 dim=5 hr=0x80004005
+UAV r=7 f=2 c=0 dim=6 hr=0x80004005
+UAV r=7 f=2 c=0 dim=8 hr=0x80004005
+UAV r=7 f=2 c=0 dim=99 hr=0x80004005
+RTV r=7 f=2 c=0 dim=0 hr=0x80004005
+RTV r=7 f=2 c=0 dim=2 hr=0x80004005
+RTV r=7 f=2 c=0 dim=3 hr=0x80004005
+RTV r=7 f=2 c=0 dim=4 hr=0x80004005
+RTV r=7 f=2 c=0 dim=5 hr=0x80004005
+RTV r=7 f=2 c=0 dim=6 hr=0x80004005
+RTV r=7 f=2 c=0 dim=7 hr=0x80004005
+RTV r=7 f=2 c=0 dim=8 hr=0x80004005
+RTV r=7 f=2 c=0 dim=99 hr=0x80004005
+DSV r=7 f=2 c=0 dim=0 hr=0x80004005
+DSV r=7 f=2 c=0 dim=1 hr=0x80004005
+DSV r=7 f=2 c=0 dim=2 hr=0x80004005
+DSV r=7 f=2 c=0 dim=3 hr=0x80004005
+DSV r=7 f=2 c=0 dim=4 hr=0x80004005
+DSV r=7 f=2 c=0 dim=5 hr=0x80004005
+DSV r=7 f=2 c=0 dim=6 hr=0x80004005
+DSV r=7 f=2 c=0 dim=99 hr=0x80004005

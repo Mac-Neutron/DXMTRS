@@ -1179,3 +1179,6 @@ pub const fn cpu_placement_flag(is_32bit: bool) -> BufferAllocationFlags {
         BufferAllocationFlags::empty()
     }
 }
+
+#[cfg(test)]
+mod tests;

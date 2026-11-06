@@ -6,7 +6,7 @@ use std::sync::Arc;
 use dxmt_core::{
     format::MTL_DXGI_FORMAT_BC,
     resource::{
-        Texture, TextureAllocationFlags, TextureViewDescriptor,
+        Texture, TextureAllocationFlags, TextureViewDescriptor, TextureViewKey,
         dims::{mip_extent, mip_extent_wrapping},
     },
 };
@@ -589,25 +589,158 @@ pub unsafe fn create_srv(
         v
     };
 
+    let (view, clamp) = match srv_view(&resource.desc, resource.texture.as_deref(), &view_desc) {
+        Ok(v) => v,
+        Err(hr) => return hr,
+    };
+    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
+    unsafe {
+        crate::descriptor_heap::write_srv_texture(
+            descriptor,
+            resource.texture.as_deref(),
+            view,
+            clamp,
+        )
+    }
+}
+
+/// `MTLD3D12Texture::CreateUnorderedAccessView` (`d3d12_texture.cpp:581-676`).
+///
+/// # Safety
+///
+/// `counter` is unused; `desc` is null or points to a readable `D3D12_UNORDERED_ACCESS_VIEW_DESC`.
+pub unsafe fn create_uav(
+    resource: &Resource,
+    _counter: *mut c_void,
+    desc: *const c_void,
+    descriptor: D3d12CpuDescriptorHandle,
+) -> Hresult {
+    crate::scope!("texture.CreateUnorderedAccessView");
+    let view_desc = if desc.is_null() {
+        match super::extract_entire_uav(&resource.desc) {
+            Ok(v) => v,
+            Err(hr) => return hr,
+        }
+    } else {
+        // SAFETY: `desc` is non-null and points to an `UnorderedAccessViewDesc`.
+        let mut v = unsafe { ptr::read(desc.cast::<UnorderedAccessViewDesc>()) };
+        if v.format == 0 {
+            v.format = resource.desc.format;
+        }
+        v
+    };
+
+    let (view, atomic_view) = match uav_views(&resource.desc, &view_desc) {
+        Ok(v) => v,
+        Err(hr) => return hr,
+    };
+    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
+    unsafe {
+        crate::descriptor_heap::write_uav_texture(
+            descriptor,
+            resource.texture.clone(),
+            view,
+            atomic_view,
+        )
+    }
+}
+
+/// `MTLD3D12Texture::CreateRenderTargetView` (`d3d12_texture.cpp:679-796`).
+///
+/// # Safety
+///
+/// `desc` is null or points to a readable `D3D12_RENDER_TARGET_VIEW_DESC`.
+pub unsafe fn create_rtv(
+    resource: &Resource,
+    desc: *const c_void,
+    descriptor: D3d12CpuDescriptorHandle,
+) -> Hresult {
+    crate::scope!("texture.CreateRenderTargetView");
+    let view_desc = if desc.is_null() {
+        match super::extract_entire_rtv(&resource.desc) {
+            Ok(v) => v,
+            Err(hr) => return hr,
+        }
+    } else {
+        // SAFETY: `desc` is non-null and points to a `RenderTargetViewDesc`.
+        let mut v = unsafe { ptr::read(desc.cast::<RenderTargetViewDesc>()) };
+        if v.format == 0 {
+            v.format = resource.desc.format;
+        }
+        v
+    };
+
+    let rt_desc = match rtv_target(&resource.desc, resource.texture.as_ref(), &view_desc) {
+        Ok(rt) => rt,
+        Err(hr) => return hr,
+    };
+    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
+    unsafe { crate::descriptor_heap::write_rtv(descriptor, rt_desc) }
+}
+
+/// `MTLD3D12Texture::CreateDepthStencilView` (`d3d12_texture.cpp:799-899`).
+///
+/// # Safety
+///
+/// `desc` is null or points to a readable `D3D12_DEPTH_STENCIL_VIEW_DESC`.
+pub unsafe fn create_dsv(
+    resource: &Resource,
+    desc: *const c_void,
+    descriptor: D3d12CpuDescriptorHandle,
+) -> Hresult {
+    crate::scope!("texture.CreateDepthStencilView");
+    let view_desc = if desc.is_null() {
+        match super::extract_entire_dsv(&resource.desc) {
+            Ok(v) => v,
+            Err(hr) => return hr,
+        }
+    } else {
+        // SAFETY: `desc` is non-null and points to a `DepthStencilViewDesc`.
+        let mut v = unsafe { ptr::read(desc.cast::<DepthStencilViewDesc>()) };
+        if v.format == 0 {
+            v.format = resource.desc.format;
+        }
+        v
+    };
+
+    let rt_desc = match dsv_target(&resource.desc, resource.texture.as_ref(), &view_desc) {
+        Ok(rt) => rt,
+        Err(hr) => return hr,
+    };
+    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
+    unsafe { crate::descriptor_heap::write_dsv(descriptor, rt_desc) }
+}
+
+/// The Metal view and LOD clamp of a texture SRV `view_desc` describes (format already filled).
+///
+/// # Errors
+///
+/// The format's `HRESULT` when Metal has no counterpart, `E_INVALIDARG` for a buffer or unknown
+/// dimension.
+pub fn srv_view(
+    desc: &ResourceDesc,
+    texture: Option<&Texture>,
+    view_desc: &ShaderResourceViewDesc,
+) -> Result<(TextureViewKey, f32), Hresult> {
     let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
-        return hr;
+        return Err(hr);
     }
 
     let mut format = encode_component_mapping(
         view_desc.shader_4_component_mapping,
         metal_format.pixel_format,
     );
-    let tex_pf = resource.texture.as_ref().map_or_else(
-        || super::resource_pixel_format(&resource.desc),
+    let tex_pf = texture.map_or_else(
+        || super::resource_pixel_format(desc),
         |t| t.info().pixel_format,
     );
     if tex_pf == WMT_PIXEL_FORMAT_DEPTH32_FLOAT || tex_pf == WMT_PIXEL_FORMAT_DEPTH16_UNORM {
         format = encode_component_mapping(view_desc.shader_4_component_mapping, tex_pf);
     }
 
-    let mip_levels = u32::from(resource.desc.mip_levels);
-    let depth_or_array = u32::from(resource.desc.depth_or_array_size);
+    let mip_levels = u32::from(desc.mip_levels);
+    let depth_or_array = u32::from(desc.depth_or_array_size);
     let mut min_lod = 0.0f32;
     let (texture_type, first_mip, mip_count, first_slice, array_size) =
         match view_desc.view_dimension {
@@ -738,7 +871,7 @@ pub unsafe fn create_srv(
                 };
                 (WMT_TEXTURE_TYPE3D, v.most_detailed_mip, count, 0, 1)
             }
-            _ => return E_INVALIDARG,
+            _ => return Err(E_INVALIDARG),
         };
 
     let view = TextureViewDescriptor {
@@ -751,49 +884,27 @@ pub unsafe fn create_srv(
     }
     .key();
     let clamp = i32_to_f32(f32_to_i32(min_lod).wrapping_sub((first_mip & 0xf).cast_signed()));
-    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
-    unsafe {
-        crate::descriptor_heap::write_srv_texture(
-            descriptor,
-            resource.texture.as_deref(),
-            view,
-            clamp,
-        )
-    }
+    Ok((view, clamp))
 }
 
-/// `MTLD3D12Texture::CreateUnorderedAccessView` (`d3d12_texture.cpp:581-676`).
+/// The Metal view of a texture UAV `view_desc` describes (format already filled).
 ///
-/// # Safety
+/// An `R32Float` view also has an `R32Uint` twin, which atomics use.
 ///
-/// `counter` is unused; `desc` is null or points to a readable `D3D12_UNORDERED_ACCESS_VIEW_DESC`.
-pub unsafe fn create_uav(
-    resource: &Resource,
-    _counter: *mut c_void,
-    desc: *const c_void,
-    descriptor: D3d12CpuDescriptorHandle,
-) -> Hresult {
-    crate::scope!("texture.CreateUnorderedAccessView");
-    let view_desc = if desc.is_null() {
-        match super::extract_entire_uav(&resource.desc) {
-            Ok(v) => v,
-            Err(hr) => return hr,
-        }
-    } else {
-        // SAFETY: `desc` is non-null and points to an `UnorderedAccessViewDesc`.
-        let mut v = unsafe { ptr::read(desc.cast::<UnorderedAccessViewDesc>()) };
-        if v.format == 0 {
-            v.format = resource.desc.format;
-        }
-        v
-    };
-
+/// # Errors
+///
+/// The format's `HRESULT` when Metal has no counterpart, `E_INVALIDARG` for a buffer or unknown
+/// dimension.
+pub fn uav_views(
+    desc: &ResourceDesc,
+    view_desc: &UnorderedAccessViewDesc,
+) -> Result<(TextureViewKey, Option<TextureViewKey>), Hresult> {
     let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
-        return hr;
+        return Err(hr);
     }
 
-    let depth_or_array = u32::from(resource.desc.depth_or_array_size);
+    let depth_or_array = u32::from(desc.depth_or_array_size);
     let (texture_type, first_mip, first_slice, array_size) = match view_desc.view_dimension {
         D3D12_UAV_DIMENSION_TEXTURE1D => {
             // SAFETY: `view_dimension == D3D12_UAV_DIMENSION_TEXTURE1D` selects `texture_1d`.
@@ -843,7 +954,7 @@ pub unsafe fn create_uav(
             }
             (WMT_TEXTURE_TYPE3D, v.mip_slice, 0, 1)
         }
-        _ => return E_INVALIDARG,
+        _ => return Err(E_INVALIDARG),
     };
 
     let view = TextureViewDescriptor {
@@ -866,51 +977,27 @@ pub unsafe fn create_uav(
         }
         .key()
     });
-    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
-    unsafe {
-        crate::descriptor_heap::write_uav_texture(
-            descriptor,
-            resource.texture.clone(),
-            view,
-            atomic_view,
-        )
-    }
+    Ok((view, atomic_view))
 }
 
-/// `MTLD3D12Texture::CreateRenderTargetView` (`d3d12_texture.cpp:679-796`).
+/// The render-pass attachment a texture RTV `view_desc` describes (format already filled).
 ///
-/// # Safety
+/// # Errors
 ///
-/// `desc` is null or points to a readable `D3D12_RENDER_TARGET_VIEW_DESC`.
-pub unsafe fn create_rtv(
-    resource: &Resource,
-    desc: *const c_void,
-    descriptor: D3d12CpuDescriptorHandle,
-) -> Hresult {
-    crate::scope!("texture.CreateRenderTargetView");
-    let view_desc = if desc.is_null() {
-        match super::extract_entire_rtv(&resource.desc) {
-            Ok(v) => v,
-            Err(hr) => return hr,
-        }
-    } else {
-        // SAFETY: `desc` is non-null and points to a `RenderTargetViewDesc`.
-        let mut v = unsafe { ptr::read(desc.cast::<RenderTargetViewDesc>()) };
-        if v.format == 0 {
-            v.format = resource.desc.format;
-        }
-        v
-    };
-
+/// The format's `HRESULT` when Metal has no counterpart, `E_INVALIDARG` for a buffer or unknown
+/// dimension.
+pub fn rtv_target(
+    desc: &ResourceDesc,
+    texture: Option<&Arc<Texture>>,
+    view_desc: &RenderTargetViewDesc,
+) -> Result<RenderTargetDesc, Hresult> {
     let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
-        return hr;
+        return Err(hr);
     }
 
-    let tex_array_len = resource.texture.as_deref().map_or_else(
-        || u32::from(resource.desc.depth_or_array_size),
-        Texture::array_length,
-    );
+    let tex_array_len =
+        texture.map_or_else(|| u32::from(desc.depth_or_array_size), |t| t.array_length());
     let mut depth_plane = 0u32;
     let mut rt_array_len = 0u32;
 
@@ -983,8 +1070,7 @@ pub unsafe fn create_rtv(
         D3D12_RTV_DIMENSION_TEXTURE3D => {
             // SAFETY: `view_dimension == D3D12_RTV_DIMENSION_TEXTURE3D` selects `texture_3d`.
             let v = unsafe { &*view_desc.view.texture_3d };
-            let mip_depth =
-                mip_extent_wrapping(u32::from(resource.desc.depth_or_array_size), v.mip_slice);
+            let mip_depth = mip_extent_wrapping(u32::from(desc.depth_or_array_size), v.mip_slice);
             depth_plane = v.first_w_slice;
             rt_array_len = if v.w_size == u32::MAX {
                 mip_depth
@@ -993,7 +1079,7 @@ pub unsafe fn create_rtv(
             };
             (WMT_TEXTURE_TYPE3D, v.mip_slice, 0, 1)
         }
-        _ => return E_INVALIDARG,
+        _ => return Err(E_INVALIDARG),
     };
 
     let view = TextureViewDescriptor {
@@ -1006,61 +1092,40 @@ pub unsafe fn create_rtv(
     }
     .key();
     let mip_shift = first_mip & 0xf;
-    let base_w = resource.texture.as_ref().map_or_else(
-        || u32::try_from(resource.desc.width).unwrap_or(1),
+    let base_w = texture.map_or_else(
+        || u32::try_from(desc.width).unwrap_or(1),
         |t| t.info().width,
     );
-    let base_h = resource
-        .texture
-        .as_ref()
-        .map_or(resource.desc.height, |t| t.info().height);
-    let rt_desc = RenderTargetDesc {
-        texture: resource.texture.clone(),
+    let base_h = texture.map_or(desc.height, |t| t.info().height);
+    Ok(RenderTargetDesc {
+        texture: texture.cloned(),
         view,
         width: mip_extent(base_w, mip_shift),
         height: mip_extent(base_h, mip_shift),
         depth_plane,
         render_target_array_length: rt_array_len,
         flags: 0,
-    };
-    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
-    unsafe { crate::descriptor_heap::write_rtv(descriptor, rt_desc) }
+    })
 }
 
-/// `MTLD3D12Texture::CreateDepthStencilView` (`d3d12_texture.cpp:799-899`).
+/// The render-pass attachment a texture DSV `view_desc` describes (format already filled).
 ///
-/// # Safety
+/// # Errors
 ///
-/// `desc` is null or points to a readable `D3D12_DEPTH_STENCIL_VIEW_DESC`.
-pub unsafe fn create_dsv(
-    resource: &Resource,
-    desc: *const c_void,
-    descriptor: D3d12CpuDescriptorHandle,
-) -> Hresult {
-    crate::scope!("texture.CreateDepthStencilView");
-    let view_desc = if desc.is_null() {
-        match super::extract_entire_dsv(&resource.desc) {
-            Ok(v) => v,
-            Err(hr) => return hr,
-        }
-    } else {
-        // SAFETY: `desc` is non-null and points to a `DepthStencilViewDesc`.
-        let mut v = unsafe { ptr::read(desc.cast::<DepthStencilViewDesc>()) };
-        if v.format == 0 {
-            v.format = resource.desc.format;
-        }
-        v
-    };
-
+/// The format's `HRESULT` when Metal has no counterpart, `E_INVALIDARG` for a buffer or unknown
+/// dimension.
+pub fn dsv_target(
+    desc: &ResourceDesc,
+    texture: Option<&Arc<Texture>>,
+    view_desc: &DepthStencilViewDesc,
+) -> Result<RenderTargetDesc, Hresult> {
     let (hr, metal_format) = dxmt_core::format::query_dxgi_ref(view_desc.format);
     if hr != S_OK {
-        return hr;
+        return Err(hr);
     }
 
-    let tex_array_len = resource.texture.as_deref().map_or_else(
-        || u32::from(resource.desc.depth_or_array_size),
-        Texture::array_length,
-    );
+    let tex_array_len =
+        texture.map_or_else(|| u32::from(desc.depth_or_array_size), |t| t.array_length());
     let mut rt_array_len = 0u32;
 
     let (texture_type, first_mip, first_slice, array_size) = match view_desc.view_dimension {
@@ -1123,7 +1188,7 @@ pub unsafe fn create_dsv(
                 slices,
             )
         }
-        _ => return E_INVALIDARG,
+        _ => return Err(E_INVALIDARG),
     };
 
     let view = TextureViewDescriptor {
@@ -1136,25 +1201,20 @@ pub unsafe fn create_dsv(
     }
     .key();
     let mip_shift = first_mip & 0xf;
-    let base_w = resource.texture.as_ref().map_or_else(
-        || u32::try_from(resource.desc.width).unwrap_or(1),
+    let base_w = texture.map_or_else(
+        || u32::try_from(desc.width).unwrap_or(1),
         |t| t.info().width,
     );
-    let base_h = resource
-        .texture
-        .as_ref()
-        .map_or(resource.desc.height, |t| t.info().height);
-    let rt_desc = RenderTargetDesc {
-        texture: resource.texture.clone(),
+    let base_h = texture.map_or(desc.height, |t| t.info().height);
+    Ok(RenderTargetDesc {
+        texture: texture.cloned(),
         view,
         width: mip_extent(base_w, mip_shift),
         height: mip_extent(base_h, mip_shift),
         depth_plane: 0,
         render_target_array_length: rt_array_len,
         flags: view_desc.flags,
-    };
-    // SAFETY: `descriptor` is forwarded to `descriptor_heap`.
-    unsafe { crate::descriptor_heap::write_dsv(descriptor, rt_desc) }
+    })
 }
 
 /// `MTLD3D12Texture::GetResourceTiling` (`d3d12_texture.cpp:901-907`).
@@ -1162,3 +1222,6 @@ pub fn get_resource_tiling(_resource: &Resource) {
     crate::scope!("texture.GetResourceTiling");
     let (): () = crate::not_implemented!("Texture::GetResourceTiling");
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,236 @@
+TEX2D f=0 b=0 a8=0 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=0 a8=1 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=1 a8=0 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=1 a8=1 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=2 a8=0 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=2 a8=1 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=0 b=3 a8=0 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=0 b=3 a8=1 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=0 b=4 a8=0 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=0 b=4 a8=1 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=0 b=5 a8=0 hr=0x80004005 pf=70 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=0 b=5 a8=1 hr=0x80004005 pf=70 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=1 b=0 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x11010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=0 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x11010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=1 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=1 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=2 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=2 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=3 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x33010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=3 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x33010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=4 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x37010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=4 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x37010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=1 b=5 a8=0 hr=0x80004005 pf=53 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=1 b=5 a8=1 hr=0x80004005 pf=53 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=2 b=0 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=0 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=1 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=1 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=2 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=2 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=2 b=3 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=2 b=3 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=2 b=4 a8=0 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=2 b=4 a8=1 hr=0x00000000 pf=252 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x0 mips=7
+TEX2D f=2 b=5 a8=0 hr=0x80004005 pf=252 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=2 b=5 a8=1 hr=0x80004005 pf=252 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=3 b=0 a8=0 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x11010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=0 a8=1 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x11010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=1 a8=0 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=1 a8=1 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=2 a8=0 hr=0x00000000 pf=250 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=2 a8=1 hr=0x00000000 pf=250 64x32x1 arr=1 bits=0x15010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=3 a8=0 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x13010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=3 a8=1 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x13010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=4 a8=0 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x17010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=4 a8=1 hr=0x00000000 pf=23 64x32x1 arr=1 bits=0x17010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=3 b=5 a8=0 hr=0x80004005 pf=23 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=3 b=5 a8=1 hr=0x80004005 pf=23 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=4 b=0 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=0 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=1 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=1 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=2 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=2 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=3 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x23010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=3 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x23010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=4 a8=0 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x27010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=4 a8=1 hr=0x00000000 pf=53 64x32x1 arr=1 bits=0x27010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=4 b=5 a8=0 hr=0x80004005 pf=53 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=4 b=5 a8=1 hr=0x80004005 pf=53 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=5 b=0 a8=0 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=0 a8=1 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=1 a8=0 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=1 a8=1 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=2 a8=0 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=2 a8=1 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=3 a8=0 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=3 a8=1 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x23010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=4 a8=0 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=4 a8=1 hr=0x00000000 pf=103 64x32x1 arr=1 bits=0x27010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=5 b=5 a8=0 hr=0x80004005 pf=103 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=5 b=5 a8=1 hr=0x80004005 pf=103 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=6 b=0 a8=0 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=0 a8=1 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=1 a8=0 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=1 a8=1 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=2 a8=0 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=2 a8=1 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=3 a8=0 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=3 a8=1 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=4 a8=0 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=4 a8=1 hr=0x00000000 pf=55 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=6 b=5 a8=0 hr=0x80004005 pf=55 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=6 b=5 a8=1 hr=0x80004005 pf=55 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=7 b=0 a8=0 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=0 a8=1 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x01010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=1 a8=0 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=1 a8=1 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=2 a8=0 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=2 a8=1 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x05010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=3 a8=0 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=3 a8=1 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x03010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=4 a8=0 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=4 a8=1 hr=0x00000000 pf=130 64x32x1 arr=1 bits=0x07010702 opt=0x10 flags=0x1 mips=7
+TEX2D f=7 b=5 a8=0 hr=0x80004005 pf=130 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=7 b=5 a8=1 hr=0x80004005 pf=130 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=0 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=0 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=1 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=1 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=2 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=2 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=3 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=3 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=4 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=4 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=5 a8=0 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D f=8 b=5 a8=1 hr=0x80004005 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=0
+TEX2D u=0 m=0 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x10 flags=0x1 mips=1
+TEX2D u=0 m=0 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=1 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=1 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=2 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=2 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=3 bind=0x8 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=0 m=3 bind=0x80 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=0 m=4 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=0 m=4 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x10 flags=0x0 mips=1
+TEX2D u=1 m=0 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x110 flags=0x1 mips=1
+TEX2D u=1 m=0 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=1 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=1 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=2 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=2 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=3 bind=0x8 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=1 m=3 bind=0x80 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=1 m=4 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=1 m=4 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x110 flags=0x0 mips=1
+TEX2D u=2 m=0 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=0 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=1 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=1 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=2 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=2 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=3 bind=0x8 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=2 m=3 bind=0x80 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=2 m=4 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=2 m=4 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x1 flags=0x0 mips=1
+TEX2D u=3 m=0 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=0 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=1 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=1 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=2 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=2 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=3 bind=0x8 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=3 bind=0x80 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=4 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=3 m=4 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=0 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=0 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=1 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=1 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=2 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=2 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=3 bind=0x8 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=3 bind=0x80 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=4 bind=0x8 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01010102 opt=0x0 flags=0x0 mips=1
+TEX2D u=4 m=4 bind=0x80 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x03010102 opt=0x0 flags=0x0 mips=1
+TEX2D s=0 hr=0x00000000 pf=70 128x64x1 arr=1 bits=0x01010802 opt=0x10 flags=0x1 mips=8
+TEX2D s=1 hr=0x00000000 pf=70 128x64x1 arr=4 bits=0x01010303 opt=0x10 flags=0x1 mips=3
+TEX2D s=2 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D s=3 hr=0x00000000 pf=70 64x64x1 arr=1 bits=0x01010705 opt=0x10 flags=0x1 mips=7
+TEX2D s=4 hr=0x00000000 pf=70 64x64x1 arr=2 bits=0x01010706 opt=0x10 flags=0x1 mips=7
+TEX2D s=5 hr=0x00000000 pf=70 64x64x1 arr=1 bits=0x01010705 opt=0x10 flags=0x1 mips=7
+TEX2D s=6 hr=0x00000000 pf=70 64x64x1 arr=1 bits=0x01010105 opt=0x10 flags=0x1 mips=1
+TEX2D s=7 hr=0x00000000 pf=70 64x32x1 arr=1 bits=0x01040104 opt=0x10 flags=0x1 mips=1
+TEX2D s=8 hr=0x00000000 pf=70 64x32x1 arr=3 bits=0x01020108 opt=0x10 flags=0x1 mips=1
+TEX2D s=9 hr=0x80070057 pf=70 0x0x0 arr=0 bits=0x00000000 opt=0x10 flags=0x0 mips=1
+TEX2D s=10 hr=0x80070057 pf=70 0x0x0 arr=0 bits=0x00000000 opt=0x10 flags=0x0 mips=1
+TEX2D s=11 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D s=12 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX2D s=13 hr=0x00000000 pf=70 1x1x1 arr=1 bits=0x01010102 opt=0x10 flags=0x1 mips=1
+TEX1D s=0 hr=0x00000000 pf=70 64x1x1 arr=1 bits=0x03010702 opt=0x10 flags=0x0 mips=7
+TEX1D s=1 hr=0x00000000 pf=70 64x1x1 arr=5 bits=0x03010303 opt=0x10 flags=0x0 mips=3
+TEX1D s=2 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+TEX1D s=3 hr=0x00000000 pf=70 1000x1x1 arr=2 bits=0x03010a03 opt=0x10 flags=0x0 mips=10
+TEX3D s=0 hr=0x00000000 pf=70 32x16x8 arr=1 bits=0x05010607 opt=0x10 flags=0x1 mips=6
+TEX3D s=1 hr=0x00000000 pf=70 4x4x64 arr=1 bits=0x05010307 opt=0x10 flags=0x1 mips=3
+TEX3D s=2 hr=0x00000000 pf=70 32x16x8 arr=1 bits=0x05010207 opt=0x10 flags=0x1 mips=2
+TEX3D s=3 hr=0x80070057 pf=0 0x0x0 arr=0 bits=0x00000000 opt=0x0 flags=0x0 mips=1
+VIEW1D s=0 SRV fmt=28 dim=2 [0, 7]
+VIEW1D s=0 UAV fmt=28 dim=2 [0]
+VIEW1D s=0 RTV fmt=28 dim=2 [0]
+VIEW1D s=0 DSV fmt=28 dim=1 flags=0 [0]
+VIEW1D s=1 SRV fmt=28 dim=3 [0, 3, 0, 4]
+VIEW1D s=1 UAV fmt=28 dim=3 [0, 0, 4]
+VIEW1D s=1 RTV fmt=28 dim=3 [0, 0, 4]
+VIEW1D s=1 DSV fmt=28 dim=2 flags=0 [0, 0, 4]
+VIEW1D s=2 SRV fmt=28 dim=3 [0, 1, 0, 0]
+VIEW1D s=2 UAV fmt=28 dim=3 [0, 0, 0]
+VIEW1D s=2 RTV fmt=28 dim=3 [0, 0, 0]
+VIEW1D s=2 DSV fmt=28 dim=2 flags=0 [0, 0, 0]
+VIEW2D s=0 SRV fmt=28 dim=4 [0, 8, 0]
+VIEW2D s=0 UAV fmt=28 dim=4 [0, 0]
+VIEW2D s=0 RTV fmt=28 dim=4 [0, 0]
+VIEW2D s=0 DSV fmt=28 dim=3 flags=0 [0]
+VIEW2D s=1 SRV fmt=28 dim=5 [0, 4, 0, 12, 0]
+VIEW2D s=1 UAV fmt=28 dim=5 [0, 0, 12, 0]
+VIEW2D s=1 RTV fmt=28 dim=5 [0, 0, 12, 0]
+VIEW2D s=1 DSV fmt=28 dim=4 flags=0 [0, 0, 12]
+VIEW2D s=2 SRV fmt=28 dim=9 [0, 7]
+VIEW2D s=2 UAV fmt=28 dim=5 [0, 0, 6, 0]
+VIEW2D s=2 RTV fmt=28 dim=5 [0, 0, 6, 0]
+VIEW2D s=2 DSV fmt=28 dim=4 flags=0 [0, 0, 6]
+VIEW2D s=3 SRV fmt=28 dim=10 [0, 7, 0, 2]
+VIEW2D s=3 UAV fmt=28 dim=5 [0, 0, 12, 0]
+VIEW2D s=3 RTV fmt=28 dim=5 [0, 0, 12, 0]
+VIEW2D s=3 DSV fmt=28 dim=4 flags=0 [0, 0, 12]
+VIEW2D s=4 SRV fmt=28 dim=10 [0, 7, 0, 3]
+VIEW2D s=4 UAV fmt=28 dim=5 [0, 0, 18, 0]
+VIEW2D s=4 RTV fmt=28 dim=5 [0, 0, 18, 0]
+VIEW2D s=4 DSV fmt=28 dim=4 flags=0 [0, 0, 18]
+VIEW2D s=5 SRV fmt=28 dim=4 [0, 7, 0]
+VIEW2D s=5 UAV fmt=28 dim=4 [0, 0]
+VIEW2D s=5 RTV fmt=28 dim=4 [0, 0]
+VIEW2D s=5 DSV fmt=28 dim=3 flags=0 [0]
+VIEW2D s=6 SRV fmt=28 dim=6 []
+VIEW2D s=6 UAV hr=0x80004005
+VIEW2D s=6 RTV fmt=28 dim=6 []
+VIEW2D s=6 DSV fmt=28 dim=5 flags=0 []
+VIEW2D s=7 SRV fmt=28 dim=7 [0, 3]
+VIEW2D s=7 UAV hr=0x80004005
+VIEW2D s=7 RTV fmt=28 dim=7 [0, 3]
+VIEW2D s=7 DSV fmt=28 dim=6 flags=0 [0, 3]
+VIEW2D s=8 SRV fmt=28 dim=7 [0, 6]
+VIEW2D s=8 UAV hr=0x80004005
+VIEW2D s=8 RTV fmt=28 dim=7 [0, 6]
+VIEW2D s=8 DSV fmt=28 dim=6 flags=0 [0, 6]
+VIEW2D s=9 SRV fmt=28 dim=5 [0, 1, 0, 0, 0]
+VIEW2D s=9 UAV fmt=28 dim=5 [0, 0, 0, 0]
+VIEW2D s=9 RTV fmt=28 dim=5 [0, 0, 0, 0]
+VIEW2D s=9 DSV fmt=28 dim=4 flags=0 [0, 0, 0]
+VIEW3D SRV fmt=28 dim=8 [0, 6]
+VIEW3D UAV fmt=28 dim=8 [0, 0, 8]
+VIEW3D RTV fmt=28 dim=8 [0, 0, 8]
+VIEW3D DSV hr=0x80004005

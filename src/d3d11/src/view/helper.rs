@@ -1266,3 +1266,6 @@ pub fn initialize_and_normalize_dsv_descriptor(
     }
     Err(E_FAIL)
 }
+
+#[cfg(test)]
+mod tests;
