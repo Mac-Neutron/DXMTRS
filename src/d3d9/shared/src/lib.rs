@@ -15,7 +15,6 @@ pub mod frame_metadata;
 pub mod ftol;
 pub mod identity;
 mod log_filter;
-mod log_helpers;
 pub mod log_paths;
 pub mod mtl;
 pub mod mtl_handle;
@@ -32,6 +31,11 @@ pub mod upload_feedback;
 pub use commands::{
     BlitCommand, BlitCommandType, Command, CommandType, CopyBufferToBufferInfo,
     CopyBufferToTextureInfo, CopyTextureSubRectInfo, NullTextureKind,
+};
+// The once-macros live in dxmt-util; every `mtld3d_shared::log_once_*!` call compiles unchanged.
+pub use dxmt_util::{
+    log_once_debug_by, log_once_info, log_once_info_by, log_once_trace_by, log_once_warn,
+    log_once_warn_by,
 };
 pub use ffi_boundary::{
     InPtr, InPtrMut, OutPtr, ValueIn, VtableThis, slice_from_caller, slice_to_caller,

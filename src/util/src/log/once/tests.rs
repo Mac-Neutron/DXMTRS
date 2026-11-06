@@ -61,3 +61,13 @@ fn macros_compile_with_typical_shapes() {
         "SetSoftwareVertexProcessing({state}): obsolete"
     );
 }
+
+// With info filtered out, a keyed info line neither evaluates its key nor takes its set's lock.
+#[test]
+fn a_keyed_info_skips_its_key_when_info_is_off() {
+    // Error and above only, whatever logger a later test may install.
+    log::set_max_level(log::LevelFilter::Error);
+    let mut evaluated = false;
+    crate::log_once_info_by!(target: "t", key: { evaluated = true; 2 }, "x");
+    assert!(!evaluated);
+}

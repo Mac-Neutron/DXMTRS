@@ -289,11 +289,15 @@ macro_rules! trace {
 macro_rules! err_once {
     ($log:expr, $($arg:tt)*) => {{
         static LOGGED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
-        if !LOGGED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
+        if !LOGGED.load(::core::sync::atomic::Ordering::Relaxed)
+            && !LOGGED.swap(true, ::core::sync::atomic::Ordering::Relaxed)
+        {
             $crate::err!($log, $($arg)*);
         }
     }};
 }
+
+mod once;
 
 #[cfg(test)]
 mod tests;

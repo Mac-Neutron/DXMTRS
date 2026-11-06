@@ -42,7 +42,10 @@ came from elsewhere keep their own notices, and this is where they are:
   from it.
 - **`src/util/rust_pe_rt.c` is LGPL, like the rest of the tree, and is linked into D3D9's guest DLLs.** The
   Rust runtime shim for `-pc-windows-msvc` code is part of the x86_64 and i386 `d3d9.dll` and `mtld3d.dll` the VM
-  guest loads, which are otherwise zlib. The source offer for that object is this repository.
+  guest loads. The source offer for that object is this repository.
+- **dxmt-util is LGPL and is linked into every D3D9 binary** (`d3d9.dll`, `mtld3d.dll`, `mtld3d.so`, the Mac's and the
+  VM's), which are LGPL combined works; the source offer is this repository. Its files from mtld3d keep the zlib notice:
+  `src/util/src/log/once.rs` (+tests).
 - **airconv's DXBC readers are MIT.** `src/airconv/ir`'s container, signature and token readers are ported from
   [`libs/DXBCParser`](libs/DXBCParser) (Microsoft, MIT); each ported file keeps that notice, and the crate's manifest
   says `LGPL-2.1-or-later AND MIT`.

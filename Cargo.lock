@@ -255,6 +255,9 @@ dependencies = [
 [[package]]
 name = "dxmt-util"
 version = "0.14.1"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "env_filter"
@@ -439,6 +442,7 @@ name = "mtld3d-shared"
 version = "0.14.1"
 dependencies = [
  "bitflags 2.13.2",
+ "dxmt-util",
  "env_logger",
  "libc",
  "log",

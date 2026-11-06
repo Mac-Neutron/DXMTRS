@@ -146,7 +146,7 @@ Never an inline `#[cfg(test)] mod tests { ... }` block. Two reasons. Editing a t
 
 Carry the cfg predicate verbatim. `perf.rs` declares `#[cfg(all(test, perf_tracking))] mod tests;`, and weakening that to a plain `#[cfg(test)]` compiles clean while silently dropping the tests from every run.
 
-Two things do not move. A `#[cfg(test)]` helper that is an inherent method on a production type stays in the parent next to that type (`passes.rs` keeps a test-only `emit_scissor`), as does a `#[cfg(test)] pub fn` the tests import through `super::` (`log_helpers.rs` keeps `first_seen`).
+Two things do not move. A `#[cfg(test)]` helper that is an inherent method on a production type stays in the parent next to that type (`passes.rs` keeps a test-only `emit_scissor`), as does a `#[cfg(test)] pub fn` the tests import through `super::` (`log/once.rs` keeps `first_seen`).
 
 Watch relative paths on the way out: `include_str!` resolves against the containing file, so a path that was `../tests/fixtures/x.txt` inline becomes `../../tests/fixtures/x.txt` one directory down.
 
@@ -434,7 +434,7 @@ Adding any other `[workspace.lints] foo = "allow"` requires the same justificati
 
 Every stub, unimplemented branch, default `_ =>` arm, silent early-return, and silent fallback must log. Silent fallthroughs hide real bugs behind a clean `RUST_LOG=info`.
 
-Macros live in `src/d3d9/shared/src/log_helpers.rs`, exported via `#[macro_export]`. Every crate calls them as `mtld3d_shared::log_once_warn!(target: LOG_TARGET, "…")` (or `log_once_warn_by!`, `log_once_trace_by!`, `log_once_info!`, `log_once_info_by!`). Backed by per-call-site `static AtomicBool` — fires once per process per site.
+Macros live in `src/util/src/log/once.rs`, exported via `#[macro_export]` and re-exported by `mtld3d-shared`. Every crate calls them as before, as `mtld3d_shared::log_once_warn!(target: LOG_TARGET, "…")` (or `log_once_warn_by!`, `log_once_trace_by!`, `log_once_info!`, `log_once_info_by!`). Backed by per-call-site `static AtomicBool` — fires once per process per site.
 
 When to `log_once_warn!`: COM vtable stubs returning a constant; `match` arms falling through because the input isn't handled yet; `else { return }` short-circuits dropping a draw / skipping a binding / swallowing state; FFI/Metal helpers with safe-fallback returns for unmapped values.
 

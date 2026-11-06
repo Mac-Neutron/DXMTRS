@@ -5,10 +5,9 @@
 //! `os_sync_wait_on_address` natively. Natively a thread's priority stays as it is, as
 //! `win32_native.h`'s `SetThreadPriority` leaves it.
 
-use core::{
-    ffi::c_void,
-    sync::atomic::{AtomicU64, Ordering, fence},
-};
+use core::sync::atomic::{Ordering, fence};
+#[cfg(any(windows, target_os = "macos"))]
+use core::{ffi::c_void, sync::atomic::AtomicU64};
 use std::{
     sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
     thread::{self, JoinHandle},
@@ -54,7 +53,7 @@ unsafe extern "system" {
     fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn os_sync_wait_on_address(address: *mut c_void, value: u64, size: usize, flags: u32) -> i32;
     fn os_sync_wake_by_address_all(address: *mut c_void, size: usize, flags: u32) -> i32;
@@ -79,7 +78,7 @@ pub fn wait(atomic: &AtomicU64, current: u64) {
 /// Blocks while `atomic` holds `current`.
 ///
 /// A wait can end early, as `std::atomic::wait`'s can: callers load the value again and decide.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn wait(atomic: &AtomicU64, current: u64) {
     // SAFETY: the address holds eight bytes for the call's length; no flags: within this process.
     unsafe { os_sync_wait_on_address(atomic.as_ptr().cast(), current, size_of::<u64>(), 0) };
@@ -93,7 +92,7 @@ pub fn wake_all(atomic: &AtomicU64) {
 }
 
 /// Wakes every thread waiting on `atomic`.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn wake_all(atomic: &AtomicU64) {
     // SAFETY: the address and size are a waiter's; no flags: within this process.
     unsafe { os_sync_wake_by_address_all(atomic.as_ptr().cast(), size_of::<u64>(), 0) };
@@ -126,8 +125,10 @@ pub fn wait_until_finished<T>(handle: JoinHandle<T>) {
 }
 
 /// A value that only rises, which threads wait to reach (`util_cpu_fence.hpp`).
+#[cfg(any(windows, target_os = "macos"))]
 pub struct CpuFence(AtomicU64);
 
+#[cfg(any(windows, target_os = "macos"))]
 impl CpuFence {
     /// A fence at `value`.
     #[must_use]

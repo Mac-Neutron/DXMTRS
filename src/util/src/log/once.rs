@@ -1,3 +1,9 @@
+//! The `log` crate's once-macros: a line per call site, or per key, at most once a process.
+//!
+//! From mtld3d (zlib, README.md's list). Every expansion calls `::log::…!` by path, so inside
+//! this crate SC's `#[macro_export]` `warn!`/`info!`/… never capture them; their compile-time
+//! level is the `log` crate's own.
+
 // Fire a `warn!` at most once per call site. Backed by a `static
 // AtomicBool` declared inside the macro expansion, so each textual
 // invocation gets its own latch. Intended for stubs, unimplemented
@@ -12,7 +18,10 @@ macro_rules! log_once_warn {
     (target: $target:expr, $($arg:tt)*) => {{
         static FIRED: ::core::sync::atomic::AtomicBool =
             ::core::sync::atomic::AtomicBool::new(false);
-        if !FIRED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
+        // A load first: once fired, the site costs a read, not a write to a shared line.
+        if !FIRED.load(::core::sync::atomic::Ordering::Relaxed)
+            && !FIRED.swap(true, ::core::sync::atomic::Ordering::Relaxed)
+        {
             ::log::warn!(target: $target, $($arg)*);
         }
     }};
@@ -128,7 +137,10 @@ macro_rules! log_once_info {
     (target: $target:expr, $($arg:tt)*) => {{
         static FIRED: ::core::sync::atomic::AtomicBool =
             ::core::sync::atomic::AtomicBool::new(false);
-        if !FIRED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
+        // A load first: once fired, the site costs a read, not a write to a shared line.
+        if !FIRED.load(::core::sync::atomic::Ordering::Relaxed)
+            && !FIRED.swap(true, ::core::sync::atomic::Ordering::Relaxed)
+        {
             ::log::info!(target: $target, $($arg)*);
         }
     }};
@@ -138,21 +150,29 @@ macro_rules! log_once_info {
 // design calls whose format string carries a value that varies across
 // legitimate inputs — e.g. `SetSoftwareVertexProcessing({software})`
 // where both `0` and `1` are legitimate and we want both visible.
+// Gated on `log_enabled!(Info)` like `log_once_debug_by!`: with info filtered
+// out (`DXMT_LOG_LEVEL=warn`, the p build) the key is not evaluated and the
+// set's mutex is not taken, so a key first seen while filtered can still log
+// later. `log_once_warn_by!` has no such gate: warn is on at every level but
+// `error`/`none`, where the gate would add the logger's filter walk ahead of
+// the mutex it saves.
 #[macro_export]
 macro_rules! log_once_info_by {
     (target: $target:expr, key: $key:expr, $($arg:tt)*) => {{
-        static SEEN: ::std::sync::LazyLock<
-            ::std::sync::Mutex<::std::collections::BTreeSet<u64>>,
-        > = ::std::sync::LazyLock::new(|| {
-            ::std::sync::Mutex::new(::std::collections::BTreeSet::new())
-        });
-        let k: u64 = $key;
-        let first = {
-            let mut s = SEEN.lock().expect("log_once_info_by set poisoned");
-            s.insert(k)
-        };
-        if first {
-            ::log::info!(target: $target, $($arg)*);
+        if ::log::log_enabled!(target: $target, ::log::Level::Info) {
+            static SEEN: ::std::sync::LazyLock<
+                ::std::sync::Mutex<::std::collections::BTreeSet<u64>>,
+            > = ::std::sync::LazyLock::new(|| {
+                ::std::sync::Mutex::new(::std::collections::BTreeSet::new())
+            });
+            let k: u64 = $key;
+            let first = {
+                let mut s = SEEN.lock().expect("log_once_info_by set poisoned");
+                s.insert(k)
+            };
+            if first {
+                ::log::info!(target: $target, $($arg)*);
+            }
         }
     }};
 }

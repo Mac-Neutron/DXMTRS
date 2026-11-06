@@ -1,15 +1,16 @@
+use std::{sync::Arc, thread};
+#[cfg(any(windows, target_os = "macos"))]
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
-use super::{CpuFence, lock, read, write};
+#[cfg(any(windows, target_os = "macos"))]
+use super::CpuFence;
+use super::{lock, read, write};
 
 /// Polls `flag` for up to ten seconds: whether it turned true.
+#[cfg(any(windows, target_os = "macos"))]
 fn turns_true(flag: &AtomicBool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !flag.load(Ordering::SeqCst) {
@@ -22,6 +23,7 @@ fn turns_true(flag: &AtomicBool) -> bool {
 }
 
 /// A thread waiting for 2 sleeps through a signal of 1 and wakes on 2.
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn wait_wakes_on_another_thread() {
     let fence = Arc::new(CpuFence::new(0));
