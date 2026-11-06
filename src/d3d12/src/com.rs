@@ -1,4 +1,4 @@
-//! COM base types, `DeviceChild` ownership, companion vtables, `slot!`, and D3D12 IIDs.
+//! `DeviceChild` ownership, `slot!`, worker threads, and the COM names d3d12 takes from dxmt-util.
 
 use core::{ffi::c_void, ptr, ptr::NonNull};
 
