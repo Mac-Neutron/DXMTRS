@@ -10,7 +10,7 @@
 //! Every D3D9 register lives in the DXBC temporary file, outputs included: they are written
 //! back to the output registers only at the end, after the epilogue `emit.rs` runs (the vertex
 //! fixups; the pixel alpha test, fog and sRGB encode). [`ROWS`] is the opcode table both stages
-//! are checked against, one row per opcode and control; `ps_1_x` is not lowered yet.
+//! are checked against, one row per opcode and control.
 
 use std::collections::BTreeMap;
 
@@ -29,6 +29,7 @@ use crate::{
 mod inline;
 mod ops;
 mod ps;
+mod ps1;
 mod regs;
 mod vs;
 
@@ -71,6 +72,11 @@ pub mod range {
     pub const LOD_BIAS: u32 = 8;
     /// `PsDraw`: row 0 `vpos_scale`.
     pub const PS_DRAW: u32 = 9;
+    /// `bump_env`, two rows a texture stage.
+    ///
+    /// Row `2n` is stage `n`'s matrix `(m00, m01, m10, m11)`, row `2n + 1` its `(lscale,
+    /// loffset, 0, 0)`; declared only for a program with a bump op.
+    pub const BUMP_ENV: u32 = 10;
 }
 
 /// `VsDraw`'s first user clip plane row.
@@ -133,10 +139,13 @@ pub struct PsBindings {
     /// The [`range`]s bound beside `c#`, in `emit_ps_function`'s order.
     ///
     /// The alpha reference for an alpha test other than none and `D3DCMP_ALWAYS`, `fog_data`
-    /// for vertex or table fog, the LOD table under `VariantFlags::LOD_BIAS`, `PsDraw` for a
+    /// for vertex or table fog, `bump_env` for a bump op in the program's main body (`texbem`,
+    /// `texbeml`, `bem`), the LOD table under `VariantFlags::LOD_BIAS`, `PsDraw` for a
     /// declared `vPos` the key scales, `i#` and `b#` for a constant no `defi`/`defb` defines.
     pub ranges: Vec<u32>,
     /// The declared sampler slots: the texture kind bound there, and whether it is a depth one.
+    ///
+    /// `ps_1_x` declares none: each stage a sampling op names has one (`declared_ps_samplers`).
     pub samplers: BTreeMap<u16, (TextureType, bool)>,
 }
 
@@ -166,15 +175,25 @@ pub const fn slot_bit(mask: u16, slot: u16) -> bool {
 #[must_use]
 pub fn ps_bindings(program: &DxsoProgram, key: &VariantKey) -> PsBindings {
     let mut samplers = BTreeMap::new();
-    for decl in &program.declarations {
-        if let Declaration::Sampler { reg, .. } = decl {
-            let depth = slot_bit(key.depth_sampler_mask, reg.index);
-            samplers.insert(reg.index, (bound_sampler_type(key, reg.index), depth));
-        }
+    let declared = program.declarations.iter().filter_map(|decl| match decl {
+        Declaration::Sampler { reg, .. } => Some(reg.index),
+        Declaration::Semantic { .. } => None,
+    });
+    // `ps_1_x`: the stage each sampling op of the main body names.
+    let stages = program
+        .instructions
+        .iter()
+        .filter(|_| program.major == 1)
+        .filter(|i| ps1::samples(i.opcode))
+        .filter_map(|i| i.dst.map(|d| d.reg.index));
+    for slot in declared.chain(stages) {
+        let depth = slot_bit(key.depth_sampler_mask, slot);
+        samplers.insert(slot, (bound_sampler_type(key, slot), depth));
     }
     let conditions = [
         (key.alpha_func != 0 && key.alpha_func != 8, range::ALPHA_REF),
         (key.fog_mode != 0 || key.fog_table_mode != 0, range::FOG),
+        (program.uses_bump_env(), range::BUMP_ENV),
         (key.flags.contains(VariantFlags::LOD_BIAS), range::LOD_BIAS),
         (
             program.reads_vpos() && key.flags.contains(VariantFlags::VPOS_SCALE),
@@ -196,8 +215,7 @@ pub fn ps_bindings(program: &DxsoProgram, key: &VariantKey) -> PsBindings {
 ///
 /// # Errors
 ///
-/// [`LowerError::Unsupported`] for what `emit.rs` refuses or what Metal refuses in its MSL, and
-/// for `ps_1_x`, which is not lowered yet.
+/// [`LowerError::Unsupported`] for what `emit.rs` refuses or what Metal refuses in its MSL.
 pub fn pixel(program: &DxsoProgram, key: &VariantKey) -> Result<Lowered, LowerError> {
     ps::lower(program, key)
 }
@@ -234,8 +252,6 @@ pub struct Row {
     pub ps: Support,
 }
 
-/// The `ps_1_x` texture and bump ops, which Task 6 lowers with the `ps_1_x` models.
-const PS1_LATER: &str = "a ps_1_x op (lowered with ps_1_x, not yet)";
 const PS_ONLY: &str = "a pixel shader op (it reads pixel texture coordinates or writes a pixel)";
 const DERIVATIVE: &str = "a derivative in a vertex function (Metal refuses it)";
 const DISCARD: &str = "a discard in a vertex function (Metal refuses it)";
@@ -247,16 +263,6 @@ const fn vs_row(opcode: Opcode, control: Control) -> Row {
         control,
         vs: Support::Lowered,
         ps: Support::Lowered,
-    }
-}
-
-/// A `ps_1_x` op: a vertex shader refuses it, a pixel shader waits for the `ps_1_x` lowering.
-const fn vs_refused(opcode: Opcode, why: &'static str) -> Row {
-    Row {
-        opcode,
-        control: Control::None,
-        vs: Support::Unsupported(why),
-        ps: Support::Unsupported(PS1_LATER),
     }
 }
 
@@ -351,28 +357,28 @@ pub const ROWS: &[Row] = &[
     plain(Opcode::MovA),
     parsed(Opcode::DefB),
     parsed(Opcode::DefI),
-    vs_refused(Opcode::TexCoord, PS_ONLY),
+    ps_row(Opcode::TexCoord, PS_ONLY),
     ps_row(Opcode::TexKill, DISCARD),
     vs_row(Opcode::TexLd, Control::None),
     vs_row(Opcode::TexLd, Control::Projected),
     vs_row(Opcode::TexLd, Control::Biased),
-    vs_refused(Opcode::TexBem, PS_ONLY),
-    vs_refused(Opcode::TexBemL, PS_ONLY),
-    vs_refused(Opcode::TexReg2Ar, PS_ONLY),
-    vs_refused(Opcode::TexReg2Gb, PS_ONLY),
-    vs_refused(Opcode::TexM3x2Pad, PS_ONLY),
-    vs_refused(Opcode::TexM3x2Tex, PS_ONLY),
-    vs_refused(Opcode::TexM3x3Pad, PS_ONLY),
-    vs_refused(Opcode::TexM3x3Tex, PS_ONLY),
-    vs_refused(Opcode::TexM3x3Spec, PS_ONLY),
-    vs_refused(Opcode::TexM3x3VSpec, PS_ONLY),
-    vs_refused(Opcode::TexReg2Rgb, PS_ONLY),
-    vs_refused(Opcode::TexDp3Tex, PS_ONLY),
-    vs_refused(Opcode::TexM3x2Depth, PS_ONLY),
-    vs_refused(Opcode::TexDp3, PS_ONLY),
-    vs_refused(Opcode::TexM3x3, PS_ONLY),
-    vs_refused(Opcode::TexDepth, PS_ONLY),
-    vs_refused(Opcode::Bem, PS_ONLY),
+    ps_row(Opcode::TexBem, PS_ONLY),
+    ps_row(Opcode::TexBemL, PS_ONLY),
+    ps_row(Opcode::TexReg2Ar, PS_ONLY),
+    ps_row(Opcode::TexReg2Gb, PS_ONLY),
+    ps_row(Opcode::TexM3x2Pad, PS_ONLY),
+    ps_row(Opcode::TexM3x2Tex, PS_ONLY),
+    ps_row(Opcode::TexM3x3Pad, PS_ONLY),
+    ps_row(Opcode::TexM3x3Tex, PS_ONLY),
+    ps_row(Opcode::TexM3x3Spec, PS_ONLY),
+    ps_row(Opcode::TexM3x3VSpec, PS_ONLY),
+    ps_row(Opcode::TexReg2Rgb, PS_ONLY),
+    ps_row(Opcode::TexDp3Tex, PS_ONLY),
+    ps_row(Opcode::TexM3x2Depth, PS_ONLY),
+    ps_row(Opcode::TexDp3, PS_ONLY),
+    ps_row(Opcode::TexM3x3, PS_ONLY),
+    ps_row(Opcode::TexDepth, PS_ONLY),
+    ps_row(Opcode::Bem, PS_ONLY),
     plain(Opcode::ExpP),
     plain(Opcode::LogP),
     vs_row(Opcode::Cnd, Control::None),

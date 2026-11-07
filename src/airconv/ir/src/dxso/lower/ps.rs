@@ -1,21 +1,24 @@
-//! The pixel stage, shader models 2 and 3: its inputs, its outputs' mirrors and its epilogue.
+//! The pixel stage: its inputs, its outputs' mirrors and its epilogue (`ps_1_x`'s ops: `ps1`).
 //!
 //! `emit.rs`'s `emit_ps_function`: the `Varyings` members arrive as fragment inputs named by
 //! semantic (`d3d9_<code>`, colours `[[flat]]` under `FLAT_SHADE`, `fog_z` centre without
 //! perspective), the position raw (`fix_w: false`: the MSL reads `in.position` as Metal gives
 //! it), the point coordinate standing in for texture coordinates 0-7 under `POINT_SPRITE`, the
-//! front-facing flag for a declared `vFace`. `ps_2_0` reads `vN` as colour N and `tN` as texture
-//! coordinate N; `ps_3_0` each input by its `dcl` semantic, a register several semantics share
-//! assembled lane by lane, an extra semantic only when the bound vertex shader outputs it
-//! (`linked_input_mask`). Writes land in mirrors of `oC#` and `oDepth`; the epilogue then runs
-//! the alpha test, the fog blend and the sRGB encode on them, in that order, and the mirrors go
-//! to the output registers the signature pops: each exported colour, the depth unless the pass
-//! has no depth attachment, and the key's sample mask under `SAMPLE_MASK`.
+//! front-facing flag for a declared `vFace`. `ps_1_x` and `ps_2_0` read `vN` as colour N, `ps_2_0`
+//! `tN` as texture coordinate N and `ps_1_x` as its `t[N]` mirror, seeded from it; `ps_3_0` each
+//! input by its `dcl` semantic, a register several semantics share assembled lane by lane, an
+//! extra semantic only when the bound vertex shader outputs it (`linked_input_mask`). Writes land
+//! in mirrors of `oC#` and `oDepth` (and `ps_1_x`'s `t[N]`); the epilogue sets `oC0 = r0` for
+//! `ps_1_x`, then runs the alpha test, the fog blend and the sRGB encode, in that order, and the
+//! mirrors go to the output registers the signature pops: each exported colour, the depth unless
+//! the pass has no depth attachment, and the key's sample mask under `SAMPLE_MASK`.
 
 use std::collections::BTreeMap;
 
 use super::{
-    FOG_Z_VARYING, Lower, LowerError, Lowered, VsBindings, ps_bindings, range,
+    FOG_Z_VARYING, Lower, LowerError, Lowered, VsBindings, ps_bindings,
+    ps1::T_REGS,
+    range,
     regs::{
         A0, MASK_ALL, MASK_W, MASK_X, MASK_Y, MASK_Z, P0, cbuf, fbin, fcmp, fdst, fimm, fsplat,
         ftemp, fun, ibin, idst, iimm, isplat, itemp, lane, mad, mov, mov_sat, movc, negate, odst,
@@ -90,8 +93,12 @@ pub struct PsIo {
     sprite: Vec<u32>,
     /// `oC0`.. as the program writes them (`emit.rs`'s locals).
     colors: Vec<u32>,
-    /// `_depth_storage`, when the program writes `oDepth`.
-    depth: Option<u32>,
+    /// `_depth_storage`, when the program writes `oDepth` (or `texdepth`, `texm3x2depth`).
+    pub depth: Option<u32>,
+    /// `ps_1_x`'s `t[8]`, seeded from texture coordinates 0-7.
+    pub t: Vec<u32>,
+    /// The ranges bound beside `c#` (`PsBindings::ranges`): `bump_env` for a bump op.
+    pub ranges: Vec<u32>,
     /// `vPos` declared, and read scaled.
     vpos: bool,
     vpos_scaled: bool,
@@ -110,6 +117,8 @@ impl PsIo {
             sprite: Vec::new(),
             colors: Vec::new(),
             depth: None,
+            t: Vec::new(),
+            ranges: Vec::new(),
             vpos: false,
             vpos_scaled: false,
             vface: false,
@@ -127,9 +136,6 @@ pub fn lower(program: &DxsoProgram, key: &VariantKey) -> Result<Lowered, LowerEr
     if program.shader_type != ShaderType::Pixel {
         return Err(refused("a vertex shader lowered as a pixel shader"));
     }
-    if program.major < 2 {
-        return Err(refused("ps_1_x (lowered with ps_1_x, not yet)"));
-    }
     let bindings = ps_bindings(program, key);
     // `emit.rs` shifts a 16-bit mask by the slot; D3D9 has sixteen.
     if bindings.samplers.keys().any(|slot| *slot >= 16) {
@@ -140,6 +146,7 @@ pub fn lower(program: &DxsoProgram, key: &VariantKey) -> Result<Lowered, LowerEr
     }
     let mut ps = PsIo::none();
     ps.key = *key;
+    ps.ranges.clone_from(&bindings.ranges);
     ps.samplers = bindings
         .samplers
         .iter()
@@ -243,6 +250,9 @@ impl Lower<'_> {
         if key.flags.contains(VariantFlags::POINT_SPRITE) {
             self.ps.sprite = (0..SPRITE_TEXCOORDS).map(|_| self.perm()).collect();
         }
+        if program.major == 1 {
+            self.ps.t = (0..T_REGS).map(|_| self.perm()).collect();
+        }
         if program.major != 3 {
             return;
         }
@@ -285,6 +295,19 @@ impl Lower<'_> {
                 .position(|s| *s == semantic)
                 .and_then(|i| u32::try_from(i).ok())
                 .map(|i| IN_EXTRA + i),
+        }
+    }
+
+    /// `in.texcoord<index>`: texture coordinate `index` as the body reads it.
+    ///
+    /// # Errors
+    ///
+    /// An index past the sixteen the `Varyings` declare.
+    pub fn texcoord(&self, index: u16) -> Result<Src, LowerError> {
+        if u32::from(index) < TEXCOORDS {
+            Ok(self.varying(IN_TEXCOORD + u32::from(index)))
+        } else {
+            Err(self.refuse("a texture register above t15"))
         }
     }
 
@@ -334,6 +357,11 @@ impl Lower<'_> {
                 self.emit(mov(fdst(t, 1 << c), value))?;
             }
         }
+        // `ps_1_x`: `t[i] = in.texcoordi`, after the sprite's substitution.
+        let t: Vec<u32> = self.ps.t.clone();
+        for (t, reg) in t.into_iter().zip(IN_TEXCOORD..) {
+            self.emit(mov(fdst(t, MASK_ALL), self.varying(reg)))?;
+        }
         self.zero_registers()?;
         let mirrors: Vec<u32> = self
             .ps
@@ -350,7 +378,7 @@ impl Lower<'_> {
 
     /// Every `r#` the program names, `a0` and `p0` zeroed (the MSL's `= {}`, `int4(0)`, `false`).
     pub fn zero_registers(&mut self) -> Result<(), LowerError> {
-        let used: std::collections::BTreeSet<u16> = self
+        let mut used: std::collections::BTreeSet<u16> = self
             .program
             .all_instructions()
             .flat_map(|i| {
@@ -362,6 +390,10 @@ impl Lower<'_> {
             .filter(|r| r.kind == RegKind::Temp && r.index < super::regs::TEMPS)
             .map(|r| r.index)
             .collect();
+        // `ps_1_x`'s colour is `r0`, named or not.
+        if self.sm1() {
+            used.insert(0);
+        }
         for r in used {
             self.emit(mov(fdst(u32::from(r), MASK_ALL), fsplat(0.0)))?;
         }
@@ -384,11 +416,9 @@ impl Lower<'_> {
                 None if index < 2 => self.varying(IN_COLOR + u32::from(index)),
                 None => return Err(self.refuse("an input register past v1 with no dcl")),
             },
-            // `tN`: `in.texcoordN`.
-            RegKind::Addr if u32::from(index) < TEXCOORDS => {
-                self.varying(IN_TEXCOORD + u32::from(index))
-            }
-            RegKind::Addr => return Err(self.refuse("a texture register above t15")),
+            // `ps_1_x`'s `tN`: `t[N]`; later models': `in.texcoordN`.
+            RegKind::Addr if self.sm1() => ftemp(self.t_reg(index)?),
+            RegKind::Addr => self.texcoord(index)?,
             RegKind::ColorOut => match self.ps.colors.get(usize::from(index)) {
                 Some(t) => ftemp(*t),
                 None => return Err(self.refuse("a colour output the program never writes")),
@@ -449,13 +479,14 @@ impl Lower<'_> {
         })
     }
 
-    /// Where a pixel shader's write lands: an `oC#` or `oDepth` mirror.
+    /// Where a pixel shader's write lands: an `oC#` or `oDepth` mirror, or `ps_1_x`'s `t[N]`.
     ///
     /// # Errors
     ///
     /// A register the MSL has no local for.
     pub fn ps_target(&self, kind: RegKind, index: u16) -> Result<super::regs::Target, LowerError> {
         let target = match kind {
+            RegKind::Addr if self.sm1() => Some(self.t_reg(index)?),
             RegKind::ColorOut => self.ps.colors.get(usize::from(index)).copied(),
             RegKind::DepthOut => self.ps.depth,
             _ => None,
@@ -483,6 +514,9 @@ impl Lower<'_> {
 
     /// `texkill`: `if (any(r.<mask> < 0.0)) discard_fragment();`, a predicate ignored.
     ///
+    /// `ps_1_x` tests `.xyz` whatever the mask: `ps_1_4` its register, earlier models the
+    /// iterated texture coordinate the register names.
+    ///
     /// # Errors
     ///
     /// A `texkill` without its operand, or one reading a register the stage cannot read.
@@ -490,13 +524,22 @@ impl Lower<'_> {
         let Some(dst) = inst.dst else {
             return Err(self.refuse("texkill without its operand"));
         };
-        let value = self.src(&crate::dxso::ir::SrcOperand {
-            reg: dst.reg,
-            swizzle: crate::dxso::ir::Swizzle::IDENTITY,
-            modifier: crate::dxso::ir::SrcModifier::None,
-            rel_addr: None,
-        })?;
-        let lanes: Vec<u8> = (0..4).filter(|c| dst.write_mask.covers(*c)).collect();
+        let (major, minor) = (self.program.major, self.program.minor);
+        let value = if major >= 2 || minor == 4 {
+            self.src(&crate::dxso::ir::SrcOperand {
+                reg: dst.reg,
+                swizzle: crate::dxso::ir::Swizzle::IDENTITY,
+                modifier: crate::dxso::ir::SrcModifier::None,
+                rel_addr: None,
+            })?
+        } else {
+            self.texcoord(dst.reg.index)?
+        };
+        let lanes: Vec<u8> = if major >= 2 {
+            (0..4).filter(|c| dst.write_mask.covers(*c)).collect()
+        } else {
+            vec![0, 1, 2]
+        };
         let Some((first, rest)) = lanes.split_first() else {
             return Ok(());
         };
@@ -854,6 +897,10 @@ impl Lower<'_> {
         let Some(c0) = self.ps.colors.first().copied() else {
             return Err(self.refuse("a pixel shader without oC0"));
         };
+        // `ps_1_x`: `oC0 = r[0]`.
+        if self.sm1() {
+            self.emit(mov(fdst(c0, MASK_ALL), ftemp(0)))?;
+        }
         self.alpha_test(c0)?;
         self.fog(c0)?;
         let exported = self.exported();

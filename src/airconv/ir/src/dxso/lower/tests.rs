@@ -53,8 +53,12 @@ fn bare(opcode: Opcode) -> Instruction {
     inst(opcode, None, Vec::new())
 }
 
-/// A program of `stage` running `instructions`, with sampler 0 and `i0` declared.
-fn program(stage: ShaderType, instructions: Vec<Instruction>) -> DxsoProgram {
+/// A `stage` program of model `major.minor` running `instructions`, sampler 0 and `i0` declared.
+fn program(
+    stage: ShaderType,
+    (major, minor): (u8, u8),
+    instructions: Vec<Instruction>,
+) -> DxsoProgram {
     let mut subroutines = BTreeMap::new();
     subroutines.insert(
         0,
@@ -67,8 +71,8 @@ fn program(stage: ShaderType, instructions: Vec<Instruction>) -> DxsoProgram {
     DxsoProgram {
         bytecode: Arc::from([]),
         shader_type: stage,
-        major: 3,
-        minor: 0,
+        major,
+        minor,
         declarations: vec![Declaration::Sampler {
             texture_type: TextureType::Texture2D,
             reg: reg(RegKind::Sampler, 0),
@@ -167,8 +171,24 @@ fn sample(opcode: Opcode, control: &Control) -> Vec<Instruction> {
     main
 }
 
+/// The model a row runs in: `ps_1_3` for a pixel `ps_1_x` op (whose `t[]` only it has), else 3.
+const fn model(stage: ShaderType, opcode: Opcode) -> (u8, u8) {
+    match stage {
+        ShaderType::Pixel if super::ps1::lowers(opcode, 3) => (1, 3),
+        _ => (3, 0),
+    }
+}
+
 fn lower(stage: ShaderType, instructions: Vec<Instruction>) -> Result<(), LowerError> {
-    let p = program(stage, instructions);
+    lower_in(stage, (3, 0), instructions)
+}
+
+fn lower_in(
+    stage: ShaderType,
+    version: (u8, u8),
+    instructions: Vec<Instruction>,
+) -> Result<(), LowerError> {
+    let p = program(stage, version, instructions);
     match stage {
         ShaderType::Vertex => vertex(&p, &VsSpec::default()).map(drop),
         ShaderType::Pixel => pixel(&p, &VariantKey::default()).map(drop),
@@ -234,6 +254,17 @@ fn every_opcode_has_a_lowering_or_is_unsupported() {
         }
     }
 
+    // A pixel shader lowers every row the parser does not consume.
+    for row in ROWS {
+        assert!(
+            !matches!(row.ps, Support::Unsupported(_)),
+            "Pixel {:?} {:?}: {:?}",
+            row.opcode,
+            row.control,
+            row.ps
+        );
+    }
+
     // Each row lowers, or is refused naming its opcode, in each stage.
     for row in ROWS {
         let code = opcode_value(row.opcode);
@@ -241,7 +272,8 @@ fn every_opcode_has_a_lowering_or_is_unsupported() {
             if *support == Support::Parser {
                 continue;
             }
-            let result = lower(stage, sample(row.opcode, &row.control));
+            let version = model(stage, row.opcode);
+            let result = lower_in(stage, version, sample(row.opcode, &row.control));
             assert!(
                 agrees(support, &result, code),
                 "{stage:?} {:?} {:?}: {support:?} but {result:?}",
@@ -257,7 +289,7 @@ fn every_opcode_has_a_lowering_or_is_unsupported() {
                     i.predicate = Some(src(RegKind::Predicate, 0));
                 }
                 assert_eq!(
-                    lower(stage, predicated),
+                    lower_in(stage, version, predicated),
                     Ok(()),
                     "predicated {:?}",
                     row.opcode

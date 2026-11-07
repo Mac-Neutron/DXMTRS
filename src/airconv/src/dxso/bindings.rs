@@ -2,9 +2,10 @@
 //!
 //! The vertex stage's `c#` at buffer 30, `PosFixup` 28 and `VsDraw` 27 always, `i#` 29 and `b#`
 //! 26 for dynamic constants only, the LOD table 25 with it; the pixel stage's `c#` at 15 always,
-//! the alpha reference 14 under an active alpha test, `fog_data` 13 under fog, the LOD table 9
-//! under `LOD_BIAS`, `PsDraw` 8 for a scaled `vPos`, `i#` 11 and `b#` 10 for dynamic constants;
-//! textures and samplers at the D3D9 slot, a depth slot as `depth2d`: `mtld3d-shared`'s `mtl.rs`
+//! the alpha reference 14 under an active alpha test, `fog_data` 13 under fog, `bump_env` 12 for
+//! a bump op, the LOD table 9 under `LOD_BIAS`, `PsDraw` 8 for a scaled `vPos`, `i#` 11 and `b#`
+//! 10 for dynamic constants; textures and samplers at the D3D9 slot (`ps_1_x`'s at each stage a
+//! sampling op names), a depth slot as `depth2d`: `mtld3d-shared`'s `mtl.rs`
 //! slots and `emit.rs`'s conditions, so `draw.rs` binds the AIR function as it binds the MSL
 //! one. The slots are restated here because airconv links no D3D9 crate (C3-23); a change to
 //! either side is a change to both.
@@ -56,6 +57,8 @@ pub const PS_FLOAT_CONST_SLOT: u32 = 15;
 pub const PS_ALPHA_REF_SLOT: u32 = 14;
 /// `fog_data` (`[[buffer(13)]]`).
 pub const PS_FOG_SLOT: u32 = 13;
+/// `bump_env` (`[[buffer(12)]]`).
+pub const PS_BUMP_ENV_SLOT: u32 = 12;
 /// `PS_INT_CONST_SLOT`.
 pub const PS_INT_CONST_SLOT: u32 = 11;
 /// `PS_BOOL_CONST_SLOT`.
@@ -215,6 +218,7 @@ pub fn pixel(b: &PsBindings, desc: &mut FunctionSignatureDesc) -> D3d9Bindings {
                 "alpha_ref",
             ),
             range::FOG => (PS_FOG_SLOT, float4, "fog_data"),
+            range::BUMP_ENV => (PS_BUMP_ENV_SLOT, float4, "bump_env"),
             range::LOD_BIAS => (PS_LOD_BIAS_SLOT, float4, "lod_bias"),
             range::PS_DRAW => (PS_DRAW_SLOT, float4, "ps_draw"),
             range::INT => (PS_INT_CONST_SLOT, MslValue::INT4, "ps_i"),

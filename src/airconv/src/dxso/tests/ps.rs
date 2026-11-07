@@ -1341,3 +1341,5 @@ fn linked_extras_only_when_vs_writes_them() {
     assert!(!users(&l).iter().any(|u| u == "d3d9_48" || u == "d3d9_96"));
     pmetallib(&t, VariantKey::default());
 }
+
+mod ps1;

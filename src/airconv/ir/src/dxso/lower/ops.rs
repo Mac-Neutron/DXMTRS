@@ -86,6 +86,9 @@ impl Lower<'_> {
             Opcode::SetP => return self.setp(inst),
             Opcode::MovA => return self.mova(inst),
             Opcode::TexKill => return self.texkill(inst),
+            op if !self.is_vertex() && super::ps1::lowers(op, self.program.major) => {
+                return self.ps1(inst);
+            }
             _ => {}
         }
         let srcs = self.sources(inst)?;

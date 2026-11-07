@@ -344,10 +344,27 @@ impl Lower<'_> {
                 self.ps_read(kind, index)?
             }
             RegKind::Input => self.read_input(index)?,
-            RegKind::Const => self.defs.get(&index).map_or_else(
-                || cbuf(range::FLOAT, u32::from(index), OperandDataType::Float),
-                |value| fimm(*value),
-            ),
+            // `ps_1_x` clamps to `[-1, 1]`: a `def` where it is defined, a `c#` at each read.
+            RegKind::Const => match self.defs.get(&index).copied() {
+                Some(value) if self.sm1() => fimm(value.map(|v| v.clamp(-1.0, 1.0))),
+                Some(value) => fimm(value),
+                None => {
+                    let c = cbuf(range::FLOAT, u32::from(index), OperandDataType::Float);
+                    if self.sm1() {
+                        let s = self.scratch();
+                        self.emit(fbin(FloatBinaryOp::Max, fdst(s, MASK_ALL), c, fsplat(-1.0)))?;
+                        self.emit(fbin(
+                            FloatBinaryOp::Min,
+                            fdst(s, MASK_ALL),
+                            ftemp(s),
+                            fsplat(1.0),
+                        ))?;
+                        ftemp(s)
+                    } else {
+                        c
+                    }
+                }
+            },
             // `float4(a)`.
             RegKind::Addr if self.is_vertex() => {
                 let s = self.scratch();
@@ -655,7 +672,11 @@ impl Lower<'_> {
     }
 
     /// Where a write to `kind`/`index` lands (`register_write_target`).
-    fn target(&self, kind: RegKind, index: u16) -> Result<Target, LowerError> {
+    ///
+    /// # Errors
+    ///
+    /// A register the stage has no local for.
+    pub fn target(&self, kind: RegKind, index: u16) -> Result<Target, LowerError> {
         match kind {
             RegKind::Temp if index < TEMPS => Ok(Target::Temp(u32::from(index))),
             RegKind::Temp => Err(self.refuse("a temporary register above r31")),
