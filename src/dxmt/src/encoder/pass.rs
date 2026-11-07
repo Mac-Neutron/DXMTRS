@@ -275,7 +275,7 @@ impl Encoder {
         key: TextureViewKey,
         access: Access,
     ) -> Option<Attachment> {
-        let (allocation, view) = self.texture_view::<S>(texture, key, access)?;
+        let (allocation, view) = self.texture_view::<S>(texture, key, access, None)?;
         Some(Attachment {
             texture: Arc::clone(texture),
             allocation,
@@ -295,7 +295,7 @@ impl Encoder {
     /// read); then each half keeps only the waits no other of its waits implies.
     pub fn end_pass(&mut self) {
         for (texture, key) in self.depth_stencil_writes().into_iter().flatten() {
-            self.texture_view::<{ stage::PIXEL }>(&texture, key, Access::WRITE);
+            self.texture_view::<{ stage::PIXEL }>(&texture, key, Access::WRITE, None);
         }
         let Some(mut pass) = self.pass.take() else {
             debug_assert!(false, "a pass to end");
@@ -474,6 +474,7 @@ impl Encoder {
                 textures.motion_vector,
                 textures.motion_vector_view,
                 Access::READ,
+                None,
             )
             .map_or(0, |(_, view)| view.texture);
         let output = self.whole::<true>(textures.output);
@@ -665,7 +666,7 @@ impl Encoder {
     /// The Metal texture of `texture`'s whole view, read (or written if `WRITE`) by the pass.
     fn whole<const WRITE: bool>(&mut self, texture: &Texture) -> u64 {
         let access = if WRITE { Access::WRITE } else { Access::READ };
-        self.texture_view::<{ stage::COMPUTE }>(texture, texture.full_view(), access)
+        self.texture_view::<{ stage::COMPUTE }>(texture, texture.full_view(), access, None)
             .map_or(0, |(_, view)| view.texture)
     }
 

@@ -528,7 +528,25 @@ impl Encoder {
         access: Access,
     ) -> Option<(Arc<BufferAllocation>, u64)> {
         let allocation = buffer.current()?;
-        self.track_buffer::<S>(&allocation, access);
+        self.track_buffer::<S>(&allocation, access, None);
+        let offset = allocation.current_suballocation_offset();
+        Some((allocation, offset))
+    }
+
+    /// [`Self::access_buffer`], the allocation also made resident for the pass.
+    ///
+    /// Resident as stage `S` of a pipeline of kind `K` reading or writing it, on the one
+    /// use-table entry.
+    fn access_resident_buffer<const S: u8, const K: u8>(
+        &mut self,
+        buffer: &Buffer,
+        access: Access,
+        read: bool,
+        write: bool,
+    ) -> Option<(Arc<BufferAllocation>, u64)> {
+        let allocation = buffer.current()?;
+        let resident = resident::Resident::Whole(resident::mask::<S, K>(read, write));
+        self.track_buffer::<S>(&allocation, access, Some(resident));
         let offset = allocation.current_suballocation_offset();
         Some((allocation, offset))
     }
@@ -540,7 +558,7 @@ impl Encoder {
         key: BufferViewKey,
         access: Access,
     ) -> Option<(BufferView, u64)> {
-        self.buffer_view::<S>(buffer, key, access)
+        self.buffer_view::<S>(buffer, key, access, None)
             .map(|(_, view, texel)| (view, texel))
     }
 
@@ -555,7 +573,13 @@ impl Encoder {
         let Some(allocation) = texture.current() else {
             return 0;
         };
-        self.track_texture::<S>(&allocation, access, slice..slice + 1, level..level + 1);
+        self.track_texture::<S>(
+            &allocation,
+            access,
+            slice..slice + 1,
+            level..level + 1,
+            None,
+        );
         allocation.texture()
     }
 
@@ -566,7 +590,7 @@ impl Encoder {
         key: TextureViewKey,
         access: Access,
     ) -> Option<TextureView> {
-        self.texture_view::<S>(texture, key, access)
+        self.texture_view::<S>(texture, key, access, None)
             .map(|(_, view)| view)
     }
 
@@ -662,85 +686,119 @@ impl Encoder {
         }
     }
 
-    fn track_buffer<const S: u8>(&mut self, allocation: &Arc<BufferAllocation>, access: Access) {
+    /// Tracks the current suballocation's access, and makes what `resident` names resident.
+    ///
+    /// The residency, made only inside a pass, uses the same use-table entry as the tracking.
+    fn track_buffer<const S: u8>(
+        &mut self,
+        allocation: &Arc<BufferAllocation>,
+        access: Access,
+        resident: Option<resident::Resident<BufferViewKey>>,
+    ) {
         self.retain(allocation, allocation.check_retained(self.seq));
-        if allocation
+        let resident = resident.zip(self.pass.as_ref().map(|p| p.id));
+        let read_only = allocation
             .flags()
-            .contains(BufferAllocationFlags::GPU_READONLY)
-        {
+            .contains(BufferAllocationFlags::GPU_READONLY);
+        if read_only && resident.is_none() {
             return;
         }
         let used = self
             .buffers_used
             .entry(allocation, buffer_trackers(allocation));
-        let suballocation = usize::try_from(allocation.current_suballocation()).ok();
-        let Some(tracker) = suballocation.and_then(|s| used.trackers.get_mut(s)) else {
-            debug_assert!(false, "a suballocation past the buffer's");
-            return;
-        };
-        track::<S>(self.pass.as_mut(), tracker, access);
+        if !read_only {
+            let suballocation = usize::try_from(allocation.current_suballocation()).ok();
+            if let Some(tracker) = suballocation.and_then(|s| used.trackers.get_mut(s)) {
+                track::<S>(self.pass.as_mut(), tracker, access);
+            } else {
+                debug_assert!(false, "a suballocation past the buffer's");
+            }
+        }
+        if let Some((resident, id)) = resident
+            && let Some((resource, mask)) = resident.check(used, id, allocation.buffer())
+        {
+            self.use_resource::<S>(resource, mask);
+        }
     }
 
     /// Tracks subresources `levels` of `slices`, or the one tracker of a texture shaders only read.
+    ///
+    /// The view `resident` names is made resident for the pass on the same use-table entry.
     fn track_texture<const S: u8>(
         &mut self,
         allocation: &Arc<TextureAllocation>,
         access: Access,
         slices: core::ops::Range<u32>,
         levels: core::ops::Range<u32>,
+        resident: Option<resident::Resident<TextureViewKey>>,
     ) {
         self.retain(allocation, allocation.check_retained(self.seq));
+        let resident = resident.zip(self.pass.as_ref().map(|p| p.id));
         let flags = allocation.flags();
-        if flags.contains(TextureAllocationFlags::GPU_READONLY) {
+        let read_only = flags.contains(TextureAllocationFlags::GPU_READONLY);
+        if read_only && resident.is_none() {
             return;
         }
         let used = self
             .textures_used
             .entry(allocation, texture_trackers(allocation));
-        let mut pass = self.pass.as_mut();
-        if flags.contains(TextureAllocationFlags::SHADER_READONLY) {
-            if let Some(tracker) = used.trackers.first_mut() {
-                track::<S>(pass, tracker, access);
+        if !read_only {
+            let mut pass = self.pass.as_mut();
+            if flags.contains(TextureAllocationFlags::SHADER_READONLY) {
+                if let Some(tracker) = used.trackers.first_mut() {
+                    track::<S>(pass, tracker, access);
+                }
+            } else {
+                let levels_per_slice = allocation.mip_level_count();
+                for slice in slices {
+                    for level in levels.clone() {
+                        let index = usize::try_from(slice * levels_per_slice + level).ok();
+                        let Some(tracker) = index.and_then(|i| used.trackers.get_mut(i)) else {
+                            debug_assert!(false, "a subresource past the texture's");
+                            continue;
+                        };
+                        track::<S>(pass.as_deref_mut(), tracker, access);
+                    }
+                }
             }
-            return;
         }
-        let levels_per_slice = allocation.mip_level_count();
-        for slice in slices {
-            for level in levels.clone() {
-                let index = usize::try_from(slice * levels_per_slice + level).ok();
-                let Some(tracker) = index.and_then(|i| used.trackers.get_mut(i)) else {
-                    debug_assert!(false, "a subresource past the texture's");
-                    continue;
-                };
-                track::<S>(pass.as_deref_mut(), tracker, access);
-            }
+        if let Some((resident, id)) = resident
+            && let Some((resource, mask)) = resident.check(used, id, allocation.texture())
+        {
+            self.use_resource::<S>(resource, mask);
         }
     }
 
+    /// `buffer`'s view `key`, used as `access` says and made resident with `resident`, a mask.
     fn buffer_view<const S: u8>(
         &mut self,
         buffer: &Buffer,
         key: BufferViewKey,
         access: Access,
+        resident: Option<u32>,
     ) -> Option<(Arc<BufferAllocation>, BufferView, u64)> {
         let allocation = buffer.current()?;
-        self.track_buffer::<S>(&allocation, access);
         let view = buffer.view(&allocation, key);
+        let resident = resident.map(|mask| resident::Resident::View(key, view.texture, mask));
+        self.track_buffer::<S>(&allocation, access, resident);
         let texel = allocation.current_suballocation_offset_in(view.suballocation_texel);
         Some((allocation, view, texel))
     }
 
+    /// `texture`'s view `key`, used as `access` says and made resident with `resident`, a mask.
     fn texture_view<const S: u8>(
         &mut self,
         texture: &Texture,
         key: TextureViewKey,
         access: Access,
+        resident: Option<u32>,
     ) -> Option<(Arc<TextureAllocation>, TextureView)> {
         let allocation = texture.current()?;
         let view = allocation.view(key);
         let slices = key.first_slice()..key.first_slice() + key.array_size();
         let levels = key.first_mip()..key.first_mip() + key.mip_count();
-        self.track_texture::<S>(&allocation, access, slices, levels);
+        let resident = resident.map(|mask| resident::Resident::View(key, view.texture, mask));
+        self.track_texture::<S>(&allocation, access, slices, levels, resident);
         Some((allocation, view))
     }
 }

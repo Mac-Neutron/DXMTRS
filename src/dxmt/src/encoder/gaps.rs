@@ -462,7 +462,13 @@ impl Encoder {
         access: Access,
     ) -> Option<Arc<TextureAllocation>> {
         let allocation = tex.current()?;
-        self.track_texture::<S>(&allocation, access, slice..slice + 1, level..level + 1);
+        self.track_texture::<S>(
+            &allocation,
+            access,
+            slice..slice + 1,
+            level..level + 1,
+            None,
+        );
         Some(allocation)
     }
 
@@ -494,13 +500,12 @@ impl Encoder {
         access: Access,
     ) -> Option<(Arc<BufferAllocation>, u64)> {
         let _ = (offset, len);
-        let (allocation, sub_offset) = self.access_buffer::<S>(buf, access)?;
-        self.make_allocation_resident::<S, K>(
-            &allocation,
+        self.access_resident_buffer::<S, K>(
+            buf,
+            access,
             access.contains(Access::READ),
             access.contains(Access::WRITE),
-        );
-        Some((allocation, sub_offset))
+        )
     }
 
     /// Makes `buf`'s current allocation resident in stage `S` of pipeline kind `K`.

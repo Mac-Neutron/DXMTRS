@@ -47,8 +47,13 @@ impl Encoder {
             }
             let bound = binding.buffer.as_ref().and_then(|buffer| {
                 let length = buffer.length().saturating_sub(u64::from(binding.offset));
-                self.access_buffer::<{ stage::VERTEX }>(buffer, Access::READ)
-                    .map(|(allocation, suballocation)| (allocation, suballocation, length))
+                self.access_resident_buffer::<{ stage::VERTEX }, K>(
+                    buffer,
+                    Access::READ,
+                    true,
+                    false,
+                )
+                .map(|(allocation, suballocation)| (allocation, suballocation, length))
             });
             if let Some((allocation, suballocation, length)) = bound {
                 let address = allocation.gpu_address() + suballocation;
@@ -58,7 +63,6 @@ impl Encoder {
                     entry + 1,
                     u64::from(binding.stride) | u64::from(length) << 32,
                 );
-                self.make_allocation_resident::<{ stage::VERTEX }, K>(&allocation, true, false);
             } else {
                 table.set(entry, self.dummy_address());
                 table.set(entry + 1, 0);
@@ -85,18 +89,17 @@ impl Encoder {
         };
         let bindings = core::mem::take(&mut self.stream_outputs);
         for (slot, binding) in bindings.iter().enumerate() {
-            let bound = binding
-                .buffer
-                .as_ref()
-                .and_then(|buffer| self.access_buffer::<{ stage::VERTEX }>(buffer, Access::WRITE));
+            let bound = binding.buffer.as_ref().and_then(|buffer| {
+                self.access_resident_buffer::<{ stage::VERTEX }, { kind::ORDINARY }>(
+                    buffer,
+                    Access::WRITE,
+                    false,
+                    true,
+                )
+            });
             if let Some((allocation, suballocation)) = bound {
                 let address = allocation.gpu_address() + suballocation;
                 table.set(2 * slot, address + u64::from(binding.offset));
-                self.make_allocation_resident::<{ stage::VERTEX }, { kind::ORDINARY }>(
-                    &allocation,
-                    false,
-                    true,
-                );
             } else {
                 table.set(2 * slot, 0);
             }
@@ -131,13 +134,13 @@ impl Encoder {
             let binding = bindings.get(slot);
             let bound = binding.and_then(|b| {
                 let buffer = b.buffer.as_ref()?;
-                let (allocation, suballocation) = self.access_buffer::<S>(buffer, Access::READ)?;
+                let (allocation, suballocation) =
+                    self.access_resident_buffer::<S, K>(buffer, Access::READ, true, false)?;
                 Some((allocation, suballocation + u64::from(b.offset)))
             });
             let at = index(arg.structure_ptr_offset);
             if let Some((allocation, offset)) = bound {
                 table.set(at, allocation.gpu_address() + offset);
-                self.make_allocation_resident::<S, K>(&allocation, true, false);
             } else {
                 table.set(at, self.dummy_address());
                 self.use_dummy::<S, K>();
@@ -256,21 +259,22 @@ impl Encoder {
         let mut qwords = [0, 0];
         if flags & MTL_SM50_SHADER_ARGUMENT_BUFFER != 0 {
             if let Some(ResourceView::Buffer { buffer, slice, .. }) = view
-                && let Some((allocation, suballocation)) = self.access_buffer::<S>(buffer, access)
+                && let Some((allocation, suballocation)) =
+                    self.access_resident_buffer::<S, K>(buffer, access, read, write)
             {
                 let address = allocation.gpu_address() + suballocation;
                 qwords = [
                     address + u64::from(slice.byte_offset),
                     u64::from(slice.byte_length),
                 ];
-                self.make_allocation_resident::<S, K>(&allocation, read, write);
             }
         } else if flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE != 0 {
             match view {
                 Some(ResourceView::Buffer { buffer, key, slice }) => {
                     debug_assert!(flags & MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET != 0);
-                    if let Some((allocation, view, texel)) =
-                        self.buffer_view::<S>(buffer, *key, access)
+                    let resident = resident::mask::<S, K>(read, write);
+                    if let Some((_, view, texel)) =
+                        self.buffer_view::<S>(buffer, *key, access, Some(resident))
                     {
                         // The first element wraps as the C++'s 32-bit sum does.
                         let first = (u64::from(slice.first_element) + texel) & u64::from(u32::MAX);
@@ -278,28 +282,17 @@ impl Encoder {
                             view.gpu_resource_id,
                             u64::from(slice.element_count) << 32 | first,
                         ];
-                        self.make_buffer_view_resident::<S, K>(
-                            buffer,
-                            &allocation,
-                            *key,
-                            read,
-                            write,
-                        );
                     }
                 }
                 Some(ResourceView::Texture { texture, key }) => {
                     debug_assert!(flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP != 0);
                     let key = key.with_array(flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY != 0);
-                    if let Some((allocation, view)) = self.texture_view::<S>(texture, key, access) {
+                    let resident = resident::mask::<S, K>(read, write);
+                    if let Some((_, view)) =
+                        self.texture_view::<S>(texture, key, access, Some(resident))
+                    {
                         // The array length, and a minimum LOD of 0.0's bits.
                         qwords = [view.gpu_resource_id, u64::from(key.array_size()) << 32];
-                        self.make_texture_view_resident::<S, K>(
-                            &allocation,
-                            key,
-                            view.texture,
-                            read,
-                            write,
-                        );
                     }
                 }
                 _ => {}

@@ -3,10 +3,11 @@ use core::ptr::{self, NonNull};
 use winemetal_sys::wire::{
     MTL_SM50_SHADER_ARGUMENT_BUFFER, MTL_SM50_SHADER_ARGUMENT_TEXTURE,
     MTL_SM50_SHADER_ARGUMENT_UAV_COUNTER, MtlSm50ShaderArgument, SM50_BINDING_INDEX_ARGUMENT_TABLE,
-    SM50_BINDING_INDEX_CONSTANT_BUFFER2, SM50_BINDING_INDEX_VERTEX_BUFFER,
-    WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER_OFFSET, WMT_RENDER_COMMAND_SET_OBJECT_BUFFER_OFFSET,
-    WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WMT_RENDER_COMMAND_USE_RESOURCE,
-    WMT_RENDER_STAGE_OBJECT, WMT_RENDER_STAGE_VERTEX, WMT_RESOURCE_USAGE_READ,
+    SM50_BINDING_INDEX_CONSTANT_BUFFER, SM50_BINDING_INDEX_CONSTANT_BUFFER2,
+    SM50_BINDING_INDEX_VERTEX_BUFFER, WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER_OFFSET,
+    WMT_RENDER_COMMAND_SET_OBJECT_BUFFER_OFFSET, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET,
+    WMT_RENDER_COMMAND_USE_RESOURCE, WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_OBJECT,
+    WMT_RENDER_STAGE_VERTEX, WMT_RESOURCE_USAGE_READ,
 };
 
 use super::*;
@@ -215,5 +216,79 @@ fn residency_once_per_pass_and_use() {
         resident::mask::<{ stage::VERTEX }, { kind::GEOMETRY }>(true, true),
         resident::mask::<{ stage::VERTEX }, { kind::GEOMETRY }>(true, false)
             | resident::mask::<{ stage::VERTEX }, { kind::GEOMETRY }>(false, true)
+    );
+}
+
+#[test]
+fn bound_buffers_tracked_and_resident_once_per_pass() {
+    // SAFETY: fake non-zero handle for the test binary's `NSObject_retain`/`NSObject_release`.
+    let device = unsafe { Obj::adopt(0xD9) }.expect("non-zero handle");
+    let buffer = |flags| {
+        let buffer = Arc::new(Buffer::new(256, &device));
+        buffer.rename(buffer.allocate(flags));
+        buffer
+    };
+    let (target, constants) = (
+        buffer(BufferAllocationFlags::empty()),
+        buffer(BufferAllocationFlags::GPU_READONLY),
+    );
+    let (written, read_only) = (target.current().unwrap(), constants.current().unwrap());
+    let mut args = [UNTOUCHED; 4];
+    let mut encoder = Encoder::headless();
+    encoder.start_compute_pass(None);
+    let _ = encoder.access_buffer::<{ stage::COMPUTE }>(&target, Access::WRITE);
+    encoder.pass = None;
+    let len = size_of_val(&args);
+    // SAFETY: `args` outlives the encoder and nothing else touches it meanwhile.
+    let arguments =
+        unsafe { ArgumentBuffer::new(NonNull::from(&mut args).cast(), len, 0x77, ARGS_AT) };
+    encoder.start_render_pass(0, 0, 0, Some(arguments));
+    encoder.bind_constant_buffer::<{ stage::PIXEL }>(0, 16, Some(Arc::clone(&target)));
+    encoder.bind_constant_buffer::<{ stage::PIXEL }>(1, 0, Some(Arc::clone(&constants)));
+    let cbuffers = [argument(0, 0, 0, 0), argument(0, 1, 0, 1)];
+    encoder.encode_constant_buffers::<{ stage::PIXEL }, { kind::ORDINARY }>(&cbuffers, 0);
+    encoder.encode_constant_buffers::<{ stage::PIXEL }, { kind::ORDINARY }>(&cbuffers, 0);
+    assert_eq!(
+        args[..2],
+        [written.gpu_address() + 16, read_only.gpu_address()]
+    );
+    let offset = || {
+        Rec::Offset(
+            WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER_OFFSET,
+            ARGS_AT,
+            binding_index(SM50_BINDING_INDEX_CONSTANT_BUFFER),
+        )
+    };
+    assert_eq!(
+        records(&encoder),
+        [
+            Rec::Use(
+                written.buffer(),
+                WMT_RESOURCE_USAGE_READ,
+                WMT_RENDER_STAGE_FRAGMENT
+            ),
+            Rec::Use(
+                read_only.buffer(),
+                WMT_RESOURCE_USAGE_READ,
+                WMT_RENDER_STAGE_FRAGMENT
+            ),
+            offset(),
+            offset(),
+        ],
+        "one use per buffer and pass, the read-only one's too"
+    );
+    assert!(
+        encoder.pass().unwrap().fence_wait.test(256),
+        "the read waits for the compute pass's write"
+    );
+    let used = |at: &Arc<BufferAllocation>| {
+        encoder.buffers_used.map[&Arc::as_ptr(at).addr()]
+            .trackers
+            .len()
+    };
+    assert_eq!(
+        (used(&written), used(&read_only)),
+        (1, 0),
+        "a read-only buffer has an entry, with no tracker"
     );
 }

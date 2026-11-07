@@ -12,8 +12,8 @@ use winemetal_sys::wire::{
 };
 use winemetal_wire::MemPtr;
 
-use super::{Encoder, buffer_trackers, kind, stage, texture_trackers};
-use crate::resource::{Buffer, BufferAllocation, BufferViewKey, TextureAllocation, TextureViewKey};
+use super::{Encoder, Used, buffer_trackers, kind, stage};
+use crate::resource::BufferAllocation;
 
 const VERTEX_READ: u32 = 1;
 const VERTEX_WRITE: u32 = 1 << 1;
@@ -142,49 +142,26 @@ impl Encoder {
             self.use_resource::<S>(allocation.buffer(), mask);
         }
     }
+}
 
-    /// A buffer's texel view made resident for the pass, unless it already is for this use.
-    pub(super) fn make_buffer_view_resident<const S: u8, const K: u8>(
-        &mut self,
-        buffer: &Buffer,
-        allocation: &Arc<BufferAllocation>,
-        key: BufferViewKey,
-        read: bool,
-        write: bool,
-    ) {
-        let Some(id) = self.pass.as_ref().map(|p| p.id) else {
-            return;
-        };
-        let used = self
-            .buffers_used
-            .entry(allocation, buffer_trackers(allocation));
-        if let Some(mask) =
-            view_residency(&mut used.views, key).check(id, mask::<S, K>(read, write))
-        {
-            let view = buffer.view(allocation, key);
-            self.use_resource::<S>(view.texture, mask);
-        }
-    }
+/// What an access the encoder tracks also makes resident for the pass, with a residency mask.
+pub enum Resident<K> {
+    /// The allocation's own Metal resource.
+    Whole(u32),
+    /// The allocation's view `K`, whose Metal texture is the `u64`.
+    View(K, u64, u32),
+}
 
-    /// A texture view (whose Metal texture is `texture`) made resident for the pass.
-    pub(super) fn make_texture_view_resident<const S: u8, const K: u8>(
-        &mut self,
-        allocation: &Arc<TextureAllocation>,
-        key: TextureViewKey,
-        texture: u64,
-        read: bool,
-        write: bool,
-    ) {
-        let Some(id) = self.pass.as_ref().map(|p| p.id) else {
-            return;
-        };
-        let used = self
-            .textures_used
-            .entry(allocation, texture_trackers(allocation));
-        if let Some(mask) =
-            view_residency(&mut used.views, key).check(id, mask::<S, K>(read, write))
-        {
-            self.use_resource::<S>(texture, mask);
+impl<K: PartialEq + Copy> Resident<K> {
+    /// The resource to make resident for pass `id` and its mask, `None` when it is already.
+    ///
+    /// `whole` is the allocation's own resource; `used` is its use-table entry.
+    pub(super) fn check(self, used: &mut Used<K>, id: u64, whole: u64) -> Option<(u64, u32)> {
+        match self {
+            Self::Whole(mask) => used.residency.check(id, mask).map(|m| (whole, m)),
+            Self::View(key, texture, mask) => view_residency(&mut used.views, key)
+                .check(id, mask)
+                .map(|m| (texture, m)),
         }
     }
 }
