@@ -1,0 +1,2 @@
+# Recipes of the corpus the AIR path and D3D9's MSL render differently, triaged (filled by the C3a parity test).
+# One per line: <file> <vs key> <ps key> <reason>. Keys are the records' disk keys in hex.

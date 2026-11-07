@@ -57,4 +57,6 @@ came from elsewhere keep their own notices, and this is where they are:
   Brad Conte's SHA-256 as Florian Ziesche adapted it for MetalLib (`src/airconv/sha256.hpp`, "presented 'as is' without
   any guarantees", no licence named); `src/airconv/ir/src/metallib.rs` is ported from `src/airconv/metallib_writer.cpp`,
   which carries no notice.
+- **`tests/d3d9/dxso-corpus/` holds Wine's d3d9 test shaders (LGPL-2.1) beside the zlib tests**, as shader cache files; its
+  [`README.md`](tests/d3d9/dxso-corpus/README.md) names each file's origin.
 - Everything else is under the LGPL above unless the file or its folder says otherwise.
