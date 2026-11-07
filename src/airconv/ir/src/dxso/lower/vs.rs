@@ -139,6 +139,7 @@ pub fn lower(program: &DxsoProgram, spec: VsSpec) -> Result<Lowered, LowerError>
         ShaderType::Vertex,
         VsIo::empty(bindings, spec.provided_input_mask),
     );
+    l.check_definitions()?;
     l.plan_vertex();
     l.vertex_prologue()?;
     l.body(&program.instructions)?;

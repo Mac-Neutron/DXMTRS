@@ -632,6 +632,14 @@ pub const fn opcode_value(opcode: Opcode) -> u16 {
 
 /// The most IR instructions a program may lower to (calls inside calls multiply).
 const MAX_INSTRUCTIONS: usize = 1 << 20;
+/// The most D3D9 instructions a program may lower to once its calls are inlined.
+///
+/// D3D9's own ceiling on what one vertex or pixel shader runs: `MaxVShaderInstructionsExecuted`
+/// and `MaxPShaderInstructionsExecuted` are at least 65535 for shader model 3, so an inlined
+/// program longer than that cannot run its every call on the hardware D3D9 describes. It bounds
+/// the inliner, whose `call` emits nothing: 32 labels each calling the next twice would
+/// otherwise walk 2^31 instructions on the translator's host.
+const MAX_DXSO_INSTRUCTIONS: usize = 1 << 16;
 /// The deepest `call` nesting; D3D9 allows four, a recursive call is skipped before this.
 const MAX_CALL_DEPTH: usize = 32;
 
@@ -673,6 +681,8 @@ struct Lower<'p> {
     /// The labels being expanded, innermost last.
     calls: Vec<u32>,
     emitted: usize,
+    /// D3D9 instructions lowered so far, inlined bodies included.
+    lowered: usize,
     /// The `D3DSIO_*` value of the instruction being lowered, for errors.
     opcode: u16,
     defs: BTreeMap<u16, [f32; 4]>,
@@ -696,11 +706,12 @@ impl<'p> Lower<'p> {
             frames: Vec::new(),
             calls: Vec::new(),
             emitted: 0,
+            lowered: 0,
             opcode: 0,
+            // `emit.rs` names a `def`'s local by its index whatever its register kind.
             defs: program
                 .def_constants
                 .iter()
-                .filter(|d| d.reg.kind == RegKind::Const)
                 .map(|d| (d.reg.index, d.value))
                 .collect(),
             defi: program
@@ -715,6 +726,31 @@ impl<'p> Lower<'p> {
                 .collect(),
             vs,
         }
+    }
+
+    /// Refuses a register a program defines twice (`def`, `defi` or `defb`).
+    ///
+    /// `emit.rs` declares one local per definition (`float4 cN`, `int4 iN`, `bool bN`), so a
+    /// second one of the same index does not compile.
+    fn check_definitions(&self) -> Result<(), LowerError> {
+        let p = self.program;
+        let mut seen = std::collections::BTreeSet::new();
+        let defs = p.def_constants.iter().map(|d| (0, d.reg.index));
+        let ints = p.def_int_constants.iter().map(|d| (1, d.reg.index));
+        let bools = p.def_bool_constants.iter().map(|d| (2, d.reg.index));
+        for (file, index) in defs.chain(ints).chain(bools) {
+            if !seen.insert((file, index)) {
+                return Err(LowerError::Unsupported {
+                    opcode: opcode_value(match file {
+                        0 => Opcode::Def,
+                        1 => Opcode::DefI,
+                        _ => Opcode::DefB,
+                    }),
+                    what: "a constant register defined twice",
+                });
+            }
+        }
+        Ok(())
     }
 
     const fn is_vertex(&self) -> bool {

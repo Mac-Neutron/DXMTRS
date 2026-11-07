@@ -72,6 +72,8 @@ mod op {
     pub const DEFI: u16 = 48;
     pub const DEF: u16 = 81;
     pub const SETP: u16 = 94;
+    pub const TEXLD: u16 = 66;
+    pub const TEXLDD: u16 = 93;
     pub const TEXLDL: u16 = 95;
     pub const BREAKP: u16 = 96;
 }
@@ -447,11 +449,43 @@ fn call_callnz_label_inlined() {
     )));
     metallib(&calls(), spec());
     // The depth limit: 32 nested calls lower, 33 are refused.
-    let _ = lowered(&call_chain(31), spec());
+    let _ = lowered(&call_chain(32), spec());
     assert!(matches!(
-        refused(&call_chain(40), spec()),
+        refused(&call_chain(33), spec()),
         LowerError::Unsupported { opcode: 25, .. }
     ));
+    // A call tree is bounded by the instructions it expands to, `call`s included: 31 levels of
+    // two calls each, and two levels of 300, are refused at once; four levels of four lower.
+    for tokens in [call_tree(31, 2), call_tree(2, 300)] {
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            refused(&tokens, spec()),
+            LowerError::Unsupported { what, .. } if what.contains("65536")
+        ));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+    let _ = lowered(&call_tree(4, 4), spec());
+    metallib(&call_tree(4, 4), spec());
+}
+
+/// `depth` labels, each calling the next `fan` times; the last one writes the position.
+fn call_tree(depth: u32, fan: usize) -> Vec<u32> {
+    let mut body = vec![
+        dcl(POSITION, 0, d(INPUT, 0, ALL)),
+        vec![ins(op::CALL, 1), s(LABEL, 0, XYZW)],
+        vec![ins(op::RET, 0)],
+    ];
+    for n in 0..depth {
+        body.push(vec![ins(op::LABEL, 1), s(LABEL, n, XYZW)]);
+        for _ in 0..fan {
+            body.push(vec![ins(op::CALL, 1), s(LABEL, n + 1, XYZW)]);
+        }
+        body.push(vec![ins(op::RET, 0)]);
+    }
+    body.push(vec![ins(op::LABEL, 1), s(LABEL, depth, XYZW)]);
+    body.push(vec![ins(op::MOV, 2), d(RASTOUT, 0, ALL), s(INPUT, 0, XYZW)]);
+    body.push(vec![ins(op::RET, 0)]);
+    program(VS_2_0, &body)
 }
 
 /// `setp_gt p0, r0, c0`; `(p0.x) mov r1, c1`; `(!p0.y) add r1, r1, c2`; `breakp p0.z`.
@@ -576,6 +610,38 @@ fn relative_constant_index() {
         }
     )));
     metallib(&relative(false), spec());
+    // A `def` names its local by index whatever its register kind (`emit.rs`): a `def r3` still
+    // overlays `c3`; a register defined twice is refused (the MSL's two locals collide).
+    let mut other_kind = relative(true);
+    let def_reg = d(CONST, 3, ALL);
+    let at = other_kind
+        .iter()
+        .position(|t| *t == def_reg)
+        .unwrap_or_else(|| panic!("def"));
+    if let Some(t) = other_kind.get_mut(at) {
+        *t = d(TEMP, 3, ALL);
+    }
+    let l = lowered(&other_kind, spec());
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::MovConditional(m)
+        if matches!(m.src0, SrcOperand::Immediate32 { value, .. } if value == def_value)))
+    );
+    let twice = program(
+        VS_2_0,
+        &[
+            dcl(POSITION, 0, d(INPUT, 0, ALL)),
+            def(3, [1.0; 4]),
+            def(3, [2.0; 4]),
+            vec![ins(op::MOV, 2), d(RASTOUT, 0, ALL), s(INPUT, 0, XYZW)],
+        ],
+    );
+    assert_eq!(
+        refused(&twice, spec()),
+        LowerError::Unsupported {
+            opcode: 81,
+            what: "a constant register defined twice"
+        }
+    );
 }
 
 /// `if b3` (dynamic) and `if b1` (a `defb`).
@@ -930,6 +996,68 @@ fn texldl_vertex_sampler_kinds() {
     let l = lowered(&texldl(), spec());
     assert!(!any_source(&l, |o| reads_range(o, range::VS_LOD)));
     metallib(&texldl(), spec());
+    // `texld`, `texldp`, `texldb` and `texldd` compile in a vertex function as the MSL's
+    // `sample(samp, coord.xy)` (bias 0), `(coord / coord.w).xy`, `bias(coord.w)` and
+    // `gradient2d(ddx.xy, ddy.xy)`, which Metal accepts there.
+    for control in [0, 1, 2] {
+        let t = textured(vec![
+            ins(op::TEXLD, 3) | (control << 16),
+            d(TEMP, 0, ALL),
+            s(INPUT, 0, XYZW),
+            s(SAMPLER, 0, XYZW),
+        ]);
+        let l = lowered(&t, spec());
+        let sample = count(&l, |i| matches!(i, Instruction::Sample(_)));
+        let biased = count(&l, |i| {
+            matches!(i, Instruction::SampleBias(b)
+            if matches!(&b.src_bias, SrcOperand::Input { common, .. } if common.swizzle.0 == [3; 4]))
+        });
+        let projects = count(&l, |i| {
+            matches!(i, Instruction::FloatBinaryOp(b)
+            if b.op == FloatBinaryOp::Div
+                && matches!(&b.src1, SrcOperand::Input { common, .. } if common.swizzle.0 == [3; 4]))
+        });
+        assert_eq!(
+            (sample, biased, projects),
+            match control {
+                0 => (1, 0, 0),
+                1 => (1, 0, 1),
+                _ => (0, 1, 0),
+            }
+        );
+        metallib(&t, spec());
+    }
+    let t = textured(vec![
+        ins(op::TEXLDD, 5),
+        d(TEMP, 0, ALL),
+        s(INPUT, 0, XYZW),
+        s(SAMPLER, 0, XYZW),
+        s(CONST, 1, XYZW),
+        s(CONST, 2, XYZW),
+    ]);
+    let l = lowered(&t, spec());
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::SampleDerivative(g)
+        if reads_row(&g.src_x_derivative, range::FLOAT, 1)
+            && reads_row(&g.src_y_derivative, range::FLOAT, 2)))
+    );
+    metallib(&t, spec());
+}
+
+/// A `vs_3_0` sampling slot 0 with `sample` into `r0`, written to `o1`.
+fn textured(sample: Vec<u32>) -> Vec<u32> {
+    program(
+        VS_3_0,
+        &[
+            dcl(POSITION, 0, d(INPUT, 0, ALL)),
+            dcl(POSITION, 0, d(OUTPUT, 0, ALL)),
+            dcl(TEXCOORD, 0, d(OUTPUT, 1, ALL)),
+            dcl_sampler(0, 2),
+            vec![ins(op::MOV, 2), d(OUTPUT, 0, ALL), s(INPUT, 0, XYZW)],
+            sample,
+            vec![ins(op::MOV, 2), d(OUTPUT, 1, ALL), s(TEMP, 0, XYZW)],
+        ],
+    )
 }
 
 /// The buffers `bindings::vertex` declares for a program and spec, by slot.

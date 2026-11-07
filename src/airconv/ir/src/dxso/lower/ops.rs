@@ -6,7 +6,7 @@
 //! of their swizzled source and broadcast, as the MSL's `float4(f((src).x))`.
 
 use super::{
-    Lower, LowerError, Support, control, opcode_value, range,
+    Lower, LowerError, MAX_DXSO_INSTRUCTIONS, Support, control, opcode_value, range,
     regs::{
         MASK_ALL, MASK_W, MASK_X, MASK_Y, MASK_Z, absolute, cbuf, conv, dot, fbin, fcmp, fdst,
         fsplat, ftemp, fun, ibin, idst, itemp, lane, mad, mov, movc, negate, swizzle,
@@ -61,6 +61,12 @@ impl Lower<'_> {
     pub fn instruction(&mut self, inst: &Instruction) -> Result<(), LowerError> {
         self.release();
         self.opcode = opcode_value(inst.opcode);
+        // Every instruction counts, those that emit nothing (`call`, `nop`) too, so a call tree
+        // cannot walk without bound.
+        self.lowered += 1;
+        if self.lowered > MAX_DXSO_INSTRUCTIONS {
+            return Err(self.refuse("a program that expands past 65536 instructions"));
+        }
         match support(self.stage, inst.opcode, &control(inst)) {
             Some(Support::Lowered) => {}
             Some(Support::Unsupported(why)) => return Err(self.refuse(why)),
@@ -430,33 +436,36 @@ impl Lower<'_> {
                 min_lod_clamp: None,
                 feedback: None,
             }),
-            // `texldb`: the coordinate's `.w` is the bias.
-            _ if inst.flags.contains(InstrFlags::TEX_BIASED) => Ir::SampleBias(InstSampleBias {
-                dst,
-                src_bias: lane(coord.clone(), 3),
-                src_address: coord,
-                src_resource,
-                src_sampler,
-                offsets: [0; 3],
-                min_lod_clamp: None,
-                feedback: None,
-            }),
             _ => {
-                // `texldp`: the coordinate divided by its `.w` first.
+                // `texldp`: the coordinate divided by its `.w` first; `texldb`: the bias is the
+                // unprojected coordinate's `.w` (`emit.rs` applies both when both are set).
                 let src_address = if inst.flags.contains(InstrFlags::TEX_PROJECTED) {
-                    self.binary(FloatBinaryOp::Div, coord.clone(), lane(coord, 3))?
+                    self.binary(FloatBinaryOp::Div, coord.clone(), lane(coord.clone(), 3))?
                 } else {
-                    coord
+                    coord.clone()
                 };
-                Ir::Sample(InstSample {
-                    dst,
-                    src_address,
-                    src_resource,
-                    src_sampler,
-                    offsets: [0; 3],
-                    min_lod_clamp: None,
-                    feedback: None,
-                })
+                if inst.flags.contains(InstrFlags::TEX_BIASED) {
+                    Ir::SampleBias(InstSampleBias {
+                        dst,
+                        src_bias: lane(coord, 3),
+                        src_address,
+                        src_resource,
+                        src_sampler,
+                        offsets: [0; 3],
+                        min_lod_clamp: None,
+                        feedback: None,
+                    })
+                } else {
+                    Ir::Sample(InstSample {
+                        dst,
+                        src_address,
+                        src_resource,
+                        src_sampler,
+                        offsets: [0; 3],
+                        min_lod_clamp: None,
+                        feedback: None,
+                    })
+                }
             }
         };
         self.emit(inst)?;
