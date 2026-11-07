@@ -1116,3 +1116,5 @@ fn nonfinite_position_is_not_sanitized() {
     assert!(l.cfg.blocks.iter().any(|b| b.target == Target::Return));
     metallib(&m4x4(), spec());
 }
+
+mod ps;

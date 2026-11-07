@@ -2,9 +2,9 @@
 //!
 //! `airconv_ir::dxso::lower` turns the program into DXBC blocks and a signature; this takes
 //! them through the DXBC lowering (`dxbc::converter`, `dxbc::blocks`, the signature replay)
-//! with D3D9's bindings, as `dxbc::vs` does for a DXBC vertex shader: Metal 3.1 (AIR 2.6),
-//! common flags 0 (ruling C3-6), stage-in attributes and no vertex pulling. Pixel shaders are
-//! not lowered yet.
+//! with D3D9's bindings, as `dxbc::vs` and `dxbc::ps` do for DXBC: Metal 3.1 (AIR 2.6), common
+//! flags 0 (ruling C3-6), stage-in attributes and no vertex pulling, and for a pixel shader no
+//! pipeline node (its outputs are the lowering's, typed `float4`).
 
 use core::ffi::CStr;
 
@@ -14,7 +14,7 @@ use airconv_ir::{
         DxsoProgram, ShaderType,
         lower::{self, LowerError},
         parse,
-        spec::{StageSpec, VsSpec},
+        spec::{StageSpec, VariantKey, VsSpec},
     },
     shader_info::ShaderFlags,
     tokens::program_type,
@@ -46,8 +46,8 @@ mod bindings;
 ///
 /// # Errors
 ///
-/// What the lowering refuses (`dxso: unsupported …`), a stage the specialization does not
-/// match, and a pixel shader (`dxso: not lowered`).
+/// What the lowering refuses (`dxso: unsupported …`), and a stage the specialization does not
+/// match.
 pub fn convert(
     program: &DxsoProgram,
     spec: &StageSpec,
@@ -82,7 +82,7 @@ fn lower_into(
 ) -> Result<(), Error> {
     match (spec, program.shader_type) {
         (StageSpec::Vs(vs), ShaderType::Vertex) => vertex(program, *vs, name, m),
-        (StageSpec::Ps(_), ShaderType::Pixel) => Err(Error::new(b"dxso: not lowered")),
+        (StageSpec::Ps(key), ShaderType::Pixel) => pixel(program, key, name, m),
         _ => Err(Error::new(b"dxso: stage does not match the program")),
     }
 }
@@ -181,6 +181,73 @@ fn vertex(program: &DxsoProgram, spec: VsSpec, name: &CStr, m: &Module<'_>) -> R
     };
     b.ret(value);
     add_entry(m, c"air.vertex", entry);
+    Ok(())
+}
+
+/// The fragment function: `dxbc::ps::convert` without a pipeline node.
+fn pixel(
+    program: &DxsoProgram,
+    key: &VariantKey,
+    name: &CStr,
+    m: &Module<'_>,
+) -> Result<(), Error> {
+    let lowered = lower::pixel(program, key).map_err(|e| refusal(&e))?;
+    let cx = m.cx();
+    let types = AirTypes::new(cx.tcx());
+    let handles = Handles::default();
+    let mut desc = lowered.io.func_signature.clone();
+    let replay = replay::record(
+        &lowered.io.signature_handlers,
+        &mut desc,
+        &Options {
+            ia_layout: None,
+            pixel: None,
+            pull_mode_reg_mask: 0,
+            skip_vertex_output: false,
+        },
+    )?;
+    let binding = bindings::pixel(&lower::ps_bindings(program, key), &mut desc);
+
+    let (function, entry) = create_function(m, &desc, name.to_bytes(), false, &handles)?;
+    let no_block = || invalid("a block of no function");
+    let entry_bb = function.append_block(cx, c"entry").ok_or_else(no_block)?;
+    let epilogue_bb = function
+        .append_block(cx, c"epilogue")
+        .ok_or_else(no_block)?;
+    let b = Builder::new(cx);
+    b.position_at_end(entry_bb);
+    let air = AirBuilder::new(&b, m, &types, 0);
+    set_metal_version(m, SM50_SHADER_METAL_310);
+
+    let mut res = Resources::default();
+    setup_io_registers(
+        &mut res,
+        &types,
+        &b,
+        lowered.io.max_input_register,
+        lowered.io.max_output_register,
+    );
+    setup_temp_register(&lowered.cfg.info, &mut res, &types, &b);
+    replay.prologue(&air, function, &mut res)?;
+    let conv = Converter {
+        air: &air,
+        ir: &b,
+        function,
+        binding: &binding,
+        res: &res,
+        types: &types,
+        pso_sample_mask: u32::MAX,
+        shader_type: program_type::PIXEL,
+        metal_version: SM50_SHADER_METAL_310,
+        geometry: None,
+    };
+    let real_entry = blocks::convert(&conv, &lowered.cfg.blocks, epilogue_bb)?;
+    b.br(real_entry);
+
+    b.position_at_end(epilogue_bb);
+    let value = replay.epilogue(&air, &res, zero_return(cx, function), u32::MAX)?;
+    value.map_or_else(|| b.ret_void(), |v| b.ret(v));
+    add_entry(m, c"air.fragment", entry);
     Ok(())
 }
 

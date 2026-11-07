@@ -1445,6 +1445,9 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             Instruction::SampleBias(i) => self.sample_b(i),
             Instruction::SampleDerivative(i) => self.sample_d(i),
             Instruction::SampleCompare(i) => self.sample_c(i),
+            Instruction::SampleCompareLevel(i) => self.sample_c_l(i),
+            Instruction::SampleCompareGrad(i) => self.sample_c_d(i),
+            Instruction::TextureSize(i) => self.texture_size(i),
             Instruction::Gather(i) => self.gather(i),
             Instruction::GatherCompare(i) => self.gather_c(i),
             Instruction::CalcLod(i) => self.lod(i),
@@ -2341,6 +2344,107 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             &lod,
         )?;
         self.store_texel(&sample.dst, value, &tex.swizzle)
+    }
+
+    /// D3D9's depth comparison at an explicit level: `sample_l`'s level, `sample_c`'s reference.
+    fn sample_c_l(&self, sample: &airconv_ir::ir::InstSampleCompareLevel) -> Result<(), Error> {
+        let Some((tex, sampler)) =
+            self.texture_and_sampler(&sample.src_resource, &sample.src_sampler)?
+        else {
+            return Ok(());
+        };
+        let reference = self.load_operand(&sample.src_reference, MASK_X)?;
+        let Some(c) = self.sample_coord(&tex, &sampler, &sample.src_address, None, compared)?
+        else {
+            return Ok(());
+        };
+        let lod = self
+            .ir
+            .fadd(self.load_operand(&sample.src_lod, MASK_X)?, sampler.bias);
+        let at = SampleAt {
+            coord: c.coord,
+            array_index: c.array_index,
+            offset: self.air.get_offset(&tex.texture, sample.offsets),
+        };
+        let (value, _) = self.air.create_sample_cmp(
+            &tex.texture,
+            tex.handle,
+            c.sampler,
+            &at,
+            reference,
+            &Lod::Level(lod),
+        )?;
+        self.store_texel(&sample.dst, value, &tex.swizzle)
+    }
+
+    /// D3D9's depth comparison with gradients: `sample_d`'s gradients, `sample_c`'s reference.
+    fn sample_c_d(&self, sample: &airconv_ir::ir::InstSampleCompareGrad) -> Result<(), Error> {
+        let Some((tex, sampler)) =
+            self.texture_and_sampler(&sample.src_resource, &sample.src_sampler)?
+        else {
+            return Ok(());
+        };
+        let min_lod = self.min_lod_clamp(&tex, None)?;
+        let reference = self.load_operand(&sample.src_reference, MASK_X)?;
+        let Some(c) = self.sample_coord(
+            &tex,
+            &sampler,
+            &sample.src_address,
+            Some((&sample.src_x_derivative, &sample.src_y_derivative)),
+            compared,
+        )?
+        else {
+            return Ok(());
+        };
+        let (ddx, ddy) = c
+            .derivatives
+            .ok_or_else(|| invalid("a gradient comparison without derivatives"))?;
+        // As `sample_d`: gradients scaled by 2^bias move the LOD by the sampler's bias.
+        let n = self
+            .lanes(ddx.ty())
+            .ok_or_else(|| invalid("a scalar gradient"))?;
+        let exp2 = self
+            .air
+            .create_fp_un_op(FpUnOp::Exp2, sampler.bias, false)?;
+        let scale = self.ir.vector_splat(n, exp2, c"");
+        let at = SampleAt {
+            coord: c.coord,
+            array_index: c.array_index,
+            offset: self.air.get_offset(&tex.texture, sample.offsets),
+        };
+        let grad = Gradient {
+            dx: self.ir.fmul(ddx, scale),
+            dy: self.ir.fmul(ddy, scale),
+            min_lod,
+        };
+        let (value, _) = self.air.create_sample_cmp_grad(
+            &tex.texture,
+            tex.handle,
+            c.sampler,
+            &at,
+            reference,
+            &grad,
+        )?;
+        self.store_texel(&sample.dst, value, &tex.swizzle)
+    }
+
+    /// D3D9's texture size: `resinfo`'s level-0 width and height, unsigned, without its null case.
+    fn texture_size(&self, size: &airconv_ir::ir::InstTextureSize) -> Result<(), Error> {
+        let Some(tex) = self.load_srv_texture(&size.src_resource)? else {
+            return Ok(());
+        };
+        let level = self.int(0);
+        let to_float = |q| {
+            let v =
+                self.air
+                    .create_bound_texture_query(&tex.texture, tex.handle, q, Some(level))?;
+            self.air.create_convert_to_float(v, Signedness::Unsigned)
+        };
+        let (x, y) = (to_float(Query::Width)?, to_float(Query::Height)?);
+        let zero = self.ir.cx().null(self.types.float4);
+        let v = self.ir.insert_element_u64(zero, x, 0);
+        let v = self.ir.insert_element_u64(v, y, 1);
+        self.store_texel(&size.dst, v, &tex.swizzle)
     }
 
     /// A gather's offset, read after the coordinates and slice: two lanes, three for cubes.

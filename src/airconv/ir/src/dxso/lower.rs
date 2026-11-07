@@ -8,8 +8,9 @@
 //! `call`/`callnz` are inlined at their call sites.
 //!
 //! Every D3D9 register lives in the DXBC temporary file, outputs included: they are written
-//! back to the output registers only at the end, after the epilogue `emit.rs` runs. [`ROWS`]
-//! is the opcode table both stages are checked against, one row per opcode and control.
+//! back to the output registers only at the end, after the epilogue `emit.rs` runs (the vertex
+//! fixups; the pixel alpha test, fog and sRGB encode). [`ROWS`] is the opcode table both stages
+//! are checked against, one row per opcode and control; `ps_1_x` is not lowered yet.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ use super::{
     DxsoProgram, Semantic, SemanticSet, TextureType,
     ir::{CmpFunc, Declaration, InstrFlags, Instruction, RegKind, ShaderType, SrcModifier},
     opcode::Opcode,
-    spec::{VariantKey, VsSpec},
+    spec::{VariantFlags, VariantKey, VsSpec},
 };
 use crate::{
     cfg::Cfg,
@@ -27,6 +28,7 @@ use crate::{
 
 mod inline;
 mod ops;
+mod ps;
 mod regs;
 mod vs;
 
@@ -61,6 +63,14 @@ pub mod range {
     pub const VS_DRAW: u32 = 4;
     /// The vertex LOD table, one `float2` per sampler slot, read one word at a time.
     pub const VS_LOD: u32 = 5;
+    /// The alpha test's reference, one `float`, read only as its first word.
+    pub const ALPHA_REF: u32 = 6;
+    /// `fog_data`: row 0 the fog colour, row 1 `(start, end, density, depth bias)`.
+    pub const FOG: u32 = 7;
+    /// The pixel LOD table, one `float4` row per sampler slot: `(bias, 2^bias, offset, floor)`.
+    pub const LOD_BIAS: u32 = 8;
+    /// `PsDraw`: row 0 `vpos_scale`.
+    pub const PS_DRAW: u32 = 9;
 }
 
 /// `VsDraw`'s first user clip plane row.
@@ -118,17 +128,78 @@ pub fn vertex(program: &DxsoProgram, spec: &VsSpec) -> Result<Lowered, LowerErro
     vs::lower(program, *spec)
 }
 
+/// What a pixel stage binds besides its float constants, under the MSL emitter's conditions.
+pub struct PsBindings {
+    /// The [`range`]s bound beside `c#`, in `emit_ps_function`'s order.
+    ///
+    /// The alpha reference for an alpha test other than none and `D3DCMP_ALWAYS`, `fog_data`
+    /// for vertex or table fog, the LOD table under `VariantFlags::LOD_BIAS`, `PsDraw` for a
+    /// declared `vPos` the key scales, `i#` and `b#` for a constant no `defi`/`defb` defines.
+    pub ranges: Vec<u32>,
+    /// The declared sampler slots: the texture kind bound there, and whether it is a depth one.
+    pub samplers: BTreeMap<u16, (TextureType, bool)>,
+}
+
+/// The texture kind bound at pixel slot `slot` (`emit.rs`'s `bound_sampler_type`).
+#[must_use]
+pub const fn bound_sampler_type(key: &VariantKey, slot: u16) -> TextureType {
+    if slot >= 16 {
+        return TextureType::Texture2D;
+    }
+    let bit = 1u16 << slot;
+    if key.volume_sampler_mask & bit != 0 {
+        TextureType::Texture3D
+    } else if key.cube_sampler_mask & bit != 0 {
+        TextureType::TextureCube
+    } else {
+        TextureType::Texture2D
+    }
+}
+
+/// Whether `mask` has slot `slot`'s bit (slots past 15 have none).
+#[must_use]
+pub const fn slot_bit(mask: u16, slot: u16) -> bool {
+    slot < 16 && mask & (1 << slot) != 0
+}
+
+/// The pixel stage's bindings (`emit.rs`'s `emit_ps_function` conditions).
+#[must_use]
+pub fn ps_bindings(program: &DxsoProgram, key: &VariantKey) -> PsBindings {
+    let mut samplers = BTreeMap::new();
+    for decl in &program.declarations {
+        if let Declaration::Sampler { reg, .. } = decl {
+            let depth = slot_bit(key.depth_sampler_mask, reg.index);
+            samplers.insert(reg.index, (bound_sampler_type(key, reg.index), depth));
+        }
+    }
+    let conditions = [
+        (key.alpha_func != 0 && key.alpha_func != 8, range::ALPHA_REF),
+        (key.fog_mode != 0 || key.fog_table_mode != 0, range::FOG),
+        (key.flags.contains(VariantFlags::LOD_BIAS), range::LOD_BIAS),
+        (
+            program.reads_vpos() && key.flags.contains(VariantFlags::VPOS_SCALE),
+            range::PS_DRAW,
+        ),
+        (program.uses_dynamic_int_constants(), range::INT),
+        (program.uses_dynamic_bool_constants(), range::BOOL),
+    ];
+    PsBindings {
+        ranges: conditions
+            .into_iter()
+            .filter_map(|(on, range)| on.then_some(range))
+            .collect(),
+        samplers,
+    }
+}
+
 /// Lowers a pixel shader specialized by `key`.
 ///
 /// # Errors
 ///
-/// [`LowerError::Unsupported`]: pixel shaders are not lowered yet.
-pub const fn pixel(program: &DxsoProgram, key: &VariantKey) -> Result<Lowered, LowerError> {
-    let _ = (program, key);
-    Err(LowerError::Unsupported {
-        opcode: 0,
-        what: PS_LATER,
-    })
+/// [`LowerError::Unsupported`] for what `emit.rs` refuses or what Metal refuses in its MSL, and
+/// for `ps_1_x`, which is not lowered yet.
+pub fn pixel(program: &DxsoProgram, key: &VariantKey) -> Result<Lowered, LowerError> {
+    ps::lower(program, key)
 }
 
 /// An instruction's control bits, as far as they select its behaviour.
@@ -163,29 +234,39 @@ pub struct Row {
     pub ps: Support,
 }
 
-/// Pixel shaders, until their lowering lands.
-const PS_LATER: &str = "pixel shaders are not lowered yet";
+/// The `ps_1_x` texture and bump ops, which Task 6 lowers with the `ps_1_x` models.
+const PS1_LATER: &str = "a ps_1_x op (lowered with ps_1_x, not yet)";
 const PS_ONLY: &str = "a pixel shader op (it reads pixel texture coordinates or writes a pixel)";
 const DERIVATIVE: &str = "a derivative in a vertex function (Metal refuses it)";
 const DISCARD: &str = "a discard in a vertex function (Metal refuses it)";
 
-/// A row lowered in a vertex shader.
+/// A row both stages lower.
 const fn vs_row(opcode: Opcode, control: Control) -> Row {
     Row {
         opcode,
         control,
         vs: Support::Lowered,
-        ps: Support::Unsupported(PS_LATER),
+        ps: Support::Lowered,
     }
 }
 
-/// A row a vertex shader refuses.
+/// A `ps_1_x` op: a vertex shader refuses it, a pixel shader waits for the `ps_1_x` lowering.
 const fn vs_refused(opcode: Opcode, why: &'static str) -> Row {
     Row {
         opcode,
         control: Control::None,
         vs: Support::Unsupported(why),
-        ps: Support::Unsupported(PS_LATER),
+        ps: Support::Unsupported(PS1_LATER),
+    }
+}
+
+/// A row only a pixel shader lowers.
+const fn ps_row(opcode: Opcode, why: &'static str) -> Row {
+    Row {
+        opcode,
+        control: Control::None,
+        vs: Support::Unsupported(why),
+        ps: Support::Lowered,
     }
 }
 
@@ -271,7 +352,7 @@ pub const ROWS: &[Row] = &[
     parsed(Opcode::DefB),
     parsed(Opcode::DefI),
     vs_refused(Opcode::TexCoord, PS_ONLY),
-    vs_refused(Opcode::TexKill, DISCARD),
+    ps_row(Opcode::TexKill, DISCARD),
     vs_row(Opcode::TexLd, Control::None),
     vs_row(Opcode::TexLd, Control::Projected),
     vs_row(Opcode::TexLd, Control::Biased),
@@ -299,8 +380,8 @@ pub const ROWS: &[Row] = &[
     parsed(Opcode::Def),
     plain(Opcode::Cmp),
     plain(Opcode::Dp2Add),
-    vs_refused(Opcode::Dsx, DERIVATIVE),
-    vs_refused(Opcode::Dsy, DERIVATIVE),
+    ps_row(Opcode::Dsx, DERIVATIVE),
+    ps_row(Opcode::Dsy, DERIVATIVE),
     plain(Opcode::TexLdD),
     cmp(Opcode::SetP, None),
     cmp(Opcode::SetP, Some(CmpFunc::Gt)),
@@ -318,76 +399,20 @@ pub const ROWS: &[Row] = &[
 
 /// The source modifiers, each with what the two stages do with it.
 pub const MODIFIER_ROWS: &[(SrcModifier, Support, Support)] = &[
-    (
-        SrcModifier::None,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Neg,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Bias,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::BiasNeg,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Sign,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::SignNeg,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Comp,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::X2,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::X2Neg,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Dz,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Dw,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Abs,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::AbsNeg,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        SrcModifier::Not,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
+    (SrcModifier::None, Support::Lowered, Support::Lowered),
+    (SrcModifier::Neg, Support::Lowered, Support::Lowered),
+    (SrcModifier::Bias, Support::Lowered, Support::Lowered),
+    (SrcModifier::BiasNeg, Support::Lowered, Support::Lowered),
+    (SrcModifier::Sign, Support::Lowered, Support::Lowered),
+    (SrcModifier::SignNeg, Support::Lowered, Support::Lowered),
+    (SrcModifier::Comp, Support::Lowered, Support::Lowered),
+    (SrcModifier::X2, Support::Lowered, Support::Lowered),
+    (SrcModifier::X2Neg, Support::Lowered, Support::Lowered),
+    (SrcModifier::Dz, Support::Lowered, Support::Lowered),
+    (SrcModifier::Dw, Support::Lowered, Support::Lowered),
+    (SrcModifier::Abs, Support::Lowered, Support::Lowered),
+    (SrcModifier::AbsNeg, Support::Lowered, Support::Lowered),
+    (SrcModifier::Not, Support::Lowered, Support::Lowered),
 ];
 
 /// A relative address through a register `emit.rs` has no case for.
@@ -395,95 +420,87 @@ const REL_KIND: &str = "a relative address through a register other than a0 or a
 
 /// The register kinds a relative constant address may go through.
 pub const REL_ADDR_ROWS: &[(RegKind, Support, Support)] = &[
-    (
-        RegKind::Addr,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
-    (
-        RegKind::Loop,
-        Support::Lowered,
-        Support::Unsupported(PS_LATER),
-    ),
+    (RegKind::Addr, Support::Lowered, Support::Lowered),
+    (RegKind::Loop, Support::Lowered, Support::Lowered),
     (
         RegKind::Temp,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Input,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Const,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::RastOut,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::AttrOut,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::TexcoordOut,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::ConstInt,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::ColorOut,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::DepthOut,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Sampler,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Output,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::ConstBool,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::TempFloat16,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::MiscType,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Label,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
     (
         RegKind::Predicate,
         Support::Unsupported(REL_KIND),
-        Support::Unsupported(PS_LATER),
+        Support::Unsupported(REL_KIND),
     ),
 ];
 
@@ -689,10 +706,11 @@ struct Lower<'p> {
     defi: BTreeMap<u16, [i32; 4]>,
     defb: BTreeMap<u16, bool>,
     vs: vs::VsIo,
+    ps: ps::PsIo,
 }
 
 impl<'p> Lower<'p> {
-    fn new(program: &'p DxsoProgram, stage: ShaderType, vs: vs::VsIo) -> Self {
+    fn new(program: &'p DxsoProgram, stage: ShaderType, vs: vs::VsIo, ps: ps::PsIo) -> Self {
         let mut blocks = Vec::new();
         let current = BlockId::push(&mut blocks, "entry");
         Self {
@@ -725,6 +743,7 @@ impl<'p> Lower<'p> {
                 .map(|d| (d.reg.index, d.value))
                 .collect(),
             vs,
+            ps,
         }
     }
 

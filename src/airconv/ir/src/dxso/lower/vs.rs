@@ -15,8 +15,8 @@ use super::{
     FOG_Z_VARYING, Lower, LowerError, Lowered, MAX_CLIP_PLANES, VS_DRAW_CLIP_ROW, VsBindings,
     range,
     regs::{
-        A0, MASK_ALL, MASK_X, MASK_Y, MASK_Z, P0, TEMPS, Target, cbuf, dot, fbin, fcmp, fdst,
-        fsplat, ftemp, ibin, idst, isplat, itemp, lane, mad, mov, mov_sat, movc, odst,
+        MASK_ALL, MASK_X, MASK_Y, MASK_Z, Target, cbuf, dot, fbin, fcmp, fdst, fsplat, ftemp, ibin,
+        idst, itemp, lane, mad, mov, mov_sat, movc, odst,
     },
     varying_name, vs_bindings,
 };
@@ -79,7 +79,7 @@ pub struct VsIo {
 }
 
 impl VsIo {
-    fn empty(bindings: VsBindings, provided_mask: u16) -> Self {
+    pub fn empty(bindings: VsBindings, provided_mask: u16) -> Self {
         Self {
             inputs: BTreeSet::new(),
             provided_mask,
@@ -138,6 +138,7 @@ pub fn lower(program: &DxsoProgram, spec: VsSpec) -> Result<Lowered, LowerError>
         program,
         ShaderType::Vertex,
         VsIo::empty(bindings, spec.provided_input_mask),
+        super::ps::PsIo::none(),
     );
     l.check_definitions()?;
     l.plan_vertex();
@@ -223,23 +224,7 @@ impl Lower<'_> {
 
     /// The registers zeroed and the members given their defaults (the MSL's locals).
     fn vertex_prologue(&mut self) -> Result<(), LowerError> {
-        let program = self.program;
-        let used: BTreeSet<u16> = program
-            .all_instructions()
-            .flat_map(|i| {
-                i.dst
-                    .iter()
-                    .map(|d| d.reg)
-                    .chain(i.srcs.iter().map(|s| s.reg))
-            })
-            .filter(|r| r.kind == RegKind::Temp && r.index < TEMPS)
-            .map(|r| r.index)
-            .collect();
-        for r in used {
-            self.emit(mov(fdst(u32::from(r), MASK_ALL), fsplat(0.0)))?;
-        }
-        self.emit(mov(idst(A0, MASK_ALL), isplat(0)))?;
-        self.emit(mov(idst(P0, MASK_ALL), isplat(0)))?;
+        self.zero_registers()?;
         let zero = [self.vs.position, self.vs.position1];
         let colors = self.vs.color.clone();
         for t in zero.into_iter().chain(self.vs.texcoord.clone()) {

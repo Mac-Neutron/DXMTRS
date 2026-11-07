@@ -338,6 +338,11 @@ impl Lower<'_> {
         Ok(match kind {
             RegKind::Temp if index < TEMPS => ftemp(u32::from(index)),
             RegKind::Temp => return Err(self.refuse("a temporary register above r31")),
+            RegKind::Input | RegKind::Addr | RegKind::ColorOut | RegKind::MiscType
+                if !self.is_vertex() =>
+            {
+                self.ps_read(kind, index)?
+            }
             RegKind::Input => self.read_input(index)?,
             RegKind::Const => self.defs.get(&index).map_or_else(
                 || cbuf(range::FLOAT, u32::from(index), OperandDataType::Float),
@@ -656,7 +661,7 @@ impl Lower<'_> {
             RegKind::Temp => Err(self.refuse("a temporary register above r31")),
             RegKind::Predicate => Err(self.refuse("a p0 write other than setp's")),
             _ if self.is_vertex() => self.vs_target(kind, index),
-            _ => Err(self.refuse("a register the stage cannot write")),
+            _ => self.ps_target(kind, index),
         }
     }
 

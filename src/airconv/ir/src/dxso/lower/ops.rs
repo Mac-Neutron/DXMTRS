@@ -85,6 +85,7 @@ impl Lower<'_> {
             Opcode::Call | Opcode::CallNz => return self.call(inst),
             Opcode::SetP => return self.setp(inst),
             Opcode::MovA => return self.mova(inst),
+            Opcode::TexKill => return self.texkill(inst),
             _ => {}
         }
         let srcs = self.sources(inst)?;
@@ -118,14 +119,14 @@ impl Lower<'_> {
     }
 
     /// A scratch holding `op(a, b)` in every lane.
-    fn binary(&mut self, op: FloatBinaryOp, a: Src, b: Src) -> Result<Src, LowerError> {
+    pub fn binary(&mut self, op: FloatBinaryOp, a: Src, b: Src) -> Result<Src, LowerError> {
         let s = self.scratch();
         self.emit(fbin(op, fdst(s, MASK_ALL), a, b))?;
         Ok(ftemp(s))
     }
 
     /// A scratch holding `op(a)` in every lane.
-    fn unary(&mut self, op: FloatUnaryOp, a: Src) -> Result<Src, LowerError> {
+    pub fn unary(&mut self, op: FloatUnaryOp, a: Src) -> Result<Src, LowerError> {
         let s = self.scratch();
         self.emit(fun(op, fdst(s, MASK_ALL), a))?;
         Ok(ftemp(s))
@@ -139,7 +140,7 @@ impl Lower<'_> {
     }
 
     /// A scratch holding `cond ? a : b` per lane, `cond` an integer mask.
-    fn select(&mut self, cond: Src, a: Src, b: Src) -> Result<Src, LowerError> {
+    pub fn select(&mut self, cond: Src, a: Src, b: Src) -> Result<Src, LowerError> {
         let s = self.scratch();
         self.emit(movc(fdst(s, MASK_ALL), cond, a, b))?;
         Ok(ftemp(s))
@@ -153,7 +154,7 @@ impl Lower<'_> {
     }
 
     /// `pow(base, e)` as Metal's fast math computes it: `exp2(e * log2(base))`.
-    fn pow(&mut self, base: Src, e: Src) -> Result<Src, LowerError> {
+    pub fn pow(&mut self, base: Src, e: Src) -> Result<Src, LowerError> {
         let l = self.unary(FloatUnaryOp::Log2, base)?;
         let p = self.binary(FloatBinaryOp::Mul, l, e)?;
         self.unary(FloatUnaryOp::Exp2, p)
@@ -317,6 +318,8 @@ impl Lower<'_> {
                 self.select(below, fsplat(on), fsplat(off))?
             }
             Opcode::TexLd | Opcode::TexLdL | Opcode::TexLdD => self.texture(inst, srcs)?,
+            Opcode::Dsx => self.derivative(a(0)?, false)?,
+            Opcode::Dsy => self.derivative(a(0)?, true)?,
             _ => return Err(self.refuse("an opcode with no lowering")),
         })
     }
@@ -401,6 +404,9 @@ impl Lower<'_> {
         let slot = sampler.reg.index;
         if !self.samplers().contains_key(&slot) {
             return Err(self.refuse("a sample from a sampler slot with no dcl"));
+        }
+        if !self.is_vertex() {
+            return self.ps_texture(inst, srcs, slot, sampler.swizzle.0);
         }
         let coord = self.arg(srcs, 0)?;
         let src_resource = SrcOperandResource {
@@ -498,7 +504,11 @@ impl Lower<'_> {
 
     /// The stage's declared sampler slots, typed by the bound texture.
     pub const fn samplers(&self) -> &std::collections::BTreeMap<u16, TextureType> {
-        &self.vs.samplers
+        if self.is_vertex() {
+            &self.vs.samplers
+        } else {
+            &self.ps.samplers
+        }
     }
 
     /// `setp_<cmp> p0, s0, s1`: the comparison per lane into `p0`, masked and predicated.
@@ -512,11 +522,8 @@ impl Lower<'_> {
         self.store_int(super::regs::P0, mask, c, inst.predicate.as_ref())
     }
 
-    /// `mova a0, s`: rounded, masked and predicated (a vertex shader's `a` only).
+    /// `mova a0, s`: rounded, masked and predicated (a pixel shader's `a` too, as the MSL's).
     fn mova(&mut self, inst: &Instruction) -> Result<(), LowerError> {
-        if !self.is_vertex() {
-            return Err(self.refuse("mova outside a vertex shader"));
-        }
         let srcs = self.sources(inst)?;
         let value = self.arg(&srcs, 0)?;
         let Some(dst) = inst.dst else {

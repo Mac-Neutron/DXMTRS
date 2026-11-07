@@ -343,6 +343,45 @@ pub struct InstSampleLod {
     pub feedback: Option<DstOperand>,
 }
 
+/// A depth comparison at an explicit level (D3D9's `texldl`, or a pinned level, on a depth slot).
+///
+/// No DXBC instruction decodes to it: `sample_c_lz` is [`InstSampleCompare`]'s `level_zero`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstSampleCompareLevel {
+    pub dst: DstOperand,
+    pub src_address: SrcOperand,
+    pub src_resource: SrcOperandResource,
+    pub src_sampler: SrcOperandSampler,
+    pub src_reference: SrcOperand,
+    pub src_lod: SrcOperand,
+    pub offsets: [i32; 3],
+}
+
+/// A depth comparison with explicit gradients (D3D9's `texldd` on a depth slot).
+///
+/// No DXBC instruction decodes to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstSampleCompareGrad {
+    pub dst: DstOperand,
+    pub src_address: SrcOperand,
+    pub src_resource: SrcOperandResource,
+    pub src_sampler: SrcOperandSampler,
+    pub src_reference: SrcOperand,
+    pub src_x_derivative: SrcOperand,
+    pub src_y_derivative: SrcOperand,
+    pub offsets: [i32; 3],
+}
+
+/// The level-0 width and height of a directly bound texture, as floats in lanes x and y.
+///
+/// D3D9's fetch4 shift. Unlike [`InstResourceInfo`] it has no null-handle case: a texture bound
+/// as its own argument tests null. No DXBC instruction decodes to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstTextureSize {
+    pub dst: DstOperand,
+    pub src_resource: SrcOperandResource,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstGather {
     pub dst: DstOperand,
@@ -802,6 +841,12 @@ pub enum Instruction {
     SampleBias(InstSampleBias),
     SampleDerivative(InstSampleDerivative),
     SampleLod(InstSampleLod),
+    /// D3D9's, beyond `InstructionList`'s kinds: a depth comparison at an explicit level.
+    SampleCompareLevel(InstSampleCompareLevel),
+    /// D3D9's, beyond `InstructionList`'s kinds: a depth comparison with gradients.
+    SampleCompareGrad(InstSampleCompareGrad),
+    /// D3D9's, beyond `InstructionList`'s kinds: a directly bound texture's size.
+    TextureSize(InstTextureSize),
     SamplePos(InstSamplePos),
     SampleInfo(InstSampleInfo),
     BufferInfo(InstBufferInfo),

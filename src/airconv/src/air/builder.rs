@@ -911,6 +911,32 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         Ok(self.pair(result))
     }
 
+    /// `air.get_*` of a texture bound as its own argument, without a null-handle select.
+    ///
+    /// [`Self::create_texture_query`]'s select would answer 0: such a handle (D3D9's bindings)
+    /// tests null.
+    ///
+    /// # Errors
+    ///
+    /// A level the query uses and the operands lack.
+    pub fn create_bound_texture_query(
+        &self,
+        texture: &Texture,
+        handle: Val<'cx>,
+        query: Query,
+        level: Option<Val<'cx>>,
+    ) -> Result<Val<'cx>, Error> {
+        let info = texture.kind.info();
+        let sized = matches!(query, Query::Width | Query::Height | Query::Depth);
+        let name = [b"air.".as_slice(), query.name(), b"_", info.suffix].concat();
+        let mut call = Call::new(self);
+        call.push(self.texture_handle_type(texture.kind), handle);
+        if sized && info.has(MIPMAPPED) {
+            call.push(self.int_ty(1), operand(level, &name)?);
+        }
+        call.finish(&name, self.int_ty(1), READ)
+    }
+
     /// `air.get_*`: a texture's size, slices, levels or samples, 0 for a null handle.
     ///
     /// `CreateTextureQuery`; a mipmapped kind's width, height and depth take `level`.

@@ -179,10 +179,7 @@ fn lower(stage: ShaderType, instructions: Vec<Instruction>) -> Result<(), LowerE
 fn agrees(support: &Support, result: &Result<(), LowerError>, opcode: u16) -> bool {
     match (support, result) {
         (Support::Lowered, Ok(())) | (Support::Parser, _) => true,
-        (Support::Unsupported(_), Err(LowerError::Unsupported { opcode: o, .. })) => {
-            // A pixel shader is refused before any instruction.
-            *o == opcode || *o == 0
-        }
+        (Support::Unsupported(_), Err(LowerError::Unsupported { opcode: o, .. })) => *o == opcode,
         _ => false,
     }
 }

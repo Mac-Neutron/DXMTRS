@@ -98,6 +98,8 @@ src/airconv/ir/src/ir.rs InstResourceInfo Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSample Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSampleBias Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSampleCompare Clone,Debug,PartialEq,Eq
+src/airconv/ir/src/ir.rs InstSampleCompareGrad Clone,Debug,PartialEq,Eq
+src/airconv/ir/src/ir.rs InstSampleCompareLevel Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSampleDerivative Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSampleInfo Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSampleLod Clone,Debug,PartialEq,Eq
@@ -108,6 +110,7 @@ src/airconv/ir/src/ir.rs InstStoreStructured Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstStoreUavTyped Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSwapConditional Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstSync Clone,Debug,PartialEq,Eq
+src/airconv/ir/src/ir.rs InstTextureSize Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs Instruction Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs InstructionCommon Clone,Debug,PartialEq,Eq
 src/airconv/ir/src/ir.rs IntegerBinaryOp Clone,Debug,PartialEq,Eq
