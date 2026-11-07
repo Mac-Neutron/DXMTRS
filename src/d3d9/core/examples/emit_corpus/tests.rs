@@ -30,7 +30,11 @@ fn written_cache_loads_with_every_record() {
     let path = temp("written");
     write_synthetic_cache(&path, &corpus).expect("write");
     let records = loaded(&path);
-    assert_eq!(records.shaders.len(), corpus.shaders.len());
+    // The timed set plus the `ps_1_x` texture-address families and modifier programs only the cache file carries.
+    assert_eq!(
+        records.shaders.len(),
+        corpus.shaders.len() + texture_family_ps().len() + modifier_programs().len()
+    );
     assert!(records.shaders.iter().all(|e| e.source().is_some()));
     assert!(!records.pipelines.is_empty());
     // Every programmable kind is present, and every recipe pairs a vertex with a pixel record.

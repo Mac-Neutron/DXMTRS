@@ -17,6 +17,12 @@ version = "0.14.1"
 dependencies = [
  "airconv-ir",
  "cc",
+ "dispatch2",
+ "mtld3d-core",
+ "mtld3d-shared",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
  "rustc-hash",
 ]
 

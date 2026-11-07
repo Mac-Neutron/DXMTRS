@@ -69,7 +69,7 @@ use std::{
 use mtld3d_core::{
     dxso::{
         self, Declaration, DxsoProgram, FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey,
-        RegKind, VariantKey, VsSamplerKinds, tci_entry,
+        RegKind, VariantFlags, VariantKey, VsSamplerKinds, tci_entry,
     },
     pipeline_state::{
         ExtraColorAttachments, PipelineAttachFlags, PipelineRsBits, PipelineSnapshot, StreamLayout,
@@ -591,6 +591,11 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
     let mut vertex = Vec::new();
     let mut pixel = Vec::new();
     let mut shaders = Vec::new();
+    let modifier_tokens = modifier_programs();
+    let modifier_parsed = modifier_tokens
+        .iter()
+        .map(|(tokens, _)| dxso::parse(tokens).map_err(|e| format!("modifier program: {e:?}")))
+        .collect::<Result<Vec<_>, _>>()?;
     for shader in &corpus.shaders {
         let Input::Synthetic {
             tokens,
@@ -616,6 +621,44 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         }
         shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
     }
+    // The texture-address families pair with the `vs_1_1` shaders only.
+    let mut families = Vec::new();
+    for (tokens, variant) in texture_family_ps() {
+        let program = dxso::parse(&tokens).map_err(|e| format!("family ps: {e:?}"))?;
+        let source = ShaderSource::pixel(&program, variant);
+        let kind = CachedKind::from_programmable(
+            u8::try_from((tokens[0] >> 8) & 0xFF).map_err(|e| e.to_string())?,
+            true,
+        )
+        .ok_or("family ps kind")?;
+        let key = source.disk_key();
+        let msl = source.emit(&kind.entry_name(key))?;
+        families.push(ShaderRecordRef::new(kind, key));
+        shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
+    }
+    // The modifier programs: vertex shaders join the pairing below, pixel shaders pair with the
+    // vertex shaders of their model into float targets that keep what an 8-bit one clamps.
+    let mut modifier_ps = Vec::new();
+    for ((tokens, specialization), program) in modifier_tokens.iter().zip(&modifier_parsed) {
+        let major = u8::try_from((tokens[0] >> 8) & 0xFF).map_err(|e| e.to_string())?;
+        let source = match specialization {
+            Specialization::Vertex { clip_planes } => {
+                ShaderSource::vertex(program, u16::MAX, *clip_planes, VsSamplerKinds::default())
+            }
+            Specialization::Pixel(variant) => ShaderSource::pixel(program, *variant),
+        };
+        let is_pixel = tokens[0] >> 16 == 0xFFFF;
+        let kind = CachedKind::from_programmable(major, is_pixel).ok_or("modifier kind")?;
+        let key = source.disk_key();
+        let msl = source.emit(&kind.entry_name(key))?;
+        let reference = ShaderRecordRef::new(kind, key);
+        if is_pixel {
+            modifier_ps.push((reference, major));
+        } else {
+            vertex.push((reference, program, tokens[0]));
+        }
+        shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
+    }
     let mut pipelines = Vec::new();
     for (vs, program, vs_header) in &vertex {
         let attrs = vertex_attrs(program);
@@ -625,32 +668,70 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
             if (vs_header >> 8 & 0xFF == 3) != (ps_header >> 8 & 0xFF == 3) {
                 continue;
             }
-            let mut stream_layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
-            stream_layouts[0] = StreamLayout {
+            pipelines.push(synthetic_recipe(
+                *vs,
+                *ps,
                 stride,
-                step: VertexStepFunction::PerVertex,
-                step_rate: 1,
-            };
-            let snapshot = PipelineSnapshot {
-                vs_fn: MetalHandle::NULL,
-                ps_fn: MetalHandle::NULL,
-                vdecl_hash: vs.key(),
-                stream_layouts,
-                color_format: PixelFormat::Bgra8Unorm,
-                attach: PipelineAttachFlags::HAS_COLOR_OUTPUT
-                    | PipelineAttachFlags::COLOR_HAS_ALPHA,
-                rs: PipelineRsBits {
-                    color_write_mask: 0x0F,
-                    ..PipelineRsBits::default()
-                },
-                extra: ExtraColorAttachments::NONE,
-                ps_color_out_mask: 1,
-                sample_count: 1,
-            };
-            pipelines.push(PipelineRecipe::from_snapshot(*vs, *ps, &snapshot, &attrs));
+                &attrs,
+                PixelFormat::Bgra8Unorm,
+            ));
+        }
+        for (ps, major) in &modifier_ps {
+            if u32::from(*major) == vs_header >> 8 & 0xFF {
+                pipelines.push(synthetic_recipe(
+                    *vs,
+                    *ps,
+                    stride,
+                    &attrs,
+                    PixelFormat::Rgba16Float,
+                ));
+            }
+        }
+        if vs_header >> 8 & 0xFF == 1 {
+            for ps in &families {
+                pipelines.push(synthetic_recipe(
+                    *vs,
+                    *ps,
+                    stride,
+                    &attrs,
+                    PixelFormat::Bgra8Unorm,
+                ));
+            }
         }
     }
     Ok((shaders, pipelines))
+}
+
+/// The recipe of a synthetic pair: one `float4` stream, one target of `color_format`, no blending.
+fn synthetic_recipe(
+    vs: ShaderRecordRef,
+    ps: ShaderRecordRef,
+    stride: u32,
+    attrs: &[VertexAttrDesc],
+    color_format: PixelFormat,
+) -> PipelineRecipe {
+    let mut stream_layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
+    stream_layouts[0] = StreamLayout {
+        stride,
+        step: VertexStepFunction::PerVertex,
+        step_rate: 1,
+    };
+    let snapshot = PipelineSnapshot {
+        vs_fn: MetalHandle::NULL,
+        ps_fn: MetalHandle::NULL,
+        vdecl_hash: vs.key(),
+        stream_layouts,
+        color_format,
+        attach: PipelineAttachFlags::HAS_COLOR_OUTPUT | PipelineAttachFlags::COLOR_HAS_ALPHA,
+        rs: PipelineRsBits {
+            color_write_mask: 0x0F,
+            ..PipelineRsBits::default()
+        },
+        extra: ExtraColorAttachments::NONE,
+        ps_color_out_mask: 1,
+        sample_count: 1,
+    };
+    PipelineRecipe::from_snapshot(vs, ps, &snapshot, attrs)
 }
 
 /// One tightly packed `float4` per input register the vertex shader declares, in one stream.
@@ -1298,6 +1379,281 @@ fn synthetic_sm() -> Vec<Shader> {
         ));
     }
     fixed_names(shaders)
+}
+
+/// The `ps_1_x` texture-address families the timed set lacks, for the parity corpus only.
+///
+/// `--write-cache` pairs each with the `vs_1_1` shaders; `--digest` and the timed corpora do not
+/// see them. Programs are Task 6's hand cases: bem, texbem, texbeml, texm3x2pad/tex/depth,
+/// texm3x3pad/tex/spec/vspec and texm3x3, texreg2ar/gb/rgb, texdp3, texdp3tex and texdepth.
+fn texture_family_ps() -> Vec<(Vec<u32>, VariantKey)> {
+    const PHASE: u32 = 0xFFFD;
+    const ALL: u8 = 0xF;
+    let td = |n: u16| dst(REG_ADDR_OR_TEXTURE, n, ALL);
+    let ts = |n: u16| src(REG_ADDR_OR_TEXTURE, n, SWIZ_IDENTITY);
+    let rd = |n: u16| dst(REG_TEMP, n, ALL);
+    let rs = |n: u16| src(REG_TEMP, n, SWIZ_IDENTITY);
+    let c = |n: u16| src(REG_CONST, n, SWIZ_IDENTITY);
+    let sel = |n: u16| ts(n) | (4 << 24);
+    let ins = |code: u16, operands: &[u32]| {
+        let mut v = vec![op(code, 0)];
+        v.extend_from_slice(operands);
+        v
+    };
+    let prog = |header: u32, body: &[Vec<u32>]| {
+        let mut t = vec![header];
+        for b in body {
+            t.extend_from_slice(b);
+        }
+        t.push(END);
+        t
+    };
+    let def_row = |index: u16, value: [f32; 4]| {
+        let mut t = vec![op(OP_DEF, 5), dst(REG_CONST, index, ALL)];
+        t.extend(value.map(f32::to_bits));
+        t
+    };
+    // Opcodes: texcoord 64, texkill 65, tex 66, texbem 67, texbeml 68, texreg2ar 69, texreg2gb 70,
+    // texm3x2pad 71, texm3x2tex 72, texm3x3pad 73, texm3x3tex 74, texm3x3spec 76, texm3x3vspec 77,
+    // cnd 80, bem 89, texm3x2depth 84, texdp3 83, texm3x3 86, texdp3tex 85, texdepth 87, texreg2rgb 82.
+    let bem = prog(
+        PS_1_1,
+        &[
+            ins(66, &[td(0)]),
+            ins(67, &[td(1), ts(0)]),
+            ins(68, &[td(2), ts(0)]),
+            ins(OP_ADD, &[rd(0), ts(1), ts(2)]),
+        ],
+    );
+    let beml_mask = prog(
+        PS_1_1,
+        &[
+            ins(66, &[td(0)]),
+            ins(68, &[dst(REG_ADDR_OR_TEXTURE, 2, 0b0011), ts(0)]),
+            ins(OP_ADD, &[rd(0), ts(0), ts(2)]),
+        ],
+    );
+    let bem14 = prog(
+        PS_1_4,
+        &[
+            ins(66, &[rd(0), ts(0)]),
+            ins(89, &[dst(REG_TEMP, 1, 3), c(0), rs(0)]),
+            vec![PHASE],
+            ins(66, &[rd(2), rs(1)]),
+            ins(OP_ADD, &[rd(0), rs(2), rs(1)]),
+        ],
+    );
+    let m3x2tex = prog(
+        PS_1_1,
+        &[
+            ins(66, &[td(0)]),
+            ins(71, &[td(1), sel(0)]),
+            ins(72, &[td(2), sel(0)]),
+            ins(OP_ADD, &[rd(0), ts(2), ts(1)]),
+        ],
+    );
+    let m3x2depth = |zero: bool| {
+        let source = if zero { c(1) } else { ts(0) };
+        prog(
+            0xFFFF_0103,
+            &[
+                def_row(1, [0.0; 4]),
+                ins(66, &[td(0)]),
+                ins(71, &[td(1), ts(0)]),
+                ins(84, &[td(2), source]),
+                ins(OP_MOV, &[rd(0), ts(0)]),
+            ],
+        )
+    };
+    let m3x3 = |last: u16, extra: &[u32]| {
+        let mut operands = vec![td(3), sel(0)];
+        operands.extend_from_slice(extra);
+        prog(
+            0xFFFF_0102,
+            &[
+                ins(66, &[td(0)]),
+                ins(73, &[td(1), sel(0)]),
+                ins(73, &[td(2), sel(0)]),
+                ins(last, &operands),
+                ins(OP_MOV, &[rd(0), ts(3)]),
+            ],
+        )
+    };
+    let reg2 = prog(
+        0xFFFF_0102,
+        &[
+            ins(66, &[td(0)]),
+            ins(69, &[td(1), ts(0)]),
+            ins(70, &[td(2), ts(0)]),
+            ins(82, &[td(3), ts(0)]),
+            ins(OP_ADD, &[rd(0), ts(1), ts(2)]),
+            ins(OP_MAD, &[rd(0), ts(3), c(2), rs(0)]),
+        ],
+    );
+    let dp3 = prog(
+        0xFFFF_0102,
+        &[
+            ins(66, &[td(0)]),
+            ins(83, &[td(1), ts(0)]),
+            ins(85, &[td(2), ts(0)]),
+            ins(OP_ADD, &[rd(0), ts(1), ts(2)]),
+        ],
+    );
+    let texdepth = |value: Option<[f32; 4]>| {
+        let mut body = value.map_or_else(
+            || vec![ins(64, &[rd(5), ts(0)])],
+            |v| vec![def_row(0, v), ins(OP_MOV, &[rd(5), c(0)])],
+        );
+        body.extend([vec![PHASE], ins(87, &[rd(5)]), ins(OP_MOV, &[rd(0), ts(1)])]);
+        prog(PS_1_4, &body)
+    };
+    let key = |cube: u16| VariantKey {
+        cube_sampler_mask: cube,
+        ..VariantKey::default()
+    };
+    // A shader that writes depth needs the flag: the recipes carry no depth attachment.
+    let no_depth = VariantKey {
+        flags: VariantFlags::NO_DEPTH_ATTACHMENT,
+        ..VariantKey::default()
+    };
+    vec![
+        (bem, key(0)),
+        (beml_mask, key(0)),
+        (bem14, key(0)),
+        (m3x2tex, key(0)),
+        (m3x2depth(false), no_depth),
+        (m3x2depth(true), no_depth),
+        (m3x3(74, &[]), key(0)),
+        (m3x3(86, &[]), key(0)),
+        (m3x3(76, &[c(7)]), key(0b1000)),
+        (m3x3(77, &[]), key(0b1000)),
+        (reg2, key(0)),
+        (dp3, key(0)),
+        (texdepth(None), no_depth),
+        (texdepth(Some([0.0; 4])), no_depth),
+    ]
+}
+
+/// Programs whose result modifiers feed further arithmetic, for the parity corpus only.
+///
+/// `_sat` on a destination, `-r`, `|r|` (`vs_2_0` and later, `ps_3_0`), `1-r` and `_bias`
+/// (`ps_1_x`) on values from `c#` and `v#`: each result goes through more arithmetic before it
+/// leaves, so dropping a modifier changes the pixels even in a float target. Vertex shaders write
+/// a texcoord, pass-through pixel shaders show it unclamped, the others compute with the modifiers.
+fn modifier_programs() -> Vec<(Vec<u32>, Specialization)> {
+    const SAT: u32 = 1 << 20;
+    const NEG: u32 = 1 << 24;
+    const BIAS: u32 = 2 << 24;
+    const COMP: u32 = 6 << 24;
+    const ABS: u32 = 11 << 24;
+    let t = |n: u16| dst(REG_TEMP, n, XYZW);
+    let r = |n: u16| src(REG_TEMP, n, SWIZ_IDENTITY);
+    let c = |n: u16| src(REG_CONST, n, SWIZ_IDENTITY);
+    let v = |n: u16| src(REG_INPUT, n, SWIZ_IDENTITY);
+    let tex = |n: u16| src(REG_ADDR_OR_TEXTURE, n, SWIZ_IDENTITY);
+    let mut out = Vec::new();
+    // vs_1_1, vs_2_0, vs_3_0: texcoord v1 through `mad_sat`, a negated and an absolute source.
+    for version in [VS_1_1, VS_2_0, VS_3_0] {
+        let (sm1, sm3) = (version == VS_1_1, version == VS_3_0);
+        let mut vs = vec![version];
+        dcl(&mut vs, usage(D3DDECLUSAGE_POSITION, 0), REG_INPUT, 0, XYZW);
+        dcl(&mut vs, usage(D3DDECLUSAGE_TEXCOORD, 0), REG_INPUT, 1, XYZW);
+        let (position, texcoord) = if sm3 {
+            dcl(
+                &mut vs,
+                usage(D3DDECLUSAGE_POSITION, 0),
+                REG_OUTPUT,
+                0,
+                XYZW,
+            );
+            dcl(
+                &mut vs,
+                usage(D3DDECLUSAGE_TEXCOORD, 0),
+                REG_OUTPUT,
+                1,
+                XYZW,
+            );
+            (dst(REG_OUTPUT, 0, XYZW), dst(REG_OUTPUT, 1, XYZW))
+        } else {
+            (dst(REG_RASTOUT, 0, XYZW), dst(REG_OUTPUT, 0, XYZW))
+        };
+        let magnitude = if sm1 { r(1) } else { r(1) | ABS };
+        vs.extend([op(OP_MAD, 4), t(0) | SAT, v(1), c(0), c(1)]);
+        vs.extend([op(OP_MAD, 4), t(1), r(0) | NEG, c(2), v(1)]);
+        vs.extend([op(OP_ADD, 3), t(2), magnitude, c(3)]);
+        vs.extend([op(OP_MUL, 3), t(2) | SAT, r(2), c(4)]);
+        vs.extend([op(OP_MAD, 4), t(3), r(2), c(5), r(1)]);
+        vs.extend([op(OP_MOV, 2), position, v(0)]);
+        vs.extend([op(OP_MOV, 2), texcoord, r(3)]);
+        vs.push(END);
+        out.push((vs, Specialization::Vertex { clip_planes: 0 }));
+    }
+    let plain = || Specialization::Pixel(VariantKey::default());
+    // ps_1_1: `_bias`, `1-` and a negated source around `mad_sat`.
+    out.push((
+        vec![
+            PS_1_1,
+            op(64, 0),
+            dst(REG_ADDR_OR_TEXTURE, 0, XYZW),
+            op(OP_MAD, 0),
+            t(0) | SAT,
+            tex(0) | BIAS,
+            c(0),
+            v(0),
+            op(OP_MUL, 0),
+            t(1),
+            r(0) | COMP,
+            c(1),
+            op(OP_ADD, 0),
+            t(0),
+            r(1),
+            tex(0) | NEG,
+            END,
+        ],
+        plain(),
+    ));
+    // ps_2_0: texcoord t0 and colour v0 through `mad_sat`, a negated source and `add_sat`.
+    let mut ps = vec![PS_2_0];
+    dcl(&mut ps, DCL_PLAIN, REG_ADDR_OR_TEXTURE, 0, XYZW);
+    dcl(&mut ps, DCL_PLAIN, REG_INPUT, 0, XYZW);
+    ps.extend([op(OP_MAD, 4), t(0) | SAT, tex(0), c(0), v(0)]);
+    ps.extend([op(OP_MAD, 4), t(1), r(0) | NEG, c(1), tex(0)]);
+    ps.extend([op(OP_ADD, 3), t(2) | SAT, r(1), c(2) | NEG]);
+    ps.extend([op(OP_MAD, 4), t(3), r(2), c(3), r(1)]);
+    ps.extend([op(OP_MOV, 2), dst(REG_COLOROUT, 0, XYZW), r(3), END]);
+    out.push((ps, plain()));
+    // ps_3_0: the same with an absolute source.
+    let mut ps = vec![PS_3_0];
+    dcl(&mut ps, usage(D3DDECLUSAGE_TEXCOORD, 0), REG_INPUT, 0, XYZW);
+    dcl(&mut ps, usage(D3DDECLUSAGE_COLOR, 0), REG_INPUT, 1, XYZW);
+    ps.extend([op(OP_MAD, 4), t(0) | SAT, v(0), c(0), v(1)]);
+    ps.extend([op(OP_MAD, 4), t(1), r(0) | NEG, c(1), v(0)]);
+    ps.extend([op(OP_ADD, 3), t(2) | SAT, r(1) | ABS, c(2) | NEG]);
+    ps.extend([op(OP_MAD, 4), t(3), r(2), c(3), r(1)]);
+    ps.extend([op(OP_MOV, 2), dst(REG_COLOROUT, 0, XYZW), r(3), END]);
+    out.push((ps, plain()));
+    // Pass-throughs of the interpolated texcoord: ps_1_1 (clamped by `texcoord`), 2_0 and 3_0.
+    out.push((
+        vec![
+            PS_1_1,
+            op(64, 0),
+            dst(REG_ADDR_OR_TEXTURE, 0, XYZW),
+            op(OP_MOV, 0),
+            t(0),
+            tex(0),
+            END,
+        ],
+        plain(),
+    ));
+    let mut ps = vec![PS_2_0];
+    dcl(&mut ps, DCL_PLAIN, REG_ADDR_OR_TEXTURE, 0, XYZW);
+    ps.extend([op(OP_MOV, 2), dst(REG_COLOROUT, 0, XYZW), tex(0), END]);
+    out.push((ps, plain()));
+    let mut ps = vec![PS_3_0];
+    dcl(&mut ps, usage(D3DDECLUSAGE_TEXCOORD, 0), REG_INPUT, 0, XYZW);
+    ps.extend([op(OP_MOV, 2), dst(REG_COLOROUT, 0, XYZW), v(0), END]);
+    out.push((ps, plain()));
+    out
 }
 
 /// `vs_1_1`: transformed, lit world geometry with a scrolled second coordinate set.

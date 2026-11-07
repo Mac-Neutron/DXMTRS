@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use airconv_ir::dxso::spec::{StageSpec, VsSpec};
+
 use super::RecipeReader;
 use crate::{
     dxso::{self, DxsoProgram, VariantFlags, VariantKey, VsSamplerKinds},
@@ -49,6 +51,23 @@ impl ShaderSource {
     #[must_use]
     pub fn tokens(&self) -> &[u32] {
         &self.tokens
+    }
+
+    /// The specialization the AIR translator reads, as `emit` gives it to the MSL emitters.
+    #[must_use]
+    pub const fn stage_spec(&self) -> StageSpec {
+        match self.specialization {
+            Specialization::Vertex {
+                provided_input_mask,
+                clip_plane_count,
+                sampler_kinds,
+            } => StageSpec::Vs(VsSpec {
+                provided_input_mask,
+                clip_plane_count,
+                sampler_kinds,
+            }),
+            Specialization::Pixel(variant) => StageSpec::Ps(variant),
+        }
     }
 
     #[must_use]

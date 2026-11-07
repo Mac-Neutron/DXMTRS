@@ -18,5 +18,16 @@ rustc-hash = { workspace = true }
 [build-dependencies]
 cc = { workspace = true }
 
+# `tests/dxso_parity.rs` renders the D3D9 corpus through D3D9's MSL emitters and through
+# `airconv::dxso::translate` on the Mac's Metal device (ruling C3-16): both are host-only, and
+# `-e normal,build` keeps them out of the translator's key.
+[dev-dependencies]
+dispatch2 = { workspace = true }
+mtld3d-core = { workspace = true, features = ["disk-cache"] }
+mtld3d-shared = { workspace = true }
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-metal = { workspace = true, features = ["dispatch2", "MTLArgument", "MTLBlitCommandEncoder", "MTLPipeline"] }
+
 [lints]
 workspace = true
