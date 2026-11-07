@@ -69,6 +69,7 @@ pub const DEVICE_NEW_DEPTH_STENCIL_STATE: u32 = 20;
 pub const DEVICE_NEW_TEXTURE: u32 = 21;
 pub const TEXTURE_NEW_TEXTURE_VIEW: u32 = 23;
 pub const DEVICE_MIN_LINEAR_TEXTURE_ALIGNMENT: u32 = 24;
+pub const DEVICE_NEW_LIBRARY: u32 = 25;
 pub const LIBRARY_NEW_FUNCTION: u32 = 26;
 pub const NSOBJECT_DESCRIPTION: u32 = 28;
 pub const DEVICE_NEW_COMPUTE_PIPELINE_STATE: u32 = 29;
@@ -111,6 +112,14 @@ pub const COMMAND_BUFFER_ERROR: u32 = 89;
 pub const LAYER_SET_COLOR_SPACE: u32 = 93;
 pub const COMMAND_BUFFER_ENCODE_WAIT_FOR_EVENT: u32 = 102;
 pub const SHARED_EVENT_SIGNAL_VALUE: u32 = 103;
+pub const SM50_INITIALIZE: u32 = 74;
+pub const SM50_DESTROY: u32 = 75;
+pub const SM50_COMPILE: u32 = 76;
+pub const SM50_GET_COMPILED_BITCODE: u32 = 77;
+pub const SM50_DESTROY_BITCODE: u32 = 78;
+pub const SM50_GET_ERROR_MESSAGE: u32 = 79;
+pub const SM50_FREE_ERROR: u32 = 80;
+pub const DISPATCH_DATA_ALLOC_INIT: u32 = 114;
 pub const DEVICE_REGISTRY_ID: u32 = 125;
 pub const COMMAND_BUFFER_PROPERTY: u32 = 130;
 pub const DEVICE_NEW_LIBRARY_WITH_SOURCE: u32 = 144;
@@ -168,6 +177,7 @@ pub const SLOTS: &[(u32, &str)] = &[
         DEVICE_MIN_LINEAR_TEXTURE_ALIGNMENT,
         "_MTLDevice_minimumLinearTextureAlignmentForPixelFormat",
     ),
+    (DEVICE_NEW_LIBRARY, "_MTLDevice_newLibrary"),
     (LIBRARY_NEW_FUNCTION, "_MTLLibrary_newFunction"),
     (NSOBJECT_DESCRIPTION, "_NSObject_description"),
     (
@@ -264,6 +274,14 @@ pub const SLOTS: &[(u32, &str)] = &[
         "_MTLCommandBuffer_encodeWaitForEvent",
     ),
     (SHARED_EVENT_SIGNAL_VALUE, "_MTLSharedEvent_signalValue"),
+    (SM50_INITIALIZE, "thunk_SM50Initialize"),
+    (SM50_DESTROY, "thunk_SM50Destroy"),
+    (SM50_COMPILE, "thunk_SM50Compile"),
+    (SM50_GET_COMPILED_BITCODE, "thunk_SM50GetCompiledBitcode"),
+    (SM50_DESTROY_BITCODE, "thunk_SM50DestroyBitcode"),
+    (SM50_GET_ERROR_MESSAGE, "thunk_SM50GetErrorMessage"),
+    (SM50_FREE_ERROR, "thunk_SM50FreeError"),
+    (DISPATCH_DATA_ALLOC_INIT, "_DispatchData_alloc_init"),
     (DEVICE_REGISTRY_ID, "_MTLDevice_registryID"),
     (COMMAND_BUFFER_PROPERTY, "_MTLCommandBuffer_property"),
     (

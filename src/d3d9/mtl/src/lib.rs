@@ -19,6 +19,7 @@ pub mod metal;
 pub mod metal_fx;
 pub mod objc2;
 pub mod quartz_core;
+pub mod sm50;
 
 /// objc2-metal's names.
 pub mod objc2_metal {
