@@ -203,29 +203,8 @@ impl GraphicsKey {
                     return 0;
                 }
                 // SAFETY: `GraphicsDesc::blend_state` is a live `BlendState` pointer while this
-                // descriptor is being turned into a key. Hashing the description, rather than the
-                // address, keeps the key valid if an allocator reuses the object's address and
-                // lets two equivalent states share a pipeline.
-                let blend = unsafe { &*p.cast::<BlendState>() };
-                // Copy field by field into zeroed storage: hashing the original record would
-                // include its padding bytes, which the application's structure need not define.
-                // SAFETY: `D3d11BlendDesc1` is a POD record of integers for which all zero bits
-                // are a valid value.
-                let mut desc =
-                    unsafe { core::mem::zeroed::<crate::abi::records::D3d11BlendDesc1>() };
-                desc.alpha_to_coverage_enable = blend.desc.alpha_to_coverage_enable;
-                desc.independent_blend_enable = blend.desc.independent_blend_enable;
-                for (dst, src) in desc.render_target.iter_mut().zip(&blend.desc.render_target) {
-                    *dst = *src;
-                }
-                // SAFETY: `desc` is a plain record of exactly this many bytes, fully initialized.
-                let bytes = unsafe {
-                    core::slice::from_raw_parts(
-                        (&raw const desc).cast::<u8>(),
-                        core::mem::size_of::<crate::abi::records::D3d11BlendDesc1>(),
-                    )
-                };
-                xxhash_rust::xxh3::xxh3_64(bytes)
+                // descriptor is being turned into a key.
+                unsafe { (*p).hash() }
             }),
             input_layout_sha1,
             so_layout_sha1,

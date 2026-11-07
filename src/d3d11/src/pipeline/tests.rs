@@ -5,11 +5,13 @@ use winemetal_sys::sm50::MtlShaderReflection;
 
 use crate::{
     pipeline::{
-        GS_PAYLOAD_MEMORY_LENGTH, GraphicsDesc, GraphicsPipelineKind, IMMUTABLE_FRAGMENT_BUFFERS,
-        IMMUTABLE_GS_OBJECT_BUFFERS, IMMUTABLE_TS_OBJECT_BUFFERS, IMMUTABLE_VERTEX_BUFFERS,
-        MESH_PAYLOAD_MEMORY_LENGTH, PipelineCache, depth_stencil_planes, truncate_error_text,
+        GS_PAYLOAD_MEMORY_LENGTH, GraphicsDesc, GraphicsKey, GraphicsPipelineKind,
+        IMMUTABLE_FRAGMENT_BUFFERS, IMMUTABLE_GS_OBJECT_BUFFERS, IMMUTABLE_TS_OBJECT_BUFFERS,
+        IMMUTABLE_VERTEX_BUFFERS, MESH_PAYLOAD_MEMORY_LENGTH, PipelineCache, depth_stencil_planes,
+        truncate_error_text,
     },
     shader::{ManagedShader, args::ShaderVariant},
+    state::{default_blend_desc1, translate_blend_state},
 };
 
 fn dummy_reflection() -> MtlShaderReflection {
@@ -127,4 +129,24 @@ fn gs_and_ts_dispatch_to_mesh_pipeline_specs() {
     assert_eq!(ts_spec.stencil_pixel_format, 260);
     assert_eq!(depth_stencil_planes(252), (252, 0));
     assert_eq!(depth_stencil_planes(253), (0, 253));
+}
+
+#[test]
+fn blend_state_hash_is_the_descriptions_xxh3() {
+    let mut desc = default_blend_desc1();
+    desc.independent_blend_enable = 7;
+    desc.render_target[3].blend_enable = 1;
+    desc.render_target[3].src_blend = 5;
+    desc.render_target[3].render_target_write_mask = 0x0b;
+    let blend = translate_blend_state(&desc).expect("a valid description");
+    let key = GraphicsKey::from_desc(&GraphicsDesc {
+        blend_state: Some(&raw const blend),
+        ..GraphicsDesc::default()
+    });
+    assert_eq!(
+        key.blend_state_hash, 0x1b52_403e_93de_1bf8,
+        "the xxh3 of the description's fields with zeroed padding"
+    );
+    let none = GraphicsKey::from_desc(&GraphicsDesc::default());
+    assert_eq!(none.blend_state_hash, 0, "no blend state hashes to 0");
 }

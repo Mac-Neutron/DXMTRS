@@ -242,10 +242,36 @@ pub fn translate_blend_state(desc: &D3d11BlendDesc1) -> Result<BlendState, Hresu
             || is_dual_source_factor(rt0.dest_blend));
 
     Ok(BlendState {
+        hash: blend_desc_hash(&desc_normalized),
         desc: desc_normalized,
         info,
         dual_source,
     })
+}
+
+/// The xxh3 of a blend description's fields, the graphics pipeline key's part for it.
+///
+/// Hashing the description, rather than the object's address, keeps the key valid if an allocator
+/// reuses the address and lets two equivalent states share a pipeline. The fields are copied into
+/// zeroed storage first: hashing the original record would include its padding bytes, which the
+/// application's structure need not define.
+fn blend_desc_hash(blend: &D3d11BlendDesc1) -> u64 {
+    // SAFETY: `D3d11BlendDesc1` is a POD record of integers for which all zero bits are a valid
+    // value.
+    let mut desc = unsafe { core::mem::zeroed::<D3d11BlendDesc1>() };
+    desc.alpha_to_coverage_enable = blend.alpha_to_coverage_enable;
+    desc.independent_blend_enable = blend.independent_blend_enable;
+    for (dst, src) in desc.render_target.iter_mut().zip(&blend.render_target) {
+        *dst = *src;
+    }
+    // SAFETY: `desc` is a plain record of exactly this many bytes, fully initialized.
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            (&raw const desc).cast::<u8>(),
+            core::mem::size_of::<D3d11BlendDesc1>(),
+        )
+    };
+    xxhash_rust::xxh3::xxh3_64(bytes)
 }
 
 /// Compiled `ID3D11BlendState1` (`MTLD3D11BlendState`).
@@ -253,6 +279,8 @@ pub struct BlendState {
     pub desc: D3d11BlendDesc1,
     info: WMTRenderPipelineBlendInfo,
     dual_source: bool,
+    /// [`blend_desc_hash`] of `desc`, which never changes after creation.
+    hash: u64,
 }
 
 impl BlendState {
@@ -271,6 +299,12 @@ impl BlendState {
     #[must_use]
     pub const fn info(&self) -> &WMTRenderPipelineBlendInfo {
         &self.info
+    }
+
+    /// The xxh3 of the description the graphics pipeline key holds, made at creation.
+    #[must_use]
+    pub const fn hash(&self) -> u64 {
+        self.hash
     }
 
     /// Returns `true` when dual-source blending is enabled (`IsDualSourceBlending`).
