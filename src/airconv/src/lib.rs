@@ -23,7 +23,7 @@ mod air;
 mod api;
 mod dxbc;
 mod dxil;
-mod dxso;
+pub mod dxso;
 mod entry;
 mod llvm;
 mod module;

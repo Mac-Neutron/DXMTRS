@@ -6,6 +6,7 @@
 
 pub mod ir;
 pub mod link;
+pub mod lower;
 pub mod opcode;
 pub mod parser;
 pub mod spec;

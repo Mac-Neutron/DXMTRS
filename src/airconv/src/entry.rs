@@ -7,7 +7,7 @@ mod geometry;
 mod initialize;
 mod tessellation;
 
-pub use compile::{compile, passthrough_vertex};
+pub use compile::{compile, finish, passthrough_vertex};
 pub use geometry::{compile_gs, compile_gs_vertex};
 pub use initialize::{entry_info, initialize};
 pub use tessellation::{compile_domain, compile_hull};

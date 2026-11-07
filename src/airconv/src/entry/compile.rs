@@ -46,7 +46,7 @@ pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<
             }
             let cx = Context::new();
             let m = module::initialize(&cx, c"shader.air");
-            dxso::convert(d, &spec, args, name, &m)?;
+            dxso::convert(&d.program, &spec, args, name, &m)?;
             return finish(&m, ShaderFlags::default(), None);
         }
         Shader::Dxil(d) => {
@@ -96,7 +96,11 @@ pub fn passthrough_vertex(pixel: &Shader) -> Result<Vec<u8>, Error> {
 /// The Metal helpers `flags` ask for linked, the pass pipeline run and the module written.
 ///
 /// A DXIL shader (its kind `dxil_kind`) keeps DXIL's float policy in the helpers.
-fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<Vec<u8>, Error> {
+pub fn finish(
+    m: &Module<'_>,
+    flags: ShaderFlags,
+    dxil_kind: Option<u32>,
+) -> Result<Vec<u8>, Error> {
     let msad = flags.contains(ShaderFlags::USE_MSAD);
     let samplepos = flags.contains(ShaderFlags::USE_SAMPLEPOS);
     let refs = module::link_helpers(m, msad, samplepos, false)?;
