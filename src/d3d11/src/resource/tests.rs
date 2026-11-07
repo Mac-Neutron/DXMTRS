@@ -3222,6 +3222,7 @@ fn dynamic_buffer_renames_on_the_caller() {
     assert!(!renamed1);
     assert!(Arc::ptr_eq(&alloc1, &initial));
     assert_eq!(sub1, 1);
+    assert_eq!(dyn_buf.immediate_suballocation(), 1);
     assert_eq!(ptr1.expose_provenance(), 0x1_0000 + 2048);
     assert_eq!(MADE_BUFFERS.with(Cell::get), 1);
 

@@ -95,11 +95,10 @@ impl<M: Mode> Context<M> {
                 }
             }
             if let Some(imm) = self.as_immediate_mut() {
+                let mut p_data = None;
                 if map_type == D3D11_MAP_WRITE_DISCARD {
-                    let next_sub = dyn_buf.next_suballocation();
-                    if next_sub != 0 {
-                        dyn_buf.use_immediate_suballocation(next_sub);
-                        let alloc = dyn_buf.immediate_name();
+                    if let Some((alloc, next_sub, mapped)) = dyn_buf.next_suballocation() {
+                        p_data = Some(mapped);
                         super::Immediate::emit_st(imm, move |_enc| {
                             alloc.use_suballocation(next_sub);
                         });
@@ -126,7 +125,9 @@ impl<M: Mode> Context<M> {
                     }
                 }
                 let out = D3d11MappedSubresource {
-                    p_data: dyn_buf.immediate_mapped_memory().cast(),
+                    p_data: p_data
+                        .unwrap_or_else(|| dyn_buf.immediate_mapped_memory())
+                        .cast(),
                     row_pitch,
                     depth_pitch,
                 };

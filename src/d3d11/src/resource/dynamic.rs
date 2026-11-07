@@ -33,22 +33,19 @@ pub fn allocate_dynamic_buffer(
 ///
 /// Matches `MapDynamicBuffer` in `d3d11_context_imm.cpp:120-135`: returns
 /// `(allocation, suballocation, mapped_ptr)` and whether a new allocation was renamed (`true` when
-/// `next_suballocation` returned `0` and a new allocation became the immediate name).
+/// `next_suballocation` found no next one and a new allocation became the immediate name).
 #[must_use]
 pub fn discard_map_dynamic_buffer(
     dynamic: &DynamicBuffer,
     current_seq: u64,
     coherent_seq: u64,
 ) -> (Arc<BufferAllocation>, u32, *mut u8, bool) {
-    let subidx = dynamic.next_suballocation();
-    if subidx == 0 {
+    if let Some((alloc, subidx, ptr)) = dynamic.next_suballocation() {
+        (alloc, subidx, ptr, false)
+    } else {
         let alloc = dynamic.allocate(coherent_seq);
         dynamic.update_immediate_name(current_seq, Arc::clone(&alloc), 0, false);
         let ptr = dynamic.immediate_mapped_memory();
         (alloc, 0, ptr, true)
-    } else {
-        let alloc = dynamic.immediate_name();
-        let ptr = dynamic.immediate_mapped_memory();
-        (alloc, subidx, ptr, false)
     }
 }

@@ -146,10 +146,9 @@ impl<M: Mode> Context<M> {
                         }
                     }
                     if let Some(imm) = self.as_immediate_mut() {
-                        let next_sub = dynamic.next_suballocation();
-                        let (alloc, sub) = if next_sub != 0 {
-                            dynamic.use_immediate_suballocation(next_sub);
-                            let a = dynamic.immediate_name();
+                        let (alloc, sub) = if let Some((a, next_sub, _)) =
+                            dynamic.next_suballocation()
+                        {
                             let a_emit = Arc::clone(&a);
                             super::Immediate::emit_st(imm, move |_enc| {
                                 a_emit.use_suballocation(next_sub);

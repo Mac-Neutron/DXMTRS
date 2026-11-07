@@ -81,15 +81,18 @@ impl DynamicBuffer {
         lock(&self.state).recycle(current_seq, allocation);
     }
 
-    /// Moves the name to its next suballocation and returns it, or 0 when it has no next one.
-    pub fn next_suballocation(&self) -> u32 {
+    /// Moves the name to its next suballocation, `None` when it has no next one.
+    ///
+    /// Returns the name, that suballocation and its CPU memory (or null): one lock for the step
+    /// and the reads a discarding map makes after it.
+    pub fn next_suballocation(&self) -> Option<(Arc<BufferAllocation>, u32, *mut u8)> {
         let mut s = lock(&self.state);
         let next = s.suballocation + 1;
         if !s.name.has_suballocation(next) {
-            return 0;
+            return None;
         }
         s.suballocation = next;
-        next
+        Some((Arc::clone(&s.name), next, s.name.mapped_memory(next)))
     }
 
     /// Lends an allocation found as [`Self::allocate`] finds one, under a new id.
