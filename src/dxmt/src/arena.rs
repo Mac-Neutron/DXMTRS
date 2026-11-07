@@ -328,6 +328,11 @@ impl CommandList {
         self.list.push(&mut self.arena, f, call_ref::<F>);
     }
 
+    /// Uninitialized memory for `layout`, valid until the list is dropped.
+    pub fn allocate(&mut self, layout: Layout) -> NonNull<u8> {
+        self.arena.allocate(layout)
+    }
+
     /// Runs the commands in the order they were recorded.
     pub fn run(&self, encoder: &mut Encoder) {
         // SAFETY: every node is `emit_fn`'s `call_ref`, which a shared reference suffices for.

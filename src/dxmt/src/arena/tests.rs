@@ -125,6 +125,30 @@ fn list_replays_twice() {
     assert_eq!(count(&drops), 3);
 }
 
+/// A deferred list's memory, aligned, holds what was written in it for every replay.
+#[test]
+fn list_memory_lives_with_the_list() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut list = CommandList::new(64);
+    for i in 0..4u64 {
+        let raw = list.allocate(Layout::new::<u64>()).cast::<u64>();
+        assert_eq!(raw.addr().get() % align_of::<u64>(), 0);
+        // SAFETY: `allocate` returned unused memory with `u64`'s size and alignment.
+        unsafe { raw.write(0x100 + i) };
+        let (seen, at) = (Arc::clone(&seen), raw.expose_provenance());
+        list.emit_fn(move |_| {
+            let raw = core::ptr::with_exposed_provenance::<u64>(at.get());
+            // SAFETY: the list's memory, written above, lives as long as the list.
+            seen.lock().unwrap().push(unsafe { raw.read() });
+        });
+    }
+    let mut encoder = Encoder::headless();
+    list.run(&mut encoder);
+    list.run(&mut encoder);
+    let once = [0x100, 0x101, 0x102, 0x103];
+    assert_eq!(*seen.lock().unwrap(), [once, once].concat());
+}
+
 /// Captures in `Commands::emit` and values in `Commands::retain` drop at `reset`, not `run`.
 #[test]
 fn arena_drops_at_reset_not_at_run() {

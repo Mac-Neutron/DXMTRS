@@ -594,20 +594,9 @@ impl<M: Mode> Context<M> {
 
             let num_vp = (self.state.rasterizer.num_viewports as usize).min(16);
             if self.dirty.contains(DirtyFlags::VIEWPORTS) {
-                let mut vps = Vec::with_capacity(num_vp);
-                for vp in self.state.rasterizer.viewports.iter().take(num_vp) {
-                    vps.push(WMTViewport {
-                        origin_x: f64::from(vp.top_left_x),
-                        origin_y: f64::from(vp.top_left_y),
-                        width: f64::from(vp.width),
-                        height: f64::from(vp.height),
-                        znear: f64::from(vp.min_depth),
-                        zfar: f64::from(vp.max_depth),
-                    });
-                }
                 let (raw_vp, _) = M::alloc(
                     self,
-                    vps.len() * size_of::<WMTViewport>(),
+                    num_vp * size_of::<WMTViewport>(),
                     align_of::<WMTViewport>(),
                 );
                 #[expect(
@@ -616,13 +605,29 @@ impl<M: Mode> Context<M> {
                 )]
                 let vp_ptr = core::ptr::NonNull::new(raw_vp.cast::<WMTViewport>())
                     .unwrap_or(core::ptr::NonNull::dangling());
-                if !raw_vp.is_null() && !vps.is_empty() {
-                    // SAFETY: `M::alloc` allocated space for `vps.len()` `WMTViewport` items.
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(vps.as_ptr(), vp_ptr.as_ptr(), vps.len());
+                if !raw_vp.is_null() {
+                    // SAFETY: `M::alloc` allocated `num_vp` aligned `WMTViewport` items, which
+                    // nothing else reaches until the command below is emitted.
+                    let out = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            vp_ptr
+                                .cast::<core::mem::MaybeUninit<WMTViewport>>()
+                                .as_ptr(),
+                            num_vp,
+                        )
+                    };
+                    for (slot, vp) in out.iter_mut().zip(&self.state.rasterizer.viewports) {
+                        slot.write(WMTViewport {
+                            origin_x: f64::from(vp.top_left_x),
+                            origin_y: f64::from(vp.top_left_y),
+                            width: f64::from(vp.width),
+                            height: f64::from(vp.height),
+                            znear: f64::from(vp.min_depth),
+                            zfar: f64::from(vp.max_depth),
+                        });
                     }
                 }
-                let viewport_count = u8::try_from(vps.len()).unwrap_or(0);
+                let viewport_count = u8::try_from(num_vp).unwrap_or(0);
                 let cmd = WmtcmdRenderSetviewports {
                     r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
                     reserved: [0; 3],
@@ -649,49 +654,9 @@ impl<M: Mode> Context<M> {
                     self.state.output_merger.render_target_height
                 };
                 let num_sc = self.state.rasterizer.num_scissor_rects as usize;
-                let mut scs = Vec::with_capacity(num_vp);
-                for (i, r) in self
-                    .state
-                    .rasterizer
-                    .scissor_rects
-                    .iter()
-                    .enumerate()
-                    .take(num_vp)
-                {
-                    if allow_scissor {
-                        if i < num_sc {
-                            let max_w = i32::try_from(rt_w).unwrap_or(i32::MAX);
-                            let max_h = i32::try_from(rt_h).unwrap_or(i32::MAX);
-                            let left = r.left.clamp(0, max_w);
-                            let top = r.top.clamp(0, max_h);
-                            let right = r.right.clamp(left, max_w);
-                            let bottom = r.bottom.clamp(top, max_h);
-                            scs.push(WMTScissorRect {
-                                x: u64::try_from(left).unwrap_or(0),
-                                y: u64::try_from(top).unwrap_or(0),
-                                width: u64::try_from(right - left).unwrap_or(0),
-                                height: u64::try_from(bottom - top).unwrap_or(0),
-                            });
-                        } else {
-                            scs.push(WMTScissorRect {
-                                x: 0,
-                                y: 0,
-                                width: 0,
-                                height: 0,
-                            });
-                        }
-                    } else {
-                        scs.push(WMTScissorRect {
-                            x: 0,
-                            y: 0,
-                            width: u64::from(rt_w),
-                            height: u64::from(rt_h),
-                        });
-                    }
-                }
                 let (raw_sc, _) = M::alloc(
                     self,
-                    scs.len() * size_of::<WMTScissorRect>(),
+                    num_vp * size_of::<WMTScissorRect>(),
                     align_of::<WMTScissorRect>(),
                 );
                 #[expect(
@@ -700,13 +665,53 @@ impl<M: Mode> Context<M> {
                 )]
                 let sc_ptr = core::ptr::NonNull::new(raw_sc.cast::<WMTScissorRect>())
                     .unwrap_or(core::ptr::NonNull::dangling());
-                if !raw_sc.is_null() && !scs.is_empty() {
-                    // SAFETY: `M::alloc` allocated space for `scs.len()` `WMTScissorRect` items.
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(scs.as_ptr(), sc_ptr.as_ptr(), scs.len());
+                if !raw_sc.is_null() {
+                    // SAFETY: `M::alloc` allocated `num_vp` aligned `WMTScissorRect` items, which
+                    // nothing else reaches until the command below is emitted.
+                    let out = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            sc_ptr
+                                .cast::<core::mem::MaybeUninit<WMTScissorRect>>()
+                                .as_ptr(),
+                            num_vp,
+                        )
+                    };
+                    let rects = out.iter_mut().zip(&self.state.rasterizer.scissor_rects);
+                    for (i, (slot, r)) in rects.enumerate() {
+                        let rect = if allow_scissor {
+                            if i < num_sc {
+                                let max_w = i32::try_from(rt_w).unwrap_or(i32::MAX);
+                                let max_h = i32::try_from(rt_h).unwrap_or(i32::MAX);
+                                let left = r.left.clamp(0, max_w);
+                                let top = r.top.clamp(0, max_h);
+                                let right = r.right.clamp(left, max_w);
+                                let bottom = r.bottom.clamp(top, max_h);
+                                WMTScissorRect {
+                                    x: u64::try_from(left).unwrap_or(0),
+                                    y: u64::try_from(top).unwrap_or(0),
+                                    width: u64::try_from(right - left).unwrap_or(0),
+                                    height: u64::try_from(bottom - top).unwrap_or(0),
+                                }
+                            } else {
+                                WMTScissorRect {
+                                    x: 0,
+                                    y: 0,
+                                    width: 0,
+                                    height: 0,
+                                }
+                            }
+                        } else {
+                            WMTScissorRect {
+                                x: 0,
+                                y: 0,
+                                width: u64::from(rt_w),
+                                height: u64::from(rt_h),
+                            }
+                        };
+                        slot.write(rect);
                     }
                 }
-                let rect_count = u8::try_from(scs.len()).unwrap_or(0);
+                let rect_count = u8::try_from(num_vp).unwrap_or(0);
                 let cmd = WmtcmdRenderSetscissorrects {
                     r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
                     reserved: [0; 3],

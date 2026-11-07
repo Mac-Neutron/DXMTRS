@@ -31,20 +31,6 @@ use crate::{
     state::Defaults,
 };
 
-struct AlignedBlock {
-    ptr: usize,
-    layout: core::alloc::Layout,
-}
-
-impl Drop for AlignedBlock {
-    fn drop(&mut self) {
-        // SAFETY: `self.ptr` was allocated with `std::alloc::alloc_zeroed(self.layout)`.
-        unsafe {
-            std::alloc::dealloc(self.ptr as *mut u8, self.layout);
-        }
-    }
-}
-
 /// Per-command-list dynamic buffer allocation recorded by a deferred context.
 pub struct DeferredDynamicBuffer {
     pub dynamic: Arc<DynamicBuffer>,
@@ -243,20 +229,11 @@ impl Mode for Deferred {
     }
 
     fn alloc(ctx: &mut Context<Self>, size: usize, align: usize) -> (*mut u8, u64) {
-        let len = size.max(1);
-        let alignment = align.max(1);
-        let Ok(layout) = core::alloc::Layout::from_size_align(len, alignment) else {
+        let Ok(layout) = core::alloc::Layout::from_size_align(size.max(1), align.max(1)) else {
             return (ptr::null_mut(), 0);
         };
-        // SAFETY: `layout` has non-zero size (`len >= 1`).
-        let raw = unsafe { std::alloc::alloc_zeroed(layout) };
-        if raw.is_null() {
-            return (ptr::null_mut(), 0);
-        }
-        ctx.mode.retained.push(Box::new(AlignedBlock {
-            ptr: raw as usize,
-            layout,
-        }));
+        // The list's arena, which the command list takes over with its commands.
+        let raw = ctx.mode.commands_mut().allocate(layout).as_ptr();
         (raw, raw as usize as u64)
     }
 
