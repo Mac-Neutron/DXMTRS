@@ -131,3 +131,17 @@ fn update_baseline_rejects_filters() {
     let err = parse_args(base(&["--update-baseline", "--only", "device"])).unwrap_err();
     assert!(err.contains("cannot be combined"), "{err}");
 }
+
+#[test]
+fn keep_shader_cache_takes_a_directory_and_defaults_to_off() {
+    assert!(parse_args(base(&[])).unwrap().keep_shader_cache.is_none());
+    let config = parse_args(base(&["--keep-shader-cache", "/k"])).unwrap();
+    assert_eq!(
+        config
+            .keep_shader_cache
+            .as_deref()
+            .and_then(std::path::Path::to_str),
+        Some("/k")
+    );
+    assert!(parse_args(base(&["--keep-shader-cache"])).is_err());
+}

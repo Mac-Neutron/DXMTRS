@@ -131,6 +131,12 @@ pub struct Launch {
     /// `None` keeps the process sample alone, and the wineserver sample says
     /// the caller named no server rather than going missing.
     pub wineserver: Option<Wineserver>,
+    /// Where each subtest's shader cache is kept, with the cache on for the run.
+    ///
+    /// `None` runs with `shaderCache.enable=false`. Set, the cache the layer writes beside
+    /// `exe` is deleted before each subtest and moved to `<dir>/<leg>-<subtest>.bin` after it,
+    /// so no subtest starts from another's warm cache.
+    pub keep_shader_cache: Option<PathBuf>,
 }
 
 /// The wineserver a timed-out subtest waits on, as the caller names it.
@@ -272,6 +278,12 @@ pub fn run_subtest(
     // shader that stops reading a slot), all deduplicated to a handful of
     // lines that read exactly like the error lines and bury them. Only errors
     // are reported, so a new validation line means a new misuse.
+    let cache = launch.keep_shader_cache.as_deref().map(|dir| {
+        let file = launch.exe.with_file_name(SHADER_CACHE_FILE);
+        // Not a failure if it is not there: only a cache left by an earlier run matters.
+        let _ = fs::remove_file(&file);
+        (file, dir.join(format!("{leg}-{subtest}.bin")))
+    });
     let mut child = Command::new(&launch.wine)
         .arg(&launch.exe)
         .arg(subtest.arg())
@@ -283,7 +295,10 @@ pub fn run_subtest(
         .env("WINEDLLOVERRIDES", HEADLESS_DLL_OVERRIDES)
         .env("WINEMSYNC", "1")
         .env("RUST_LOG", &launch.log)
-        .env("MTLD3D_CONFIG", config_entries(leg, raw.as_ref()))
+        .env(
+            "MTLD3D_CONFIG",
+            config_entries(leg, raw.as_ref(), cache.is_some()),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -332,6 +347,10 @@ pub fn run_subtest(
     // Read after the collection, so a line the process printed just before
     // ending on its own counts too: its later reads were zeros all the same.
     let gpu_hang = hung.load(Ordering::Relaxed);
+
+    if let Some((file, kept)) = &cache {
+        keep_cache(file, kept);
+    }
 
     // Surface Metal API-validation failures (the layer runs in `nslog` mode, so
     // these are logged rather than aborting). Deduplicated, address/number
@@ -394,6 +413,30 @@ pub fn run_subtest(
         validation_errors,
         gpu_hang,
     })
+}
+
+/// The shader cache the layer writes beside the test EXE.
+const SHADER_CACHE_FILE: &str = "mtld3d_shaders.bin";
+
+/// Move a subtest's shader cache to `kept`; a failure is reported and never fails the run.
+///
+/// A subtest that wrote no cache (it crashed first) keeps nothing. The cache's sidecar lock
+/// stays behind, and is only a lock.
+fn keep_cache(file: &Path, kept: &Path) {
+    if !file.is_file() {
+        return;
+    }
+    let moved = kept
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::rename(file, kept).or_else(|_| fs::copy(file, kept).map(drop)));
+    if let Err(e) = moved {
+        eprintln!(
+            "  [conformance] could not keep {} as {}: {e}",
+            file.display(),
+            kept.display()
+        );
+    }
 }
 
 /// Read a pipe on a thread of its own, handing each chunk over as it arrives.
@@ -806,7 +849,7 @@ fn exit_trailer(status: ExitStatus) -> String {
 /// (`mtld3d_shaders.bin`) for every conformance run so the DLL compiles
 /// shaders fresh each run — a change to the shader translator (or a
 /// `SHADER_CACHE_SCHEMA` bump) is always reflected without having to delete a
-/// stale cache by hand.
+/// stale cache by hand. A run that keeps the caches (`--keep-shader-cache`) sets it `true`.
 ///
 /// `shader.asyncCompile=false`: a draw whose shader or pipeline is still
 /// building is kept in its frame, whose submission waits for the build,
@@ -822,9 +865,9 @@ fn exit_trailer(status: ExitStatus) -> String {
 /// `intel.*` key on so the whole suite runs under the answers an Intel/AMD Mac
 /// gives. A kept run adds `log.dir`, so the process's log file lands beside
 /// its raw output.
-fn config_entries(leg: Leg, raw: Option<&RawTarget>) -> String {
+fn config_entries(leg: Leg, raw: Option<&RawTarget>, keep_cache: bool) -> String {
     let mut entries = format!(
-        "shaderCache.enable=false;shader.asyncCompile=false;color.hdr.enable=false{}",
+        "shaderCache.enable={keep_cache};shader.asyncCompile=false;color.hdr.enable=false{}",
         leg.variant.config_entries()
     );
     if let Some(raw) = raw {

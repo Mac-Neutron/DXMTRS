@@ -75,6 +75,7 @@ fn real_main() -> Result<ExitCode, String> {
         log: config.log,
         raw_dir,
         timeout: run::timeout_from_env(),
+        keep_shader_cache: config.keep_shader_cache,
         wineserver,
     };
     let leg = Leg {

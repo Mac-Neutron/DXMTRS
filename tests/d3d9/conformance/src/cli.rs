@@ -52,6 +52,11 @@ pub struct Config {
     /// A repeat run raises it so the process's log file says what the layer
     /// did before a process ended without its summary.
     pub log: String,
+    /// `--keep-shader-cache <dir>`: run with the shader cache on and keep each subtest's cache.
+    ///
+    /// The cache the layer writes beside the test EXE is moved to
+    /// `<dir>/<leg>-<subtest>.bin` after every subtest. `None` keeps the cache off.
+    pub keep_shader_cache: Option<PathBuf>,
 }
 
 /// Parse CLI args (excluding `argv[0]`).
@@ -59,7 +64,7 @@ pub struct Config {
 /// Recognised flags: `--update-baseline`, `--wine <path>`, `--wineserver
 /// <path>`, `--exe <path>`, `--tests-wine-version <version>`, `--arch <arch>`,
 /// `--variant <native|intel|scale>`, `--assets <dir>`, `--only <subtest>`,
-/// `--repeat <N>`, `--log <filter>`.
+/// `--repeat <N>`, `--log <filter>`, `--keep-shader-cache <dir>`.
 /// `--wine`, `--exe` and `--arch` are mandatory: the runner resolves no paths of
 /// its own, so the caller owns every Wine location. One
 /// invocation runs one test binary, which is what lets a 32-bit and a 64-bit CI
@@ -85,6 +90,7 @@ pub fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, Stri
     let mut only: Option<Subtest> = None;
     let mut repeat: u32 = 1;
     let mut log = "off".to_owned();
+    let mut keep_shader_cache: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--update-baseline" => update = true,
@@ -150,6 +156,12 @@ pub fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, Stri
                     .next()
                     .ok_or_else(|| "--log needs a RUST_LOG filter".to_owned())?;
             }
+            "--keep-shader-cache" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--keep-shader-cache needs a directory".to_owned())?;
+                keep_shader_cache = Some(PathBuf::from(value));
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -173,6 +185,7 @@ pub fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, Stri
         only,
         repeat,
         log,
+        keep_shader_cache,
     })
 }
 

@@ -34,8 +34,9 @@ use std::{
 };
 
 use super::{
-    DEFAULT_TIMEOUT, Launch, cwd_is_server_dir, is_gpu_hang_line, normalize_numbers, run_subtest,
-    server_dir_for, validation_errors, validation_gate_failed, wineserver_pids,
+    DEFAULT_TIMEOUT, Launch, config_entries, cwd_is_server_dir, is_gpu_hang_line,
+    normalize_numbers, run_subtest, server_dir_for, validation_errors, validation_gate_failed,
+    wineserver_pids,
 };
 use crate::model::{Arch, Gpu, Leg, Subtest, Variant};
 
@@ -162,6 +163,7 @@ fn launch(exe: PathBuf) -> Launch {
         raw_dir: None,
         timeout: DEFAULT_TIMEOUT,
         wineserver: None,
+        keep_shader_cache: None,
     }
 }
 
@@ -438,4 +440,49 @@ fn nothing_is_kept_and_no_log_dir_is_named_without_a_raw_dir() {
     let dir = exe.parent().expect("script dir").to_path_buf();
     run_subtest(&launch(exe), LEG, Subtest::Device, None).expect("spawn sh");
     assert!(!dir.join("i686-device.log").exists());
+}
+
+#[test]
+fn keep_shader_cache_config() {
+    let off = config_entries(LEG, None, false);
+    let on = config_entries(LEG, None, true);
+    assert!(off.starts_with("shaderCache.enable=false;"), "{off}");
+    assert!(on.starts_with("shaderCache.enable=true;"), "{on}");
+    assert_eq!(
+        off.replacen("enable=false", "enable=true", 1),
+        on,
+        "the cache switch is the only difference"
+    );
+}
+
+#[test]
+fn cache_moved_after_each_subtest() {
+    // The script reports whether a cache was already there, then writes one named for its subtest.
+    let exe = script(
+        "cache",
+        &format!(
+            "d=$(dirname \"$0\"); if [ -f \"$d/mtld3d_shaders.bin\" ]; then echo 'device.c:1: Test failed: warm start'; fi\n\
+             echo \"$1\" > \"$d/mtld3d_shaders.bin\"; echo '{SUMMARY}'\n"
+        ),
+    );
+    let dir = exe.parent().expect("script dir").to_path_buf();
+    let kept = dir.join("kept");
+    fs::write(dir.join("mtld3d_shaders.bin"), "stale").expect("stale cache");
+    let launch = Launch {
+        keep_shader_cache: Some(kept.clone()),
+        ..launch(exe)
+    };
+    for subtest in [Subtest::Device, Subtest::Visual] {
+        let run = run_subtest(&launch, LEG, subtest, None).expect("spawn sh");
+        assert!(
+            run.result.sites.is_empty(),
+            "{subtest} started from a warm cache"
+        );
+        let file = kept.join(format!("{LEG}-{subtest}.bin"));
+        assert_eq!(
+            fs::read_to_string(&file).expect("cache kept").trim_end(),
+            subtest.arg()
+        );
+        assert!(!dir.join("mtld3d_shaders.bin").exists(), "{subtest}");
+    }
 }

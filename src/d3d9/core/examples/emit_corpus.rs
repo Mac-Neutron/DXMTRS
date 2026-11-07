@@ -3,6 +3,14 @@
 //! Usage: `emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]`, which
 //! the runner's `bench-ab` runs per leg (`--base-host`, `--cand-host`) with the production profile.
 //!
+//! Two more modes build the DXSO corpus (`tests/d3d9/dxso-corpus`) and time nothing.
+//! `emit_corpus --write-cache <path>` writes the synthetic programmable shaders as a shader
+//! cache file: one record per shader, with the DXSO and its exact specialization, and a pipeline
+//! recipe per vertex and pixel shader pair of the same shader model family (a `vs_3_0` pairs with
+//! `ps_3_0` only, as D3D9 requires), over a `float4` stream of the vertex shader's declared inputs.
+//! `emit_corpus --merge <out> <in>...` reads cache files and writes one file holding every shader
+//! record and recipe of them, once each.
+//!
 //! Two synthetic corpora always run: `synthetic_ff`, about sixty fixed-function
 //! vertex keys and fifty pixel keys shaped like the ones a fixed-function game
 //! prewarms, and `synthetic_sm`, a handful of hand-assembled SM1/SM2/SM3 token
@@ -60,14 +68,22 @@ use std::{
 
 use mtld3d_core::{
     dxso::{
-        self, DxsoProgram, FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey, VariantKey,
-        VsSamplerKinds, tci_entry,
+        self, Declaration, DxsoProgram, FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey,
+        RegKind, VariantKey, VsSamplerKinds, tci_entry,
+    },
+    pipeline_state::{
+        ExtraColorAttachments, PipelineAttachFlags, PipelineRsBits, PipelineSnapshot, StreamLayout,
     },
     shader_cache::{
-        CACHE_FORMAT_VERSION, CacheEntry, SHADER_CACHE_SCHEMA_VERSION, SHADER_EMITTER_VERSION,
-        ShaderSource, read_header, read_records,
+        CACHE_FORMAT_VERSION, CacheEntry, CacheHeader, PipelineRecipe, SHADER_CACHE_SCHEMA_VERSION,
+        SHADER_EMITTER_VERSION, ShaderRecordRef, ShaderSource, read_header, read_records,
+        write_bundle, write_header,
     },
     shader_key::CachedKind,
+};
+use mtld3d_shared::{
+    MetalHandle, VertexAttrDesc,
+    mtl::{PixelFormat, VertexFormat, VertexStepFunction},
 };
 use mtld3d_types::{
     D3DCMP_GREATEREQUAL, D3DDECLUSAGE_BLENDINDICES, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_FOG,
@@ -76,7 +92,7 @@ use mtld3d_types::{
     D3DTOP_ADD, D3DTOP_BLENDCURRENTALPHA, D3DTOP_BLENDTEXTUREALPHA, D3DTOP_MODULATE,
     D3DTOP_MODULATE2X, D3DTOP_MODULATEALPHA_ADDCOLOR, D3DTOP_SELECTARG1, D3DTSS_ALPHAARG1,
     D3DTSS_ALPHAARG2, D3DTSS_ALPHAOP, D3DTSS_COLORARG1, D3DTSS_COLORARG2, D3DTSS_COLOROP,
-    texture_stage_state_defaults,
+    MAX_STREAMS, texture_stage_state_defaults,
 };
 use xxhash_rust::xxh3::Xxh3;
 
@@ -350,6 +366,10 @@ struct Args {
     iters: Option<u32>,
     metrics: Option<PathBuf>,
     digest: bool,
+    /// `--write-cache <path>`: write the synthetic programmable set as a cache file.
+    write_cache: Option<PathBuf>,
+    /// `--merge <out> <in>...`: the output and the cache files to merge into it.
+    merge: Option<(PathBuf, Vec<PathBuf>)>,
     caches: Vec<PathBuf>,
 }
 
@@ -367,17 +387,28 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{error}");
             eprintln!(
-                "usage: emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]"
+                "usage: emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]\n       \
+                 emit_corpus --write-cache <out.bin>\n       \
+                 emit_corpus --merge <out.bin> <in.bin>..."
             );
             return ExitCode::from(2);
         }
     };
+    if let Some((out, inputs)) = &args.merge {
+        return report(merge_caches(out, inputs));
+    }
     let mut corpora = vec![
         Corpus::new("synthetic_ff".to_owned(), synthetic_ff()),
         Corpus::new("synthetic_sm".to_owned(), synthetic_sm()),
     ];
     // The synthetic inputs are this tree's own, so one that fails to emit is a bug.
     let mut failed = corpora.iter().any(|corpus| corpus.failures > 0);
+    if let Some(out) = &args.write_cache {
+        if failed {
+            return ExitCode::FAILURE;
+        }
+        return report(write_synthetic_cache(out, &corpora[1]));
+    }
     for path in &args.caches {
         match load_cache(path, &corpora) {
             Ok(Some(corpus)) => corpora.push(corpus),
@@ -475,6 +506,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         iters: None,
         metrics: None,
         digest: false,
+        write_cache: None,
+        merge: None,
         caches: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -492,11 +525,185 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 parsed.metrics = Some(args.next().ok_or("--metrics needs a directory")?.into());
             }
             "--digest" => parsed.digest = true,
+            "--write-cache" => {
+                parsed.write_cache = Some(args.next().ok_or("--write-cache needs a path")?.into());
+            }
+            "--merge" => {
+                let out = args.next().ok_or("--merge needs an output path")?.into();
+                let inputs: Vec<PathBuf> = args.by_ref().map(PathBuf::from).collect();
+                if inputs.is_empty() {
+                    return Err("--merge needs at least one input cache".to_owned());
+                }
+                parsed.merge = Some((out, inputs));
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => parsed.caches.push(arg.into()),
         }
     }
     Ok(parsed)
+}
+
+/// Print a mode's one-line result, or its error.
+fn report(result: Result<String, String>) -> ExitCode {
+    match result {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Write `shaders` and `pipelines` as the one bundle of a fresh cache file at `path`.
+fn write_cache_file(
+    path: &Path,
+    shaders: &[CacheEntry],
+    pipelines: &[PipelineRecipe],
+) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    write_header(&mut bytes);
+    write_bundle(&mut bytes, shaders, pipelines);
+    fs::write(path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut kinds = std::collections::BTreeMap::new();
+    for entry in shaders {
+        *kinds.entry(format!("{:?}", entry.kind)).or_insert(0_usize) += 1;
+    }
+    Ok(format!(
+        "{}: {} shader records {kinds:?}, {} pipeline recipes, {} bytes",
+        path.display(),
+        shaders.len(),
+        pipelines.len(),
+        bytes.len()
+    ))
+}
+
+/// The cache file of the synthetic programmable shaders and their pipelines.
+fn write_synthetic_cache(path: &Path, corpus: &Corpus) -> Result<String, String> {
+    let (shaders, pipelines) = synthetic_records(corpus)?;
+    write_cache_file(path, &shaders, &pipelines)
+}
+
+/// A cache record per synthetic programmable shader, and a recipe per compatible VS and PS pair.
+fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRecipe>), String> {
+    let mut vertex = Vec::new();
+    let mut pixel = Vec::new();
+    let mut shaders = Vec::new();
+    for shader in &corpus.shaders {
+        let Input::Synthetic {
+            tokens,
+            program,
+            specialization,
+        } = &shader.input
+        else {
+            continue;
+        };
+        let source = match specialization {
+            Specialization::Vertex { clip_planes } => {
+                ShaderSource::vertex(program, u16::MAX, *clip_planes, VsSamplerKinds::default())
+            }
+            Specialization::Pixel(variant) => ShaderSource::pixel(program, *variant),
+        };
+        let kind = shader.kind();
+        let key = source.disk_key();
+        let msl = source.emit(&kind.entry_name(key))?;
+        let reference = ShaderRecordRef::new(kind, key);
+        match specialization {
+            Specialization::Vertex { .. } => vertex.push((reference, program, tokens[0])),
+            Specialization::Pixel(_) => pixel.push((reference, tokens[0])),
+        }
+        shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
+    }
+    let mut pipelines = Vec::new();
+    for (vs, program, vs_header) in &vertex {
+        let attrs = vertex_attrs(program);
+        let stride = u32::try_from(attrs.len() * 16).map_err(|e| e.to_string())?;
+        for (ps, ps_header) in &pixel {
+            // D3D9 pairs a shader model 3 vertex shader with a shader model 3 pixel shader only.
+            if (vs_header >> 8 & 0xFF == 3) != (ps_header >> 8 & 0xFF == 3) {
+                continue;
+            }
+            let mut stream_layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
+            stream_layouts[0] = StreamLayout {
+                stride,
+                step: VertexStepFunction::PerVertex,
+                step_rate: 1,
+            };
+            let snapshot = PipelineSnapshot {
+                vs_fn: MetalHandle::NULL,
+                ps_fn: MetalHandle::NULL,
+                vdecl_hash: vs.key(),
+                stream_layouts,
+                color_format: PixelFormat::Bgra8Unorm,
+                attach: PipelineAttachFlags::HAS_COLOR_OUTPUT
+                    | PipelineAttachFlags::COLOR_HAS_ALPHA,
+                rs: PipelineRsBits {
+                    color_write_mask: 0x0F,
+                    ..PipelineRsBits::default()
+                },
+                extra: ExtraColorAttachments::NONE,
+                ps_color_out_mask: 1,
+                sample_count: 1,
+            };
+            pipelines.push(PipelineRecipe::from_snapshot(*vs, *ps, &snapshot, &attrs));
+        }
+    }
+    Ok((shaders, pipelines))
+}
+
+/// One tightly packed `float4` per input register the vertex shader declares, in one stream.
+fn vertex_attrs(program: &DxsoProgram) -> Vec<VertexAttrDesc> {
+    let mut registers: Vec<u32> = program
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Declaration::Semantic { reg, .. } if reg.kind == RegKind::Input => {
+                Some(u32::from(reg.index))
+            }
+            _ => None,
+        })
+        .collect();
+    registers.sort_unstable();
+    registers.dedup();
+    registers
+        .into_iter()
+        .zip(0_u32..)
+        .map(|(attr_index, slot)| VertexAttrDesc {
+            attr_index,
+            buffer_index: 0,
+            offset: slot * 16,
+            format: VertexFormat::Float4,
+        })
+        .collect()
+}
+
+/// One cache file holding the shader records and recipes of every input, once each.
+fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
+    let mut shaders: Vec<CacheEntry> = Vec::new();
+    let mut pipelines: Vec<PipelineRecipe> = Vec::new();
+    for path in inputs {
+        let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        if read_header(&bytes) != Ok(CacheHeader::CURRENT) {
+            return Err(format!(
+                "{}: not a shader cache this build reads (container {CACHE_FORMAT_VERSION}, \
+                 schema {SHADER_CACHE_SCHEMA_VERSION})",
+                path.display()
+            ));
+        }
+        let records = read_records(&bytes);
+        if records.valid_len() < bytes.len() {
+            return Err(format!("{}: torn or damaged", path.display()));
+        }
+        shaders.extend(records.shaders);
+        pipelines.extend(records.pipelines);
+    }
+    let mut seen = rustc_hash::FxHashSet::default();
+    shaders.retain(|entry| seen.insert((entry.kind as u8, entry.key)));
+    let mut seen = rustc_hash::FxHashSet::default();
+    pipelines.retain(|recipe| seen.insert(recipe.disk_key()));
+    write_cache_file(out, &shaders, &pipelines)
 }
 
 /// The cargo profile this binary was built with, from `target/<triple>/<profile>/examples`.
@@ -1595,3 +1802,8 @@ fn normal_mapped_ps() -> Vec<u32> {
     out.push(END);
     out
 }
+
+// An example is not a `mod.rs` file, so the test module names its file.
+#[cfg(test)]
+#[path = "emit_corpus/tests.rs"]
+mod tests;

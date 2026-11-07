@@ -28,6 +28,7 @@ disk-cache = ["dep:zstd"]
 
 [[example]]
 name = "emit_corpus"
+test = true
 required-features = ["disk-cache"]
 
 [build-dependencies]
