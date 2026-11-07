@@ -93,6 +93,7 @@ fn new_test_context() -> Context<TestMode> {
         refs: Managed::default(),
         private_data: PrivateData::default(),
         device: ptr::null_mut(),
+        live: false,
         state: ContextState {
             sample_mask: 0xffff_ffff,
             stencil_ref: 0,

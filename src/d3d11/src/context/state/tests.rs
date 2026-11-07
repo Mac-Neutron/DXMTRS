@@ -37,6 +37,7 @@ fn new_test_context() -> Context<Immediate> {
         refs: crate::com::Managed::default(),
         private_data: dxmt_util::private_data::PrivateData::default(),
         device: ptr::null_mut(),
+        live: false,
         state: super::ContextState::default(),
         cmdbuf_state: crate::context::CommandBufferState::Idle,
         encode: crate::context::encode::EncodeSession::default(),

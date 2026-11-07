@@ -54,6 +54,7 @@ fn new_test_context() -> Context<Immediate> {
         refs: crate::com::Managed::default(),
         private_data: dxmt_util::private_data::PrivateData::default(),
         device: ptr::null_mut(),
+        live: false,
         state: ContextState {
             sample_mask: 0xffff_ffff,
             stencil_ref: 0,

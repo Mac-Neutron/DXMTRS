@@ -49,8 +49,13 @@ const D3D11_SO_NO_RASTERIZED_STREAM: u32 = 0xffff_ffff;
 
 impl<M: Mode> Context<M> {
     fn managed_shader(&self, stage: ShaderStage) -> Option<Arc<ManagedShader>> {
+        self.managed_shader_ref(stage).map(Arc::clone)
+    }
+
+    /// The shader bound to `stage`, borrowed: the binding's object outlives the call.
+    fn managed_shader_ref(&self, stage: ShaderStage) -> Option<&'static Arc<ManagedShader>> {
         let ptr = self.state.shader_stages[stage.index()].shader.as_ptr();
-        Shader::from_iface(ptr).map(|s| Arc::clone(&s.managed))
+        Shader::from_iface(ptr).map(|s| &s.managed)
     }
 
     fn build_graphics_desc(&self, indexed: bool) -> GraphicsDesc {
@@ -152,12 +157,11 @@ impl<M: Mode> Context<M> {
         if topology == 0 {
             return None;
         }
-        let vs = self.managed_shader(ShaderStage::Vertex)?;
-        let _ = vs;
-        let hs = self.managed_shader(ShaderStage::Hull);
-        let ds = self.managed_shader(ShaderStage::Domain);
-        let gs = self.managed_shader(ShaderStage::Geometry);
-        let gs_passthrough = gs.as_ref().map_or(u32::MAX, |g| {
+        self.managed_shader_ref(ShaderStage::Vertex)?;
+        let hs = self.managed_shader_ref(ShaderStage::Hull);
+        let ds = self.managed_shader_ref(ShaderStage::Domain);
+        let gs = self.managed_shader_ref(ShaderStage::Geometry);
+        let gs_passthrough = gs.map_or(u32::MAX, |g| {
             // SAFETY: `g` is a geometry shader so `u.geometry_shader` is initialized.
             let gs_refl = unsafe { g.reflection.u.geometry_shader };
             // SAFETY: `gs_pass_through` is the active union arm for geometry shader reflection.
@@ -168,7 +172,7 @@ impl<M: Mode> Context<M> {
             .as_ptr();
         let is_so = StreamOutputLayout::from_iface(gs_ptr).is_some();
 
-        let target_kind = if let Some(ref hs_shader) = hs {
+        let target_kind = if let Some(hs_shader) = hs {
             if !(33..=64).contains(&topology) {
                 return None;
             }
@@ -182,7 +186,7 @@ impl<M: Mode> Context<M> {
                 });
                 return None;
             }
-            ds.as_ref()?;
+            ds?;
             if gs.is_some() && !is_so && gs_passthrough == u32::MAX {
                 M::emit_st(self, |enc| {
                     enc.set_compatibility_flag(
@@ -350,7 +354,7 @@ impl<M: Mode> Context<M> {
         let Some(shader_obj) = Shader::from_iface(ptr) else {
             return;
         };
-        let managed = Arc::clone(&shader_obj.managed);
+        let managed = &shader_obj.managed;
         let refl = &managed.reflection;
 
         let cb_mask = u128::from(refl.constant_buffer_slot_mask);
@@ -381,7 +385,7 @@ impl<M: Mode> Context<M> {
         if refl.num_constant_buffers > 0 && dirty_cb {
             let cb_bytes = u64::from(refl.num_constant_buffers) << 3;
             let offset = self.pre_allocate_argument_buffer(is_compute, cb_bytes, 32);
-            let managed_cb = Arc::clone(&managed);
+            let managed_cb = Arc::clone(managed);
             M::emit_st(self, move |enc| {
                 enc.encode_constant_buffers::<S, K>(&managed_cb.constant_buffers, offset);
             });
@@ -393,7 +397,7 @@ impl<M: Mode> Context<M> {
         if refl.num_arguments > 0 && (dirty_samp || dirty_srv || uav_bound) {
             let arg_bytes = u64::from(refl.argument_table_qwords) << 3;
             let offset = self.pre_allocate_argument_buffer(is_compute, arg_bytes, 32);
-            let managed_arg = Arc::clone(&managed);
+            let managed_arg = Arc::clone(managed);
             M::emit_st(self, move |enc| {
                 enc.encode_shader_resources::<S, K>(&managed_arg.arguments, offset);
             });

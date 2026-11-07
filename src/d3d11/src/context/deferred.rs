@@ -295,6 +295,7 @@ impl Context<Deferred> {
             refs,
             private_data: PrivateData::default(),
             device,
+            live: super::immediate::live_device(device).is_some(),
             state: super::state::ContextState::default(),
             cmdbuf_state: CommandBufferState::Idle,
             encode: super::encode::EncodeSession::default(),

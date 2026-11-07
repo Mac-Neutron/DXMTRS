@@ -313,6 +313,7 @@ impl Context<Immediate> {
             refs,
             private_data: PrivateData::default(),
             device,
+            live: live_device(device).is_some(),
             state: super::state::ContextState::default(),
             cmdbuf_state: CommandBufferState::Idle,
             encode: super::encode::EncodeSession::default(),
@@ -485,8 +486,8 @@ impl Context<Immediate> {
 impl<M: Mode> Context<M> {
     /// Whether this context is backed by a live Metal device.
     #[must_use]
-    pub(super) fn is_live(&self) -> bool {
-        live_device(self.device).is_some()
+    pub(super) const fn is_live(&self) -> bool {
+        self.live
     }
 
     /// Downcasts `&self` to `&Context<Immediate>` when `M` is [`Immediate`].

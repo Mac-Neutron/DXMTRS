@@ -102,6 +102,10 @@ pub struct Context<M: Mode> {
     pub refs: Managed,
     pub private_data: PrivateData,
     pub device: *mut c_void,
+    /// `device` is a live device with a Metal device, fixed for the context's life.
+    ///
+    /// `device` never changes, nor does a device's Metal device.
+    pub live: bool,
     pub state: state::ContextState,
     pub cmdbuf_state: CommandBufferState,
     /// The encode session: snapshot, pass records and their arena.
