@@ -75,8 +75,12 @@ pub trait Mode: Sized + 'static {
     /// Allocates `size` bytes aligned to `align` in the argument-buffer / CPU heap.
     fn alloc(ctx: &mut Context<Self>, size: usize, align: usize) -> (*mut u8, u64);
 
-    /// Allocates a temporary staging slice `(buffer, offset)` of `size` bytes aligned to `align`.
-    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64);
+    /// Allocates a temporary staging slice `(buffer, offset, mapped)` of `size` bytes.
+    ///
+    /// The slice is aligned to `align`.
+    /// `mapped` is the buffer's start in this process's memory, where `offset` counts from, or null
+    /// when the process cannot reach it (or the buffer is not a Metal one).
+    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64, *mut u8);
 
     /// Current buffer allocation for `dynamic` in this context (`GetDynamicBufferLatestName`).
     fn dynamic_name(ctx: &mut Context<Self>, dynamic: &DynamicBuffer) -> Arc<BufferAllocation>;

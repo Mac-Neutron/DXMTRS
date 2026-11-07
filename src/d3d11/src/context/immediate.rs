@@ -237,19 +237,19 @@ impl Mode for Immediate {
         }
     }
 
-    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64) {
+    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64, *mut u8) {
         if let Some(dev) = live_device(ctx.device) {
             let (block, offset) = dev
                 .core_mut()
                 .queue_mut()
                 .allocate_staging_buffer(size.max(1), align.max(1));
-            return (block.buffer, offset);
+            return (block.buffer, offset, block.mapped);
         }
         let seq = ctx.mode.current_seq();
         let coherent = ctx.mode.coherent_seq();
         if let Some(ring) = ctx.mode.staging_allocator.as_mut() {
             let (block, offset) = ring.allocate(seq, coherent, size.max(1), align.max(1));
-            return (block.gpu_address + offset, offset);
+            return (block.gpu_address + offset, offset, ptr::null_mut());
         }
         let (ptr, gpu_addr) = Self::alloc(
             ctx,
@@ -257,7 +257,7 @@ impl Mode for Immediate {
             usize::try_from(align.max(1)).unwrap_or(1),
         );
         let _ = ptr;
-        (gpu_addr, 0)
+        (gpu_addr, 0, ptr::null_mut())
     }
 
     fn dynamic_name(ctx: &mut Context<Self>, dynamic: &DynamicBuffer) -> Arc<BufferAllocation> {

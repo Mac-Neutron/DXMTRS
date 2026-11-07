@@ -68,12 +68,12 @@ impl Mode for TestMode {
         (ptr::null_mut(), 0)
     }
 
-    fn staging(_ctx: &mut Context<Self>, size: u64, _align: u64) -> (u64, u64) {
+    fn staging(_ctx: &mut Context<Self>, size: u64, _align: u64) -> (u64, u64, *mut u8) {
         NEXT_STAGING.with(|cell| {
             let mut st = cell.borrow_mut();
             let (handle, offset) = *st;
             st.1 = st.1.saturating_add(size);
-            (handle, offset)
+            (handle, offset, ptr::null_mut())
         })
     }
 

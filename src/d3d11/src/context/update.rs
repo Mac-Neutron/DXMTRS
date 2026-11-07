@@ -34,7 +34,23 @@ const D3D11_COPY_NO_OVERWRITE: u32 = 1;
 const D3D11_COPY_DISCARD: u32 = 2;
 
 /// Copies `data` into the Metal staging buffer `handle` at `offset`.
-fn update_staging_contents(handle: u64, offset: u64, data: &[u8]) {
+///
+/// Straight into `mapped`, the buffer's start from [`Mode::staging`], when this process reaches
+/// it: a staging ring's buffers are shared storage (`CPU_WRITE_COMBINED`, never `GPU_MANAGED`), so
+/// no range needs telling Metal, as `BufferAllocation::update_contents` does for its own. Through
+/// winemetal's `MTLBuffer_updateContents` otherwise.
+fn update_staging_contents(handle: u64, mapped: *mut u8, offset: u64, data: &[u8]) {
+    if !mapped.is_null() {
+        let Ok(start) = usize::try_from(offset) else {
+            return;
+        };
+        let dst = mapped.wrapping_add(start);
+        // SAFETY: `mapped` is the start of the staging block `M::staging` allocated in, whose
+        // `offset..offset + data.len()` it gave this upload; the block lives until the GPU is done
+        // with the sequence, and `data` is the application's memory, not the block's.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
+        return;
+    }
     #[cfg(test)]
     write_test_staging_slice(handle, offset, data);
     #[cfg(not(test))]
@@ -197,8 +213,8 @@ impl<M: Mode> Context<M> {
             }
 
             if let Some(dst_buf) = get_buffer_ref(dst_resource) {
-                let (staging_buffer, offset) = M::staging(self, u64::from(copy_len), 16);
-                update_staging_contents(staging_buffer, offset, src_slice);
+                let (staging_buffer, offset, mapped) = M::staging(self, u64::from(copy_len), 16);
+                update_staging_contents(staging_buffer, mapped, offset, src_slice);
                 self.switch_to_blit_encoder();
                 #[cfg(test)]
                 if let Some((dst_h, dst_off)) = dst_buf.test_handle() {
@@ -257,7 +273,7 @@ impl<M: Mode> Context<M> {
             let bytes_per_depth_slice =
                 u64::from(effective_rows).saturating_mul(u64::from(effective_bpr));
             let total_bytes = bytes_per_depth_slice.saturating_mul(u64::from(dst_size[2]));
-            let (staging_buffer, offset) = M::staging(self, total_bytes, 16);
+            let (staging_buffer, offset, mapped) = M::staging(self, total_bytes, 16);
             let src_base = src_data.cast::<u8>();
 
             if effective_bpr == src_row_pitch {
@@ -270,7 +286,7 @@ impl<M: Mode> Context<M> {
                     let src_ptr = unsafe { src_base.add(src_byte_off) };
                     // SAFETY: `src_ptr` points to `slice_len` readable bytes from `src_data`.
                     let data = unsafe { slice::from_raw_parts(src_ptr, slice_len) };
-                    update_staging_contents(staging_buffer, dst_offset, data);
+                    update_staging_contents(staging_buffer, mapped, dst_offset, data);
                 }
             } else {
                 let row_len = effective_bpr as usize;
@@ -288,7 +304,7 @@ impl<M: Mode> Context<M> {
                         let src_ptr = unsafe { src_base.add(src_byte_off) };
                         // SAFETY: `src_ptr` points to `row_len` readable bytes.
                         let data = unsafe { slice::from_raw_parts(src_ptr, row_len) };
-                        update_staging_contents(staging_buffer, dst_offset, data);
+                        update_staging_contents(staging_buffer, mapped, dst_offset, data);
                     }
                 }
             }

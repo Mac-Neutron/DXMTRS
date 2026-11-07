@@ -237,20 +237,20 @@ impl Mode for Deferred {
         (raw, raw as usize as u64)
     }
 
-    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64) {
+    fn staging(ctx: &mut Context<Self>, size: u64, align: u64) -> (u64, u64, *mut u8) {
         if let Some(ring) = ctx.mode.staging_allocator.as_mut() {
             let (block, offset) = ring.allocate(0, 0, size.max(1), align.max(1));
             if block.buffer != 0 {
-                return (block.buffer, offset);
+                return (block.buffer, offset, block.mapped);
             }
-            return (block.gpu_address + offset, offset);
+            return (block.gpu_address + offset, offset, ptr::null_mut());
         }
         let (_, gpu_addr) = Self::alloc(
             ctx,
             usize::try_from(size.max(1)).unwrap_or(1),
             usize::try_from(align.max(1)).unwrap_or(1),
         );
-        (gpu_addr, 0)
+        (gpu_addr, 0, ptr::null_mut())
     }
 
     fn dynamic_name(ctx: &mut Context<Self>, dynamic: &DynamicBuffer) -> Arc<BufferAllocation> {
