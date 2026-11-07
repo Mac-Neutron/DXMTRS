@@ -49,6 +49,8 @@ mod op {
     pub const MOV: u16 = 1;
     pub const ADD: u16 = 2;
     pub const MUL: u16 = 5;
+    pub const SLT: u16 = 12;
+    pub const SGE: u16 = 13;
     pub const LIT: u16 = 16;
     pub const DST: u16 = 17;
     pub const M4X4: u16 = 20;
@@ -750,6 +752,46 @@ fn lit_dst_nrm_crs_sincos_pow_expansions() {
     assert!(instructions(&l).any(|i| matches!(i, Instruction::FloatMad(_))));
     assert_eq!(count(&l, |i| matches!(i, Instruction::SinCos(_))), 1);
     metallib(&expansions(), spec());
+}
+
+/// `dcl_position v0; dcl_texcoord0 v1; mov oPos, v0; <opcode> oT0, v0, v1.<swizzle>` (`vs_2_0`).
+fn binary(opcode: u16, swizzle: u8) -> Vec<u32> {
+    program(
+        VS_2_0,
+        &[
+            dcl(POSITION, 0, d(INPUT, 0, ALL)),
+            dcl(TEXCOORD, 0, d(INPUT, 1, ALL)),
+            vec![ins(op::MOV, 2), d(RASTOUT, 0, ALL), s(INPUT, 0, XYZW)],
+            vec![
+                ins(opcode, 3),
+                d(OUTPUT, 0, ALL),
+                s(INPUT, 0, XYZW),
+                s(INPUT, 1, swizzle),
+            ],
+        ],
+    )
+}
+
+/// Whether `l` compares `v0` with `v1` by `cmp`.
+fn compares_inputs(l: &Lowered, cmp: &FloatComparison) -> bool {
+    instructions(l).any(|i| {
+        matches!(i, Instruction::FloatCompare(c)
+        if c.cmp == *cmp
+            && matches!(c.src0, SrcOperand::Input { regid: 0, .. })
+            && matches!(c.src1, SrcOperand::Input { regid: 1, .. }))
+    })
+}
+
+#[test]
+fn sge_and_slt_compare_ordered() {
+    // `sge` is `v0 >= v1` (Metal's `step(v1, v0)`), `slt` is `v0 < v1`: both 0 where a NaN is
+    // compared, as D3D9's, not `!(v0 < v1)`.
+    let sge = lowered(&binary(op::SGE, XYZW), spec());
+    assert!(compares_inputs(&sge, &FloatComparison::GreaterEqual));
+    assert!(!compares_inputs(&sge, &FloatComparison::LessThan));
+    let slt = lowered(&binary(op::SLT, XYZW), spec());
+    assert!(compares_inputs(&slt, &FloatComparison::LessThan));
+    metallib(&binary(op::SGE, XYZW), spec());
 }
 
 /// `dcl_position v0; dcl_normal v1; mov oPos, v0; mov oT0, v1` (`vs_2_0`).

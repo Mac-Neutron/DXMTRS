@@ -310,15 +310,16 @@ impl Lower<'_> {
                 let c = self.mask(FloatComparison::GreaterEqual, a(0)?, fsplat(0.0))?;
                 self.select(c, a(1)?, a(2)?)?
             }
-            // `1 - step(s1, s0)` and `step(s1, s0)`: `step` is 0 only where `s0 < s1`.
+            // `s0 < s1` and `s0 >= s1` (Metal's `step(s1, s0)`), ordered: 0 where a NaN is
+            // compared, as D3D9's.
             Opcode::Slt | Opcode::Sge => {
-                let below = self.mask(FloatComparison::LessThan, a(0)?, a(1)?)?;
-                let (on, off) = if inst.opcode == Opcode::Slt {
-                    (1.0, 0.0)
+                let cmp = if inst.opcode == Opcode::Slt {
+                    FloatComparison::LessThan
                 } else {
-                    (0.0, 1.0)
+                    FloatComparison::GreaterEqual
                 };
-                self.select(below, fsplat(on), fsplat(off))?
+                let holds = self.mask(cmp, a(0)?, a(1)?)?;
+                self.select(holds, fsplat(1.0), fsplat(0.0))?
             }
             Opcode::TexLd | Opcode::TexLdL | Opcode::TexLdD => self.texture(inst, srcs)?,
             Opcode::Dsx => self.derivative(a(0)?, false)?,
