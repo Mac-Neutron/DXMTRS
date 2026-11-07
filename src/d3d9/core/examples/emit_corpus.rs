@@ -694,7 +694,12 @@ fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
         }
         let records = read_records(&bytes);
         if records.valid_len() < bytes.len() {
-            return Err(format!("{}: torn or damaged", path.display()));
+            // As the layer's `load` does: keep the records before the damage.
+            eprintln!(
+                "{}: torn or damaged; dropping {} bytes after the valid prefix",
+                path.display(),
+                bytes.len() - records.valid_len()
+            );
         }
         shaders.extend(records.shaders);
         pipelines.extend(records.pipelines);

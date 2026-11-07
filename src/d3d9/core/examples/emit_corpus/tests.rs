@@ -75,3 +75,18 @@ fn merge_of_one_file_keeps_every_record() {
     assert_eq!(again.shaders.len(), before.shaders.len());
     assert_eq!(again.pipelines.len(), before.pipelines.len());
 }
+
+#[test]
+fn merge_keeps_the_valid_prefix_of_a_torn_file() {
+    let path = temp("torn-in");
+    write_synthetic_cache(&path, &synthetic()).expect("write");
+    let before = loaded(&path);
+    let mut bytes = fs::read(&path).expect("read");
+    bytes.extend_from_slice(&[0xA5; 37]);
+    fs::write(&path, bytes).expect("append junk");
+    let out = temp("torn-out");
+    merge_caches(&out, &[path]).expect("merge");
+    let after = loaded(&out);
+    assert_eq!(after.shaders, before.shaders);
+    assert_eq!(after.pipelines.len(), before.pipelines.len());
+}
