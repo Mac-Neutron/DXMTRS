@@ -23,6 +23,9 @@ dependencies = [
 [[package]]
 name = "airconv-ir"
 version = "0.14.1"
+dependencies = [
+ "bitflags 2.13.2",
+]
 
 [[package]]
 name = "anstream"
@@ -406,6 +409,7 @@ dependencies = [
 name = "mtld3d-core"
 version = "0.14.1"
 dependencies = [
+ "airconv-ir",
  "bitflags 2.13.2",
  "dxmt-util",
  "log",
@@ -443,6 +447,7 @@ dependencies = [
 name = "mtld3d-shared"
 version = "0.14.1"
 dependencies = [
+ "airconv-ir",
  "bitflags 2.13.2",
  "dxmt-util",
  "env_logger",

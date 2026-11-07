@@ -2,9 +2,38 @@
 //!
 //! Covers the subset of Shader Model 2.0 we actually need.
 
-pub use mtld3d_shared::shader_create::DeclUsage;
-
 use super::opcode::Opcode;
+
+/// D3D declaration usage encoded in shader input semantics (`D3DDECLUSAGE_*`, in this order).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeclUsage {
+    Position,
+    BlendWeight,
+    BlendIndices,
+    Normal,
+    PSize,
+    Texcoord,
+    Tangent,
+    Binormal,
+    TessFactor,
+    PositionT,
+    Color,
+    Fog,
+    Depth,
+    Sample,
+}
+
+/// Something a program does that the translators accept but cannot honour.
+///
+/// Returned, not logged: the caller decides where the line goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DxsoWarning {
+    /// A `ps_3_0` declares more than `MAX_LINKED_INPUTS` extra input semantics.
+    LinkedInputsOverflow,
+    /// A write to `oCi` beyond the four D3D9 render targets.
+    ColorOutBeyondTargets(u16),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderType {
@@ -127,6 +156,7 @@ pub struct WriteMask(pub u8);
 
 impl WriteMask {
     pub const ALL: Self = Self(0b1111);
+    #[must_use]
     pub const fn covers(self, component: u8) -> bool {
         self.0 & (1 << component) != 0
     }
@@ -439,7 +469,7 @@ impl DxsoProgram {
     /// body. Any question of the form "does this shader use X" has to ask
     /// both lists, or a shader that only reaches X through a `call` answers
     /// no.
-    pub(super) fn all_instructions(&self) -> impl Iterator<Item = &Instruction> {
+    pub fn all_instructions(&self) -> impl Iterator<Item = &Instruction> {
         self.instructions
             .iter()
             .chain(self.subroutines.values().flatten())
@@ -539,14 +569,16 @@ impl DxsoProgram {
     /// has `oCi` as its destination. `ps_1_x` has no `oC` register (the result
     /// is whatever `r0` holds at the end), so SM1 programs report bit 0. A
     /// write to an index above 3 is outside the D3D9 limit of four
-    /// simultaneous render targets and is ignored here, with a one-shot warn.
+    /// simultaneous render targets and is ignored here, with a
+    /// [`DxsoWarning::ColorOutBeyondTargets`] per such index returned.
     /// Always bit 0 for a vertex shader.
     #[must_use]
-    pub fn color_out_mask(&self) -> u8 {
+    pub fn color_out_mask(&self) -> (u8, Vec<DxsoWarning>) {
         if self.shader_type != ShaderType::Pixel || self.major < 2 {
-            return 1;
+            return (1, Vec::new());
         }
         let mut mask = 0u8;
+        let mut warnings = Vec::new();
         let bodies = core::iter::once(&self.instructions).chain(self.subroutines.values());
         for inst in bodies.flatten() {
             let Some(dst) = inst.dst.as_ref() else {
@@ -558,15 +590,14 @@ impl DxsoProgram {
             match dst.reg.index {
                 i @ 0..=3 => mask |= 1 << i,
                 other => {
-                    mtld3d_shared::log_once_warn_by!(
-                        target: super::LOG_TARGET,
-                        key: u64::from(other),
-                        "dxso: PS writes oC{other}, beyond the four D3D9 render targets → write ignored"
-                    );
+                    let warning = DxsoWarning::ColorOutBeyondTargets(other);
+                    if !warnings.contains(&warning) {
+                        warnings.push(warning);
+                    }
                 }
             }
         }
-        mask
+        (mask, warnings)
     }
 }
 

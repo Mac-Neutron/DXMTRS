@@ -4,13 +4,6 @@
 //! surface as a hard `UnsupportedShaderModel` error instead of silently
 //! producing wrong IR.
 
-use mtld3d_types::{
-    D3DDECLUSAGE_BINORMAL, D3DDECLUSAGE_BLENDINDICES, D3DDECLUSAGE_BLENDWEIGHT, D3DDECLUSAGE_COLOR,
-    D3DDECLUSAGE_DEPTH, D3DDECLUSAGE_FOG, D3DDECLUSAGE_NORMAL, D3DDECLUSAGE_POSITION,
-    D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_PSIZE, D3DDECLUSAGE_SAMPLE, D3DDECLUSAGE_TANGENT,
-    D3DDECLUSAGE_TESSFACTOR, D3DDECLUSAGE_TEXCOORD,
-};
-
 use super::{
     ir::{
         CmpFunc, DeclUsage, Declaration, DefBoolConstant, DefConstant, DefIntConstant, DstMods,
@@ -317,10 +310,8 @@ pub fn parse(bytecode: &[u32]) -> Result<DxsoProgram, DxsoError> {
                     cmp_func,
                 };
                 match current_label {
-                    Some(label) => subroutines
-                        .get_mut(&label)
-                        .expect("subroutine entry was created on Label")
-                        .push(inst),
+                    // The `Label` arm created the entry before it set `current_label`.
+                    Some(label) => subroutines.entry(label).or_default().push(inst),
                     None => instructions.push(inst),
                 }
             }
@@ -477,20 +468,20 @@ const fn decode_src_modifier(b: u8) -> SrcModifier {
 
 const fn decode_decl_usage(b: u8) -> Result<DeclUsage, DxsoError> {
     Ok(match b {
-        D3DDECLUSAGE_POSITION => DeclUsage::Position,
-        D3DDECLUSAGE_BLENDWEIGHT => DeclUsage::BlendWeight,
-        D3DDECLUSAGE_BLENDINDICES => DeclUsage::BlendIndices,
-        D3DDECLUSAGE_NORMAL => DeclUsage::Normal,
-        D3DDECLUSAGE_PSIZE => DeclUsage::PSize,
-        D3DDECLUSAGE_TEXCOORD => DeclUsage::Texcoord,
-        D3DDECLUSAGE_TANGENT => DeclUsage::Tangent,
-        D3DDECLUSAGE_BINORMAL => DeclUsage::Binormal,
-        D3DDECLUSAGE_TESSFACTOR => DeclUsage::TessFactor,
-        D3DDECLUSAGE_POSITIONT => DeclUsage::PositionT,
-        D3DDECLUSAGE_COLOR => DeclUsage::Color,
-        D3DDECLUSAGE_FOG => DeclUsage::Fog,
-        D3DDECLUSAGE_DEPTH => DeclUsage::Depth,
-        D3DDECLUSAGE_SAMPLE => DeclUsage::Sample,
+        0 => DeclUsage::Position,     // D3DDECLUSAGE_POSITION
+        1 => DeclUsage::BlendWeight,  // D3DDECLUSAGE_BLENDWEIGHT
+        2 => DeclUsage::BlendIndices, // D3DDECLUSAGE_BLENDINDICES
+        3 => DeclUsage::Normal,       // D3DDECLUSAGE_NORMAL
+        4 => DeclUsage::PSize,        // D3DDECLUSAGE_PSIZE
+        5 => DeclUsage::Texcoord,     // D3DDECLUSAGE_TEXCOORD
+        6 => DeclUsage::Tangent,      // D3DDECLUSAGE_TANGENT
+        7 => DeclUsage::Binormal,     // D3DDECLUSAGE_BINORMAL
+        8 => DeclUsage::TessFactor,   // D3DDECLUSAGE_TESSFACTOR
+        9 => DeclUsage::PositionT,    // D3DDECLUSAGE_POSITIONT
+        10 => DeclUsage::Color,       // D3DDECLUSAGE_COLOR
+        11 => DeclUsage::Fog,         // D3DDECLUSAGE_FOG
+        12 => DeclUsage::Depth,       // D3DDECLUSAGE_DEPTH
+        13 => DeclUsage::Sample,      // D3DDECLUSAGE_SAMPLE
         _ => return Err(DxsoError::UnknownDeclUsage(b)),
     })
 }

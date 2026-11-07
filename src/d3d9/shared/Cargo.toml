@@ -14,6 +14,7 @@ perf-tracking = []
 perf-build = ["dxmt-util/perf-build"]
 
 [dependencies]
+airconv-ir = { workspace = true }
 bitflags = { workspace = true }
 dxmt-util = { workspace = true }
 env_logger = { workspace = true }

@@ -24,6 +24,14 @@ fn emitter_fingerprint() {
     collect_sources(Path::new("src/dxso"), &mut paths);
     paths.extend([
         "src/dxso.rs".into(),
+        // The moved front end, listed by name (not the folder) so the lowering files beside it do not
+        // move the MSL fingerprint (C3-20).
+        "../../airconv/ir/src/dxso.rs".into(),
+        "../../airconv/ir/src/dxso/ir.rs".into(),
+        "../../airconv/ir/src/dxso/link.rs".into(),
+        "../../airconv/ir/src/dxso/opcode.rs".into(),
+        "../../airconv/ir/src/dxso/parser.rs".into(),
+        "../../airconv/ir/src/dxso/spec.rs".into(),
         "src/vs_draw.rs".into(),
         "src/ps_draw.rs".into(),
         "../../unix/shared/src/mtl.rs".into(),

@@ -1,11 +1,5 @@
 //! Unit tests for semantic linkage between SM3 vertex and pixel shaders.
 
-use mtld3d_types::{
-    D3DDECLUSAGE_BLENDWEIGHT, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_DEPTH, D3DDECLUSAGE_FOG,
-    D3DDECLUSAGE_NORMAL, D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_PSIZE,
-    D3DDECLUSAGE_SAMPLE, D3DDECLUSAGE_TANGENT, D3DDECLUSAGE_TEXCOORD,
-};
-
 use super::{
     LinkInputs, MAX_LINKED_INPUTS, PsInputs, Semantic, SemanticSet, VsOutputs,
     decl_passthrough_code, passthrough_extras, write_extra_members, write_passthrough_inputs,
@@ -13,7 +7,7 @@ use super::{
 };
 use crate::dxso::{
     ir::{DeclUsage, DstMods, DstOperand, RegKind, Register, WriteMask},
-    parser::parse,
+    parse,
 };
 
 const VS3_HEADER: u32 = 0xFFFE_0300;
@@ -128,7 +122,7 @@ fn input_order_fixes_the_mask_bits() {
             dcl(COLOR, 2, INPUT, 4, 0xF),
         ],
     );
-    let inputs = LinkInputs::ps_inputs(&ps);
+    let inputs = LinkInputs::ps_inputs(&ps).0;
     let order: Vec<_> = inputs.iter().map(Semantic::member).collect();
     assert_eq!(order, ["tangent0", "normal0", "color2"]);
 
@@ -141,18 +135,6 @@ fn input_order_fixes_the_mask_bits() {
     );
     assert_eq!(inputs.mask_against(&SemanticSet::vs_outputs(&vs)), 0b101);
     assert_eq!(inputs.mask_against(&SemanticSet::default()), 0);
-}
-
-#[test]
-fn inputs_past_the_mask_width_are_not_linked() {
-    let dcls: Vec<_> = (0..10).map(|i| dcl(NORMAL, i, INPUT, i, 0xF)).collect();
-    let inputs = LinkInputs::ps_inputs(&program(PS3_HEADER, &dcls));
-    assert_eq!(inputs.iter().count(), MAX_LINKED_INPUTS);
-    assert!(
-        inputs
-            .position(Semantic::new(DeclUsage::Normal, 8))
-            .is_none()
-    );
 }
 
 #[test]
@@ -313,7 +295,7 @@ fn a_pixel_shader_below_sm3_keeps_its_structural_colour_inputs() {
     let ps = parse(&[0xFFFF_0200, DCL, 0x8000_0000, 0x900F_0001, END_TOKEN]).expect("ps_2_0");
     let plan = PsInputs::build(&ps, 0);
     assert_eq!(plan.reads()[&1], "in.color1");
-    assert!(LinkInputs::ps_inputs(&ps).is_empty());
+    assert!(LinkInputs::ps_inputs(&ps).0.is_empty());
 }
 
 /// The passthrough list of `codes`, zero-filled past the end.
@@ -327,45 +309,6 @@ fn code(usage: u32, index: u32) -> u8 {
     let usage = u8::try_from(usage).expect("usage fits u8");
     let index = u8::try_from(index).expect("index fits u8");
     decl_passthrough_code(usage, index).expect("semantic passes through")
-}
-
-#[test]
-fn a_pretransformed_layout_passes_through_what_the_ff_stage_does_not_write() {
-    // The fixed-function stage writes these itself.
-    for (usage, index) in [
-        (D3DDECLUSAGE_POSITION, 0),
-        (D3DDECLUSAGE_POSITIONT, 0),
-        (D3DDECLUSAGE_PSIZE, 0),
-        (D3DDECLUSAGE_TEXCOORD, 0),
-        (D3DDECLUSAGE_TEXCOORD, 7),
-        (D3DDECLUSAGE_COLOR, 0),
-        (D3DDECLUSAGE_COLOR, 1),
-    ] {
-        assert_eq!(
-            decl_passthrough_code(usage, index),
-            None,
-            "usage {usage} index {index}"
-        );
-    }
-    // Everything else a `ps_3_0` can declare reaches it by semantic.
-    for (usage, index) in [
-        (D3DDECLUSAGE_POSITION, 1),
-        (D3DDECLUSAGE_FOG, 0),
-        (D3DDECLUSAGE_NORMAL, 0),
-        (D3DDECLUSAGE_BLENDWEIGHT, 0),
-        (D3DDECLUSAGE_TANGENT, 3),
-        (D3DDECLUSAGE_COLOR, 2),
-        (D3DDECLUSAGE_DEPTH, 0),
-        (D3DDECLUSAGE_SAMPLE, 15),
-        (D3DDECLUSAGE_POSITIONT, 1),
-    ] {
-        assert!(
-            decl_passthrough_code(usage, index).is_some(),
-            "usage {usage} index {index}"
-        );
-    }
-    // A usage outside D3DDECLUSAGE never does.
-    assert_eq!(decl_passthrough_code(D3DDECLUSAGE_SAMPLE + 1, 0), None);
 }
 
 #[test]
@@ -425,7 +368,7 @@ fn a_pixel_shader_links_the_extras_a_pretransformed_layout_passes_through() {
             dcl(COLOR, 2, INPUT, 2, 0xF),
         ],
     );
-    let inputs = LinkInputs::ps_inputs(&ps);
+    let inputs = LinkInputs::ps_inputs(&ps).0;
     let list = passthrough_of(&[code(NORMAL, 0), code(FOG, 0), code(TANGENT, 0)]);
     let mask = inputs.mask_against(&SemanticSet::passthrough_outputs(&list));
     // TANGENT0 and NORMAL0 link; COLOR2 is not in the declaration.

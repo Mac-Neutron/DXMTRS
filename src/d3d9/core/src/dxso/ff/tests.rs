@@ -15,11 +15,7 @@ use super::{
     FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey, MAX_VERTEX_BLEND_MATRIX_INDEX, emit_ps_ff,
     emit_vs_ff,
 };
-use crate::dxso::{
-    decl_passthrough_code,
-    emit::{VariantFlags, VariantKey},
-    tci_entry,
-};
+use crate::dxso::{VariantFlags, VariantKey, decl_passthrough_code, tci_entry};
 
 /// D3D enum constant at the key's narrow width.
 fn narrow(v: u32) -> u8 {

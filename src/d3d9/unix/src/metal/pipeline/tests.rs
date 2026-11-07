@@ -392,7 +392,7 @@ fn a_pretransformed_layout_builds_a_pipeline_with_each_sm3_input() {
         ];
         let program = parse(&tokens).expect("ps_3_0 parses");
         let variant = VariantKey {
-            linked_input_mask: LinkInputs::ps_inputs(&program).mask_against(&outputs),
+            linked_input_mask: LinkInputs::ps_inputs(&program).0.mask_against(&outputs),
             ..VariantKey::default()
         };
         let ps_msl =

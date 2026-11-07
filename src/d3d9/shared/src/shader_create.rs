@@ -15,25 +15,7 @@ pub enum ShaderStage {
     Pixel = 1,
 }
 
-/// D3D declaration usage encoded in shader input semantics.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeclUsage {
-    Position,
-    BlendWeight,
-    BlendIndices,
-    Normal,
-    PSize,
-    Texcoord,
-    Tangent,
-    Binormal,
-    TessFactor,
-    PositionT,
-    Color,
-    Fog,
-    Depth,
-    Sample,
-}
+pub use airconv_ir::dxso::DeclUsage;
 
 /// A shader input declaration in its original declaration order.
 #[repr(C)]

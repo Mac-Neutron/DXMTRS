@@ -49,7 +49,10 @@ came from elsewhere keep their own notices, and this is where they are:
   `src/util/src/config/mtld3d.rs` (+tests), `src/util/src/crash.rs` (+tests), `src/util/src/crash/veh.rs`.
 - **airconv's DXBC readers are MIT.** `src/airconv/ir`'s container, signature and token readers are ported from
   [`libs/DXBCParser`](libs/DXBCParser) (Microsoft, MIT); each ported file keeps that notice, and the crate's manifest
-  says `LGPL-2.1-or-later AND MIT`.
+  says `LGPL-2.1-or-later AND MIT AND Zlib`.
+- **airconv's DXSO front end is zlib.** `src/airconv/ir/src/dxso.rs` and `src/airconv/ir/src/dxso/{ir,link,opcode,parser,spec}.rs`
+  (+tests) are mtld3d's D3D9 shader parser, IR, linkage data and specialization types, moved here from `mtld3d-core` so the
+  translator and D3D9's MSL emitters read one parser; they keep the zlib notice, as `dxmt-util`'s mtld3d files do.
 - **airconv's SHA-256 and metallib container come from DXMT's metallib writer.** `src/airconv/ir/src/sha256.rs` is
   Brad Conte's SHA-256 as Florian Ziesche adapted it for MetalLib (`src/airconv/sha256.hpp`, "presented 'as is' without
   any guarantees", no licence named); `src/airconv/ir/src/metallib.rs` is ported from `src/airconv/metallib_writer.cpp`,

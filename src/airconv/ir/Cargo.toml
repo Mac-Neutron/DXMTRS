@@ -4,10 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 # The DXBC container, signature and token readers are ported from libs/DXBCParser (MIT; the ported files keep
-# Microsoft's notice).
-license = "LGPL-2.1-or-later AND MIT"
+# Microsoft's notice). `dxso.rs` and `dxso/{ir,link,opcode,parser,spec}.rs` (and their tests) are mtld3d's (Zlib,
+# README.md's list), moved from mtld3d-core.
+license = "LGPL-2.1-or-later AND MIT AND Zlib"
 description = "airconv's half without LLVM: DXBC containers, tokens, control flow, reflection and the metallib container"
 publish = false
+
+[dependencies]
+bitflags = { workspace = true }
 
 [lints]
 workspace = true

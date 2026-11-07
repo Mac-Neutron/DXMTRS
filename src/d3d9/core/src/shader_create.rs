@@ -6,7 +6,10 @@
 use mtld3d_shared::shader_create::{ShaderInputSemantic, ShaderStage, ShaderUsage};
 
 use crate::{
-    dxso::{Declaration, DxsoError, DxsoProgram, LinkInputs, RegKind, ShaderType, parse},
+    dxso::{
+        Declaration, DxsoError, DxsoProgram, RegKind, ShaderType, color_out_mask, link_inputs,
+        parse,
+    },
     ids::ProgramId,
 };
 
@@ -95,9 +98,9 @@ pub fn parse_shader(
             usage.set(ShaderUsage::BUMP_ENV, program.uses_bump_env());
             usage.set(
                 ShaderUsage::LINKED_INPUTS,
-                !LinkInputs::ps_inputs(&program).is_empty(),
+                !link_inputs(&program).is_empty(),
             );
-            program.color_out_mask()
+            color_out_mask(&program)
         }
     };
     Ok(ParsedShader {

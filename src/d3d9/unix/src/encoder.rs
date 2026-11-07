@@ -5596,7 +5596,7 @@ impl FrameEncoder {
         if program.reads_vpos() {
             self.prog_reads_vpos.insert(shader_id);
         }
-        let inputs = LinkInputs::ps_inputs(&program);
+        let inputs = mtld3d_core::dxso::link_inputs(&program);
         if !inputs.is_empty() {
             self.prog_link_inputs.insert(shader_id, inputs);
         }

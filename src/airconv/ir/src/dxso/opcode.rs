@@ -94,6 +94,7 @@ pub enum Opcode {
 }
 
 impl Opcode {
+    #[must_use]
     pub const fn from_u16(v: u16) -> Option<Self> {
         Some(match v {
             0 => Self::Nop,
@@ -190,6 +191,7 @@ impl Opcode {
     /// `decode_dst` (write mask) rather than `decode_src` (swizzle). Most such
     /// opcodes do write the register; `texkill`, `texdepth` and `texm3x2depth`
     /// only read it — they discard the fragment or write fragment depth.
+    #[must_use]
     pub const fn has_destination(self) -> bool {
         matches!(
             self,

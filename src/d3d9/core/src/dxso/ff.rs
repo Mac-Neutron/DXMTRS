@@ -47,9 +47,10 @@ use mtld3d_types::{
 };
 
 use super::{
+    VariantFlags, VariantKey,
     emit::{
-        VariantFlags, VariantKey, bump_lum_exprs, bump_matrix_exprs, fog_blend_active,
-        write_fog_blend, write_point_sprite_prologue,
+        bump_lum_exprs, bump_matrix_exprs, fog_blend_active, write_fog_blend,
+        write_point_sprite_prologue,
     },
     link::{
         MAX_LINKED_INPUTS, Semantic, passthrough_extras, write_extra_members,

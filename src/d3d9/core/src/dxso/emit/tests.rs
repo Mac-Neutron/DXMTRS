@@ -20,7 +20,7 @@ use super::{
     emit_ps_programmable, emit_vs_programmable, emit_vs_programmable_named,
 };
 use crate::{
-    dxso::{ir::TextureType, parser::parse},
+    dxso::{DxsoWarning, ir::TextureType, parse},
     shader_key::ff_key_hash,
 };
 
@@ -4837,10 +4837,10 @@ fn two_target_ps() -> Vec<u32> {
 #[test]
 fn color_out_mask_reports_written_targets() {
     let ps = parse(&two_target_ps()).expect("ps parse");
-    assert_eq!(ps.color_out_mask(), 0b11);
+    assert_eq!(ps.color_out_mask(), (0b11, vec![]));
     let single = parse(&red_constant_ps()).expect("ps parse");
-    assert_eq!(single.color_out_mask(), 0b1);
-    // A write beyond oC3 is outside the D3D9 limit and is not reported.
+    assert_eq!(single.color_out_mask(), (0b1, vec![]));
+    // A write beyond oC3 is outside the D3D9 limit: it is not in the mask, and is returned as a warning.
     let mut beyond = two_target_ps();
     let oc1_dst = dst_token(TYPE_COLOROUT, 1, 0xF, false);
     let slot = beyond
@@ -4848,7 +4848,10 @@ fn color_out_mask_reports_written_targets() {
         .position(|&t| t == oc1_dst)
         .expect("oC1 dst present");
     beyond[slot] = dst_token(TYPE_COLOROUT, 4, 0xF, false);
-    assert_eq!(parse(&beyond).expect("ps parse").color_out_mask(), 0b1);
+    assert_eq!(
+        parse(&beyond).expect("ps parse").color_out_mask(),
+        (0b1, vec![DxsoWarning::ColorOutBeyondTargets(4)])
+    );
 }
 
 #[test]

@@ -9,6 +9,19 @@ const MODULE_ROOTS: [(&str, &str); 2] = [
     ("mtld3d_shared::", "../../unix/shared/src/"),
 ];
 
+/// The emitter's front end, moved into `airconv-ir`.
+///
+/// `build.rs` hashes these files by name (C3-20), not the folder, so the lowering files beside
+/// them stay out of the MSL fingerprint.
+const FRONT_END: [&str; 6] = [
+    "../../airconv/ir/src/dxso.rs",
+    "../../airconv/ir/src/dxso/ir.rs",
+    "../../airconv/ir/src/dxso/link.rs",
+    "../../airconv/ir/src/dxso/opcode.rs",
+    "../../airconv/ir/src/dxso/parser.rs",
+    "../../airconv/ir/src/dxso/spec.rs",
+];
+
 /// The emitter sources `build.rs` hashes: `src/dxso.rs` and everything under `src/dxso`.
 fn emitter_sources(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -31,6 +44,29 @@ fn emitter_sources(root: &Path) -> Vec<PathBuf> {
     let mut out = vec![root.join("src/dxso.rs")];
     walk(&root.join("src/dxso"), &mut out);
     out
+}
+
+/// The moved front end is in the emitter fingerprint, file by file, and nothing else under it is.
+#[test]
+fn the_moved_front_end_is_fingerprinted_by_name() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let build = fs::read_to_string(root.join("build.rs")).expect("read build.rs");
+    for file in FRONT_END {
+        assert!(
+            root.join(file).is_file(),
+            "{file} moved: update FRONT_END and build.rs"
+        );
+        assert!(
+            build.contains(&format!("\"{file}\"")),
+            "build.rs does not hash {file}"
+        );
+    }
+    let listed = build.matches("\"../../airconv/ir/src/dxso").count();
+    assert_eq!(
+        listed,
+        FRONT_END.len(),
+        "build.rs hashes a file not in FRONT_END"
+    );
 }
 
 /// Every module outside `dxso` that the emitter names is in the emitter fingerprint.
@@ -78,5 +114,19 @@ fn every_module_the_emitter_names_is_fingerprinted() {
     assert!(
         missing.is_empty(),
         "emitter sources name modules the fingerprint does not hash: {missing:#?}"
+    );
+}
+
+/// The two warnings the parser returns log the text it logged itself.
+#[test]
+fn the_returned_warnings_log_the_text_the_parser_used_to() {
+    use super::{DxsoWarning, warning_text};
+    assert_eq!(
+        warning_text(DxsoWarning::LinkedInputsOverflow),
+        "dxso: PS declares more than 8 extra input semantics → the rest read zero"
+    );
+    assert_eq!(
+        warning_text(DxsoWarning::ColorOutBeyondTargets(5)),
+        "dxso: PS writes oC5, beyond the four D3D9 render targets → write ignored"
     );
 }

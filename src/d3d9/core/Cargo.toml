@@ -8,6 +8,7 @@ description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
 authors = ["Alexander Theissen <alex.theissen@me.com>"]
 
 [dependencies]
+airconv-ir = { workspace = true }
 dxmt-util = { workspace = true }
 mtld3d-shared = { workspace = true }
 mtld3d-types = { workspace = true }
