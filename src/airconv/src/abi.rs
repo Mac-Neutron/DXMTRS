@@ -57,6 +57,7 @@ pub const SM50_SHADER_PSO_GEOMETRY_SHADER: u32 = 6;
 pub const SM50_SHADER_PSO_TESSELLATOR: u32 = 7;
 pub const SM50_SHADER_ROOT_SIGNATURE: u32 = 8;
 pub const SM50_SHADER_ROOT_SIGNATURE2: u32 = 9;
+pub const SM50_SHADER_D3D9: u32 = 10;
 pub const SM50_SHADER_ARGUMENT_TYPE_MAX: u32 = 0xffff_ffff;
 
 // SM50_SHADER_METAL_VERSION
@@ -301,6 +302,31 @@ pub struct Sm50ShaderRootSignatureData {
     pub bytecode_length: usize,
 }
 
+/// A D3D9 stage's specialization, `airconv_ir::dxso::spec`'s wire form as bytes.
+#[repr(C)]
+pub struct Sm50ShaderD3d9Data {
+    pub next: *mut c_void,
+    pub r#type: u32,
+    /// 0 a vertex shader, 1 a pixel shader.
+    pub stage: u32,
+    pub vs: [u8; 6],
+    pub ps: [u8; 22],
+}
+
+// The header's literals are airconv-ir's wire lengths and type number.
+const _: () = {
+    assert!(SM50_SHADER_D3D9 == airconv_ir::dxso::spec::SM50_SHADER_D3D9);
+    let node = Sm50ShaderD3d9Data {
+        next: ptr::null_mut(),
+        r#type: 0,
+        stage: 0,
+        vs: [0; 6],
+        ps: [0; 22],
+    };
+    assert!(node.vs.len() == airconv_ir::dxso::spec::VS_SPEC_WIRE);
+    assert!(node.ps.len() == airconv_ir::dxso::spec::VARIANT_KEY_WIRE);
+};
+
 #[repr(C)]
 pub struct DxilEntryElement {
     /// A `DXIL_SEMANTIC_*` value, or another of DXC's `SemanticKind` numbers.
@@ -350,6 +376,7 @@ pub struct ArgChain<'a> {
     pub tessellator: Option<&'a Sm50ShaderPsoTessellatorData>,
     pub root_signature: Option<&'a Sm50ShaderRootSignatureData>,
     pub root_signature2: Option<&'a Sm50ShaderRootSignatureData>,
+    pub d3d9: Option<&'a Sm50ShaderD3d9Data>,
 }
 
 impl Sm50IaInputElement {
@@ -394,6 +421,7 @@ impl ArgChain<'_> {
             tessellator: None,
             root_signature: None,
             root_signature2: None,
+            d3d9: None,
         };
         while !node.is_null() {
             // SAFETY: a non-null node is a live header (the caller's contract).
@@ -435,6 +463,10 @@ impl ArgChain<'_> {
                 SM50_SHADER_ROOT_SIGNATURE2 => {
                     // SAFETY: as above.
                     unsafe { keep_first(&mut chain.root_signature2, node) };
+                }
+                SM50_SHADER_D3D9 => {
+                    // SAFETY: as above.
+                    unsafe { keep_first(&mut chain.d3d9, node) };
                 }
                 _ => {}
             }

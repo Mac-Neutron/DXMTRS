@@ -16,9 +16,11 @@ use airconv_ir::{
     binding::{self, BindingType, ShaderArgument},
     container::{self, Container},
     dxil_part,
+    dxso::ShaderType,
     initialize::{self, DxbcShader},
     reflection::{self, Reflection, StageReflection},
     signature::Parameter,
+    tokens::program_type,
 };
 
 use crate::{
@@ -36,7 +38,7 @@ use crate::{
         self,
         types::{EntryInfo, ResourceFlags},
     },
-    shader::{Dxbc, Dxil, EntryView, Shader},
+    shader::{Dxbc, Dxil, Dxso, EntryView, Shader},
 };
 
 /// A signature name that holds a NUL, which a C string cannot carry.
@@ -66,6 +68,28 @@ const _: () = {
 /// `refl` is null or points to writable memory for one reflection, which may be uninitialised:
 /// for DXBC only the stage's fields are written, nothing is read.
 pub unsafe fn initialize(bytes: &[u8], refl: *mut MtlShaderReflection) -> Result<Shader, Error> {
+    if let Some(tokens) = dxso_tokens(bytes) {
+        let program = airconv_ir::dxso::parse(&tokens)
+            .map_err(|e| Error::new(format!("dxso: {e:?}").as_bytes()))?;
+        if !refl.is_null() {
+            // SAFETY: `refl` is non-null and writable for one reflection (the caller's contract).
+            unsafe { out::Out::new(refl) }.put(0, [0u8; size_of::<MtlShaderReflection>()]);
+        }
+        let stage = match program.shader_type {
+            ShaderType::Vertex => program_type::VERTEX,
+            ShaderType::Pixel => program_type::PIXEL,
+        };
+        let entry = EntryView {
+            is_dxil: false,
+            stage,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            resources: Vec::new(),
+            _names: Vec::new(),
+            _semantic_indices: Box::default(),
+        };
+        return Ok(Shader::Dxso(Dxso { program, entry }));
+    }
     let container = Container::parse(bytes)?;
     if let Some(part) = dxil_part::find(&container)? {
         let ir = dxil::initialize::initialize(&part, capture_hash(bytes))?;
@@ -89,6 +113,24 @@ pub unsafe fn initialize(bytes: &[u8], refl: *mut MtlShaderReflection) -> Result
         entry,
         ir,
     }))
+}
+
+/// The tokens of a D3D9 shader, when `bytes` is one.
+///
+/// Whole 32-bit words that open with a vertex (`0xFFFE`) or pixel (`0xFFFF`) version token. A
+/// DXBC container opens with `DXBC` (`0x4342_5844`), so no container matches. The bytes come from
+/// a record with no alignment promise, so each token is read as little-endian bytes.
+fn dxso_tokens(bytes: &[u8]) -> Option<Vec<u32>> {
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let tokens: Vec<u32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
+        .collect();
+    matches!(tokens.first().map(|t| t >> 16), Some(0xfffe | 0xffff)).then_some(tokens)
 }
 
 /// The shader's entry point as `DXILGetEntry` answers it.

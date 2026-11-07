@@ -215,3 +215,70 @@ fn initialize_err(bytes: &[u8]) -> Vec<u8> {
         Err(e) => e.text().to_vec(),
     }
 }
+
+/// A token stream as the bytes a caller hands in.
+fn token_bytes(tokens: &[u32]) -> Vec<u8> {
+    tokens.iter().flat_map(|t| t.to_le_bytes()).collect()
+}
+
+/// `vs_2_0` or `ps_2_0` with no instruction but `end`.
+const VS_2_0: [u32; 2] = [0xfffe_0200, 0x0000_ffff];
+const PS_2_0: [u32; 2] = [0xffff_0200, 0x0000_ffff];
+
+#[test]
+fn reads_a_dxso_vs_2_0_token_stream() {
+    let (shader, written) = initialize_over_a5(&token_bytes(&VS_2_0));
+    // The reflection is zeroed whole; the stage is the entry's.
+    assert_eq!(written.as_slice(), [0u8; 72]);
+    assert!(matches!(shader, Shader::Dxso(_)));
+    let entry = shader.entry();
+    assert_eq!(
+        (entry.is_dxil, entry.stage),
+        (false, airconv_ir::tokens::program_type::VERTEX)
+    );
+    assert!(entry.inputs.is_empty() && entry.outputs.is_empty() && entry.resources.is_empty());
+    let (cbs, args) = shader.arguments();
+    assert!(cbs.is_empty() && args.is_empty());
+    let (ps, _) = initialize_over_a5(&token_bytes(&PS_2_0));
+    assert_eq!(ps.entry().stage, airconv_ir::tokens::program_type::PIXEL);
+}
+
+#[test]
+fn reads_an_unaligned_dxso_stream() {
+    let mut padded = vec![0xa5];
+    padded.extend(token_bytes(&VS_2_0));
+    let shader = unsafe_initialize(padded.get(1..).unwrap_or_default());
+    assert!(matches!(shader, Shader::Dxso(_)));
+}
+
+#[test]
+fn refuses_a_dxso_with_version_0xfffe0400() {
+    let text = initialize_err(&token_bytes(&[0xfffe_0400, 0x0000_ffff]));
+    assert!(
+        text.starts_with(b"dxso: "),
+        "{}",
+        String::from_utf8_lossy(&text)
+    );
+}
+
+#[test]
+fn refuses_a_stream_of_3_bytes() {
+    // Not a whole token: the container reader's refusal, never the DXSO reader's.
+    let text = initialize_err(&[0x00, 0x02, 0xfe]);
+    assert!(!text.is_empty() && !text.starts_with(b"dxso"));
+    let odd = initialize_err(&token_bytes(&[0xfffe_0200, 0x0000_ffff, 0])[..9]);
+    assert!(!odd.starts_with(b"dxso"));
+}
+
+#[test]
+fn a_dxbc_container_still_reads() {
+    let shader = unsafe_initialize(include_bytes!("../../../ir/tests/data/render.ps.dxbc"));
+    assert!(matches!(shader, Shader::Dxbc(_)));
+}
+
+fn unsafe_initialize(bytes: &[u8]) -> Shader {
+    // SAFETY: a null reflection is written nowhere.
+    unsafe { initialize(bytes, ptr::null_mut()) }.unwrap_or_else(|e| {
+        panic!("{}", String::from_utf8_lossy(e.text()));
+    })
+}

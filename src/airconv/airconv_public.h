@@ -215,6 +215,7 @@ enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE {
   SM50_SHADER_PSO_TESSELLATOR = 7,
   SM50_SHADER_ROOT_SIGNATURE = 8,
   SM50_SHADER_ROOT_SIGNATURE2 = 9,
+  SM50_SHADER_D3D9 = 10,
   SM50_SHADER_ARGUMENT_TYPE_MAX = 0xffffffff,
 };
 
@@ -237,6 +238,19 @@ struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA {
   uint32_t num_elements;
   uint32_t strides[4];
   struct SM50_STREAM_OUTPUT_ELEMENT *elements;
+};
+
+/**
+ * A D3D9 stage's specialization, as bytes (the guest builds it without the translator's crates).
+ * stage 0 is a vertex shader and 1 a pixel shader; vs holds the vertex half and ps the pixel
+ * half, the other stage's zero. The layout is airconv-ir's dxso::spec wire form.
+ */
+struct SM50_SHADER_D3D9_DATA {
+  void *next;
+  enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
+  uint32_t stage;
+  uint8_t vs[6];
+  uint8_t ps[22];
 };
 
 enum SM50_SHADER_METAL_VERSION {

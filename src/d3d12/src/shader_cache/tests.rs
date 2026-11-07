@@ -411,7 +411,8 @@ fn probe_bypasses_the_cache() {
     // SAFETY: non-zero fake Metal device handle.
     let device = unsafe { Obj::adopt(0x6001) }.expect("fake device");
     let mut shader = CachedShader {
-        bytecode: b"first-shader-dxbc".to_vec(),
+        // Opens with `DXBC`, as `dxmt_core::shader::initialize` requires; the digest is separate.
+        bytecode: b"DXBCfirst-shader-dxbc".to_vec(),
         digest: GOLDEN_SHADER_1_DIGEST,
         shader: None,
         reflected: false,

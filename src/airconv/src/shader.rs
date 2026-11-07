@@ -5,7 +5,7 @@
 
 use std::ffi::CString;
 
-use airconv_ir::initialize::DxbcShader;
+use airconv_ir::{dxso::DxsoProgram, initialize::DxbcShader};
 
 use crate::{
     abi::{DxilEntryElement, DxilEntryInfo, DxilEntryResource, MtlSm50ShaderArgument},
@@ -18,6 +18,8 @@ pub enum Shader {
     Dxbc(Dxbc),
     /// A DXIL shader.
     Dxil(Dxil),
+    /// A D3D9 shader (SM1-3 tokens).
+    Dxso(Dxso),
 }
 
 /// An initialized DXBC shader, with the tables and the entry its getters hand out.
@@ -34,6 +36,14 @@ pub struct Dxbc {
 /// Its argument tables are empty: a DXIL shader's bindings come from its root signature.
 pub struct Dxil {
     pub ir: DxilShader,
+    pub entry: EntryView,
+}
+
+/// An initialized D3D9 shader: its parsed program, and an entry with only the stage.
+///
+/// Its argument tables are empty: a D3D9 shader's bindings are fixed by the stage.
+pub struct Dxso {
+    pub program: DxsoProgram,
     pub entry: EntryView,
 }
 
@@ -72,7 +82,7 @@ impl Shader {
     pub fn arguments(&self) -> (&[MtlSm50ShaderArgument], &[MtlSm50ShaderArgument]) {
         match self {
             Self::Dxbc(dxbc) => (&dxbc.constant_buffers, &dxbc.arguments),
-            Self::Dxil(_) => (&[], &[]),
+            Self::Dxil(_) | Self::Dxso(_) => (&[], &[]),
         }
     }
 
@@ -80,7 +90,9 @@ impl Shader {
     #[must_use]
     pub const fn entry(&self) -> &EntryView {
         match self {
-            Self::Dxbc(Dxbc { entry, .. }) | Self::Dxil(Dxil { entry, .. }) => entry,
+            Self::Dxbc(Dxbc { entry, .. })
+            | Self::Dxil(Dxil { entry, .. })
+            | Self::Dxso(Dxso { entry, .. }) => entry,
         }
     }
 }

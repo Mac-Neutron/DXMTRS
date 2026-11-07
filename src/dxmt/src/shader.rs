@@ -77,13 +77,20 @@ pub enum Entry {
 
 /// Parses DXBC `bytecode` into a shader, writing its reflection.
 ///
+/// Input that does not open with `DXBC` is refused before airconv sees it: `SM50Initialize` also
+/// reads D3D9's token streams, which D3D10-12 must not create shaders from.
+///
 /// # Errors
 ///
-/// airconv's error when it refuses the bytecode; its handle may be 0.
+/// airconv's error when it refuses the bytecode; its handle may be 0, which is also the
+/// refusal of a non-DXBC stream.
 pub fn initialize(
     bytecode: &[u8],
     reflection: &mut MtlShaderReflection,
 ) -> Result<Sm50Shader, Sm50Error> {
+    if !bytecode.starts_with(b"DXBC") {
+        return Err(Sm50Error(0));
+    }
     let mut shader = 0;
     let mut error = 0;
     // SAFETY: `bytecode` is valid for its length; the three outputs are writable.
@@ -200,3 +207,6 @@ pub fn load_function(device: &Obj, data: &Obj, name: &CStr) -> Result<Obj, LoadE
     let library = new_library(device, data).ok_or(LoadError::Library)?;
     new_function(&library, name).ok_or(LoadError::Function)
 }
+
+#[cfg(test)]
+mod tests;

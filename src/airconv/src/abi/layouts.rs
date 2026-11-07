@@ -72,6 +72,12 @@ const _: () = {
     assert!(offset_of!(crate::abi::Sm50ShaderEmulateVertexStreamOutputData, strides) == 20);
     assert!(offset_of!(crate::abi::Sm50ShaderEmulateVertexStreamOutputData, elements) == 40);
     assert!(size_of::<crate::abi::Sm50ShaderEmulateVertexStreamOutputData>() == 48);
+    assert!(offset_of!(crate::abi::Sm50ShaderD3d9Data, next) == 0);
+    assert!(offset_of!(crate::abi::Sm50ShaderD3d9Data, r#type) == 8);
+    assert!(offset_of!(crate::abi::Sm50ShaderD3d9Data, stage) == 12);
+    assert!(offset_of!(crate::abi::Sm50ShaderD3d9Data, vs) == 16);
+    assert!(offset_of!(crate::abi::Sm50ShaderD3d9Data, ps) == 22);
+    assert!(size_of::<crate::abi::Sm50ShaderD3d9Data>() == 48);
     assert!(offset_of!(crate::abi::Sm50ShaderCommonData, next) == 0);
     assert!(offset_of!(crate::abi::Sm50ShaderCommonData, r#type) == 8);
     assert!(offset_of!(crate::abi::Sm50ShaderCommonData, metal_version) == 12);
@@ -195,6 +201,7 @@ const _: () = {
     assert!(crate::abi::SM50_INDEX_BUFFER_FORMAT_UINT32 == 2);
     assert!(crate::abi::SM50_SHADER_ARGUMENT_TYPE_MAX == 4_294_967_295);
     assert!(crate::abi::SM50_SHADER_COMMON == 2);
+    assert!(crate::abi::SM50_SHADER_D3D9 == 10);
     assert!(crate::abi::SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT == 1);
     assert!(crate::abi::SM50_SHADER_FLAG_DEFUSE_FMA == 2);
     assert!(crate::abi::SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO == 1);

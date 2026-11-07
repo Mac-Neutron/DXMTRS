@@ -76,3 +76,33 @@ fn arg_chain_first_of_each_type_wins() {
     let empty = unsafe { ArgChain::walk(ptr::null()) };
     assert!(empty.common.is_none() && empty.tessellator.is_none());
 }
+
+#[test]
+fn d3d9_data_layout() {
+    use core::mem::{offset_of, size_of};
+
+    use airconv_ir::dxso::spec::{SM50_SHADER_D3D9 as SPEC_TYPE, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
+
+    assert_eq!(SM50_SHADER_D3D9, SPEC_TYPE);
+    assert_eq!(SM50_SHADER_D3D9, 10);
+    let node = Sm50ShaderD3d9Data {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_D3D9,
+        stage: 1,
+        vs: [0; VS_SPEC_WIRE],
+        ps: [0; VARIANT_KEY_WIRE],
+    };
+    assert_eq!(
+        (
+            offset_of!(Sm50ShaderD3d9Data, stage),
+            offset_of!(Sm50ShaderD3d9Data, vs),
+            offset_of!(Sm50ShaderD3d9Data, ps),
+            size_of::<Sm50ShaderD3d9Data>()
+        ),
+        (12, 16, 22, 48)
+    );
+    // SAFETY: `node` is a live single node whose `next` is null.
+    let chain = unsafe { ArgChain::walk(ptr::from_ref(&node).cast()) };
+    assert_eq!(chain.d3d9.map(|d| d.stage), Some(1));
+    assert!(chain.common.is_none());
+}

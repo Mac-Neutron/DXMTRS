@@ -17,12 +17,13 @@ use airconv::abi::{
 };
 #[cfg(not(feature = "native"))]
 use airconv::abi::{
-    SM50_SHADER_COMMON, SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT, SM50_SHADER_GS_PASS_THROUGH,
-    SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER,
-    SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2,
-    Sm50ShaderCommonData, Sm50ShaderEmulateVertexStreamOutputData, Sm50ShaderGsPassThroughData,
-    Sm50ShaderGsPassThroughDataUnion, Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData,
-    Sm50ShaderPsoPixelShaderData, Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
+    SM50_SHADER_COMMON, SM50_SHADER_D3D9, SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT,
+    SM50_SHADER_GS_PASS_THROUGH, SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_PSO_GEOMETRY_SHADER,
+    SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE,
+    SM50_SHADER_ROOT_SIGNATURE2, Sm50ShaderCommonData, Sm50ShaderEmulateVertexStreamOutputData,
+    Sm50ShaderGsPassThroughData, Sm50ShaderGsPassThroughDataUnion, Sm50ShaderIaInputLayoutData,
+    Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData, Sm50ShaderPsoTessellatorData,
+    Sm50ShaderRootSignatureData,
 };
 use winemetal_wire::{
     Sm50CompileGeometryPipelineGeometryParams, Sm50CompileGeometryPipelineVertexParams,
@@ -585,6 +586,25 @@ unsafe fn walk_chain(mut cur32: u32) -> (*mut Sm50ShaderCompilationArgumentData,
     (next_ptr, nodes)
 }
 
+/// `STATUS_INVALID_PARAMETER`.
+#[cfg(not(feature = "native"))]
+const STATUS_INVALID_PARAMETER: i32 = 0xC000_000D_u32.cast_signed();
+
+/// Whether the 32-bit chain from `head` holds a node of type `ty`.
+///
+/// `header` reads a node's `(next, type)` at its 32-bit address.
+#[cfg(not(feature = "native"))]
+fn chain_has_type(mut head: u32, ty: u32, header: impl Fn(u32) -> (u32, u32)) -> bool {
+    while head != 0 {
+        let (next, node_ty) = header(head);
+        if node_ty == ty {
+            return true;
+        }
+        head = next;
+    }
+    false
+}
+
 /// Slot 74 (`WoW64`): widens 32-bit `sm50_initialize_params32` and calls `SM50Initialize`.
 ///
 /// # Safety
@@ -620,6 +640,15 @@ pub unsafe extern "C-unwind" fn sm50_compile_32(args: *mut c_void) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileParams32>(args) };
+    // `walk_chain` has no error path, and no 32-bit PE caller builds a D3D9 node (C3-21).
+    let has_d3d9 = chain_has_type(p.args, SM50_SHADER_D3D9, |at| {
+        // SAFETY: `at` is non-zero and addresses a valid 32-bit argument header (the caller's chain).
+        let hdr = unsafe { &*ptr32::<Sm50ShaderCompilationArgumentData32>(at).cast_const() };
+        (hdr.next, hdr.r#type)
+    });
+    if has_d3d9 {
+        return STATUS_INVALID_PARAMETER;
+    }
     // SAFETY: `p.args` is a 32-bit argument chain from the caller.
     let (chain, _nodes) = unsafe { walk_chain(p.args) };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv::sm50_compile`.
@@ -818,3 +847,6 @@ pub unsafe extern "C-unwind" fn sm50_get_arguments_info_32(args: *mut c_void) ->
     };
     STATUS_SUCCESS
 }
+
+#[cfg(all(test, not(feature = "native")))]
+mod tests;

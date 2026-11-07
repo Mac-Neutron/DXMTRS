@@ -2,13 +2,18 @@
 
 use core::ffi::CStr;
 
-use airconv_ir::{shader_info::ShaderFlags, tokens::program_type};
+use airconv_ir::{
+    dxso::{ShaderType, spec::StageSpec},
+    shader_info::ShaderFlags,
+    tokens::program_type,
+};
 
 use crate::{
     abi::ArgChain,
     api::Error,
     dxbc, dxil,
     dxil::types::shader_kind,
+    dxso,
     llvm::{Context, Module},
     module,
     shader::Shader,
@@ -27,6 +32,23 @@ use crate::{
 pub fn compile(shader: &Shader, args: &ArgChain<'_>, name: &CStr) -> Result<Vec<u8>, Error> {
     let dxbc = match shader {
         Shader::Dxbc(dxbc) => dxbc,
+        Shader::Dxso(d) => {
+            let Some(node) = args.d3d9 else {
+                return Err(Error::new(b"dxso: no D3D9 specialization"));
+            };
+            let spec = StageSpec::from_wire(node.stage, &node.vs, &node.ps)
+                .map_err(|_| Error::new(b"dxso: bad D3D9 specialization"))?;
+            if !matches!(
+                (&spec, d.program.shader_type),
+                (StageSpec::Vs(_), ShaderType::Vertex) | (StageSpec::Ps(_), ShaderType::Pixel)
+            ) {
+                return Err(Error::new(b"dxso: stage does not match the program"));
+            }
+            let cx = Context::new();
+            let m = module::initialize(&cx, c"shader.air");
+            dxso::convert(d, &spec, args, name, &m)?;
+            return finish(&m, ShaderFlags::default(), None);
+        }
         Shader::Dxil(d) => {
             let cx = Context::new();
             let m = dxil::converter::convert(&d.ir, name.to_bytes(), &cx, args)?;
@@ -86,3 +108,6 @@ fn finish(m: &Module<'_>, flags: ShaderFlags, dxil_kind: Option<u32>) -> Result<
     module::optimize(m);
     writer::write(m, &refs)
 }
+
+#[cfg(test)]
+mod tests;
