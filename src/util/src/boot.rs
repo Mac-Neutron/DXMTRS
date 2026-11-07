@@ -22,11 +22,13 @@ macro_rules! dxmt_dll {
         static ALLOCATOR: ::snmalloc_rs::SnMalloc = ::snmalloc_rs::SnMalloc;
     };
     (@type_info) => {
-        /// The `type_info` vtable under its MSVC decorated name (`src/d3d9/src/arm64_crt.rs`).
+        /// The `type_info` vtable under its MSVC decorated name.
         ///
         /// Rust's `std::thread` `catch_unwind` emits a C++ type descriptor
-        /// (`__rust_panic_type_info`) whose first field points at this vtable; every profile sets
-        /// `panic = "abort"`, so nothing ever reads through it.
+        /// (`__rust_panic_type_info`) whose first field points at this vtable, so the name has to
+        /// resolve; llvm-mingw's CRT does not define it. Nothing reads through it: every profile
+        /// sets `panic = "abort"`, and the C++ frame handler (`__CxxFrameHandler3`) matches a
+        /// thrown type by descriptor address and decorated name, never through the vtable.
         #[cfg(windows)]
         #[unsafe(export_name = "??_7type_info@@6B@")]
         pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];

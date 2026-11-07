@@ -9,19 +9,7 @@ use core::ffi::c_void;
 
 use crate::DLL_THREAD_DETACH;
 
-/// The `type_info` vtable, under its MSVC decorated name.
-///
-/// std's `catch_unwind` emits a C++ type descriptor for the Rust panic, and the
-/// descriptor's first field points at this vtable, so the name has to resolve.
-/// Nothing ever reads through it. Every profile this crate is built with
-/// (`dev`, `release`, `production`) sets `panic = "abort"`, so no Rust panic is
-/// thrown as a C++ exception for a handler to match. And a handler that did
-/// match one would not call through it either: the C++ frame handler
-/// (`__CxxFrameHandler3`, which Wine implements) compares a thrown type with a
-/// caught one by descriptor address and then by decorated name, never through
-/// the vtable.
-#[unsafe(export_name = "??_7type_info@@6B@")]
-pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
+dxmt_util::dxmt_dll!(@type_info);
 
 /// The TLS callback that tears down snmalloc's per-thread allocator.
 ///
