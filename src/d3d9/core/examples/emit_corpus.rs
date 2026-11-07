@@ -1,6 +1,6 @@
 //! Time DXSO parsing and MSL emission over shader corpora on the host, without Wine.
 //!
-//! Usage: `emit_corpus [--iters N] [--metrics DIR] [mtld3d_shaders.bin ...]`, which
+//! Usage: `emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]`, which
 //! the runner's `bench-ab` runs per leg (`--base-host`, `--cand-host`) with the production profile.
 //!
 //! Two synthetic corpora always run: `synthetic_ff`, about sixty fixed-function
@@ -35,6 +35,10 @@
 //!
 //! Without `--iters` the pass count is chosen so each measurement runs for at
 //! least 200 ms.
+//!
+//! `--digest` ends the run with `msl-digest <xxh3 hex> <n> shaders`: the XXH3-64 of every MSL the
+//! corpora emit, in corpus then shader order, each followed by a NUL, so a change of any emitted
+//! byte shows.
 //!
 //! `--metrics DIR` writes one `bench-host_emit_<corpus>.metrics` file per corpus
 //! in the bench metrics format: `meta <bench> <key> <value...>` and
@@ -74,6 +78,7 @@ use mtld3d_types::{
     D3DTSS_ALPHAARG2, D3DTSS_ALPHAOP, D3DTSS_COLORARG1, D3DTSS_COLORARG2, D3DTSS_COLOROP,
     texture_stage_state_defaults,
 };
+use xxhash_rust::xxh3::Xxh3;
 
 /// Wall time a measurement runs for at least when `--iters` is not given.
 const TARGET: Duration = Duration::from_millis(200);
@@ -344,6 +349,7 @@ struct Report {
 struct Args {
     iters: Option<u32>,
     metrics: Option<PathBuf>,
+    digest: bool,
     caches: Vec<PathBuf>,
 }
 
@@ -360,7 +366,9 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(error) => {
             eprintln!("{error}");
-            eprintln!("usage: emit_corpus [--iters N] [--metrics DIR] [mtld3d_shaders.bin ...]");
+            eprintln!(
+                "usage: emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]"
+            );
             return ExitCode::from(2);
         }
     };
@@ -438,6 +446,9 @@ fn main() -> ExitCode {
         "times are microseconds per shader, median and minimum over the passes; \
          parse_emit reparses the tokens, emit does not"
     );
+    if args.digest {
+        println!("{}", msl_digest(&corpora));
+    }
     if failed {
         ExitCode::FAILURE
     } else {
@@ -445,10 +456,25 @@ fn main() -> ExitCode {
     }
 }
 
+/// The `msl-digest` line: XXH3-64 over every MSL the corpora emit, each followed by a NUL.
+fn msl_digest(corpora: &[Corpus]) -> String {
+    let mut hasher = Xxh3::new();
+    let mut count = 0_usize;
+    for shader in corpora.iter().flat_map(|corpus| &corpus.shaders) {
+        // A corpus keeps only shaders that emitted, and emission is deterministic.
+        let msl = shader.emit().expect("a kept shader emits again");
+        hasher.update(msl.as_bytes());
+        hasher.update(&[0]);
+        count += 1;
+    }
+    format!("msl-digest {:016x} {count} shaders", hasher.digest())
+}
+
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
         iters: None,
         metrics: None,
+        digest: false,
         caches: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -465,6 +491,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--metrics" => {
                 parsed.metrics = Some(args.next().ok_or("--metrics needs a directory")?.into());
             }
+            "--digest" => parsed.digest = true,
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => parsed.caches.push(arg.into()),
         }
