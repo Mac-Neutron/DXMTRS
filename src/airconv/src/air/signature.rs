@@ -445,6 +445,7 @@ fn input_field(
         FunctionInput::InstanceId => (b"air.instance_id", b"mtl_instance_id", UINT),
         FunctionInput::BaseInstance => (b"air.base_instance", b"mtl_base_instance", UINT),
         FunctionInput::PrimitiveId => (b"air.primitive_id", b"mtl_primitive_id", UINT),
+        FunctionInput::PointCoord => (b"air.point_coord", b"mtl_point_coord", MslValue::FLOAT2),
         FunctionInput::InputCoverage => (b"air.sample_mask_in", b"mtl_sample_mask", UINT),
     };
     md.string(kind).names(value_name(ty).as_bytes(), arg_name);
@@ -511,6 +512,11 @@ fn output_field(md: &mut Md<'_>, tcx: &TyCx, output: &FunctionOutput) -> Ty {
                 .integer(*count as u64)
                 .names(b"float", b"mtl_clip_distance");
             tcx.array(tcx.float(), count_u32(*count))
+        }
+        FunctionOutput::PointSize => {
+            md.string(b"air.point_size")
+                .names(b"float", b"mtl_point_size");
+            tcx.float()
         }
         FunctionOutput::RenderTargetArrayIndex => {
             md.string(b"air.render_target_array_index")

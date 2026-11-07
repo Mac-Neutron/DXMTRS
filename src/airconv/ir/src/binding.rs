@@ -269,6 +269,8 @@ pub enum FunctionInput {
     ThreadgroupsPerGrid,
     ThreadIndexInSimdgroup,
     ThreadsPerSimdgroup,
+    /// The point sprite's coordinate (D3D9's `texcoord` of a point; `air.point_coord`).
+    PointCoord,
 }
 
 /// A function output (`FunctionOutput`).
@@ -296,6 +298,8 @@ pub enum FunctionOutput {
     },
     CoverageMask,
     StencilRef,
+    /// The vertex stage's point size (`air.point_size`).
+    PointSize,
 }
 
 /// A mesh's per-vertex or per-primitive user data (`OutputMeshData`).
@@ -376,6 +380,7 @@ impl MslValue {
     pub const ULONG: Self = Self::Scalar(MslScalar::Ulong);
     pub const INT4: Self = Self::vector(4, MslScalar::Int);
     pub const UINT4: Self = Self::vector(4, MslScalar::Uint);
+    pub const FLOAT2: Self = Self::vector(2, MslScalar::Float);
     pub const FLOAT4: Self = Self::vector(4, MslScalar::Float);
 
     const fn vector(dimension: u32, scalar: MslScalar) -> Self {
