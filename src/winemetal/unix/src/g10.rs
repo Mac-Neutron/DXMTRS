@@ -41,7 +41,10 @@ use winemetal_wire::{
 };
 
 #[cfg(not(feature = "native"))]
-use crate::float_cast::{u64_to_u32, usize_to_u32};
+use crate::{
+    ffi::STATUS_INVALID_PARAMETER,
+    float_cast::{u64_to_u32, usize_to_u32},
+};
 use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, params},
     float_cast::u64_to_usize,
@@ -460,12 +463,24 @@ impl ChainNode {
 
 /// Widens a 32-bit `SM50_SHADER_COMPILATION_ARGUMENT_DATA` linked list into owned 64-bit nodes.
 ///
+/// `None` for a chain [`chain_is_walkable`] refuses; the caller answers `STATUS_INVALID_PARAMETER`.
+///
 /// # Safety
 ///
 /// `head32` must be zero or the 32-bit address of a null-terminated chain of valid 32-bit argument
 /// structures matching their `type` tag.
 #[cfg(not(feature = "native"))]
-unsafe fn walk_chain(mut cur32: u32) -> (*mut Sm50ShaderCompilationArgumentData, Vec<ChainNode>) {
+unsafe fn walk_chain(
+    mut cur32: u32,
+) -> Option<(*mut Sm50ShaderCompilationArgumentData, Vec<ChainNode>)> {
+    let walkable = chain_is_walkable(cur32, |at| {
+        // SAFETY: `at` is non-zero and addresses a valid 32-bit argument header (the caller's chain).
+        let hdr = unsafe { &*ptr32::<Sm50ShaderCompilationArgumentData32>(at).cast_const() };
+        (hdr.next, hdr.r#type)
+    });
+    if !walkable {
+        return None;
+    }
     let mut nodes: Vec<ChainNode> = Vec::new();
     while cur32 != 0 {
         let hdr_ptr = ptr32::<Sm50ShaderCompilationArgumentData32>(cur32).cast_const();
@@ -583,26 +598,32 @@ unsafe fn walk_chain(mut cur32: u32) -> (*mut Sm50ShaderCompilationArgumentData,
         unsafe { (*cur_ptr).next = next_ptr.cast() };
         next_ptr = cur_ptr;
     }
-    (next_ptr, nodes)
+    Some((next_ptr, nodes))
 }
 
-/// `STATUS_INVALID_PARAMETER`.
+/// The most nodes a 32-bit chain may hold (the header has nine types; a cycle never ends).
 #[cfg(not(feature = "native"))]
-const STATUS_INVALID_PARAMETER: i32 = 0xC000_000D_u32.cast_signed();
+const MAX_CHAIN_NODES: usize = 64;
 
-/// Whether the 32-bit chain from `head` holds a node of type `ty`.
+/// Whether the 32-bit chain from `head` can be widened.
+///
+/// At most [`MAX_CHAIN_NODES`] nodes, none of type `SM50_SHADER_D3D9` (no 32-bit PE caller builds
+/// one, C3-21).
 ///
 /// `header` reads a node's `(next, type)` at its 32-bit address.
 #[cfg(not(feature = "native"))]
-fn chain_has_type(mut head: u32, ty: u32, header: impl Fn(u32) -> (u32, u32)) -> bool {
-    while head != 0 {
-        let (next, node_ty) = header(head);
-        if node_ty == ty {
+fn chain_is_walkable(mut head: u32, header: impl Fn(u32) -> (u32, u32)) -> bool {
+    for _ in 0..MAX_CHAIN_NODES {
+        if head == 0 {
             return true;
+        }
+        let (next, ty) = header(head);
+        if ty == SM50_SHADER_D3D9 {
+            return false;
         }
         head = next;
     }
-    false
+    head == 0
 }
 
 /// Slot 74 (`WoW64`): widens 32-bit `sm50_initialize_params32` and calls `SM50Initialize`.
@@ -640,17 +661,10 @@ pub unsafe extern "C-unwind" fn sm50_compile_32(args: *mut c_void) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileParams32>(args) };
-    // `walk_chain` has no error path, and no 32-bit PE caller builds a D3D9 node (C3-21).
-    let has_d3d9 = chain_has_type(p.args, SM50_SHADER_D3D9, |at| {
-        // SAFETY: `at` is non-zero and addresses a valid 32-bit argument header (the caller's chain).
-        let hdr = unsafe { &*ptr32::<Sm50ShaderCompilationArgumentData32>(at).cast_const() };
-        (hdr.next, hdr.r#type)
-    });
-    if has_d3d9 {
-        return STATUS_INVALID_PARAMETER;
-    }
     // SAFETY: `p.args` is a 32-bit argument chain from the caller.
-    let (chain, _nodes) = unsafe { walk_chain(p.args) };
+    let Some((chain, _nodes)) = (unsafe { walk_chain(p.args) }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv::sm50_compile`.
     p.ret = unsafe {
         airconv::sm50_compile(
@@ -724,7 +738,9 @@ pub unsafe extern "C-unwind" fn sm50_compile_geometry_pipeline_vertex_32(args: *
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileGeometryPipelineVertexParams32>(args) };
     // SAFETY: `p.vertex_args` is a 32-bit argument chain from the caller.
-    let (chain, _nodes) = unsafe { walk_chain(p.vertex_args) };
+    let Some((chain, _nodes)) = (unsafe { walk_chain(p.vertex_args) }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv`.
     p.ret = unsafe {
         airconv::sm50_compile_geometry_pipeline_vertex(
@@ -753,7 +769,9 @@ pub unsafe extern "C-unwind" fn sm50_compile_geometry_pipeline_geometry_32(
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileGeometryPipelineGeometryParams32>(args) };
     // SAFETY: `p.geometry_args` is a 32-bit argument chain from the caller.
-    let (chain, _nodes) = unsafe { walk_chain(p.geometry_args) };
+    let Some((chain, _nodes)) = (unsafe { walk_chain(p.geometry_args) }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv`.
     p.ret = unsafe {
         airconv::sm50_compile_geometry_pipeline_geometry(
@@ -782,7 +800,9 @@ pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_hull_32(
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileTessellationPipelineHullParams32>(args) };
     // SAFETY: `p.hull_args` is a 32-bit argument chain from the caller.
-    let (chain, _nodes) = unsafe { walk_chain(p.hull_args) };
+    let Some((chain, _nodes)) = (unsafe { walk_chain(p.hull_args) }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv`.
     p.ret = unsafe {
         airconv::sm50_compile_tessellation_pipeline_hull(
@@ -811,7 +831,9 @@ pub unsafe extern "C-unwind" fn sm50_compile_tessellation_pipeline_domain_32(
     // SAFETY: the caller's contract.
     let p = unsafe { params::<Sm50CompileTessellationPipelineDomainParams32>(args) };
     // SAFETY: `p.domain_args` is a 32-bit argument chain from the caller.
-    let (chain, _nodes) = unsafe { walk_chain(p.domain_args) };
+    let Some((chain, _nodes)) = (unsafe { walk_chain(p.domain_args) }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
     // SAFETY: widened 32-bit pointers and chain forwarded to `airconv`.
     p.ret = unsafe {
         airconv::sm50_compile_tessellation_pipeline_domain(

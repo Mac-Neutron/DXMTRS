@@ -124,13 +124,17 @@ fn dxso_tokens(bytes: &[u8]) -> Option<Vec<u32>> {
     if !bytes.len().is_multiple_of(4) {
         return None;
     }
+    let first = u32::from_le_bytes(*bytes.first_chunk::<4>()?);
+    if !matches!(first >> 16, 0xfffe | 0xffff) {
+        return None;
+    }
     let tokens: Vec<u32> = bytes
         .as_chunks::<4>()
         .0
         .iter()
         .map(|w| u32::from_le_bytes(*w))
         .collect();
-    matches!(tokens.first().map(|t| t >> 16), Some(0xfffe | 0xffff)).then_some(tokens)
+    Some(tokens)
 }
 
 /// The shader's entry point as `DXILGetEntry` answers it.

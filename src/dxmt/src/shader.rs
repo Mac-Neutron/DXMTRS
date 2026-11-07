@@ -47,6 +47,10 @@ impl Sm50Error {
     /// The error's text (`SM50GetErrorMessage`).
     #[must_use]
     pub fn message(&self) -> String {
+        if self.0 == 0 {
+            // No airconv error object: `initialize` refused a stream that is not DXBC.
+            return "not a DXBC container".to_owned();
+        }
         // SAFETY: `self.0` is a live `sm50_error_t` handle or 0.
         unsafe { error_message(self.0) }
     }

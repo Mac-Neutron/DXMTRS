@@ -20,6 +20,9 @@ pub const STATUS_SUCCESS: i32 = 0;
 /// `STATUS_UNSUCCESSFUL`.
 pub const STATUS_UNSUCCESSFUL: i32 = 0xC000_0001_u32.cast_signed();
 
+/// `STATUS_INVALID_PARAMETER`.
+pub const STATUS_INVALID_PARAMETER: i32 = 0xC000_000D_u32.cast_signed();
+
 /// `STATUS_NOT_IMPLEMENTED`.
 pub const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002_u32.cast_signed();
 

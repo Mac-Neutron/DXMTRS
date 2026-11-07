@@ -20,4 +20,8 @@ fn refuses_a_dxso_token_stream() {
         initialize(b"DXB", &mut reflection),
         Err(super::Sm50Error(0))
     ));
+    let Err(error) = initialize(b"DXB", &mut reflection) else {
+        panic!("initialized");
+    };
+    assert_eq!(error.message(), "not a DXBC container");
 }

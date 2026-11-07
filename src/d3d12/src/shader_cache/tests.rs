@@ -483,3 +483,15 @@ fn function_cache_retains_a_live_function() {
     let cached = cache.get(&key).expect("cached");
     assert_eq!(cached.handle(), 0x9100);
 }
+
+#[test]
+fn parse_refuses_a_non_dxbc_blob_without_a_crash() {
+    let mut shader = CachedShader {
+        bytecode: b"not-a-container".to_vec(),
+        digest: GOLDEN_SHADER_1_DIGEST,
+        shader: None,
+        reflected: false,
+        reflection: golden_reflection(),
+    };
+    assert_eq!(shader.parse().err(), Some(super::E_FAIL));
+}
