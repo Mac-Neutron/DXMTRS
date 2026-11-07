@@ -156,11 +156,16 @@ impl Lower<'_> {
         Ok(itemp(s))
     }
 
-    /// `pow(base, e)` as Metal's fast math computes it: `exp2(e * log2(base))`.
+    /// `pow(base, e)`: `e == 0 ? 1 : exp2(e * log2(base))`.
+    ///
+    /// `pow(x, 0)` is 1 for every `x`, 0 included, as D3D9's `pow` (it never makes a NaN or an
+    /// infinity) and Metal's `pow`, where `exp2(0 * log2(0))` is a NaN.
     pub fn pow(&mut self, base: Src, e: Src) -> Result<Src, LowerError> {
         let l = self.unary(FloatUnaryOp::Log2, base)?;
-        let p = self.binary(FloatBinaryOp::Mul, l, e)?;
-        self.unary(FloatUnaryOp::Exp2, p)
+        let p = self.binary(FloatBinaryOp::Mul, l, e.clone())?;
+        let x = self.unary(FloatUnaryOp::Exp2, p)?;
+        let zero = self.mask(FloatComparison::Equal, e, fsplat(0.0))?;
+        self.select(zero, fsplat(1.0), x)
     }
 
     /// The instruction's value as a `float4` operand.

@@ -794,6 +794,25 @@ fn sge_and_slt_compare_ordered() {
     metallib(&binary(op::SGE, XYZW), spec());
 }
 
+#[test]
+fn pow_of_a_zero_exponent_is_one() {
+    // `e == 0 ? 1 : exp2(e * log2(|b|))`: D3D9's `pow(0, 0)` is 1, as Metal's `pow`, not
+    // `exp2(0 * -inf)`, a NaN.
+    let l = lowered(&binary(op::POW, XXXX), spec());
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::FloatCompare(c)
+        if c.cmp == FloatComparison::Equal
+            && matches!(c.src0, SrcOperand::Input { regid: 1, .. })
+            && matches!(c.src1, SrcOperand::Immediate32 { value: [0, 0, 0, 0], .. })))
+    );
+    let one = 1.0_f32.to_bits();
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::MovConditional(m)
+        if matches!(m.src0, SrcOperand::Immediate32 { value, .. } if value == [one; 4])))
+    );
+    metallib(&binary(op::POW, XXXX), spec());
+}
+
 /// `dcl_position v0; dcl_normal v1; mov oPos, v0; mov oT0, v1` (`vs_2_0`).
 fn two_inputs() -> Vec<u32> {
     program(
