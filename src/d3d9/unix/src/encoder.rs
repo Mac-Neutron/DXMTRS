@@ -15,7 +15,7 @@ use mtld3d_core::{
     async_compile::{ClearHistory, ClearPlanes, DeferredPipelineId, JobTicket, TicketSource},
     buffer_rename::{BufferMapMode, stage_upload_needs_preserve},
     build_index::BuildIndex,
-    config::Mtld3dConfig,
+    config::{Mtld3dConfig, ShaderBackend},
     convert::{FAN_PATTERN_MAX_TRIANGLES, fan_pattern_bytes, fill_fan_pattern_u16},
     depth_stencil_state::{DepthStencilSnapshot, description_from_snapshot, key_from_snapshot},
     draw_data::VsSourceView,
@@ -1173,6 +1173,10 @@ pub struct FrameEncoder {
     /// and `begin_frame` forgets the memo, whose record addresses are only
     /// meaningful inside the packet that carries them.
     libraries: compile::libraries::StageLibraries,
+    /// The backend each draw's shader pair is built with (`shader.backend`, rulings C3b-2, C3b-3).
+    pair_rule: compile::libraries::PairRule,
+    /// The build's translator key, which AIR records carry; `None` in a cargo-only build.
+    translator_key: Option<[u8; 32]>,
     texture_cache: FxHashMap<TextureId, TextureGpuState>,
     /// One `MTLBuffer` wrapper per upload-snapshot chunk, keyed by the chunk's page generation.
     ///
@@ -1703,6 +1707,20 @@ impl FrameEncoder {
             }
         }
         flags.set(FrameEncoderFlags::CAPTURE_LAYER, capture_layer_loaded());
+        let translator_key = crate::key::translator_key();
+        let pair_rule = compile::libraries::PairRule::new(config.shader_backend);
+        info!(
+            target: LOG_TARGET,
+            "shader backend: {}, translator {}",
+            match config.shader_backend {
+                ShaderBackend::Msl => "msl",
+                ShaderBackend::Air => "air",
+            },
+            translator_key.map_or_else(
+                || "none".to_owned(),
+                |key| format!("{:02x}{:02x}{:02x}{:02x}", key[0], key[1], key[2], key[3])
+            ),
+        );
         // The clock allocation lives as long as this encoder, so its address
         // names the encoder among the live ones.
         let hud = crate::hud_state::HudReporter::new(Arc::as_ptr(&clock) as u64);
@@ -1789,6 +1807,8 @@ impl FrameEncoder {
             prog_link_outputs: FxHashMap::default(),
             lib_cache: FxHashMap::default(),
             libraries: compile::libraries::StageLibraries::default(),
+            pair_rule,
+            translator_key,
             texture_cache: FxHashMap::default(),
             snapshot_wrappers: FxHashMap::default(),
             texture_versions: TextureVersions::new(version_budget),
@@ -9459,6 +9479,28 @@ pub fn compile_stage_library(
         error!(target: LOG_TARGET, "encoder: CompileShaderLibrary failed (entry={entry})");
         return None;
     };
+    Some(StageLibHandles { library, func })
+}
+
+/// The metallib of a programmable stage's retained source, from the translator (ruling C3b-10).
+///
+/// A failure is logged and gives `None`, as an MSL emission error does.
+pub fn translate_stage(source: &shader_cache::ShaderSource, entry: &str) -> Option<Vec<u8>> {
+    // Entry names are generated hex and never hold a NUL.
+    let name = std::ffi::CString::new(entry).ok()?;
+    crate::metal::translate_dxso(source.tokens(), &source.stage_spec(), &name)
+        .map_err(|e| error!(target: LOG_TARGET, "encoder: translating {entry} failed: {e}"))
+        .ok()
+}
+
+/// A stage library from a metallib, the AIR twin of [`compile_stage_library`].
+pub fn compile_air_stage_library(
+    device_handle: MetalHandle<MTLDeviceKind>,
+    metallib: &[u8],
+    entry: &str,
+) -> Option<StageLibHandles> {
+    let (library, func) =
+        crate::metal::compile_metallib_library(device_handle, metallib, entry, entry)?;
     Some(StageLibHandles { library, func })
 }
 

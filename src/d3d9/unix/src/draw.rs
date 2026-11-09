@@ -134,7 +134,7 @@ fn resolve_libraries_slow(
     enc.drain_compile_results();
     let mut waited = false;
     loop {
-        let vs_resolved = enc.resolve_vs_library(shaders.vs);
+        let vs_resolved = enc.resolve_vs_library(shaders.vs, shaders.backend);
         let Some(vs) = library_slot(&vs_resolved) else {
             let dk = shaders.vs.disk_key();
             mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "draw dropped: the VS library failed to build");
@@ -145,7 +145,7 @@ fn resolve_libraries_slow(
             );
             return None;
         };
-        let ps_resolved = enc.resolve_ps_library(shaders.ps, shaders.variant);
+        let ps_resolved = enc.resolve_ps_library(shaders.ps, shaders.variant, shaders.backend);
         let Some(ps) = library_slot(&ps_resolved) else {
             let dk = shaders.ps.disk_key(shaders.variant);
             mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "draw dropped: the PS library failed to build");
@@ -791,16 +791,21 @@ fn emit_draw_view(
     //    enqueue. An unbuilt or failed stage sends the draw there; it
     //    installs finished builds before probing again and queues both
     //    stages before deciding whether to wait, defer or skip the draw.
+    //    The pair's backend is decided here, the one place holding both
+    //    stages and the final PS variant, and every key below carries it.
     let t_lookup = CycleAddTimer::start(enc.op_sub_detail_ptr(OpSubDetail::RLookup));
-    let libraries = enc.lookup_libraries(vs, vs_snapshot, ps, ps_variant);
+    let backend = enc.pair_backend(vs, ps, &ps_variant);
+    let shaders = ShaderRef {
+        vs,
+        ps,
+        variant: ps_variant,
+        backend,
+    };
+    let libraries = enc.lookup_libraries(vs, vs_snapshot, ps, ps_variant, backend);
     let Some((vs_handles, ps_handles)) = libraries.or_else(|| {
         resolve_libraries_slow(
             enc,
-            &ShaderRef {
-                vs,
-                ps,
-                variant: ps_variant,
-            },
+            &shaders,
             planes_used(render_state, target_planes),
             !rt0_drop,
         )
@@ -808,11 +813,6 @@ fn emit_draw_view(
         return;
     };
     drop(t_lookup);
-    let shaders = ShaderRef {
-        vs,
-        ps,
-        variant: ps_variant,
-    };
     enc.maybe_log_pass_shader(shaders, stage_bindings);
     // Carry the bound RT's D3D "has alpha" bit so destination-alpha blend
     // factors clamp on alpha-less targets (X8R8G8B8 shares `Bgra8Unorm` with

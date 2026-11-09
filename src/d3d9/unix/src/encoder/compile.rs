@@ -26,6 +26,7 @@ use mtld3d_core::{
         LibrarySlot, Resolution, mark_kept_reads, may_skip_draw,
     },
     build_index::BuildLookup,
+    config::ShaderBackend,
     draw_data::{FixedPsSource, FixedVsSource, ProgrammablePsSource, ProgrammableVsSource},
     dxso::{
         DxsoProgram, FfPsKey, FfVsKey, LOG_TARGET as MSL_TRACE_TARGET, VariantKey, VsSamplerKinds,
@@ -50,8 +51,8 @@ use mtld3d_shared::{
 use rustc_hash::FxHashMap;
 
 use super::{
-    FrameEncoder, FrameEncoderFlags, LOG_TARGET, StageLibHandles, compile_stage_library,
-    open_or_create_cache_file,
+    FrameEncoder, FrameEncoderFlags, LOG_TARGET, StageLibHandles, compile_air_stage_library,
+    compile_stage_library, open_or_create_cache_file, translate_stage,
 };
 use crate::{
     draw::{PsSourceView, ShaderRef, VsSourceView},
@@ -237,6 +238,8 @@ struct LibraryJob {
     /// Whether to append the record to the shader cache.
     persist: bool,
     cache_path: Option<std::path::PathBuf>,
+    /// The build's translator key; an AIR record is written only under one (ruling C3b-6).
+    translator: Option<[u8; 32]>,
 }
 
 /// The emitter input of one library, and the index key its outcome lands under.
@@ -247,6 +250,7 @@ enum LibraryInput {
         provided_input_mask: u16,
         clip_plane_count: u8,
         sampler_kinds: VsSamplerKinds,
+        backend: ShaderBackend,
     },
     FixedFunctionVs {
         key: FfVsKey,
@@ -255,6 +259,7 @@ enum LibraryInput {
         ps_id: ProgramId,
         program: Arc<DxsoProgram>,
         variant: VariantKey,
+        backend: ShaderBackend,
     },
     FixedFunctionPs {
         key: FfPsKey,
@@ -280,6 +285,36 @@ impl LibraryInput {
             Self::ProgrammableVs { .. } | Self::ProgrammablePs { .. }
         )
     }
+
+    /// The backend the library is built with; fixed function is always MSL.
+    const fn backend(&self) -> ShaderBackend {
+        match self {
+            Self::ProgrammableVs { backend, .. } | Self::ProgrammablePs { backend, .. } => *backend,
+            Self::FixedFunctionVs { .. } | Self::FixedFunctionPs { .. } => ShaderBackend::Msl,
+        }
+    }
+
+    /// The program and specialization a record retains; `None` for fixed function.
+    fn source(&self) -> Option<shader_cache::ShaderSource> {
+        match self {
+            Self::ProgrammableVs {
+                program,
+                provided_input_mask,
+                clip_plane_count,
+                sampler_kinds,
+                ..
+            } => Some(shader_cache::ShaderSource::vertex(
+                program,
+                *provided_input_mask,
+                *clip_plane_count,
+                *sampler_kinds,
+            )),
+            Self::ProgrammablePs {
+                program, variant, ..
+            } => Some(shader_cache::ShaderSource::pixel(program, *variant)),
+            Self::FixedFunctionVs { .. } | Self::FixedFunctionPs { .. } => None,
+        }
+    }
 }
 
 /// Everything a worker needs to build and persist one render pipeline.
@@ -300,6 +335,8 @@ pub struct PipelineIdentity {
     shader_refs: Option<(ShaderRecordRef, ShaderRecordRef)>,
     vs: PairShaderId,
     ps: PairShaderId,
+    /// An AIR pair's two programs, which a failed pipeline marks failed (ruling C3b-3).
+    air_programs: Option<(ProgramId, ProgramId)>,
 }
 
 impl PipelineIdentity {
@@ -309,6 +346,7 @@ impl PipelineIdentity {
             shader_refs: self.shader_refs,
             vs: self.vs,
             ps: self.ps,
+            air_programs: self.air_programs,
         }
     }
 }
@@ -395,6 +433,7 @@ struct PipelineOutcome {
     snapshot: PipelineSnapshot,
     vs: PairShaderId,
     ps: PairShaderId,
+    air_programs: Option<(ProgramId, ProgramId)>,
     sibling_of: Option<u64>,
     handle: Option<MetalHandle<MTLRenderPipelineStateKind>>,
     total_ns: u64,
@@ -418,12 +457,16 @@ fn run_job(ticket: JobTicket, queued: QueuedJob, on_worker: bool) -> CompileResu
 }
 
 fn build_library(job: LibraryJob) -> LibraryOutcome {
+    if job.input.backend() == ShaderBackend::Air {
+        return build_air_library(job);
+    }
     let LibraryJob {
         input,
         reference,
         device,
         persist,
         cache_path,
+        translator: _,
     } = job;
     let mut total_ns = 0;
     let mut emit_ns = 0;
@@ -487,28 +530,12 @@ fn build_library(job: LibraryJob) -> LibraryOutcome {
         elapsed = started.elapsed();
         if persist {
             let _persist = NanosSetTimer::start(&raw mut persist_ns);
-            let retained = match &input {
-                LibraryInput::ProgrammableVs {
-                    program,
-                    provided_input_mask,
-                    clip_plane_count,
-                    sampler_kinds,
-                    ..
-                } => Some(shader_cache::ShaderSource::vertex(
-                    program,
-                    *provided_input_mask,
-                    *clip_plane_count,
-                    *sampler_kinds,
-                )),
-                LibraryInput::ProgrammablePs {
-                    program, variant, ..
-                } => Some(shader_cache::ShaderSource::pixel(program, *variant)),
-                LibraryInput::FixedFunctionVs { .. } | LibraryInput::FixedFunctionPs { .. } => {
-                    None
-                }
-            };
-            let entry =
-                shader_cache::CacheEntry::new(reference.kind(), reference.key(), msl, retained);
+            let entry = shader_cache::CacheEntry::new(
+                reference.kind(),
+                reference.key(),
+                msl,
+                input.source(),
+            );
             persist_error = open_or_create_cache_file(cache_path.as_deref())
                 .and_then(|writer| writer.append_shader(&entry))
                 .err();
@@ -531,6 +558,69 @@ fn build_library(job: LibraryJob) -> LibraryOutcome {
     }
 }
 
+/// [`build_library`] for a stage of an AIR pair: translate, load the metallib, persist.
+///
+/// The record is written only when the job carries the build's translator key
+/// (ruling C3b-6). The translation is the emission row; Metal's own phases are
+/// not timed for a metallib.
+fn build_air_library(job: LibraryJob) -> LibraryOutcome {
+    let LibraryJob {
+        input,
+        reference,
+        device,
+        persist,
+        cache_path,
+        translator,
+    } = job;
+    let mut total_ns = 0;
+    let mut emit_ns = 0;
+    let mut persist_ns = 0;
+    let mut persist_error = None;
+    let mut elapsed = Duration::ZERO;
+    let total_timer = NanosSetTimer::start(&raw mut total_ns);
+    let entry_name = reference.kind().entry_name(reference.key());
+    let started = Instant::now();
+    let source = input.source();
+    let emission = NanosSetTimer::start(&raw mut emit_ns);
+    let metallib = source
+        .as_ref()
+        .and_then(|source| translate_stage(source, &entry_name));
+    drop(emission);
+    let emitted = metallib.is_some();
+    let handles = metallib.zip(source).and_then(|(metallib, source)| {
+        let handles = compile_air_stage_library(device, &metallib, &entry_name)?;
+        elapsed = started.elapsed();
+        if persist && let Some(translator) = translator {
+            let _persist = NanosSetTimer::start(&raw mut persist_ns);
+            let entry = shader_cache::CacheEntry::new_air(
+                reference.kind(),
+                reference.key(),
+                translator,
+                metallib,
+                source,
+            );
+            persist_error = open_or_create_cache_file(cache_path.as_deref())
+                .and_then(|writer| writer.append_shader(&entry))
+                .err();
+        }
+        Some(handles)
+    });
+    drop(total_timer);
+    LibraryOutcome {
+        input,
+        reference,
+        handles,
+        emitted,
+        bucket: Some(reference.kind().compile_bucket()),
+        elapsed,
+        total_ns,
+        emit_ns,
+        persist_ns,
+        native: ShaderTimings::new(),
+        persist_error,
+    }
+}
+
 fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
     let PipelineJob {
         snapshot,
@@ -540,6 +630,7 @@ fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
                 shader_refs,
                 vs,
                 ps,
+                air_programs,
             },
         sibling_of,
         device,
@@ -596,6 +687,7 @@ fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
         snapshot,
         vs,
         ps,
+        air_programs,
         sibling_of,
         handle: pipeline,
         total_ns,
@@ -637,6 +729,18 @@ enum Begun {
 }
 
 impl FrameEncoder {
+    /// The backend a draw's pair is built with; see [`libraries::PairRule`].
+    #[inline]
+    pub fn pair_backend(
+        &mut self,
+        vs: VsSourceView<'_>,
+        ps: PsSourceView<'_>,
+        variant: &VariantKey,
+    ) -> ShaderBackend {
+        self.pair_rule
+            .pair_backend(&self.program_cache, vs, ps, variant)
+    }
+
     /// Both stages' built library handles for a draw, or `None` for the slow path.
     ///
     /// See [`libraries::StageLibraries::lookup_ready`]: a draw naming the
@@ -648,8 +752,10 @@ impl FrameEncoder {
         vs_snapshot: VsSourceView<'_>,
         ps: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
     ) -> Option<(StageLibHandles, StageLibHandles)> {
-        self.libraries.lookup_ready(vs, vs_snapshot, ps, variant)
+        self.libraries
+            .lookup_ready(vs, vs_snapshot, ps, variant, backend)
     }
 
     /// Resolve the VS library for a draw.
@@ -665,25 +771,33 @@ impl FrameEncoder {
     /// draw that names them and are never removed, so a missing program is
     /// as final as a rejected one.
     #[inline]
-    pub fn resolve_vs_library(&mut self, source: VsSourceView<'_>) -> Resolution<StageLibHandles> {
-        match self.libraries.lookup_vs(source) {
+    pub fn resolve_vs_library(
+        &mut self,
+        source: VsSourceView<'_>,
+        backend: ShaderBackend,
+    ) -> Resolution<StageLibHandles> {
+        match self.libraries.lookup_vs(source, backend) {
             Some(Some(handles)) => return Resolution::Ready(*handles),
             Some(None) => return Resolution::Failed,
             None => {}
         }
-        self.resolve_vs_library_miss(source)
+        self.resolve_vs_library_miss(source, backend)
     }
 
     /// The cold half of [`Self::resolve_vs_library`], out of line so a hit pays nothing for it.
     #[cold]
     #[inline(never)]
-    fn resolve_vs_library_miss(&mut self, source: VsSourceView<'_>) -> Resolution<StageLibHandles> {
+    fn resolve_vs_library_miss(
+        &mut self,
+        source: VsSourceView<'_>,
+        backend: ShaderBackend,
+    ) -> Resolution<StageLibHandles> {
         let mut miss_ns = 0;
         let miss = NanosSetTimer::start(&raw mut miss_ns);
-        let begun = self.begin_vs_library(source);
+        let begun = self.begin_vs_library(source, backend);
         let resolution = match begun {
             Begun::Bridged(handles) => {
-                self.record_vs_library(source, Some(handles));
+                self.record_vs_library(source, backend, Some(handles));
                 Resolution::Ready(handles)
             }
             Begun::Failed => {
@@ -692,7 +806,7 @@ impl FrameEncoder {
                     "encoder: VS library {} failed to build, its draws are dropped without another attempt",
                     vs_source_tag(source)
                 );
-                self.record_vs_library(source, None);
+                self.record_vs_library(source, backend, None);
                 Resolution::Failed
             }
             Begun::Queued(ticket) | Begun::Pending(ticket) => Resolution::Pending(ticket),
@@ -702,8 +816,13 @@ impl FrameEncoder {
         resolution
     }
 
-    fn record_vs_library(&mut self, source: VsSourceView<'_>, outcome: Option<StageLibHandles>) {
-        self.libraries.record_vs(source, outcome);
+    fn record_vs_library(
+        &mut self,
+        source: VsSourceView<'_>,
+        backend: ShaderBackend,
+        outcome: Option<StageLibHandles>,
+    ) {
+        self.libraries.record_vs(source, backend, outcome);
     }
 
     /// Cold half of [`Self::resolve_vs_library`]: the index missed.
@@ -711,8 +830,8 @@ impl FrameEncoder {
     /// Computes the Xxh3 `disk_key` (the only content hash, about once per
     /// shader), bridges the warm-loaded disk-keyed `lib_cache`, and queues
     /// the build otherwise. Every `VsKey` variant of a shader maps to the
-    /// same `disk_key`.
-    fn begin_vs_library(&mut self, source: VsSourceView<'_>) -> Begun {
+    /// same `disk_key`; an AIR library's record has the AIR kind of the MSL one.
+    fn begin_vs_library(&mut self, source: VsSourceView<'_>, backend: ShaderBackend) -> Begun {
         let disk_key = source.disk_key();
         let (kind, program) = match source {
             VsSourceView::Programmable(ProgrammableVsSource { vs_id, .. }) => {
@@ -721,7 +840,7 @@ impl FrameEncoder {
                     return Begun::Failed;
                 };
                 (
-                    CachedKind::from_programmable(program.major, false),
+                    programmable_kind(program.major, false, backend),
                     Some(Arc::clone(program)),
                 )
             }
@@ -761,6 +880,7 @@ impl FrameEncoder {
                 provided_input_mask: *provided_input_mask,
                 clip_plane_count: *clip_plane_count,
                 sampler_kinds: *sampler_kinds,
+                backend,
             },
             (VsSourceView::FixedFunction(FixedVsSource { key, .. }), _) => {
                 LibraryInput::FixedFunctionVs { key: key.clone() }
@@ -782,13 +902,14 @@ impl FrameEncoder {
         &mut self,
         source: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
     ) -> Resolution<StageLibHandles> {
-        match self.libraries.lookup_ps(source, variant) {
+        match self.libraries.lookup_ps(source, variant, backend) {
             Some(Some(handles)) => return Resolution::Ready(*handles),
             Some(None) => return Resolution::Failed,
             None => {}
         }
-        self.resolve_ps_library_miss(source, variant)
+        self.resolve_ps_library_miss(source, variant, backend)
     }
 
     /// The cold half of [`Self::resolve_ps_library`], out of line so a hit pays nothing for it.
@@ -798,13 +919,14 @@ impl FrameEncoder {
         &mut self,
         source: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
     ) -> Resolution<StageLibHandles> {
         let mut miss_ns = 0;
         let miss = NanosSetTimer::start(&raw mut miss_ns);
-        let begun = self.begin_ps_library(source, variant);
+        let begun = self.begin_ps_library(source, variant, backend);
         let resolution = match begun {
             Begun::Bridged(handles) => {
-                self.record_ps_library(source, variant, Some(handles));
+                self.record_ps_library(source, variant, backend, Some(handles));
                 Resolution::Ready(handles)
             }
             Begun::Failed => {
@@ -813,7 +935,7 @@ impl FrameEncoder {
                     "encoder: PS library {} failed to build, its draws are dropped without another attempt",
                     ps_source_tag(source, variant)
                 );
-                self.record_ps_library(source, variant, None);
+                self.record_ps_library(source, variant, backend, None);
                 Resolution::Failed
             }
             Begun::Queued(ticket) | Begun::Pending(ticket) => Resolution::Pending(ticket),
@@ -827,13 +949,19 @@ impl FrameEncoder {
         &mut self,
         source: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
         outcome: Option<StageLibHandles>,
     ) {
-        self.libraries.record_ps(source, variant, outcome);
+        self.libraries.record_ps(source, variant, backend, outcome);
     }
 
     /// Cold half of [`Self::resolve_ps_library`]; the `disk_key` folds in `variant`.
-    fn begin_ps_library(&mut self, source: PsSourceView<'_>, variant: VariantKey) -> Begun {
+    fn begin_ps_library(
+        &mut self,
+        source: PsSourceView<'_>,
+        variant: VariantKey,
+        backend: ShaderBackend,
+    ) -> Begun {
         let disk_key = source.disk_key(variant);
         let (kind, program) = match source {
             PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
@@ -842,7 +970,7 @@ impl FrameEncoder {
                     return Begun::Failed;
                 };
                 (
-                    CachedKind::from_programmable(program.major, true),
+                    programmable_kind(program.major, true, backend),
                     Some(Arc::clone(program)),
                 )
             }
@@ -870,6 +998,7 @@ impl FrameEncoder {
                     ps_id: *ps_id,
                     program,
                     variant,
+                    backend,
                 }
             }
             (PsSourceView::FixedFunction(FixedPsSource { key, .. }), _) => {
@@ -890,6 +1019,7 @@ impl FrameEncoder {
             device: self.device_handle,
             persist: self.cache_persists(),
             cache_path: self.cache_path.clone(),
+            translator: self.translator_key,
         };
         let ticket = self.enqueue(CompileJob::Library(job));
         self.pending_libs.insert(reference, ticket);
@@ -1631,6 +1761,19 @@ impl FrameEncoder {
                 "encoder: {stage} library {} failed to build, its draws are dropped without another attempt",
                 reference_tag(reference)
             );
+            if let LibraryInput::ProgrammableVs {
+                vs_id: program,
+                backend: ShaderBackend::Air,
+                ..
+            }
+            | LibraryInput::ProgrammablePs {
+                ps_id: program,
+                backend: ShaderBackend::Air,
+                ..
+            } = input
+            {
+                self.fail_air_program(program);
+            }
         }
         let device = self.device_handle.raw();
         let seq = self.current_submit_seq;
@@ -1671,17 +1814,29 @@ impl FrameEncoder {
                 provided_input_mask,
                 clip_plane_count,
                 sampler_kinds,
+                backend,
                 ..
             } => self.libraries.record_programmable_vs(
-                (vs_id, provided_input_mask, clip_plane_count, sampler_kinds),
+                (
+                    vs_id,
+                    provided_input_mask,
+                    clip_plane_count,
+                    sampler_kinds,
+                    backend,
+                ),
                 handles,
             ),
             LibraryInput::FixedFunctionPs { key, variant } => {
                 self.libraries.record_ff_ps(key, variant, handles);
             }
-            LibraryInput::ProgrammablePs { ps_id, variant, .. } => {
+            LibraryInput::ProgrammablePs {
+                ps_id,
+                variant,
+                backend,
+                ..
+            } => {
                 self.libraries
-                    .record_programmable_ps(ps_id, variant, handles);
+                    .record_programmable_ps(ps_id, variant, backend, handles);
             }
         }
     }
@@ -1692,6 +1847,7 @@ impl FrameEncoder {
             snapshot,
             vs,
             ps,
+            air_programs,
             sibling_of,
             handle,
             total_ns,
@@ -1768,9 +1924,23 @@ impl FrameEncoder {
                 vs.tag(),
                 ps.tag()
             );
+            if let Some((vs_id, ps_id)) = air_programs {
+                self.fail_air_program(vs_id);
+                self.fail_air_program(ps_id);
+            }
         }
         self.pending_pipelines.remove(&key);
         self.pipeline_cache.record(key, handle);
+    }
+
+    /// Send a program's later pairs to MSL after one of its AIR builds failed (ruling C3b-3).
+    fn fail_air_program(&mut self, program: ProgramId) {
+        if self.pair_rule.fail(program) {
+            warn!(
+                target: LOG_TARGET,
+                "encoder: program {program:#x} failed as AIR, its pairs are built as MSL from now on"
+            );
+        }
     }
 
     /// Latch the shader cache off after a worker's append failed.
@@ -1826,8 +1996,15 @@ fn pipeline_identity(
     program_cache: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
     shaders: &ShaderRef<'_>,
 ) -> PipelineIdentity {
+    let air_programs = match (shaders.backend, shaders.vs, shaders.ps) {
+        (ShaderBackend::Air, VsSourceView::Programmable(vs), PsSourceView::Programmable(ps)) => {
+            Some((vs.vs_id, ps.ps_id))
+        }
+        _ => None,
+    };
     PipelineIdentity {
         shader_refs: pipeline_shader_refs(program_cache, shaders),
+        air_programs,
         vs: PairShaderId {
             is_programmable: matches!(shaders.vs, VsSourceView::Programmable(_)),
             hash: shaders.vs.disk_key(),
@@ -1847,18 +2024,31 @@ fn pipeline_shader_refs(
         VsSourceView::FixedFunction(_) => CachedKind::FfVs,
         VsSourceView::Programmable(ProgrammableVsSource { vs_id, .. }) => {
             let major = program_cache.get(vs_id)?.major;
-            CachedKind::from_programmable(major, false)?
+            programmable_kind(major, false, shaders.backend)?
         }
     };
     let ps_kind = match shaders.ps {
         PsSourceView::FixedFunction(_) => CachedKind::FfPs,
         PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
             let major = program_cache.get(ps_id)?.major;
-            CachedKind::from_programmable(major, true)?
+            programmable_kind(major, true, shaders.backend)?
         }
     };
     Some((
         ShaderRecordRef::new(vs_kind, shaders.vs.disk_key()),
         ShaderRecordRef::new(ps_kind, shaders.ps.disk_key(shaders.variant)),
     ))
+}
+
+/// The record kind of a programmable stage built with `backend`.
+const fn programmable_kind(
+    sm_major: u8,
+    is_pixel: bool,
+    backend: ShaderBackend,
+) -> Option<CachedKind> {
+    let kind = CachedKind::from_programmable(sm_major, is_pixel);
+    match (backend, kind) {
+        (ShaderBackend::Air, Some(kind)) => kind.air(),
+        _ => kind,
+    }
 }

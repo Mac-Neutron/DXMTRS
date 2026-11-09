@@ -3,7 +3,7 @@ use mtld3d_core::{
     dxso::{FfStage, FfVsFlags, VariantFlags},
 };
 
-use super::*;
+use super::{super::tests::programs, *};
 
 fn handles(value: u64) -> StageLibHandles {
     // SAFETY: opaque test values; the index and memo only copy and compare handles.
@@ -98,10 +98,15 @@ fn built_pair(
     vs: &ProgrammableVsSource,
     ps: &ProgrammablePsSource,
 ) {
-    libraries.record_vs(VsSourceView::Programmable(vs), Some(handles(10)));
+    libraries.record_vs(
+        VsSourceView::Programmable(vs),
+        ShaderBackend::Msl,
+        Some(handles(10)),
+    );
     libraries.record_ps(
         PsSourceView::Programmable(ps),
         variant(0),
+        ShaderBackend::Msl,
         Some(handles(20)),
     );
 }
@@ -121,14 +126,14 @@ fn repeated_records_answer_from_the_memo() {
         "recording leaves the memo empty"
     );
     let first = libraries
-        .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+        .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
         .map(raw_pair);
     assert_eq!(first, Some((10, 20)));
     assert_eq!(libraries.memo.vs_record, vs_record(vs_view));
     assert_eq!(libraries.memo.ps_record, ps_record(ps_view));
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         first,
         "a draw naming the same records gets the same libraries"
@@ -142,7 +147,11 @@ fn a_rebound_shader_probes_the_index_for_its_own_record() {
     let second_vs = programmable_vs(3);
     let ps = programmable_ps(2);
     built_pair(&mut libraries, &first_vs, &ps);
-    libraries.record_vs(VsSourceView::Programmable(&second_vs), Some(handles(30)));
+    libraries.record_vs(
+        VsSourceView::Programmable(&second_vs),
+        ShaderBackend::Msl,
+        Some(handles(30)),
+    );
     let ps_view = PsSourceView::Programmable(&ps);
     for (vs, expected) in [(&first_vs, 10), (&second_vs, 30), (&first_vs, 10)] {
         assert_eq!(
@@ -151,7 +160,8 @@ fn a_rebound_shader_probes_the_index_for_its_own_record() {
                     VsSourceView::Programmable(vs),
                     VsSourceView::Programmable(vs),
                     ps_view,
-                    variant(0)
+                    variant(0),
+                    ShaderBackend::Msl
                 )
                 .map(raw_pair),
             Some((expected, 20)),
@@ -164,7 +174,7 @@ fn a_rebound_shader_probes_the_index_for_its_own_record() {
     let view = VsSourceView::Programmable(&resent);
     assert_eq!(
         libraries
-            .lookup_ready(view, view, ps_view, variant(0))
+            .lookup_ready(view, view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((10, 20))
     );
@@ -178,12 +188,12 @@ fn a_changed_variant_probes_the_pixel_index() {
     let ps = programmable_ps(2);
     built_pair(&mut libraries, &vs, &ps);
     let ps_view = PsSourceView::Programmable(&ps);
-    libraries.record_ps(ps_view, variant(4), Some(handles(40)));
+    libraries.record_ps(ps_view, variant(4), ShaderBackend::Msl, Some(handles(40)));
     let vs_view = VsSourceView::Programmable(&vs);
     for (key, expected) in [(variant(0), 20), (variant(4), 40), (variant(0), 20)] {
         assert_eq!(
             libraries
-                .lookup_ready(vs_view, vs_view, ps_view, key)
+                .lookup_ready(vs_view, vs_view, ps_view, key, ShaderBackend::Msl)
                 .map(raw_pair),
             Some((10, expected)),
             "the pixel library follows the draw's variant on an unchanged record"
@@ -195,7 +205,7 @@ fn a_changed_variant_probes_the_pixel_index() {
     };
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, flagged)
+            .lookup_ready(vs_view, vs_view, ps_view, flagged, ShaderBackend::Msl)
             .map(|_| ()),
         None,
         "a variant that was never built is no memo hit"
@@ -214,35 +224,38 @@ fn a_rebuild_or_an_adopted_library_replaces_the_memoised_handles() {
     );
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((10, 20))
     );
     // A finished worker build lands under the owned key.
-    libraries.record_programmable_vs(programmable_vs_key(&vs), Some(handles(50)));
+    libraries.record_programmable_vs(
+        programmable_vs_key(&vs, ShaderBackend::Msl),
+        Some(handles(50)),
+    );
     assert_eq!(
         libraries.memo.vs_record, 0,
         "an index write forgets the memo"
     );
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((50, 20))
     );
     // A library bridged from the prewarmed cache lands under the draw's source.
-    libraries.record_ps(ps_view, variant(0), Some(handles(60)));
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Msl, Some(handles(60)));
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((50, 60))
     );
     // A failed rebuild is an answer too: the draw goes to the slow path.
-    libraries.record_programmable_ps(ps.ps_id, variant(0), None);
+    libraries.record_programmable_ps(ps.ps_id, variant(0), ShaderBackend::Msl, None);
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(|_| ()),
         None
     );
@@ -256,7 +269,11 @@ fn a_recycled_record_address_misses_after_the_packet_boundary() {
     let mut vs = programmable_vs(1);
     let recycled = programmable_vs(7);
     built_pair(&mut libraries, &vs, &ps);
-    libraries.record_vs(VsSourceView::Programmable(&recycled), Some(handles(70)));
+    libraries.record_vs(
+        VsSourceView::Programmable(&recycled),
+        ShaderBackend::Msl,
+        Some(handles(70)),
+    );
     let ps_view = PsSourceView::Programmable(&ps);
     let address = vs_record(VsSourceView::Programmable(&vs));
     assert_eq!(
@@ -265,7 +282,8 @@ fn a_recycled_record_address_misses_after_the_packet_boundary() {
                 VsSourceView::Programmable(&vs),
                 VsSourceView::Programmable(&vs),
                 ps_view,
-                variant(0)
+                variant(0),
+                ShaderBackend::Msl
             )
             .map(raw_pair),
         Some((10, 20))
@@ -281,7 +299,7 @@ fn a_recycled_record_address_misses_after_the_packet_boundary() {
     );
     assert_eq!(
         libraries
-            .lookup_ready(view, view, ps_view, variant(0))
+            .lookup_ready(view, view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((70, 20)),
         "the recycled address answers for the record now stored there"
@@ -302,6 +320,7 @@ fn a_recycled_record_without_the_packet_boundary_trips_the_memo_check() {
         VsSourceView::Programmable(&vs),
         ps_view,
         variant(0),
+        ShaderBackend::Msl,
     );
     vs.vs_id = ProgramId::from_shader_reply(9);
     let _ = libraries.lookup_ready(
@@ -309,6 +328,7 @@ fn a_recycled_record_without_the_packet_boundary_trips_the_memo_check() {
         VsSourceView::Programmable(&vs),
         ps_view,
         variant(0),
+        ShaderBackend::Msl,
     );
 }
 
@@ -319,14 +339,18 @@ fn a_device_reset_forgets_the_memo_and_the_failures() {
     let ps = programmable_ps(2);
     let failed = programmable_vs(8);
     built_pair(&mut libraries, &vs, &ps);
-    libraries.record_vs(VsSourceView::Programmable(&failed), None);
+    libraries.record_vs(
+        VsSourceView::Programmable(&failed),
+        ShaderBackend::Msl,
+        None,
+    );
     let (vs_view, ps_view) = (
         VsSourceView::Programmable(&vs),
         PsSourceView::Programmable(&ps),
     );
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((10, 20))
     );
@@ -334,13 +358,13 @@ fn a_device_reset_forgets_the_memo_and_the_failures() {
     assert_eq!((libraries.memo.vs_record, libraries.memo.ps_record), (0, 0));
     assert!(
         libraries
-            .lookup_vs(VsSourceView::Programmable(&failed))
+            .lookup_vs(VsSourceView::Programmable(&failed), ShaderBackend::Msl)
             .is_none(),
         "the failed key is built once more"
     );
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(raw_pair),
         Some((10, 20)),
         "built libraries survive the reset"
@@ -349,7 +373,7 @@ fn a_device_reset_forgets_the_memo_and_the_failures() {
     assert_eq!((libraries.memo.vs_record, libraries.memo.ps_record), (0, 0));
     assert_eq!(
         libraries
-            .lookup_ready(vs_view, vs_view, ps_view, variant(0))
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
             .map(|_| ()),
         None
     );
@@ -362,7 +386,11 @@ fn fixed_function_records_are_tagged_and_keyed_by_content() {
     let fogged = fixed_vs(3);
     let ps = fixed_ps(false);
     libraries.record_ff_vs(vs.key.clone(), Some(handles(80)));
-    libraries.record_vs(VsSourceView::FixedFunction(&fogged), Some(handles(82)));
+    libraries.record_vs(
+        VsSourceView::FixedFunction(&fogged),
+        ShaderBackend::Msl,
+        Some(handles(82)),
+    );
     libraries.record_ff_ps(ps.key.clone(), variant(0), Some(handles(90)));
     let ps_view = PsSourceView::FixedFunction(&ps);
     let view = VsSourceView::FixedFunction(&vs);
@@ -379,7 +407,8 @@ fn fixed_function_records_are_tagged_and_keyed_by_content() {
                     VsSourceView::FixedFunction(source),
                     VsSourceView::FixedFunction(source),
                     ps_view,
-                    variant(0)
+                    variant(0),
+                    ShaderBackend::Msl
                 )
                 .map(raw_pair),
             Some((expected, 90))
@@ -392,7 +421,8 @@ fn fixed_function_records_are_tagged_and_keyed_by_content() {
                 view,
                 view,
                 PsSourceView::FixedFunction(&specular),
-                variant(0)
+                variant(0),
+                ShaderBackend::Msl
             )
             .map(|_| ()),
         None,
@@ -500,16 +530,22 @@ fn lod_table_copies_at_one_address_answer_for_their_own_snapshot_records() {
     let second = programmable_vs(3);
     let ps = programmable_ps(2);
     let ps_view = PsSourceView::Programmable(&ps);
-    libraries.record_ps(ps_view, variant(0), Some(handles(20)));
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Msl, Some(handles(20)));
     libraries.record_vs(
         VsSourceView::Programmable(&first.with_lod_table()),
+        ShaderBackend::Msl,
         Some(handles(10)),
     );
     libraries.record_vs(
         VsSourceView::Programmable(&second.with_lod_table()),
+        ShaderBackend::Msl,
         Some(handles(30)),
     );
-    libraries.record_vs(VsSourceView::Programmable(&first), Some(handles(50)));
+    libraries.record_vs(
+        VsSourceView::Programmable(&first),
+        ShaderBackend::Msl,
+        Some(handles(50)),
+    );
 
     let mut slot = first.with_lod_table();
     let answer = |libraries: &mut StageLibraries, keyed: &ProgrammableVsSource, record| {
@@ -519,6 +555,7 @@ fn lod_table_copies_at_one_address_answer_for_their_own_snapshot_records() {
                 VsSourceView::Programmable(record),
                 ps_view,
                 variant(0),
+                ShaderBackend::Msl,
             )
             .map(raw_pair)
     };
@@ -545,5 +582,192 @@ fn lod_table_copies_at_one_address_answer_for_their_own_snapshot_records() {
             VsSourceView::Programmable(&first),
             VsSourceView::Programmable(&first)
         )
+    );
+}
+
+#[test]
+fn pair_backend_is_msl_under_msl() {
+    let mut rule = PairRule::new(ShaderBackend::Msl);
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    assert_eq!(
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::Programmable(&vs),
+            PsSourceView::Programmable(&ps),
+            &variant(0)
+        ),
+        ShaderBackend::Msl
+    );
+    assert!(
+        rule.vs_lowers.is_empty() && rule.ps_lowers.is_empty(),
+        "nothing is lowered under msl"
+    );
+}
+
+#[test]
+fn pair_backend_air_for_two_programmable_stages() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    assert_eq!(
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::Programmable(&vs),
+            PsSourceView::Programmable(&ps),
+            &variant(0)
+        ),
+        ShaderBackend::Air
+    );
+}
+
+#[test]
+fn pair_backend_msl_when_either_stage_is_ff() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let programs = programs();
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    let (fixed_vertex, fixed_pixel) = (fixed_vs(0), fixed_ps(false));
+    for (vs, ps) in [
+        (
+            VsSourceView::FixedFunction(&fixed_vertex),
+            PsSourceView::Programmable(&ps),
+        ),
+        (
+            VsSourceView::Programmable(&vs),
+            PsSourceView::FixedFunction(&fixed_pixel),
+        ),
+        (
+            VsSourceView::FixedFunction(&fixed_vertex),
+            PsSourceView::FixedFunction(&fixed_pixel),
+        ),
+    ] {
+        assert_eq!(
+            rule.pair_backend(&programs, vs, ps, &variant(0)),
+            ShaderBackend::Msl
+        );
+    }
+    assert!(
+        rule.vs_lowers.is_empty() && rule.ps_lowers.is_empty(),
+        "a fixed-function stage decides before any lowering"
+    );
+}
+
+#[test]
+fn pair_backend_msl_when_a_program_failed() {
+    let programs = programs();
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    for failed in [vs.vs_id, ps.ps_id] {
+        let mut rule = PairRule::new(ShaderBackend::Air);
+        assert!(rule.fail(failed));
+        assert!(!rule.fail(failed), "a program fails once");
+        assert_eq!(
+            rule.pair_backend(
+                &programs,
+                VsSourceView::Programmable(&vs),
+                PsSourceView::Programmable(&ps),
+                &variant(0)
+            ),
+            ShaderBackend::Msl
+        );
+    }
+}
+
+#[test]
+fn pair_backend_msl_when_a_lowering_refuses() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let (vs, ps) = (programmable_vs(1), programmable_ps(3));
+    assert_eq!(
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::Programmable(&vs),
+            PsSourceView::Programmable(&ps),
+            &variant(0)
+        ),
+        ShaderBackend::Msl
+    );
+    assert_eq!(rule.ps_lowers.get(&(ps.ps_id, variant(0))), Some(&false));
+}
+
+#[test]
+fn air_lowering_is_memoized_per_stage_key() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let programs = programs();
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    let backend = |rule: &mut PairRule, variant: VariantKey| {
+        rule.pair_backend(
+            &programs,
+            VsSourceView::Programmable(&vs),
+            PsSourceView::Programmable(&ps),
+            &variant,
+        )
+    };
+    assert_eq!(backend(&mut rule, variant(0)), ShaderBackend::Air);
+    assert_eq!(backend(&mut rule, variant(0)), ShaderBackend::Air);
+    assert_eq!((rule.vs_lowers.len(), rule.ps_lowers.len()), (1, 1));
+    assert_eq!(backend(&mut rule, variant(4)), ShaderBackend::Air);
+    assert_eq!(
+        (rule.vs_lowers.len(), rule.ps_lowers.len()),
+        (1, 2),
+        "a new PS variant lowers once more, the VS key does not"
+    );
+    // The memo answers instead of lowering again.
+    rule.ps_lowers.insert((ps.ps_id, variant(0)), false);
+    assert_eq!(backend(&mut rule, variant(0)), ShaderBackend::Msl);
+}
+
+#[test]
+fn memo_keys_keep_backends_apart() {
+    let mut libraries = StageLibraries::default();
+    let vs = programmable_vs(1);
+    let ps = programmable_ps(2);
+    let (vs_view, ps_view) = (
+        VsSourceView::Programmable(&vs),
+        PsSourceView::Programmable(&ps),
+    );
+    built_pair(&mut libraries, &vs, &ps);
+    let lookup = |libraries: &mut StageLibraries, backend| {
+        libraries
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), backend)
+            .map(raw_pair)
+    };
+    assert_eq!(lookup(&mut libraries, ShaderBackend::Msl), Some((10, 20)));
+    assert_eq!(
+        lookup(&mut libraries, ShaderBackend::Air),
+        None,
+        "the memo of an MSL pair does not answer an AIR one"
+    );
+    libraries.record_vs(vs_view, ShaderBackend::Air, Some(handles(30)));
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Air, Some(handles(40)));
+    for (backend, expected) in [
+        (ShaderBackend::Air, (30, 40)),
+        (ShaderBackend::Msl, (10, 20)),
+        (ShaderBackend::Air, (30, 40)),
+    ] {
+        assert_eq!(lookup(&mut libraries, backend), Some(expected));
+    }
+}
+
+#[test]
+fn an_air_failure_leaves_the_msl_index_unknown() {
+    let mut libraries = StageLibraries::default();
+    let vs = programmable_vs(1);
+    let ps = programmable_ps(2);
+    let (vs_view, ps_view) = (
+        VsSourceView::Programmable(&vs),
+        PsSourceView::Programmable(&ps),
+    );
+    libraries.record_vs(vs_view, ShaderBackend::Air, None);
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Air, None);
+    assert!(matches!(
+        libraries.lookup_vs(vs_view, ShaderBackend::Air),
+        Some(None)
+    ));
+    assert!(libraries.lookup_vs(vs_view, ShaderBackend::Msl).is_none());
+    assert!(matches!(
+        libraries.lookup_ps(ps_view, variant(0), ShaderBackend::Air),
+        Some(None)
+    ));
+    assert!(
+        libraries
+            .lookup_ps(ps_view, variant(0), ShaderBackend::Msl)
+            .is_none()
     );
 }

@@ -76,6 +76,8 @@ impl EncoderService {
             context.device_handle,
             config.shader_cache_enable,
             cache_path.clone(),
+            config.shader_backend,
+            crate::key::translator_key(),
         );
         let startup = EncoderStartup { context, clocks };
         let service = Self::finish_startup(calibration, prewarm, receiver, |receiver| {

@@ -20,6 +20,7 @@ pub use shader_source::{
 
 pub use crate::shader_key::{ps_source_disk_key_programmable, vs_source_disk_key_programmable};
 use crate::{
+    config::ShaderBackend,
     depth_stencil_state::DepthStencilSnapshot,
     dxso::{FfPsKey, FfVsKey, TextureType, VariantKey, VsSamplerKinds},
     ids::{BufferId, ProgramId},
@@ -899,13 +900,15 @@ pub fn ps_source_disk_key_ff(ff: &FfPsKey, variant: VariantKey) -> u64 {
 /// Passed as a unit to the gated diagnostic / telemetry consumers
 /// (`maybe_log_pass_shader`, `maybe_emit_draw_trace`, `bump_pair_stats`) so
 /// each builds its `VsKey`/`PsKey` / `PairShaderId` internally only when its
-/// gate is open — never on the hot path. `Copy` (two references + a small
-/// `VariantKey`).
+/// gate is open — never on the hot path. `Copy` (two references, a small
+/// `VariantKey` and the backend).
 #[derive(Clone, Copy)]
 pub struct ShaderRef<'a> {
     pub vs: VsSourceView<'a>,
     pub ps: PsSourceView<'a>,
     pub variant: VariantKey,
+    /// The backend both stages are built with, decided once per draw (ruling C3b-2).
+    pub backend: ShaderBackend,
 }
 
 /// Immutable slice token into the current frame or encoder scratch arena.

@@ -15,15 +15,24 @@
 //! as well, so the memo never answers with handles the index no longer
 //! holds. It keeps built handles only: an unknown key or a recorded failure
 //! goes to the index on every draw, as it did before the memo.
+//!
+//! Under `shader.backend=air` a programmable stage has two libraries per key,
+//! one per backend ([`PairRule`] picks the pair's), so the programmable keys and
+//! the memo carry the backend; fixed-function stages are always MSL.
 
+use std::sync::Arc;
+
+use airconv_ir::dxso::{lower, spec::VsSpec};
+use log::debug;
 use mtld3d_core::{
     build_index::BuildIndex,
+    config::ShaderBackend,
     draw_data::{FixedPsSource, FixedVsSource, ProgrammablePsSource, ProgrammableVsSource},
-    dxso::{FfPsKey, FfVsKey, VariantKey, VsSamplerKinds},
+    dxso::{DxsoProgram, FfPsKey, FfVsKey, VariantKey, VsSamplerKinds},
     ids::ProgramId,
 };
 use mtld3d_shared::MetalHandle;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     draw::{PsSourceView, VsSourceView},
@@ -48,11 +57,14 @@ use crate::{
 #[derive(Default)]
 pub struct StageLibraries {
     ff_vs: BuildIndex<FfVsKey, StageLibHandles>,
-    prog_vs: BuildIndex<(ProgramId, u16, u8, VsSamplerKinds), StageLibHandles>,
+    prog_vs: BuildIndex<ProgrammableVsKey, StageLibHandles>,
     ff_ps: FxHashMap<FfPsKey, BuildIndex<VariantKey, StageLibHandles>>,
-    prog_ps: BuildIndex<(ProgramId, VariantKey), StageLibHandles>,
+    prog_ps: BuildIndex<(ProgramId, VariantKey, ShaderBackend), StageLibHandles>,
     memo: LibraryMemo,
 }
+
+/// A programmable VS library's index key: program, provided inputs, clip planes, samplers, backend.
+pub type ProgrammableVsKey = (ProgramId, u16, u8, VsSamplerKinds, ShaderBackend);
 
 impl StageLibraries {
     /// Both stages' built handles, or `None` when either stage is unknown or failed.
@@ -64,7 +76,8 @@ impl StageLibraries {
     /// `vs_snapshot` is the snapshot's own VS record, whose address
     /// identifies the source in the memo. `vs` is that record, or a copy of
     /// it the draw keyed for the vertex LOD table, which lives wherever the
-    /// draw put it; see [`vs_memo_identity`].
+    /// draw put it; see [`vs_memo_identity`]. `backend` is the pair's, and a
+    /// memo slot answers only for the backend it was filled for.
     #[inline]
     pub fn lookup_ready(
         &mut self,
@@ -72,20 +85,21 @@ impl StageLibraries {
         vs_snapshot: VsSourceView<'_>,
         ps: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
     ) -> Option<(StageLibHandles, StageLibHandles)> {
-        let vs_record = vs_memo_identity(vs, vs_snapshot);
+        let vs_record = vs_memo_identity(vs, vs_snapshot) | backend_tag(backend);
         let vs_handles = if self.memo.vs_record == vs_record {
-            self.debug_assert_memo_vs(vs);
+            self.debug_assert_memo_vs(vs, backend);
             self.memo.vs
         } else {
-            self.memo_vs(vs, vs_record)?
+            self.memo_vs(vs, backend, vs_record)?
         };
-        let ps_record = ps_record(ps);
+        let ps_record = ps_record(ps) | backend_tag(backend);
         let ps_handles = if self.memo.holds_ps(ps_record, &variant) {
-            self.debug_assert_memo_ps(ps, variant);
+            self.debug_assert_memo_ps(ps, variant, backend);
             self.memo.ps
         } else {
-            self.memo_ps(ps, variant, ps_record)?
+            self.memo_ps(ps, variant, backend, ps_record)?
         };
         Some((vs_handles, ps_handles))
     }
@@ -95,12 +109,16 @@ impl StageLibraries {
     /// The borrowed outcome is one pointer: unknown, recorded failure, or
     /// ready handles.
     #[inline]
-    pub fn lookup_vs(&self, source: VsSourceView<'_>) -> Option<&Option<StageLibHandles>> {
+    pub fn lookup_vs(
+        &self,
+        source: VsSourceView<'_>,
+        backend: ShaderBackend,
+    ) -> Option<&Option<StageLibHandles>> {
         match source {
             VsSourceView::FixedFunction(FixedVsSource { key, .. }) => self.ff_vs.lookup_entry(key),
-            VsSourceView::Programmable(value) => {
-                self.prog_vs.lookup_entry(&programmable_vs_key(value))
-            }
+            VsSourceView::Programmable(value) => self
+                .prog_vs
+                .lookup_entry(&programmable_vs_key(value, backend)),
         }
     }
 
@@ -113,6 +131,7 @@ impl StageLibraries {
         &self,
         source: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
     ) -> Option<&Option<StageLibHandles>> {
         match source {
             PsSourceView::FixedFunction(FixedPsSource { key, .. }) => self
@@ -120,19 +139,24 @@ impl StageLibraries {
                 .get(key)
                 .and_then(|variants| variants.lookup_entry(&variant)),
             PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
-                self.prog_ps.lookup_entry(&(*ps_id, variant))
+                self.prog_ps.lookup_entry(&(*ps_id, variant, backend))
             }
         }
     }
 
     /// Record how building the VS library of a draw's source ended, `None` being a failure.
-    pub fn record_vs(&mut self, source: VsSourceView<'_>, outcome: Option<StageLibHandles>) {
+    pub fn record_vs(
+        &mut self,
+        source: VsSourceView<'_>,
+        backend: ShaderBackend,
+        outcome: Option<StageLibHandles>,
+    ) {
         match source {
             VsSourceView::FixedFunction(FixedVsSource { key, .. }) => {
                 self.record_ff_vs(key.clone(), outcome);
             }
             VsSourceView::Programmable(value) => {
-                self.record_programmable_vs(programmable_vs_key(value), outcome);
+                self.record_programmable_vs(programmable_vs_key(value, backend), outcome);
             }
         }
     }
@@ -142,6 +166,7 @@ impl StageLibraries {
         &mut self,
         source: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
         outcome: Option<StageLibHandles>,
     ) {
         match source {
@@ -149,7 +174,7 @@ impl StageLibraries {
                 self.record_ff_ps(key.clone(), variant, outcome);
             }
             PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
-                self.record_programmable_ps(*ps_id, variant, outcome);
+                self.record_programmable_ps(*ps_id, variant, backend, outcome);
             }
         }
     }
@@ -160,10 +185,10 @@ impl StageLibraries {
         self.ff_vs.record(key, outcome);
     }
 
-    /// Record a programmable VS build outcome under its program, inputs, clip planes and samplers.
+    /// Record a programmable VS build outcome under its [`ProgrammableVsKey`].
     pub fn record_programmable_vs(
         &mut self,
-        key: (ProgramId, u16, u8, VsSamplerKinds),
+        key: ProgrammableVsKey,
         outcome: Option<StageLibHandles>,
     ) {
         self.memo.forget();
@@ -181,15 +206,16 @@ impl StageLibraries {
         self.ff_ps.entry(key).or_default().record(variant, outcome);
     }
 
-    /// Record a programmable PS build outcome under its program and variant.
+    /// Record a programmable PS build outcome under its program, variant and backend.
     pub fn record_programmable_ps(
         &mut self,
         ps_id: ProgramId,
         variant: VariantKey,
+        backend: ShaderBackend,
         outcome: Option<StageLibHandles>,
     ) {
         self.memo.forget();
-        self.prog_ps.record((ps_id, variant), outcome);
+        self.prog_ps.record((ps_id, variant, backend), outcome);
     }
 
     /// Forget the failed keys so each is built once more; built libraries stay.
@@ -227,8 +253,13 @@ impl StageLibraries {
     }
 
     /// Look up a VS source whose record the memo does not hold, and memoise it when built.
-    fn memo_vs(&mut self, vs: VsSourceView<'_>, record: usize) -> Option<StageLibHandles> {
-        let handles = (*self.lookup_vs(vs)?)?;
+    fn memo_vs(
+        &mut self,
+        vs: VsSourceView<'_>,
+        backend: ShaderBackend,
+        record: usize,
+    ) -> Option<StageLibHandles> {
+        let handles = (*self.lookup_vs(vs, backend)?)?;
         self.memo.vs_record = record;
         self.memo.vs = handles;
         Some(handles)
@@ -239,9 +270,10 @@ impl StageLibraries {
         &mut self,
         ps: PsSourceView<'_>,
         variant: VariantKey,
+        backend: ShaderBackend,
         record: usize,
     ) -> Option<StageLibHandles> {
-        let handles = (*self.lookup_ps(ps, variant)?)?;
+        let handles = (*self.lookup_ps(ps, variant, backend)?)?;
         self.memo.ps_record = record;
         self.memo.ps_variant = variant;
         self.memo.ps = handles;
@@ -250,18 +282,23 @@ impl StageLibraries {
 
     /// Check, in builds with debug assertions, that a memoised VS answer is the index's own.
     #[inline]
-    fn debug_assert_memo_vs(&self, vs: VsSourceView<'_>) {
+    fn debug_assert_memo_vs(&self, vs: VsSourceView<'_>, backend: ShaderBackend) {
         debug_assert!(
-            matches!(self.lookup_vs(vs), Some(Some(handles)) if same_handles(handles, &self.memo.vs)),
+            matches!(self.lookup_vs(vs, backend), Some(Some(handles)) if same_handles(handles, &self.memo.vs)),
             "the VS library memo answers what the index holds for its record"
         );
     }
 
     /// Check, in builds with debug assertions, that a memoised PS answer is the index's own.
     #[inline]
-    fn debug_assert_memo_ps(&self, ps: PsSourceView<'_>, variant: VariantKey) {
+    fn debug_assert_memo_ps(
+        &self,
+        ps: PsSourceView<'_>,
+        variant: VariantKey,
+        backend: ShaderBackend,
+    ) {
         debug_assert!(
-            matches!(self.lookup_ps(ps, variant), Some(Some(handles)) if same_handles(handles, &self.memo.ps)),
+            matches!(self.lookup_ps(ps, variant, backend), Some(Some(handles)) if same_handles(handles, &self.memo.ps)),
             "the PS library memo answers what the index holds for its record and variant"
         );
     }
@@ -344,6 +381,11 @@ fn ps_record(source: PsSourceView<'_>) -> usize {
     }
 }
 
+/// Bit 2 of a memo identity, set for an AIR library: the records are 8-aligned, so it is free.
+const fn backend_tag(backend: ShaderBackend) -> usize {
+    (backend as usize) << 2
+}
+
 /// The 22 bytes of a variant key as three words; equal words mean equal keys.
 ///
 /// Field order and widths follow the `repr(C)` layout, so the backend reads
@@ -386,14 +428,118 @@ fn variant_words(variant: &VariantKey) -> [u64; 3] {
     ]
 }
 
-/// The programmable VS index key: program, provided inputs, clip planes and sampler kinds.
-const fn programmable_vs_key(value: &ProgrammableVsSource) -> (ProgramId, u16, u8, VsSamplerKinds) {
+/// The programmable VS index key: program, provided inputs, clip planes, sampler kinds, backend.
+const fn programmable_vs_key(
+    value: &ProgrammableVsSource,
+    backend: ShaderBackend,
+) -> ProgrammableVsKey {
     (
         value.vs_id,
         value.provided_input_mask,
         value.clip_plane_count,
         value.sampler_kinds,
+        backend,
     )
+}
+
+/// The backend a draw's VS/PS pair is built with (rulings C3b-2, C3b-3).
+///
+/// Under `shader.backend=msl` every pair is MSL, decided on the first compare.
+/// Under `air` a pair is AIR when both stages are programmable, neither program
+/// has failed as AIR this session, and both lower through the translator's IR
+/// with the pair's own specialization; otherwise both stages are MSL, so an
+/// AIR stage never meets an MSL one. The lowering is a prefilter: a library or
+/// pipeline that still fails as AIR marks its programs failed ([`Self::fail`]),
+/// and their later pairs go MSL. Each stage key's lowering runs once.
+pub struct PairRule {
+    configured: ShaderBackend,
+    vs_lowers: FxHashMap<(ProgramId, u16, u8, VsSamplerKinds), bool>,
+    ps_lowers: FxHashMap<(ProgramId, VariantKey), bool>,
+    failed: FxHashSet<ProgramId>,
+}
+
+impl PairRule {
+    pub fn new(configured: ShaderBackend) -> Self {
+        Self {
+            configured,
+            vs_lowers: FxHashMap::default(),
+            ps_lowers: FxHashMap::default(),
+            failed: FxHashSet::default(),
+        }
+    }
+
+    /// The pair's backend; `programs` holds every registered program.
+    #[inline]
+    pub fn pair_backend(
+        &mut self,
+        programs: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
+        vs: VsSourceView<'_>,
+        ps: PsSourceView<'_>,
+        variant: &VariantKey,
+    ) -> ShaderBackend {
+        if self.configured == ShaderBackend::Msl {
+            return ShaderBackend::Msl;
+        }
+        self.air_pair_backend(programs, vs, ps, variant)
+    }
+
+    fn air_pair_backend(
+        &mut self,
+        programs: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
+        vs: VsSourceView<'_>,
+        ps: PsSourceView<'_>,
+        variant: &VariantKey,
+    ) -> ShaderBackend {
+        let (VsSourceView::Programmable(vs), PsSourceView::Programmable(ps)) = (vs, ps) else {
+            return ShaderBackend::Msl;
+        };
+        if self.failed.contains(&vs.vs_id) || self.failed.contains(&ps.ps_id) {
+            return ShaderBackend::Msl;
+        }
+        let vs_lowers = *self
+            .vs_lowers
+            .entry((
+                vs.vs_id,
+                vs.provided_input_mask,
+                vs.clip_plane_count,
+                vs.sampler_kinds,
+            ))
+            .or_insert_with(|| {
+                let spec = VsSpec {
+                    provided_input_mask: vs.provided_input_mask,
+                    clip_plane_count: vs.clip_plane_count,
+                    sampler_kinds: vs.sampler_kinds,
+                };
+                programs.get(&vs.vs_id).is_some_and(|program| {
+                    lower::vertex(program, &spec)
+                        .map_err(|e| debug!(target: crate::LOG_TARGET, "VS {:#x} stays MSL: {e:?}", vs.vs_id))
+                        .is_ok()
+                })
+            });
+        if !vs_lowers {
+            return ShaderBackend::Msl;
+        }
+        let ps_lowers = *self
+            .ps_lowers
+            .entry((ps.ps_id, *variant))
+            .or_insert_with(|| {
+                programs.get(&ps.ps_id).is_some_and(|program| {
+                    lower::pixel(program, variant)
+                        .map_err(|e| debug!(target: crate::LOG_TARGET, "PS {:#x} stays MSL: {e:?}", ps.ps_id))
+                        .is_ok()
+                })
+            });
+        if ps_lowers {
+            ShaderBackend::Air
+        } else {
+            ShaderBackend::Msl
+        }
+    }
+
+    /// Mark a program failed as AIR; whether it was not already.
+    pub fn fail(&mut self, program: ProgramId) -> bool {
+        self.failed.insert(program)
+    }
 }
 
 const fn same_handles(left: &StageLibHandles, right: &StageLibHandles) -> bool {

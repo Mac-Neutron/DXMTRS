@@ -5,6 +5,11 @@
 //! resulting device-local handles to the encoder over a dedicated one-shot
 //! completion channel. The encoder blocks on that channel before draining
 //! any `EncoderMessage`, so live miss-compiles cannot duplicate prewarm work.
+//!
+//! AIR records (ruling C3b-7) are built only under `shader.backend=air` in a
+//! build with a translator key; otherwise they and the recipes naming them stay
+//! in the file unread. One written by another translator build is regenerated
+//! from its retained DXSO and appended, so compaction keeps the fresh one.
 
 use std::{
     path::Path,
@@ -17,13 +22,15 @@ use std::{
 
 use log::{error, info};
 use mtld3d_core::{
+    config::ShaderBackend,
     perf::{
         PairShaderId,
         compilation::{Identity as CompileIdentity, Kind as CompileKind},
     },
     pipeline_state::{self, PipelineBuildInputs},
-    shader_cache::{self, CacheLoad, ShaderRecordRef},
+    shader_cache::{self, CacheEntry, CacheLoad, ShaderRecordRef},
     shader_compile_stats::{CompileBucket, Snapshot, format_summary},
+    shader_key::CachedKind,
     shader_prewarm::PrewarmHandle,
     startup_work,
 };
@@ -36,7 +43,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     LOG_TARGET,
-    encoder::{StageLibHandles, WarmCache, compile_stage_library},
+    encoder::{
+        StageLibHandles, WarmCache, compile_air_stage_library, compile_stage_library,
+        translate_stage,
+    },
     metal::handle::IntoRetained,
     mtl::objc2::rc::autoreleasepool,
 };
@@ -45,20 +55,47 @@ use crate::{
 ///
 /// Every device owns its libraries and pipelines. The worker's result reaches
 /// the encoder before frames, and an unavailable worker disables cache writes.
+/// `backend` is `shader.backend` and `translator` the build's translator key.
 pub fn spawn(
     device_handle: MetalHandle<MTLDeviceKind>,
     shader_cache: bool,
     cache_path: Option<std::path::PathBuf>,
+    backend: ShaderBackend,
+    translator: Option<[u8; 32]>,
 ) -> (PrewarmHandle, Receiver<Option<WarmCache>>) {
-    PrewarmHandle::spawn(move |stop| run(device_handle, stop, shader_cache, cache_path))
+    PrewarmHandle::spawn(move |stop| {
+        run(
+            device_handle,
+            stop,
+            shader_cache,
+            cache_path,
+            air_key(backend, translator),
+        )
+    })
+}
+
+/// The key AIR records are built under: the build's, under `shader.backend=air` only.
+const fn air_key(backend: ShaderBackend, translator: Option<[u8; 32]>) -> Option<[u8; 32]> {
+    match backend {
+        ShaderBackend::Air => translator,
+        ShaderBackend::Msl => None,
+    }
+}
+
+/// Whether prewarm leaves a record of `kind` unread: an AIR one with no key to build it under.
+const fn skipped(kind: CachedKind, air_key: Option<&[u8; 32]>) -> bool {
+    kind.is_air() && air_key.is_none()
 }
 
 /// The pre-warm body; `shader_cache` is the interface's `shaderCache.enable`.
+///
+/// `air_key` is [`air_key`]'s: `None` leaves AIR records and their recipes unread.
 fn run(
     device_handle: MetalHandle<MTLDeviceKind>,
     stop: &AtomicBool,
     shader_cache: bool,
     cache_path: Option<std::path::PathBuf>,
+    air_key: Option<[u8; 32]>,
 ) -> Option<WarmCache> {
     if !shader_cache {
         info!(
@@ -115,6 +152,9 @@ fn run(
         if stop.load(Ordering::Acquire) {
             break;
         }
+        if skipped(entry.kind, air_key.as_ref()) {
+            continue;
+        }
         match entry.refresh_msl() {
             Ok(true) => {
                 refreshed += 1;
@@ -144,15 +184,30 @@ fn run(
     // Regeneration and persistence keep disk order. Native calls share only the
     // device and immutable source; all admitted calls finish before PSO work.
     let compiled = startup_work::map(&ready_shaders, stop, |entry| {
-        compile_library(device_handle, entry)
+        compile_library(device_handle, entry, air_key.as_ref())
     });
+    let mut air_libraries = 0u32;
+    let mut regenerated_air = 0u32;
     for (index, result) in compiled {
         let entry = ready_shaders[index];
         let LibraryCompilation {
             handles,
             timings,
             elapsed_ns,
+            regenerated,
         } = result;
+        if let Some(regenerated) = regenerated {
+            regenerated_air += 1;
+            records.needs_compaction = true;
+            if let Err(error) = shader_cache::CacheWriter::open(&path)
+                .and_then(|writer| writer.append_shader(&regenerated))
+            {
+                mtld3d_shared::log_once_warn!(
+                    target: LOG_TARGET,
+                    "shader_cache: persisting regenerated AIR failed: {error}"
+                );
+            }
+        }
         compilation.shader_parts(&timings, handles.is_some(), 0, || {
             mtld3d_core::perf::compilation::Identity::Prewarm {
                 device: device_handle.raw(),
@@ -166,11 +221,15 @@ fn run(
         let idx = bucket_index(entry.kind.compile_bucket());
         counts[idx] += 1;
         duration_ns[idx] += elapsed_ns;
+        air_libraries += u32::from(entry.kind.is_air());
         libraries.insert(ShaderRecordRef::new(entry.kind, entry.key), handles);
     }
 
     if refreshed != 0 {
         info!(target: LOG_TARGET, "shader_cache: regenerated MSL for {refreshed} retained DXSO variants");
+    }
+    if regenerated_air != 0 {
+        info!(target: LOG_TARGET, "shader_cache: regenerated AIR for {regenerated_air} retained DXSO variants");
     }
     let total: u32 = counts.iter().sum();
     let cached = u32::try_from(libraries.len()).unwrap_or(u32::MAX);
@@ -186,6 +245,11 @@ fn run(
         for recipe in &records.pipelines {
             if stop.load(Ordering::Acquire) {
                 break;
+            }
+            if skipped(recipe.vs().kind(), air_key.as_ref())
+                || skipped(recipe.ps().kind(), air_key.as_ref())
+            {
+                continue;
             }
             let Some(vs) = libraries.get(&recipe.vs()) else {
                 mtld3d_shared::log_once_warn_by!(
@@ -271,7 +335,12 @@ fn run(
             counts,
             duration_ns,
         };
-        info!(target: LOG_TARGET, "{}", format_summary(&snap, "pre-warmed", cached));
+        let summary = format_summary(&snap, "pre-warmed", cached);
+        if air_key.is_some() {
+            info!(target: LOG_TARGET, "{summary} ({air_libraries} AIR)");
+        } else {
+            info!(target: LOG_TARGET, "{summary}");
+        }
     }
     info!(
         target: LOG_TARGET,
@@ -293,25 +362,45 @@ struct LibraryCompilation {
     handles: Option<StageLibHandles>,
     timings: mtld3d_shared::perf::ShaderTimings,
     elapsed_ns: u64,
+    /// An AIR record regenerated under the build's key, for the coordinator to append.
+    regenerated: Option<CacheEntry>,
 }
 
+/// Build one record's library; an AIR record of another key is translated again first.
 fn compile_library(
     device: MetalHandle<MTLDeviceKind>,
-    entry: &shader_cache::CacheEntry,
+    entry: &CacheEntry,
+    air_key: Option<&[u8; 32]>,
 ) -> LibraryCompilation {
     let entry_name = entry.kind.entry_name(entry.key);
     let started = Instant::now();
     let mut timings = mtld3d_shared::perf::ShaderTimings::new();
-    let handles = compile_stage_library(
-        device,
-        entry.msl().unwrap_or_default(),
-        &entry_name,
-        &mut timings,
-    );
+    let mut regenerated = None;
+    let handles = match (entry.msl(), entry.air(), air_key) {
+        (Some(msl), _, _) => compile_stage_library(device, msl, &entry_name, &mut timings),
+        (None, Some((translator, metallib)), Some(key)) if translator == key => {
+            compile_air_stage_library(device, metallib, &entry_name)
+        }
+        (None, Some(_), Some(key)) => entry.source().and_then(|source| {
+            let metallib = translate_stage(source, &entry_name)?;
+            let handles = compile_air_stage_library(device, &metallib, &entry_name)?;
+            regenerated = Some(CacheEntry::new_air(
+                entry.kind,
+                entry.key,
+                *key,
+                metallib,
+                source.clone(),
+            ));
+            Some(handles)
+        }),
+        // `run` admits no AIR record without a key, and a record is MSL or AIR.
+        _ => None,
+    };
     LibraryCompilation {
         handles,
         timings,
         elapsed_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+        regenerated,
     }
 }
 
@@ -439,3 +528,6 @@ const fn bucket_index(bucket: CompileBucket) -> usize {
         CompileBucket::Sm3 => 3,
     }
 }
+
+#[cfg(test)]
+mod tests;
