@@ -687,6 +687,23 @@ fn pair_backend_msl_when_a_lowering_refuses() {
 }
 
 #[test]
+fn a_refusing_program_is_logged_once_across_stage_keys() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let (vs, ps) = (programmable_vs(1), programmable_ps(3));
+    for v in [0, 4] {
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::Programmable(&vs),
+            PsSourceView::Programmable(&ps),
+            &variant(v),
+        );
+    }
+    assert_eq!(rule.ps_lowers.len(), 2, "two stage keys lowered");
+    assert_eq!(rule.refused.len(), 1);
+    assert!(!log_refusal(&mut rule.refused, "PS", ps.ps_id, &"again"));
+}
+
+#[test]
 fn air_lowering_is_memoized_per_stage_key() {
     let mut rule = PairRule::new(ShaderBackend::Air);
     let programs = programs();

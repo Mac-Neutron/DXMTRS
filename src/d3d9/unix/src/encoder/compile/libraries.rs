@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use airconv_ir::dxso::{lower, spec::VsSpec};
-use log::debug;
+use log::info;
 use mtld3d_core::{
     build_index::BuildIndex,
     config::ShaderBackend,
@@ -456,6 +456,7 @@ pub struct PairRule {
     vs_lowers: FxHashMap<(ProgramId, u16, u8, VsSamplerKinds), bool>,
     ps_lowers: FxHashMap<(ProgramId, VariantKey), bool>,
     failed: FxHashSet<ProgramId>,
+    refused: FxHashSet<ProgramId>,
 }
 
 impl PairRule {
@@ -465,6 +466,7 @@ impl PairRule {
             vs_lowers: FxHashMap::default(),
             ps_lowers: FxHashMap::default(),
             failed: FxHashSet::default(),
+            refused: FxHashSet::default(),
         }
     }
 
@@ -512,7 +514,7 @@ impl PairRule {
                 };
                 programs.get(&vs.vs_id).is_some_and(|program| {
                     lower::vertex(program, &spec)
-                        .map_err(|e| debug!(target: crate::LOG_TARGET, "VS {:#x} stays MSL: {e:?}", vs.vs_id))
+                        .map_err(|e| log_refusal(&mut self.refused, "VS", vs.vs_id, &e))
                         .is_ok()
                 })
             });
@@ -525,7 +527,7 @@ impl PairRule {
             .or_insert_with(|| {
                 programs.get(&ps.ps_id).is_some_and(|program| {
                     lower::pixel(program, variant)
-                        .map_err(|e| debug!(target: crate::LOG_TARGET, "PS {:#x} stays MSL: {e:?}", ps.ps_id))
+                        .map_err(|e| log_refusal(&mut self.refused, "PS", ps.ps_id, &e))
                         .is_ok()
                 })
             });
@@ -540,6 +542,20 @@ impl PairRule {
     pub fn fail(&mut self, program: ProgramId) -> bool {
         self.failed.insert(program)
     }
+}
+
+/// Log a program's first lowering refusal (once per program, not per stage key); whether it was.
+fn log_refusal(
+    refused: &mut FxHashSet<ProgramId>,
+    stage: &str,
+    program: ProgramId,
+    error: &dyn std::fmt::Debug,
+) -> bool {
+    let first = refused.insert(program);
+    if first {
+        info!(target: crate::LOG_TARGET, "{stage} {program:#x} stays MSL: {error:?}");
+    }
+    first
 }
 
 const fn same_handles(left: &StageLibHandles, right: &StageLibHandles) -> bool {

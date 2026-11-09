@@ -327,6 +327,8 @@ struct PipelineJob {
     device: MetalHandle<MTLDeviceKind>,
     persist: bool,
     cache_path: Option<std::path::PathBuf>,
+    /// The build's translator key; an AIR pair's recipe is written only under one (ruling C3b-6).
+    translator: Option<[u8; 32]>,
 }
 
 /// The shader identities a pipeline build records, taken from the draw's two sources.
@@ -621,6 +623,14 @@ fn build_air_library(job: LibraryJob) -> LibraryOutcome {
     }
 }
 
+/// An AIR pair's recipe names AIR records, which exist only under a build key.
+const fn recipe_persists(
+    air_programs: Option<(ProgramId, ProgramId)>,
+    translator: Option<[u8; 32]>,
+) -> bool {
+    air_programs.is_none() || translator.is_some()
+}
+
 fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
     let PipelineJob {
         snapshot,
@@ -636,7 +646,9 @@ fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
         device,
         persist,
         cache_path,
+        translator,
     } = job;
+    let persist = persist && recipe_persists(air_programs, translator);
     let mut total_ns = 0;
     let mut persist_ns = 0;
     let mut persist_error = None;
@@ -1185,6 +1197,7 @@ impl FrameEncoder {
             device: self.device_handle,
             persist: self.cache_persists(),
             cache_path: self.cache_path.clone(),
+            translator: self.translator_key,
         };
         let ticket = self.enqueue(CompileJob::Pipeline(Box::new(job)));
         self.pending_pipelines.insert(key, ticket);

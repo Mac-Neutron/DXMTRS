@@ -205,6 +205,7 @@ fn pipeline_job(sibling_of: Option<u64>) -> QueuedJob {
             device: MetalHandle::NULL,
             persist: false,
             cache_path: None,
+            translator: None,
         })),
         enqueued_tsc: 0,
     }
@@ -397,6 +398,18 @@ fn failed_air_pipeline_demotes_the_pair() {
         "the failure lands under the AIR key only"
     );
     enc.shutdown_cleanup();
+}
+
+/// An AIR pair's recipe is written only when the job has the build's key; other pairs' always.
+#[test]
+fn an_air_recipe_is_not_written_without_a_build_key() {
+    let air = Some((
+        ProgramId::from_shader_reply(1),
+        ProgramId::from_shader_reply(2),
+    ));
+    assert!(!recipe_persists(air, None));
+    assert!(recipe_persists(air, Some([7u8; 32])));
+    assert!(recipe_persists(None, None));
 }
 
 /// An AIR library is built and its record written only when the job has the build's key.
