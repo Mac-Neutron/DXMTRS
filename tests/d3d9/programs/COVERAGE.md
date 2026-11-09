@@ -17,7 +17,9 @@ threads of that one Wine process, each test with its own device and window;
 `exit_code.rs`, `unload.rs`, `unload_after_device.rs`, `snmalloc_drift.rs`
 and `thread_exit.rs` beside it are their own binaries because each needs a
 process of its own. On the arm64 Wine the x86_64 binaries can run once more
-against the x86_64 DLLs, emulated, in a tree and prefix of their own. The runner is
+against the x86_64 DLLs, emulated, in a tree and prefix of their own. `tools/e2e-link.sh` builds and links
+them for x86_64 on the Mac with llvm-mingw's `lld-link` (`BUILD_DIR=… tools/e2e-link.sh --offline`; the
+programs land in `$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/debug/deps/`). The runner is
 `tests/d3d9/runner`, and the host-native `mtld3d-core`/`mtld3d-shared` unit tests
 run in `tools/rust-check.sh`. Every interface the harness creates must have brought `mtld3d.dll` into
 the process, so a leg whose processes are given another `d3d9.dll` (the
