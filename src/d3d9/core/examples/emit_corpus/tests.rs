@@ -30,10 +30,15 @@ fn written_cache_loads_with_every_record() {
     let path = temp("written");
     write_synthetic_cache(&path, &corpus).expect("write");
     let records = loaded(&path);
-    // The timed set plus the `ps_1_x` texture-address families and modifier programs only the cache file carries.
+    // The timed set plus what only the cache file carries: the `ps_1_x` texture-address families, the modifier
+    // programs, the `oDepth` writers and the vertex shader that feeds the depth families.
     assert_eq!(
         records.shaders.len(),
-        corpus.shaders.len() + texture_family_ps().len() + modifier_programs().len()
+        corpus.shaders.len()
+            + texture_family_ps().len()
+            + modifier_programs().len()
+            + depth_programs().len()
+            + 1
     );
     assert!(records.shaders.iter().all(|e| e.source().is_some()));
     assert!(!records.pipelines.is_empty());
