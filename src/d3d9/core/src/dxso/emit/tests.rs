@@ -6145,3 +6145,79 @@ fn sm3_packed_input_lanes_follow_the_point_sprite_substitution() {
     assert!(substituted < assembled, "{msl}");
     metal_compile_or_fail(&msl);
 }
+
+// ── Subroutine expansion bound (C3b-16) ──
+
+const OP_NOP: u16 = 0;
+
+/// A `vs_2_0` whose main calls label 0, then one body per label.
+///
+/// Each body is a list of calls (label ids) then `nops` nops.
+fn call_program(bodies: &[(&[u16], usize)]) -> Vec<u32> {
+    let call = |l: u16| {
+        [
+            opcode_token(OP_CALL, 1),
+            src_token(TYPE_LABEL, l, SWIZ_IDENTITY, 0),
+        ]
+    };
+    let mut bc = vec![VS_HEADER];
+    bc.extend(call(0));
+    bc.push(opcode_token(OP_RET, 0));
+    for (label, (calls, nops)) in (0u16..).zip(bodies) {
+        bc.extend([
+            opcode_token(OP_LABEL, 1),
+            src_token(TYPE_LABEL, label, SWIZ_IDENTITY, 0),
+        ]);
+        bc.extend(calls.iter().flat_map(|&l| call(l)));
+        bc.extend(std::iter::repeat_n(opcode_token(OP_NOP, 0), *nops));
+        bc.push(opcode_token(OP_RET, 0));
+    }
+    bc.push(END_TOKEN);
+    bc
+}
+
+/// Emits on a thread so an unbounded expansion fails the test instead of hanging the suite.
+fn emit_call_program(bc: &[u32]) -> Result<String, String> {
+    let prog = parse(bc).expect("call program parses");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // The thread is left running on a timeout: it is the unbounded expansion itself.
+    std::thread::spawn(move || {
+        let _ = tx.send(emit_vs_programmable(&prog).map_err(|e| format!("{e:?}")));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the emit finished within 5 s")
+}
+
+fn chain(labels: u16) -> Vec<u32> {
+    let next: Vec<[u16; 1]> = (1..labels).map(|l| [l]).collect();
+    let mut bodies: Vec<(&[u16], usize)> = next.iter().map(|n| (&n[..], 0)).collect();
+    bodies.push((&[], 1));
+    call_program(&bodies)
+}
+
+#[test]
+fn call_depth_33_is_refused() {
+    let err = emit_call_program(&chain(33)).expect_err("33 nested calls are refused");
+    assert!(err.contains("deeper than 32"), "{err}");
+}
+
+#[test]
+fn call_depth_32_still_emits() {
+    emit_call_program(&chain(32)).expect("32 nested calls emit");
+}
+
+#[test]
+fn a_doubling_call_chain_is_refused() {
+    let next: Vec<[u16; 2]> = (1..32).map(|l| [l, l]).collect();
+    let mut bodies: Vec<(&[u16], usize)> = next.iter().map(|n| (&n[..], 0)).collect();
+    bodies.push((&[], 1));
+    let err = emit_call_program(&call_program(&bodies)).expect_err("2^31 instructions are refused");
+    assert!(err.contains("past 1048576"), "{err}");
+}
+
+#[test]
+fn five_calls_of_a_16k_instruction_subroutine_still_emit() {
+    // 81920 expanded instructions: past AIR's 65536, under the cap.
+    let bodies: [(&[u16], usize); 2] = [(&[1, 1, 1, 1, 1], 0), (&[], 16384)];
+    emit_call_program(&call_program(&bodies)).expect("81920 expanded instructions emit");
+}

@@ -19,7 +19,7 @@
 //!   pipeline-creation time.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     fmt::Write,
 };
@@ -83,6 +83,15 @@ pub(super) fn bump_lum_exprs(stage: u16) -> (String, String) {
     let i = stage * 2 + 1;
     (format!("bump_env[{i}].x"), format!("bump_env[{i}].y"))
 }
+
+/// Deepest nest of subroutine calls the inliner expands (AIR's `MAX_CALL_DEPTH`).
+const MAX_CALL_DEPTH: usize = 32;
+
+/// Most instructions one shader may expand to.
+///
+/// Not AIR's 65536: that refuses legal programs this emitter emits today (a 16k-instruction
+/// subroutine called from five branches); 2^20 is 16x it.
+const MAX_EXPANDED_INSTRUCTIONS: u32 = 1 << 20;
 
 #[derive(Debug)]
 pub enum EmitError {
@@ -1405,6 +1414,11 @@ struct EmitContext<'a> {
     /// call (label already on the stack) emits a once-per-label warn and skips
     /// the expansion rather than blowing the host stack.
     expansion_stack: RefCell<Vec<u32>>,
+    /// Instructions translated so far, against `MAX_EXPANDED_INSTRUCTIONS`.
+    ///
+    /// The main body and every expanded subroutine count, `call` and `nop`
+    /// included, as the AIR lowering counts them.
+    expanded: Cell<u32>,
     /// SM3 VS only: maps `(reg.kind, reg.index)` to the register's write target.
     ///
     /// Populated from the `dcl_*` declarations (see `link::VsOutputs`): an
@@ -1507,6 +1521,7 @@ impl<'a> EmitContext<'a> {
             loop_al_count: RefCell::new(0),
             subroutines: init.subroutines,
             expansion_stack: RefCell::new(Vec::new()),
+            expanded: Cell::new(0),
         }
     }
 
@@ -1532,6 +1547,7 @@ impl<'a> EmitContext<'a> {
             loop_al_count: RefCell::new(0),
             subroutines: init.subroutines,
             expansion_stack: RefCell::new(Vec::new()),
+            expanded: Cell::new(0),
         }
     }
 
@@ -1627,6 +1643,13 @@ fn translate_instruction(
     inst: &Instruction,
     ctx: &EmitContext,
 ) -> Result<(), EmitError> {
+    let expanded = ctx.expanded.get() + 1;
+    if expanded > MAX_EXPANDED_INSTRUCTIONS {
+        return Err(EmitError::UnsupportedInstruction(format!(
+            "a program that expands past {MAX_EXPANDED_INSTRUCTIONS} instructions"
+        )));
+    }
+    ctx.expanded.set(expanded);
     // Sampler sources carry only a register index (consumed directly by the
     // opcode handler — e.g. `TexLd` uses `inst.srcs[1].reg.index`), never a
     // cooked data value. Skip the generic load for them so `register_read_expr`
@@ -2372,6 +2395,9 @@ fn translate_instruction(
 
 /// Inline-expand a subroutine body at a `Call` / `CallNz` site.
 ///
+/// Bounded: nests deeper than `MAX_CALL_DEPTH` or a shader expanding past
+/// `MAX_EXPANDED_INSTRUCTIONS` fail the emit.
+///
 /// Cycle detection: if the label is already on the expansion stack,
 /// warn once and skip. Missing labels (call to an undefined id)
 /// also warn-and-skip rather than failing the emit — best-effort
@@ -2404,6 +2430,11 @@ fn expand_subroutine(out: &mut String, label: u32, ctx: &EmitContext) -> Result<
             );
             return Ok(());
         }
+    }
+    if ctx.expansion_stack.borrow().len() >= MAX_CALL_DEPTH {
+        return Err(EmitError::UnsupportedInstruction(format!(
+            "calls nested deeper than {MAX_CALL_DEPTH}"
+        )));
     }
     ctx.expansion_stack.borrow_mut().push(label);
     for sub_inst in body {
