@@ -45,7 +45,7 @@ use mtld3d_shared::{
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBinding, MTLBindingType, MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer,
+    MTLBinding, MTLBindingType, MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLCommandBuffer,
     MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCompareFunction,
     MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLFunction, MTLIndexType, MTLLanguageVersion, MTLLibrary,
@@ -957,7 +957,7 @@ fn build_pipeline(
             }
             let ds = MTLDepthStencilDescriptor::new();
             ds.setDepthCompareFunction(MTLCompareFunction::Always);
-            ds.setDepthWriteEnabled(false);
+            ds.setDepthWriteEnabled(true);
             depth_state = gpu.device.newDepthStencilStateWithDescriptor(&ds);
         }
     }
@@ -1044,12 +1044,7 @@ const fn ps_kind(v: &VariantKey, slot: u32) -> TexKind {
 /// Renders the recipe through `built`.
 ///
 /// The raw bytes of each color attachment (the probe: one RGBA32F).
-fn render(
-    gpu: &mut Gpu,
-    r: &Recipe<'_>,
-    built: &Built,
-    probe: bool,
-) -> Result<Vec<(PixelFormat, Vec<u8>)>, String> {
+fn render(gpu: &mut Gpu, r: &Recipe<'_>, built: &Built, probe: bool) -> Result<Rendered, String> {
     let formats: Vec<PixelFormat> = if probe {
         vec![PixelFormat::Rgba32Float]
     } else {
@@ -1063,6 +1058,7 @@ fn render(
     for (i, t) in targets.iter().enumerate() {
         attach_color(&pass, i, t);
     }
+    let mut depth_texture = None;
     if !probe && r.has_depth() {
         let desc = MTLTextureDescriptor::new();
         desc.setTextureType(MTLTextureType::Type2D);
@@ -1085,10 +1081,11 @@ fn render(
             .device
             .newTextureWithDescriptor(&desc)
             .ok_or("no depth target")?;
+        depth_texture = Some(depth.clone());
         let attachment = pass.depthAttachment();
         attachment.setTexture(Some(&depth));
         attachment.setLoadAction(MTLLoadAction::Clear);
-        attachment.setStoreAction(MTLStoreAction::DontCare);
+        attachment.setStoreAction(MTLStoreAction::Store);
         attachment.setClearDepth(1.0);
         if r.has_stencil() {
             let stencil = pass.stencilAttachment();
@@ -1180,16 +1177,67 @@ fn render(
         }
     }
     encoder.endEncoding();
+    let depth_readback = match &depth_texture {
+        Some(depth) => Some(blit_depth(gpu, &cmd, depth, r.has_stencil())?),
+        None => None,
+    };
     cmd.commit();
     cmd.waitUntilCompleted();
     if cmd.status() != MTLCommandBufferStatus::Completed {
         return Err(format!("the draw failed: {:?}", cmd.error()));
     }
-    formats
+    let colors = formats
         .iter()
         .zip(&targets)
         .map(|(f, t)| Ok((*f, read_target(t, *f)?)))
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    let depth = depth_readback.map(|buf| {
+        let bytes = SIDE * SIDE * 4;
+        // SAFETY: the buffer holds `bytes` bytes, shared storage, written by the completed blit.
+        unsafe { std::slice::from_raw_parts(buf.contents().as_ptr().cast::<u8>(), bytes) }.to_vec()
+    });
+    Ok(Rendered { colors, depth })
+}
+
+/// What a render read back.
+///
+/// Each color attachment's bytes and, with a depth attachment, its depth plane as `SIDE * SIDE`
+/// little-endian `f32`.
+struct Rendered {
+    colors: Vec<(PixelFormat, Vec<u8>)>,
+    depth: Option<Vec<u8>>,
+}
+
+/// Encodes the depth plane's blit into a shared buffer.
+///
+/// The plane of `depth` (`Depth32Float`, or `Depth32Float_Stencil8` read through
+/// `DepthFromDepthStencil`); the buffer is returned for reading after `cmd` ran.
+fn blit_depth(
+    gpu: &Gpu,
+    cmd: &ProtocolObject<dyn MTLCommandBuffer>,
+    depth: &Tex,
+    stencil: bool,
+) -> Result<Buf, String> {
+    let bytes = SIDE * SIDE * 4;
+    let out = buffer(&gpu.device, &vec![0_u8; bytes])?;
+    let blit = cmd.blitCommandEncoder().ok_or("no blit encoder")?;
+    // SAFETY: the texture is `SIDE` x `SIDE`, the buffer holds `SIDE * SIDE` 4-byte texels.
+    unsafe {
+        blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+            depth,
+            0,
+            0,
+            MTLOrigin { x: 0, y: 0, z: 0 },
+            MTLSize { width: SIDE, height: SIDE, depth: 1 },
+            &out,
+            0,
+            SIDE * 4,
+            bytes,
+            if stencil { MTLBlitOption::DepthFromDepthStencil } else { MTLBlitOption::empty() },
+        );
+    }
+    blit.endEncoding();
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1291,6 +1339,7 @@ struct Tally {
     /// Whether the last recipe's MSL render drew a pixel.
     last_drew: bool,
     pos_ulps: u64,
+    depth_ulps: u64,
     covered: usize,
     cover_both: usize,
     cover_msl_only: usize,
@@ -1338,7 +1387,7 @@ fn position_probe(gpu: &mut Gpu, r: &Recipe<'_>, tally: &mut Tally) {
     };
     let run = |gpu: &mut Gpu, vs: &Func| {
         let built = build_pipeline(gpu, r, vs, &probe, true)?;
-        let image = render(gpu, r, &built, true)?;
+        let image = render(gpu, r, &built, true)?.colors;
         Ok::<_, String>((built, image))
     };
     let (Ok((msl_built, msl_image)), Ok((air_built, air_image))) =
@@ -1409,7 +1458,7 @@ fn run_recipe(gpu: &mut Gpu, r: &Recipe<'_>, tally: &mut Tally) -> Outcome {
         Ok(done) => done,
         Err(e) => return Outcome::MslFailed(e),
     };
-    if let Some((format, image)) = msl_image.first()
+    if let Some((format, image)) = msl_image.colors.first()
         && let Ok(clear) = gpu.clear_pixel(*format)
         && drawn(image, &clear).contains(&true)
     {
@@ -1436,11 +1485,22 @@ fn run_recipe(gpu: &mut Gpu, r: &Recipe<'_>, tally: &mut Tally) -> Outcome {
     let mut worst = 0.0_f64;
     let mut equal = true;
     let mut names = Vec::new();
-    for ((format, a), (_, b)) in msl_image.iter().zip(&air_image) {
+    for ((format, a), (_, b)) in msl_image.colors.iter().zip(&air_image.colors) {
         let (delta, same) = compare_images(*format, a, b);
         worst = worst.max(delta);
         equal &= same;
         names.push(format!("{format:?}"));
+    }
+    if let (Some(a), Some(b)) = (&msl_image.depth, &air_image.depth) {
+        let (delta, same) = compare_images(PixelFormat::R32Float, a, b);
+        worst = worst.max(delta);
+        equal &= same;
+        names.push("depth".to_owned());
+        for (x, y) in rgba32(a).into_iter().zip(rgba32(b)) {
+            if !x.is_nan() && !y.is_nan() {
+                tally.depth_ulps = tally.depth_ulps.max(ulps(x, y));
+            }
+        }
     }
     if !equal {
         return Outcome::Differ(worst, names.join(","));
@@ -1519,6 +1579,7 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
             println!("nodraw {name} {keys}");
             if let Some(reason) = accepted("nodraw") {
                 println!("triaged {name} {keys} nodraw {reason}");
+                tally.triaged += 1;
             } else {
                 tally.no_draw += 1;
             }
@@ -1553,6 +1614,7 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
         tally.compared, tally.pairs, tally.no_draw
     );
     println!("pos-ulps {name} {}", tally.pos_ulps);
+    println!("depth-ulps {name} {}", tally.depth_ulps);
     println!(
         "pos-cover {name} {} both, {} msl only, {} air only; msl drew pixels in {}/{} pairs",
         tally.cover_both, tally.cover_msl_only, tally.cover_air_only, tally.covered, tally.pairs
@@ -1633,9 +1695,12 @@ fn dxso_parity() {
         }
     }
     // A triage line nothing used is a difference that went away or a typo: fail, so it is removed.
-    for entry in triage.stale(&found) {
-        println!("stale-triage {entry}");
-        failures.push(format!("stale triage entry: {entry}"));
+    // The self check renders MSL on both sides, so the entries about AIR's differences go unused.
+    if !gpu.air_is_msl {
+        for entry in triage.stale(&found) {
+            println!("stale-triage {entry}");
+            failures.push(format!("stale triage entry: {entry}"));
+        }
     }
     assert!(compared > 0, "no pipeline recipe compared");
     assert!(failures.is_empty(), "dxso-parity failed: {failures:?}");

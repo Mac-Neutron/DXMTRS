@@ -151,6 +151,7 @@ const REG_ATTROUT: u32 = 5;
 /// `oT#` in SM2, and the generic `o#` output an SM3 vertex shader declares.
 const REG_OUTPUT: u32 = 6;
 const REG_COLOROUT: u32 = 8;
+const REG_DEPTHOUT: u32 = 9;
 const REG_SAMPLER: u32 = 10;
 
 const XYZW: u8 = 0xF;
@@ -640,9 +641,10 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         }
         shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
     }
-    // The texture-address families pair with the `vs_1_1` shaders only.
+    // The texture-address families pair with the `vs_1_1` shaders only; the depth ones (and the
+    // `oDepth` programs below) with the first vertex shader of their model, which is enough.
     let mut families = Vec::new();
-    for (tokens, variant) in texture_family_ps() {
+    for (tokens, variant, depth) in texture_family_ps() {
         let program = dxso::parse(&tokens).map_err(|e| format!("family ps: {e:?}"))?;
         let source = ShaderSource::pixel(&program, variant);
         let kind = CachedKind::from_programmable(
@@ -652,7 +654,17 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         .ok_or("family ps kind")?;
         let key = source.disk_key();
         let msl = source.emit(&kind.entry_name(key))?;
-        families.push(ShaderRecordRef::new(kind, key));
+        families.push((ShaderRecordRef::new(kind, key), 1_u8, depth));
+        shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
+    }
+    for tokens in depth_programs() {
+        let program = dxso::parse(&tokens).map_err(|e| format!("depth ps: {e:?}"))?;
+        let source = ShaderSource::pixel(&program, VariantKey::default());
+        let major = u8::try_from((tokens[0] >> 8) & 0xFF).map_err(|e| e.to_string())?;
+        let kind = CachedKind::from_programmable(major, true).ok_or("depth ps kind")?;
+        let key = source.disk_key();
+        let msl = source.emit(&kind.entry_name(key))?;
+        families.push((ShaderRecordRef::new(kind, key), major, true));
         shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
     }
     // The modifier programs: vertex shaders join the pairing below, pixel shaders pair with the
@@ -679,6 +691,7 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
     }
     let mut pipelines = Vec::new();
+    let mut depth_paired = 0_u8;
     for (vs, program, vs_header) in &vertex {
         let attrs = vertex_attrs(program);
         let stride = u32::try_from(attrs.len() * 16).map_err(|e| e.to_string())?;
@@ -693,6 +706,7 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
                 stride,
                 &attrs,
                 PixelFormat::Bgra8Unorm,
+                false,
             ));
         }
         for (ps, major) in &modifier_ps {
@@ -703,20 +717,25 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
                     stride,
                     &attrs,
                     PixelFormat::Rgba16Float,
+                    false,
                 ));
             }
         }
-        if vs_header >> 8 & 0xFF == 1 {
-            for ps in &families {
+        let major = u8::try_from(vs_header >> 8 & 0xFF).map_err(|e| e.to_string())?;
+        for (ps, ps_major, depth) in &families {
+            let first = depth_paired & (1 << major) == 0;
+            if *ps_major == major && (major == 1 && !depth || *depth && first) {
                 pipelines.push(synthetic_recipe(
                     *vs,
                     *ps,
                     stride,
                     &attrs,
                     PixelFormat::Bgra8Unorm,
+                    *depth,
                 ));
             }
         }
+        depth_paired |= 1 << major;
     }
     Ok((shaders, pipelines))
 }
@@ -728,6 +747,7 @@ fn synthetic_recipe(
     stride: u32,
     attrs: &[VertexAttrDesc],
     color_format: PixelFormat,
+    depth: bool,
 ) -> PipelineRecipe {
     let mut stream_layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
     stream_layouts[0] = StreamLayout {
@@ -741,7 +761,12 @@ fn synthetic_recipe(
         vdecl_hash: vs.key(),
         stream_layouts,
         color_format,
-        attach: PipelineAttachFlags::HAS_COLOR_OUTPUT | PipelineAttachFlags::COLOR_HAS_ALPHA,
+        attach: if depth {
+            PipelineAttachFlags::HAS_DEPTH
+        } else {
+            PipelineAttachFlags::empty()
+        } | PipelineAttachFlags::HAS_COLOR_OUTPUT
+            | PipelineAttachFlags::COLOR_HAS_ALPHA,
         rs: PipelineRsBits {
             color_write_mask: 0x0F,
             ..PipelineRsBits::default()
@@ -1445,7 +1470,7 @@ fn synthetic_sm() -> Vec<Shader> {
 /// `--write-cache` pairs each with the `vs_1_1` shaders; `--digest` and the timed corpora do not
 /// see them. Programs are Task 6's hand cases: bem, texbem, texbeml, texm3x2pad/tex/depth,
 /// texm3x3pad/tex/spec/vspec and texm3x3, texreg2ar/gb/rgb, texdp3, texdp3tex and texdepth.
-fn texture_family_ps() -> Vec<(Vec<u32>, VariantKey)> {
+fn texture_family_ps() -> Vec<(Vec<u32>, VariantKey, bool)> {
     const PHASE: u32 = 0xFFFD;
     const ALL: u8 = 0xF;
     let td = |n: u16| dst(REG_ADDR_OR_TEXTURE, n, ALL);
@@ -1575,7 +1600,7 @@ fn texture_family_ps() -> Vec<(Vec<u32>, VariantKey)> {
         flags: VariantFlags::NO_DEPTH_ATTACHMENT,
         ..VariantKey::default()
     };
-    vec![
+    let plain = vec![
         (bem, key(0)),
         (beml_mask, key(0)),
         (bem14, key(0)),
@@ -1590,7 +1615,49 @@ fn texture_family_ps() -> Vec<(Vec<u32>, VariantKey)> {
         (dp3, key(0)),
         (texdepth(None), no_depth),
         (texdepth(Some([0.0; 4])), no_depth),
-    ]
+    ];
+    // The depth writers again, now with the depth attachment (the third field): `oDepth` reaches
+    // the depth output, which the parity test reads back.
+    let mut out: Vec<_> = plain.into_iter().map(|(t, k)| (t, k, false)).collect();
+    out.extend([
+        (m3x2depth(false), key(0), true),
+        (m3x2depth(true), key(0), true),
+        (texdepth(None), key(0), true),
+        (texdepth(Some([0.0; 4])), key(0), true),
+    ]);
+    out
+}
+
+/// `ps_2_0` and `ps_3_0` programs that write `oDepth` the way games do, for the parity corpus only.
+///
+/// `mov oDepth, r0.x` from a varying; the second `ps_3_0` one has `_sat`.
+fn depth_programs() -> Vec<Vec<u32>> {
+    const SAT: u32 = 1 << 20;
+    let mut out = Vec::new();
+    for (version, saturate) in [(PS_2_0, 0), (PS_3_0, 0), (PS_3_0, SAT)] {
+        let mut ps = vec![version];
+        let varying = if version == PS_3_0 {
+            dcl(&mut ps, usage(D3DDECLUSAGE_TEXCOORD, 0), REG_INPUT, 0, XYZW);
+            src(REG_INPUT, 0, SWIZ_IDENTITY)
+        } else {
+            dcl(&mut ps, DCL_PLAIN, REG_ADDR_OR_TEXTURE, 0, XYZW);
+            src(REG_ADDR_OR_TEXTURE, 0, SWIZ_IDENTITY)
+        };
+        ps.extend([op(OP_MOV, 2), dst(REG_TEMP, 0, XYZW), varying]);
+        ps.extend([
+            op(OP_MOV, 2),
+            dst(REG_DEPTHOUT, 0, X) | saturate,
+            src(REG_TEMP, 0, SWIZ_X),
+        ]);
+        ps.extend([
+            op(OP_MOV, 2),
+            dst(REG_COLOROUT, 0, XYZW),
+            src(REG_TEMP, 0, SWIZ_IDENTITY),
+            END,
+        ]);
+        out.push(ps);
+    }
+    out
 }
 
 /// Programs whose result modifiers feed further arithmetic, for the parity corpus only.
