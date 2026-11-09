@@ -71,6 +71,18 @@ fn refuses_bytes_that_are_no_shader() {
     assert!(error.starts_with("SM50Initialize"), "{error}");
 }
 
+/// Bytes that are no metallib come back as the error's text, and the +1 error is given back once.
+#[test]
+fn new_library_reports_a_bad_metallib() {
+    if !have_winemetal() {
+        return;
+    }
+    let device = MTLCreateSystemDefaultDevice().expect("a device from winemetal");
+    let error = new_library(&device, b"nope").expect_err("not a metallib");
+    assert!(error.starts_with("newLibraryWithData"), "{error}");
+    assert!(!error.is_empty());
+}
+
 /// A `vs_2_0` and a `ps_2_0` triangle: translated, made libraries, and put in a pipeline.
 ///
 /// Passes once the translator lowers DXSO (C3a Task 10).

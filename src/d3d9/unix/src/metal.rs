@@ -49,7 +49,10 @@ pub use pipeline::{create_render_pipeline, destroy_render_pipeline};
 pub use presenter::{set_wait_policy, wait_for_present_idle};
 pub use record::DeviceRecord;
 pub use sampler::{create_sampler_state, destroy_sampler_state};
-pub use shader::{compile_shader_library, destroy_function, destroy_library};
+pub use shader::{
+    compile_metallib_library, compile_shader_library, destroy_function, destroy_library,
+    translate_dxso,
+};
 pub use texture::{
     OPAQUE_BLACK, TRANSPARENT_BLACK, TextureClearBatch, clear_new_color_textures,
     create_backbuffer, create_color_target, create_depth_stencil_state, create_depth_texture,

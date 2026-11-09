@@ -1,3 +1,6 @@
+use core::ffi::CStr;
+
+use airconv_ir::dxso::spec::StageSpec;
 use log::error;
 use mtld3d_shared::{
     MetalHandle,
@@ -8,8 +11,10 @@ use crate::{
     LOG_TARGET,
     metal::handle::{IntoRetained, ReleaseRetain},
     mtl::{
-        objc2::rc::Retained,
-        objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLMathMode},
+        objc2::{rc::Retained, runtime::ProtocolObject},
+        objc2_metal::{
+            MTLCompileOptions, MTLDevice, MTLFunction, MTLLanguageVersion, MTLLibrary, MTLMathMode,
+        },
     },
 };
 
@@ -78,6 +83,15 @@ pub fn compile_shader_library(
     drop(function);
     let func = resolved?;
 
+    Some(into_handles(library, func))
+}
+
+type LibraryFunction = (MetalHandle<MTLLibraryKind>, MetalHandle<MTLFunctionKind>);
+
+fn into_handles(
+    library: Retained<ProtocolObject<dyn MTLLibrary>>,
+    func: Retained<ProtocolObject<dyn MTLFunction>>,
+) -> LibraryFunction {
     // SAFETY: `Retained::into_raw` transfers the canonical retain into the
     // typed library handle.
     let lib_handle =
@@ -85,7 +99,77 @@ pub fn compile_shader_library(
     // SAFETY: `Retained::into_raw` transfers the canonical retain into the
     // typed function handle.
     let fn_handle = unsafe { MetalHandle::<MTLFunctionKind>::new(Retained::into_raw(func) as u64) };
-    Some((lib_handle, fn_handle))
+    (lib_handle, fn_handle)
+}
+
+/// The metallib of the DXSO program `tokens` (ruling C3b-10).
+///
+/// As the stage `spec` says, its function named `name`: the translator linked into `mtld3d.so`
+/// on the Mac, winemetal's slots 74 to 80 through the facade.
+///
+/// # Errors
+/// The translator's text.
+#[cfg(not(mtl_facade))]
+pub fn translate_dxso(tokens: &[u32], spec: &StageSpec, name: &CStr) -> Result<Vec<u8>, String> {
+    airconv::dxso::translate(tokens, spec, name)
+        .map_err(|e| String::from_utf8_lossy(e.text()).into_owned())
+}
+
+/// As the Mac form, through winemetal.
+///
+/// # Errors
+/// The translator's text.
+#[cfg(mtl_facade)]
+pub fn translate_dxso(tokens: &[u32], spec: &StageSpec, name: &CStr) -> Result<Vec<u8>, String> {
+    crate::mtl::translate(tokens, spec, name)
+}
+
+/// A library of the metallib `metallib` and its function `entry`.
+///
+/// The twin of `compile_shader_library`: a failure is logged and gives `None`.
+#[must_use]
+pub fn compile_metallib_library(
+    device_handle: MetalHandle<MTLDeviceKind>,
+    metallib: &[u8],
+    entry: &str,
+    label: &str,
+) -> Option<LibraryFunction> {
+    crate::mtl::objc2::rc::autoreleasepool(|_| {
+        let device = device_handle.into_retained()?;
+        let library = match library_from_bytes(&device, metallib) {
+            Ok(library) => library,
+            Err(e) => {
+                error!(target: LOG_TARGET, "shader library {label} failed: {e}");
+                return None;
+            }
+        };
+        let name = crate::mtl::objc2_foundation::NSString::from_str(entry);
+        library.setLabel(Some(&name));
+        let Some(func) = library.newFunctionWithName(&name) else {
+            error!(target: LOG_TARGET, "shader library {label} has no function {entry}");
+            return None;
+        };
+        Some(into_handles(library, func))
+    })
+}
+
+#[cfg(not(mtl_facade))]
+fn library_from_bytes(
+    device: &ProtocolObject<dyn MTLDevice>,
+    metallib: &[u8],
+) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+    let data = dispatch2::DispatchData::from_bytes(metallib);
+    device
+        .newLibraryWithData_error(&data)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(mtl_facade)]
+fn library_from_bytes(
+    device: &ProtocolObject<dyn MTLDevice>,
+    metallib: &[u8],
+) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+    crate::mtl::new_library(device, metallib)
 }
 
 /// Release a Metal library handle.

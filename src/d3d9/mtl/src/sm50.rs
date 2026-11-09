@@ -18,6 +18,7 @@ use core::{
 use airconv_ir::dxso::spec::{SM50_SHADER_D3D9, StageSpec, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
 
 use crate::{
+    foundation::NSString,
     meta,
     metal::{MTLDevice, MTLLibrary, handle_of},
     objc2::{self, Retained, runtime::ProtocolObject},
@@ -283,19 +284,44 @@ pub fn translate(tokens: &[u32], spec: &StageSpec, name: &CStr) -> Result<Vec<u8
     bytes.ok_or_else(|| format!("SM50GetCompiledBitcode (status {status:#x}) gave no bytes"))
 }
 
+/// The description of NSError `error` (a +1 handle), which this gives back once; 0 is no error.
+fn take_ns_error(error: u64) -> String {
+    if error == 0 {
+        return "no error object".to_owned();
+    }
+    let mut params = wmt::ObjObjRet {
+        handle: error,
+        ret: 0,
+    };
+    // SAFETY: slot 28 describes a live object; its string is autoreleased.
+    let status = unsafe { table::call(wmt::NSOBJECT_DESCRIPTION, &mut params) };
+    let text = (status == 0)
+        .then(|| NSString::from_autoreleased(params.ret))
+        .flatten()
+        .map_or_else(|| "(no description)".to_owned(), |s| s.to_rust());
+    release(error);
+    text
+}
+
 /// A library of the metallib `metallib` (what [`translate`] returned) on `device`.
 ///
-/// `None` when winemetal makes none (the bytes are not a metallib Metal accepts).
-pub fn new_library(device: &ProtocolObject<dyn MTLDevice>, metallib: &[u8]) -> Option<Library> {
+/// # Errors
+/// The text of the error winemetal made (or the slot's status) when the bytes are not a metallib
+/// Metal accepts.
+pub fn new_library(
+    device: &ProtocolObject<dyn MTLDevice>,
+    metallib: &[u8],
+) -> Result<Library, String> {
     let mut data = wmt::ObjU64ObjRet {
         handle: metallib.as_ptr() as usize as u64,
         arg: metallib.len() as u64,
         ret: 0,
     };
     // SAFETY: slot 114 copies `arg` bytes from the address in `handle` into dispatch data.
-    unsafe { table::call(wmt::DISPATCH_DATA_ALLOC_INIT, &mut data) };
-    if data.ret == 0 {
-        return None;
+    let status = unsafe { table::call(wmt::DISPATCH_DATA_ALLOC_INIT, &mut data) };
+    if status != 0 || data.ret == 0 {
+        release(data.ret);
+        return Err(format!("dispatch data (status {status:#x}) was not made"));
     }
     let device = handle_of(device);
     let mut params = NewLibrary {
@@ -305,12 +331,18 @@ pub fn new_library(device: &ProtocolObject<dyn MTLDevice>, metallib: &[u8]) -> O
         ret_library: 0,
     };
     // SAFETY: slot 25 reads the device and the data, and returns +1 handles.
-    unsafe { table::call(wmt::DEVICE_NEW_LIBRARY, &mut params) };
+    let status = unsafe { table::call(wmt::DEVICE_NEW_LIBRARY, &mut params) };
     release(data.ret);
+    let Some(library) = objc2::from_plus_one(params.ret_library) else {
+        return Err(format!(
+            "newLibraryWithData (status {status:#x}): {}",
+            take_ns_error(params.ret_error)
+        ));
+    };
+    // A library made with an error object (a warning) still gives the error back once.
     release(params.ret_error);
-    let library = objc2::from_plus_one(params.ret_library)?;
     meta::with(params.ret_library, |e| e.device = device);
-    Some(library)
+    Ok(library)
 }
 
 #[cfg(test)]

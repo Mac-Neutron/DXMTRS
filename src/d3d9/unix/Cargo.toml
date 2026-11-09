@@ -20,6 +20,7 @@ perf-build = ["mtld3d-shared/perf-build"]
 winemetal = ["dep:mtld3d-mtl"]
 
 [dependencies]
+airconv-ir = { workspace = true }
 mtld3d-core = { workspace = true, features = ["disk-cache"] }
 mtld3d-types = { workspace = true }
 bitflags = { workspace = true }

@@ -34,6 +34,9 @@ mod shader_programs;
 mod stack_page;
 mod translation;
 
+// The shader paths of ruling C3b-10, public until the AIR build (Task 5) calls them from inside the crate.
+pub use metal::{compile_metallib_library, translate_dxso};
+
 /// `log` target used by every call inside this crate.
 ///
 /// d3d9.dll fires a one-shot `InitLogger` thunk on load — see
