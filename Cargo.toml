@@ -31,14 +31,13 @@ members = [
 # A command without -p takes the crates that build and test on the host. It leaves the PE crates out, and winemetal:
 # its unit test binary references symbols only the link of winemetal.so or the native winemetal.dylib provides
 # (NtSetEvent, sqlite3_*, SM50*), so its tests run on their own, `cargo test -p winemetal` with `-undefined
-# dynamic_lookup`. airconv too: its build script needs AIRCONV_LLVM and AIRCONV_XCRUN (tools/rust-check.sh).
+# dynamic_lookup`. airconv too: its build script needs AIRCONV_LLVM and AIRCONV_XCRUN (tools/rust-check.sh), and so mtld3d-unix, which links it.
 default-members = [
     "src/airconv/ir",
     "src/d3d9/core",
     "src/d3d9/mtl",
     "src/d3d9/shared",
     "src/d3d9/types",
-    "src/d3d9/unix",
     "src/replay",
     "src/winemetal/wire",
     "tests/d3d9/conformance",

@@ -1,4 +1,25 @@
+use std::{env, fs, path::Path};
+
 const DELEGATE_FORWARD: &str = "src/metal/macdrv/delegate_forward.m";
+
+/// The quoted value of `#define <name> "…"` in meson's header, `""` when there is none.
+fn extract_quoted_define(path: &Path, name: &str) -> String {
+    println!("cargo:rerun-if-changed={}", path.display());
+    let Ok(contents) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    contents
+        .lines()
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("#define")?
+                .trim_start()
+                .strip_prefix(name)
+        })
+        .find_map(|rest| rest.trim().strip_prefix('"')?.strip_suffix('"'))
+        .unwrap_or_default()
+        .to_owned()
+}
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(perf_tracking)");
@@ -18,6 +39,14 @@ fn main() {
     if std::env::var("MTLD3D_CRUMB").is_ok_and(|v| !v.is_empty() && v != "0") {
         println!("cargo:rustc-cfg=mtld3d_crumb");
     }
+
+    // The translator's key (ruling C3b-6): meson's header, `""` outside meson. Read before the non-Apple return: the
+    // guest's Linux build stamps the shader cache with it too.
+    println!("cargo:rerun-if-env-changed=DXMT_TRANSLATOR_KEY_H");
+    let key = env::var_os("DXMT_TRANSLATOR_KEY_H").map_or_else(String::new, |p| {
+        extract_quoted_define(Path::new(&p), "DXMT_TRANSLATOR_KEY")
+    });
+    println!("cargo:rustc-env=DXMT_TRANSLATOR_KEY={key}");
 
     let target = std::env::var("TARGET").unwrap();
     // MacNeutron: `mtl_facade` when the Metal layer goes through winemetal (src/mtl.rs): the `winemetal` feature, and

@@ -487,9 +487,11 @@ dependencies = [
 name = "mtld3d-unix"
 version = "0.14.1"
 dependencies = [
+ "airconv",
  "bitflags 2.13.2",
  "block2",
  "cc",
+ "dispatch2",
  "dxmt-util",
  "libc",
  "libloading",

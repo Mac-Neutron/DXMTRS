@@ -20,6 +20,7 @@ mod hud_state;
 #[cfg(mtl_facade)]
 #[path = "hud_state_wm.rs"]
 mod hud_state;
+pub mod key;
 mod log_file;
 #[cfg(not(mtl_facade))]
 mod main_thread_checker;
