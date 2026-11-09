@@ -7,7 +7,7 @@ use crate::{
     foundation::NSString,
     metal::{
         MTLCreateSystemDefaultDevice, MTLDevice as _, MTLLibrary as _, MTLPixelFormat,
-        MTLRenderPipelineDescriptor,
+        MTLRenderPipelineDescriptor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
     },
 };
 
@@ -100,10 +100,27 @@ fn translates_a_dxso_vs_and_ps_on_the_host() {
             .newFunctionWithName(&NSString::from_str("ps_main"))
             .as_deref(),
     );
+    // v0 is the position: attribute 0, float4, from vertex buffer 0, as the runtime lays out a stream.
+    let vertex_desc = MTLVertexDescriptor::new();
+    // SAFETY: attribute 0 is within the descriptor's table.
+    let attr = unsafe { vertex_desc.attributes().objectAtIndexedSubscript(0) };
+    attr.setFormat(MTLVertexFormat::Float4);
+    // SAFETY: plain accessor, offset 0.
+    unsafe { attr.setOffset(0) };
+    // SAFETY: plain accessor, buffer slot 0.
+    unsafe { attr.setBufferIndex(0) };
+    // SAFETY: layout 0 is within the descriptor's table.
+    let layout = unsafe { vertex_desc.layouts().objectAtIndexedSubscript(0) };
+    // SAFETY: plain accessor, a float4 stride.
+    unsafe { layout.setStride(16) };
+    layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+    // SAFETY: plain accessor, step rate 1.
+    unsafe { layout.setStepRate(1) };
+    desc.setVertexDescriptor(Some(&vertex_desc));
     // SAFETY: index < 8.
     unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }
         .setPixelFormat(MTLPixelFormat::RGBA8Unorm);
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .expect("a pipeline of the two");
+        .unwrap_or_else(|e| panic!("a pipeline of the two: {}", e.localizedDescription()));
 }
