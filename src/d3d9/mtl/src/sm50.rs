@@ -135,14 +135,14 @@ fn release(handle: u64) {
     }
 }
 
-/// The text of SM50 error `error`, which this frees.
-fn take_error(error: u64) -> String {
-    if error == 0 {
+/// The text of SM50 error `error`, which this frees and sets to 0.
+fn take_error(error: &mut u64) -> String {
+    if *error == 0 {
         return "no error text".to_owned();
     }
     let mut text = [0_u8; ERROR_TEXT];
     let mut params = GetErrorMessage {
-        error,
+        error: *error,
         buffer: text.as_mut_ptr(),
         buffer_size: text.len(),
         ret_size: 0,
@@ -157,12 +157,23 @@ fn take_error(error: u64) -> String {
     String::from_utf8_lossy(text.get(..len).unwrap_or_default()).into_owned()
 }
 
-/// Gives error `error` back (slot 80); 0 is none.
-fn free_error(error: u64) {
-    if error != 0 {
-        let mut params = wmt::ObjNoRet { handle: error };
+/// Gives error `error` back (slot 80) and sets it to 0; 0 is none.
+fn free_error(error: &mut u64) {
+    settle(error, |handle| {
+        let mut params = wmt::ObjNoRet { handle };
         // SAFETY: slot 80 frees the error once.
         unsafe { table::call(wmt::SM50_FREE_ERROR, &mut params) };
+    });
+}
+
+/// Hands the handle in `slot` to `give_back` and sets the slot to 0; 0 is none.
+///
+/// A later call on the same variable, such as the compile that leaves `*error` untouched, so never
+/// gives the same handle back twice.
+fn settle(slot: &mut u64, give_back: impl FnOnce(u64)) {
+    let handle = core::mem::take(slot);
+    if handle != 0 {
+        give_back(handle);
     }
 }
 
@@ -210,10 +221,10 @@ pub fn translate(tokens: &[u32], spec: &StageSpec, name: &CStr) -> Result<Vec<u8
         return Err(format!(
             "SM50Initialize (status {status:#x}, ret {}): {}",
             init.ret,
-            take_error(error)
+            take_error(&mut error)
         ));
     }
-    free_error(error);
+    free_error(&mut error);
 
     let mut d3d9 = D3d9Data {
         next: ptr::null_mut(),
@@ -245,10 +256,10 @@ pub fn translate(tokens: &[u32], spec: &StageSpec, name: &CStr) -> Result<Vec<u8
         return Err(format!(
             "SM50Compile (status {status:#x}, ret {}): {}",
             compile.ret,
-            take_error(error)
+            take_error(&mut error)
         ));
     }
-    free_error(error);
+    free_error(&mut error);
 
     let mut out = CompiledBitcode { data: 0, size: 0 };
     let mut get = GetCompiledBitcode {

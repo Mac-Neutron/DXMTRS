@@ -2,7 +2,7 @@
 
 use airconv_ir::dxso::spec::{StageSpec, VariantKey, VsSpec};
 
-use super::{new_library, translate};
+use super::{new_library, settle, translate};
 use crate::{
     foundation::NSString,
     metal::{
@@ -45,6 +45,20 @@ fn have_winemetal() -> bool {
         println!("skipped: no winemetal");
     }
     have
+}
+
+/// A freed error handle is not freed again.
+///
+/// A compile that fails before it writes `*error` (or succeeds without touching it) would
+/// otherwise give the initialize call's handle back twice.
+#[test]
+fn a_freed_error_handle_is_not_freed_twice() {
+    let mut error = 7_u64;
+    let mut freed = Vec::new();
+    settle(&mut error, |h| freed.push(h));
+    settle(&mut error, |h| freed.push(h));
+    assert_eq!(freed, [7]);
+    assert_eq!(error, 0);
 }
 
 #[test]
