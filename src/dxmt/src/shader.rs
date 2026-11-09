@@ -41,15 +41,19 @@ impl Drop for Sm50Bitcode {
 }
 
 /// An owned `sm50_error_t` handle; 0 is none (`SM50Error`, `d3d12_pipeline.hpp:68-85`).
-pub struct Sm50Error(pub u64);
+///
+/// The second field marks `initialize`'s own refusal of a stream that is not DXBC.
+pub struct Sm50Error(pub u64, bool);
 
 impl Sm50Error {
     /// The error's text (`SM50GetErrorMessage`).
     #[must_use]
     pub fn message(&self) -> String {
-        if self.0 == 0 {
-            // No airconv error object: `initialize` refused a stream that is not DXBC.
+        if self.1 {
             return "not a DXBC container".to_owned();
+        }
+        if self.0 == 0 {
+            return "no airconv error object".to_owned();
         }
         // SAFETY: `self.0` is a live `sm50_error_t` handle or 0.
         unsafe { error_message(self.0) }
@@ -93,7 +97,7 @@ pub fn initialize(
     reflection: &mut MtlShaderReflection,
 ) -> Result<Sm50Shader, Sm50Error> {
     if !bytecode.starts_with(b"DXBC") {
-        return Err(Sm50Error(0));
+        return Err(Sm50Error(0, true));
     }
     let mut shader = 0;
     let mut error = 0;
@@ -110,7 +114,7 @@ pub fn initialize(
     if status == 0 {
         Ok(Sm50Shader(shader))
     } else {
-        Err(Sm50Error(error))
+        Err(Sm50Error(error, false))
     }
 }
 
@@ -156,7 +160,7 @@ pub unsafe fn compile(
     if status == 0 {
         Ok(Sm50Bitcode(bitcode))
     } else {
-        Err(Sm50Error(error))
+        Err(Sm50Error(error, false))
     }
 }
 

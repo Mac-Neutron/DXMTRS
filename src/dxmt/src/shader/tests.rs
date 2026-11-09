@@ -14,14 +14,22 @@ fn refuses_a_dxso_token_stream() {
         .collect();
     assert!(matches!(
         initialize(&tokens, &mut reflection),
-        Err(super::Sm50Error(0))
+        Err(super::Sm50Error(0, true))
     ));
     assert!(matches!(
         initialize(b"DXB", &mut reflection),
-        Err(super::Sm50Error(0))
+        Err(super::Sm50Error(0, true))
     ));
     let Err(error) = initialize(b"DXB", &mut reflection) else {
         panic!("initialized");
     };
     assert_eq!(error.message(), "not a DXBC container");
+}
+
+#[test]
+fn another_handle_zero_refusal_is_not_called_a_dxbc_problem() {
+    assert_eq!(
+        super::Sm50Error(0, false).message(),
+        "no airconv error object"
+    );
 }
