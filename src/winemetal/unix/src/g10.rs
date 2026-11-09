@@ -601,14 +601,15 @@ unsafe fn walk_chain(
     Some((next_ptr, nodes))
 }
 
-/// The most nodes a 32-bit chain may hold (the header has nine types; a cycle never ends).
+/// The most nodes a 32-bit chain may hold (the header has ten types; a cycle never ends).
 #[cfg(not(feature = "native"))]
 const MAX_CHAIN_NODES: usize = 64;
 
 /// Whether the 32-bit chain from `head` can be widened.
 ///
 /// At most [`MAX_CHAIN_NODES`] nodes, none of type `SM50_SHADER_D3D9` (no 32-bit PE caller builds
-/// one, C3-21).
+/// one, C3-21). The header has ten node types, so a longer chain is not one a caller builds: chains
+/// over 64 nodes, cycles included, are refused by design.
 ///
 /// `header` reads a node's `(next, type)` at its 32-bit address.
 #[cfg(not(feature = "native"))]
