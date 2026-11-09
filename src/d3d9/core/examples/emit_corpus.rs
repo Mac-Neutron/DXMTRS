@@ -690,6 +690,21 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         }
         shaders.push(CacheEntry::new(kind, key, msl, Some(source)));
     }
+    // The `ps_1_4` depth writers pair with a `vs_1_1` that also writes `oT2` (`texm3x2depth`
+    // divides by a dot product with it), so their depth varies across the target.
+    let depth_tokens = depth_vs_1_1();
+    let depth_program = dxso::parse(&depth_tokens).map_err(|e| format!("depth vs: {e:?}"))?;
+    let depth_source = ShaderSource::vertex(&depth_program, u16::MAX, 0, VsSamplerKinds::default());
+    let depth_kind = CachedKind::from_programmable(1, false).ok_or("depth vs kind")?;
+    let depth_key = depth_source.disk_key();
+    let depth_msl = depth_source.emit(&depth_kind.entry_name(depth_key))?;
+    let depth_vs = ShaderRecordRef::new(depth_kind, depth_key);
+    shaders.push(CacheEntry::new(
+        depth_kind,
+        depth_key,
+        depth_msl,
+        Some(depth_source),
+    ));
     let mut pipelines = Vec::new();
     let mut depth_paired = 0_u8;
     for (vs, program, vs_header) in &vertex {
@@ -724,7 +739,7 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
         let major = u8::try_from(vs_header >> 8 & 0xFF).map_err(|e| e.to_string())?;
         for (ps, ps_major, depth) in &families {
             let first = depth_paired & (1 << major) == 0;
-            if *ps_major == major && (major == 1 && !depth || *depth && first) {
+            if *ps_major == major && (major == 1 && !depth || *depth && major != 1 && first) {
                 pipelines.push(synthetic_recipe(
                     *vs,
                     *ps,
@@ -736,6 +751,21 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
             }
         }
         depth_paired |= 1 << major;
+    }
+    let attrs = vertex_attrs(&depth_program);
+    let stride = u32::try_from(attrs.len() * 16).map_err(|e| e.to_string())?;
+    for (ps, _, depth) in families
+        .iter()
+        .filter(|(_, major, depth)| *depth && *major == 1)
+    {
+        pipelines.push(synthetic_recipe(
+            depth_vs,
+            *ps,
+            stride,
+            &attrs,
+            PixelFormat::Bgra8Unorm,
+            *depth,
+        ));
     }
     Ok((shaders, pipelines))
 }
@@ -1828,6 +1858,21 @@ fn world_vs_1_1() -> Vec<u32> {
         dst(REG_OUTPUT, 1, XYZW),
         src(REG_INPUT, 2, SWIZ_IDENTITY),
         src(REG_CONST, 9, SWIZ_IDENTITY),
+        END,
+    ]);
+    out
+}
+
+/// `vs_1_1`: `world_vs_1_1` that also writes `oT2` from the normal, scaled and offset by constants.
+fn depth_vs_1_1() -> Vec<u32> {
+    let mut out = world_vs_1_1();
+    out.pop();
+    out.extend([
+        op(OP_MAD, 0),
+        dst(REG_OUTPUT, 2, XYZW),
+        src(REG_INPUT, 1, SWIZ_IDENTITY),
+        src(REG_CONST, 5, SWIZ_IDENTITY),
+        src(REG_INPUT, 2, SWIZ_IDENTITY),
         END,
     ]);
     out

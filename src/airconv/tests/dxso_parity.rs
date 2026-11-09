@@ -1489,13 +1489,17 @@ fn run_recipe(gpu: &mut Gpu, r: &Recipe<'_>, tally: &mut Tally) -> Outcome {
         let (delta, same) = compare_images(*format, a, b);
         worst = worst.max(delta);
         equal &= same;
-        names.push(format!("{format:?}"));
+        if !same {
+            names.push(format!("{format:?}"));
+        }
     }
     if let (Some(a), Some(b)) = (&msl_image.depth, &air_image.depth) {
         let (delta, same) = compare_images(PixelFormat::R32Float, a, b);
         worst = worst.max(delta);
         equal &= same;
-        names.push("depth".to_owned());
+        if !same {
+            names.push("depth".to_owned());
+        }
         for (x, y) in rgba32(a).into_iter().zip(rgba32(b)) {
             if !x.is_nan() && !y.is_nan() {
                 tally.depth_ulps = tally.depth_ulps.max(ulps(x, y));
@@ -1575,18 +1579,22 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
             continue;
         }
         tally.compared += 1;
+        let mut triaged_here = false;
         if !tally.last_drew {
             println!("nodraw {name} {keys}");
             if let Some(reason) = accepted("nodraw") {
                 println!("triaged {name} {keys} nodraw {reason}");
                 tally.triaged += 1;
+                triaged_here = true;
             } else {
                 tally.no_draw += 1;
             }
         }
         match &outcome {
             Outcome::Equal => {
-                tally.equal += 1;
+                if !triaged_here {
+                    tally.equal += 1;
+                }
                 continue;
             }
             Outcome::MslFailed(_) => {}
@@ -1600,7 +1608,9 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
         }
         if let Some(reason) = accepted(outcome.kind()) {
             println!("triaged {name} {keys} {} {reason}", outcome.kind());
-            tally.triaged += 1;
+            if !triaged_here {
+                tally.triaged += 1;
+            }
             continue;
         }
         match outcome {
