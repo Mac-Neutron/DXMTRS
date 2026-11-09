@@ -12,7 +12,9 @@
 use dxmt_util::config::Sources;
 use mtld3d_shared::mtl::{ColorSpacePolicy, SoftwareCursorPolicy};
 
-use super::{AdapterSpoof, CursorScale, Mtld3dConfig, foreign_key, parse, parse_sources};
+use super::{
+    AdapterSpoof, CursorScale, Mtld3dConfig, ShaderBackend, foreign_key, parse, parse_sources,
+};
 
 #[test]
 fn empty_input_returns_defaults() {
@@ -659,6 +661,49 @@ fn adapter_spoof_rejects_unknown_vendor() {
 fn df_formats_defaults_on_and_parses_off() {
     assert!(parse(None, "", None).df_formats);
     assert!(!parse(None, "caps.dfFormats = false\n", None).df_formats);
+}
+
+#[test]
+fn shader_backend_defaults_to_msl() {
+    assert_eq!(parse(None, "", None).shader_backend, ShaderBackend::Msl);
+    assert_eq!(ShaderBackend::default(), ShaderBackend::Msl);
+}
+
+#[test]
+fn shader_backend_air_parses() {
+    assert_eq!(
+        parse(None, "shader.backend = air\n", None).shader_backend,
+        ShaderBackend::Air
+    );
+    assert_eq!(
+        parse(None, "shader.backend = AIR\n", None).shader_backend,
+        ShaderBackend::Air
+    );
+    assert_eq!(
+        parse(None, "shader.backend = Msl\n", None).shader_backend,
+        ShaderBackend::Msl
+    );
+}
+
+#[test]
+fn shader_backend_bad_value_warns_and_keeps_msl() {
+    assert_eq!(
+        parse(None, "shader.backend = metal\n", None).shader_backend,
+        ShaderBackend::Msl
+    );
+    assert_eq!(
+        parse(None, "shader.backend = air\nshader.backend = metal\n", None).shader_backend,
+        ShaderBackend::Air,
+        "a bad value keeps the earlier one"
+    );
+}
+
+#[test]
+fn mtld3d_config_env_overrides_the_file_for_shader_backend() {
+    assert_eq!(
+        parse(None, "shader.backend = msl\n", Some("shader.backend=air")).shader_backend,
+        ShaderBackend::Air
+    );
 }
 
 fn sources(dxmt_env: &str, mtld3d_env: &str) -> Sources {

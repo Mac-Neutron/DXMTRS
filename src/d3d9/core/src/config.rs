@@ -143,6 +143,11 @@ pub struct Mtld3dConfig {
     /// its submission waiting for the build. `false` keeps every such draw.
     /// Default: `true`. File key: `shader.asyncCompile`.
     pub shader_async_compile: bool,
+    /// Which compiler builds D3D9 shader libraries.
+    ///
+    /// The MSL emitter or the translator's AIR.
+    /// Default: [`ShaderBackend::Msl`]. File key: `shader.backend`.
+    pub shader_backend: ShaderBackend,
     /// Directory the process's log file and GPU traces go into.
     ///
     /// Resolved against the executable's directory; an absolute path stands
@@ -334,6 +339,19 @@ pub struct Mtld3dConfig {
     pub df_formats: bool,
 }
 
+/// `shader.backend` policy: how a D3D9 shader becomes a Metal library.
+///
+/// Also the backend a shader pair is built with (`ShaderRef`, index keys).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ShaderBackend {
+    /// Emit MSL and compile it.
+    #[default]
+    Msl = 0,
+    /// Lower through the translator to AIR.
+    Air = 1,
+}
+
 /// `adapter.spoof` policy: the vendor identity `GetAdapterIdentifier` reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterSpoof {
@@ -394,6 +412,7 @@ impl Default for Mtld3dConfig {
             cursor_software: SoftwareCursorPolicy::Off,
             shader_cache_enable: true,
             shader_async_compile: true,
+            shader_backend: ShaderBackend::Msl,
             log_dir: String::new(),
             bytecode_dump_dir: String::new(),
             skip_shaders: Vec::new(),
@@ -562,6 +581,10 @@ pub fn log_options(cfg: &Mtld3dConfig) {
         target: crate::LOG_TARGET,
         "config: shader.asyncCompile = {}", cfg.shader_async_compile
     );
+    info!(
+        target: crate::LOG_TARGET,
+        "config: shader.backend = {}", shader_backend_label(cfg.shader_backend)
+    );
     info!(target: crate::LOG_TARGET, "config: log.dir = {:?}", cfg.log_dir);
     info!(
         target: crate::LOG_TARGET,
@@ -687,6 +710,7 @@ fn apply(cfg: &mut Mtld3dConfig, source: &str, key: &str, value: &str) {
         "cursor.software" => assign_cursor_software(source, value, &mut cfg.cursor_software),
         "shaderCache.enable" => assign_bool(source, key, value, &mut cfg.shader_cache_enable),
         "shader.asyncCompile" => assign_bool(source, key, value, &mut cfg.shader_async_compile),
+        "shader.backend" => assign_shader_backend(source, value, &mut cfg.shader_backend),
         "log.dir" => value.clone_into(&mut cfg.log_dir),
         "debug.bytecodeDumpDir" => value.clone_into(&mut cfg.bytecode_dump_dir),
         "debug.skipShaders" => cfg.skip_shaders = parse_hex_list(value),
@@ -747,6 +771,25 @@ fn assign_cursor_software(source: &str, value: &str, slot: &mut SoftwareCursorPo
             "{source}: 'cursor.software = {other}' is not auto, true or false → kept {kept}",
             kept = cursor_software_label(*slot)
         ),
+    }
+}
+
+fn assign_shader_backend(source: &str, value: &str, slot: &mut ShaderBackend) {
+    match value.to_ascii_lowercase().as_str() {
+        "msl" => *slot = ShaderBackend::Msl,
+        "air" => *slot = ShaderBackend::Air,
+        other => log_once_warn!(
+            target: crate::LOG_TARGET,
+            "{source}: 'shader.backend = {other}' is not msl or air → kept {kept}",
+            kept = shader_backend_label(*slot)
+        ),
+    }
+}
+
+const fn shader_backend_label(b: ShaderBackend) -> &'static str {
+    match b {
+        ShaderBackend::Msl => "msl",
+        ShaderBackend::Air => "air",
     }
 }
 

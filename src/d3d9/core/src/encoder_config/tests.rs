@@ -2,7 +2,7 @@ use mtld3d_shared::encoder_wire::{FrameSlab, WireError, WireReader};
 
 use super::{
     AdapterSpoof, ColorSpacePolicy, CursorScale, DeviceCapsFlags, GpuCaps, Mtld3dConfig,
-    SoftwareCursorPolicy, WireValue,
+    ShaderBackend, SoftwareCursorPolicy, WireValue,
 };
 
 fn round_trip<T: WireValue>(value: &T) -> T {
@@ -32,6 +32,7 @@ fn resolved_configuration_preserves_nondefaults() {
     value.cursor_software = SoftwareCursorPolicy::On;
     value.shader_cache_enable = !value.shader_cache_enable;
     value.shader_async_compile = !value.shader_async_compile;
+    value.shader_backend = ShaderBackend::Air;
     value.log_dir = "log_dir/utf8-ä".into();
     value.bytecode_dump_dir = "bytecode_dump_dir/utf8-ä".into();
     value.skip_shaders = vec![0, u64::MAX, 55];
@@ -67,6 +68,18 @@ fn gpu_caps_preserve_native_overrides() {
         value.min_linear_texture_align
     );
     assert_eq!(decoded.device_caps, value.device_caps);
+}
+
+#[test]
+fn unknown_shader_backend_byte_is_refused() {
+    assert_eq!(
+        ShaderBackend::read_wire(&mut WireReader::new(&[2])),
+        Err(WireError::InvalidValue)
+    );
+    assert_eq!(
+        ShaderBackend::read_wire(&mut WireReader::new(&[1])),
+        Ok(ShaderBackend::Air)
+    );
 }
 
 #[test]
