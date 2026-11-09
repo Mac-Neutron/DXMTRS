@@ -156,16 +156,21 @@ impl Lower<'_> {
         Ok(itemp(s))
     }
 
-    /// `pow(base, e)`: `e == 0 ? 1 : exp2(e * log2(base))`.
+    /// `pow(base, e)`: `e == 0 || |base| == 1 ? 1 : exp2(e * log2(base))`.
     ///
     /// `pow(x, 0)` is 1 for every `x`, 0 included, as D3D9's `pow` (it never makes a NaN or an
-    /// infinity) and Metal's `pow`, where `exp2(0 * log2(0))` is a NaN.
+    /// infinity) and Metal's `pow`, where `exp2(0 * log2(0))` is a NaN. `pow(+-1, e)` is 1 for
+    /// every `e`, infinities and NaN too, where `exp2(e * 0)` is a NaN; `|base| == 1` is compared
+    /// directly because the vertex stage's `afn` makes `log2` of 1 inexact.
     pub fn pow(&mut self, base: Src, e: Src) -> Result<Src, LowerError> {
-        let l = self.unary(FloatUnaryOp::Log2, base)?;
+        let l = self.unary(FloatUnaryOp::Log2, base.clone())?;
         let p = self.binary(FloatBinaryOp::Mul, l, e.clone())?;
         let x = self.unary(FloatUnaryOp::Exp2, p)?;
         let zero = self.mask(FloatComparison::Equal, e, fsplat(0.0))?;
-        self.select(zero, fsplat(1.0), x)
+        let unit = self.mask(FloatComparison::Equal, absolute(base), fsplat(1.0))?;
+        let one = self.scratch();
+        self.emit(ibin(IntegerBinaryOp::Or, idst(one, MASK_ALL), zero, unit))?;
+        self.select(itemp(one), fsplat(1.0), x)
     }
 
     /// The instruction's value as a `float4` operand.

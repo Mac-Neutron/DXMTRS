@@ -813,6 +813,25 @@ fn pow_of_a_zero_exponent_is_one() {
     metallib(&binary(op::POW, XXXX), spec());
 }
 
+#[test]
+fn pow_of_a_unit_base_is_one() {
+    // `|b| == 1` joins `e == 0` in the select: D3D9's `pow(1, +-inf)` and `pow(1, nan)` are 1,
+    // not `exp2(+-inf * 0)`, a NaN.
+    let l = lowered(&binary(op::POW, XXXX), spec());
+    let one = 1.0_f32.to_bits();
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::FloatCompare(c)
+        if c.cmp == FloatComparison::Equal
+            && matches!(c.src0, SrcOperand::Input { regid: 0, .. })
+            && matches!(c.src1, SrcOperand::Immediate32 { value, .. } if value == [one; 4])))
+    );
+    assert!(
+        instructions(&l).any(|i| matches!(i, Instruction::IntegerBinaryOp(b)
+        if b.op == IntegerBinaryOp::Or))
+    );
+    metallib(&binary(op::POW, XXXX), spec());
+}
+
 /// `dcl_position v0; dcl_normal v1; mov oPos, v0; mov oT0, v1` (`vs_2_0`).
 fn two_inputs() -> Vec<u32> {
     program(
