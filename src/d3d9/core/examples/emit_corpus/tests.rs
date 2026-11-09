@@ -94,3 +94,36 @@ fn merge_keeps_the_valid_prefix_of_a_torn_file() {
     assert_eq!(after.shaders, before.shaders);
     assert_eq!(after.pipelines.len(), before.pipelines.len());
 }
+
+#[test]
+fn kinds_counts_msl_and_air_records() {
+    let path = temp("kinds-src");
+    write_synthetic_cache(&path, &synthetic()).expect("write");
+    let records = loaded(&path).shaders;
+    let vs = records
+        .iter()
+        .find(|e| e.kind == CachedKind::Sm3Vs)
+        .expect("sm3 vs");
+    let ps = records
+        .iter()
+        .find(|e| e.kind == CachedKind::Sm3Ps)
+        .expect("sm3 ps");
+    let air = CacheEntry::new_air(
+        CachedKind::AirSm3Ps,
+        ps.key,
+        [7; 32],
+        vec![1, 2, 3],
+        ps.source().expect("source").clone(),
+    );
+    let out = temp("kinds");
+    write_cache_file(&out, &[vs.clone(), ps.clone(), air], &[]).expect("write kinds fixture");
+    let line = kinds_line(&[out.clone(), out.clone()]).expect("kinds");
+    assert_eq!(
+        line,
+        "kinds 2 files: sm1vs=0 sm1ps=0 sm2vs=0 sm2ps=0 sm3vs=2 sm3ps=2 air_sm1vs=0 air_sm1ps=0 \
+         air_sm2vs=0 air_sm2ps=0 air_sm3vs=0 air_sm3ps=2 ffvs=0 ffps=0"
+    );
+    assert!(kinds_line(&[temp("kinds-missing")]).is_err());
+    // An AIR record is not MSL to time.
+    assert!(Shader::record(loaded(&out).shaders.pop().expect("air")).is_none());
+}

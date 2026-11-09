@@ -302,7 +302,12 @@ fn compile_library(
     let entry_name = entry.kind.entry_name(entry.key);
     let started = Instant::now();
     let mut timings = mtld3d_shared::perf::ShaderTimings::new();
-    let handles = compile_stage_library(device, &entry.msl, &entry_name, &mut timings);
+    let handles = compile_stage_library(
+        device,
+        entry.msl().unwrap_or_default(),
+        &entry_name,
+        &mut timings,
+    );
     LibraryCompilation {
         handles,
         timings,

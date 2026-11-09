@@ -22,6 +22,70 @@ fn cached_kind_round_trips_via_byte() {
 }
 
 #[test]
+fn air_kinds_round_trip_and_name() {
+    let pairs = [
+        (
+            CachedKind::Sm1Vs,
+            CachedKind::AirSm1Vs,
+            10,
+            "mtld3d_vs_air_sm1_000000ab",
+        ),
+        (
+            CachedKind::Sm1Ps,
+            CachedKind::AirSm1Ps,
+            11,
+            "mtld3d_ps_air_sm1_000000ab",
+        ),
+        (
+            CachedKind::Sm2Vs,
+            CachedKind::AirSm2Vs,
+            12,
+            "mtld3d_vs_air_sm2_000000ab",
+        ),
+        (
+            CachedKind::Sm2Ps,
+            CachedKind::AirSm2Ps,
+            13,
+            "mtld3d_ps_air_sm2_000000ab",
+        ),
+        (
+            CachedKind::Sm3Vs,
+            CachedKind::AirSm3Vs,
+            14,
+            "mtld3d_vs_air_sm3_000000ab",
+        ),
+        (
+            CachedKind::Sm3Ps,
+            CachedKind::AirSm3Ps,
+            15,
+            "mtld3d_ps_air_sm3_000000ab",
+        ),
+    ];
+    for (msl, air, byte, name) in pairs {
+        assert_eq!(air as u8, byte);
+        assert_eq!(CachedKind::from_byte(byte), Some(air));
+        assert_eq!(msl.air(), Some(air));
+        assert_eq!(air.air(), None);
+        assert!(air.is_air() && !msl.is_air());
+        assert_eq!(air.msl_twin(), msl);
+        assert_eq!(msl.msl_twin(), msl);
+        assert!(air.is_programmable());
+        assert_eq!(
+            (air.is_vertex(), air.is_pixel()),
+            (msl.is_vertex(), msl.is_pixel())
+        );
+        assert_eq!(air.compile_bucket(), msl.compile_bucket());
+        assert_eq!(air.entry_name(0xAB), name);
+    }
+    assert_eq!(CachedKind::FfVs.air(), None);
+    assert_eq!(CachedKind::FfPs.air(), None);
+    assert!(!CachedKind::FfVs.is_air());
+    assert_eq!(CachedKind::from_byte(8), None);
+    assert_eq!(CachedKind::from_byte(9), None);
+    assert_eq!(CachedKind::from_byte(16), None);
+}
+
+#[test]
 fn from_programmable_maps_supported_majors() {
     assert_eq!(
         CachedKind::from_programmable(1, false),

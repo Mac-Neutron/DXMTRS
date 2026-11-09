@@ -21,6 +21,7 @@
 //! * `kind` ∈ `0..=7` (`CachedKind`) → **Single** chunk. Frame decompresses to
 //!   an emitter fingerprint (u64 LE), a source-present byte, optional DXSO
 //!   and specialization inputs, then UTF-8 MSL. `key` is the `disk_key`.
+//!   `kind` ∈ `10..=15` (AIR twins) is `translator key [32] | DXSO inputs | metallib`.
 //!   Stale programmable MSL is regenerated; stale source-less records are dropped.
 //! * `kind == RECORD_KIND_PIPELINE` (`0xFE`) → **Single** pipeline recipe.
 //!   The recipe contains stable shader references and explicit logical fields,
@@ -410,9 +411,23 @@ pub use source::ShaderSource;
 pub struct CacheEntry {
     pub kind: CachedKind,
     pub key: u64,
-    pub msl: String,
     source: Option<ShaderSource>,
-    emitter_version: u64,
+    body: EntryBody,
+}
+
+/// What a shader record stores.
+///
+/// MSL text and the emitter that wrote it, or a metallib and the translator build that wrote it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntryBody {
+    Msl {
+        emitter: u64,
+        msl: String,
+    },
+    Air {
+        translator: [u8; 32],
+        metallib: Vec<u8>,
+    },
 }
 
 impl CacheEntry {
@@ -426,9 +441,31 @@ impl CacheEntry {
         Self {
             kind,
             key,
-            msl,
             source,
-            emitter_version: SHADER_EMITTER_VERSION,
+            body: EntryBody::Msl {
+                emitter: SHADER_EMITTER_VERSION,
+                msl,
+            },
+        }
+    }
+
+    /// An AIR record: `kind` is the AIR kind, `source` the twin's retained inputs.
+    #[must_use]
+    pub const fn new_air(
+        kind: CachedKind,
+        key: u64,
+        translator: [u8; 32],
+        metallib: Vec<u8>,
+        source: ShaderSource,
+    ) -> Self {
+        Self {
+            kind,
+            key,
+            source: Some(source),
+            body: EntryBody::Air {
+                translator,
+                metallib,
+            },
         }
     }
 
@@ -438,9 +475,44 @@ impl CacheEntry {
         self.source.as_ref()
     }
 
+    /// The MSL text; `None` for an AIR record.
+    #[must_use]
+    pub fn msl(&self) -> Option<&str> {
+        match &self.body {
+            EntryBody::Msl { msl, .. } => Some(msl),
+            EntryBody::Air { .. } => None,
+        }
+    }
+
+    /// Replace the MSL text of an MSL record, keeping its emitter fingerprint; no effect on AIR.
+    pub fn set_msl(&mut self, text: String) {
+        if let EntryBody::Msl { msl, .. } = &mut self.body {
+            *msl = text;
+        }
+    }
+
+    /// The translator key and metallib; `None` for an MSL record.
+    #[must_use]
+    pub fn air(&self) -> Option<(&[u8; 32], &[u8])> {
+        match &self.body {
+            EntryBody::Air {
+                translator,
+                metallib,
+            } => Some((translator, metallib)),
+            EntryBody::Msl { .. } => None,
+        }
+    }
+
+    /// Whether the MSL was written by another emitter.
+    ///
+    /// AIR is never stale here: its key comparison belongs to the prewarm that knows the
+    /// build's key.
     #[must_use]
     pub const fn needs_regeneration(&self) -> bool {
-        self.emitter_version != SHADER_EMITTER_VERSION
+        match &self.body {
+            EntryBody::Msl { emitter, .. } => *emitter != SHADER_EMITTER_VERSION,
+            EntryBody::Air { .. } => false,
+        }
     }
 
     /// Replace stale MSL from retained programmable inputs before compilation.
@@ -459,23 +531,50 @@ impl CacheEntry {
             .source
             .as_ref()
             .ok_or("stale shader has no retained DXSO")?;
-        let msl = source.emit(&self.kind.entry_name(self.key))?;
-        self.msl = msl;
-        self.emitter_version = SHADER_EMITTER_VERSION;
+        let text = source.emit(&self.kind.entry_name(self.key))?;
+        self.body = EntryBody::Msl {
+            emitter: SHADER_EMITTER_VERSION,
+            msl: text,
+        };
         Ok(true)
     }
 
-    fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.emitter_version.to_le_bytes());
-        out.push(u8::from(self.source.is_some()));
-        if let Some(source) = &self.source {
-            source.encode(out);
+    const fn body_len(&self) -> usize {
+        match &self.body {
+            EntryBody::Msl { msl, .. } => msl.len(),
+            EntryBody::Air { metallib, .. } => metallib.len() + 32,
         }
-        out.extend_from_slice(self.msl.as_bytes());
+    }
+
+    fn encode(&self, out: &mut Vec<u8>) {
+        match &self.body {
+            EntryBody::Msl { emitter, msl } => {
+                out.extend_from_slice(&emitter.to_le_bytes());
+                out.push(u8::from(self.source.is_some()));
+                if let Some(source) = &self.source {
+                    source.encode(out);
+                }
+                out.extend_from_slice(msl.as_bytes());
+            }
+            EntryBody::Air {
+                translator,
+                metallib,
+            } => {
+                out.extend_from_slice(translator);
+                if let Some(source) = &self.source {
+                    source.encode(out);
+                }
+                out.extend_from_slice(metallib);
+            }
+        }
     }
 
     fn decode(kind: CachedKind, key: u64, bytes: &[u8]) -> Option<Self> {
-        let entry = Self::decode_body(kind, key, bytes);
+        let entry = if kind.is_air() {
+            Self::decode_air(kind, key, bytes)
+        } else {
+            Self::decode_body(kind, key, bytes)
+        };
         if entry.is_none() {
             mtld3d_shared::log_once_warn!(
                 target: crate::LOG_TARGET,
@@ -485,9 +584,29 @@ impl CacheEntry {
         entry
     }
 
+    fn decode_air(kind: CachedKind, key: u64, bytes: &[u8]) -> Option<Self> {
+        let mut reader = RecipeReader::new(bytes);
+        let translator: [u8; 32] = reader.take(32)?.try_into().ok()?;
+        let source = ShaderSource::decode(kind.msl_twin(), &mut reader)?;
+        if source.disk_key() != key {
+            return None;
+        }
+        let metallib = reader.take(bytes.len() - reader.offset)?;
+        if metallib.is_empty() {
+            return None;
+        }
+        Some(Self::new_air(
+            kind,
+            key,
+            translator,
+            metallib.to_vec(),
+            source,
+        ))
+    }
+
     fn decode_body(kind: CachedKind, key: u64, bytes: &[u8]) -> Option<Self> {
         let mut reader = RecipeReader::new(bytes);
-        let emitter_version = reader.u64()?;
+        let emitter = reader.u64()?;
         let source = match reader.u8()? {
             0 => None,
             1 if kind.is_programmable() => {
@@ -505,9 +624,8 @@ impl CacheEntry {
         Some(Self {
             kind,
             key,
-            msl,
             source,
-            emitter_version,
+            body: EntryBody::Msl { emitter, msl },
         })
     }
 }
@@ -753,8 +871,11 @@ impl PipelineRecipe {
     }
 
     fn is_valid(&self) -> bool {
+        // A pair is AIR or MSL as a whole (C3b-2); a mixed recipe is never written.
+        let one_backend = self.vs.kind.is_air() == self.ps.kind.is_air();
         self.vs.kind.is_vertex()
             && self.ps.kind.is_pixel()
+            && one_backend
             // An attachmentless sibling cannot serve a depth-only pass and
             // fails pipeline validation on Mac2. Keep useful cache records
             // while dropping these unused recipes from older writers.
@@ -977,7 +1098,7 @@ fn parse_records(bytes: &[u8], mode: RecordMode) -> (CacheRecords, bool) {
             // A file header inside the file is a stray from a duplicate
             // creation: skip its 16 bytes and keep parsing. No chunk header
             // can be mistaken for it, since the magic's leading byte would
-            // have to be a `kind` outside `0..=7` and `RECORD_KIND_BUNDLE`.
+            // have to be a `kind` outside `CachedKind`'s bytes and `RECORD_KIND_BUNDLE`.
             other_chunk = true;
             off += HEADER_LEN;
             continue;
@@ -1207,7 +1328,7 @@ impl CacheWriter {
     ///
     /// Any locking, validation, open, or write error.
     pub fn append_shader(&self, entry: &CacheEntry) -> std::io::Result<()> {
-        let mut buf = Vec::with_capacity(CHUNK_HEADER_LEN + entry.msl.len());
+        let mut buf = Vec::with_capacity(CHUNK_HEADER_LEN + entry.body_len());
         write_record(&mut buf, entry);
         self.append_bytes(&buf)
     }
@@ -1518,8 +1639,11 @@ fn push_record(
             if let Some(&index) = seen_shaders.get(&reference) {
                 selection.duplicates = true;
                 // A refreshed append wins over an older emitter, in either record order.
+                // AIR has no emitter version and core no build key: the later record wins
+                // (an append is never older than the bundle before it).
                 let old = &mut shaders[index];
-                if !entry.needs_regeneration() && old.needs_regeneration() {
+                if entry.kind.is_air() || (!entry.needs_regeneration() && old.needs_regeneration())
+                {
                     *old = entry;
                 }
             } else {

@@ -518,7 +518,7 @@ fn stale_cache_emitter(path: &std::path::Path) {
     shader_cache::write_header(&mut bytes);
     assert_eq!(bytes.len(), HEADER_LEN);
     for entry in &mut records.shaders {
-        entry.msl = "invalid obsolete MSL".into();
+        entry.set_msl("invalid obsolete MSL".into());
         let mut chunk = Vec::new();
         shader_cache::write_record(&mut chunk, entry);
         let mut body = zstd::decode_all(&chunk[CHUNK_HEADER_LEN..]).expect("decode shader record");

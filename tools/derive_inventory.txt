@@ -468,6 +468,7 @@ src/d3d9/core/src/reset_summary.rs ResetMethod Clone,Copy
 src/d3d9/core/src/sampler_state.rs SamplerFlags Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/sampler_state.rs SamplerKey Clone,Copy,PartialEq,Eq,Hash,Debug
 src/d3d9/core/src/shader_cache.rs CacheEntry Clone,Debug,PartialEq,Eq
+src/d3d9/core/src/shader_cache.rs EntryBody Clone,Debug,PartialEq,Eq
 src/d3d9/core/src/shader_cache.rs ShaderRecordRef Clone,Copy,PartialEq,Eq,Hash
 src/d3d9/core/src/shader_cache/source.rs ShaderSource Clone,Debug,PartialEq,Eq
 src/d3d9/core/src/shader_cache/source.rs Specialization Clone,Debug,PartialEq,Eq

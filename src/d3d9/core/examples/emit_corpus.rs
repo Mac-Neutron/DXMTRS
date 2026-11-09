@@ -10,6 +10,7 @@
 //! `ps_3_0` only, as D3D9 requires), over a `float4` stream of the vertex shader's declared inputs.
 //! `emit_corpus --merge <out> <in>...` reads cache files and writes one file holding every shader
 //! record and recipe of them, once each.
+//! `emit_corpus --kinds <in>...` prints the record count per kind, summed over the files.
 //!
 //! Two synthetic corpora always run: `synthetic_ff`, about sixty fixed-function
 //! vertex keys and fifty pixel keys shaped like the ones a fixed-function game
@@ -59,7 +60,9 @@
 //! comparison that a build unable to read that cache may lack the file.
 
 use std::{
-    env, fmt, fs,
+    env,
+    fmt::{self, Write as _},
+    fs,
     hint::black_box,
     path::{Path, PathBuf},
     process::ExitCode,
@@ -227,6 +230,8 @@ impl Shader {
     /// A cached record, or `None` for one that keeps no emission inputs.
     fn record(entry: CacheEntry) -> Option<Self> {
         entry.source()?;
+        // An AIR record holds a metallib, not MSL to time.
+        entry.msl()?;
         let name = entry.kind.entry_name(entry.key);
         Some(Self {
             input: Input::Record(entry),
@@ -370,6 +375,8 @@ struct Args {
     write_cache: Option<PathBuf>,
     /// `--merge <out> <in>...`: the output and the cache files to merge into it.
     merge: Option<(PathBuf, Vec<PathBuf>)>,
+    /// `--kinds <file>...`: the cache files whose records are counted per kind.
+    kinds: Option<Vec<PathBuf>>,
     caches: Vec<PathBuf>,
 }
 
@@ -389,11 +396,15 @@ fn main() -> ExitCode {
             eprintln!(
                 "usage: emit_corpus [--iters N] [--metrics DIR] [--digest] [mtld3d_shaders.bin ...]\n       \
                  emit_corpus --write-cache <out.bin>\n       \
-                 emit_corpus --merge <out.bin> <in.bin>..."
+                 emit_corpus --merge <out.bin> <in.bin>...\n       \
+                 emit_corpus --kinds <in.bin>..."
             );
             return ExitCode::from(2);
         }
     };
+    if let Some(inputs) = &args.kinds {
+        return report(kinds_line(inputs));
+    }
     if let Some((out, inputs)) = &args.merge {
         return report(merge_caches(out, inputs));
     }
@@ -508,6 +519,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         digest: false,
         write_cache: None,
         merge: None,
+        kinds: None,
         caches: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -535,6 +547,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                     return Err("--merge needs at least one input cache".to_owned());
                 }
                 parsed.merge = Some((out, inputs));
+            }
+            "--kinds" => {
+                let inputs: Vec<PathBuf> = args.by_ref().map(PathBuf::from).collect();
+                if inputs.is_empty() {
+                    return Err("--kinds needs at least one cache".to_owned());
+                }
+                parsed.kinds = Some(inputs);
             }
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => parsed.caches.push(arg.into()),
@@ -790,6 +809,46 @@ fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
     let mut seen = rustc_hash::FxHashSet::default();
     pipelines.retain(|recipe| seen.insert(recipe.disk_key()));
     write_cache_file(out, &shaders, &pipelines)
+}
+
+/// `--kinds`: the record count per kind, summed over `inputs`, as one line.
+fn kinds_line(inputs: &[PathBuf]) -> Result<String, String> {
+    const KINDS: [(CachedKind, &str); 14] = [
+        (CachedKind::Sm1Vs, "sm1vs"),
+        (CachedKind::Sm1Ps, "sm1ps"),
+        (CachedKind::Sm2Vs, "sm2vs"),
+        (CachedKind::Sm2Ps, "sm2ps"),
+        (CachedKind::Sm3Vs, "sm3vs"),
+        (CachedKind::Sm3Ps, "sm3ps"),
+        (CachedKind::AirSm1Vs, "air_sm1vs"),
+        (CachedKind::AirSm1Ps, "air_sm1ps"),
+        (CachedKind::AirSm2Vs, "air_sm2vs"),
+        (CachedKind::AirSm2Ps, "air_sm2ps"),
+        (CachedKind::AirSm3Vs, "air_sm3vs"),
+        (CachedKind::AirSm3Ps, "air_sm3ps"),
+        (CachedKind::FfVs, "ffvs"),
+        (CachedKind::FfPs, "ffps"),
+    ];
+    let mut counts = [0_usize; KINDS.len()];
+    for path in inputs {
+        let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        if read_header(&bytes) != Ok(CacheHeader::CURRENT) {
+            return Err(format!(
+                "{}: not a shader cache this build reads",
+                path.display()
+            ));
+        }
+        for entry in read_records(&bytes).shaders {
+            if let Some(at) = KINDS.iter().position(|(kind, _)| *kind == entry.kind) {
+                counts[at] += 1;
+            }
+        }
+    }
+    let mut line = format!("kinds {} files:", inputs.len());
+    for ((_, name), count) in KINDS.iter().zip(counts) {
+        let _ = write!(line, " {name}={count}");
+    }
+    Ok(line)
 }
 
 /// The cargo profile this binary was built with, from `target/<triple>/<profile>/examples`.
