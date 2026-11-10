@@ -1207,10 +1207,18 @@ fn ff_records(
     }
     let tokens = passthrough_ps();
     let program = dxso::parse(&tokens).map_err(|e| format!("passthrough ps: {e:?}"))?;
-    let (inputs, _) = LinkInputs::ps_inputs(&program);
+    // Every extra the pixel shader declares is one the vertex key passes through.
+    let (inputs, overflow) = LinkInputs::ps_inputs(&program);
+    let linked_input_mask =
+        inputs.mask_against(&SemanticSet::passthrough_outputs(&passthrough.passthrough));
+    if overflow.is_some() || linked_input_mask.count_ones() as usize != inputs.iter().count() {
+        return Err(format!(
+            "passthrough ps: links {linked_input_mask:#04x} of {} extras",
+            inputs.iter().count()
+        ));
+    }
     let variant = VariantKey {
-        linked_input_mask: inputs
-            .mask_against(&SemanticSet::passthrough_outputs(&passthrough.passthrough)),
+        linked_input_mask,
         ..VariantKey::default()
     };
     let source = ShaderSource::pixel(&program, variant);
