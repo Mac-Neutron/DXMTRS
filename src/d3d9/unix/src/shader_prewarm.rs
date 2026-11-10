@@ -9,7 +9,10 @@
 //! AIR records (ruling C3b-7) are built only under `shader.backend=air` in a
 //! build with a translator key; otherwise they and the recipes naming them stay
 //! in the file unread. One written by another translator build is regenerated
-//! from its retained DXSO and appended, so compaction keeps the fresh one.
+//! from its retained DXSO and appended, so compaction keeps the fresh one. A
+//! fixed-function AIR record whose key `ff_build` now builds into other tokens
+//! is regenerated from the fresh build the same way: the builders are outside
+//! the translator key.
 
 use std::{
     path::Path,
@@ -28,7 +31,7 @@ use mtld3d_core::{
         compilation::{Identity as CompileIdentity, Kind as CompileKind},
     },
     pipeline_state::{self, PipelineBuildInputs},
-    shader_cache::{self, CacheEntry, CacheLoad, ShaderRecordRef},
+    shader_cache::{self, CacheEntry, CacheLoad, ShaderRecordRef, ShaderSource},
     shader_compile_stats::{CompileBucket, Snapshot, format_summary},
     shader_key::CachedKind,
     shader_prewarm::PrewarmHandle,
@@ -366,7 +369,9 @@ struct LibraryCompilation {
     regenerated: Option<CacheEntry>,
 }
 
-/// Build one record's library; an AIR record of another key is translated again first.
+/// Build one record's library; a stale AIR record is translated again first.
+///
+/// Stale is another translator key, or a fixed-function source `ff_build` now builds otherwise.
 fn compile_library(
     device: MetalHandle<MTLDeviceKind>,
     entry: &CacheEntry,
@@ -378,21 +383,28 @@ fn compile_library(
     let mut regenerated = None;
     let handles = match (entry.msl(), entry.air(), air_key) {
         (Some(msl), _, _) => compile_stage_library(device, msl, &entry_name, &mut timings),
-        (None, Some((translator, metallib)), Some(key)) if translator == key => {
-            compile_air_stage_library(device, metallib, &entry_name)
+        (None, Some((translator, metallib)), Some(key)) => {
+            let rebuilt = entry.source().and_then(ShaderSource::rebuilt_ff);
+            if translator == key && rebuilt.is_none() {
+                compile_air_stage_library(device, metallib, &entry_name)
+            } else {
+                rebuilt
+                    .as_ref()
+                    .or_else(|| entry.source())
+                    .and_then(|source| {
+                        let metallib = translate_stage(source, &entry_name)?;
+                        let handles = compile_air_stage_library(device, &metallib, &entry_name)?;
+                        regenerated = Some(CacheEntry::new_air(
+                            entry.kind,
+                            entry.key,
+                            *key,
+                            metallib,
+                            source.clone(),
+                        ));
+                        Some(handles)
+                    })
+            }
         }
-        (None, Some(_), Some(key)) => entry.source().and_then(|source| {
-            let metallib = translate_stage(source, &entry_name)?;
-            let handles = compile_air_stage_library(device, &metallib, &entry_name)?;
-            regenerated = Some(CacheEntry::new_air(
-                entry.kind,
-                entry.key,
-                *key,
-                metallib,
-                source.clone(),
-            ));
-            Some(handles)
-        }),
         // `run` admits no AIR record without a key, and a record is MSL or AIR.
         _ => None,
     };

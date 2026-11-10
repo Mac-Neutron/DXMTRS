@@ -1340,3 +1340,471 @@ fn a_bundle_of_msl_and_air_records_loads() {
     let stats = read_stats(&bytes).expect("stats");
     assert_eq!((stats.shaders, stats.ff_shaders), (9, 1));
 }
+
+/// A lit, fogged, clipped fixed-function vertex key reading two coordinate sets.
+fn ff_vs_key() -> crate::dxso::FfVsKey {
+    use crate::dxso::{FfVsFlags, FfVsKey, tci_entry};
+
+    FfVsKey {
+        flags: FfVsFlags::HAS_NORMAL | FfVsFlags::HAS_COLOR0 | FfVsFlags::LIGHTING_ENABLED,
+        input_tex_coord_count: 2,
+        tex_coord_count: 2,
+        light_active_mask: 0b11,
+        light_directional_mask: 0b01,
+        light_spot_mask: 0b10,
+        diffuse_source: 0,
+        ambient_source: 0,
+        specular_source: 0,
+        emissive_source: 0,
+        fog_mode: 3,
+        tci: [tci_entry(0, 0), tci_entry(0, 1), 0, 0, 0, 0, 0, 0],
+        passthrough: [0; 8],
+        tex_coord_dims: [2, 3, 0, 0, 0, 0, 0, 0],
+        tt_flags: [0x02, 0, 0, 0, 0, 0, 0, 0],
+        vertex_blend_count: 0,
+        declared_weights_count: 0,
+        clip_plane_count: 2,
+        reserved: 0,
+    }
+}
+
+/// A textured `MODULATE` stage over the diffuse colour, the specular add on.
+fn ff_ps_key() -> crate::dxso::FfPsKey {
+    use mtld3d_types::{D3DTA_DIFFUSE, D3DTA_TEXTURE, D3DTOP_DISABLE, D3DTOP_MODULATE};
+
+    use crate::dxso::{FfPsKey, FfStage, FfStageFlags};
+
+    let op = |value: u32| u8::try_from(value).expect("a D3D9 op fits u8");
+    let mut stages = [FfStage {
+        color_op: op(D3DTOP_DISABLE),
+        alpha_op: op(D3DTOP_DISABLE),
+        ..FfStage::default()
+    }; 8];
+    stages[0] = FfStage {
+        color_op: op(D3DTOP_MODULATE),
+        color_arg1: op(D3DTA_TEXTURE),
+        color_arg2: op(D3DTA_DIFFUSE),
+        alpha_op: op(D3DTOP_MODULATE),
+        alpha_arg1: op(D3DTA_TEXTURE),
+        alpha_arg2: op(D3DTA_DIFFUSE),
+        flags: FfStageFlags::HAS_TEXTURE,
+    };
+    FfPsKey {
+        stages,
+        specular_add: true,
+        tt_projected_mask: 0x01,
+    }
+}
+
+fn ff_variant() -> crate::dxso::VariantKey {
+    crate::dxso::VariantKey {
+        fog_mode: 3,
+        color_out_mask: 0x01,
+        flags: crate::dxso::VariantFlags::FLAT_SHADE,
+        ..crate::dxso::VariantKey::default()
+    }
+}
+
+/// The fixed-function source the builders give `ff_vs_key()` or `ff_ps_key()`.
+fn ff_source(pixel: bool) -> ShaderSource {
+    if pixel {
+        let key = ff_ps_key();
+        ShaderSource::ff_pixel(&key, ff_variant(), &crate::ff_build::pixel(&key))
+    } else {
+        let key = ff_vs_key();
+        ShaderSource::ff_vertex(&key, &crate::ff_build::vertex(&key))
+    }
+}
+
+/// A record of fixed-function `kind` carrying `source`: `ff.rs`'s MSL, or a fake metallib for 8/9.
+fn ff_entry(kind: CachedKind, source: ShaderSource) -> CacheEntry {
+    let key = source.disk_key();
+    if kind.is_air() {
+        return CacheEntry::new_air(kind, key, [0xC3; 32], vec![0x4D, 0x54, 1, 2], source);
+    }
+    let msl = source.emit(&kind.entry_name(key)).expect("ff.rs emits");
+    CacheEntry::new(kind, key, msl, Some(source))
+}
+
+fn ff_kinds() -> [CachedKind; 4] {
+    [
+        CachedKind::FfVs,
+        CachedKind::FfPs,
+        CachedKind::AirFfVs,
+        CachedKind::AirFfPs,
+    ]
+}
+
+fn ff_kind_entry(kind: CachedKind) -> CacheEntry {
+    ff_entry(kind, ff_source(kind.is_pixel()))
+}
+
+/// The record decoded from its own body, and from a file of it.
+fn assert_round_trips(entry: &CacheEntry) {
+    let decoded = CacheEntry::decode(entry.kind, entry.key, &air_body(entry));
+    assert_eq!(decoded.as_ref(), Some(entry), "{:?}", entry.kind);
+    for bundle in [false, true] {
+        let (read, _) = read_shaders(&write_file(&[vec![entry.clone()]], bundle));
+        assert_eq!(
+            read,
+            std::slice::from_ref(entry),
+            "{:?} bundle={bundle}",
+            entry.kind
+        );
+    }
+}
+
+#[test]
+fn an_ff_vs_source_round_trips() {
+    use airconv_ir::dxso::spec::{StageSpec, VsSpec};
+
+    let key = ff_vs_key();
+    let program = crate::ff_build::vertex(&key);
+    let source = ShaderSource::ff_vertex(&key, &program);
+    assert_eq!(source.tokens(), &program.tokens[..]);
+    assert_eq!(
+        source.disk_key(),
+        crate::draw_data::vs_source_disk_key_ff(&key)
+    );
+    assert_eq!(
+        source.stage_spec(),
+        StageSpec::Vs(VsSpec {
+            provided_input_mask: program.provided_input_mask,
+            clip_plane_count: 2,
+            ..VsSpec::default()
+        })
+    );
+    let entry = ff_entry(CachedKind::FfVs, source);
+    assert_eq!(
+        entry.msl(),
+        Some(&*crate::dxso::emit_vs_ff_named(
+            &key,
+            &CachedKind::FfVs.entry_name(entry.key)
+        ))
+    );
+    assert_round_trips(&entry);
+}
+
+#[test]
+fn an_ff_ps_source_round_trips() {
+    use airconv_ir::dxso::spec::StageSpec;
+
+    let key = ff_ps_key();
+    let program = crate::ff_build::pixel(&key);
+    let source = ShaderSource::ff_pixel(&key, ff_variant(), &program);
+    assert_eq!(source.tokens(), &program.tokens[..]);
+    assert_eq!(
+        source.disk_key(),
+        crate::draw_data::ps_source_disk_key_ff(&key, ff_variant())
+    );
+    assert_eq!(source.stage_spec(), StageSpec::Ps(ff_variant()));
+    let entry = ff_entry(CachedKind::FfPs, source);
+    assert_eq!(
+        entry.msl(),
+        Some(&*crate::dxso::emit_ps_ff_named(
+            &key,
+            ff_variant(),
+            &CachedKind::FfPs.entry_name(entry.key)
+        ))
+    );
+    assert_round_trips(&entry);
+}
+
+#[test]
+fn an_air_ff_record_round_trips() {
+    let entries = [
+        ff_kind_entry(CachedKind::AirFfVs),
+        ff_kind_entry(CachedKind::AirFfPs),
+    ];
+    for entry in &entries {
+        assert!(entry.msl().is_none() && entry.air().is_some());
+        assert_round_trips(entry);
+    }
+    let path = scratch_dir("air-ff-compact").join("c.bin");
+    for entry in &entries {
+        append_one(&path, entry);
+    }
+    compact(&path).expect("compact");
+    let CacheLoad::Current(records) = load(&path).expect("load") else {
+        panic!("current cache");
+    };
+    assert_eq!(records.shaders, entries);
+}
+
+#[test]
+fn an_ff_source_on_the_wrong_stage_kind_is_refused() {
+    for kind in ff_kinds() {
+        let entry = ff_kind_entry(kind);
+        let body = air_body(&entry);
+        let twin = |vertex: CachedKind, pixel: CachedKind| {
+            if kind.is_vertex() { pixel } else { vertex }
+        };
+        let wrong = if kind.is_air() {
+            [
+                twin(CachedKind::AirFfVs, CachedKind::AirFfPs),
+                twin(CachedKind::AirSm3Vs, CachedKind::AirSm3Ps),
+                if kind.is_vertex() {
+                    CachedKind::AirSm3Vs
+                } else {
+                    CachedKind::AirSm3Ps
+                },
+            ]
+        } else {
+            [
+                twin(CachedKind::FfVs, CachedKind::FfPs),
+                twin(CachedKind::Sm3Vs, CachedKind::Sm3Ps),
+                if kind.is_vertex() {
+                    CachedKind::Sm3Vs
+                } else {
+                    CachedKind::Sm3Ps
+                },
+            ]
+        };
+        for other in wrong {
+            assert!(
+                CacheEntry::decode(other, entry.key, &body).is_none(),
+                "{kind:?} body read as {other:?}"
+            );
+        }
+        assert!(
+            CacheEntry::decode(kind, entry.key ^ 1, &body).is_none(),
+            "{kind:?} key"
+        );
+    }
+    // A programmable source on an FF kind is refused too.
+    for (programmable, ff) in [
+        (CachedKind::Sm3Vs, CachedKind::FfVs),
+        (CachedKind::Sm3Ps, CachedKind::FfPs),
+        (CachedKind::AirSm3Vs, CachedKind::AirFfVs),
+        (CachedKind::AirSm3Ps, CachedKind::AirFfPs),
+    ] {
+        let entry = programmable_entry(programmable);
+        assert!(
+            CacheEntry::decode(ff, entry.key, &air_body(&entry)).is_none(),
+            "{ff:?}"
+        );
+    }
+}
+
+#[test]
+fn a_truncated_ff_source_is_refused() {
+    for kind in ff_kinds() {
+        let entry = ff_kind_entry(kind);
+        let body = air_body(&entry);
+        // MSL: every cut before the source ends; AIR: every cut before the metallib's first byte.
+        let end = if kind.is_air() {
+            body.len() - entry.air().expect("air").1.len() + 1
+        } else {
+            body.len() - entry.msl().expect("msl").len()
+        };
+        for cut in 0..end {
+            assert!(
+                CacheEntry::decode(kind, entry.key, &body[..cut]).is_none(),
+                "{kind:?} cut {cut}"
+            );
+        }
+        assert!(
+            CacheEntry::decode(kind, entry.key, &body).is_some(),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn a_runtime_msl_ff_record_stays_sourceless() {
+    // A C3b build encodes an FF record as `emitter | has_source = 0 | MSL`: the bytes stay.
+    for kind in [CachedKind::FfVs, CachedKind::FfPs] {
+        let msl = "vertex VsOut mtld3d_vs_ff_00000001() { /* ff */ }";
+        let entry = CacheEntry::new(kind, 0x0123_4567_89AB_CDEF, msl.into(), None);
+        let mut expected = SHADER_EMITTER_VERSION.to_le_bytes().to_vec();
+        expected.push(0);
+        expected.extend_from_slice(msl.as_bytes());
+        assert_eq!(air_body(&entry), expected, "{kind:?}");
+        let decoded = CacheEntry::decode(kind, entry.key, &expected).expect("decode");
+        assert!(decoded.source().is_none());
+        assert_eq!(decoded, entry);
+    }
+}
+
+#[test]
+fn a_corpus_msl_ff_record_with_a_source_loads() {
+    for kind in [CachedKind::FfVs, CachedKind::FfPs] {
+        let expected = ff_kind_entry(kind);
+        let mut stale = expected.clone();
+        flip_emitter(&mut stale);
+        stale.set_msl("obsolete MSL must never compile".into());
+        let (mut read, _) = read_shaders(&write_file(&[vec![stale]], false));
+        assert_eq!(
+            read.len(),
+            1,
+            "{kind:?}: a stale FF record with a source is kept"
+        );
+        let entry = &mut read[0];
+        assert_eq!(entry.source(), expected.source());
+        assert!(entry.refresh_msl().expect("ff.rs regenerates"));
+        assert_eq!(
+            *entry, expected,
+            "{kind:?}: the MSL ff.rs emits for the key"
+        );
+    }
+}
+
+#[test]
+fn a_hostile_ff_key_is_refused() {
+    use crate::dxso::{FfStageFlags, FfVsFlags};
+
+    let program = crate::ff_build::vertex(&ff_vs_key());
+    let mutated = |name, mutate: fn(&mut crate::dxso::FfVsKey)| {
+        let mut key = ff_vs_key();
+        mutate(&mut key);
+        (name, key)
+    };
+    let vertex_cases = [
+        mutated("unknown flag", |k| {
+            k.flags = FfVsFlags::from_bits_retain(1 << 10);
+        }),
+        mutated("input sets", |k| k.input_tex_coord_count = 9),
+        mutated("stage sets", |k| k.tex_coord_count = 9),
+        mutated("tci set", |k| k.tci[0] = 0x08),
+        mutated("dims", |k| k.tex_coord_dims[1] = 5),
+        mutated("passthrough code", |k| {
+            k.passthrough = [0xE0, 0, 0, 0, 0, 0, 0, 0];
+        }),
+        mutated("blend count", |k| k.vertex_blend_count = 5),
+        mutated("clip planes", |k| k.clip_plane_count = 7),
+        mutated("reserved", |k| k.reserved = 1),
+    ];
+    for (name, key) in vertex_cases {
+        let source = ShaderSource::ff_vertex(&key, &program);
+        for kind in [CachedKind::FfVs, CachedKind::AirFfVs] {
+            let entry = if kind.is_air() {
+                CacheEntry::new_air(kind, source.disk_key(), [1; 32], vec![1], source.clone())
+            } else {
+                CacheEntry::new(kind, source.disk_key(), String::new(), Some(source.clone()))
+            };
+            assert!(
+                CacheEntry::decode(kind, entry.key, &air_body(&entry)).is_none(),
+                "{name} on {kind:?}"
+            );
+        }
+    }
+    let program = crate::ff_build::pixel(&ff_ps_key());
+    let mut key = ff_ps_key();
+    key.stages[3].flags = FfStageFlags::from_bits_retain(1 << 2);
+    let source = ShaderSource::ff_pixel(&key, ff_variant(), &program);
+    let entry = CacheEntry::new(
+        CachedKind::FfPs,
+        source.disk_key(),
+        String::new(),
+        Some(source),
+    );
+    assert!(CacheEntry::decode(entry.kind, entry.key, &air_body(&entry)).is_none());
+    // `specular_add` follows the emitter (8 bytes), the source flag and eight 7-byte stages.
+    let entry = ff_kind_entry(CachedKind::FfPs);
+    let mut body = air_body(&entry);
+    assert_eq!(body[8 + 1 + 8 * 7], 1);
+    body[8 + 1 + 8 * 7] = 2;
+    assert!(CacheEntry::decode(entry.kind, entry.key, &body).is_none());
+}
+
+#[test]
+fn a_warned_ff_key_round_trips() {
+    use crate::dxso::{FfVsFlags, tci_entry};
+
+    let mut key = ff_vs_key();
+    key.flags |= FfVsFlags::COLOR_VERTEX;
+    key.diffuse_source = 3;
+    key.tci[1] = tci_entry(6, 1);
+    let source = ShaderSource::ff_vertex(&key, &crate::ff_build::vertex(&key));
+    for kind in [CachedKind::FfVs, CachedKind::AirFfVs] {
+        assert_round_trips(&ff_entry(kind, source.clone()));
+    }
+}
+
+#[test]
+fn an_accepted_extreme_ff_key_builds_without_a_panic() {
+    use crate::dxso::{FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey, tci_entry};
+
+    // Every field at the most the decoder accepts: a prewarm rebuild must not panic on it.
+    // Extra semantics, then codes a vertex declaration never passes through (TEXCOORD0, COLOR0,
+    // COLOR1, PSIZE0, POSITIONT0, a repeat), which the decoder accepts as nameable.
+    let extras = [0xD0, 0x6F, 0x7F, 0x8F, 0x31, 0x22, 0x13, 0xC1];
+    let aliases = [0x50, 0xA0, 0xA1, 0x40, 0x90, 0x50, 0, 0];
+    for (flags, passthrough) in [
+        (FfVsFlags::all(), extras),
+        (FfVsFlags::all(), aliases),
+        (FfVsFlags::all() - FfVsFlags::HAS_RHW, extras),
+    ] {
+        let key = FfVsKey {
+            flags,
+            input_tex_coord_count: 8,
+            tex_coord_count: 8,
+            light_active_mask: 0xFF,
+            light_directional_mask: 0x0F,
+            light_spot_mask: 0xF0,
+            diffuse_source: 0xFF,
+            ambient_source: 0xFF,
+            specular_source: 0xFF,
+            emissive_source: 0xFF,
+            fog_mode: 0xFF,
+            // Modes 15 down to 9, then SPHEREMAP; every stage reads set 7.
+            tci: [15, 14, 13, 12, 11, 10, 9, 4].map(|mode| tci_entry(mode, 7)),
+            passthrough,
+            tex_coord_dims: [4; 8],
+            tt_flags: [0xFF, 0x17, 0x14, 0x13, 0x12, 0x07, 0x04, 0x10],
+            vertex_blend_count: 4,
+            declared_weights_count: 0xFF,
+            clip_plane_count: 6,
+            reserved: 0,
+        };
+        let program = crate::ff_build::vertex(&key);
+        crate::dxso::parse(&program.tokens).expect("the extreme key's tokens parse");
+        let source = ShaderSource::ff_vertex(&key, &program);
+        assert_round_trips(&ff_entry(CachedKind::FfVs, source));
+    }
+    let key = FfPsKey {
+        stages: [FfStage {
+            color_op: 0xFF,
+            color_arg1: 0xFF,
+            color_arg2: 0xFF,
+            alpha_op: 0xFF,
+            alpha_arg1: 0xFF,
+            alpha_arg2: 0xFF,
+            flags: FfStageFlags::all(),
+        }; 8],
+        specular_add: true,
+        tt_projected_mask: 0xFF,
+    };
+    let program = crate::ff_build::pixel(&key);
+    crate::dxso::parse(&program.tokens).expect("the extreme key's tokens parse");
+    let source = ShaderSource::ff_pixel(&key, ff_variant(), &program);
+    assert_round_trips(&ff_entry(CachedKind::FfPs, source));
+}
+
+#[test]
+fn a_rebuilt_ff_source_is_none_when_current() {
+    for pixel in [false, true] {
+        assert_eq!(ff_source(pixel).rebuilt_ff(), None);
+    }
+    let programmable = programmable_entry(CachedKind::Sm3Vs);
+    assert_eq!(
+        programmable.source().and_then(ShaderSource::rebuilt_ff),
+        None
+    );
+    // Another key's build stored under this key: the rebuild is this key's, mask included.
+    let key = ff_vs_key();
+    let mut other = key.clone();
+    other.flags.remove(crate::dxso::FfVsFlags::HAS_NORMAL);
+    other.input_tex_coord_count = 0;
+    let stale_program = crate::ff_build::vertex(&other);
+    let fresh_program = crate::ff_build::vertex(&key);
+    assert_ne!(
+        stale_program.provided_input_mask,
+        fresh_program.provided_input_mask
+    );
+    let stale = ShaderSource::ff_vertex(&key, &stale_program);
+    assert_eq!(
+        stale.rebuilt_ff(),
+        Some(ShaderSource::ff_vertex(&key, &fresh_program))
+    );
+}

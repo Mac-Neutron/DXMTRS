@@ -21,6 +21,8 @@
 //! * `kind` ∈ `0..=7` (`CachedKind`) → **Single** chunk. Frame decompresses to
 //!   an emitter fingerprint (u64 LE), a source-present byte, optional DXSO
 //!   and specialization inputs, then UTF-8 MSL. `key` is the `disk_key`.
+//!   Fixed-function (`0..=1`) records the runtime writes carry no source; a
+//!   source on one is its key and `ff_build`'s tokens.
 //!   `kind` ∈ `8..=15` (AIR twins, `8..=9` fixed-function) is
 //!   `translator key [32] | DXSO inputs | metallib`.
 //!   Stale programmable MSL is regenerated; stale source-less records are dropped.
@@ -470,7 +472,10 @@ impl CacheEntry {
         }
     }
 
-    /// The retained DXSO and specialization inputs; `None` for fixed-function records.
+    /// The retained DXSO and specialization inputs.
+    ///
+    /// `None` for the fixed-function MSL records the runtime writes; an AIR record always has
+    /// one, and a corpus-written fixed-function MSL record may.
     #[must_use]
     pub const fn source(&self) -> Option<&ShaderSource> {
         self.source.as_ref()
@@ -610,7 +615,7 @@ impl CacheEntry {
         let emitter = reader.u64()?;
         let source = match reader.u8()? {
             0 => None,
-            1 if kind.is_programmable() => {
+            1 => {
                 let source = ShaderSource::decode(kind, &mut reader)?;
                 if source.disk_key() != key {
                     return None;
@@ -939,6 +944,10 @@ impl<'a> RecipeReader<'a> {
 
     fn u64(&mut self) -> Option<u64> {
         Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+
+    fn array<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.take(N)?.try_into().ok()
     }
 
     const fn is_empty(&self) -> bool {

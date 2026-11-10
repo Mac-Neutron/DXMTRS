@@ -5,7 +5,7 @@ use mtld3d_core::{
     pipeline_state::{
         ExtraColorAttachments, PipelineAttachFlags, PipelineRsBits, PipelineSnapshot, StreamLayout,
     },
-    shader_cache::{PipelineRecipe, ShaderSource},
+    shader_cache::PipelineRecipe,
 };
 use mtld3d_shared::{
     VertexAttrDesc,
@@ -160,6 +160,8 @@ fn prewarm_skips_air_records_and_recipes_under_msl() {
     assert_eq!(air_key(ShaderBackend::Air, None), None);
     assert_eq!(air_key(ShaderBackend::Air, Some(KEY)), Some(KEY));
     for kind in [
+        CachedKind::AirFfVs,
+        CachedKind::AirFfPs,
         CachedKind::AirSm1Vs,
         CachedKind::AirSm2Ps,
         CachedKind::AirSm3Ps,
@@ -227,4 +229,172 @@ fn prewarm_regenerates_an_air_record_with_another_key() {
         "compaction keeps the regenerated records only"
     );
     let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+}
+
+/// A lit fixed-function vertex key; `normal` adds the normal input and one coordinate set.
+fn ff_vs_key(normal: bool) -> mtld3d_core::dxso::FfVsKey {
+    use mtld3d_core::dxso::{FfVsFlags, FfVsKey};
+
+    let mut flags = FfVsFlags::HAS_COLOR0;
+    if normal {
+        flags |= FfVsFlags::HAS_NORMAL | FfVsFlags::LIGHTING_ENABLED;
+    }
+    FfVsKey {
+        flags,
+        input_tex_coord_count: u8::from(normal),
+        tex_coord_count: u8::from(normal),
+        light_active_mask: u8::from(normal),
+        light_directional_mask: u8::from(normal),
+        light_spot_mask: 0,
+        diffuse_source: 0,
+        ambient_source: 0,
+        specular_source: 0,
+        emissive_source: 0,
+        fog_mode: 0,
+        tci: [0; 8],
+        passthrough: [0; 8],
+        tex_coord_dims: [2, 0, 0, 0, 0, 0, 0, 0],
+        tt_flags: [0; 8],
+        vertex_blend_count: 0,
+        declared_weights_count: 0,
+        clip_plane_count: 0,
+        reserved: 0,
+    }
+}
+
+/// A fixed-function pixel key: `textured` modulates a texture into the diffuse colour.
+fn ff_ps_key(textured: bool) -> mtld3d_core::dxso::FfPsKey {
+    use mtld3d_core::dxso::{FfPsKey, FfStage, FfStageFlags};
+    use mtld3d_types::{
+        D3DTA_DIFFUSE, D3DTA_TEXTURE, D3DTOP_DISABLE, D3DTOP_MODULATE, D3DTOP_SELECTARG1,
+    };
+
+    let code = |value: u32| u8::try_from(value).expect("a D3D9 code fits u8");
+    let disabled = FfStage {
+        color_op: code(D3DTOP_DISABLE),
+        alpha_op: code(D3DTOP_DISABLE),
+        ..FfStage::default()
+    };
+    let mut stages = [disabled; 8];
+    stages[0] = if textured {
+        FfStage {
+            color_op: code(D3DTOP_MODULATE),
+            color_arg1: code(D3DTA_TEXTURE),
+            color_arg2: code(D3DTA_DIFFUSE),
+            alpha_op: code(D3DTOP_MODULATE),
+            alpha_arg1: code(D3DTA_TEXTURE),
+            alpha_arg2: code(D3DTA_DIFFUSE),
+            flags: FfStageFlags::HAS_TEXTURE,
+        }
+    } else {
+        FfStage {
+            color_op: code(D3DTOP_SELECTARG1),
+            color_arg1: code(D3DTA_DIFFUSE),
+            alpha_op: code(D3DTOP_SELECTARG1),
+            alpha_arg1: code(D3DTA_DIFFUSE),
+            ..FfStage::default()
+        }
+    };
+    FfPsKey {
+        stages,
+        specular_add: false,
+        tt_projected_mask: 0,
+    }
+}
+
+/// The AIR record of `source`, translated now and stamped `translator`.
+fn ff_air_entry(source: ShaderSource, translator: [u8; 32]) -> CacheEntry {
+    let kind = if matches!(
+        source.stage_spec(),
+        airconv_ir::dxso::spec::StageSpec::Vs(_)
+    ) {
+        CachedKind::AirFfVs
+    } else {
+        CachedKind::AirFfPs
+    };
+    let key = source.disk_key();
+    let metallib = translate_stage(&source, &kind.entry_name(key)).expect("translates");
+    CacheEntry::new_air(kind, key, translator, metallib, source)
+}
+
+/// The current fixed-function sources of `ff_vs_key(true)` and `ff_ps_key(true)`.
+fn fresh_ff_sources() -> [ShaderSource; 2] {
+    let (vs, ps) = (ff_vs_key(true), ff_ps_key(true));
+    [
+        ShaderSource::ff_vertex(&vs, &mtld3d_core::ff_build::vertex(&vs)),
+        ShaderSource::ff_pixel(
+            &ps,
+            VariantKey::default(),
+            &mtld3d_core::ff_build::pixel(&ps),
+        ),
+    ]
+}
+
+#[test]
+fn stale_ff_tokens_regenerate_the_air_record() {
+    let device = device();
+    let dir = std::env::temp_dir().join(format!("mtld3d-prewarm-ff-stale-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("mtld3d_shaders.bin");
+    // Each key stored with another key's build: other tokens, and for the VS another input mask.
+    let (vs, ps) = (ff_vs_key(true), ff_ps_key(true));
+    let stale = [
+        ShaderSource::ff_vertex(&vs, &mtld3d_core::ff_build::vertex(&ff_vs_key(false))),
+        ShaderSource::ff_pixel(
+            &ps,
+            VariantKey::default(),
+            &mtld3d_core::ff_build::pixel(&ff_ps_key(false)),
+        ),
+    ];
+    let writer = shader_cache::CacheWriter::open(&path).expect("cache file");
+    let mut refs = Vec::new();
+    for source in stale {
+        let entry = ff_air_entry(source, KEY);
+        refs.push(plain(ShaderRecordRef::new(entry.kind, entry.key)));
+        writer.append_shader(&entry).expect("append");
+    }
+    let warm = prewarm(handle_of(&device), &path, Some(KEY));
+    let mut built: Vec<_> = warm.libraries.iter().map(|(r, _)| plain(*r)).collect();
+    built.sort_unstable();
+    refs.sort_unstable();
+    assert_eq!(built, refs);
+    let kept = records(&path);
+    assert_eq!(
+        kept.shaders.len(),
+        2,
+        "compaction keeps the regenerated records only"
+    );
+    for (entry, fresh) in kept.shaders.iter().zip(fresh_ff_sources()) {
+        assert_eq!(
+            entry.source(),
+            Some(&fresh),
+            "{:?}: this key's build",
+            entry.kind
+        );
+        assert_eq!(entry.air().map(|(key, _)| *key), Some(KEY));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn matching_ff_tokens_keep_the_record() {
+    let device = device();
+    for source in fresh_ff_sources() {
+        let entry = ff_air_entry(source, KEY);
+        let kept = compile_library(handle_of(&device), &entry, Some(&KEY));
+        assert!(kept.handles.is_some(), "{:?} builds", entry.kind);
+        assert!(
+            kept.regenerated.is_none(),
+            "{:?}: current tokens",
+            entry.kind
+        );
+        // Another translator build regenerates it as any AIR record, from the same source.
+        let other = compile_library(handle_of(&device), &entry, Some(&OTHER_KEY));
+        assert!(other.handles.is_some());
+        let regenerated = other.regenerated.expect("another key regenerates");
+        assert_eq!(regenerated.air().map(|(key, _)| *key), Some(OTHER_KEY));
+        assert_eq!(regenerated.source(), entry.source());
+        assert_eq!(regenerated.key, entry.key);
+    }
 }
