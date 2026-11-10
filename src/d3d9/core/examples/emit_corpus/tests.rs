@@ -161,8 +161,10 @@ fn kinds_counts_msl_and_air_records() {
 }
 
 /// A programmable pair from the synthetic cache: a `vs_3_0` and a `ps_3_0` record.
-fn sm3_pair() -> (CacheEntry, CacheEntry) {
-    let path = temp("sm3-pair");
+///
+/// Each test names its own file: tests run in parallel in one process.
+fn sm3_pair(name: &str) -> (CacheEntry, CacheEntry) {
+    let path = temp(name);
     write_synthetic_cache(&path, &synthetic()).expect("write");
     let records = loaded(&path).shaders;
     let find = |kind| {
@@ -188,7 +190,7 @@ fn recipe(vs: &CacheEntry, ps: &CacheEntry) -> PipelineRecipe {
 
 #[test]
 fn merge_drops_sourceless_records_and_their_recipes() {
-    let (vs, ps) = sm3_pair();
+    let (vs, ps) = sm3_pair("sourceless-pair");
     let key = carrier_vs();
     let (_, with_source) = ff_vs_record(&key).expect("ff vs");
     // The MSL fixed-function record a C3b runtime writes: no source.
@@ -224,7 +226,7 @@ fn merge_drops_sourceless_records_and_their_recipes() {
 
 #[test]
 fn merge_keeps_air_records_with_sources() {
-    let (vs, ps) = sm3_pair();
+    let (vs, ps) = sm3_pair("air-pair");
     let (_, vertex_ff) = ff_vs_record(&carrier_vs()).expect("ff vs");
     let (ps_key, variant) = carrier_ps(&carrier_vs());
     let (_, pixel_ff) = ff_ps_record(&ps_key, variant).expect("ff ps");
