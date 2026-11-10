@@ -3,8 +3,11 @@
 //! `winemetal.so` loaded once, its 64-bit `__wine_unix_call_funcs` slots called with winemetal's
 //! own parameter structs (`winemetal_thunks.h`). A 32-bit process ([`mark_wow64`]) calls its
 //! `__wine_unix_call_wow64_funcs` instead, whose entries for the slots the facade calls take the
-//! same structs: in the VM's guest they mark the process 32-bit, so the memory winemetal hands out
-//! lies below 2 GiB, where the i386 PE side writes into it (D3D9 M2b).
+//! same structs, SM50's aside: in the VM's guest they mark the process 32-bit, so the memory
+//! winemetal hands out lies below 2 GiB, where the i386 PE side writes into it (D3D9 M2b). That
+//! table's SM50 entries read a 32-bit PE caller's `*_params32`, and this crate lays out SM50's
+//! structs by its own pointer width (`sm50.rs`), so a 64-bit build calls them through the 64-bit
+//! table even when marked (`takes_table64`).
 //!
 //! The library is the one beside the image holding this crate (`mtld3d.so` in Wine's
 //! `lib/wine/<arch>-unix`), or `MTLD3D_WINEMETAL` when that names one (tests). Under Wine the
@@ -17,6 +20,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::wmt;
+
 type Slot = unsafe extern "C" fn(*mut c_void) -> i32;
 
 /// The loaded table.
@@ -24,6 +29,9 @@ type Slot = unsafe extern "C" fn(*mut c_void) -> i32;
 /// Process-wide, as the library is (one `dlopen` handle per process, never closed).
 pub struct Table {
     funcs: *const Slot,
+    /// `__wine_unix_call_funcs`: `funcs` but in a marked 64-bit build.
+    funcs64: *const Slot,
+    wow64: bool,
 }
 
 // SAFETY: the table is an immutable array of function pointers in a library that is never unloaded.
@@ -126,7 +134,8 @@ impl Table {
         if handle.is_null() {
             return Err(format!("dlopen {path}: {}", last_error()));
         }
-        let symbol = if WOW64.load(Ordering::Relaxed) {
+        let wow64 = WOW64.load(Ordering::Relaxed);
+        let symbol = if wow64 {
             c"__wine_unix_call_wow64_funcs"
         } else {
             c"__wine_unix_call_funcs"
@@ -140,9 +149,24 @@ impl Table {
                 last_error()
             ));
         }
+        let funcs64 = if wow64 && WIDE {
+            // SAFETY: a symbol lookup in the handle just opened.
+            let funcs64 = unsafe { dlsym(handle, c"__wine_unix_call_funcs".as_ptr()) };
+            if funcs64.is_null() {
+                return Err(format!(
+                    "{path} has no __wine_unix_call_funcs: {}",
+                    last_error()
+                ));
+            }
+            funcs64
+        } else {
+            funcs
+        };
         log::info!(target: "mtld3d::mtl", "winemetal: {path} ({})", symbol.to_string_lossy());
         Ok(Self {
             funcs: funcs.cast(),
+            funcs64: funcs64.cast(),
+            wow64,
         })
     }
 
@@ -150,7 +174,7 @@ impl Table {
     #[must_use]
     pub fn slot_address(&self, slot: u32) -> usize {
         // SAFETY: callers ask only for slots the facade uses, all inside the table.
-        unsafe { *self.funcs.add(slot as usize) as usize }
+        unsafe { *self.funcs_for(slot).add(slot as usize) as usize }
     }
 
     /// Calls slot `slot` with `params`, winemetal's parameter struct for it; its NTSTATUS.
@@ -159,8 +183,35 @@ impl Table {
     /// handle in it is valid for the call.
     pub unsafe fn call<P>(&self, slot: u32, params: &mut P) -> i32 {
         // SAFETY: the caller's contract; the slot index is one the facade uses (inside the table).
-        unsafe { (*self.funcs.add(slot as usize))((params as *mut P).cast()) }
+        unsafe { (*self.funcs_for(slot).add(slot as usize))((params as *mut P).cast()) }
     }
+
+    /// The table slot `slot` is called through.
+    const fn funcs_for(&self, slot: u32) -> *const Slot {
+        if takes_table64(slot, self.wow64, WIDE) {
+            self.funcs64
+        } else {
+            self.funcs
+        }
+    }
+}
+
+/// Whether this build's pointers are 64-bit.
+const WIDE: bool = size_of::<usize>() == 8;
+
+/// Whether slot `slot` goes through winemetal's 64-bit table.
+///
+/// In a process marked `wow64`, by a build whose pointers are `wide`. A marked 64-bit build (new
+/// `WoW64`'s Unix side) still calls SM50's slots through the 64-bit table: the `WoW64` table
+/// converts them from a 32-bit caller's structs, and `sm50.rs` lays them out 64-bit. Skipping the
+/// `WoW64` entry is safe. In the VM's guest those entries differ from the 64-bit ones only in
+/// setting the process's 32-bit latch, which is process-wide and which the `WoW64` calls that made
+/// the device, before any compile, already set; and SM50's output is read only here, on the 64-bit
+/// Unix side, so it need not lie below 2 GiB. On macOS the `WoW64` table is the 64-bit one with
+/// the converters in place. An i686 build's own table is the 32-bit one and its structs are
+/// 32-bit, so it keeps it.
+const fn takes_table64(slot: u32, wow64: bool, wide: bool) -> bool {
+    !wow64 || (wide && matches!(slot, wmt::SM50_INITIALIZE..=wmt::SM50_FREE_ERROR))
 }
 
 /// Calls slot `slot` of the loaded table.
@@ -175,3 +226,6 @@ pub unsafe fn call<P>(slot: u32, params: &mut P) -> i32 {
     // SAFETY: the caller's contract.
     unsafe { table.call(slot, params) }
 }
+
+#[cfg(test)]
+mod tests;
