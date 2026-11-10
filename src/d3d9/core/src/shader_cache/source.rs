@@ -375,7 +375,10 @@ fn encode_ff_vs(key: &FfVsKey, out: &mut Vec<u8>) {
     ]);
 }
 
-/// An `FfVsKey`, refused only where `ff.rs` or `ff_build` would index past an array.
+/// An `FfVsKey` the builder can take.
+///
+/// Refused only where `ff.rs`/`ff_build` would index past an array or read a value no live key
+/// carries (C3c-4).
 ///
 /// Values they merely warn about and fall back from (a material source above 2, a TCI mode
 /// above 4, a fog mode they do not name) load: live keys carry them.

@@ -789,7 +789,7 @@ impl Gpu {
     fn make_function(&self, air: bool, entry: &CacheEntry) -> Result<Func, Fail> {
         let source = entry
             .source()
-            .ok_or_else(|| Fail::Refused("a fixed-function record".to_owned()))?;
+            .ok_or_else(|| Fail::Refused("a record without a source".to_owned()))?;
         let name = entry.kind.entry_name(entry.key);
         if air {
             let cname = CString::new(name.clone()).map_err(|e| Fail::Refused(e.to_string()))?;

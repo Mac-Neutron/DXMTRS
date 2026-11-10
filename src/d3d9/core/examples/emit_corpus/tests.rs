@@ -225,6 +225,29 @@ fn merge_drops_sourceless_records_and_their_recipes() {
 }
 
 #[test]
+fn a_sourceless_record_does_not_evict_its_sourced_twin() {
+    let key = carrier_vs();
+    let (_, sourced) = ff_vs_record(&key).expect("ff vs");
+    // Same (kind, key), no source, read first.
+    let sourceless = CacheEntry::new(
+        sourced.kind,
+        sourced.key,
+        sourced.msl().expect("msl").to_owned(),
+        None,
+    );
+    let (first, second) = (temp("twin-first"), temp("twin-second"));
+    write_cache_file(&first, std::slice::from_ref(&sourceless), &[]).expect("write");
+    write_cache_file(&second, std::slice::from_ref(&sourced), &[]).expect("write");
+    let out = temp("twin-out");
+    let line = merge_caches(&out, &[first, second]).expect("merge");
+    assert!(
+        line.starts_with("merge: dropped 1 sourceless records, 0 recipes\n"),
+        "{line}"
+    );
+    assert_eq!(loaded(&out).shaders, vec![sourced]);
+}
+
+#[test]
 fn merge_keeps_air_records_with_sources() {
     let (vs, ps) = sm3_pair("air-pair");
     let (_, vertex_ff) = ff_vs_record(&carrier_vs()).expect("ff vs");

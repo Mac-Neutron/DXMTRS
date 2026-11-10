@@ -521,7 +521,7 @@ impl CacheEntry {
         }
     }
 
-    /// Replace stale MSL from retained programmable inputs before compilation.
+    /// Replace stale MSL from retained inputs before compilation.
     ///
     /// Returns whether the entry changed and needs persisting. A failed regeneration
     /// leaves its source and old fingerprint intact so the next launch can retry.
@@ -536,7 +536,7 @@ impl CacheEntry {
         let source = self
             .source
             .as_ref()
-            .ok_or("stale shader has no retained DXSO")?;
+            .ok_or("stale shader has no retained source")?;
         let text = source.emit(&self.kind.entry_name(self.key))?;
         self.body = EntryBody::Msl {
             emitter: SHADER_EMITTER_VERSION,

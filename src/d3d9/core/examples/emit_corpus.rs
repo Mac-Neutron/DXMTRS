@@ -1826,13 +1826,14 @@ fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
         shaders.extend(records.shaders);
         pipelines.extend(records.pipelines);
     }
-    let mut seen = rustc_hash::FxHashSet::default();
-    shaders.retain(|entry| seen.insert((entry.kind as u8, entry.key)));
     // A record without a source cannot be rendered again (a C3b runtime's MSL fixed-function
-    // records, a stage demoted to MSL under `air`), nor can a recipe naming it.
+    // records, a stage demoted to MSL under `air`), nor can a recipe naming it. Dropped before
+    // the dedup, so one cannot evict its sourced twin.
     let records = shaders.len();
     shaders.retain(|entry| entry.source().is_some());
     let sourceless = records - shaders.len();
+    let mut seen = rustc_hash::FxHashSet::default();
+    shaders.retain(|entry| seen.insert((entry.kind as u8, entry.key)));
     let kept: rustc_hash::FxHashSet<_> = shaders
         .iter()
         .map(|entry| (entry.kind as u8, entry.key))
