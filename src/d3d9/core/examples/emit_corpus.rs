@@ -8,8 +8,13 @@
 //! cache file: one record per shader, with the DXSO and its exact specialization, and a pipeline
 //! recipe per vertex and pixel shader pair of the same shader model family (a `vs_3_0` pairs with
 //! `ps_3_0` only, as D3D9 requires), over a `float4` stream of the vertex shader's declared inputs.
+//! The same file holds the fixed-function keys of `synthetic_ff` and `synthetic_ff_extra` as MSL
+//! records with their sources (the key and `ff_build`'s tokens), in recipes over the vertex
+//! declaration each vertex key stands for, and cross-family pairs of fixed-function and
+//! programmable stages.
 //! `emit_corpus --merge <out> <in>...` reads cache files and writes one file holding every shader
-//! record and recipe of them, once each.
+//! record and recipe of them, once each, less the records without a source and the recipes naming
+//! them, which it counts (`merge: dropped <r> sourceless records, <p> recipes`).
 //! `emit_corpus --kinds <in>...` prints the record count per kind, summed over the files.
 //!
 //! Two synthetic corpora always run: `synthetic_ff`, about sixty fixed-function
@@ -20,8 +25,8 @@
 //! synthetic shaders are named by position in fixed-width names, so the MSL
 //! sizes change only when the emitted code does. Each cache file named
 //! on the command line adds a corpus named after its directory, holding every
-//! programmable record; fixed-function records keep no emission inputs on disk,
-//! so a cache contributes only its programmable half.
+//! MSL record with a source; the layer writes its fixed-function MSL records
+//! without one, so a game's cache contributes only its programmable half.
 //!
 //! A cache that is not an mtld3d shader cache, or whose container format this
 //! build does not read (a stale cache next to a game install is normal), is
@@ -70,10 +75,13 @@ use std::{
 };
 
 use mtld3d_core::{
+    convert::resolve_attrs_for_ff,
     dxso::{
-        self, Declaration, DxsoProgram, FfPsKey, FfStage, FfStageFlags, FfVsFlags, FfVsKey,
-        RegKind, VariantFlags, VariantKey, VsSamplerKinds, tci_entry,
+        self, Declaration, DxsoProgram, FfPsKey, FfStage, FfStageFlags, FfStageResult, FfVsFlags,
+        FfVsKey, LinkInputs, RegKind, SemanticSet, VariantFlags, VariantKey, VsSamplerKinds,
+        decl_passthrough_code, tci_entry,
     },
+    ff_build,
     pipeline_state::{
         ExtraColorAttachments, PipelineAttachFlags, PipelineRsBits, PipelineSnapshot, StreamLayout,
     },
@@ -89,12 +97,18 @@ use mtld3d_shared::{
     mtl::{PixelFormat, VertexFormat, VertexStepFunction},
 };
 use mtld3d_types::{
-    D3DCMP_GREATEREQUAL, D3DDECLUSAGE_BLENDINDICES, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_FOG,
-    D3DDECLUSAGE_NORMAL, D3DDECLUSAGE_POSITION, D3DDECLUSAGE_TEXCOORD, D3DFOG_LINEAR,
-    D3DMCS_COLOR1, D3DMCS_COLOR2, D3DMCS_MATERIAL, D3DTA_CURRENT, D3DTA_DIFFUSE, D3DTA_TEXTURE,
-    D3DTOP_ADD, D3DTOP_BLENDCURRENTALPHA, D3DTOP_BLENDTEXTUREALPHA, D3DTOP_MODULATE,
-    D3DTOP_MODULATE2X, D3DTOP_MODULATEALPHA_ADDCOLOR, D3DTOP_SELECTARG1, D3DTSS_ALPHAARG1,
-    D3DTSS_ALPHAARG2, D3DTSS_ALPHAOP, D3DTSS_COLORARG1, D3DTSS_COLORARG2, D3DTSS_COLOROP,
+    D3DCMP_GREATEREQUAL, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT1,
+    D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT3, D3DDECLTYPE_FLOAT4, D3DDECLTYPE_UBYTE4,
+    D3DDECLUSAGE_BINORMAL, D3DDECLUSAGE_BLENDINDICES, D3DDECLUSAGE_BLENDWEIGHT, D3DDECLUSAGE_COLOR,
+    D3DDECLUSAGE_DEPTH, D3DDECLUSAGE_FOG, D3DDECLUSAGE_NORMAL, D3DDECLUSAGE_POSITION,
+    D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_PSIZE, D3DDECLUSAGE_SAMPLE, D3DDECLUSAGE_TANGENT,
+    D3DDECLUSAGE_TEXCOORD, D3DFOG_LINEAR, D3DMCS_COLOR1, D3DMCS_COLOR2, D3DMCS_MATERIAL,
+    D3DTA_ALPHAREPLICATE, D3DTA_COMPLEMENT, D3DTA_CONSTANT, D3DTA_CURRENT, D3DTA_DIFFUSE,
+    D3DTA_SPECULAR, D3DTA_TEMP, D3DTA_TEXTURE, D3DTA_TFACTOR, D3DTOP_ADD, D3DTOP_ADDSIGNED,
+    D3DTOP_BLENDCURRENTALPHA, D3DTOP_BLENDTEXTUREALPHA, D3DTOP_BUMPENVMAP,
+    D3DTOP_BUMPENVMAPLUMINANCE, D3DTOP_DISABLE, D3DTOP_LERP, D3DTOP_MODULATE, D3DTOP_MODULATE2X,
+    D3DTOP_MODULATEALPHA_ADDCOLOR, D3DTOP_SELECTARG1, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2,
+    D3DTSS_ALPHAOP, D3DTSS_COLORARG1, D3DTSS_COLORARG2, D3DTSS_COLOROP, D3DVERTEXELEMENT9,
     MAX_STREAMS, texture_stage_state_defaults,
 };
 use xxhash_rust::xxh3::Xxh3;
@@ -767,6 +781,10 @@ fn synthetic_records(corpus: &Corpus) -> Result<(Vec<CacheEntry>, Vec<PipelineRe
             *depth,
         ));
     }
+    ff_records(&vertex, &pixel, &mut shaders, &mut pipelines)?;
+    // Two shapes can build the same pair.
+    let mut seen = rustc_hash::FxHashSet::default();
+    pipelines.retain(|recipe| seen.insert(recipe.disk_key()));
     Ok((shaders, pipelines))
 }
 
@@ -834,7 +852,948 @@ fn vertex_attrs(program: &DxsoProgram) -> Vec<VertexAttrDesc> {
         .collect()
 }
 
+/// One fixed-function vertex record of `key`: its MSL, and its source (`ff_build`'s tokens).
+fn ff_vs_record(key: &FfVsKey) -> Result<(ShaderRecordRef, CacheEntry), String> {
+    let source = ShaderSource::ff_vertex(key, &ff_build::vertex(key));
+    let (kind, disk_key) = (CachedKind::FfVs, source.disk_key());
+    let msl = source.emit(&kind.entry_name(disk_key))?;
+    Ok((
+        ShaderRecordRef::new(kind, disk_key),
+        CacheEntry::new(kind, disk_key, msl, Some(source)),
+    ))
+}
+
+/// One fixed-function pixel record of `key` under `variant`, as [`ff_vs_record`].
+fn ff_ps_record(
+    key: &FfPsKey,
+    variant: VariantKey,
+) -> Result<(ShaderRecordRef, CacheEntry), String> {
+    let source = ShaderSource::ff_pixel(key, variant, &ff_build::pixel(key));
+    let (kind, disk_key) = (CachedKind::FfPs, source.disk_key());
+    let msl = source.emit(&kind.entry_name(disk_key))?;
+    Ok((
+        ShaderRecordRef::new(kind, disk_key),
+        CacheEntry::new(kind, disk_key, msl, Some(source)),
+    ))
+}
+
+/// The vertex declaration a game would draw `key` with: one stream, tightly packed.
+///
+/// Position (`POSITIONT` float4 when pre-transformed), normal float3, the two colours as
+/// `D3DCOLOR`, each texture set at its dimension, the declared blend weights and `UBYTE4`
+/// indices, the point size, and a float4 per passthrough entry.
+fn ff_elements(key: &FfVsKey) -> Vec<D3DVERTEXELEMENT9> {
+    let mut elements = Vec::new();
+    let mut offset = 0_u16;
+    let mut push = |type_: u8, usage: u8, usage_index: u8| {
+        elements.push(D3DVERTEXELEMENT9 {
+            stream: 0,
+            offset,
+            type_,
+            method: D3DDECLMETHOD_DEFAULT,
+            usage,
+            usage_index,
+        });
+        offset += match type_ {
+            D3DDECLTYPE_FLOAT1 | D3DDECLTYPE_D3DCOLOR | D3DDECLTYPE_UBYTE4 => 4,
+            D3DDECLTYPE_FLOAT2 => 8,
+            D3DDECLTYPE_FLOAT3 => 12,
+            _ => 16,
+        };
+    };
+    let float = |n: u8| match n {
+        1 => D3DDECLTYPE_FLOAT1,
+        2 | 0 => D3DDECLTYPE_FLOAT2,
+        3 => D3DDECLTYPE_FLOAT3,
+        _ => D3DDECLTYPE_FLOAT4,
+    };
+    if key.has_rhw() {
+        push(D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITIONT, 0);
+    } else {
+        push(D3DDECLTYPE_FLOAT3, D3DDECLUSAGE_POSITION, 0);
+    }
+    if key.has_normal() {
+        push(D3DDECLTYPE_FLOAT3, D3DDECLUSAGE_NORMAL, 0);
+    }
+    if key.has_color0() {
+        push(D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0);
+    }
+    if key.has_color1() {
+        push(D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 1);
+    }
+    for set in 0..key.input_tex_coord_count.min(8) {
+        push(
+            float(key.tex_coord_dims[usize::from(set)]),
+            D3DDECLUSAGE_TEXCOORD,
+            set,
+        );
+    }
+    if key.vertex_blend_count > 0 && key.declared_weights_count > 0 {
+        push(
+            float(key.declared_weights_count),
+            D3DDECLUSAGE_BLENDWEIGHT,
+            0,
+        );
+    }
+    if key.declared_indices() {
+        push(D3DDECLTYPE_UBYTE4, D3DDECLUSAGE_BLENDINDICES, 0);
+    }
+    if key.has_psize() {
+        push(D3DDECLTYPE_FLOAT1, D3DDECLUSAGE_PSIZE, 0);
+    }
+    for code in key.passthrough.iter().take_while(|code| **code != 0) {
+        let named = (0..=D3DDECLUSAGE_SAMPLE)
+            .flat_map(|usage| (0..16).map(move |index| (usage, index)))
+            .find(|(usage, index)| decl_passthrough_code(*usage, *index) == Some(*code));
+        if let Some((usage, index)) = named {
+            push(D3DDECLTYPE_FLOAT4, usage, index);
+        }
+    }
+    elements
+}
+
+/// The stride and attributes of `key`'s declaration, resolved as the layer resolves them.
+fn ff_attrs(key: &FfVsKey, provided_input_mask: u16) -> Result<(u32, Vec<VertexAttrDesc>), String> {
+    let resolved = resolve_attrs_for_ff(&ff_elements(key), &key.passthrough);
+    let fed = resolved
+        .attrs
+        .iter()
+        .fold(0_u16, |mask, attr| mask | 1 << attr.attr_index.min(15));
+    if provided_input_mask & !fed != 0 {
+        return Err(format!(
+            "{key:?}: the declaration feeds {fed:#06x}, the program reads {provided_input_mask:#06x}"
+        ));
+    }
+    Ok((resolved.extents[0], resolved.attrs))
+}
+
+/// The pixel key that shows every output of the vertex key `vs`.
+///
+/// Stage 0 modulates its texture by the diffuse colour, each further stage samples the next
+/// coordinate (`ADDSIGNED` and `MODULATE2X` by turns), the specular colour is added, the vertex fog
+/// applied, and a stage the vertex key projects is projected here too.
+fn carrier_ps(vs: &FfVsKey) -> (FfPsKey, VariantKey) {
+    let stages = vs.tex_coord_count.min(8);
+    let mut cascade = vec![[
+        D3DTOP_SELECTARG1,
+        D3DTA_DIFFUSE,
+        D3DTA_CURRENT,
+        D3DTOP_SELECTARG1,
+        D3DTA_DIFFUSE,
+        D3DTA_CURRENT,
+    ]];
+    if stages > 0 {
+        cascade.clear();
+    }
+    for stage in 0..stages {
+        let (op, arg2) = match stage {
+            0 => (D3DTOP_MODULATE, D3DTA_DIFFUSE),
+            s if s % 2 == 1 => (D3DTOP_ADDSIGNED, D3DTA_CURRENT),
+            _ => (D3DTOP_MODULATE2X, D3DTA_CURRENT),
+        };
+        cascade.push([
+            op,
+            D3DTA_TEXTURE,
+            arg2,
+            D3DTOP_MODULATE,
+            D3DTA_TEXTURE,
+            arg2,
+        ]);
+    }
+    let mut key = ps_key(&cascade, true);
+    let projected = (0..usize::from(stages))
+        .filter(|stage| vs.tt_flags[*stage] & TT_PROJECTED != 0)
+        .fold(0_u8, |mask, stage| mask | 1 << stage);
+    key.tt_projected_mask = projected;
+    let variant = VariantKey {
+        fog_mode: narrow(D3DFOG_LINEAR),
+        tt_projected_mask: projected,
+        ..VariantKey::default()
+    };
+    (key, variant)
+}
+
+/// The vertex key every fixed-function pixel key is drawn with.
+///
+/// Both colours, vertex fog and eight four-component coordinate sets, so each stage samples a
+/// coordinate of its own.
+fn carrier_vs() -> FfVsKey {
+    let mut key = bare_vs_key(FfVsFlags::HAS_COLOR0 | FfVsFlags::HAS_COLOR1, 8, 8);
+    key.tex_coord_dims = [4; 8];
+    key.fog_mode = narrow(D3DFOG_LINEAR);
+    key
+}
+
+/// [`carrier_vs`] with every coordinate through a four-component projected texture matrix.
+///
+/// The parity inputs give stages 0 and 1 a matrix whose `w` column is zero, so a projected pixel
+/// stage behind it divides by zero everywhere and reads the origin.
+fn w_zero_vs() -> FfVsKey {
+    let mut key = carrier_vs();
+    key.tt_flags = [4 | TT_PROJECTED; 8];
+    key
+}
+
+/// The lit vertex key the cross-family pairs put in front of the programmable pixel shaders.
+fn cross_vs() -> FfVsKey {
+    let flags = FfVsFlags::HAS_NORMAL
+        | FfVsFlags::LIGHTING_ENABLED
+        | FfVsFlags::COLOR_VERTEX
+        | FfVsFlags::SPECULAR_ENABLE
+        | FfVsFlags::LOCAL_VIEWER;
+    let mut key = with_lights(bare_vs_key(flags, 4, 4), 0b11, 0b01, 0);
+    key.tex_coord_dims[..4].copy_from_slice(&[2, 2, 3, 4]);
+    key.fog_mode = narrow(D3DFOG_LINEAR);
+    key
+}
+
+/// `ps_3_0` reading the eight passthrough extras of [`extra_vs_keys`]' pre-transformed key.
+///
+/// Normal, tangent, binormal, colour 2, fog, position 1, blend weight and depth, each scaled by a
+/// constant row and summed, so each extra shows in the float target it renders into.
+fn passthrough_ps() -> Vec<u32> {
+    let mut out = vec![PS_3_0];
+    let extras = [
+        (D3DDECLUSAGE_NORMAL, 0),
+        (D3DDECLUSAGE_TANGENT, 0),
+        (D3DDECLUSAGE_BINORMAL, 0),
+        (D3DDECLUSAGE_COLOR, 2),
+        (D3DDECLUSAGE_FOG, 0),
+        (D3DDECLUSAGE_POSITION, 1),
+        (D3DDECLUSAGE_BLENDWEIGHT, 0),
+        (D3DDECLUSAGE_DEPTH, 0),
+    ];
+    for (input, (decl_usage, index)) in (0_u16..).zip(extras) {
+        dcl(&mut out, usage(decl_usage, index), REG_INPUT, input, XYZW);
+    }
+    alu2(
+        &mut out,
+        OP_MUL,
+        dst(REG_TEMP, 0, XYZW),
+        src(REG_INPUT, 0, SWIZ_IDENTITY),
+        src(REG_CONST, 0, SWIZ_IDENTITY),
+    );
+    for input in 1..8 {
+        alu3(
+            &mut out,
+            OP_MAD,
+            dst(REG_TEMP, 0, XYZW),
+            [
+                src(REG_INPUT, input, SWIZ_IDENTITY),
+                src(REG_CONST, input, SWIZ_IDENTITY),
+                src(REG_TEMP, 0, SWIZ_IDENTITY),
+            ],
+        );
+    }
+    out.extend([
+        op(OP_MOV, 2),
+        dst(REG_COLOROUT, 0, XYZW),
+        src(REG_TEMP, 0, SWIZ_IDENTITY),
+        END,
+    ]);
+    out
+}
+
+/// The fixed-function records of the corpus file and the recipes drawing them.
+///
+/// Every key of `synthetic_ff()` and [`synthetic_ff_extra`] is one MSL record with its source:
+/// each vertex key drawn once with its [`carrier_ps`], each pixel key once behind
+/// [`carrier_vs`], and a projecting pixel key once more behind [`w_zero_vs`]. Then the
+/// cross-family pairs: [`cross_vs`] in front of every programmable pixel
+/// shader of `pixel`, the first vertex shader of each model in `vertex` in front of a
+/// fixed-function pixel key, and the pre-transformed passthrough key in front of a `ps_3_0`
+/// reading its extras. A recipe with a fixed-function vertex stage has a depth attachment, so
+/// the pre-transformed depth clamp and bias show.
+fn ff_records(
+    vertex: &[(ShaderRecordRef, &DxsoProgram, u32)],
+    pixel: &[(ShaderRecordRef, u32)],
+    shaders: &mut Vec<CacheEntry>,
+    pipelines: &mut Vec<PipelineRecipe>,
+) -> Result<(), String> {
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut keep = |reference: ShaderRecordRef, entry: CacheEntry| {
+        if seen.insert((reference.kind() as u8, reference.key())) {
+            shaders.push(entry);
+        }
+        reference
+    };
+    let mut vs_keys = Vec::new();
+    let mut ps_keys = Vec::new();
+    for shader in synthetic_ff().into_iter().chain(synthetic_ff_extra()) {
+        match shader.input {
+            Input::FfVs(key) => vs_keys.push(key),
+            Input::FfPs(key, variant) => ps_keys.push((key, variant)),
+            Input::Synthetic { .. } | Input::Record(_) => {}
+        }
+    }
+    let mut build_vs =
+        |key: &FfVsKey| -> Result<(ShaderRecordRef, u32, Vec<VertexAttrDesc>), String> {
+            let program = ff_build::vertex(key);
+            let (stride, attrs) = ff_attrs(key, program.provided_input_mask)?;
+            let (reference, entry) = ff_vs_record(key)?;
+            Ok((keep(reference, entry), stride, attrs))
+        };
+    let mut draws = Vec::new();
+    for key in &vs_keys {
+        let (vs, stride, attrs) = build_vs(key)?;
+        let (ps_key, variant) = carrier_ps(key);
+        let (ps, entry) = ff_ps_record(&ps_key, variant)?;
+        draws.push((vs, stride, attrs, ps, entry, PixelFormat::Bgra8Unorm));
+    }
+    let carrier = build_vs(&carrier_vs())?;
+    let w_zero = build_vs(&w_zero_vs())?;
+    for (key, variant) in &ps_keys {
+        let (ps, entry) = ff_ps_record(key, *variant)?;
+        if key.tt_projected_mask != 0 {
+            let (vs, stride, attrs) = &w_zero;
+            draws.push((
+                *vs,
+                *stride,
+                attrs.clone(),
+                ps,
+                entry.clone(),
+                PixelFormat::Bgra8Unorm,
+            ));
+        }
+        draws.push((
+            carrier.0,
+            carrier.1,
+            carrier.2.clone(),
+            ps,
+            entry,
+            PixelFormat::Bgra8Unorm,
+        ));
+    }
+    let cross = build_vs(&cross_vs())?;
+    let passthrough = vs_keys
+        .iter()
+        .find(|key| key.has_rhw() && key.passthrough[7] != 0 && key.fog_mode == 0)
+        .ok_or("no pre-transformed passthrough key")?;
+    let (pass_vs, pass_stride, pass_attrs) = build_vs(passthrough)?;
+    for (vs, stride, attrs, ps, entry, format) in draws {
+        let ps = keep(ps, entry);
+        pipelines.push(synthetic_recipe(vs, ps, stride, &attrs, format, true));
+    }
+    for (ps, _) in pixel {
+        pipelines.push(synthetic_recipe(
+            cross.0,
+            *ps,
+            cross.1,
+            &cross.2,
+            PixelFormat::Bgra8Unorm,
+            true,
+        ));
+    }
+    let (two_stage, variant) = carrier_ps(&bare_vs_key(FfVsFlags::HAS_COLOR0, 2, 2));
+    let (reference, entry) = ff_ps_record(&two_stage, variant)?;
+    let two_stage_ps = keep(reference, entry);
+    let mut models = 0_u8;
+    for (vs, program, header) in vertex {
+        let major = u8::try_from(header >> 8 & 0xFF).map_err(|e| e.to_string())?;
+        if models & 1 << major != 0 {
+            continue;
+        }
+        models |= 1 << major;
+        let attrs = vertex_attrs(program);
+        let stride = u32::try_from(attrs.len() * 16).map_err(|e| e.to_string())?;
+        pipelines.push(synthetic_recipe(
+            *vs,
+            two_stage_ps,
+            stride,
+            &attrs,
+            PixelFormat::Bgra8Unorm,
+            false,
+        ));
+    }
+    let tokens = passthrough_ps();
+    let program = dxso::parse(&tokens).map_err(|e| format!("passthrough ps: {e:?}"))?;
+    let (inputs, _) = LinkInputs::ps_inputs(&program);
+    let variant = VariantKey {
+        linked_input_mask: inputs
+            .mask_against(&SemanticSet::passthrough_outputs(&passthrough.passthrough)),
+        ..VariantKey::default()
+    };
+    let source = ShaderSource::pixel(&program, variant);
+    let (kind, key) = (CachedKind::Sm3Ps, source.disk_key());
+    let msl = source.emit(&kind.entry_name(key))?;
+    let ps = keep(
+        ShaderRecordRef::new(kind, key),
+        CacheEntry::new(kind, key, msl, Some(source)),
+    );
+    pipelines.push(synthetic_recipe(
+        pass_vs,
+        ps,
+        pass_stride,
+        &pass_attrs,
+        PixelFormat::Rgba16Float,
+        true,
+    ));
+    Ok(())
+}
+
+/// `D3DTSS_TCI_*` modes as the high nibble of an `FfVsKey::tci` entry.
+const TCI_PASSTHRU: u8 = 0;
+const TCI_NORMAL: u8 = 1;
+const TCI_POSITION: u8 = 2;
+const TCI_SPHEREMAP: u8 = 4;
+/// A mode past SPHEREMAP, undefined.
+const TCI_UNDEFINED: u8 = 5;
+/// `FfVsKey::tt_flags`: the count in the low three bits, `D3DTTFF_PROJECTED` at bit 4.
+const TT_PROJECTED: u8 = 0x10;
+
+/// The further fixed-function shapes the corpus file carries, beyond `synthetic_ff()`.
+///
+/// `ff_build`'s test lists `extra_vs_keys` and `extra_ps_keys` restated (an example cannot call
+/// a unit test's functions): clip planes, blending, pre-transformed passthrough, point size,
+/// spot lights, every TCI mode, texture transforms, vertex fog, material sources; every colour
+/// and alpha op, TEMP, bump environment stages, the specular add, depth, cube and volume slots,
+/// the LOD bias, raw and projected depth. One shape more than those lists: a projected stage after
+/// an untextured luminance bump. Not in `--digest` or the timed corpora.
+fn synthetic_ff_extra() -> Vec<Shader> {
+    let mut shaders: Vec<Shader> = extra_vs_keys().into_iter().map(Shader::ff_vs).collect();
+    let mut pixel = extra_ps_keys();
+    let mut after_bump = ps_key(
+        &[
+            [
+                D3DTOP_BUMPENVMAPLUMINANCE,
+                D3DTA_DIFFUSE,
+                D3DTA_CURRENT,
+                D3DTOP_SELECTARG1,
+                D3DTA_DIFFUSE,
+                D3DTA_CURRENT,
+            ],
+            [
+                D3DTOP_MODULATE,
+                D3DTA_TEXTURE,
+                D3DTA_DIFFUSE,
+                D3DTOP_MODULATE,
+                D3DTA_TEXTURE,
+                D3DTA_DIFFUSE,
+            ],
+        ],
+        false,
+    );
+    after_bump.tt_projected_mask = 0b10;
+    pixel.push((
+        after_bump,
+        VariantKey {
+            tt_projected_mask: 0b10,
+            ..VariantKey::default()
+        },
+    ));
+    shaders.extend(
+        pixel
+            .into_iter()
+            .map(|(key, variant)| Shader::ff_ps(key, variant)),
+    );
+    shaders
+}
+/// A key with `flags`, `sets` two-component coordinate sets, `stages` stages each reading its own.
+fn bare_vs_key(flags: FfVsFlags, sets: u8, stages: u8) -> FfVsKey {
+    let mut k = FfVsKey {
+        flags,
+        input_tex_coord_count: sets,
+        tex_coord_count: stages,
+        light_active_mask: 0,
+        light_directional_mask: 0,
+        light_spot_mask: 0,
+        diffuse_source: 0,
+        ambient_source: 0,
+        specular_source: 0,
+        emissive_source: 0,
+        fog_mode: 0,
+        tci: core::array::from_fn(|s| tci_entry(TCI_PASSTHRU, u8::try_from(s).unwrap_or(0))),
+        passthrough: [0; 8],
+        tex_coord_dims: [0; 8],
+        tt_flags: [0; 8],
+        vertex_blend_count: 0,
+        declared_weights_count: 0,
+        clip_plane_count: 0,
+        reserved: 0,
+    };
+    k.tex_coord_dims[..usize::from(sets)].fill(2);
+    k
+}
+
+const fn with_lights(mut k: FfVsKey, active: u8, directional: u8, spot: u8) -> FfVsKey {
+    k.light_active_mask = active;
+    k.light_directional_mask = directional;
+    k.light_spot_mask = spot;
+    k
+}
+
+/// The further vertex shapes of the AIR corpus, and each builder warning's key.
+fn extra_vs_keys() -> Vec<FfVsKey> {
+    let lit = FfVsFlags::HAS_NORMAL | FfVsFlags::LIGHTING_ENABLED | FfVsFlags::COLOR_VERTEX;
+    let specular = lit | FfVsFlags::SPECULAR_ENABLE | FfVsFlags::LOCAL_VIEWER;
+    let unlit = FfVsFlags::HAS_COLOR0;
+    let rhw = FfVsFlags::HAS_RHW | FfVsFlags::HAS_COLOR0;
+    let mut keys = Vec::new();
+
+    // User clip planes, lit and unlit.
+    for planes in [1, 3, 6] {
+        let mut k = with_lights(bare_vs_key(lit, 1, 1), 0b1, 0b1, 0);
+        k.clip_plane_count = planes;
+        keys.push(k);
+        let mut k = bare_vs_key(unlit, 1, 1);
+        k.clip_plane_count = planes;
+        keys.push(k);
+    }
+
+    // Blending: sequential and indexed, one to four matrices, with the normal through the bones.
+    for count in 1..=4u8 {
+        for indexed in [false, true] {
+            for normal in [false, true] {
+                let mut flags = if normal { lit } else { unlit };
+                if indexed {
+                    flags |= FfVsFlags::VERTEX_BLEND_INDEXED | FfVsFlags::DECLARED_INDICES;
+                }
+                let mut k = bare_vs_key(flags, 1, 1);
+                if normal {
+                    k = with_lights(k, 0b11, 0b01, 0);
+                }
+                k.vertex_blend_count = count;
+                k.declared_weights_count = count - 1;
+                keys.push(k);
+            }
+        }
+    }
+    // Indices declared, the render state sequential; a texgen-only normal through the bones.
+    let mut k = bare_vs_key(unlit | FfVsFlags::DECLARED_INDICES, 1, 1);
+    k.vertex_blend_count = 3;
+    k.declared_weights_count = 2;
+    keys.push(k);
+    let mut k = bare_vs_key(FfVsFlags::HAS_NORMAL | FfVsFlags::NORMALIZE_NORMALS, 1, 2);
+    k.tci[1] = tci_entry(TCI_REFLECTION, 0);
+    k.vertex_blend_count = 2;
+    k.declared_weights_count = 1;
+    keys.push(k);
+
+    // Pre-transformed: passthrough extras (FOG0 under fog mode 4 and not), PSIZE, every dim.
+    let pass = |usage: u8, index: u8| decl_passthrough_code(usage, index).unwrap_or(0);
+    let extras = [
+        pass(D3DDECLUSAGE_NORMAL, 0),
+        pass(D3DDECLUSAGE_TANGENT, 0),
+        pass(D3DDECLUSAGE_BINORMAL, 0),
+        pass(D3DDECLUSAGE_COLOR, 2),
+        pass(D3DDECLUSAGE_FOG, 0),
+        pass(D3DDECLUSAGE_POSITION, 1),
+        pass(D3DDECLUSAGE_BLENDWEIGHT, 0),
+        pass(D3DDECLUSAGE_DEPTH, 0),
+    ];
+    for fog_mode in [0, 4] {
+        let mut k = bare_vs_key(rhw | FfVsFlags::HAS_COLOR1 | FfVsFlags::HAS_PSIZE, 4, 8);
+        k.tex_coord_dims[..4].copy_from_slice(&[1, 2, 3, 4]);
+        k.passthrough = extras;
+        k.fog_mode = fog_mode;
+        keys.push(k);
+    }
+    let mut k = bare_vs_key(rhw, 1, 1);
+    k.passthrough[..2].copy_from_slice(&extras[..2]);
+    keys.push(k);
+    // Fog mode 4 without a specular colour, pre-transformed and not.
+    let mut k = bare_vs_key(rhw, 1, 1);
+    k.fog_mode = 4;
+    keys.push(k);
+    let mut k = bare_vs_key(unlit, 1, 1);
+    k.fog_mode = 4;
+    keys.push(k);
+
+    // Point size: per vertex or the render state, scaled or not; pre-transformed with PSIZE.
+    for flags in [
+        unlit | FfVsFlags::POINT_SCALE,
+        unlit | FfVsFlags::POINT_SCALE | FfVsFlags::HAS_PSIZE,
+        unlit | FfVsFlags::HAS_PSIZE,
+        rhw | FfVsFlags::HAS_PSIZE,
+    ] {
+        keys.push(bare_vs_key(flags, 1, 1));
+    }
+
+    // Spot lights beside directional and point ones; a spot light with no normal.
+    keys.push(with_lights(
+        bare_vs_key(specular, 1, 1),
+        0b111,
+        0b001,
+        0b100,
+    ));
+    keys.push(with_lights(bare_vs_key(lit, 1, 1), 0b11, 0, 0b11));
+    keys.push(with_lights(
+        bare_vs_key(
+            FfVsFlags::LIGHTING_ENABLED | unlit | FfVsFlags::HAS_COLOR1,
+            1,
+            1,
+        ),
+        0b11,
+        0,
+        0b10,
+    ));
+    // Specular with an infinite viewer, lit with a specular colour but no specular.
+    keys.push(with_lights(
+        bare_vs_key(lit | FfVsFlags::SPECULAR_ENABLE, 1, 1),
+        0b1,
+        0b1,
+        0,
+    ));
+    keys.push(with_lights(
+        bare_vs_key(lit | FfVsFlags::HAS_COLOR1, 1, 1),
+        0b1,
+        0b1,
+        0,
+    ));
+
+    // Every TCI mode, lit and unlit, with and without a normal, and through a texture matrix.
+    for mode in [
+        TCI_PASSTHRU,
+        TCI_NORMAL,
+        TCI_POSITION,
+        TCI_REFLECTION,
+        TCI_SPHEREMAP,
+        TCI_UNDEFINED,
+    ] {
+        for flags in [lit, FfVsFlags::HAS_NORMAL, unlit] {
+            for count in [0, 3] {
+                let mut k = bare_vs_key(flags, 1, 2);
+                if flags.contains(FfVsFlags::LIGHTING_ENABLED) {
+                    k = with_lights(k, 0b1, 0b1, 0);
+                }
+                k.tci[1] = tci_entry(mode, 0);
+                k.tt_flags[1] = count;
+                keys.push(k);
+            }
+        }
+    }
+
+    // Texture transforms: counts 1-7, projected or not, over every input dimension.
+    for count in 1..=7u8 {
+        for projected in [0, TT_PROJECTED] {
+            let mut k = bare_vs_key(unlit, 4, 4);
+            k.tex_coord_dims[..4].copy_from_slice(&[1, 2, 3, 4]);
+            k.tt_flags[..4].fill(count | projected);
+            keys.push(k);
+        }
+    }
+    let mut k = bare_vs_key(unlit, 4, 4);
+    k.tex_coord_dims[..4].copy_from_slice(&[1, 2, 3, 4]);
+    k.tt_flags[..4].fill(TT_PROJECTED);
+    keys.push(k);
+
+    // Vertex fog: every mode, by depth and by range.
+    for fog_mode in 1..=4 {
+        for range in [false, true] {
+            let mut flags = lit | FfVsFlags::HAS_COLOR1;
+            flags.set(FfVsFlags::RANGE_FOG, range && fog_mode < 4);
+            let mut k = with_lights(bare_vs_key(flags, 1, 1), 0b1, 0b1, 0);
+            k.fog_mode = fog_mode;
+            keys.push(k);
+        }
+    }
+
+    // Material sources from the vertex colours, with and without them.
+    for (diffuse, colors) in [
+        (D3DMCS_COLOR1, FfVsFlags::HAS_COLOR0),
+        (D3DMCS_COLOR2, FfVsFlags::HAS_COLOR1),
+        (D3DMCS_COLOR1, FfVsFlags::empty()),
+        (D3DMCS_COLOR2, FfVsFlags::HAS_COLOR0 | FfVsFlags::HAS_COLOR1),
+    ] {
+        let mut k = with_lights(bare_vs_key(specular | colors, 1, 1), 0b11, 0b01, 0);
+        k.diffuse_source = narrow(diffuse);
+        k.ambient_source = narrow(D3DMCS_COLOR2);
+        k.specular_source = narrow(D3DMCS_COLOR1);
+        k.emissive_source = narrow(D3DMCS_COLOR2);
+        keys.push(k);
+    }
+    // Lit without a normal (ambient and emissive alone), with a light.
+    keys.push(with_lights(
+        bare_vs_key(FfVsFlags::LIGHTING_ENABLED | unlit, 1, 1),
+        0b1,
+        0b1,
+        0,
+    ));
+    // Normalized normals.
+    keys.push(with_lights(
+        bare_vs_key(lit | FfVsFlags::NORMALIZE_NORMALS, 1, 1),
+        0b1,
+        0,
+        0,
+    ));
+
+    // The warnings: an absent set, a material source past COLOR2, texgen on a pre-transformed
+    // stage, an undefined mode (the last two in the TCI loop above too).
+    let mut k = bare_vs_key(unlit, 1, 2);
+    k.tci[1] = tci_entry(TCI_PASSTHRU, 3);
+    keys.push(k);
+    let mut k = with_lights(bare_vs_key(lit, 1, 1), 0b1, 0b1, 0);
+    k.ambient_source = 3;
+    keys.push(k);
+    let mut k = bare_vs_key(rhw, 1, 2);
+    k.tci[1] = tci_entry(TCI_POSITION, 0);
+    keys.push(k);
+    let mut k = bare_vs_key(rhw, 1, 2);
+    k.tci[1] = tci_entry(TCI_PASSTHRU, 5);
+    keys.push(k);
+
+    keys.push(worst_case_vs_key());
+    keys
+}
+
+/// The key holding the most at once.
+///
+/// Four indexed bones, eight spot lights with specular, eight texgen stages, point scale, six
+/// clip planes and range fog.
+fn worst_case_vs_key() -> FfVsKey {
+    let flags = FfVsFlags::HAS_NORMAL
+        | FfVsFlags::LIGHTING_ENABLED
+        | FfVsFlags::COLOR_VERTEX
+        | FfVsFlags::HAS_COLOR0
+        | FfVsFlags::HAS_COLOR1
+        | FfVsFlags::SPECULAR_ENABLE
+        | FfVsFlags::LOCAL_VIEWER
+        | FfVsFlags::NORMALIZE_NORMALS
+        | FfVsFlags::VERTEX_BLEND_INDEXED
+        | FfVsFlags::DECLARED_INDICES
+        | FfVsFlags::POINT_SCALE
+        | FfVsFlags::HAS_PSIZE
+        | FfVsFlags::RANGE_FOG;
+    let mut k = with_lights(bare_vs_key(flags, 8, 8), 0xFF, 0, 0xFF);
+    let modes = [
+        TCI_NORMAL,
+        TCI_POSITION,
+        TCI_REFLECTION,
+        TCI_SPHEREMAP,
+        TCI_PASSTHRU,
+        TCI_SPHEREMAP,
+        TCI_REFLECTION,
+        TCI_NORMAL,
+    ];
+    for (stage, mode) in modes.into_iter().enumerate() {
+        k.tci[stage] = tci_entry(mode, u8::try_from(stage).unwrap_or(0));
+        k.tt_flags[stage] = 4 | TT_PROJECTED;
+    }
+    k.tex_coord_dims = [1, 2, 3, 4, 1, 2, 3, 4];
+    k.diffuse_source = narrow(D3DMCS_COLOR1);
+    k.specular_source = narrow(D3DMCS_COLOR2);
+    k.vertex_blend_count = 4;
+    k.declared_weights_count = 3;
+    k.clip_plane_count = 6;
+    k.fog_mode = 2;
+    k
+}
+
+/// The further pixel shapes of the AIR corpus.
+///
+/// Every colour and alpha op over texture, diffuse and the modifiers; TEMP results; bump
+/// environment stages with and without a texture, projected and chained; the specular add;
+/// stages sampling depth, cube and volume slots, under a LOD bias, raw depth and projection.
+fn extra_ps_keys() -> Vec<(FfPsKey, VariantKey)> {
+    let plain = VariantKey::default();
+    let mut keys = Vec::new();
+    let tex_diffuse = |op: u32| {
+        [
+            op,
+            D3DTA_TEXTURE,
+            D3DTA_DIFFUSE,
+            op,
+            D3DTA_TEXTURE,
+            D3DTA_DIFFUSE,
+        ]
+    };
+    // Every op (DISABLE aside) as stage 0's colour and alpha op, then over CURRENT as stage 1.
+    for op in D3DTOP_SELECTARG1..=D3DTOP_LERP {
+        keys.push((ps_key(&[tex_diffuse(op)], false), plain));
+        let second = [
+            op,
+            D3DTA_TEXTURE | D3DTA_COMPLEMENT,
+            D3DTA_CURRENT | D3DTA_ALPHAREPLICATE,
+            op,
+            D3DTA_SPECULAR,
+            D3DTA_TFACTOR,
+        ];
+        keys.push((
+            ps_key(&[tex_diffuse(D3DTOP_MODULATE), second], false),
+            plain,
+        ));
+        // Modifiers on both sides of the colour and the alpha op.
+        let modified = [
+            op,
+            D3DTA_TEXTURE | D3DTA_ALPHAREPLICATE,
+            D3DTA_DIFFUSE | D3DTA_COMPLEMENT | D3DTA_ALPHAREPLICATE,
+            op,
+            D3DTA_TEXTURE | D3DTA_COMPLEMENT,
+            D3DTA_CURRENT | D3DTA_COMPLEMENT,
+        ];
+        keys.push((ps_key(&[modified], false), plain));
+        // The same op without a texture: the unbound fallback or the implicit-zero-alpha arm.
+        let untextured = [
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((
+            ps_key(&[tex_diffuse(D3DTOP_MODULATE), untextured], false),
+            plain,
+        ));
+    }
+    // A kept alpha (DISABLE, a bump op in the alpha role), TEMP's alpha kept at zero.
+    for alpha_op in [
+        D3DTOP_DISABLE,
+        D3DTOP_BUMPENVMAP,
+        D3DTOP_BUMPENVMAPLUMINANCE,
+    ] {
+        let mut k = ps_key(
+            &[
+                [
+                    D3DTOP_MODULATE,
+                    D3DTA_TEXTURE,
+                    D3DTA_DIFFUSE,
+                    alpha_op,
+                    D3DTA_TEXTURE,
+                    D3DTA_DIFFUSE,
+                ],
+                [
+                    D3DTOP_ADD,
+                    D3DTA_TEMP,
+                    D3DTA_CURRENT,
+                    D3DTOP_SELECTARG1,
+                    D3DTA_TEMP,
+                    D3DTA_CURRENT,
+                ],
+            ],
+            false,
+        );
+        keys.push((k.clone(), plain));
+        k.stages[0].set_result(FfStageResult::Temp);
+        keys.push((k, plain));
+    }
+    // Arguments: constant, temp, specular, factor; a stage writing TEMP read by the next.
+    let mut k = ps_key(
+        &[
+            [
+                D3DTOP_MODULATE,
+                D3DTA_TEXTURE,
+                D3DTA_CONSTANT,
+                D3DTOP_SELECTARG1,
+                D3DTA_TFACTOR,
+                D3DTA_CURRENT,
+            ],
+            [
+                D3DTOP_ADD,
+                D3DTA_TEMP,
+                D3DTA_SPECULAR,
+                D3DTOP_MODULATE,
+                D3DTA_TEMP | D3DTA_COMPLEMENT,
+                D3DTA_CURRENT,
+            ],
+        ],
+        true,
+    );
+    k.stages[0].set_result(FfStageResult::Temp);
+    keys.push((k, plain));
+    // Bump environment stages, with and without a texture, luminance, chained, projected.
+    for op in [D3DTOP_BUMPENVMAP, D3DTOP_BUMPENVMAPLUMINANCE] {
+        let bump = [
+            op,
+            D3DTA_TEXTURE,
+            D3DTA_CURRENT,
+            D3DTOP_SELECTARG1,
+            D3DTA_TEXTURE,
+            D3DTA_CURRENT,
+        ];
+        let next = tex_diffuse(D3DTOP_MODULATE);
+        keys.push((ps_key(&[bump, next], false), plain));
+        // Without a texture, naming one: the unbound fallback, not a bump stage.
+        let mut k = ps_key(&[bump, next], false);
+        k.stages[0].flags = FfStageFlags::empty();
+        keys.push((k, plain));
+        // Without a texture, naming none: a bump stage that displaces nothing.
+        let untextured = [
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            D3DTOP_SELECTARG1,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((ps_key(&[untextured, next], false), plain));
+        // A bump stage whose next stage samples nothing.
+        let diffuse = [
+            D3DTOP_MODULATE,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            D3DTOP_SELECTARG1,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((ps_key(&[bump, diffuse], false), plain));
+        keys.push((ps_key(&[bump, bump, next], false), plain));
+        let mut k = ps_key(&[bump, next], false);
+        k.tt_projected_mask = 0b11;
+        let projected = VariantKey {
+            tt_projected_mask: 0b11,
+            ..plain
+        };
+        keys.push((k, projected));
+    }
+    // Sampling a depth, a cube and a volume slot; a LOD bias; raw depth; projected depth.
+    let three = ps_key(
+        &[
+            tex_diffuse(D3DTOP_MODULATE),
+            tex_diffuse(D3DTOP_MODULATE),
+            tex_diffuse(D3DTOP_MODULATE),
+        ],
+        false,
+    );
+    let mut projected = three.clone();
+    projected.tt_projected_mask = 0b001;
+    for (k, variant) in [
+        (
+            three.clone(),
+            VariantKey {
+                depth_sampler_mask: 0b001,
+                cube_sampler_mask: 0b010,
+                volume_sampler_mask: 0b100,
+                ..plain
+            },
+        ),
+        (
+            three.clone(),
+            VariantKey {
+                flags: VariantFlags::LOD_BIAS,
+                ..plain
+            },
+        ),
+        (
+            three,
+            VariantKey {
+                depth_sampler_mask: 0b001,
+                depth_fetch_mask: 0b001,
+                ..plain
+            },
+        ),
+        (
+            projected,
+            VariantKey {
+                depth_sampler_mask: 0b001,
+                tt_projected_mask: 0b001,
+                ..plain
+            },
+        ),
+    ] {
+        keys.push((k, variant));
+    }
+    // A cascade cut short by DISABLE.
+    let mut k = ps_key(&[tex_diffuse(D3DTOP_MODULATE)], true);
+    k.stages[1].color_op = narrow(D3DTOP_DISABLE);
+    keys.push((k, plain));
+    keys
+}
+
 /// One cache file holding the shader records and recipes of every input, once each.
+///
+/// Records without a source are dropped, and so are the recipes naming a record the file does
+/// not keep; the first line of the result counts both.
 fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
     let mut shaders: Vec<CacheEntry> = Vec::new();
     let mut pipelines: Vec<PipelineRecipe> = Vec::new();
@@ -861,9 +1820,28 @@ fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
     }
     let mut seen = rustc_hash::FxHashSet::default();
     shaders.retain(|entry| seen.insert((entry.kind as u8, entry.key)));
+    // A record without a source cannot be rendered again (a C3b runtime's MSL fixed-function
+    // records, a stage demoted to MSL under `air`), nor can a recipe naming it.
+    let records = shaders.len();
+    shaders.retain(|entry| entry.source().is_some());
+    let sourceless = records - shaders.len();
+    let kept: rustc_hash::FxHashSet<_> = shaders
+        .iter()
+        .map(|entry| (entry.kind as u8, entry.key))
+        .collect();
     let mut seen = rustc_hash::FxHashSet::default();
     pipelines.retain(|recipe| seen.insert(recipe.disk_key()));
-    write_cache_file(out, &shaders, &pipelines)
+    let recipes = pipelines.len();
+    pipelines.retain(|recipe| {
+        [recipe.vs(), recipe.ps()]
+            .iter()
+            .all(|stage| kept.contains(&(stage.kind() as u8, stage.key())))
+    });
+    let written = write_cache_file(out, &shaders, &pipelines)?;
+    Ok(format!(
+        "merge: dropped {sourceless} sourceless records, {} recipes\n{written}",
+        recipes - pipelines.len()
+    ))
 }
 
 /// `--kinds`: the record count per kind, summed over `inputs`, as one line.
@@ -1418,9 +2396,12 @@ fn ps_key(cascade: &[[u32; 6]], specular_add: bool) -> FfPsKey {
             alpha_arg1,
             alpha_arg2,
         ] = ops;
-        // A game binds a texture to the stages it samples and to no others.
+        // A game binds a texture to the stages it samples (an argument naming the texture, with
+        // or without modifiers) and to no others.
         let textured = index < cascade.len()
-            && [color_arg1, color_arg2, alpha_arg1, alpha_arg2].contains(&D3DTA_TEXTURE);
+            && [color_arg1, color_arg2, alpha_arg1, alpha_arg2]
+                .iter()
+                .any(|arg| arg & 0xF == D3DTA_TEXTURE);
         FfStage {
             color_op: narrow(color_op),
             color_arg1: narrow(color_arg1),

@@ -1,6 +1,7 @@
 //! Tests for the cache-writing modes.
 //!
-//! The synthetic cache loads with every record, and a merge keeps what its inputs held.
+//! The synthetic cache loads with every record, and a merge keeps what its inputs held that
+//! has a source.
 
 use mtld3d_core::shader_cache::{CacheLoad, load};
 
@@ -31,18 +32,42 @@ fn written_cache_loads_with_every_record() {
     write_synthetic_cache(&path, &corpus).expect("write");
     let records = loaded(&path);
     // The timed set plus what only the cache file carries: the `ps_1_x` texture-address families, the modifier
-    // programs, the `oDepth` writers and the vertex shader that feeds the depth families.
+    // programs, the `oDepth` writers, the vertex shader that feeds the depth families and the
+    // `ps_3_0` reading the passthrough extras.
     assert_eq!(
-        records.shaders.len(),
+        records
+            .shaders
+            .iter()
+            .filter(|e| e.kind.is_programmable())
+            .count(),
         corpus.shaders.len()
             + texture_family_ps().len()
             + modifier_programs().len()
             + depth_programs().len()
-            + 1
+            + 2
     );
     assert!(records.shaders.iter().all(|e| e.source().is_some()));
     assert!(!records.pipelines.is_empty());
-    // Every programmable kind is present, and every recipe pairs a vertex with a pixel record.
+    // Every fixed-function key of both lists has its record, built by this tree's `ff_build`.
+    let has = |entry: &CacheEntry| records.shaders.iter().any(|e| e == entry);
+    for shader in synthetic_ff().into_iter().chain(synthetic_ff_extra()) {
+        let entry = match &shader.input {
+            Input::FfVs(key) => ff_vs_record(key),
+            Input::FfPs(key, variant) => ff_ps_record(key, *variant),
+            Input::Synthetic { .. } | Input::Record(_) => continue,
+        }
+        .expect("a fixed-function record")
+        .1;
+        assert!(has(&entry), "{:?} {:016x}", entry.kind, entry.key);
+    }
+    assert!(
+        records
+            .shaders
+            .iter()
+            .filter_map(CacheEntry::source)
+            .all(|source| source.rebuilt_ff().is_none())
+    );
+    // Every MSL kind is present, and every recipe pairs a vertex with a pixel record.
     for kind in [
         CachedKind::Sm1Vs,
         CachedKind::Sm1Ps,
@@ -50,6 +75,8 @@ fn written_cache_loads_with_every_record() {
         CachedKind::Sm2Ps,
         CachedKind::Sm3Vs,
         CachedKind::Sm3Ps,
+        CachedKind::FfVs,
+        CachedKind::FfPs,
     ] {
         assert!(records.shaders.iter().any(|e| e.kind == kind), "{kind:?}");
     }
@@ -131,4 +158,107 @@ fn kinds_counts_msl_and_air_records() {
     assert!(kinds_line(&[temp("kinds-missing")]).is_err());
     // An AIR record is not MSL to time.
     assert!(Shader::record(loaded(&out).shaders.pop().expect("air")).is_none());
+}
+
+/// A programmable pair from the synthetic cache: a `vs_3_0` and a `ps_3_0` record.
+fn sm3_pair() -> (CacheEntry, CacheEntry) {
+    let path = temp("sm3-pair");
+    write_synthetic_cache(&path, &synthetic()).expect("write");
+    let records = loaded(&path).shaders;
+    let find = |kind| {
+        records
+            .iter()
+            .find(|e| e.kind == kind && e.source().is_some())
+            .cloned()
+            .expect("a programmable record")
+    };
+    (find(CachedKind::Sm3Vs), find(CachedKind::Sm3Ps))
+}
+
+fn recipe(vs: &CacheEntry, ps: &CacheEntry) -> PipelineRecipe {
+    synthetic_recipe(
+        ShaderRecordRef::new(vs.kind, vs.key),
+        ShaderRecordRef::new(ps.kind, ps.key),
+        16,
+        &[],
+        PixelFormat::Bgra8Unorm,
+        false,
+    )
+}
+
+#[test]
+fn merge_drops_sourceless_records_and_their_recipes() {
+    let (vs, ps) = sm3_pair();
+    let key = carrier_vs();
+    let (_, with_source) = ff_vs_record(&key).expect("ff vs");
+    // The MSL fixed-function record a C3b runtime writes: no source.
+    let sourceless = CacheEntry::new(
+        CachedKind::FfVs,
+        with_source.key,
+        with_source.msl().expect("msl").to_owned(),
+        None,
+    );
+    let path = temp("sourceless-in");
+    write_cache_file(
+        &path,
+        &[vs.clone(), ps.clone(), sourceless.clone()],
+        &[recipe(&vs, &ps), recipe(&sourceless, &ps)],
+    )
+    .expect("write");
+    assert_eq!(
+        loaded(&path).shaders.len(),
+        3,
+        "the input keeps the sourceless record"
+    );
+    let out = temp("sourceless-out");
+    let line = merge_caches(&out, &[path]).expect("merge");
+    assert!(
+        line.starts_with("merge: dropped 1 sourceless records, 1 recipes\n"),
+        "{line}"
+    );
+    let merged = loaded(&out);
+    assert_eq!(merged.shaders, vec![vs.clone(), ps]);
+    assert_eq!(merged.pipelines.len(), 1);
+    assert_eq!(merged.pipelines[0].vs().key(), vs.key);
+}
+
+#[test]
+fn merge_keeps_air_records_with_sources() {
+    let (vs, ps) = sm3_pair();
+    let (_, vertex_ff) = ff_vs_record(&carrier_vs()).expect("ff vs");
+    let (ps_key, variant) = carrier_ps(&carrier_vs());
+    let (_, pixel_ff) = ff_ps_record(&ps_key, variant).expect("ff ps");
+    let air = |kind, entry: &CacheEntry| {
+        CacheEntry::new_air(
+            kind,
+            entry.key,
+            [7; 32],
+            vec![1, 2, 3],
+            entry.source().expect("source").clone(),
+        )
+    };
+    let records = [
+        air(CachedKind::AirFfVs, &vertex_ff),
+        air(CachedKind::AirFfPs, &pixel_ff),
+        air(CachedKind::AirSm3Vs, &vs),
+        air(CachedKind::AirSm3Ps, &ps),
+        vertex_ff,
+        pixel_ff,
+    ];
+    let pipelines = [
+        recipe(&records[0], &records[1]),
+        recipe(&records[2], &records[3]),
+        recipe(&records[4], &records[5]),
+    ];
+    let path = temp("air-in");
+    write_cache_file(&path, &records, &pipelines).expect("write");
+    let out = temp("air-out");
+    let line = merge_caches(&out, &[path]).expect("merge");
+    assert!(
+        line.starts_with("merge: dropped 0 sourceless records, 0 recipes\n"),
+        "{line}"
+    );
+    let merged = loaded(&out);
+    assert_eq!(merged.shaders, records.to_vec());
+    assert_eq!(merged.pipelines.len(), pipelines.len());
 }
