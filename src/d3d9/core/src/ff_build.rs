@@ -24,8 +24,10 @@
 use std::sync::Arc;
 
 pub mod asm;
+mod ps;
 mod vs;
 
+pub use ps::pixel;
 pub use vs::vertex;
 
 /// One fixed-function stage built as DXSO, with what its translation needs beside the tokens.

@@ -430,7 +430,7 @@ type StageOps = [u32; 6];
 /// A pixel key from its cascade; stages past it keep their D3D9 defaults.
 ///
 /// A stage gets a texture when one of its arguments names `D3DTA_TEXTURE`, or the op does.
-fn ps_key(cascade: &[StageOps], specular_add: bool) -> FfPsKey {
+pub fn ps_key(cascade: &[StageOps], specular_add: bool) -> FfPsKey {
     let stages = core::array::from_fn(|index| {
         let defaults = texture_stage_state_defaults(u8::try_from(index).unwrap_or(0));
         let state = |ty: u32| defaults[usize::try_from(ty).unwrap_or(0)];
@@ -596,6 +596,60 @@ pub fn extra_ps_keys() -> Vec<(FfPsKey, VariantKey)> {
             ps_key(&[tex_diffuse(D3DTOP_MODULATE), second], false),
             plain,
         ));
+        // Modifiers on both sides of the colour and the alpha op.
+        let modified = [
+            op,
+            D3DTA_TEXTURE | D3DTA_ALPHAREPLICATE,
+            D3DTA_DIFFUSE | D3DTA_COMPLEMENT | D3DTA_ALPHAREPLICATE,
+            op,
+            D3DTA_TEXTURE | D3DTA_COMPLEMENT,
+            D3DTA_CURRENT | D3DTA_COMPLEMENT,
+        ];
+        keys.push((ps_key(&[modified], false), plain));
+        // The same op without a texture: the unbound fallback or the implicit-zero-alpha arm.
+        let untextured = [
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((
+            ps_key(&[tex_diffuse(D3DTOP_MODULATE), untextured], false),
+            plain,
+        ));
+    }
+    // A kept alpha (DISABLE, a bump op in the alpha role), TEMP's alpha kept at zero.
+    for alpha_op in [
+        D3DTOP_DISABLE,
+        D3DTOP_BUMPENVMAP,
+        D3DTOP_BUMPENVMAPLUMINANCE,
+    ] {
+        let mut k = ps_key(
+            &[
+                [
+                    D3DTOP_MODULATE,
+                    D3DTA_TEXTURE,
+                    D3DTA_DIFFUSE,
+                    alpha_op,
+                    D3DTA_TEXTURE,
+                    D3DTA_DIFFUSE,
+                ],
+                [
+                    D3DTOP_ADD,
+                    D3DTA_TEMP,
+                    D3DTA_CURRENT,
+                    D3DTOP_SELECTARG1,
+                    D3DTA_TEMP,
+                    D3DTA_CURRENT,
+                ],
+            ],
+            false,
+        );
+        keys.push((k.clone(), plain));
+        k.stages[0].set_result(FfStageResult::Temp);
+        keys.push((k, plain));
     }
     // Arguments: constant, temp, specular, factor; a stage writing TEMP read by the next.
     let mut k = ps_key(
@@ -633,9 +687,30 @@ pub fn extra_ps_keys() -> Vec<(FfPsKey, VariantKey)> {
         ];
         let next = tex_diffuse(D3DTOP_MODULATE);
         keys.push((ps_key(&[bump, next], false), plain));
+        // Without a texture, naming one: the unbound fallback, not a bump stage.
         let mut k = ps_key(&[bump, next], false);
         k.stages[0].flags = FfStageFlags::empty();
         keys.push((k, plain));
+        // Without a texture, naming none: a bump stage that displaces nothing.
+        let untextured = [
+            op,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            D3DTOP_SELECTARG1,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((ps_key(&[untextured, next], false), plain));
+        // A bump stage whose next stage samples nothing.
+        let diffuse = [
+            D3DTOP_MODULATE,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+            D3DTOP_SELECTARG1,
+            D3DTA_DIFFUSE,
+            D3DTA_CURRENT,
+        ];
+        keys.push((ps_key(&[bump, diffuse], false), plain));
         keys.push((ps_key(&[bump, bump, next], false), plain));
         let mut k = ps_key(&[bump, next], false);
         k.tt_projected_mask = 0b11;
