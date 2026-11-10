@@ -1808,3 +1808,22 @@ fn a_rebuilt_ff_source_is_none_when_current() {
         Some(ShaderSource::ff_vertex(&key, &fresh_program))
     );
 }
+
+#[test]
+fn a_32_bit_builds_ff_record_decodes_on_a_64_bit_host() {
+    use crate::shader_key::ff_key_hash_32;
+
+    for kind in ff_kinds() {
+        let mut entry = ff_kind_entry(kind);
+        entry.key = if kind.is_pixel() {
+            ff_key_hash_32(&(&ff_ps_key(), ff_variant()))
+        } else {
+            ff_key_hash_32(&ff_vs_key())
+        };
+        assert_round_trips(&entry);
+        assert!(
+            CacheEntry::decode(kind, entry.key ^ 1, &air_body(&entry)).is_none(),
+            "{kind:?}"
+        );
+    }
+}

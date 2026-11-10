@@ -21,7 +21,10 @@ use crate::{
     },
     ff_build::{self, FfProgram},
     ids::ProgramId,
-    shader_key::{CachedKind, ps_source_disk_key_programmable, vs_source_disk_key_programmable},
+    shader_key::{
+        CachedKind, ff_key_hash_32, ps_source_disk_key_programmable,
+        vs_source_disk_key_programmable,
+    },
     vs_draw::MAX_CLIP_PLANES,
 };
 
@@ -142,6 +145,21 @@ impl ShaderSource {
             Specialization::FfVertex { key, .. } => vs_source_disk_key_ff(key),
             Specialization::FfPixel { key, variant } => ps_source_disk_key_ff(key, *variant),
         }
+    }
+
+    /// Whether a record stored under `key` belongs to this source.
+    ///
+    /// The source's own disk key, or for a fixed-function source the key a 32-bit build computes
+    /// (`ff_key_hash_32`), so a 64-bit host reads the fixed-function records of an i686 cache.
+    pub(super) fn matches_disk_key(&self, key: u64) -> bool {
+        key == self.disk_key()
+            || match &self.specialization {
+                Specialization::FfVertex { key: ff, .. } => key == ff_key_hash_32(ff),
+                Specialization::FfPixel { key: ff, variant } => {
+                    key == ff_key_hash_32(&(ff, *variant))
+                }
+                Specialization::Vertex { .. } | Specialization::Pixel(_) => false,
+            }
     }
 
     /// This fixed-function source's key built again, when the build differs from the stored one.

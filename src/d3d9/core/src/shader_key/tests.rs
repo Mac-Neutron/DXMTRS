@@ -155,3 +155,93 @@ fn ff_key_hash_is_stable() {
     let b = (1u32, 2u32, 3u32);
     assert_eq!(ff_key_hash(&a), ff_key_hash(&b));
 }
+
+/// A vertex key with every field distinct, so a field out of hash order would show.
+fn ff_vs_key() -> crate::dxso::FfVsKey {
+    crate::dxso::FfVsKey {
+        flags: crate::dxso::FfVsFlags::from_bits_retain(0x0305),
+        input_tex_coord_count: 1,
+        tex_coord_count: 2,
+        light_active_mask: 3,
+        light_directional_mask: 4,
+        light_spot_mask: 5,
+        diffuse_source: 6,
+        ambient_source: 7,
+        specular_source: 8,
+        emissive_source: 9,
+        fog_mode: 10,
+        tci: [11, 12, 13, 14, 15, 16, 17, 18],
+        passthrough: [19, 20, 21, 22, 23, 24, 25, 26],
+        tex_coord_dims: [27, 28, 29, 30, 31, 32, 33, 34],
+        tt_flags: [35, 36, 37, 38, 39, 40, 41, 42],
+        vertex_blend_count: 43,
+        declared_weights_count: 44,
+        clip_plane_count: 45,
+        reserved: 46,
+    }
+}
+
+/// `key`'s `Hash` input written out by hand, each array behind a `prefix`-byte length.
+fn ff_vs_bytes(key: &crate::dxso::FfVsKey, prefix: usize) -> Vec<u8> {
+    let mut out = key.flags.bits().to_le_bytes().to_vec();
+    out.extend([
+        key.input_tex_coord_count,
+        key.tex_coord_count,
+        key.light_active_mask,
+        key.light_directional_mask,
+        key.light_spot_mask,
+        key.diffuse_source,
+        key.ambient_source,
+        key.specular_source,
+        key.emissive_source,
+        key.fog_mode,
+    ]);
+    for array in [
+        &key.tci,
+        &key.passthrough,
+        &key.tex_coord_dims,
+        &key.tt_flags,
+    ] {
+        out.extend_from_slice(&array.len().to_le_bytes()[..prefix]);
+        out.extend_from_slice(array);
+    }
+    out.extend([
+        key.vertex_blend_count,
+        key.declared_weights_count,
+        key.clip_plane_count,
+    ]);
+    out
+}
+
+#[test]
+fn ff_key_hash_32_is_the_hash_a_32_bit_build_computes() {
+    use xxhash_rust::xxh3::xxh3_64;
+
+    let key = ff_vs_key();
+    assert_eq!(
+        ff_key_hash(&key),
+        xxh3_64(&ff_vs_bytes(&key, size_of::<usize>()))
+    );
+    assert_eq!(ff_key_hash_32(&key), xxh3_64(&ff_vs_bytes(&key, 4)));
+    // An array's length prefix is a `usize`: the 64-bit host's key differs.
+    #[cfg(target_pointer_width = "64")]
+    assert_ne!(ff_key_hash_32(&key), ff_key_hash(&key));
+}
+
+#[test]
+fn ff_key_hash_32_is_ff_key_hash_without_usize_writes() {
+    let key = (
+        7_u64,
+        0x1234_u16,
+        VsSamplerKinds {
+            volume_mask: 1,
+            cube_mask: 2,
+            lod_table: true,
+        },
+        VariantKey {
+            fog_mode: 3,
+            ..VariantKey::default()
+        },
+    );
+    assert_eq!(ff_key_hash_32(&key), ff_key_hash(&key));
+}

@@ -262,6 +262,40 @@ pub fn ff_key_hash<T: Hash>(key: &T) -> u64 {
     h.finish()
 }
 
+/// [`ff_key_hash`] as a 32-bit build computes it.
+///
+/// An array's length prefix goes through `Hasher::write_usize`, 4 bytes on i686 and 8 on the
+/// 64-bit host, so a fixed-function key differs between the two. A host reading a cache an i686
+/// build wrote checks its fixed-function records against this. Equal to [`ff_key_hash`] on a
+/// 32-bit build.
+#[must_use]
+pub fn ff_key_hash_32<T: Hash>(key: &T) -> u64 {
+    let mut h = Xxh3Width32(Xxh3::new());
+    key.hash(&mut h);
+    h.0.finish()
+}
+
+/// `Xxh3` with `usize` and `isize` written as 4 little-endian bytes, as on i686.
+struct Xxh3Width32(Xxh3);
+
+impl Hasher for Xxh3Width32 {
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.0.write(&value.to_le_bytes()[..4]);
+    }
+
+    fn write_isize(&mut self, value: isize) {
+        self.0.write(&value.to_le_bytes()[..4]);
+    }
+}
+
 /// Content identity of a programmable vertex shader and its emission inputs.
 #[must_use]
 pub fn vs_source_disk_key_programmable(

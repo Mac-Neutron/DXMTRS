@@ -594,7 +594,7 @@ impl CacheEntry {
         let mut reader = RecipeReader::new(bytes);
         let translator: [u8; 32] = reader.take(32)?.try_into().ok()?;
         let source = ShaderSource::decode(kind.msl_twin(), &mut reader)?;
-        if source.disk_key() != key {
+        if !source.matches_disk_key(key) {
             return None;
         }
         let metallib = reader.take(bytes.len() - reader.offset)?;
@@ -617,7 +617,7 @@ impl CacheEntry {
             0 => None,
             1 => {
                 let source = ShaderSource::decode(kind, &mut reader)?;
-                if source.disk_key() != key {
+                if !source.matches_disk_key(key) {
                     return None;
                 }
                 Some(source)
