@@ -7,8 +7,10 @@ divergences from D3D9 it keeps on purpose. The tested games are in
 
 ## Supported
 
-- Shader models 1.x through 3.0, translated from DXSO to MSL and cached on
-  disk by content hash.
+- Shader models 1.x through 3.0 and the fixed-function stages, lowered from
+  DXSO through the translator to AIR by default (`shader.backend=air`) and
+  cached on disk by content hash; `shader.backend=msl` is the escape, the MSL
+  emitter, unchanged until its deletion.
 - The fixed-function pipeline: lighting, texture-coordinate generation
   (camera-space normal, position and reflection vector, and sphere map), the
   texture-stage cascade (CURRENT/TEMP registers, per-stage constants,

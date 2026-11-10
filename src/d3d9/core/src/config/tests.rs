@@ -664,9 +664,17 @@ fn df_formats_defaults_on_and_parses_off() {
 }
 
 #[test]
-fn shader_backend_defaults_to_msl() {
-    assert_eq!(parse(None, "", None).shader_backend, ShaderBackend::Msl);
-    assert_eq!(ShaderBackend::default(), ShaderBackend::Msl);
+fn shader_backend_defaults_to_air() {
+    assert_eq!(parse(None, "", None).shader_backend, ShaderBackend::Air);
+    assert_eq!(ShaderBackend::default(), ShaderBackend::Air);
+}
+
+#[test]
+fn shader_backend_msl_in_the_file_is_kept() {
+    assert_eq!(
+        parse(None, "shader.backend = msl\n", None).shader_backend,
+        ShaderBackend::Msl
+    );
 }
 
 #[test]
@@ -686,14 +694,14 @@ fn shader_backend_air_parses() {
 }
 
 #[test]
-fn shader_backend_bad_value_warns_and_keeps_msl() {
+fn shader_backend_bad_value_warns_and_keeps_the_value_in_effect() {
     assert_eq!(
         parse(None, "shader.backend = metal\n", None).shader_backend,
-        ShaderBackend::Msl
+        ShaderBackend::Air
     );
     assert_eq!(
-        parse(None, "shader.backend = air\nshader.backend = metal\n", None).shader_backend,
-        ShaderBackend::Air,
+        parse(None, "shader.backend = msl\nshader.backend = metal\n", None).shader_backend,
+        ShaderBackend::Msl,
         "a bad value keeps the earlier one"
     );
 }
@@ -703,6 +711,14 @@ fn mtld3d_config_env_overrides_the_file_for_shader_backend() {
     assert_eq!(
         parse(None, "shader.backend = msl\n", Some("shader.backend=air")).shader_backend,
         ShaderBackend::Air
+    );
+}
+
+#[test]
+fn mtld3d_config_env_msl_overrides_a_file_saying_air() {
+    assert_eq!(
+        parse(None, "shader.backend = air\n", Some("shader.backend=msl")).shader_backend,
+        ShaderBackend::Msl
     );
 }
 
@@ -719,6 +735,14 @@ fn dxmt_config_sets_a_d3d9_key() {
     assert_eq!(
         parse_sources(None, &sources("present.maxFps=60", ""), b"").present_max_fps,
         60
+    );
+}
+
+#[test]
+fn dxmt_config_msl_reaches_d3d9() {
+    assert_eq!(
+        parse_sources(None, &sources("shader.backend=msl", ""), b"").shader_backend,
+        ShaderBackend::Msl
     );
 }
 

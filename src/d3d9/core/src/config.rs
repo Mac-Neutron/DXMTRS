@@ -146,7 +146,7 @@ pub struct Mtld3dConfig {
     /// Which compiler builds D3D9 shader libraries.
     ///
     /// The MSL emitter or the translator's AIR.
-    /// Default: [`ShaderBackend::Msl`]. File key: `shader.backend`.
+    /// Default: [`ShaderBackend::Air`]. File key: `shader.backend`.
     pub shader_backend: ShaderBackend,
     /// Directory the process's log file and GPU traces go into.
     ///
@@ -345,10 +345,10 @@ pub struct Mtld3dConfig {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ShaderBackend {
-    /// Emit MSL and compile it.
-    #[default]
+    /// Emit MSL and compile it: the escape while it lasts.
     Msl = 0,
     /// Lower through the translator to AIR.
+    #[default]
     Air = 1,
 }
 
@@ -412,7 +412,7 @@ impl Default for Mtld3dConfig {
             cursor_software: SoftwareCursorPolicy::Off,
             shader_cache_enable: true,
             shader_async_compile: true,
-            shader_backend: ShaderBackend::Msl,
+            shader_backend: ShaderBackend::Air,
             log_dir: String::new(),
             bytecode_dump_dir: String::new(),
             skip_shaders: Vec::new(),

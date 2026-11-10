@@ -251,8 +251,8 @@ An exact count a change moved on purpose fails every comparison against a base
 from before that change, so such a run names it in `--accept`, and only that
 run: the next change to the count fails again.
 
-The host benchmark needs no Wine: it times DXSO parsing and MSL emission on this
-machine over two synthetic corpora and any shader cache `--host-corpus` names
+The host benchmark needs no Wine: it times DXSO parsing and MSL emission (the
+`shader.backend=msl` escape; the default is `air`) on this machine over two synthetic corpora and any shader cache `--host-corpus` names
 (`host::emit_corpus`). `bench-ab` runs it too when it is given each leg's
 `emit_corpus` (`--base-host`, `--cand-host`), in rounds of its own before the
 others, the run's first benchmark processes (only the short Wine process that
