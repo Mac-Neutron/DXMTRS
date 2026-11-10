@@ -927,7 +927,10 @@ impl FrameEncoder {
                     key: key.clone(),
                     backend,
                     program: match backend {
-                        ShaderBackend::Air => self.pair_rule.ff_vs_program(key),
+                        ShaderBackend::Air => match self.pair_rule.ff_vs_program(key) {
+                            Some(program) => Some(program),
+                            None => return Begun::Failed,
+                        },
                         ShaderBackend::Msl => None,
                     },
                 }
@@ -1054,7 +1057,10 @@ impl FrameEncoder {
                     variant,
                     backend,
                     program: match backend {
-                        ShaderBackend::Air => self.pair_rule.ff_ps_program(key),
+                        ShaderBackend::Air => match self.pair_rule.ff_ps_program(key) {
+                            Some(program) => Some(program),
+                            None => return Begun::Failed,
+                        },
                         ShaderBackend::Msl => None,
                     },
                 }

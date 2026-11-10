@@ -814,6 +814,91 @@ fn an_msl_ff_library_under_air_persists_sourceless() {
     let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
 }
 
+/// Under `air`, a lowered fixed-function pair persists kinds 8 and 9 with their sources.
+#[test]
+fn an_air_ff_pair_through_the_encoder_persists_its_sources() {
+    let device = crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice().expect("Metal device");
+    let path = temp_cache("ff-air-encoder");
+    let mut enc = encoder(&device, ShaderBackend::Air, Some(path.clone()));
+    // A cargo build has no translator key; AIR records need one.
+    enc.translator_key = Some([7; 32]);
+    enc.ingest_warm_cache(crate::encoder::WarmCache::empty(), false);
+    let (vs, ps) = (ff_vs_source(), ff_ps_source(true));
+    let (vs_view, ps_view) = (
+        VsSourceView::FixedFunction(&vs),
+        PsSourceView::FixedFunction(&ps),
+    );
+    let variant = VariantKey::default();
+    let backend = enc.pair_backend(vs_view, ps_view, &variant);
+    assert_eq!(backend, ShaderBackend::Air);
+    for failed in [
+        matches!(
+            enc.resolve_vs_library(vs_view, backend),
+            mtld3d_core::async_compile::Resolution::Failed
+        ),
+        matches!(
+            enc.resolve_ps_library(ps_view, variant, backend),
+            mtld3d_core::async_compile::Resolution::Failed
+        ),
+    ] {
+        assert!(!failed);
+    }
+    enc.finish_compiles(false);
+    let mut rule = libraries::PairRule::new(ShaderBackend::Air);
+    assert_eq!(
+        rule.pair_backend(&programs(), vs_view, ps_view, &variant),
+        ShaderBackend::Air
+    );
+    let vs_built = rule.ff_vs_program(&vs.key).expect("the VS lowered");
+    let ps_built = rule.ff_ps_program(&ps.key).expect("the PS lowered");
+    let want = [
+        (
+            CachedKind::AirFfVs,
+            shader_cache::ShaderSource::ff_vertex(&vs.key, vs_built.program()),
+        ),
+        (
+            CachedKind::AirFfPs,
+            shader_cache::ShaderSource::ff_pixel(&ps.key, variant, ps_built.program()),
+        ),
+    ];
+    let records = loaded(&path);
+    // Worker completion order is not fixed: compare as a set.
+    assert_eq!(records.shaders.len(), 2);
+    for (kind, source) in &want {
+        assert!(
+            records
+                .shaders
+                .iter()
+                .any(|entry| entry.kind == *kind && entry.source() == Some(source)),
+            "a {kind:?} record with the program the rule built"
+        );
+    }
+    enc.shutdown_cleanup();
+    let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+}
+
+/// Under `air`, a fixed-function stage the rule has no program for fails; no job is queued.
+#[test]
+fn an_air_ff_stage_without_a_program_fails_without_a_job() {
+    let device = crate::mtl::objc2_metal::MTLCreateSystemDefaultDevice().expect("Metal device");
+    let mut enc = encoder(&device, ShaderBackend::Air, None);
+    enc.ingest_warm_cache(crate::encoder::WarmCache::empty(), false);
+    let (vs, ps) = (ff_vs_source(), ff_ps_source(true));
+    assert!(matches!(
+        enc.resolve_vs_library(VsSourceView::FixedFunction(&vs), ShaderBackend::Air),
+        mtld3d_core::async_compile::Resolution::Failed
+    ));
+    assert!(matches!(
+        enc.resolve_ps_library(
+            PsSourceView::FixedFunction(&ps),
+            VariantKey::default(),
+            ShaderBackend::Air
+        ),
+        mtld3d_core::async_compile::Resolution::Failed
+    ));
+    enc.shutdown_cleanup();
+}
+
 /// Build both fixed-function stages of an AIR pair into one cache file, stamped `translator`.
 ///
 /// Answers each stage's source and the file.
