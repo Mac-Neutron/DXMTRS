@@ -12,8 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    FOG_Z_VARYING, Lower, LowerError, Lowered, MAX_CLIP_PLANES, VS_DRAW_CLIP_ROW, VsBindings,
-    range,
+    FOG_Z_VARYING, Lower, LowerError, Lowered, MAX_CLIP_PLANES, VS_CLIP_BASIS_OUTPUT,
+    VS_DRAW_CLIP_ROW, VS_WINDOW, VS_WINDOW_POS_FIXUP, VsBindings, range,
     regs::{
         MASK_ALL, MASK_X, MASK_Y, MASK_Z, Target, cbuf, dot, fbin, fcmp, fdst, fsplat, ftemp, ibin,
         idst, itemp, lane, mad, mov, mov_sat, movc, odst,
@@ -76,6 +76,10 @@ pub struct VsIo {
     pub targets: Option<BTreeMap<(RegKind, u16), u32>>,
     /// SM3 registers several semantics share: the staging mirror and its elements.
     pub staged: Vec<(u32, Vec<Element>)>,
+    /// `dcl_position o31`'s mirror, the user clip planes' basis ([`VS_CLIP_BASIS_OUTPUT`]).
+    pub clip_basis: Option<u32>,
+    /// A direct `PosFixup` window read was lowered: the epilogue clamps the depth.
+    pub reads_pos_fixup: bool,
 }
 
 impl VsIo {
@@ -94,6 +98,8 @@ impl VsIo {
             extras: Vec::new(),
             targets: None,
             staged: Vec::new(),
+            clip_basis: None,
+            reads_pos_fixup: false,
         }
     }
 
@@ -199,6 +205,15 @@ impl Lower<'_> {
         let mut targets = BTreeMap::new();
         for (reg, group) in by_reg {
             let direct = match group.as_slice() {
+                [only]
+                    if reg.1 == VS_CLIP_BASIS_OUTPUT
+                        && (only.semantic.usage, only.semantic.index)
+                            == (DeclUsage::Position, 0) =>
+                {
+                    let basis = self.perm();
+                    self.vs.clip_basis = Some(basis);
+                    Some(basis)
+                }
                 [only] => {
                     let scalar = matches!(
                         (only.semantic.usage, only.semantic.index),
@@ -234,6 +249,9 @@ impl Lower<'_> {
             self.emit(mov(fdst(t, MASK_ALL), fsplat(v)))?;
         }
         self.emit(mov(fdst(self.vs.fog, MASK_ALL), fsplat(1.0)))?;
+        if let Some(basis) = self.vs.clip_basis {
+            self.emit(mov(fdst(basis, MASK_ALL), fsplat(0.0)))?;
+        }
         // `D3DRS_POINTSIZE`, the size of a point whose shader never writes one.
         self.emit(mov(fdst(self.vs.point_size, MASK_ALL), lane(vs_draw(0), 0)))?;
         let extras: Vec<u32> = self.vs.extras.iter().map(|(_, t)| *t).collect();
@@ -378,13 +396,15 @@ impl Lower<'_> {
         {
             self.emit(mov(fdst(self.vs.fog, MASK_ALL), lane(ftemp(specular), 3)))?;
         }
-        // User clip planes against the application's own position, before the fixup.
+        // User clip planes against the application's own position, before the fixup, or
+        // against the clip basis a program declares.
+        let basis = self.vs.clip_basis.unwrap_or(pos);
         for i in 0..clip_planes {
             let reg = OUT_CLIP + u32::from(i / 4);
             self.emit(dot(
                 4,
                 odst(reg, 1 << (i % 4)),
-                ftemp(pos),
+                ftemp(basis),
                 vs_draw(VS_DRAW_CLIP_ROW + u32::from(i)),
             ))?;
         }
@@ -406,6 +426,9 @@ impl Lower<'_> {
             lane(ftemp(pos), 3),
         ))?;
         self.depth_bias(pos)?;
+        if self.vs.reads_pos_fixup {
+            self.rhw_depth_clamp(pos)?;
+        }
         // `clamp(size, min, max) * render scale`.
         let size = self.scratch();
         let point = vs_draw(0);
@@ -490,6 +513,50 @@ impl Lower<'_> {
             lane(ftemp(clamped), 0),
             lane(ftemp(biased), 0),
         ))
+    }
+
+    /// `if (pos_fixup.z != 0) z = clamp(z, 0, w)`, after the depth bias.
+    ///
+    /// `pos_fixup.z` is non-zero only for a fixed-function pre-transformed draw with no depth
+    /// test, whose depth D3D9 does not clip; only a program reading [`VS_WINDOW_POS_FIXUP`] has it.
+    fn rhw_depth_clamp(&mut self, pos: u32) -> Result<(), LowerError> {
+        let (z, w) = (lane(ftemp(pos), 2), lane(ftemp(pos), 3));
+        let clamped = self.scratch();
+        self.emit(fbin(
+            FloatBinaryOp::Max,
+            fdst(clamped, MASK_X),
+            z.clone(),
+            fsplat(0.0),
+        ))?;
+        self.emit(fbin(
+            FloatBinaryOp::Min,
+            fdst(clamped, MASK_X),
+            lane(ftemp(clamped), 0),
+            w,
+        ))?;
+        let on = self.scratch();
+        self.emit(fcmp(
+            FloatComparison::NotEqual,
+            idst(on, MASK_X),
+            lane(pos_fixup(0), 2),
+            fsplat(0.0),
+        ))?;
+        self.emit(movc(
+            fdst(pos, MASK_Z),
+            lane(itemp(on), 0),
+            lane(ftemp(clamped), 0),
+            z,
+        ))
+    }
+
+    /// A direct read of the vertex window: `VsDraw` row `index - VS_WINDOW`, or `PosFixup` row 0.
+    pub fn vs_window(&mut self, index: u16) -> crate::ir::SrcOperand {
+        if index == VS_WINDOW_POS_FIXUP {
+            self.vs.reads_pos_fixup = true;
+            pos_fixup(0)
+        } else {
+            vs_draw(u32::from(index.wrapping_sub(VS_WINDOW)))
+        }
     }
 
     /// The function signature: stage-in attributes, the outputs in `Varyings`' order.

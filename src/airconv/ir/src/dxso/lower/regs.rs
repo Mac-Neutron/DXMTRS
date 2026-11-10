@@ -6,7 +6,10 @@
 //! reads the D3D9 value as a `float4`, swizzled and modified as `emit.rs`'s `load_src`; a
 //! write goes through [`Lower::store`], `store_dst`'s order: scale, saturate, mask, predicate.
 
-use super::{Lower, LowerError, Support, modifier_support, range, rel_addr_support};
+use super::{
+    BUMP_ENV_ROWS, Lower, LowerError, Support, VS_WINDOW, VS_WINDOW_POS_FIXUP, modifier_support,
+    range, rel_addr_support,
+};
 use crate::{
     dxso::ir::{DstMods, DstOperand, RegKind, SrcModifier, SrcOperand},
     ir::{
@@ -344,10 +347,16 @@ impl Lower<'_> {
                 self.ps_read(kind, index)?
             }
             RegKind::Input => self.read_input(index)?,
+            RegKind::Output if !self.is_vertex() && index < BUMP_ENV_ROWS => {
+                cbuf(range::BUMP_ENV, u32::from(index), OperandDataType::Float)
+            }
             // `ps_1_x` clamps to `[-1, 1]`: a `def` where it is defined, a `c#` at each read.
             RegKind::Const => match self.defs.get(&index).copied() {
                 Some(value) if self.sm1() => fimm(value.map(|v| v.clamp(-1.0, 1.0))),
                 Some(value) => fimm(value),
+                None if self.is_vertex() && (VS_WINDOW..=VS_WINDOW_POS_FIXUP).contains(&index) => {
+                    self.vs_window(index)
+                }
                 None => {
                     let c = cbuf(range::FLOAT, u32::from(index), OperandDataType::Float);
                     if self.sm1() {

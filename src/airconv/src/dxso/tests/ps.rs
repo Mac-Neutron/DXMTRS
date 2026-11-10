@@ -1342,4 +1342,52 @@ fn linked_extras_only_when_vs_writes_them() {
     pmetallib(&t, VariantKey::default());
 }
 
+/// A pixel source of token type 11: the bump environment's rows.
+const BUMP_ROW: u32 = 11;
+const BEM: u16 = 89;
+
+/// `ps_3_0`: `mov oC0, <type 11>[row].x`.
+fn bump_row_read(row: u32) -> Vec<u32> {
+    program(PS_3_0, &[mov(d(COLOROUT, 0, ALL), s(BUMP_ROW, row, XXXX))])
+}
+
+#[test]
+fn ps_type11_source_reads_bump_env_rows() {
+    let t = bump_row_read(3);
+    let l = plowered(&t, VariantKey::default());
+    assert!(any_read(&l, |o| reads_row(o, range::BUMP_ENV, 3)));
+    // It binds `bump_env` (slot 12); a program without one does not.
+    assert_eq!(arguments(&t, VariantKey::default()).0, [15, 12]);
+    assert_eq!(arguments(&sampled(), VariantKey::default()).0, [15]);
+    pmetallib(&t, VariantKey::default());
+    // `bump_env` holds sixteen rows: past them is refused, never read.
+    assert!(matches!(
+        prefused(&bump_row_read(16), VariantKey::default()),
+        LowerError::Unsupported { .. }
+    ));
+}
+
+#[test]
+fn bem_lowers_in_ps_3_0() {
+    let t = program(
+        PS_3_0,
+        &[
+            dcl(TEXCOORD, 0, d(INPUT, 0, ALL)),
+            dcl(TEXCOORD, 1, d(INPUT, 1, ALL)),
+            vec![
+                ins(BEM, 3),
+                d(TEMP, 2, 0x3),
+                s(INPUT, 0, XYZW),
+                s(INPUT, 1, XYZW),
+            ],
+            mov(d(COLOROUT, 0, ALL), s(TEMP, 2, XYZW)),
+        ],
+    );
+    // The matrix is the destination's: `bump_env[2 * 2]`.
+    let l = plowered(&t, VariantKey::default());
+    assert!(any_read(&l, |o| reads_row(o, range::BUMP_ENV, 4)));
+    assert_eq!(arguments(&t, VariantKey::default()).0, [15, 12]);
+    pmetallib(&t, VariantKey::default());
+}
+
 mod ps1;

@@ -75,7 +75,8 @@ pub mod range {
     /// `bump_env`, two rows a texture stage.
     ///
     /// Row `2n` is stage `n`'s matrix `(m00, m01, m10, m11)`, row `2n + 1` its `(lscale,
-    /// loffset, 0, 0)`; declared only for a program with a bump op.
+    /// loffset, 0, 0)`; declared only for a program with a bump op or a source of token type
+    /// 11 ([`super::BUMP_ENV_ROWS`]).
     pub const BUMP_ENV: u32 = 10;
 }
 
@@ -83,6 +84,28 @@ pub mod range {
 pub const VS_DRAW_CLIP_ROW: u32 = 6;
 /// The most user clip planes D3D9 has (`D3DMAXUSERCLIPPLANES`), the rows `VsDraw` holds.
 pub const MAX_CLIP_PLANES: u8 = 6;
+
+/// The vertex window's first `c#`.
+///
+/// A direct read of `c<VS_WINDOW + r>`, `r` below 12, reads `VsDraw` row `r`. No valid shader
+/// names it (D3D9 here has 256 vertex constants); the fixed-function builder reads the rows no
+/// `c#` holds through it. A `def` there is the `def`, and a relative read reads the `c#` buffer.
+pub const VS_WINDOW: u16 = 2032;
+/// The window's `PosFixup` register.
+///
+/// A direct read of it reads `PosFixup` row 0, and a program that reads it clamps its depth to
+/// `[0, w]` under `pos_fixup.z != 0` after the depth bias.
+pub const VS_WINDOW_POS_FIXUP: u16 = VS_WINDOW + 12;
+/// The clip basis output register.
+///
+/// `vs_3_0`'s `dcl_position o31`: the user clip planes are dotted with its value instead of the
+/// position, and it is neither a varying nor in the signature.
+pub const VS_CLIP_BASIS_OUTPUT: u16 = 31;
+/// `bump_env`'s rows.
+///
+/// A pixel source of token type 11 (`RegKind::Output`) at index `r` reads row `r` (no valid
+/// pixel shader names that type); an index past them is refused.
+pub const BUMP_ENV_ROWS: u16 = 16;
 
 /// The varying name of the base member `fog_z`, which carries no semantic.
 pub const FOG_Z_VARYING: &str = "d3d9_fog_z";
@@ -140,8 +163,9 @@ pub struct PsBindings {
     ///
     /// The alpha reference for an alpha test other than none and `D3DCMP_ALWAYS`, `fog_data`
     /// for vertex or table fog, `bump_env` for a bump op in the program's main body (`texbem`,
-    /// `texbeml`, `bem`), the LOD table under `VariantFlags::LOD_BIAS`, `PsDraw` for a
-    /// declared `vPos` the key scales, `i#` and `b#` for a constant no `defi`/`defb` defines.
+    /// `texbeml`, `bem`) or a source of token type 11 anywhere, the LOD table under
+    /// `VariantFlags::LOD_BIAS`, `PsDraw` for a declared `vPos` the key scales, `i#` and `b#`
+    /// for a constant no `defi`/`defb` defines.
     pub ranges: Vec<u32>,
     /// The declared sampler slots: the texture kind bound there, and whether it is a depth one.
     ///
@@ -193,7 +217,10 @@ pub fn ps_bindings(program: &DxsoProgram, key: &VariantKey) -> PsBindings {
     let conditions = [
         (key.alpha_func != 0 && key.alpha_func != 8, range::ALPHA_REF),
         (key.fog_mode != 0 || key.fog_table_mode != 0, range::FOG),
-        (program.uses_bump_env(), range::BUMP_ENV),
+        (
+            program.uses_bump_env() || reads_bump_rows(program),
+            range::BUMP_ENV,
+        ),
         (key.flags.contains(VariantFlags::LOD_BIAS), range::LOD_BIAS),
         (
             program.reads_vpos() && key.flags.contains(VariantFlags::VPOS_SCALE),
@@ -853,6 +880,14 @@ impl<'p> Lower<'p> {
             _ => None,
         })
     }
+}
+
+/// Whether any instruction reads a source of token type 11, a `bump_env` row.
+fn reads_bump_rows(program: &DxsoProgram) -> bool {
+    program
+        .all_instructions()
+        .flat_map(|i| &i.srcs)
+        .any(|s| s.reg.kind == RegKind::Output)
 }
 
 #[cfg(test)]

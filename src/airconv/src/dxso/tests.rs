@@ -1197,4 +1197,262 @@ fn nonfinite_position_is_not_sanitized() {
     metallib(&m4x4(), spec());
 }
 
+/// `add r0, r0, <src>` (`src` one token, or two for a relative read).
+fn add_r0(src: &[u32]) -> Vec<u32> {
+    let mut t = vec![
+        ins(op::ADD, 2 + u32::try_from(src.len()).unwrap_or(1)),
+        d(TEMP, 0, ALL),
+        s(TEMP, 0, XYZW),
+    ];
+    t.extend_from_slice(src);
+    t
+}
+
+/// `vs_3_0`: `oPos = v0`, `o1 = v0 + ` each of `reads`, after `defs`.
+fn vs3_reading(defs: &[Vec<u32>], reads: &[&[u32]]) -> Vec<u32> {
+    let mut body = vec![
+        dcl(POSITION, 0, d(INPUT, 0, ALL)),
+        dcl(POSITION, 0, d(OUTPUT, 0, ALL)),
+        dcl(TEXCOORD, 0, d(OUTPUT, 1, ALL)),
+    ];
+    body.extend_from_slice(defs);
+    body.push(vec![ins(op::MOVA, 2), d(ADDR, 0, 0x1), s(CONST, 0, XXXX)]);
+    body.push(vec![ins(op::MOV, 2), d(OUTPUT, 0, ALL), s(INPUT, 0, XYZW)]);
+    body.push(vec![ins(op::MOV, 2), d(TEMP, 0, ALL), s(INPUT, 0, XYZW)]);
+    body.extend(reads.iter().map(|r| add_r0(r)));
+    body.push(vec![ins(op::MOV, 2), d(OUTPUT, 1, ALL), s(TEMP, 0, XYZW)]);
+    program(VS_3_0, &body)
+}
+
+/// The window's reads: `c2032`, `c2037`, `c2043`, `c2044`, `c2045`, `c[a0.x + 2032]`.
+fn window() -> Vec<u32> {
+    vs3_reading(
+        &[],
+        &[
+            &[s(CONST, 2032, XYZW)],
+            &[s(CONST, 2037, XYZW)],
+            &[s(CONST, 2043, XYZW)],
+            &[s(CONST, 2044, XYZW)],
+            &[s(CONST, 2045, XYZW)],
+            &[s(CONST, 2032, XYZW) | (1 << 13), s(ADDR, 0, XXXX)],
+        ],
+    )
+}
+
+/// The `add`s of the body reading row `row` of `range`.
+fn adds_reading(l: &Lowered, range: u32, row: u32) -> usize {
+    count(l, |i| {
+        matches!(i, Instruction::FloatBinaryOp(b)
+        if b.op == FloatBinaryOp::Add && reads_row(&b.src1, range, row))
+    })
+}
+
+#[test]
+fn vs_window_reads_vs_draw_and_pos_fixup_rows() {
+    let l = lowered(&window(), spec());
+    // `c2032 + r` is `VsDraw` row `r`, `c2044` `PosFixup` row 0.
+    for row in [0, 5, 11] {
+        assert_eq!(adds_reading(&l, range::VS_DRAW, row), 1, "VsDraw row {row}");
+    }
+    assert_eq!(adds_reading(&l, range::POS_FIXUP, 0), 1);
+    // `c2045` and a relative read stay `c#` rows.
+    assert_eq!(adds_reading(&l, range::FLOAT, 2045), 1);
+    assert!(!any_source(&l, |o| (2032..=2044).any(|r| reads_row(
+        o,
+        range::FLOAT,
+        r
+    ))));
+    assert!(any_source(&l, |o| matches!(
+        o,
+        SrcOperand::ConstantBuffer {
+            rangeid: range::FLOAT,
+            regindex: OperandIndex::Temp { offset: 2032, .. },
+            ..
+        }
+    )));
+    metallib(&window(), spec());
+    // A `def` at a window index is the `def`.
+    let shadowed = vs3_reading(&[def(2033, [1.0; 4])], &[&[s(CONST, 2033, XYZW)]]);
+    let l = lowered(&shadowed, spec());
+    assert_eq!(adds_reading(&l, range::VS_DRAW, 1), 0);
+}
+
+/// Where the first instruction `f` accepts sits in the lowered program.
+fn position_of(l: &Lowered, f: impl Fn(&Instruction) -> bool) -> Option<usize> {
+    instructions(l).position(f)
+}
+
+/// The test of `pos_fixup.z != 0`.
+fn is_rhw_clamp_test(i: &Instruction) -> bool {
+    matches!(i, Instruction::FloatCompare(c) if c.cmp == FloatComparison::NotEqual
+        && reads_row(&c.src0, range::POS_FIXUP, 0)
+        && matches!(&c.src0, SrcOperand::ConstantBuffer { common, .. } if common.swizzle.0 == [2; 4]))
+}
+
+/// A `movc` into lanes `mask` of a temporary.
+fn is_movc_into(i: &Instruction, mask: u32) -> bool {
+    matches!(i, Instruction::MovConditional(m)
+        if matches!(&m.dst, airconv_ir::ir::DstOperand::Temp { common, .. } if common.mask == mask))
+}
+
+#[test]
+fn rhw_depth_clamp_follows_the_bias() {
+    let l = lowered(&window(), spec());
+    let fog_z = position_of(
+        &l,
+        |i| matches!(i, Instruction::FloatBinaryOp(b) if b.op == FloatBinaryOp::Div),
+    );
+    let bias = position_of(
+        &l,
+        |i| matches!(i, Instruction::FloatMad(m) if reads_row(&m.src0, range::POS_FIXUP, 1)),
+    );
+    let test = position_of(&l, is_rhw_clamp_test);
+    let (Some(fog_z), Some(bias), Some(test)) = (fog_z, bias, test) else {
+        panic!("fog_z {fog_z:?}, bias {bias:?}, clamp {test:?}");
+    };
+    assert!(fog_z < bias && bias < test, "{fog_z} {bias} {test}");
+    // The clamped z replaces the position's z under the test.
+    assert!(instructions(&l).skip(test).any(|i| is_movc_into(i, 0b100)));
+    assert_eq!(count(&l, is_rhw_clamp_test), 1);
+    metallib(&window(), spec());
+    // No `c2044` read, no clamp.
+    for tokens in [m4x4(), vs3_reading(&[], &[&[s(CONST, 2045, XYZW)]])] {
+        assert_eq!(count(&lowered(&tokens, spec()), is_rhw_clamp_test), 0);
+    }
+}
+
+/// `vs_3_0`: `oPos = v0`, then, with `basis`, `dcl_position o31` written `v1` after it.
+fn clip_basis(basis: bool) -> Vec<u32> {
+    let mut body = vec![
+        dcl(POSITION, 0, d(INPUT, 0, ALL)),
+        dcl(TEXCOORD, 0, d(INPUT, 1, ALL)),
+        dcl(POSITION, 0, d(OUTPUT, 0, ALL)),
+    ];
+    if basis {
+        body.push(dcl(POSITION, 0, d(OUTPUT, 31, ALL)));
+    }
+    body.push(vec![ins(op::MOV, 2), d(OUTPUT, 0, ALL), s(INPUT, 0, XYZW)]);
+    if basis {
+        body.push(vec![ins(op::MOV, 2), d(OUTPUT, 31, ALL), s(INPUT, 1, XYZW)]);
+    }
+    program(VS_3_0, &body)
+}
+
+/// The temporary a `mov` writes from input `v`.
+fn temps_written_from_input(l: &Lowered, v: u32) -> Vec<u32> {
+    instructions(l)
+        .filter_map(|i| match i {
+            Instruction::Mov(m) => match (&m.dst, &m.src) {
+                (
+                    airconv_ir::ir::DstOperand::Temp { regid, .. },
+                    SrcOperand::Input { regid: r, .. },
+                ) if *r == v => Some(*regid),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The temporary the position output is written from, and the ones each clip dot reads.
+fn position_and_clip_bases(l: &Lowered) -> (Option<u32>, Vec<u32>) {
+    let position = instructions(l).find_map(|i| match i {
+        Instruction::Mov(m) => match (&m.dst, &m.src) {
+            (
+                airconv_ir::ir::DstOperand::Output { regid: 0, .. },
+                SrcOperand::Temp { regid, .. },
+            ) => Some(*regid),
+            _ => None,
+        },
+        _ => None,
+    });
+    let clips = instructions(l)
+        .filter_map(|i| match i {
+            Instruction::DotProduct(d)
+                if (6..12).any(|r| reads_row(&d.src1, range::VS_DRAW, r)) =>
+            {
+                match &d.src0 {
+                    SrcOperand::Temp { regid, .. } => Some(*regid),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    (position, clips)
+}
+
+#[test]
+fn o31_position_is_the_clip_basis_not_a_varying() {
+    let two = VsSpec {
+        clip_plane_count: 2,
+        ..spec()
+    };
+    let with = lowered(&clip_basis(true), two);
+    let without = lowered(&clip_basis(false), two);
+    // No extra output: o31 is neither a varying nor in the signature.
+    assert_eq!(pops(&with), pops(&without));
+    assert_eq!(with.io.max_output_register, without.io.max_output_register);
+    assert_eq!(with.outputs, without.outputs);
+    // The position keeps o0's value; the clip loop dots o31's.
+    let (Some(position), clips) = position_and_clip_bases(&with) else {
+        panic!("no position write");
+    };
+    assert!(temps_written_from_input(&with, 0).contains(&position));
+    assert!(!temps_written_from_input(&with, 1).contains(&position));
+    assert_eq!(clips.len(), 2);
+    for basis in &clips {
+        assert_ne!(*basis, position);
+        assert!(temps_written_from_input(&with, 1).contains(basis));
+    }
+    metallib(&clip_basis(true), two);
+    // Without o31 the clip loop dots the clip-space position, as before.
+    let (position, clips) = position_and_clip_bases(&without);
+    assert_eq!(clips, [position.unwrap_or(u32::MAX); 2]);
+    metallib(&clip_basis(false), two);
+}
+
+#[test]
+fn vs_inputs_v16_to_v22_are_attributes() {
+    let t = program(
+        VS_3_0,
+        &[
+            dcl(POSITION, 0, d(INPUT, 0, ALL)),
+            dcl(TEXCOORD, 1, d(INPUT, 16, ALL)),
+            dcl(TEXCOORD, 2, d(INPUT, 22, ALL)),
+            dcl(POSITION, 0, d(OUTPUT, 0, ALL)),
+            dcl(TEXCOORD, 0, d(OUTPUT, 1, ALL)),
+            vec![ins(op::MOV, 2), d(OUTPUT, 0, ALL), s(INPUT, 0, XYZW)],
+            vec![
+                ins(op::ADD, 3),
+                d(OUTPUT, 1, ALL),
+                s(INPUT, 16, XYZW),
+                s(INPUT, 22, XYZW),
+            ],
+        ],
+    );
+    // The mask names v0..v15 only: v16..v22 are always provided.
+    let only_v0 = VsSpec {
+        provided_input_mask: 0b1,
+        ..VsSpec::default()
+    };
+    let l = lowered(&t, only_v0);
+    let inputs: Vec<u32> =
+        l.io.signature_handlers
+            .iter()
+            .filter_map(|h| match h {
+                SignatureHandler::VertexInput { reg, .. } => Some(*reg),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(inputs, [0, 16, 22]);
+    for reg in [16, 22] {
+        assert!(any_source(
+            &l,
+            |o| matches!(o, SrcOperand::Input { regid, .. } if *regid == reg)
+        ));
+    }
+    metallib(&t, only_v0);
+}
+
 mod ps;
