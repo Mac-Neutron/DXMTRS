@@ -23,6 +23,7 @@ pub mod container;
 pub mod decode;
 pub mod dxil_part;
 pub mod dxso;
+pub mod dxso_write;
 pub mod estimators;
 mod float_cast;
 pub mod handlers;
