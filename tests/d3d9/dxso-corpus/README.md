@@ -26,7 +26,7 @@ the arm64x leg's caches in `<build>/mtld3d-conformance/air-caches`):
 
     cargo run -p mtld3d-core --features disk-cache --example emit_corpus -- --write-cache tests/d3d9/dxso-corpus/synthetic.bin
     D3D9_BACKEND=air sh dxmt/mtld3d-conformance.sh
-    sh dxmt/mtld3d-conformance.sh --arch i686-arm64 --exe <x86 d3d9_test.exe> --keep-shader-cache <dir>/i686
+    D3D9_BACKEND=air sh dxmt/mtld3d-conformance.sh --arch i686-arm64 --exe <x86 d3d9_test.exe> --keep-shader-cache <dir>/i686
     cargo run -p mtld3d-core --features disk-cache --example emit_corpus -- --merge tests/d3d9/dxso-corpus/conformance-x64.bin <build>/mtld3d-conformance/air-caches/*.bin
 
 (`--merge` for `conformance-i686.bin` over `<dir>/i686/*.bin`. It drops the records without a source and the recipes

@@ -433,7 +433,9 @@ Each of these rots silently when it is left for later:
   extend the source list when adding an emission dependency outside those paths.
   Bump the shader-cache schema for incompatible shader keys or pipeline-translation
   semantics, and the container version for binary-format changes. Programmable
-  DXSO survives emitter changes; fixed-function entries rebuild on first use.
+  DXSO survives emitter changes; fixed-function entries rebuild on first use. AIR
+  fixed-function records (kinds 8 and 9) carry their key and tokens, and prewarm
+  rebuilds them from the key when `ff_build`'s output changed.
 - A new config key ships with its dispatch arm, its unit test, and its entry in
   the `mtld3d.conf` sample with the default and a short why.
 - A new built-in app profile ships with the rationale for every key it sets as
