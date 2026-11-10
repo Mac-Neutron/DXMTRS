@@ -24,6 +24,9 @@
 use std::sync::Arc;
 
 pub mod asm;
+mod vs;
+
+pub use vs::vertex;
 
 /// One fixed-function stage built as DXSO, with what its translation needs beside the tokens.
 #[derive(Debug)]
@@ -39,3 +42,6 @@ pub struct FfProgram {
     /// The caller logs each under `mtld3d::dxso`.
     pub warnings: Vec<&'static str>,
 }
+
+#[cfg(test)]
+mod tests;
