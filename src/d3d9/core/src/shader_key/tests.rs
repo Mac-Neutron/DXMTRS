@@ -77,12 +77,58 @@ fn air_kinds_round_trip_and_name() {
         assert_eq!(air.compile_bucket(), msl.compile_bucket());
         assert_eq!(air.entry_name(0xAB), name);
     }
-    assert_eq!(CachedKind::FfVs.air(), None);
-    assert_eq!(CachedKind::FfPs.air(), None);
-    assert!(!CachedKind::FfVs.is_air());
-    assert_eq!(CachedKind::from_byte(8), None);
-    assert_eq!(CachedKind::from_byte(9), None);
     assert_eq!(CachedKind::from_byte(16), None);
+}
+
+#[test]
+fn air_ff_kinds_round_trip_bytes() {
+    assert_eq!(CachedKind::AirFfVs as u8, 8);
+    assert_eq!(CachedKind::AirFfPs as u8, 9);
+    assert_eq!(CachedKind::from_byte(8), Some(CachedKind::AirFfVs));
+    assert_eq!(CachedKind::from_byte(9), Some(CachedKind::AirFfPs));
+    assert_eq!(
+        CachedKind::AirFfVs.entry_name(0xAB),
+        "mtld3d_vs_air_ff_000000ab"
+    );
+    assert_eq!(
+        CachedKind::AirFfPs.entry_name(0xAB),
+        "mtld3d_ps_air_ff_000000ab"
+    );
+}
+
+#[test]
+fn air_ff_kinds_twin_ff_kinds() {
+    assert_eq!(CachedKind::FfVs.air(), Some(CachedKind::AirFfVs));
+    assert_eq!(CachedKind::FfPs.air(), Some(CachedKind::AirFfPs));
+    assert_eq!(CachedKind::AirFfVs.air(), None);
+    assert_eq!(CachedKind::AirFfPs.air(), None);
+    assert_eq!(CachedKind::AirFfVs.msl_twin(), CachedKind::FfVs);
+    assert_eq!(CachedKind::AirFfPs.msl_twin(), CachedKind::FfPs);
+    assert_eq!(CachedKind::FfVs.msl_twin(), CachedKind::FfVs);
+    assert_eq!(
+        CachedKind::AirFfVs.compile_bucket(),
+        CachedKind::FfVs.compile_bucket()
+    );
+    assert_eq!(
+        CachedKind::AirFfPs.compile_bucket(),
+        CachedKind::FfPs.compile_bucket()
+    );
+}
+
+#[test]
+fn air_ff_kinds_are_air_and_not_programmable() {
+    for k in [CachedKind::AirFfVs, CachedKind::AirFfPs] {
+        assert!(k.is_air());
+        assert!(!k.is_programmable());
+    }
+    assert!(!CachedKind::FfVs.is_air());
+    assert!(!CachedKind::FfPs.is_air());
+}
+
+#[test]
+fn air_ff_kinds_are_vertex_or_pixel() {
+    assert!(CachedKind::AirFfVs.is_vertex() && !CachedKind::AirFfVs.is_pixel());
+    assert!(CachedKind::AirFfPs.is_pixel() && !CachedKind::AirFfPs.is_vertex());
 }
 
 #[test]

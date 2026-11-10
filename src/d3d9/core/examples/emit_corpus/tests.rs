@@ -126,7 +126,7 @@ fn kinds_counts_msl_and_air_records() {
     assert_eq!(
         line,
         "kinds 2 files: sm1vs=0 sm1ps=0 sm2vs=0 sm2ps=0 sm3vs=2 sm3ps=2 air_sm1vs=0 air_sm1ps=0 \
-         air_sm2vs=0 air_sm2ps=0 air_sm3vs=0 air_sm3ps=2 ffvs=0 ffps=0"
+         air_sm2vs=0 air_sm2ps=0 air_sm3vs=0 air_sm3ps=2 ffvs=0 ffps=0 air_ffvs=0 air_ffps=0"
     );
     assert!(kinds_line(&[temp("kinds-missing")]).is_err());
     // An AIR record is not MSL to time.

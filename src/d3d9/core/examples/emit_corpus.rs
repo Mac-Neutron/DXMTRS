@@ -868,7 +868,7 @@ fn merge_caches(out: &Path, inputs: &[PathBuf]) -> Result<String, String> {
 
 /// `--kinds`: the record count per kind, summed over `inputs`, as one line.
 fn kinds_line(inputs: &[PathBuf]) -> Result<String, String> {
-    const KINDS: [(CachedKind, &str); 14] = [
+    const KINDS: [(CachedKind, &str); 16] = [
         (CachedKind::Sm1Vs, "sm1vs"),
         (CachedKind::Sm1Ps, "sm1ps"),
         (CachedKind::Sm2Vs, "sm2vs"),
@@ -883,6 +883,8 @@ fn kinds_line(inputs: &[PathBuf]) -> Result<String, String> {
         (CachedKind::AirSm3Ps, "air_sm3ps"),
         (CachedKind::FfVs, "ffvs"),
         (CachedKind::FfPs, "ffps"),
+        (CachedKind::AirFfVs, "air_ffvs"),
+        (CachedKind::AirFfPs, "air_ffps"),
     ];
     let mut counts = [0_usize; KINDS.len()];
     for path in inputs {

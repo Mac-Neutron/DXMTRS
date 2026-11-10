@@ -21,7 +21,8 @@
 //! * `kind` ∈ `0..=7` (`CachedKind`) → **Single** chunk. Frame decompresses to
 //!   an emitter fingerprint (u64 LE), a source-present byte, optional DXSO
 //!   and specialization inputs, then UTF-8 MSL. `key` is the `disk_key`.
-//!   `kind` ∈ `10..=15` (AIR twins) is `translator key [32] | DXSO inputs | metallib`.
+//!   `kind` ∈ `8..=15` (AIR twins, `8..=9` fixed-function) is
+//!   `translator key [32] | DXSO inputs | metallib`.
 //!   Stale programmable MSL is regenerated; stale source-less records are dropped.
 //! * `kind == RECORD_KIND_PIPELINE` (`0xFE`) → **Single** pipeline recipe.
 //!   The recipe contains stable shader references and explicit logical fields,

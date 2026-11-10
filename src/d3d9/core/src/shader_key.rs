@@ -29,7 +29,8 @@ pub enum CachedKind {
     Sm2Ps = 5,
     Sm3Vs = 6,
     Sm3Ps = 7,
-    // 8 and 9 stay free for the fixed-function twins (C3c).
+    AirFfVs = 8,
+    AirFfPs = 9,
     AirSm1Vs = 10,
     AirSm1Ps = 11,
     AirSm2Vs = 12,
@@ -54,6 +55,8 @@ impl CachedKind {
             5 => Some(Self::Sm2Ps),
             6 => Some(Self::Sm3Vs),
             7 => Some(Self::Sm3Ps),
+            8 => Some(Self::AirFfVs),
+            9 => Some(Self::AirFfPs),
             10 => Some(Self::AirSm1Vs),
             11 => Some(Self::AirSm1Ps),
             12 => Some(Self::AirSm2Vs),
@@ -71,77 +74,142 @@ impl CachedKind {
     #[must_use]
     pub const fn compile_bucket(self) -> CompileBucket {
         match self {
-            Self::FfVs | Self::FfPs => CompileBucket::Ff,
+            Self::FfVs | Self::FfPs | Self::AirFfVs | Self::AirFfPs => CompileBucket::Ff,
             Self::Sm1Vs | Self::Sm1Ps | Self::AirSm1Vs | Self::AirSm1Ps => CompileBucket::Sm1,
             Self::Sm2Vs | Self::Sm2Ps | Self::AirSm2Vs | Self::AirSm2Ps => CompileBucket::Sm2,
             Self::Sm3Vs | Self::Sm3Ps | Self::AirSm3Vs | Self::AirSm3Ps => CompileBucket::Sm3,
         }
     }
 
-    /// The AIR twin of a programmable MSL kind; `None` for fixed-function and AIR kinds.
+    /// The AIR twin of an MSL kind; `None` for AIR kinds.
     #[must_use]
     pub const fn air(self) -> Option<Self> {
         match self {
+            Self::FfVs => Some(Self::AirFfVs),
+            Self::FfPs => Some(Self::AirFfPs),
             Self::Sm1Vs => Some(Self::AirSm1Vs),
             Self::Sm1Ps => Some(Self::AirSm1Ps),
             Self::Sm2Vs => Some(Self::AirSm2Vs),
             Self::Sm2Ps => Some(Self::AirSm2Ps),
             Self::Sm3Vs => Some(Self::AirSm3Vs),
             Self::Sm3Ps => Some(Self::AirSm3Ps),
-            _ => None,
+            Self::AirFfVs
+            | Self::AirFfPs
+            | Self::AirSm1Vs
+            | Self::AirSm1Ps
+            | Self::AirSm2Vs
+            | Self::AirSm2Ps
+            | Self::AirSm3Vs
+            | Self::AirSm3Ps => None,
         }
     }
 
     #[must_use]
     pub const fn is_air(self) -> bool {
-        self as u8 >= 10
+        match self {
+            Self::AirFfVs
+            | Self::AirFfPs
+            | Self::AirSm1Vs
+            | Self::AirSm1Ps
+            | Self::AirSm2Vs
+            | Self::AirSm2Ps
+            | Self::AirSm3Vs
+            | Self::AirSm3Ps => true,
+            Self::FfVs
+            | Self::FfPs
+            | Self::Sm1Vs
+            | Self::Sm1Ps
+            | Self::Sm2Vs
+            | Self::Sm2Ps
+            | Self::Sm3Vs
+            | Self::Sm3Ps => false,
+        }
     }
 
     /// The MSL kind of the same program and specialization (identity for non-AIR kinds).
     #[must_use]
     pub const fn msl_twin(self) -> Self {
         match self {
+            Self::AirFfVs => Self::FfVs,
+            Self::AirFfPs => Self::FfPs,
             Self::AirSm1Vs => Self::Sm1Vs,
             Self::AirSm1Ps => Self::Sm1Ps,
             Self::AirSm2Vs => Self::Sm2Vs,
             Self::AirSm2Ps => Self::Sm2Ps,
             Self::AirSm3Vs => Self::Sm3Vs,
             Self::AirSm3Ps => Self::Sm3Ps,
-            other => other,
+            Self::FfVs
+            | Self::FfPs
+            | Self::Sm1Vs
+            | Self::Sm1Ps
+            | Self::Sm2Vs
+            | Self::Sm2Ps
+            | Self::Sm3Vs
+            | Self::Sm3Ps => self,
         }
     }
 
     #[must_use]
     pub const fn is_vertex(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::FfVs
-                | Self::Sm1Vs
-                | Self::Sm2Vs
-                | Self::Sm3Vs
-                | Self::AirSm1Vs
-                | Self::AirSm2Vs
-                | Self::AirSm3Vs
-        )
+            | Self::Sm1Vs
+            | Self::Sm2Vs
+            | Self::Sm3Vs
+            | Self::AirFfVs
+            | Self::AirSm1Vs
+            | Self::AirSm2Vs
+            | Self::AirSm3Vs => true,
+            Self::FfPs
+            | Self::Sm1Ps
+            | Self::Sm2Ps
+            | Self::Sm3Ps
+            | Self::AirFfPs
+            | Self::AirSm1Ps
+            | Self::AirSm2Ps
+            | Self::AirSm3Ps => false,
+        }
     }
 
     #[must_use]
     pub const fn is_pixel(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::FfPs
-                | Self::Sm1Ps
-                | Self::Sm2Ps
-                | Self::Sm3Ps
-                | Self::AirSm1Ps
-                | Self::AirSm2Ps
-                | Self::AirSm3Ps
-        )
+            | Self::Sm1Ps
+            | Self::Sm2Ps
+            | Self::Sm3Ps
+            | Self::AirFfPs
+            | Self::AirSm1Ps
+            | Self::AirSm2Ps
+            | Self::AirSm3Ps => true,
+            Self::FfVs
+            | Self::Sm1Vs
+            | Self::Sm2Vs
+            | Self::Sm3Vs
+            | Self::AirFfVs
+            | Self::AirSm1Vs
+            | Self::AirSm2Vs
+            | Self::AirSm3Vs => false,
+        }
     }
 
     #[must_use]
     pub const fn is_programmable(self) -> bool {
-        !matches!(self, Self::FfVs | Self::FfPs)
+        match self {
+            Self::FfVs | Self::FfPs | Self::AirFfVs | Self::AirFfPs => false,
+            Self::Sm1Vs
+            | Self::Sm1Ps
+            | Self::Sm2Vs
+            | Self::Sm2Ps
+            | Self::Sm3Vs
+            | Self::Sm3Ps
+            | Self::AirSm1Vs
+            | Self::AirSm1Ps
+            | Self::AirSm2Vs
+            | Self::AirSm2Ps
+            | Self::AirSm3Vs
+            | Self::AirSm3Ps => true,
+        }
     }
 
     /// Programmable: derive the kind from `(sm_major, is_pixel_shader)`.
@@ -172,6 +240,7 @@ impl CachedKind {
         let stage = if self.is_vertex() { "vs" } else { "ps" };
         let kind_label = match self {
             Self::FfVs | Self::FfPs => "ff",
+            Self::AirFfVs | Self::AirFfPs => "air_ff",
             Self::Sm1Vs | Self::Sm1Ps => "sm1",
             Self::Sm2Vs | Self::Sm2Ps => "sm2",
             Self::Sm3Vs | Self::Sm3Ps => "sm3",

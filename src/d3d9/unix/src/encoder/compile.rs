@@ -712,7 +712,7 @@ fn build_pipeline(job: PipelineJob) -> PipelineOutcome {
 /// `prog 0x…` / `ff 0x…` for a shader record, the tag the trace dumps and warnings use.
 fn reference_tag(reference: ShaderRecordRef) -> String {
     PairShaderId {
-        is_programmable: !matches!(reference.kind(), CachedKind::FfVs | CachedKind::FfPs),
+        is_programmable: reference.kind().is_programmable(),
         hash: reference.key(),
     }
     .tag()
