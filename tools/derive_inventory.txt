@@ -158,6 +158,7 @@ src/airconv/src/llvm/ty.rs TyKind Clone,PartialEq,Eq,Hash,Debug
 src/airconv/src/module.rs Layout Clone,Copy
 src/airconv/tests/dxso_parity.rs Class Clone,Copy,PartialEq,Eq
 src/airconv/tests/dxso_parity.rs Fail Clone
+src/airconv/tests/dxso_parity.rs Inputs Clone,Copy
 src/airconv/tests/dxso_parity.rs Layout Clone,Copy
 src/airconv/tests/dxso_parity.rs TexKind Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d11/src/abi/records.rs D3d10BlendDesc Clone,Copy,Default

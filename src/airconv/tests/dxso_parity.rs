@@ -8,7 +8,12 @@
 //! a live pipeline): the records give the DXSO and the exact specialization; the MSL pair is
 //! `ShaderSource::emit` compiled as `unix/src/metal/shader.rs` does (MSL 2.4, preserve invariance,
 //! fast math); the AIR pair is `translate` of the same tokens and specialization, loaded with
-//! `newLibraryWithData`. Both pairs get the same vertex descriptor, the same attachments, the same
+//! `newLibraryWithData`. A fixed-function record's MSL is `ff.rs`'s for its key, and its AIR the
+//! translation of the tokens `ff_build` made from that key; a fixed-function stage reads the
+//! constants the layer uploads for a fixed transform, lighting and texture state (ruling C3c-8),
+//! a programmable stage the sine-shaped rows. A recipe naming a record without a source fails the
+//! file, and so does a fixed-function record whose tokens this tree's `ff_build` no longer builds
+//! (`ff-stale`). Both pairs get the same vertex descriptor, the same attachments, the same
 //! deterministic inputs (attributes, constants, textures and samplers) and one draw of a 4x4 vertex
 //! grid (triangles, or points for a point-sprite recipe) into a 64x64 target. Equal means every
 //! channel within 2/255 on 8-bit formats, within 1e-3 relative (1e-5 absolute floor) on float
@@ -26,16 +31,24 @@ use std::{
     env,
     ffi::{CString, c_void},
     fs,
+    mem::MaybeUninit,
     path::{Path, PathBuf},
     ptr::NonNull,
 };
 
 use airconv::dxso::translate;
-use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSpec};
+use airconv_ir::dxso::{
+    DeclUsage, Declaration, RegKind, parse,
+    spec::{StageSpec, VariantFlags, VariantKey, VsSpec},
+};
 use dispatch2::DispatchData;
 use mtld3d_core::{
+    dxso::{FfVsFlags, FfVsKey},
+    ff_state::FfState,
     pipeline_state::PipelineSnapshot,
-    shader_cache::{CacheEntry, CacheHeader, CacheReadError, read_header, read_records},
+    shader_cache::{
+        CacheEntry, CacheHeader, CacheReadError, ShaderSource, read_header, read_records,
+    },
     shader_key::CachedKind,
 };
 use mtld3d_shared::{
@@ -268,6 +281,330 @@ impl Uniforms {
             ps_draw: floats(&[1.0, 1.0, 0.0, 0.0]),
         }
     }
+
+    /// The inputs of a fixed-function stage (ruling C3c-8).
+    ///
+    /// The programmable set with the fixed-function `vs_c`, `vs_draw` and `bump_env`, and
+    /// `PosFixup` from a 64x64 target at render scale 2. A pre-transformed stage also gets its
+    /// depth clamp on and a depth bias, so the bias-then-clamp order shows on the depths the
+    /// attributes place outside `[0, w]`.
+    fn ff(rhw: bool) -> Self {
+        let side = 1.0 / small(SIDE);
+        let (clamp, bias) = if rhw { (1.0, 0.03) } else { (0.0, 0.0) };
+        Self {
+            vs_c: ff_vs_constants(rhw),
+            pos_fixup: floats(&[side, -side, clamp, 2.0, bias, 0.0, 0.0, 0.0]),
+            vs_draw: ff_vs_draw(),
+            bump_env: ff_bump_env(),
+            ..Self::new()
+        }
+    }
+}
+
+/// `D3DTS_VIEW`, `D3DTS_PROJECTION` and `D3DTS_WORLD` (`D3DTS_WORLDMATRIX(0)`).
+const D3DTS_VIEW: u32 = 2;
+const D3DTS_PROJECTION: u32 = 3;
+const D3DTS_WORLD: u32 = 256;
+
+/// Writes `$v` into the `D3DCOLORVALUE` `$c`.
+macro_rules! paint {
+    ($c:expr, $v:expr) => {{
+        let [r, g, b, a]: [f32; 4] = $v;
+        $c.r = r;
+        $c.g = g;
+        $c.b = b;
+        $c.a = a;
+    }};
+}
+
+/// The uniform set a stage of a recipe reads: the programmable one, or a fixed-function one.
+// Copy: `render` indexes `Gpu::uniforms` with a recipe's field (`as usize`).
+#[derive(Clone, Copy)]
+enum Inputs {
+    Programmable = 0,
+    Ff = 1,
+    /// A pre-transformed fixed-function vertex stage: `vs_c` row 0 is the viewport.
+    FfRhw = 2,
+}
+
+/// The view, projection and world matrices of the fixed-function inputs, row-vector (`v * M`).
+fn ff_view() -> [f32; 16] {
+    let eye = [1.5_f32, 2.0, -9.0];
+    let norm = |v: [f32; 3]| {
+        let l = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.map(|x| x / l)
+    };
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[2].mul_add(-b[1], a[1] * b[2]),
+            a[0].mul_add(-b[2], a[2] * b[0]),
+            a[1].mul_add(-b[0], a[0] * b[1]),
+        ]
+    };
+    let dot = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let z = norm(eye.map(|x| -x));
+    let x = norm(cross([0.0, 1.0, 0.0], z));
+    let y = cross(z, x);
+    [
+        x[0],
+        y[0],
+        z[0],
+        0.0, //
+        x[1],
+        y[1],
+        z[1],
+        0.0, //
+        x[2],
+        y[2],
+        z[2],
+        0.0, //
+        -dot(x, eye),
+        -dot(y, eye),
+        -dot(z, eye),
+        1.0,
+    ]
+}
+
+/// A left-handed perspective: 0.9 rad vertical field, square, near 1, far 40.
+fn ff_projection() -> [f32; 16] {
+    let ys = 1.0 / 0.45_f32.tan();
+    let (zn, zf) = (1.0_f32, 40.0_f32);
+    [
+        ys,
+        0.0,
+        0.0,
+        0.0, //
+        0.0,
+        ys,
+        0.0,
+        0.0, //
+        0.0,
+        0.0,
+        zf / (zf - zn),
+        1.0, //
+        0.0,
+        0.0,
+        -zn * zf / (zf - zn),
+        0.0,
+    ]
+}
+
+/// World matrix `n` of the palette: a rotation about y and x, a non-uniform scale, a translation.
+fn ff_world(n: usize) -> [f32; 16] {
+    let t = small(n);
+    let (sy, cy) = 0.1_f32.mul_add(t, 0.5).sin_cos();
+    let (sx, cx) = 0.05_f32.mul_add(t, 0.3).sin_cos();
+    let scale = [0.8, 0.005_f32.mul_add(-t, 1.2), 1.0];
+    // Ry * Rx, rows scaled.
+    let r = [
+        [cy, sy * sx, -sy * cx],
+        [0.0, cx, sx],
+        [sy, -cy * sx, cy * cx],
+    ];
+    [
+        r[0][0] * scale[0],
+        r[0][1] * scale[0],
+        r[0][2] * scale[0],
+        0.0, //
+        r[1][0] * scale[1],
+        r[1][1] * scale[1],
+        r[1][2] * scale[1],
+        0.0, //
+        r[2][0] * scale[2],
+        r[2][1] * scale[2],
+        r[2][2] * scale[2],
+        0.0, //
+        0.02_f32.mul_add(t, 0.2),
+        -0.1,
+        0.3,
+        1.0,
+    ]
+}
+
+/// Texture matrix of stage `s`: a scale and an offset.
+///
+/// Stages 0 and 1 have a zero `w` column, so a four-component projected coordinate of theirs
+/// has `w == 0` over the whole draw (the origin sample of the guarded divide); stages 2 and up
+/// divide by a varying `w`.
+fn ff_texture_matrix(s: usize) -> [f32; 16] {
+    let t = small(s);
+    let w = if s < 2 { 0.0 } else { 1.0 };
+    [
+        0.1_f32.mul_add(t, 0.5),
+        0.0,
+        0.0,
+        0.1 * w, //
+        0.0,
+        0.75,
+        0.0,
+        0.2 * w, //
+        0.0,
+        0.0,
+        1.25,
+        -0.1 * w, //
+        0.05 * t,
+        -0.05 * t,
+        0.2,
+        0.5 * w,
+    ]
+}
+
+/// The rows `fill` writes, read back (every row starts as zeros).
+fn filled(rows: usize, fill: impl FnOnce(&mut [MaybeUninit<[f32; 4]>])) -> Vec<[f32; 4]> {
+    let mut dst = vec![MaybeUninit::new([0.0; 4]); rows];
+    fill(&mut dst);
+    dst.into_iter()
+        // SAFETY: every row was initialized by `MaybeUninit::new` above, and `fill` only writes.
+        .map(|row| unsafe { row.assume_init() })
+        .collect()
+}
+
+/// The fixed-function vertex constants the layer uploads for a fixed state (`ff_state.rs`).
+///
+/// Rows 0-3 `transpose(WORLD * VIEW)`, 4-7 `transpose(PROJ)`, 8 fog (start 2, end 18, density
+/// 0.1: factors about 0.25 to 0.75 over the drawn depths), 9 ambient, 10-14 the material (power
+/// 12), 15-62 eight lights (spot data in every slot, so a slot the key reads as directional or
+/// point is as defined; eye space, through `fill_lights_section`), 63-94 eight texture matrices,
+/// 95-254 a 40-matrix palette, `transpose(WORLD_n * VIEW)`. Pre-transformed: row 0 is the
+/// logical viewport `(32, 32, 0, 0)` (width, height, x, y) the MSL divides by.
+fn ff_vs_constants(rhw: bool) -> Vec<u8> {
+    let mut ff = FfState::new();
+    let mut matrix = *ff.transform(D3DTS_VIEW).expect("the view matrix");
+    let transforms = [(D3DTS_VIEW, ff_view()), (D3DTS_PROJECTION, ff_projection())]
+        .into_iter()
+        .chain((0..40).map(|n| (D3DTS_WORLD + u32::try_from(n).expect("a bone"), ff_world(n))));
+    for (state, m) in transforms {
+        matrix.m = m;
+        ff.set_transform(state, &matrix);
+    }
+    let mut material = *ff.material();
+    paint!(material.diffuse, [0.8, 0.7, 0.6, 0.9]);
+    paint!(material.ambient, [0.3, 0.35, 0.4, 1.0]);
+    paint!(material.specular, [0.5, 0.45, 0.4, 1.0]);
+    paint!(material.emissive, [0.05, 0.1, 0.02, 0.0]);
+    material.power = 12.0;
+    ff.set_material(&material);
+    for i in 0..8 {
+        let t = small(i);
+        let mut light = FfState::enable_default_light();
+        light.type_ = 2;
+        paint!(
+            light.diffuse,
+            [
+                0.05_f32.mul_add(-t, 0.9),
+                0.6,
+                0.05_f32.mul_add(t, 0.3),
+                1.0
+            ]
+        );
+        paint!(light.specular, [0.7, 0.05_f32.mul_add(-t, 0.7), 0.5, 0.8]);
+        paint!(light.ambient, [0.1, 0.05 * t, 0.1, 1.0]);
+        light.position.x = 3.0 - t;
+        light.position.y = 4.0;
+        light.position.z = 0.5_f32.mul_add(t, -5.0);
+        light.direction.x = 0.1_f32.mul_add(t, -0.3);
+        light.direction.y = -1.0;
+        light.direction.z = 0.6;
+        light.range = 100.0;
+        light.falloff = 1.0;
+        light.attenuation0 = 1.0;
+        light.attenuation1 = 0.05;
+        light.attenuation2 = 0.01;
+        light.theta = 0.6;
+        light.phi = 1.4;
+        ff.set_light(i, &light);
+        ff.set_light_enabled(i, true);
+    }
+    let key = FfVsKey {
+        flags: FfVsFlags::LIGHTING_ENABLED | FfVsFlags::SPECULAR_ENABLE,
+        input_tex_coord_count: 0,
+        tex_coord_count: 0,
+        light_active_mask: 0xFF,
+        light_directional_mask: 0,
+        light_spot_mask: 0xFF,
+        diffuse_source: 0,
+        ambient_source: 0,
+        specular_source: 0,
+        emissive_source: 0,
+        fog_mode: 0,
+        tci: [0; 8],
+        passthrough: [0; 8],
+        tex_coord_dims: [0; 8],
+        tt_flags: [0; 8],
+        vertex_blend_count: 0,
+        declared_weights_count: 0,
+        clip_plane_count: 0,
+        reserved: 0,
+    };
+    let mut rows = vec![[0.0_f32; 4]; ROWS];
+    rows[0..4].copy_from_slice(&filled(4, |d| ff.fill_wv_section(d)));
+    rows[4..8].copy_from_slice(&filled(4, |d| ff.fill_proj_section(d)));
+    rows[8] = [2.0, 18.0, 0.1, 0.0];
+    rows[9] = [0.2, 0.15, 0.1, 1.0];
+    rows[10..15].copy_from_slice(&filled(5, |d| ff.fill_material_section(&key, d)));
+    rows[15..63].copy_from_slice(&filled(48, |d| ff.fill_lights_section(&key, d)));
+    let view = *ff.transform(D3DTS_VIEW).expect("the view matrix");
+    for s in 0..8 {
+        matrix.m = ff_texture_matrix(s);
+        rows_of(
+            &FfState::transpose(&matrix).m,
+            &mut rows[63 + 4 * s..67 + 4 * s],
+        );
+    }
+    for n in 0..40 {
+        matrix.m = ff_world(n);
+        let bone = FfState::transpose(&FfState::mat_mul(&matrix, &view));
+        rows_of(&bone.m, &mut rows[95 + 4 * n..99 + 4 * n]);
+    }
+    if rhw {
+        rows[0] = [32.0, 32.0, 0.0, 0.0];
+    }
+    floats(rows.as_flattened())
+}
+
+/// The four rows of a row-major matrix.
+fn rows_of(m: &[f32; 16], out: &mut [[f32; 4]]) {
+    for (row, chunk) in out.iter_mut().zip(m.as_chunks::<4>().0) {
+        *row = *chunk;
+    }
+}
+
+/// `VsDraw` of a fixed-function draw.
+///
+/// Point `(4, 1, 16)`, point scale `(1, 0.1, 0.01)`, the inverse view as `vs_draw.rs` packs it
+/// (`transpose(inverse(VIEW))`), six world-space planes, each cutting part of the drawn
+/// geometry.
+fn ff_vs_draw() -> Vec<u8> {
+    let mut matrix = *FfState::new()
+        .transform(D3DTS_VIEW)
+        .expect("the view matrix");
+    matrix.m = ff_view();
+    let inverse = FfState::inverse(&matrix).expect("an invertible view");
+    let mut out = vec![4.0, 1.0, 16.0, 0.0, 1.0, 0.1, 0.01, 0.0];
+    out.extend(FfState::transpose(&inverse).m);
+    for plane in 0..6 {
+        let (s, c) = (1.05 * small(plane)).sin_cos();
+        out.extend([0.4 * c, 0.4 * s, 0.1, 1.2]);
+    }
+    floats(&out)
+}
+
+/// `bump_env`, 16 rows, distinct per stage.
+///
+/// Stage `n`'s matrix at row `2n`, its luminance scale and offset at row `2n + 1`.
+fn ff_bump_env() -> Vec<u8> {
+    let mut out = Vec::new();
+    for n in 0..8 {
+        let t = small(n);
+        out.extend([
+            t.mul_add(1.0 / 16.0, 0.5),
+            -0.25,
+            0.25,
+            t.mul_add(-1.0 / 16.0, 0.75),
+        ]);
+        out.extend([t.mul_add(0.125, 0.5), 0.125 * t, 0.0, 0.0]);
+    }
+    floats(&out)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -372,7 +709,8 @@ struct Gpu {
     samplers: FxHashMap<bool, Retained<ProtocolObject<dyn MTLSamplerState>>>,
     clear_pixels: FxHashMap<usize, Vec<u8>>,
     functions: FxHashMap<(bool, CachedKind, u64), Result<Func, Fail>>,
-    uniforms: Uniforms,
+    /// Indexed by [`Inputs`].
+    uniforms: [Uniforms; 3],
     probe: Option<Func>,
     air_is_msl: bool,
 }
@@ -429,7 +767,7 @@ impl Gpu {
             samplers: FxHashMap::default(),
             clear_pixels: FxHashMap::default(),
             functions: FxHashMap::default(),
-            uniforms: Uniforms::new(),
+            uniforms: [Uniforms::new(), Uniforms::ff(false), Uniforms::ff(true)],
             probe,
             air_is_msl: env::var_os("AIRCONV_DXSO_SELF").is_some(),
         })
@@ -823,6 +1161,9 @@ fn ulps(a: f32, b: f32) -> u64 {
 struct Recipe<'a> {
     vs: &'a CacheEntry,
     ps: &'a CacheEntry,
+    /// The uniforms the vertex stage reads, and the pixel stage's.
+    vs_inputs: Inputs,
+    ps_inputs: Inputs,
     vs_spec: VsSpec,
     ps_spec: VariantKey,
     snapshot: PipelineSnapshot,
@@ -1096,7 +1437,10 @@ fn render(gpu: &mut Gpu, r: &Recipe<'_>, built: &Built, probe: bool) -> Result<R
     }
     let streams = vertex_buffers(gpu, r)?;
     let indices = buffer(&gpu.device, &index_data())?;
-    let u = &gpu.uniforms;
+    let (u, p) = (
+        &gpu.uniforms[r.vs_inputs as usize],
+        &gpu.uniforms[r.ps_inputs as usize],
+    );
     let (vs_uniforms, ps_uniforms) = (
         [
             (&u.vs_c, 30),
@@ -1107,14 +1451,14 @@ fn render(gpu: &mut Gpu, r: &Recipe<'_>, built: &Built, probe: bool) -> Result<R
             (&u.vs_lod, 25),
         ],
         [
-            (&u.ps_c, 15),
-            (&u.alpha_ref, 14),
-            (&u.fog, 13),
-            (&u.bump_env, 12),
-            (&u.ps_i, 11),
-            (&u.ps_b, 10),
-            (&u.lod_bias, 9),
-            (&u.ps_draw, 8),
+            (&p.ps_c, 15),
+            (&p.alpha_ref, 14),
+            (&p.fog, 13),
+            (&p.bump_env, 12),
+            (&p.ps_i, 11),
+            (&p.ps_b, 10),
+            (&p.lod_bias, 9),
+            (&p.ps_draw, 8),
         ],
     );
     let cmd = gpu.queue.commandBuffer().ok_or("no command buffer")?;
@@ -1330,9 +1674,12 @@ struct Tally {
     bind_differ: usize,
     air_refused: usize,
     msl_failed: usize,
-    ff_skipped: usize,
+    /// Recipes with a fixed-function stage.
+    ff: usize,
+    /// Fixed-function records whose stored tokens a fresh build of their key no longer gives.
+    ff_stale: usize,
     triaged: usize,
-    /// Recipes compared: not ff-skipped, not msl-failed.
+    /// Recipes compared: not msl-failed.
     compared: usize,
     /// Recipes whose MSL render drew nothing, untriaged.
     no_draw: usize,
@@ -1521,6 +1868,22 @@ fn run_recipe(gpu: &mut Gpu, r: &Recipe<'_>, tally: &mut Tally) -> Outcome {
     }
 }
 
+/// Whether a vertex program takes a pre-transformed position (`dcl_positiont`).
+fn pre_transformed(tokens: &[u32]) -> bool {
+    parse(tokens).is_ok_and(|program| {
+        program.declarations.iter().any(|decl| {
+            matches!(
+                decl,
+                Declaration::Semantic {
+                    usage: DeclUsage::PositionT,
+                    reg,
+                    ..
+                } if reg.kind == RegKind::Input
+            )
+        })
+    })
+}
+
 fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
     let bytes = fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
     match read_header(&bytes) {
@@ -1537,7 +1900,14 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
         .iter()
         .map(|s| ((s.kind, s.key), s))
         .collect();
-    let mut tally = Tally::default();
+    let mut tally = Tally {
+        ff_stale: records
+            .shaders
+            .iter()
+            .filter(|s| s.source().and_then(ShaderSource::rebuilt_ff).is_some())
+            .count(),
+        ..Tally::default()
+    };
     for recipe in &records.pipelines {
         tally.pairs += 1;
         let (vs_ref, ps_ref) = (recipe.vs(), recipe.ps());
@@ -1549,17 +1919,36 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
         };
         let (vs, ps) = (*vs, *ps);
         let (Some(vs_src), Some(ps_src)) = (vs.source(), ps.source()) else {
-            tally.ff_skipped += 1;
-            continue;
+            panic!(
+                "{name}: a recipe names a record without a source ({:?} {:016x}, {:?} {:016x})",
+                vs.kind, vs.key, ps.kind, ps.key
+            );
         };
+        if !vs.kind.is_programmable() || !ps.kind.is_programmable() {
+            tally.ff += 1;
+        }
         let (StageSpec::Vs(vs_spec), StageSpec::Ps(ps_spec)) =
             (vs_src.stage_spec(), ps_src.stage_spec())
         else {
             panic!("{name}: a recipe pairs the wrong stages");
         };
+        let vs_inputs = if vs.kind.is_programmable() {
+            Inputs::Programmable
+        } else if pre_transformed(vs_src.tokens()) {
+            Inputs::FfRhw
+        } else {
+            Inputs::Ff
+        };
+        let ps_inputs = if ps.kind.is_programmable() {
+            Inputs::Programmable
+        } else {
+            Inputs::Ff
+        };
         let r = Recipe {
             vs,
             ps,
+            vs_inputs,
+            ps_inputs,
             vs_spec,
             ps_spec,
             snapshot: recipe.resolve(MetalHandle::NULL, MetalHandle::NULL),
@@ -1630,18 +2019,28 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
         tally.cover_both, tally.cover_msl_only, tally.cover_air_only, tally.covered, tally.pairs
     );
     println!(
-        "dxso-parity: {name}: {}/{} equal, {} differ, {} bind-differ, {} air-refused, {} msl-failed, {} ff-skipped, {} triaged",
+        "dxso-parity: {name}: {}/{} equal, {} differ, {} bind-differ, {} air-refused, {} msl-failed, {} ff, {} ff-stale, {} triaged",
         tally.equal,
         tally.pairs,
         tally.differ,
         tally.bind_differ,
         tally.air_refused,
         tally.msl_failed,
-        tally.ff_skipped,
+        tally.ff,
+        tally.ff_stale,
         tally.triaged
     );
     tally
 }
+
+/// The corpus files that hold fixed-function pairs, each of which must compare at least one.
+///
+/// `synthetic.bin` is written by `emit_corpus --write-cache` with the synthetic fixed-function
+/// set. A conformance file holds fixed-function pairs once it is captured under
+/// `shader.backend=air` (its fixed-function records then carry their sources); the
+/// `conformance-x64.bin` of this tree was captured under `msl` and joins this list when it is
+/// recaptured.
+const FF_FILES: [&str; 1] = ["synthetic.bin"];
 
 const CORPUS_FILES: [&str; 3] = [
     "synthetic.bin",
@@ -1694,6 +2093,15 @@ fn dxso_parity() {
         compared += tally.compared;
         if tally.compared == 0 {
             failures.push(format!("{name}: no pair compared"));
+        }
+        if FF_FILES.contains(name) && tally.ff == 0 {
+            failures.push(format!("{name}: 0 ff pairs"));
+        }
+        if tally.ff_stale > 0 {
+            failures.push(format!(
+                "{name}: {} fixed-function records stale against ff_build",
+                tally.ff_stale
+            ));
         }
         if tally.differ + tally.bind_differ + tally.air_refused + tally.msl_failed + tally.no_draw
             > 0
