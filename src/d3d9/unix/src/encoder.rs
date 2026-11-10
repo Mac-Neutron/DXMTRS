@@ -9482,7 +9482,7 @@ pub fn compile_stage_library(
     Some(StageLibHandles { library, func })
 }
 
-/// The metallib of a programmable stage's retained source, from the translator (ruling C3b-10).
+/// The metallib of a stage's retained source, from the translator (rulings C3b-10, C3c-6).
 ///
 /// A failure is logged and gives `None`, as an MSL emission error does.
 pub fn translate_stage(source: &shader_cache::ShaderSource, entry: &str) -> Option<Vec<u8>> {

@@ -646,6 +646,7 @@ src/d3d9/unix/src/encoder.rs MipStagingBuffer Clone,Default
 src/d3d9/unix/src/encoder.rs PsSamplerDecls Clone,Copy,Default
 src/d3d9/unix/src/encoder.rs StageLibHandles Clone,Copy
 src/d3d9/unix/src/encoder.rs SubmitMode Clone,Copy,PartialEq,Eq
+src/d3d9/unix/src/encoder/compile/libraries.rs AirStage Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/unix/src/metal/clear_quad.rs ClearQuadKey Hash,PartialEq,Eq,Clone,Copy
 src/d3d9/unix/src/metal/command.rs BlitSite Clone,Copy
 src/d3d9/unix/src/metal/command.rs CopyRejectReason Clone,Copy,PartialEq,Eq,Debug

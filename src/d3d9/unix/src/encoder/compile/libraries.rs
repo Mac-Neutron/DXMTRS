@@ -16,9 +16,9 @@
 //! holds. It keeps built handles only: an unknown key or a recorded failure
 //! goes to the index on every draw, as it did before the memo.
 //!
-//! Under `shader.backend=air` a programmable stage has two libraries per key,
-//! one per backend ([`PairRule`] picks the pair's), so the programmable keys and
-//! the memo carry the backend; fixed-function stages are always MSL.
+//! Under `shader.backend=air` a stage has two libraries per key, one per
+//! backend ([`PairRule`] picks the pair's), so the programmable keys, the
+//! fixed-function index pairs and the memo carry the backend.
 
 use std::sync::Arc;
 
@@ -27,8 +27,15 @@ use log::info;
 use mtld3d_core::{
     build_index::BuildIndex,
     config::ShaderBackend,
-    draw_data::{FixedPsSource, FixedVsSource, ProgrammablePsSource, ProgrammableVsSource},
-    dxso::{DxsoProgram, FfPsKey, FfVsKey, VariantKey, VsSamplerKinds},
+    draw_data::{
+        FixedPsSource, FixedVsSource, ProgrammablePsSource, ProgrammableVsSource,
+        ps_source_disk_key_ff, vs_source_disk_key_ff,
+    },
+    dxso::{
+        DxsoError, DxsoProgram, FfPsKey, FfVsKey, LOG_TARGET as DXSO_TARGET, VariantKey,
+        VsSamplerKinds, parse,
+    },
+    ff_build::{self, FfProgram},
     ids::ProgramId,
 };
 use mtld3d_shared::MetalHandle;
@@ -54,11 +61,15 @@ use crate::{
 /// runs when the device replaces its implicit surfaces or moves its window,
 /// not on every Reset), shutdown forgets everything. The indexes do not own
 /// the libraries: `lib_cache` does.
+///
+/// The fixed-function indexes are one per backend, indexed by
+/// `backend as usize`, so a probe borrows the key instead of building an
+/// owned `(key, backend)` tuple.
 #[derive(Default)]
 pub struct StageLibraries {
-    ff_vs: BuildIndex<FfVsKey, StageLibHandles>,
+    ff_vs: [BuildIndex<FfVsKey, StageLibHandles>; 2],
     prog_vs: BuildIndex<ProgrammableVsKey, StageLibHandles>,
-    ff_ps: FxHashMap<FfPsKey, BuildIndex<VariantKey, StageLibHandles>>,
+    ff_ps: [FxHashMap<FfPsKey, BuildIndex<VariantKey, StageLibHandles>>; 2],
     prog_ps: BuildIndex<(ProgramId, VariantKey, ShaderBackend), StageLibHandles>,
     memo: LibraryMemo,
 }
@@ -115,7 +126,9 @@ impl StageLibraries {
         backend: ShaderBackend,
     ) -> Option<&Option<StageLibHandles>> {
         match source {
-            VsSourceView::FixedFunction(FixedVsSource { key, .. }) => self.ff_vs.lookup_entry(key),
+            VsSourceView::FixedFunction(FixedVsSource { key, .. }) => {
+                self.ff_vs[backend as usize].lookup_entry(key)
+            }
             VsSourceView::Programmable(value) => self
                 .prog_vs
                 .lookup_entry(&programmable_vs_key(value, backend)),
@@ -134,8 +147,7 @@ impl StageLibraries {
         backend: ShaderBackend,
     ) -> Option<&Option<StageLibHandles>> {
         match source {
-            PsSourceView::FixedFunction(FixedPsSource { key, .. }) => self
-                .ff_ps
+            PsSourceView::FixedFunction(FixedPsSource { key, .. }) => self.ff_ps[backend as usize]
                 .get(key)
                 .and_then(|variants| variants.lookup_entry(&variant)),
             PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
@@ -153,7 +165,7 @@ impl StageLibraries {
     ) {
         match source {
             VsSourceView::FixedFunction(FixedVsSource { key, .. }) => {
-                self.record_ff_vs(key.clone(), outcome);
+                self.record_ff_vs(key.clone(), backend, outcome);
             }
             VsSourceView::Programmable(value) => {
                 self.record_programmable_vs(programmable_vs_key(value, backend), outcome);
@@ -171,7 +183,7 @@ impl StageLibraries {
     ) {
         match source {
             PsSourceView::FixedFunction(FixedPsSource { key, .. }) => {
-                self.record_ff_ps(key.clone(), variant, outcome);
+                self.record_ff_ps(key.clone(), variant, backend, outcome);
             }
             PsSourceView::Programmable(ProgrammablePsSource { ps_id, .. }) => {
                 self.record_programmable_ps(*ps_id, variant, backend, outcome);
@@ -179,10 +191,15 @@ impl StageLibraries {
         }
     }
 
-    /// Record a fixed-function VS build outcome under its owned key.
-    pub fn record_ff_vs(&mut self, key: FfVsKey, outcome: Option<StageLibHandles>) {
+    /// Record a fixed-function VS build outcome under its owned key and backend.
+    pub fn record_ff_vs(
+        &mut self,
+        key: FfVsKey,
+        backend: ShaderBackend,
+        outcome: Option<StageLibHandles>,
+    ) {
         self.memo.forget();
-        self.ff_vs.record(key, outcome);
+        self.ff_vs[backend as usize].record(key, outcome);
     }
 
     /// Record a programmable VS build outcome under its [`ProgrammableVsKey`].
@@ -195,15 +212,19 @@ impl StageLibraries {
         self.prog_vs.record(key, outcome);
     }
 
-    /// Record a fixed-function PS build outcome under its owned key and variant.
+    /// Record a fixed-function PS build outcome under its owned key, variant and backend.
     pub fn record_ff_ps(
         &mut self,
         key: FfPsKey,
         variant: VariantKey,
+        backend: ShaderBackend,
         outcome: Option<StageLibHandles>,
     ) {
         self.memo.forget();
-        self.ff_ps.entry(key).or_default().record(variant, outcome);
+        self.ff_ps[backend as usize]
+            .entry(key)
+            .or_default()
+            .record(variant, outcome);
     }
 
     /// Record a programmable PS build outcome under its program, variant and backend.
@@ -221,9 +242,11 @@ impl StageLibraries {
     /// Forget the failed keys so each is built once more; built libraries stay.
     pub fn forget_failures(&mut self) {
         self.memo.forget();
-        self.ff_vs.forget_failures();
+        for index in &mut self.ff_vs {
+            index.forget_failures();
+        }
         self.prog_vs.forget_failures();
-        for variants in self.ff_ps.values_mut() {
+        for variants in self.ff_ps.iter_mut().flat_map(FxHashMap::values_mut) {
             variants.forget_failures();
         }
         self.prog_ps.forget_failures();
@@ -232,19 +255,24 @@ impl StageLibraries {
     /// Forget every key, for a teardown that destroys the libraries they name.
     pub fn clear(&mut self) {
         self.memo.forget();
-        self.ff_vs.clear();
+        for index in &mut self.ff_vs {
+            index.clear();
+        }
         self.prog_vs.clear();
-        self.ff_ps.clear();
+        for index in &mut self.ff_ps {
+            index.clear();
+        }
         self.prog_ps.clear();
     }
 
     /// How many fixed-function libraries are built or failed, both stages.
     ///
     /// One per distinct fixed-function vertex shader key and one per distinct
-    /// pixel shader key, whose variants count once. A key whose build failed
-    /// counts too.
+    /// pixel shader key, whose variants count once, per backend. A key whose
+    /// build failed counts too.
     pub fn ff_count(&self) -> usize {
-        self.ff_vs.len() + self.ff_ps.len()
+        self.ff_vs.iter().map(BuildIndex::len).sum::<usize>()
+            + self.ff_ps.iter().map(FxHashMap::len).sum::<usize>()
     }
 
     /// Forget the memo before a packet whose records may reuse the previous packet's addresses.
@@ -442,21 +470,73 @@ const fn programmable_vs_key(
     )
 }
 
-/// The backend a draw's VS/PS pair is built with (rulings C3b-2, C3b-3).
+/// A stage that failed as AIR: a program, or a fixed-function key (ruling C3c-6).
+///
+/// What [`PairRule::fail`] takes and what a pipeline build carries to its
+/// install, so the failure of an AIR pipeline reaches both of its stages.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AirStage {
+    Program(ProgramId),
+    FfVs(FfVsKey),
+    FfPs(FfPsKey),
+}
+
+/// A fixed-function stage built as DXSO and parsed, once per key on the encoder thread.
+///
+/// The prefilter lowers `parsed`; the AIR worker translates the built
+/// program's tokens and writes them in the record's source, so the key is
+/// never built twice.
+#[derive(Debug)]
+pub struct FfBuilt {
+    program: FfProgram,
+    parsed: DxsoProgram,
+}
+
+impl FfBuilt {
+    /// Parse a built program. Its tokens skip the application shader checks.
+    ///
+    /// # Errors
+    ///
+    /// The parser's diagnostic when the builder made a program it cannot read.
+    pub fn new(program: FfProgram) -> Result<Self, DxsoError> {
+        let parsed = parse(&program.tokens)?;
+        Ok(Self { program, parsed })
+    }
+
+    /// The built program: tokens, input mask and warnings.
+    pub const fn program(&self) -> &FfProgram {
+        &self.program
+    }
+}
+
+/// The backend a draw's VS/PS pair is built with (rulings C3b-2, C3b-3, C3c-6).
 ///
 /// Under `shader.backend=msl` every pair is MSL, decided on the first compare.
-/// Under `air` a pair is AIR when both stages are programmable, neither program
-/// has failed as AIR this session, and both lower through the translator's IR
-/// with the pair's own specialization; otherwise both stages are MSL, so an
-/// AIR stage never meets an MSL one. The lowering is a prefilter: a library or
-/// pipeline that still fails as AIR marks its programs failed ([`Self::fail`]),
-/// and their later pairs go MSL. Each stage key's lowering runs once.
+/// Under `air` a pair is AIR when both stages lower through the translator's IR
+/// with the pair's own specialization and neither has failed as AIR this
+/// session; otherwise both stages are MSL, so an AIR stage never meets an MSL
+/// one. A fixed-function stage lowers as the program `ff_build` makes of its
+/// key, built and parsed once per key and kept ([`FfBuilt`]) for the AIR
+/// build. The lowering is a prefilter: a library or pipeline that still fails
+/// as AIR marks its stages failed ([`Self::fail`]), and their later pairs go
+/// MSL. Each stage key's lowering runs once; a fixed-function key's failure
+/// lives in its memo entry, so a known key's probe is a borrow.
 pub struct PairRule {
     configured: ShaderBackend,
     vs_lowers: FxHashMap<(ProgramId, u16, u8, VsSamplerKinds), bool>,
     ps_lowers: FxHashMap<(ProgramId, VariantKey), bool>,
+    /// `None`: refused or failed as AIR.
+    ff_vs: FxHashMap<FfVsKey, Option<Arc<FfBuilt>>>,
+    ff_ps: FxHashMap<FfPsKey, FfPsLowering>,
     failed: FxHashSet<ProgramId>,
     refused: FxHashSet<ProgramId>,
+}
+
+/// A fixed-function pixel key's build, and whether it lowers with each variant seen.
+struct FfPsLowering {
+    /// `None`: refused or failed as AIR, whatever the variant.
+    built: Option<Arc<FfBuilt>>,
+    variants: FxHashMap<VariantKey, bool>,
 }
 
 impl PairRule {
@@ -465,6 +545,8 @@ impl PairRule {
             configured,
             vs_lowers: FxHashMap::default(),
             ps_lowers: FxHashMap::default(),
+            ff_vs: FxHashMap::default(),
+            ff_ps: FxHashMap::default(),
             failed: FxHashSet::default(),
             refused: FxHashSet::default(),
         }
@@ -485,6 +567,8 @@ impl PairRule {
         self.air_pair_backend(programs, vs, ps, variant)
     }
 
+    // ponytail: a fixed-function draw hashes its keys here under `air`; an address memo in front,
+    // as `LibraryMemo` has, if a profile shows the probe.
     fn air_pair_backend(
         &mut self,
         programs: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
@@ -492,13 +576,32 @@ impl PairRule {
         ps: PsSourceView<'_>,
         variant: &VariantKey,
     ) -> ShaderBackend {
-        let (VsSourceView::Programmable(vs), PsSourceView::Programmable(ps)) = (vs, ps) else {
-            return ShaderBackend::Msl;
-        };
-        if self.failed.contains(&vs.vs_id) || self.failed.contains(&ps.ps_id) {
-            return ShaderBackend::Msl;
+        if self.vs_lowers(programs, vs) && self.ps_lowers(programs, ps, variant) {
+            ShaderBackend::Air
+        } else {
+            ShaderBackend::Msl
         }
-        let vs_lowers = *self
+    }
+
+    /// Whether a VS stage lowers and has not failed as AIR.
+    fn vs_lowers(
+        &mut self,
+        programs: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
+        vs: VsSourceView<'_>,
+    ) -> bool {
+        let vs = match vs {
+            VsSourceView::FixedFunction(FixedVsSource { key, .. }) => {
+                if let Some(built) = self.ff_vs.get(key) {
+                    return built.is_some();
+                }
+                return self.lower_ff_vs(key);
+            }
+            VsSourceView::Programmable(vs) => vs,
+        };
+        if self.failed.contains(&vs.vs_id) {
+            return false;
+        }
+        *self
             .vs_lowers
             .entry((
                 vs.vs_id,
@@ -517,11 +620,34 @@ impl PairRule {
                         .map_err(|e| log_refusal(&mut self.refused, "VS", vs.vs_id, &e))
                         .is_ok()
                 })
-            });
-        if !vs_lowers {
-            return ShaderBackend::Msl;
+            })
+    }
+
+    /// Whether a PS stage lowers with `variant` and has not failed as AIR.
+    fn ps_lowers(
+        &mut self,
+        programs: &FxHashMap<ProgramId, Arc<DxsoProgram>>,
+        ps: PsSourceView<'_>,
+        variant: &VariantKey,
+    ) -> bool {
+        let ps = match ps {
+            PsSourceView::FixedFunction(FixedPsSource { key, .. }) => {
+                if let Some(entry) = self.ff_ps.get(key) {
+                    if entry.built.is_none() {
+                        return false;
+                    }
+                    if let Some(&lowers) = entry.variants.get(variant) {
+                        return lowers;
+                    }
+                }
+                return self.lower_ff_ps(key, variant);
+            }
+            PsSourceView::Programmable(ps) => ps,
+        };
+        if self.failed.contains(&ps.ps_id) {
+            return false;
         }
-        let ps_lowers = *self
+        *self
             .ps_lowers
             .entry((ps.ps_id, *variant))
             .or_insert_with(|| {
@@ -530,18 +656,113 @@ impl PairRule {
                         .map_err(|e| log_refusal(&mut self.refused, "PS", ps.ps_id, &e))
                         .is_ok()
                 })
-            });
-        if ps_lowers {
-            ShaderBackend::Air
-        } else {
-            ShaderBackend::Msl
-        }
+            })
     }
 
-    /// Mark a program failed as AIR; whether it was not already.
-    pub fn fail(&mut self, program: ProgramId) -> bool {
-        self.failed.insert(program)
+    /// Build, parse and lower a fixed-function VS key seen for the first time.
+    #[cold]
+    #[inline(never)]
+    fn lower_ff_vs(&mut self, key: &FfVsKey) -> bool {
+        let disk_key = vs_source_disk_key_ff(key);
+        let built = build_ff(ff_build::vertex(key), "VS", disk_key).filter(|built| {
+            let spec = VsSpec {
+                provided_input_mask: built.program.provided_input_mask,
+                clip_plane_count: key.clip_plane_count,
+                sampler_kinds: VsSamplerKinds::default(),
+            };
+            lower::vertex(&built.parsed, &spec)
+                .map_err(|e| log_ff_refusal("VS", disk_key, &e))
+                .is_ok()
+        });
+        let lowers = built.is_some();
+        self.ff_vs.insert(key.clone(), built.map(Arc::new));
+        lowers
     }
+
+    /// Build and parse a fixed-function PS key seen first, then lower it with `variant`.
+    #[cold]
+    #[inline(never)]
+    fn lower_ff_ps(&mut self, key: &FfPsKey, variant: &VariantKey) -> bool {
+        if !self.ff_ps.contains_key(key) {
+            let built = build_ff(
+                ff_build::pixel(key),
+                "PS",
+                ps_source_disk_key_ff(key, *variant),
+            );
+            self.ff_ps.insert(
+                key.clone(),
+                FfPsLowering {
+                    built: built.map(Arc::new),
+                    variants: FxHashMap::default(),
+                },
+            );
+        }
+        let Some(entry) = self.ff_ps.get_mut(key) else {
+            return false;
+        };
+        let Some(built) = &entry.built else {
+            return false;
+        };
+        let lowers = lower::pixel(&built.parsed, variant)
+            .map_err(|e| log_ff_refusal("PS", ps_source_disk_key_ff(key, *variant), &e))
+            .is_ok();
+        entry.variants.insert(*variant, lowers);
+        lowers
+    }
+
+    /// The program the prefilter built for a fixed-function VS key, for its AIR build.
+    pub fn ff_vs_program(&self, key: &FfVsKey) -> Option<Arc<FfBuilt>> {
+        self.ff_vs.get(key)?.clone()
+    }
+
+    /// The program the prefilter built for a fixed-function PS key, for its AIR build.
+    pub fn ff_ps_program(&self, key: &FfPsKey) -> Option<Arc<FfBuilt>> {
+        self.ff_ps.get(key)?.built.clone()
+    }
+
+    /// Mark a stage failed as AIR; whether it was not already.
+    ///
+    /// A fixed-function key's memo entry turns `None`, for every variant of a pixel key.
+    pub fn fail(&mut self, stage: AirStage) -> bool {
+        match stage {
+            AirStage::Program(program) => self.failed.insert(program),
+            AirStage::FfVs(key) => !matches!(self.ff_vs.insert(key, None), Some(None)),
+            AirStage::FfPs(key) => {
+                if let Some(entry) = self.ff_ps.get_mut(&key) {
+                    return entry.built.take().is_some();
+                }
+                let failed = FfPsLowering {
+                    built: None,
+                    variants: FxHashMap::default(),
+                };
+                self.ff_ps.insert(key, failed);
+                true
+            }
+        }
+    }
+}
+
+/// Parse a fixed-function stage's built program and log its warnings, once each per process.
+///
+/// `None` when it does not parse, logged at info like a lowering refusal.
+fn build_ff(program: FfProgram, stage: &str, disk_key: u64) -> Option<FfBuilt> {
+    for &warning in &program.warnings {
+        // ponytail: keyed by the text's address; a warning whose text sits at two addresses
+        // logs twice.
+        mtld3d_shared::log_once_warn_by!(
+            target: DXSO_TARGET,
+            key: warning.as_ptr().addr() as u64,
+            "{warning}"
+        );
+    }
+    FfBuilt::new(program)
+        .map_err(|e| log_ff_refusal(stage, disk_key, &e))
+        .ok()
+}
+
+/// Log a fixed-function key's lowering refusal; the memo entry it fills keeps it to once a key.
+fn log_ff_refusal(stage: &str, disk_key: u64, error: &dyn std::fmt::Debug) {
+    info!(target: crate::LOG_TARGET, "{stage} ff {disk_key:#x} stays MSL: {error:?}");
 }
 
 /// Log a program's first lowering refusal (once per program, not per stage key); whether it was.

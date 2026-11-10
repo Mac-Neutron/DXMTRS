@@ -3,7 +3,10 @@ use mtld3d_core::{
     dxso::{FfStage, FfVsFlags, VariantFlags},
 };
 
-use super::{super::tests::programs, *};
+use super::{
+    super::tests::{ff_ps_source, ff_vs_source, programs},
+    *,
+};
 
 fn handles(value: u64) -> StageLibHandles {
     // SAFETY: opaque test values; the index and memo only copy and compare handles.
@@ -385,13 +388,18 @@ fn fixed_function_records_are_tagged_and_keyed_by_content() {
     let vs = fixed_vs(0);
     let fogged = fixed_vs(3);
     let ps = fixed_ps(false);
-    libraries.record_ff_vs(vs.key.clone(), Some(handles(80)));
+    libraries.record_ff_vs(vs.key.clone(), ShaderBackend::Msl, Some(handles(80)));
     libraries.record_vs(
         VsSourceView::FixedFunction(&fogged),
         ShaderBackend::Msl,
         Some(handles(82)),
     );
-    libraries.record_ff_ps(ps.key.clone(), variant(0), Some(handles(90)));
+    libraries.record_ff_ps(
+        ps.key.clone(),
+        variant(0),
+        ShaderBackend::Msl,
+        Some(handles(90)),
+    );
     let ps_view = PsSourceView::FixedFunction(&ps);
     let view = VsSourceView::FixedFunction(&vs);
     assert_eq!(
@@ -620,44 +628,16 @@ fn pair_backend_air_for_two_programmable_stages() {
 }
 
 #[test]
-fn pair_backend_msl_when_either_stage_is_ff() {
-    let mut rule = PairRule::new(ShaderBackend::Air);
-    let programs = programs();
-    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
-    let (fixed_vertex, fixed_pixel) = (fixed_vs(0), fixed_ps(false));
-    for (vs, ps) in [
-        (
-            VsSourceView::FixedFunction(&fixed_vertex),
-            PsSourceView::Programmable(&ps),
-        ),
-        (
-            VsSourceView::Programmable(&vs),
-            PsSourceView::FixedFunction(&fixed_pixel),
-        ),
-        (
-            VsSourceView::FixedFunction(&fixed_vertex),
-            PsSourceView::FixedFunction(&fixed_pixel),
-        ),
-    ] {
-        assert_eq!(
-            rule.pair_backend(&programs, vs, ps, &variant(0)),
-            ShaderBackend::Msl
-        );
-    }
-    assert!(
-        rule.vs_lowers.is_empty() && rule.ps_lowers.is_empty(),
-        "a fixed-function stage decides before any lowering"
-    );
-}
-
-#[test]
 fn pair_backend_msl_when_a_program_failed() {
     let programs = programs();
     let (vs, ps) = (programmable_vs(1), programmable_ps(2));
     for failed in [vs.vs_id, ps.ps_id] {
         let mut rule = PairRule::new(ShaderBackend::Air);
-        assert!(rule.fail(failed));
-        assert!(!rule.fail(failed), "a program fails once");
+        assert!(rule.fail(AirStage::Program(failed)));
+        assert!(
+            !rule.fail(AirStage::Program(failed)),
+            "a program fails once"
+        );
         assert_eq!(
             rule.pair_backend(
                 &programs,
@@ -786,5 +766,198 @@ fn an_air_failure_leaves_the_msl_index_unknown() {
         libraries
             .lookup_ps(ps_view, variant(0), ShaderBackend::Msl)
             .is_none()
+    );
+}
+
+#[test]
+fn an_ff_pair_is_air_when_both_lower() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let programs = programs();
+    let (vs, ps) = (programmable_vs(1), programmable_ps(2));
+    let (fixed_vertex, fixed_pixel) = (ff_vs_source(), ff_ps_source(true));
+    for (vs, ps) in [
+        (
+            VsSourceView::FixedFunction(&fixed_vertex),
+            PsSourceView::FixedFunction(&fixed_pixel),
+        ),
+        (
+            VsSourceView::FixedFunction(&fixed_vertex),
+            PsSourceView::Programmable(&ps),
+        ),
+        (
+            VsSourceView::Programmable(&vs),
+            PsSourceView::FixedFunction(&fixed_pixel),
+        ),
+    ] {
+        for _ in 0..2 {
+            assert_eq!(
+                rule.pair_backend(&programs, vs, ps, &variant(0)),
+                ShaderBackend::Air
+            );
+        }
+    }
+}
+
+#[test]
+fn an_ff_vs_with_a_refusing_ps_is_msl_both() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let (vs, refusing) = (ff_vs_source(), programmable_ps(3));
+    assert_eq!(
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::FixedFunction(&vs),
+            PsSourceView::Programmable(&refusing),
+            &variant(0)
+        ),
+        ShaderBackend::Msl
+    );
+    assert!(
+        rule.ff_vs_program(&vs.key).is_some(),
+        "the VS lowers; the refusing PS decides the pair, one backend for both stages"
+    );
+}
+
+#[test]
+fn a_failed_ff_vs_demotes_its_pairs() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let programs = programs();
+    let (vs, ps, fixed_pixel) = (ff_vs_source(), programmable_ps(2), ff_ps_source(true));
+    let mut other = ff_vs_source();
+    other.key.fog_mode = 3;
+    let pairs = [
+        PsSourceView::FixedFunction(&fixed_pixel),
+        PsSourceView::Programmable(&ps),
+    ];
+    for ps in pairs {
+        assert_eq!(
+            rule.pair_backend(&programs, VsSourceView::FixedFunction(&vs), ps, &variant(0)),
+            ShaderBackend::Air
+        );
+    }
+    assert!(rule.fail(AirStage::FfVs(vs.key.clone())));
+    assert!(
+        !rule.fail(AirStage::FfVs(vs.key.clone())),
+        "a key fails once"
+    );
+    assert!(
+        rule.ff_vs_program(&vs.key).is_none(),
+        "the failure is in the memo"
+    );
+    for ps in pairs {
+        assert_eq!(
+            rule.pair_backend(&programs, VsSourceView::FixedFunction(&vs), ps, &variant(0)),
+            ShaderBackend::Msl
+        );
+        assert_eq!(
+            rule.pair_backend(
+                &programs,
+                VsSourceView::FixedFunction(&other),
+                ps,
+                &variant(0)
+            ),
+            ShaderBackend::Air,
+            "another key stays AIR"
+        );
+    }
+}
+
+#[test]
+fn an_ff_ps_failure_is_keyed_by_ff_key() {
+    let mut rule = PairRule::new(ShaderBackend::Air);
+    let programs = programs();
+    let vs = programmable_vs(1);
+    let (failing, other) = (ff_ps_source(true), ff_ps_source(false));
+    let pair = |rule: &mut PairRule, ps: &FixedPsSource, v: u8| {
+        rule.pair_backend(
+            &programs,
+            VsSourceView::Programmable(&vs),
+            PsSourceView::FixedFunction(ps),
+            &variant(v),
+        )
+    };
+    assert_eq!(pair(&mut rule, &failing, 0), ShaderBackend::Air);
+    assert!(rule.fail(AirStage::FfPs(failing.key.clone())));
+    assert!(!rule.fail(AirStage::FfPs(failing.key.clone())));
+    for v in [0, 4] {
+        assert_eq!(
+            pair(&mut rule, &failing, v),
+            ShaderBackend::Msl,
+            "every variant of the failed key"
+        );
+        assert_eq!(pair(&mut rule, &other, v), ShaderBackend::Air);
+    }
+    assert!(rule.failed.is_empty(), "no program is marked");
+    assert!(rule.ff_ps_program(&failing.key).is_none());
+}
+
+#[test]
+fn ff_indexes_keep_backends_apart() {
+    let mut libraries = StageLibraries::default();
+    let (vs, ps) = (fixed_vs(0), fixed_ps(false));
+    let (vs_view, ps_view) = (
+        VsSourceView::FixedFunction(&vs),
+        PsSourceView::FixedFunction(&ps),
+    );
+    libraries.record_vs(vs_view, ShaderBackend::Air, None);
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Air, None);
+    assert!(libraries.lookup_vs(vs_view, ShaderBackend::Msl).is_none());
+    assert!(
+        libraries
+            .lookup_ps(ps_view, variant(0), ShaderBackend::Msl)
+            .is_none(),
+        "an AIR failure leaves the MSL index unknown"
+    );
+    libraries.record_vs(vs_view, ShaderBackend::Msl, Some(handles(10)));
+    libraries.record_ps(ps_view, variant(0), ShaderBackend::Msl, Some(handles(20)));
+    assert!(matches!(
+        libraries.lookup_vs(vs_view, ShaderBackend::Air),
+        Some(None)
+    ));
+    assert_eq!(
+        libraries
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Msl)
+            .map(raw_pair),
+        Some((10, 20))
+    );
+    assert_eq!(
+        libraries
+            .lookup_ready(vs_view, vs_view, ps_view, variant(0), ShaderBackend::Air)
+            .map(|_| ()),
+        None,
+        "an MSL library is never an AIR probe's answer"
+    );
+    assert_eq!(libraries.ff_count(), 4, "both backends count");
+    libraries.forget_failures();
+    assert!(libraries.lookup_vs(vs_view, ShaderBackend::Air).is_none());
+    assert!(
+        libraries
+            .lookup_ps(ps_view, variant(0), ShaderBackend::Air)
+            .is_none()
+    );
+    assert_eq!(
+        libraries.ff_count(),
+        3,
+        "the emptied AIR pixel key still counts"
+    );
+    libraries.clear();
+    assert_eq!(libraries.ff_count(), 0);
+}
+
+#[test]
+fn msl_backend_builds_no_ff_program() {
+    let mut rule = PairRule::new(ShaderBackend::Msl);
+    let (vs, ps) = (ff_vs_source(), ff_ps_source(true));
+    assert_eq!(
+        rule.pair_backend(
+            &programs(),
+            VsSourceView::FixedFunction(&vs),
+            PsSourceView::FixedFunction(&ps),
+            &variant(0)
+        ),
+        ShaderBackend::Msl
+    );
+    assert!(
+        rule.ff_vs.is_empty() && rule.ff_ps.is_empty(),
+        "nothing is built under msl"
     );
 }

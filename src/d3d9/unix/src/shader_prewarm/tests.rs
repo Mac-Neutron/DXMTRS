@@ -73,6 +73,24 @@ fn air_cache(name: &str, translator: [u8; 32]) -> (PathBuf, [ShaderRecordRef; 2]
         ShaderRecordRef::new(vs.kind, vs.key),
         ShaderRecordRef::new(ps.kind, ps.key),
     ];
+    let recipe = recipe(
+        refs,
+        &[VertexAttrDesc {
+            attr_index: 0,
+            buffer_index: 0,
+            offset: 0,
+            format: VertexFormat::Float4,
+        }],
+    );
+    let writer = shader_cache::CacheWriter::open(&path).expect("cache file");
+    writer.append_shader(&vs).expect("append VS");
+    writer.append_shader(&ps).expect("append PS");
+    writer.append_pipeline(&recipe).expect("append recipe");
+    (path, refs)
+}
+
+/// The recipe of a pair drawn into one 32-bit colour target from one 16-byte stream.
+fn recipe(refs: [ShaderRecordRef; 2], attrs: &[VertexAttrDesc]) -> PipelineRecipe {
     let mut stream_layouts = [StreamLayout::UNUSED; mtld3d_types::MAX_STREAMS as usize];
     stream_layouts[0] = StreamLayout {
         stride: 16,
@@ -94,22 +112,7 @@ fn air_cache(name: &str, translator: [u8; 32]) -> (PathBuf, [ShaderRecordRef; 2]
         ps_color_out_mask: 1,
         sample_count: 1,
     };
-    let recipe = PipelineRecipe::from_snapshot(
-        refs[0],
-        refs[1],
-        &snapshot,
-        &[VertexAttrDesc {
-            attr_index: 0,
-            buffer_index: 0,
-            offset: 0,
-            format: VertexFormat::Float4,
-        }],
-    );
-    let writer = shader_cache::CacheWriter::open(&path).expect("cache file");
-    writer.append_shader(&vs).expect("append VS");
-    writer.append_shader(&ps).expect("append PS");
-    writer.append_pipeline(&recipe).expect("append recipe");
-    (path, refs)
+    PipelineRecipe::from_snapshot(refs[0], refs[1], &snapshot, attrs)
 }
 
 /// A record reference as its kind byte and key, for comparing and printing.
@@ -397,4 +400,64 @@ fn matching_ff_tokens_keep_the_record() {
         assert_eq!(regenerated.source(), entry.source());
         assert_eq!(regenerated.key, entry.key);
     }
+}
+
+/// AIR fixed-function records and their recipes replay under `air` and stay unread under `msl`.
+#[test]
+fn an_air_ff_recipe_replays_from_air_records() {
+    let device = device();
+    let dir = std::env::temp_dir().join(format!("mtld3d-prewarm-ff-recipe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("mtld3d_shaders.bin");
+    let [vs_source, ps_source] = fresh_ff_sources();
+    let attrs: Vec<VertexAttrDesc> = (0..16u32)
+        .filter(|index| ff_vs_mask() & (1 << index) != 0)
+        .map(|attr_index| VertexAttrDesc {
+            attr_index,
+            buffer_index: 0,
+            offset: 0,
+            format: VertexFormat::Float4,
+        })
+        .collect();
+    let entries = [
+        ff_air_entry(vs_source, KEY),
+        ff_air_entry(ps_source, KEY),
+        air_entry(true, KEY),
+    ];
+    let [vs, ff_ps, ps] = entries
+        .each_ref()
+        .map(|e| ShaderRecordRef::new(e.kind, e.key));
+    assert_eq!(
+        [vs, ff_ps, ps].map(ShaderRecordRef::kind),
+        [
+            CachedKind::AirFfVs,
+            CachedKind::AirFfPs,
+            CachedKind::AirSm2Ps
+        ]
+    );
+    let writer = shader_cache::CacheWriter::open(&path).expect("cache file");
+    for entry in &entries {
+        writer.append_shader(entry).expect("append shader");
+    }
+    for refs in [[vs, ff_ps], [vs, ps]] {
+        writer
+            .append_pipeline(&recipe(refs, &attrs))
+            .expect("append recipe");
+    }
+    let skipped = prewarm(MetalHandle::NULL, &path, None);
+    assert!(skipped.libraries.is_empty() && skipped.pipelines.is_empty());
+    let warm = prewarm(handle_of(&device), &path, Some(KEY));
+    assert_eq!(warm.libraries.len(), 3);
+    assert_eq!(
+        warm.pipelines.len(),
+        2,
+        "FF x FF and FF x programmable AIR recipes build"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The vertex inputs `ff_vs_key(true)`'s program declares.
+fn ff_vs_mask() -> u16 {
+    mtld3d_core::ff_build::vertex(&ff_vs_key(true)).provided_input_mask
 }
