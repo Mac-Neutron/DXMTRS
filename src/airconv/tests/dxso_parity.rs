@@ -2036,11 +2036,11 @@ fn run_file(gpu: &mut Gpu, dir: &Path, name: &str, triage: &Triage) -> Tally {
 /// The corpus files that hold fixed-function pairs, each of which must compare at least one.
 ///
 /// `synthetic.bin` is written by `emit_corpus --write-cache` with the synthetic fixed-function
-/// set. A conformance file holds fixed-function pairs once it is captured under
-/// `shader.backend=air` (its fixed-function records then carry their sources); the
-/// `conformance-x64.bin` of this tree was captured under `msl` and joins this list when it is
-/// recaptured.
-const FF_FILES: [&str; 1] = ["synthetic.bin"];
+/// set; `conformance-x64.bin` was captured under `shader.backend=air`, where every
+/// fixed-function record carries its source. A capture under `msl` holds none (its
+/// fixed-function records keep no source and `--merge` drops them), so a file from such a
+/// capture, as `conformance-i686.bin` would be today, is not held to this rule.
+const FF_FILES: [&str; 2] = ["synthetic.bin", "conformance-x64.bin"];
 
 const CORPUS_FILES: [&str; 3] = [
     "synthetic.bin",
