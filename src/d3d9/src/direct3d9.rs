@@ -1982,7 +1982,9 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
             );
             return D3DERR_NOTAVAILABLE;
         }
-        Ok(mtld3d_core::config::RuntimeMode::Core) => return create_core_device(),
+        Ok(mtld3d_core::config::RuntimeMode::Core) => {
+            return create_core_device(args, cfg, pp, extended);
+        }
         Ok(mtld3d_core::config::RuntimeMode::Mtld3d) => {}
     }
 
@@ -2207,8 +2209,8 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         backbuffer_width: pp.back_buffer_width,
         backbuffer_height: pp.back_buffer_height,
         render_scale,
-        encoder,
-        current_frame: FrameData::new(&FrameInit {
+        encoder: crate::device::Mtld3dOnly::new(encoder),
+        current_frame: crate::device::Mtld3dOnly::new(FrameData::new(&FrameInit {
             device_handle: cq_params.device_handle,
             record_handle: cq_params.record_handle,
             backbuffer_handle: bb_params.texture_handle,
@@ -2227,7 +2229,9 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
             backbuffer_contents: BackbufferContents::from_swap_effect(pp.swap_effect),
             depth_texture: depth_handle,
             depth_has_stencil: depth_format_has_stencil(pp.auto_depth_stencil_format),
-        }),
+        })),
+        #[cfg(feature = "core-runtime")]
+        core: None,
         render_states,
         sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
         direct3d: this as u64,
@@ -2297,30 +2301,138 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
     D3D_OK
 }
 
-/// `CreateDevice` under the core runtime: the core device on the adapter's Metal device.
+/// `CreateDevice` under the core runtime: a device whose frames DXMT's core records.
 ///
-/// The core runtime's COM device is not built yet (DXMTRS C4a): the core device comes up, logs
-/// its line and goes, and the call is refused as an unsupported feature is (C4-13).
+/// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
+/// registry ID `GetDeviceInfo` reported, with D3D9's queue profile. What the core runtime does
+/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen, multisampled
+/// or auto depth-stencil device, and a back buffer other than `X8R8G8B8`/`A8R8G8B8`.
 #[cfg(feature = "core-runtime")]
-fn create_core_device() -> i32 {
+fn create_core_device(
+    args: &CreateDeviceArgs,
+    cfg: &Arc<Mtld3dConfig>,
+    mut pp: D3DPRESENT_PARAMETERS,
+    extended: bool,
+) -> i32 {
+    let &CreateDeviceArgs {
+        this,
+        adapter,
+        dev_type,
+        focus_window,
+        behavior_flags,
+        present_params,
+        device,
+    } = args;
+    if pp.windowed == 0 || pp.multi_sample_type != 0 || pp.enable_auto_depth_stencil != 0 {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice: runtime.mode = core takes a windowed device without \
+             multisampling or an auto depth-stencil → D3DERR_NOTAVAILABLE"
+        );
+        return D3DERR_NOTAVAILABLE;
+    }
+    let hwnd = if pp.device_window != 0 {
+        pp.device_window as u64
+    } else {
+        focus_window as u64
+    };
+    resolve_backbuffer_dims(hwnd, &mut pp);
+    if pp.back_buffer_format == 0 {
+        pp.back_buffer_format = adapter_display_format();
+    }
+    pp.back_buffer_count = pp.back_buffer_count.max(1);
+    if pp.back_buffer_width == 0 || pp.back_buffer_height == 0 {
+        warn!(target: LOG_TARGET, "reject CreateDevice: zero back-buffer dimensions (hwnd=0x{hwnd:x})");
+        return D3DERR_INVALIDCALL;
+    }
+    if !matches!(pp.back_buffer_format, D3DFMT_X8R8G8B8 | D3DFMT_A8R8G8B8) {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice: runtime.mode = core takes an X8R8G8B8 or A8R8G8B8 back buffer \
+             → D3DERR_NOTAVAILABLE"
+        );
+        return D3DERR_NOTAVAILABLE;
+    }
     let Some(mtl) = d3d9_rt::device::select_device(device_info().registry_id) else {
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
     };
-    drop(d3d9_rt::device::CoreDevice::new(
-        mtl,
-        d3d9_rt::device::queue_profile(),
-    ));
-    mtld3d_shared::log_once_warn!(
-        target: LOG_TARGET,
-        "reject CreateDevice: runtime.mode = core has no COM device yet"
-    );
-    D3DERR_NOTAVAILABLE
+    let core = d3d9_rt::device::CoreDevice::new(mtl, d3d9_rt::device::queue_profile());
+    addref_parent_direct3d9(this);
+    let mut render_states = mtld3d_types::render_state_defaults();
+    render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;
+    let mut stored = pp;
+    if stored.device_window == 0 {
+        stored.device_window = focus_window as usize;
+    }
+    let dev = Direct3DDevice9::new(crate::device::DeviceCreateInfo {
+        device_handle: MetalHandle::NULL,
+        record_handle: DeviceRecordHandle::NULL,
+        view_handle: MetalHandle::NULL,
+        layer_handle: MetalHandle::NULL,
+        pacing: LayerPacing {
+            display_sync: false,
+            max_fps: 0,
+        },
+        backbuffer_handle: MetalHandle::NULL,
+        backbuffer_srgb_handle: MetalHandle::NULL,
+        backbuffer_msaa_handle: MetalHandle::NULL,
+        backbuffer_msaa_srgb_handle: MetalHandle::NULL,
+        backbuffer_sample_count: 1,
+        depth_stencil_handle: MetalHandle::NULL,
+        depth_stencil_format: 0,
+        backbuffer_width: pp.back_buffer_width,
+        backbuffer_height: pp.back_buffer_height,
+        render_scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
+        encoder: crate::device::Mtld3dOnly::absent(),
+        current_frame: crate::device::Mtld3dOnly::absent(),
+        core: Some(Box::new(core)),
+        render_states,
+        sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
+        direct3d: this as u64,
+        creation_adapter: adapter,
+        creation_device_type: dev_type,
+        creation_behavior_flags: behavior_flags,
+        creation_focus_window: focus_window as usize,
+        present_params: stored,
+        hwnd: hwnd as *mut c_void,
+        cursor_scale: 1,
+        software_cursor: false,
+        display_sinks: Box::new(crate::cursor::DisplaySinks::new()),
+        fullscreen: None,
+        config: Arc::clone(cfg),
+        initial_flags: if extended {
+            crate::device::DeviceFlags::EXTENDED
+        } else {
+            crate::device::DeviceFlags::empty()
+        },
+    });
+    // No cursor subclass: the core runtime has no cursor or window features yet (C4d).
+    let dev_ptr = Box::into_raw(Box::new(dev));
+    // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
+    unsafe {
+        (*dev_ptr)
+            .inner()
+            .set_device_wrapper(dev_ptr.cast::<c_void>());
+    };
+    // SAFETY: `present_params` is the non-null pointer the request was read from, writable
+    // per the ABI; alignment is not assumed.
+    unsafe { crate::device::report_resolved_geometry(present_params, &pp) };
+    // SAFETY: vtable out-param; `device` is *mut *mut c_void per IDirect3D9 ABI; alignment is not
+    // assumed.
+    unsafe { OutPtr::write_opt(device, dev_ptr.cast::<c_void>()) };
+    info!(target: LOG_TARGET, "CreateDevice succeeded on the core runtime (extended={extended})");
+    D3D_OK
 }
 
 /// `CreateDevice` under the core runtime in a build without it, which never latches it.
 #[cfg(not(feature = "core-runtime"))]
-const fn create_core_device() -> i32 {
+const fn create_core_device(
+    _args: &CreateDeviceArgs,
+    _cfg: &Arc<Mtld3dConfig>,
+    _pp: D3DPRESENT_PARAMETERS,
+    _extended: bool,
+) -> i32 {
     D3DERR_NOTAVAILABLE
 }
 

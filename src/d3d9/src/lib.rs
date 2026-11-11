@@ -1,3 +1,24 @@
+/// Under the core runtime (DXMTRS C4a), an entry point it does not implement answers `$value`.
+///
+/// `$core` says whether the object's device runs the core runtime; the first such call of each
+/// entry point logs a warning (C4-13). In a build without `core-runtime` this is nothing.
+macro_rules! refuse_under_core {
+    ($core:expr, $name:literal) => {
+        #[cfg(feature = "core-runtime")]
+        if $core {
+            $crate::device::refuse_under_core($name);
+            return;
+        }
+    };
+    ($core:expr, $name:literal, $value:expr) => {
+        #[cfg(feature = "core-runtime")]
+        if $core {
+            $crate::device::refuse_under_core($name);
+            return $value;
+        }
+    };
+}
+
 #[cfg(windows)]
 mod arm64_crt;
 mod bound_buffers;

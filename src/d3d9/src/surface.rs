@@ -2233,6 +2233,10 @@ extern "system" fn surface_get_priority(this: *mut c_void) -> u32 {
 
 extern "system" fn surface_pre_load(this: *mut c_void) {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
+    refuse_under_core!(
+        refused_under_core(this, false),
+        "IDirect3DSurface9::PreLoad"
+    );
     let _timer = surf_timer(this, SurfaceSubCategory::Misc);
     // See IDirect3DTexture9::PreLoad — Metal has no resident-set hint.
     mtld3d_shared::log_once_info!(
@@ -2373,6 +2377,22 @@ extern "system" fn surface_get_desc(this: *mut c_void, desc: *mut D3DSURFACE_DES
     0 // S_OK
 }
 
+/// Whether the core runtime refuses an entry point of the surface at `this` (DXMTRS C4a, C4-13).
+///
+/// True when the surface's device runs the core runtime, unless it is a system-memory surface
+/// and `ok_in_system_memory` lets those through.
+#[cfg(feature = "core-runtime")]
+fn refused_under_core(this: *mut c_void, ok_in_system_memory: bool) -> bool {
+    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DSurface9 per the ABI.
+    let Some(obj) = (unsafe { InPtr::<Direct3DSurface9>::opt(this) }) else {
+        return false;
+    };
+    let device = obj.inner().device_inner;
+    // SAFETY: a surface's device outlives it (it forwards or holds a device reference).
+    let core = !device.is_null() && unsafe { &*device }.is_core();
+    core && !(ok_in_system_memory && obj.inner().system_memory.is_some())
+}
+
 extern "system" fn surface_lock_rect(
     this: *mut c_void,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2380,6 +2400,11 @@ extern "system" fn surface_lock_rect(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
+    refuse_under_core!(
+        refused_under_core(this, true),
+        "IDirect3DSurface9::LockRect",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = surf_timer(this, SurfaceSubCategory::LockRect);
     if locked_rect.is_null() {
         return D3DERR_INVALIDCALL;
@@ -2506,6 +2531,11 @@ extern "system" fn surface_lock_rect(
 
 extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
+    refuse_under_core!(
+        refused_under_core(this, true),
+        "IDirect3DSurface9::UnlockRect",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = surf_timer(this, SurfaceSubCategory::UnlockRect);
     // SAFETY: vtable thunk; `this` is *mut Direct3DSurface9 per IDirect3DSurface9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DSurface9>::opt(this) }) else {
@@ -3621,6 +3651,11 @@ fn pin_dc_texture_level(inner: &SurfaceInner, open: bool) {
 
 extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
+    refuse_under_core!(
+        refused_under_core(this, false),
+        "IDirect3DSurface9::GetDC",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = surf_timer(this, SurfaceSubCategory::GetDc);
     if hdc.is_null() {
         return D3DERR_INVALIDCALL;
@@ -3769,6 +3804,11 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
 
 extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
+    refuse_under_core!(
+        refused_under_core(this, false),
+        "IDirect3DSurface9::ReleaseDC",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = surf_timer(this, SurfaceSubCategory::ReleaseDc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DSurface9 per IDirect3DSurface9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DSurface9>::opt(this) }) else {

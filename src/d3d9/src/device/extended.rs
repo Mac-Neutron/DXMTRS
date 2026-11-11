@@ -34,6 +34,11 @@ pub extern "system" fn set_convolution_mono_kernel(
     _columns: *mut f32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::SetConvolutionMonoKernel",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     mtld3d_shared::log_once_info!(
         target: LOG_TARGET,
         "IDirect3DDevice9Ex::SetConvolutionMonoKernel: no convolution filter → INVALIDCALL"
@@ -54,6 +59,11 @@ pub extern "system" fn compose_rects(
     _offset_y: i32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::ComposeRects",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     mtld3d_shared::log_once_warn!(
         target: LOG_TARGET,
         "stub IDirect3DDevice9Ex::ComposeRects → OK (nothing is composed)"
@@ -75,6 +85,11 @@ pub extern "system" fn present_ex(
     flags: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::PresentEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     present_impl(
         this,
@@ -89,6 +104,11 @@ pub extern "system" fn present_ex(
 /// `GetGPUThreadPriority`: a stub that reports the normal priority, 0.
 pub extern "system" fn get_gpu_thread_priority(this: *mut c_void, priority: *mut i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::GetGPUThreadPriority",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     if priority.is_null() {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -109,6 +129,11 @@ pub extern "system" fn get_gpu_thread_priority(this: *mut c_void, priority: *mut
 /// `SetGPUThreadPriority`: a stub that succeeds and stores nothing.
 pub extern "system" fn set_gpu_thread_priority(this: *mut c_void, priority: i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::SetGPUThreadPriority",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     mtld3d_shared::log_once_warn!(
         target: LOG_TARGET,
         "stub IDirect3DDevice9Ex::SetGPUThreadPriority({priority}) → OK (not applied)"
@@ -119,6 +144,11 @@ pub extern "system" fn set_gpu_thread_priority(this: *mut c_void, priority: i32)
 /// `WaitForVBlank`: a stub that returns at once for the implicit swap chain.
 pub extern "system" fn wait_for_vblank(this: *mut c_void, swap_chain: u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::WaitForVBlank",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     if swap_chain != 0 {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -140,6 +170,11 @@ pub extern "system" fn check_resource_residency(
     _count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::CheckResourceResidency",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     mtld3d_shared::log_once_info!(
         target: LOG_TARGET,
         "IDirect3DDevice9Ex::CheckResourceResidency → OK (no residency to report)"
@@ -155,6 +190,11 @@ pub extern "system" fn check_resource_residency(
 /// the configured value and what the device enforces.
 pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::SetMaximumFrameLatency",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -191,6 +231,11 @@ pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32
 /// `GetMaximumFrameLatency`: the value the last `SetMaximumFrameLatency` stored.
 pub extern "system" fn get_maximum_frame_latency(this: *mut c_void, latency: *mut u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::GetMaximumFrameLatency",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -216,6 +261,11 @@ pub extern "system" fn get_maximum_frame_latency(this: *mut c_void, latency: *mu
 /// answers as `D3DERR_OUTOFVIDEOMEMORY`, the code the call documents for it.
 pub extern "system" fn check_device_state(this: *mut c_void, _window: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::CheckDeviceState",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -248,6 +298,11 @@ pub extern "system" fn create_render_target_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::CreateRenderTargetEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     if !usage_accepted(usage, shared_handle, "CreateRenderTargetEx") {
         return D3DERR_INVALIDCALL;
     }
@@ -277,6 +332,11 @@ pub extern "system" fn create_offscreen_plain_surface_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::CreateOffscreenPlainSurfaceEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     if !usage_accepted(usage, shared_handle, "CreateOffscreenPlainSurfaceEx") {
         return D3DERR_INVALIDCALL;
     }
@@ -306,6 +366,11 @@ pub extern "system" fn create_depth_stencil_surface_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::CreateDepthStencilSurfaceEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     if !usage_accepted(usage, shared_handle, "CreateDepthStencilSurfaceEx") {
         return D3DERR_INVALIDCALL;
     }
@@ -337,6 +402,11 @@ pub extern "system" fn reset_ex(
     mode: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::ResetEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if present_params.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -360,6 +430,11 @@ pub extern "system" fn get_display_mode_ex(
     rotation: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9Ex::GetDisplayModeEx",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if swap_chain != 0 {
         mtld3d_shared::log_once_warn!(

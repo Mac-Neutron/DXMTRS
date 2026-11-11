@@ -21,6 +21,8 @@ pub use mtld3d_core::encoder_data::{
 mod extended;
 mod frame_dump;
 mod mem_watch;
+mod runtime;
+
 use mtld3d_core::{
     api_lock::{ApiGuard, ApiLock},
     caps,
@@ -100,6 +102,9 @@ use mtld3d_types::{
     IDirect3DDevice9ExVtbl, IDirect3DDevice9Vtbl, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
     render_state_defaults,
 };
+pub use runtime::Mtld3dOnly;
+#[cfg(feature = "core-runtime")]
+pub use runtime::refuse_under_core;
 
 use super::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, E_FAIL, LOG_TARGET,
@@ -114,8 +119,8 @@ use super::{
         build_alpha_ref_bytes,
     },
     encoder::{
-        ColorFillTarget, EncoderThread, FrameData, FrameInit, SubmitFence, TextureInfo,
-        VbibWarmupEntry,
+        ColorFillTarget, EncoderCounters, EncoderThread, FrameData, FrameInit, SubmitFence,
+        TextureInfo, VbibWarmupEntry,
     },
     index_buffer::{Direct3DIndexBuffer9, IndexBufferCreateInfo},
     null_out,
@@ -502,9 +507,12 @@ pub struct DeviceInner {
     /// depth-stencil).
     implicit_depth_stencil: u64,
 
-    // Encoder + frame state.
-    encoder: EncoderThread,
-    current_frame: FrameData,
+    // Encoder + frame state: mtld3d's runtime's, absent under the core runtime.
+    encoder: Mtld3dOnly<EncoderThread>,
+    current_frame: Mtld3dOnly<FrameData>,
+    /// The core runtime's device (`runtime.mode = core`), `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    core: Option<Box<d3d9_rt::device::CoreDevice>>,
     /// Shared with the encoder thread and the unix completion handler.
     ///
     /// The frame's submit seq is stamped in `stamp_and_swap`; this atomic
@@ -1720,7 +1728,7 @@ impl DeviceInner {
     /// Read on texture `LockRect` (instead of `coherent_seq`) to decide
     /// staging contention. See [`Self::upload_coherent_seq`].
     /// Device capabilities, as the encoder sees them.
-    pub const fn gpu_caps(&self) -> mtld3d_core::gpu_caps::GpuCaps {
+    pub fn gpu_caps(&self) -> mtld3d_core::gpu_caps::GpuCaps {
         self.encoder.gpu_caps()
     }
 
@@ -1778,7 +1786,7 @@ impl DeviceInner {
         for tex_id in self.departed_textures.take() {
             self.push_control(DestroyTextureOp { tex_id });
         }
-        let mut frame = core::mem::replace(&mut self.current_frame, new_frame);
+        let mut frame = core::mem::replace(&mut *self.current_frame, new_frame);
         // A `PresentationInterval` a Reset changed rides the first frame that
         // leaves the device after it, which is this one: the encoder applies it
         // before the frame's own `nextDrawable`. Putting it on the replacement
@@ -1927,7 +1935,7 @@ impl DeviceInner {
     #[cold]
     fn discard_unsendable_frame(&mut self) {
         let fresh = self.fresh_frame();
-        drop(core::mem::replace(&mut self.current_frame, fresh));
+        drop(core::mem::replace(&mut *self.current_frame, fresh));
         self.reassert_saved_bindings();
     }
 
@@ -2232,7 +2240,7 @@ impl DeviceInner {
         }
     }
 
-    pub const fn encoder_runtime(&self) -> u64 {
+    pub fn encoder_runtime(&self) -> u64 {
         self.encoder.runtime()
     }
 
@@ -3119,7 +3127,8 @@ impl DeviceInner {
         // already sent the start out with the piece it submitted, so this is
         // the stop.
         let carried = self.current_frame.take_carried_capture_marks(false);
-        self.current_frame = self.fresh_frame();
+        let fresh = self.fresh_frame();
+        *self.current_frame = fresh;
         self.current_frame.mark_gpu_capture(carried);
     }
 
@@ -3439,8 +3448,13 @@ pub struct DeviceCreateInfo {
     pub backbuffer_height: u32,
     /// Resolved `render.scale`, already forced to identity where unusable.
     pub render_scale: mtld3d_core::render_scale::RenderScale,
-    pub encoder: EncoderThread,
-    pub current_frame: FrameData,
+    /// mtld3d's encoder thread, absent under the core runtime.
+    pub encoder: Mtld3dOnly<EncoderThread>,
+    /// mtld3d's frame, absent under the core runtime.
+    pub current_frame: Mtld3dOnly<FrameData>,
+    /// The core runtime's device, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    pub core: Option<Box<d3d9_rt::device::CoreDevice>>,
     pub render_states: [u32; RENDER_STATE_COUNT],
     pub sampler_states: [[u32; SAMPLER_STATE_COUNT]; STAGE_COUNT],
     pub direct3d: u64,
@@ -3494,9 +3508,19 @@ pub struct Direct3DDevice9 {
 }
 
 impl Direct3DDevice9 {
-    pub fn new(mut info: DeviceCreateInfo) -> Self {
-        info.encoder
-            .reuse_recording_storage(&mut info.current_frame);
+    pub fn new(info: DeviceCreateInfo) -> Self {
+        let DeviceCreateInfo {
+            encoder,
+            mut current_frame,
+            ..
+        } = info;
+        // Only mtld3d's runtime has a frame to record into.
+        #[cfg(feature = "core-runtime")]
+        if let Some(encoder) = encoder.get() {
+            encoder.reuse_recording_storage(&mut current_frame);
+        }
+        #[cfg(not(feature = "core-runtime"))]
+        encoder.reuse_recording_storage(&mut current_frame);
         let viewport = D3DVIEWPORT9 {
             x: 0,
             y: 0,
@@ -3506,12 +3530,17 @@ impl Direct3DDevice9 {
             max_z: 1.0,
         };
 
-        let counters = info.encoder.counters();
-        let coherent_seq = counters.coherent_seq();
-        let upload_coherent_seq = counters.upload_coherent_seq();
-        let failed_submit_seq = counters.failed_submit_seq();
-        let vbib_retained_bytes = counters.retained_bytes();
-        let largest_free_word = counters.largest_free_word();
+        // The core runtime's device shares no counter with an encoder: its own stay at zero.
+        #[cfg(not(feature = "core-runtime"))]
+        let counters = Some(encoder.counters());
+        #[cfg(feature = "core-runtime")]
+        let counters = encoder.get().map(EncoderThread::counters);
+        let fresh = || Arc::new(AtomicU64::new(0));
+        let coherent_seq = counters.map_or_else(fresh, EncoderCounters::coherent_seq);
+        let upload_coherent_seq = counters.map_or_else(fresh, EncoderCounters::upload_coherent_seq);
+        let failed_submit_seq = counters.map_or_else(fresh, EncoderCounters::failed_submit_seq);
+        let vbib_retained_bytes = counters.map_or_else(fresh, EncoderCounters::retained_bytes);
+        let largest_free_word = counters.map_or_else(fresh, EncoderCounters::largest_free_word);
         if info.config.present_max_frame_latency != 0 {
             log::info!(
                 target: LOG_TARGET,
@@ -3557,8 +3586,10 @@ impl Direct3DDevice9 {
             implicit_swapchain: 0,
             implicit_render_target: 0,
             implicit_depth_stencil: 0,
-            encoder: info.encoder,
-            current_frame: info.current_frame,
+            encoder,
+            current_frame,
+            #[cfg(feature = "core-runtime")]
+            core: info.core,
             coherent_seq,
             upload_coherent_seq,
             failed_submit_seq,
@@ -3663,6 +3694,12 @@ impl Direct3DDevice9 {
 impl DeviceInner {
     pub const fn device_handle(&self) -> MetalHandle<MTLDeviceKind> {
         self.device_handle
+    }
+
+    /// Whether the device runs the core runtime (`runtime.mode = core`).
+    #[cfg(feature = "core-runtime")]
+    pub const fn is_core(&self) -> bool {
+        self.core.is_some()
     }
 
     pub const fn record_handle(&self) -> DeviceRecordHandle {
@@ -4540,6 +4577,17 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
         // `current_frame` on `drop(device_inner)` and the matching
         // MTLBuffers leak; the next CreateDevice fails to wrap the same
         // `bytesNoCopy` pages because Metal still considers them in-use.
+        // The core runtime's device made nothing on mtld3d's side: its queue drains as its core
+        // device goes, and the rest of the device with it.
+        #[cfg(feature = "core-runtime")]
+        if let Some(core) = device_inner.core.take() {
+            drop(core);
+            drop(device_inner);
+            obj.refcount = 0;
+            release_parent(parent);
+            return rc;
+        }
+
         let _flush = device_inner.flush_current_frame_blocking();
 
         // Shut down encoder thread before destroying Metal resources.
@@ -4614,6 +4662,15 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
         release_parent(parent);
     }
     rc
+}
+
+/// Whether the device at `this` runs the core runtime (`runtime.mode = core`).
+///
+/// False for a null `this`, which the entry point then refuses as it always has.
+#[cfg(feature = "core-runtime")]
+pub fn is_core_device(this: *mut c_void) -> bool {
+    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DDevice9 per the ABI.
+    unsafe { InPtr::<Direct3DDevice9>::opt(this) }.is_some_and(|obj| obj.inner().is_core())
 }
 
 /// Give back the reference a device holds on the `IDirect3D9` that created it.
@@ -4720,6 +4777,11 @@ struct ParentIUnknownVtbl {
 
 extern "system" fn device_test_cooperative_level(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::TestCooperativeLevel",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // No exclusive mode is ever taken, so focus changes never lose the device.
     // The non-OK answers are the failure latch a step the layer could not
@@ -4763,6 +4825,11 @@ extern "system" fn device_get_available_texture_mem(this: *mut c_void) -> u32 {
     // is discarded.
     const VRAM_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetAvailableTextureMem",
+        0
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -4790,6 +4857,11 @@ extern "system" fn device_get_available_texture_mem(this: *mut c_void) -> u32 {
 
 extern "system" fn device_evict_managed_resources(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::EvictManagedResources",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Spec contract: "evict managed-pool resources from VRAM; the
     // runtime re-uploads on next use." On unified memory there is no
@@ -4808,6 +4880,11 @@ extern "system" fn device_evict_managed_resources(this: *mut c_void) -> i32 {
 
 extern "system" fn device_get_direct3d(this: *mut c_void, ppd3d9: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetDirect3D",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDirect3D()");
     if ppd3d9.is_null() {
@@ -4839,6 +4916,11 @@ extern "system" fn device_get_direct3d(this: *mut c_void, ppd3d9: *mut *mut c_vo
 
 extern "system" fn device_get_device_caps(this: *mut c_void, caps: *mut D3DCAPS9) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetDeviceCaps",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDeviceCaps()");
     if caps.is_null() {
@@ -4864,6 +4946,11 @@ extern "system" fn device_get_display_mode(
     mode: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetDisplayMode",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDisplayMode(swap_chain={swap_chain})");
     if mode.is_null() || swap_chain != 0 {
@@ -4887,6 +4974,11 @@ extern "system" fn device_get_display_mode(
 
 extern "system" fn device_get_creation_parameters(this: *mut c_void, params: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetCreationParameters",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetCreationParameters()");
     if params.is_null() {
@@ -4962,6 +5054,11 @@ extern "system" fn device_create_additional_swap_chain(
     swap_chain: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateAdditionalSwapChain",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Nowhere to hand the chain to: refused before it is made, since a chain
     // nobody holds would keep its device reference for good.
@@ -5042,6 +5139,11 @@ extern "system" fn device_get_swap_chain(
     out: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetSwapChain",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     null_out(out);
     // Only the implicit swapchain (index 0) is exposed; GetSwapChain never
@@ -5070,6 +5172,11 @@ extern "system" fn device_get_swap_chain(
 
 extern "system" fn device_get_number_of_swap_chains(this: *mut c_void) -> u32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetNumberOfSwapChains",
+        0
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetNumberOfSwapChains()");
     1
@@ -5077,6 +5184,11 @@ extern "system" fn device_get_number_of_swap_chains(this: *mut c_void) -> u32 {
 
 extern "system" fn device_reset(this: *mut c_void, present_params: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::Reset",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     let hr = reset_impl(this, present_params, ResetCall::Reset);
     reported_state_code(this, hr)
@@ -5948,6 +6060,11 @@ extern "system" fn device_present(
     dirty_region: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        is_core_device(this),
+        "IDirect3DDevice9::Present",
+        D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     present_impl(
         this,
@@ -6115,6 +6232,11 @@ extern "system" fn device_get_raster_status(
     _status: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetRasterStatus",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetRasterStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -6122,6 +6244,11 @@ extern "system" fn device_get_raster_status(
 
 extern "system" fn device_set_dialog_box_mode(this: *mut c_void, _enable: i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetDialogBoxMode",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::SetDialogBoxMode → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -6134,6 +6261,10 @@ extern "system" fn device_set_gamma_ramp(
     ramp: *const c_void,
 ) {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetGammaRamp"
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // The call returns nothing, so every rejection below is a warn and a
     // no-op: there is no channel to answer through.
@@ -6186,6 +6317,10 @@ extern "system" fn device_set_gamma_ramp(
 
 extern "system" fn device_get_gamma_ramp(this: *mut c_void, swap_chain: u32, ramp: *mut c_void) {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetGammaRamp"
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if ramp.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -6223,6 +6358,11 @@ extern "system" fn device_create_texture(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     create_texture_path(&TextureCreateArgs {
         this,
@@ -6741,7 +6881,7 @@ fn push_texture_warmups(dev: &mut DeviceInner, inner: &crate::texture::TextureIn
     if inner.is_cpu_only() {
         return;
     }
-    let frame = &mut dev.current_frame;
+    let frame = &mut *dev.current_frame;
     let recorder = frame
         .recorder
         .get_or_insert_with(mtld3d_core::encoder_packet::FrameRecorder::new);
@@ -6983,6 +7123,11 @@ extern "system" fn device_create_volume_texture(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateVolumeTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(
         target: LOG_TARGET,
@@ -7175,6 +7320,11 @@ extern "system" fn device_create_cube_texture(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateCubeTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if edge_length == 0 || texture.is_null() {
         null_out(texture);
@@ -7390,6 +7540,11 @@ extern "system" fn device_create_vertex_buffer(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateVertexBuffer",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if vb.is_null() || length == 0 {
         null_out(vb);
@@ -7479,6 +7634,11 @@ extern "system" fn device_create_index_buffer(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateIndexBuffer",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if ib.is_null() || length == 0 {
         null_out(ib);
@@ -7757,6 +7917,11 @@ extern "system" fn device_create_render_target(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateRenderTarget",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if surface.is_null() || width == 0 || height == 0 {
         null_out(surface);
@@ -7873,6 +8038,11 @@ extern "system" fn device_create_depth_stencil_surface(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateDepthStencilSurface",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if surface.is_null() || width == 0 || height == 0 {
         null_out(surface);
@@ -8057,6 +8227,11 @@ extern "system" fn device_update_surface(
     dst_point: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::UpdateSurface",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable args; live `Direct3DSurface9` pointers per the ABI.
     let Some(src_surf) = (unsafe { InPtr::<crate::surface::Direct3DSurface9>::opt(src) }) else {
@@ -8428,6 +8603,11 @@ extern "system" fn device_update_texture(
     dst: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::UpdateTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if src.is_null() || dst.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -8671,6 +8851,11 @@ extern "system" fn device_get_render_target_data(
     dst: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        is_core_device(this),
+        "IDirect3DDevice9::GetRenderTargetData",
+        D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -8839,6 +9024,11 @@ extern "system" fn device_get_front_buffer_data(
     dst_surface: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetFrontBufferData",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Only the implicit swapchain is addressed by this device entry point.
     if swap_chain != 0 {
@@ -8987,6 +9177,11 @@ extern "system" fn device_stretch_rect(
     use crate::surface::Direct3DSurface9;
 
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::StretchRect",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if src.is_null() || dst.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -9966,6 +10161,11 @@ extern "system" fn device_color_fill(
     color: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::ColorFill",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     if surface.is_null() {
         return D3DERR_INVALIDCALL;
@@ -10082,6 +10282,11 @@ extern "system" fn device_create_offscreen_plain_surface(
     // `device_create_texture` (which re-derives its own device borrow) without
     // holding a live borrow from `obj` across the call.
     let device_inner = obj.inner_ptr();
+    refuse_under_core!(
+        pool == D3DPOOL_DEFAULT && obj.inner().is_core(),
+        "IDirect3DDevice9::CreateOffscreenPlainSurface(D3DPOOL_DEFAULT)",
+        D3DERR_NOTAVAILABLE
+    );
     // D3DPOOL_DEFAULT: a lockable, GPU-resident offscreen surface. Back it with
     // an internal color texture (CPU staging for LockRect + a Metal texture for
     // StretchRect) and hand back its owned level-0 surface — lock/unlock/upload
@@ -10205,6 +10410,11 @@ extern "system" fn device_set_render_target(
     surface: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetRenderTarget",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::RtDs);
     if index >= D3D_MAX_SIMULTANEOUS_RENDERTARGETS {
         mtld3d_shared::log_once_warn!(
@@ -10504,6 +10714,11 @@ extern "system" fn device_set_depth_stencil_surface(
     surface: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetDepthStencilSurface",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::RtDs);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -10726,6 +10941,11 @@ extern "system" fn device_get_depth_stencil_surface(
     surface: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetDepthStencilSurface",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::RtDs);
     if surface.is_null() {
         return D3DERR_INVALIDCALL;
@@ -10868,6 +11088,11 @@ extern "system" fn device_clear(
     stencil: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        is_core_device(this),
+        "IDirect3DDevice9::Clear",
+        D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -11011,6 +11236,11 @@ extern "system" fn device_set_transform(
     matrix: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetTransform",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     // SAFETY: vtable in-param; `matrix` is *const D3DMATRIX per ABI.
     let Some(m) = (unsafe { ValueIn::<D3DMATRIX>::read_opt(matrix) }) else {
@@ -11035,6 +11265,11 @@ extern "system" fn device_set_transform(
 
 extern "system" fn device_get_transform(this: *mut c_void, state: u32, matrix: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetTransform",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if matrix.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11063,6 +11298,11 @@ extern "system" fn device_multiply_transform(
     matrix: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::MultiplyTransform",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     // SAFETY: vtable in-param; `matrix` is *const D3DMATRIX per ABI.
     let Some(rhs) = (unsafe { ValueIn::<D3DMATRIX>::read_opt(matrix) }) else {
@@ -11088,6 +11328,11 @@ extern "system" fn device_multiply_transform(
 
 extern "system" fn device_set_viewport(this: *mut c_void, viewport: *const c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetViewport",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     // SAFETY: vtable in-param; `viewport` is *const D3DVIEWPORT9 per ABI.
     let Some(v) = (unsafe { ValueIn::<D3DVIEWPORT9>::read_opt(viewport) }) else {
@@ -11114,6 +11359,11 @@ extern "system" fn device_set_viewport(this: *mut c_void, viewport: *const c_voi
 
 extern "system" fn device_get_viewport(this: *mut c_void, viewport: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetViewport",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     if viewport.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11130,6 +11380,11 @@ extern "system" fn device_get_viewport(this: *mut c_void, viewport: *mut c_void)
 
 extern "system" fn device_set_material(this: *mut c_void, material: *const c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetMaterial",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     // SAFETY: vtable in-param; `material` is *const D3DMATERIAL9 per ABI.
     let Some(m) = (unsafe { ValueIn::<D3DMATERIAL9>::read_opt(material) }) else {
@@ -11153,6 +11408,11 @@ extern "system" fn device_set_material(this: *mut c_void, material: *const c_voi
 
 extern "system" fn device_get_material(this: *mut c_void, material: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetMaterial",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if material.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11169,6 +11429,11 @@ extern "system" fn device_get_material(this: *mut c_void, material: *mut c_void)
 
 extern "system" fn device_set_light(this: *mut c_void, index: u32, light: *const c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetLight",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     // SAFETY: vtable in-param; `light` is *const D3DLIGHT9 per ABI.
     let Some(l) = (unsafe { ValueIn::<D3DLIGHT9>::read_opt(light) }) else {
@@ -11192,6 +11457,11 @@ extern "system" fn device_set_light(this: *mut c_void, index: u32, light: *const
 
 extern "system" fn device_get_light(this: *mut c_void, index: u32, light: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetLight",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if light.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11216,6 +11486,11 @@ extern "system" fn device_get_light(this: *mut c_void, index: u32, light: *mut c
 
 extern "system" fn device_light_enable(this: *mut c_void, index: u32, enable: i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::LightEnable",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -11236,6 +11511,11 @@ extern "system" fn device_light_enable(this: *mut c_void, index: u32, enable: i3
 
 extern "system" fn device_get_light_enable(this: *mut c_void, index: u32, enable: *mut i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetLightEnable",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if enable.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11264,6 +11544,11 @@ extern "system" fn device_get_light_enable(this: *mut c_void, index: u32, enable
 
 extern "system" fn device_set_clip_plane(this: *mut c_void, index: u32, plane: *const f32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetClipPlane",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if plane.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11289,6 +11574,11 @@ extern "system" fn device_set_clip_plane(this: *mut c_void, index: u32, plane: *
 
 extern "system" fn device_get_clip_plane(this: *mut c_void, index: u32, plane: *mut f32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetClipPlane",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if plane.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11323,6 +11613,11 @@ extern "system" fn device_set_render_state(this: *mut c_void, state: u32, value:
     // engines on the matching vendor path use it as their only way to
     // hand scene depth to a second depth consumer.
     if state == D3DRS_POINTSIZE && value == 0x7fa0_5000 {
+        refuse_under_core!(
+            dev.is_core(),
+            "IDirect3DDevice9::SetRenderState(RESZ)",
+            D3DERR_NOTAVAILABLE
+        );
         dev.resolve_resz_depth();
     }
     if let Some(rec) = dev.recording_state_block_mut() {
@@ -11424,6 +11719,11 @@ extern "system" fn device_create_state_block(
 ) -> i32 {
     use crate::state_block::Direct3DStateBlock9;
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateStateBlock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::StateBlock);
     if sb.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11454,6 +11754,11 @@ extern "system" fn device_create_state_block(
 
 extern "system" fn device_begin_state_block(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::BeginStateBlock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::StateBlock);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -11480,6 +11785,11 @@ extern "system" fn device_end_state_block(this: *mut c_void, sb: *mut *mut c_voi
     use crate::state_block::Direct3DStateBlock9;
 
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::EndStateBlock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::StateBlock);
     if sb.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11508,6 +11818,11 @@ extern "system" fn device_end_state_block(this: *mut c_void, sb: *mut *mut c_voi
 
 extern "system" fn device_set_clip_status(this: *mut c_void, _status: *const c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetClipStatus",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::SetClipStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -11515,6 +11830,11 @@ extern "system" fn device_set_clip_status(this: *mut c_void, _status: *const c_v
 
 extern "system" fn device_get_clip_status(this: *mut c_void, _status: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetClipStatus",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetClipStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -11526,6 +11846,11 @@ extern "system" fn device_get_texture(
     texture: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Texture);
     if texture.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11632,6 +11957,11 @@ fn reject_sampler_state_type(call: &str, type_: u32) -> i32 {
 
 extern "system" fn device_set_texture(this: *mut c_void, stage: u32, texture: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetTexture",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Texture);
     let vertex_slot = vertex_sampler_slot(stage);
     if vertex_slot.is_none() && stage as usize >= STAGE_COUNT {
@@ -11731,6 +12061,11 @@ extern "system" fn device_get_texture_stage_state(
     value: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetTextureStageState",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::TexStageState);
     if value.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11760,6 +12095,11 @@ extern "system" fn device_set_texture_stage_state(
     value: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetTextureStageState",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::TexStageState);
     let (stage, type_) = clamp_texture_stage_state("SetTextureStageState", stage, type_);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
@@ -11810,6 +12150,11 @@ extern "system" fn device_get_sampler_state(
     value: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetSamplerState",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::SamplerState);
     if value.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11850,6 +12195,11 @@ extern "system" fn device_set_sampler_state(
     value: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetSamplerState",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::SamplerState);
     let vertex_slot = vertex_sampler_slot(sampler);
     if vertex_slot.is_none() && sampler as usize >= STAGE_COUNT {
@@ -11962,6 +12312,11 @@ fn rejected_filter_stage(dev: &DeviceInner) -> Option<i32> {
 
 extern "system" fn device_validate_device(this: *mut c_void, num_passes: *mut u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::ValidateDevice",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -11992,6 +12347,11 @@ extern "system" fn device_set_palette_entries(
     entries: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetPaletteEntries",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if entries.is_null() {
         return D3DERR_INVALIDCALL;
@@ -12028,6 +12388,11 @@ extern "system" fn device_get_palette_entries(
     _entries: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetPaletteEntries",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetPaletteEntries → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12035,6 +12400,11 @@ extern "system" fn device_get_palette_entries(
 
 extern "system" fn device_set_current_texture_palette(this: *mut c_void, _palette: u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetCurrentTexturePalette",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Non-functional palette API: the setter succeeds, the palette is ignored.
     // GetCurrentTexturePalette stays INVALIDCALL.
@@ -12048,6 +12418,11 @@ extern "system" fn device_get_current_texture_palette(
     _palette_number: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetCurrentTexturePalette",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetCurrentTexturePalette → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12055,6 +12430,11 @@ extern "system" fn device_get_current_texture_palette(
 
 extern "system" fn device_set_scissor_rect(this: *mut c_void, rect: *const c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetScissorRect",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     // SAFETY: vtable in-param; `rect` is *const D3DRECT per ABI.
     let Some(r) = (unsafe { ValueIn::<D3DRECT>::read_opt(rect) }) else {
@@ -12083,6 +12463,11 @@ extern "system" fn device_set_scissor_rect(this: *mut c_void, rect: *const c_voi
 
 extern "system" fn device_get_scissor_rect(this: *mut c_void, rect: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetScissorRect",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     if rect.is_null() {
         return D3DERR_INVALIDCALL;
@@ -12104,6 +12489,11 @@ extern "system" fn device_get_scissor_rect(this: *mut c_void, rect: *mut c_void)
 
 extern "system" fn device_set_software_vertex_processing(this: *mut c_void, software: i32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetSoftwareVertexProcessing",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SW vertex processing exists for old CPUs without HW T&L. Running
     // the same pipeline on HW VP produces the same visible result, so
@@ -12121,6 +12511,11 @@ extern "system" fn device_set_software_vertex_processing(this: *mut c_void, soft
 
 extern "system" fn device_get_software_vertex_processing(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetSoftwareVertexProcessing",
+        0
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_info!(
         target: crate::LOG_TARGET,
@@ -12131,6 +12526,11 @@ extern "system" fn device_get_software_vertex_processing(this: *mut c_void) -> i
 
 extern "system" fn device_set_npatch_mode(this: *mut c_void, segments: f32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetNPatchMode",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SetNPatchMode(0.0) and SetNPatchMode(1.0) both mean "N-patch
     // tessellation disabled" — i.e. default behavior. Games clear this
@@ -12149,6 +12549,11 @@ extern "system" fn device_set_npatch_mode(this: *mut c_void, segments: f32) -> i
 
 extern "system" fn device_get_npatch_mode(this: *mut c_void) -> f32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetNPatchMode",
+        0.0
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // N-patches are obsolete fixed-function tessellation; every modern
     // driver returns 0.0 (disabled). No port candidate.
@@ -12221,6 +12626,11 @@ extern "system" fn device_draw_primitive(
     primitive_count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DrawPrimitive",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -12517,6 +12927,11 @@ extern "system" fn device_draw_indexed_primitive(
     primitive_count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DrawIndexedPrimitive",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -12831,6 +13246,11 @@ extern "system" fn device_draw_primitive_up(
     vertex_stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        is_core_device(this),
+        "IDirect3DDevice9::DrawPrimitiveUP",
+        D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -13955,6 +14375,11 @@ extern "system" fn device_draw_indexed_primitive_up(
     vertex_stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DrawIndexedPrimitiveUP",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -14088,6 +14513,11 @@ extern "system" fn device_process_vertices(
     use crate::vertex_buffer::Direct3DVertexBuffer9;
 
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::ProcessVertices",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     if dst_buffer.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14192,6 +14622,11 @@ extern "system" fn device_create_vertex_declaration(
     const MAX_ELEMENTS: usize = 64; // generous; D3D9 limit is MAXD3DDECLLENGTH=64
 
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateVertexDeclaration",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if elements.is_null() || decl.is_null() {
         null_out(decl);
@@ -14282,6 +14717,11 @@ extern "system" fn device_create_vertex_declaration(
 
 extern "system" fn device_set_vertex_declaration(this: *mut c_void, decl: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetVertexDeclaration",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -14332,6 +14772,11 @@ extern "system" fn device_set_vertex_declaration(this: *mut c_void, decl: *mut c
 
 extern "system" fn device_get_vertex_declaration(this: *mut c_void, decl: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetVertexDeclaration",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if decl.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14433,6 +14878,11 @@ extern "system" fn device_set_fvf(this: *mut c_void, fvf: u32) -> i32 {
 
 extern "system" fn device_get_fvf(this: *mut c_void, fvf: *mut u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetFVF",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if fvf.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14557,6 +15007,11 @@ extern "system" fn device_create_vertex_shader(
     shader: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateVertexShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     null_out(shader);
     if function.is_null() || shader.is_null() {
@@ -14745,6 +15200,11 @@ fn create_native_shader(
 
 extern "system" fn device_set_vertex_shader(this: *mut c_void, shader: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetVertexShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -14777,6 +15237,11 @@ extern "system" fn device_set_vertex_shader(this: *mut c_void, shader: *mut c_vo
 
 extern "system" fn device_get_vertex_shader(this: *mut c_void, shader: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetVertexShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if shader.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14808,6 +15273,11 @@ extern "system" fn device_set_vertex_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetVertexShaderConstantF",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14943,6 +15413,11 @@ extern "system" fn device_get_vertex_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetVertexShaderConstantF",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14984,6 +15459,11 @@ extern "system" fn device_set_vertex_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetVertexShaderConstantI",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetVertexShaderConstantI",
@@ -15034,6 +15514,11 @@ extern "system" fn device_get_vertex_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetVertexShaderConstantI",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetVertexShaderConstantI",
@@ -15072,6 +15557,11 @@ extern "system" fn device_set_vertex_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetVertexShaderConstantB",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetVertexShaderConstantB",
@@ -15121,6 +15611,11 @@ extern "system" fn device_get_vertex_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetVertexShaderConstantB",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetVertexShaderConstantB",
@@ -15153,6 +15648,11 @@ extern "system" fn device_set_stream_source(
     stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetStreamSource",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     if stream >= mtld3d_types::MAX_STREAMS {
         mtld3d_shared::log_once_warn!(
@@ -15192,6 +15692,11 @@ extern "system" fn device_get_stream_source(
     stride: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetStreamSource",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     if stream_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15243,6 +15748,11 @@ extern "system" fn device_set_stream_source_freq(
     setting: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetStreamSourceFreq",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -15272,6 +15782,11 @@ extern "system" fn device_get_stream_source_freq(
     setting: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetStreamSourceFreq",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     if setting.is_null() || stream >= mtld3d_types::MAX_STREAMS {
         return D3DERR_INVALIDCALL;
@@ -15290,6 +15805,11 @@ extern "system" fn device_get_stream_source_freq(
 
 extern "system" fn device_set_indices(this: *mut c_void, index_data: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetIndices",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -15310,6 +15830,11 @@ extern "system" fn device_set_indices(this: *mut c_void, index_data: *mut c_void
 
 extern "system" fn device_get_indices(this: *mut c_void, index_data: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetIndices",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Buffer);
     if index_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15340,6 +15865,11 @@ extern "system" fn device_create_pixel_shader(
     shader: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreatePixelShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     null_out(shader);
     if function.is_null() || shader.is_null() {
@@ -15418,6 +15948,11 @@ extern "system" fn device_create_pixel_shader(
 
 extern "system" fn device_set_pixel_shader(this: *mut c_void, shader: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetPixelShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -15451,6 +15986,11 @@ extern "system" fn device_set_pixel_shader(this: *mut c_void, shader: *mut c_voi
 
 extern "system" fn device_get_pixel_shader(this: *mut c_void, shader: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetPixelShader",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if shader.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15482,6 +16022,11 @@ extern "system" fn device_set_pixel_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetPixelShaderConstantF",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15537,6 +16082,11 @@ extern "system" fn device_get_pixel_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetPixelShaderConstantF",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15578,6 +16128,11 @@ extern "system" fn device_set_pixel_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetPixelShaderConstantI",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetPixelShaderConstantI",
@@ -15625,6 +16180,11 @@ extern "system" fn device_get_pixel_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetPixelShaderConstantI",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetPixelShaderConstantI",
@@ -15663,6 +16223,11 @@ extern "system" fn device_set_pixel_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::SetPixelShaderConstantB",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetPixelShaderConstantB",
@@ -15709,6 +16274,11 @@ extern "system" fn device_get_pixel_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::GetPixelShaderConstantB",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetPixelShaderConstantB",
@@ -15740,6 +16310,11 @@ extern "system" fn device_draw_rect_patch(
     _tri_patch_info: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DrawRectPatch",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DrawRectPatch → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -15752,6 +16327,11 @@ extern "system" fn device_draw_tri_patch(
     _tri_patch_info: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DrawTriPatch",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DrawTriPatch → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -15759,6 +16339,11 @@ extern "system" fn device_draw_tri_patch(
 
 extern "system" fn device_delete_patch(this: *mut c_void, _handle: u32) -> i32 {
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::DeletePatch",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DeletePatch → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -15771,6 +16356,11 @@ extern "system" fn device_create_query(
 ) -> i32 {
     use crate::query::{Direct3DQuery9, data_size_for};
     let _api = device_api_lock(this);
+    refuse_under_core!(
+        crate::device::is_core_device(this),
+        "IDirect3DDevice9::CreateQuery",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // `query` being null is the D3D9 idiom for "is this query type supported?"
     // (returns S_OK without allocating). Unsupported types are logged so an
