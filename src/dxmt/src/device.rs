@@ -30,6 +30,16 @@ impl Device {
     /// When the command queue's worker threads cannot be spawned.
     #[must_use]
     pub fn new(mtl: Obj, metal_version_option: i32) -> Self {
+        Self::with_config(mtl, metal_version_option, QueueConfig::default())
+    }
+
+    /// [`Device::new`] with a front end's own queue sizes (D3D9's memory profile, DXMTRS C4).
+    ///
+    /// # Panics
+    ///
+    /// When the command queue's worker threads cannot be spawned.
+    #[must_use]
+    pub fn with_config(mtl: Obj, metal_version_option: i32, config: QueueConfig) -> Self {
         let (mut major, mut minor, mut patch) = (0_u64, 0_u64, 0_u64);
         // SAFETY: all three pointers reference valid stack locals.
         unsafe { WMTGetOSVersion(&raw mut major, &raw mut minor, &raw mut patch) };
@@ -45,7 +55,7 @@ impl Device {
             // SAFETY: `mtl` holds a live Metal device handle.
             unsafe { MTLDevice_setShouldMaximizeConcurrentCompilation(mtl.handle(), true) };
         }
-        let queue = Queue::new(&mtl, QueueConfig::default()).expect("command queue threads");
+        let queue = Queue::new(&mtl, config).expect("command queue threads");
         let cmd_library = if mtl.handle() > 0x1000 {
             crate::library::Library::new(&mtl).ok()
         } else {

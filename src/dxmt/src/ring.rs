@@ -70,6 +70,12 @@ impl RingBump {
         }
     }
 
+    /// The ring's block size and lifetime.
+    #[must_use]
+    pub const fn config(&self) -> &RingConfig {
+        &self.blocks.config
+    }
+
     /// `size` bytes aligned to `align` for command sequence `seq`, and their offset in the block.
     ///
     /// `align` is a power of two. A block whose last sequence is below `coherent`, the last one

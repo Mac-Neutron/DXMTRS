@@ -247,6 +247,8 @@ pub struct Encoder {
     queries: crate::query::Queries,
     deferred_queries: Vec<usize>,
     argbuf_ring: Option<crate::ring::RingBump>,
+    /// The argument-buffer ring's block size and lifetime ([`Encoder::set_argument_ring`]).
+    argbuf_ring_config: crate::ring::RingConfig,
     copy_temp: Option<crate::ring::RingBump>,
     emulated: Option<crate::emulated::EmulatedContext>,
     clear_rtv: Option<crate::library::ClearRtv>,
@@ -261,6 +263,11 @@ pub struct Encoder {
 }
 
 impl Encoder {
+    /// The argument-buffer ring's block size and lifetime, before its first allocation.
+    pub const fn set_argument_ring(&mut self, block: u64, lifetime: u64) {
+        self.argbuf_ring_config = crate::ring::RingConfig { block, lifetime };
+    }
+
     /// An encoder on `device`, its records in blocks of `heap` bytes (the queue's `encoder_heap`).
     ///
     /// It makes the dummy sampler and the zeroed 64 KiB buffer unbound slots read, and the fence
@@ -641,6 +648,10 @@ impl Encoder {
             queries: crate::query::Queries::new(),
             deferred_queries: Vec::new(),
             argbuf_ring: None,
+            argbuf_ring_config: crate::ring::RingConfig {
+                block: 0x40_0000,
+                lifetime: crate::ring::LIFETIME,
+            },
             copy_temp: None,
             emulated: None,
             clear_rtv: None,

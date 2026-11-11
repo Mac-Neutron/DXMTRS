@@ -101,3 +101,25 @@ fn metal_version_as_cpp() {
     assert_eq!(dev.max_object_threadgroups(), 1024);
     assert_eq!(MAXIMIZE_CONCURRENT.get(), None);
 }
+
+/// A front end's own queue sizes reach the device's queue and its rings (D3D9's, DXMTRS C4).
+#[test]
+fn with_config_reaches_the_queue() {
+    use crate::queue::QueueConfig;
+    // SAFETY: fake non-zero handle for the test binary's `NSObject_retain`/`NSObject_release`.
+    let mtl = unsafe { Obj::adopt(0xD3) }.expect("non-zero handle");
+    let config = QueueConfig {
+        chunks: 4,
+        staging_block: 0x10_0000,
+        ring_lifetime: 30,
+        ..QueueConfig::default()
+    };
+    let dev = Device::with_config(mtl, 320, config);
+    let got = dev.queue().config();
+    assert_eq!(
+        (got.chunks, got.staging_block, got.ring_lifetime),
+        (4, 0x10_0000, 30)
+    );
+    let staging = dev.queue().staging_ring_config();
+    assert_eq!((staging.block, staging.lifetime), (0x10_0000, 30));
+}

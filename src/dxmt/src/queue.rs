@@ -61,8 +61,16 @@ pub struct QueueConfig {
     pub chunks: u32,
     /// Bytes in a block of the chunks' command memory (`kCommandChunkCPUHeapSize`).
     pub cpu_heap: usize,
-    /// Bytes in a block of argument-buffer memory (`kCommandChunkGPUHeapSize`), the encoder's.
+    /// Bytes in a block of argument-buffer memory (`kCommandChunkGPUHeapSize`).
+    ///
+    /// The encoder's argument-buffer ring.
     pub gpu_heap: usize,
+    /// Bytes in a block of the queue's staging ring (upload memory the API thread fills).
+    pub staging_block: u64,
+    /// Frees (or sequences) a ring block stays unused for before it is released.
+    ///
+    /// The staging and argument-buffer rings'.
+    pub ring_lifetime: u64,
     /// Bytes in a block of the encoder's own memory (`kEncodingContextCPUHeapSize`).
     pub encoder_heap: usize,
     /// Frames the CPU may run ahead of the GPU until the front end sets another number.
@@ -75,6 +83,8 @@ impl Default for QueueConfig {
             chunks: 32,
             cpu_heap: 0x40_0000,
             gpu_heap: 0x40_0000,
+            staging_block: 0x40_0000,
+            ring_lifetime: 300,
             encoder_heap: 0x10_0000,
             max_latency: 3,
         }
@@ -349,8 +359,8 @@ impl Queue {
             device,
             staging_flags,
             RingConfig {
-                block: 0x40_0000,
-                lifetime: 300,
+                block: config.staging_block,
+                lifetime: config.ring_lifetime,
             },
         );
         let mut this = Self {
@@ -376,6 +386,10 @@ impl Queue {
         // A failed start drops `this`, whose `drop` stops and waits for what started.
         let shared = Arc::clone(&this.shared);
         let mut encoder = Encoder::new(device, this.config.encoder_heap);
+        encoder.set_argument_ring(
+            u64::try_from(this.config.gpu_heap).unwrap_or(u64::MAX),
+            this.config.ring_lifetime,
+        );
         // Borrowed: `drop` waits for the encode thread before the event is released.
         let event = this.shared_event();
         this.threads.push(spawn(Some(ENCODE_THREAD), move || {
@@ -393,6 +407,12 @@ impl Queue {
             unsafe { SharedEventListener_start(listener) };
         })?);
         Ok(this)
+    }
+
+    /// The staging ring's block size and lifetime.
+    #[must_use]
+    pub const fn staging_ring_config(&self) -> &RingConfig {
+        self.staging.config()
     }
 
     /// The sizes the queue was made with.

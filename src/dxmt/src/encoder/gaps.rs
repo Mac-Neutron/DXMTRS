@@ -1576,6 +1576,10 @@ impl Encoder {
         } else {
             0xDEAD
         };
+        let (block, lifetime) = (
+            self.argbuf_ring_config.block,
+            self.argbuf_ring_config.lifetime,
+        );
         self.argbuf_ring.get_or_insert_with(|| {
             // SAFETY: `handle` is borrowed for `RingBump::new`, which retains its own copy.
             let dev = ManuallyDrop::new(unsafe { Obj::adopt(handle) }.expect("non-zero"));
@@ -1583,14 +1587,7 @@ impl Encoder {
             if cfg!(not(target_os = "macos")) {
                 flags |= BufferAllocationFlags::CPU_PLACED;
             }
-            RingBump::new(
-                &dev,
-                flags,
-                RingConfig {
-                    block: 0x40_0000,
-                    lifetime: LIFETIME,
-                },
-            )
+            RingBump::new(&dev, flags, RingConfig { block, lifetime })
         })
     }
 
