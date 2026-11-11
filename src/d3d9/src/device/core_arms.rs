@@ -8,12 +8,9 @@
 use core::ffi::c_void;
 
 use mtld3d_core::{
-    convert::{
-        d3d_to_metal_primitive, ff_vs_layout_from_elements, fvf_to_elements, resolve_attrs_for_ff,
-        vertex_count,
-    },
+    convert::{d3d_to_metal_primitive, ff_vs_layout_from_elements, vertex_count},
     dxso::MAX_LINKED_INPUTS,
-    ff_build,
+    ff_pipeline::{FfPipelineKey, up_byte_count},
 };
 use mtld3d_shared::InPtr;
 use mtld3d_types::{
@@ -120,10 +117,10 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
 
 /// `DrawPrimitiveUP` of a pre-transformed (`XYZRHW`) fixed-function draw.
 ///
-/// The keys, constants and vertex layout are the ones mtld3d's runtime derives from the same
-/// state (`FfState`, `fvf_to_elements`, `resolve_attrs_for_ff`); `d3d9_rt` builds the pipeline
-/// and records the draw. A bound shader, a transformed position, blending or a pixel cascade
-/// past one constant row is refused (C4-13). Culling is not applied yet (C4b).
+/// The keys and constants are the ones mtld3d's runtime derives from the same state (`FfState`,
+/// the bound FVF declaration's layout); `d3d9_rt` looks the pipeline up by its key, builds it on
+/// a miss, and records the draw. A bound shader, a transformed position, blending or a pixel
+/// cascade past one constant row is refused (C4-13). Culling is not applied yet (C4b).
 pub fn draw_primitive_up(
     this: *mut c_void,
     primitive: u32,
@@ -146,18 +143,15 @@ pub fn draw_primitive_up(
         return Some(D3DERR_INVALIDCALL);
     };
     let count = vertex_count(primitive, primitive_count);
-    if data.is_null() || stride == 0 || count == 0 {
+    let Some(byte_count) = up_byte_count(stride, count) else {
+        return Some(D3DERR_INVALIDCALL);
+    };
+    if data.is_null() || byte_count == 0 {
         return Some(D3DERR_INVALIDCALL);
     }
-    let (elements, _) = fvf_to_elements(fvf);
-    let layout = ff_vs_layout_from_elements(&elements);
-    let resolved = resolve_attrs_for_ff(&elements, &[0; MAX_LINKED_INPUTS]);
-    let attributes = resolved
-        .attrs
-        .iter()
-        .filter(|a| a.buffer_index == 0)
-        .map(|a| (a.attr_index, a.format as u32, a.offset))
-        .collect::<Vec<_>>();
+    // A non-zero FVF is the bound declaration's: `SetFVF` built it from `fvf_to_elements(fvf)`.
+    // SAFETY: non-null (the FVF is not 0); the bound slot's refcount keeps it live.
+    let layout = ff_vs_layout_from_elements(unsafe { &*dev.vertex_decl() }.inner().elements());
     let rs = *dev.render_states();
     let vs_key = dev
         .ff_state()
@@ -170,8 +164,6 @@ pub fn draw_primitive_up(
     let variant = dev
         .ff_state()
         .variant_key(&rs, true, dev.uses_automatic_fog());
-    let vs = ff_build::vertex(&vs_key);
-    let ps = ff_build::pixel(&ps_key);
     let viewport = dev.viewport();
     let to_f32 = |n: u32| f32::from(u16::try_from(n).unwrap_or(u16::MAX));
     let mut row = [core::mem::MaybeUninit::uninit()];
@@ -202,7 +194,6 @@ pub fn draw_primitive_up(
     let vs_draw = dev
         .vs_draw
         .build_bytes(&rs, point_size, &view, &dev.clip_planes);
-    let byte_count = usize::try_from(stride).ok()? * usize::try_from(count).ok()?;
     // SAFETY: per the DrawPrimitiveUP ABI, `data` holds `count` vertices `stride` bytes apart,
     // read here; alignment is not assumed.
     let vertices = unsafe { mtld3d_shared::slice_from_caller(data.cast::<u8>(), byte_count) };
@@ -212,15 +203,15 @@ pub fn draw_primitive_up(
         .iter()
         .filter(|(d3d, _)| enabled & d3d != 0)
         .fold(0_u8, |mask, (_, metal)| mask | metal);
-    let draw = d3d9_rt::device::FfDraw {
-        vs_tokens: &vs.tokens,
-        vs_inputs: vs.provided_input_mask,
-        clip_planes: vs_key.clip_plane_count,
-        ps_tokens: &ps.tokens,
+    let key = FfPipelineKey {
+        vs: vs_key,
+        ps: ps_key,
         variant,
-        attributes: &attributes,
+        fvf,
         stride,
         write_mask,
+    };
+    let draw = d3d9_rt::device::FfDrawData {
         primitive: metal_primitive as u8,
         vertex_count: count,
         vertices: &vertices,
@@ -238,6 +229,8 @@ pub fn draw_primitive_up(
         alpha_ref: &alpha_ref[..alpha_len],
         fog: &fog[..fog_len],
     };
-    dev.core.as_deref_mut()?.draw_up(&draw);
+    // A refused draw records nothing (a pipeline that does not build is logged); D3D9 reports
+    // nothing for it, as under C4a.
+    let _ = dev.core.as_deref_mut()?.draw_up(&key, &draw);
     Some(D3D_OK)
 }

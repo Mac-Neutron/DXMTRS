@@ -107,6 +107,11 @@ pub fn take_log() -> Vec<(u32, String)> {
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
 pub const FAKE_DEVICES: [u64; 2] = [0xe1, 0xe2];
 
+/// A made-up device whose `MTLDevice_newRenderPipelineStateWithVertexDescriptor` makes nothing.
+///
+/// The call is still captured; a test runs a pipeline that does not build on it.
+pub const REFUSES_PIPELINES: u64 = 0xbad;
+
 /// The registry ID `MTLDevice_registryID` answers for `device`.
 #[must_use]
 pub const fn fake_registry_id(device: u64) -> u64 {
@@ -335,6 +340,9 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
         device,
         "MTLDevice_newRenderPipelineStateWithVertexDescriptor".to_owned(),
     );
+    if device == REFUSES_PIPELINES {
+        return 0;
+    }
     state.made_of(device)
 }
 

@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use dxmt_core::{
     device::Device,
+    pipeline_cache::PsoMap,
     queue::QueueConfig,
     resource::{Texture, TextureViewKey},
     staging::Staging,
 };
-use rustc_hash::FxHashMap;
+use mtld3d_core::ff_pipeline::FfPipelineKey;
 use winemetal_sys::{
     MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
 };
@@ -22,17 +23,20 @@ pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 /// A D3D9 device's core: the Metal device, the core's command queue and what it records.
 ///
 /// The recording state is the API thread's view of the chunk being recorded: whether the last
-/// closure left a render pass open, and whether the chunk holds any work. Fields drop in order:
-/// the queue (its threads, and the chunks holding the closures) before the back buffer and the
-/// window the closures name.
+/// closure left a render pass open, and whether the chunk holds any work. [`Drop`] drains the
+/// queue first; then fields drop in order: the queue (its threads, and the chunks holding the
+/// closures) before the back buffer and the window the closures name, and the pipelines, whose
+/// raw handles the closures carry.
 pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
     window: Option<swapchain::Window>,
     /// The read-back destination, made at the first read-back and kept.
     readback: Option<Arc<Staging>>,
-    /// The fixed-function pipelines by key, `None` for one that did not build.
-    pipelines: FxHashMap<u64, Option<Obj>>,
+    /// The fixed-function pipelines by key, handle 0 for one that did not build.
+    ///
+    /// Never cleared: a recorded closure names its pipeline by handle until the drain.
+    pipelines: PsoMap<FfPipelineKey, ()>,
     render_open: bool,
     dirty: bool,
 }
@@ -65,7 +69,7 @@ impl CoreDevice {
             back_buffer: None,
             window: None,
             readback: None,
-            pipelines: FxHashMap::default(),
+            pipelines: PsoMap::default(),
             render_open: false,
             dirty: false,
         }
@@ -155,7 +159,7 @@ mod surface;
 mod swapchain;
 mod sync;
 
-pub use draw::FfDraw;
+pub use draw::{DrawRefused, FfDrawData};
 pub use swapchain::present_after;
 
 #[cfg(test)]

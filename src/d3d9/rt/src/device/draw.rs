@@ -1,19 +1,24 @@
 //! One fixed-function draw on the core (C4-9): its pipeline, built once per key, and its records.
 //!
-//! The front end builds both stages as DXSO (`ff_build`) with their specialization; this
-//! translates each through the core's DXSO entry (`initialize_dxso`, then `compile`,
-//! `compiled_data` and `load_function`, the D3D10-12 path), makes the pipeline with the vertex
-//! descriptor (slot 156), and records the pipeline, the vertex bytes at buffer 0, the stages'
-//! constants at D3D9's slots and the draw into the back buffer's render pass. The pipeline is
-//! built on the API thread and waited for (no asynchronous compile until C4d).
+//! The front end builds the draw's [`FfPipelineKey`] and its per-draw data. On a key the device
+//! has not seen, both stages are built as DXSO (`ff_source`) and translated through the core's
+//! DXSO entry (`initialize_dxso`, then `compile`, `compiled_data` and `load_function`, the
+//! D3D10-12 path), and the pipeline is made with the vertex descriptor (slot 156) and kept in the
+//! device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap). The draw records the pipeline, the
+//! vertex bytes at buffer 0, the stages' constants at D3D9's slots and the draw into the back
+//! buffer's render pass. The pipeline is built on the API thread and waited for (no asynchronous
+//! compile until C4d).
 
 use core::ffi::CStr;
+use std::sync::{Arc, OnceLock};
 
-use airconv_ir::dxso::spec::{StageSpec, VariantKey, VsSamplerKinds, VsSpec};
+use airconv_ir::dxso::spec::{StageSpec, VsSamplerKinds, VsSpec};
 use dxmt_core::{
     encoder::{NO_NEXT, direct, stage},
+    pipeline_cache::Compiled,
     shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
 };
+use mtld3d_core::ff_pipeline::{FfPipelineKey, FfPipelineSource, ff_source};
 use winemetal_sys::{
     MTLDevice_newRenderPipelineStateWithVertexDescriptor, Obj,
     sm50::{SM50_SHADER_COMMON, SM50_SHADER_METAL_310, Sm50ShaderCommonData},
@@ -40,24 +45,8 @@ mod slot {
     pub const PS_FOG: u8 = 13;
 }
 
-/// What a fixed-function `DrawPrimitiveUP` needs, as the front end resolved it.
-pub struct FfDraw<'a> {
-    /// The vertex stage, `ff_build::vertex`'s tokens.
-    pub vs_tokens: &'a [u32],
-    /// The vertex inputs the vertex stage declares (`FfProgram::provided_input_mask`).
-    pub vs_inputs: u16,
-    /// User clip planes the vertex stage writes.
-    pub clip_planes: u8,
-    /// The pixel stage, `ff_build::pixel`'s tokens.
-    pub ps_tokens: &'a [u32],
-    /// The pixel stage's specialization.
-    pub variant: VariantKey,
-    /// Each vertex attribute: `(attribute index, MTLVertexFormat, byte offset)`, from buffer 0.
-    pub attributes: &'a [(u32, u32, u32)],
-    /// Bytes from one vertex to the next.
-    pub stride: u32,
-    /// The colour target's `MTLColorWriteMask`.
-    pub write_mask: u8,
+/// What one fixed-function `DrawPrimitiveUP` binds and draws, as the front end resolved it.
+pub struct FfDrawData<'a> {
     /// The `MTLPrimitiveType`.
     pub primitive: u8,
     pub vertex_count: u32,
@@ -75,18 +64,30 @@ pub struct FfDraw<'a> {
     pub fog: &'a [u8],
 }
 
+/// Why a draw recorded nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DrawRefused {
+    /// The device has no back buffer.
+    NoBackBuffer,
+    /// The draw's pipeline does not build (logged once per key).
+    Pipeline,
+}
+
 impl CoreDevice {
-    /// Records `draw` into the back buffer's render pass.
+    /// Records `draw` with the pipeline of `key` into the back buffer's render pass.
     ///
-    /// False, and nothing recorded, when its pipeline does not build (logged once per key), or
-    /// the device has no back buffer.
-    pub fn draw_up(&mut self, draw: &FfDraw<'_>) -> bool {
+    /// # Errors
+    ///
+    /// Nothing recorded when the device has no back buffer, or the pipeline does not build.
+    pub fn draw_up(
+        &mut self,
+        key: &FfPipelineKey,
+        draw: &FfDrawData<'_>,
+    ) -> Result<(), DrawRefused> {
         if self.back_buffer.is_none() {
-            return false;
+            return Err(DrawRefused::NoBackBuffer);
         }
-        let Some(pso) = self.ff_pipeline(draw) else {
-            return false;
-        };
+        let pso = self.ff_pipeline(key).ok_or(DrawRefused::Pipeline)?;
         self.open_render_pass();
         let vertices = draw.vertices.to_vec();
         let vs_constants = draw.vs_constants.to_vec();
@@ -129,42 +130,48 @@ impl CoreDevice {
                 base_instance: 0,
             });
         });
-        true
+        Ok(())
     }
 
-    /// The pipeline of `draw`'s key: its handle, which the device keeps for its life.
-    fn ff_pipeline(&mut self, draw: &FfDraw<'_>) -> Option<u64> {
-        let key = pipeline_key(draw);
-        if let Some(built) = self.pipelines.get(&key) {
-            return built.as_ref().map(Obj::handle);
+    /// The pipeline of `key`: its handle, which the device keeps for its life.
+    ///
+    /// Built on the first draw of `key`; `None` when it does not build, logged then.
+    fn ff_pipeline(&self, key: &FfPipelineKey) -> Option<u64> {
+        if let Some(entry) = self.pipelines.get(key) {
+            return entry.ready();
         }
-        let built = self.build_pipeline(draw);
-        if built.is_none() {
+        let pso = self.build_pipeline(&ff_source(key));
+        if pso.is_none() {
             log::error!(
                 target: LOG_TARGET,
-                "d3d9 core: the fixed-function pipeline {key:#018x} does not build; its draws are \
-                 dropped"
+                "d3d9 core: the fixed-function pipeline of FVF {:#x} (stride {}) does not build; \
+                 its draws are dropped",
+                key.fvf,
+                key.stride
             );
         }
-        let handle = built.as_ref().map(Obj::handle);
-        self.pipelines.insert(key, built);
-        handle
+        let handle = pso.as_ref().map_or(0, Obj::handle);
+        // Built and ready (C4b-3): no job, so the scheduler is never started.
+        let entry = Compiled::ready_with(Arc::new(()), handle, pso);
+        self.pipelines
+            .insert_or_existing(key.clone(), entry, &OnceLock::new())
+            .ready()
     }
 
-    fn build_pipeline(&self, draw: &FfDraw<'_>) -> Option<Obj> {
+    fn build_pipeline(&self, source: &FfPipelineSource) -> Option<Obj> {
         let vs_spec = StageSpec::Vs(VsSpec {
-            provided_input_mask: draw.vs_inputs,
-            clip_plane_count: draw.clip_planes,
+            provided_input_mask: source.provided_input_mask,
+            clip_plane_count: source.clip_plane_count,
             sampler_kinds: VsSamplerKinds::default(),
         });
-        let vs = self.compile_stage(draw.vs_tokens, &vs_spec, c"d3d9_ff_vs")?;
-        let ps_spec = StageSpec::Ps(draw.variant);
-        let ps = self.compile_stage(draw.ps_tokens, &ps_spec, c"d3d9_ff_ps")?;
+        let vs = self.compile_stage(&source.vs_tokens, &vs_spec, c"d3d9_ff_vs")?;
+        let ps_spec = StageSpec::Ps(source.variant);
+        let ps = self.compile_stage(&source.ps_tokens, &ps_spec, c"d3d9_ff_ps")?;
         let mut info = dxmt_core::library::render_pipeline_info();
         info.vertex_function = vs.handle();
         info.fragment_function = ps.handle();
         info.colors[0].pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
-        info.colors[0].write_mask = draw.write_mask;
+        info.colors[0].write_mask = source.write_mask;
         let mut vertex = WMTVertexDescriptorInfo {
             attributes: [WMTVertexAttributeInfo {
                 format: 0,
@@ -177,7 +184,7 @@ impl CoreDevice {
                 step_rate: 0,
             }; 31],
         };
-        for &(index, format, offset) in draw.attributes {
+        for &(index, format, offset) in &source.attrs {
             if let Some(attribute) = vertex.attributes.get_mut(index as usize) {
                 *attribute = WMTVertexAttributeInfo {
                     format,
@@ -187,7 +194,7 @@ impl CoreDevice {
             }
         }
         vertex.layouts[usize::from(slot::VERTICES)] = WMTVertexBufferLayoutInfo {
-            stride: draw.stride,
+            stride: source.stride,
             step_function: STEP_PER_VERTEX,
             step_rate: 1,
         };
@@ -232,33 +239,6 @@ impl CoreDevice {
         let data = compiled_data(&bitcode)?;
         load_function(self.device.device(), &data, name).ok()
     }
-}
-
-/// What a pipeline is built from, hashed.
-///
-/// Both stages and their specializations, the vertex layout and the write mask.
-fn pipeline_key(draw: &FfDraw<'_>) -> u64 {
-    let mut bytes = Vec::with_capacity((draw.vs_tokens.len() + draw.ps_tokens.len()) * 4 + 64);
-    for token in draw.vs_tokens.iter().chain(draw.ps_tokens) {
-        bytes.extend_from_slice(&token.to_le_bytes());
-    }
-    let (_, vs, _) = StageSpec::Vs(VsSpec {
-        provided_input_mask: draw.vs_inputs,
-        clip_plane_count: draw.clip_planes,
-        sampler_kinds: VsSamplerKinds::default(),
-    })
-    .to_wire();
-    let (_, _, ps) = StageSpec::Ps(draw.variant).to_wire();
-    bytes.extend_from_slice(&vs);
-    bytes.extend_from_slice(&ps);
-    for &attribute in draw.attributes {
-        for word in <[u32; 3]>::from(attribute) {
-            bytes.extend_from_slice(&word.to_le_bytes());
-        }
-    }
-    bytes.extend_from_slice(&draw.stride.to_le_bytes());
-    bytes.push(draw.write_mask);
-    xxhash_rust::xxh3::xxh3_64(&bytes)
 }
 
 #[cfg(test)]
