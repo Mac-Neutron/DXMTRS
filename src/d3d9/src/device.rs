@@ -13247,11 +13247,16 @@ extern "system" fn device_draw_primitive_up(
     vertex_stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        is_core_device(this),
-        "IDirect3DDevice9::DrawPrimitiveUP",
-        D3DERR_NOTAVAILABLE
-    );
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_arms::draw_primitive_up(
+        this,
+        primitive_type,
+        primitive_count,
+        vertex_data,
+        vertex_stride,
+    ) {
+        return hr;
+    }
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {

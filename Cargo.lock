@@ -195,10 +195,13 @@ dependencies = [
 name = "d3d9-rt"
 version = "0.14.1"
 dependencies = [
+ "airconv-ir",
  "dxmt-core",
  "dxmt-fakes",
  "log",
+ "rustc-hash",
  "winemetal-sys",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -17,9 +17,12 @@ perf-build = ["dxmt-core/perf-build"]
 workspace = true
 
 [dependencies]
+airconv-ir = { workspace = true }
 dxmt-core = { workspace = true }
 log = { workspace = true }
+rustc-hash = { workspace = true }
 winemetal-sys = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 dxmt-fakes = { path = "../../dxmt/fakes" }

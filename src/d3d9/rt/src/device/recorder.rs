@@ -75,7 +75,9 @@ impl CoreDevice {
             b: f64::from(rgba[2]),
             a: f64::from(rgba[3]),
         };
-        self.emit(move |enc| enc.clear_color(&texture, key, 1, color));
+        // Array length 0: the back buffer is no array, as a render pass on it says (and D3D11's
+        // views of a plain 2D texture), which lets the optimizer fold the clear into that pass.
+        self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
     }
 }
 

@@ -11,6 +11,7 @@ use dxmt_core::{
     resource::{Texture, TextureViewKey},
     staging::Staging,
 };
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
 };
@@ -30,6 +31,8 @@ pub struct CoreDevice {
     window: Option<swapchain::Window>,
     /// The read-back destination, made at the first read-back and kept.
     readback: Option<Arc<Staging>>,
+    /// The fixed-function pipelines by key, `None` for one that did not build.
+    pipelines: FxHashMap<u64, Option<Obj>>,
     render_open: bool,
     dirty: bool,
 }
@@ -62,6 +65,7 @@ impl CoreDevice {
             back_buffer: None,
             window: None,
             readback: None,
+            pipelines: FxHashMap::default(),
             render_open: false,
             dirty: false,
         }
@@ -145,11 +149,13 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
     device
 }
 
+mod draw;
 mod recorder;
 mod surface;
 mod swapchain;
 mod sync;
 
+pub use draw::FfDraw;
 pub use swapchain::present_after;
 
 #[cfg(test)]
