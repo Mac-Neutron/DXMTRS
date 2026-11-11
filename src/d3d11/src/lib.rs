@@ -23,7 +23,7 @@ pub mod names;
 pub mod pipeline;
 pub mod query;
 pub mod resource;
-pub mod scheduler;
+pub use dxmt_core::scheduler;
 pub mod shader;
 pub mod state;
 pub mod subresource;

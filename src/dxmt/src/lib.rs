@@ -32,6 +32,7 @@ pub mod resource;
 pub mod ring;
 pub mod sampler;
 pub mod scaler;
+pub mod scheduler;
 pub mod settings;
 pub mod shader;
 pub mod shader_cache;
