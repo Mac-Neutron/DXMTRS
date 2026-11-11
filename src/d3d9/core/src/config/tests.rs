@@ -13,7 +13,8 @@ use dxmt_util::config::Sources;
 use mtld3d_shared::mtl::{ColorSpacePolicy, SoftwareCursorPolicy};
 
 use super::{
-    AdapterSpoof, CursorScale, Mtld3dConfig, ShaderBackend, foreign_key, parse, parse_sources,
+    AdapterSpoof, CursorScale, Mtld3dConfig, RuntimeMode, ShaderBackend, foreign_key, parse,
+    parse_sources,
 };
 
 #[test]
@@ -802,4 +803,51 @@ fn mtld3d_config_keeps_a_non_bmp_char() {
     );
     assert_eq!(cfg.log_dir, "Z:/Users/a/\u{1F3AE} Games/logs");
     assert_eq!(cfg.present_max_fps, 60);
+}
+
+#[test]
+fn runtime_mode_defaults_to_mtld3d() {
+    assert_eq!(parse(None, "", None).runtime_mode, RuntimeMode::Mtld3d);
+    assert_eq!(RuntimeMode::default(), RuntimeMode::Mtld3d);
+}
+
+#[test]
+fn runtime_mode_core_in_the_file() {
+    assert_eq!(
+        parse(None, "runtime.mode = core\n", None).runtime_mode,
+        RuntimeMode::Core
+    );
+    assert_eq!(
+        parse(None, "runtime.mode = MTLD3D\n", None).runtime_mode,
+        RuntimeMode::Mtld3d
+    );
+}
+
+#[test]
+fn mtld3d_config_env_overrides_runtime_mode() {
+    assert_eq!(
+        parse(None, "runtime.mode = core\n", Some("runtime.mode=mtld3d")).runtime_mode,
+        RuntimeMode::Mtld3d
+    );
+}
+
+#[test]
+fn dxmt_config_runtime_mode_reaches_d3d9() {
+    assert_eq!(
+        parse_sources(None, &sources("runtime.mode=core", ""), b"").runtime_mode,
+        RuntimeMode::Core
+    );
+}
+
+#[test]
+fn runtime_mode_bad_value_warns_and_keeps_mtld3d() {
+    assert_eq!(
+        parse(None, "runtime.mode = unix\n", None).runtime_mode,
+        RuntimeMode::Mtld3d
+    );
+    assert_eq!(
+        parse(None, "runtime.mode = core\nruntime.mode = pe\n", None).runtime_mode,
+        RuntimeMode::Core,
+        "a bad value keeps the earlier one"
+    );
 }

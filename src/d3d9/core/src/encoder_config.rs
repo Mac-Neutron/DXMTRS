@@ -8,7 +8,7 @@ use mtld3d_shared::{
 };
 
 use crate::{
-    config::{AdapterSpoof, CursorScale, Mtld3dConfig, ShaderBackend},
+    config::{AdapterSpoof, CursorScale, Mtld3dConfig, RuntimeMode, ShaderBackend},
     encoder_value::WireValue,
     gpu_caps::GpuCaps,
 };
@@ -32,6 +32,7 @@ impl WireValue for Mtld3dConfig {
         self.shader_cache_enable.write_wire(writer)?;
         self.shader_async_compile.write_wire(writer)?;
         self.shader_backend.write_wire(writer)?;
+        self.runtime_mode.write_wire(writer)?;
         self.log_dir.write_wire(writer)?;
         self.bytecode_dump_dir.write_wire(writer)?;
         self.skip_shaders.write_wire(writer)?;
@@ -69,6 +70,7 @@ impl WireValue for Mtld3dConfig {
             shader_cache_enable: <bool>::read_wire(reader)?,
             shader_async_compile: <bool>::read_wire(reader)?,
             shader_backend: <ShaderBackend>::read_wire(reader)?,
+            runtime_mode: <RuntimeMode>::read_wire(reader)?,
             log_dir: <String>::read_wire(reader)?,
             bytecode_dump_dir: <String>::read_wire(reader)?,
             skip_shaders: <Vec<u64>>::read_wire(reader)?,
@@ -117,6 +119,22 @@ impl WireValue for ShaderBackend {
         match reader.u8()? {
             0 => Ok(Self::Msl),
             1 => Ok(Self::Air),
+            _ => Err(WireError::InvalidValue),
+        }
+    }
+}
+
+impl WireValue for RuntimeMode {
+    fn write_wire(&self, writer: &mut WireWriter<'_>) -> Result<(), WireError> {
+        writer.u8(match self {
+            Self::Mtld3d => 0,
+            Self::Core => 1,
+        })
+    }
+    fn read_wire(reader: &mut WireReader<'_>) -> Result<Self, WireError> {
+        match reader.u8()? {
+            0 => Ok(Self::Mtld3d),
+            1 => Ok(Self::Core),
             _ => Err(WireError::InvalidValue),
         }
     }

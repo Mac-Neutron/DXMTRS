@@ -79,6 +79,7 @@ pub mod readback;
 pub mod render_scale;
 pub mod render_state;
 pub mod reset_summary;
+pub mod runtime_latch;
 pub mod sampler_state;
 pub mod scratch;
 #[cfg(feature = "disk-cache")]

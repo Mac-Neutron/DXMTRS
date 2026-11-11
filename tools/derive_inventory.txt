@@ -380,6 +380,7 @@ src/d3d9/core/src/buffer_rename.rs LockPlan Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/buffer_rename.rs PreserveKind Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/config.rs AdapterSpoof Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/config.rs CursorScale Debug,Clone,Copy,PartialEq,Eq
+src/d3d9/core/src/config.rs RuntimeMode Clone,Copy,Default,Debug,PartialEq,Eq
 src/d3d9/core/src/config.rs ShaderBackend Clone,Copy,Default,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/convert.rs FfVsLayout Clone,Copy,Default
 src/d3d9/core/src/convert.rs FfVsLayoutFlags Clone,Copy,Debug,Default,PartialEq,Eq
