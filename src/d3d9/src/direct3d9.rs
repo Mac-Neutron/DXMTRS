@@ -2357,7 +2357,12 @@ fn create_core_device(
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
     };
-    let core = d3d9_rt::device::CoreDevice::new(mtl, d3d9_rt::device::queue_profile());
+    let mut core = d3d9_rt::device::CoreDevice::new(mtl, d3d9_rt::device::queue_profile());
+    core.attach(
+        isize::try_from(hwnd).unwrap_or_default(),
+        pp.back_buffer_width,
+        pp.back_buffer_height,
+    );
     addref_parent_direct3d9(this);
     let mut render_states = mtld3d_types::render_state_defaults();
     render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;

@@ -3,7 +3,14 @@
 //! The Metal device is winemetal's (`WMTCopyAllDevices`), the one whose registry ID the adapter
 //! `GetDeviceInfo` reported has; the queue takes D3D9's memory profile ([`queue_profile`]).
 
-use dxmt_core::{device::Device, queue::QueueConfig};
+use std::sync::Arc;
+
+use dxmt_core::{
+    device::Device,
+    queue::QueueConfig,
+    resource::{Texture, TextureViewKey},
+    staging::Staging,
+};
 use winemetal_sys::{
     MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
 };
@@ -11,9 +18,20 @@ use winemetal_sys::{
 /// The `log` target of the core runtime's lines.
 pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 
-/// A D3D9 device's core: the Metal device and the core's command queue.
+/// A D3D9 device's core: the Metal device, the core's command queue and what it records.
+///
+/// The recording state is the API thread's view of the chunk being recorded: whether the last
+/// closure left a render pass open, and whether the chunk holds any work. Fields drop in order:
+/// the queue (its threads, and the chunks holding the closures) before the back buffer and the
+/// window the closures name.
 pub struct CoreDevice {
     device: Device,
+    back_buffer: Option<swapchain::BackBuffer>,
+    window: Option<swapchain::Window>,
+    /// The read-back destination, made at the first read-back and kept.
+    readback: Option<Arc<Staging>>,
+    render_open: bool,
+    dirty: bool,
 }
 
 impl CoreDevice {
@@ -39,7 +57,14 @@ impl CoreDevice {
                 "d3d9 core: no command library (dxmt_command.metallib), so nothing presents"
             );
         }
-        Self { device }
+        Self {
+            device,
+            back_buffer: None,
+            window: None,
+            readback: None,
+            render_open: false,
+            dirty: false,
+        }
     }
 
     /// The core device.
@@ -52,6 +77,17 @@ impl CoreDevice {
     pub const fn device_mut(&mut self) -> &mut Device {
         &mut self.device
     }
+}
+
+impl Drop for CoreDevice {
+    fn drop(&mut self) {
+        self.drain();
+    }
+}
+
+/// The back buffer's texture and the view a pass draws to or clears.
+fn back_buffer_view(back_buffer: &swapchain::BackBuffer) -> (Arc<Texture>, TextureViewKey) {
+    (Arc::clone(&back_buffer.texture), back_buffer.key)
 }
 
 /// D3D9's queue sizes in this process: [`queue_profile_for`] its pointer width.
@@ -109,5 +145,14 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
     device
 }
 
+mod recorder;
+mod surface;
+mod swapchain;
+mod sync;
+
+pub use swapchain::present_after;
+
+#[cfg(test)]
+mod fixture;
 #[cfg(test)]
 mod tests;

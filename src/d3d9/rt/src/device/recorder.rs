@@ -1,0 +1,83 @@
+//! The recorder: closures into the core's chunk, and the render pass they leave open.
+//!
+//! The core's `Encoder::begin` overwrites an open pass, so every helper that begins a pass of
+//! its own (a Clear, a Present, a read-back blit) closes the open render pass first
+//! ([`CoreDevice::close_pass`]). A draw opens one on the back buffer, loading and storing it, and
+//! leaves it open for the next draw (C4-12).
+
+use dxmt_core::{
+    deptrack::Access,
+    encoder::{Encoder, stage},
+};
+use winemetal_sys::wire::{
+    WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_STORE_ACTION_STORE, WMTClearColor,
+};
+
+use super::{CoreDevice, back_buffer_view};
+
+impl CoreDevice {
+    /// Records `f`, which the encode thread runs once at the chunk's flush.
+    pub fn emit(&mut self, f: impl Fn(&mut Encoder) + Send + 'static) {
+        self.device.queue_mut().chunk().emit(f);
+        self.dirty = true;
+    }
+
+    /// Ends the render pass the last closure left open, if one is.
+    pub fn close_pass(&mut self) {
+        if self.render_open {
+            self.render_open = false;
+            self.emit(Encoder::end_pass);
+        }
+    }
+
+    /// Opens a render pass on the back buffer, loading and storing it, unless one is open.
+    pub fn open_render_pass(&mut self) {
+        if self.render_open {
+            return;
+        }
+        let Some(back_buffer) = &self.back_buffer else {
+            return;
+        };
+        let (width, height) = (back_buffer.width, back_buffer.height);
+        let (texture, key) = back_buffer_view(back_buffer);
+        self.emit(move |enc| {
+            enc.start_render_pass(0, 0, 1, None);
+            let attachment =
+                enc.attachment::<{ stage::PIXEL }>(&texture, key, Access::READ | Access::WRITE);
+            let Some(targets) = enc.render_targets() else {
+                return;
+            };
+            let color = &mut targets.colors[0];
+            color.target.attachment = attachment;
+            color.target.load_action = WMT_LOAD_ACTION_LOAD;
+            color.target.store_action = WMT_STORE_ACTION_STORE;
+            targets.tile_barrier_pso_key[0] = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+            targets.tile_barrier_pso_key[8] = 1;
+            targets.render_target_width = width;
+            targets.render_target_height = height;
+        });
+        self.render_open = true;
+    }
+
+    /// Clears the whole back buffer to `rgba`.
+    ///
+    /// A core Clear pass, which the optimizer folds into the next render pass on the back buffer
+    /// as that pass's load action.
+    pub fn clear(&mut self, rgba: [f32; 4]) {
+        let Some(back_buffer) = &self.back_buffer else {
+            return;
+        };
+        let (texture, key) = back_buffer_view(back_buffer);
+        self.close_pass();
+        let color = WMTClearColor {
+            r: f64::from(rgba[0]),
+            g: f64::from(rgba[1]),
+            b: f64::from(rgba[2]),
+            a: f64::from(rgba[3]),
+        };
+        self.emit(move |enc| enc.clear_color(&texture, key, 1, color));
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -6,11 +6,11 @@
 use core::{fmt::Write, ptr};
 
 use winemetal_sys::wire::{
-    WMT_BLIT_COMMAND_NOP, WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_DISPATCH_INDIRECT,
-    WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_PSO, WMT_RENDER_COMMAND_DRAW,
-    WMT_RENDER_COMMAND_DRAW_INDEXED, WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT,
-    WMT_RENDER_COMMAND_DRAW_INDIRECT, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW,
-    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
+    WMT_BLIT_COMMAND_NOP, WMT_BLIT_COMMAND_UPDATE_FENCE, WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
+    WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_DISPATCH_INDIRECT, WMT_COMPUTE_COMMAND_NOP,
+    WMT_COMPUTE_COMMAND_SET_PSO, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
+    WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT, WMT_RENDER_COMMAND_DRAW_INDIRECT,
+    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
     WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED_INDIRECT,
     WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDIRECT, WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_NOP,
@@ -23,16 +23,17 @@ use winemetal_sys::wire::{
     WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
     WMT_RENDER_COMMAND_SET_VERTEX_BUFFER, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET,
     WMT_RENDER_COMMAND_SET_VERTEX_BYTES, WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE,
-    WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE, WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTScissorRect,
-    WMTViewport, WmtcmdBase, WmtcmdComputeDispatch, WmtcmdComputeDispatchIndirect,
-    WmtcmdComputeSetpso, WmtcmdRenderDraw, WmtcmdRenderDrawIndexed,
+    WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE, WMT_RENDER_COMMAND_SET_VIEWPORTS,
+    WMT_RENDER_COMMAND_UPDATE_FENCE, WMT_RENDER_COMMAND_WAIT_FOR_FENCE, WMTScissorRect,
+    WMTViewport, WmtcmdBase, WmtcmdBlitFenceOp, WmtcmdComputeDispatch,
+    WmtcmdComputeDispatchIndirect, WmtcmdComputeSetpso, WmtcmdRenderDraw, WmtcmdRenderDrawIndexed,
     WmtcmdRenderDrawIndexedIndirect, WmtcmdRenderDrawIndirect, WmtcmdRenderDxmtGeometryDraw,
     WmtcmdRenderDxmtGeometryDrawIndexed, WmtcmdRenderDxmtGeometryDrawIndexedIndirect,
     WmtcmdRenderDxmtGeometryDrawIndirect, WmtcmdRenderDxmtTessellationMeshDraw,
-    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderSetblendcolor, WmtcmdRenderSetbuffer,
-    WmtcmdRenderSetbufferoffset, WmtcmdRenderSetbytes, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
-    WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetsampler, WmtcmdRenderSetscissorrects,
-    WmtcmdRenderSettexture, WmtcmdRenderSetviewports,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderFenceOp, WmtcmdRenderSetblendcolor,
+    WmtcmdRenderSetbuffer, WmtcmdRenderSetbufferoffset, WmtcmdRenderSetbytes, WmtcmdRenderSetdsso,
+    WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetsampler,
+    WmtcmdRenderSetscissorrects, WmtcmdRenderSettexture, WmtcmdRenderSetviewports,
 };
 
 /// The encoder a record list is for: record types are numbered per encoder.
@@ -80,6 +81,14 @@ pub unsafe fn format_pass_records(kind: &Records, first: *const WmtcmdBase) -> V
         match kind {
             Records::Render => match cmd_type {
                 WMT_RENDER_COMMAND_NOP => {}
+                WMT_RENDER_COMMAND_WAIT_FOR_FENCE | WMT_RENDER_COMMAND_UPDATE_FENCE => {
+                    // SAFETY: `cmd_type` verified as a fence command.
+                    let c = unsafe { &*base_ptr.cast::<WmtcmdRenderFenceOp>() };
+                    lines.push(format!(
+                        "render {cmd_type} fence=#{} stages={}",
+                        c.fence, c.stages
+                    ));
+                }
                 WMT_RENDER_COMMAND_SET_VERTEX_BUFFER
                 | WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER
                 | WMT_RENDER_COMMAND_SET_MESH_BUFFER
@@ -376,11 +385,15 @@ pub unsafe fn format_pass_records(kind: &Records, first: *const WmtcmdBase) -> V
                 }
                 _ => lines.push(format!("compute {cmd_type}")),
             },
-            Records::Blit => {
-                if cmd_type != WMT_BLIT_COMMAND_NOP {
-                    lines.push(format!("blit {cmd_type}"));
+            Records::Blit => match cmd_type {
+                WMT_BLIT_COMMAND_NOP => {}
+                WMT_BLIT_COMMAND_WAIT_FOR_FENCE | WMT_BLIT_COMMAND_UPDATE_FENCE => {
+                    // SAFETY: `cmd_type` verified as a fence command.
+                    let c = unsafe { &*base_ptr.cast::<WmtcmdBlitFenceOp>() };
+                    lines.push(format!("blit {cmd_type} fence=#{}", c.fence));
                 }
-            }
+                _ => lines.push(format!("blit {cmd_type}")),
+            },
         }
         cur_addr = base.next.ptr;
     }

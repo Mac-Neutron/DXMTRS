@@ -7,8 +7,9 @@
 //! binaries define their own fakes, and two definitions of one symbol do not link.
 //!
 //! What Metal is asked to do is captured per device ([`take_calls`]): the command buffers'
-//! encoders, the records each `encodeCommands` is handed (as [`format_pass_records`] prints
-//! them), the ends, the commits, pipelines and presents. Objects a device's queue makes carry
+//! encoders (a render pass's first colour target as a `color0` line), the records each
+//! `encodeCommands` is handed (as [`format_pass_records`] prints them), the ends, the commits,
+//! pipelines and presents. Objects a device's queue makes carry
 //! its handle, so tests running at once each read their own device's calls. What the core logs
 //! goes to [`take_log`]. The capture manager and the scalers have no fakes: a call to one aborts
 //! the test (the test binary links with `-undefined dynamic_lookup`).
@@ -475,9 +476,21 @@ const extern "C-unwind" fn fake_property(_cmdbuf: u64, _property: u32) -> u64 {
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_renderCommandEncoder")]
-extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, _info: *mut WMTRenderPassInfo) -> u64 {
+extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassInfo) -> u64 {
+    // SAFETY: the core hands winemetal its pass description, alive for the call.
+    let color = unsafe { &(*info).colors[0] };
     let mut state = state();
     state.say(cmdbuf, "MTLCommandBuffer_renderCommandEncoder".to_owned());
+    if color.texture != 0 {
+        let c = &color.clear_color;
+        state.say(
+            cmdbuf,
+            format!(
+                "  color0 load={} store={} clear={},{},{},{}",
+                color.load_action, color.store_action, c.r, c.g, c.b, c.a
+            ),
+        );
+    }
     state.made_of(cmdbuf)
 }
 
@@ -551,6 +564,12 @@ extern "C-unwind" fn fake_create_metal_view(_hwnd: isize, device: u64, layer: *m
     // SAFETY: the caller's out pointer, writable.
     unsafe { layer.write(made) };
     view
+}
+
+/// No VM host's window-system hooks: the presenter takes drawables itself.
+#[unsafe(export_name = "WMTGetWsiHooks")]
+const extern "C-unwind" fn fake_wsi_hooks() -> *const core::ffi::c_void {
+    core::ptr::null()
 }
 
 #[unsafe(export_name = "ReleaseMetalView")]

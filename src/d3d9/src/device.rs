@@ -18,6 +18,8 @@ pub use mtld3d_core::encoder_data::{
     UploadTextureOpFlags,
 };
 
+#[cfg(feature = "core-runtime")]
+mod core_arms;
 mod extended;
 mod frame_dump;
 mod mem_watch;
@@ -6060,11 +6062,12 @@ extern "system" fn device_present(
     dirty_region: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        is_core_device(this),
-        "IDirect3DDevice9::Present",
-        D3DERR_NOTAVAILABLE
-    );
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) =
+        core_arms::present(this, src_rect, dst_rect, dst_window_override, dirty_region)
+    {
+        return hr;
+    }
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     present_impl(
         this,
@@ -8851,11 +8854,10 @@ extern "system" fn device_get_render_target_data(
     dst: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        is_core_device(this),
-        "IDirect3DDevice9::GetRenderTargetData",
-        D3DERR_NOTAVAILABLE
-    );
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_arms::get_render_target_data(this, rt, dst) {
+        return hr;
+    }
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -11088,11 +11090,10 @@ extern "system" fn device_clear(
     stencil: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        is_core_device(this),
-        "IDirect3DDevice9::Clear",
-        D3DERR_NOTAVAILABLE
-    );
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_arms::clear(this, rects, flags, color) {
+        return hr;
+    }
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
