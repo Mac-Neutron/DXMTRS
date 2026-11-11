@@ -24,6 +24,7 @@ pub mod info;
 pub mod initializer;
 pub mod library;
 pub mod log;
+pub mod pipeline_cache;
 pub mod presenter;
 pub mod query;
 pub mod queue;

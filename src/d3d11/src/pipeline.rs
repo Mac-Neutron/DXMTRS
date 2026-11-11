@@ -7,7 +7,10 @@ use core::{
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dxmt_core::format::{depth_stencil_planar_flags, is_unorm8_rt};
+use dxmt_core::{
+    format::{depth_stencil_planar_flags, is_unorm8_rt},
+    pipeline_cache::{Compiled, PsoMap},
+};
 use dxmt_util::sync::lock;
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
@@ -25,7 +28,7 @@ use crate::{
     com::Hresult,
     device::Device,
     input_layout::{InputLayout, StreamOutputLayout},
-    scheduler::{CompileJob, CompileScheduler},
+    scheduler::CompileScheduler,
     shader::{
         ManagedShader,
         args::{EMPTY_SHA1, IaLayoutChainInput, SoLayoutChainInput},
@@ -232,89 +235,17 @@ pub enum GraphicsPipelineKind {
 }
 
 /// Compiled graphics pipeline state (`MTLCompiledGraphicsPipeline`).
-pub struct CompiledGraphics {
-    handle: AtomicU64,
-    pso: Mutex<Option<Obj>>,
-    job: Mutex<Option<CompileJob>>,
-    pub kind: Arc<GraphicsPipelineKind>,
-}
-
-impl Default for CompiledGraphics {
-    fn default() -> Self {
-        let desc = GraphicsDesc::default();
-        Self {
-            handle: AtomicU64::new(0),
-            pso: Mutex::new(None),
-            job: Mutex::new(None),
-            kind: Arc::new(GraphicsPipelineKind::Standard(Box::new(
-                build_graphics_pipeline(&desc),
-            ))),
-        }
-    }
-}
-
-impl CompiledGraphics {
-    /// Returns the Metal render pipeline handle, waiting if compiling (`GetPipeline`).
-    #[must_use]
-    pub fn ready(&self) -> Option<u64> {
-        let h = self.handle.load(Ordering::Acquire);
-        if h != 0 {
-            return Some(h);
-        }
-        let job = lock(&self.job).clone();
-        if let Some(job) = job {
-            job.wait();
-        }
-        let h2 = self.handle.load(Ordering::Acquire);
-        (h2 != 0).then_some(h2)
-    }
-}
+pub type CompiledGraphics = Compiled<GraphicsPipelineKind>;
 
 /// Compiled compute pipeline state (`MTLCompiledComputePipeline`).
-pub struct CompiledCompute {
-    handle: AtomicU64,
-    pso: Mutex<Option<Obj>>,
-    job: Mutex<Option<CompileJob>>,
-    pub spec: Arc<ComputePipelineSpec>,
-}
-
-impl Default for CompiledCompute {
-    fn default() -> Self {
-        Self {
-            handle: AtomicU64::new(0),
-            pso: Mutex::new(None),
-            job: Mutex::new(None),
-            spec: Arc::new(ComputePipelineSpec {
-                variant: crate::shader::args::ShaderVariant::Default,
-                threadgroup_size: [1, 1, 1],
-            }),
-        }
-    }
-}
-
-impl CompiledCompute {
-    /// Returns the Metal compute pipeline handle, waiting if compiling (`GetPipeline`).
-    #[must_use]
-    pub fn ready(&self) -> Option<u64> {
-        let h = self.handle.load(Ordering::Acquire);
-        if h != 0 {
-            return Some(h);
-        }
-        let job = lock(&self.job).clone();
-        if let Some(job) = job {
-            job.wait();
-        }
-        let h2 = self.handle.load(Ordering::Acquire);
-        (h2 != 0).then_some(h2)
-    }
-}
+pub type CompiledCompute = Compiled<ComputePipelineSpec>;
 
 /// Per-device shader and pipeline state cache (`MTLD3D11PipelineCache`).
 pub struct PipelineCache {
     device: *mut c_void,
     shaders: Mutex<FxHashMap<[u8; 20], Arc<ManagedShader>>>,
-    graphics_psos: Mutex<FxHashMap<GraphicsKey, Arc<CompiledGraphics>>>,
-    compute_psos: Mutex<FxHashMap<[u8; 20], Arc<CompiledCompute>>>,
+    graphics_psos: PsoMap<GraphicsKey, GraphicsPipelineKind>,
+    compute_psos: PsoMap<[u8; 20], ComputePipelineSpec>,
     scheduler: OnceLock<CompileScheduler>,
 }
 
@@ -336,8 +267,8 @@ impl PipelineCache {
         Self {
             device,
             shaders: Mutex::new(FxHashMap::default()),
-            graphics_psos: Mutex::new(FxHashMap::default()),
-            compute_psos: Mutex::new(FxHashMap::default()),
+            graphics_psos: PsoMap::default(),
+            compute_psos: PsoMap::default(),
             scheduler: OnceLock::new(),
         }
     }
@@ -384,11 +315,8 @@ impl PipelineCache {
     #[must_use]
     pub fn graphics(&self, desc: &GraphicsDesc) -> Arc<CompiledGraphics> {
         let key = GraphicsKey::from_desc(desc);
-        {
-            let map = lock(&self.graphics_psos);
-            if let Some(existing) = map.get(&key) {
-                return Arc::clone(existing);
-            }
+        if let Some(existing) = self.graphics_psos.get(&key) {
+            return existing;
         }
 
         let live_dev =
@@ -416,128 +344,49 @@ impl PipelineCache {
 
         let compiled = if live_dev.is_some() {
             let data = GraphicsCompileData::from_desc(desc);
-            let compiled = Arc::new(CompiledGraphics {
-                handle: AtomicU64::new(0),
-                pso: Mutex::new(None),
-                job: Mutex::new(None),
-                kind: Arc::clone(&kind),
-            });
-            let job = {
-                let weak = Arc::downgrade(&compiled);
-                let device_ptr = self.device as usize;
-                let kind = Arc::clone(&kind);
-                CompileJob::from_fn(move || {
-                    let Some(compiled) = weak.upgrade() else {
-                        return;
-                    };
-                    // SAFETY: the pipeline cache's owner waits for schedulers to become idle
-                    // before the device (and this raw pointer) is dropped.
-                    let Some(dev) = Device::from_iface(device_ptr as *mut c_void) else {
-                        return;
-                    };
-                    let pso = data.compile(dev, &kind);
-                    let handle = pso.as_ref().map_or(0, Obj::handle);
-                    *lock(&compiled.pso) = pso;
-                    compiled.handle.store(handle, Ordering::Release);
-                })
-            };
-            *lock(&compiled.job) = Some(job);
-            compiled
-        } else {
-            Arc::new(CompiledGraphics {
-                handle: AtomicU64::new(next_pso_handle()),
-                pso: Mutex::new(None),
-                job: Mutex::new(None),
-                kind,
+            let device_ptr = self.device as usize;
+            Compiled::pending(kind, move |kind| {
+                // SAFETY: the pipeline cache's owner waits for schedulers to become idle
+                // before the device (and this raw pointer) is dropped.
+                let dev = Device::from_iface(device_ptr as *mut c_void)?;
+                data.compile(dev, kind)
             })
+        } else {
+            Compiled::ready_with(kind, next_pso_handle(), None)
         };
-
-        // The entry is visible only after its job is installed, so a cache hit never observes a
-        // placeholder that `ready` cannot wait on.
-        let mut map = lock(&self.graphics_psos);
-        if let Some(existing) = map.get(&key) {
-            return Arc::clone(existing);
-        }
-        let job = lock(&compiled.job).clone();
-        map.insert(key, Arc::clone(&compiled));
-        drop(map);
-        if let Some(job) = job {
-            self.scheduler().submit(job);
-        }
-        compiled
-    }
-
-    fn scheduler(&self) -> &CompileScheduler {
-        self.scheduler.get_or_init(CompileScheduler::default)
+        self.graphics_psos
+            .insert_or_existing(key, compiled, &self.scheduler)
     }
 
     /// Looks up or enqueues a compute pipeline for `shader` (`GetComputePipeline`).
     #[must_use]
     pub fn compute(&self, shader: &Arc<ManagedShader>) -> Arc<CompiledCompute> {
-        {
-            let map = lock(&self.compute_psos);
-            if let Some(existing) = map.get(&shader.sha1) {
-                return Arc::clone(existing);
-            }
+        if let Some(existing) = self.compute_psos.get(&shader.sha1) {
+            return existing;
         }
         let spec = Arc::new(build_compute_pipeline(shader));
 
         let live_dev =
             Device::from_iface(self.device).filter(|dev| dev.core().device().handle() > 0x1000);
         let compiled = if live_dev.is_some() {
-            let compiled = Arc::new(CompiledCompute {
-                handle: AtomicU64::new(0),
-                pso: Mutex::new(None),
-                job: Mutex::new(None),
-                spec: Arc::clone(&spec),
-            });
-            let job = {
-                let weak = Arc::downgrade(&compiled);
-                let device_ptr = self.device as usize;
-                let shader = Arc::clone(shader);
-                let spec = Arc::clone(&spec);
-                CompileJob::from_fn(move || {
-                    let Some(compiled) = weak.upgrade() else {
-                        return;
-                    };
-                    // SAFETY: as in `graphics`: device teardown waits for scheduler idle.
-                    let Some(dev) = Device::from_iface(device_ptr as *mut c_void) else {
-                        return;
-                    };
-                    let pso = compile_compute_pso(dev, &shader, &spec);
-                    let handle = pso.as_ref().map_or(0, Obj::handle);
-                    *lock(&compiled.pso) = pso;
-                    compiled.handle.store(handle, Ordering::Release);
-                })
-            };
-            *lock(&compiled.job) = Some(job);
-            compiled
-        } else {
-            Arc::new(CompiledCompute {
-                handle: AtomicU64::new(next_pso_handle()),
-                pso: Mutex::new(None),
-                job: Mutex::new(None),
-                spec,
+            let device_ptr = self.device as usize;
+            let shader = Arc::clone(shader);
+            Compiled::pending(spec, move |spec| {
+                // SAFETY: as in `graphics`: device teardown waits for scheduler idle.
+                let dev = Device::from_iface(device_ptr as *mut c_void)?;
+                compile_compute_pso(dev, &shader, spec)
             })
+        } else {
+            Compiled::ready_with(spec, next_pso_handle(), None)
         };
-
-        let mut map = lock(&self.compute_psos);
-        if let Some(existing) = map.get(&shader.sha1) {
-            return Arc::clone(existing);
-        }
-        let job = lock(&compiled.job).clone();
-        map.insert(shader.sha1, Arc::clone(&compiled));
-        drop(map);
-        if let Some(job) = job {
-            self.scheduler().submit(job);
-        }
-        compiled
+        self.compute_psos
+            .insert_or_existing(shader.sha1, compiled, &self.scheduler)
     }
 
     /// Releases every cached Metal object before the device's Metal device goes away.
     pub fn clear(&self) {
-        lock(&self.graphics_psos).clear();
-        lock(&self.compute_psos).clear();
+        self.graphics_psos.clear();
+        self.compute_psos.clear();
         lock(&self.shaders).clear();
     }
 }
