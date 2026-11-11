@@ -217,3 +217,41 @@ fn records_keep_their_order() {
         "the merged pass keeps no record"
     );
 }
+
+/// A target drawn again 128 ids on keeps its first pass where it is (DXMTRS C4's deptrack fix).
+///
+/// The second pass no longer waits for the first's fence itself (its write is over [`LANE`] ids
+/// old); a pass about 64 ids after the first does, through the weak waits, and stops the scan
+/// before the first pass could be moved or merged past the second.
+#[test]
+fn a_target_drawn_again_128_ids_on_keeps_its_first_pass() {
+    let target = texture(0x100);
+    let mut encoder = Encoder::headless();
+    draw(&mut encoder, &target, WMT_LOAD_ACTION_DONT_CARE, &[1]);
+    let first = encoder.passes[0].id;
+    let others: Vec<_> = (0..63).map(|n| texture(0x1000 + n * 0x100)).collect();
+    for other in &others {
+        draw(&mut encoder, other, WMT_LOAD_ACTION_DONT_CARE, &[0]);
+    }
+    draw(&mut encoder, &target, WMT_LOAD_ACTION_LOAD, &[2]);
+    let last = encoder.passes.len() - 1;
+    assert!(
+        encoder.passes[last].id - first >= 128,
+        "the second pass is 128 ids on"
+    );
+    assert!(
+        !encoder.passes[last].fence_wait.test(first),
+        "and waits for the first only through other passes"
+    );
+    encoder.optimize();
+    assert_eq!(
+        offsets(&encoder.passes[0]),
+        [1],
+        "the first pass stays first"
+    );
+    assert_eq!(
+        offsets(&encoder.passes[last]),
+        [2],
+        "the second keeps only its own records"
+    );
+}

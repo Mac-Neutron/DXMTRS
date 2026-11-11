@@ -287,3 +287,92 @@ fn locality_check_drops_local_waits() {
         "the vertex half is waited for without a fence"
     );
 }
+
+/// Whether a pass rewriting X `dw` ids on is fence-ordered after T's write `dr` ids back.
+///
+/// The pass also reads T. Render passes of two ids from 256, every half's strong waits through
+/// the real trackers and the locality check; a filler pass writes a tracker of its own. An
+/// encoder's edges are the encoders its emitted fences name (the latest earlier encoder of each
+/// slot) and, for a fragment half, its vertex half; ordering is reachability over them.
+fn reread_ordered_after(dw: u64, dr: u64) -> bool {
+    let first = 257;
+    let reread = first + dw.max(dr);
+    let (x_at, t_at) = (reread - dw, reread - dr);
+    let (mut tx, mut tt) = (
+        GenericAccessTracker::default(),
+        GenericAccessTracker::default(),
+    );
+    let mut check = FenceLocalityCheck::default();
+    let mut edges: Vec<Vec<u64>> = vec![Vec::new(); usize::try_from(reread + 1).unwrap()];
+    let mut emit = |id: u64, strong: FenceSet, fragment: bool, edges: &mut Vec<Vec<u64>>| {
+        let waits = check.collect_and_simplify_waits(strong, id, fragment);
+        let out = &mut edges[usize::try_from(id).unwrap()];
+        waits.for_each(|slot| {
+            let lane = slot as u64;
+            out.push(id - 1 - (id - 1 - lane) % PARITY_LANE);
+        });
+        if fragment {
+            out.push(id - 1);
+        }
+    };
+    let mut fid = first;
+    while fid <= reread {
+        let (mut wait, mut b) = (FenceSet::EMPTY, BarrierState::default());
+        emit(fid - 1, FenceSet::EMPTY, false, &mut edges);
+        if fid == reread {
+            tx.access_exclusive_fragment(fid, &mut wait, &mut b, false);
+            tt.access_shared_fragment(fid, &mut wait, &mut b);
+        } else if fid == x_at {
+            tx.access_exclusive_fragment(fid, &mut wait, &mut b, false);
+        } else if fid == t_at {
+            tt.access_exclusive_fragment(fid, &mut wait, &mut b, false);
+        } else {
+            GenericAccessTracker::default()
+                .access_exclusive_fragment(fid, &mut wait, &mut b, false);
+        }
+        emit(fid, wait, true, &mut edges);
+        fid += 2;
+    }
+    let mut seen = vec![false; edges.len()];
+    let mut stack = vec![reread];
+    while let Some(at) = stack.pop() {
+        if at == t_at {
+            return true;
+        }
+        let i = usize::try_from(at).unwrap();
+        if !core::mem::replace(&mut seen[i], true) {
+            stack.extend(edges[i].iter().copied().filter(|&u| u >= first - 1));
+        }
+    }
+    false
+}
+
+/// A pass rewriting a target 128 ids old orders after a write of what it reads 64 ids back.
+///
+/// The fragment half's wait on the target's old write (its lane the read's) once dropped the weak
+/// wait that ordered the read (`map2-deptrack.md`, DXMTRS C4a): the C++ has the same gap.
+#[test]
+fn a_reread_128_ids_on_waits_for_the_write_64_ids_back() {
+    assert!(reread_ordered_after(128, 64));
+}
+
+/// The same over write and read distances: every read is ordered after its write.
+#[test]
+fn rereads_wait_for_their_writes_at_any_distance() {
+    for dw in (66..=400).step_by(2) {
+        for dr in [64, 66, 126, 128, 130, 192, 254, 256, 258, 320, 600] {
+            if dr != dw {
+                assert!(
+                    reread_ordered_after(dw, dr),
+                    "write {dw} ids back, read {dr}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "prints the replay, to regenerate golden.txt"]
+fn print_replay() {
+    print!("{}", replay());
+}

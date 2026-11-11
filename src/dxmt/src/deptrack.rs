@@ -7,8 +7,11 @@
 //! to the accessing encoder's set the fences it must wait for, or the barrier it needs when the
 //! earlier access is its own. [`FenceLocalityCheck`] then drops the waits another wait implies.
 //!
-//! Behaviour is the C++'s (`dxmt_deptrack.*`). Written ahead for the switches of `d3d11.dll` and
-//! `d3d12.dll`, which are its first callers.
+//! Behaviour is the C++'s (`dxmt_deptrack.*`), but for one fix (DXMTRS C4): a render half's write
+//! waits for the target's last write only when it is recent (under [`LANE`] ids back), as every
+//! other wait does. The C++ always waited for it; that strong bit, of a write 128 or more ids old,
+//! masked the lane of the weak wait that ordered a read of something written exactly 64 ids back.
+//! Written ahead for the switches of `d3d11.dll` and `d3d12.dll`, which are its first callers.
 
 /// Fences per parity: the bits of one word.
 pub const LANE: u64 = 64;
@@ -325,7 +328,9 @@ impl GenericAccessTracker {
             return;
         }
         self.shared.enumerate(id, |r| wait.set(r));
-        if last != 0 {
+        // Only a recent write, as every other wait: an older one is ordered through the weak
+        // waits, and a strong bit for it would mask the lane of a write 64 ids back (DXMTRS C4).
+        if id.wrapping_sub(last) < LANE {
             wait.set(last);
         }
         if self.shared.is_last_access(id + 1) || self.shared.is_last_access(id) {
@@ -423,7 +428,9 @@ impl GenericAccessTracker {
             return;
         }
         self.shared.enumerate(id, |r| wait.set(r));
-        if last != 0 {
+        // Only a recent write, as every other wait: an older one is ordered through the weak
+        // waits, and a strong bit for it would mask the lane of a write 64 ids back (DXMTRS C4).
+        if id.wrapping_sub(last) < LANE {
             wait.set(last);
         }
         if self.shared.is_last_access(id) || self.shared.is_last_access(id - 1) {
