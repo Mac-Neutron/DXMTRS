@@ -1,14 +1,23 @@
 #!/bin/sh
-# arm64x-link.sh <llvm-mingw-bin> <winebuild> <libntdll.a> <def> <out.dll> <arm64.lib> <arm64ec.lib> [<version.rc>]:
+# arm64x-link.sh [--ec-import <lib>] <llvm-mingw-bin> <winebuild> <libntdll.a> <def> <out.dll> <arm64.lib>
+# <arm64ec.lib> [<version.rc>]:
 # links one ARM64X Wine builtin (src/d3d9's d3d9.dll and mtld3d.dll) from a crate's two static libraries, the
 # aarch64-pc-windows-msvc half (the .def's native exports) and the arm64ec-pc-windows-msvc one, against llvm-mingw's
-# ARM64X CRT and Wine's libntdll.a; an .rc is compiled by llvm-rc and linked in; the image is marked builtin. Ported
+# ARM64X CRT and Wine's libntdll.a; an .rc is compiled by llvm-rc and linked in; the image is marked builtin.
+# --ec-import names an import library only the ARM64EC half resolves against (d3d9's core runtime's winemetal.dll,
+# which has no native arm64 half: meson builds that half without the core runtime). Ported
 # from mtld3d's Makefile (windows-arm64x, zlib). Not meson's driver link: MacNeutron's cross file links with
 # -flto=thin, which -marm64x refuses. The linker is <llvm-mingw-bin>/lld-link only, never PATH's (MacNeutron puts
 # rust-lld there under that name); its version goes into the build log.
 set -eu
+ecimp=
+if [ "${1:-}" = --ec-import ]; then
+  [ $# -ge 2 ] || { echo "arm64x-link.sh: --ec-import needs a library" >&2; exit 2; }
+  ecimp=$2
+  shift 2
+fi
 [ $# -ge 7 ] && [ $# -le 8 ] || {
-  echo "usage: arm64x-link.sh <llvm-mingw-bin> <winebuild> <libntdll.a> <def> <out.dll> <arm64.lib> <arm64ec.lib> [<version.rc>]" >&2
+  echo "usage: arm64x-link.sh [--ec-import <lib>] <llvm-mingw-bin> <winebuild> <libntdll.a> <def> <out.dll> <arm64.lib> <arm64ec.lib> [<version.rc>]" >&2
   exit 2
 }
 bin=$1 winebuild=$2 ntdll=$3 def=$4 out=$5 arm64=$6 arm64ec=$7 rc=${8:-}
@@ -71,5 +80,5 @@ done
 "$bin/lld-link" -lldmingw /dll /machine:arm64x /nodefaultlib /opt:ref,icf \
   /entry:DllMainCRTStartup /def:"$def" /defarm64native:"$def" \
   /debug /pdb:"${out%.dll}.pdb" /pdbaltpath:%_PDB% /out:"$out" \
-  "$crt/dllcrt2.o" "$arm64" "$arm64ec" $res $libs "$ntdll"
+  "$crt/dllcrt2.o" "$arm64" "$arm64ec" $res $libs ${ecimp:+"$ecimp"} "$ntdll"
 "$winebuild" --builtin "$out"

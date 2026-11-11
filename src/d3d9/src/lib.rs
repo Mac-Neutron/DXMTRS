@@ -49,6 +49,7 @@ use std::sync::Arc;
 use dxmt_util::crash::veh::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExA,
 };
+use mtld3d_core::config::RuntimeMode;
 use mtld3d_shared::{InitLoggerParams, identity};
 // HRESULT codes live in `mtld3d_types` (shared with the integration-test
 // harness); re-exported under the crate root so every in-crate
@@ -121,6 +122,53 @@ static ALLOCATOR: crate::crumb_allocator::CrumbAllocator = crate::crumb_allocato
 /// unload has to stay real. `CreateDevice` requires a real HWND and
 /// presentation parameters, so reaching it implies actual use.
 pub static USED: AtomicBool = AtomicBool::new(false);
+
+/// The process's runtime mode (`runtime.mode`): the first interface's wins.
+///
+/// A static because the resource is process-wide: one process runs one runtime, `mtld3d.so`'s or
+/// DXMT's core, and every interface and device of it is of that one.
+static RUNTIME: mtld3d_core::runtime_latch::RuntimeLatch =
+    mtld3d_core::runtime_latch::RuntimeLatch::new();
+
+/// Whether this half of `d3d9.dll` carries the core runtime (`core-runtime`).
+const CORE_BUILT: bool = cfg!(feature = "core-runtime");
+
+/// The mode `cfg` asks for, as this build can run it, latched for the process.
+///
+/// `Err` holds the mode the process latched first, when it is not this one.
+fn runtime_mode(cfg: &mtld3d_core::config::Mtld3dConfig) -> Result<RuntimeMode, RuntimeMode> {
+    let mode = mtld3d_core::runtime_latch::effective_mode(cfg.runtime_mode, CORE_BUILT);
+    if mode != cfg.runtime_mode {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "runtime.mode = core: this d3d9.dll ({}) carries no core runtime, so mtld3d runs",
+            mtld3d_shared::identity::ARCH
+        );
+    }
+    RUNTIME.latch(mode)
+}
+
+/// The core's log writer (`dxmt_core::log`), forwarding to the `log` facade D3D9's lines take.
+#[cfg(feature = "core-runtime")]
+#[unsafe(export_name = "dxmt_log")]
+extern "C" fn dxmt_log(level: u32, message: *const u8, length: usize) {
+    if message.is_null() {
+        return;
+    }
+    // SAFETY: `dxmt_core::log` passes a valid UTF-8 slice pointer and length for the call.
+    let bytes = unsafe { core::slice::from_raw_parts(message, length) };
+    let Ok(text) = core::str::from_utf8(bytes) else {
+        return;
+    };
+    let level = match level {
+        0 => log::Level::Trace,
+        1 => log::Level::Debug,
+        2 => log::Level::Info,
+        3 => log::Level::Warn,
+        _ => log::Level::Error,
+    };
+    log::log!(target: "mtld3d::dxmt", level, "{text}");
+}
 
 unsafe extern "system" {
     fn DisableThreadLibraryCalls(lib_module: *mut c_void) -> i32;
@@ -301,6 +349,13 @@ fn create_interface(extended: bool) -> *mut Direct3D9 {
     // interface names it again and the unix side keeps the file it has.
     let cfg = config::load();
     log_sink::open(&cfg);
+    if let Err(held) = runtime_mode(&cfg) {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "runtime.mode: the process runs {}; a device of this interface's mode is refused",
+            mtld3d_core::config::runtime_mode_label(held)
+        );
+    }
     direct3d9::install_page_allocator();
     // The page-box pool is one per process; the interface resolved most
     // recently sizes it.

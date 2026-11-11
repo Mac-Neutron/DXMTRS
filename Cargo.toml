@@ -10,6 +10,7 @@ members = [
     "src/d3d9",
     "src/d3d9/core",
     "src/d3d9/mtl",
+    "src/d3d9/rt",
     "src/d3d9/shared",
     "src/d3d9/shim",
     "src/d3d9/types",
@@ -58,6 +59,7 @@ repository = "https://github.com/Mac-Neutron/DXMTRS"
 [workspace.dependencies]
 airconv = { path = "src/airconv" }
 airconv-ir = { path = "src/airconv/ir" }
+d3d9-rt = { path = "src/d3d9/rt" }
 dxmt-core = { path = "src/dxmt" }
 dxmt-util = { path = "src/util" }
 mtld3d-core = { path = "src/d3d9/core" }

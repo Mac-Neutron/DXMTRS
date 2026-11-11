@@ -8,11 +8,12 @@
 #           seam's src/dxmt/src/<seam>/abi.rs (the header its first line names, with crate::<seam>); a C declaration
 #           changed without its regeneration would otherwise still compile (needs Xcode's clang and jq)
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
-#           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), and the core's
-#           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD)
-#   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 and the host
+#           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), the core's
+#           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD), and d3d9 with its
+#           core runtime (core-runtime) on arm64ec, x86_64 and i686, with guest-vm on the last two
+#   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 (also d3d9 with core-runtime) and the host
 #   test    the host unit tests, D3D9's also with perf-tracking (not mtld3d-mtl's integration tests: see unit_tests),
-#           dxmt-fakes' in a cargo command of its own
+#           dxmt-fakes' and d3d9-rt's (which link dxmt-fakes) each in a cargo command of its own
 #   audit   tools/audit.sh; refuses while an untracked .rs, .toml or .md file exists (the audit reads tracked files)
 # The PE legs compile build scripts that need C and Wine's archives, so the inputs are variables (docs/DEVELOPMENT.md,
 # "tools/rust-check.sh"); MacNeutron sets them from its pins. cargo runs offline: fetch the locked crates first.
@@ -60,10 +61,10 @@ case $(rustc --version) in
 esac
 
 PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
-  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys --features d3d11/front-end'
+  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p d3d9-rt --features d3d11/front-end'
 PE64_P="$PE_P -p nvngx -p nvapi"
 HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
-  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p dxmt-fakes'
+  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p dxmt-fakes -p d3d9-rt'
 # The core's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
 CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d11/front-end,d3d12/perf-build'
 HOST=aarch64-apple-darwin
@@ -291,6 +292,13 @@ leg_clippy() {
   lint $I686 $CORE_PERF || rc=1
   lint $I686 -p d3d9 -p mtld3d --features d3d9/perf-build,mtld3d/perf-build || rc=1
   lint $HOST -p mtld3d-unix --features mtld3d-unix/perf-build || rc=1
+  # D3D9's core runtime, in the halves that carry it (winemetal.dll has no native arm64 half).
+  for t in arm64ec-pc-windows-msvc x86_64-pc-windows-msvc $I686; do
+    lint $t -p d3d9 -p d3d9-rt --features d3d9/core-runtime || rc=1
+  done
+  for t in x86_64-pc-windows-msvc $I686; do
+    lint $t -p d3d9 -p d3d9-rt --features d3d9/core-runtime,d3d9/guest-vm || rc=1
+  done
   return $rc
 }
 
@@ -298,6 +306,8 @@ leg_doc() {
   rc=0
   RUSTDOCFLAGS='-D warnings'; export RUSTDOCFLAGS
   pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 $PE_P --features mtld3d-core/disk-cache || rc=1
+  pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 -p d3d9 -p d3d9-rt --features d3d9/core-runtime \
+    || rc=1
   cargo_ doc --no-deps --offline --keep-going --target $HOST $HOST_P --features mtld3d-core/disk-cache,d3d11/front-end || rc=1
   unset RUSTDOCFLAGS
   return $rc
@@ -327,6 +337,8 @@ leg_test() {
   # dxmt-fakes' winemetal fakes in a command of their own: no test binary links them beside the
   # core's, d3d11's or d3d12's own (one symbol, two definitions).
   tst -p dxmt-fakes \
+    --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
+  tst -p d3d9-rt \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

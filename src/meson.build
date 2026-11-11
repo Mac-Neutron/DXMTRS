@@ -12,10 +12,13 @@ if not dxmt_crossbuild
 subdir('nativemetal')
 else
 subdir('winemetal')
-subdir('d3d9')
 endif
 
 subdir('dxmt')
+# After dxmt: d3d9's core runtime (d3d9_core_runtime) builds with the core's command library.
+if dxmt_crossbuild
+subdir('d3d9')
+endif
 subdir('dxgi')
 subdir('d3d11')
 subdir('d3d10')

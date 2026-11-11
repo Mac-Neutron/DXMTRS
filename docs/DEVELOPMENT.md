@@ -125,7 +125,11 @@ output stays out of the source tree: every cargo run outside meson sets an absol
   `mtld3d.dll`. Rust has no ARM64X target, so each crate is built once per half as a static library and
   `tools/arm64x-link.sh` links both into one image. It needs LLD 23 or newer (llvm-mingw's own `lld-link`, never the one
   on `PATH`) and an llvm-mingw whose `aarch64-w64-mingw32` sysroot carries the ARM64 and ARM64EC halves together.
-  `nvngx.dll`, `nvapi64.dll` and `winemetal.dll` are built for both targets too.
+  `nvngx.dll`, `nvapi64.dll` and `winemetal.dll` are built for both targets too. With meson's `d3d9_core_runtime`
+  (DXMTRS C4, off by default) the `arm64ec`, `x86_64` and `i686` builds of the `d3d9` crate carry its `core-runtime`
+  feature (`src/d3d9/rt` on `dxmt-core`) and import `winemetal.dll`; the `aarch64` half does not, since
+  `winemetal.dll`'s image is ARM64EC alone, and the link gives that import library to the ARM64EC half only
+  (`tools/arm64x-link.sh --ec-import`).
 - `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`: the PE side of the VM guest, linked by meson's own driver
   (`i686` is D3D9 and `winemetal.dll` only).
 - `x86_64-unknown-linux-gnu` and `i686-unknown-linux-gnu`: the guest's `mtld3d.so`, built through

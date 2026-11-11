@@ -60,6 +60,18 @@ impl RuntimeLatch {
     }
 }
 
+/// The mode a process runs when it asks for `requested`.
+///
+/// `requested` itself, except `core` in a `d3d9.dll` built without the core runtime (meson's
+/// `d3d9_core_runtime` off, or the native arm64 half of an ARM64X image), which keeps `mtld3d`.
+#[must_use]
+pub const fn effective_mode(requested: RuntimeMode, built_with_core: bool) -> RuntimeMode {
+    match requested {
+        RuntimeMode::Core if built_with_core => RuntimeMode::Core,
+        _ => RuntimeMode::Mtld3d,
+    }
+}
+
 impl Default for RuntimeLatch {
     fn default() -> Self {
         Self::new()

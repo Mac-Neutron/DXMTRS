@@ -787,6 +787,15 @@ fn page_allocator() -> Option<mtld3d_core::page_box::PageAllocator> {
         };
         unix_call(&mut params);
     }
+    #[cfg(all(feature = "core-runtime", feature = "guest-vm"))]
+    if crate::RUNTIME.get() == Some(mtld3d_core::config::RuntimeMode::Core) {
+        // The core runtime has no Unix side of its own: the guest's winemetal serves the pages.
+        log::info!(target: LOG_TARGET, "page boxes: pages from the guest's winemetal");
+        return Some(mtld3d_core::page_box::PageAllocator {
+            alloc: d3d9_rt::guest_pages::alloc,
+            free: d3d9_rt::guest_pages::free,
+        });
+    }
     if !device_info()
         .caps
         .contains(DeviceCapsFlags::PAGES_FROM_UNIX)
@@ -1961,6 +1970,22 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         return D3DERR_INVALIDCALL;
     }
 
+    // One runtime per process (DXMTRS C4): a device of the mode the process did not latch is
+    // refused, and the core runtime's device is the core's (no mtld3d.so queue, layer or encoder).
+    match crate::runtime_mode(cfg) {
+        Err(held) => {
+            warn!(
+                target: LOG_TARGET,
+                "reject CreateDevice: the process runs runtime.mode = {}, this interface asks for \
+                 the other",
+                mtld3d_core::config::runtime_mode_label(held)
+            );
+            return D3DERR_NOTAVAILABLE;
+        }
+        Ok(mtld3d_core::config::RuntimeMode::Core) => return create_core_device(),
+        Ok(mtld3d_core::config::RuntimeMode::Mtld3d) => {}
+    }
+
     // Create Metal device + command queue
     let gate = present_gate_unix_path(cfg);
     let mut present_debug = PresentDebugFlags::empty();
@@ -2270,6 +2295,33 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
     }
     info!(target: LOG_TARGET, "CreateDevice succeeded (extended={extended})");
     D3D_OK
+}
+
+/// `CreateDevice` under the core runtime: the core device on the adapter's Metal device.
+///
+/// The core runtime's COM device is not built yet (DXMTRS C4a): the core device comes up, logs
+/// its line and goes, and the call is refused as an unsupported feature is (C4-13).
+#[cfg(feature = "core-runtime")]
+fn create_core_device() -> i32 {
+    let Some(mtl) = d3d9_rt::device::select_device(device_info().registry_id) else {
+        error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
+        return D3DERR_NOTAVAILABLE;
+    };
+    drop(d3d9_rt::device::CoreDevice::new(
+        mtl,
+        d3d9_rt::device::queue_profile(),
+    ));
+    mtld3d_shared::log_once_warn!(
+        target: LOG_TARGET,
+        "reject CreateDevice: runtime.mode = core has no COM device yet"
+    );
+    D3DERR_NOTAVAILABLE
+}
+
+/// `CreateDevice` under the core runtime in a build without it, which never latches it.
+#[cfg(not(feature = "core-runtime"))]
+const fn create_core_device() -> i32 {
+    D3DERR_NOTAVAILABLE
 }
 
 /// Attach a `CAMetalLayer` to the game window.

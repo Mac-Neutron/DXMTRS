@@ -12,3 +12,4 @@ option('guest_vm', type : 'boolean', value : false, description : 'MacNeutron: a
 option('translator_key_file', type : 'string', value : '', description : 'A file holding the shader translator\'s key; empty: DXMT\'s version keys the shader cache')
 option('d3d9_perf_tracking', type : 'boolean', value : false, description : 'DXMTRS: D3D9\'s developer timers (the 2 s perf grid and perf-kv) in d3d9.dll and mtld3d.so; never in a release')
 option('cargo_toolchain', type : 'string', value : '1.99.0', description : 'DXMTRS: the rustup toolchain cargo builds the Rust static libraries with (dxmt/pins MTLD3D_RUST in MacNeutron)')
+option('d3d9_core_runtime', type : 'boolean', value : false, description : 'DXMTRS C4: d3d9.dll carries the core runtime (runtime.mode=core: D3D9 on dxmt-core over winemetal.dll) in its arm64ec, x86_64 and i686 halves; dev builds only until C4e')

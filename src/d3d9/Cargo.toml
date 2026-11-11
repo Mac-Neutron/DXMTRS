@@ -14,10 +14,16 @@ crate-type = ["staticlib"]
 # D3D9's developer timers; mtld3d.so needs the same (meson's d3d9_perf_tracking sets both).
 perf-tracking = ["mtld3d-core/perf-tracking", "mtld3d-shared/perf-tracking"]
 # DXMT_PERF_BUILD: lines below warnings compiled out.
-perf-build = ["mtld3d-shared/perf-build"]
+perf-build = ["mtld3d-shared/perf-build", "d3d9-rt?/perf-build"]
+# DXMTRS C4: the core runtime (runtime.mode=core), d3d9-rt on dxmt-core; meson's d3d9_core_runtime, on the arm64ec,
+# x86_64 and i686 halves only (winemetal.dll has no native arm64 half).
+core-runtime = ["dep:d3d9-rt"]
+# The VM guest's build (meson's guest_vm): the core runtime's guest-only winemetal calls.
+guest-vm = ["d3d9-rt?/guest-vm"]
 
 [dependencies]
 bitflags = { workspace = true }
+d3d9-rt = { workspace = true, optional = true }
 dxmt-util = { workspace = true }
 mtld3d-core = { workspace = true }
 mtld3d-shared = { workspace = true }

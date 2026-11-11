@@ -1,0 +1,25 @@
+[package]
+name = "d3d9-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Direct3D 9's recording on DXMT's core (runtime.mode=core): the core device, its queue profile and the recorder d3d9.dll calls; host-tested on dxmt-fakes"
+publish = false
+
+[features]
+# The VM guest's build: the core's guest-only winemetal calls, and page boxes from WMTMemoryAlloc.
+guest-vm = ["dxmt-core/guest-vm", "winemetal-sys/guest-vm"]
+# DXMT_PERF_BUILD: the core's statistics compiled out.
+perf-build = ["dxmt-core/perf-build"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-core = { workspace = true }
+log = { workspace = true }
+winemetal-sys = { workspace = true }
+
+[dev-dependencies]
+dxmt-fakes = { path = "../../dxmt/fakes" }

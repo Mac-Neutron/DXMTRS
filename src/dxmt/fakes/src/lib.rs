@@ -103,6 +103,15 @@ pub fn take_log() -> Vec<(u32, String)> {
     core::mem::take(&mut state().log)
 }
 
+/// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
+pub const FAKE_DEVICES: [u64; 2] = [0xe1, 0xe2];
+
+/// The registry ID `MTLDevice_registryID` answers for `device`.
+#[must_use]
+pub const fn fake_registry_id(device: u64) -> u64 {
+    0x1_0000_0000 | device
+}
+
 /// Captures an `encodeCommands` call and the records from `head` on, as `kind`'s.
 fn encode(name: &str, kind: &Records, encoder: u64, head: *const WmtcmdBase) {
     // SAFETY: the core hands winemetal a list of live records of `kind`'s encoder.
@@ -176,6 +185,30 @@ const extern "C-unwind" fn fake_supports_family(_device: u64, _family: u32) -> b
 
 #[unsafe(export_name = "MTLDevice_setShouldMaximizeConcurrentCompilation")]
 const extern "C-unwind" fn fake_maximize_concurrent(_device: u64, _value: bool) {}
+
+#[unsafe(export_name = "WMTCopyAllDevices")]
+extern "C-unwind" fn fake_copy_all_devices() -> u64 {
+    state().made_of(0)
+}
+
+#[unsafe(export_name = "NSArray_count")]
+const extern "C-unwind" fn fake_array_count(_array: u64) -> u64 {
+    FAKE_DEVICES.len() as u64
+}
+
+#[unsafe(export_name = "NSArray_object")]
+extern "C-unwind" fn fake_array_object(_array: u64, index: u64) -> u64 {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| FAKE_DEVICES.get(i))
+        .copied()
+        .unwrap_or(0)
+}
+
+#[unsafe(export_name = "MTLDevice_registryID")]
+const extern "C-unwind" fn fake_registry_id_of(device: u64) -> u64 {
+    fake_registry_id(device)
+}
 
 #[unsafe(export_name = "MTLDevice_newCommandQueue")]
 extern "C-unwind" fn fake_new_command_queue(device: u64, _max_command_buffers: u64) -> u64 {
