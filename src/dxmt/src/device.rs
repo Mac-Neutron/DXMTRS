@@ -70,6 +70,26 @@ impl Device {
         }
     }
 
+    /// A device on the made-up handle `handle`, for a front end's host tests on `dxmt-fakes`.
+    ///
+    /// The handle is at most 0x1000, so the device makes no command library; every Metal call
+    /// goes to the test binary's fakes.
+    ///
+    /// # Panics
+    ///
+    /// When `handle` is 0 or above 0x1000, or as [`Device::new`].
+    #[cfg(feature = "headless")]
+    #[must_use]
+    pub fn headless(handle: u64, config: QueueConfig) -> Self {
+        assert!(
+            handle <= 0x1000,
+            "a made-up device handle is at most 0x1000"
+        );
+        // SAFETY: a made-up handle, which only the test binary's fakes see.
+        let mtl = unsafe { Obj::adopt(handle) }.expect("a non-zero handle");
+        Self::with_config(mtl, 0, config)
+    }
+
     /// The Metal device.
     #[must_use]
     pub const fn device(&self) -> &Obj {

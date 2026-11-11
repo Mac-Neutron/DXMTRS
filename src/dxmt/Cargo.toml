@@ -13,6 +13,9 @@ publish = false
 perf-build = ["dxmt-util/perf-build"]
 # The VM guest's build (meson's guest_vm option): winemetal's guest-only functions.
 guest-vm = ["winemetal-sys/guest-vm"]
+# Test support for a front end's host tests (dxmt-fakes): `Encoder::headless`, `Device::headless`
+# and `test_support`. It exports no symbols, so it is safe to unify into any test build.
+headless = []
 
 [lints]
 workspace = true

@@ -332,7 +332,7 @@ impl Encoder {
     }
 
     /// An encoder without Metal objects: no dummies (unbound slots read address 0), no fences.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "headless"))]
     #[must_use]
     pub fn headless() -> Self {
         Self::with(0, 0x1000, Box::default(), None, 0, None)

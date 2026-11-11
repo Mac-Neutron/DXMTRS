@@ -1,0 +1,15 @@
+[package]
+name = "dxmt-fakes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Dev-only: the winemetal fakes a front end's host tests run dxmt-core on, with a capture of the passes a commit encodes; in no shipped build"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+dxmt-core = { workspace = true, features = ["headless"] }
+winemetal-sys = { workspace = true }

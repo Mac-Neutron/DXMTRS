@@ -39,4 +39,6 @@ pub mod staging;
 pub mod state_map;
 pub mod stats;
 pub mod swapchain;
+#[cfg(any(test, feature = "headless"))]
+pub mod test_support;
 pub mod topology;

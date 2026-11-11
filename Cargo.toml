@@ -16,6 +16,7 @@ members = [
     "src/d3d9/unix",
     "src/dxgi",
     "src/dxmt",
+    "src/dxmt/fakes",
     "src/nvapi",
     "src/nvngx",
     "src/replay",
