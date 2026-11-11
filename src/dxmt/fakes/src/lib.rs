@@ -134,6 +134,26 @@ const extern "C-unwind" fn fake_description(_object: u64) -> u64 {
     0
 }
 
+#[unsafe(export_name = "NSString_string")]
+extern "C-unwind" fn fake_nsstring_string(_data: *const c_char, _encoding: u64) -> u64 {
+    state().made_of(0)
+}
+
+#[unsafe(export_name = "NSString_lengthOfBytesUsingEncoding")]
+const extern "C-unwind" fn fake_nsstring_length(_string: u64, _encoding: u64) -> u64 {
+    0
+}
+
+#[unsafe(export_name = "NSString_getCString")]
+const extern "C-unwind" fn fake_nsstring_get_cstring(
+    _string: u64,
+    _buffer: *mut c_char,
+    _max: u64,
+    _encoding: u64,
+) -> u32 {
+    0
+}
+
 #[unsafe(export_name = "NSAutoreleasePool_alloc_init")]
 extern "C-unwind" fn fake_autorelease_pool() -> u64 {
     state().made_of(0)
