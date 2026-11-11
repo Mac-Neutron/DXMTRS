@@ -16,6 +16,35 @@ use winemetal_sys::{
     },
 };
 
+/// `SM50_SHADER_D3D9`, the argument type of a D3D9 stage's specialization (`airconv_public.h`).
+pub const SM50_SHADER_D3D9: u32 = 10;
+/// Bytes of the vertex half of `SM50_SHADER_D3D9_DATA` (airconv-ir's `VS_SPEC_WIRE`).
+pub const D3D9_VS_WIRE: usize = 6;
+/// Bytes of the pixel half of `SM50_SHADER_D3D9_DATA` (airconv-ir's `VARIANT_KEY_WIRE`).
+pub const D3D9_PS_WIRE: usize = 22;
+
+/// `SM50_SHADER_D3D9_DATA`: a D3D9 stage's specialization, a node of a compile's argument chain.
+///
+/// 48 bytes on a 64-bit process (`stage` at 12, `vs` at 16, `ps` at 22), 40 on a 32-bit one.
+#[repr(C)]
+pub struct Sm50ShaderD3d9Data {
+    pub next: *mut c_void,
+    /// [`SM50_SHADER_D3D9`].
+    pub r#type: u32,
+    /// 0 for a vertex shader, 1 for a pixel shader.
+    pub stage: u32,
+    pub vs: [u8; D3D9_VS_WIRE],
+    pub ps: [u8; D3D9_PS_WIRE],
+}
+
+const _: () = {
+    let wide = size_of::<usize>() == 8;
+    assert!(size_of::<Sm50ShaderD3d9Data>() == if wide { 48 } else { 40 });
+    assert!(core::mem::offset_of!(Sm50ShaderD3d9Data, stage) == if wide { 12 } else { 8 });
+    assert!(core::mem::offset_of!(Sm50ShaderD3d9Data, vs) == if wide { 16 } else { 12 });
+    assert!(core::mem::offset_of!(Sm50ShaderD3d9Data, ps) == if wide { 22 } else { 18 });
+};
+
 /// An owned `sm50_shader_t` handle; 0 is none (`SM50Shader`, `d3d12_pipeline.hpp:30-47`).
 pub struct Sm50Shader(pub u64);
 
@@ -42,15 +71,16 @@ impl Drop for Sm50Bitcode {
 
 /// An owned `sm50_error_t` handle; 0 is none (`SM50Error`, `d3d12_pipeline.hpp:68-85`).
 ///
-/// The second field marks `initialize`'s own refusal of a stream that is not DXBC.
-pub struct Sm50Error(pub u64, bool);
+/// The second field is an entry's own refusal of bytes it does not take, before airconv sees
+/// them: [`initialize`]'s of a stream that is not DXBC, [`initialize_dxso`]'s of DXBC.
+pub struct Sm50Error(pub u64, Option<&'static str>);
 
 impl Sm50Error {
     /// The error's text (`SM50GetErrorMessage`).
     #[must_use]
     pub fn message(&self) -> String {
-        if self.1 {
-            return "not a DXBC container".to_owned();
+        if let Some(refusal) = self.1 {
+            return refusal.to_owned();
         }
         if self.0 == 0 {
             return "no airconv error object".to_owned();
@@ -97,7 +127,7 @@ pub fn initialize(
     reflection: &mut MtlShaderReflection,
 ) -> Result<Sm50Shader, Sm50Error> {
     if !bytecode.starts_with(b"DXBC") {
-        return Err(Sm50Error(0, true));
+        return Err(Sm50Error(0, Some("not a DXBC container")));
     }
     let mut shader = 0;
     let mut error = 0;
@@ -114,8 +144,57 @@ pub fn initialize(
     if status == 0 {
         Ok(Sm50Shader(shader))
     } else {
-        Err(Sm50Error(error, false))
+        Err(Sm50Error(error, None))
     }
+}
+
+/// Parses a D3D9 token stream (`bytecode`, DXSO) into a shader, with the node its compile needs.
+///
+/// `wire` is the stage's specialization as airconv-ir's `StageSpec::to_wire` gives it: the stage
+/// (0 vertex, 1 pixel), the vertex half and the pixel half. The returned
+/// [`Sm50ShaderD3d9Data`] goes into the argument chain [`compile`] is handed, after
+/// `SM50_SHADER_COMMON`'s node, so [`compile`], [`compiled_data`] and [`load_function`] serve D3D9
+/// as they serve D3D10-12. A DXSO shader has no reflection to write. DXBC is refused: D3D9 does
+/// not create shaders from a D3D10-12 container.
+///
+/// # Errors
+///
+/// The refusal of a DXBC container, or airconv's error when it refuses the tokens.
+pub fn initialize_dxso(
+    bytecode: &[u8],
+    wire: (u32, [u8; D3D9_VS_WIRE], [u8; D3D9_PS_WIRE]),
+) -> Result<(Sm50Shader, Sm50ShaderD3d9Data), Sm50Error> {
+    if bytecode.starts_with(b"DXBC") {
+        return Err(Sm50Error(
+            0,
+            Some("a DXBC container, not a D3D9 token stream"),
+        ));
+    }
+    let mut shader = 0;
+    let mut error = 0;
+    // SAFETY: `bytecode` is valid for its length; the shader and error outputs are writable and
+    // the reflection is null, which airconv skips.
+    let status = unsafe {
+        SM50Initialize(
+            bytecode.as_ptr().cast::<c_void>(),
+            bytecode.len(),
+            &raw mut shader,
+            core::ptr::null_mut(),
+            &raw mut error,
+        )
+    };
+    if status != 0 {
+        return Err(Sm50Error(error, None));
+    }
+    let (stage, vs, ps) = wire;
+    let d3d9 = Sm50ShaderD3d9Data {
+        next: core::ptr::null_mut(),
+        r#type: SM50_SHADER_D3D9,
+        stage,
+        vs,
+        ps,
+    };
+    Ok((Sm50Shader(shader), d3d9))
 }
 
 /// Compiles the function `name` through `entry`.
@@ -160,7 +239,7 @@ pub unsafe fn compile(
     if status == 0 {
         Ok(Sm50Bitcode(bitcode))
     } else {
-        Err(Sm50Error(error, false))
+        Err(Sm50Error(error, None))
     }
 }
 

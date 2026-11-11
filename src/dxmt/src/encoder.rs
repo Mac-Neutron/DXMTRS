@@ -60,6 +60,7 @@ use crate::{
 };
 
 mod argument;
+pub mod direct;
 mod flush;
 mod gaps;
 mod optimize;

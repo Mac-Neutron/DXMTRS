@@ -4,10 +4,10 @@ use std::sync::Arc;
 use winemetal_sys::{
     Obj,
     wire::{
-        WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_RENDER_COMMAND_DRAW,
         WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WMT_TEXTURE_TYPE2D,
         WMT_TEXTURE_USAGE_RENDER_TARGET, WMTClearColor, WMTTextureInfo, WmtcmdBase,
-        WmtcmdRenderSetbufferoffset,
+        WmtcmdRenderDraw, WmtcmdRenderSetbufferoffset,
     },
 };
 use winemetal_wire::MemPtr;
@@ -15,8 +15,9 @@ use winemetal_wire::MemPtr;
 use super::*;
 use crate::{
     deptrack::Access,
-    encoder::{Target, stage},
+    encoder::{Target, direct, stage},
     resource::{Texture, TextureAllocationFlags},
+    test_support::{Records, format_pass_records},
 };
 
 /// `MTLHeap_newTexture`: a made-up handle per offset, which nothing dereferences.
@@ -253,5 +254,61 @@ fn a_target_drawn_again_128_ids_on_keeps_its_first_pass() {
         offsets(&encoder.passes[last]),
         [2],
         "the second keeps only its own records"
+    );
+}
+
+/// A render pass drawing to `texture` (loaded with `load`), which binds `bytes` itself, then draws.
+fn draw_with_own_binds(encoder: &mut Encoder, texture: &Arc<Texture>, load: u32, bytes: &[u8]) {
+    encoder.start_render_pass(0, 0, 1, None);
+    let attachment =
+        encoder.attachment::<{ stage::PIXEL }>(texture, texture.full_view(), Access::WRITE);
+    let targets = encoder.render_targets().expect("a render pass");
+    targets.colors[0].target = Target {
+        attachment,
+        load_action: load,
+        store_action: WMT_STORE_ACTION_STORE,
+        level: 0,
+        slice: 0,
+        depth_plane: 0,
+    };
+    targets.render_target_array_length = 1;
+    direct::bind_bytes::<{ stage::VERTEX }>(encoder, 0, bytes);
+    encoder.encode_render_command(WmtcmdRenderDraw {
+        r#type: WMT_RENDER_COMMAND_DRAW,
+        reserved: [0; 3],
+        next: MemPtr::NULL,
+        primitive_type: 3,
+        vertex_start: 0,
+        vertex_count: 3,
+        instance_count: 1,
+        base_instance: 0,
+    });
+    encoder.end_pass();
+}
+
+/// Two same-target passes without argument buffers merge, each pass's binds before its own draw.
+///
+/// DXMTRS C4-8: a D3D9 render pass re-emits all its state.
+#[test]
+fn merged_passes_keep_each_pass_state() {
+    let target = texture(0x100);
+    let mut encoder = Encoder::headless();
+    draw_with_own_binds(&mut encoder, &target, WMT_LOAD_ACTION_DONT_CARE, &[1; 16]);
+    draw_with_own_binds(&mut encoder, &target, WMT_LOAD_ACTION_LOAD, &[2; 32]);
+    encoder.optimize();
+    assert!(matches!(encoder.passes[0].kind, PassKind::Null));
+    // SAFETY: the merged pass's own list, in the encoder's memory.
+    let lines =
+        unsafe { format_pass_records(&Records::Render, encoder.passes[1].records().as_ptr()) };
+    let draw = "render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 \
+                base_instance=0";
+    assert_eq!(
+        lines,
+        [
+            "render 46 length=16 index=0",
+            draw,
+            "render 46 length=32 index=0",
+            draw
+        ]
     );
 }
