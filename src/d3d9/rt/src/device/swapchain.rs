@@ -94,8 +94,9 @@ impl CoreDevice {
             scale_factor: 1.0,
             sample_count: 1,
         };
-        // SAFETY: the device, the layer (held by `view` until the window's drop, after the
-        // presenter's) and the command library (the device's) outlive the presenter.
+        // SAFETY: the device and the command library outlive every present the presenter
+        // encodes (the queue that encodes them drops first, with the device); the layer is held
+        // by `view`, released in the window's drop after the presenter.
         let presenter = unsafe { Presenter::new(&desc) };
         presenter.change_layer_properties(
             WMT_PIXEL_FORMAT_BGRA8_UNORM,
