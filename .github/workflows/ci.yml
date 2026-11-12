@@ -10,6 +10,11 @@ on:
     branches:
     - main
 
+# A newer push to the same branch or pull request supersedes the run before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   packages: write
@@ -351,6 +356,7 @@ jobs:
 
   build-gcc-release-x86-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine]
     steps:
       - name: Checkout
@@ -514,6 +520,7 @@ jobs:
 
   build-clang-release-x86-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine, setup-llvm-mingw]
     steps:
       - name: Checkout
@@ -563,6 +570,7 @@ jobs:
 
   build-clang-debugoptimized-arm64ec-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine-arm64ec, setup-llvm-mingw, setup-llvm-darwin-arm64]
     steps:
       - name: Checkout
@@ -618,6 +626,7 @@ jobs:
 
   build-clang-release-arm64ec-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine-arm64ec, setup-llvm-mingw, setup-llvm-darwin-arm64]
     steps:
       - name: Checkout
@@ -673,6 +682,7 @@ jobs:
 
   build-clang-release-arm64-macos:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: setup-llvm-darwin-arm64
     steps:
       - name: Checkout
