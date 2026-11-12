@@ -1,10 +1,15 @@
 use core::ffi::c_void;
 
-use mtld3d_core::{convert::InputSemantic, ids::ProgramId};
+use mtld3d_core::{
+    convert::InputSemantic, ids::ProgramId, pipeline_key::ShaderCode, shader_create::CoreShaderMeta,
+};
 use mtld3d_shared::InPtr;
 use mtld3d_types::{Guid, IDirect3DVertexShader9Vtbl};
 
 use super::{D3DERR_INVALIDCALL, com_ref::ComUnknown, device::DeviceInner};
+
+/// A core device's program: its interned code and what its draws need of it.
+pub type CoreProgram = (ShaderCode, CoreShaderMeta);
 
 static DIRECT3D_VERTEX_SHADER9_VTBL: IDirect3DVertexShader9Vtbl = IDirect3DVertexShader9Vtbl {
     query_interface: vs_query_interface,
@@ -47,6 +52,8 @@ impl Direct3DVertexShader9 {
             flags,
             input_semantics,
             bytecode,
+            #[cfg(feature = "core-runtime")]
+            core: None,
         }));
         Self {
             vtbl: &raw const DIRECT3D_VERTEX_SHADER9_VTBL,
@@ -97,6 +104,21 @@ impl Direct3DVertexShader9 {
         &self.inner().input_semantics
     }
 
+    /// The shader of a core device: `code` (its tokens the `GetFunction` bytecode) and `meta`.
+    #[cfg(feature = "core-runtime")]
+    #[must_use]
+    pub fn with_core(self, code: ShaderCode, meta: CoreShaderMeta) -> Self {
+        // SAFETY: `new`'s own box, which nothing else reaches yet.
+        unsafe { (*self.inner).core = Some((code, meta)) };
+        self
+    }
+
+    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    pub fn core(&self) -> Option<&CoreProgram> {
+        self.inner().core.as_ref()
+    }
+
     fn inner(&self) -> &VertexShaderInner {
         // SAFETY: `self.inner` was installed by `Self::new` as a
         // `Box::into_raw` and is dropped only in `vs_release` at refcount
@@ -142,6 +164,9 @@ struct VertexShaderInner {
     /// Kept verbatim so `GetFunction` can hand it back. Nothing else reads
     /// it: the translation works from the parsed `DxsoProgram`.
     bytecode: std::sync::Arc<[u32]>,
+    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    core: Option<CoreProgram>,
 }
 
 #[inline]

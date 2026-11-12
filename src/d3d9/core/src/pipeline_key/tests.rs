@@ -12,12 +12,14 @@ use mtld3d_types::{
     D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_TEXCOORD, D3DFVF_DIFFUSE,
     D3DFVF_SPECULAR, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, D3DVIEWPORT9, render_state_defaults,
 };
+use rustc_hash::FxHashMap;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
     ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_ps_variant, core_viewport, float_rows,
-    indexed_up_vertices, pipeline_source, up_byte_count, viewport_depth_range,
+    indexed_up_vertices, pipeline_source, pos_fixup, up_byte_count, viewport_covers,
+    viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -531,4 +533,70 @@ fn up_byte_count_refuses_an_overflow() {
     assert_eq!(up_byte_count(u32::MAX, 1), usize::try_from(u32::MAX).ok());
     assert_eq!(up_byte_count(u32::MAX, 2), None);
     assert_eq!(up_byte_count(0x1_0000, 0x1_0000), None);
+}
+
+/// A device's programs of the same tokens share one `Arc`, its id their hash.
+///
+/// An entry under the id holding other tokens (a collision) or a dropped program is replaced,
+/// never reused.
+#[test]
+fn shader_code_interning_is_exact() {
+    let mut programs = FxHashMap::default();
+    let first = ShaderCode::intern(&mut programs, &VS_POS_TEX1);
+    let again = ShaderCode::intern(&mut programs, &VS_POS_TEX1);
+    assert_eq!(first.tokens().as_ptr(), again.tokens().as_ptr());
+    assert_eq!(first.id(), ProgramId::from_tokens(&VS_POS_TEX1));
+    let other: Arc<[u32]> = Arc::from(&[0xffff_0200_u32, 0x0000_ffff][..]);
+    programs.insert(first.id(), Arc::downgrade(&other));
+    let collided = ShaderCode::intern(&mut programs, &VS_POS_TEX1);
+    assert_eq!(collided.tokens(), VS_POS_TEX1);
+    assert_eq!(collided, first);
+    drop((first, again, collided));
+    let fresh = ShaderCode::intern(&mut programs, &VS_POS_TEX1);
+    assert_eq!(fresh.tokens(), VS_POS_TEX1);
+    assert_eq!(programs.len(), 1);
+}
+
+/// A Clear covers the back buffer under a viewport from its origin over all of it, or unset.
+#[test]
+fn viewport_covers_the_target() {
+    let target = (64, 32);
+    let viewport = |x, y, width, height| D3DVIEWPORT9 {
+        x,
+        y,
+        width,
+        height,
+        min_z: 0.0,
+        max_z: 1.0,
+    };
+    assert!(viewport_covers(&viewport(0, 0, 64, 32), target));
+    assert!(viewport_covers(&viewport(0, 0, 80, 40), target));
+    assert!(viewport_covers(&viewport(5, 5, 0, 32), target));
+    assert!(!viewport_covers(&viewport(0, 0, 32, 32), target));
+    assert!(!viewport_covers(&viewport(0, 1, 64, 32), target));
+    assert!(!viewport_covers(&viewport(1, 0, 64, 32), target));
+    assert!(!viewport_covers(&viewport(0, 0, 64, 31), target));
+}
+
+/// The half-pixel fixup is the drawn viewport's; only a pre-transformed draw clamps its depth.
+#[test]
+fn pos_fixup_follows_the_drawn_viewport() {
+    let target = (256, 128);
+    let viewport = |width, height| D3DVIEWPORT9 {
+        x: 0,
+        y: 0,
+        width,
+        height,
+        min_z: 0.0,
+        max_z: 1.0,
+    };
+    let bits = |v: [f32; 5]| v.map(f32::to_bits);
+    assert_eq!(
+        bits(pos_fixup(&viewport(128, 64), target, false)),
+        bits([1.0 / 128.0, -1.0 / 64.0, 0.0, 1.0, 0.0])
+    );
+    assert_eq!(
+        bits(pos_fixup(&viewport(0, 64), target, true)),
+        bits([1.0 / 256.0, -1.0 / 128.0, 1.0, 1.0, 0.0])
+    );
 }

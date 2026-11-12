@@ -52,6 +52,9 @@ pub struct VertexDeclInner {
     passthrough: [u8; MAX_LINKED_INPUTS],
     /// The FVF `SetFVF` built this declaration for, 0 for one the game created.
     fvf: u32,
+    /// The elements as the core runtime's pipeline key holds them, built once here.
+    #[cfg(feature = "core-runtime")]
+    code: mtld3d_core::pipeline_key::DeclCode,
 }
 
 impl VertexDeclInner {
@@ -87,6 +90,12 @@ impl VertexDeclInner {
     pub const fn fvf(&self) -> u32 {
         self.fvf
     }
+
+    /// The elements as the core runtime's pipeline key holds them.
+    #[cfg(feature = "core-runtime")]
+    pub const fn code(&self) -> &mtld3d_core::pipeline_key::DeclCode {
+        &self.code
+    }
 }
 
 pub struct VertexDeclCreateInfo<'a> {
@@ -104,6 +113,10 @@ impl Direct3DVertexDeclaration9 {
         let packed = pack_vertex_decl(info.elements)?;
         let inner = Box::into_raw(Box::new(VertexDeclInner {
             device_inner: info.device_inner,
+            #[cfg(feature = "core-runtime")]
+            code: mtld3d_core::pipeline_key::DeclCode::new(
+                packed.elements_with_end.as_slice().into(),
+            ),
             elements_with_end: packed.elements_with_end,
             hash: packed.hash,
             stream_mask: packed.stream_mask,

@@ -1,10 +1,14 @@
 use core::ffi::c_void;
 
 use mtld3d_core::ids::ProgramId;
+#[cfg(feature = "core-runtime")]
+use mtld3d_core::{pipeline_key::ShaderCode, shader_create::CoreShaderMeta};
 use mtld3d_shared::InPtr;
 use mtld3d_types::{Guid, IDirect3DPixelShader9Vtbl};
 
 use super::{D3DERR_INVALIDCALL, com_ref::ComUnknown, device::DeviceInner};
+#[cfg(feature = "core-runtime")]
+use crate::vertex_shader::CoreProgram;
 
 static DIRECT3D_PIXEL_SHADER9_VTBL: IDirect3DPixelShader9Vtbl = IDirect3DPixelShader9Vtbl {
     query_interface: ps_query_interface,
@@ -42,6 +46,8 @@ impl Direct3DPixelShader9 {
             flags,
             color_out_mask,
             bytecode,
+            #[cfg(feature = "core-runtime")]
+            core: None,
         }));
         Self {
             vtbl: &raw const DIRECT3D_PIXEL_SHADER9_VTBL,
@@ -94,6 +100,21 @@ impl Direct3DPixelShader9 {
     /// Bit `i` set ⇒ the bytecode writes `oCi` (see `DxsoProgram::color_out_mask`).
     pub fn color_out_mask(&self) -> u8 {
         self.inner().color_out_mask
+    }
+
+    /// The shader of a core device: `code` (its tokens the `GetFunction` bytecode) and `meta`.
+    #[cfg(feature = "core-runtime")]
+    #[must_use]
+    pub fn with_core(self, code: ShaderCode, meta: CoreShaderMeta) -> Self {
+        // SAFETY: `new`'s own box, which nothing else reaches yet.
+        unsafe { (*self.inner).core = Some((code, meta)) };
+        self
+    }
+
+    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    pub fn core(&self) -> Option<&CoreProgram> {
+        self.inner().core.as_ref()
     }
 
     fn inner(&self) -> &PixelShaderInner {
@@ -159,6 +180,9 @@ struct PixelShaderInner {
     /// Kept verbatim so `GetFunction` can hand it back. Nothing else reads
     /// it: the translation works from the parsed `DxsoProgram`.
     bytecode: std::sync::Arc<[u32]>,
+    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    core: Option<CoreProgram>,
 }
 
 #[inline]

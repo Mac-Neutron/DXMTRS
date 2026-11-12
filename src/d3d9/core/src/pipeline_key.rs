@@ -11,12 +11,13 @@
 
 use std::{
     hash::{Hash, Hasher},
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSamplerKinds, VsSpec};
 use mtld3d_shared::shader_create::ShaderStage;
 use mtld3d_types::{D3DVERTEXELEMENT9, D3DVIEWPORT9};
+use rustc_hash::FxHashMap;
 
 use crate::{
     convert::{
@@ -46,6 +47,24 @@ impl ShaderCode {
         Self { id, tokens }
     }
 
+    /// The program `tokens`, sharing the `Arc` of a live program of the same tokens in `programs`.
+    ///
+    /// Its id is the tokens' hash, so one `Arc` never carries two ids. An entry whose program
+    /// is gone or holds other tokens under the same id is replaced.
+    pub fn intern(programs: &mut FxHashMap<ProgramId, Weak<[u32]>>, tokens: &[u32]) -> Self {
+        let id = ProgramId::from_tokens(tokens);
+        let live = programs
+            .get(&id)
+            .and_then(Weak::upgrade)
+            .filter(|kept| **kept == *tokens);
+        let tokens = live.unwrap_or_else(|| {
+            let fresh = Arc::<[u32]>::from(tokens);
+            programs.insert(id, Arc::downgrade(&fresh));
+            fresh
+        });
+        Self { id, tokens }
+    }
+
     /// The program's id.
     #[must_use]
     pub const fn id(&self) -> ProgramId {
@@ -56,6 +75,12 @@ impl ShaderCode {
     #[must_use]
     pub fn tokens(&self) -> &[u32] {
         &self.tokens
+    }
+
+    /// The program's tokens, shared.
+    #[must_use]
+    pub fn shared_tokens(&self) -> Arc<[u32]> {
+        Arc::clone(&self.tokens)
     }
 }
 
@@ -468,17 +493,23 @@ pub const fn viewport_depth_range(min_z: f32, max_z: f32) -> (f32, f32) {
     (min_z, max_z.max(min_z + 0.001))
 }
 
+/// Whether `v` covers a `target` of `(width, height)`: from its origin over all of it, or unset.
+///
+/// A zero width or height covers the target, as [`core_viewport`] draws it.
+#[must_use]
+pub const fn viewport_covers(v: &D3DVIEWPORT9, target: (u32, u32)) -> bool {
+    v.width == 0
+        || v.height == 0
+        || (v.x == 0 && v.y == 0 && v.width >= target.0 && v.height >= target.1)
+}
+
 /// The Metal viewport of `v` on a `target` of `(width, height)`.
 ///
 /// `(origin x, origin y, width, height, znear, zfar)`: a zero width or height covers the
 /// target, as mtld3d's pass does, and the depth range is [`viewport_depth_range`]'s.
 #[must_use]
 pub fn core_viewport(v: &D3DVIEWPORT9, target: (u32, u32)) -> [f64; 6] {
-    let (x, y, width, height) = if v.width != 0 && v.height != 0 {
-        (v.x, v.y, v.width, v.height)
-    } else {
-        (0, 0, target.0, target.1)
-    };
+    let (x, y, width, height) = drawn_rect(v, target);
     let (znear, zfar) = viewport_depth_range(v.min_z, v.max_z);
     [
         f64::from(x),
@@ -487,6 +518,33 @@ pub fn core_viewport(v: &D3DVIEWPORT9, target: (u32, u32)) -> [f64; 6] {
         f64::from(height),
         f64::from(znear),
         f64::from(zfar),
+    ]
+}
+
+/// The rectangle `v` draws to on a `target` of `(width, height)`: all of it when unset.
+const fn drawn_rect(v: &D3DVIEWPORT9, target: (u32, u32)) -> (u32, u32, u32, u32) {
+    if v.width != 0 && v.height != 0 {
+        (v.x, v.y, v.width, v.height)
+    } else {
+        (0, 0, target.0, target.1)
+    }
+}
+
+/// The vertex stages' `PosFixup` of a draw through `v` on `target`.
+///
+/// `(1 / width, -1 / height, depth clamp, render scale, depth bias)` of the drawn viewport, as
+/// mtld3d's draw binds it: the half-pixel offset; a pre-transformed (`rhw`) draw clamps its
+/// depth; no render scale and no depth bias (no depth surface under the core yet).
+#[must_use]
+pub fn pos_fixup(v: &D3DVIEWPORT9, target: (u32, u32), rhw: bool) -> [f32; 5] {
+    let (_, _, width, height) = drawn_rect(v, target);
+    let pixels = |n: u32| f32::from(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
+    [
+        1.0 / pixels(width),
+        -1.0 / pixels(height),
+        f32::from(u8::from(rhw)),
+        1.0,
+        0.0,
     ]
 }
 

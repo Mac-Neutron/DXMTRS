@@ -20,6 +20,8 @@ pub use mtld3d_core::encoder_data::{
 
 #[cfg(feature = "core-runtime")]
 mod core_arms;
+#[cfg(feature = "core-runtime")]
+mod core_draw;
 mod extended;
 mod frame_dump;
 mod mem_watch;
@@ -515,6 +517,9 @@ pub struct DeviceInner {
     /// The core runtime's device (`runtime.mode = core`), `None` for one of mtld3d's.
     #[cfg(feature = "core-runtime")]
     core: Option<Box<d3d9_rt::device::CoreDevice>>,
+    /// A core device's programs by id, for its shaders to share one `Arc` of the same tokens.
+    #[cfg(feature = "core-runtime")]
+    programs: rustc_hash::FxHashMap<ProgramId, std::sync::Weak<[u32]>>,
     /// Shared with the encoder thread and the unix completion handler.
     ///
     /// The frame's submit seq is stamped in `stamp_and_swap`; this atomic
@@ -1100,9 +1105,13 @@ impl DeviceInner {
         // whichever target is bound when it becomes a Metal command. Keeping it
         // logical here is also what holds the fixed-function XYZRHW row in the
         // game's screen space.
+        // A core device's draws take the viewport from `self.viewport`: no frame to push to.
+        #[cfg(feature = "core-runtime")]
+        if self.is_core() {
+            return;
+        }
         let (x, y, width, height) = (v.x, v.y, v.width, v.height);
-        let min_z = v.min_z;
-        let max_z = v.max_z.max(v.min_z + 0.001);
+        let (min_z, max_z) = mtld3d_core::pipeline_key::viewport_depth_range(v.min_z, v.max_z);
         self.push_control(crate::device::SetViewportOp {
             x,
             y,
@@ -3592,6 +3601,8 @@ impl Direct3DDevice9 {
             current_frame,
             #[cfg(feature = "core-runtime")]
             core: info.core,
+            #[cfg(feature = "core-runtime")]
+            programs: rustc_hash::FxHashMap::default(),
             coherent_seq,
             upload_coherent_seq,
             failed_submit_seq,
@@ -4918,11 +4929,6 @@ extern "system" fn device_get_direct3d(this: *mut c_void, ppd3d9: *mut *mut c_vo
 
 extern "system" fn device_get_device_caps(this: *mut c_void, caps: *mut D3DCAPS9) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetDeviceCaps",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDeviceCaps()");
     if caps.is_null() {
@@ -11329,11 +11335,6 @@ extern "system" fn device_multiply_transform(
 
 extern "system" fn device_set_viewport(this: *mut c_void, viewport: *const c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetViewport",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     // SAFETY: vtable in-param; `viewport` is *const D3DVIEWPORT9 per ABI.
     let Some(v) = (unsafe { ValueIn::<D3DVIEWPORT9>::read_opt(viewport) }) else {
@@ -11360,11 +11361,6 @@ extern "system" fn device_set_viewport(this: *mut c_void, viewport: *const c_voi
 
 extern "system" fn device_get_viewport(this: *mut c_void, viewport: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetViewport",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::ViewScissor);
     if viewport.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11545,11 +11541,6 @@ extern "system" fn device_get_light_enable(this: *mut c_void, index: u32, enable
 
 extern "system" fn device_set_clip_plane(this: *mut c_void, index: u32, plane: *const f32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetClipPlane",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if plane.is_null() {
         return D3DERR_INVALIDCALL;
@@ -11575,11 +11566,6 @@ extern "system" fn device_set_clip_plane(this: *mut c_void, index: u32, plane: *
 
 extern "system" fn device_get_clip_plane(this: *mut c_void, index: u32, plane: *mut f32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetClipPlane",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::FfFixed);
     if plane.is_null() {
         return D3DERR_INVALIDCALL;
@@ -13247,16 +13233,6 @@ extern "system" fn device_draw_primitive_up(
     vertex_stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    #[cfg(feature = "core-runtime")]
-    if let Some(hr) = core_arms::draw_primitive_up(
-        this,
-        primitive_type,
-        primitive_count,
-        vertex_data,
-        vertex_stride,
-    ) {
-        return hr;
-    }
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -13272,6 +13248,16 @@ extern "system" fn device_draw_primitive_up(
     // A draw of no primitives is valid and draws nothing.
     if primitive_count == 0 {
         return D3D_OK;
+    }
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_draw::draw_primitive_up(
+        dev,
+        primitive_type,
+        primitive_count,
+        vertex_data,
+        vertex_stride,
+    ) {
+        return hr;
     }
 
     // Triangle fan has no Metal primitive: the fan's vertices go up as they
@@ -13435,6 +13421,11 @@ fn propagate_const_delta(
     start_register: u32,
     slice: &[[f32; 4]],
 ) {
+    // A core device has no encoder mirror: its draws bind the rows from `ShaderBindings`.
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return;
+    }
     let start = start_register as usize;
     if start >= CONSTANT_ROWS || slice.is_empty() {
         return;
@@ -14381,11 +14372,6 @@ extern "system" fn device_draw_indexed_primitive_up(
     vertex_stride: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DrawIndexedPrimitiveUP",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -14417,6 +14403,22 @@ extern "system" fn device_draw_indexed_primitive_up(
             return D3DERR_INVALIDCALL;
         }
     };
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_draw::draw_indexed_primitive_up(
+        dev,
+        &core_draw::IndexedUp {
+            primitive: primitive_type,
+            min_vertex_index,
+            num_vertices,
+            primitive_count,
+            index_data,
+            index_format,
+            vertex_data,
+            stride: vertex_stride,
+        },
+    ) {
+        return hr;
+    }
 
     // Upload enough vertices to cover the indexed range. The inline indices are
     // absolute (base vertex 0), so copy `[0, min_vertex_index + num_vertices)`
@@ -14628,11 +14630,6 @@ extern "system" fn device_create_vertex_declaration(
     const MAX_ELEMENTS: usize = 64; // generous; D3D9 limit is MAXD3DDECLLENGTH=64
 
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreateVertexDeclaration",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if elements.is_null() || decl.is_null() {
         null_out(decl);
@@ -14723,11 +14720,6 @@ extern "system" fn device_create_vertex_declaration(
 
 extern "system" fn device_set_vertex_declaration(this: *mut c_void, decl: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetVertexDeclaration",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -14778,11 +14770,6 @@ extern "system" fn device_set_vertex_declaration(this: *mut c_void, decl: *mut c
 
 extern "system" fn device_get_vertex_declaration(this: *mut c_void, decl: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetVertexDeclaration",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if decl.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14884,11 +14871,6 @@ extern "system" fn device_set_fvf(this: *mut c_void, fvf: u32) -> i32 {
 
 extern "system" fn device_get_fvf(this: *mut c_void, fvf: *mut u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetFVF",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if fvf.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15013,11 +14995,6 @@ extern "system" fn device_create_vertex_shader(
     shader: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreateVertexShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     null_out(shader);
     if function.is_null() || shader.is_null() {
@@ -15030,11 +15007,12 @@ extern "system" fn device_create_vertex_shader(
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
     };
-    let mut created = match create_native_shader(
+    let created = create_shader(
         obj.inner(),
         &bytecode,
         mtld3d_shared::shader_create::ShaderStage::Vertex,
-    ) {
+    );
+    let (mut created, program) = match created {
         Ok(created) => created,
         Err(result) => return result,
     };
@@ -15057,7 +15035,9 @@ extern "system" fn device_create_vertex_shader(
             .usage
             .contains(mtld3d_shared::shader_create::ShaderUsage::BOOL_CONST),
     );
-    if let Err(result) = created.adopt(obj.inner()) {
+    if program.is_none()
+        && let Err(result) = created.adopt(obj.inner())
+    {
         return result;
     }
     let shader_obj = Direct3DVertexShader9::new(
@@ -15066,8 +15046,16 @@ extern "system" fn device_create_vertex_shader(
         created.max_const_used,
         const_usage,
         core::mem::take(&mut created.input_semantics),
-        Arc::from(bytecode),
+        program.as_ref().map_or_else(
+            || Arc::from(bytecode.as_slice()),
+            |(code, _)| code.shared_tokens(),
+        ),
     );
+    #[cfg(feature = "core-runtime")]
+    let shader_obj = match program {
+        Some((code, meta)) => shader_obj.with_core(code, meta),
+        None => shader_obj,
+    };
     let shader_ptr = Box::into_raw(Box::new(shader_obj));
     // SAFETY: shader_ptr is a freshly created live shader at refcount one.
     unsafe { crate::com_ref::com_register_child(shader_ptr) };
@@ -15114,6 +15102,47 @@ impl Drop for CreatedNativeShader {
             }
         }
     }
+}
+
+/// What a created shader's COM object is built from, and a core device's program.
+type CreatedShader = (
+    CreatedNativeShader,
+    Option<crate::vertex_shader::CoreProgram>,
+);
+
+/// The shader `bytecode` of `stage`, created by the device's runtime.
+///
+/// Parsed in-process on a core device (C4b2-3), by mtld3d's unix side otherwise.
+fn create_shader(
+    #[cfg(feature = "core-runtime")] dev: &mut DeviceInner,
+    #[cfg(not(feature = "core-runtime"))] dev: &DeviceInner,
+    bytecode: &[u32],
+    stage: mtld3d_shared::shader_create::ShaderStage,
+) -> Result<CreatedShader, i32> {
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        let (parsed, meta, code) = core_draw::create_core_shader(dev, bytecode, &stage)?;
+        let created = CreatedNativeShader {
+            runtime: 0,
+            // Nothing registered on a unix side, so nothing to adopt or cancel.
+            registration: 0,
+            shader_id: parsed.id,
+            max_const_used: parsed.max_const_used,
+            usage: parsed.usage,
+            color_out_mask: parsed.color_out_mask,
+            input_semantics: parsed
+                .input_semantics
+                .iter()
+                .map(|s| InputSemantic {
+                    usage: s.usage,
+                    usage_index: s.usage_index,
+                    register_index: s.register_index,
+                })
+                .collect(),
+        };
+        return Ok((created, Some((code, meta))));
+    }
+    create_native_shader(dev, bytecode, stage).map(|created| (created, None))
 }
 
 fn create_native_shader(
@@ -15206,11 +15235,6 @@ fn create_native_shader(
 
 extern "system" fn device_set_vertex_shader(this: *mut c_void, shader: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetVertexShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -15243,11 +15267,6 @@ extern "system" fn device_set_vertex_shader(this: *mut c_void, shader: *mut c_vo
 
 extern "system" fn device_get_vertex_shader(this: *mut c_void, shader: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetVertexShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if shader.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15279,11 +15298,6 @@ extern "system" fn device_set_vertex_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetVertexShaderConstantF",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15419,11 +15433,6 @@ extern "system" fn device_get_vertex_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetVertexShaderConstantF",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -15465,11 +15474,6 @@ extern "system" fn device_set_vertex_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetVertexShaderConstantI",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetVertexShaderConstantI",
@@ -15520,11 +15524,6 @@ extern "system" fn device_get_vertex_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetVertexShaderConstantI",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetVertexShaderConstantI",
@@ -15563,11 +15562,6 @@ extern "system" fn device_set_vertex_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetVertexShaderConstantB",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetVertexShaderConstantB",
@@ -15617,11 +15611,6 @@ extern "system" fn device_get_vertex_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetVertexShaderConstantB",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetVertexShaderConstantB",
@@ -15871,11 +15860,6 @@ extern "system" fn device_create_pixel_shader(
     shader: *mut *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreatePixelShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     null_out(shader);
     if function.is_null() || shader.is_null() {
@@ -15888,11 +15872,12 @@ extern "system" fn device_create_pixel_shader(
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
     };
-    let mut created = match create_native_shader(
+    let created = create_shader(
         obj.inner(),
         &bytecode,
         mtld3d_shared::shader_create::ShaderStage::Pixel,
-    ) {
+    );
+    let (mut created, program) = match created {
         Ok(created) => created,
         Err(result) => return result,
     };
@@ -15933,7 +15918,9 @@ extern "system" fn device_create_pixel_shader(
             .usage
             .contains(mtld3d_shared::shader_create::ShaderUsage::LINKED_INPUTS),
     );
-    if let Err(result) = created.adopt(obj.inner()) {
+    if program.is_none()
+        && let Err(result) = created.adopt(obj.inner())
+    {
         return result;
     }
     let shader_obj = Direct3DPixelShader9::new(
@@ -15942,8 +15929,16 @@ extern "system" fn device_create_pixel_shader(
         created.max_const_used,
         usage,
         created.color_out_mask,
-        Arc::from(bytecode),
+        program.as_ref().map_or_else(
+            || Arc::from(bytecode.as_slice()),
+            |(code, _)| code.shared_tokens(),
+        ),
     );
+    #[cfg(feature = "core-runtime")]
+    let shader_obj = match program {
+        Some((code, meta)) => shader_obj.with_core(code, meta),
+        None => shader_obj,
+    };
     let shader_ptr = Box::into_raw(Box::new(shader_obj));
     // SAFETY: shader_ptr is a freshly created live shader at refcount one.
     unsafe { crate::com_ref::com_register_child(shader_ptr) };
@@ -15954,11 +15949,6 @@ extern "system" fn device_create_pixel_shader(
 
 extern "system" fn device_set_pixel_shader(this: *mut c_void, shader: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetPixelShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -15992,11 +15982,6 @@ extern "system" fn device_set_pixel_shader(this: *mut c_void, shader: *mut c_voi
 
 extern "system" fn device_get_pixel_shader(this: *mut c_void, shader: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetPixelShader",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = bind_timer(this, BindSubCategory::Shader);
     if shader.is_null() {
         return D3DERR_INVALIDCALL;
@@ -16028,11 +16013,6 @@ extern "system" fn device_set_pixel_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetPixelShaderConstantF",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -16088,11 +16068,6 @@ extern "system" fn device_get_pixel_shader_constant_f(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetPixelShaderConstantF",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     if constant_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -16134,11 +16109,6 @@ extern "system" fn device_set_pixel_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetPixelShaderConstantI",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetPixelShaderConstantI",
@@ -16186,11 +16156,6 @@ extern "system" fn device_get_pixel_shader_constant_i(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetPixelShaderConstantI",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetPixelShaderConstantI",
@@ -16229,11 +16194,6 @@ extern "system" fn device_set_pixel_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetPixelShaderConstantB",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "SetPixelShaderConstantB",
@@ -16280,11 +16240,6 @@ extern "system" fn device_get_pixel_shader_constant_b(
     count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetPixelShaderConstantB",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::ShaderConst);
     let count = match int_bool_constant_rows(
         "GetPixelShaderConstantB",
