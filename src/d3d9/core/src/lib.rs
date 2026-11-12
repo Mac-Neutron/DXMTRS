@@ -67,6 +67,7 @@ pub mod page_box;
 pub mod page_box_pool;
 pub mod passes;
 pub mod perf;
+pub mod pipeline_key;
 pub mod pipeline_memo;
 pub mod pipeline_state;
 pub mod pixel_convert;

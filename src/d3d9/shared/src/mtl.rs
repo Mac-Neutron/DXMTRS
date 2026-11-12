@@ -654,6 +654,21 @@ pub const SET_BYTES_MAX: usize = 4096;
 /// caps at compile time; the presenter sizes its slot array with it.
 pub const PRESENT_PIPELINE_DEPTH: usize = 5;
 
+/// Fragment-stage buffer slot of the float constant table (`ps_c`).
+///
+/// The top of the fragment uniforms (airconv's `dxso/bindings.rs`), which count down from it.
+pub const PS_FLOAT_CONST_SLOT: u32 = 15;
+
+/// Fragment-stage buffer slot of the alpha test's reference.
+///
+/// Bound only for a draw whose pixel variant alpha-tests.
+pub const PS_ALPHA_REF_SLOT: u32 = 14;
+
+/// Fragment-stage buffer slot of `fog_data`.
+///
+/// Bound only for a draw whose pixel variant fogs.
+pub const PS_FOG_SLOT: u32 = 13;
+
 /// Fragment-stage buffer slot of the runtime integer constant table (`ps_i`).
 ///
 /// The fragment uniforms count down from 15 (`ps_c`, alpha ref, fog, bump

@@ -456,6 +456,15 @@ src/d3d9/core/src/perf.rs PairStatsSample Clone,Copy
 src/d3d9/core/src/perf.rs PerPairStats Default,Clone,Copy
 src/d3d9/core/src/perf.rs Stat Clone,Copy,Default
 src/d3d9/core/src/perf.rs SurfaceSubCategory Clone,Copy,Debug,strum::EnumCount
+src/d3d9/core/src/pipeline_key.rs CoreRefusal Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/core/src/pipeline_key.rs DeclCode Clone,Debug
+src/d3d9/core/src/pipeline_key.rs DrawFacts Clone,Copy,Default
+src/d3d9/core/src/pipeline_key.rs DrawFlags Clone,Copy,Debug,Default,PartialEq,Eq
+src/d3d9/core/src/pipeline_key.rs PipelineKey Clone,Debug,PartialEq,Eq,Hash
+src/d3d9/core/src/pipeline_key.rs PsStageKey Clone,Debug,PartialEq,Eq,Hash
+src/d3d9/core/src/pipeline_key.rs ShaderCode Clone,Debug
+src/d3d9/core/src/pipeline_key.rs StageKind Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/core/src/pipeline_key.rs VsStageKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs ExtraColorAttachments Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs PipelineAttachFlags Clone,Copy,Debug,Default,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs PipelineRsBits Clone,Copy,Debug,Default,PartialEq,Eq,Hash
@@ -477,6 +486,7 @@ src/d3d9/core/src/shader_cache/source.rs ShaderSource Clone,Debug,PartialEq,Eq
 src/d3d9/core/src/shader_cache/source.rs Specialization Clone,Debug,PartialEq,Eq
 src/d3d9/core/src/shader_compile_stats.rs CompileBucket Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/shader_compile_stats.rs Snapshot Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/core/src/shader_create.rs CoreMetaFlags Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/shader_key.rs CachedKind Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/staging_coverage.rs CoverageState Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/stretch_rect.rs RejectReason Clone,Copy,Debug,PartialEq,Eq

@@ -1,6 +1,6 @@
 use mtld3d_shared::shader_create::{DeclUsage, ShaderStage, ShaderUsage};
 
-use super::{ShaderCreateError, parse_shader};
+use super::{CoreShaderMeta, ShaderCreateError, core_meta, parse_shader};
 use crate::ids::ProgramId;
 
 #[test]
@@ -205,4 +205,139 @@ fn pixel_integer_and_boolean_files_start_at_ps_2_x() {
             Err(ShaderCreateError::ConstantRegisterLimit)
         ));
     }
+}
+
+/// `ps_2_0 { dcl t0; dcl_2d s0; texld r0, t0, s0; mov oC0, r0 }`.
+const PS_2_0_TEXLD: [u32; 15] = [
+    0xffff_0200, // ps_2_0
+    0x0200_001f,
+    0x8000_0000,
+    0xb00f_0000, // dcl t0
+    0x0200_001f,
+    0x9000_0000,
+    0xa00f_0800, // dcl_2d s0
+    0x0300_0042,
+    0x800f_0000,
+    0xb0e4_0000,
+    0xa0e4_0800, // texld r0, t0, s0
+    0x0200_0001,
+    0x800f_0800,
+    0x80e4_0000, // mov oC0, r0
+    0x0000_ffff,
+];
+
+/// `ps_1_1 { tex t0; mov r0, t0 }`: SM1 declares no sampler, its `tex` samples stage 0.
+const PS_1_1_TEX: [u32; 7] = [
+    0xffff_0101, // ps_1_1
+    0x0100_0042,
+    0xb00f_0000, // tex t0
+    0x0200_0001,
+    0x800f_0000,
+    0xb0e4_0000, // mov r0, t0
+    0x0000_ffff,
+];
+
+/// `vs_3_0 { dcl_position v0; dcl_position o0; dcl_2d s0; mov o0, v0 }`.
+const VS_3_0_SAMPLER: [u32; 14] = [
+    0xfffe_0300, // vs_3_0
+    0x0200_001f,
+    0x8000_0000,
+    0x900f_0000, // dcl_position v0
+    0x0200_001f,
+    0x8000_0000,
+    0xe00f_0000, // dcl_position o0
+    0x0200_001f,
+    0x9000_0000,
+    0xa00f_0800, // dcl_2d s0
+    0x0200_0001,
+    0xe00f_0000,
+    0x90e4_0000, // mov o0, v0
+    0x0000_ffff,
+];
+
+/// `ps_2_0 { mov oC0, c0 }`.
+const PS_2_0_C0: [u32; 5] = [
+    0xffff_0200, // ps_2_0
+    0x0200_0001,
+    0x800f_0800,
+    0xa0e4_0000, // mov oC0, c0
+    0x0000_ffff,
+];
+
+/// `ps_1_4 { bem r0.xy, r0, r1 }`: reads the bump-env rows, samples nothing.
+const PS_1_4_BEM: [u32; 6] = [
+    0xffff_0104, // ps_1_4
+    0x0300_0059,
+    0x8003_0000,
+    0x80e4_0000,
+    0x80e4_0001, // bem r0.xy, r0, r1
+    0x0000_ffff,
+];
+
+/// `ps_3_0 { dcl_normal v0; mov oC0, v0 }`.
+const PS_3_0_NORMAL: [u32; 8] = [
+    0xffff_0300, // ps_3_0
+    0x0200_001f,
+    0x8000_0003,
+    0x900f_0000, // dcl_normal v0
+    0x0200_0001,
+    0x800f_0800,
+    0x90e4_0000, // mov oC0, v0
+    0x0000_ffff,
+];
+
+/// `vs_3_0 { dcl_position v0; dcl_position o0; dcl_normal o2; mov o0, v0; mov o2, v0 }`.
+const VS_3_0_NORMAL: [u32; 17] = [
+    0xfffe_0300, // vs_3_0
+    0x0200_001f,
+    0x8000_0000,
+    0x900f_0000, // dcl_position v0
+    0x0200_001f,
+    0x8000_0000,
+    0xe00f_0000, // dcl_position o0
+    0x0200_001f,
+    0x8000_0003,
+    0xe00f_0002, // dcl_normal o2
+    0x0200_0001,
+    0xe00f_0000,
+    0x90e4_0000, // mov o0, v0
+    0x0200_0001,
+    0xe00f_0002,
+    0x90e4_0000, // mov o2, v0
+    0x0000_ffff,
+];
+
+/// What the core derives once from `tokens`, created as `stage`.
+fn meta(stage: &ShaderStage, tokens: &[u32]) -> CoreShaderMeta {
+    core_meta(
+        &parse_shader(stage, tokens)
+            .expect("a valid program")
+            .program,
+    )
+}
+
+#[test]
+fn core_meta_flags_a_declared_sampler() {
+    assert!(meta(&ShaderStage::Pixel, &PS_2_0_TEXLD).samples());
+    assert!(meta(&ShaderStage::Pixel, &PS_1_1_TEX).samples());
+    assert!(meta(&ShaderStage::Vertex, &VS_3_0_SAMPLER).samples());
+    let plain = meta(&ShaderStage::Pixel, &PS_2_0_C0);
+    assert!(!plain.samples());
+    assert!(!plain.bump_env());
+}
+
+#[test]
+fn core_meta_flags_bump_env() {
+    let bem = meta(&ShaderStage::Pixel, &PS_1_4_BEM);
+    assert!(bem.bump_env());
+    assert!(!bem.samples());
+}
+
+#[test]
+fn core_meta_links_a_ps_3_0_input() {
+    let ps = meta(&ShaderStage::Pixel, &PS_3_0_NORMAL);
+    let vs = meta(&ShaderStage::Vertex, &VS_3_0_NORMAL);
+    assert_eq!(ps.link_inputs.mask_against(&vs.link_outputs), 1);
+    let plain = meta(&ShaderStage::Pixel, &PS_2_0_C0);
+    assert!(plain.link_inputs.is_empty());
 }

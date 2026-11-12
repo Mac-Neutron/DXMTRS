@@ -7,8 +7,8 @@ use mtld3d_shared::shader_create::{ShaderInputSemantic, ShaderStage, ShaderUsage
 
 use crate::{
     dxso::{
-        Declaration, DxsoError, DxsoProgram, RegKind, ShaderType, color_out_mask, link_inputs,
-        parse,
+        Declaration, DxsoError, DxsoProgram, LinkInputs, RegKind, SemanticSet, ShaderType,
+        color_out_mask, declared_ps_samplers, link_inputs, parse,
     },
     ids::ProgramId,
 };
@@ -111,6 +111,60 @@ pub fn parse_shader(
         color_out_mask,
         input_semantics,
     })
+}
+
+/// What the core runtime's draws need of a program, derived once at creation.
+///
+/// What mtld3d's encoder derives when it registers a program (`register_program`), for a device
+/// that has no encoder: the core keys and refuses its draws on these.
+pub struct CoreShaderMeta {
+    /// [`Self::samples`] and [`Self::bump_env`].
+    pub flags: CoreMetaFlags,
+    /// A `ps_3_0`'s extra input semantics; empty for any other program.
+    pub link_inputs: LinkInputs,
+    /// A `vs_3_0`'s extra output semantics; empty for any other program.
+    pub link_outputs: SemanticSet,
+}
+
+bitflags::bitflags! {
+    /// What a program uses that the core runtime's draws refuse.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct CoreMetaFlags: u8 {
+        /// The program declares a sampler (SM1: samples a stage), which the core cannot bind yet.
+        const SAMPLES = 1 << 0;
+        /// The program reads the bump-env rows (`bem`, `texbem`, `texbeml`).
+        const BUMP_ENV = 1 << 1;
+    }
+}
+
+impl CoreShaderMeta {
+    /// The program declares a sampler (SM1: samples a stage).
+    #[must_use]
+    pub const fn samples(&self) -> bool {
+        self.flags.contains(CoreMetaFlags::SAMPLES)
+    }
+
+    /// The program reads the bump-env rows.
+    #[must_use]
+    pub const fn bump_env(&self) -> bool {
+        self.flags.contains(CoreMetaFlags::BUMP_ENV)
+    }
+}
+
+/// The [`CoreShaderMeta`] of `program`.
+#[must_use]
+pub fn core_meta(program: &DxsoProgram) -> CoreShaderMeta {
+    let mut flags = CoreMetaFlags::empty();
+    flags.set(
+        CoreMetaFlags::SAMPLES,
+        !declared_ps_samplers(program).is_empty(),
+    );
+    flags.set(CoreMetaFlags::BUMP_ENV, program.uses_bump_env());
+    CoreShaderMeta {
+        flags,
+        link_inputs: link_inputs(program),
+        link_outputs: SemanticSet::vs_outputs(program),
+    }
 }
 
 #[cfg(test)]
