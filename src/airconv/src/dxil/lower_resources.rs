@@ -1093,8 +1093,9 @@ impl<'cx> Lowering<'_, 'cx> {
             let half = |i: u64| b.trunc(if i == 0 { v } else { b.lshr(v, thirty_two) }, i32_ty);
             if let Some((tex, handle, coherent, pos, array)) = &texture {
                 // The texel read with lo and hi in .x and .y, then the texture fence. Built on
-                // the read, so the write waits for it: Metal doesn't order a texture read before
-                // a later write to the same texel, and an Exchange's value doesn't depend on it.
+                // the read, so the write waits for it: the texture fence orders only a write
+                // before a later read, a read before a later write to the same texel was measured
+                // unordered (about 1 in 50 dispatches), and an Exchange's value doesn't use it.
                 let mut t = req(read, "a texel atomic of no texel read")?;
                 for i in 0..2 {
                     t = b.insert_element_u64(t, half(i), i);

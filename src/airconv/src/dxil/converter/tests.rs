@@ -1,10 +1,13 @@
-//! The DXIL converter: concurrent compiles and a static global's name.
+//! The DXIL converter: concurrent compiles, a static global's name and the 64-bit atomics.
 //!
 //! The corpus itself is compared with the C++'s by the lane runs of `dxil-translate` (C1, C2,
 //! C3, C8, C11, with the root signatures the tool gives them); these pin what a lane run cannot
 //! see.
 
-use airconv_ir::{container::Container, dxil_part, metallib};
+use airconv_ir::{
+    container::{self, Container, fourcc},
+    dxil_part, metallib,
+};
 
 use super::{convert, move_constants_to_constant_space, rebuilt};
 use crate::{
@@ -109,28 +112,21 @@ fn groupshared64_atomics_lower_on_opaque_pointers() {
 
 /// Every 64-bit texel atomic's write (`atomic64typed.dxil`) is built on its section's read.
 ///
-/// So the write can't overtake the read: an Exchange's value doesn't depend on the read, and
-/// Metal doesn't order a texture read before a later write to the same texel (its old came back
-/// as its own new value about once in 50 dispatches).
+/// So the write can't overtake the read: an Exchange's value doesn't depend on the read, Metal's
+/// texture fence orders only a write before a later read, and a read before a later write to the
+/// same texel was measured unordered (its old came back as its own new value about once in 50
+/// dispatches). The read is of the write's texel, and no lock acquire (a `cmpxchg`) lies between.
 #[test]
 fn texel64_atomic_writes_depend_on_their_read() {
     let bytes = include_bytes!("../../../ir/tests/data/atomic64typed.dxil");
     // SAFETY: no reflection is asked for.
     let shader = ok(unsafe { initialize(bytes, core::ptr::null_mut()) });
     // The lock table comes with a root signature: RTS0 1.0, one table of t0-t6, u0-u14 and b0
-    // (range type, count, base, space, offset), in a DXBC container of that one part.
+    // (range type, count, base, space, offset).
     let mut rts0: Vec<u32> = vec![1, 1, 24, 0, 0, 0, 0, 0, 36, 3, 44];
     rts0.extend([0, 7, 0, 0, 0, 1, 15, 0, 0, 7, 2, 1, 0, 0, 22]);
     let part: Vec<u8> = rts0.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let mut container = b"DXBC".to_vec();
-    container.extend([0; 16]);
-    let size = u32::try_from(44 + part.len()).unwrap();
-    for w in [1, size, 1, 36] {
-        container.extend(u32::to_le_bytes(w));
-    }
-    container.extend(b"RTS0");
-    container.extend(u32::try_from(part.len()).unwrap().to_le_bytes());
-    container.extend(&part);
+    let container = container::build(&[(fourcc::RTS0, &part)]).unwrap();
     let root = crate::abi::Sm50ShaderRootSignatureData {
         next: core::ptr::null_mut(),
         r#type: crate::abi::SM50_SHADER_ROOT_SIGNATURE,
@@ -145,35 +141,35 @@ fn texel64_atomic_writes_depend_on_their_read() {
     let text =
         String::from_utf8(ok(module::parse(&cx, &bitcode, b"", b"", module::Layout::Keep)).print())
             .unwrap();
-    // `%name = <definition>` of each local value.
-    let defs: rustc_hash::FxHashMap<&str, &str> = text
-        .lines()
-        .filter_map(|l| l.trim_start().split_once(" = "))
+    let lines: Vec<&str> = text.lines().collect();
+    // `%name` -> (its line, its definition).
+    let defs: rustc_hash::FxHashMap<&str, (usize, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| l.trim_start().split_once(" = ").map(|(n, d)| (n, (i, d))))
         .filter(|(name, _)| name.starts_with('%'))
         .collect();
-    let writes: Vec<&str> = text
-        .lines()
-        .filter(|l| l.contains("call void @air.write_texture_2d"))
+    let writes: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].contains("call void @air.write_texture_2d"))
         .collect();
     assert!(!writes.is_empty(), "{text}");
-    for write in writes {
-        // The texel operand's lane .z (which an R32G32 write ignores), traced back through
+    for at in writes {
+        let write = lines[at];
+        // (handle, coordinate, texel, ...)
+        let wargs = call_args(write);
+        // The texel's lane .z (which an R32G32 write ignores), traced back through
         // insertelement, shufflevector and extractvalue: it must be a texture read's.
-        let (_, rest) = write
-            .split_once("<4 x i32> ")
-            .unwrap_or_else(|| panic!("{write}"));
-        let (mut value, mut lane) = (rest.split([',', ')']).next().unwrap(), 2);
-        let read = loop {
-            let def = *defs
+        let (mut value, mut lane) = (last(wargs[2]), 2);
+        let (read_at, read) = loop {
+            let &(_, def) = defs
                 .get(value)
                 .unwrap_or_else(|| panic!("{write}: lane {lane} is the constant {value}"));
             let ops = operands(def);
             if def.starts_with("insertelement") {
-                assert_ne!(
-                    ops[2],
-                    format!("i64 {lane}"),
-                    "{write}: lane {lane} inserted"
-                );
+                let index: usize = last(ops[2])
+                    .parse()
+                    .unwrap_or_else(|_| panic!("{write}: {def} inserts at a variable index"));
+                assert_ne!(index, lane, "{write}: lane {lane} inserted by {def}");
                 value = last(ops[0]);
             } else if def.starts_with("shufflevector") {
                 let mask: Vec<u32> = ops[2]
@@ -185,31 +181,63 @@ fn texel64_atomic_writes_depend_on_their_read() {
                 let m = mask[lane];
                 (value, lane) = (last(ops[usize::from(m >= 4)]), (m % 4) as usize);
             } else if def.starts_with("extractvalue") {
-                break defs.get(last(ops[0])).copied().unwrap_or("");
+                break defs.get(last(ops[0])).copied().unwrap_or((0, ""));
             } else {
                 panic!("{write}: lane {lane} comes from {value} = {def}");
             }
         };
         assert!(read.contains("@air.read_texture_2d"), "{write}: {read}");
+        assert_eq!(
+            call_args(read)[1],
+            wargs[1],
+            "{write} reads another texel: {read}"
+        );
+        assert!(
+            read_at < at && !lines[read_at..at].iter().any(|l| l.contains("cmpxchg")),
+            "{write}: its read {read} is of another lock section"
+        );
     }
 }
 
-/// An instruction's operands, split at the commas outside `<>` and `{}`.
+/// An instruction's operands, split at the commas outside `<>`, `{}` and `()`.
 fn operands(def: &str) -> Vec<&str> {
-    let body = def.split_once(' ').map_or("", |(_, b)| b);
+    split_top(def.split_once(' ').map_or("", |(_, b)| b))
+}
+
+/// A call's arguments: inside the parentheses after its callee.
+fn call_args(call: &str) -> Vec<&str> {
+    let after = &call[call.find('@').unwrap_or(0)..];
+    let open = after.find('(').unwrap_or_else(|| panic!("{call}"));
+    let mut depth = 0i32;
+    let close = after[open..]
+        .char_indices()
+        .find(|&(_, c)| {
+            depth += match c {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            };
+            depth == 0
+        })
+        .map_or(after.len(), |(i, _)| open + i);
+    split_top(&after[open + 1..close])
+}
+
+/// `s` split at the commas outside `<>`, `{}` and `()`, each part trimmed.
+fn split_top(s: &str) -> Vec<&str> {
     let (mut out, mut depth, mut from) = (Vec::new(), 0i32, 0);
-    for (i, c) in body.char_indices() {
+    for (i, c) in s.char_indices() {
         match c {
-            '<' | '{' => depth += 1,
-            '>' | '}' => depth -= 1,
+            '<' | '{' | '(' => depth += 1,
+            '>' | '}' | ')' => depth -= 1,
             ',' if depth == 0 => {
-                out.push(body[from..i].trim());
+                out.push(s[from..i].trim());
                 from = i + 1;
             }
             _ => {}
         }
     }
-    out.push(body[from..].trim());
+    out.push(s[from..].trim());
     out
 }
 
