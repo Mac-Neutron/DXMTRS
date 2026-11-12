@@ -467,9 +467,33 @@ fn core_draw_kinds_cover_every_case() {
         PsStageConstants,
         Blending,
         Scissor,
+        CoreRefusal::FfTexture,
     ];
     let names = refusals.map(CoreRefusal::name);
     assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
+}
+
+/// A fixed-function cascade that reads a bound texture is refused.
+///
+/// A programmable pixel shader ignores the cascade, so the same bound texture refuses nothing
+/// there.
+#[test]
+fn ff_cascade_reading_a_texture_is_refused() {
+    let facts = |flags| DrawFacts {
+        flags,
+        ff_ps_constant_rows: 1,
+    };
+    let ff = DrawFlags::LAYOUT_RHW | DrawFlags::FF_PS_TEXTURES;
+    assert_eq!(core_draw_kinds(facts(ff)), Err(CoreRefusal::FfTexture));
+    let prog = ff | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
+    assert_eq!(
+        core_draw_kinds(facts(prog)),
+        Ok((StageKind::Ff, StageKind::Prog))
+    );
+    assert_eq!(
+        CoreRefusal::FfTexture.name(),
+        "IDirect3DDevice9::Draw*PrimitiveUP (a fixed-function stage reading a texture)"
+    );
 }
 
 /// Relative addressing binds every row; otherwise the rows the program names.

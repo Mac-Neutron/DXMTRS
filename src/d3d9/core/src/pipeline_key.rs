@@ -360,6 +360,8 @@ bitflags::bitflags! {
         const BLENDING = 1 << 8;
         /// The scissor test is enabled.
         const SCISSOR = 1 << 9;
+        /// The fixed-function pixel cascade reads a bound texture.
+        const FF_PS_TEXTURES = 1 << 10;
     }
 }
 
@@ -395,6 +397,8 @@ pub enum CoreRefusal {
     Blending,
     /// The scissor test is enabled.
     Scissor,
+    /// The fixed-function pixel cascade reads a bound texture (textures are C4b-3b's).
+    FfTexture,
 }
 
 impl CoreRefusal {
@@ -416,6 +420,9 @@ impl CoreRefusal {
             }
             Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
+            Self::FfTexture => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (a fixed-function stage reading a texture)"
+            }
         }
     }
 }
@@ -449,6 +456,9 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
         StageKind::Prog
     };
     let ps = if !flags.contains(DrawFlags::PS_BOUND) {
+        if flags.contains(DrawFlags::FF_PS_TEXTURES) {
+            return Err(CoreRefusal::FfTexture);
+        }
         if f.ff_ps_constant_rows > 1 {
             return Err(CoreRefusal::PsStageConstants);
         }

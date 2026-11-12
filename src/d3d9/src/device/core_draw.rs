@@ -111,7 +111,14 @@ fn resolve(
     let layout = ff_vs_layout_from_elements(decl.elements());
     let vs_core = vs.and_then(|s| s.core());
     let ps_core = ps.and_then(|s| s.core());
+    // The pixel stages' bound textures (`cached_bound_texture_mask` is mtld3d's snapshot's, 0 here).
+    let bound = dev.stage_bindings().bound_mask().to_le_bytes()[0];
     let ff_ps = ps.is_none().then(|| dev.ff_state().build_ps_key(&rs, 0));
+    // The cascade reads a bound texture exactly when the bound mask changes its key (C4b3a-3).
+    let ff_textures = bound != 0
+        && ff_ps
+            .as_ref()
+            .is_some_and(|k| dev.ff_state().build_ps_key(&rs, bound) != *k);
     let mut flags = DrawFlags::empty();
     flags.set(DrawFlags::VS_BOUND, vs.is_some());
     flags.set(DrawFlags::VS_CORE, vs_core.is_some());
@@ -138,6 +145,7 @@ fn resolve(
         DrawFlags::SCISSOR,
         rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
     );
+    flags.set(DrawFlags::FF_PS_TEXTURES, ff_textures);
     let facts = DrawFacts {
         flags,
         ff_ps_constant_rows: ff_ps.as_ref().map_or(0, FfPsKey::constant_rows),
@@ -190,7 +198,7 @@ fn resolve(
         binds.push(Stage::Vertex, mtl::VS_FLOAT_CONST_SLOT, row.as_flattened());
         let key = dev
             .ff_state()
-            .build_vs_key(&rs, layout, 0, decl.passthrough());
+            .build_vs_key(&rs, layout, bound, decl.passthrough());
         ff_outputs = Some(SemanticSet::passthrough_outputs(&key.passthrough));
         VsStageKey::Ff(key)
     };
