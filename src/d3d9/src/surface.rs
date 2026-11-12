@@ -658,6 +658,12 @@ impl Direct3DSurface9 {
         unsafe { &*self.vtbl }
     }
 
+    /// Whether this is a back buffer: the implicit one or an additional swap chain's (C4b3a-4).
+    #[cfg(feature = "core-runtime")]
+    pub fn is_back_buffer(&self) -> bool {
+        self.inner().implicit_kind == ImplicitKind::Backbuffer
+    }
+
     /// Non-null parent for texture-backed surfaces (from `GetSurfaceLevel`).
     ///
     /// Null for standalone surfaces (backbuffer from `GetBackBuffer`,

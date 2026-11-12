@@ -552,6 +552,20 @@ extern "system" fn ib_get_type(this: *mut c_void) -> u32 {
 
 // ── IDirect3DIndexBuffer9 ──
 
+/// Whether the buffer at `this` belongs to a device of the core runtime (DXMTRS C4b-3a).
+///
+/// Such a buffer is inert: no lock until C4c.
+#[cfg(feature = "core-runtime")]
+fn on_core_device(this: *mut c_void) -> bool {
+    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DIndexBuffer9 per the ABI.
+    let Some(obj) = (unsafe { InPtr::<Direct3DIndexBuffer9>::opt(this) }) else {
+        return false;
+    };
+    let device = obj.inner().device_inner;
+    // SAFETY: a buffer's device outlives it (D3D9 lifetime rules, as its finalizer relies on).
+    !device.is_null() && unsafe { &*device }.is_core()
+}
+
 extern "system" fn ib_lock(
     this: *mut c_void,
     offset_to_lock: u32,
@@ -560,6 +574,11 @@ extern "system" fn ib_lock(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DIndexBuffer9>(this);
+    refuse_under_core!(
+        on_core_device(this),
+        "IDirect3DIndexBuffer9::Lock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = ib_timer(this);
     if pp_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -752,6 +771,11 @@ extern "system" fn ib_lock(
 
 extern "system" fn ib_unlock(this: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DIndexBuffer9>(this);
+    refuse_under_core!(
+        on_core_device(this),
+        "IDirect3DIndexBuffer9::Unlock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = ib_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DIndexBuffer9 per ABI.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DIndexBuffer9>::opt(this) }) else {

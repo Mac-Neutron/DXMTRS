@@ -433,11 +433,6 @@ extern "system" fn swapchain_get_back_buffer(
     back_buffer: *mut *mut c_void,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9::GetBackBuffer",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if back_buffer.is_null() {
         return D3DERR_INVALIDCALL;
     }

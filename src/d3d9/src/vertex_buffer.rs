@@ -635,6 +635,20 @@ extern "system" fn vb_get_type(this: *mut c_void) -> u32 {
 
 // ── IDirect3DVertexBuffer9 ──
 
+/// Whether the buffer at `this` belongs to a device of the core runtime (DXMTRS C4b-3a).
+///
+/// Such a buffer is inert: no lock until C4c.
+#[cfg(feature = "core-runtime")]
+fn on_core_device(this: *mut c_void) -> bool {
+    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DVertexBuffer9 per the ABI.
+    let Some(obj) = (unsafe { InPtr::<Direct3DVertexBuffer9>::opt(this) }) else {
+        return false;
+    };
+    let device = obj.inner().device_inner;
+    // SAFETY: a buffer's device outlives it (D3D9 lifetime rules, as its finalizer relies on).
+    !device.is_null() && unsafe { &*device }.is_core()
+}
+
 /// Honor the D3DLOCK flags per `buffer_rename::plan_lock`:
 ///
 /// - `NOOVERWRITE | READONLY`, or uncontended: return the existing
@@ -661,6 +675,11 @@ extern "system" fn vb_lock(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DVertexBuffer9>(this);
+    refuse_under_core!(
+        on_core_device(this),
+        "IDirect3DVertexBuffer9::Lock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = vb_timer(this);
     if pp_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -867,6 +886,11 @@ extern "system" fn vb_lock(
 
 extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DVertexBuffer9>(this);
+    refuse_under_core!(
+        on_core_device(this),
+        "IDirect3DVertexBuffer9::Unlock",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     let _timer = vb_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DVertexBuffer9 per ABI.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DVertexBuffer9>::opt(this) }) else {
