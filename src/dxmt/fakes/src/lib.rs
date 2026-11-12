@@ -22,10 +22,12 @@ use std::{
 
 use dxmt_core::test_support::{Records, format_pass_records};
 use winemetal_sys::wire::{
+    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
     WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
     WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
-    WMTVertexDescriptorInfo, WmtcmdBase,
+    WMTVertexDescriptorInfo, WmtcmdBase, WmtcmdBlitCopyFromBufferToTexture,
+    WmtcmdBlitGenerateMipmaps,
 };
 
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
@@ -243,9 +245,29 @@ extern "C-unwind" fn fake_new_fence(device: u64) -> u64 {
 
 #[unsafe(export_name = "MTLDevice_newSamplerState")]
 extern "C-unwind" fn fake_new_sampler_state(device: u64, info: *mut WMTSamplerInfo) -> u64 {
-    let handle = state().made_of(device);
-    // SAFETY: the core's sampler description, writable.
-    unsafe { (*info).gpu_resource_id = handle + 1 };
+    let mut state = state();
+    let handle = state.made_of(device);
+    // SAFETY: the core's sampler description, readable and writable for the call.
+    let i = unsafe { &mut *info };
+    i.gpu_resource_id = handle + 1;
+    let line = format!(
+        "MTLDevice_newSamplerState min={} mag={} mip={} address={},{},{} border={} compare={} \
+         lod={}..{} aniso={} normalized={} argument_buffers={}",
+        i.min_filter,
+        i.mag_filter,
+        i.mip_filter,
+        i.s_address_mode,
+        i.t_address_mode,
+        i.r_address_mode,
+        i.border_color,
+        i.compare_function,
+        i.lod_min_clamp,
+        i.lod_max_clamp,
+        i.max_anisotroy,
+        i.normalized_coords,
+        i.support_argument_buffers
+    );
+    state.say(device, line);
     handle
 }
 
@@ -270,9 +292,16 @@ extern "C-unwind" fn fake_new_buffer(device: u64, info: *mut WMTBufferInfo) -> u
 
 #[unsafe(export_name = "MTLDevice_newTexture")]
 extern "C-unwind" fn fake_new_texture(device: u64, info: *mut WMTTextureInfo) -> u64 {
-    let handle = state().made_of(device);
-    // SAFETY: the core's texture description, writable.
-    unsafe { (*info).gpu_resource_id = handle + 1 };
+    let mut state = state();
+    let handle = state.made_of(device);
+    // SAFETY: the core's texture description, readable and writable for the call.
+    let i = unsafe { &mut *info };
+    i.gpu_resource_id = handle + 1;
+    let line = format!(
+        "MTLDevice_newTexture #{handle} format={} size={}x{}x{} array={} bits={:#x}",
+        i.pixel_format, i.width, i.height, i.depth, i.array_length, i.bits
+    );
+    state.say(device, line);
     handle
 }
 
@@ -545,14 +574,66 @@ extern "C-unwind" fn fake_render_encode_commands(encoder: u64, head: *const Wmtc
     );
 }
 
+/// A blit encoder's records, with the copies into textures and the mipmap generations in full.
+///
+/// [`format_pass_records`] prints a blit record as its type alone; the texture uploads a front
+/// end's tests assert on are decoded here.
 #[unsafe(export_name = "MTLBlitCommandEncoder_encodeCommands")]
 extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const WmtcmdBase) {
-    encode(
-        "MTLBlitCommandEncoder_encodeCommands",
-        &Records::Blit,
-        encoder,
-        head,
-    );
+    // SAFETY: the core hands winemetal a list of live blit records.
+    let mut lines = unsafe { format_pass_records(&Records::Blit, head) };
+    let mut details = Vec::new();
+    let mut at = head.expose_provenance() as u64;
+    while at != 0 {
+        let base_ptr = core::ptr::with_exposed_provenance::<WmtcmdBase>(
+            usize::try_from(at).expect("a pointer"),
+        );
+        // SAFETY: a record of the list.
+        let base = unsafe { &*base_ptr };
+        match base.r#type {
+            WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE => {
+                // SAFETY: a record of this type.
+                let c = unsafe { &*base_ptr.cast::<WmtcmdBlitCopyFromBufferToTexture>() };
+                details.push(format!(
+                    "blit copy_to_texture #{} level={} slice={} origin={},{},{} size={}x{}x{} \
+                     offset={} bytes_per_row={} bytes_per_image={}",
+                    c.dst,
+                    c.level,
+                    c.slice,
+                    c.origin.x,
+                    c.origin.y,
+                    c.origin.z,
+                    c.size.width,
+                    c.size.height,
+                    c.size.depth,
+                    c.src_offset,
+                    c.bytes_per_row,
+                    c.bytes_per_image
+                ));
+            }
+            WMT_BLIT_COMMAND_GENERATE_MIPMAPS => {
+                // SAFETY: a record of this type.
+                let c = unsafe { &*base_ptr.cast::<WmtcmdBlitGenerateMipmaps>() };
+                details.push(format!("blit generate_mipmaps #{}", c.texture));
+            }
+            _ => {}
+        }
+        at = base.next.ptr;
+    }
+    let mut details = details.into_iter();
+    for line in &mut lines {
+        let typed = format!("blit {WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE}");
+        let mips = format!("blit {WMT_BLIT_COMMAND_GENERATE_MIPMAPS}");
+        if *line == typed || *line == mips {
+            *line = details.next().expect("a decoded blit record");
+        }
+    }
+    let mut state = state();
+    state.say(encoder, "MTLBlitCommandEncoder_encodeCommands".to_owned());
+    for line in lines {
+        state.say(encoder, format!("  {line}"));
+    }
+    drop(state);
 }
 
 #[unsafe(export_name = "MTLCommandEncoder_endEncoding")]

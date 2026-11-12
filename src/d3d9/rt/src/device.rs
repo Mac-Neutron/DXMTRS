@@ -40,8 +40,17 @@ pub struct CoreDevice {
     pipelines: PsoMap<PipelineKey, Option<PipelineSource>>,
     /// The compiled stage functions the pipelines are made of.
     functions: draw::StageFunctions,
+    /// The D3D9 textures' core textures, by id (C4b-3b).
+    textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
+    /// The samplers by their key's bits (C4b-3b).
+    samplers: rustc_hash::FxHashMap<u64, Arc<dxmt_core::sampler::Sampler>>,
     render_open: bool,
+    /// The last closure left a blit pass open (consecutive uploads share it).
+    blit_open: bool,
     dirty: bool,
+    /// Bytes staged for uploads in the chunk being recorded, and the budget past which it commits.
+    staged_bytes: u64,
+    staged_budget: u64,
 }
 
 impl CoreDevice {
@@ -53,6 +62,7 @@ impl CoreDevice {
     #[must_use]
     pub fn new(mtl: Obj, profile: QueueConfig) -> Self {
         let chunks = profile.chunks;
+        let staging_block = profile.staging_block;
         let device = Device::with_config(mtl, 0, profile);
         // A perf build compiles out what is below a warning; the gates read this line there too.
         let level = if cfg!(feature = "perf-build") {
@@ -74,8 +84,13 @@ impl CoreDevice {
             readback: None,
             pipelines: PsoMap::default(),
             functions: draw::StageFunctions::default(),
+            textures: rustc_hash::FxHashMap::default(),
+            samplers: rustc_hash::FxHashMap::default(),
             render_open: false,
+            blit_open: false,
             dirty: false,
+            staged_bytes: 0,
+            staged_budget: staged_budget(staging_block),
         }
     }
 
@@ -100,6 +115,17 @@ impl Drop for CoreDevice {
 /// The back buffer's texture and the view a pass draws to or clears.
 fn back_buffer_view(back_buffer: &swapchain::BackBuffer) -> (Arc<Texture>, TextureViewKey) {
     (Arc::clone(&back_buffer.texture), back_buffer.key)
+}
+
+/// The bytes a chunk may stage for uploads before it is committed.
+///
+/// 32 MiB in a 32-bit profile (its 1 MiB ring blocks), 256 MiB otherwise.
+const fn staged_budget(staging_block: u64) -> u64 {
+    if staging_block <= 0x10_0000 {
+        32 << 20
+    } else {
+        256 << 20
+    }
 }
 
 /// D3D9's queue sizes in this process: [`queue_profile_for`] its pointer width.
@@ -159,12 +185,15 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
 
 mod draw;
 mod recorder;
+mod samplers;
 mod surface;
 mod swapchain;
 mod sync;
+mod textures;
 
 pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
+pub use textures::{CoreTextureDesc, TextureKind, UploadRegion};
 
 #[cfg(test)]
 mod fixture;

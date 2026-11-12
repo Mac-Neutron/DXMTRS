@@ -19,7 +19,7 @@ impl CoreDevice {
     /// Commits the chunk if it holds work, then waits for the last chunk committed (a clean chunk
     /// is never committed, so it waits for nothing of its own).
     pub fn drain(&mut self) {
-        if self.dirty || self.render_open {
+        if self.dirty || self.render_open || self.blit_open {
             self.commit();
         }
         let last = self.device.queue().current_seq() - 1;
@@ -31,6 +31,7 @@ impl CoreDevice {
         self.close_pass();
         self.device.queue_mut().commit();
         self.dirty = false;
+        self.staged_bytes = 0;
     }
 }
 

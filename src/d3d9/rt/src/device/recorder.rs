@@ -22,19 +22,33 @@ impl CoreDevice {
         self.dirty = true;
     }
 
-    /// Ends the render pass the last closure left open, if one is.
+    /// Ends the render or blit pass the last closure left open, if one is.
     pub fn close_pass(&mut self) {
-        if self.render_open {
+        if self.render_open || self.blit_open {
             self.render_open = false;
+            self.blit_open = false;
             self.emit(Encoder::end_pass);
         }
     }
 
+    /// Opens a blit pass, closing an open render pass, unless one is open: uploads share it.
+    pub fn open_blit_pass(&mut self) {
+        if self.blit_open {
+            return;
+        }
+        self.close_pass();
+        self.emit(Encoder::start_blit_pass);
+        self.blit_open = true;
+    }
+
     /// Opens a render pass on the back buffer, loading and storing it, unless one is open.
+    ///
+    /// An open blit pass ends first: the core's `begin` holds one pass at a time.
     pub fn open_render_pass(&mut self) {
         if self.render_open {
             return;
         }
+        self.close_pass();
         let Some(back_buffer) = &self.back_buffer else {
             return;
         };
