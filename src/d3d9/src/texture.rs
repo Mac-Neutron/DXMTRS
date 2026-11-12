@@ -2395,6 +2395,12 @@ impl TextureInner {
             return 0;
         }
         let device = DeviceInner::from_ptr(self.device_inner);
+        // A core device copies the staging into its ring at record time: no upload reads it
+        // later, so every write takes it in place (C4b3b-3).
+        #[cfg(feature = "core-runtime")]
+        if device.is_core() {
+            return u64::MAX;
+        }
         let takes_upload_pass = mtld3d_core::upload_pass::upload_pass_decode(
             self.d3d_format,
             self.metal_pixel_format,
