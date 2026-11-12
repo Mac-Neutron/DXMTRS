@@ -482,14 +482,10 @@ fn emit_draw_view(
             sampled_stage_mask, ..
         }) => (*sampled_stage_mask, 0),
     };
-    let lod_table_mask = ps_sampled_mask & !variant.fetch4_mask;
-    let explicit_lod_mask = (texldl_mask | variant.depth_sampler_mask) & lod_table_mask;
     // `D3DSAMP_MIPMAPLODBIAS` has no Metal sampler equivalent, so the bias
-    // reaches the GPU as a fragment uniform the sample sites read. Resolving
-    // it here keeps every draw that leaves the state at its zero default on
-    // the unbiased shader with nothing extra bound. A bias on a stage this
-    // shader does not sample reaches no sample site, so it neither mints the
-    // biased variant nor binds the table.
+    // reaches the GPU as a fragment uniform the sample sites read; the rule
+    // (sampled slots, fetch4's excluded, explicit-level rows for `texldl` and
+    // depth slots) is mtld3d-core's `lod_table`, shared with the core runtime.
     // Under a reduced `render.scale` the sampler picks its mip from the
     // render grid, coarser than the presented size warrants; `render.lodBias`
     // adds the compensating `log2(scale)` to every stage the shader samples,
@@ -500,29 +496,23 @@ fn emit_draw_view(
     } else {
         0.0
     };
-    // An explicit level takes the game's bias in its row, never the scale
-    // term, which compensates a LOD computed on the reduced grid.
-    let mut lod_bias = [0.0f32; mtld3d_core::sampler_state::LOD_BIAS_SLOTS];
-    let mut explicit_lod: Option<[[f32; 2]; mtld3d_core::sampler_state::LOD_BIAS_SLOTS]> = None;
-    let mut any_lod_bias = false;
-    for (stage_u32, b) in stage_bindings {
-        let bit = 1u16 << stage_u32;
-        if lod_table_mask & bit == 0 {
-            continue;
-        }
-        let bias = mtld3d_core::sampler_state::lod_bias(&b.sampler_state) + scale_bias;
-        if mtld3d_core::sampler_state::lod_bias_active(bias) {
-            lod_bias[stage_u32 as usize] = bias;
-            any_lod_bias = true;
-        }
-        if explicit_lod_mask & bit != 0
-            && let Some(row) = mtld3d_core::sampler_state::explicit_lod_row(&b.sampler_state)
-        {
-            explicit_lod.get_or_insert(mtld3d_core::sampler_state::EXPLICIT_LOD_OPEN_ROWS)
-                [stage_u32 as usize] = row;
-        }
-    }
-    let any_lod_table = any_lod_bias || explicit_lod.is_some();
+    let table = mtld3d_core::sampler_state::lod_table(
+        ps_sampled_mask,
+        variant.fetch4_mask,
+        texldl_mask,
+        variant.depth_sampler_mask,
+        stage_bindings
+            .into_iter()
+            .map(|(stage, b)| (stage, &b.sampler_state)),
+        scale_bias,
+    );
+    let any_lod_table = table.is_some();
+    let lod_bias = table
+        .as_ref()
+        .map_or([0.0f32; mtld3d_core::sampler_state::LOD_BIAS_SLOTS], |t| {
+            t.bias
+        });
+    let explicit_lod = table.and_then(|t| t.explicit);
     // `D3DRS_SRGBWRITEENABLE` picks the pass's colour attachment views, so it
     // has to reach the pass state before anything this draw emits opens a
     // pass. A change ends the current one, since the views are frozen at

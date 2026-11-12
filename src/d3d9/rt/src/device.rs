@@ -193,7 +193,7 @@ mod textures;
 
 pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
-pub use textures::{CoreTextureDesc, TextureKind, UploadRegion};
+pub use textures::{CoreTextureDesc, TextureBind, TextureKind, UploadRegion, view_format};
 
 #[cfg(test)]
 mod fixture;

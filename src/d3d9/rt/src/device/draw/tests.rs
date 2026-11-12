@@ -123,6 +123,7 @@ const fn draw<'a>(
         fill_mode: 0,
         cull_mode: 0,
         binds,
+        textures: &[],
     }
 }
 
@@ -515,4 +516,141 @@ fn a_vertex_shader_that_does_not_parse_is_cached_as_failed() {
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(!draws(&calls), "{calls:#?}");
+}
+
+/// A 2x2 BGRA8 texture `id` on `core`, uploaded.
+fn texture(core: &mut crate::device::CoreDevice, id: u64) -> mtld3d_core::ids::TextureId {
+    let id = mtld3d_core::ids::TextureId::from_raw(id);
+    let desc = super::super::CoreTextureDesc {
+        pixel_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        kind: super::super::TextureKind::Tex2d,
+        width: 2,
+        height: 2,
+        depth: 1,
+        levels: 1,
+        view_twins: false,
+        block: (1, 1, 4),
+    };
+    core.texture_create(id, &desc);
+    let whole = super::super::UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+        width: 2,
+        height: 2,
+        depth: 1,
+    };
+    assert!(core.texture_upload(id, whole, &[0u8; 16], 8, 16));
+    id
+}
+
+/// A textured draw binds its texture and sampler at the slot, after the PSO and before the draw.
+#[test]
+fn a_textured_draw_binds_texture_and_sampler() {
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
+    };
+    const DEVICE: u64 = 0xf1;
+    let mut core = core_on_fakes(DEVICE);
+    let id = texture(&mut core, 1);
+    let snapshot = mtld3d_core::sampler_state::snapshot_from_state(
+        &mtld3d_types::sampler_state_defaults(),
+        false,
+    );
+    let skey = mtld3d_core::sampler_state::key_from_snapshot(&snapshot);
+    let sampler = core.sampler(
+        skey,
+        &mtld3d_core::sampler_state::description_from_snapshot(&snapshot, skey),
+    );
+    let bind = core
+        .texture_bind(0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, sampler)
+        .expect("a stored texture");
+    let binds = ff_binds();
+    let textures = [bind];
+    let data = DrawData {
+        textures: &textures,
+        ..triangle(&binds)
+    };
+    assert_eq!(core.draw_up(&key(0xf), &data), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let texture_at = calls
+        .iter()
+        .position(|c| {
+            c.starts_with(&format!(
+                "  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} "
+            ))
+        })
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    let sampler_at = calls
+        .iter()
+        .position(|c| {
+            c.starts_with(&format!(
+                "  render {WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE} "
+            ))
+        })
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    let draw_at = calls
+        .iter()
+        .position(|c| c.starts_with("  render 19 "))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(texture_at < draw_at && sampler_at < draw_at, "{calls:#?}");
+}
+
+/// Render, upload, render: one pass when unsampled, two when sampled.
+///
+/// When neither draw samples the uploaded texture the optimizer merges the two render passes
+/// around the blit (map2-passes §3); when the first samples it, they stay two passes.
+#[test]
+fn render_blit_render_merges_when_unsampled() {
+    const DEVICE: u64 = 0xf2;
+    let render_passes = |calls: &[String]| {
+        calls
+            .iter()
+            .filter(|c| *c == "MTLCommandBuffer_renderCommandEncoder")
+            .count()
+    };
+    let mut core = core_on_fakes(DEVICE);
+    let id = texture(&mut core, 2);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    let whole = super::super::UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+        width: 2,
+        height: 2,
+        depth: 1,
+    };
+    assert!(core.texture_upload(id, whole, &[1u8; 16], 8, 16));
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let unsampled = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(render_passes(&unsampled), 1, "{unsampled:#?}");
+    let bind = core
+        .texture_bind(
+            0,
+            id,
+            winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            None,
+        )
+        .expect("a stored texture");
+    let textures = [bind];
+    let sampled = DrawData {
+        textures: &textures,
+        ..triangle(&binds)
+    };
+    assert_eq!(core.draw_up(&key(0xf), &sampled), Ok(()));
+    assert!(core.texture_upload(id, whole, &[2u8; 16], 8, 16));
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let split = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(render_passes(&split), 2, "{split:#?}");
 }

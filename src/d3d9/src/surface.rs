@@ -2396,7 +2396,17 @@ fn refused_under_core(this: *mut c_void, ok_in_system_memory: bool) -> bool {
     let device = obj.inner().device_inner;
     // SAFETY: a surface's device outlives it (it forwards or holds a device reference).
     let core = !device.is_null() && unsafe { &*device }.is_core();
-    core && !(ok_in_system_memory && obj.inner().system_memory.is_some())
+    // A texture level locks through its texture's staging (C4b-3b), unless the texture is a
+    // render target or a depth texture, which a core device does not have yet (C4b-3d).
+    let texture_level = {
+        let parent = obj.inner().parent_texture;
+        // SAFETY: a level's parent texture is live while the level is (it holds a reference).
+        !parent.is_null()
+            && unsafe { &*parent }.d3d_usage()
+                & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
+                == 0
+    };
+    core && !(ok_in_system_memory && (obj.inner().system_memory.is_some() || texture_level))
 }
 
 extern "system" fn surface_lock_rect(

@@ -425,75 +425,57 @@ fn core_ps_variant_rules() {
 #[test]
 fn core_draw_kinds_cover_every_case() {
     use CoreRefusal::{
-        Blending, BumpEnv, NotCoreShader, PsStageConstants, Sampler, Scissor, TransformedFf,
+        Blending, DepthTexture, Fetch4, NotCoreShader, RenderTargetTexture, Scissor, TransformedFf,
+        VertexTexture,
     };
     use StageKind::{Ff, Prog};
-    let facts = |flags, ff_ps_constant_rows| DrawFacts {
-        flags,
-        ff_ps_constant_rows,
-    };
+    let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
     let rhw = both | DrawFlags::LAYOUT_RHW;
-    let cases: [(DrawFacts, Kinds); 16] = [
-        (facts(both, 0), Ok((Prog, Prog))),
-        (facts(rhw, 0), Ok((Ff, Prog))),
+    let cases: [(DrawFacts, Kinds); 14] = [
+        (facts(both), Ok((Prog, Prog))),
+        (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
         (
-            facts((rhw - DrawFlags::VS_CORE) | DrawFlags::VS_SAMPLES, 0),
+            facts((rhw - DrawFlags::VS_CORE) | DrawFlags::VS_SAMPLES),
             Ok((Ff, Prog)),
         ),
-        (facts(both - DrawFlags::VS_BOUND, 0), Err(TransformedFf)),
-        (facts(DrawFlags::LAYOUT_RHW, 1), Ok((Ff, Ff))),
-        (facts(both - DrawFlags::PS_BOUND, 1), Ok((Prog, Ff))),
-        (facts(both - DrawFlags::PS_BOUND, 2), Err(PsStageConstants)),
-        (facts(both | DrawFlags::VS_SAMPLES, 0), Err(Sampler)),
-        (facts(both | DrawFlags::PS_SAMPLES, 0), Err(Sampler)),
-        (facts(both | DrawFlags::PS_BUMP_ENV, 0), Err(BumpEnv)),
-        (facts(both - DrawFlags::VS_CORE, 0), Err(NotCoreShader)),
-        (facts(both - DrawFlags::PS_CORE, 0), Err(NotCoreShader)),
-        (facts(rhw - DrawFlags::PS_CORE, 0), Err(NotCoreShader)),
-        (facts(both | DrawFlags::BLENDING, 0), Err(Blending)),
-        (facts(both | DrawFlags::SCISSOR, 0), Err(Scissor)),
-        (facts(rhw | DrawFlags::SCISSOR, 0), Err(Scissor)),
+        (facts(both - DrawFlags::VS_BOUND), Err(TransformedFf)),
+        (facts(DrawFlags::LAYOUT_RHW), Ok((Ff, Ff))),
+        (facts(both - DrawFlags::PS_BOUND), Ok((Prog, Ff))),
+        (facts(both | DrawFlags::VS_SAMPLES), Err(VertexTexture)),
+        (facts(both - DrawFlags::VS_CORE), Err(NotCoreShader)),
+        (facts(both - DrawFlags::PS_CORE), Err(NotCoreShader)),
+        (facts(both | DrawFlags::BLENDING), Err(Blending)),
+        (facts(rhw | DrawFlags::SCISSOR), Err(Scissor)),
+        (
+            facts(rhw | DrawFlags::SAMPLES_DEPTH_TEXTURE),
+            Err(DepthTexture),
+        ),
+        (
+            facts(DrawFlags::LAYOUT_RHW | DrawFlags::FETCH4),
+            Err(Fetch4),
+        ),
+        (
+            facts(both | DrawFlags::SAMPLES_RT_TEXTURE),
+            Err(RenderTargetTexture),
+        ),
     ];
     for (i, (facts, expected)) in cases.into_iter().enumerate() {
         assert_eq!(core_draw_kinds(facts), expected, "case {i}");
     }
     let refusals = [
         NotCoreShader,
-        Sampler,
-        BumpEnv,
+        VertexTexture,
         TransformedFf,
-        PsStageConstants,
         Blending,
         Scissor,
-        CoreRefusal::FfTexture,
+        DepthTexture,
+        Fetch4,
+        RenderTargetTexture,
     ];
     let names = refusals.map(CoreRefusal::name);
     assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
-}
-
-/// A fixed-function cascade that reads a bound texture is refused.
-///
-/// A programmable pixel shader ignores the cascade, so the same bound texture refuses nothing
-/// there.
-#[test]
-fn ff_cascade_reading_a_texture_is_refused() {
-    let facts = |flags| DrawFacts {
-        flags,
-        ff_ps_constant_rows: 1,
-    };
-    let ff = DrawFlags::LAYOUT_RHW | DrawFlags::FF_PS_TEXTURES;
-    assert_eq!(core_draw_kinds(facts(ff)), Err(CoreRefusal::FfTexture));
-    let prog = ff | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
-    assert_eq!(
-        core_draw_kinds(facts(prog)),
-        Ok((StageKind::Ff, StageKind::Prog))
-    );
-    assert_eq!(
-        CoreRefusal::FfTexture.name(),
-        "IDirect3DDevice9::Draw*PrimitiveUP (a fixed-function stage reading a texture)"
-    );
 }
 
 /// Relative addressing binds every row; otherwise the rows the program names.
@@ -626,4 +608,14 @@ fn pos_fixup_follows_the_drawn_viewport() {
         bits(pos_fixup(&viewport(0, 64), target, true)),
         bits([1.0 / 256.0, -1.0 / 128.0, 1.0, 1.0, 0.0])
     );
+}
+
+/// A textured draw's variant types its volume and cube slots and takes `LOD_BIAS` with its table.
+#[test]
+fn texture_variant_types_slots_and_lod() {
+    let v = super::core_texture_variant(VariantKey::default(), 0b10, 0b100, true);
+    assert_eq!((v.volume_sampler_mask, v.cube_sampler_mask), (0b10, 0b100));
+    assert!(v.flags.contains(VariantFlags::LOD_BIAS));
+    let v = super::core_texture_variant(v, 0, 0, false);
+    assert!(!v.flags.contains(VariantFlags::LOD_BIAS));
 }

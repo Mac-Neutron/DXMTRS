@@ -316,6 +316,15 @@ fn meta(stage: &ShaderStage, tokens: &[u32]) -> CoreShaderMeta {
     )
 }
 
+/// The declared sampler slots: a `ps_2_0` `texld` of s0 declares s0 alone; a plain program none.
+#[test]
+fn core_meta_masks_the_declared_samplers() {
+    let texld = meta(&ShaderStage::Pixel, &PS_2_0_TEXLD);
+    assert_eq!(texld.sampler_mask, 1);
+    assert_eq!(texld.explicit_lod_mask, 0);
+    assert_eq!(meta(&ShaderStage::Pixel, &PS_2_0_C0).sampler_mask, 0);
+}
+
 #[test]
 fn core_meta_flags_a_declared_sampler() {
     assert!(meta(&ShaderStage::Pixel, &PS_2_0_TEXLD).samples());

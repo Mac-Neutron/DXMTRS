@@ -125,5 +125,9 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
         .core
         .as_deref_mut()?
         .read_back(bytes, desc.bytes_per_row as usize);
+    if ok {
+        // A SYSTEMMEM texture's level re-arms its dirty state, as mtld3d's read-back does.
+        dst.note_system_memory_written();
+    }
     Some(if ok { D3D_OK } else { D3DERR_INVALIDCALL })
 }

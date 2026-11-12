@@ -3760,6 +3760,12 @@ impl DeviceInner {
         self.core.is_some()
     }
 
+    /// The core runtime's device, `None` for one of mtld3d's.
+    #[cfg(feature = "core-runtime")]
+    pub fn core_mut(&mut self) -> Option<&mut d3d9_rt::device::CoreDevice> {
+        self.core.as_deref_mut()
+    }
+
     pub const fn record_handle(&self) -> DeviceRecordHandle {
         self.record_handle
     }
@@ -8621,11 +8627,6 @@ extern "system" fn device_update_texture(
     dst: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::UpdateTexture",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if src.is_null() || dst.is_null() {
         mtld3d_shared::log_once_warn!(

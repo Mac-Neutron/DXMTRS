@@ -9,18 +9,22 @@
 
 use core::{ffi::c_void, ops::Range};
 
-use d3d9_rt::device::{Bind, DrawData, DrawRefused, Indices, Stage};
+use d3d9_rt::device::{Bind, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format};
 use mtld3d_core::{
     convert::{
         FanRewrite, d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive,
         ff_vs_layout_from_elements, vertex_count,
     },
-    dxso::{FfPsKey, SemanticSet},
+    dxso::SemanticSet,
     ff_state::FfState,
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, ShaderCode, StageKind, VsStageKey,
-        core_draw_kinds, core_ps_variant, core_viewport, float_rows, indexed_up_vertices,
-        pos_fixup, up_byte_count,
+        core_draw_kinds, core_ps_variant, core_texture_variant, core_viewport, float_rows,
+        indexed_up_vertices, pos_fixup, up_byte_count,
+    },
+    sampler_state::{
+        TEXTURE_LOD_SLOT, description_from_snapshot, key_from_snapshot, lod_table,
+        sample_unfiltered, snapshot_from_state,
     },
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
     vs_draw::clip_plane_count,
@@ -29,7 +33,8 @@ use mtld3d_shared::{mtl, shader_create::ShaderStage, slice_from_caller};
 use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
-    D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE,
+    D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DSAMP_SRGBTEXTURE,
+    D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -58,11 +63,22 @@ pub fn create_core_shader(
     Ok((parsed, meta, code))
 }
 
-/// The bytes a core draw binds and the stage and slot of each, empty ones left out.
+/// What a core draw binds.
+///
+/// The bytes and the stage and slot of each, empty ones left out; and its pixel slots' textures
+/// and samplers.
 #[derive(Default)]
 struct Binds {
     bytes: Vec<u8>,
     at: Vec<(Stage, u8, Range<usize>)>,
+    textures: Vec<TextureBind>,
+}
+
+/// One sampled pixel slot of a draw: its texture (null for none) and its sampler states.
+struct SampledSlot {
+    slot: u16,
+    texture: *mut crate::texture::Direct3DTexture9,
+    states: [u32; SAMPLER_STATE_COUNT],
 }
 
 impl Binds {
@@ -112,13 +128,27 @@ fn resolve(
     let vs_core = vs.and_then(|s| s.core());
     let ps_core = ps.and_then(|s| s.core());
     // The pixel stages' bound textures (`cached_bound_texture_mask` is mtld3d's snapshot's, 0 here).
-    let bound = dev.stage_bindings().bound_mask().to_le_bytes()[0];
-    let ff_ps = ps.is_none().then(|| dev.ff_state().build_ps_key(&rs, 0));
-    // The cascade reads a bound texture exactly when the bound mask changes its key (C4b3a-3).
-    let ff_textures = bound != 0
-        && ff_ps
-            .as_ref()
-            .is_some_and(|k| dev.ff_state().build_ps_key(&rs, bound) != *k);
+    let bound_mask = dev.stage_bindings().bound_mask();
+    let bound = bound_mask.to_le_bytes()[0];
+    let ff_ps = ps
+        .is_none()
+        .then(|| dev.ff_state().build_ps_key(&rs, bound));
+    // The slots this draw samples: the PS's declared samplers, or the cascade's sampled stages.
+    let sampled_mask = match (ps_core, &ff_ps) {
+        (Some((_, meta)), _) => meta.sampler_mask,
+        (None, Some(key)) => key.sampled_stage_mask(),
+        (None, None) => 0,
+    };
+    let bindings = dev.stage_bindings();
+    let depth_mask = bindings.depth_sampler_mask() | bindings.depth_fetch_mask();
+    let (fetch4, fetch4_alpha) = bindings.fetch4().masks();
+    let rt_texture = (0..16u16).any(|slot| {
+        let tex = bindings.texture(usize::from(slot));
+        sampled_mask & (1 << slot) != 0
+            && !tex.is_null()
+            // SAFETY: a bound texture, live while its stage holds it.
+            && unsafe { &*tex }.d3d_usage() & D3DUSAGE_RENDERTARGET != 0
+    });
     let mut flags = DrawFlags::empty();
     flags.set(DrawFlags::VS_BOUND, vs.is_some());
     flags.set(DrawFlags::VS_CORE, vs_core.is_some());
@@ -130,14 +160,6 @@ fn resolve(
     flags.set(DrawFlags::PS_BOUND, ps.is_some());
     flags.set(DrawFlags::PS_CORE, ps_core.is_some());
     flags.set(
-        DrawFlags::PS_SAMPLES,
-        ps_core.is_some_and(|(_, m)| m.samples()),
-    );
-    flags.set(
-        DrawFlags::PS_BUMP_ENV,
-        ps_core.is_some_and(|(_, m)| m.bump_env()),
-    );
-    flags.set(
         DrawFlags::BLENDING,
         rs[D3DRS_ALPHABLENDENABLE as usize] != 0,
     );
@@ -145,11 +167,16 @@ fn resolve(
         DrawFlags::SCISSOR,
         rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
     );
-    flags.set(DrawFlags::FF_PS_TEXTURES, ff_textures);
-    let facts = DrawFacts {
-        flags,
-        ff_ps_constant_rows: ff_ps.as_ref().map_or(0, FfPsKey::constant_rows),
-    };
+    flags.set(
+        DrawFlags::SAMPLES_DEPTH_TEXTURE,
+        depth_mask & sampled_mask != 0,
+    );
+    flags.set(
+        DrawFlags::FETCH4,
+        (fetch4 | fetch4_alpha) & sampled_mask != 0,
+    );
+    flags.set(DrawFlags::SAMPLES_RT_TEXTURE, rt_texture);
+    let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
@@ -234,13 +261,28 @@ fn resolve(
                 let bools = bindings.ps_constants_b_bits().to_le_bytes();
                 binds.push(Stage::Pixel, mtl::PS_BOOL_CONST_SLOT, &bools);
             }
+            if meta.bump_env() {
+                let bump_env = dev.ff_state().build_bump_env_bytes();
+                binds.push(Stage::Pixel, mtl::PS_BUMP_ENV_SLOT, &bump_env);
+            }
             let linked = vs_outputs.map_or(0, |outputs| meta.link_inputs.mask_against(outputs));
             (PsStageKey::Prog(code.clone()), linked)
         }
         (_, _, _, ff_ps) => {
-            let constants = dev.ff_state().build_ps_constants(&rs);
-            binds.push(Stage::Pixel, mtl::PS_FLOAT_CONST_SLOT, &constants);
-            let key = ff_ps.unwrap_or_else(|| dev.ff_state().build_ps_key(&rs, 0));
+            let key = ff_ps.unwrap_or_else(|| dev.ff_state().build_ps_key(&rs, bound));
+            // TFACTOR and the stages' constants, as many rows as the cascade reads (C4b-3b).
+            let mut rows = [[0u8; 16]; 9];
+            let count = usize::from(key.constant_rows()).clamp(1, rows.len());
+            dev.ff_state()
+                .fill_ps_stage_constants(&rs, &mut rows[..count]);
+            binds.push(
+                Stage::Pixel,
+                mtl::PS_FLOAT_CONST_SLOT,
+                rows[..count].as_flattened(),
+            );
+            // Read only by a BUMPENVMAP stage; bound unread otherwise, as mtld3d's draws do.
+            let bump_env = dev.ff_state().build_bump_env_bytes();
+            binds.push(Stage::Pixel, mtl::PS_BUMP_ENV_SLOT, &bump_env);
             (PsStageKey::Ff(key), 0)
         }
     };
@@ -254,6 +296,76 @@ fn resolve(
         primitive == D3DPT_POINTLIST,
         linked,
     );
+    // The sampled slots: each one's texture (flushed to the core), view and sampler, or the black.
+    let mut slots = Vec::new();
+    let mut remaining = sampled_mask;
+    while remaining != 0 {
+        let slot = u16::try_from(remaining.trailing_zeros()).unwrap_or(0);
+        remaining &= remaining - 1;
+        let texture = dev.stage_bindings().texture(usize::from(slot));
+        let mut states = dev.stage_bindings().sampler_states(usize::from(slot));
+        if !texture.is_null() {
+            // SAFETY: a bound texture, live while its stage holds it.
+            let tex = unsafe { &*texture };
+            if dev.samples_unfiltered(tex) {
+                sample_unfiltered(&mut states);
+            }
+            states[TEXTURE_LOD_SLOT] = tex.inner().lod();
+        }
+        slots.push(SampledSlot {
+            slot,
+            texture,
+            states,
+        });
+    }
+    let texldl = ps_core.map_or(0, |(_, meta)| meta.explicit_lod_mask);
+    let table = lod_table(
+        sampled_mask,
+        fetch4 | fetch4_alpha,
+        texldl,
+        depth_mask,
+        slots.iter().map(|s| (u32::from(s.slot), &s.states)),
+        0.0,
+    );
+    if let Some(table) = &table {
+        binds.push(Stage::Pixel, mtl::PS_LOD_BIAS_SLOT, &table.bytes());
+    }
+    let variant = core_texture_variant(
+        variant,
+        dev.stage_bindings().volume_sampler_mask() & sampled_mask,
+        dev.stage_bindings().cube_sampler_mask() & sampled_mask,
+        table.is_some(),
+    );
+    if let Some(core) = dev.core.as_deref_mut() {
+        for s in &slots {
+            let snapshot = snapshot_from_state(&s.states, false);
+            let skey = key_from_snapshot(&snapshot);
+            let sampler = core.sampler(skey, &description_from_snapshot(&snapshot, skey));
+            let slot = u8::try_from(s.slot).unwrap_or(0);
+            let bind = if s.texture.is_null() {
+                None
+            } else {
+                // SAFETY: a bound texture, live while its stage holds it; distinct from the device.
+                let tex = unsafe { &mut *s.texture };
+                let id = tex.texture_id();
+                if crate::texture::core_flush_dirty(tex.inner_mut(), core) {
+                    core.texture_format(id).and_then(|stored| {
+                        let srgb = s.states[D3DSAMP_SRGBTEXTURE as usize] != 0;
+                        let format = mtl::PixelFormat::from_repr(stored)
+                            .and_then(|f| srgb.then(|| f.srgb_twin()).flatten())
+                            .map_or(stored, |twin| twin as u32);
+                        let swizzle = tex.inner().swizzle().map(|s| s.map(|c| c as u8));
+                        core.texture_bind(slot, id, view_format(format, swizzle), sampler.clone())
+                    })
+                } else {
+                    None
+                }
+            };
+            binds
+                .textures
+                .push(bind.unwrap_or_else(|| core.black_bind(slot, sampler)));
+        }
+    }
     // Empty when the alpha test or fog is off: not bound.
     let (alpha_ref, alpha_len) =
         mtld3d_core::draw_data::build_alpha_ref_bytes(variant, dev.ff_state().alpha_ref(&rs));
@@ -302,10 +414,11 @@ fn draw(
     let Some(metal_primitive) = metal_primitive else {
         return D3DERR_INVALIDCALL;
     };
-    let (key, binds) = match resolve(dev, primitive, stride) {
+    let (key, mut binds) = match resolve(dev, primitive, stride) {
         Ok(resolved) => resolved,
         Err(hr) => return hr,
     };
+    let textures = core::mem::take(&mut binds.textures);
     let binds = binds.binds();
     let pp = dev.present_params();
     let rs = dev.render_states();
@@ -321,6 +434,7 @@ fn draw(
         fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         binds: &binds,
+        textures: &textures,
     };
     let Some(core) = dev.core.as_deref_mut() else {
         return D3D_OK;

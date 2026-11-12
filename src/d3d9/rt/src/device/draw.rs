@@ -88,6 +88,8 @@ pub struct DrawData<'a> {
     /// The `MTLCullMode`.
     pub cull_mode: u8,
     pub binds: &'a [Bind<'a>],
+    /// The pixel slots' textures and samplers (C4b-3b).
+    pub textures: &'a [super::TextureBind],
 }
 
 /// Why a draw recorded nothing.
@@ -185,6 +187,11 @@ impl CoreDevice {
             depth_bias_clamp: 0.0,
         };
         let (primitive_type, vertex_count) = (draw.primitive, draw.vertex_count);
+        let textures: Vec<_> = draw
+            .textures
+            .iter()
+            .map(|t| (t.slot, Arc::clone(&t.texture), t.key, t.sampler.clone()))
+            .collect();
         self.emit(move |enc| {
             enc.encode_render_command(WmtcmdRenderSetpso {
                 r#type: WMT_RENDER_COMMAND_SET_PSO,
@@ -212,6 +219,16 @@ impl CoreDevice {
                     Stage::Vertex => direct::bind_bytes::<{ stage::VERTEX }>(enc, *slot, bound),
                     Stage::Pixel => direct::bind_bytes::<{ stage::PIXEL }>(enc, *slot, bound),
                 }
+            }
+            // The plain sampler state, not the cube twin: mtld3d's cube samples clamp in the
+            // shader as its own binds do (C4b3b-5).
+            for (slot, texture, key, sampler) in &textures {
+                direct::bind_texture::<{ stage::PIXEL }>(enc, *slot, Some((texture, *key)));
+                direct::bind_sampler::<{ stage::PIXEL }>(enc, *slot, sampler.as_ref(), false);
+            }
+            if !textures.is_empty() {
+                // A texture read in a pass that wrote it waits on a tile barrier.
+                enc.resolve_render_pass_barrier(dxmt_core::encoder::Encoder::dispatch_tile_barrier);
             }
             let Some((index_bytes, index_type, index_count)) = &indices else {
                 enc.encode_render_command(WmtcmdRenderDraw {

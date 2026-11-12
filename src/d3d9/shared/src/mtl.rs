@@ -691,6 +691,12 @@ pub const PS_BOOL_CONST_SLOT: u32 = 10;
 /// site; bound only for a draw whose bound stages carry a non-zero bias.
 pub const PS_LOD_BIAS_SLOT: u32 = 9;
 
+/// Fragment-stage buffer slot of the bump-environment uniform.
+///
+/// `BUMPENVMAT*`, `BUMPENVLSCALE` and `BUMPENVLOFFSET` per stage, which `texbem`/`texbeml`/`bem`
+/// and the cascade's BUMPENVMAP read.
+pub const PS_BUMP_ENV_SLOT: u32 = 12;
+
 /// Fragment-stage buffer slot of the per-draw `PsDraw` uniform.
 ///
 /// One `float4`: `.xy` are the logical pixels per render pixel of the bound

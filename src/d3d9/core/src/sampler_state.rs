@@ -533,6 +533,65 @@ pub fn explicit_lod_row(ss: &[u32; SAMPLER_STATE_COUNT]) -> Option<[f32; 2]> {
     Some([offset, floor])
 }
 
+/// A draw's per-slot LOD table: each sampled slot's bias, and the explicit-level rows.
+pub struct LodTable {
+    pub bias: [f32; LOD_BIAS_SLOTS],
+    /// Present when an explicit-level slot (`texldl`, a depth slot) carries a clamp row.
+    pub explicit: Option<[[f32; 2]; LOD_BIAS_SLOTS]>,
+}
+
+impl LodTable {
+    /// The table's bytes for `PS_LOD_BIAS_SLOT`.
+    #[must_use]
+    pub fn bytes(&self) -> [u8; LOD_BIAS_BYTES] {
+        build_lod_bias_bytes(
+            &self.bias,
+            self.explicit.as_ref().unwrap_or(&EXPLICIT_LOD_OPEN_ROWS),
+        )
+    }
+}
+
+/// The LOD table a draw binds, `None` when it carries nothing (the unbiased shader, no bind).
+///
+/// Only the slots the pixel stage samples (`sampled`) and that fetch4 does not take count. A
+/// slot's `D3DSAMP_MIPMAPLODBIAS` plus `scale_bias` (`render.lodBias`'s term) is its bias; the
+/// explicit-level slots (`texldl`'s and every depth slot) take their clamp row, since Metal
+/// ignores sampler LOD clamps at an explicit level. Both runtimes' draws decide it here.
+#[must_use]
+pub fn lod_table<'a>(
+    sampled: u16,
+    fetch4: u16,
+    texldl: u16,
+    depth: u16,
+    states: impl IntoIterator<Item = (u32, &'a [u32; SAMPLER_STATE_COUNT])>,
+    scale_bias: f32,
+) -> Option<LodTable> {
+    let table_mask = sampled & !fetch4;
+    let explicit_mask = (texldl | depth) & table_mask;
+    let mut bias = [0.0f32; LOD_BIAS_SLOTS];
+    let mut explicit: Option<[[f32; 2]; LOD_BIAS_SLOTS]> = None;
+    let mut any_bias = false;
+    for (stage, state) in states {
+        let Some(bit) = 1u16.checked_shl(stage) else {
+            continue;
+        };
+        if table_mask & bit == 0 {
+            continue;
+        }
+        let b = lod_bias(state) + scale_bias;
+        if lod_bias_active(b) {
+            bias[stage as usize] = b;
+            any_bias = true;
+        }
+        if explicit_mask & bit != 0
+            && let Some(row) = explicit_lod_row(state)
+        {
+            explicit.get_or_insert(EXPLICIT_LOD_OPEN_ROWS)[stage as usize] = row;
+        }
+    }
+    (any_bias || explicit.is_some()).then_some(LodTable { bias, explicit })
+}
+
 /// Serialise the per-slot LOD inputs into the fragment uniform's bytes.
 ///
 /// Row `i` is `(bias, exp2(bias), offset, floor)`. An implicit-LOD sample

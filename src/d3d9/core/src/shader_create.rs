@@ -124,6 +124,10 @@ pub struct CoreShaderMeta {
     pub link_inputs: LinkInputs,
     /// A `vs_3_0`'s extra output semantics; empty for any other program.
     pub link_outputs: SemanticSet,
+    /// The sampler slots the program declares (`dcl_<dim> sN`, SM1's sampled stages), s0-s15.
+    pub sampler_mask: u16,
+    /// The declared slots sampled at an explicit level (`texldl`), whose clamp the shader applies.
+    pub explicit_lod_mask: u16,
 }
 
 bitflags::bitflags! {
@@ -160,10 +164,16 @@ pub fn core_meta(program: &DxsoProgram) -> CoreShaderMeta {
         !declared_ps_samplers(program).is_empty(),
     );
     flags.set(CoreMetaFlags::BUMP_ENV, program.uses_bump_env());
+    let sampler_mask = declared_ps_samplers(program)
+        .keys()
+        .filter(|&&slot| slot < 16)
+        .fold(0u16, |mask, &slot| mask | 1 << slot);
     CoreShaderMeta {
         flags,
         link_inputs: link_inputs(program),
         link_outputs: SemanticSet::vs_outputs(program),
+        sampler_mask,
+        explicit_lod_mask: crate::dxso::explicit_lod_samplers(program) & sampler_mask,
     }
 }
 

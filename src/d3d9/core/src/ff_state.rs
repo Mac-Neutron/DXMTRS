@@ -2170,16 +2170,33 @@ impl FfState {
         let ptr = scratch.alloc_uninit_slice::<core::mem::MaybeUninit<[u8; 16]>>(count);
         // SAFETY: scratch reserved count aligned row slots, not yet initialized.
         let dst = unsafe { core::slice::from_raw_parts_mut(ptr, count) };
-        dst[0].write(self.build_ps_constants(render_states));
-        for (stage, slot) in dst[1..].iter_mut().enumerate() {
-            let rgba = d3dcolor_to_rgba(self.texture_stage_states[stage][D3DTSS_CONSTANT as usize]);
-            let mut bytes = [0; 16];
-            for (chunk, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(rgba) {
-                *chunk = value.to_le_bytes();
-            }
-            slot.write(bytes);
+        let mut rows_out = [[0u8; 16]; 9];
+        self.fill_ps_stage_constants(render_states, &mut rows_out[..count]);
+        for (slot, row) in dst.iter_mut().zip(rows_out) {
+            slot.write(row);
         }
         ptr.cast()
+    }
+
+    /// The cascade's constant rows into `out`.
+    ///
+    /// Row 0 TFACTOR, row `1 + n` stage `n`'s `D3DTSS_CONSTANT`, as many as `out` holds (at
+    /// most nine).
+    pub fn fill_ps_stage_constants(
+        &self,
+        render_states: &[u32; RENDER_STATE_COUNT],
+        out: &mut [[u8; 16]],
+    ) {
+        let Some((first, stages)) = out.split_first_mut() else {
+            return;
+        };
+        *first = self.build_ps_constants(render_states);
+        for (stage, slot) in stages.iter_mut().enumerate().take(8) {
+            let rgba = d3dcolor_to_rgba(self.texture_stage_states[stage][D3DTSS_CONSTANT as usize]);
+            for (chunk, value) in slot.as_chunks_mut::<4>().0.iter_mut().zip(rgba) {
+                *chunk = value.to_le_bytes();
+            }
+        }
     }
 
     /// Pack FF PS constants: `ps_c[0]` = texture factor.

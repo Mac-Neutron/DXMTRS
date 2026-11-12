@@ -3355,6 +3355,12 @@ impl TextureInner {
     pub const fn lod(&self) -> u32 {
         self.lod
     }
+
+    /// The format's channel swizzle on its Metal view, `None` when it reads as stored.
+    #[cfg(feature = "core-runtime")]
+    pub const fn swizzle(&self) -> Option<[mtld3d_shared::mtl::Swizzle; 4]> {
+        self.swizzle
+    }
 }
 
 /// Take uninitialized page-aligned staging, a parked box of each size first.
@@ -3584,13 +3590,18 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
             .collect();
         boxed.upload_generation = vec![0; boxed.staging.len()];
     }
+    // A core device's staging is the source of every upload and lock, never dropped (C4b3b-3).
+    #[cfg(feature = "core-runtime")]
+    let core = boxed.device_inner != 0 && DeviceInner::from_ptr(boxed.device_inner).is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
     // A default-pool static texture's staging only carries writes to the
     // GPU, and a streaming engine creates far more textures than it ever
     // writes through this device. Release the pages now and let
     // `ensure_staging` materialize a level on its first write; a whole-level
     // upload then releases it again ([`schedule_upload`]).
     for level in 0..boxed.staging.len() {
-        if boxed.staging_droppable(level) {
+        if !core && boxed.staging_droppable(level) {
             boxed.drop_staging(level);
         }
     }
@@ -3598,7 +3609,7 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
     // draws into it, so its staging starts released and claimed for the GPU:
     // the first CPU use of a level reads it back into fresh pages
     // (`move_subresource_to_staging`), and the level keeps them from then on.
-    if staging_lazy_class(boxed.d3d_pool, boxed.d3d_usage, boxed.flags, boxed.depth) {
+    if !core && staging_lazy_class(boxed.d3d_pool, boxed.d3d_usage, boxed.flags, boxed.depth) {
         for level in 0..boxed.staging.len() {
             boxed.drop_staging(level);
             boxed.mark_subresource_gpu_authoritative(0, level);
@@ -3800,19 +3811,6 @@ extern "system" fn texture_release(this: *mut c_void) -> u32 {
     unsafe { crate::com_ref::com_release::<Direct3DTexture9>(this) }
 }
 
-/// Whether the texture at `this` belongs to a device of the core runtime (DXMTRS C4b-3a).
-///
-/// A texture detached from its released device answers false: its paths push nothing.
-#[cfg(feature = "core-runtime")]
-fn texture_on_core(this: *mut c_void) -> bool {
-    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DTexture9 per the ABI.
-    let Some(obj) = (unsafe { InPtr::<Direct3DTexture9>::opt(this) }) else {
-        return false;
-    };
-    let device = obj.inner().device_inner;
-    device != 0 && DeviceInner::from_ptr(device).is_core()
-}
-
 /// Destroy a `Direct3DTexture9` wrapper once both `refcount` and `private_refcount` are zero.
 ///
 /// Pushes the Metal-handle teardown to the encoder thread, deregisters from
@@ -3856,6 +3854,11 @@ unsafe fn finalize_texture(this: *mut Direct3DTexture9) {
         let core = false;
         if !core {
             dev.push_control(crate::device::DestroyTextureOp { tex_id: texture_id });
+        }
+        // The store's texture goes with it; the closures already recorded hold their own.
+        #[cfg(feature = "core-runtime")]
+        if let Some(core) = dev.core_mut() {
+            core.forget_texture(texture_id);
         }
         // Drop from the live-textures registry before freeing the
         // inner Box so `evict_managed_resources` never sees a dangling
@@ -4195,10 +4198,6 @@ extern "system" fn texture_get_auto_gen_filter_type(this: *mut c_void) -> u32 {
 // log once and do nothing.
 extern "system" fn texture_generate_mip_sub_levels(this: *mut c_void) {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DBaseTexture9::GenerateMipSubLevels"
-    );
     let _timer = tex_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DTexture9 per IDirect3DTexture9 ABI.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DTexture9>::opt(this) }) else {
@@ -4240,6 +4239,15 @@ extern "system" fn texture_generate_mip_sub_levels(this: *mut c_void) {
     }
     ti.note_gpu_use();
     if upload_regenerates {
+        return;
+    }
+    // A core device regenerates in its store, in API order; a pending level-0 write regenerates
+    // the chain when its bind uploads it (`core_flush_dirty`).
+    #[cfg(feature = "core-runtime")]
+    if let Some(core) = dev.core_mut() {
+        if ti.dirty_mask & 1 == 0 {
+            core.texture_generate_mips(texture_id);
+        }
         return;
     }
     dev.push_control(crate::device::GenerateMipmapsOp { texture_id });
@@ -4643,11 +4651,6 @@ extern "system" fn texture_lock_rect(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DTexture9::LockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = tex_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DTexture9 per IDirect3DTexture9 ABI.
     // SAFETY: vtable `this` is the live cube wrapper for this call.
@@ -4784,11 +4787,6 @@ fn reject_unlock_level(level: u32) -> i32 {
 
 extern "system" fn texture_unlock_rect(this: *mut c_void, level: u32) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DTexture9::UnlockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = tex_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DTexture9 per IDirect3DTexture9 ABI.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DTexture9>::opt(this) }) else {
@@ -4885,11 +4883,6 @@ extern "system" fn texture_unlock_rect(this: *mut c_void, level: u32) -> i32 {
 
 extern "system" fn texture_add_dirty_rect(this: *mut c_void, rect: *const c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DTexture9::AddDirtyRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = tex_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DTexture9 per the ABI. InPtrMut
     // so we can union the rect into the source dirty region.
@@ -5816,7 +5809,196 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
     if ti.dirty_mask == 0 {
         return;
     }
+    // A core device uploads at the texture's next sampling bind ([`core_flush_dirty`]).
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return;
+    }
     flush_dirty_mips_slow::<false>(ti, dev);
+}
+
+/// Uploads `ti`'s dirty levels into `core`'s store (DXMTRS C4b-3b), making its texture first.
+///
+/// A texture the store lacks (made on another device, or CPU-only until now) gets its core
+/// texture and every level. Each dirty level, cube face or volume level goes as its pending rect
+/// (the whole level when none), from the staging, widened on the CPU to BGRA8 when its format's
+/// upload is not a plain copy (`upload_decode`). An autogen texture regenerates its chain after
+/// a level-0 upload. False when the texture has no core form here: a depth format or a render
+/// target (C4b-3d), whose draws are refused.
+#[cfg(feature = "core-runtime")]
+pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
+    use d3d9_rt::device::{CoreTextureDesc, TextureKind, UploadRegion};
+    if ti.flags.contains(TextureFlags::DEPTH_FORMAT)
+        || ti.d3d_usage & mtld3d_types::D3DUSAGE_RENDERTARGET != 0
+    {
+        return false;
+    }
+    let id = ti.texture_id;
+    let decode = mtld3d_core::upload_pass::upload_decode(ti.d3d_format, ti.metal_pixel_format)
+        .filter(|d| *d != mtld3d_core::upload_pass::UploadDecode::CopyBgra8);
+    let cube = ti.flags.contains(TextureFlags::CUBE);
+    let kind = if cube {
+        TextureKind::Cube
+    } else if ti.depth > 1 || ti.flags.contains(TextureFlags::VOLUME_TEXTURE) {
+        TextureKind::Volume
+    } else {
+        TextureKind::Tex2d
+    };
+    let fresh = !core.has_texture(id);
+    if fresh {
+        let pixel_format = if decode.is_some() {
+            mtld3d_shared::mtl::PixelFormat::Bgra8Unorm
+        } else {
+            ti.metal_pixel_format
+        };
+        let desc = CoreTextureDesc {
+            pixel_format: pixel_format as u32,
+            kind,
+            width: ti.width,
+            height: ti.height,
+            depth: ti.depth.max(1),
+            levels: ti.levels,
+            view_twins: ti.swizzle.is_some() || pixel_format.srgb_twin().is_some(),
+            block: if decode.is_some() {
+                (1, 1, 4)
+            } else {
+                (ti.block_w.max(1), ti.block_h.max(1), ti.block_bytes)
+            },
+        };
+        core.texture_create(id, &desc);
+    }
+    let levels = ti.levels as usize;
+    let all = if levels >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << levels) - 1
+    };
+    let mut regenerate = false;
+    let faces = if cube { CUBE_FACE_COUNT } else { 1 };
+    for face in 0..faces {
+        let mut mask = if fresh {
+            all
+        } else if cube {
+            ti.cube
+                .as_deref()
+                .map_or(0, |c| c.dirty_masks[face as usize])
+        } else {
+            ti.dirty_mask
+        };
+        if cube && let Some(c) = ti.cube.as_deref_mut() {
+            c.dirty_masks[face as usize] = 0;
+        }
+        while mask != 0 {
+            let level_bit = mask.trailing_zeros();
+            let level = level_bit as usize;
+            mask &= mask - 1;
+            if level >= levels {
+                continue;
+            }
+            let (w, h) = (ti.mip_widths[level], ti.mip_heights[level]);
+            let pending = if cube {
+                let index = ti.cube_subresource_index(face, level);
+                index.and_then(|i| ti.cube.as_deref_mut()?.pending_upload_rects[i].take())
+            } else {
+                ti.pending_upload_rects
+                    .get_mut(level)
+                    .and_then(Option::take)
+            };
+            let rect = if fresh {
+                DirtyRect::full(w, h)
+            } else {
+                pending.unwrap_or_else(|| DirtyRect::full(w, h))
+            };
+            let staging = if cube {
+                let Some(index) = ti.cube_subresource_index(face, level) else {
+                    continue;
+                };
+                ti.cube.as_deref().map(|c| Arc::clone(&c.staging[index]))
+            } else {
+                ti.staging.get(level).map(Arc::clone)
+            };
+            let Some(staging) = staging else {
+                continue;
+            };
+            let bytes = staging.as_slice();
+            let pitch = ti.mip_bytes_per_row(level) as usize;
+            let (bw, bh) = (ti.block_w.max(1), ti.block_h.max(1));
+            let block_rows = ti.mip_height(level).div_ceil(bh) as usize;
+            let slice_pitch = pitch * block_rows;
+            let depth = if kind == TextureKind::Volume {
+                (ti.depth >> level).max(1)
+            } else {
+                1
+            };
+            let region = UploadRegion {
+                level: level_bit,
+                slice: face,
+                x: rect.x,
+                y: rect.y,
+                z: 0,
+                width: rect.w,
+                height: rect.h,
+                depth,
+            };
+            let start =
+                (rect.y / bh) as usize * pitch + (rect.x / bw) as usize * ti.block_bytes as usize;
+            let uploaded = if decode.is_some() {
+                let dst_pitch = rect.w as usize * 4;
+                let mut widened = vec![0u8; dst_pitch * rect.h as usize * depth as usize];
+                let converted = mtld3d_core::pixel_convert::convert_region(
+                    &mut widened,
+                    mtld3d_types::D3DFMT_A8R8G8B8,
+                    bytes,
+                    ti.d3d_format,
+                    &mtld3d_core::pixel_convert::ConvertRegion {
+                        src_x: rect.x,
+                        src_y: rect.y,
+                        dst_x: 0,
+                        dst_y: 0,
+                        width: rect.w,
+                        height: rect.h,
+                        src_pitch: pitch,
+                        dst_pitch,
+                        src_slice_pitch: slice_pitch,
+                        dst_slice_pitch: dst_pitch * rect.h as usize,
+                        depth: depth as usize,
+                    },
+                );
+                converted
+                    && core.texture_upload(
+                        id,
+                        region,
+                        &widened,
+                        u32::try_from(dst_pitch).unwrap_or(u32::MAX),
+                        u32::try_from(dst_pitch * rect.h as usize).unwrap_or(u32::MAX),
+                    )
+            } else {
+                bytes.get(start..).is_some_and(|from| {
+                    core.texture_upload(
+                        id,
+                        region,
+                        from,
+                        u32::try_from(pitch).unwrap_or(u32::MAX),
+                        u32::try_from(slice_pitch).unwrap_or(u32::MAX),
+                    )
+                })
+            };
+            if !uploaded {
+                mtld3d_shared::log_once_warn_by!(
+                    target: crate::LOG_TARGET,
+                    key: id.raw(),
+                    "d3d9 core: texture {:#x} level {level} did not upload",
+                    id.raw()
+                );
+            }
+            regenerate |= level == 0;
+        }
+    }
+    ti.dirty_mask = 0;
+    if regenerate && ti.autogen_mipmap() {
+        core.texture_generate_mips(id);
+    }
+    true
 }
 
 /// Publish a CPU write of a texture in application order, after the passes before it.
@@ -5824,6 +6006,10 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// A CPU `StretchRect` conversion and a write into a render-target texture
 /// take this path; every other write waits for the level's next bind.
 pub fn flush_converted_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return;
+    }
     if ti.dirty_mask != 0 {
         flush_dirty_mips_slow::<true>(ti, dev);
     }
@@ -6081,11 +6267,6 @@ extern "system" fn volume_lock_box(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DVolumeTexture9::LockBox",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if locked_box.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -6213,11 +6394,6 @@ extern "system" fn volume_lock_box(
 
 extern "system" fn volume_unlock_box(this: *mut c_void, level: u32) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DVolumeTexture9::UnlockBox",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // SAFETY: vtable thunk; volume layout matches `Direct3DTexture9`.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DTexture9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
@@ -6273,11 +6449,6 @@ extern "system" fn volume_unlock_box(this: *mut c_void, level: u32) -> i32 {
 
 extern "system" fn volume_add_dirty_box(this: *mut c_void, _box: *const c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DVolumeTexture9::AddDirtyBox",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // SAFETY: vtable thunk; volume layout matches `Direct3DTexture9`.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DTexture9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
@@ -6775,11 +6946,6 @@ pub extern "system" fn cube_lock_rect(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DCubeTexture9::LockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = tex_timer(this);
     if face >= CUBE_FACE_COUNT || locked_rect.is_null() {
         return D3DERR_INVALIDCALL;
@@ -6849,11 +7015,6 @@ pub extern "system" fn cube_lock_rect(
 /// Unlock one cube face subresource.
 pub extern "system" fn cube_unlock_rect(this: *mut c_void, face: u32, level: u32) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DCubeTexture9::UnlockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if face >= CUBE_FACE_COUNT {
         return D3DERR_INVALIDCALL;
     }
@@ -6893,11 +7054,6 @@ pub extern "system" fn cube_unlock_rect(this: *mut c_void, face: u32, level: u32
 
 extern "system" fn cube_add_dirty_rect(this: *mut c_void, face: u32, rect: *const c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DTexture9>(this);
-    refuse_under_core!(
-        texture_on_core(this),
-        "IDirect3DCubeTexture9::AddDirtyRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if face >= CUBE_FACE_COUNT {
         return D3DERR_INVALIDCALL;
     }

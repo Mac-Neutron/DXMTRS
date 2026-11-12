@@ -336,6 +336,22 @@ pub fn core_ps_variant(
     variant
 }
 
+/// A textured core draw's variant (C4b-3b).
+///
+/// Its sampled volume and cube slots typed, `LOD_BIAS` when it binds its LOD table.
+#[must_use]
+pub fn core_texture_variant(
+    mut variant: VariantKey,
+    volume_mask: u16,
+    cube_mask: u16,
+    lod_table: bool,
+) -> VariantKey {
+    variant.volume_sampler_mask = volume_mask;
+    variant.cube_sampler_mask = cube_mask;
+    variant.flags.set(VariantFlags::LOD_BIAS, lod_table);
+    variant
+}
+
 bitflags::bitflags! {
     /// What a draw's state is, for [`core_draw_kinds`].
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -352,16 +368,16 @@ bitflags::bitflags! {
         const PS_BOUND = 1 << 4;
         /// The bound pixel shader was created by a core device.
         const PS_CORE = 1 << 5;
-        /// The bound pixel shader declares a sampler.
-        const PS_SAMPLES = 1 << 6;
-        /// The bound pixel shader reads the bump-env rows.
-        const PS_BUMP_ENV = 1 << 7;
         /// Blending is enabled.
         const BLENDING = 1 << 8;
         /// The scissor test is enabled.
         const SCISSOR = 1 << 9;
-        /// The fixed-function pixel cascade reads a bound texture.
-        const FF_PS_TEXTURES = 1 << 10;
+        /// A sampled pixel slot holds a depth-format texture (shadow compare or raw fetch).
+        const SAMPLES_DEPTH_TEXTURE = 1 << 10;
+        /// A sampled pixel slot has fetch4 latched.
+        const FETCH4 = 1 << 11;
+        /// A sampled pixel slot holds a render-target texture.
+        const SAMPLES_RT_TEXTURE = 1 << 12;
     }
 }
 
@@ -369,8 +385,6 @@ bitflags::bitflags! {
 #[derive(Clone, Copy, Default)]
 pub struct DrawFacts {
     pub flags: DrawFlags,
-    /// The constant rows the fixed-function pixel cascade reads (`FfPsKey::constant_rows`).
-    pub ff_ps_constant_rows: u8,
 }
 
 /// A stage of a core draw.
@@ -385,20 +399,20 @@ pub enum StageKind {
 pub enum CoreRefusal {
     /// A bound shader was not created by a core device.
     NotCoreShader,
-    /// A bound shader declares a sampler (textures are C4b-3's).
-    Sampler,
-    /// The pixel shader reads the bump-env rows.
-    BumpEnv,
+    /// The vertex shader declares a sampler (vertex textures are C4b-3c's).
+    VertexTexture,
     /// No vertex shader over a layout that is not pre-transformed (the FF VS's transforms).
     TransformedFf,
-    /// The fixed-function pixel cascade reads more than one constant row.
-    PsStageConstants,
     /// Blending is enabled.
     Blending,
     /// The scissor test is enabled.
     Scissor,
-    /// The fixed-function pixel cascade reads a bound texture (textures are C4b-3b's).
-    FfTexture,
+    /// A sampled slot holds a depth-format texture (C4b-3d).
+    DepthTexture,
+    /// A sampled slot has fetch4 latched (C4b-3d).
+    Fetch4,
+    /// A sampled slot holds a render-target texture (C4b-3d).
+    RenderTargetTexture,
 }
 
 impl CoreRefusal {
@@ -409,19 +423,19 @@ impl CoreRefusal {
             Self::NotCoreShader => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a shader no core device created)"
             }
-            Self::Sampler => "IDirect3DDevice9::Draw*PrimitiveUP (a shader declaring a sampler)",
-            Self::BumpEnv => "IDirect3DDevice9::Draw*PrimitiveUP (a pixel shader reading bump-env)",
+            Self::VertexTexture => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (a vertex shader declaring a sampler)"
+            }
             Self::TransformedFf => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (fixed-function transform of untransformed \
                  vertices)"
             }
-            Self::PsStageConstants => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (texture-stage constants)"
-            }
             Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
-            Self::FfTexture => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (a fixed-function stage reading a texture)"
+            Self::DepthTexture => "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture sampled)",
+            Self::Fetch4 => "IDirect3DDevice9::Draw*PrimitiveUP (fetch4)",
+            Self::RenderTargetTexture => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (a render-target texture sampled)"
             }
         }
     }
@@ -444,6 +458,15 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     if flags.contains(DrawFlags::SCISSOR) {
         return Err(CoreRefusal::Scissor);
     }
+    if flags.contains(DrawFlags::SAMPLES_DEPTH_TEXTURE) {
+        return Err(CoreRefusal::DepthTexture);
+    }
+    if flags.contains(DrawFlags::FETCH4) {
+        return Err(CoreRefusal::Fetch4);
+    }
+    if flags.contains(DrawFlags::SAMPLES_RT_TEXTURE) {
+        return Err(CoreRefusal::RenderTargetTexture);
+    }
     let vs = if flags.contains(DrawFlags::LAYOUT_RHW) {
         StageKind::Ff
     } else if !flags.contains(DrawFlags::VS_BOUND) {
@@ -451,24 +474,14 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     } else if !flags.contains(DrawFlags::VS_CORE) {
         return Err(CoreRefusal::NotCoreShader);
     } else if flags.contains(DrawFlags::VS_SAMPLES) {
-        return Err(CoreRefusal::Sampler);
+        return Err(CoreRefusal::VertexTexture);
     } else {
         StageKind::Prog
     };
     let ps = if !flags.contains(DrawFlags::PS_BOUND) {
-        if flags.contains(DrawFlags::FF_PS_TEXTURES) {
-            return Err(CoreRefusal::FfTexture);
-        }
-        if f.ff_ps_constant_rows > 1 {
-            return Err(CoreRefusal::PsStageConstants);
-        }
         StageKind::Ff
     } else if !flags.contains(DrawFlags::PS_CORE) {
         return Err(CoreRefusal::NotCoreShader);
-    } else if flags.contains(DrawFlags::PS_SAMPLES) {
-        return Err(CoreRefusal::Sampler);
-    } else if flags.contains(DrawFlags::PS_BUMP_ENV) {
-        return Err(CoreRefusal::BumpEnv);
     } else {
         StageKind::Prog
     };

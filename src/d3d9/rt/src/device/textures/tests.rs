@@ -48,7 +48,7 @@ fn lines<'a>(calls: &'a [String], prefix: &str) -> Vec<&'a str> {
 /// A texture is made once; two uploads to it are two copies in one blit pass.
 #[test]
 fn create_once_upload_twice() {
-    const DEVICE: u64 = 0xb1;
+    const DEVICE: u64 = 0xd1;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(1);
     core.texture_create(id, &bgra(4, 4, 1));
@@ -82,7 +82,7 @@ fn create_once_upload_twice() {
 /// A pass with no work is dropped, so Clears stand for the draws.
 #[test]
 fn blit_closes_before_render() {
-    const DEVICE: u64 = 0xb2;
+    const DEVICE: u64 = 0xd2;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(2);
     core.texture_create(id, &bgra(2, 2, 1));
@@ -105,7 +105,7 @@ fn blit_closes_before_render() {
 /// A BC1 mip of 2x2 texels uploads one 4x4 block: size clamped to the mip edge, 8 bytes a row.
 #[test]
 fn bc_small_mip_extents() {
-    const DEVICE: u64 = 0xb3;
+    const DEVICE: u64 = 0xd3;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(3);
     let desc = CoreTextureDesc {
@@ -130,7 +130,7 @@ fn bc_small_mip_extents() {
 /// A volume's region goes in z: slice 0, origin.z and size.depth from the region.
 #[test]
 fn volume_slice_extents() {
-    const DEVICE: u64 = 0xb4;
+    const DEVICE: u64 = 0xd4;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(4);
     let desc = CoreTextureDesc {
@@ -157,7 +157,7 @@ fn volume_slice_extents() {
 /// A source pitch wider than the row is repacked to the tight row.
 #[test]
 fn rows_repacked_to_tight_pitch() {
-    const DEVICE: u64 = 0xb5;
+    const DEVICE: u64 = 0xd5;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(5);
     core.texture_create(id, &bgra(2, 2, 1));
@@ -176,7 +176,7 @@ fn rows_repacked_to_tight_pitch() {
 /// A 2 MiB upload in a 32-bit profile (1 MiB ring blocks) is one copy (an oversize block).
 #[test]
 fn oversize_upload_i686() {
-    const DEVICE: u64 = 0xb6;
+    const DEVICE: u64 = 0xd6;
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
     let mut core = CoreDevice::new(mtl, queue_profile_for(32));
@@ -195,7 +195,7 @@ fn oversize_upload_i686() {
 /// Three 16 MiB uploads in a 32-bit profile (32 MiB budget) commit once, at the third.
 #[test]
 fn budget_commits_chunk() {
-    const DEVICE: u64 = 0xb7;
+    const DEVICE: u64 = 0xd7;
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
     let mut core = CoreDevice::new(mtl, queue_profile_for(32));
@@ -215,7 +215,7 @@ fn budget_commits_chunk() {
 /// A generated mip chain is one blit record after the level-0 upload.
 #[test]
 fn generate_mips_after_upload() {
-    const DEVICE: u64 = 0xb8;
+    const DEVICE: u64 = 0xd8;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(8);
     core.texture_create(id, &bgra(4, 4, 3));
@@ -237,7 +237,7 @@ fn generate_mips_after_upload() {
 /// Forgetting a texture drops the store's entry; what was recorded still runs.
 #[test]
 fn forget_keeps_encoded() {
-    const DEVICE: u64 = 0xb9;
+    const DEVICE: u64 = 0xd9;
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(9);
     core.texture_create(id, &bgra(2, 2, 1));

@@ -774,3 +774,36 @@ fn the_last_bound_cache_rebinds_the_vertex_lod_table_once_per_pass_and_change() 
     bound.reset();
     assert!(bound.vs_lod_changed(table.bytes()), "a new pass rebinds");
 }
+
+/// The draw's LOD table follows the sampled slots.
+///
+/// A bias on a sampled slot makes one, on an unsampled or fetch4 slot none; an explicit-level slot
+/// with a clamp takes its row.
+#[test]
+fn lod_table_follows_the_sampled_slots() {
+    let mut biased = mtld3d_types::sampler_state_defaults();
+    biased[mtld3d_types::D3DSAMP_MIPMAPLODBIAS as usize] = 1.0f32.to_bits();
+    let plain = mtld3d_types::sampler_state_defaults();
+    let states = [(0u32, &biased), (1u32, &plain)];
+    let table = super::lod_table(0b01, 0, 0, 0, states, 0.0).expect("slot 0's bias");
+    assert!((table.bias[0] - 1.0).abs() < f32::EPSILON);
+    assert!(table.explicit.is_none());
+    assert!(
+        super::lod_table(0b10, 0, 0, 0, states, 0.0).is_none(),
+        "slot 0 unsampled"
+    );
+    assert!(
+        super::lod_table(0b01, 0b01, 0, 0, states, 0.0).is_none(),
+        "fetch4's slot"
+    );
+    assert!(
+        super::lod_table(0b11, 0, 0, 0, [(1u32, &plain)], 0.0).is_none(),
+        "no bias"
+    );
+    let mut clamped = mtld3d_types::sampler_state_defaults();
+    clamped[mtld3d_types::D3DSAMP_MAXMIPLEVEL as usize] = 2;
+    clamped[mtld3d_types::D3DSAMP_MIPFILTER as usize] = mtld3d_types::D3DTEXF_POINT;
+    let table =
+        super::lod_table(0b01, 0, 0b01, 0, [(0u32, &clamped)], 0.0).expect("texldl's clamp row");
+    assert!(table.explicit.is_some());
+}

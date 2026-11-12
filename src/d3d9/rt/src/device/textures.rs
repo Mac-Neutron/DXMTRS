@@ -71,10 +71,30 @@ pub struct UploadRegion {
     pub depth: u32,
 }
 
+/// A texture and sampler a draw binds at one pixel slot.
+pub struct TextureBind {
+    pub(super) slot: u8,
+    pub(super) texture: Arc<Texture>,
+    pub(super) key: TextureViewKey,
+    pub(super) sampler: Option<Arc<dxmt_core::sampler::Sampler>>,
+}
+
 /// A stored texture: the core texture and the description it was made from.
 pub(super) struct Stored {
     texture: Arc<Texture>,
     desc: CoreTextureDesc,
+}
+
+/// The view format of `pixel_format` with `swizzle` in its high bits.
+///
+/// `swizzle` is Metal's `MTLTextureSwizzle` per channel, red green blue alpha; no swizzle is the
+/// format itself.
+#[must_use]
+pub const fn view_format(pixel_format: u32, swizzle: Option<[u8; 4]>) -> u32 {
+    match swizzle {
+        Some([r, g, b, a]) => winemetal_sys::wire::encode_format_swizzle(pixel_format, r, g, b, a),
+        None => pixel_format,
+    }
 }
 
 impl CoreDevice {
@@ -119,6 +139,45 @@ impl CoreDevice {
                 desc: *desc,
             },
         );
+    }
+
+    /// The `WMTPixelFormat` `id`'s texture is stored in, if the store holds it.
+    #[must_use]
+    pub fn texture_format(&self, id: TextureId) -> Option<u32> {
+        self.textures.get(&id).map(|s| s.desc.pixel_format)
+    }
+
+    /// A draw's bind of `id`'s texture in `view_format` with `sampler` at pixel `slot`.
+    #[must_use]
+    pub fn texture_bind(
+        &self,
+        slot: u8,
+        id: TextureId,
+        view_format: u32,
+        sampler: Option<Arc<dxmt_core::sampler::Sampler>>,
+    ) -> Option<TextureBind> {
+        let (texture, key) = self.texture_view(id, view_format)?;
+        Some(TextureBind {
+            slot,
+            texture,
+            key,
+            sampler,
+        })
+    }
+
+    /// A draw's bind of the opaque black at pixel `slot`, with `sampler`.
+    pub fn black_bind(
+        &mut self,
+        slot: u8,
+        sampler: Option<Arc<dxmt_core::sampler::Sampler>>,
+    ) -> TextureBind {
+        let (texture, key) = self.black();
+        TextureBind {
+            slot,
+            texture,
+            key,
+            sampler,
+        }
     }
 
     /// Whether the store holds `id`'s texture.
