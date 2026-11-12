@@ -201,6 +201,7 @@ dependencies = [
  "log",
  "mtld3d-core",
  "mtld3d-types",
+ "rustc-hash",
  "winemetal-sys",
 ]
 

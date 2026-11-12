@@ -44,7 +44,6 @@ pub mod encoder_value;
 pub mod extended;
 pub mod fetch4;
 pub mod ff_build;
-pub mod ff_pipeline;
 pub mod ff_state;
 pub mod format;
 pub mod format_probe;

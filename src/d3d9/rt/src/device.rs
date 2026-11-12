@@ -12,7 +12,7 @@ use dxmt_core::{
     resource::{Texture, TextureViewKey},
     staging::Staging,
 };
-use mtld3d_core::ff_pipeline::FfPipelineKey;
+use mtld3d_core::pipeline_key::{PipelineKey, PipelineSource};
 use winemetal_sys::{
     MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
 };
@@ -25,18 +25,21 @@ pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 /// The recording state is the API thread's view of the chunk being recorded: whether the last
 /// closure left a render pass open, and whether the chunk holds any work. [`Drop`] drains the
 /// queue first; then fields drop in order: the queue (its threads, and the chunks holding the
-/// closures) before the back buffer and the window the closures name, and the pipelines, whose
-/// raw handles the closures carry.
+/// closures) before the back buffer and the window the closures name, and the pipelines and the
+/// stage functions, whose raw handles the closures carry.
 pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
     window: Option<swapchain::Window>,
     /// The read-back destination, made at the first read-back and kept.
     readback: Option<Arc<Staging>>,
-    /// The fixed-function pipelines by key, handle 0 for one that did not build.
+    /// The pipelines by key, each with its source (none when a stage does not parse).
     ///
+    /// Handle 0 for one that did not build or was not built (its layout crosses the stride).
     /// Never cleared: a recorded closure names its pipeline by handle until the drain.
-    pipelines: PsoMap<FfPipelineKey, ()>,
+    pipelines: PsoMap<PipelineKey, Option<PipelineSource>>,
+    /// The compiled stage functions the pipelines are made of.
+    functions: draw::StageFunctions,
     render_open: bool,
     dirty: bool,
 }
@@ -70,6 +73,7 @@ impl CoreDevice {
             window: None,
             readback: None,
             pipelines: PsoMap::default(),
+            functions: draw::StageFunctions::default(),
             render_open: false,
             dirty: false,
         }
@@ -159,7 +163,7 @@ mod surface;
 mod swapchain;
 mod sync;
 
-pub use draw::{DrawRefused, FfDrawData};
+pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
 
 #[cfg(test)]

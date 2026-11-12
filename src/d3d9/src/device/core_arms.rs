@@ -7,16 +7,21 @@
 
 use core::ffi::c_void;
 
+use d3d9_rt::device::{Bind, DrawData, Stage};
 use mtld3d_core::{
-    convert::{d3d_to_metal_primitive, ff_vs_layout_from_elements, vertex_count},
+    convert::{
+        d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive, ff_vs_layout_from_elements,
+        fvf_to_elements, vertex_count,
+    },
     dxso::MAX_LINKED_INPUTS,
-    ff_pipeline::{FfPipelineKey, up_byte_count},
+    pipeline_key::{DeclCode, PipelineKey, PsStageKey, VsStageKey, core_viewport, up_byte_count},
 };
-use mtld3d_shared::InPtr;
+use mtld3d_shared::{InPtr, mtl};
 use mtld3d_types::{
-    D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
-    D3DERR_NOTAVAILABLE, D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFVF_POSITION_MASK, D3DFVF_XYZRHW,
-    D3DMATRIX, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE, D3DRS_SCISSORTESTENABLE,
+    D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DCULL_NONE, D3DDECL_END,
+    D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFILL_SOLID, D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8,
+    D3DFVF_POSITION_MASK, D3DFVF_XYZRHW, D3DMATRIX, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
+    D3DRS_SCISSORTESTENABLE,
 };
 
 use super::{DeviceInner, Direct3DDevice9, refuse_under_core};
@@ -203,31 +208,65 @@ pub fn draw_primitive_up(
         .iter()
         .filter(|(d3d, _)| enabled & d3d != 0)
         .fold(0_u8, |mask, (_, metal)| mask | metal);
-    let key = FfPipelineKey {
-        vs: vs_key,
-        ps: ps_key,
+    // ponytail: the declaration's code is built per draw until the front end keeps it on the
+    // declaration (C4b-2 Task 4).
+    let layout = DeclCode::new(
+        fvf_to_elements(fvf)
+            .0
+            .into_iter()
+            .chain([D3DDECL_END])
+            .collect(),
+    );
+    let key = PipelineKey {
+        vs: VsStageKey::Ff(vs_key),
+        ps: PsStageKey::Ff(ps_key),
         variant,
-        fvf,
+        layout,
         stride,
         write_mask,
     };
-    let draw = d3d9_rt::device::FfDrawData {
+    // No depth surface: an RHW draw's depth clamps (pos_fixup.z), as mtld3d's does.
+    let pos_fixup = [
+        1.0 / to_f32(viewport.width.max(1)),
+        -1.0 / to_f32(viewport.height.max(1)),
+        1.0,
+        1.0,
+        0.0,
+    ]
+    .iter()
+    .flat_map(|v: &f32| v.to_le_bytes())
+    .collect::<Vec<u8>>();
+    let slot = |slot: u32| u8::try_from(slot).expect("a Metal buffer slot below 31");
+    let vs = |index, bytes| Bind {
+        stage: Stage::Vertex,
+        slot: slot(index),
+        bytes,
+    };
+    let ps = |index, bytes| Bind {
+        stage: Stage::Pixel,
+        slot: slot(index),
+        bytes,
+    };
+    let binds = [
+        vs(mtl::VS_FLOAT_CONST_SLOT, &vs_constants[..]),
+        vs(mtl::VS_POS_FIXUP_SLOT, &pos_fixup),
+        vs(mtl::VS_DRAW_SLOT, &vs_draw),
+        ps(mtl::PS_FLOAT_CONST_SLOT, &ps_constants),
+        // Empty when the alpha test or fog is off: not bound.
+        ps(mtl::PS_ALPHA_REF_SLOT, &alpha_ref[..alpha_len]),
+        ps(mtl::PS_FOG_SLOT, &fog[..fog_len]),
+    ];
+    let pp = dev.present_params();
+    let draw = DrawData {
         primitive: metal_primitive as u8,
-        vertex_count: count,
         vertices: &vertices,
-        vs_constants: &vs_constants,
-        // No depth surface: an RHW draw's depth clamps (pos_fixup.z), as mtld3d's does.
-        pos_fixup: [
-            1.0 / to_f32(viewport.width.max(1)),
-            -1.0 / to_f32(viewport.height.max(1)),
-            1.0,
-            1.0,
-            0.0,
-        ],
-        vs_draw: &vs_draw,
-        ps_constants: &ps_constants,
-        alpha_ref: &alpha_ref[..alpha_len],
-        fog: &fog[..fog_len],
+        vertex_count: count,
+        indices: None,
+        viewport: core_viewport(&viewport, (pp.back_buffer_width, pp.back_buffer_height)),
+        // C4a's arm culls nothing and fills (C4b-2 Task 4 takes the render states).
+        fill_mode: d3d_to_metal_fill(D3DFILL_SOLID) as u8,
+        cull_mode: d3d_to_metal_cull(D3DCULL_NONE) as u8,
+        binds: &binds,
     };
     // A refused draw records nothing (a pipeline that does not build is logged); D3D9 reports
     // nothing for it, as under C4a.

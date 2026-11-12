@@ -417,7 +417,6 @@ src/d3d9/core/src/encoder_data.rs RtBinding Clone
 src/d3d9/core/src/encoder_data.rs StretchSurfaceFlags Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/encoder_data.rs TextureInfo Clone
 src/d3d9/core/src/encoder_data.rs VbibWarmupEntry Clone,Copy
-src/d3d9/core/src/ff_pipeline.rs FfPipelineKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/ff_state.rs FfVsDirty Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/ff_state.rs FogConfig Clone,Copy
 src/d3d9/core/src/format.rs StandaloneSurfaceKind Clone,Copy
@@ -552,6 +551,7 @@ src/d3d9/mtl/src/wmt.rs Size Default,Clone,Copy,PartialEq,Eq
 src/d3d9/mtl/src/wmt.rs SpatialScalerInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
+src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
 src/d3d9/shared/src/commands.rs BlitCommand Clone,Copy
 src/d3d9/shared/src/commands.rs BlitCommandType Clone,Copy,Debug,PartialEq,Eq,FromRepr
 src/d3d9/shared/src/commands.rs Command Clone,Copy
