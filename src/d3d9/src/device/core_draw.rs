@@ -15,7 +15,7 @@ use mtld3d_core::{
         FanRewrite, d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive,
         ff_vs_layout_from_elements, vertex_count,
     },
-    dxso::SemanticSet,
+    dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, ShaderCode, StageKind, VsStageKey,
@@ -206,6 +206,8 @@ fn resolve(
         VsStageKey::Prog {
             code: code.clone(),
             clip_plane_count: clip_plane_count(&rs),
+            // A sampling vertex shader is refused until its vertex textures are bound.
+            sampler_kinds: VsSamplerKinds::default(),
         }
     } else {
         // A pre-transformed layout: the fixed-function stage, a bound shader bypassed.

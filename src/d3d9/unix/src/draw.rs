@@ -385,17 +385,16 @@ fn emit_draw_view(
         }
         VsSourceView::FixedFunction(_) => PsSamplerDecls::default(),
     };
-    // Every vertex sample names its level, and Metal applies no sampler LOD
-    // clamp to an explicit level, so a vertex slot whose state moves that
-    // level (a texture LOD, a LOD bias, a finest level) reaches the shader
-    // through the vertex LOD table. The VS key carries the table only for a
-    // shader whose `texldl` samples such a slot; a draw with no such slot
-    // keeps its library. The keyed copy is a local, so the memo lookup
+    // The VS key carries the vertex LOD table only where `vertex_lod_table`
+    // says the shader reads it. The keyed copy is a local, so the memo lookup
     // names the snapshot record alongside it.
     let vs_lod_source;
     let vs = match vs_snapshot {
         VsSourceView::Programmable(source)
-            if vs_decls.explicit_lod_mask() & u16::from(enc.vertex_lod_mask()) != 0 =>
+            if mtld3d_core::sampler_state::vertex_lod_table(
+                vs_decls.explicit_lod_mask(),
+                enc.vertex_lod_mask(),
+            ) =>
         {
             vs_lod_source = source.with_lod_table();
             VsSourceView::Programmable(&vs_lod_source)

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mtld3d_core::{
     convert::{FanRewrite, ff_vs_layout_from_elements, fvf_to_elements},
-    dxso::MAX_LINKED_INPUTS,
+    dxso::{MAX_LINKED_INPUTS, VsSamplerKinds},
     ff_state::FfState,
     ids::ProgramId,
     pipeline_key::{DeclCode, PipelineKey, PsStageKey, ShaderCode, VsStageKey},
@@ -93,6 +93,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         vs: VsStageKey::Prog {
             code: vs,
             clip_plane_count: 0,
+            sampler_kinds: VsSamplerKinds::default(),
         },
         ps: PsStageKey::Prog(ps),
         variant: mtld3d_core::dxso::VariantKey::default(),
@@ -485,6 +486,7 @@ fn a_crossing_draw_is_refused() {
                 0x0000_ffff,
             ]),
             clip_plane_count: 0,
+            sampler_kinds: VsSamplerKinds::default(),
         },
         layout: decl(&[
             element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),

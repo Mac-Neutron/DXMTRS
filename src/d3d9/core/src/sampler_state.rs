@@ -551,6 +551,19 @@ impl LodTable {
     }
 }
 
+/// Whether a sampling vertex shader's key carries the vertex LOD table.
+///
+/// Every vertex sample names its level, and Metal applies no sampler LOD clamp to an explicit
+/// level, so a vertex slot whose state moves that level (a texture LOD, a LOD bias, a finest
+/// level: `lod_mask`, [`VertexLodTable::mask`]) reaches the shader through the table. Only a
+/// shader whose `texldl` samples such a slot (`explicit_lod`, the shader's explicit-level
+/// samplers) takes it; a draw with no such slot keeps its library. Both runtimes' draws decide it
+/// here.
+#[must_use]
+pub const fn vertex_lod_table(explicit_lod: u16, lod_mask: u8) -> bool {
+    explicit_lod & lod_mask as u16 != 0
+}
+
 /// The LOD table a draw binds, `None` when it carries nothing (the unbiased shader, no bind).
 ///
 /// Only the slots the pixel stage samples (`sampled`) and that fetch4 does not take count. A

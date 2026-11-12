@@ -807,3 +807,15 @@ fn lod_table_follows_the_sampled_slots() {
         super::lod_table(0b01, 0, 0b01, 0, [(0u32, &clamped)], 0.0).expect("texldl's clamp row");
     assert!(table.explicit.is_some());
 }
+
+#[test]
+fn vertex_lod_table_needs_a_sampled_moved_slot() {
+    // Slot 0 is sampled at an explicit level and its state moves the level.
+    assert!(vertex_lod_table(0b0001, 0b0001));
+    // The moved slot is not one the shader samples at an explicit level.
+    assert!(!vertex_lod_table(0b0001, 0b0010));
+    // No explicit-level sample at all.
+    assert!(!vertex_lod_table(0, 0b1111));
+    // Pixel-range bits of the mask never meet the four vertex slots.
+    assert!(!vertex_lod_table(0b1_0000, 0b1111));
+}

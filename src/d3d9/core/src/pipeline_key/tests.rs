@@ -143,6 +143,7 @@ fn prog_base() -> PipelineKey {
         vs: VsStageKey::Prog {
             code: code(&VS_POS_TEX1),
             clip_plane_count: 0,
+            sampler_kinds: VsSamplerKinds::default(),
         },
         ps: PsStageKey::Prog(code(&PS_C0)),
         variant: VariantKey::default(),
@@ -195,6 +196,39 @@ type Case = (&'static str, fn() -> PipelineKey, Change);
 /// What [`core_draw_kinds`] answers.
 type Kinds = Result<(StageKind, StageKind), CoreRefusal>;
 
+fn prog_kinds_of(key: &mut PipelineKey) -> &mut VsSamplerKinds {
+    match &mut key.vs {
+        VsStageKey::Prog { sampler_kinds, .. } => sampler_kinds,
+        VsStageKey::Ff(_) => panic!("a programmable vertex stage"),
+    }
+}
+
+/// A sampling vertex shader's kinds reach the lowering.
+///
+/// A cube or volume slot types its texture, and the LOD table makes `texldl` read its row.
+#[test]
+fn prog_vs_spec_carries_the_sampler_kinds() {
+    let mut key = prog_base();
+    *prog_kinds_of(&mut key) = VsSamplerKinds {
+        volume_mask: 0b100,
+        cube_mask: 0b10,
+        lod_table: true,
+    };
+    match source(&key).vs.spec {
+        StageSpec::Vs(spec) => {
+            assert_eq!(spec.sampler_kinds.volume_mask, 0b100);
+            assert_eq!(spec.sampler_kinds.cube_mask, 0b10);
+            assert!(spec.sampler_kinds.lod_table);
+        }
+        StageSpec::Ps(_) => panic!("a vertex spec on the vertex stage"),
+    }
+    // The fixed-function vertex stage samples nothing.
+    match source(&ff_base()).vs.spec {
+        StageSpec::Vs(spec) => assert_eq!(spec.sampler_kinds, VsSamplerKinds::default()),
+        StageSpec::Ps(_) => panic!("a vertex spec on the vertex stage"),
+    }
+}
+
 /// Each field of the key, in each stage arm, reaches what its pipeline is built from.
 ///
 /// Two keys differing in one field give different sources, so a key that left a pipeline input
@@ -203,7 +237,7 @@ type Kinds = Result<(StageKind, StageKind), CoreRefusal>;
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 13] = [
+    let changes: [Case; 15] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -214,9 +248,16 @@ fn pipeline_key_tracks_every_input() {
             k.vs = VsStageKey::Prog {
                 code: code(&VS_POS_TEX1_OTHER),
                 clip_plane_count: 0,
+                sampler_kinds: VsSamplerKinds::default(),
             };
         }),
         ("vs Prog (clip planes)", prog_base, |k| *prog_clip_of(k) = 2),
+        ("vs Prog (a cube vertex sampler)", prog_base, |k| {
+            prog_kinds_of(k).cube_mask = 0b10;
+        }),
+        ("vs Prog (the vertex LOD table)", prog_base, |k| {
+            prog_kinds_of(k).lod_table = true;
+        }),
         ("vs arm", prog_base, |k| {
             k.vs = VsStageKey::Ff(ff_vs(&prog_elements()));
         }),

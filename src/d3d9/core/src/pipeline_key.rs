@@ -148,10 +148,13 @@ impl Hash for DeclCode {
 pub enum VsStageKey {
     /// The fixed-function vertex stage of this key.
     Ff(FfVsKey),
-    /// The application's program, with the user clip planes it writes.
+    /// The application's program.
+    ///
+    /// With the user clip planes it writes and the kinds of the textures at its vertex samplers.
     Prog {
         code: ShaderCode,
         clip_plane_count: u8,
+        sampler_kinds: VsSamplerKinds,
     },
 }
 
@@ -236,7 +239,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         write_mask,
     } = key;
     let elements = layout.elements();
-    let (vs_code, declared, clip_plane_count, resolved) = match vs {
+    let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
         VsStageKey::Ff(vs) => {
             let built = ff_build::vertex(vs);
             let resolved = resolve_attrs_for_ff(elements, &vs.passthrough);
@@ -244,12 +247,15 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
                 ff_code(built.tokens),
                 built.provided_input_mask,
                 vs.clip_plane_count,
+                // The fixed-function vertex stage samples nothing.
+                VsSamplerKinds::default(),
                 resolved,
             )
         }
         VsStageKey::Prog {
             code,
             clip_plane_count,
+            sampler_kinds,
         } => {
             let parsed = parse_shader(&ShaderStage::Vertex, code.tokens())?;
             let semantics = parsed
@@ -263,7 +269,13 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
                 .collect::<Vec<_>>();
             let resolved = resolve_attrs_for_vs(elements, &semantics);
             // A program declares what it reads; the layout alone decides what is provided.
-            (code.clone(), u16::MAX, *clip_plane_count, resolved)
+            (
+                code.clone(),
+                u16::MAX,
+                *clip_plane_count,
+                *sampler_kinds,
+                resolved,
+            )
         }
     };
     // A UP draw feeds buffer 0 alone: elements on other streams back no input, which then reads
@@ -287,7 +299,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
             spec: StageSpec::Vs(VsSpec {
                 provided_input_mask: declared & kept_mask,
                 clip_plane_count,
-                sampler_kinds: VsSamplerKinds::default(),
+                sampler_kinds,
             }),
         },
         ps: StageSource {
