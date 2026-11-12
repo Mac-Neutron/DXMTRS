@@ -34,7 +34,7 @@ use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
     D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DSAMP_SRGBTEXTURE,
-    D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
+    D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -154,12 +154,20 @@ fn resolve(
     let vertex_sampled = vs_core
         .filter(|_| !layout.has_rhw())
         .map_or(0, |(_, meta)| meta.sampler_mask & 0xF);
-    let vertex_usage = (0..4usize)
+    // A depth texture by its format, as the pixel slots' mask has it (one made without the
+    // DEPTHSTENCIL usage is a depth texture too); a render target by its usage.
+    let (vertex_depth, vertex_target) = (0..4usize)
         .filter(|slot| vertex_sampled & (1 << slot) != 0)
         .map(|slot| dev.vertex_texture(slot))
         .filter(|tex| !tex.is_null())
-        // SAFETY: a bound texture, live while its vertex slot holds it.
-        .fold(0, |usage, tex| usage | unsafe { &*tex }.d3d_usage());
+        .fold((false, false), |(depth, target), tex| {
+            // SAFETY: a bound texture, live while its vertex slot holds it.
+            let tex = unsafe { &*tex };
+            (
+                depth || tex.is_depth_format(),
+                target || tex.d3d_usage() & D3DUSAGE_RENDERTARGET != 0,
+            )
+        });
     let mut flags = DrawFlags::empty();
     flags.set(DrawFlags::VS_BOUND, vs.is_some());
     flags.set(DrawFlags::VS_CORE, vs_core.is_some());
@@ -176,16 +184,13 @@ fn resolve(
     );
     flags.set(
         DrawFlags::SAMPLES_DEPTH_TEXTURE,
-        depth_mask & sampled_mask != 0 || vertex_usage & D3DUSAGE_DEPTHSTENCIL != 0,
+        depth_mask & sampled_mask != 0 || vertex_depth,
     );
     flags.set(
         DrawFlags::FETCH4,
         (fetch4 | fetch4_alpha) & sampled_mask != 0,
     );
-    flags.set(
-        DrawFlags::SAMPLES_RT_TEXTURE,
-        rt_texture || vertex_usage & D3DUSAGE_RENDERTARGET != 0,
-    );
+    flags.set(DrawFlags::SAMPLES_RT_TEXTURE, rt_texture || vertex_target);
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
         refuse_under_core(refusal.name());

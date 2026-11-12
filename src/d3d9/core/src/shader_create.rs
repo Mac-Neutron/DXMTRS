@@ -131,10 +131,10 @@ pub struct CoreShaderMeta {
 }
 
 bitflags::bitflags! {
-    /// What a program uses that the core runtime's draws refuse.
+    /// What a program uses that a core draw binds for.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct CoreMetaFlags: u8 {
-        /// The program declares a sampler (SM1: samples a stage), which the core cannot bind yet.
+        /// The program declares a sampler (SM1: samples a stage).
         const SAMPLES = 1 << 0;
         /// The program reads the bump-env rows (`bem`, `texbem`, `texbeml`).
         const BUMP_ENV = 1 << 1;

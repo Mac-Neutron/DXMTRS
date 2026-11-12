@@ -88,7 +88,7 @@ pub struct DrawData<'a> {
     /// The `MTLCullMode`.
     pub cull_mode: u8,
     pub binds: &'a [Bind<'a>],
-    /// The pixel slots' textures and samplers (C4b-3b).
+    /// The sampled slots' textures and samplers, each at its stage.
     pub textures: &'a [super::TextureBind],
 }
 
