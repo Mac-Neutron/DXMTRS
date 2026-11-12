@@ -42,20 +42,29 @@ impl<T> Mtld3dOnly<T> {
 impl<T> Deref for Mtld3dOnly<T> {
     type Target = T;
 
+    // The panic names the caller's line: the site that lacks its guard.
+    #[track_caller]
     fn deref(&self) -> &T {
         #[cfg(not(feature = "core-runtime"))]
         return &self.0;
         #[cfg(feature = "core-runtime")]
-        self.0.as_ref().unwrap_or_else(|| missed_guard())
+        match self.0.as_ref() {
+            Some(value) => value,
+            None => missed_guard(),
+        }
     }
 }
 
 impl<T> DerefMut for Mtld3dOnly<T> {
+    #[track_caller]
     fn deref_mut(&mut self) -> &mut T {
         #[cfg(not(feature = "core-runtime"))]
         return &mut self.0;
         #[cfg(feature = "core-runtime")]
-        self.0.as_mut().unwrap_or_else(|| missed_guard())
+        match self.0.as_mut() {
+            Some(value) => value,
+            None => missed_guard(),
+        }
     }
 }
 
@@ -74,8 +83,11 @@ pub fn refuse_under_core(name: &'static str) {
 #[cfg(feature = "core-runtime")]
 #[cold]
 #[inline(never)]
+#[track_caller]
 fn missed_guard() -> ! {
     panic!(
-        "d3d9 core: an entry point without its runtime.mode = core guard reached mtld3d's recorder"
+        "d3d9 core: an entry point without its runtime.mode = core guard reached mtld3d's recorder \
+         at {}",
+        core::panic::Location::caller()
     )
 }
