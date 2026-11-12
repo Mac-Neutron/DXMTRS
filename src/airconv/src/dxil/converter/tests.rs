@@ -107,6 +107,117 @@ fn groupshared64_atomics_lower_on_opaque_pointers() {
     );
 }
 
+/// Every 64-bit texel atomic's write (`atomic64typed.dxil`) is built on its section's read.
+///
+/// So the write can't overtake the read: an Exchange's value doesn't depend on the read, and
+/// Metal doesn't order a texture read before a later write to the same texel (its old came back
+/// as its own new value about once in 50 dispatches).
+#[test]
+fn texel64_atomic_writes_depend_on_their_read() {
+    let bytes = include_bytes!("../../../ir/tests/data/atomic64typed.dxil");
+    // SAFETY: no reflection is asked for.
+    let shader = ok(unsafe { initialize(bytes, core::ptr::null_mut()) });
+    // The lock table comes with a root signature: RTS0 1.0, one table of t0-t6, u0-u14 and b0
+    // (range type, count, base, space, offset), in a DXBC container of that one part.
+    let mut rts0: Vec<u32> = vec![1, 1, 24, 0, 0, 0, 0, 0, 36, 3, 44];
+    rts0.extend([0, 7, 0, 0, 0, 1, 15, 0, 0, 7, 2, 1, 0, 0, 22]);
+    let part: Vec<u8> = rts0.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let mut container = b"DXBC".to_vec();
+    container.extend([0; 16]);
+    let size = u32::try_from(44 + part.len()).unwrap();
+    for w in [1, size, 1, 36] {
+        container.extend(u32::to_le_bytes(w));
+    }
+    container.extend(b"RTS0");
+    container.extend(u32::try_from(part.len()).unwrap().to_le_bytes());
+    container.extend(&part);
+    let root = crate::abi::Sm50ShaderRootSignatureData {
+        next: core::ptr::null_mut(),
+        r#type: crate::abi::SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: container.as_ptr().cast(),
+        bytecode_length: container.len(),
+    };
+    // SAFETY: a chain of one node, which outlives it, as is its bytecode.
+    let args = unsafe { ArgChain::walk((&raw const root).cast()) };
+    let metallib = ok(compile(&shader, &args, c"main"));
+    let (bitcode, _) = metallib::parse(&metallib).unwrap();
+    let cx = Context::new();
+    let text =
+        String::from_utf8(ok(module::parse(&cx, &bitcode, b"", b"", module::Layout::Keep)).print())
+            .unwrap();
+    // `%name = <definition>` of each local value.
+    let defs: rustc_hash::FxHashMap<&str, &str> = text
+        .lines()
+        .filter_map(|l| l.trim_start().split_once(" = "))
+        .filter(|(name, _)| name.starts_with('%'))
+        .collect();
+    let writes: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("call void @air.write_texture_2d"))
+        .collect();
+    assert!(!writes.is_empty(), "{text}");
+    for write in writes {
+        // The texel operand's lane .z (which an R32G32 write ignores), traced back through
+        // insertelement, shufflevector and extractvalue: it must be a texture read's.
+        let (_, rest) = write
+            .split_once("<4 x i32> ")
+            .unwrap_or_else(|| panic!("{write}"));
+        let (mut value, mut lane) = (rest.split([',', ')']).next().unwrap(), 2);
+        let read = loop {
+            let def = *defs
+                .get(value)
+                .unwrap_or_else(|| panic!("{write}: lane {lane} is the constant {value}"));
+            let ops = operands(def);
+            if def.starts_with("insertelement") {
+                assert_ne!(
+                    ops[2],
+                    format!("i64 {lane}"),
+                    "{write}: lane {lane} inserted"
+                );
+                value = last(ops[0]);
+            } else if def.starts_with("shufflevector") {
+                let mask: Vec<u32> = ops[2]
+                    .trim_start_matches("<4 x i32> <")
+                    .trim_end_matches('>')
+                    .split(", ")
+                    .map(|m| last(m).parse().unwrap())
+                    .collect();
+                let m = mask[lane];
+                (value, lane) = (last(ops[usize::from(m >= 4)]), (m % 4) as usize);
+            } else if def.starts_with("extractvalue") {
+                break defs.get(last(ops[0])).copied().unwrap_or("");
+            } else {
+                panic!("{write}: lane {lane} comes from {value} = {def}");
+            }
+        };
+        assert!(read.contains("@air.read_texture_2d"), "{write}: {read}");
+    }
+}
+
+/// An instruction's operands, split at the commas outside `<>` and `{}`.
+fn operands(def: &str) -> Vec<&str> {
+    let body = def.split_once(' ').map_or("", |(_, b)| b);
+    let (mut out, mut depth, mut from) = (Vec::new(), 0i32, 0);
+    for (i, c) in body.char_indices() {
+        match c {
+            '<' | '{' => depth += 1,
+            '>' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(body[from..i].trim());
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(body[from..].trim());
+    out
+}
+
+/// An operand's last token: its value without its type.
+fn last(operand: &str) -> &str {
+    operand.rsplit(' ').next().unwrap_or(operand)
+}
+
 /// DXC's `.hca` pattern (`buffers.dxil`) retargets and erases a no-op bitcast.
 #[test]
 fn hca_noop_bitcast_is_retargeted_not_rebuilt() {

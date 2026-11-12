@@ -948,11 +948,11 @@ impl<'cx> Lowering<'_, 'cx> {
     /// address, so every view of the same bytes takes the same lock, and their halves are read
     /// and written as relaxed 32-bit atomics. Textures (`R32G32_UINT`) are keyed by the texel's
     /// (x, y) alone, which every view of it agrees on, and read and written through the
-    /// `<4 x i32>` texel (lo .x, hi .y) under device and texture fences, with a texture fence
-    /// after the write. A pixel shader's helper lanes (D3D gives them no UAV side effects, and a
-    /// helper whose lock atomic were discarded could spin forever) and an out-of-bounds buffer
-    /// element skip it and read 0; a texture out of bounds is left to Metal, as the 32-bit
-    /// texture atomics are.
+    /// `<4 x i32>` texel (lo .x, hi .y) under device and texture fences, the write built on the
+    /// read (which orders them) and a texture fence after it. A pixel shader's helper lanes (D3D
+    /// gives them no UAV side effects, and a helper whose lock atomic were discarded could spin
+    /// forever) and an out-of-bounds buffer element skip it and read 0; a texture out of bounds is
+    /// left to Metal, as the 32-bit texture atomics are.
     fn atomic64(
         &self,
         opcode: u32,
@@ -1067,8 +1067,8 @@ impl<'cx> Lowering<'_, 'cx> {
         });
         let relaxed = sys::ATOMIC_ORDERING_MONOTONIC;
         let thirty_two = cx.const_int(i64_ty, 32, false);
-        // One texel read, or the two halves.
-        let load = || -> Result<Val<'cx>, Error> {
+        // One texel read, or the two halves; the value and the texel.
+        let load = || -> Result<(Val<'cx>, Option<Val<'cx>>), Error> {
             let t = match &texture {
                 Some((tex, handle, coherent, pos, array)) => {
                     let at = texel_at(*pos, *array, self.int(0));
@@ -1087,13 +1087,15 @@ impl<'cx> Lowering<'_, 'cx> {
                 Ok(b.zext(word, i64_ty))
             };
             let low = half(0)?;
-            Ok(b.or(low, b.shl(half(1)?, thirty_two)))
+            Ok((b.or(low, b.shl(half(1)?, thirty_two)), t))
         };
-        let store = |v: Val<'cx>| -> Result<(), Error> {
+        let store = |v: Val<'cx>, read: Option<Val<'cx>>| -> Result<(), Error> {
             let half = |i: u64| b.trunc(if i == 0 { v } else { b.lshr(v, thirty_two) }, i32_ty);
             if let Some((tex, handle, coherent, pos, array)) = &texture {
-                // <lo, hi, 0, 0>, then the texture fence.
-                let mut t = cx.null(tcx.vector(i32_ty, 4));
+                // The texel read with lo and hi in .x and .y, then the texture fence. Built on
+                // the read, so the write waits for it: Metal doesn't order a texture read before
+                // a later write to the same texel, and an Exchange's value doesn't depend on it.
+                let mut t = req(read, "a texel atomic of no texel read")?;
                 for i in 0..2 {
                     t = b.insert_element_u64(t, half(i), i);
                 }
@@ -1117,7 +1119,7 @@ impl<'cx> Lowering<'_, 'cx> {
         };
         let lock = b.gep(i32_ty, locks, &[key]);
         let old = self.under_lock(then, lock, flags, ThreadScope::Device, |at| {
-            let value = load()?;
+            let (value, read) = load()?;
             if cas {
                 // Stores only on a 64-bit match (CompareStore: the same, its result unused).
                 let matched = b.icmp(sys::INT_EQ, value, arg(5)?);
@@ -1126,7 +1128,7 @@ impl<'cx> Lowering<'_, 'cx> {
                     sys::airconv_shim_split_block_and_insert_if_then(matched.raw(), at.raw(), 0)
                 })?;
                 b.position_before(store_then);
-                store(arg(6)?)?;
+                store(arg(6)?, read)?;
                 b.position_before(at);
             } else {
                 let op = atomic_op(const_arg(call, 2, 0));
@@ -1143,7 +1145,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 if next.is_null() {
                     return Err(unsupported(call));
                 }
-                store(self.val(next)?)?;
+                store(self.val(next)?, read)?;
             }
             Ok(value)
         })?;
