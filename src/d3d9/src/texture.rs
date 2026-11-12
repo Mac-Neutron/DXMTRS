@@ -1319,6 +1319,19 @@ impl TextureInner {
         self.device_inner
     }
 
+    /// Whether a core device refuses this texture's CPU lock.
+    ///
+    /// A render-target or depth texture's lock reads its GPU contents back,
+    /// which a core device does not do until C4b-3d.
+    #[cfg(feature = "core-runtime")]
+    fn core_refuses_lock(&self) -> bool {
+        self.device_inner != 0
+            && self.d3d_usage
+                & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
+                != 0
+            && DeviceInner::from_ptr(self.device_inner).is_core()
+    }
+
     /// How many sub-resource cache slots this texture addresses.
     ///
     /// `levels * 6` for a cube map (see
@@ -4667,6 +4680,11 @@ extern "system" fn texture_lock_rect(
     if level >= ti.app_level_count() || out_locked_rect.is_null() {
         return D3DERR_INVALIDCALL;
     }
+    refuse_under_core!(
+        ti.core_refuses_lock(),
+        "IDirect3DTexture9::LockRect (a render-target or depth texture)",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     // A held device context maps the whole resource, so no level of it can be
     // locked until `ReleaseDC`. The DC is taken through a level surface and
     // recorded on the texture, which is the only place this entry point can see
@@ -4804,6 +4822,11 @@ extern "system" fn texture_unlock_rect(this: *mut c_void, level: u32) -> i32 {
     if level >= ti.app_level_count() {
         return reject_unlock_level(level);
     }
+    refuse_under_core!(
+        ti.core_refuses_lock(),
+        "IDirect3DTexture9::UnlockRect (a render-target or depth texture)",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     mtld3d_shared::crumb!("api:tex_ulock", u64::from(level));
     let level_u = level as usize;
     let (read_only, no_dirty, was_locked, lock_rect) = ti.take_lock(level_u);
