@@ -357,7 +357,13 @@ fn resolve(
                             .and_then(|f| srgb.then(|| f.srgb_twin()).flatten())
                             .map_or(stored, |twin| twin as u32);
                         let swizzle = tex.inner().swizzle().map(|s| s.map(|c| c as u8));
-                        core.texture_bind(slot, id, view_format(format, swizzle), sampler.clone())
+                        core.texture_bind(
+                            Stage::Pixel,
+                            slot,
+                            id,
+                            view_format(format, swizzle),
+                            sampler.clone(),
+                        )
                     })
                 } else {
                     None
@@ -365,7 +371,7 @@ fn resolve(
             };
             binds
                 .textures
-                .push(bind.unwrap_or_else(|| core.black_bind(slot, sampler)));
+                .push(bind.unwrap_or_else(|| core.black_bind(Stage::Pixel, slot, sampler)));
         }
     }
     // Empty when the alpha test or fog is off: not bound.

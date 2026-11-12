@@ -548,6 +548,72 @@ fn texture(core: &mut crate::device::CoreDevice, id: u64) -> mtld3d_core::ids::T
     id
 }
 
+/// A texture bound at the vertex stage is a vertex texture and sampler record.
+///
+/// One at vertex slot 2 beside one at pixel slot 0: one vertex texture, one vertex sampler and one
+/// fragment texture, each before the draw.
+#[test]
+fn a_vertex_texture_binds_at_the_vertex_stage() {
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
+        WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE, WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE,
+    };
+    const DEVICE: u64 = 0xe1;
+    let mut core = core_on_fakes(DEVICE);
+    let id = texture(&mut core, 1);
+    let snapshot = mtld3d_core::sampler_state::snapshot_from_state(
+        &mtld3d_types::sampler_state_defaults(),
+        false,
+    );
+    let skey = mtld3d_core::sampler_state::key_from_snapshot(&snapshot);
+    let sampler = core.sampler(
+        skey,
+        &mtld3d_core::sampler_state::description_from_snapshot(&snapshot, skey),
+    );
+    let vertex = core
+        .texture_bind(
+            Stage::Vertex,
+            2,
+            id,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            sampler.clone(),
+        )
+        .expect("a stored texture");
+    let pixel = core
+        .texture_bind(Stage::Pixel, 0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, sampler)
+        .expect("a stored texture");
+    let binds = ff_binds();
+    let textures = [vertex, pixel];
+    let data = DrawData {
+        textures: &textures,
+        ..triangle(&binds)
+    };
+    assert_eq!(core.draw_up(&key(0xf), &data), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let records = |prefix: String| -> Vec<usize> {
+        calls
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.starts_with(&prefix))
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let draw_at = records("  render 19 ".to_owned());
+    assert_eq!(draw_at.len(), 1, "{calls:#?}");
+    let vertex_texture = records(format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE} "));
+    let vertex_sampler = records(format!(
+        "  render {WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE} "
+    ));
+    let fragment_texture = records(format!(
+        "  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} "
+    ));
+    assert_eq!(vertex_texture.len(), 1, "{calls:#?}");
+    assert_eq!(vertex_sampler.len(), 1, "{calls:#?}");
+    assert_eq!(fragment_texture.len(), 1, "{calls:#?}");
+    assert!(vertex_texture[0] < draw_at[0] && vertex_sampler[0] < draw_at[0]);
+}
+
 /// A textured draw binds its texture and sampler at the slot, after the PSO and before the draw.
 #[test]
 fn a_textured_draw_binds_texture_and_sampler() {
@@ -568,7 +634,7 @@ fn a_textured_draw_binds_texture_and_sampler() {
         &mtld3d_core::sampler_state::description_from_snapshot(&snapshot, skey),
     );
     let bind = core
-        .texture_bind(0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, sampler)
+        .texture_bind(Stage::Pixel, 0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, sampler)
         .expect("a stored texture");
     let binds = ff_binds();
     let textures = [bind];
@@ -638,6 +704,7 @@ fn render_blit_render_merges_when_unsampled() {
     assert_eq!(render_passes(&unsampled), 1, "{unsampled:#?}");
     let bind = core
         .texture_bind(
+            Stage::Pixel,
             0,
             id,
             winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,

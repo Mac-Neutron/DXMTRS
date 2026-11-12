@@ -26,7 +26,7 @@ use winemetal_sys::wire::{
     WmtcmdBlitGenerateMipmaps,
 };
 
-use super::{CoreDevice, LOG_TARGET};
+use super::{CoreDevice, LOG_TARGET, draw::Stage};
 
 /// A D3D9 texture's shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +71,9 @@ pub struct UploadRegion {
     pub depth: u32,
 }
 
-/// A texture and sampler a draw binds at one pixel slot.
+/// A texture and sampler a draw binds at one slot of a stage.
 pub struct TextureBind {
+    pub(super) stage: Stage,
     pub(super) slot: u8,
     pub(super) texture: Arc<Texture>,
     pub(super) key: TextureViewKey,
@@ -147,10 +148,11 @@ impl CoreDevice {
         self.textures.get(&id).map(|s| s.desc.pixel_format)
     }
 
-    /// A draw's bind of `id`'s texture in `view_format` with `sampler` at pixel `slot`.
+    /// A draw's bind of `id`'s texture in `view_format` with `sampler` at `stage`'s `slot`.
     #[must_use]
     pub fn texture_bind(
         &self,
+        stage: Stage,
         slot: u8,
         id: TextureId,
         view_format: u32,
@@ -158,6 +160,7 @@ impl CoreDevice {
     ) -> Option<TextureBind> {
         let (texture, key) = self.texture_view(id, view_format)?;
         Some(TextureBind {
+            stage,
             slot,
             texture,
             key,
@@ -165,14 +168,16 @@ impl CoreDevice {
         })
     }
 
-    /// A draw's bind of the opaque black at pixel `slot`, with `sampler`.
+    /// A draw's bind of the opaque black at `stage`'s `slot`, with `sampler`.
     pub fn black_bind(
         &mut self,
+        stage: Stage,
         slot: u8,
         sampler: Option<Arc<dxmt_core::sampler::Sampler>>,
     ) -> TextureBind {
         let (texture, key) = self.black();
         TextureBind {
+            stage,
             slot,
             texture,
             key,

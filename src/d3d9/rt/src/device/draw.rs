@@ -190,7 +190,15 @@ impl CoreDevice {
         let textures: Vec<_> = draw
             .textures
             .iter()
-            .map(|t| (t.slot, Arc::clone(&t.texture), t.key, t.sampler.clone()))
+            .map(|t| {
+                (
+                    t.stage,
+                    t.slot,
+                    Arc::clone(&t.texture),
+                    t.key,
+                    t.sampler.clone(),
+                )
+            })
             .collect();
         self.emit(move |enc| {
             enc.encode_render_command(WmtcmdRenderSetpso {
@@ -222,9 +230,18 @@ impl CoreDevice {
             }
             // The plain sampler state, not the cube twin: mtld3d's cube samples clamp in the
             // shader as its own binds do (C4b3b-5).
-            for (slot, texture, key, sampler) in &textures {
-                direct::bind_texture::<{ stage::PIXEL }>(enc, *slot, Some((texture, *key)));
-                direct::bind_sampler::<{ stage::PIXEL }>(enc, *slot, sampler.as_ref(), false);
+            for (stage, slot, texture, key, sampler) in &textures {
+                let (view, sampler) = (Some((&**texture, *key)), sampler.as_ref());
+                match stage {
+                    Stage::Vertex => {
+                        direct::bind_texture::<{ stage::VERTEX }>(enc, *slot, view);
+                        direct::bind_sampler::<{ stage::VERTEX }>(enc, *slot, sampler, false);
+                    }
+                    Stage::Pixel => {
+                        direct::bind_texture::<{ stage::PIXEL }>(enc, *slot, view);
+                        direct::bind_sampler::<{ stage::PIXEL }>(enc, *slot, sampler, false);
+                    }
+                }
             }
             if !textures.is_empty() {
                 // A texture read in a pass that wrote it waits on a tile barrier.
