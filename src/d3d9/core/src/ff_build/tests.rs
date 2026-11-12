@@ -1287,3 +1287,171 @@ fn ps_key_lists_emit() {
         );
     }
 }
+
+/// The rows `ff_vs_rows` binds for the key of `state` under `rs` and `layout`, and that key.
+fn bound_rows(
+    state: &crate::ff_state::FfState,
+    rs: &[u32; mtld3d_types::RENDER_STATE_COUNT],
+    layout: crate::convert::FfVsLayout,
+) -> (FfVsKey, Vec<[f32; 4]>) {
+    let key = state.build_vs_key(rs, layout, 0, [0; 8]);
+    let rows = state.ff_vs_rows(rs, &key);
+    (key, rows)
+}
+
+#[test]
+fn ff_vs_rows_cover_the_rows_the_shader_reads() {
+    use mtld3d_types::{
+        D3DCOLORVALUE, D3DLIGHT_DIRECTIONAL, D3DLIGHT_POINT, D3DLIGHT_SPOT, D3DLIGHT9,
+        D3DMATERIAL9, D3DRS_AMBIENT, D3DRS_FOGENABLE, D3DRS_FOGEND, D3DRS_FOGSTART,
+        D3DRS_FOGVERTEXMODE, D3DRS_INDEXEDVERTEXBLENDENABLE, D3DRS_LIGHTING, D3DRS_SPECULARENABLE,
+        D3DRS_VERTEXBLEND, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT4, D3DVBF_1WEIGHTS,
+        D3DVBF_3WEIGHTS, D3DVECTOR, render_state_defaults,
+    };
+
+    use crate::{
+        convert::{FfVsLayout, FfVsLayoutFlags},
+        ff_state::FfState,
+    };
+    /// Whether a bound row holds anything.
+    fn written(row: &[f32; 4]) -> bool {
+        row.iter().any(|lane| lane.to_bits() != 0)
+    }
+    // A light and a material with no zero parameter, so that every row they fill is non-zero.
+    let colour = D3DCOLORVALUE {
+        r: 1.0,
+        g: 0.5,
+        b: 0.25,
+        a: 0.125,
+    };
+    let vector = D3DVECTOR {
+        x: 1.0,
+        y: -1.0,
+        z: 2.0,
+    };
+    let seeded_light = |ty: u32| D3DLIGHT9 {
+        type_: ty,
+        diffuse: colour,
+        specular: colour,
+        ambient: colour,
+        position: vector,
+        direction: vector,
+        range: 10.0,
+        falloff: 1.0,
+        attenuation0: 1.0,
+        attenuation1: 0.5,
+        attenuation2: 0.25,
+        theta: 0.1,
+        phi: 0.2,
+    };
+    let seeded_material = D3DMATERIAL9 {
+        diffuse: colour,
+        ambient: colour,
+        specular: colour,
+        emissive: colour,
+        power: 8.0,
+    };
+    let layout = |flags, sets: u8, weights: u8| FfVsLayout {
+        flags,
+        tex_coord_count: sets,
+        tex_coord_dims: [4; 8],
+        declared_weights_count: weights,
+    };
+    let lit = |lights: &[u32], specular: bool| {
+        let mut state = FfState::new();
+        state.set_material(&seeded_material);
+        for (index, ty) in lights.iter().enumerate() {
+            state.set_light(index, &seeded_light(*ty));
+            state.set_light_enabled(index, true);
+        }
+        let mut rs = render_state_defaults();
+        rs[D3DRS_LIGHTING as usize] = 1;
+        rs[D3DRS_SPECULARENABLE as usize] = u32::from(specular);
+        rs[D3DRS_AMBIENT as usize] = 0x0040_8020;
+        (state, rs)
+    };
+    let mut cases = Vec::new();
+    // Unlit with LINEAR vertex fog.
+    let mut state = FfState::new();
+    state.set_material(&seeded_material);
+    let mut rs = render_state_defaults();
+    rs[D3DRS_LIGHTING as usize] = 0;
+    rs[D3DRS_FOGENABLE as usize] = 1;
+    rs[D3DRS_FOGVERTEXMODE as usize] = D3DFOG_LINEAR;
+    rs[D3DRS_FOGSTART as usize] = 1.0f32.to_bits();
+    rs[D3DRS_FOGEND as usize] = 5.0f32.to_bits();
+    cases.push(bound_rows(
+        &state,
+        &rs,
+        layout(FfVsLayoutFlags::empty(), 0, 0),
+    ));
+    // Lit: one spot light with specular, then eight lights of every type.
+    let (state, rs) = lit(&[D3DLIGHT_SPOT], true);
+    cases.push(bound_rows(
+        &state,
+        &rs,
+        layout(FfVsLayoutFlags::HAS_NORMAL, 0, 0),
+    ));
+    let (state, rs) = lit(
+        &[
+            D3DLIGHT_POINT,
+            D3DLIGHT_SPOT,
+            D3DLIGHT_DIRECTIONAL,
+            D3DLIGHT_POINT,
+            D3DLIGHT_SPOT,
+            D3DLIGHT_DIRECTIONAL,
+            D3DLIGHT_POINT,
+            D3DLIGHT_SPOT,
+        ],
+        true,
+    );
+    cases.push(bound_rows(
+        &state,
+        &rs,
+        layout(FfVsLayoutFlags::HAS_NORMAL, 0, 0),
+    ));
+    // A four-component texture transform on stage 3.
+    let mut state = FfState::new();
+    state.set_material(&seeded_material);
+    state.set_texture_stage_state(3, D3DTSS_TEXTURETRANSFORMFLAGS as usize, D3DTTFF_COUNT4);
+    let mut rs = render_state_defaults();
+    rs[D3DRS_LIGHTING as usize] = 0;
+    cases.push(bound_rows(
+        &state,
+        &rs,
+        layout(FfVsLayoutFlags::empty(), 4, 0),
+    ));
+    // Three weights in sequence, then one weight by index (the whole palette).
+    let mut blend = rs;
+    blend[D3DRS_VERTEXBLEND as usize] = D3DVBF_3WEIGHTS;
+    cases.push(bound_rows(
+        &state,
+        &blend,
+        layout(FfVsLayoutFlags::empty(), 0, 3),
+    ));
+    let mut indexed = rs;
+    indexed[D3DRS_VERTEXBLEND as usize] = D3DVBF_1WEIGHTS;
+    indexed[D3DRS_INDEXEDVERTEXBLENDENABLE as usize] = 1;
+    let (key, rows) = bound_rows(
+        &state,
+        &indexed,
+        layout(FfVsLayoutFlags::DECLARED_INDICES, 0, 1),
+    );
+    assert!(key.vertex_blend_indexed(), "{key:?}");
+    assert_eq!(rows.len(), 255);
+    assert!(
+        rows[usize::from(PALETTE)..].iter().all(written),
+        "the indexed palette is bound whole"
+    );
+    cases.push((key, rows));
+    for (key, rows) in &cases {
+        for row in direct_rows(&built(key).1) {
+            let bound = rows.get(usize::from(row));
+            assert!(
+                bound.is_some_and(written),
+                "{key:?}: the shader reads c{row}, bound as {bound:?} of {} rows",
+                rows.len()
+            );
+        }
+    }
+}

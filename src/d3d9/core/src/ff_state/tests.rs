@@ -3169,3 +3169,161 @@ fn ps_key_with_stage_zero_disabled_keys_no_stage_state() {
     assert_eq!(key.tt_projected_mask, 0);
     assert_eq!(key.sampled_stage_mask(), 0);
 }
+
+/// `count` directional lights set and enabled at indices `0..count`.
+fn state_with_lights(count: usize) -> FfState {
+    let mut state = FfState::new();
+    for index in 0..count {
+        state.set_light(
+            index,
+            &seeded_light(mtld3d_types::D3DLIGHT_DIRECTIONAL, 1.0),
+        );
+        state.set_light_enabled(index, true);
+    }
+    state
+}
+
+/// A translation, D3D's row-vector layout.
+fn translation(x: f32, y: f32, z: f32) -> D3DMATRIX {
+    let mut m = D3DMATRIX::IDENTITY;
+    m.m[12] = x;
+    m.m[13] = y;
+    m.m[14] = z;
+    m
+}
+
+#[test]
+fn ff_vs_rows_len_is_the_row_count() {
+    let mut cases: Vec<(FfState, super::FfVsKey)> = vec![
+        (FfState::new(), make_vs_key(super::FfVsFlags::empty(), 0)),
+        (FfState::new(), blend_key_with(3, false)),
+        (state_with_palette_high_water(39), blend_key()),
+    ];
+    for count in [0, 1, 8] {
+        let state = state_with_lights(count);
+        let key = lit_vs_key(&state);
+        cases.push((state, key));
+    }
+    let mut tt = FfState::new();
+    tt.set_texture_stage_state(4, D3DTSS_TEXTURETRANSFORMFLAGS as usize, 2);
+    cases.push((tt, make_vs_key(super::FfVsFlags::empty(), 0)));
+    for (state, key) in &cases {
+        assert_eq!(
+            state.ff_vs_rows(&rs(), key).len(),
+            usize::from(state.ff_vs_row_count(key)),
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn ff_vs_rows_match_hand_values() {
+    use mtld3d_types::{
+        D3DLIGHT_POINT, D3DLIGHT9, D3DRS_AMBIENT, D3DRS_LIGHTING, D3DTS_PROJECTION, D3DTS_VIEW,
+        D3DTS_WORLD, D3DVECTOR,
+    };
+    let mut state = FfState::new();
+    state.set_transform(D3DTS_WORLD, &translation(1.0, 2.0, 3.0));
+    state.set_transform(D3DTS_VIEW, &translation(10.0, 0.0, 0.0));
+    let mut proj = D3DMATRIX::IDENTITY;
+    proj.m[0] = 2.0;
+    proj.m[5] = 3.0;
+    proj.m[10] = 4.0;
+    state.set_transform(D3DTS_PROJECTION, &proj);
+    // The one enabled light sits past the eight built-in slots: it compacts to shader slot 0.
+    state.set_light_at(
+        12,
+        &D3DLIGHT9 {
+            type_: D3DLIGHT_POINT,
+            position: D3DVECTOR {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            ..D3DLIGHT9::default()
+        },
+    );
+    state.set_light_enabled_at(12, true);
+    let mut states = rs();
+    states[D3DRS_LIGHTING as usize] = 1;
+    states[D3DRS_AMBIENT as usize] = 0x00ff_0000;
+    let layout = FfVsLayout {
+        flags: FfVsLayoutFlags::HAS_NORMAL,
+        tex_coord_count: 0,
+        tex_coord_dims: [0; 8],
+        declared_weights_count: 0,
+    };
+    let key = state.build_vs_key(&states, layout, 0, [0; 8]);
+    let rows = state.ff_vs_rows(&states, &key);
+    // transpose(world * view): the translations add into the fourth column.
+    assert_eq!(
+        rows[0..4],
+        [
+            [1.0, 0.0, 0.0, 11.0],
+            [0.0, 1.0, 0.0, 2.0],
+            [0.0, 0.0, 1.0, 3.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    assert_eq!(
+        rows[4..8],
+        [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    assert_eq!(rows[9], [1.0, 0.0, 0.0, 0.0], "AMBIENT 0x00ff0000");
+    // The light's eye-space position, (1, 2, 3) moved by VIEW, and its type (POINT = 1).
+    assert_eq!(rows[15], [11.0, 2.0, 3.0, 1.0]);
+}
+
+#[test]
+fn ff_vs_rows_leave_unwritten_rows_zero() {
+    // Lit, one light, no specular, no fog: 21 rows; the fog row and the material's fifth row
+    // (the specular power) belong to no section this key writes.
+    let state = state_with_lights(1);
+    let key = lit_vs_key(&state);
+    let rows = state.ff_vs_rows(&rs(), &key);
+    assert_eq!(rows.len(), 21);
+    assert_eq!(rows[8], [0.0; 4], "fog off");
+    assert_eq!(
+        rows[14], [0.0; 4],
+        "no specular: the power row is unwritten"
+    );
+    assert_ne!(rows[15], [0.0; 4], "the light's first row");
+    // Unlit with a transform on stage 2: nothing between the material's one row and row 63.
+    let mut tt = FfState::new();
+    tt.set_texture_stage_state(2, D3DTSS_TEXTURETRANSFORMFLAGS as usize, 2);
+    let key = make_vs_key(super::FfVsFlags::empty(), 0);
+    let rows = tt.ff_vs_rows(&rs(), &key);
+    assert_eq!(rows.len(), 75);
+    assert!(
+        rows[11..63]
+            .iter()
+            .flatten()
+            .all(|lane| lane.to_bits() == 0)
+    );
+    // Stages 0-2 carry identity (transposed), stage 2's included.
+    assert_eq!(rows[63], [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(rows[74], [0.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn ff_vs_rows_follow_the_view() {
+    use mtld3d_types::{D3DLIGHT_POINT, D3DTS_VIEW};
+    let mut state = FfState::new();
+    state.set_light(0, &seeded_light(D3DLIGHT_POINT, 1.0));
+    state.set_light_enabled(0, true);
+    let key = lit_vs_key(&state);
+    let before = state.ff_vs_rows(&rs(), &key);
+    state.set_transform(D3DTS_VIEW, &translation(0.0, 5.0, 0.0));
+    let after = state.ff_vs_rows(&rs(), &key);
+    assert_ne!(before[0..4], after[0..4], "WV follows VIEW");
+    assert_eq!(before[4..8], after[4..8], "PROJ does not");
+    assert_ne!(
+        before[15], after[15],
+        "the light's eye-space position follows VIEW"
+    );
+}

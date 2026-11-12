@@ -1691,6 +1691,62 @@ impl FfState {
         dst_ptr.cast::<u8>()
     }
 
+    /// The fixed-function vertex constant rows of one untransformed draw.
+    ///
+    /// [`Self::ff_vs_row_count`] rows: each section at its fixed base row (WV
+    /// 0, PROJ 4, fog 8, ambient 9, material 10, lights 15, texture transforms
+    /// 63, the palette at [`FF_VS_PALETTE_BASE_ROW`]) and zero where the key
+    /// has no section, which are rows its shader does not read. A core draw
+    /// binds them whole; the default runtime sends its encoder mirror the
+    /// sections that changed instead. Not for a pre-transformed key, whose one
+    /// row is [`Self::fill_xyzrhw_row`]'s.
+    #[must_use]
+    pub fn ff_vs_rows(
+        &self,
+        render_states: &[u32; RENDER_STATE_COUNT],
+        vs_key: &FfVsKey,
+    ) -> Vec<[f32; 4]> {
+        use core::mem::MaybeUninit;
+        /// The `count` rows from `base`.
+        fn span(
+            rows: &mut [MaybeUninit<[f32; 4]>],
+            base: u16,
+            count: u16,
+        ) -> &mut [MaybeUninit<[f32; 4]>] {
+            let base = usize::from(base);
+            &mut rows[base..base + usize::from(count)]
+        }
+        debug_assert!(
+            !vs_key.has_rhw(),
+            "a pre-transformed draw binds its viewport row"
+        );
+        let mut rows =
+            vec![MaybeUninit::new([0.0f32; 4]); usize::from(self.ff_vs_row_count(vs_key))];
+        self.fill_wv_section(span(&mut rows, 0, 4));
+        self.fill_proj_section(span(&mut rows, 4, 4));
+        Self::fill_fog_section(render_states, vs_key.fog_mode, span(&mut rows, 8, 1));
+        Self::fill_ambient_section(render_states, span(&mut rows, 9, 1));
+        let material = Self::material_section_rows(vs_key);
+        self.fill_material_section(vs_key, span(&mut rows, 10, material));
+        let lights = Self::lights_section_rows(vs_key);
+        if lights != 0 {
+            self.fill_lights_section(vs_key, span(&mut rows, 15, lights));
+        }
+        let transforms = self.tt_section_rows();
+        if transforms != 0 {
+            self.fill_tt_section(span(&mut rows, 63, transforms));
+        }
+        let palette = self.palette_section_rows(vs_key);
+        if palette != 0 {
+            self.fill_palette_section(vs_key, span(&mut rows, FF_VS_PALETTE_BASE_ROW, palette));
+        }
+        rows.into_iter()
+            // SAFETY: every row was initialised (to zero) when the vector was allocated; a
+            // section fill only overwrites rows.
+            .map(|row| unsafe { row.assume_init() })
+            .collect()
+    }
+
     /// Fill the supplied final constant-row destination without allocating.
     ///
     /// # Panics
