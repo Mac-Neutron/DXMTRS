@@ -303,6 +303,7 @@ jobs:
 
   build-gcc-release-x86_64-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine, setup-llvm-darwin]
     steps:
       - name: Checkout
@@ -404,6 +405,7 @@ jobs:
 
   build-clang-debugoptimized-x86_64-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine, setup-llvm-mingw, setup-llvm-darwin, setup-llvm-win]
     steps:
       - name: Checkout
@@ -465,6 +467,7 @@ jobs:
 
   build-clang-release-x86_64-windows-cross:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: [setup-wine, setup-llvm-mingw, setup-llvm-darwin]
     steps:
       - name: Checkout
