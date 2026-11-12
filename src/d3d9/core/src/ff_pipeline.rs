@@ -60,9 +60,19 @@ pub struct FfPipelineSource {
 /// What the pipeline of `key` is built from.
 #[must_use]
 pub fn ff_source(key: &FfPipelineKey) -> FfPipelineSource {
-    let vs = ff_build::vertex(&key.vs);
-    let ps = ff_build::pixel(&key.ps);
-    let (elements, _) = fvf_to_elements(key.fvf);
+    // Every field by name: a field added to the key is a compile error here, the one place a key
+    // becomes a pipeline, until it is read.
+    let FfPipelineKey {
+        vs,
+        ps,
+        variant,
+        fvf,
+        stride,
+        write_mask,
+    } = key;
+    let vs_out = ff_build::vertex(vs);
+    let ps_out = ff_build::pixel(ps);
+    let (elements, _) = fvf_to_elements(*fvf);
     let attrs = resolve_attrs_for_ff(&elements, &[0; MAX_LINKED_INPUTS])
         .attrs
         .iter()
@@ -70,14 +80,14 @@ pub fn ff_source(key: &FfPipelineKey) -> FfPipelineSource {
         .map(|a| (a.attr_index, a.format as u32, a.offset))
         .collect();
     FfPipelineSource {
-        vs_tokens: vs.tokens,
-        provided_input_mask: vs.provided_input_mask,
-        clip_plane_count: key.vs.clip_plane_count,
-        ps_tokens: ps.tokens,
-        variant: key.variant,
+        vs_tokens: vs_out.tokens,
+        provided_input_mask: vs_out.provided_input_mask,
+        clip_plane_count: vs.clip_plane_count,
+        ps_tokens: ps_out.tokens,
+        variant: *variant,
         attrs,
-        stride: key.stride,
-        write_mask: key.write_mask,
+        stride: *stride,
+        write_mask: *write_mask,
     }
 }
 

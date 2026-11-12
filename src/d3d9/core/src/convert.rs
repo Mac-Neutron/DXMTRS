@@ -870,18 +870,21 @@ pub fn fill_fan_pattern_u16(out: &mut [u8], primitive_count: u32) {
 }
 
 /// Compute vertex count from D3D9 primitive type and primitive count.
+///
+/// 0, which every draw refuses, for an unhandled type or a count whose vertices pass `u32`.
 pub fn vertex_count(d3d_type: u32, primitive_count: u32) -> u32 {
     match d3d_type {
-        D3DPT_POINTLIST => primitive_count,        // point list
-        D3DPT_LINELIST => primitive_count * 2,     // line list
-        D3DPT_LINESTRIP => primitive_count + 1,    // line strip
-        D3DPT_TRIANGLELIST => primitive_count * 3, // triangle list
-        D3DPT_TRIANGLESTRIP | D3DPT_TRIANGLEFAN => primitive_count + 2, // strip / fan
+        D3DPT_POINTLIST => Some(primitive_count),               // point list
+        D3DPT_LINELIST => primitive_count.checked_mul(2),       // line list
+        D3DPT_LINESTRIP => primitive_count.checked_add(1),      // line strip
+        D3DPT_TRIANGLELIST => primitive_count.checked_mul(3),   // triangle list
+        D3DPT_TRIANGLESTRIP | D3DPT_TRIANGLEFAN => primitive_count.checked_add(2), // strip / fan
         other => {
             mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "vertex_count: D3DPRIMITIVETYPE {other} unhandled → 0 verts");
-            0
+            Some(0)
         }
     }
+    .unwrap_or(0)
 }
 
 /// `D3DDECLTYPE_*` → `(MTLVertexFormat, size_bytes)`.

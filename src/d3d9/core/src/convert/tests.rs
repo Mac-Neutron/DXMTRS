@@ -1408,3 +1408,24 @@ fn a_pretransformed_passthrough_skips_dropped_elements_repeats_and_overflow() {
         .collect();
     assert_eq!(rhw_passthrough(&elements)[..], expected[..]);
 }
+
+/// A primitive count whose vertices pass `u32` gives 0 vertices.
+///
+/// Every draw refuses 0, rather than drawing a wrapped count or panicking on the overflow.
+#[test]
+fn vertex_count_past_u32_is_0() {
+    use mtld3d_types::{
+        D3DPT_LINELIST, D3DPT_LINESTRIP, D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DPT_TRIANGLELIST,
+        D3DPT_TRIANGLESTRIP,
+    };
+    assert_eq!(super::vertex_count(D3DPT_TRIANGLELIST, 4), 12);
+    assert_eq!(super::vertex_count(D3DPT_TRIANGLELIST, 0x5555_5556), 0);
+    assert_eq!(super::vertex_count(D3DPT_LINELIST, 0x8000_0000), 0);
+    assert_eq!(super::vertex_count(D3DPT_LINESTRIP, u32::MAX), 0);
+    assert_eq!(super::vertex_count(D3DPT_TRIANGLESTRIP, u32::MAX - 1), 0);
+    assert_eq!(
+        super::vertex_count(D3DPT_TRIANGLEFAN, u32::MAX - 2),
+        u32::MAX
+    );
+    assert_eq!(super::vertex_count(D3DPT_POINTLIST, u32::MAX), u32::MAX);
+}

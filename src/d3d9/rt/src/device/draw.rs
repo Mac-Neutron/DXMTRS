@@ -10,7 +10,7 @@
 //! compile until C4d).
 
 use core::ffi::CStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use airconv_ir::dxso::spec::{StageSpec, VsSamplerKinds, VsSpec};
 use dxmt_core::{
@@ -149,13 +149,12 @@ impl CoreDevice {
                 key.fvf,
                 key.stride
             );
+            log::debug!(target: LOG_TARGET, "d3d9 core: the pipeline that does not build: {key:?}");
         }
         let handle = pso.as_ref().map_or(0, Obj::handle);
-        // Built and ready (C4b-3): no job, so the scheduler is never started.
+        // Built and ready (C4b-3): no job, so no scheduler.
         let entry = Compiled::ready_with(Arc::new(()), handle, pso);
-        self.pipelines
-            .insert_or_existing(key.clone(), entry, &OnceLock::new())
-            .ready()
+        self.pipelines.insert_ready(key.clone(), entry).ready()
     }
 
     fn build_pipeline(&self, source: &FfPipelineSource) -> Option<Obj> {

@@ -131,3 +131,23 @@ fn clear_releases_the_psos() {
     assert!(map.is_empty());
     assert_eq!(CALLS.with_borrow(Clone::clone), ["NSObject_release 0x5201"]);
 }
+
+#[test]
+fn insert_ready_keeps_the_first_entry() {
+    let map = PsoMap::<u32, ()>::default();
+    let first = map.insert_ready(7, Compiled::ready_with(Arc::new(()), 0x7001, None));
+    let second = map.insert_ready(7, Compiled::ready_with(Arc::new(()), 0x7002, None));
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(second.ready(), Some(0x7001));
+    assert_eq!(map.len(), 1);
+}
+
+/// `insert_ready` refuses a pending entry.
+///
+/// Its job only a scheduler runs: inserted with none, its `ready` would wait forever.
+#[test]
+#[should_panic(expected = "insert_ready: a pending entry")]
+fn insert_ready_refuses_a_pending_entry() {
+    let map = PsoMap::<u32, ()>::default();
+    drop(map.insert_ready(1, Compiled::pending(Arc::new(()), |()| None)));
+}

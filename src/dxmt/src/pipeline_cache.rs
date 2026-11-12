@@ -136,6 +136,21 @@ impl<K: Hash + Eq, S> PsoMap<K, S> {
         entry
     }
 
+    /// [`Self::insert_or_existing`] for an already compiled entry, which starts no scheduler.
+    ///
+    /// The entry is a [`Compiled::ready_with`] one: it has no job.
+    ///
+    /// # Panics
+    ///
+    /// If `entry` is pending: its job would never run, and its `ready` would wait forever.
+    pub fn insert_ready(&self, key: K, entry: Arc<Compiled<S>>) -> Arc<Compiled<S>> {
+        assert!(
+            lock(&entry.job).is_none(),
+            "insert_ready: a pending entry has a job only a scheduler runs"
+        );
+        self.insert_or_existing(key, entry, &OnceLock::new())
+    }
+
     /// Drops every entry, releasing the Metal objects no draw still holds.
     pub fn clear(&self) {
         lock(&self.map).clear();
