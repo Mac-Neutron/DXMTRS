@@ -48,9 +48,12 @@ impl<T> Deref for Mtld3dOnly<T> {
         #[cfg(not(feature = "core-runtime"))]
         return &self.0;
         #[cfg(feature = "core-runtime")]
-        match self.0.as_ref() {
-            Some(value) => value,
-            None => missed_guard(),
+        {
+            // A direct call: a function passed to map_or_else would lose the caller's line.
+            let Some(value) = self.0.as_ref() else {
+                missed_guard()
+            };
+            value
         }
     }
 }
@@ -61,9 +64,12 @@ impl<T> DerefMut for Mtld3dOnly<T> {
         #[cfg(not(feature = "core-runtime"))]
         return &mut self.0;
         #[cfg(feature = "core-runtime")]
-        match self.0.as_mut() {
-            Some(value) => value,
-            None => missed_guard(),
+        {
+            // A direct call: a function passed to map_or_else would lose the caller's line.
+            let Some(value) = self.0.as_mut() else {
+                missed_guard()
+            };
+            value
         }
     }
 }
