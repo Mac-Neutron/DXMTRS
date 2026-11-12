@@ -473,10 +473,13 @@ pub const fn float_rows(max_const_used: u32, relative: bool) -> u32 {
     if relative { 256 } else { max_const_used }
 }
 
-/// The bytes of `count` vertices `stride` bytes apart; `None` past `u32` or the address space.
+/// The bytes of `count` vertices `stride` bytes apart; `None` past `i32::MAX`.
+///
+/// The bound holds on every host: a caller's slice may not exceed `isize::MAX`, 2 GiB on i686,
+/// and no D3D9 UP draw passes that much.
 #[must_use]
 pub fn up_byte_count(stride: u32, count: u32) -> Option<usize> {
-    usize::try_from(stride.checked_mul(count)?).ok()
+    usize::try_from(i32::try_from(stride.checked_mul(count)?).ok()?).ok()
 }
 
 /// The vertices an indexed UP draw reads: `[0, min_vertex_index + num_vertices)`.

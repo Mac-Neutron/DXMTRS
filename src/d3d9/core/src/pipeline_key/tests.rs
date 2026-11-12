@@ -530,7 +530,10 @@ fn core_viewport_rules() {
 #[test]
 fn up_byte_count_refuses_an_overflow() {
     assert_eq!(up_byte_count(20, 3), Some(60));
-    assert_eq!(up_byte_count(u32::MAX, 1), usize::try_from(u32::MAX).ok());
+    // Past `i32::MAX` on every host: on i686 the caller's slice may not exceed `isize::MAX`.
+    assert_eq!(up_byte_count(0x7fff_ffff, 1), Some(0x7fff_ffff));
+    assert_eq!(up_byte_count(0x8000_0000, 1), None);
+    assert_eq!(up_byte_count(u32::MAX, 1), None);
     assert_eq!(up_byte_count(u32::MAX, 2), None);
     assert_eq!(up_byte_count(0x1_0000, 0x1_0000), None);
 }
