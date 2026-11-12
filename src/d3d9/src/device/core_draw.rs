@@ -23,8 +23,8 @@ use mtld3d_core::{
         indexed_up_vertices, pos_fixup, up_byte_count,
     },
     sampler_state::{
-        TEXTURE_LOD_SLOT, description_from_snapshot, key_from_snapshot, lod_table,
-        sample_unfiltered, snapshot_from_state,
+        TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
+        sample_unfiltered, snapshot_from_state, vertex_lod_table,
     },
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
     vs_draw::clip_plane_count,
@@ -34,7 +34,7 @@ use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
     D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DSAMP_SRGBTEXTURE,
-    D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
+    D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -65,8 +65,8 @@ pub fn create_core_shader(
 
 /// What a core draw binds.
 ///
-/// The bytes and the stage and slot of each, empty ones left out; and its pixel slots' textures
-/// and samplers.
+/// The bytes and the stage and slot of each, empty ones left out; and its sampled slots' textures
+/// and samplers, pixel and vertex.
 #[derive(Default)]
 struct Binds {
     bytes: Vec<u8>,
@@ -74,7 +74,7 @@ struct Binds {
     textures: Vec<TextureBind>,
 }
 
-/// One sampled pixel slot of a draw: its texture (null for none) and its sampler states.
+/// One sampled slot of a draw, pixel or vertex: its texture (null for none) and its sampler states.
 struct SampledSlot {
     slot: u16,
     texture: *mut crate::texture::Direct3DTexture9,
@@ -149,13 +149,20 @@ fn resolve(
             // SAFETY: a bound texture, live while its stage holds it.
             && unsafe { &*tex }.d3d_usage() & D3DUSAGE_RENDERTARGET != 0
     });
+    // The vertex slots (s0-s3) a core vertex shader samples; none where a pre-transformed layout
+    // bypasses the shader.
+    let vertex_sampled = vs_core
+        .filter(|_| !layout.has_rhw())
+        .map_or(0, |(_, meta)| meta.sampler_mask & 0xF);
+    let vertex_usage = (0..4usize)
+        .filter(|slot| vertex_sampled & (1 << slot) != 0)
+        .map(|slot| dev.vertex_texture(slot))
+        .filter(|tex| !tex.is_null())
+        // SAFETY: a bound texture, live while its vertex slot holds it.
+        .fold(0, |usage, tex| usage | unsafe { &*tex }.d3d_usage());
     let mut flags = DrawFlags::empty();
     flags.set(DrawFlags::VS_BOUND, vs.is_some());
     flags.set(DrawFlags::VS_CORE, vs_core.is_some());
-    flags.set(
-        DrawFlags::VS_SAMPLES,
-        vs_core.is_some_and(|(_, m)| m.samples()),
-    );
     flags.set(DrawFlags::LAYOUT_RHW, layout.has_rhw());
     flags.set(DrawFlags::PS_BOUND, ps.is_some());
     flags.set(DrawFlags::PS_CORE, ps_core.is_some());
@@ -169,13 +176,16 @@ fn resolve(
     );
     flags.set(
         DrawFlags::SAMPLES_DEPTH_TEXTURE,
-        depth_mask & sampled_mask != 0,
+        depth_mask & sampled_mask != 0 || vertex_usage & D3DUSAGE_DEPTHSTENCIL != 0,
     );
     flags.set(
         DrawFlags::FETCH4,
         (fetch4 | fetch4_alpha) & sampled_mask != 0,
     );
-    flags.set(DrawFlags::SAMPLES_RT_TEXTURE, rt_texture);
+    flags.set(
+        DrawFlags::SAMPLES_RT_TEXTURE,
+        rt_texture || vertex_usage & D3DUSAGE_RENDERTARGET != 0,
+    );
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
         refuse_under_core(refusal.name());
@@ -187,7 +197,9 @@ fn resolve(
     let mut binds = Binds::default();
     // A pre-transformed draw's outputs: the declaration elements its FF VS passes through.
     let mut ff_outputs = None;
-    let vs_key = if let (StageKind::Prog, Some(vs), Some((code, _))) = (vs_kind, vs, vs_core) {
+    // The vertex slots this draw samples, apart from the pixel slots: they share numbers 0-3.
+    let mut vertex_slots = Vec::new();
+    let vs_key = if let (StageKind::Prog, Some(vs), Some((code, meta))) = (vs_kind, vs, vs_core) {
         let rows = float_rows(vs.max_const_used(), vs.uses_rel_const());
         let bindings = dev.shader_bindings();
         binds.push(
@@ -203,38 +215,87 @@ fn resolve(
             let bools = bindings.vs_constants_b_bits().to_le_bytes();
             binds.push(Stage::Vertex, mtl::VS_BOOL_CONST_SLOT, &bools);
         }
+        // The kinds of the textures at the vertex slots, as mtld3d keys them, and the LOD table
+        // where a `texldl` samples a slot whose state moves its level.
+        let mut sampler_kinds = VsSamplerKinds::default();
+        if vertex_sampled != 0 {
+            let mut levels = VertexLodTable::new();
+            for slot in (0..4usize).filter(|slot| vertex_sampled & (1 << slot) != 0) {
+                let texture = dev.vertex_texture(slot);
+                let mut states = dev.vertex_sampler_states[slot];
+                // The spare state 0 carries the bound texture's SetLOD, none unbound.
+                states[TEXTURE_LOD_SLOT] = 0;
+                if !texture.is_null() {
+                    // SAFETY: a bound texture, live while its vertex slot holds it.
+                    let tex = unsafe { &*texture };
+                    if dev.samples_unfiltered(tex) {
+                        sample_unfiltered(&mut states);
+                    }
+                    states[TEXTURE_LOD_SLOT] = tex.inner().lod();
+                }
+                levels.set_slot(slot, &states);
+                vertex_slots.push(SampledSlot {
+                    slot: u16::try_from(slot).unwrap_or(0),
+                    texture,
+                    states,
+                });
+            }
+            sampler_kinds = dev.vertex_texture_kinds();
+            sampler_kinds.lod_table = vertex_lod_table(meta.explicit_lod_mask, levels.mask());
+            if sampler_kinds.lod_table {
+                binds.push(Stage::Vertex, mtl::VS_LOD_SLOT, levels.bytes());
+            }
+        }
         VsStageKey::Prog {
             code: code.clone(),
             clip_plane_count: clip_plane_count(&rs),
-            // A sampling vertex shader is refused until its vertex textures are bound.
-            sampler_kinds: VsSamplerKinds::default(),
+            sampler_kinds,
         }
     } else {
-        // A pre-transformed layout: the fixed-function stage, a bound shader bypassed.
-        let to_f32 = |n: u32| f32::from(u16::try_from(n).unwrap_or(u16::MAX));
-        let mut row = [core::mem::MaybeUninit::uninit()];
-        FfState::fill_xyzrhw_row(
-            (
-                to_f32(viewport.x),
-                to_f32(viewport.y),
-                to_f32(viewport.width),
-                to_f32(viewport.height),
-            ),
-            &mut row,
-        );
-        // SAFETY: `fill_xyzrhw_row` wrote the one row.
-        let row = unsafe { row[0].assume_init() }.map(f32::to_le_bytes);
-        binds.push(Stage::Vertex, mtl::VS_FLOAT_CONST_SLOT, row.as_flattened());
+        // The fixed-function vertex stage: no shader bound, or a pre-transformed layout, which
+        // bypasses one.
         let key = dev
             .ff_state()
             .build_vs_key(&rs, layout, bound, decl.passthrough());
+        if layout.has_rhw() {
+            let to_f32 = |n: u32| f32::from(u16::try_from(n).unwrap_or(u16::MAX));
+            let mut row = [core::mem::MaybeUninit::uninit()];
+            FfState::fill_xyzrhw_row(
+                (
+                    to_f32(viewport.x),
+                    to_f32(viewport.y),
+                    to_f32(viewport.width),
+                    to_f32(viewport.height),
+                ),
+                &mut row,
+            );
+            // SAFETY: `fill_xyzrhw_row` wrote the one row.
+            let row = unsafe { row[0].assume_init() }.map(f32::to_le_bytes);
+            binds.push(Stage::Vertex, mtl::VS_FLOAT_CONST_SLOT, row.as_flattened());
+        } else {
+            // The transforms, lights, material and texture transforms, rebuilt whole each draw
+            // (C4b3c-2: dedup against the last-bound rows is C4d's).
+            let rows = dev
+                .ff_state()
+                .ff_vs_rows(&rs, &key)
+                .into_iter()
+                .map(|row| row.map(f32::to_le_bytes))
+                .collect::<Vec<_>>();
+            binds.push(
+                Stage::Vertex,
+                mtl::VS_FLOAT_CONST_SLOT,
+                rows.as_flattened().as_flattened(),
+            );
+        }
         ff_outputs = Some(SemanticSet::passthrough_outputs(&key.passthrough));
         VsStageKey::Ff(key)
     };
     let vs_outputs = ff_outputs
         .as_ref()
         .or_else(|| vs_core.map(|(_, meta)| &meta.link_outputs));
-    let fixup = pos_fixup(&viewport, target, vs_kind == StageKind::Ff).map(f32::to_le_bytes);
+    // The depth clamp is a pre-transformed draw's alone: an untransformed fixed-function draw
+    // clips, as a shader's does.
+    let fixup = pos_fixup(&viewport, target, layout.has_rhw()).map(f32::to_le_bytes);
     binds.push(Stage::Vertex, mtl::VS_POS_FIXUP_SLOT, fixup.as_flattened());
     let view = dev
         .ff_state()
@@ -298,7 +359,8 @@ fn resolve(
         primitive == D3DPT_POINTLIST,
         linked,
     );
-    // The sampled slots: each one's texture (flushed to the core), view and sampler, or the black.
+    // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
+    // black.
     let mut slots = Vec::new();
     let mut remaining = sampled_mask;
     while remaining != 0 {
@@ -339,7 +401,11 @@ fn resolve(
         table.is_some(),
     );
     if let Some(core) = dev.core.as_deref_mut() {
-        for s in &slots {
+        let every_slot = slots
+            .iter()
+            .map(|s| (Stage::Pixel, s))
+            .chain(vertex_slots.iter().map(|s| (Stage::Vertex, s)));
+        for (stage, s) in every_slot {
             let snapshot = snapshot_from_state(&s.states, false);
             let skey = key_from_snapshot(&snapshot);
             let sampler = core.sampler(skey, &description_from_snapshot(&snapshot, skey));
@@ -358,7 +424,7 @@ fn resolve(
                             .map_or(stored, |twin| twin as u32);
                         let swizzle = tex.inner().swizzle().map(|s| s.map(|c| c as u8));
                         core.texture_bind(
-                            Stage::Pixel,
+                            stage,
                             slot,
                             id,
                             view_format(format, swizzle),
@@ -371,7 +437,7 @@ fn resolve(
             };
             binds
                 .textures
-                .push(bind.unwrap_or_else(|| core.black_bind(Stage::Pixel, slot, sampler)));
+                .push(bind.unwrap_or_else(|| core.black_bind(stage, slot, sampler)));
         }
     }
     // Empty when the alpha test or fog is off: not bound.

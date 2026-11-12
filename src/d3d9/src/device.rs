@@ -1398,7 +1398,7 @@ impl DeviceInner {
     /// `SetLOD`, the level a vertex `texldl` counts from, so a bind that
     /// changes it and a `SetLOD` on the bound texture push it again too.
     fn push_vertex_sampler_row(&mut self, slot: usize) {
-        // A core device has no encoder mirror: its draws read the states (C4b3a-6).
+        // A core device has no encoder mirror: its draws read the states (`core_draw::resolve`).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
@@ -1455,7 +1455,7 @@ impl DeviceInner {
             self.mark_snapshot_dirty(SnapshotDirty::VS_SOURCE);
         }
         // A core device keeps the binding only: no migration, promotion, upload or encoder mirror
-        // (vertex textures draw from C4b-3b; C4b3a-6).
+        // (its draws bind the vertex slots a shader samples, `core_draw::resolve`).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
@@ -10517,7 +10517,7 @@ extern "system" fn device_set_render_target(
     }
     // A core device draws to its one back buffer, which every back-buffer surface (the implicit
     // one, an additional swap chain's) aliases (C4b3a-4): it binds one at index 0, front end
-    // only; other targets are C4b-3c's.
+    // only; other targets are C4b-3d's.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
         // SAFETY: `surf` is the live surface validated above.
@@ -10805,7 +10805,7 @@ extern "system" fn device_set_depth_stencil_surface(
         }
         (desc.width, desc.height)
     };
-    // A core device has no depth surface yet (C4b-3c): it takes the unbind only, front end only.
+    // A core device has no depth surface yet (C4b-3d): it takes the unbind only, front end only.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
         if !surf.is_null() {

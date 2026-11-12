@@ -372,8 +372,6 @@ bitflags::bitflags! {
         const VS_BOUND = 1 << 0;
         /// The bound vertex shader was created by a core device.
         const VS_CORE = 1 << 1;
-        /// The bound vertex shader declares a sampler.
-        const VS_SAMPLES = 1 << 2;
         /// The layout is pre-transformed (POSITIONT).
         const LAYOUT_RHW = 1 << 3;
         /// A pixel shader is bound.
@@ -384,11 +382,11 @@ bitflags::bitflags! {
         const BLENDING = 1 << 8;
         /// The scissor test is enabled.
         const SCISSOR = 1 << 9;
-        /// A sampled pixel slot holds a depth-format texture (shadow compare or raw fetch).
+        /// A sampled slot, pixel or vertex, holds a depth-format texture.
         const SAMPLES_DEPTH_TEXTURE = 1 << 10;
         /// A sampled pixel slot has fetch4 latched.
         const FETCH4 = 1 << 11;
-        /// A sampled pixel slot holds a render-target texture.
+        /// A sampled slot, pixel or vertex, holds a render-target texture.
         const SAMPLES_RT_TEXTURE = 1 << 12;
     }
 }
@@ -411,10 +409,6 @@ pub enum StageKind {
 pub enum CoreRefusal {
     /// A bound shader was not created by a core device.
     NotCoreShader,
-    /// The vertex shader declares a sampler (vertex textures are C4b-3c's).
-    VertexTexture,
-    /// No vertex shader over a layout that is not pre-transformed (the FF VS's transforms).
-    TransformedFf,
     /// Blending is enabled.
     Blending,
     /// The scissor test is enabled.
@@ -435,13 +429,6 @@ impl CoreRefusal {
             Self::NotCoreShader => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a shader no core device created)"
             }
-            Self::VertexTexture => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (a vertex shader declaring a sampler)"
-            }
-            Self::TransformedFf => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (fixed-function transform of untransformed \
-                 vertices)"
-            }
             Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
             Self::DepthTexture => "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture sampled)",
@@ -456,8 +443,8 @@ impl CoreRefusal {
 /// The stages a core draw of `f` takes, or why the core refuses it.
 ///
 /// A pre-transformed layout takes the fixed-function vertex stage whether a vertex shader is
-/// bound or not, as D3D9 bypasses it; no vertex shader over any other layout needs the
-/// fixed-function transforms, which the core does not have yet.
+/// bound or not, as D3D9 bypasses it; so does any layout with no vertex shader, whose transforms,
+/// lights and texture coordinates the fixed-function vertex stage computes.
 ///
 /// # Errors
 ///
@@ -479,14 +466,10 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     if flags.contains(DrawFlags::SAMPLES_RT_TEXTURE) {
         return Err(CoreRefusal::RenderTargetTexture);
     }
-    let vs = if flags.contains(DrawFlags::LAYOUT_RHW) {
+    let vs = if flags.contains(DrawFlags::LAYOUT_RHW) || !flags.contains(DrawFlags::VS_BOUND) {
         StageKind::Ff
-    } else if !flags.contains(DrawFlags::VS_BOUND) {
-        return Err(CoreRefusal::TransformedFf);
     } else if !flags.contains(DrawFlags::VS_CORE) {
         return Err(CoreRefusal::NotCoreShader);
-    } else if flags.contains(DrawFlags::VS_SAMPLES) {
-        return Err(CoreRefusal::VertexTexture);
     } else {
         StageKind::Prog
     };

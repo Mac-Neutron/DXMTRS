@@ -466,8 +466,7 @@ fn core_ps_variant_rules() {
 #[test]
 fn core_draw_kinds_cover_every_case() {
     use CoreRefusal::{
-        Blending, DepthTexture, Fetch4, NotCoreShader, RenderTargetTexture, Scissor, TransformedFf,
-        VertexTexture,
+        Blending, DepthTexture, Fetch4, NotCoreShader, RenderTargetTexture, Scissor,
     };
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
@@ -477,14 +476,15 @@ fn core_draw_kinds_cover_every_case() {
         (facts(both), Ok((Prog, Prog))),
         (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
+        (facts(rhw - DrawFlags::VS_CORE), Ok((Ff, Prog))),
+        // No vertex shader: the fixed-function vertex stage, whatever the layout.
         (
-            facts((rhw - DrawFlags::VS_CORE) | DrawFlags::VS_SAMPLES),
+            facts(both - DrawFlags::VS_BOUND - DrawFlags::VS_CORE),
             Ok((Ff, Prog)),
         ),
-        (facts(both - DrawFlags::VS_BOUND), Err(TransformedFf)),
+        (facts(DrawFlags::empty()), Ok((Ff, Ff))),
         (facts(DrawFlags::LAYOUT_RHW), Ok((Ff, Ff))),
         (facts(both - DrawFlags::PS_BOUND), Ok((Prog, Ff))),
-        (facts(both | DrawFlags::VS_SAMPLES), Err(VertexTexture)),
         (facts(both - DrawFlags::VS_CORE), Err(NotCoreShader)),
         (facts(both - DrawFlags::PS_CORE), Err(NotCoreShader)),
         (facts(both | DrawFlags::BLENDING), Err(Blending)),
@@ -507,8 +507,6 @@ fn core_draw_kinds_cover_every_case() {
     }
     let refusals = [
         NotCoreShader,
-        VertexTexture,
-        TransformedFf,
         Blending,
         Scissor,
         DepthTexture,
