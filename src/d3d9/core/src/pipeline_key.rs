@@ -392,8 +392,6 @@ bitflags::bitflags! {
         const SAMPLES_DEPTH_TEXTURE = 1 << 10;
         /// A sampled pixel slot has fetch4 latched.
         const FETCH4 = 1 << 11;
-        /// A sampled slot, pixel or vertex, holds a render-target texture.
-        const SAMPLES_RT_TEXTURE = 1 << 12;
     }
 }
 
@@ -423,8 +421,6 @@ pub enum CoreRefusal {
     DepthTexture,
     /// A sampled slot has fetch4 latched (C4b-3d).
     Fetch4,
-    /// A sampled slot holds a render-target texture (C4b-3d).
-    RenderTargetTexture,
 }
 
 impl CoreRefusal {
@@ -439,9 +435,6 @@ impl CoreRefusal {
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
             Self::DepthTexture => "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture sampled)",
             Self::Fetch4 => "IDirect3DDevice9::Draw*PrimitiveUP (fetch4)",
-            Self::RenderTargetTexture => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (a render-target texture sampled)"
-            }
         }
     }
 }
@@ -468,9 +461,6 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     }
     if flags.contains(DrawFlags::FETCH4) {
         return Err(CoreRefusal::Fetch4);
-    }
-    if flags.contains(DrawFlags::SAMPLES_RT_TEXTURE) {
-        return Err(CoreRefusal::RenderTargetTexture);
     }
     let vs = if flags.contains(DrawFlags::LAYOUT_RHW) || !flags.contains(DrawFlags::VS_BOUND) {
         StageKind::Ff

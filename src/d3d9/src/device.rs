@@ -7861,6 +7861,12 @@ fn create_color_target_surface(
         );
         return None;
     }
+    // A core device's target is a core texture under an id of its own (DXMTRS C4b-3d1).
+    #[cfg(feature = "core-runtime")]
+    // SAFETY: `device_inner` is the live owning device, non-null for every caller of this fn.
+    if unsafe { &*device_inner }.is_core() {
+        return core_color_target(device_inner, spec, &mapping);
+    }
     // A render target created at the reported back-buffer size is the game's
     // main view and shares its scale; the surface still reports `width`/`height`
     // so `GetDesc` and every coordinate the game supplies stay logical.
@@ -7929,6 +7935,55 @@ fn create_color_target_surface(
     Some(surf_ptr)
 }
 
+/// A standalone colour target on a device of the core runtime (DXMTRS C4b-3d1).
+///
+/// A one-level render-target texture in the core's store, under an id the surface keeps and its
+/// finalize forgets; the surface carries no Metal handle. It is not counted in the device's
+/// video-memory figure (C4b3d1-7).
+#[cfg(feature = "core-runtime")]
+fn core_color_target(
+    device_inner: *mut DeviceInner,
+    spec: &ColorTargetSpec,
+    mapping: &mtld3d_core::format::FormatMapping,
+) -> Option<*mut Direct3DSurface9> {
+    use d3d9_rt::device::{CoreTextureDesc, TextureKind};
+    let id = mtld3d_core::ids::TextureId::new_unique();
+    // SAFETY: `device_inner` is the live owning device, non-null for every caller.
+    let core = unsafe { &mut *device_inner }.core_mut()?;
+    core.texture_create(
+        id,
+        &CoreTextureDesc {
+            pixel_format: mapping.metal_pixel_format() as u32,
+            kind: TextureKind::Tex2d,
+            width: spec.width,
+            height: spec.height,
+            depth: 1,
+            levels: 1,
+            view_twins: false,
+            block: (1, 1, mapping.bytes_per_pixel()),
+            render_target: true,
+        },
+    );
+    let mut surf = Direct3DSurface9::new_color_target(&ColorTargetCreateInfo {
+        device_inner,
+        metal_color_handle: MetalHandle::NULL,
+        metal_color_srgb_handle: MetalHandle::NULL,
+        metal_msaa_handle: MetalHandle::NULL,
+        metal_msaa_srgb_handle: MetalHandle::NULL,
+        width: spec.width,
+        height: spec.height,
+        format: spec.format,
+        usage: spec.usage,
+        render_scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
+        multi_sample: spec.multi_sample,
+    });
+    surf.set_core_texture(id);
+    let surf_ptr = Box::into_raw(Box::new(surf));
+    // SAFETY: `surf_ptr` is a freshly created, live standalone render-target surface at refcount 1.
+    unsafe { crate::com_ref::com_register_child(surf_ptr) };
+    Some(surf_ptr)
+}
+
 extern "system" fn device_create_render_target(
     this: *mut c_void,
     width: u32,
@@ -7941,11 +7996,6 @@ extern "system" fn device_create_render_target(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreateRenderTarget",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if surface.is_null() || width == 0 || height == 0 {
         null_out(surface);
@@ -7991,6 +8041,19 @@ extern "system" fn device_create_render_target(
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
         null_out(surface);
         return D3DERR_INVALIDCALL;
+    };
+    // A core device has no multisampled target yet (C4b-3d5), and a surface's lock is refused
+    // there (C4c), so a lockable target takes no staging.
+    #[cfg(feature = "core-runtime")]
+    let lockable = if obj.inner().is_core() {
+        if multi_sample.sample_count > 1 {
+            crate::device::refuse_under_core("IDirect3DDevice9::CreateRenderTarget (multisampled)");
+            null_out(surface);
+            return mtld3d_types::D3DERR_NOTAVAILABLE;
+        }
+        0
+    } else {
+        lockable
     };
     // A `Lockable == TRUE` render target keeps its standalone renderable colour
     // texture (so `GetContainer`/`GetDesc`/`StretchRect` are unchanged) but also
@@ -10515,18 +10578,47 @@ extern "system" fn device_set_render_target(
         );
         return D3DERR_INVALIDCALL;
     }
-    // A core device draws to its one back buffer, which every back-buffer surface (the implicit
-    // one, an additional swap chain's) aliases (C4b3a-4): it binds one at index 0, front end
-    // only; other targets are C4b-3d's.
+    // A core device draws to one colour target (DXMTRS C4b-3d1): the back buffer, which every
+    // back-buffer surface (the implicit one, an additional swap chain's) aliases (C4b3d1-4), a
+    // render-target texture's level or face, or a standalone render target. Index 1-3 is C4b-3d4's.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
-        // SAFETY: `surf` is the live surface validated above.
-        if slot != 0 || !unsafe { &*surf }.is_back_buffer() {
-            crate::device::refuse_under_core(
-                "IDirect3DDevice9::SetRenderTarget (a target other than a back buffer at index 0)",
-            );
+        const UNTARGETED: &str =
+            "IDirect3DDevice9::SetRenderTarget (a surface the core does not target)";
+        if slot != 0 {
+            crate::device::refuse_under_core("IDirect3DDevice9::SetRenderTarget (index above 0)");
             return mtld3d_types::D3DERR_NOTAVAILABLE;
         }
+        let (target, parent) = {
+            // SAFETY: `surf` is the live surface validated above.
+            let surf = unsafe { &*surf };
+            (surf.core_target(), surf.parent_texture())
+        };
+        let (Some(target), Some(core)) = (target, dev.core.as_deref_mut()) else {
+            crate::device::refuse_under_core(UNTARGETED);
+            return mtld3d_types::D3DERR_NOTAVAILABLE;
+        };
+        // SAFETY: null, or the surface's parent texture, live while the surface is and distinct
+        // from the device.
+        if let Some(parent) = unsafe { parent.as_mut() } {
+            // Its core texture exists from here, with every CPU write so far uploaded.
+            let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+        }
+        if !core.set_target(target) {
+            crate::device::refuse_under_core(UNTARGETED);
+            return mtld3d_types::D3DERR_NOTAVAILABLE;
+        }
+        // mtld3d's bookkeeping, in its order. An AUTOGENMIPMAP texture the slot leaves has its
+        // chain regenerated, after the passes that drew its level 0.
+        // SAFETY: as above.
+        let new_autogen = unsafe { parent.as_ref() }
+            .and_then(|pt| pt.inner().autogen_mipmap().then(|| pt.texture_id()));
+        if let Some(old_id) = dev.cur_autogen_rt_ids[0].take()
+            && Some(old_id) != new_autogen
+        {
+            core.texture_generate_mips(old_id);
+        }
+        dev.cur_autogen_rt_ids[0] = new_autogen;
         dev.bound_rt_mut()
             .replace_render_target(0, surf, desc.width, desc.height);
         dev.set_viewport(mtld3d_types::D3DVIEWPORT9 {

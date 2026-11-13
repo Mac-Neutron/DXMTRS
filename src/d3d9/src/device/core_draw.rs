@@ -34,7 +34,7 @@ use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
     D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DSAMP_SRGBTEXTURE,
-    D3DUSAGE_RENDERTARGET, SAMPLER_STATE_COUNT,
+    SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -142,32 +142,18 @@ fn resolve(
     let bindings = dev.stage_bindings();
     let depth_mask = bindings.depth_sampler_mask() | bindings.depth_fetch_mask();
     let (fetch4, fetch4_alpha) = bindings.fetch4().masks();
-    let rt_texture = (0..16u16).any(|slot| {
-        let tex = bindings.texture(usize::from(slot));
-        sampled_mask & (1 << slot) != 0
-            && !tex.is_null()
-            // SAFETY: a bound texture, live while its stage holds it.
-            && unsafe { &*tex }.d3d_usage() & D3DUSAGE_RENDERTARGET != 0
-    });
     // The vertex slots (s0-s3) a core vertex shader samples; none where a pre-transformed layout
     // bypasses the shader.
     let vertex_sampled = vs_core
         .filter(|_| !layout.has_rhw())
         .map_or(0, |(_, meta)| meta.sampler_mask & 0xF);
     // A depth texture by its format, as the pixel slots' mask has it (one made without the
-    // DEPTHSTENCIL usage is a depth texture too); a render target by its usage.
-    let (vertex_depth, vertex_target) = (0..4usize)
+    // DEPTHSTENCIL usage is a depth texture too).
+    let vertex_depth = (0..4usize)
         .filter(|slot| vertex_sampled & (1 << slot) != 0)
         .map(|slot| dev.vertex_texture(slot))
-        .filter(|tex| !tex.is_null())
-        .fold((false, false), |(depth, target), tex| {
-            // SAFETY: a bound texture, live while its vertex slot holds it.
-            let tex = unsafe { &*tex };
-            (
-                depth || tex.is_depth_format(),
-                target || tex.d3d_usage() & D3DUSAGE_RENDERTARGET != 0,
-            )
-        });
+        // SAFETY: a bound texture, live while its vertex slot holds it.
+        .any(|tex| !tex.is_null() && unsafe { &*tex }.is_depth_format());
     let mut flags = DrawFlags::empty();
     flags.set(DrawFlags::VS_BOUND, vs.is_some());
     flags.set(DrawFlags::VS_CORE, vs_core.is_some());
@@ -190,14 +176,14 @@ fn resolve(
         DrawFlags::FETCH4,
         (fetch4 | fetch4_alpha) & sampled_mask != 0,
     );
-    flags.set(DrawFlags::SAMPLES_RT_TEXTURE, rt_texture || vertex_target);
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
     })?;
-    let pp = dev.present_params();
-    let target = (pp.back_buffer_width, pp.back_buffer_height);
+    // The bound colour target's size and format (DXMTRS C4b-3d1); the present parameters' for a
+    // device with no back buffer, whose draws record nothing.
+    let (target, color_format) = core_target_of(dev);
     let viewport = dev.viewport();
     let mut binds = Binds::default();
     // A pre-transformed draw's outputs: the declaration elements its FF VS passes through.
@@ -468,10 +454,24 @@ fn resolve(
         layout: decl.code().clone(),
         stride,
         write_mask,
-        // The back buffer's, the one target until the front end binds others.
-        color_format: mtl::PixelFormat::Bgra8Unorm as u32,
+        color_format,
     };
     Ok((key, binds))
+}
+
+/// The bound colour target's size and `WMTPixelFormat` (DXMTRS C4b-3d1).
+///
+/// The back buffer's from the present parameters when the target does not resolve (a device
+/// with no back buffer, whose draws record nothing).
+fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
+    let core = dev.core.as_deref();
+    let size = core.and_then(d3d9_rt::device::CoreDevice::target_size);
+    let format = core.and_then(d3d9_rt::device::CoreDevice::target_format);
+    let pp = dev.present_params();
+    (
+        size.unwrap_or((pp.back_buffer_width, pp.back_buffer_height)),
+        format.unwrap_or(mtl::PixelFormat::Bgra8Unorm as u32),
+    )
 }
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
@@ -501,17 +501,14 @@ fn draw(
     };
     let textures = core::mem::take(&mut binds.textures);
     let binds = binds.binds();
-    let pp = dev.present_params();
+    let (target, _) = core_target_of(dev);
     let rs = dev.render_states();
     let draw = DrawData {
         primitive: metal_primitive as u8,
         vertices,
         vertex_count,
         indices,
-        viewport: core_viewport(
-            &dev.viewport(),
-            (pp.back_buffer_width, pp.back_buffer_height),
-        ),
+        viewport: core_viewport(&dev.viewport(), target),
         fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         binds: &binds,

@@ -470,14 +470,12 @@ fn core_ps_variant_rules() {
 /// Which stages a draw takes, or why the core refuses it.
 #[test]
 fn core_draw_kinds_cover_every_case() {
-    use CoreRefusal::{
-        Blending, DepthTexture, Fetch4, NotCoreShader, RenderTargetTexture, Scissor,
-    };
+    use CoreRefusal::{Blending, DepthTexture, Fetch4, NotCoreShader, Scissor};
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
     let rhw = both | DrawFlags::LAYOUT_RHW;
-    let cases: [(DrawFacts, Kinds); 14] = [
+    let cases: [(DrawFacts, Kinds); 13] = [
         (facts(both), Ok((Prog, Prog))),
         (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
@@ -502,22 +500,17 @@ fn core_draw_kinds_cover_every_case() {
             facts(DrawFlags::LAYOUT_RHW | DrawFlags::FETCH4),
             Err(Fetch4),
         ),
-        (
-            facts(both | DrawFlags::SAMPLES_RT_TEXTURE),
-            Err(RenderTargetTexture),
-        ),
     ];
     for (i, (facts, expected)) in cases.into_iter().enumerate() {
         assert_eq!(core_draw_kinds(facts), expected, "case {i}");
     }
-    let refusals = [
-        NotCoreShader,
-        Blending,
-        Scissor,
-        DepthTexture,
-        Fetch4,
-        RenderTargetTexture,
-    ];
+    let refusals = [NotCoreShader, Blending, Scissor, DepthTexture, Fetch4];
+    for refusal in refusals {
+        // Every refusal there is: one added or dropped does not compile until this names it.
+        match refusal {
+            NotCoreShader | Blending | Scissor | DepthTexture | Fetch4 => {}
+        }
+    }
     let names = refusals.map(CoreRefusal::name);
     assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
 }

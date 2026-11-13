@@ -5852,16 +5852,18 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// texture and every level. Each dirty level, cube face or volume level goes as its pending rect
 /// (the whole level when none), from the staging, widened on the CPU to BGRA8 when its format's
 /// upload is not a plain copy (`upload_decode`). An autogen texture regenerates its chain after
-/// a level-0 upload. False when the texture has no core form here: a depth format or a render
-/// target (C4b-3d), whose draws are refused.
+/// a level-0 upload. A render target's core texture is made as one (zeroed, and with no first
+/// upload: only the levels a CPU write dirtied go). False when the texture has no core form
+/// here: a depth format (C4b-3d2), whose draws are refused.
 #[cfg(feature = "core-runtime")]
 pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
     use d3d9_rt::device::{CoreTextureDesc, TextureKind, UploadRegion};
-    if ti.flags.contains(TextureFlags::DEPTH_FORMAT)
-        || ti.d3d_usage & mtld3d_types::D3DUSAGE_RENDERTARGET != 0
-    {
+    if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
         return false;
     }
+    // A render target's core texture starts zeroed and takes no first upload: its staging holds
+    // nothing until a CPU write dirties a level (DXMTRS C4b-3d1).
+    let render_target = ti.d3d_usage & mtld3d_types::D3DUSAGE_RENDERTARGET != 0;
     let id = ti.texture_id;
     let decode = mtld3d_core::upload_pass::upload_decode(ti.d3d_format, ti.metal_pixel_format)
         .filter(|d| *d != mtld3d_core::upload_pass::UploadDecode::CopyBgra8);
@@ -5893,10 +5895,12 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             } else {
                 (ti.block_w.max(1), ti.block_h.max(1), ti.block_bytes)
             },
-            render_target: false,
+            render_target,
         };
         core.texture_create(id, &desc);
     }
+    // Every level of a texture just made, from its staging.
+    let first_upload = fresh && !render_target;
     let levels = ti.levels as usize;
     let all = if levels >= 32 {
         u32::MAX
@@ -5906,7 +5910,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
     let mut regenerate = false;
     let faces = if cube { CUBE_FACE_COUNT } else { 1 };
     for face in 0..faces {
-        let mut mask = if fresh {
+        let mut mask = if first_upload {
             all
         } else if cube {
             ti.cube
@@ -5934,7 +5938,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
                     .get_mut(level)
                     .and_then(Option::take)
             };
-            let rect = if fresh {
+            let rect = if first_upload {
                 DirtyRect::full(w, h)
             } else {
                 pending.unwrap_or_else(|| DirtyRect::full(w, h))
@@ -6055,6 +6059,13 @@ pub fn flush_converted_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// keeps the upload for its next bind.
 pub fn publish_render_target_write(ti: &mut TextureInner, dev: &mut DeviceInner) {
     if ti.d3d_usage & mtld3d_types::D3DUSAGE_RENDERTARGET != 0 {
+        // A core device uploads the dirty levels now, as a blit after the passes recorded so far
+        // (DXMTRS C4b-3d1): left for the next bind, the write would land over the draws after it.
+        #[cfg(feature = "core-runtime")]
+        if let Some(core) = dev.core_mut() {
+            let _ = core_flush_dirty(ti, core);
+            return;
+        }
         flush_converted_mips(ti, dev);
     }
 }

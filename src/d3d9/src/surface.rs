@@ -253,6 +253,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -310,6 +312,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -370,6 +374,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::Backbuffer,
             container,
         }));
@@ -416,6 +422,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::DepthStencil,
             container,
         }));
@@ -465,6 +473,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: parent_texture,
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -518,6 +528,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: parent_texture,
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -565,6 +577,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -614,6 +628,8 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
+            #[cfg(feature = "core-runtime")]
+            core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -672,6 +688,46 @@ impl Direct3DSurface9 {
     /// texture's Metal handle and restoring the backbuffer.
     pub fn parent_texture(&self) -> *mut Direct3DTexture9 {
         self.inner().parent_texture
+    }
+
+    /// Gives a standalone render target its core texture's id (DXMTRS C4b-3d1).
+    #[cfg(feature = "core-runtime")]
+    pub fn set_core_texture(&mut self, id: mtld3d_core::ids::TextureId) {
+        // SAFETY: `self.inner` is the live `SurfaceInner` of this wrapper, just made by
+        // `new_color_target`; access is exclusive under the device's API lock.
+        unsafe { &mut *self.inner }.core_texture = Some(id);
+    }
+
+    /// The colour target this surface is to a device of the core runtime (DXMTRS C4b-3d1).
+    ///
+    /// The back buffer for a back-buffer surface (the implicit one, and an additional swap
+    /// chain's, which aliases it: C4b3d1-4), a render-target texture's level and face, or a
+    /// standalone render target's own core texture; `None` for a surface the core does not draw
+    /// to (a depth-stencil, an offscreen plain surface, a level of a texture that is no target).
+    #[cfg(feature = "core-runtime")]
+    pub fn core_target(&self) -> Option<d3d9_rt::device::TargetRef> {
+        use d3d9_rt::device::TargetRef;
+        if self.is_back_buffer() {
+            return Some(TargetRef::BackBuffer);
+        }
+        let inner = self.inner();
+        if let Some(id) = inner.core_texture {
+            return Some(TargetRef::Texture {
+                id,
+                level: 0,
+                face: None,
+            });
+        }
+        // SAFETY: null, or the level's parent texture, live while the level is (it holds a
+        // reference).
+        let parent = unsafe { inner.parent_texture.as_ref() }?;
+        (parent.d3d_usage() & mtld3d_types::D3DUSAGE_RENDERTARGET != 0).then(|| {
+            TargetRef::Texture {
+                id: parent.texture_id(),
+                level: inner.mip_level,
+                face: self.cube_face(),
+            }
+        })
     }
 
     /// The container texture both refcounts of this surface forward to, or null.
@@ -1269,6 +1325,12 @@ struct SurfaceInner {
     /// every other surface, including the offscreen plain that owns a private
     /// backing texture no second shell can reach.
     state_owner_texture: *mut Direct3DTexture9,
+    /// A standalone render target's core texture, on a device of the core runtime (DXMTRS C4b-3d1).
+    ///
+    /// The store's id for it, forgotten at this surface's finalize; `None` for every other surface
+    /// and on a device of mtld3d's runtime.
+    #[cfg(feature = "core-runtime")]
+    core_texture: Option<mtld3d_core::ids::TextureId>,
 }
 
 /// The GDI objects backing an outstanding `GetDC`.
@@ -1686,6 +1748,18 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
         !inner.flags.contains(SurfaceFlags::CONTAINER_CACHED),
         "container-cached sub-resource surface finalized outside its container's teardown"
     );
+    // A core device's standalone render target owns its core texture (DXMTRS C4b-3d1): the store
+    // forgets it; the closures already recorded hold their own reference.
+    #[cfg(feature = "core-runtime")]
+    if let Some(id) = inner.core_texture
+        && !inner.device_inner.is_null()
+    {
+        // SAFETY: a standalone surface forwards a device reference for its public lifetime, and
+        // a bound one is released by the device's teardown before its core device goes.
+        if let Some(core) = unsafe { &mut *inner.device_inner }.core_mut() {
+            core.forget_texture(id);
+        }
+    }
     // A standalone colour target owns its Metal colour texture, the
     // multisampled companion it resolves from, and the sRGB twin view taken
     // of each. All of them go on the encoder's seq-gated retention queue so a
