@@ -26,7 +26,11 @@ use winemetal_sys::wire::{
     WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitGenerateMipmaps,
 };
 
-use super::{CoreDevice, LOG_TARGET, TargetRef, draw::Stage, target::Resolved};
+use super::{
+    CoreDevice, LOG_TARGET, TargetRef,
+    draw::Stage,
+    target::{Resolved, Shape},
+};
 
 /// A D3D9 texture's shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,20 +234,17 @@ impl CoreDevice {
         self.textures.remove(&id);
     }
 
-    /// Level `level` (and `face`, for a cube) of `id`'s texture as a pass attaches it.
+    /// The shape of level `level` (and `face`, for a cube) of `id`'s texture as a target.
     ///
     /// `None` unless the store holds `id` as a render target with that level, and `face` is a
-    /// cube's face exactly when it is a cube. The view is of the one subresource, a 2D view whose
-    /// slice is the face (C4b3d1-3): built here field by field, since the core's own 2D view
-    /// helper has no slice.
-    pub(super) fn texture_target(
+    /// cube's face exactly when it is a cube.
+    pub(super) fn texture_shape(
         &self,
         id: TextureId,
         level: u32,
         face: Option<u32>,
-    ) -> Option<Resolved> {
-        let stored = self.textures.get(&id)?;
-        let desc = &stored.desc;
+    ) -> Option<Shape> {
+        let desc = &self.textures.get(&id)?.desc;
         let slice = match (desc.kind, face) {
             (TextureKind::Tex2d, None) => 0,
             (TextureKind::Cube, Some(face)) if face < 6 => face,
@@ -252,23 +253,36 @@ impl CoreDevice {
         if !desc.render_target || level >= desc.levels {
             return None;
         }
-        let key = TextureViewDescriptor {
-            format: desc.pixel_format,
-            texture_type: WMT_TEXTURE_TYPE2D,
-            first_mip: level,
-            mip_count: 1,
-            first_slice: slice,
-            array_size: 1,
-        }
-        .key();
         let extent = |size: u32| size.checked_shr(level).unwrap_or(0).max(1);
-        Some(Resolved {
-            texture: Arc::clone(&stored.texture),
-            key,
+        Some(Shape {
             width: extent(desc.width),
             height: extent(desc.height),
             pixel_format: desc.pixel_format,
             texel_bytes: desc.block.2,
+            level,
+            slice,
+        })
+    }
+
+    /// `id`'s texture as a pass attaches the subresource `shape` names.
+    ///
+    /// The view is of that one subresource, a 2D view whose slice is the face (C4b3d1-3): built
+    /// here field by field, since the core's own 2D view helper has no slice.
+    pub(super) fn texture_target(&self, id: TextureId, shape: Shape) -> Option<Resolved> {
+        let stored = self.textures.get(&id)?;
+        let key = TextureViewDescriptor {
+            format: shape.pixel_format,
+            texture_type: WMT_TEXTURE_TYPE2D,
+            first_mip: shape.level,
+            mip_count: 1,
+            first_slice: shape.slice,
+            array_size: 1,
+        }
+        .key();
+        Some(Resolved {
+            texture: Arc::clone(&stored.texture),
+            key,
+            shape,
         })
     }
 

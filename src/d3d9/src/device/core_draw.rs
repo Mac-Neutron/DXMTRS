@@ -104,9 +104,10 @@ impl Binds {
     }
 }
 
-/// The pipeline key and binds of a UP draw of `primitive` with `stride` from the device state.
+/// A UP draw's pipeline key, binds and target size, from the device state.
 ///
-/// The caller checked that a declaration (or an FVF's) is bound.
+/// The draw is of `primitive` with `stride`; the caller checked that a declaration (or an FVF's)
+/// is bound.
 ///
 /// # Errors
 ///
@@ -116,7 +117,7 @@ fn resolve(
     dev: &mut DeviceInner,
     primitive: u32,
     stride: u32,
-) -> Result<(PipelineKey, Binds), i32> {
+) -> Result<(PipelineKey, Binds, (u32, u32)), i32> {
     let rs = *dev.render_states();
     // SAFETY: bound (the caller checked), and its slot's refcount keeps it live for the call.
     let decl = unsafe { &*dev.vertex_decl() }.inner();
@@ -456,7 +457,7 @@ fn resolve(
         write_mask,
         color_format,
     };
-    Ok((key, binds))
+    Ok((key, binds, target))
 }
 
 /// The bound colour target's size and `WMTPixelFormat` (DXMTRS C4b-3d1).
@@ -464,14 +465,16 @@ fn resolve(
 /// The back buffer's from the present parameters when the target does not resolve (a device
 /// with no back buffer, whose draws record nothing).
 fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
-    let core = dev.core.as_deref();
-    let size = core.and_then(d3d9_rt::device::CoreDevice::target_size);
-    let format = core.and_then(d3d9_rt::device::CoreDevice::target_format);
-    let pp = dev.present_params();
-    (
-        size.unwrap_or((pp.back_buffer_width, pp.back_buffer_height)),
-        format.unwrap_or(mtl::PixelFormat::Bgra8Unorm as u32),
-    )
+    dev.core
+        .as_deref()
+        .and_then(d3d9_rt::device::CoreDevice::target_desc)
+        .unwrap_or_else(|| {
+            let pp = dev.present_params();
+            (
+                (pp.back_buffer_width, pp.back_buffer_height),
+                mtl::PixelFormat::Bgra8Unorm as u32,
+            )
+        })
 }
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
@@ -495,13 +498,12 @@ fn draw(
     let Some(metal_primitive) = metal_primitive else {
         return D3DERR_INVALIDCALL;
     };
-    let (key, mut binds) = match resolve(dev, primitive, stride) {
+    let (key, mut binds, target) = match resolve(dev, primitive, stride) {
         Ok(resolved) => resolved,
         Err(hr) => return hr,
     };
     let textures = core::mem::take(&mut binds.textures);
     let binds = binds.binds();
-    let (target, _) = core_target_of(dev);
     let rs = dev.render_states();
     let draw = DrawData {
         primitive: metal_primitive as u8,

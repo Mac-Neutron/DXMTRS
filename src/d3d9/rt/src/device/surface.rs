@@ -21,14 +21,15 @@ impl CoreDevice {
         let Some(target) = self.resolve(source) else {
             return false;
         };
-        let (width, height) = (target.width, target.height);
-        let bytes_per_row = width * target.texel_bytes;
+        let shape = target.shape;
+        let (width, height) = (shape.width, shape.height);
+        let bytes_per_row = width * shape.texel_bytes;
         let row = bytes_per_row as usize;
         let needed = dst_pitch * (height as usize).saturating_sub(1) + row;
         if height == 0 || dst_pitch < row || dst.len() < needed {
             return false;
         }
-        let (level, slice) = (target.key.first_mip(), target.key.first_slice());
+        let (level, slice) = (shape.level, shape.slice);
         let texture = target.texture;
         let length = u64::from(bytes_per_row) * u64::from(height);
         // One buffer, remade when a source of another size or row is read.

@@ -26,32 +26,56 @@ pub enum TargetRef {
     },
 }
 
-/// A target as a pass attaches it.
-pub(super) struct Resolved {
-    pub(super) texture: Arc<Texture>,
-    /// The view of the target's one subresource.
-    pub(super) key: TextureViewKey,
+/// A target's shape: what a draw checks and keys on, without holding the texture.
+#[derive(Clone, Copy)]
+pub(super) struct Shape {
     pub(super) width: u32,
     pub(super) height: u32,
     /// The `WMTPixelFormat` the pipeline and the tile-barrier key name.
     pub(super) pixel_format: u32,
     /// Bytes a texel, for a read-back's rows.
     pub(super) texel_bytes: u32,
+    /// The level and slice (a cube's face) of the target's one subresource.
+    pub(super) level: u32,
+    pub(super) slice: u32,
+}
+
+/// A target as a pass attaches it.
+pub(super) struct Resolved {
+    pub(super) texture: Arc<Texture>,
+    /// The view of the target's one subresource.
+    pub(super) key: TextureViewKey,
+    pub(super) shape: Shape,
 }
 
 impl CoreDevice {
-    /// `target` as a pass attaches it, when it names something the device can draw to.
-    pub(super) fn resolve(&self, target: TargetRef) -> Option<Resolved> {
+    /// `target`'s shape, when it names something the device can draw to.
+    ///
+    /// Every draw asks this (its key's format, its viewport's bounds), so it takes no reference.
+    pub(super) fn shape(&self, target: TargetRef) -> Option<Shape> {
         match target {
-            TargetRef::BackBuffer => self.back_buffer.as_ref().map(|back_buffer| Resolved {
-                texture: Arc::clone(&back_buffer.texture),
-                key: back_buffer.key,
+            TargetRef::BackBuffer => self.back_buffer.as_ref().map(|back_buffer| Shape {
                 width: back_buffer.width,
                 height: back_buffer.height,
                 pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
                 texel_bytes: 4,
+                level: 0,
+                slice: 0,
             }),
-            TargetRef::Texture { id, level, face } => self.texture_target(id, level, face),
+            TargetRef::Texture { id, level, face } => self.texture_shape(id, level, face),
+        }
+    }
+
+    /// `target` as a pass attaches it, when it names something the device can draw to.
+    pub(super) fn resolve(&self, target: TargetRef) -> Option<Resolved> {
+        let shape = self.shape(target)?;
+        match target {
+            TargetRef::BackBuffer => self.back_buffer.as_ref().map(|back_buffer| Resolved {
+                texture: Arc::clone(&back_buffer.texture),
+                key: back_buffer.key,
+                shape,
+            }),
+            TargetRef::Texture { id, .. } => self.texture_target(id, shape),
         }
     }
 
@@ -60,7 +84,7 @@ impl CoreDevice {
     /// False, and nothing changed, when it does not resolve. A change ends the open render pass,
     /// whose attachment is the old target.
     pub fn set_target(&mut self, target: TargetRef) -> bool {
-        if self.resolve(target).is_none() {
+        if self.shape(target).is_none() {
             return false;
         }
         if target != self.target {
@@ -81,13 +105,20 @@ impl CoreDevice {
     /// The current target's width and height; `None` when it does not resolve.
     #[must_use]
     pub fn target_size(&self) -> Option<(u32, u32)> {
-        self.resolve(self.target).map(|t| (t.width, t.height))
+        self.shape(self.target).map(|t| (t.width, t.height))
     }
 
     /// The current target's `WMTPixelFormat`; `None` when it does not resolve.
     #[must_use]
     pub fn target_format(&self) -> Option<u32> {
-        self.resolve(self.target).map(|t| t.pixel_format)
+        self.shape(self.target).map(|t| t.pixel_format)
+    }
+
+    /// The current target's size and `WMTPixelFormat` in one look-up, for a draw.
+    #[must_use]
+    pub fn target_desc(&self) -> Option<((u32, u32), u32)> {
+        self.shape(self.target)
+            .map(|t| ((t.width, t.height), t.pixel_format))
     }
 }
 

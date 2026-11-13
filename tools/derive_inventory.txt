@@ -552,6 +552,7 @@ src/d3d9/mtl/src/wmt.rs SpatialScalerInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
 src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
+src/d3d9/rt/src/device/target.rs Shape Clone,Copy
 src/d3d9/rt/src/device/target.rs TargetRef Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/textures.rs CoreTextureDesc Clone,Copy,Debug
 src/d3d9/rt/src/device/textures.rs TextureKind Clone,Copy,Debug,PartialEq,Eq

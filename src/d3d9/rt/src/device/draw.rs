@@ -147,7 +147,7 @@ impl CoreDevice {
     /// Nothing recorded when the colour target does not resolve (a device with no back buffer),
     /// the layout crosses its stride, or the pipeline does not build.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
-        let Some(target) = self.resolve(self.target) else {
+        let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };
         debug_assert_eq!(

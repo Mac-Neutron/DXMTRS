@@ -51,7 +51,8 @@ impl CoreDevice {
         let Some(target) = self.resolve(self.target) else {
             return;
         };
-        let (width, height, pixel_format) = (target.width, target.height, target.pixel_format);
+        let shape = target.shape;
+        let (width, height, pixel_format) = (shape.width, shape.height, shape.pixel_format);
         let (texture, key) = (target.texture, target.key);
         self.emit(move |enc| {
             enc.start_render_pass(0, 0, 1, None);
