@@ -7947,6 +7947,11 @@ fn core_color_target(
     mapping: &mtld3d_core::format::FormatMapping,
 ) -> Option<*mut Direct3DSurface9> {
     use d3d9_rt::device::{CoreTextureDesc, TextureKind};
+    // Metal raises for a texture past its limit, which ends the process: the answer comes first,
+    // as mtld3d's Unix create gives it.
+    if !mtld3d_core::caps::texture_extent_fits(spec.width, spec.height) {
+        return None;
+    }
     let id = mtld3d_core::ids::TextureId::new_unique();
     // SAFETY: `device_inner` is the live owning device, non-null for every caller.
     let core = unsafe { &mut *device_inner }.core_mut()?;
