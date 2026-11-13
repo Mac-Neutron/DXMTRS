@@ -711,6 +711,9 @@ impl Direct3DSurface9 {
             return Some(TargetRef::BackBuffer);
         }
         let inner = self.inner();
+        if inner.standalone_usage & D3DUSAGE_DEPTHSTENCIL != 0 {
+            return None;
+        }
         if let Some(id) = inner.core_texture {
             return Some(TargetRef::Texture {
                 id,
@@ -726,6 +729,36 @@ impl Direct3DSurface9 {
                 id: parent.texture_id(),
                 level: inner.mip_level,
                 face: self.cube_face(),
+            }
+        })
+    }
+
+    /// The core depth-stencil this surface is (DXMTRS C4b-3d2).
+    ///
+    /// The device's auto depth-stencil for the implicit surface; a standalone depth-stencil's
+    /// own core texture; a level of a depth texture made with `D3DUSAGE_DEPTHSTENCIL`. `None`
+    /// for a surface the core does not attach as one.
+    #[cfg(feature = "core-runtime")]
+    pub fn core_depth(&self) -> Option<d3d9_rt::device::DepthRef> {
+        use d3d9_rt::device::DepthRef;
+        let inner = self.inner();
+        if inner.implicit_kind == ImplicitKind::DepthStencil {
+            // SAFETY: null, or the device that owns its implicit surface and outlives it.
+            let id = unsafe { inner.device_inner.as_ref() }?.core_auto_depth()?;
+            return Some(DepthRef { id, level: 0 });
+        }
+        // SAFETY: null, or the level's parent texture, live while the level is (it holds a
+        // reference).
+        let Some(parent) = (unsafe { inner.parent_texture.as_ref() }) else {
+            return inner
+                .core_texture
+                .filter(|_| inner.standalone_usage & D3DUSAGE_DEPTHSTENCIL != 0)
+                .map(|id| DepthRef { id, level: 0 });
+        };
+        (parent.is_depth_format() && parent.d3d_usage() & D3DUSAGE_DEPTHSTENCIL != 0).then(|| {
+            DepthRef {
+                id: parent.texture_id(),
+                level: inner.mip_level,
             }
         })
     }

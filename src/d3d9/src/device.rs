@@ -517,6 +517,12 @@ pub struct DeviceInner {
     /// The core runtime's device (`runtime.mode = core`), `None` for one of mtld3d's.
     #[cfg(feature = "core-runtime")]
     core: Option<Box<d3d9_rt::device::CoreDevice>>,
+    /// A core device's auto depth-stencil: its core texture's id (DXMTRS C4b-3d2).
+    ///
+    /// What `depth_stencil_handle` is to a device of mtld3d's: none when the device was made
+    /// without one.
+    #[cfg(feature = "core-runtime")]
+    core_auto_depth: Option<mtld3d_core::ids::TextureId>,
     /// A core device's programs by id, for its shaders to share one `Arc` of the same tokens.
     #[cfg(feature = "core-runtime")]
     programs: rustc_hash::FxHashMap<ProgramId, std::sync::Weak<[u32]>>,
@@ -3647,6 +3653,8 @@ impl Direct3DDevice9 {
             #[cfg(feature = "core-runtime")]
             core: info.core,
             #[cfg(feature = "core-runtime")]
+            core_auto_depth: None,
+            #[cfg(feature = "core-runtime")]
             programs: rustc_hash::FxHashMap::default(),
             coherent_seq,
             upload_coherent_seq,
@@ -3878,7 +3886,29 @@ impl DeviceInner {
         // A custom depth surface bound via `SetDepthStencilSurface` counts as
         // bound regardless of the auto handle; otherwise the device default
         // auto depth-stencil is in effect iff its handle exists.
-        !self.bound_rt.depth_stencil().is_null() || !self.depth_stencil_handle.is_null()
+        !self.bound_rt.depth_stencil().is_null() || self.has_auto_depth()
+    }
+
+    /// Whether the device has an auto depth-stencil: mtld3d's Metal texture, or a core device's.
+    const fn has_auto_depth(&self) -> bool {
+        #[cfg(feature = "core-runtime")]
+        if self.core_auto_depth.is_some() {
+            return true;
+        }
+        !self.depth_stencil_handle.is_null()
+    }
+
+    /// A core device's auto depth-stencil, `None` when the device has none.
+    #[cfg(feature = "core-runtime")]
+    pub const fn core_auto_depth(&self) -> Option<mtld3d_core::ids::TextureId> {
+        self.core_auto_depth
+    }
+
+    /// Records a core device's auto depth-stencil and its `D3DFMT_*`, at `CreateDevice`.
+    #[cfg(feature = "core-runtime")]
+    pub const fn set_core_auto_depth(&mut self, id: mtld3d_core::ids::TextureId, format: u32) {
+        self.core_auto_depth = Some(id);
+        self.depth_stencil_format = format;
     }
 
     /// Whether the bound depth-stencil surface carries a stencil plane.
@@ -4108,7 +4138,7 @@ impl DeviceInner {
     pub fn get_or_create_implicit_depth_stencil(
         &mut self,
     ) -> *mut crate::surface::Direct3DSurface9 {
-        if self.depth_stencil_handle.is_null() {
+        if !self.has_auto_depth() {
             return core::ptr::null_mut();
         }
         if self.implicit_depth_stencil == 0 {
@@ -8118,6 +8148,70 @@ extern "system" fn device_create_render_target(
     D3D_OK
 }
 
+/// A standalone depth-stencil surface on a device of the core runtime (DXMTRS C4b-3d2).
+///
+/// A one-level depth texture in the core's store, under an id the surface keeps and its finalize
+/// forgets; the surface carries no Metal handle and is not counted in the device's video-memory
+/// figure, as a standalone colour target's.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE` for a multisampled one (refused, C4b-3d5); `D3DERR_INVALIDCALL` past
+/// the device's texture limit, which Metal would raise for.
+#[cfg(feature = "core-runtime")]
+fn core_depth_surface(
+    device_inner: *mut DeviceInner,
+    (width, height): (u32, u32),
+    format: u32,
+    pixel_format: u32,
+    multi_sample: SurfaceMultiSample,
+) -> Result<*mut Direct3DSurface9, i32> {
+    use d3d9_rt::device::{CoreTextureDesc, TextureKind};
+    if multi_sample.sample_count > 1 {
+        crate::device::refuse_under_core(
+            "IDirect3DDevice9::CreateDepthStencilSurface (multisampled)",
+        );
+        return Err(mtld3d_types::D3DERR_NOTAVAILABLE);
+    }
+    if !mtld3d_core::caps::texture_extent_fits(width, height) {
+        return Err(D3DERR_INVALIDCALL);
+    }
+    let id = mtld3d_core::ids::TextureId::new_unique();
+    // SAFETY: `device_inner` is the live owning device, non-null for the caller.
+    let Some(core) = unsafe { &mut *device_inner }.core_mut() else {
+        return Err(D3DERR_INVALIDCALL);
+    };
+    core.texture_create(
+        id,
+        &CoreTextureDesc {
+            pixel_format,
+            kind: TextureKind::Tex2d,
+            width,
+            height,
+            depth: 1,
+            levels: 1,
+            view_twins: false,
+            // Never uploaded to or read back: the block is not read.
+            block: (1, 1, 4),
+            render_target: true,
+        },
+    );
+    let mut surf = Direct3DSurface9::new_depth_stencil(
+        device_inner,
+        MetalHandle::NULL,
+        width,
+        height,
+        format,
+        mtld3d_core::render_scale::RenderScale::IDENTITY,
+        multi_sample,
+    );
+    surf.set_core_texture(id);
+    let surf_ptr = Box::into_raw(Box::new(surf));
+    // SAFETY: `surf_ptr` is a freshly created, live standalone depth-stencil at refcount 1.
+    unsafe { crate::com_ref::com_register_child(surf_ptr) };
+    Ok(surf_ptr)
+}
+
 extern "system" fn device_create_depth_stencil_surface(
     this: *mut c_void,
     width: u32,
@@ -8130,11 +8224,6 @@ extern "system" fn device_create_depth_stencil_surface(
     shared_handle: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreateDepthStencilSurface",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if surface.is_null() || width == 0 || height == 0 {
         null_out(surface);
@@ -8184,6 +8273,29 @@ extern "system" fn device_create_depth_stencil_surface(
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
     };
+    // A core device's is a depth texture in the core's store (DXMTRS C4b-3d2), after the checks
+    // both runtimes share.
+    #[cfg(feature = "core-runtime")]
+    if obj.inner().is_core() {
+        let made = core_depth_surface(
+            obj.inner_ptr(),
+            (width, height),
+            format,
+            pixel_format as u32,
+            multi_sample,
+        );
+        return match made {
+            Ok(surf_ptr) => {
+                // SAFETY: vtable out-param; `surface` is *mut *mut c_void per the ABI.
+                unsafe { OutPtr::write_opt(surface, surf_ptr.cast::<c_void>()) };
+                D3D_OK
+            }
+            Err(hr) => {
+                null_out(surface);
+                hr
+            }
+        };
+    }
     let device_handle = obj.inner().device_handle;
     // A depth buffer created at the reported back-buffer size is the one paired
     // with the main view, so it shares the back buffer's scale and stays the
@@ -10902,17 +11014,41 @@ extern "system" fn device_set_depth_stencil_surface(
         }
         (desc.width, desc.height)
     };
-    // A core device has no depth surface yet (C4b-3d): it takes the unbind only, front end only.
+    // A core device binds one of its own depth-stencils (DXMTRS C4b-3d2): the implicit one, a
+    // standalone surface, or a depth texture's level. Its size is not checked here: a draw or a
+    // Clear that needs a depth-stencil of another size than the colour target is refused then,
+    // since either binding may change alone.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
-        if !surf.is_null() {
-            crate::device::refuse_under_core(
-                "IDirect3DDevice9::SetDepthStencilSurface (a surface)",
-            );
+        const UNATTACHED: &str =
+            "IDirect3DDevice9::SetDepthStencilSurface (a surface the core does not attach)";
+        let Some(core) = dev.core.as_deref_mut() else {
+            return D3DERR_INVALIDCALL;
+        };
+        // SAFETY: null, or the live surface validated above.
+        let depth = if let Some(surf) = unsafe { surf.as_ref() } {
+            let own = surf.device_inner() == obj.inner_ptr();
+            let Some(depth) = surf.core_depth().filter(|_| own) else {
+                crate::device::refuse_under_core(UNATTACHED);
+                return mtld3d_types::D3DERR_NOTAVAILABLE;
+            };
+            // SAFETY: null, or the surface's parent texture, live while the surface is and
+            // distinct from the device.
+            if let Some(parent) = unsafe { surf.parent_texture().as_mut() } {
+                // Its core texture exists from here.
+                let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+            }
+            Some(depth)
+        } else {
+            None
+        };
+        if !core.set_depth(depth) {
+            crate::device::refuse_under_core(UNATTACHED);
             return mtld3d_types::D3DERR_NOTAVAILABLE;
         }
         dev.bound_rt_mut().replace_depth_stencil(surf);
-        dev.flags.set(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND, true);
+        dev.flags
+            .set(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND, surf.is_null());
         return D3D_OK;
     }
     dev.bound_rt_mut().replace_depth_stencil(surf);
@@ -11231,7 +11367,7 @@ extern "system" fn device_clear(
 ) -> i32 {
     let _api = device_api_lock(this);
     #[cfg(feature = "core-runtime")]
-    if let Some(hr) = core_arms::clear(this, rects, flags, color) {
+    if let Some(hr) = core_arms::clear(this, rects, flags, color, z, stencil) {
         return hr;
     }
     let _timer = device_timer(this, DeviceSubCategory::Frame);

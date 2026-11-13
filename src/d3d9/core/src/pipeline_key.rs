@@ -431,6 +431,10 @@ pub enum CoreRefusal {
     DepthTexture,
     /// A sampled slot has fetch4 latched (C4b-3d).
     Fetch4,
+    /// The draw tests or writes a depth-stencil of another size than the colour target (C4b-3d3).
+    DepthSize,
+    /// The draw tests or writes the depth-stencil it samples (C4c).
+    BoundDepthSampled,
 }
 
 impl CoreRefusal {
@@ -445,6 +449,12 @@ impl CoreRefusal {
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
             Self::DepthTexture => "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture sampled)",
             Self::Fetch4 => "IDirect3DDevice9::Draw*PrimitiveUP (fetch4)",
+            Self::DepthSize => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (a depth-stencil of another size than the target)"
+            }
+            Self::BoundDepthSampled => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (the depth-stencil sampled while bound)"
+            }
         }
     }
 }
@@ -487,6 +497,39 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
         StageKind::Prog
     };
     Ok((vs, ps))
+}
+
+/// The depth format a core draw's key names, or why the core refuses the draw (C4b-3d2).
+///
+/// `bound` is the bound depth-stencil's `WMTPixelFormat` (none: the key names none), `attachable`
+/// whether a pass on the colour target can attach it (it has the target's size), `samples_bound`
+/// whether the draw samples it, and `uses_plane` whether the draw's state tests or writes one of
+/// its planes. An attachable depth-stencil the draw does not sample is the key's. Otherwise the
+/// draw goes without it, which only a draw that uses no plane may.
+///
+/// # Errors
+///
+/// A draw that uses a plane of a depth-stencil it cannot have: of another size, or sampled.
+pub const fn core_key_depth(
+    bound: Option<u32>,
+    attachable: bool,
+    samples_bound: bool,
+    uses_plane: bool,
+) -> Result<u32, CoreRefusal> {
+    let Some(format) = bound else {
+        return Ok(0);
+    };
+    if attachable && !samples_bound {
+        return Ok(format);
+    }
+    if !uses_plane {
+        return Ok(0);
+    }
+    if attachable {
+        Err(CoreRefusal::BoundDepthSampled)
+    } else {
+        Err(CoreRefusal::DepthSize)
+    }
 }
 
 /// The float rows a stage binds: the whole 256-row file under relative addressing.

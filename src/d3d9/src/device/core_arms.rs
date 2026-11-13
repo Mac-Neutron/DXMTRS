@@ -8,7 +8,7 @@
 
 use core::ffi::c_void;
 
-use d3d9_rt::device::TargetRef;
+use d3d9_rt::device::{DepthState, TargetRef};
 use mtld3d_core::{
     convert::{d3dcolor_to_rgba_f32, linear_to_srgb_rgba},
     pipeline_key::viewport_covers,
@@ -35,11 +35,23 @@ fn core_device<'a>(this: *mut c_void) -> Option<&'a mut DeviceInner> {
     dev.is_core().then_some(dev)
 }
 
-/// `Clear` of the whole colour target's colour; anything else is refused.
-pub fn clear(this: *mut c_void, rects: *const c_void, flags: u32, color: u32) -> Option<i32> {
+/// `Clear` of the whole colour target and of the whole depth-stencil; anything else is refused.
+///
+/// Z and stencil go to the bound depth-stencil (DXMTRS C4b-3d2): `D3DERR_INVALIDCALL` with none
+/// bound, as mtld3d answers; refused for one of another size than the colour target, whose
+/// whole-target Clear is a partial one of it (C4b-3d3). The stencil flag against a format with no
+/// stencil plane clears nothing, as D3D9 has it (the core device masks the planes).
+pub fn clear(
+    this: *mut c_void,
+    rects: *const c_void,
+    flags: u32,
+    color: u32,
+    z: f32,
+    stencil: u32,
+) -> Option<i32> {
     let dev = core_device(this)?;
-    if flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL) != 0 {
-        // No depth-stencil surface under the core runtime yet: D3D9's answer for none bound.
+    let depth_flags = flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
+    if depth_flags != 0 && !dev.depth_stencil_bound() {
         return Some(D3DERR_INVALIDCALL);
     }
     if !rects.is_null() || dev.render_state(D3DRS_SCISSORTESTENABLE as usize) != 0 {
@@ -55,6 +67,12 @@ pub fn clear(this: *mut c_void, rects: *const c_void, flags: u32, color: u32) ->
         refuse_under_core("IDirect3DDevice9::Clear (a viewport not covering the target)");
         return Some(D3DERR_NOTAVAILABLE);
     }
+    if depth_flags != 0 && matches!(dev.core.as_deref()?.depth_state(), DepthState::Detached(_)) {
+        refuse_under_core(
+            "IDirect3DDevice9::Clear (a depth-stencil of another size than the target)",
+        );
+        return Some(D3DERR_NOTAVAILABLE);
+    }
     if flags & D3DCLEAR_TARGET != 0 {
         // No target has an sRGB view yet (C4b3d1-1): the colour is stored encoded, as a draw's
         // (C4b2-4).
@@ -65,6 +83,13 @@ pub fn clear(this: *mut c_void, rects: *const c_void, flags: u32, color: u32) ->
             linear_to_srgb_rgba(linear)
         };
         dev.core.as_deref_mut()?.clear(rgba);
+    }
+    if depth_flags != 0 {
+        let planes = u32::from(flags & D3DCLEAR_ZBUFFER != 0)
+            | u32::from(flags & D3DCLEAR_STENCIL != 0) << 1;
+        dev.core
+            .as_deref_mut()?
+            .clear_depth_stencil(planes, z, stencil.to_le_bytes()[0]);
     }
     Some(D3D_OK)
 }

@@ -2305,8 +2305,9 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
 ///
 /// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
 /// registry ID `GetDeviceInfo` reported, with D3D9's queue profile. What the core runtime does
-/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen, multisampled
-/// or auto depth-stencil device, and a back buffer other than `X8R8G8B8`/`A8R8G8B8`.
+/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen or
+/// multisampled device, and a back buffer other than `X8R8G8B8`/`A8R8G8B8`. An auto
+/// depth-stencil is a depth texture in the core's store, bound at once (DXMTRS C4b-3d2).
 #[cfg(feature = "core-runtime")]
 fn create_core_device(
     args: &CreateDeviceArgs,
@@ -2323,11 +2324,11 @@ fn create_core_device(
         present_params,
         device,
     } = args;
-    if pp.windowed == 0 || pp.multi_sample_type != 0 || pp.enable_auto_depth_stencil != 0 {
+    if pp.windowed == 0 || pp.multi_sample_type != 0 {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
             "reject CreateDevice: runtime.mode = core takes a windowed device without \
-             multisampling or an auto depth-stencil → D3DERR_NOTAVAILABLE"
+             multisampling → D3DERR_NOTAVAILABLE"
         );
         return D3DERR_NOTAVAILABLE;
     }
@@ -2363,9 +2364,35 @@ fn create_core_device(
         pp.back_buffer_width,
         pp.back_buffer_height,
     );
+    // The auto depth-stencil, of the back buffer's size; a format of 0 asks for none, as under
+    // mtld3d. The entry point checked the format before the runtimes part.
+    let auto_depth = (pp.enable_auto_depth_stencil != 0)
+        .then(|| mtld3d_core::format::map_d3d_depth_format(pp.auto_depth_stencil_format))
+        .flatten()
+        .map(|pixel_format| {
+            let id = mtld3d_core::ids::TextureId::new_unique();
+            let desc = d3d9_rt::device::CoreTextureDesc {
+                pixel_format: pixel_format as u32,
+                kind: d3d9_rt::device::TextureKind::Tex2d,
+                width: pp.back_buffer_width,
+                height: pp.back_buffer_height,
+                depth: 1,
+                levels: 1,
+                view_twins: false,
+                block: (1, 1, 4),
+                render_target: true,
+            };
+            core.texture_create(id, &desc);
+            let bound = core.set_depth(Some(d3d9_rt::device::DepthRef { id, level: 0 }));
+            debug_assert!(bound, "a depth texture just made binds");
+            id
+        });
     addref_parent_direct3d9(this);
+    // D3DRS_ZENABLE defaults to TRUE exactly when the device has an auto depth-stencil.
     let mut render_states = mtld3d_types::render_state_defaults();
-    render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;
+    if auto_depth.is_none() {
+        render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;
+    }
     let mut stored = pp;
     if stored.device_window == 0 {
         stored.device_window = focus_window as usize;
@@ -2415,11 +2442,11 @@ fn create_core_device(
     // No cursor subclass: the core runtime has no cursor or window features yet (C4d).
     let dev_ptr = Box::into_raw(Box::new(dev));
     // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
-    unsafe {
-        (*dev_ptr)
-            .inner()
-            .set_device_wrapper(dev_ptr.cast::<c_void>());
-    };
+    let inner = unsafe { (*dev_ptr).inner() };
+    inner.set_device_wrapper(dev_ptr.cast::<c_void>());
+    if let Some(id) = auto_depth {
+        inner.set_core_auto_depth(id, pp.auto_depth_stencil_format);
+    }
     // SAFETY: `present_params` is the non-null pointer the request was read from, writable
     // per the ABI; alignment is not assumed.
     unsafe { crate::device::report_resolved_geometry(present_params, &pp) };

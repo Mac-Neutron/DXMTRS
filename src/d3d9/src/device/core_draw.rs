@@ -9,18 +9,22 @@
 
 use core::{ffi::c_void, ops::Range};
 
-use d3d9_rt::device::{Bind, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format};
+use d3d9_rt::device::{
+    Bind, CoreDevice, DepthState, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format,
+};
 use mtld3d_core::{
     convert::{
-        FanRewrite, d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive,
-        ff_vs_layout_from_elements, vertex_count,
+        FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
+        d3d_to_metal_fill, d3d_to_metal_primitive, ff_vs_layout_from_elements, vertex_count,
     },
+    depth_stencil_state::snapshot_from_state as depth_snapshot,
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     pipeline_key::{
-        DrawFacts, DrawFlags, PipelineKey, PsStageKey, ShaderCode, StageKind, VsStageKey,
-        core_draw_kinds, core_ps_variant, core_texture_variant, core_viewport, float_rows,
-        indexed_up_vertices, pos_fixup, up_byte_count,
+        CoreRefusal, DrawFacts, DrawFlags, PipelineKey, PsStageKey, ShaderCode, StageKind,
+        VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_texture_variant,
+        core_viewport, float_rows, indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count,
+        viewport_depth_range,
     },
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
@@ -29,12 +33,17 @@ use mtld3d_core::{
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
     vs_draw::clip_plane_count,
 };
-use mtld3d_shared::{mtl, shader_create::ShaderStage, slice_from_caller};
+use mtld3d_shared::{
+    mtl::{self, PixelFormat},
+    shader_create::ShaderStage,
+    slice_from_caller,
+};
 use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
-    D3DRS_CULLMODE, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DSAMP_SRGBTEXTURE,
-    SAMPLER_STATE_COUNT,
+    D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE,
+    D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_STENCILREF, D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE,
+    RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -185,6 +194,10 @@ fn resolve(
     // The bound colour target's size and format (DXMTRS C4b-3d1); the present parameters' for a
     // device with no back buffer, whose draws record nothing.
     let (target, color_format) = core_target_of(dev);
+    // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one when a pass can attach it;
+    // none, for a draw that uses no plane, when it cannot.
+    let depth_format = key_depth(dev, &rs)?;
+    let has_depth = depth_format != 0;
     let viewport = dev.viewport();
     let mut binds = Binds::default();
     // A pre-transformed draw's outputs: the declaration elements its FF VS passes through.
@@ -287,7 +300,10 @@ fn resolve(
         .or_else(|| vs_core.map(|(_, meta)| &meta.link_outputs));
     // The depth clamp is a pre-transformed draw's alone: an untransformed fixed-function draw
     // clips, as a shader's does.
-    let fixup = pos_fixup(&viewport, target, layout.has_rhw(), 0.0).map(f32::to_le_bytes);
+    let clamp_z = rhw_depth_clamp(layout.has_rhw(), has_depth, rs[D3DRS_ZENABLE as usize] != 0);
+    let (znear, zfar) = viewport_depth_range(viewport.min_z, viewport.max_z);
+    let depth_bias = d3d_depth_bias_to_clip(rs[D3DRS_DEPTHBIAS as usize], znear, zfar);
+    let fixup = pos_fixup(&viewport, target, clamp_z, depth_bias).map(f32::to_le_bytes);
     binds.push(Stage::Vertex, mtl::VS_POS_FIXUP_SLOT, fixup.as_flattened());
     let view = dev
         .ff_state()
@@ -350,7 +366,7 @@ fn resolve(
         ps_kind == StageKind::Prog,
         primitive == D3DPT_POINTLIST,
         linked,
-        false,
+        has_depth,
     );
     // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
     // black.
@@ -457,7 +473,7 @@ fn resolve(
         stride,
         write_mask,
         color_format,
-        depth_format: 0,
+        depth_format,
     };
     Ok((key, binds, target))
 }
@@ -477,6 +493,33 @@ fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
                 mtl::PixelFormat::Bgra8Unorm as u32,
             )
         })
+}
+
+/// The depth format a draw's key names from the device's depth-stencil and render states `rs`.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE` ([`core_key_depth`]), logged once per reason.
+fn key_depth(dev: &DeviceInner, rs: &[u32; RENDER_STATE_COUNT]) -> Result<u32, i32> {
+    let state = dev
+        .core
+        .as_deref()
+        .map_or(DepthState::None, CoreDevice::depth_state);
+    let (bound, attachable) = match state {
+        DepthState::None => (None, false),
+        DepthState::Attached(format) => (Some(format), true),
+        DepthState::Detached(format) => (Some(format), false),
+    };
+    // What the draw's state tests or writes of the planes that depth-stencil has.
+    let uses_plane = bound.is_some_and(|format| {
+        let has_stencil = format == PixelFormat::Depth32FloatStencil8 as u32;
+        let gated = depth_snapshot(rs).gated_on_stencil_attachment(has_stencil);
+        gated.uses_depth() || gated.stencil_enable != 0
+    });
+    core_key_depth(bound, attachable, false, uses_plane).map_err(|refusal| {
+        refuse_under_core(refusal.name());
+        D3DERR_NOTAVAILABLE
+    })
 }
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
@@ -517,18 +560,25 @@ fn draw(
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         binds: &binds,
         textures: &textures,
-        depth_stencil: mtld3d_core::depth_stencil_state::DepthStencilSnapshot::inert(),
-        stencil_ref: 0,
-        slope_scale: 0.0,
+        depth_stencil: depth_snapshot(rs),
+        stencil_ref: rs[D3DRS_STENCILREF as usize].to_le_bytes()[0],
+        slope_scale: d3d_slope_scale_to_metal(rs[D3DRS_SLOPESCALEDEPTHBIAS as usize], 1.0),
     };
     let Some(core) = dev.core.as_deref_mut() else {
         return D3D_OK;
     };
-    if core.draw_up(&key, &draw) == Err(DrawRefused::Crossing) {
-        refuse_under_core(CROSSING);
-        return D3DERR_NOTAVAILABLE;
+    match core.draw_up(&key, &draw) {
+        Err(DrawRefused::Crossing) => {
+            refuse_under_core(CROSSING);
+            D3DERR_NOTAVAILABLE
+        }
+        // The key named a depth-stencil no pass can attach: `key_depth` decides before this.
+        Err(DrawRefused::Depth) => {
+            refuse_under_core(CoreRefusal::DepthSize.name());
+            D3DERR_NOTAVAILABLE
+        }
+        _ => D3D_OK,
     }
-    D3D_OK
 }
 
 /// `DrawPrimitiveUP` on the core, after the entry point's shared checks (C4b2-7).

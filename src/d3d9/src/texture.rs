@@ -1322,13 +1322,17 @@ impl TextureInner {
     /// Whether a core device refuses this texture's CPU lock.
     ///
     /// A render-target or depth texture's lock reads its GPU contents back,
-    /// which a core device does not do until C4b-3d.
+    /// which a core device does not do until C4c; a dynamic depth texture's
+    /// (made without the depth-stencil usage) uploads a packed copy, C4c's too.
     #[cfg(feature = "core-runtime")]
     fn core_refuses_lock(&self) -> bool {
+        let target = self.d3d_usage
+            & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
+            != 0;
+        let dynamic_depth = self.flags.contains(TextureFlags::DEPTH_FORMAT)
+            && self.d3d_usage & D3DUSAGE_DYNAMIC != 0;
         self.device_inner != 0
-            && self.d3d_usage
-                & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
-                != 0
+            && (target || dynamic_depth)
             && DeviceInner::from_ptr(self.device_inner).is_core()
     }
 
@@ -5853,13 +5857,29 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// (the whole level when none), from the staging, widened on the CPU to BGRA8 when its format's
 /// upload is not a plain copy (`upload_decode`). An autogen texture regenerates its chain after
 /// a level-0 upload. A render target's core texture is made as one (zeroed, and with no first
-/// upload: only the levels a CPU write dirtied go). False when the texture has no core form
-/// here: a depth format (C4b-3d2), whose draws are refused.
+/// upload: only the levels a CPU write dirtied go), and so is a depth texture's, which never
+/// uploads. Always true since C4b-3d2: every texture has a core form.
 #[cfg(feature = "core-runtime")]
 pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
     use d3d9_rt::device::{CoreTextureDesc, TextureKind, UploadRegion};
+    // A depth texture's core texture is a depth texture (DXMTRS C4b-3d2): zeroed, written by
+    // passes and Clears only. Its CPU lock is refused (`core_refuses_lock`), so nothing uploads.
     if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
-        return false;
+        if !core.has_texture(ti.texture_id) {
+            let desc = CoreTextureDesc {
+                pixel_format: ti.metal_pixel_format as u32,
+                kind: TextureKind::Tex2d,
+                width: ti.width,
+                height: ti.height,
+                depth: 1,
+                levels: ti.levels,
+                view_twins: false,
+                block: (1, 1, ti.block_bytes.max(1)),
+                render_target: true,
+            };
+            core.texture_create(ti.texture_id, &desc);
+        }
+        return true;
     }
     // A render target's core texture starts zeroed and takes no first upload: its staging holds
     // nothing until a CPU write dirties a level (DXMTRS C4b-3d1).
