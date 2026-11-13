@@ -14,9 +14,11 @@ use dxmt_core::{
 };
 use mtld3d_core::{
     ids::TextureId,
-    sampler_state::{SamplerDescription, SamplerKey},
+    sampler_state::{SamplerDescription, SamplerFlags, SamplerKey},
 };
-use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMTSamplerInfo};
+use winemetal_sys::wire::{
+    WMT_COMPARE_FUNCTION_LESS_EQUAL, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMTSamplerInfo,
+};
 
 use super::{CoreDevice, CoreTextureDesc, TextureKind, UploadRegion};
 
@@ -40,7 +42,12 @@ impl CoreDevice {
             s_address_mode: desc.address_u as u8,
             t_address_mode: desc.address_v as u8,
             border_color: desc.border_color as u8,
-            compare_function: 0,
+            // A shadow sample's sampler: D3D9's hardware shadow filter is less-equal (1 is lit).
+            compare_function: if desc.flags.contains(SamplerFlags::IS_COMPARE) {
+                WMT_COMPARE_FUNCTION_LESS_EQUAL
+            } else {
+                0
+            },
             lod_min_clamp: desc.lod_min_clamp,
             lod_max_clamp: desc.lod_max_clamp,
             max_anisotroy: desc.max_anisotropy.max(1),

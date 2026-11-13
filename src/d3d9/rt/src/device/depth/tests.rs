@@ -8,7 +8,7 @@ use winemetal_sys::wire::{
 
 use super::{DepthRef, DepthState};
 use crate::device::{
-    CoreDevice, DrawData, DrawRefused, TargetRef, TextureKind,
+    CoreDevice, DrawData, DrawRefused, Stage, TargetRef, TextureKind,
     fixture::{
         core_on_fakes, depth_desc, ff_binds, key, line, passes, target_desc, textures_made,
         triangle,
@@ -504,4 +504,91 @@ fn a_zenable_change_in_a_pass_encodes_a_new_state() {
         .collect::<Vec<_>>();
     // ALWAYS (Metal's 7), not writing.
     assert!(made[1].contains(" cmp=7 write=0 "), "{calls:#?}");
+}
+
+/// A compare sampler (a shadow sample's) is made with Metal's less-equal; a plain one with none.
+#[test]
+fn a_compare_sampler_is_less_equal() {
+    use mtld3d_core::sampler_state::{
+        description_from_snapshot, key_from_snapshot, snapshot_from_state,
+    };
+    let mut rig = Rig::new(0x2f1);
+    for (is_compare, compare) in [(true, " compare=3 "), (false, " compare=0 ")] {
+        let snapshot = snapshot_from_state(&mtld3d_types::sampler_state_defaults(), is_compare);
+        let key = key_from_snapshot(&snapshot);
+        assert!(
+            rig.core
+                .sampler(key, &description_from_snapshot(&snapshot, key))
+                .is_some()
+        );
+        let calls = rig.take();
+        let made = calls
+            .iter()
+            .find(|c| c.starts_with("MTLDevice_newSamplerState "))
+            .unwrap_or_else(|| panic!("{calls:#?}"));
+        assert!(made.contains(compare), "{made}");
+    }
+}
+
+/// A draw that samples the bound depth-stencil draws without it, after the pass that wrote it.
+///
+/// A characterization of the passes and the core's tracking (it holds before the front end
+/// samples depth): a draw to (X, T), a draw to Y sampling T in its stored format, a draw to
+/// (X, T) again are three passes in that order, and the second waits on a fence the first
+/// updates, its one tie to it.
+#[test]
+fn a_draw_sampling_the_bound_depth_detaches_it() {
+    use winemetal_sys::wire::{
+        WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE, WMT_RENDER_COMMAND_UPDATE_FENCE,
+        WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
+    };
+    let mut rig = Rig::new(0x2f2);
+    let (depth, _) = rig.depth(1, D32F, (64, 64), 1);
+    let (x, _) = rig.color(2);
+    let (y, _) = rig.color(3);
+    let target = |id| TargetRef::Texture {
+        id,
+        level: 0,
+        face: None,
+    };
+    assert!(rig.core.set_target(target(x)));
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
+    assert!(rig.core.set_target(target(y)));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling = DrawData {
+        textures: &textures,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw_up(&key_with(0), &sampling), Ok(()));
+    assert!(rig.core.set_target(target(x)));
+    assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
+    let calls = rig.take();
+    let all = passes(&calls);
+    let with_depth = all
+        .iter()
+        .map(|pass| line(pass, "  depth ").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(with_depth, [true, false, true], "{calls:#?}");
+    let texture = format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} ");
+    assert!(line(all[1], &texture).is_some(), "{calls:#?}");
+    let fences = |pass: &[String], command: u16| {
+        let prefix = format!("  render {command} fence=#");
+        pass.iter()
+            .filter_map(|c| c.strip_prefix(&prefix))
+            .filter_map(|c| c.split(' ').next())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let written = fences(all[0], WMT_RENDER_COMMAND_UPDATE_FENCE);
+    let awaited = fences(all[1], WMT_RENDER_COMMAND_WAIT_FOR_FENCE);
+    assert!(
+        awaited.iter().any(|fence| written.contains(fence)),
+        "the sampling pass waits on the depth's writer: {calls:#?}"
+    );
 }

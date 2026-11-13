@@ -21,10 +21,10 @@ use mtld3d_core::{
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     pipeline_key::{
-        CoreRefusal, DrawFacts, DrawFlags, PipelineKey, PsStageKey, ShaderCode, StageKind,
-        VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_texture_variant,
-        core_viewport, float_rows, indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count,
-        viewport_depth_range,
+        CoreRefusal, DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode,
+        StageKind, VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant,
+        core_texture_variant, core_viewport, float_rows, indexed_up_vertices, pos_fixup,
+        rhw_depth_clamp, up_byte_count, viewport_depth_range,
     },
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
@@ -150,8 +150,28 @@ fn resolve(
         (None, None) => 0,
     };
     let bindings = dev.stage_bindings();
-    let depth_mask = bindings.depth_sampler_mask() | bindings.depth_fetch_mask();
+    // The sampled pixel slots by what they hold, as mtld3d's draw folds them into its variant.
     let (fetch4, fetch4_alpha) = bindings.fetch4().masks();
+    let masks = SampledMasks {
+        volume: bindings.volume_sampler_mask() & sampled_mask,
+        cube: bindings.cube_sampler_mask() & sampled_mask,
+        depth: bindings.depth_sampler_mask() & sampled_mask,
+        depth_fetch: bindings.depth_fetch_mask() & sampled_mask,
+        raw_depth_red: bindings.fetch4().raw_red_mask() & sampled_mask,
+        fetch4: fetch4 & sampled_mask,
+        fetch4_alpha: fetch4_alpha & sampled_mask,
+    };
+    // Whether a sampled pixel slot holds the bound depth-stencil's texture, at any level: Metal
+    // forbids sampling an attachment, and the core's tracking does not see it (the pass's write
+    // is recorded at its end), so this is the one guard.
+    let bound_depth = dev.core.as_deref().and_then(CoreDevice::depth);
+    let samples_bound = bound_depth.is_some_and(|depth| {
+        (0..16usize)
+            .filter(|slot| sampled_mask & (1 << slot) != 0)
+            .map(|slot| bindings.texture(slot))
+            // SAFETY: a bound texture, live while its stage holds it.
+            .any(|tex| !tex.is_null() && unsafe { &*tex }.texture_id() == depth.id)
+    });
     // The vertex slots (s0-s3) a core vertex shader samples; none where a pre-transformed layout
     // bypasses the shader.
     let vertex_sampled = vs_core
@@ -178,14 +198,7 @@ fn resolve(
         DrawFlags::SCISSOR,
         rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
     );
-    flags.set(
-        DrawFlags::SAMPLES_DEPTH_TEXTURE,
-        depth_mask & sampled_mask != 0 || vertex_depth,
-    );
-    flags.set(
-        DrawFlags::FETCH4,
-        (fetch4 | fetch4_alpha) & sampled_mask != 0,
-    );
+    flags.set(DrawFlags::VERTEX_DEPTH_TEXTURE, vertex_depth);
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
         refuse_under_core(refusal.name());
@@ -196,7 +209,7 @@ fn resolve(
     let (target, color_format) = core_target_of(dev);
     // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one when a pass can attach it;
     // none, for a draw that uses no plane, when it cannot.
-    let depth_format = key_depth(dev, &rs)?;
+    let depth_format = key_depth(dev, &rs, samples_bound)?;
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
     let mut binds = Binds::default();
@@ -394,28 +407,34 @@ fn resolve(
     let texldl = ps_core.map_or(0, |(_, meta)| meta.explicit_lod_mask);
     let table = lod_table(
         sampled_mask,
-        fetch4 | fetch4_alpha,
+        masks.fetch4 | masks.fetch4_alpha,
         texldl,
-        depth_mask,
+        masks.depth,
         slots.iter().map(|s| (u32::from(s.slot), &s.states)),
         0.0,
     );
     if let Some(table) = &table {
         binds.push(Stage::Pixel, mtl::PS_LOD_BIAS_SLOT, &table.bytes());
     }
-    let variant = core_texture_variant(
-        variant,
-        dev.stage_bindings().volume_sampler_mask() & sampled_mask,
-        dev.stage_bindings().cube_sampler_mask() & sampled_mask,
-        table.is_some(),
-    );
+    let variant = core_texture_variant(variant, &masks, table.is_some());
     if let Some(core) = dev.core.as_deref_mut() {
         let every_slot = slots
             .iter()
             .map(|s| (Stage::Pixel, s))
             .chain(vertex_slots.iter().map(|s| (Stage::Vertex, s)));
         for (stage, s) in every_slot {
-            let snapshot = snapshot_from_state(&s.states, false);
+            // A pixel slot's depth texture: a shadow sample takes a compare sampler with the
+            // application's filters; a raw one (INTZ, DF16, DF24) a plain point sampler.
+            let bit = if matches!(stage, Stage::Pixel) {
+                1u16 << s.slot
+            } else {
+                0
+            };
+            let raw_depth = masks.depth_fetch & bit != 0;
+            let mut snapshot = snapshot_from_state(&s.states, masks.depth & bit != 0 && !raw_depth);
+            if raw_depth {
+                snapshot.force_point_filter();
+            }
             let skey = key_from_snapshot(&snapshot);
             let sampler = core.sampler(skey, &description_from_snapshot(&snapshot, skey));
             let slot = u8::try_from(s.slot).unwrap_or(0);
@@ -444,6 +463,12 @@ fn resolve(
                     None
                 }
             };
+            // The black is a colour texture: a depth slot's shader could not take it. Every depth
+            // texture has a core form, so none falls back.
+            debug_assert!(
+                bind.is_some() || masks.depth & bit == 0,
+                "a depth slot binds its depth texture"
+            );
             binds
                 .textures
                 .push(bind.unwrap_or_else(|| core.black_bind(stage, slot, sampler)));
@@ -497,10 +522,16 @@ fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
 
 /// The depth format a draw's key names from the device's depth-stencil and render states `rs`.
 ///
+/// `samples_bound` is whether the draw samples the bound depth-stencil's texture.
+///
 /// # Errors
 ///
 /// `D3DERR_NOTAVAILABLE` ([`core_key_depth`]), logged once per reason.
-fn key_depth(dev: &DeviceInner, rs: &[u32; RENDER_STATE_COUNT]) -> Result<u32, i32> {
+fn key_depth(
+    dev: &DeviceInner,
+    rs: &[u32; RENDER_STATE_COUNT],
+    samples_bound: bool,
+) -> Result<u32, i32> {
     let state = dev
         .core
         .as_deref()
@@ -516,7 +547,7 @@ fn key_depth(dev: &DeviceInner, rs: &[u32; RENDER_STATE_COUNT]) -> Result<u32, i
         let gated = depth_snapshot(rs).gated_on_stencil_attachment(has_stencil);
         gated.uses_depth() || gated.stencil_enable != 0
     });
-    core_key_depth(bound, attachable, false, uses_plane).map_err(|refusal| {
+    core_key_depth(bound, attachable, samples_bound, uses_plane).map_err(|refusal| {
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
     })

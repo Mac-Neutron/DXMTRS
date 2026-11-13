@@ -17,9 +17,9 @@ use xxhash_rust::xxh3::Xxh3;
 
 use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
-    ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant,
-    core_viewport, float_rows, indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp,
-    up_byte_count, viewport_covers, viewport_depth_range,
+    SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth,
+    core_ps_variant, core_viewport, float_rows, indexed_up_vertices, pipeline_source, pos_fixup,
+    rhw_depth_clamp, up_byte_count, viewport_covers, viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -489,13 +489,13 @@ fn core_ps_variant_rules() {
 #[test]
 fn core_draw_kinds_cover_every_case() {
     use CoreRefusal::{
-        Blending, BoundDepthSampled, DepthSize, DepthTexture, Fetch4, NotCoreShader, Scissor,
+        Blending, BoundDepthSampled, DepthSize, NotCoreShader, Scissor, VertexDepthTexture,
     };
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
     let rhw = both | DrawFlags::LAYOUT_RHW;
-    let cases: [(DrawFacts, Kinds); 13] = [
+    let cases: [(DrawFacts, Kinds); 12] = [
         (facts(both), Ok((Prog, Prog))),
         (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
@@ -513,12 +513,8 @@ fn core_draw_kinds_cover_every_case() {
         (facts(both | DrawFlags::BLENDING), Err(Blending)),
         (facts(rhw | DrawFlags::SCISSOR), Err(Scissor)),
         (
-            facts(rhw | DrawFlags::SAMPLES_DEPTH_TEXTURE),
-            Err(DepthTexture),
-        ),
-        (
-            facts(DrawFlags::LAYOUT_RHW | DrawFlags::FETCH4),
-            Err(Fetch4),
+            facts(both | DrawFlags::VERTEX_DEPTH_TEXTURE),
+            Err(VertexDepthTexture),
         ),
     ];
     for (i, (facts, expected)) in cases.into_iter().enumerate() {
@@ -528,15 +524,14 @@ fn core_draw_kinds_cover_every_case() {
         NotCoreShader,
         Blending,
         Scissor,
-        DepthTexture,
-        Fetch4,
+        VertexDepthTexture,
         DepthSize,
         BoundDepthSampled,
     ];
     for refusal in refusals {
         // Every refusal there is: one added or dropped does not compile until this names it.
         match refusal {
-            NotCoreShader | Blending | Scissor | DepthTexture | Fetch4 | DepthSize
+            NotCoreShader | Blending | Scissor | VertexDepthTexture | DepthSize
             | BoundDepthSampled => {}
         }
     }
@@ -736,9 +731,36 @@ fn rhw_depth_clamp_follows_mtld3d() {
 /// A textured draw's variant types its volume and cube slots and takes `LOD_BIAS` with its table.
 #[test]
 fn texture_variant_types_slots_and_lod() {
-    let v = super::core_texture_variant(VariantKey::default(), 0b10, 0b100, true);
+    let masks = SampledMasks {
+        volume: 0b10,
+        cube: 0b100,
+        ..SampledMasks::default()
+    };
+    let v = super::core_texture_variant(VariantKey::default(), &masks, true);
     assert_eq!((v.volume_sampler_mask, v.cube_sampler_mask), (0b10, 0b100));
     assert!(v.flags.contains(VariantFlags::LOD_BIAS));
-    let v = super::core_texture_variant(v, 0, 0, false);
+    let v = super::core_texture_variant(v, &SampledMasks::default(), false);
     assert!(!v.flags.contains(VariantFlags::LOD_BIAS));
+}
+
+/// A draw's variant carries its depth slots (shadow and raw) and its fetch4 slots, as mtld3d's.
+#[test]
+fn core_texture_variant_carries_the_depth_and_fetch4_masks() {
+    let masks = SampledMasks {
+        volume: 0,
+        cube: 0,
+        depth: 0b0110,
+        depth_fetch: 0b0100,
+        raw_depth_red: 0b0100,
+        fetch4: 0b1001,
+        fetch4_alpha: 0b1000,
+    };
+    let v = super::core_texture_variant(VariantKey::default(), &masks, false);
+    assert_eq!(v.depth_sampler_mask, 0b0110);
+    assert_eq!(v.depth_fetch_mask, 0b0100);
+    assert_eq!(v.raw_depth_red_mask, 0b0100);
+    assert_eq!((v.fetch4_mask, v.fetch4_alpha_mask), (0b1001, 0b1000));
+    // A draw without them clears what the base carried.
+    let v = super::core_texture_variant(v, &SampledMasks::default(), false);
+    assert_eq!(v, VariantKey::default());
 }

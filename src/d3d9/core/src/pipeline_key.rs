@@ -364,18 +364,43 @@ pub fn core_ps_variant(
     variant
 }
 
+/// The sampled pixel slots of a core draw by what they hold, one bit a slot (C4b-3b, C4b-3d2).
+///
+/// What mtld3d's draw folds into its variant from the stage bindings.
+#[derive(Debug, Default)]
+pub struct SampledMasks {
+    /// Volume textures.
+    pub volume: u16,
+    /// Cube textures.
+    pub cube: u16,
+    /// Depth-format textures: a shadow sample, unless the slot is in `depth_fetch`.
+    pub depth: u16,
+    /// The depth formats sampled raw (INTZ, DF16, DF24), a subset of `depth`.
+    pub depth_fetch: u16,
+    /// The raw depth formats that read as red alone (DF16, DF24).
+    pub raw_depth_red: u16,
+    /// Slots whose sample is a fetch4 gather.
+    pub fetch4: u16,
+    /// The fetch4 slots that gather alpha (A8).
+    pub fetch4_alpha: u16,
+}
+
 /// A textured core draw's variant (C4b-3b).
 ///
-/// Its sampled volume and cube slots typed, `LOD_BIAS` when it binds its LOD table.
+/// Its sampled slots typed by `masks`, `LOD_BIAS` when it binds its LOD table.
 #[must_use]
 pub fn core_texture_variant(
     mut variant: VariantKey,
-    volume_mask: u16,
-    cube_mask: u16,
+    masks: &SampledMasks,
     lod_table: bool,
 ) -> VariantKey {
-    variant.volume_sampler_mask = volume_mask;
-    variant.cube_sampler_mask = cube_mask;
+    variant.volume_sampler_mask = masks.volume;
+    variant.cube_sampler_mask = masks.cube;
+    variant.depth_sampler_mask = masks.depth;
+    variant.depth_fetch_mask = masks.depth_fetch;
+    variant.raw_depth_red_mask = masks.raw_depth_red;
+    variant.fetch4_mask = masks.fetch4;
+    variant.fetch4_alpha_mask = masks.fetch4_alpha;
     variant.flags.set(VariantFlags::LOD_BIAS, lod_table);
     variant
 }
@@ -398,10 +423,8 @@ bitflags::bitflags! {
         const BLENDING = 1 << 8;
         /// The scissor test is enabled.
         const SCISSOR = 1 << 9;
-        /// A sampled slot, pixel or vertex, holds a depth-format texture.
-        const SAMPLES_DEPTH_TEXTURE = 1 << 10;
-        /// A sampled pixel slot has fetch4 latched.
-        const FETCH4 = 1 << 11;
+        /// A sampled vertex slot holds a depth-format texture.
+        const VERTEX_DEPTH_TEXTURE = 1 << 10;
     }
 }
 
@@ -427,10 +450,8 @@ pub enum CoreRefusal {
     Blending,
     /// The scissor test is enabled.
     Scissor,
-    /// A sampled slot holds a depth-format texture (C4b-3d).
-    DepthTexture,
-    /// A sampled slot has fetch4 latched (C4b-3d).
-    Fetch4,
+    /// A sampled vertex slot holds a depth-format texture (C4c).
+    VertexDepthTexture,
     /// The draw tests or writes a depth-stencil of another size than the colour target (C4b-3d3).
     DepthSize,
     /// The draw tests or writes the depth-stencil it samples (C4c).
@@ -447,8 +468,9 @@ impl CoreRefusal {
             }
             Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
             Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
-            Self::DepthTexture => "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture sampled)",
-            Self::Fetch4 => "IDirect3DDevice9::Draw*PrimitiveUP (fetch4)",
+            Self::VertexDepthTexture => {
+                "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture at a vertex sampler)"
+            }
             Self::DepthSize => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a depth-stencil of another size than the target)"
             }
@@ -476,11 +498,8 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     if flags.contains(DrawFlags::SCISSOR) {
         return Err(CoreRefusal::Scissor);
     }
-    if flags.contains(DrawFlags::SAMPLES_DEPTH_TEXTURE) {
-        return Err(CoreRefusal::DepthTexture);
-    }
-    if flags.contains(DrawFlags::FETCH4) {
-        return Err(CoreRefusal::Fetch4);
+    if flags.contains(DrawFlags::VERTEX_DEPTH_TEXTURE) {
+        return Err(CoreRefusal::VertexDepthTexture);
     }
     let vs = if flags.contains(DrawFlags::LAYOUT_RHW) || !flags.contains(DrawFlags::VS_BOUND) {
         StageKind::Ff
