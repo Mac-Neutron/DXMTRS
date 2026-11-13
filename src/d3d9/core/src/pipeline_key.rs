@@ -169,8 +169,9 @@ pub enum PsStageKey {
 
 /// What a pipeline of the core's draws depends on.
 ///
-/// The arm draws to one one-sample colour target with blending refused, so these fields are all
-/// of it. The stride is here because D3D9 fetches through a Metal vertex descriptor.
+/// The arm draws to one one-sample colour target and at most one depth-stencil, with blending
+/// refused, so these fields are all of it. The stride is here because D3D9 fetches through a
+/// Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -185,6 +186,8 @@ pub struct PipelineKey {
     pub write_mask: u8,
     /// The colour target's `WMTPixelFormat`.
     pub color_format: u32,
+    /// The attached depth-stencil's `WMTPixelFormat`; 0 for a draw without one.
+    pub depth_format: u32,
 }
 
 /// One stage as it is translated: its program and its specialization.
@@ -209,6 +212,8 @@ pub struct PipelineSource {
     pub write_mask: u8,
     /// The colour target's `WMTPixelFormat`.
     pub color_format: u32,
+    /// The attached depth-stencil's `WMTPixelFormat`; 0 for a draw without one.
+    pub depth_format: u32,
 }
 
 impl PipelineSource {
@@ -242,6 +247,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         stride,
         write_mask,
         color_format,
+        depth_format,
     } = key;
     let elements = layout.elements();
     let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
@@ -319,22 +325,24 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         stride: *stride,
         write_mask: *write_mask,
         color_format: *color_format,
+        depth_format: *depth_format,
     })
 }
 
 /// The pixel variant of a core draw from the API thread's `base`.
 ///
-/// What mtld3d's encoder patches per draw, for the core's one BGRA8 back buffer with no depth,
-/// one sample, no render scale and no samplers: a programmable stage exports colour 0 alone and
-/// no depth, `POINT_SPRITE` holds on point lists only, and the stage reads the extra inputs of
-/// `linked_input_mask`. `SRGB_WRITE` stays: the back buffer has no sRGB view, so the shader
-/// encodes.
+/// What mtld3d's encoder patches per draw, for the core's one colour target, one sample, no
+/// render scale and no samplers: a programmable stage exports colour 0 alone, and its depth
+/// exactly when the draw has a depth-stencil attached (`has_depth`); `POINT_SPRITE` holds on
+/// point lists only, and the stage reads the extra inputs of `linked_input_mask`. `SRGB_WRITE`
+/// stays: the target has no sRGB view, so the shader encodes.
 #[must_use]
 pub fn core_ps_variant(
     base: VariantKey,
     ps_is_prog: bool,
     point_list: bool,
     linked_input_mask: u8,
+    has_depth: bool,
 ) -> VariantKey {
     let mut variant = VariantKey {
         linked_input_mask,
@@ -349,7 +357,9 @@ pub fn core_ps_variant(
     }
     if ps_is_prog {
         variant.color_out_mask = 0;
-        variant.flags.insert(VariantFlags::NO_DEPTH_ATTACHMENT);
+        variant
+            .flags
+            .set(VariantFlags::NO_DEPTH_ATTACHMENT, !has_depth);
     }
     variant
 }
@@ -550,19 +560,28 @@ const fn drawn_rect(v: &D3DVIEWPORT9, target: (u32, u32)) -> (u32, u32, u32, u32
 /// The vertex stages' `PosFixup` of a draw through `v` on `target`.
 ///
 /// `(1 / width, -1 / height, depth clamp, render scale, depth bias)` of the drawn viewport, as
-/// mtld3d's draw binds it: the half-pixel offset; a pre-transformed (`rhw`) draw clamps its
-/// depth; no render scale and no depth bias (no depth surface under the core yet).
+/// mtld3d's draw binds it: the half-pixel offset; `clamp_z` ([`rhw_depth_clamp`]); no render
+/// scale; `depth_bias` in clip depth (`d3d_depth_bias_to_clip`), which the vertex stage adds.
 #[must_use]
-pub fn pos_fixup(v: &D3DVIEWPORT9, target: (u32, u32), rhw: bool) -> [f32; 5] {
+pub fn pos_fixup(v: &D3DVIEWPORT9, target: (u32, u32), clamp_z: bool, depth_bias: f32) -> [f32; 5] {
     let (_, _, width, height) = drawn_rect(v, target);
     let pixels = |n: u32| f32::from(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
     [
         1.0 / pixels(width),
         -1.0 / pixels(height),
-        f32::from(u8::from(rhw)),
+        f32::from(u8::from(clamp_z)),
         1.0,
-        0.0,
+        depth_bias,
     ]
+}
+
+/// Whether a draw clamps its depth in the vertex stage, as mtld3d's draw decides it.
+///
+/// A pre-transformed (`rhw`) draw does, unless a depth test is live: `has_depth` is whether the
+/// draw has a depth-stencil attached, `depth_enable` whether `D3DRS_ZENABLE` is on.
+#[must_use]
+pub const fn rhw_depth_clamp(rhw: bool, has_depth: bool, depth_enable: bool) -> bool {
+    rhw && !(has_depth && depth_enable)
 }
 
 #[cfg(test)]

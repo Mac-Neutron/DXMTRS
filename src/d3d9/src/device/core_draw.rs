@@ -287,7 +287,7 @@ fn resolve(
         .or_else(|| vs_core.map(|(_, meta)| &meta.link_outputs));
     // The depth clamp is a pre-transformed draw's alone: an untransformed fixed-function draw
     // clips, as a shader's does.
-    let fixup = pos_fixup(&viewport, target, layout.has_rhw()).map(f32::to_le_bytes);
+    let fixup = pos_fixup(&viewport, target, layout.has_rhw(), 0.0).map(f32::to_le_bytes);
     binds.push(Stage::Vertex, mtl::VS_POS_FIXUP_SLOT, fixup.as_flattened());
     let view = dev
         .ff_state()
@@ -350,6 +350,7 @@ fn resolve(
         ps_kind == StageKind::Prog,
         primitive == D3DPT_POINTLIST,
         linked,
+        false,
     );
     // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
     // black.
@@ -456,6 +457,7 @@ fn resolve(
         stride,
         write_mask,
         color_format,
+        depth_format: 0,
     };
     Ok((key, binds, target))
 }

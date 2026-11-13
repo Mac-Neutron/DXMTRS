@@ -18,8 +18,8 @@ use xxhash_rust::xxh3::Xxh3;
 use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
     ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_ps_variant, core_viewport, float_rows,
-    indexed_up_vertices, pipeline_source, pos_fixup, up_byte_count, viewport_covers,
-    viewport_depth_range,
+    indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count,
+    viewport_covers, viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -126,6 +126,7 @@ fn ff_base() -> PipelineKey {
         stride,
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
+        depth_format: 0,
     }
 }
 
@@ -152,6 +153,7 @@ fn prog_base() -> PipelineKey {
         stride: 28,
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
+        depth_format: 0,
     }
 }
 
@@ -239,7 +241,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 16] = [
+    let changes: [Case; 17] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -289,6 +291,9 @@ fn pipeline_key_tracks_every_input() {
         ("write_mask", ff_base, |k| k.write_mask = 0x7),
         ("color_format", ff_base, |k| {
             k.color_format = PixelFormat::Rgba16Unorm as u32;
+        }),
+        ("depth_format", ff_base, |k| {
+            k.depth_format = PixelFormat::Depth32Float as u32;
         }),
     ];
     for (field, base, change) in changes {
@@ -437,7 +442,9 @@ fn a_crossing_attribute_is_detected() {
     assert!(!source(&prog_base()).crosses_stride());
 }
 
-/// Core's pixel variant: one BGRA8 target, no depth, no samplers, one sample, its linked inputs.
+/// Core's pixel variant: one colour target, no samplers, one sample, its linked inputs.
+///
+/// A programmable stage keeps its depth output exactly when a depth-stencil is attached.
 #[test]
 fn core_ps_variant_rules() {
     let base = VariantKey {
@@ -451,7 +458,7 @@ fn core_ps_variant_rules() {
             | VariantFlags::SAMPLE_MASK,
         ..VariantKey::default()
     };
-    let prog = core_ps_variant(base, true, false, 0b101);
+    let prog = core_ps_variant(base, true, false, 0b101, false);
     assert_eq!(prog.color_out_mask, 0);
     assert_eq!(prog.linked_input_mask, 0b101);
     assert_eq!(prog.alpha_func, 5);
@@ -460,11 +467,22 @@ fn core_ps_variant_rules() {
         prog.flags,
         VariantFlags::SRGB_WRITE | VariantFlags::NO_DEPTH_ATTACHMENT
     );
-    let points = core_ps_variant(base, true, true, 0);
+    let points = core_ps_variant(base, true, true, 0, false);
     assert!(points.flags.contains(VariantFlags::POINT_SPRITE));
-    let ff = core_ps_variant(base, false, false, 0);
+    let ff = core_ps_variant(base, false, false, 0, false);
     assert_eq!(ff.flags, VariantFlags::SRGB_WRITE);
     assert_eq!(ff.linked_input_mask, 0);
+    // With a depth-stencil attached the stage exports its depth, even from a base that had not.
+    let no_depth_base = VariantKey {
+        flags: base.flags | VariantFlags::NO_DEPTH_ATTACHMENT,
+        ..base
+    };
+    let with_depth = core_ps_variant(no_depth_base, true, false, 0, true);
+    assert_eq!(with_depth.flags, VariantFlags::SRGB_WRITE);
+    assert_eq!(
+        core_ps_variant(base, false, false, 0, true).flags,
+        VariantFlags::SRGB_WRITE
+    );
 }
 
 /// Which stages a draw takes, or why the core refuses it.
@@ -624,7 +642,7 @@ fn viewport_covers_the_target() {
     assert!(!viewport_covers(&viewport(0, 0, 64, 31), target));
 }
 
-/// The half-pixel fixup is the drawn viewport's; only a pre-transformed draw clamps its depth.
+/// The half-pixel fixup is the drawn viewport's; the clamp and the depth bias are the caller's.
 #[test]
 fn pos_fixup_follows_the_drawn_viewport() {
     let target = (256, 128);
@@ -638,13 +656,34 @@ fn pos_fixup_follows_the_drawn_viewport() {
     };
     let bits = |v: [f32; 5]| v.map(f32::to_bits);
     assert_eq!(
-        bits(pos_fixup(&viewport(128, 64), target, false)),
+        bits(pos_fixup(&viewport(128, 64), target, false, 0.0)),
         bits([1.0 / 128.0, -1.0 / 64.0, 0.0, 1.0, 0.0])
     );
     assert_eq!(
-        bits(pos_fixup(&viewport(0, 64), target, true)),
-        bits([1.0 / 256.0, -1.0 / 128.0, 1.0, 1.0, 0.0])
+        bits(pos_fixup(&viewport(0, 64), target, true, -0.25)),
+        bits([1.0 / 256.0, -1.0 / 128.0, 1.0, 1.0, -0.25])
     );
+}
+
+/// mtld3d's rule: a pre-transformed draw clamps its depth unless a depth test is live.
+#[test]
+fn rhw_depth_clamp_follows_mtld3d() {
+    // (rhw, a depth attached, ZENABLE) -> clamp.
+    let cases = [
+        (true, false, false, true),
+        (true, false, true, true),
+        (true, true, false, true),
+        (true, true, true, false),
+        (false, false, false, false),
+        (false, true, true, false),
+    ];
+    for (rhw, has_depth, depth_enable, clamp) in cases {
+        assert_eq!(
+            rhw_depth_clamp(rhw, has_depth, depth_enable),
+            clamp,
+            "{rhw} {has_depth} {depth_enable}"
+        );
+    }
 }
 
 /// A textured draw's variant types its volume and cube slots and takes `LOD_BIAS` with its table.

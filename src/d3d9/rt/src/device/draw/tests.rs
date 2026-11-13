@@ -85,6 +85,7 @@ fn key(write_mask: u8) -> PipelineKey {
         stride,
         write_mask,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        depth_format: 0,
     }
 }
 
@@ -102,6 +103,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         stride: 16,
         write_mask: 0xf,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        depth_format: 0,
     }
 }
 
@@ -777,6 +779,7 @@ fn a_draw_targets_the_set_texture() {
     assert_eq!(core.target_format(), Some(WMT_PIXEL_FORMAT_RGBA16_UNORM));
     let wide = PipelineKey {
         color_format: WMT_PIXEL_FORMAT_RGBA16_UNORM,
+        depth_format: 0,
         ..key(0xf)
     };
     assert_eq!(core.draw_up(&wide, &triangle(&binds)), Ok(()));
