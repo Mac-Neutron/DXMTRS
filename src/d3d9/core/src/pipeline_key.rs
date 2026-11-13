@@ -167,10 +167,10 @@ pub enum PsStageKey {
     Prog(ShaderCode),
 }
 
-/// What a pipeline of the core's back buffer depends on.
+/// What a pipeline of the core's draws depends on.
 ///
-/// The arm draws only to the BGRA8 one-sample back buffer with blending refused, so these fields
-/// are all of it. The stride is here because D3D9 fetches through a Metal vertex descriptor.
+/// The arm draws to one one-sample colour target with blending refused, so these fields are all
+/// of it. The stride is here because D3D9 fetches through a Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -183,6 +183,8 @@ pub struct PipelineKey {
     pub stride: u32,
     /// The colour target's `MTLColorWriteMask`.
     pub write_mask: u8,
+    /// The colour target's `WMTPixelFormat`.
+    pub color_format: u32,
 }
 
 /// One stage as it is translated: its program and its specialization.
@@ -205,6 +207,8 @@ pub struct PipelineSource {
     pub stride: u32,
     /// The colour target's `MTLColorWriteMask`.
     pub write_mask: u8,
+    /// The colour target's `WMTPixelFormat`.
+    pub color_format: u32,
 }
 
 impl PipelineSource {
@@ -237,6 +241,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         layout,
         stride,
         write_mask,
+        color_format,
     } = key;
     let elements = layout.elements();
     let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
@@ -313,6 +318,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         stream0_extent: resolved.extents[0],
         stride: *stride,
         write_mask: *write_mask,
+        color_format: *color_format,
     })
 }
 

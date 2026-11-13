@@ -84,6 +84,7 @@ fn key(write_mask: u8) -> PipelineKey {
         layout: decl(&elements),
         stride,
         write_mask,
+        color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
     }
 }
 
@@ -100,6 +101,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         layout: decl(&[element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0)]),
         stride: 16,
         write_mask: 0xf,
+        color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
     }
 }
 

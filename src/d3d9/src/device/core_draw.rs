@@ -468,6 +468,8 @@ fn resolve(
         layout: decl.code().clone(),
         stride,
         write_mask,
+        // The back buffer's, the one target until the front end binds others.
+        color_format: mtl::PixelFormat::Bgra8Unorm as u32,
     };
     Ok((key, binds))
 }

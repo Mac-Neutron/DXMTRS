@@ -5,7 +5,7 @@ use std::{
 };
 
 use airconv_ir::dxso::spec::{StageSpec, VsSamplerKinds, VsSpec};
-use mtld3d_shared::mtl::VertexFormat;
+use mtld3d_shared::mtl::{PixelFormat, VertexFormat};
 use mtld3d_types::{
     D3DDECL_END, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT2,
     D3DDECLTYPE_FLOAT3, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_NORMAL,
@@ -125,6 +125,7 @@ fn ff_base() -> PipelineKey {
         layout: decl(&elements),
         stride,
         write_mask: 0xf,
+        color_format: PixelFormat::Bgra8Unorm as u32,
     }
 }
 
@@ -150,6 +151,7 @@ fn prog_base() -> PipelineKey {
         layout: decl(&prog_elements()),
         stride: 28,
         write_mask: 0xf,
+        color_format: PixelFormat::Bgra8Unorm as u32,
     }
 }
 
@@ -237,7 +239,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 15] = [
+    let changes: [Case; 16] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -285,6 +287,9 @@ fn pipeline_key_tracks_every_input() {
         }),
         ("stride", ff_base, |k| k.stride = 24),
         ("write_mask", ff_base, |k| k.write_mask = 0x7),
+        ("color_format", ff_base, |k| {
+            k.color_format = PixelFormat::Rgba16Unorm as u32;
+        }),
     ];
     for (field, base, change) in changes {
         let mut key = base();
