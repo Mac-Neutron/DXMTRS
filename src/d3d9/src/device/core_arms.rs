@@ -121,10 +121,11 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
     // SAFETY: the surface's own pages, `len` bytes at `ptr`, which the API lock keeps to this
     // call while it copies into them.
     let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
-    let ok = dev
-        .core
-        .as_deref_mut()?
-        .read_back(bytes, desc.bytes_per_row as usize);
+    let ok = dev.core.as_deref_mut()?.read_back(
+        d3d9_rt::device::TargetRef::BackBuffer,
+        bytes,
+        desc.bytes_per_row as usize,
+    );
     if ok {
         // A SYSTEMMEM texture's level re-arms its dirty state, as mtld3d's read-back does.
         dst.note_system_memory_written();

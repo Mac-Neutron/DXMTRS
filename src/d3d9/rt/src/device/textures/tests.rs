@@ -19,6 +19,7 @@ fn bgra(width: u32, height: u32, levels: u32) -> CoreTextureDesc {
         levels,
         view_twins: false,
         block: (1, 1, 4),
+        render_target: false,
     }
 }
 
@@ -111,6 +112,7 @@ fn bc_small_mip_extents() {
     let desc = CoreTextureDesc {
         pixel_format: WMT_PIXEL_FORMAT_BC1_RGBA,
         block: (4, 4, 8),
+        render_target: false,
         ..bgra(8, 8, 3)
     };
     core.texture_create(id, &desc);

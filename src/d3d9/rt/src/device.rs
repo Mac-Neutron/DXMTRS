@@ -31,8 +31,8 @@ pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
     window: Option<swapchain::Window>,
-    /// The read-back destination, made at the first read-back and kept.
-    readback: Option<Arc<Staging>>,
+    /// The read-back destination and its row's bytes, kept until a read-back needs another.
+    readback: Option<(Arc<Staging>, u32)>,
     /// The pipelines by key, each with its source (none when a stage does not parse).
     ///
     /// Handle 0 for one that did not build or was not built (its layout crosses the stride).
@@ -44,6 +44,8 @@ pub struct CoreDevice {
     textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
     /// The samplers by their key's bits (C4b-3b).
     samplers: rustc_hash::FxHashMap<u64, Arc<dxmt_core::sampler::Sampler>>,
+    /// The colour target draws and clears go to (C4b-3d1).
+    target: TargetRef,
     render_open: bool,
     /// The last closure left a blit pass open (consecutive uploads share it).
     blit_open: bool,
@@ -86,6 +88,7 @@ impl CoreDevice {
             functions: draw::StageFunctions::default(),
             textures: rustc_hash::FxHashMap::default(),
             samplers: rustc_hash::FxHashMap::default(),
+            target: TargetRef::BackBuffer,
             render_open: false,
             blit_open: false,
             dirty: false,
@@ -189,10 +192,12 @@ mod samplers;
 mod surface;
 mod swapchain;
 mod sync;
+mod target;
 mod textures;
 
 pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
+pub use target::TargetRef;
 pub use textures::{CoreTextureDesc, TextureBind, TextureKind, UploadRegion, view_format};
 
 #[cfg(test)]

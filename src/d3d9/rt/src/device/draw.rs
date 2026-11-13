@@ -8,7 +8,7 @@
 //! descriptor (slot 156) and kept in the device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap).
 //! The draw records the pipeline, the viewport, the rasterizer state, the vertex bytes at buffer
 //! 0, the stages' binds and the draw (its indices, if any, in the argument-buffer ring) into the
-//! back buffer's render pass. The pipeline is built on the API thread and waited for (no
+//! colour target's render pass. The pipeline is built on the API thread and waited for (no
 //! asynchronous compile until C4d).
 
 use core::ffi::CStr;
@@ -29,12 +29,11 @@ use winemetal_sys::{
     MTLDevice_newRenderPipelineStateWithVertexDescriptor, Obj,
     sm50::{SM50_SHADER_COMMON, SM50_SHADER_METAL_310, Sm50ShaderCommonData},
     wire::{
-        MemPtr, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RENDER_COMMAND_DRAW,
-        WMT_RENDER_COMMAND_DRAW_INDEXED, WMT_RENDER_COMMAND_SET_PSO,
-        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_VIEWPORTS,
-        WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport,
-        WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderSetpso,
-        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetviewports,
+        MemPtr, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
+        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
+        WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo,
+        WMTVertexDescriptorInfo, WMTViewport, WmtcmdRenderDraw, WmtcmdRenderDrawIndexed,
+        WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetviewports,
     },
 };
 
@@ -95,7 +94,7 @@ pub struct DrawData<'a> {
 /// Why a draw recorded nothing.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DrawRefused {
-    /// The device has no back buffer.
+    /// The colour target does not resolve: the device has no back buffer.
     NoBackBuffer,
     /// The draw's pipeline does not build (logged once per key).
     Pipeline,
@@ -141,16 +140,20 @@ impl StageFunctions {
 }
 
 impl CoreDevice {
-    /// Records `draw` with the pipeline of `key` into the back buffer's render pass.
+    /// Records `draw` with the pipeline of `key` into the current colour target's render pass.
     ///
     /// # Errors
     ///
-    /// Nothing recorded when the device has no back buffer, the layout crosses its stride, or
-    /// the pipeline does not build.
+    /// Nothing recorded when the colour target does not resolve (a device with no back buffer),
+    /// the layout crosses its stride, or the pipeline does not build.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
-        if self.back_buffer.is_none() {
+        let Some(target) = self.resolve(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
-        }
+        };
+        debug_assert_eq!(
+            key.color_format, target.pixel_format,
+            "a draw's key names its target's colour format"
+        );
         let pso = self.pipeline(key)?;
         self.open_render_pass();
         let vertices = draw.vertices.to_vec();
@@ -358,7 +361,7 @@ fn build_pipeline(
     let mut info = dxmt_core::library::render_pipeline_info();
     info.vertex_function = vs;
     info.fragment_function = ps;
-    info.colors[0].pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+    info.colors[0].pixel_format = source.color_format;
     info.colors[0].write_mask = source.write_mask;
     let mut vertex = WMTVertexDescriptorInfo {
         attributes: [WMTVertexAttributeInfo {

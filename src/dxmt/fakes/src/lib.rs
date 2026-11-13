@@ -22,11 +22,12 @@ use std::{
 
 use dxmt_core::test_support::{Records, format_pass_records};
 use winemetal_sys::wire::{
-    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
-    WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
-    WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
-    WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
-    WMTVertexDescriptorInfo, WmtcmdBase, WmtcmdBlitCopyFromBufferToTexture,
+    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER,
+    WMT_BLIT_COMMAND_GENERATE_MIPMAPS, WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo,
+    WMTDepthStencilInfo, WMTEDRValue, WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps,
+    WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo, WMTSamplerInfo,
+    WMTTextureInfo, WMTTextureSwizzleChannels, WMTVertexDescriptorInfo, WmtcmdBase,
+    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
     WmtcmdBlitGenerateMipmaps,
 };
 
@@ -308,16 +309,25 @@ extern "C-unwind" fn fake_new_texture(device: u64, info: *mut WMTTextureInfo) ->
 #[unsafe(export_name = "MTLTexture_newTextureView")]
 extern "C-unwind" fn fake_new_texture_view(
     texture: u64,
-    _format: u32,
-    _texture_type: u32,
-    _level_start: u16,
+    format: u32,
+    texture_type: u32,
+    level_start: u16,
     _level_count: u16,
-    _slice_start: u16,
+    slice_start: u16,
     _slice_count: u16,
     _swizzle: WMTTextureSwizzleChannels,
     gpu_resource_id: *mut u64,
 ) -> u64 {
-    let handle = state().made_of(texture);
+    let mut state = state();
+    let handle = state.made_of(texture);
+    state.say(
+        texture,
+        format!(
+            "MTLTexture_newTextureView #{handle} of #{texture} format={format} type={texture_type} \
+             mip={level_start} slice={slice_start}"
+        ),
+    );
+    drop(state);
     // SAFETY: the core's out pointer, writable.
     unsafe { gpu_resource_id.write(handle + 1) };
     handle
@@ -360,15 +370,18 @@ extern "C-unwind" fn fake_new_render_pipeline(
 #[unsafe(export_name = "MTLDevice_newRenderPipelineStateWithVertexDescriptor")]
 extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
     device: u64,
-    _info: *const WMTRenderPipelineInfo,
+    info: *const WMTRenderPipelineInfo,
     _vertex: *const WMTVertexDescriptorInfo,
     _error: *mut u64,
 ) -> u64 {
+    // SAFETY: the core's pipeline description, alive for the call.
+    let color0 = unsafe { (*info).colors[0].pixel_format };
     let mut state = state();
     state.say(
         device,
         "MTLDevice_newRenderPipelineStateWithVertexDescriptor".to_owned(),
     );
+    state.say(device, format!("  pso color0={color0}"));
     if device == REFUSES_PIPELINES {
         return 0;
     }
@@ -515,7 +528,8 @@ const extern "C-unwind" fn fake_property(_cmdbuf: u64, _property: u32) -> u64 {
 #[unsafe(export_name = "MTLCommandBuffer_renderCommandEncoder")]
 extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassInfo) -> u64 {
     // SAFETY: the core hands winemetal its pass description, alive for the call.
-    let color = unsafe { &(*info).colors[0] };
+    let pass = unsafe { &*info };
+    let color = &pass.colors[0];
     let mut state = state();
     state.say(cmdbuf, "MTLCommandBuffer_renderCommandEncoder".to_owned());
     if color.texture != 0 {
@@ -525,6 +539,14 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
             format!(
                 "  color0 load={} store={} clear={},{},{},{}",
                 color.load_action, color.store_action, c.r, c.g, c.b, c.a
+            ),
+        );
+        // After the line the older tests index: the attached texture or view, and the pass's size.
+        state.say(
+            cmdbuf,
+            format!(
+                "  target0 #{} {}x{}",
+                color.texture, pass.render_target_width, pass.render_target_height
             ),
         );
     }
@@ -581,8 +603,9 @@ extern "C-unwind" fn fake_render_encode_commands(encoder: u64, head: *const Wmtc
 #[unsafe(export_name = "MTLBlitCommandEncoder_encodeCommands")]
 extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const WmtcmdBase) {
     // SAFETY: the core hands winemetal a list of live blit records.
-    let mut lines = unsafe { format_pass_records(&Records::Blit, head) };
+    let lines = unsafe { format_pass_records(&Records::Blit, head) };
     let mut details = Vec::new();
+    let mut reads = Vec::new();
     let mut at = head.expose_provenance() as u64;
     while at != 0 {
         let base_ptr = core::ptr::with_exposed_provenance::<WmtcmdBase>(
@@ -616,21 +639,36 @@ extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const Wmtcmd
                 let c = unsafe { &*base_ptr.cast::<WmtcmdBlitGenerateMipmaps>() };
                 details.push(format!("blit generate_mipmaps #{}", c.texture));
             }
+            WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER => {
+                // SAFETY: a record of this type.
+                let c = unsafe { &*base_ptr.cast::<WmtcmdBlitCopyFromTextureToBuffer>() };
+                reads.push(format!(
+                    "  copy_to_buffer #{} level={} slice={} size={}x{} bytes_per_row={}",
+                    c.src, c.level, c.slice, c.size.width, c.size.height, c.bytes_per_row
+                ));
+            }
             _ => {}
         }
         at = base.next.ptr;
     }
     let mut details = details.into_iter();
-    for line in &mut lines {
+    let mut reads = reads.into_iter();
+    let read = format!("blit {WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER}");
+    let mut out = Vec::with_capacity(lines.len());
+    for mut line in lines {
         let typed = format!("blit {WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE}");
         let mips = format!("blit {WMT_BLIT_COMMAND_GENERATE_MIPMAPS}");
-        if *line == typed || *line == mips {
-            *line = details.next().expect("a decoded blit record");
+        if line == typed || line == mips {
+            line = details.next().expect("a decoded blit record");
         }
+        // A texture-to-buffer copy keeps its line, which older tests match; its detail follows.
+        let detail = (line == read).then(|| reads.next().expect("a decoded read"));
+        out.push(line);
+        out.extend(detail);
     }
     let mut state = state();
     state.say(encoder, "MTLBlitCommandEncoder_encodeCommands".to_owned());
-    for line in lines {
+    for line in out {
         state.say(encoder, format!("  {line}"));
     }
     drop(state);

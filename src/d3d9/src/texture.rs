@@ -5893,6 +5893,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             } else {
                 (ti.block_w.max(1), ti.block_h.max(1), ti.block_bytes)
             },
+            render_target: false,
         };
         core.texture_create(id, &desc);
     }

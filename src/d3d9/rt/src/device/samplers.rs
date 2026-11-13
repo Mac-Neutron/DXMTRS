@@ -70,6 +70,7 @@ impl CoreDevice {
                 levels: 1,
                 view_twins: false,
                 block: (1, 1, 4),
+                render_target: false,
             };
             self.texture_create(BLACK, &desc);
             let whole = UploadRegion {

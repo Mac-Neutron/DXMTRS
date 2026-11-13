@@ -2,18 +2,16 @@
 //!
 //! The core's `Encoder::begin` overwrites an open pass, so every helper that begins a pass of
 //! its own (a Clear, a Present, a read-back blit) closes the open render pass first
-//! ([`CoreDevice::close_pass`]). A draw opens one on the back buffer, loading and storing it, and
-//! leaves it open for the next draw (C4-12).
+//! ([`CoreDevice::close_pass`]). A draw opens one on the current colour target, loading and
+//! storing it, and leaves it open for the next draw (C4-12).
 
 use dxmt_core::{
     deptrack::Access,
     encoder::{Encoder, stage},
 };
-use winemetal_sys::wire::{
-    WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_STORE_ACTION_STORE, WMTClearColor,
-};
+use winemetal_sys::wire::{WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor};
 
-use super::{CoreDevice, back_buffer_view};
+use super::CoreDevice;
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -41,19 +39,20 @@ impl CoreDevice {
         self.blit_open = true;
     }
 
-    /// Opens a render pass on the back buffer, loading and storing it, unless one is open.
+    /// Opens a render pass on the current colour target, loading and storing it.
     ///
-    /// An open blit pass ends first: the core's `begin` holds one pass at a time.
+    /// Nothing when one is open. An open blit pass ends first: the core's `begin` holds one pass
+    /// at a time.
     pub fn open_render_pass(&mut self) {
         if self.render_open {
             return;
         }
         self.close_pass();
-        let Some(back_buffer) = &self.back_buffer else {
+        let Some(target) = self.resolve(self.target) else {
             return;
         };
-        let (width, height) = (back_buffer.width, back_buffer.height);
-        let (texture, key) = back_buffer_view(back_buffer);
+        let (width, height, pixel_format) = (target.width, target.height, target.pixel_format);
+        let (texture, key) = (target.texture, target.key);
         self.emit(move |enc| {
             enc.start_render_pass(0, 0, 1, None);
             let attachment =
@@ -65,7 +64,7 @@ impl CoreDevice {
             color.target.attachment = attachment;
             color.target.load_action = WMT_LOAD_ACTION_LOAD;
             color.target.store_action = WMT_STORE_ACTION_STORE;
-            targets.tile_barrier_pso_key[0] = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+            targets.tile_barrier_pso_key[0] = pixel_format;
             targets.tile_barrier_pso_key[8] = 1;
             targets.render_target_width = width;
             targets.render_target_height = height;
@@ -73,15 +72,15 @@ impl CoreDevice {
         self.render_open = true;
     }
 
-    /// Clears the whole back buffer to `rgba`.
+    /// Clears the whole current colour target to `rgba`.
     ///
-    /// A core Clear pass, which the optimizer folds into the next render pass on the back buffer
-    /// as that pass's load action.
+    /// A core Clear pass, which the optimizer folds into the next render pass on the same view as
+    /// that pass's load action, and which runs as a pass of its own when none follows.
     pub fn clear(&mut self, rgba: [f32; 4]) {
-        let Some(back_buffer) = &self.back_buffer else {
+        let Some(target) = self.resolve(self.target) else {
             return;
         };
-        let (texture, key) = back_buffer_view(back_buffer);
+        let (texture, key) = (target.texture, target.key);
         self.close_pass();
         let color = WMTClearColor {
             r: f64::from(rgba[0]),
@@ -89,7 +88,7 @@ impl CoreDevice {
             b: f64::from(rgba[2]),
             a: f64::from(rgba[3]),
         };
-        // Array length 0: the back buffer is no array, as a render pass on it says (and D3D11's
+        // Array length 0: a target's view is no array, as a render pass on it says (and D3D11's
         // views of a plain 2D texture), which lets the optimizer fold the clear into that pass.
         self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
     }

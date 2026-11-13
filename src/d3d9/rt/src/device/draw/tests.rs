@@ -534,6 +534,7 @@ fn texture(core: &mut crate::device::CoreDevice, id: u64) -> mtld3d_core::ids::T
         levels: 1,
         view_twins: false,
         block: (1, 1, 4),
+        render_target: false,
     };
     core.texture_create(id, &desc);
     let whole = super::super::UploadRegion {
@@ -724,4 +725,164 @@ fn render_blit_render_merges_when_unsampled() {
     core.drain();
     let split = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(render_passes(&split), 2, "{split:#?}");
+}
+
+/// A stored 64x64 one-level render-target texture of `pixel_format`, and its handle.
+///
+/// Its creation's calls (and everything before) are taken.
+fn target_texture(
+    core: &mut crate::device::CoreDevice,
+    device: u64,
+    id: u64,
+    pixel_format: u32,
+    texel_bytes: u32,
+) -> (mtld3d_core::ids::TextureId, String) {
+    use crate::device::{
+        TextureKind,
+        fixture::{target_desc, textures_made},
+    };
+    let id = mtld3d_core::ids::TextureId::from_raw(id);
+    core.texture_create(
+        id,
+        &target_desc(pixel_format, TextureKind::Tex2d, 64, 1, texel_bytes),
+    );
+    core.drain();
+    let made = textures_made(&dxmt_fakes::take_calls(device));
+    (id, made.last().expect("a texture made").clone())
+}
+
+/// The whole of a 2D texture's level 0 as a target.
+const fn level0(id: mtld3d_core::ids::TextureId) -> crate::device::TargetRef {
+    crate::device::TargetRef::Texture {
+        id,
+        level: 0,
+        face: None,
+    }
+}
+
+/// A draw goes to the set target, with a pipeline of the key's colour format.
+///
+/// Two keys that differ only in the colour format are two pipelines.
+#[test]
+fn a_draw_targets_the_set_texture() {
+    use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_RGBA16_UNORM};
+
+    use crate::device::fixture::targets;
+    const DEVICE: u64 = 0xf9;
+    let mut core = core_on_fakes(DEVICE);
+    let (id, texture) = target_texture(&mut core, DEVICE, 1, WMT_PIXEL_FORMAT_RGBA16_UNORM, 8);
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert!(core.set_target(level0(id)));
+    assert_eq!(core.target_format(), Some(WMT_PIXEL_FORMAT_RGBA16_UNORM));
+    let wide = PipelineKey {
+        color_format: WMT_PIXEL_FORMAT_RGBA16_UNORM,
+        ..key(0xf)
+    };
+    assert_eq!(core.draw_up(&wide, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(pipelines_made(&calls), 2, "{calls:#?}");
+    let formats = calls
+        .iter()
+        .filter_map(|c| c.strip_prefix("  pso color0="))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        formats,
+        [
+            WMT_PIXEL_FORMAT_BGRA8_UNORM.to_string(),
+            WMT_PIXEL_FORMAT_RGBA16_UNORM.to_string()
+        ],
+        "{calls:#?}"
+    );
+    let drawn = targets(&calls);
+    assert_eq!(
+        drawn.last(),
+        Some(&(texture, "64x64".to_owned())),
+        "{calls:#?}"
+    );
+    assert_eq!(drawn.len(), 2, "{calls:#?}");
+}
+
+/// A render-target texture made between two draws is zeroed ahead of them, outside their chunk.
+///
+/// The initializer's cleared pass on the new texture comes before the back buffer's one render
+/// encoder, which holds both draws: nothing of the creation is recorded between them.
+#[test]
+fn a_target_made_between_two_draws_is_zeroed_ahead_of_them() {
+    use winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM;
+
+    use crate::device::{
+        TextureKind,
+        fixture::{target_desc, targets, textures_made},
+    };
+    const DEVICE: u64 = 0xfa;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let back_buffer = textures_made(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.texture_create(
+        mtld3d_core::ids::TextureId::from_raw(1),
+        &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 8, 1, 4),
+    );
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let made = textures_made(&calls)[0].clone();
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [made, back_buffer], "{calls:#?}");
+    let draws = calls
+        .iter()
+        .filter(|c| c.starts_with("  render 19 "))
+        .count();
+    assert_eq!(draws, 2, "{calls:#?}");
+}
+
+/// A target rewritten after it was sampled is not merged past its reader (C4a's ruling C4-3).
+///
+/// Draw to A, draw to the back buffer sampling A, draw to A, draw to the back buffer sampling A:
+/// four passes in that order.
+#[test]
+fn a_rewritten_target_is_not_merged_past_its_reader() {
+    use winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM;
+
+    use crate::device::{
+        TargetRef,
+        fixture::{targets, textures_made},
+    };
+    const DEVICE: u64 = 0xfb;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let back_buffer = textures_made(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let (id, texture) = target_texture(&mut core, DEVICE, 1, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+    let binds = ff_binds();
+    for _ in 0..2 {
+        assert!(core.set_target(level0(id)));
+        assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+        assert!(core.set_target(TargetRef::BackBuffer));
+        let bind = core
+            .texture_bind(Stage::Pixel, 0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, None)
+            .expect("a stored texture");
+        let textures = [bind];
+        let sampling = DrawData {
+            textures: &textures,
+            ..triangle(&binds)
+        };
+        assert_eq!(core.draw_up(&key(0xf), &sampling), Ok(()));
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        handles,
+        [texture.clone(), back_buffer.clone(), texture, back_buffer],
+        "{calls:#?}"
+    );
 }

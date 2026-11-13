@@ -21,12 +21,12 @@ use mtld3d_core::ids::TextureId;
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE2D,
-    WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_SHADER_READ,
-    WMTOrigin, WMTSize, WMTTextureInfo, WmtcmdBlitCopyFromBufferToTexture,
-    WmtcmdBlitGenerateMipmaps,
+    WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
+    WMT_TEXTURE_USAGE_SHADER_READ, WMTOrigin, WMTSize, WMTTextureInfo,
+    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitGenerateMipmaps,
 };
 
-use super::{CoreDevice, LOG_TARGET, draw::Stage};
+use super::{CoreDevice, LOG_TARGET, TargetRef, draw::Stage, target::Resolved};
 
 /// A D3D9 texture's shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +53,10 @@ pub struct CoreTextureDesc {
     ///
     /// (1, 1, texel size) for an uncompressed format.
     pub block: (u32, u32, u32),
+    /// A render target (C4b-3d1).
+    ///
+    /// Made with the render-target usage, tracked a subresource at a time, and zeroed.
+    pub render_target: bool,
 }
 
 /// A region of one subresource to upload.
@@ -101,8 +105,10 @@ pub const fn view_format(pixel_format: u32, swizzle: Option<[u8; 4]>) -> u32 {
 impl CoreDevice {
     /// Makes the core texture of `id`.
     ///
-    /// Its storage is uninitialised, as D3D9's contents are; a second call for one id replaces the
-    /// first.
+    /// Its storage is uninitialised, as D3D9's contents are, unless it is a render target, which
+    /// starts transparent black as mtld3d's do: the core's initializer zeroes each subresource
+    /// ahead of the next chunk, so nothing enters the chunk being recorded and an open pass stays
+    /// open. A second call for one id replaces the first.
     pub fn texture_create(&mut self, id: TextureId, desc: &CoreTextureDesc) {
         let (texture_type, array_length) = match desc.kind {
             TextureKind::Tex2d => (WMT_TEXTURE_TYPE2D, 1),
@@ -112,6 +118,9 @@ impl CoreDevice {
         let mut usage = WMT_TEXTURE_USAGE_SHADER_READ;
         if desc.view_twins {
             usage |= WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+        }
+        if desc.render_target {
+            usage |= WMT_TEXTURE_USAGE_RENDER_TARGET;
         }
         let info = WMTTextureInfo {
             pixel_format: desc.pixel_format,
@@ -130,9 +139,25 @@ impl CoreDevice {
             gpu_resource_id: 0,
         };
         let texture = Arc::new(Texture::new(info, self.device.device()));
-        texture.rename(texture.allocate(
-            TextureAllocationFlags::GPU_PRIVATE | TextureAllocationFlags::SHADER_READONLY,
-        ));
+        if desc.render_target {
+            // No `SHADER_READONLY`: a pass that writes one level or face and a draw that samples
+            // another are tracked apart.
+            let allocation = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
+            texture.rename(Arc::clone(&allocation));
+            let slices = if desc.kind == TextureKind::Cube { 6 } else { 1 };
+            let initializer = self.device.queue().initializer();
+            for slice in 0..slices {
+                for level in 0..desc.levels {
+                    let _ = initializer.init_texture_zero(&texture, &allocation, slice, level);
+                }
+            }
+            // The next commit carries the initializer's work, even with nothing else recorded.
+            self.dirty = true;
+        } else {
+            texture.rename(texture.allocate(
+                TextureAllocationFlags::GPU_PRIVATE | TextureAllocationFlags::SHADER_READONLY,
+            ));
+        }
         self.textures.insert(
             id,
             Stored {
@@ -192,8 +217,59 @@ impl CoreDevice {
     }
 
     /// Drops the store's texture of `id`; the closures already recorded hold their own.
+    ///
+    /// When it is the current colour target the back buffer becomes the target, and the open pass,
+    /// which draws to it, ends.
     pub fn forget_texture(&mut self, id: TextureId) {
+        if matches!(self.target, TargetRef::Texture { id: current, .. } if current == id) {
+            if self.render_open {
+                self.close_pass();
+            }
+            self.target = TargetRef::BackBuffer;
+        }
         self.textures.remove(&id);
+    }
+
+    /// Level `level` (and `face`, for a cube) of `id`'s texture as a pass attaches it.
+    ///
+    /// `None` unless the store holds `id` as a render target with that level, and `face` is a
+    /// cube's face exactly when it is a cube. The view is of the one subresource, a 2D view whose
+    /// slice is the face (C4b3d1-3): built here field by field, since the core's own 2D view
+    /// helper has no slice.
+    pub(super) fn texture_target(
+        &self,
+        id: TextureId,
+        level: u32,
+        face: Option<u32>,
+    ) -> Option<Resolved> {
+        let stored = self.textures.get(&id)?;
+        let desc = &stored.desc;
+        let slice = match (desc.kind, face) {
+            (TextureKind::Tex2d, None) => 0,
+            (TextureKind::Cube, Some(face)) if face < 6 => face,
+            _ => return None,
+        };
+        if !desc.render_target || level >= desc.levels {
+            return None;
+        }
+        let key = TextureViewDescriptor {
+            format: desc.pixel_format,
+            texture_type: WMT_TEXTURE_TYPE2D,
+            first_mip: level,
+            mip_count: 1,
+            first_slice: slice,
+            array_size: 1,
+        }
+        .key();
+        let extent = |size: u32| size.checked_shr(level).unwrap_or(0).max(1);
+        Some(Resolved {
+            texture: Arc::clone(&stored.texture),
+            key,
+            width: extent(desc.width),
+            height: extent(desc.height),
+            pixel_format: desc.pixel_format,
+            texel_bytes: desc.block.2,
+        })
     }
 
     /// The view of `id`'s texture in `format` (its own, an sRGB twin, swizzle bits included).
