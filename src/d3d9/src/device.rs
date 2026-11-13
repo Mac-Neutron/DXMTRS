@@ -3924,8 +3924,10 @@ impl DeviceInner {
         if bound.is_null() {
             return depth_format_has_stencil(self.depth_stencil_format);
         }
+        // A texture's level reports its texture's format (a standalone format of 0 otherwise
+        // read as "no stencil", and the Clear of a D24S8 or INTZ level's stencil was dropped).
         // SAFETY: non-null check passed; the bound-RT refcount holds it live.
-        depth_format_has_stencil(unsafe { (*bound).standalone_format() })
+        depth_format_has_stencil(unsafe { (*bound).depth_attachment_format() })
     }
 
     /// The device's default depth-stencil format (`D3DFMT_*`), or `0` when none.
