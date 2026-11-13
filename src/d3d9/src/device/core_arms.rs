@@ -46,7 +46,11 @@ pub fn clear(this: *mut c_void, rects: *const c_void, flags: u32, color: u32) ->
         refuse_under_core("IDirect3DDevice9::Clear (rects or scissor)");
         return Some(D3DERR_NOTAVAILABLE);
     }
-    let target = dev.core.as_deref()?.target_size()?;
+    // A core device always has a target (its back buffer is made with it); were there none, the
+    // Clear would have nothing to clear.
+    let Some(target) = dev.core.as_deref()?.target_size() else {
+        return Some(D3D_OK);
+    };
     if !viewport_covers(&dev.viewport(), target) {
         refuse_under_core("IDirect3DDevice9::Clear (a viewport not covering the target)");
         return Some(D3DERR_NOTAVAILABLE);
