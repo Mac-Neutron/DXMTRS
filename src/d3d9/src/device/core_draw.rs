@@ -517,6 +517,9 @@ fn draw(
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         binds: &binds,
         textures: &textures,
+        depth_stencil: mtld3d_core::depth_stencil_state::DepthStencilSnapshot::inert(),
+        stencil_ref: 0,
+        slope_scale: 0.0,
     };
     let Some(core) = dev.core.as_deref_mut() else {
         return D3D_OK;

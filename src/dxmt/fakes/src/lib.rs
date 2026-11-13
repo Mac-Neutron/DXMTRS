@@ -351,9 +351,37 @@ const extern "C-unwind" fn fake_height(_texture: u64) -> u64 {
 #[unsafe(export_name = "MTLDevice_newDepthStencilState")]
 extern "C-unwind" fn fake_new_depth_stencil_state(
     device: u64,
-    _info: *const WMTDepthStencilInfo,
+    info: *const WMTDepthStencilInfo,
 ) -> u64 {
-    state().made_of(device)
+    // SAFETY: the caller's state description, alive for the call.
+    let info = unsafe { &*info };
+    let face = |s: &winemetal_sys::wire::WMTStencilInfo| {
+        format!(
+            "{},{},{},{},{},{},{}",
+            s.enabled,
+            s.stencil_compare_function,
+            s.stencil_fail_op,
+            s.depth_fail_op,
+            s.depth_stencil_pass_op,
+            s.read_mask,
+            s.write_mask
+        )
+    };
+    let made = format!(
+        "cmp={} write={} front={} back={}",
+        info.depth_compare_function,
+        info.depth_write_enabled,
+        face(&info.front_stencil),
+        face(&info.back_stencil)
+    );
+    let mut state = state();
+    let handle = state.made_of(device);
+    state.say(
+        device,
+        format!("MTLDevice_newDepthStencilState #{handle} {made}"),
+    );
+    drop(state);
+    handle
 }
 
 #[unsafe(export_name = "MTLDevice_newRenderPipelineState")]
@@ -375,13 +403,22 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
     _error: *mut u64,
 ) -> u64 {
     // SAFETY: the core's pipeline description, alive for the call.
-    let color0 = unsafe { (*info).colors[0].pixel_format };
+    let info = unsafe { &*info };
+    let (color0, depth, stencil) = (
+        info.colors[0].pixel_format,
+        info.depth_pixel_format,
+        info.stencil_pixel_format,
+    );
     let mut state = state();
     state.say(
         device,
         "MTLDevice_newRenderPipelineStateWithVertexDescriptor".to_owned(),
     );
     state.say(device, format!("  pso color0={color0}"));
+    // After the line the older tests read: the planes the pipeline declares, when it does.
+    if depth != 0 || stencil != 0 {
+        state.say(device, format!("  pso depth={depth} stencil={stencil}"));
+    }
     if device == REFUSES_PIPELINES {
         return 0;
     }
@@ -547,6 +584,27 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
             format!(
                 "  target0 #{} {}x{}",
                 color.texture, pass.render_target_width, pass.render_target_height
+            ),
+        );
+    }
+    // After the colour lines: each attached depth-stencil plane.
+    if pass.depth.texture != 0 {
+        let d = &pass.depth;
+        state.say(
+            cmdbuf,
+            format!(
+                "  depth #{} load={} store={} clear={}",
+                d.texture, d.load_action, d.store_action, d.clear_depth
+            ),
+        );
+    }
+    if pass.stencil.texture != 0 {
+        let s = &pass.stencil;
+        state.say(
+            cmdbuf,
+            format!(
+                "  stencil #{} load={} store={} clear={}",
+                s.texture, s.load_action, s.store_action, s.clear_stencil
             ),
         );
     }

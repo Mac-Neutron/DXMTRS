@@ -2,8 +2,9 @@
 //!
 //! The core's `Encoder::begin` overwrites an open pass, so every helper that begins a pass of
 //! its own (a Clear, a Present, a read-back blit) closes the open render pass first
-//! ([`CoreDevice::close_pass`]). A draw opens one on the current colour target, loading and
-//! storing it, and leaves it open for the next draw (C4-12).
+//! ([`CoreDevice::close_pass`]). A draw opens one on the current colour target, with the
+//! depth-stencil when its key names one, loading and storing them, and leaves it open for the
+//! next draw of that kind (C4-12).
 
 use dxmt_core::{
     deptrack::Access,
@@ -11,7 +12,7 @@ use dxmt_core::{
 };
 use winemetal_sys::wire::{WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor};
 
-use super::CoreDevice;
+use super::{CoreDevice, depth};
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -24,6 +25,7 @@ impl CoreDevice {
     pub fn close_pass(&mut self) {
         if self.render_open || self.blit_open {
             self.render_open = false;
+            self.open_depth = None;
             self.blit_open = false;
             self.emit(Encoder::end_pass);
         }
@@ -39,28 +41,63 @@ impl CoreDevice {
         self.blit_open = true;
     }
 
-    /// Opens a render pass on the current colour target, loading and storing it.
+    /// Opens a render pass on the current colour target alone, loading and storing it.
     ///
-    /// Nothing when one is open. An open blit pass ends first: the core's `begin` holds one pass
-    /// at a time.
+    /// Nothing when a render pass is open. An open blit pass ends first: the core's `begin` holds
+    /// one pass at a time.
     pub fn open_render_pass(&mut self) {
-        if self.render_open {
+        if !self.render_open {
+            self.open_pass(false);
+        }
+    }
+
+    /// Opens the render pass of a draw: on the colour target, with the depth-stencil or without.
+    ///
+    /// Nothing when a pass of that kind is open; one of the other kind ends first. `with_depth`
+    /// asks for a depth-stencil a pass can attach (the caller checked [`CoreDevice::depth_state`]
+    /// before opening); its planes load and store, and `end_pass` records their write.
+    pub(super) fn open_pass(&mut self, with_depth: bool) {
+        if self.render_open && self.open_depth.is_some() == with_depth {
             return;
         }
         self.close_pass();
         let Some(target) = self.resolve(self.target) else {
             return;
         };
+        let depth = if with_depth {
+            self.resolve_depth()
+        } else {
+            None
+        };
+        let attached = depth.is_some();
         let shape = target.shape;
         let (width, height, pixel_format) = (shape.width, shape.height, shape.pixel_format);
         let (texture, key) = (target.texture, target.key);
         self.emit(move |enc| {
-            enc.start_render_pass(0, 0, 1, None);
+            let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
+            enc.start_render_pass(planes, 0, 1, None);
             let attachment =
                 enc.attachment::<{ stage::PIXEL }>(&texture, key, Access::READ | Access::WRITE);
+            // One attachment a plane, both of the one view (the core's are not shared).
+            let mut plane = |bit: u8| {
+                depth.as_ref().filter(|_| planes & bit != 0).and_then(|d| {
+                    enc.attachment::<{ stage::PIXEL }>(&d.texture, d.key, Access::READ)
+                })
+            };
+            let (depth_plane, stencil_plane) = (plane(1), plane(2));
             let Some(targets) = enc.render_targets() else {
                 return;
             };
+            if planes & 1 != 0 {
+                targets.depth.target.attachment = depth_plane;
+                targets.depth.target.load_action = WMT_LOAD_ACTION_LOAD;
+                targets.depth.target.store_action = WMT_STORE_ACTION_STORE;
+            }
+            if planes & 2 != 0 {
+                targets.stencil.target.attachment = stencil_plane;
+                targets.stencil.target.load_action = WMT_LOAD_ACTION_LOAD;
+                targets.stencil.target.store_action = WMT_STORE_ACTION_STORE;
+            }
             let color = &mut targets.colors[0];
             color.target.attachment = attachment;
             color.target.load_action = WMT_LOAD_ACTION_LOAD;
@@ -71,6 +108,7 @@ impl CoreDevice {
             targets.render_target_height = height;
         });
         self.render_open = true;
+        self.open_depth = self.depth.filter(|_| attached);
     }
 
     /// Clears the whole current colour target to `rgba`.

@@ -1,20 +1,18 @@
 use std::sync::Arc;
 
 use mtld3d_core::{
-    convert::{FanRewrite, ff_vs_layout_from_elements, fvf_to_elements},
-    dxso::{MAX_LINKED_INPUTS, VsSamplerKinds},
-    ff_state::FfState,
+    convert::FanRewrite,
+    dxso::VsSamplerKinds,
     ids::ProgramId,
-    pipeline_key::{DeclCode, PipelineKey, PsStageKey, ShaderCode, VsStageKey},
+    pipeline_key::{PipelineKey, PsStageKey, ShaderCode, VsStageKey},
 };
 use mtld3d_types::{
-    D3DDECL_END, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4,
-    D3DDECLUSAGE_POSITION, D3DDECLUSAGE_TEXCOORD, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9,
-    render_state_defaults,
+    D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION,
+    D3DDECLUSAGE_TEXCOORD, D3DVERTEXELEMENT9,
 };
 
 use super::{Bind, DrawData, DrawRefused, Indices, Stage};
-use crate::device::fixture::{at, core_on_fakes};
+use crate::device::fixture::{at, core_on_fakes, decl, draw, ff_binds, key, triangle};
 
 /// `vs_2_0 { dcl_position v0; mov oPos, v0 }`.
 const VS_POS: [u32; 8] = [
@@ -49,11 +47,6 @@ const PS_C1: [u32; 5] = [
 /// A `vs_2_0` version token and nothing else: no end token, so it does not parse.
 const VS_TRUNCATED: [u32; 1] = [0xfffe_0200];
 
-/// The declaration of `elements`, `D3DDECL_END` appended.
-fn decl(elements: &[D3DVERTEXELEMENT9]) -> DeclCode {
-    DeclCode::new(elements.iter().copied().chain([D3DDECL_END]).collect())
-}
-
 /// The program of `tokens`, in an `Arc` of its own.
 fn code(tokens: &[u32]) -> ShaderCode {
     ShaderCode::from_parts(ProgramId::from_tokens(tokens), Arc::from(tokens))
@@ -68,24 +61,6 @@ const fn element(offset: u16, type_: u8, usage: u8, usage_index: u8) -> D3DVERTE
         method: D3DDECLMETHOD_DEFAULT,
         usage,
         usage_index,
-    }
-}
-
-/// The key of a default-state `XYZRHW | DIFFUSE` draw, 20 bytes a vertex.
-fn key(write_mask: u8) -> PipelineKey {
-    let rs = render_state_defaults();
-    let ff = FfState::new();
-    let (elements, stride) = fvf_to_elements(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
-    let layout = ff_vs_layout_from_elements(&elements);
-    PipelineKey {
-        vs: VsStageKey::Ff(ff.build_vs_key(&rs, layout, 0, [0; MAX_LINKED_INPUTS])),
-        ps: PsStageKey::Ff(ff.build_ps_key(&rs, 0)),
-        variant: ff.variant_key(&rs, true, false),
-        layout: decl(&elements),
-        stride,
-        write_mask,
-        color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
-        depth_format: 0,
     }
 }
 
@@ -104,67 +79,6 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         write_mask: 0xf,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
-    }
-}
-
-/// A full-target viewport of the fixture's 64x32 back buffer.
-const VIEWPORT: [f64; 6] = [0.0, 0.0, 64.0, 32.0, 0.0, 1.0];
-
-static VERTICES: [u8; 64] = [0; 64];
-
-/// A draw of `primitive` over `vertex_count` of [`VERTICES`] with `binds`, unculled.
-const fn draw<'a>(
-    primitive: u8,
-    vertex_count: u32,
-    indices: Option<Indices<'a>>,
-    binds: &'a [Bind<'a>],
-) -> DrawData<'a> {
-    DrawData {
-        primitive,
-        vertices: &VERTICES,
-        vertex_count,
-        indices,
-        viewport: VIEWPORT,
-        fill_mode: 0,
-        cull_mode: 0,
-        binds,
-        textures: &[],
-    }
-}
-
-/// A fixed-function triangle's binds, as C4a's arm makes them.
-fn ff_binds() -> [Bind<'static>; 6] {
-    static VS_CONSTANTS: [u8; 16] = [0; 16];
-    static POS_FIXUP: [u8; 20] = [0; 20];
-    static VS_DRAW: [u8; 32] = [0; 32];
-    static PS_CONSTANTS: [u8; 16] = [0; 16];
-    static ALPHA_REF: [u8; 4] = [0; 4];
-    static FOG: [u8; 32] = [0; 32];
-    let vs = |slot, bytes| Bind {
-        stage: Stage::Vertex,
-        slot,
-        bytes,
-    };
-    let ps = |slot, bytes| Bind {
-        stage: Stage::Pixel,
-        slot,
-        bytes,
-    };
-    [
-        vs(30, &VS_CONSTANTS),
-        vs(28, &POS_FIXUP),
-        vs(27, &VS_DRAW),
-        ps(15, &PS_CONSTANTS),
-        ps(14, &ALPHA_REF),
-        ps(13, &FOG),
-    ]
-}
-
-/// A triangle's per-draw data: three 20-byte vertices.
-fn triangle<'a>(binds: &'a [Bind<'a>]) -> DrawData<'a> {
-    DrawData {
-        vertices: &VERTICES[..60],
-        ..draw(3, 3, None, binds)
     }
 }
 

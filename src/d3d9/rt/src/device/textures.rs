@@ -231,13 +231,41 @@ impl CoreDevice {
             }
             self.target = TargetRef::BackBuffer;
         }
+        if self.depth.is_some_and(|depth| depth.id == id) {
+            if self.render_open {
+                self.close_pass();
+            }
+            self.depth = None;
+        }
         self.textures.remove(&id);
+    }
+
+    /// The size and `WMTPixelFormat` of level `level` of `id`'s texture as a depth-stencil.
+    ///
+    /// `None` unless the store holds `id` as a 2D depth texture (a render-target description in
+    /// a format with depth-stencil planes) with that level.
+    pub(super) fn depth_level(&self, id: TextureId, level: u32) -> Option<(u32, u32, u32)> {
+        let desc = &self.textures.get(&id)?.desc;
+        if desc.kind != TextureKind::Tex2d
+            || !desc.render_target
+            || level >= desc.levels
+            || super::depth::planes(desc.pixel_format) == 0
+        {
+            return None;
+        }
+        let extent = |size: u32| size.checked_shr(level).unwrap_or(0).max(1);
+        Some((extent(desc.width), extent(desc.height), desc.pixel_format))
+    }
+
+    /// `id`'s core texture, if the store holds it.
+    pub(super) fn stored_texture(&self, id: TextureId) -> Option<Arc<Texture>> {
+        self.textures.get(&id).map(|s| Arc::clone(&s.texture))
     }
 
     /// The shape of level `level` (and `face`, for a cube) of `id`'s texture as a target.
     ///
-    /// `None` unless the store holds `id` as a render target with that level, and `face` is a
-    /// cube's face exactly when it is a cube.
+    /// `None` unless the store holds `id` as a colour render target with that level (a depth
+    /// texture is none), and `face` is a cube's face exactly when it is a cube.
     pub(super) fn texture_shape(
         &self,
         id: TextureId,
@@ -250,7 +278,10 @@ impl CoreDevice {
             (TextureKind::Cube, Some(face)) if face < 6 => face,
             _ => return None,
         };
-        if !desc.render_target || level >= desc.levels {
+        if !desc.render_target
+            || level >= desc.levels
+            || super::depth::planes(desc.pixel_format) != 0
+        {
             return None;
         }
         let extent = |size: u32| size.checked_shr(level).unwrap_or(0).max(1);

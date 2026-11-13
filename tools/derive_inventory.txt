@@ -551,6 +551,8 @@ src/d3d9/mtl/src/wmt.rs Size Default,Clone,Copy,PartialEq,Eq
 src/d3d9/mtl/src/wmt.rs SpatialScalerInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
+src/d3d9/rt/src/device/depth.rs DepthRef Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/rt/src/device/depth.rs DepthState Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
 src/d3d9/rt/src/device/target.rs Shape Clone,Copy
 src/d3d9/rt/src/device/target.rs TargetRef Clone,Copy,Debug,PartialEq,Eq

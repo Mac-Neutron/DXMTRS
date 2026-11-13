@@ -25,8 +25,8 @@ pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 /// The recording state is the API thread's view of the chunk being recorded: whether the last
 /// closure left a render pass open, and whether the chunk holds any work. [`Drop`] drains the
 /// queue first; then fields drop in order: the queue (its threads, and the chunks holding the
-/// closures) before the back buffer and the window the closures name, and the pipelines and the
-/// stage functions, whose raw handles the closures carry.
+/// closures) before the back buffer and the window the closures name, and the pipelines, the
+/// stage functions and the depth-stencil states, whose raw handles the closures carry.
 pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
@@ -44,9 +44,17 @@ pub struct CoreDevice {
     textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
     /// The samplers by their key's bits (C4b-3b).
     samplers: rustc_hash::FxHashMap<u64, Arc<dxmt_core::sampler::Sampler>>,
+    /// The depth-stencil states by their key's bits (C4b-3d2).
+    ///
+    /// Never cleared, as the pipelines: a recorded closure names its state by handle.
+    depth_states: rustc_hash::FxHashMap<u64, Obj>,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
+    /// The depth-stencil draws test against and clears go to (C4b-3d2).
+    depth: Option<DepthRef>,
     render_open: bool,
+    /// The depth-stencil the open render pass has attached; none for a pass without one.
+    open_depth: Option<DepthRef>,
     /// The last closure left a blit pass open (consecutive uploads share it).
     blit_open: bool,
     dirty: bool,
@@ -88,8 +96,11 @@ impl CoreDevice {
             functions: draw::StageFunctions::default(),
             textures: rustc_hash::FxHashMap::default(),
             samplers: rustc_hash::FxHashMap::default(),
+            depth_states: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
+            depth: None,
             render_open: false,
+            open_depth: None,
             blit_open: false,
             dirty: false,
             staged_bytes: 0,
@@ -186,6 +197,7 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
     device
 }
 
+mod depth;
 mod draw;
 mod recorder;
 mod samplers;
@@ -195,6 +207,7 @@ mod sync;
 mod target;
 mod textures;
 
+pub use depth::{DepthRef, DepthState};
 pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
 pub use target::TargetRef;

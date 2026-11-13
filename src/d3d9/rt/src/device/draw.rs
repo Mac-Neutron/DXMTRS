@@ -8,8 +8,9 @@
 //! descriptor (slot 156) and kept in the device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap).
 //! The draw records the pipeline, the viewport, the rasterizer state, the vertex bytes at buffer
 //! 0, the stages' binds and the draw (its indices, if any, in the argument-buffer ring) into the
-//! colour target's render pass. The pipeline is built on the API thread and waited for (no
-//! asynchronous compile until C4d).
+//! colour target's render pass, after the depth-stencil state when its key names a depth
+//! format. The pipeline is built on the API thread and waited for (no asynchronous compile until
+//! C4d).
 
 use core::ffi::CStr;
 use std::{ops::Range, sync::Arc};
@@ -21,8 +22,9 @@ use dxmt_core::{
     pipeline_cache::Compiled,
     shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
 };
-use mtld3d_core::pipeline_key::{
-    PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source,
+use mtld3d_core::{
+    depth_stencil_state::DepthStencilSnapshot,
+    pipeline_key::{PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
@@ -30,14 +32,15 @@ use winemetal_sys::{
     sm50::{SM50_SHADER_COMMON, SM50_SHADER_METAL_310, Sm50ShaderCommonData},
     wire::{
         MemPtr, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
-        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-        WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo,
-        WMTVertexDescriptorInfo, WMTViewport, WmtcmdRenderDraw, WmtcmdRenderDrawIndexed,
-        WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetviewports,
+        WMT_RENDER_COMMAND_SET_DSSO, WMT_RENDER_COMMAND_SET_PSO,
+        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_VIEWPORTS,
+        WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport,
+        WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
+        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetviewports,
     },
 };
 
-use super::{CoreDevice, LOG_TARGET};
+use super::{CoreDevice, DepthState, LOG_TARGET};
 
 /// `MTLVertexStepFunctionPerVertex`.
 const STEP_PER_VERTEX: u32 = 1;
@@ -89,6 +92,14 @@ pub struct DrawData<'a> {
     pub binds: &'a [Bind<'a>],
     /// The sampled slots' textures and samplers, each at its stage.
     pub textures: &'a [super::TextureBind],
+    /// The depth and stencil state of the render states, not yet gated on the attached planes.
+    ///
+    /// Read only by a draw whose key names a depth format.
+    pub depth_stencil: DepthStencilSnapshot,
+    /// `D3DRS_STENCILREF`'s low byte.
+    pub stencil_ref: u8,
+    /// Metal's slope-scaled depth bias (the constant bias is the vertex stage's).
+    pub slope_scale: f32,
 }
 
 /// Why a draw recorded nothing.
@@ -100,6 +111,8 @@ pub enum DrawRefused {
     Pipeline,
     /// An attribute crosses the stride, which the core cannot fetch yet.
     Crossing,
+    /// The key names a depth format no pass on the colour target can attach.
+    Depth,
 }
 
 /// A compiled stage function's key: its program and its specialization's wire form.
@@ -145,7 +158,8 @@ impl CoreDevice {
     /// # Errors
     ///
     /// Nothing recorded when the colour target does not resolve (a device with no back buffer),
-    /// the layout crosses its stride, or the pipeline does not build.
+    /// the key names a depth format the bound depth-stencil is not attachable in, the layout
+    /// crosses its stride, or the pipeline does not build.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
@@ -154,8 +168,26 @@ impl CoreDevice {
             key.color_format, target.pixel_format,
             "a draw's key names its target's colour format"
         );
+        // The key decides the pass: with the depth-stencil exactly when it names a format. An
+        // open pass with it was checked when it opened, and a change of either binding closed it.
+        let with_depth = key.depth_format != 0;
+        let attachable = || self.depth_state() == DepthState::Attached(key.depth_format);
+        if with_depth && self.open_depth.is_none() && !attachable() {
+            return Err(DrawRefused::Depth);
+        }
+        debug_assert!(
+            !with_depth || attachable(),
+            "a draw's key names the attached depth-stencil's format"
+        );
         let pso = self.pipeline(key)?;
-        self.open_render_pass();
+        // The state of the planes the pass has: no stencil test without the plane.
+        let depth_state = with_depth.then(|| {
+            let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
+            let gated = draw.depth_stencil.gated_on_stencil_attachment(has_stencil);
+            self.depth_state_handle(&gated)
+        });
+        let stencil_ref = draw.stencil_ref;
+        self.open_pass(with_depth);
         let vertices = draw.vertices.to_vec();
         let mut bytes = Vec::new();
         let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
@@ -186,7 +218,7 @@ impl CoreDevice {
             depth_clip_mode: 0,
             winding: 0,
             depth_bias: 0.0,
-            scole_scale: 0.0,
+            scole_scale: draw.slope_scale,
             depth_bias_clamp: 0.0,
         };
         let (primitive_type, vertex_count) = (draw.primitive, draw.vertex_count);
@@ -210,6 +242,15 @@ impl CoreDevice {
                 next: NO_NEXT,
                 pso,
             });
+            if let Some(dsso) = depth_state {
+                enc.encode_render_command(WmtcmdRenderSetdsso {
+                    r#type: WMT_RENDER_COMMAND_SET_DSSO,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    dsso,
+                    stencil_ref,
+                });
+            }
             let slot = enc
                 .allocate_cpu(size_of::<WMTViewport>(), align_of::<WMTViewport>())
                 .cast::<WMTViewport>();
@@ -363,6 +404,14 @@ fn build_pipeline(
     info.fragment_function = ps;
     info.colors[0].pixel_format = source.color_format;
     info.colors[0].write_mask = source.write_mask;
+    // The planes of the pass the key draws in: both formats are the combined format's.
+    let planes = super::depth::planes(source.depth_format);
+    if planes & 1 != 0 {
+        info.depth_pixel_format = source.depth_format;
+    }
+    if planes & 2 != 0 {
+        info.stencil_pixel_format = source.depth_format;
+    }
     let mut vertex = WMTVertexDescriptorInfo {
         attributes: [WMTVertexAttributeInfo {
             format: 0,
