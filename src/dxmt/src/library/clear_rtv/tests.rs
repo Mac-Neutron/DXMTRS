@@ -3,9 +3,10 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     WMT_COMPARE_FUNCTION_ALWAYS, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
-    WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT,
-    WMT_PIXEL_FORMAT_RGBA8_SINT, WMT_PIXEL_FORMAT_RGBA8_UINT, WMT_PIXEL_FORMAT_RGBA8_UNORM,
-    WMT_STENCIL_OPERATION_REPLACE, WMT_TEXTURE_TYPE2D_ARRAY, WMTScissorRect,
+    WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8, WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_R32_FLOAT,
+    WMT_PIXEL_FORMAT_R32_UINT, WMT_PIXEL_FORMAT_RGBA8_SINT, WMT_PIXEL_FORMAT_RGBA8_UINT,
+    WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_STENCIL_OPERATION_REPLACE, WMT_TEXTURE_TYPE2D_ARRAY,
+    WMTScissorRect,
 };
 
 use super::{ClearRtv, Kind, depth_stencil_infos, kind, pipeline_info, pso_key};
@@ -95,8 +96,8 @@ fn clear_shaders_by_format() {
     assert_eq!(kind(WMT_PIXEL_FORMAT_RGBA8_UINT, 0), Kind::Uint);
     assert_eq!(kind(WMT_PIXEL_FORMAT_R32_UINT, 0), Kind::Uint);
     assert_eq!(kind(WMT_PIXEL_FORMAT_RGBA8_SINT, 0), Kind::Sint);
-    // The planes win over the format.
-    for flag in 1..=3 {
+    // The depth plane wins over the format.
+    for flag in [1, 3] {
         assert_eq!(kind(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, flag), Kind::Depth);
     }
 }
@@ -161,4 +162,18 @@ fn depth_stencil_states_as_cpp() {
             assert_eq!((s.read_mask, s.write_mask), (0xff, 0xff));
         }
     }
+}
+
+#[test]
+fn a_stencil_only_clear_draws_no_depth() {
+    // A stencil-only pipeline has no depth format, and Metal rejects a fragment that writes depth
+    // without one.
+    let format = WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8;
+    assert_eq!(kind(format, 2), Kind::Float);
+    assert_eq!(kind(format, 1), Kind::Depth);
+    assert_eq!(kind(format, 3), Kind::Depth);
+    assert_eq!(
+        pipeline_info(1, 2, format, 1, 2).depth_pixel_format,
+        WMT_PIXEL_FORMAT_INVALID
+    );
 }

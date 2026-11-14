@@ -4,8 +4,8 @@ use std::sync::Arc;
 use winemetal_sys::{
     Obj,
     wire::{
-        WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_RENDER_COMMAND_DRAW,
-        WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WMT_TEXTURE_TYPE2D,
+        WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM,
+        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WMT_TEXTURE_TYPE2D,
         WMT_TEXTURE_USAGE_RENDER_TARGET, WMTClearColor, WMTTextureInfo, WmtcmdBase,
         WmtcmdRenderDraw, WmtcmdRenderSetbufferoffset,
     },
@@ -32,15 +32,22 @@ extern "C-unwind" fn fake_heap_new_texture(
 
 /// A 64×64 render target with an allocation (on a made-up heap, at `at`).
 fn texture(at: u64) -> Arc<Texture> {
+    sized(at, WMT_PIXEL_FORMAT_RGBA8_UNORM, 64)
+}
+
+/// A `size`×`size` render target of `pixel_format` with an allocation.
+///
+/// On a made-up heap, at `at`.
+fn sized(at: u64, pixel_format: u32, size: u32) -> Arc<Texture> {
     // SAFETY: made-up handles; the fakes that see them (the shader cache tests' `NSObject_retain`
     // and `NSObject_release`, which log per thread) never dereference them.
     let device = unsafe { Obj::adopt(0xde) }.expect("a handle");
     // SAFETY: as above.
     let heap = unsafe { Obj::adopt(0x4e) }.expect("a handle");
     let info = WMTTextureInfo {
-        pixel_format: WMT_PIXEL_FORMAT_RGBA8_UNORM,
-        width: 64,
-        height: 64,
+        pixel_format,
+        width: size,
+        height: size,
         depth: 1,
         array_length: 1,
         bits: (WMT_TEXTURE_TYPE2D << WMTTextureInfo::TYPE_SHIFT)
@@ -310,5 +317,63 @@ fn merged_passes_keep_each_pass_state() {
             "render 46 length=32 index=0",
             draw
         ]
+    );
+}
+
+/// A render pass of `width`×`height` (0: unset) that loads and stores `depth`'s depth plane.
+fn depth_pass(encoder: &mut Encoder, depth: &Arc<Texture>, width: u32, height: u32) {
+    encoder.start_render_pass(1, 0, 0, None);
+    let attachment =
+        encoder.attachment::<{ stage::PIXEL }>(depth, depth.full_view(), Access::WRITE);
+    let targets = encoder.render_targets().expect("a render pass");
+    targets.depth.target = Target {
+        attachment,
+        load_action: WMT_LOAD_ACTION_LOAD,
+        store_action: WMT_STORE_ACTION_STORE,
+        level: 0,
+        slice: 0,
+        depth_plane: 0,
+    };
+    targets.render_target_array_length = 1;
+    targets.render_target_width = width;
+    targets.render_target_height = height;
+    encoder.end_pass();
+}
+
+#[test]
+fn a_clear_is_not_folded_into_a_smaller_pass() {
+    // A depth view of 128×128 cleared, then a pass of this area that attaches it.
+    for (width, height, folded) in [(64, 32, false), (128, 128, true), (0, 0, true)] {
+        let depth = sized(0x100, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 128);
+        let mut encoder = Encoder::headless();
+        encoder.clear_depth_stencil(&depth, depth.full_view(), 1, 1, 0.5, 0);
+        depth_pass(&mut encoder, &depth, width, height);
+        encoder.optimize();
+        assert_eq!(
+            matches!(encoder.passes[0].kind, PassKind::Null),
+            folded,
+            "a {width}x{height} pass"
+        );
+        let load = if folded {
+            WMT_LOAD_ACTION_CLEAR
+        } else {
+            WMT_LOAD_ACTION_LOAD
+        };
+        assert_eq!(targets(&encoder.passes[1]).depth.target.load_action, load);
+    }
+    // A colour view of 128×128 cleared, then a pass of 64×64 on it.
+    let color = sized(0x200, WMT_PIXEL_FORMAT_RGBA8_UNORM, 128);
+    let mut encoder = Encoder::headless();
+    encoder.clear_color(&color, color.full_view(), 1, COLOR);
+    draw(&mut encoder, &color, WMT_LOAD_ACTION_LOAD, &[1]);
+    if let PassKind::Render(targets) = &mut encoder.passes[1].kind {
+        targets.render_target_width = 64;
+        targets.render_target_height = 64;
+    }
+    encoder.optimize();
+    assert!(matches!(encoder.passes[0].kind, PassKind::Clear(_)));
+    assert_eq!(
+        targets(&encoder.passes[1]).colors[0].target.load_action,
+        WMT_LOAD_ACTION_LOAD
     );
 }

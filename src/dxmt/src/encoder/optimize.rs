@@ -7,7 +7,8 @@
 //! pass becomes its store action. Merged passes become [`PassKind::Null`]; none moves.
 //!
 //! Behaviour is the C++ `flushCommands`' first loop and `checkEncoderRelation`
-//! (`dxmt_context.cpp:892-905, 1285-1602`).
+//! (`dxmt_context.cpp:892-905, 1285-1602`), but for one guard the C++ has not: a clear is not
+//! merged into a render pass that draws to less than the cleared view (see `clear_into_render`).
 
 use std::sync::Arc;
 
@@ -254,9 +255,18 @@ fn take_targets(r0: &mut RenderTargets, r1: &mut RenderTargets) {
 /// `clear` as the load action of `render`'s target that is its view.
 ///
 /// True when nothing of the clear is left: a depth-stencil clear can keep the plane `render` does
-/// not draw to.
+/// not draw to. Never for a pass whose area is smaller than the view: a load action reaches the
+/// pass's area only, and the clear is of the whole view (a depth-stencil larger than the colour
+/// targets it is drawn with, which D3D9 and D3D11 both allow).
 fn clear_into_render(clear: &mut Clear, render: &mut RenderTargets) -> bool {
     if u32::from(render.render_target_array_length) != clear.array_length {
+        return false;
+    }
+    // An unset area (0) is Metal's own: the smallest attachment's.
+    if render.render_target_width != 0
+        && render.render_target_height != 0
+        && (render.render_target_width < clear.width || render.render_target_height < clear.height)
+    {
         return false;
     }
     let Some(view) = clear.attachment.as_ref() else {

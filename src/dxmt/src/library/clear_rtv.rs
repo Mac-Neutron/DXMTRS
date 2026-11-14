@@ -191,11 +191,14 @@ enum Kind {
 
 /// The shader for a target of `format`.
 ///
-/// Depth-stencil's if `dsv_flag` names planes, else by the format's numeric kind.
+/// The depth one if `dsv_flag` names the depth plane, else by the format's numeric kind. A
+/// stencil-only clear takes the float one: its pipeline has no depth format, which a fragment
+/// that writes depth needs, and the colour it writes has no attachment (the stencil is the
+/// reference value's).
 const fn kind(format: u32, dsv_flag: u32) -> Kind {
-    if dsv_flag != 0 {
+    if dsv_flag & 1 != 0 {
         Kind::Depth
-    } else if !format::is_integer(format) {
+    } else if dsv_flag != 0 || !format::is_integer(format) {
         Kind::Float
     } else if format::unsigned_integer(format) == format {
         Kind::Uint
