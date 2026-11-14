@@ -76,6 +76,7 @@ impl CoreDevice {
                 depth: 1,
                 levels: 1,
                 view_twins: false,
+                srgb_format: 0,
                 block: (1, 1, 4),
                 render_target: false,
             };

@@ -5,7 +5,7 @@ use crate::device::fixture::{at, core_on_fakes, returns_within_10s};
 fn present_records_present_signals_commits_then_bounds() {
     const DEVICE: u64 = 0xa3;
     let mut core = core_on_fakes(DEVICE);
-    core.clear([0.0, 1.0, 0.0, 1.0]);
+    core.clear([0.0, 1.0, 0.0, 1.0], false);
     assert_eq!(core.device().queue().current_frame_seq(), 1);
     core.present(true, 0.0);
     assert_eq!(core.device().queue().current_frame_seq(), 2);
@@ -39,7 +39,7 @@ fn hidden_presents_never_hang() {
         let mut core = core_on_fakes(DEVICE);
         let hidden = core.device().queue().max_latency() + 2;
         for _ in 0..hidden {
-            core.clear([0.0, 0.0, 0.0, 1.0]);
+            core.clear([0.0, 0.0, 0.0, 1.0], false);
             core.present(false, 0.0);
         }
         assert_eq!(core.device().queue().current_frame_seq(), 1);

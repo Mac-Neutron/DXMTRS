@@ -62,6 +62,7 @@ pub const fn target_desc(
         depth: 1,
         levels,
         view_twins: false,
+        srgb_format: 0,
         block: (1, 1, texel_bytes),
         render_target: true,
     }
@@ -193,6 +194,7 @@ pub const fn depth_desc(
         depth: 1,
         levels,
         view_twins: false,
+        srgb_format: 0,
         block: (1, 1, 4),
         render_target: true,
     }

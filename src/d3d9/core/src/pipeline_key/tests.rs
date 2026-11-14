@@ -18,8 +18,9 @@ use xxhash_rust::xxh3::Xxh3;
 use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
     SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth,
-    core_ps_variant, core_scissor, core_viewport, float_rows, indexed_up_vertices, pipeline_source,
-    pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
+    core_ps_variant, core_scissor, core_srgb_variant, core_viewport, float_rows,
+    indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count,
+    viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -765,4 +766,20 @@ fn core_scissor_follows_mtld3d() {
         core_scissor(false, rect(8, 4, 40, 20), &viewport(4, 2, 0, 8), target),
         [0, 0, 64, 32]
     );
+}
+
+#[test]
+fn core_srgb_variant_rules() {
+    let base = VariantKey {
+        flags: VariantFlags::SRGB_WRITE | VariantFlags::POINT_SPRITE,
+        ..VariantKey::default()
+    };
+    // The stage encodes unless the pass's view does.
+    assert_eq!(core_srgb_variant(base, false), base);
+    assert_eq!(
+        core_srgb_variant(base, true).flags,
+        VariantFlags::POINT_SPRITE
+    );
+    let off = VariantKey::default();
+    assert_eq!(core_srgb_variant(off, true), off);
 }

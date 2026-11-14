@@ -7985,6 +7985,7 @@ fn core_color_target(
         return None;
     }
     let id = mtld3d_core::ids::TextureId::new_unique();
+    let srgb_twin = mapping.metal_pixel_format().srgb_twin();
     // SAFETY: `device_inner` is the live owning device, non-null for every caller.
     let core = unsafe { &mut *device_inner }.core_mut()?;
     core.texture_create(
@@ -7996,7 +7997,9 @@ fn core_color_target(
             height: spec.height,
             depth: 1,
             levels: 1,
-            view_twins: false,
+            // sRGB write attaches the twin's view where the format has one, as a texture's.
+            view_twins: srgb_twin.is_some(),
+            srgb_format: srgb_twin.map_or(0, |twin| twin as u32),
             block: (1, 1, mapping.bytes_per_pixel()),
             render_target: true,
         },
@@ -8193,6 +8196,7 @@ fn core_depth_surface(
             depth: 1,
             levels: 1,
             view_twins: false,
+            srgb_format: 0,
             // Never uploaded to or read back: the block is not read.
             block: (1, 1, 4),
             render_target: true,

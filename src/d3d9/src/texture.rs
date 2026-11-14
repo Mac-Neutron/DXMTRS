@@ -5874,6 +5874,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
                 depth: 1,
                 levels: ti.levels,
                 view_twins: false,
+                srgb_format: 0,
                 block: (1, 1, ti.block_bytes.max(1)),
                 render_target: true,
             };
@@ -5910,6 +5911,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             depth: ti.depth.max(1),
             levels: ti.levels,
             view_twins: ti.swizzle.is_some() || pixel_format.srgb_twin().is_some(),
+            srgb_format: pixel_format.srgb_twin().map_or(0, |twin| twin as u32),
             block: if decode.is_some() {
                 (1, 1, 4)
             } else {

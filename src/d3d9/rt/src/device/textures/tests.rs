@@ -18,6 +18,7 @@ fn bgra(width: u32, height: u32, levels: u32) -> CoreTextureDesc {
         depth: 1,
         levels,
         view_twins: false,
+        srgb_format: 0,
         block: (1, 1, 4),
         render_target: false,
     }
@@ -87,9 +88,9 @@ fn blit_closes_before_render() {
     let mut core = core_on_fakes(DEVICE);
     let id = TextureId::from_raw(2);
     core.texture_create(id, &bgra(2, 2, 1));
-    core.clear([1.0, 0.0, 0.0, 1.0]);
+    core.clear([1.0, 0.0, 0.0, 1.0], false);
     assert!(core.texture_upload(id, whole(0, 0), &[0u8; 16], 8, 16));
-    core.clear([0.0, 1.0, 0.0, 1.0]);
+    core.clear([0.0, 1.0, 0.0, 1.0], false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");

@@ -14,7 +14,7 @@ use crate::device::{
 fn readback_waits_on_the_render_pass_then_its_seq() {
     const DEVICE: u64 = 0xa6;
     let mut core = core_on_fakes(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0]);
+    core.clear([0.0, 0.0, 1.0, 1.0], false);
     let mut out = vec![0_u8; 64 * 4 * 32];
     let seq = core.device().queue().current_seq();
     assert!(core.read_back(TargetRef::BackBuffer, &mut out, 64 * 4));
@@ -132,7 +132,7 @@ fn a_read_back_waits_on_its_subresource() {
         face: None,
     };
     assert!(core.set_target(level1));
-    core.clear([0.0, 1.0, 0.0, 1.0]);
+    core.clear([0.0, 1.0, 0.0, 1.0], false);
     let mut out = vec![0_u8; 8 * 4 * 8];
     assert!(core.read_back(level1, &mut out, 8 * 4));
     let calls = dxmt_fakes::take_calls(DEVICE);

@@ -171,9 +171,10 @@ impl CoreDevice {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };
-        debug_assert_eq!(
-            key.color_format, target.pixel_format,
-            "a draw's key names its target's colour format"
+        debug_assert!(
+            key.color_format == target.pixel_format
+                || (key.color_format == target.srgb_format && target.srgb_format != 0),
+            "a draw's key names its target's colour format, or its sRGB twin's"
         );
         // The key decides the pass: with the depth-stencil exactly when it names a format. An
         // open pass with it was checked when it opened, and a change of either binding closed it.
@@ -202,7 +203,7 @@ impl CoreDevice {
             self.depth_state_handle(&gated)
         });
         let stencil_ref = draw.stencil_ref;
-        self.open_pass(with_depth);
+        self.open_pass(with_depth, key.color_format);
         // After the pass is open: `open_pass` ends one of the other depth kind, and a new pass
         // has recorded none. Once a pass and on a change, not once a draw.
         let scissor = (self.pass_scissor != Some(scissor)).then(|| {

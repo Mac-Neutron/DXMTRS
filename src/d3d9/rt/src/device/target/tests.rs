@@ -1,13 +1,16 @@
-use mtld3d_core::ids::TextureId;
+use mtld3d_core::{ids::TextureId, pipeline_key::PipelineKey};
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMTTextureInfo,
+    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_TEXTURE_TYPE2D,
+    WMT_TEXTURE_USAGE_RENDER_TARGET, WMTTextureInfo,
 };
 
 use super::TargetRef;
 use crate::device::{
     CoreDevice, TextureKind,
-    fixture::{core_on_fakes, target_desc, targets, textures_made},
+    fixture::{
+        at, core_on_fakes, ff_binds, key, line, passes, target_desc, targets, textures_made,
+        triangle,
+    },
 };
 
 /// A core device on `device` and its back buffer's handle, the calls so far taken.
@@ -120,7 +123,7 @@ fn a_clear_folds_into_the_targets_pass() {
     let (mut core, _) = core_and_back_buffer(DEVICE);
     let (id, texture) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
     assert!(core.set_target(level0(id)));
-    core.clear([1.0, 0.0, 0.0, 1.0]);
+    core.clear([1.0, 0.0, 0.0, 1.0], false);
     core.open_render_pass();
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -254,4 +257,146 @@ fn no_back_buffer_is_no_target() {
     assert_eq!(core.target(), TargetRef::BackBuffer);
     assert_eq!(core.target_size(), None);
     assert_eq!(core.target_format(), None);
+}
+
+const BGRA8: u32 = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+const SRGB: u32 = WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB;
+
+/// The fixture's draw with a key that names `format` as the colour target's.
+fn draw_in(core: &mut CoreDevice, format: u32) {
+    let binds = ff_binds();
+    let key = PipelineKey {
+        color_format: format,
+        ..key(0xf)
+    };
+    assert_eq!(core.draw_up(&key, &triangle(&binds)), Ok(()));
+}
+
+/// Whether `handle` is a view of `texture` in `format`, by the views `calls` show made.
+fn is_view(calls: &[String], handle: &str, texture: &str, format: u32) -> bool {
+    let made = format!("MTLTexture_newTextureView {handle} of {texture} format={format} ");
+    calls.iter().any(|c| c.starts_with(&made))
+}
+
+/// A draw whose key names the sRGB twin draws to the back buffer's sRGB view (DXMTRS C4b-3d3).
+///
+/// Its pipeline names that format; a key with the stored format draws to the texture itself.
+#[test]
+fn srgb_write_attaches_the_twin() {
+    const DEVICE: u64 = 0x320;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    assert_eq!(core.target_desc(false), Some(((64, 32), BGRA8)));
+    assert_eq!(core.target_desc(true), Some(((64, 32), SRGB)));
+    assert_eq!(core.target_format(), Some(BGRA8));
+    draw_in(&mut core, SRGB);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let drawn = targets(&calls);
+    assert_eq!(drawn.len(), 1, "{calls:#?}");
+    assert!(
+        is_view(&calls, &drawn[0].0, &back_buffer, SRGB),
+        "{calls:#?}"
+    );
+    assert!(
+        calls.contains(&format!("  pso color0={SRGB}")),
+        "{calls:#?}"
+    );
+    draw_in(&mut core, BGRA8);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        targets(&calls),
+        [(back_buffer, "64x32".to_owned())],
+        "{calls:#?}"
+    );
+}
+
+/// A draw on the other view of the target ends the open pass; one on the same view does not.
+#[test]
+fn a_format_switch_ends_the_pass() {
+    const DEVICE: u64 = 0x321;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    for format in [BGRA8, SRGB, SRGB, BGRA8] {
+        draw_in(&mut core, format);
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 3, "{calls:#?}");
+}
+
+/// A target made with no sRGB twin keeps its format under sRGB write; one made with it takes it.
+#[test]
+fn a_target_without_a_twin_keeps_its_format() {
+    const DEVICE: u64 = 0x322;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (plain, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    assert!(core.set_target(level0(plain)));
+    assert_eq!(core.target_desc(true), Some(((64, 64), BGRA8)));
+    let twin = TextureId::from_raw(2);
+    let mut desc = target_desc(BGRA8, TextureKind::Tex2d, 64, 1, 4);
+    desc.view_twins = true;
+    desc.srgb_format = SRGB;
+    core.texture_create(twin, &desc);
+    assert!(core.set_target(level0(twin)));
+    assert_eq!(core.target_desc(true), Some(((64, 64), SRGB)));
+    assert_eq!(core.target_desc(false), Some(((64, 64), BGRA8)));
+}
+
+/// A Clear and a draw made under sRGB write are one pass: the Clear is its load action.
+#[test]
+fn a_clear_and_its_pass_share_the_view() {
+    const DEVICE: u64 = 0x323;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    core.clear([0.0, 0.0, 1.0, 1.0], true);
+    draw_in(&mut core, SRGB);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    assert_eq!(
+        line(all[0], "  color0 "),
+        Some("load=2 store=1 clear=0,0,1,1"),
+        "{calls:#?}"
+    );
+}
+
+/// A Clear on one view and a draw on the other are two passes: the draw loads what was cleared.
+///
+/// One more pass than a Clear and a draw of one state (ruling 7: C4d's to remove).
+#[test]
+fn a_clear_on_the_other_view_is_its_own_pass() {
+    const DEVICE: u64 = 0x324;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    core.clear([0.0, 0.0, 1.0, 1.0], false);
+    draw_in(&mut core, SRGB);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = passes(&calls);
+    assert_eq!(all.len(), 2, "{calls:#?}");
+    assert_eq!(
+        line(all[0], "  color0 "),
+        Some("load=2 store=1 clear=0,0,1,1"),
+        "{calls:#?}"
+    );
+    let drawn = line(all[1], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1"), "{calls:#?}");
+}
+
+/// A read-back after a draw through the sRGB view reads the stored texture, after that pass.
+#[test]
+fn read_back_reads_the_stored_view() {
+    const DEVICE: u64 = 0x325;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    draw_in(&mut core, SRGB);
+    let mut out = vec![0_u8; 64 * 4 * 32];
+    assert!(core.read_back(TargetRef::BackBuffer, &mut out, 64 * 4));
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    assert!(render < blit, "{calls:#?}");
+    let copied = calls[blit..]
+        .iter()
+        .find_map(|c| c.trim_start().strip_prefix("copy_to_buffer "))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(copied.starts_with(&format!("{back_buffer} ")), "{calls:#?}");
 }

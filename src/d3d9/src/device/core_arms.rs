@@ -71,18 +71,20 @@ pub fn clear(
     };
     let viewport = drawn_rect(&dev.viewport(), target);
     if flags & D3DCLEAR_TARGET != 0 {
-        // No target has an sRGB view yet (C4b3d1-1): the colour is stored encoded, as a draw's
-        // (C4b2-4).
+        // Under sRGB write a target with an sRGB twin is cleared through it and Metal encodes
+        // (DXMTRS C4b-3d3); one without is stored encoded, as a draw's colour is (C4b2-4).
+        let srgb = dev.render_state(D3DRS_SRGBWRITEENABLE as usize) != 0;
         let linear = d3dcolor_to_rgba_f32(color);
-        let rgba = if dev.render_state(D3DRS_SRGBWRITEENABLE as usize) == 0 {
-            linear
-        } else {
-            linear_to_srgb_rgba(linear)
-        };
         let core = dev.core.as_deref_mut()?;
+        let hardware = srgb && core.target_desc(true).map(|(_, f)| f) != core.target_format();
+        let rgba = if srgb && !hardware {
+            linear_to_srgb_rgba(linear)
+        } else {
+            linear
+        };
         match clear_area(regions.as_deref(), viewport, target) {
-            ClearArea::Whole => core.clear(rgba),
-            ClearArea::Regions(list) => core.clear_rects(&list, rgba),
+            ClearArea::Whole => core.clear(rgba, srgb),
+            ClearArea::Regions(list) => core.clear_rects(&list, rgba, srgb),
         }
     }
     let core = dev.core.as_deref_mut()?;

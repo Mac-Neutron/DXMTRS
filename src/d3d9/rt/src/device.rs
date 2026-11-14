@@ -55,6 +55,8 @@ pub struct CoreDevice {
     render_open: bool,
     /// The depth-stencil the open render pass has attached; none for a pass without one.
     open_depth: Option<DepthRef>,
+    /// The colour format the open render pass attached: the target's, or its sRGB twin's.
+    open_format: u32,
     /// The scissor the open render pass last recorded; none since it began (DXMTRS C4b-3d3).
     pass_scissor: Option<[u32; 4]>,
     /// The last closure left a blit pass open (consecutive uploads share it).
@@ -103,6 +105,7 @@ impl CoreDevice {
             depth: None,
             render_open: false,
             open_depth: None,
+            open_format: 0,
             pass_scissor: None,
             blit_open: false,
             dirty: false,

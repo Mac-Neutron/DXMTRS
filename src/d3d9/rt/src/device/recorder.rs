@@ -51,7 +51,8 @@ impl CoreDevice {
     /// one pass at a time.
     pub fn open_render_pass(&mut self) {
         if !self.render_open {
-            self.open_pass(false);
+            let format = self.target_format().unwrap_or_default();
+            self.open_pass(false, format);
         }
     }
 
@@ -59,15 +60,17 @@ impl CoreDevice {
     ///
     /// Nothing when a pass of that kind is open; one of the other kind ends first. `with_depth`
     /// asks for the bound depth-stencil (the caller checked [`CoreDevice::depth_format`] before
-    /// opening); its planes load and store, and `end_pass` records their write. A new pass has
-    /// recorded no scissor: this is the one place that forgets the last one.
-    pub(super) fn open_pass(&mut self, with_depth: bool) {
-        if self.render_open && self.open_depth.is_some() == with_depth {
+    /// opening); its planes load and store, and `end_pass` records their write. `format` is the
+    /// colour target's own or its sRGB twin's: a pass on the other view ends first. A new pass
+    /// has recorded no scissor: this is the one place that forgets the last one.
+    pub(super) fn open_pass(&mut self, with_depth: bool, format: u32) {
+        if self.render_open && self.open_depth.is_some() == with_depth && self.open_format == format
+        {
             return;
         }
         self.close_pass();
         self.pass_scissor = None;
-        let Some(target) = self.resolve(self.target) else {
+        let Some(target) = self.resolve_as(self.target, format) else {
             return;
         };
         let depth = if with_depth {
@@ -77,7 +80,6 @@ impl CoreDevice {
         };
         let attached = depth.is_some();
         let shape = target.shape;
-        let pixel_format = shape.pixel_format;
         // Metal draws to the smallest attachment; the area is said, so a Clear folds into this
         // pass only when the pass reaches all of the cleared view.
         let (width, height) = self
@@ -113,21 +115,30 @@ impl CoreDevice {
             color.target.attachment = attachment;
             color.target.load_action = WMT_LOAD_ACTION_LOAD;
             color.target.store_action = WMT_STORE_ACTION_STORE;
-            targets.tile_barrier_pso_key[0] = pixel_format;
+            targets.tile_barrier_pso_key[0] = format;
             targets.tile_barrier_pso_key[8] = 1;
             targets.render_target_width = width;
             targets.render_target_height = height;
         });
         self.render_open = true;
+        self.open_format = format;
         self.open_depth = self.depth.filter(|_| attached);
+    }
+
+    /// The current colour target through the view a Clear made under `srgb_write` clears.
+    fn clear_target(&self, srgb_write: bool) -> Option<super::target::Resolved> {
+        let format = self.shape(self.target)?.attached_format(srgb_write);
+        self.resolve_as(self.target, format)
     }
 
     /// Clears the whole current colour target to `rgba`.
     ///
     /// A core Clear pass, which the optimizer folds into the next render pass on the same view as
-    /// that pass's load action, and which runs as a pass of its own when none follows.
-    pub fn clear(&mut self, rgba: [f32; 4]) {
-        let Some(target) = self.resolve(self.target) else {
+    /// that pass's load action, and which runs as a pass of its own when none follows. Under
+    /// `srgb_write` a target with an sRGB twin is cleared through it: `rgba` is then linear, and
+    /// only a pass on that view takes the Clear as its load action.
+    pub fn clear(&mut self, rgba: [f32; 4], srgb_write: bool) {
+        let Some(target) = self.clear_target(srgb_write) else {
             return;
         };
         let (texture, key) = (target.texture, target.key);
@@ -147,12 +158,13 @@ impl CoreDevice {
     ///
     /// Nothing for no rect. The core's quad clear (`ClearRtv`, D3D11's `ClearView`): a render
     /// pass of its own on the target alone, a scissored triangle a rect, which takes nothing of
-    /// the draws' state (blending, the write mask, the scissor).
-    pub fn clear_rects(&mut self, rects: &[[u32; 4]], rgba: [f32; 4]) {
+    /// the draws' state (blending, the write mask, the scissor). `srgb_write` as
+    /// [`CoreDevice::clear`]'s.
+    pub fn clear_rects(&mut self, rects: &[[u32; 4]], rgba: [f32; 4], srgb_write: bool) {
         if rects.is_empty() {
             return;
         }
-        let Some(target) = self.resolve(self.target) else {
+        let Some(target) = self.clear_target(srgb_write) else {
             return;
         };
         let (texture, key) = (target.texture, target.key);

@@ -23,8 +23,8 @@ use mtld3d_core::{
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
         VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_scissor,
-        core_texture_variant, core_viewport, float_rows, indexed_up_vertices, pos_fixup,
-        rhw_depth_clamp, up_byte_count, viewport_depth_range,
+        core_srgb_variant, core_texture_variant, core_viewport, float_rows, indexed_up_vertices,
+        pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
     },
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
@@ -42,8 +42,8 @@ use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
     D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE,
-    D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_STENCILREF, D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE,
-    RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
+    D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_ZENABLE,
+    D3DSAMP_SRGBTEXTURE, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -200,9 +200,11 @@ fn resolve(
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
     })?;
-    // The bound colour target's size and format (DXMTRS C4b-3d1); the present parameters' for a
-    // device with no back buffer, whose draws record nothing.
-    let (target, color_format) = core_target_of(dev);
+    // The bound colour target's size and the format the draw attaches it in (DXMTRS C4b-3d1):
+    // its sRGB twin's under sRGB write when it has one, which then encodes (C4b-3d3). The present
+    // parameters' for a device with no back buffer, whose draws record nothing.
+    let (target, color_format, hardware_srgb) =
+        core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0);
     // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size; none
     // for a draw that samples it and uses no plane of it.
     let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound)?;
@@ -417,7 +419,10 @@ fn resolve(
     if let Some(table) = &table {
         binds.push(Stage::Pixel, mtl::PS_LOD_BIAS_SLOT, &table.bytes());
     }
-    let variant = core_texture_variant(variant, &masks, table.is_some());
+    let variant = core_srgb_variant(
+        core_texture_variant(variant, &masks, table.is_some()),
+        hardware_srgb,
+    );
     if let Some(core) = dev.core.as_deref_mut() {
         let every_slot = slots
             .iter()
@@ -504,21 +509,29 @@ fn resolve(
     Ok((key, binds, target))
 }
 
-/// The bound colour target's size and `WMTPixelFormat` (DXMTRS C4b-3d1).
+/// The bound colour target's size, the format a draw attaches it in, and whether that encodes.
 ///
-/// The back buffer's from the present parameters when the target does not resolve (a device
-/// with no back buffer, whose draws record nothing).
-fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
-    dev.core
-        .as_deref()
-        .and_then(d3d9_rt::device::CoreDevice::target_desc)
-        .unwrap_or_else(|| {
-            let pp = dev.present_params();
-            (
-                (pp.back_buffer_width, pp.back_buffer_height),
-                mtl::PixelFormat::Bgra8Unorm as u32,
-            )
-        })
+/// The `WMTPixelFormat` is the target's own, or its sRGB twin's under `srgb_write`
+/// (`D3DRS_SRGBWRITEENABLE`) when it has one; the flag says it is the twin's (DXMTRS C4b-3d1,
+/// C4b-3d3). The back buffer's from the present parameters when the target does not resolve (a
+/// device with no back buffer, whose draws record nothing).
+fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), u32, bool) {
+    let core = dev.core.as_deref();
+    core.and_then(|core| core.target_desc(srgb_write))
+        .map_or_else(
+            || {
+                let pp = dev.present_params();
+                (
+                    (pp.back_buffer_width, pp.back_buffer_height),
+                    mtl::PixelFormat::Bgra8Unorm as u32,
+                    false,
+                )
+            },
+            |(size, format)| {
+                let stored = core.and_then(CoreDevice::target_format);
+                (size, format, srgb_write && stored != Some(format))
+            },
+        )
 }
 
 /// Whether a depth-stencil is bound, and the depth format a draw's key names.

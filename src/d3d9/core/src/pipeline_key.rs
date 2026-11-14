@@ -335,7 +335,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
 /// render scale and no samplers: a programmable stage exports colour 0 alone, and its depth
 /// exactly when the draw has a depth-stencil attached (`has_depth`); `POINT_SPRITE` holds on
 /// point lists only, and the stage reads the extra inputs of `linked_input_mask`. `SRGB_WRITE`
-/// stays: the target has no sRGB view, so the shader encodes.
+/// stays here: [`core_srgb_variant`] drops it for a pass on an sRGB view.
 #[must_use]
 pub fn core_ps_variant(
     base: VariantKey,
@@ -360,6 +360,19 @@ pub fn core_ps_variant(
         variant
             .flags
             .set(VariantFlags::NO_DEPTH_ATTACHMENT, !has_depth);
+    }
+    variant
+}
+
+/// A core draw's pixel variant for the view its pass attaches (C4b-3d3).
+///
+/// `hardware` is whether that view is the target's sRGB twin: Metal then encodes after the
+/// blender, so the stage must not (`SRGB_WRITE` goes), as mtld3d's draw decides it. A target
+/// with no twin keeps the stage's encode.
+#[must_use]
+pub fn core_srgb_variant(mut variant: VariantKey, hardware: bool) -> VariantKey {
+    if hardware {
+        variant.flags.remove(VariantFlags::SRGB_WRITE);
     }
     variant
 }

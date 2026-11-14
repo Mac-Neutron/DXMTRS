@@ -5,7 +5,7 @@ use crate::device::fixture::{at, core_on_fakes, ff_binds, key, line, passes, tri
 fn clear_becomes_the_pass_load_action() {
     const DEVICE: u64 = 0xa1;
     let mut core = core_on_fakes(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0]);
+    core.clear([0.0, 0.0, 1.0, 1.0], false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let encoder = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
@@ -22,7 +22,7 @@ fn clear_behind_an_open_pass_closes_it() {
     const DEVICE: u64 = 0xa2;
     let mut core = core_on_fakes(DEVICE);
     core.open_render_pass();
-    core.clear([1.0, 0.0, 0.0, 1.0]);
+    core.clear([1.0, 0.0, 0.0, 1.0], false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let encoders = calls
@@ -51,7 +51,7 @@ fn a_rect_clear_is_a_pass_of_its_own() {
     let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
     assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
-    core.clear_rects(&[[1, 2, 3, 4], [8, 8, 16, 16]], [0.0, 1.0, 0.0, 1.0]);
+    core.clear_rects(&[[1, 2, 3, 4], [8, 8, 16, 16]], [0.0, 1.0, 0.0, 1.0], false);
     assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -75,7 +75,7 @@ fn an_empty_list_records_nothing() {
     let mut core = core_on_fakes(DEVICE);
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
-    core.clear_rects(&[], [0.0, 1.0, 0.0, 1.0]);
+    core.clear_rects(&[], [0.0, 1.0, 0.0, 1.0], false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(passes(&calls).is_empty(), "{calls:#?}");

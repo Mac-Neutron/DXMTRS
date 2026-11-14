@@ -348,7 +348,7 @@ fn a_clear_then_a_draw_is_one_pass() {
     let mut rig = Rig::new(0x2e8);
     let (depth, _) = rig.depth(1, D32F_S8, (64, 32), 1);
     assert!(rig.core.set_depth(Some(level0(depth))));
-    rig.core.clear([0.0, 0.0, 1.0, 1.0]);
+    rig.core.clear([0.0, 0.0, 1.0, 1.0], false);
     rig.core.clear_depth_stencil(3, 0.25, 7);
     assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Ok(()));
     let calls = rig.take();

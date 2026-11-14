@@ -53,6 +53,10 @@ pub struct CoreTextureDesc {
     pub levels: u32,
     /// Views in another format (an sRGB twin, a swizzle) will be taken: `PIXEL_FORMAT_VIEW` usage.
     pub view_twins: bool,
+    /// The sRGB twin's `WMTPixelFormat` a render target is attached through under sRGB write.
+    ///
+    /// 0 for none; read only with `view_twins` (DXMTRS C4b-3d3).
+    pub srgb_format: u32,
     /// The format's block: width and height in texels, size in bytes.
     ///
     /// (1, 1, texel size) for an uncompressed format.
@@ -289,6 +293,7 @@ impl CoreDevice {
             width: extent(desc.width),
             height: extent(desc.height),
             pixel_format: desc.pixel_format,
+            srgb_format: if desc.view_twins { desc.srgb_format } else { 0 },
             texel_bytes: desc.block.2,
             level,
             slice,

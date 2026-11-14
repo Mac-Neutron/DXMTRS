@@ -13,8 +13,8 @@ use winemetal_sys::{
     CreateMetalViewFromHWND, ReleaseMetalView,
     wire::{
         WMT_COLOR_SPACE_SRGB, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
-        WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ,
-        WMTTextureInfo,
+        WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
+        WMT_TEXTURE_USAGE_SHADER_READ, WMTTextureInfo,
     },
 };
 
@@ -61,7 +61,10 @@ impl CoreDevice {
             bits: (WMT_TEXTURE_TYPE2D << WMTTextureInfo::TYPE_SHIFT)
                 | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
                 | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-                | ((WMT_TEXTURE_USAGE_RENDER_TARGET | WMT_TEXTURE_USAGE_SHADER_READ)
+                // The view usage: sRGB write attaches the sRGB twin's view (DXMTRS C4b-3d3).
+                | ((WMT_TEXTURE_USAGE_RENDER_TARGET
+                    | WMT_TEXTURE_USAGE_SHADER_READ
+                    | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW)
                     << WMTTextureInfo::USAGE_SHIFT),
             options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
             flags: 0,
