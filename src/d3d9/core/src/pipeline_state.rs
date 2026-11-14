@@ -11,14 +11,19 @@
 //! the unix side but absent from the key would collapse every blend op onto a
 //! single cached pipeline.
 
+// Re-exported for the core runtime, which maps them to the wire's numbers (DXMTRS C4b-3d3).
+pub use mtld3d_shared::mtl::{BlendFactor, BlendOperation};
 use mtld3d_shared::{
     MetalHandle, VertexAttrDesc, VertexBufferLayoutDesc,
-    mtl::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat, VertexStepFunction},
+    mtl::{ColorWriteMask, PixelFormat, VertexStepFunction},
     mtl_handle::MTLFunctionKind,
 };
 use mtld3d_types::{
     D3DBLEND_BOTHINVSRCALPHA, D3DBLEND_BOTHSRCALPHA, D3DBLEND_INVSRCALPHA, D3DBLEND_ONE,
-    D3DBLEND_SRCALPHA, D3DBLEND_ZERO, D3DBLENDOP_ADD, D3DBLENDOP_MAX, D3DBLENDOP_MIN, MAX_STREAMS,
+    D3DBLEND_SRCALPHA, D3DBLEND_ZERO, D3DBLENDOP_ADD, D3DBLENDOP_MAX, D3DBLENDOP_MIN,
+    D3DRS_ALPHABLENDENABLE, D3DRS_BLENDOP, D3DRS_BLENDOPALPHA, D3DRS_DESTBLEND,
+    D3DRS_DESTBLENDALPHA, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_SRCBLENDALPHA,
+    MAX_STREAMS, RENDER_STATE_COUNT,
 };
 
 use crate::{
@@ -26,6 +31,7 @@ use crate::{
         d3d_to_metal_blend, d3d_to_metal_blend_op, d3d_to_metal_blend_rt, d3d_to_metal_write_mask,
     },
     ids::VertexAttrsHash,
+    render_state::enum_value,
 };
 
 bitflags::bitflags! {
@@ -704,8 +710,14 @@ struct EffectiveBlend {
 /// and a `MIN` or `MAX` equation reads its factors as `ONE`, see
 /// [`min_max_factors`].
 fn effective_blend(s: &PipelineSnapshot) -> EffectiveBlend {
-    let rs = &s.rs;
-    if !rs.blend_enable() || !s.has_color_output() {
+    effective_blend_rs(&s.rs, s.has_color_output())
+}
+
+/// [`effective_blend`] of the render-state bits `rs` alone.
+///
+/// `has_color_output` is whether the pass has a colour output to blend into.
+fn effective_blend_rs(rs: &PipelineRsBits, has_color_output: bool) -> EffectiveBlend {
+    if !rs.blend_enable() || !has_color_output {
         return EffectiveBlend {
             enable: false,
             src: D3DBLEND_ONE,
@@ -740,6 +752,72 @@ fn effective_blend(s: &PipelineSnapshot) -> EffectiveBlend {
         op_alpha,
         separate_alpha,
     }
+}
+
+/// The blend a pipeline of the core runtime is built with (DXMTRS C4b-3d3).
+///
+/// mtld3d's effective blend for the one colour target, in Metal's terms. A draw with blending
+/// off has none.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CoreBlend {
+    pub src: BlendFactor,
+    pub dst: BlendFactor,
+    pub op: BlendOperation,
+    pub src_alpha: BlendFactor,
+    pub dst_alpha: BlendFactor,
+    pub op_alpha: BlendOperation,
+}
+
+impl CoreBlend {
+    /// Whether an equation reads the blend colour (`D3DRS_BLENDFACTOR`).
+    #[must_use]
+    pub const fn reads_blend_color(&self) -> bool {
+        const fn reads(factor: BlendFactor) -> bool {
+            matches!(
+                factor,
+                BlendFactor::BlendColor | BlendFactor::OneMinusBlendColor
+            )
+        }
+        reads(self.src) || reads(self.dst) || reads(self.src_alpha) || reads(self.dst_alpha)
+    }
+}
+
+/// The blend of a core draw from the render states `rs`; `None` with blending off.
+///
+/// The rules are `effective_blend`'s and the factors [`d3d_to_metal_blend_rt`]'s, as
+/// [`key_from_snapshot`] has them for a draw with one colour target: `target_has_alpha` is
+/// whether that target stores alpha (the destination-alpha factors of one that does not read 1).
+#[must_use]
+pub fn core_blend(rs: &[u32; RENDER_STATE_COUNT], target_has_alpha: bool) -> Option<CoreBlend> {
+    let mut flags = PipelineRsFlags::empty();
+    flags.set(
+        PipelineRsFlags::BLEND_ENABLE,
+        rs[D3DRS_ALPHABLENDENABLE as usize] != 0,
+    );
+    flags.set(
+        PipelineRsFlags::SEPARATE_ALPHA_BLEND,
+        rs[D3DRS_SEPARATEALPHABLENDENABLE as usize] != 0,
+    );
+    let bits = PipelineRsBits {
+        flags,
+        src_blend: enum_value(rs, D3DRS_SRCBLEND),
+        dst_blend: enum_value(rs, D3DRS_DESTBLEND),
+        blend_op: enum_value(rs, D3DRS_BLENDOP),
+        src_blend_alpha: enum_value(rs, D3DRS_SRCBLENDALPHA),
+        dst_blend_alpha: enum_value(rs, D3DRS_DESTBLENDALPHA),
+        blend_op_alpha: enum_value(rs, D3DRS_BLENDOPALPHA),
+        ..PipelineRsBits::default()
+    };
+    let blend = effective_blend_rs(&bits, true);
+    let factor = |d3d: u32| d3d_to_metal_blend_rt(d3d, target_has_alpha);
+    blend.enable.then(|| CoreBlend {
+        src: factor(blend.src),
+        dst: factor(blend.dst),
+        op: d3d_to_metal_blend_op(blend.op),
+        src_alpha: factor(blend.src_alpha),
+        dst_alpha: factor(blend.dst_alpha),
+        op_alpha: d3d_to_metal_blend_op(blend.op_alpha),
+    })
 }
 
 /// Resolve the `D3DBLEND_BOTH*` source factors into the pair they stand for.

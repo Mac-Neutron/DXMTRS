@@ -26,6 +26,7 @@ use crate::{
     dxso::{FfPsKey, FfVsKey},
     ff_build,
     ids::ProgramId,
+    pipeline_state::CoreBlend,
     shader_create::{ShaderCreateError, parse_shader},
 };
 
@@ -169,9 +170,8 @@ pub enum PsStageKey {
 
 /// What a pipeline of the core's draws depends on.
 ///
-/// The arm draws to one one-sample colour target and at most one depth-stencil, with blending
-/// refused, so these fields are all of it. The stride is here because D3D9 fetches through a
-/// Metal vertex descriptor.
+/// The arm draws to one one-sample colour target and at most one depth-stencil, so these fields
+/// are all of it. The stride is here because D3D9 fetches through a Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -188,6 +188,8 @@ pub struct PipelineKey {
     pub color_format: u32,
     /// The attached depth-stencil's `WMTPixelFormat`; 0 for a draw without one.
     pub depth_format: u32,
+    /// The colour target's blend; none with blending off (C4b-3d3).
+    pub blend: Option<CoreBlend>,
 }
 
 /// One stage as it is translated: its program and its specialization.
@@ -214,6 +216,8 @@ pub struct PipelineSource {
     pub color_format: u32,
     /// The attached depth-stencil's `WMTPixelFormat`; 0 for a draw without one.
     pub depth_format: u32,
+    /// The colour target's blend; none with blending off.
+    pub blend: Option<CoreBlend>,
 }
 
 impl PipelineSource {
@@ -248,6 +252,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         write_mask,
         color_format,
         depth_format,
+        blend,
     } = key;
     let elements = layout.elements();
     let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
@@ -326,6 +331,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         write_mask: *write_mask,
         color_format: *color_format,
         depth_format: *depth_format,
+        blend: blend.clone(),
     })
 }
 
@@ -432,8 +438,6 @@ bitflags::bitflags! {
         const PS_BOUND = 1 << 4;
         /// The bound pixel shader was created by a core device.
         const PS_CORE = 1 << 5;
-        /// Blending is enabled.
-        const BLENDING = 1 << 8;
         /// A sampled vertex slot holds a depth-format texture.
         const VERTEX_DEPTH_TEXTURE = 1 << 10;
     }
@@ -457,8 +461,6 @@ pub enum StageKind {
 pub enum CoreRefusal {
     /// A bound shader was not created by a core device.
     NotCoreShader,
-    /// Blending is enabled.
-    Blending,
     /// A sampled vertex slot holds a depth-format texture (C4c).
     VertexDepthTexture,
     /// The draw tests or writes the depth-stencil it samples (C4c).
@@ -473,7 +475,6 @@ impl CoreRefusal {
             Self::NotCoreShader => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a shader no core device created)"
             }
-            Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
             Self::VertexDepthTexture => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture at a vertex sampler)"
             }
@@ -495,9 +496,6 @@ impl CoreRefusal {
 /// The first reason the core does not draw `f`.
 pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), CoreRefusal> {
     let flags = f.flags;
-    if flags.contains(DrawFlags::BLENDING) {
-        return Err(CoreRefusal::Blending);
-    }
     if flags.contains(DrawFlags::VERTEX_DEPTH_TEXTURE) {
         return Err(CoreRefusal::VertexDepthTexture);
     }

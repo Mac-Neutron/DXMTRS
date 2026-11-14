@@ -82,6 +82,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         write_mask: 0xf,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
+        blend: None,
     }
 }
 
@@ -698,6 +699,7 @@ fn a_draw_targets_the_set_texture() {
     let wide = PipelineKey {
         color_format: WMT_PIXEL_FORMAT_RGBA16_UNORM,
         depth_format: 0,
+        blend: None,
         ..key(0xf)
     };
     assert_eq!(core.draw_up(&wide, &triangle(&binds)), Ok(()));
@@ -907,4 +909,79 @@ fn an_empty_scissor_draws_nothing() {
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(passes(&calls).is_empty(), "{calls:#?}");
     assert_eq!(core.pipelines_len(), 0);
+}
+
+/// mtld3d's blend enums reach the wire by name: its numbers are not theirs.
+#[test]
+fn wire_blend_numbers() {
+    use mtld3d_core::pipeline_state::{BlendFactor as F, BlendOperation as O};
+    use winemetal_sys::wire as w;
+    let factors = [
+        (F::Zero, w::WMT_BLEND_FACTOR_ZERO),
+        (F::One, w::WMT_BLEND_FACTOR_ONE),
+        (F::SourceColor, w::WMT_BLEND_FACTOR_SOURCE_COLOR),
+        (
+            F::OneMinusSourceColor,
+            w::WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR,
+        ),
+        (F::SourceAlpha, w::WMT_BLEND_FACTOR_SOURCE_ALPHA),
+        (
+            F::OneMinusSourceAlpha,
+            w::WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA,
+        ),
+        (F::DestinationAlpha, w::WMT_BLEND_FACTOR_DESTINATION_ALPHA),
+        (
+            F::OneMinusDestinationAlpha,
+            w::WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA,
+        ),
+        (F::DestinationColor, w::WMT_BLEND_FACTOR_DESTINATION_COLOR),
+        (
+            F::OneMinusDestinationColor,
+            w::WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR,
+        ),
+        (
+            F::SourceAlphaSaturated,
+            w::WMT_BLEND_FACTOR_SOURCE_ALPHA_SATURATED,
+        ),
+        (F::BlendColor, w::WMT_BLEND_FACTOR_BLEND_COLOR),
+        (
+            F::OneMinusBlendColor,
+            w::WMT_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR,
+        ),
+    ];
+    for (factor, wire) in factors {
+        assert_eq!(super::wire_factor(factor), wire, "{factor:?}");
+    }
+    // The pair a cast would swap.
+    assert_eq!(super::wire_factor(F::DestinationColor), 6);
+    assert_eq!(super::wire_factor(F::DestinationAlpha), 8);
+    let ops = [
+        (O::Add, w::WMT_BLEND_OPERATION_ADD),
+        (O::Subtract, w::WMT_BLEND_OPERATION_SUBTRACT),
+        (O::ReverseSubtract, w::WMT_BLEND_OPERATION_REVERSE_SUBTRACT),
+        (O::Min, w::WMT_BLEND_OPERATION_MIN),
+        (O::Max, w::WMT_BLEND_OPERATION_MAX),
+    ];
+    for (op, wire) in ops {
+        assert_eq!(super::wire_op(op), wire, "{op:?}");
+    }
+}
+
+/// Two keys that differ in their blend alone are two pipelines; the same blend again is none.
+#[test]
+fn a_blend_is_its_own_pipeline() {
+    const DEVICE: u64 = 0x330;
+    let mut core = core_on_fakes(DEVICE);
+    let mut rs = mtld3d_types::render_state_defaults();
+    rs[mtld3d_types::D3DRS_ALPHABLENDENABLE as usize] = 1;
+    let blended = PipelineKey {
+        blend: mtld3d_core::pipeline_state::core_blend(&rs, true),
+        ..key(0xf)
+    };
+    assert!(blended.blend.is_some());
+    let binds = ff_binds();
+    for key in [&key(0xf), &blended, &blended, &key(0xf)] {
+        assert_eq!(core.draw_up(key, &triangle(&binds)), Ok(()));
+    }
+    assert_eq!(core.pipelines_len(), 2);
 }

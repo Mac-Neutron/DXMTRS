@@ -128,6 +128,7 @@ fn ff_base() -> PipelineKey {
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
+        blend: None,
     }
 }
 
@@ -155,6 +156,7 @@ fn prog_base() -> PipelineKey {
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
+        blend: None,
     }
 }
 
@@ -242,7 +244,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 17] = [
+    let changes: [Case; 18] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -295,6 +297,11 @@ fn pipeline_key_tracks_every_input() {
         }),
         ("depth_format", ff_base, |k| {
             k.depth_format = PixelFormat::Depth32Float as u32;
+        }),
+        ("blend", ff_base, |k| {
+            let mut rs = render_state_defaults();
+            rs[mtld3d_types::D3DRS_ALPHABLENDENABLE as usize] = 1;
+            k.blend = crate::pipeline_state::core_blend(&rs, true);
         }),
     ];
     for (field, base, change) in changes {
@@ -489,12 +496,12 @@ fn core_ps_variant_rules() {
 /// Which stages a draw takes, or why the core refuses it.
 #[test]
 fn core_draw_kinds_cover_every_case() {
-    use CoreRefusal::{Blending, BoundDepthSampled, NotCoreShader, VertexDepthTexture};
+    use CoreRefusal::{BoundDepthSampled, NotCoreShader, VertexDepthTexture};
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
     let rhw = both | DrawFlags::LAYOUT_RHW;
-    let cases: [(DrawFacts, Kinds); 11] = [
+    let cases: [(DrawFacts, Kinds); 10] = [
         (facts(both), Ok((Prog, Prog))),
         (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
@@ -509,7 +516,6 @@ fn core_draw_kinds_cover_every_case() {
         (facts(both - DrawFlags::PS_BOUND), Ok((Prog, Ff))),
         (facts(both - DrawFlags::VS_CORE), Err(NotCoreShader)),
         (facts(both - DrawFlags::PS_CORE), Err(NotCoreShader)),
-        (facts(both | DrawFlags::BLENDING), Err(Blending)),
         (
             facts(both | DrawFlags::VERTEX_DEPTH_TEXTURE),
             Err(VertexDepthTexture),
@@ -518,16 +524,11 @@ fn core_draw_kinds_cover_every_case() {
     for (i, (facts, expected)) in cases.into_iter().enumerate() {
         assert_eq!(core_draw_kinds(facts), expected, "case {i}");
     }
-    let refusals = [
-        NotCoreShader,
-        Blending,
-        VertexDepthTexture,
-        BoundDepthSampled,
-    ];
+    let refusals = [NotCoreShader, VertexDepthTexture, BoundDepthSampled];
     for refusal in refusals {
         // Every refusal there is: one added or dropped does not compile until this names it.
         match refusal {
-            NotCoreShader | Blending | VertexDepthTexture | BoundDepthSampled => {}
+            NotCoreShader | VertexDepthTexture | BoundDepthSampled => {}
         }
     }
     let names = refusals.map(CoreRefusal::name);

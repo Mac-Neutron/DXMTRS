@@ -15,17 +15,20 @@ use d3d9_rt::device::{
 use mtld3d_core::{
     convert::{
         FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
-        d3d_to_metal_fill, d3d_to_metal_primitive, ff_vs_layout_from_elements, vertex_count,
+        d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32,
+        ff_vs_layout_from_elements, vertex_count,
     },
     depth_stencil_state::snapshot_from_state as depth_snapshot,
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
+    format::{FormatMapping, map_d3d_format},
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
         VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_scissor,
         core_srgb_variant, core_texture_variant, core_viewport, float_rows, indexed_up_vertices,
         pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
     },
+    pipeline_state::core_blend,
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
         sample_unfiltered, snapshot_from_state, vertex_lod_table,
@@ -40,10 +43,10 @@ use mtld3d_shared::{
 };
 use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
-    D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
-    D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE,
-    D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_ZENABLE,
-    D3DSAMP_SRGBTEXTURE, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
+    D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_BLENDFACTOR,
+    D3DRS_COLORWRITEENABLE, D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE,
+    D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF,
+    D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -190,10 +193,6 @@ fn resolve(
     flags.set(DrawFlags::LAYOUT_RHW, layout.has_rhw());
     flags.set(DrawFlags::PS_BOUND, ps.is_some());
     flags.set(DrawFlags::PS_CORE, ps_core.is_some());
-    flags.set(
-        DrawFlags::BLENDING,
-        rs[D3DRS_ALPHABLENDENABLE as usize] != 0,
-    );
     flags.set(DrawFlags::VERTEX_DEPTH_TEXTURE, vertex_depth);
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
@@ -505,6 +504,10 @@ fn resolve(
         write_mask,
         color_format,
         depth_format,
+        // Only a blended draw asks what its target stores.
+        blend: (rs[D3DRS_ALPHABLENDENABLE as usize] != 0)
+            .then(|| core_blend(&rs, target_has_alpha(dev)))
+            .flatten(),
     };
     Ok((key, binds, target))
 }
@@ -532,6 +535,39 @@ fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), u32, bool
                 (size, format, srgb_write && stored != Some(format))
             },
         )
+}
+
+/// Whether the bound colour target stores alpha, as mtld3d's blend factors see it (C4b-3d3).
+///
+/// A back buffer does, whatever its format (mtld3d binds it so); another target by its format,
+/// one the format table does not know counting as alpha-bearing.
+fn target_has_alpha(dev: &DeviceInner) -> bool {
+    let bound = dev.bound_rt().render_target(0);
+    // SAFETY: null, or the bound surface, which its slot's refcount keeps live for the call.
+    let Some(surface) = (unsafe { bound.as_ref() }) else {
+        return true;
+    };
+    if surface.is_back_buffer() {
+        return true;
+    }
+    let mut desc = D3DSURFACE_DESC {
+        format: 0,
+        resource_type: 0,
+        usage: 0,
+        pool: 0,
+        multi_sample_type: 0,
+        multi_sample_quality: 0,
+        width: 0,
+        height: 0,
+    };
+    // SAFETY: the surface's own `GetDesc` thunk, with the surface as `this` and a writable
+    // description.
+    if unsafe { (surface.vtbl().get_desc)(bound.cast(), &raw mut desc) } != 0 {
+        return true;
+    }
+    map_d3d_format(desc.format)
+        .as_ref()
+        .is_none_or(FormatMapping::has_alpha)
 }
 
 /// Whether a depth-stencil is bound, and the depth format a draw's key names.
@@ -609,6 +645,11 @@ fn draw(
         depth_stencil: depth_snapshot(rs),
         stencil_ref: rs[D3DRS_STENCILREF as usize].to_le_bytes()[0],
         slope_scale: d3d_slope_scale_to_metal(rs[D3DRS_SLOPESCALEDEPTHBIAS as usize], 1.0),
+        blend_color: key
+            .blend
+            .as_ref()
+            .filter(|blend| blend.reads_blend_color())
+            .map(|_| d3dcolor_to_rgba_f32(rs[D3DRS_BLENDFACTOR as usize])),
     };
     let Some(core) = dev.core.as_deref_mut() else {
         return D3D_OK;

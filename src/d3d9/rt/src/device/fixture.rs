@@ -108,6 +108,7 @@ pub fn key(write_mask: u8) -> PipelineKey {
         write_mask,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
+        blend: None,
     }
 }
 
@@ -140,6 +141,7 @@ pub const fn draw<'a>(
         depth_stencil: DepthStencilSnapshot::inert(),
         stencil_ref: 0,
         slope_scale: 0.0,
+        blend_color: None,
     }
 }
 

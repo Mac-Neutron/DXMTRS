@@ -464,6 +464,7 @@ src/d3d9/core/src/pipeline_key.rs PsStageKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_key.rs ShaderCode Clone,Debug
 src/d3d9/core/src/pipeline_key.rs StageKind Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/pipeline_key.rs VsStageKey Clone,Debug,PartialEq,Eq,Hash
+src/d3d9/core/src/pipeline_state.rs CoreBlend Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs ExtraColorAttachments Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs PipelineAttachFlags Clone,Copy,Debug,Default,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs PipelineRsBits Clone,Copy,Debug,Default,PartialEq,Eq,Hash

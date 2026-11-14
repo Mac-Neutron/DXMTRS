@@ -684,3 +684,34 @@ fn a_depth_kind_switch_records_the_scissor_again() {
         assert_eq!(scissor_of(pass).as_deref(), Some("64 32"), "{calls:#?}");
     }
 }
+
+/// The blend colour is recorded after the depth-stencil state, with the draw's stencil reference.
+///
+/// Only for a draw that carries one.
+#[test]
+fn the_blend_colour_is_recorded_with_the_stencil_ref() {
+    let mut rig = Rig::new(0x331);
+    let (depth, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let binds = ff_binds();
+    let blended = DrawData {
+        depth_stencil: tested(),
+        stencil_ref: 5,
+        blend_color: Some([0.25, 0.5, 0.75, 1.0]),
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw_up(&key_with(D32F_S8), &blended), Ok(()));
+    assert_eq!(rig.draw(&key_with(D32F_S8), (tested(), 5, 0.0)), Ok(()));
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    let at = |prefix: &str| all[0].iter().position(|c| c.starts_with(prefix));
+    let (state, color) = (at("  render 16 "), at("  render 17 "));
+    assert!(state.is_some() && state < color, "{calls:#?}");
+    let colors = all[0]
+        .iter()
+        .filter(|c| c.starts_with("  render 17 "))
+        .collect::<Vec<_>>();
+    assert_eq!(colors.len(), 1, "{calls:#?}");
+    assert!(colors[0].ends_with(" stencil_ref=5"), "{calls:#?}");
+}

@@ -26,19 +26,29 @@ use mtld3d_core::{
     clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
     pipeline_key::{PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source},
+    pipeline_state::{BlendFactor, BlendOperation},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newRenderPipelineStateWithVertexDescriptor, Obj,
     sm50::{SM50_SHADER_COMMON, SM50_SHADER_METAL_310, Sm50ShaderCommonData},
     wire::{
-        MemPtr, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
-        WMT_RENDER_COMMAND_SET_DSSO, WMT_RENDER_COMMAND_SET_PSO,
-        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
-        WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTScissorRect, WMTVertexAttributeInfo,
-        WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport, WmtcmdRenderDraw,
-        WmtcmdRenderDrawIndexed, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
-        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects, WmtcmdRenderSetviewports,
+        MemPtr, WMT_BLEND_FACTOR_BLEND_COLOR, WMT_BLEND_FACTOR_DESTINATION_ALPHA,
+        WMT_BLEND_FACTOR_DESTINATION_COLOR, WMT_BLEND_FACTOR_ONE,
+        WMT_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR, WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA,
+        WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR, WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA,
+        WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR, WMT_BLEND_FACTOR_SOURCE_ALPHA,
+        WMT_BLEND_FACTOR_SOURCE_ALPHA_SATURATED, WMT_BLEND_FACTOR_SOURCE_COLOR,
+        WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD, WMT_BLEND_OPERATION_MAX,
+        WMT_BLEND_OPERATION_MIN, WMT_BLEND_OPERATION_REVERSE_SUBTRACT,
+        WMT_BLEND_OPERATION_SUBTRACT, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
+        WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF, WMT_RENDER_COMMAND_SET_DSSO,
+        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
+        WMT_RENDER_COMMAND_SET_SCISSOR_RECTS, WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTScissorRect,
+        WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport,
+        WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderSetblendcolor, WmtcmdRenderSetdsso,
+        WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects,
+        WmtcmdRenderSetviewports,
     },
 };
 
@@ -106,6 +116,10 @@ pub struct DrawData<'a> {
     pub stencil_ref: u8,
     /// Metal's slope-scaled depth bias (the constant bias is the vertex stage's).
     pub slope_scale: f32,
+    /// The blend colour (`D3DRS_BLENDFACTOR` as red, green, blue, alpha).
+    ///
+    /// For a draw whose key's blend reads it; none otherwise.
+    pub blend_color: Option<[f32; 4]>,
 }
 
 /// Why a draw recorded nothing.
@@ -203,6 +217,7 @@ impl CoreDevice {
             self.depth_state_handle(&gated)
         });
         let stencil_ref = draw.stencil_ref;
+        let blend_color = draw.blend_color;
         self.open_pass(with_depth, key.color_format);
         // After the pass is open: `open_pass` ends one of the other depth kind, and a new pass
         // has recorded none. Once a pass and on a change, not once a draw.
@@ -275,6 +290,20 @@ impl CoreDevice {
                     reserved: [0; 3],
                     next: NO_NEXT,
                     dsso,
+                    stencil_ref,
+                });
+            }
+            if let Some([red, green, blue, alpha]) = blend_color {
+                // The record that carries the blend colour also sets the stencil reference: the
+                // draw's own, which the depth-stencil state just set.
+                enc.encode_render_command(WmtcmdRenderSetblendcolor {
+                    r#type: WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    red,
+                    green,
+                    blue,
+                    alpha,
                     stencil_ref,
                 });
             }
@@ -445,6 +474,16 @@ fn build_pipeline(
     info.fragment_function = ps;
     info.colors[0].pixel_format = source.color_format;
     info.colors[0].write_mask = source.write_mask;
+    if let Some(blend) = &source.blend {
+        let color = &mut info.colors[0];
+        color.blending_enabled = 1;
+        color.src_rgb_blend_factor = wire_factor(blend.src);
+        color.dst_rgb_blend_factor = wire_factor(blend.dst);
+        color.rgb_blend_operation = wire_op(blend.op);
+        color.src_alpha_blend_factor = wire_factor(blend.src_alpha);
+        color.dst_alpha_blend_factor = wire_factor(blend.dst_alpha);
+        color.alpha_blend_operation = wire_op(blend.op_alpha);
+    }
     // The planes of the pass the key draws in: both formats are the combined format's.
     let planes = super::depth::planes(source.depth_format);
     if planes & 1 != 0 {
@@ -494,6 +533,38 @@ fn build_pipeline(
     drop(unsafe { Obj::adopt(error) });
     // SAFETY: a new pipeline's handle carries its reference.
     unsafe { Obj::adopt(pso) }
+}
+
+/// The wire's `WMT_BLEND_FACTOR_*` of mtld3d's blend factor.
+///
+/// Name by name: the two enums number destination colour and alpha the other way round.
+const fn wire_factor(factor: BlendFactor) -> u8 {
+    match factor {
+        BlendFactor::Zero => WMT_BLEND_FACTOR_ZERO,
+        BlendFactor::One => WMT_BLEND_FACTOR_ONE,
+        BlendFactor::SourceColor => WMT_BLEND_FACTOR_SOURCE_COLOR,
+        BlendFactor::OneMinusSourceColor => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR,
+        BlendFactor::SourceAlpha => WMT_BLEND_FACTOR_SOURCE_ALPHA,
+        BlendFactor::OneMinusSourceAlpha => WMT_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA,
+        BlendFactor::DestinationAlpha => WMT_BLEND_FACTOR_DESTINATION_ALPHA,
+        BlendFactor::OneMinusDestinationAlpha => WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA,
+        BlendFactor::DestinationColor => WMT_BLEND_FACTOR_DESTINATION_COLOR,
+        BlendFactor::OneMinusDestinationColor => WMT_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR,
+        BlendFactor::SourceAlphaSaturated => WMT_BLEND_FACTOR_SOURCE_ALPHA_SATURATED,
+        BlendFactor::BlendColor => WMT_BLEND_FACTOR_BLEND_COLOR,
+        BlendFactor::OneMinusBlendColor => WMT_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR,
+    }
+}
+
+/// The wire's `WMT_BLEND_OPERATION_*` of mtld3d's blend operation.
+const fn wire_op(op: BlendOperation) -> u8 {
+    match op {
+        BlendOperation::Add => WMT_BLEND_OPERATION_ADD,
+        BlendOperation::Subtract => WMT_BLEND_OPERATION_SUBTRACT,
+        BlendOperation::ReverseSubtract => WMT_BLEND_OPERATION_REVERSE_SUBTRACT,
+        BlendOperation::Min => WMT_BLEND_OPERATION_MIN,
+        BlendOperation::Max => WMT_BLEND_OPERATION_MAX,
+    }
 }
 
 /// The function `name` of the DXSO stage `tokens`, translated with `spec`.
