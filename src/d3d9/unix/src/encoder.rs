@@ -15,6 +15,7 @@ use mtld3d_core::{
     async_compile::{ClearHistory, ClearPlanes, DeferredPipelineId, JobTicket, TicketSource},
     buffer_rename::{BufferMapMode, stage_upload_needs_preserve},
     build_index::BuildIndex,
+    clear_area::clip_rect_to_viewport,
     config::{Mtld3dConfig, ShaderBackend},
     convert::{FAN_PATTERN_MAX_TRIANGLES, fan_pattern_bytes, fill_fan_pattern_u16},
     depth_stencil_state::{DepthStencilSnapshot, description_from_snapshot, key_from_snapshot},
@@ -1602,33 +1603,6 @@ struct HeldBackings {
     pageboxes: Vec<RetainedPages>,
     staging_arcs: Vec<Arc<PageBox>>,
     staging_reads: Vec<PageBoxRead>,
-}
-
-/// Intersect a D3D9 `RECT` `(x1, y1, x2, y2)` with the viewport `(x, y, w, h)`.
-///
-/// The rect is half-open, top-left origin. Returns the overlap as
-/// `(x, y, w, h)`, or `None` if the rect is inverted/degenerate or the
-/// overlap is empty. Used by `clear_color_rects` to turn each `Clear`
-/// pRect into a clip-to-viewport scissor region.
-fn clip_rect_to_viewport(
-    rect: (i32, i32, i32, i32),
-    vp: (u32, u32, u32, u32),
-) -> Option<(u32, u32, u32, u32)> {
-    let (rx1, ry1, rx2, ry2) = rect;
-    if rx2 <= rx1 || ry2 <= ry1 {
-        return None;
-    }
-    let (vx, vy, vw, vh) = vp;
-    let vx2 = vx.saturating_add(vw);
-    let vy2 = vy.saturating_add(vh);
-    let x1 = rx1.max(0).cast_unsigned().max(vx);
-    let y1 = ry1.max(0).cast_unsigned().max(vy);
-    let x2 = rx2.max(0).cast_unsigned().min(vx2);
-    let y2 = ry2.max(0).cast_unsigned().min(vy2);
-    if x2 <= x1 || y2 <= y1 {
-        return None;
-    }
-    Some((x1, y1, x2 - x1, y2 - y1))
 }
 
 impl FrameEncoder {

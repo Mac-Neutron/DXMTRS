@@ -2,17 +2,19 @@
 //!
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
 //! and the call's result for a device of the core runtime. What an arm does not cover yet (a
-//! rect, scissored or partial-viewport Clear, a Present with rects or another window) is refused
-//! with one warning (C4-13). Clear and the read-back go to and come from the bound colour target
-//! (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! Present with rects or another window) is refused with one warning (C4-13). Clear and the
+//! read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP draws are
+//! `core_draw`'s.
 
 use core::ffi::c_void;
 
-use d3d9_rt::device::{DepthState, TargetRef};
+use d3d9_rt::device::TargetRef;
 use mtld3d_core::{
+    clear_area::{ClearArea, clear_area, clear_regions},
     convert::{d3dcolor_to_rgba_f32, linear_to_srgb_rgba},
-    pipeline_key::viewport_covers,
+    pipeline_key::drawn_rect,
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
+    render_state::scissor_region,
 };
 use mtld3d_shared::InPtr;
 use mtld3d_types::{
@@ -35,14 +37,17 @@ fn core_device<'a>(this: *mut c_void) -> Option<&'a mut DeviceInner> {
     dev.is_core().then_some(dev)
 }
 
-/// `Clear` of the whole colour target and of the whole depth-stencil; anything else is refused.
+/// `Clear`: the rects, the scissor and the viewport bound it, as under mtld3d.
 ///
 /// Z and stencil go to the bound depth-stencil (DXMTRS C4b-3d2): `D3DERR_INVALIDCALL` with none
-/// bound, as mtld3d answers; refused for one of another size than the colour target, whose
-/// whole-target Clear is a partial one of it (C4b-3d3). The stencil flag against a format with no
-/// stencil plane clears nothing, as D3D9 has it (the core device masks the planes).
+/// bound, as mtld3d answers. Each of the colour target and the depth-stencil is cleared whole
+/// when a region covers it, and by rects otherwise ([`clear_area`], DXMTRS C4b-3d3): the
+/// depth-stencil is judged against its own size, which need not be the target's. The stencil
+/// flag against a format with no stencil plane clears nothing, as D3D9 has it (the core device
+/// masks the planes).
 pub fn clear(
     this: *mut c_void,
+    count: u32,
     rects: *const c_void,
     flags: u32,
     color: u32,
@@ -54,25 +59,17 @@ pub fn clear(
     if depth_flags != 0 && !dev.depth_stencil_bound() {
         return Some(D3DERR_INVALIDCALL);
     }
-    if !rects.is_null() || dev.render_state(D3DRS_SCISSORTESTENABLE as usize) != 0 {
-        refuse_under_core("IDirect3DDevice9::Clear (rects or scissor)");
-        return Some(D3DERR_NOTAVAILABLE);
-    }
+    let scissor_on = dev.render_state(D3DRS_SCISSORTESTENABLE as usize) != 0;
+    let regions = clear_regions(
+        (!rects.is_null()).then(|| super::clear_target_rects(count, rects)),
+        scissor_on.then(|| scissor_region(dev.scissor_rect())),
+    );
     // A core device always has a target (its back buffer is made with it); were there none, the
     // Clear would have nothing to clear.
     let Some(target) = dev.core.as_deref()?.target_size() else {
         return Some(D3D_OK);
     };
-    if !viewport_covers(&dev.viewport(), target) {
-        refuse_under_core("IDirect3DDevice9::Clear (a viewport not covering the target)");
-        return Some(D3DERR_NOTAVAILABLE);
-    }
-    if depth_flags != 0 && matches!(dev.core.as_deref()?.depth_state(), DepthState::Detached(_)) {
-        refuse_under_core(
-            "IDirect3DDevice9::Clear (a depth-stencil of another size than the target)",
-        );
-        return Some(D3DERR_NOTAVAILABLE);
-    }
+    let viewport = drawn_rect(&dev.viewport(), target);
     if flags & D3DCLEAR_TARGET != 0 {
         // No target has an sRGB view yet (C4b3d1-1): the colour is stored encoded, as a draw's
         // (C4b2-4).
@@ -82,14 +79,23 @@ pub fn clear(
         } else {
             linear_to_srgb_rgba(linear)
         };
-        dev.core.as_deref_mut()?.clear(rgba);
+        let core = dev.core.as_deref_mut()?;
+        match clear_area(regions.as_deref(), viewport, target) {
+            ClearArea::Whole => core.clear(rgba),
+            ClearArea::Regions(list) => core.clear_rects(&list, rgba),
+        }
     }
-    if depth_flags != 0 {
+    let core = dev.core.as_deref_mut()?;
+    if depth_flags != 0
+        && let Some(extent) = core.depth_size()
+    {
         let planes = u32::from(flags & D3DCLEAR_ZBUFFER != 0)
             | u32::from(flags & D3DCLEAR_STENCIL != 0) << 1;
-        dev.core
-            .as_deref_mut()?
-            .clear_depth_stencil(planes, z, stencil.to_le_bytes()[0]);
+        let stencil = stencil.to_le_bytes()[0];
+        match clear_area(regions.as_deref(), viewport, extent) {
+            ClearArea::Whole => core.clear_depth_stencil(planes, z, stencil),
+            ClearArea::Regions(list) => core.clear_depth_stencil_rects(&list, planes, z, stencil),
+        }
     }
     Some(D3D_OK)
 }

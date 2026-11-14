@@ -6,11 +6,15 @@
 //! depth-stencil when its key names one, loading and storing them, and leaves it open for the
 //! next draw of that kind (C4-12).
 
+use std::sync::Arc;
+
 use dxmt_core::{
     deptrack::Access,
     encoder::{Encoder, stage},
 };
-use winemetal_sys::wire::{WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor};
+use winemetal_sys::wire::{
+    WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor, WMTScissorRect,
+};
 
 use super::{CoreDevice, depth};
 
@@ -131,6 +135,45 @@ impl CoreDevice {
         // views of a plain 2D texture), which lets the optimizer fold the clear into that pass.
         self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
     }
+
+    /// Clears `rects` (`x, y, width, height`, each inside it) of the current colour target.
+    ///
+    /// Nothing for no rect. The core's quad clear (`ClearRtv`, D3D11's `ClearView`): a render
+    /// pass of its own on the target alone, a scissored triangle a rect, which takes nothing of
+    /// the draws' state (blending, the write mask, the scissor).
+    pub fn clear_rects(&mut self, rects: &[[u32; 4]], rgba: [f32; 4]) {
+        if rects.is_empty() {
+            return;
+        }
+        let Some(target) = self.resolve(self.target) else {
+            return;
+        };
+        let (texture, key) = (target.texture, target.key);
+        let rects = scissor_rects(rects);
+        self.close_pass();
+        self.emit(move |enc| {
+            enc.with_clear_rtv(|quad, enc| {
+                quad.begin(enc, Arc::clone(&texture), key, 0, 0);
+                for &rect in &rects {
+                    quad.clear_color(enc, rect, 0, rgba);
+                }
+                quad.end(enc);
+            });
+        });
+    }
+}
+
+/// `rects` (`x, y, width, height`) as the quad clear's scissor rects.
+pub(super) fn scissor_rects(rects: &[[u32; 4]]) -> Vec<WMTScissorRect> {
+    rects
+        .iter()
+        .map(|&[x, y, width, height]| WMTScissorRect {
+            x: u64::from(x),
+            y: u64::from(y),
+            width: u64::from(width),
+            height: u64::from(height),
+        })
+        .collect()
 }
 
 #[cfg(test)]

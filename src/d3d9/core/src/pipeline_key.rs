@@ -582,16 +582,6 @@ pub const fn viewport_depth_range(min_z: f32, max_z: f32) -> (f32, f32) {
     (min_z, max_z.max(min_z + 0.001))
 }
 
-/// Whether `v` covers a `target` of `(width, height)`: from its origin over all of it, or unset.
-///
-/// A zero width or height covers the target, as [`core_viewport`] draws it.
-#[must_use]
-pub const fn viewport_covers(v: &D3DVIEWPORT9, target: (u32, u32)) -> bool {
-    v.width == 0
-        || v.height == 0
-        || (v.x == 0 && v.y == 0 && v.width >= target.0 && v.height >= target.1)
-}
-
 /// The Metal viewport of `v` on a `target` of `(width, height)`.
 ///
 /// `(origin x, origin y, width, height, znear, zfar)`: a zero width or height covers the
@@ -611,7 +601,10 @@ pub fn core_viewport(v: &D3DVIEWPORT9, target: (u32, u32)) -> [f64; 6] {
 }
 
 /// The rectangle `v` draws to on a `target` of `(width, height)`: all of it when unset.
-const fn drawn_rect(v: &D3DVIEWPORT9, target: (u32, u32)) -> (u32, u32, u32, u32) {
+///
+/// `(x, y, width, height)`.
+#[must_use]
+pub const fn drawn_rect(v: &D3DVIEWPORT9, target: (u32, u32)) -> (u32, u32, u32, u32) {
     if v.width != 0 && v.height != 0 {
         (v.x, v.y, v.width, v.height)
     } else {

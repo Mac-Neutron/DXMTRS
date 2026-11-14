@@ -101,12 +101,25 @@ impl CoreDevice {
         }
     }
 
+    /// The current depth-stencil's width and height; `None` when none is bound.
+    #[must_use]
+    pub fn depth_size(&self) -> Option<(u32, u32)> {
+        let depth = self.depth?;
+        self.depth_level(depth.id, depth.level)
+            .map(|(width, height, _)| (width, height))
+    }
+
     /// The current depth-stencil as a pass attaches it, when one on the colour target can.
     pub(super) fn resolve_depth(&self) -> Option<Resolved> {
-        let DepthState::Attached(pixel_format) = self.depth_state() else {
-            return None;
-        };
+        matches!(self.depth_state(), DepthState::Attached(_))
+            .then(|| self.resolve_bound_depth())
+            .flatten()
+    }
+
+    /// The current depth-stencil as a pass on it alone attaches it, whatever the colour target.
+    fn resolve_bound_depth(&self) -> Option<Resolved> {
         let depth = self.depth?;
+        let (_, _, pixel_format) = self.depth_level(depth.id, depth.level)?;
         let texture = self.stored_texture(depth.id)?;
         let key = TextureViewDescriptor {
             format: pixel_format,
@@ -124,28 +137,59 @@ impl CoreDevice {
         })
     }
 
+    /// The current depth-stencil's view and the planes of `planes` it has, for a clear.
+    ///
+    /// `None` with nothing to clear: none bound, or no plane left (D3D9's stencil Clear of a
+    /// depth-only format), which the core would read as a colour clear.
+    fn depth_clear(&self, planes: u32) -> Option<(Arc<Texture>, TextureViewKey, u32)> {
+        let resolved = self.resolve_bound_depth()?;
+        let planes = planes & u32::from(self::planes(resolved.pixel_format));
+        (planes != 0).then_some((resolved.texture, resolved.key, planes))
+    }
+
     /// Clears `planes` (`depth 1, stencil 2`) of the whole current depth-stencil.
     ///
-    /// Nothing unless a pass on the colour target can attach it, and nothing for planes its
-    /// format has not (D3D9's stencil Clear of a depth-only format). `depth` is clamped to
-    /// `[0, 1]`, a NaN to 0. A core Clear pass, as [`CoreDevice::clear`]'s.
+    /// Whatever the colour target's size, and nothing for planes its format has not. `depth` is
+    /// clamped to `[0, 1]`, a NaN to 0. A core Clear pass, as [`CoreDevice::clear`]'s: the
+    /// optimizer folds it into the next pass that attaches the view and draws to all of it.
     pub fn clear_depth_stencil(&mut self, planes: u32, depth: f32, stencil: u8) {
-        let Some(resolved) = self.resolve_depth() else {
+        let Some((texture, key, planes)) = self.depth_clear(planes) else {
             return;
         };
-        let planes = planes & u32::from(self::planes(resolved.pixel_format));
-        if planes == 0 {
-            // No plane left: the core would read 0 as a colour clear.
-            return;
-        }
-        let depth = if depth.is_nan() {
-            0.0
-        } else {
-            depth.clamp(0.0, 1.0)
-        };
-        let (texture, key) = (resolved.texture, resolved.key);
+        let depth = clear_depth(depth);
         self.close_pass();
         self.emit(move |enc| enc.clear_depth_stencil(&texture, key, 0, planes, depth, stencil));
+    }
+
+    /// Clears `planes` of `rects` (`x, y, width, height`, each inside it) of the depth-stencil.
+    ///
+    /// The planes and `depth` as [`CoreDevice::clear_depth_stencil`]'s; nothing for no rect. The
+    /// core's quad clear on the depth-stencil alone, as [`CoreDevice::clear_rects`]'s.
+    pub fn clear_depth_stencil_rects(
+        &mut self,
+        rects: &[[u32; 4]],
+        planes: u32,
+        depth: f32,
+        stencil: u8,
+    ) {
+        if rects.is_empty() {
+            return;
+        }
+        let Some((texture, key, planes)) = self.depth_clear(planes) else {
+            return;
+        };
+        let depth = clear_depth(depth);
+        let rects = super::recorder::scissor_rects(rects);
+        self.close_pass();
+        self.emit(move |enc| {
+            enc.with_clear_rtv(|quad, enc| {
+                quad.begin(enc, Arc::clone(&texture), key, 0, planes);
+                for &rect in &rects {
+                    quad.clear_depth_stencil(enc, rect, depth, stencil);
+                }
+                quad.end(enc);
+            });
+        });
     }
 
     /// The handle of the depth-stencil state of `snapshot`, made at its first request.
@@ -197,6 +241,15 @@ impl CoreDevice {
         let handle = state.handle();
         self.depth_states.insert(key.raw(), state);
         handle
+    }
+}
+
+/// A Clear's depth as Metal takes it: within `[0, 1]`, a NaN as 0.
+const fn clear_depth(depth: f32) -> f32 {
+    if depth.is_nan() {
+        0.0
+    } else {
+        depth.clamp(0.0, 1.0)
     }
 }
 

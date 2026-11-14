@@ -20,6 +20,7 @@ pub mod buffer_rename;
 pub mod build_index;
 pub mod caps;
 pub mod capture_chord;
+pub mod clear_area;
 pub mod config;
 pub mod convert;
 pub mod crash_report;

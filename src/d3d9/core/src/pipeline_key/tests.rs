@@ -19,7 +19,7 @@ use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
     SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth,
     core_ps_variant, core_viewport, float_rows, indexed_up_vertices, pipeline_source, pos_fixup,
-    rhw_depth_clamp, up_byte_count, viewport_covers, viewport_depth_range,
+    rhw_depth_clamp, up_byte_count, viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -661,27 +661,6 @@ fn shader_code_interning_is_exact() {
     let fresh = ShaderCode::intern(&mut programs, &VS_POS_TEX1);
     assert_eq!(fresh.tokens(), VS_POS_TEX1);
     assert_eq!(programs.len(), 1);
-}
-
-/// A Clear covers the back buffer under a viewport from its origin over all of it, or unset.
-#[test]
-fn viewport_covers_the_target() {
-    let target = (64, 32);
-    let viewport = |x, y, width, height| D3DVIEWPORT9 {
-        x,
-        y,
-        width,
-        height,
-        min_z: 0.0,
-        max_z: 1.0,
-    };
-    assert!(viewport_covers(&viewport(0, 0, 64, 32), target));
-    assert!(viewport_covers(&viewport(0, 0, 80, 40), target));
-    assert!(viewport_covers(&viewport(5, 5, 0, 32), target));
-    assert!(!viewport_covers(&viewport(0, 0, 32, 32), target));
-    assert!(!viewport_covers(&viewport(0, 1, 64, 32), target));
-    assert!(!viewport_covers(&viewport(1, 0, 64, 32), target));
-    assert!(!viewport_covers(&viewport(0, 0, 64, 31), target));
 }
 
 /// The half-pixel fixup is the drawn viewport's; the clamp and the depth bias are the caller's.

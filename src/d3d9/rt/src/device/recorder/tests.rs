@@ -1,4 +1,4 @@
-use crate::device::fixture::{at, core_on_fakes};
+use crate::device::fixture::{at, core_on_fakes, ff_binds, key, line, passes, triangle};
 
 /// A whole-target Clear reaches Metal as a render pass that clears colour target 0.
 #[test]
@@ -40,4 +40,43 @@ fn clear_behind_an_open_pass_closes_it() {
             .any(|c| c == "  color0 load=2 store=1 clear=1,0,0,1"),
         "{calls:#?}"
     );
+}
+
+/// A Clear of rects is a pass of its own between the draws around it: a scissored triangle a rect.
+#[test]
+fn a_rect_clear_is_a_pass_of_its_own() {
+    const DEVICE: u64 = 0x300;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.clear_rects(&[[1, 2, 3, 4], [8, 8, 16, 16]], [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = passes(&calls);
+    assert_eq!(all.len(), 3, "{calls:#?}");
+    let rects = |pass: &[String]| pass.iter().filter(|c| c.trim() == "render 36").count();
+    assert_eq!(
+        (rects(all[0]), rects(all[1]), rects(all[2])),
+        (0, 2, 0),
+        "{calls:#?}"
+    );
+    // The quads load what the first draw stored: nothing of a whole clear's load action.
+    let color = line(all[1], "  color0 ").unwrap_or_default();
+    assert!(color.starts_with("load=1 store=1"), "{calls:#?}");
+}
+
+/// A Clear of no rect records nothing, and leaves the open pass open.
+#[test]
+fn an_empty_list_records_nothing() {
+    const DEVICE: u64 = 0x301;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    core.clear_rects(&[], [0.0, 1.0, 0.0, 1.0]);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(passes(&calls).is_empty(), "{calls:#?}");
 }

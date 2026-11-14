@@ -11328,22 +11328,6 @@ fn clear_target_rects(count: u32, rects: *const c_void) -> Vec<(i32, i32, i32, i
     slice.iter().map(|r| (r.x1, r.y1, r.x2, r.y2)).collect()
 }
 
-/// Intersect two half-open D3D9 rects `(x1, y1, x2, y2)`.
-///
-/// Returns the overlap,
-/// or `None` if disjoint or either is degenerate. Clips a `Clear` rect to the
-/// scissor rect when `D3DRS_SCISSORTESTENABLE` is on.
-fn intersect_d3d_rects(
-    a: (i32, i32, i32, i32),
-    b: (i32, i32, i32, i32),
-) -> Option<(i32, i32, i32, i32)> {
-    let x1 = a.0.max(b.0);
-    let y1 = a.1.max(b.1);
-    let x2 = a.2.min(b.2);
-    let y2 = a.3.min(b.3);
-    (x2 > x1 && y2 > y1).then_some((x1, y1, x2, y2))
-}
-
 /// The `INVALIDCALL` `Clear` answers for a depth or stencil clear with no depth-stencil surface.
 ///
 /// Out of line so `Clear` does not build the log arguments on its hot path.
@@ -11369,7 +11353,7 @@ extern "system" fn device_clear(
 ) -> i32 {
     let _api = device_api_lock(this);
     #[cfg(feature = "core-runtime")]
-    if let Some(hr) = core_arms::clear(this, rects, flags, color, z, stencil) {
+    if let Some(hr) = core_arms::clear(this, count, rects, flags, color, z, stencil) {
         return hr;
     }
     let _timer = device_timer(this, DeviceSubCategory::Frame);
@@ -11407,31 +11391,10 @@ extern "system" fn device_clear(
     //  - pRects != NULL, Count >  0 → clear each rect (∩ scissor if on).
     // `None` is the whole target; `Some` is an explicit list, already clipped
     // to the scissor and possibly empty.
-    let regions: Option<Vec<(i32, i32, i32, i32)>> = if rects.is_null() {
-        scissor_on.then(|| {
-            let (x1, y1, x2, y2) = scissor;
-            if x2 > x1 && y2 > y1 {
-                vec![scissor]
-            } else {
-                Vec::new()
-            }
-        })
-    } else {
-        let mut list = if count > 0 {
-            clear_target_rects(count, rects)
-        } else {
-            Vec::new()
-        };
-        if scissor_on {
-            list.retain_mut(|r| {
-                intersect_d3d_rects(*r, scissor).is_some_and(|clipped| {
-                    *r = clipped;
-                    true
-                })
-            });
-        }
-        Some(list)
-    };
+    let regions = mtld3d_core::clear_area::clear_regions(
+        (!rects.is_null()).then(|| clear_target_rects(count, rects)),
+        scissor_on.then_some(scissor),
+    );
 
     if flags & D3DCLEAR_TARGET != 0 {
         // D3DCOLOR is ARGB; unpack to normalized float bits so the encoder

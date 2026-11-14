@@ -372,7 +372,8 @@ const fn pack_viewport_key(vp: (u32, u32, u32, u32)) -> u64 {
 }
 
 /// Whether the `(x, y, w, h)` region spans a whole `(w, h)` extent from its origin.
-const fn region_covers_extent(region: (u32, u32, u32, u32), extent: (u32, u32)) -> bool {
+#[must_use]
+pub const fn region_covers_extent(region: (u32, u32, u32, u32), extent: (u32, u32)) -> bool {
     let (x, y, w, h) = region;
     x == 0 && y == 0 && extent_covers((w, h), extent)
 }

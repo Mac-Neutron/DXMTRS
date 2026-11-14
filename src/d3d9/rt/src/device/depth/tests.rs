@@ -298,7 +298,6 @@ fn a_depth_of_another_size_is_detached() {
         assert!(rig.core.set_depth(Some(level0(depth))));
         assert_eq!(rig.core.depth_state(), DepthState::Detached(D32F_S8));
         assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Err(DrawRefused::Depth));
-        rig.core.clear_depth_stencil(3, 0.5, 1);
         let calls = rig.take();
         assert!(passes(&calls).is_empty(), "{calls:#?}");
         assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
@@ -591,4 +590,61 @@ fn a_draw_sampling_the_bound_depth_detaches_it() {
         awaited.iter().any(|fence| written.contains(fence)),
         "the sampling pass waits on the depth's writer: {calls:#?}"
     );
+}
+
+/// A Clear of rects of the depth-stencil is a pass on it alone, whatever the colour target's size.
+#[test]
+fn a_rect_depth_clear_attaches_the_depth_alone() {
+    let mut rig = Rig::new(0x302);
+    let (depth, texture) = rig.depth(1, D32F_S8, (128, 128), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    rig.core
+        .clear_depth_stencil_rects(&[[0, 0, 100, 100], [100, 100, 28, 28]], 3, 0.5, 7);
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    for plane in ["depth", "stencil"] {
+        let handle = plane_handle(all[0], plane).unwrap_or_else(|| panic!("{calls:#?}"));
+        assert_eq!(rig.texture_of(&handle), texture, "{calls:#?}");
+    }
+    assert_eq!(line(all[0], "  color0 "), None, "{calls:#?}");
+    let rects = all[0].iter().filter(|c| c.trim() == "render 36").count();
+    assert_eq!(rects, 2, "{calls:#?}");
+}
+
+/// A stencil Clear of rects of a format with no stencil plane records nothing.
+///
+/// Nor does one of no rect, or with no depth-stencil bound.
+#[test]
+fn a_stencil_rect_clear_of_a_depth_only_format_records_nothing() {
+    let mut rig = Rig::new(0x303);
+    let (depth, _) = rig.depth(1, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    rig.core
+        .clear_depth_stencil_rects(&[[0, 0, 8, 8]], 2, 0.5, 9);
+    rig.core.clear_depth_stencil_rects(&[], 1, 0.5, 9);
+    assert!(rig.core.set_depth(None));
+    rig.core
+        .clear_depth_stencil_rects(&[[0, 0, 8, 8]], 3, 0.5, 9);
+    let calls = rig.take();
+    assert!(passes(&calls).is_empty(), "{calls:#?}");
+}
+
+/// A whole Clear of a depth-stencil of another size than the colour target is recorded.
+///
+/// A pass that clears the plane.
+#[test]
+fn a_whole_depth_clear_of_another_size_is_recorded() {
+    let mut rig = Rig::new(0x304);
+    let (depth, texture) = rig.depth(1, D32F, (128, 128), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    assert_eq!(rig.core.depth_size(), Some((128, 128)));
+    rig.core.clear_depth_stencil(1, 0.5, 0);
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    let handle = plane_handle(all[0], "depth").unwrap_or_else(|| panic!("{calls:#?}"));
+    assert_eq!(rig.texture_of(&handle), texture, "{calls:#?}");
+    let line = line(all[0], "  depth ").unwrap_or_default();
+    assert!(line.ends_with(" load=2 store=1 clear=0.5"), "{calls:#?}");
 }
