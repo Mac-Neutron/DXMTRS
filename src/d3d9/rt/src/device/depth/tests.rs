@@ -6,7 +6,7 @@ use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
 };
 
-use super::{DepthRef, DepthState};
+use super::DepthRef;
 use crate::device::{
     CoreDevice, DrawData, DrawRefused, Stage, TargetRef, TextureKind,
     fixture::{
@@ -122,6 +122,19 @@ fn plane_handle(pass: &[String], plane: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The width and height of the last scissor `pass` records, as `"<width> <height>"`.
+fn scissor_of(pass: &[String]) -> Option<String> {
+    let record = pass
+        .iter()
+        .rev()
+        .find_map(|c| c.strip_prefix("  render 14 "))?;
+    let field = |name: &str| {
+        let (_, rest) = record.split_once(&format!("scissor_rects[0].{name}="))?;
+        rest.split(' ').next().map(str::to_owned)
+    };
+    Some(format!("{} {}", field("width")?, field("height")?))
+}
+
 /// A snapshot testing and writing depth with `D3DCMP_LESSEQUAL`.
 const fn tested() -> DepthStencilSnapshot {
     let mut s = DepthStencilSnapshot::inert();
@@ -135,7 +148,7 @@ const fn tested() -> DepthStencilSnapshot {
 #[test]
 fn a_draw_with_no_depth_encodes_no_state() {
     let mut rig = Rig::new(0x2e0);
-    assert_eq!(rig.core.depth_state(), DepthState::None);
+    assert_eq!(rig.core.depth_format(), None);
     assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
     let calls = rig.take();
     let all = passes(&calls);
@@ -157,7 +170,7 @@ fn a_depth_is_attached_with_the_colour_target() {
     let (id, texture) = rig.depth(1, D32F_S8, (64, 32), 1);
     assert!(rig.core.set_depth(Some(level0(id))));
     assert_eq!(rig.core.depth(), Some(level0(id)));
-    assert_eq!(rig.core.depth_state(), DepthState::Attached(D32F_S8));
+    assert_eq!(rig.core.depth_format(), Some(D32F_S8));
     assert_eq!(rig.draw(&key_with(D32F_S8), (tested(), 5, 0.0)), Ok(()));
     let calls = rig.take();
     let all = passes(&calls);
@@ -236,7 +249,7 @@ fn set_depth_takes_depth_textures_only() {
         level: 1
     })));
     assert!(rig.core.set_depth(None));
-    assert_eq!(rig.core.depth_state(), DepthState::None);
+    assert_eq!(rig.core.depth_format(), None);
 }
 
 /// A change of depth-stencil ends the open pass: each draw's pass has its own.
@@ -275,7 +288,7 @@ fn a_target_change_keeps_the_depth() {
     assert_eq!(rig.draw(&key_with(D32F), INERT), Ok(()));
     assert!(rig.core.set_target(target(second)));
     assert_eq!(rig.core.depth(), Some(level0(depth)));
-    assert_eq!(rig.core.depth_state(), DepthState::Attached(D32F));
+    assert_eq!(rig.core.depth_format(), Some(D32F));
     assert_eq!(rig.draw(&key_with(D32F), INERT), Ok(()));
     let calls = rig.take();
     let bound = passes(&calls)
@@ -286,26 +299,29 @@ fn a_target_change_keeps_the_depth() {
     assert_eq!(bound, [texture.clone(), texture], "{calls:#?}");
 }
 
-/// A depth-stencil of another size than the colour target is bound but not attachable.
+/// A depth-stencil of another size than the colour target is attached (DXMTRS C4b-3d3).
 ///
-/// A key naming its format records nothing, a key without one draws in a pass without it, and a
-/// Clear of it records nothing.
+/// The pass is cut to the smaller of the two: the draw's scissor says so.
 #[test]
-fn a_depth_of_another_size_is_detached() {
+fn a_depth_of_another_size_attaches() {
     let mut rig = Rig::new(0x2e6);
-    for (id, size) in [(1, (128, 128)), (2, (16, 16))] {
-        let (depth, _) = rig.depth(id, D32F_S8, size, 1);
+    for (id, size, cut) in [(1, (128, 128), "64 32"), (2, (16, 16), "16 16")] {
+        let (depth, texture) = rig.depth(id, D32F_S8, size, 1);
         assert!(rig.core.set_depth(Some(level0(depth))));
-        assert_eq!(rig.core.depth_state(), DepthState::Detached(D32F_S8));
-        assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Err(DrawRefused::Depth));
-        let calls = rig.take();
-        assert!(passes(&calls).is_empty(), "{calls:#?}");
-        assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
+        assert_eq!(rig.core.depth_format(), Some(D32F_S8));
+        assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Ok(()));
         let calls = rig.take();
         let all = passes(&calls);
         assert_eq!(all.len(), 1, "{calls:#?}");
+        let handle = plane_handle(all[0], "depth").unwrap_or_else(|| panic!("{calls:#?}"));
+        assert_eq!(rig.texture_of(&handle), texture, "{calls:#?}");
+        assert_eq!(scissor_of(all[0]).as_deref(), Some(cut), "{calls:#?}");
+        // A key that names no depth draws without it, over the whole colour target.
+        assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
+        let calls = rig.take();
+        let all = passes(&calls);
         assert_eq!(line(all[0], "  depth "), None, "{calls:#?}");
-        assert_eq!(line(all[0], "  render 16 "), None, "{calls:#?}");
+        assert_eq!(scissor_of(all[0]).as_deref(), Some("64 32"), "{calls:#?}");
     }
 }
 
@@ -411,7 +427,7 @@ fn forgetting_the_bound_depth_unbinds_it() {
     assert_eq!(rig.draw(&key_with(D32F), INERT), Ok(()));
     rig.core.forget_texture(depth);
     assert_eq!(rig.core.depth(), None);
-    assert_eq!(rig.core.depth_state(), DepthState::None);
+    assert_eq!(rig.core.depth_format(), None);
     assert_eq!(rig.draw(&key_with(D32F), INERT), Err(DrawRefused::Depth));
     assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
     let calls = rig.take();
@@ -449,12 +465,12 @@ fn a_level_of_a_depth_texture_attaches_that_level() {
     let mut rig = Rig::new(0x2ee);
     let (depth, texture) = rig.depth(1, D32F, (128, 64), 2);
     assert!(rig.core.set_depth(Some(level0(depth))));
-    assert_eq!(rig.core.depth_state(), DepthState::Detached(D32F));
+    assert_eq!(rig.core.depth_size(), Some((128, 64)));
     assert!(rig.core.set_depth(Some(DepthRef {
         id: depth,
         level: 1
     })));
-    assert_eq!(rig.core.depth_state(), DepthState::Attached(D32F));
+    assert_eq!(rig.core.depth_size(), Some((64, 32)));
     assert_eq!(rig.draw(&key_with(D32F), INERT), Ok(()));
     let calls = rig.take();
     let all = passes(&calls);
@@ -647,4 +663,24 @@ fn a_whole_depth_clear_of_another_size_is_recorded() {
     assert_eq!(rig.texture_of(&handle), texture, "{calls:#?}");
     let line = line(all[0], "  depth ").unwrap_or_default();
     assert!(line.ends_with(" load=2 store=1 clear=0.5"), "{calls:#?}");
+}
+
+/// A pass that `open_pass` begins itself (a draw of the other depth kind) records its scissor.
+///
+/// One rect, a depth draw, a draw without the depth-stencil and a depth draw again: three passes,
+/// the rect in each.
+#[test]
+fn a_depth_kind_switch_records_the_scissor_again() {
+    let mut rig = Rig::new(0x305);
+    let (depth, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    for format in [D32F_S8, 0, D32F_S8] {
+        assert_eq!(rig.draw(&key_with(format), INERT), Ok(()));
+    }
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 3, "{calls:#?}");
+    for pass in all {
+        assert_eq!(scissor_of(pass).as_deref(), Some("64 32"), "{calls:#?}");
+    }
 }

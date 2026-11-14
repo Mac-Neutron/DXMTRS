@@ -4,7 +4,7 @@
 //! its own (a Clear, a Present, a read-back blit) closes the open render pass first
 //! ([`CoreDevice::close_pass`]). A draw opens one on the current colour target, with the
 //! depth-stencil when its key names one, loading and storing them, and leaves it open for the
-//! next draw of that kind (C4-12).
+//! next draw of that kind (C4-12). The pass draws to the smaller of the two (DXMTRS C4b-3d3).
 
 use std::sync::Arc;
 
@@ -58,13 +58,15 @@ impl CoreDevice {
     /// Opens the render pass of a draw: on the colour target, with the depth-stencil or without.
     ///
     /// Nothing when a pass of that kind is open; one of the other kind ends first. `with_depth`
-    /// asks for a depth-stencil a pass can attach (the caller checked [`CoreDevice::depth_state`]
-    /// before opening); its planes load and store, and `end_pass` records their write.
+    /// asks for the bound depth-stencil (the caller checked [`CoreDevice::depth_format`] before
+    /// opening); its planes load and store, and `end_pass` records their write. A new pass has
+    /// recorded no scissor: this is the one place that forgets the last one.
     pub(super) fn open_pass(&mut self, with_depth: bool) {
         if self.render_open && self.open_depth.is_some() == with_depth {
             return;
         }
         self.close_pass();
+        self.pass_scissor = None;
         let Some(target) = self.resolve(self.target) else {
             return;
         };
@@ -75,7 +77,12 @@ impl CoreDevice {
         };
         let attached = depth.is_some();
         let shape = target.shape;
-        let (width, height, pixel_format) = (shape.width, shape.height, shape.pixel_format);
+        let pixel_format = shape.pixel_format;
+        // Metal draws to the smallest attachment; the area is said, so a Clear folds into this
+        // pass only when the pass reaches all of the cleared view.
+        let (width, height) = self
+            .pass_extent(attached)
+            .unwrap_or((shape.width, shape.height));
         let (texture, key) = (target.texture, target.key);
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));

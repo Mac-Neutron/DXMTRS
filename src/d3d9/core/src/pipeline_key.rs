@@ -16,7 +16,7 @@ use std::{
 
 use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSamplerKinds, VsSpec};
 use mtld3d_shared::shader_create::ShaderStage;
-use mtld3d_types::{D3DVERTEXELEMENT9, D3DVIEWPORT9};
+use mtld3d_types::{D3DRECT, D3DVERTEXELEMENT9, D3DVIEWPORT9};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -421,8 +421,6 @@ bitflags::bitflags! {
         const PS_CORE = 1 << 5;
         /// Blending is enabled.
         const BLENDING = 1 << 8;
-        /// The scissor test is enabled.
-        const SCISSOR = 1 << 9;
         /// A sampled vertex slot holds a depth-format texture.
         const VERTEX_DEPTH_TEXTURE = 1 << 10;
     }
@@ -448,12 +446,8 @@ pub enum CoreRefusal {
     NotCoreShader,
     /// Blending is enabled.
     Blending,
-    /// The scissor test is enabled.
-    Scissor,
     /// A sampled vertex slot holds a depth-format texture (C4c).
     VertexDepthTexture,
-    /// The draw tests or writes a depth-stencil of another size than the colour target (C4b-3d3).
-    DepthSize,
     /// The draw tests or writes the depth-stencil it samples (C4c).
     BoundDepthSampled,
 }
@@ -467,12 +461,8 @@ impl CoreRefusal {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a shader no core device created)"
             }
             Self::Blending => "IDirect3DDevice9::Draw*PrimitiveUP (blending)",
-            Self::Scissor => "IDirect3DDevice9::Draw*PrimitiveUP (scissor test)",
             Self::VertexDepthTexture => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture at a vertex sampler)"
-            }
-            Self::DepthSize => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (a depth-stencil of another size than the target)"
             }
             Self::BoundDepthSampled => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (the depth-stencil sampled while bound)"
@@ -494,9 +484,6 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     let flags = f.flags;
     if flags.contains(DrawFlags::BLENDING) {
         return Err(CoreRefusal::Blending);
-    }
-    if flags.contains(DrawFlags::SCISSOR) {
-        return Err(CoreRefusal::Scissor);
     }
     if flags.contains(DrawFlags::VERTEX_DEPTH_TEXTURE) {
         return Err(CoreRefusal::VertexDepthTexture);
@@ -520,34 +507,30 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
 
 /// The depth format a core draw's key names, or why the core refuses the draw (C4b-3d2).
 ///
-/// `bound` is the bound depth-stencil's `WMTPixelFormat` (none: the key names none), `attachable`
-/// whether a pass on the colour target can attach it (it has the target's size), `samples_bound`
-/// whether the draw samples it, and `uses_plane` whether the draw's state tests or writes one of
-/// its planes. An attachable depth-stencil the draw does not sample is the key's. Otherwise the
-/// draw goes without it, which only a draw that uses no plane may.
+/// `bound` is the bound depth-stencil's `WMTPixelFormat` (none: the key names none),
+/// `samples_bound` whether the draw samples it, and `uses_plane` whether the draw's state tests
+/// or writes one of its planes. A depth-stencil the draw does not sample is the key's, whatever
+/// its size (C4b-3d3). A draw that samples it goes without it, which only a draw that uses no
+/// plane may.
 ///
 /// # Errors
 ///
-/// A draw that uses a plane of a depth-stencil it cannot have: of another size, or sampled.
+/// A draw that uses a plane of the depth-stencil it samples.
 pub const fn core_key_depth(
     bound: Option<u32>,
-    attachable: bool,
     samples_bound: bool,
     uses_plane: bool,
 ) -> Result<u32, CoreRefusal> {
     let Some(format) = bound else {
         return Ok(0);
     };
-    if attachable && !samples_bound {
+    if !samples_bound {
         return Ok(format);
     }
-    if !uses_plane {
-        return Ok(0);
-    }
-    if attachable {
+    if uses_plane {
         Err(CoreRefusal::BoundDepthSampled)
     } else {
-        Err(CoreRefusal::DepthSize)
+        Ok(0)
     }
 }
 
@@ -609,6 +592,20 @@ pub const fn drawn_rect(v: &D3DVIEWPORT9, target: (u32, u32)) -> (u32, u32, u32,
         (v.x, v.y, v.width, v.height)
     } else {
         (0, 0, target.0, target.1)
+    }
+}
+
+/// The scissor a core draw is cut to, before the pass's extent clamps it (C4b-3d3).
+///
+/// `[x, y, width, height]`, as mtld3d resolves it: the scissor `rect` while `test`
+/// (`D3DRS_SCISSORTESTENABLE`) is on, an inverted or empty one staying empty; the drawn viewport
+/// with it off.
+#[must_use]
+pub fn core_scissor(test: bool, rect: D3DRECT, v: &D3DVIEWPORT9, target: (u32, u32)) -> [u32; 4] {
+    if test {
+        crate::render_state::scissor_snapshot_rect(rect).map(u32::from)
+    } else {
+        drawn_rect(v, target).into()
     }
 }
 

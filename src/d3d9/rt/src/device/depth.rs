@@ -1,12 +1,12 @@
 //! The depth-stencil a core device draws against (DXMTRS C4b-3d2).
 //!
 //! One level of a stored depth texture, kept by reference ([`DepthRef`]) beside the colour
-//! target. [`CoreDevice::depth_state`] is the one fact the front end reads: none bound, one a
-//! pass on the current colour target can attach, or one it cannot (another size). A draw's
-//! pipeline key then names the format it draws with, or 0, and the key alone decides the pass,
-//! the pipeline and the depth-stencil state: a draw whose key names no format draws in a pass
-//! without the depth-stencil even while one is bound. A change of depth-stencil ends the open
-//! render pass, as a change of colour target does.
+//! target. [`CoreDevice::depth_format`] is the one fact the front end reads: the bound one's
+//! format, whatever its size (a pass draws to the smaller of the colour target and it, DXMTRS
+//! C4b-3d3). A draw's pipeline key then names the format it draws with, or 0, and the key alone
+//! decides the pass, the pipeline and the depth-stencil state: a draw whose key names no format
+//! draws in a pass without the depth-stencil even while one is bound. A change of depth-stencil
+//! ends the open render pass, as a change of colour target does.
 
 use std::sync::Arc;
 
@@ -29,19 +29,6 @@ use super::{CoreDevice, LOG_TARGET};
 pub struct DepthRef {
     pub id: TextureId,
     pub level: u32,
-}
-
-/// What the bound depth-stencil is to a draw on the current colour target.
-///
-/// The formats are the depth-stencil's `WMTPixelFormat`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DepthState {
-    /// None is bound.
-    None,
-    /// One of the colour target's size: a pass attaches it.
-    Attached(u32),
-    /// One no pass on the current colour target attaches: of another size, or with no target.
-    Detached(u32),
 }
 
 /// The depth-stencil as a pass attaches it and a Clear clears it.
@@ -83,22 +70,14 @@ impl CoreDevice {
         self.depth
     }
 
-    /// What the bound depth-stencil is to a draw on the current colour target.
+    /// The bound depth-stencil's `WMTPixelFormat`; `None` when none is bound.
     ///
     /// Every draw asks this once (its key's depth format), so it takes no reference.
     #[must_use]
-    pub fn depth_state(&self) -> DepthState {
-        let Some((width, height, format)) = self
-            .depth
-            .and_then(|depth| self.depth_level(depth.id, depth.level))
-        else {
-            return DepthState::None;
-        };
-        if self.target_size() == Some((width, height)) {
-            DepthState::Attached(format)
-        } else {
-            DepthState::Detached(format)
-        }
+    pub fn depth_format(&self) -> Option<u32> {
+        let depth = self.depth?;
+        self.depth_level(depth.id, depth.level)
+            .map(|(_, _, format)| format)
     }
 
     /// The current depth-stencil's width and height; `None` when none is bound.
@@ -109,15 +88,20 @@ impl CoreDevice {
             .map(|(width, height, _)| (width, height))
     }
 
-    /// The current depth-stencil as a pass attaches it, when one on the colour target can.
-    pub(super) fn resolve_depth(&self) -> Option<Resolved> {
-        matches!(self.depth_state(), DepthState::Attached(_))
-            .then(|| self.resolve_bound_depth())
-            .flatten()
+    /// The area a pass on the current colour target draws to; `None` when it does not resolve.
+    ///
+    /// The target's, cut to the bound depth-stencil's when the pass attaches it (`with_depth`):
+    /// Metal draws to the smallest attachment.
+    pub(super) fn pass_extent(&self, with_depth: bool) -> Option<(u32, u32)> {
+        let (width, height) = self.target_size()?;
+        Some(match self.depth_size().filter(|_| with_depth) {
+            Some((depth_width, depth_height)) => (width.min(depth_width), height.min(depth_height)),
+            None => (width, height),
+        })
     }
 
-    /// The current depth-stencil as a pass on it alone attaches it, whatever the colour target.
-    fn resolve_bound_depth(&self) -> Option<Resolved> {
+    /// The current depth-stencil as a pass attaches it, whatever its size.
+    pub(super) fn resolve_depth(&self) -> Option<Resolved> {
         let depth = self.depth?;
         let (_, _, pixel_format) = self.depth_level(depth.id, depth.level)?;
         let texture = self.stored_texture(depth.id)?;
@@ -142,7 +126,7 @@ impl CoreDevice {
     /// `None` with nothing to clear: none bound, or no plane left (D3D9's stencil Clear of a
     /// depth-only format), which the core would read as a colour clear.
     fn depth_clear(&self, planes: u32) -> Option<(Arc<Texture>, TextureViewKey, u32)> {
-        let resolved = self.resolve_bound_depth()?;
+        let resolved = self.resolve_depth()?;
         let planes = planes & u32::from(self::planes(resolved.pixel_format));
         (planes != 0).then_some((resolved.texture, resolved.key, planes))
     }

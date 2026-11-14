@@ -12,7 +12,10 @@ use mtld3d_types::{
 };
 
 use super::{Bind, DrawData, DrawRefused, Indices, Stage};
-use crate::device::fixture::{at, core_on_fakes, decl, draw, ff_binds, key, triangle};
+use crate::device::{
+    CoreDevice,
+    fixture::{at, core_on_fakes, decl, draw, ff_binds, key, passes, triangle},
+};
 
 /// `vs_2_0 { dcl_position v0; mov oPos, v0 }`.
 const VS_POS: [u32; 8] = [
@@ -802,4 +805,105 @@ fn a_rewritten_target_is_not_merged_past_its_reader() {
         [texture.clone(), back_buffer.clone(), texture, back_buffer],
         "{calls:#?}"
     );
+}
+
+/// The fields of each scissor `calls` records, in order: `"<x> <y> <width> <height>"`.
+fn scissors(calls: &[String]) -> Vec<String> {
+    calls
+        .iter()
+        .filter_map(|c| c.strip_prefix("  render 14 "))
+        .map(|record| {
+            ["x", "y", "width", "height"]
+                .map(|name| {
+                    record
+                        .split_once(&format!("scissor_rects[0].{name}="))
+                        .and_then(|(_, rest)| rest.split(' ').next())
+                        .unwrap_or("?")
+                        .to_owned()
+                })
+                .join(" ")
+        })
+        .collect()
+}
+
+/// A draw with `scissor` and the fixture's triangle.
+fn scissored(core: &mut CoreDevice, scissor: [u32; 4]) -> Result<(), DrawRefused> {
+    let binds = ff_binds();
+    let draw = DrawData {
+        scissor,
+        ..triangle(&binds)
+    };
+    core.draw_up(&key(0xf), &draw)
+}
+
+/// A pass records its scissor at its first draw and not again for the same rect.
+///
+/// A new pass records it again: Metal keeps none across encoders, and a merged pass must not
+/// inherit one.
+#[test]
+fn the_scissor_is_recorded_at_each_pass_start() {
+    const DEVICE: u64 = 0x310;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(scissored(&mut core, [8, 4, 16, 8]), Ok(()));
+    assert_eq!(scissored(&mut core, [8, 4, 16, 8]), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(scissors(&calls), ["8 4 16 8"], "{calls:#?}");
+    assert_eq!(scissored(&mut core, [8, 4, 16, 8]), Ok(()));
+    core.close_pass();
+    assert_eq!(scissored(&mut core, [8, 4, 16, 8]), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(scissors(&calls), ["8 4 16 8", "8 4 16 8"], "{calls:#?}");
+}
+
+/// A changed rect is recorded, and the rect before it again when it comes back.
+#[test]
+fn a_scissor_change_is_recorded() {
+    const DEVICE: u64 = 0x311;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for rect in [[8, 4, 16, 8], [0, 0, 64, 32], [0, 0, 64, 32], [8, 4, 16, 8]] {
+        assert_eq!(scissored(&mut core, rect), Ok(()));
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        scissors(&calls),
+        ["8 4 16 8", "0 0 64 32", "8 4 16 8"],
+        "{calls:#?}"
+    );
+}
+
+/// A rect past the pass is cut to it: the 64x32 back buffer's.
+#[test]
+fn the_scissor_is_clamped_to_the_pass() {
+    const DEVICE: u64 = 0x312;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(scissored(&mut core, [0, 0, 300, 300]), Ok(()));
+    assert_eq!(scissored(&mut core, [60, 30, 300, 300]), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(scissors(&calls), ["0 0 64 32", "60 30 4 2"], "{calls:#?}");
+}
+
+/// A draw whose rect holds no pixel of the pass records nothing: no pass, no pipeline.
+#[test]
+fn an_empty_scissor_draws_nothing() {
+    const DEVICE: u64 = 0x313;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for rect in [[0, 0, 0, 8], [8, 8, 16, 0], [64, 0, 8, 8], [300, 300, 8, 8]] {
+        assert_eq!(scissored(&mut core, rect), Ok(()));
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(passes(&calls).is_empty(), "{calls:#?}");
+    assert_eq!(core.pipelines_len(), 0);
 }

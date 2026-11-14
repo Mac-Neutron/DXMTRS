@@ -18,8 +18,8 @@ use xxhash_rust::xxh3::Xxh3;
 use super::{
     CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
     SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth,
-    core_ps_variant, core_viewport, float_rows, indexed_up_vertices, pipeline_source, pos_fixup,
-    rhw_depth_clamp, up_byte_count, viewport_depth_range,
+    core_ps_variant, core_scissor, core_viewport, float_rows, indexed_up_vertices, pipeline_source,
+    pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -488,14 +488,12 @@ fn core_ps_variant_rules() {
 /// Which stages a draw takes, or why the core refuses it.
 #[test]
 fn core_draw_kinds_cover_every_case() {
-    use CoreRefusal::{
-        Blending, BoundDepthSampled, DepthSize, NotCoreShader, Scissor, VertexDepthTexture,
-    };
+    use CoreRefusal::{Blending, BoundDepthSampled, NotCoreShader, VertexDepthTexture};
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
     let rhw = both | DrawFlags::LAYOUT_RHW;
-    let cases: [(DrawFacts, Kinds); 12] = [
+    let cases: [(DrawFacts, Kinds); 11] = [
         (facts(both), Ok((Prog, Prog))),
         (facts(rhw), Ok((Ff, Prog))),
         // A pre-transformed layout bypasses the bound VS: none of its flags counts.
@@ -511,7 +509,6 @@ fn core_draw_kinds_cover_every_case() {
         (facts(both - DrawFlags::VS_CORE), Err(NotCoreShader)),
         (facts(both - DrawFlags::PS_CORE), Err(NotCoreShader)),
         (facts(both | DrawFlags::BLENDING), Err(Blending)),
-        (facts(rhw | DrawFlags::SCISSOR), Err(Scissor)),
         (
             facts(both | DrawFlags::VERTEX_DEPTH_TEXTURE),
             Err(VertexDepthTexture),
@@ -523,16 +520,13 @@ fn core_draw_kinds_cover_every_case() {
     let refusals = [
         NotCoreShader,
         Blending,
-        Scissor,
         VertexDepthTexture,
-        DepthSize,
         BoundDepthSampled,
     ];
     for refusal in refusals {
         // Every refusal there is: one added or dropped does not compile until this names it.
         match refusal {
-            NotCoreShader | Blending | Scissor | VertexDepthTexture | DepthSize
-            | BoundDepthSampled => {}
+            NotCoreShader | Blending | VertexDepthTexture | BoundDepthSampled => {}
         }
     }
     let names = refusals.map(CoreRefusal::name);
@@ -546,31 +540,21 @@ fn core_draw_kinds_cover_every_case() {
 #[test]
 fn core_key_depth_covers_every_case() {
     const F: u32 = 260;
-    // (bound, attachable, sampled by the draw, uses a plane) -> the key's format.
+    // (bound, sampled by the draw, uses a plane) -> the key's format.
     let cases = [
-        (None, false, false, true, Ok(0)),
-        (None, false, false, false, Ok(0)),
-        (Some(F), true, false, true, Ok(F)),
-        (Some(F), true, false, false, Ok(F)),
-        (Some(F), false, false, false, Ok(0)),
-        (Some(F), false, false, true, Err(CoreRefusal::DepthSize)),
-        (Some(F), true, true, false, Ok(0)),
-        (
-            Some(F),
-            true,
-            true,
-            true,
-            Err(CoreRefusal::BoundDepthSampled),
-        ),
-        // Detached and sampled: the size is named first.
-        (Some(F), false, true, true, Err(CoreRefusal::DepthSize)),
-        (Some(F), false, true, false, Ok(0)),
+        (None, false, true, Ok(0)),
+        (None, false, false, Ok(0)),
+        (None, true, true, Ok(0)),
+        (Some(F), false, true, Ok(F)),
+        (Some(F), false, false, Ok(F)),
+        (Some(F), true, false, Ok(0)),
+        (Some(F), true, true, Err(CoreRefusal::BoundDepthSampled)),
     ];
-    for (bound, attachable, sampled, uses_plane, expected) in cases {
+    for (bound, sampled, uses_plane, expected) in cases {
         assert_eq!(
-            core_key_depth(bound, attachable, sampled, uses_plane),
+            core_key_depth(bound, sampled, uses_plane),
             expected,
-            "{bound:?} {attachable} {sampled} {uses_plane}"
+            "{bound:?} {sampled} {uses_plane}"
         );
     }
 }
@@ -742,4 +726,43 @@ fn core_texture_variant_carries_the_depth_and_fetch4_masks() {
     // A draw without them clears what the base carried.
     let v = super::core_texture_variant(v, &SampledMasks::default(), false);
     assert_eq!(v, VariantKey::default());
+}
+
+#[test]
+fn core_scissor_follows_mtld3d() {
+    use mtld3d_types::D3DRECT;
+    let rect = |x1, y1, x2, y2| D3DRECT { x1, y1, x2, y2 };
+    let viewport = |x, y, width, height| D3DVIEWPORT9 {
+        x,
+        y,
+        width,
+        height,
+        min_z: 0.0,
+        max_z: 1.0,
+    };
+    let target = (64, 32);
+    let full = viewport(0, 0, 64, 32);
+    // The test on: the rect, whatever the viewport.
+    assert_eq!(
+        core_scissor(true, rect(8, 4, 40, 20), &full, target),
+        [8, 4, 32, 16]
+    );
+    // A negative origin starts at 0; an inverted rect is empty at its origin.
+    assert_eq!(
+        core_scissor(true, rect(-8, -4, 40, 20), &full, target),
+        [0, 0, 40, 20]
+    );
+    assert_eq!(
+        core_scissor(true, rect(40, 20, 8, 4), &full, target),
+        [40, 20, 0, 0]
+    );
+    // The test off: the drawn viewport, and the target for an unset one.
+    assert_eq!(
+        core_scissor(false, rect(8, 4, 40, 20), &viewport(4, 2, 16, 8), target),
+        [4, 2, 16, 8]
+    );
+    assert_eq!(
+        core_scissor(false, rect(8, 4, 40, 20), &viewport(4, 2, 0, 8), target),
+        [0, 0, 64, 32]
+    );
 }

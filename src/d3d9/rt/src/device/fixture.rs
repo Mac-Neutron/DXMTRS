@@ -130,6 +130,8 @@ pub const fn draw<'a>(
         vertex_count,
         indices,
         viewport: VIEWPORT,
+        // Larger than any pass: the clamp makes it the pass's extent.
+        scissor: [0, 0, u32::MAX, u32::MAX],
         fill_mode: 0,
         cull_mode: 0,
         binds,

@@ -9,8 +9,8 @@
 //! The draw records the pipeline, the viewport, the rasterizer state, the vertex bytes at buffer
 //! 0, the stages' binds and the draw (its indices, if any, in the argument-buffer ring) into the
 //! colour target's render pass, after the depth-stencil state when its key names a depth
-//! format. The pipeline is built on the API thread and waited for (no asynchronous compile until
-//! C4d).
+//! format, and the scissor when the pass has not recorded that one last. The pipeline is built
+//! on the API thread and waited for (no asynchronous compile until C4d).
 
 use core::ffi::CStr;
 use std::{ops::Range, sync::Arc};
@@ -23,6 +23,7 @@ use dxmt_core::{
     shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
 };
 use mtld3d_core::{
+    clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
     pipeline_key::{PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source},
 };
@@ -33,14 +34,15 @@ use winemetal_sys::{
     wire::{
         MemPtr, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
         WMT_RENDER_COMMAND_SET_DSSO, WMT_RENDER_COMMAND_SET_PSO,
-        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_VIEWPORTS,
-        WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport,
-        WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
-        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetviewports,
+        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+        WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTScissorRect, WMTVertexAttributeInfo,
+        WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport, WmtcmdRenderDraw,
+        WmtcmdRenderDrawIndexed, WmtcmdRenderSetdsso, WmtcmdRenderSetpso,
+        WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects, WmtcmdRenderSetviewports,
     },
 };
 
-use super::{CoreDevice, DepthState, LOG_TARGET};
+use super::{CoreDevice, LOG_TARGET};
 
 /// `MTLVertexStepFunctionPerVertex`.
 const STEP_PER_VERTEX: u32 = 1;
@@ -85,6 +87,10 @@ pub struct DrawData<'a> {
     pub indices: Option<Indices<'a>>,
     /// `(origin x, origin y, width, height, znear, zfar)`.
     pub viewport: [f64; 6],
+    /// The rectangle the draw is cut to (`x, y, width, height`), which the pass's extent clamps.
+    ///
+    /// The scissor rect with the scissor test on, the drawn viewport with it off.
+    pub scissor: [u32; 4],
     /// The `MTLTriangleFillMode`.
     pub fill_mode: u8,
     /// The `MTLCullMode`.
@@ -111,7 +117,7 @@ pub enum DrawRefused {
     Pipeline,
     /// An attribute crosses the stride, which the core cannot fetch yet.
     Crossing,
-    /// The key names a depth format no pass on the colour target can attach.
+    /// The key names a depth format the bound depth-stencil has not (none is bound).
     Depth,
 }
 
@@ -158,8 +164,9 @@ impl CoreDevice {
     /// # Errors
     ///
     /// Nothing recorded when the colour target does not resolve (a device with no back buffer),
-    /// the key names a depth format the bound depth-stencil is not attachable in, the layout
-    /// crosses its stride, or the pipeline does not build.
+    /// the key names a depth format the bound depth-stencil has not, the layout crosses its
+    /// stride, or the pipeline does not build. A draw whose scissor holds no pixel of the pass
+    /// records nothing and is no error.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
@@ -171,14 +178,22 @@ impl CoreDevice {
         // The key decides the pass: with the depth-stencil exactly when it names a format. An
         // open pass with it was checked when it opened, and a change of either binding closed it.
         let with_depth = key.depth_format != 0;
-        let attachable = || self.depth_state() == DepthState::Attached(key.depth_format);
-        if with_depth && self.open_depth.is_none() && !attachable() {
+        let bound = || self.depth_format() == Some(key.depth_format);
+        if with_depth && self.open_depth.is_none() && !bound() {
             return Err(DrawRefused::Depth);
         }
         debug_assert!(
-            !with_depth || attachable(),
-            "a draw's key names the attached depth-stencil's format"
+            !with_depth || bound(),
+            "a draw's key names the bound depth-stencil's format"
         );
+        // Metal takes no scissor past the pass's extent, nor an empty one: a draw cut to nothing
+        // writes no pixel, so it records nothing.
+        let extent = self
+            .pass_extent(with_depth)
+            .unwrap_or((target.width, target.height));
+        let Some(scissor) = clamp_rect(draw.scissor, extent) else {
+            return Ok(());
+        };
         let pso = self.pipeline(key)?;
         // The state of the planes the pass has: no stencil test without the plane.
         let depth_state = with_depth.then(|| {
@@ -188,6 +203,17 @@ impl CoreDevice {
         });
         let stencil_ref = draw.stencil_ref;
         self.open_pass(with_depth);
+        // After the pass is open: `open_pass` ends one of the other depth kind, and a new pass
+        // has recorded none. Once a pass and on a change, not once a draw.
+        let scissor = (self.pass_scissor != Some(scissor)).then(|| {
+            self.pass_scissor = Some(scissor);
+            WMTScissorRect {
+                x: u64::from(scissor[0]),
+                y: u64::from(scissor[1]),
+                width: u64::from(scissor[2]),
+                height: u64::from(scissor[3]),
+            }
+        });
         let vertices = draw.vertices.to_vec();
         let mut bytes = Vec::new();
         let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
@@ -263,6 +289,20 @@ impl CoreDevice {
                 viewports: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
                 viewport_count: 1,
             });
+            if let Some(rect) = scissor {
+                let slot = enc
+                    .allocate_cpu(size_of::<WMTScissorRect>(), align_of::<WMTScissorRect>())
+                    .cast::<WMTScissorRect>();
+                // SAFETY: the encoder's memory, sized and aligned for one rect, nobody else's.
+                unsafe { slot.write(rect) };
+                enc.encode_render_command(WmtcmdRenderSetscissorrects {
+                    r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    scissor_rects: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
+                    rect_count: 1,
+                });
+            }
             enc.encode_render_command(rasterizer);
             direct::bind_bytes::<{ stage::VERTEX }>(enc, slot::VERTICES, &vertices);
             for (stage, slot, range) in &binds {

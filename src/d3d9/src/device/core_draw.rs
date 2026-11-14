@@ -10,7 +10,7 @@
 use core::{ffi::c_void, ops::Range};
 
 use d3d9_rt::device::{
-    Bind, CoreDevice, DepthState, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format,
+    Bind, CoreDevice, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format,
 };
 use mtld3d_core::{
     convert::{
@@ -21,8 +21,8 @@ use mtld3d_core::{
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     pipeline_key::{
-        CoreRefusal, DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode,
-        StageKind, VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant,
+        DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
+        VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_scissor,
         core_texture_variant, core_viewport, float_rows, indexed_up_vertices, pos_fixup,
         rhw_depth_clamp, up_byte_count, viewport_depth_range,
     },
@@ -194,10 +194,6 @@ fn resolve(
         DrawFlags::BLENDING,
         rs[D3DRS_ALPHABLENDENABLE as usize] != 0,
     );
-    flags.set(
-        DrawFlags::SCISSOR,
-        rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
-    );
     flags.set(DrawFlags::VERTEX_DEPTH_TEXTURE, vertex_depth);
     let facts = DrawFacts { flags };
     let (vs_kind, ps_kind) = core_draw_kinds(facts).map_err(|refusal| {
@@ -207,9 +203,9 @@ fn resolve(
     // The bound colour target's size and format (DXMTRS C4b-3d1); the present parameters' for a
     // device with no back buffer, whose draws record nothing.
     let (target, color_format) = core_target_of(dev);
-    // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one when a pass can attach it;
-    // none, for a draw that uses no plane, when it cannot.
-    let depth_format = key_depth(dev, &rs, samples_bound)?;
+    // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size; none
+    // for a draw that samples it and uses no plane of it.
+    let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound)?;
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
     let mut binds = Binds::default();
@@ -312,8 +308,13 @@ fn resolve(
         .as_ref()
         .or_else(|| vs_core.map(|(_, meta)| &meta.link_outputs));
     // The depth clamp is a pre-transformed draw's alone: an untransformed fixed-function draw
-    // clips, as a shader's does.
-    let clamp_z = rhw_depth_clamp(layout.has_rhw(), has_depth, rs[D3DRS_ZENABLE as usize] != 0);
+    // clips, as a shader's does. It follows the bound depth-stencil, which mtld3d's draw has
+    // attached also when it samples it (the key then names none here).
+    let clamp_z = rhw_depth_clamp(
+        layout.has_rhw(),
+        depth_bound,
+        rs[D3DRS_ZENABLE as usize] != 0,
+    );
     let (znear, zfar) = viewport_depth_range(viewport.min_z, viewport.max_z);
     let depth_bias = d3d_depth_bias_to_clip(rs[D3DRS_DEPTHBIAS as usize], znear, zfar);
     let fixup = pos_fixup(&viewport, target, clamp_z, depth_bias).map(f32::to_le_bytes);
@@ -520,9 +521,10 @@ fn core_target_of(dev: &DeviceInner) -> ((u32, u32), u32) {
         })
 }
 
-/// The depth format a draw's key names from the device's depth-stencil and render states `rs`.
+/// Whether a depth-stencil is bound, and the depth format a draw's key names.
 ///
-/// `samples_bound` is whether the draw samples the bound depth-stencil's texture.
+/// From the device's depth-stencil and render states `rs`; `samples_bound` is whether the draw
+/// samples the bound depth-stencil's texture.
 ///
 /// # Errors
 ///
@@ -531,26 +533,20 @@ fn key_depth(
     dev: &DeviceInner,
     rs: &[u32; RENDER_STATE_COUNT],
     samples_bound: bool,
-) -> Result<u32, i32> {
-    let state = dev
-        .core
-        .as_deref()
-        .map_or(DepthState::None, CoreDevice::depth_state);
-    let (bound, attachable) = match state {
-        DepthState::None => (None, false),
-        DepthState::Attached(format) => (Some(format), true),
-        DepthState::Detached(format) => (Some(format), false),
-    };
+) -> Result<(bool, u32), i32> {
+    let bound = dev.core.as_deref().and_then(CoreDevice::depth_format);
     // What the draw's state tests or writes of the planes that depth-stencil has.
     let uses_plane = bound.is_some_and(|format| {
         let has_stencil = format == PixelFormat::Depth32FloatStencil8 as u32;
         let gated = depth_snapshot(rs).gated_on_stencil_attachment(has_stencil);
         gated.uses_depth() || gated.stencil_enable != 0
     });
-    core_key_depth(bound, attachable, samples_bound, uses_plane).map_err(|refusal| {
-        refuse_under_core(refusal.name());
-        D3DERR_NOTAVAILABLE
-    })
+    core_key_depth(bound, samples_bound, uses_plane)
+        .map(|format| (bound.is_some(), format))
+        .map_err(|refusal| {
+            refuse_under_core(refusal.name());
+            D3DERR_NOTAVAILABLE
+        })
 }
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
@@ -587,6 +583,12 @@ fn draw(
         vertex_count,
         indices,
         viewport: core_viewport(&dev.viewport(), target),
+        scissor: core_scissor(
+            rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
+            dev.scissor_rect(),
+            &dev.viewport(),
+            target,
+        ),
         fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         binds: &binds,
@@ -601,11 +603,6 @@ fn draw(
     match core.draw_up(&key, &draw) {
         Err(DrawRefused::Crossing) => {
             refuse_under_core(CROSSING);
-            D3DERR_NOTAVAILABLE
-        }
-        // The key named a depth-stencil no pass can attach: `key_depth` decides before this.
-        Err(DrawRefused::Depth) => {
-            refuse_under_core(CoreRefusal::DepthSize.name());
             D3DERR_NOTAVAILABLE
         }
         _ => D3D_OK,
