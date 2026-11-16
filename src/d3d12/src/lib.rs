@@ -39,7 +39,7 @@ use crate::com::{E_INVALIDARG, E_NOINTERFACE, Guid, Hresult};
 /// `D3D_FEATURE_LEVEL_11_0` (`0xb000`), the minimum feature level `D3D12CreateDevice` accepts.
 pub const D3D_FEATURE_LEVEL_11_0: u32 = 0xb000;
 
-dxmt_util::dxmt_dll!(pub log "d3d12.log", allocator, type_info);
+dxmt_util::dxmt_dll!(pub log "d3d12.log", allocator, type_info, pe_rt);
 
 /// One-time process initialization: latches `DXMT_STATS=1` and registers `atexit` natively.
 static INIT: LazyLock<()> = LazyLock::new(|| {

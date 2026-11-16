@@ -15,6 +15,7 @@ crate-type = ["staticlib"]
 perf-build = ["mtld3d-shared/perf-build"]
 
 [dependencies]
+dxmt-util = { workspace = true }
 mtld3d-shared = { workspace = true }
 log = { workspace = true }
 

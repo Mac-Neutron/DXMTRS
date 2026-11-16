@@ -236,9 +236,13 @@ if dxmt_crossbuild and cpu_family == 'x86'
   rust_pe_wine_ntdll = [cc.find_library('ntdll', static : true,
     dirs : [meson.project_source_root() / rust_wine_dir / windows_builtin_install_dir])]
 endif
+# rust_no_source: an image linked from Rust archives alone still needs one compiled input, from which meson takes its
+# link driver; an empty C file meson writes into the build folder is that input. The MSVC runtime symbols x86 needs
+# (_fltused, __chkstk, __tls_array) are Rust: dxmt_dll!'s pe_rt part (src/util/src/boot.rs), named at each crate's root.
+rust_no_source = configure_file(output : 'rust_no_source.c', capture : true, command : ['true'])
 rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll'] : [],
   dependencies : rust_pe_wine_ntdll,
-  sources : files('src/util/rust_pe_rt.c'))
+  sources : rust_no_source)
 
 subdir('src')
 

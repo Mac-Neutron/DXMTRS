@@ -16,4 +16,4 @@ pub mod nvext;
 pub mod output;
 pub use dxmt_util::{private_data, wsi};
 
-dxmt_util::dxmt_dll!(log "dxgi.log", allocator);
+dxmt_util::dxmt_dll!(log "dxgi.log", allocator, pe_rt);

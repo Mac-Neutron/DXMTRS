@@ -31,7 +31,7 @@ pub mod surface;
 pub mod swapchain;
 pub mod view;
 
-dxmt_util::dxmt_dll!(pub log "d3d11.log", allocator, type_info);
+dxmt_util::dxmt_dll!(pub log "d3d11.log", allocator, type_info, pe_rt);
 
 /// The core's log writer (`dxmt_core::log`), forwarding to [`LOG`].
 #[cfg(feature = "front-end")]

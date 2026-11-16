@@ -11,7 +11,7 @@ use crate::abi::{
     E_NOTIMPL, IID_ID3D10_DEVICE, IID_ID3D10_MULTITHREAD, MultithreadVtbl,
 };
 
-dxmt_util::dxmt_dll!(log "d3d10core.log");
+dxmt_util::dxmt_dll!(log "d3d10core.log", pe_rt);
 
 unsafe extern "system" {
     /// DXMT's d3d11 device constructor, which `d3d11.dll` and `d3d11.dylib` export.

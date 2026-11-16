@@ -39,7 +39,7 @@ winemetal_unix_ld_args = [
 ] + (get_option('debug') ? [] : ['-Wl,-S'])
 winemetal_unix_link_depends = [winemetal_unix_rust]
 
-shared_library('winemetal', files('../../util/rust_pe_rt.c'),
+shared_library('winemetal', rust_no_source,
   name_prefix         : '',
   dependencies        : [ airconv_dep_darwin ],
   include_directories : dxmt_include_path,

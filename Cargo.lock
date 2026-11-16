@@ -283,6 +283,7 @@ dependencies = [
 name = "dxmt-replay"
 version = "0.14.1"
 dependencies = [
+ "dxmt-util",
  "rustc-hash",
 ]
 
@@ -424,6 +425,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mtld3d"
 version = "0.14.1"
 dependencies = [
+ "dxmt-util",
  "log",
  "mtld3d-shared",
 ]
@@ -934,6 +936,7 @@ dependencies = [
 name = "winemetal-pe"
 version = "0.14.1"
 dependencies = [
+ "dxmt-util",
  "winemetal-wire",
 ]
 

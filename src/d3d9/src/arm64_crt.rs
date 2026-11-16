@@ -3,13 +3,14 @@
 //! Every DLL of this crate links llvm-mingw's CRT (`src/d3d9/meson.build`: the
 //! ARM64X pair through `tools/arm64x-link.sh`, the VM guest's x86 pairs through
 //! meson), which defines none of it, and MSVC's libraries are not available to
-//! this build. `_fltused` comes from `src/util/rust_pe_rt.c`.
+//! this build. `_fltused` and the x86 stack probe come from `dxmt_dll!`'s `pe_rt` part.
 
 use core::ffi::c_void;
 
 use crate::DLL_THREAD_DETACH;
 
 dxmt_util::dxmt_dll!(@type_info);
+dxmt_util::dxmt_dll!(@pe_rt);
 
 /// The TLS callback that tears down snmalloc's per-thread allocator.
 ///

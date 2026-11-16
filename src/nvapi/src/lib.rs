@@ -9,7 +9,7 @@ pub mod sys;
 
 use core::ffi::c_void;
 
-dxmt_util::dxmt_dll!(log "nvapi.log");
+dxmt_util::dxmt_dll!(log "nvapi.log", pe_rt);
 
 /// NVIDIA's table of function names and IDs.
 const INTERFACE_TABLE: &str = include_str!("../../../external/nvapi/nvapi_interface.h");

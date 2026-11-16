@@ -32,6 +32,8 @@ macro_rules! exports {
     )*};
 }
 
+dxmt_util::dxmt_dll!(@pe_rt);
+
 mod access;
 mod cache;
 mod capture;

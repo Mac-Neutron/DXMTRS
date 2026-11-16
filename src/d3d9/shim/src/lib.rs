@@ -5,6 +5,8 @@ use mtld3d_shared::{LogLineKind, WriteLogParams, identity};
 
 const LOG_TARGET: &str = "mtld3d::shim";
 
+dxmt_util::dxmt_dll!(@pe_rt);
+
 // Wine unixlib symbols from winecrt0's unix_lib.o.
 // __wine_unixlib_handle: set by loader after __wine_init_unix_call succeeds.
 // __wine_unix_call_dispatcher: function pointer, initially a lazy-init stub,

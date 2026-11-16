@@ -955,6 +955,8 @@ fn run_replay(arg_os: &OsString) -> i32 {
 #[unsafe(export_name = "??_7type_info@@6B@")]
 pub static TYPE_INFO_VFTABLE: [usize; 1] = [0];
 
+dxmt_util::dxmt_dll!(@pe_rt);
+
 /// Wide-character entry point for `dxmt-replay.exe` on Windows (`-municode`).
 ///
 /// # Safety

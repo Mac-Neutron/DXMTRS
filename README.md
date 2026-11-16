@@ -40,9 +40,6 @@ came from elsewhere keep their own notices, and this is where they are:
   patched for ARM64EC; the crate's notice is [`vendor/snmalloc-sys/LICENSE`](vendor/snmalloc-sys/LICENSE) and
   snmalloc's is [`vendor/snmalloc-sys/upstream/LICENSE`](vendor/snmalloc-sys/upstream/LICENSE). D3D9's allocator comes
   from it.
-- **`src/util/rust_pe_rt.c` is LGPL, like the rest of the tree, and is linked into D3D9's guest DLLs.** The
-  Rust runtime shim for `-pc-windows-msvc` code is part of the x86_64 and i386 `d3d9.dll` and `mtld3d.dll` the VM
-  guest loads. The source offer for that object is this repository.
 - **dxmt-util is LGPL and is linked into every D3D9 binary** (`d3d9.dll`, `mtld3d.dll`, `mtld3d.so`, the Mac's and the
   VM's), which are LGPL combined works; the source offer is this repository. Its files from mtld3d keep the zlib notice:
   `src/util/src/log/once.rs` (+tests), `src/util/src/log/paths.rs` (+tests),

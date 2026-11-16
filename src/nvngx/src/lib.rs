@@ -7,7 +7,7 @@ mod entry;
 mod ngx;
 mod parameter;
 
-dxmt_util::dxmt_dll!(log "nvngx.log");
+dxmt_util::dxmt_dll!(log "nvngx.log", pe_rt);
 
 #[cfg(windows)]
 unsafe extern "system" {
