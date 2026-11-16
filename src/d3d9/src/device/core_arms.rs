@@ -2,9 +2,9 @@
 //!
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
 //! and the call's result for a device of the core runtime. What an arm does not cover yet (a
-//! Present with rects or another window) is refused with one warning (C4-13). Clear and the
-//! read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP draws are
-//! `core_draw`'s.
+//! Present with rects or another window, a `StretchRect` other than a multisample resolve) is
+//! refused with one warning (C4-13). Clear and the read-back go to and come from the bound colour
+//! target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -16,10 +16,11 @@ use mtld3d_core::{
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
     render_state::scissor_region,
 };
-use mtld3d_shared::InPtr;
+use mtld3d_shared::{InPtr, ValueIn};
 use mtld3d_types::{
     D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
-    D3DERR_NOTAVAILABLE, D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DSURFACE_DESC,
+    D3DERR_NOTAVAILABLE, D3DPOOL_DEFAULT, D3DRECT, D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE,
+    D3DSURFACE_DESC, D3DUSAGE_RENDERTARGET,
 };
 
 use super::{DeviceInner, Direct3DDevice9, refuse_under_core};
@@ -139,10 +140,10 @@ pub fn present(
 /// `GetRenderTargetData` from a colour target the core draws to.
 ///
 /// mtld3d's checks, in its order and with its answers: a source or destination that is no
-/// surface, a destination that is not system memory, a source that is no render target and a
-/// destination of another size or format are `D3DERR_INVALIDCALL`. An additional swap chain's
-/// back buffer is refused: as a target it aliases the device's (C4b3d1-4), which is not what it
-/// would read.
+/// surface, a multisampled source (DXMTRS C4b-3d5), a destination that is not system memory, a
+/// source that is no render target and a destination of another size or format are
+/// `D3DERR_INVALIDCALL`. An additional swap chain's back buffer is refused: as a target it
+/// aliases the device's (C4b3d1-4), which is not what it would read.
 pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_void) -> Option<i32> {
     let dev = core_device(this)?;
     // SAFETY: `rt` is null or a caller-owned IDirect3DSurface9* per the ABI.
@@ -153,6 +154,12 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
     let Some(dst) = (unsafe { InPtr::<Direct3DSurface9>::opt(dst) }) else {
         return Some(D3DERR_INVALIDCALL);
     };
+    if src.multi_sample().sample_count > 1 {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "GetRenderTargetData: source is multisampled → INVALIDCALL (StretchRect it into a \
+             single-sampled surface first)");
+        return Some(D3DERR_INVALIDCALL);
+    }
     let Some(desc) = dst.system_memory_blit_dst() else {
         return Some(D3DERR_INVALIDCALL);
     };
@@ -165,21 +172,9 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
         );
         return Some(D3DERR_NOTAVAILABLE);
     }
-    let mut from = D3DSURFACE_DESC {
-        format: 0,
-        resource_type: 0,
-        usage: 0,
-        pool: 0,
-        multi_sample_type: 0,
-        multi_sample_quality: 0,
-        width: 0,
-        height: 0,
-    };
-    // SAFETY: the source surface's own `GetDesc` thunk, with the surface as `this` and a
-    // writable description.
-    if unsafe { (src.vtbl().get_desc)(rt, &raw mut from) } != 0 {
+    let Some(from) = surface_desc(&src, rt) else {
         return Some(D3DERR_INVALIDCALL);
-    }
+    };
     let reject = reject_readback_dst(
         &ReadbackSource {
             width: from.width,
@@ -215,4 +210,103 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
         dst.note_system_memory_written();
     }
     Some(if ok { D3D_OK } else { D3DERR_INVALIDCALL })
+}
+
+/// `StretchRect` on a core device: a multisampled render target resolved into a single-sample one.
+///
+/// The one shape the core implements (DXMTRS C4b-3d5), all of it required: both surfaces are
+/// targets the core draws to and neither is an additional swap chain's back buffer (as a target
+/// it aliases the device's, C4b3d1-4); both are default-pool render targets of one size and of
+/// formats whose bytes copy (mtld3d's `copies_bytes`); the source has more than one sample and
+/// the destination one; each rect is null or the whole surface; a destination level's texture is
+/// not AUTOGENMIPMAP, and its CPU writes are uploaded first; and the core device records the
+/// resolve. Anything else is the logged refusal and `D3DERR_NOTAVAILABLE`. `surfaces` and
+/// `rects` are the source's and the destination's; the caller checked the surfaces are not null
+/// and the filter is one `StretchRect` takes.
+pub fn stretch_rect_resolve(
+    this: *mut c_void,
+    surfaces: [*mut c_void; 2],
+    rects: [*const c_void; 2],
+) -> i32 {
+    if resolve_shape(this, surfaces, rects).is_some() {
+        D3D_OK
+    } else {
+        refuse_under_core("IDirect3DDevice9::StretchRect (other than a multisample resolve)");
+        D3DERR_NOTAVAILABLE
+    }
+}
+
+/// [`stretch_rect_resolve`]'s shape, recorded; `None`, and nothing recorded, for any other.
+fn resolve_shape(
+    this: *mut c_void,
+    surfaces: [*mut c_void; 2],
+    rects: [*const c_void; 2],
+) -> Option<()> {
+    let dev = core_device(this)?;
+    // SAFETY: (each) null or a caller-owned IDirect3DSurface9* per the ABI.
+    let [Some(src), Some(dst)] = surfaces.map(|s| unsafe { InPtr::<Direct3DSurface9>::opt(s) })
+    else {
+        return None;
+    };
+    let (source, destination) = (src.core_target()?, dst.core_target()?);
+    let aliased = |target: TargetRef, surface: *mut c_void| {
+        target == TargetRef::BackBuffer && surface as u64 != dev.implicit_render_target
+    };
+    if aliased(source, surfaces[0]) || aliased(destination, surfaces[1]) {
+        return None;
+    }
+    let (from, into) = (
+        surface_desc(&src, surfaces[0])?,
+        surface_desc(&dst, surfaces[1])?,
+    );
+    let whole = |desc: &D3DSURFACE_DESC, rect: *const c_void| {
+        // SAFETY: null or the caller's RECT, read with no alignment assumed.
+        unsafe { ValueIn::<D3DRECT>::read_opt(rect) }.is_none_or(|r| {
+            r.x1 == 0
+                && r.y1 == 0
+                && u32::try_from(r.x2) == Ok(desc.width)
+                && u32::try_from(r.y2) == Ok(desc.height)
+        })
+    };
+    let targets = [&from, &into]
+        .iter()
+        .all(|desc| desc.usage & D3DUSAGE_RENDERTARGET != 0 && desc.pool == D3DPOOL_DEFAULT);
+    let shaped = targets
+        && (from.width, from.height) == (into.width, into.height)
+        && super::copies_bytes(from.format, into.format, dev.config().expand_packed16)
+        && src.multi_sample().sample_count > 1
+        && dst.multi_sample().sample_count == 1
+        && whole(&from, rects[0])
+        && whole(&into, rects[1]);
+    if !shaped {
+        return None;
+    }
+    let core = dev.core.as_deref_mut()?;
+    // SAFETY: null, or the destination level's parent texture, live while the level is and
+    // distinct from the device.
+    if let Some(parent) = unsafe { dst.parent_texture().as_mut() } {
+        if parent.inner().autogen_mipmap() {
+            return None;
+        }
+        // Its core texture exists from here, with every CPU write so far uploaded.
+        let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+    }
+    core.resolve_into(source, destination).then_some(())
+}
+
+/// `surface`'s `GetDesc` (at `ptr`, the same surface); `None` when it fails.
+fn surface_desc(surface: &Direct3DSurface9, ptr: *mut c_void) -> Option<D3DSURFACE_DESC> {
+    let mut desc = D3DSURFACE_DESC {
+        format: 0,
+        resource_type: 0,
+        usage: 0,
+        pool: 0,
+        multi_sample_type: 0,
+        multi_sample_quality: 0,
+        width: 0,
+        height: 0,
+    };
+    // SAFETY: the surface's own `GetDesc` thunk, with the surface as `this` and a writable
+    // description.
+    (unsafe { (surface.vtbl().get_desc)(ptr, &raw mut desc) } == 0).then_some(desc)
 }

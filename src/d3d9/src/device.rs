@@ -8019,7 +8019,7 @@ fn core_color_target(
             },
             srgb_format: srgb_twin.map_or(0, |twin| twin as u32),
             block: (1, 1, mapping.bytes_per_pixel()),
-            samples: 1,
+            samples: spec.multi_sample.sample_count,
         },
     );
     let mut surf = Direct3DSurface9::new_color_target(&ColorTargetCreateInfo {
@@ -8100,19 +8100,9 @@ extern "system" fn device_create_render_target(
         null_out(surface);
         return D3DERR_INVALIDCALL;
     };
-    // A core device has no multisampled target yet (C4b-3d5), and a surface's lock is refused
-    // there (C4c), so a lockable target takes no staging.
+    // A surface's lock is refused on a core device (C4c), so a lockable target takes no staging.
     #[cfg(feature = "core-runtime")]
-    let lockable = if obj.inner().is_core() {
-        if multi_sample.sample_count > 1 {
-            crate::device::refuse_under_core("IDirect3DDevice9::CreateRenderTarget (multisampled)");
-            null_out(surface);
-            return mtld3d_types::D3DERR_NOTAVAILABLE;
-        }
-        0
-    } else {
-        lockable
-    };
+    let lockable = if obj.inner().is_core() { 0 } else { lockable };
     // A `Lockable == TRUE` render target keeps its standalone renderable colour
     // texture (so `GetContainer`/`GetDesc`/`StretchRect` are unchanged) but also
     // gets a CPU staging buffer: `LockRect` maps it, `UnlockRect` uploads it to
@@ -8177,10 +8167,11 @@ extern "system" fn device_create_render_target(
 /// forgets; the surface carries no Metal handle and is not counted in the device's video-memory
 /// figure, as a standalone colour target's.
 ///
+/// A multisampled one is a texture of its count (DXMTRS C4b-3d5).
+///
 /// # Errors
 ///
-/// `D3DERR_NOTAVAILABLE` for a multisampled one (refused, C4b-3d5); `D3DERR_INVALIDCALL` past
-/// the device's texture limit, which Metal would raise for.
+/// `D3DERR_INVALIDCALL` past the device's texture limit, which Metal would raise for.
 #[cfg(feature = "core-runtime")]
 fn core_depth_surface(
     device_inner: *mut DeviceInner,
@@ -8190,12 +8181,6 @@ fn core_depth_surface(
     multi_sample: SurfaceMultiSample,
 ) -> Result<*mut Direct3DSurface9, i32> {
     use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind};
-    if multi_sample.sample_count > 1 {
-        crate::device::refuse_under_core(
-            "IDirect3DDevice9::CreateDepthStencilSurface (multisampled)",
-        );
-        return Err(mtld3d_types::D3DERR_NOTAVAILABLE);
-    }
     if !mtld3d_core::caps::texture_extent_fits(width, height) {
         return Err(D3DERR_INVALIDCALL);
     }
@@ -8217,7 +8202,7 @@ fn core_depth_surface(
             srgb_format: 0,
             // Never uploaded to or read back: the block is not read.
             block: (1, 1, 4),
-            samples: 1,
+            samples: multi_sample.sample_count,
         },
     );
     let mut surf = Direct3DSurface9::new_depth_stencil(
@@ -9399,11 +9384,6 @@ extern "system" fn device_stretch_rect(
     use crate::surface::Direct3DSurface9;
 
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::StretchRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if src.is_null() || dst.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -9419,6 +9399,12 @@ extern "system" fn device_stretch_rect(
             "reject StretchRect: invalid filter {filter} → INVALIDCALL"
         );
         return D3DERR_INVALIDCALL;
+    }
+    // A core device takes the multisample resolve alone, judged on its own surfaces: mtld3d's
+    // checks below read Metal handles a core surface has not (DXMTRS C4b-3d5).
+    #[cfg(feature = "core-runtime")]
+    if crate::device::is_core_device(this) {
+        return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
     }
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -9724,7 +9710,8 @@ extern "system" fn device_stretch_rect(
     // A planar source always converts: its R8 storage holds YUV planes, not
     // the pixels of any colour format, so it never takes the 1:1 blit. It is
     // answered ahead of the lookup, which has no entry for it.
-    let cross_format = planar_endpoint || !copies_bytes(&src_info, &dst_info, expand_packed16);
+    let cross_format =
+        planar_endpoint || !copies_bytes(src_info.format, dst_info.format, expand_packed16);
 
     // A cross-format 1:1 copy into an offscreen-plain destination has no GPU
     // path: the render-quad conversion needs a render-target destination, and
@@ -10011,17 +9998,18 @@ fn flush_dirty_mips_for_gpu_write(
 /// since every reader of a destination without alpha ignores the alpha it
 /// carries. A packed YUV endpoint lays its bytes out in an order no other
 /// format shares (`reinterprets_packed_yuv`), so such a pair converts or is
-/// refused like a pair of two storages.
-fn copies_bytes(src: &StretchSurfaceInfo, dst: &StretchSurfaceInfo, expand_packed16: bool) -> bool {
-    let src_map = crate::direct3d9::map_for_device(src.format, expand_packed16);
-    let dst_map = crate::direct3d9::map_for_device(dst.format, expand_packed16);
+/// refused like a pair of two storages. A core device's `StretchRect` asks it of its two
+/// surfaces' formats too (DXMTRS C4b-3d5).
+fn copies_bytes(src_format: u32, dst_format: u32, expand_packed16: bool) -> bool {
+    let src_map = crate::direct3d9::map_for_device(src_format, expand_packed16);
+    let dst_map = crate::direct3d9::map_for_device(dst_format, expand_packed16);
     let exposes_padding = matches!(
         (&src_map, &dst_map),
         (Some(s), Some(d)) if mtld3d_core::stretch_rect::exposes_padding_as_alpha(s, d)
     );
     src_map.map(|m| m.metal_pixel_format()) == dst_map.map(|m| m.metal_pixel_format())
         && !exposes_padding
-        && !mtld3d_core::stretch_rect::reinterprets_packed_yuv(src.format, dst.format)
+        && !mtld3d_core::stretch_rect::reinterprets_packed_yuv(src_format, dst_format)
 }
 
 /// Gate a colour `StretchRect` pair on a transport that copies or converts it.
@@ -10045,7 +10033,7 @@ fn check_stretch_rect_formats(
     // endpoint schedules an upload. Unmappable formats are always rejected.
     let convertible = src_mtl.is_some()
         && dst_mtl.is_some()
-        && (copies_bytes(src, dst, expand_packed16)
+        && (copies_bytes(src.format, dst.format, expand_packed16)
             || dst.flags.contains(StretchSurfaceFlags::IS_RENDER_TARGET)
             || (dst
                 .flags

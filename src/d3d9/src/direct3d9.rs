@@ -2305,9 +2305,10 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
 ///
 /// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
 /// registry ID `GetDeviceInfo` reported, with D3D9's queue profile. What the core runtime does
-/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen or
-/// multisampled device, and a back buffer other than `X8R8G8B8`/`A8R8G8B8`. An auto
-/// depth-stencil is a depth texture in the core's store, bound at once (DXMTRS C4b-3d2).
+/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen device, and a
+/// back buffer other than `X8R8G8B8`/`A8R8G8B8`. An auto depth-stencil is a depth texture in the
+/// core's store, bound at once (DXMTRS C4b-3d2). The multisample type is mtld3d's check with
+/// its answer: the back buffer and the auto depth-stencil take its count (DXMTRS C4b-3d5).
 #[cfg(feature = "core-runtime")]
 fn create_core_device(
     args: &CreateDeviceArgs,
@@ -2324,11 +2325,10 @@ fn create_core_device(
         present_params,
         device,
     } = args;
-    if pp.windowed == 0 || pp.multi_sample_type != 0 {
+    if pp.windowed == 0 {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
-            "reject CreateDevice: runtime.mode = core takes a windowed device without \
-             multisampling → D3DERR_NOTAVAILABLE"
+            "reject CreateDevice: runtime.mode = core takes a windowed device → D3DERR_NOTAVAILABLE"
         );
         return D3DERR_NOTAVAILABLE;
     }
@@ -2354,6 +2354,25 @@ fn create_core_device(
         );
         return D3DERR_NOTAVAILABLE;
     }
+    // After the back buffer's format is settled (a zero format names no surface to the check):
+    // mtld3d's predicate and answer, one count for the back buffer and the auto depth-stencil.
+    let Ok(count) = multisample::resolve_sample_count(
+        pp.multi_sample_type,
+        pp.multi_sample_quality,
+        pp.back_buffer_format,
+        device_caps_flags(),
+    ) else {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice: MultiSampleType={} Quality={} on back-buffer format {} → \
+             INVALIDCALL",
+            pp.multi_sample_type,
+            pp.multi_sample_quality,
+            pp.back_buffer_format
+        );
+        return D3DERR_INVALIDCALL;
+    };
+    let samples = u8::try_from(count).expect("a sample count of at most 16");
     let Some(mtl) = d3d9_rt::device::select_device(device_info().registry_id) else {
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
@@ -2363,7 +2382,7 @@ fn create_core_device(
         isize::try_from(hwnd).unwrap_or_default(),
         pp.back_buffer_width,
         pp.back_buffer_height,
-        1,
+        samples,
     );
     // The auto depth-stencil, of the back buffer's size; a format of 0 asks for none, as under
     // mtld3d. The entry point checked the format before the runtimes part.
@@ -2382,7 +2401,7 @@ fn create_core_device(
                 flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
                 srgb_format: 0,
                 block: (1, 1, 4),
-                samples: 1,
+                samples,
             };
             core.texture_create(id, &desc);
             let bound = core.set_depth(Some(d3d9_rt::device::DepthRef { id, level: 0 }));
@@ -2412,7 +2431,7 @@ fn create_core_device(
         backbuffer_srgb_handle: MetalHandle::NULL,
         backbuffer_msaa_handle: MetalHandle::NULL,
         backbuffer_msaa_srgb_handle: MetalHandle::NULL,
-        backbuffer_sample_count: 1,
+        backbuffer_sample_count: samples,
         depth_stencil_handle: MetalHandle::NULL,
         depth_stencil_format: 0,
         backbuffer_width: pp.back_buffer_width,
