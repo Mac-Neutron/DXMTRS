@@ -16,10 +16,10 @@ use rustc_hash::FxHashMap;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{
-    CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource, PsStageKey,
-    SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_key_depth,
-    core_ps_variant, core_scissor, core_srgb_variant, core_viewport, float_rows,
-    indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count,
+    CoreExtra, CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource,
+    PsStageKey, SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_extras,
+    core_key_depth, core_ps_variant, core_scissor, core_srgb_variant, core_viewport, extra_present,
+    float_rows, indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count,
     viewport_depth_range,
 };
 use crate::{
@@ -129,6 +129,7 @@ fn ff_base() -> PipelineKey {
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
         blend: None,
+        extras: [None, None, None],
     }
 }
 
@@ -157,6 +158,7 @@ fn prog_base() -> PipelineKey {
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
         blend: None,
+        extras: [None, None, None],
     }
 }
 
@@ -244,7 +246,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 18] = [
+    let changes: [Case; 19] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -302,6 +304,10 @@ fn pipeline_key_tracks_every_input() {
             let mut rs = render_state_defaults();
             rs[mtld3d_types::D3DRS_ALPHABLENDENABLE as usize] = 1;
             k.blend = crate::pipeline_state::core_blend(&rs, true);
+        }),
+        // On the fixed-function stage: a programmable one exports exactly the key's extras.
+        ("extras", ff_base, |k| {
+            k.extras[1] = Some(extra(PixelFormat::Rgba16Float as u32));
         }),
     ];
     for (field, base, change) in changes {
@@ -450,9 +456,11 @@ fn a_crossing_attribute_is_detected() {
     assert!(!source(&prog_base()).crosses_stride());
 }
 
-/// Core's pixel variant: one colour target, no samplers, one sample, its linked inputs.
+/// Core's pixel variant: no samplers, one sample, its linked inputs and the pass's extras.
 ///
-/// A programmable stage keeps its depth output exactly when a depth-stencil is attached.
+/// A programmable stage exports colour 0 and each extra the pass attaches (bit `i + 1` for slot
+/// `i + 1`), and keeps its depth output exactly when a depth-stencil is attached; the
+/// fixed-function stage keeps the base's outputs.
 #[test]
 fn core_ps_variant_rules() {
     let base = VariantKey {
@@ -466,7 +474,7 @@ fn core_ps_variant_rules() {
             | VariantFlags::SAMPLE_MASK,
         ..VariantKey::default()
     };
-    let prog = core_ps_variant(base, true, false, 0b101, false);
+    let prog = core_ps_variant(base, true, false, 0b101, false, 0);
     assert_eq!(prog.color_out_mask, 0);
     assert_eq!(prog.linked_input_mask, 0b101);
     assert_eq!(prog.alpha_func, 5);
@@ -475,20 +483,26 @@ fn core_ps_variant_rules() {
         prog.flags,
         VariantFlags::SRGB_WRITE | VariantFlags::NO_DEPTH_ATTACHMENT
     );
-    let points = core_ps_variant(base, true, true, 0, false);
+    // (extras the pass attaches, bit i slot i + 1) -> the programmable stage's outputs.
+    for (extras, outputs) in [(0b101, 0b1010), (0b010, 0b0100), (0b111, 0b1110), (0, 0)] {
+        let prog = core_ps_variant(base, true, false, 0, false, extras);
+        assert_eq!(prog.color_out_mask, outputs, "{extras:#b}");
+    }
+    let points = core_ps_variant(base, true, true, 0, false, 0);
     assert!(points.flags.contains(VariantFlags::POINT_SPRITE));
-    let ff = core_ps_variant(base, false, false, 0, false);
+    let ff = core_ps_variant(base, false, false, 0, false, 0b101);
     assert_eq!(ff.flags, VariantFlags::SRGB_WRITE);
     assert_eq!(ff.linked_input_mask, 0);
+    assert_eq!(ff.color_out_mask, 0b110);
     // With a depth-stencil attached the stage exports its depth, even from a base that had not.
     let no_depth_base = VariantKey {
         flags: base.flags | VariantFlags::NO_DEPTH_ATTACHMENT,
         ..base
     };
-    let with_depth = core_ps_variant(no_depth_base, true, false, 0, true);
+    let with_depth = core_ps_variant(no_depth_base, true, false, 0, true, 0);
     assert_eq!(with_depth.flags, VariantFlags::SRGB_WRITE);
     assert_eq!(
-        core_ps_variant(base, false, false, 0, true).flags,
+        core_ps_variant(base, false, false, 0, true, 0).flags,
         VariantFlags::SRGB_WRITE
     );
 }
@@ -783,4 +797,113 @@ fn core_srgb_variant_rules() {
     );
     let off = VariantKey::default();
     assert_eq!(core_srgb_variant(off, true), off);
+}
+
+/// An extra of `format`, every channel written, unblended.
+const fn extra(format: u32) -> CoreExtra {
+    CoreExtra {
+        format,
+        write_mask: 0xf,
+        blend: None,
+    }
+}
+
+/// The key's colour formats: colour 0's, then each extra's, 0 for an empty slot.
+#[test]
+fn color_formats_lists_the_slots() {
+    const RGBA8: u32 = PixelFormat::Rgba8Unorm as u32;
+    const R32F: u32 = PixelFormat::R32Float as u32;
+    let bgra8 = PixelFormat::Bgra8Unorm as u32;
+    assert_eq!(ff_base().color_formats(), [bgra8, 0, 0, 0]);
+    let key = PipelineKey {
+        extras: [Some(extra(RGBA8)), None, Some(extra(R32F))],
+        ..ff_base()
+    };
+    assert_eq!(key.color_formats(), [bgra8, RGBA8, 0, R32F]);
+}
+
+/// Bit `i` for each slot `i + 1` a pass attaches.
+#[test]
+fn extra_present_bits() {
+    assert_eq!(extra_present([0, 0, 0]), 0);
+    assert_eq!(extra_present([80, 0, 0]), 0b001);
+    assert_eq!(extra_present([0, 70, 0]), 0b010);
+    assert_eq!(extra_present([0, 0, 55]), 0b100);
+    assert_eq!(extra_present([80, 0, 115]), 0b101);
+    assert_eq!(extra_present([80, 70, 55]), 0b111);
+}
+
+/// Each extra takes its own slot's format, write mask and destination-alpha clamp, as mtld3d's.
+///
+/// Slot `n`'s mask is `D3DRS_COLORWRITEENABLE<n>` when the program writes `oC<n>`, empty when it
+/// does not (the target is declared and keeps its contents); its blend is the draw's.
+#[test]
+fn core_extras_follow_mtld3d() {
+    use mtld3d_types::{
+        D3DBLEND_DESTALPHA, D3DBLEND_INVDESTALPHA, D3DRS_ALPHABLENDENABLE, D3DRS_COLORWRITEENABLE1,
+        D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3, D3DRS_DESTBLEND, D3DRS_SRCBLEND,
+    };
+
+    use crate::pipeline_state::{BlendFactor, core_blend};
+    const F1: u32 = PixelFormat::Rgba8Unorm as u32;
+    const F2: u32 = PixelFormat::Rgba16Float as u32;
+    const F3: u32 = PixelFormat::R32Float as u32;
+    let mut rs = render_state_defaults();
+    // Red, green, blue: Metal's 8, 4 and 2.
+    rs[D3DRS_COLORWRITEENABLE1 as usize] = 0x1;
+    rs[D3DRS_COLORWRITEENABLE2 as usize] = 0x2;
+    rs[D3DRS_COLORWRITEENABLE3 as usize] = 0x4;
+    let every = 0b1111;
+    let mask = |extra: &Option<CoreExtra>| extra.as_ref().map(|e| e.write_mask);
+    // A slot not in the pass is none, whatever the states and the masks.
+    assert_eq!(
+        core_extras([0, 0, 0], &rs, every, every),
+        [None, None, None]
+    );
+    // Slot 2 alone: COLORWRITEENABLE2, and bit 2 of the written mask, not bit 1.
+    let [one, two, three] = core_extras([0, F2, 0], &rs, 0b0100, 0);
+    assert_eq!((one, three), (None, None));
+    assert_eq!(
+        two,
+        Some(CoreExtra {
+            format: F2,
+            write_mask: 4,
+            blend: None,
+        })
+    );
+    assert_eq!(mask(&core_extras([0, F2, 0], &rs, 0b0010, 0)[1]), Some(0));
+    // Slot 3 takes COLORWRITEENABLE3.
+    assert_eq!(mask(&core_extras([0, 0, F3], &rs, 0b1000, 0)[2]), Some(2));
+    // A present slot the program does not write (the fixed-function stage writes colour 0
+    // alone): an empty mask, its format kept.
+    assert_eq!(
+        core_extras([F1, 0, 0], &rs, 1, 0)[0],
+        Some(CoreExtra {
+            format: F1,
+            write_mask: 0,
+            blend: None,
+        })
+    );
+    // Blending on: the draw's equation, each slot clamped on its own alpha.
+    rs[D3DRS_ALPHABLENDENABLE as usize] = 1;
+    rs[D3DRS_SRCBLEND as usize] = D3DBLEND_DESTALPHA;
+    rs[D3DRS_DESTBLEND as usize] = D3DBLEND_INVDESTALPHA;
+    let [one, two, three] = core_extras([F1, F2, 0], &rs, every, 0b0100);
+    assert_eq!(three, None);
+    let one = one.and_then(|e| e.blend).expect("slot 1 blends");
+    let two = two.and_then(|e| e.blend).expect("slot 2 blends");
+    assert_eq!((one.src, one.dst), (BlendFactor::One, BlendFactor::Zero));
+    assert_eq!(
+        (two.src, two.dst),
+        (
+            BlendFactor::DestinationAlpha,
+            BlendFactor::OneMinusDestinationAlpha
+        )
+    );
+    let zero = core_blend(&rs, true).expect("colour 0 blends");
+    assert_eq!(two, zero);
+    assert_eq!(
+        (one.op, one.op_alpha, two.op, two.op_alpha),
+        (zero.op, zero.op_alpha, zero.op, zero.op_alpha)
+    );
 }

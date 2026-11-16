@@ -16,7 +16,10 @@ use std::{
 
 use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSamplerKinds, VsSpec};
 use mtld3d_shared::shader_create::ShaderStage;
-use mtld3d_types::{D3DRECT, D3DVERTEXELEMENT9, D3DVIEWPORT9};
+use mtld3d_types::{
+    D3DRECT, D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3,
+    D3DVERTEXELEMENT9, D3DVIEWPORT9, RENDER_STATE_COUNT,
+};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -26,7 +29,8 @@ use crate::{
     dxso::{FfPsKey, FfVsKey},
     ff_build,
     ids::ProgramId,
-    pipeline_state::CoreBlend,
+    pipeline_state::{CoreBlend, ExtraColorAttachments, PipelineRsBits, core_blend},
+    render_state::enum_value,
     shader_create::{ShaderCreateError, parse_shader},
 };
 
@@ -170,8 +174,9 @@ pub enum PsStageKey {
 
 /// What a pipeline of the core's draws depends on.
 ///
-/// The arm draws to one one-sample colour target and at most one depth-stencil, so these fields
-/// are all of it. The stride is here because D3D9 fetches through a Metal vertex descriptor.
+/// The arm draws to up to four one-sample colour targets (colour 0 and the extras at index 1-3)
+/// and at most one depth-stencil, so these fields are all of it. The stride is here because D3D9
+/// fetches through a Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -189,6 +194,38 @@ pub struct PipelineKey {
     /// The attached depth-stencil's `WMTPixelFormat`; 0 for a draw without one.
     pub depth_format: u32,
     /// The colour target's blend; none with blending off (C4b-3d3).
+    pub blend: Option<CoreBlend>,
+    /// The colour targets at index 1-3 the pass attaches: `extras[i]` is slot `i + 1`'s.
+    ///
+    /// None for a slot the pass leaves empty (DXMTRS C4b-3d4).
+    pub extras: [Option<CoreExtra>; 3],
+}
+
+impl PipelineKey {
+    /// The `WMTPixelFormat` each colour slot of the key's pass attaches; 0 for an empty slot.
+    ///
+    /// Colour 0's, then each extra's.
+    #[must_use]
+    pub const fn color_formats(&self) -> [u32; 4] {
+        let mut formats = [self.color_format, 0, 0, 0];
+        let mut i = 0;
+        while i < self.extras.len() {
+            if let Some(extra) = &self.extras[i] {
+                formats[i + 1] = extra.format;
+            }
+            i += 1;
+        }
+        formats
+    }
+}
+
+/// A colour target above index 0 as a core pipeline declares it (DXMTRS C4b-3d4).
+///
+/// Its attached `WMTPixelFormat`, its `MTLColorWriteMask` and its blend, none with blending off.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CoreExtra {
+    pub format: u32,
+    pub write_mask: u8,
     pub blend: Option<CoreBlend>,
 }
 
@@ -218,6 +255,8 @@ pub struct PipelineSource {
     pub depth_format: u32,
     /// The colour target's blend; none with blending off.
     pub blend: Option<CoreBlend>,
+    /// The colour targets at index 1-3: `extras[i]` is slot `i + 1`'s, none for an empty slot.
+    pub extras: [Option<CoreExtra>; 3],
 }
 
 impl PipelineSource {
@@ -253,6 +292,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         color_format,
         depth_format,
         blend,
+        extras,
     } = key;
     let elements = layout.elements();
     let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
@@ -307,7 +347,17 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         .fold(0, |mask, bit| mask | bit);
     let ps_code = match ps {
         PsStageKey::Ff(ps) => ff_code(ff_build::pixel(ps).tokens),
-        PsStageKey::Prog(code) => code.clone(),
+        PsStageKey::Prog(code) => {
+            // The key names the extras twice, in its variant and in `extras`: a programmable
+            // stage exports exactly the slots the pass attaches.
+            let [_, f1, f2, f3] = key.color_formats();
+            debug_assert_eq!(
+                variant.color_out_mask,
+                extra_present([f1, f2, f3]) << 1,
+                "a programmable stage exports colour 0 and the key's extras"
+            );
+            code.clone()
+        }
     };
     Ok(PipelineSource {
         vs: StageSource {
@@ -332,16 +382,19 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         color_format: *color_format,
         depth_format: *depth_format,
         blend: blend.clone(),
+        extras: extras.clone(),
     })
 }
 
 /// The pixel variant of a core draw from the API thread's `base`.
 ///
-/// What mtld3d's encoder patches per draw, for the core's one colour target, one sample, no
-/// render scale and no samplers: a programmable stage exports colour 0 alone, and its depth
-/// exactly when the draw has a depth-stencil attached (`has_depth`); `POINT_SPRITE` holds on
-/// point lists only, and the stage reads the extra inputs of `linked_input_mask`. `SRGB_WRITE`
-/// stays here: [`core_srgb_variant`] drops it for a pass on an sRGB view.
+/// What mtld3d's encoder patches per draw, for the core's one-sample colour targets, no render
+/// scale and no samplers: a programmable stage exports colour 0 and each extra its pass attaches
+/// (`extra_present`, bit `i` for slot `i + 1`, as [`extra_present`] makes it; DXMTRS C4b-3d4),
+/// and its depth exactly when the draw has a depth-stencil attached (`has_depth`);
+/// `POINT_SPRITE` holds on point lists only, and the stage reads the extra inputs of
+/// `linked_input_mask`. The fixed-function stage keeps `base`'s outputs. `SRGB_WRITE` stays
+/// here: [`core_srgb_variant`] drops it for a pass on sRGB views.
 #[must_use]
 pub fn core_ps_variant(
     base: VariantKey,
@@ -349,6 +402,7 @@ pub fn core_ps_variant(
     point_list: bool,
     linked_input_mask: u8,
     has_depth: bool,
+    extra_present: u8,
 ) -> VariantKey {
     let mut variant = VariantKey {
         linked_input_mask,
@@ -362,12 +416,68 @@ pub fn core_ps_variant(
         variant.flags.remove(VariantFlags::POINT_SPRITE);
     }
     if ps_is_prog {
-        variant.color_out_mask = 0;
+        // mtld3d's draw: the pass's extras shifted by one, colour 0 implied.
+        variant.color_out_mask = extra_present << 1;
         variant
             .flags
             .set(VariantFlags::NO_DEPTH_ATTACHMENT, !has_depth);
     }
     variant
+}
+
+/// The colour targets at index 1-3 a core draw's pipeline declares (DXMTRS C4b-3d4).
+///
+/// `formats[i]` is slot `i + 1`'s attached `WMTPixelFormat`, 0 for a slot the pass leaves empty,
+/// which is then none. Both masks are slot-indexed as the variant's `color_out_mask` is: bit
+/// `i + 1` is slot `i + 1`, and bit 0 (colour 0's) is not read. A slot's write mask is mtld3d's
+/// own rule: its `D3DRS_COLORWRITEENABLE<n>` when the program writes `oC<n>` (`ps_written`,
+/// which is 1 for the fixed-function stage), empty otherwise, so a declared target the program
+/// does not write keeps its contents. Its blend is the draw's, clamped on its own destination
+/// alpha (`has_alpha`), as mtld3d's extra targets blend.
+#[must_use]
+pub fn core_extras(
+    formats: [u32; 3],
+    rs: &[u32; RENDER_STATE_COUNT],
+    ps_written: u8,
+    has_alpha: u8,
+) -> [Option<CoreExtra>; 3] {
+    let bits = PipelineRsBits {
+        color_write_mask_ext: [
+            enum_value(rs, D3DRS_COLORWRITEENABLE1),
+            enum_value(rs, D3DRS_COLORWRITEENABLE2),
+            enum_value(rs, D3DRS_COLORWRITEENABLE3),
+        ],
+        ..PipelineRsBits::default()
+    };
+    let attached = ExtraColorAttachments {
+        present_mask: extra_present(formats),
+        ..ExtraColorAttachments::NONE
+    };
+    core::array::from_fn(|i| {
+        (formats[i] != 0).then(|| CoreExtra {
+            format: formats[i],
+            write_mask: u8::try_from(bits.extra_write_mask(&attached, ps_written, i).bits())
+                .unwrap_or(0),
+            blend: core_blend(rs, has_alpha & (1 << (i + 1)) != 0),
+        })
+    })
+}
+
+/// The slots of `formats` a pass attaches: bit `i` for slot `i + 1`, a non-zero `formats[i]`.
+///
+/// `ExtraColorAttachments::present_mask`'s convention, which the variant's `color_out_mask`
+/// takes shifted by one.
+#[must_use]
+pub const fn extra_present(formats: [u32; 3]) -> u8 {
+    let mut mask = 0;
+    let mut i = 0;
+    while i < formats.len() {
+        if formats[i] != 0 {
+            mask |= 1 << i;
+        }
+        i += 1;
+    }
+    mask
 }
 
 /// A core draw's pixel variant for the view its pass attaches (C4b-3d3).

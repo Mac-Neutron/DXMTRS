@@ -83,6 +83,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
         blend: None,
+        extras: [None, None, None],
     }
 }
 

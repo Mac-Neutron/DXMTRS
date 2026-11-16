@@ -7,6 +7,11 @@
 //! are fixed when it begins. A target with an sRGB twin is attached through the twin's view by a
 //! pass or Clear made under sRGB write, so the hardware encodes after the blender (DXMTRS
 //! C4b-3d3); a read-back and Present keep the stored format's view.
+//!
+//! Three more targets are kept at index 1-3 ([`CoreDevice::set_extra_target`]). A draw's pass
+//! attaches the pass set: target 0, and each of them that resolves, has target 0's size and is no
+//! target already in the set; under sRGB write every member through its twin when every member
+//! has one (DXMTRS C4b-3d4). A change of any of them ends the open render pass too.
 
 use std::sync::Arc;
 
@@ -139,14 +144,69 @@ impl CoreDevice {
         self.shape(self.target).map(|t| t.pixel_format)
     }
 
-    /// The current target's size and the `WMTPixelFormat` a draw attaches it in, in one look-up.
+    /// Binds `target` at colour slot `slot` (1-3), or unbinds the slot (DXMTRS C4b-3d4).
     ///
-    /// Under `srgb_write` (`D3DRS_SRGBWRITEENABLE`) a target with an sRGB twin is attached through
-    /// the twin, whose format this then is: the draw's key names it.
+    /// False, and nothing changed, for another slot or a target that does not resolve. A change
+    /// ends the open render pass, whose attachments are fixed. A bound target need not join the
+    /// pass set: one of another size than target 0 is kept, and skipped by draws.
+    pub fn set_extra_target(&mut self, slot: usize, target: Option<TargetRef>) -> bool {
+        let Some(index) = slot.checked_sub(1).filter(|&i| i < self.extras.len()) else {
+            return false;
+        };
+        if target.is_some_and(|target| self.shape(target).is_none()) {
+            return false;
+        }
+        if self.extras[index] != target {
+            if self.render_open {
+                self.close_pass();
+            }
+            self.extras[index] = target;
+        }
+        true
+    }
+
+    /// Target 0's size and the `WMTPixelFormat` each slot of the pass set attaches.
+    ///
+    /// 0 for a slot not in the set; `None` when target 0 does not resolve. Under `srgb_write`
+    /// (`D3DRS_SRGBWRITEENABLE`) every member is attached through its sRGB twin when every member
+    /// has one, and in its stored format otherwise, as mtld3d decides it: the draw's key names
+    /// these formats.
     #[must_use]
-    pub fn target_desc(&self, srgb_write: bool) -> Option<((u32, u32), u32)> {
-        self.shape(self.target)
-            .map(|t| ((t.width, t.height), t.attached_format(srgb_write)))
+    pub fn target_desc(&self, srgb_write: bool) -> Option<((u32, u32), [u32; 4])> {
+        let set = self.pass_set();
+        let first = set[0]?;
+        let twins = srgb_write && set.iter().flatten().all(|shape| shape.srgb_format != 0);
+        let formats = set.map(|shape| shape.map_or(0, |shape| shape.attached_format(twins)));
+        Some(((first.width, first.height), formats))
+    }
+
+    /// The pass set: the shape of each colour slot a draw's pass attaches, none for the others.
+    ///
+    /// Target 0, and each extra, in slot order, that resolves, has target 0's width and height
+    /// (mtld3d's rule: one of another size is skipped by draws) and is not the `TargetRef` of
+    /// target 0 or of a lower slot in the set (Metal is never handed one view twice). All none
+    /// when target 0 does not resolve. The one place the set is decided.
+    pub(super) fn pass_set(&self) -> [Option<Shape>; 4] {
+        let mut set = [None; 4];
+        let Some(first) = self.shape(self.target) else {
+            return set;
+        };
+        set[0] = Some(first);
+        let mut members = [Some(self.target), None, None, None];
+        for (slot, extra) in (1..).zip(self.extras) {
+            let Some(target) = extra.filter(|target| !members.contains(&Some(*target))) else {
+                continue;
+            };
+            let Some(shape) = self
+                .shape(target)
+                .filter(|shape| (shape.width, shape.height) == (first.width, first.height))
+            else {
+                continue;
+            };
+            set[slot] = Some(shape);
+            members[slot] = Some(target);
+        }
+        set
     }
 }
 

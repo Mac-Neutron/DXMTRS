@@ -76,7 +76,7 @@ pub fn clear(
         let srgb = dev.render_state(D3DRS_SRGBWRITEENABLE as usize) != 0;
         let linear = d3dcolor_to_rgba_f32(color);
         let core = dev.core.as_deref_mut()?;
-        let hardware = srgb && core.target_desc(true).map(|(_, f)| f) != core.target_format();
+        let hardware = srgb && core.target_desc(true).map(|(_, f)| f[0]) != core.target_format();
         let rgba = if srgb && !hardware {
             linear_to_srgb_rgba(linear)
         } else {

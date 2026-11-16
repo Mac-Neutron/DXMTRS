@@ -24,9 +24,9 @@ use mtld3d_core::{
     format::{FormatMapping, map_d3d_format},
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
-        VsStageKey, core_draw_kinds, core_key_depth, core_ps_variant, core_scissor,
-        core_srgb_variant, core_texture_variant, core_viewport, float_rows, indexed_up_vertices,
-        pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
+        VsStageKey, core_draw_kinds, core_extras, core_key_depth, core_ps_variant, core_scissor,
+        core_srgb_variant, core_texture_variant, core_viewport, extra_present, float_rows,
+        indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
     },
     pipeline_state::core_blend,
     sampler_state::{
@@ -199,11 +199,13 @@ fn resolve(
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
     })?;
-    // The bound colour target's size and the format the draw attaches it in (DXMTRS C4b-3d1):
-    // its sRGB twin's under sRGB write when it has one, which then encodes (C4b-3d3). The present
-    // parameters' for a device with no back buffer, whose draws record nothing.
-    let (target, color_format, hardware_srgb) =
+    // The bound colour targets' size and the format the draw attaches each slot of the pass set
+    // in (DXMTRS C4b-3d1, C4b-3d4): the sRGB twins' under sRGB write when every member has one,
+    // which then encode (C4b-3d3). The present parameters' for a device with no back buffer,
+    // whose draws record nothing.
+    let (target, colors, hardware_srgb) =
         core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0);
+    let [color_format, f1, f2, f3] = colors;
     // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size; none
     // for a draw that samples it and uses no plane of it.
     let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound)?;
@@ -330,7 +332,9 @@ fn resolve(
         .vs_draw
         .build_bytes(&rs, point_size, &view, &dev.clip_planes);
     binds.push(Stage::Vertex, mtl::VS_DRAW_SLOT, &vs_draw);
-    let (ps_key, linked) = match (ps_kind, ps, ps_core, ff_ps) {
+    // The pixel stage's key, its linked inputs and the `oC<i>` it writes (bit `i`): the
+    // fixed-function stage writes colour 0 alone.
+    let (ps_key, linked, written) = match (ps_kind, ps, ps_core, ff_ps) {
         (StageKind::Prog, Some(ps), Some((code, meta)), _) => {
             let rows = float_rows(ps.max_const_used(), ps.uses_rel_const());
             let bindings = dev.shader_bindings();
@@ -352,7 +356,7 @@ fn resolve(
                 binds.push(Stage::Pixel, mtl::PS_BUMP_ENV_SLOT, &bump_env);
             }
             let linked = vs_outputs.map_or(0, |outputs| meta.link_inputs.mask_against(outputs));
-            (PsStageKey::Prog(code.clone()), linked)
+            (PsStageKey::Prog(code.clone()), linked, ps.color_out_mask())
         }
         (_, _, _, ff_ps) => {
             let key = ff_ps.unwrap_or_else(|| dev.ff_state().build_ps_key(&rs, bound));
@@ -369,7 +373,7 @@ fn resolve(
             // Read only by a BUMPENVMAP stage; bound unread otherwise, as mtld3d's draws do.
             let bump_env = dev.ff_state().build_bump_env_bytes();
             binds.push(Stage::Pixel, mtl::PS_BUMP_ENV_SLOT, &bump_env);
-            (PsStageKey::Ff(key), 0)
+            (PsStageKey::Ff(key), 0, 1)
         }
     };
     let mut base = dev
@@ -382,6 +386,7 @@ fn resolve(
         primitive == D3DPT_POINTLIST,
         linked,
         has_depth,
+        extra_present([f1, f2, f3]),
     );
     // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
     // black.
@@ -495,6 +500,15 @@ fn resolve(
         .iter()
         .filter(|(d3d, _)| enabled & d3d != 0)
         .fold(0_u8, |mask, (_, metal)| mask | metal);
+    // Only a blended draw asks what its targets store: each slot of the set at its own bit.
+    let blending = rs[D3DRS_ALPHABLENDENABLE as usize] != 0;
+    let alpha = if blending {
+        (1..colors.len())
+            .filter(|&slot| colors[slot] != 0 && slot_has_alpha(dev, slot))
+            .fold(0_u8, |mask, slot| mask | (1 << slot))
+    } else {
+        0
+    };
     let key = PipelineKey {
         vs: vs_key,
         ps: ps_key,
@@ -504,21 +518,22 @@ fn resolve(
         write_mask,
         color_format,
         depth_format,
-        // Only a blended draw asks what its target stores.
-        blend: (rs[D3DRS_ALPHABLENDENABLE as usize] != 0)
-            .then(|| core_blend(&rs, target_has_alpha(dev)))
+        blend: blending
+            .then(|| core_blend(&rs, slot_has_alpha(dev, 0)))
             .flatten(),
+        extras: core_extras([f1, f2, f3], &rs, written, alpha),
     };
     Ok((key, binds, target))
 }
 
-/// The bound colour target's size, the format a draw attaches it in, and whether that encodes.
+/// The bound colour targets' size, the format a draw attaches each in, and whether that encodes.
 ///
-/// The `WMTPixelFormat` is the target's own, or its sRGB twin's under `srgb_write`
-/// (`D3DRS_SRGBWRITEENABLE`) when it has one; the flag says it is the twin's (DXMTRS C4b-3d1,
-/// C4b-3d3). The back buffer's from the present parameters when the target does not resolve (a
-/// device with no back buffer, whose draws record nothing).
-fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), u32, bool) {
+/// The `WMTPixelFormat`s are [`CoreDevice::target_desc`]'s, one a slot, 0 for a slot not in the
+/// pass set: each target's own, or under `srgb_write` (`D3DRS_SRGBWRITEENABLE`) every one's sRGB
+/// twin's when every one has one; the flag says colour 0's is the twin's (DXMTRS C4b-3d1,
+/// C4b-3d3, C4b-3d4). The back buffer's from the present parameters when target 0 does not
+/// resolve (a device with no back buffer, whose draws record nothing).
+fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), [u32; 4], bool) {
     let core = dev.core.as_deref();
     core.and_then(|core| core.target_desc(srgb_write))
         .map_or_else(
@@ -526,23 +541,24 @@ fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), u32, bool
                 let pp = dev.present_params();
                 (
                     (pp.back_buffer_width, pp.back_buffer_height),
-                    mtl::PixelFormat::Bgra8Unorm as u32,
+                    [mtl::PixelFormat::Bgra8Unorm as u32, 0, 0, 0],
                     false,
                 )
             },
-            |(size, format)| {
+            |(size, formats)| {
                 let stored = core.and_then(CoreDevice::target_format);
-                (size, format, srgb_write && stored != Some(format))
+                (size, formats, srgb_write && stored != Some(formats[0]))
             },
         )
 }
 
-/// Whether the bound colour target stores alpha, as mtld3d's blend factors see it (C4b-3d3).
+/// Whether the colour target at `slot` stores alpha, as mtld3d's blend factors see it.
 ///
-/// A back buffer does, whatever its format (mtld3d binds it so); another target by its format,
-/// one the format table does not know counting as alpha-bearing.
-fn target_has_alpha(dev: &DeviceInner) -> bool {
-    let bound = dev.bound_rt().render_target(0);
+/// A back buffer does, whatever its format (mtld3d binds it so), and so does an empty slot;
+/// another target by its format, one the format table does not know counting as alpha-bearing
+/// (DXMTRS C4b-3d3, C4b-3d4).
+fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
+    let bound = dev.bound_rt().render_target(slot);
     // SAFETY: null, or the bound surface, which its slot's refcount keeps live for the call.
     let Some(surface) = (unsafe { bound.as_ref() }) else {
         return true;
@@ -601,7 +617,8 @@ fn key_depth(
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
 ///
 /// A crossing layout answers `D3DERR_NOTAVAILABLE` (logged once); a draw `d3d9_rt` drops for
-/// another reason answers `D3D_OK`, as under C4a.
+/// another reason answers `D3D_OK`, as under C4a, one whose colour targets are not its key's
+/// logged once (unreachable while the key's colours are `target_desc`'s).
 fn draw(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -658,6 +675,13 @@ fn draw(
         Err(DrawRefused::Crossing) => {
             refuse_under_core(CROSSING);
             D3DERR_NOTAVAILABLE
+        }
+        Err(DrawRefused::Target) => {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: a draw's colour targets are not its key's; the draw is dropped"
+            );
+            D3D_OK
         }
         _ => D3D_OK,
     }

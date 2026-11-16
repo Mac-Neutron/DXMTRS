@@ -455,6 +455,7 @@ src/d3d9/core/src/perf.rs PairStatsSample Clone,Copy
 src/d3d9/core/src/perf.rs PerPairStats Default,Clone,Copy
 src/d3d9/core/src/perf.rs Stat Clone,Copy,Default
 src/d3d9/core/src/perf.rs SurfaceSubCategory Clone,Copy,Debug,strum::EnumCount
+src/d3d9/core/src/pipeline_key.rs CoreExtra Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_key.rs CoreRefusal Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/pipeline_key.rs DeclCode Clone,Debug
 src/d3d9/core/src/pipeline_key.rs DrawFacts Clone,Copy,Default

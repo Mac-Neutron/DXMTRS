@@ -2,9 +2,10 @@
 //!
 //! The core's `Encoder::begin` overwrites an open pass, so every helper that begins a pass of
 //! its own (a Clear, a Present, a read-back blit) closes the open render pass first
-//! ([`CoreDevice::close_pass`]). A draw opens one on the current colour target, with the
-//! depth-stencil when its key names one, loading and storing them, and leaves it open for the
-//! next draw of that kind (C4-12). The pass draws to the smaller of the two (DXMTRS C4b-3d3).
+//! ([`CoreDevice::close_pass`]). A draw opens one on the colour targets its key names (target 0
+//! and extras of the pass set, DXMTRS C4b-3d4), with the depth-stencil when its key names one,
+//! loading and storing them, and leaves it open for the next draw of that kind (C4-12). The pass
+//! draws to the smaller of target 0 and the depth-stencil (DXMTRS C4b-3d3).
 
 use std::sync::Arc;
 
@@ -30,6 +31,7 @@ impl CoreDevice {
         if self.render_open || self.blit_open {
             self.render_open = false;
             self.open_depth = None;
+            self.open_colors = [0; 4];
             self.blit_open = false;
             self.emit(Encoder::end_pass);
         }
@@ -52,45 +54,74 @@ impl CoreDevice {
     pub fn open_render_pass(&mut self) {
         if !self.render_open {
             let format = self.target_format().unwrap_or_default();
-            self.open_pass(false, format);
+            self.open_pass(false, [format, 0, 0, 0]);
         }
     }
 
-    /// Opens the render pass of a draw: on the colour target, with the depth-stencil or without.
+    /// Opens the render pass of a draw: on `colors`' slots, with the depth-stencil or without.
     ///
-    /// Nothing when a pass of that kind is open; one of the other kind ends first. `with_depth`
-    /// asks for the bound depth-stencil (the caller checked [`CoreDevice::depth_format`] before
-    /// opening); its planes load and store, and `end_pass` records their write. `format` is the
-    /// colour target's own or its sRGB twin's: a pass on the other view ends first. A new pass
+    /// Nothing when a pass of that kind on those colours is open; any other ends first.
+    /// `with_depth` asks for the bound depth-stencil (the caller checked
+    /// [`CoreDevice::depth_format`] before opening); its planes load and store, and `end_pass`
+    /// records their write. `colors[slot]` is the `WMTPixelFormat` slot `slot` attaches in (its
+    /// target's own or its sRGB twin's), 0 for an empty slot: the caller checked them against
+    /// [`CoreDevice::target_desc`], and a slot outside the pass set is never attached. A new pass
     /// has recorded no scissor: this is the one place that forgets the last one.
-    pub(super) fn open_pass(&mut self, with_depth: bool, format: u32) {
-        if self.render_open && self.open_depth.is_some() == with_depth && self.open_format == format
+    pub(super) fn open_pass(&mut self, with_depth: bool, colors: [u32; 4]) {
+        if self.render_open && self.open_depth.is_some() == with_depth && self.open_colors == colors
         {
             return;
         }
         self.close_pass();
         self.pass_scissor = None;
-        let Some(target) = self.resolve_as(self.target, format) else {
+        let set = self.pass_set();
+        debug_assert!(
+            colors.iter().zip(&set).all(|(&format, shape)| {
+                format == 0
+                    || shape.is_some_and(|s| format == s.pixel_format || format == s.srgb_format)
+            }),
+            "a pass attaches its set's slots, each in its format or its twin's"
+        );
+        let [e1, e2, e3] = self.extras;
+        let slots = [Some(self.target), e1, e2, e3];
+        // Each attached slot's view in its format; a hole and a slot outside the set have none.
+        let views: [_; 4] = core::array::from_fn(|slot| {
+            let format = colors[slot];
+            let target = slots[slot].filter(|_| format != 0 && set[slot].is_some())?;
+            self.resolve_as(target, format)
+                .map(|resolved| (resolved.texture, resolved.key))
+        });
+        let Some(first) = set[0].filter(|_| views[0].is_some()) else {
             return;
         };
+        // The optimizer compares and folds the first `count` slots: up to the highest attached.
+        let count = colors
+            .iter()
+            .zip(1_u8..)
+            .filter(|(format, _)| **format != 0)
+            .map(|(_, count)| count)
+            .last()
+            .unwrap_or(0);
         let depth = if with_depth {
             self.resolve_depth()
         } else {
             None
         };
         let attached = depth.is_some();
-        let shape = target.shape;
         // Metal draws to the smallest attachment; the area is said, so a Clear folds into this
-        // pass only when the pass reaches all of the cleared view.
+        // pass only when the pass reaches all of the cleared view. Every set member has target
+        // 0's size.
         let (width, height) = self
             .pass_extent(attached)
-            .unwrap_or((shape.width, shape.height));
-        let (texture, key) = (target.texture, target.key);
+            .unwrap_or((first.width, first.height));
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
-            enc.start_render_pass(planes, 0, 1, None);
-            let attachment =
-                enc.attachment::<{ stage::PIXEL }>(&texture, key, Access::READ | Access::WRITE);
+            enc.start_render_pass(planes, 0, count, None);
+            let attachments = views.each_ref().map(|view| {
+                view.as_ref().and_then(|(texture, key)| {
+                    enc.attachment::<{ stage::PIXEL }>(texture, *key, Access::READ | Access::WRITE)
+                })
+            });
             // One attachment a plane, both of the one view (the core's are not shared).
             let mut plane = |bit: u8| {
                 depth.as_ref().filter(|_| planes & bit != 0).and_then(|d| {
@@ -111,17 +142,23 @@ impl CoreDevice {
                 targets.stencil.target.load_action = WMT_LOAD_ACTION_LOAD;
                 targets.stencil.target.store_action = WMT_STORE_ACTION_STORE;
             }
-            let color = &mut targets.colors[0];
-            color.target.attachment = attachment;
-            color.target.load_action = WMT_LOAD_ACTION_LOAD;
-            color.target.store_action = WMT_STORE_ACTION_STORE;
-            targets.tile_barrier_pso_key[0] = format;
+            // Each slot at its own index, a hole left empty in the pass and in the barrier's key.
+            for (slot, attachment) in attachments.into_iter().enumerate() {
+                if views[slot].is_none() {
+                    continue;
+                }
+                let color = &mut targets.colors[slot];
+                color.target.attachment = attachment;
+                color.target.load_action = WMT_LOAD_ACTION_LOAD;
+                color.target.store_action = WMT_STORE_ACTION_STORE;
+                targets.tile_barrier_pso_key[slot] = colors[slot];
+            }
             targets.tile_barrier_pso_key[8] = 1;
             targets.render_target_width = width;
             targets.render_target_height = height;
         });
         self.render_open = true;
-        self.open_format = format;
+        self.open_colors = colors;
         self.open_depth = self.depth.filter(|_| attached);
     }
 

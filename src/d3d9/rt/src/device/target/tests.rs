@@ -1,15 +1,20 @@
-use mtld3d_core::{ids::TextureId, pipeline_key::PipelineKey};
+use mtld3d_core::{
+    ids::TextureId,
+    pipeline_key::{CoreExtra, PipelineKey},
+};
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_TEXTURE_TYPE2D,
-    WMT_TEXTURE_USAGE_RENDER_TARGET, WMTTextureInfo,
+    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_PIXEL_FORMAT_R32_FLOAT,
+    WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET,
+    WMTTextureInfo,
 };
 
 use super::TargetRef;
 use crate::device::{
-    CoreDevice, TextureKind,
+    CoreDevice, CoreTextureDesc, DrawData, DrawRefused, Stage, TextureKind,
     fixture::{
-        at, core_on_fakes, ff_binds, key, line, passes, target_desc, targets, textures_made,
-        triangle,
+        at, core_on_fakes, ff_binds, key, key_extras, line, passes, target_desc, targets,
+        textures_made, triangle,
     },
 };
 
@@ -30,11 +35,19 @@ fn stored(
     size: u32,
     levels: u32,
 ) -> (TextureId, String) {
+    let desc = target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, kind, size, levels, 4);
+    stored_desc(core, device, id, &desc)
+}
+
+/// A stored texture of `desc`, and its handle; its creation's calls taken.
+fn stored_desc(
+    core: &mut CoreDevice,
+    device: u64,
+    id: u64,
+    desc: &CoreTextureDesc,
+) -> (TextureId, String) {
     let id = TextureId::from_raw(id);
-    core.texture_create(
-        id,
-        &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, kind, size, levels, 4),
-    );
+    core.texture_create(id, desc);
     core.drain();
     let made = textures_made(&dxmt_fakes::take_calls(device));
     (id, made[0].clone())
@@ -285,8 +298,8 @@ fn is_view(calls: &[String], handle: &str, texture: &str, format: u32) -> bool {
 fn srgb_write_attaches_the_twin() {
     const DEVICE: u64 = 0x320;
     let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
-    assert_eq!(core.target_desc(false), Some(((64, 32), BGRA8)));
-    assert_eq!(core.target_desc(true), Some(((64, 32), SRGB)));
+    assert_eq!(core.target_desc(false), Some(((64, 32), [BGRA8, 0, 0, 0])));
+    assert_eq!(core.target_desc(true), Some(((64, 32), [SRGB, 0, 0, 0])));
     assert_eq!(core.target_format(), Some(BGRA8));
     draw_in(&mut core, SRGB);
     core.drain();
@@ -331,15 +344,15 @@ fn a_target_without_a_twin_keeps_its_format() {
     let (mut core, _) = core_and_back_buffer(DEVICE);
     let (plain, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
     assert!(core.set_target(level0(plain)));
-    assert_eq!(core.target_desc(true), Some(((64, 64), BGRA8)));
+    assert_eq!(core.target_desc(true), Some(((64, 64), [BGRA8, 0, 0, 0])));
     let twin = TextureId::from_raw(2);
     let mut desc = target_desc(BGRA8, TextureKind::Tex2d, 64, 1, 4);
     desc.view_twins = true;
     desc.srgb_format = SRGB;
     core.texture_create(twin, &desc);
     assert!(core.set_target(level0(twin)));
-    assert_eq!(core.target_desc(true), Some(((64, 64), SRGB)));
-    assert_eq!(core.target_desc(false), Some(((64, 64), BGRA8)));
+    assert_eq!(core.target_desc(true), Some(((64, 64), [SRGB, 0, 0, 0])));
+    assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
 }
 
 /// A Clear and a draw made under sRGB write are one pass: the Clear is its load action.
@@ -399,4 +412,446 @@ fn read_back_reads_the_stored_view() {
         .find_map(|c| c.trim_start().strip_prefix("copy_to_buffer "))
         .unwrap_or_else(|| panic!("{calls:#?}"));
     assert!(copied.starts_with(&format!("{back_buffer} ")), "{calls:#?}");
+}
+
+const RGBA8: u32 = WMT_PIXEL_FORMAT_RGBA8_UNORM;
+const RGBA8_SRGB: u32 = WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB;
+const RGBA16F: u32 = WMT_PIXEL_FORMAT_RGBA16_FLOAT;
+const R32F: u32 = WMT_PIXEL_FORMAT_R32_FLOAT;
+
+/// An extra of `format` written through `write_mask`, unblended.
+const fn extra(format: u32, write_mask: u8) -> CoreExtra {
+    CoreExtra {
+        format,
+        write_mask,
+        blend: None,
+    }
+}
+
+/// A square `size` one-level 2D render target of `format`, `texel_bytes` a texel.
+const fn flat(format: u32, size: u32, texel_bytes: u32) -> CoreTextureDesc {
+    target_desc(format, TextureKind::Tex2d, size, 1, texel_bytes)
+}
+
+/// `desc` with an sRGB twin of `srgb_format`.
+const fn twinned(mut desc: CoreTextureDesc, srgb_format: u32) -> CoreTextureDesc {
+    desc.view_twins = true;
+    desc.srgb_format = srgb_format;
+    desc
+}
+
+/// Target 0 a stored 64x64 BGRA8 texture, made first: the fixture's back buffer is 64x32.
+fn core_on_a_64_target(device: u64) -> (CoreDevice, TextureId) {
+    let (mut core, _) = core_and_back_buffer(device);
+    let (t0, _) = stored(&mut core, device, 1, TextureKind::Tex2d, 64, 1);
+    assert!(core.set_target(level0(t0)));
+    (core, t0)
+}
+
+/// The draws `calls` shows recorded.
+fn draws(calls: &[String]) -> usize {
+    calls
+        .iter()
+        .filter(|c| c.starts_with("  render 19 "))
+        .count()
+}
+
+/// The `target<slot>` handle of each render pass in `calls` that attaches `slot`, in order.
+fn slot_targets(calls: &[String], slot: usize) -> Vec<String> {
+    let prefix = format!("  target{slot} ");
+    passes(calls)
+        .into_iter()
+        .filter_map(|pass| line(pass, &prefix).map(str::to_owned))
+        .collect()
+}
+
+/// A draw's key names the slots its pass attaches, in its formats, with its masks.
+///
+/// The same targets with a key naming none of them is refused: the key decides the pass.
+#[test]
+fn the_key_names_the_pass() {
+    const DEVICE: u64 = 0x340;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t1, h1) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    let (t2, h2) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA16F, 64, 8));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    assert!(core.set_extra_target(2, Some(level0(t2))));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, RGBA8, RGBA16F, 0]))
+    );
+    let binds = ff_binds();
+    let both = key_extras([Some(extra(RGBA8, 8)), Some(extra(RGBA16F, 6)), None]);
+    assert_eq!(core.draw_up(&both, &triangle(&binds)), Ok(()));
+    assert_eq!(
+        core.draw_up(&key(0xf), &triangle(&binds)),
+        Err(DrawRefused::Target)
+    );
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    for slot in [1, 2] {
+        let color = line(all[0], &format!("  color{slot} ")).unwrap_or_default();
+        assert!(color.starts_with("load=1 store=1"), "{calls:#?}");
+    }
+    assert_eq!(line(all[0], "  target1 "), Some(h1.as_str()), "{calls:#?}");
+    assert_eq!(line(all[0], "  target2 "), Some(h2.as_str()), "{calls:#?}");
+    assert_eq!(line(all[0], "  color3 "), None, "{calls:#?}");
+    assert!(
+        calls.contains(&format!("  pso color1={RGBA8} mask=8 blend=0")),
+        "{calls:#?}"
+    );
+    assert!(
+        calls.contains(&format!("  pso color2={RGBA16F} mask=6 blend=0")),
+        "{calls:#?}"
+    );
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
+}
+
+/// A key naming a format a slot does not store, or a slot with no target, records nothing.
+///
+/// So does a key that was right before its extra was unbound: no pass, no pipeline built.
+#[test]
+fn a_key_the_targets_cannot_make_is_refused() {
+    const DEVICE: u64 = 0x341;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t1, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    let binds = ff_binds();
+    let refused = Err(DrawRefused::Target);
+    let other_format = key_extras([Some(extra(R32F, 0xf)), None, None]);
+    assert_eq!(core.draw_up(&other_format, &triangle(&binds)), refused);
+    let unbound = key_extras([Some(extra(RGBA8, 0xf)), Some(extra(RGBA8, 0xf)), None]);
+    assert_eq!(core.draw_up(&unbound, &triangle(&binds)), refused);
+    assert_eq!(core.pipelines_len(), 0);
+    let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
+    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    assert!(core.set_extra_target(1, None));
+    assert_eq!(core.draw_up(&named, &triangle(&binds)), refused);
+    assert_eq!(core.pipelines_len(), 1);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
+}
+
+/// An empty slot between two bound ones is attached nowhere: no pass line, no pipeline line.
+#[test]
+fn a_hole_stays_empty() {
+    const DEVICE: u64 = 0x342;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t2, h2) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA16F, 64, 8));
+    assert!(core.set_extra_target(2, Some(level0(t2))));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, 0, RGBA16F, 0]))
+    );
+    let binds = ff_binds();
+    let hole = key_extras([None, Some(extra(RGBA16F, 0xf)), None]);
+    assert_eq!(core.draw_up(&hole, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    assert_eq!(line(all[0], "  target2 "), Some(h2.as_str()), "{calls:#?}");
+    assert!(line(all[0], "  color2 ").is_some(), "{calls:#?}");
+    assert_eq!(line(all[0], "  color1 "), None, "{calls:#?}");
+    assert_eq!(line(all[0], "  target1 "), None, "{calls:#?}");
+    assert!(
+        calls.contains(&format!("  pso color2={RGBA16F} mask=15 blend=0")),
+        "{calls:#?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("  pso color1=")),
+        "{calls:#?}"
+    );
+}
+
+/// A bound extra of another size than target 0 is no member of the pass set.
+#[test]
+fn an_extra_of_another_size_is_not_in_the_set() {
+    const DEVICE: u64 = 0x343;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (small, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 32, 4));
+    assert!(core.set_extra_target(1, Some(level0(small))));
+    assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
+    let binds = ff_binds();
+    let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
+    assert_eq!(
+        core.draw_up(&named, &triangle(&binds)),
+        Err(DrawRefused::Target)
+    );
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+}
+
+/// A target already in the set is no member again: target 0's own, or a lower slot's.
+#[test]
+fn a_duplicate_is_not_in_the_set() {
+    const DEVICE: u64 = 0x344;
+    let (mut core, t0) = core_on_a_64_target(DEVICE);
+    assert!(core.set_extra_target(1, Some(level0(t0))));
+    assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
+    let (t1, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    assert!(core.set_extra_target(2, Some(level0(t1))));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
+    );
+}
+
+/// An extra leaves the set when target 0 takes another size, and joins it at its own.
+#[test]
+fn a_target_0_of_another_size_drops_the_extra() {
+    const DEVICE: u64 = 0x345;
+    let (mut core, t0) = core_on_a_64_target(DEVICE);
+    let (small, h_small) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 32, 4));
+    let (u, _) = stored(&mut core, DEVICE, 3, TextureKind::Tex2d, 32, 1);
+    assert!(core.set_extra_target(1, Some(level0(small))));
+    assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
+    assert!(core.set_target(level0(u)));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((32, 32), [BGRA8, RGBA8, 0, 0]))
+    );
+    let binds = ff_binds();
+    let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
+    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    assert!(core.set_target(level0(t0)));
+    assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
+    assert_eq!(
+        core.draw_up(&named, &triangle(&binds)),
+        Err(DrawRefused::Target)
+    );
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(slot_targets(&calls, 1), [h_small], "{calls:#?}");
+}
+
+/// Another target at a slot ends the pass, the same one does not; with a hole below it too.
+///
+/// The passes reach Metal after the optimizer: two passes that differ in any slot up to the
+/// highest attached one stay two.
+#[test]
+fn an_extra_change_ends_the_pass() {
+    const DEVICE: u64 = 0x346;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (a, ha) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    let (b, hb) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 64, 4));
+    let binds = ff_binds();
+    for slot in [1, 2] {
+        let mut extras = [None, None, None];
+        extras[slot - 1] = Some(extra(RGBA8, 0xf));
+        let named = key_extras(extras);
+        assert!(core.set_extra_target(1, None));
+        assert!(core.set_extra_target(slot, Some(level0(a))));
+        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert!(core.set_extra_target(slot, Some(level0(b))));
+        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        assert_eq!(passes(&calls).len(), 2, "slot {slot}: {calls:#?}");
+        assert_eq!(
+            slot_targets(&calls, slot),
+            [ha.clone(), hb.clone()],
+            "slot {slot}: {calls:#?}"
+        );
+        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert!(core.set_extra_target(slot, Some(level0(b))));
+        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        assert_eq!(passes(&calls).len(), 1, "slot {slot}: {calls:#?}");
+    }
+}
+
+/// Forgetting a texture empties every extra slot that holds it and ends the pass.
+#[test]
+fn forgetting_an_extra_unbinds_it() {
+    const DEVICE: u64 = 0x347;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (cube, _) = stored_desc(
+        &mut core,
+        DEVICE,
+        2,
+        &target_desc(RGBA8, TextureKind::Cube, 64, 1, 4),
+    );
+    let (kept, h_kept) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 64, 4));
+    let face = |face| TargetRef::Texture {
+        id: cube,
+        level: 0,
+        face: Some(face),
+    };
+    assert!(core.set_extra_target(1, Some(face(0))));
+    assert!(core.set_extra_target(2, Some(face(1))));
+    assert!(core.set_extra_target(3, Some(level0(kept))));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, RGBA8, RGBA8, RGBA8]))
+    );
+    let binds = ff_binds();
+    let all = key_extras([
+        Some(extra(RGBA8, 0xf)),
+        Some(extra(RGBA8, 0xf)),
+        Some(extra(RGBA8, 0xf)),
+    ]);
+    assert_eq!(core.draw_up(&all, &triangle(&binds)), Ok(()));
+    core.forget_texture(cube);
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, 0, 0, RGBA8]))
+    );
+    let third = key_extras([None, None, Some(extra(RGBA8, 0xf))]);
+    assert_eq!(core.draw_up(&third, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(line(found[1], "  target1 "), None, "{calls:#?}");
+    assert_eq!(line(found[1], "  target2 "), None, "{calls:#?}");
+    assert_eq!(
+        slot_targets(&calls, 3),
+        [h_kept.clone(), h_kept],
+        "{calls:#?}"
+    );
+}
+
+/// Under sRGB write the set attaches every member's twin when every one has one; none otherwise.
+#[test]
+fn srgb_twins_are_all_or_nothing() {
+    const DEVICE: u64 = 0x348;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t0, _) = stored_desc(&mut core, DEVICE, 1, &twinned(flat(BGRA8, 64, 4), SRGB));
+    let (t1, _) = stored_desc(
+        &mut core,
+        DEVICE,
+        2,
+        &twinned(flat(RGBA8, 64, 4), RGBA8_SRGB),
+    );
+    let (float, _) = stored_desc(&mut core, DEVICE, 3, &flat(R32F, 64, 4));
+    let (small, _) = stored_desc(&mut core, DEVICE, 4, &flat(R32F, 32, 4));
+    assert!(core.set_target(level0(t0)));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    assert_eq!(
+        core.target_desc(true),
+        Some(((64, 64), [SRGB, RGBA8_SRGB, 0, 0]))
+    );
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
+    );
+    assert!(core.set_extra_target(1, Some(level0(float))));
+    assert_eq!(
+        core.target_desc(true),
+        Some(((64, 64), [BGRA8, R32F, 0, 0]))
+    );
+    assert!(core.set_extra_target(1, Some(level0(small))));
+    assert_eq!(core.target_desc(true), Some(((64, 64), [SRGB, 0, 0, 0])));
+}
+
+/// An extra's blend reaches its colour of the pipeline; an unblended one stays off.
+#[test]
+fn the_blend_reaches_each_extra() {
+    const DEVICE: u64 = 0x349;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t1, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    let (t2, _) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    assert!(core.set_extra_target(2, Some(level0(t2))));
+    let mut rs = mtld3d_types::render_state_defaults();
+    rs[mtld3d_types::D3DRS_ALPHABLENDENABLE as usize] = 1;
+    let blend = mtld3d_core::pipeline_state::core_blend(&rs, true);
+    assert!(blend.is_some());
+    let blended = PipelineKey {
+        blend: blend.clone(),
+        extras: [
+            Some(CoreExtra {
+                format: RGBA8,
+                write_mask: 0xf,
+                blend,
+            }),
+            Some(extra(RGBA8, 0xf)),
+            None,
+        ],
+        ..key(0xf)
+    };
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&blended, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        calls.contains(&format!("  pso color1={RGBA8} mask=15 blend=1")),
+        "{calls:#?}"
+    );
+    assert!(
+        calls.contains(&format!("  pso color2={RGBA8} mask=15 blend=0")),
+        "{calls:#?}"
+    );
+}
+
+/// The tile barrier's pipeline names each attached slot's format, a hole none, and one sample.
+///
+/// Under sRGB write with two twinned members both name the twins.
+#[test]
+fn the_tile_barrier_names_each_slot() {
+    const DEVICE: u64 = 0x34a;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (x, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 2);
+    let (e, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA16F, 64, 8));
+    let (y, _) = stored_desc(
+        &mut core,
+        DEVICE,
+        3,
+        &twinned(target_desc(BGRA8, TextureKind::Tex2d, 64, 2, 4), SRGB),
+    );
+    let (f, _) = stored_desc(
+        &mut core,
+        DEVICE,
+        4,
+        &twinned(flat(RGBA8, 64, 4), RGBA8_SRGB),
+    );
+    let binds = ff_binds();
+    // A draw that samples target 0's texture, whose level 0 its pass attaches.
+    let sampling = |core: &mut CoreDevice, id: TextureId, key: &PipelineKey| {
+        let bind = core
+            .texture_bind(Stage::Pixel, 0, id, BGRA8, None)
+            .expect("a stored texture");
+        let textures = [bind];
+        let data = DrawData {
+            textures: &textures,
+            ..triangle(&binds)
+        };
+        assert_eq!(core.draw_up(key, &data), Ok(()));
+        core.drain();
+        dxmt_fakes::take_calls(DEVICE)
+    };
+    assert!(core.set_target(level0(x)));
+    assert!(core.set_extra_target(2, Some(level0(e))));
+    let hole = key_extras([None, Some(extra(RGBA16F, 0xf)), None]);
+    let calls = sampling(&mut core, x, &hole);
+    let tile = |calls: &[String], slot: usize| {
+        calls
+            .iter()
+            .find_map(|c| c.strip_prefix(&format!("  tile color{slot}=")))
+            .map(str::to_owned)
+    };
+    assert_eq!(tile(&calls, 0), Some(BGRA8.to_string()), "{calls:#?}");
+    assert_eq!(tile(&calls, 1), None, "{calls:#?}");
+    assert_eq!(tile(&calls, 2), Some(RGBA16F.to_string()), "{calls:#?}");
+    assert!(calls.contains(&"  tile samples=1".to_owned()), "{calls:#?}");
+    assert!(core.set_target(level0(y)));
+    assert!(core.set_extra_target(2, None));
+    assert!(core.set_extra_target(1, Some(level0(f))));
+    assert_eq!(
+        core.target_desc(true),
+        Some(((64, 64), [SRGB, RGBA8_SRGB, 0, 0]))
+    );
+    let twins = PipelineKey {
+        color_format: SRGB,
+        ..key_extras([Some(extra(RGBA8_SRGB, 0xf)), None, None])
+    };
+    let calls = sampling(&mut core, y, &twins);
+    assert_eq!(tile(&calls, 0), Some(SRGB.to_string()), "{calls:#?}");
+    assert_eq!(tile(&calls, 1), Some(RGBA8_SRGB.to_string()), "{calls:#?}");
 }

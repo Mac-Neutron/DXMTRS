@@ -6,7 +6,7 @@ use mtld3d_core::{
     depth_stencil_state::DepthStencilSnapshot,
     dxso::MAX_LINKED_INPUTS,
     ff_state::FfState,
-    pipeline_key::{DeclCode, PipelineKey, PsStageKey, VsStageKey},
+    pipeline_key::{CoreExtra, DeclCode, PipelineKey, PsStageKey, VsStageKey},
 };
 use mtld3d_types::{
     D3DDECL_END, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, render_state_defaults,
@@ -109,7 +109,13 @@ pub fn key(write_mask: u8) -> PipelineKey {
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
         blend: None,
+        extras: [None, None, None],
     }
+}
+
+/// The fixture's key, colour 0 written whole, naming `extras` at index 1-3.
+pub fn key_extras(extras: [Option<CoreExtra>; 3]) -> PipelineKey {
+    PipelineKey { extras, ..key(0xf) }
 }
 
 /// A full-target viewport of the fixture's 64x32 back buffer.

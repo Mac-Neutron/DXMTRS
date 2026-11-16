@@ -226,14 +226,28 @@ impl CoreDevice {
 
     /// Drops the store's texture of `id`; the closures already recorded hold their own.
     ///
-    /// When it is the current colour target the back buffer becomes the target, and the open pass,
-    /// which draws to it, ends.
+    /// When it is the current colour target the back buffer becomes the target, and every slot at
+    /// index 1-3 that holds it is emptied (DXMTRS C4b-3d4); the open pass, which draws to it, ends.
     pub fn forget_texture(&mut self, id: TextureId) {
-        if matches!(self.target, TargetRef::Texture { id: current, .. } if current == id) {
+        let holds = |target: &TargetRef| match *target {
+            TargetRef::Texture { id: held, .. } => held == id,
+            TargetRef::BackBuffer => false,
+        };
+        if holds(&self.target) {
             if self.render_open {
                 self.close_pass();
             }
             self.target = TargetRef::BackBuffer;
+        }
+        if self.extras.iter().flatten().any(holds) {
+            if self.render_open {
+                self.close_pass();
+            }
+            for extra in &mut self.extras {
+                if extra.as_ref().is_some_and(holds) {
+                    *extra = None;
+                }
+            }
         }
         if self.depth.is_some_and(|depth| depth.id == id) {
             if self.render_open {

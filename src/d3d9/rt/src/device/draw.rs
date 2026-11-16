@@ -26,7 +26,7 @@ use mtld3d_core::{
     clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
     pipeline_key::{PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source},
-    pipeline_state::{BlendFactor, BlendOperation},
+    pipeline_state::{BlendFactor, BlendOperation, CoreBlend},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
@@ -44,9 +44,10 @@ use winemetal_sys::{
         WMT_BLEND_OPERATION_SUBTRACT, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
         WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF, WMT_RENDER_COMMAND_SET_DSSO,
         WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-        WMT_RENDER_COMMAND_SET_SCISSOR_RECTS, WMT_RENDER_COMMAND_SET_VIEWPORTS, WMTScissorRect,
-        WMTVertexAttributeInfo, WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport,
-        WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderSetblendcolor, WmtcmdRenderSetdsso,
+        WMT_RENDER_COMMAND_SET_SCISSOR_RECTS, WMT_RENDER_COMMAND_SET_VIEWPORTS,
+        WMTColorAttachmentBlendInfo, WMTScissorRect, WMTVertexAttributeInfo,
+        WMTVertexBufferLayoutInfo, WMTVertexDescriptorInfo, WMTViewport, WmtcmdRenderDraw,
+        WmtcmdRenderDrawIndexed, WmtcmdRenderSetblendcolor, WmtcmdRenderSetdsso,
         WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects,
         WmtcmdRenderSetviewports,
     },
@@ -133,6 +134,11 @@ pub enum DrawRefused {
     Crossing,
     /// The key names a depth format the bound depth-stencil has not (none is bound).
     Depth,
+    /// The key names colour formats the bound targets do not make.
+    ///
+    /// Its colours are those of the pass set ([`CoreDevice::target_desc`]) under neither sRGB
+    /// write (DXMTRS C4b-3d4).
+    Target,
 }
 
 /// A compiled stage function's key: its program and its specialization's wire form.
@@ -173,23 +179,30 @@ impl StageFunctions {
 }
 
 impl CoreDevice {
-    /// Records `draw` with the pipeline of `key` into the current colour target's render pass.
+    /// Records `draw` with the pipeline of `key` into the render pass of the targets it names.
     ///
     /// # Errors
     ///
-    /// Nothing recorded when the colour target does not resolve (a device with no back buffer),
-    /// the key names a depth format the bound depth-stencil has not, the layout crosses its
-    /// stride, or the pipeline does not build. A draw whose scissor holds no pixel of the pass
-    /// records nothing and is no error.
+    /// Nothing recorded when colour target 0 does not resolve (a device with no back buffer),
+    /// the key names colour formats the bound targets do not make or a depth format the bound
+    /// depth-stencil has not, the layout crosses its stride, or the pipeline does not build. A
+    /// draw whose scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };
-        debug_assert!(
-            key.color_format == target.pixel_format
-                || (key.color_format == target.srgb_format && target.srgb_format != 0),
-            "a draw's key names its target's colour format, or its sRGB twin's"
-        );
+        // The key decides the pass's colour slots and formats. An open pass on them was checked
+        // when it opened, and a change of any target closed it; otherwise the pass set must make
+        // them, under one sRGB write or the other.
+        let colors = key.color_formats();
+        let open = self.render_open && self.open_colors == colors;
+        if !open
+            && [false, true]
+                .into_iter()
+                .all(|srgb| self.target_desc(srgb).map(|(_, formats)| formats) != Some(colors))
+        {
+            return Err(DrawRefused::Target);
+        }
         // The key decides the pass: with the depth-stencil exactly when it names a format. An
         // open pass with it was checked when it opened, and a change of either binding closed it.
         let with_depth = key.depth_format != 0;
@@ -218,7 +231,7 @@ impl CoreDevice {
         });
         let stencil_ref = draw.stencil_ref;
         let blend_color = draw.blend_color;
-        self.open_pass(with_depth, key.color_format);
+        self.open_pass(with_depth, colors);
         // After the pass is open: `open_pass` ends one of the other depth kind, and a new pass
         // has recorded none. Once a pass and on a change, not once a draw.
         let scissor = (self.pass_scissor != Some(scissor)).then(|| {
@@ -475,14 +488,19 @@ fn build_pipeline(
     info.colors[0].pixel_format = source.color_format;
     info.colors[0].write_mask = source.write_mask;
     if let Some(blend) = &source.blend {
-        let color = &mut info.colors[0];
-        color.blending_enabled = 1;
-        color.src_rgb_blend_factor = wire_factor(blend.src);
-        color.dst_rgb_blend_factor = wire_factor(blend.dst);
-        color.rgb_blend_operation = wire_op(blend.op);
-        color.src_alpha_blend_factor = wire_factor(blend.src_alpha);
-        color.dst_alpha_blend_factor = wire_factor(blend.dst_alpha);
-        color.alpha_blend_operation = wire_op(blend.op_alpha);
+        set_blend(&mut info.colors[0], blend);
+    }
+    // Slots 1-3 at their own index; an empty one keeps the invalid format, as its pass's slot
+    // holds no attachment.
+    for (color, extra) in info.colors[1..].iter_mut().zip(&source.extras) {
+        let Some(extra) = extra else {
+            continue;
+        };
+        color.pixel_format = extra.format;
+        color.write_mask = extra.write_mask;
+        if let Some(blend) = &extra.blend {
+            set_blend(color, blend);
+        }
     }
     // The planes of the pass the key draws in: both formats are the combined format's.
     let planes = super::depth::planes(source.depth_format);
@@ -533,6 +551,17 @@ fn build_pipeline(
     drop(unsafe { Obj::adopt(error) });
     // SAFETY: a new pipeline's handle carries its reference.
     unsafe { Obj::adopt(pso) }
+}
+
+/// Turns blending on in `color`, with `blend`'s factors and operations in the wire's numbers.
+const fn set_blend(color: &mut WMTColorAttachmentBlendInfo, blend: &CoreBlend) {
+    color.blending_enabled = 1;
+    color.src_rgb_blend_factor = wire_factor(blend.src);
+    color.dst_rgb_blend_factor = wire_factor(blend.dst);
+    color.rgb_blend_operation = wire_op(blend.op);
+    color.src_alpha_blend_factor = wire_factor(blend.src_alpha);
+    color.dst_alpha_blend_factor = wire_factor(blend.dst_alpha);
+    color.alpha_blend_operation = wire_op(blend.op_alpha);
 }
 
 /// The wire's `WMT_BLEND_FACTOR_*` of mtld3d's blend factor.

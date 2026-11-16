@@ -50,13 +50,19 @@ pub struct CoreDevice {
     depth_states: rustc_hash::FxHashMap<u64, Obj>,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
+    /// The colour targets bound at index 1-3: `extras[i]` is slot `i + 1`'s (DXMTRS C4b-3d4).
+    ///
+    /// A draw's pass attaches those of the pass set ([`CoreDevice::target_desc`]).
+    extras: [Option<TargetRef>; 3],
     /// The depth-stencil draws test against and clears go to (C4b-3d2).
     depth: Option<DepthRef>,
     render_open: bool,
     /// The depth-stencil the open render pass has attached; none for a pass without one.
     open_depth: Option<DepthRef>,
-    /// The colour format the open render pass attached: the target's, or its sRGB twin's.
-    open_format: u32,
+    /// The `WMTPixelFormat` each colour slot of the open render pass attached; 0 for none.
+    ///
+    /// A target's own or its sRGB twin's; all 0 while no render pass is open.
+    open_colors: [u32; 4],
     /// The scissor the open render pass last recorded; none since it began (DXMTRS C4b-3d3).
     pass_scissor: Option<[u32; 4]>,
     /// The last closure left a blit pass open (consecutive uploads share it).
@@ -102,10 +108,11 @@ impl CoreDevice {
             samplers: rustc_hash::FxHashMap::default(),
             depth_states: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
+            extras: [None; 3],
             depth: None,
             render_open: false,
             open_depth: None,
-            open_format: 0,
+            open_colors: [0; 4],
             pass_scissor: None,
             blit_open: false,
             dirty: false,
