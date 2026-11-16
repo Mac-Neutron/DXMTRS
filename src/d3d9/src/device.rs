@@ -4990,11 +4990,6 @@ extern "system" fn device_evict_managed_resources(this: *mut c_void) -> i32 {
 
 extern "system" fn device_get_direct3d(this: *mut c_void, ppd3d9: *mut *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetDirect3D",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDirect3D()");
     if ppd3d9.is_null() {
