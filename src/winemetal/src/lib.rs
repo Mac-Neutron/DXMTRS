@@ -6,7 +6,7 @@
 //! back what the handler wrote: the return value and the out-pointers the C copied back. Statuses
 //! are dropped, as a release build of the C dropped them, except where the C looked: the bootstrap
 //! calls answer whether theirs was 0 and `WMTForward` passes its own through. On Windows,
-//! `DllMain` loads the Unix side; the `SM50*` exports stay C (`airconv_thunks.c`).
+//! `DllMain` loads the Unix side, and the translator's `SM50*` exports are thunks too (`sm50`).
 
 /// `winemetal.h`'s exported entry points.
 ///
@@ -49,6 +49,8 @@ mod pipelines;
 #[cfg(windows)]
 mod protos;
 mod resources;
+#[cfg(any(windows, test))]
+pub mod sm50;
 mod transport;
 
 // The exports at the crate root, where `protos` names them as `winemetal.h` does.

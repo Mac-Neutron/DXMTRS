@@ -230,6 +230,4 @@ struct sm50_get_arguments_info_params32 {
 
 COMPATIBLE_STRUCT32(sm50_get_arguments_info_params, 16)
 
-#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_##code, params)
-
 #endif

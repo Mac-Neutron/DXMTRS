@@ -63,7 +63,7 @@ esac
 PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
   -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p d3d9-rt --features d3d11/front-end'
 PE64_P="$PE_P -p nvngx -p nvapi"
-HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
+HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p winemetal-pe -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
   -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p dxmt-fakes -p d3d9-rt'
 # The core's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
 CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d11/front-end,d3d12/perf-build'
@@ -261,6 +261,7 @@ leg_gen() {
     D3D10_QUERY_DATA_PIPELINE_STATISTICS D3D10_QUERY_DATA_SO_STATISTICS \
     D3D10_COUNTER_DESC D3D10_COUNTER_INFO || rc=1
   gen_cmp src/winemetal/sys/src/sm50/abi.rs --seam-abi src/winemetal/sys/sm50-abi.h winemetal_sys::sm50 || rc=1
+  gen_cmp src/winemetal/src/sm50/abi.rs --seam-abi src/winemetal/sys/sm50-abi.h crate::sm50 || rc=1
   for f in src/dxmt/src/*/abi.rs; do
     h=$(sed -n '1s/^\/\/! `\([^`]*\)`.s `dxmt-abi` block.*/\1/p' "$f")
     hdr=$(git ls-files "src/*/$h")

@@ -74,7 +74,7 @@ pub fn unix_call(slot: u32, args: *mut c_void) -> i32 {
     unsafe { handler(args) }
 }
 
-/// A params structure of the wire: integers, floats, `MemPtr`s and arrays of them.
+/// A params structure of the wire: integers, floats, `MemPtr`s, raw pointers and arrays of them.
 ///
 /// # Safety
 ///
@@ -166,6 +166,29 @@ params!(
     UnixcallSetmetalcachepath,
     UnixcallUpdateDisplaySetting,
     UnixcallWmtmemory,
+);
+
+macro_rules! pointer_params {
+    ($($t:ident),* $(,)?) => {$(
+        // SAFETY: a `#[repr(C)]` wire mirror of integers and raw pointers, each of which all-zero bytes are.
+        unsafe impl Params for wire::$t {}
+    )*};
+}
+
+// `airconv_thunks.h`'s params: the translator's calls, whose pointers travel as pointers.
+pointer_params!(
+    Sm50CompileGeometryPipelineGeometryParams,
+    Sm50CompileGeometryPipelineVertexParams,
+    Sm50CompileParams,
+    Sm50CompileTessellationPipelineDomainParams,
+    Sm50CompileTessellationPipelineHullParams,
+    Sm50DestroyBitcodeParams,
+    Sm50DestroyParams,
+    Sm50FreeErrorParams,
+    Sm50GetArgumentsInfoParams,
+    Sm50GetCompiledBitcodeParams,
+    Sm50GetErrorMessageParams,
+    Sm50InitializeParams,
 );
 
 /// Calls handler `slot` with a zeroed `T` that `fill` writes first.

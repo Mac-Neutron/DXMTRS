@@ -6,8 +6,8 @@
 # each bitfield's shift and width (Apple clang for aarch64-apple-darwin; llvm-mingw's clang, -ffreestanding, for the
 # four Windows targets). Once, from Apple clang: each enum value of winemetal.h and each SM50_BINDING_INDEX_*, each
 # integer macro of the headers (-E -dM), the swizzle macros on every swizzled pixel format, and each slot number
-# (src/winemetal/src/*.rs's calls, airconv_unixcalls, WMTForward's). The headers are read with -DDXMT_GUEST_VM, which
-# only adds declarations. airconv_public.h's structs may be mirrored too (lib.rs mirrors the reflection pair, whose
+# (src/winemetal/src/*.rs's calls, airconv_unixcalls for the SM50 slots whatever sm50.rs's exports are named,
+# WMTForward's). The headers are read with -DDXMT_GUEST_VM, which only adds declarations. airconv_public.h's structs may be mirrored too (lib.rs mirrors the reflection pair, whose
 # anonymous union is the field u) and its MTL_SM50_SHADER_ARGUMENT_* enumerators are asserted with winemetal.h's.
 # Names take Rust casing: a struct's snake_case becomes CamelCase, an all-capitals word capitalised
 # (MTL_SM50_SHADER_ARGUMENT: MtlSm50ShaderArgument; WMT names stay),
@@ -1042,7 +1042,7 @@ apple -fsyntax-only -Xclang -ast-dump -Xclang -ast-dump-filter -Xclang wire_prob
   >"$t/values"
 awk 'FILENAME == ARGV[1] && /^pub const / { sub(/:/, "", $3); sub(/;/, "", $NF); num[$3] = $NF; next }
   /^[[:space:]]*fn [A-Za-z_][A-Za-z0-9_]*\(/ { s = $0; sub(/^[[:space:]]*fn /, "", s); sub(/\(.*/, "", s); f = s }
-  match($0, /slot::[A-Z0-9_]+/) { c = substr($0, RSTART + 6, RLENGTH - 6); print f, num[c] }
+  match($0, /slot::[A-Z0-9_]+/) { c = substr($0, RSTART + 6, RLENGTH - 6); if (c !~ /^SM50_/) print f, num[c] }
 ' "$wire/slot.rs" "$wm"/src/*.rs >"$t/slots"
 
 printf '\nconst _: () = {\n'

@@ -1,9 +1,7 @@
 # DXMTRS: winemetal.dll's thunks and DllMain are Rust (winemetal-pe, src/winemetal), linked from the crate's static
 # library per Rust target as nvapi's are; its exports are named by the .def (the VM guest's adds its three calls). The
-# SM50 thunks stay C. winemetal_thunks.c is the native dylib's (src/nativemetal).
-winemetal_src = [
-  'airconv_thunks.c',
-]
+# translator's SM50 thunks are in the same crate (src/winemetal/src/sm50.rs).
+winemetal_src = []
 
 winemetal_rust = []
 foreach t : rust_pe_targets
