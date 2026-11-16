@@ -10500,16 +10500,13 @@ extern "system" fn device_create_offscreen_plain_surface(
     // `device_create_texture` (which re-derives its own device borrow) without
     // holding a live borrow from `obj` across the call.
     let device_inner = obj.inner_ptr();
-    refuse_under_core!(
-        pool == D3DPOOL_DEFAULT && obj.inner().is_core(),
-        "IDirect3DDevice9::CreateOffscreenPlainSurface(D3DPOOL_DEFAULT)",
-        D3DERR_NOTAVAILABLE
-    );
     // D3DPOOL_DEFAULT: a lockable, GPU-resident offscreen surface. Back it with
     // an internal color texture (CPU staging for LockRect + a Metal texture for
-    // StretchRect) and hand back its owned level-0 surface — lock/unlock/upload
+    // StretchRect) and hand back its owned level-0 surface: lock/unlock/upload
     // reuse the texture machinery, StretchRect resolves the texture handle. No
-    // D3DUSAGE_* (offscreen plain), single mip.
+    // D3DUSAGE_* (offscreen plain), single mip. A core device takes the same arm:
+    // the texture keeps its staging and records nothing, and a lock is the one use
+    // it serves (`StretchRect`, `ColorFill`, `UpdateSurface` and `GetDC` refuse).
     if pool == D3DPOOL_DEFAULT {
         let mut tex_out: *mut c_void = core::ptr::null_mut();
         let hr = create_texture_path(&TextureCreateArgs {
