@@ -10,8 +10,9 @@
 //! encoders (a render pass's colour targets as `color<i>` lines, the views they resolve into
 //! and a raster sample count above one), the records each `encodeCommands` is handed (as
 //! [`format_pass_records`] prints them), the ends, the commits, pipelines (a raster sample count
-//! other than one or alpha-to-coverage; the tile pipelines too) and presents. Objects a device's
-//! queue makes carry its handle, so tests running at once each read their own device's calls.
+//! other than one or alpha-to-coverage, a vertex descriptor's used attributes and layouts; the
+//! tile pipelines too) and presents. Objects a device's queue makes carry its handle, so tests
+//! running at once each read their own device's calls.
 //! What the core logs goes to [`take_log`]. The capture manager and the scalers have no fakes: a
 //! call to one aborts the test (the test binary links with `-undefined dynamic_lookup`).
 
@@ -23,13 +24,14 @@ use std::{
 
 use dxmt_core::test_support::{Records, format_pass_records};
 use winemetal_sys::wire::{
-    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER,
-    WMT_BLIT_COMMAND_GENERATE_MIPMAPS, WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo,
-    WMTDepthStencilInfo, WMTEDRValue, WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps,
-    WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo, WMTSamplerInfo,
-    WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo,
-    WmtcmdBase, WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
-    WmtcmdBlitGenerateMipmaps,
+    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
+    WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
+    WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
+    WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
+    WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
+    WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo, WmtcmdBase,
+    WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
+    WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitGenerateMipmaps,
 };
 
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
@@ -403,6 +405,32 @@ fn say_coverage(state: &mut State, device: u64, info: &WMTRenderPipelineInfo) {
     }
 }
 
+/// A vertex descriptor's used attributes (a format) and layouts (a stride), each in index order.
+fn say_vertex(state: &mut State, device: u64, vertex: &WMTVertexDescriptorInfo) {
+    for (i, a) in vertex.attributes.iter().enumerate() {
+        if a.format != 0 {
+            state.say(
+                device,
+                format!(
+                    "  attr {i} format={} offset={} buffer={}",
+                    a.format, a.offset, a.buffer_index
+                ),
+            );
+        }
+    }
+    for (i, l) in vertex.layouts.iter().enumerate() {
+        if l.stride != 0 {
+            state.say(
+                device,
+                format!(
+                    "  layout {i} stride={} step={} rate={}",
+                    l.stride, l.step_function, l.step_rate
+                ),
+            );
+        }
+    }
+}
+
 #[unsafe(export_name = "MTLDevice_newRenderPipelineState")]
 extern "C-unwind" fn fake_new_render_pipeline(
     device: u64,
@@ -421,7 +449,7 @@ extern "C-unwind" fn fake_new_render_pipeline(
 extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
     device: u64,
     info: *const WMTRenderPipelineInfo,
-    _vertex: *const WMTVertexDescriptorInfo,
+    vertex: *const WMTVertexDescriptorInfo,
     _error: *mut u64,
 ) -> u64 {
     // SAFETY: the core's pipeline description, alive for the call.
@@ -454,6 +482,10 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
         state.say(device, format!("  pso depth={depth} stencil={stencil}"));
     }
     say_coverage(&mut state, device, info);
+    // SAFETY: the core's vertex descriptor, null or alive for the call.
+    if let Some(vertex) = unsafe { vertex.as_ref() } {
+        say_vertex(&mut state, device, vertex);
+    }
     if device == REFUSES_PIPELINES {
         return 0;
     }
@@ -740,10 +772,10 @@ extern "C-unwind" fn fake_render_encode_commands(encoder: u64, head: *const Wmtc
     );
 }
 
-/// A blit encoder's records, with the copies into textures and the mipmap generations in full.
+/// A blit encoder's records, with the copies into textures and buffers and the mipmaps in full.
 ///
-/// [`format_pass_records`] prints a blit record as its type alone; the texture uploads a front
-/// end's tests assert on are decoded here.
+/// [`format_pass_records`] prints a blit record as its type alone; the texture and buffer uploads
+/// a front end's tests assert on are decoded here.
 #[unsafe(export_name = "MTLBlitCommandEncoder_encodeCommands")]
 extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const WmtcmdBase) {
     // SAFETY: the core hands winemetal a list of live blit records.
@@ -778,6 +810,15 @@ extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const Wmtcmd
                     c.bytes_per_image
                 ));
             }
+            WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER => {
+                // SAFETY: a record of this type.
+                let c = unsafe { &*base_ptr.cast::<WmtcmdBlitCopyFromBufferToBuffer>() };
+                details.push(format!(
+                    "blit copy_to_buffer_from_buffer #{} src_offset={} #{} dst_offset={} \
+                     length={}",
+                    c.src, c.src_offset, c.dst, c.dst_offset, c.copy_length
+                ));
+            }
             WMT_BLIT_COMMAND_GENERATE_MIPMAPS => {
                 // SAFETY: a record of this type.
                 let c = unsafe { &*base_ptr.cast::<WmtcmdBlitGenerateMipmaps>() };
@@ -801,8 +842,9 @@ extern "C-unwind" fn fake_blit_encode_commands(encoder: u64, head: *const Wmtcmd
     let mut out = Vec::with_capacity(lines.len());
     for mut line in lines {
         let typed = format!("blit {WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE}");
+        let copy = format!("blit {WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER}");
         let mips = format!("blit {WMT_BLIT_COMMAND_GENERATE_MIPMAPS}");
-        if line == typed || line == mips {
+        if line == typed || line == copy || line == mips {
             line = details.next().expect("a decoded blit record");
         }
         // A texture-to-buffer copy keeps its line, which older tests match; its detail follows.
