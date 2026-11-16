@@ -2088,13 +2088,26 @@ impl DeviceInner {
     /// Unbind render target `slot` (1..=3): `SetRenderTarget(slot, NULL)`.
     ///
     /// Regenerates the mip chain of an autogen texture that was bound there,
-    /// drops the persistent binding and tells the encoder.
+    /// drops the persistent binding and tells the encoder (the core device,
+    /// under the core runtime).
     fn unbind_extra_render_target(&mut self, slot: usize) {
         #[cfg(feature = "core-runtime")]
         let core = self.is_core();
         #[cfg(not(feature = "core-runtime"))]
         let core = false;
-        if let Some(old_id) = self.cur_autogen_rt_ids[slot].take()
+        let old_autogen = self.cur_autogen_rt_ids[slot].take();
+        // The core device's slot first, while the reference released below, which may be the
+        // texture's last, still holds it: the chain of an AUTOGENMIPMAP texture leaving the slot
+        // is regenerated after the passes that drew its level 0, then the slot is emptied
+        // (DXMTRS C4b-3d4).
+        #[cfg(feature = "core-runtime")]
+        if core && let Some(rt) = self.core.as_deref_mut() {
+            if let Some(old_id) = old_autogen {
+                rt.texture_generate_mips(old_id);
+            }
+            rt.set_extra_target(slot, None);
+        }
+        if let Some(old_id) = old_autogen
             && !core
         {
             self.push_control(crate::device::GenerateMipmapsOrderedOp { old_id });
@@ -10701,17 +10714,13 @@ extern "system" fn device_set_render_target(
         );
         return D3DERR_INVALIDCALL;
     }
-    // A core device draws to one colour target (DXMTRS C4b-3d1): the back buffer, which every
-    // back-buffer surface (the implicit one, an additional swap chain's) aliases (C4b3d1-4), a
-    // render-target texture's level or face, or a standalone render target. Index 1-3 is C4b-3d4's.
+    // A core device draws to the back buffer, which every back-buffer surface (the implicit one,
+    // an additional swap chain's) aliases (C4b3d1-4), a render-target texture's level or face, or
+    // a standalone render target, at any index (DXMTRS C4b-3d1, C4b-3d4).
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
         const UNTARGETED: &str =
             "IDirect3DDevice9::SetRenderTarget (a surface the core does not target)";
-        if slot != 0 {
-            crate::device::refuse_under_core("IDirect3DDevice9::SetRenderTarget (index above 0)");
-            return mtld3d_types::D3DERR_NOTAVAILABLE;
-        }
         let (target, parent) = {
             // SAFETY: `surf` is the live surface validated above.
             let surf = unsafe { &*surf };
@@ -10727,7 +10736,12 @@ extern "system" fn device_set_render_target(
             // Its core texture exists from here, with every CPU write so far uploaded.
             let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
         }
-        if !core.set_target(target) {
+        let bound = if slot == 0 {
+            core.set_target(target)
+        } else {
+            core.set_extra_target(slot, Some(target))
+        };
+        if !bound {
             crate::device::refuse_under_core(UNTARGETED);
             return mtld3d_types::D3DERR_NOTAVAILABLE;
         }
@@ -10736,14 +10750,20 @@ extern "system" fn device_set_render_target(
         // SAFETY: as above.
         let new_autogen = unsafe { parent.as_ref() }
             .and_then(|pt| pt.inner().autogen_mipmap().then(|| pt.texture_id()));
-        if let Some(old_id) = dev.cur_autogen_rt_ids[0].take()
+        if let Some(old_id) = dev.cur_autogen_rt_ids[slot].take()
             && Some(old_id) != new_autogen
         {
             core.texture_generate_mips(old_id);
         }
-        dev.cur_autogen_rt_ids[0] = new_autogen;
+        dev.cur_autogen_rt_ids[slot] = new_autogen;
+        // The surface the core device now draws to at the slot: a draw asks it its format.
         dev.bound_rt_mut()
-            .replace_render_target(0, surf, desc.width, desc.height);
+            .replace_render_target(slot, surf, desc.width, desc.height);
+        if slot != 0 {
+            // Only render target 0 owns the viewport and scissor, as under mtld3d; a draw reads
+            // the targets at index 1-3 from the device, so no snapshot section goes stale.
+            return D3D_OK;
+        }
         dev.set_viewport(mtld3d_types::D3DVIEWPORT9 {
             x: 0,
             y: 0,
