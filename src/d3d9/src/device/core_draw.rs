@@ -10,7 +10,8 @@
 use core::{ffi::c_void, ops::Range};
 
 use d3d9_rt::device::{
-    Bind, CoreDevice, DrawData, DrawRefused, Indices, Stage, StreamData, TextureBind, view_format,
+    Bind, CoreDevice, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData, TextureBind,
+    view_format,
 };
 use mtld3d_core::{
     convert::{
@@ -700,6 +701,9 @@ fn draw(
         primitive: metal_primitive as u8,
         streams,
         vertex_count,
+        vertex_start: 0,
+        base_vertex: 0,
+        instancing: None,
         indices,
         viewport: core_viewport(&dev.viewport(), target),
         scissor: core_scissor(
@@ -779,7 +783,7 @@ pub fn draw_primitive_up(
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
     let indices = Indices {
-        bytes: &list,
+        data: IndexData::Bytes(&list),
         index_type: fan.index_type() as u8,
         count: fan.index_count(),
     };
@@ -839,7 +843,7 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     let (primitive, stride) = (up.primitive, up.stride);
     if primitive != D3DPT_TRIANGLEFAN {
         let indices = Indices {
-            bytes: &source,
+            data: IndexData::Bytes(&source),
             index_type,
             count,
         };
@@ -859,7 +863,7 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
     let indices = Indices {
-        bytes: &list,
+        data: IndexData::Bytes(&list),
         index_type: fan.index_type() as u8,
         count: fan.index_count(),
     };

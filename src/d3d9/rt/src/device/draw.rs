@@ -1,4 +1,4 @@
-//! One UP draw on the core (C4-9, C4b-2): its pipeline, built once per key, and its records.
+//! One draw on the core (C4-9, C4b-2, DXMTRS C4c-1): its pipeline, built once a key, its records.
 //!
 //! The front end builds the draw's [`PipelineKey`] and its per-draw data ([`DrawData`]). On a key
 //! the device has not seen, [`pipeline_source`] turns it into both stages' DXSO and the vertex
@@ -7,30 +7,35 @@
 //! holds that stage's function for that specialization, and the pipeline is made with the vertex
 //! descriptor (slot 156) and kept in the device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap).
 //! The draw records the pipeline, the viewport, the rasterizer state, each stream the pipeline
-//! reads at its slot, the stages' binds and the draw (its indices, if any, in the argument-buffer
-//! ring) into the colour target's render pass, after the depth-stencil state when its key names a
-//! depth format, and the scissor when the pass has not recorded that one last. The pipeline is
-//! built on the API thread and waited for (no asynchronous compile until C4d).
+//! reads at its slot (inline bytes, zeros, or a stored buffer, its read tracked), the stages'
+//! binds and the draw (its indices, if any, in the argument-buffer ring or a stored buffer) into
+//! the colour target's render pass, after the depth-stencil state when its key names a depth
+//! format, and the scissor when the pass has not recorded that one last. The pipeline is built on
+//! the API thread and waited for (no asynchronous compile until C4d).
 
 use core::ffi::CStr;
 use std::{ops::Range, sync::Arc};
 
 use airconv_ir::dxso::spec::{StageSpec, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
 use dxmt_core::{
+    deptrack::Access,
     device::Device,
     encoder::{NO_NEXT, direct, stage},
     pipeline_cache::Compiled,
+    resource::Buffer,
     shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
 };
 use mtld3d_core::{
     clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
     draw_data::NULL_STREAM_ZEROS,
+    ids::BufferId,
     pipeline_key::{
         MAX_STREAMS, PipelineKey, PipelineSource, ShaderCode, StageSource, StreamKey,
         pipeline_source,
     },
     pipeline_state::{BlendFactor, BlendOperation, CoreBlend},
+    streams::{instance_count, offset_shift},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
@@ -84,25 +89,45 @@ pub enum StreamData<'a> {
     Bytes(&'a [u8]),
     /// Zeros: a stream the declaration names with nothing bound.
     Zeros,
+    /// A stored buffer ([`CoreDevice::buffer_create`]) read from byte `offset` (DXMTRS C4c-1).
+    Buffer { id: BufferId, offset: u32 },
+}
+
+/// Where an indexed draw's indices are.
+pub enum IndexData<'a> {
+    /// Bytes, copied into the argument-buffer ring.
+    Bytes(&'a [u8]),
+    /// A stored buffer ([`CoreDevice::buffer_create`]), from byte `offset` (DXMTRS C4c-1).
+    Buffer { id: BufferId, offset: u64 },
 }
 
 /// An indexed draw's indices.
 pub struct Indices<'a> {
-    pub bytes: &'a [u8],
+    pub data: IndexData<'a>,
     /// `MTLIndexType`: 0 for 16-bit, 1 for 32-bit.
     pub index_type: u8,
     pub count: u32,
 }
 
-/// What one UP draw binds and draws, as the front end resolved it.
+/// What one draw binds and draws, as the front end resolved it.
 ///
-/// A `DrawPrimitiveUP` or a `DrawIndexedPrimitiveUP`.
+/// A `DrawPrimitiveUP` or a `DrawIndexedPrimitiveUP`, or a draw from stored buffers (DXMTRS
+/// C4c-1).
 pub struct DrawData<'a> {
     /// The `MTLPrimitiveType`.
     pub primitive: u8,
     /// Each stream's data, by stream (DXMTRS C4c-1).
     pub streams: [StreamData<'a>; MAX_STREAMS as usize],
     pub vertex_count: u32,
+    /// The first vertex of a draw without indices.
+    pub vertex_start: u32,
+    /// What an indexed draw adds to each index.
+    pub base_vertex: i32,
+    /// Stream 0's frequency word, and the bound streams whose word is instance data (bit `n`).
+    ///
+    /// None for a draw that never instances. The instance count is mtld3d's: the word's count
+    /// when a stream the pipeline reads is in the mask, 1 otherwise.
+    pub instancing: Option<(u32, u16)>,
     /// The indices of an indexed draw (a fan's triangle list too).
     pub indices: Option<Indices<'a>>,
     /// `(origin x, origin y, width, height, znear, zfar)`.
@@ -141,6 +166,12 @@ pub enum DrawRefused {
     Pipeline,
     /// An attribute crosses its stream's stride, which the core cannot fetch yet.
     Crossing,
+    /// A stream the pipeline reads is bound at an offset off four bytes (DXMTRS C4c-1).
+    ///
+    /// The core cannot fetch that yet.
+    Offset,
+    /// A stored buffer the draw reads is not in the store (DXMTRS C4c-1).
+    Buffer,
     /// The key names a depth format the bound depth-stencil has not (none is bound).
     ///
     /// Or the bound one is of another sample count than target 0, which no pass attaches beside
@@ -151,6 +182,14 @@ pub enum DrawRefused {
     /// Its colours are those of the pass set ([`CoreDevice::target_desc`]) under neither sRGB
     /// write (DXMTRS C4b-3d4); its count is target 0's (DXMTRS C4b-3d5).
     Target,
+}
+
+/// Where a recorded indexed draw reads its indices.
+enum IndexFeed {
+    /// Bytes the closure copies into the argument-buffer ring.
+    Ring(Vec<u8>),
+    /// A stored buffer, from a byte offset.
+    Stored(Arc<Buffer>, u64),
 }
 
 /// A compiled stage function's key: its program and its specialization's wire form.
@@ -198,8 +237,9 @@ impl CoreDevice {
     /// Nothing recorded when colour target 0 does not resolve (a device with no back buffer),
     /// the key names colour formats the bound targets do not make, another sample count than
     /// target 0's, or a depth format the bound depth-stencil has not or one of another count,
-    /// the layout crosses its stride, or the pipeline does not build. A draw whose scissor holds
-    /// no pixel of the pass records nothing and is no error.
+    /// the layout crosses a stride, the pipeline does not build, a stream it reads is bound at
+    /// an offset off four bytes, or a stored buffer it reads is not in the store. A draw whose
+    /// scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
@@ -249,6 +289,53 @@ impl CoreDevice {
         let (Some(pso), Some(source)) = (entry.ready(), entry.spec.as_ref().as_ref()) else {
             return Err(DrawRefused::Pipeline);
         };
+        // The streams the pipeline reads: bit `n` for stream `n`.
+        let used = (0_u16..)
+            .zip(&source.layouts)
+            .filter(|(_, layout)| layout.is_used())
+            .fold(0_u16, |mask, (stream, _)| mask | 1 << stream);
+        // Before anything is recorded: a stream the pipeline reads at an offset off four bytes
+        // (Metal binds it at the multiple of four below, and mtld3d moves its attributes, a fetch
+        // the core has not), then a stored buffer the store does not hold.
+        let reads = || {
+            (0_u8..)
+                .zip(&draw.streams)
+                .filter(|(slot, _)| used & 1 << slot != 0)
+                .filter_map(|(slot, data)| match *data {
+                    StreamData::Buffer { id, offset } => Some((slot, id, offset)),
+                    _ => None,
+                })
+        };
+        if reads().any(|(_, _, offset)| offset_shift(offset) != 0) {
+            return Err(DrawRefused::Offset);
+        }
+        let stored = reads()
+            .map(|(slot, id, offset)| {
+                let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
+                Ok((slot, Arc::clone(buffer), u64::from(offset)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let indexed = match &draw.indices {
+            None => None,
+            Some(Indices {
+                data,
+                index_type,
+                count,
+            }) => {
+                let feed = match *data {
+                    IndexData::Bytes(bytes) => IndexFeed::Ring(bytes.to_vec()),
+                    IndexData::Buffer { id, offset } => {
+                        let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
+                        IndexFeed::Stored(Arc::clone(buffer), offset)
+                    }
+                };
+                Some((feed, *index_type, *count))
+            }
+        };
+        // mtld3d's instance count: stream 0's, when a stream the pipeline reads is per instance.
+        let instances = draw.instancing.map_or(1, |(word, instanced)| {
+            instance_count(word, instanced & used != 0)
+        });
         // The state of the planes the pass has: no stencil test without the plane.
         let depth_state = with_depth.then(|| {
             let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
@@ -279,6 +366,8 @@ impl CoreDevice {
             }
             let fed = match data {
                 StreamData::Bytes(fed) => *fed,
+                // Bound by its buffer, in the closure.
+                StreamData::Buffer { .. } => continue,
                 StreamData::Zeros | StreamData::None => {
                     debug_assert!(
                         matches!(data, StreamData::Zeros),
@@ -296,10 +385,6 @@ impl CoreDevice {
             bytes.extend_from_slice(bind.bytes);
             binds.push((bind.stage, bind.slot, start..bytes.len()));
         }
-        let indices = draw
-            .indices
-            .as_ref()
-            .map(|i| (i.bytes.to_vec(), i.index_type, i.count));
         let [origin_x, origin_y, width, height, znear, zfar] = draw.viewport;
         let viewport = WMTViewport {
             origin_x,
@@ -322,6 +407,7 @@ impl CoreDevice {
             depth_bias_clamp: 0.0,
         };
         let (primitive_type, vertex_count) = (draw.primitive, draw.vertex_count);
+        let (vertex_start, base_vertex) = (draw.vertex_start, draw.base_vertex);
         let textures: Vec<_> = draw
             .textures
             .iter()
@@ -392,6 +478,9 @@ impl CoreDevice {
                 });
             }
             enc.encode_render_command(rasterizer);
+            for (slot, buffer, offset) in &stored {
+                direct::bind_buffer::<{ stage::VERTEX }>(enc, *slot, Some(buffer), *offset);
+            }
             for (stage, slot, range) in &binds {
                 let bound = &bytes[range.clone()];
                 match stage {
@@ -418,26 +507,41 @@ impl CoreDevice {
                 // A texture read in a pass that wrote it waits on a tile barrier.
                 enc.resolve_render_pass_barrier(dxmt_core::encoder::Encoder::dispatch_tile_barrier);
             }
-            let Some((index_bytes, index_type, index_count)) = &indices else {
+            let Some((feed, index_type, index_count)) = &indexed else {
                 enc.encode_render_command(WmtcmdRenderDraw {
                     r#type: WMT_RENDER_COMMAND_DRAW,
                     reserved: [0; 3],
                     next: NO_NEXT,
                     primitive_type,
-                    vertex_start: 0,
+                    vertex_start: u64::from(vertex_start),
                     vertex_count: u64::from(vertex_count),
-                    instance_count: 1,
+                    instance_count: instances,
                     base_instance: 0,
                 });
                 return;
             };
-            let ring = enc.allocate_argument_buffer(index_bytes.len());
-            // SAFETY: the slice's mapping is `index_bytes.len()` bytes the pass alone uses.
-            unsafe {
-                ring.mapping()
-                    .as_ptr()
-                    .copy_from_nonoverlapping(index_bytes.as_ptr(), index_bytes.len());
-            }
+            let (index_buffer, index_buffer_offset) = match feed {
+                IndexFeed::Ring(index_bytes) => {
+                    let ring = enc.allocate_argument_buffer(index_bytes.len());
+                    // SAFETY: the slice's mapping is `index_bytes.len()` bytes the pass alone
+                    // uses.
+                    unsafe {
+                        ring.mapping()
+                            .as_ptr()
+                            .copy_from_nonoverlapping(index_bytes.as_ptr(), index_bytes.len());
+                    }
+                    (ring.buffer(), ring.offset())
+                }
+                IndexFeed::Stored(buffer, offset) => {
+                    // A stored buffer has its allocation from its creation on.
+                    let Some((allocation, at)) =
+                        enc.access_buffer::<{ stage::VERTEX }>(buffer, Access::READ)
+                    else {
+                        return;
+                    };
+                    (allocation.buffer(), at + offset)
+                }
+            };
             enc.encode_render_command(WmtcmdRenderDrawIndexed {
                 r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
                 reserved: [0; 3],
@@ -445,10 +549,10 @@ impl CoreDevice {
                 primitive_type,
                 index_type: *index_type,
                 index_count: u64::from(*index_count),
-                index_buffer: ring.buffer(),
-                index_buffer_offset: ring.offset(),
-                instance_count: 1,
-                base_vertex: 0,
+                index_buffer,
+                index_buffer_offset,
+                instance_count: instances,
+                base_vertex,
                 base_instance: 0,
             });
         });

@@ -9,9 +9,12 @@ use mtld3d_core::{
     pipeline_key::{
         CoreExtra, DeclCode, MAX_STREAMS, PipelineKey, PsStageKey, StreamKey, VsStageKey,
     },
+    streams::stream_step,
 };
 use mtld3d_types::{
-    D3DDECL_END, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, render_state_defaults,
+    D3DDECL_END, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT4,
+    D3DDECLUSAGE_COLOR, D3DDECLUSAGE_POSITIONT, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9,
+    render_state_defaults,
 };
 use winemetal_sys::Obj;
 
@@ -140,6 +143,41 @@ pub fn key(write_mask: u8) -> PipelineKey {
     }
 }
 
+/// The fixed-function key of a pre-transformed position on stream 0 and a colour on stream 1.
+///
+/// The colour at `color_offset` of stream 1's element; the streams fed as `streams` says.
+pub fn two_stream_key(
+    color_offset: u16,
+    streams: [StreamKey; MAX_STREAMS as usize],
+) -> PipelineKey {
+    let element = |stream, offset, type_, usage| D3DVERTEXELEMENT9 {
+        stream,
+        offset,
+        type_,
+        method: D3DDECLMETHOD_DEFAULT,
+        usage,
+        usage_index: 0,
+    };
+    let elements = [
+        element(0, 0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITIONT),
+        element(1, color_offset, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR),
+    ];
+    let rs = render_state_defaults();
+    let layout = ff_vs_layout_from_elements(&elements);
+    PipelineKey {
+        vs: VsStageKey::Ff(FfState::new().build_vs_key(&rs, layout, 0, [0; MAX_LINKED_INPUTS])),
+        layout: decl(&elements),
+        streams,
+        ..key(0xf)
+    }
+}
+
+/// The key entry of a bound stream: its stride and the step and rate of its frequency word.
+pub const fn bound(stride: u32, freq: u32) -> StreamKey {
+    let (step, rate) = stream_step(freq);
+    StreamKey::Bound { stride, step, rate }
+}
+
 /// The fixture's key, colour 0 written whole, naming `extras` at index 1-3.
 pub fn key_extras(extras: [Option<CoreExtra>; 3]) -> PipelineKey {
     PipelineKey { extras, ..key(0xf) }
@@ -163,6 +201,9 @@ pub const fn draw<'a>(
         primitive,
         streams: stream0(&VERTICES),
         vertex_count,
+        vertex_start: 0,
+        base_vertex: 0,
+        instancing: None,
         indices,
         viewport: VIEWPORT,
         // Larger than any pass: the clamp makes it the pass's extent.

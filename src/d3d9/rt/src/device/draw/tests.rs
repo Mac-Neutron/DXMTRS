@@ -1,23 +1,24 @@
 use std::sync::Arc;
 
 use mtld3d_core::{
-    convert::{FanRewrite, ff_vs_layout_from_elements},
-    dxso::{MAX_LINKED_INPUTS, VsSamplerKinds},
-    ff_state::FfState,
+    convert::FanRewrite,
+    dxso::VsSamplerKinds,
     ids::ProgramId,
     pipeline_key::{MAX_STREAMS, PipelineKey, PsStageKey, ShaderCode, StreamKey, VsStageKey},
-    streams::{STREAM_FREQ_DEFAULT, stream_step},
+    streams::STREAM_FREQ_DEFAULT,
 };
 use mtld3d_types::{
-    D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4,
-    D3DDECLUSAGE_COLOR, D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_TEXCOORD,
-    D3DSTREAMSOURCE_INSTANCEDATA, D3DVERTEXELEMENT9, render_state_defaults,
+    D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION,
+    D3DDECLUSAGE_TEXCOORD, D3DSTREAMSOURCE_INSTANCEDATA, D3DVERTEXELEMENT9,
 };
 
-use super::{Bind, DrawData, DrawRefused, Indices, Stage, StreamData};
+use super::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
 use crate::device::{
     CoreDevice,
-    fixture::{at, core_on_fakes, decl, draw, ff_binds, inline, key, passes, stream0, triangle},
+    fixture::{
+        at, bound, core_on_fakes, decl, draw, ff_binds, inline, key, passes, stream0, triangle,
+        two_stream_key,
+    },
 };
 
 /// `vs_2_0 { dcl_position v0; mov oPos, v0 }`.
@@ -304,7 +305,7 @@ fn indexed_draw_up_draws_from_the_ring() {
     static INDICES: [u8; 12] = [0, 0, 1, 0, 2, 0, 2, 0, 1, 0, 3, 0];
     let mut core = core_on_fakes(DEVICE);
     let indices = Indices {
-        bytes: &INDICES,
+        data: IndexData::Bytes(&INDICES),
         index_type: 0,
         count: 6,
     };
@@ -337,7 +338,7 @@ fn a_fan_becomes_an_indexed_list() {
     fan.write(&mut list);
     assert_eq!(list, [0, 0, 1, 0, 2, 0, 0, 0, 2, 0, 3, 0]);
     let indices = Indices {
-        bytes: &list,
+        data: IndexData::Bytes(&list),
         index_type: fan.index_type() as u8,
         count: fan.index_count(),
     };
@@ -992,38 +993,11 @@ fn a_blend_is_its_own_pipeline() {
     assert_eq!(core.pipelines_len(), 2);
 }
 
-/// The fixed-function key of a pre-transformed position on stream 0 and a colour on stream 1.
-///
-/// The colour at `color_offset` of stream 1's element; the streams fed as `streams` says.
-fn two_stream_key(color_offset: u16, streams: [StreamKey; MAX_STREAMS as usize]) -> PipelineKey {
-    let elements = [
-        element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITIONT, 0),
-        D3DVERTEXELEMENT9 {
-            stream: 1,
-            ..element(color_offset, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0)
-        },
-    ];
-    let rs = render_state_defaults();
-    let layout = ff_vs_layout_from_elements(&elements);
-    PipelineKey {
-        vs: VsStageKey::Ff(FfState::new().build_vs_key(&rs, layout, 0, [0; MAX_LINKED_INPUTS])),
-        layout: decl(&elements),
-        streams,
-        ..key(0xf)
-    }
-}
-
 /// The key entries of a UP draw at 16 bytes a vertex whose stream 1 is fed as `entry` says.
 fn up_with(entry: StreamKey) -> [StreamKey; MAX_STREAMS as usize] {
     let mut streams = inline(16);
     streams[1] = entry;
     streams
-}
-
-/// The key entry of a bound stream: its stride and the step and rate of its frequency word.
-const fn bound(stride: u32, freq: u32) -> StreamKey {
-    let (step, rate) = stream_step(freq);
-    StreamKey::Bound { stride, step, rate }
 }
 
 /// The vertex descriptor's lines (`  attr`, `  layout`) of each pipeline `calls` shows made.

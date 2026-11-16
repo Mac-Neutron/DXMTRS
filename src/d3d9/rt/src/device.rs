@@ -36,6 +36,8 @@ pub struct CoreDevice {
     functions: draw::StageFunctions,
     /// The D3D9 textures' core textures, by id (C4b-3b).
     textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
+    /// The D3D9 vertex and index buffers' core buffers, by id (DXMTRS C4c-1).
+    buffers: rustc_hash::FxHashMap<mtld3d_core::ids::BufferId, Arc<dxmt_core::resource::Buffer>>,
     /// The samplers by their key's bits (C4b-3b).
     samplers: rustc_hash::FxHashMap<u64, Arc<dxmt_core::sampler::Sampler>>,
     /// The depth-stencil states by their key's bits (C4b-3d2).
@@ -99,6 +101,7 @@ impl CoreDevice {
             pipelines: PsoMap::default(),
             functions: draw::StageFunctions::default(),
             textures: rustc_hash::FxHashMap::default(),
+            buffers: rustc_hash::FxHashMap::default(),
             samplers: rustc_hash::FxHashMap::default(),
             depth_states: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
@@ -199,6 +202,7 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
     device
 }
 
+mod buffers;
 mod depth;
 mod draw;
 mod recorder;
@@ -210,7 +214,7 @@ mod target;
 mod textures;
 
 pub use depth::DepthRef;
-pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage, StreamData};
+pub use draw::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
 pub use swapchain::present_after;
 pub use target::TargetRef;
 pub use textures::{
