@@ -1684,7 +1684,7 @@ impl DeviceInner {
         page_box: PageBox,
         last_submit_seq: u64,
     ) {
-        // As `retire_released_buffer`: nothing on a core device held it.
+        // A core device's buffers are staged and never rename (DXMTRS C4c-1).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
@@ -1714,9 +1714,11 @@ impl DeviceInner {
         backing: Option<PageBox>,
         last_submit_seq: u64,
     ) {
-        // A core device's buffer never reached a GPU: its backing drops here (C4b3a-6).
+        // A core device's buffer: its backing drops here (C4b3a-6) and its core buffer leaves the
+        // store, which the draws recorded from it still hold (DXMTRS C4c-1).
         #[cfg(feature = "core-runtime")]
-        if self.is_core() {
+        if let Some(core) = self.core_mut() {
+            core.forget_buffer(buffer_id);
             return;
         }
         match backing {

@@ -312,6 +312,14 @@ impl Direct3DVertexBuffer9 {
             classify_backing(info.usage, info.pool),
         );
         let map_mode = classify_map_mode(info.usage, info.pool);
+        // Under the core runtime every buffer is staged: its backing is the truth, which a draw
+        // uploads (DXMTRS C4c-1).
+        #[cfg(feature = "core-runtime")]
+        let map_mode = if on_core_device(info.device_inner) {
+            BufferMapMode::Staged
+        } else {
+            map_mode
+        };
         // A `Staged` buffer starts full-dirty, whatever
         // `buffer.ignoreLockBounds` says. Its device allocation is
         // `Private`, Metal does not zero it, and no blit command can fill
@@ -635,17 +643,13 @@ extern "system" fn vb_get_type(this: *mut c_void) -> u32 {
 
 // ── IDirect3DVertexBuffer9 ──
 
-/// Whether the buffer at `this` belongs to a device of the core runtime (DXMTRS C4b-3a).
+/// Whether `device`, a buffer's, runs the core runtime (DXMTRS C4b-3a).
 ///
-/// Such a buffer is inert: no lock until C4c.
+/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1).
 #[cfg(feature = "core-runtime")]
-fn on_core_device(this: *mut c_void) -> bool {
-    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DVertexBuffer9 per the ABI.
-    let Some(obj) = (unsafe { InPtr::<Direct3DVertexBuffer9>::opt(this) }) else {
-        return false;
-    };
-    let device = obj.inner().device_inner;
-    // SAFETY: a buffer's device outlives it (D3D9 lifetime rules, as its finalizer relies on).
+fn on_core_device(device: *mut DeviceInner) -> bool {
+    // SAFETY: null, or a buffer's device, which outlives it (D3D9 lifetime rules, as its
+    // finalizer relies on).
     !device.is_null() && unsafe { &*device }.is_core()
 }
 
@@ -675,11 +679,6 @@ extern "system" fn vb_lock(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DVertexBuffer9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DVertexBuffer9::Lock",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = vb_timer(this);
     if pp_data.is_null() {
         return D3DERR_INVALIDCALL;
@@ -724,7 +723,13 @@ extern "system" fn vb_lock(
         // nothing was written, and this path has no later upload to carry
         // the bytes, so dropping the range would drop the write.
         if records_dirty_range(flags, inner.pool) {
-            if flags & D3DLOCK_DISCARD != 0 {
+            // The buffer's own class, not its mode: a core device stages its DYNAMIC buffers too.
+            if flags & D3DLOCK_DISCARD != 0
+                && matches!(
+                    classify_map_mode(inner.usage, inner.pool),
+                    BufferMapMode::Staged
+                )
+            {
                 mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
                     "vb_lock: D3DLOCK_DISCARD on a non-DYNAMIC (Staged) buffer — treating as a normal dirtied-range upload");
             }
@@ -751,6 +756,15 @@ extern "system" fn vb_lock(
                 size_to_lock,
                 ignore_lock_bounds(inner),
             );
+            // A buffer mtld3d maps directly (DYNAMIC, default pool) shows the GPU every byte
+            // written through the pointer, inside the announced window or not: staged on a core
+            // device, its lock dirties the whole of it (DXMTRS C4c-1).
+            #[cfg(feature = "core-runtime")]
+            let trusted = trusted
+                && (matches!(
+                    classify_map_mode(inner.usage, inner.pool),
+                    BufferMapMode::Staged
+                ) || !on_core_device(inner.device_inner));
             let discard = flags & D3DLOCK_DISCARD != 0;
             let widen = !trusted && (inner.backing.may_widen_upload() || discard);
             if !trusted && !widen {
@@ -886,11 +900,6 @@ extern "system" fn vb_lock(
 
 extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DVertexBuffer9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DVertexBuffer9::Unlock",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = vb_timer(this);
     // SAFETY: vtable thunk; `this` is *mut Direct3DVertexBuffer9 per ABI.
     let Some(mut obj) = (unsafe { InPtrMut::<Direct3DVertexBuffer9>::opt(this) }) else {
@@ -907,6 +916,11 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
             // lock, as D3D9 counts them.
             return D3D_OK;
         }
+    }
+    // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1).
+    #[cfg(feature = "core-runtime")]
+    if on_core_device(inner.device_inner) {
+        return D3D_OK;
     }
     if matches!(inner.map_mode, BufferMapMode::Staged)
         && let Some((min, max)) = inner.dirty.span()
