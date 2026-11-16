@@ -94,7 +94,10 @@ pub fn clear(
         }
     }
     let core = dev.core.as_deref_mut()?;
+    // A depth-stencil of another sample count than target 0's is in no pass, and mtld3d's Clear
+    // of its planes does nothing (DXMTRS C4b-3d5).
     if depth_flags != 0
+        && core.depth_samples() == Some(core.target_samples())
         && let Some(extent) = core.depth_size()
     {
         let planes = u32::from(flags & D3DCLEAR_ZBUFFER != 0)
@@ -236,7 +239,9 @@ pub fn stretch_rect_resolve(
     }
 }
 
-/// [`stretch_rect_resolve`]'s shape, recorded; `None`, and nothing recorded, for any other.
+/// [`stretch_rect_resolve`]'s shape, recorded; `None`, and no resolve recorded, for any other.
+///
+/// The destination's owed uploads may be recorded before a refusal: they were due anyway.
 fn resolve_shape(
     this: *mut c_void,
     surfaces: [*mut c_void; 2],

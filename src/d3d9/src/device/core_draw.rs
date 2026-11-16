@@ -447,9 +447,12 @@ fn resolve(
         effective_sample_mask(
             rs[mtld3d_types::D3DRS_MULTISAMPLEMASK as usize],
             sample_count,
+            // A null slot 0 is the device's own back buffer, never set: its type, as mtld3d reads it.
             // SAFETY: null, or the surface bound at slot 0, which its slot's refcount keeps live.
-            unsafe { dev.bound_rt().render_target(0).as_ref() }
-                .map_or(0, |surface| surface.multi_sample().multi_sample_type),
+            unsafe { dev.bound_rt().render_target(0).as_ref() }.map_or_else(
+                || dev.backbuffer_multi_sample_type(),
+                |surface| surface.multi_sample().multi_sample_type,
+            ),
         ),
         alpha_to_coverage,
     );
