@@ -11,7 +11,7 @@ use core::ffi::c_void;
 use d3d9_rt::device::TargetRef;
 use mtld3d_core::{
     clear_area::{ClearArea, clear_area, clear_regions},
-    convert::{d3dcolor_to_rgba_f32, linear_to_srgb_rgba},
+    convert::d3dcolor_to_rgba_f32,
     pipeline_key::drawn_rect,
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
     render_state::scissor_region,
@@ -23,7 +23,7 @@ use mtld3d_types::{
 };
 
 use super::{DeviceInner, Direct3DDevice9, refuse_under_core};
-use crate::surface::Direct3DSurface9;
+use crate::{bound_rt::RENDER_TARGET_SLOTS, surface::Direct3DSurface9};
 
 unsafe extern "system" {
     fn IsWindowVisible(window: *mut c_void) -> i32;
@@ -40,11 +40,13 @@ fn core_device<'a>(this: *mut c_void) -> Option<&'a mut DeviceInner> {
 /// `Clear`: the rects, the scissor and the viewport bound it, as under mtld3d.
 ///
 /// Z and stencil go to the bound depth-stencil (DXMTRS C4b-3d2): `D3DERR_INVALIDCALL` with none
-/// bound, as mtld3d answers. Each of the colour target and the depth-stencil is cleared whole
-/// when a region covers it, and by rects otherwise ([`clear_area`], DXMTRS C4b-3d3): the
-/// depth-stencil is judged against its own size, which need not be the target's. The stencil
-/// flag against a format with no stencil plane clears nothing, as D3D9 has it (the core device
-/// masks the planes).
+/// bound, as mtld3d answers. The colour goes to every bound colour target, index 0-3, in the
+/// pass set or not (DXMTRS C4b-3d4), each with the viewport drawn on its own extent; the core
+/// device picks each one's view and encodes the colour once under sRGB write. Each colour target
+/// and the depth-stencil is cleared whole when a region covers it, and by rects otherwise
+/// ([`clear_area`], DXMTRS C4b-3d3), judged against its own size: the depth-stencil's with the
+/// viewport drawn on target 0. The stencil flag against a format with no stencil plane clears
+/// nothing, as D3D9 has it (the core device masks the planes).
 pub fn clear(
     this: *mut c_void,
     count: u32,
@@ -69,22 +71,24 @@ pub fn clear(
     let Some(target) = dev.core.as_deref()?.target_size() else {
         return Some(D3D_OK);
     };
-    let viewport = drawn_rect(&dev.viewport(), target);
+    let set_viewport = dev.viewport();
+    let viewport = drawn_rect(&set_viewport, target);
     if flags & D3DCLEAR_TARGET != 0 {
-        // Under sRGB write a target with an sRGB twin is cleared through it and Metal encodes
-        // (DXMTRS C4b-3d3); one without is stored encoded, as a draw's colour is (C4b2-4).
         let srgb = dev.render_state(D3DRS_SRGBWRITEENABLE as usize) != 0;
         let linear = d3dcolor_to_rgba_f32(color);
         let core = dev.core.as_deref_mut()?;
-        let hardware = srgb && core.target_desc(true).map(|(_, f)| f[0]) != core.target_format();
-        let rgba = if srgb && !hardware {
-            linear_to_srgb_rgba(linear)
-        } else {
-            linear
-        };
-        match clear_area(regions.as_deref(), viewport, target) {
-            ClearArea::Whole => core.clear(rgba, srgb),
-            ClearArea::Regions(list) => core.clear_rects(&list, rgba, srgb),
+        for slot in 0..RENDER_TARGET_SLOTS {
+            let Some(extent) = core.color_size(slot) else {
+                continue;
+            };
+            match clear_area(
+                regions.as_deref(),
+                drawn_rect(&set_viewport, extent),
+                extent,
+            ) {
+                ClearArea::Whole => core.clear(slot, linear, srgb),
+                ClearArea::Regions(list) => core.clear_rects(slot, &list, linear, srgb),
+            }
         }
     }
     let core = dev.core.as_deref_mut()?;

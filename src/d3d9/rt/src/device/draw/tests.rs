@@ -133,7 +133,7 @@ fn draws(calls: &[String]) -> bool {
 fn ff_draw_up_records_pipeline_binds_and_draw() {
     const DEVICE: u64 = 0xb1;
     let mut core = core_on_fakes(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0], false);
+    core.clear(0, [0.0, 0.0, 1.0, 1.0], false);
     let binds = ff_binds();
     assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
@@ -206,7 +206,7 @@ fn prog_draw_up_records_pipeline_binds_and_draw() {
     static POS_FIXUP: [u8; 20] = [0; 20];
     static PS_FLOATS: [u8; 16] = [0; 16];
     let mut core = core_on_fakes(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0], false);
+    core.clear(0, [0.0, 0.0, 1.0, 1.0], false);
     let binds = [
         Bind {
             stage: Stage::Vertex,

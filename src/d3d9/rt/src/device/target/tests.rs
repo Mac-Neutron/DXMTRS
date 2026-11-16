@@ -136,7 +136,7 @@ fn a_clear_folds_into_the_targets_pass() {
     let (mut core, _) = core_and_back_buffer(DEVICE);
     let (id, texture) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
     assert!(core.set_target(level0(id)));
-    core.clear([1.0, 0.0, 0.0, 1.0], false);
+    core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
     core.open_render_pass();
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -360,7 +360,7 @@ fn a_target_without_a_twin_keeps_its_format() {
 fn a_clear_and_its_pass_share_the_view() {
     const DEVICE: u64 = 0x323;
     let (mut core, _) = core_and_back_buffer(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0], true);
+    core.clear(0, [0.0, 0.0, 1.0, 1.0], true);
     draw_in(&mut core, SRGB);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -380,7 +380,7 @@ fn a_clear_and_its_pass_share_the_view() {
 fn a_clear_on_the_other_view_is_its_own_pass() {
     const DEVICE: u64 = 0x324;
     let (mut core, _) = core_and_back_buffer(DEVICE);
-    core.clear([0.0, 0.0, 1.0, 1.0], false);
+    core.clear(0, [0.0, 0.0, 1.0, 1.0], false);
     draw_in(&mut core, SRGB);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -854,4 +854,178 @@ fn the_tile_barrier_names_each_slot() {
     let calls = sampling(&mut core, y, &twins);
     assert_eq!(tile(&calls, 0), Some(SRGB.to_string()), "{calls:#?}");
     assert_eq!(tile(&calls, 1), Some(RGBA8_SRGB.to_string()), "{calls:#?}");
+}
+
+/// Each bound target's Clear folds into its slot of the next pass, as that slot's load action.
+///
+/// With a hole below the cleared slot too: the pass's count reaches it.
+#[test]
+fn a_clear_reaches_each_bound_target() {
+    const DEVICE: u64 = 0x34b;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t1, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    let (t2, _) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    assert!(core.set_extra_target(2, Some(level0(t2))));
+    let colours = [
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+    ];
+    for (slot, colour) in colours.into_iter().enumerate() {
+        core.clear(slot, colour, false);
+    }
+    let binds = ff_binds();
+    let both = key_extras([Some(extra(RGBA8, 0xf)), Some(extra(RGBA8, 0xf)), None]);
+    assert_eq!(core.draw_up(&both, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    for (slot, clear) in ["1,0,0,1", "0,1,0,1", "0,0,1,1"].into_iter().enumerate() {
+        assert_eq!(
+            line(found[0], &format!("  color{slot} ")),
+            Some(format!("load=2 store=1 clear={clear}").as_str()),
+            "{calls:#?}"
+        );
+    }
+    assert!(core.set_extra_target(1, None));
+    core.clear(2, [1.0, 1.0, 0.0, 1.0], false);
+    let hole = key_extras([None, Some(extra(RGBA8, 0xf)), None]);
+    assert_eq!(core.draw_up(&hole, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color2 "),
+        Some("load=2 store=1 clear=1,1,0,1"),
+        "{calls:#?}"
+    );
+}
+
+/// A Clear of a bound target outside the pass set is a pass of its own, on that target's view.
+///
+/// The draw after it attaches target 0 alone.
+#[test]
+fn a_clear_of_a_target_outside_the_set_is_its_own_pass() {
+    const DEVICE: u64 = 0x34c;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t0, h0) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    let (small, h_small) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 32, 4));
+    assert!(core.set_target(level0(t0)));
+    assert!(core.set_extra_target(1, Some(level0(small))));
+    core.clear(1, [0.0, 1.0, 0.0, 1.0], false);
+    let binds = ff_binds();
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [h_small, h0], "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=0,1,0,1"),
+        "{calls:#?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("  color1 ")),
+        "{calls:#?}"
+    );
+}
+
+/// Under sRGB write a Clear stores its colour encoded exactly once.
+///
+/// A target with a twin, alone, is cleared through the twin with the linear colour. With an
+/// extra that has none, both are cleared through their stored views with the encoded colour,
+/// and both Clears fold into the pass of the set.
+#[test]
+fn a_clear_encodes_once() {
+    const DEVICE: u64 = 0x34d;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t0, h0) = stored_desc(&mut core, DEVICE, 1, &twinned(flat(BGRA8, 64, 4), SRGB));
+    let (float, h_float) = stored_desc(&mut core, DEVICE, 2, &flat(R32F, 64, 4));
+    assert!(core.set_target(level0(t0)));
+    let linear = [0.5, 0.5, 0.5, 1.0];
+    core.clear(0, linear, true);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=0.5,0.5,0.5,1"),
+        "{calls:#?}"
+    );
+    let cleared = targets(&calls);
+    assert!(is_view(&calls, &cleared[0].0, &h0, SRGB), "{calls:#?}");
+    assert!(core.set_extra_target(1, Some(level0(float))));
+    core.clear(0, linear, true);
+    core.clear(1, linear, true);
+    let binds = ff_binds();
+    let named = key_extras([Some(extra(R32F, 0xf)), None, None]);
+    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    let [r, g, b, a] = mtld3d_core::convert::linear_to_srgb_rgba(linear).map(f64::from);
+    let encoded = format!("load=2 store=1 clear={r},{g},{b},{a}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some(encoded.as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(
+        line(found[0], "  color1 "),
+        Some(encoded.as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(targets(&calls)[0].0, h0, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  target1 "),
+        Some(h_float.as_str()),
+        "{calls:#?}"
+    );
+}
+
+/// A Clear of rects at a slot is a quad clear on that slot's view alone.
+#[test]
+fn a_rect_clear_reaches_one_slot() {
+    const DEVICE: u64 = 0x34e;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (t1, h1) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(t1))));
+    core.clear_rects(1, &[[8, 8, 16, 16]], [0.0, 1.0, 0.0, 1.0], false);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        targets(&calls).first().map(|(handle, _)| handle.as_str()),
+        Some(h1.as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(line(found[0], "  color1 "), None, "{calls:#?}");
+    let rects = found[0].iter().filter(|c| c.trim() == "render 36").count();
+    assert_eq!(rects, 1, "{calls:#?}");
+}
+
+/// The size of the target bound at each slot, in the pass set or not; none for an empty slot.
+#[test]
+fn color_size_lists_bound_slots() {
+    const DEVICE: u64 = 0x34f;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (small, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 32, 4));
+    let (wide, _) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(small))));
+    assert!(core.set_extra_target(3, Some(level0(wide))));
+    assert_eq!(
+        [0, 1, 2, 3, 4].map(|slot| core.color_size(slot)),
+        [Some((64, 64)), Some((32, 32)), None, Some((64, 64)), None]
+    );
 }

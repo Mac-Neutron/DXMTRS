@@ -13,11 +13,12 @@ use dxmt_core::{
     deptrack::Access,
     encoder::{Encoder, stage},
 };
+use mtld3d_core::convert::linear_to_srgb_rgba;
 use winemetal_sys::wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor, WMTScissorRect,
 };
 
-use super::{CoreDevice, depth};
+use super::{CoreDevice, depth, target::Resolved};
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -82,12 +83,12 @@ impl CoreDevice {
             }),
             "a pass attaches its set's slots, each in its format or its twin's"
         );
-        let [e1, e2, e3] = self.extras;
-        let slots = [Some(self.target), e1, e2, e3];
         // Each attached slot's view in its format; a hole and a slot outside the set have none.
         let views: [_; 4] = core::array::from_fn(|slot| {
             let format = colors[slot];
-            let target = slots[slot].filter(|_| format != 0 && set[slot].is_some())?;
+            let target = self
+                .slot_target(slot)
+                .filter(|_| format != 0 && set[slot].is_some())?;
             self.resolve_as(target, format)
                 .map(|resolved| (resolved.texture, resolved.key))
         });
@@ -162,20 +163,45 @@ impl CoreDevice {
         self.open_depth = self.depth.filter(|_| attached);
     }
 
-    /// The current colour target through the view a Clear made under `srgb_write` clears.
-    fn clear_target(&self, srgb_write: bool) -> Option<super::target::Resolved> {
-        let format = self.shape(self.target)?.attached_format(srgb_write);
-        self.resolve_as(self.target, format)
+    /// `slot`'s target as a Clear under `srgb_write` clears it, and the colour stored for `linear`.
+    ///
+    /// A member of the pass set is cleared through the view the set attaches it in, so the Clear
+    /// folds into the set's pass; a bound target outside the set through its own twin when it has
+    /// one, as mtld3d's pass that binds it alone. Through an sRGB view the colour is stored linear
+    /// and Metal encodes it; under `srgb_write` through any other view it is stored encoded, as
+    /// mtld3d's Clear stores it: each target is encoded exactly once (DXMTRS C4b-3d4).
+    fn clear_target(
+        &self,
+        slot: usize,
+        linear: [f32; 4],
+        srgb_write: bool,
+    ) -> Option<(Resolved, [f32; 4])> {
+        let target = self.slot_target(slot)?;
+        let shape = self.shape(target)?;
+        let format = self
+            .target_desc(srgb_write)
+            .and_then(|(_, formats)| formats.get(slot).copied())
+            .filter(|&format| format != 0)
+            .unwrap_or_else(|| shape.attached_format(srgb_write));
+        let rgba = if srgb_write && format == shape.pixel_format {
+            linear_to_srgb_rgba(linear)
+        } else {
+            linear
+        };
+        Some((self.resolve_as(target, format)?, rgba))
     }
 
-    /// Clears the whole current colour target to `rgba`.
+    /// Clears the whole colour target bound at `slot` (0-3) to `linear`, in the pass set or not.
     ///
-    /// A core Clear pass, which the optimizer folds into the next render pass on the same view as
-    /// that pass's load action, and which runs as a pass of its own when none follows. Under
-    /// `srgb_write` a target with an sRGB twin is cleared through it: `rgba` is then linear, and
-    /// only a pass on that view takes the Clear as its load action.
-    pub fn clear(&mut self, rgba: [f32; 4], srgb_write: bool) {
-        let Some(target) = self.clear_target(srgb_write) else {
+    /// A core Clear pass of that one view, which the optimizer folds into the next render pass
+    /// that attaches the view, as its load action at that slot, and which runs as a pass of its
+    /// own when none follows. Under `srgb_write` the view and the stored colour are chosen so the
+    /// colour is encoded exactly once: a member of the pass set through the view the set attaches
+    /// it in, a target outside the set through its own sRGB twin when it has one; through an
+    /// sRGB view `linear` is stored as given and Metal encodes, through any other it is stored
+    /// encoded. Nothing for an empty slot.
+    pub fn clear(&mut self, slot: usize, linear: [f32; 4], srgb_write: bool) {
+        let Some((target, rgba)) = self.clear_target(slot, linear, srgb_write) else {
             return;
         };
         let (texture, key) = (target.texture, target.key);
@@ -191,17 +217,23 @@ impl CoreDevice {
         self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
     }
 
-    /// Clears `rects` (`x, y, width, height`, each inside it) of the current colour target.
+    /// Clears `rects` (`x, y, width, height`, each inside it) of the target bound at `slot`.
     ///
-    /// Nothing for no rect. The core's quad clear (`ClearRtv`, D3D11's `ClearView`): a render
-    /// pass of its own on the target alone, a scissored triangle a rect, which takes nothing of
-    /// the draws' state (blending, the write mask, the scissor). `srgb_write` as
-    /// [`CoreDevice::clear`]'s.
-    pub fn clear_rects(&mut self, rects: &[[u32; 4]], rgba: [f32; 4], srgb_write: bool) {
+    /// Nothing for no rect or an empty slot. The core's quad clear (`ClearRtv`, D3D11's
+    /// `ClearView`): a render pass of its own on that one view, a scissored triangle a rect,
+    /// which takes nothing of the draws' state (blending, the write mask, the scissor). The view
+    /// and the stored colour of `linear` under `srgb_write` are [`CoreDevice::clear`]'s.
+    pub fn clear_rects(
+        &mut self,
+        slot: usize,
+        rects: &[[u32; 4]],
+        linear: [f32; 4],
+        srgb_write: bool,
+    ) {
         if rects.is_empty() {
             return;
         }
-        let Some(target) = self.clear_target(srgb_write) else {
+        let Some((target, rgba)) = self.clear_target(slot, linear, srgb_write) else {
             return;
         };
         let (texture, key) = (target.texture, target.key);

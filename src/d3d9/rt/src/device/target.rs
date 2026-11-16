@@ -144,6 +144,22 @@ impl CoreDevice {
         self.shape(self.target).map(|t| t.pixel_format)
     }
 
+    /// The size of the colour target bound at `slot` (0-3), in the pass set or not (C4b-3d4).
+    ///
+    /// `None` for an empty slot, or one whose target does not resolve.
+    #[must_use]
+    pub fn color_size(&self, slot: usize) -> Option<(u32, u32)> {
+        let shape = self.shape(self.slot_target(slot)?)?;
+        Some((shape.width, shape.height))
+    }
+
+    /// The target bound at colour slot `slot` (0-3): target 0 or an extra; none for an empty one.
+    pub(super) fn slot_target(&self, slot: usize) -> Option<TargetRef> {
+        slot.checked_sub(1).map_or(Some(self.target), |index| {
+            self.extras.get(index).copied().flatten()
+        })
+    }
+
     /// Binds `target` at colour slot `slot` (1-3), or unbinds the slot (DXMTRS C4b-3d4).
     ///
     /// False, and nothing changed, for another slot or a target that does not resolve. A change
