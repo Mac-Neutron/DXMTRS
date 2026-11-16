@@ -7,12 +7,13 @@
 //! binaries define their own fakes, and two definitions of one symbol do not link.
 //!
 //! What Metal is asked to do is captured per device ([`take_calls`]): the command buffers'
-//! encoders (a render pass's colour targets as `color<i>` lines), the records each
-//! `encodeCommands` is handed (as [`format_pass_records`] prints them), the ends, the commits,
-//! pipelines (the tile pipelines too) and presents. Objects a device's queue makes carry
-//! its handle, so tests running at once each read their own device's calls. What the core logs
-//! goes to [`take_log`]. The capture manager and the scalers have no fakes: a call to one aborts
-//! the test (the test binary links with `-undefined dynamic_lookup`).
+//! encoders (a render pass's colour targets as `color<i>` lines, the views they resolve into
+//! and a raster sample count above one), the records each `encodeCommands` is handed (as
+//! [`format_pass_records`] prints them), the ends, the commits, pipelines (a raster sample count
+//! other than one or alpha-to-coverage; the tile pipelines too) and presents. Objects a device's
+//! queue makes carry its handle, so tests running at once each read their own device's calls.
+//! What the core logs goes to [`take_log`]. The capture manager and the scalers have no fakes: a
+//! call to one aborts the test (the test binary links with `-undefined dynamic_lookup`).
 
 use core::{alloc::Layout, ffi::c_char};
 use std::{
@@ -384,14 +385,30 @@ extern "C-unwind" fn fake_new_depth_stencil_state(
     handle
 }
 
+/// A pipeline's raster sample count and alpha-to-coverage, when either is not the default.
+fn say_coverage(state: &mut State, device: u64, info: &WMTRenderPipelineInfo) {
+    if info.raster_sample_count != 1 || info.alpha_to_coverage_enabled != 0 {
+        state.say(
+            device,
+            format!(
+                "  pso samples={} a2c={}",
+                info.raster_sample_count, info.alpha_to_coverage_enabled
+            ),
+        );
+    }
+}
+
 #[unsafe(export_name = "MTLDevice_newRenderPipelineState")]
 extern "C-unwind" fn fake_new_render_pipeline(
     device: u64,
-    _info: *const WMTRenderPipelineInfo,
+    info: *const WMTRenderPipelineInfo,
     _error: *mut u64,
 ) -> u64 {
+    // SAFETY: the core's pipeline description, alive for the call.
+    let info = unsafe { &*info };
     let mut state = state();
     state.say(device, "MTLDevice_newRenderPipelineState".to_owned());
+    say_coverage(&mut state, device, info);
     state.made_of(device)
 }
 
@@ -431,6 +448,7 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
     if depth != 0 || stencil != 0 {
         state.say(device, format!("  pso depth={depth} stencil={stencil}"));
     }
+    say_coverage(&mut state, device, info);
     if device == REFUSES_PIPELINES {
         return 0;
     }
@@ -621,6 +639,10 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
                 color.texture, pass.render_target_width, pass.render_target_height
             ),
         );
+        // After a colour's lines: the view it resolves into, when it has one.
+        if color.resolve_texture != 0 {
+            state.say(cmdbuf, format!("  resolve0 #{}", color.resolve_texture));
+        }
     }
     // After colour 0's lines: each other attached colour, its view without the pass's size.
     for (i, color) in pass.colors.iter().enumerate().skip(1) {
@@ -634,6 +656,9 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
                 ),
             );
             state.say(cmdbuf, format!("  target{i} #{}", color.texture));
+            if color.resolve_texture != 0 {
+                state.say(cmdbuf, format!("  resolve{i} #{}", color.resolve_texture));
+            }
         }
     }
     // After the colour lines: each attached depth-stencil plane.
@@ -655,6 +680,13 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
                 "  stencil #{} load={} store={} clear={}",
                 s.texture, s.load_action, s.store_action, s.clear_stencil
             ),
+        );
+    }
+    // After the planes: the raster sample count the pass names, when it is above one.
+    if pass.default_raster_sample_count > 1 {
+        state.say(
+            cmdbuf,
+            format!("  samples={}", pass.default_raster_sample_count),
         );
     }
     state.made_of(cmdbuf)

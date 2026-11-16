@@ -1,15 +1,23 @@
+use std::sync::Arc;
+
+use dxmt_core::{
+    deptrack::Access,
+    encoder::stage,
+    resource::{Texture, TextureAllocationFlags, TextureViewKey, texture_info},
+};
 use mtld3d_core::{
     ids::TextureId,
     pipeline_key::{CoreExtra, PipelineKey},
 };
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_PIXEL_FORMAT_R32_FLOAT,
-    WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
-    WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMTTextureInfo,
+    WMT_LOAD_ACTION_LOAD, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_PIXEL_FORMAT_RGBA8_UNORM_S_RGB,
+    WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_STORE_ACTION_STORE,
+    WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+    WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ, WMTTextureInfo,
 };
 
-use super::TargetRef;
+use super::{Resolved, TargetRef};
 use crate::device::{
     CoreDevice, CoreTextureDesc, DrawData, DrawRefused, Stage, TextureKind,
     fixture::{
@@ -1046,4 +1054,199 @@ fn an_extra_that_cannot_be_bound_is_refused() {
         core.target_desc(false),
         Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
     );
+}
+
+/// A 4-sample one-level 2D render target of `format`, `size` square, which the store does not hold.
+///
+/// Its usage is the one `texture_create` gives a render target with twins.
+fn multisampled(core: &CoreDevice, format: u32, size: u32) -> Arc<Texture> {
+    let usage = WMT_TEXTURE_USAGE_RENDER_TARGET
+        | WMT_TEXTURE_USAGE_SHADER_READ
+        | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+    let info = WMTTextureInfo {
+        pixel_format: format,
+        width: size,
+        height: size,
+        depth: 1,
+        array_length: 1,
+        bits: texture_info::info_bits(WMT_TEXTURE_TYPE2D_MULTISAMPLE, 1, 4, usage),
+        options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    let texture = Arc::new(Texture::new(info, core.device.device()));
+    texture.rename(texture.allocate(TextureAllocationFlags::GPU_PRIVATE));
+    texture
+}
+
+/// Records a render pass that loads and stores `texture`'s view `key` at colour 0, drawing nothing.
+fn pass_on(core: &mut CoreDevice, texture: &Arc<Texture>, key: TextureViewKey) {
+    let texture = Arc::clone(texture);
+    core.emit(move |enc| {
+        enc.start_render_pass(0, 0, 1, None);
+        let attachment =
+            enc.attachment::<{ stage::PIXEL }>(&texture, key, Access::READ | Access::WRITE);
+        if let Some(targets) = enc.render_targets() {
+            let color = &mut targets.colors[0].target;
+            color.attachment = attachment;
+            color.load_action = WMT_LOAD_ACTION_LOAD;
+            color.store_action = WMT_STORE_ACTION_STORE;
+        }
+        enc.end_pass();
+    });
+}
+
+/// Records the core's resolve of `source`'s view `key` into `destination`.
+fn resolve_on(
+    core: &mut CoreDevice,
+    source: &Arc<Texture>,
+    key: TextureViewKey,
+    destination: &Resolved,
+) {
+    let (source, texture, view) = (
+        Arc::clone(source),
+        Arc::clone(&destination.texture),
+        destination.key,
+    );
+    core.emit(move |enc| enc.resolve_texture(&source, key, &texture, view));
+}
+
+/// The single render pass `calls` shows: its colour 0 stores and resolves, into the returned view.
+fn resolved_pass(calls: &[String]) -> String {
+    let found = passes(calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    let color = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(color.starts_with("load=1 store=3 "), "{calls:#?}");
+    line(found[0], "  resolve0 ")
+        .unwrap_or_else(|| panic!("no resolve0: {calls:#?}"))
+        .to_owned()
+}
+
+/// The core makes a multisampled texture and attaches its own view to a pass (DXMTRS C4b-3d5).
+///
+/// Made with the multisample type and 4 samples, as the fake sees its bits; a pass on its
+/// `TYPE2D_MULTISAMPLE` view, which is the texture itself, is encoded. The fakes take any view:
+/// that Metal does is the validation layer's to show.
+#[test]
+fn dxmt_core_attaches_a_multisampled_view() {
+    const DEVICE: u64 = 0x380;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let texture = multisampled(&core, BGRA8, 64);
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let made = calls
+        .iter()
+        .find(|c| c.starts_with("MTLDevice_newTexture "))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    let bits = made
+        .rsplit_once("bits=0x")
+        .and_then(|(_, hex)| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| panic!("{made}"));
+    let seen = WMTTextureInfo {
+        bits,
+        ..*texture.info()
+    };
+    assert_eq!(
+        (seen.r#type(), seen.sample_count()),
+        (WMT_TEXTURE_TYPE2D_MULTISAMPLE, 4),
+        "{made}"
+    );
+    let handle = textures_made(&calls)[0].clone();
+    pass_on(&mut core, &texture, texture.full_view());
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=1 store=1 clear=0,0,0,0"),
+        "{calls:#?}"
+    );
+    assert_eq!(targets(&calls)[0].0, handle, "{calls:#?}");
+}
+
+/// The core resolves a multisampled view into a 2D view of one level, or of one cube face.
+///
+/// Alone, a pass of its own whose colour 0 is the source, resolved into that view; right after a
+/// render pass on the source, folded into it: one pass, its store action the resolve's.
+#[test]
+fn dxmt_core_resolves_into_a_level_view() {
+    const DEVICE: u64 = 0x381;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (flat, flat_handle) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 2);
+    let (cube, cube_handle) = stored(&mut core, DEVICE, 2, TextureKind::Cube, 32, 1);
+    let source = multisampled(&core, BGRA8, 32);
+    let source_handle = textures_made(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let key = source.full_view();
+    let level1 = TargetRef::Texture {
+        id: flat,
+        level: 1,
+        face: None,
+    };
+    let face3 = TargetRef::Texture {
+        id: cube,
+        level: 0,
+        face: Some(3),
+    };
+    for (target, parent, mip, slice) in [(level1, flat_handle, 1, 0), (face3, cube_handle, 0, 3)] {
+        let destination = core.resolve(target).expect("a target");
+        resolve_on(&mut core, &source, key, &destination);
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        let want = format!(
+            " of {parent} format={BGRA8} type={WMT_TEXTURE_TYPE2D} mip={mip} slice={slice}"
+        );
+        let view = calls
+            .iter()
+            .filter_map(|c| c.strip_prefix("MTLTexture_newTextureView "))
+            .find_map(|c| c.strip_suffix(want.as_str()))
+            .unwrap_or_else(|| panic!("no view{want}: {calls:#?}"))
+            .to_owned();
+        assert_eq!(
+            resolved_pass(&calls),
+            view,
+            "alone, mip {mip} slice {slice}"
+        );
+        assert_eq!(targets(&calls)[0].0, source_handle, "{calls:#?}");
+        pass_on(&mut core, &source, key);
+        resolve_on(&mut core, &source, key, &destination);
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        assert_eq!(
+            resolved_pass(&calls),
+            view,
+            "folded, mip {mip} slice {slice}"
+        );
+        assert_eq!(targets(&calls)[0].0, source_handle, "{calls:#?}");
+    }
+}
+
+/// The core resolves through sRGB twins: both views keyed in the twin's format.
+///
+/// The resolve names the destination's twin view, alone and folded into a pass on the source's.
+#[test]
+fn dxmt_core_resolves_through_a_twin() {
+    const DEVICE: u64 = 0x382;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (id, handle) = stored_desc(&mut core, DEVICE, 1, &twinned(flat(BGRA8, 32, 4), SRGB));
+    let source = multisampled(&core, BGRA8, 32);
+    let source_handle = textures_made(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let key = source.full_view().with_format(SRGB);
+    let destination = core.resolve_as(level0(id), SRGB).expect("a target");
+    resolve_on(&mut core, &source, key, &destination);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let twin = resolved_pass(&calls);
+    assert!(is_view(&calls, &twin, &handle, SRGB), "{calls:#?}");
+    let source_twin = targets(&calls)[0].0.clone();
+    assert!(
+        is_view(&calls, &source_twin, &source_handle, SRGB),
+        "{calls:#?}"
+    );
+    pass_on(&mut core, &source, key);
+    resolve_on(&mut core, &source, key, &destination);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(resolved_pass(&calls), twin, "folded");
+    assert_eq!(targets(&calls)[0].0, source_twin, "{calls:#?}");
 }
