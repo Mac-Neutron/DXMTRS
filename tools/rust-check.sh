@@ -343,6 +343,8 @@ leg_test() {
   # above tests the Wine build's, and one command builds a crate with one feature set.
   tst -p winemetal --features native \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
+  # winemetal.dll's crate in a command of its own: its test binary defines the unix-call table the SM50 exports reach.
+  tst -p winemetal-pe || rc=1
   # dxmt-fakes' winemetal fakes in a command of their own: no test binary links them beside the
   # core's, d3d11's or d3d12's own (one symbol, two definitions).
   tst -p dxmt-fakes \
