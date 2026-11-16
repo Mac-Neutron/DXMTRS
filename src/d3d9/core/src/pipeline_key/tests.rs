@@ -1,35 +1,41 @@
 use std::{
     collections::BTreeSet,
     hash::{Hash, Hasher},
+    ptr::NonNull,
     sync::Arc,
 };
 
 use airconv_ir::dxso::spec::{StageSpec, VsSamplerKinds, VsSpec};
-use mtld3d_shared::mtl::{PixelFormat, VertexFormat};
+use mtld3d_shared::mtl::{PixelFormat, VertexFormat, VertexStepFunction};
 use mtld3d_types::{
     D3DDECL_END, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT2,
     D3DDECLTYPE_FLOAT3, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_NORMAL,
     D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_TEXCOORD, D3DFVF_DIFFUSE,
-    D3DFVF_SPECULAR, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, D3DVIEWPORT9, render_state_defaults,
+    D3DFVF_SPECULAR, D3DFVF_XYZRHW, D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA,
+    D3DVERTEXELEMENT9, D3DVIEWPORT9, render_state_defaults,
 };
 use rustc_hash::FxHashMap;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{
-    CoreExtra, CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource,
-    PsStageKey, SampledMasks, ShaderCode, StageKind, VsStageKey, core_coverage_variant,
-    core_draw_kinds, core_extras, core_key_depth, core_ps_variant, core_scissor, core_srgb_variant,
-    core_viewport, extra_present, float_rows, indexed_up_vertices, pipeline_source, pos_fixup,
-    rhw_depth_clamp, up_byte_count, viewport_depth_range,
+    CoreExtra, CoreRefusal, DeclCode, DrawFacts, DrawFlags, MAX_STREAMS, PipelineKey,
+    PipelineSource, PsStageKey, SampledMasks, ShaderCode, StageKind, StreamKey, VsStageKey,
+    core_coverage_variant, core_draw_kinds, core_extras, core_key_depth, core_ps_variant,
+    core_scissor, core_srgb_variant, core_viewport, extra_present, float_rows, indexed_up_vertices,
+    pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
 };
 use crate::{
-    convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
+    convert::{ff_vs_layout_from_elements, fvf_to_elements, resolve_attrs_for_ff, rhw_passthrough},
+    draw_data::{AttrSnapshot, DeclarationHeader, StreamBinding},
     dxso::{
         FF_PASSTHROUGH_ATTR_BASE, FfVsKey, VariantFlags, VariantKey, ff_attr_index_for_semantic,
     },
+    encoder_draw::draw_record::{StreamRecord, VertexBytes, VertexView, stream_layouts_view},
     ff_state::FfState,
-    ids::ProgramId,
+    ids::{BufferId, ProgramId},
     multisample::SAMPLE_MASK_ALL,
+    pipeline_state::StreamLayout,
+    streams::{STREAM_FREQ_DEFAULT, stream_step},
 };
 
 /// `vs_2_0 { dcl_position v0; dcl_texcoord1 v3; mov oPos, v0; mov oT0, v3 }`.
@@ -103,6 +109,19 @@ fn decl(elements: &[D3DVERTEXELEMENT9]) -> DeclCode {
     DeclCode::new(elements.iter().copied().chain([D3DDECL_END]).collect())
 }
 
+/// The streams of a UP draw at `stride` over a declaration of stream 0 alone.
+fn inline(stride: u32) -> [StreamKey; MAX_STREAMS as usize] {
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = StreamKey::Inline { stride };
+    streams
+}
+
+/// The key entry of a bound stream: its stride and the step and rate of its frequency word.
+const fn bound(stride: u32, freq: u32) -> StreamKey {
+    let (step, rate) = stream_step(freq);
+    StreamKey::Bound { stride, step, rate }
+}
+
 /// The program of `tokens`, in an `Arc` of its own.
 fn code(tokens: &[u32]) -> ShaderCode {
     ShaderCode::from_parts(ProgramId::from_tokens(tokens), Arc::from(tokens))
@@ -125,7 +144,7 @@ fn ff_base() -> PipelineKey {
         ps: PsStageKey::Ff(ff.build_ps_key(&rs, 0)),
         variant: ff.variant_key(&rs, true, false),
         layout: decl(&elements),
-        stride,
+        streams: inline(stride),
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
@@ -156,7 +175,7 @@ fn prog_base() -> PipelineKey {
         ps: PsStageKey::Prog(code(&PS_C0)),
         variant: VariantKey::default(),
         layout: decl(&prog_elements()),
-        stride: 28,
+        streams: inline(28),
         write_mask: 0xf,
         color_format: PixelFormat::Bgra8Unorm as u32,
         depth_format: 0,
@@ -297,7 +316,7 @@ fn pipeline_key_tracks_every_input() {
             elements[1].offset = 20;
             k.layout = decl(&elements);
         }),
-        ("stride", ff_base, |k| k.stride = 24),
+        ("streams", ff_base, |k| k.streams = inline(24)),
         ("write_mask", ff_base, |k| k.write_mask = 0x7),
         ("color_format", ff_base, |k| {
             k.color_format = PixelFormat::Rgba16Unorm as u32;
@@ -361,8 +380,8 @@ fn programmable_attrs_resolve_by_semantic() {
     assert_eq!(
         source.attrs,
         [
-            (0, VertexFormat::Float4 as u32, 0),
-            (3, VertexFormat::Float2 as u32, 16)
+            (0, VertexFormat::Float4 as u32, 0, 0),
+            (3, VertexFormat::Float2 as u32, 16, 0)
         ]
     );
     assert_eq!(
@@ -373,31 +392,58 @@ fn programmable_attrs_resolve_by_semantic() {
             sampler_kinds: VsSamplerKinds::default(),
         })
     );
-    assert_eq!(source.stream0_extent, 24);
-    assert_eq!(source.stride, 28);
+    // Stream 0 steps by the call's 28 bytes; the attributes the stage reads end at 24.
+    assert_eq!(
+        source.layouts[0],
+        StreamLayout {
+            stride: 28,
+            step: VertexStepFunction::PerVertex,
+            step_rate: 1,
+        }
+    );
+    assert!(source.layouts[1..].iter().all(|l| !l.is_used()));
+    assert_eq!(source.crossing, 0);
     assert_eq!(source.ps.spec, StageSpec::Ps(VariantKey::default()));
 }
 
-/// A UP draw feeds stream 0 only: an element on another stream provides no input to either stage.
+/// A UP draw's element on a stream with nothing bound is provided, at its stream's slot.
+///
+/// To both stages: the stream reads zeros through a constant layout of its extent.
 #[test]
-fn elements_off_stream_0_are_not_provided() {
+fn elements_off_stream_0_are_provided_at_their_stream() {
+    let mut streams = inline(16);
+    streams[1] = StreamKey::Null;
     let prog = PipelineKey {
         layout: decl(&[
             element(0, 0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),
             element(1, 0, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 1),
         ]),
-        stride: 16,
+        streams,
         ..prog_base()
     };
     let prog = source(&prog);
-    assert_eq!(provided(&prog), 0b0001);
-    assert_eq!(prog.attrs, [(0, VertexFormat::Float4 as u32, 0)]);
+    assert_eq!(provided(&prog), 0b1001);
+    assert_eq!(
+        prog.attrs,
+        [
+            (0, VertexFormat::Float4 as u32, 0, 0),
+            (3, VertexFormat::Float2 as u32, 0, 1)
+        ]
+    );
+    assert_eq!(
+        prog.layouts[1],
+        StreamLayout {
+            stride: 8,
+            step: VertexStepFunction::Constant,
+            step_rate: 0,
+        }
+    );
 
     let ff_mask = |elements: &[D3DVERTEXELEMENT9]| {
         let key = PipelineKey {
             vs: VsStageKey::Ff(ff_vs(elements)),
             layout: decl(elements),
-            stride: 20,
+            streams,
             ..ff_base()
         };
         provided(&source(&key))
@@ -413,7 +459,7 @@ fn elements_off_stream_0_are_not_provided() {
         position,
         element(1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0),
     ]);
-    assert_eq!(on_1 & color0, 0, "nor from stream 1");
+    assert_ne!(on_1 & color0, 0, "and from stream 1");
     assert_ne!(on_1 & 1, 0, "the position stays provided");
 }
 
@@ -427,7 +473,7 @@ fn rhw_decl_feeds_the_ff_vs_with_its_passthrough() {
     let key = PipelineKey {
         vs: VsStageKey::Ff(ff_vs(&elements)),
         layout: decl(&elements),
-        stride: 28,
+        streams: inline(28),
         ..ff_base()
     };
     let source = source(&key);
@@ -435,14 +481,14 @@ fn rhw_decl_feeds_the_ff_vs_with_its_passthrough() {
     assert!(
         source
             .attrs
-            .contains(&(passthrough, VertexFormat::Float3 as u32, 16)),
+            .contains(&(passthrough, VertexFormat::Float3 as u32, 16, 0)),
         "{:?}",
         source.attrs
     );
     assert_ne!(provided(&source) & (1 << passthrough), 0);
 }
 
-/// An attribute ending past the stride crosses into the next vertex.
+/// An attribute ending past its stream's stride crosses into the next element, on any stream.
 #[test]
 fn a_crossing_attribute_is_detected() {
     let elements = [
@@ -451,16 +497,164 @@ fn a_crossing_attribute_is_detected() {
     ];
     let crossing = PipelineKey {
         layout: decl(&elements),
-        stride: 16,
+        streams: inline(16),
         ..prog_base()
     };
+    assert_eq!(source(&crossing).crossing, 0b01);
     assert!(source(&crossing).crosses_stride());
     let whole = PipelineKey {
-        stride: 28,
+        streams: inline(28),
         ..crossing
     };
     assert!(!source(&whole).crosses_stride());
     assert!(!source(&prog_base()).crosses_stride());
+    // The texture coordinates on stream 1, bound 4 bytes apart under an 8-byte element.
+    let mut streams = inline(16);
+    streams[1] = bound(4, STREAM_FREQ_DEFAULT);
+    let on_1 = PipelineKey {
+        layout: decl(&[
+            element(0, 0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),
+            element(1, 0, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 1),
+        ]),
+        streams,
+        ..prog_base()
+    };
+    assert_eq!(source(&on_1).crossing, 0b10);
+    assert!(source(&on_1).crosses_stride());
+}
+
+/// The core's layouts are mtld3d's for every way a stream is fed.
+///
+/// Stream by stream against `stream_layouts_view`, the closure mtld3d's draws run, over the same
+/// declaration and bindings: inline, bound, a zero stride under each kind of word, per instance,
+/// an instance rate of 0, nothing bound, and strides short of their extent. The crossing streams
+/// too.
+#[test]
+fn layouts_are_mtld3ds_for_every_feed() {
+    let elements = [
+        element(0, 0, D3DDECLTYPE_FLOAT3, D3DDECLUSAGE_POSITION, 0),
+        element(1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0),
+        element(2, 0, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 0),
+    ];
+    let vs = ff_vs(&elements);
+    let resolved = resolve_attrs_for_ff(&elements, &vs.passthrough);
+    assert_eq!(resolved.used_streams, 0b111);
+    assert_eq!(resolved.extents[..3], [12, 4, 8]);
+    let header = DeclarationHeader {
+        vdecl_hash: 0,
+        extents: resolved.extents,
+        count: u32::try_from(resolved.attrs.len()).expect("three attributes"),
+        used_streams: resolved.used_streams,
+        reserved: 0,
+    };
+    // SAFETY: the attributes and the header outlive the token, which is only read below.
+    let attrs =
+        unsafe { AttrSnapshot::new(NonNull::from(&resolved.attrs[0]), NonNull::from(&header)) };
+    let base = PipelineKey {
+        vs: VsStageKey::Ff(vs),
+        layout: decl(&elements),
+        ..ff_base()
+    };
+    let mtld3d = |view: &VertexView<'_>| {
+        let mut layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
+        let (mut crossing, mut offsets) = (0, 0);
+        stream_layouts_view(&mut layouts, view, &attrs, &mut crossing, &mut offsets);
+        (layouts, crossing)
+    };
+    let core = |streams| {
+        let source = source(&PipelineKey {
+            streams,
+            ..base.clone()
+        });
+        (source.layouts, source.crossing)
+    };
+
+    // A UP draw 16 bytes a vertex: stream 0 inline, the other two nothing bound.
+    let bytes = VertexBytes {
+        address: 0,
+        length: 0,
+        size: 0,
+    };
+    let up = VertexView::Up {
+        record: &bytes,
+        stride: 16,
+    };
+    let mut streams = inline(16);
+    streams[1] = StreamKey::Null;
+    streams[2] = StreamKey::Null;
+    assert_eq!(core(streams), mtld3d(&up), "inline");
+
+    let (indexed, instanced) = (D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA);
+    let default = Some((12, STREAM_FREQ_DEFAULT));
+    // Each stream's binding, `(stride, frequency word)`, none for nothing bound; the crossing
+    // streams.
+    let cases = [
+        (
+            "per vertex",
+            [default, Some((4, indexed | 3)), Some((8, 1))],
+            0,
+        ),
+        (
+            "zero strides",
+            [
+                Some((0, indexed | 3)),
+                Some((0, instanced | 2)),
+                Some((0, 1)),
+            ],
+            0,
+        ),
+        (
+            "zero stride, rate 0",
+            [default, Some((0, instanced)), None],
+            0,
+        ),
+        (
+            "per instance",
+            [default, Some((4, instanced | 2)), Some((8, instanced | 1))],
+            0,
+        ),
+        (
+            "instance rate 0",
+            [default, Some((4, instanced)), Some((8, instanced))],
+            0,
+        ),
+        ("nothing bound", [default, None, None], 0),
+        (
+            "short strides",
+            [Some((8, 1)), Some((4, 1)), Some((4, instanced | 2))],
+            0b101,
+        ),
+    ];
+    for (name, bindings, crossing) in cases {
+        let records = (0_u8..)
+            .zip(bindings)
+            .filter_map(|(stream, binding)| {
+                binding.map(|(stride, freq)| {
+                    StreamRecord::from_binding(&StreamBinding {
+                        stream,
+                        buffer_id: BufferId::from_raw(1),
+                        backing_ptr: 0,
+                        backing_len: 64,
+                        backing_generation: 0,
+                        offset: 0,
+                        stride,
+                        freq,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let view = VertexView::Bound {
+            records: &records,
+            stream0_freq: STREAM_FREQ_DEFAULT,
+        };
+        let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+        for (key, binding) in streams.iter_mut().zip(bindings) {
+            *key = binding.map_or(StreamKey::Null, |(stride, freq)| bound(stride, freq));
+        }
+        let expected = mtld3d(&view);
+        assert_eq!(expected.1, crossing, "{name}");
+        assert_eq!(core(streams), expected, "{name}");
+    }
 }
 
 /// Core's pixel variant: no samplers, one sample, its linked inputs and the pass's extras.

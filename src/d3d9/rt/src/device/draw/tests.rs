@@ -1,20 +1,23 @@
 use std::sync::Arc;
 
 use mtld3d_core::{
-    convert::FanRewrite,
-    dxso::VsSamplerKinds,
+    convert::{FanRewrite, ff_vs_layout_from_elements},
+    dxso::{MAX_LINKED_INPUTS, VsSamplerKinds},
+    ff_state::FfState,
     ids::ProgramId,
-    pipeline_key::{PipelineKey, PsStageKey, ShaderCode, VsStageKey},
+    pipeline_key::{MAX_STREAMS, PipelineKey, PsStageKey, ShaderCode, StreamKey, VsStageKey},
+    streams::{STREAM_FREQ_DEFAULT, stream_step},
 };
 use mtld3d_types::{
-    D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION,
-    D3DDECLUSAGE_TEXCOORD, D3DVERTEXELEMENT9,
+    D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT4,
+    D3DDECLUSAGE_COLOR, D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_TEXCOORD,
+    D3DSTREAMSOURCE_INSTANCEDATA, D3DVERTEXELEMENT9, render_state_defaults,
 };
 
-use super::{Bind, DrawData, DrawRefused, Indices, Stage};
+use super::{Bind, DrawData, DrawRefused, Indices, Stage, StreamData};
 use crate::device::{
     CoreDevice,
-    fixture::{at, core_on_fakes, decl, draw, ff_binds, key, passes, triangle},
+    fixture::{at, core_on_fakes, decl, draw, ff_binds, inline, key, passes, stream0, triangle},
 };
 
 /// `vs_2_0 { dcl_position v0; mov oPos, v0 }`.
@@ -78,7 +81,7 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         ps: PsStageKey::Prog(ps),
         variant: mtld3d_core::dxso::VariantKey::default(),
         layout: decl(&[element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0)]),
-        stride: 16,
+        streams: inline(16),
         write_mask: 0xf,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
@@ -987,4 +990,189 @@ fn a_blend_is_its_own_pipeline() {
         assert_eq!(core.draw_up(key, &triangle(&binds)), Ok(()));
     }
     assert_eq!(core.pipelines_len(), 2);
+}
+
+/// The fixed-function key of a pre-transformed position on stream 0 and a colour on stream 1.
+///
+/// The colour at `color_offset` of stream 1's element; the streams fed as `streams` says.
+fn two_stream_key(color_offset: u16, streams: [StreamKey; MAX_STREAMS as usize]) -> PipelineKey {
+    let elements = [
+        element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITIONT, 0),
+        D3DVERTEXELEMENT9 {
+            stream: 1,
+            ..element(color_offset, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0)
+        },
+    ];
+    let rs = render_state_defaults();
+    let layout = ff_vs_layout_from_elements(&elements);
+    PipelineKey {
+        vs: VsStageKey::Ff(FfState::new().build_vs_key(&rs, layout, 0, [0; MAX_LINKED_INPUTS])),
+        layout: decl(&elements),
+        streams,
+        ..key(0xf)
+    }
+}
+
+/// The key entries of a UP draw at 16 bytes a vertex whose stream 1 is fed as `entry` says.
+fn up_with(entry: StreamKey) -> [StreamKey; MAX_STREAMS as usize] {
+    let mut streams = inline(16);
+    streams[1] = entry;
+    streams
+}
+
+/// The key entry of a bound stream: its stride and the step and rate of its frequency word.
+const fn bound(stride: u32, freq: u32) -> StreamKey {
+    let (step, rate) = stream_step(freq);
+    StreamKey::Bound { stride, step, rate }
+}
+
+/// The vertex descriptor's lines (`  attr`, `  layout`) of each pipeline `calls` shows made.
+fn descriptors(calls: &[String]) -> Vec<Vec<&str>> {
+    let mut found = Vec::new();
+    for call in calls {
+        if call == "MTLDevice_newRenderPipelineStateWithVertexDescriptor" {
+            found.push(Vec::new());
+        } else if (call.starts_with("  attr ") || call.starts_with("  layout "))
+            && let Some(last) = found.last_mut()
+        {
+            last.push(call.as_str());
+        }
+    }
+    found
+}
+
+/// A UP draw's declared stream with nothing bound reads zeros at its own slot.
+///
+/// Stream 0's attribute at buffer 0, stepping per vertex at the call's stride; stream 1's at
+/// buffer 1, under a constant layout of the element's extent, and the draw binds that many zeros
+/// at slot 1.
+#[test]
+fn a_declared_stream_with_nothing_bound_reads_zeros() {
+    const DEVICE: u64 = 0x3c0;
+    let mut core = core_on_fakes(DEVICE);
+    let vertices = [0_u8; 48];
+    let mut streams = stream0(&vertices);
+    streams[1] = StreamData::Zeros;
+    let binds = ff_binds();
+    let drawn = DrawData {
+        streams,
+        ..draw(3, 3, None, &binds)
+    };
+    let key = two_stream_key(0, up_with(StreamKey::Null));
+    assert_eq!(core.draw_up(&key, &drawn), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        descriptors(&calls),
+        [[
+            "  attr 0 format=31 offset=0 buffer=0",
+            "  attr 2 format=42 offset=0 buffer=1",
+            "  layout 0 stride=16 step=1 rate=1",
+            "  layout 1 stride=4 step=0 rate=0",
+        ]],
+        "{calls:#?}"
+    );
+    let pass = passes(&calls)[0];
+    find(pass, "  render 46 length=48 index=0");
+    find(pass, "  render 46 length=4 index=1");
+}
+
+/// A bound stream's layout steps as its key entry says, and a zero stride is constant.
+///
+/// `INSTANCEDATA | 2` steps per instance at rate 2; a zero stride is a constant layout of the
+/// element's extent under a per-vertex word and under a per-instance one.
+#[test]
+fn a_bound_entry_prints_its_step_and_rate() {
+    const DEVICE: u64 = 0x3c1;
+    let mut core = core_on_fakes(DEVICE);
+    let (vertices, colors) = ([0_u8; 48], [0_u8; 12]);
+    let mut streams = stream0(&vertices);
+    streams[1] = StreamData::Bytes(&colors);
+    let binds = ff_binds();
+    let drawn = DrawData {
+        streams,
+        ..draw(3, 3, None, &binds)
+    };
+    let instanced = D3DSTREAMSOURCE_INSTANCEDATA | 2;
+    for entry in [
+        bound(4, instanced),
+        bound(0, STREAM_FREQ_DEFAULT),
+        bound(0, instanced),
+    ] {
+        assert_eq!(
+            core.draw_up(&two_stream_key(0, up_with(entry)), &drawn),
+            Ok(())
+        );
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let layouts = descriptors(&calls)
+        .iter()
+        .map(|lines| {
+            lines
+                .iter()
+                .rfind(|l| l.starts_with("  layout 1 "))
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        layouts,
+        [
+            Some("  layout 1 stride=4 step=2 rate=2"),
+            Some("  layout 1 stride=4 step=0 rate=0"),
+            Some("  layout 1 stride=4 step=0 rate=0"),
+        ],
+        "{calls:#?}"
+    );
+}
+
+/// Two keys that differ in one stream's stride alone are two pipelines, each at its stride.
+#[test]
+fn keys_of_two_strides_are_two_pipelines() {
+    const DEVICE: u64 = 0x3c2;
+    let mut core = core_on_fakes(DEVICE);
+    let binds = ff_binds();
+    let wider = PipelineKey {
+        streams: inline(24),
+        ..key(0xf)
+    };
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw_up(&wider, &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(pipelines_made(&calls), 2, "{calls:#?}");
+    let strides = descriptors(&calls)
+        .iter()
+        .map(|lines| {
+            lines
+                .iter()
+                .rfind(|l| l.starts_with("  layout 0 "))
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        strides,
+        [
+            Some("  layout 0 stride=20 step=1 rate=1"),
+            Some("  layout 0 stride=24 step=1 rate=1"),
+        ],
+        "{calls:#?}"
+    );
+}
+
+/// An attribute crossing stream 1's stride refuses the draw, as one crossing stream 0's does.
+#[test]
+fn a_crossing_on_stream_1_is_refused() {
+    const DEVICE: u64 = 0x3c3;
+    let mut core = core_on_fakes(DEVICE);
+    // The colour ends at byte 8 of stream 1's element, which is bound 4 bytes apart.
+    let key = two_stream_key(4, up_with(bound(4, STREAM_FREQ_DEFAULT)));
+    let refused = Err(DrawRefused::Crossing);
+    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.compiles(), 0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(pipelines_made(&calls), 0, "{calls:#?}");
+    assert!(!draws(&calls), "{calls:#?}");
 }

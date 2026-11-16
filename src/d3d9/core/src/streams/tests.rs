@@ -139,6 +139,44 @@ fn non_zero_stride_steps_per_frequency_word() {
     );
 }
 
+/// `bound_stream_layout` is still the whole rule: the zero-stride arm before the word's step.
+///
+/// Against the rule written out in one body, for each kind of word, strides of 0, short of,
+/// equal to and past the extent.
+#[test]
+fn bound_stream_layout_keeps_its_whole_rule() {
+    const fn whole(app_stride: u32, extent: u32, freq: u32) -> StreamLayout {
+        if app_stride == 0 {
+            return StreamLayout {
+                stride: extent,
+                step: VertexStepFunction::Constant,
+                step_rate: 0,
+            };
+        }
+        let (step, step_rate) = stream_step(freq);
+        StreamLayout {
+            stride: layout_stride(app_stride, extent),
+            step,
+            step_rate,
+        }
+    }
+    let words = [
+        STREAM_FREQ_DEFAULT,
+        D3DSTREAMSOURCE_INDEXEDDATA | 3,
+        D3DSTREAMSOURCE_INSTANCEDATA | 2,
+        D3DSTREAMSOURCE_INSTANCEDATA,
+    ];
+    for freq in words {
+        for (stride, extent) in [(0, 12), (4, 12), (12, 12), (28, 12)] {
+            assert_eq!(
+                bound_stream_layout(stride, extent, freq),
+                whole(stride, extent, freq),
+                "stride {stride}, extent {extent}, word {freq:#x}"
+            );
+        }
+    }
+}
+
 #[test]
 fn layout_stride_preserves_the_application_step() {
     assert_eq!(layout_stride(48, 36), 48);

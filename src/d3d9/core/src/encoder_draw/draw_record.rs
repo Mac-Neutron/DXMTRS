@@ -929,30 +929,17 @@ pub fn stream_layouts_view(
     crossing: &mut u16,
     offsets: &mut u32,
 ) {
-    use mtld3d_shared::mtl::VertexStepFunction;
-
-    use crate::{
-        pipeline_state::StreamLayout,
-        streams::{bound_stream_layout, layout_stride},
-    };
+    use crate::streams::{bound_stream_layout, inline_stream_layout, null_stream_layout};
     crate::draw_data::stream_layouts_with(
         layouts,
         attrs,
         |stream, extent| match source.feed(stream) {
-            StreamViewFeed::Inline { stride } => StreamLayout {
-                stride: layout_stride(stride, extent),
-                step: VertexStepFunction::PerVertex,
-                step_rate: 1,
-            },
+            StreamViewFeed::Inline { stride } => inline_stream_layout(stride, extent),
             StreamViewFeed::Buffer(record) => {
                 *offsets |= record.offset;
                 bound_stream_layout(record.stride, extent, record.frequency)
             }
-            StreamViewFeed::Null => StreamLayout {
-                stride: extent,
-                step: VertexStepFunction::Constant,
-                step_rate: 0,
-            },
+            StreamViewFeed::Null => null_stream_layout(extent),
         },
         crossing,
     );

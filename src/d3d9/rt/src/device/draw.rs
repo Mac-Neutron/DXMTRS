@@ -6,11 +6,11 @@
 //! `compile`, `compiled_data` and `load_function`, the D3D10-12 path) unless the device already
 //! holds that stage's function for that specialization, and the pipeline is made with the vertex
 //! descriptor (slot 156) and kept in the device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap).
-//! The draw records the pipeline, the viewport, the rasterizer state, the vertex bytes at buffer
-//! 0, the stages' binds and the draw (its indices, if any, in the argument-buffer ring) into the
-//! colour target's render pass, after the depth-stencil state when its key names a depth
-//! format, and the scissor when the pass has not recorded that one last. The pipeline is built
-//! on the API thread and waited for (no asynchronous compile until C4d).
+//! The draw records the pipeline, the viewport, the rasterizer state, each stream the pipeline
+//! reads at its slot, the stages' binds and the draw (its indices, if any, in the argument-buffer
+//! ring) into the colour target's render pass, after the depth-stencil state when its key names a
+//! depth format, and the scissor when the pass has not recorded that one last. The pipeline is
+//! built on the API thread and waited for (no asynchronous compile until C4d).
 
 use core::ffi::CStr;
 use std::{ops::Range, sync::Arc};
@@ -25,7 +25,11 @@ use dxmt_core::{
 use mtld3d_core::{
     clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
-    pipeline_key::{PipelineKey, PipelineSource, ShaderCode, StageSource, pipeline_source},
+    draw_data::NULL_STREAM_ZEROS,
+    pipeline_key::{
+        MAX_STREAMS, PipelineKey, PipelineSource, ShaderCode, StageSource, StreamKey,
+        pipeline_source,
+    },
     pipeline_state::{BlendFactor, BlendOperation, CoreBlend},
 };
 use rustc_hash::FxHashMap;
@@ -55,14 +59,6 @@ use winemetal_sys::{
 
 use super::{CoreDevice, LOG_TARGET};
 
-/// `MTLVertexStepFunctionPerVertex`.
-const STEP_PER_VERTEX: u32 = 1;
-
-/// D3D9's vertex buffer slot of a UP draw's vertices (the front end names the others).
-mod slot {
-    pub const VERTICES: u8 = 0;
-}
-
 /// The stage a [`Bind`] binds at.
 // Copy: one byte, copied into the closure's bind list.
 #[derive(Clone, Copy)]
@@ -76,6 +72,18 @@ pub struct Bind<'a> {
     pub stage: Stage,
     pub slot: u8,
     pub bytes: &'a [u8],
+}
+
+/// One vertex stream's data for a draw, at the stream's slot.
+// Copy: an entry of the draw's array, which the tests' const fixture builds.
+#[derive(Clone, Copy)]
+pub enum StreamData<'a> {
+    /// None: a stream the declaration does not name.
+    None,
+    /// Bytes bound inline (a UP draw's stream 0).
+    Bytes(&'a [u8]),
+    /// Zeros: a stream the declaration names with nothing bound.
+    Zeros,
 }
 
 /// An indexed draw's indices.
@@ -92,7 +100,8 @@ pub struct Indices<'a> {
 pub struct DrawData<'a> {
     /// The `MTLPrimitiveType`.
     pub primitive: u8,
-    pub vertices: &'a [u8],
+    /// Each stream's data, by stream (DXMTRS C4c-1).
+    pub streams: [StreamData<'a>; MAX_STREAMS as usize],
     pub vertex_count: u32,
     /// The indices of an indexed draw (a fan's triangle list too).
     pub indices: Option<Indices<'a>>,
@@ -130,7 +139,7 @@ pub enum DrawRefused {
     NoBackBuffer,
     /// The draw's pipeline does not build (logged once per key).
     Pipeline,
-    /// An attribute crosses the stride, which the core cannot fetch yet.
+    /// An attribute crosses its stream's stride, which the core cannot fetch yet.
     Crossing,
     /// The key names a depth format the bound depth-stencil has not (none is bound).
     ///
@@ -236,7 +245,10 @@ impl CoreDevice {
         let Some(scissor) = clamp_rect(draw.scissor, extent) else {
             return Ok(());
         };
-        let pso = self.pipeline(key)?;
+        let entry = self.pipeline(key)?;
+        let (Some(pso), Some(source)) = (entry.ready(), entry.spec.as_ref().as_ref()) else {
+            return Err(DrawRefused::Pipeline);
+        };
         // The state of the planes the pass has: no stencil test without the plane.
         let depth_state = with_depth.then(|| {
             let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
@@ -257,9 +269,28 @@ impl CoreDevice {
                 height: u64::from(scissor[3]),
             }
         });
-        let vertices = draw.vertices.to_vec();
         let mut bytes = Vec::new();
         let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
+        // Each stream the pipeline reads, first, at its slot: its bytes, or for one with nothing
+        // bound zeros of its layout's stride, clamped to the zero feed as mtld3d clamps it.
+        for ((slot, layout), data) in (0_u8..).zip(&source.layouts).zip(&draw.streams) {
+            if !layout.is_used() {
+                continue;
+            }
+            let fed = match data {
+                StreamData::Bytes(fed) => *fed,
+                StreamData::Zeros | StreamData::None => {
+                    debug_assert!(
+                        matches!(data, StreamData::Zeros),
+                        "a stream the pipeline reads has data"
+                    );
+                    &NULL_STREAM_ZEROS[..(layout.stride as usize).min(NULL_STREAM_ZEROS.len())]
+                }
+            };
+            let start = bytes.len();
+            bytes.extend_from_slice(fed);
+            binds.push((Stage::Vertex, slot, start..bytes.len()));
+        }
         for bind in draw.binds.iter().filter(|b| !b.bytes.is_empty()) {
             let start = bytes.len();
             bytes.extend_from_slice(bind.bytes);
@@ -361,7 +392,6 @@ impl CoreDevice {
                 });
             }
             enc.encode_render_command(rasterizer);
-            direct::bind_bytes::<{ stage::VERTEX }>(enc, slot::VERTICES, &vertices);
             for (stage, slot, range) in &binds {
                 let bound = &bytes[range.clone()];
                 match stage {
@@ -425,11 +455,14 @@ impl CoreDevice {
         Ok(())
     }
 
-    /// The pipeline of `key`: its handle, which the device keeps for its life.
+    /// The pipeline entry of `key`, which the device keeps for its life: its handle and source.
     ///
-    /// Built on the first draw of `key`, unless its layout crosses the stride; a key that does
-    /// not build is kept as handle 0, logged then, and never built again.
-    fn pipeline(&mut self, key: &PipelineKey) -> Result<u64, DrawRefused> {
+    /// Built on the first draw of `key`, unless its layout crosses a stride; a key that does not
+    /// build is kept as handle 0, logged then, and never built again.
+    fn pipeline(
+        &mut self,
+        key: &PipelineKey,
+    ) -> Result<Arc<Compiled<Option<PipelineSource>>>, DrawRefused> {
         let entry = self
             .pipelines
             .get(key)
@@ -442,7 +475,7 @@ impl CoreDevice {
         {
             return Err(DrawRefused::Crossing);
         }
-        entry.ready().ok_or(DrawRefused::Pipeline)
+        Ok(entry)
     }
 
     /// The entry of a key the device has not seen: built unless its layout crosses the stride.
@@ -460,12 +493,33 @@ impl CoreDevice {
             _ => None,
         };
         if pso.is_none() && !crossing {
+            let streams = key
+                .streams
+                .iter()
+                .filter(|s| **s != StreamKey::Unused)
+                .collect::<Vec<_>>();
             log::error!(
                 target: LOG_TARGET,
-                "d3d9 core: a pipeline (stride {}) does not build; its draws are dropped",
-                key.stride
+                "d3d9 core: a pipeline (streams {streams:?}) does not build; its draws are dropped"
             );
             log::debug!(target: LOG_TARGET, "d3d9 core: the pipeline that does not build: {key:?}");
+        }
+        // A stream with nothing bound reads the zero feed, which its draws clamp to (as mtld3d's
+        // do): said once a key.
+        let zeros = NULL_STREAM_ZEROS.len();
+        for (stream, (entry, layout)) in source
+            .iter()
+            .flat_map(|source| key.streams.iter().zip(&source.layouts))
+            .enumerate()
+        {
+            if *entry == StreamKey::Null && layout.stride as usize > zeros {
+                log::warn!(
+                    target: LOG_TARGET,
+                    "d3d9 core: stream {stream} is unbound and its declaration extent {} exceeds \
+                     the zero feed; clamped",
+                    layout.stride
+                );
+            }
         }
         let handle = pso.as_ref().map_or(0, Obj::handle);
         // Built and ready (C4b-1's ruling C4b-3): no job, so no scheduler.
@@ -539,20 +593,26 @@ fn build_pipeline(
             step_rate: 0,
         }; 31],
     };
-    for &(index, format, offset) in &source.attrs {
+    for &(index, format, offset, slot) in &source.attrs {
         if let Some(attribute) = vertex.attributes.get_mut(index as usize) {
             *attribute = WMTVertexAttributeInfo {
                 format,
                 offset,
-                buffer_index: u32::from(slot::VERTICES),
+                buffer_index: slot,
             };
         }
     }
-    vertex.layouts[usize::from(slot::VERTICES)] = WMTVertexBufferLayoutInfo {
-        stride: source.stride,
-        step_function: STEP_PER_VERTEX,
-        step_rate: 1,
-    };
+    for (wire, layout) in vertex.layouts.iter_mut().zip(&source.layouts) {
+        if layout.is_used() {
+            *wire = WMTVertexBufferLayoutInfo {
+                stride: layout.stride,
+                // mtld3d's step function has Metal's numbers: Constant 0, PerVertex 1,
+                // PerInstance 2 (the wire names none).
+                step_function: layout.step as u32,
+                step_rate: layout.step_rate,
+            };
+        }
+    }
     let mut error = 0;
     // SAFETY: a live device; the info, the vertex descriptor and the error slot are alive for
     // the call; the functions are retained by the pipeline.

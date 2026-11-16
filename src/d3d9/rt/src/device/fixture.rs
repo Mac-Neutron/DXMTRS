@@ -6,7 +6,9 @@ use mtld3d_core::{
     depth_stencil_state::DepthStencilSnapshot,
     dxso::MAX_LINKED_INPUTS,
     ff_state::FfState,
-    pipeline_key::{CoreExtra, DeclCode, PipelineKey, PsStageKey, VsStageKey},
+    pipeline_key::{
+        CoreExtra, DeclCode, MAX_STREAMS, PipelineKey, PsStageKey, StreamKey, VsStageKey,
+    },
 };
 use mtld3d_types::{
     D3DDECL_END, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, render_state_defaults,
@@ -14,8 +16,8 @@ use mtld3d_types::{
 use winemetal_sys::Obj;
 
 use super::{
-    Bind, CoreDevice, CoreTextureDesc, CoreTextureFlags, DrawData, Indices, Stage, TextureKind,
-    queue_profile,
+    Bind, CoreDevice, CoreTextureDesc, CoreTextureFlags, DrawData, Indices, Stage, StreamData,
+    TextureKind, queue_profile,
 };
 
 /// A core device on the made-up handle `handle` with a 64x32 back buffer and a window.
@@ -102,6 +104,20 @@ pub fn decl(elements: &[D3DVERTEXELEMENT9]) -> DeclCode {
     DeclCode::new(elements.iter().copied().chain([D3DDECL_END]).collect())
 }
 
+/// The key entries of a UP draw at `stride` over a declaration of stream 0 alone.
+pub fn inline(stride: u32) -> [StreamKey; MAX_STREAMS as usize] {
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = StreamKey::Inline { stride };
+    streams
+}
+
+/// A draw's streams: `bytes` on stream 0, nothing on the others.
+pub const fn stream0(bytes: &[u8]) -> [StreamData<'_>; MAX_STREAMS as usize] {
+    let mut streams = [StreamData::None; MAX_STREAMS as usize];
+    streams[0] = StreamData::Bytes(bytes);
+    streams
+}
+
 /// The key of a default-state `XYZRHW | DIFFUSE` draw, 20 bytes a vertex, with no depth-stencil.
 pub fn key(write_mask: u8) -> PipelineKey {
     let rs = render_state_defaults();
@@ -113,7 +129,7 @@ pub fn key(write_mask: u8) -> PipelineKey {
         ps: PsStageKey::Ff(ff.build_ps_key(&rs, 0)),
         variant: ff.variant_key(&rs, true, false),
         layout: decl(&elements),
-        stride,
+        streams: inline(stride),
         write_mask,
         color_format: winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM,
         depth_format: 0,
@@ -145,7 +161,7 @@ pub const fn draw<'a>(
 ) -> DrawData<'a> {
     DrawData {
         primitive,
-        vertices: &VERTICES,
+        streams: stream0(&VERTICES),
         vertex_count,
         indices,
         viewport: VIEWPORT,
@@ -193,7 +209,7 @@ pub fn ff_binds() -> [Bind<'static>; 6] {
 /// A triangle's per-draw data: three 20-byte vertices.
 pub fn triangle<'a>(binds: &'a [Bind<'a>]) -> DrawData<'a> {
     DrawData {
-        vertices: &VERTICES[..60],
+        streams: stream0(&VERTICES[..60]),
         ..draw(3, 3, None, binds)
     }
 }

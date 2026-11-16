@@ -511,6 +511,15 @@ impl StreamLayout {
     pub const fn is_used(&self) -> bool {
         self.stride != 0
     }
+
+    /// Whether the attributes the shader consumes, `extent` bytes of an element, pass the stride.
+    ///
+    /// The draw then fetches those through a [`crate::streams::CrossingFetch`].
+    #[inline]
+    #[must_use]
+    pub const fn crosses(&self, extent: u32) -> bool {
+        self.stride < extent
+    }
 }
 
 /// The wire layouts of a snapshot, one per used stream.

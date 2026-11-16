@@ -1,10 +1,13 @@
-use mtld3d_shared::command_header::COMMAND_HEADER_BYTES;
+use mtld3d_shared::{command_header::COMMAND_HEADER_BYTES, mtl::VertexStepFunction};
 
 use super::*;
-use crate::encoder_draw::{
-    draw_payload_size,
-    draw_record::{DrawView, VertexView},
-    write_draw_into,
+use crate::{
+    encoder_draw::{
+        draw_payload_size,
+        draw_record::{DrawView, VertexView},
+        write_draw_into,
+    },
+    streams::layout_stride,
 };
 
 #[test]

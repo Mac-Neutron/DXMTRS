@@ -599,9 +599,24 @@ pub const fn crossing_read_size(size: u32, extent: u32, stride: u32) -> u32 {
 /// stream offset, whatever the frequency word says, which Metal spells as a
 /// `Constant` layout (there is no zero-stride layout, and stepping such a
 /// stream per vertex would fetch past the buffer's end). Any other stride
-/// steps per the frequency word.
+/// steps per the frequency word: [`stepped_stream_layout`] of its [`stream_step`].
 #[must_use]
 pub const fn bound_stream_layout(app_stride: u32, extent: u32, freq: u32) -> StreamLayout {
+    let (step, rate) = stream_step(freq);
+    stepped_stream_layout(app_stride, extent, step, rate)
+}
+
+/// [`bound_stream_layout`] of a frequency word already split into its step and rate.
+///
+/// `step` and `rate` are [`stream_step`]'s. A zero stride is a `Constant` layout over `extent`
+/// whatever they say; any other stride steps by `step` at `rate`.
+#[must_use]
+pub const fn stepped_stream_layout(
+    app_stride: u32,
+    extent: u32,
+    step: VertexStepFunction,
+    rate: u32,
+) -> StreamLayout {
     if app_stride == 0 {
         return StreamLayout {
             stride: extent,
@@ -609,11 +624,37 @@ pub const fn bound_stream_layout(app_stride: u32, extent: u32, freq: u32) -> Str
             step_rate: 0,
         };
     }
-    let (step, step_rate) = stream_step(freq);
     StreamLayout {
         stride: layout_stride(app_stride, extent),
         step,
-        step_rate,
+        step_rate: rate,
+    }
+}
+
+/// The vertex buffer layout of stream 0 of a UP draw: its bytes inline at the call's `stride`.
+///
+/// Steps per vertex by [`layout_stride`] of the stride and `extent`, the span of the declaration
+/// elements the shader consumes on the stream.
+#[must_use]
+pub const fn inline_stream_layout(stride: u32, extent: u32) -> StreamLayout {
+    StreamLayout {
+        stride: layout_stride(stride, extent),
+        step: VertexStepFunction::PerVertex,
+        step_rate: 1,
+    }
+}
+
+/// The vertex buffer layout of a stream the declaration reads with nothing bound.
+///
+/// A `Constant` layout over `extent`, the span of the declaration elements the shader consumes
+/// on the stream: every vertex and instance reads the zeros bound at its slot
+/// ([`crate::draw_data::NULL_STREAM_ZEROS`]).
+#[must_use]
+pub const fn null_stream_layout(extent: u32) -> StreamLayout {
+    StreamLayout {
+        stride: extent,
+        step: VertexStepFunction::Constant,
+        step_rate: 0,
     }
 }
 

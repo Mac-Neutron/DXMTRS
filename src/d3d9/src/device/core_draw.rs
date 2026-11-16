@@ -10,7 +10,7 @@
 use core::{ffi::c_void, ops::Range};
 
 use d3d9_rt::device::{
-    Bind, CoreDevice, DrawData, DrawRefused, Indices, Stage, TextureBind, view_format,
+    Bind, CoreDevice, DrawData, DrawRefused, Indices, Stage, StreamData, TextureBind, view_format,
 };
 use mtld3d_core::{
     convert::{
@@ -25,7 +25,7 @@ use mtld3d_core::{
     multisample::{alpha_to_coverage_requested, effective_sample_mask},
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
-        VsStageKey, core_coverage_variant, core_draw_kinds, core_extras, core_key_depth,
+        StreamKey, VsStageKey, core_coverage_variant, core_draw_kinds, core_extras, core_key_depth,
         core_ps_variant, core_scissor, core_srgb_variant, core_texture_variant, core_viewport,
         extra_present, float_rows, indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count,
         viewport_depth_range,
@@ -48,7 +48,8 @@ use mtld3d_types::{
     D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_BLENDFACTOR,
     D3DRS_COLORWRITEENABLE, D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE,
     D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF,
-    D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
+    D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC, MAX_STREAMS, RENDER_STATE_COUNT,
+    SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -118,10 +119,10 @@ impl Binds {
     }
 }
 
-/// A UP draw's pipeline key, binds and target size, from the device state.
+/// A draw's pipeline key, binds and target size, from the device state.
 ///
-/// The draw is of `primitive` with `stride`; the caller checked that a declaration (or an FVF's)
-/// is bound.
+/// The draw is of `primitive`, its streams fed as `streams` says; the caller checked that a
+/// declaration (or an FVF's) is bound.
 ///
 /// # Errors
 ///
@@ -130,7 +131,7 @@ impl Binds {
 fn resolve(
     dev: &mut DeviceInner,
     primitive: u32,
-    stride: u32,
+    streams: &[StreamKey; MAX_STREAMS as usize],
 ) -> Result<(PipelineKey, Binds, (u32, u32)), i32> {
     let rs = *dev.render_states();
     // SAFETY: bound (the caller checked), and its slot's refcount keeps it live for the call.
@@ -543,7 +544,7 @@ fn resolve(
         ps: ps_key,
         variant,
         layout: decl.code().clone(),
-        stride,
+        streams: *streams,
         write_mask,
         color_format,
         depth_format,
@@ -673,7 +674,22 @@ fn draw(
     let Some(metal_primitive) = metal_primitive else {
         return D3DERR_INVALIDCALL;
     };
-    let (key, mut binds, target) = match resolve(dev, primitive, stride) {
+    // A UP draw's streams: its bytes inline at the call's stride on stream 0, zeros at each other
+    // stream the declaration names, as mtld3d feeds them.
+    let declared = super::declared_stream_mask(dev);
+    let mut keys = [StreamKey::Unused; MAX_STREAMS as usize];
+    let mut streams = [StreamData::None; MAX_STREAMS as usize];
+    for (stream, (key, data)) in keys.iter_mut().zip(&mut streams).enumerate() {
+        if declared & (1 << stream) == 0 {
+            continue;
+        }
+        (*key, *data) = if stream == 0 {
+            (StreamKey::Inline { stride }, StreamData::Bytes(vertices))
+        } else {
+            (StreamKey::Null, StreamData::Zeros)
+        };
+    }
+    let (key, mut binds, target) = match resolve(dev, primitive, &keys) {
         Ok(resolved) => resolved,
         Err(hr) => return hr,
     };
@@ -682,7 +698,7 @@ fn draw(
     let rs = dev.render_states();
     let draw = DrawData {
         primitive: metal_primitive as u8,
-        vertices,
+        streams,
         vertex_count,
         indices,
         viewport: core_viewport(&dev.viewport(), target),

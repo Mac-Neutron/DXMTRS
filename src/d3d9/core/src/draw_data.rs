@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 
 use mtld3d_shared::{
     NullTextureKind, VertexAttrDesc,
-    mtl::{IndexType, PrimitiveType, VertexStepFunction},
+    mtl::{IndexType, PrimitiveType},
 };
 use mtld3d_types::{MAX_STREAMS, SAMPLER_STATE_COUNT};
 
@@ -28,7 +28,7 @@ use crate::{
     pipeline_state::StreamLayout,
     scratch::ScratchArena,
     shader_key,
-    streams::{bound_stream_layout, layout_stride},
+    streams::{bound_stream_layout, inline_stream_layout, null_stream_layout},
 };
 
 /// Pixel sampler stages represented by captured stage bindings.
@@ -224,17 +224,9 @@ pub fn stream_layouts(
         &mut layouts,
         attrs,
         |stream, extent| match source.feed(stream) {
-            StreamFeed::Inline { stride } => StreamLayout {
-                stride: layout_stride(stride, extent),
-                step: VertexStepFunction::PerVertex,
-                step_rate: 1,
-            },
+            StreamFeed::Inline { stride } => inline_stream_layout(stride, extent),
             StreamFeed::Buffer(b) => bound_stream_layout(b.stride, extent, b.freq),
-            StreamFeed::Null => StreamLayout {
-                stride: extent,
-                step: VertexStepFunction::Constant,
-                step_rate: 0,
-            },
+            StreamFeed::Null => null_stream_layout(extent),
         },
         &mut 0,
     );
@@ -261,7 +253,7 @@ pub fn stream_layouts_with(
         used &= used - 1;
         let extent = attrs.extents()[stream as usize];
         let stream_layout = layout(stream, extent);
-        *crossing |= u16::from(stream_layout.stride < extent) << stream;
+        *crossing |= u16::from(stream_layout.crosses(extent)) << stream;
         layouts[stream as usize] = stream_layout;
     }
 }

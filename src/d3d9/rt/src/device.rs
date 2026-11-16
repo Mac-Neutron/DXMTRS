@@ -210,7 +210,7 @@ mod target;
 mod textures;
 
 pub use depth::DepthRef;
-pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
+pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage, StreamData};
 pub use swapchain::present_after;
 pub use target::TargetRef;
 pub use textures::{

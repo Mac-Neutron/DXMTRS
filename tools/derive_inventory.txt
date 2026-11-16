@@ -464,6 +464,7 @@ src/d3d9/core/src/pipeline_key.rs PipelineKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_key.rs PsStageKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_key.rs ShaderCode Clone,Debug
 src/d3d9/core/src/pipeline_key.rs StageKind Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/core/src/pipeline_key.rs StreamKey Clone,Copy,Debug,Default,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_key.rs VsStageKey Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs CoreBlend Clone,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/pipeline_state.rs ExtraColorAttachments Clone,Copy,Debug,PartialEq,Eq,Hash
@@ -555,6 +556,7 @@ src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
 src/d3d9/rt/src/device/depth.rs DepthRef Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
+src/d3d9/rt/src/device/draw.rs StreamData Clone,Copy
 src/d3d9/rt/src/device/target.rs Shape Clone,Copy
 src/d3d9/rt/src/device/target.rs TargetRef Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/textures.rs CoreTextureDesc Clone,Copy,Debug

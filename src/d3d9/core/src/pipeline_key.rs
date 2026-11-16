@@ -15,7 +15,10 @@ use std::{
 };
 
 use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSamplerKinds, VsSpec};
-use mtld3d_shared::shader_create::ShaderStage;
+use mtld3d_shared::{mtl::VertexStepFunction, shader_create::ShaderStage};
+// The key holds one entry a stream: d3d9-rt, with no dependency of its own on the D3D9 types,
+// sizes its draws' streams by the same count.
+pub use mtld3d_types::MAX_STREAMS;
 use mtld3d_types::{
     D3DRECT, D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3,
     D3DVERTEXELEMENT9, D3DVIEWPORT9, RENDER_STATE_COUNT,
@@ -30,9 +33,10 @@ use crate::{
     ff_build,
     ids::ProgramId,
     multisample::SAMPLE_MASK_ALL,
-    pipeline_state::{CoreBlend, ExtraColorAttachments, PipelineRsBits, core_blend},
+    pipeline_state::{CoreBlend, ExtraColorAttachments, PipelineRsBits, StreamLayout, core_blend},
     render_state::enum_value,
     shader_create::{ShaderCreateError, parse_shader},
+    streams::{inline_stream_layout, null_stream_layout, stepped_stream_layout},
 };
 
 /// A program's tokens and their id, compared exactly.
@@ -173,11 +177,36 @@ pub enum PsStageKey {
     Prog(ShaderCode),
 }
 
+/// How a draw feeds one vertex stream, as far as its pipeline's vertex layout depends on it.
+///
+/// One entry a stream of [`PipelineKey::streams`]: the front end fills those of the bound
+/// declaration and leaves the rest `Unused`.
+// Copy: an entry of the key's array, built by value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum StreamKey {
+    /// A stream the declaration does not name.
+    #[default]
+    Unused,
+    /// Stream 0 of a UP draw: its bytes inline at the call's stride.
+    Inline { stride: u32 },
+    /// A bound vertex buffer: its stride, and the step and rate of its frequency word.
+    ///
+    /// [`crate::streams::stream_step`]'s. The word's count is not here: an instanced draw passes
+    /// it beside the key, which would otherwise build a pipeline a count.
+    Bound {
+        stride: u32,
+        step: VertexStepFunction,
+        rate: u32,
+    },
+    /// A stream the declaration names with nothing bound: zeros.
+    Null,
+}
+
 /// What a pipeline of the core's draws depends on.
 ///
 /// The arm draws to up to four colour targets of one sample count (colour 0 and the extras at
 /// index 1-3) and at most one depth-stencil of that count, so these fields are all of it. The
-/// stride is here because D3D9 fetches through a Metal vertex descriptor.
+/// streams are here because D3D9 fetches through a Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -186,8 +215,8 @@ pub struct PipelineKey {
     pub variant: VariantKey,
     /// The bound declaration (the FVF's for an FVF draw).
     pub layout: DeclCode,
-    /// Bytes from one vertex to the next.
-    pub stride: u32,
+    /// How the draw feeds each vertex stream, by stream (DXMTRS C4c-1).
+    pub streams: [StreamKey; MAX_STREAMS as usize],
     /// The colour target's `MTLColorWriteMask`.
     pub write_mask: u8,
     /// The colour target's `WMTPixelFormat`.
@@ -246,12 +275,14 @@ pub struct StageSource {
 pub struct PipelineSource {
     pub vs: StageSource,
     pub ps: StageSource,
-    /// Each vertex attribute: `(attribute index, MTLVertexFormat, byte offset)`, from buffer 0.
-    pub attrs: Vec<(u32, u32, u32)>,
-    /// The end of the furthest attribute on stream 0.
-    pub stream0_extent: u32,
-    /// Bytes from one vertex to the next.
-    pub stride: u32,
+    /// Each vertex attribute: `(attribute index, MTLVertexFormat, byte offset, buffer slot)`.
+    ///
+    /// The slot is the attribute's stream (mtld3d's numbering: the streams at slots 0-15).
+    pub attrs: Vec<(u32, u32, u32, u32)>,
+    /// Each stream's vertex buffer layout; [`StreamLayout::UNUSED`] for one no attribute reads.
+    pub layouts: [StreamLayout; MAX_STREAMS as usize],
+    /// The streams an attribute crosses the stride of: bit `n` for stream `n`.
+    pub crossing: u16,
     /// The colour target's `MTLColorWriteMask`.
     pub write_mask: u8,
     /// The colour target's `WMTPixelFormat`.
@@ -269,12 +300,12 @@ pub struct PipelineSource {
 }
 
 impl PipelineSource {
-    /// Whether an attribute ends past the stride, reading into the next vertex.
+    /// Whether an attribute ends past its stream's stride, reading into the next element.
     ///
-    /// Such a layout needs mtld3d's slot remap, which the core does not have yet.
+    /// Such a layout needs mtld3d's crossing fetch, which the core does not have yet.
     #[must_use]
     pub const fn crosses_stride(&self) -> bool {
-        self.stream0_extent > self.stride
+        self.crossing != 0
     }
 }
 
@@ -296,7 +327,7 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         ps,
         variant,
         layout,
-        stride,
+        streams,
         write_mask,
         color_format,
         depth_format,
@@ -345,17 +376,30 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
             )
         }
     };
-    // A UP draw feeds buffer 0 alone: elements on other streams back no input, which then reads
-    // the translator's zero fill, as mtld3d's unbound stream reads zeros.
-    let kept = resolved
+    // Every resolved attribute is provided, at its stream's slot: a stream with nothing bound
+    // feeds zeros through a constant layout, as mtld3d feeds it.
+    let kept_mask = resolved
         .attrs
-        .iter()
-        .filter(|a| a.buffer_index == 0)
-        .collect::<Vec<_>>();
-    let kept_mask = kept
         .iter()
         .filter_map(|a| 1_u16.checked_shl(a.attr_index))
         .fold(0, |mask, bit| mask | bit);
+    // Each stream an attribute reads: its layout from the key's entry over its extent.
+    let mut layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
+    let mut crossing = 0_u16;
+    for (stream, (layout, entry)) in layouts.iter_mut().zip(streams).enumerate() {
+        if resolved.used_streams & (1 << stream) == 0 {
+            continue;
+        }
+        let extent = resolved.extents[stream];
+        *layout = match *entry {
+            StreamKey::Inline { stride } => inline_stream_layout(stride, extent),
+            StreamKey::Bound { stride, step, rate } => {
+                stepped_stream_layout(stride, extent, step, rate)
+            }
+            StreamKey::Null | StreamKey::Unused => null_stream_layout(extent),
+        };
+        crossing |= u16::from(layout.crosses(extent)) << stream;
+    }
     let ps_code = match ps {
         PsStageKey::Ff(ps) => ff_code(ff_build::pixel(ps).tokens),
         PsStageKey::Prog(code) => {
@@ -383,12 +427,13 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
             code: ps_code,
             spec: StageSpec::Ps(*variant),
         },
-        attrs: kept
+        attrs: resolved
+            .attrs
             .iter()
-            .map(|a| (a.attr_index, a.format as u32, a.offset))
+            .map(|a| (a.attr_index, a.format as u32, a.offset, a.buffer_index))
             .collect(),
-        stream0_extent: resolved.extents[0],
-        stride: *stride,
+        layouts,
+        crossing,
         write_mask: *write_mask,
         color_format: *color_format,
         depth_format: *depth_format,
