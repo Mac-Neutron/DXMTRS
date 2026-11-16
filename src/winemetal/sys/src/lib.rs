@@ -43,6 +43,12 @@ unsafe extern "C-unwind" {
     pub fn wmt_native_open_thread(thread_id: u32) -> *mut c_void;
     /// `CloseHandle`: drops a reference; the last frees the object.
     pub fn wmt_native_close_handle(handle: *mut c_void) -> i32;
+    /// `SetEvent`, or a relay's function: nonzero when `handle` is an event or a relay.
+    pub fn wmt_native_set_event(handle: *mut c_void) -> i32;
+    /// One more reference to a native handle; nothing for anything else.
+    pub fn wmt_native_ref(handle: *mut c_void);
+    /// Drops a reference to a native handle (the last frees it): nonzero when `handle` is one.
+    pub fn wmt_native_unref(handle: *mut c_void) -> i32;
     /// Sets the calling thread's native not-implemented flag (`MTLD3DNotImplemented`).
     pub fn wmt_native_not_implemented();
     /// Reads and clears the calling thread's native not-implemented flag.

@@ -9,6 +9,7 @@
 #ifndef _WIN32
 
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -93,5 +94,31 @@ static inline int mn_win32_set_event(void *h) {
   pthread_mutex_unlock(&o->m);
   return 1;
 }
+
+/* winemetal.dylib's exports over these handles, for the Rust front ends and a host that holds DXMT: a second
+ * implementation of the functions above and of win32_native.h's (src/winemetal/unix/src/native_win32.rs), on the same
+ * layout. One process: a duplicate's source and target process are this one. winemetal-sys declares them
+ * (src/winemetal/sys/src/lib.rs); tools/winemetal-layouts.sh --decls and --seam-abi read this block. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* dxmt-abi begin */
+void *wmt_native_create_event(int32_t manual, int32_t initial);
+void *wmt_native_create_semaphore(int32_t initial, int32_t max);
+int32_t wmt_native_release_semaphore(void *handle, int32_t count, int32_t *previous);
+uint32_t wmt_native_wait_for_single_object(void *handle, uint32_t milliseconds);
+int32_t wmt_native_duplicate_handle(void *source, void **target, uint32_t options);
+void *wmt_native_open_thread(uint32_t thread_id);
+int32_t wmt_native_close_handle(void *handle);
+int wmt_native_set_event(void *handle);
+void wmt_native_ref(void *handle);
+int wmt_native_unref(void *handle);
+void wmt_native_not_implemented(void);
+bool MTLD3DNotImplemented(void);
+uint32_t wmt_native_handle_count(void *handle);
+/* dxmt-abi end */
+#ifdef __cplusplus
+}
+#endif
 
 #endif

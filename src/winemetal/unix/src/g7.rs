@@ -26,6 +26,8 @@ use winemetal_wire::{
 };
 
 use self::listener::{Listener, Owner};
+#[cfg(feature = "native")]
+use crate::native_win32::{wmt_native_ref, wmt_native_set_event, wmt_native_unref};
 use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, mem_mut, mem_slice, params},
     float_cast::{u64_to_usize, usize_to_u32},
@@ -66,18 +68,6 @@ unsafe extern "C" {
     /// Wine's `NtSetEvent`, from `ntdll.so`.
     #[link_name = "NtSetEvent"]
     fn nt_set_event(handle: *mut c_void, prev_state: *mut c_void) -> i32;
-}
-
-#[cfg(feature = "native")]
-unsafe extern "C" {
-    /// `mn_win32_set_event` (`src/nativemetal/win32_event.c`): sets an event or calls a relay.
-    fn wmt_native_set_event(handle: *mut c_void) -> c_int;
-
-    /// `mn_win32_ref`: one more reference to a native event.
-    fn wmt_native_ref(handle: *mut c_void);
-
-    /// `mn_win32_unref`: drops a reference to a native event; the last frees it.
-    fn wmt_native_unref(handle: *mut c_void) -> c_int;
 }
 
 /// Slot 15, `MTLDevice_newSharedEvent`: a new shared event, +1.

@@ -1,7 +1,4 @@
-winemetal_src = [
-  'win32_event.c',
-  'win32_native.cpp',
-]
+winemetal_src = rust_no_source
 winemetal_link_depends = []
 
 winemetal_ld_args = [

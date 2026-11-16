@@ -330,3 +330,15 @@ const _: unsafe extern "C-unwind" fn(*mut c_void, *mut *mut c_void, u32) -> i32 
 const _: unsafe extern "C-unwind" fn(u32) -> *mut c_void = crate::wmt_native_open_thread;
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 const _: unsafe extern "C-unwind" fn(*mut c_void) -> i32 = crate::wmt_native_close_handle;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn(*mut c_void) -> i32 = crate::wmt_native_set_event;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn(*mut c_void) = crate::wmt_native_ref;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn(*mut c_void) -> i32 = crate::wmt_native_unref;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn() = crate::wmt_native_not_implemented;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn() -> bool = crate::MTLD3DNotImplemented;
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const _: unsafe extern "C-unwind" fn(*mut c_void) -> u32 = crate::wmt_native_handle_count;

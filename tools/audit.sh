@@ -573,7 +573,6 @@ fi
 CPP_SOURCES='src/airconv/shim/shim.cpp
 src/airconv/transforms/lower_16bit_texread.cpp
 src/airconv/transforms/simdgroup_implicit_membarrier.cpp
-src/nativemetal/win32_native.cpp
 src/util/wsi_monitor_win32.cpp
 src/util/wsi_window_win32.cpp'
 # shellcheck disable=SC2046

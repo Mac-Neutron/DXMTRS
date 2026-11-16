@@ -35,9 +35,10 @@
 # clang's (long is 64-bit there), else it fails. Then, compiled on macOS only, the prototype checks of the native
 # build's functions lib.rs declares by hand, printed as --seam-abi prints them: winemetal.h's WMTMemoryHooked and
 # WMTGetWsiHooks (-DDXMT_NATIVE; a pointer to a winemetal struct without a mirror, WMTWsiHooks, is a c_void pointer) and
-# the functions of src/nativemetal/win32_native.cpp's dxmt-abi block.
+# the functions of src/util/win32_native_event.h's dxmt-abi block.
 #
-# With --seam-abi <header> <module path> it prints a seam's abi.rs, its C ABI asserted against its Rust exports:
+# With --seam-abi <header> <module path> [<struct>...] it prints a seam's abi.rs, its C ABI asserted against its Rust
+# exports:
 #   sh tools/winemetal-layouts.sh --seam-abi src/dxmt/dxmt_format.hpp crate::format "$(sh dxmt/toolchain.sh)" \
 #     > src/dxmt/src/format/abi.rs
 # The header's lines between /* dxmt-abi begin */ and /* dxmt-abi end */ are C (a C++ header puts its extern "C" {
@@ -47,7 +48,10 @@
 # winemetal struct as its winemetal-wire mirror, size_t and uintptr_t as usize, ptrdiff_t and intptr_t as isize, long
 # as the target's; a pointer to a struct winemetal.h doesn't define points to <module path>::<Name>, the seam's mirror
 # (a snake_case name in CamelCase, an all-capitals word capitalised: MTL_DXGI_FORMAT_DESC is MtlDxgiFormatDesc). Fails
-# on a type it cannot map and on a header with no block or no function in it.
+# on a type it cannot map and on a header with no block or no function in it. Each <struct> named, a struct of the
+# header read whole as C by Apple clang, has its size and each field's offset on aarch64-apple-darwin asserted against
+# its mirror <module path>::<Name>, and with them each integer macro the header defines against <module path>::<NAME>;
+# fails on a struct missing from the dump or with a bitfield.
 #
 # With --airconv (no other argument) it prints airconv's src/abi/layouts.rs instead, the compile-time asserts that pin
 # the crate's mirrors in src/abi.rs to airconv_public.h and dxil/dxil_public.h:
@@ -71,14 +75,19 @@
 # any target disagrees on the struct definitions.
 set -eu
 usage() {
-  echo "usage: winemetal-layouts.sh [--protos | --decls | --seam-abi <header> <module path>] <llvm-mingw-bin>" >&2
+  echo "usage: winemetal-layouts.sh [--protos | --decls | --seam-abi <header> <module path> [<struct>...]] <llvm-mingw-bin>" >&2
   echo "       winemetal-layouts.sh --com <header> <module path> [<Interface>...] [--records <Record>...] <llvm-mingw-bin>" >&2
   echo "       winemetal-layouts.sh --airconv" >&2
   exit 2
 }
 case ${1:-} in
 --protos | --decls) mode=${1#--}; shift ;;
---seam-abi) [ $# -eq 4 ] || usage; mode=seam header=$2 module=$3; shift 3 ;;
+--seam-abi)
+  [ $# -ge 4 ] || usage
+  mode=seam header=$2 module=$3 records=
+  shift 3
+  while [ $# -gt 1 ]; do records="$records $1"; shift; done
+  ;;
 --com)
   [ $# -ge 5 ] || usage
   mode=com
@@ -433,7 +442,7 @@ if [ "$mode" = decls ]; then
       fail "the declarations differ on $target (< aarch64-w64-mingw32, > $target)"
     }
   done
-  scratch "$root/src/nativemetal/win32_native.cpp" >"$t/native.c"
+  scratch "$root/src/util/win32_native_event.h" >"$t/native.c"
   ast aarch64-apple-darwin "$t/native.c" $flags -DDXMT_NATIVE
   printer -v out=check -v block=1 -v pick="WMTMemoryHooked WMTGetWsiHooks" -v lp64=1 -v abi=C-unwind -v module=crate \
     -v cfg="$mac" -v opaque=1 -v wp=wire:: >"$t/native" || fail "native: $(tail -1 "$t/native")"
@@ -480,6 +489,43 @@ EOF
     printf '\n'
     cat "$t/out"
   done
+  [ -n "$records" ] || exit 0
+  # The structs named and the header's integer macros: the header read whole, as C, on aarch64-apple-darwin.
+  printf '#include "%s/%s"\n' "$(cd "$(dirname "$header")" && pwd)" "$(basename "$header")" >"$t/rec.c"
+  xcrun clang -target aarch64-apple-darwin -fsyntax-only -Xclang -fdump-record-layouts-complete "$t/rec.c" >"$t/dump"
+  xcrun clang -target aarch64-apple-darwin -E -dM "$t/rec.c" >"$t/defines"
+  awk -v want="$records" -v m="$module" "$names"'
+    function hex(v,   o) {
+      for (o = ""; length(v) > 4; v = substr(v, 1, length(v) - 4)) o = "_" substr(v, length(v) - 3) o
+      return "0x" v o
+    }
+    BEGIN { k = split(want, a, " "); for (i = 1; i <= k; i++) w[a[i]] = 1 }
+    FILENAME == ARGV[1] { if (NF == 3 && $3 ~ /^(0x[0-9a-fA-F]+|[0-9]+)[uU]?$/) d[$2] = $3; next }
+    FILENAME == ARGV[2] {
+      if ($1 == "#define" && ($2 in d) && !seen[$2]++) {
+        v = d[$2]; sub(/[uU]$/, "", v)
+        print "    assert!(" m "::" $2 " == " (v ~ /^0x/ ? hex(substr(v, 3)) : num(v)) ");"
+      }
+      next
+    }
+    /^\*\*\* Dumping AST Record Layout/ { rec = ""; next }
+    rec == "" && /^ +0 \| / {
+      rec = $3 == "struct" && NF == 4 && ($4 in w) && !($4 in got) ? $4 : "-"; got[rec] = 1; next
+    }
+    rec == "" || rec == "-" { next }
+    /\| \[sizeof=/ {
+      s = $0; sub(/.*sizeof=/, "", s); sub(/,.*/, "", s)
+      print "    assert!(size_of::<" m "::" rust(rec) ">() == " s ");"; rec = "-"; next
+    }
+    /^ *[0-9:-]+ \|   [^ ]/ {
+      if ($1 ~ /:/) { print "E " rec " has a bitfield"; exit 1 }
+      print "    assert!(core::mem::offset_of!(" m "::" rust(rec) ", " field($NF) ") == " $1 ");"
+    }
+    END { for (r in w) if (!(r in got)) { print "E no struct " r " in the dump"; exit 1 } }' \
+    "$t/defines" "$header" "$t/dump" >"$t/out" || fail "$header: $(tail -1 "$t/out")"
+  printf '\n#[cfg(%s)]\nconst _: () = {\n' "$mac"
+  cat "$t/out"
+  printf '};\n'
   exit 0
 fi
 

@@ -19,5 +19,6 @@ ignore = [
     "src/winemetal/src/sm50/abi.rs",
     "src/winemetal/sys/src/decls.rs",
     "src/winemetal/sys/src/sm50/abi.rs",
+    "src/winemetal/unix/src/native_win32/abi.rs",
     "src/winemetal/wire/src/layouts.rs",
 ]

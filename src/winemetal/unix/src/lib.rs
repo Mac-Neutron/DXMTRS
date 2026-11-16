@@ -11,6 +11,8 @@ pub mod format;
 pub mod handle;
 pub mod histogram;
 pub mod init;
+#[cfg(feature = "native")]
+pub mod native_win32;
 pub mod table;
 pub mod texture;
 
