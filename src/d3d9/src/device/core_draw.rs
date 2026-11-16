@@ -1,11 +1,13 @@
-//! The core runtime's UP draws and shader creation (DXMTRS C4b-2): thin arms over `d3d9_rt`.
+//! The core runtime's draws and shader creation (DXMTRS C4b-2, C4c-1): thin arms over `d3d9_rt`.
 //!
 //! A shader of a core device is parsed in-process and its tokens interned on the device, so a
 //! draw's key compares programs by pointer. A draw resolves its [`PipelineKey`] and binds from the
 //! device state with `mtld3d_core::pipeline_key`'s host-tested decisions ([`core_draw_kinds`],
 //! [`core_ps_variant`], [`float_rows`], [`core_viewport`], [`pos_fixup`]); `d3d9_rt` builds the
-//! pipeline on a miss and records the draw. A draw the core does not cover yet answers
-//! `D3DERR_NOTAVAILABLE` with one warning per reason.
+//! pipeline on a miss and records the draw. A UP draw feeds the call's bytes; a draw from the
+//! bound buffers first uploads what each buffer it reads owes its core form, and answers in
+//! mtld3d's order. A draw the core does not cover yet answers `D3DERR_NOTAVAILABLE` with one
+//! warning per reason.
 
 use core::{ffi::c_void, ops::Range};
 
@@ -15,8 +17,8 @@ use d3d9_rt::device::{
 };
 use mtld3d_core::{
     convert::{
-        FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
-        d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32,
+        FAN_PATTERN_MAX_TRIANGLES, FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal,
+        d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32,
         ff_vs_layout_from_elements, vertex_count,
     },
     depth_stencil_state::snapshot_from_state as depth_snapshot,
@@ -37,6 +39,7 @@ use mtld3d_core::{
         sample_unfiltered, snapshot_from_state, vertex_lod_table,
     },
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
+    streams::{is_instance_data, stream_step},
     vs_draw::clip_plane_count,
 };
 use mtld3d_shared::{
@@ -54,9 +57,21 @@ use mtld3d_types::{
 };
 
 use super::{DeviceInner, refuse_under_core};
+use crate::{
+    com_ref::ComChild, index_buffer::Direct3DIndexBuffer9, vertex_buffer::Direct3DVertexBuffer9,
+};
 
 /// The refusal of a draw whose layout crosses its stride (C4b2-8), one name for both entry points.
 const CROSSING: &str = "IDirect3DDevice9::Draw*PrimitiveUP (an attribute crossing the stride)";
+/// The buffer draws' refusal of a layout that crosses a stream's stride (DXMTRS C4c-1).
+const BUFFER_CROSSING: &str = "IDirect3DDevice9::Draw*Primitive (an attribute crossing the stride)";
+/// The refusal of a draw that reads a stream bound at an offset off four bytes (DXMTRS C4c-1).
+const OFFSET: &str = "IDirect3DDevice9::Draw*Primitive (a stream offset off four bytes)";
+/// The refusal of a draw that reads a buffer another device made (DXMTRS C4c-1).
+///
+/// The dirty range is one a buffer and the core's store one a device: a second device would draw
+/// stale bytes and keep a store entry nothing forgets.
+const OTHER_DEVICE: &str = "IDirect3DDevice9::Draw*Primitive (a buffer of another device)";
 
 /// The shader `bytecode` of `stage`, parsed in-process for a core device (C4b2-3).
 ///
@@ -88,6 +103,32 @@ struct Binds {
     bytes: Vec<u8>,
     at: Vec<(Stage, u8, Range<usize>)>,
     textures: Vec<TextureBind>,
+}
+
+/// What a draw feeds its vertex stage and draws: each stream, its vertices or its indices.
+///
+/// A UP draw's are the call's bytes at stream 0; a buffer draw's the bound buffers (DXMTRS C4c-1).
+struct Feed<'a> {
+    keys: [StreamKey; MAX_STREAMS as usize],
+    streams: [StreamData<'a>; MAX_STREAMS as usize],
+    vertex_count: u32,
+    vertex_start: u32,
+    base_vertex: i32,
+    /// Stream 0's frequency word and its instance-data streams (bit `n`), if the draw instances.
+    instancing: Option<(u32, u16)>,
+    indices: Option<Indices<'a>>,
+    /// The name a crossing layout is refused under: the UP draws' or the buffer draws'.
+    crossing: &'static str,
+}
+
+/// The declared streams' bound vertex buffers, as a buffer draw reads them (DXMTRS C4c-1).
+struct BoundStreams {
+    keys: [StreamKey; MAX_STREAMS as usize],
+    streams: [StreamData<'static>; MAX_STREAMS as usize],
+    /// Each declared stream's buffer, null where none is bound.
+    buffers: [*mut Direct3DVertexBuffer9; MAX_STREAMS as usize],
+    /// Stream 0's frequency word, and the bound streams whose word is instance data (bit `n`).
+    instancing: (u32, u16),
 }
 
 /// One sampled slot of a draw, pixel or vertex: its texture (null for none) and its sampler states.
@@ -654,10 +695,8 @@ fn key_depth(
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
 ///
-/// A crossing layout answers `D3DERR_NOTAVAILABLE` (logged once); a draw `d3d9_rt` drops for
-/// another reason answers `D3D_OK`, as under C4a, one whose colour targets or depth-stencil are
-/// not its key's logged once (unreachable while the key's colours, count and depth format are
-/// `target_desc`'s, `target_samples`' and `key_depth`'s).
+/// Its bytes go inline at the call's stride on stream 0, zeros at each other stream the
+/// declaration names, as mtld3d feeds them; [`record`] does the rest.
 fn draw(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -675,8 +714,6 @@ fn draw(
     let Some(metal_primitive) = metal_primitive else {
         return D3DERR_INVALIDCALL;
     };
-    // A UP draw's streams: its bytes inline at the call's stride on stream 0, zeros at each other
-    // stream the declaration names, as mtld3d feeds them.
     let declared = super::declared_stream_mask(dev);
     let mut keys = [StreamKey::Unused; MAX_STREAMS as usize];
     let mut streams = [StreamData::None; MAX_STREAMS as usize];
@@ -690,6 +727,43 @@ fn draw(
             (StreamKey::Null, StreamData::Zeros)
         };
     }
+    let feed = Feed {
+        keys,
+        streams,
+        vertex_count,
+        vertex_start: 0,
+        base_vertex: 0,
+        instancing: None,
+        indices,
+        crossing: CROSSING,
+    };
+    record(dev, primitive, metal_primitive, feed)
+}
+
+/// Records a draw of `primitive`, as Metal's `metal_primitive`, from `feed` with the device state.
+///
+/// A crossing layout answers `D3DERR_NOTAVAILABLE` under `feed`'s name and a stream read at an
+/// offset off four bytes under [`OFFSET`] (each logged once); a draw `d3d9_rt` drops for another
+/// reason answers `D3D_OK`, as under C4a, one whose colour targets, depth-stencil or buffer are
+/// not its key's or the store's logged once (unreachable while the key's colours, count and depth
+/// format are `target_desc`'s, `target_samples`' and `key_depth`'s, and the arms flush every
+/// buffer they read).
+fn record(
+    dev: &mut DeviceInner,
+    primitive: u32,
+    metal_primitive: mtl::PrimitiveType,
+    feed: Feed<'_>,
+) -> i32 {
+    let Feed {
+        keys,
+        streams,
+        vertex_count,
+        vertex_start,
+        base_vertex,
+        instancing,
+        indices,
+        crossing,
+    } = feed;
     let (key, mut binds, target) = match resolve(dev, primitive, &keys) {
         Ok(resolved) => resolved,
         Err(hr) => return hr,
@@ -701,9 +775,9 @@ fn draw(
         primitive: metal_primitive as u8,
         streams,
         vertex_count,
-        vertex_start: 0,
-        base_vertex: 0,
-        instancing: None,
+        vertex_start,
+        base_vertex,
+        instancing,
         indices,
         viewport: core_viewport(&dev.viewport(), target),
         scissor: core_scissor(
@@ -730,9 +804,14 @@ fn draw(
     };
     match core.draw(&key, &draw) {
         Err(DrawRefused::Crossing) => {
-            refuse_under_core(CROSSING);
+            refuse_under_core(crossing);
             D3DERR_NOTAVAILABLE
         }
+        Err(DrawRefused::Offset) => {
+            refuse_under_core(OFFSET);
+            D3DERR_NOTAVAILABLE
+        }
+        Err(DrawRefused::Buffer) => dropped(),
         Err(DrawRefused::Target) => {
             mtld3d_shared::log_once_warn!(
                 target: crate::LOG_TARGET,
@@ -817,10 +896,8 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     if !dev.is_core() {
         return None;
     }
-    let (index_type, index_size) = match up.index_format {
-        D3DFMT_INDEX16 => (0_u8, 2_u8),
-        D3DFMT_INDEX32 => (1, 4),
-        _ => return Some(D3DERR_INVALIDCALL),
+    let Some((index_type, index_size)) = index_kind(up.index_format) else {
+        return Some(D3DERR_INVALIDCALL);
     };
     let vertex_total = indexed_up_vertices(up.min_vertex_index, up.num_vertices);
     let Some(byte_count) = vertex_total.and_then(|total| up_byte_count(up.stride, total)) else {
@@ -875,4 +952,339 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
         vertex_total,
         Some(indices),
     ))
+}
+
+/// `DrawPrimitive` on the core, after the entry point's shared checks (DXMTRS C4c-1).
+///
+/// `None` for a device of mtld3d's runtime. Answers in mtld3d's order: a fan first
+/// ([`sequential_fan`]); then the primitive type, the vertex count and no declared stream with a
+/// buffer, each `D3DERR_INVALIDCALL`. A draw without indices never instances.
+pub fn draw_primitive(
+    dev: &mut DeviceInner,
+    primitive: u32,
+    start_vertex: u32,
+    primitive_count: u32,
+) -> Option<i32> {
+    if !dev.is_core() {
+        return None;
+    }
+    if primitive == D3DPT_TRIANGLEFAN {
+        return Some(sequential_fan(dev, start_vertex, primitive_count));
+    }
+    let Some(metal_primitive) = d3d_to_metal_primitive(primitive) else {
+        return Some(D3DERR_INVALIDCALL);
+    };
+    let count = vertex_count(primitive, primitive_count);
+    if count == 0 {
+        return Some(D3DERR_INVALIDCALL);
+    }
+    let bound = match bound_streams(dev) {
+        Ok(Some(bound)) => bound,
+        Ok(None) => return Some(invalid("DrawPrimitive: no vertex buffer bound")),
+        Err(hr) => return Some(hr),
+    };
+    if !flush(dev, &bound, None) {
+        return Some(dropped());
+    }
+    let feed = Feed {
+        keys: bound.keys,
+        streams: bound.streams,
+        vertex_count: count,
+        vertex_start: start_vertex,
+        base_vertex: 0,
+        instancing: None,
+        indices: None,
+        crossing: BUFFER_CROSSING,
+    };
+    Some(record(dev, primitive, metal_primitive, feed))
+}
+
+/// `DrawIndexedPrimitive` on the core, after the entry point's shared checks (DXMTRS C4c-1).
+///
+/// `None` for a device of mtld3d's runtime. Answers in mtld3d's order: a fan first
+/// ([`indexed_fan`]); then the primitive type and the index count (`D3DERR_INVALIDCALL`), no
+/// declared stream with a buffer (`D3D_OK`, nothing drawn, the index buffer not looked at), no
+/// index buffer (`D3DERR_INVALIDCALL`). The indices are the index buffer's from `start_index`,
+/// `base_vertex` added to each; the draw instances by stream 0's frequency word.
+pub fn draw_indexed_primitive(
+    dev: &mut DeviceInner,
+    primitive: u32,
+    base_vertex: i32,
+    start_index: u32,
+    primitive_count: u32,
+) -> Option<i32> {
+    if !dev.is_core() {
+        return None;
+    }
+    if primitive == D3DPT_TRIANGLEFAN {
+        return Some(indexed_fan(dev, base_vertex, start_index, primitive_count));
+    }
+    let Some(metal_primitive) = d3d_to_metal_primitive(primitive) else {
+        return Some(D3DERR_INVALIDCALL);
+    };
+    let count = vertex_count(primitive, primitive_count);
+    if count == 0 {
+        return Some(D3DERR_INVALIDCALL);
+    }
+    let bound = match bound_streams(dev) {
+        Ok(Some(bound)) => bound,
+        Ok(None) => return Some(D3D_OK),
+        Err(hr) => return Some(hr),
+    };
+    let index = match bound_index(dev) {
+        Ok(Some(index)) => index,
+        Ok(None) => return Some(invalid("DrawIndexedPrimitive: no index buffer bound")),
+        Err(hr) => return Some(hr),
+    };
+    let (format, id) = {
+        // SAFETY: the bound index buffer, live while bound.
+        let inner = unsafe { &*index }.inner();
+        (inner.format(), inner.buffer_id())
+    };
+    let Some((index_type, size)) = index_kind(format) else {
+        return Some(invalid("DrawIndexedPrimitive: unsupported index format"));
+    };
+    if !flush(dev, &bound, Some(index)) {
+        return Some(dropped());
+    }
+    let offset = u64::from(start_index) * u64::from(size);
+    let feed = Feed {
+        keys: bound.keys,
+        streams: bound.streams,
+        vertex_count: count,
+        vertex_start: 0,
+        base_vertex,
+        instancing: Some(bound.instancing),
+        indices: Some(Indices {
+            data: IndexData::Buffer { id, offset },
+            index_type,
+            count,
+        }),
+        crossing: BUFFER_CROSSING,
+    };
+    Some(record(dev, primitive, metal_primitive, feed))
+}
+
+/// A `DrawPrimitive` fan, its answers in mtld3d's order.
+///
+/// A rewrite that cannot address it, then no declared stream with a buffer, each
+/// `D3DERR_INVALIDCALL`. The list holds the fan's absolute vertex numbers, so it draws from vertex
+/// 0 at base 0. A fan mtld3d's shared pattern cannot address (more than
+/// [`FAN_PATTERN_MAX_TRIANGLES`] triangles, or a first vertex past `i32::MAX`) instances, as
+/// mtld3d's generated list does.
+fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32) -> i32 {
+    let Some(fan) = FanRewrite::sequential(start_vertex, primitive_count) else {
+        return super::reject_unaddressable_fan("DrawPrimitive", primitive_count);
+    };
+    let bound = match bound_streams(dev) {
+        Ok(Some(bound)) => bound,
+        Ok(None) => return invalid("triangle fan: no vertex buffer bound"),
+        Err(hr) => return hr,
+    };
+    let generated =
+        primitive_count > FAN_PATTERN_MAX_TRIANGLES || i32::try_from(start_vertex).is_err();
+    fan_draw(dev, &fan, &bound, generated.then_some(bound.instancing))
+}
+
+/// A `DrawIndexedPrimitive` fan, in mtld3d's order (its `bound_index_fan`, then its draw).
+///
+/// No index buffer, a fan that reads past the index buffer's pages, or a rewrite that cannot
+/// address it answers `D3DERR_INVALIDCALL`; then no declared stream with a buffer `D3D_OK`. The
+/// rewrite folds `base_vertex` into its indices, so the list draws at base 0. The index buffer is
+/// read on the CPU alone: its core form is not flushed.
+fn indexed_fan(
+    dev: &mut DeviceInner,
+    base_vertex: i32,
+    start_index: u32,
+    primitive_count: u32,
+) -> i32 {
+    let index = match bound_index(dev) {
+        Ok(Some(index)) => index,
+        Ok(None) => return invalid("DrawIndexedPrimitive: no index buffer bound"),
+        Err(hr) => return hr,
+    };
+    // SAFETY: the bound index buffer, live while bound; nothing writes its backing until the
+    // fan's list is written (its own flush is the vertex buffers').
+    let inner = unsafe { &*index }.inner();
+    let Some((_, size)) = index_kind(inner.format()) else {
+        return invalid("DrawIndexedPrimitive: unsupported index format");
+    };
+    // The fan's `primitive_count + 2` indices from `start_index`, inside the backing's pages.
+    let first = usize::try_from(u64::from(start_index) * u64::from(size));
+    let len = usize::try_from((u64::from(primitive_count) + 2) * u64::from(size));
+    let Some(src) = first
+        .ok()
+        .zip(len.ok())
+        .and_then(|(first, len)| inner.backing().get(first..)?.get(..len))
+    else {
+        return invalid("DrawIndexedPrimitive: triangle fan reads past the index buffer");
+    };
+    let Some(fan) = FanRewrite::indexed(src, usize::from(size), base_vertex, primitive_count)
+    else {
+        return D3DERR_INVALIDCALL;
+    };
+    let bound = match bound_streams(dev) {
+        Ok(Some(bound)) => bound,
+        Ok(None) => return D3D_OK,
+        Err(hr) => return hr,
+    };
+    fan_draw(dev, &fan, &bound, Some(bound.instancing))
+}
+
+/// Draws `fan`'s triangle list over the bound streams `bound`, once each is flushed.
+fn fan_draw(
+    dev: &mut DeviceInner,
+    fan: &FanRewrite<'_>,
+    bound: &BoundStreams,
+    instancing: Option<(u32, u16)>,
+) -> i32 {
+    if !flush(dev, bound, None) {
+        return dropped();
+    }
+    let mut list = vec![0; fan.byte_len()];
+    fan.write(&mut list);
+    let feed = Feed {
+        keys: bound.keys,
+        streams: bound.streams,
+        vertex_count: fan.index_count(),
+        vertex_start: 0,
+        base_vertex: 0,
+        instancing,
+        indices: Some(Indices {
+            data: IndexData::Bytes(&list),
+            index_type: fan.index_type() as u8,
+            count: fan.index_count(),
+        }),
+        crossing: BUFFER_CROSSING,
+    };
+    record(dev, D3DPT_TRIANGLEFAN, mtl::PrimitiveType::Triangle, feed)
+}
+
+/// The declared streams' bound vertex buffers, keyed and fed as a buffer draw reads them.
+///
+/// A declared stream with none bound reads zeros; `Ok(None)` when no declared stream has one.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE` for a buffer of another device ([`of_this_device`]).
+fn bound_streams(dev: &DeviceInner) -> Result<Option<BoundStreams>, i32> {
+    let declared = super::declared_stream_mask(dev);
+    let bound = dev.bound_buffers();
+    let mut streams = BoundStreams {
+        keys: [StreamKey::Unused; MAX_STREAMS as usize],
+        streams: [StreamData::None; MAX_STREAMS as usize],
+        buffers: [core::ptr::null_mut(); MAX_STREAMS as usize],
+        instancing: (bound.stream_freq(0), 0),
+    };
+    for stream in 0..MAX_STREAMS as usize {
+        if declared & (1 << stream) == 0 {
+            continue;
+        }
+        let vb = bound.stream_vertex_buffer(stream);
+        // SAFETY: null, or the stream's bound vertex buffer, live while bound.
+        let Some(buffer) = (unsafe { vb.as_ref() }) else {
+            streams.keys[stream] = StreamKey::Null;
+            streams.streams[stream] = StreamData::Zeros;
+            continue;
+        };
+        of_this_device(buffer, dev)?;
+        let freq = bound.stream_freq(stream);
+        let (step, rate) = stream_step(freq);
+        streams.keys[stream] = StreamKey::Bound {
+            stride: bound.stream_stride(stream),
+            step,
+            rate,
+        };
+        streams.streams[stream] = StreamData::Buffer {
+            id: buffer.inner().buffer_id(),
+            offset: bound.stream_offset(stream),
+        };
+        streams.buffers[stream] = vb;
+        if is_instance_data(freq) {
+            streams.instancing.1 |= 1 << stream;
+        }
+    }
+    Ok(streams
+        .buffers
+        .iter()
+        .any(|vb| !vb.is_null())
+        .then_some(streams))
+}
+
+/// The bound index buffer, `Ok(None)` for none.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE` for one of another device ([`of_this_device`]), before its bytes are
+/// read.
+fn bound_index(dev: &DeviceInner) -> Result<Option<*mut Direct3DIndexBuffer9>, i32> {
+    let index = dev.bound_buffers().index_buffer();
+    // SAFETY: null, or the bound index buffer, live while bound.
+    let Some(buffer) = (unsafe { index.as_ref() }) else {
+        return Ok(None);
+    };
+    of_this_device(buffer, dev)?;
+    Ok(Some(index))
+}
+
+/// Whether the drawing device `dev` made `buffer`.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE` under [`OTHER_DEVICE`], logged once, for a buffer of another device:
+/// before any buffer of the draw is flushed or read.
+fn of_this_device(buffer: &impl ComChild, dev: &DeviceInner) -> Result<(), i32> {
+    if core::ptr::eq(buffer.owning_device(), dev.device_wrapper()) {
+        return Ok(());
+    }
+    refuse_under_core(OTHER_DEVICE);
+    Err(D3DERR_NOTAVAILABLE)
+}
+
+/// Uploads what each buffer a draw reads owes its core form; false when one has none.
+///
+/// `bound`'s vertex buffers, and `index` for an indexed draw that reads it.
+fn flush(
+    dev: &mut DeviceInner,
+    bound: &BoundStreams,
+    index: Option<*mut Direct3DIndexBuffer9>,
+) -> bool {
+    let Some(core) = dev.core.as_deref_mut() else {
+        return false;
+    };
+    let vertices = bound.buffers.iter().filter(|vb| !vb.is_null()).all(|&vb| {
+        // SAFETY: a bound vertex buffer, live while bound, distinct from the device.
+        unsafe { &mut *vb }.inner_mut().core_flush(core)
+    });
+    // SAFETY: the bound index buffer, live while bound, distinct from the device.
+    vertices && index.is_none_or(|ib| unsafe { &mut *ib }.inner_mut().core_flush(core))
+}
+
+/// The `D3D_OK` of a draw dropped because a buffer it reads has no core form, logged once.
+fn dropped() -> i32 {
+    mtld3d_shared::log_once_warn!(
+        target: crate::LOG_TARGET,
+        "d3d9 core: a draw's buffer has no core form; the draw is dropped"
+    );
+    D3D_OK
+}
+
+/// The `D3DERR_INVALIDCALL` of a buffer draw, logged once a reason, as mtld3d's draws log it.
+#[cold]
+fn invalid(reason: &'static str) -> i32 {
+    mtld3d_shared::log_once_warn_by!(
+        target: crate::LOG_TARGET,
+        key: reason.as_ptr() as u64,
+        "{reason}"
+    );
+    D3DERR_INVALIDCALL
+}
+
+/// The `MTLIndexType` and the byte size of an index format; `None` for one of neither size.
+const fn index_kind(format: u32) -> Option<(u8, u8)> {
+    match format {
+        D3DFMT_INDEX16 => Some((0, 2)),
+        D3DFMT_INDEX32 => Some((1, 4)),
+        _ => None,
+    }
 }

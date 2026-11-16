@@ -286,6 +286,44 @@ impl VertexBufferInner {
             self.last_submit_seq = seq;
         }
     }
+
+    /// Brings the buffer's core form up to its backing before a draw reads it (DXMTRS C4c-1).
+    ///
+    /// A buffer the core's store lacks is made at the backing's padded length, as mtld3d's device
+    /// buffer is, and takes the whole backing; otherwise the dirty span, if any, uploads. The
+    /// range is cleared after an accepted upload unless a lock is out: a buffer drawn while
+    /// locked uploads again at its next draw, as mtld3d's `flush_staged_if_mapped` has it. False
+    /// when the core makes no buffer or refuses the upload (a buffer it made then leaves the
+    /// store, so the next draw makes it whole again).
+    #[cfg(feature = "core-runtime")]
+    #[must_use]
+    pub fn core_flush(&mut self, core: &mut d3d9_rt::device::CoreDevice) -> bool {
+        let backing = self.backing.as_slice();
+        let made = !core.has_buffer(self.buffer_id);
+        let (offset, bytes) = if made {
+            let length = u64::try_from(backing.len());
+            if !length.is_ok_and(|length| core.buffer_create(self.buffer_id, length)) {
+                return false;
+            }
+            (0, Some(backing))
+        } else {
+            let Some((min, max)) = self.dirty.span() else {
+                return true;
+            };
+            (min, backing.get(min as usize..max as usize))
+        };
+        if !bytes.is_some_and(|bytes| core.buffer_upload(self.buffer_id, u64::from(offset), bytes))
+        {
+            if made {
+                core.forget_buffer(self.buffer_id);
+            }
+            return false;
+        }
+        if self.lock_count == 0 {
+            self.dirty.clear();
+        }
+        true
+    }
 }
 
 pub struct VertexBufferCreateInfo {

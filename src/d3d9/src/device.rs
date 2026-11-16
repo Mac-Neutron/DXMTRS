@@ -12759,11 +12759,6 @@ extern "system" fn device_draw_primitive(
     primitive_count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DrawPrimitive",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -12778,6 +12773,11 @@ extern "system" fn device_draw_primitive(
     if primitive_count == 0 {
         std::hint::cold_path();
         return D3D_OK;
+    }
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_draw::draw_primitive(dev, primitive_type, start_vertex, primitive_count)
+    {
+        return hr;
     }
     // Triangle fan has no Metal primitive: rewrite it as a triangle-list index
     // stream over the bound streams. Kept off the (non-fan) hot path below.
@@ -13060,11 +13060,6 @@ extern "system" fn device_draw_indexed_primitive(
     primitive_count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DrawIndexedPrimitive",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
@@ -13079,6 +13074,16 @@ extern "system" fn device_draw_indexed_primitive(
     if primitive_count == 0 {
         std::hint::cold_path();
         return D3D_OK;
+    }
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = core_draw::draw_indexed_primitive(
+        dev,
+        primitive_type,
+        base_vertex_index,
+        start_index,
+        primitive_count,
+    ) {
+        return hr;
     }
     // Triangle fan has no Metal primitive: rewrite the addressed indices as a
     // triangle list over the bound streams. Kept off the (non-fan) hot path.
