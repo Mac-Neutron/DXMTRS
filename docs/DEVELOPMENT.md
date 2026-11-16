@@ -140,6 +140,12 @@ The per-target C and C++ environment that cc-rs reads (compiler, flags, file-pre
 `src/d3d9`'s meson targets set it. They also pass `MTLD3D_WINECRT0`, the path of Wine's `libwinecrt0.a`, which the
 `mtld3d.dll` shim bundles. Both are build-time variables, not runtime ones.
 
+Two of this tree's own sources go through cc-rs: airconv's shim over LLVM's C++ API (`src/airconv/build.rs`, with the
+two passes it includes) and `mtld3d.so`'s Objective-C delegate forward (`src/d3d9/unix/build.rs`). The rest that cc-rs
+compiles belongs to crates (snmalloc-sys, zstd-sys). Meson compiles no C or C++ of this tree outside `tests/dx11`
+(built only under `enable_tests`): a target made of Rust archives alone takes `rust_no_source`, an empty generated C
+file, for its link driver.
+
 ### Instruction-set baselines
 
 The x86 PE DLLs are guest code, which an x86 translator runs: Rosetta under an x86_64 Wine, and the translator an
@@ -187,7 +193,8 @@ pins:
 
 The script does no sysroot work and has no Linux leg: no leg compiles a Linux target. The guest build does, and
 Linux-only code is not linted (pre-existing). Generated files (`src/winemetal/wire/src/layouts.rs`,
-`src/winemetal/src/protos.rs`, `src/winemetal/sys/src/decls.rs`, each seam's `src/dxmt/src/<seam>/abi.rs` and
+`src/winemetal/src/protos.rs`, `src/winemetal/sys/src/decls.rs`, each seam's `abi.rs` (`src/dxmt/src/<seam>/abi.rs`,
+`src/winemetal/src/sm50/abi.rs`, `src/winemetal/unix/src/native_win32/abi.rs`) and
 `src/airconv/src/abi/layouts.rs`, from `tools/winemetal-layouts.sh`) are skipped by rustfmt; the `gen` leg regenerates
 the winemetal and seam files into the target folder (with llvm-mingw's clang, Xcode's and `jq`) and fails when one
 differs from its committed file, since a C declaration changed without its regeneration still compiles. A seam's

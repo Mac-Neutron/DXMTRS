@@ -22,6 +22,7 @@ Most of this document is enforced by `tools/rust-check.sh`: the pinned nightly's
 | `HashMap` / `HashSet` = 0 (maps are `FxHashMap` / `FxHashSet`) | §FxHash for maps, xxh3 for content |
 | `DefaultHasher` / `RandomState` = 0 (content hashes are xxh3) | §FxHash for maps, xxh3 for content |
 | `mod.rs` files = 0 | §Module style |
+| C, C++ and Objective-C sources under `src/` and `tests/` confined to the files `tools/audit.sh` lists, each with its reason | §Mechanical audit |
 | Inline `#[cfg(test)] mod tests { … }` blocks = 0 | §Unit tests live in `<stem>/tests.rs` |
 | Every end-to-end test file (`tests/d3d9/programs/tests/*.rs` and `tests/d3d9/programs/tests/e2e/*.rs`, `main.rs` aside) has a row in `tests/d3d9/programs/COVERAGE.md`, and every row a file | §End-to-end tests are listed in `COVERAGE.md` |
 | Raw thread spawns (`.spawn(`, `.spawn_scoped(`, `thread::spawn(`, `thread::Builder`) = 0 under `tests/d3d9/programs/tests/e2e/` | §Every end-to-end test names itself |
