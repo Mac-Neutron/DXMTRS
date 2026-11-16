@@ -51,7 +51,7 @@ impl CoreDevice {
     /// Opens a render pass on the current colour target alone, loading and storing it.
     ///
     /// For the device's tests: nothing checks it against the pass set, as a draw's pass is
-    /// ([`CoreDevice::draw_up`]). Nothing when a render pass is open. An open blit pass ends
+    /// ([`CoreDevice::draw`]). Nothing when a render pass is open. An open blit pass ends
     /// first: the core's `begin` holds one pass at a time.
     #[cfg(test)]
     pub(super) fn open_render_pass(&mut self) {

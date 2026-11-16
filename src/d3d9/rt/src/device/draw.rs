@@ -200,7 +200,7 @@ impl CoreDevice {
     /// target 0's, or a depth format the bound depth-stencil has not or one of another count,
     /// the layout crosses its stride, or the pipeline does not build. A draw whose scissor holds
     /// no pixel of the pass records nothing and is no error.
-    pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
+    pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };

@@ -724,7 +724,7 @@ fn draw(
     let Some(core) = dev.core.as_deref_mut() else {
         return D3D_OK;
     };
-    match core.draw_up(&key, &draw) {
+    match core.draw(&key, &draw) {
         Err(DrawRefused::Crossing) => {
             refuse_under_core(CROSSING);
             D3DERR_NOTAVAILABLE

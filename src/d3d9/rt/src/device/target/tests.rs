@@ -291,7 +291,7 @@ fn draw_in(core: &mut CoreDevice, format: u32) {
         color_format: format,
         ..key(0xf)
     };
-    assert_eq!(core.draw_up(&key, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key, &triangle(&binds)), Ok(()));
 }
 
 /// Whether `handle` is a view of `texture` in `format`, by the views `calls` show made.
@@ -491,9 +491,9 @@ fn the_key_names_the_pass() {
     );
     let binds = ff_binds();
     let both = key_extras([Some(extra(RGBA8, 8)), Some(extra(RGBA16F, 6)), None]);
-    assert_eq!(core.draw_up(&both, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&both, &triangle(&binds)), Ok(()));
     assert_eq!(
-        core.draw_up(&key(0xf), &triangle(&binds)),
+        core.draw(&key(0xf), &triangle(&binds)),
         Err(DrawRefused::Target)
     );
     core.drain();
@@ -530,14 +530,14 @@ fn a_key_the_targets_cannot_make_is_refused() {
     let binds = ff_binds();
     let refused = Err(DrawRefused::Target);
     let other_format = key_extras([Some(extra(R32F, 0xf)), None, None]);
-    assert_eq!(core.draw_up(&other_format, &triangle(&binds)), refused);
+    assert_eq!(core.draw(&other_format, &triangle(&binds)), refused);
     let unbound = key_extras([Some(extra(RGBA8, 0xf)), Some(extra(RGBA8, 0xf)), None]);
-    assert_eq!(core.draw_up(&unbound, &triangle(&binds)), refused);
+    assert_eq!(core.draw(&unbound, &triangle(&binds)), refused);
     assert_eq!(core.pipelines_len(), 0);
     let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
-    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
     assert!(core.set_extra_target(1, None));
-    assert_eq!(core.draw_up(&named, &triangle(&binds)), refused);
+    assert_eq!(core.draw(&named, &triangle(&binds)), refused);
     assert_eq!(core.pipelines_len(), 1);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -558,7 +558,7 @@ fn a_hole_stays_empty() {
     );
     let binds = ff_binds();
     let hole = key_extras([None, Some(extra(RGBA16F, 0xf)), None]);
-    assert_eq!(core.draw_up(&hole, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&hole, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let all = passes(&calls);
@@ -588,10 +588,10 @@ fn an_extra_of_another_size_is_not_in_the_set() {
     let binds = ff_binds();
     let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
     assert_eq!(
-        core.draw_up(&named, &triangle(&binds)),
+        core.draw(&named, &triangle(&binds)),
         Err(DrawRefused::Target)
     );
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
 }
 
 /// A target already in the set is no member again: target 0's own, or a lower slot's.
@@ -626,11 +626,11 @@ fn a_target_0_of_another_size_drops_the_extra() {
     );
     let binds = ff_binds();
     let named = key_extras([Some(extra(RGBA8, 0xf)), None, None]);
-    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
     assert!(core.set_target(level0(t0)));
     assert_eq!(core.target_desc(false), Some(((64, 64), [BGRA8, 0, 0, 0])));
     assert_eq!(
-        core.draw_up(&named, &triangle(&binds)),
+        core.draw(&named, &triangle(&binds)),
         Err(DrawRefused::Target)
     );
     core.drain();
@@ -655,9 +655,9 @@ fn an_extra_change_ends_the_pass() {
         let named = key_extras(extras);
         assert!(core.set_extra_target(1, None));
         assert!(core.set_extra_target(slot, Some(level0(a))));
-        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
         assert!(core.set_extra_target(slot, Some(level0(b))));
-        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
         core.drain();
         let calls = dxmt_fakes::take_calls(DEVICE);
         assert_eq!(passes(&calls).len(), 2, "slot {slot}: {calls:#?}");
@@ -666,9 +666,9 @@ fn an_extra_change_ends_the_pass() {
             [ha.clone(), hb.clone()],
             "slot {slot}: {calls:#?}"
         );
-        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
         assert!(core.set_extra_target(slot, Some(level0(b))));
-        assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
         core.drain();
         let calls = dxmt_fakes::take_calls(DEVICE);
         assert_eq!(passes(&calls).len(), 1, "slot {slot}: {calls:#?}");
@@ -705,14 +705,14 @@ fn forgetting_an_extra_unbinds_it() {
         Some(extra(RGBA8, 0xf)),
         Some(extra(RGBA8, 0xf)),
     ]);
-    assert_eq!(core.draw_up(&all, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&all, &triangle(&binds)), Ok(()));
     core.forget_texture(cube);
     assert_eq!(
         core.target_desc(false),
         Some(((64, 64), [BGRA8, 0, 0, RGBA8]))
     );
     let third = key_extras([None, None, Some(extra(RGBA8, 0xf))]);
-    assert_eq!(core.draw_up(&third, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&third, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
@@ -786,7 +786,7 @@ fn the_blend_reaches_each_extra() {
         ..key(0xf)
     };
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&blended, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&blended, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(
@@ -831,7 +831,7 @@ fn the_tile_barrier_names_each_slot() {
             textures: &textures,
             ..triangle(&binds)
         };
-        assert_eq!(core.draw_up(key, &data), Ok(()));
+        assert_eq!(core.draw(key, &data), Ok(()));
         core.drain();
         dxmt_fakes::take_calls(DEVICE)
     };
@@ -886,7 +886,7 @@ fn a_clear_reaches_each_bound_target() {
     }
     let binds = ff_binds();
     let both = key_extras([Some(extra(RGBA8, 0xf)), Some(extra(RGBA8, 0xf)), None]);
-    assert_eq!(core.draw_up(&both, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&both, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
@@ -901,7 +901,7 @@ fn a_clear_reaches_each_bound_target() {
     assert!(core.set_extra_target(1, None));
     core.clear(2, [1.0, 1.0, 0.0, 1.0], false);
     let hole = key_extras([None, Some(extra(RGBA8, 0xf)), None]);
-    assert_eq!(core.draw_up(&hole, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&hole, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
@@ -926,7 +926,7 @@ fn a_clear_of_a_target_outside_the_set_is_its_own_pass() {
     assert!(core.set_extra_target(1, Some(level0(small))));
     core.clear(1, [0.0, 1.0, 0.0, 1.0], false);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
@@ -977,7 +977,7 @@ fn a_clear_encodes_once() {
     core.clear(1, linear, true);
     let binds = ff_binds();
     let named = key_extras([Some(extra(R32F, 0xf)), None, None]);
-    assert_eq!(core.draw_up(&named, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
@@ -1306,11 +1306,11 @@ fn the_key_names_the_sample_count() {
     assert_eq!(core.target_samples(), 4);
     let binds = ff_binds();
     let refused = Err(DrawRefused::Target);
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), refused);
     let four = key_of_count(4, false);
-    assert_eq!(core.draw_up(&four, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
     // The four-sample draw's pass is open on the same colours: no excuse for another count.
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), refused);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(draws(&calls), 1, "{calls:#?}");
@@ -1321,8 +1321,8 @@ fn the_key_names_the_sample_count() {
     assert_eq!(targets(&calls)[0].0, h_t, "{calls:#?}");
     assert!(core.set_target(level0(u)));
     assert_eq!(core.target_samples(), 1);
-    assert_eq!(core.draw_up(&four, &triangle(&binds)), refused);
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&four, &triangle(&binds)), refused);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
 }
 
 /// An extra of another sample count than target 0 is no member of the pass set.
@@ -1383,12 +1383,12 @@ fn a_depth_of_another_count_is_left_out() {
             "{what}"
         );
         assert_eq!(
-            core.draw_up(&named(samples), &triangle(&binds)),
+            core.draw(&named(samples), &triangle(&binds)),
             Err(DrawRefused::Depth),
             "{what}"
         );
         assert_eq!(
-            core.draw_up(&key_of_count(samples, false), &triangle(&binds)),
+            core.draw(&key_of_count(samples, false), &triangle(&binds)),
             Ok(()),
             "{what}"
         );
@@ -1400,7 +1400,7 @@ fn a_depth_of_another_count_is_left_out() {
     }
     assert!(core.set_depth(Some(DepthRef { id: d4, level: 0 })));
     assert_eq!(core.depth_samples(), Some(4));
-    assert_eq!(core.draw_up(&named(4), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&named(4), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(line(passes(&calls)[0], "  depth ").is_some(), "{calls:#?}");
@@ -1415,10 +1415,7 @@ fn alpha_to_coverage_is_the_pipelines() {
     assert!(core.set_target(level0(t)));
     let binds = ff_binds();
     for a2c in [true, false] {
-        assert_eq!(
-            core.draw_up(&key_of_count(4, a2c), &triangle(&binds)),
-            Ok(())
-        );
+        assert_eq!(core.draw(&key_of_count(4, a2c), &triangle(&binds)), Ok(()));
     }
     assert_eq!(core.pipelines_len(), 2);
     core.drain();
@@ -1438,7 +1435,7 @@ fn a_clear_of_a_multisampled_target() {
     core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
     let binds = ff_binds();
     assert_eq!(
-        core.draw_up(&key_of_count(4, false), &triangle(&binds)),
+        core.draw(&key_of_count(4, false), &triangle(&binds)),
         Ok(())
     );
     core.drain();
@@ -1520,10 +1517,10 @@ fn a_resolve_takes_the_last_view() {
     };
     let other_pass = |core: &mut CoreDevice| {
         assert!(core.set_target(level0(e)));
-        assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     };
     assert!(core.set_target(level0(t)));
-    assert_eq!(core.draw_up(&through_twin, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&through_twin, &triangle(&binds)), Ok(()));
     other_pass(&mut core);
     assert!(core.resolve_into(level0(t), level0(d)));
     core.drain();
@@ -1551,7 +1548,7 @@ fn a_resolve_takes_the_last_view() {
     );
     assert_eq!(targets(&calls)[2].0, h_t, "{calls:#?}");
     assert!(core.set_target(level0(t)));
-    assert_eq!(core.draw_up(&through_twin, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&through_twin, &triangle(&binds)), Ok(()));
     assert!(core.resolve_into(level0(t), level0(d)));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -1567,9 +1564,9 @@ fn a_resolve_ends_the_destinations_pass() {
     let (d, h_d) = stored(&mut core, DEVICE, 2, TextureKind::Tex2d, 64, 1);
     let binds = ff_binds();
     assert!(core.set_target(level0(d)));
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     assert!(core.resolve_into(level0(t), level0(d)));
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);

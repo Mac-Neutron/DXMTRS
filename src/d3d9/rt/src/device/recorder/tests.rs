@@ -50,14 +50,14 @@ fn a_rect_clear_is_a_pass_of_its_own() {
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.clear_rects(
         0,
         &[[1, 2, 3, 4], [8, 8, 16, 16]],
         [0.0, 1.0, 0.0, 1.0],
         false,
     );
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let all = passes(&calls);

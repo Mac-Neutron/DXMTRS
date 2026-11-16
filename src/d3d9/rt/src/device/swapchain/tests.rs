@@ -125,7 +125,7 @@ fn a_multisampled_back_buffer_presents_resolved() {
         samples: 4,
         ..key(0xf)
     };
-    assert_eq!(core.draw_up(&four, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
     core.present(true, 0.0);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -147,7 +147,7 @@ fn a_single_sample_back_buffer_is_as_before() {
     let made = back_buffers(&dxmt_fakes::take_calls(DEVICE));
     assert_eq!(made.len(), 1, "{made:?}");
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.present(true, 0.0);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);

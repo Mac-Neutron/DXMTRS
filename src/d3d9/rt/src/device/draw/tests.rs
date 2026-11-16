@@ -140,7 +140,7 @@ fn ff_draw_up_records_pipeline_binds_and_draw() {
     let mut core = core_on_fakes(DEVICE);
     core.clear(0, [0.0, 0.0, 1.0, 1.0], false);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(
@@ -172,11 +172,11 @@ fn ff_pipeline_compiles_once_per_key() {
     const DEVICE: u64 = 0xb2;
     let mut core = core_on_fakes(DEVICE);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 1, "{calls:#?}");
-    assert_eq!(core.draw_up(&key(0x7), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0x7), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 1, "{calls:#?}");
@@ -189,8 +189,8 @@ fn ff_draw_with_a_failed_pipeline_records_nothing() {
     let mut core = core_on_fakes(DEVICE);
     let binds = ff_binds();
     let refused = Err(DrawRefused::Pipeline);
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), refused);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), refused);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 1, "{calls:#?}");
@@ -244,7 +244,7 @@ fn prog_draw_up_records_pipeline_binds_and_draw() {
         ..draw(4, 4, None, &binds)
     };
     let key = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&key, &culled), Ok(()));
+    assert_eq!(core.draw(&key, &culled), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let pass = cleared_pass(&calls);
@@ -287,7 +287,7 @@ fn an_empty_bind_is_not_emitted() {
         },
     ];
     let key = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &binds)), Ok(()));
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(&calls, "  render 11 length=16 index=15");
@@ -309,7 +309,7 @@ fn indexed_draw_up_draws_from_the_ring() {
         count: 6,
     };
     let key = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&key, &draw(3, 4, Some(indices), &[])), Ok(()));
+    assert_eq!(core.draw(&key, &draw(3, 4, Some(indices), &[])), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let draw = calls
@@ -342,7 +342,7 @@ fn a_fan_becomes_an_indexed_list() {
         count: fan.index_count(),
     };
     let key = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&key, &draw(3, 4, Some(indices), &[])), Ok(()));
+    assert_eq!(core.draw(&key, &draw(3, 4, Some(indices), &[])), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(
@@ -361,11 +361,11 @@ fn a_vertex_shader_compiles_once_across_pixel_shaders() {
     let vs = code(&VS_POS);
     let first = prog_key(vs.clone(), code(&PS_C0));
     let second = prog_key(vs, code(&PS_C1));
-    assert_eq!(core.draw_up(&first, &draw(3, 3, None, &[])), Ok(()));
-    assert_eq!(core.draw_up(&second, &draw(3, 3, None, &[])), Ok(()));
+    assert_eq!(core.draw(&first, &draw(3, 3, None, &[])), Ok(()));
+    assert_eq!(core.draw(&second, &draw(3, 3, None, &[])), Ok(()));
     assert_eq!(core.pipelines_len(), 2);
     assert_eq!(core.compiles(), 3);
-    assert_eq!(core.draw_up(&first, &draw(3, 3, None, &[])), Ok(()));
+    assert_eq!(core.draw(&first, &draw(3, 3, None, &[])), Ok(()));
     assert_eq!(core.compiles(), 3);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -378,11 +378,11 @@ fn a_recreated_shader_hits_the_cache() {
     const DEVICE: u64 = 0xb8;
     let mut core = core_on_fakes(DEVICE);
     let first = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&first, &draw(3, 3, None, &[])), Ok(()));
+    assert_eq!(core.draw(&first, &draw(3, 3, None, &[])), Ok(()));
     let compiles = core.compiles();
     let made = pipelines_made(&dxmt_fakes::take_calls(DEVICE));
     let again = prog_key(code(&VS_POS), code(&PS_C0));
-    assert_eq!(core.draw_up(&again, &draw(3, 3, None, &[])), Ok(()));
+    assert_eq!(core.draw(&again, &draw(3, 3, None, &[])), Ok(()));
     assert_eq!(core.compiles(), compiles);
     assert_eq!(core.pipelines_len(), 1);
     core.drain();
@@ -423,8 +423,8 @@ fn a_crossing_draw_is_refused() {
         ..prog_key(code(&VS_POS), code(&PS_C0))
     };
     let refused = Err(DrawRefused::Crossing);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
     assert_eq!(core.compiles(), 0);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -439,8 +439,8 @@ fn a_vertex_shader_that_does_not_parse_is_cached_as_failed() {
     let mut core = core_on_fakes(DEVICE);
     let key = prog_key(code(&VS_TRUNCATED), code(&PS_C0));
     let refused = Err(DrawRefused::Pipeline);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
     assert_eq!(core.pipelines_len(), 1);
     assert_eq!(core.compiles(), 0);
     core.drain();
@@ -518,7 +518,7 @@ fn a_vertex_texture_binds_at_the_vertex_stage() {
         textures: &textures,
         ..triangle(&binds)
     };
-    assert_eq!(core.draw_up(&key(0xf), &data), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &data), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let records = |prefix: String| -> Vec<usize> {
@@ -572,7 +572,7 @@ fn a_textured_draw_binds_texture_and_sampler() {
         textures: &textures,
         ..triangle(&binds)
     };
-    assert_eq!(core.draw_up(&key(0xf), &data), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &data), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let texture_at = calls
@@ -616,7 +616,7 @@ fn render_blit_render_merges_when_unsampled() {
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     let whole = super::super::UploadRegion {
         level: 0,
         slice: 0,
@@ -628,7 +628,7 @@ fn render_blit_render_merges_when_unsampled() {
         depth: 1,
     };
     assert!(core.texture_upload(id, whole, &[1u8; 16], 8, 16));
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let unsampled = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(render_passes(&unsampled), 1, "{unsampled:#?}");
@@ -646,9 +646,9 @@ fn render_blit_render_merges_when_unsampled() {
         textures: &textures,
         ..triangle(&binds)
     };
-    assert_eq!(core.draw_up(&key(0xf), &sampled), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &sampled), Ok(()));
     assert!(core.texture_upload(id, whole, &[2u8; 16], 8, 16));
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let split = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(render_passes(&split), 2, "{split:#?}");
@@ -699,7 +699,7 @@ fn a_draw_targets_the_set_texture() {
     let mut core = core_on_fakes(DEVICE);
     let (id, texture) = target_texture(&mut core, DEVICE, 1, WMT_PIXEL_FORMAT_RGBA16_UNORM, 8);
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     assert!(core.set_target(level0(id)));
     assert_eq!(core.target_format(), Some(WMT_PIXEL_FORMAT_RGBA16_UNORM));
     let wide = PipelineKey {
@@ -708,7 +708,7 @@ fn a_draw_targets_the_set_texture() {
         blend: None,
         ..key(0xf)
     };
-    assert_eq!(core.draw_up(&wide, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&wide, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 2, "{calls:#?}");
@@ -750,12 +750,12 @@ fn a_target_made_between_two_draws_is_zeroed_ahead_of_them() {
     core.drain();
     let back_buffer = textures_made(&dxmt_fakes::take_calls(DEVICE))[0].clone();
     let binds = ff_binds();
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.texture_create(
         mtld3d_core::ids::TextureId::from_raw(1),
         &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 8, 1, 4),
     );
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let made = textures_made(&calls)[0].clone();
@@ -791,7 +791,7 @@ fn a_rewritten_target_is_not_merged_past_its_reader() {
     let binds = ff_binds();
     for _ in 0..2 {
         assert!(core.set_target(level0(id)));
-        assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
         assert!(core.set_target(TargetRef::BackBuffer));
         let bind = core
             .texture_bind(Stage::Pixel, 0, id, WMT_PIXEL_FORMAT_BGRA8_UNORM, None)
@@ -801,7 +801,7 @@ fn a_rewritten_target_is_not_merged_past_its_reader() {
             textures: &textures,
             ..triangle(&binds)
         };
-        assert_eq!(core.draw_up(&key(0xf), &sampling), Ok(()));
+        assert_eq!(core.draw(&key(0xf), &sampling), Ok(()));
     }
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -842,7 +842,7 @@ fn scissored(core: &mut CoreDevice, scissor: [u32; 4]) -> Result<(), DrawRefused
         scissor,
         ..triangle(&binds)
     };
-    core.draw_up(&key(0xf), &draw)
+    core.draw(&key(0xf), &draw)
 }
 
 /// A pass records its scissor at its first draw and not again for the same rect.
@@ -987,7 +987,7 @@ fn a_blend_is_its_own_pipeline() {
     assert!(blended.blend.is_some());
     let binds = ff_binds();
     for key in [&key(0xf), &blended, &blended, &key(0xf)] {
-        assert_eq!(core.draw_up(key, &triangle(&binds)), Ok(()));
+        assert_eq!(core.draw(key, &triangle(&binds)), Ok(()));
     }
     assert_eq!(core.pipelines_len(), 2);
 }
@@ -1059,7 +1059,7 @@ fn a_declared_stream_with_nothing_bound_reads_zeros() {
         ..draw(3, 3, None, &binds)
     };
     let key = two_stream_key(0, up_with(StreamKey::Null));
-    assert_eq!(core.draw_up(&key, &drawn), Ok(()));
+    assert_eq!(core.draw(&key, &drawn), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(
@@ -1100,7 +1100,7 @@ fn a_bound_entry_prints_its_step_and_rate() {
         bound(0, instanced),
     ] {
         assert_eq!(
-            core.draw_up(&two_stream_key(0, up_with(entry)), &drawn),
+            core.draw(&two_stream_key(0, up_with(entry)), &drawn),
             Ok(())
         );
     }
@@ -1136,8 +1136,8 @@ fn keys_of_two_strides_are_two_pipelines() {
         streams: inline(24),
         ..key(0xf)
     };
-    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
-    assert_eq!(core.draw_up(&wider, &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_eq!(core.draw(&wider, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 2, "{calls:#?}");
@@ -1168,8 +1168,8 @@ fn a_crossing_on_stream_1_is_refused() {
     // The colour ends at byte 8 of stream 1's element, which is bound 4 bytes apart.
     let key = two_stream_key(4, up_with(bound(4, STREAM_FREQ_DEFAULT)));
     let refused = Err(DrawRefused::Crossing);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
-    assert_eq!(core.draw_up(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
     assert_eq!(core.compiles(), 0);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);

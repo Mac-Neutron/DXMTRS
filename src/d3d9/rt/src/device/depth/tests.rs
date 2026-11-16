@@ -71,7 +71,7 @@ impl Rig {
             slope_scale: data.2,
             ..triangle(&binds)
         };
-        self.core.draw_up(key, &draw)
+        self.core.draw(key, &draw)
     }
 
     /// The texture `handle` is, or is a view of, by the views made so far.
@@ -580,7 +580,7 @@ fn a_draw_sampling_the_bound_depth_detaches_it() {
         textures: &textures,
         ..triangle(&binds)
     };
-    assert_eq!(rig.core.draw_up(&key_with(0), &sampling), Ok(()));
+    assert_eq!(rig.core.draw(&key_with(0), &sampling), Ok(()));
     assert!(rig.core.set_target(target(x)));
     assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
     let calls = rig.take();
@@ -700,7 +700,7 @@ fn the_blend_colour_is_recorded_with_the_stencil_ref() {
         blend_color: Some([0.25, 0.5, 0.75, 1.0]),
         ..triangle(&binds)
     };
-    assert_eq!(rig.core.draw_up(&key_with(D32F_S8), &blended), Ok(()));
+    assert_eq!(rig.core.draw(&key_with(D32F_S8), &blended), Ok(()));
     assert_eq!(rig.draw(&key_with(D32F_S8), (tested(), 5, 0.0)), Ok(()));
     let calls = rig.take();
     let all = passes(&calls);
