@@ -165,6 +165,7 @@ impl CoreDevice {
     /// False, and nothing changed, for another slot or a target that does not resolve. A change
     /// ends the open render pass, whose attachments are fixed. A bound target need not join the
     /// pass set: one of another size than target 0 is kept, and skipped by draws.
+    #[must_use]
     pub fn set_extra_target(&mut self, slot: usize, target: Option<TargetRef>) -> bool {
         let Some(index) = slot.checked_sub(1).filter(|&i| i < self.extras.len()) else {
             return false;

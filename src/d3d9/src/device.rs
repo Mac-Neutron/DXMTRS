@@ -2105,7 +2105,8 @@ impl DeviceInner {
             if let Some(old_id) = old_autogen {
                 rt.texture_generate_mips(old_id);
             }
-            rt.set_extra_target(slot, None);
+            let unbound = rt.set_extra_target(slot, None);
+            debug_assert!(unbound, "slot 1-3 takes an unbind");
         }
         if let Some(old_id) = old_autogen
             && !core

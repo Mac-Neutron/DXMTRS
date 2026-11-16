@@ -456,8 +456,11 @@ pub fn core_extras(
     core::array::from_fn(|i| {
         (formats[i] != 0).then(|| CoreExtra {
             format: formats[i],
-            write_mask: u8::try_from(bits.extra_write_mask(&attached, ps_written, i).bits())
-                .unwrap_or(0),
+            // A colour write mask has four bits: its low byte is all of it.
+            write_mask: bits
+                .extra_write_mask(&attached, ps_written, i)
+                .bits()
+                .to_le_bytes()[0],
             blend: core_blend(rs, has_alpha & (1 << (i + 1)) != 0),
         })
     })

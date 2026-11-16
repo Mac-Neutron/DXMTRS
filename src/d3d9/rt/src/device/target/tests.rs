@@ -1029,3 +1029,21 @@ fn color_size_lists_bound_slots() {
         [Some((64, 64)), Some((32, 32)), None, Some((64, 64)), None]
     );
 }
+
+/// A slot that is not 1-3, or a target that does not resolve, is refused and changes nothing.
+#[test]
+fn an_extra_that_cannot_be_bound_is_refused() {
+    const DEVICE: u64 = 0x350;
+    let (mut core, _) = core_on_a_64_target(DEVICE);
+    let (kept, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    assert!(core.set_extra_target(1, Some(level0(kept))));
+    let unknown = level0(TextureId::from_raw(9));
+    assert!(!core.set_extra_target(0, Some(level0(kept))));
+    assert!(!core.set_extra_target(4, Some(level0(kept))));
+    assert!(!core.set_extra_target(1, Some(unknown)));
+    assert_eq!(core.color_size(1), Some((64, 64)));
+    assert_eq!(
+        core.target_desc(false),
+        Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
+    );
+}
