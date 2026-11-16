@@ -3,12 +3,16 @@
 //! From the second-last pass back, a clear or render pass is compared with each pass after it
 //! until one depends on it. Passes in between only stay where they are when neither waits for
 //! the other. A clear becomes the load action of a later render pass that draws to its view, a
-//! render pass is prepended to a later one with the same targets, and a resolve after a render
-//! pass becomes its store action. Merged passes become [`PassKind::Null`]; none moves.
+//! render pass is prepended to a later one with the same targets, and a resolve right after a
+//! render pass becomes its store action. Merged passes become [`PassKind::Null`]; none moves.
 //!
 //! Behaviour is the C++ `flushCommands`' first loop and `checkEncoderRelation`
-//! (`dxmt_context.cpp:892-905, 1285-1602`), but for one guard the C++ has not: a clear is not
-//! merged into a render pass that draws to less than the cleared view (see `clear_into_render`).
+//! (`dxmt_context.cpp:892-905, 1285-1602`), but for two guards the C++ has not: a clear is not
+//! merged into a render pass that draws to less than the cleared view (see `clear_into_render`),
+//! and a resolve is folded only into the render pass right before it, with no live pass between
+//! (see `relation`). A folded resolve writes its destination at the end of that render pass,
+//! before every pass between, and nothing checks the resolve against those: one that draws to,
+//! clears or reads the destination would see it written early.
 
 use std::sync::Arc;
 
@@ -34,14 +38,22 @@ impl Encoder {
             ) {
                 continue;
             }
+            // No live pass between `j` and `i` yet: a resolve folded into `j` is none.
+            let mut adjacent = true;
             for i in j + 1..count {
                 let (former, latter) = self.passes.split_at_mut(i);
                 if matches!(latter[0].kind, PassKind::Null) {
                     continue;
                 }
-                if relation(&mut former[j], &mut latter[0], &mut self.frame_stats) {
+                if relation(
+                    &mut former[j],
+                    &mut latter[0],
+                    adjacent,
+                    &mut self.frame_stats,
+                ) {
                     break;
                 }
+                adjacent &= matches!(latter[0].kind, PassKind::Null);
             }
         }
     }
@@ -59,10 +71,12 @@ enum Merged {
 /// Compares `former` with a pass after it, merging what can be.
 ///
 /// True when they keep their order (the C++'s `DXMT_ENCODER_LIST_OP_SYNCHRONIZE`), false when
-/// the scan goes on past `latter`.
+/// the scan goes on past `latter`. A resolve is offered to `former` only when `adjacent` (no live
+/// pass lies between the two); otherwise the dependency test decides, as for any other pair.
 fn relation(
     former: &mut Pass,
     latter: &mut Pass,
+    adjacent: bool,
     stats: &mut crate::frame_stats::FrameStatistics,
 ) -> bool {
     if matches!(former.kind, PassKind::Null) || matches!(latter.kind, PassKind::Null) {
@@ -85,7 +99,7 @@ fn relation(
             Merged::Nothing
         }
         (PassKind::Render(targets), PassKind::Resolve(resolve)) => {
-            if resolve_into_render(targets, resolve) {
+            if adjacent && resolve_into_render(targets, resolve) {
                 Merged::Latter
             } else {
                 Merged::Nothing

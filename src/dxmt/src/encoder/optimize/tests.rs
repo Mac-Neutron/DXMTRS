@@ -5,7 +5,7 @@ use winemetal_sys::{
     Obj,
     wire::{
         WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM,
-        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET, WMT_TEXTURE_TYPE2D,
+        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER_OFFSET,
         WMT_TEXTURE_USAGE_RENDER_TARGET, WMTClearColor, WMTTextureInfo, WmtcmdBase,
         WmtcmdRenderDraw, WmtcmdRenderSetbufferoffset,
     },
@@ -16,7 +16,10 @@ use super::*;
 use crate::{
     deptrack::Access,
     encoder::{Target, direct, stage},
-    resource::{Texture, TextureAllocationFlags},
+    resource::{
+        Texture, TextureAllocationFlags,
+        texture_info::{Dimension, info_bits, texture_type},
+    },
     test_support::{Records, format_pass_records},
 };
 
@@ -32,13 +35,13 @@ extern "C-unwind" fn fake_heap_new_texture(
 
 /// A 64×64 render target with an allocation (on a made-up heap, at `at`).
 fn texture(at: u64) -> Arc<Texture> {
-    sized(at, WMT_PIXEL_FORMAT_RGBA8_UNORM, 64)
+    sized(at, WMT_PIXEL_FORMAT_RGBA8_UNORM, 64, 1)
 }
 
-/// A `size`×`size` render target of `pixel_format` with an allocation.
+/// A `size`×`size` render target of `pixel_format` with an allocation, `samples` a texel.
 ///
-/// On a made-up heap, at `at`.
-fn sized(at: u64, pixel_format: u32, size: u32) -> Arc<Texture> {
+/// On a made-up heap, at `at`; multisampled above one sample.
+fn sized(at: u64, pixel_format: u32, size: u32, samples: u32) -> Arc<Texture> {
     // SAFETY: made-up handles; the fakes that see them (the shader cache tests' `NSObject_retain`
     // and `NSObject_release`, which log per thread) never dereference them.
     let device = unsafe { Obj::adopt(0xde) }.expect("a handle");
@@ -50,10 +53,12 @@ fn sized(at: u64, pixel_format: u32, size: u32) -> Arc<Texture> {
         height: size,
         depth: 1,
         array_length: 1,
-        bits: (WMT_TEXTURE_TYPE2D << WMTTextureInfo::TYPE_SHIFT)
-            | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-            | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-            | (WMT_TEXTURE_USAGE_RENDER_TARGET << WMTTextureInfo::USAGE_SHIFT),
+        bits: info_bits(
+            texture_type(Dimension::Texture2D, 1, samples, false),
+            1,
+            samples,
+            WMT_TEXTURE_USAGE_RENDER_TARGET,
+        ),
         options: 0,
         flags: 0,
         mach_port: 0,
@@ -193,6 +198,72 @@ fn optimizer_refuses_across_dependency() {
         );
     }
     assert_eq!(offsets(&encoder.passes[4]), [2]);
+}
+
+/// A resolve folds into its source's render pass only when no pass lies between the two.
+///
+/// A draw on the destination, or a clear of it, between them keeps the resolve a pass of its own
+/// after that pass: folded, the destination would be written before it instead of after it.
+#[test]
+fn a_resolve_is_not_folded_across_a_pass() {
+    let resolve = |encoder: &mut Encoder, source: &Arc<Texture>, destination: &Arc<Texture>| {
+        encoder.resolve_texture(
+            source,
+            source.full_view(),
+            destination,
+            destination.full_view(),
+        );
+        encoder.optimize();
+    };
+    for clear in [false, true] {
+        let between = if clear { "a clear" } else { "a draw" };
+        let (source, destination) = (
+            sized(0x100, WMT_PIXEL_FORMAT_RGBA8_UNORM, 64, 4),
+            texture(0x200),
+        );
+        let mut encoder = Encoder::headless();
+        draw(&mut encoder, &source, WMT_LOAD_ACTION_LOAD, &[1]);
+        if clear {
+            encoder.clear_color(&destination, destination.full_view(), 1, COLOR);
+        } else {
+            draw(&mut encoder, &destination, WMT_LOAD_ACTION_LOAD, &[2]);
+        }
+        resolve(&mut encoder, &source, &destination);
+        let color = &targets(&encoder.passes[0]).colors[0];
+        assert_eq!(
+            color.target.store_action, WMT_STORE_ACTION_STORE,
+            "{between} between: the source's pass only stores"
+        );
+        assert!(color.resolve.is_none(), "{between} between");
+        assert!(
+            !matches!(encoder.passes[1].kind, PassKind::Null),
+            "{between} between stays"
+        );
+        assert!(
+            matches!(encoder.passes[2].kind, PassKind::Resolve(_)),
+            "{between} between: the resolve is a pass of its own, after it"
+        );
+    }
+    let (source, destination) = (
+        sized(0x100, WMT_PIXEL_FORMAT_RGBA8_UNORM, 64, 4),
+        texture(0x200),
+    );
+    let mut encoder = Encoder::headless();
+    draw(&mut encoder, &source, WMT_LOAD_ACTION_LOAD, &[1]);
+    resolve(&mut encoder, &source, &destination);
+    let color = &targets(&encoder.passes[0]).colors[0];
+    assert_eq!(
+        color.target.store_action, WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE,
+        "nothing between: the resolve is the source's store action"
+    );
+    assert!(
+        color
+            .resolve
+            .as_ref()
+            .is_some_and(|r| Arc::ptr_eq(&r.texture, &destination)),
+        "into the destination"
+    );
+    assert!(matches!(encoder.passes[1].kind, PassKind::Null));
 }
 
 #[test]
@@ -344,7 +415,7 @@ fn depth_pass(encoder: &mut Encoder, depth: &Arc<Texture>, width: u32, height: u
 fn a_clear_is_not_folded_into_a_smaller_pass() {
     // A depth view of 128×128 cleared, then a pass of this area that attaches it.
     for (width, height, folded) in [(64, 32, false), (128, 128, true), (0, 0, true)] {
-        let depth = sized(0x100, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 128);
+        let depth = sized(0x100, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 128, 1);
         let mut encoder = Encoder::headless();
         encoder.clear_depth_stencil(&depth, depth.full_view(), 1, 1, 0.5, 0);
         depth_pass(&mut encoder, &depth, width, height);
@@ -362,7 +433,7 @@ fn a_clear_is_not_folded_into_a_smaller_pass() {
         assert_eq!(targets(&encoder.passes[1]).depth.target.load_action, load);
     }
     // A colour view of 128×128 cleared, then a pass of 64×64 on it.
-    let color = sized(0x200, WMT_PIXEL_FORMAT_RGBA8_UNORM, 128);
+    let color = sized(0x200, WMT_PIXEL_FORMAT_RGBA8_UNORM, 128, 1);
     let mut encoder = Encoder::headless();
     encoder.clear_color(&color, color.full_view(), 1, COLOR);
     draw(&mut encoder, &color, WMT_LOAD_ACTION_LOAD, &[1]);
