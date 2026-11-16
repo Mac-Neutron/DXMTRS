@@ -7,9 +7,9 @@
 //! binaries define their own fakes, and two definitions of one symbol do not link.
 //!
 //! What Metal is asked to do is captured per device ([`take_calls`]): the command buffers'
-//! encoders (a render pass's first colour target as a `color0` line), the records each
+//! encoders (a render pass's colour targets as `color<i>` lines), the records each
 //! `encodeCommands` is handed (as [`format_pass_records`] prints them), the ends, the commits,
-//! pipelines and presents. Objects a device's queue makes carry
+//! pipelines (the tile pipelines too) and presents. Objects a device's queue makes carry
 //! its handle, so tests running at once each read their own device's calls. What the core logs
 //! goes to [`take_log`]. The capture manager and the scalers have no fakes: a call to one aborts
 //! the test (the test binary links with `-undefined dynamic_lookup`).
@@ -26,8 +26,8 @@ use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_GENERATE_MIPMAPS, WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo,
     WMTDepthStencilInfo, WMTEDRValue, WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps,
     WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo, WMTSamplerInfo,
-    WMTTextureInfo, WMTTextureSwizzleChannels, WMTVertexDescriptorInfo, WmtcmdBase,
-    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
+    WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo,
+    WmtcmdBase, WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
     WmtcmdBlitGenerateMipmaps,
 };
 
@@ -415,13 +415,48 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
         "MTLDevice_newRenderPipelineStateWithVertexDescriptor".to_owned(),
     );
     state.say(device, format!("  pso color0={color0}"));
-    // After the line the older tests read: the planes the pipeline declares, when it does.
+    // After the line the older tests read: each other colour the pipeline declares, then the
+    // planes, when it does.
+    for (i, c) in info.colors.iter().enumerate().skip(1) {
+        if c.pixel_format != 0 {
+            state.say(
+                device,
+                format!(
+                    "  pso color{i}={} mask={} blend={}",
+                    c.pixel_format, c.write_mask, c.blending_enabled
+                ),
+            );
+        }
+    }
     if depth != 0 || stencil != 0 {
         state.say(device, format!("  pso depth={depth} stencil={stencil}"));
     }
     if device == REFUSES_PIPELINES {
         return 0;
     }
+    state.made_of(device)
+}
+
+/// A tile pipeline (a render pass's tile barrier): the colour formats and the sample count.
+#[unsafe(export_name = "MTLDevice_newTileRenderPipelineState")]
+extern "C-unwind" fn fake_new_tile_pipeline(
+    device: u64,
+    info: *const WMTTileRenderPipelineInfo,
+    _error: *mut u64,
+) -> u64 {
+    // SAFETY: the core's tile pipeline description, alive for the call.
+    let info = unsafe { &*info };
+    let mut state = state();
+    state.say(device, "MTLDevice_newTileRenderPipelineState".to_owned());
+    for (i, format) in info.color_formats.iter().enumerate() {
+        if *format != 0 {
+            state.say(device, format!("  tile color{i}={format}"));
+        }
+    }
+    state.say(
+        device,
+        format!("  tile samples={}", info.raster_sample_count),
+    );
     state.made_of(device)
 }
 
@@ -586,6 +621,20 @@ extern "C-unwind" fn fake_render_encoder(cmdbuf: u64, info: *mut WMTRenderPassIn
                 color.texture, pass.render_target_width, pass.render_target_height
             ),
         );
+    }
+    // After colour 0's lines: each other attached colour, its view without the pass's size.
+    for (i, color) in pass.colors.iter().enumerate().skip(1) {
+        if color.texture != 0 {
+            let c = &color.clear_color;
+            state.say(
+                cmdbuf,
+                format!(
+                    "  color{i} load={} store={} clear={},{},{},{}",
+                    color.load_action, color.store_action, c.r, c.g, c.b, c.a
+                ),
+            );
+            state.say(cmdbuf, format!("  target{i} #{}", color.texture));
+        }
     }
     // After the colour lines: each attached depth-stencil plane.
     if pass.depth.texture != 0 {
