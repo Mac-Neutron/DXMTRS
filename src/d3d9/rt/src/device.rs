@@ -5,13 +5,7 @@
 
 use std::sync::Arc;
 
-use dxmt_core::{
-    device::Device,
-    pipeline_cache::PsoMap,
-    queue::QueueConfig,
-    resource::{Texture, TextureViewKey},
-    staging::Staging,
-};
+use dxmt_core::{device::Device, pipeline_cache::PsoMap, queue::QueueConfig, staging::Staging};
 use mtld3d_core::pipeline_key::{PipelineKey, PipelineSource};
 use winemetal_sys::{
     MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
@@ -137,11 +131,6 @@ impl Drop for CoreDevice {
     fn drop(&mut self) {
         self.drain();
     }
-}
-
-/// The back buffer's texture and the view a pass draws to or clears.
-fn back_buffer_view(back_buffer: &swapchain::BackBuffer) -> (Arc<Texture>, TextureViewKey) {
-    (Arc::clone(&back_buffer.texture), back_buffer.key)
 }
 
 /// The bytes a chunk may stage for uploads before it is committed.

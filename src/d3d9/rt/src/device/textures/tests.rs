@@ -182,7 +182,7 @@ fn oversize_upload_i686() {
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
     let mut core = CoreDevice::new(mtl, queue_profile_for(32));
-    core.attach(1, 64, 32);
+    core.attach(1, 64, 32, 1);
     let id = TextureId::from_raw(6);
     core.texture_create(id, &bgra(1024, 512, 1));
     let bytes = vec![0u8; 1024 * 512 * 4];
@@ -201,7 +201,7 @@ fn budget_commits_chunk() {
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
     let mut core = CoreDevice::new(mtl, queue_profile_for(32));
-    core.attach(1, 64, 32);
+    core.attach(1, 64, 32, 1);
     let id = TextureId::from_raw(7);
     core.texture_create(id, &bgra(2048, 2048, 1));
     let bytes = vec![0u8; 2048 * 2048 * 4];

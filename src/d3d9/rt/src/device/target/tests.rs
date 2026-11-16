@@ -1500,3 +1500,129 @@ fn a_clear_skips_a_same_size_target_of_another_count() {
         assert_eq!(core.clear_size(0), Some((64, 64)), "{what}");
     }
 }
+
+/// A resolve reads the source through the view a pass or Clear last wrote it in.
+///
+/// After a draw through the sRGB twin and a pass on another target, a resolve pass of its own
+/// names both twin views; after a Clear with sRGB write off, the stored views (the textures
+/// themselves); with nothing between the draw and the resolve, it is the draw's pass's store.
+#[test]
+fn a_resolve_takes_the_last_view() {
+    const DEVICE: u64 = 0x38b;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored_desc(&mut core, DEVICE, 1, &twinned(ms_desc(BGRA8, 64, 4), SRGB));
+    let (d, h_d) = stored_desc(&mut core, DEVICE, 2, &twinned(flat(BGRA8, 64, 4), SRGB));
+    let (e, _) = stored(&mut core, DEVICE, 3, TextureKind::Tex2d, 64, 1);
+    let binds = ff_binds();
+    let through_twin = PipelineKey {
+        color_format: SRGB,
+        ..key_of_count(4, false)
+    };
+    let other_pass = |core: &mut CoreDevice| {
+        assert!(core.set_target(level0(e)));
+        assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    };
+    assert!(core.set_target(level0(t)));
+    assert_eq!(core.draw_up(&through_twin, &triangle(&binds)), Ok(()));
+    other_pass(&mut core);
+    assert!(core.resolve_into(level0(t), level0(d)));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 3, "{calls:#?}");
+    let drawn = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1 "), "{calls:#?}");
+    let twin = line(found[2], "  resolve0 ").unwrap_or_default().to_owned();
+    assert!(is_view(&calls, &twin, &h_d, SRGB), "{calls:#?}");
+    let source = targets(&calls)[2].0.clone();
+    assert!(is_view(&calls, &source, &h_t, SRGB), "{calls:#?}");
+    assert!(core.set_target(level0(t)));
+    core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+    other_pass(&mut core);
+    assert!(core.resolve_into(level0(t), level0(d)));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 3, "{calls:#?}");
+    assert_eq!(
+        line(found[2], "  resolve0 "),
+        Some(h_d.as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(targets(&calls)[2].0, h_t, "{calls:#?}");
+    assert!(core.set_target(level0(t)));
+    assert_eq!(core.draw_up(&through_twin, &triangle(&binds)), Ok(()));
+    assert!(core.resolve_into(level0(t), level0(d)));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(resolved_pass(&calls), twin, "folded");
+}
+
+/// A resolve ends the destination's open pass and follows it; a later draw on it opens another.
+#[test]
+fn a_resolve_ends_the_destinations_pass() {
+    const DEVICE: u64 = 0x38c;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (d, h_d) = stored(&mut core, DEVICE, 2, TextureKind::Tex2d, 64, 1);
+    let binds = ff_binds();
+    assert!(core.set_target(level0(d)));
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    assert!(core.resolve_into(level0(t), level0(d)));
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 3, "{calls:#?}");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [h_d.clone(), h_t, h_d.clone()], "{calls:#?}");
+    assert_eq!(
+        line(found[1], "  resolve0 "),
+        Some(h_d.as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(draws(&calls), 2, "{calls:#?}");
+}
+
+/// A resolve the core cannot record is refused, and nothing is recorded.
+///
+/// A single-sample source, a multisampled destination, another size, another format, and a
+/// format Metal does not resolve (an integer one: the fakes answer every GPU family, and Apple9
+/// resolves the 32-bit floats).
+#[test]
+fn a_resolve_refuses_what_it_cannot_do() {
+    const DEVICE: u64 = 0x38d;
+    const RGBA16_UINT: u32 = winemetal_sys::wire::WMT_PIXEL_FORMAT_RGBA16_UINT;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (ms, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (ms_too, _) = stored_desc(&mut core, DEVICE, 2, &ms_desc(BGRA8, 64, 4));
+    let (one, _) = stored(&mut core, DEVICE, 3, TextureKind::Tex2d, 64, 1);
+    let (one_too, _) = stored(&mut core, DEVICE, 4, TextureKind::Tex2d, 64, 1);
+    let (small, _) = stored(&mut core, DEVICE, 5, TextureKind::Tex2d, 32, 1);
+    let (rgba, _) = stored_desc(&mut core, DEVICE, 6, &flat(RGBA8, 64, 4));
+    let (int_ms, _) = stored_desc(&mut core, DEVICE, 7, &ms_desc(RGBA16_UINT, 64, 4));
+    let (int_one, _) = stored_desc(&mut core, DEVICE, 8, &flat(RGBA16_UINT, 64, 8));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for (what, source, destination) in [
+        ("a single-sample source", one, one_too),
+        ("a multisampled destination", ms, ms_too),
+        ("another size", ms, small),
+        ("another format", ms, rgba),
+        ("a format Metal does not resolve", int_ms, int_one),
+    ] {
+        assert!(
+            !core.resolve_into(level0(source), level0(destination)),
+            "{what}"
+        );
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !calls.contains(&"MTLCommandBuffer_renderCommandEncoder".to_owned()),
+        "{calls:#?}"
+    );
+}

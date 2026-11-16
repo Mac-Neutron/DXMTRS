@@ -23,7 +23,7 @@ pub fn core_on_fakes(handle: u64) -> CoreDevice {
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { Obj::adopt(handle) }.expect("a non-zero handle");
     let mut core = CoreDevice::new(mtl, queue_profile());
-    core.attach(1, 64, 32);
+    core.attach(1, 64, 32, 1);
     core
 }
 

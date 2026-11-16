@@ -119,6 +119,14 @@ impl CoreDevice {
             .unwrap_or((first.width, first.height));
         // Every attachment has target 0's sample count (the set's rule), which the barrier takes.
         let samples = u32::from(first.samples);
+        // The view each attached target is written through, which a resolve of it reads.
+        for (slot, view) in views.iter().enumerate() {
+            if view.is_some()
+                && let Some(target) = self.slot_target(slot)
+            {
+                self.note_written(target, colors[slot]);
+            }
+        }
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
             enc.start_render_pass(planes, 0, count, None);
@@ -209,6 +217,7 @@ impl CoreDevice {
             return;
         };
         let (texture, key) = (target.texture, target.key);
+        self.note_cleared(slot, key.format());
         self.close_pass();
         let color = WMTClearColor {
             r: f64::from(rgba[0]),
@@ -241,6 +250,7 @@ impl CoreDevice {
             return;
         };
         let (texture, key) = (target.texture, target.key);
+        self.note_cleared(slot, key.format());
         let rects = scissor_rects(rects);
         self.close_pass();
         self.emit(move |enc| {
@@ -252,6 +262,13 @@ impl CoreDevice {
                 quad.end(enc);
             });
         });
+    }
+
+    /// Records that a Clear writes the target bound at `slot` through its view in `format`.
+    fn note_cleared(&mut self, slot: usize, format: u32) {
+        if let Some(target) = self.slot_target(slot) {
+            self.note_written(target, format);
+        }
     }
 }
 

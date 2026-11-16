@@ -2363,6 +2363,7 @@ fn create_core_device(
         isize::try_from(hwnd).unwrap_or_default(),
         pp.back_buffer_width,
         pp.back_buffer_height,
+        1,
     );
     // The auto depth-stencil, of the back buffer's size; a format of 0 asks for none, as under
     // mtld3d. The entry point checked the format before the runtimes part.

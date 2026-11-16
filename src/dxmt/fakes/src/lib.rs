@@ -193,6 +193,11 @@ const extern "C-unwind" fn fake_supports_family(_device: u64, _family: u32) -> b
     true
 }
 
+#[unsafe(export_name = "MTLDevice_supportsBCTextureCompression")]
+const extern "C-unwind" fn fake_supports_bc(_device: u64) -> bool {
+    true
+}
+
 #[unsafe(export_name = "MTLDevice_setShouldMaximizeConcurrentCompilation")]
 const extern "C-unwind" fn fake_maximize_concurrent(_device: u64, _value: bool) {}
 

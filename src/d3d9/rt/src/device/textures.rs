@@ -110,6 +110,11 @@ pub struct TextureBind {
 pub(super) struct Stored {
     texture: Arc<Texture>,
     desc: CoreTextureDesc,
+    /// The `WMTPixelFormat` of the view the last pass or Clear wrote it through.
+    ///
+    /// Its stored format or its sRGB twin's; the stored one until a pass or Clear writes it. A
+    /// resolve of a multisampled texture reads it through that view (DXMTRS C4b-3d5).
+    last_written: u32,
 }
 
 /// The view format of `pixel_format` with `swizzle` in its high bits.
@@ -196,8 +201,42 @@ impl CoreDevice {
             Stored {
                 texture,
                 desc: *desc,
+                last_written: desc.pixel_format,
             },
         );
+    }
+
+    /// The `WMTPixelFormat` of the view the last pass or Clear wrote `target` through.
+    ///
+    /// A texture's, or a multisampled back buffer's companion's (DXMTRS C4b-3d5); `None` for a
+    /// single-sample back buffer, which nothing resolves, or a texture the store lacks. What a
+    /// resolve and Present read a multisampled target through, as mtld3d resolves.
+    pub(super) fn last_written(&self, target: TargetRef) -> Option<u32> {
+        match target {
+            TargetRef::BackBuffer => self
+                .back_buffer
+                .as_ref()
+                .and_then(|back_buffer| back_buffer.companion.as_ref())
+                .map(|companion| companion.last_written),
+            TargetRef::Texture { id, .. } => self.textures.get(&id).map(|s| s.last_written),
+        }
+    }
+
+    /// Records that a pass or Clear writes `target` through its view in `format`.
+    pub(super) fn note_written(&mut self, target: TargetRef, format: u32) {
+        let written = match target {
+            TargetRef::BackBuffer => self
+                .back_buffer
+                .as_mut()
+                .and_then(|back_buffer| back_buffer.companion.as_mut())
+                .map(|companion| &mut companion.last_written),
+            TargetRef::Texture { id, .. } => {
+                self.textures.get_mut(&id).map(|s| &mut s.last_written)
+            }
+        };
+        if let Some(written) = written {
+            *written = format;
+        }
     }
 
     /// The `WMTPixelFormat` `id`'s texture is stored in, if the store holds it.

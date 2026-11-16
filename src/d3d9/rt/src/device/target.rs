@@ -88,7 +88,7 @@ impl CoreDevice {
                 texel_bytes: 4,
                 level: 0,
                 slice: 0,
-                samples: 1,
+                samples: back_buffer.drawn().2,
             }),
             TargetRef::Texture { id, level, face } => self.texture_shape(id, level, face),
         }
@@ -105,10 +105,13 @@ impl CoreDevice {
     pub(super) fn resolve(&self, target: TargetRef) -> Option<Resolved> {
         let shape = self.shape(target)?;
         match target {
-            TargetRef::BackBuffer => self.back_buffer.as_ref().map(|back_buffer| Resolved {
-                texture: Arc::clone(&back_buffer.texture),
-                key: back_buffer.key,
-                shape,
+            TargetRef::BackBuffer => self.back_buffer.as_ref().map(|back_buffer| {
+                let (texture, key, _) = back_buffer.drawn();
+                Resolved {
+                    texture: Arc::clone(texture),
+                    key,
+                    shape,
+                }
             }),
             TargetRef::Texture { id, .. } => self.texture_target(id, shape),
         }
