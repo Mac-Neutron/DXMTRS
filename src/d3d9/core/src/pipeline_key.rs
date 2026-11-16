@@ -29,6 +29,7 @@ use crate::{
     dxso::{FfPsKey, FfVsKey},
     ff_build,
     ids::ProgramId,
+    multisample::SAMPLE_MASK_ALL,
     pipeline_state::{CoreBlend, ExtraColorAttachments, PipelineRsBits, core_blend},
     render_state::enum_value,
     shader_create::{ShaderCreateError, parse_shader},
@@ -174,9 +175,9 @@ pub enum PsStageKey {
 
 /// What a pipeline of the core's draws depends on.
 ///
-/// The arm draws to up to four one-sample colour targets (colour 0 and the extras at index 1-3)
-/// and at most one depth-stencil, so these fields are all of it. The stride is here because D3D9
-/// fetches through a Metal vertex descriptor.
+/// The arm draws to up to four colour targets of one sample count (colour 0 and the extras at
+/// index 1-3) and at most one depth-stencil of that count, so these fields are all of it. The
+/// stride is here because D3D9 fetches through a Metal vertex descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub vs: VsStageKey,
@@ -199,6 +200,10 @@ pub struct PipelineKey {
     ///
     /// None for a slot the pass leaves empty (DXMTRS C4b-3d4).
     pub extras: [Option<CoreExtra>; 3],
+    /// The pass's sample count: target 0's, 1 for a single-sample target (DXMTRS C4b-3d5).
+    pub samples: u8,
+    /// Coverage from the fragment's alpha: requested, on a multisampled target (DXMTRS C4b-3d5).
+    pub alpha_to_coverage: bool,
 }
 
 impl PipelineKey {
@@ -257,6 +262,10 @@ pub struct PipelineSource {
     pub blend: Option<CoreBlend>,
     /// The colour targets at index 1-3: `extras[i]` is slot `i + 1`'s, none for an empty slot.
     pub extras: [Option<CoreExtra>; 3],
+    /// The pipeline's raster sample count.
+    pub samples: u8,
+    /// Whether the pipeline takes coverage from the fragment's alpha.
+    pub alpha_to_coverage: bool,
 }
 
 impl PipelineSource {
@@ -293,6 +302,8 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         depth_format,
         blend,
         extras,
+        samples,
+        alpha_to_coverage,
     } = key;
     let elements = layout.elements();
     let (vs_code, declared, clip_plane_count, sampler_kinds, resolved) = match vs {
@@ -383,6 +394,8 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         depth_format: *depth_format,
         blend: blend.clone(),
         extras: extras.clone(),
+        samples: *samples,
+        alpha_to_coverage: *alpha_to_coverage,
     })
 }
 
@@ -481,6 +494,29 @@ pub const fn extra_present(formats: [u32; 3]) -> u8 {
         i += 1;
     }
     mask
+}
+
+/// A core draw's pixel variant for its coverage (DXMTRS C4b-3d5).
+///
+/// What mtld3d's draw adds last: a `sample_mask` other than [`SAMPLE_MASK_ALL`] (the mask
+/// `effective_sample_mask` narrowed against target 0) is the stage's `[[sample_mask]]` output, and
+/// `alpha_to_coverage` (requested, on a multisampled target) takes the alpha test's place, so the
+/// stage tests no alpha. The fixed-function stage honours both, as a program does. Applied to the
+/// final variant, which the alpha-reference bind and the key then take.
+#[must_use]
+pub fn core_coverage_variant(
+    mut variant: VariantKey,
+    sample_mask: u8,
+    alpha_to_coverage: bool,
+) -> VariantKey {
+    if sample_mask != SAMPLE_MASK_ALL {
+        variant.flags.insert(VariantFlags::SAMPLE_MASK);
+        variant.sample_mask = sample_mask;
+    }
+    if alpha_to_coverage {
+        variant.alpha_func = 0;
+    }
+    variant
 }
 
 /// A core draw's pixel variant for the view its pass attaches (C4b-3d3).
@@ -632,10 +668,12 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
 /// The depth format a core draw's key names, or why the core refuses the draw (C4b-3d2).
 ///
 /// `bound` is the bound depth-stencil's `WMTPixelFormat` (none: the key names none),
-/// `samples_bound` whether the draw samples it, and `uses_plane` whether the draw's state tests
-/// or writes one of its planes. A depth-stencil the draw does not sample is the key's, whatever
-/// its size (C4b-3d3). A draw that samples it goes without it, which only a draw that uses no
-/// plane may.
+/// `samples_bound` whether the draw samples it, `uses_plane` whether the draw's state tests or
+/// writes one of its planes, and `same_samples` whether its sample count is colour target 0's.
+/// One of another count is left out before anything else, as mtld3d's pass leaves it out: the
+/// key names none and nothing is refused (DXMTRS C4b-3d5). A depth-stencil the draw does not
+/// sample is the key's, whatever its size (C4b-3d3). A draw that samples it goes without it,
+/// which only a draw that uses no plane may.
 ///
 /// # Errors
 ///
@@ -644,10 +682,14 @@ pub const fn core_key_depth(
     bound: Option<u32>,
     samples_bound: bool,
     uses_plane: bool,
+    same_samples: bool,
 ) -> Result<u32, CoreRefusal> {
     let Some(format) = bound else {
         return Ok(0);
     };
+    if !same_samples {
+        return Ok(0);
+    }
     if !samples_bound {
         return Ok(format);
     }

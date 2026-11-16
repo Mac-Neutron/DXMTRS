@@ -224,7 +224,9 @@ pub use depth::DepthRef;
 pub use draw::{Bind, DrawData, DrawRefused, Indices, Stage};
 pub use swapchain::present_after;
 pub use target::TargetRef;
-pub use textures::{CoreTextureDesc, TextureBind, TextureKind, UploadRegion, view_format};
+pub use textures::{
+    CoreTextureDesc, CoreTextureFlags, TextureBind, TextureKind, UploadRegion, view_format,
+};
 
 #[cfg(test)]
 mod fixture;

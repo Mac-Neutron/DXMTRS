@@ -84,6 +84,8 @@ fn prog_key(vs: ShaderCode, ps: ShaderCode) -> PipelineKey {
         depth_format: 0,
         blend: None,
         extras: [None, None, None],
+        samples: 1,
+        alpha_to_coverage: false,
     }
 }
 
@@ -453,10 +455,10 @@ fn texture(core: &mut crate::device::CoreDevice, id: u64) -> mtld3d_core::ids::T
         height: 2,
         depth: 1,
         levels: 1,
-        view_twins: false,
+        flags: super::super::CoreTextureFlags::empty(),
         srgb_format: 0,
         block: (1, 1, 4),
-        render_target: false,
+        samples: 1,
     };
     core.texture_create(id, &desc);
     let whole = super::super::UploadRegion {

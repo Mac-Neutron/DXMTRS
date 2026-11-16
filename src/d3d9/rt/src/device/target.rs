@@ -11,7 +11,9 @@
 //! Three more targets are kept at index 1-3 ([`CoreDevice::set_extra_target`]). A draw's pass
 //! attaches the pass set: target 0, and each of them that resolves, has target 0's size and is no
 //! target already in the set; under sRGB write every member through its twin when every member
-//! has one (DXMTRS C4b-3d4). A change of any of them ends the open render pass too.
+//! has one (DXMTRS C4b-3d4). A member has target 0's sample count too, which the pass, its
+//! pipeline and its tile barrier take (DXMTRS C4b-3d5). A change of any of them ends the open
+//! render pass too.
 
 use std::sync::Arc;
 
@@ -47,6 +49,8 @@ pub(super) struct Shape {
     /// The level and slice (a cube's face) of the target's one subresource.
     pub(super) level: u32,
     pub(super) slice: u32,
+    /// Samples a texel; 1 for a single-sample target (DXMTRS C4b-3d5).
+    pub(super) samples: u8,
 }
 
 impl Shape {
@@ -84,6 +88,7 @@ impl CoreDevice {
                 texel_bytes: 4,
                 level: 0,
                 slice: 0,
+                samples: 1,
             }),
             TargetRef::Texture { id, level, face } => self.texture_shape(id, level, face),
         }
@@ -144,13 +149,26 @@ impl CoreDevice {
         self.shape(self.target).map(|t| t.pixel_format)
     }
 
-    /// The size of the colour target bound at `slot` (0-3), in the pass set or not (C4b-3d4).
+    /// The size of the colour target bound at `slot` (0-3) that a Clear reaches.
     ///
-    /// `None` for an empty slot, or one whose target does not resolve.
+    /// Every bound one, in the pass set or not (C4b-3d4), but one of target 0's size and another
+    /// sample count than target 0's: mtld3d's Clear leaves that one alone, since it is in no pass
+    /// and not of the other size that sends a Clear to a target apart (DXMTRS C4b-3d5). `None`
+    /// for an empty slot, one whose target or target 0 does not resolve, and that one.
     #[must_use]
-    pub fn color_size(&self, slot: usize) -> Option<(u32, u32)> {
+    pub fn clear_size(&self, slot: usize) -> Option<(u32, u32)> {
         let shape = self.shape(self.slot_target(slot)?)?;
-        Some((shape.width, shape.height))
+        let first = self.shape(self.target)?;
+        let size = (shape.width, shape.height);
+        (size != (first.width, first.height) || shape.samples == first.samples).then_some(size)
+    }
+
+    /// Colour target 0's sample count; 1 when it does not resolve (DXMTRS C4b-3d5).
+    ///
+    /// Every draw's key names it, and its pass, pipeline and tile barrier take it.
+    #[must_use]
+    pub fn target_samples(&self) -> u8 {
+        self.shape(self.target).map_or(1, |shape| shape.samples)
     }
 
     /// The target bound at colour slot `slot` (0-3): target 0 or an extra; none for an empty one.
@@ -199,10 +217,11 @@ impl CoreDevice {
 
     /// The pass set: the shape of each colour slot a draw's pass attaches, none for the others.
     ///
-    /// Target 0, and each extra, in slot order, that resolves, has target 0's width and height
-    /// (mtld3d's rule: one of another size is skipped by draws) and is not the `TargetRef` of
-    /// target 0 or of a lower slot in the set (Metal is never handed one view twice). All none
-    /// when target 0 does not resolve. The one place the set is decided.
+    /// Target 0, and each extra, in slot order, that resolves, has target 0's width, height and
+    /// sample count (mtld3d's rules: one of another size or count is skipped by draws; a pass's
+    /// attachments share one count, DXMTRS C4b-3d5) and is not the `TargetRef` of target 0 or of
+    /// a lower slot in the set (Metal is never handed one view twice). All none when target 0
+    /// does not resolve. The one place the set is decided.
     pub(super) fn pass_set(&self) -> [Option<Shape>; 4] {
         let mut set = [None; 4];
         let Some(first) = self.shape(self.target) else {
@@ -214,10 +233,10 @@ impl CoreDevice {
             let Some(target) = extra.filter(|target| !members.contains(&Some(*target))) else {
                 continue;
             };
-            let Some(shape) = self
-                .shape(target)
-                .filter(|shape| (shape.width, shape.height) == (first.width, first.height))
-            else {
+            let Some(shape) = self.shape(target).filter(|shape| {
+                (shape.width, shape.height, shape.samples)
+                    == (first.width, first.height, first.samples)
+            }) else {
                 continue;
             };
             set[slot] = Some(shape);

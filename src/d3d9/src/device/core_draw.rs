@@ -22,13 +22,15 @@ use mtld3d_core::{
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     format::{FormatMapping, map_d3d_format},
+    multisample::{alpha_to_coverage_requested, effective_sample_mask},
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
-        VsStageKey, core_draw_kinds, core_extras, core_key_depth, core_ps_variant, core_scissor,
-        core_srgb_variant, core_texture_variant, core_viewport, extra_present, float_rows,
-        indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
+        VsStageKey, core_coverage_variant, core_draw_kinds, core_extras, core_key_depth,
+        core_ps_variant, core_scissor, core_srgb_variant, core_texture_variant, core_viewport,
+        extra_present, float_rows, indexed_up_vertices, pos_fixup, rhw_depth_clamp, up_byte_count,
+        viewport_depth_range,
     },
-    pipeline_state::core_blend,
+    pipeline_state::{PipelineRsBits, PipelineRsFlags, core_blend},
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
         sample_unfiltered, snapshot_from_state, vertex_lod_table,
@@ -206,9 +208,12 @@ fn resolve(
     let (target, colors, hardware_srgb) =
         core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0);
     let [color_format, f1, f2, f3] = colors;
-    // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size; none
-    // for a draw that samples it and uses no plane of it.
-    let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound)?;
+    // Target 0's sample count, which the pass, its pipeline and its coverage follow (DXMTRS
+    // C4b-3d5).
+    let sample_count = dev.core.as_deref().map_or(1, CoreDevice::target_samples);
+    // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size, when it
+    // has target 0's count; none for a draw that samples it and uses no plane of it.
+    let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count)?;
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
     let mut binds = Binds::default();
@@ -427,6 +432,27 @@ fn resolve(
         core_texture_variant(variant, &masks, table.is_some()),
         hardware_srgb,
     );
+    // Coverage follows target 0, not the device (DXMTRS C4b-3d5): mtld3d's own predicates. The
+    // sample mask narrowed against target 0's count and type (a non-maskable or single-sample
+    // target ignores it); alpha-to-coverage, requested by `D3DRS_ADAPTIVETESS_Y` or the A2M
+    // latch, on a multisampled target only, where it replaces the alpha test.
+    let mut requested = PipelineRsBits::default();
+    requested.flags.set(
+        PipelineRsFlags::ALPHA_TO_COVERAGE,
+        alpha_to_coverage_requested(&rs, dev.a2m_enabled()),
+    );
+    let alpha_to_coverage = requested.alpha_to_coverage(sample_count);
+    let variant = core_coverage_variant(
+        variant,
+        effective_sample_mask(
+            rs[mtld3d_types::D3DRS_MULTISAMPLEMASK as usize],
+            sample_count,
+            // SAFETY: null, or the surface bound at slot 0, which its slot's refcount keeps live.
+            unsafe { dev.bound_rt().render_target(0).as_ref() }
+                .map_or(0, |surface| surface.multi_sample().multi_sample_type),
+        ),
+        alpha_to_coverage,
+    );
     if let Some(core) = dev.core.as_deref_mut() {
         let every_slot = slots
             .iter()
@@ -522,6 +548,8 @@ fn resolve(
             .then(|| core_blend(&rs, slot_has_alpha(dev, 0)))
             .flatten(),
         extras: core_extras([f1, f2, f3], &rs, written, alpha),
+        samples: sample_count,
+        alpha_to_coverage,
     };
     Ok((key, binds, target))
 }
@@ -586,10 +614,12 @@ fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
         .is_none_or(FormatMapping::has_alpha)
 }
 
-/// Whether a depth-stencil is bound, and the depth format a draw's key names.
+/// Whether a depth-stencil the pass can attach is bound, and the depth format a draw's key names.
 ///
 /// From the device's depth-stencil and render states `rs`; `samples_bound` is whether the draw
-/// samples the bound depth-stencil's texture.
+/// samples the bound depth-stencil's texture, `samples` colour target 0's sample count. A bound
+/// depth-stencil of another count is left out of the pass, as mtld3d's draw leaves it out: the
+/// key names no format and the clamp sees none bound (DXMTRS C4b-3d5).
 ///
 /// # Errors
 ///
@@ -598,16 +628,19 @@ fn key_depth(
     dev: &DeviceInner,
     rs: &[u32; RENDER_STATE_COUNT],
     samples_bound: bool,
+    samples: u8,
 ) -> Result<(bool, u32), i32> {
-    let bound = dev.core.as_deref().and_then(CoreDevice::depth_format);
+    let core = dev.core.as_deref();
+    let bound = core.and_then(CoreDevice::depth_format);
+    let same_samples = core.and_then(CoreDevice::depth_samples) == Some(samples);
     // What the draw's state tests or writes of the planes that depth-stencil has.
     let uses_plane = bound.is_some_and(|format| {
         let has_stencil = format == PixelFormat::Depth32FloatStencil8 as u32;
         let gated = depth_snapshot(rs).gated_on_stencil_attachment(has_stencil);
         gated.uses_depth() || gated.stencil_enable != 0
     });
-    core_key_depth(bound, samples_bound, uses_plane)
-        .map(|format| (bound.is_some(), format))
+    core_key_depth(bound, samples_bound, uses_plane, same_samples)
+        .map(|format| (bound.is_some() && same_samples, format))
         .map_err(|refusal| {
             refuse_under_core(refusal.name());
             D3DERR_NOTAVAILABLE
@@ -617,8 +650,9 @@ fn key_depth(
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.
 ///
 /// A crossing layout answers `D3DERR_NOTAVAILABLE` (logged once); a draw `d3d9_rt` drops for
-/// another reason answers `D3D_OK`, as under C4a, one whose colour targets are not its key's
-/// logged once (unreachable while the key's colours are `target_desc`'s).
+/// another reason answers `D3D_OK`, as under C4a, one whose colour targets or depth-stencil are
+/// not its key's logged once (unreachable while the key's colours, count and depth format are
+/// `target_desc`'s, `target_samples`' and `key_depth`'s).
 fn draw(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -680,6 +714,13 @@ fn draw(
             mtld3d_shared::log_once_warn!(
                 target: crate::LOG_TARGET,
                 "d3d9 core: a draw's colour targets are not its key's; the draw is dropped"
+            );
+            D3D_OK
+        }
+        Err(DrawRefused::Depth) => {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: a draw's depth-stencil is not its key's; the draw is dropped"
             );
             D3D_OK
         }

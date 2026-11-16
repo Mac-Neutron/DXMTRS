@@ -117,6 +117,8 @@ impl CoreDevice {
         let (width, height) = self
             .pass_extent(attached)
             .unwrap_or((first.width, first.height));
+        // Every attachment has target 0's sample count (the set's rule), which the barrier takes.
+        let samples = u32::from(first.samples);
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
             enc.start_render_pass(planes, 0, count, None);
@@ -156,7 +158,7 @@ impl CoreDevice {
                 color.target.store_action = WMT_STORE_ACTION_STORE;
                 targets.tile_barrier_pso_key[slot] = colors[slot];
             }
-            targets.tile_barrier_pso_key[8] = 1;
+            targets.tile_barrier_pso_key[8] = samples;
             targets.render_target_width = width;
             targets.render_target_height = height;
         });

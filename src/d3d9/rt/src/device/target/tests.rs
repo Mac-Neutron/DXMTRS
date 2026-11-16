@@ -19,10 +19,11 @@ use winemetal_sys::wire::{
 
 use super::{Resolved, TargetRef};
 use crate::device::{
-    CoreDevice, CoreTextureDesc, DrawData, DrawRefused, Stage, TextureKind,
+    CoreDevice, CoreTextureDesc, CoreTextureFlags, DepthRef, DrawData, DrawRefused, Stage,
+    TextureKind,
     fixture::{
-        at, core_on_fakes, ff_binds, key, key_extras, line, passes, target_desc, targets,
-        textures_made, triangle,
+        at, core_on_fakes, depth_desc, ff_binds, key, key_extras, line, ms_desc, passes,
+        target_desc, targets, textures_made, triangle,
     },
 };
 
@@ -210,7 +211,7 @@ fn a_level_and_a_face_have_their_own_views() {
     );
     let plain = TextureId::from_raw(3);
     let mut desc = target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 8, 1, 4);
-    desc.render_target = false;
+    desc.flags.remove(CoreTextureFlags::RENDER_TARGET);
     core.texture_create(plain, &desc);
     let current = core.target();
     for (what, target) in [
@@ -355,7 +356,7 @@ fn a_target_without_a_twin_keeps_its_format() {
     assert_eq!(core.target_desc(true), Some(((64, 64), [BGRA8, 0, 0, 0])));
     let twin = TextureId::from_raw(2);
     let mut desc = target_desc(BGRA8, TextureKind::Tex2d, 64, 1, 4);
-    desc.view_twins = true;
+    desc.flags.insert(CoreTextureFlags::VIEW_TWINS);
     desc.srgb_format = SRGB;
     core.texture_create(twin, &desc);
     assert!(core.set_target(level0(twin)));
@@ -443,7 +444,7 @@ const fn flat(format: u32, size: u32, texel_bytes: u32) -> CoreTextureDesc {
 
 /// `desc` with an sRGB twin of `srgb_format`.
 const fn twinned(mut desc: CoreTextureDesc, srgb_format: u32) -> CoreTextureDesc {
-    desc.view_twins = true;
+    desc.flags = desc.flags.union(CoreTextureFlags::VIEW_TWINS);
     desc.srgb_format = srgb_format;
     desc
 }
@@ -1025,7 +1026,7 @@ fn a_rect_clear_reaches_one_slot() {
 
 /// The size of the target bound at each slot, in the pass set or not; none for an empty slot.
 #[test]
-fn color_size_lists_bound_slots() {
+fn clear_size_lists_bound_slots() {
     const DEVICE: u64 = 0x34f;
     let (mut core, _) = core_on_a_64_target(DEVICE);
     let (small, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 32, 4));
@@ -1033,7 +1034,7 @@ fn color_size_lists_bound_slots() {
     assert!(core.set_extra_target(1, Some(level0(small))));
     assert!(core.set_extra_target(3, Some(level0(wide))));
     assert_eq!(
-        [0, 1, 2, 3, 4].map(|slot| core.color_size(slot)),
+        [0, 1, 2, 3, 4].map(|slot| core.clear_size(slot)),
         [Some((64, 64)), Some((32, 32)), None, Some((64, 64)), None]
     );
 }
@@ -1049,7 +1050,7 @@ fn an_extra_that_cannot_be_bound_is_refused() {
     assert!(!core.set_extra_target(0, Some(level0(kept))));
     assert!(!core.set_extra_target(4, Some(level0(kept))));
     assert!(!core.set_extra_target(1, Some(unknown)));
-    assert_eq!(core.color_size(1), Some((64, 64)));
+    assert_eq!(core.clear_size(1), Some((64, 64)));
     assert_eq!(
         core.target_desc(false),
         Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
@@ -1249,4 +1250,253 @@ fn dxmt_core_resolves_through_a_twin() {
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(resolved_pass(&calls), twin, "folded");
     assert_eq!(targets(&calls)[0].0, source_twin, "{calls:#?}");
+}
+
+/// The key of the fixture's draw with `samples` a texel and alpha-to-coverage `a2c`.
+fn key_of_count(samples: u8, a2c: bool) -> PipelineKey {
+    PipelineKey {
+        samples,
+        alpha_to_coverage: a2c,
+        ..key(0xf)
+    }
+}
+
+/// A multisampled render target is made of the multisample type, and zeroed by a pass.
+#[test]
+fn a_multisampled_texture_is_made_so() {
+    const DEVICE: u64 = 0x383;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    core.texture_create(TextureId::from_raw(1), &ms_desc(BGRA8, 64, 4));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let made = calls
+        .iter()
+        .find(|c| c.starts_with("MTLDevice_newTexture "))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    let bits = made
+        .rsplit_once("bits=0x")
+        .and_then(|(_, hex)| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| panic!("{made}"));
+    let field = |shift: u32| (bits >> shift) & 0xff;
+    assert_eq!(
+        (
+            field(WMTTextureInfo::TYPE_SHIFT),
+            field(WMTTextureInfo::SAMPLE_COUNT_SHIFT)
+        ),
+        (WMT_TEXTURE_TYPE2D_MULTISAMPLE, 4),
+        "{made}"
+    );
+    let zeroed = calls
+        .iter()
+        .filter(|c| *c == "  color0 load=2 store=1 clear=0,0,0,0")
+        .count();
+    assert_eq!(zeroed, 1, "{calls:#?}");
+}
+
+/// A key names target 0's sample count, whatever pass is open; its pipeline and pass take it.
+///
+/// The pass attaches the multisampled texture itself (its one view of the multisample type).
+#[test]
+fn the_key_names_the_sample_count() {
+    const DEVICE: u64 = 0x384;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (u, _) = stored(&mut core, DEVICE, 2, TextureKind::Tex2d, 64, 1);
+    assert!(core.set_target(level0(t)));
+    assert_eq!(core.target_samples(), 4);
+    let binds = ff_binds();
+    let refused = Err(DrawRefused::Target);
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
+    let four = key_of_count(4, false);
+    assert_eq!(core.draw_up(&four, &triangle(&binds)), Ok(()));
+    // The four-sample draw's pass is open on the same colours: no excuse for another count.
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), refused);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
+    assert!(
+        calls.contains(&"  pso samples=4 a2c=0".to_owned()),
+        "{calls:#?}"
+    );
+    assert_eq!(targets(&calls)[0].0, h_t, "{calls:#?}");
+    assert!(core.set_target(level0(u)));
+    assert_eq!(core.target_samples(), 1);
+    assert_eq!(core.draw_up(&four, &triangle(&binds)), refused);
+    assert_eq!(core.draw_up(&key(0xf), &triangle(&binds)), Ok(()));
+}
+
+/// An extra of another sample count than target 0 is no member of the pass set.
+#[test]
+fn an_extra_of_another_count_is_not_in_the_set() {
+    const DEVICE: u64 = 0x385;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (ms0, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (ms1, _) = stored_desc(&mut core, DEVICE, 2, &ms_desc(RGBA8, 64, 4));
+    let (one0, _) = stored(&mut core, DEVICE, 3, TextureKind::Tex2d, 64, 1);
+    let (one1, _) = stored_desc(&mut core, DEVICE, 4, &flat(RGBA8, 64, 4));
+    for (what, t0, t1, slot1) in [
+        ("4 beside 1", ms0, one1, 0),
+        ("1 beside 4", one0, ms1, 0),
+        ("4 beside 4", ms0, ms1, RGBA8),
+    ] {
+        assert!(core.set_target(level0(t0)), "{what}");
+        assert!(core.set_extra_target(1, Some(level0(t1))), "{what}");
+        assert_eq!(
+            core.target_desc(false),
+            Some(((64, 64), [BGRA8, slot1, 0, 0])),
+            "{what}"
+        );
+    }
+}
+
+/// A depth-stencil of another sample count than target 0 is left out of the draw's pass.
+///
+/// A key naming its format is refused; one naming none draws without it. Equal counts attach.
+#[test]
+fn a_depth_of_another_count_is_left_out() {
+    const DEVICE: u64 = 0x386;
+    const D32F_S8: u32 = winemetal_sys::wire::WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (u, _) = stored(&mut core, DEVICE, 2, TextureKind::Tex2d, 64, 1);
+    let ms_depth = CoreTextureDesc {
+        samples: 4,
+        ..depth_desc(D32F_S8, 64, 64, 1)
+    };
+    let (d4, _) = stored_desc(&mut core, DEVICE, 3, &ms_depth);
+    let (d1, _) = stored_desc(&mut core, DEVICE, 4, &depth_desc(D32F_S8, 64, 64, 1));
+    let binds = ff_binds();
+    let named = |samples| PipelineKey {
+        depth_format: D32F_S8,
+        ..key_of_count(samples, false)
+    };
+    for (what, target, depth, samples) in [
+        ("4-sample depth, 1-sample target", u, d4, 1),
+        ("1-sample depth, 4-sample target", t, d1, 4),
+    ] {
+        assert!(core.set_target(level0(target)), "{what}");
+        assert!(
+            core.set_depth(Some(DepthRef {
+                id: depth,
+                level: 0
+            })),
+            "{what}"
+        );
+        assert_eq!(
+            core.draw_up(&named(samples), &triangle(&binds)),
+            Err(DrawRefused::Depth),
+            "{what}"
+        );
+        assert_eq!(
+            core.draw_up(&key_of_count(samples, false), &triangle(&binds)),
+            Ok(()),
+            "{what}"
+        );
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        let found = passes(&calls);
+        assert_eq!(found.len(), 1, "{what}: {calls:#?}");
+        assert_eq!(line(found[0], "  depth "), None, "{what}: {calls:#?}");
+    }
+    assert!(core.set_depth(Some(DepthRef { id: d4, level: 0 })));
+    assert_eq!(core.depth_samples(), Some(4));
+    assert_eq!(core.draw_up(&named(4), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(line(passes(&calls)[0], "  depth ").is_some(), "{calls:#?}");
+}
+
+/// Alpha-to-coverage is the pipeline's: two keys differing in it build two pipelines.
+#[test]
+fn alpha_to_coverage_is_the_pipelines() {
+    const DEVICE: u64 = 0x387;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    assert!(core.set_target(level0(t)));
+    let binds = ff_binds();
+    for a2c in [true, false] {
+        assert_eq!(
+            core.draw_up(&key_of_count(4, a2c), &triangle(&binds)),
+            Ok(())
+        );
+    }
+    assert_eq!(core.pipelines_len(), 2);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    for line in ["  pso samples=4 a2c=1", "  pso samples=4 a2c=0"] {
+        assert!(calls.contains(&line.to_owned()), "{line}: {calls:#?}");
+    }
+}
+
+/// A whole Clear of a multisampled target folds into its pass; a rect Clear is a 4-sample quad.
+#[test]
+fn a_clear_of_a_multisampled_target() {
+    const DEVICE: u64 = 0x388;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    assert!(core.set_target(level0(t)));
+    core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
+    let binds = ff_binds();
+    assert_eq!(
+        core.draw_up(&key_of_count(4, false), &triangle(&binds)),
+        Ok(())
+    );
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=1,0,0,1"),
+        "{calls:#?}"
+    );
+    core.clear_rects(0, &[[8, 8, 16, 16]], [0.0, 1.0, 0.0, 1.0], false);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(line(found[0], "  samples="), Some("4"), "{calls:#?}");
+    assert!(
+        calls.contains(&"  pso samples=4 a2c=0".to_owned()),
+        "{calls:#?}"
+    );
+}
+
+/// A multisampled target is not read back: nothing is recorded.
+#[test]
+fn a_multisampled_target_is_not_read_back() {
+    const DEVICE: u64 = 0x389;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let mut out = vec![0_u8; 64 * 4 * 64];
+    assert!(!core.read_back(level0(t), &mut out, 64 * 4));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !calls.contains(&"MTLCommandBuffer_blitCommandEncoder".to_owned()),
+        "{calls:#?}"
+    );
+}
+
+/// A Clear does not reach a bound target of target 0's size and another sample count.
+///
+/// One of another size is cleared apart whatever its count, and one of target 0's count is.
+#[test]
+fn a_clear_skips_a_same_size_target_of_another_count() {
+    const DEVICE: u64 = 0x38a;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    let (same, _) = stored_desc(&mut core, DEVICE, 2, &flat(RGBA8, 64, 4));
+    let (small, _) = stored_desc(&mut core, DEVICE, 3, &flat(RGBA8, 32, 4));
+    let (equal, _) = stored_desc(&mut core, DEVICE, 4, &ms_desc(RGBA8, 64, 4));
+    assert!(core.set_target(level0(t)));
+    for (what, extra, reached) in [
+        ("same size, another count", same, None),
+        ("another size, another count", small, Some((32, 32))),
+        ("same size, same count", equal, Some((64, 64))),
+    ] {
+        assert!(core.set_extra_target(1, Some(level0(extra))), "{what}");
+        assert_eq!(core.clear_size(1), reached, "{what}");
+        assert_eq!(core.clear_size(0), Some((64, 64)), "{what}");
+    }
 }

@@ -16,12 +16,16 @@ impl CoreDevice {
     /// A blit of the source's one level and slice into the device's read-back buffer, that
     /// subresource tracked as read so the blit waits for the passes that wrote it, then a wait
     /// for its chunk (C4-12). The rows are the source's width in its texels. False, and nothing
-    /// recorded, when `source` does not resolve or `dst` is too small.
+    /// recorded, when `source` does not resolve, is multisampled (Metal blits no multisampled
+    /// texture; D3D9 refuses one, DXMTRS C4b-3d5) or `dst` is too small.
     pub fn read_back(&mut self, source: TargetRef, dst: &mut [u8], dst_pitch: usize) -> bool {
         let Some(target) = self.resolve(source) else {
             return false;
         };
         let shape = target.shape;
+        if shape.samples > 1 {
+            return false;
+        }
         let (width, height) = (shape.width, shape.height);
         let bytes_per_row = width * shape.texel_bytes;
         let row = bytes_per_row as usize;

@@ -21,9 +21,9 @@ use mtld3d_core::ids::TextureId;
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE2D,
-    WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMT_TEXTURE_USAGE_SHADER_READ, WMTOrigin, WMTSize, WMTTextureInfo,
-    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitGenerateMipmaps,
+    WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+    WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ, WMTOrigin, WMTSize,
+    WMTTextureInfo, WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitGenerateMipmaps,
 };
 
 use super::{
@@ -40,6 +40,19 @@ pub enum TextureKind {
     Volume,
 }
 
+bitflags::bitflags! {
+    /// How a core texture is used beyond sampling.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct CoreTextureFlags: u8 {
+        /// Views in another format (an sRGB twin, a swizzle) will be taken: `PIXEL_FORMAT_VIEW`.
+        const VIEW_TWINS = 1 << 0;
+        /// A render target (C4b-3d1).
+        ///
+        /// Made with the render-target usage, tracked a subresource at a time, and zeroed.
+        const RENDER_TARGET = 1 << 1;
+    }
+}
+
 /// What a core texture is made of.
 #[derive(Clone, Copy, Debug)]
 pub struct CoreTextureDesc {
@@ -51,20 +64,21 @@ pub struct CoreTextureDesc {
     /// The volume's depth; 1 otherwise.
     pub depth: u32,
     pub levels: u32,
-    /// Views in another format (an sRGB twin, a swizzle) will be taken: `PIXEL_FORMAT_VIEW` usage.
-    pub view_twins: bool,
+    /// Its views in another format and its render-target use.
+    pub flags: CoreTextureFlags,
     /// The sRGB twin's `WMTPixelFormat` a render target is attached through under sRGB write.
     ///
-    /// 0 for none; read only with `view_twins` (DXMTRS C4b-3d3).
+    /// 0 for none; read only with `VIEW_TWINS` (DXMTRS C4b-3d3).
     pub srgb_format: u32,
     /// The format's block: width and height in texels, size in bytes.
     ///
     /// (1, 1, texel size) for an uncompressed format.
     pub block: (u32, u32, u32),
-    /// A render target (C4b-3d1).
+    /// Samples a texel: 1, or 2, 4 or 8 for a multisampled render target (DXMTRS C4b-3d5).
     ///
-    /// Made with the render-target usage, tracked a subresource at a time, and zeroed.
-    pub render_target: bool,
+    /// A multisampled texture is a one-level 2D render target of the multisample type, whose
+    /// views are of that type too.
+    pub samples: u8,
 }
 
 /// A region of one subresource to upload.
@@ -118,16 +132,22 @@ impl CoreDevice {
     /// ahead of the next chunk, so nothing enters the chunk being recorded and an open pass stays
     /// open. A second call for one id replaces the first.
     pub fn texture_create(&mut self, id: TextureId, desc: &CoreTextureDesc) {
+        let render_target = desc.flags.contains(CoreTextureFlags::RENDER_TARGET);
+        debug_assert!(
+            desc.samples == 1
+                || (desc.kind == TextureKind::Tex2d && desc.levels == 1 && render_target),
+            "a multisampled texture is a one-level 2D render target"
+        );
         let (texture_type, array_length) = match desc.kind {
-            TextureKind::Tex2d => (WMT_TEXTURE_TYPE2D, 1),
+            TextureKind::Tex2d => (two_d(desc.samples), 1),
             TextureKind::Cube => (WMT_TEXTURE_TYPE_CUBE, 1),
             TextureKind::Volume => (WMT_TEXTURE_TYPE3D, 1),
         };
         let mut usage = WMT_TEXTURE_USAGE_SHADER_READ;
-        if desc.view_twins {
+        if desc.flags.contains(CoreTextureFlags::VIEW_TWINS) {
             usage |= WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
         }
-        if desc.render_target {
+        if render_target {
             usage |= WMT_TEXTURE_USAGE_RENDER_TARGET;
         }
         let info = WMTTextureInfo {
@@ -140,14 +160,19 @@ impl CoreDevice {
                 1
             },
             array_length,
-            bits: texture_info::info_bits(texture_type, desc.levels, 1, usage),
+            bits: texture_info::info_bits(
+                texture_type,
+                desc.levels,
+                u32::from(desc.samples),
+                usage,
+            ),
             options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
             flags: 0,
             mach_port: 0,
             gpu_resource_id: 0,
         };
         let texture = Arc::new(Texture::new(info, self.device.device()));
-        if desc.render_target {
+        if render_target {
             // No `SHADER_READONLY`: a pass that writes one level or face and a draw that samples
             // another are tracked apart.
             let allocation = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
@@ -259,21 +284,26 @@ impl CoreDevice {
         self.textures.remove(&id);
     }
 
-    /// The size and `WMTPixelFormat` of level `level` of `id`'s texture as a depth-stencil.
+    /// The size, `WMTPixelFormat` and sample count of level `level` of `id`'s depth texture.
     ///
     /// `None` unless the store holds `id` as a 2D depth texture (a render-target description in
     /// a format with depth-stencil planes) with that level.
-    pub(super) fn depth_level(&self, id: TextureId, level: u32) -> Option<(u32, u32, u32)> {
+    pub(super) fn depth_level(&self, id: TextureId, level: u32) -> Option<(u32, u32, u32, u8)> {
         let desc = &self.textures.get(&id)?.desc;
         if desc.kind != TextureKind::Tex2d
-            || !desc.render_target
+            || !desc.flags.contains(CoreTextureFlags::RENDER_TARGET)
             || level >= desc.levels
             || super::depth::planes(desc.pixel_format) == 0
         {
             return None;
         }
         let extent = |size: u32| size.checked_shr(level).unwrap_or(0).max(1);
-        Some((extent(desc.width), extent(desc.height), desc.pixel_format))
+        Some((
+            extent(desc.width),
+            extent(desc.height),
+            desc.pixel_format,
+            desc.samples,
+        ))
     }
 
     /// `id`'s core texture, if the store holds it.
@@ -297,7 +327,7 @@ impl CoreDevice {
             (TextureKind::Cube, Some(face)) if face < 6 => face,
             _ => return None,
         };
-        if !desc.render_target
+        if !desc.flags.contains(CoreTextureFlags::RENDER_TARGET)
             || level >= desc.levels
             || super::depth::planes(desc.pixel_format) != 0
         {
@@ -308,22 +338,28 @@ impl CoreDevice {
             width: extent(desc.width),
             height: extent(desc.height),
             pixel_format: desc.pixel_format,
-            srgb_format: if desc.view_twins { desc.srgb_format } else { 0 },
+            srgb_format: if desc.flags.contains(CoreTextureFlags::VIEW_TWINS) {
+                desc.srgb_format
+            } else {
+                0
+            },
             texel_bytes: desc.block.2,
             level,
             slice,
+            samples: desc.samples,
         })
     }
 
     /// `id`'s texture as a pass attaches the subresource `shape` names.
     ///
     /// The view is of that one subresource, a 2D view whose slice is the face (C4b3d1-3): built
-    /// here field by field, since the core's own 2D view helper has no slice.
+    /// here field by field, since the core's own 2D view helper has no slice. A multisampled
+    /// texture's is of the multisample type (DXMTRS C4b-3d5).
     pub(super) fn texture_target(&self, id: TextureId, shape: Shape) -> Option<Resolved> {
         let stored = self.textures.get(&id)?;
         let key = TextureViewDescriptor {
             format: shape.pixel_format,
-            texture_type: WMT_TEXTURE_TYPE2D,
+            texture_type: two_d(shape.samples),
             first_mip: shape.level,
             mip_count: 1,
             first_slice: shape.slice,
@@ -542,6 +578,15 @@ impl Blit {
             rows: height.div_ceil(bh),
             images: depth,
         })
+    }
+}
+
+/// The Metal type of a 2D texture, or of a view of one subresource of it, of `samples` a texel.
+pub(super) const fn two_d(samples: u8) -> u32 {
+    if samples > 1 {
+        WMT_TEXTURE_TYPE2D_MULTISAMPLE
+    } else {
+        WMT_TEXTURE_TYPE2D
     }
 }
 

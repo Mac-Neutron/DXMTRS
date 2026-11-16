@@ -2378,10 +2378,10 @@ fn create_core_device(
                 height: pp.back_buffer_height,
                 depth: 1,
                 levels: 1,
-                view_twins: false,
+                flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
                 srgb_format: 0,
                 block: (1, 1, 4),
-                render_target: true,
+                samples: 1,
             };
             core.texture_create(id, &desc);
             let bound = core.set_depth(Some(d3d9_rt::device::DepthRef { id, level: 0 }));

@@ -17,10 +17,10 @@ use xxhash_rust::xxh3::Xxh3;
 
 use super::{
     CoreExtra, CoreRefusal, DeclCode, DrawFacts, DrawFlags, PipelineKey, PipelineSource,
-    PsStageKey, SampledMasks, ShaderCode, StageKind, VsStageKey, core_draw_kinds, core_extras,
-    core_key_depth, core_ps_variant, core_scissor, core_srgb_variant, core_viewport, extra_present,
-    float_rows, indexed_up_vertices, pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count,
-    viewport_depth_range,
+    PsStageKey, SampledMasks, ShaderCode, StageKind, VsStageKey, core_coverage_variant,
+    core_draw_kinds, core_extras, core_key_depth, core_ps_variant, core_scissor, core_srgb_variant,
+    core_viewport, extra_present, float_rows, indexed_up_vertices, pipeline_source, pos_fixup,
+    rhw_depth_clamp, up_byte_count, viewport_depth_range,
 };
 use crate::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
@@ -29,6 +29,7 @@ use crate::{
     },
     ff_state::FfState,
     ids::ProgramId,
+    multisample::SAMPLE_MASK_ALL,
 };
 
 /// `vs_2_0 { dcl_position v0; dcl_texcoord1 v3; mov oPos, v0; mov oT0, v3 }`.
@@ -130,6 +131,8 @@ fn ff_base() -> PipelineKey {
         depth_format: 0,
         blend: None,
         extras: [None, None, None],
+        samples: 1,
+        alpha_to_coverage: false,
     }
 }
 
@@ -159,6 +162,8 @@ fn prog_base() -> PipelineKey {
         depth_format: 0,
         blend: None,
         extras: [None, None, None],
+        samples: 1,
+        alpha_to_coverage: false,
     }
 }
 
@@ -246,7 +251,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 19] = [
+    let changes: [Case; 21] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -309,6 +314,8 @@ fn pipeline_key_tracks_every_input() {
         ("extras", ff_base, |k| {
             k.extras[1] = Some(extra(PixelFormat::Rgba16Float as u32));
         }),
+        ("samples", ff_base, |k| k.samples = 4),
+        ("alpha_to_coverage", ff_base, |k| k.alpha_to_coverage = true),
     ];
     for (field, base, change) in changes {
         let mut key = base();
@@ -552,27 +559,59 @@ fn core_draw_kinds_cover_every_case() {
 /// The depth format a draw's key names, or why the core refuses the draw.
 ///
 /// The bound depth-stencil's format when a pass can attach it and the draw does not sample it;
-/// otherwise none for a draw that uses no plane, and a refusal for one that does.
+/// otherwise none for a draw that uses no plane, and a refusal for one that does. One of another
+/// sample count than target 0 is none before anything else, never a refusal.
 #[test]
 fn core_key_depth_covers_every_case() {
     const F: u32 = 260;
-    // (bound, sampled by the draw, uses a plane) -> the key's format.
+    // (bound, sampled by the draw, uses a plane, target 0's count) -> the key's format.
     let cases = [
-        (None, false, true, Ok(0)),
-        (None, false, false, Ok(0)),
-        (None, true, true, Ok(0)),
-        (Some(F), false, true, Ok(F)),
-        (Some(F), false, false, Ok(F)),
-        (Some(F), true, false, Ok(0)),
-        (Some(F), true, true, Err(CoreRefusal::BoundDepthSampled)),
+        (None, false, true, true, Ok(0)),
+        (None, false, false, true, Ok(0)),
+        (None, true, true, true, Ok(0)),
+        (Some(F), false, true, true, Ok(F)),
+        (Some(F), false, false, true, Ok(F)),
+        (Some(F), true, false, true, Ok(0)),
+        (
+            Some(F),
+            true,
+            true,
+            true,
+            Err(CoreRefusal::BoundDepthSampled),
+        ),
+        (Some(F), false, true, false, Ok(0)),
+        (Some(F), true, true, false, Ok(0)),
+        (None, false, true, false, Ok(0)),
     ];
-    for (bound, sampled, uses_plane, expected) in cases {
+    for (bound, sampled, uses_plane, same_samples, expected) in cases {
         assert_eq!(
-            core_key_depth(bound, sampled, uses_plane),
+            core_key_depth(bound, sampled, uses_plane, same_samples),
             expected,
-            "{bound:?} {sampled} {uses_plane}"
+            "{bound:?} {sampled} {uses_plane} {same_samples}"
         );
     }
+}
+
+/// The coverage a draw adds to its pixel variant: the narrowed sample mask, alpha-to-coverage.
+///
+/// The all-samples mask leaves the variant alone; any other sets the flag and the byte. Coverage
+/// from alpha zeroes the alpha test's function and leaves the mask as it was.
+#[test]
+fn core_coverage_variant_rules() {
+    let base = VariantKey {
+        alpha_func: 5,
+        ..VariantKey::default()
+    };
+    assert_eq!(core_coverage_variant(base, SAMPLE_MASK_ALL, false), base);
+    let masked = core_coverage_variant(base, 0x3, false);
+    assert!(masked.flags.contains(VariantFlags::SAMPLE_MASK));
+    assert_eq!((masked.sample_mask, masked.alpha_func), (0x3, 5));
+    let a2c = core_coverage_variant(base, SAMPLE_MASK_ALL, true);
+    assert_eq!(a2c.alpha_func, 0);
+    assert!(!a2c.flags.contains(VariantFlags::SAMPLE_MASK));
+    assert_eq!(a2c.sample_mask, base.sample_mask);
+    let both = core_coverage_variant(base, 0x1, true);
+    assert_eq!((both.sample_mask, both.alpha_func), (0x1, 0));
 }
 
 /// Relative addressing binds every row; otherwise the rows the program names.

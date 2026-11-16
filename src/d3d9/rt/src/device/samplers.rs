@@ -20,7 +20,7 @@ use winemetal_sys::wire::{
     WMT_COMPARE_FUNCTION_LESS_EQUAL, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMTSamplerInfo,
 };
 
-use super::{CoreDevice, CoreTextureDesc, TextureKind, UploadRegion};
+use super::{CoreDevice, CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
 
 /// The black texture's id: past every id the front end mints (they count up from 1).
 const BLACK: TextureId = TextureId::from_raw(u64::MAX);
@@ -75,10 +75,10 @@ impl CoreDevice {
                 height: 1,
                 depth: 1,
                 levels: 1,
-                view_twins: false,
+                flags: CoreTextureFlags::empty(),
                 srgb_format: 0,
                 block: (1, 1, 4),
-                render_target: false,
+                samples: 1,
             };
             self.texture_create(BLACK, &desc);
             let whole = UploadRegion {

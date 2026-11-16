@@ -5861,7 +5861,7 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// uploads. Always true since C4b-3d2: every texture has a core form.
 #[cfg(feature = "core-runtime")]
 pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
-    use d3d9_rt::device::{CoreTextureDesc, TextureKind, UploadRegion};
+    use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
     // A depth texture's core texture is a depth texture (DXMTRS C4b-3d2): zeroed, written by
     // passes and Clears only. Its CPU lock is refused (`core_refuses_lock`), so nothing uploads.
     if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
@@ -5873,10 +5873,10 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
                 height: ti.height,
                 depth: 1,
                 levels: ti.levels,
-                view_twins: false,
+                flags: CoreTextureFlags::RENDER_TARGET,
                 srgb_format: 0,
                 block: (1, 1, ti.block_bytes.max(1)),
-                render_target: true,
+                samples: 1,
             };
             core.texture_create(ti.texture_id, &desc);
         }
@@ -5903,6 +5903,12 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
         } else {
             ti.metal_pixel_format
         };
+        let mut flags = CoreTextureFlags::empty();
+        flags.set(
+            CoreTextureFlags::VIEW_TWINS,
+            ti.swizzle.is_some() || pixel_format.srgb_twin().is_some(),
+        );
+        flags.set(CoreTextureFlags::RENDER_TARGET, render_target);
         let desc = CoreTextureDesc {
             pixel_format: pixel_format as u32,
             kind,
@@ -5910,14 +5916,14 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             height: ti.height,
             depth: ti.depth.max(1),
             levels: ti.levels,
-            view_twins: ti.swizzle.is_some() || pixel_format.srgb_twin().is_some(),
+            flags,
             srgb_format: pixel_format.srgb_twin().map_or(0, |twin| twin as u32),
             block: if decode.is_some() {
                 (1, 1, 4)
             } else {
                 (ti.block_w.max(1), ti.block_h.max(1), ti.block_bytes)
             },
-            render_target,
+            samples: 1,
         };
         core.texture_create(id, &desc);
     }

@@ -7992,7 +7992,7 @@ fn core_color_target(
     spec: &ColorTargetSpec,
     mapping: &mtld3d_core::format::FormatMapping,
 ) -> Option<*mut Direct3DSurface9> {
-    use d3d9_rt::device::{CoreTextureDesc, TextureKind};
+    use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind};
     // Metal raises for a texture past its limit, which ends the process: the answer comes first,
     // as mtld3d's Unix create gives it.
     if !mtld3d_core::caps::texture_extent_fits(spec.width, spec.height) {
@@ -8012,10 +8012,14 @@ fn core_color_target(
             depth: 1,
             levels: 1,
             // sRGB write attaches the twin's view where the format has one, as a texture's.
-            view_twins: srgb_twin.is_some(),
+            flags: if srgb_twin.is_some() {
+                CoreTextureFlags::RENDER_TARGET.union(CoreTextureFlags::VIEW_TWINS)
+            } else {
+                CoreTextureFlags::RENDER_TARGET
+            },
             srgb_format: srgb_twin.map_or(0, |twin| twin as u32),
             block: (1, 1, mapping.bytes_per_pixel()),
-            render_target: true,
+            samples: 1,
         },
     );
     let mut surf = Direct3DSurface9::new_color_target(&ColorTargetCreateInfo {
@@ -8185,7 +8189,7 @@ fn core_depth_surface(
     pixel_format: u32,
     multi_sample: SurfaceMultiSample,
 ) -> Result<*mut Direct3DSurface9, i32> {
-    use d3d9_rt::device::{CoreTextureDesc, TextureKind};
+    use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind};
     if multi_sample.sample_count > 1 {
         crate::device::refuse_under_core(
             "IDirect3DDevice9::CreateDepthStencilSurface (multisampled)",
@@ -8209,11 +8213,11 @@ fn core_depth_surface(
             height,
             depth: 1,
             levels: 1,
-            view_twins: false,
+            flags: CoreTextureFlags::RENDER_TARGET,
             srgb_format: 0,
             // Never uploaded to or read back: the block is not read.
             block: (1, 1, 4),
-            render_target: true,
+            samples: 1,
         },
     );
     let mut surf = Direct3DSurface9::new_depth_stencil(

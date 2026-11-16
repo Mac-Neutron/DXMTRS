@@ -1,7 +1,7 @@
 use mtld3d_core::ids::TextureId;
 use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BGRA8_UNORM};
 
-use super::{CoreTextureDesc, TextureKind, UploadRegion};
+use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
 use crate::device::{
     CoreDevice,
     fixture::{at, core_on_fakes},
@@ -17,10 +17,10 @@ fn bgra(width: u32, height: u32, levels: u32) -> CoreTextureDesc {
         height,
         depth: 1,
         levels,
-        view_twins: false,
+        flags: CoreTextureFlags::empty(),
         srgb_format: 0,
         block: (1, 1, 4),
-        render_target: false,
+        samples: 1,
     }
 }
 
@@ -113,7 +113,6 @@ fn bc_small_mip_extents() {
     let desc = CoreTextureDesc {
         pixel_format: WMT_PIXEL_FORMAT_BC1_RGBA,
         block: (4, 4, 8),
-        render_target: false,
         ..bgra(8, 8, 3)
     };
     core.texture_create(id, &desc);

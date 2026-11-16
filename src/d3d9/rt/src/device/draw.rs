@@ -133,11 +133,14 @@ pub enum DrawRefused {
     /// An attribute crosses the stride, which the core cannot fetch yet.
     Crossing,
     /// The key names a depth format the bound depth-stencil has not (none is bound).
+    ///
+    /// Or the bound one is of another sample count than target 0, which no pass attaches beside
+    /// it (DXMTRS C4b-3d5).
     Depth,
-    /// The key names colour formats the bound targets do not make.
+    /// The key names colour formats the bound targets do not make, or another sample count.
     ///
     /// Its colours are those of the pass set ([`CoreDevice::target_desc`]) under neither sRGB
-    /// write (DXMTRS C4b-3d4).
+    /// write (DXMTRS C4b-3d4); its count is target 0's (DXMTRS C4b-3d5).
     Target,
 }
 
@@ -184,13 +187,19 @@ impl CoreDevice {
     /// # Errors
     ///
     /// Nothing recorded when colour target 0 does not resolve (a device with no back buffer),
-    /// the key names colour formats the bound targets do not make or a depth format the bound
-    /// depth-stencil has not, the layout crosses its stride, or the pipeline does not build. A
-    /// draw whose scissor holds no pixel of the pass records nothing and is no error.
+    /// the key names colour formats the bound targets do not make, another sample count than
+    /// target 0's, or a depth format the bound depth-stencil has not or one of another count,
+    /// the layout crosses its stride, or the pipeline does not build. A draw whose scissor holds
+    /// no pixel of the pass records nothing and is no error.
     pub fn draw_up(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };
+        // A pass and its pipeline share one sample count, target 0's, whatever pass is open: an
+        // open pass on the same colours does not excuse another count (DXMTRS C4b-3d5).
+        if key.samples != target.samples {
+            return Err(DrawRefused::Target);
+        }
         // The key decides the pass's colour slots and formats. An open pass on them was checked
         // when it opened, and a change of any target closed it; otherwise the pass set must make
         // them, under one sRGB write or the other.
@@ -208,6 +217,11 @@ impl CoreDevice {
         let with_depth = key.depth_format != 0;
         let bound = || self.depth_format() == Some(key.depth_format);
         if with_depth && self.open_depth.is_none() && !bound() {
+            return Err(DrawRefused::Depth);
+        }
+        // A depth-stencil of another count than target 0 is left out of the pass: a key that
+        // names it is not the draw's (DXMTRS C4b-3d5).
+        if with_depth && self.depth_samples() != Some(target.samples) {
             return Err(DrawRefused::Depth);
         }
         debug_assert!(
@@ -510,6 +524,9 @@ fn build_pipeline(
     if planes & 2 != 0 {
         info.stencil_pixel_format = source.depth_format;
     }
+    // The pass's count, and coverage from alpha on a multisampled one (DXMTRS C4b-3d5).
+    info.raster_sample_count = source.samples;
+    info.alpha_to_coverage_enabled = u8::from(source.alpha_to_coverage);
     let mut vertex = WMTVertexDescriptorInfo {
         attributes: [WMTVertexAttributeInfo {
             format: 0,

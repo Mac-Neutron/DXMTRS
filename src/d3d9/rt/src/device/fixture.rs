@@ -14,7 +14,8 @@ use mtld3d_types::{
 use winemetal_sys::Obj;
 
 use super::{
-    Bind, CoreDevice, CoreTextureDesc, DrawData, Indices, Stage, TextureKind, queue_profile,
+    Bind, CoreDevice, CoreTextureDesc, CoreTextureFlags, DrawData, Indices, Stage, TextureKind,
+    queue_profile,
 };
 
 /// A core device on the made-up handle `handle` with a 64x32 back buffer and a window.
@@ -61,10 +62,18 @@ pub const fn target_desc(
         height: size,
         depth: 1,
         levels,
-        view_twins: false,
+        flags: CoreTextureFlags::RENDER_TARGET,
         srgb_format: 0,
         block: (1, 1, texel_bytes),
-        render_target: true,
+        samples: 1,
+    }
+}
+
+/// A square `size` one-level 2D render target of `pixel_format`, 4-byte texels of `samples`.
+pub const fn ms_desc(pixel_format: u32, size: u32, samples: u8) -> CoreTextureDesc {
+    CoreTextureDesc {
+        samples,
+        ..target_desc(pixel_format, TextureKind::Tex2d, size, 1, 4)
     }
 }
 
@@ -110,6 +119,8 @@ pub fn key(write_mask: u8) -> PipelineKey {
         depth_format: 0,
         blend: None,
         extras: [None, None, None],
+        samples: 1,
+        alpha_to_coverage: false,
     }
 }
 
@@ -201,10 +212,10 @@ pub const fn depth_desc(
         height,
         depth: 1,
         levels,
-        view_twins: false,
+        flags: CoreTextureFlags::RENDER_TARGET,
         srgb_format: 0,
         block: (1, 1, 4),
-        render_target: true,
+        samples: 1,
     }
 }
 

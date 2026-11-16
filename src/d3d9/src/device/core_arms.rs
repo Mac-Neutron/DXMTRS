@@ -41,12 +41,13 @@ fn core_device<'a>(this: *mut c_void) -> Option<&'a mut DeviceInner> {
 ///
 /// Z and stencil go to the bound depth-stencil (DXMTRS C4b-3d2): `D3DERR_INVALIDCALL` with none
 /// bound, as mtld3d answers. The colour goes to every bound colour target, index 0-3, in the
-/// pass set or not (DXMTRS C4b-3d4), each with the viewport drawn on its own extent; the core
-/// device picks each one's view and encodes the colour once under sRGB write. Each colour target
-/// and the depth-stencil is cleared whole when a region covers it, and by rects otherwise
-/// ([`clear_area`], DXMTRS C4b-3d3), judged against its own size: the depth-stencil's with the
-/// viewport drawn on target 0. The stencil flag against a format with no stencil plane clears
-/// nothing, as D3D9 has it (the core device masks the planes).
+/// pass set or not (DXMTRS C4b-3d4), but one of target 0's size and another sample count, which
+/// mtld3d's Clear leaves alone (`clear_size`, DXMTRS C4b-3d5), each with the viewport drawn on
+/// its own extent; the core device picks each one's view and encodes the colour once under sRGB
+/// write. Each colour target and the depth-stencil is cleared whole when a region covers it, and
+/// by rects otherwise ([`clear_area`], DXMTRS C4b-3d3), judged against its own size: the
+/// depth-stencil's with the viewport drawn on target 0. The stencil flag against a format with
+/// no stencil plane clears nothing, as D3D9 has it (the core device masks the planes).
 pub fn clear(
     this: *mut c_void,
     count: u32,
@@ -78,7 +79,7 @@ pub fn clear(
         let linear = d3dcolor_to_rgba_f32(color);
         let core = dev.core.as_deref_mut()?;
         for slot in 0..RENDER_TARGET_SLOTS {
-            let Some(extent) = core.color_size(slot) else {
+            let Some(extent) = core.clear_size(slot) else {
                 continue;
             };
             match clear_area(

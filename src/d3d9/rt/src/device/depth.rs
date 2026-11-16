@@ -20,7 +20,7 @@ use mtld3d_core::{
     },
     ids::TextureId,
 };
-use winemetal_sys::wire::{WMT_TEXTURE_TYPE2D, WMTDepthStencilInfo, WMTStencilInfo};
+use winemetal_sys::wire::{WMTDepthStencilInfo, WMTStencilInfo};
 
 use super::{CoreDevice, LOG_TARGET};
 
@@ -77,7 +77,17 @@ impl CoreDevice {
     pub fn depth_format(&self) -> Option<u32> {
         let depth = self.depth?;
         self.depth_level(depth.id, depth.level)
-            .map(|(_, _, format)| format)
+            .map(|(_, _, format, _)| format)
+    }
+
+    /// The bound depth-stencil's sample count; `None` when none is bound (DXMTRS C4b-3d5).
+    ///
+    /// A draw's pass attaches it only when it is colour target 0's.
+    #[must_use]
+    pub fn depth_samples(&self) -> Option<u8> {
+        let depth = self.depth?;
+        self.depth_level(depth.id, depth.level)
+            .map(|(_, _, _, samples)| samples)
     }
 
     /// The current depth-stencil's width and height; `None` when none is bound.
@@ -85,7 +95,7 @@ impl CoreDevice {
     pub fn depth_size(&self) -> Option<(u32, u32)> {
         let depth = self.depth?;
         self.depth_level(depth.id, depth.level)
-            .map(|(width, height, _)| (width, height))
+            .map(|(width, height, _, _)| (width, height))
     }
 
     /// The area a pass on the current colour target draws to; `None` when it does not resolve.
@@ -101,13 +111,15 @@ impl CoreDevice {
     }
 
     /// The current depth-stencil as a pass attaches it, whatever its size.
+    ///
+    /// A multisampled one's view is of the multisample type (DXMTRS C4b-3d5).
     pub(super) fn resolve_depth(&self) -> Option<Resolved> {
         let depth = self.depth?;
-        let (_, _, pixel_format) = self.depth_level(depth.id, depth.level)?;
+        let (_, _, pixel_format, samples) = self.depth_level(depth.id, depth.level)?;
         let texture = self.stored_texture(depth.id)?;
         let key = TextureViewDescriptor {
             format: pixel_format,
-            texture_type: WMT_TEXTURE_TYPE2D,
+            texture_type: super::textures::two_d(samples),
             first_mip: depth.level,
             mip_count: 1,
             first_slice: 0,
