@@ -1132,6 +1132,17 @@ unsafe extern "C" {
         out_message: *mut *mut c_char,
     ) -> Bool;
 
+    // The textual IR reader (`llvm-c/IRReader.h`), for tests that state a module as text. The
+    // buffer must end in a NUL (`requires_null_terminator`) and stays the caller's.
+    #[cfg(test)]
+    #[link_name = "LLVMParseIRInContext2"]
+    pub fn parse_ir_in_context2(
+        context: ContextRef,
+        mem_buf: MemoryBufferRef,
+        out_m: *mut ModuleRef,
+        out_message: *mut *mut c_char,
+    ) -> Bool;
+
     // The linker (the shim links the helpers; this form, with no flag, is for tests)
     #[cfg(test)]
     #[link_name = "LLVMLinkModules2"]

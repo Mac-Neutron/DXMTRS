@@ -1,6 +1,7 @@
 //! Tests of module setup, the helpers, the shim's pipeline and the writer's entry extraction.
 
 use core::{ffi::CStr, ptr};
+use std::ffi::CString;
 
 use airconv_ir::{
     container::Container,
@@ -356,4 +357,276 @@ fn shim_pipeline_places_the_two_passes() {
         WS_P15_OPT_PRINTED.strip_suffix(')').unwrap()
     );
     assert_eq!(pipeline_text(1), expected);
+}
+
+/// Parses the textual IR `text` into a module of `cx`.
+fn parse_ir<'cx>(cx: &'cx Context, text: &CStr) -> Module<'cx> {
+    let mut out = ptr::null_mut();
+    let mut message = ptr::null_mut();
+    // SAFETY: `text` is NUL-terminated and outlives the buffer; the name is NUL-terminated.
+    let buffer = unsafe {
+        sys::create_memory_buffer_with_memory_range(
+            text.as_ptr(),
+            text.count_bytes(),
+            c"ir".as_ptr(),
+            1,
+        )
+    };
+    // SAFETY: a live context and buffer; the two outputs are writable.
+    let failed =
+        unsafe { sys::parse_ir_in_context2(cx.raw(), buffer, &raw mut out, &raw mut message) };
+    // SAFETY: the buffer made above, freed once; the reader did not take it.
+    unsafe { sys::dispose_memory_buffer(buffer) };
+    if failed != 0 {
+        // SAFETY: the reader's NUL-terminated message.
+        let text = unsafe { CStr::from_ptr(message) }.to_string_lossy();
+        panic!("{text}");
+    }
+    // SAFETY: the reader's module, of `cx`, handed over.
+    unsafe { Module::from_raw(cx, out) }
+}
+
+/// The module `text` after the pass pipeline, printed.
+fn optimized(text: &CStr) -> String {
+    let cx = Context::new();
+    let m = parse_ir(&cx, text);
+    optimize(&m);
+    assert_eq!(verify(&m), "");
+    String::from_utf8(m.print()).unwrap()
+}
+
+/// 16-bit reads of a 32-bit vector, each result kept alive by a store or a return.
+///
+/// Alive, so that no earlier pass of the pipeline removes it: three constant lanes (low half,
+/// high half, the last lane), a constant lane beside a variable one (the cast must stay for the
+/// variable one), and a cast nothing extracts from.
+const READ16: &CStr = c"
+define void @constant_lanes(<4 x i32> %v, ptr %out) {
+  %c = bitcast <4 x i32> %v to <8 x i16>
+  %e0 = extractelement <8 x i16> %c, i32 0
+  %e1 = extractelement <8 x i16> %c, i32 1
+  %e7 = extractelement <8 x i16> %c, i64 7
+  store i16 %e0, ptr %out, align 2
+  %p1 = getelementptr i16, ptr %out, i64 1
+  store i16 %e1, ptr %p1, align 2
+  %p2 = getelementptr i16, ptr %out, i64 2
+  store i16 %e7, ptr %p2, align 2
+  ret void
+}
+
+define i16 @variable_lane(<4 x i32> %v, i32 %i) {
+  %c = bitcast <4 x i32> %v to <8 x i16>
+  %e3 = extractelement <8 x i16> %c, i32 3
+  %ev = extractelement <8 x i16> %c, i32 %i
+  %s = add i16 %e3, %ev
+  ret i16 %s
+}
+
+define <8 x i16> @cast_alone(<4 x i32> %v) {
+  %c = bitcast <4 x i32> %v to <8 x i16>
+  ret <8 x i16> %c
+}
+";
+
+const READ16_OPTIMIZED: &str = r#"; ModuleID = 'ir'
+source_filename = "ir"
+
+define void @constant_lanes(<4 x i32> %v, ptr %out) local_unnamed_addr {
+  %1 = extractelement <4 x i32> %v, i64 0
+  %e0.trunc_to_i16 = trunc i32 %1 to i16
+  %2 = extractelement <4 x i32> %v, i64 0
+  %.lshr161 = lshr i32 %2, 16
+  %e1.trunc_to_i16 = trunc i32 %.lshr161 to i16
+  %3 = extractelement <4 x i32> %v, i64 3
+  %.lshr16 = lshr i32 %3, 16
+  %e7.trunc_to_i16 = trunc i32 %.lshr16 to i16
+  store i16 %e0.trunc_to_i16, ptr %out, align 2
+  %p1 = getelementptr i8, ptr %out, i64 2
+  store i16 %e1.trunc_to_i16, ptr %p1, align 2
+  %p2 = getelementptr i8, ptr %out, i64 4
+  store i16 %e7.trunc_to_i16, ptr %p2, align 2
+  ret void
+}
+
+define i16 @variable_lane(<4 x i32> %v, i32 %i) local_unnamed_addr {
+  %c = bitcast <4 x i32> %v to <8 x i16>
+  %1 = extractelement <4 x i32> %v, i64 1
+  %.lshr16 = lshr i32 %1, 16
+  %e3.trunc_to_i16 = trunc i32 %.lshr16 to i16
+  %ev = extractelement <8 x i16> %c, i32 %i
+  %s = add i16 %e3.trunc_to_i16, %ev
+  ret i16 %s
+}
+
+define <8 x i16> @cast_alone(<4 x i32> %v) local_unnamed_addr {
+  %c = bitcast <4 x i32> %v to <8 x i16>
+  ret <8 x i16> %c
+}
+"#;
+
+#[test]
+fn the_pipeline_lowers_16_bit_reads_of_a_32_bit_vector() {
+    assert_eq!(optimized(READ16), READ16_OPTIMIZED);
+}
+
+/// Threadgroup memory (address space 3) read after it is written.
+///
+/// Each load is from an address the pipeline cannot prove equal to the store's: two loads after
+/// one store (one barrier, after the store), a second store and its load (a second barrier), a
+/// load after a call, a load after a store to other memory, and a load of other memory after a
+/// threadgroup store (none for the three).
+const BARRIER: &str = "
+declare void @opaque()
+
+define void @two_loads_one_store(ptr addrspace(3) %a, ptr addrspace(3) %b, ptr addrspace(3) %c, ptr %out, i32 %x) {
+  store i32 %x, ptr addrspace(3) %a, align 4
+  %l1 = load i32, ptr addrspace(3) %b, align 4
+  %l2 = load i32, ptr addrspace(3) %c, align 4
+  %s = add i32 %l1, %l2
+  store i32 %s, ptr addrspace(3) %a, align 4
+  %l3 = load i32, ptr addrspace(3) %b, align 4
+  store i32 %l3, ptr %out, align 4
+  ret void
+}
+
+define i32 @load_after_a_call(ptr addrspace(3) %b) {
+  call void @opaque()
+  %l = load i32, ptr addrspace(3) %b, align 4
+  ret i32 %l
+}
+
+define i32 @load_after_another_store(ptr %p, ptr addrspace(3) %b, i32 %x) {
+  store i32 %x, ptr %p, align 4
+  %l = load i32, ptr addrspace(3) %b, align 4
+  ret i32 %l
+}
+
+define i32 @another_load_after_the_store(ptr %p, ptr addrspace(3) %b, i32 %x) {
+  store i32 %x, ptr addrspace(3) %b, align 4
+  %l = load i32, ptr %p, align 4
+  ret i32 %l
+}
+";
+
+const BARRIER_OPTIMIZED: &str = r#"; ModuleID = 'ir'
+source_filename = "ir"
+
+declare void @opaque() local_unnamed_addr
+
+define void @two_loads_one_store(ptr addrspace(3) %a, ptr addrspace(3) %b, ptr addrspace(3) %c, ptr %out, i32 %x) local_unnamed_addr {
+  store i32 %x, ptr addrspace(3) %a, align 4
+  call void @air.simdgroup.barrier(i32 2, i32 1)
+  %l1 = load i32, ptr addrspace(3) %b, align 4
+  %l2 = load i32, ptr addrspace(3) %c, align 4
+  %s = add i32 %l1, %l2
+  store i32 %s, ptr addrspace(3) %a, align 4
+  call void @air.simdgroup.barrier(i32 2, i32 1)
+  %l3 = load i32, ptr addrspace(3) %b, align 4
+  store i32 %l3, ptr %out, align 4
+  ret void
+}
+
+define i32 @load_after_a_call(ptr addrspace(3) %b) local_unnamed_addr {
+  call void @opaque()
+  %l = load i32, ptr addrspace(3) %b, align 4
+  ret i32 %l
+}
+
+define i32 @load_after_another_store(ptr %p, ptr addrspace(3) %b, i32 %x) local_unnamed_addr {
+  store i32 %x, ptr %p, align 4
+  %l = load i32, ptr addrspace(3) %b, align 4
+  ret i32 %l
+}
+
+define i32 @another_load_after_the_store(ptr %p, ptr addrspace(3) %b, i32 %x) local_unnamed_addr {
+  store i32 %x, ptr addrspace(3) %b, align 4
+  %l = load i32, ptr %p, align 4
+  ret i32 %l
+}
+
+; Function Attrs: convergent nounwind willreturn
+declare void @air.simdgroup.barrier(i32, i32) #0
+
+attributes #0 = { convergent nounwind willreturn }
+
+!air.kernel = !{!0}
+
+!0 = !{}
+"#;
+
+#[test]
+fn the_pipeline_fences_threadgroup_stores_a_kernel_reads_back() {
+    let kernel = CString::new(format!("{BARRIER}\n!air.kernel = !{{!0}}\n!0 = !{{}}\n")).unwrap();
+    assert_eq!(optimized(&kernel), BARRIER_OPTIMIZED);
+}
+
+#[test]
+fn the_pipeline_fences_nothing_outside_a_kernel() {
+    let plain = CString::new(BARRIER).unwrap();
+    let printed = optimized(&plain);
+    assert!(printed.contains("@two_loads_one_store"), "{printed}");
+    assert!(!printed.contains("air.simdgroup.barrier"), "{printed}");
+}
+
+/// The first attribute group of `printed`, without its braces.
+fn first_attribute_group(printed: &str) -> &str {
+    let (_, rest) = printed.split_once("attributes #0 = { ").expect(printed);
+    rest.split_once(" }").expect(printed).0
+}
+
+#[test]
+fn memory_attributes_print_as_llvm_23_writes_them() {
+    // Rows of four: the location mask's selector (all, argument memory, inaccessible memory, both),
+    // each with `ModRefInfo` none, read, write, read-write.
+    let expected = [
+        "memory(none)",
+        "memory(read)",
+        "memory(write)",
+        "memory(readwrite)",
+        "memory(none)",
+        "memory(argmem: read)",
+        "memory(argmem: write)",
+        "memory(argmem: readwrite)",
+        "memory(none)",
+        "memory(inaccessiblemem: read)",
+        "memory(inaccessiblemem: write)",
+        "memory(inaccessiblemem: readwrite)",
+        "memory(none)",
+        "memory(argmem: read, inaccessiblemem: read)",
+        "memory(argmem: write, inaccessiblemem: write)",
+        "memory(argmem: readwrite, inaccessiblemem: readwrite)",
+    ];
+    let printed: Vec<String> = (0..16)
+        .map(|row: i32| {
+            let cx = Context::new();
+            let m = Module::new(&cx, c"m");
+            let tcx = cx.tcx();
+            let f = ok(m.add_function(b"f", tcx.function(tcx.void(), &[], false)));
+            // SAFETY: the context is live.
+            let attribute =
+                unsafe { sys::airconv_shim_memory_attribute(cx.raw(), row / 4, row % 4) };
+            // SAFETY: a function of this context and an attribute of it.
+            unsafe {
+                sys::add_attribute_at_index(
+                    f.val().raw(),
+                    sys::ATTRIBUTE_FUNCTION_INDEX,
+                    attribute,
+                );
+            };
+            let text = String::from_utf8(m.print()).unwrap();
+            first_attribute_group(&text).to_owned()
+        })
+        .collect();
+    assert_eq!(printed, expected);
+}
+
+#[test]
+fn a_set_up_module_carries_sdk_version_15_0() {
+    let cx = Context::new();
+    let m = initialize(&cx, c"m");
+    let printed = String::from_utf8(m.print()).unwrap();
+    assert!(
+        printed.contains("!{i32 2, !\"SDK Version\", [2 x i32] [i32 15, i32 0]}"),
+        "{printed}"
+    );
 }
