@@ -6,15 +6,15 @@
 //! `compile`, `compiled_data` and `load_function`, the D3D10-12 path) unless the device already
 //! holds that stage's function for that specialization, and the pipeline is made with the vertex
 //! descriptor (slot 156) and kept in the device's [`PsoMap`](dxmt_core::pipeline_cache::PsoMap).
-//! The draw records the pipeline, the viewport, the rasterizer state, each stream the pipeline
-//! reads at its slot (inline bytes, zeros, or a stored buffer, its read tracked), the stages'
-//! binds and the draw (its indices, if any, in the argument-buffer ring or a stored buffer) into
-//! the colour target's render pass, after the depth-stencil state when its key names a depth
-//! format, and the scissor when the pass has not recorded that one last. The pipeline is built on
-//! the API thread and waited for (no asynchronous compile until C4d).
+//! The draw records the pipeline, the viewport, the rasterizer state, each vertex buffer slot the
+//! pipeline reads, from the stream it binds (inline bytes, zeros, or a stored buffer, its read
+//! tracked), the stages' binds and the draw (its indices, if any, in the argument-buffer ring or a
+//! stored buffer) into the colour target's render pass, after the depth-stencil state when its key
+//! names a depth format, and the scissor when the pass has not recorded that one last. The
+//! pipeline is built on the API thread and waited for (no asynchronous compile until C4d).
 
 use core::ffi::CStr;
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 
 use airconv_ir::dxso::spec::{StageSpec, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
 use dxmt_core::{
@@ -35,7 +35,7 @@ use mtld3d_core::{
         pipeline_source,
     },
     pipeline_state::{BlendFactor, BlendOperation, CoreBlend},
-    streams::{instance_count, offset_shift},
+    streams::{advanced_binding_offset, instance_count, offset_shift, slot_binding_offset},
 };
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
@@ -79,7 +79,7 @@ pub struct Bind<'a> {
     pub bytes: &'a [u8],
 }
 
-/// One vertex stream's data for a draw, at the stream's slot.
+/// One vertex stream's data for a draw, at each vertex buffer slot that binds the stream.
 // Copy: an entry of the draw's array, which the tests' const fixture builds.
 #[derive(Clone, Copy)]
 pub enum StreamData<'a> {
@@ -164,14 +164,11 @@ pub enum DrawRefused {
     NoBackBuffer,
     /// The draw's pipeline does not build (logged once per key).
     Pipeline,
-    /// An attribute crosses its stream's stride, or no binding can fetch the layout.
+    /// A layout no binding can fetch, or a binding it advances past its buffer (DXMTRS C4c-2a).
     ///
-    /// The core binds no fetch yet.
-    Crossing,
-    /// A stream the pipeline reads is bound at an offset off four bytes (DXMTRS C4c-1).
-    ///
-    /// The core cannot fetch that yet.
-    Offset,
+    /// The layout: an attribute wider than its stride, or more than 16 attributes under a fetch
+    /// (its error logged once per key). mtld3d widens such a layout and draws other bytes.
+    Fetch,
     /// A stored buffer the draw reads is not in the store (DXMTRS C4c-1).
     Buffer,
     /// The key names a depth format the bound depth-stencil has not (none is bound).
@@ -239,9 +236,9 @@ impl CoreDevice {
     /// Nothing recorded when colour target 0 does not resolve (a device with no back buffer),
     /// the key names colour formats the bound targets do not make, another sample count than
     /// target 0's, or a depth format the bound depth-stencil has not or one of another count,
-    /// the layout crosses a stride or cannot be fetched, the pipeline does not build, a stream it
-    /// reads is bound at an offset off four bytes, or a stored buffer it reads is not in the
-    /// store. A draw whose scissor holds no pixel of the pass records nothing and is no error.
+    /// no binding can fetch the layout, the pipeline does not build, a stored buffer it reads is
+    /// not in the store, or a slot advanced past a crossing attribute's offset starts past its
+    /// buffer. A draw whose scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
@@ -296,27 +293,55 @@ impl CoreDevice {
             .zip(&source.streams)
             .filter(|(_, layout)| layout.is_used())
             .fold(0_u16, |mask, (stream, _)| mask | 1 << stream);
-        // Before anything is recorded: a stream the pipeline reads at an offset off four bytes
-        // (Metal binds it at the multiple of four below, and mtld3d moves its attributes, a fetch
-        // the core has not), then a stored buffer the store does not hold.
-        let reads = || {
-            (0_u8..)
-                .zip(&draw.streams)
-                .filter(|(slot, _)| used & 1 << slot != 0)
-                .filter_map(|(slot, data)| match *data {
-                    StreamData::Buffer { id, offset } => Some((slot, id, offset)),
-                    _ => None,
-                })
-        };
-        if reads().any(|(_, _, offset)| offset_shift(offset) != 0) {
-            return Err(DrawRefused::Offset);
+        // Before anything is recorded, each vertex buffer slot the pipeline reads, from the stream
+        // it binds, past that stream's offset by its advance (mtld3d's fetch): a stored buffer at
+        // the slot's binding offset, refused when the store does not hold it or an advanced
+        // binding starts past its end; inline bytes from the advance, zero-filled to their length;
+        // or for a stream with nothing bound zeros of its stride, clamped to the zero feed as
+        // mtld3d clamps it.
+        let mut stored = Vec::new();
+        let mut bytes = Vec::new();
+        let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
+        for ((slot, layout), &(stream, advance)) in
+            (0_u8..).zip(&source.layouts).zip(&source.bindings)
+        {
+            if !layout.is_used() {
+                continue;
+            }
+            let fed = match draw.streams[usize::from(stream)] {
+                StreamData::Buffer { id, offset } => {
+                    let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
+                    debug_assert!(
+                        matches!(
+                            key.streams[usize::from(stream)],
+                            StreamKey::Bound { shift: s, .. } if offset_shift(offset) == s.into()
+                        ),
+                        "a bound stream's key carries its offset's shift"
+                    );
+                    if advance != 0
+                        && advanced_binding_offset(offset, advance, buffer.length()).is_err()
+                    {
+                        return Err(DrawRefused::Fetch);
+                    }
+                    let at = slot_binding_offset(offset, advance);
+                    stored.push((slot, Arc::clone(buffer), u64::from(at)));
+                    continue;
+                }
+                StreamData::Bytes(fed) => slot_bytes(fed, advance),
+                data @ (StreamData::Zeros | StreamData::None) => {
+                    debug_assert!(
+                        matches!(data, StreamData::Zeros),
+                        "a stream the pipeline reads has data"
+                    );
+                    debug_assert!(advance == 0, "a stream with nothing bound never crosses");
+                    let stride = source.streams[usize::from(stream)].stride as usize;
+                    Cow::Borrowed(&NULL_STREAM_ZEROS[..stride.min(NULL_STREAM_ZEROS.len())])
+                }
+            };
+            let start = bytes.len();
+            bytes.extend_from_slice(&fed);
+            binds.push((Stage::Vertex, slot, start..bytes.len()));
         }
-        let stored = reads()
-            .map(|(slot, id, offset)| {
-                let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
-                Ok((slot, Arc::clone(buffer), u64::from(offset)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let indexed = match &draw.indices {
             None => None,
             Some(Indices {
@@ -358,30 +383,6 @@ impl CoreDevice {
                 height: u64::from(scissor[3]),
             }
         });
-        let mut bytes = Vec::new();
-        let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
-        // Each stream the pipeline reads, first, at its slot: its bytes, or for one with nothing
-        // bound zeros of its layout's stride, clamped to the zero feed as mtld3d clamps it.
-        for ((slot, layout), data) in (0_u8..).zip(&source.streams).zip(&draw.streams) {
-            if !layout.is_used() {
-                continue;
-            }
-            let fed = match data {
-                StreamData::Bytes(fed) => *fed,
-                // Bound by its buffer, in the closure.
-                StreamData::Buffer { .. } => continue,
-                StreamData::Zeros | StreamData::None => {
-                    debug_assert!(
-                        matches!(data, StreamData::Zeros),
-                        "a stream the pipeline reads has data"
-                    );
-                    &NULL_STREAM_ZEROS[..(layout.stride as usize).min(NULL_STREAM_ZEROS.len())]
-                }
-            };
-            let start = bytes.len();
-            bytes.extend_from_slice(fed);
-            binds.push((Stage::Vertex, slot, start..bytes.len()));
-        }
         for bind in draw.binds.iter().filter(|b| !b.bytes.is_empty()) {
             let start = bytes.len();
             bytes.extend_from_slice(bind.bytes);
@@ -563,8 +564,9 @@ impl CoreDevice {
 
     /// The pipeline entry of `key`, which the device keeps for its life: its handle and source.
     ///
-    /// Built on the first draw of `key`, unless its layout is refused ([`refused_layout`]); a key
-    /// that does not build is kept as handle 0, logged then, and never built again.
+    /// Built on the first draw of `key`, unless no binding can fetch its layout
+    /// ([`refused_layout`]); a key that does not build is kept as handle 0, logged then, and never
+    /// built again.
     fn pipeline(
         &mut self,
         key: &PipelineKey,
@@ -574,20 +576,27 @@ impl CoreDevice {
             .get(key)
             .unwrap_or_else(|| self.insert_pipeline(key));
         if entry.spec.as_ref().as_ref().is_some_and(refused_layout) {
-            return Err(DrawRefused::Crossing);
+            return Err(DrawRefused::Fetch);
         }
         Ok(entry)
     }
 
-    /// The entry of a key the device has not seen: built unless its layout is refused.
+    /// The entry of a key the device has not seen: built unless no binding can fetch its layout.
     ///
-    /// One that does not build is logged and kept as handle 0, never built again.
+    /// One that does not build is logged and kept as handle 0, never built again; one no binding
+    /// can fetch is kept as handle 0 too, its fetch error logged.
     fn insert_pipeline(&mut self, key: &PipelineKey) -> Arc<Compiled<Option<PipelineSource>>> {
         let source = pipeline_source(key)
             .map_err(|e| {
                 log::debug!(target: LOG_TARGET, "d3d9 core: a vertex stage: {e:?}");
             })
             .ok();
+        if let Some(Err(e)) = source.as_ref().map(|source| &source.fetch) {
+            log::debug!(
+                target: LOG_TARGET,
+                "d3d9 core: no binding fetches a vertex layout ({e:?}); its draws are refused"
+            );
+        }
         let refused = source.as_ref().is_some_and(refused_layout);
         let pso = match &source {
             Some(source) if !refused => build_pipeline(&self.device, source, &mut self.functions),
@@ -641,11 +650,28 @@ impl CoreDevice {
     }
 }
 
-/// Whether the core refuses `source`'s layout: a crossing attribute, or no binding fetches it.
-///
-/// The core's draws bind each stream once, at its own slot: they bind no fetch yet.
+/// Whether the core refuses `source`'s layout: no binding can fetch it.
 const fn refused_layout(source: &PipelineSource) -> bool {
-    source.crosses_stride() || !source.fetchable()
+    !source.fetchable()
+}
+
+/// The bytes an inline stream binds at a slot advanced `advance` bytes past it.
+///
+/// `fed` from byte `advance` on, zero-filled to `fed`'s length (all zeros from the end on); `fed`
+/// itself at no advance. Vertex `i` of a slot reads `i * stride` bytes in, and an attribute fits
+/// its stride, so the slot reads the bytes mtld3d's payload holds from the advance: the stream's,
+/// then the zeros it pads past the last vertex.
+fn slot_bytes(fed: &[u8], advance: u32) -> Cow<'_, [u8]> {
+    if advance == 0 {
+        return Cow::Borrowed(fed);
+    }
+    let read = usize::try_from(advance)
+        .ok()
+        .and_then(|advance| fed.get(advance..))
+        .unwrap_or_default();
+    let mut bytes = read.to_vec();
+    bytes.resize(fed.len(), 0);
+    Cow::Owned(bytes)
 }
 
 /// The pipeline `source` describes, its stages from `functions` (compiled there on a miss).

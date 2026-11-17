@@ -327,14 +327,6 @@ pub struct PipelineSource {
 }
 
 impl PipelineSource {
-    /// Whether an attribute ends past its stream's stride, reading into the next element.
-    ///
-    /// Such a layout needs mtld3d's crossing fetch, which the core's draws do not bind yet.
-    #[must_use]
-    pub const fn crosses_stride(&self) -> bool {
-        self.crossing != 0
-    }
-
     /// Whether the layout can be fetched: it needs no fetch, or the one it needs builds.
     #[must_use]
     pub const fn fetchable(&self) -> bool {

@@ -1,7 +1,7 @@
 use mtld3d_core::{
     ids::{BufferId, TextureId},
-    pipeline_key::{MAX_STREAMS, PipelineKey},
-    streams::STREAM_FREQ_DEFAULT,
+    pipeline_key::{MAX_STREAMS, PipelineKey, StreamKey},
+    streams::{STREAM_FREQ_DEFAULT, stream_step},
 };
 use mtld3d_types::{D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA};
 use winemetal_sys::wire::{
@@ -13,7 +13,7 @@ use winemetal_sys::wire::{
 use crate::device::{
     CoreDevice, DrawData, DrawRefused, IndexData, Indices, StreamData, TargetRef, TextureKind,
     fixture::{
-        at, bound, core_on_fakes, draw, ff_binds, key, passes, target_desc, triangle,
+        at, bound, core_on_fakes, descriptors, draw, ff_binds, key, passes, target_desc, triangle,
         two_stream_key,
     },
     queue_profile_for,
@@ -26,6 +26,17 @@ fn bound_key() -> PipelineKey {
     PipelineKey {
         streams,
         ..key(0xf)
+    }
+}
+
+/// The key entry of a stream bound per vertex `stride` bytes apart, at an offset of shift `shift`.
+const fn shifted(stride: u32, shift: u8) -> StreamKey {
+    let (step, rate) = stream_step(STREAM_FREQ_DEFAULT);
+    StreamKey::Bound {
+        stride,
+        step,
+        rate,
+        shift,
     }
 }
 
@@ -303,25 +314,23 @@ fn instancing_counts_only_a_stream_the_stage_reads() {
     assert_eq!(counts, ["3", "1"], "{calls:#?}");
 }
 
-/// A stream the stage reads at an offset off four bytes refuses the draw before any record.
+/// A stream read at an offset off four bytes binds at the multiple of four below it.
 ///
-/// One the stage does not read draws at such an offset.
+/// The attributes it feeds sit that many bytes further on. A stream the stage does not read draws
+/// at such an offset with nothing moved.
 #[test]
-fn an_odd_offset_refuses_only_a_stream_the_stage_reads() {
+fn an_odd_offset_binds_below_and_moves_its_attributes() {
     const DEVICE: u64 = 0x3ca;
     let mut core = core_on_fakes(DEVICE);
     let vertices = filled(&mut core, 1, 160);
-    core.drain();
-    let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
+    let mut key = bound_key();
+    key.streams[0] = shifted(20, 2);
     let odd = DrawData {
-        streams: stored(&[(vertices, 2)]),
+        streams: stored(&[(vertices, 22)]),
         ..draw(3, 3, None, &binds)
     };
-    assert_eq!(core.draw(&bound_key(), &odd), Err(DrawRefused::Offset));
-    core.drain();
-    let calls = dxmt_fakes::take_calls(DEVICE);
-    assert!(passes(&calls).is_empty(), "{calls:#?}");
+    assert_eq!(core.draw(&key, &odd), Ok(()));
     let mut streams = stored(&[(vertices, 0)]);
     streams[2] = StreamData::Buffer {
         id: vertices,
@@ -332,6 +341,149 @@ fn an_odd_offset_refuses_only_a_stream_the_stage_reads() {
         ..draw(3, 3, None, &binds)
     };
     assert_eq!(core.draw(&bound_key(), &unread), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        descriptors(&calls),
+        [
+            [
+                "  attr 0 format=31 offset=2 buffer=0",
+                "  attr 2 format=42 offset=18 buffer=0",
+                "  layout 0 stride=20 step=1 rate=1",
+            ],
+            [
+                "  attr 0 format=31 offset=0 buffer=0",
+                "  attr 2 format=42 offset=16 buffer=0",
+                "  layout 0 stride=20 step=1 rate=1",
+            ],
+        ],
+        "{calls:#?}"
+    );
+    let buffer = copied_into(&calls, 0);
+    let pass = passes(&calls)[0];
+    for offset in [20, 0] {
+        let line = format!("  render 2 buffer={buffer} offset={offset} index=0");
+        assert!(pass.contains(&line), "no {line:?} in {pass:#?}");
+    }
+}
+
+/// A shift on stream 1 moves stream 1's attributes alone: stream 0, aligned, keeps its own.
+#[test]
+fn a_shifted_stream_1_moves_only_its_attributes() {
+    const DEVICE: u64 = 0x3d1;
+    let mut core = core_on_fakes(DEVICE);
+    let (vertices, colors) = (filled(&mut core, 1, 160), filled(&mut core, 2, 64));
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = bound(20, STREAM_FREQ_DEFAULT);
+    streams[1] = shifted(4, 2);
+    let binds = ff_binds();
+    let drawn = DrawData {
+        streams: stored(&[(vertices, 20), (colors, 10)]),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&two_stream_key(0, streams), &drawn), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        descriptors(&calls),
+        [[
+            "  attr 0 format=31 offset=0 buffer=0",
+            "  attr 2 format=42 offset=2 buffer=1",
+            "  layout 0 stride=20 step=1 rate=1",
+            "  layout 1 stride=4 step=1 rate=1",
+        ]],
+        "{calls:#?}"
+    );
+    let (vertex_buffer, color_buffer) = (copied_into(&calls, 0), copied_into(&calls, 1));
+    let pass = passes(&calls)[0];
+    for line in [
+        format!("  render 2 buffer={vertex_buffer} offset=20 index=0"),
+        format!("  render 2 buffer={color_buffer} offset=8 index=1"),
+    ] {
+        assert!(pass.contains(&line), "no {line:?} in {pass:#?}");
+    }
+}
+
+/// A crossing attribute's slot binds its stream's buffer again, advanced by the attribute's offset.
+///
+/// The colour at offset 16 of a vertex bound 16 bytes apart moves to slot 1, offset 0, under
+/// stream 0's layout, while the position keeps slot 0: the one buffer is bound at the stream's
+/// offset at slot 0 and 16 bytes on at slot 1. A stream none of whose attributes fits its stride,
+/// the colour at offset 4 of stream 1 bound 4 bytes apart, keeps its own slot, advanced.
+#[test]
+fn a_crossing_attribute_binds_its_buffer_again() {
+    const DEVICE: u64 = 0x3d2;
+    let mut core = core_on_fakes(DEVICE);
+    let (vertices, colors) = (filled(&mut core, 1, 160), filled(&mut core, 2, 64));
+    let binds = ff_binds();
+    let mut key = bound_key();
+    key.streams[0] = bound(16, STREAM_FREQ_DEFAULT);
+    let spare = DrawData {
+        streams: stored(&[(vertices, 20)]),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&key, &spare), Ok(()));
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = bound(20, STREAM_FREQ_DEFAULT);
+    streams[1] = bound(4, STREAM_FREQ_DEFAULT);
+    let own = DrawData {
+        streams: stored(&[(vertices, 0), (colors, 8)]),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&two_stream_key(4, streams), &own), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        descriptors(&calls),
+        [
+            [
+                "  attr 0 format=31 offset=0 buffer=0",
+                "  attr 2 format=42 offset=0 buffer=1",
+                "  layout 0 stride=16 step=1 rate=1",
+                "  layout 1 stride=16 step=1 rate=1",
+            ],
+            [
+                "  attr 0 format=31 offset=0 buffer=0",
+                "  attr 2 format=42 offset=0 buffer=1",
+                "  layout 0 stride=20 step=1 rate=1",
+                "  layout 1 stride=4 step=1 rate=1",
+            ],
+        ],
+        "{calls:#?}"
+    );
+    let (vertex_buffer, color_buffer) = (copied_into(&calls, 0), copied_into(&calls, 1));
+    let pass = passes(&calls)[0];
+    for line in [
+        format!("  render 2 buffer={vertex_buffer} offset=20 index=0"),
+        format!("  render 2 buffer={vertex_buffer} offset=36 index=1"),
+        format!("  render 2 buffer={color_buffer} offset=12 index=1"),
+    ] {
+        assert!(pass.contains(&line), "no {line:?} in {pass:#?}");
+    }
+}
+
+/// A binding advanced past its buffer's end refuses the draw before any record.
+///
+/// The colour at offset 16 of a vertex bound 16 bytes apart, the stream at byte 16 of a 32-byte
+/// buffer: the colour's slot would start at byte 32.
+#[test]
+fn an_advanced_binding_past_the_buffer_is_refused() {
+    const DEVICE: u64 = 0x3d3;
+    let mut core = core_on_fakes(DEVICE);
+    let vertices = filled(&mut core, 1, 32);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let binds = ff_binds();
+    let mut key = bound_key();
+    key.streams[0] = bound(16, STREAM_FREQ_DEFAULT);
+    let past = DrawData {
+        streams: stored(&[(vertices, 16)]),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&key, &past), Err(DrawRefused::Fetch));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(passes(&calls).is_empty(), "{calls:#?}");
 }
 
 /// A forgotten buffer's recorded draw still binds it; a later draw naming it is refused.

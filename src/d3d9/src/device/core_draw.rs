@@ -39,7 +39,7 @@ use mtld3d_core::{
         sample_unfiltered, snapshot_from_state, vertex_lod_table,
     },
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
-    streams::{is_instance_data, stream_step},
+    streams::{is_instance_data, offset_shift, stream_step},
     vs_draw::clip_plane_count,
 };
 use mtld3d_shared::{
@@ -60,12 +60,15 @@ use crate::{
     com_ref::ComChild, index_buffer::Direct3DIndexBuffer9, vertex_buffer::Direct3DVertexBuffer9,
 };
 
-/// The refusal of a draw whose layout crosses its stride (C4b2-8), one name for both entry points.
-const CROSSING: &str = "IDirect3DDevice9::Draw*PrimitiveUP (an attribute crossing the stride)";
-/// The buffer draws' refusal of a layout that crosses a stream's stride (DXMTRS C4c-1).
-const BUFFER_CROSSING: &str = "IDirect3DDevice9::Draw*Primitive (an attribute crossing the stride)";
-/// The refusal of a draw that reads a stream bound at an offset off four bytes (DXMTRS C4c-1).
-const OFFSET: &str = "IDirect3DDevice9::Draw*Primitive (a stream offset off four bytes)";
+/// The UP draws' refusal of a layout no binding can fetch (DXMTRS C4c-2a).
+///
+/// An attribute wider than its stride, or more than 16 attributes under a fetch.
+const UP_FETCH: &str = "IDirect3DDevice9::Draw*PrimitiveUP (a layout no binding can fetch)";
+/// The buffer draws' refusal of a layout no binding can fetch (DXMTRS C4c-2a).
+///
+/// An attribute wider than its stride, more than 16 attributes under a fetch, or a binding
+/// advanced past a crossing attribute's offset that starts past its buffer.
+const BUFFER_FETCH: &str = "IDirect3DDevice9::Draw*Primitive (a layout no binding can fetch)";
 /// The refusal of a draw that reads a buffer another device made (DXMTRS C4c-1).
 ///
 /// The dirty range is one a buffer and the core's store one a device: a second device would draw
@@ -116,8 +119,8 @@ struct Feed<'a> {
     /// Stream 0's frequency word and its instance-data streams (bit `n`), if the draw instances.
     instancing: Option<(u32, u16)>,
     indices: Option<Indices<'a>>,
-    /// The name a crossing layout is refused under: the UP draws' or the buffer draws'.
-    crossing: &'static str,
+    /// The name a layout no binding can fetch is refused under: the UP draws' or the buffer draws'.
+    fetch: &'static str,
 }
 
 /// The declared streams' bound vertex buffers, as a buffer draw reads them (DXMTRS C4c-1).
@@ -734,19 +737,18 @@ fn draw(
         base_vertex: 0,
         instancing: None,
         indices,
-        crossing: CROSSING,
+        fetch: UP_FETCH,
     };
     record(dev, primitive, metal_primitive, feed)
 }
 
 /// Records a draw of `primitive`, as Metal's `metal_primitive`, from `feed` with the device state.
 ///
-/// A crossing layout answers `D3DERR_NOTAVAILABLE` under `feed`'s name and a stream read at an
-/// offset off four bytes under [`OFFSET`] (each logged once); a draw `d3d9_rt` drops for another
-/// reason answers `D3D_OK`, as under C4a, one whose colour targets, depth-stencil or buffer are
-/// not its key's or the store's logged once (unreachable while the key's colours, count and depth
-/// format are `target_desc`'s, `target_samples`' and `key_depth`'s, and the arms flush every
-/// buffer they read).
+/// A layout no binding can fetch answers `D3DERR_NOTAVAILABLE` under `feed`'s name (logged once);
+/// a draw `d3d9_rt` drops for another reason answers `D3D_OK`, as under C4a, one whose colour
+/// targets, depth-stencil or buffer are not its key's or the store's logged once (unreachable
+/// while the key's colours, count and depth format are `target_desc`'s, `target_samples`' and
+/// `key_depth`'s, and the arms flush every buffer they read).
 fn record(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -761,7 +763,7 @@ fn record(
         base_vertex,
         instancing,
         indices,
-        crossing,
+        fetch,
     } = feed;
     let (key, mut binds, target) = match resolve(dev, primitive, &keys) {
         Ok(resolved) => resolved,
@@ -802,12 +804,8 @@ fn record(
         return D3D_OK;
     };
     match core.draw(&key, &draw) {
-        Err(DrawRefused::Crossing) => {
-            refuse_under_core(crossing);
-            D3DERR_NOTAVAILABLE
-        }
-        Err(DrawRefused::Offset) => {
-            refuse_under_core(OFFSET);
+        Err(DrawRefused::Fetch) => {
+            refuse_under_core(fetch);
             D3DERR_NOTAVAILABLE
         }
         Err(DrawRefused::Buffer) => dropped(),
@@ -995,7 +993,7 @@ pub fn draw_primitive(
         base_vertex: 0,
         instancing: None,
         indices: None,
-        crossing: BUFFER_CROSSING,
+        fetch: BUFFER_FETCH,
     };
     Some(record(dev, primitive, metal_primitive, feed))
 }
@@ -1062,7 +1060,7 @@ pub fn draw_indexed_primitive(
             index_type: index_type as u8,
             count,
         }),
-        crossing: BUFFER_CROSSING,
+        fetch: BUFFER_FETCH,
     };
     Some(record(dev, primitive, metal_primitive, feed))
 }
@@ -1155,7 +1153,7 @@ fn fan_draw(
             index_type: fan.index_type() as u8,
             count: fan.index_count(),
         }),
-        crossing: BUFFER_CROSSING,
+        fetch: BUFFER_FETCH,
     };
     record(dev, D3DPT_TRIANGLEFAN, mtl::PrimitiveType::Triangle, feed)
 }
@@ -1190,16 +1188,16 @@ fn bound_streams(dev: &DeviceInner) -> Result<Option<BoundStreams>, i32> {
         of_this_device(buffer, dev)?;
         let freq = bound.stream_freq(stream);
         let (step, rate) = stream_step(freq);
+        let offset = bound.stream_offset(stream);
         streams.keys[stream] = StreamKey::Bound {
             stride: bound.stream_stride(stream),
             step,
             rate,
-            // d3d9-rt refuses a stream it reads bound off four bytes: no key is shifted yet.
-            shift: 0,
+            shift: u8::try_from(offset_shift(offset)).expect("a shift is below 4"),
         };
         streams.streams[stream] = StreamData::Buffer {
             id: buffer.inner().buffer_id(),
-            offset: bound.stream_offset(stream),
+            offset,
         };
         streams.buffers[stream] = vb;
         if is_instance_data(freq) {

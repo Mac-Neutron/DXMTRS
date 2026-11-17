@@ -299,6 +299,21 @@ pub fn passes(calls: &[String]) -> Vec<&[String]> {
     found
 }
 
+/// The vertex descriptor's lines (`  attr`, `  layout`) of each pipeline `calls` shows made.
+pub fn descriptors(calls: &[String]) -> Vec<Vec<&str>> {
+    let mut found = Vec::new();
+    for call in calls {
+        if call == "MTLDevice_newRenderPipelineStateWithVertexDescriptor" {
+            found.push(Vec::new());
+        } else if (call.starts_with("  attr ") || call.starts_with("  layout "))
+            && let Some(last) = found.last_mut()
+        {
+            last.push(call.as_str());
+        }
+    }
+    found
+}
+
 /// The first line of `pass` starting with `prefix`, without it.
 pub fn line<'a>(pass: &'a [String], prefix: &str) -> Option<&'a str> {
     pass.iter().find_map(|c| c.strip_prefix(prefix))

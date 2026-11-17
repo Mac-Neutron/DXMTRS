@@ -542,13 +542,12 @@ fn a_crossing_attribute_is_detected() {
         ..prog_base()
     };
     assert_eq!(source(&crossing).crossing, 0b01);
-    assert!(source(&crossing).crosses_stride());
     let whole = PipelineKey {
         streams: inline(28),
         ..crossing
     };
-    assert!(!source(&whole).crosses_stride());
-    assert!(!source(&prog_base()).crosses_stride());
+    assert_eq!(source(&whole).crossing, 0);
+    assert_eq!(source(&prog_base()).crossing, 0);
     // The texture coordinates on stream 1, bound 4 bytes apart under an 8-byte element.
     let mut streams = inline(16);
     streams[1] = bound(4, STREAM_FREQ_DEFAULT);
@@ -561,7 +560,6 @@ fn a_crossing_attribute_is_detected() {
         ..prog_base()
     };
     assert_eq!(source(&on_1).crossing, 0b10);
-    assert!(source(&on_1).crosses_stride());
 }
 
 /// A crossing attribute is fetched at a spare slot, unshifted and on a shifted stream.

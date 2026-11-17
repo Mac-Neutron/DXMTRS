@@ -12,12 +12,12 @@ use mtld3d_types::{
     D3DDECLUSAGE_TEXCOORD, D3DSTREAMSOURCE_INSTANCEDATA, D3DVERTEXELEMENT9,
 };
 
-use super::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
+use super::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData, slot_bytes};
 use crate::device::{
     CoreDevice,
     fixture::{
-        at, bound, core_on_fakes, decl, draw, ff_binds, inline, key, passes, stream0, triangle,
-        two_stream_key,
+        at, bound, core_on_fakes, decl, descriptors, draw, ff_binds, inline, key, passes, stream0,
+        triangle, two_stream_key,
     },
 };
 
@@ -391,9 +391,12 @@ fn a_recreated_shader_hits_the_cache() {
     assert_eq!(pipelines_made(&dxmt_fakes::take_calls(DEVICE)), 0);
 }
 
-/// A layout whose attribute crosses the stride is refused before anything compiles.
+/// A layout whose attribute crosses the stride binds the stream's bytes at a second slot.
+///
+/// The texture coordinates at offset 20 of 16-byte vertices: at slot 1, offset 0, under stream
+/// 0's layout; the draw binds the stream's 64 bytes at slot 0 and 64 at slot 1, from byte 20.
 #[test]
-fn a_crossing_draw_is_refused() {
+fn an_inline_crossing_draw_binds_its_bytes_at_two_slots() {
     const DEVICE: u64 = 0xb9;
     let mut core = core_on_fakes(DEVICE);
     let key = PipelineKey {
@@ -423,14 +426,38 @@ fn a_crossing_draw_is_refused() {
         ]),
         ..prog_key(code(&VS_POS), code(&PS_C0))
     };
-    let refused = Err(DrawRefused::Crossing);
-    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
-    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
-    assert_eq!(core.compiles(), 0);
+    assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
-    assert_eq!(pipelines_made(&calls), 0, "{calls:#?}");
-    assert!(!draws(&calls), "{calls:#?}");
+    assert_eq!(
+        descriptors(&calls),
+        [[
+            "  attr 0 format=31 offset=0 buffer=0",
+            "  attr 3 format=29 offset=0 buffer=1",
+            "  layout 0 stride=16 step=1 rate=1",
+            "  layout 1 stride=16 step=1 rate=1",
+        ]],
+        "{calls:#?}"
+    );
+    let pass = passes(&calls)[0];
+    find(pass, "  render 46 length=64 index=0");
+    find(pass, "  render 46 length=64 index=1");
+    assert!(draws(&calls), "{calls:#?}");
+}
+
+/// An inline slot's bytes are the stream's from its advance, zero-filled to the stream's length.
+///
+/// The stream itself at no advance; all zeros at an advance at or past its end.
+#[test]
+fn an_inline_slot_reads_from_its_advance() {
+    let fed = [1_u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    assert_eq!(*slot_bytes(&fed, 0), fed);
+    assert_eq!(
+        *slot_bytes(&fed, 8),
+        [9, 10, 11, 12, 0, 0, 0, 0, 0, 0, 0, 0]
+    );
+    assert_eq!(*slot_bytes(&fed, 12), [0; 12]);
+    assert_eq!(*slot_bytes(&fed, 20), [0; 12]);
 }
 
 /// A vertex stage that does not parse is kept as a failed entry: no re-parse, no draw.
@@ -1000,21 +1027,6 @@ fn up_with(entry: StreamKey) -> [StreamKey; MAX_STREAMS as usize] {
     streams
 }
 
-/// The vertex descriptor's lines (`  attr`, `  layout`) of each pipeline `calls` shows made.
-fn descriptors(calls: &[String]) -> Vec<Vec<&str>> {
-    let mut found = Vec::new();
-    for call in calls {
-        if call == "MTLDevice_newRenderPipelineStateWithVertexDescriptor" {
-            found.push(Vec::new());
-        } else if (call.starts_with("  attr ") || call.starts_with("  layout "))
-            && let Some(last) = found.last_mut()
-        {
-            last.push(call.as_str());
-        }
-    }
-    found
-}
-
 /// A UP draw's declared stream with nothing bound reads zeros at its own slot.
 ///
 /// Stream 0's attribute at buffer 0, stepping per vertex at the call's stride; stream 1's at
@@ -1134,17 +1146,20 @@ fn keys_of_two_strides_are_two_pipelines() {
     );
 }
 
-/// An attribute crossing stream 1's stride refuses the draw, as one crossing stream 0's does.
+/// An attribute wider than its stream's stride refuses every draw, and its pipeline never builds.
+///
+/// The colour's four bytes on stream 1, bound 2 bytes apart: no binding fetches them, and the key
+/// is kept unbuilt.
 #[test]
-fn a_crossing_on_stream_1_is_refused() {
+fn an_attribute_wider_than_its_stride_is_refused() {
     const DEVICE: u64 = 0x3c3;
     let mut core = core_on_fakes(DEVICE);
-    // The colour ends at byte 8 of stream 1's element, which is bound 4 bytes apart.
-    let key = two_stream_key(4, up_with(bound(4, STREAM_FREQ_DEFAULT)));
-    let refused = Err(DrawRefused::Crossing);
+    let key = two_stream_key(0, up_with(bound(2, STREAM_FREQ_DEFAULT)));
+    let refused = Err(DrawRefused::Fetch);
     assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
     assert_eq!(core.draw(&key, &draw(3, 3, None, &[])), refused);
     assert_eq!(core.compiles(), 0);
+    assert_eq!(core.pipelines_len(), 1);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(pipelines_made(&calls), 0, "{calls:#?}");
