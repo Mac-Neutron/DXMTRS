@@ -238,6 +238,10 @@ impl IndexBufferInner {
     /// padded length and takes the whole backing; otherwise the dirty span, if any, uploads,
     /// cleared after an accepted upload unless a lock is out. False when the core makes no
     /// buffer or refuses the upload (a buffer it made then leaves the store).
+    ///
+    /// Unlike the vertex buffer's, an upload never releases the backing, whatever the usage: an
+    /// indexed triangle fan reads its indices out of it, and the core runtime has no read-back
+    /// of a buffer to restore it from (DXMTRS C4c-2b).
     #[cfg(feature = "core-runtime")]
     #[must_use]
     pub fn core_flush(&mut self, core: &mut d3d9_rt::device::CoreDevice) -> bool {

@@ -1249,12 +1249,16 @@ fn flush(
     bound: &BoundStreams,
     index: Option<*mut Direct3DIndexBuffer9>,
 ) -> bool {
+    // Read before the core is borrowed: a vertex buffer's release decision takes it.
+    let ignore_lock_bounds = dev.config().buffer_ignore_lock_bounds;
     let Some(core) = dev.core.as_deref_mut() else {
         return false;
     };
     let vertices = bound.buffers.iter().filter(|vb| !vb.is_null()).all(|&vb| {
         // SAFETY: a bound vertex buffer, live while bound, distinct from the device.
-        unsafe { &mut *vb }.inner_mut().core_flush(core)
+        unsafe { &mut *vb }
+            .inner_mut()
+            .core_flush(core, ignore_lock_bounds)
     });
     // SAFETY: the bound index buffer, live while bound, distinct from the device.
     vertices && index.is_none_or(|ib| unsafe { &mut *ib }.inner_mut().core_flush(core))

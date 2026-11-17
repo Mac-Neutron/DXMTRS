@@ -88,7 +88,8 @@ pub struct VertexBufferInner {
     /// `Staged` only: the byte range dirtied since the last upload.
     ///
     /// Accumulated across `Lock`s and flushed on `Unlock` (on a core
-    /// device, by `core_flush` at the next draw). Unused for `Direct`.
+    /// device, by `core_flush` at the next draw, or at the `Unlock` of a
+    /// re-created backing). Unused for `Direct`.
     dirty: DirtyRange,
     /// Canonical CPU backing.
     ///
@@ -292,25 +293,44 @@ impl VertexBufferInner {
     /// A buffer the core's store lacks is made at the backing's padded length, as mtld3d's device
     /// buffer is, and takes the whole backing; otherwise the dirty span, if any, uploads. The
     /// range is cleared after an accepted upload unless a lock is out: a buffer drawn while
-    /// locked uploads again at its next draw, as mtld3d's `flush_staged_if_mapped` has it. False
-    /// when the core makes no buffer or refuses the upload (a buffer it made then leaves the
-    /// store, so the next draw makes it whole again).
+    /// locked uploads again at its next draw, as mtld3d's `flush_staged_if_mapped` has it. An
+    /// accepted upload releases the backing by mtld3d's rule, which `ignore_lock_bounds`
+    /// (`buffer.ignoreLockBounds`) is part of (DXMTRS C4c-2b). False when the core makes no
+    /// buffer or refuses the upload (a buffer it made then leaves the store, so the next draw
+    /// makes it whole again).
     #[cfg(feature = "core-runtime")]
     #[must_use]
-    pub fn core_flush(&mut self, core: &mut d3d9_rt::device::CoreDevice) -> bool {
+    pub fn core_flush(
+        &mut self,
+        core: &mut d3d9_rt::device::CoreDevice,
+        ignore_lock_bounds: bool,
+    ) -> bool {
+        // A released backing's last upload carried every byte, and a lock re-creates the backing
+        // before it records a range: nothing is owed.
+        if self.backing.is_released() && self.dirty.is_empty() {
+            return true;
+        }
         let backing = self.backing.as_slice();
         let made = !core.has_buffer(self.buffer_id);
-        let (offset, bytes) = if made {
+        if made && !self.backing.may_widen_upload() {
+            // Unreachable: a backing is re-created only after an upload into the store, which
+            // keeps the buffer until the D3D9 buffer is destroyed. Its zeros must not reach a new
+            // core buffer.
+            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                "d3d9 core: a re-created vertex buffer backing has no core buffer; the draw is dropped");
+            return false;
+        }
+        let (offset, end, bytes) = if made {
             let length = u64::try_from(backing.len());
             if !length.is_ok_and(|length| core.buffer_create(self.buffer_id, length)) {
                 return false;
             }
-            (0, Some(backing))
+            (0, self.length, Some(backing))
         } else {
             let Some((min, max)) = self.dirty.span() else {
                 return true;
             };
-            (min, backing.get(min as usize..max as usize))
+            (min, max, backing.get(min as usize..max as usize))
         };
         if !bytes.is_some_and(|bytes| core.buffer_upload(self.buffer_id, u64::from(offset), bytes))
         {
@@ -322,6 +342,8 @@ impl VertexBufferInner {
         if self.lock_count == 0 {
             self.dirty.clear();
         }
+        self.backing.note_upload(offset, end);
+        release_backing_after_upload(self, ignore_lock_bounds);
         true
     }
 }
@@ -955,9 +977,24 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
             return D3D_OK;
         }
     }
-    // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1).
+    // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1), except a
+    // re-created backing's: it holds zeros outside the windows written since, and the range is
+    // one span, so a second window would upload the zeros between the two over the device's
+    // bytes. Each window uploads at its own Unlock, as mtld3d's do (DXMTRS C4c-2b).
     #[cfg(feature = "core-runtime")]
     if on_core_device(inner.device_inner) {
+        if !inner.backing.may_widen_upload() {
+            // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
+            // finalizer relies on); nothing else of it is borrowed in this entry point.
+            let dev = unsafe { &mut *inner.device_inner };
+            let ignore = dev.config().buffer_ignore_lock_bounds;
+            if let Some(core) = dev.core_mut()
+                && !inner.core_flush(core, ignore)
+            {
+                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                    "d3d9 core: a re-created vertex buffer's window did not upload at its Unlock; the next draw uploads it");
+            }
+        }
         return D3D_OK;
     }
     if matches!(inner.map_mode, BufferMapMode::Staged)
@@ -996,7 +1033,8 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
         // buffer, so clearing it on a path that queued nothing would
         // drop them silently.
         inner.dirty.clear();
-        release_backing_after_upload(inner);
+        let ignore = ignore_lock_bounds(inner);
+        release_backing_after_upload(inner, ignore);
     }
     D3D_OK
 }
@@ -1028,14 +1066,16 @@ fn ignore_lock_bounds(inner: &VertexBufferInner) -> bool {
 ///
 /// The trade is the one the texture-staging release already accepts: the GPU
 /// holds the only copy, so nothing can re-upload these buffers if the Metal
-/// device is recreated under them.
-fn release_backing_after_upload(inner: &mut VertexBufferInner) {
+/// device is recreated under them. `ignore_lock_bounds` is the device's
+/// `buffer.ignoreLockBounds`, which the caller reads: a core device's draw
+/// holds the device borrowed while it uploads (DXMTRS C4c-2b).
+fn release_backing_after_upload(inner: &mut VertexBufferInner, ignore_lock_bounds: bool) {
     // `buffer.ignoreLockBounds` says this title writes outside the windows it
     // announces, and the only way to carry those writes is to upload the whole
     // buffer out of the CPU copy. Releasing the copy would leave that upload
     // nothing true to carry, so the knob keeps it.
     if inner.lock_count != 0
-        || ignore_lock_bounds(inner)
+        || ignore_lock_bounds
         || !may_release_backing(inner.usage, inner.pool)
         || !inner.backing.may_widen_upload()
     {
