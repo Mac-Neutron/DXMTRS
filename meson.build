@@ -245,7 +245,3 @@ rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll'] 
   sources : rust_no_source)
 
 subdir('src')
-
-if get_option('enable_tests')
-subdir('tests')
-endif

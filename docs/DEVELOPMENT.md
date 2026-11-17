@@ -142,9 +142,8 @@ The per-target C and C++ environment that cc-rs reads (compiler, flags, file-pre
 
 Two of this tree's own sources go through cc-rs: airconv's shim over LLVM's C++ API (`src/airconv/build.rs`, with the
 two passes it includes) and `mtld3d.so`'s Objective-C delegate forward (`src/d3d9/unix/build.rs`). The rest that cc-rs
-compiles belongs to crates (snmalloc-sys, zstd-sys). Meson compiles no C or C++ of this tree outside `tests/dx11`
-(built only under `enable_tests`): a target made of Rust archives alone takes `rust_no_source`, an empty generated C
-file, for its link driver.
+compiles belongs to crates (snmalloc-sys, zstd-sys). Meson compiles no C or C++ of this tree: a target made of Rust
+archives alone takes `rust_no_source`, an empty generated C file, for its link driver.
 
 ### Instruction-set baselines
 

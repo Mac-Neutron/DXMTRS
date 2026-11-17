@@ -575,22 +575,10 @@ fi
 #     the two module passes), which LLVM's C API does not reach.
 #   src/d3d9/unix/src/metal/macdrv/delegate_forward.m: an Objective-C @try around a send to Wine's application
 #     delegate. mtld3d.so builds with panic = "abort", where no Rust frame can catch the exception.
-#   tests/dx11: DXMT's D3D11 sample programs, built only under enable_tests.
 C_SOURCES='src/airconv/shim/shim.cpp
 src/airconv/transforms/lower_16bit_texread.cpp
 src/airconv/transforms/simdgroup_implicit_membarrier.cpp
-src/d3d9/unix/src/metal/macdrv/delegate_forward.m
-tests/dx11/dx11_animated.cpp
-tests/dx11/dx11_bpl.cpp
-tests/dx11/dx11_camera.cpp
-tests/dx11/dx11_cbuffer.cpp
-tests/dx11/dx11_cube.cpp
-tests/dx11/dx11_hdr_linear.cpp
-tests/dx11/dx11_hdr_pq.cpp
-tests/dx11/dx11_model.cpp
-tests/dx11/dx11_obj.cpp
-tests/dx11/dx11_texquad.cpp
-tests/dx11/dx11_triangle.cpp'
+src/d3d9/unix/src/metal/macdrv/delegate_forward.m'
 # shellcheck disable=SC2046
 c_strays=$(outside "$C_SOURCES" $(git ls-files 'src/*.c' 'src/*.cc' 'src/*.cpp' 'src/*.cxx' 'src/*.m' 'src/*.mm' \
     'tests/*.c' 'tests/*.cc' 'tests/*.cpp' 'tests/*.cxx' 'tests/*.m' 'tests/*.mm'))
