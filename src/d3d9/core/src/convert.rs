@@ -841,6 +841,16 @@ fn put_fan_index(dst: &mut [u8], vertex: u32, index_type: IndexType) {
 /// at `u16::MAX`.
 pub const FAN_PATTERN_MAX_TRIANGLES: u32 = u16::MAX as u32 - 1;
 
+/// Whether a non-indexed fan rides the shared 16-bit pattern.
+///
+/// It does up to [`FAN_PATTERN_MAX_TRIANGLES`] triangles from a first vertex a base vertex can
+/// name (`i32`); any other fan draws from a generated list, which, unlike the pattern, instances.
+#[inline]
+#[must_use]
+pub const fn fan_fits_pattern(start_vertex: u32, primitive_count: u32) -> bool {
+    primitive_count <= FAN_PATTERN_MAX_TRIANGLES && start_vertex <= i32::MAX as u32
+}
+
 /// Bytes the shared 16-bit fan pattern needs for `primitive_count` triangles.
 #[must_use]
 pub const fn fan_pattern_bytes(primitive_count: u32) -> usize {

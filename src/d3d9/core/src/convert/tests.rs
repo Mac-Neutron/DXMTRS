@@ -66,6 +66,14 @@ fn nonindexed_fan_becomes_absolute_u16_triangles() {
 }
 
 #[test]
+fn a_fan_fits_the_pattern_up_to_its_last_triangle_and_base_vertex() {
+    assert!(fan_fits_pattern(0, FAN_PATTERN_MAX_TRIANGLES));
+    assert!(!fan_fits_pattern(0, FAN_PATTERN_MAX_TRIANGLES + 1));
+    assert!(fan_fits_pattern(i32::MAX as u32, 1));
+    assert!(!fan_fits_pattern(i32::MAX as u32 + 1, 1));
+}
+
+#[test]
 fn fan_rewrite_writes_only_the_triangles_that_fit() {
     // The draw path sizes the arena block with `byte_len`; a shorter buffer
     // is filled with whole triangles and the rest left alone.

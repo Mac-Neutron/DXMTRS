@@ -83,12 +83,12 @@ pub struct VertexBufferInner {
     ///
     /// `Staged` does a dirty-range upload on Unlock. Decided once at
     /// creation from `usage`/`pool`; selects the `Lock`/`Unlock` path
-    /// below.
+    /// below. Always `Staged` on a core device (DXMTRS C4c-1).
     map_mode: BufferMapMode,
     /// `Staged` only: the byte range dirtied since the last upload.
     ///
-    /// Accumulated across `Lock`s and flushed on `Unlock`. Unused for
-    /// `Direct`.
+    /// Accumulated across `Lock`s and flushed on `Unlock` (on a core
+    /// device, by `core_flush` at the next draw). Unused for `Direct`.
     dirty: DirtyRange,
     /// Canonical CPU backing.
     ///

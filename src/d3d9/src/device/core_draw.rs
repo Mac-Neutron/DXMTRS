@@ -17,8 +17,8 @@ use d3d9_rt::device::{
 };
 use mtld3d_core::{
     convert::{
-        FAN_PATTERN_MAX_TRIANGLES, FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal,
-        d3d_to_metal_cull, d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32,
+        FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
+        d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32, fan_fits_pattern,
         ff_vs_layout_from_elements, vertex_count,
     },
     depth_stencil_state::snapshot_from_state as depth_snapshot,
@@ -958,7 +958,9 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
 ///
 /// `None` for a device of mtld3d's runtime. Answers in mtld3d's order: a fan first
 /// ([`sequential_fan`]); then the primitive type, the vertex count and no declared stream with a
-/// buffer, each `D3DERR_INVALIDCALL`. A draw without indices never instances.
+/// buffer, each `D3DERR_INVALIDCALL`. A draw that is no fan never instances; a fan off mtld3d's
+/// shared pattern does ([`sequential_fan`]).
+#[must_use]
 pub fn draw_primitive(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -1006,6 +1008,7 @@ pub fn draw_primitive(
 /// declared stream with a buffer (`D3D_OK`, nothing drawn, the index buffer not looked at), no
 /// index buffer (`D3DERR_INVALIDCALL`). The indices are the index buffer's from `start_index`,
 /// `base_vertex` added to each; the draw instances by stream 0's frequency word.
+#[must_use]
 pub fn draw_indexed_primitive(
     dev: &mut DeviceInner,
     primitive: u32,
@@ -1069,8 +1072,7 @@ pub fn draw_indexed_primitive(
 ///
 /// A rewrite that cannot address it, then no declared stream with a buffer, each
 /// `D3DERR_INVALIDCALL`. The list holds the fan's absolute vertex numbers, so it draws from vertex
-/// 0 at base 0. A fan mtld3d's shared pattern cannot address (more than
-/// [`FAN_PATTERN_MAX_TRIANGLES`] triangles, or a first vertex past `i32::MAX`) instances, as
+/// 0 at base 0. A fan mtld3d's shared pattern cannot address ([`fan_fits_pattern`]) instances, as
 /// mtld3d's generated list does.
 fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32) -> i32 {
     let Some(fan) = FanRewrite::sequential(start_vertex, primitive_count) else {
@@ -1081,8 +1083,7 @@ fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32
         Ok(None) => return invalid("triangle fan: no vertex buffer bound"),
         Err(hr) => return hr,
     };
-    let generated =
-        primitive_count > FAN_PATTERN_MAX_TRIANGLES || i32::try_from(start_vertex).is_err();
+    let generated = !fan_fits_pattern(start_vertex, primitive_count);
     fan_draw(dev, &fan, &bound, generated.then_some(bound.instancing))
 }
 
@@ -1283,8 +1284,8 @@ fn invalid(reason: &'static str) -> i32 {
 /// The `MTLIndexType` and the byte size of an index format; `None` for one of neither size.
 const fn index_kind(format: u32) -> Option<(u8, u8)> {
     match format {
-        D3DFMT_INDEX16 => Some((0, 2)),
-        D3DFMT_INDEX32 => Some((1, 4)),
+        D3DFMT_INDEX16 => Some((mtl::IndexType::UInt16 as u8, 2)),
+        D3DFMT_INDEX32 => Some((mtl::IndexType::UInt32 as u8, 4)),
         _ => None,
     }
 }

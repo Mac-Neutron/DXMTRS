@@ -2396,7 +2396,8 @@ impl DeviceInner {
     ///
     /// Same drain semantics as `push_texture_warmup`.
     pub fn push_buffer_warmup(&mut self, entry: VbibWarmupEntry) {
-        // A core device's buffers have no Metal object (inert, C4b3a-2).
+        // A core device's buffers have none of mtld3d's Metal objects: the core makes its own
+        // at their first draw (DXMTRS C4c-1).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
@@ -12786,9 +12787,7 @@ extern "system" fn device_draw_primitive(
         // The encoder's shared 16-bit pattern covers every fan a 16-bit index
         // can address and costs nothing per draw; anything longer, or a start
         // vertex past the base-vertex range, gets a generated 32-bit list.
-        let index_source = if primitive_count <= convert::FAN_PATTERN_MAX_TRIANGLES
-            && i32::try_from(start_vertex).is_ok()
-        {
+        let index_source = if convert::fan_fits_pattern(start_vertex, primitive_count) {
             IndexSource::Fan {
                 start_vertex,
                 primitive_count,

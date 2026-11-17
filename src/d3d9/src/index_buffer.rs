@@ -69,7 +69,8 @@ pub struct IndexBufferInner {
     private_data: PrivateDataStore,
     /// `Direct` (zero-copy) vs `Staged` (separate device buffer + dirty-range upload).
     ///
-    /// Decided once at creation from `usage`/`pool`.
+    /// Decided once at creation from `usage`/`pool`; always `Staged` on a core device, whose
+    /// dirty range `core_flush` uploads at the next draw (DXMTRS C4c-1).
     map_mode: BufferMapMode,
     /// `Staged` only: byte range dirtied since the last upload.
     dirty: DirtyRange,
