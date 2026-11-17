@@ -81,30 +81,29 @@ use mtld3d_shared::{
 use mtld3d_types::{
     D3D_MAX_SIMULTANEOUS_RENDERTARGETS, D3DCAPS9, D3DCLEAR_STENCIL, D3DCLEAR_TARGET,
     D3DCLEAR_ZBUFFER, D3DDEVICE_CREATION_PARAMETERS, D3DDISPLAYMODE,
-    D3DERR_UNSUPPORTEDTEXTUREFILTER, D3DFMT_ATI1, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DFMT_UYVY,
-    D3DFMT_YUY2, D3DGAMMARAMP, D3DLIGHT9, D3DMATERIAL9, D3DMATRIX, D3DPOOL_DEFAULT,
-    D3DPOOL_MANAGED, D3DPOOL_MANAGED_EX, D3DPOOL_SCRATCH, D3DPOOL_SYSTEMMEM, D3DPRESENT_PARAMETERS,
-    D3DPRESENTFLAG_LOCKABLE_BACKBUFFER, D3DPT_TRIANGLEFAN, D3DPT_TRIANGLELIST, D3DRECT,
-    D3DRS_ALPHABLENDENABLE, D3DRS_ALPHAFUNC, D3DRS_ALPHAREF, D3DRS_ALPHATESTENABLE, D3DRS_AMBIENT,
-    D3DRS_AMBIENTMATERIALSOURCE, D3DRS_BLENDFACTOR, D3DRS_BLENDOP, D3DRS_BLENDOPALPHA,
-    D3DRS_CLIPPING, D3DRS_CLIPPLANEENABLE, D3DRS_COLORVERTEX, D3DRS_COLORWRITEENABLE,
-    D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3, D3DRS_CULLMODE,
-    D3DRS_DEPTHBIAS, D3DRS_DESTBLEND, D3DRS_DESTBLENDALPHA, D3DRS_DIFFUSEMATERIALSOURCE,
-    D3DRS_EMISSIVEMATERIALSOURCE, D3DRS_FILLMODE, D3DRS_FOGCOLOR, D3DRS_FOGDENSITY,
-    D3DRS_FOGENABLE, D3DRS_FOGEND, D3DRS_FOGSTART, D3DRS_FOGTABLEMODE, D3DRS_FOGVERTEXMODE,
-    D3DRS_INDEXEDVERTEXBLENDENABLE, D3DRS_LIGHTING, D3DRS_LOCALVIEWER, D3DRS_MULTISAMPLEMASK,
-    D3DRS_NORMALIZENORMALS, D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B, D3DRS_POINTSCALE_C,
-    D3DRS_POINTSCALEENABLE, D3DRS_POINTSIZE, D3DRS_POINTSIZE_MAX, D3DRS_POINTSIZE_MIN,
-    D3DRS_POINTSPRITEENABLE, D3DRS_RANGEFOGENABLE, D3DRS_SCISSORTESTENABLE,
-    D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SHADEMODE, D3DRS_SLOPESCALEDEPTHBIAS,
-    D3DRS_SPECULARENABLE, D3DRS_SPECULARMATERIALSOURCE, D3DRS_SRCBLEND, D3DRS_SRCBLENDALPHA,
-    D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_TEXTUREFACTOR, D3DRS_VERTEXBLEND,
-    D3DRTYPE_CUBETEXTURE, D3DTEXF_LINEAR, D3DTEXF_NONE, D3DTEXF_POINT, D3DUSAGE_AUTOGENMIPMAP,
-    D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_DMAP, D3DUSAGE_DONOTCLIP, D3DUSAGE_DYNAMIC, D3DUSAGE_NONSECURE,
-    D3DUSAGE_NPATCHES, D3DUSAGE_POINTS, D3DUSAGE_QUERY_FILTER, D3DUSAGE_RENDERTARGET,
-    D3DUSAGE_RTPATCHES, D3DUSAGE_SOFTWAREPROCESSING, D3DUSAGE_WRITEONLY, D3DVIEWPORT9, Guid,
-    IDirect3DDevice9ExVtbl, IDirect3DDevice9Vtbl, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
-    render_state_defaults,
+    D3DERR_UNSUPPORTEDTEXTUREFILTER, D3DFMT_ATI1, D3DFMT_UYVY, D3DFMT_YUY2, D3DGAMMARAMP,
+    D3DLIGHT9, D3DMATERIAL9, D3DMATRIX, D3DPOOL_DEFAULT, D3DPOOL_MANAGED, D3DPOOL_MANAGED_EX,
+    D3DPOOL_SCRATCH, D3DPOOL_SYSTEMMEM, D3DPRESENT_PARAMETERS, D3DPRESENTFLAG_LOCKABLE_BACKBUFFER,
+    D3DPT_TRIANGLEFAN, D3DPT_TRIANGLELIST, D3DRECT, D3DRS_ALPHABLENDENABLE, D3DRS_ALPHAFUNC,
+    D3DRS_ALPHAREF, D3DRS_ALPHATESTENABLE, D3DRS_AMBIENT, D3DRS_AMBIENTMATERIALSOURCE,
+    D3DRS_BLENDFACTOR, D3DRS_BLENDOP, D3DRS_BLENDOPALPHA, D3DRS_CLIPPING, D3DRS_CLIPPLANEENABLE,
+    D3DRS_COLORVERTEX, D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2,
+    D3DRS_COLORWRITEENABLE3, D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_DESTBLEND,
+    D3DRS_DESTBLENDALPHA, D3DRS_DIFFUSEMATERIALSOURCE, D3DRS_EMISSIVEMATERIALSOURCE,
+    D3DRS_FILLMODE, D3DRS_FOGCOLOR, D3DRS_FOGDENSITY, D3DRS_FOGENABLE, D3DRS_FOGEND,
+    D3DRS_FOGSTART, D3DRS_FOGTABLEMODE, D3DRS_FOGVERTEXMODE, D3DRS_INDEXEDVERTEXBLENDENABLE,
+    D3DRS_LIGHTING, D3DRS_LOCALVIEWER, D3DRS_MULTISAMPLEMASK, D3DRS_NORMALIZENORMALS,
+    D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B, D3DRS_POINTSCALE_C, D3DRS_POINTSCALEENABLE,
+    D3DRS_POINTSIZE, D3DRS_POINTSIZE_MAX, D3DRS_POINTSIZE_MIN, D3DRS_POINTSPRITEENABLE,
+    D3DRS_RANGEFOGENABLE, D3DRS_SCISSORTESTENABLE, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SHADEMODE,
+    D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SPECULARENABLE, D3DRS_SPECULARMATERIALSOURCE, D3DRS_SRCBLEND,
+    D3DRS_SRCBLENDALPHA, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_TEXTUREFACTOR,
+    D3DRS_VERTEXBLEND, D3DRTYPE_CUBETEXTURE, D3DTEXF_LINEAR, D3DTEXF_NONE, D3DTEXF_POINT,
+    D3DUSAGE_AUTOGENMIPMAP, D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_DMAP, D3DUSAGE_DONOTCLIP,
+    D3DUSAGE_DYNAMIC, D3DUSAGE_NONSECURE, D3DUSAGE_NPATCHES, D3DUSAGE_POINTS,
+    D3DUSAGE_QUERY_FILTER, D3DUSAGE_RENDERTARGET, D3DUSAGE_RTPATCHES, D3DUSAGE_SOFTWAREPROCESSING,
+    D3DUSAGE_WRITEONLY, D3DVIEWPORT9, Guid, IDirect3DDevice9ExVtbl, IDirect3DDevice9Vtbl,
+    RENDER_STATE_COUNT, SAMPLER_STATE_COUNT, render_state_defaults,
 };
 pub use runtime::Mtld3dOnly;
 #[cfg(feature = "core-runtime")]
@@ -7736,7 +7735,7 @@ extern "system" fn device_create_index_buffer(
     // D3DFMT_INDEX16 = 101, D3DFMT_INDEX32 = 102 are the only legal index
     // formats; the draw path selects `MTLIndexType` from the stored format, so
     // both are fully supported here.
-    if format != D3DFMT_INDEX16 && format != D3DFMT_INDEX32 {
+    if convert::index_format(format).is_none() {
         warn!(
             target: LOG_TARGET,
             "reject CreateIndexBuffer(format={format}) → INVALIDCALL (not an index format)"
@@ -13008,18 +13007,15 @@ fn bound_index_fan(
         let inner = unsafe { &*ptr }.inner();
         (inner.format(), inner.backing_needs_readback())
     };
-    let index_size: u64 = match format {
-        D3DFMT_INDEX16 => 2,
-        D3DFMT_INDEX32 => 4,
-        other => {
-            mtld3d_shared::log_once_warn_by!(
-                target: LOG_TARGET,
-                key: u64::from(other),
-                "DrawIndexedPrimitive: unsupported index format {other}"
-            );
-            return None;
-        }
+    let Some((_, index_size)) = convert::index_format(format) else {
+        mtld3d_shared::log_once_warn_by!(
+            target: LOG_TARGET,
+            key: u64::from(format),
+            "DrawIndexedPrimitive: unsupported index format {format}"
+        );
+        return None;
     };
+    let index_size = u64::from(index_size);
     if needs_readback && !materialise_index_backing(dev, ptr) {
         return None;
     }
@@ -13287,17 +13283,14 @@ fn snapshot_bound_index_source(dev: &DeviceInner, start_index: u32) -> Option<In
     // on the device.
     let ib = unsafe { &mut *ptr };
     let inner = ib.inner_mut();
-    let (index_type, index_stride): (mtld3d_shared::mtl::IndexType, u32) = match inner.format() {
-        D3DFMT_INDEX16 => (mtld3d_shared::mtl::IndexType::UInt16, 2),
-        D3DFMT_INDEX32 => (mtld3d_shared::mtl::IndexType::UInt32, 4),
-        other => {
-            mtld3d_shared::log_once_warn_by!(
-                target: LOG_TARGET,
-                key: u64::from(other),
-                "DrawIndexedPrimitive: unsupported index format {other}"
-            );
-            return None;
-        }
+    let format = inner.format();
+    let Some((index_type, index_stride)) = convert::index_format(format) else {
+        mtld3d_shared::log_once_warn_by!(
+            target: LOG_TARGET,
+            key: u64::from(format),
+            "DrawIndexedPrimitive: unsupported index format {format}"
+        );
+        return None;
     };
     inner.stamp_submit_seq(seq);
     Some(IndexBuffer {
@@ -13305,7 +13298,7 @@ fn snapshot_bound_index_source(dev: &DeviceInner, start_index: u32) -> Option<In
         address: inner.current_backing_ptr() as u64,
         length: inner.current_backing_len() as u64,
         generation: inner.current_backing_generation(),
-        offset: start_index * index_stride,
+        offset: start_index * u32::from(index_stride),
         kind: index_type as u8,
         reserved: [0; 3],
     })
@@ -14545,18 +14538,15 @@ extern "system" fn device_draw_indexed_primitive_up(
     if index_data.is_null() || vertex_data.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    let (index_type, index_size): (mtld3d_shared::mtl::IndexType, usize) = match index_format {
-        D3DFMT_INDEX16 => (mtld3d_shared::mtl::IndexType::UInt16, 2),
-        D3DFMT_INDEX32 => (mtld3d_shared::mtl::IndexType::UInt32, 4),
-        other => {
-            mtld3d_shared::log_once_warn_by!(
-                target: LOG_TARGET,
-                key: u64::from(other),
-                "DrawIndexedPrimitiveUP: unsupported index format {other}"
-            );
-            return D3DERR_INVALIDCALL;
-        }
+    let Some((index_type, index_size)) = convert::index_format(index_format) else {
+        mtld3d_shared::log_once_warn_by!(
+            target: LOG_TARGET,
+            key: u64::from(index_format),
+            "DrawIndexedPrimitiveUP: unsupported index format {index_format}"
+        );
+        return D3DERR_INVALIDCALL;
     };
+    let index_size = usize::from(index_size);
     #[cfg(feature = "core-runtime")]
     if let Some(hr) = core_draw::draw_indexed_primitive_up(
         dev,

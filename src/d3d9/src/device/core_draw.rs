@@ -19,7 +19,7 @@ use mtld3d_core::{
     convert::{
         FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
         d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32, fan_fits_pattern,
-        ff_vs_layout_from_elements, vertex_count,
+        ff_vs_layout_from_elements, index_format, vertex_count,
     },
     depth_stencil_state::snapshot_from_state as depth_snapshot,
     dxso::{SemanticSet, VsSamplerKinds},
@@ -48,12 +48,11 @@ use mtld3d_shared::{
     slice_from_caller,
 };
 use mtld3d_types::{
-    D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DFMT_INDEX16, D3DFMT_INDEX32, D3DMATRIX,
-    D3DPT_POINTLIST, D3DPT_TRIANGLEFAN, D3DRS_ALPHABLENDENABLE, D3DRS_BLENDFACTOR,
-    D3DRS_COLORWRITEENABLE, D3DRS_CULLMODE, D3DRS_DEPTHBIAS, D3DRS_FILLMODE,
-    D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF,
-    D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC, MAX_STREAMS, RENDER_STATE_COUNT,
-    SAMPLER_STATE_COUNT,
+    D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DMATRIX, D3DPT_POINTLIST, D3DPT_TRIANGLEFAN,
+    D3DRS_ALPHABLENDENABLE, D3DRS_BLENDFACTOR, D3DRS_COLORWRITEENABLE, D3DRS_CULLMODE,
+    D3DRS_DEPTHBIAS, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS,
+    D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC,
+    MAX_STREAMS, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -896,7 +895,7 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     if !dev.is_core() {
         return None;
     }
-    let Some((index_type, index_size)) = index_kind(up.index_format) else {
+    let Some((index_type, index_size)) = index_format(up.index_format) else {
         return Some(D3DERR_INVALIDCALL);
     };
     let vertex_total = indexed_up_vertices(up.min_vertex_index, up.num_vertices);
@@ -921,7 +920,7 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     if primitive != D3DPT_TRIANGLEFAN {
         let indices = Indices {
             data: IndexData::Bytes(&source),
-            index_type,
+            index_type: index_type as u8,
             count,
         };
         return Some(draw(
@@ -1044,7 +1043,7 @@ pub fn draw_indexed_primitive(
         let inner = unsafe { &*index }.inner();
         (inner.format(), inner.buffer_id())
     };
-    let Some((index_type, size)) = index_kind(format) else {
+    let Some((index_type, size)) = index_format(format) else {
         return Some(invalid("DrawIndexedPrimitive: unsupported index format"));
     };
     if !flush(dev, &bound, Some(index)) {
@@ -1060,7 +1059,7 @@ pub fn draw_indexed_primitive(
         instancing: Some(bound.instancing),
         indices: Some(Indices {
             data: IndexData::Buffer { id, offset },
-            index_type,
+            index_type: index_type as u8,
             count,
         }),
         crossing: BUFFER_CROSSING,
@@ -1107,7 +1106,7 @@ fn indexed_fan(
     // SAFETY: the bound index buffer, live while bound; nothing writes its backing until the
     // fan's list is written (its own flush is the vertex buffers').
     let inner = unsafe { &*index }.inner();
-    let Some((_, size)) = index_kind(inner.format()) else {
+    let Some((_, size)) = index_format(inner.format()) else {
         return invalid("DrawIndexedPrimitive: unsupported index format");
     };
     // The fan's `primitive_count + 2` indices from `start_index`, inside the backing's pages.
@@ -1279,13 +1278,4 @@ fn invalid(reason: &'static str) -> i32 {
         "{reason}"
     );
     D3DERR_INVALIDCALL
-}
-
-/// The `MTLIndexType` and the byte size of an index format; `None` for one of neither size.
-const fn index_kind(format: u32) -> Option<(u8, u8)> {
-    match format {
-        D3DFMT_INDEX16 => Some((mtl::IndexType::UInt16 as u8, 2)),
-        D3DFMT_INDEX32 => Some((mtl::IndexType::UInt32 as u8, 4)),
-        _ => None,
-    }
 }

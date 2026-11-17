@@ -101,6 +101,16 @@ fn fan_pattern_is_the_relative_fan_and_clips_to_the_buffer() {
     );
 }
 
+/// The two index formats give their `MTLIndexType` and index size; every other format none.
+#[test]
+fn index_format_maps_the_two_index_formats_alone() {
+    assert_eq!(index_format(D3DFMT_INDEX16), Some((IndexType::UInt16, 2)));
+    assert_eq!(index_format(D3DFMT_INDEX32), Some((IndexType::UInt32, 4)));
+    for other in [D3DFMT_A8R8G8B8, D3DFMT_L8, D3DFMT_R32F] {
+        assert_eq!(index_format(other), None, "{other}");
+    }
+}
+
 #[test]
 fn fan_widens_to_u32_past_u16_range() {
     let fan = FanRewrite::sequential(0xFFFE, 1).expect("fits");
