@@ -197,7 +197,7 @@ fn dxil_entry_view_points_at_each_elements_indices() {
 #[test]
 fn unreadable_bitcode_answers_the_readers_text() {
     // The DXIL part's bitcode magic broken (the last one: DXC's STAT part holds a program too):
-    // the shim's `parseBitcodeFile`, never the C API's reader (which would exit), answers the
+    // the fork's `parseBitcodeFile`, never the C API's reader (which would exit), answers the
     // C++'s text, read once from the C++ over the C API.
     let mut bytes = include_bytes!("../../../ir/tests/data/cache.cs.dxil").to_vec();
     let magic = bytes.windows(4).rposition(|w| w == b"BC\xc0\xde").unwrap();

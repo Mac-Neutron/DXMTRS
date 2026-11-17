@@ -112,7 +112,7 @@ fn finish_dxil(m: &Module<'_>, msad: bool, samplepos: bool) -> Result<Vec<u8>, E
     if msad || samplepos {
         dxil::converter::strip_fast_math(m, shader_kind::GEOMETRY);
     }
-    module::optimize(m);
+    module::optimize(m)?;
     writer::write(m, &refs)
 }
 
@@ -133,6 +133,6 @@ fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
         flags.contains(ShaderFlags::USE_SAMPLEPOS),
         false,
     )?;
-    module::optimize(m);
+    module::optimize(m)?;
     writer::write(m, &refs)
 }

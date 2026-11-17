@@ -1,13 +1,14 @@
-//! The LLVM 23 C API, `AIRWriter.h` and the shim's functions, declared by hand.
+//! The LLVM 23 C API, with the fork's `AIRWriter.h` and `AIRExtras.h`, declared by hand.
 //!
-//! Each declaration is the prototype of `llvm-c/{Core,Analysis,Linker,AIRWriter}.h` in the install
-//! `AIRCONV_LLVM` names, under its snake-case name with the C name as `link_name` (`LLVMBuildGEP2`
-//! is `build_gep2`); enumerators are constants named the same way (`LLVMIntEQ` is `INT_EQ`).
+//! Each declaration is the prototype of `llvm-c/{Core,Analysis,Linker,AIRWriter,AIRExtras}.h` in
+//! the install `AIRCONV_LLVM` names, under its snake-case name with the C name as `link_name`
+//! (`LLVMBuildGEP2` is `build_gep2`); enumerators are constants named the same way (`LLVMIntEQ` is
+//! `INT_EQ`).
 //! Only the deprecated forms are left out: the typed `2` forms (`LLVMBuildLoad2`, …) and the
 //! length-taking ones (`LLVMSetValueName2`, `LLVMMDStringInContext2`) are what the translator
 //! calls. The list is every function a later part of the translator uses; one that is missing is
-//! added here, never declared where it is called. The shim's functions (`shim/shim.cpp`, named
-//! `airconv_shim_*`) cover what this API lacks on LLVM 23.
+//! added here, never declared where it is called. `AIRExtras.h`'s functions (named `air_*`
+//! here) are LLVM C++ calls this API lacks on LLVM 23, which our fork gives C names.
 
 use core::{
     ffi::{c_char, c_int, c_longlong, c_uint, c_ulonglong, c_void},
@@ -54,6 +55,8 @@ opaque! {
     Use => UseRef;
     /// `ModuleSlotTracker`, as `llvm-c/AIRExtras.h` hands one out.
     AirSlotTracker => AirSlotTrackerRef;
+    /// The `FunctionAnalysisManager` of a running pass, valid during the pass's callback.
+    AirFunctionAnalyses => AirFunctionAnalysesRef;
 }
 
 /// An entry of `LLVMInstructionGetAllMetadataOtherThanDebugLoc`'s array.
@@ -99,6 +102,22 @@ pub type AirDataLayoutCallback = unsafe extern "C" fn(
     layout_len: usize,
     out_len: *mut usize,
 ) -> *const c_char;
+/// `LLVMAIRFunctionPassCallback`: a function pass's run.
+///
+/// Answers non-zero when it changed the function (`PreservedAnalyses::none()`), zero when it did
+/// not (`all()`).
+pub type AirFunctionPassCallback =
+    extern "C" fn(ctx: *mut c_void, function: ValueRef, analyses: AirFunctionAnalysesRef) -> Bool;
+/// `LLVMAIRFunctionPass`: a function pass a pipeline's text may name.
+#[repr(C)]
+pub struct AirFunctionPass {
+    /// The name the text uses, `name_len` bytes.
+    pub name: *const c_char,
+    pub name_len: usize,
+    pub run: AirFunctionPassCallback,
+    /// Handed to `run` as it is.
+    pub ctx: *mut c_void,
+}
 /// `LLVMAIRLinkOnlyNeeded` (`Linker::Flags::LinkOnlyNeeded`).
 pub const AIR_LINK_ONLY_NEEDED: c_uint = 1 << 1;
 
@@ -312,6 +331,8 @@ unsafe extern "C" {
     pub fn set_source_file_name(m: ModuleRef, name: *const c_char, len: usize);
     #[link_name = "LLVMSetDataLayout"]
     pub fn set_data_layout(m: ModuleRef, data_layout_str: *const c_char);
+    #[link_name = "LLVMGetModuleContext"]
+    pub fn get_module_context(m: ModuleRef) -> ContextRef;
     #[link_name = "LLVMSetTarget"]
     pub fn set_target(m: ModuleRef, triple: *const c_char);
     #[link_name = "LLVMAddModuleFlag"]
@@ -357,7 +378,6 @@ unsafe extern "C" {
     pub fn get_first_named_metadata(m: ModuleRef) -> NamedMDNodeRef;
     #[link_name = "LLVMGetNextNamedMetadata"]
     pub fn get_next_named_metadata(named_md_node: NamedMDNodeRef) -> NamedMDNodeRef;
-    #[cfg(test)]
     #[link_name = "LLVMGetNamedMetadata"]
     pub fn get_named_metadata(m: ModuleRef, name: *const c_char, name_len: usize)
     -> NamedMDNodeRef;
@@ -372,6 +392,8 @@ unsafe extern "C" {
     pub fn add_named_metadata_operand(m: ModuleRef, name: *const c_char, val: ValueRef);
 
     // Types
+    #[link_name = "LLVMGetTypeContext"]
+    pub fn get_type_context(ty: TypeRef) -> ContextRef;
     #[link_name = "LLVMGetTypeKind"]
     pub fn get_type_kind(ty: TypeRef) -> TypeKind;
     #[cfg(any(test, feature = "oracle"))]
@@ -501,6 +523,8 @@ unsafe extern "C" {
     pub fn is_a_alloca_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsABitCastInst"]
     pub fn is_a_bit_cast_inst(val: ValueRef) -> ValueRef;
+    #[link_name = "LLVMIsAExtractElementInst"]
+    pub fn is_a_extract_element_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAExtractValueInst"]
     pub fn is_a_extract_value_inst(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsALoadInst"]
@@ -1184,7 +1208,7 @@ unsafe extern "C" {
         out_message: *mut *mut c_char,
     ) -> Bool;
 
-    // The linker (the shim links the helpers; this form, with no flag, is for tests)
+    // The linker (`air_link_modules` links the helpers; this form, with no flag, is for tests)
     #[cfg(test)]
     #[link_name = "LLVMLinkModules2"]
     pub fn link_modules2(dest: ModuleRef, src: ModuleRef) -> Bool;
@@ -1309,24 +1333,46 @@ unsafe extern "C" {
     pub fn air_get_local_slot(tracker: AirSlotTrackerRef, value: ValueRef) -> c_int;
     #[link_name = "LLVMAIRDisposeSlotTracker"]
     pub fn air_dispose_slot_tracker(tracker: AirSlotTrackerRef);
-}
 
-// The shim (`shim/shim.cpp`): the pass pipeline and its two passes. `extern "C"` in C++ built
-// without exceptions, so nothing unwinds out of it.
-unsafe extern "C" {
-    /// Links LLVM's core and the barrier pass through the pass's own declaration: answers 1.
-    #[cfg(test)]
-    pub fn airconv_shim_probe() -> c_int;
-    /// Runs airconv's pass pipeline on `module`, its two passes included.
-    pub fn airconv_shim_run_passes(module: ModuleRef);
-    /// Prints the pass pipeline (`ModulePassManager::printPipeline`) to `*out` (`*len` bytes).
+    /// Parses the module pipeline `pipeline` and runs it on `module`.
     ///
-    /// The buffer is freed with `dispose_message` and is built with or without the two passes.
-    #[cfg(test)]
-    pub fn airconv_shim_pipeline_text(air_passes: c_int, out: *mut *mut c_char, len: *mut usize);
-    /// Declares (or finds) `air.simdgroup.barrier` in `module` as the barrier pass does.
+    /// `PassBuilder::parsePassPipeline`, in which each of `passes` is a function pass known by
+    /// its name, then `ModulePassManager::run` with the four analysis managers cross-registered
+    /// and no `StandardInstrumentations`. Answers 0, or 1 with the parse error in `*out_message`
+    /// (`*out_message_len` bytes, freed with `dispose_message`) and the module untouched.
+    #[link_name = "LLVMAIRRunPasses"]
+    pub fn air_run_passes(
+        module: ModuleRef,
+        pipeline: *const c_char,
+        pipeline_len: usize,
+        passes: *const AirFunctionPass,
+        num_passes: usize,
+        out_message: *mut *mut c_char,
+        out_message_len: *mut usize,
+    ) -> Bool;
+    /// The same parse, then `ModulePassManager::printPipeline` into `*out_message`.
     ///
-    /// Answers the function.
+    /// Answers 1 with the parse error there instead. A pass of `passes` prints as its name.
     #[cfg(test)]
-    pub fn airconv_shim_declare_simdgroup_barrier(module: ModuleRef) -> ValueRef;
+    #[link_name = "LLVMAIRPrintPipeline"]
+    pub fn air_print_pipeline(
+        pipeline: *const c_char,
+        pipeline_len: usize,
+        passes: *const AirFunctionPass,
+        num_passes: usize,
+        out_message: *mut *mut c_char,
+        out_message_len: *mut usize,
+    ) -> Bool;
+    /// The instruction that defines the memory `inst` reads, as `MemorySSA` has it.
+    ///
+    /// `analyses`' `MemorySSAAnalysis` result for `function` (computed on first use): the
+    /// instruction of `inst`'s defining access when that is a `MemoryDef` with one. Null when
+    /// `inst` has no memory access, when its defining access is a `MemoryPhi`, or when it is the
+    /// function's live-on-entry definition.
+    #[link_name = "LLVMAIRGetMemoryDefInstruction"]
+    pub fn air_get_memory_def_instruction(
+        analyses: AirFunctionAnalysesRef,
+        function: ValueRef,
+        inst: ValueRef,
+    ) -> ValueRef;
 }

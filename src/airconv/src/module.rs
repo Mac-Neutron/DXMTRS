@@ -3,8 +3,8 @@
 //! Ported from `airconv_context.cpp`: [`initialize`] (and [`set_up`], for a parsed module) gives a
 //! module AIR's source name, triple, data layout, SDK version and module flags; [`link_helpers`]
 //! links the Metal helpers a shader calls (msad, sample positions, tessellation), compiled to AIR
-//! by `build.rs`; [`optimize`] runs airconv's pass pipeline through the shim. [`parse`] reads
-//! bitcode as the C++'s `parseBitcodeFile` calls did.
+//! by `build.rs`; [`optimize`] runs airconv's pass pipeline, whose two own passes are [`passes`].
+//! [`parse`] reads bitcode as the C++'s `parseBitcodeFile` calls did.
 
 use core::{
     ffi::{CStr, c_char, c_void},
@@ -15,6 +15,37 @@ use crate::{
     api::Error,
     llvm::{Context, Module, sys},
 };
+
+pub mod passes;
+
+/// The pass pipeline, as LLVM's `PassBuilder` parses it.
+///
+/// The passes DXMT's `runOptimizationPasses` picked from LLVM's default pipelines (an
+/// unoptimized shader makes a pipeline state slow to compile, the full pipeline is too heavy),
+/// written as LLVM prints that hand-built pipeline, so each pass parses with the options it was
+/// built with: a bare `instcombine` would verify its fixpoint, a bare `simplifycfg` in the last
+/// group would not turn switch ranges into compares. The last two names are [`passes`]' own.
+const PIPELINE: &str = concat!(
+    "annotation2metadata,forceattrs,inferattrs,",
+    "function<eager-inv>(",
+    "lower-expect,",
+    "simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;",
+    "no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;",
+    "no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;",
+    "simplify-cond-branch;no-speculate-unpredictables>,",
+    "sroa<modify-cfg>,",
+    "early-cse<>",
+    "),",
+    "always-inline,ipsccp,globalopt,function(mem2reg),deadargelim,",
+    "function<eager-inv>(",
+    "instcombine<max-iterations=1;no-verify-fixpoint>,",
+    "simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;",
+    "no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;",
+    "no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;",
+    "simplify-cond-branch;no-speculate-unpredictables>,",
+    "air::Lower16BitTexReadPass,air::SimdgroupImplicitMemBarrierPass",
+    ")"
+);
 
 /// The Metal helpers as AIR bitcode, `shaders/*.metal` compiled by `build.rs`.
 const MSAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/air_msad.air"));
@@ -246,10 +277,39 @@ pub fn link_helpers(
     Ok(linked)
 }
 
-/// `runOptimizationPasses`: airconv's pass pipeline, its two passes included.
-pub fn optimize(m: &Module<'_>) {
-    // SAFETY: a live module.
-    unsafe { sys::airconv_shim_run_passes(m.raw()) };
+/// `runOptimizationPasses`: airconv's pass pipeline ([`PIPELINE`]), its two passes included.
+///
+/// # Errors
+///
+/// `LLVM error: …` if LLVM does not parse the pipeline's text, which its tests pin.
+pub fn optimize(m: &Module<'_>) -> Result<(), Error> {
+    let passes = passes::table();
+    let mut message = ptr::null_mut();
+    let mut len = 0;
+    // SAFETY: a live module; the text and the table hold their lengths, and the table's names
+    // and callbacks outlive the call; the two outputs are writable.
+    let failed = unsafe {
+        sys::air_run_passes(
+            m.raw(),
+            PIPELINE.as_ptr().cast(),
+            PIPELINE.len(),
+            passes.as_ptr(),
+            passes.len(),
+            &raw mut message,
+            &raw mut len,
+        )
+    } != 0;
+    if !failed {
+        return Ok(());
+    }
+    let mut text = b"LLVM error: ".to_vec();
+    if !message.is_null() {
+        // SAFETY: the parser's message, `len` bytes.
+        text.extend_from_slice(unsafe { slice::from_raw_parts(message.cast::<u8>(), len) });
+        // SAFETY: the parser's message, freed once.
+        unsafe { sys::dispose_message(message) };
+    }
+    Err(Error::new(&text))
 }
 
 fn link_helper(m: &Module<'_>, air: &[u8]) -> Result<(), Error> {

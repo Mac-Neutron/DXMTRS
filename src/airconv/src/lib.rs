@@ -2,10 +2,10 @@
 //!
 //! The crate exports the header's functions under their C names (`SM50Initialize`, …) and, for
 //! the test tools, `DXILCompilePassThroughVertex` and `DXILGetEntry` of `dxil/dxil_public.h`.
-//! Translation runs on LLVM 15 through its C API, declared here by hand, and a C++ shim for what
-//! that API lacks (`shim/shim.cpp`, with the two passes of `transforms/`), both built by
-//! `build.rs` against the install `AIRCONV_LLVM` names. LLVM's libraries are linked by the final
-//! image, never bundled into this crate.
+//! Translation runs on LLVM 23 through its C API, declared here by hand, with the C entry points
+//! our LLVM fork adds for what that API lacks (`llvm-c/AIRWriter.h`, `llvm-c/AIRExtras.h`), from
+//! the install `AIRCONV_LLVM` names. The crate holds no C or C++. LLVM's libraries are linked by
+//! the final image, never bundled into this crate.
 //!
 //! Guest bytes never panic and never end the process: an exported function answers an error.
 #![cfg_attr(
@@ -39,6 +39,3 @@ pub use api::{
     sm50_destroy, sm50_destroy_bitcode, sm50_free_error, sm50_get_arguments_info,
     sm50_get_compiled_bitcode, sm50_get_error_message, sm50_initialize,
 };
-
-#[cfg(test)]
-mod tests;

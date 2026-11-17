@@ -70,6 +70,6 @@ fn finish(m: &Module<'_>, flags: ShaderFlags) -> Result<Vec<u8>, Error> {
         flags.contains(ShaderFlags::USE_SAMPLEPOS),
         true,
     )?;
-    module::optimize(m);
+    module::optimize(m)?;
     writer::write(m, &refs)
 }

@@ -75,15 +75,14 @@ fn with_function(
     String::from_utf8_lossy(&m.print()).into_owned()
 }
 
-/// The shim's barrier declaration (the C++ pass's, G1b) and `create_barrier`'s print the same.
+/// The barrier pass's declaration (G1b) and `create_barrier`'s print the same.
 #[test]
-fn barrier_declaration_matches_the_shim() {
+fn barrier_declaration_matches_the_pass() {
     let cx = Context::new();
-    let shim = module::initialize(&cx, c"shim");
-    // SAFETY: a live module.
-    let declared = unsafe { sys::airconv_shim_declare_simdgroup_barrier(shim.raw()) };
+    let pass = module::initialize(&cx, c"pass");
+    let (declared, _) = module::passes::declare_simdgroup_barrier(pass.raw());
     assert!(!declared.is_null());
-    let shim_text = String::from_utf8_lossy(&shim.print()).into_owned();
+    let pass_text = String::from_utf8_lossy(&pass.print()).into_owned();
     let ours = with_function(
         |_| Vec::new(),
         0,
@@ -92,8 +91,8 @@ fn barrier_declaration_matches_the_shim() {
         },
     );
     let name = "air.simdgroup.barrier";
-    let theirs = declarations(&shim_text).remove(name);
-    assert!(theirs.is_some(), "{shim_text}");
+    let theirs = declarations(&pass_text).remove(name);
+    assert!(theirs.is_some(), "{pass_text}");
     assert_eq!(theirs, declarations(&ours).remove(name));
 }
 

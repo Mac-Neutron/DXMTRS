@@ -5,7 +5,7 @@ if not native_llvm_path.startswith('/')
 endif
 
 # airconv's LLVM: the crate links it unbundled (build.rs), so the image that links winemetal's static library names
-# it. -lc++ for LLVM and the shim: the images' sources are C, so meson links them with the C driver.
+# it. -lc++ for LLVM: the images have no C++ source, so meson links them with the C driver.
 llvm_ld_flags_darwin = [
   '-L'+join_paths(native_llvm_path, 'lib'),
   '-lm', '-lz', '-lxml2', '-lc++'
@@ -25,5 +25,5 @@ airconv_dep_darwin = declare_dependency(
 )
 
 # What airconv's build.rs reads (src/airconv/build.rs), for the custom targets that build winemetal's static library:
-# the LLVM it compiles the shim against, and the xcrun (a machine file's, which may be a script) for its Metal helpers.
+# the LLVM it links, and the xcrun (a machine file's, which may be a script) for its Metal helpers.
 airconv_cargo_env = { 'AIRCONV_LLVM': native_llvm_path, 'AIRCONV_XCRUN': xcrun.full_path() }

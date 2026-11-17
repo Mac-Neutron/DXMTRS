@@ -1074,7 +1074,7 @@ fn attribute_tables_round_trip_to_the_cxx() {
         );
     }
 
-    crate::module::optimize(&m);
+    ok(crate::module::optimize(&m));
     verify_ok(&m);
     let post_text = String::from_utf8(m.print()).unwrap();
     let (post_decls, post_groups) = parse_decls(&post_text);

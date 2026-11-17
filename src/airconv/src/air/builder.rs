@@ -79,7 +79,7 @@ const TEXTURE_FENCE: &Attrs = &[
 const PURE: &Attrs = &[(FN, b"nounwind"), (FN, b"willreturn"), (FN, b"readnone")];
 /// Derivatives and discard.
 const PLAIN: &Attrs = &[(FN, b"nounwind"), (FN, b"willreturn")];
-/// Barriers (the shim's barrier pass declares `air.simdgroup.barrier` with the same list).
+/// Barriers (the barrier pass declares `air.simdgroup.barrier` with the same list).
 const BARRIER: &Attrs = &[(FN, b"convergent"), (FN, b"nounwind"), (FN, b"willreturn")];
 /// The device-coherent load.
 const COHERENT_LOAD: &Attrs = &[

@@ -27,7 +27,7 @@
 #   MTLD3D_LLVM_MINGW    llvm-mingw's root
 #   WINE_BUILD           the Mac Wine build tree (libs/winecrt0/aarch64-windows/libwinecrt0.a)
 #   GUEST_WINE_SDK       the VM guest's Wine SDK (lib/wine/{x86_64,i386}-windows/libwinecrt0.a)
-#   AIRCONV_LLVM         the LLVM 23 install airconv builds its shim against and links (include/, lib/, .complete;
+#   AIRCONV_LLVM         the LLVM 23 install airconv links, built from tools/llvm.sh's commit (lib/, .complete;
 #                        MacNeutron: build/wine-arm64-src/llvm23-arm64-nolto, which make llvm-nolto installs)
 #   AIRCONV_XCRUN        xcrun, or a sh script taking xcrun's arguments, for airconv's Metal helpers (MacNeutron:
 #                        wine-arm64/tools/xcrun-metal.sh)

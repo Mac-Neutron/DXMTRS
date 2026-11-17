@@ -1,4 +1,4 @@
-//! Tests of module setup, the helpers, the shim's pipeline and the writer's entry extraction.
+//! Tests of module setup, the helpers, the pass pipeline and the writer's entry extraction.
 
 use core::{ffi::CStr, ptr};
 use std::ffi::CString;
@@ -9,7 +9,10 @@ use airconv_ir::{
     metallib::{FunctionEntry, FunctionKind, Patch, VertexAttribute},
 };
 
-use super::{Layout, MSAD, SAMPLEPOS, TESSELLATION, initialize, link_helpers, optimize, parse};
+use super::{
+    Layout, MSAD, PIPELINE, SAMPLEPOS, TESSELLATION, initialize, link_helpers, optimize, parse,
+    passes,
+};
 use crate::{
     api::Error,
     llvm::{Builder, Context, FastMath, Module, sys},
@@ -143,7 +146,7 @@ fn helpers_parse_and_link() {
         }
         assert_eq!(verify(&m), "");
         // The pass pipeline runs on it and leaves it valid.
-        optimize(&m);
+        ok(optimize(&m));
         assert_eq!(verify(&m), "");
         assert!(cx.take_error().is_none());
     }
@@ -244,7 +247,7 @@ fn function_entries_reads_a_patch() {
 }
 
 #[test]
-fn shim_fast_math_flags() {
+fn fast_math_flags() {
     let cx = Context::new();
     let tcx = cx.tcx();
     let m = initialize(&cx, c"shader.air");
@@ -311,17 +314,44 @@ fn dxil_layout_override_drops_i8_32() {
     assert!(!printed.contains("i8:32"), "{printed}");
 }
 
-fn pipeline_text(air_passes: i32) -> String {
+/// The module pipeline `text` as LLVM prints it back, the two passes known by name.
+fn printed_pipeline(text: &str) -> String {
+    let passes = passes::table();
     let mut ptr: *mut std::ffi::c_char = std::ptr::null_mut();
     let mut len: usize = 0;
-    // SAFETY: `ptr` and `len` are valid out-pointers.
-    unsafe { sys::airconv_shim_pipeline_text(air_passes, &raw mut ptr, &raw mut len) };
-    // SAFETY: `airconv_shim_pipeline_text` wrote `len` bytes at `ptr`.
+    // SAFETY: the text and the table hold their lengths; `ptr` and `len` are valid out-pointers.
+    let failed = unsafe {
+        sys::air_print_pipeline(
+            text.as_ptr().cast(),
+            text.len(),
+            passes.as_ptr(),
+            passes.len(),
+            &raw mut ptr,
+            &raw mut len,
+        )
+    };
+    // SAFETY: the printer wrote `len` bytes at `ptr`.
     let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
     let s = String::from_utf8(bytes.to_vec()).unwrap();
-    // SAFETY: `ptr` was allocated by `airconv_shim_pipeline_text` as a message buffer.
+    // SAFETY: `ptr` was allocated by the printer as a message buffer.
     unsafe { sys::dispose_message(ptr) };
+    assert_eq!(failed, 0, "{s}");
     s
+}
+
+/// The pipeline as LLVM prints it: the one [`optimize`] runs, or that one without its two passes.
+fn pipeline_text(air_passes: i32) -> String {
+    let both = format!(
+        ",{},{}",
+        passes::LOWER_16BIT_TEXREAD,
+        passes::SIMDGROUP_IMPLICIT_MEMBARRIER
+    );
+    assert!(PIPELINE.contains(&both), "{PIPELINE}");
+    if air_passes == 0 {
+        printed_pipeline(&PIPELINE.replace(&both, ""))
+    } else {
+        printed_pipeline(PIPELINE)
+    }
 }
 
 const WS_P15_OPT_PRINTED: &str = concat!(
@@ -346,17 +376,45 @@ const WS_P15_OPT_PRINTED: &str = concat!(
 );
 
 #[test]
-fn shim_pipeline_equals_ws_p15() {
+fn pipeline_equals_ws_p15() {
     assert_eq!(pipeline_text(0), WS_P15_OPT_PRINTED);
 }
 
 #[test]
-fn shim_pipeline_places_the_two_passes() {
+fn pipeline_places_the_two_passes() {
     let expected = format!(
         "{},air::Lower16BitTexReadPass,air::SimdgroupImplicitMemBarrierPass)",
         WS_P15_OPT_PRINTED.strip_suffix(')').unwrap()
     );
     assert_eq!(pipeline_text(1), expected);
+    // The text parses to itself: every pass has the options it is written with.
+    assert_eq!(PIPELINE, expected);
+}
+
+#[test]
+fn a_pass_the_pipeline_does_not_know_is_an_error() {
+    let passes = passes::table();
+    let text = "function(no-such-pass)";
+    let mut ptr: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut len: usize = 0;
+    // SAFETY: the text and the table hold their lengths; `ptr` and `len` are valid out-pointers.
+    let failed = unsafe {
+        sys::air_print_pipeline(
+            text.as_ptr().cast(),
+            text.len(),
+            passes.as_ptr(),
+            passes.len(),
+            &raw mut ptr,
+            &raw mut len,
+        )
+    };
+    assert_eq!(failed, 1);
+    // SAFETY: the parser wrote `len` bytes at `ptr`.
+    let message = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec();
+    // SAFETY: the parser's message, freed once.
+    unsafe { sys::dispose_message(ptr) };
+    let message = String::from_utf8(message).unwrap();
+    assert!(message.contains("no-such-pass"), "{message}");
 }
 
 /// Parses the textual IR `text` into a module of `cx`.
@@ -390,7 +448,7 @@ fn parse_ir<'cx>(cx: &'cx Context, text: &CStr) -> Module<'cx> {
 fn optimized(text: &CStr) -> String {
     let cx = Context::new();
     let m = parse_ir(&cx, text);
-    optimize(&m);
+    ok(optimize(&m));
     assert_eq!(verify(&m), "");
     String::from_utf8(m.print()).unwrap()
 }
@@ -565,6 +623,30 @@ fn the_pipeline_fences_nothing_outside_a_kernel() {
     let plain = CString::new(BARRIER).unwrap();
     let printed = optimized(&plain);
     assert!(printed.contains("@two_loads_one_store"), "{printed}");
+    assert!(!printed.contains("air.simdgroup.barrier"), "{printed}");
+}
+
+/// A kernel whose threadgroup load nothing wrote before is left alone.
+///
+/// The load's `MemorySSA` definition is the function's entry, which has no instruction. DXMT's
+/// pass dereferenced that null and crashed; the load is skipped.
+#[test]
+fn the_pipeline_skips_a_threadgroup_load_nothing_wrote_before() {
+    let printed = optimized(
+        c"
+define i32 @first_load(ptr addrspace(3) %b) {
+  %l = load i32, ptr addrspace(3) %b, align 4
+  ret i32 %l
+}
+
+!air.kernel = !{!0}
+!0 = !{}
+",
+    );
+    assert!(
+        printed.contains("load i32, ptr addrspace(3) %b"),
+        "{printed}"
+    );
     assert!(!printed.contains("air.simdgroup.barrier"), "{printed}");
 }
 

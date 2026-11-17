@@ -1,7 +1,7 @@
 //! DXIL Initialize: the module parsed, its entry, resources and signature handlers read.
 //!
 //! Ported from `A/dxil/dxil_initialize.cpp` (`InitializeDXIL`). The bitcode is parsed into its
-//! own context with typed pointers (through the shim's `parseBitcodeFile`, so a bad module
+//! own context with typed pointers (through the fork's `parseBitcodeFile`, so a bad module
 //! answers the C++'s `DXIL: can't read the bitcode: …`), read, and dropped; the shader keeps the
 //! bitcode, which every compile parses again in its own context. The refusals come in the C++'s
 //! order.

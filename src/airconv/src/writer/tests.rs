@@ -88,7 +88,7 @@ fn table_leaves_out_a_retyped_function() {
     );
     let _ = b.ret(call);
 
-    module::optimize(&m);
+    ok(module::optimize(&m));
     let (values, _, stale) = ok(build_table(&m));
     assert_eq!(stale, 1);
     assert_eq!(values.len(), 1);
@@ -113,7 +113,7 @@ fn table_leaves_out_a_deleted_declaration() {
     let _ = ok(m.get_or_insert_function(b"air.dfdx.f32", decl_ty, &[]));
     b.ret_void();
 
-    module::optimize(&m);
+    ok(module::optimize(&m));
     let (values, _, stale) = ok(build_table(&m));
     assert_eq!(stale, 1);
     assert_eq!(values.len(), 1);
@@ -187,7 +187,7 @@ fn write_types_the_helpers_from_their_refs() {
 
     let refs = ok(module::link_helpers(&m, false, false, true));
     assert_eq!(refs.len(), 1);
-    module::optimize(&m);
+    ok(module::optimize(&m));
     let (metallib, stats, _) = ok(write_with_stats(&m, &refs));
     assert_ne!(metallib, [] as [u8; 0]);
     assert!(stats.refs_filled > 0, "refs_filled={}", stats.refs_filled);

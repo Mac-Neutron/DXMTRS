@@ -109,7 +109,7 @@ pub fn finish(
     {
         dxil::converter::strip_fast_math(m, kind);
     }
-    module::optimize(m);
+    module::optimize(m)?;
     writer::write(m, &refs)
 }
 
