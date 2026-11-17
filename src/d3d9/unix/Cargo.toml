@@ -51,8 +51,5 @@ objc2-quartz-core = { workspace = true }
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 mtld3d-mtl = { workspace = true }
 
-[build-dependencies]
-cc = { workspace = true }
-
 [lints]
 workspace = true

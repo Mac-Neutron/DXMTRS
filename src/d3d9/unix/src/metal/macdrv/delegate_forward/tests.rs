@@ -10,7 +10,8 @@
 //!
 //! The test harness always builds with unwinding, so these tests cannot show
 //! that a Rust frame would have aborted; they show that the exception stops in
-//! the Objective-C `@try`, which is the same under either panic strategy.
+//! the sending function's landing pad, which is the same under either panic
+//! strategy.
 
 use objc2::{define_class, extern_methods, rc::Retained, runtime::NSObject};
 use objc2_foundation::{NSException, NSNotification, NSString};

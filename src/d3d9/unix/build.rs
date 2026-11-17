@@ -1,7 +1,5 @@
 use std::{env, fs, path::Path};
 
-const DELEGATE_FORWARD: &str = "src/metal/macdrv/delegate_forward.m";
-
 /// The quoted value of `#define <name> "…"` in meson's header, `""` when there is none.
 fn extract_quoted_define(path: &Path, name: &str) -> String {
     println!("cargo:rerun-if-changed={}", path.display());
@@ -61,18 +59,4 @@ fn main() {
     }
 
     println!("cargo:rustc-link-arg-cdylib=-Wl,-install_name,@rpath/mtld3d.so");
-
-    // Every Rust frame of this crate aborts on unwind (`panic = "abort"`),
-    // so a message send whose Objective-C exception has to be caught keeps
-    // its `@try` and the send together in Objective-C.
-    if facade {
-        return;
-    }
-    println!("cargo:rerun-if-changed={DELEGATE_FORWARD}");
-    cc::Build::new()
-        .file(DELEGATE_FORWARD)
-        .flag("-fobjc-exceptions")
-        .flag("-fno-objc-arc")
-        .warnings_into_errors(true)
-        .compile("mtld3d_delegate_forward");
 }
