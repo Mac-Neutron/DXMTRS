@@ -394,7 +394,8 @@ fn a_recreated_shader_hits_the_cache() {
 /// A layout whose attribute crosses the stride binds the stream's bytes at a second slot.
 ///
 /// The texture coordinates at offset 20 of 16-byte vertices: at slot 1, offset 0, under stream
-/// 0's layout; the draw binds the stream's 64 bytes at slot 0 and 64 at slot 1, from byte 20.
+/// 0's layout; the draw binds 64 bytes at slot 0 and 64 at slot 1. The capture prints a bind's
+/// length alone: which bytes slot 1 holds is `an_inline_slot_reads_from_its_advance`'s to say.
 #[test]
 fn an_inline_crossing_draw_binds_its_bytes_at_two_slots() {
     const DEVICE: u64 = 0xb9;
