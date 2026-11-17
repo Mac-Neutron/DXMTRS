@@ -272,10 +272,10 @@ fn shim_fast_math_flags() {
     );
     assert!(print(plain).contains("= fadd float"), "{}", print(plain));
     // SAFETY: an instruction of this context.
-    let sum_flags = unsafe { sys::airconv_shim_get_fast_math_flags(sum.raw()) };
+    let sum_flags = unsafe { sys::get_fast_math_flags(sum.raw()) };
     assert_eq!(sum_flags, flags.bits());
     // SAFETY: as above.
-    let plain_flags = unsafe { sys::airconv_shim_get_fast_math_flags(plain.raw()) };
+    let plain_flags = unsafe { sys::get_fast_math_flags(plain.raw()) };
     assert_eq!(plain_flags, 0);
     // SAFETY: as above; the flags replace the instruction's.
     unsafe { sys::airconv_shim_copy_fast_math_flags(sum.raw(), FastMath::NO_NANS.bits()) };
@@ -284,10 +284,10 @@ fn shim_fast_math_flags() {
     unsafe { sys::airconv_shim_copy_fast_math_flags(sum.raw(), 0x7f) };
     assert!(print(sum).contains("fadd fast float"), "{}", print(sum));
     // SAFETY: a value of this context.
-    let sum_is_fp = unsafe { sys::airconv_shim_is_fp_math_operator(sum.raw()) };
+    let sum_is_fp = unsafe { sys::can_value_use_fast_math_flags(sum.raw()) };
     assert_eq!(sum_is_fp, 1);
     // SAFETY: as above (a folded constant: not a floating-point operation).
-    let int_is_fp = unsafe { sys::airconv_shim_is_fp_math_operator(int.raw()) };
+    let int_is_fp = unsafe { sys::can_value_use_fast_math_flags(int.raw()) };
     assert_eq!(int_is_fp, 0);
 }
 
@@ -597,14 +597,12 @@ fn memory_attributes_print_as_llvm_23_writes_them() {
         "memory(argmem: readwrite, inaccessiblemem: readwrite)",
     ];
     let printed: Vec<String> = (0..16)
-        .map(|row: i32| {
+        .map(|row: u32| {
             let cx = Context::new();
             let m = Module::new(&cx, c"m");
             let tcx = cx.tcx();
             let f = ok(m.add_function(b"f", tcx.function(tcx.void(), &[], false)));
-            // SAFETY: the context is live.
-            let attribute =
-                unsafe { sys::airconv_shim_memory_attribute(cx.raw(), row / 4, row % 4) };
+            let attribute = ok(cx.memory_attribute(row / 4, row % 4));
             // SAFETY: a function of this context and an attribute of it.
             unsafe {
                 sys::add_attribute_at_index(

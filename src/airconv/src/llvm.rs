@@ -375,6 +375,38 @@ impl Context {
         Ok(unsafe { sys::create_enum_attribute(self.raw, kind, value) })
     }
 
+    /// The `memory(…)` attribute (`Attribute::getWithMemoryEffects`).
+    ///
+    /// `mod_ref` is `ModRefInfo` (`0`: none, `1`: `Ref`, `2`: `Mod`, `3`: `ModRef`) for the
+    /// locations `locations` selects (`0`: every location, `1`: argument memory, `2`:
+    /// inaccessible memory, `3`: both); the other locations are not accessed. The value is
+    /// `MemoryEffects`' encoding in LLVM 23, two bits a location (`IRMemLocation`: argument,
+    /// inaccessible, errno, other, and two target-specific ones); a test pins the sixteen
+    /// printed forms, which change if LLVM adds a location.
+    ///
+    /// # Errors
+    ///
+    /// `LLVM error: no attribute memory` if this LLVM has none.
+    pub fn memory_attribute(
+        &self,
+        locations: u32,
+        mod_ref: u32,
+    ) -> Result<sys::AttributeRef, Error> {
+        /// How many locations `IRMemLocation` has.
+        const LOCATIONS: u32 = 6;
+        let mask = match locations {
+            1 => 0b01,
+            2 => 0b10,
+            3 => 0b11,
+            _ => (1 << LOCATIONS) - 1,
+        };
+        let mod_ref = u64::from(mod_ref & 3);
+        let encoded = (0..LOCATIONS)
+            .filter(|location| mask >> location & 1 == 1)
+            .fold(0, |bits, location| bits | mod_ref << (location * 2));
+        self.enum_attribute(b"memory", encoded)
+    }
+
     /// Converts an attribute table `(index, name)` into LLVM 23 attributes.
     ///
     /// Upgrades function-level memory attributes and parameter `nocapture` as `BitcodeReader`
@@ -422,20 +454,19 @@ impl Context {
                     _ => out.push((index, self.enum_attribute(attr_name, 0)?)),
                 }
             } else if attr_name == b"nocapture" {
-                // SAFETY: the context is live.
-                out.push((index, unsafe { sys::airconv_shim_captures_none(self.raw) }));
+                // `CaptureInfo::none()`, whose encoding is 0.
+                out.push((index, self.enum_attribute(b"captures", 0)?));
             } else {
                 out.push((index, self.enum_attribute(attr_name, 0)?));
             }
         }
         if has_mem {
-            let (argmem_only, mr) = match loc_mask {
+            let (locations, mr) = match loc_mask {
                 0 => (0, 0),
                 1..=3 => (loc_mask, mod_ref),
                 _ => (0, mod_ref),
             };
-            // SAFETY: the context is live.
-            let mem = unsafe { sys::airconv_shim_memory_attribute(self.raw, argmem_only, mr) };
+            let mem = self.memory_attribute(locations, mr)?;
             out.push((sys::ATTRIBUTE_FUNCTION_INDEX, mem));
         }
         Ok(out)

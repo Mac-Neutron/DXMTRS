@@ -83,11 +83,15 @@ pub type DiagnosticSeverity = c_uint;
 pub type VerifierFailureAction = c_uint;
 /// `LLVMAttributeIndex`: the return value, the function, or a parameter from 1.
 pub type AttributeIndex = c_uint;
+/// `LLVMModuleFlagBehavior`.
+pub type ModuleFlagBehavior = c_uint;
 /// `LLVMDiagnosticHandler`.
 pub type DiagnosticHandler = Option<unsafe extern "C" fn(DiagnosticInfoRef, *mut c_void)>;
 
 /// `LLVMAttributeFunctionIndex` (-1 as an unsigned).
 pub const ATTRIBUTE_FUNCTION_INDEX: AttributeIndex = AttributeIndex::MAX;
+/// `LLVMModuleFlagBehaviorWarning`.
+pub const MODULE_FLAG_BEHAVIOR_WARNING: ModuleFlagBehavior = 1;
 
 /// `LLVMAIRValueType`: a value and its typed type (`AIRWriter.h`).
 #[repr(C)]
@@ -293,6 +297,14 @@ unsafe extern "C" {
     pub fn set_data_layout(m: ModuleRef, data_layout_str: *const c_char);
     #[link_name = "LLVMSetTarget"]
     pub fn set_target(m: ModuleRef, triple: *const c_char);
+    #[link_name = "LLVMAddModuleFlag"]
+    pub fn add_module_flag(
+        m: ModuleRef,
+        behavior: ModuleFlagBehavior,
+        key: *const c_char,
+        key_len: usize,
+        val: MetadataRef,
+    );
     #[cfg(any(test, feature = "oracle"))]
     #[link_name = "LLVMPrintModuleToString"]
     pub fn print_module_to_string(m: ModuleRef) -> *mut c_char;
@@ -522,6 +534,12 @@ unsafe extern "C" {
         constant_vals: *mut ValueRef,
         length: c_uint,
     ) -> ValueRef;
+    #[link_name = "LLVMConstDataArray"]
+    pub fn const_data_array(
+        element_ty: TypeRef,
+        data: *const c_char,
+        size_in_bytes: usize,
+    ) -> ValueRef;
     #[link_name = "LLVMConstVector"]
     pub fn const_vector(scalar_constant_vals: *mut ValueRef, size: c_uint) -> ValueRef;
     #[link_name = "LLVMGetAggregateElement"]
@@ -682,6 +700,12 @@ unsafe extern "C" {
     pub fn set_volatile(memory_access_inst: ValueRef, is_volatile: Bool);
     #[link_name = "LLVMSetOrdering"]
     pub fn set_ordering(memory_access_inst: ValueRef, ordering: AtomicOrdering);
+    // Fast-math flags. `get_fast_math_flags` is undefined on a value `can_value_use_fast_math_flags`
+    // answers 0 for.
+    #[link_name = "LLVMCanValueUseFastMathFlags"]
+    pub fn can_value_use_fast_math_flags(inst: ValueRef) -> Bool;
+    #[link_name = "LLVMGetFastMathFlags"]
+    pub fn get_fast_math_flags(fp_math_inst: ValueRef) -> c_uint;
     #[link_name = "LLVMGetAtomicRMWBinOp"]
     pub fn get_atomic_rmw_bin_op(atomic_rmw_inst: ValueRef) -> AtomicRMWBinOp;
 
@@ -1173,16 +1197,10 @@ unsafe extern "C" {
     /// Every floating-point instruction it makes from now on carries them; `flags` holds
     /// `FastMathFlags`' bits.
     pub fn airconv_shim_set_fast_math_flags(builder: BuilderRef, flags: c_uint);
-    /// The fast-math flags of `inst` (`FPMathOperator::getFastMathFlags`).
-    ///
-    /// 0 for a value that is not a floating-point operation.
-    pub fn airconv_shim_get_fast_math_flags(inst: ValueRef) -> c_uint;
     /// Replaces the fast-math flags of `inst` (`Instruction::copyFastMathFlags`).
     ///
     /// A value that is not a floating-point operation is left alone.
     pub fn airconv_shim_copy_fast_math_flags(inst: ValueRef, flags: c_uint);
-    /// Whether `value` carries fast-math flags (`isa<FPMathOperator>`).
-    pub fn airconv_shim_is_fp_math_operator(value: ValueRef) -> Bool;
 
     /// Parses `size` bytes of bitcode into a module of `context` (`parseBitcodeFile`).
     ///
@@ -1219,19 +1237,6 @@ unsafe extern "C" {
     /// The buffer is freed with `dispose_message` and is built with or without the two passes.
     #[cfg(test)]
     pub fn airconv_shim_pipeline_text(air_passes: c_int, out: *mut *mut c_char, len: *mut usize);
-    /// `Attribute::getWithMemoryEffects` for the given location mask and `ModRefInfo`.
-    ///
-    /// `argmem_only` selects the location mask (`0`: all, `1`: `ArgMem`, `2`: `InaccessibleMem`,
-    /// `3`: both) and `mod_ref` is `ModRefInfo` (`0`: none, `1`: `Ref`, `2`: `Mod`, `3`: `ModRef`).
-    pub fn airconv_shim_memory_attribute(
-        context: ContextRef,
-        argmem_only: c_int,
-        mod_ref: c_int,
-    ) -> AttributeRef;
-    /// `Attribute::getWithCaptureInfo(CaptureInfo::none())`: `captures(none)`.
-    pub fn airconv_shim_captures_none(context: ContextRef) -> AttributeRef;
-    /// Sets the module's SDK version (`Module::setSDKVersion`).
-    pub fn airconv_shim_set_sdk_version(module: ModuleRef, major: c_uint, minor: c_uint);
     /// Declares (or finds) `air.simdgroup.barrier` in `module` as the barrier pass does.
     ///
     /// Answers the function.

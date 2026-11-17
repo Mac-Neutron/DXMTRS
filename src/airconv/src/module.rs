@@ -32,6 +32,9 @@ const SOURCE_FILE_NAME: &[u8] = b"airconv_generated.metal";
 const TRIPLE: &CStr = c"air64-apple-macosx14.0.0";
 const DATA_LAYOUT: &CStr = c"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
+/// The module flag `Module::setSDKVersion` writes.
+const SDK_VERSION: &[u8] = b"SDK Version";
+
 /// `Module::ModFlagBehavior`'s `Error` and `Max` (LLVM's C enum has no `Max`).
 const FLAG_ERROR: u64 = 1;
 const FLAG_MAX: u64 = 7;
@@ -75,9 +78,27 @@ pub fn set_up(m: &Module<'_>) {
     unsafe { sys::set_target(m.raw(), TRIPLE.as_ptr()) };
     // SAFETY: a live module; a NUL-terminated data layout LLVM parses.
     unsafe { sys::set_data_layout(m.raw(), DATA_LAYOUT.as_ptr()) };
-    // SAFETY: a live module.
-    unsafe { sys::airconv_shim_set_sdk_version(m.raw(), 15, 0) };
     let cx = m.cx();
+    // `Module::setSDKVersion(VersionTuple(15, 0))`: a `Warning` flag whose value is the version's
+    // parts as a data array of `i32`.
+    let version: [u32; 2] = [15, 0];
+    // SAFETY: a live context.
+    let i32_raw = unsafe { sys::int_type_in_context(cx.raw(), 32) };
+    // SAFETY: an integer type of the context; the array is read for its eight bytes.
+    let parts =
+        unsafe { sys::const_data_array(i32_raw, version.as_ptr().cast(), size_of_val(&version)) };
+    // SAFETY: a constant of the context.
+    let parts = unsafe { sys::value_as_metadata(parts) };
+    // SAFETY: a live module; the key holds its length; `parts` is metadata of its context.
+    unsafe {
+        sys::add_module_flag(
+            m.raw(),
+            sys::MODULE_FLAG_BEHAVIOR_WARNING,
+            SDK_VERSION.as_ptr().cast(),
+            SDK_VERSION.len(),
+            parts,
+        );
+    };
     let i32_ty = cx.tcx().int(32);
     for (behavior, key, value) in MODULE_FLAGS {
         let flag = cx.md_node(&[

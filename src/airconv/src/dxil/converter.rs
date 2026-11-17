@@ -932,11 +932,11 @@ fn strip_fast_math_of(inst: sys::ValueRef, pre_raster: bool) {
         return;
     }
     // SAFETY: an instruction of the module.
-    if unsafe { sys::airconv_shim_is_fp_math_operator(inst) } == 0 {
+    if unsafe { sys::can_value_use_fast_math_flags(inst) } == 0 {
         return;
     }
     // SAFETY: a floating-point operation.
-    let flags = unsafe { sys::airconv_shim_get_fast_math_flags(inst) };
+    let flags = unsafe { sys::get_fast_math_flags(inst) };
     let mut dropped = FastMath::NO_NANS.with(FastMath::NO_INFS);
     if pre_raster {
         dropped = dropped

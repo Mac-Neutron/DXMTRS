@@ -8,7 +8,6 @@
 
 #include "llvm-c/Core.h"
 #include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/FMF.h"
 #include "llvm/IR/IRBuilder.h"
@@ -19,8 +18,6 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/ModRef.h"
-#include "llvm/Support/VersionTuple.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/Annotation2Metadata.h"
 #include "llvm/Transforms/IPO/DeadArgumentElimination.h"
@@ -71,21 +68,8 @@ static FastMathFlags FromBits(unsigned bits) {
   return flags;
 }
 
-static unsigned ToBits(FastMathFlags flags) {
-  return (flags.allowReassoc() ? FastMathFlags::AllowReassoc : 0) | (flags.noNaNs() ? FastMathFlags::NoNaNs : 0) |
-         (flags.noInfs() ? FastMathFlags::NoInfs : 0) | (flags.noSignedZeros() ? FastMathFlags::NoSignedZeros : 0) |
-         (flags.allowReciprocal() ? FastMathFlags::AllowReciprocal : 0) |
-         (flags.allowContract() ? FastMathFlags::AllowContract : 0) |
-         (flags.approxFunc() ? FastMathFlags::ApproxFunc : 0);
-}
-
 extern "C" void airconv_shim_set_fast_math_flags(LLVMBuilderRef builder, unsigned flags) {
   unwrap(builder)->setFastMathFlags(FromBits(flags));
-}
-
-extern "C" unsigned airconv_shim_get_fast_math_flags(LLVMValueRef inst) {
-  auto *op = dyn_cast<FPMathOperator>(unwrap(inst));
-  return op ? ToBits(op->getFastMathFlags()) : 0;
 }
 
 extern "C" void airconv_shim_copy_fast_math_flags(LLVMValueRef inst, unsigned flags) {
@@ -93,8 +77,6 @@ extern "C" void airconv_shim_copy_fast_math_flags(LLVMValueRef inst, unsigned fl
   if (i && isa<FPMathOperator>(i))
     i->copyFastMathFlags(FromBits(flags));
 }
-
-extern "C" LLVMBool airconv_shim_is_fp_math_operator(LLVMValueRef value) { return isa<FPMathOperator>(unwrap(value)); }
 
 // Bitcode, as LoadModule reads it.
 extern "C" LLVMBool airconv_shim_parse_bitcode(LLVMContextRef context, const char *data, size_t size,
@@ -235,23 +217,6 @@ extern "C" void airconv_shim_pipeline_text(int air_passes, char **out, size_t *l
     *out = copy;
     *len = text.size();
   }
-}
-
-extern "C" LLVMAttributeRef airconv_shim_memory_attribute(LLVMContextRef context, int argmem_only, int mod_ref) {
-  auto mr = static_cast<ModRefInfo>(mod_ref & 3);
-  MemoryEffects effects = (argmem_only == 1)   ? MemoryEffects::argMemOnly(mr)
-                          : (argmem_only == 2) ? MemoryEffects::inaccessibleMemOnly(mr)
-                          : (argmem_only == 3) ? MemoryEffects::inaccessibleOrArgMemOnly(mr)
-                                               : MemoryEffects(mr);
-  return wrap(Attribute::getWithMemoryEffects(*unwrap(context), effects));
-}
-
-extern "C" LLVMAttributeRef airconv_shim_captures_none(LLVMContextRef context) {
-  return wrap(Attribute::getWithCaptureInfo(*unwrap(context), CaptureInfo::none()));
-}
-
-extern "C" void airconv_shim_set_sdk_version(LLVMModuleRef module, unsigned major, unsigned minor) {
-  unwrap(module)->setSDKVersion(VersionTuple(major, minor));
 }
 
 extern "C" LLVMValueRef airconv_shim_declare_simdgroup_barrier(LLVMModuleRef module) {
