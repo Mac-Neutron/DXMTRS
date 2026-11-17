@@ -570,20 +570,14 @@ if [ -n "$modules" ]; then
     report 'Module style: foo.rs + foo/, not foo/mod.rs' 'mod.rs file' "$modules"
 fi
 
-# The C, C++ and Objective-C sources of src/ and tests/: everything else there is Rust, and a new one fails here.
-#   src/airconv/shim, src/airconv/transforms: the translator's glue over LLVM's C++ API (pass manager, MemorySSA,
-#     the two module passes), which LLVM's C API does not reach.
-#   src/d3d9/unix/src/metal/macdrv/delegate_forward.m: an Objective-C @try around a send to Wine's application
-#     delegate. mtld3d.so builds with panic = "abort", where no Rust frame can catch the exception.
-C_SOURCES='src/airconv/shim/shim.cpp
-src/airconv/transforms/lower_16bit_texread.cpp
-src/airconv/transforms/simdgroup_implicit_membarrier.cpp
-src/d3d9/unix/src/metal/macdrv/delegate_forward.m'
-# shellcheck disable=SC2046
-c_strays=$(outside "$C_SOURCES" $(git ls-files 'src/*.c' 'src/*.cc' 'src/*.cpp' 'src/*.cxx' 'src/*.m' 'src/*.mm' \
-    'tests/*.c' 'tests/*.cc' 'tests/*.cpp' 'tests/*.cxx' 'tests/*.m' 'tests/*.mm'))
+# No C, C++ or Objective-C source under src/ or tests/: the tree is Rust (docs/CONVENTIONS.md), and a file of those
+# languages fails here. What cannot be Rust has a home outside this tree: LLVM C++ in our LLVM fork, behind the C
+# names of llvm-c/AIRExtras.h; code rustc cannot emit, such as a landing pad, as global_asm! in the Rust file that
+# calls it. Headers stay: they are what the generated bindings are read from and what MacNeutron's C compiles.
+c_strays=$(git ls-files 'src/*.c' 'src/*.cc' 'src/*.cpp' 'src/*.cxx' 'src/*.m' 'src/*.mm' \
+    'tests/*.c' 'tests/*.cc' 'tests/*.cpp' 'tests/*.cxx' 'tests/*.m' 'tests/*.mm')
 if [ -n "$c_strays" ]; then
-    report 'Mechanical audit' 'unexpected C, C++ or Objective-C source file in src/ or tests/' "$c_strays"
+    report 'Mechanical audit' 'C, C++ or Objective-C source file in src/ or tests/: this tree is Rust' "$c_strays"
 fi
 
 findings=$(coverage_matrix)

@@ -9,9 +9,8 @@ The tree is one project with one Cargo workspace at the root and one meson
 build. The Rust crates of Direct3D 10, 11 and 12 sit under `src/` (`src/dxgi`,
 `src/d3d10`, `src/d3d11`, `src/d3d12`, `src/winemetal`, `src/util`, `src/nvapi`,
 `src/nvngx`, ...); Direct3D 9, the former mtld3d, sits under `src/d3d9` with its
-tests in `tests/d3d9`. The few C++ and Objective-C sources left are the ones
-`tools/audit.sh` lists (`C_SOURCES`), each with its reason. Cargo commands run
-from the root.
+tests in `tests/d3d9`. No C, C++ or Objective-C source is left under `src/` or
+`tests/`, and `tools/audit.sh` fails on one. Cargo commands run from the root.
 
 It points at the files that own the rules:
 

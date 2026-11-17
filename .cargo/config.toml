@@ -53,9 +53,8 @@ rustflags = [
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "15.0"
-# `-march=x86-64-v2` mirrors the x86_64 macOS rustflags so build-script C/C++ code (mtld3d-unix's Objective-C
-# delegate forward, snmalloc-sys's C++, zstd-sys's C) gets the same ISA. cc-rs appends the plain `CFLAGS` /
-# `CXXFLAGS` to these.
+# `-march=x86-64-v2` mirrors the x86_64 macOS rustflags so build-script C/C++ code (snmalloc-sys's C++, zstd-sys's
+# C) gets the same ISA. cc-rs appends the plain `CFLAGS` / `CXXFLAGS` to these.
 CFLAGS_x86_64-apple-darwin   = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"
 CXXFLAGS_x86_64-apple-darwin = "-march=x86-64-v2 -mbmi -mbmi2 -mlzcnt"
 # The MSVC librarian, as a bare name resolved from PATH: `llvm-lib` is `llvm-ar` in lib.exe-compatible mode (it

@@ -140,10 +140,9 @@ The per-target C and C++ environment that cc-rs reads (compiler, flags, file-pre
 `src/d3d9`'s meson targets set it. They also pass `MTLD3D_WINECRT0`, the path of Wine's `libwinecrt0.a`, which the
 `mtld3d.dll` shim bundles. Both are build-time variables, not runtime ones.
 
-Two of this tree's own sources go through cc-rs: airconv's shim over LLVM's C++ API (`src/airconv/build.rs`, with the
-two passes it includes) and `mtld3d.so`'s Objective-C delegate forward (`src/d3d9/unix/build.rs`). The rest that cc-rs
-compiles belongs to crates (snmalloc-sys, zstd-sys). Meson compiles no C or C++ of this tree: a target made of Rust
-archives alone takes `rust_no_source`, an empty generated C file, for its link driver.
+None of this tree's own sources goes through cc-rs: what it compiles belongs to crates (snmalloc-sys, zstd-sys). Meson
+compiles no C or C++ of this tree: a target made of Rust archives alone takes `rust_no_source`, an empty generated C
+file, for its link driver.
 
 ### Instruction-set baselines
 
@@ -186,7 +185,7 @@ pins:
 | `MTLD3D_LLVM_MINGW` | The llvm-mingw root. Its `bin` folder is also on `PATH`. |
 | `WINE_BUILD` | The Mac Wine build tree, for `libntdll.a` and `libwinecrt0.a`. |
 | `GUEST_WINE_SDK` | The VM guest's Wine SDK. |
-| `AIRCONV_LLVM` | The LLVM 15 install airconv's build script compiles its C++ shim against and links (`include`, `lib`, `.complete`). |
+| `AIRCONV_LLVM` | The LLVM 23 install airconv links, built from `tools/llvm.sh`'s commit of our fork (`lib`, `.complete`). |
 | `AIRCONV_XCRUN` | `xcrun`, or a `sh` script taking `xcrun`'s arguments (run through `/bin/sh` when it is not executable), for airconv's Metal helpers. |
 | `CARGO_TARGET_DIR` | Optional. An absolute folder outside the tree. |
 
