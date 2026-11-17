@@ -2378,6 +2378,7 @@ fn create_core_device(
         return D3DERR_NOTAVAILABLE;
     };
     let mut core = d3d9_rt::device::CoreDevice::new(mtl, d3d9_rt::device::queue_profile());
+    core.set_retention_cap(cfg.vbib_retention_cap_bytes);
     core.attach(
         isize::try_from(hwnd).unwrap_or_default(),
         pp.back_buffer_width,

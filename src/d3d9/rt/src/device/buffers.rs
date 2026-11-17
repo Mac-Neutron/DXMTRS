@@ -60,9 +60,11 @@ impl CoreDevice {
     /// Uploads `bytes` into `id`'s buffer at byte `offset`.
     ///
     /// The bytes are copied into a staging-ring block now; a blit copies them at the chunk's
-    /// encode, after every pass recorded before it, which ends an open render pass. False, and
-    /// nothing recorded, when the store has no `id`, `bytes` is empty, the range ends past the
-    /// buffer, or this process cannot reach the staging block.
+    /// encode, after every pass recorded before it, which ends an open render pass. They count
+    /// against the retention cap until that chunk retires, and the upload first waits while the
+    /// bytes the GPU side holds are at the cap (DXMTRS C4c-2b). False, and nothing recorded,
+    /// when the store has no `id`, `bytes` is empty, the range ends past the buffer, or this
+    /// process cannot reach the staging block.
     #[must_use]
     pub fn buffer_upload(&mut self, id: BufferId, offset: u64, bytes: &[u8]) -> bool {
         let Some(buffer) = self.buffers.get(&id) else {
@@ -79,6 +81,7 @@ impl CoreDevice {
             return false;
         }
         let buffer = Arc::clone(buffer);
+        self.hold_under_cap();
         let (block, staged) = self.device.queue_mut().allocate_staging_buffer(length, 16);
         let Ok(start) = usize::try_from(staged) else {
             return false;
@@ -112,6 +115,10 @@ impl CoreDevice {
                 copy_length: length,
             });
         });
+        // At the chunk being recorded, before a commit for the staged budget moves it on.
+        let queue = self.device.queue();
+        let (seq, coherent) = (queue.current_seq(), queue.coherent_seq());
+        self.retained.add(seq, length, coherent);
         self.staged_bytes += length;
         if self.staged_bytes > self.staged_budget {
             self.commit();

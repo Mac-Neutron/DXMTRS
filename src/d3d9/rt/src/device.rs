@@ -67,6 +67,10 @@ pub struct CoreDevice {
     /// Bytes staged for uploads in the chunk being recorded, and the budget past which it commits.
     staged_bytes: u64,
     staged_budget: u64,
+    /// The vertex and index bytes the GPU side still holds, by chunk (DXMTRS C4c-2b).
+    retained: retained::Retained,
+    /// The cap on those bytes, `memory.vbibRetentionCapMB`; 0 for none.
+    retention_cap: u64,
 }
 
 impl CoreDevice {
@@ -115,6 +119,8 @@ impl CoreDevice {
             dirty: false,
             staged_bytes: 0,
             staged_budget: staged_budget(staging_block),
+            retained: retained::Retained::default(),
+            retention_cap: 0,
         }
     }
 
@@ -206,6 +212,7 @@ mod buffers;
 mod depth;
 mod draw;
 mod recorder;
+mod retained;
 mod samplers;
 mod surface;
 mod swapchain;
