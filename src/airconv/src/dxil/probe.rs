@@ -57,8 +57,7 @@ pub fn apply(dxil: &DxilShader, cx: &Context, main: sys::ValueRef) -> Result<(),
     let mut probed = [None; 3];
     let mut texts: [Vec<u8>; 3] = Default::default();
     for ((slot, text), &number) in probed.iter_mut().zip(&mut texts).zip(&numbers) {
-        // SAFETY: a defined function of the module.
-        let inst = unsafe { sys::airconv_shim_local_slot(main, number) };
+        let inst = local_slot(main, number);
         if !inst.is_null() {
             let inst = lift(inst)?;
             *slot = Some(inst);
@@ -271,4 +270,31 @@ fn position_after<'cx>(at: &Builder<'cx>, inst: Val<'cx>) -> Result<(), Error> {
     }
     at.position_before(lift(at.cx(), next)?);
     Ok(())
+}
+
+/// The last instruction of `function` whose local slot number is `slot`, or null.
+///
+/// The number is `ModuleSlotTracker`'s, as the printer numbers unnamed values; `u32::MAX`
+/// matches an instruction with no number, as the C++'s `(int)~0u` did (`ApplyProbe`).
+pub fn local_slot(function: sys::ValueRef, slot: u32) -> sys::ValueRef {
+    let wanted = slot.cast_signed();
+    let mut found = core::ptr::null_mut();
+    // SAFETY: a defined function of a live module; the tracker is freed below.
+    let tracker = unsafe { sys::air_create_slot_tracker(function) };
+    // SAFETY: a function of the module (its blocks and their instructions likewise).
+    for block in walk_blocks(unsafe { sys::get_first_basic_block(function) }) {
+        // SAFETY: a block of the function.
+        let mut inst = unsafe { sys::get_first_instruction(block) };
+        while !inst.is_null() {
+            // SAFETY: the tracker made above and an instruction of its function.
+            if unsafe { sys::air_get_local_slot(tracker, inst) } == wanted {
+                found = inst;
+            }
+            // SAFETY: an instruction of the block.
+            inst = unsafe { sys::get_next_instruction(inst) };
+        }
+    }
+    // SAFETY: the tracker made above, freed once.
+    unsafe { sys::air_dispose_slot_tracker(tracker) };
+    found
 }

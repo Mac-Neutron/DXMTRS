@@ -1043,9 +1043,8 @@ impl<'cx> Lowering<'_, 'cx> {
         let head = self.insert_block()?;
         let run = b.not(skip);
         // SAFETY: a condition and the call it splits before, of the function built.
-        let then = self.val(unsafe {
-            sys::airconv_shim_split_block_and_insert_if_then(run.raw(), call.raw(), 0)
-        })?;
+        let then =
+            self.val(unsafe { sys::air_split_block_and_insert_if_then(run.raw(), call.raw(), 0) })?;
         b.position_before(then);
         // The key, in 32-bit math: h = (the address's low 32 bits) >> 3, or x * 0x9E3779B1 + y;
         // h ^= h >> 16; lock h & (ATOMIC64_LOCKS - 1).
@@ -1126,7 +1125,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 let matched = b.icmp(sys::INT_EQ, value, arg(5)?);
                 // SAFETY: a condition and the section's branch it splits before.
                 let store_then = self.val(unsafe {
-                    sys::airconv_shim_split_block_and_insert_if_then(matched.raw(), at.raw(), 0)
+                    sys::air_split_block_and_insert_if_then(matched.raw(), at.raw(), 0)
                 })?;
                 b.position_before(store_then);
                 store(arg(6)?, read)?;
@@ -1136,12 +1135,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 // SAFETY: the builder is positioned in the function built; the operands are of
                 // its context.
                 let next = unsafe {
-                    sys::airconv_shim_build_atomic_rmw_value(
-                        b.raw(),
-                        op,
-                        value.raw(),
-                        arg(6)?.raw(),
-                    )
+                    sys::air_build_atomic_rmw_value(b.raw(), op, value.raw(), arg(6)?.raw())
                 };
                 if next.is_null() {
                     return Err(unsupported(call));

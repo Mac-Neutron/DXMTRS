@@ -265,10 +265,10 @@ fn hca_noop_bitcast_is_retargeted_not_rebuilt() {
     assert!(!hca0.is_null());
     // SAFETY: as above.
     let main_fn = unsafe { sys::get_named_function(raw_m.raw(), c"main".as_ptr()) };
-    // SAFETY: `@main` has an entry block and slot 125 is the reader's dead `bitcast ptr %10 to ptr`
-    // instruction from `llvm.lifetime.start.p0i8`; point it at `@kNeighbor.i.0.hca` so `retarget`
-    // sees `bitcast ptr @kNeighbor.i.0.hca to ptr`.
-    let dead_cast = unsafe { sys::airconv_shim_local_slot(main_fn, 125) };
+    // Slot 125 of `@main` is the reader's dead `bitcast ptr %10 to ptr` instruction from
+    // `llvm.lifetime.start.p0i8`; point it at `@kNeighbor.i.0.hca` so `retarget` sees
+    // `bitcast ptr @kNeighbor.i.0.hca to ptr`.
+    let dead_cast = crate::dxil::probe::local_slot(main_fn, 125);
     assert!(!dead_cast.is_null());
     // SAFETY: `dead_cast` is a `BitCastInst` of the module.
     assert!(!unsafe { sys::is_a_bit_cast_inst(dead_cast) }.is_null());

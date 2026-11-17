@@ -6,7 +6,10 @@
 //! by `build.rs`; [`optimize`] runs airconv's pass pipeline through the shim. [`parse`] reads
 //! bitcode as the C++'s `parseBitcodeFile` calls did.
 
-use core::{ffi::CStr, ptr, slice};
+use core::{
+    ffi::{CStr, c_char, c_void},
+    ptr, slice,
+};
 
 use crate::{
     api::Error,
@@ -138,30 +141,36 @@ pub fn parse<'cx>(
     let mut out = ptr::null_mut();
     let mut text = ptr::null_mut();
     let mut len = 0;
-    let dxil_layout = matches!(layout, Layout::Dxil).into();
+    // The layout the callback answers lives here until the parse ends.
+    let mut kept = Vec::<u8>::new();
+    let callback: Option<sys::AirDataLayoutCallback> = match layout {
+        Layout::Keep => None,
+        Layout::Dxil => Some(drop_i8_32),
+    };
     // SAFETY: the context is live; `bitcode` and `name` hold their lengths; the three outputs are
-    // writable.
+    // writable; `kept` is the `Vec` the callback takes and outlives the call.
     let failed = unsafe {
-        sys::airconv_shim_parse_bitcode(
+        sys::air_parse_bitcode(
             cx.raw(),
             bitcode.as_ptr().cast(),
             bitcode.len(),
             name.as_ptr().cast(),
             name.len(),
-            dxil_layout,
+            callback,
+            (&raw mut kept).cast(),
             &raw mut out,
             &raw mut text,
             &raw mut len,
         )
     } != 0;
-    // SAFETY: the shim answers null or a module of `cx` it hands over.
+    // SAFETY: the reader answers null or a module of `cx` it hands over.
     let module = (!out.is_null()).then(|| unsafe { Module::from_raw(cx, out) });
     let message = if text.is_null() {
         Vec::new()
     } else {
-        // SAFETY: the shim answers `len` bytes at `text`.
+        // SAFETY: the reader answers `len` bytes at `text`.
         let bytes = unsafe { slice::from_raw_parts(text.cast::<u8>(), len) }.to_vec();
-        // SAFETY: the shim's message, freed once.
+        // SAFETY: the reader's message, freed once.
         unsafe { sys::dispose_message(text) };
         bytes
     };
@@ -172,6 +181,41 @@ pub fn parse<'cx>(
         Some(module) if !failed => Ok(module),
         _ => Err(Error::new(&[prefix, &message].concat())),
     }
+}
+
+/// The reader's data-layout callback for DXIL: the module's layout without its `i8:32` component.
+///
+/// `ctx` is the `Vec<u8>` [`parse`] keeps the answer in. The parts are joined as `LoadModule`'s
+/// loop joined them: a `-` goes before a part only once something is kept.
+unsafe extern "C" fn drop_i8_32(
+    ctx: *mut c_void,
+    _triple: *const c_char,
+    _triple_len: usize,
+    layout: *const c_char,
+    layout_len: usize,
+    out_len: *mut usize,
+) -> *const c_char {
+    // SAFETY: `parse` passes its `Vec<u8>`, which nothing else touches during the parse.
+    let kept = unsafe { &mut *ctx.cast::<Vec<u8>>() };
+    let layout = if layout_len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: the reader passes `layout_len` bytes at `layout`.
+        unsafe { slice::from_raw_parts(layout.cast::<u8>(), layout_len) }
+    };
+    kept.clear();
+    for part in layout.split(|&byte| byte == b'-') {
+        if part == b"i8:32" {
+            continue;
+        }
+        if !kept.is_empty() {
+            kept.push(b'-');
+        }
+        kept.extend_from_slice(part);
+    }
+    // SAFETY: the reader passes a writable length.
+    unsafe { *out_len = kept.len() };
+    kept.as_ptr().cast()
 }
 
 /// Links the Metal helpers the module calls, each only for what it uses (`linkShader`).
@@ -214,11 +258,13 @@ fn link_helper(m: &Module<'_>, air: &[u8]) -> Result<(), Error> {
     for name in HELPER_METADATA {
         // SAFETY: a live module; `name` holds its length.
         unsafe {
-            sys::airconv_shim_erase_named_metadata(helper.raw(), name.as_ptr().cast(), name.len());
+            sys::air_erase_named_metadata(helper.raw(), name.as_ptr().cast(), name.len());
         }
     }
     // SAFETY: both modules are live and of `cx`; the link takes the helper.
-    let failed = unsafe { sys::airconv_shim_link_only_needed(m.raw(), helper.into_raw()) } != 0;
+    let failed =
+        unsafe { sys::air_link_modules(m.raw(), helper.into_raw(), sys::AIR_LINK_ONLY_NEEDED) }
+            != 0;
     match cx.take_error() {
         Some(error) => Err(error),
         None if failed => Err(Error::new(b"LLVM error: a Metal helper does not link")),

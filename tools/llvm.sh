@@ -1,9 +1,9 @@
-# LLVM 23 (MacNeutron's air-23 fork, with the AIR bitcode writer), by architecture, for wine-arm64/build.sh (arm64) and
-# `make llvm-nolto` (sourced); dxmt/tools.sh links the host tools against it. The caller defines die, UNIX_CPU and
-# UNIX_LTO. Messages go to stderr.
+# LLVM 23 (MacNeutron's air-23 fork, with the AIR bitcode writer and the C entry points of llvm-c/AIRExtras.h), by
+# architecture, for wine-arm64/build.sh (arm64) and `make llvm-nolto` (sourced); dxmt/tools.sh links the host tools
+# against it. The caller defines die, UNIX_CPU and UNIX_LTO. Messages go to stderr.
 
 LLVM_AIR_REPO=https://github.com/Mac-Neutron/llvm-project.git
-LLVM_AIR_COMMIT=edc723f40de7c461a3e8473d174d88a9027dcc54
+LLVM_AIR_COMMIT=9df6993f28043ccc381aa0b43e2b9acf2a6223fc
 
 # LLVM 23: static, Release (-O3), no targets or tools, assertions and zstd off, for the caller's UNIX_CPU, as ThinLTO
 # bitcode when UNIX_LTO asks for it (winemetal.so's link optimizes the translator and LLVM together). Built once per

@@ -52,6 +52,8 @@ opaque! {
     DiagnosticInfo => DiagnosticInfoRef;
     /// `Use`.
     Use => UseRef;
+    /// `ModuleSlotTracker`, as `llvm-c/AIRExtras.h` hands one out.
+    AirSlotTracker => AirSlotTrackerRef;
 }
 
 /// An entry of `LLVMInstructionGetAllMetadataOtherThanDebugLoc`'s array.
@@ -85,6 +87,21 @@ pub type VerifierFailureAction = c_uint;
 pub type AttributeIndex = c_uint;
 /// `LLVMModuleFlagBehavior`.
 pub type ModuleFlagBehavior = c_uint;
+/// `LLVMAIRDataLayoutCallback`: the data layout a bitcode module is parsed with.
+///
+/// Called with the module's triple and layout; answers the layout to use (`*out_len` bytes that
+/// stay valid until the parse ends) or null to keep the module's.
+pub type AirDataLayoutCallback = unsafe extern "C" fn(
+    ctx: *mut c_void,
+    triple: *const c_char,
+    triple_len: usize,
+    layout: *const c_char,
+    layout_len: usize,
+    out_len: *mut usize,
+) -> *const c_char;
+/// `LLVMAIRLinkOnlyNeeded` (`Linker::Flags::LinkOnlyNeeded`).
+pub const AIR_LINK_ONLY_NEEDED: c_uint = 1 << 1;
+
 /// `LLVMDiagnosticHandler`.
 pub type DiagnosticHandler = Option<unsafe extern "C" fn(DiagnosticInfoRef, *mut c_void)>;
 
@@ -1185,51 +1202,121 @@ unsafe extern "C" {
     ) -> Bool;
 }
 
-// The shim (`shim/shim.cpp`): what LLVM 23's C API lacks. Each is `extern "C"` in C++ built
-// without exceptions, so nothing unwinds out of it.
+// The fork's entry points (`llvm-c/AIRExtras.h`, `libLLVMAIRExtras.a`): LLVM C++ calls that LLVM
+// 23's C API does not reach, each under a C name and with no decision of ours in it. They are
+// C++ built without exceptions, so nothing unwinds out of one.
 unsafe extern "C" {
-    /// Links LLVM's core and the barrier pass through the pass's own declaration: answers 1.
-    #[cfg(test)]
-    pub fn airconv_shim_probe() -> c_int;
-
     /// Sets the builder's fast-math flags (`IRBuilder::setFastMathFlags`).
     ///
     /// Every floating-point instruction it makes from now on carries them; `flags` holds
     /// `FastMathFlags`' bits.
-    pub fn airconv_shim_set_fast_math_flags(builder: BuilderRef, flags: c_uint);
+    #[link_name = "LLVMAIRBuilderSetFastMathFlags"]
+    pub fn air_builder_set_fast_math_flags(builder: BuilderRef, flags: c_uint);
     /// Replaces the fast-math flags of `inst` (`Instruction::copyFastMathFlags`).
     ///
     /// A value that is not a floating-point operation is left alone.
-    pub fn airconv_shim_copy_fast_math_flags(inst: ValueRef, flags: c_uint);
+    #[link_name = "LLVMAIRCopyFastMathFlags"]
+    pub fn air_copy_fast_math_flags(inst: ValueRef, flags: c_uint);
 
     /// Parses `size` bytes of bitcode into a module of `context` (`parseBitcodeFile`).
     ///
-    /// The buffer is named by `name`; the module is read in full. When `dxil_layout` is non-zero,
-    /// its `DataLayout` callback drops the `i8:32` component. Answers 0 and the module in `*out`,
-    /// or 1 and `toString` of the error in `*error` (`*error_len` bytes, freed with
+    /// The buffer is named by `name`; the module is read in full. `callback`, when there is one,
+    /// is the reader's `DataLayout` callback, called with `ctx`. Answers 0 and the module in
+    /// `*out`, or 1 and `toString` of the error in `*error` (`*error_len` bytes, freed with
     /// `dispose_message`).
-    pub fn airconv_shim_parse_bitcode(
+    #[link_name = "LLVMAIRParseBitcode"]
+    pub fn air_parse_bitcode(
         context: ContextRef,
         data: *const c_char,
         size: usize,
         name: *const c_char,
         name_len: usize,
-        dxil_layout: Bool,
+        callback: Option<AirDataLayoutCallback>,
+        ctx: *mut c_void,
         out: *mut ModuleRef,
         error: *mut *mut c_char,
         error_len: *mut usize,
     ) -> Bool;
-    /// Links `src`, which it takes, into `dest`: only what `dest` uses.
+    /// Links `src`, which it takes, into `dest` (`Linker::linkModules` with `flags`).
     ///
-    /// `Linker::linkModules` with `LinkOnlyNeeded`; answers 1 on an error, which the context's
-    /// handler has seen.
-    pub fn airconv_shim_link_only_needed(dest: ModuleRef, src: ModuleRef) -> Bool;
+    /// Answers 1 on an error, which the context's handler has seen.
+    #[link_name = "LLVMAIRLinkModules"]
+    pub fn air_link_modules(dest: ModuleRef, src: ModuleRef, flags: c_uint) -> Bool;
     /// Erases the named metadata `name` of `module` if it has it.
-    pub fn airconv_shim_erase_named_metadata(
+    #[link_name = "LLVMAIREraseNamedMetadata"]
+    pub fn air_erase_named_metadata(module: ModuleRef, name: *const c_char, name_len: usize);
+    /// Destroys the constant `constant`, which nothing uses (`Constant::destroyConstant`).
+    #[link_name = "LLVMAIRDestroyConstant"]
+    pub fn air_destroy_constant(constant: ValueRef);
+    /// The identified structs of `module` (`Module::getIdentifiedStructTypes`).
+    ///
+    /// Answers how many it has and writes the first `capacity` of them to `out`.
+    #[link_name = "LLVMAIRGetIdentifiedStructTypes"]
+    pub fn air_get_identified_struct_types(
         module: ModuleRef,
-        name: *const c_char,
-        name_len: usize,
-    );
+        out: *mut TypeRef,
+        capacity: usize,
+    ) -> usize;
+    /// The name of the struct `ty` with its length (`StructType::getName`).
+    ///
+    /// Null and 0 for a struct with no name. `get_struct_name` answers a C string, which ends at
+    /// a NUL the name may hold.
+    #[link_name = "LLVMAIRGetStructName"]
+    pub fn air_get_struct_name(ty: TypeRef, name_len: *mut usize) -> *const c_char;
+    /// Names the identified struct `ty` (`StructType::setName`).
+    #[link_name = "LLVMAIRStructSetName"]
+    pub fn air_struct_set_name(ty: TypeRef, name: *const c_char, name_len: usize);
+
+    /// Splits `block` before `before` (`BasicBlock::splitBasicBlock`).
+    ///
+    /// A null `before` splits at the end. Answers the new block.
+    #[link_name = "LLVMAIRSplitBasicBlock"]
+    pub fn air_split_basic_block(block: BasicBlockRef, before: ValueRef) -> BasicBlockRef;
+    /// `SplitBlockAndInsertIfThen(cond, split_before, unreachable)`.
+    ///
+    /// Answers the terminator of the new conditional block.
+    #[link_name = "LLVMAIRSplitBlockAndInsertIfThen"]
+    pub fn air_split_block_and_insert_if_then(
+        cond: ValueRef,
+        split_before: ValueRef,
+        unreachable: Bool,
+    ) -> ValueRef;
+    /// The constant expression `expr` as an instruction (`ConstantExpr::getAsInstruction`).
+    ///
+    /// It is inserted before `insert_before`.
+    #[link_name = "LLVMAIRConstantExprAsInstruction"]
+    pub fn air_constant_expr_as_instruction(expr: ValueRef, insert_before: ValueRef) -> ValueRef;
+    /// `buildAtomicRMWValue`: the value `op` stores, from `loaded` and `value`.
+    ///
+    /// It is built at the builder's position; null for an operation LLVM's function has no case
+    /// for.
+    #[link_name = "LLVMAIRBuildAtomicRMWValue"]
+    pub fn air_build_atomic_rmw_value(
+        builder: BuilderRef,
+        op: AtomicRMWBinOp,
+        loaded: ValueRef,
+        value: ValueRef,
+    ) -> ValueRef;
+
+    /// A `ModuleSlotTracker` of `function`'s module with `function` incorporated.
+    ///
+    /// It numbers the function's unnamed values as the printer does; freed with
+    /// `air_dispose_slot_tracker`.
+    #[link_name = "LLVMAIRCreateSlotTracker"]
+    pub fn air_create_slot_tracker(function: ValueRef) -> AirSlotTrackerRef;
+    /// The local slot number of `value`, or -1 when it has none.
+    #[link_name = "LLVMAIRGetLocalSlot"]
+    pub fn air_get_local_slot(tracker: AirSlotTrackerRef, value: ValueRef) -> c_int;
+    #[link_name = "LLVMAIRDisposeSlotTracker"]
+    pub fn air_dispose_slot_tracker(tracker: AirSlotTrackerRef);
+}
+
+// The shim (`shim/shim.cpp`): the pass pipeline and its two passes. `extern "C"` in C++ built
+// without exceptions, so nothing unwinds out of it.
+unsafe extern "C" {
+    /// Links LLVM's core and the barrier pass through the pass's own declaration: answers 1.
+    #[cfg(test)]
+    pub fn airconv_shim_probe() -> c_int;
     /// Runs airconv's pass pipeline on `module`, its two passes included.
     pub fn airconv_shim_run_passes(module: ModuleRef);
     /// Prints the pass pipeline (`ModulePassManager::printPipeline`) to `*out` (`*len` bytes).
@@ -1242,46 +1329,4 @@ unsafe extern "C" {
     /// Answers the function.
     #[cfg(test)]
     pub fn airconv_shim_declare_simdgroup_barrier(module: ModuleRef) -> ValueRef;
-
-    /// Splits `block` before `before` (`BasicBlock::splitBasicBlock`).
-    ///
-    /// A null `before` splits at the end. Answers the new block.
-    pub fn airconv_shim_split_block(block: BasicBlockRef, before: ValueRef) -> BasicBlockRef;
-    /// `SplitBlockAndInsertIfThen(cond, split_before, unreachable)`.
-    ///
-    /// Answers the terminator of the new conditional block.
-    pub fn airconv_shim_split_block_and_insert_if_then(
-        cond: ValueRef,
-        split_before: ValueRef,
-        unreachable: Bool,
-    ) -> ValueRef;
-    /// The constant expression `expr` as an instruction (`ConstantExpr::getAsInstruction`).
-    ///
-    /// It is inserted before `insert_before`.
-    pub fn airconv_shim_get_as_instruction(expr: ValueRef, insert_before: ValueRef) -> ValueRef;
-    /// Destroys the constant `constant`, which nothing uses (`Constant::destroyConstant`).
-    pub fn airconv_shim_destroy_constant(constant: ValueRef);
-    /// Renames the identified structs of `module` named `from…` to `to…` (`setName`).
-    ///
-    /// The rest of each name, after `from`, follows `to`.
-    pub fn airconv_shim_rename_struct(
-        module: ModuleRef,
-        from: *const c_char,
-        from_len: usize,
-        to: *const c_char,
-        to_len: usize,
-    );
-    /// `buildAtomicRMWValue`: the value `op` stores, from `loaded` and `value`.
-    ///
-    /// It is built at the builder's position.
-    pub fn airconv_shim_build_atomic_rmw_value(
-        builder: BuilderRef,
-        op: AtomicRMWBinOp,
-        loaded: ValueRef,
-        value: ValueRef,
-    ) -> ValueRef;
-    /// The instruction of `function` whose local slot number is `slot`, or null.
-    ///
-    /// The number is `ModuleSlotTracker`'s, as the printer numbers unnamed values.
-    pub fn airconv_shim_local_slot(function: ValueRef, slot: c_uint) -> ValueRef;
 }

@@ -159,11 +159,11 @@ impl<'cx> Builder<'cx> {
 
     /// Sets the fast-math flags of the floating-point instructions made from now on.
     ///
-    /// `IRBuilder::setFastMathFlags`, through the shim.
+    /// `IRBuilder::setFastMathFlags`, through the fork's entry point.
     pub fn set_fast_math(&self, flags: FastMath) {
         self.fast_math.set(flags);
         // SAFETY: the builder is live.
-        unsafe { sys::airconv_shim_set_fast_math_flags(self.raw, flags.bits()) };
+        unsafe { sys::air_builder_set_fast_math_flags(self.raw, flags.bits()) };
     }
 
     /// Sets `flags` until the guard is dropped, which puts the current ones back.

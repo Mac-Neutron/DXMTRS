@@ -891,9 +891,8 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     return Ok(None);
                 }
                 // SAFETY: a condition and the call it splits before, of the function built.
-                let then = unsafe {
-                    sys::airconv_shim_split_block_and_insert_if_then(cond.raw(), call.raw(), 0)
-                };
+                let then =
+                    unsafe { sys::air_split_block_and_insert_if_then(cond.raw(), call.raw(), 0) };
                 b.position_before(self.val(then)?);
                 air.create_discard()?;
                 Ok(None)
@@ -1358,7 +1357,7 @@ unsafe fn replace<'cx>(call: Val<'cx>, value: Option<Val<'cx>>) -> Result<(), Er
 /// Splits `block` before its instruction `at` (`splitBasicBlock`); answers the new block.
 pub fn split<'cx>(block: Block<'cx>, at: Val<'cx>) -> Block<'cx> {
     // SAFETY: `at` is an instruction of `block` (the caller's).
-    let rest = unsafe { sys::airconv_shim_split_block(block.raw(), at.raw()) };
+    let rest = unsafe { sys::air_split_basic_block(block.raw(), at.raw()) };
     // SAFETY: the block the split made, of this context.
     unsafe { Block::new(rest) }
 }

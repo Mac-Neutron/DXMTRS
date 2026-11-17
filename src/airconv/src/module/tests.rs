@@ -278,10 +278,10 @@ fn shim_fast_math_flags() {
     let plain_flags = unsafe { sys::get_fast_math_flags(plain.raw()) };
     assert_eq!(plain_flags, 0);
     // SAFETY: as above; the flags replace the instruction's.
-    unsafe { sys::airconv_shim_copy_fast_math_flags(sum.raw(), FastMath::NO_NANS.bits()) };
+    unsafe { sys::air_copy_fast_math_flags(sum.raw(), FastMath::NO_NANS.bits()) };
     assert!(print(sum).contains("fadd nnan float"), "{}", print(sum));
     // SAFETY: as above.
-    unsafe { sys::airconv_shim_copy_fast_math_flags(sum.raw(), 0x7f) };
+    unsafe { sys::air_copy_fast_math_flags(sum.raw(), 0x7f) };
     assert!(print(sum).contains("fadd fast float"), "{}", print(sum));
     // SAFETY: a value of this context.
     let sum_is_fp = unsafe { sys::can_value_use_fast_math_flags(sum.raw()) };

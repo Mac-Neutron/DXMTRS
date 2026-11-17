@@ -573,7 +573,7 @@ fn zero_group_shared_locks<'cx>(
     // SAFETY: the body's entry block, which holds instructions.
     let first = unsafe { sys::get_first_instruction(body.raw()) };
     // SAFETY: as above; `first` is its first instruction.
-    let rest = unsafe { sys::airconv_shim_split_block(body.raw(), first) };
+    let rest = unsafe { sys::air_split_basic_block(body.raw(), first) };
     // SAFETY: the block the split made, of this context.
     let rest = unsafe { Block::new(rest) };
     // SAFETY: `body`'s terminator is the branch the split just made, held by nothing.
@@ -674,7 +674,7 @@ fn strip_dxil(m: &Module<'_>) {
     for name in named {
         // SAFETY: a live module; the name holds its length.
         unsafe {
-            sys::airconv_shim_erase_named_metadata(m.raw(), name.as_ptr().cast(), name.len());
+            sys::air_erase_named_metadata(m.raw(), name.as_ptr().cast(), name.len());
         };
     }
     // SAFETY: a live module.
@@ -688,16 +688,30 @@ fn strip_dxil(m: &Module<'_>) {
             for_each_instruction(bb, drop_metadata);
         }
     }
-    let (from, to) = (b"dx.types.", b"dxil.");
-    // SAFETY: a live module; the names hold their lengths.
-    unsafe {
-        sys::airconv_shim_rename_struct(
-            m.raw(),
-            from.as_ptr().cast(),
-            from.len(),
-            to.as_ptr().cast(),
-            to.len(),
-        );
+    rename_structs(m, b"dx.types.", b"dxil.");
+}
+
+/// Renames the identified structs of `m` named `from…` to `to…`: the rest of each name follows.
+fn rename_structs(m: &Module<'_>, from: &[u8], to: &[u8]) {
+    // SAFETY: a live module; with no capacity nothing is written.
+    let count = unsafe { sys::air_get_identified_struct_types(m.raw(), core::ptr::null_mut(), 0) };
+    let mut structs = vec![core::ptr::null_mut(); count];
+    // SAFETY: a live module; `structs` holds `count` writable entries.
+    unsafe { sys::air_get_identified_struct_types(m.raw(), structs.as_mut_ptr(), count) };
+    for ty in structs {
+        let mut len = 0;
+        // SAFETY: an identified struct of the module; `len` is writable.
+        let name = unsafe { sys::air_get_struct_name(ty, &raw mut len) };
+        if name.is_null() {
+            continue;
+        }
+        // SAFETY: the struct's name, `len` bytes (it may hold a NUL, as the reader allows).
+        let name = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
+        if let Some(rest) = name.strip_prefix(from) {
+            let renamed = [to, rest].concat();
+            // SAFETY: the struct listed above; the name holds its length.
+            unsafe { sys::air_struct_set_name(ty, renamed.as_ptr().cast(), renamed.len()) };
+        }
     }
 }
 
@@ -720,12 +734,12 @@ fn retarget(cx: &Context, from: sys::ValueRef, to: sys::ValueRef) -> Result<(), 
                 ));
             }
             // SAFETY: a constant expression and the instruction it is expanded before.
-            let expanded = unsafe { sys::airconv_shim_get_as_instruction(user, ce_user) };
+            let expanded = unsafe { sys::air_constant_expr_as_instruction(user, ce_user) };
             replace_uses_of_with(ce_user, user, expanded);
             Ok(())
         })?;
         // SAFETY: a constant expression nothing uses now.
-        unsafe { sys::airconv_shim_destroy_constant(user) };
+        unsafe { sys::air_destroy_constant(user) };
         Ok(())
     })?;
     for_each_user(from, |user| {
@@ -928,7 +942,7 @@ fn strip_fast_math_of(inst: sys::ValueRef, pre_raster: bool) {
     // SAFETY: an instruction of the module.
     if !unsafe { sys::is_af_cmp_inst(inst) }.is_null() {
         // SAFETY: a compare, which carries fast-math flags.
-        unsafe { sys::airconv_shim_copy_fast_math_flags(inst, FastMath::NONE.bits()) };
+        unsafe { sys::air_copy_fast_math_flags(inst, FastMath::NONE.bits()) };
         return;
     }
     // SAFETY: an instruction of the module.
@@ -946,7 +960,7 @@ fn strip_fast_math_of(inst: sys::ValueRef, pre_raster: bool) {
     }
     let kept = flags & !dropped.bits();
     // SAFETY: as above.
-    unsafe { sys::airconv_shim_copy_fast_math_flags(inst, kept) };
+    unsafe { sys::air_copy_fast_math_flags(inst, kept) };
 }
 
 /// The address space of the pointer value `v`.
