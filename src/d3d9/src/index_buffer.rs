@@ -228,7 +228,8 @@ impl IndexBufferInner {
 
     /// The backing's bytes, its padded length; empty for a released one (DXMTRS C4c-1).
     ///
-    /// What a core device's indexed triangle fan reads its indices from.
+    /// What a core device's indexed triangle fan reads a staged buffer's indices from; a buffer
+    /// the core maps directly has none, and its fan reads the core's memory (DXMTRS C4c-2b).
     #[cfg(feature = "core-runtime")]
     #[must_use]
     pub fn backing(&self) -> &[u8] {
@@ -714,7 +715,8 @@ extern "system" fn ib_lock(
         // nothing was written, and this path has no later upload to carry
         // the bytes, so dropping the range would drop the write.
         if records_dirty_range(flags, inner.pool) {
-            // The buffer's own class, not its mode: a core device stages its DYNAMIC buffers too.
+            // The buffer's own class, not its mode: a core device stages a DYNAMIC buffer it
+            // could not map (DXMTRS C4c-2b's fall-back).
             if flags & D3DLOCK_DISCARD != 0
                 && matches!(
                     classify_map_mode(inner.usage, inner.pool),

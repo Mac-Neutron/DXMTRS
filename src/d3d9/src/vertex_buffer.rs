@@ -147,9 +147,11 @@ impl VertexBufferInner {
 
     /// Whether the buffer holds no CPU copy of its contents.
     ///
-    /// True only for a `D3DUSAGE_WRITEONLY` default-pool buffer whose
+    /// True for a `D3DUSAGE_WRITEONLY` default-pool buffer whose
     /// upload has been queued: its bytes live on the GPU alone until the
-    /// next `Lock` re-creates the backing.
+    /// next `Lock` re-creates the backing. True from its creation on for a
+    /// buffer a core device maps directly, which never has one (DXMTRS
+    /// C4c-2b).
     #[must_use]
     pub const fn backing_is_released(&self) -> bool {
         self.backing.is_released()
@@ -879,7 +881,8 @@ extern "system" fn vb_lock(
         // nothing was written, and this path has no later upload to carry
         // the bytes, so dropping the range would drop the write.
         if records_dirty_range(flags, inner.pool) {
-            // The buffer's own class, not its mode: a core device stages its DYNAMIC buffers too.
+            // The buffer's own class, not its mode: a core device stages a DYNAMIC buffer it
+            // could not map (DXMTRS C4c-2b's fall-back).
             if flags & D3DLOCK_DISCARD != 0
                 && matches!(
                     classify_map_mode(inner.usage, inner.pool),

@@ -1683,7 +1683,8 @@ impl DeviceInner {
         page_box: PageBox,
         last_submit_seq: u64,
     ) {
-        // A core device's buffers are staged and never rename (DXMTRS C4c-1).
+        // A core device's buffers keep no page here: a staged one never renames (DXMTRS C4c-1),
+        // and a dynamic one's names are the core's (DXMTRS C4c-2b).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
@@ -2395,8 +2396,9 @@ impl DeviceInner {
     ///
     /// Same drain semantics as `push_texture_warmup`.
     pub fn push_buffer_warmup(&mut self, entry: VbibWarmupEntry) {
-        // A core device's buffers have none of mtld3d's Metal objects: the core makes its own
-        // at their first draw (DXMTRS C4c-1).
+        // A core device's buffers have none of mtld3d's Metal objects: the core makes its own,
+        // a staged buffer's at its first draw (DXMTRS C4c-1), a dynamic one's at its creation
+        // (DXMTRS C4c-2b).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
             return;
