@@ -330,6 +330,24 @@ fn crossing_fetch_lists_each_slot_of_a_stream_with_its_advance() {
 }
 
 #[test]
+fn a_fetch_hands_out_each_slots_stream_and_advance() {
+    let attrs = [
+        attr(0, 0, VertexFormat::Float3),
+        attr(0, 28, VertexFormat::UChar4NormalizedBgra),
+        attr(1, 0, VertexFormat::Float),
+    ];
+    let mut layouts = [StreamLayout::UNUSED; 16];
+    layouts[0] = bound_stream_layout(16, 32, 1);
+    layouts[1] = bound_stream_layout(4, 4, 1);
+    let fetch = CrossingFetch::new(&attrs, &layouts, 0).expect("one crossing attribute");
+    let bindings = fetch.bindings();
+    // The crossing colour reads stream 0 at slot 2, 28 bytes on; each stream its own slot.
+    assert_eq!(bindings[..3], [(0, 0), (1, 0), (0, 28)]);
+    // A slot nothing reads binds its own stream, unadvanced.
+    assert!((3_u8..16).all(|slot| bindings[usize::from(slot)] == (slot, 0)));
+}
+
+#[test]
 fn a_fetch_keeps_the_stream_layouts_it_was_built_from() {
     let attrs = [
         attr(0, 0, VertexFormat::Float3),

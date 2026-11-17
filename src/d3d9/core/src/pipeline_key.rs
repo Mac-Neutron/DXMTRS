@@ -36,7 +36,10 @@ use crate::{
     pipeline_state::{CoreBlend, ExtraColorAttachments, PipelineRsBits, StreamLayout, core_blend},
     render_state::enum_value,
     shader_create::{ShaderCreateError, parse_shader},
-    streams::{inline_stream_layout, null_stream_layout, stepped_stream_layout},
+    streams::{
+        CrossingFetch, VertexFetchError, inline_stream_layout, null_stream_layout, offset_shift,
+        stepped_stream_layout,
+    },
 };
 
 /// A program's tokens and their id, compared exactly.
@@ -189,14 +192,17 @@ pub enum StreamKey {
     Unused,
     /// Stream 0 of a UP draw: its bytes inline at the call's stride.
     Inline { stride: u32 },
-    /// A bound vertex buffer: its stride, and the step and rate of its frequency word.
+    /// A bound vertex buffer: its stride, its frequency word's step and rate, its offset's shift.
     ///
-    /// [`crate::streams::stream_step`]'s. The word's count is not here: an instanced draw passes
-    /// it beside the key, which would otherwise build a pipeline a count.
+    /// The step and rate are [`crate::streams::stream_step`]'s. The word's count is not here: an
+    /// instanced draw passes it beside the key, which would otherwise build a pipeline a count.
+    /// `shift` is [`offset_shift`] of the stream's offset (0-3), which the pipeline's fetch moves
+    /// the stream's attributes by ([`PipelineSource`]).
     Bound {
         stride: u32,
         step: VertexStepFunction,
         rate: u32,
+        shift: u8,
     },
     /// A stream the declaration names with nothing bound: zeros.
     Null,
@@ -271,18 +277,39 @@ pub struct StageSource {
 }
 
 /// What a pipeline is built from: [`pipeline_source`] of its key.
+///
+/// A layout with an attribute that ends past its stream's stride, or with a stream it reads bound
+/// at an offset off four bytes, is fetched as mtld3d fetches it ([`CrossingFetch`]): `attrs`,
+/// `layouts` and `bindings` are then the fetch's, by Metal slot, and `streams` stays by stream.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PipelineSource {
     pub vs: StageSource,
     pub ps: StageSource,
     /// Each vertex attribute: `(attribute index, MTLVertexFormat, byte offset, buffer slot)`.
     ///
-    /// The slot is the attribute's stream (mtld3d's numbering: the streams at slots 0-15).
+    /// The slot is the attribute's stream (mtld3d's numbering: the streams at slots 0-15) and the
+    /// offset its element's, except under a fetch: a crossing attribute sits at offset 0 of a slot
+    /// of its own, and a shifted stream's attributes sit its shift further on.
     pub attrs: Vec<(u32, u32, u32, u32)>,
-    /// Each stream's vertex buffer layout; [`StreamLayout::UNUSED`] for one no attribute reads.
+    /// Each Metal slot's vertex buffer layout; [`StreamLayout::UNUSED`] for one no attribute reads.
+    ///
+    /// Slot `n` has stream `n`'s layout, except that under a fetch a crossing attribute's slot has
+    /// its stream's.
     pub layouts: [StreamLayout; MAX_STREAMS as usize],
+    /// Each D3D9 stream's vertex buffer layout, before any fetch.
+    ///
+    /// [`StreamLayout::UNUSED`] for a stream no attribute reads.
+    pub streams: [StreamLayout; MAX_STREAMS as usize],
+    /// For Metal slot `n`, the stream it binds and the byte advance past that stream's offset.
+    ///
+    /// `(n, 0)` without a fetch. A slot binds at [`crate::streams::slot_binding_offset`].
+    pub bindings: [(u8, u32); MAX_STREAMS as usize],
     /// The streams an attribute crosses the stride of: bit `n` for stream `n`.
     pub crossing: u16,
+    /// Why no binding can fetch the layout, when it needs a fetch and that does not build.
+    ///
+    /// `attrs`, `layouts` and `bindings` are then the ones without a fetch.
+    pub fetch: Result<(), VertexFetchError>,
     /// The colour target's `MTLColorWriteMask`.
     pub write_mask: u8,
     /// The colour target's `WMTPixelFormat`.
@@ -302,10 +329,16 @@ pub struct PipelineSource {
 impl PipelineSource {
     /// Whether an attribute ends past its stream's stride, reading into the next element.
     ///
-    /// Such a layout needs mtld3d's crossing fetch, which the core does not have yet.
+    /// Such a layout needs mtld3d's crossing fetch, which the core's draws do not bind yet.
     #[must_use]
     pub const fn crosses_stride(&self) -> bool {
         self.crossing != 0
+    }
+
+    /// Whether the layout can be fetched: it needs no fetch, or the one it needs builds.
+    #[must_use]
+    pub const fn fetchable(&self) -> bool {
+        self.fetch.is_ok()
     }
 }
 
@@ -383,23 +416,50 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         .iter()
         .filter_map(|a| 1_u16.checked_shl(a.attr_index))
         .fold(0, |mask, bit| mask | bit);
-    // Each stream an attribute reads: its layout from the key's entry over its extent.
-    let mut layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
+    // Each stream an attribute reads: its layout from the key's entry over its extent, and a bound
+    // one's shift, two bits a stream as `stream_shifts` packs mtld3d's.
+    let mut stream_layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
     let mut crossing = 0_u16;
-    for (stream, (layout, entry)) in layouts.iter_mut().zip(streams).enumerate() {
+    let mut shifts = 0_u32;
+    for (stream, (layout, entry)) in stream_layouts.iter_mut().zip(streams).enumerate() {
         if resolved.used_streams & (1 << stream) == 0 {
             continue;
         }
         let extent = resolved.extents[stream];
         *layout = match *entry {
             StreamKey::Inline { stride } => inline_stream_layout(stride, extent),
-            StreamKey::Bound { stride, step, rate } => {
+            StreamKey::Bound {
+                stride,
+                step,
+                rate,
+                shift,
+            } => {
+                shifts |= offset_shift(u32::from(shift)) << (2 * stream);
                 stepped_stream_layout(stride, extent, step, rate)
             }
             StreamKey::Null | StreamKey::Unused => null_stream_layout(extent),
         };
         crossing |= u16::from(layout.crosses(extent)) << stream;
     }
+    // A crossing attribute or a shifted stream is fetched as mtld3d's draws fetch it. Any other
+    // layout, and one no binding can fetch, has each stream at its own slot, unadvanced.
+    let fetched = (crossing != 0 || shifts != 0)
+        .then(|| CrossingFetch::new(&resolved.attrs, &stream_layouts, shifts))
+        .transpose();
+    let mut own_slots = [(0, 0); MAX_STREAMS as usize];
+    for (slot, binding) in (0_u8..).zip(&mut own_slots) {
+        binding.0 = slot;
+    }
+    let (attrs, layouts, bindings) = if let Ok(Some(built)) = &fetched {
+        (built.attrs(), *built.layouts(), built.bindings())
+    } else {
+        (&resolved.attrs[..], stream_layouts, own_slots)
+    };
+    let attrs = attrs
+        .iter()
+        .map(|a| (a.attr_index, a.format as u32, a.offset, a.buffer_index))
+        .collect();
+    let fetch = fetched.map(|_| ());
     let ps_code = match ps {
         PsStageKey::Ff(ps) => ff_code(ff_build::pixel(ps).tokens),
         PsStageKey::Prog(code) => {
@@ -427,13 +487,12 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
             code: ps_code,
             spec: StageSpec::Ps(*variant),
         },
-        attrs: resolved
-            .attrs
-            .iter()
-            .map(|a| (a.attr_index, a.format as u32, a.offset, a.buffer_index))
-            .collect(),
+        attrs,
         layouts,
+        streams: stream_layouts,
+        bindings,
         crossing,
+        fetch,
         write_mask: *write_mask,
         color_format: *color_format,
         depth_format: *depth_format,

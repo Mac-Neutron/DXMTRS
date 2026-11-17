@@ -164,7 +164,9 @@ pub enum DrawRefused {
     NoBackBuffer,
     /// The draw's pipeline does not build (logged once per key).
     Pipeline,
-    /// An attribute crosses its stream's stride, which the core cannot fetch yet.
+    /// An attribute crosses its stream's stride, or no binding can fetch the layout.
+    ///
+    /// The core binds no fetch yet.
     Crossing,
     /// A stream the pipeline reads is bound at an offset off four bytes (DXMTRS C4c-1).
     ///
@@ -237,9 +239,9 @@ impl CoreDevice {
     /// Nothing recorded when colour target 0 does not resolve (a device with no back buffer),
     /// the key names colour formats the bound targets do not make, another sample count than
     /// target 0's, or a depth format the bound depth-stencil has not or one of another count,
-    /// the layout crosses a stride, the pipeline does not build, a stream it reads is bound at
-    /// an offset off four bytes, or a stored buffer it reads is not in the store. A draw whose
-    /// scissor holds no pixel of the pass records nothing and is no error.
+    /// the layout crosses a stride or cannot be fetched, the pipeline does not build, a stream it
+    /// reads is bound at an offset off four bytes, or a stored buffer it reads is not in the
+    /// store. A draw whose scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
@@ -291,7 +293,7 @@ impl CoreDevice {
         };
         // The streams the pipeline reads: bit `n` for stream `n`.
         let used = (0_u16..)
-            .zip(&source.layouts)
+            .zip(&source.streams)
             .filter(|(_, layout)| layout.is_used())
             .fold(0_u16, |mask, (stream, _)| mask | 1 << stream);
         // Before anything is recorded: a stream the pipeline reads at an offset off four bytes
@@ -360,7 +362,7 @@ impl CoreDevice {
         let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
         // Each stream the pipeline reads, first, at its slot: its bytes, or for one with nothing
         // bound zeros of its layout's stride, clamped to the zero feed as mtld3d clamps it.
-        for ((slot, layout), data) in (0_u8..).zip(&source.layouts).zip(&draw.streams) {
+        for ((slot, layout), data) in (0_u8..).zip(&source.streams).zip(&draw.streams) {
             if !layout.is_used() {
                 continue;
             }
@@ -561,8 +563,8 @@ impl CoreDevice {
 
     /// The pipeline entry of `key`, which the device keeps for its life: its handle and source.
     ///
-    /// Built on the first draw of `key`, unless its layout crosses a stride; a key that does not
-    /// build is kept as handle 0, logged then, and never built again.
+    /// Built on the first draw of `key`, unless its layout is refused ([`refused_layout`]); a key
+    /// that does not build is kept as handle 0, logged then, and never built again.
     fn pipeline(
         &mut self,
         key: &PipelineKey,
@@ -571,18 +573,13 @@ impl CoreDevice {
             .pipelines
             .get(key)
             .unwrap_or_else(|| self.insert_pipeline(key));
-        if entry
-            .spec
-            .as_ref()
-            .as_ref()
-            .is_some_and(PipelineSource::crosses_stride)
-        {
+        if entry.spec.as_ref().as_ref().is_some_and(refused_layout) {
             return Err(DrawRefused::Crossing);
         }
         Ok(entry)
     }
 
-    /// The entry of a key the device has not seen: built unless its layout crosses the stride.
+    /// The entry of a key the device has not seen: built unless its layout is refused.
     ///
     /// One that does not build is logged and kept as handle 0, never built again.
     fn insert_pipeline(&mut self, key: &PipelineKey) -> Arc<Compiled<Option<PipelineSource>>> {
@@ -591,12 +588,12 @@ impl CoreDevice {
                 log::debug!(target: LOG_TARGET, "d3d9 core: a vertex stage: {e:?}");
             })
             .ok();
-        let crossing = source.as_ref().is_some_and(PipelineSource::crosses_stride);
+        let refused = source.as_ref().is_some_and(refused_layout);
         let pso = match &source {
-            Some(source) if !crossing => build_pipeline(&self.device, source, &mut self.functions),
+            Some(source) if !refused => build_pipeline(&self.device, source, &mut self.functions),
             _ => None,
         };
-        if pso.is_none() && !crossing {
+        if pso.is_none() && !refused {
             let streams = key
                 .streams
                 .iter()
@@ -613,7 +610,7 @@ impl CoreDevice {
         let zeros = NULL_STREAM_ZEROS.len();
         for (stream, (entry, layout)) in source
             .iter()
-            .flat_map(|source| key.streams.iter().zip(&source.layouts))
+            .flat_map(|source| key.streams.iter().zip(&source.streams))
             .enumerate()
         {
             if *entry == StreamKey::Null && layout.stride as usize > zeros {
@@ -642,6 +639,13 @@ impl CoreDevice {
     pub fn pipelines_len(&self) -> usize {
         self.pipelines.len()
     }
+}
+
+/// Whether the core refuses `source`'s layout: a crossing attribute, or no binding fetches it.
+///
+/// The core's draws bind each stream once, at its own slot: they bind no fetch yet.
+const fn refused_layout(source: &PipelineSource) -> bool {
+    source.crosses_stride() || !source.fetchable()
 }
 
 /// The pipeline `source` describes, its stages from `functions` (compiled there on a miss).

@@ -490,6 +490,15 @@ impl CrossingFetch {
         &self.stream_layouts
     }
 
+    /// For each Metal slot, the stream it binds and the byte advance past that stream's offset.
+    ///
+    /// The slot binds at [`slot_binding_offset`] of the two. In a built fetch, a slot no
+    /// crossing attribute was moved to binds its own stream, unadvanced.
+    #[must_use]
+    pub fn bindings(&self) -> [(u8, u32); MAX_STREAMS as usize] {
+        self.bindings.each_ref().map(|b| (b.stream, b.offset))
+    }
+
     /// The `vdecl_hash` a pipeline snapshot of this fetch carries.
     ///
     /// The pipeline memo compares snapshots without the attribute list, and

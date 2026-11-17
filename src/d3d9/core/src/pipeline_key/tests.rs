@@ -35,7 +35,7 @@ use crate::{
     ids::{BufferId, ProgramId},
     multisample::SAMPLE_MASK_ALL,
     pipeline_state::StreamLayout,
-    streams::{STREAM_FREQ_DEFAULT, stream_step},
+    streams::{STREAM_FREQ_DEFAULT, VertexFetchError, stream_step},
 };
 
 /// `vs_2_0 { dcl_position v0; dcl_texcoord1 v3; mov oPos, v0; mov oT0, v3 }`.
@@ -119,7 +119,28 @@ fn inline(stride: u32) -> [StreamKey; MAX_STREAMS as usize] {
 /// The key entry of a bound stream: its stride and the step and rate of its frequency word.
 const fn bound(stride: u32, freq: u32) -> StreamKey {
     let (step, rate) = stream_step(freq);
-    StreamKey::Bound { stride, step, rate }
+    StreamKey::Bound {
+        stride,
+        step,
+        rate,
+        shift: 0,
+    }
+}
+
+/// The key entry of a per-vertex stream bound at an offset whose low two bits are `shift`.
+const fn shifted(stride: u32, shift: u8) -> StreamKey {
+    let (step, rate) = stream_step(STREAM_FREQ_DEFAULT);
+    StreamKey::Bound {
+        stride,
+        step,
+        rate,
+        shift,
+    }
+}
+
+/// Each Metal slot bound to its own stream, unadvanced: the bindings of a source with no fetch.
+fn own_slots() -> [(u8, u32); MAX_STREAMS as usize] {
+    std::array::from_fn(|slot| (u8::try_from(slot).expect("a slot below 16"), 0))
 }
 
 /// The program of `tokens`, in an `Arc` of its own.
@@ -183,6 +204,16 @@ fn prog_base() -> PipelineKey {
         extras: [None, None, None],
         samples: 1,
         alpha_to_coverage: false,
+    }
+}
+
+/// [`prog_base`] from a buffer on stream 0, 28 bytes a vertex, its offset's low bits `shift`.
+fn prog_bound(shift: u8) -> PipelineKey {
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = shifted(28, shift);
+    PipelineKey {
+        streams,
+        ..prog_base()
     }
 }
 
@@ -270,7 +301,7 @@ fn prog_vs_spec_carries_the_sampler_kinds() {
 fn pipeline_key_tracks_every_input() {
     assert_eq!(source(&ff_base()), source(&ff_base()));
     assert_eq!(source(&prog_base()), source(&prog_base()));
-    let changes: [Case; 21] = [
+    let changes: [Case; 22] = [
         ("vs Ff (tokens)", ff_base, |k| {
             ff_vs_of(k).tex_coord_count = 1;
         }),
@@ -317,6 +348,12 @@ fn pipeline_key_tracks_every_input() {
             k.layout = decl(&elements);
         }),
         ("streams", ff_base, |k| k.streams = inline(24)),
+        // A shift alone: the same stride, step and rate.
+        (
+            "streams (shift)",
+            || prog_bound(0),
+            |k| k.streams[0] = shifted(28, 1),
+        ),
         ("write_mask", ff_base, |k| k.write_mask = 0x7),
         ("color_format", ff_base, |k| {
             k.color_format = PixelFormat::Rgba16Unorm as u32;
@@ -404,6 +441,10 @@ fn programmable_attrs_resolve_by_semantic() {
     assert!(source.layouts[1..].iter().all(|l| !l.is_used()));
     assert_eq!(source.crossing, 0);
     assert_eq!(source.ps.spec, StageSpec::Ps(VariantKey::default()));
+    // Nothing crosses and nothing is shifted: no fetch, each stream at its own slot.
+    assert_eq!(source.fetch, Ok(()));
+    assert_eq!(source.streams, source.layouts);
+    assert_eq!(source.bindings, own_slots());
 }
 
 /// A UP draw's element on a stream with nothing bound is provided, at its stream's slot.
@@ -523,6 +564,126 @@ fn a_crossing_attribute_is_detected() {
     assert!(source(&on_1).crosses_stride());
 }
 
+/// A crossing attribute is fetched at a spare slot, unshifted and on a shifted stream.
+///
+/// At offset 0 of the slot (plus the stream's shift), under its stream's layout, through a
+/// binding of its stream advanced by its offset; the streams keep their own layouts.
+#[test]
+fn a_crossing_attribute_is_fetched_at_a_spare_slot() {
+    let elements = [
+        element(0, 0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),
+        element(0, 20, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 1),
+    ];
+    for shift in [0, 2] {
+        let mut key = PipelineKey {
+            layout: decl(&elements),
+            ..prog_bound(0)
+        };
+        key.streams[0] = shifted(16, shift);
+        let source = source(&key);
+        assert_eq!(source.crossing, 0b01, "{shift}");
+        assert_eq!(source.fetch, Ok(()), "{shift}");
+        let moved = u32::from(shift);
+        assert_eq!(
+            source.attrs,
+            [
+                (0, VertexFormat::Float4 as u32, moved, 0),
+                (3, VertexFormat::Float2 as u32, moved, 1)
+            ],
+            "{shift}"
+        );
+        assert_eq!(source.layouts[..2], [source.streams[0]; 2], "{shift}");
+        assert!(!source.streams[1].is_used(), "{shift}");
+        assert_eq!(source.bindings[..2], [(0, 0), (0, 20)], "{shift}");
+        assert_eq!(source.bindings[2..], own_slots()[2..], "{shift}");
+    }
+}
+
+/// A stream bound off four bytes moves the attributes it feeds by its shift, at their own slots.
+///
+/// On stream 0, and on either of two streams alone: the other stream's attributes stay.
+#[test]
+fn a_shifted_stream_moves_the_attributes_it_feeds() {
+    let on_0 = source(&prog_bound(2));
+    assert_eq!(on_0.fetch, Ok(()));
+    assert_eq!(
+        on_0.attrs,
+        [
+            (0, VertexFormat::Float4 as u32, 2, 0),
+            (3, VertexFormat::Float2 as u32, 18, 0)
+        ]
+    );
+    assert_eq!(on_0.layouts, on_0.streams);
+    assert_eq!(on_0.bindings, own_slots());
+    // The position on stream 0, 16 bytes a vertex; the texture coordinates on stream 1, 8.
+    let two = |shift_0: u8, shift_1: u8| {
+        let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+        streams[0] = shifted(16, shift_0);
+        streams[1] = shifted(8, shift_1);
+        source(&PipelineKey {
+            layout: decl(&[
+                element(0, 0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),
+                element(1, 0, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 1),
+            ]),
+            streams,
+            ..prog_base()
+        })
+    };
+    let on_1 = two(0, 3);
+    assert_eq!(
+        on_1.attrs,
+        [
+            (0, VertexFormat::Float4 as u32, 0, 0),
+            (3, VertexFormat::Float2 as u32, 3, 1)
+        ]
+    );
+    assert_eq!(on_1.bindings, own_slots());
+    let on_0_of_2 = two(1, 0);
+    assert_eq!(
+        on_0_of_2.attrs,
+        [
+            (0, VertexFormat::Float4 as u32, 1, 0),
+            (3, VertexFormat::Float2 as u32, 0, 1)
+        ]
+    );
+    // A shift on a stream the stage does not read moves nothing and fetches nothing.
+    let mut unread = prog_bound(0);
+    let mut elements = prog_elements().to_vec();
+    elements.push(element(1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0));
+    unread.layout = decl(&elements);
+    unread.streams[1] = shifted(4, 3);
+    let unread = source(&unread);
+    assert!(!unread.streams[1].is_used());
+    assert_eq!(unread.attrs, source(&prog_bound(0)).attrs);
+    assert_eq!(unread.bindings, own_slots());
+}
+
+/// An attribute wider than its stream's stride cannot be fetched by any binding.
+///
+/// The source says why, and keeps each stream at its own slot with its attributes unmoved.
+#[test]
+fn an_attribute_wider_than_its_stride_cannot_be_fetched() {
+    let mut key = prog_bound(0);
+    // The FLOAT4 position is 16 bytes under an 8-byte stride.
+    key.streams[0] = shifted(8, 0);
+    let source = source(&key);
+    assert_eq!(source.crossing, 0b01);
+    assert_eq!(
+        source.fetch,
+        Err(VertexFetchError::AttributeWiderThanStride)
+    );
+    assert!(!source.fetchable());
+    assert_eq!(
+        source.attrs,
+        [
+            (0, VertexFormat::Float4 as u32, 0, 0),
+            (3, VertexFormat::Float2 as u32, 16, 0)
+        ]
+    );
+    assert_eq!(source.layouts, source.streams);
+    assert_eq!(source.bindings, own_slots());
+}
+
 /// The core's layouts are mtld3d's for every way a stream is fed.
 ///
 /// Stream by stream against `stream_layouts_view`, the closure mtld3d's draws run, over the same
@@ -566,7 +727,7 @@ fn layouts_are_mtld3ds_for_every_feed() {
             streams,
             ..base.clone()
         });
-        (source.layouts, source.crossing)
+        (source.streams, source.crossing)
     };
 
     // A UP draw 16 bytes a vertex: stream 0 inline, the other two nothing bound.

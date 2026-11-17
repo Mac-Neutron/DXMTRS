@@ -175,7 +175,12 @@ pub fn two_stream_key(
 /// The key entry of a bound stream: its stride and the step and rate of its frequency word.
 pub const fn bound(stride: u32, freq: u32) -> StreamKey {
     let (step, rate) = stream_step(freq);
-    StreamKey::Bound { stride, step, rate }
+    StreamKey::Bound {
+        stride,
+        step,
+        rate,
+        shift: 0,
+    }
 }
 
 /// The fixture's key, colour 0 written whole, naming `extras` at index 1-3.

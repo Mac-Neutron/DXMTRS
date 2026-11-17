@@ -1194,6 +1194,8 @@ fn bound_streams(dev: &DeviceInner) -> Result<Option<BoundStreams>, i32> {
             stride: bound.stream_stride(stream),
             step,
             rate,
+            // d3d9-rt refuses a stream it reads bound off four bytes: no key is shifted yet.
+            shift: 0,
         };
         streams.streams[stream] = StreamData::Buffer {
             id: buffer.inner().buffer_id(),
