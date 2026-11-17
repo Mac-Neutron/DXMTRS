@@ -44,7 +44,7 @@ pub struct Rational {
     pub denominator: u32,
 }
 
-/// `WsiMode` in `wsi_monitor.hpp`.
+/// DXMT's `WsiMode`.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct WsiMode {
     pub width: u32,
@@ -54,7 +54,7 @@ pub struct WsiMode {
     pub interlaced: bool,
 }
 
-/// `DXMTWindowState` in `wsi_platform_win32.hpp`: a window's saved windowed styles and rectangle.
+/// DXMT's `DXMTWindowState`: a window's saved windowed styles and rectangle.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct WindowState {

@@ -1,4 +1,4 @@
-//! Win32's window system, as `wsi_monitor_win32.cpp` and `wsi_window_win32.cpp` ask it.
+//! Win32's window system, as DXMT's C++ (`wsi_monitor_win32.cpp`, `wsi_window_win32.cpp`) asks it.
 //!
 //! `user32`, `gdi32` and `kernel32` functions linked by meson. A monitor or window handle is
 //! checked by `user32`, so a stale one fails the call rather than the process.

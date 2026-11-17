@@ -575,15 +575,11 @@ fi
 #     the two module passes), which LLVM's C API does not reach.
 #   src/d3d9/unix/src/metal/macdrv/delegate_forward.m: an Objective-C @try around a send to Wine's application
 #     delegate. mtld3d.so builds with panic = "abort", where no Rust frame can catch the exception.
-#   src/util/wsi_*_win32.cpp: built by no target here (src/util/src/wsi is their Rust); MacNeutron's guest window
-#     proxy, which is C++, compiles them from this tree.
 #   tests/dx11: DXMT's D3D11 sample programs, built only under enable_tests.
 C_SOURCES='src/airconv/shim/shim.cpp
 src/airconv/transforms/lower_16bit_texread.cpp
 src/airconv/transforms/simdgroup_implicit_membarrier.cpp
 src/d3d9/unix/src/metal/macdrv/delegate_forward.m
-src/util/wsi_monitor_win32.cpp
-src/util/wsi_window_win32.cpp
 tests/dx11/dx11_animated.cpp
 tests/dx11/dx11_bpl.cpp
 tests/dx11/dx11_camera.cpp
