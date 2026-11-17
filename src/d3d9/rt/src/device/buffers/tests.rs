@@ -3,7 +3,10 @@ use mtld3d_core::{
     pipeline_key::{MAX_STREAMS, PipelineKey, StreamKey},
     streams::{STREAM_FREQ_DEFAULT, stream_step},
 };
-use mtld3d_types::{D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA};
+use mtld3d_types::{
+    D3DLOCK_DISCARD, D3DLOCK_NOOVERWRITE, D3DLOCK_READONLY, D3DSTREAMSOURCE_INDEXEDDATA,
+    D3DSTREAMSOURCE_INSTANCEDATA, D3DUSAGE_DYNAMIC,
+};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_UPDATE_FENCE, WMT_BLIT_COMMAND_WAIT_FOR_FENCE, WMT_PIXEL_FORMAT_BGRA8_UNORM,
     WMT_RENDER_COMMAND_UPDATE_FENCE, WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
@@ -713,4 +716,241 @@ fn an_upload_far_after_a_draw_of_its_buffer_is_ordered() {
         awaited.iter().any(|fence| written.contains(fence)),
         "{calls:#?}"
     );
+}
+
+/// What each draw of `calls` bound at vertex slot 0, in order: `#<handle> offset=<offset>`.
+///
+/// The nil binds a render pass opens with are left out.
+fn slot0_binds(calls: &[String]) -> Vec<&str> {
+    calls
+        .iter()
+        .filter_map(|c| c.strip_prefix("  render 2 buffer="))
+        .filter_map(|c| c.strip_suffix(" index=0"))
+        .filter(|c| !c.starts_with("#0 "))
+        .collect()
+}
+
+/// A dynamic buffer of `length` bytes, made in the store.
+fn dynamic(core: &mut CoreDevice, id: u64, length: u32) -> BufferId {
+    let id = BufferId::from_raw(id);
+    assert!(core.dynamic_create(id, length));
+    id
+}
+
+/// Locks `id` with `flags` over the window `offset`, `size`, the usage of a dynamic buffer.
+fn lock(core: &mut CoreDevice, id: BufferId, flags: u32, offset: u32, size: u32) -> *mut u8 {
+    let locked = core.dynamic_lock(id, flags, D3DUSAGE_DYNAMIC, offset, size);
+    assert!(
+        !locked.is_null(),
+        "a dynamic buffer's lock answers a pointer"
+    );
+    locked
+}
+
+/// Writes `len` bytes of `value` through a lock's pointer.
+fn fill(locked: *mut u8, len: usize, value: u8) {
+    // SAFETY: a lock's pointer at the start of a dynamic buffer of at least `len` bytes.
+    unsafe { locked.write_bytes(value, len) };
+}
+
+/// The `len` bytes a lock's pointer reads.
+fn read(locked: *mut u8, len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    // SAFETY: a lock's pointer at the start of a dynamic buffer of at least `len` bytes, which
+    // `bytes`, a new vector, does not overlap.
+    unsafe { core::ptr::copy_nonoverlapping(locked, bytes.as_mut_ptr(), len) };
+    bytes
+}
+
+/// A `D3DLOCK_NOOVERWRITE` lock between two draws records nothing: no copy, no pass split.
+///
+/// Both draws bind the same name at the same offset. Would catch a lock that uploads or renames
+/// under `NOOVERWRITE`.
+#[test]
+fn a_nooverwrite_lock_between_draws_records_nothing() {
+    const DEVICE: u64 = 0x3f0;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 1, 180);
+    draw_from(&mut core, id, None);
+    let _ = lock(&mut core, id, D3DLOCK_NOOVERWRITE, 60, 60);
+    draw_from(&mut core, id, None);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let all = work(&calls);
+    assert_eq!(all.len(), 1, "one pass and no blit: {calls:#?}");
+    let binds = slot0_binds(&calls);
+    assert_eq!(binds.len(), 2, "{calls:#?}");
+    assert_eq!(binds[0], binds[1], "{calls:#?}");
+}
+
+/// A `D3DLOCK_DISCARD` after a draw gives the draw after it a new name; the draw before keeps its.
+///
+/// Over one page (5000 bytes) a new allocation, its own handle; in one page (180 bytes, 256-byte
+/// suballocations) the next suballocation of the same handle. Would catch a dropped emitted
+/// rename, a dropped emitted suballocation step, and a draw that stamps nothing (the lock would
+/// then write in place).
+#[test]
+fn a_discard_after_a_draw_names_the_buffer_anew() {
+    const DEVICE: u64 = 0x3f1;
+    let mut core = core_on_fakes(DEVICE);
+    // Over one page, then in one.
+    for id in [dynamic(&mut core, 1, 5000), dynamic(&mut core, 2, 180)] {
+        draw_from(&mut core, id, None);
+        let _ = lock(&mut core, id, D3DLOCK_DISCARD, 0, 0);
+        draw_from(&mut core, id, None);
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let binds = slot0_binds(&calls)
+        .into_iter()
+        .filter_map(|bind| bind.split_once(" offset="))
+        .collect::<Vec<_>>();
+    assert_eq!(binds.len(), 4, "{calls:#?}");
+    assert_ne!(binds[0].0, binds[1].0, "a new allocation: {calls:#?}");
+    assert_eq!([binds[0].1, binds[1].1], ["0", "0"], "{calls:#?}");
+    assert_eq!(binds[2].0, binds[3].0, "the same allocation: {calls:#?}");
+    assert_eq!([binds[2].1, binds[3].1], ["0", "256"], "{calls:#?}");
+}
+
+/// A whole lock with no flags after a draw answers new memory holding the bytes the CPU wrote.
+///
+/// Twice in one uncommitted chunk: the second copies what the first answered and was written
+/// with, the immediate suballocation, where the buffer's current one (the encode thread's) still
+/// holds the fill. A partial lock after a draw writes in place. Would catch a copy dropped, a
+/// copy read from the current allocation, and a partial lock renamed.
+#[test]
+fn a_whole_lock_after_a_draw_keeps_the_bytes_written() {
+    const DEVICE: u64 = 0x3f2;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 1, 180);
+    let filled = lock(&mut core, id, 0, 0, 0);
+    fill(filled, 180, 0x11);
+    draw_from(&mut core, id, None);
+    let first = lock(&mut core, id, 0, 0, 0);
+    assert_ne!(first, filled);
+    assert_eq!(read(first, 180), [0x11; 180]);
+    fill(first, 180, 0x22);
+    draw_from(&mut core, id, None);
+    let second = lock(&mut core, id, 0, 0, 0);
+    assert_ne!(second, first);
+    assert_eq!(read(second, 180), [0x22; 180]);
+    draw_from(&mut core, id, None);
+    let partial = lock(&mut core, id, 0, 20, 20);
+    assert_eq!(partial, second.wrapping_add(20));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+}
+
+/// An append after a `D3DLOCK_DISCARD`, the chunk not committed, writes the new name's memory.
+///
+/// Not the name the encode thread still binds. Would catch a lock that answers the buffer's
+/// current allocation.
+#[test]
+fn an_append_after_a_discard_writes_the_new_name() {
+    const DEVICE: u64 = 0x3f3;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 1, 5000);
+    let first = lock(&mut core, id, D3DLOCK_NOOVERWRITE, 0, 0);
+    draw_from(&mut core, id, None);
+    let discarded = lock(&mut core, id, D3DLOCK_DISCARD, 0, 0);
+    assert_ne!(discarded, first);
+    let appended = lock(&mut core, id, D3DLOCK_NOOVERWRITE, 60, 60);
+    assert_eq!(appended, discarded.wrapping_add(60));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+}
+
+/// A lock of any kind on a buffer no draw read writes in place; an index buffer is stamped too.
+///
+/// Would catch a `D3DLOCK_DISCARD` renamed with no draw in flight, and an index buffer the draw
+/// does not stamp (its `D3DLOCK_DISCARD` would then write in place).
+#[test]
+fn a_lock_renames_only_what_a_draw_read() {
+    const DEVICE: u64 = 0x3f4;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 1, 180);
+    let first = lock(&mut core, id, 0, 0, 0);
+    for flags in [D3DLOCK_DISCARD, 0, D3DLOCK_NOOVERWRITE, D3DLOCK_READONLY] {
+        assert_eq!(lock(&mut core, id, flags, 0, 0), first, "flags {flags:#x}");
+    }
+    let (vertices, indices) = (filled(&mut core, 2, 160), dynamic(&mut core, 3, 64));
+    let before = lock(&mut core, indices, D3DLOCK_DISCARD, 0, 0);
+    draw_from(&mut core, vertices, Some(indices));
+    assert_ne!(lock(&mut core, indices, D3DLOCK_DISCARD, 0, 0), before);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+}
+
+/// A new name puts the old one's bytes in the ledger; a suballocation step puts none.
+///
+/// Past a 1-byte cap the next new name commits the chunk being recorded, waits for it, and takes
+/// the name that chunk freed: the coherent chunk is read after the wait. Would catch a ledger
+/// add left out or made at a step, a rename that does not hold, and a coherent chunk read before
+/// the hold (a third allocation instead of the first name).
+#[test]
+fn a_new_name_is_counted_and_held_under_the_cap() {
+    const DEVICE: u64 = 0x3f5;
+    let mut core = core_on_fakes(DEVICE);
+    let (small, large) = (dynamic(&mut core, 1, 180), dynamic(&mut core, 2, 5000));
+    draw_from(&mut core, small, None);
+    let _ = lock(&mut core, small, D3DLOCK_DISCARD, 0, 0);
+    assert_eq!(core.retained.bytes(), 0, "a step");
+    let first = lock(&mut core, large, D3DLOCK_NOOVERWRITE, 0, 0);
+    draw_from(&mut core, large, None);
+    let _ = lock(&mut core, large, D3DLOCK_DISCARD, 0, 0);
+    assert_eq!(core.retained.bytes(), 8192, "the old name's two pages");
+    core.set_retention_cap(1);
+    let held = core.device().queue().current_seq();
+    draw_from(&mut core, large, None);
+    let reused = lock(&mut core, large, D3DLOCK_DISCARD, 0, 0);
+    assert_eq!(core.device().queue().current_seq(), held + 1);
+    assert!(core.device().queue().coherent_seq() >= held);
+    assert_eq!(reused, first, "the name the waited-for chunk freed");
+    assert_eq!(core.retained.bytes(), 8192);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+}
+
+/// A copy after a contended `D3DLOCK_DISCARD` reads the bytes written through the new name.
+///
+/// None past the buffer's length or for a buffer that is not dynamic. Would catch a copy read
+/// from the buffer's current allocation, which still holds the old bytes.
+#[test]
+fn a_copy_reads_the_immediate_name() {
+    const DEVICE: u64 = 0x3f6;
+    let mut core = core_on_fakes(DEVICE);
+    let (vertices, indices) = (filled(&mut core, 1, 160), dynamic(&mut core, 2, 64));
+    fill(lock(&mut core, indices, D3DLOCK_DISCARD, 0, 0), 64, 1);
+    draw_from(&mut core, vertices, Some(indices));
+    fill(lock(&mut core, indices, D3DLOCK_DISCARD, 0, 0), 64, 2);
+    assert_eq!(core.dynamic_copy(indices, 4, 8), Some(vec![2; 8]));
+    assert_eq!(core.dynamic_copy(indices, 60, 4), Some(vec![2; 4]));
+    assert_eq!(core.dynamic_copy(indices, 60, 8), None);
+    assert_eq!(core.dynamic_copy(vertices, 0, 4), None);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+}
+
+/// A forgotten dynamic buffer's recorded draw still binds it; the first draw of one flags the line.
+///
+/// The line that dynamic buffers are read in place is flagged at the first draw that reads one,
+/// not at a create or a draw of a staged buffer. A lock of an id the store does not hold, or of
+/// a staged buffer, answers null.
+#[test]
+fn a_forgotten_dynamic_buffers_draw_still_encodes() {
+    const DEVICE: u64 = 0x3f7;
+    let mut core = core_on_fakes(DEVICE);
+    let (staged, id) = (filled(&mut core, 1, 160), dynamic(&mut core, 2, 180));
+    draw_from(&mut core, staged, None);
+    assert!(!core.buffers.read_in_place);
+    draw_from(&mut core, id, None);
+    assert!(core.buffers.read_in_place);
+    core.forget_buffer(id);
+    assert!(!core.has_buffer(id));
+    for gone in [id, staged] {
+        assert!(core.dynamic_lock(gone, 0, D3DUSAGE_DYNAMIC, 0, 0).is_null());
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(slot0_binds(&calls).len(), 2, "{calls:#?}");
 }

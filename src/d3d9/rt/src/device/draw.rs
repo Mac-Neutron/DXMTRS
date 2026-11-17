@@ -310,7 +310,7 @@ impl CoreDevice {
             }
             let fed = match draw.streams[usize::from(stream)] {
                 StreamData::Buffer { id, offset } => {
-                    let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
+                    let buffer = self.buffers.buffer(id).ok_or(DrawRefused::Buffer)?;
                     debug_assert!(
                         matches!(
                             key.streams[usize::from(stream)],
@@ -352,7 +352,7 @@ impl CoreDevice {
                 let feed = match *data {
                     IndexData::Bytes(bytes) => IndexFeed::Ring(bytes.to_vec()),
                     IndexData::Buffer { id, offset } => {
-                        let buffer = self.buffers.get(&id).ok_or(DrawRefused::Buffer)?;
+                        let buffer = self.buffers.buffer(id).ok_or(DrawRefused::Buffer)?;
                         IndexFeed::Stored(Arc::clone(buffer), offset)
                     }
                 };
@@ -559,6 +559,8 @@ impl CoreDevice {
                 base_instance: 0,
             });
         });
+        // After the record: a lock that renames from here on leaves this draw its name.
+        self.stamp_dynamic(draw);
         Ok(())
     }
 

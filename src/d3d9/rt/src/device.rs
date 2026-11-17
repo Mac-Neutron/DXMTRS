@@ -37,7 +37,9 @@ pub struct CoreDevice {
     /// The D3D9 textures' core textures, by id (C4b-3b).
     textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
     /// The D3D9 vertex and index buffers' core buffers, by id (DXMTRS C4c-1).
-    buffers: rustc_hash::FxHashMap<mtld3d_core::ids::BufferId, Arc<dxmt_core::resource::Buffer>>,
+    ///
+    /// A dynamic one's with its names (DXMTRS C4c-2b).
+    buffers: buffers::BufferStore,
     /// The samplers by their key's bits (C4b-3b).
     samplers: rustc_hash::FxHashMap<u64, Arc<dxmt_core::sampler::Sampler>>,
     /// The depth-stencil states by their key's bits (C4b-3d2).
@@ -84,13 +86,11 @@ impl CoreDevice {
         let chunks = profile.chunks;
         let staging_block = profile.staging_block;
         let device = Device::with_config(mtl, 0, profile);
-        // A perf build compiles out what is below a warning; the gates read this line there too.
-        let level = if cfg!(feature = "perf-build") {
-            log::Level::Warn
-        } else {
-            log::Level::Info
-        };
-        log::log!(target: LOG_TARGET, level, "d3d9 core: device on dxmt-core ({chunks} chunks)");
+        log::log!(
+            target: LOG_TARGET,
+            gate_level(),
+            "d3d9 core: device on dxmt-core ({chunks} chunks)"
+        );
         if device.cmd_library_handle() == 0 && device.device().handle() > 0x1000 {
             log::error!(
                 target: LOG_TARGET,
@@ -105,7 +105,7 @@ impl CoreDevice {
             pipelines: PsoMap::default(),
             functions: draw::StageFunctions::default(),
             textures: rustc_hash::FxHashMap::default(),
-            buffers: rustc_hash::FxHashMap::default(),
+            buffers: buffers::BufferStore::default(),
             samplers: rustc_hash::FxHashMap::default(),
             depth_states: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
@@ -139,6 +139,15 @@ impl CoreDevice {
 impl Drop for CoreDevice {
     fn drop(&mut self) {
         self.drain();
+    }
+}
+
+/// The level of the lines the gates read: a perf build compiles out what is below a warning.
+const fn gate_level() -> log::Level {
+    if cfg!(feature = "perf-build") {
+        log::Level::Warn
+    } else {
+        log::Level::Info
     }
 }
 
