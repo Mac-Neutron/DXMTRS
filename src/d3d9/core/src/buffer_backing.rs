@@ -179,6 +179,23 @@ impl BufferBacking {
         }
     }
 
+    /// A backing released from the start, for a buffer of `logical_len` bytes that keeps none.
+    ///
+    /// The core runtime's dynamic buffer, whose CPU writes land in the memory the GPU reads
+    /// (DXMTRS C4c-2b). No `PageBox` is charged, so none is discharged, and its padded length
+    /// is 0.
+    #[must_use]
+    pub const fn released(logical_len: u32, class: BackingClass) -> Self {
+        Self {
+            page_box: None,
+            padded_len: 0,
+            logical_len,
+            class,
+            state: BackingState::Released,
+            pinned: false,
+        }
+    }
+
     /// How much of the device buffer's contents this backing still holds.
     #[must_use]
     pub const fn state(&self) -> BackingState {

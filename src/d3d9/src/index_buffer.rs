@@ -69,8 +69,9 @@ pub struct IndexBufferInner {
     private_data: PrivateDataStore,
     /// `Direct` (zero-copy) vs `Staged` (separate device buffer + dirty-range upload).
     ///
-    /// Decided once at creation from `usage`/`pool`; always `Staged` on a core device, whose
-    /// dirty range `core_flush` uploads at the next draw (DXMTRS C4c-1).
+    /// Decided once at creation from `usage`/`pool`. On a core device `Direct` is a buffer the
+    /// core maps itself, with no backing (DXMTRS C4c-2b), and every other is `Staged`, its dirty
+    /// range uploaded by `core_flush` at the next draw (DXMTRS C4c-1).
     map_mode: BufferMapMode,
     /// `Staged` only: byte range dirtied since the last upload.
     dirty: DirtyRange,
@@ -80,7 +81,9 @@ pub struct IndexBufferInner {
     /// byte of a buffer D3D9 promises no readback (see
     /// `mtld3d_core::buffer_backing`). The indexed triangle-fan rewrite is
     /// the one path that still reads these bytes on the CPU; it reads them
-    /// back off the GPU instead and pins what it installs.
+    /// back off the GPU instead and pins what it installs. A `Direct` buffer
+    /// of a core device is released from the start: the CPU writes the
+    /// core's memory, which the fan reads (DXMTRS C4c-2b).
     backing: BufferBacking,
     last_submit_seq: u64,
     /// Number of `Lock`s not yet ended by an `Unlock`.
@@ -241,10 +244,14 @@ impl IndexBufferInner {
     ///
     /// Unlike the vertex buffer's, an upload never releases the backing, whatever the usage: an
     /// indexed triangle fan reads its indices out of it, and the core runtime has no read-back
-    /// of a buffer to restore it from (DXMTRS C4c-2b).
+    /// of a buffer to restore it from (DXMTRS C4c-2b). A buffer the core maps directly owes
+    /// nothing.
     #[cfg(feature = "core-runtime")]
     #[must_use]
     pub fn core_flush(&mut self, core: &mut d3d9_rt::device::CoreDevice) -> bool {
+        if matches!(self.map_mode, BufferMapMode::Direct) {
+            return true;
+        }
         let backing = self.backing.as_slice();
         let made = !core.has_buffer(self.buffer_id);
         let (offset, bytes) = if made {
@@ -293,18 +300,31 @@ impl Direct3DIndexBuffer9 {
         // opening upload is unconditional because the device buffer starts
         // undefined, no blit command can fill it, and a fill made only
         // through locks `records_dirty_range` rejects announces nothing.
-        let backing = BufferBacking::new(
-            PageBox::try_new_zeroed(info.length as usize)?,
-            info.length,
-            classify_backing(info.usage, info.pool),
-        );
+        // A buffer the core maps directly keeps no backing, as a vertex
+        // buffer's (DXMTRS C4c-2b).
+        let buffer_id = BufferId::new_unique();
+        let class = classify_backing(info.usage, info.pool);
         let map_mode = classify_map_mode(info.usage, info.pool);
-        // Staged on a core device, as a vertex buffer is (DXMTRS C4c-1).
         #[cfg(feature = "core-runtime")]
-        let map_mode = if on_core_device(info.device_inner) {
-            BufferMapMode::Staged
+        // SAFETY: `info.device_inner` is null or the creating device, live, whose create entry
+        // point uses no other reference to it until this returns.
+        let core_mode = unsafe {
+            crate::vertex_buffer::core_map_mode(info.device_inner, map_mode, buffer_id, info.length)
+        };
+        #[cfg(feature = "core-runtime")]
+        let (map_mode, released) = core_mode.map_or((map_mode, false), |mode| {
+            (mode, matches!(mode, BufferMapMode::Direct))
+        });
+        #[cfg(not(feature = "core-runtime"))]
+        let released = false;
+        let backing = if released {
+            BufferBacking::released(info.length, class)
         } else {
-            map_mode
+            BufferBacking::new(
+                PageBox::try_new_zeroed(info.length as usize)?,
+                info.length,
+                class,
+            )
         };
         let dirty = if matches!(map_mode, BufferMapMode::Staged) {
             DirtyRange::full(info.length)
@@ -313,7 +333,7 @@ impl Direct3DIndexBuffer9 {
         };
         let inner = Box::into_raw(Box::new(IndexBufferInner {
             device_inner: info.device_inner,
-            buffer_id: BufferId::new_unique(),
+            buffer_id,
             length: info.length,
             usage: info.usage,
             format: info.format,
@@ -611,7 +631,8 @@ extern "system" fn ib_get_type(this: *mut c_void) -> u32 {
 
 /// Whether `device`, a buffer's, runs the core runtime (DXMTRS C4b-3a).
 ///
-/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1).
+/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1), but for those the
+/// core maps directly (DXMTRS C4c-2b).
 #[cfg(feature = "core-runtime")]
 fn on_core_device(device: *mut DeviceInner) -> bool {
     // SAFETY: null, or a buffer's device, which outlives it (D3D9 lifetime rules, as its
@@ -647,6 +668,28 @@ extern "system" fn ib_lock(
             "ib_lock: clamping out-of-range range (off={offset_to_lock}, size={size_to_lock}, len={})",
             inner.length
         );
+    }
+    // A buffer the core maps directly takes the core's pointer, as a vertex buffer's (DXMTRS
+    // C4c-2b).
+    #[cfg(feature = "core-runtime")]
+    {
+        // SAFETY: the buffer's device, null or live (it outlives its buffers); this entry point
+        // uses no other reference to it during the call.
+        let direct = unsafe {
+            crate::vertex_buffer::core_lock(
+                inner.device_inner,
+                inner.map_mode,
+                inner.buffer_id,
+                inner.usage,
+                offset_to_lock,
+                size_to_lock,
+                flags,
+            )
+        };
+        if let Some(ptr) = direct {
+            // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
+            return unsafe { answer_lock(inner, flags, ptr, pp_data) };
+        }
     }
 
     if inner.backing.is_released() {
@@ -809,24 +852,44 @@ extern "system" fn ib_lock(
         }
     }
 
+    // `offset_to_lock <= inner.length` is checked above and the backing is
+    // allocated for `inner.length` bytes, so the offset lands inside it.
+    let ptr = inner
+        .backing
+        .write_ptr_at(offset_to_lock as usize)
+        .unwrap_or_else(core::ptr::null_mut);
+    // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
+    unsafe { answer_lock(inner, flags, ptr, pp_data) }
+}
+
+/// The end of a `ib_lock` that has its pointer: the flags' check, then `ptr`, null when none maps.
+///
+/// # Safety
+///
+/// `pp_data` is non-null and, per the D3D9 ABI, points to a writable `*mut c_void` slot owned
+/// by the caller.
+unsafe fn answer_lock(
+    inner: &mut IndexBufferInner,
+    flags: u32,
+    ptr: *mut u8,
+    pp_data: *mut *mut c_void,
+) -> i32 {
     let unknown = flags & !D3DLOCK_KNOWN_BITS;
     if unknown != 0 {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "ib_lock: unrecognised D3DLOCK bits {unknown:#x} ignored");
     }
-    // `offset_to_lock <= inner.length` is checked above and the backing is
-    // allocated for `inner.length` bytes, so the offset lands inside it.
-    let Some(ptr) = inner.backing.write_ptr_at(offset_to_lock as usize) else {
+    if ptr.is_null() {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "ib_lock: no backing to map");
-        // SAFETY: `pp_data` is non-null (checked above) and per the D3D9 ABI points to a writable
-        // `*mut c_void` slot owned by the caller; alignment is not assumed.
+        // SAFETY: `pp_data` is the caller's writable slot (this function's contract); alignment
+        // is not assumed.
         unsafe { OutPtr::write_opt(pp_data, core::ptr::null_mut()) };
         return D3DERR_INVALIDCALL;
-    };
+    }
     // Counted only once the pointer exists: a refused Lock maps nothing for
     // an Unlock to end.
     inner.lock_count = inner.lock_count.saturating_add(1);
-    // SAFETY: `pp_data` is non-null (checked above) and per the D3D9
-    // ABI points to a writable `*mut c_void` slot owned by the caller; alignment is not assumed.
+    // SAFETY: `pp_data` is the caller's writable slot (this function's contract); alignment is
+    // not assumed.
     unsafe { OutPtr::write_opt(pp_data, ptr.cast::<c_void>()) };
     D3D_OK
 }

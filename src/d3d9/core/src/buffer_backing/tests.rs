@@ -146,6 +146,26 @@ fn live_bytes_track_every_backing_transition() {
     });
 }
 
+#[test]
+fn a_backing_released_from_the_start_charges_and_discharges_nothing() {
+    with_gauge(|_gauge| {
+        let base = live_backing_bytes();
+        let mut b = BufferBacking::released(SMALL, BackingClass::Dynamic);
+        assert_eq!(live_backing_bytes().total(), base.total());
+        assert_eq!(b.state(), BackingState::Released);
+        assert!(!b.may_widen_upload());
+        assert_eq!(b.padded_len(), 0);
+        assert_eq!(b.ptr(), 0);
+        assert_eq!(b.as_slice(), []);
+        assert!(b.write_ptr_at(0).is_none());
+        assert!(b.release().is_none(), "nothing to hand out");
+        b.note_upload(0, SMALL);
+        assert_eq!(b.state(), BackingState::Released);
+        drop(b);
+        assert_eq!(live_backing_bytes().total(), base.total());
+    });
+}
+
 // ── the state machine ──
 
 #[test]

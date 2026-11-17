@@ -16,6 +16,7 @@ use d3d9_rt::device::{
     view_format,
 };
 use mtld3d_core::{
+    buffer_rename::BufferMapMode,
     convert::{
         FanRewrite, d3d_depth_bias_to_clip, d3d_slope_scale_to_metal, d3d_to_metal_cull,
         d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32, fan_fits_pattern,
@@ -1089,7 +1090,8 @@ fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32
 /// No index buffer, a fan that reads past the index buffer's pages, or a rewrite that cannot
 /// address it answers `D3DERR_INVALIDCALL`; then no declared stream with a buffer `D3D_OK`. The
 /// rewrite folds `base_vertex` into its indices, so the list draws at base 0. The index buffer is
-/// read on the CPU alone: its core form is not flushed.
+/// read on the CPU alone: its core form is not flushed. A buffer the core maps directly is read
+/// where the last lock wrote it, its logical length the bound (DXMTRS C4c-2b).
 fn indexed_fan(
     dev: &mut DeviceInner,
     base_vertex: i32,
@@ -1101,8 +1103,8 @@ fn indexed_fan(
         Ok(None) => return invalid("DrawIndexedPrimitive: no index buffer bound"),
         Err(hr) => return hr,
     };
-    // SAFETY: the bound index buffer, live while bound; nothing writes its backing until the
-    // fan's list is written (its own flush is the vertex buffers').
+    // SAFETY: the bound index buffer, live while bound; nothing writes its backing or its core
+    // memory until the fan's list is written (its own flush is the vertex buffers').
     let inner = unsafe { &*index }.inner();
     let Some((_, size)) = index_format(inner.format()) else {
         return invalid("DrawIndexedPrimitive: unsupported index format");
@@ -1110,11 +1112,20 @@ fn indexed_fan(
     // The fan's `primitive_count + 2` indices from `start_index`, inside the backing's pages.
     let first = usize::try_from(u64::from(start_index) * u64::from(size));
     let len = usize::try_from((u64::from(primitive_count) + 2) * u64::from(size));
-    let Some(src) = first
-        .ok()
-        .zip(len.ok())
-        .and_then(|(first, len)| inner.backing().get(first..)?.get(..len))
-    else {
+    let window = first.ok().zip(len.ok());
+    let copied;
+    let src = if matches!(inner.map_mode(), BufferMapMode::Direct) {
+        // Copied out: the draw below borrows the device the core's memory is reached through.
+        copied = window.and_then(|(first, len)| {
+            dev.core
+                .as_deref()?
+                .dynamic_copy(inner.buffer_id(), first, len)
+        });
+        copied.as_deref()
+    } else {
+        window.and_then(|(first, len)| inner.backing().get(first..)?.get(..len))
+    };
+    let Some(src) = src else {
         return invalid("DrawIndexedPrimitive: triangle fan reads past the index buffer");
     };
     let Some(fan) = FanRewrite::indexed(src, usize::from(size), base_vertex, primitive_count)
@@ -1243,7 +1254,9 @@ fn of_this_device(buffer: &impl ComChild, dev: &DeviceInner) -> Result<(), i32> 
 
 /// Uploads what each buffer a draw reads owes its core form; false when one has none.
 ///
-/// `bound`'s vertex buffers, and `index` for an indexed draw that reads it.
+/// `bound`'s vertex buffers, and `index` for an indexed draw that reads it. A buffer the core
+/// maps directly owes nothing and is skipped: the CPU wrote the memory the GPU reads (DXMTRS
+/// C4c-2b).
 fn flush(
     dev: &mut DeviceInner,
     bound: &BoundStreams,
@@ -1256,12 +1269,16 @@ fn flush(
     };
     let vertices = bound.buffers.iter().filter(|vb| !vb.is_null()).all(|&vb| {
         // SAFETY: a bound vertex buffer, live while bound, distinct from the device.
-        unsafe { &mut *vb }
-            .inner_mut()
-            .core_flush(core, ignore_lock_bounds)
+        let inner = unsafe { &mut *vb }.inner_mut();
+        matches!(inner.map_mode(), BufferMapMode::Direct)
+            || inner.core_flush(core, ignore_lock_bounds)
     });
-    // SAFETY: the bound index buffer, live while bound, distinct from the device.
-    vertices && index.is_none_or(|ib| unsafe { &mut *ib }.inner_mut().core_flush(core))
+    vertices
+        && index.is_none_or(|ib| {
+            // SAFETY: the bound index buffer, live while bound, distinct from the device.
+            let inner = unsafe { &mut *ib }.inner_mut();
+            matches!(inner.map_mode(), BufferMapMode::Direct) || inner.core_flush(core)
+        })
 }
 
 /// The `D3D_OK` of a draw dropped because a buffer it reads has no core form, logged once.

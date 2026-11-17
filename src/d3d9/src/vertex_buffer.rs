@@ -83,7 +83,8 @@ pub struct VertexBufferInner {
     ///
     /// `Staged` does a dirty-range upload on Unlock. Decided once at
     /// creation from `usage`/`pool`; selects the `Lock`/`Unlock` path
-    /// below. Always `Staged` on a core device (DXMTRS C4c-1).
+    /// below. On a core device `Direct` is a buffer the core maps itself
+    /// (DXMTRS C4c-2b) and every other is `Staged` (DXMTRS C4c-1).
     map_mode: BufferMapMode,
     /// `Staged` only: the byte range dirtied since the last upload.
     ///
@@ -97,7 +98,9 @@ pub struct VertexBufferInner {
     /// onto the retention pipeline. For `Staged`, this is pure CPU
     /// staging — the game writes it; `Unlock` snapshots the dirty range up
     /// to the device buffer, and a buffer D3D9 promises no readback
-    /// releases it there (see `mtld3d_core::buffer_backing`).
+    /// releases it there (see `mtld3d_core::buffer_backing`). A `Direct`
+    /// buffer of a core device is released from the start: the CPU writes
+    /// the core's memory (DXMTRS C4c-2b).
     backing: BufferBacking,
     /// Submit seq of the most recent frame that drew from this buffer.
     ///
@@ -297,7 +300,7 @@ impl VertexBufferInner {
     /// accepted upload releases the backing by mtld3d's rule, which `ignore_lock_bounds`
     /// (`buffer.ignoreLockBounds`) is part of (DXMTRS C4c-2b). False when the core makes no
     /// buffer or refuses the upload (a buffer it made then leaves the store, so the next draw
-    /// makes it whole again).
+    /// makes it whole again). A buffer the core maps directly owes nothing (DXMTRS C4c-2b).
     #[cfg(feature = "core-runtime")]
     #[must_use]
     pub fn core_flush(
@@ -305,6 +308,9 @@ impl VertexBufferInner {
         core: &mut d3d9_rt::device::CoreDevice,
         ignore_lock_bounds: bool,
     ) -> bool {
+        if matches!(self.map_mode, BufferMapMode::Direct) {
+            return true;
+        }
         // A released backing's last upload carried every byte, and a lock re-creates the backing
         // before it records a range: nothing is owed.
         if self.backing.is_released() && self.dirty.is_empty() {
@@ -362,23 +368,32 @@ impl Direct3DVertexBuffer9 {
     /// The CPU backing is the one allocation of a buffer create that may
     /// fail, which the create answers with `E_OUTOFMEMORY`.
     pub fn new(info: &VertexBufferCreateInfo) -> Option<Self> {
-        // Zeroed, not uninit: a `Staged` buffer's first upload carries the
-        // whole staging region, so any byte the game left alone has to be
-        // a defined value rather than heap residue. One `bzero` per create,
-        // and renames keep using the recycle pool.
-        let backing = BufferBacking::new(
-            PageBox::try_new_zeroed(info.length as usize)?,
-            info.length,
-            classify_backing(info.usage, info.pool),
-        );
+        let buffer_id = BufferId::new_unique();
+        let class = classify_backing(info.usage, info.pool);
         let map_mode = classify_map_mode(info.usage, info.pool);
-        // Under the core runtime every buffer is staged: its backing is the truth, which a draw
-        // uploads (DXMTRS C4c-1).
         #[cfg(feature = "core-runtime")]
-        let map_mode = if on_core_device(info.device_inner) {
-            BufferMapMode::Staged
+        // SAFETY: `info.device_inner` is null or the creating device, live, whose create entry
+        // point uses no other reference to it until this returns.
+        let core_mode =
+            unsafe { core_map_mode(info.device_inner, map_mode, buffer_id, info.length) };
+        #[cfg(feature = "core-runtime")]
+        let (map_mode, released) = core_mode.map_or((map_mode, false), |mode| {
+            (mode, matches!(mode, BufferMapMode::Direct))
+        });
+        #[cfg(not(feature = "core-runtime"))]
+        let released = false;
+        // A buffer the core maps directly keeps no backing. Any other is zeroed, not uninit: a
+        // `Staged` buffer's first upload carries the whole staging region, so any byte the game
+        // left alone has to be a defined value rather than heap residue. One `bzero` per create,
+        // and renames keep using the recycle pool.
+        let backing = if released {
+            BufferBacking::released(info.length, class)
         } else {
-            map_mode
+            BufferBacking::new(
+                PageBox::try_new_zeroed(info.length as usize)?,
+                info.length,
+                class,
+            )
         };
         // A `Staged` buffer starts full-dirty, whatever
         // `buffer.ignoreLockBounds` says. Its device allocation is
@@ -401,7 +416,7 @@ impl Direct3DVertexBuffer9 {
         };
         let inner = Box::into_raw(Box::new(VertexBufferInner {
             device_inner: info.device_inner,
-            buffer_id: BufferId::new_unique(),
+            buffer_id,
             length: info.length,
             usage: info.usage,
             fvf: info.fvf,
@@ -441,6 +456,61 @@ impl Direct3DVertexBuffer9 {
         // contract; `&mut self` guarantees exclusive access.
         unsafe { &mut *self.inner }
     }
+}
+
+/// The mode a core device gives a new buffer `id` of `length` bytes that mtld3d maps by `mode`.
+///
+/// `None` for a device of mtld3d's runtime. A buffer mtld3d maps directly is the core's dynamic
+/// buffer, which the CPU writes in place, when the core makes one (DXMTRS C4c-2b); when it
+/// cannot, it has logged why, and the buffer is staged. Every other buffer is staged: its
+/// backing is the truth, which a draw uploads (DXMTRS C4c-1). The index buffer's too.
+///
+/// # Safety
+///
+/// `device` is null or a live device, no other reference to which is used during the call.
+#[cfg(feature = "core-runtime")]
+pub unsafe fn core_map_mode(
+    device: *mut DeviceInner,
+    mode: BufferMapMode,
+    id: BufferId,
+    length: u32,
+) -> Option<BufferMapMode> {
+    // SAFETY: null or live, and no other reference to it used meanwhile (the caller's contract).
+    let core = unsafe { device.as_mut() }?.core_mut()?;
+    let direct = matches!(mode, BufferMapMode::Direct) && core.dynamic_create(id, length);
+    Some(if direct {
+        BufferMapMode::Direct
+    } else {
+        BufferMapMode::Staged
+    })
+}
+
+/// The pointer at `offset` that a core device's lock of a buffer it maps directly answers.
+///
+/// `None` for any other buffer, which takes mtld3d's lock path; null for a lock the core
+/// refuses. The core plans the lock by mtld3d's rules over `flags`, `usage` and the window
+/// (`offset`, `size`), and renames when a recorded draw may still read the bytes (DXMTRS
+/// C4c-2b). The index buffer's too.
+///
+/// # Safety
+///
+/// `device` is null or a live device, no other reference to which is used during the call.
+#[cfg(feature = "core-runtime")]
+pub unsafe fn core_lock(
+    device: *mut DeviceInner,
+    mode: BufferMapMode,
+    id: BufferId,
+    usage: u32,
+    offset: u32,
+    size: u32,
+    flags: u32,
+) -> Option<*mut u8> {
+    if !matches!(mode, BufferMapMode::Direct) {
+        return None;
+    }
+    // SAFETY: null or live, and no other reference to it used meanwhile (the caller's contract).
+    let core = unsafe { device.as_mut() }?.core_mut()?;
+    Some(core.dynamic_lock(id, flags, usage, offset, size))
 }
 
 // ── IUnknown ──
@@ -705,7 +775,8 @@ extern "system" fn vb_get_type(this: *mut c_void) -> u32 {
 
 /// Whether `device`, a buffer's, runs the core runtime (DXMTRS C4b-3a).
 ///
-/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1).
+/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1), but for those the
+/// core maps directly ([`core_map_mode`], DXMTRS C4c-2b).
 #[cfg(feature = "core-runtime")]
 fn on_core_device(device: *mut DeviceInner) -> bool {
     // SAFETY: null, or a buffer's device, which outlives it (D3D9 lifetime rules, as its
@@ -731,6 +802,9 @@ fn on_core_device(device: *mut DeviceInner) -> bool {
 /// - Non-DYNAMIC buffers never reach `plan_lock`: they are `Staged`, and
 ///   a partial write there uploads the dirtied range to a separate
 ///   device buffer on Unlock, so it cannot land under a queued draw.
+///
+/// A buffer a core device maps directly takes the core's lock instead
+/// ([`core_lock`]), which plans by the same rules (DXMTRS C4c-2b).
 extern "system" fn vb_lock(
     this: *mut c_void,
     offset_to_lock: u32,
@@ -759,6 +833,28 @@ extern "system" fn vb_lock(
             "vb_lock: clamping out-of-range range (off={offset_to_lock}, size={size_to_lock}, len={})",
             inner.length
         );
+    }
+    // A buffer the core maps directly has no backing to restore, stage or rename: its lock is
+    // the core's pointer and the answer below (DXMTRS C4c-2b).
+    #[cfg(feature = "core-runtime")]
+    {
+        // SAFETY: the buffer's device, null or live (it outlives its buffers); this entry point
+        // uses no other reference to it during the call.
+        let direct = unsafe {
+            core_lock(
+                inner.device_inner,
+                inner.map_mode,
+                inner.buffer_id,
+                inner.usage,
+                offset_to_lock,
+                size_to_lock,
+                flags,
+            )
+        };
+        if let Some(ptr) = direct {
+            // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
+            return unsafe { answer_lock(inner, flags, ptr, pp_data) };
+        }
     }
 
     if inner.backing.is_released() {
@@ -936,24 +1032,44 @@ extern "system" fn vb_lock(
         }
     }
 
+    // `offset_to_lock <= inner.length` is checked above and the backing is
+    // allocated for `inner.length` bytes, so the offset lands inside it.
+    let ptr = inner
+        .backing
+        .write_ptr_at(offset_to_lock as usize)
+        .unwrap_or_else(core::ptr::null_mut);
+    // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
+    unsafe { answer_lock(inner, flags, ptr, pp_data) }
+}
+
+/// The end of a `vb_lock` that has its pointer: the flags' check, then `ptr`, null when none maps.
+///
+/// # Safety
+///
+/// `pp_data` is non-null and, per the D3D9 ABI, points to a writable `*mut c_void` slot owned
+/// by the caller.
+unsafe fn answer_lock(
+    inner: &mut VertexBufferInner,
+    flags: u32,
+    ptr: *mut u8,
+    pp_data: *mut *mut c_void,
+) -> i32 {
     let unknown = flags & !D3DLOCK_KNOWN_BITS;
     if unknown != 0 {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "vb_lock: unrecognised D3DLOCK bits {unknown:#x} ignored");
     }
-    // `offset_to_lock <= inner.length` is checked above and the backing is
-    // allocated for `inner.length` bytes, so the offset lands inside it.
-    let Some(ptr) = inner.backing.write_ptr_at(offset_to_lock as usize) else {
+    if ptr.is_null() {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "vb_lock: no backing to map");
-        // SAFETY: `pp_data` is non-null (checked above) and per the D3D9 ABI points to a writable
-        // `*mut c_void` slot owned by the caller; alignment is not assumed.
+        // SAFETY: `pp_data` is the caller's writable slot (this function's contract); alignment
+        // is not assumed.
         unsafe { OutPtr::write_opt(pp_data, core::ptr::null_mut()) };
         return D3DERR_INVALIDCALL;
-    };
+    }
     // Counted only once the pointer exists: a refused Lock maps nothing for
     // an Unlock to end.
     inner.lock_count = inner.lock_count.saturating_add(1);
-    // SAFETY: `pp_data` is non-null (checked above) and per the D3D9
-    // ABI points to a writable `*mut c_void` slot owned by the caller; alignment is not assumed.
+    // SAFETY: `pp_data` is the caller's writable slot (this function's contract); alignment is
+    // not assumed.
     unsafe { OutPtr::write_opt(pp_data, ptr.cast::<c_void>()) };
     D3D_OK
 }
@@ -980,10 +1096,12 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
     // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1), except a
     // re-created backing's: it holds zeros outside the windows written since, and the range is
     // one span, so a second window would upload the zeros between the two over the device's
-    // bytes. Each window uploads at its own Unlock, as mtld3d's do (DXMTRS C4c-2b).
+    // bytes. Each window uploads at its own Unlock, as mtld3d's do (DXMTRS C4c-2b). A buffer the
+    // core maps directly, whose backing is released for good, owes nothing: its Unlock is the
+    // count.
     #[cfg(feature = "core-runtime")]
     if on_core_device(inner.device_inner) {
-        if !inner.backing.may_widen_upload() {
+        if matches!(inner.map_mode, BufferMapMode::Staged) && !inner.backing.may_widen_upload() {
             // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
             // finalizer relies on); nothing else of it is borrowed in this entry point.
             let dev = unsafe { &mut *inner.device_inner };
