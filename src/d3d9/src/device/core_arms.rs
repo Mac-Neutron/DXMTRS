@@ -1,10 +1,12 @@
 //! The entry points the core runtime implements (DXMTRS C4a): thin arms over `d3d9_rt`.
 //!
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
-//! and the call's result for a device of the core runtime. What an arm does not cover yet (a
-//! Present with rects or another window, a `StretchRect` other than a multisample resolve) is
-//! refused with one warning (C4-13). Clear and the read-back go to and come from the bound colour
-//! target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! and the call's result for a device of the core runtime. `StretchRect` runs mtld3d's gates on
+//! both runtimes, so a call they reject answers `D3DERR_INVALIDCALL` on both, and a core device
+//! leaves past them for `stretch_rect_resolve` (DXMTRS C4c-4a). What an arm does not cover yet (a
+//! Present with rects or another window, a valid `StretchRect` other than a multisample resolve)
+//! is refused with one warning (C4-13). Clear and the read-back go to and come from the bound
+//! colour target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -238,15 +240,18 @@ pub fn core_read_into(
 
 /// `StretchRect` on a core device: a multisampled render target resolved into a single-sample one.
 ///
-/// The one shape the core implements (DXMTRS C4b-3d5), all of it required: both surfaces are
-/// targets the core draws to and neither is an additional swap chain's back buffer (as a target
-/// it aliases the device's, C4b3d1-4); both are default-pool render targets of one size and of
-/// formats whose bytes copy (mtld3d's `copies_bytes`); the source has more than one sample and
-/// the destination one; each rect is null or the whole surface; a destination level's texture is
-/// not AUTOGENMIPMAP, and its CPU writes are uploaded first; and the core device records the
-/// resolve. Anything else is the logged refusal and `D3DERR_NOTAVAILABLE`. `surfaces` and
-/// `rects` are the source's and the destination's; the caller checked the surfaces are not null
-/// and the filter is one `StretchRect` takes.
+/// The caller has run mtld3d's gates (the filter, the endpoints' classes and pools, the
+/// depth-stencil pair, the formats, the rects, a stretch inside one surface, the planar and
+/// scaling rules), so a call mtld3d rejects at its gates has answered `D3DERR_INVALIDCALL`
+/// before this, and what arrives is a valid shape (DXMTRS C4c-4a). The one shape the core
+/// implements (DXMTRS C4b-3d5), all of it required: both surfaces are targets the core draws to
+/// and neither is an additional swap chain's back buffer (as a target it aliases the device's,
+/// C4b3d1-4); both are default-pool render targets of one size and of formats whose bytes copy
+/// (mtld3d's `copies_bytes`); the source has more than one sample and the destination one; each
+/// rect is null or the whole surface; a destination level's texture is not AUTOGENMIPMAP, and
+/// its CPU writes are uploaded first; and the core device records the resolve. Any other is the
+/// logged refusal and `D3DERR_NOTAVAILABLE`. `surfaces` and `rects` are the source's and the
+/// destination's.
 pub fn stretch_rect_resolve(
     this: *mut c_void,
     surfaces: [*mut c_void; 2],

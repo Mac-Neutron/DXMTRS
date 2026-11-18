@@ -9406,12 +9406,6 @@ extern "system" fn device_stretch_rect(
         );
         return D3DERR_INVALIDCALL;
     }
-    // A core device takes the multisample resolve alone, judged on its own surfaces: mtld3d's
-    // checks below read Metal handles a core surface has not (DXMTRS C4b-3d5).
-    #[cfg(feature = "core-runtime")]
-    if crate::device::is_core_device(this) {
-        return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
-    }
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DDevice9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
@@ -9429,7 +9423,11 @@ extern "system" fn device_stretch_rect(
         ));
     }
 
-    let Some(src_info) = resolve_stretch_surface(src_surf) else {
+    #[cfg(feature = "core-runtime")]
+    let core = dev.is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
+    let Some(src_info) = resolve_stretch_surface(src_surf, core) else {
         mtld3d_shared::log_once_warn_by!(
             target: crate::LOG_TARGET,
             key: RejectReason::UnsupportedSource.key(),
@@ -9438,7 +9436,7 @@ extern "system" fn device_stretch_rect(
         );
         return D3DERR_INVALIDCALL;
     };
-    let Some(dst_info) = resolve_stretch_surface(dst_surf) else {
+    let Some(dst_info) = resolve_stretch_surface(dst_surf, core) else {
         mtld3d_shared::log_once_warn_by!(
             target: crate::LOG_TARGET,
             key: RejectReason::UnsupportedDestination.key(),
@@ -9515,6 +9513,12 @@ extern "system" fn device_stretch_rect(
                 "reject StretchRect: depth-stencil copy must be full-surface 1:1 → INVALIDCALL"
             );
             return D3DERR_INVALIDCALL;
+        }
+        // A core device leaves here, past the gates: what follows reads Metal handles its
+        // surfaces lack and records for mtld3d's encoder.
+        #[cfg(feature = "core-runtime")]
+        if dev.is_core() {
+            return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
         }
         // Past every depth-stencil gate, so the endpoints' pending uploads are
         // work this call will use.
@@ -9697,6 +9701,12 @@ extern "system" fn device_stretch_rect(
             dst_region.w, dst_region.h
         );
         return D3DERR_INVALIDCALL;
+    }
+    // A core device leaves here, past the gates: what follows reads Metal handles its surfaces
+    // lack and records for mtld3d's encoder.
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
     }
     // Past every gate that can reject the call, so the endpoints' pending
     // uploads are work this call will use.
@@ -10112,8 +10122,16 @@ fn parse_stretch_regions(
     }
 }
 
+/// A `StretchRect` or `ColorFill` endpoint, `None` for a surface neither takes.
+///
+/// A texture's level or face is judged by its texture, first. `core` is whether the device runs
+/// the core runtime, whose back buffer, render targets and depth-stencils have no Metal handle:
+/// they are judged by what they are to the core, with a null handle in the kind. That arm is
+/// keyed on the device, not on the surface, since `core_target` answers for every back buffer
+/// on either runtime.
 fn resolve_stretch_surface(
     surf: *mut crate::surface::Direct3DSurface9,
+    core: bool,
 ) -> Option<StretchSurfaceInfo> {
     if surf.is_null() {
         return None;
@@ -10174,67 +10192,94 @@ fn resolve_stretch_surface(
             sample_count: 1,
         });
     }
+    // A core device's back buffer or render target is a colour target to the core, and its
+    // depth-stencil a depth. The kind's handle is null: nothing a core device runs reads it.
+    #[cfg(feature = "core-runtime")]
+    if core {
+        if s.core_target().is_some() {
+            return Some(standalone_stretch_info(
+                s,
+                StretchKind::Backbuffer(MetalHandle::NULL),
+                StretchSurfaceFlags::IS_RENDER_TARGET,
+                [MetalHandle::NULL; 2],
+            ));
+        }
+        if s.core_depth().is_some() {
+            return Some(standalone_stretch_info(
+                s,
+                StretchKind::DepthStencil(MetalHandle::NULL),
+                StretchSurfaceFlags::IS_DEPTH_STENCIL,
+                [MetalHandle::NULL; 2],
+            ));
+        }
+    }
+    // A build without the core runtime has no core device.
+    #[cfg(not(feature = "core-runtime"))]
+    let _ = core;
     let color = s.metal_color_handle();
     if !color.is_null() {
         // A standalone colour surface: the implicit backbuffer or a
         // `CreateRenderTarget` surface — both DEFAULT-pool render targets.
-        return Some(StretchSurfaceInfo {
-            kind: StretchKind::Backbuffer(color),
-            width: s.standalone_width(),
-            height: s.standalone_height(),
-            texture_size: TargetExtent::whole(
-                s.render_scale(),
-                (s.standalone_width(), s.standalone_height()),
-            )
-            .texture(),
-            // The surface's own scale, fixed when it was created: it is what
-            // its Metal texture was allocated at, and it does not move when
-            // the back buffer is resized under it.
-            scale: s.render_scale(),
-            format: s.standalone_format(),
-            mip_level: 0,
-            slice: None,
-            pool: D3DPOOL_DEFAULT,
-            flags: StretchSurfaceFlags::IS_RENDER_TARGET,
-            autogen_texture_id: None,
-            msaa: s.metal_msaa_handle(),
-            msaa_srgb: s.metal_msaa_srgb_handle(),
-            sample_count: s.multi_sample().sample_count,
-        });
+        return Some(standalone_stretch_info(
+            s,
+            StretchKind::Backbuffer(color),
+            StretchSurfaceFlags::IS_RENDER_TARGET,
+            [s.metal_msaa_handle(), s.metal_msaa_srgb_handle()],
+        ));
     }
     let depth = s.metal_depth_handle();
     if !depth.is_null() {
         // A standalone depth-stencil surface (`CreateDepthStencilSurface`): a
         // DEFAULT-pool `Private` depth texture. StretchRect permits only a 1:1
-        // depth→depth copy.
-        return Some(StretchSurfaceInfo {
-            kind: StretchKind::DepthStencil(depth),
-            width: s.standalone_width(),
-            height: s.standalone_height(),
-            texture_size: TargetExtent::whole(
-                s.render_scale(),
-                (s.standalone_width(), s.standalone_height()),
-            )
-            .texture(),
-            // See the colour branch above: the surface answers with what its
-            // own depth texture was created at.
-            scale: s.render_scale(),
-            format: s.standalone_format(),
-            mip_level: 0,
-            slice: None,
-            pool: D3DPOOL_DEFAULT,
-            flags: StretchSurfaceFlags::IS_DEPTH_STENCIL,
-            autogen_texture_id: None,
-            // A depth surface carries its samples in its own texture: there is
-            // no single-sample companion to resolve into, because D3D9 offers
-            // no way to sample one. `StretchRect` reads the sample count to
-            // tell a plain depth copy from the resolve.
-            msaa: MetalHandle::NULL,
-            msaa_srgb: MetalHandle::NULL,
-            sample_count: s.multi_sample().sample_count,
-        });
+        // depth→depth copy. It carries its samples in its own texture: there
+        // is no single-sample companion to resolve into, because D3D9 offers
+        // no way to sample one. `StretchRect` reads the sample count to tell a
+        // plain depth copy from the resolve.
+        return Some(standalone_stretch_info(
+            s,
+            StretchKind::DepthStencil(depth),
+            StretchSurfaceFlags::IS_DEPTH_STENCIL,
+            [MetalHandle::NULL; 2],
+        ));
     }
     None
+}
+
+/// A standalone surface's `StretchRect` info: a back buffer, a render target or a depth-stencil.
+///
+/// `kind`, `flags` and `companion` (the multisampled companion and its sRGB twin) are the
+/// caller's; the rest is the surface's own, level 0 of a `D3DPOOL_DEFAULT` surface with its
+/// sample count.
+fn standalone_stretch_info(
+    s: &crate::surface::Direct3DSurface9,
+    kind: StretchKind,
+    flags: StretchSurfaceFlags,
+    companion: [MetalHandle<MTLTextureKind>; 2],
+) -> StretchSurfaceInfo {
+    let [msaa, msaa_srgb] = companion;
+    StretchSurfaceInfo {
+        kind,
+        width: s.standalone_width(),
+        height: s.standalone_height(),
+        texture_size: TargetExtent::whole(
+            s.render_scale(),
+            (s.standalone_width(), s.standalone_height()),
+        )
+        .texture(),
+        // The surface's own scale, fixed when it was created: it is what
+        // its texture was allocated at, and it does not move when the back
+        // buffer is resized under it.
+        scale: s.render_scale(),
+        format: s.standalone_format(),
+        mip_level: 0,
+        slice: None,
+        pool: D3DPOOL_DEFAULT,
+        flags,
+        autogen_texture_id: None,
+        msaa,
+        msaa_srgb,
+        sample_count: s.multi_sample().sample_count,
+    }
 }
 
 /// Resolve a `ColorFill` rect against the destination mip extent.
@@ -10399,7 +10444,11 @@ extern "system" fn device_color_fill(
     // SAFETY: vtable in-param; `rect` is *const D3DRECT per the D3D9 ABI.
     let rect = unsafe { ValueIn::<mtld3d_types::D3DRECT>::read_opt(rect) };
     let surf = surface.cast::<Direct3DSurface9>();
-    let Some(info) = resolve_stretch_surface(surf) else {
+    #[cfg(feature = "core-runtime")]
+    let core = obj.inner().is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
+    let Some(info) = resolve_stretch_surface(surf, core) else {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "ColorFill on a surface with no DEFAULT-pool backing → INVALIDCALL");
         return D3DERR_INVALIDCALL;
