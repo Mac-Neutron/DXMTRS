@@ -24,7 +24,10 @@ use mtld3d_types::{
 };
 
 use super::{DeviceInner, Direct3DDevice9, refuse_under_core};
-use crate::{bound_rt::RENDER_TARGET_SLOTS, surface::Direct3DSurface9};
+use crate::{
+    bound_rt::RENDER_TARGET_SLOTS,
+    surface::{Direct3DSurface9, SystemMemoryDst},
+};
 
 unsafe extern "system" {
     fn IsWindowVisible(window: *mut c_void) -> i32;
@@ -202,17 +205,41 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
         // Its core texture exists from here, with every CPU write so far uploaded.
         let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
     }
-    let len = usize::try_from(desc.len).ok()?;
-    let ptr = core::ptr::with_exposed_provenance_mut::<u8>(usize::try_from(desc.ptr).ok()?);
-    // SAFETY: the surface's own pages, `len` bytes at `ptr`, which the API lock keeps to this
-    // call while it copies into them.
-    let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
-    let ok = core.read_back(source, bytes, desc.bytes_per_row as usize);
+    let ok = core_read_into(&dst, &desc, |bytes, pitch| {
+        core.read_back(source, bytes, pitch)
+    });
+    Some(if ok { D3D_OK } else { D3DERR_INVALIDCALL })
+}
+
+/// Runs a core read into a system-memory destination's pages, then re-arms the destination.
+///
+/// `desc` is what `dst.system_memory_blit_dst()` answered in the same call; `read` gets its pages
+/// and its row pitch. The one place those pages become a slice, for `GetRenderTargetData` and
+/// `GetFrontBufferData` (DXMTRS C4c-3a). False, and nothing re-armed, when `read` is false or
+/// the pages do not fit this process's addresses; the caller logs and answers.
+pub fn core_read_into(
+    dst: &Direct3DSurface9,
+    desc: &SystemMemoryDst,
+    read: impl FnOnce(&mut [u8], usize) -> bool,
+) -> bool {
+    let pages = usize::try_from(desc.ptr)
+        .ok()
+        .zip(usize::try_from(desc.len).ok());
+    let ok = pages.is_some_and(|(addr, len)| {
+        let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
+        // SAFETY: `len` bytes at `ptr` are `dst`'s own pages (a standalone surface's backing or
+        // its system-memory texture level's staging), live while `dst` is, their address exposed
+        // by `system_memory_blit_dst`'s cast of the page's pointer. No other reference to them is
+        // alive: `system_memory_blit_dst` kept only their address and length, the API lock keeps
+        // this call alone, and `read` reaches only the core device.
+        let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+        read(bytes, desc.bytes_per_row as usize)
+    });
     if ok {
         // A SYSTEMMEM texture's level re-arms its dirty state, as mtld3d's read-back does.
         dst.note_system_memory_written();
     }
-    Some(if ok { D3D_OK } else { D3DERR_INVALIDCALL })
+    ok
 }
 
 /// `StretchRect` on a core device: a multisampled render target resolved into a single-sample one.

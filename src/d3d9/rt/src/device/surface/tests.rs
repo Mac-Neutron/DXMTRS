@@ -8,6 +8,7 @@ use winemetal_sys::wire::WMT_PIXEL_FORMAT_RGBA16_UNORM;
 use crate::device::{
     CoreDevice, TargetRef, TextureKind,
     fixture::{at, core_on_fakes, target_desc, textures_made},
+    target::Shape,
 };
 
 /// The device's read-back buffer; panics when it has none.
@@ -159,12 +160,19 @@ fn readback_waits_on_the_render_pass_then_its_seq() {
     );
 }
 
-/// A destination too small for the back buffer at its pitch is refused.
+/// A destination too small for the back buffer at its pitch is refused, as is a texel of no bytes.
 #[test]
 fn readback_refuses_a_short_destination() {
     let mut core = core_on_fakes(0xa7);
     let mut out = vec![0_u8; 16];
     assert!(!core.read_back(TargetRef::BackBuffer, &mut out, 64 * 4));
+    let shape = core.shape(TargetRef::BackBuffer).expect("the back buffer");
+    let empty = Shape {
+        texel_bytes: 0,
+        ..shape
+    };
+    let whole = DirtyRect::full(shape.width, shape.height);
+    assert!(super::rect_bytes(empty, whole, 64 * 4 * 32, 64 * 4).is_none());
 }
 
 /// A read-back reads the target it names, in rows of that target's texels.

@@ -209,9 +209,9 @@ impl CoreDevice {
 
 /// The bytes of a row of `rect` and of all its rows, at `shape`'s texel size, when it is read.
 ///
-/// None for an empty rect or one that leaves `shape`'s extent, rows `dst_pitch` apart that do not
-/// hold a row, `dst_len` bytes that do not hold the rows, or 4 GiB or more (the blit names its
-/// bytes in `u32`). Counted in `u64`, each converted once.
+/// None for an empty rect or one that leaves `shape`'s extent, a texel of no bytes, rows
+/// `dst_pitch` apart that do not hold a row, `dst_len` bytes that do not hold the rows, or 4 GiB
+/// or more (the blit names its bytes in `u32`). Counted in `u64`, each converted once.
 fn rect_bytes(
     shape: Shape,
     rect: DirtyRect,
@@ -223,6 +223,7 @@ fn rect_bytes(
     };
     if rect.w == 0
         || rect.h == 0
+        || shape.texel_bytes == 0
         || !inside(rect.x, rect.w, shape.width)
         || !inside(rect.y, rect.h, shape.height)
     {

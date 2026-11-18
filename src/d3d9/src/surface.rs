@@ -649,9 +649,9 @@ impl Direct3DSurface9 {
     /// false — so `GetContainer`/`GetDesc`/`StretchRect` behave exactly as for
     /// a non-lockable RT. Only `LockRect`/`UnlockRect` change: they now read /
     /// write `backing` and upload it to `metal_color_handle` (on a core device,
-    /// to its core texture) on unlock. The
-    /// `backing` must be sized `linear_row_pitch(width, bpp) * height`, the
-    /// same layout every other host-visible surface store carries.
+    /// to its core texture) on unlock. The `backing` must be sized
+    /// `linear_row_pitch(width, bpp) * height`, the same layout every other
+    /// host-visible surface store carries.
     pub fn set_lockable_staging(&mut self, backing: PageBox) {
         // SAFETY: `self.inner` is the live `SurfaceInner` for this wrapper,
         // freshly created by `new_color_target` (refcount 1); access is

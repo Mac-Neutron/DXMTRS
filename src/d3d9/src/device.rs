@@ -1040,15 +1040,7 @@ impl DeviceInner {
         #[cfg(feature = "core-runtime")]
         if let Some(core) = self.core_mut() {
             let whole = DirtyRect::full(source.width, source.height);
-            let pitch = dst_desc.bytes_per_row as usize;
-            let pages = usize::try_from(dst_desc.ptr)
-                .ok()
-                .zip(usize::try_from(dst_desc.len).ok());
-            let read = pages.is_some_and(|(addr, len)| {
-                let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
-                // SAFETY: the destination's own pages, `len` bytes at `ptr`, which the API lock
-                // keeps to this call while the core copies into them.
-                let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+            let read = core_arms::core_read_into(dst_surf, &dst_desc, |bytes, pitch| {
                 core.read_presented(whole, bytes, pitch)
             });
             if !read {
@@ -1056,7 +1048,6 @@ impl DeviceInner {
                     "d3d9 core: GetFrontBufferData did not read the back buffer → INVALIDCALL");
                 return D3DERR_INVALIDCALL;
             }
-            dst_surf.note_system_memory_written();
             return D3D_OK;
         }
         let hr = blit_texture_to_systemmem(
