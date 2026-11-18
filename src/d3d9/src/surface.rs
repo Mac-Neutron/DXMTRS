@@ -648,7 +648,8 @@ impl Direct3DSurface9 {
     /// respect — `parent_texture` null, `container` 0, `owns_parent_texture`
     /// false — so `GetContainer`/`GetDesc`/`StretchRect` behave exactly as for
     /// a non-lockable RT. Only `LockRect`/`UnlockRect` change: they now read /
-    /// write `backing` and upload it to `metal_color_handle` on unlock. The
+    /// write `backing` and upload it to `metal_color_handle` (on a core device,
+    /// to its core texture) on unlock. The
     /// `backing` must be sized `linear_row_pitch(width, bpp) * height`, the
     /// same layout every other host-visible surface store carries.
     pub fn set_lockable_staging(&mut self, backing: PageBox) {
@@ -1075,6 +1076,7 @@ impl Direct3DSurface9 {
     /// `D3DPOOL_DEFAULT` render target (it keeps its renderable colour handle),
     /// which D3D9 rejects as a destination, so this returns `None` for it, as
     /// it does for a level of a `D3DPOOL_DEFAULT` or `D3DPOOL_MANAGED` texture.
+    /// On a core device it is told apart by its core texture (DXMTRS C4c-3a).
     pub fn system_memory_blit_dst(&self) -> Option<SystemMemoryDst> {
         // SAFETY: `self.inner` is the live `SurfaceInner` for this wrapper;
         // access is exclusive (D3D9 objects are single-threaded, or serialised
@@ -1082,6 +1084,10 @@ impl Direct3DSurface9 {
         // transient exclusive borrow taken to read the buffer pointer is sound.
         let inner = unsafe { &mut *self.inner };
         if !inner.metal_color_handle.is_null() {
+            return None;
+        }
+        #[cfg(feature = "core-runtime")]
+        if inner.core_texture.is_some() {
             return None;
         }
         if inner.system_memory.is_some() {
@@ -2492,10 +2498,11 @@ extern "system" fn surface_get_desc(this: *mut c_void, desc: *mut D3DSURFACE_DES
 
 /// Whether the core runtime refuses an entry point of the surface at `this` (DXMTRS C4a, C4-13).
 ///
-/// True when the surface's device runs the core runtime, unless it is a system-memory surface
-/// and `ok_in_system_memory` lets those through.
+/// True when the surface's device runs the core runtime: for every surface, or for a back buffer
+/// alone when `back_buffer_only` (`LockRect` and `UnlockRect`, which answer every other surface
+/// there without mtld3d's recorder, DXMTRS C4c-3a).
 #[cfg(feature = "core-runtime")]
-fn refused_under_core(this: *mut c_void, ok_in_system_memory: bool) -> bool {
+fn refused_under_core(this: *mut c_void, back_buffer_only: bool) -> bool {
     // SAFETY: vtable thunk; `this` is null or a *mut Direct3DSurface9 per the ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DSurface9>::opt(this) }) else {
         return false;
@@ -2503,17 +2510,7 @@ fn refused_under_core(this: *mut c_void, ok_in_system_memory: bool) -> bool {
     let device = obj.inner().device_inner;
     // SAFETY: a surface's device outlives it (it forwards or holds a device reference).
     let core = !device.is_null() && unsafe { &*device }.is_core();
-    // A texture level locks through its texture's staging (C4b-3b), unless the texture is a
-    // render target or a depth texture, which a core device does not have yet (C4b-3d).
-    let texture_level = {
-        let parent = obj.inner().parent_texture;
-        // SAFETY: a level's parent texture is live while the level is (it holds a reference).
-        !parent.is_null()
-            && unsafe { &*parent }.d3d_usage()
-                & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
-                == 0
-    };
-    core && !(ok_in_system_memory && (obj.inner().system_memory.is_some() || texture_level))
+    core && (!back_buffer_only || obj.is_back_buffer())
 }
 
 extern "system" fn surface_lock_rect(
@@ -2621,6 +2618,21 @@ extern "system" fn surface_lock_rect(
     // (`CreateRenderTarget` with `Lockable == TRUE`) carries BOTH a renderable
     // colour handle AND a CPU staging buffer, and the implicit back buffer is
     // read back on demand. A `Lockable == FALSE` render target has neither.
+    // On a core device a `CreateRenderTarget` surface has a core texture in place of the Metal
+    // handle (DXMTRS C4c-3a): with its staging it locks as a lockable render target, and without
+    // it (a non-lockable or multisampled one) it has no bytes to hand back.
+    #[cfg(feature = "core-runtime")]
+    if obj.inner().core_texture.is_some()
+        && obj.inner().standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0
+    {
+        if obj.inner().system_memory.is_some() {
+            return lockable_rt_lock_rect(&obj, locked_rect, rect, flags);
+        }
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "IDirect3DSurface9::LockRect on a non-lockable render target → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
     if !obj.inner().live_color_handle().is_null() {
         let route = {
             let inner = obj.inner();
@@ -2730,6 +2742,14 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
         // never wrote the staging (it only read the read-back), so uploading it
         // would clobber the rendered pixels with a stale copy — skip the upload.
         let read_only = inner.lock_flags & D3DLOCK_READONLY != 0;
+        // On a core device the colour texture is the target's core texture (DXMTRS C4c-3a).
+        #[cfg(feature = "core-runtime")]
+        if inner.flags.contains(SurfaceFlags::MAPPED)
+            && !read_only
+            && let Some(id) = inner.core_texture
+        {
+            core_lockable_rt_upload(inner, id);
+        }
         if inner.flags.contains(SurfaceFlags::MAPPED)
             && !read_only
             && !inner.live_color_handle().is_null()
@@ -3223,7 +3243,9 @@ fn systemmem_lock_rect(
 /// the GPU colour texture is first read back into the staging so a read lock
 /// (`D3DLOCK_READONLY`, or a default read/modify lock) observes the rendered /
 /// blitted pixels rather than stale staging. The read-back reuses the same
-/// `BlitTextureToBuffer` core as the backbuffer / `GetRenderTargetData` path.
+/// `BlitTextureToBuffer` core as the backbuffer / `GetRenderTargetData` path,
+/// and on a core device the core's read-back of the target's core texture
+/// (DXMTRS C4c-3a), which `UnlockRect` then uploads to.
 fn lockable_rt_lock_rect(
     obj: &Direct3DSurface9,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -3307,8 +3329,13 @@ fn refresh_lockable_rt_staging(inner: &mut SurfaceInner) -> bool {
 /// uses. Marks the texture
 /// read-back BEFORE the flush so the store-action rules treat the rendered
 /// content as live. A failed blit rejects the mapping; staging may contain
-/// only part of the requested pixels.
+/// only part of the requested pixels. On a core device the target's core
+/// texture is read back instead (`core_lockable_rt_read_back`).
 fn lockable_rt_readback_fill(inner: &mut SurfaceInner, bpp: u32) -> bool {
+    #[cfg(feature = "core-runtime")]
+    if let Some(id) = inner.core_texture {
+        return core_lockable_rt_read_back(inner, id, bpp);
+    }
     let (width, height) = (inner.standalone_width, inner.standalone_height);
     let tex_handle = inner.live_color_handle();
     if bpp == 0 || width == 0 || height == 0 || tex_handle.is_null() {
@@ -3477,6 +3504,82 @@ fn lockable_rt_upload(inner: &mut SurfaceInner) {
         },
         bytes,
     });
+}
+
+/// Reads a core device's lockable render target into its staging (DXMTRS C4c-3a).
+///
+/// The whole core texture `id`, `bpp` bytes a texel, at the staging's pitch, through the core's
+/// read-back (`GetRenderTargetData`'s), which waits for the passes that wrote it. False, with one
+/// error line, when the surface has no core device or no staging, or the read fails.
+#[cfg(feature = "core-runtime")]
+fn core_lockable_rt_read_back(
+    inner: &mut SurfaceInner,
+    id: mtld3d_core::ids::TextureId,
+    bpp: u32,
+) -> bool {
+    let target = d3d9_rt::device::TargetRef::Texture {
+        id,
+        level: 0,
+        face: None,
+    };
+    let pitch = mtld3d_core::format::linear_row_pitch(inner.standalone_width, bpp) as usize;
+    // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+    // allocation from the staging borrowed below.
+    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+    let read = core
+        .zip(inner.system_memory.as_mut())
+        .is_some_and(|(core, page)| core.read_back(target, page.as_mut_slice(), pitch));
+    if !read {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: LockRect of a lockable render target did not read texture {:#x} back → INVALIDCALL",
+            id.raw()
+        );
+    }
+    read
+}
+
+/// Uploads a core device's lockable render target's staging to its core texture (DXMTRS C4c-3a).
+///
+/// The whole surface, at the staging's pitch, into core texture `id` at record time: a draw
+/// recorded before keeps the old texels and one recorded after sees the write, the order
+/// `lockable_rt_upload`'s region update keeps. A failed upload logs one error line and leaves the
+/// texture as it was.
+#[cfg(feature = "core-runtime")]
+fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId) {
+    let bpp = mtld3d_core::format::map_d3d_format(inner.standalone_format)
+        .map_or(0, |mapping| mapping.bytes_per_pixel());
+    let (width, height) = (inner.standalone_width, inner.standalone_height);
+    let pitch = mtld3d_core::format::linear_row_pitch(width, bpp);
+    let region = d3d9_rt::device::UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+        width,
+        height,
+        depth: 1,
+    };
+    // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+    // allocation from the staging.
+    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+    let uploaded = core
+        .zip(inner.system_memory.as_ref())
+        .is_some_and(|(core, page)| {
+            core.texture_upload(
+                id,
+                region,
+                page.as_slice(),
+                pitch,
+                pitch.saturating_mul(height),
+            )
+        });
+    if !uploaded {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: UnlockRect of a lockable render target did not upload texture {:#x}; it keeps its texels",
+            id.raw()
+        );
+    }
 }
 
 /// Parse a `RECT*` pointer passed to `LockRect` and clamp it against `(full_w, full_h)`.

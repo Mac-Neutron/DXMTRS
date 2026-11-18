@@ -8099,9 +8099,6 @@ extern "system" fn device_create_render_target(
         null_out(surface);
         return D3DERR_INVALIDCALL;
     };
-    // A surface's lock is refused on a core device (C4c), so a lockable target takes no staging.
-    #[cfg(feature = "core-runtime")]
-    let lockable = if obj.inner().is_core() { 0 } else { lockable };
     // A `Lockable == TRUE` render target keeps its standalone renderable colour
     // texture (so `GetContainer`/`GetDesc`/`StretchRect` are unchanged) but also
     // gets a CPU staging buffer: `LockRect` maps it, `UnlockRect` uploads it to
