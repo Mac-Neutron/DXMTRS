@@ -1,7 +1,7 @@
 use mtld3d_core::ids::TextureId;
 use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BGRA8_UNORM};
 
-use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
+use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion, plane_copies};
 use crate::device::{
     CoreDevice,
     fixture::{at, core_on_fakes},
@@ -250,4 +250,28 @@ fn forget_keeps_encoded() {
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(lines(&calls, "blit copy_to_texture").len(), 1, "{calls:#?}");
+}
+
+/// A `Depth32FloatStencil8` level's copies: depth, then stencil, each of the whole level.
+///
+/// Rows of `w * 4` bytes and of `w` rounded up to 4, at widths 3 and 5 and at a 1x1 level;
+/// the level as `u16`, slice 0, origin 0, no image pitch. A row past `u32` makes none.
+#[test]
+fn plane_copies_split_depth_and_stencil() {
+    for (level, (width, height), rows) in [
+        (0, (3, 2), [12, 4]),
+        (2, (5, 7), [20, 8]),
+        (4, (1, 1), [4, 4]),
+    ] {
+        let copies = plane_copies(level, (width, height)).expect("rows within u32");
+        for (copy, (options, row)) in copies.iter().zip([(1, rows[0]), (2, rows[1])]) {
+            assert_eq!((copy.r#type, copy.options), (10, options));
+            assert_eq!((copy.bytes_per_row, copy.bytes_per_image), (row, 0));
+            assert_eq!((copy.level, copy.slice), (level, 0));
+            let size = (copy.size.width, copy.size.height, copy.size.depth);
+            assert_eq!(size, (u64::from(width), u64::from(height), 1));
+            assert_eq!((copy.origin.x, copy.origin.y, copy.origin.z), (0, 0, 0));
+        }
+    }
+    assert!(plane_copies(0, (u32::MAX, 1)).is_none());
 }

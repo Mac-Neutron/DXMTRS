@@ -19,11 +19,16 @@ use dxmt_core::{
 };
 use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId};
 use winemetal_sys::wire::{
-    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
-    WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE2D,
-    WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE3D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
-    WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ, WMTOrigin, WMTSize,
-    WMTTextureInfo, WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitGenerateMipmaps,
+    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
+    WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
+    WMT_BLIT_COMMAND_GENERATE_MIPMAPS, WMT_BLIT_OPTION_DEPTH_FROM_DEPTH_STENCIL,
+    WMT_BLIT_OPTION_STENCIL_FROM_DEPTH_STENCIL, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+    WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+    WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_TYPE3D,
+    WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
+    WMT_TEXTURE_USAGE_SHADER_READ, WMTOrigin, WMTSize, WMTTextureInfo,
+    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromBufferToTextureWithblitoption,
+    WmtcmdBlitGenerateMipmaps,
 };
 
 use super::{
@@ -32,6 +37,20 @@ use super::{
     surface::rect_bytes,
     target::{Resolved, Shape},
 };
+
+/// A whole level of a depth texture as CPU planes, for [`CoreDevice::depth_upload`].
+///
+/// The planes `PlaneLayout::new(w, h, 4)` of `mtld3d_core::depth_texture` lays out fit: depth
+/// rows of `w * 4` bytes, stencil rows of `w` rounded up to 4.
+pub struct DepthPlanes<'a> {
+    /// The depth plane: rows of `w` little-endian `f32`s, `depth_pitch` bytes apart.
+    pub depth: &'a [u8],
+    pub depth_pitch: usize,
+    /// The stencil plane, rows of one byte a texel, and its pitch.
+    ///
+    /// Read for a format with a stencil plane only.
+    pub stencil: Option<(&'a [u8], usize)>,
+}
 
 /// A D3D9 texture's shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -508,6 +527,119 @@ impl CoreDevice {
         self.upload(texture, 0, &copy, bytes, (pitch, 0))
     }
 
+    /// Uploads the whole of level `level` of `id`'s depth texture from CPU planes.
+    ///
+    /// In application order, as [`CoreDevice::texture_upload`] records an upload: each plane's
+    /// rows are packed in a staging-ring block now, and a blit copies them at the chunk's encode,
+    /// after every pass recorded before it (DXMTRS C4c-3b). A `Depth32Float` level takes its
+    /// depth plane in one plain copy, as mtld3d's encoder does, and a stencil plane given is not
+    /// read; a `Depth32FloatStencil8` level takes a copy a plane, depth first. The copies' rows
+    /// are `w * 4` bytes of depth and `w` rounded up to 4 of stencil, as dxmt-core's initializer
+    /// copies. False, and nothing recorded, unless the store holds `id` as a single-sample depth
+    /// texture in one of those two formats with that level, which fits the blit's `u16`; for a
+    /// plane's pitch under its row or its bytes short of its rows; for a missing stencil plane.
+    #[must_use]
+    pub fn depth_upload(
+        &mut self,
+        id: TextureId,
+        level: u32,
+        DepthPlanes {
+            depth,
+            depth_pitch,
+            stencil,
+        }: DepthPlanes<'_>,
+    ) -> bool {
+        let Some((width, height, pixel_format, samples)) = self.depth_level(id, level) else {
+            return false;
+        };
+        let Ok(blit_level) = u16::try_from(level) else {
+            return false;
+        };
+        if samples > 1 {
+            return false;
+        }
+        let shape = Shape {
+            width,
+            height,
+            pixel_format,
+            srgb_format: 0,
+            texel_bytes: 4,
+            level,
+            slice: 0,
+            samples,
+        };
+        let whole = DirtyRect::full(width, height);
+        let Some((depth_row, _)) = rect_bytes(shape, whole, depth.len(), depth_pitch) else {
+            return false;
+        };
+        let Some(texture) = self.stored_texture(id) else {
+            return false;
+        };
+        match pixel_format {
+            WMT_PIXEL_FORMAT_DEPTH32_FLOAT => {
+                let copy = Blit {
+                    slice: 0,
+                    origin: WMTOrigin { x: 0, y: 0, z: 0 },
+                    size: WMTSize {
+                        width: u64::from(width),
+                        height: u64::from(height),
+                        depth: 1,
+                    },
+                    row_bytes: depth_row,
+                    rows: height,
+                    images: 1,
+                };
+                self.upload(texture, level, &copy, depth, (depth_pitch, 0))
+            }
+            WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8 => {
+                let Some((stencil, stencil_pitch)) = stencil else {
+                    return false;
+                };
+                let stencil_shape = Shape {
+                    texel_bytes: 1,
+                    ..shape
+                };
+                let (Some((stencil_row, _)), Some(mut copies)) = (
+                    rect_bytes(stencil_shape, whole, stencil.len(), stencil_pitch),
+                    plane_copies(blit_level, (width, height)),
+                ) else {
+                    return false;
+                };
+                let sources = [
+                    (depth, depth_pitch, depth_row),
+                    (stencil, stencil_pitch, stencil_row),
+                ];
+                let mut total = 0;
+                for (copy, (plane, pitch, row)) in copies.iter_mut().zip(sources) {
+                    let stride = copy.bytes_per_row;
+                    let Some(at) = self.stage_rows(plane, (pitch, 0), (row, height, 1), stride)
+                    else {
+                        return false;
+                    };
+                    (copy.src, copy.src_offset) = at;
+                    total += u64::from(stride) * u64::from(height);
+                }
+                self.open_blit_pass();
+                self.emit(move |enc| {
+                    let dst =
+                        enc.access_texture::<{ stage::COMPUTE }>(&texture, level, 0, Access::WRITE);
+                    for copy in copies {
+                        enc.encode_blit_command(WmtcmdBlitCopyFromBufferToTextureWithblitoption {
+                            dst,
+                            ..copy
+                        });
+                    }
+                });
+                self.staged_bytes += total;
+                if self.staged_bytes > self.staged_budget {
+                    self.commit();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Records `copy` of `bytes` into level `level` of `texture`, after every pass recorded before.
     ///
     /// `bytes`' rows are `src_row` bytes apart and its images `src_image`. The rows are packed in
@@ -530,7 +662,8 @@ impl CoreDevice {
         }
         let total = u64::from(copy.row_bytes) * u64::from(copy.rows) * u64::from(copy.images);
         let layout = (copy.row_bytes, copy.rows, copy.images);
-        let Some((buffer, offset)) = self.stage_rows(bytes, (src_row, src_image), layout) else {
+        let pitches = (src_row, src_image);
+        let Some((buffer, offset)) = self.stage_rows(bytes, pitches, layout, copy.row_bytes) else {
             return false;
         };
         self.open_blit_pass();
@@ -562,19 +695,25 @@ impl CoreDevice {
         true
     }
 
-    /// Copies rows of `bytes` into a new staging-ring block, packed: its buffer and offset.
+    /// Copies rows of `bytes` into a new staging-ring block, `stride` apart: its buffer and offset.
     ///
     /// `images` images of `rows` rows of `row_bytes` bytes: row `r` of image `i` is read at
     /// `i * src_image + r * src_row` of `bytes`, which the caller checked holds every row, and
-    /// lands right after the row before it. None, with an error, when the block has no mapping
-    /// this process reaches.
+    /// lands `stride` bytes after the row before it: `row_bytes` packs them, a wider stride
+    /// leaves the ring's bytes between them as they are (a stencil plane's rows, rounded up to 4
+    /// bytes, DXMTRS C4c-3b). None, with an error, when the block has no mapping this process
+    /// reaches; None for a stride under the row.
     fn stage_rows(
         &mut self,
         bytes: &[u8],
         (src_row, src_image): (usize, usize),
         (row_bytes, rows, images): (u32, u32, u32),
+        stride: u32,
     ) -> Option<(u64, u64)> {
-        let total = u64::from(row_bytes) * u64::from(rows) * u64::from(images);
+        if stride < row_bytes {
+            return None;
+        }
+        let total = u64::from(stride) * u64::from(rows) * u64::from(images);
         let (block, offset) = self.device.queue_mut().allocate_staging_buffer(total, 16);
         let start = usize::try_from(offset).ok()?;
         if block.mapped.is_null() {
@@ -585,10 +724,10 @@ impl CoreDevice {
         for i in 0..images as usize {
             for r in 0..rows as usize {
                 let from = i * src_image + r * src_row;
-                let to = (i * rows as usize + r) * tight;
+                let to = (i * rows as usize + r) * stride as usize;
                 let src = &bytes[from..from + tight];
                 // SAFETY: the block's mapping holds `total` bytes from `start`; `to + tight` is
-                // within them.
+                // within them, `tight` being at most `stride`.
                 let dst = unsafe { block.mapped.add(start + to) };
                 // SAFETY: `dst` holds `tight` writable bytes (above), which `src` (the caller's
                 // slice) does not overlap.
@@ -693,6 +832,46 @@ impl Blit {
             images: depth,
         })
     }
+}
+
+/// The copies of a `Depth32FloatStencil8` level's two planes, depth first, as dxmt-core's.
+///
+/// A copy of level `level`, `width` x `height`, at slice 0 and origin 0 a plane: rows of
+/// `width * 4` bytes of depth, of `width` rounded up to 4 of stencil. The source and the
+/// destination are 0, for the caller to fill; none when a row overflows `u32`.
+fn plane_copies(
+    level: u16,
+    (width, height): (u32, u32),
+) -> Option<[WmtcmdBlitCopyFromBufferToTextureWithblitoption; 2]> {
+    let copy = |bytes_per_row, options| WmtcmdBlitCopyFromBufferToTextureWithblitoption {
+        r#type: WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
+        reserved: [0; 3],
+        next: NO_NEXT,
+        src: 0,
+        src_offset: 0,
+        bytes_per_row,
+        bytes_per_image: 0,
+        size: WMTSize {
+            width: u64::from(width),
+            height: u64::from(height),
+            depth: 1,
+        },
+        dst: 0,
+        slice: 0,
+        level,
+        options,
+        origin: WMTOrigin { x: 0, y: 0, z: 0 },
+    };
+    Some([
+        copy(
+            width.checked_mul(4)?,
+            WMT_BLIT_OPTION_DEPTH_FROM_DEPTH_STENCIL,
+        ),
+        copy(
+            width.checked_next_multiple_of(4)?,
+            WMT_BLIT_OPTION_STENCIL_FROM_DEPTH_STENCIL,
+        ),
+    ])
 }
 
 /// The Metal type of a 2D texture, or of a view of one subresource of it, of `samples` a texel.

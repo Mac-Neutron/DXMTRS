@@ -2,15 +2,15 @@ use mtld3d_core::{
     depth_stencil_state::DepthStencilSnapshot, ids::TextureId, pipeline_key::PipelineKey,
 };
 use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
     WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
 };
 
 use super::DepthRef;
 use crate::device::{
-    CoreDevice, DrawData, DrawRefused, Stage, TargetRef, TextureKind,
+    CoreDevice, CoreTextureDesc, DepthPlanes, DrawData, DrawRefused, Stage, TargetRef, TextureKind,
     fixture::{
-        core_on_fakes, depth_desc, ff_binds, key, line, passes, target_desc, textures_made,
+        at, core_on_fakes, depth_desc, ff_binds, key, line, passes, target_desc, textures_made,
         triangle,
     },
 };
@@ -714,4 +714,173 @@ fn the_blend_colour_is_recorded_with_the_stencil_ref() {
         .collect::<Vec<_>>();
     assert_eq!(colors.len(), 1, "{calls:#?}");
     assert!(colors[0].ends_with(" stencil_ref=5"), "{calls:#?}");
+}
+
+/// The lines of `calls` that are blit records (`  blit `), fences left out.
+fn blit_records(calls: &[String]) -> Vec<&str> {
+    calls
+        .iter()
+        .filter(|c| c.starts_with("  blit ") && !c.contains(" fence="))
+        .map(String::as_str)
+        .collect()
+}
+
+/// A `Depth32Float` level uploads in one plain copy of its `f32` rows; a stencil plane is unread.
+///
+/// Levels 0 and 1 of a two-level 6x4 texture: the copy names the texture, the level, slice 0,
+/// origin 0, the level's size and rows of `w * 4` bytes.
+#[test]
+fn a_depth_level_uploads_in_one_plain_copy() {
+    let mut rig = Rig::new(0x400);
+    let (id, texture) = rig.depth(1, D32F, (6, 4), 2);
+    let depth = [0_u8; 6 * 4 * 4];
+    for (level, size, row) in [(0, "6x4x1", 24), (1, "3x2x1", 12)] {
+        let planes = DepthPlanes {
+            depth: &depth,
+            depth_pitch: row,
+            stencil: Some((&[], 0)),
+        };
+        assert!(rig.core.depth_upload(id, level, planes), "level {level}");
+        let calls = rig.take();
+        let copies = blit_records(&calls);
+        assert_eq!(copies.len(), 1, "{calls:#?}");
+        let head = format!(
+            "  blit copy_to_texture {texture} level={level} slice=0 origin=0,0,0 size={size} "
+        );
+        assert!(copies[0].starts_with(&head), "{calls:#?}");
+        assert!(
+            copies[0].contains(&format!(" bytes_per_row={row} ")),
+            "{calls:#?}"
+        );
+    }
+}
+
+/// Depth rows wider than the level's are copied a row at a time: the copy's rows are tight.
+///
+/// The fewest bytes the rows take are enough.
+#[test]
+fn a_depth_pitch_over_the_row_is_packed() {
+    let mut rig = Rig::new(0x401);
+    let (id, _) = rig.depth(1, D32F, (4, 2), 1);
+    let planes = DepthPlanes {
+        depth: &[0_u8; 20 + 16],
+        depth_pitch: 20,
+        stencil: None,
+    };
+    assert!(rig.core.depth_upload(id, 0, planes));
+    let calls = rig.take();
+    let copies = blit_records(&calls);
+    assert_eq!(copies.len(), 1, "{calls:#?}");
+    assert!(
+        copies[0].ends_with(" bytes_per_row=16 bytes_per_image=32"),
+        "{calls:#?}"
+    );
+}
+
+/// A `Depth32FloatStencil8` level uploads in two plane copies in one blit pass, and no other.
+#[test]
+fn a_depth_stencil_level_uploads_in_two_plane_copies() {
+    let mut rig = Rig::new(0x402);
+    let (id, _) = rig.depth(1, D32F_S8, (3, 2), 1);
+    let planes = DepthPlanes {
+        depth: &[0_u8; 12 * 2],
+        depth_pitch: 12,
+        stencil: Some((&[0_u8; 4 * 2], 4)),
+    };
+    assert!(rig.core.depth_upload(id, 0, planes));
+    let calls = rig.take();
+    assert_eq!(
+        blit_records(&calls),
+        ["  blit 10", "  blit 10"],
+        "{calls:#?}"
+    );
+    let start = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    let end = start
+        + calls[start..]
+            .iter()
+            .position(|c| c == "MTLCommandEncoder_endEncoding")
+            .unwrap_or_else(|| panic!("{calls:#?}"));
+    let inside = calls[start..end]
+        .iter()
+        .filter(|c| *c == "  blit 10")
+        .count();
+    assert_eq!(inside, 2, "{calls:#?}");
+}
+
+/// An upload recorded while a draw's pass is open ends it; the next draw's pass loads the planes.
+///
+/// A render pass, the blit pass, a render pass, in record order.
+#[test]
+fn a_depth_upload_ends_the_open_pass() {
+    let mut rig = Rig::new(0x403);
+    let (id, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(id))));
+    assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Ok(()));
+    let (depth, stencil) = (vec![0_u8; 64 * 4 * 32], vec![0_u8; 64 * 32]);
+    let planes = DepthPlanes {
+        depth: &depth,
+        depth_pitch: 64 * 4,
+        stencil: Some((&stencil, 64)),
+    };
+    assert!(rig.core.depth_upload(id, 0, planes));
+    assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Ok(()));
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 2, "{calls:#?}");
+    let renders = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| *c == "MTLCommandBuffer_renderCommandEncoder")
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    let first_end = renders[0] + all[0].len();
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    assert!(first_end < blit && blit < renders[1], "{calls:#?}");
+    for plane in ["  depth ", "  stencil "] {
+        let rest = line(all[1], plane).unwrap_or_default();
+        assert!(rest.contains(" load=1 store=1 "), "{calls:#?}");
+    }
+}
+
+/// An upload a level cannot take is refused, and nothing is recorded.
+///
+/// No such texture, a colour texture, a multisampled one, a level past the last, a depth format
+/// other than the two, a pitch under a plane's row, a plane short of its rows, no stencil plane
+/// for a stencil format.
+#[test]
+fn a_refused_depth_upload_records_nothing() {
+    let mut rig = Rig::new(0x404);
+    let (d32f, _) = rig.depth(1, D32F, (4, 2), 1);
+    let (d32f_s8, _) = rig.depth(2, D32F_S8, (4, 2), 1);
+    let (d16, _) = rig.depth(3, WMT_PIXEL_FORMAT_DEPTH16_UNORM, (4, 2), 1);
+    let (color, _) = rig.color(4);
+    let multisampled = TextureId::from_raw(5);
+    let desc = CoreTextureDesc {
+        samples: 4,
+        ..depth_desc(D32F, 4, 2, 1)
+    };
+    rig.core.texture_create(multisampled, &desc);
+    let _ = rig.take();
+    let (depth, stencil) = ([0_u8; 32], [0_u8; 8]);
+    for (what, id, level, depth_plane, stencil_plane) in [
+        ("no such texture", TextureId::from_raw(9), 0, (32, 16), None),
+        ("a colour texture", color, 0, (32, 16), None),
+        ("a multisampled texture", multisampled, 0, (32, 16), None),
+        ("a level past the last", d32f, 1, (32, 16), None),
+        ("a D16 texture", d16, 0, (32, 16), None),
+        ("a depth pitch under the row", d32f, 0, (32, 15), None),
+        ("a depth plane short of its rows", d32f, 0, (31, 16), None),
+        ("no stencil plane", d32f_s8, 0, (32, 16), None),
+        ("stencil pitch < row", d32f_s8, 0, (32, 16), Some((8, 3))),
+        ("stencil plane short", d32f_s8, 0, (32, 16), Some((7, 4))),
+    ] {
+        let planes = DepthPlanes {
+            depth: &depth[..depth_plane.0],
+            depth_pitch: depth_plane.1,
+            stencil: stencil_plane.map(|(len, pitch)| (&stencil[..len], pitch)),
+        };
+        assert!(!rig.core.depth_upload(id, level, planes), "{what}");
+        let calls = rig.take();
+        assert!(calls.is_empty(), "{what}: {calls:#?}");
+    }
 }

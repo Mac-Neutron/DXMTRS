@@ -237,7 +237,8 @@ pub use draw::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamDat
 pub use swapchain::present_after;
 pub use target::TargetRef;
 pub use textures::{
-    CoreTextureDesc, CoreTextureFlags, TextureBind, TextureKind, UploadRegion, view_format,
+    CoreTextureDesc, CoreTextureFlags, DepthPlanes, TextureBind, TextureKind, UploadRegion,
+    view_format,
 };
 
 #[cfg(test)]
