@@ -691,7 +691,7 @@ impl Direct3DSurface9 {
         self.inner().parent_texture
     }
 
-    /// Gives a standalone render target its core texture's id (DXMTRS C4b-3d1).
+    /// Gives a standalone render target or depth-stencil its core texture's id (DXMTRS C4b-3d1).
     #[cfg(feature = "core-runtime")]
     pub fn set_core_texture(&mut self, id: mtld3d_core::ids::TextureId) {
         // SAFETY: `self.inner` is the live `SurfaceInner` of this wrapper, just made by
@@ -1364,10 +1364,11 @@ struct SurfaceInner {
     /// every other surface, including the offscreen plain that owns a private
     /// backing texture no second shell can reach.
     state_owner_texture: *mut Direct3DTexture9,
-    /// A standalone render target's core texture, on a device of the core runtime (DXMTRS C4b-3d1).
+    /// A standalone target's core texture, on a device of the core runtime (DXMTRS C4b-3d1).
     ///
-    /// The store's id for it, forgotten at this surface's finalize; `None` for every other surface
-    /// and on a device of mtld3d's runtime.
+    /// The store's id for a `CreateRenderTarget` or `CreateDepthStencilSurface` surface, forgotten
+    /// at this surface's finalize; `None` for every other surface and on a device of mtld3d's
+    /// runtime.
     #[cfg(feature = "core-runtime")]
     core_texture: Option<mtld3d_core::ids::TextureId>,
 }
@@ -1453,6 +1454,13 @@ impl SurfaceInner {
         self.flags.remove(SurfaceFlags::MAPPED);
         shared.map_count = shared.map_count.saturating_sub(1);
         D3D_OK
+    }
+
+    /// Whether the surface's device runs the core runtime (`runtime.mode = core`).
+    #[cfg(feature = "core-runtime")]
+    fn on_core_device(&self) -> bool {
+        // SAFETY: null, or the surface's live owning device, which outlives it.
+        unsafe { self.device_inner.as_ref() }.is_some_and(DeviceInner::is_core)
     }
 }
 
@@ -1787,8 +1795,9 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
         !inner.flags.contains(SurfaceFlags::CONTAINER_CACHED),
         "container-cached sub-resource surface finalized outside its container's teardown"
     );
-    // A core device's standalone render target owns its core texture (DXMTRS C4b-3d1): the store
-    // forgets it; the closures already recorded hold their own reference.
+    // A core device's standalone render target or depth-stencil owns its core texture (DXMTRS
+    // C4b-3d1, C4b-3d2): the store forgets it; the closures already recorded hold their own
+    // reference.
     #[cfg(feature = "core-runtime")]
     if let Some(id) = inner.core_texture
         && !inner.device_inner.is_null()
@@ -2352,10 +2361,7 @@ extern "system" fn surface_get_priority(this: *mut c_void) -> u32 {
 
 extern "system" fn surface_pre_load(this: *mut c_void) {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(
-        refused_under_core(this, false),
-        "IDirect3DSurface9::PreLoad"
-    );
+    refuse_under_core!(refused_under_core(this), "IDirect3DSurface9::PreLoad");
     let _timer = surf_timer(this, SurfaceSubCategory::Misc);
     // See IDirect3DTexture9::PreLoad — Metal has no resident-set hint.
     mtld3d_shared::log_once_info!(
@@ -2498,19 +2504,11 @@ extern "system" fn surface_get_desc(this: *mut c_void, desc: *mut D3DSURFACE_DES
 
 /// Whether the core runtime refuses an entry point of the surface at `this` (DXMTRS C4a, C4-13).
 ///
-/// True when the surface's device runs the core runtime: for every surface, or for a back buffer
-/// alone when `back_buffer_only` (`LockRect` and `UnlockRect`, which answer every other surface
-/// there without mtld3d's recorder, DXMTRS C4c-3a).
+/// True when the surface's device runs the core runtime.
 #[cfg(feature = "core-runtime")]
-fn refused_under_core(this: *mut c_void, back_buffer_only: bool) -> bool {
+fn refused_under_core(this: *mut c_void) -> bool {
     // SAFETY: vtable thunk; `this` is null or a *mut Direct3DSurface9 per the ABI.
-    let Some(obj) = (unsafe { InPtr::<Direct3DSurface9>::opt(this) }) else {
-        return false;
-    };
-    let device = obj.inner().device_inner;
-    // SAFETY: a surface's device outlives it (it forwards or holds a device reference).
-    let core = !device.is_null() && unsafe { &*device }.is_core();
-    core && (!back_buffer_only || obj.is_back_buffer())
+    unsafe { InPtr::<Direct3DSurface9>::opt(this) }.is_some_and(|obj| obj.inner().on_core_device())
 }
 
 extern "system" fn surface_lock_rect(
@@ -2520,11 +2518,6 @@ extern "system" fn surface_lock_rect(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(
-        refused_under_core(this, true),
-        "IDirect3DSurface9::LockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = surf_timer(this, SurfaceSubCategory::LockRect);
     if locked_rect.is_null() {
         return D3DERR_INVALIDCALL;
@@ -2618,9 +2611,14 @@ extern "system" fn surface_lock_rect(
     // (`CreateRenderTarget` with `Lockable == TRUE`) carries BOTH a renderable
     // colour handle AND a CPU staging buffer, and the implicit back buffer is
     // read back on demand. A `Lockable == FALSE` render target has neither.
-    // On a core device a `CreateRenderTarget` surface has a core texture in place of the Metal
-    // handle (DXMTRS C4c-3a): with its staging it locks as a lockable render target, and without
-    // it (a non-lockable or multisampled one) it has no bytes to hand back.
+    // On a core device none of them has a Metal handle (DXMTRS C4c-3a). The back buffer is read
+    // back through the core; a `CreateRenderTarget` surface has a core texture in the handle's
+    // place: with its staging it locks as a lockable render target, and without it (a
+    // non-lockable or multisampled one) it has no bytes to hand back.
+    #[cfg(feature = "core-runtime")]
+    if obj.is_back_buffer() && obj.inner().on_core_device() {
+        return backbuffer_lock_readback(&obj, locked_rect, rect, flags);
+    }
     #[cfg(feature = "core-runtime")]
     if obj.inner().core_texture.is_some()
         && obj.inner().standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0
@@ -2666,11 +2664,6 @@ extern "system" fn surface_lock_rect(
 
 extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(
-        refused_under_core(this, true),
-        "IDirect3DSurface9::UnlockRect",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = surf_timer(this, SurfaceSubCategory::UnlockRect);
     // SAFETY: vtable thunk; `this` is *mut Direct3DSurface9 per IDirect3DSurface9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DSurface9>::opt(this) }) else {
@@ -2762,6 +2755,15 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
         // the (shared cube) resource is a no-op success — see `try_end_lock`.
         return inner.try_end_lock();
     }
+    // A core device's back buffer locks read-only (DXMTRS C4c-3a): its Unlock ends the lock and
+    // drops the page, with nothing to write back.
+    #[cfg(feature = "core-runtime")]
+    if inner.implicit_kind == ImplicitKind::Backbuffer && inner.on_core_device() {
+        let hr = inner.try_end_lock();
+        inner.lock_flags = 0;
+        inner.readback = None;
+        return hr;
+    }
     // Standalone colour surface (the back-buffer read-back path). A successful
     // `LockRect` recorded the lock and stashed its page in `readback`, so
     // ending that lock drops the page (the performance-critical portrait
@@ -2791,6 +2793,8 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
 /// backbuffer texture, then blit the requested sub-rect into a page-aligned
 /// PE-heap buffer that stays alive until `UnlockRect`. `WoW` uses this for
 /// character portraits (a small sub-rect blit back to a game-side texture).
+/// On a core device the rect is read as Present would show it, and a writable
+/// lock or an additional swap chain's back buffer is refused (DXMTRS C4c-3a).
 fn backbuffer_lock_readback(
     obj: &Direct3DSurface9,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2815,6 +2819,19 @@ fn backbuffer_lock_readback(
         );
         return D3DERR_INVALIDCALL;
     }
+    // A core device reads its back buffer through a lock but writes nothing back yet, and an
+    // additional swap chain's back buffer aliases the device's there, which is not what it would
+    // read (DXMTRS C4c-3a). Both are refused where the flag check stands, ahead of the lock state.
+    refuse_under_core!(
+        inner.on_core_device() && flags & D3DLOCK_READONLY == 0,
+        "IDirect3DSurface9::LockRect (a writable lock of the back buffer)",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
+    refuse_under_core!(
+        inner.on_core_device() && inner.flags.contains(SurfaceFlags::PINS_SWAP_CHAIN),
+        "IDirect3DSurface9::LockRect (an additional swap chain's back buffer)",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     // The read-back page is what the lock maps, and a `GetDC` wraps the same
     // slot, so the back buffer takes the surface lock state like every other
     // lockable surface: a second lock or a lock under an outstanding DC is
@@ -2887,7 +2904,8 @@ fn backbuffer_map_for_write(
 /// Read the back buffer, or `rect` of it, into the page a successful back-buffer lock maps.
 ///
 /// The caller has recorded the lock; on a failure it is the caller that
-/// takes the record back.
+/// takes the record back. On a core device the core reads it
+/// (`core_backbuffer_read_into_lock`, DXMTRS C4c-3a).
 fn backbuffer_read_into_lock(
     inner: &mut SurfaceInner,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2930,6 +2948,11 @@ fn backbuffer_read_into_lock(
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "back-buffer LockRect: the read-back page would be empty → INVALIDCALL");
         return D3DERR_INVALIDCALL;
+    }
+    #[cfg(feature = "core-runtime")]
+    if inner.on_core_device() {
+        let rect = mtld3d_core::dirty_rect::DirtyRect { x, y, w, h };
+        return core_backbuffer_read_into_lock(inner, locked_rect, rect, bytes_per_row, bytes);
     }
     let mut page = PageBox::new_uninit(bytes);
 
@@ -2988,6 +3011,45 @@ fn backbuffer_read_into_lock(
     // SAFETY: `locked_rect` is non-null (checked by the caller before
     // entry) and per the D3D9 ABI points to a writable `D3DLOCKED_RECT`
     // slot owned by the caller; alignment is not assumed.
+    unsafe { OutPtr::write_opt(locked_rect, locked) };
+    inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
+    D3D_OK
+}
+
+/// Reads `rect` of a core device's back buffer into the page its lock maps (DXMTRS C4c-3a).
+///
+/// The twin of `backbuffer_read_into_lock`'s read, out structure and page: the rect as Present
+/// would show it now (a multisampled back buffer resolved first) into a zeroed page of `bytes`,
+/// rows `bytes_per_row` apart, which the lock reports and `UnlockRect` drops. `INVALIDCALL`, with
+/// one error line, when the read fails; the caller takes the lock back.
+#[cfg(feature = "core-runtime")]
+fn core_backbuffer_read_into_lock(
+    inner: &mut SurfaceInner,
+    locked_rect: *mut D3DLOCKED_RECT,
+    rect: mtld3d_core::dirty_rect::DirtyRect,
+    bytes_per_row: u32,
+    bytes: usize,
+) -> i32 {
+    // Zeroed, since the read writes it through a slice.
+    let mut page = PageBox::new_zeroed(bytes);
+    let (x, y, w, h) = (rect.x, rect.y, rect.w, rect.h);
+    // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+    // allocation from the page.
+    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+    let read = core
+        .is_some_and(|core| core.read_presented(rect, page.as_mut_slice(), bytes_per_row as usize));
+    if !read {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: LockRect of the back buffer did not read {w}x{h} at ({x}, {y}) → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    let locked = D3DLOCKED_RECT {
+        pitch: bytes_per_row.cast_signed(),
+        bits: page.as_mut_ptr().cast::<c_void>(),
+    };
+    // SAFETY: `locked_rect` is non-null (checked by the caller before entry) and per the D3D9 ABI
+    // points to a writable `D3DLOCKED_RECT` slot owned by the caller; alignment is not assumed.
     unsafe { OutPtr::write_opt(locked_rect, locked) };
     inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
     D3D_OK
@@ -3878,7 +3940,7 @@ fn pin_dc_texture_level(inner: &SurfaceInner, open: bool) {
 extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
     refuse_under_core!(
-        refused_under_core(this, false),
+        refused_under_core(this),
         "IDirect3DSurface9::GetDC",
         mtld3d_types::D3DERR_NOTAVAILABLE
     );
@@ -4031,7 +4093,7 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
 extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
     refuse_under_core!(
-        refused_under_core(this, false),
+        refused_under_core(this),
         "IDirect3DSurface9::ReleaseDC",
         mtld3d_types::D3DERR_NOTAVAILABLE
     );
