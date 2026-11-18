@@ -9722,7 +9722,18 @@ extern "system" fn device_stretch_rect(
     // lack and records for mtld3d's encoder.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
-        return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
+        return core_arms::stretch_colour(
+            this,
+            &core_arms::StretchCall {
+                surfaces: [src, dst],
+                infos: [&src_info, &dst_info],
+                regions: [src_region, dst_region],
+                rects: [src_rect, dst_rect],
+                scaling,
+                planar_endpoint,
+                expand_packed16,
+            },
+        );
     }
     // Past every gate that can reject the call, so the endpoints' pending
     // uploads are work this call will use.

@@ -3,12 +3,16 @@
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
 //! and the call's result for a device of the core runtime. `StretchRect`, `ColorFill` and
 //! `UpdateSurface` run mtld3d's gates on both runtimes, so a call they reject answers
-//! `D3DERR_INVALIDCALL` on both, and a core device leaves past them for `stretch_rect_resolve`,
-//! `color_fill` for a colour target, or `update_color_target` for a region of the back buffer
-//! or a render target (DXMTRS C4c-4a). What an arm does not cover yet (a Present with rects or
-//! another window, a valid `StretchRect` other than a multisample resolve) is refused with one
-//! warning (C4-13). Clear and the read-back go to and come from the bound colour target (DXMTRS
-//! C4b-3d1). The UP draws are `core_draw`'s.
+//! `D3DERR_INVALIDCALL` on both, and a core device leaves past them for `stretch_colour` (a
+//! colour pair) or `stretch_rect_resolve` (a depth-stencil pair), `color_fill` for a colour
+//! target, or `update_color_target` for a region of the back buffer or a render target (DXMTRS
+//! C4c-4a). `stretch_colour` resolves a multisampled target into a single-sample one, and copies
+//! texel for texel into a target on the GPU (DXMTRS C4c-4b): it tests the destination itself,
+//! since on a core device the GPU writes nothing but targets. What an arm does not cover yet (a
+//! Present with rects or another window; a scaled, converting or multisampled `StretchRect`, one
+//! into a surface that is no target, a depth-stencil one) is refused with one warning (C4-13).
+//! Clear and the read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP
+//! draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -20,6 +24,7 @@ use mtld3d_core::{
     pipeline_key::drawn_rect,
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
     render_state::scissor_region,
+    stretch_rect::{SameSurfaceRoute, StretchRegion, same_surface_route},
 };
 use mtld3d_shared::{InPtr, ValueIn};
 use mtld3d_types::{
@@ -28,7 +33,9 @@ use mtld3d_types::{
     D3DSURFACE_DESC, D3DUSAGE_RENDERTARGET,
 };
 
-use super::{DeviceInner, Direct3DDevice9, StretchSurfaceInfo, refuse_under_core};
+use super::{
+    DeviceInner, Direct3DDevice9, StretchSurfaceFlags, StretchSurfaceInfo, refuse_under_core,
+};
 use crate::{
     bound_rt::RENDER_TARGET_SLOTS,
     surface::{Direct3DSurface9, SystemMemoryDst},
@@ -241,6 +248,145 @@ pub fn core_read_into(
     ok
 }
 
+/// A colour `StretchRect` past mtld3d's gates, each pair the source's then the destination's.
+pub struct StretchCall<'a> {
+    /// The surfaces, as the call passed them.
+    pub surfaces: [*mut c_void; 2],
+    /// What `resolve_stretch_surface` made of them.
+    pub infos: [&'a StretchSurfaceInfo; 2],
+    /// The rects as parsed: not empty, and inside their surfaces.
+    pub regions: [StretchRegion; 2],
+    /// The rects as passed: null, or the caller's `RECT`.
+    pub rects: [*const c_void; 2],
+    /// The two regions differ in size.
+    pub scaling: bool,
+    /// Either format is a planar YUV one.
+    pub planar_endpoint: bool,
+    /// The device's `expand_packed16`, as `copies_bytes` reads it.
+    pub expand_packed16: bool,
+}
+
+/// `StretchRect` of colour on a core device: a resolve, or a copy into a target texel for texel.
+///
+/// The caller has run mtld3d's gates (the filter, the endpoints' classes and pools, the formats,
+/// the rects, a stretch inside one surface, the planar and scaling rules), so a call mtld3d
+/// rejects at its gates has answered `D3DERR_INVALIDCALL` before this, and what arrives is a
+/// valid shape (DXMTRS C4c-4a). In order:
+///
+/// - the multisample resolve `resolve_shape` records (DXMTRS C4b-3d5);
+/// - refused by name: a scaled copy, a multisampled end, and a copy that converts into anything
+///   but a plain surface (mtld3d's `cross_format`: a planar end, or bytes that do not copy);
+/// - a destination that is a render target itself (the back buffer, an additional swap chain's,
+///   a standalone target, a render-target texture's level or cube face) is written on the GPU
+///   (DXMTRS C4c-4b), from a target, a level of a texture that is no target or a plain surface.
+///   Two ends in one texture copy when mtld3d's `same_surface_route` says `Direct` (two levels,
+///   two faces, disjoint rects); identical rects are `D3D_OK` with nothing recorded, and
+///   overlapping ones are refused by name. Each end's texture has its CPU writes uploaded first,
+///   the source's so that its core texture exists. A level so written is claimed for the GPU,
+///   so its next lock reads the copy back, and an AUTOGENMIPMAP destination regenerates its
+///   chain, as after `ColorFill`;
+/// - any other destination is refused by name.
+///
+/// The destination itself is tested, not the pair's class: on a core device the GPU writes
+/// nothing but targets, whose locks read it back, and an extended device's whole-surface copy
+/// passes mtld3d's class gate into a level that is no target. A copy the core does not record
+/// is logged and `D3DERR_INVALIDCALL`.
+pub fn stretch_colour(this: *mut c_void, call: &StretchCall<'_>) -> i32 {
+    if resolve_shape(this, call.surfaces, call.rects).is_some() {
+        return D3D_OK;
+    }
+    let [src_info, dst_info] = call.infos;
+    let [src_region, dst_region] = call.regions;
+    let cross_format = call.planar_endpoint
+        || !super::copies_bytes(src_info.format, dst_info.format, call.expand_packed16);
+    let plain_dst = dst_info
+        .flags
+        .contains(StretchSurfaceFlags::IS_OFFSCREEN_PLAIN_DEFAULT);
+    if call.scaling
+        || src_info.sample_count > 1
+        || dst_info.sample_count > 1
+        || (cross_format && !plain_dst)
+    {
+        return refuse_stretch();
+    }
+    let src_surf = call.surfaces[0].cast::<Direct3DSurface9>();
+    let dst_surf = call.surfaces[1].cast::<Direct3DSurface9>();
+    // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
+    // the call per the ABI.
+    let src = unsafe { &*src_surf };
+    // SAFETY: as above.
+    let dst = unsafe { &*dst_surf };
+    let (src_parent, dst_parent) = (src.parent_texture(), dst.parent_texture());
+    let route = same_surface_route(
+        src_region,
+        dst_region,
+        src_info.mip_level,
+        dst_info.mip_level,
+        src_info.slice.unwrap_or(0),
+        dst_info.slice.unwrap_or(0),
+    );
+    if dst_info
+        .flags
+        .contains(StretchSurfaceFlags::IS_RENDER_TARGET)
+    {
+        let source = src.core_target().or_else(|| {
+            // SAFETY: null, or the source level's parent texture, live while the level is.
+            let parent = unsafe { src_parent.as_ref() }?;
+            Some(TargetRef::Texture {
+                id: parent.texture_id(),
+                level: src.mip_level(),
+                face: src.cube_face(),
+            })
+        });
+        let destination = dst.core_target();
+        let core = core_device(this).and_then(DeviceInner::core_mut);
+        let (Some(source), Some(destination), Some(core)) = (source, destination, core) else {
+            log::error!(target: crate::LOG_TARGET,
+                "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
+            return D3DERR_INVALIDCALL;
+        };
+        let one_texture = match (source, destination) {
+            (TargetRef::BackBuffer, TargetRef::BackBuffer) => true,
+            (TargetRef::Texture { id, .. }, TargetRef::Texture { id: to, .. }) => id == to,
+            _ => false,
+        };
+        if one_texture {
+            match route {
+                SameSurfaceRoute::Skip => return D3D_OK,
+                SameSurfaceRoute::Scratch => return refuse_stretch(),
+                SameSurfaceRoute::Direct => {}
+            }
+        }
+        // SAFETY: null, or the source level's parent texture, live while the level is and
+        // distinct from the device.
+        if let Some(texture) = unsafe { src_parent.as_mut() } {
+            // Its core texture exists from here, with every CPU write so far uploaded.
+            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+        }
+        let separate = dst_parent != src_parent;
+        // SAFETY: null, or the destination level's parent texture, live while the level is and
+        // distinct from the device and from the source's.
+        if separate && let Some(texture) = unsafe { dst_parent.as_mut() } {
+            // Its owed uploads are recorded ahead of the copy, in the same blit pass.
+            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+        }
+        let rect = [src_region.x, src_region.y, src_region.w, src_region.h];
+        if !core.copy(source, rect, destination, [dst_region.x, dst_region.y]) {
+            log::error!(target: crate::LOG_TARGET,
+                "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
+            return D3DERR_INVALIDCALL;
+        }
+        if !dst_parent.is_null() {
+            super::claim_dst_subresource_for_gpu(dst_surf, dst_info);
+        }
+        if let Some(id) = dst_info.autogen_texture_id {
+            core.texture_generate_mips(id);
+        }
+        return D3D_OK;
+    }
+    refuse_stretch()
+}
+
 /// `StretchRect` on a core device: a multisampled render target resolved into a single-sample one.
 ///
 /// The caller has run mtld3d's gates (the filter, the endpoints' classes and pools, the
@@ -263,8 +409,7 @@ pub fn stretch_rect_resolve(
     if resolve_shape(this, surfaces, rects).is_some() {
         D3D_OK
     } else {
-        refuse_under_core("IDirect3DDevice9::StretchRect (other than a multisample resolve)");
-        D3DERR_NOTAVAILABLE
+        refuse_stretch()
     }
 }
 
@@ -432,6 +577,17 @@ fn resolve_shape(
         let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
     }
     core.resolve_into(source, destination).then_some(())
+}
+
+/// Refuses a valid `StretchRect` the core does not do yet, with one warning a process.
+///
+/// The one place that names the call: the warning is keyed on the name's address and the gates
+/// count one line a launch, so the name has one copy, in a body never inlined (DXMTRS C4c-4b).
+#[cold]
+#[inline(never)]
+fn refuse_stretch() -> i32 {
+    refuse_under_core("IDirect3DDevice9::StretchRect (other than a multisample resolve)");
+    D3DERR_NOTAVAILABLE
 }
 
 /// `surface`'s `GetDesc` (at `ptr`, the same surface); `None` when it fails.
