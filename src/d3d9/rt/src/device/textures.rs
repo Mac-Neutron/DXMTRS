@@ -6,7 +6,7 @@
 //! uploads share one blit pass, which the next render pass, Clear, read-back or commit closes.
 //! The bytes staged in the chunk being recorded are counted: past the profile's budget the chunk
 //! is committed, so a frame that uploads more than a 32-bit process can hold in ring blocks
-//! retires them as it goes.
+//! retires them as it goes. The back buffer is written from CPU rows the same way (DXMTRS C4c-3b).
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use dxmt_core::{
         Texture, TextureAllocationFlags, TextureViewDescriptor, TextureViewKey, texture_info,
     },
 };
-use mtld3d_core::ids::TextureId;
+use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE_CUBE, WMT_TEXTURE_TYPE2D,
@@ -29,6 +29,7 @@ use winemetal_sys::wire::{
 use super::{
     CoreDevice, LOG_TARGET, TargetRef,
     draw::Stage,
+    surface::rect_bytes,
     target::{Resolved, Shape},
 };
 
@@ -460,12 +461,67 @@ impl CoreDevice {
         let Some(stored) = self.textures.get(&id) else {
             return false;
         };
-        let desc = stored.desc;
         let texture = Arc::clone(&stored.texture);
-        let Some(copy) = Blit::of(&desc, region) else {
+        let Some(copy) = Blit::of(&stored.desc, region) else {
             return false;
         };
-        let (src_row, src_image) = (bytes_per_row as usize, bytes_per_image as usize);
+        let pitches = (bytes_per_row as usize, bytes_per_image as usize);
+        self.upload(texture, region.level, &copy, bytes, pitches)
+    }
+
+    /// Writes the whole back buffer from CPU rows of its BGRA8 texels, `pitch` bytes apart.
+    ///
+    /// In application order, as [`CoreDevice::texture_upload`] records an upload: the rows are
+    /// packed in a staging-ring block now, and a blit copies them at the chunk's encode, after
+    /// every pass recorded before it. A Clear recorded before stays under them, and the next pass
+    /// on the back buffer loads them (DXMTRS C4c-3b). False, and nothing recorded, without a back
+    /// buffer, for a multisampled one (no blit writes its companion), for an empty extent, a pitch
+    /// under the row or `bytes` short of the rows.
+    #[must_use]
+    pub fn write_presented(&mut self, bytes: &[u8], pitch: usize) -> bool {
+        let (Some(shape), Some(back_buffer)) =
+            (self.shape(TargetRef::BackBuffer), &self.back_buffer)
+        else {
+            return false;
+        };
+        if shape.samples > 1 {
+            return false;
+        }
+        let whole = DirtyRect::full(shape.width, shape.height);
+        let Some((row_bytes, _)) = rect_bytes(shape, whole, bytes.len(), pitch) else {
+            return false;
+        };
+        let texture = Arc::clone(back_buffer.presented().0);
+        let copy = Blit {
+            slice: 0,
+            origin: WMTOrigin { x: 0, y: 0, z: 0 },
+            size: WMTSize {
+                width: u64::from(shape.width),
+                height: u64::from(shape.height),
+                depth: 1,
+            },
+            row_bytes,
+            rows: shape.height,
+            images: 1,
+        };
+        // One image: its pitch is never read.
+        self.upload(texture, 0, &copy, bytes, (pitch, 0))
+    }
+
+    /// Records `copy` of `bytes` into level `level` of `texture`, after every pass recorded before.
+    ///
+    /// `bytes`' rows are `src_row` bytes apart and its images `src_image`. The rows are packed in
+    /// a staging-ring block now; the blit runs in the blit pass consecutive uploads share, and
+    /// past the staged budget the chunk is committed. False, and nothing recorded, for a row
+    /// pitch under the copy's row or `bytes` short of its rows.
+    fn upload(
+        &mut self,
+        texture: Arc<Texture>,
+        level: u32,
+        copy: &Blit,
+        bytes: &[u8],
+        (src_row, src_image): (usize, usize),
+    ) -> bool {
         let needed = src_image * (copy.images as usize - 1)
             + src_row * (copy.rows as usize - 1)
             + copy.row_bytes as usize;
@@ -473,30 +529,13 @@ impl CoreDevice {
             return false;
         }
         let total = u64::from(copy.row_bytes) * u64::from(copy.rows) * u64::from(copy.images);
-        let (block, offset) = self.device.queue_mut().allocate_staging_buffer(total, 16);
-        let Ok(start) = usize::try_from(offset) else {
+        let layout = (copy.row_bytes, copy.rows, copy.images);
+        let Some((buffer, offset)) = self.stage_rows(bytes, (src_row, src_image), layout) else {
             return false;
         };
-        if block.mapped.is_null() {
-            log::error!(target: LOG_TARGET, "d3d9 core: a staging block this process cannot reach");
-            return false;
-        }
-        let tight = copy.row_bytes as usize;
-        for image in 0..copy.images as usize {
-            for row in 0..copy.rows as usize {
-                let from = image * src_image + row * src_row;
-                let to = (image * copy.rows as usize + row) * tight;
-                let src = &bytes[from..from + tight];
-                // SAFETY: the block's mapping holds `total` bytes from `start`; `to + tight` is
-                // within them.
-                let dst = unsafe { block.mapped.add(start + to) };
-                // SAFETY: `dst` holds `tight` writable bytes (above), which `src` (the caller's
-                // slice) does not overlap.
-                unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, tight) };
-            }
-        }
         self.open_blit_pass();
-        let (buffer, level, slice) = (block.buffer, region.level, copy.slice);
+        let (slice, origin, size, bytes_per_row) =
+            (copy.slice, copy.origin, copy.size, copy.row_bytes);
         let bytes_per_image = copy.row_bytes * copy.rows;
         self.emit(move |enc| {
             let dst =
@@ -507,13 +546,13 @@ impl CoreDevice {
                 next: NO_NEXT,
                 src: buffer,
                 src_offset: offset,
-                bytes_per_row: copy.row_bytes,
+                bytes_per_row,
                 bytes_per_image,
-                size: copy.size,
+                size,
                 dst,
                 slice,
                 level,
-                origin: copy.origin,
+                origin,
             });
         });
         self.staged_bytes += total;
@@ -521,6 +560,42 @@ impl CoreDevice {
             self.commit();
         }
         true
+    }
+
+    /// Copies rows of `bytes` into a new staging-ring block, packed: its buffer and offset.
+    ///
+    /// `images` images of `rows` rows of `row_bytes` bytes: row `r` of image `i` is read at
+    /// `i * src_image + r * src_row` of `bytes`, which the caller checked holds every row, and
+    /// lands right after the row before it. None, with an error, when the block has no mapping
+    /// this process reaches.
+    fn stage_rows(
+        &mut self,
+        bytes: &[u8],
+        (src_row, src_image): (usize, usize),
+        (row_bytes, rows, images): (u32, u32, u32),
+    ) -> Option<(u64, u64)> {
+        let total = u64::from(row_bytes) * u64::from(rows) * u64::from(images);
+        let (block, offset) = self.device.queue_mut().allocate_staging_buffer(total, 16);
+        let start = usize::try_from(offset).ok()?;
+        if block.mapped.is_null() {
+            log::error!(target: LOG_TARGET, "d3d9 core: a staging block this process cannot reach");
+            return None;
+        }
+        let tight = row_bytes as usize;
+        for i in 0..images as usize {
+            for r in 0..rows as usize {
+                let from = i * src_image + r * src_row;
+                let to = (i * rows as usize + r) * tight;
+                let src = &bytes[from..from + tight];
+                // SAFETY: the block's mapping holds `total` bytes from `start`; `to + tight` is
+                // within them.
+                let dst = unsafe { block.mapped.add(start + to) };
+                // SAFETY: `dst` holds `tight` writable bytes (above), which `src` (the caller's
+                // slice) does not overlap.
+                unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, tight) };
+            }
+        }
+        Some((block.buffer, offset))
     }
 
     /// Regenerates `id`'s levels below 0 from level 0 (`D3DUSAGE_AUTOGENMIPMAP`), in API order.

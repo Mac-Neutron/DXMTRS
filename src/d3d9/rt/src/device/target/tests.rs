@@ -1678,3 +1678,46 @@ fn a_draw_after_an_upload_loads_it() {
     assert!(renders[0] < upload && upload < renders[1], "{calls:#?}");
     assert_eq!(draws(&calls), 1, "{calls:#?}");
 }
+
+/// A Clear, a write of the whole back buffer, then a draw: the draw's pass loads the write.
+///
+/// The back buffer's twin of `a_draw_after_an_upload_loads_it`: the Clear is a pass of its own
+/// before the write's copy into the back buffer's texture (DXMTRS C4c-3b).
+#[test]
+fn a_draw_after_a_back_buffer_write_loads_it() {
+    const DEVICE: u64 = 0x3b0;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
+    assert!(core.write_presented(&[0x55; 64 * 4 * 32], 64 * 4));
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=1,0,0,1"),
+        "{calls:#?}"
+    );
+    let drawn = line(found[1], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1 "), "{calls:#?}");
+    let copied = format!("  blit copy_to_texture {back_buffer} ");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [back_buffer.clone(), back_buffer], "{calls:#?}");
+    let write = calls
+        .iter()
+        .position(|c| c.starts_with(&copied))
+        .unwrap_or_else(|| panic!("no write: {calls:#?}"));
+    let renders = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| *c == "MTLCommandBuffer_renderCommandEncoder")
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    assert!(renders[0] < write && write < renders[1], "{calls:#?}");
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
+}

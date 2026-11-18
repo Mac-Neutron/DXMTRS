@@ -207,16 +207,17 @@ impl CoreDevice {
     }
 }
 
-/// The bytes of a row of `rect` and of all its rows, at `shape`'s texel size, when it is read.
+/// The bytes of a row of `rect` and of all its rows, at `shape`'s texel size, read or written.
 ///
-/// None for an empty rect or one that leaves `shape`'s extent, a texel of no bytes, rows
-/// `dst_pitch` apart that do not hold a row, `dst_len` bytes that do not hold the rows, or 4 GiB
-/// or more (the blit names its bytes in `u32`). Counted in `u64`, each converted once.
-fn rect_bytes(
+/// `len` and `pitch` are the CPU side's: a read's destination, a write's source. None for an
+/// empty rect or one that leaves `shape`'s extent, a texel of no bytes, rows `pitch` apart that
+/// do not hold a row, `len` bytes that do not hold the rows, or 4 GiB or more (the blit names
+/// its bytes in `u32`). Counted in `u64`, each converted once.
+pub(super) fn rect_bytes(
     shape: Shape,
     rect: DirtyRect,
-    dst_len: usize,
-    dst_pitch: usize,
+    len: usize,
+    pitch: usize,
 ) -> Option<(u32, u32)> {
     let inside = |start: u32, extent: u32, edge: u32| {
         start.checked_add(extent).is_some_and(|end| end <= edge)
@@ -230,9 +231,9 @@ fn rect_bytes(
         return None;
     }
     let row = u64::from(rect.w) * u64::from(shape.texel_bytes);
-    let pitch = u64::try_from(dst_pitch).ok()?;
+    let pitch = u64::try_from(pitch).ok()?;
     let needed = pitch.checked_mul(u64::from(rect.h - 1))?.checked_add(row)?;
-    if pitch < row || u64::try_from(dst_len).ok()? < needed {
+    if pitch < row || u64::try_from(len).ok()? < needed {
         return None;
     }
     let image = row.checked_mul(u64::from(rect.h))?;

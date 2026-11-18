@@ -255,6 +255,87 @@ fn a_refused_read_records_nothing() {
     assert!(!core.read_presented(texels(0, 0, 1, 1), &mut [0_u8; 4], 4));
 }
 
+/// A write of the back buffer from rows wider than its row is one copy of the whole, packed.
+///
+/// The fewest bytes the rows take are enough; the copy's rows are the back buffer's 256 bytes.
+#[test]
+fn a_back_buffer_write_packs_its_rows() {
+    const DEVICE: u64 = 0x3b1;
+    let mut core = core_with_samples(DEVICE, 1);
+    core.drain();
+    let presented = back_buffers(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let pitch = 64 * 4 + 12;
+    assert!(core.write_presented(&vec![0_u8; pitch * 31 + 64 * 4], pitch));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let copies = copies_to_texture(&calls);
+    assert_eq!(copies.len(), 1, "{calls:#?}");
+    let copy = &calls[copies[0]];
+    assert!(
+        copy.starts_with(&format!(
+            "  blit copy_to_texture {presented} level=0 slice=0 origin=0,0,0 size=64x32x1 "
+        )),
+        "{copy}"
+    );
+    assert!(
+        copy.ends_with(" bytes_per_row=256 bytes_per_image=8192"),
+        "{copy}"
+    );
+}
+
+/// A write the back buffer cannot take is refused, and nothing is recorded.
+///
+/// A multisampled back buffer, a pitch under the row and bytes short of the rows; and a device
+/// without a back buffer.
+#[test]
+fn a_refused_back_buffer_write_records_nothing() {
+    let bytes = vec![0_u8; 64 * 4 * 32];
+    for (what, device, samples, len, pitch) in [
+        ("a multisampled back buffer", 0x3b2, 4, 64 * 4 * 32, 64 * 4),
+        ("a pitch under the row", 0x3b3, 1, 64 * 4 * 32, 64 * 4 - 1),
+        ("bytes short of the rows", 0x3b4, 1, 64 * 4 * 32 - 1, 64 * 4),
+    ] {
+        let mut core = core_with_samples(device, samples);
+        core.drain();
+        let _ = dxmt_fakes::take_calls(device);
+        assert!(!core.write_presented(&bytes[..len], pitch), "{what}");
+        core.drain();
+        let calls = dxmt_fakes::take_calls(device);
+        assert!(calls.is_empty(), "{what}: {calls:#?}");
+    }
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { winemetal_sys::Obj::adopt(0x3b5) }.expect("a non-zero handle");
+    let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
+    assert!(!core.write_presented(&bytes, 64 * 4));
+}
+
+/// A write of the back buffer before a Present and one after it are recorded in that order.
+#[test]
+fn back_buffer_writes_keep_their_order_around_a_present() {
+    const DEVICE: u64 = 0x3b6;
+    let mut core = core_with_samples(DEVICE, 1);
+    let bytes = vec![0_u8; 64 * 4 * 32];
+    assert!(core.write_presented(&bytes, 64 * 4));
+    core.present(true, 0.0);
+    assert!(core.write_presented(&bytes, 64 * 4));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let copies = copies_to_texture(&calls);
+    let present = at(&calls, "MTLCommandBuffer_presentDrawable");
+    assert_eq!(copies.len(), 2, "{calls:#?}");
+    assert!(copies[0] < present && present < copies[1], "{calls:#?}");
+}
+
+/// The indices of the copies into a texture `calls` shows.
+fn copies_to_texture(calls: &[String]) -> Vec<usize> {
+    calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.trim_start().starts_with("blit copy_to_texture "))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// The rect of `width` x `height` texels at (`x`, `y`).
 const fn texels(x: u32, y: u32, width: u32, height: u32) -> DirtyRect {
     DirtyRect {
