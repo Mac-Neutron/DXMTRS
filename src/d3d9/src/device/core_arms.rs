@@ -1,17 +1,18 @@
 //! The entry points the core runtime implements (DXMTRS C4a): thin arms over `d3d9_rt`.
 //!
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
-//! and the call's result for a device of the core runtime. `StretchRect` and `ColorFill` run
-//! mtld3d's gates on both runtimes, so a call they reject answers `D3DERR_INVALIDCALL` on both,
-//! and a core device leaves past them for `stretch_rect_resolve`, or `color_fill` for a colour
-//! target (DXMTRS C4c-4a). What an arm does not cover yet (a Present with rects or another
-//! window, a valid `StretchRect` other than a multisample resolve) is refused with one warning
-//! (C4-13). Clear and the read-back go to and come from the bound colour target (DXMTRS
+//! and the call's result for a device of the core runtime. `StretchRect`, `ColorFill` and
+//! `UpdateSurface` run mtld3d's gates on both runtimes, so a call they reject answers
+//! `D3DERR_INVALIDCALL` on both, and a core device leaves past them for `stretch_rect_resolve`,
+//! `color_fill` for a colour target, or `update_color_target` for a region of the back buffer
+//! or a render target (DXMTRS C4c-4a). What an arm does not cover yet (a Present with rects or
+//! another window, a valid `StretchRect` other than a multisample resolve) is refused with one
+//! warning (C4-13). Clear and the read-back go to and come from the bound colour target (DXMTRS
 //! C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
-use d3d9_rt::device::TargetRef;
+use d3d9_rt::device::{TargetRef, UploadRegion};
 use mtld3d_core::{
     clear_area::{ClearArea, clear_area, clear_regions},
     convert::d3dcolor_to_rgba_f32,
@@ -311,6 +312,64 @@ pub fn color_fill(
     }
     if let Some(id) = info.autogen_texture_id {
         core.texture_generate_mips(id);
+    }
+    D3D_OK
+}
+
+/// `UpdateSurface` of a region into the back buffer or a standalone render target.
+///
+/// The caller has run mtld3d's rejects (a multisampled destination, the source's pool and
+/// backing, the formats and their conversion, the source rect and the destination point), so
+/// `rows` hold the region in the destination's format, `row_bytes` apart from its first texel,
+/// and `origin` and `extent`, in texels of the destination, lie inside it. The back buffer (an
+/// additional swap chain's too, which aliases it, C4b3d1-4) takes them through `write_presented`,
+/// a standalone render target through an upload of its level 0; both are recorded in application
+/// order, after the passes before them and under the passes after. A lockable target's staging
+/// is stale after it, as after a draw: its next lock reads the target back (DXMTRS C4c-4a). A
+/// write the core refuses, or a pitch or image size past `u32`, is logged and
+/// `D3DERR_INVALIDCALL`.
+pub fn update_color_target(
+    dev: &mut DeviceInner,
+    surface: &Direct3DSurface9,
+    origin: (u32, u32),
+    extent: (u32, u32),
+    rows: &[u8],
+    row_bytes: usize,
+) -> i32 {
+    let target = surface.core_target();
+    let written = match (target, dev.core_mut()) {
+        (Some(TargetRef::BackBuffer), Some(core)) => {
+            let rect = DirtyRect {
+                x: origin.0,
+                y: origin.1,
+                w: extent.0,
+                h: extent.1,
+            };
+            core.write_presented(rect, rows, row_bytes)
+        }
+        (Some(TargetRef::Texture { id, .. }), Some(core)) => {
+            let region = UploadRegion {
+                level: 0,
+                slice: 0,
+                x: origin.0,
+                y: origin.1,
+                z: 0,
+                width: extent.0,
+                height: extent.1,
+                depth: 1,
+            };
+            u32::try_from(row_bytes).is_ok_and(|pitch| {
+                pitch
+                    .checked_mul(extent.1)
+                    .is_some_and(|image| core.texture_upload(id, region, rows, pitch, image))
+            })
+        }
+        _ => false,
+    };
+    if !written {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: UpdateSurface into {target:?} at {origin:?} ({extent:?}) was not recorded → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
     }
     D3D_OK
 }

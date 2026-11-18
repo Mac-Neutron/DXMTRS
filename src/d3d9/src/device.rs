@@ -8451,11 +8451,6 @@ extern "system" fn device_update_surface(
     dst_point: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::UpdateSurface",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable args; live `Direct3DSurface9` pointers per the ABI.
     let Some(src_surf) = (unsafe { InPtr::<crate::surface::Direct3DSurface9>::opt(src) }) else {
@@ -8615,9 +8610,15 @@ extern "system" fn device_update_surface(
         publish_staging_write(tex);
         return D3D_OK;
     }
+    // A core device's colour surfaces have no Metal handle; the core knows them as its targets.
+    // Keyed on the device being core: `core_target()` answers the back buffer on either runtime.
+    #[cfg(feature = "core-runtime")]
+    let core_target = is_core_device(this) && dst_surf.core_target().is_some();
+    #[cfg(not(feature = "core-runtime"))]
+    let core_target = false;
     // A render-target surface or the back buffer: a colour surface with no
     // texture behind it, whose Metal texture takes the region directly.
-    if dst_parent.is_null() && !dst_surf.metal_color_handle().is_null() {
+    if dst_parent.is_null() && (!dst_surf.metal_color_handle().is_null() || core_target) {
         // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
         let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
             return D3DERR_INVALIDCALL;
@@ -8684,7 +8685,9 @@ extern "system" fn device_update_surface(
 /// `D3DPOOL_SYSTEMMEM` surface, standalone or a texture level, its region is
 /// held to the rules a texture destination applies, and a pair of two
 /// formats converts where the update codec covers it, as it does into a
-/// texture. A multisampled destination is refused, as D3D9 refuses one.
+/// texture. A multisampled destination is refused, as D3D9 refuses one. A
+/// core device runs the same rejects and builds the same rows, then hands them
+/// to `core_arms::update_color_target` in place of the encoder operation.
 fn update_surface_into_color_target(
     dev: &mut DeviceInner,
     src_surf: &crate::surface::Direct3DSurface9,
@@ -8799,6 +8802,19 @@ fn update_surface_into_color_target(
         ) {
             return reject(10, "the conversion ran past the source backing");
         }
+    }
+    // A core device writes the region through the core, past the rejects: what follows reads a
+    // Metal handle its surfaces lack and records for mtld3d's encoder.
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return core_arms::update_color_target(
+            dev,
+            dst_surf,
+            origin,
+            (region.w, region.h),
+            &rows,
+            row_bytes,
+        );
     }
     let scale = dst_surf.render_scale();
     let texture = TargetExtent::whole(scale, dst_extent).texture();
@@ -10562,9 +10578,9 @@ extern "system" fn device_create_offscreen_plain_surface(
     // StretchRect) and hand back its owned level-0 surface: lock/unlock/upload
     // reuse the texture machinery, StretchRect resolves the texture handle. No
     // D3DUSAGE_* (offscreen plain), single mip. A core device takes the same arm:
-    // the texture keeps its staging and records nothing, and a lock and a device
-    // context are the uses it serves (`StretchRect`, `ColorFill` and
-    // `UpdateSurface` refuse).
+    // the texture keeps its staging and records nothing; a lock, a device
+    // context, `ColorFill` and `UpdateSurface` write that staging, and
+    // `StretchRect` refuses it.
     if pool == D3DPOOL_DEFAULT {
         let mut tex_out: *mut c_void = core::ptr::null_mut();
         let hr = create_texture_path(&TextureCreateArgs {
