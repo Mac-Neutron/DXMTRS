@@ -1,7 +1,8 @@
 //! Surfaces on the core: read-back, and the resolve of a multisampled target.
 //!
-//! A colour target read back into a system-memory surface's bytes (`GetRenderTargetData`), and a
-//! multisampled target resolved into a single-sample one (`StretchRect`'s resolve).
+//! A colour target read back into a system-memory surface's bytes (`GetRenderTargetData`), a
+//! rect of the back buffer read as Present shows it (DXMTRS C4c-3a), and a multisampled target
+//! resolved into a single-sample one (`StretchRect`'s resolve).
 
 use std::sync::Arc;
 
@@ -11,21 +12,26 @@ use dxmt_core::{
     format::{CAP_RESOLVE, device_capability_map},
     staging::Staging,
 };
+use mtld3d_core::dirty_rect::DirtyRect;
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMTOrigin, WMTSize,
     WmtcmdBlitCopyFromTextureToBuffer,
 };
 
-use super::{CoreDevice, TargetRef};
+use super::{
+    CoreDevice, TargetRef,
+    target::{Resolved, Shape},
+};
 
 impl CoreDevice {
     /// Copies the target `source` into `dst`, rows `dst_pitch` bytes apart (`GetRenderTargetData`).
     ///
-    /// A blit of the source's one level and slice into the device's read-back buffer, that
-    /// subresource tracked as read so the blit waits for the passes that wrote it, then a wait
-    /// for its chunk (C4-12). The rows are the source's width in its texels. False, and nothing
-    /// recorded, when `source` does not resolve, is multisampled (Metal blits no multisampled
-    /// texture; D3D9 refuses one, DXMTRS C4b-3d5) or `dst` is too small.
+    /// A blit of the source's one level and slice into the device's read-back buffer (kept while
+    /// long enough, made anew only to grow), that subresource tracked as read so the blit waits
+    /// for the passes that wrote it, then a wait for its chunk (C4-12). The rows are the source's
+    /// width in its texels. False, and nothing recorded, when `source` does not resolve, is
+    /// multisampled (Metal blits no multisampled texture; D3D9 refuses one, DXMTRS C4b-3d5) or
+    /// `dst` is too small.
     pub fn read_back(&mut self, source: TargetRef, dst: &mut [u8], dst_pitch: usize) -> bool {
         let Some(target) = self.resolve(source) else {
             return false;
@@ -34,34 +40,74 @@ impl CoreDevice {
         if shape.samples > 1 {
             return false;
         }
-        let (width, height) = (shape.width, shape.height);
-        let bytes_per_row = width * shape.texel_bytes;
-        let row = bytes_per_row as usize;
-        let needed = dst_pitch * (height as usize).saturating_sub(1) + row;
-        if height == 0 || dst_pitch < row || dst.len() < needed {
+        let whole = DirtyRect::full(shape.width, shape.height);
+        let Some(sizes) = rect_bytes(shape, whole, dst.len(), dst_pitch) else {
             return false;
-        }
-        let (level, slice) = (shape.level, shape.slice);
-        let texture = target.texture;
-        let length = u64::from(bytes_per_row) * u64::from(height);
-        // One buffer, remade when a source of another size or row is read.
+        };
+        self.read_rect(target, whole, sizes, dst, dst_pitch)
+    }
+
+    /// Copies `rect` of the back buffer, as Present would show it now, into `dst`.
+    ///
+    /// `rect` is in texels of the BGRA8 back buffer; its rows land `dst_pitch` bytes apart. A
+    /// multisampled back buffer is first resolved into the presented texture as Present resolves
+    /// it, through the view its last pass or Clear wrote it in; a single-sample one is read as
+    /// drawn. Then [`CoreDevice::read_back`]'s blit of the rect, wait and copy. False, and
+    /// nothing recorded, without a back buffer, for an empty rect or one that leaves the back
+    /// buffer, a pitch under the rect's row, or a `dst` too small (DXMTRS C4c-3a).
+    #[must_use]
+    pub fn read_presented(&mut self, rect: DirtyRect, dst: &mut [u8], dst_pitch: usize) -> bool {
+        let (Some(shape), Some(back_buffer)) =
+            (self.shape(TargetRef::BackBuffer), &self.back_buffer)
+        else {
+            return false;
+        };
+        let Some(sizes) = rect_bytes(shape, rect, dst.len(), dst_pitch) else {
+            return false;
+        };
+        let (texture, key) = back_buffer.presented();
+        let presented = Resolved {
+            texture: Arc::clone(texture),
+            key,
+            shape: Shape {
+                samples: 1,
+                ..shape
+            },
+        };
+        self.resolve_presented();
+        self.read_rect(presented, rect, sizes, dst, dst_pitch)
+    }
+
+    /// Copies `rect` of `source`'s one subresource into `dst`, rows `dst_pitch` bytes apart.
+    ///
+    /// `bytes_per_row` and `bytes_per_image` are the rect's row and rows, which `rect_bytes`
+    /// answered for this rect, source and `dst`. The blit packs the rows tightly from the start of
+    /// the read-back buffer, and they are copied out by the rect's row. False when the buffer has
+    /// no mapping this process reaches, after the wait.
+    fn read_rect(
+        &mut self,
+        source: Resolved,
+        rect: DirtyRect,
+        (bytes_per_row, bytes_per_image): (u32, u32),
+        dst: &mut [u8],
+        dst_pitch: usize,
+    ) -> bool {
+        let length = u64::from(bytes_per_image);
+        // Grown, never shrunk: a read of fewer bytes keeps the buffer there (DXMTRS C4c-3a).
         let staging = match &self.readback {
-            Some((staging, kept_row))
-                if staging.length() == length && *kept_row == bytes_per_row =>
-            {
-                Arc::clone(staging)
-            }
+            Some(staging) if staging.length() >= length => Arc::clone(staging),
             _ => {
                 let staging = Arc::new(Staging::new(
                     self.device.device(),
                     length,
                     bytes_per_row,
-                    bytes_per_row * height,
+                    bytes_per_image,
                 ));
-                self.readback = Some((Arc::clone(&staging), bytes_per_row));
+                self.readback = Some(Arc::clone(&staging));
                 staging
             }
         };
+        let (texture, level, slice) = (source.texture, source.shape.level, source.shape.slice);
         self.close_pass();
         let seq = self.device.queue().current_seq();
         staging.use_copy_destination(seq);
@@ -80,29 +126,35 @@ impl CoreDevice {
                     src,
                     slice,
                     level,
-                    origin: WMTOrigin { x: 0, y: 0, z: 0 },
+                    origin: WMTOrigin {
+                        x: u64::from(rect.x),
+                        y: u64::from(rect.y),
+                        z: 0,
+                    },
                     size: WMTSize {
-                        width: u64::from(width),
-                        height: u64::from(height),
+                        width: u64::from(rect.w),
+                        height: u64::from(rect.h),
                         depth: 1,
                     },
                     dst: allocation.buffer(),
                     offset,
                     bytes_per_row,
-                    bytes_per_image: bytes_per_row * height,
+                    bytes_per_image,
                 });
             }
             enc.end_pass();
         });
         self.sync_to(seq);
-        let source = staging.mapped_immediate_memory();
-        if source.is_null() {
+        let mapped = staging.mapped_immediate_memory();
+        if mapped.is_null() {
             return false;
         }
-        // SAFETY: the read-back buffer's mapping, `length` (row times height) bytes, which the GPU finished writing
-        // (`sync_to`) and nothing else writes until the next read-back.
-        let source = unsafe { core::slice::from_raw_parts(source, row * height as usize) };
-        for (out, line) in dst.chunks_mut(dst_pitch).zip(source.chunks(row)) {
+        let row = bytes_per_row as usize;
+        // SAFETY: the read-back buffer's mapping, at least `bytes_per_image` bytes (it is kept only
+        // while that long), which the GPU finished writing (`sync_to`) and nothing else writes
+        // until the next read-back.
+        let packed = unsafe { core::slice::from_raw_parts(mapped, bytes_per_image as usize) };
+        for (out, line) in dst.chunks_mut(dst_pitch).zip(packed.chunks(row)) {
             out[..row].copy_from_slice(line);
         }
         true
@@ -153,6 +205,37 @@ impl CoreDevice {
         caps.get(&pixel_format)
             .is_some_and(|caps| caps & CAP_RESOLVE != 0)
     }
+}
+
+/// The bytes of a row of `rect` and of all its rows, at `shape`'s texel size, when it is read.
+///
+/// None for an empty rect or one that leaves `shape`'s extent, rows `dst_pitch` apart that do not
+/// hold a row, `dst_len` bytes that do not hold the rows, or 4 GiB or more (the blit names its
+/// bytes in `u32`). Counted in `u64`, each converted once.
+fn rect_bytes(
+    shape: Shape,
+    rect: DirtyRect,
+    dst_len: usize,
+    dst_pitch: usize,
+) -> Option<(u32, u32)> {
+    let inside = |start: u32, extent: u32, edge: u32| {
+        start.checked_add(extent).is_some_and(|end| end <= edge)
+    };
+    if rect.w == 0
+        || rect.h == 0
+        || !inside(rect.x, rect.w, shape.width)
+        || !inside(rect.y, rect.h, shape.height)
+    {
+        return None;
+    }
+    let row = u64::from(rect.w) * u64::from(shape.texel_bytes);
+    let pitch = u64::try_from(dst_pitch).ok()?;
+    let needed = pitch.checked_mul(u64::from(rect.h - 1))?.checked_add(row)?;
+    if pitch < row || u64::try_from(dst_len).ok()? < needed {
+        return None;
+    }
+    let image = row.checked_mul(u64::from(rect.h))?;
+    Some((u32::try_from(row).ok()?, u32::try_from(image).ok()?))
 }
 
 #[cfg(test)]

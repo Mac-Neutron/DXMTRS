@@ -1,4 +1,4 @@
-use mtld3d_core::pipeline_key::PipelineKey;
+use mtld3d_core::{dirty_rect::DirtyRect, pipeline_key::PipelineKey};
 
 use crate::device::fixture::{
     at, core_on_fakes, ff_binds, key, line, passes, returns_within_10s, targets, textures_made,
@@ -159,6 +159,110 @@ fn a_single_sample_back_buffer_is_as_before() {
         "{calls:#?}"
     );
     at(&calls, "MTLCommandBuffer_presentDrawable");
+}
+
+/// A read of a multisampled back buffer resolves it first, as Present does, then reads that.
+///
+/// After a draw, the resolve folds into the draw's pass before the copy, and the copy reads the
+/// presented texture; a Present after the read resolves again, in a pass of its own.
+#[test]
+fn a_multisampled_back_buffer_is_read_resolved() {
+    const DEVICE: u64 = 0x3a5;
+    let mut core = core_with_samples(DEVICE, 4);
+    core.drain();
+    let made = back_buffers(&dxmt_fakes::take_calls(DEVICE));
+    let (presented, companion) = (made[0].clone(), made[1].clone());
+    let binds = ff_binds();
+    let four = PipelineKey {
+        samples: 4,
+        ..key(0xf)
+    };
+    assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
+    let mut out = [0_u8; 8];
+    assert!(core.read_presented(texels(3, 2, 2, 1), &mut out, 8));
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(targets(&calls)[0].0, companion, "{calls:#?}");
+    let resolved = at(&calls, &format!("  resolve0 {presented}"));
+    let copy = at(
+        &calls,
+        &format!("    copy_to_buffer {presented} level=0 slice=0 size=2x1 bytes_per_row=8"),
+    );
+    assert!(resolved < copy, "{calls:#?}");
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
+    assert_eq!(drawn, 0, "a resolve pass of its own: {calls:#?}");
+}
+
+/// A read of a single-sample back buffer resolves nothing: the drawn texture is the one shown.
+#[test]
+fn a_single_sample_back_buffer_is_read_as_drawn() {
+    const DEVICE: u64 = 0x3a6;
+    let mut core = core_with_samples(DEVICE, 1);
+    core.drain();
+    let drawn = back_buffers(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    let mut out = [0_u8; 4];
+    assert!(core.read_presented(texels(3, 2, 1, 1), &mut out, 4));
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("  resolve0 ") || c.contains(" store=3 ")),
+        "{calls:#?}"
+    );
+    at(
+        &calls,
+        &format!("    copy_to_buffer {drawn} level=0 slice=0 size=1x1 bytes_per_row=4"),
+    );
+}
+
+/// A read the back buffer cannot answer is refused, and nothing is recorded, a resolve included.
+///
+/// An empty rect, one past an edge or past `u32::MAX`, a pitch under the rect's row and a short
+/// destination, on a single-sample and a multisampled back buffer; and a device without one.
+#[test]
+fn a_refused_read_records_nothing() {
+    for (device, samples) in [(0x3a7, 1), (0x3a8, 4)] {
+        let mut core = core_with_samples(device, samples);
+        core.drain();
+        let _ = dxmt_fakes::take_calls(device);
+        let mut out = vec![0_u8; 64 * 4 * 32];
+        for (what, rect, len, pitch) in [
+            ("an empty width", texels(0, 0, 0, 4), 256 * 4, 256),
+            ("an empty height", texels(0, 0, 4, 0), 256 * 4, 256),
+            ("past the right edge", texels(60, 0, 8, 1), 256, 256),
+            ("past the bottom edge", texels(0, 30, 1, 4), 256 * 4, 256),
+            ("past u32::MAX", texels(u32::MAX, 0, 2, 1), 256, 256),
+            ("a pitch under the row", texels(0, 0, 4, 2), 256, 15),
+            ("a short destination", texels(0, 0, 4, 2), 31, 16),
+        ] {
+            assert!(
+                !core.read_presented(rect, &mut out[..len], pitch),
+                "{what}, {samples} samples"
+            );
+        }
+        assert!(core.readback.is_none(), "{samples} samples");
+        core.drain();
+        let calls = dxmt_fakes::take_calls(device);
+        assert!(calls.is_empty(), "{samples} samples: {calls:#?}");
+    }
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { winemetal_sys::Obj::adopt(0x3a9) }.expect("a non-zero handle");
+    let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
+    assert!(!core.read_presented(texels(0, 0, 1, 1), &mut [0_u8; 4], 4));
+}
+
+/// The rect of `width` x `height` texels at (`x`, `y`).
+const fn texels(x: u32, y: u32, width: u32, height: u32) -> DirtyRect {
+    DirtyRect {
+        x,
+        y,
+        w: width,
+        h: height,
+    }
 }
 
 /// The handles of the 64x32 textures `calls` shows made, in order: the presenter makes its own.

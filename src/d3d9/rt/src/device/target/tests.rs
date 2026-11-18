@@ -20,7 +20,7 @@ use winemetal_sys::wire::{
 use super::{Resolved, TargetRef};
 use crate::device::{
     CoreDevice, CoreTextureDesc, CoreTextureFlags, DepthRef, DrawData, DrawRefused, Stage,
-    TextureKind,
+    TextureKind, UploadRegion,
     fixture::{
         at, core_on_fakes, depth_desc, ff_binds, key, key_extras, line, ms_desc, passes,
         target_desc, targets, textures_made, triangle,
@@ -1622,4 +1622,59 @@ fn a_resolve_refuses_what_it_cannot_do() {
         !calls.contains(&"MTLCommandBuffer_renderCommandEncoder".to_owned()),
         "{calls:#?}"
     );
+}
+
+/// A Clear, an upload into that target, then a draw: the draw's pass loads the upload.
+///
+/// The Clear is a pass of its own before the upload's blit, not folded past it into the draw's
+/// pass, where it would clear the uploaded block (DXMTRS C4c-3a).
+#[test]
+fn a_draw_after_an_upload_loads_it() {
+    const DEVICE: u64 = 0x3a4;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    assert!(core.set_target(level0(t)));
+    core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
+    let block = UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 8,
+        y: 8,
+        z: 0,
+        width: 8,
+        height: 8,
+        depth: 1,
+    };
+    assert!(core.texture_upload(t, block, &[0x55; 8 * 8 * 4], 8 * 4, 8 * 8 * 4));
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=1,0,0,1"),
+        "{calls:#?}"
+    );
+    let drawn = line(found[1], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1 "), "{calls:#?}");
+    let copied = format!("  blit copy_to_texture {h_t} ");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [h_t.clone(), h_t], "{calls:#?}");
+    let upload = calls
+        .iter()
+        .position(|c| c.starts_with(&copied))
+        .unwrap_or_else(|| panic!("no upload: {calls:#?}"));
+    let renders = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| *c == "MTLCommandBuffer_renderCommandEncoder")
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    assert!(renders[0] < upload && upload < renders[1], "{calls:#?}");
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
 }

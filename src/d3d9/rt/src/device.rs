@@ -25,8 +25,11 @@ pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
     window: Option<swapchain::Window>,
-    /// The read-back destination and its row's bytes, kept until a read-back needs another.
-    readback: Option<(Arc<Staging>, u32)>,
+    /// The read-back destination, kept while it is long enough and remade only to grow.
+    ///
+    /// Reads of different sizes alternate (whole targets, rects of the back buffer); its ceiling
+    /// is the largest read's bytes, held for the device's life (DXMTRS C4c-3a).
+    readback: Option<Arc<Staging>>,
     /// The pipelines by key, each with its source (none when a stage does not parse).
     ///
     /// Handle 0 for one that did not build or was not built (its layout crosses the stride).

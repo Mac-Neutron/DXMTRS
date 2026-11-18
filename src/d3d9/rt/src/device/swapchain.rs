@@ -189,22 +189,8 @@ impl CoreDevice {
             }
             return;
         };
-        let (shown, key) = back_buffer.presented();
-        let texture = Arc::clone(shown);
-        let companion = back_buffer
-            .companion
-            .as_ref()
-            .map(|companion| (Arc::clone(&companion.texture), companion.key));
-        self.close_pass();
-        if let Some((companion, companion_key)) = companion {
-            let format = self
-                .last_written(TargetRef::BackBuffer)
-                .unwrap_or(WMT_PIXEL_FORMAT_BGRA8_UNORM);
-            let (source, destination) =
-                (companion_key.with_format(format), key.with_format(format));
-            let resolved = Arc::clone(&texture);
-            self.emit(move |enc| enc.resolve_texture(&companion, source, &resolved, destination));
-        }
+        let texture = Arc::clone(back_buffer.presented().0);
+        self.resolve_presented();
         let (frame_id, metadata) = presenter.synchronize();
         let queue = self.device.queue_mut();
         let frame = queue.current_frame_seq();
@@ -215,6 +201,31 @@ impl CoreDevice {
         });
         self.commit();
         self.device.queue().present_boundary(true);
+    }
+
+    /// Ends the open pass, then resolves a multisampled back buffer into the presented texture.
+    ///
+    /// The companion through the view its last pass or Clear wrote it in (DXMTRS C4b-3d5): folded
+    /// into the last pass when that pass drew it, a resolve pass of its own otherwise. Nothing
+    /// more for a single-sample back buffer, whose drawn texture is the presented one. What
+    /// Present records every frame, and a read of the back buffer as Present shows it before its
+    /// copy (DXMTRS C4c-3a).
+    pub(super) fn resolve_presented(&mut self) {
+        self.close_pass();
+        let Some(back_buffer) = &self.back_buffer else {
+            return;
+        };
+        let Some(companion) = &back_buffer.companion else {
+            return;
+        };
+        let (shown, key) = back_buffer.presented();
+        let (resolved, companion_key) = (Arc::clone(shown), companion.key);
+        let companion = Arc::clone(&companion.texture);
+        let format = self
+            .last_written(TargetRef::BackBuffer)
+            .unwrap_or(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+        let (source, destination) = (companion_key.with_format(format), key.with_format(format));
+        self.emit(move |enc| enc.resolve_texture(&companion, source, &resolved, destination));
     }
 }
 
