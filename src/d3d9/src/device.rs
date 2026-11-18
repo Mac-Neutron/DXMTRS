@@ -9724,6 +9724,7 @@ extern "system" fn device_stretch_rect(
     if dev.is_core() {
         return core_arms::stretch_colour(
             this,
+            &obj,
             &core_arms::StretchCall {
                 surfaces: [src, dst],
                 infos: [&src_info, &dst_info],
