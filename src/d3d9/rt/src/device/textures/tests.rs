@@ -4,7 +4,7 @@ use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BGRA8_UNOR
 use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion, plane_copies};
 use crate::device::{
     CoreDevice,
-    fixture::{at, core_on_fakes},
+    fixture::{at, core_on_fakes, ms_desc},
     queue_profile_for,
 };
 
@@ -250,6 +250,23 @@ fn forget_keeps_encoded() {
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(lines(&calls, "blit copy_to_texture").len(), 1, "{calls:#?}");
+}
+
+/// An upload into a multisampled render target is refused, and nothing is recorded.
+///
+/// No blit writes a multisampled texture.
+#[test]
+fn a_multisampled_texture_takes_no_upload() {
+    const DEVICE: u64 = 0x422;
+    let mut core = core_on_fakes(DEVICE);
+    let id = TextureId::from_raw(1);
+    core.texture_create(id, &ms_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, 8, 4));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    assert!(!core.texture_upload(id, whole(0, 0), &[0; 8 * 8 * 4], 8 * 4, 8 * 8 * 4));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(calls.is_empty(), "{calls:#?}");
 }
 
 /// A `Depth32FloatStencil8` level's copies: depth, then stencil, each of the whole level.

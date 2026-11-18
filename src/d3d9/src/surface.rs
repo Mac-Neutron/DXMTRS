@@ -3172,9 +3172,12 @@ fn backbuffer_page_upload(inner: &mut SurfaceInner) {
         // SAFETY: null, or the surface's live owning device, which outlives it and is a different
         // allocation from the page.
         let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+        let whole = mtld3d_core::dirty_rect::DirtyRect::full(width, height);
         let written = core
             .zip(inner.readback.as_ref())
-            .is_some_and(|(core, page)| core.write_presented(page.as_slice(), bytes_per_row));
+            .is_some_and(|(core, page)| {
+                core.write_presented(whole, page.as_slice(), bytes_per_row)
+            });
         if !written {
             log::error!(target: LOG_TARGET,
                 "d3d9 core: a CPU write-back of the back buffer did not write {width}x{height} \

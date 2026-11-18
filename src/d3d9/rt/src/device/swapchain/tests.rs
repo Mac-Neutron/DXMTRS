@@ -265,7 +265,11 @@ fn a_back_buffer_write_packs_its_rows() {
     core.drain();
     let presented = back_buffers(&dxmt_fakes::take_calls(DEVICE))[0].clone();
     let pitch = 64 * 4 + 12;
-    assert!(core.write_presented(&vec![0_u8; pitch * 31 + 64 * 4], pitch));
+    assert!(core.write_presented(
+        DirtyRect::full(64, 32),
+        &vec![0_u8; pitch * 31 + 64 * 4],
+        pitch
+    ));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let copies = copies_to_texture(&calls);
@@ -298,7 +302,10 @@ fn a_refused_back_buffer_write_records_nothing() {
         let mut core = core_with_samples(device, samples);
         core.drain();
         let _ = dxmt_fakes::take_calls(device);
-        assert!(!core.write_presented(&bytes[..len], pitch), "{what}");
+        assert!(
+            !core.write_presented(DirtyRect::full(64, 32), &bytes[..len], pitch),
+            "{what}"
+        );
         core.drain();
         let calls = dxmt_fakes::take_calls(device);
         assert!(calls.is_empty(), "{what}: {calls:#?}");
@@ -306,7 +313,7 @@ fn a_refused_back_buffer_write_records_nothing() {
     // SAFETY: a made-up handle, which only the fakes see.
     let mtl = unsafe { winemetal_sys::Obj::adopt(0x3b5) }.expect("a non-zero handle");
     let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
-    assert!(!core.write_presented(&bytes, 64 * 4));
+    assert!(!core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
 }
 
 /// A write of the back buffer before a Present and one after it are recorded in that order.
@@ -315,15 +322,78 @@ fn back_buffer_writes_keep_their_order_around_a_present() {
     const DEVICE: u64 = 0x3b6;
     let mut core = core_with_samples(DEVICE, 1);
     let bytes = vec![0_u8; 64 * 4 * 32];
-    assert!(core.write_presented(&bytes, 64 * 4));
+    assert!(core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
     core.present(true, 0.0);
-    assert!(core.write_presented(&bytes, 64 * 4));
+    assert!(core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let copies = copies_to_texture(&calls);
     let present = at(&calls, "MTLCommandBuffer_presentDrawable");
     assert_eq!(copies.len(), 2, "{calls:#?}");
     assert!(copies[0] < present && present < copies[1], "{calls:#?}");
+}
+
+/// A write of a rect off the origin, of an odd width, copies that rect from its first texel.
+///
+/// The copy's origin and size are the rect's, its rows the rect's row packed from rows wider
+/// than it; the draw after it loads the back buffer, in a pass after the copy.
+#[test]
+fn a_back_buffer_rect_write_lands_at_its_origin() {
+    const DEVICE: u64 = 0x420;
+    let mut core = core_with_samples(DEVICE, 1);
+    core.drain();
+    let presented = back_buffers(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    let pitch = 7 * 4 + 12;
+    let bytes = vec![0_u8; pitch * 3 + 7 * 4];
+    assert!(core.write_presented(texels(3, 5, 7, 4), &bytes, pitch));
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let copies = copies_to_texture(&calls);
+    assert_eq!(copies.len(), 1, "{calls:#?}");
+    let copy = &calls[copies[0]];
+    assert!(
+        copy.starts_with(&format!(
+            "  blit copy_to_texture {presented} level=0 slice=0 origin=3,5,0 size=7x4x1 "
+        )),
+        "{copy}"
+    );
+    assert!(
+        copy.ends_with(" bytes_per_row=28 bytes_per_image=112"),
+        "{copy}"
+    );
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(targets(&calls)[0].0, presented, "{calls:#?}");
+    let drawn = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1 "), "{calls:#?}");
+    let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+    assert!(copies[0] < render, "{calls:#?}");
+}
+
+/// A write of a rect the back buffer does not hold is refused, and nothing is recorded.
+///
+/// An empty rect, one past an edge and one past `u32::MAX`, with bytes enough for the whole.
+#[test]
+fn a_back_buffer_write_past_an_edge_records_nothing() {
+    const DEVICE: u64 = 0x421;
+    let mut core = core_with_samples(DEVICE, 1);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let bytes = vec![0_u8; 64 * 4 * 32];
+    for (what, rect) in [
+        ("an empty width", texels(0, 0, 0, 4)),
+        ("an empty height", texels(0, 0, 4, 0)),
+        ("past the right edge", texels(60, 0, 8, 1)),
+        ("past the bottom edge", texels(0, 30, 1, 4)),
+        ("past u32::MAX", texels(u32::MAX, 0, 2, 1)),
+    ] {
+        assert!(!core.write_presented(rect, &bytes, 64 * 4), "{what}");
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(calls.is_empty(), "{calls:#?}");
 }
 
 /// The indices of the copies into a texture `calls` shows.

@@ -468,7 +468,8 @@ impl CoreDevice {
     ///
     /// The rows are repacked to the format's tight row in a staging-ring block now; a blit copies
     /// them at the chunk's encode, after every pass recorded before it. False, and nothing
-    /// recorded, when the store has no `id`, the region is empty or `bytes` is short.
+    /// recorded, when the store has no `id` or holds it multisampled (no blit writes one), the
+    /// region is empty or `bytes` is short.
     pub fn texture_upload(
         &mut self,
         id: TextureId,
@@ -480,6 +481,9 @@ impl CoreDevice {
         let Some(stored) = self.textures.get(&id) else {
             return false;
         };
+        if stored.desc.samples > 1 {
+            return false;
+        }
         let texture = Arc::clone(&stored.texture);
         let Some(copy) = Blit::of(&stored.desc, region) else {
             return false;
@@ -488,16 +492,19 @@ impl CoreDevice {
         self.upload(texture, region.level, &copy, bytes, pitches)
     }
 
-    /// Writes the whole back buffer from CPU rows of its BGRA8 texels, `pitch` bytes apart.
+    /// Writes `rect` of the back buffer from CPU rows of its BGRA8 texels.
     ///
-    /// In application order, as [`CoreDevice::texture_upload`] records an upload: the rows are
-    /// packed in a staging-ring block now, and a blit copies them at the chunk's encode, after
-    /// every pass recorded before it. A Clear recorded before stays under them, and the next pass
-    /// on the back buffer loads them (DXMTRS C4c-3b). False, and nothing recorded, without a back
-    /// buffer, for a multisampled one (no blit writes its companion), for an empty extent, a pitch
-    /// under the row or `bytes` short of the rows.
+    /// `rect` is in texels of the back buffer. `bytes` starts at the rect's first texel and its
+    /// rows are `pitch` bytes apart, each at least the rect's row, as
+    /// [`CoreDevice::read_presented`]'s `dst`. In application order, as
+    /// [`CoreDevice::texture_upload`] records an upload: the rows are packed in a staging-ring
+    /// block now, and a blit copies them into the rect at the chunk's encode, after every pass
+    /// recorded before it. A Clear recorded before stays under them, and the next pass on the
+    /// back buffer loads them (DXMTRS C4c-3b). False, and nothing recorded, without a back
+    /// buffer, for a multisampled one (no blit writes its companion), for an empty rect or one
+    /// that leaves the back buffer, a pitch under the rect's row or `bytes` short of its rows.
     #[must_use]
-    pub fn write_presented(&mut self, bytes: &[u8], pitch: usize) -> bool {
+    pub fn write_presented(&mut self, rect: DirtyRect, bytes: &[u8], pitch: usize) -> bool {
         let (Some(shape), Some(back_buffer)) =
             (self.shape(TargetRef::BackBuffer), &self.back_buffer)
         else {
@@ -506,21 +513,24 @@ impl CoreDevice {
         if shape.samples > 1 {
             return false;
         }
-        let whole = DirtyRect::full(shape.width, shape.height);
-        let Some((row_bytes, _)) = rect_bytes(shape, whole, bytes.len(), pitch) else {
+        let Some((row_bytes, _)) = rect_bytes(shape, rect, bytes.len(), pitch) else {
             return false;
         };
         let texture = Arc::clone(back_buffer.presented().0);
         let copy = Blit {
             slice: 0,
-            origin: WMTOrigin { x: 0, y: 0, z: 0 },
+            origin: WMTOrigin {
+                x: u64::from(rect.x),
+                y: u64::from(rect.y),
+                z: 0,
+            },
             size: WMTSize {
-                width: u64::from(shape.width),
-                height: u64::from(shape.height),
+                width: u64::from(rect.w),
+                height: u64::from(rect.h),
                 depth: 1,
             },
             row_bytes,
-            rows: shape.height,
+            rows: rect.h,
             images: 1,
         };
         // One image: its pitch is never read.

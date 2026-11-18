@@ -1688,7 +1688,11 @@ fn a_draw_after_a_back_buffer_write_loads_it() {
     const DEVICE: u64 = 0x3b0;
     let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
     core.clear(0, [1.0, 0.0, 0.0, 1.0], false);
-    assert!(core.write_presented(&[0x55; 64 * 4 * 32], 64 * 4));
+    assert!(core.write_presented(
+        mtld3d_core::dirty_rect::DirtyRect::full(64, 32),
+        &[0x55; 64 * 4 * 32],
+        64 * 4
+    ));
     let binds = ff_binds();
     assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.drain();
