@@ -2755,15 +2755,6 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
         // the (shared cube) resource is a no-op success — see `try_end_lock`.
         return inner.try_end_lock();
     }
-    // A core device's back buffer locks read-only (DXMTRS C4c-3a): its Unlock ends the lock and
-    // drops the page, with nothing to write back.
-    #[cfg(feature = "core-runtime")]
-    if inner.implicit_kind == ImplicitKind::Backbuffer && inner.on_core_device() {
-        let hr = inner.try_end_lock();
-        inner.lock_flags = 0;
-        inner.readback = None;
-        return hr;
-    }
     // Standalone colour surface (the back-buffer read-back path). A successful
     // `LockRect` recorded the lock and stashed its page in `readback`, so
     // ending that lock drops the page (the performance-critical portrait
@@ -2793,8 +2784,9 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
 /// backbuffer texture, then blit the requested sub-rect into a page-aligned
 /// PE-heap buffer that stays alive until `UnlockRect`. `WoW` uses this for
 /// character portraits (a small sub-rect blit back to a game-side texture).
-/// On a core device the rect is read as Present would show it, and a writable
-/// lock or an additional swap chain's back buffer is refused (DXMTRS C4c-3a).
+/// On a core device the core reads it as Present would show it (DXMTRS C4c-3a), the whole
+/// surface for a writable lock, and the next `UnlockRect` writes that back (DXMTRS C4c-3b);
+/// a writable lock of a multisampled back buffer is refused.
 fn backbuffer_lock_readback(
     obj: &Direct3DSurface9,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2819,17 +2811,14 @@ fn backbuffer_lock_readback(
         );
         return D3DERR_INVALIDCALL;
     }
-    // A core device reads its back buffer through a lock but writes nothing back yet, and an
-    // additional swap chain's back buffer aliases the device's there, which is not what it would
-    // read (DXMTRS C4c-3a). Both are refused where the flag check stands, ahead of the lock state.
+    // A core device writes its back buffer back through a blit, which cannot write the
+    // multisampled companion the frame resolves from; D3D9 does not let a lockable back buffer be
+    // multisampled (DXMTRS C4c-3b). Refused where the flag check stands, ahead of the lock state.
     refuse_under_core!(
-        inner.on_core_device() && flags & D3DLOCK_READONLY == 0,
-        "IDirect3DSurface9::LockRect (a writable lock of the back buffer)",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
-    refuse_under_core!(
-        inner.on_core_device() && inner.flags.contains(SurfaceFlags::PINS_SWAP_CHAIN),
-        "IDirect3DSurface9::LockRect (an additional swap chain's back buffer)",
+        inner.on_core_device()
+            && flags & D3DLOCK_READONLY == 0
+            && inner.live_multi_sample().sample_count > 1,
+        "IDirect3DSurface9::LockRect (a writable lock of a multisampled back buffer)",
         mtld3d_types::D3DERR_NOTAVAILABLE
     );
     // The read-back page is what the lock maps, and a `GetDC` wraps the same
@@ -3062,12 +3051,36 @@ fn core_backbuffer_read_into_lock(
 /// `LockRect` portrait path has its own sub-rect variant above). The page is
 /// what the DC's DIB wraps, so it is sized and written at the surface format's
 /// host-visible pitch, which is the stride GDI derives for a DIB of the same
-/// width and bit count.
+/// width and bit count. On a core device the core reads it as Present would
+/// show it (DXMTRS C4c-3b).
 fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)> {
     if inner.device_inner.is_null() {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "back-buffer GetDC: the surface has no owning device → INVALIDCALL");
         return None;
+    }
+    #[cfg(feature = "core-runtime")]
+    if inner.on_core_device() {
+        let (w, h) = (inner.live_width(), inner.live_height());
+        // A core device's back buffer is BGRA8, four bytes a texel; zeroed, since the read
+        // writes the page through a slice.
+        let bytes_per_row = mtld3d_core::format::linear_row_pitch(w, 4);
+        let mut page = PageBox::new_zeroed((bytes_per_row as usize).saturating_mul(h as usize));
+        // SAFETY: the surface's live owning device (non-null, checked above), which outlives it
+        // and is a different allocation from the page.
+        let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+        let whole = mtld3d_core::dirty_rect::DirtyRect::full(w, h);
+        let read = core.is_some_and(|core| {
+            core.read_presented(whole, page.as_mut_slice(), bytes_per_row as usize)
+        });
+        if !read {
+            log::error!(target: LOG_TARGET,
+                "d3d9 core: a CPU read of the back buffer did not read {w}x{h} → INVALIDCALL"
+            );
+            return None;
+        }
+        inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
+        return Some((w, h, bytes_per_row));
     }
     let w = inner.live_width();
     let h = inner.live_height();
@@ -3140,7 +3153,30 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
 /// copied in as it stands. It goes through a scratch texture at its own extent
 /// and a linear-filtered quad instead, the downscale counterpart of the
 /// `MetalFX` resolve that seeded the page at `GetDC`.
+///
+/// On a core device the core writes the page into the back buffer in application order, over
+/// what was drawn before (DXMTRS C4c-3b).
 fn backbuffer_page_upload(inner: &mut SurfaceInner) {
+    #[cfg(feature = "core-runtime")]
+    if inner.on_core_device() {
+        let (width, height) = (inner.live_width(), inner.live_height());
+        // The page `readback_full_backbuffer`'s core arm read: BGRA8 rows, four bytes a texel.
+        let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, 4) as usize;
+        // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+        // allocation from the page.
+        let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+        let written = core
+            .zip(inner.readback.as_ref())
+            .is_some_and(|(core, page)| core.write_presented(page.as_slice(), bytes_per_row));
+        if !written {
+            log::error!(target: LOG_TARGET,
+                "d3d9 core: a CPU write-back of the back buffer did not write {width}x{height} \
+                 (a page held: {}); it keeps its texels",
+                inner.readback.is_some()
+            );
+        }
+        return;
+    }
     let (width, height) = (inner.live_width(), inner.live_height());
     let color_handle = inner.live_color_handle().raw();
     let live_format = inner.live_format();
@@ -3593,7 +3629,7 @@ fn core_lockable_rt_read_back(
         .is_some_and(|(core, page)| core.read_back(target, page.as_mut_slice(), pitch));
     if !read {
         log::error!(target: LOG_TARGET,
-            "d3d9 core: LockRect of a lockable render target did not read texture {:#x} back → INVALIDCALL",
+            "d3d9 core: a CPU read of a lockable render target did not read texture {:#x} back → INVALIDCALL",
             id.raw()
         );
     }
@@ -3638,7 +3674,7 @@ fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId
         });
     if !uploaded {
         log::error!(target: LOG_TARGET,
-            "d3d9 core: UnlockRect of a lockable render target did not upload texture {:#x}; it keeps its texels",
+            "d3d9 core: a CPU write-back of a lockable render target did not upload texture {:#x}; it keeps its texels",
             id.raw()
         );
     }

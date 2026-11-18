@@ -148,8 +148,8 @@ pub fn present(
 /// mtld3d's checks, in its order and with its answers: a source or destination that is no
 /// surface, a multisampled source (DXMTRS C4b-3d5), a destination that is not system memory, a
 /// source that is no render target and a destination of another size or format are
-/// `D3DERR_INVALIDCALL`. An additional swap chain's back buffer is refused: as a target it
-/// aliases the device's (C4b3d1-4), which is not what it would read.
+/// `D3DERR_INVALIDCALL`. An additional swap chain's back buffer reads as the device's, which it
+/// aliases (C4b3d1-4), as on mtld3d (DXMTRS C4c-3b).
 pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_void) -> Option<i32> {
     let dev = core_device(this)?;
     // SAFETY: `rt` is null or a caller-owned IDirect3DSurface9* per the ABI.
@@ -172,12 +172,6 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
     let Some(source) = src.core_target() else {
         return Some(D3DERR_INVALIDCALL);
     };
-    if source == TargetRef::BackBuffer && rt as u64 != dev.implicit_render_target {
-        refuse_under_core(
-            "IDirect3DDevice9::GetRenderTargetData (an additional swap chain's back buffer)",
-        );
-        return Some(D3DERR_NOTAVAILABLE);
-    }
     let Some(from) = surface_desc(&src, rt) else {
         return Some(D3DERR_INVALIDCALL);
     };
