@@ -10330,7 +10330,8 @@ fn color_fill_block_aligned(region: DirtyRect, extent: (u32, u32), block: (u32, 
 /// no pixels at all. A fill into level 0 of an `D3DUSAGE_AUTOGENMIPMAP`
 /// texture carries the mip-chain regeneration with it. `info` is consumed
 /// because the destination kind travels into the encoder operation, which
-/// cannot reach the surface.
+/// cannot reach the surface. mtld3d's alone: a core device fills through
+/// `core_arms::color_fill`.
 fn color_fill_render_target(
     dev: &mut DeviceInner,
     info: StretchSurfaceInfo,
@@ -10374,7 +10375,9 @@ fn color_fill_render_target(
 /// colour attachment, and its read-back is a `LockRect` straight into CPU
 /// staging that no path refreshes from the GPU. The fill therefore lands in
 /// the staging on this thread and rides the ordinary upload to the texture,
-/// exactly like the write half of a `LockRect` / `UnlockRect` pair.
+/// exactly like the write half of a `LockRect` / `UnlockRect` pair. A core
+/// device marks the filled rect dirty instead, and the core texture takes it
+/// when the texture is next flushed (`core_flush_dirty`).
 fn color_fill_offscreen_plain(
     dev: &mut DeviceInner,
     parent: *mut Direct3DTexture9,
@@ -10411,6 +10414,12 @@ fn color_fill_offscreen_plain(
             "ColorFill: staging fill of level {level} fell outside the mip → surface left unfilled");
         return D3D_OK;
     }
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        ti.mark_mip_dirty_rect(level as usize, region);
+        dev.mark_snapshot_dirty_all();
+        return D3D_OK;
+    }
     crate::texture::schedule_upload(ti, dev, level, region);
     D3D_OK
 }
@@ -10422,11 +10431,6 @@ extern "system" fn device_color_fill(
     color: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::ColorFill",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     if surface.is_null() {
         return D3DERR_INVALIDCALL;
@@ -10485,6 +10489,12 @@ extern "system" fn device_color_fill(
         && !color_fill_block_aligned(region, extent, (fmt.block_width(), fmt.block_height()))
     {
         return D3DERR_INVALIDCALL;
+    }
+    // A core device fills a render target through the core, past the gates: what follows reads
+    // Metal handles its surfaces lack and records for mtld3d's encoder.
+    #[cfg(feature = "core-runtime")]
+    if core && info.flags.contains(StretchSurfaceFlags::IS_RENDER_TARGET) {
+        return core_arms::color_fill(obj.inner(), surf, &info, region, color);
     }
     if info.flags.contains(StretchSurfaceFlags::IS_RENDER_TARGET) {
         // The fill runs as a render pass over the destination's Metal texture

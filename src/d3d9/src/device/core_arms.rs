@@ -1,12 +1,13 @@
 //! The entry points the core runtime implements (DXMTRS C4a): thin arms over `d3d9_rt`.
 //!
 //! Each answers `None` for a device of mtld3d's runtime, whose entry point then runs as before,
-//! and the call's result for a device of the core runtime. `StretchRect` runs mtld3d's gates on
-//! both runtimes, so a call they reject answers `D3DERR_INVALIDCALL` on both, and a core device
-//! leaves past them for `stretch_rect_resolve` (DXMTRS C4c-4a). What an arm does not cover yet (a
-//! Present with rects or another window, a valid `StretchRect` other than a multisample resolve)
-//! is refused with one warning (C4-13). Clear and the read-back go to and come from the bound
-//! colour target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! and the call's result for a device of the core runtime. `StretchRect` and `ColorFill` run
+//! mtld3d's gates on both runtimes, so a call they reject answers `D3DERR_INVALIDCALL` on both,
+//! and a core device leaves past them for `stretch_rect_resolve`, or `color_fill` for a colour
+//! target (DXMTRS C4c-4a). What an arm does not cover yet (a Present with rects or another
+//! window, a valid `StretchRect` other than a multisample resolve) is refused with one warning
+//! (C4-13). Clear and the read-back go to and come from the bound colour target (DXMTRS
+//! C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -14,6 +15,7 @@ use d3d9_rt::device::TargetRef;
 use mtld3d_core::{
     clear_area::{ClearArea, clear_area, clear_regions},
     convert::d3dcolor_to_rgba_f32,
+    dirty_rect::DirtyRect,
     pipeline_key::drawn_rect,
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
     render_state::scissor_region,
@@ -25,7 +27,7 @@ use mtld3d_types::{
     D3DSURFACE_DESC, D3DUSAGE_RENDERTARGET,
 };
 
-use super::{DeviceInner, Direct3DDevice9, refuse_under_core};
+use super::{DeviceInner, Direct3DDevice9, StretchSurfaceInfo, refuse_under_core};
 use crate::{
     bound_rt::RENDER_TARGET_SLOTS,
     surface::{Direct3DSurface9, SystemMemoryDst},
@@ -263,6 +265,54 @@ pub fn stretch_rect_resolve(
         refuse_under_core("IDirect3DDevice9::StretchRect (other than a multisample resolve)");
         D3DERR_NOTAVAILABLE
     }
+}
+
+/// `ColorFill` of a colour target the core draws to: the back buffer, a render target or a level.
+///
+/// The caller has run mtld3d's gates (the surface's class and pool, the planar formats, the
+/// region clamped to the surface and not empty, the block grid), so `region` is a part of the
+/// surface's level or the whole of it. A render-target texture's level or face has its CPU
+/// writes uploaded first; the core then fills the whole view or the region with `color` as
+/// given, as mtld3d's fill writes it (`D3DRS_SRGBWRITEENABLE` is not read). Only a recorded fill
+/// claims the level for the GPU, so its next lock reads the fill back, and regenerates an
+/// AUTOGENMIPMAP texture's chain (DXMTRS C4c-4a). A fill the core refuses is logged and
+/// `D3DERR_INVALIDCALL`.
+pub fn color_fill(
+    dev: &mut DeviceInner,
+    surf: *mut Direct3DSurface9,
+    info: &StretchSurfaceInfo,
+    region: DirtyRect,
+    color: u32,
+) -> i32 {
+    // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
+    // the call per the ABI.
+    let surface = unsafe { &*surf };
+    let (Some(target), Some(core)) = (surface.core_target(), dev.core_mut()) else {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: ColorFill of a surface that is no colour target of the core → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    };
+    let parent = surface.parent_texture();
+    // SAFETY: null, or the level's parent texture, live while the level is and distinct from the
+    // device.
+    if let Some(texture) = unsafe { parent.as_mut() } {
+        // Its core texture exists from here, with every CPU write so far uploaded.
+        let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+    }
+    let rect = (region != DirtyRect::full(info.width, info.height))
+        .then_some([region.x, region.y, region.w, region.h]);
+    if !core.fill(target, rect, d3dcolor_to_rgba_f32(color)) {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: ColorFill of {target:?} (rect {rect:?}) was not recorded → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    }
+    if !parent.is_null() {
+        super::claim_dst_subresource_for_gpu(surf, info);
+    }
+    if let Some(id) = info.autogen_texture_id {
+        core.texture_generate_mips(id);
+    }
+    D3D_OK
 }
 
 /// [`stretch_rect_resolve`]'s shape, recorded; `None`, and no resolve recorded, for any other.
