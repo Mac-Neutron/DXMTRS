@@ -394,11 +394,6 @@ extern "system" fn swapchain_present(
 
 extern "system" fn swapchain_get_front_buffer_data(this: *mut c_void, surface: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9::GetFrontBufferData",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // SAFETY: vtable thunk; `this` is a live swapchain pointer or null.
     let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
         mtld3d_shared::log_once_warn!(target: LOG_TARGET,

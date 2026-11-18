@@ -1017,7 +1017,9 @@ impl DeviceInner {
     /// Read the implicit front buffer into a validated caller-owned surface.
     ///
     /// Both front-buffer entry points use the persistent backbuffer and the
-    /// same extent/format policy. The caller holds this device's API lock.
+    /// same extent/format policy. The caller holds this device's API lock. On a
+    /// core device the core reads the back buffer as Present would show it now,
+    /// a multisampled one resolved first (DXMTRS C4c-3a).
     pub fn read_front_buffer(&mut self, dst_surf: &Direct3DSurface9) -> i32 {
         let Some(dst_desc) = dst_surf.system_memory_blit_dst() else {
             warn_readback_rejected("GetFrontBufferData", ReadbackReject::NotSystemMemory);
@@ -1034,6 +1036,28 @@ impl DeviceInner {
         };
         if reject_readback("GetFrontBufferData", &source, &dst_desc).is_some() {
             return D3DERR_INVALIDCALL;
+        }
+        #[cfg(feature = "core-runtime")]
+        if let Some(core) = self.core_mut() {
+            let whole = DirtyRect::full(source.width, source.height);
+            let pitch = dst_desc.bytes_per_row as usize;
+            let pages = usize::try_from(dst_desc.ptr)
+                .ok()
+                .zip(usize::try_from(dst_desc.len).ok());
+            let read = pages.is_some_and(|(addr, len)| {
+                let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
+                // SAFETY: the destination's own pages, `len` bytes at `ptr`, which the API lock
+                // keeps to this call while the core copies into them.
+                let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+                core.read_presented(whole, bytes, pitch)
+            });
+            if !read {
+                error!(target: LOG_TARGET,
+                    "d3d9 core: GetFrontBufferData did not read the back buffer → INVALIDCALL");
+                return D3DERR_INVALIDCALL;
+            }
+            dst_surf.note_system_memory_written();
+            return D3D_OK;
         }
         let hr = blit_texture_to_systemmem(
             self,
@@ -9227,11 +9251,6 @@ extern "system" fn device_get_front_buffer_data(
     dst_surface: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetFrontBufferData",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Only the implicit swapchain is addressed by this device entry point.
     if swap_chain != 0 {
