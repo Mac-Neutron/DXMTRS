@@ -4,15 +4,16 @@
 //! and the call's result for a device of the core runtime. `StretchRect`, `ColorFill` and
 //! `UpdateSurface` run mtld3d's gates on both runtimes, so a call they reject answers
 //! `D3DERR_INVALIDCALL` on both, and a core device leaves past them for `stretch_colour` (a
-//! colour pair) or `stretch_rect_resolve` (a depth-stencil pair), `color_fill` for a colour
-//! target, or `update_color_target` for a region of the back buffer or a render target (DXMTRS
-//! C4c-4a). `stretch_colour` resolves a multisampled target into a single-sample one, copies
-//! texel for texel into a target on the GPU, and between two plain surfaces on the CPU (DXMTRS
-//! C4c-4b): it tests the destination itself, since on a core device the GPU writes nothing but
-//! targets. What an arm does not cover yet (a Present with rects or another window; a scaled,
-//! multisampled or depth-stencil `StretchRect`, one that converts into a target) is refused with
-//! one warning (C4-13). Clear and the read-back go to and come from the bound colour target
-//! (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! colour pair) or `stretch_depth` (a depth-stencil pair), `color_fill` for a colour target, or
+//! `update_color_target` for a region of the back buffer or a render target (DXMTRS C4c-4a).
+//! `stretch_colour` resolves a multisampled target into a single-sample one, copies texel for
+//! texel into a target on the GPU, and between two plain surfaces on the CPU; `stretch_depth`
+//! copies a depth-stencil surface whole into another (DXMTRS C4c-4b). The colour arm tests the
+//! destination itself, since on a core device the GPU writes nothing but targets. What an arm
+//! does not cover yet (a Present with rects or another window; a scaled `StretchRect`, one with
+//! a multisampled end other than the resolve, one that converts into a target, the depth-stencil
+//! resolve) is refused with one warning (C4-13). Clear and the read-back go to and come from the
+//! bound colour target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -451,30 +452,44 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     D3D_OK
 }
 
-/// `StretchRect` on a core device: a multisampled render target resolved into a single-sample one.
+/// `StretchRect` of a depth-stencil pair on a core device: the whole surface copied into another.
 ///
-/// The caller has run mtld3d's gates (the filter, the endpoints' classes and pools, the
-/// depth-stencil pair, the formats, the rects, a stretch inside one surface, the planar and
-/// scaling rules), so a call mtld3d rejects at its gates has answered `D3DERR_INVALIDCALL`
-/// before this, and what arrives is a valid shape (DXMTRS C4c-4a). The one shape the core
-/// implements (DXMTRS C4b-3d5), all of it required: both surfaces are targets the core draws to
-/// and neither is an additional swap chain's back buffer (as a target it aliases the device's,
-/// C4b3d1-4); both are default-pool render targets of one size and of formats whose bytes copy
-/// (mtld3d's `copies_bytes`); the source has more than one sample and the destination one; each
-/// rect is null or the whole surface; a destination level's texture is not AUTOGENMIPMAP, and
-/// its CPU writes are uploaded first; and the core device records the resolve. Any other is the
-/// logged refusal and `D3DERR_NOTAVAILABLE`. `surfaces` and `rects` are the source's and the
-/// destination's.
-pub fn stretch_rect_resolve(
+/// The caller has run mtld3d's depth-stencil gates (two depth-stencil surfaces of one format and
+/// size in the default pool, sample counts equal or a resolve, whole rects), so a pair they
+/// reject has answered `D3DERR_INVALIDCALL` before this. The resolve, more samples into one, is
+/// refused by name. One surface at both ends is `D3D_OK` with nothing recorded, as mtld3d's
+/// encoder skips it. Any other pair is one copy of the whole level, its depth and its stencil,
+/// two multisampled surfaces of one count included, as mtld3d records it (DXMTRS C4c-4b). A copy
+/// the core does not record is logged and `D3DERR_INVALIDCALL`. `surfaces` and `infos` are the
+/// source's and the destination's.
+pub fn stretch_depth(
     this: *mut c_void,
     surfaces: [*mut c_void; 2],
-    rects: [*const c_void; 2],
+    infos: [&StretchSurfaceInfo; 2],
 ) -> i32 {
-    if resolve_shape(this, surfaces, rects).is_some() {
-        D3D_OK
-    } else {
-        refuse_stretch()
+    if infos[0].sample_count != infos[1].sample_count {
+        return refuse_stretch();
     }
+    // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
+    // the call per the ABI.
+    let src = unsafe { &*surfaces[0].cast::<Direct3DSurface9>() };
+    // SAFETY: as above.
+    let dst = unsafe { &*surfaces[1].cast::<Direct3DSurface9>() };
+    let (source, destination) = (src.core_depth(), dst.core_depth());
+    if source.is_some() && source == destination {
+        return D3D_OK;
+    }
+    let core = core_device(this).and_then(DeviceInner::core_mut);
+    let copied = match (source, destination, core) {
+        (Some(source), Some(destination), Some(core)) => core.copy_depth(source, destination),
+        _ => false,
+    };
+    if !copied {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: StretchRect of depth {source:?} into {destination:?} was not recorded → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    }
+    D3D_OK
 }
 
 /// `ColorFill` of a colour target the core draws to: the back buffer, a render target or a level.
@@ -583,9 +598,16 @@ pub fn update_color_target(
     D3D_OK
 }
 
-/// [`stretch_rect_resolve`]'s shape, recorded; `None`, and no resolve recorded, for any other.
+/// The multisample resolve `stretch_colour` takes first, recorded; `None` for any other shape.
 ///
-/// The destination's owed uploads may be recorded before a refusal: they were due anyway.
+/// The one shape (DXMTRS C4b-3d5), all of it required: both surfaces are targets the core draws
+/// to and neither is an additional swap chain's back buffer (as a target it aliases the
+/// device's, C4b3d1-4); both are default-pool render targets of one size and of formats whose
+/// bytes copy (mtld3d's `copies_bytes`); the source has more than one sample and the
+/// destination one; each rect is null or the whole surface; a destination level's texture is
+/// not AUTOGENMIPMAP, and its CPU writes are uploaded first; and the core device records the
+/// resolve. The destination's owed uploads may be recorded before a refusal: they were due
+/// anyway. `surfaces` and `rects` are the source's and the destination's.
 fn resolve_shape(
     this: *mut c_void,
     surfaces: [*mut c_void; 2],

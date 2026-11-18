@@ -9534,7 +9534,7 @@ extern "system" fn device_stretch_rect(
         // surfaces lack and records for mtld3d's encoder.
         #[cfg(feature = "core-runtime")]
         if dev.is_core() {
-            return core_arms::stretch_rect_resolve(this, [src, dst], [src_rect, dst_rect]);
+            return core_arms::stretch_depth(this, [src, dst], [&src_info, &dst_info]);
         }
         // Past every depth-stencil gate, so the endpoints' pending uploads are
         // work this call will use.
