@@ -1462,6 +1462,21 @@ impl SurfaceInner {
         // SAFETY: null, or the surface's live owning device, which outlives it.
         unsafe { self.device_inner.as_ref() }.is_some_and(DeviceInner::is_core)
     }
+
+    /// A lockable render target's core texture, on a device of the core runtime (DXMTRS C4c-3b).
+    ///
+    /// A surface with a core texture and a CPU staging that is no depth-stencil:
+    /// `CreateRenderTarget` with `Lockable == TRUE`. Its lock, `GetDC` and `ReleaseDC` test it
+    /// where mtld3d tests `is_lockable_render_target`, which a core device's target, with no Metal
+    /// handle, never answers. `None` for every other surface and on mtld3d's runtime.
+    #[cfg(feature = "core-runtime")]
+    const fn core_lockable_render_target(&self) -> Option<mtld3d_core::ids::TextureId> {
+        if self.system_memory.is_some() && self.standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0 {
+            self.core_texture
+        } else {
+            None
+        }
+    }
 }
 
 impl SurfaceInner {
@@ -2361,7 +2376,6 @@ extern "system" fn surface_get_priority(this: *mut c_void) -> u32 {
 
 extern "system" fn surface_pre_load(this: *mut c_void) {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(refused_under_core(this), "IDirect3DSurface9::PreLoad");
     let _timer = surf_timer(this, SurfaceSubCategory::Misc);
     // See IDirect3DTexture9::PreLoad — Metal has no resident-set hint.
     mtld3d_shared::log_once_info!(
@@ -2502,15 +2516,6 @@ extern "system" fn surface_get_desc(this: *mut c_void, desc: *mut D3DSURFACE_DES
     0 // S_OK
 }
 
-/// Whether the core runtime refuses an entry point of the surface at `this` (DXMTRS C4a, C4-13).
-///
-/// True when the surface's device runs the core runtime.
-#[cfg(feature = "core-runtime")]
-fn refused_under_core(this: *mut c_void) -> bool {
-    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DSurface9 per the ABI.
-    unsafe { InPtr::<Direct3DSurface9>::opt(this) }.is_some_and(|obj| obj.inner().on_core_device())
-}
-
 extern "system" fn surface_lock_rect(
     this: *mut c_void,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2620,12 +2625,13 @@ extern "system" fn surface_lock_rect(
         return backbuffer_lock_readback(&obj, locked_rect, rect, flags);
     }
     #[cfg(feature = "core-runtime")]
+    if obj.inner().core_lockable_render_target().is_some() {
+        return lockable_rt_lock_rect(&obj, locked_rect, rect, flags);
+    }
+    #[cfg(feature = "core-runtime")]
     if obj.inner().core_texture.is_some()
         && obj.inner().standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0
     {
-        if obj.inner().system_memory.is_some() {
-            return lockable_rt_lock_rect(&obj, locked_rect, rect, flags);
-        }
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "IDirect3DSurface9::LockRect on a non-lockable render target → INVALIDCALL"
         );
@@ -3047,8 +3053,9 @@ fn core_backbuffer_read_into_lock(
 /// Read the FULL implicit backbuffer texture into a fresh PE-heap page.
 ///
 /// The page is held on `inner.readback`, returning `(width, height,
-/// bytes_per_row)` or `None` on failure. Used by `GetDC` on the backbuffer (the
-/// `LockRect` portrait path has its own sub-rect variant above). The page is
+/// bytes_per_row)` or `None` on failure. Used by `GetDC` on the backbuffer and
+/// by a writable `LockRect` of a lockable one (the read-only `LockRect`
+/// portrait path has its own sub-rect variant above). The page is
 /// what the DC's DIB wraps, so it is sized and written at the surface format's
 /// host-visible pitch, which is the stride GDI derives for a DIB of the same
 /// width and bit count. On a core device the core reads it as Present would
@@ -3975,11 +3982,6 @@ fn pin_dc_texture_level(inner: &SurfaceInner, open: bool) {
 
 extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(
-        refused_under_core(this),
-        "IDirect3DSurface9::GetDC",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = surf_timer(this, SurfaceSubCategory::GetDc);
     if hdc.is_null() {
         return D3DERR_INVALIDCALL;
@@ -4024,6 +4026,16 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
     if (unsafe { &*inner.dc_lock_ptr() }).map_count != 0 {
         return D3DERR_INVALIDCALL;
     }
+    // A core device writes a lockable back buffer's DC back through a blit, which cannot write
+    // the multisampled companion the frame resolves from; D3D9 does not let a lockable back buffer
+    // be multisampled (DXMTRS C4c-3b). Refused after the state checks above, as the writable lock.
+    refuse_under_core!(
+        inner.on_core_device()
+            && inner.is_lockable_backbuffer()
+            && inner.live_multi_sample().sample_count > 1,
+        "IDirect3DSurface9::GetDC (a multisampled back buffer)",
+        mtld3d_types::D3DERR_NOTAVAILABLE
+    );
     // A LOCKABLE implicit backbuffer is GPU-only: snapshot it via a full
     // read-back into `readback` so `dc_pixels` (and the DIB it seeds) have host
     // pixels. A NON-lockable backbuffer rejects GetDC: the
@@ -4038,6 +4050,12 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
     // `ColorFill`, a draw or a `StretchRect` into the surface is invisible to
     // the DC, exactly as it would be to a `LockRect` that skipped the same
     // read-back.
+    // On a core device the colour texture is the target's core texture, which
+    // `lockable_rt_readback_fill` reads back (DXMTRS C4c-3b).
+    #[cfg(feature = "core-runtime")]
+    if inner.core_lockable_render_target().is_some() && !refresh_lockable_rt_staging(inner) {
+        return D3DERR_INVALIDCALL;
+    }
     if inner.is_lockable_render_target() && !refresh_lockable_rt_staging(inner) {
         return D3DERR_INVALIDCALL;
     }
@@ -4128,11 +4146,6 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
 
 extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
-    refuse_under_core!(
-        refused_under_core(this),
-        "IDirect3DSurface9::ReleaseDC",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = surf_timer(this, SurfaceSubCategory::ReleaseDc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DSurface9 per IDirect3DSurface9 ABI.
     let Some(obj) = (unsafe { InPtrMut::<Direct3DSurface9>::opt(this) }) else {
@@ -4197,6 +4210,11 @@ extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i3
     // GDI drew is in the staging alone: push it to the colour texture the way
     // `UnlockRect` does, or the next read-back overwrites it with the pixels
     // the GPU still holds.
+    // On a core device the colour texture is the target's core texture (DXMTRS C4c-3b).
+    #[cfg(feature = "core-runtime")]
+    if let Some(id) = inner.core_lockable_render_target() {
+        core_lockable_rt_upload(inner, id);
+    }
     if inner.is_lockable_render_target() {
         lockable_rt_upload(inner);
     }

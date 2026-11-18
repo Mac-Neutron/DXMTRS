@@ -10503,8 +10503,9 @@ extern "system" fn device_create_offscreen_plain_surface(
     // StretchRect) and hand back its owned level-0 surface: lock/unlock/upload
     // reuse the texture machinery, StretchRect resolves the texture handle. No
     // D3DUSAGE_* (offscreen plain), single mip. A core device takes the same arm:
-    // the texture keeps its staging and records nothing, and a lock is the one use
-    // it serves (`StretchRect`, `ColorFill`, `UpdateSurface` and `GetDC` refuse).
+    // the texture keeps its staging and records nothing, and a lock and a device
+    // context are the uses it serves (`StretchRect`, `ColorFill` and
+    // `UpdateSurface` refuse).
     if pool == D3DPOOL_DEFAULT {
         let mut tex_out: *mut c_void = core::ptr::null_mut();
         let hr = create_texture_path(&TextureCreateArgs {
