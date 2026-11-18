@@ -6,11 +6,14 @@
 //! C4b-3d3). A draw's pipeline key then names the format it draws with, or 0, and the key alone
 //! decides the pass, the pipeline and the depth-stencil state: a draw whose key names no format
 //! draws in a pass without the depth-stencil even while one is bound. A change of depth-stencil
-//! ends the open render pass, as a change of colour target does.
+//! ends the open render pass, as a change of colour target does. A depth-stencil copies whole
+//! into another of its size, format and sample count (`StretchRect`'s, DXMTRS C4c-4b).
 
 use std::sync::Arc;
 
 use dxmt_core::{
+    deptrack::Access,
+    encoder::stage,
     format::depth_stencil_planar_flags,
     resource::{Texture, TextureViewDescriptor, TextureViewKey},
 };
@@ -22,7 +25,7 @@ use mtld3d_core::{
 };
 use winemetal_sys::wire::{WMTDepthStencilInfo, WMTStencilInfo};
 
-use super::{CoreDevice, LOG_TARGET};
+use super::{CoreDevice, LOG_TARGET, surface::blit_record, target::Shape};
 
 /// A depth-stencil: one level of a stored depth texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +189,63 @@ impl CoreDevice {
                 quad.end(enc);
             });
         });
+    }
+
+    /// Copies the whole of the depth-stencil `src` into `dst`, both planes.
+    ///
+    /// `StretchRect`'s depth-stencil copy (DXMTRS C4c-4b), recorded as [`CoreDevice::copy`]
+    /// records: one blit of the level at slice 0 in the blit pass uploads share (the open render
+    /// pass ends), the source's level tracked as read and the destination's as written. The
+    /// blit has no plane option: one copy moves the depth and the stencil. Two multisampled
+    /// levels of one count are one blit too, as mtld3d records them. False, and nothing
+    /// recorded, unless both name a level of a stored depth texture, the two differ, and their
+    /// width, height, pixel format and sample count are equal.
+    #[must_use]
+    pub fn copy_depth(&mut self, src: DepthRef, dst: DepthRef) -> bool {
+        let (Some(from), Some(into)) = (
+            self.depth_level(src.id, src.level),
+            self.depth_level(dst.id, dst.level),
+        ) else {
+            return false;
+        };
+        if src == dst || from != into {
+            return false;
+        }
+        let (Some(source), Some(destination)) =
+            (self.stored_texture(src.id), self.stored_texture(dst.id))
+        else {
+            return false;
+        };
+        let (width, height, pixel_format, samples) = from;
+        let shape = |level| Shape {
+            width,
+            height,
+            pixel_format,
+            srgb_format: 0,
+            texel_bytes: 4,
+            level,
+            slice: 0,
+            samples,
+        };
+        let (src_shape, dst_shape) = (shape(src.level), shape(dst.level));
+        self.open_blit_pass();
+        self.emit(move |enc| {
+            let src =
+                enc.access_texture::<{ stage::COMPUTE }>(&source, src_shape.level, 0, Access::READ);
+            let dst = enc.access_texture::<{ stage::COMPUTE }>(
+                &destination,
+                dst_shape.level,
+                0,
+                Access::WRITE,
+            );
+            enc.encode_blit_command(blit_record(
+                (src, &src_shape),
+                [0, 0, width, height],
+                (dst, &dst_shape),
+                [0, 0],
+            ));
+        });
+        true
     }
 
     /// The handle of the depth-stencil state of `snapshot`, made at its first request.

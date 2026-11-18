@@ -884,3 +884,126 @@ fn a_refused_depth_upload_records_nothing() {
         assert!(calls.is_empty(), "{what}: {calls:#?}");
     }
 }
+
+/// A stored 64x32 `Depth32FloatStencil8` texture of `samples` a texel, of one level.
+fn depth_of(rig: &mut Rig, id: u64, samples: u8) -> TextureId {
+    let id = TextureId::from_raw(id);
+    let desc = CoreTextureDesc {
+        samples,
+        ..depth_desc(D32F_S8, 64, 32, 1)
+    };
+    rig.core.texture_create(id, &desc);
+    let _ = rig.take();
+    id
+}
+
+/// The fences (`#<n>`) `lines`' records starting with `prefix` (`  blit 7 fence=`) name.
+fn fence_ids<'a>(lines: &'a [String], prefix: &str) -> Vec<&'a str> {
+    lines
+        .iter()
+        .filter_map(|c| c.strip_prefix(prefix))
+        .filter_map(|c| c.split(' ').next())
+        .collect()
+}
+
+/// A depth-stencil copies into another of its size, format and sample count in one blit.
+///
+/// One copy of the whole level, both planes, in a blit pass; a multisampled pair of one count
+/// too.
+#[test]
+fn a_depth_copy_is_one_blit() {
+    let mut rig = Rig::new(0x440);
+    let (d1, d2) = (depth_of(&mut rig, 1, 1), depth_of(&mut rig, 2, 1));
+    let (m1, m2) = (depth_of(&mut rig, 3, 4), depth_of(&mut rig, 4, 4));
+    for (what, src, dst) in [("one sample", d1, d2), ("4 samples", m1, m2)] {
+        assert!(rig.core.copy_depth(level0(src), level0(dst)), "{what}");
+        let calls = rig.take();
+        assert_eq!(blit_records(&calls), ["  blit 4"], "{what}: {calls:#?}");
+        let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+        assert!(blit < at(&calls, "  blit 4"), "{what}: {calls:#?}");
+    }
+}
+
+/// A depth copy it cannot make is refused, and nothing is recorded.
+///
+/// No such texture at either end, a colour texture at either end, one level at both ends,
+/// another size, format or sample count, a level past the last.
+#[test]
+fn a_refused_depth_copy_records_nothing() {
+    let mut rig = Rig::new(0x441);
+    let (d1, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    let d2 = level0(rig.depth(2, D32F_S8, (64, 32), 1).0);
+    let small = level0(rig.depth(3, D32F_S8, (32, 32), 1).0);
+    let d32f = level0(rig.depth(4, D32F, (64, 32), 1).0);
+    let color = level0(rig.color(5).0);
+    let multisampled = level0(depth_of(&mut rig, 6, 4));
+    let unknown = level0(TextureId::from_raw(9));
+    let past = DepthRef { id: d1, level: 1 };
+    for (what, src, dst) in [
+        ("no such source", unknown, d2),
+        ("no such destination", level0(d1), unknown),
+        ("a colour source", color, d2),
+        ("a colour destination", level0(d1), color),
+        ("one level at both ends", d2, d2),
+        ("another size", small, d2),
+        ("another format", d32f, d2),
+        ("another sample count", multisampled, d2),
+        ("a level past the last", past, d2),
+    ] {
+        assert!(!rig.core.copy_depth(src, dst), "{what}");
+        let calls = rig.take();
+        assert!(calls.is_empty(), "{what}: {calls:#?}");
+    }
+}
+
+/// A depth copy waits for the Clear of its source.
+///
+/// The source cleared, then copied: the copy's blit pass waits on a fence the Clear's pass
+/// updates.
+#[test]
+fn a_depth_copy_waits_on_the_clear_of_its_source() {
+    let mut rig = Rig::new(0x442);
+    let (d1, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    let (d2, _) = rig.depth(2, D32F_S8, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(d1))));
+    rig.core.clear_depth_stencil(3, 0.25, 3);
+    assert!(rig.core.copy_depth(level0(d1), level0(d2)));
+    let calls = rig.take();
+    let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    assert!(render < blit, "{calls:#?}");
+    // The fences the Clear's pass updates (record 34), and those the blit waits for (6) before
+    // its copy (4).
+    let updated = fence_ids(&calls[render..blit], "  render 34 fence=");
+    let waits = fence_ids(&calls[blit..at(&calls, "  blit 4")], "  blit 6 fence=");
+    assert!(
+        waits.iter().any(|w| updated.contains(w)),
+        "the copy waits on {waits:?}, the Clear updates {updated:?}: {calls:#?}"
+    );
+}
+
+/// A draw against a copied depth-stencil waits for the copy.
+///
+/// The copy, then a draw with its destination bound: the draw's pass waits on a fence the copy's
+/// blit pass updates.
+#[test]
+fn a_draw_against_a_copied_depth_waits_on_the_copy() {
+    let mut rig = Rig::new(0x443);
+    let (d1, _) = rig.depth(1, D32F_S8, (64, 32), 1);
+    let (d2, _) = rig.depth(2, D32F_S8, (64, 32), 1);
+    assert!(rig.core.copy_depth(level0(d1), level0(d2)));
+    assert!(rig.core.set_depth(Some(level0(d2))));
+    assert_eq!(rig.draw(&key_with(D32F_S8), (tested(), 0, 0.0)), Ok(()));
+    let calls = rig.take();
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+    assert!(blit < render, "{calls:#?}");
+    // The fences the copy's blit pass updates (record 7), and those the draw's pass waits for
+    // (33).
+    let updated = fence_ids(&calls[blit..render], "  blit 7 fence=");
+    let waits = fence_ids(&calls[render..], "  render 33 fence=");
+    assert!(
+        waits.iter().any(|w| updated.contains(w)),
+        "the draw waits on {waits:?}, the copy updates {updated:?}: {calls:#?}"
+    );
+}

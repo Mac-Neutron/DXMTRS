@@ -335,7 +335,7 @@ pub(super) fn rect_bytes(
 /// its slice. `rect` is `[x, y, width, height]` in the source's texels, `origin` `[x, y]` in the
 /// destination's, one image deep. Built from its arguments alone, so its fields are tested: the
 /// fakes print such a record's type and none of its fields.
-fn blit_record(
+pub(super) fn blit_record(
     (src, from): (u64, &Shape),
     [x, y, width, height]: [u32; 4],
     (dst, into): (u64, &Shape),
