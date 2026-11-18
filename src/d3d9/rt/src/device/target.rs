@@ -24,6 +24,9 @@ use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_U
 use super::CoreDevice;
 
 /// A colour target: the back buffer, or one level (and cube face) of a render-target texture.
+///
+/// A copy's source may also name a level of a colour texture that is no target
+/// ([`CoreDevice::copy`], DXMTRS C4c-4b).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetRef {
     BackBuffer,

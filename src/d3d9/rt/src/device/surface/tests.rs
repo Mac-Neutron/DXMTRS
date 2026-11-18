@@ -3,17 +3,70 @@ use std::sync::Arc;
 use dxmt_core::staging::Staging;
 use dxmt_fakes::take_calls;
 use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId};
-use winemetal_sys::wire::WMT_PIXEL_FORMAT_RGBA16_UNORM;
+use winemetal_sys::wire::{
+    WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE, WMT_PIXEL_FORMAT_BGRA8_UNORM,
+    WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_PIXEL_FORMAT_RGBA16_UNORM,
+};
 
 use crate::device::{
-    CoreDevice, TargetRef, TextureKind,
-    fixture::{at, core_on_fakes, target_desc, textures_made},
+    CoreDevice, CoreTextureDesc, CoreTextureFlags, TargetRef, TextureKind, UploadRegion,
+    fixture::{
+        at, core_on_fakes, depth_desc, ff_binds, key, ms_desc, target_desc, textures_made, triangle,
+    },
     target::Shape,
 };
+
+const BGRA8: u32 = WMT_PIXEL_FORMAT_BGRA8_UNORM;
 
 /// The device's read-back buffer; panics when it has none.
 fn readback(core: &CoreDevice) -> Arc<Staging> {
     Arc::clone(core.readback.as_ref().expect("a read-back buffer"))
+}
+
+/// A stored texture of `desc` under `id`; its creation's calls (a target's zeroing) are taken.
+fn stored(core: &mut CoreDevice, device: u64, id: u64, desc: &CoreTextureDesc) -> TextureId {
+    let id = TextureId::from_raw(id);
+    core.texture_create(id, desc);
+    core.drain();
+    let _ = take_calls(device);
+    id
+}
+
+/// A stored square `size` BGRA8 2D render-target texture of `levels` levels, as [`stored`] makes.
+fn target_2d(core: &mut CoreDevice, device: u64, id: u64, size: u32, levels: u32) -> TextureId {
+    let desc = target_desc(BGRA8, TextureKind::Tex2d, size, levels, 4);
+    stored(core, device, id, &desc)
+}
+
+/// A square `size` one-level BGRA8 texture that is no render target, of `kind`.
+const fn plain_desc(kind: TextureKind, size: u32) -> CoreTextureDesc {
+    CoreTextureDesc {
+        flags: CoreTextureFlags::empty(),
+        ..target_desc(BGRA8, kind, size, 1, 4)
+    }
+}
+
+/// Level `level` of the 2D texture `id`.
+const fn level_of(id: TextureId, level: u32) -> TargetRef {
+    TargetRef::Texture {
+        id,
+        level,
+        face: None,
+    }
+}
+
+/// The fences (`#<n>`) `lines`' records starting with `prefix` (`  blit 7 fence=`) name.
+fn fences<'a>(lines: &'a [String], prefix: &str) -> Vec<&'a str> {
+    lines
+        .iter()
+        .filter_map(|c| c.strip_prefix(prefix))
+        .filter_map(|c| c.split(' ').next())
+        .collect()
+}
+
+/// How many texture-to-texture copies (`  blit 4`) `calls` holds.
+fn copies(calls: &[String]) -> usize {
+    calls.iter().filter(|c| *c == "  blit 4").count()
 }
 
 /// A rect of the back buffer is copied at its size and row, after the open pass ends.
@@ -278,4 +331,243 @@ fn a_read_back_waits_on_its_subresource() {
         waits.iter().any(|w| updated.contains(w)),
         "the blit waits on {waits:?}, the level's pass updates {updated:?}: {calls:#?}"
     );
+}
+
+/// A copy's record names each end's handle, level and slice, the source's rect and the origin.
+///
+/// Sentinel handles and a distinct value in every field: the source's never lands in the
+/// destination's, and the size is the rect's, one image deep.
+#[test]
+fn a_blit_record_names_each_end() {
+    let shape = |level, slice| Shape {
+        width: 64,
+        height: 64,
+        pixel_format: BGRA8,
+        srgb_format: 0,
+        texel_bytes: 4,
+        level,
+        slice,
+        samples: 1,
+    };
+    let record = super::blit_record(
+        (0xa1, &shape(2, 5)),
+        [3, 7, 11, 13],
+        (0xb2, &shape(1, 4)),
+        [17, 19],
+    );
+    assert_eq!(
+        (record.r#type, record.reserved),
+        (WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE, [0; 3])
+    );
+    assert_eq!(
+        (record.src, record.src_level, record.src_slice),
+        (0xa1, 2, 5)
+    );
+    let origin = record.src_origin;
+    assert_eq!((origin.x, origin.y, origin.z), (3, 7, 0));
+    let size = record.src_size;
+    assert_eq!((size.width, size.height, size.depth), (11, 13, 1));
+    assert_eq!(
+        (record.dst, record.dst_level, record.dst_slice),
+        (0xb2, 1, 4)
+    );
+    let origin = record.dst_origin;
+    assert_eq!((origin.x, origin.y, origin.z), (17, 19, 0));
+}
+
+/// A copy it cannot make is refused, and nothing is recorded.
+///
+/// Each case is sound but in the one it names. A rect inside level 0 that leaves level 1 is
+/// copied from level 0: the rect is in the level's texels.
+#[test]
+fn a_refused_copy_records_nothing() {
+    const DEVICE: u64 = 0x430;
+    let mut core = core_on_fakes(DEVICE);
+    let mips = target_2d(&mut core, DEVICE, 1, 64, 2);
+    let (level0, level1) = (level_of(mips, 0), level_of(mips, 1));
+    let flat = plain_desc(TextureKind::Tex2d, 64);
+    let plain = level_of(stored(&mut core, DEVICE, 2, &flat), 0);
+    let d32f = depth_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 64, 1);
+    let depth = level_of(stored(&mut core, DEVICE, 3, &d32f), 0);
+    let volume_desc = CoreTextureDesc {
+        depth: 4,
+        ..plain_desc(TextureKind::Volume, 16)
+    };
+    let volume = level_of(stored(&mut core, DEVICE, 4, &volume_desc), 0);
+    let ms = level_of(stored(&mut core, DEVICE, 5, &ms_desc(BGRA8, 64, 4)), 0);
+    let rgba_desc = target_desc(WMT_PIXEL_FORMAT_RGBA8_UNORM, TextureKind::Tex2d, 64, 1, 4);
+    let rgba = level_of(stored(&mut core, DEVICE, 6, &rgba_desc), 0);
+    let (bb, unknown) = (TargetRef::BackBuffer, level_of(TextureId::from_raw(9), 0));
+    let (rect, zero) = ([0, 0, 8, 8], [0, 0]);
+    for (what, src, src_rect, dst, origin) in [
+        ("an unknown source", unknown, rect, bb, zero),
+        ("an unknown destination", bb, rect, unknown, zero),
+        ("a depth source", depth, rect, bb, zero),
+        ("a volume source", volume, rect, bb, zero),
+        ("a non-target destination", bb, rect, plain, zero),
+        ("a multisampled source", ms, rect, bb, zero),
+        ("a multisampled destination", bb, rect, ms, zero),
+        ("unequal formats", rgba, rect, bb, zero),
+        ("no width", bb, [0, 0, 0, 8], level0, zero),
+        ("no height", bb, [0, 0, 8, 0], level0, zero),
+        ("a rect past level 1", level1, [20, 20, 20, 20], bb, zero),
+        ("an origin past level 1", bb, rect, level1, [28, 0]),
+        ("an origin past u32", bb, rect, level0, [u32::MAX, 0]),
+        ("overlapping rects", level0, [0, 0, 32, 32], level0, [9, 9]),
+        ("identical rects", level0, [8, 8, 16, 16], level0, [8, 8]),
+        ("back-buffer overlap", bb, [0, 0, 32, 16], bb, [8, 4]),
+    ] {
+        assert!(!core.copy(src, src_rect, dst, origin), "{what}");
+        core.drain();
+        let calls = take_calls(DEVICE);
+        assert!(calls.is_empty(), "{what}: {calls:#?}");
+    }
+    assert!(core.copy(level0, [20, 20, 20, 20], bb, zero));
+}
+
+/// A copy ends the open render pass and is one copy in a blit pass after the pass's end.
+#[test]
+fn a_copy_ends_the_open_render_pass() {
+    const DEVICE: u64 = 0x431;
+    let mut core = core_on_fakes(DEVICE);
+    let target = level_of(target_2d(&mut core, DEVICE, 1, 64, 1), 0);
+    core.clear(0, [0.0, 0.0, 1.0, 1.0], false);
+    core.open_render_pass();
+    assert!(core.copy(TargetRef::BackBuffer, [8, 4, 13, 9], target, [5, 6]));
+    assert!(!core.render_open && core.blit_open);
+    core.drain();
+    let calls = take_calls(DEVICE);
+    let end = |from: usize| {
+        from + calls[from..]
+            .iter()
+            .position(|c| c == "MTLCommandEncoder_endEncoding")
+            .unwrap_or_else(|| panic!("no end after {from}: {calls:#?}"))
+    };
+    let render_end = end(at(&calls, "MTLCommandBuffer_renderCommandEncoder"));
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    let copy = at(&calls, "  blit 4");
+    let order = [render_end, blit, copy, end(blit)];
+    assert!(order.is_sorted(), "{order:?}: {calls:#?}");
+    assert_eq!(copies(&calls), 1, "{calls:#?}");
+}
+
+/// A copy from a texture that is no target follows the upload before it, in its blit pass.
+#[test]
+fn a_copy_from_a_texture_no_target_follows_its_upload() {
+    const DEVICE: u64 = 0x432;
+    let mut core = core_on_fakes(DEVICE);
+    let plain = stored(&mut core, DEVICE, 1, &plain_desc(TextureKind::Tex2d, 16));
+    let region = UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+        width: 16,
+        height: 16,
+        depth: 1,
+    };
+    assert!(core.texture_upload(plain, region, &[0; 16 * 16 * 4], 16 * 4, 16 * 16 * 4));
+    let source = level_of(plain, 0);
+    assert!(core.copy(source, [2, 3, 9, 7], TargetRef::BackBuffer, [30, 20]));
+    core.drain();
+    let calls = take_calls(DEVICE);
+    let blits = calls
+        .iter()
+        .filter(|c| *c == "MTLCommandBuffer_blitCommandEncoder")
+        .count();
+    assert_eq!(blits, 1, "{calls:#?}");
+    let upload = calls
+        .iter()
+        .position(|c| c.starts_with("  blit copy_to_texture "))
+        .unwrap_or_else(|| panic!("no upload in {calls:#?}"));
+    assert!(upload < at(&calls, "  blit 4"), "{calls:#?}");
+    assert_eq!(copies(&calls), 1, "{calls:#?}");
+}
+
+/// One texture copies into itself where the texels differ, one copy each.
+///
+/// Level 0 into level 1, two disjoint rects of one level, two of the back buffer.
+#[test]
+fn one_texture_copies_into_other_texels_of_itself() {
+    const DEVICE: u64 = 0x433;
+    let mut core = core_on_fakes(DEVICE);
+    let mips = target_2d(&mut core, DEVICE, 1, 64, 2);
+    let (level0, level1) = (level_of(mips, 0), level_of(mips, 1));
+    let bb = TargetRef::BackBuffer;
+    for (what, src, src_rect, dst, origin) in [
+        ("two levels", level0, [8, 8, 20, 20], level1, [3, 4]),
+        ("one level", level0, [0, 0, 16, 16], level0, [32, 32]),
+        ("the back buffer", bb, [0, 0, 16, 16], bb, [40, 8]),
+    ] {
+        assert!(core.copy(src, src_rect, dst, origin), "{what}");
+        core.drain();
+        let calls = take_calls(DEVICE);
+        assert_eq!(copies(&calls), 1, "{what}: {calls:#?}");
+    }
+}
+
+/// A copy from a level waits for the pass that wrote that level.
+///
+/// A Clear of level 1 of a render-target texture, then a copy from that level into the back
+/// buffer: the copy's blit pass waits on a fence the Clear's pass updates.
+#[test]
+fn a_copy_waits_on_its_source_subresource() {
+    const DEVICE: u64 = 0x434;
+    let mut core = core_on_fakes(DEVICE);
+    let level1 = level_of(target_2d(&mut core, DEVICE, 1, 64, 2), 1);
+    assert!(core.set_target(level1));
+    core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
+    assert!(core.copy(level1, [2, 3, 10, 9], TargetRef::BackBuffer, [5, 6]));
+    core.drain();
+    let calls = take_calls(DEVICE);
+    let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    assert!(render < blit, "{calls:#?}");
+    // The fences the Clear's pass updates (record 34), and those the blit waits for (6) before
+    // its texture-to-texture copy (4).
+    let updated = fences(&calls[render..blit], "  render 34 fence=");
+    let waits = fences(&calls[blit..at(&calls, "  blit 4")], "  blit 6 fence=");
+    assert!(
+        waits.iter().any(|w| updated.contains(w)),
+        "the copy waits on {waits:?}, the level's Clear updates {updated:?}: {calls:#?}"
+    );
+}
+
+/// A draw on a copy's destination waits for the copy.
+///
+/// A copy into level 1 of a render-target texture, and one into face 3 of a cube, each then
+/// drawn on: the draw's pass waits on a fence the copy's blit pass updates. Each target holds
+/// the draw's viewport.
+#[test]
+fn a_draw_on_a_copied_subresource_waits_on_the_copy() {
+    const DEVICE: u64 = 0x435;
+    let mut core = core_on_fakes(DEVICE);
+    let level1 = level_of(target_2d(&mut core, DEVICE, 1, 128, 2), 1);
+    let cube_desc = target_desc(BGRA8, TextureKind::Cube, 64, 1, 4);
+    let face3 = TargetRef::Texture {
+        id: stored(&mut core, DEVICE, 2, &cube_desc),
+        level: 0,
+        face: Some(3),
+    };
+    let binds = ff_binds();
+    for (what, dst) in [("level 1", level1), ("face 3", face3)] {
+        let copied = core.copy(TargetRef::BackBuffer, [4, 2, 16, 16], dst, [7, 9]);
+        assert!(copied, "{what}");
+        assert!(core.set_target(dst), "{what}");
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()), "{what}");
+        core.drain();
+        let calls = take_calls(DEVICE);
+        let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+        let render = at(&calls, "MTLCommandBuffer_renderCommandEncoder");
+        assert!(blit < render, "{what}: {calls:#?}");
+        // The fences the copy's blit pass updates (record 7), and those the draw's pass waits
+        // for (33).
+        let updated = fences(&calls[blit..render], "  blit 7 fence=");
+        let waits = fences(&calls[render..], "  render 33 fence=");
+        assert!(
+            waits.iter().any(|w| updated.contains(w)),
+            "{what}: the draw waits on {waits:?}, the copy updates {updated:?}: {calls:#?}"
+        );
+    }
 }

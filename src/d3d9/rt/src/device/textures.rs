@@ -380,13 +380,42 @@ impl CoreDevice {
         level: u32,
         face: Option<u32>,
     ) -> Option<Shape> {
+        self.stored_shape(id, level, face, true)
+    }
+
+    /// The shape of level `level` (and `face`) of `id`'s colour texture, a target or not.
+    ///
+    /// `None` unless the store holds `id` as a 2D or cube colour texture with that level (a depth
+    /// texture and a volume are none), and `face` is a cube's face exactly when it is a cube. A
+    /// block-compressed level's `texel_bytes` is its block's: such a level never reaches
+    /// [`CoreDevice::copy`], the one caller, whose destination is a target and whose two formats
+    /// are equal, and its shape is no rect's measure (DXMTRS C4c-4b).
+    pub(super) fn level_shape(
+        &self,
+        id: TextureId,
+        level: u32,
+        face: Option<u32>,
+    ) -> Option<Shape> {
+        self.stored_shape(id, level, face, false)
+    }
+
+    /// `texture_shape`'s and `level_shape`'s one body, with one lookup of the store.
+    ///
+    /// `target_only` asks for a render target's level. Every draw's shapes come through here.
+    fn stored_shape(
+        &self,
+        id: TextureId,
+        level: u32,
+        face: Option<u32>,
+        target_only: bool,
+    ) -> Option<Shape> {
         let desc = &self.textures.get(&id)?.desc;
         let slice = match (desc.kind, face) {
             (TextureKind::Tex2d, None) => 0,
             (TextureKind::Cube, Some(face)) if face < 6 => face,
             _ => return None,
         };
-        if !desc.flags.contains(CoreTextureFlags::RENDER_TARGET)
+        if (target_only && !desc.flags.contains(CoreTextureFlags::RENDER_TARGET))
             || level >= desc.levels
             || super::depth::planes(desc.pixel_format) != 0
         {
@@ -468,8 +497,8 @@ impl CoreDevice {
     ///
     /// The rows are repacked to the format's tight row in a staging-ring block now; a blit copies
     /// them at the chunk's encode, after every pass recorded before it. False, and nothing
-    /// recorded, when the store has no `id` or holds it multisampled (no blit writes one), the
-    /// region is empty or `bytes` is short.
+    /// recorded, when the store has no `id` or holds it multisampled (no blit from a buffer
+    /// writes one), the region is empty or `bytes` is short.
     pub fn texture_upload(
         &mut self,
         id: TextureId,
@@ -501,8 +530,9 @@ impl CoreDevice {
     /// block now, and a blit copies them into the rect at the chunk's encode, after every pass
     /// recorded before it. A Clear recorded before stays under them, and the next pass on the
     /// back buffer loads them (DXMTRS C4c-3b). False, and nothing recorded, without a back
-    /// buffer, for a multisampled one (no blit writes its companion), for an empty rect or one
-    /// that leaves the back buffer, a pitch under the rect's row or `bytes` short of its rows.
+    /// buffer, for a multisampled one (no blit from a buffer writes its companion), for an empty
+    /// rect or one that leaves the back buffer, a pitch under the rect's row or `bytes` short of
+    /// its rows.
     #[must_use]
     pub fn write_presented(&mut self, rect: DirtyRect, bytes: &[u8], pitch: usize) -> bool {
         let (Some(shape), Some(back_buffer)) =

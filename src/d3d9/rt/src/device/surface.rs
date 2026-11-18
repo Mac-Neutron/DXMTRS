@@ -1,8 +1,9 @@
-//! Surfaces on the core: read-back, and the resolve of a multisampled target.
+//! Surfaces on the core: read-back, the resolve of a multisampled target, and copies.
 //!
 //! A colour target read back into a system-memory surface's bytes (`GetRenderTargetData`), a
-//! rect of the back buffer read as Present shows it (DXMTRS C4c-3a), and a multisampled target
-//! resolved into a single-sample one (`StretchRect`'s resolve).
+//! rect of the back buffer read as Present shows it (DXMTRS C4c-3a), a multisampled target
+//! resolved into a single-sample one (`StretchRect`'s resolve), and a rect of a texture copied
+//! into a target texel for texel (`StretchRect`'s unscaled copy, DXMTRS C4c-4b).
 
 use std::sync::Arc;
 
@@ -12,10 +13,13 @@ use dxmt_core::{
     format::{CAP_RESOLVE, device_capability_map},
     staging::Staging,
 };
-use mtld3d_core::dirty_rect::DirtyRect;
+use mtld3d_core::{
+    dirty_rect::DirtyRect,
+    stretch_rect::{SameSurfaceRoute, StretchRegion, same_surface_route},
+};
 use winemetal_sys::wire::{
-    WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMTOrigin, WMTSize,
-    WmtcmdBlitCopyFromTextureToBuffer,
+    WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
+    WMTOrigin, WMTSize, WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitCopyFromTextureToTexture,
 };
 
 use super::{
@@ -30,8 +34,8 @@ impl CoreDevice {
     /// long enough, made anew only to grow), that subresource tracked as read so the blit waits
     /// for the passes that wrote it, then a wait for its chunk (C4-12). The rows are the source's
     /// width in its texels. False, and nothing recorded, when `source` does not resolve, is
-    /// multisampled (Metal blits no multisampled texture; D3D9 refuses one, DXMTRS C4b-3d5) or
-    /// `dst` is too small.
+    /// multisampled (Metal copies no multisampled texture into a buffer; D3D9 refuses one,
+    /// DXMTRS C4b-3d5) or `dst` is too small.
     pub fn read_back(&mut self, source: TargetRef, dst: &mut [u8], dst_pitch: usize) -> bool {
         let Some(target) = self.resolve(source) else {
             return false;
@@ -195,6 +199,94 @@ impl CoreDevice {
         true
     }
 
+    /// Copies `src_rect` of `src` into the target `dst` at `dst_origin`, texel for texel.
+    ///
+    /// `StretchRect`'s unscaled copy (DXMTRS C4c-4b). `src` is any stored colour level, a target
+    /// or not, or the back buffer; `src_rect` is `[x, y, width, height]` in the texels of its
+    /// level, `dst_origin` `[x, y]` in the destination's. One blit in the blit pass uploads share
+    /// (the open render pass ends), the source's subresource tracked as read and the
+    /// destination's as written: that orders it after the passes that wrote either and before
+    /// the next pass on the destination. False, and nothing recorded, when either end does not
+    /// resolve or has more than one sample (the back buffer copied is then the one Present
+    /// shows), the two stored formats differ (a blit copies bytes), the rect is empty or leaves
+    /// the source's level, it leaves the destination at `dst_origin`, or both ends are one
+    /// texture and mtld3d's `same_surface_route` is not `Direct` for the pair (identical or
+    /// overlapping rects of one subresource).
+    #[must_use]
+    pub fn copy(
+        &mut self,
+        src: TargetRef,
+        src_rect: [u32; 4],
+        dst: TargetRef,
+        dst_origin: [u32; 2],
+    ) -> bool {
+        let source = match src {
+            TargetRef::BackBuffer => self.resolve(src).map(|from| (from.texture, from.shape)),
+            TargetRef::Texture { id, level, face } => self
+                .level_shape(id, level, face)
+                .zip(self.stored_texture(id))
+                .map(|(shape, texture)| (texture, shape)),
+        };
+        let (
+            Some((from, shape)),
+            Some(Resolved {
+                texture: to,
+                shape: into,
+                ..
+            }),
+        ) = (source, self.resolve(dst))
+        else {
+            return false;
+        };
+        let [x, y, width, height] = src_rect;
+        let [dst_x, dst_y] = dst_origin;
+        if shape.samples > 1
+            || into.samples > 1
+            || shape.pixel_format != into.pixel_format
+            || width == 0
+            || height == 0
+            || !inside(x, width, shape.width)
+            || !inside(y, height, shape.height)
+            || !inside(dst_x, width, into.width)
+            || !inside(dst_y, height, into.height)
+        {
+            return false;
+        }
+        let (src_level, src_slice) = (shape.level, shape.slice);
+        let (dst_level, dst_slice) = (into.level, into.slice);
+        let region = |x, y| StretchRegion {
+            x,
+            y,
+            w: width,
+            h: height,
+        };
+        let route = same_surface_route(
+            region(x, y),
+            region(dst_x, dst_y),
+            src_level,
+            dst_level,
+            src_slice,
+            dst_slice,
+        );
+        if Arc::ptr_eq(&from, &to) && route != SameSurfaceRoute::Direct {
+            return false;
+        }
+        self.open_blit_pass();
+        self.emit(move |enc| {
+            let src =
+                enc.access_texture::<{ stage::COMPUTE }>(&from, src_level, src_slice, Access::READ);
+            let dst =
+                enc.access_texture::<{ stage::COMPUTE }>(&to, dst_level, dst_slice, Access::WRITE);
+            enc.encode_blit_command(blit_record(
+                (src, &shape),
+                src_rect,
+                (dst, &into),
+                dst_origin,
+            ));
+        });
+        true
+    }
+
     /// Whether Metal resolves a multisampled texture of `pixel_format` on this device.
     ///
     /// dxmt-core's capability table of the device, built at each call: a `StretchRect` resolve's
@@ -219,9 +311,6 @@ pub(super) fn rect_bytes(
     len: usize,
     pitch: usize,
 ) -> Option<(u32, u32)> {
-    let inside = |start: u32, extent: u32, edge: u32| {
-        start.checked_add(extent).is_some_and(|end| end <= edge)
-    };
     if rect.w == 0
         || rect.h == 0
         || shape.texel_bytes == 0
@@ -238,6 +327,51 @@ pub(super) fn rect_bytes(
     }
     let image = row.checked_mul(u64::from(rect.h))?;
     Some((u32::try_from(row).ok()?, u32::try_from(image).ok()?))
+}
+
+/// The record of a texture-to-texture copy of `rect` of `src`'s subresource to `dst`'s `origin`.
+///
+/// Each end is a texture's handle and the shape of the one subresource it names: its level and
+/// its slice. `rect` is `[x, y, width, height]` in the source's texels, `origin` `[x, y]` in the
+/// destination's, one image deep. Built from its arguments alone, so its fields are tested: the
+/// fakes print such a record's type and none of its fields.
+fn blit_record(
+    (src, from): (u64, &Shape),
+    [x, y, width, height]: [u32; 4],
+    (dst, into): (u64, &Shape),
+    [dst_x, dst_y]: [u32; 2],
+) -> WmtcmdBlitCopyFromTextureToTexture {
+    WmtcmdBlitCopyFromTextureToTexture {
+        r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
+        reserved: [0; 3],
+        next: dxmt_core::encoder::NO_NEXT,
+        src,
+        src_slice: from.slice,
+        src_level: from.level,
+        src_origin: WMTOrigin {
+            x: u64::from(x),
+            y: u64::from(y),
+            z: 0,
+        },
+        src_size: WMTSize {
+            width: u64::from(width),
+            height: u64::from(height),
+            depth: 1,
+        },
+        dst,
+        dst_slice: into.slice,
+        dst_level: into.level,
+        dst_origin: WMTOrigin {
+            x: u64::from(dst_x),
+            y: u64::from(dst_y),
+            z: 0,
+        },
+    }
+}
+
+/// Whether `extent` texels from `start` end at `edge` or before it, the sum checked.
+fn inside(start: u32, extent: u32, edge: u32) -> bool {
+    start.checked_add(extent).is_some_and(|end| end <= edge)
 }
 
 #[cfg(test)]
