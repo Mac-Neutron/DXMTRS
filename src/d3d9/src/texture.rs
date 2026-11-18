@@ -1321,18 +1321,16 @@ impl TextureInner {
 
     /// Whether a core device refuses this texture's CPU lock.
     ///
-    /// A render-target or depth texture's lock reads its GPU contents back,
-    /// which a core device does not do until C4c; a dynamic depth texture's
-    /// (made without the depth-stencil usage) uploads a packed copy, C4c's too.
+    /// A dynamic depth texture's lock (one made without the depth-stencil
+    /// usage) reads its depth planes back and uploads a packed copy, which a
+    /// core device does not do yet. Every other depth texture's lock is
+    /// mtld3d's `INVALIDCALL`, and a render-target texture's level is read
+    /// back by the core (DXMTRS C4c-3a).
     #[cfg(feature = "core-runtime")]
     fn core_refuses_lock(&self) -> bool {
-        let target = self.d3d_usage
-            & (mtld3d_types::D3DUSAGE_RENDERTARGET | mtld3d_types::D3DUSAGE_DEPTHSTENCIL)
-            != 0;
-        let dynamic_depth = self.flags.contains(TextureFlags::DEPTH_FORMAT)
-            && self.d3d_usage & D3DUSAGE_DYNAMIC != 0;
         self.device_inner != 0
-            && (target || dynamic_depth)
+            && self.flags.contains(TextureFlags::DEPTH_FORMAT)
+            && self.d3d_usage & D3DUSAGE_DYNAMIC != 0
             && DeviceInner::from_ptr(self.device_inner).is_core()
     }
 
@@ -4384,7 +4382,15 @@ unsafe fn hand_back_cached_surface(cached: u64, out: *mut *mut c_void) {
 /// GPU authoritative so a later map or partial write retries the readback. A
 /// texture with no Metal texture holds nothing on the GPU, so the claim was
 /// left by an operation the encoder dropped and the staging answers as it is.
+/// On a core device the core reads the subresource back
+/// (`core_read_subresource_back`, DXMTRS C4c-3a).
 fn materialize_subresource_from_gpu(ti: &mut TextureInner, face: u32, level: usize) -> bool {
+    #[cfg(feature = "core-runtime")]
+    if ti.device_inner != 0
+        && let Some(core) = DeviceInner::from_ptr(ti.device_inner).core_mut()
+    {
+        return core_read_subresource_back(ti, core, face, level);
+    }
     let (width, height) = (ti.mip_width(level), ti.mip_height(level));
     let bytes_per_row = ti.mip_bytes_per_row(level);
     let block_rows = height.div_ceil(ti.block_h.max(1));
@@ -4539,6 +4545,52 @@ fn materialize_subresource_from_gpu(ti: &mut TextureInner, face: u32, level: usi
     true
 }
 
+/// Reads a texture's level or cube face back into its staging on a core device (DXMTRS C4c-3a).
+///
+/// The core arm of `materialize_subresource_from_gpu`: every CPU write owed to the core texture is
+/// uploaded first (`core_flush_dirty`, which also makes the texture), then the core reads
+/// `(face, level)` into the level's staging at its pitch, after the passes that wrote it. The
+/// caller clears the claim and counts the read as the level's upload. mtld3d's `ensure_staging`
+/// and `prepare_staging_read_back` have no work here: a core device never drops a staging, and
+/// nothing reads one past record time. False, with one error line, for a subresource the core
+/// does not resolve, one with no staging, or a failed read; the claim then stays.
+#[cfg(feature = "core-runtime")]
+fn core_read_subresource_back(
+    ti: &mut TextureInner,
+    core: &mut d3d9_rt::device::CoreDevice,
+    face: u32,
+    level: usize,
+) -> bool {
+    let _ = core_flush_dirty(ti, core);
+    let pitch = ti.mip_bytes_per_row(level) as usize;
+    let target = u32::try_from(level)
+        .ok()
+        .map(|level| d3d9_rt::device::TargetRef::Texture {
+            id: ti.texture_id,
+            level,
+            face: ti.cube.is_some().then_some(face),
+        });
+    // Formed only after the flush, which reads the same pages.
+    let staging = ti
+        .subresource_staging_backing(face, level)
+        .and_then(|(ptr, len)| Some((usize::try_from(ptr).ok()?, len)));
+    let read = target.zip(staging).is_some_and(|(target, (addr, len))| {
+        let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
+        // SAFETY: the subresource's staging pages, `len` bytes at `ptr`, live while the
+        // texture is; no other reference to them is alive (the API lock keeps this call alone,
+        // and a core device's uploads copied them at record time).
+        let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+        core.read_back(target, bytes, pitch)
+    });
+    if !read {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: face {face} level {level} of texture {:#x} did not read back → \
+             materialization failed", ti.texture_id.raw()
+        );
+    }
+    read
+}
+
 /// The staging rows a read back of a widened level is narrowed into.
 struct NarrowTarget {
     /// The level's D3D format, narrower than the BGRA8 it lives in on the GPU.
@@ -4686,7 +4738,7 @@ extern "system" fn texture_lock_rect(
     }
     refuse_under_core!(
         ti.core_refuses_lock(),
-        "IDirect3DTexture9::LockRect (a render-target or depth texture)",
+        "IDirect3DTexture9::LockRect (a depth texture)",
         mtld3d_types::D3DERR_NOTAVAILABLE
     );
     // A held device context maps the whole resource, so no level of it can be
@@ -4828,7 +4880,7 @@ extern "system" fn texture_unlock_rect(this: *mut c_void, level: u32) -> i32 {
     }
     refuse_under_core!(
         ti.core_refuses_lock(),
-        "IDirect3DTexture9::UnlockRect (a render-target or depth texture)",
+        "IDirect3DTexture9::UnlockRect (a depth texture)",
         mtld3d_types::D3DERR_NOTAVAILABLE
     );
     mtld3d_shared::crumb!("api:tex_ulock", u64::from(level));
@@ -5863,7 +5915,8 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
     use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
     // A depth texture's core texture is a depth texture (DXMTRS C4b-3d2): zeroed, written by
-    // passes and Clears only. Its CPU lock is refused (`core_refuses_lock`), so nothing uploads.
+    // passes and Clears only. Its CPU lock is refused (a dynamic one's by `core_refuses_lock`,
+    // any other's by the lock's depth check), so nothing uploads.
     if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
         if !core.has_texture(ti.texture_id) {
             let desc = CoreTextureDesc {
