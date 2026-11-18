@@ -149,8 +149,7 @@ file, for its link driver.
 The x86 PE DLLs are guest code, which an x86 translator runs: Rosetta under an x86_64 Wine, and the translator an
 arm64 Wine carries (FEX). The ARM64X images are native code and have no such baseline. `.cargo/config.toml` sets the
 x86 builds' CPU baseline for the Rust, and `tools/mingw-cc.sh env` sets it for the C and C++ that build scripts compile.
-Neither goes past SSE4.2 or uses BMI; the comments in `.cargo/config.toml` say why. DXMT's own C++ has no baseline of
-its own.
+Neither goes past SSE4.2 or uses BMI; the comments in `.cargo/config.toml` say why.
 
 The i686 build targets `pentium4`, plain SSE2. The 32-bit build that matters today is the one World of Warcraft 1.12
 and 3.3.5a load under Rosetta, and there `pentium4` measured faster than `nehalem`: 9 to 15 % less time per call for the
