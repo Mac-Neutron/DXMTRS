@@ -12,13 +12,14 @@ use std::sync::Arc;
 use dxmt_core::{
     deptrack::Access,
     encoder::{Encoder, stage},
+    resource::{Texture, TextureViewKey},
 };
 use mtld3d_core::convert::linear_to_srgb_rgba;
 use winemetal_sys::wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor, WMTScissorRect,
 };
 
-use super::{CoreDevice, depth, target::Resolved};
+use super::{CoreDevice, TargetRef, depth, target::Resolved};
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -225,9 +226,7 @@ impl CoreDevice {
             b: f64::from(rgba[2]),
             a: f64::from(rgba[3]),
         };
-        // Array length 0: a target's view is no array, as a render pass on it says (and D3D11's
-        // views of a plain 2D texture), which lets the optimizer fold the clear into that pass.
-        self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
+        self.emit_clear(texture, key, color);
     }
 
     /// Clears `rects` (`x, y, width, height`, each inside it) of the target bound at `slot`.
@@ -253,6 +252,74 @@ impl CoreDevice {
         self.note_cleared(slot, key.format());
         let rects = scissor_rects(rects);
         self.close_pass();
+        self.emit_quad_clear(texture, key, rects, rgba);
+    }
+
+    /// Fills `target`'s rect `[x, y, width, height]`, or the whole of it, with `rgba` as given.
+    ///
+    /// `ColorFill` on any colour target the device resolves, bound or not, multisampled or not,
+    /// through the view in its stored format, never its sRGB twin: `rgba` is stored as given, as
+    /// a Clear under no sRGB write stores it. The rect is in the texels of the target's level (a
+    /// cube's face being one). The open pass ends; the whole view is then [`CoreDevice::clear`]'s
+    /// Clear pass of that view, a rect [`CoreDevice::clear_rects`]'s quad clear. The draws' state
+    /// is untouched: the next draw opens its pass anew, loading every slot. False, and nothing
+    /// recorded, when `target` does not resolve, or the rect is empty or leaves the target.
+    #[must_use]
+    pub fn fill(&mut self, target: TargetRef, rect: Option<[u32; 4]>, rgba: [f32; 4]) -> bool {
+        let Some(Resolved {
+            texture,
+            key,
+            shape,
+        }) = self.resolve(target)
+        else {
+            return false;
+        };
+        let inside = |start: u32, extent: u32, edge: u32| {
+            start.checked_add(extent).is_some_and(|end| end <= edge)
+        };
+        if rect.is_some_and(|[x, y, width, height]| {
+            width == 0
+                || height == 0
+                || !inside(x, width, shape.width)
+                || !inside(y, height, shape.height)
+        }) {
+            return false;
+        }
+        self.note_written(target, key.format());
+        self.close_pass();
+        if let Some(rect) = rect {
+            self.emit_quad_clear(texture, key, scissor_rects(&[rect]), rgba);
+        } else {
+            let [r, g, b, a] = rgba.map(f64::from);
+            self.emit_clear(texture, key, WMTClearColor { r, g, b, a });
+        }
+        true
+    }
+
+    /// Records that a Clear writes the target bound at `slot` through its view in `format`.
+    fn note_cleared(&mut self, slot: usize, format: u32) {
+        if let Some(target) = self.slot_target(slot) {
+            self.note_written(target, format);
+        }
+    }
+
+    /// Records a core Clear pass of the whole view `key` of `texture` to `color`.
+    fn emit_clear(&mut self, texture: Arc<Texture>, key: TextureViewKey, color: WMTClearColor) {
+        // Array length 0: a target's view is no array, as a render pass on it says (and D3D11's
+        // views of a plain 2D texture), which lets the optimizer fold the clear into that pass.
+        self.emit(move |enc| enc.clear_color(&texture, key, 0, color));
+    }
+
+    /// Records the core's quad clear of `rects` of the view `key` of `texture` to `rgba`.
+    ///
+    /// A render pass of its own on that one view, a scissored triangle a rect.
+    fn emit_quad_clear(
+        &mut self,
+        texture: Arc<Texture>,
+        key: TextureViewKey,
+        rects: Vec<WMTScissorRect>,
+        rgba: [f32; 4],
+    ) {
         self.emit(move |enc| {
             enc.with_clear_rtv(|quad, enc| {
                 quad.begin(enc, Arc::clone(&texture), key, 0, 0);
@@ -262,13 +329,6 @@ impl CoreDevice {
                 quad.end(enc);
             });
         });
-    }
-
-    /// Records that a Clear writes the target bound at `slot` through its view in `format`.
-    fn note_cleared(&mut self, slot: usize, format: u32) {
-        if let Some(target) = self.slot_target(slot) {
-            self.note_written(target, format);
-        }
     }
 }
 

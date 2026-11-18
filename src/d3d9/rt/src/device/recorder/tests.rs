@@ -85,3 +85,16 @@ fn an_empty_list_records_nothing() {
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert!(passes(&calls).is_empty(), "{calls:#?}");
 }
+
+/// A rect's `x, y, width, height` become its scissor's `x, y, width, height`, field for field.
+///
+/// What the quad clear scissors to: the fakes print a scissor record without its rect.
+#[test]
+fn scissor_rects_keep_each_field() {
+    let scissors = super::scissor_rects(&[[1, 2, 3, 4], [50, 6, 70, 9]]);
+    let fields = scissors
+        .iter()
+        .map(|s| [s.x, s.y, s.width, s.height])
+        .collect::<Vec<_>>();
+    assert_eq!(fields, [[1, 2, 3, 4], [50, 6, 70, 9]]);
+}

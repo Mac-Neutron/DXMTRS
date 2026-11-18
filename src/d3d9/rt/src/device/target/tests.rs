@@ -1721,3 +1721,349 @@ fn a_draw_after_a_back_buffer_write_loads_it() {
     assert!(renders[0] < write && write < renders[1], "{calls:#?}");
     assert_eq!(draws(&calls), 1, "{calls:#?}");
 }
+
+/// The render passes in `calls` whose colour 0 is the texture or view `handle`.
+fn passes_on<'a>(calls: &'a [String], handle: &str) -> Vec<&'a [String]> {
+    let prefix = format!("{handle} ");
+    passes(calls)
+        .into_iter()
+        .filter(|pass| line(pass, "  target0 ").is_some_and(|target| target.starts_with(&prefix)))
+        .collect()
+}
+
+/// The lines of `pass` that are exactly the record `record` (`render 36`), its fields aside.
+fn records(pass: &[String], record: &str) -> usize {
+    pass.iter().filter(|c| c.trim() == record).count()
+}
+
+/// A fill of a target no pass attaches ends the open pass and leaves the draws around it alone.
+///
+/// Draw on the back buffer, fill another target, draw on the back buffer again: the pass is
+/// closed right after the fill; every pass on the back buffer loads and stores it, whether the
+/// two merge or not, and holds the two draws; one pass reaches the filled target. A whole fill
+/// is its Clear pass, the colour as given; a rect fill its quad's pass, which loads.
+#[test]
+fn a_fill_of_an_unbound_target_leaves_the_draws_alone() {
+    const DEVICE: u64 = 0x410;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    let (y, h_y) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    let binds = ff_binds();
+    for rect in [None, Some([4, 6, 20, 10])] {
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+        assert!(core.render_open, "{rect:?}");
+        assert!(
+            core.fill(level0(y), rect, [0.25, 0.5, 1.0, 1.0]),
+            "{rect:?}"
+        );
+        assert!(!core.render_open, "{rect:?}");
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        let drawn_passes = passes_on(&calls, &back_buffer);
+        let filled_passes = passes_on(&calls, &h_y);
+        assert_eq!(
+            drawn_passes.len() + filled_passes.len(),
+            passes(&calls).len(),
+            "{rect:?}: {calls:#?}"
+        );
+        for pass in &drawn_passes {
+            let color = line(pass, "  color0 ").unwrap_or_default();
+            assert!(color.starts_with("load=1 store=1 "), "{rect:?}: {calls:#?}");
+        }
+        let drawn = drawn_passes
+            .iter()
+            .map(|pass| {
+                pass.iter()
+                    .filter(|c| c.starts_with("  render 19 "))
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(drawn, 2, "{rect:?}: {calls:#?}");
+        assert_eq!(filled_passes.len(), 1, "{rect:?}: {calls:#?}");
+        let filled = line(filled_passes[0], "  color0 ").unwrap_or_default();
+        if rect.is_some() {
+            assert!(filled.starts_with("load=1 store=1 "), "{calls:#?}");
+            assert_eq!(records(filled_passes[0], "render 36"), 1, "{calls:#?}");
+        } else {
+            assert_eq!(filled, "load=2 store=1 clear=0.25,0.5,1,1", "{calls:#?}");
+        }
+    }
+}
+
+/// A rect fill is one quad pass on the target's view at its size: one scissor and one colour.
+///
+/// It loads and stores the target, and hands the quad its colour as 16 bytes. The fakes print
+/// neither the scissor's rect nor the colour: `scissor_rects_keep_each_field` holds the first.
+#[test]
+fn a_rect_fill_is_one_quad() {
+    const DEVICE: u64 = 0x411;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    assert!(core.fill(
+        TargetRef::BackBuffer,
+        Some([5, 7, 18, 16]),
+        [0.25, 0.5, 0.75, 1.0]
+    ));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        targets(&calls),
+        [(back_buffer, "64x32".to_owned())],
+        "{calls:#?}"
+    );
+    let color = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(color.starts_with("load=1 store=1 "), "{calls:#?}");
+    assert_eq!(records(found[0], "render 36"), 1, "{calls:#?}");
+    let quad_colours = found[0]
+        .iter()
+        .filter(|c| c.starts_with("  render 11 length=16 "))
+        .count();
+    assert_eq!(quad_colours, 1, "{calls:#?}");
+}
+
+/// A fill of a target with an sRGB twin goes through its stored view, the colour as given.
+///
+/// The whole view's Clear stores the colour unencoded on the texture itself, and a rect's quad
+/// attaches the texture itself too: no view in the twin's format is made.
+#[test]
+fn a_fill_takes_the_stored_view() {
+    const DEVICE: u64 = 0x412;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored_desc(&mut core, DEVICE, 1, &twinned(flat(BGRA8, 64, 4), SRGB));
+    let mid = [0.5, 0.25, 0.5, 1.0];
+    assert!(core.fill(level0(t), None, mid));
+    assert!(core.fill(level0(t), Some([8, 8, 16, 16]), mid));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=0.5,0.25,0.5,1"),
+        "{calls:#?}"
+    );
+    assert_eq!(records(found[1], "render 36"), 1, "{calls:#?}");
+    // A Clear pass of its own names no size: only the quad's says the view's.
+    let drawn = targets(&calls);
+    let handles = drawn.iter().map(|(handle, _)| handle).collect::<Vec<_>>();
+    assert_eq!(handles, [&h_t, &h_t], "{calls:#?}");
+    assert_eq!(drawn[1].1, "64x64", "{calls:#?}");
+    let twin = format!(" format={SRGB} ");
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLTexture_newTextureView ") && c.contains(&twin)),
+        "{calls:#?}"
+    );
+}
+
+/// A whole fill of the back buffer or of a multisampled target is a Clear pass of that texture.
+///
+/// A rect fill of the multisampled target is its quad's pass, at four samples.
+#[test]
+fn a_fill_reaches_the_back_buffer_and_a_multisampled_target() {
+    const DEVICE: u64 = 0x413;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored_desc(&mut core, DEVICE, 1, &ms_desc(BGRA8, 64, 4));
+    assert!(core.fill(TargetRef::BackBuffer, None, [0.25, 0.25, 0.5, 1.0]));
+    assert!(core.fill(level0(t), None, [0.5, 0.25, 0.25, 1.0]));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [back_buffer, h_t.clone()], "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=0.25,0.25,0.5,1"),
+        "{calls:#?}"
+    );
+    assert_eq!(
+        line(found[1], "  color0 "),
+        Some("load=2 store=1 clear=0.5,0.25,0.25,1"),
+        "{calls:#?}"
+    );
+    assert!(core.fill(level0(t), Some([8, 8, 16, 16]), [0.0, 1.0, 0.0, 1.0]));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(targets(&calls)[0].0, h_t, "{calls:#?}");
+    assert_eq!(line(found[0], "  samples="), Some("4"), "{calls:#?}");
+}
+
+/// A fill of a level or a cube face reaches that one subresource's view, at the level's size.
+///
+/// The rect is in the level's texels: one inside level 0 that leaves level 1 is refused there,
+/// and nothing is recorded.
+#[test]
+fn a_fill_reaches_a_level_and_a_face() {
+    const DEVICE: u64 = 0x414;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (mips, mips_handle) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 2);
+    let (cube, cube_handle) = stored(&mut core, DEVICE, 2, TextureKind::Cube, 16, 1);
+    let level1 = TargetRef::Texture {
+        id: mips,
+        level: 1,
+        face: None,
+    };
+    let face3 = TargetRef::Texture {
+        id: cube,
+        level: 0,
+        face: Some(3),
+    };
+    assert!(!core.fill(level1, Some([20, 20, 20, 20]), [0.25; 4]));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(calls.is_empty(), "{calls:#?}");
+    assert!(core.fill(level1, Some([4, 4, 20, 20]), [0.25; 4]));
+    assert!(core.fill(face3, None, [0.5, 0.25, 0.25, 1.0]));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let view = |parent: &str, mip: u32, slice: u32| {
+        let want = format!(
+            " of {parent} format={BGRA8} type={WMT_TEXTURE_TYPE2D} mip={mip} slice={slice}"
+        );
+        calls
+            .iter()
+            .filter_map(|c| c.strip_prefix("MTLTexture_newTextureView "))
+            .find_map(|c| c.strip_suffix(want.as_str()))
+            .unwrap_or_else(|| panic!("no view{want}: {calls:#?}"))
+            .to_owned()
+    };
+    // The quad's pass names its view's size; a Clear pass of its own names none.
+    let drawn = targets(&calls);
+    assert_eq!(drawn.len(), 2, "{calls:#?}");
+    assert_eq!(
+        drawn[0],
+        (view(&mips_handle, 1, 0), "32x32".to_owned()),
+        "{calls:#?}"
+    );
+    assert_eq!(drawn[1].0, view(&cube_handle, 0, 3), "{calls:#?}");
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(records(found[0], "render 36"), 1, "{calls:#?}");
+    assert_eq!(
+        line(found[1], "  color0 "),
+        Some("load=2 store=1 clear=0.5,0.25,0.25,1"),
+        "{calls:#?}"
+    );
+}
+
+/// A fill the target cannot take is refused: nothing is recorded and the open pass stays open.
+///
+/// An empty rect, one past an edge or past `u32::MAX`, and a target the store lacks; the draws
+/// around them share one pass.
+#[test]
+fn a_refused_fill_records_nothing() {
+    const DEVICE: u64 = 0x415;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    let back = TargetRef::BackBuffer;
+    for (what, target, rect) in [
+        ("an empty width", back, Some([0, 0, 0, 4])),
+        ("an empty height", back, Some([0, 0, 4, 0])),
+        ("past the right edge", back, Some([60, 0, 8, 1])),
+        ("past the bottom edge", back, Some([0, 30, 1, 4])),
+        ("past u32::MAX", back, Some([u32::MAX, 0, 2, 1])),
+        (
+            "an id the store lacks",
+            level0(TextureId::from_raw(9)),
+            None,
+        ),
+    ] {
+        assert!(!core.fill(target, rect, [1.0, 0.0, 0.0, 1.0]), "{what}");
+        assert!(core.render_open, "{what}");
+    }
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    assert_eq!(
+        targets(&calls),
+        [(back_buffer, "64x32".to_owned())],
+        "{calls:#?}"
+    );
+    let color = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(color.starts_with("load=1 store=1 "), "{calls:#?}");
+    assert_eq!(draws(&calls), 2, "{calls:#?}");
+}
+
+/// A fill of level 0, then the chain regenerated from it: the Clear's pass before the mipmap blit.
+#[test]
+fn mipmaps_are_made_after_a_fill() {
+    const DEVICE: u64 = 0x416;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 2);
+    assert!(core.fill(level0(t), None, [0.25, 0.5, 0.75, 1.0]));
+    core.texture_generate_mips(t);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let cleared = at(&calls, "  color0 load=2 store=1 clear=0.25,0.5,0.75,1");
+    let mipmaps = calls
+        .iter()
+        .position(|c| c.starts_with("  blit generate_mipmaps "))
+        .unwrap_or_else(|| panic!("no mipmaps: {calls:#?}"));
+    assert!(cleared < mipmaps, "{calls:#?}");
+}
+
+/// A fill, an upload into that target, then a draw on it: the draw's pass loads the upload.
+///
+/// `a_draw_after_an_upload_loads_it` with a fill of the target before it is bound in place of
+/// the Clear: the fill is a pass of its own before the upload's blit.
+#[test]
+fn a_draw_after_a_fill_and_an_upload_loads_them() {
+    const DEVICE: u64 = 0x417;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (t, h_t) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    assert!(core.fill(level0(t), None, [1.0, 0.0, 0.0, 1.0]));
+    let block = UploadRegion {
+        level: 0,
+        slice: 0,
+        x: 8,
+        y: 8,
+        z: 0,
+        width: 8,
+        height: 8,
+        depth: 1,
+    };
+    assert!(core.texture_upload(t, block, &[0x55; 8 * 8 * 4], 8 * 4, 8 * 8 * 4));
+    assert!(core.set_target(level0(t)));
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert_eq!(
+        line(found[0], "  color0 "),
+        Some("load=2 store=1 clear=1,0,0,1"),
+        "{calls:#?}"
+    );
+    let drawn = line(found[1], "  color0 ").unwrap_or_default();
+    assert!(drawn.starts_with("load=1 store=1 "), "{calls:#?}");
+    let handles = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(handles, [h_t.clone(), h_t.clone()], "{calls:#?}");
+    let copied = format!("  blit copy_to_texture {h_t} ");
+    let upload = calls
+        .iter()
+        .position(|c| c.starts_with(&copied))
+        .unwrap_or_else(|| panic!("no upload: {calls:#?}"));
+    let renders = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| *c == "MTLCommandBuffer_renderCommandEncoder")
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    assert!(renders[0] < upload && upload < renders[1], "{calls:#?}");
+    assert_eq!(draws(&calls), 1, "{calls:#?}");
+}
