@@ -1319,21 +1319,6 @@ impl TextureInner {
         self.device_inner
     }
 
-    /// Whether a core device refuses this texture's CPU lock.
-    ///
-    /// A dynamic depth texture's lock (one made without the depth-stencil
-    /// usage) reads its depth planes back and uploads a packed copy, which a
-    /// core device does not do yet. Every other depth texture's lock is
-    /// mtld3d's `INVALIDCALL`, and a render-target texture's level is read
-    /// back by the core (DXMTRS C4c-3a).
-    #[cfg(feature = "core-runtime")]
-    fn core_refuses_lock(&self) -> bool {
-        self.device_inner != 0
-            && self.flags.contains(TextureFlags::DEPTH_FORMAT)
-            && self.d3d_usage & D3DUSAGE_DYNAMIC != 0
-            && DeviceInner::from_ptr(self.device_inner).is_core()
-    }
-
     /// How many sub-resource cache slots this texture addresses.
     ///
     /// `levels * 6` for a cube map (see
@@ -4736,11 +4721,6 @@ extern "system" fn texture_lock_rect(
     if level >= ti.app_level_count() || out_locked_rect.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    refuse_under_core!(
-        ti.core_refuses_lock(),
-        "IDirect3DTexture9::LockRect (a depth texture)",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // A held device context maps the whole resource, so no level of it can be
     // locked until `ReleaseDC`. The DC is taken through a level surface and
     // recorded on the texture, which is the only place this entry point can see
@@ -4878,11 +4858,6 @@ extern "system" fn texture_unlock_rect(this: *mut c_void, level: u32) -> i32 {
     if level >= ti.app_level_count() {
         return reject_unlock_level(level);
     }
-    refuse_under_core!(
-        ti.core_refuses_lock(),
-        "IDirect3DTexture9::UnlockRect (a depth texture)",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::crumb!("api:tex_ulock", u64::from(level));
     let level_u = level as usize;
     let (read_only, no_dirty, was_locked, lock_rect) = ti.take_lock(level_u);
@@ -5909,14 +5884,16 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// (the whole level when none), from the staging, widened on the CPU to BGRA8 when its format's
 /// upload is not a plain copy (`upload_decode`). An autogen texture regenerates its chain after
 /// a level-0 upload. A render target's core texture is made as one (zeroed, and with no first
-/// upload: only the levels a CPU write dirtied go), and so is a depth texture's, which never
-/// uploads. Always true since C4b-3d2: every texture has a core form.
+/// upload: only the levels a CPU write dirtied go), and so is a depth texture's, whose dirty
+/// levels (a dynamic one's locks) go whole as planes (`core_upload_depth_levels`). Always true
+/// since C4b-3d2: every texture has a core form.
 #[cfg(feature = "core-runtime")]
 pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) -> bool {
     use d3d9_rt::device::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion};
-    // A depth texture's core texture is a depth texture (DXMTRS C4b-3d2): zeroed, written by
-    // passes and Clears only. Its CPU lock is refused (a dynamic one's by `core_refuses_lock`,
-    // any other's by the lock's depth check), so nothing uploads.
+    // A depth texture's core texture is a depth texture (DXMTRS C4b-3d2): zeroed, written by the
+    // passes it is attached to and by Clears. A dynamic one is never attached, and its CPU locks
+    // reach it here, each dirty level uploaded whole (DXMTRS C4c-3b); any other depth texture's
+    // lock is the lock's depth check's `INVALIDCALL`, so it has no dirty level.
     if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
         if !core.has_texture(ti.texture_id) {
             let desc = CoreTextureDesc {
@@ -5933,6 +5910,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             };
             core.texture_create(ti.texture_id, &desc);
         }
+        core_upload_depth_levels(ti, core);
         return true;
     }
     // A render target's core texture starts zeroed and takes no first upload: its staging holds
@@ -6114,6 +6092,81 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
         core.texture_generate_mips(id);
     }
     true
+}
+
+/// Uploads each level of `ti`'s depth texture a CPU lock dirtied, whole (DXMTRS C4c-3b).
+///
+/// A dynamic depth texture is never attached, so its staging, packed as the lock wrote it, is
+/// the level's only copy: a dirty level is unpacked into a float depth plane and, for D24S8, a
+/// stencil plane in `PlaneLayout::new(w, h, 4)`'s rows, and uploaded in application order,
+/// ahead of the draw that binds it. An uploaded level's mark and pending rect go and it counts
+/// as uploaded (`was_uploaded`), so a `READONLY` re-lock publishes nothing, as on mtld3d; a
+/// level that does not unpack or upload keeps them for the next bind and logs once a texture.
+/// A level never dirtied keeps the zeros its core texture was made with, as its staging does.
+#[cfg(feature = "core-runtime")]
+fn core_upload_depth_levels(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreDevice) {
+    use d3d9_rt::device::DepthPlanes;
+    use mtld3d_core::depth_texture::{PackedDepth, PlaneLayout};
+    let id = ti.texture_id;
+    let format = PackedDepth::from_d3d(ti.d3d_format);
+    let mut mask = ti.dirty_mask;
+    while mask != 0 {
+        let level_bit = mask.trailing_zeros();
+        let level = level_bit as usize;
+        mask &= mask - 1;
+        if level >= ti.levels as usize {
+            continue;
+        }
+        let layout = PlaneLayout::new(ti.mip_width(level), ti.mip_height(level), 4);
+        let uploaded = format.as_ref().zip(layout).is_some_and(|(format, layout)| {
+            let stencil_len = if format.has_stencil() {
+                layout.stencil_pitch * layout.height
+            } else {
+                0
+            };
+            let mut depth = vec![0u8; layout.depth_pitch * layout.height];
+            let mut stencil = vec![0u8; stencil_len];
+            let packed_pitch = ti.mip_bytes_per_row(level) as usize;
+            let unpacked = ti.staging.get(level).is_some_and(|packed| {
+                layout.unpack(
+                    format,
+                    packed.as_slice(),
+                    packed_pitch,
+                    &mut depth,
+                    &mut stencil,
+                )
+            });
+            let stencil_plane = format
+                .has_stencil()
+                .then_some((stencil.as_slice(), layout.stencil_pitch));
+            unpacked
+                && core.depth_upload(
+                    id,
+                    level_bit,
+                    DepthPlanes {
+                        depth: &depth,
+                        depth_pitch: layout.depth_pitch,
+                        stencil: stencil_plane,
+                    },
+                )
+        });
+        if !uploaded {
+            mtld3d_shared::log_once_warn_by!(
+                target: crate::LOG_TARGET,
+                key: id.raw(),
+                "d3d9 core: depth texture {:#x} level {level} did not upload; it stays dirty",
+                id.raw()
+            );
+            continue;
+        }
+        ti.dirty_mask &= !(1 << level_bit);
+        if let Some(rect) = ti.pending_upload_rects.get_mut(level) {
+            *rect = None;
+        }
+        if let Some(flag) = ti.was_uploaded.get_mut(level) {
+            *flag = true;
+        }
+    }
 }
 
 /// Publish a CPU write of a texture in application order, after the passes before it.
