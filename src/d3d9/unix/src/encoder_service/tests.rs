@@ -172,7 +172,10 @@ fn failed_startup_retires_started_workers(reject_submit: bool) {
     use mtld3d_core::shader_prewarm::PrewarmHandle;
     use mtld3d_shared::{MetalHandle, record_handle::DeviceRecordHandle};
 
-    const DEADLINE: Duration = Duration::from_secs(5);
+    // How long a worker waits for the supervisor before giving up, never reached on a passing
+    // run. The late failure starts an encoder on a real Metal device first, which a freshly
+    // linked test binary on a busy host has taken more than five seconds to do.
+    const DEADLINE: Duration = Duration::from_secs(30);
     let (release, blocked) = mpsc::channel();
     let (prewarm_done, prewarm_finished) = mpsc::channel();
     let (submit_entered, submit_start) = mpsc::channel();
