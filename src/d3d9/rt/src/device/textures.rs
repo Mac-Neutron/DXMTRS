@@ -431,9 +431,11 @@ impl CoreDevice {
     ///
     /// `None` unless the store holds `id` as a 2D or cube colour texture with that level (a depth
     /// texture and a volume are none), and `face` is a cube's face exactly when it is a cube. A
-    /// block-compressed level's `texel_bytes` is its block's: such a level never reaches
-    /// [`CoreDevice::copy`], the one caller, whose destination is a target and whose two formats
-    /// are equal, and its shape is no rect's measure (DXMTRS C4c-4b).
+    /// block-compressed level's `texel_bytes` is its block's, which neither reader of the shape
+    /// reads: `copy_source` hands it to [`CoreDevice::copy`], which such a level never reaches
+    /// (its destination is a target and its two formats are equal, DXMTRS C4c-4b), and to
+    /// [`CoreDevice::stretch`], which samples one scaled or converted into a target and measures
+    /// its rect by the level's width and height, in texels (DXMTRS C4c-4c).
     pub(super) fn level_shape(
         &self,
         id: TextureId,

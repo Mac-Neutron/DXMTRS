@@ -41,7 +41,7 @@ use winemetal_sys::{
 
 use super::{CoreDevice, LOG_TARGET, TargetRef, surface::inside, target::Shape};
 
-/// `MTLLanguageVersion2_4`: the Metal language version mtld3d compiles the quad's source in.
+/// `MTLLanguageVersion2_4`: the quad's and the depth resolve's language version, as mtld3d's.
 const LANGUAGE_VERSION_2_4: u64 = (2 << 16) | 4;
 /// `MTLMathModeFast`, as mtld3d compiles the quad's source.
 const MATH_MODE_FAST: u8 = 2;

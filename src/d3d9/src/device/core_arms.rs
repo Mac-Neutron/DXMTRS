@@ -12,10 +12,11 @@
 //! between overlapping rects of one texture, through a scratch texture where a shape needs one
 //! (DXMTRS C4c-4c). Into a plain surface it copies on the CPU, from another (DXMTRS C4c-4b) or
 //! from itself (DXMTRS C4c-4c). `stretch_depth` copies a depth-stencil surface whole into another
-//! (DXMTRS C4c-4b). The colour arm tests the destination itself, since on a core device the GPU
-//! writes nothing but targets. What an arm does not cover yet is refused with one warning
-//! (C4-13): a Present with rects or another window; of `StretchRect`, the depth-stencil resolve,
-//! an extended device's whole-surface copy into a level that is no target (two faces of one cube
+//! (DXMTRS C4c-4b), or resolves a multisampled one into a single-sample one, sample 0 of each
+//! plane (DXMTRS C4c-4d). The colour arm tests the destination itself, since on a core device the
+//! GPU writes nothing but targets. What an arm does not cover yet is refused with one warning
+//! (C4-13): a Present with rects or another window; of `StretchRect`, all in the colour arm, an
+//! extended device's whole-surface copy into a level that is no target (two faces of one cube
 //! included) or from a surface that is no plain one, a pair of plain surfaces whose formats no
 //! CPU conversion serves, and a multisampled source of a format this GPU does not resolve. Clear
 //! and the read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP draws
@@ -667,24 +668,27 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     D3D_OK
 }
 
-/// `StretchRect` of a depth-stencil pair on a core device: the whole surface copied into another.
+/// `StretchRect` of a depth-stencil pair on a core device: the whole surface copied or resolved.
 ///
 /// The caller has run mtld3d's depth-stencil gates (two depth-stencil surfaces of one format and
 /// size in the default pool, sample counts equal or a resolve, whole rects), so a pair they
-/// reject has answered `D3DERR_INVALIDCALL` before this. The resolve, more samples into one, is
-/// refused by name. One surface at both ends is `D3D_OK` with nothing recorded, as mtld3d's
-/// encoder skips it. Any other pair is one copy of the whole level, its depth and its stencil,
-/// two multisampled surfaces of one count included, as mtld3d records it (DXMTRS C4c-4b). A copy
-/// the core does not record is logged and `D3DERR_INVALIDCALL`. `surfaces` and `infos` are the
-/// source's and the destination's.
+/// reject has answered `D3DERR_INVALIDCALL` before this, and none past them is refused by name.
+/// The resolve, more samples into one, writes sample 0 of each texel of the source's depth, and
+/// of its stencil for a format that has one, into the destination, as mtld3d's resolve keeps
+/// them (DXMTRS C4c-4d). Of one sample count, one surface at both ends is `D3D_OK` with nothing
+/// recorded, as mtld3d's encoder skips it, and any other pair is one copy of the whole level,
+/// its depth and its stencil, two multisampled surfaces of one count included, as mtld3d
+/// records it (DXMTRS C4c-4b). A copy or a resolve the core does not record, one Metal makes no
+/// pass for included, is logged as an error and `D3DERR_INVALIDCALL`, where mtld3d answers a
+/// resolve it skips `D3D_OK` with one warning. `surfaces` and `infos` are the source's and the
+/// destination's.
 pub fn stretch_depth(
     this: *mut c_void,
     surfaces: [*mut c_void; 2],
     infos: [&StretchSurfaceInfo; 2],
 ) -> i32 {
-    if infos[0].sample_count != infos[1].sample_count {
-        return refuse_stretch();
-    }
+    // The one pair of unequal counts the gates let through: more samples into one.
+    let resolve = infos[0].sample_count != infos[1].sample_count;
     // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
     // the call per the ABI.
     let src = unsafe { &*surfaces[0].cast::<Direct3DSurface9>() };
@@ -695,11 +699,22 @@ pub fn stretch_depth(
         return D3D_OK;
     }
     let core = core_device(this).and_then(DeviceInner::core_mut);
-    let copied = match (source, destination, core) {
-        (Some(source), Some(destination), Some(core)) => core.copy_depth(source, destination),
+    let recorded = match (source, destination, core) {
+        (Some(source), Some(destination), Some(core)) => {
+            if resolve {
+                core.depth_resolve(source, destination)
+            } else {
+                core.copy_depth(source, destination)
+            }
+        }
         _ => false,
     };
-    if !copied {
+    if !recorded && resolve {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: StretchRect resolving depth {source:?} into {destination:?} was not recorded → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    }
+    if !recorded {
         log::error!(target: crate::LOG_TARGET,
             "d3d9 core: StretchRect of depth {source:?} into {destination:?} was not recorded → INVALIDCALL");
         return D3DERR_INVALIDCALL;
@@ -903,6 +918,11 @@ fn with_scratch(
 ///
 /// The one place that names the call: the warning is keyed on the name's address and the gates
 /// count one line a launch, so the name has one copy, in a body never inlined (DXMTRS C4c-4b).
+/// Every caller is `stretch_colour`'s: a multisampled target other than the back buffer, of a
+/// format this GPU does not resolve, as the source of a copy into a target; an extended
+/// device's whole-surface copy into a level that is no target (two faces of one cube included)
+/// or from a surface that is no plain one; and a pair of plain surfaces whose formats no CPU
+/// conversion serves.
 #[cold]
 #[inline(never)]
 fn refuse_stretch() -> i32 {
