@@ -396,6 +396,244 @@ fn a_back_buffer_write_past_an_edge_records_nothing() {
     assert!(calls.is_empty(), "{calls:#?}");
 }
 
+/// A resize drains the work recorded before it, then makes the back buffer alone, at its size.
+///
+/// The Clear's chunk is committed before the new texture is made; nothing else is made (a second
+/// presenter would make its gamma table), and the old back buffer is held by nothing.
+#[test]
+fn a_resize_drains_then_makes_the_back_buffer_alone() {
+    const DEVICE: u64 = 0x480;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let held = core.back_buffer.as_ref().expect("a back buffer");
+    let old = std::sync::Arc::downgrade(&held.texture);
+    core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
+    core.resize(128, 64, 1);
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let commit = at(&calls, "MTLCommandBuffer_commit");
+    let made = made_at(&calls);
+    assert_eq!(made.len(), 1, "{calls:#?}");
+    assert!(made[0].1.contains(" size=128x64x1 "), "{calls:#?}");
+    assert!(commit < made[0].0, "{calls:#?}");
+    assert!(old.upgrade().is_none(), "the old back buffer is held");
+}
+
+/// After a resize a draw targets the new back buffer and a Present shows it at the new size.
+///
+/// Twice: each resize's texture is the one the draw's pass attaches, at its size, and the one
+/// the present samples, into the layer at the size the presenter was last given (its viewport).
+#[test]
+fn a_resized_back_buffer_is_drawn_and_presented() {
+    const DEVICE: u64 = 0x481;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let binds = ff_binds();
+    for (width, height) in [(128_u16, 64_u16), (96, 48)] {
+        core.resize(u32::from(width), u32::from(height), 1);
+        core.drain();
+        let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(
+            core.target_size(),
+            Some((u32::from(width), u32::from(height)))
+        );
+        assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+        core.present(true, 0.0);
+        core.drain();
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        assert_eq!(
+            targets(&calls)[0],
+            (made[0].clone(), format!("{width}x{height}")),
+            "{calls:#?}"
+        );
+        assert_presented_at(&calls, &made[0], width, height);
+    }
+}
+
+/// A resize to four samples makes a companion; one back to one sample drops it.
+///
+/// Each way only the back buffer's textures are made and target 0 takes the new count: at four
+/// the draw goes to the companion, resolved into the new presented texture, which is presented;
+/// at one the draw goes to the presented texture, nothing resolves, and the companion is held
+/// by nothing.
+#[test]
+fn a_resize_changes_the_sample_count_both_ways() {
+    const DEVICE: u64 = 0x482;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    let binds = ff_binds();
+    core.resize(64, 32, 4);
+    core.drain();
+    let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
+    assert_eq!(made.len(), 2, "{made:?}");
+    let (presented, companion) = (made[0].clone(), made[1].clone());
+    assert_eq!(core.target_samples(), 4);
+    let four = PipelineKey {
+        samples: 4,
+        ..key(0xf)
+    };
+    assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
+    assert_eq!(drawn, 1, "folded into the draw's pass: {calls:#?}");
+    assert_presented_at(&calls, &presented, 64, 32);
+    let held = core.back_buffer.as_ref().expect("a back buffer");
+    let ms = held.companion.as_ref().expect("a companion");
+    let old = std::sync::Arc::downgrade(&ms.texture);
+    core.resize(64, 32, 1);
+    core.drain();
+    let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
+    assert_eq!(made.len(), 1, "{made:?}");
+    assert!(old.upgrade().is_none(), "the companion is held");
+    assert_eq!(core.target_samples(), 1);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(targets(&calls)[0].0, made[0], "{calls:#?}");
+    assert!(
+        !calls.iter().any(|c| c.starts_with("  resolve0 ")),
+        "{calls:#?}"
+    );
+    assert_presented_at(&calls, &made[0], 64, 32);
+}
+
+/// A device without a window resizes its back buffer alone, and still presents nothing.
+#[test]
+fn a_resize_without_a_window_makes_the_back_buffer() {
+    const DEVICE: u64 = 0x483;
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
+    let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
+    core.attach(0, 64, 32, 1);
+    core.resize(128, 64, 4);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let resized = calls
+        .iter()
+        .filter(|c| c.starts_with("MTLDevice_newTexture ") && c.contains(" size=128x64x1 "))
+        .count();
+    assert_eq!(resized, 2, "{calls:#?}");
+    assert_eq!(core.target_size(), Some((128, 64)));
+    assert_eq!(core.target_samples(), 4);
+    let binds = ff_binds();
+    let four = PipelineKey {
+        samples: 4,
+        ..key(0xf)
+    };
+    assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    at(&calls, "MTLCommandBuffer_commit");
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_presentDrawable"),
+        "{calls:#?}"
+    );
+}
+
+/// A resize leaves an open OCCLUSION bracket open: its END after the resize is the one counted.
+#[test]
+fn a_resize_keeps_an_open_occlusion_bracket() {
+    const DEVICE: u64 = 0x484;
+    let mut core = core_on_fakes(DEVICE);
+    let mut query = crate::device::Occlusion::default();
+    let binds = ff_binds();
+    core.occlusion_begin(&mut query);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.resize(128, 64, 1);
+    assert_eq!(core.open_brackets, Some(1));
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.occlusion_end(&mut query);
+    assert_eq!(core.open_brackets, Some(0));
+    core.drain();
+}
+
+/// A retarget drains, then makes a presenter on the new window and keeps the back buffer.
+///
+/// The Clear's chunk is committed before the new presenter's gamma table, the one texture made;
+/// the next Present shows the kept back buffer at its size. To window 0 it answers false and
+/// the device presents nothing; to a window again it answers true and presents.
+#[test]
+fn a_retarget_keeps_the_back_buffer_and_makes_a_presenter() {
+    const DEVICE: u64 = 0x485;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let back_buffer = back_buffers(&dxmt_fakes::take_calls(DEVICE))[0].clone();
+    core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
+    assert!(core.retarget(2));
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let commit = at(&calls, "MTLCommandBuffer_commit");
+    let made = made_at(&calls);
+    assert_eq!(made.len(), 1, "{calls:#?}");
+    assert!(made[0].1.contains(" size=1024x1x1 "), "{calls:#?}");
+    assert!(commit < made[0].0, "{calls:#?}");
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_presented_at(&calls, &back_buffer, 64, 32);
+    assert!(!core.retarget(0));
+    core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    at(&calls, "MTLCommandBuffer_commit");
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_presentDrawable"),
+        "{calls:#?}"
+    );
+    assert!(core.retarget(3));
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_presented_at(&calls, &back_buffer, 64, 32);
+}
+
+/// Asserts `calls` present `presented` into the layer at `width` x `height`.
+///
+/// The present's pass samples it at index 0, and its viewport is the layer's drawable size: the
+/// size the presenter was last given.
+fn assert_presented_at(calls: &[String], presented: &str, width: u16, height: u16) {
+    let texture = winemetal_sys::wire::WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE;
+    let source = format!("  render {texture} texture={presented} index=0");
+    let found = passes(calls);
+    let pass = found
+        .iter()
+        .find(|pass| pass.contains(&source))
+        .unwrap_or_else(|| panic!("no present of {presented}: {calls:#?}"));
+    let (zero, one) = (hex(0.0), hex(1.0));
+    let (across, down) = (hex(f32::from(width)), hex(f32::from(height)));
+    let viewport = format!(
+        "  render 13 viewports=48B viewport_count=1 viewports[0].origin_x={zero} \
+         viewports[0].origin_y={zero} viewports[0].width={across} \
+         viewports[0].height={down} viewports[0].znear={zero} viewports[0].zfar={one}"
+    );
+    assert!(pass.contains(&viewport), "{calls:#?}");
+}
+
+/// Each texture `calls` shows made: its call's index and its line.
+fn made_at(calls: &[String]) -> Vec<(usize, &String)> {
+    calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.starts_with("MTLDevice_newTexture "))
+        .collect()
+}
+
+/// `value` as the fakes print a float: its bits in hex.
+fn hex(value: f32) -> String {
+    format!("0x{:08x}", value.to_bits())
+}
+
 /// The indices of the copies into a texture `calls` shows.
 fn copies_to_texture(calls: &[String]) -> Vec<usize> {
     calls

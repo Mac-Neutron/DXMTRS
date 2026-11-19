@@ -21,7 +21,7 @@ use dxmt_core::resource::{Texture, TextureViewKey};
 use mtld3d_core::ids::TextureId;
 use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB};
 
-use super::CoreDevice;
+use super::{CoreDevice, DepthRef};
 
 /// A colour target: the back buffer, or one level (and cube face) of a render-target texture.
 ///
@@ -204,6 +204,24 @@ impl CoreDevice {
             self.extras[index] = target;
         }
         true
+    }
+
+    /// Binds the implicit targets: the back buffer at target 0, no extra target, and `depth`.
+    ///
+    /// What a `Reset` leaves bound, `depth` being the automatic depth-stencil or none. A change
+    /// ends the open render pass, as each setter's does. False when the back buffer does not
+    /// resolve or `depth` names no level of a stored depth texture; that `depth` leaves no
+    /// depth-stencil bound.
+    pub fn reset_targets(&mut self, depth: Option<DepthRef>) -> bool {
+        let mut bound = self.set_target(TargetRef::BackBuffer);
+        for slot in 1..=self.extras.len() {
+            bound &= self.set_extra_target(slot, None);
+        }
+        if !self.set_depth(depth) {
+            self.set_depth(None);
+            bound = false;
+        }
+        bound
     }
 
     /// Target 0's size and the `WMTPixelFormat` each slot of the pass set attaches.

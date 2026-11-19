@@ -2071,3 +2071,58 @@ fn a_draw_after_a_fill_and_an_upload_loads_them() {
     assert!(renders[0] < upload && upload < renders[1], "{calls:#?}");
     assert_eq!(draws(&calls), 1, "{calls:#?}");
 }
+
+/// Resetting the targets binds the back buffer at target 0, no extra target, and the depth given.
+///
+/// From a texture at target 0, extras at slots 1 and 3 and a depth-stencil, in an open pass: the
+/// pass ends, and the next draw's pass attaches the back buffer alone. A depth-stencil given is
+/// bound; one the store does not hold answers false and leaves none.
+#[test]
+fn reset_targets_binds_the_back_buffer_alone() {
+    const DEVICE: u64 = 0x486;
+    const D32F: u32 = winemetal_sys::wire::WMT_PIXEL_FORMAT_DEPTH32_FLOAT;
+    let (mut core, back_buffer) = core_and_back_buffer(DEVICE);
+    let (t, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    let (e1, _) = stored(&mut core, DEVICE, 2, TextureKind::Tex2d, 64, 1);
+    let (e3, _) = stored(&mut core, DEVICE, 3, TextureKind::Tex2d, 64, 1);
+    let (d, _) = stored_desc(&mut core, DEVICE, 4, &depth_desc(D32F, 64, 64, 1));
+    assert!(core.set_target(level0(t)));
+    assert!(core.set_extra_target(1, Some(level0(e1))));
+    assert!(core.set_extra_target(3, Some(level0(e3))));
+    assert!(core.set_depth(Some(DepthRef { id: d, level: 0 })));
+    core.open_render_pass();
+    assert!(core.reset_targets(None));
+    assert!(!core.render_open);
+    assert_eq!(core.target(), TargetRef::BackBuffer);
+    assert_eq!(core.extras, [None; 3]);
+    assert_eq!(core.depth(), None);
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    let Some(drawn) = found.last() else {
+        panic!("no pass: {calls:#?}");
+    };
+    assert_eq!(
+        line(drawn, "  target0 "),
+        Some(format!("{back_buffer} 64x32").as_str()),
+        "{calls:#?}"
+    );
+    assert_eq!(line(drawn, "  target1 "), None, "{calls:#?}");
+    assert_eq!(line(drawn, "  target3 "), None, "{calls:#?}");
+    let (fresh, _) = stored_desc(&mut core, DEVICE, 5, &depth_desc(D32F, 64, 32, 1));
+    let auto = Some(DepthRef {
+        id: fresh,
+        level: 0,
+    });
+    assert!(core.reset_targets(auto));
+    assert_eq!(core.depth(), auto);
+    let unknown = Some(DepthRef {
+        id: TextureId::from_raw(6),
+        level: 0,
+    });
+    assert!(!core.reset_targets(unknown));
+    assert_eq!(core.depth(), None);
+    assert_eq!(core.target(), TargetRef::BackBuffer);
+}

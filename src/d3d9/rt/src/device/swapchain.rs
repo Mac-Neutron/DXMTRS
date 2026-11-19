@@ -91,84 +91,45 @@ impl CoreDevice {
     /// back buffer has a multisampled companion of that count, zeroed, which draws and clears go
     /// to (DXMTRS C4b-3d5); the single-sample texture is made first either way.
     pub fn attach(&mut self, hwnd: isize, width: u32, height: u32, samples: u8) {
-        let mtl = self.device.device();
-        let info = |samples: u8| WMTTextureInfo {
-            pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
-            width,
-            height,
-            depth: 1,
-            array_length: 1,
-            bits: texture_info::info_bits(
-                two_d(samples),
-                1,
-                u32::from(samples),
-                // The view usage: sRGB write attaches the sRGB twin's view (DXMTRS C4b-3d3).
-                WMT_TEXTURE_USAGE_RENDER_TARGET
-                    | WMT_TEXTURE_USAGE_SHADER_READ
-                    | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
-            ),
-            options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
-            flags: 0,
-            mach_port: 0,
-            gpu_resource_id: 0,
-        };
-        let texture = Arc::new(Texture::new(info(1), mtl));
-        texture.rename(texture.allocate(TextureAllocationFlags::GPU_PRIVATE));
-        let key = texture.full_view();
-        // Zeroed as a render-target texture is, ahead of the next chunk.
-        let companion = (samples > 1).then(|| {
-            let texture = Arc::new(Texture::new(info(samples), mtl));
-            let allocation = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
-            texture.rename(Arc::clone(&allocation));
-            let initializer = self.device.queue().initializer();
-            let _ = initializer.init_texture_zero(&texture, &allocation, 0, 0);
-            Companion {
-                key: texture.full_view(),
-                texture,
-                samples,
-                last_written: WMT_PIXEL_FORMAT_BGRA8_UNORM,
-            }
-        });
-        self.dirty |= companion.is_some();
-        self.back_buffer = Some(BackBuffer {
-            texture,
-            key,
-            width,
-            height,
-            companion,
-        });
-        if hwnd == 0 {
-            return;
+        self.make_back_buffer(width, height, samples);
+        self.window = self.open_window(hwnd, width, height);
+    }
+
+    /// Makes the back buffer again, `width` x `height` of `samples`, in place: a `Reset`'s.
+    ///
+    /// The work recorded so far is drained first, so no recorded closure is left to name the old
+    /// back buffer, which then drops with its companion. The new one is made as
+    /// [`CoreDevice::attach`] makes it, at any size and count, the old one's included, and
+    /// [`TargetRef::BackBuffer`], the presented texture and the companion name it from here on.
+    /// The window's Metal view and presenter are kept, the presenter's layer taking the new size;
+    /// a device without a window makes the back buffer alone. The presenter keeps its one sample,
+    /// format and colour space, so its pipelines stand and nothing waits on the GPU.
+    pub fn resize(&mut self, width: u32, height: u32, samples: u8) {
+        self.drain();
+        self.make_back_buffer(width, height, samples);
+        let presenter = self.window.as_ref().and_then(|w| w.presenter.as_deref());
+        if let Some(presenter) = presenter {
+            set_layer_size(presenter, width, height);
         }
-        let mut layer = 0;
-        // SAFETY: winemetal's call; `layer` is writable for it.
-        let view = unsafe { CreateMetalViewFromHWND(hwnd, mtl.handle(), &raw mut layer) };
-        if view == 0 || layer == 0 {
-            log::error!(target: LOG_TARGET, "d3d9 core: no Metal view for window {hwnd:#x}");
-            return;
-        }
-        let desc = PresenterDesc {
-            device: mtl.handle(),
-            layer,
-            library: self.device.cmd_library_handle(),
-            scale_factor: 1.0,
-            sample_count: 1,
+    }
+
+    /// Moves the device to window `hwnd`, its back buffer kept: a `Reset` naming another window.
+    ///
+    /// The work recorded so far is drained first; the old window's presenter and then its Metal
+    /// view are dropped, and a view and a presenter are made on `hwnd` at the back buffer's size.
+    /// True when the device can present afterwards. False for `hwnd` 0, for a window winemetal
+    /// gives no view or layer (logged) and for a device without a back buffer: the device then
+    /// has no window and presents nothing, as one whose [`CoreDevice::attach`] made no view. Each
+    /// call makes a view, and winemac keeps a client surface for every view made on a window
+    /// until the window is destroyed: a caller moves the device only to another window.
+    pub fn retarget(&mut self, hwnd: isize) -> bool {
+        self.drain();
+        self.window = None;
+        let Some((width, height)) = self.back_buffer.as_ref().map(|b| (b.width, b.height)) else {
+            return false;
         };
-        // SAFETY: the device and the command library outlive every present the presenter
-        // encodes (the queue that encodes them drops first, with the device); the layer is held
-        // by `view`, released in the window's drop after the presenter.
-        let presenter = unsafe { Presenter::new(&desc) };
-        presenter.change_layer_properties(
-            WMT_PIXEL_FORMAT_BGRA8_UNORM,
-            WMT_COLOR_SPACE_SRGB,
-            f64::from(width),
-            f64::from(height),
-            1,
-        );
-        self.window = Some(Window {
-            view,
-            presenter: Some(Arc::new(presenter)),
-        });
+        self.window = self.open_window(hwnd, width, height);
+        self.window.is_some()
     }
 
     /// Presents the back buffer `after` seconds after the last present (0: at once).
@@ -227,6 +188,91 @@ impl CoreDevice {
         let (source, destination) = (companion_key.with_format(format), key.with_format(format));
         self.emit(move |enc| enc.resolve_texture(&companion, source, &resolved, destination));
     }
+
+    /// Makes the `width` x `height` back buffer of `samples`, in place of the one before.
+    ///
+    /// The single-sample texture first, then for `samples` above one the companion.
+    fn make_back_buffer(&mut self, width: u32, height: u32, samples: u8) {
+        let mtl = self.device.device();
+        let info = |samples: u8| WMTTextureInfo {
+            pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            width,
+            height,
+            depth: 1,
+            array_length: 1,
+            bits: texture_info::info_bits(
+                two_d(samples),
+                1,
+                u32::from(samples),
+                // The view usage: sRGB write attaches the sRGB twin's view (DXMTRS C4b-3d3).
+                WMT_TEXTURE_USAGE_RENDER_TARGET
+                    | WMT_TEXTURE_USAGE_SHADER_READ
+                    | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+            ),
+            options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+            flags: 0,
+            mach_port: 0,
+            gpu_resource_id: 0,
+        };
+        let texture = Arc::new(Texture::new(info(1), mtl));
+        texture.rename(texture.allocate(TextureAllocationFlags::GPU_PRIVATE));
+        let key = texture.full_view();
+        // Zeroed as a render-target texture is, ahead of the next chunk.
+        let companion = (samples > 1).then(|| {
+            let texture = Arc::new(Texture::new(info(samples), mtl));
+            let allocation = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
+            texture.rename(Arc::clone(&allocation));
+            let initializer = self.device.queue().initializer();
+            let _ = initializer.init_texture_zero(&texture, &allocation, 0, 0);
+            Companion {
+                key: texture.full_view(),
+                texture,
+                samples,
+                last_written: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            }
+        });
+        self.dirty |= companion.is_some();
+        self.back_buffer = Some(BackBuffer {
+            texture,
+            key,
+            width,
+            height,
+            companion,
+        });
+    }
+
+    /// A Metal view on window `hwnd` and a presenter on its layer, sized `width` x `height`.
+    ///
+    /// None for `hwnd` 0, and for a window winemetal gives no view or layer (logged).
+    fn open_window(&self, hwnd: isize, width: u32, height: u32) -> Option<Window> {
+        if hwnd == 0 {
+            return None;
+        }
+        let mtl = self.device.device();
+        let mut layer = 0;
+        // SAFETY: winemetal's call; `layer` is writable for it.
+        let view = unsafe { CreateMetalViewFromHWND(hwnd, mtl.handle(), &raw mut layer) };
+        if view == 0 || layer == 0 {
+            log::error!(target: LOG_TARGET, "d3d9 core: no Metal view for window {hwnd:#x}");
+            return None;
+        }
+        let desc = PresenterDesc {
+            device: mtl.handle(),
+            layer,
+            library: self.device.cmd_library_handle(),
+            scale_factor: 1.0,
+            sample_count: 1,
+        };
+        // SAFETY: the device and the command library outlive every present the presenter
+        // encodes (the queue that encodes them drops first, with the device); the layer is held
+        // by `view`, released in the window's drop after the presenter.
+        let presenter = unsafe { Presenter::new(&desc) };
+        set_layer_size(&presenter, width, height);
+        Some(Window {
+            view,
+            presenter: Some(Arc::new(presenter)),
+        })
+    }
 }
 
 /// The seconds a present at D3D9 presentation `interval` waits after the last.
@@ -244,6 +290,19 @@ pub fn present_after(interval: u32, refresh_hz: u32) -> f64 {
     };
     let rate = if refresh_hz == 0 { 60 } else { refresh_hz };
     vsync_duration(refreshes, 0, f64::from(rate))
+}
+
+/// Gives `presenter`'s layer the back buffer's format and colour space, `width` x `height`.
+///
+/// At one sample: the presenter shows the single-sample texture.
+fn set_layer_size(presenter: &Presenter, width: u32, height: u32) {
+    presenter.change_layer_properties(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_COLOR_SPACE_SRGB,
+        f64::from(width),
+        f64::from(height),
+        1,
+    );
 }
 
 #[cfg(test)]
