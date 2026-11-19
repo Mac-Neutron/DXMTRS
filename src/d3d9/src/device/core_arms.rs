@@ -6,17 +6,20 @@
 //! `D3DERR_INVALIDCALL` on both, and a core device leaves past them for `stretch_colour` (a
 //! colour pair) or `stretch_depth` (a depth-stencil pair), `color_fill` for a colour target, or
 //! `update_color_target` for a region of the back buffer or a render target (DXMTRS C4c-4a).
-//! `stretch_colour` resolves a multisampled target into a single-sample one, copies texel for
-//! texel into a target on the GPU, and between two plain surfaces on the CPU; `stretch_depth`
-//! copies a depth-stencil surface whole into another (DXMTRS C4c-4b). Into a target the colour
-//! arm also scales and converts, sampling the source as mtld3d's quad does, from YUV, into and
-//! from a multisampled target and between overlapping rects of one texture, through a scratch
-//! texture where a shape needs one (DXMTRS C4c-4c). It tests the destination itself, since on a
-//! core device the GPU writes nothing but targets. What an arm does not cover yet (a Present
-//! with rects or another window; a `StretchRect` of a plain surface onto itself other than
-//! identical rects, from a multisampled target of a format this GPU does not resolve, the
-//! depth-stencil resolve) is refused with one warning (C4-13). Clear and the read-back go to and
-//! come from the bound colour target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! `stretch_colour` resolves a multisampled target into a single-sample one. Into a target it
+//! copies texel for texel on the GPU (DXMTRS C4c-4b), or samples the source as mtld3d's quad
+//! does: scaled, converting, from packed or planar YUV, into and from a multisampled target,
+//! between overlapping rects of one texture, through a scratch texture where a shape needs one
+//! (DXMTRS C4c-4c). Into a plain surface it copies on the CPU, from another (DXMTRS C4c-4b) or
+//! from itself (DXMTRS C4c-4c). `stretch_depth` copies a depth-stencil surface whole into another
+//! (DXMTRS C4c-4b). The colour arm tests the destination itself, since on a core device the GPU
+//! writes nothing but targets. What an arm does not cover yet is refused with one warning
+//! (C4-13): a Present with rects or another window; of `StretchRect`, the depth-stencil resolve,
+//! an extended device's whole-surface copy into a level that is no target (two faces of one cube
+//! included) or from a surface that is no plain one, a pair of plain surfaces whose formats no
+//! CPU conversion serves, and a multisampled source of a format this GPU does not resolve. Clear
+//! and the read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP draws
+//! are `core_draw`'s.
 
 use core::ffi::c_void;
 
@@ -49,6 +52,7 @@ use super::{
 use crate::{
     bound_rt::RENDER_TARGET_SLOTS,
     surface::{Direct3DSurface9, SystemMemoryDst},
+    texture::SourceImage,
 };
 
 unsafe extern "system" {
@@ -309,13 +313,17 @@ pub struct StretchCall<'a> {
 ///   claimed for the GPU, so its next lock reads the copy back, and an AUTOGENMIPMAP destination
 ///   regenerates its chain, as after `ColorFill`;
 /// - a destination that is no target is written on the CPU. One surface or one texture at both
-///   ends is `D3D_OK` for identical rects and refused by name otherwise (both routes need two
-///   textures). A plain surface into another copies the bytes when the two stagings hold the
-///   same ones (one D3D format, or bytes that copy with neither format widened on upload),
-///   through mtld3d's CPU conversion otherwise, and is refused by name when there is none. The
-///   rect written is marked dirty, so the plain surface's next use as a source uploads it and
-///   its lock reads it; nothing is read back from the GPU first, since a plain surface is never
-///   the GPU's on a core device (only a target is ever claimed);
+///   ends is `D3D_OK` for identical rects. A plain surface onto itself with other rects copies
+///   inside its own staging (DXMTRS C4c-4c): the level's bytes copied out first, so overlapping
+///   rects read what was there, then the source rect written back at the destination point,
+///   block by block; any other pair in one texture (an extended device's two faces of one cube)
+///   is refused by name, the other routes needing two textures. A plain surface into another
+///   copies the bytes when the two stagings hold the same ones (one D3D format, or bytes that
+///   copy with neither format widened on upload), through mtld3d's CPU conversion otherwise, and
+///   is refused by name when there is none. The rect written is marked dirty, so the plain
+///   surface's next use as a source uploads it and its lock reads it; nothing is read back from
+///   the GPU first, since a plain surface is never the GPU's on a core device (only a target is
+///   ever claimed);
 /// - any other destination (an extended device's whole-surface copy into a level that is no
 ///   target, or from a surface that is no plain one) is refused by name.
 ///
@@ -570,17 +578,56 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         }
         return D3D_OK;
     }
-    // One surface or one texture at both ends: both CPU routes need two textures.
-    if core::ptr::eq(src_surf, dst_surf) || (!src_parent.is_null() && src_parent == dst_parent) {
-        return if route == SameSurfaceRoute::Skip {
-            D3D_OK
-        } else {
-            refuse_stretch()
-        };
-    }
     let plain_src = src_info
         .flags
         .contains(StretchSurfaceFlags::IS_OFFSCREEN_PLAIN_DEFAULT);
+    // The rects as the CPU copies take them: the source's edges, the destination's origin.
+    let rect = (
+        src_region.x.cast_signed(),
+        src_region.y.cast_signed(),
+        (src_region.x + src_region.w).cast_signed(),
+        (src_region.y + src_region.h).cast_signed(),
+    );
+    let point = (dst_region.x.cast_signed(), dst_region.y.cast_signed());
+    // One surface or one texture at both ends: identical rects write what is there.
+    if core::ptr::eq(src_surf, dst_surf) || (!src_parent.is_null() && src_parent == dst_parent) {
+        if route == SameSurfaceRoute::Skip {
+            return D3D_OK;
+        }
+        // Only a plain surface onto itself copies inside its own staging (DXMTRS C4c-4c). Any
+        // other pair, an extended device's two faces of one cube, is refused by name: the other
+        // CPU routes need two textures.
+        if !core::ptr::eq(src_surf, dst_surf) || !plain_src || !plain_dst {
+            return refuse_stretch();
+        }
+        // SAFETY: null, or the plain surface's own texture, live while the surface is and
+        // reached through nothing else in this call.
+        let copied = unsafe { src_parent.as_mut() }.is_some_and(|texture| {
+            let inner = texture.inner_mut();
+            let level = src_info.mip_level as usize;
+            // The level's bytes copied out first, so overlapping rects read what was there, as
+            // through a buffer; the copy back keeps its own block and bounds checks.
+            let held = inner
+                .surface_source_image(None, level)
+                .map(|image| (image.bytes.to_vec(), image.pitch));
+            held.is_some_and(|(bytes, pitch)| {
+                let image = SourceImage {
+                    bytes: &bytes,
+                    pitch,
+                    width: src_info.width,
+                    height: src_info.height,
+                    format: src_info.format,
+                };
+                inner.copy_bytes_to_staging_region(level, &image, Some(rect), point)
+            })
+        });
+        if !copied {
+            log::error!(target: crate::LOG_TARGET,
+                "d3d9 core: StretchRect of a plain surface's {src_region:?} onto its own {dst_region:?} was not recorded → INVALIDCALL");
+            return D3DERR_INVALIDCALL;
+        }
+        return D3D_OK;
+    }
     if !plain_src || !plain_dst || src_parent.is_null() || dst_parent.is_null() {
         return refuse_stretch();
     }
@@ -597,18 +644,12 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         // SAFETY: non-null (checked), the destination's parent texture, live while the
         // destination is and distinct from the source's (checked above).
         let dst_tex = unsafe { &mut *dst_parent };
-        let rect = (
-            src_region.x.cast_signed(),
-            src_region.y.cast_signed(),
-            (src_region.x + src_region.w).cast_signed(),
-            (src_region.y + src_region.h).cast_signed(),
-        );
         dst_tex.inner_mut().copy_sub_region_from(
             dst_info.mip_level as usize,
             src_tex.inner(),
             src_info.mip_level as usize,
             Some(rect),
-            (dst_region.x.cast_signed(), dst_region.y.cast_signed()),
+            point,
         )
     } else if can_convert(src_info.format, dst_info.format) {
         let converted = super::convert_stretch_dst_staging(
