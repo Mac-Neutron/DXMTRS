@@ -11,7 +11,8 @@ use winemetal_sys::wire::{
 use crate::device::{
     CoreDevice, CoreTextureDesc, CoreTextureFlags, TargetRef, TextureKind, UploadRegion,
     fixture::{
-        at, core_on_fakes, depth_desc, ff_binds, key, ms_desc, target_desc, textures_made, triangle,
+        at, core_on_fakes, depth_desc, ff_binds, key, ms_desc, target_desc, targets, textures_made,
+        triangle,
     },
     target::Shape,
 };
@@ -405,7 +406,7 @@ fn a_refused_copy_records_nothing() {
         ("a depth source", depth, rect, bb, zero),
         ("a volume source", volume, rect, bb, zero),
         ("a non-target destination", bb, rect, plain, zero),
-        ("a multisampled source", ms, rect, bb, zero),
+        ("a multisampled texture source", ms, rect, bb, zero),
         ("a multisampled destination", bb, rect, ms, zero),
         ("unequal formats", rgba, rect, bb, zero),
         ("no width", bb, [0, 0, 0, 8], level0, zero),
@@ -448,6 +449,35 @@ fn a_copy_ends_the_open_render_pass() {
     let copy = at(&calls, "  blit 4");
     let order = [render_end, blit, copy, end(blit)];
     assert!(order.is_sorted(), "{order:?}: {calls:#?}");
+    assert_eq!(copies(&calls), 1, "{calls:#?}");
+}
+
+/// A multisampled back buffer is copied from as Present shows it: resolved, then copied.
+///
+/// Its companion is resolved into the presented texture, a pass of its own, and the one copy, in
+/// a blit pass after that resolve, reads the presented texture.
+#[test]
+fn a_multisampled_back_buffer_is_copied_resolved() {
+    const DEVICE: u64 = 0x436;
+    let mut core = core_on_fakes(DEVICE);
+    let target = level_of(target_2d(&mut core, DEVICE, 1, 64, 1), 0);
+    core.attach(0, 64, 32, 4);
+    core.drain();
+    let made = textures_made(&take_calls(DEVICE));
+    let (presented, companion) = (made[0].clone(), made[1].clone());
+    assert!(core.copy(TargetRef::BackBuffer, [8, 4, 13, 9], target, [5, 6]));
+    core.drain();
+    let calls = take_calls(DEVICE);
+    // The resolve pass's one target; a resolve names no pass size.
+    let attached = targets(&calls)
+        .into_iter()
+        .map(|(handle, _)| handle)
+        .collect::<Vec<_>>();
+    assert_eq!(attached, [companion], "{calls:#?}");
+    let resolved = at(&calls, &format!("  resolve0 {presented}"));
+    let blit = at(&calls, "MTLCommandBuffer_blitCommandEncoder");
+    let copy = at(&calls, "  blit 4");
+    assert!(resolved < blit && blit < copy, "{calls:#?}");
     assert_eq!(copies(&calls), 1, "{calls:#?}");
 }
 

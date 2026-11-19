@@ -3,7 +3,8 @@
 //! A colour target read back into a system-memory surface's bytes (`GetRenderTargetData`), a
 //! rect of the back buffer read as Present shows it (DXMTRS C4c-3a), a multisampled target
 //! resolved into a single-sample one (`StretchRect`'s resolve), and a rect of a texture copied
-//! into a target texel for texel (`StretchRect`'s unscaled copy, DXMTRS C4c-4b).
+//! into a target texel for texel (`StretchRect`'s unscaled copy, DXMTRS C4c-4b), from the back
+//! buffer as Present shows it (DXMTRS C4c-4c).
 
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use dxmt_core::{
     deptrack::Access,
     encoder::stage,
     format::{CAP_RESOLVE, device_capability_map},
+    resource::Texture,
     staging::Staging,
 };
 use mtld3d_core::{
@@ -202,16 +204,18 @@ impl CoreDevice {
     /// Copies `src_rect` of `src` into the target `dst` at `dst_origin`, texel for texel.
     ///
     /// `StretchRect`'s unscaled copy (DXMTRS C4c-4b). `src` is any stored colour level, a target
-    /// or not, or the back buffer; `src_rect` is `[x, y, width, height]` in the texels of its
-    /// level, `dst_origin` `[x, y]` in the destination's. One blit in the blit pass uploads share
-    /// (the open render pass ends), the source's subresource tracked as read and the
-    /// destination's as written: that orders it after the passes that wrote either and before
-    /// the next pass on the destination. False, and nothing recorded, when either end does not
-    /// resolve or has more than one sample (the back buffer copied is then the one Present
-    /// shows), the two stored formats differ (a blit copies bytes), the rect is empty or leaves
-    /// the source's level, it leaves the destination at `dst_origin`, or both ends are one
-    /// texture and mtld3d's `same_surface_route` is not `Direct` for the pair (identical or
-    /// overlapping rects of one subresource).
+    /// or not, or the back buffer as Present shows it: a multisampled one is first resolved into
+    /// the presented texture as Present resolves it, and that texture is the source (DXMTRS
+    /// C4c-4c). `src_rect` is `[x, y, width, height]` in the texels of its level, `dst_origin`
+    /// `[x, y]` in the destination's. One blit in the blit pass uploads share (the open render
+    /// pass ends), the source's subresource tracked as read and the destination's as written:
+    /// that orders it after the passes that wrote either and before the next pass on the
+    /// destination. False, and nothing recorded, when either end does not resolve, the source is
+    /// a multisampled texture, the destination is multisampled, the two stored formats differ (a
+    /// blit copies bytes), the rect is empty or leaves the source's level, it leaves the
+    /// destination at `dst_origin`, or both ends are one texture and mtld3d's
+    /// `same_surface_route` is not `Direct` for the pair (identical or overlapping rects of one
+    /// subresource).
     #[must_use]
     pub fn copy(
         &mut self,
@@ -220,21 +224,14 @@ impl CoreDevice {
         dst: TargetRef,
         dst_origin: [u32; 2],
     ) -> bool {
-        let source = match src {
-            TargetRef::BackBuffer => self.resolve(src).map(|from| (from.texture, from.shape)),
-            TargetRef::Texture { id, level, face } => self
-                .level_shape(id, level, face)
-                .zip(self.stored_texture(id))
-                .map(|(shape, texture)| (texture, shape)),
-        };
         let (
-            Some((from, shape)),
+            Some((from, shape, resolve_first)),
             Some(Resolved {
                 texture: to,
                 shape: into,
                 ..
             }),
-        ) = (source, self.resolve(dst))
+        ) = (self.copy_source(src), self.resolve(dst))
         else {
             return false;
         };
@@ -271,6 +268,9 @@ impl CoreDevice {
         if Arc::ptr_eq(&from, &to) && route != SameSurfaceRoute::Direct {
             return false;
         }
+        if resolve_first {
+            self.resolve_presented();
+        }
         self.open_blit_pass();
         self.emit(move |enc| {
             let src =
@@ -285,6 +285,30 @@ impl CoreDevice {
             ));
         });
         true
+    }
+
+    /// A copy's source: the texture and the shape of the one subresource `src` names.
+    ///
+    /// A stored colour level, a target or not, or the back buffer as Present shows it: its
+    /// presented texture, of one sample, with true when the back buffer is multisampled, whose
+    /// companion the caller then resolves into it ([`CoreDevice::resolve_presented`]) once
+    /// nothing refuses the copy. `None` when the store or the swap chain holds nothing `src` names.
+    pub(super) fn copy_source(&self, src: TargetRef) -> Option<(Arc<Texture>, Shape, bool)> {
+        match src {
+            TargetRef::BackBuffer => {
+                let shape = self.shape(src)?;
+                let texture = Arc::clone(self.back_buffer.as_ref()?.presented().0);
+                let presented = Shape {
+                    samples: 1,
+                    ..shape
+                };
+                Some((texture, presented, shape.samples > 1))
+            }
+            TargetRef::Texture { id, level, face } => self
+                .level_shape(id, level, face)
+                .zip(self.stored_texture(id))
+                .map(|(shape, texture)| (texture, shape, false)),
+        }
     }
 
     /// Whether Metal resolves a multisampled texture of `pixel_format` on this device.
