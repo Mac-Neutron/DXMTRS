@@ -163,18 +163,6 @@ struct SwapChainInner {
     backbuffer_pins: u32,
 }
 
-/// Whether the swap chain at `this` belongs to a device of the core runtime (DXMTRS C4a).
-#[cfg(feature = "core-runtime")]
-fn on_core_device(this: *mut c_void) -> bool {
-    // SAFETY: vtable thunk; `this` is null or a *mut Direct3DSwapChain9 per the ABI.
-    let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
-        return false;
-    };
-    let device = obj.inner().device_inner;
-    // SAFETY: a swap chain's device outlives it.
-    !device.is_null() && unsafe { &*device }.is_core()
-}
-
 extern "system" fn swapchain_query_interface(
     this: *mut c_void,
     riid: *const Guid,
@@ -358,11 +346,6 @@ extern "system" fn swapchain_present(
     flags: u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9::Present",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // SAFETY: vtable thunk; `this` is *mut Direct3DSwapChain9 per the ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;

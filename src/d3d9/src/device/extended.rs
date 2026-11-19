@@ -75,11 +75,6 @@ pub extern "system" fn present_ex(
     flags: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::PresentEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     present_impl(
         this,

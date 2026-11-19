@@ -2228,6 +2228,13 @@ impl DeviceInner {
     /// Present's `send_frame`) is stashed into the incoming fresh frame so
     /// the encoder's next summary can read it.
     pub fn present(&mut self) -> i32 {
+        // A core device presents through its `CoreDevice`, ahead of every recorder read below,
+        // whichever entry came here, with the device's own present parameters: an additional
+        // swap chain's `Present` included, as on mtld3d.
+        #[cfg(feature = "core-runtime")]
+        if let Some(core) = self.core.as_deref_mut() {
+            return core_arms::present(core, &self.present_params);
+        }
         if let Err(hr) = self.encoder.status() {
             self.discard_unsendable_frame();
             return hr;
@@ -6159,12 +6166,6 @@ extern "system" fn device_present(
     dirty_region: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    #[cfg(feature = "core-runtime")]
-    if let Some(hr) =
-        core_arms::present(this, src_rect, dst_rect, dst_window_override, dirty_region)
-    {
-        return hr;
-    }
     let _timer = device_timer(this, DeviceSubCategory::Frame);
     present_impl(
         this,

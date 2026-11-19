@@ -14,8 +14,9 @@
 //! from itself (DXMTRS C4c-4c). `stretch_depth` copies a depth-stencil surface whole into another
 //! (DXMTRS C4c-4b), or resolves a multisampled one into a single-sample one, sample 0 of each
 //! plane (DXMTRS C4c-4d). The colour arm tests the destination itself, since on a core device the
-//! GPU writes nothing but targets. What an arm does not cover yet is refused with one warning
-//! (C4-13): a Present with rects or another window; of `StretchRect`, all in the colour arm, an
+//! GPU writes nothing but targets. Every present, whatever its arguments and entry, presents the
+//! whole back buffer into the device window, as on mtld3d (DXMTRS C4c-6a). What an arm does not
+//! cover yet is refused with one warning (C4-13): of `StretchRect`, all in the colour arm, an
 //! extended device's whole-surface copy into a level that is no target (two faces of one cube
 //! included) or from a surface that is no plain one, a pair of plain surfaces whose formats no
 //! CPU conversion serves, and a multisampled source of a format this GPU does not resolve. Clear
@@ -43,8 +44,9 @@ use mtld3d_core::{
 use mtld3d_shared::{InPtr, ValueIn};
 use mtld3d_types::{
     D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
-    D3DERR_NOTAVAILABLE, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, D3DRECT, D3DRS_SCISSORTESTENABLE,
-    D3DRS_SRGBWRITEENABLE, D3DSURFACE_DESC, D3DTEXF_LINEAR, D3DUSAGE_RENDERTARGET,
+    D3DERR_NOTAVAILABLE, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, D3DPRESENT_PARAMETERS, D3DRECT,
+    D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DSURFACE_DESC, D3DTEXF_LINEAR,
+    D3DUSAGE_RENDERTARGET,
 };
 
 use super::{
@@ -141,24 +143,14 @@ pub fn clear(
     Some(D3D_OK)
 }
 
-/// `Present` of the whole back buffer into the device window, paced by its interval.
-pub fn present(
-    this: *mut c_void,
-    src_rect: *const c_void,
-    dst_rect: *const c_void,
-    dst_window_override: *mut c_void,
-    dirty_region: *const c_void,
-) -> Option<i32> {
-    let dev = core_device(this)?;
-    if !src_rect.is_null()
-        || !dst_rect.is_null()
-        || !dst_window_override.is_null()
-        || !dirty_region.is_null()
-    {
-        refuse_under_core("IDirect3DDevice9::Present (rects, region or another window)");
-        return Some(D3DERR_NOTAVAILABLE);
-    }
-    let pp = dev.present_params();
+/// A present of the whole back buffer into the device window, paced by its interval.
+///
+/// Every present of a core device: `DeviceInner::present` calls it first, for `Present`,
+/// `PresentEx` and a swap chain's `Present` alike, after mtld3d's entry code warned once for each
+/// rect, window, region and flag it ignores, as mtld3d ignores them (DXMTRS C4c-6a). `pp` is the
+/// device's, so an additional swap chain presents the device's back buffer into the device window
+/// at the device's interval, as on mtld3d.
+pub fn present(core: &mut CoreDevice, pp: &D3DPRESENT_PARAMETERS) -> i32 {
     let window = pp.device_window as *mut c_void;
     let interval = pp.presentation_interval;
     // A hidden or minimized window presents nothing (G4): its drawable would never come back.
@@ -166,8 +158,8 @@ pub fn present(
     let visible = unsafe { IsWindowVisible(window) } != 0 && !dxmt_util::wsi::is_minimized(window);
     let refresh = crate::direct3d9::current_adapter_display_mode().refresh_rate;
     let after = d3d9_rt::device::present_after(interval, refresh);
-    dev.core.as_deref_mut()?.present(visible, after);
-    Some(D3D_OK)
+    core.present(visible, after);
+    D3D_OK
 }
 
 /// `GetRenderTargetData` from a colour target the core draws to.
