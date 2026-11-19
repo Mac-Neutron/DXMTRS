@@ -34,11 +34,6 @@ pub extern "system" fn set_convolution_mono_kernel(
     _columns: *mut f32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::SetConvolutionMonoKernel",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_info!(
         target: LOG_TARGET,
         "IDirect3DDevice9Ex::SetConvolutionMonoKernel: no convolution filter → INVALIDCALL"
@@ -59,11 +54,6 @@ pub extern "system" fn compose_rects(
     _offset_y: i32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::ComposeRects",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_warn!(
         target: LOG_TARGET,
         "stub IDirect3DDevice9Ex::ComposeRects → OK (nothing is composed)"
@@ -104,11 +94,6 @@ pub extern "system" fn present_ex(
 /// `GetGPUThreadPriority`: a stub that reports the normal priority, 0.
 pub extern "system" fn get_gpu_thread_priority(this: *mut c_void, priority: *mut i32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::GetGPUThreadPriority",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if priority.is_null() {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -129,11 +114,6 @@ pub extern "system" fn get_gpu_thread_priority(this: *mut c_void, priority: *mut
 /// `SetGPUThreadPriority`: a stub that succeeds and stores nothing.
 pub extern "system" fn set_gpu_thread_priority(this: *mut c_void, priority: i32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::SetGPUThreadPriority",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_warn!(
         target: LOG_TARGET,
         "stub IDirect3DDevice9Ex::SetGPUThreadPriority({priority}) → OK (not applied)"
@@ -144,11 +124,6 @@ pub extern "system" fn set_gpu_thread_priority(this: *mut c_void, priority: i32)
 /// `WaitForVBlank`: a stub that returns at once for the implicit swap chain.
 pub extern "system" fn wait_for_vblank(this: *mut c_void, swap_chain: u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::WaitForVBlank",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if swap_chain != 0 {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -170,11 +145,6 @@ pub extern "system" fn check_resource_residency(
     _count: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::CheckResourceResidency",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_info!(
         target: LOG_TARGET,
         "IDirect3DDevice9Ex::CheckResourceResidency → OK (no residency to report)"
@@ -430,11 +400,6 @@ pub extern "system" fn get_display_mode_ex(
     rotation: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::GetDisplayModeEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if swap_chain != 0 {
         mtld3d_shared::log_once_warn!(

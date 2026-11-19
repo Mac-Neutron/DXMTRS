@@ -2586,6 +2586,9 @@ impl DeviceInner {
     /// "evict from VRAM, runtime re-uploads on next use". A texture of any
     /// other pool is filtered out by `evict_mark_dirty`, which is where the
     /// reason lives; its cache entry stays intact.
+    ///
+    /// A core device marks the same levels and destroys nothing: it keeps its GPU copies, and
+    /// the marks alone re-publish each level at its texture's next bind (`core_flush_dirty`).
     pub fn evict_managed_resources(&mut self) {
         let live: Vec<*mut TextureInner> = self
             .live_textures
@@ -2603,6 +2606,16 @@ impl DeviceInner {
             if let Some(tex_id) = crate::texture::evict_mark_dirty(ti) {
                 to_evict.push(tex_id);
             }
+        }
+        #[cfg(feature = "core-runtime")]
+        if self.is_core() {
+            mtld3d_shared::log_once_info!(
+                target: TEX_TRACE_TARGET,
+                "EvictManagedResources: marked {} textures dirty; runtime.mode = core keeps their \
+                 GPU copies",
+                to_evict.len()
+            );
+            return;
         }
         let evicted_count = to_evict.len();
         for tex_id in to_evict {
@@ -4954,11 +4967,6 @@ extern "system" fn device_get_available_texture_mem(this: *mut c_void) -> u32 {
     // is discarded.
     const VRAM_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetAvailableTextureMem",
-        0
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -4969,6 +4977,8 @@ extern "system" fn device_get_available_texture_mem(this: *mut c_void) -> u32 {
         0 => VRAM_BUDGET,
         cap => VRAM_BUDGET.min(cap),
     };
+    // A core device's standalone render targets and depth-stencil surfaces are not in `used`:
+    // their core creators return before the charge, so only its textures lower the figure.
     let used = dev.vram_bytes_used.load(Ordering::Acquire);
     // An extended device pages its default-pool memory, so its figure does
     // not shrink as the application allocates.
@@ -4986,11 +4996,6 @@ extern "system" fn device_get_available_texture_mem(this: *mut c_void) -> u32 {
 
 extern "system" fn device_evict_managed_resources(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::EvictManagedResources",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Spec contract: "evict managed-pool resources from VRAM; the
     // runtime re-uploads on next use." On unified memory there is no
@@ -5065,11 +5070,6 @@ extern "system" fn device_get_display_mode(
     mode: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetDisplayMode",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetDisplayMode(swap_chain={swap_chain})");
     if mode.is_null() || swap_chain != 0 {
@@ -5093,11 +5093,6 @@ extern "system" fn device_get_display_mode(
 
 extern "system" fn device_get_creation_parameters(this: *mut c_void, params: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetCreationParameters",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     trace!(target: LOG_TARGET, "IDirect3DDevice9::GetCreationParameters()");
     if params.is_null() {
@@ -6337,11 +6332,6 @@ extern "system" fn device_get_raster_status(
     _status: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetRasterStatus",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetRasterStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -6349,11 +6339,6 @@ extern "system" fn device_get_raster_status(
 
 extern "system" fn device_set_dialog_box_mode(this: *mut c_void, _enable: i32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetDialogBoxMode",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::SetDialogBoxMode → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12089,11 +12074,6 @@ extern "system" fn device_end_state_block(this: *mut c_void, sb: *mut *mut c_voi
 
 extern "system" fn device_set_clip_status(this: *mut c_void, _status: *const c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetClipStatus",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::SetClipStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12101,11 +12081,6 @@ extern "system" fn device_set_clip_status(this: *mut c_void, _status: *const c_v
 
 extern "system" fn device_get_clip_status(this: *mut c_void, _status: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetClipStatus",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetClipStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12553,11 +12528,6 @@ fn rejected_filter_stage(dev: &DeviceInner) -> Option<i32> {
 
 extern "system" fn device_validate_device(this: *mut c_void, num_passes: *mut u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::ValidateDevice",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -12588,11 +12558,6 @@ extern "system" fn device_set_palette_entries(
     entries: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetPaletteEntries",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if entries.is_null() {
         return D3DERR_INVALIDCALL;
@@ -12629,11 +12594,6 @@ extern "system" fn device_get_palette_entries(
     _entries: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetPaletteEntries",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetPaletteEntries → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12641,11 +12601,6 @@ extern "system" fn device_get_palette_entries(
 
 extern "system" fn device_set_current_texture_palette(this: *mut c_void, _palette: u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetCurrentTexturePalette",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // Non-functional palette API: the setter succeeds, the palette is ignored.
     // GetCurrentTexturePalette stays INVALIDCALL.
@@ -12659,11 +12614,6 @@ extern "system" fn device_get_current_texture_palette(
     _palette_number: *mut u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetCurrentTexturePalette",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::GetCurrentTexturePalette → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -12720,11 +12670,6 @@ extern "system" fn device_get_scissor_rect(this: *mut c_void, rect: *mut c_void)
 
 extern "system" fn device_set_software_vertex_processing(this: *mut c_void, software: i32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetSoftwareVertexProcessing",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SW vertex processing exists for old CPUs without HW T&L. Running
     // the same pipeline on HW VP produces the same visible result, so
@@ -12742,11 +12687,6 @@ extern "system" fn device_set_software_vertex_processing(this: *mut c_void, soft
 
 extern "system" fn device_get_software_vertex_processing(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetSoftwareVertexProcessing",
-        0
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_info!(
         target: crate::LOG_TARGET,
@@ -12757,11 +12697,6 @@ extern "system" fn device_get_software_vertex_processing(this: *mut c_void) -> i
 
 extern "system" fn device_set_npatch_mode(this: *mut c_void, segments: f32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetNPatchMode",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SetNPatchMode(0.0) and SetNPatchMode(1.0) both mean "N-patch
     // tessellation disabled" — i.e. default behavior. Games clear this
@@ -12780,11 +12715,6 @@ extern "system" fn device_set_npatch_mode(this: *mut c_void, segments: f32) -> i
 
 extern "system" fn device_get_npatch_mode(this: *mut c_void) -> f32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetNPatchMode",
-        0.0
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // N-patches are obsolete fixed-function tessellation; every modern
     // driver returns 0.0 (disabled). No port candidate.
@@ -16490,11 +16420,6 @@ extern "system" fn device_draw_rect_patch(
     _tri_patch_info: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DrawRectPatch",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DrawRectPatch → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -16507,11 +16432,6 @@ extern "system" fn device_draw_tri_patch(
     _tri_patch_info: *const c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DrawTriPatch",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DrawTriPatch → INVALIDCALL");
     D3DERR_INVALIDCALL
@@ -16519,11 +16439,6 @@ extern "system" fn device_draw_tri_patch(
 
 extern "system" fn device_delete_patch(this: *mut c_void, _handle: u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::DeletePatch",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "stub IDirect3DDevice9::DeletePatch → INVALIDCALL");
     D3DERR_INVALIDCALL

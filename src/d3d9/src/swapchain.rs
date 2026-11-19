@@ -486,22 +486,12 @@ extern "system" fn swapchain_get_back_buffer(
 
 extern "system" fn swapchain_get_raster_status(this: *mut c_void, _status: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9::GetRasterStatus",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_warn!(target: LOG_TARGET, "stub IDirect3DSwapChain9::GetRasterStatus → INVALIDCALL");
     D3DERR_INVALIDCALL
 }
 
 extern "system" fn swapchain_get_display_mode(this: *mut c_void, mode: *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9::GetDisplayMode",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if mode.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -556,11 +546,6 @@ extern "system" fn swapchain_get_present_parameters(
 
 extern "system" fn swapchain_get_last_present_count(this: *mut c_void, count: *mut u32) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9Ex::GetLastPresentCount",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_warn!(target: LOG_TARGET,
         "stub IDirect3DSwapChain9Ex::GetLastPresentCount → 0 (presents are not counted)");
     if count.is_null() {
@@ -577,11 +562,6 @@ extern "system" fn swapchain_get_present_stats(
     stats: *mut D3DPRESENTSTATS,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9Ex::GetPresentStats",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     mtld3d_shared::log_once_warn!(target: LOG_TARGET,
         "stub IDirect3DSwapChain9Ex::GetPresentStats → zeroed statistics");
     if stats.is_null() {
@@ -611,11 +591,6 @@ extern "system" fn swapchain_get_display_mode_ex(
     rotation: *mut u32,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    refuse_under_core!(
-        on_core_device(this),
-        "IDirect3DSwapChain9Ex::GetDisplayModeEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // SAFETY: vtable thunk; `this` is *mut Direct3DSwapChain9 per the ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
         return D3DERR_INVALIDCALL;
