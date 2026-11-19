@@ -3,7 +3,7 @@
 //! The Metal device is winemetal's (`WMTCopyAllDevices`), the one whose registry ID the adapter
 //! `GetDeviceInfo` reported has; the queue takes D3D9's memory profile ([`queue_profile`]).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dxmt_core::{device::Device, pipeline_cache::PsoMap, queue::QueueConfig, staging::Staging};
 use mtld3d_core::pipeline_key::{PipelineKey, PipelineSource};
@@ -20,7 +20,8 @@ pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 /// closure left a render pass open, and whether the chunk holds any work. [`Drop`] drains the
 /// queue first; then fields drop in order: the queue (its threads, and the chunks holding the
 /// closures) before the back buffer and the window the closures name, and the pipelines, the
-/// stage functions and the depth-stencil states, whose raw handles the closures carry.
+/// stage functions, the depth-stencil states and the `StretchRect` quad's functions and
+/// pipelines, whose raw handles the closures carry.
 pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
@@ -49,6 +50,16 @@ pub struct CoreDevice {
     ///
     /// Never cleared, as the pipelines: a recorded closure names its state by handle.
     depth_states: rustc_hash::FxHashMap<u64, Obj>,
+    /// The `StretchRect` quad's two functions, made at the first sampled copy (DXMTRS C4c-4c).
+    ///
+    /// Of the library compiled from mtld3d's source; none inside once Metal made no library or
+    /// function, which the device does not try again.
+    quad_functions: OnceLock<Option<[Obj; 2]>>,
+    /// The quad's pipelines by the destination's stored format and sample count.
+    ///
+    /// None for one Metal does not make, never made again. Never cleared, as the pipelines: a
+    /// recorded closure names its pipeline by handle.
+    quad_pipelines: rustc_hash::FxHashMap<(u32, u8), Option<Obj>>,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
     /// The colour targets bound at index 1-3: `extras[i]` is slot `i + 1`'s (DXMTRS C4b-3d4).
@@ -111,6 +122,8 @@ impl CoreDevice {
             buffers: buffers::BufferStore::default(),
             samplers: rustc_hash::FxHashMap::default(),
             depth_states: rustc_hash::FxHashMap::default(),
+            quad_functions: OnceLock::new(),
+            quad_pipelines: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
             extras: [None; 3],
             depth: None,
@@ -226,6 +239,7 @@ mod draw;
 mod recorder;
 mod retained;
 mod samplers;
+mod stretch;
 mod surface;
 mod swapchain;
 mod sync;
@@ -234,6 +248,7 @@ mod textures;
 
 pub use depth::DepthRef;
 pub use draw::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
+pub use stretch::StretchQuad;
 pub use swapchain::present_after;
 pub use target::TargetRef;
 pub use textures::{

@@ -1,5 +1,7 @@
 //! A core device on `dxmt-fakes` for the recorder's tests, and what its queue's commits captured.
 
+use core::ffi::c_char;
+
 use dxmt_fakes as _;
 use mtld3d_core::{
     convert::{ff_vs_layout_from_elements, fvf_to_elements},
@@ -16,12 +18,18 @@ use mtld3d_types::{
     D3DDECLUSAGE_COLOR, D3DDECLUSAGE_POSITIONT, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9,
     render_state_defaults,
 };
-use winemetal_sys::Obj;
+use winemetal_sys::{Obj, wire::WMTCompileOptions};
 
 use super::{
     Bind, CoreDevice, CoreTextureDesc, CoreTextureFlags, DrawData, Indices, Stage, StreamData,
     TextureKind, queue_profile,
 };
+
+/// The library a sampled copy compiles in a test: a handle no fake makes and no test's device.
+///
+/// Below the fakes' first handle, so the functions made of it are its own and their calls, which
+/// print nothing, are no test's.
+const SOURCE_LIBRARY: u64 = 0xb117;
 
 /// A core device on the made-up handle `handle` with a 64x32 back buffer and a window.
 pub fn core_on_fakes(handle: u64) -> CoreDevice {
@@ -80,6 +88,19 @@ pub const fn ms_desc(pixel_format: u32, size: u32, samples: u8) -> CoreTextureDe
         samples,
         ..target_desc(pixel_format, TextureKind::Tex2d, size, 1, 4)
     }
+}
+
+/// [`ms_desc`]'s target, with its sRGB twin `srgb_format` and views in another format.
+pub const fn twinned_ms_desc(
+    pixel_format: u32,
+    srgb_format: u32,
+    size: u32,
+    samples: u8,
+) -> CoreTextureDesc {
+    let mut desc = ms_desc(pixel_format, size, samples);
+    desc.flags = desc.flags.union(CoreTextureFlags::VIEW_TWINS);
+    desc.srgb_format = srgb_format;
+    desc
 }
 
 /// The handles (`#<n>`) of the textures `calls` shows made, in order.
@@ -317,4 +338,20 @@ pub fn descriptors(calls: &[String]) -> Vec<Vec<&str>> {
 /// The first line of `pass` starting with `prefix`, without it.
 pub fn line<'a>(pass: &'a [String], prefix: &str) -> Option<&'a str> {
     pass.iter().find_map(|c| c.strip_prefix(prefix))
+}
+
+/// `MTLDevice_newLibraryWithSourceOptions`, which the fakes leave out: [`SOURCE_LIBRARY`].
+///
+/// The test binary links with dynamic lookup, so the fixture defines the one winemetal call the
+/// recorder makes that `dxmt-fakes` does not, as `dxmt-core`'s own tests define theirs. Every
+/// source compiles; the options, the source and the error slot are not read.
+#[unsafe(export_name = "MTLDevice_newLibraryWithSourceOptions")]
+const extern "C-unwind" fn library_with_source(
+    _device: u64,
+    _source: *const c_char,
+    _length: u64,
+    _options: *const WMTCompileOptions,
+    _error: *mut u64,
+) -> u64 {
+    SOURCE_LIBRARY
 }

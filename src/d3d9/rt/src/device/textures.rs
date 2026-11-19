@@ -226,6 +226,40 @@ impl CoreDevice {
         );
     }
 
+    /// A new single-sample, one-level 2D render target of `width` x `height`, made like `like`.
+    ///
+    /// In `like`'s stored format, with its sRGB twin and views in another format when it has a
+    /// twin, so a resolve of `like` through the view a pass or Clear last wrote it in, or a copy
+    /// of its bytes, lands in it. Registered under a fresh id and zeroed, as every render target
+    /// is; the caller forgets it ([`CoreDevice::forget_texture`]) once its copies are recorded,
+    /// whose closures hold their own. `None`, and nothing made, when `like` does not resolve as a
+    /// target or the size is empty (DXMTRS C4c-4c).
+    #[must_use]
+    pub fn scratch_like(&mut self, like: TargetRef, width: u32, height: u32) -> Option<TargetRef> {
+        let shape = self.shape(like).filter(|_| width != 0 && height != 0)?;
+        let mut flags = CoreTextureFlags::RENDER_TARGET;
+        flags.set(CoreTextureFlags::VIEW_TWINS, shape.srgb_format != 0);
+        let desc = CoreTextureDesc {
+            pixel_format: shape.pixel_format,
+            kind: TextureKind::Tex2d,
+            width,
+            height,
+            depth: 1,
+            levels: 1,
+            flags,
+            srgb_format: shape.srgb_format,
+            block: (1, 1, shape.texel_bytes),
+            samples: 1,
+        };
+        let id = TextureId::new_unique();
+        self.texture_create(id, &desc);
+        Some(TargetRef::Texture {
+            id,
+            level: 0,
+            face: None,
+        })
+    }
+
     /// The `WMTPixelFormat` of the view the last pass or Clear wrote `target` through.
     ///
     /// A texture's, or a multisampled back buffer's companion's (DXMTRS C4b-3d5); `None` for a
@@ -363,6 +397,13 @@ impl CoreDevice {
             desc.pixel_format,
             desc.samples,
         ))
+    }
+
+    /// Whether `id`'s texture was made with views in another format (`VIEW_TWINS`).
+    pub(super) fn view_twins(&self, id: TextureId) -> bool {
+        self.textures
+            .get(&id)
+            .is_some_and(|s| s.desc.flags.contains(CoreTextureFlags::VIEW_TWINS))
     }
 
     /// `id`'s core texture, if the store holds it.

@@ -394,7 +394,7 @@ pub(super) fn blit_record(
 }
 
 /// Whether `extent` texels from `start` end at `edge` or before it, the sum checked.
-fn inside(start: u32, extent: u32, edge: u32) -> bool {
+pub(super) fn inside(start: u32, extent: u32, edge: u32) -> bool {
     start.checked_add(extent).is_some_and(|end| end <= edge)
 }
 

@@ -23,8 +23,8 @@ dxmt-core = { workspace = true }
 log = { workspace = true }
 rustc-hash = { workspace = true }
 mtld3d-core = { workspace = true }
+mtld3d-types = { workspace = true }
 winemetal-sys = { workspace = true }
 
 [dev-dependencies]
 dxmt-fakes = { path = "../../dxmt/fakes" }
-mtld3d-types = { workspace = true }

@@ -3,8 +3,8 @@ use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BGRA8_UNOR
 
 use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion, plane_copies};
 use crate::device::{
-    CoreDevice,
-    fixture::{at, core_on_fakes, ms_desc},
+    CoreDevice, TargetRef,
+    fixture::{at, core_on_fakes, ms_desc, twinned_ms_desc},
     queue_profile_for,
 };
 
@@ -291,4 +291,58 @@ fn plane_copies_split_depth_and_stencil() {
         }
     }
     assert!(plane_copies(0, (u32::MAX, 1)).is_none());
+}
+
+/// A scratch made like a twinned multisampled target takes that target's resolve through the twin.
+///
+/// The target was cleared through its sRGB twin, so its resolve reads that view: the scratch, a
+/// single-sample one-level 2D target of the asked size in the target's format, has the twin too
+/// and takes the one resolve (a debug build panics on a destination without it). A target that
+/// does not resolve, or an empty size, makes none.
+#[test]
+fn a_scratch_takes_a_resolve_through_the_twin() {
+    const DEVICE: u64 = 0x448;
+    const SRGB: u32 = winemetal_sys::wire::WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB;
+    let mut core = core_on_fakes(DEVICE);
+    let id = TextureId::new_unique();
+    core.texture_create(
+        id,
+        &twinned_ms_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, SRGB, 64, 4),
+    );
+    let ms = TargetRef::Texture {
+        id,
+        level: 0,
+        face: None,
+    };
+    assert!(core.set_target(ms));
+    core.clear(0, [0.5, 0.5, 0.5, 1.0], true);
+    let scratch = core.scratch_like(ms, 64, 64).expect("a scratch");
+    assert_ne!(scratch, ms);
+    let shape = core.shape(scratch).expect("a target");
+    assert_eq!(
+        (
+            shape.width,
+            shape.height,
+            shape.pixel_format,
+            shape.srgb_format,
+            shape.level,
+            shape.samples
+        ),
+        (64, 64, WMT_PIXEL_FORMAT_BGRA8_UNORM, SRGB, 0, 1)
+    );
+    assert!(core.resolve_into(ms, scratch));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let resolves = calls
+        .iter()
+        .filter(|c| c.starts_with("  resolve0 "))
+        .count();
+    assert_eq!(resolves, 1, "{calls:#?}");
+    let unknown = TargetRef::Texture {
+        id: TextureId::new_unique(),
+        level: 0,
+        face: None,
+    };
+    assert_eq!(core.scratch_like(unknown, 8, 8), None);
+    assert_eq!(core.scratch_like(ms, 0, 8), None);
 }
