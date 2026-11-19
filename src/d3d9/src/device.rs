@@ -3090,19 +3090,39 @@ impl DeviceInner {
     /// swap chain without one. A plain device's `Reset` then wipes the rest of
     /// its state; an extended device's keeps it.
     fn reset_targets_to_implicit(&mut self) {
+        #[cfg(feature = "core-runtime")]
+        let core = self.is_core();
+        #[cfg(not(feature = "core-runtime"))]
+        let core = false;
         // An autogen texture bound as a render target regenerates its mip
         // chain when it stops being one, as `SetRenderTarget` does on the way
         // off it; queued ahead of the teardown that may release it.
         let autogen = core::mem::replace(&mut self.cur_autogen_rt_ids, [None; RENDER_TARGET_SLOTS]);
-        for old_id in autogen.into_iter().flatten() {
-            self.push_control(crate::device::GenerateMipmapsOrderedOp { old_id });
+        // A core device regenerates the chains and binds the implicit targets itself, while the
+        // references the teardown releases still hold the textures (DXMTRS C4c-6c).
+        #[cfg(feature = "core-runtime")]
+        if let Some(rt) = self.core.as_deref_mut() {
+            for old_id in autogen.into_iter().flatten() {
+                rt.texture_generate_mips(old_id);
+            }
+            let depth = self
+                .core_auto_depth
+                .map(|id| d3d9_rt::device::DepthRef { id, level: 0 });
+            let bound = rt.reset_targets(depth);
+            debug_assert!(bound, "the back buffer and the auto depth-stencil bind");
+        }
+        if !core {
+            for old_id in autogen.into_iter().flatten() {
+                self.push_control(crate::device::GenerateMipmapsOrderedOp { old_id });
+            }
         }
         self.bound_rt.teardown();
         // The encoder's frame reset already drops render targets 1..3; the
-        // explicit unbind covers the frame in flight.
+        // explicit unbind covers the frame in flight. A core device has no
+        // encoder mirror of its targets.
         self.last_color_rt_binding = None;
         for slot in 1..RENDER_TARGET_SLOTS {
-            if self.last_extra_rt_bindings[slot - 1].take().is_some() {
+            if self.last_extra_rt_bindings[slot - 1].take().is_some() && !core {
                 self.push_control(crate::device::UnbindExtraColorOp {
                     slot: u8::try_from(slot).expect("validated extra color slot"),
                 });
@@ -3957,7 +3977,7 @@ impl DeviceInner {
         self.core_auto_depth
     }
 
-    /// Records a core device's auto depth-stencil and its `D3DFMT_*`, at `CreateDevice`.
+    /// Records a core device's auto depth-stencil and its `D3DFMT_*` (`CreateDevice`, `Reset`).
     #[cfg(feature = "core-runtime")]
     pub const fn set_core_auto_depth(&mut self, id: mtld3d_core::ids::TextureId, format: u32) {
         self.core_auto_depth = Some(id);
@@ -4161,6 +4181,11 @@ impl DeviceInner {
             unsafe { crate::surface::detach_implicit_surface(&depth) };
             self.implicit_depth_stencil = 0;
             self.set_depth_stencil_handle(MetalHandle::NULL);
+            // A core device's surface took the texture over under its id (DXMTRS C4c-6c).
+            #[cfg(feature = "core-runtime")]
+            if self.is_core() {
+                self.core_auto_depth = None;
+            }
         }
     }
 
@@ -4926,11 +4951,6 @@ struct ParentIUnknownVtbl {
 
 extern "system" fn device_test_cooperative_level(this: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::TestCooperativeLevel",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // No exclusive mode is ever taken, so focus changes never lose the device.
     // The non-OK answers are the failure latch a step the layer could not
@@ -4946,7 +4966,13 @@ extern "system" fn device_test_cooperative_level(this: *mut c_void) -> i32 {
     if object.as_ref().is_some_and(|obj| obj.inner().is_extended()) {
         return D3D_OK;
     }
+    // A core device has no failure latch (DXMTRS C4c-6c): it answers the `Reset` it owes alone.
+    #[cfg(feature = "core-runtime")]
+    let core = crate::device::is_core_device(this);
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
     if let Some(obj) = &object
+        && !core
         && let Err(hr) = obj.inner().encoder_status()
     {
         return hr;
@@ -5290,11 +5316,6 @@ extern "system" fn device_get_number_of_swap_chains(this: *mut c_void) -> u32 {
 
 extern "system" fn device_reset(this: *mut c_void, present_params: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::Reset",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     let hr = reset_impl(this, present_params, ResetCall::Reset);
     reported_state_code(this, hr)
@@ -5363,6 +5384,13 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         return D3DERR_INVALIDCALL;
     };
     let dev = obj.inner();
+    // A core device (DXMTRS C4c-6c) takes the core's forms of the steps that reach mtld3d's
+    // recorder: no failure latch, no frame to deliver or reseed, its back buffer, window and auto
+    // depth-stencil made again through `CoreDevice`.
+    #[cfg(feature = "core-runtime")]
+    let core = dev.is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
     // What the line a Reset writes compares against, and whether the device
     // already waits for a successful Reset: a game retries a failing one
     // every frame, and a success then is a recovery.
@@ -5410,7 +5438,7 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         );
         return D3DERR_INVALIDCALL;
     }
-    if let Err(hr) = dev.encoder_status() {
+    if !core && let Err(hr) = dev.encoder_status() {
         return hr;
     }
 
@@ -5529,6 +5557,26 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         );
         return reject_reset(dev);
     }
+    // A core device is windowed, its back buffer X8R8G8B8 or A8R8G8B8, as its `CreateDevice`
+    // makes it: once mtld3d's validation has had its say, a request for more is refused by name,
+    // owing no `Reset` and changing nothing more (DXMTRS C4c-6c, rulings R6c-3 and R6c-5).
+    #[cfg(feature = "core-runtime")]
+    if core && pp.windowed == 0 {
+        crate::device::refuse_under_core("IDirect3DDevice9::Reset (into fullscreen)");
+        return mtld3d_types::D3DERR_NOTAVAILABLE;
+    }
+    #[cfg(feature = "core-runtime")]
+    if core
+        && !matches!(
+            pp.back_buffer_format,
+            mtld3d_types::D3DFMT_X8R8G8B8 | mtld3d_types::D3DFMT_A8R8G8B8
+        )
+    {
+        crate::device::refuse_under_core(
+            "IDirect3DDevice9::Reset (a back-buffer format the core does not make)",
+        );
+        return mtld3d_types::D3DERR_NOTAVAILABLE;
+    }
     let target_window = if pp.device_window == 0 {
         dev.window()
     } else {
@@ -5571,11 +5619,12 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
     // still holds makes the swap chain new textures at any size: the held
     // surface keeps the old ones (`detach_held_implicit_surfaces`).
     // Only the first four are a change in what the device presents with,
-    // which the line's level keys on; a held surface alone is not.
+    // which the line's level keys on; a held surface alone is not. A core
+    // device's handle is always null: its back buffer lives in the core.
     let recreated_for_a_change = pp.back_buffer_width != dev.backbuffer_width
         || pp.back_buffer_height != dev.backbuffer_height
         || multi_sample_changed
-        || dev.backbuffer_handle.is_null();
+        || (!core && dev.backbuffer_handle.is_null());
     let resized = recreated_for_a_change || held.back_buffer.is_some() || held.depth.is_some();
     // Reset adopts the present params' auto depth-stencil configuration: an
     // enabled flag (re)creates the implicit depth-stencil at the given format,
@@ -5588,8 +5637,9 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
     };
     // A `Reset` may name another `hDeviceWindow`. The presentation surface
     // and the window subclass both live on the window the device attached, so
-    // they move across before anything is recreated against the new one.
-    if retargeted {
+    // they move across before anything is recreated against the new one. A
+    // core device moves after, below.
+    if retargeted && !core {
         // A pending change from an earlier Reset would otherwise ride the
         // frame the retarget flush below sends, which still names the layer
         // the device is leaving. The fresh attach receives this Reset's
@@ -5651,8 +5701,9 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         // cached VGUI text meshes rode exactly this queue through its
         // same-size windowed/fullscreen Reset, which is issue #76's garbled
         // menu text. The resized path flushes inside
-        // `reset_recreate_resources`.
-        if let Err(hr) = dev.flush_current_frame_blocking() {
+        // `reset_recreate_resources`. A core device's recorder keeps what it
+        // recorded: nothing is reseeded.
+        if !core && let Err(hr) = dev.flush_current_frame_blocking() {
             log_failed_reset(
                 dev,
                 &log,
@@ -5662,6 +5713,14 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
             );
             return hr;
         }
+    }
+    // A core device moves once its back buffer has its new size, at which the
+    // view on the new window opens; its arm answers no error.
+    if retargeted
+        && core
+        && let Err(hr) = retarget_device_window(dev, &pp, target_window)
+    {
+        return hr;
     }
 
     // Refresh the device + cached implicit swapchain present parameters
@@ -5682,8 +5741,10 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
     //    unix side). Runs before the state defaults: `reset_to_defaults`
     //    pushes ops (default viewport, unbinds), and pushing them first
     //    would hand them to the reseed to throw away, so this keeps the
-    //    order `apply_auto_resize` already uses.
-    dev.reseed_current_frame();
+    //    order `apply_auto_resize` already uses. A core device has no frame.
+    if !core {
+        dev.reseed_current_frame();
+    }
     // The fresh attach's layer carries no gamma table. The ramp is queued only
     // now that `current_frame` names that layer: the frames the flushes above
     // sent still named the layer the retarget detached, and a ramp riding one
@@ -5801,6 +5862,12 @@ fn reject_reset(dev: &mut DeviceInner) -> i32 {
     if dev.is_extended() {
         return D3DERR_INVALIDCALL;
     }
+    // A core device has no frame in flight to deliver: its recorder keeps what it recorded, and
+    // the defaults rebind its targets (DXMTRS C4c-6c).
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        return fail_reset(dev, D3DERR_INVALIDCALL);
+    }
     if let Err(hr) = dev.flush_current_frame_blocking() {
         dev.flags.insert(DeviceFlags::NOT_RESET);
         return hr;
@@ -5821,7 +5888,14 @@ fn reject_reset(dev: &mut DeviceInner) -> i32 {
 /// succeeds.
 fn fail_reset(dev: &mut DeviceInner, hr: i32) -> i32 {
     dev.flags.insert(DeviceFlags::NOT_RESET);
-    dev.reseed_current_frame();
+    // A core device has no frame to replace (DXMTRS C4c-6c).
+    #[cfg(feature = "core-runtime")]
+    let core = dev.is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
+    if !core {
+        dev.reseed_current_frame();
+    }
     // An extended device keeps its state here too; its targets return to the
     // implicit surfaces, which name whatever the failed recreate left.
     if dev.is_extended() {
@@ -5903,11 +5977,25 @@ fn apply_reset_window_mode(dev: &mut DeviceInner, pp: &mtld3d_types::D3DPRESENT_
 /// An attach that fails leaves the device with no presentation surface, the
 /// same answer `CreateDevice` gives that failure: the device keeps working and
 /// `Present` becomes a no-op.
+///
+/// A core device moves its Metal view and presenter (`CoreDevice::retarget`), after its back
+/// buffer is made again; it has no cursor subclass to move (DXMTRS C4c-6c).
 fn retarget_device_window(
     dev: &mut DeviceInner,
     pp: &mtld3d_types::D3DPRESENT_PARAMETERS,
     hwnd: usize,
 ) -> Result<(), i32> {
+    #[cfg(feature = "core-runtime")]
+    if let Some(core) = dev.core.as_deref_mut() {
+        if !core.retarget(isize::try_from(hwnd).unwrap_or_default()) {
+            warn!(
+                target: LOG_TARGET,
+                "Reset: no Metal layer on the new device window 0x{hwnd:x}; the device presents \
+                 nowhere until a later Reset attaches one",
+            );
+        }
+        return Ok(());
+    }
     // Ops already queued name the layer that is about to go, and the encoder
     // waits for GPU idle, so nothing in flight references the view once the
     // detach releases it. No texture is destroyed here, so the encoder is
@@ -5962,11 +6050,25 @@ fn retarget_device_window(
 /// the caller on failure; `Ok(())` on success. State defaults + reseed +
 /// display-sync handling (steps 7-9) remains in the parent because the final
 /// pacing step depends on whether this Reset attached a fresh layer.
+///
+/// A core device detaches the held surfaces, adopts the new dimensions, makes its back buffer
+/// again in place at them and the adopted sample count (`CoreDevice::resize`, which drains first
+/// and keeps the view and presenter), then its auto depth-stencil (DXMTRS C4c-6c).
 fn reset_recreate_resources(
     dev: &mut DeviceInner,
     pp: &mtld3d_types::D3DPRESENT_PARAMETERS,
     held: HeldImplicitSurfaces,
 ) -> Result<(), i32> {
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        dev.detach_held_implicit_surfaces(held);
+        dev.set_backbuffer_dims(pp.back_buffer_width, pp.back_buffer_height);
+        let (samples, format) = (dev.backbuffer_sample_count, dev.depth_stencil_format);
+        if let Some(core) = dev.core.as_deref_mut() {
+            core.resize(pp.back_buffer_width, pp.back_buffer_height, samples);
+        }
+        return remake_core_auto_depth(dev, format);
+    }
     // 1. Drain any ops the API thread queued onto current_frame after the
     //    last Present — same pattern as device_release. The encoder's
     //    Reset handler waits for GPU idle, so by the time it returns,
@@ -6096,7 +6198,18 @@ fn reset_recreate_resources(
 /// The common case — auto depth unchanged, e.g. a state-clobber Reset — is a
 /// no-op, so the dims-unchanged fast path keeps skipping the flush/recreate
 /// cycle. Returns the D3D9 HRESULT to bubble back on failure.
+///
+/// A core device keys on its auto depth-stencil's id, and makes it again, or drops it, through
+/// the core (DXMTRS C4c-6c).
 fn reconcile_implicit_depth(dev: &mut DeviceInner, new_depth_format: u32) -> Result<(), i32> {
+    #[cfg(feature = "core-runtime")]
+    if dev.is_core() {
+        let had_depth = dev.core_auto_depth.is_some();
+        if new_depth_format == dev.depth_stencil_format && (new_depth_format != 0) == had_depth {
+            return Ok(());
+        }
+        return remake_core_auto_depth(dev, new_depth_format);
+    }
     let had_depth = !dev.depth_stencil_handle.is_null();
     let want_depth = new_depth_format != 0;
     if new_depth_format == dev.depth_stencil_format && want_depth == had_depth {
@@ -6155,6 +6268,53 @@ fn reconcile_implicit_depth(dev: &mut DeviceInner, new_depth_format: u32) -> Res
         }
         dev.set_depth_stencil_handle(ds_params.texture_handle);
     }
+    Ok(())
+}
+
+/// Makes a core device's auto depth-stencil again for a `Reset`, of `format` (0: none).
+///
+/// The old one is forgotten (one a held surface took over is no longer the device's), and a new
+/// one made as `CreateDevice` makes it, at the back buffer's size and sample count, under a fresh
+/// id; the device's format follows. The core binds it with the implicit targets
+/// (`reset_targets_to_implicit`). A format with no Metal mapping leaves none and answers
+/// `D3DERR_INVALIDCALL`, as mtld3d's recreate does (DXMTRS C4c-6c).
+#[cfg(feature = "core-runtime")]
+fn remake_core_auto_depth(dev: &mut DeviceInner, format: u32) -> Result<(), i32> {
+    let old = dev.core_auto_depth.take();
+    dev.depth_stencil_format = 0;
+    let (width, height, samples) = (
+        dev.backbuffer_width,
+        dev.backbuffer_height,
+        dev.backbuffer_sample_count,
+    );
+    let Some(core) = dev.core.as_deref_mut() else {
+        return Ok(());
+    };
+    if let Some(id) = old {
+        core.forget_texture(id);
+    }
+    if format == 0 {
+        return Ok(());
+    }
+    let Some(pixel_format) = mtld3d_core::format::map_d3d_depth_format(format) else {
+        error!(target: LOG_TARGET, "Reset: AutoDepthStencilFormat {format} has no Metal mapping");
+        return Err(D3DERR_INVALIDCALL);
+    };
+    let id = mtld3d_core::ids::TextureId::new_unique();
+    let desc = d3d9_rt::device::CoreTextureDesc {
+        pixel_format: pixel_format as u32,
+        kind: d3d9_rt::device::TextureKind::Tex2d,
+        width,
+        height,
+        depth: 1,
+        levels: 1,
+        flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
+        srgb_format: 0,
+        block: (1, 1, 4),
+        samples,
+    };
+    core.texture_create(id, &desc);
+    dev.set_core_auto_depth(id, format);
     Ok(())
 }
 

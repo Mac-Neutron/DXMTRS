@@ -2043,20 +2043,34 @@ pub unsafe fn detach_implicit_surface(held: &HeldSurface) {
         inner.metal_depth_handle = device.depth_stencil_handle();
         mtld3d_core::format::StandaloneSurfaceKind::DepthStencil
     };
+    // On a core device the depth-stencil takes the auto depth-stencil's core texture over under
+    // its id, which its final release forgets; the back buffer takes nothing: the core makes its
+    // back buffer again in place, so the held one is no target of the core (ruling R6c-4). Neither
+    // is charged, as a core device counts no standalone surface (DXMTRS C4b3d1-7, C4c-6c).
+    #[cfg(feature = "core-runtime")]
+    let core = device.is_core();
+    #[cfg(not(feature = "core-runtime"))]
+    let core = false;
+    #[cfg(feature = "core-runtime")]
+    if core && kind == ImplicitKind::DepthStencil {
+        inner.core_texture = device.core_auto_depth();
+    }
     inner.standalone_width = held.width;
     inner.standalone_height = held.height;
     inner.standalone_format = held.format;
     inner.standalone_render_scale = held.render_scale;
     inner.standalone_pool = D3DPOOL_DEFAULT;
     inner.multi_sample = held.multi_sample;
-    device.register_standalone_surface(
-        held.width,
-        held.height,
-        held.format,
-        u32::from(held.multi_sample.sample_count),
-        standalone_kind,
-        held.render_scale,
-    );
+    if !core {
+        device.register_standalone_surface(
+            held.width,
+            held.height,
+            held.format,
+            u32::from(held.multi_sample.sample_count),
+            standalone_kind,
+            held.render_scale,
+        );
+    }
     inner.container = device.device_wrapper() as u64;
     inner.implicit_kind = ImplicitKind::None;
 }

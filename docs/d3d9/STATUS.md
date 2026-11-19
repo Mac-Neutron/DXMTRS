@@ -35,9 +35,23 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
   `CreateDepthStencilSurface` surfaces; `ValidateDevice` answers one pass for a
   state whose draw that runtime refuses. Still refused there, each once by
-  name with `D3DERR_NOTAVAILABLE`, among others: `Reset` and what tests for
-  it, fullscreen devices, `ProcessVertices`, gamma, frame latency, the `Ex`
-  creators and the cursor calls.
+  name with `D3DERR_NOTAVAILABLE`, among others: fullscreen devices,
+  `ProcessVertices`, gamma, frame latency, the `Ex` creators and the cursor
+  calls.
+- On the core runtime a windowed `Reset` and `ResetEx` answer as on mtld3d:
+  the back buffer and the auto depth-stencil made again at the new size and
+  sample count, in place, the view moved to another device window when one is
+  named, mtld3d's validation and its two kinds of rejection, and
+  `TestCooperativeLevel` and the presents `D3DERR_DEVICENOTRESET` until a
+  `Reset` succeeds. Four differences: a `Reset` into fullscreen, and one to a
+  back-buffer format other than X8R8G8B8 or A8R8G8B8 (which mtld3d warns about
+  and accepts), are refused by name with `D3DERR_NOTAVAILABLE`, owing no
+  `Reset`; the GPU's failures latch no device-lost answer, so
+  `TestCooperativeLevel` answers only a `Reset` owed and `CheckDeviceState`
+  `D3D_OK`; and a back buffer an extended device's application holds across
+  `ResetEx` keeps its description but no pixels: it is no target of the core,
+  so a use that needs its texture answers as a surface without one does, where
+  mtld3d keeps its old texture (a held auto depth-stencil keeps its texture).
 - `D3DUSAGE_DYNAMIC` with `D3DPOOL_MANAGED` or `D3DPOOL_SCRATCH` is rejected
   with `D3DERR_INVALIDCALL` at 2D, cube and volume texture creation, for every
   format: the flag asks to drive the copy the device reads, which the managed

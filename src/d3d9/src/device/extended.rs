@@ -226,11 +226,6 @@ pub extern "system" fn get_maximum_frame_latency(this: *mut c_void, latency: *mu
 /// answers as `D3DERR_OUTOFVIDEOMEMORY`, the code the call documents for it.
 pub extern "system" fn check_device_state(this: *mut c_void, _window: *mut c_void) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::CheckDeviceState",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -241,6 +236,11 @@ pub extern "system" fn check_device_state(this: *mut c_void, _window: *mut c_voi
         "IDirect3DDevice9Ex::CheckDeviceState: reports the failure latch alone; no occlusion or \
          mode-change status"
     );
+    // A core device has no failure latch (DXMTRS C4c-6c).
+    #[cfg(feature = "core-runtime")]
+    if obj.inner().is_core() {
+        return D3D_OK;
+    }
     match obj.inner().encoder_status() {
         Ok(()) => D3D_OK,
         Err(hr) => obj.inner().state_code(hr),
@@ -367,11 +367,6 @@ pub extern "system" fn reset_ex(
     mode: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::ResetEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if present_params.is_null() {
         mtld3d_shared::log_once_warn!(
