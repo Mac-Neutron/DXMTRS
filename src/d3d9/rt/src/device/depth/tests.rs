@@ -1,22 +1,33 @@
+use dxmt_core::resource::texture_info;
 use mtld3d_core::{
     depth_stencil_state::DepthStencilSnapshot, ids::TextureId, pipeline_key::PipelineKey,
 };
-use winemetal_sys::wire::{
-    WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
-    WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+use winemetal_sys::{
+    Obj,
+    wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH16_UNORM,
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
+        WMT_PIXEL_FORMAT_X32_STENCIL8, WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
+        WMT_TEXTURE_TYPE2D_MULTISAMPLE, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+        WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ,
+    },
 };
 
 use super::DepthRef;
 use crate::device::{
     CoreDevice, CoreTextureDesc, DepthPlanes, DrawData, DrawRefused, Stage, TargetRef, TextureKind,
     fixture::{
-        at, core_on_fakes, depth_desc, ff_binds, key, line, passes, target_desc, textures_made,
-        triangle,
+        at, core_on_fakes, depth_desc, ff_binds, key, line, ms_desc, passes, target_desc,
+        textures_made, triangle,
     },
 };
 
 const D32F: u32 = WMT_PIXEL_FORMAT_DEPTH32_FLOAT;
 const D32F_S8: u32 = WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8;
+
+/// The record of a draw of three vertices from vertex 0, one instance.
+const DRAW_3: &str =
+    "  render 19 primitive_type=3 vertex_start=0 vertex_count=3 instance_count=1 base_instance=0";
 
 /// A core device on fakes (a 64x32 back buffer) and every call it has made so far.
 ///
@@ -1006,4 +1017,389 @@ fn a_draw_against_a_copied_depth_waits_on_the_copy() {
         waits.iter().any(|w| updated.contains(w)),
         "the draw waits on {waits:?}, the copy updates {updated:?}: {calls:#?}"
     );
+}
+
+/// A stored texture of `desc` under a fresh id, and its Metal handle.
+///
+/// A fresh id, not one of `Rig::depth`'s small ones: a resolve's scratch takes a fresh id, which
+/// could be one of those.
+fn fresh(rig: &mut Rig, desc: &CoreTextureDesc) -> Made {
+    let id = TextureId::new_unique();
+    rig.core.texture_create(id, desc);
+    let made = textures_made(&rig.take());
+    (id, made[0].clone())
+}
+
+/// [`fresh`]'s one-level 64x32 depth texture of `format`, `samples` a texel.
+fn fresh_depth(rig: &mut Rig, format: u32, samples: u8) -> Made {
+    let desc = CoreTextureDesc {
+        samples,
+        ..depth_desc(format, 64, 32, 1)
+    };
+    fresh(rig, &desc)
+}
+
+/// The resolve's pass in `calls`: the one render pass that draws with no colour target.
+fn resolve_pass(calls: &[String]) -> &[String] {
+    let found = passes(calls)
+        .into_iter()
+        .filter(|pass| line(pass, "  color0 ").is_none() && line(pass, "  render 19 ").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    found[0]
+}
+
+/// The first render pass in `calls` with a colour target: a draw's.
+fn draw_pass(calls: &[String]) -> &[String] {
+    passes(calls)
+        .into_iter()
+        .find(|pass| line(pass, "  color0 ").is_some())
+        .unwrap_or_else(|| panic!("no draw's pass in {calls:#?}"))
+}
+
+/// `value` as the fakes print a float: its bits in hex.
+fn hex(value: f32) -> String {
+    format!("0x{:08x}", value.to_bits())
+}
+
+/// A resolve it cannot make is refused, and nothing is recorded: no pass, pipeline or state.
+///
+/// Four samples at both ends, one at both ends, a destination of two, another size, another
+/// format, a colour texture at either end, an unknown id at either end. The sound pair then
+/// resolves.
+#[test]
+fn a_refused_depth_resolve_records_nothing() {
+    let mut rig = Rig::new(0x450);
+    let ms = fresh_depth(&mut rig, D32F_S8, 4).0;
+    let ms_b = fresh_depth(&mut rig, D32F_S8, 4).0;
+    let two = fresh_depth(&mut rig, D32F_S8, 2).0;
+    let one = fresh_depth(&mut rig, D32F_S8, 1).0;
+    let one_b = fresh_depth(&mut rig, D32F_S8, 1).0;
+    let small = fresh(&mut rig, &depth_desc(D32F_S8, 32, 32, 1)).0;
+    let d32f = fresh_depth(&mut rig, D32F, 1).0;
+    let color_desc = target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 64, 1, 4);
+    let color = fresh(&mut rig, &color_desc).0;
+    let unknown = TextureId::new_unique();
+    for (what, src, dst) in [
+        ("four samples at both ends", ms, ms_b),
+        ("one sample at both ends", one, one_b),
+        ("a destination of two samples", ms, two),
+        ("a single-sample source", one, ms),
+        ("another size", ms, small),
+        ("another format", ms, d32f),
+        ("a colour source", color, one),
+        ("a colour destination", ms, color),
+        ("an unknown source", unknown, one),
+        ("an unknown destination", ms, unknown),
+    ] {
+        assert!(!rig.core.depth_resolve(level0(src), level0(dst)), "{what}");
+        let calls = rig.take();
+        assert!(calls.is_empty(), "{what}: {calls:#?}");
+    }
+    assert!(rig.core.depth_resolve(level0(ms), level0(one)));
+}
+
+/// A stencil format's resolve copies its source into a scratch, then is one pass of its own.
+///
+/// The scratch is a new 4-sample `Depth32FloatStencil8` texture of the source's size made with
+/// views in another format, which one texture-to-texture blit fills before the pass. The pass has
+/// no colour target and attaches the destination's depth and stencil planes, don't-care and
+/// stored. It records once each: its pipeline; a state that always passes, writes depth and
+/// replaces the stencil on both faces, at reference 0; the level's viewport and scissor; a
+/// rasterizer state that fills and culls nothing; the scratch at fragment texture 0 and its
+/// `X32_Stencil8` view of the multisample type at 1; a draw of three vertices. No pass is left
+/// open.
+#[test]
+fn a_stencil_resolve_reads_a_scratch_in_one_pass() {
+    let mut rig = Rig::new(0x451);
+    let (src, _) = fresh_depth(&mut rig, D32F_S8, 4);
+    let (dst, h_dst) = fresh_depth(&mut rig, D32F_S8, 1);
+    assert!(rig.core.depth_resolve(level0(src), level0(dst)));
+    assert!(!rig.core.render_open && !rig.core.blit_open);
+    let pso = rig
+        .core
+        .resolve_pipelines
+        .get(&D32F_S8)
+        .and_then(Option::as_ref)
+        .map(Obj::handle)
+        .expect("the resolve's pipeline");
+    let calls = rig.take();
+    let made = textures_made(&calls);
+    assert_eq!(made.len(), 1, "{calls:#?}");
+    let scratch = &made[0];
+    let usage = WMT_TEXTURE_USAGE_SHADER_READ
+        | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW
+        | WMT_TEXTURE_USAGE_RENDER_TARGET;
+    let bits = texture_info::info_bits(WMT_TEXTURE_TYPE2D_MULTISAMPLE, 1, 4, usage);
+    let described = format!(
+        "MTLDevice_newTexture {scratch} format={D32F_S8} size=64x32x1 array=1 bits={bits:#x}"
+    );
+    assert!(calls.contains(&described), "{described:?} in {calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    let drawn = calls
+        .iter()
+        .position(|c| c.starts_with("  render 19 "))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(at(&calls, "  blit 4") < drawn, "{calls:#?}");
+    let pass = resolve_pass(&calls);
+    for plane in ["depth", "stencil"] {
+        let handle = plane_handle(pass, plane).unwrap_or_else(|| panic!("{plane}: {calls:#?}"));
+        assert_eq!(rig.texture_of(&handle), h_dst, "{plane}: {calls:#?}");
+        let rest = line(pass, &format!("  {plane} ")).unwrap_or_default();
+        assert!(rest.contains(" load=0 store=1 "), "{plane}: {calls:#?}");
+    }
+    let (state, desc) = calls
+        .iter()
+        .find_map(|c| c.strip_prefix("MTLDevice_newDepthStencilState "))
+        .and_then(|c| c.split_once(' '))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    // ALWAYS (Metal's 7) with a write; each face on, ALWAYS, REPLACE (2) on every outcome, read
+    // mask 0 (unread under ALWAYS), write mask ff.
+    assert_eq!(
+        desc, "cmp=7 write=1 front=1,7,2,2,2,0,255 back=1,7,2,2,2,0,255",
+        "{calls:#?}"
+    );
+    let view = format!(
+        " of {scratch} format={WMT_PIXEL_FORMAT_X32_STENCIL8} \
+         type={WMT_TEXTURE_TYPE2D_MULTISAMPLE} mip=0 slice=0"
+    );
+    let stencil = calls
+        .iter()
+        .filter_map(|c| c.strip_prefix("MTLTexture_newTextureView "))
+        .find_map(|c| c.strip_suffix(view.as_str()))
+        .unwrap_or_else(|| panic!("no stencil view{view}: {calls:#?}"));
+    let (zero, one) = (hex(0.0), hex(1.0));
+    let (across, down) = (hex(64.0), hex(32.0));
+    let texture = WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE;
+    for record in [
+        format!("  render 15 pso=#{pso}"),
+        format!("  render 16 dsso={state} stencil_ref=0"),
+        format!(
+            "  render 13 viewports=48B viewport_count=1 viewports[0].origin_x={zero} \
+             viewports[0].origin_y={zero} viewports[0].width={across} \
+             viewports[0].height={down} viewports[0].znear={zero} viewports[0].zfar={one}"
+        ),
+        "  render 14 scissor_rects=32B rect_count=1 scissor_rects[0].x=0 scissor_rects[0].y=0 \
+         scissor_rects[0].width=64 scissor_rects[0].height=32"
+            .to_owned(),
+        format!(
+            "  render 12 fill_mode=0 cull_mode=0 depth_clip_mode=0 winding=0 \
+             depth_bias={zero} scole_scale={zero} depth_bias_clamp={zero}"
+        ),
+        format!("  render {texture} texture={scratch} index=0"),
+        format!("  render {texture} texture={stencil} index=1"),
+        DRAW_3.to_owned(),
+    ] {
+        assert_eq!(
+            pass.iter().filter(|c| **c == record).count(),
+            1,
+            "{record:?} once in {calls:#?}"
+        );
+    }
+    let binds = format!("  render {texture} ");
+    assert_eq!(
+        pass.iter().filter(|c| c.starts_with(&binds)).count(),
+        2,
+        "{calls:#?}"
+    );
+}
+
+/// A depth-only format's resolve reads its source itself: no scratch, no copy, one bind.
+///
+/// One pass, which attaches the destination's depth plane alone, don't-care and stored, under a
+/// state that always passes and writes depth with no stencil test, and binds the source's own
+/// texture at fragment texture 0.
+#[test]
+fn a_depth_only_resolve_reads_its_source() {
+    let mut rig = Rig::new(0x452);
+    let (src, h_src) = fresh_depth(&mut rig, D32F, 4);
+    let (dst, h_dst) = fresh_depth(&mut rig, D32F, 1);
+    assert!(rig.core.depth_resolve(level0(src), level0(dst)));
+    assert!(!rig.core.render_open && !rig.core.blit_open);
+    let calls = rig.take();
+    assert!(textures_made(&calls).is_empty(), "{calls:#?}");
+    assert!(blit_records(&calls).is_empty(), "{calls:#?}");
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLTexture_newTextureView ")),
+        "{calls:#?}"
+    );
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    let pass = resolve_pass(&calls);
+    let handle = plane_handle(pass, "depth").unwrap_or_else(|| panic!("{calls:#?}"));
+    assert_eq!(rig.texture_of(&handle), h_dst, "{calls:#?}");
+    let depth = line(pass, "  depth ").unwrap_or_default();
+    assert!(depth.contains(" load=0 store=1 "), "{calls:#?}");
+    assert_eq!(line(pass, "  stencil "), None, "{calls:#?}");
+    let made = calls
+        .iter()
+        .find_map(|c| c.strip_prefix("MTLDevice_newDepthStencilState #"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(
+        made.ends_with(" cmp=7 write=1 front=0,0,0,0,0,0,0 back=0,0,0,0,0,0,0"),
+        "{calls:#?}"
+    );
+    let texture = format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} ");
+    let binds = pass
+        .iter()
+        .filter_map(|c| c.strip_prefix(&texture))
+        .collect::<Vec<_>>();
+    let source = format!("texture={h_src} index=0");
+    assert_eq!(binds, [source.as_str()], "{calls:#?}");
+    assert_eq!(
+        pass.iter().filter(|c| *c == DRAW_3).count(),
+        1,
+        "{calls:#?}"
+    );
+}
+
+/// The resolve's pipelines are made once a destination format, and its state once a format.
+///
+/// Two resolves into `Depth32FloatStencil8` make one pipeline of one sample and one state; one
+/// into `Depth32Float` makes a second of each. No rect clear or stretch runs here: their
+/// pipelines print the same line.
+#[test]
+fn a_resolve_pipeline_per_format() {
+    const PIPELINE: &str = "MTLDevice_newRenderPipelineState";
+    let mut rig = Rig::new(0x453);
+    let count =
+        |calls: &[String], prefix: &str| calls.iter().filter(|c| c.starts_with(prefix)).count();
+    let ms = fresh_depth(&mut rig, D32F_S8, 4).0;
+    let one = fresh_depth(&mut rig, D32F_S8, 1).0;
+    let ms_d32f = fresh_depth(&mut rig, D32F, 4).0;
+    let one_d32f = fresh_depth(&mut rig, D32F, 1).0;
+    assert!(rig.core.depth_resolve(level0(ms), level0(one)));
+    assert!(rig.core.depth_resolve(level0(ms), level0(one)));
+    let calls = rig.take();
+    assert_eq!(count(&calls, PIPELINE), 1, "{calls:#?}");
+    assert_eq!(count(&calls, "  pso samples="), 0, "{calls:#?}");
+    assert_eq!(
+        count(&calls, "MTLDevice_newDepthStencilState "),
+        1,
+        "{calls:#?}"
+    );
+    assert!(rig.core.depth_resolve(level0(ms_d32f), level0(one_d32f)));
+    let calls = rig.take();
+    assert_eq!(count(&calls, PIPELINE), 1, "{calls:#?}");
+    assert_eq!(
+        count(&calls, "MTLDevice_newDepthStencilState "),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(rig.core.resolve_pipelines.len(), 2);
+}
+
+/// A resolve waits for the Clear of its source.
+///
+/// A depth-only source cleared, then resolved: the resolve's pass, which reads the source, waits
+/// on a fence the Clear's pass updates.
+#[test]
+fn a_resolve_waits_on_the_clear_of_its_source() {
+    let mut rig = Rig::new(0x454);
+    let (src, _) = fresh_depth(&mut rig, D32F, 4);
+    let (dst, _) = fresh_depth(&mut rig, D32F, 1);
+    assert!(rig.core.set_depth(Some(level0(src))));
+    rig.core.clear_depth_stencil(1, 0.25, 0);
+    assert!(rig.core.depth_resolve(level0(src), level0(dst)));
+    let calls = rig.take();
+    let all = passes(&calls);
+    assert_eq!(all.len(), 2, "{calls:#?}");
+    // The fences the Clear's pass updates (record 34), and those the resolve's waits for (33).
+    let updated = fence_ids(all[0], "  render 34 fence=");
+    let waits = fence_ids(resolve_pass(&calls), "  render 33 fence=");
+    assert!(
+        waits.iter().any(|w| updated.contains(w)),
+        "the resolve waits on {waits:?}, the Clear updates {updated:?}: {calls:#?}"
+    );
+}
+
+/// A draw against a resolved depth-stencil waits for the resolve.
+///
+/// For each format, the resolve, then a draw with its destination bound: the draw's pass, which
+/// the resolve's never merges with, waits on a fence the resolve's pass updates.
+#[test]
+fn a_draw_against_a_resolved_depth_waits_on_the_resolve() {
+    let mut rig = Rig::new(0x455);
+    for format in [D32F_S8, D32F] {
+        let (src, _) = fresh_depth(&mut rig, format, 4);
+        let (dst, _) = fresh_depth(&mut rig, format, 1);
+        assert!(rig.core.depth_resolve(level0(src), level0(dst)), "{format}");
+        assert!(rig.core.set_depth(Some(level0(dst))), "{format}");
+        assert_eq!(
+            rig.draw(&key_with(format), (tested(), 0, 0.0)),
+            Ok(()),
+            "{format}"
+        );
+        let calls = rig.take();
+        let updated = fence_ids(resolve_pass(&calls), "  render 34 fence=");
+        let waits = fence_ids(draw_pass(&calls), "  render 33 fence=");
+        assert!(
+            waits.iter().any(|w| updated.contains(w)),
+            "{format}: the draw waits on {waits:?}, the resolve updates {updated:?}: {calls:#?}"
+        );
+    }
+}
+
+/// A draw on a resolved source waits for what read it: a write after a read.
+///
+/// For each format, the resolve, then a draw with its 4-sample source bound beside a 4-sample
+/// target, which writes the source. A stencil format's source was read by the copy into the
+/// scratch: the draw's pass waits on a fence that blit updates (record 7). A depth-only one's was
+/// read by the resolve's pass: the draw's waits on a fence that pass updates.
+#[test]
+fn a_draw_on_a_resolved_source_waits_on_its_read() {
+    let mut rig = Rig::new(0x456);
+    let (target, _) = fresh(&mut rig, &ms_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, 64, 4));
+    assert!(rig.core.set_target(TargetRef::Texture {
+        id: target,
+        level: 0,
+        face: None,
+    }));
+    for format in [D32F_S8, D32F] {
+        let (src, _) = fresh_depth(&mut rig, format, 4);
+        let (dst, _) = fresh_depth(&mut rig, format, 1);
+        assert!(rig.core.depth_resolve(level0(src), level0(dst)), "{format}");
+        assert!(rig.core.set_depth(Some(level0(src))), "{format}");
+        let drawn = PipelineKey {
+            depth_format: format,
+            samples: 4,
+            ..key(0xf)
+        };
+        assert_eq!(rig.draw(&drawn, (tested(), 0, 0.0)), Ok(()), "{format}");
+        let calls = rig.take();
+        let draw = draw_pass(&calls);
+        assert!(line(draw, "  depth ").is_some(), "{format}: {calls:#?}");
+        let updated = if format == D32F_S8 {
+            fence_ids(&calls, "  blit 7 fence=")
+        } else {
+            fence_ids(resolve_pass(&calls), "  render 34 fence=")
+        };
+        let waits = fence_ids(draw, "  render 33 fence=");
+        assert!(
+            waits.iter().any(|w| updated.contains(w)),
+            "{format}: the draw waits on {waits:?}, its reader updates {updated:?}: {calls:#?}"
+        );
+    }
+}
+
+/// A Clear of the destination recorded before a resolve folds into its pass and is dropped.
+///
+/// A depth-only pair, the destination bound and cleared whole, then the resolve: one pass, the
+/// resolve's, whose depth plane still loads don't-care (its triangle writes every texel).
+#[test]
+fn a_clear_of_the_destination_folds_into_the_resolve() {
+    let mut rig = Rig::new(0x457);
+    let (src, _) = fresh_depth(&mut rig, D32F, 4);
+    let (dst, h_dst) = fresh_depth(&mut rig, D32F, 1);
+    assert!(rig.core.set_depth(Some(level0(dst))));
+    rig.core.clear_depth_stencil(1, 0.5, 0);
+    assert!(rig.core.depth_resolve(level0(src), level0(dst)));
+    let calls = rig.take();
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    let pass = resolve_pass(&calls);
+    let handle = plane_handle(pass, "depth").unwrap_or_else(|| panic!("{calls:#?}"));
+    assert_eq!(rig.texture_of(&handle), h_dst, "{calls:#?}");
+    let depth = line(pass, "  depth ").unwrap_or_default();
+    assert!(depth.ends_with(" load=0 store=1 clear=0"), "{calls:#?}");
 }

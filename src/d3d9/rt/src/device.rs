@@ -20,8 +20,8 @@ pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 /// closure left a render pass open, and whether the chunk holds any work. [`Drop`] drains the
 /// queue first; then fields drop in order: the queue (its threads, and the chunks holding the
 /// closures) before the back buffer and the window the closures name, and the pipelines, the
-/// stage functions, the depth-stencil states and the `StretchRect` quad's functions and
-/// pipelines, whose raw handles the closures carry.
+/// stage functions, the depth-stencil states, the `StretchRect` quad's functions and pipelines
+/// and the depth-stencil resolve's, whose raw handles the closures carry.
 pub struct CoreDevice {
     device: Device,
     back_buffer: Option<swapchain::BackBuffer>,
@@ -60,6 +60,17 @@ pub struct CoreDevice {
     /// None for one Metal does not make, never made again. Never cleared, as the pipelines: a
     /// recorded closure names its pipeline by handle.
     quad_pipelines: rustc_hash::FxHashMap<(u32, u8), Option<Obj>>,
+    /// The depth-stencil resolve's three functions, made at the first resolve (DXMTRS C4c-4d).
+    ///
+    /// The vertex function, then the fragment functions of a depth plane alone and of depth and
+    /// stencil; none inside once Metal made no library or function, which the device does not try
+    /// again.
+    resolve_functions: OnceLock<Option<[Obj; 3]>>,
+    /// The resolve's pipelines by the destination's `WMTPixelFormat`.
+    ///
+    /// None for one Metal does not make, never made again. Never cleared, as the pipelines: a
+    /// recorded closure names its pipeline by handle.
+    resolve_pipelines: rustc_hash::FxHashMap<u32, Option<Obj>>,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
     /// The colour targets bound at index 1-3: `extras[i]` is slot `i + 1`'s (DXMTRS C4b-3d4).
@@ -124,6 +135,8 @@ impl CoreDevice {
             depth_states: rustc_hash::FxHashMap::default(),
             quad_functions: OnceLock::new(),
             quad_pipelines: rustc_hash::FxHashMap::default(),
+            resolve_functions: OnceLock::new(),
+            resolve_pipelines: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
             extras: [None; 3],
             depth: None,

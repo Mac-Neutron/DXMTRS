@@ -64,7 +64,10 @@ bitflags::bitflags! {
     /// How a core texture is used beyond sampling.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct CoreTextureFlags: u8 {
-        /// Views in another format (an sRGB twin, a swizzle) will be taken: `PIXEL_FORMAT_VIEW`.
+        /// Views in another format will be taken: `PIXEL_FORMAT_VIEW`.
+        ///
+        /// An sRGB twin, a swizzle, or a depth texture's `X32_Stencil8` view of its stencil plane
+        /// (the depth-stencil resolve's scratch, DXMTRS C4c-4d).
         const VIEW_TWINS = 1 << 0;
         /// A render target (C4b-3d1).
         ///

@@ -13,7 +13,7 @@ use std::{ffi::CStr, sync::Arc};
 use dxmt_core::{
     deptrack::Access,
     device::Device,
-    encoder::{NO_NEXT, direct, stage},
+    encoder::{Encoder, NO_NEXT, direct, stage},
     library::{description, render_pipeline, render_pipeline_info},
     resource::TextureViewDescriptor,
     sampler::Sampler,
@@ -150,20 +150,7 @@ impl CoreDevice {
         let (xform, src_level) = quad_uniforms(&shape, quad.src_rect, quad.decode);
         // Each `float4` as the 16 little-endian bytes the shader reads.
         let (xform, src_level) = (xform.map(f32::to_le_bytes), src_level.map(f32::to_le_bytes));
-        let viewport = WMTViewport {
-            origin_x: f64::from(dst_x),
-            origin_y: f64::from(dst_y),
-            width: f64::from(dst_width),
-            height: f64::from(dst_height),
-            znear: 0.0,
-            zfar: 1.0,
-        };
-        let scissor = WMTScissorRect {
-            x: u64::from(dst_x),
-            y: u64::from(dst_y),
-            width: u64::from(dst_width),
-            height: u64::from(dst_height),
-        };
+        let dst_rect = quad.dst_rect;
         let (target, key, extent) = (to.texture, to.key, (into.width, into.height));
         self.emit(move |enc| {
             enc.start_render_pass(0, 0, 1, None);
@@ -176,50 +163,7 @@ impl CoreDevice {
                 color.target.store_action = WMT_STORE_ACTION_STORE;
                 (targets.render_target_width, targets.render_target_height) = extent;
             }
-            enc.encode_render_command(WmtcmdRenderSetpso {
-                r#type: WMT_RENDER_COMMAND_SET_PSO,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                pso,
-            });
-            let slot = enc
-                .allocate_cpu(size_of::<WMTViewport>(), align_of::<WMTViewport>())
-                .cast::<WMTViewport>();
-            // SAFETY: the encoder's memory, sized and aligned for one viewport, nobody else's.
-            unsafe { slot.write(viewport) };
-            enc.encode_render_command(WmtcmdRenderSetviewports {
-                r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                viewports: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
-                viewport_count: 1,
-            });
-            let slot = enc
-                .allocate_cpu(size_of::<WMTScissorRect>(), align_of::<WMTScissorRect>())
-                .cast::<WMTScissorRect>();
-            // SAFETY: the encoder's memory, sized and aligned for one rect, nobody else's.
-            unsafe { slot.write(scissor) };
-            enc.encode_render_command(WmtcmdRenderSetscissorrects {
-                r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                scissor_rects: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
-                rect_count: 1,
-            });
-            // The quad's own: the optimizer merges this pass with a draw's on the same view, and
-            // Metal's encoder would keep that draw's cull and fill modes.
-            enc.encode_render_command(WmtcmdRenderSetrasterizerstate {
-                r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                fill_mode: WMT_TRIANGLE_FILL_MODE_FILL,
-                cull_mode: WMT_CULL_MODE_NONE,
-                depth_clip_mode: WMT_DEPTH_CLIP_MODE_CLIP,
-                winding: WMT_WINDING_CLOCKWISE,
-                depth_bias: 0.0,
-                scole_scale: 0.0,
-                depth_bias_clamp: 0.0,
-            });
+            encode_triangle_state(enc, pso, dst_rect);
             // Metal's slot 0 of each stage, as the shader declares them: a D3D9 pass binds no
             // argument buffer that these would have to leave alone.
             direct::bind_bytes::<{ stage::VERTEX }>(enc, 0, xform.as_flattened());
@@ -253,7 +197,16 @@ impl CoreDevice {
         }
         let [vs, ps] = self
             .quad_functions
-            .get_or_init(|| compile_quad(&self.device))
+            .get_or_init(|| {
+                compile_functions(
+                    &self.device,
+                    BLIT_MSL,
+                    [BLIT_VS, BLIT_PS],
+                    MATH_MODE_FAST,
+                    "the StretchRect quad's",
+                    "sampled copies",
+                )
+            })
             .as_ref()?
             .each_ref()
             .map(Obj::handle);
@@ -300,26 +253,101 @@ impl CoreDevice {
     }
 }
 
-/// The quad's two functions: [`BLIT_MSL`] compiled on `device` as mtld3d compiles it.
+/// Records a pass's pipeline `pso`, viewport and scissor on `rect`, and its rasterizer state.
 ///
-/// Metal language 2.4 and fast math. The library is released once its functions are made, as
-/// mtld3d releases its own: they hold it. None, and Metal's error logged, when Metal makes no
-/// library or no function; the device does not try again.
-fn compile_quad(device: &Device) -> Option<[Obj; 2]> {
+/// What a pass of the device's own sets before its one triangle (the `StretchRect` quad, the
+/// depth-stencil resolve): `rect` is `x, y, width, height`, the viewport's depth runs from 0 to
+/// 1, and the rasterizer state fills, culls nothing, clips depth and has no bias. The state is
+/// the pass's own: the optimizer may merge such a pass with a draw's on the same view, and
+/// Metal's encoder would keep that draw's cull and fill modes.
+pub(super) fn encode_triangle_state(enc: &mut Encoder, pso: u64, rect: [u32; 4]) {
+    let [x, y, width, height] = rect;
+    enc.encode_render_command(WmtcmdRenderSetpso {
+        r#type: WMT_RENDER_COMMAND_SET_PSO,
+        reserved: [0; 3],
+        next: NO_NEXT,
+        pso,
+    });
+    let slot = enc
+        .allocate_cpu(size_of::<WMTViewport>(), align_of::<WMTViewport>())
+        .cast::<WMTViewport>();
+    let viewport = WMTViewport {
+        origin_x: f64::from(x),
+        origin_y: f64::from(y),
+        width: f64::from(width),
+        height: f64::from(height),
+        znear: 0.0,
+        zfar: 1.0,
+    };
+    // SAFETY: the encoder's memory, sized and aligned for one viewport, nobody else's.
+    unsafe { slot.write(viewport) };
+    enc.encode_render_command(WmtcmdRenderSetviewports {
+        r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
+        reserved: [0; 3],
+        next: NO_NEXT,
+        viewports: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
+        viewport_count: 1,
+    });
+    let slot = enc
+        .allocate_cpu(size_of::<WMTScissorRect>(), align_of::<WMTScissorRect>())
+        .cast::<WMTScissorRect>();
+    let scissor = WMTScissorRect {
+        x: u64::from(x),
+        y: u64::from(y),
+        width: u64::from(width),
+        height: u64::from(height),
+    };
+    // SAFETY: the encoder's memory, sized and aligned for one rect, nobody else's.
+    unsafe { slot.write(scissor) };
+    enc.encode_render_command(WmtcmdRenderSetscissorrects {
+        r#type: WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+        reserved: [0; 3],
+        next: NO_NEXT,
+        scissor_rects: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
+        rect_count: 1,
+    });
+    enc.encode_render_command(WmtcmdRenderSetrasterizerstate {
+        r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
+        reserved: [0; 3],
+        next: NO_NEXT,
+        fill_mode: WMT_TRIANGLE_FILL_MODE_FILL,
+        cull_mode: WMT_CULL_MODE_NONE,
+        depth_clip_mode: WMT_DEPTH_CLIP_MODE_CLIP,
+        winding: WMT_WINDING_CLOCKWISE,
+        depth_bias: 0.0,
+        scole_scale: 0.0,
+        depth_bias_clamp: 0.0,
+    });
+}
+
+/// The functions `names` of a library Metal compiles from `source` on `device`, in that order.
+///
+/// Metal language 2.4 in `math_mode` (`MTLMathMode`). The library is released once its functions
+/// are made, as mtld3d releases its own: they hold it. None, and Metal's error logged as
+/// `owner`'s with what is then `refused`, when Metal makes no library or no function; the caller
+/// keeps the none and does not try again. Every `source` is a constant whose ASCII is asserted.
+pub(super) fn compile_functions<const N: usize>(
+    device: &Device,
+    source: &str,
+    names: [&CStr; N],
+    math_mode: u8,
+    owner: &str,
+    refused: &str,
+) -> Option<[Obj; N]> {
     let options = WMTCompileOptions {
         language_version: LANGUAGE_VERSION_2_4,
         preserve_invariance: 0,
-        math_mode: MATH_MODE_FAST,
+        math_mode,
         padding: [0; 6],
     };
-    let length = u64::try_from(BLIT_MSL.len()).unwrap_or(0);
+    let length = u64::try_from(source.len()).unwrap_or(0);
     let mut error = 0;
-    // SAFETY: a live device; the source is `length` bytes of ASCII, and the options and the error
-    // slot are alive for the call.
+    // SAFETY: a live device; the source is `length` bytes of ASCII (each caller's constant), and
+    // the options and the error slot are alive for the call.
     let library = unsafe {
         MTLDevice_newLibraryWithSourceOptions(
             device.device().handle(),
-            BLIT_MSL.as_ptr().cast(),
+            source.as_ptr().cast(),
             length,
             &raw const options,
             &raw mut error,
@@ -335,8 +363,7 @@ fn compile_quad(device: &Device) -> Option<[Obj; 2]> {
             .map_or_else(|| "no error".to_owned(), description);
         log::error!(
             target: LOG_TARGET,
-            "d3d9 core: the StretchRect quad's library does not build ({text}); sampled copies \
-             are refused"
+            "d3d9 core: {owner} library does not build ({text}); {refused} are refused"
         );
         return None;
     };
@@ -348,13 +375,18 @@ fn compile_quad(device: &Device) -> Option<[Obj; 2]> {
         if function.is_none() {
             log::error!(
                 target: LOG_TARGET,
-                "d3d9 core: the StretchRect quad's function {name:?} does not build; sampled \
-                 copies are refused"
+                "d3d9 core: {owner} function {name:?} does not build; {refused} are refused"
             );
         }
         function
     };
-    Some([function(BLIT_VS)?, function(BLIT_PS)?])
+    // None from the first function Metal does not make: the ones after it are not asked for.
+    names
+        .into_iter()
+        .map(function)
+        .collect::<Option<Vec<_>>>()?
+        .try_into()
+        .ok()
 }
 
 /// The quad's two uniforms: the vertex stage's `xform` and the fragment stage's `src_level`.

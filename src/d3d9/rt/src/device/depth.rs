@@ -7,14 +7,17 @@
 //! decides the pass, the pipeline and the depth-stencil state: a draw whose key names no format
 //! draws in a pass without the depth-stencil even while one is bound. A change of depth-stencil
 //! ends the open render pass, as a change of colour target does. A depth-stencil copies whole
-//! into another of its size, format and sample count (`StretchRect`'s, DXMTRS C4c-4b).
+//! into another of its size, format and sample count (`StretchRect`'s, DXMTRS C4c-4b), and a
+//! multisampled one resolves into a single-sample one of its size and format, sample 0 of each
+//! plane, through a render pass of the device's own (DXMTRS C4c-4d).
 
-use std::sync::Arc;
+use std::{ffi::CStr, sync::Arc};
 
 use dxmt_core::{
     deptrack::Access,
-    encoder::stage,
+    encoder::{NO_NEXT, direct, stage},
     format::depth_stencil_planar_flags,
+    library::{render_pipeline, render_pipeline_info},
     resource::{Texture, TextureViewDescriptor, TextureViewKey},
 };
 use mtld3d_core::{
@@ -23,9 +26,88 @@ use mtld3d_core::{
     },
     ids::TextureId,
 };
-use winemetal_sys::wire::{WMTDepthStencilInfo, WMTStencilInfo};
+use winemetal_sys::{
+    Obj,
+    wire::{
+        WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_X32_STENCIL8, WMT_PRIMITIVE_TYPE_TRIANGLE,
+        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_DSSO, WMT_STORE_ACTION_STORE,
+        WMTDepthStencilInfo, WMTStencilInfo, WmtcmdRenderDraw, WmtcmdRenderSetdsso,
+    },
+};
 
-use super::{CoreDevice, LOG_TARGET, surface::blit_record, target::Shape};
+use super::{
+    CoreDevice, CoreTextureDesc, CoreTextureFlags, LOG_TARGET, TextureKind,
+    stretch::{compile_functions, encode_triangle_state},
+    surface::blit_record,
+    target::Shape,
+};
+
+/// The depth-stencil resolve's Metal source: a covering triangle and sample 0 of each plane.
+///
+/// The vertex function makes one triangle over the whole target from the vertex index alone, at
+/// z 0 and w 1, as dxmt-core's `vs_present_quad`. Each fragment function reads sample 0 of the
+/// source texel under its pixel and writes it as the fragment's depth: the depth plane alone,
+/// or the depth plane and the stencil plane (an `X32_Stencil8` view), whose value the fragment
+/// writes as its stencil. mtld3d resolves with a compute kernel, so there is no text to share.
+const RESOLVE_MSL: &str = r"
+#include <metal_stdlib>
+using namespace metal;
+
+struct resolve_vs_out {
+    float4 position [[position]];
+};
+
+struct resolve_depth_out {
+    float depth [[depth(any)]];
+};
+
+struct resolve_depth_stencil_out {
+    float depth [[depth(any)]];
+    uint stencil [[stencil]];
+};
+
+vertex resolve_vs_out resolve_depth_vs(ushort id [[vertex_id]]) {
+    // id 0, 1, 2 -> (0, 0), (2, 0), (0, 2): the clip-space triangle (-1, 1), (3, 1), (-1, -3).
+    float2 uv = float2((id << 1) & 2, id & 2);
+    resolve_vs_out out;
+    out.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return out;
+}
+
+fragment resolve_depth_out resolve_depth_fs(
+    float4 position [[position]],
+    depth2d_ms<float, access::read> depth [[texture(0)]]
+) {
+    resolve_depth_out out;
+    out.depth = depth.read(uint2(position.xy), 0);
+    return out;
+}
+
+fragment resolve_depth_stencil_out resolve_depth_stencil_fs(
+    float4 position [[position]],
+    depth2d_ms<float, access::read> depth [[texture(0)]],
+    texture2d_ms<uint, access::read> stencil [[texture(1)]]
+) {
+    uint2 texel = uint2(position.xy);
+    resolve_depth_stencil_out out;
+    out.depth = depth.read(texel, 0);
+    out.stencil = stencil.read(texel, 0).r;
+    return out;
+}
+";
+
+/// [`RESOLVE_MSL`]'s functions: the vertex one, then the fragment ones of depth and of both.
+const RESOLVE_FUNCTIONS: [&CStr; 3] = [
+    c"resolve_depth_vs",
+    c"resolve_depth_fs",
+    c"resolve_depth_stencil_fs",
+];
+
+/// `MTLMathModeSafe`, as mtld3d compiles its depth-stencil transfer kernel.
+const MATH_MODE_SAFE: u8 = 0;
+
+// winemetal's thunk decodes a library's source as ASCII.
+const _: () = assert!(RESOLVE_MSL.is_ascii());
 
 /// A depth-stencil: one level of a stored depth texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,6 +330,153 @@ impl CoreDevice {
         true
     }
 
+    /// Resolves the multisampled depth-stencil `src` into `dst`: sample 0 of each plane.
+    ///
+    /// `StretchRect`'s depth-stencil resolve (DXMTRS C4c-4d), one render pass of its own on the
+    /// destination's level: no colour target; the depth plane, and the stencil plane of a format
+    /// that has one, attached for writing, loaded as don't-care and stored; the level's extent as
+    /// its size, so a Clear of the destination recorded before folds into it and is dropped. One
+    /// triangle covers the level (viewport, depth 0 to 1, and scissor the level's; filling and
+    /// culling nothing) under a state that always passes and writes the depth, and replaces the
+    /// stencil on both faces when the format has that plane; each fragment writes sample 0 of the
+    /// source texel under it. A depth-only source is read itself. A source with a stencil plane
+    /// is first copied, as [`CoreDevice::copy_depth`] copies, into a scratch texture of its shape
+    /// made with views in another format (its `X32_Stencil8` view needs that usage, which the
+    /// core's depth textures lack), whose two planes are read; the store forgets the scratch
+    /// once its copy is recorded, the closures holding it. Each read is tracked, so a later write
+    /// of the source waits for it.
+    /// The open pass ends first and none is open after; the device's draw state is neither read
+    /// nor changed.
+    ///
+    /// False, and nothing recorded, unless both name a level of a stored depth texture, `src` has
+    /// more than one sample and `dst` one, and their width, height and pixel format are equal; or
+    /// when Metal makes no library, function or pipeline for it (each logged once, then kept as
+    /// none) or no depth-stencil state (logged). Those are made before anything is recorded.
+    #[must_use]
+    pub fn depth_resolve(&mut self, src: DepthRef, dst: DepthRef) -> bool {
+        let (Some(from), Some(into)) = (
+            self.depth_level(src.id, src.level),
+            self.depth_level(dst.id, dst.level),
+        ) else {
+            return false;
+        };
+        let (width, height, pixel_format, samples) = from;
+        if samples < 2 || into != (width, height, pixel_format, 1) {
+            return false;
+        }
+        let (Some(source), Some(destination)) =
+            (self.stored_texture(src.id), self.stored_texture(dst.id))
+        else {
+            return false;
+        };
+        let planes = planes(pixel_format);
+        let has_stencil = planes & 2 != 0;
+        let Some(pso) = self.resolve_pipeline(pixel_format) else {
+            return false;
+        };
+        let state = DepthStencilSnapshot::depth_stencil_overwrite();
+        let dsso = self.depth_state_handle(&state.gated_on_stencil_attachment(has_stencil));
+        // Metal's default state, which handle 0 stands for, writes no depth.
+        if dsso == 0 {
+            return false;
+        }
+        let (read, level) = if has_stencil {
+            let scratch = DepthRef {
+                id: TextureId::new_unique(),
+                level: 0,
+            };
+            let desc = CoreTextureDesc {
+                pixel_format,
+                kind: TextureKind::Tex2d,
+                width,
+                height,
+                depth: 1,
+                levels: 1,
+                flags: CoreTextureFlags::RENDER_TARGET | CoreTextureFlags::VIEW_TWINS,
+                srgb_format: 0,
+                block: (1, 1, 4),
+                samples,
+            };
+            self.texture_create(scratch.id, &desc);
+            let copied = self.copy_depth(src, scratch);
+            let texture = self.stored_texture(scratch.id);
+            // The closures hold the texture; the store lets it go whatever happens next.
+            self.forget_texture(scratch.id);
+            // Never taken: a fresh id of the source's shape, which `copy_depth` always copies.
+            let (true, Some(texture)) = (copied, texture) else {
+                return false;
+            };
+            (texture, scratch.level)
+        } else {
+            (source, src.level)
+        };
+        let key = |format, samples, level| {
+            TextureViewDescriptor {
+                format,
+                texture_type: super::textures::two_d(samples),
+                first_mip: level,
+                mip_count: 1,
+                first_slice: 0,
+                array_size: 1,
+            }
+            .key()
+        };
+        // The key `resolve_depth` gives the destination when it is bound, which its Clear has.
+        let target = key(pixel_format, 1, dst.level);
+        let depth_view = key(pixel_format, samples, level);
+        let stencil_view = has_stencil.then(|| key(WMT_PIXEL_FORMAT_X32_STENCIL8, samples, level));
+        self.close_pass();
+        self.emit(move |enc| {
+            enc.start_render_pass(planes, 0, 0, None);
+            // One attachment a plane, both of the one view, as a draw's pass attaches them.
+            let mut plane = |bit: u8| {
+                if planes & bit == 0 {
+                    return None;
+                }
+                enc.attachment::<{ stage::PIXEL }>(&destination, target, Access::WRITE)
+            };
+            let (depth_plane, stencil_plane) = (plane(1), plane(2));
+            if let Some(targets) = enc.render_targets() {
+                // Don't-care: the triangle writes every texel of each plane.
+                if planes & 1 != 0 {
+                    targets.depth.target.attachment = depth_plane;
+                    targets.depth.target.load_action = WMT_LOAD_ACTION_DONT_CARE;
+                    targets.depth.target.store_action = WMT_STORE_ACTION_STORE;
+                }
+                if planes & 2 != 0 {
+                    targets.stencil.target.attachment = stencil_plane;
+                    targets.stencil.target.load_action = WMT_LOAD_ACTION_DONT_CARE;
+                    targets.stencil.target.store_action = WMT_STORE_ACTION_STORE;
+                }
+                (targets.render_target_width, targets.render_target_height) = (width, height);
+            }
+            encode_triangle_state(enc, pso, [0, 0, width, height]);
+            enc.encode_render_command(WmtcmdRenderSetdsso {
+                r#type: WMT_RENDER_COMMAND_SET_DSSO,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                dsso,
+                stencil_ref: 0,
+            });
+            direct::bind_texture::<{ stage::PIXEL }>(enc, 0, Some((&*read, depth_view)));
+            if let Some(view) = stencil_view {
+                direct::bind_texture::<{ stage::PIXEL }>(enc, 1, Some((&*read, view)));
+            }
+            enc.encode_render_command(WmtcmdRenderDraw {
+                r#type: WMT_RENDER_COMMAND_DRAW,
+                reserved: [0; 3],
+                next: NO_NEXT,
+                primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
+                vertex_start: 0,
+                vertex_count: 3,
+                instance_count: 1,
+                base_instance: 0,
+            });
+            enc.end_pass();
+        });
+        true
+    }
+
     /// The handle of the depth-stencil state of `snapshot`, made at its first request.
     ///
     /// The device keeps it for its life: a recorded closure names it by handle. 0 (Metal's
@@ -296,6 +525,58 @@ impl CoreDevice {
         };
         let handle = state.handle();
         self.depth_states.insert(key.raw(), state);
+        handle
+    }
+
+    /// The resolve's pipeline into the depth-stencil `format`, made at its first request.
+    ///
+    /// Through dxmt-core's `render_pipeline`: the vertex function and the fragment function of
+    /// the format's planes, the depth pixel format `format` and the stencil one too for a format
+    /// with a stencil plane, no colour, one sample. One Metal does not make is logged and kept as
+    /// none, never made again; none while the library does not build.
+    fn resolve_pipeline(&mut self, format: u32) -> Option<u64> {
+        if let Some(pso) = self.resolve_pipelines.get(&format) {
+            return pso.as_ref().map(Obj::handle);
+        }
+        let [vs, depth_fs, stencil_fs] = self
+            .resolve_functions
+            .get_or_init(|| {
+                compile_functions(
+                    &self.device,
+                    RESOLVE_MSL,
+                    RESOLVE_FUNCTIONS,
+                    MATH_MODE_SAFE,
+                    "the depth-stencil resolve's",
+                    "depth-stencil resolves",
+                )
+            })
+            .as_ref()?
+            .each_ref()
+            .map(Obj::handle);
+        let planes = planes(format);
+        let mut info = render_pipeline_info();
+        info.vertex_function = vs;
+        info.fragment_function = if planes & 2 != 0 {
+            stencil_fs
+        } else {
+            depth_fs
+        };
+        if planes & 1 != 0 {
+            info.depth_pixel_format = format;
+        }
+        if planes & 2 != 0 {
+            info.stencil_pixel_format = format;
+        }
+        let pso = render_pipeline(self.device.device(), &info);
+        if pso.is_none() {
+            log::error!(
+                target: LOG_TARGET,
+                "d3d9 core: the depth-stencil resolve's pipeline into format {format} does not \
+                 build; those resolves are refused"
+            );
+        }
+        let handle = pso.as_ref().map(Obj::handle);
+        self.resolve_pipelines.insert(format, pso);
         handle
     }
 }
