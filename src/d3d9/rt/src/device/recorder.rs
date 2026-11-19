@@ -19,7 +19,7 @@ use winemetal_sys::wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor, WMTScissorRect,
 };
 
-use super::{CoreDevice, TargetRef, depth, target::Resolved};
+use super::{CoreDevice, TargetRef, depth, query, target::Resolved};
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -70,7 +70,8 @@ impl CoreDevice {
     /// records their write. `colors[slot]` is the `WMTPixelFormat` slot `slot` attaches in (its
     /// target's own or its sRGB twin's), 0 for an empty slot: the caller checked them against
     /// [`CoreDevice::target_desc`], and a slot outside the pass set is never attached. A new pass
-    /// has recorded no scissor: this is the one place that forgets the last one.
+    /// has recorded no scissor: this is the one place that forgets the last one. From the device's
+    /// first OCCLUSION BEGIN on, a new pass starts with counting off (DXMTRS C4c-5).
     pub(super) fn open_pass(&mut self, with_depth: bool, colors: [u32; 4]) {
         if self.render_open && self.open_depth.is_some() == with_depth && self.open_colors == colors
         {
@@ -128,9 +129,15 @@ impl CoreDevice {
                 self.note_written(target, colors[slot]);
             }
         }
+        let counted = self.open_brackets.is_some();
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
             enc.start_render_pass(planes, 0, count, None);
+            // Once the device began an occlusion query, a pass may be merged behind one that
+            // counts: it starts with counting off, before any draw of its own bumps.
+            if counted {
+                query::visibility_off(enc);
+            }
             let attachments = views.each_ref().map(|view| {
                 view.as_ref().and_then(|(texture, key)| {
                     enc.attachment::<{ stage::PIXEL }>(texture, *key, Access::READ | Access::WRITE)

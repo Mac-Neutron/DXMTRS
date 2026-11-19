@@ -426,6 +426,7 @@ impl CoreDevice {
         let depth_view = key(pixel_format, samples, level);
         let stencil_view = has_stencil.then(|| key(WMT_PIXEL_FORMAT_X32_STENCIL8, samples, level));
         self.close_pass();
+        let counted = self.open_brackets.is_some();
         self.emit(move |enc| {
             enc.start_render_pass(planes, 0, 0, None);
             // One attachment a plane, both of the one view, as a draw's pass attaches them.
@@ -450,7 +451,7 @@ impl CoreDevice {
                 }
                 (targets.render_target_width, targets.render_target_height) = (width, height);
             }
-            encode_triangle_state(enc, pso, [0, 0, width, height]);
+            encode_triangle_state(enc, pso, [0, 0, width, height], counted);
             enc.encode_render_command(WmtcmdRenderSetdsso {
                 r#type: WMT_RENDER_COMMAND_SET_DSSO,
                 reserved: [0; 3],

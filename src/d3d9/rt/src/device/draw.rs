@@ -510,7 +510,10 @@ impl CoreDevice {
                 // A texture read in a pass that wrote it waits on a tile barrier.
                 enc.resolve_render_pass_barrier(dxmt_core::encoder::Encoder::dispatch_tile_barrier);
             }
+            // An application's draw counts into the occlusion queries active; no pass of the
+            // device's own bumps (DXMTRS C4c-5).
             let Some((feed, index_type, index_count)) = &indexed else {
+                enc.bump_visibility_result_offset();
                 enc.encode_render_command(WmtcmdRenderDraw {
                     r#type: WMT_RENDER_COMMAND_DRAW,
                     reserved: [0; 3],
@@ -545,6 +548,7 @@ impl CoreDevice {
                     (allocation.buffer(), at + offset)
                 }
             };
+            enc.bump_visibility_result_offset();
             enc.encode_render_command(WmtcmdRenderDrawIndexed {
                 r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
                 reserved: [0; 3],

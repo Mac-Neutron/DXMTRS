@@ -98,6 +98,12 @@ pub struct CoreDevice {
     retained: retained::Retained,
     /// The cap on those bytes, `memory.vbibRetentionCapMB`; 0 for none.
     retention_cap: u64,
+    /// The OCCLUSION brackets begun and not ended; none before the device's first BEGIN.
+    ///
+    /// One up a recorded begin, one down a recorded end (DXMTRS C4c-5). From the first BEGIN on,
+    /// each draw pass and each triangle pass of the device's own starts with counting off; any
+    /// bracket left open at the device's end is logged.
+    open_brackets: Option<u32>,
 }
 
 impl CoreDevice {
@@ -150,6 +156,7 @@ impl CoreDevice {
             staged_budget: staged_budget(staging_block),
             retained: retained::Retained::default(),
             retention_cap: 0,
+            open_brackets: None,
         }
     }
 
@@ -168,6 +175,13 @@ impl CoreDevice {
 impl Drop for CoreDevice {
     fn drop(&mut self) {
         self.drain();
+        // A bracket the front end never ended counted on every pass since its BEGIN.
+        if let Some(open @ 1..) = self.open_brackets {
+            log::error!(
+                target: LOG_TARGET,
+                "d3d9 core: {open} occlusion queries' END was not recorded"
+            );
+        }
     }
 }
 
@@ -249,6 +263,7 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
 mod buffers;
 mod depth;
 mod draw;
+mod query;
 mod recorder;
 mod retained;
 mod samplers;
@@ -261,6 +276,7 @@ mod textures;
 
 pub use depth::DepthRef;
 pub use draw::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
+pub use query::{Occlusion, OcclusionAnswer};
 pub use stretch::StretchQuad;
 pub use swapchain::present_after;
 pub use target::TargetRef;

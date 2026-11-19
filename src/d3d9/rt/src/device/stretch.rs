@@ -39,7 +39,7 @@ use winemetal_sys::{
     },
 };
 
-use super::{CoreDevice, LOG_TARGET, TargetRef, surface::inside, target::Shape};
+use super::{CoreDevice, LOG_TARGET, TargetRef, query, surface::inside, target::Shape};
 
 /// `MTLLanguageVersion2_4`: the quad's and the depth resolve's language version, as mtld3d's.
 const LANGUAGE_VERSION_2_4: u64 = (2 << 16) | 4;
@@ -152,6 +152,7 @@ impl CoreDevice {
         let (xform, src_level) = (xform.map(f32::to_le_bytes), src_level.map(f32::to_le_bytes));
         let dst_rect = quad.dst_rect;
         let (target, key, extent) = (to.texture, to.key, (into.width, into.height));
+        let counted = self.open_brackets.is_some();
         self.emit(move |enc| {
             enc.start_render_pass(0, 0, 1, None);
             let attachment =
@@ -163,7 +164,7 @@ impl CoreDevice {
                 color.target.store_action = WMT_STORE_ACTION_STORE;
                 (targets.render_target_width, targets.render_target_height) = extent;
             }
-            encode_triangle_state(enc, pso, dst_rect);
+            encode_triangle_state(enc, pso, dst_rect, counted);
             // Metal's slot 0 of each stage, as the shader declares them: a D3D9 pass binds no
             // argument buffer that these would have to leave alone.
             direct::bind_bytes::<{ stage::VERTEX }>(enc, 0, xform.as_flattened());
@@ -259,8 +260,12 @@ impl CoreDevice {
 /// depth-stencil resolve): `rect` is `x, y, width, height`, the viewport's depth runs from 0 to
 /// 1, and the rasterizer state fills, culls nothing, clips depth and has no bias. The state is
 /// the pass's own: the optimizer may merge such a pass with a draw's on the same view, and
-/// Metal's encoder would keep that draw's cull and fill modes.
-pub(super) fn encode_triangle_state(enc: &mut Encoder, pso: u64, rect: [u32; 4]) {
+/// Metal's encoder would keep that draw's cull and fill modes. For the same reason, once the
+/// device began an occlusion query (`counted`), counting is turned off first (DXMTRS C4c-5).
+pub(super) fn encode_triangle_state(enc: &mut Encoder, pso: u64, rect: [u32; 4], counted: bool) {
+    if counted {
+        query::visibility_off(enc);
+    }
     let [x, y, width, height] = rect;
     enc.encode_render_command(WmtcmdRenderSetpso {
         r#type: WMT_RENDER_COMMAND_SET_PSO,
