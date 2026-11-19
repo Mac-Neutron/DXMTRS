@@ -24,7 +24,11 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   EXP and EXP2; SM3 shaders own their fog.
 - Every draw call and primitive type, point sprites, user clip planes, all
   sixteen vertex streams, hardware instancing.
-- State blocks, occlusion and event queries.
+- State blocks, occlusion and event queries, on the core runtime
+  (`runtime.mode = core`) too. There only an application's draws count toward
+  an occlusion query, where mtld3d also counts a scaled `StretchRect` into the
+  bound target right after a counted draw, and an END with no BEGIN answers 0
+  at once, where mtld3d answers it once that frame retired.
 - `D3DUSAGE_DYNAMIC` with `D3DPOOL_MANAGED` or `D3DPOOL_SCRATCH` is rejected
   with `D3DERR_INVALIDCALL` at 2D, cube and volume texture creation, for every
   format: the flag asks to drive the copy the device reads, which the managed

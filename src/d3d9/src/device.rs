@@ -16536,11 +16536,6 @@ extern "system" fn device_create_query(
 ) -> i32 {
     use crate::query::{Direct3DQuery9, data_size_for};
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::CreateQuery",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // `query` being null is the D3D9 idiom for "is this query type supported?"
     // (returns S_OK without allocating). Unsupported types are logged so an

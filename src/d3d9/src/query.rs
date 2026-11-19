@@ -11,6 +11,14 @@
 //!   `setVisibilityResultMode:offset:` commands; `GetData` polls the
 //!   shared `VisibilityQueryCore` for the finalized pixel count.
 //!   See `mtld3d_core::visibility` for the sum + pool machinery.
+//!
+//! On a device of the core runtime (DXMTRS C4c-5) both types run on `d3d9_rt`'s `CoreDevice`
+//! with mtld3d's answers, sizes and config opt-ins: an EVENT's END stamps the chunk being
+//! recorded, and a poll commits it while it is still that chunk; an OCCLUSION bracket is
+//! `d3d9_rt`'s `Occlusion`, which the query owns and ends at its final `Release`. Only an
+//! application's draws count, where mtld3d also counts a scaled `StretchRect` into the bound
+//! target right after a counted draw, and an END with no BEGIN answers 0 at once, where mtld3d
+//! answers it once its frame retired.
 
 use core::ffi::c_void;
 use std::sync::{
@@ -58,6 +66,8 @@ impl Direct3DQuery9 {
             data_size,
             core,
             end_seq: AtomicU64::new(0),
+            #[cfg(feature = "core-runtime")]
+            occlusion: core::cell::RefCell::default(),
         }));
         Self {
             vtbl: &raw const DIRECT3D_QUERY9_VTBL,
@@ -105,7 +115,117 @@ struct QueryInner {
     /// query with nothing outstanding is finished by definition. An OCCLUSION
     /// query's `D3DGETDATA_FLUSH` wait reads it to tell whether its END is
     /// still in the recording frame.
+    ///
+    /// On a core device, an EVENT's END stamps the core's chunk instead (DXMTRS C4c-5).
     end_seq: AtomicU64,
+    /// An OCCLUSION query's bracket on a core device (DXMTRS C4c-5); never issued on mtld3d's.
+    ///
+    /// A cell, since every entry borrows the inner shared; no borrow outlives the `CoreDevice`
+    /// call it is lent to, none of which calls back into the query.
+    #[cfg(feature = "core-runtime")]
+    occlusion: core::cell::RefCell<d3d9_rt::device::Occlusion>,
+}
+
+/// The poison a query never issued answers: every byte `0xdd`.
+///
+/// The runtime's uninitialised result.
+const NEVER_ISSUED: u64 = 0xdddd_dddd_dddd_dddd;
+
+/// Write an EVENT's BOOL: TRUE exactly when `status` is `D3D_OK`.
+///
+/// A short read takes the low bytes of it rather than nothing: the runtime fills what the caller
+/// asked for.
+unsafe fn write_signalled(data: *mut c_void, size: u32, status: i32) {
+    let signalled = u32::from(status == D3D_OK).to_le_bytes();
+    let n = (size as usize).min(signalled.len());
+    // SAFETY: the caller guarantees `data` is non-null with at least `size` writable bytes, and
+    // `n <= size`.
+    unsafe { core::ptr::copy_nonoverlapping(signalled.as_ptr(), data.cast::<u8>(), n) };
+}
+
+/// `Issue` on a core device; `None` on one of mtld3d's.
+///
+/// EVENT: the END bit stamps the chunk being recorded; BEGIN and no bit do nothing. OCCLUSION:
+/// BEGIN begins a bracket and END ends it, both bits in that order, no bit nothing. `D3D_OK`
+/// every time, as mtld3d answers.
+#[cfg(feature = "core-runtime")]
+fn issue_on_core(inner: &QueryInner, flags: u32) -> Option<i32> {
+    // SAFETY: the query retains its owning device throughout this call.
+    let dev = unsafe { &mut *inner.device_inner };
+    let rt = dev.core_mut()?;
+    if inner.query_type == D3DQUERYTYPE_EVENT {
+        if flags & D3DISSUE_END != 0 {
+            inner.end_seq.store(rt.event_stamp(), Ordering::Release);
+        }
+    } else if inner.query_type == D3DQUERYTYPE_OCCLUSION {
+        let mut occlusion = inner.occlusion.borrow_mut();
+        if flags & D3DISSUE_BEGIN != 0 {
+            rt.occlusion_begin(&mut occlusion);
+        }
+        if flags & D3DISSUE_END != 0 {
+            rt.occlusion_end(&mut occlusion);
+        }
+    }
+    Some(D3D_OK)
+}
+
+/// `GetData` on a core device; `None` on one of mtld3d's.
+///
+/// In mtld3d's order. EVENT: `query.eventImmediate` answers done; else done once the core
+/// retired the END's chunk (never issued is done), the poll committing that chunk while it is
+/// the one being recorded; `S_OK` with TRUE or `S_FALSE` with FALSE. OCCLUSION: never issued is
+/// `S_OK` with the `0xdd` poison, a count `S_OK` with it; a pending one with
+/// `D3DGETDATA_FLUSH` and `query.flushImmediate` is `S_OK` with the "fully visible" stub at
+/// once, an open bracket included, so the poll does not wait then; otherwise it is `S_FALSE`
+/// with nothing written, the poll with the flag having waited for an ended bracket's chunk.
+#[cfg(feature = "core-runtime")]
+fn get_data_on_core(inner: &QueryInner, data: *mut c_void, size: u32, flags: u32) -> Option<i32> {
+    use d3d9_rt::device::OcclusionAnswer;
+
+    // SAFETY: the query's device reference keeps its owning DeviceInner alive.
+    let dev = unsafe { &mut *inner.device_inner };
+    let config = dev.config();
+    let (event_immediate, flush_immediate) =
+        (config.query_event_immediate, config.query_flush_immediate);
+    let rt = dev.core_mut()?;
+    let has_output = !data.is_null() && size != 0;
+    if inner.query_type == D3DQUERYTYPE_EVENT {
+        let done = event_immediate || rt.event_done(inner.end_seq.load(Ordering::Acquire));
+        let status = if done { D3D_OK } else { S_FALSE };
+        if has_output {
+            // SAFETY: `has_output` guarantees `data` is non-null with at least `size` writable
+            // bytes.
+            unsafe { write_signalled(data, size, status) };
+        }
+        return Some(status);
+    }
+    let flush = flags & D3DGETDATA_FLUSH != 0;
+    let answer = rt.occlusion_poll(&inner.occlusion.borrow(), flush && !flush_immediate);
+    let value = match answer {
+        OcclusionAnswer::Never => NEVER_ISSUED,
+        OcclusionAnswer::Count(count) => count,
+        OcclusionAnswer::Pending if flush && flush_immediate => u64::from(u32::MAX),
+        OcclusionAnswer::Pending => return Some(S_FALSE),
+    };
+    if has_output {
+        // SAFETY: `has_output` guarantees `data` is non-null with at least `size` writable
+        // bytes, `size >= 1`.
+        unsafe { write_occlusion(data, size, value) };
+    }
+    Some(D3D_OK)
+}
+
+/// The final `Release` on a core device; `None` on one of mtld3d's.
+///
+/// An open OCCLUSION bracket is ended.
+#[cfg(feature = "core-runtime")]
+fn release_on_core(inner: &QueryInner) -> Option<()> {
+    // SAFETY: a query's final `Release` finalizes it before giving back its device reference, so
+    // `device_inner` is live, and the release holds the device's API lock.
+    let dev = unsafe { &mut *inner.device_inner };
+    let rt = dev.core_mut()?;
+    rt.occlusion_release(&mut inner.occlusion.borrow_mut());
+    Some(())
 }
 
 /// Whether the GPU has retired the frame an EVENT query was issued in.
@@ -228,8 +348,13 @@ unsafe fn finalize_query(this: *mut Direct3DQuery9) {
 /// The application can no longer read the count, and an open span keeps the
 /// encoder arming a counting slot on every pass and keeping every draw it
 /// could otherwise leave out, for as long as the device lives. The END is
-/// recorded like the application's own, so the span closes in frame order.
+/// recorded like the application's own, so the span closes in frame order. On a core device the
+/// core's bracket is ended instead, before the mailbox's test: nothing arms that mailbox there.
 fn close_released_span(inner: &QueryInner) {
+    #[cfg(feature = "core-runtime")]
+    if release_on_core(inner).is_some() {
+        return;
+    }
     let Some(core) = inner.core.as_ref() else {
         return;
     };
@@ -307,6 +432,10 @@ extern "system" fn query_issue(this: *mut c_void, flags: u32) -> i32 {
         return D3DERR_INVALIDCALL;
     };
     let inner = obj.inner();
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = issue_on_core(inner, flags) {
+        return hr;
+    }
     // SAFETY: the query retains its owning device throughout this call.
     if let Err(hr) = unsafe { &*inner.device_inner }.encoder_status() {
         return hr;
@@ -405,6 +534,10 @@ extern "system" fn query_get_data(
         return D3DERR_INVALIDCALL;
     };
     let inner = obj.inner();
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = get_data_on_core(inner, data, size, flags) {
+        return hr;
+    }
     // SAFETY: the query's device reference keeps its owning DeviceInner alive.
     let device = unsafe { &*inner.device_inner };
     if let Err(hr) = device.encoder_status() {
@@ -433,14 +566,9 @@ extern "system" fn query_get_data(
             event_status(inner)
         };
         if has_output {
-            // The BOOL is TRUE exactly when the status is `D3D_OK`. A short
-            // read takes the low bytes of it rather than nothing: the
-            // runtime fills what the caller asked for.
-            let signalled = u32::from(status == D3D_OK).to_le_bytes();
-            let n = (size as usize).min(signalled.len());
             // SAFETY: `has_output` guarantees `data` is non-null with at
-            // least `size` writable bytes, and `n <= size`.
-            unsafe { core::ptr::copy_nonoverlapping(signalled.as_ptr(), data.cast::<u8>(), n) };
+            // least `size` writable bytes.
+            unsafe { write_signalled(data, size, status) };
         }
         return status;
     }
@@ -485,7 +613,7 @@ extern "system" fn query_get_data(
                     // poison: every byte `0xdd`.
                     if has_output {
                         // SAFETY: as above, non-null `data`, `size >= 1`.
-                        unsafe { write_occlusion(data, size, 0xdddd_dddd_dddd_dddd) };
+                        unsafe { write_occlusion(data, size, NEVER_ISSUED) };
                     }
                     D3D_OK
                 }
