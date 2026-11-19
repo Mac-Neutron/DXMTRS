@@ -29,6 +29,15 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   an occlusion query, where mtld3d also counts a scaled `StretchRect` into the
   bound target right after a counted draw, and an END with no BEGIN answers 0
   at once, where mtld3d answers it once that frame retired.
+- On the core runtime the getters, the obsolete calls and every form of
+  `Present` answer as on mtld3d, with four differences: a present skips
+  mtld3d's frame capture and cursor work; `EvictManagedResources` keeps the
+  GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
+  `CreateDepthStencilSurface` surfaces; `ValidateDevice` answers one pass for a
+  state whose draw that runtime refuses. Still refused there, each once by
+  name with `D3DERR_NOTAVAILABLE`, among others: `Reset` and what tests for
+  it, fullscreen devices, `ProcessVertices`, gamma, frame latency, the `Ex`
+  creators and the cursor calls.
 - `D3DUSAGE_DYNAMIC` with `D3DPOOL_MANAGED` or `D3DPOOL_SCRATCH` is rejected
   with `D3DERR_INVALIDCALL` at 2D, cube and volume texture creation, for every
   format: the flag asks to drive the copy the device reads, which the managed
