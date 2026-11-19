@@ -9733,6 +9733,7 @@ extern "system" fn device_stretch_rect(
                 scaling,
                 planar_endpoint,
                 expand_packed16,
+                filter,
             },
         );
     }

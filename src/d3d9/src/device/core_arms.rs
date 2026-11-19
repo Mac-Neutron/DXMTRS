@@ -8,16 +8,18 @@
 //! `update_color_target` for a region of the back buffer or a render target (DXMTRS C4c-4a).
 //! `stretch_colour` resolves a multisampled target into a single-sample one, copies texel for
 //! texel into a target on the GPU, and between two plain surfaces on the CPU; `stretch_depth`
-//! copies a depth-stencil surface whole into another (DXMTRS C4c-4b). The colour arm tests the
-//! destination itself, since on a core device the GPU writes nothing but targets. What an arm
-//! does not cover yet (a Present with rects or another window; a scaled `StretchRect`, one with
-//! a multisampled end other than the resolve, one that converts into a target, the depth-stencil
-//! resolve) is refused with one warning (C4-13). Clear and the read-back go to and come from the
-//! bound colour target (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
+//! copies a depth-stencil surface whole into another (DXMTRS C4c-4b). Into a target the colour
+//! arm also scales and converts, sampling the source as mtld3d's quad does (DXMTRS C4c-4c). It
+//! tests the destination itself, since on a core device the GPU writes nothing but targets.
+//! What an arm does not cover yet (a Present with rects or another window; a `StretchRect` with
+//! a multisampled end other than the resolve, from a planar YUV surface, or inside one texture
+//! other than texel for texel between disjoint rects, the depth-stencil resolve) is refused with
+//! one warning (C4-13). Clear and the read-back go to and come from the bound colour target
+//! (DXMTRS C4b-3d1). The UP draws are `core_draw`'s.
 
 use core::ffi::c_void;
 
-use d3d9_rt::device::{TargetRef, UploadRegion};
+use d3d9_rt::device::{StretchQuad, TargetRef, UploadRegion, view_format};
 use mtld3d_core::{
     clear_area::{ClearArea, clear_area, clear_regions},
     convert::d3dcolor_to_rgba_f32,
@@ -26,14 +28,14 @@ use mtld3d_core::{
     pixel_convert::can_convert,
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
     render_state::scissor_region,
-    stretch_rect::{SameSurfaceRoute, StretchRegion, same_surface_route},
+    stretch_rect::{SameSurfaceRoute, StretchRegion, blit_decode, same_surface_route},
     upload_pass::is_expanded_upload,
 };
 use mtld3d_shared::{InPtr, ValueIn};
 use mtld3d_types::{
     D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
     D3DERR_NOTAVAILABLE, D3DPOOL_DEFAULT, D3DRECT, D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE,
-    D3DSURFACE_DESC, D3DUSAGE_RENDERTARGET,
+    D3DSURFACE_DESC, D3DTEXF_LINEAR, D3DUSAGE_RENDERTARGET,
 };
 
 use super::{
@@ -267,9 +269,11 @@ pub struct StretchCall<'a> {
     pub planar_endpoint: bool,
     /// The device's `expand_packed16`, as `copies_bytes` reads it.
     pub expand_packed16: bool,
+    /// The call's filter: `D3DTEXF_NONE`, `D3DTEXF_POINT` or `D3DTEXF_LINEAR`, as the gates pass.
+    pub filter: u32,
 }
 
-/// `StretchRect` of colour on a core device: a resolve, or a copy into a target texel for texel.
+/// `StretchRect` of colour on a core device: a resolve, a copy, or a sampled copy into a target.
 ///
 /// The caller has run mtld3d's gates (the filter, the endpoints' classes and pools, the formats,
 /// the rects, a stretch inside one surface, the planar and scaling rules), so a call mtld3d
@@ -277,17 +281,22 @@ pub struct StretchCall<'a> {
 /// valid shape (DXMTRS C4c-4a). In order:
 ///
 /// - the multisample resolve `resolve_shape` records (DXMTRS C4b-3d5);
-/// - refused by name: a scaled copy, a multisampled end, and a copy that converts into anything
-///   but a plain surface (mtld3d's `cross_format`: a planar end, or bytes that do not copy);
 /// - a destination that is a render target itself (the back buffer, an additional swap chain's,
-///   a standalone target, a render-target texture's level or cube face) is written on the GPU
-///   (DXMTRS C4c-4b), from a target, a level of a texture that is no target or a plain surface.
-///   Two ends in one texture copy when mtld3d's `same_surface_route` says `Direct` (two levels,
-///   two faces, disjoint rects); identical rects are `D3D_OK` with nothing recorded, and
-///   overlapping ones are refused by name. Each end's texture has its CPU writes uploaded first,
-///   the source's so that its core texture exists. A level so written is claimed for the GPU,
-///   so its next lock reads the copy back, and an AUTOGENMIPMAP destination regenerates its
-///   chain, as after `ColorFill`;
+///   a standalone target, a render-target texture's level or cube face) is written on the GPU,
+///   from a target, a level of a texture that is no target or a plain surface. Identical rects
+///   of one texture are `D3D_OK` with nothing recorded, a multisampled target's included, as
+///   mtld3d's encoder skips them. Refused by name for now: a multisampled end, a planar YUV
+///   source, and two ends in one texture other than mtld3d's `same_surface_route` `Direct`
+///   (overlapping rects, a scaled copy between two levels or faces). Each end's texture has its
+///   CPU writes uploaded first, the source's so that its core texture exists. An unscaled copy
+///   whose bytes copy is a blit (DXMTRS C4c-4b), two levels, two faces or disjoint rects of one
+///   texture included. Any other, scaled or converting, samples the source onto the destination
+///   rect as mtld3d's quad does (DXMTRS C4c-4c): nearest for NONE and POINT, bilinear for
+///   LINEAR; a level of a texture that is no target through its swizzled view, every other
+///   source through its stored format, as mtld3d binds them; packed YUV and an X format's alpha
+///   decoded as mtld3d decodes them. A level so written is claimed for the GPU, so its next lock
+///   reads the copy back, and an AUTOGENMIPMAP destination regenerates its chain, as after
+///   `ColorFill`;
 /// - a destination that is no target is written on the CPU. One surface or one texture at both
 ///   ends is `D3D_OK` for identical rects and refused by name otherwise (both routes need two
 ///   textures). A plain surface into another copies the bytes when the two stagings hold the
@@ -314,13 +323,6 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     let plain_dst = dst_info
         .flags
         .contains(StretchSurfaceFlags::IS_OFFSCREEN_PLAIN_DEFAULT);
-    if call.scaling
-        || src_info.sample_count > 1
-        || dst_info.sample_count > 1
-        || (cross_format && !plain_dst)
-    {
-        return refuse_stretch();
-    }
     let src_surf = call.surfaces[0].cast::<Direct3DSurface9>();
     let dst_surf = call.surfaces[1].cast::<Direct3DSurface9>();
     // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
@@ -341,7 +343,8 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         .flags
         .contains(StretchSurfaceFlags::IS_RENDER_TARGET)
     {
-        let source = src.core_target().or_else(|| {
+        let src_target = src.core_target();
+        let source = src_target.or_else(|| {
             // SAFETY: null, or the source level's parent texture, live while the level is.
             let parent = unsafe { src_parent.as_ref() }?;
             Some(TargetRef::Texture {
@@ -357,17 +360,22 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
                 "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
             return D3DERR_INVALIDCALL;
         };
+        // On the call's own ends, ahead of any other test: identical rects of one texture write
+        // what is there, a multisampled target's included, and nothing is recorded.
         let one_texture = match (source, destination) {
             (TargetRef::BackBuffer, TargetRef::BackBuffer) => true,
             (TargetRef::Texture { id, .. }, TargetRef::Texture { id: to, .. }) => id == to,
             _ => false,
         };
-        if one_texture {
-            match route {
-                SameSurfaceRoute::Skip => return D3D_OK,
-                SameSurfaceRoute::Scratch => return refuse_stretch(),
-                SameSurfaceRoute::Direct => {}
-            }
+        if one_texture && route == SameSurfaceRoute::Skip {
+            return D3D_OK;
+        }
+        if src_info.sample_count > 1
+            || dst_info.sample_count > 1
+            || (one_texture && route == SameSurfaceRoute::Scratch)
+            || mtld3d_core::stretch_rect::is_planar_yuv(src_info.format)
+        {
+            return refuse_stretch();
         }
         // SAFETY: null, or the source level's parent texture, live while the level is and
         // distinct from the device.
@@ -382,8 +390,44 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             // Its owed uploads are recorded ahead of the copy, in the same blit pass.
             let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
         }
+        // The view the source is sampled through, as mtld3d's quad binds it (ruling SW): a level
+        // of a texture that is no target through its swizzled view, every other source through
+        // its stored format, never an sRGB twin. Read once each end's core texture exists.
+        let stored = match source {
+            TargetRef::Texture { id, .. } => core.texture_format(id),
+            // The core's back buffer is stored as its format maps on this device: BGRA8.
+            TargetRef::BackBuffer => {
+                crate::direct3d9::map_for_device(src_info.format, call.expand_packed16)
+                    .map(|mapping| mapping.metal_pixel_format() as u32)
+            }
+        };
+        let swizzle = if src_target.is_some() {
+            None
+        } else {
+            // SAFETY: null, or the source level's parent texture, live while the level is.
+            unsafe { src_parent.as_ref() }
+                .and_then(|parent| parent.inner().swizzle())
+                .map(|swizzle| swizzle.map(|channel| channel as u8))
+        };
+        let view = stored.map(|format| view_format(format, swizzle));
         let rect = [src_region.x, src_region.y, src_region.w, src_region.h];
-        if !core.copy(source, rect, destination, [dst_region.x, dst_region.y]) {
+        // An unscaled copy whose bytes copy is a blit (DXMTRS C4c-4b); any other is sampled.
+        let recorded = if !call.scaling && !cross_format && dst_info.sample_count == 1 {
+            core.copy(source, rect, destination, [dst_region.x, dst_region.y])
+        } else {
+            view.is_some_and(|src_view| {
+                core.stretch(&StretchQuad {
+                    src: source,
+                    src_rect: rect,
+                    src_view,
+                    dst: destination,
+                    dst_rect: [dst_region.x, dst_region.y, dst_region.w, dst_region.h],
+                    linear: call.filter == D3DTEXF_LINEAR,
+                    decode: blit_decode(src_info.format).uniform(),
+                })
+            })
+        };
+        if !recorded {
             log::error!(target: crate::LOG_TARGET,
                 "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
             return D3DERR_INVALIDCALL;
