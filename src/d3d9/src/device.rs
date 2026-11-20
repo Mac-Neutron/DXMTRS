@@ -5557,14 +5557,10 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         );
         return reject_reset(dev);
     }
-    // A core device is windowed, its back buffer X8R8G8B8 or A8R8G8B8, as its `CreateDevice`
-    // makes it: once mtld3d's validation has had its say, a request for more is refused by name,
-    // owing no `Reset` and changing nothing more (DXMTRS C4c-6c, rulings R6c-3 and R6c-5).
-    #[cfg(feature = "core-runtime")]
-    if core && pp.windowed == 0 {
-        crate::device::refuse_under_core("IDirect3DDevice9::Reset (into fullscreen)");
-        return mtld3d_types::D3DERR_NOTAVAILABLE;
-    }
+    // A core device's back buffer is X8R8G8B8 or A8R8G8B8, as its `CreateDevice` makes it: once
+    // mtld3d's validation has had its say, a request for another is refused by name, owing no
+    // `Reset` and changing nothing more (DXMTRS C4c-6c, ruling R6c-5). Into and out of
+    // fullscreen, it runs mtld3d's window code below (DXMTRS C4c-6d).
     #[cfg(feature = "core-runtime")]
     if core
         && !matches!(
