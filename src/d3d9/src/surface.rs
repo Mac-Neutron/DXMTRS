@@ -4010,6 +4010,94 @@ fn pin_dc_texture_level(inner: &SurfaceInner, open: bool) {
     texture.set_level_dc_open(inner.mip_level as usize, open);
 }
 
+/// Prepare `inner`'s host pixel store and wrap it in a memory DC and DIB section.
+///
+/// Refreshes lockable render-target and texture staging when needed, validates the
+/// resolved pixel store and DIB stride, and creates the `D3DKMT` memory DC.
+fn create_dc_on_surface(inner: &mut SurfaceInner) -> Option<GdiDc> {
+    // A lockable standalone render target keeps its pixels in the colour
+    // texture the GPU writes and hands the DC a DIB over its CPU staging, so
+    // the staging has to be refreshed from the texture first. Otherwise a
+    // `ColorFill`, a draw or a `StretchRect` into the surface is invisible to
+    // the DC, exactly as it would be to a `LockRect` that skipped the same
+    // read-back.
+    // On a core device the colour texture is the target's core texture, which
+    // `lockable_rt_readback_fill` reads back (DXMTRS C4c-3b).
+    #[cfg(feature = "core-runtime")]
+    if inner.core_lockable_render_target().is_some() && !refresh_lockable_rt_staging(inner) {
+        return None;
+    }
+    if inner.is_lockable_render_target() && !refresh_lockable_rt_staging(inner) {
+        return None;
+    }
+    if !refill_dc_texture_level(inner) {
+        return None;
+    }
+    let Some(px) = inner.dc_pixels() else {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "IDirect3DSurface9::GetDC on a surface with no host pixel store → INVALIDCALL");
+        return None;
+    };
+    // Reject a format with no GDI mapping; the DIB layout itself is derived
+    // from `format` by the kernel.
+    let Some(dib_pitch) = dc_dib_pitch(&px) else {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "IDirect3DSurface9::GetDC: format has no GDI mapping → INVALIDCALL");
+        return None;
+    };
+    // The DC reads the surface pixels, so there must be a live store.
+    if px.bits.is_null() {
+        return None;
+    }
+    // Every store a surface resolves is sized and strided by
+    // `linear_row_pitch`, the rounding GDI derives the DIB stride from, so the
+    // store's own pitch is the DIB's and the DIB aliases it directly. GDI
+    // rejects a pitch below the DIB stride outright, so a store that ever came
+    // in tighter would have to be copied through a page of its own.
+    debug_assert!(
+        px.src_pitch >= dib_pitch as usize,
+        "a device context resolved a pixel store tighter than its DIB stride"
+    );
+    let pitch = u32::try_from(px.src_pitch).ok()?;
+
+    // Wrap the pixel store resolved above in a memory DC + DIB via
+    // `D3DKMTCreateDCFromMemory`. Unlike `CreateDIBSection`, the
+    // kernel leaves `biSizeImage` 0 and stores a negative top-down `biHeight`,
+    // matching the `DIBSECTION` values GDI reports for such a DIB. `h_device_dc`
+    // is a throwaway template DC deleted right after the call.
+    // SAFETY: `CreateCompatibleDC(NULL)` is the documented form for a memory DC
+    // compatible with the screen; null on failure is tolerated (template only;
+    // `D3DKMTCreateDCFromMemory` reports the real failure via its status).
+    let device_dc = unsafe { CreateCompatibleDC(core::ptr::null_mut()) };
+    let mut desc = D3DKMT_CREATEDCFROMMEMORY {
+        p_memory: px.bits.cast::<c_void>(),
+        format: px.d3d_format,
+        width: px.width,
+        height: px.height,
+        pitch,
+        h_device_dc: device_dc,
+        p_color_table: core::ptr::null(),
+        h_dc: core::ptr::null_mut(),
+        h_bitmap: core::ptr::null_mut(),
+    };
+    // SAFETY: `&mut desc` is a live, aligned `D3DKMT_CREATEDCFROMMEMORY`; the call
+    // fills `h_dc` / `h_bitmap` on success and returns a non-zero NTSTATUS on
+    // failure. `p_memory` stays valid for the DC's lifetime (surface store).
+    let status = unsafe { D3DKMTCreateDCFromMemory(&raw mut desc) };
+    if !device_dc.is_null() {
+        // SAFETY: `device_dc` is the live template memory DC created above; it has
+        // served its purpose (the created DC is `desc.h_dc`) and is deleted here.
+        unsafe { DeleteDC(device_dc) };
+    }
+    if status != 0 || desc.h_dc.is_null() {
+        return None;
+    }
+    Some(GdiDc {
+        dc: desc.h_dc,
+        bitmap: desc.h_bitmap,
+    })
+}
+
 extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSurface9>(this);
     let _timer = surf_timer(this, SurfaceSubCategory::GetDc);
@@ -4064,85 +4152,11 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
     if inner.is_lockable_backbuffer() && readback_full_backbuffer(inner).is_none() {
         return D3DERR_INVALIDCALL;
     }
-    // A lockable standalone render target keeps its pixels in the colour
-    // texture the GPU writes and hands the DC a DIB over its CPU staging, so
-    // the staging has to be refreshed from the texture first. Otherwise a
-    // `ColorFill`, a draw or a `StretchRect` into the surface is invisible to
-    // the DC, exactly as it would be to a `LockRect` that skipped the same
-    // read-back.
-    // On a core device the colour texture is the target's core texture, which
-    // `lockable_rt_readback_fill` reads back (DXMTRS C4c-3b).
-    #[cfg(feature = "core-runtime")]
-    if inner.core_lockable_render_target().is_some() && !refresh_lockable_rt_staging(inner) {
-        return D3DERR_INVALIDCALL;
-    }
-    if inner.is_lockable_render_target() && !refresh_lockable_rt_staging(inner) {
-        return D3DERR_INVALIDCALL;
-    }
-    if !refill_dc_texture_level(inner) {
-        return D3DERR_INVALIDCALL;
-    }
-    let Some(px) = inner.dc_pixels() else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "IDirect3DSurface9::GetDC on a surface with no host pixel store → INVALIDCALL");
+    let Some(held_dc) = create_dc_on_surface(inner) else {
+        inner.readback = None;
+        inner.readback_dims = (0, 0);
         return D3DERR_INVALIDCALL;
     };
-    // Reject a format with no GDI mapping; the DIB layout itself is derived
-    // from `format` by the kernel.
-    let Some(dib_pitch) = dc_dib_pitch(&px) else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "IDirect3DSurface9::GetDC: format has no GDI mapping → INVALIDCALL");
-        return D3DERR_INVALIDCALL;
-    };
-    // The DC reads the surface pixels, so there must be a live store.
-    if px.bits.is_null() {
-        return D3DERR_INVALIDCALL;
-    }
-    // Every store a surface resolves is sized and strided by
-    // `linear_row_pitch`, the rounding GDI derives the DIB stride from, so the
-    // store's own pitch is the DIB's and the DIB aliases it directly. GDI
-    // rejects a pitch below the DIB stride outright, so a store that ever came
-    // in tighter would have to be copied through a page of its own.
-    debug_assert!(
-        px.src_pitch >= dib_pitch as usize,
-        "a device context resolved a pixel store tighter than its DIB stride"
-    );
-    let Ok(pitch) = u32::try_from(px.src_pitch) else {
-        return D3DERR_INVALIDCALL;
-    };
-
-    // Wrap the pixel store resolved above in a memory DC + DIB via
-    // `D3DKMTCreateDCFromMemory`. Unlike `CreateDIBSection`, the
-    // kernel leaves `biSizeImage` 0 and stores a negative top-down `biHeight`,
-    // matching the `DIBSECTION` values GDI reports for such a DIB. `h_device_dc`
-    // is a throwaway template DC deleted right after the call.
-    // SAFETY: `CreateCompatibleDC(NULL)` is the documented form for a memory DC
-    // compatible with the screen; null on failure is tolerated (template only —
-    // `D3DKMTCreateDCFromMemory` reports the real failure via its status).
-    let device_dc = unsafe { CreateCompatibleDC(core::ptr::null_mut()) };
-    let mut desc = D3DKMT_CREATEDCFROMMEMORY {
-        p_memory: px.bits.cast::<c_void>(),
-        format: px.d3d_format,
-        width: px.width,
-        height: px.height,
-        pitch,
-        h_device_dc: device_dc,
-        p_color_table: core::ptr::null(),
-        h_dc: core::ptr::null_mut(),
-        h_bitmap: core::ptr::null_mut(),
-    };
-    // SAFETY: `&mut desc` is a live, aligned `D3DKMT_CREATEDCFROMMEMORY`; the call
-    // fills `h_dc` / `h_bitmap` on success and returns a non-zero NTSTATUS on
-    // failure. `p_memory` stays valid for the DC's lifetime (surface store).
-    let status = unsafe { D3DKMTCreateDCFromMemory(&raw mut desc) };
-    if !device_dc.is_null() {
-        // SAFETY: `device_dc` is the live template memory DC created above; it has
-        // served its purpose (the created DC is `desc.h_dc`) and is deleted here.
-        unsafe { DeleteDC(device_dc) };
-    }
-    if status != 0 || desc.h_dc.is_null() {
-        return D3DERR_INVALIDCALL;
-    }
 
     // The DC now maps the level, so nothing may release the staging under it
     // until `ReleaseDC` drops the pin.
@@ -4150,17 +4164,15 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
     // SAFETY: `dc_lock_ptr` returns the live resource-wide state; the prior
     // immutable borrow above ended, so this exclusive deref does not alias it.
     let dc_lock = unsafe { &mut *inner.dc_lock_ptr() };
-    dc_lock.held_dc = GdiDc {
-        dc: desc.h_dc,
-        bitmap: desc.h_bitmap,
-    };
+    let hdc_out = held_dc.dc;
+    dc_lock.held_dc = held_dc;
     dc_lock.dc_in_use = true;
     dc_lock.holder = (inner.cube_face, inner.mip_level);
     // A `GetDC` counts toward the resource map count (per D3D9), so a
     // subsequent `GetDC`/`LockRect` on any face is rejected until `ReleaseDC`.
     dc_lock.map_count += 1;
     // Written only on success; `hdc` is non-null (checked above).
-    crate::write_out(hdc, desc.h_dc);
+    crate::write_out(hdc, hdc_out);
     D3D_OK
 }
 

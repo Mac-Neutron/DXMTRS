@@ -216,6 +216,13 @@ impl CoreDevice {
     /// depth-stencil bound.
     pub fn reset_targets(&mut self, depth: Option<DepthRef>) -> bool {
         let mut bound = self.set_target(TargetRef::BackBuffer);
+        if !bound && self.target != TargetRef::BackBuffer {
+            if self.render_open {
+                self.close_pass();
+            }
+            self.target = TargetRef::BackBuffer;
+            self.target_gen = self.target_gen.wrapping_add(1);
+        }
         for slot in 1..=self.extras.len() {
             bound &= self.set_extra_target(slot, None);
         }

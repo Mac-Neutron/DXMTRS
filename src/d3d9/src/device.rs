@@ -3123,7 +3123,10 @@ impl DeviceInner {
                 .core_auto_depth
                 .map(|id| d3d9_rt::device::DepthRef { id, level: 0 });
             let bound = rt.reset_targets(depth);
-            debug_assert!(bound, "the back buffer and the auto depth-stencil bind");
+            debug_assert!(
+                bound || !rt.has_back_buffer(),
+                "the back buffer and the auto depth-stencil bind"
+            );
         }
         if !core {
             for old_id in autogen.into_iter().flatten() {

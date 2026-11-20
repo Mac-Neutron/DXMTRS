@@ -2128,3 +2128,23 @@ fn reset_targets_binds_the_back_buffer_alone() {
     assert_eq!(core.depth(), None);
     assert_eq!(core.target(), TargetRef::BackBuffer);
 }
+
+/// Resetting targets clears a custom RT0 even when the back buffer does not resolve.
+///
+/// A failed resize drops the back buffer, leaving the custom RT0 bound; `reset_targets` still
+/// returns `false`, closes any open pass, resets target 0 to `BackBuffer`, and bumps `target_gen`.
+#[test]
+fn reset_targets_clears_custom_rt0_when_back_buffer_is_missing() {
+    const DEVICE: u64 = 0x705;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    let (rt, _) = stored(&mut core, DEVICE, 1, TextureKind::Tex2d, 64, 1);
+    assert!(core.set_target(level0(rt)));
+    assert_ne!(core.target(), TargetRef::BackBuffer);
+    assert!(!core.resize(0, 64, 1));
+    core.open_render_pass();
+    let gen_before = core.target_gen();
+    assert!(!core.reset_targets(None));
+    assert!(!core.render_open);
+    assert_eq!(core.target(), TargetRef::BackBuffer);
+    assert_ne!(core.target_gen(), gen_before);
+}

@@ -860,14 +860,15 @@ impl TextureInner {
         }
     }
 
-    /// Give `level` a staging buffer again before a write lands in it.
+    /// Give `level` a staging buffer again before a write or read-back lands in it.
     ///
-    /// The fresh buffer holds no pixels, so it serves only a caller that
-    /// defines every byte it will upload: a whole-level write, a level the GPU
-    /// never received, or a read back of the level. A partial CPU write goes
-    /// through [`Self::ensure_staging_for_write`] and a `LockRect`, which D3D9
-    /// promises the level's current contents, through
-    /// [`Self::ensure_staging_for_lock`].
+    /// The fresh buffer holds uninitialized bytes, so it serves only a caller that
+    /// defines every byte it will upload or overwrite: a whole-level write, a
+    /// `D3DLOCK_DISCARD` lock, or a GPU read-back of the level. Partial CPU writes
+    /// go through [`Self::ensure_staging_for_write`] and `LockRect` calls through
+    /// [`Self::ensure_staging_for_lock`], both of which use
+    /// [`Self::ensure_zeroed_staging`] when a never-uploaded level must keep zeroed
+    /// unwritten texels.
     fn ensure_staging(&mut self, level: usize) {
         self.ensure_staging_with(level, false);
     }
@@ -955,16 +956,18 @@ impl TextureInner {
         false
     }
 
-    /// Re-create released `level`'s staging for a partial CPU write of it.
+    /// Re-create released `level`'s staging for a CPU write of it.
     ///
-    /// The upload the write schedules is the bounding box of every write since
-    /// the last flush, which is sound only over a staging holding the whole
-    /// level, so the level is read back from the GPU before the write lands.
-    /// It then keeps its staging (`kept_staging`): a level written in part
-    /// after its release is written again, and each release would cost the
-    /// same blocking read at the next write. A whole-level write and a level
-    /// the GPU never received take the pages as allocated. Returns false when
-    /// the read back fails, which rejects the write.
+    /// The upload a partial write schedules is the bounding box of every write
+    /// since the last flush, which is sound only over a staging holding the whole
+    /// level, so an uploaded level is read back from the GPU before the write
+    /// lands. It then keeps its staging (`kept_staging`): a level written in part
+    /// after its release is written again, and each release would cost the same
+    /// blocking read at the next write. A whole-level write takes uninitialized
+    /// pages via [`Self::ensure_staging`]; a partial write of a level the GPU
+    /// never received takes zeroed pages via [`Self::ensure_zeroed_staging`] so
+    /// unwritten texels remain zero. Returns false when the read back fails,
+    /// which rejects the write.
     fn ensure_staging_for_write(&mut self, level: usize, whole_level: bool) -> bool {
         if self.dropped_staging & (1u32 << level) == 0 {
             return true;
