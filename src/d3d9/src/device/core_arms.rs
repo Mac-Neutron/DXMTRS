@@ -1019,7 +1019,7 @@ fn with_scratch(
 #[cold]
 #[inline(never)]
 fn refuse_stretch() -> i32 {
-    refuse_under_core("IDirect3DDevice9::StretchRect (other than a multisample resolve)");
+    refuse_under_core("IDirect3DDevice9::StretchRect (a pair the core does not copy)");
     D3DERR_NOTAVAILABLE
 }
 

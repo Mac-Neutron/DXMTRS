@@ -3373,8 +3373,8 @@ impl DeviceInner {
         if self.current_frame.get().is_none() {
             mtld3d_shared::log_once_info!(
                 target: LOG_TARGET,
-                "d3d9 core: a windowed device's back buffer keeps its size when its window is \
-                 resized (WM_SIZE); the window shows it scaled until a Reset"
+                "d3d9 core: a windowed device's back buffer does not follow its window's size \
+                 (WM_SIZE); it keeps its size until a Reset"
             );
             return;
         }
@@ -4082,7 +4082,7 @@ impl DeviceInner {
             // Native ramps the whole desktop for a windowed device, which is
             // not ours to touch, so the ramp is kept for `GetGammaRamp` and
             // changes nothing on screen. It applies as soon as a `Reset`
-            // takes the device fullscreen, on mtld3d's runtime.
+            // takes the device fullscreen, on either runtime.
             mtld3d_shared::log_once_warn!(
                 target: crate::LOG_TARGET,
                 "SetGammaRamp on a windowed device: the ramp is stored and reported back, \
@@ -16823,7 +16823,7 @@ pub fn warn_present_params_fields_once(pp: &mtld3d_types::D3DPRESENT_PARAMETERS)
         // without it (`mode_set_attempts`); vsync follows the panel.
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "CreateDevice: full_screen_refresh_rate_in_hz={} requested: the display mode set \
-             asks for it, but presentation follows the panel's own rate",
+             asks for it; presentation intervals ONE and DEFAULT follow the panel's own rate",
             pp.full_screen_refresh_rate_in_hz
         );
     }
