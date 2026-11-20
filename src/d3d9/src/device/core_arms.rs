@@ -33,6 +33,7 @@ use d3d9_rt::device::{
     UploadRegion, view_format,
 };
 use mtld3d_core::{
+    buffer_rename::BufferMapMode,
     clear_area::{ClearArea, clear_area, clear_regions},
     convert::d3dcolor_to_rgba_f32,
     dirty_rect::DirtyRect,
@@ -59,6 +60,7 @@ use crate::{
     bound_rt::RENDER_TARGET_SLOTS,
     surface::{Direct3DSurface9, SystemMemoryDst},
     texture::SourceImage,
+    vertex_buffer::VertexBufferInner,
 };
 
 unsafe extern "system" {
@@ -887,6 +889,36 @@ pub fn update_color_target(
         return D3DERR_INVALIDCALL;
     }
     D3D_OK
+}
+
+/// `ProcessVertices`' source bytes from the first vertex on, when the core maps the buffer.
+///
+/// `Ok(None)` for a device of mtld3d's runtime and for a buffer with a CPU backing, which holds
+/// its bytes. A buffer the core maps directly keeps no CPU copy, so its bytes from `first()` to
+/// its end are read where the CPU last wrote them (DXMTRS C4c-7d-1), before mtld3d's test of a
+/// released backing, which such a buffer would fail. A first vertex past the end answers
+/// `D3DERR_INVALIDCALL`, as past a backing; so do bytes the core does not hold, logged once.
+pub fn process_vertices_source(
+    dev: &mut DeviceInner,
+    src: &VertexBufferInner,
+    first: impl FnOnce() -> usize,
+) -> Result<Option<Vec<u8>>, i32> {
+    let Some(core) = dev.core_mut() else {
+        return Ok(None);
+    };
+    if !matches!(src.map_mode(), BufferMapMode::Direct) {
+        return Ok(None);
+    }
+    let first = first();
+    let Some(len) = (src.length() as usize).checked_sub(first) else {
+        return Err(D3DERR_INVALIDCALL);
+    };
+    let bytes = core.dynamic_copy(src.buffer_id(), first, len);
+    if bytes.is_none() {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "d3d9 core: ProcessVertices' dynamic source holds no bytes to read → INVALIDCALL");
+    }
+    bytes.map(Some).ok_or(D3DERR_INVALIDCALL)
 }
 
 /// The multisample resolve `stretch_colour` takes first, recorded; `None` for any other shape.

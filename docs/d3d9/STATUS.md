@@ -35,8 +35,15 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
   `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
   `ValidateDevice` answers one pass for a state whose draw that runtime
-  refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`,
-  among others: `ProcessVertices`.
+  refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`:
+  a `Reset` to a back-buffer format the core does not make; a
+  `SetRenderTarget` or `SetDepthStencilSurface` of a surface the core does not
+  target or attach; a writable `LockRect` and a `GetDC` of a multisampled back
+  buffer; a RESZ into a dynamic depth texture; a `StretchRect` of a pair the
+  core does not copy; and a draw whose layout no binding can fetch, that reads
+  a buffer of another device, binds a shader no core device created, samples
+  a depth texture at a vertex sampler or samples the depth-stencil it tests or
+  writes.
 - On the core runtime the gamma ramp, the frame latency and the extended
   device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
   `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp is stored and

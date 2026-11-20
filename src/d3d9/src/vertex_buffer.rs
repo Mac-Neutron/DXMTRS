@@ -134,6 +134,13 @@ impl VertexBufferInner {
         self.buffer_id
     }
 
+    /// The buffer's length in bytes, as created.
+    #[cfg(feature = "core-runtime")]
+    #[must_use]
+    pub const fn length(&self) -> u32 {
+        self.length
+    }
+
     /// The buffer's CPU backing bytes.
     ///
     /// Used as the `ProcessVertices` source read: the source stream is a
@@ -220,6 +227,59 @@ impl VertexBufferInner {
         );
         self.backing.note_upload(min, min + len);
         dev.push_stage_upload(self.buffer_id, transient, min, len);
+    }
+
+    /// `write_processed` on a core device: the vertices at `offset`, clipped to the buffer.
+    ///
+    /// Nothing is written for an empty window. A buffer the core maps directly takes them through
+    /// the core's lock of the window, in place or renamed as an application's lock with no flag
+    /// is (DXMTRS C4c-7d-1). A backing that mirrors the core's buffer takes them, and its dirty
+    /// range grows by the window, which the next draw's `core_flush` uploads. A backing re-created
+    /// after its release holds zeros outside the windows written since: the window goes to the
+    /// core alone, at once, as `vb_unlock`'s core path sends one, since a range widened over two
+    /// windows would upload the zeros between them over the core's bytes. When the core refuses
+    /// that upload, the window joins the range for the next draw, logged once.
+    #[cfg(feature = "core-runtime")]
+    pub fn core_write_processed(
+        &mut self,
+        offset: usize,
+        bytes: &[u8],
+        core: &mut d3d9_rt::device::CoreDevice,
+    ) {
+        let length = self.length as usize;
+        let end = offset.saturating_add(bytes.len()).min(length);
+        if offset >= end {
+            return;
+        }
+        let bytes = &bytes[..end - offset];
+        let (min, max) = (
+            u32::try_from(offset).expect("VB offset fits u32"),
+            u32::try_from(end).expect("VB span fits u32"),
+        );
+        if matches!(self.map_mode, BufferMapMode::Direct) {
+            let ptr = core.dynamic_lock(self.buffer_id, 0, self.usage, min, max - min);
+            if ptr.is_null() {
+                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                    "d3d9 core: ProcessVertices' dynamic destination did not lock; nothing written");
+                return;
+            }
+            // SAFETY: the core's lock answers `ptr` at byte `min` of its buffer's memory, which
+            // holds the window (it ends inside the buffer); `bytes` is the caller's own memory.
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
+            return;
+        }
+        self.restore_backing();
+        let dst = self.backing.as_mut_slice();
+        dst[offset..end].copy_from_slice(bytes);
+        if self.backing.may_widen_upload() {
+            self.dirty.conjoin(min, max - min, self.length);
+        } else if core.buffer_upload(self.buffer_id, u64::from(min), bytes) {
+            self.backing.note_upload(min, max);
+        } else {
+            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                "d3d9 core: ProcessVertices' window into a re-created vertex buffer backing did not upload; the next draw uploads it");
+            self.dirty.conjoin(min, max - min, self.length);
+        }
     }
 
     /// Upload a still-mapped `Staged` buffer's dirty span without ending the lock.

@@ -14884,11 +14884,6 @@ extern "system" fn device_process_vertices(
     use crate::vertex_buffer::Direct3DVertexBuffer9;
 
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::ProcessVertices",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Draws);
     if dst_buffer.is_null() {
         return D3DERR_INVALIDCALL;
@@ -14926,22 +14921,36 @@ extern "system" fn device_process_vertices(
     // SAFETY: `src_vb` is a live bound `Direct3DVertexBuffer9` (non-null
     // checked); the bound-slot reference keeps it alive for this call.
     let src_inner = unsafe { (*src_vb).inner() };
-    if src_inner.backing_is_released() {
-        // A default-pool D3DUSAGE_WRITEONLY buffer keeps its bytes on the GPU
-        // alone. D3DUSAGE_SOFTWAREPROCESSING is the usage a title declares for
-        // a buffer it feeds to ProcessVertices, and that declaration keeps the
-        // CPU copy, so a source without it has nothing left to read.
-        mtld3d_shared::log_once_warn!(
-            target: crate::LOG_TARGET,
-            "ProcessVertices from a D3DUSAGE_WRITEONLY source without D3DUSAGE_SOFTWAREPROCESSING: no CPU copy to read → INVALIDCALL"
-        );
-        return D3DERR_INVALIDCALL;
-    }
-    let src_bytes = src_inner.backing();
-    let first = (src_stream_offset + src_start.saturating_mul(src_stride)) as usize;
-    if first > src_bytes.len() {
-        return D3DERR_INVALIDCALL;
-    }
+    let first = || (src_stream_offset + src_start.saturating_mul(src_stride)) as usize;
+    // A buffer a core device maps directly is read where the CPU wrote it (DXMTRS C4c-7d-1).
+    #[cfg(feature = "core-runtime")]
+    let mapped = match core_arms::process_vertices_source(dev, src_inner, first) {
+        Ok(mapped) => mapped,
+        Err(hr) => return hr,
+    };
+    #[cfg(not(feature = "core-runtime"))]
+    let mapped: Option<Vec<u8>> = None;
+    let src_bytes = if let Some(bytes) = &mapped {
+        bytes.as_slice()
+    } else {
+        if src_inner.backing_is_released() {
+            // A default-pool D3DUSAGE_WRITEONLY buffer keeps its bytes on the GPU
+            // alone. D3DUSAGE_SOFTWAREPROCESSING is the usage a title declares for
+            // a buffer it feeds to ProcessVertices, and that declaration keeps the
+            // CPU copy, so a source without it has nothing left to read.
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "ProcessVertices from a D3DUSAGE_WRITEONLY source without D3DUSAGE_SOFTWAREPROCESSING: no CPU copy to read → INVALIDCALL"
+            );
+            return D3DERR_INVALIDCALL;
+        }
+        let backing = src_inner.backing();
+        let first = first();
+        if first > backing.len() {
+            return D3DERR_INVALIDCALL;
+        }
+        &backing[first..]
+    };
 
     // SAFETY: `dst_buffer` is a live `Direct3DVertexBuffer9*` per the D3D9 ABI;
     // it is distinct from `src_vb` (the source is a bound stream, the
@@ -14951,7 +14960,7 @@ extern "system" fn device_process_vertices(
 
     let processed = mtld3d_core::process_vertices::process_vertices(
         &mtld3d_core::process_vertices::ProcessVerticesRequest {
-            src: &src_bytes[first..],
+            src: src_bytes,
             src_stride,
             src_fvf,
             dst_fvf,
@@ -14979,6 +14988,15 @@ extern "system" fn device_process_vertices(
     }
     let (_, dst_stride) = mtld3d_core::convert::fvf_to_elements(dst_fvf);
     let dst_offset = (dst_index.saturating_mul(dst_stride)) as usize;
+    // A core device writes through its own buffer paths: no page box, stage upload or recorder
+    // status (DXMTRS C4c-7d-1).
+    #[cfg(feature = "core-runtime")]
+    if let Some(core) = dev.core_mut() {
+        dst_obj
+            .inner_mut()
+            .core_write_processed(dst_offset, &processed, core);
+        return D3D_OK;
+    }
     dst_obj
         .inner_mut()
         .write_processed(dst_offset, &processed, dev);
