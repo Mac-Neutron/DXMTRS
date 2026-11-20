@@ -2486,8 +2486,6 @@ fn create_core_device(
             crate::device::DeviceFlags::empty()
         },
     });
-    // No cursor subclass: its `WM_SIZE` arm reaches mtld3d's recorder. The cursor calls answer
-    // without it (DXMTRS C4c-7a).
     let dev_ptr = Box::into_raw(Box::new(dev));
     // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
     let inner = unsafe { (*dev_ptr).inner() };
@@ -2495,6 +2493,12 @@ fn create_core_device(
     if let Some(id) = auto_depth {
         inner.set_core_auto_depth(id, pp.auto_depth_stencil_format);
     }
+    // The window subclass, as mtld3d's create installs it, once nothing is left to fail: its
+    // registry keeps this address until the release unregisters it, before anything is freed.
+    // Its one path into mtld3d's recorder, the auto-resize on `WM_SIZE`, returns at once on a
+    // core device (DXMTRS C4c-6d).
+    let inner_ptr = std::ptr::from_mut::<crate::device::DeviceInner>(inner);
+    inner.cursor().install_subclass(inner_ptr);
     // SAFETY: `present_params` is the non-null pointer the request was read from, writable
     // per the ABI; alignment is not assumed.
     unsafe { crate::device::report_resolved_geometry(present_params, &pp) };

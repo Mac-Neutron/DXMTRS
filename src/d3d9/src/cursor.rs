@@ -17,9 +17,11 @@
 //! the `WindowServer` cursor plane never toggles on our account.
 //!
 //! **The core runtime.** A device of the core runtime runs the three entry
-//! points as they are, without the subclass (its `WM_SIZE` arm reaches
-//! mtld3d's recorder): a window class's own cursor comes back at the window's
-//! next `WM_SETCURSOR`, and the scale stays 1 (DXMTRS C4c-7a).
+//! points and the subclass as they are (DXMTRS C4c-7a, C4c-6d), but for the
+//! subclass's one path into mtld3d's recorder, the auto-resize on `WM_SIZE`,
+//! which returns at once there (`DeviceInner::apply_auto_resize`): its back
+//! buffer keeps its size until a `Reset`. Its cursor's scale stays 1, and it
+//! has no overlay view.
 
 use core::{
     ffi::c_void,
@@ -1562,7 +1564,8 @@ pub extern "system" fn device_show_cursor(this: *mut c_void, show: i32) -> i32 {
 /// surface request every device on the window gets on a `WM_WINDOWPOSCHANGED`
 /// that can move its client area, the fullscreen
 /// window lookup, the auto-resize on `WM_SIZE`, which flushes the current
-/// frame, the registry mode restore on deactivation, and the fullscreen
+/// frame of a device of mtld3d's runtime and returns at once on a core
+/// device, the registry mode restore on deactivation, and the fullscreen
 /// re-cover and reactivation posted as `WM_APP_REASSERT_FULLSCREEN` and
 /// `WM_APP_REACTIVATE_FULLSCREEN`, which set the display mode and move the
 /// window. The device pointer is read under the `DEVICE_INSTANCES` mutex and
@@ -1745,7 +1748,8 @@ extern "system" fn cursor_wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: i
         // chrome / dock take some pixels). lParam's low / high words
         // are the new client width / height in pixels — trigger an
         // auto-resize so a windowed back buffer keeps matching the
-        // client area the game sees.
+        // client area the game sees (a core device's keeps its size:
+        // `DeviceInner::apply_auto_resize`).
         //
         // Skipped while mtld3d is the one moving this window: a fullscreen
         // transition's own `SetWindowPos` bounces back here, and that

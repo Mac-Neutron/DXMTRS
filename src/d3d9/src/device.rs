@@ -3362,7 +3362,22 @@ impl DeviceInner {
     /// the cursor subclass wndproc on the API thread; encoder is paused
     /// inside `flush_current_frame_blocking` for the destroy/create
     /// span so no in-flight cmdbuf references the freed handles.
+    ///
+    /// A core device returns at once, before it reads anything, its back
+    /// buffer kept until a `Reset` (DXMTRS C4c-6d, ruling R6d-3): the resize
+    /// is mtld3d's recorder's work. The test is the recorder's absence,
+    /// which holds for the device's whole life, its release included, where
+    /// `is_core` turns false once the release has taken the core.
     pub fn apply_auto_resize(&mut self, new_width: u32, new_height: u32) {
+        #[cfg(feature = "core-runtime")]
+        if self.current_frame.get().is_none() {
+            mtld3d_shared::log_once_info!(
+                target: LOG_TARGET,
+                "d3d9 core: a windowed device's back buffer keeps its size when its window is \
+                 resized (WM_SIZE); the window shows it scaled until a Reset"
+            );
+            return;
+        }
         if new_width == 0 || new_height == 0 {
             return;
         }
@@ -4067,7 +4082,7 @@ impl DeviceInner {
             // Native ramps the whole desktop for a windowed device, which is
             // not ours to touch, so the ramp is kept for `GetGammaRamp` and
             // changes nothing on screen. It applies as soon as a `Reset`
-            // takes the device fullscreen.
+            // takes the device fullscreen, on mtld3d's runtime.
             mtld3d_shared::log_once_warn!(
                 target: crate::LOG_TARGET,
                 "SetGammaRamp on a windowed device: the ramp is stored and reported back, \
@@ -4084,6 +4099,16 @@ impl DeviceInner {
     /// applying is queued once, as a removal.
     fn queue_gamma(&mut self) {
         let apply = self.is_fullscreen() && !mtld3d_core::gamma::is_identity(&self.gamma_ramp);
+        // The core's presenter is handed no ramp (DXMTRS C4c-6d, ruling R6d-4); what is queued
+        // has no consumer there.
+        #[cfg(feature = "core-runtime")]
+        if apply && self.is_core() {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: a gamma ramp on a fullscreen device is stored and reported back, but \
+                 not applied on the core runtime"
+            );
+        }
         if apply {
             self.pending_gamma = Some(mtld3d_core::gamma::Change::Apply(Box::new(
                 mtld3d_core::gamma::to_lut(&self.gamma_ramp),
@@ -5975,7 +6000,8 @@ fn apply_reset_window_mode(dev: &mut DeviceInner, pp: &mtld3d_types::D3DPRESENT_
 /// `Present` becomes a no-op.
 ///
 /// A core device moves its Metal view and presenter (`CoreDevice::retarget`), after its back
-/// buffer is made again; it has no cursor subclass to move (DXMTRS C4c-6c).
+/// buffer is made again (DXMTRS C4c-6c), then the subclass and the cursor, whatever the view
+/// answered, as mtld3d's arm moves them; the cursor has no overlay view (DXMTRS C4c-6d).
 fn retarget_device_window(
     dev: &mut DeviceInner,
     pp: &mtld3d_types::D3DPRESENT_PARAMETERS,
@@ -5990,6 +6016,9 @@ fn retarget_device_window(
                  nowhere until a later Reset attaches one",
             );
         }
+        let dev_ptr = std::ptr::from_mut::<DeviceInner>(dev);
+        dev.cursor
+            .retarget(hwnd as *mut c_void, MetalHandle::NULL, dev_ptr);
         return Ok(());
     }
     // Ops already queued name the layer that is about to go, and the encoder
