@@ -191,6 +191,9 @@ fn get_data_on_core(inner: &QueryInner, data: *mut c_void, size: u32, flags: u32
     let has_output = !data.is_null() && size != 0;
     if inner.query_type == D3DQUERYTYPE_EVENT {
         let done = event_immediate || rt.event_done(inner.end_seq.load(Ordering::Acquire));
+        if let Err(hr) = dev.encoder_status() {
+            return Some(hr);
+        }
         let status = if done { D3D_OK } else { S_FALSE };
         if has_output {
             // SAFETY: `has_output` guarantees `data` is non-null with at least `size` writable
@@ -201,6 +204,9 @@ fn get_data_on_core(inner: &QueryInner, data: *mut c_void, size: u32, flags: u32
     }
     let flush = flags & D3DGETDATA_FLUSH != 0;
     let answer = rt.occlusion_poll(&inner.occlusion.borrow(), flush && !flush_immediate);
+    if let Err(hr) = dev.encoder_status() {
+        return Some(hr);
+    }
     let value = match answer {
         OcclusionAnswer::Never => NEVER_ISSUED,
         OcclusionAnswer::Count(count) => count,
@@ -432,12 +438,12 @@ extern "system" fn query_issue(this: *mut c_void, flags: u32) -> i32 {
         return D3DERR_INVALIDCALL;
     };
     let inner = obj.inner();
-    #[cfg(feature = "core-runtime")]
-    if let Some(hr) = issue_on_core(inner, flags) {
-        return hr;
-    }
     // SAFETY: the query retains its owning device throughout this call.
     if let Err(hr) = unsafe { &*inner.device_inner }.encoder_status() {
+        return hr;
+    }
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = issue_on_core(inner, flags) {
         return hr;
     }
     if inner.query_type == D3DQUERYTYPE_EVENT {
@@ -534,13 +540,13 @@ extern "system" fn query_get_data(
         return D3DERR_INVALIDCALL;
     };
     let inner = obj.inner();
-    #[cfg(feature = "core-runtime")]
-    if let Some(hr) = get_data_on_core(inner, data, size, flags) {
-        return hr;
-    }
     // SAFETY: the query's device reference keeps its owning DeviceInner alive.
     let device = unsafe { &*inner.device_inner };
     if let Err(hr) = device.encoder_status() {
+        return hr;
+    }
+    #[cfg(feature = "core-runtime")]
+    if let Some(hr) = get_data_on_core(inner, data, size, flags) {
         return hr;
     }
 

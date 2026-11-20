@@ -74,6 +74,7 @@ fn reset() {
     crate::fakes::log_object_calls(|op, obj| {
         push_log(format!("{op} {obj:#x}"));
     });
+    crate::fakes::on_command_buffer(fake_command_buffer);
 }
 
 fn fake_obj(handle: u64) -> Obj {
@@ -132,8 +133,7 @@ extern "C-unwind" fn fake_wait_until_signaled_value(event: u64, value: u64, time
     })
 }
 
-#[unsafe(export_name = "MTLCommandQueue_commandBuffer")]
-extern "C-unwind" fn fake_command_buffer(queue: u64) -> u64 {
+fn fake_command_buffer(queue: u64) -> u64 {
     STATE.with_borrow_mut(|state| {
         let id = state.next_cmdbuf;
         state.next_cmdbuf += 1;

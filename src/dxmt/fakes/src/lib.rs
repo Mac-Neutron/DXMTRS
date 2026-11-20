@@ -26,7 +26,8 @@ use dxmt_core::test_support::{Records, format_pass_records};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
-    WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
+    WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMT_COMMAND_BUFFER_STATUS_ERROR,
+    WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
     WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
     WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
     WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo, WmtcmdBase,
@@ -42,6 +43,10 @@ struct State {
     next: u64,
     /// The device each object a device's queue made belongs to.
     owner: BTreeMap<u64, u64>,
+    /// Armed command-buffer failures per device, consumed when a buffer finishes.
+    fail_next: BTreeMap<u64, u32>,
+    /// Per-command-buffer simulated Metal completion status.
+    cmdbuf_status: BTreeMap<u64, u64>,
     /// Each call a test reads, after its device.
     calls: Vec<(u64, String)>,
     log: Vec<(u32, String)>,
@@ -55,6 +60,8 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State {
     next: FIRST_HANDLE,
     owner: BTreeMap::new(),
+    fail_next: BTreeMap::new(),
+    cmdbuf_status: BTreeMap::new(),
     calls: Vec::new(),
     log: Vec::new(),
 });
@@ -108,6 +115,12 @@ pub fn take_calls(device: u64) -> Vec<String> {
 #[must_use]
 pub fn take_log() -> Vec<(u32, String)> {
     core::mem::take(&mut state().log)
+}
+
+/// Arms `device`'s next finished command buffer to complete with `WMT_COMMAND_BUFFER_STATUS_ERROR`.
+pub fn fail_next_command_buffer(device: u64) {
+    let mut state = state();
+    *state.fail_next.entry(device).or_insert(0) += 1;
 }
 
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
@@ -644,12 +657,40 @@ extern "C-unwind" fn fake_commit(cmdbuf: u64) {
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_status")]
-const extern "C-unwind" fn fake_status(_cmdbuf: u64) -> u64 {
-    WMT_COMMAND_BUFFER_STATUS_COMPLETED
+extern "C-unwind" fn fake_status(cmdbuf: u64) -> u64 {
+    let mut state = state();
+    let status = if let Some(&status) = state.cmdbuf_status.get(&cmdbuf) {
+        status
+    } else if let Some(device) = state.device_of(cmdbuf)
+        && let Some(count) = state.fail_next.get_mut(&device)
+        && *count > 0
+    {
+        *count -= 1;
+        state
+            .cmdbuf_status
+            .insert(cmdbuf, WMT_COMMAND_BUFFER_STATUS_SCHEDULED);
+        WMT_COMMAND_BUFFER_STATUS_SCHEDULED
+    } else {
+        WMT_COMMAND_BUFFER_STATUS_COMPLETED
+    };
+    drop(state);
+    status
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_waitUntilCompleted")]
-const extern "C-unwind" fn fake_wait_until_completed(_cmdbuf: u64) {}
+extern "C-unwind" fn fake_wait_until_completed(cmdbuf: u64) {
+    let mut state = state();
+    if let Some(status) = state.cmdbuf_status.get_mut(&cmdbuf)
+        && *status == WMT_COMMAND_BUFFER_STATUS_SCHEDULED
+    {
+        *status = WMT_COMMAND_BUFFER_STATUS_ERROR;
+    }
+}
+
+#[unsafe(export_name = "MTLCommandBuffer_error")]
+const extern "C-unwind" fn fake_cmdbuf_error(_cmdbuf: u64) -> u64 {
+    0
+}
 
 #[unsafe(export_name = "MTLCommandBuffer_property")]
 const extern "C-unwind" fn fake_property(_cmdbuf: u64, _property: u32) -> u64 {

@@ -38,3 +38,26 @@ fn select_device_takes_the_reported_registry_id() {
     let fallback = select_device(0x5eed).expect("a device");
     assert_eq!(fallback.handle(), dxmt_fakes::FAKE_DEVICES[0]);
 }
+
+#[test]
+fn command_buffer_error_latches_core_device_has_error() {
+    crate::device::fixture::returns_within_10s(|| {
+        const DEVICE: u64 = 0x520;
+        let mut core = crate::device::fixture::core_on_fakes(DEVICE);
+        assert!(!core.has_error());
+
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        core.drain();
+        assert!(!core.has_error());
+
+        dxmt_fakes::fail_next_command_buffer(DEVICE);
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        core.drain();
+        assert!(core.has_error());
+
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        core.present(true, 0.0);
+        core.drain();
+        assert!(core.has_error());
+    });
+}

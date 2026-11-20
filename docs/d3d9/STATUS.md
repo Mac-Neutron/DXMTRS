@@ -120,17 +120,14 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   window when one is named, into fullscreen, between fullscreen modes and
   back to windowed through mtld3d's own mode set and window code, mtld3d's
   validation and its two kinds of rejection, and `TestCooperativeLevel` and
-  the presents `D3DERR_DEVICENOTRESET` until a `Reset` succeeds. Three
-  differences: a
-  `Reset` to a back-buffer format other than X8R8G8B8 or A8R8G8B8 (which
-  mtld3d warns about and accepts) is refused by name with
-  `D3DERR_NOTAVAILABLE`, owing no `Reset`; the GPU's failures latch no
-  device-lost answer, so `TestCooperativeLevel` answers only a `Reset` owed
-  and `CheckDeviceState` `D3D_OK`; and a back buffer an extended device's
-  application holds across `ResetEx` keeps its description but no pixels: it
-  is no target of the core, so a use that needs its texture answers as a
-  surface without one does, where mtld3d keeps its old texture (a held auto
-  depth-stencil keeps its texture).
+  the presents `D3DERR_DEVICENOTRESET` until a `Reset` succeeds. Two
+  differences: a `Reset` to a back-buffer format other than X8R8G8B8 or
+  A8R8G8B8 (which mtld3d warns about and accepts) is refused by name with
+  `D3DERR_NOTAVAILABLE`, owing no `Reset`; and a back buffer an extended
+  device's application holds across `ResetEx` keeps its description but no
+  pixels: it is no target of the core, so a use that needs its texture answers
+  as a surface without one does, where mtld3d keeps its old texture (a held
+  auto depth-stencil keeps its texture).
 - `D3DUSAGE_DYNAMIC` with `D3DPOOL_MANAGED` or `D3DPOOL_SCRATCH` is rejected
   with `D3DERR_INVALIDCALL` at 2D, cube and volume texture creation, for every
   format: the flag asks to drive the copy the device reads, which the managed

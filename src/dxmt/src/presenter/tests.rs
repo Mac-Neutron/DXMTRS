@@ -155,6 +155,7 @@ fn serial() -> MutexGuard<'static, ()> {
 fn reset() {
     *fake() = Fake::new();
     crate::fakes::log_object_calls(object_call);
+    crate::fakes::on_autorelease_pool(fake_pool);
 }
 
 /// The retains and releases, from `crate::fakes`, as the C++ golden's stubs print them.
@@ -258,8 +259,7 @@ unsafe fn text(s: *const c_char) -> String {
     unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned()
 }
 
-#[unsafe(export_name = "NSAutoreleasePool_alloc_init")]
-extern "C-unwind" fn fake_pool() -> u64 {
+fn fake_pool() -> u64 {
     let mut f = fake();
     let h = f.handle("pool");
     let line = format!("  NSAutoreleasePool_alloc_init -> {}", f.name(h));
@@ -1214,6 +1214,7 @@ fn scenario(line: &str, ramps: &[Box<DXMTGammaRamp>; 2]) {
                     let queries = QUERIES.load(SeqCst);
                     let t = s.spawn(|| {
                         crate::fakes::log_object_calls(object_call);
+                        crate::fakes::on_autorelease_pool(fake_pool);
                         p.synchronize()
                     });
                     while QUERIES.load(SeqCst) == queries {

@@ -926,6 +926,14 @@ extern "system" fn ib_unlock(this: *mut c_void) -> i32 {
     // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1).
     #[cfg(feature = "core-runtime")]
     if on_core_device(inner.device_inner) {
+        if matches!(inner.map_mode, BufferMapMode::Staged) && inner.dirty.span().is_some() {
+            // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
+            // finalizer relies on); nothing else of it is borrowed in this entry point.
+            let dev = unsafe { &*inner.device_inner };
+            if let Err(hr) = dev.encoder_status() {
+                return hr;
+            }
+        }
         return D3D_OK;
     }
     if matches!(inner.map_mode, BufferMapMode::Staged)

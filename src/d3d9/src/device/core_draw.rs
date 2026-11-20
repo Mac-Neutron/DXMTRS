@@ -1020,11 +1020,17 @@ pub fn draw_primitive_up(
     // read here; alignment is not assumed.
     let vertices = unsafe { slice_from_caller(data.cast::<u8>(), byte_count) };
     if primitive != D3DPT_TRIANGLEFAN {
+        if let Err(hr) = dev.encoder_status() {
+            return Some(hr);
+        }
         return Some(draw(dev, primitive, stride, &vertices, count, None));
     }
     let Some(fan) = FanRewrite::sequential(0, primitive_count) else {
         return Some(D3DERR_INVALIDCALL);
     };
+    if let Err(hr) = dev.encoder_status() {
+        return Some(hr);
+    }
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
     let indices = Indices {
@@ -1085,6 +1091,9 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     let source = unsafe { slice_from_caller(up.index_data.cast::<u8>(), index_bytes) };
     let (primitive, stride) = (up.primitive, up.stride);
     if primitive != D3DPT_TRIANGLEFAN {
+        if let Err(hr) = dev.encoder_status() {
+            return Some(hr);
+        }
         let indices = Indices {
             data: IndexData::Bytes(&source),
             index_type: index_type as u8,
@@ -1103,6 +1112,9 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     else {
         return Some(D3DERR_INVALIDCALL);
     };
+    if let Err(hr) = dev.encoder_status() {
+        return Some(hr);
+    }
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
     let indices = Indices {
@@ -1145,6 +1157,9 @@ pub fn draw_primitive(
     let count = vertex_count(primitive, primitive_count);
     if count == 0 {
         return Some(D3DERR_INVALIDCALL);
+    }
+    if let Err(hr) = dev.latched_encoder_status() {
+        return Some(hr);
     }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
@@ -1195,6 +1210,9 @@ pub fn draw_indexed_primitive(
     if count == 0 {
         return Some(D3DERR_INVALIDCALL);
     }
+    if let Err(hr) = dev.latched_encoder_status() {
+        return Some(hr);
+    }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
         Ok(None) => return Some(D3D_OK),
@@ -1244,6 +1262,9 @@ fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32
     let Some(fan) = FanRewrite::sequential(start_vertex, primitive_count) else {
         return super::reject_unaddressable_fan("DrawPrimitive", primitive_count);
     };
+    if let Err(hr) = dev.known_encoder_status() {
+        return hr;
+    }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
         Ok(None) => return invalid("triangle fan: no vertex buffer bound"),
@@ -1300,6 +1321,9 @@ fn indexed_fan(
     else {
         return D3DERR_INVALIDCALL;
     };
+    if let Err(hr) = dev.known_encoder_status() {
+        return hr;
+    }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
         Ok(None) => return D3D_OK,

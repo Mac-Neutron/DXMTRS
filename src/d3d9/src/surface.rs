@@ -3042,14 +3042,23 @@ fn core_backbuffer_read_into_lock(
     bytes_per_row: u32,
     bytes: usize,
 ) -> i32 {
-    // Zeroed, since the read writes it through a slice.
-    let mut page = PageBox::new_zeroed(bytes);
     let (x, y, w, h) = (rect.x, rect.y, rect.w, rect.h);
     // SAFETY: null, or the surface's live owning device, which outlives it and is a different
     // allocation from the page.
-    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
-    let read = core
+    let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if let Err(hr) = dev.encoder_status() {
+        return hr;
+    }
+    // Zeroed, since the read writes it through a slice.
+    let mut page = PageBox::new_zeroed(bytes);
+    let read = dev
+        .core_mut()
         .is_some_and(|core| core.read_presented(rect, page.as_mut_slice(), bytes_per_row as usize));
+    if let Err(hr) = dev.encoder_status() {
+        return hr;
+    }
     if !read {
         log::error!(target: LOG_TARGET,
             "d3d9 core: LockRect of the back buffer did not read {w}x{h} at ({x}, {y}) → INVALIDCALL"
@@ -3089,14 +3098,20 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
         // A core device's back buffer is BGRA8, four bytes a texel; zeroed, since the read
         // writes the page through a slice.
         let bytes_per_row = mtld3d_core::format::linear_row_pitch(w, 4);
-        let mut page = PageBox::new_zeroed((bytes_per_row as usize).saturating_mul(h as usize));
         // SAFETY: the surface's live owning device (non-null, checked above), which outlives it
         // and is a different allocation from the page.
-        let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+        let dev = unsafe { &mut *inner.device_inner };
+        if dev.encoder_status().is_err() {
+            return None;
+        }
+        let mut page = PageBox::new_zeroed((bytes_per_row as usize).saturating_mul(h as usize));
         let whole = mtld3d_core::dirty_rect::DirtyRect::full(w, h);
-        let read = core.is_some_and(|core| {
+        let read = dev.core_mut().is_some_and(|core| {
             core.read_presented(whole, page.as_mut_slice(), bytes_per_row as usize)
         });
+        if dev.encoder_status().is_err() {
+            return None;
+        }
         if !read {
             log::error!(target: LOG_TARGET,
                 "d3d9 core: a CPU read of the back buffer did not read {w}x{h} → INVALIDCALL"
@@ -3199,9 +3214,15 @@ fn backbuffer_page_upload(inner: &mut SurfaceInner) {
         let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, 4) as usize;
         // SAFETY: null, or the surface's live owning device, which outlives it and is a different
         // allocation from the page.
-        let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
+        let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
+            return;
+        };
+        if dev.latched_encoder_status().is_err() {
+            return;
+        }
         let whole = mtld3d_core::dirty_rect::DirtyRect::full(width, height);
-        let written = core
+        let written = dev
+            .core_mut()
             .zip(inner.readback.as_ref())
             .is_some_and(|(core, page)| {
                 core.write_presented(whole, page.as_slice(), bytes_per_row)
@@ -3660,10 +3681,19 @@ fn core_lockable_rt_read_back(
     let pitch = mtld3d_core::format::linear_row_pitch(inner.standalone_width, bpp) as usize;
     // SAFETY: null, or the surface's live owning device, which outlives it and is a different
     // allocation from the staging borrowed below.
-    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
-    let read = core
+    let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
+        return false;
+    };
+    if dev.encoder_status().is_err() {
+        return false;
+    }
+    let read = dev
+        .core_mut()
         .zip(inner.system_memory.as_mut())
         .is_some_and(|(core, page)| core.read_back(target, page.as_mut_slice(), pitch));
+    if dev.encoder_status().is_err() {
+        return false;
+    }
     if !read {
         log::error!(target: LOG_TARGET,
             "d3d9 core: a CPU read of a lockable render target did not read texture {:#x} back → INVALIDCALL",
@@ -3697,8 +3727,14 @@ fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId
     };
     // SAFETY: null, or the surface's live owning device, which outlives it and is a different
     // allocation from the staging.
-    let core = unsafe { inner.device_inner.as_mut() }.and_then(DeviceInner::core_mut);
-    let uploaded = core
+    let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
+        return;
+    };
+    if dev.latched_encoder_status().is_err() {
+        return;
+    }
+    let uploaded = dev
+        .core_mut()
         .zip(inner.system_memory.as_ref())
         .is_some_and(|(core, page)| {
             core.texture_upload(

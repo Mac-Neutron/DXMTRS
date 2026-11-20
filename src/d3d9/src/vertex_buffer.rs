@@ -1172,16 +1172,21 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
     // count.
     #[cfg(feature = "core-runtime")]
     if on_core_device(inner.device_inner) {
-        if matches!(inner.map_mode, BufferMapMode::Staged) && !inner.backing.may_widen_upload() {
+        if matches!(inner.map_mode, BufferMapMode::Staged) && inner.dirty.span().is_some() {
             // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
             // finalizer relies on); nothing else of it is borrowed in this entry point.
             let dev = unsafe { &mut *inner.device_inner };
-            let ignore = dev.config().buffer_ignore_lock_bounds;
-            if let Some(core) = dev.core_mut()
-                && !inner.core_flush(core, ignore)
-            {
-                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                    "d3d9 core: a re-created vertex buffer's window did not upload at its Unlock; the next draw uploads it");
+            if let Err(hr) = dev.encoder_status() {
+                return hr;
+            }
+            if !inner.backing.may_widen_upload() {
+                let ignore = dev.config().buffer_ignore_lock_bounds;
+                if let Some(core) = dev.core_mut()
+                    && !inner.core_flush(core, ignore)
+                {
+                    mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                        "d3d9 core: a re-created vertex buffer's window did not upload at its Unlock; the next draw uploads it");
+                }
             }
         }
         return D3D_OK;

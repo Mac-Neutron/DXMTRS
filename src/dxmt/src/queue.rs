@@ -23,11 +23,14 @@ use std::{
 
 use dxmt_util::sync::{self, CpuFence, lock};
 use winemetal_sys::{
-    MTLCommandBuffer_commit, MTLCommandBuffer_encodeWaitForEvent, MTLCommandBuffer_status,
-    MTLCommandBuffer_waitUntilCompleted, MTLCommandQueue_commandBuffer, MTLDevice_newCommandQueue,
-    MTLDevice_newSharedEvent, MTLSharedEvent_signaledValue, Obj, Pool, SharedEventListener_create,
-    SharedEventListener_destroy, SharedEventListener_start,
-    wire::WMT_COMMAND_BUFFER_STATUS_SCHEDULED,
+    MTLCommandBuffer_commit, MTLCommandBuffer_encodeWaitForEvent, MTLCommandBuffer_error,
+    MTLCommandBuffer_status, MTLCommandBuffer_waitUntilCompleted, MTLCommandQueue_commandBuffer,
+    MTLDevice_newCommandQueue, MTLDevice_newSharedEvent, MTLSharedEvent_signaledValue, Obj, Pool,
+    SharedEventListener_create, SharedEventListener_destroy, SharedEventListener_start,
+    wire::{
+        WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMT_COMMAND_BUFFER_STATUS_ERROR,
+        WMT_COMMAND_BUFFER_STATUS_SCHEDULED,
+    },
 };
 
 use crate::{
@@ -288,6 +291,7 @@ struct Shared {
     device: Option<Obj>,
     queue: Option<Obj>,
     frame_latency: CpuFence,
+    has_error: AtomicBool,
     initializer: ResourceInitializer,
     statistics: Mutex<Container>,
 }
@@ -371,6 +375,7 @@ impl Queue {
                 device: unsafe { Obj::retain(device.handle()) },
                 queue,
                 frame_latency: CpuFence::new(0),
+                has_error: AtomicBool::new(false),
                 initializer: ResourceInitializer::new(device),
                 statistics: Mutex::new(Container::default()),
             }),
@@ -492,6 +497,15 @@ impl Queue {
     #[must_use]
     pub fn coherent_seq(&self) -> u64 {
         self.shared.ring.coherent()
+    }
+
+    /// Whether any finished Metal command buffer on this queue failed.
+    ///
+    /// Latches true permanently once the finish thread observes a nil or non-completed
+    /// command buffer; chunks continue retiring normally so callers never hang.
+    #[must_use]
+    pub fn has_error(&self) -> bool {
+        self.shared.has_error.load(Ordering::Acquire)
     }
 
     /// Blocks until chunk `seq` is retired.
@@ -687,7 +701,6 @@ fn encode(shared: &Shared, encoder: &mut Encoder, event: u64) {
 }
 
 /// `dxmt-finish-thread`: waits for each chunk's command buffer, then retires the chunk.
-// ponytail: no device-error report yet: the core has no log to write it to.
 fn finish(shared: &Shared) {
     sync::set_time_critical();
     let mut seq = 1;
@@ -697,11 +710,29 @@ fn finish(shared: &Shared) {
         let chunk = unsafe { &mut *slot };
         if let Some(cmdbuf) = &chunk.cmdbuf {
             // SAFETY: a live command buffer the chunk holds.
-            let status = unsafe { MTLCommandBuffer_status(cmdbuf.handle()) };
+            let mut status = unsafe { MTLCommandBuffer_status(cmdbuf.handle()) };
             if status <= WMT_COMMAND_BUFFER_STATUS_SCHEDULED {
                 // SAFETY: a live command buffer the chunk holds.
                 unsafe { MTLCommandBuffer_waitUntilCompleted(cmdbuf.handle()) };
+                // SAFETY: the same live command buffer after completion.
+                status = unsafe { MTLCommandBuffer_status(cmdbuf.handle()) };
             }
+            if status != WMT_COMMAND_BUFFER_STATUS_COMPLETED
+                && !shared.has_error.swap(true, Ordering::AcqRel)
+            {
+                if status == WMT_COMMAND_BUFFER_STATUS_ERROR {
+                    log_command_buffer_error(cmdbuf.handle(), seq);
+                } else {
+                    crate::log::err(&format!(
+                        "dxmt queue: Metal command buffer {seq} finished with unexpected status \
+                         {status}"
+                    ));
+                }
+            }
+        } else if !shared.has_error.swap(true, Ordering::AcqRel) {
+            crate::log::err(&format!(
+                "dxmt queue: Metal command buffer {seq} allocation returned nil"
+            ));
         }
         if chunk.frame_latency != NO_FRAME {
             shared.frame_latency.signal(chunk.frame_latency);
@@ -709,6 +740,30 @@ fn finish(shared: &Shared) {
         chunk.reset();
         shared.ring.finish(seq);
         seq += 1;
+    }
+}
+
+fn log_command_buffer_error(cmdbuf: u64, seq: u64) {
+    let _pool = Pool::new();
+    // SAFETY: `cmdbuf` is a live `MTLCommandBuffer`; `MTLCommandBuffer_error` returns a +0
+    // autoreleased `NSError` or nil.
+    let raw = unsafe { MTLCommandBuffer_error(cmdbuf) };
+    // SAFETY: `raw` is nil or a live `NSError` kept alive by `_pool` until this call returns.
+    if let Some(err) = unsafe { Obj::retain(raw) } {
+        let desc = crate::library::description(&err);
+        if desc.is_empty() {
+            crate::log::err(&format!(
+                "dxmt queue: Metal command buffer {seq} completed with error status"
+            ));
+        } else {
+            crate::log::err(&format!(
+                "dxmt queue: Metal command buffer {seq} completed with error: {desc}"
+            ));
+        }
+    } else {
+        crate::log::err(&format!(
+            "dxmt queue: Metal command buffer {seq} completed with error status"
+        ));
     }
 }
 

@@ -185,6 +185,12 @@ impl CoreDevice {
     pub const fn target_gen(&self) -> u64 {
         self.target_gen
     }
+
+    /// Whether any finished Metal command buffer on this device's queue failed.
+    #[must_use]
+    pub fn has_error(&self) -> bool {
+        self.device.queue().has_error()
+    }
 }
 
 impl Drop for CoreDevice {

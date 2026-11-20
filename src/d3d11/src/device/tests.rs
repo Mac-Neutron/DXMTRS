@@ -137,6 +137,11 @@ extern "C-unwind" fn fake_cmdbuf_status(_cmdbuf: u64) -> u64 {
 #[unsafe(export_name = "MTLCommandBuffer_waitUntilCompleted")]
 extern "C-unwind" fn fake_cmdbuf_wait(_cmdbuf: u64) {}
 
+#[unsafe(export_name = "MTLCommandBuffer_error")]
+const extern "C-unwind" fn fake_cmdbuf_error(_cmdbuf: u64) -> u64 {
+    0
+}
+
 #[unsafe(export_name = "SharedEventListener_create")]
 extern "C-unwind" fn fake_listener_create() -> u64 {
     1

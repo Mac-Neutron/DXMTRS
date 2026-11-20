@@ -177,3 +177,23 @@ fn a_vertex_descriptor_prints_its_used_attributes_and_layouts() {
         ],
     );
 }
+
+/// Arming `fail_next_command_buffer` makes the next finished buffer latch `Queue::has_error`.
+#[test]
+fn fail_next_command_buffer_latches_queue_has_error() {
+    const DEVICE: u64 = 0xf5;
+    let mut device = Device::headless(DEVICE, QueueConfig::default());
+    let queue = device.queue_mut();
+    assert!(!queue.has_error());
+
+    let seq1 = queue.current_seq();
+    queue.commit();
+    queue.wait_cpu(seq1);
+    assert!(!queue.has_error());
+
+    dxmt_fakes::fail_next_command_buffer(DEVICE);
+    let seq2 = queue.current_seq();
+    queue.commit();
+    queue.wait_cpu(seq2);
+    assert!(queue.has_error());
+}

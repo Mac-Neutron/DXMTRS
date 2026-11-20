@@ -100,6 +100,9 @@ pub fn clear(
     if depth_flags != 0 && !dev.depth_stencil_bound() {
         return Some(D3DERR_INVALIDCALL);
     }
+    if dev.latched_encoder_status().is_err() {
+        return Some(D3D_OK);
+    }
     let scissor_on = dev.render_state(D3DRS_SCISSORTESTENABLE as usize) != 0;
     let regions = clear_regions(
         (!rects.is_null()).then(|| super::clear_target_rects(count, rects)),
@@ -216,34 +219,45 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
     if reject.is_some() {
         return Some(D3DERR_INVALIDCALL);
     }
-    let core = dev.core.as_deref_mut()?;
-    // SAFETY: null, or the source level's parent texture, live while the level is and distinct
-    // from the device.
-    if let Some(parent) = unsafe { src.parent_texture().as_mut() } {
-        // Its core texture exists from here, with every CPU write so far uploaded.
-        let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+    if let Err(hr) = dev.encoder_status() {
+        return Some(hr);
     }
-    let ok = core_read_into(&dst, &desc, |bytes, pitch| {
-        core.read_back(source, bytes, pitch)
-    });
-    Some(if ok { D3D_OK } else { D3DERR_INVALIDCALL })
+    let ok = {
+        let core = dev.core.as_deref_mut()?;
+        // SAFETY: null, or the source level's parent texture, live while the level is and distinct
+        // from the device.
+        if let Some(parent) = unsafe { src.parent_texture().as_mut() } {
+            // Its core texture exists from here, with every CPU write so far uploaded.
+            let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+        }
+        core_read_pages(&desc, |bytes, pitch| core.read_back(source, bytes, pitch))
+    };
+    if let Err(hr) = dev.encoder_status() {
+        return Some(hr);
+    }
+    if ok {
+        // A SYSTEMMEM texture's level re-arms its dirty state, as mtld3d's read-back does.
+        dst.note_system_memory_written();
+        Some(D3D_OK)
+    } else {
+        Some(D3DERR_INVALIDCALL)
+    }
 }
 
-/// Runs a core read into a system-memory destination's pages, then re-arms the destination.
+/// Runs a core read into a system-memory destination's pages.
 ///
 /// `desc` is what `dst.system_memory_blit_dst()` answered in the same call; `read` gets its pages
 /// and its row pitch. The one place those pages become a slice, for `GetRenderTargetData` and
-/// `GetFrontBufferData` (DXMTRS C4c-3a). False, and nothing re-armed, when `read` is false or
-/// the pages do not fit this process's addresses; the caller logs and answers.
-pub fn core_read_into(
-    dst: &Direct3DSurface9,
+/// `GetFrontBufferData` (DXMTRS C4c-3a). False when `read` is false or the pages do not fit this
+/// process's addresses; the caller checks device status, re-arms the destination, and answers.
+pub fn core_read_pages(
     desc: &SystemMemoryDst,
     read: impl FnOnce(&mut [u8], usize) -> bool,
 ) -> bool {
     let pages = usize::try_from(desc.ptr)
         .ok()
         .zip(usize::try_from(desc.len).ok());
-    let ok = pages.is_some_and(|(addr, len)| {
+    pages.is_some_and(|(addr, len)| {
         let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
         // SAFETY: `len` bytes at `ptr` are `dst`'s own pages (a standalone surface's backing or
         // its system-memory texture level's staging), live while `dst` is, their address exposed
@@ -252,12 +266,7 @@ pub fn core_read_into(
         // this call alone, and `read` reaches only the core device.
         let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
         read(bytes, desc.bytes_per_row as usize)
-    });
-    if ok {
-        // A SYSTEMMEM texture's level re-arms its dirty state, as mtld3d's read-back does.
-        dst.note_system_memory_written();
-    }
-    ok
+    })
 }
 
 /// A colour `StretchRect` past mtld3d's gates, each pair the source's then the destination's.
@@ -371,8 +380,8 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             })
         });
         let destination = dst.core_target();
-        let core = core_device(this).and_then(DeviceInner::core_mut);
-        let (Some(source), Some(destination), Some(core)) = (source, destination, core) else {
+        let dev = core_device(this);
+        let (Some(source), Some(destination), Some(dev)) = (source, destination, dev) else {
             log::error!(target: crate::LOG_TARGET,
                 "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
             return D3DERR_INVALIDCALL;
@@ -387,6 +396,14 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         if one_texture && route == SameSurfaceRoute::Skip {
             return D3D_OK;
         }
+        if dev.latched_encoder_status().is_err() {
+            return D3D_OK;
+        }
+        let Some(core) = dev.core_mut() else {
+            log::error!(target: crate::LOG_TARGET,
+                "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
+            return D3DERR_INVALIDCALL;
+        };
         let planar = mtld3d_core::stretch_rect::is_planar_yuv(src_info.format);
         // SAFETY: null, or the source level's parent texture, live while the level is and
         // distinct from the device.
@@ -695,14 +712,18 @@ pub fn stretch_depth(
     if source.is_some() && source == destination {
         return D3D_OK;
     }
-    let core = core_device(this).and_then(DeviceInner::core_mut);
-    let recorded = match (source, destination, core) {
-        (Some(source), Some(destination), Some(core)) => {
-            if resolve {
-                core.depth_resolve(source, destination)
-            } else {
-                core.copy_depth(source, destination)
+    let recorded = match (source, destination, core_device(this)) {
+        (Some(source), Some(destination), Some(dev)) => {
+            if dev.latched_encoder_status().is_err() {
+                return D3D_OK;
             }
+            dev.core_mut().is_some_and(|core| {
+                if resolve {
+                    core.depth_resolve(source, destination)
+                } else {
+                    core.copy_depth(source, destination)
+                }
+            })
         }
         _ => false,
     };
@@ -754,18 +775,23 @@ pub fn resz(dev: &mut DeviceInner) -> Result<(), i32> {
         return Ok(());
     }
     // Always a core device: the caller's test.
-    let Some(core) = dev.core_mut() else {
-        return Ok(());
-    };
-    let Some(source) = core.depth() else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "d3d9 core: RESZ skipped: no depth-stencil bound");
+    let Some(source) = dev.core_mut().and_then(|core| core.depth()) else {
+        if dev.is_core() {
+            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                "d3d9 core: RESZ skipped: no depth-stencil bound");
+        }
         return Ok(());
     };
     if texture.d3d_usage() & D3DUSAGE_DYNAMIC != 0 {
         refuse_under_core("IDirect3DDevice9::SetRenderState(RESZ) (into a dynamic depth texture)");
         return Err(D3DERR_NOTAVAILABLE);
     }
+    if dev.latched_encoder_status().is_err() {
+        return Ok(());
+    }
+    let Some(core) = dev.core_mut() else {
+        return Ok(());
+    };
     // A depth texture never bound or sampled gets its core form here.
     let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
     let destination = DepthRef {
@@ -805,7 +831,15 @@ pub fn color_fill(
     // SAFETY: the caller's IDirect3DSurface9*, checked non-null by the entry point and live for
     // the call per the ABI.
     let surface = unsafe { &*surf };
-    let (Some(target), Some(core)) = (surface.core_target(), dev.core_mut()) else {
+    let Some(target) = surface.core_target() else {
+        log::error!(target: crate::LOG_TARGET,
+            "d3d9 core: ColorFill of a surface that is no colour target of the core → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    };
+    if dev.latched_encoder_status().is_err() {
+        return D3D_OK;
+    }
+    let Some(core) = dev.core_mut() else {
         log::error!(target: crate::LOG_TARGET,
             "d3d9 core: ColorFill of a surface that is no colour target of the core → INVALIDCALL");
         return D3DERR_INVALIDCALL;
@@ -854,6 +888,9 @@ pub fn update_color_target(
     row_bytes: usize,
 ) -> i32 {
     let target = surface.core_target();
+    if target.is_some() && dev.latched_encoder_status().is_err() {
+        return D3D_OK;
+    }
     let written = match (target, dev.core_mut()) {
         (Some(TargetRef::BackBuffer), Some(core)) => {
             let rect = DirtyRect {
@@ -974,6 +1011,9 @@ fn resolve_shape(
         && whole(&into, rects[1]);
     if !shaped {
         return None;
+    }
+    if dev.latched_encoder_status().is_err() {
+        return Some(());
     }
     let core = dev.core.as_deref_mut()?;
     // SAFETY: null, or the destination level's parent texture, live while the level is and

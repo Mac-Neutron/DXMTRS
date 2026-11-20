@@ -4412,10 +4412,8 @@ unsafe fn hand_back_cached_surface(cached: u64, out: *mut *mut c_void) {
 /// (`core_read_subresource_back`, DXMTRS C4c-3a).
 fn materialize_subresource_from_gpu(ti: &mut TextureInner, face: u32, level: usize) -> bool {
     #[cfg(feature = "core-runtime")]
-    if ti.device_inner != 0
-        && let Some(core) = DeviceInner::from_ptr(ti.device_inner).core_mut()
-    {
-        return core_read_subresource_back(ti, core, face, level);
+    if ti.device_inner != 0 && DeviceInner::from_ptr(ti.device_inner).is_core() {
+        return core_read_subresource_back(ti, DeviceInner::from_ptr(ti.device_inner), face, level);
     }
     let (width, height) = (ti.mip_width(level), ti.mip_height(level));
     let bytes_per_row = ti.mip_bytes_per_row(level);
@@ -4583,10 +4581,16 @@ fn materialize_subresource_from_gpu(ti: &mut TextureInner, face: u32, level: usi
 #[cfg(feature = "core-runtime")]
 fn core_read_subresource_back(
     ti: &mut TextureInner,
-    core: &mut d3d9_rt::device::CoreDevice,
+    dev: &mut DeviceInner,
     face: u32,
     level: usize,
 ) -> bool {
+    if dev.encoder_status().is_err() {
+        return false;
+    }
+    let Some(core) = dev.core_mut() else {
+        return false;
+    };
     let _ = core_flush_dirty(ti, core);
     let pitch = ti.mip_bytes_per_row(level) as usize;
     let target = u32::try_from(level)
@@ -4608,6 +4612,9 @@ fn core_read_subresource_back(
         let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
         core.read_back(target, bytes, pitch)
     });
+    if dev.encoder_status().is_err() {
+        return false;
+    }
     if !read {
         log::error!(target: crate::LOG_TARGET,
             "d3d9 core: face {face} level {level} of texture {:#x} did not read back → \

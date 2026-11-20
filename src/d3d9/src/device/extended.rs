@@ -232,11 +232,6 @@ pub extern "system" fn check_device_state(this: *mut c_void, _window: *mut c_voi
         "IDirect3DDevice9Ex::CheckDeviceState: reports the failure latch alone; no occlusion or \
          mode-change status"
     );
-    // A core device has no failure latch (DXMTRS C4c-6c).
-    #[cfg(feature = "core-runtime")]
-    if obj.inner().is_core() {
-        return D3D_OK;
-    }
     match obj.inner().encoder_status() {
         Ok(()) => D3D_OK,
         Err(hr) => obj.inner().state_code(hr),

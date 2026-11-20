@@ -4,21 +4,70 @@
 //! it. Each call goes to the hook its thread set with [`log_object_calls`], and nowhere when the
 //! thread set none, so a test sees the calls of its own threads only.
 
-use core::cell::Cell;
+use core::{
+    cell::Cell,
+    sync::atomic::{AtomicU64, Ordering},
+};
+use std::sync::{Mutex, PoisonError};
 
 /// What a hook is handed: the call's name and the object.
 pub type Hook = fn(&'static str, u64);
+
+/// Thread-local hook for `NSAutoreleasePool_alloc_init`.
+pub type PoolHook = fn() -> u64;
+
+/// Thread-local hook for `MTLCommandQueue_commandBuffer`.
+pub type CommandBufferHook = fn(u64) -> u64;
+
+/// Global handler for default `MTLCommandQueue_commandBuffer` allocations.
+pub type QueueCommandBufferHandler = fn(u64, u64) -> u64;
+
+/// Thread-local hook for `NSObject_description` and `NSString` readback.
+pub type DescriptionHook = fn(u64) -> Option<&'static str>;
+
+static NEXT_CMDBUF: AtomicU64 = AtomicU64::new(0x8000_0001);
+static QUEUE_CMDBUF_HANDLER: Mutex<Option<QueueCommandBufferHandler>> = Mutex::new(None);
 
 thread_local! {
     /// The calling thread's hook.
     ///
     /// A thread-local, because winemetal's C functions reach no object of the test's.
     static HOOK: Cell<Option<Hook>> = const { Cell::new(None) };
+    static POOL_HOOK: Cell<Option<PoolHook>> = const { Cell::new(None) };
+    static COMMAND_BUFFER_HOOK: Cell<Option<CommandBufferHook>> = const { Cell::new(None) };
+    static DESCRIPTION_HOOK: Cell<Option<DescriptionHook>> = const { Cell::new(None) };
 }
 
 /// Sends this thread's `NSObject_retain` and `NSObject_release` calls to `hook`.
 pub fn log_object_calls(hook: Hook) {
     HOOK.set(Some(hook));
+}
+
+/// Clears this thread's `NSObject_retain` and `NSObject_release` hook.
+pub fn clear_object_calls_hook() {
+    HOOK.set(None);
+}
+
+/// Routes this thread's `NSAutoreleasePool_alloc_init` calls through `hook`.
+pub fn on_autorelease_pool(hook: PoolHook) {
+    POOL_HOOK.set(Some(hook));
+}
+
+/// Routes this thread's `MTLCommandQueue_commandBuffer` calls through `hook`.
+pub fn on_command_buffer(hook: CommandBufferHook) {
+    COMMAND_BUFFER_HOOK.set(Some(hook));
+}
+
+/// Registers the process-wide handler notified for default `MTLCommandQueue_commandBuffer` calls.
+pub fn register_command_buffer_handler(handler: QueueCommandBufferHandler) {
+    *QUEUE_CMDBUF_HANDLER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(handler);
+}
+
+/// Routes this thread's `NSObject_description` and `NSString` queries through `hook`.
+pub fn on_description(hook: Option<DescriptionHook>) {
+    DESCRIPTION_HOOK.set(hook);
 }
 
 fn call(name: &'static str, object: u64) {
@@ -47,24 +96,62 @@ extern "C-unwind" fn fake_new_library(_dev: u64, _data: u64, _err: *mut u64) -> 
     0x7302
 }
 
+#[unsafe(export_name = "NSAutoreleasePool_alloc_init")]
+extern "C-unwind" fn fake_autorelease_pool() -> u64 {
+    POOL_HOOK.get().map_or(0x730e, |hook| hook())
+}
+
+#[unsafe(export_name = "MTLCommandQueue_commandBuffer")]
+extern "C-unwind" fn fake_command_buffer(queue: u64) -> u64 {
+    if let Some(hook) = COMMAND_BUFFER_HOOK.get() {
+        return hook(queue);
+    }
+    let cmdbuf = NEXT_CMDBUF.fetch_add(1, Ordering::Relaxed);
+    let handler = *QUEUE_CMDBUF_HANDLER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    handler.map_or(cmdbuf, |h| h(queue, cmdbuf))
+}
+
 #[unsafe(export_name = "NSObject_description")]
-extern "C-unwind" fn fake_description(_obj: u64) -> u64 {
-    0
+extern "C-unwind" fn fake_description(object: u64) -> u64 {
+    DESCRIPTION_HOOK
+        .get()
+        .and_then(|hook| hook(object))
+        .map_or(0, |_| object)
 }
 
 #[unsafe(export_name = "NSString_lengthOfBytesUsingEncoding")]
-extern "C-unwind" fn fake_nsstring_len(_str: u64, _enc: u64) -> u64 {
-    0
+extern "C-unwind" fn fake_nsstring_len(string: u64, _encoding: u64) -> u64 {
+    DESCRIPTION_HOOK
+        .get()
+        .and_then(|hook| hook(string))
+        .map_or(0, |text| u64::try_from(text.len()).unwrap_or(0))
 }
 
 #[unsafe(export_name = "NSString_getCString")]
 extern "C-unwind" fn fake_nsstring_get_cstring(
-    _str: u64,
-    _buf: *mut core::ffi::c_char,
-    _max: u64,
-    _enc: u64,
+    string: u64,
+    buffer: *mut core::ffi::c_char,
+    max: u64,
+    _encoding: u64,
 ) -> u32 {
-    0
+    let Some(text) = DESCRIPTION_HOOK.get().and_then(|hook| hook(string)) else {
+        return 0;
+    };
+    let max_len = usize::try_from(max).unwrap_or(usize::MAX);
+    if buffer.is_null() || max_len == 0 {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let copy_len = bytes.len().min(max_len - 1);
+    // SAFETY: `buffer` is non-null with room for `max_len` bytes (`copy_len + 1 <= max_len`).
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), copy_len) };
+    // SAFETY: `copy_len < max_len`, so offset `copy_len` is within the caller's buffer.
+    let end = unsafe { buffer.add(copy_len) };
+    // SAFETY: `end` points to a writable byte within the caller's buffer.
+    unsafe { end.write(0) };
+    1
 }
 
 #[unsafe(export_name = "NSString_string")]

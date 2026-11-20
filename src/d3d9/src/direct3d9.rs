@@ -2480,10 +2480,16 @@ fn create_core_device(
         display_sinks: Box::new(crate::cursor::DisplaySinks::new()),
         fullscreen,
         config: Arc::clone(cfg),
-        initial_flags: if extended {
-            crate::device::DeviceFlags::EXTENDED
-        } else {
-            crate::device::DeviceFlags::empty()
+        initial_flags: {
+            let mut flags = if extended {
+                crate::device::DeviceFlags::EXTENDED
+            } else {
+                crate::device::DeviceFlags::empty()
+            };
+            if cfg.fail_next_submit {
+                flags.insert(crate::device::DeviceFlags::FAIL_NEXT_SUBMIT);
+            }
+            flags
         },
     });
     let dev_ptr = Box::into_raw(Box::new(dev));

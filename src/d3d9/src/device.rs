@@ -1,4 +1,6 @@
 use core::{ffi::c_void, mem::MaybeUninit, ops::DerefMut, ptr::NonNull};
+#[cfg(feature = "core-runtime")]
+use std::sync::atomic::AtomicI32;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU32, AtomicU64, Ordering},
@@ -364,6 +366,9 @@ bitflags::bitflags! {
         /// nothing and owes nothing, so this is what quiets its retries; the
         /// next success clears it and says so at info.
         const RESET_FAILURE_LOGGED = 1 << 6;
+        /// Set at core creation for `debug.failNextSubmit`; consumed on the first core Present.
+        #[cfg(feature = "core-runtime")]
+        const FAIL_NEXT_SUBMIT = 1 << 7;
     }
 }
 
@@ -528,6 +533,9 @@ pub struct DeviceInner {
     /// A core device's programs by id, for its shaders to share one `Arc` of the same tokens.
     #[cfg(feature = "core-runtime")]
     programs: rustc_hash::FxHashMap<ProgramId, std::sync::Weak<[u32]>>,
+    /// First latched failure on the core runtime (`D3D_OK` until a failure).
+    #[cfg(feature = "core-runtime")]
+    core_failure: AtomicI32,
     /// Shared with the encoder thread and the unix completion handler.
     ///
     /// The frame's submit seq is stamped in `stamp_and_swap`; this atomic
@@ -1041,16 +1049,25 @@ impl DeviceInner {
             return D3DERR_INVALIDCALL;
         }
         #[cfg(feature = "core-runtime")]
-        if let Some(core) = self.core_mut() {
+        if self.is_core() {
+            if let Err(hr) = self.encoder_status() {
+                return hr;
+            }
             let whole = DirtyRect::full(source.width, source.height);
-            let read = core_arms::core_read_into(dst_surf, &dst_desc, |bytes, pitch| {
-                core.read_presented(whole, bytes, pitch)
+            let read = self.core_mut().is_some_and(|core| {
+                core_arms::core_read_pages(&dst_desc, |bytes, pitch| {
+                    core.read_presented(whole, bytes, pitch)
+                })
             });
+            if let Err(hr) = self.encoder_status() {
+                return hr;
+            }
             if !read {
                 error!(target: LOG_TARGET,
                     "d3d9 core: GetFrontBufferData did not read the back buffer → INVALIDCALL");
                 return D3DERR_INVALIDCALL;
             }
+            dst_surf.note_system_memory_written();
             return D3D_OK;
         }
         let hr = blit_texture_to_systemmem(
@@ -2243,12 +2260,37 @@ impl DeviceInner {
         // whichever entry came here, with the device's own present parameters: an additional
         // swap chain's `Present` included, as on mtld3d.
         #[cfg(feature = "core-runtime")]
-        if let Some(core) = self.core.as_deref_mut() {
-            return core_arms::present(core, &self.present_params);
+        if self.encoder.get().is_none() {
+            if let Err(hr) = self.encoder_status() {
+                return hr;
+            }
+            if self.needs_reset() {
+                return mtld3d_types::D3DERR_DEVICENOTRESET;
+            }
+            if self.flags.contains(DeviceFlags::FAIL_NEXT_SUBMIT) {
+                self.flags.remove(DeviceFlags::FAIL_NEXT_SUBMIT);
+                error!(
+                    target: LOG_TARGET,
+                    "d3d9 core: debug.failNextSubmit refused the frame submission"
+                );
+                return self.record_core_failure(
+                    mtld3d_types::D3DERR_DEVICELOST,
+                    "debug.failNextSubmit refused the submission",
+                );
+            }
+            if let Some(core) = self.core.as_deref_mut() {
+                let _ = core_arms::present(core, &self.present_params);
+            }
+            return self
+                .encoder_status()
+                .map_or_else(|hr| hr, |()| mtld3d_types::D3D_OK);
         }
-        if let Err(hr) = self.encoder.status() {
+        if let Err(hr) = self.encoder_status() {
             self.discard_unsendable_frame();
             return hr;
+        }
+        if self.needs_reset() {
+            return mtld3d_types::D3DERR_DEVICENOTRESET;
         }
         // Both `IDirect3DDevice9::Present` and the swap chain's land here, so
         // the diagnostics that run once per frame poll from this point.
@@ -2350,23 +2392,51 @@ impl DeviceInner {
     }
 
     pub fn encoder_status(&self) -> Result<(), i32> {
+        #[cfg(feature = "core-runtime")]
+        if self.encoder.get().is_none() {
+            mtld3d_core::encoder_failure::known_status(&self.core_failure)?;
+            if self
+                .core
+                .as_deref()
+                .is_some_and(d3d9_rt::device::CoreDevice::has_error)
+            {
+                return Err(self.record_core_failure(
+                    mtld3d_types::D3DERR_DEVICELOST,
+                    "a Metal command buffer completed with an error",
+                ));
+            }
+            return Ok(());
+        }
         self.recording_status()?;
         self.encoder.status()
     }
 
     /// Stop capture after a known failure without polling native work per draw.
     fn known_encoder_status(&self) -> Result<(), i32> {
+        #[cfg(feature = "core-runtime")]
+        if self.encoder.get().is_none() {
+            return mtld3d_core::encoder_failure::known_status(&self.core_failure);
+        }
         self.recording_status()?;
         self.encoder.known_status()
     }
 
-    /// Stop a bound draw after a failure the device has already latched.
+    /// Stop a bound draw or non-error command after a failure the device has already latched.
     ///
     /// A capture error still latched only in the frame recorder is reported by the draw's own
     /// record, which returns that error, or by `recording_status` on a path that records
     /// nothing. Either way it maps through `capture_failure`, which latches the device failure.
-    fn latched_encoder_status(&self) -> Result<(), i32> {
+    pub fn latched_encoder_status(&self) -> Result<(), i32> {
+        #[cfg(feature = "core-runtime")]
+        if self.encoder.get().is_none() {
+            return mtld3d_core::encoder_failure::known_status(&self.core_failure);
+        }
         self.encoder.known_status()
+    }
+
+    #[cfg(feature = "core-runtime")]
+    fn record_core_failure(&self, status: i32, cause: &str) -> i32 {
+        mtld3d_core::encoder_failure::record_failure(&self.core_failure, status, cause)
     }
 
     /// Report capture failures without polling workers again within the same draw.
@@ -3492,6 +3562,9 @@ impl DeviceInner {
     /// Core-runtime implementation of [`Self::apply_auto_resize`].
     #[cfg(feature = "core-runtime")]
     fn apply_core_auto_resize(&mut self, new_width: u32, new_height: u32) {
+        if self.encoder_status().is_err() {
+            return;
+        }
         let Some(core) = self.core.as_deref_mut() else {
             return;
         };
@@ -3813,6 +3886,8 @@ impl Direct3DDevice9 {
             core_auto_depth: None,
             #[cfg(feature = "core-runtime")]
             programs: rustc_hash::FxHashMap::default(),
+            #[cfg(feature = "core-runtime")]
+            core_failure: AtomicI32::new(D3D_OK),
             coherent_seq,
             upload_coherent_seq,
             failed_submit_seq,
@@ -5082,13 +5157,7 @@ extern "system" fn device_test_cooperative_level(this: *mut c_void) -> i32 {
     if object.as_ref().is_some_and(|obj| obj.inner().is_extended()) {
         return D3D_OK;
     }
-    // A core device has no failure latch (DXMTRS C4c-6c): it answers the `Reset` it owes alone.
-    #[cfg(feature = "core-runtime")]
-    let core = crate::device::is_core_device(this);
-    #[cfg(not(feature = "core-runtime"))]
-    let core = false;
     if let Some(obj) = &object
-        && !core
         && let Err(hr) = obj.inner().encoder_status()
     {
         return hr;
@@ -5501,8 +5570,8 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
     };
     let dev = obj.inner();
     // A core device (DXMTRS C4c-6c) takes the core's forms of the steps that reach mtld3d's
-    // recorder: no failure latch, no frame to deliver or reseed, its back buffer, window and auto
-    // depth-stencil made again through `CoreDevice`.
+    // recorder: no frame to deliver or reseed, its back buffer, window and auto depth-stencil
+    // made again through `CoreDevice`.
     #[cfg(feature = "core-runtime")]
     let core = dev.is_core();
     #[cfg(not(feature = "core-runtime"))]
@@ -5554,7 +5623,7 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         );
         return D3DERR_INVALIDCALL;
     }
-    if !core && let Err(hr) = dev.encoder_status() {
+    if let Err(hr) = dev.encoder_status() {
         return hr;
     }
 
@@ -6488,9 +6557,6 @@ fn present_impl(
         return D3DERR_INVALIDCALL;
     };
     let dev = obj.inner();
-    if dev.needs_reset() {
-        return mtld3d_types::D3DERR_DEVICENOTRESET;
-    }
 
     mtld3d_shared::crumb!("d3d9:present");
     let hr = dev.present();
@@ -13721,7 +13787,12 @@ extern "system" fn device_draw_primitive_up(
         vertex_stride,
     ) {
         // D3D9 resets stream source 0 to (NULL, 0, 0) after DrawPrimitiveUP.
-        if hr == D3D_OK {
+        if hr == D3D_OK
+            || matches!(
+                hr,
+                mtld3d_types::D3DERR_DEVICELOST | mtld3d_types::E_OUTOFMEMORY
+            )
+        {
             dev.bound_buffers_mut().reset_stream0();
         }
         return hr;
@@ -14883,8 +14954,13 @@ extern "system" fn device_draw_indexed_primitive_up(
         },
     ) {
         // D3D9 resets stream source 0 to (NULL, 0, 0) and the index buffer to NULL after a
-        // successful DrawIndexedPrimitiveUP.
-        if hr == D3D_OK {
+        // DrawIndexedPrimitiveUP.
+        if hr == D3D_OK
+            || matches!(
+                hr,
+                mtld3d_types::D3DERR_DEVICELOST | mtld3d_types::E_OUTOFMEMORY
+            )
+        {
             let bound = dev.bound_buffers_mut();
             bound.reset_stream0();
             bound.replace_index_buffer(core::ptr::null_mut());
@@ -15097,14 +15173,18 @@ extern "system" fn device_process_vertices(
     }
     let (_, dst_stride) = mtld3d_core::convert::fvf_to_elements(dst_fvf);
     let dst_offset = (dst_index.saturating_mul(dst_stride)) as usize;
-    // A core device writes through its own buffer paths: no page box, stage upload or recorder
-    // status (DXMTRS C4c-7d-1).
+    // A core device writes through its own buffer paths and reports its core failure latch.
     #[cfg(feature = "core-runtime")]
-    if let Some(core) = dev.core_mut() {
-        dst_obj
-            .inner_mut()
-            .core_write_processed(dst_offset, &processed, core);
-        return D3D_OK;
+    if dev.is_core() {
+        if let Err(hr) = dev.encoder_status() {
+            return hr;
+        }
+        if let Some(core) = dev.core_mut() {
+            dst_obj
+                .inner_mut()
+                .core_write_processed(dst_offset, &processed, core);
+        }
+        return dev.encoder_status().map_or_else(|hr| hr, |()| D3D_OK);
     }
     dst_obj
         .inner_mut()
