@@ -10,8 +10,9 @@
 //! can retire, and hand over the last owner of its pages, after the
 //! texture that allocated them was released. The staging lane's contents
 //! still end with a device: `EncoderThread::shutdown` drains the lane once
-//! native destruction has retired every lease, and a texture detached from
-//! its device drops its staging instead of parking it. The drain empties
+//! native destruction has retired every lease, a core device's release,
+//! which has no encoder, drains it once the device is gone, and a texture
+//! detached from its device drops its staging instead of parking it. The drain empties
 //! the whole process-wide lane, so a device that is still alive loses its
 //! parked boxes too (warm pages, not correctness).
 //!

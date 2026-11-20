@@ -4786,6 +4786,11 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
         if let Some(core) = device_inner.core.take() {
             drop(core);
             drop(device_inner);
+            // The default runtime's encoder shutdown frees the parked texture staging at each
+            // teardown; leave the pool as it does, or a later texture's never-written texels can
+            // read the bytes of one released before. A parked box has no owner, so other live
+            // devices lose warm pages only.
+            crate::page_box_pool::PAGEBOX_POOL.drain_staging();
             obj.refcount = 0;
             release_parent(parent);
             return rc;
