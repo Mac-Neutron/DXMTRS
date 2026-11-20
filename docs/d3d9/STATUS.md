@@ -51,15 +51,17 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   samples), into level 0 of the depth texture bound at stage 0, at the call,
   and stores the state, as mtld3d does. A RESZ the core cannot do (no texture
   or one of no depth format at stage 0, no depth-stencil bound, a destination
-  of another size or pixel format, or the bound depth-stencil's own texture)
-  is skipped with one warning and answers `D3D_OK`. Three differences: with a
+  of another size or, from a one-sample source, of another pixel format) is
+  skipped with one warning and answers `D3D_OK`. Three differences: with a
   depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at stage 0 is
   refused by name with `D3DERR_NOTAVAILABLE` and the state is neither stored
   nor recorded into an open state block; a multisampled source of another
   pixel format than the destination's (D24X8, D16 or D32 into INTZ, D24S8 or
   D24FS8 into DF24 or DF16) is skipped with a warning, where mtld3d's transfer
-  converts it; and a multisampled source with a stencil plane is first copied
-  into a scratch texture the core makes at each such call.
+  converts it; and the bound depth-stencil's own texture at stage 0 is skipped
+  with a warning, where mtld3d copies the texture onto itself. A multisampled
+  source with a stencil plane is first copied into a scratch texture the core
+  makes at each such call.
 - On the core runtime `SetCursorProperties`, `SetCursorPosition` and
   `ShowCursor` answer as on mtld3d, through the same Win32 cursor, and the
   window subclass keeps the Direct3D cursor at the window's `WM_SETCURSOR` on
