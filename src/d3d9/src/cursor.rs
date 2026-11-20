@@ -15,6 +15,11 @@
 //! upscaled bitmap through the `SetCursorOverlay` thunk, `ShowCursor` ships the
 //! visibility, and the Win32 cursor this module realizes is a blank HCURSOR, so
 //! the `WindowServer` cursor plane never toggles on our account.
+//!
+//! **The core runtime.** A device of the core runtime runs the three entry
+//! points as they are, without the subclass (its `WM_SIZE` arm reaches
+//! mtld3d's recorder): a window class's own cursor comes back at the window's
+//! next `WM_SETCURSOR`, and the scale stays 1 (DXMTRS C4c-7a).
 
 use core::{
     ffi::c_void,
@@ -1235,11 +1240,6 @@ pub extern "system" fn device_set_cursor_properties(
     cursor_bitmap: *mut c_void,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetCursorProperties",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if cursor_bitmap.is_null() {
         warn!(target: LOG_TARGET, "reject SetCursorProperties(null bitmap) → INVALIDCALL");
@@ -1418,10 +1418,6 @@ pub extern "system" fn device_set_cursor_properties(
 
 pub extern "system" fn device_set_cursor_position(this: *mut c_void, x: i32, y: i32, _flags: u32) {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetCursorPosition"
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // The pre-check earns its keep: a `SetCursorPos` to the current position
     // still queues a `WM_MOUSEMOVE`, so skipping it keeps the game's message
@@ -1461,11 +1457,6 @@ pub extern "system" fn device_set_cursor_position(this: *mut c_void, x: i32, y: 
 
 pub extern "system" fn device_show_cursor(this: *mut c_void, show: i32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::ShowCursor",
-        0
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {

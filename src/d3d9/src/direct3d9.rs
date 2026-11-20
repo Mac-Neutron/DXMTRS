@@ -2466,7 +2466,8 @@ fn create_core_device(
             crate::device::DeviceFlags::empty()
         },
     });
-    // No cursor subclass: the core runtime has no cursor or window features yet (C4d).
+    // No cursor subclass: its `WM_SIZE` arm reaches mtld3d's recorder. The cursor calls answer
+    // without it (DXMTRS C4c-7a); the core runtime has no window features yet (C4d).
     let dev_ptr = Box::into_raw(Box::new(dev));
     // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
     let inner = unsafe { (*dev_ptr).inner() };

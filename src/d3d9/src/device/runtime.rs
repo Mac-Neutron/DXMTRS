@@ -2,9 +2,9 @@
 //!
 //! A device of mtld3d's runtime holds its encoder thread and its frame; a device of the core
 //! runtime holds a `d3d9_rt::CoreDevice` and neither of those ([`Mtld3dOnly::absent`]). The
-//! entry points the core runtime does not implement yet answer `D3DERR_NOTAVAILABLE` (or their
-//! return type's nothing) with one warning (`refuse_under_core`), before they reach mtld3d's
-//! recorder; [`Mtld3dOnly`] is the backstop behind them. In a build without `core-runtime` every
+//! entry points the core runtime does not implement yet answer `D3DERR_NOTAVAILABLE` with one
+//! warning (`refuse_under_core`), before they reach mtld3d's recorder; [`Mtld3dOnly`] is the
+//! backstop behind them. In a build without `core-runtime` every
 //! device is mtld3d's and [`Mtld3dOnly`] is its value.
 
 use core::ops::{Deref, DerefMut};

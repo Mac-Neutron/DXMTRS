@@ -36,7 +36,7 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
   `ValidateDevice` answers one pass for a state whose draw that runtime
   refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`,
-  among others: fullscreen devices, `ProcessVertices` and the cursor calls.
+  among others: fullscreen devices and `ProcessVertices`.
 - On the core runtime the gamma ramp, the frame latency and the extended
   device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
   `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp is stored and
@@ -58,6 +58,14 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   INTZ, D24S8 or D24FS8 into DF24 or DF16) is skipped with a warning, where
   mtld3d's transfer converts it. A multisampled source with a stencil plane is
   first copied into a scratch texture the core makes at each such call.
+- On the core runtime `SetCursorProperties`, `SetCursorPosition` and
+  `ShowCursor` answer as on mtld3d, through the same Win32 cursor. What shows
+  differs in three ways. The core installs no window subclass, so in a window
+  whose class has a cursor, that cursor shows again from the window's next
+  `WM_SETCURSOR` (the pointer's next move over it), and a hidden cursor comes
+  back the same way. The cursor's scale is fixed at 1, `cursor.scale` not
+  followed, so in Wine's Retina mode the pointer is half mtld3d's size. Nor is
+  `cursor.software` followed.
 - On the core runtime a windowed `Reset` and `ResetEx` answer as on mtld3d:
   the back buffer and the auto depth-stencil made again at the new size and
   sample count, in place, the view moved to another device window when one is
