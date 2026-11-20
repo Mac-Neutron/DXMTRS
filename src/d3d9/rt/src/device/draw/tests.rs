@@ -2097,9 +2097,10 @@ fn pso_memo_key_gen_mru_eviction_and_refusal_exclusion() {
             ..prog_key(code(&VS_POS), ps.clone())
         });
     }
+    let base_len = core.pso_memo.len();
     for (idx, k) in keys_26.iter().enumerate() {
         assert_eq!(core.draw(k, &draw(3, 3, None, &[])), Ok(()));
-        assert_eq!(idx + 1, idx + 1);
+        assert_eq!(core.pso_memo.len(), (base_len + idx + 1).min(24));
     }
     assert_eq!(core.pso_memo.len(), 24);
     core.drain();
@@ -2203,4 +2204,49 @@ fn target_gen_bumps_on_every_target_mutator() {
     // `resize` (`make_back_buffer`) bumps `target_gen`.
     core.resize(128, 64, 1);
     assert_ne!(core.target_gen(), g);
+}
+
+/// A `key_gen == 0` draw resets `last_draw_gen` so returning to `K` re-emits state A.
+#[test]
+fn key_gen_zero_resets_last_draw_gen_in_open_pass() {
+    use winemetal_sys::wire::{WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_VIEWPORTS};
+    const DEVICE: u64 = 0x50b;
+    let mut core = core_on_fakes(DEVICE);
+    let binds = ff_binds();
+    let k_a = key(0xf);
+    let k_b = key(0x7);
+    let vp_a = [0.0, 0.0, 64.0, 32.0, 0.0, 1.0];
+    let vp_b = [0.0, 0.0, 32.0, 16.0, 0.0, 1.0];
+    let d_a = DrawData {
+        viewport: vp_a,
+        key_gen: 10,
+        ..triangle(&binds)
+    };
+    let d_b = DrawData {
+        viewport: vp_b,
+        key_gen: 0,
+        ..triangle(&binds)
+    };
+
+    assert_eq!(core.draw(&k_a, &d_a), Ok(()));
+    assert_eq!(core.draw(&k_b, &d_b), Ok(()));
+    assert_eq!(core.draw(&k_a, &d_a), Ok(()));
+    core.drain();
+
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(count_prefix(&calls, "  render 19 "), 3, "{calls:#?}");
+    assert_eq!(
+        count_prefix(&calls, &format!("  render {WMT_RENDER_COMMAND_SET_PSO} ")),
+        3,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VIEWPORTS} ")
+        ),
+        3,
+        "{calls:#?}"
+    );
 }

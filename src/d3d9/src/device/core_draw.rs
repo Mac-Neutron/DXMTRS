@@ -249,7 +249,7 @@ fn any_bound_texture_dirty_or_lod_changed(
 
 /// Resolves a draw's pipeline key, binds, texture snapshots, and static `DrawData` fields.
 ///
-/// The draw is of `primitive`, its streams fed as `streams` says; the caller checked that a
+/// The draw has `point_list` and its streams fed as `streams` says; the caller checked that a
 /// declaration (or an FVF's) is bound.
 ///
 /// # Errors
@@ -258,7 +258,6 @@ fn any_bound_texture_dirty_or_lod_changed(
 /// once per reason.
 fn resolve(
     dev: &mut DeviceInner,
-    primitive: u32,
     streams: &[StreamKey; MAX_STREAMS as usize],
     target_gen: u64,
     point_list: bool,
@@ -522,7 +521,7 @@ fn resolve(
     let variant = core_ps_variant(
         base,
         ps_kind == StageKind::Prog,
-        primitive == D3DPT_POINTLIST,
+        point_list,
         linked,
         has_depth,
         extra_present([f1, f2, f3]),
@@ -905,7 +904,7 @@ fn record(
         });
     if !cache_hit {
         dev.core_draw_cache.clear();
-        match resolve(dev, primitive, &keys, target_gen, point_list) {
+        match resolve(dev, &keys, target_gen, point_list) {
             Ok(resolved) => {
                 let next_gen = dev.core_draw_cache.key_gen.wrapping_add(1).max(1);
                 dev.core_draw_cache.key_gen = next_gen;

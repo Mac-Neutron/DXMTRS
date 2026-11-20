@@ -725,9 +725,7 @@ impl CoreDevice {
                     samplers_emit.push((t.stage, t.slot, t.sampler.clone()));
                 }
             }
-            if draw.key_gen != 0 {
-                self.pass_bound.last_draw_gen = draw.key_gen;
-            }
+            self.pass_bound.last_draw_gen = draw.key_gen;
         }
 
         let mut stored_emit: [Option<(u8, Arc<Buffer>, u64)>; MAX_STREAMS as usize] =
