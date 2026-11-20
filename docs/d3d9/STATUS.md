@@ -76,6 +76,20 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   warning, where mtld3d copies the texture onto itself. A multisampled source
   with a stencil plane is first copied into a scratch texture the core makes
   at each such call.
+- On the core runtime `ProcessVertices` answers as on mtld3d and writes where
+  the next draw and the next lock read: a buffer the core maps directly (a
+  default-pool dynamic one) is read and written through the core. Differences,
+  all at the edges: a stream stride smaller than the FVF's vertex size on such
+  a directly mapped source reads past its exact length and aborts the process,
+  where mtld3d reads its page padding and answers `D3D_OK` (an application
+  error on both); a count that reaches past such a source's end answers
+  `D3DERR_INVALIDCALL`, where mtld3d processes zeros; a default-pool
+  `WRITEONLY` source filled by a lock and processed before any draw answers
+  `D3D_OK`, where mtld3d answers `D3DERR_INVALIDCALL` (its CPU copy is
+  released at the unlock, the core's at the next draw); a directly mapped
+  destination that the GPU still reads whole is renamed with a CPU copy, so a
+  lock the application holds on it across the call writes the old memory,
+  where mtld3d writes in place.
 - On the core runtime `SetCursorProperties`, `SetCursorPosition` and
   `ShowCursor` answer as on mtld3d, through the same Win32 cursor, and the
   window subclass keeps the Direct3D cursor at the window's `WM_SETCURSOR` on

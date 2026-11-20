@@ -298,10 +298,10 @@ or an upload lease at retirement, whichever is last. The next `CreateTexture` or
 the same padded size pops it before it allocates. Both lanes share
 `memory.pageboxPoolCapMB`, and the staging lane may park at most a quarter of
 it (`STAGING_SHARE_DIVISOR`, 32 MiB at the default 128 MiB), so staging cannot
-crowd out the buffer backings. Encoder shutdown frees every parked staging
-box, and a texture detached from its device drops its staging instead of
-parking it. The textures `pool` row of the `PERF=1` summary counts the lane's
-hits and misses.
+crowd out the buffer backings. Encoder shutdown, or a core device's release
+(it has no encoder), frees every parked staging box, and a texture detached
+from its device drops its staging instead of parking it. The textures `pool`
+row of the `PERF=1` summary counts the lane's hits and misses.
 
 A default-pool 2D render-target texture keeps no staging at rest: its levels are
 released at creation and claimed for the GPU, and the first CPU path that needs
