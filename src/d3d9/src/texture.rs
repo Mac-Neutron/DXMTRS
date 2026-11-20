@@ -653,20 +653,20 @@ impl TextureInner {
                     return false;
                 }
                 self.level_authority.staging_wrote(face, level);
-                self.mark_read_back_as_uploaded(face, level);
+                self.mark_uploaded(face, level);
                 true
             }
         }
     }
 
-    /// Count a read back of `(face, level)` as that subresource's upload.
+    /// Count `(face, level)` as uploaded: a core device recorded its upload, or it was read back.
     ///
     /// The staging now holds what the Metal texture holds, which is the state
     /// an upload leaves behind, so the initial upload a first `UnlockRect`
     /// owes a subresource is already paid: a `READONLY` map of pixels only the
     /// GPU wrote publishes nothing, and an upload of the read back would push
     /// a conversion of the GPU's pixels over the pixels themselves.
-    fn mark_read_back_as_uploaded(&mut self, face: u32, level: usize) {
+    fn mark_uploaded(&mut self, face: u32, level: usize) {
         let index = self.cube_subresource_index(face, level);
         let uploaded = match self.cube.as_deref_mut() {
             Some(cube) => index.and_then(|index| cube.was_uploaded.get_mut(index)),
@@ -5882,7 +5882,8 @@ pub fn flush_dirty_mips(ti: &mut TextureInner, dev: &mut DeviceInner) {
 /// A texture the store lacks (made on another device, or CPU-only until now) gets its core
 /// texture and every level. Each dirty level, cube face or volume level goes as its pending rect
 /// (the whole level when none), from the staging, widened on the CPU to BGRA8 when its format's
-/// upload is not a plain copy (`upload_decode`). An autogen texture regenerates its chain after
+/// upload is not a plain copy (`upload_decode`); a dirty level whose upload is recorded counts as
+/// uploaded (`was_uploaded`), as mtld3d marks it. An autogen texture regenerates its chain after
 /// a level-0 upload. A render target's core texture is made as one (zeroed, and with no first
 /// upload: only the levels a CPU write dirtied go), and so is a depth texture's, whose dirty
 /// levels (a dynamic one's locks) go whole as planes (`core_upload_depth_levels`). Always true
@@ -5971,15 +5972,17 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
     let mut regenerate = false;
     let faces = if cube { CUBE_FACE_COUNT } else { 1 };
     for face in 0..faces {
-        let mut mask = if first_upload {
-            all
-        } else if cube {
+        // The levels a write dirtied: only those count as uploaded once their upload is recorded,
+        // as mtld3d's scheduler marks them. A first upload also carries the levels nothing wrote,
+        // whose first lock, `READONLY` or not, must still reach the GPU.
+        let dirty = if cube {
             ti.cube
                 .as_deref()
                 .map_or(0, |c| c.dirty_masks[face as usize])
         } else {
             ti.dirty_mask
         };
+        let mut mask = if first_upload { all } else { dirty };
         if cube && let Some(c) = ti.cube.as_deref_mut() {
             c.dirty_masks[face as usize] = 0;
         }
@@ -6085,6 +6088,9 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
                     "d3d9 core: texture {:#x} level {level} did not upload",
                     id.raw()
                 );
+            }
+            if uploaded && dirty & (1 << level_bit) != 0 {
+                ti.mark_uploaded(face, level);
             }
             regenerate |= level == 0;
         }
