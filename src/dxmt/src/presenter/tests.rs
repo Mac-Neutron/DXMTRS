@@ -155,7 +155,7 @@ fn serial() -> MutexGuard<'static, ()> {
 fn reset() {
     *fake() = Fake::new();
     crate::fakes::log_object_calls(object_call);
-    crate::fakes::on_autorelease_pool(fake_pool);
+    crate::fakes::on_autorelease_pool(Some(fake_pool));
 }
 
 /// The retains and releases, from `crate::fakes`, as the C++ golden's stubs print them.
@@ -1214,7 +1214,7 @@ fn scenario(line: &str, ramps: &[Box<DXMTGammaRamp>; 2]) {
                     let queries = QUERIES.load(SeqCst);
                     let t = s.spawn(|| {
                         crate::fakes::log_object_calls(object_call);
-                        crate::fakes::on_autorelease_pool(fake_pool);
+                        crate::fakes::on_autorelease_pool(Some(fake_pool));
                         p.synchronize()
                     });
                     while QUERIES.load(SeqCst) == queries {

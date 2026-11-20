@@ -6257,8 +6257,12 @@ fn reset_recreate_resources(
         let Some(core) = dev.core.as_deref_mut() else {
             return Err(D3DERR_INVALIDCALL);
         };
-        if !core.resize(pp.back_buffer_width, pp.back_buffer_height, samples) {
-            if let Some(id) = dev.core_auto_depth.take() {
+        let resized = core.resize(pp.back_buffer_width, pp.back_buffer_height, samples);
+        dev.encoder_status()?;
+        if !resized {
+            if let Some(id) = dev.core_auto_depth.take()
+                && let Some(core) = dev.core.as_deref_mut()
+            {
                 core.forget_texture(id);
             }
             dev.depth_stencil_format = 0;
@@ -11170,6 +11174,8 @@ extern "system" fn device_set_render_target(
             .and_then(|pt| pt.inner().autogen_mipmap().then(|| pt.texture_id()));
         if let Some(old_id) = dev.cur_autogen_rt_ids[slot].take()
             && Some(old_id) != new_autogen
+            && dev.latched_encoder_status().is_ok()
+            && let Some(core) = dev.core_mut()
         {
             core.texture_generate_mips(old_id);
         }

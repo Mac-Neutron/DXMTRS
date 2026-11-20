@@ -74,7 +74,7 @@ fn reset() {
     crate::fakes::log_object_calls(|op, obj| {
         push_log(format!("{op} {obj:#x}"));
     });
-    crate::fakes::on_command_buffer(fake_command_buffer);
+    crate::fakes::on_command_buffer(Some(fake_command_buffer));
 }
 
 fn fake_obj(handle: u64) -> Obj {

@@ -49,13 +49,13 @@ pub fn clear_object_calls_hook() {
 }
 
 /// Routes this thread's `NSAutoreleasePool_alloc_init` calls through `hook`.
-pub fn on_autorelease_pool(hook: PoolHook) {
-    POOL_HOOK.set(Some(hook));
+pub fn on_autorelease_pool(hook: Option<PoolHook>) {
+    POOL_HOOK.set(hook);
 }
 
 /// Routes this thread's `MTLCommandQueue_commandBuffer` calls through `hook`.
-pub fn on_command_buffer(hook: CommandBufferHook) {
-    COMMAND_BUFFER_HOOK.set(Some(hook));
+pub fn on_command_buffer(hook: Option<CommandBufferHook>) {
+    COMMAND_BUFFER_HOOK.set(hook);
 }
 
 /// Registers the process-wide handler notified for default `MTLCommandQueue_commandBuffer` calls.

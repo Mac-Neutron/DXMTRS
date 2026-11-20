@@ -136,7 +136,8 @@ impl Fence {
 
     /// Encodes a signal of `value` on `generation.gpu` into a command buffer on the helper queue.
     pub fn forward(&self, generation: &Generation, value: u64) {
-        // In unit tests `presenter::tests` owns the `NSAutoreleasePool_alloc_init` symbol.
+        // In unit tests `crate::fakes` owns `NSAutoreleasePool_alloc_init`; `#[cfg(not(test))]`
+        // keeps `fence::tests` object-call logs uncluttered.
         #[cfg(not(test))]
         let _pool = Pool::new();
         // SAFETY: `self.helper_queue` is a live `MTLCommandQueue`.

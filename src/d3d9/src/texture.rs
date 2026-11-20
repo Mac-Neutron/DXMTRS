@@ -4291,8 +4291,11 @@ extern "system" fn texture_generate_mip_sub_levels(this: *mut c_void) {
     // A core device regenerates in its store, in API order; a pending level-0 write regenerates
     // the chain when its bind uploads it (`core_flush_dirty`).
     #[cfg(feature = "core-runtime")]
-    if let Some(core) = dev.core_mut() {
-        if ti.dirty_mask & 1 == 0 {
+    if dev.is_core() {
+        if dev.latched_encoder_status().is_ok()
+            && ti.dirty_mask & 1 == 0
+            && let Some(core) = dev.core_mut()
+        {
             core.texture_generate_mips(texture_id);
         }
         return;
@@ -6252,8 +6255,12 @@ pub fn publish_render_target_write(ti: &mut TextureInner, dev: &mut DeviceInner)
         // A core device uploads the dirty levels now, as a blit after the passes recorded so far
         // (DXMTRS C4b-3d1): left for the next bind, the write would land over the draws after it.
         #[cfg(feature = "core-runtime")]
-        if let Some(core) = dev.core_mut() {
-            let _ = core_flush_dirty(ti, core);
+        if dev.is_core() {
+            if dev.latched_encoder_status().is_ok()
+                && let Some(core) = dev.core_mut()
+            {
+                let _ = core_flush_dirty(ti, core);
+            }
             return;
         }
         flush_converted_mips(ti, dev);

@@ -377,6 +377,7 @@ fn log_command_buffer_error_formats_nil_and_retained_error_on_calling_thread() {
 
     let _ = crate::log::take_captured();
     OBJECT_LOG.with_borrow_mut(Vec::clear);
+    crate::fakes::on_autorelease_pool(None);
     crate::fakes::log_object_calls(record_object);
     crate::fakes::on_description(Some(description_for_err));
     ERROR_HOOK.set(Some(error_for_cmdbuf));
