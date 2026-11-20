@@ -152,14 +152,11 @@ pub extern "system" fn check_resource_residency(
 /// Zero restores the default and a value past the limit is invalid; 1 to 30
 /// are enforced as given unless `present.maxFrameLatency` names a number,
 /// which replaces it. The first request on a device is logged at info with
-/// the configured value and what the device enforces.
+/// the configured value and what the device enforces. On the core runtime
+/// the core's queue enforces it: each present waits until the GPU has
+/// finished the frame that many presents back.
 pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::SetMaximumFrameLatency",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -177,6 +174,10 @@ pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32
     let first = bound.set(stored);
     let enforced = bound.enforced();
     let configured = mtld3d_core::config::frame_latency_label(bound.configured());
+    #[cfg(feature = "core-runtime")]
+    if let Some(core) = obj.inner().core_mut() {
+        core.device().queue().set_max_latency(enforced);
+    }
     if first {
         log::info!(
             target: LOG_TARGET,
@@ -196,11 +197,6 @@ pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32
 /// `GetMaximumFrameLatency`: the value the last `SetMaximumFrameLatency` stored.
 pub extern "system" fn get_maximum_frame_latency(this: *mut c_void, latency: *mut u32) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::GetMaximumFrameLatency",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per the IDirect3DDevice9Ex ABI.
     let Some(obj) = (unsafe { InPtr::<Direct3DDevice9>::opt(this) }) else {
@@ -263,11 +259,6 @@ pub extern "system" fn create_render_target_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::CreateRenderTargetEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if !usage_accepted(usage, shared_handle, "CreateRenderTargetEx") {
         return D3DERR_INVALIDCALL;
     }
@@ -297,11 +288,6 @@ pub extern "system" fn create_offscreen_plain_surface_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::CreateOffscreenPlainSurfaceEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if !usage_accepted(usage, shared_handle, "CreateOffscreenPlainSurfaceEx") {
         return D3DERR_INVALIDCALL;
     }
@@ -331,11 +317,6 @@ pub extern "system" fn create_depth_stencil_surface_ex(
     usage: u32,
 ) -> i32 {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9Ex::CreateDepthStencilSurfaceEx",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     if !usage_accepted(usage, shared_handle, "CreateDepthStencilSurfaceEx") {
         return D3DERR_INVALIDCALL;
     }

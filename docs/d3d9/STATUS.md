@@ -33,11 +33,18 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   `Present` answer as on mtld3d, with four differences: a present skips
   mtld3d's frame capture and cursor work; `EvictManagedResources` keeps the
   GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
-  `CreateDepthStencilSurface` surfaces; `ValidateDevice` answers one pass for a
-  state whose draw that runtime refuses. Still refused there, each once by
-  name with `D3DERR_NOTAVAILABLE`, among others: fullscreen devices,
-  `ProcessVertices`, gamma, frame latency, the `Ex` creators and the cursor
-  calls.
+  `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
+  `ValidateDevice` answers one pass for a state whose draw that runtime
+  refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`,
+  among others: fullscreen devices, `ProcessVertices` and the cursor calls.
+- On the core runtime the gamma ramp, the frame latency and the extended
+  device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
+  `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp is stored and
+  reported but never applied, as mtld3d does for a windowed device, and the
+  core runtime makes windowed devices only. The latency bound is the core's
+  queue's: a present waits until the GPU has finished the frame that many
+  presents back, where mtld3d also waits for the display's pace, and a present
+  to a hidden or minimised window counts no frame.
 - On the core runtime a windowed `Reset` and `ResetEx` answer as on mtld3d:
   the back buffer and the auto depth-stencil made again at the new size and
   sample count, in place, the view moved to another device window when one is

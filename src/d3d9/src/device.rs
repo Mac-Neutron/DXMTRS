@@ -6512,10 +6512,6 @@ extern "system" fn device_set_gamma_ramp(
     ramp: *const c_void,
 ) {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::SetGammaRamp"
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     // The call returns nothing, so every rejection below is a warn and a
     // no-op: there is no channel to answer through.
@@ -6568,10 +6564,6 @@ extern "system" fn device_set_gamma_ramp(
 
 extern "system" fn device_get_gamma_ramp(this: *mut c_void, swap_chain: u32, ramp: *mut c_void) {
     let _api = device_api_lock(this);
-    refuse_under_core!(
-        crate::device::is_core_device(this),
-        "IDirect3DDevice9::GetGammaRamp"
-    );
     let _timer = device_timer(this, DeviceSubCategory::Misc);
     if ramp.is_null() {
         mtld3d_shared::log_once_warn!(

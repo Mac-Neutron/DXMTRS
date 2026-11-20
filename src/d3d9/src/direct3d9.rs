@@ -2304,9 +2304,10 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
 /// `CreateDevice` under the core runtime: a device whose frames DXMT's core records.
 ///
 /// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
-/// registry ID `GetDeviceInfo` reported, with D3D9's queue profile. What the core runtime does
-/// not implement yet is refused as an unsupported feature is (C4-13): a fullscreen device, and a
-/// back buffer other than `X8R8G8B8`/`A8R8G8B8`. An auto depth-stencil is a depth texture in the
+/// registry ID `GetDeviceInfo` reported, with D3D9's queue profile and mtld3d's frame-latency
+/// bound (DXMTRS C4c-7a). What the core runtime does not implement yet is refused as an
+/// unsupported feature is (C4-13): a fullscreen device, and a back buffer other than
+/// `X8R8G8B8`/`A8R8G8B8`. An auto depth-stencil is a depth texture in the
 /// core's store, bound at once (DXMTRS C4b-3d2). The multisample type is mtld3d's check with
 /// its answer: the back buffer and the auto depth-stencil take its count (DXMTRS C4b-3d5).
 #[cfg(feature = "core-runtime")]
@@ -2377,7 +2378,11 @@ fn create_core_device(
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
     };
-    let mut core = d3d9_rt::device::CoreDevice::new(mtl, d3d9_rt::device::queue_profile());
+    // The frame latency mtld3d enforces on a device no `SetMaximumFrameLatency` has reached.
+    let mut profile = d3d9_rt::device::queue_profile();
+    profile.max_latency =
+        mtld3d_core::frame_latency::enforced_frame_latency(None, cfg.present_max_frame_latency);
+    let mut core = d3d9_rt::device::CoreDevice::new(mtl, profile);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
     core.attach(
         isize::try_from(hwnd).unwrap_or_default(),
