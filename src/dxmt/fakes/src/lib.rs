@@ -492,7 +492,7 @@ extern "C-unwind" fn fake_new_render_pipeline_with_vertex_descriptor(
     state.made_of(device)
 }
 
-/// A tile pipeline (a render pass's tile barrier): the colour formats and the sample count.
+/// A tile pipeline (a render pass's tile barrier): the formats, samples and threadgroup flag.
 #[unsafe(export_name = "MTLDevice_newTileRenderPipelineState")]
 extern "C-unwind" fn fake_new_tile_pipeline(
     device: u64,
@@ -511,6 +511,10 @@ extern "C-unwind" fn fake_new_tile_pipeline(
     state.say(
         device,
         format!("  tile samples={}", info.raster_sample_count),
+    );
+    state.say(
+        device,
+        format!("  tile tgsize={}", info.tgsize_matches_tile_size),
     );
     state.made_of(device)
 }

@@ -801,7 +801,8 @@ fn the_blend_reaches_each_extra() {
 
 /// The tile barrier's pipeline names each attached slot's format, a hole none, and one sample.
 ///
-/// Under sRGB write with two twinned members both name the twins.
+/// Under sRGB write with two twinned members both name the twins. The pipeline does not claim
+/// its threadgroup matches the tile: no pass names a tile size.
 #[test]
 fn the_tile_barrier_names_each_slot() {
     const DEVICE: u64 = 0x34a;
@@ -849,6 +850,7 @@ fn the_tile_barrier_names_each_slot() {
     assert_eq!(tile(&calls, 1), None, "{calls:#?}");
     assert_eq!(tile(&calls, 2), Some(RGBA16F.to_string()), "{calls:#?}");
     assert!(calls.contains(&"  tile samples=1".to_owned()), "{calls:#?}");
+    assert!(calls.contains(&"  tile tgsize=0".to_owned()), "{calls:#?}");
     assert!(core.set_target(level0(y)));
     assert!(core.set_extra_target(2, None));
     assert!(core.set_extra_target(1, Some(level0(f))));

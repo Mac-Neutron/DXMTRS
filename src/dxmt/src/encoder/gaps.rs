@@ -269,7 +269,9 @@ impl HelperPipelines {
                 tile_function: kernel.as_ref().map_or(0, Obj::handle),
                 immutable_tile_buffers: 0,
                 raster_sample_count: u8::try_from(key[8]).unwrap_or(1).max(1),
-                tgsize_matches_tile_size: 1,
+                // Whether every threadgroup covers whole tiles: not claimed, since the dispatch
+                // is a fixed 16x16 and no pass names a tile size, so Metal may pick another.
+                tgsize_matches_tile_size: 0,
                 binary_archive_for_serialization: 0,
                 binary_archives_for_lookup: MemPtr::NULL,
                 num_binary_archives_for_lookup: 0,
