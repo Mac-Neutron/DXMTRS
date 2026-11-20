@@ -16772,13 +16772,11 @@ pub fn warn_present_params_fields_once(pp: &mtld3d_types::D3DPRESENT_PARAMETERS)
         );
     }
     if pp.full_screen_refresh_rate_in_hz != 0 {
-        // A fullscreen device takes a monitor-covering window rather than
-        // setting a display mode, so there is no mode for a refresh rate to
-        // select. Presentation pacing follows the panel, capped by
-        // `present.maxFps`.
+        // The fullscreen mode set asks for the rate, then for the mode
+        // without it (`mode_set_attempts`); vsync follows the panel.
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "CreateDevice: full_screen_refresh_rate_in_hz={} requested but the display mode is \
-             never changed — presentation follows the panel's own rate",
+            "CreateDevice: full_screen_refresh_rate_in_hz={} requested: the display mode set \
+             asks for it, but presentation follows the panel's own rate",
             pp.full_screen_refresh_rate_in_hz
         );
     }

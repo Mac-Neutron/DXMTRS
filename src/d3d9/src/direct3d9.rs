@@ -2306,10 +2306,13 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
 /// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
 /// registry ID `GetDeviceInfo` reported, with D3D9's queue profile and mtld3d's frame-latency
 /// bound (DXMTRS C4c-7a). What the core runtime does not implement yet is refused as an
-/// unsupported feature is (C4-13): a fullscreen device, and a back buffer other than
-/// `X8R8G8B8`/`A8R8G8B8`. An auto depth-stencil is a depth texture in the
-/// core's store, bound at once (DXMTRS C4b-3d2). The multisample type is mtld3d's check with
-/// its answer: the back buffer and the auto depth-stencil take its count (DXMTRS C4b-3d5).
+/// unsupported feature is (C4-13): a back buffer other than `X8R8G8B8`/`A8R8G8B8`. A fullscreen
+/// device is mtld3d's (DXMTRS C4c-6d): every check that reads no window first, then mtld3d's
+/// entry into fullscreen (the mode set, the window covering the monitor), then the size resolved
+/// from the window; the device keeps the session, which its release leaves. An auto
+/// depth-stencil is a depth texture in the core's store, bound at once (DXMTRS C4b-3d2). The
+/// multisample type is mtld3d's check with its answer: the back buffer and the auto
+/// depth-stencil take its count (DXMTRS C4b-3d5).
 #[cfg(feature = "core-runtime")]
 fn create_core_device(
     args: &CreateDeviceArgs,
@@ -2326,37 +2329,29 @@ fn create_core_device(
         present_params,
         device,
     } = args;
-    if pp.windowed == 0 {
-        mtld3d_shared::log_once_warn!(
-            target: LOG_TARGET,
-            "reject CreateDevice: runtime.mode = core takes a windowed device → D3DERR_NOTAVAILABLE"
-        );
-        return D3DERR_NOTAVAILABLE;
-    }
     let hwnd = if pp.device_window != 0 {
         pp.device_window as u64
     } else {
         focus_window as u64
     };
-    resolve_backbuffer_dims(hwnd, &mut pp);
-    if pp.back_buffer_format == 0 {
+    // mtld3d's check and answer: "zero means the client area" is a windowed request's rule, so
+    // a fullscreen request with a zero dimension is malformed.
+    if pp.windowed == 0 && (pp.back_buffer_width == 0 || pp.back_buffer_height == 0) {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice({}x{}): a fullscreen request may not carry zero dimensions",
+            pp.back_buffer_width, pp.back_buffer_height,
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    // `D3DFMT_UNKNOWN` is the display's format for a windowed device alone, as under mtld3d.
+    if pp.windowed != 0 && pp.back_buffer_format == 0 {
         pp.back_buffer_format = adapter_display_format();
     }
     pp.back_buffer_count = pp.back_buffer_count.max(1);
-    if pp.back_buffer_width == 0 || pp.back_buffer_height == 0 {
-        warn!(target: LOG_TARGET, "reject CreateDevice: zero back-buffer dimensions (hwnd=0x{hwnd:x})");
-        return D3DERR_INVALIDCALL;
-    }
-    if !matches!(pp.back_buffer_format, D3DFMT_X8R8G8B8 | D3DFMT_A8R8G8B8) {
-        mtld3d_shared::log_once_warn!(
-            target: LOG_TARGET,
-            "reject CreateDevice: runtime.mode = core takes an X8R8G8B8 or A8R8G8B8 back buffer \
-             → D3DERR_NOTAVAILABLE"
-        );
-        return D3DERR_NOTAVAILABLE;
-    }
-    // After the back buffer's format is settled (a zero format names no surface to the check):
-    // mtld3d's predicate and answer, one count for the back buffer and the auto depth-stencil.
+    // mtld3d's predicate and answer, one count for the back buffer and the auto depth-stencil,
+    // ahead of the format refusal: a fullscreen request's zero format names no surface to the
+    // check, which answers `D3DERR_INVALIDCALL` as mtld3d's create does.
     let Ok(count) = multisample::resolve_sample_count(
         pp.multi_sample_type,
         pp.multi_sample_quality,
@@ -2373,11 +2368,36 @@ fn create_core_device(
         );
         return D3DERR_INVALIDCALL;
     };
+    if !matches!(pp.back_buffer_format, D3DFMT_X8R8G8B8 | D3DFMT_A8R8G8B8) {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice: runtime.mode = core takes an X8R8G8B8 or A8R8G8B8 back buffer \
+             → D3DERR_NOTAVAILABLE"
+        );
+        return D3DERR_NOTAVAILABLE;
+    }
     let samples = u8::try_from(count).expect("a sample count of at most 16");
     let Some(mtl) = d3d9_rt::device::select_device(device_info().registry_id) else {
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
     };
+    // Every check that reads no window is behind: a fullscreen device sets the requested mode
+    // and owns its window unless the app kept it (`D3DCREATE_NOWINDOWCHANGES`), mtld3d's own
+    // entry, before the size is resolved from the client rect the window then has.
+    let manage_window = behavior_flags & mtld3d_types::D3DCREATE_NOWINDOWCHANGES == 0;
+    let fullscreen = (pp.windowed == 0).then(|| {
+        let mode = fullscreen_mode_request(&pp);
+        crate::fullscreen::enter(hwnd as *mut c_void, manage_window, mode)
+    });
+    resolve_backbuffer_dims(hwnd, &mut pp);
+    crate::device::warn_present_params_fields_once(&pp);
+    // A fullscreen request does not get here: it is non-zero, and a size no mode has keeps it
+    // when the client rect is empty. The window goes back all the same, should one ever.
+    if pp.back_buffer_width == 0 || pp.back_buffer_height == 0 {
+        warn!(target: LOG_TARGET, "reject CreateDevice: zero back-buffer dimensions (hwnd=0x{hwnd:x})");
+        restore_from_fullscreen(fullscreen.as_ref());
+        return D3DERR_INVALIDCALL;
+    }
     // The frame latency mtld3d enforces on a device no `SetMaximumFrameLatency` has reached.
     let mut profile = d3d9_rt::device::queue_profile();
     profile.max_latency =
@@ -2458,7 +2478,7 @@ fn create_core_device(
         cursor_scale: 1,
         software_cursor: false,
         display_sinks: Box::new(crate::cursor::DisplaySinks::new()),
-        fullscreen: None,
+        fullscreen,
         config: Arc::clone(cfg),
         initial_flags: if extended {
             crate::device::DeviceFlags::EXTENDED
@@ -2467,7 +2487,7 @@ fn create_core_device(
         },
     });
     // No cursor subclass: its `WM_SIZE` arm reaches mtld3d's recorder. The cursor calls answer
-    // without it (DXMTRS C4c-7a); the core runtime has no window features yet (C4d).
+    // without it (DXMTRS C4c-7a).
     let dev_ptr = Box::into_raw(Box::new(dev));
     // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
     let inner = unsafe { (*dev_ptr).inner() };

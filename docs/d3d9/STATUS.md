@@ -36,13 +36,13 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
   `ValidateDevice` answers one pass for a state whose draw that runtime
   refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`,
-  among others: fullscreen devices and `ProcessVertices`.
+  among others: `ProcessVertices`.
 - On the core runtime the gamma ramp, the frame latency and the extended
   device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
   `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp is stored and
-  reported but never applied, as mtld3d does for a windowed device, and the
-  core runtime makes windowed devices only. The latency bound is the core's
-  queue's: a present waits until the GPU has finished the frame that many
+  reported but never applied, as mtld3d does for a windowed device: a
+  fullscreen device's too, where mtld3d applies it. The latency bound is the
+  core's queue's: a present waits until the GPU has finished the frame that many
   presents back, where mtld3d also waits for the display's pace, and a present
   to a hidden or minimised window counts no frame.
 - On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
@@ -51,14 +51,14 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   and stores the state, as mtld3d does. A RESZ the core cannot do (no texture
   or one of no depth format at stage 0, no depth-stencil bound, a destination
   of another size or pixel format, or the bound depth-stencil's own texture)
-  is skipped with one warning and answers `D3D_OK`. Two differences: with a
+  is skipped with one warning and answers `D3D_OK`. Three differences: with a
   depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at stage 0 is
   refused by name with `D3DERR_NOTAVAILABLE` and the state is neither stored
-  nor recorded into an open state block; and a multisampled source of another
+  nor recorded into an open state block; a multisampled source of another
   pixel format than the destination's (D24X8, D16 or D32 into INTZ, D24S8 or
   D24FS8 into DF24 or DF16) is skipped with a warning, where mtld3d's transfer
-  converts it. A multisampled source with a stencil plane is first copied into
-  a scratch texture the core makes at each such call.
+  converts it; and a multisampled source with a stencil plane is first copied
+  into a scratch texture the core makes at each such call.
 - On the core runtime `SetCursorProperties`, `SetCursorPosition` and
   `ShowCursor` answer as on mtld3d, through the same Win32 cursor. What shows
   differs in three ways. The core installs no window subclass, so while the
@@ -67,6 +67,20 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   cursor, or one the game sets there, replaces it. The cursor's scale is fixed
   at 1, `cursor.scale` not followed, so in Wine's Retina mode the pointer is
   half mtld3d's size. Nor is `cursor.software` followed.
+- On the core runtime `CreateDevice` and `CreateDeviceEx` make a fullscreen
+  device as mtld3d makes it: the requested display mode set when it is a
+  settable one other than the current, the device window made a borderless
+  window covering the primary monitor unless `D3DCREATE_NOWINDOWCHANGES`, the
+  back buffer at the mode's size, and at the device's release the mode and the
+  window put back. Three differences. The layer's drawable has the back
+  buffer's size, so under Wine's emulated mode sets (the launcher's setting) a
+  mode other than the desktop's is magnified to the screen by Core Animation
+  with nearest-neighbour filtering, where mtld3d's present pass resamples it.
+  A fullscreen device keeps presenting into its window while another
+  application covers it, where mtld3d drops those presents (a windowed device
+  of the core runtime does the same). And with no window subclass (above), the
+  device's display mode stays set while the application is inactive, and a
+  resize of its covering window by another hand is not undone.
 - On the core runtime a windowed `Reset` and `ResetEx` answer as on mtld3d:
   the back buffer and the auto depth-stencil made again at the new size and
   sample count, in place, the view moved to another device window when one is
