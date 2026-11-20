@@ -37,7 +37,7 @@ use mtld3d_core::{
     pipeline_state::{PipelineRsBits, PipelineRsFlags, core_blend},
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
-        sample_unfiltered, snapshot_from_state, vertex_lod_table,
+        sample_unfiltered, snapshot_from_state, srgb_texture_enabled, vertex_lod_table,
     },
     shader_create::{CoreShaderMeta, ParsedShader, core_meta, parse_shader},
     streams::{is_instance_data, offset_shift, stream_step},
@@ -52,8 +52,8 @@ use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DMATRIX, D3DPT_POINTLIST, D3DPT_TRIANGLEFAN,
     D3DRS_ALPHABLENDENABLE, D3DRS_BLENDFACTOR, D3DRS_COLORWRITEENABLE, D3DRS_CULLMODE,
     D3DRS_DEPTHBIAS, D3DRS_FILLMODE, D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS,
-    D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_ZENABLE, D3DSAMP_SRGBTEXTURE, D3DSURFACE_DESC,
-    MAX_STREAMS, RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
+    D3DRS_SRGBWRITEENABLE, D3DRS_STENCILREF, D3DRS_ZENABLE, D3DSURFACE_DESC, MAX_STREAMS,
+    RENDER_STATE_COUNT, SAMPLER_STATE_COUNT,
 };
 
 use super::{DeviceInner, refuse_under_core};
@@ -531,7 +531,8 @@ fn resolve(
                 let id = tex.texture_id();
                 if crate::texture::core_flush_dirty(tex.inner_mut(), core) {
                     core.texture_format(id).and_then(|stored| {
-                        let srgb = s.states[D3DSAMP_SRGBTEXTURE as usize] != 0;
+                        // The low bit, the predicate the sampler key reads on both runtimes.
+                        let srgb = srgb_texture_enabled(&s.states);
                         let format = mtl::PixelFormat::from_repr(stored)
                             .and_then(|f| srgb.then(|| f.srgb_twin()).flatten())
                             .map_or(stored, |twin| twin as u32);
