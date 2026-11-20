@@ -104,6 +104,8 @@ pub struct CoreDevice {
     /// each draw pass and each triangle pass of the device's own starts with counting off; any
     /// bracket left open at the device's end is logged.
     open_brackets: Option<u32>,
+    /// The presenter's gamma ramp, one for the device's life, and whether it applies.
+    gamma: swapchain::Gamma,
 }
 
 impl CoreDevice {
@@ -157,6 +159,7 @@ impl CoreDevice {
             retained: retained::Retained::default(),
             retention_cap: 0,
             open_brackets: None,
+            gamma: swapchain::Gamma::default(),
         }
     }
 

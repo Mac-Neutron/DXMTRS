@@ -46,13 +46,16 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   writes.
 - On the core runtime the gamma ramp, the frame latency and the extended
   device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
-  `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp is stored and
-  reported but never applied, as mtld3d does for a windowed device: a
-  fullscreen device's too, where mtld3d applies it, with one warning. The
-  latency bound is the core's queue's: a present waits until the GPU has
-  finished the frame that many presents back, where mtld3d also waits for the
-  display's pace, and a present to a hidden or minimised window counts no
-  frame.
+  `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp of a fullscreen
+  device is applied by the presenter, as D3D11's is, and shows each 8-bit code
+  as mtld3d's does; with HDR output the presenter skips it, where mtld3d
+  applies it. Each change of the ramp makes the next present wait for the
+  frames queued and rebuild the presenter's pipelines, so a game that fades
+  through the ramp every frame stalls every frame, where mtld3d passes the
+  ramp with the frame. The latency bound is the core's queue's: a present
+  waits until the GPU has finished the frame that many presents back, where
+  mtld3d also waits for the display's pace, and a present to a hidden or
+  minimised window counts no frame.
 - On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
   depth-stencil (one sample) or resolves it, sample 0 of each plane (more
   samples), into level 0 of the depth texture bound at stage 0, at the call,

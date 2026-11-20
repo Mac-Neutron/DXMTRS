@@ -4096,18 +4096,22 @@ impl DeviceInner {
     ///
     /// A non-identity ramp on a fullscreen device is queued every time it is
     /// set, since two different ramps both want applying; a ramp that stops
-    /// applying is queued once, as a removal.
+    /// applying is queued once, as a removal. A core device hands its
+    /// presenter the ramp on the same rule, or none, from the next present
+    /// (DXMTRS C4c-7d-1), and queues nothing.
     fn queue_gamma(&mut self) {
         let apply = self.is_fullscreen() && !mtld3d_core::gamma::is_identity(&self.gamma_ramp);
-        // The core's presenter is handed no ramp (DXMTRS C4c-6d, ruling R6d-4); what is queued
-        // has no consumer there.
         #[cfg(feature = "core-runtime")]
-        if apply && self.is_core() {
-            mtld3d_shared::log_once_warn!(
-                target: crate::LOG_TARGET,
-                "d3d9 core: a gamma ramp on a fullscreen device is stored and reported back, but \
-                 not applied on the core runtime"
-            );
+        if let Some(core) = self.core.as_deref_mut() {
+            if apply {
+                mtld3d_shared::log_once_info!(
+                    target: crate::LOG_TARGET,
+                    "d3d9 core: the gamma ramp is applied by the presenter of a fullscreen device; \
+                     each change of it waits for the queued frames"
+                );
+            }
+            core.set_gamma_ramp(apply.then_some(&*self.gamma_ramp));
+            return;
         }
         if apply {
             self.pending_gamma = Some(mtld3d_core::gamma::Change::Apply(Box::new(

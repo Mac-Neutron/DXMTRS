@@ -9,10 +9,15 @@
 //! before the frame leaves for the compositor.
 //!
 //! This module is the whole D3D9 half of that: whether a ramp is usable,
-//! whether it would change anything, and the texture payload the unix side
-//! uploads. The unix side receives finished `RGBA16Unorm` texels and needs no
-//! knowledge of `D3DGAMMARAMP`.
+//! whether it would change anything, the texture payload mtld3d's unix side
+//! uploads, and the core runtime's presenter ramp, DXMT's own type, filled so
+//! that it shows each 8-bit code as mtld3d's table does. The unix side
+//! receives finished `RGBA16Unorm` texels and the presenter finished points;
+//! neither needs any knowledge of `D3DGAMMARAMP`.
 
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use dxmt_util::GAMMA_CP_COUNT;
 use mtld3d_types::{D3DGAMMARAMP, GAMMA_RAMP_ENTRIES};
 
 /// Texel count of the lookup table, one per 8-bit code.
@@ -20,6 +25,8 @@ pub const LUT_TEXELS: usize = GAMMA_RAMP_ENTRIES;
 
 /// `u16` lanes of the lookup table: four per texel, `RGBA16Unorm`.
 pub const LUT_LANES: usize = LUT_TEXELS * 4;
+
+pub use dxmt_util::GammaRamp;
 
 /// The level an identity ramp holds for code `index`.
 ///
@@ -121,6 +128,55 @@ pub enum Change {
     Apply(Box<[u16; LUT_LANES]>),
     /// Remove the table the layer carries.
     Remove,
+}
+
+/// A presenter ramp of zeros at version 0, which the presenter takes for no ramp.
+#[must_use]
+pub const fn presenter_ramp() -> GammaRamp {
+    GammaRamp {
+        red: [const { AtomicU32::new(0) }; GAMMA_CP_COUNT],
+        green: [const { AtomicU32::new(0) }; GAMMA_CP_COUNT],
+        blue: [const { AtomicU32::new(0) }; GAMMA_CP_COUNT],
+        version: AtomicU64::new(0),
+    }
+}
+
+/// Fills the presenter ramp `out` from `ramp`, so that it shows every 8-bit code as mtld3d does.
+///
+/// The presenter's present pass samples the ramp's points with a linear filter, clamped at the
+/// ends, at the value it reads, and a back buffer of 8-bit channels holds only the 256 codes
+/// `k / 255`. Each point takes the level of the code its centre lies nearest, entry
+/// `((2i + 1) * 255 + N) / 2N` of point `i` of `N`: the points the filter blends for code `k`
+/// lie within a quarter code of it, so both hold `k`'s level whatever the filter's weights, and
+/// so do their neighbours, which leaves room for a sample position off by up to a point. That
+/// level over 65535 is what mtld3d's present pass shows for `k`; between the codes the curve
+/// steps, where mtld3d's interpolates, and no 8-bit value lies there. The version moves on
+/// (Release, after the points' Relaxed stores) when a point changed, and on the first fill: 0
+/// is the presenter's "no ramp", and each new version costs the next present a wait for the
+/// frames queued and a rebuild of the presenter's pipelines, which a ramp set again unchanged
+/// does not pay.
+pub fn fill_presenter_ramp(ramp: &D3DGAMMARAMP, out: &GammaRamp) {
+    let channels = [
+        (&ramp.red, &out.red),
+        (&ramp.green, &out.green),
+        (&ramp.blue, &out.blue),
+    ];
+    let mut changed = false;
+    for (levels, points) in channels {
+        for (i, point) in points.iter().enumerate() {
+            let level = f32::from(levels[nearest_code(i)]) / f32::from(u16::MAX);
+            let bits = level.to_bits();
+            changed |= point.swap(bits, Ordering::Relaxed) != bits;
+        }
+    }
+    if changed || out.version.load(Ordering::Relaxed) == 0 {
+        out.version.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// The 8-bit code nearest the centre of point `i` of the presenter ramp's points.
+const fn nearest_code(i: usize) -> usize {
+    ((2 * i + 1) * (GAMMA_RAMP_ENTRIES - 1) + GAMMA_CP_COUNT) / (2 * GAMMA_CP_COUNT)
 }
 
 #[cfg(test)]

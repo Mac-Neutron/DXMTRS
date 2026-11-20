@@ -7,12 +7,16 @@
 //! ramp survives as long as one channel is usable, which is the lenient
 //! behaviour a game may depend on. The lookup-table tests pin the channel order
 //! and the opaque alpha lane the fragment stage never reads but Metal still
-//! samples.
+//! samples. The presenter-ramp tests sample its points as the presenter's
+//! linear filter does at each of the 256 codes, and pin when its version moves.
+
+use core::sync::atomic::Ordering;
 
 use mtld3d_types::{D3DGAMMARAMP, GAMMA_RAMP_ENTRIES};
 
 use super::{
-    LUT_LANES, identity_level, identity_ramp, is_identity, is_usable, is_usable_channel, to_lut,
+    GAMMA_CP_COUNT, LUT_LANES, fill_presenter_ramp, identity_level, identity_ramp, is_identity,
+    is_usable, is_usable_channel, presenter_ramp, to_lut,
 };
 
 /// A channel that rises by `step` per entry from `first`, saturating.
@@ -132,4 +136,80 @@ fn the_identity_lookup_table_maps_every_code_to_itself() {
         assert_eq!(lut[lane + 1], level);
         assert_eq!(lut[lane + 2], level);
     }
+}
+
+/// A ramp whose three channels differ and none is the identity: lowered, flattened, lifted.
+fn uneven_ramp() -> D3DGAMMARAMP {
+    D3DGAMMARAMP {
+        red: ramped_channel(0, 200),
+        green: ramped_channel(7, 100),
+        blue: ramped_channel(4096, 240),
+    }
+}
+
+/// The presenter ramp's points its linear filter blends for code `k`, and one more each side.
+///
+/// Code `k` is sampled at `k / 255`, `k * N / 255 - 1/2` in points of `N`: the filter blends
+/// the points either side of it, clamped to the row's ends. The outer two stand for a sample
+/// position off by up to a point.
+fn taps(k: u8) -> [usize; 4] {
+    let last = i64::try_from(GAMMA_CP_COUNT).expect("the points fit i64") - 1;
+    let below = (2 * i64::from(k) * (last + 1) - 255).div_euclid(510);
+    let tap = |i: i64| usize::try_from(i.clamp(0, last)).expect("clamped");
+    [tap(below - 1), tap(below), tap(below + 1), tap(below + 2)]
+}
+
+/// Asserts that each tap of every code holds, bit for bit, the level mtld3d's table gives it.
+fn assert_exact_at_every_code(ramp: &D3DGAMMARAMP) {
+    let out = presenter_ramp();
+    fill_presenter_ramp(ramp, &out);
+    let lut = to_lut(ramp);
+    for (channel, curve) in [&out.red, &out.green, &out.blue].into_iter().enumerate() {
+        for k in 0..=u8::MAX {
+            let level = lut[usize::from(k) * 4 + channel];
+            let want = (f32::from(level) / f32::from(u16::MAX)).to_bits();
+            for i in taps(k) {
+                let got = curve[i].load(Ordering::Relaxed);
+                assert_eq!(got, want, "channel {channel}, code {k}, point {i}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_presenter_ramp_shows_every_code_as_the_lookup_table_does() {
+    assert_exact_at_every_code(&identity_ramp());
+    assert_exact_at_every_code(&uneven_ramp());
+    let dark = ramped_channel(0, 128);
+    let darkening = D3DGAMMARAMP {
+        red: dark,
+        green: dark,
+        blue: dark,
+    };
+    assert_exact_at_every_code(&darkening);
+}
+
+#[test]
+fn the_presenter_ramp_version_moves_only_when_a_point_changes() {
+    let out = presenter_ramp();
+    let version = || out.version.load(Ordering::Relaxed);
+    assert_eq!(version(), 0);
+    fill_presenter_ramp(&uneven_ramp(), &out);
+    assert_eq!(version(), 1);
+    fill_presenter_ramp(&uneven_ramp(), &out);
+    assert_eq!(version(), 1, "a ramp set again unchanged keeps the version");
+    fill_presenter_ramp(&identity_ramp(), &out);
+    assert_eq!(version(), 2);
+}
+
+#[test]
+fn a_first_fill_moves_the_version_off_zero_even_when_no_point_changes() {
+    let out = presenter_ramp();
+    let zeros = D3DGAMMARAMP {
+        red: [0u16; GAMMA_RAMP_ENTRIES],
+        green: [0u16; GAMMA_RAMP_ENTRIES],
+        blue: [0u16; GAMMA_RAMP_ENTRIES],
+    };
+    fill_presenter_ramp(&zeros, &out);
+    assert_eq!(out.version.load(Ordering::Relaxed), 1);
 }

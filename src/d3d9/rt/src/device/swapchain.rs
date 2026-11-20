@@ -11,6 +11,8 @@ use dxmt_core::{
     resource::{Texture, TextureAllocationFlags, TextureViewKey, texture_info},
     swapchain::vsync_duration,
 };
+use mtld3d_core::gamma::{GammaRamp, fill_presenter_ramp, presenter_ramp};
+use mtld3d_types::D3DGAMMARAMP;
 use winemetal_sys::{
     CreateMetalViewFromHWND, ReleaseMetalView,
     wire::{
@@ -84,6 +86,26 @@ impl Drop for Window {
     }
 }
 
+/// The presenter's gamma ramp and whether it applies (DXMTRS C4c-7d-1).
+///
+/// One ramp for the device's life: its version only moves on, so a presenter a re-target makes,
+/// which starts at 0, takes it at its next present, and one that has seen it skips a ramp set
+/// again unchanged ([`CoreDevice::set_gamma_ramp`]).
+pub struct Gamma {
+    ramp: Box<GammaRamp>,
+    /// Whether the ramp applies: handed to the presenter at each present while it does.
+    applies: bool,
+}
+
+impl Default for Gamma {
+    fn default() -> Self {
+        Self {
+            ramp: Box::new(presenter_ramp()),
+            applies: false,
+        }
+    }
+}
+
 impl CoreDevice {
     /// Makes the `width` x `height` back buffer, and the window's Metal view and presenter.
     ///
@@ -103,7 +125,9 @@ impl CoreDevice {
     /// [`TargetRef::BackBuffer`], the presented texture and the companion name it from here on.
     /// The window's Metal view and presenter are kept, the presenter's layer taking the new size;
     /// a device without a window makes the back buffer alone. The presenter keeps its one sample,
-    /// format and colour space, so its pipelines stand and nothing waits on the GPU.
+    /// format and colour space, so its pipelines stand and nothing waits on the GPU here; a gamma
+    /// ramp that starts or stops applying across the `Reset` costs the next present a wait for the
+    /// frames queued and the pipelines' rebuild ([`CoreDevice::set_gamma_ramp`]).
     pub fn resize(&mut self, width: u32, height: u32, samples: u8) {
         self.drain();
         self.make_back_buffer(width, height, samples);
@@ -140,7 +164,9 @@ impl CoreDevice {
     /// no signal or bound is counted that nothing would signal. A multisampled back buffer's
     /// companion is resolved into the presented texture first, every frame, drawn or not,
     /// through the view its last pass or Clear wrote it in (DXMTRS C4b-3d5): folded into the
-    /// frame's last pass when that pass drew it, a resolve pass of its own otherwise.
+    /// frame's last pass when that pass drew it, a resolve pass of its own otherwise. The
+    /// presenter is handed the gamma ramp while it applies and none otherwise, before it
+    /// synchronises, which picks its pipelines by the ramp it holds (DXMTRS C4c-7d-1).
     pub fn present(&mut self, visible: bool, after: f64) {
         let presenter = self.window.as_ref().and_then(|w| w.presenter.clone());
         let (Some(presenter), Some(back_buffer), true) = (presenter, &self.back_buffer, visible)
@@ -152,6 +178,7 @@ impl CoreDevice {
         };
         let texture = Arc::clone(back_buffer.presented().0);
         self.resolve_presented();
+        presenter.change_gamma_ramp(self.gamma.applies.then_some(&*self.gamma.ramp));
         let (frame_id, metadata) = presenter.synchronize();
         let queue = self.device.queue_mut();
         let frame = queue.current_frame_seq();
@@ -162,6 +189,19 @@ impl CoreDevice {
         });
         self.commit();
         self.device.queue().present_boundary(true);
+    }
+
+    /// The gamma ramp the presenter applies from the next present, or none (DXMTRS C4c-7d-1).
+    ///
+    /// A ramp fills the device's one presenter ramp, exact at each 8-bit code
+    /// ([`fill_presenter_ramp`]), whose version moves on only when a point changes: each new
+    /// version costs the next present a wait for the frames queued and a rebuild of the
+    /// presenter's pipelines, as for D3D11. None takes the ramp off from the next present.
+    pub fn set_gamma_ramp(&mut self, ramp: Option<&D3DGAMMARAMP>) {
+        if let Some(ramp) = ramp {
+            fill_presenter_ramp(ramp, &self.gamma.ramp);
+        }
+        self.gamma.applies = ramp.is_some();
     }
 
     /// Ends the open pass, then resolves a multisampled back buffer into the presented texture.
