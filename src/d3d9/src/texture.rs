@@ -5920,9 +5920,11 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
     let decode = mtld3d_core::upload_pass::upload_decode(ti.d3d_format, ti.metal_pixel_format)
         .filter(|d| *d != mtld3d_core::upload_pass::UploadDecode::CopyBgra8);
     let cube = ti.flags.contains(TextureFlags::CUBE);
+    // A volume of depth 1 is a 2D texture, as `is_volume` and mtld3d's create have it: the stage
+    // declares its sampler 2D.
     let kind = if cube {
         TextureKind::Cube
-    } else if ti.depth > 1 || ti.flags.contains(TextureFlags::VOLUME_TEXTURE) {
+    } else if ti.depth > 1 {
         TextureKind::Volume
     } else {
         TextureKind::Tex2d
