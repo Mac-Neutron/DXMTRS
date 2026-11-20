@@ -170,9 +170,30 @@ impl StagingTake<'_> {
 
     /// [`Self::take`] that answers `None` when no box is parked and the allocation fails.
     ///
-    /// For the staging a texture gets at creation, the one place a staging
-    /// allocation may fail (see [`PageBox::try_new_uninit`]).
+    /// For staging consumers that overwrite the full taken span without zeroing
+    /// it first (see [`PageBox::try_new_uninit`]).
     pub fn try_take(&mut self, logical_len: usize) -> Option<PageBox> {
+        self.try_take_inner(logical_len, false)
+    }
+
+    /// [`Self::try_take`] with every byte zero-initialized.
+    ///
+    /// For texture creation, where partial locks or sub-rect uploads leave
+    /// unwritten texels at zero: a pool hit is zero-filled in place and a miss
+    /// or disabled pool allocates via [`PageBox::try_new_zeroed`].
+    pub fn try_take_zeroed(&mut self, logical_len: usize) -> Option<PageBox> {
+        self.try_take_inner(logical_len, true)
+    }
+
+    /// Shared staging acquisition for `try_take` and `try_take_zeroed`.
+    fn try_take_inner(&mut self, logical_len: usize, zeroed: bool) -> Option<PageBox> {
+        let alloc = |len| {
+            if zeroed {
+                PageBox::try_new_zeroed(len)
+            } else {
+                PageBox::try_new_uninit(len)
+            }
+        };
         let Some(inner) = self.guard.as_mut() else {
             #[cfg(perf_tracking)]
             self.pool.record_acquire(
@@ -180,14 +201,17 @@ impl StagingTake<'_> {
                 diagnostics::Acquire::Disabled,
                 logical_len,
             );
-            return PageBox::try_new_uninit(logical_len);
+            return alloc(logical_len);
         };
-        if let Some(pb) = inner.pop(LaneKind::Staging, logical_len, &self.pool.pooled_bytes) {
+        if let Some(mut pb) = inner.pop(LaneKind::Staging, logical_len, &self.pool.pooled_bytes) {
             self.hits = self.hits.saturating_add(1);
+            if zeroed {
+                pb.zero_fill();
+            }
             return Some(pb);
         }
         self.misses = self.misses.saturating_add(1);
-        PageBox::try_new_uninit(logical_len)
+        alloc(logical_len)
     }
 
     /// Release the pool and report `(hits, misses)` for the device's counters.
@@ -319,8 +343,8 @@ impl PageBoxPool {
     ///
     /// The staging-lane twin of [`Self::acquire`], with the same contract:
     /// a hit keeps its pages, alignment and generation and carries stale
-    /// contents, which every staging consumer tolerates because staging is
-    /// created uninitialized.
+    /// contents; callers requiring zeroed initial bytes use
+    /// [`StagingTake::try_take_zeroed`].
     ///
     /// # Panics
     ///

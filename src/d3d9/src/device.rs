@@ -3379,21 +3379,12 @@ impl DeviceInner {
     /// inside `flush_current_frame_blocking` for the destroy/create
     /// span so no in-flight cmdbuf references the freed handles.
     ///
-    /// A core device returns at once, before it reads anything, its back
-    /// buffer kept until a `Reset` (DXMTRS C4c-6d, ruling R6d-3): the resize
-    /// is mtld3d's recorder's work. The test is the recorder's absence,
-    /// which holds for the device's whole life, its release included, where
-    /// `is_core` turns false once the release has taken the core.
+    /// On a core device, `apply_core_auto_resize` resizes the core's back
+    /// buffer, recreates its auto depth-stencil and updates viewport and
+    /// scissor when target 0 is the back buffer. The runtime check is the
+    /// recorder's absence (`current_frame.get().is_none()`), which holds
+    /// through device release after `core` has been taken.
     pub fn apply_auto_resize(&mut self, new_width: u32, new_height: u32) {
-        #[cfg(feature = "core-runtime")]
-        if self.current_frame.get().is_none() {
-            mtld3d_shared::log_once_info!(
-                target: LOG_TARGET,
-                "d3d9 core: a windowed device's back buffer does not follow its window's size \
-                 (WM_SIZE); it keeps its size until a Reset"
-            );
-            return;
-        }
         if new_width == 0 || new_height == 0 {
             return;
         }
@@ -3422,6 +3413,11 @@ impl DeviceInner {
             "apply_auto_resize: backbuffer {}x{} → {new_width}x{new_height} (WM_SIZE-driven)",
             self.backbuffer_width, self.backbuffer_height,
         );
+        #[cfg(feature = "core-runtime")]
+        if self.current_frame.get().is_none() {
+            self.apply_core_auto_resize(new_width, new_height);
+            return;
+        }
 
         if self.flush_current_frame_blocking().is_err() {
             return;
@@ -3488,6 +3484,58 @@ impl DeviceInner {
             self.scissor_rect =
                 mtld3d_core::render_state::full_target_scissor(new_width, new_height);
         }
+    }
+
+    /// Core-runtime implementation of [`Self::apply_auto_resize`].
+    #[cfg(feature = "core-runtime")]
+    fn apply_core_auto_resize(&mut self, new_width: u32, new_height: u32) {
+        let Some(core) = self.core.as_deref_mut() else {
+            return;
+        };
+        let old_auto_depth = self.core_auto_depth;
+        let rebind_depth = old_auto_depth
+            .is_some_and(|id| core.depth() == Some(d3d9_rt::device::DepthRef { id, level: 0 }));
+        let rt0_is_back_buffer = core.target() == d3d9_rt::device::TargetRef::BackBuffer;
+        let samples = self.backbuffer_sample_count;
+        if !core.resize(new_width, new_height, samples) {
+            if let Some(id) = self.core_auto_depth.take() {
+                core.forget_texture(id);
+            }
+            self.depth_stencil_format = 0;
+            self.flags.insert(DeviceFlags::NOT_RESET);
+            self.clear_core_draw_cache();
+            return;
+        }
+        self.set_backbuffer_dims(new_width, new_height);
+        let mut pp = self.present_params;
+        pp.back_buffer_width = new_width;
+        pp.back_buffer_height = new_height;
+        self.set_present_params(pp);
+        let _ = remake_core_auto_depth(self, self.depth_stencil_format);
+        if rebind_depth && let Some(core) = self.core.as_deref_mut() {
+            core.set_depth(
+                self.core_auto_depth
+                    .map(|id| d3d9_rt::device::DepthRef { id, level: 0 }),
+            );
+        }
+        if rt0_is_back_buffer {
+            let (min_z, max_z) = if self.is_extended() {
+                (self.viewport.min_z, self.viewport.max_z)
+            } else {
+                (0.0, 1.0)
+            };
+            self.set_viewport(D3DVIEWPORT9 {
+                x: 0,
+                y: 0,
+                width: new_width,
+                height: new_height,
+                min_z,
+                max_z,
+            });
+            self.scissor_rect =
+                mtld3d_core::render_state::full_target_scissor(new_width, new_height);
+        }
+        self.clear_core_draw_cache();
     }
 
     /// Create the back buffer and implicit depth texture `apply_auto_resize` needs.
@@ -4817,10 +4865,10 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
             device_inner.core_draw_cache.clear();
             drop(core);
             drop(device_inner);
-            // The default runtime's encoder shutdown frees the parked texture staging at each
-            // teardown; leave the pool as it does, or a later texture's never-written texels can
-            // read the bytes of one released before. A parked box has no owner, so other live
-            // devices lose warm pages only.
+            // Match the default runtime's encoder shutdown by freeing parked texture staging on
+            // device release so a torn-down device does not retain committed pages in a 32-bit
+            // address space. A parked box has no owner, so other live devices lose warm pages
+            // only.
             crate::page_box_pool::PAGEBOX_POOL.drain_staging();
             obj.refcount = 0;
             release_parent(parent);
@@ -5681,11 +5729,16 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
     // surface keeps the old ones (`detach_held_implicit_surfaces`).
     // Only the first four are a change in what the device presents with,
     // which the line's level keys on; a held surface alone is not. A core
-    // device's handle is always null: its back buffer lives in the core.
+    // device checks its core's back buffer instead of `backbuffer_handle`.
+    #[cfg(feature = "core-runtime")]
+    let core_missing_back_buffer = dev.core.as_deref().is_none_or(|c| !c.has_back_buffer());
+    #[cfg(not(feature = "core-runtime"))]
+    let core_missing_back_buffer = false;
     let recreated_for_a_change = pp.back_buffer_width != dev.backbuffer_width
         || pp.back_buffer_height != dev.backbuffer_height
         || multi_sample_changed
-        || (!core && dev.backbuffer_handle.is_null());
+        || (!core && dev.backbuffer_handle.is_null())
+        || (core && core_missing_back_buffer);
     let resized = recreated_for_a_change || held.back_buffer.is_some() || held.depth.is_some();
     // Reset adopts the present params' auto depth-stencil configuration: an
     // enabled flag (re)creates the implicit depth-stencil at the given format,
@@ -6129,8 +6182,15 @@ fn reset_recreate_resources(
         dev.detach_held_implicit_surfaces(held);
         dev.set_backbuffer_dims(pp.back_buffer_width, pp.back_buffer_height);
         let (samples, format) = (dev.backbuffer_sample_count, dev.depth_stencil_format);
-        if let Some(core) = dev.core.as_deref_mut() {
-            core.resize(pp.back_buffer_width, pp.back_buffer_height, samples);
+        let Some(core) = dev.core.as_deref_mut() else {
+            return Err(D3DERR_INVALIDCALL);
+        };
+        if !core.resize(pp.back_buffer_width, pp.back_buffer_height, samples) {
+            if let Some(id) = dev.core_auto_depth.take() {
+                core.forget_texture(id);
+            }
+            dev.depth_stencil_format = 0;
+            return Err(D3DERR_INVALIDCALL);
         }
         return remake_core_auto_depth(dev, format);
     }
@@ -7001,10 +7061,10 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
     // Allocate per-mip staging buffers as independent page-aligned
     // heap blocks. Each becomes an `Arc<PageBox>` inside `TextureInner`
     // so the upload operation can hand the encoder thread a refcount bump
-    // (no memcpy) at `UnlockRect` time. Contents are uninitialized —
-    // the blit upload only copies the dirty sub-rect the game writes,
-    // and a draw that references a never-Locked MTLTexture samples
-    // Metal-zeroed texture memory (independent of the staging PageBox).
+    // (no memcpy) at `UnlockRect` time. Contents are zero-initialized so
+    // a partial lock or sub-rect upload never exposes stale allocator or
+    // recycled-pool bytes in unwritten texels, matching Metal's zeroed
+    // texture memory.
     // Page alignment satisfies `newBufferWithBytesNoCopy:`'s contract
     // on non-UMA Macs (Intel/AMD). Each level pops a parked box of its
     // padded size from the page-box pool before it falls back to the
@@ -7024,7 +7084,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
             // height: the chroma planes follow the luma rows in the same box, and
             // the lock pitch strides all of them. The per-level arrays keep the
             // logical extent, which is what `GetDesc` and rect validation read.
-            match staging_take.try_take(layout.total_bytes()) {
+            match staging_take.try_take_zeroed(layout.total_bytes()) {
                 Some(page) => staging.push(page),
                 None => out_of_memory = true,
             }
@@ -7038,7 +7098,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         } else {
             for level in 0..actual_levels {
                 let (mw, mh, size, bpr) = compute_mip_size(width, height, level, &fmt);
-                let Some(page) = staging_take.try_take(size as usize) else {
+                let Some(page) = staging_take.try_take_zeroed(size as usize) else {
                     out_of_memory = true;
                     break;
                 };
@@ -7544,7 +7604,7 @@ extern "system" fn device_create_volume_texture(
             let md = (depth >> level).max(1);
             let box_bytes = (slice_size as usize).saturating_mul(md as usize);
             // The staging is the one allocation of a create that may fail.
-            let Some(page) = staging_take.try_take(box_bytes) else {
+            let Some(page) = staging_take.try_take_zeroed(box_bytes) else {
                 break;
             };
             staging.push(page);
@@ -7766,7 +7826,7 @@ extern "system" fn device_create_cube_texture(
         'faces: for _face in 0..CUBE_FACE_COUNT {
             for level in 0..actual_levels {
                 let (_, _, size, _) = compute_mip_size(edge_length, edge_length, level, &fmt);
-                let Some(page) = staging_take.try_take(size as usize) else {
+                let Some(page) = staging_take.try_take_zeroed(size as usize) else {
                     break 'faces;
                 };
                 staging.push(page);
@@ -10880,7 +10940,7 @@ extern "system" fn device_create_offscreen_plain_surface(
         (linear_row_pitch(width, bpp) as usize).saturating_mul(height as usize)
     };
     // The surface's bytes are the one allocation of the create that may fail.
-    let Some(mut backing) = PageBox::try_new_uninit(bytes) else {
+    let Some(mut backing) = PageBox::try_new_zeroed(bytes) else {
         return refuse_unallocatable_staging("CreateOffscreenPlainSurface", surface);
     };
     // An extended device's system-memory surface starts with the

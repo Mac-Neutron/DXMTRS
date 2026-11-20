@@ -17,7 +17,7 @@ use dxmt_core::{
         Texture, TextureAllocationFlags, TextureViewDescriptor, TextureViewKey, texture_info,
     },
 };
-use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId};
+use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId, stretch_rect::BlitDecode};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
@@ -34,6 +34,7 @@ use winemetal_sys::wire::{
 use super::{
     CoreDevice, LOG_TARGET, TargetRef,
     draw::Stage,
+    stretch::StretchQuad,
     surface::rect_bytes,
     target::{Resolved, Shape},
 };
@@ -591,13 +592,14 @@ impl CoreDevice {
     /// `rect` is in texels of the back buffer. `bytes` starts at the rect's first texel and its
     /// rows are `pitch` bytes apart, each at least the rect's row, as
     /// [`CoreDevice::read_presented`]'s `dst`. In application order, as
-    /// [`CoreDevice::texture_upload`] records an upload: the rows are packed in a staging-ring
-    /// block now, and a blit copies them into the rect at the chunk's encode, after every pass
-    /// recorded before it. A Clear recorded before stays under them, and the next pass on the
-    /// back buffer loads them (DXMTRS C4c-3b). False, and nothing recorded, without a back
-    /// buffer, for a multisampled one (no blit from a buffer writes its companion), for an empty
-    /// rect or one that leaves the back buffer, a pitch under the rect's row or `bytes` short of
-    /// its rows.
+    /// [`CoreDevice::texture_upload`] records an upload: for a single-sample back buffer the rows
+    /// are packed in a staging-ring block now and a blit copies them into the rect at the chunk's
+    /// encode; for a multisampled back buffer they are uploaded into a transient single-sample
+    /// scratch texture and sampled into the multisampled companion via [`CoreDevice::stretch`].
+    /// A Clear recorded before stays under them, and the next pass on the back buffer loads them
+    /// (DXMTRS C4c-3b). False, and nothing recorded, without a back buffer, for an empty rect or
+    /// one that leaves the back buffer, a pitch under the rect's row or `bytes` short of its rows,
+    /// or when the multisampled scratch texture, pipeline or sampler cannot be made.
     #[must_use]
     pub fn write_presented(&mut self, rect: DirtyRect, bytes: &[u8], pitch: usize) -> bool {
         let (Some(shape), Some(back_buffer)) =
@@ -605,12 +607,12 @@ impl CoreDevice {
         else {
             return false;
         };
-        if shape.samples > 1 {
-            return false;
-        }
         let Some((row_bytes, _)) = rect_bytes(shape, rect, bytes.len(), pitch) else {
             return false;
         };
+        if shape.samples > 1 {
+            return self.write_presented_msaa(shape, rect, row_bytes, bytes, pitch);
+        }
         let texture = Arc::clone(back_buffer.presented().0);
         let copy = Blit {
             slice: 0,
@@ -630,6 +632,73 @@ impl CoreDevice {
         };
         // One image: its pitch is never read.
         self.upload(texture, 0, &copy, bytes, (pitch, 0))
+    }
+
+    /// Uploads `rect` into a transient single-sample scratch texture and stretches it into MSAA.
+    fn write_presented_msaa(
+        &mut self,
+        shape: Shape,
+        rect: DirtyRect,
+        row_bytes: u32,
+        bytes: &[u8],
+        pitch: usize,
+    ) -> bool {
+        if self
+            .quad_pipeline(shape.pixel_format, shape.samples)
+            .is_none()
+            || self.quad_sampler(false).is_none()
+        {
+            return false;
+        }
+        let scratch = TextureId::new_unique();
+        let desc = CoreTextureDesc {
+            pixel_format: shape.pixel_format,
+            kind: TextureKind::Tex2d,
+            width: rect.w,
+            height: rect.h,
+            depth: 1,
+            levels: 1,
+            flags: CoreTextureFlags::empty(),
+            srgb_format: 0,
+            block: (1, 1, shape.texel_bytes),
+            samples: 1,
+        };
+        self.texture_create(scratch, &desc);
+        let Some(scratch_tex) = self
+            .stored_texture(scratch)
+            .filter(|tex| tex.current().is_some_and(|alloc| alloc.texture() != 0))
+        else {
+            self.forget_texture(scratch);
+            return false;
+        };
+        let copy = Blit {
+            slice: 0,
+            origin: WMTOrigin { x: 0, y: 0, z: 0 },
+            size: WMTSize {
+                width: u64::from(rect.w),
+                height: u64::from(rect.h),
+                depth: 1,
+            },
+            row_bytes,
+            rows: rect.h,
+            images: 1,
+        };
+        let ok = self.upload(scratch_tex, 0, &copy, bytes, (pitch, 0))
+            && self.stretch(&StretchQuad {
+                src: TargetRef::Texture {
+                    id: scratch,
+                    level: 0,
+                    face: None,
+                },
+                src_rect: [0, 0, rect.w, rect.h],
+                src_view: shape.pixel_format,
+                dst: TargetRef::BackBuffer,
+                dst_rect: [rect.x, rect.y, rect.w, rect.h],
+                linear: false,
+                decode: BlitDecode::None.uniform(),
+            });
+        self.forget_texture(scratch);
+        ok
     }
 
     /// Uploads the whole of level `level` of `id`'s depth texture from CPU planes.

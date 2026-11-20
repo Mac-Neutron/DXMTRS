@@ -1619,13 +1619,12 @@ raw reads now return (depth, 0, 0, 1), while INTZ broadcasts depth.
 
 The basic gather and DF raw-depth checks pass on local and `@mac2` legs.
 
-15686 keeps its existing ceilings. The test writes only four bytes of each
-format texture, so projected L16/R16F samples can read unwritten texels. ATI1
-is outside the supported Fetch4 format set and keeps ordinary sampling, with
-alpha one rather than a fourth gathered texel. A8R8G8B8 also keeps ordinary
-sampling; its unwritten texels can have alpha one rather than the expected zero.
-These cases account for the remaining format-site failures. Keep the higher pins
-because counts vary with allocation contents. 15745 (`@mac2` legs only) is the
+15686 keeps its existing ceilings for un-recorded legs. Texture staging is now
+zero-initialized at creation, so unwritten texels in partial uploads (such as
+projected L16/R16F and A8R8G8B8) read zero deterministically rather than varying
+with allocation contents. ATI1 remains outside the supported Fetch4 format set
+and keeps ordinary sampling, with alpha one rather than a fourth gathered texel.
+15745 (`@mac2` legs only) is the
 3D section's `L8` volume texture, which reads its green and blue lanes through
 the channel swizzle the paravirtual device ignores (the swizzle cluster above):
 the sample carries red alone there.

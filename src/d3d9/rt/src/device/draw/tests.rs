@@ -2202,7 +2202,7 @@ fn target_gen_bumps_on_every_target_mutator() {
     g = core.target_gen();
 
     // `resize` (`make_back_buffer`) bumps `target_gen`.
-    core.resize(128, 64, 1);
+    assert!(core.resize(128, 64, 1));
     assert_ne!(core.target_gen(), g);
 }
 

@@ -192,7 +192,7 @@ impl CoreDevice {
     /// Through dxmt-core's `render_pipeline`, as its own clears make theirs: the quad's two
     /// functions, colour 0 in `format`, no blending, no depth. One Metal does not make is logged
     /// and kept as none, never made again; none while the library does not build.
-    fn quad_pipeline(&mut self, format: u32, samples: u8) -> Option<u64> {
+    pub(super) fn quad_pipeline(&mut self, format: u32, samples: u8) -> Option<u64> {
         if let Some(pso) = self.quad_pipelines.get(&(format, samples)) {
             return pso.as_ref().map(Obj::handle);
         }
@@ -234,7 +234,7 @@ impl CoreDevice {
     /// Every address clamped to the edge, so a rect at its texture's edge reads nothing from the
     /// other side: mtld3d's blit sampler, a D3D9 sampler state of those values keyed and
     /// described as a draw's.
-    fn quad_sampler(&mut self, linear: bool) -> Option<Arc<Sampler>> {
+    pub(super) fn quad_sampler(&mut self, linear: bool) -> Option<Arc<Sampler>> {
         let filter = if linear {
             D3DTEXF_LINEAR
         } else {

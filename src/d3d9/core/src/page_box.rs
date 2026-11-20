@@ -529,6 +529,17 @@ impl PageBox {
         unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
+    /// Zero-initializes the full padded region in place.
+    ///
+    /// Uses a raw byte write so a recycled box whose pages began uninitialized
+    /// never forms a `&mut [u8]` over uninitialized bytes.
+    pub const fn zero_fill(&mut self) {
+        // SAFETY: `ptr` points to `self.len` uniquely owned, writable bytes
+        // aligned to `PAGE_SIZE`, and `&mut self` grants exclusive access per
+        // the constructor's synchronization contract.
+        unsafe { core::ptr::write_bytes(self.ptr.as_ptr(), 0, self.len) };
+    }
+
     /// Padded length (page multiple).
     ///
     /// This is what the Metal `MTLBuffer` wrapper sees.

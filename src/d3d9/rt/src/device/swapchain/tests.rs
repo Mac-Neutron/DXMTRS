@@ -289,23 +289,57 @@ fn a_back_buffer_write_packs_its_rows() {
 
 /// A write the back buffer cannot take is refused, and nothing is recorded.
 ///
-/// A multisampled back buffer, a pitch under the row and bytes short of the rows; and a device
-/// without a back buffer.
+/// A pitch under the row, bytes short of the rows and a rect past an edge on both single-sample
+/// and multisampled back buffers; and a device without a back buffer.
 #[test]
 fn a_refused_back_buffer_write_records_nothing() {
     let bytes = vec![0_u8; 64 * 4 * 32];
-    for (what, device, samples, len, pitch) in [
-        ("a multisampled back buffer", 0x3b2, 4, 64 * 4 * 32, 64 * 4),
-        ("a pitch under the row", 0x3b3, 1, 64 * 4 * 32, 64 * 4 - 1),
-        ("bytes short of the rows", 0x3b4, 1, 64 * 4 * 32 - 1, 64 * 4),
+    for (what, device, samples, rect, len, pitch) in [
+        (
+            "a pitch under the row",
+            0x3b2,
+            1,
+            DirtyRect::full(64, 32),
+            64 * 4 * 32,
+            64 * 4 - 1,
+        ),
+        (
+            "bytes short of the rows",
+            0x3b3,
+            1,
+            DirtyRect::full(64, 32),
+            64 * 4 * 32 - 1,
+            64 * 4,
+        ),
+        (
+            "a multisampled pitch under the row",
+            0x3b4,
+            4,
+            DirtyRect::full(64, 32),
+            64 * 4 * 32,
+            64 * 4 - 1,
+        ),
+        (
+            "a multisampled short buffer",
+            0x701,
+            4,
+            DirtyRect::full(64, 32),
+            64 * 4 * 32 - 1,
+            64 * 4,
+        ),
+        (
+            "a multisampled rect past the right edge",
+            0x702,
+            4,
+            texels(60, 0, 8, 4),
+            64 * 4 * 32,
+            64 * 4,
+        ),
     ] {
         let mut core = core_with_samples(device, samples);
         core.drain();
         let _ = dxmt_fakes::take_calls(device);
-        assert!(
-            !core.write_presented(DirtyRect::full(64, 32), &bytes[..len], pitch),
-            "{what}"
-        );
+        assert!(!core.write_presented(rect, &bytes[..len], pitch), "{what}");
         core.drain();
         let calls = dxmt_fakes::take_calls(device);
         assert!(calls.is_empty(), "{what}: {calls:#?}");
@@ -314,6 +348,81 @@ fn a_refused_back_buffer_write_records_nothing() {
     let mtl = unsafe { winemetal_sys::Obj::adopt(0x3b5) }.expect("a non-zero handle");
     let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
     assert!(!core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
+}
+
+/// A multisampled back buffer write stretches into the companion.
+///
+/// Uploads into a 1x scratch texture, stretches into the companion, and forgets the scratch.
+#[test]
+fn a_multisampled_back_buffer_write_stretches_into_companion() {
+    const DEVICE: u64 = 0x703;
+    let mut core = core_with_samples(DEVICE, 4);
+    core.drain();
+    let made = back_buffers(&dxmt_fakes::take_calls(DEVICE));
+    assert_eq!(made.len(), 2, "{made:?}");
+    let (presented, companion) = (made[0].clone(), made[1].clone());
+
+    let sub_pitch = 8 * 4 + 16;
+    let sub_bytes = vec![0x7f_u8; sub_pitch * 4 + 8 * 4];
+    assert!(core.write_presented(texels(4, 6, 8, 5), &sub_bytes, sub_pitch));
+    assert!(
+        core.textures.is_empty(),
+        "transient scratch must be forgotten immediately"
+    );
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let scratches = textures_made(&calls);
+    assert_eq!(scratches.len(), 1, "{calls:#?}");
+    let scratch_line = calls
+        .iter()
+        .find(|c| c.starts_with(&format!("MTLDevice_newTexture {}", scratches[0])))
+        .expect("scratch texture line");
+    assert!(scratch_line.contains(" size=8x5x1 "), "{scratch_line}");
+    let copies = copies_to_texture(&calls);
+    assert_eq!(copies.len(), 1, "{calls:#?}");
+    assert!(
+        calls[copies[0]].starts_with(&format!(
+            "  blit copy_to_texture {} level=0 slice=0 origin=0,0,0 size=8x5x1 ",
+            scratches[0]
+        )),
+        "{}",
+        calls[copies[0]]
+    );
+    assert!(
+        calls[copies[0]].ends_with(" bytes_per_row=32 bytes_per_image=160"),
+        "{}",
+        calls[copies[0]]
+    );
+    let found = passes(&calls);
+    assert_eq!(found.len(), 1, "{calls:#?}");
+    let color = line(found[0], "  color0 ").unwrap_or_default();
+    assert!(color.starts_with("load=1 store=1 "), "{calls:#?}");
+    assert_eq!(targets(&calls)[0].0, companion, "{calls:#?}");
+    assert!(
+        found[0]
+            .iter()
+            .any(|c| c.contains("viewports[0].origin_x=0x40800000")
+                && c.contains("viewports[0].origin_y=0x40c00000")
+                && c.contains("viewports[0].width=0x41000000")
+                && c.contains("viewports[0].height=0x40a00000")),
+        "{calls:#?}"
+    );
+    assert!(copies[0] < at(&calls, "MTLCommandBuffer_renderCommandEncoder"));
+
+    // Full-rect write followed by Present resolves the companion into the presented texture.
+    let full_bytes = vec![0x33_u8; 64 * 4 * 32];
+    assert!(core.write_presented(DirtyRect::full(64, 32), &full_bytes, 64 * 4));
+    assert!(core.textures.is_empty());
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
+    assert_eq!(drawn, 1, "resolve folded into stretch pass: {calls:#?}");
+    core.present(true, 0.0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
+    assert_eq!(drawn, 0, "resolve pass of its own: {calls:#?}");
 }
 
 /// A write of the back buffer before a Present and one after it are recorded in that order.
@@ -409,7 +518,7 @@ fn a_resize_drains_then_makes_the_back_buffer_alone() {
     let held = core.back_buffer.as_ref().expect("a back buffer");
     let old = std::sync::Arc::downgrade(&held.texture);
     core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
-    core.resize(128, 64, 1);
+    assert!(core.resize(128, 64, 1));
     let calls = dxmt_fakes::take_calls(DEVICE);
     let commit = at(&calls, "MTLCommandBuffer_commit");
     let made = made_at(&calls);
@@ -431,7 +540,7 @@ fn a_resized_back_buffer_is_drawn_and_presented() {
     let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
     for (width, height) in [(128_u16, 64_u16), (96, 48)] {
-        core.resize(u32::from(width), u32::from(height), 1);
+        assert!(core.resize(u32::from(width), u32::from(height), 1));
         core.drain();
         let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
         assert_eq!(made.len(), 1, "{made:?}");
@@ -465,7 +574,7 @@ fn a_resize_changes_the_sample_count_both_ways() {
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
     let binds = ff_binds();
-    core.resize(64, 32, 4);
+    assert!(core.resize(64, 32, 4));
     core.drain();
     let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
     assert_eq!(made.len(), 2, "{made:?}");
@@ -485,7 +594,7 @@ fn a_resize_changes_the_sample_count_both_ways() {
     let held = core.back_buffer.as_ref().expect("a back buffer");
     let ms = held.companion.as_ref().expect("a companion");
     let old = std::sync::Arc::downgrade(&ms.texture);
-    core.resize(64, 32, 1);
+    assert!(core.resize(64, 32, 1));
     core.drain();
     let made = textures_made(&dxmt_fakes::take_calls(DEVICE));
     assert_eq!(made.len(), 1, "{made:?}");
@@ -511,7 +620,7 @@ fn a_resize_without_a_window_makes_the_back_buffer() {
     let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
     let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
     core.attach(0, 64, 32, 1);
-    core.resize(128, 64, 4);
+    assert!(core.resize(128, 64, 4));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let resized = calls
@@ -548,7 +657,7 @@ fn a_resize_keeps_an_open_occlusion_bracket() {
     let binds = ff_binds();
     core.occlusion_begin(&mut query);
     assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
-    core.resize(128, 64, 1);
+    assert!(core.resize(128, 64, 1));
     assert_eq!(core.open_brackets, Some(1));
     assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
     core.occlusion_end(&mut query);
@@ -596,6 +705,50 @@ fn a_retarget_keeps_the_back_buffer_and_makes_a_presenter() {
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_presented_at(&calls, &back_buffer, 64, 32);
+}
+
+/// Zero-dimension resize rejects the back buffer, updates no layer, and bumps `target_gen`.
+///
+/// A valid resize afterwards restores `has_back_buffer()`, bumps `target_gen`, and resets
+/// `pass_bound`.
+#[test]
+fn zero_resize_fails_without_layer_update_and_valid_resize_recovers() {
+    const DEVICE: u64 = 0x704;
+    let mut core = core_on_fakes(DEVICE);
+    assert!(core.has_back_buffer());
+    let binds = ff_binds();
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_ne!(core.pass_bound.pso, 0, "draw populated pass_bound");
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let gen_before_fail = core.target_gen();
+    assert!(!core.resize(0, 64, 1));
+    assert!(!core.has_back_buffer());
+    assert_ne!(core.target_gen(), gen_before_fail);
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newTexture ") || c.contains("MetalLayer")),
+        "zero resize must allocate no texture or update layer: {calls:#?}"
+    );
+
+    // Draw populates pass_bound again once back buffer is restored, and resize resets pass_bound.
+    let gen_before_ok = core.target_gen();
+    assert!(core.resize(128, 64, 1));
+    assert!(core.has_back_buffer());
+    assert_ne!(core.target_gen(), gen_before_ok);
+    assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
+    assert_ne!(core.pass_bound.pso, 0);
+    let gen_before_reset = core.target_gen();
+    assert!(core.resize(96, 48, 1));
+    assert_ne!(core.target_gen(), gen_before_reset);
+    assert_eq!(
+        core.pass_bound.pso, 0,
+        "resize drains and resets pass_bound"
+    );
+    core.drain();
 }
 
 /// Asserts `calls` present `presented` into the layer at `width` x `height`.

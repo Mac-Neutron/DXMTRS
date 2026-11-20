@@ -453,3 +453,60 @@ fn draining_frees_only_the_staging_lane() {
     );
     assert_eq!(pool.drain_staging(), 0);
 }
+
+#[test]
+fn try_take_zeroed_clears_fresh_dirty_uninit_and_zero_length_boxes() {
+    // Disabled pool: fresh allocation is zeroed across logical and padded bytes.
+    let disabled = PageBoxPool::new(0);
+    let mut take = disabled.take_staging();
+    let fresh_disabled = take.try_take_zeroed(128).expect("disabled zeroed alloc");
+    assert_eq!(fresh_disabled.logical_len(), 128);
+    assert!(fresh_disabled.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (0, 0));
+
+    // Enabled pool miss: fresh allocation is zeroed.
+    let pool = PageBoxPool::new(usize::MAX);
+    let mut take = pool.take_staging();
+    let mut dirty = take.try_take_zeroed(PAGE_SIZE).expect("miss zeroed alloc");
+    assert!(dirty.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (0, 1));
+
+    // Dirty recycled pool hit: full padded region is zeroed, including past logical_len.
+    dirty.as_mut_slice().fill(0xA5);
+    let dirty_ptr = dirty.as_ptr();
+    assert!(pool.recycle_staging(Arc::new(dirty)));
+    let mut take = pool.take_staging();
+    let cleaned = take.try_take_zeroed(100).expect("recycled dirty hit");
+    assert_eq!(cleaned.as_ptr(), dirty_ptr);
+    assert_eq!(cleaned.logical_len(), 100);
+    assert!(cleaned.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (1, 0));
+
+    // Recycled `try_new_uninit` box: zero-filled without reading uninitialized bytes.
+    let uninit = PageBox::try_new_uninit(PAGE_SIZE).expect("uninit alloc");
+    let uninit_ptr = uninit.as_ptr();
+    assert!(pool.recycle_staging(Arc::new(uninit)));
+    let mut take = pool.take_staging();
+    let zeroed_uninit = take.try_take_zeroed(64).expect("recycled uninit hit");
+    assert_eq!(zeroed_uninit.as_ptr(), uninit_ptr);
+    assert!(zeroed_uninit.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (1, 0));
+
+    // Zero-length requests: both fresh miss and dirty pool hit return one zeroed page.
+    let mut take = pool.take_staging();
+    let zero_miss = take.try_take_zeroed(0).expect("zero-len fresh alloc");
+    assert_eq!(zero_miss.logical_len(), 0);
+    assert_eq!(zero_miss.len(), PAGE_SIZE);
+    assert!(zero_miss.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (0, 1));
+
+    let mut dirty_zero = zero_miss;
+    dirty_zero.as_mut_slice().fill(0x5A);
+    assert!(pool.recycle_staging(Arc::new(dirty_zero)));
+    let mut take = pool.take_staging();
+    let zero_hit = take.try_take_zeroed(0).expect("zero-len recycled hit");
+    assert_eq!(zero_hit.logical_len(), 0);
+    assert_eq!(zero_hit.len(), PAGE_SIZE);
+    assert!(zero_hit.as_slice().iter().all(|&b| b == 0));
+    assert_eq!(take.finish(), (1, 0));
+}

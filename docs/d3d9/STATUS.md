@@ -38,12 +38,11 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`:
   a `Reset` to a back-buffer format the core does not make; a
   `SetRenderTarget` or `SetDepthStencilSurface` of a surface the core does not
-  target or attach; a writable `LockRect` and a `GetDC` of a multisampled back
-  buffer; a RESZ into a dynamic depth texture; a `StretchRect` of a pair the
-  core does not copy; and a draw whose layout no binding can fetch, that reads
-  a buffer of another device, binds a shader no core device created, samples
-  a depth texture at a vertex sampler or samples the depth-stencil it tests or
-  writes.
+  target or attach; a RESZ into a dynamic depth texture; a `StretchRect` of a
+  pair the core does not copy; and a draw whose layout no binding can fetch,
+  that reads a buffer of another device, binds a shader no core device created,
+  samples a depth texture at a vertex sampler or samples the depth-stencil it
+  tests or writes.
 - On the core runtime the gamma ramp, the frame latency and the extended
   device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
   `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp of a fullscreen
@@ -100,12 +99,9 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   and does what it does on mtld3d (the Direct3D cursor at `WM_SETCURSOR`, the
   registry's display mode put back while the application is inactive and the
   device's set again when it returns, a fullscreen window's monitor covered
-  again after another hand resized it), and it follows the device to another
-  window at a `Reset` that names one. One difference: a windowed device's back
-  buffer does not follow its window's size, so after a resize (the game's, the
-  person's, or macOS shrinking the window for the menu bar or the Dock) the
-  image is stretched to the window until a `Reset`, where mtld3d makes the
-  back buffer again at the new client size.
+  again after another hand resized it, and a windowed device's back buffer,
+  auto depth-stencil, viewport and scissor following `WM_SIZE`), and it follows
+  the device to another window at a `Reset` that names one.
 - On the core runtime `CreateDevice` and `CreateDeviceEx` make a fullscreen
   device as mtld3d makes it: the requested display mode set when it is a
   settable one other than the current, the device window made a borderless

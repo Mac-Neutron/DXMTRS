@@ -247,6 +247,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle,
             multi_sample,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::empty(),
             private_data: PrivateDataStore::default(),
@@ -306,6 +307,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::empty(),
             private_data: PrivateDataStore::default(),
@@ -368,6 +370,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags,
             private_data: PrivateDataStore::default(),
@@ -416,6 +419,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::empty(),
             private_data: PrivateDataStore::default(),
@@ -467,6 +471,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::CONTAINER_CACHED,
             private_data: PrivateDataStore::default(),
@@ -522,6 +527,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::CONTAINER_CACHED,
             private_data: PrivateDataStore::default(),
@@ -571,6 +577,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: None,
             flags: SurfaceFlags::OWNS_PARENT_TEXTURE,
             private_data: PrivateDataStore::default(),
@@ -622,6 +629,7 @@ impl Direct3DSurface9 {
             metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
+            readback_dims: (0, 0),
             system_memory: Some(HeldPages::new(backing, PageHolder::Surface)),
             flags: SurfaceFlags::empty(),
             private_data: PrivateDataStore::default(),
@@ -1313,6 +1321,8 @@ struct SurfaceInner {
     /// `UnlockRect`. Persists across the Lock so the game can read the returned
     /// pointer.
     readback: Option<HeldPages>,
+    /// Logical `(width, height)` of the current `readback` page, or `(0, 0)` when none.
+    readback_dims: (u32, u32),
     /// Backing store for a `D3DPOOL_SYSTEMMEM` offscreen plain surface.
     ///
     /// From `CreateOffscreenPlainSurface`. Allocated full-size at creation;
@@ -2796,6 +2806,7 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
     }
     if was_mapped {
         inner.readback = None;
+        inner.readback_dims = (0, 0);
     }
     hr
 }
@@ -2807,8 +2818,7 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
 /// PE-heap buffer that stays alive until `UnlockRect`. `WoW` uses this for
 /// character portraits (a small sub-rect blit back to a game-side texture).
 /// On a core device the core reads it as Present would show it (DXMTRS C4c-3a), the whole
-/// surface for a writable lock, and the next `UnlockRect` writes that back (DXMTRS C4c-3b);
-/// a writable lock of a multisampled back buffer is refused.
+/// surface for a writable lock, and the next `UnlockRect` writes that back (DXMTRS C4c-3b).
 fn backbuffer_lock_readback(
     obj: &Direct3DSurface9,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -2833,16 +2843,6 @@ fn backbuffer_lock_readback(
         );
         return D3DERR_INVALIDCALL;
     }
-    // A core device writes its back buffer back through a blit, which cannot write the
-    // multisampled companion the frame resolves from; D3D9 does not let a lockable back buffer be
-    // multisampled (DXMTRS C4c-3b). Refused where the flag check stands, ahead of the lock state.
-    refuse_under_core!(
-        inner.on_core_device()
-            && flags & D3DLOCK_READONLY == 0
-            && inner.live_multi_sample().sample_count > 1,
-        "IDirect3DSurface9::LockRect (a writable lock of a multisampled back buffer)",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // The read-back page is what the lock maps, and a `GetDC` wraps the same
     // slot, so the back buffer takes the surface lock state like every other
     // lockable surface: a second lock or a lock under an outstanding DC is
@@ -2899,6 +2899,7 @@ fn backbuffer_map_for_write(
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "back-buffer LockRect: the read-back page does not reach the locked rect → INVALIDCALL");
         inner.readback = None;
+        inner.readback_dims = (0, 0);
         return D3DERR_INVALIDCALL;
     };
     let locked = D3DLOCKED_RECT {
@@ -3103,6 +3104,7 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
             return None;
         }
         inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
+        inner.readback_dims = (w, h);
         return Some((w, h, bytes_per_row));
     }
     let w = inner.live_width();
@@ -3159,6 +3161,7 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
         return None;
     }
     inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
+    inner.readback_dims = (w, h);
     Some((w, h, bytes_per_row))
 }
 
@@ -3180,9 +3183,18 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
 /// On a core device the core writes the page into the back buffer in application order, over
 /// what was drawn before (DXMTRS C4c-3b).
 fn backbuffer_page_upload(inner: &mut SurfaceInner) {
+    let (width, height) = (inner.live_width(), inner.live_height());
+    if inner.readback_dims != (width, height) {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "back-buffer write-back: page size {}x{} no longer matches back buffer {width}x{height}; skipping stale page upload",
+            inner.readback_dims.0,
+            inner.readback_dims.1,
+        );
+        return;
+    }
     #[cfg(feature = "core-runtime")]
     if inner.on_core_device() {
-        let (width, height) = (inner.live_width(), inner.live_height());
         // The page `readback_full_backbuffer`'s core arm read: BGRA8 rows, four bytes a texel.
         let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, 4) as usize;
         // SAFETY: null, or the surface's live owning device, which outlives it and is a different
@@ -3203,7 +3215,6 @@ fn backbuffer_page_upload(inner: &mut SurfaceInner) {
         }
         return;
     }
-    let (width, height) = (inner.live_width(), inner.live_height());
     let color_handle = inner.live_color_handle().raw();
     let live_format = inner.live_format();
     let Some(mapping) = mtld3d_core::format::map_d3d_format(live_format) else {
@@ -3245,7 +3256,7 @@ fn backbuffer_page_upload(inner: &mut SurfaceInner) {
     let bytes = unsafe { device_inner.capture_frame_bytes(&page.as_slice()[..needed]) };
     // The snapshot page is tightly packed, so a row is exactly `width` pixels.
     let src_stride = width * bpp;
-    if scale.is_identity() {
+    if scale.is_identity() && inner.live_multi_sample().sample_count <= 1 {
         device_inner.push_control(crate::device::UploadColorOp {
             color_handle,
             bytes,
@@ -4045,16 +4056,6 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
     if (unsafe { &*inner.dc_lock_ptr() }).map_count != 0 {
         return D3DERR_INVALIDCALL;
     }
-    // A core device writes a lockable back buffer's DC back through a blit, which cannot write
-    // the multisampled companion the frame resolves from; D3D9 does not let a lockable back buffer
-    // be multisampled (DXMTRS C4c-3b). Refused after the state checks above, as the writable lock.
-    refuse_under_core!(
-        inner.on_core_device()
-            && inner.is_lockable_backbuffer()
-            && inner.live_multi_sample().sample_count > 1,
-        "IDirect3DSurface9::GetDC (a multisampled back buffer)",
-        mtld3d_types::D3DERR_NOTAVAILABLE
-    );
     // A LOCKABLE implicit backbuffer is GPU-only: snapshot it via a full
     // read-back into `readback` so `dc_pixels` (and the DIB it seeds) have host
     // pixels. A NON-lockable backbuffer rejects GetDC: the
@@ -4247,6 +4248,7 @@ extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i3
     // now the DC is gone (the LockRect path reuses the same slot). No-op for
     // every other surface kind (their `readback` is already None here).
     inner.readback = None;
+    inner.readback_dims = (0, 0);
     // Nothing maps the level any more, so the upload the dirty mark above
     // schedules may release its staging again once it has carried GDI's rows.
     pin_dc_texture_level(inner, false);

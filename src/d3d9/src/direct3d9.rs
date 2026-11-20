@@ -2495,8 +2495,7 @@ fn create_core_device(
     }
     // The window subclass, as mtld3d's create installs it, once nothing is left to fail: its
     // registry keeps this address until the release unregisters it, before anything is freed.
-    // Its one path into mtld3d's recorder, the auto-resize on `WM_SIZE`, returns at once on a
-    // core device (DXMTRS C4c-6d).
+    // Its `WM_SIZE` handler drives `DeviceInner::apply_auto_resize` on both runtimes.
     let inner_ptr = std::ptr::from_mut::<crate::device::DeviceInner>(inner);
     inner.cursor().install_subclass(inner_ptr);
     // SAFETY: `present_params` is the non-null pointer the request was read from, writable

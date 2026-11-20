@@ -869,13 +869,28 @@ impl TextureInner {
     /// promises the level's current contents, through
     /// [`Self::ensure_staging_for_lock`].
     fn ensure_staging(&mut self, level: usize) {
+        self.ensure_staging_with(level, false);
+    }
+
+    /// Give released `level` zeroed staging, the contents of a level nothing has written.
+    fn ensure_zeroed_staging(&mut self, level: usize) {
+        self.ensure_staging_with(level, true);
+    }
+
+    /// Re-create released `level`'s staging, zero-initialized when `zeroed` is true.
+    fn ensure_staging_with(&mut self, level: usize, zeroed: bool) {
         if self.dropped_staging & (1u32 << level) == 0 {
             return;
         }
         let block_rows = self.mip_heights[level].div_ceil(self.block_h.max(1));
         let len = (self.mip_bytes_per_row[level] as usize).saturating_mul(block_rows as usize);
         // The slot holds the shared placeholder, never its last owner.
-        self.staging[level] = Arc::new(take_staging_for(self.device_inner, len.max(1)));
+        let page = if zeroed {
+            take_zeroed_staging_for(self.device_inner, len.max(1))
+        } else {
+            take_staging_for(self.device_inner, len.max(1))
+        };
+        self.staging[level] = Arc::new(page);
         self.dropped_staging &= !(1u32 << level);
         self.reset_staging_coverage(level);
         // The allocation is fresh, so no GPU-visible command references it and
@@ -890,41 +905,32 @@ impl TextureInner {
         );
     }
 
-    /// Give released `level` zeroed staging, the contents of a level nothing has written.
-    fn ensure_zeroed_staging(&mut self, level: usize) {
-        if self.dropped_staging & (1u32 << level) == 0 {
-            return;
-        }
-        self.ensure_staging(level);
-        Arc::get_mut(&mut self.staging[level])
-            .expect("re-created staging is unique")
-            .as_mut_slice()
-            .fill(0);
-    }
-
     /// Re-materialise `level`'s released staging for a `LockRect`.
     ///
     /// D3D9 hands a lock the level's current contents, and a released level
     /// holds them on the GPU alone, so the fresh pages are filled from there
     /// before the pointer goes out. The read costs a synchronous flush and blit
-    /// per lock, which the warning names. `D3DLOCK_DISCARD` and a level the GPU
-    /// never received skip it and take the pages as allocated: the first
-    /// because the caller declared the old contents dead, the second because
-    /// there are none to read.
+    /// per lock, which the warning names. `D3DLOCK_DISCARD` skips initialization
+    /// because the caller declared the old contents dead; a level the GPU never
+    /// received takes zeroed pages so unwritten texels remain zero.
     fn ensure_staging_for_lock(&mut self, level: usize, flags: u32) -> bool {
         if self.dropped_staging & (1u32 << level) == 0 {
             return true;
         }
-        let readback = mtld3d_core::texture_staging::released_level_lock_needs_readback(flags)
-            && self.was_uploaded[level];
+        let needs_readback =
+            mtld3d_core::texture_staging::released_level_lock_needs_readback(flags);
+        let readback = needs_readback && self.was_uploaded[level];
         if !readback {
-            self.ensure_staging(level);
+            if needs_readback {
+                self.ensure_zeroed_staging(level);
+            } else {
+                self.ensure_staging(level);
+            }
             mtld3d_shared::log_once_info_by!(
                 target: crate::LOG_TARGET,
                 key: self.texture_id.raw(),
-                "texture {:#x}: lock of level {level} after its staging was released hands out \
-                 uninitialised pixels; the lock discards the level's contents or the GPU never \
-                 received them",
+                "texture {:#x}: lock of level {level} after its staging was released skips GPU \
+                 readback; the lock discards the level's contents or the GPU never received them",
                 self.texture_id.raw()
             );
             return true;
@@ -967,7 +973,11 @@ impl TextureInner {
             whole_level,
             self.was_uploaded[level],
         ) {
-            self.ensure_staging(level);
+            if whole_level {
+                self.ensure_staging(level);
+            } else {
+                self.ensure_zeroed_staging(level);
+            }
             return true;
         }
         if self.read_released_level_back(level) {
@@ -3416,9 +3426,23 @@ pub fn retire_staging(device_inner: u64, backing: Arc<PageBox>) {
 
 /// One staging allocation, counted on the owning device when the texture still has one.
 fn take_staging_for(device_inner: u64, len: usize) -> PageBox {
+    take_staging_inner(device_inner, len, false)
+}
+
+/// One zeroed staging allocation, counted on the owning device when the texture still has one.
+fn take_zeroed_staging_for(device_inner: u64, len: usize) -> PageBox {
+    take_staging_inner(device_inner, len, true)
+}
+
+/// Shared staging allocation for `take_staging_for` and `take_zeroed_staging_for`.
+fn take_staging_inner(device_inner: u64, len: usize, zeroed: bool) -> PageBox {
     let (page, (hits, misses)) = {
         let mut take = take_staging();
-        let page = take.take(len);
+        let page = if zeroed {
+            take.try_take_zeroed(len).expect("PageBox alloc failed")
+        } else {
+            take.take(len)
+        };
         (page, take.finish())
     };
     if device_inner != 0 {

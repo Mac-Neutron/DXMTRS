@@ -117,24 +117,37 @@ impl CoreDevice {
         self.window = self.open_window(hwnd, width, height);
     }
 
+    /// Whether the device currently holds a live back buffer.
+    #[must_use]
+    pub const fn has_back_buffer(&self) -> bool {
+        self.back_buffer.is_some()
+    }
+
     /// Makes the back buffer again, `width` x `height` of `samples`, in place: a `Reset`'s.
     ///
     /// The work recorded so far is drained first, so no recorded closure is left to name the old
     /// back buffer, which then drops with its companion. The new one is made as
     /// [`CoreDevice::attach`] makes it, at any size and count, the old one's included, and
     /// [`TargetRef::BackBuffer`], the presented texture and the companion name it from here on.
-    /// The window's Metal view and presenter are kept, the presenter's layer taking the new size;
-    /// a device without a window makes the back buffer alone. The presenter keeps its one sample,
-    /// format and colour space, so its pipelines stand and nothing waits on the GPU here; a gamma
-    /// ramp that starts or stops applying across the `Reset` costs the next present a wait for the
-    /// frames queued and the pipelines' rebuild ([`CoreDevice::set_gamma_ramp`]).
-    pub fn resize(&mut self, width: u32, height: u32, samples: u8) {
+    /// The window's Metal view and presenter are kept, the presenter's layer taking the new size
+    /// once the new back buffer succeeds; a device without a window makes the back buffer alone.
+    /// Returns `false` without updating the layer when `width == 0`, `height == 0`, or Metal
+    /// refuses an allocation. The presenter keeps its one sample, format and colour space, so its
+    /// pipelines stand and nothing waits on the GPU here; a gamma ramp that starts or stops
+    /// applying across the `Reset` costs the next present a wait for the frames queued and the
+    /// pipelines' rebuild ([`CoreDevice::set_gamma_ramp`]).
+    #[must_use]
+    pub fn resize(&mut self, width: u32, height: u32, samples: u8) -> bool {
         self.drain();
         self.make_back_buffer(width, height, samples);
+        if self.back_buffer.is_none() {
+            return false;
+        }
         let presenter = self.window.as_ref().and_then(|w| w.presenter.as_deref());
         if let Some(presenter) = presenter {
             set_layer_size(presenter, width, height);
         }
+        true
     }
 
     /// Moves the device to window `hwnd`, its back buffer kept: a `Reset` naming another window.
@@ -231,8 +244,14 @@ impl CoreDevice {
 
     /// Makes the `width` x `height` back buffer of `samples`, in place of the one before.
     ///
-    /// The single-sample texture first, then for `samples` above one the companion.
+    /// The single-sample texture first, then for `samples` above one the companion. Rejects zero
+    /// dimensions or a null Metal allocation before queueing any zero-init work or setting `dirty`.
     fn make_back_buffer(&mut self, width: u32, height: u32, samples: u8) {
+        if width == 0 || height == 0 {
+            self.back_buffer = None;
+            self.target_gen = self.target_gen.wrapping_add(1);
+            return;
+        }
         let mtl = self.device.device();
         let info = |samples: u8| WMTTextureInfo {
             pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
@@ -255,22 +274,43 @@ impl CoreDevice {
             gpu_resource_id: 0,
         };
         let texture = Arc::new(Texture::new(info(1), mtl));
-        texture.rename(texture.allocate(TextureAllocationFlags::GPU_PRIVATE));
+        let alloc = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
+        if alloc.texture() == 0 {
+            log::error!(
+                target: LOG_TARGET,
+                "d3d9 core: failed allocating back buffer {width}x{height}"
+            );
+            self.back_buffer = None;
+            self.target_gen = self.target_gen.wrapping_add(1);
+            return;
+        }
+        texture.rename(alloc);
         let key = texture.full_view();
         // Zeroed as a render-target texture is, ahead of the next chunk.
-        let companion = (samples > 1).then(|| {
+        let companion = if samples > 1 {
             let texture = Arc::new(Texture::new(info(samples), mtl));
-            let allocation = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
-            texture.rename(Arc::clone(&allocation));
+            let comp_alloc = texture.allocate(TextureAllocationFlags::GPU_PRIVATE);
+            if comp_alloc.texture() == 0 {
+                log::error!(
+                    target: LOG_TARGET,
+                    "d3d9 core: failed allocating {samples}x back buffer companion {width}x{height}"
+                );
+                self.back_buffer = None;
+                self.target_gen = self.target_gen.wrapping_add(1);
+                return;
+            }
+            texture.rename(Arc::clone(&comp_alloc));
             let initializer = self.device.queue().initializer();
-            let _ = initializer.init_texture_zero(&texture, &allocation, 0, 0);
-            Companion {
+            let _ = initializer.init_texture_zero(&texture, &comp_alloc, 0, 0);
+            Some(Companion {
                 key: texture.full_view(),
                 texture,
                 samples,
                 last_written: WMT_PIXEL_FORMAT_BGRA8_UNORM,
-            }
-        });
+            })
+        } else {
+            None
+        };
         self.dirty |= companion.is_some();
         self.back_buffer = Some(BackBuffer {
             texture,
