@@ -52,7 +52,8 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   applies it. Each change of the ramp makes the next present wait for the
   frames queued and rebuild the presenter's pipelines, so a game that fades
   through the ramp every frame stalls every frame, where mtld3d passes the
-  ramp with the frame. The latency bound is the core's queue's: a present
+  ramp with the frame; a `Reset` into or out of fullscreen with a ramp set
+  costs the same once. The latency bound is the core's queue's: a present
   waits until the GPU has finished the frame that many presents back, where
   mtld3d also waits for the display's pace, and a present to a hidden or
   minimised window counts no frame.
@@ -62,16 +63,19 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   and stores the state, as mtld3d does. A RESZ the core cannot do (no texture
   or one of no depth format at stage 0, no depth-stencil bound, a destination
   of another size or, from a one-sample source, of another pixel format) is
-  skipped with one warning and answers `D3D_OK`. Three differences: with a
+  skipped with one warning and answers `D3D_OK`. Four differences: with a
   depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at stage 0 is
   refused by name with `D3DERR_NOTAVAILABLE` and the state is neither stored
   nor recorded into an open state block; a multisampled source of another
   pixel format than the destination's (D24X8, D16 or D32 into INTZ, D24S8 or
   D24FS8 into DF24 or DF16) is skipped with a warning, where mtld3d's transfer
-  converts it; and the bound depth-stencil's own texture at stage 0 is skipped
-  with a warning, where mtld3d copies the texture onto itself. A multisampled
-  source with a stencil plane is first copied into a scratch texture the core
-  makes at each such call.
+  converts it; a one-sample source of another pixel format than the
+  destination's (seen for D24X8 into INTZ) is skipped with a warning and the
+  destination keeps its contents, where mtld3d leaves the destination reading
+  zero; and the bound depth-stencil's own texture at stage 0 is skipped with a
+  warning, where mtld3d copies the texture onto itself. A multisampled source
+  with a stencil plane is first copied into a scratch texture the core makes
+  at each such call.
 - On the core runtime `SetCursorProperties`, `SetCursorPosition` and
   `ShowCursor` answer as on mtld3d, through the same Win32 cursor, and the
   window subclass keeps the Direct3D cursor at the window's `WM_SETCURSOR` on
