@@ -219,6 +219,19 @@ impl CoreDevice {
                 TextureAllocationFlags::GPU_PRIVATE | TextureAllocationFlags::SHADER_READONLY,
             ));
         }
+        let replaces_bound = matches!(self.target, TargetRef::Texture { id: held, .. } if held == id)
+            || self
+                .extras
+                .iter()
+                .flatten()
+                .any(|t| matches!(*t, TargetRef::Texture { id: held, .. } if held == id))
+            || self.depth.is_some_and(|depth| depth.id == id);
+        if replaces_bound {
+            if self.render_open {
+                self.close_pass();
+            }
+            self.target_gen = self.target_gen.wrapping_add(1);
+        }
         self.textures.insert(
             id,
             Stored {
@@ -355,13 +368,15 @@ impl CoreDevice {
             TargetRef::Texture { id: held, .. } => held == id,
             TargetRef::BackBuffer => false,
         };
-        if holds(&self.target) {
+        let had_target = holds(&self.target);
+        if had_target {
             if self.render_open {
                 self.close_pass();
             }
             self.target = TargetRef::BackBuffer;
         }
-        if self.extras.iter().flatten().any(holds) {
+        let had_extra = self.extras.iter().flatten().any(holds);
+        if had_extra {
             if self.render_open {
                 self.close_pass();
             }
@@ -371,11 +386,15 @@ impl CoreDevice {
                 }
             }
         }
-        if self.depth.is_some_and(|depth| depth.id == id) {
+        let had_depth = self.depth.is_some_and(|depth| depth.id == id);
+        if had_depth {
             if self.render_open {
                 self.close_pass();
             }
             self.depth = None;
+        }
+        if had_target || had_extra || had_depth {
+            self.target_gen = self.target_gen.wrapping_add(1);
         }
         self.textures.remove(&id);
     }

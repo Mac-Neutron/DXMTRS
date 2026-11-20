@@ -513,6 +513,9 @@ pub struct DeviceInner {
     // Encoder + frame state: mtld3d's runtime's, absent under the core runtime.
     encoder: Mtld3dOnly<EncoderThread>,
     current_frame: Mtld3dOnly<FrameData>,
+    /// Cached resolved state for consecutive core draws (`runtime.mode = core`).
+    #[cfg(feature = "core-runtime")]
+    core_draw_cache: core_draw::DrawCache,
     /// The core runtime's device (`runtime.mode = core`), `None` for one of mtld3d's.
     #[cfg(feature = "core-runtime")]
     core: Option<Box<d3d9_rt::device::CoreDevice>>,
@@ -1128,6 +1131,7 @@ impl DeviceInner {
         // A core device's draws take the viewport from `self.viewport`: no frame to push to.
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
+            self.invalidate_core_draw();
             return;
         }
         let (x, y, width, height) = (v.x, v.y, v.width, v.height);
@@ -1421,6 +1425,7 @@ impl DeviceInner {
         // A core device has no encoder mirror: its draws read the states (`core_draw::resolve`).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
+            self.invalidate_core_draw();
             return;
         }
         let mut state = self.vertex_sampler_states[slot];
@@ -1478,6 +1483,7 @@ impl DeviceInner {
         // (its draws bind the vertex slots a shader samples, `core_draw::resolve`).
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
+            self.clear_core_draw_cache();
             return;
         }
         let id = if tex.is_null() {
@@ -1562,6 +1568,8 @@ impl DeviceInner {
     /// state-block `apply_to` (touches many pieces — coarse is fine).
     pub fn mark_snapshot_dirty_all(&mut self) {
         self.snapshot_dirty.insert(SnapshotDirty::all());
+        #[cfg(feature = "core-runtime")]
+        self.clear_core_draw_cache();
     }
 
     /// Insert specific dirty bits for a Set* on the live state path.
@@ -1570,6 +1578,8 @@ impl DeviceInner {
     /// get rebuilt on the next draw; clean pieces retain the native state.
     pub fn mark_snapshot_dirty(&mut self, bits: SnapshotDirty) {
         self.snapshot_dirty.insert(bits);
+        #[cfg(feature = "core-runtime")]
+        self.invalidate_core_draw();
     }
 
     /// Strip FF-only dirty bits from `mask` if the corresponding shader path is programmable.
@@ -2124,6 +2134,7 @@ impl DeviceInner {
             }
             let unbound = rt.set_extra_target(slot, None);
             debug_assert!(unbound, "slot 1-3 takes an unbind");
+            self.invalidate_core_draw();
         }
         if let Some(old_id) = old_autogen
             && !core
@@ -2616,6 +2627,7 @@ impl DeviceInner {
         }
         #[cfg(feature = "core-runtime")]
         if self.is_core() {
+            self.clear_core_draw_cache();
             mtld3d_shared::log_once_info!(
                 target: TEX_TRACE_TARGET,
                 "EvictManagedResources: marked {} textures dirty; runtime.mode = core keeps their \
@@ -3081,6 +3093,8 @@ impl DeviceInner {
         self.set_viewport(viewport);
         // Wipe any cached snapshot — every input was just reset.
         self.snapshot_dirty = SnapshotDirty::all();
+        #[cfg(feature = "core-runtime")]
+        self.clear_core_draw_cache();
     }
 
     /// Return the targets to the implicit surfaces, as every `Reset` does.
@@ -3154,6 +3168,8 @@ impl DeviceInner {
             self.backbuffer_height,
         );
         self.snapshot_dirty = SnapshotDirty::all();
+        #[cfg(feature = "core-runtime")]
+        self.clear_core_draw_cache();
     }
 
     /// Update the implicit backbuffer Metal handle after `device_reset` recreates it.
@@ -3739,6 +3755,8 @@ impl Direct3DDevice9 {
             encoder,
             current_frame,
             #[cfg(feature = "core-runtime")]
+            core_draw_cache: core_draw::DrawCache::new(),
+            #[cfg(feature = "core-runtime")]
             core: info.core,
             #[cfg(feature = "core-runtime")]
             core_auto_depth: None,
@@ -3860,6 +3878,18 @@ impl DeviceInner {
     #[cfg(feature = "core-runtime")]
     pub fn core_mut(&mut self) -> Option<&mut d3d9_rt::device::CoreDevice> {
         self.core.as_deref_mut()
+    }
+
+    /// Marks the core draw cache dirty so the next draw resolves fresh state.
+    #[cfg(feature = "core-runtime")]
+    pub const fn invalidate_core_draw(&mut self) {
+        self.core_draw_cache.invalidate();
+    }
+
+    /// Clears cached core draw bindings and marks the cache dirty.
+    #[cfg(feature = "core-runtime")]
+    pub fn clear_core_draw_cache(&mut self) {
+        self.core_draw_cache.clear();
     }
 
     pub const fn record_handle(&self) -> DeviceRecordHandle {
@@ -4784,6 +4814,7 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
         // device goes, and the rest of the device with it.
         #[cfg(feature = "core-runtime")]
         if let Some(core) = device_inner.core.take() {
+            device_inner.core_draw_cache.clear();
             drop(core);
             drop(device_inner);
             // The default runtime's encoder shutdown frees the parked texture staging at each
@@ -9208,11 +9239,12 @@ extern "system" fn device_update_texture(
         let dst_ti = unsafe { (*dst_parent).inner_mut() };
         // SAFETY: vtable thunk; `this` is *mut Direct3DDevice9 per IDirect3DDevice9 ABI.
         let dev_obj = unsafe { InPtrMut::<Direct3DDevice9>::opt(this) };
-        if dst_ti.d3d_pool() == D3DPOOL_DEFAULT
-            && dst_ti.d3d_usage() & D3DUSAGE_DYNAMIC == 0
-            && let Some(obj) = dev_obj
-        {
-            crate::texture::flush_dirty_mips(dst_ti, obj.inner());
+        if let Some(obj) = dev_obj {
+            #[cfg(feature = "core-runtime")]
+            obj.inner().invalidate_core_draw();
+            if dst_ti.d3d_pool() == D3DPOOL_DEFAULT && dst_ti.d3d_usage() & D3DUSAGE_DYNAMIC == 0 {
+                crate::texture::flush_dirty_mips(dst_ti, obj.inner());
+            }
         }
     }
     hr
@@ -11019,6 +11051,7 @@ extern "system" fn device_set_render_target(
         if slot != 0 {
             // Only render target 0 owns the viewport and scissor, as under mtld3d; a draw reads
             // the targets at index 1-3 from the device, so no snapshot section goes stale.
+            dev.invalidate_core_draw();
             return D3D_OK;
         }
         dev.set_viewport(mtld3d_types::D3DVIEWPORT9 {
@@ -11332,6 +11365,7 @@ extern "system" fn device_set_depth_stencil_surface(
         dev.bound_rt_mut().replace_depth_stencil(surf);
         dev.flags
             .set(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND, surf.is_null());
+        dev.invalidate_core_draw();
         return D3D_OK;
     }
     dev.bound_rt_mut().replace_depth_stencil(surf);
@@ -12452,6 +12486,8 @@ extern "system" fn device_set_texture(this: *mut c_void, stage: u32, texture: *m
     }
     let mask = dev.ff_aware_mask(bits);
     dev.mark_snapshot_dirty(mask);
+    #[cfg(feature = "core-runtime")]
+    dev.clear_core_draw_cache();
     dev.perf_mut()
         .record_keys_gate(KeysGate::SetTexture, !ffkey_rebuilt);
     0 // S_OK
@@ -13792,6 +13828,7 @@ fn propagate_const_delta(
     // A core device has no encoder mirror: its draws bind the rows from `ShaderBindings`.
     #[cfg(feature = "core-runtime")]
     if dev.is_core() {
+        dev.invalidate_core_draw();
         return;
     }
     let start = start_register as usize;

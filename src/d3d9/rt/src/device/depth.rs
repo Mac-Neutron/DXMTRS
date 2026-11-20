@@ -145,6 +145,7 @@ impl CoreDevice {
                 self.close_pass();
             }
             self.depth = depth;
+            self.target_gen = self.target_gen.wrapping_add(1);
         }
         true
     }

@@ -127,6 +127,8 @@ pub struct VertexBufferInner {
     /// accessors are fixed at `0`. Metal has no eviction-order hint, so this
     /// is app-visible state only and never acted upon.
     priority: u32,
+    #[cfg(feature = "core-runtime")]
+    core_created: bool,
 }
 
 impl VertexBufferInner {
@@ -373,13 +375,16 @@ impl VertexBufferInner {
         if matches!(self.map_mode, BufferMapMode::Direct) {
             return true;
         }
+        if self.core_created && self.dirty.is_empty() {
+            return true;
+        }
         // A released backing's last upload carried every byte, and a lock re-creates the backing
         // before it records a range: nothing is owed.
         if self.backing.is_released() && self.dirty.is_empty() {
             return true;
         }
         let backing = self.backing.as_slice();
-        let made = !core.has_buffer(self.buffer_id);
+        let made = !self.core_created;
         if made && !self.backing.may_widen_upload() {
             // Unreachable: a backing is re-created only after an upload into the store, which
             // keeps the buffer until the D3D9 buffer is destroyed. Its zeros must not reach a new
@@ -410,6 +415,7 @@ impl VertexBufferInner {
         if self.lock_count == 0 {
             self.dirty.clear();
         }
+        self.core_created = true;
         self.backing.note_upload(offset, end);
         release_backing_after_upload(self, ignore_lock_bounds);
         true
@@ -491,6 +497,8 @@ impl Direct3DVertexBuffer9 {
             lock_count: 0,
             state_block_refs: 0,
             priority: 0,
+            #[cfg(feature = "core-runtime")]
+            core_created: false,
         }));
         Some(Self {
             vtbl: &raw const DIRECT3D_VERTEX_BUFFER9_VTBL,

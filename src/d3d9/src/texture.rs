@@ -636,6 +636,17 @@ impl TextureInner {
             })
     }
 
+    /// Whether any mip level (or any cube face mip level) has pending CPU writes to upload.
+    #[cfg(feature = "core-runtime")]
+    #[must_use]
+    pub fn has_any_dirty(&self) -> bool {
+        self.dirty_mask != 0
+            || self
+                .cube
+                .as_deref()
+                .is_some_and(|cube| cube.dirty_masks.iter().any(|&mask| mask != 0))
+    }
+
     /// Prepare a subresource's staging before a map or CPU write.
     ///
     /// Every path that gives the staging that role goes through here first: a
@@ -3863,8 +3874,11 @@ unsafe fn finalize_texture(this: *mut Direct3DTexture9) {
         }
         // The store's texture goes with it; the closures already recorded hold their own.
         #[cfg(feature = "core-runtime")]
-        if let Some(core) = dev.core_mut() {
-            core.forget_texture(texture_id);
+        {
+            dev.clear_core_draw_cache();
+            if let Some(core) = dev.core_mut() {
+                core.forget_texture(texture_id);
+            }
         }
         // Drop from the live-textures registry before freeing the
         // inner Box so `evict_managed_resources` never sees a dangling

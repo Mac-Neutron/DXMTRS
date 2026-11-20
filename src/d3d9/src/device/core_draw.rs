@@ -22,7 +22,7 @@ use mtld3d_core::{
         d3d_to_metal_fill, d3d_to_metal_primitive, d3dcolor_to_rgba_f32, fan_fits_pattern,
         ff_vs_layout_from_elements, index_format, vertex_count,
     },
-    depth_stencil_state::snapshot_from_state as depth_snapshot,
+    depth_stencil_state::{DepthStencilSnapshot, snapshot_from_state as depth_snapshot},
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
     format::{FormatMapping, map_d3d_format},
@@ -108,6 +108,60 @@ struct Binds {
     textures: Vec<TextureBind>,
 }
 
+/// Cached resolved pipeline key, constant bytes, texture binds, and static `DrawData` fields.
+struct ResolvedCoreDraw {
+    point_list: bool,
+    streams: [StreamKey; MAX_STREAMS as usize],
+    target_gen: u64,
+    key: PipelineKey,
+    binds: Binds,
+    sampled_pixel_mask: u16,
+    sampled_vertex_mask: u8,
+    cached_pixel_lods: [u32; 16],
+    cached_vertex_lods: [u32; 4],
+    viewport: [f64; 6],
+    scissor: [u32; 4],
+    fill_mode: u8,
+    cull_mode: u8,
+    depth_stencil: DepthStencilSnapshot,
+    stencil_ref: u8,
+    slope_scale: f32,
+    blend_color: Option<[f32; 4]>,
+}
+
+/// Device-owned front-end cache of the most recent core draw's resolved state.
+///
+/// Sits alongside `CoreDevice` on `DeviceInner`. `dirty` is invalidated on every state/target/
+/// constant/sampler/texture mutator and cleared (dropping cached `TextureBind` handles without
+/// resetting `key_gen`) on device reset, texture bind/evict, finalize, and release.
+pub struct DrawCache {
+    dirty: bool,
+    key_gen: u64,
+    cached: Option<ResolvedCoreDraw>,
+}
+
+impl DrawCache {
+    /// Creates an empty, initially dirty draw cache with generation starting at 1.
+    pub const fn new() -> Self {
+        Self {
+            dirty: true,
+            key_gen: 1,
+            cached: None,
+        }
+    }
+
+    /// Marks the cache dirty so the next core draw re-resolves state.
+    pub const fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Drops the cached draw entry and marks the cache dirty while preserving `key_gen`.
+    pub fn clear(&mut self) {
+        self.dirty = true;
+        self.cached = None;
+    }
+}
+
 /// What a draw feeds its vertex stage and draws: each stream, its vertices or its indices.
 ///
 /// A UP draw's are the call's bytes at stream 0; a buffer draw's the bound buffers (DXMTRS C4c-1).
@@ -132,6 +186,8 @@ struct BoundStreams {
     buffers: [*mut Direct3DVertexBuffer9; MAX_STREAMS as usize],
     /// Stream 0's frequency word, and the bound streams whose word is instance data (bit `n`).
     instancing: (u32, u16),
+    /// Bitmask of streams holding a non-null vertex buffer pointer in `buffers`.
+    present_mask: u16,
 }
 
 /// One sampled slot of a draw, pixel or vertex: its texture (null for none) and its sampler states.
@@ -151,20 +207,47 @@ impl Binds {
         let slot = u8::try_from(slot).expect("a Metal buffer slot below 31");
         self.at.push((stage, slot, start..self.bytes.len()));
     }
-
-    fn binds(&self) -> Vec<Bind<'_>> {
-        self.at
-            .iter()
-            .map(|(stage, slot, range)| Bind {
-                stage: *stage,
-                slot: *slot,
-                bytes: &self.bytes[range.clone()],
-            })
-            .collect()
-    }
 }
 
-/// A draw's pipeline key, binds and target size, from the device state.
+/// Whether any sampled pixel or vertex slot holds a dirty texture or a changed LOD setting.
+fn any_bound_texture_dirty_or_lod_changed(
+    dev: &DeviceInner,
+    sampled_pixel_mask: u16,
+    sampled_vertex_mask: u8,
+    cached_pixel_lods: &[u32; 16],
+    cached_vertex_lods: &[u32; 4],
+) -> bool {
+    let bindings = dev.stage_bindings();
+    let mut px_rem = sampled_pixel_mask;
+    while px_rem != 0 {
+        let slot = px_rem.trailing_zeros() as usize;
+        px_rem &= px_rem - 1;
+        let tex = bindings.texture(slot);
+        if !tex.is_null() {
+            // SAFETY: a bound texture, live while its stage holds it.
+            let inner = unsafe { &*tex }.inner();
+            if inner.has_any_dirty() || inner.lod() != cached_pixel_lods[slot] {
+                return true;
+            }
+        }
+    }
+    let mut vx_rem = sampled_vertex_mask;
+    while vx_rem != 0 {
+        let slot = vx_rem.trailing_zeros() as usize;
+        vx_rem &= vx_rem - 1;
+        let tex = dev.vertex_texture(slot);
+        if !tex.is_null() {
+            // SAFETY: a bound texture, live while its vertex slot holds it.
+            let inner = unsafe { &*tex }.inner();
+            if inner.has_any_dirty() || inner.lod() != cached_vertex_lods[slot] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Resolves a draw's pipeline key, binds, texture snapshots, and static `DrawData` fields.
 ///
 /// The draw is of `primitive`, its streams fed as `streams` says; the caller checked that a
 /// declaration (or an FVF's) is bound.
@@ -177,7 +260,9 @@ fn resolve(
     dev: &mut DeviceInner,
     primitive: u32,
     streams: &[StreamKey; MAX_STREAMS as usize],
-) -> Result<(PipelineKey, Binds, (u32, u32)), i32> {
+    target_gen: u64,
+    point_list: bool,
+) -> Result<ResolvedCoreDraw, i32> {
     let rs = *dev.render_states();
     // SAFETY: bound (the caller checked), and its slot's refcount keeps it live for the call.
     let decl = unsafe { &*dev.vertex_decl() }.inner();
@@ -267,6 +352,7 @@ fn resolve(
     let mut ff_outputs = None;
     // The vertex slots this draw samples, apart from the pixel slots: they share numbers 0-3.
     let mut vertex_slots = Vec::new();
+    let mut cached_vertex_lods = [0_u32; 4];
     let vs_key = if let (StageKind::Prog, Some(vs), Some((code, meta))) = (vs_kind, vs, vs_core) {
         let rows = float_rows(vs.max_const_used(), vs.uses_rel_const());
         let bindings = dev.shader_bindings();
@@ -299,7 +385,9 @@ fn resolve(
                     if dev.samples_unfiltered(tex) {
                         sample_unfiltered(&mut states);
                     }
-                    states[TEXTURE_LOD_SLOT] = tex.inner().lod();
+                    let lod = tex.inner().lod();
+                    states[TEXTURE_LOD_SLOT] = lod;
+                    cached_vertex_lods[slot] = lod;
                 }
                 levels.set_slot(slot, &states);
                 vertex_slots.push(SampledSlot {
@@ -442,19 +530,23 @@ fn resolve(
     // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
     // black.
     let mut slots = Vec::new();
+    let mut cached_pixel_lods = [0_u32; 16];
     let mut remaining = sampled_mask;
     while remaining != 0 {
         let slot = u16::try_from(remaining.trailing_zeros()).unwrap_or(0);
         remaining &= remaining - 1;
-        let texture = dev.stage_bindings().texture(usize::from(slot));
-        let mut states = dev.stage_bindings().sampler_states(usize::from(slot));
+        let slot_idx = usize::from(slot);
+        let texture = dev.stage_bindings().texture(slot_idx);
+        let mut states = dev.stage_bindings().sampler_states(slot_idx);
         if !texture.is_null() {
             // SAFETY: a bound texture, live while its stage holds it.
             let tex = unsafe { &*texture };
             if dev.samples_unfiltered(tex) {
                 sample_unfiltered(&mut states);
             }
-            states[TEXTURE_LOD_SLOT] = tex.inner().lod();
+            let lod = tex.inner().lod();
+            states[TEXTURE_LOD_SLOT] = lod;
+            cached_pixel_lods[slot_idx] = lod;
         }
         slots.push(SampledSlot {
             slot,
@@ -601,7 +693,36 @@ fn resolve(
         samples: sample_count,
         alpha_to_coverage,
     };
-    Ok((key, binds, target))
+    let blend_color = key
+        .blend
+        .as_ref()
+        .filter(|blend| blend.reads_blend_color())
+        .map(|_| d3dcolor_to_rgba_f32(rs[D3DRS_BLENDFACTOR as usize]));
+    let scissor_rect = dev.scissor_rect();
+    Ok(ResolvedCoreDraw {
+        point_list,
+        streams: *streams,
+        target_gen,
+        key,
+        binds,
+        sampled_pixel_mask: sampled_mask,
+        sampled_vertex_mask: u8::try_from(vertex_sampled & 0xF).unwrap_or(0),
+        cached_pixel_lods,
+        cached_vertex_lods,
+        viewport: core_viewport(&viewport, target),
+        scissor: core_scissor(
+            rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
+            scissor_rect,
+            &viewport,
+            target,
+        ),
+        fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
+        cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
+        depth_stencil: depth_snapshot(&rs),
+        stencil_ref: rs[D3DRS_STENCILREF as usize].to_le_bytes()[0],
+        slope_scale: d3d_slope_scale_to_metal(rs[D3DRS_SLOPESCALEDEPTHBIAS as usize], 1.0),
+        blend_color,
+    })
 }
 
 /// The bound colour targets' size, the format a draw attaches each in, and whether that encodes.
@@ -767,45 +888,92 @@ fn record(
         indices,
         fetch,
     } = feed;
-    let (key, mut binds, target) = match resolve(dev, primitive, &keys) {
-        Ok(resolved) => resolved,
-        Err(hr) => return hr,
-    };
-    let textures = core::mem::take(&mut binds.textures);
-    let binds = binds.binds();
-    let rs = dev.render_states();
-    let draw = DrawData {
-        primitive: metal_primitive as u8,
-        streams,
-        vertex_count,
-        vertex_start,
-        base_vertex,
-        instancing,
-        indices,
-        viewport: core_viewport(&dev.viewport(), target),
-        scissor: core_scissor(
-            rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
-            dev.scissor_rect(),
-            &dev.viewport(),
-            target,
-        ),
-        fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
-        cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
-        binds: &binds,
-        textures: &textures,
-        depth_stencil: depth_snapshot(rs),
-        stencil_ref: rs[D3DRS_STENCILREF as usize].to_le_bytes()[0],
-        slope_scale: d3d_slope_scale_to_metal(rs[D3DRS_SLOPESCALEDEPTHBIAS as usize], 1.0),
-        blend_color: key
-            .blend
-            .as_ref()
-            .filter(|blend| blend.reads_blend_color())
-            .map(|_| d3dcolor_to_rgba_f32(rs[D3DRS_BLENDFACTOR as usize])),
-    };
-    let Some(core) = dev.core.as_deref_mut() else {
+    let point_list = primitive == D3DPT_POINTLIST;
+    let target_gen = dev.core.as_deref().map_or(0, CoreDevice::target_gen);
+    let cache_hit = !dev.core_draw_cache.dirty
+        && dev.core_draw_cache.cached.as_ref().is_some_and(|cached| {
+            cached.point_list == point_list
+                && cached.target_gen == target_gen
+                && cached.streams == keys
+                && !any_bound_texture_dirty_or_lod_changed(
+                    dev,
+                    cached.sampled_pixel_mask,
+                    cached.sampled_vertex_mask,
+                    &cached.cached_pixel_lods,
+                    &cached.cached_vertex_lods,
+                )
+        });
+    if !cache_hit {
+        dev.core_draw_cache.clear();
+        match resolve(dev, primitive, &keys, target_gen, point_list) {
+            Ok(resolved) => {
+                let next_gen = dev.core_draw_cache.key_gen.wrapping_add(1).max(1);
+                dev.core_draw_cache.key_gen = next_gen;
+                dev.core_draw_cache.cached = Some(resolved);
+                dev.core_draw_cache.dirty = false;
+            }
+            Err(hr) => return hr,
+        }
+    }
+    let DeviceInner {
+        core_draw_cache,
+        core,
+        ..
+    } = dev;
+    let Some(core) = core.as_deref_mut() else {
         return D3D_OK;
     };
-    match core.draw(&key, &draw) {
+    let result = {
+        let Some(resolved) = core_draw_cache.cached.as_ref() else {
+            return D3D_OK;
+        };
+        let mut binds_buf = [const {
+            Bind {
+                stage: Stage::Vertex,
+                slot: 0,
+                bytes: &[],
+            }
+        }; 16];
+        debug_assert!(
+            resolved.binds.at.len() <= binds_buf.len(),
+            "resolved constant binds fit in 16 slots"
+        );
+        let bind_count = resolved.binds.at.len().min(binds_buf.len());
+        for (dst, (stage, slot, range)) in
+            binds_buf[..bind_count].iter_mut().zip(&resolved.binds.at)
+        {
+            *dst = Bind {
+                stage: *stage,
+                slot: *slot,
+                bytes: &resolved.binds.bytes[range.clone()],
+            };
+        }
+        let draw = DrawData {
+            key_gen: core_draw_cache.key_gen,
+            primitive: metal_primitive as u8,
+            streams,
+            vertex_count,
+            vertex_start,
+            base_vertex,
+            instancing,
+            indices,
+            viewport: resolved.viewport,
+            scissor: resolved.scissor,
+            fill_mode: resolved.fill_mode,
+            cull_mode: resolved.cull_mode,
+            binds: &binds_buf[..bind_count],
+            textures: &resolved.binds.textures,
+            depth_stencil: resolved.depth_stencil,
+            stencil_ref: resolved.stencil_ref,
+            slope_scale: resolved.slope_scale,
+            blend_color: resolved.blend_color,
+        };
+        core.draw(&resolved.key, &draw)
+    };
+    if result.is_err() {
+        core_draw_cache.clear();
+    }
+    match result {
         Err(DrawRefused::Fetch) => {
             refuse_under_core(fetch);
             D3DERR_NOTAVAILABLE
@@ -1185,11 +1353,12 @@ fn bound_streams(dev: &DeviceInner) -> Result<Option<BoundStreams>, i32> {
         streams: [StreamData::None; MAX_STREAMS as usize],
         buffers: [core::ptr::null_mut(); MAX_STREAMS as usize],
         instancing: (bound.stream_freq(0), 0),
+        present_mask: 0,
     };
-    for stream in 0..MAX_STREAMS as usize {
-        if declared & (1 << stream) == 0 {
-            continue;
-        }
+    let mut remaining = declared;
+    while remaining != 0 {
+        let stream = remaining.trailing_zeros() as usize;
+        remaining &= remaining - 1;
         let vb = bound.stream_vertex_buffer(stream);
         // SAFETY: null, or the stream's bound vertex buffer, live while bound.
         let Some(buffer) = (unsafe { vb.as_ref() }) else {
@@ -1212,15 +1381,12 @@ fn bound_streams(dev: &DeviceInner) -> Result<Option<BoundStreams>, i32> {
             offset,
         };
         streams.buffers[stream] = vb;
+        streams.present_mask |= 1 << stream;
         if is_instance_data(freq) {
             streams.instancing.1 |= 1 << stream;
         }
     }
-    Ok(streams
-        .buffers
-        .iter()
-        .any(|vb| !vb.is_null())
-        .then_some(streams))
+    Ok((streams.present_mask != 0).then_some(streams))
 }
 
 /// The bound index buffer, `Ok(None)` for none.
@@ -1268,18 +1434,25 @@ fn flush(
     let Some(core) = dev.core.as_deref_mut() else {
         return false;
     };
-    let vertices = bound.buffers.iter().filter(|vb| !vb.is_null()).all(|&vb| {
-        // SAFETY: a bound vertex buffer, live while bound, distinct from the device.
+    let mut remaining = bound.present_mask;
+    while remaining != 0 {
+        let stream = remaining.trailing_zeros() as usize;
+        remaining &= remaining - 1;
+        let vb = bound.buffers[stream];
+        // SAFETY: bit set in `present_mask` iff `vb` is a non-null bound vertex buffer,
+        // live while bound and distinct from the device.
         let inner = unsafe { &mut *vb }.inner_mut();
-        matches!(inner.map_mode(), BufferMapMode::Direct)
-            || inner.core_flush(core, ignore_lock_bounds)
-    });
-    vertices
-        && index.is_none_or(|ib| {
-            // SAFETY: the bound index buffer, live while bound, distinct from the device.
-            let inner = unsafe { &mut *ib }.inner_mut();
-            matches!(inner.map_mode(), BufferMapMode::Direct) || inner.core_flush(core)
-        })
+        if !matches!(inner.map_mode(), BufferMapMode::Direct)
+            && !inner.core_flush(core, ignore_lock_bounds)
+        {
+            return false;
+        }
+    }
+    index.is_none_or(|ib| {
+        // SAFETY: the bound index buffer, live while bound, distinct from the device.
+        let inner = unsafe { &mut *ib }.inner_mut();
+        matches!(inner.map_mode(), BufferMapMode::Direct) || inner.core_flush(core)
+    })
 }
 
 /// The `D3D_OK` of a draw dropped because a buffer it reads has no core form, logged once.

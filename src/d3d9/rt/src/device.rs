@@ -36,6 +36,8 @@ pub struct CoreDevice {
     /// Handle 0 for one that did not build or was not built (its layout crosses the stride).
     /// Never cleared: a recorded closure names its pipeline by handle until the drain.
     pipelines: PsoMap<PipelineKey, Option<PipelineSource>>,
+    /// Small MRU cache over resolved pipelines to avoid hashing and locking `pipelines`.
+    pso_memo: draw::PsoMemo,
     /// The compiled stage functions the pipelines are made of.
     functions: draw::StageFunctions,
     /// The D3D9 textures' core textures, by id (C4b-3b).
@@ -79,6 +81,8 @@ pub struct CoreDevice {
     extras: [Option<TargetRef>; 3],
     /// The depth-stencil draws test against and clears go to (C4b-3d2).
     depth: Option<DepthRef>,
+    /// Monotonic generation bumped whenever colour targets, depth-stencil, or back buffer change.
+    target_gen: u64,
     render_open: bool,
     /// The depth-stencil the open render pass has attached; none for a pass without one.
     open_depth: Option<DepthRef>,
@@ -86,8 +90,8 @@ pub struct CoreDevice {
     ///
     /// A target's own or its sRGB twin's; all 0 while no render pass is open.
     open_colors: [u32; 4],
-    /// The scissor the open render pass last recorded; none since it began (DXMTRS C4b-3d3).
-    pass_scissor: Option<[u32; 4]>,
+    /// Per-pass bound state for deduplicating redundant Metal render commands.
+    pass_bound: pass_bound::PassBound,
     /// The last closure left a blit pass open (consecutive uploads share it).
     blit_open: bool,
     dirty: bool,
@@ -136,6 +140,7 @@ impl CoreDevice {
             window: None,
             readback: None,
             pipelines: PsoMap::default(),
+            pso_memo: draw::PsoMemo::default(),
             functions: draw::StageFunctions::default(),
             textures: rustc_hash::FxHashMap::default(),
             buffers: buffers::BufferStore::default(),
@@ -148,10 +153,11 @@ impl CoreDevice {
             target: TargetRef::BackBuffer,
             extras: [None; 3],
             depth: None,
+            target_gen: 0,
             render_open: false,
             open_depth: None,
             open_colors: [0; 4],
-            pass_scissor: None,
+            pass_bound: pass_bound::PassBound::new(),
             blit_open: false,
             dirty: false,
             staged_bytes: 0,
@@ -172,6 +178,12 @@ impl CoreDevice {
     /// The core device, mutably: its queue records.
     pub const fn device_mut(&mut self) -> &mut Device {
         &mut self.device
+    }
+
+    /// Monotonic generation bumped on every colour-target, depth-stencil, or back-buffer change.
+    #[must_use]
+    pub const fn target_gen(&self) -> u64 {
+        self.target_gen
     }
 }
 
@@ -266,6 +278,7 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
 mod buffers;
 mod depth;
 mod draw;
+mod pass_bound;
 mod query;
 mod recorder;
 mod retained;

@@ -778,9 +778,16 @@ fn a_nooverwrite_lock_between_draws_records_nothing() {
     let calls = dxmt_fakes::take_calls(DEVICE);
     let all = work(&calls);
     assert_eq!(all.len(), 1, "one pass and no blit: {calls:#?}");
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c.starts_with("  render 19 "))
+            .count(),
+        2,
+        "{calls:#?}"
+    );
     let binds = slot0_binds(&calls);
-    assert_eq!(binds.len(), 2, "{calls:#?}");
-    assert_eq!(binds[0], binds[1], "{calls:#?}");
+    assert_eq!(binds.len(), 1, "{calls:#?}");
 }
 
 /// A `D3DLOCK_DISCARD` after a draw gives the draw after it a new name; the draw before keeps its.
@@ -953,4 +960,72 @@ fn a_forgotten_dynamic_buffers_draw_still_encodes() {
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(slot0_binds(&calls).len(), 2, "{calls:#?}");
+}
+
+/// `D3DLOCK_DISCARD` between draws in one pass rebinds both vertex and index buffers.
+#[test]
+fn a_discard_between_draws_in_one_pass_rebinds_vb_and_ib() {
+    const DEVICE: u64 = 0x3f8;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = dynamic(&mut core, 1, 5000);
+    let ib = dynamic(&mut core, 2, 5000);
+    draw_from(&mut core, vb, Some(ib));
+    let _ = lock(&mut core, vb, D3DLOCK_DISCARD, 0, 0);
+    let _ = lock(&mut core, ib, D3DLOCK_DISCARD, 0, 0);
+    draw_from(&mut core, vb, Some(ib));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(work(&calls).len(), 1, "one render pass: {calls:#?}");
+    let vb_binds = slot0_binds(&calls);
+    assert_eq!(vb_binds.len(), 2, "{calls:#?}");
+    assert_ne!(vb_binds[0], vb_binds[1], "{calls:#?}");
+    let ib_handles: Vec<_> = calls
+        .iter()
+        .filter_map(|c| c.strip_prefix("  render 20 "))
+        .filter_map(|c| c.split_once("index_buffer=#"))
+        .map(|(_, rest)| rest.split(' ').next().unwrap_or(""))
+        .collect();
+    assert_eq!(ib_handles.len(), 2, "{calls:#?}");
+    assert_ne!(ib_handles[0], ib_handles[1], "{calls:#?}");
+}
+
+/// `D3DLOCK_NOOVERWRITE` and `D3DLOCK_READONLY` return the cached mapped pointer without rename.
+#[test]
+fn nooverwrite_and_readonly_return_cached_pointer_without_rename() {
+    const DEVICE: u64 = 0x3f9;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 1, 5000);
+    let base = lock(&mut core, id, 0, 0, 0);
+    draw_from(&mut core, id, None);
+    assert_eq!(
+        lock(&mut core, id, D3DLOCK_NOOVERWRITE, 60, 60),
+        base.wrapping_add(60)
+    );
+    assert_eq!(
+        lock(&mut core, id, D3DLOCK_READONLY, 20, 40),
+        base.wrapping_add(20)
+    );
+    draw_from(&mut core, id, None);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(work(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(slot0_binds(&calls).len(), 1, "{calls:#?}");
+}
+
+/// Forgetting a buffer and recreating the same `BufferId` rebinds it in the same pass.
+#[test]
+fn forget_and_recreate_same_id_rebinds_in_same_pass() {
+    const DEVICE: u64 = 0x3fa;
+    let mut core = core_on_fakes(DEVICE);
+    let id = dynamic(&mut core, 777, 180);
+    draw_from(&mut core, id, None);
+    core.forget_buffer(id);
+    assert!(core.dynamic_create(id, 180));
+    draw_from(&mut core, id, None);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    let binds = slot0_binds(&calls);
+    assert_eq!(binds.len(), 2, "{calls:#?}");
+    assert_ne!(binds[0], binds[1], "{calls:#?}");
 }

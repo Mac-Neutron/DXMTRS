@@ -279,6 +279,7 @@ impl CoreDevice {
             height,
             companion,
         });
+        self.target_gen = self.target_gen.wrapping_add(1);
     }
 
     /// A Metal view on window `hwnd` and a presenter on its layer, sized `width` x `height`.

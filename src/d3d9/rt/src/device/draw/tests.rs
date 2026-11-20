@@ -1166,3 +1166,1041 @@ fn an_attribute_wider_than_its_stride_is_refused() {
     assert_eq!(pipelines_made(&calls), 0, "{calls:#?}");
     assert!(!draws(&calls), "{calls:#?}");
 }
+
+/// Counts stored vertex-buffer binds in `calls`, excluding encoder-preamble dummy `#0` binds.
+fn count_vb_binds(calls: &[String], suffix: &str) -> usize {
+    let prefix = format!(
+        "  render {} buffer=#",
+        winemetal_sys::wire::WMT_RENDER_COMMAND_SET_VERTEX_BUFFER
+    );
+    calls
+        .iter()
+        .filter(|c| c.starts_with(&prefix) && !c.contains("buffer=#0 ") && c.ends_with(suffix))
+        .count()
+}
+
+/// Counts records in `calls` whose line begins with `prefix`.
+fn count_prefix(calls: &[String], prefix: &str) -> usize {
+    calls.iter().filter(|c| c.starts_with(prefix)).count()
+}
+
+/// A `key` with stream 0 bound per vertex at `stride` bytes.
+fn bound0_key(stride: u32) -> PipelineKey {
+    let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    streams[0] = bound(stride, STREAM_FREQ_DEFAULT);
+    PipelineKey {
+        streams,
+        ..key(0xf)
+    }
+}
+
+/// A stored buffer of `length` zeroed bytes, uploaded and drained.
+fn stored_buffer(core: &mut CoreDevice, id: u64, length: usize) -> mtld3d_core::ids::BufferId {
+    let id = mtld3d_core::ids::BufferId::from_raw(id);
+    assert!(core.buffer_create(id, u64::try_from(length).expect("length fits u64")));
+    assert!(core.buffer_upload(id, 0, &vec![0u8; length]));
+    id
+}
+
+/// Draw streams with `id` bound at stream 0 at byte offset `offset`.
+const fn stream0_buffer(
+    id: mtld3d_core::ids::BufferId,
+    offset: u32,
+) -> [StreamData<'static>; MAX_STREAMS as usize] {
+    let mut streams = [StreamData::None; MAX_STREAMS as usize];
+    streams[0] = StreamData::Buffer { id, offset };
+    streams
+}
+
+/// A default sampler on `core`.
+fn default_sampler(core: &mut CoreDevice) -> Option<Arc<dxmt_core::sampler::Sampler>> {
+    let snapshot = mtld3d_core::sampler_state::snapshot_from_state(
+        &mtld3d_types::sampler_state_defaults(),
+        false,
+    );
+    let skey = mtld3d_core::sampler_state::key_from_snapshot(&snapshot);
+    core.sampler(
+        skey,
+        &mtld3d_core::sampler_state::description_from_snapshot(&snapshot, skey),
+    )
+}
+
+/// A linear-filtered sampler on `core`, distinct from [`default_sampler`].
+fn linear_sampler(core: &mut CoreDevice) -> Option<Arc<dxmt_core::sampler::Sampler>> {
+    let mut states = mtld3d_types::sampler_state_defaults();
+    states[mtld3d_types::D3DSAMP_MINFILTER as usize] = mtld3d_types::D3DTEXF_LINEAR;
+    let snapshot = mtld3d_core::sampler_state::snapshot_from_state(&states, false);
+    let skey = mtld3d_core::sampler_state::key_from_snapshot(&snapshot);
+    core.sampler(
+        skey,
+        &mtld3d_core::sampler_state::description_from_snapshot(&snapshot, skey),
+    )
+}
+
+/// Same-state draws in one pass deduplicate PSO, DSSO, blend, viewport, scissor, rasterizer, VB.
+#[test]
+fn same_state_draws_in_one_pass_deduplicate_all_state() {
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF, WMT_RENDER_COMMAND_SET_DSSO,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE, WMT_RENDER_COMMAND_SET_PSO,
+        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+        WMT_RENDER_COMMAND_SET_VERTEX_BYTES, WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE,
+        WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE, WMT_RENDER_COMMAND_SET_VIEWPORTS,
+    };
+    const DEVICE: u64 = 0x501;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = stored_buffer(&mut core, 1, 120);
+    let tex_id = texture(&mut core, 2);
+    let depth_id = mtld3d_core::ids::TextureId::from_raw(3);
+    core.texture_create(
+        depth_id,
+        &crate::device::fixture::depth_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 32, 1),
+    );
+    assert!(core.set_depth(Some(crate::device::DepthRef {
+        id: depth_id,
+        level: 0
+    })));
+    let sampler = default_sampler(&mut core);
+    let p_tex = core
+        .texture_bind(
+            Stage::Pixel,
+            0,
+            tex_id,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            sampler.clone(),
+        )
+        .expect("pixel texture");
+    let v_tex = core
+        .texture_bind(
+            Stage::Vertex,
+            1,
+            tex_id,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            sampler,
+        )
+        .expect("vertex texture");
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let mut rs = mtld3d_types::render_state_defaults();
+    rs[mtld3d_types::D3DRS_ALPHABLENDENABLE as usize] = 1;
+    let pkey = PipelineKey {
+        depth_format: WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        blend: mtld3d_core::pipeline_state::core_blend(&rs, true),
+        ..bound0_key(20)
+    };
+    let binds = ff_binds();
+    let textures = [p_tex, v_tex];
+    let data = DrawData {
+        streams: stream0_buffer(vb, 0),
+        binds: &binds,
+        textures: &textures,
+        stencil_ref: 7,
+        blend_color: Some([0.25, 0.5, 0.75, 1.0]),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&pkey, &data), Ok(()));
+    assert_eq!(core.draw(&pkey, &data), Ok(()));
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(count_prefix(&calls, "  render 19 "), 2, "{calls:#?}");
+    assert_eq!(
+        count_prefix(&calls, &format!("  render {WMT_RENDER_COMMAND_SET_PSO} ")),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(&calls, &format!("  render {WMT_RENDER_COMMAND_SET_DSSO} ")),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VIEWPORTS} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_SCISSOR_RECTS} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_RASTERIZER_STATE} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(count_vb_binds(&calls, ""), 1, "{calls:#?}");
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_BYTES} ")
+        ),
+        3,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES} ")
+        ),
+        3,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE} ")
+        ),
+        1,
+        "{calls:#?}"
+    );
+}
+
+/// Merged render passes keep two full sets of state and binds; pass splits re-emit VB binds.
+///
+/// Covers `draw -> close_pass -> draw` merging via `dxmt-core` `optimize()`, plus toggling
+/// `with_depth` and sRGB color format between draws using the same stored vertex buffer.
+#[test]
+fn merged_passes_and_pass_splits_reemit_full_state() {
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_RENDER_COMMAND_SET_PSO,
+    };
+    const DEVICE: u64 = 0x502;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = stored_buffer(&mut core, 1, 120);
+    let depth_id = mtld3d_core::ids::TextureId::from_raw(2);
+    core.texture_create(
+        depth_id,
+        &crate::device::fixture::depth_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 32, 1),
+    );
+    assert!(core.set_depth(Some(crate::device::DepthRef {
+        id: depth_id,
+        level: 0
+    })));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let binds = ff_binds();
+    let pkey = bound0_key(20);
+    let data = DrawData {
+        streams: stream0_buffer(vb, 0),
+        ..draw(3, 3, None, &binds)
+    };
+    assert_eq!(core.draw(&pkey, &data), Ok(()));
+    core.close_pass();
+    assert_eq!(core.draw(&pkey, &data), Ok(()));
+    core.drain();
+    let merged = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&merged).len(), 1, "{merged:#?}");
+    assert_eq!(count_prefix(&merged, "  render 19 "), 2, "{merged:#?}");
+    assert_eq!(
+        count_prefix(&merged, &format!("  render {WMT_RENDER_COMMAND_SET_PSO} ")),
+        2,
+        "{merged:#?}"
+    );
+    assert_eq!(count_vb_binds(&merged, ""), 2, "{merged:#?}");
+
+    // Toggling `with_depth` across draws re-emits `SET_VERTEX_BUFFER` on every pass.
+    let with_depth_key = PipelineKey {
+        depth_format: WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        ..pkey.clone()
+    };
+    assert_eq!(core.draw(&with_depth_key, &data), Ok(()));
+    assert_eq!(core.draw(&pkey, &data), Ok(()));
+    assert_eq!(core.draw(&with_depth_key, &data), Ok(()));
+    core.drain();
+    let depth_split = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&depth_split).len(), 3, "{depth_split:#?}");
+    assert_eq!(count_vb_binds(&depth_split, ""), 3, "{depth_split:#?}");
+
+    // Toggling sRGB color format across draws re-emits `SET_VERTEX_BUFFER` on every pass.
+    let srgb_key = PipelineKey {
+        color_format: WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        ..pkey.clone()
+    };
+    let linear_key = PipelineKey {
+        color_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        ..pkey
+    };
+    assert_eq!(core.draw(&linear_key, &data), Ok(()));
+    assert_eq!(core.draw(&srgb_key, &data), Ok(()));
+    assert_eq!(core.draw(&linear_key, &data), Ok(()));
+    core.drain();
+    let srgb_split = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&srgb_split).len(), 3, "{srgb_split:#?}");
+    assert_eq!(count_vb_binds(&srgb_split, ""), 3, "{srgb_split:#?}");
+}
+
+/// Helper passes (`clear_rects`, `stretch`, `depth_resolve`) between identical draws reset state.
+#[test]
+fn helper_passes_between_identical_draws_reemit_all_state() {
+    use mtld3d_core::stretch_rect::BlitDecode;
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_RENDER_COMMAND_SET_PSO,
+        WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
+        WMT_RENDER_COMMAND_SET_VIEWPORTS,
+    };
+    const DEVICE: u64 = 0x503;
+    let mut core = core_on_fakes(DEVICE);
+    let src_id = texture(&mut core, 1);
+    let ms_depth_id = mtld3d_core::ids::TextureId::from_raw(2);
+    core.texture_create(
+        ms_depth_id,
+        &crate::device::fixture::ms_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 4),
+    );
+    let ss_depth_id = mtld3d_core::ids::TextureId::from_raw(3);
+    core.texture_create(
+        ss_depth_id,
+        &crate::device::fixture::depth_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 64, 1),
+    );
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let binds = ff_binds();
+    let pkey = key(0xf);
+    let tri = triangle(&binds);
+
+    let assert_counts =
+        |calls: &[String], pso: usize, vp: usize, sc: usize, rast: usize, label: &str| {
+            assert_eq!(
+                count_prefix(calls, &format!("  render {WMT_RENDER_COMMAND_SET_PSO} ")),
+                pso,
+                "{label}: {calls:#?}"
+            );
+            assert_eq!(
+                count_prefix(
+                    calls,
+                    &format!("  render {WMT_RENDER_COMMAND_SET_VIEWPORTS} ")
+                ),
+                vp,
+                "{label}: {calls:#?}"
+            );
+            assert_eq!(
+                count_prefix(
+                    calls,
+                    &format!("  render {WMT_RENDER_COMMAND_SET_SCISSOR_RECTS} ")
+                ),
+                sc,
+                "{label}: {calls:#?}"
+            );
+            assert_eq!(
+                count_prefix(
+                    calls,
+                    &format!("  render {WMT_RENDER_COMMAND_SET_RASTERIZER_STATE} ")
+                ),
+                rast,
+                "{label}: {calls:#?}"
+            );
+        };
+
+    // `clear_rects` between identical draws.
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    core.clear_rects(0, &[[0, 0, 8, 8]], [0.0, 1.0, 0.0, 1.0], false);
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    core.drain();
+    let clear_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_counts(&clear_calls, 3, 2, 2, 2, "clear_rects");
+
+    // `stretch` between identical draws.
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    assert!(core.stretch(&crate::device::StretchQuad {
+        src: crate::device::TargetRef::Texture {
+            id: src_id,
+            level: 0,
+            face: None,
+        },
+        src_rect: [0, 0, 2, 2],
+        src_view: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        dst: crate::device::TargetRef::BackBuffer,
+        dst_rect: [0, 0, 8, 8],
+        linear: false,
+        decode: BlitDecode::None.uniform(),
+    }));
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    core.drain();
+    let stretch_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_counts(&stretch_calls, 3, 3, 3, 3, "stretch");
+
+    // `depth_resolve` between identical draws.
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    assert!(core.depth_resolve(
+        crate::device::DepthRef {
+            id: ms_depth_id,
+            level: 0,
+        },
+        crate::device::DepthRef {
+            id: ss_depth_id,
+            level: 0,
+        },
+    ));
+    assert_eq!(core.draw(&pkey, &tri), Ok(()));
+    core.drain();
+    let resolve_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_counts(&resolve_calls, 3, 3, 3, 3, "depth_resolve");
+}
+
+/// Slot cross-invalidation (`Buffer` <-> `Zeros` <-> `Buffer`), crossing fetch, and indexed paths.
+#[test]
+fn stream_slot_cross_invalidation_crossing_fetch_and_indexed_draws() {
+    use winemetal_sys::wire::WMT_RENDER_COMMAND_SET_VERTEX_BYTES;
+    const DEVICE: u64 = 0x504;
+    let mut core = core_on_fakes(DEVICE);
+    let vb0 = stored_buffer(&mut core, 1, 128);
+    let vb1 = stored_buffer(&mut core, 2, 128);
+    let ib = stored_buffer(&mut core, 3, 64);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    // Slot 1: `Buffer` -> `Zeros` -> `Buffer` in one pass must re-emit `SET_VERTEX_BUFFER` at slot 1.
+    let key_buf1 = two_stream_key(0, up_with(bound(4, STREAM_FREQ_DEFAULT)));
+    let key_null1 = two_stream_key(0, up_with(StreamKey::Null));
+    let verts = [0_u8; 48];
+    let mut s_buf = stream0(&verts);
+    s_buf[1] = StreamData::Buffer { id: vb1, offset: 0 };
+    let mut s_zero = stream0(&verts);
+    s_zero[1] = StreamData::Zeros;
+    let d_buf = DrawData {
+        streams: s_buf,
+        ..draw(3, 3, None, &[])
+    };
+    let d_zero = DrawData {
+        streams: s_zero,
+        ..draw(3, 3, None, &[])
+    };
+    assert_eq!(core.draw(&key_buf1, &d_buf), Ok(()));
+    assert_eq!(core.draw(&key_null1, &d_zero), Ok(()));
+    assert_eq!(core.draw(&key_buf1, &d_buf), Ok(()));
+    core.drain();
+    let cross_calls = dxmt_fakes::take_calls(DEVICE);
+    let slot1_bufs = count_vb_binds(&cross_calls, " index=1");
+    let slot1_bytes = cross_calls
+        .iter()
+        .filter(|c| {
+            c.starts_with(&format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_BYTES} "))
+                && c.ends_with(" index=1")
+        })
+        .count();
+    assert_eq!(slot1_bufs, 2, "{cross_calls:#?}");
+    assert_eq!(slot1_bytes, 1, "{cross_calls:#?}");
+
+    // Crossing fetch (`advance != 0`) for stored `Buffer` dedups both slots on repeat draw.
+    let mut cross_streams = [StreamKey::Unused; MAX_STREAMS as usize];
+    cross_streams[0] = bound(16, STREAM_FREQ_DEFAULT);
+    let cross_buf_key = PipelineKey {
+        vs: VsStageKey::Prog {
+            code: code(&[
+                0xfffe_0200,
+                0x0200_001f,
+                0x8000_0000,
+                0x900f_0000,
+                0x0200_001f,
+                0x8001_0005,
+                0x900f_0003,
+                0x0200_0001,
+                0xc00f_0000,
+                0x90e4_0000,
+                0x0200_0001,
+                0xe00f_0000,
+                0x90e4_0003,
+                0x0000_ffff,
+            ]),
+            clip_plane_count: 0,
+            sampler_kinds: VsSamplerKinds::default(),
+        },
+        layout: decl(&[
+            element(0, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITION, 0),
+            element(20, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 1),
+        ]),
+        streams: cross_streams,
+        ..prog_key(code(&VS_POS), code(&PS_C0))
+    };
+    let d_cross_buf = DrawData {
+        streams: stream0_buffer(vb0, 0),
+        ..draw(3, 3, None, &[])
+    };
+    assert_eq!(core.draw(&cross_buf_key, &d_cross_buf), Ok(()));
+    assert_eq!(core.draw(&cross_buf_key, &d_cross_buf), Ok(()));
+    core.drain();
+    let cross_buf_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_vb_binds(&cross_buf_calls, ""),
+        2,
+        "{cross_buf_calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(&cross_buf_calls, "  render 19 "),
+        2,
+        "{cross_buf_calls:#?}"
+    );
+
+    // Crossing fetch (`advance != 0`) for inline `Bytes` emits both slots on every draw.
+    let cross_up_key = PipelineKey {
+        streams: inline(16),
+        ..cross_buf_key
+    };
+    let d_cross_up = draw(3, 3, None, &[]);
+    assert_eq!(core.draw(&cross_up_key, &d_cross_up), Ok(()));
+    assert_eq!(core.draw(&cross_up_key, &d_cross_up), Ok(()));
+    core.drain();
+    let cross_up_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_prefix(
+            &cross_up_calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_BYTES} ")
+        ),
+        4,
+        "{cross_up_calls:#?}"
+    );
+
+    // Stored `IndexData::Buffer` draws twice in one pass deduping VB while emitting 2 indexed draws.
+    let ib_key = bound0_key(20);
+    let d_ib = DrawData {
+        streams: stream0_buffer(vb0, 0),
+        indices: Some(Indices {
+            data: IndexData::Buffer { id: ib, offset: 0 },
+            index_type: 0,
+            count: 3,
+        }),
+        ..draw(3, 3, None, &[])
+    };
+    assert_eq!(core.draw(&ib_key, &d_ib), Ok(()));
+    assert_eq!(core.draw(&ib_key, &d_ib), Ok(()));
+    core.drain();
+    let ib_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(count_vb_binds(&ib_calls, ""), 1, "{ib_calls:#?}");
+    assert_eq!(count_prefix(&ib_calls, "  render 20 "), 2, "{ib_calls:#?}");
+
+    // Inline `IndexData::Bytes` draws twice without hitting non-indexed fast path.
+    let raw_idx = [0_u8, 0, 1, 0, 2, 0];
+    let d_idx_up = DrawData {
+        indices: Some(Indices {
+            data: IndexData::Bytes(&raw_idx),
+            index_type: 0,
+            count: 3,
+        }),
+        ..triangle(&[])
+    };
+    let up_key = key(0xf);
+    assert_eq!(core.draw(&up_key, &d_idx_up), Ok(()));
+    assert_eq!(core.draw(&up_key, &d_idx_up), Ok(()));
+    core.drain();
+    let idx_up_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_prefix(&idx_up_calls, "  render 20 "),
+        2,
+        "{idx_up_calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(&idx_up_calls, "  render 19 "),
+        0,
+        "{idx_up_calls:#?}"
+    );
+}
+
+/// Constant byte mutation (same length different bytes, different length) on vertex and pixel.
+#[test]
+fn constant_byte_mutation_reemits_only_changed_slots() {
+    use winemetal_sys::wire::{
+        WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMT_RENDER_COMMAND_SET_VERTEX_BYTES,
+    };
+    const DEVICE: u64 = 0x505;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = stored_buffer(&mut core, 1, 120);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let pkey = bound0_key(20);
+    let mut draw_consts = |vs: &[u8], ps: &[u8]| {
+        let binds = [
+            Bind {
+                stage: Stage::Vertex,
+                slot: 30,
+                bytes: vs,
+            },
+            Bind {
+                stage: Stage::Pixel,
+                slot: 15,
+                bytes: ps,
+            },
+        ];
+        let data = DrawData {
+            streams: stream0_buffer(vb, 0),
+            ..draw(3, 3, None, &binds)
+        };
+        assert_eq!(core.draw(&pkey, &data), Ok(()));
+    };
+
+    draw_consts(&[1_u8; 16], &[2_u8; 16]);
+    draw_consts(&[1_u8; 16], &[2_u8; 16]);
+    draw_consts(&[3_u8; 16], &[4_u8; 16]);
+    draw_consts(&[3_u8; 32], &[4_u8; 32]);
+    draw_consts(&[3_u8; 32], &[4_u8; 32]);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_BYTES} ")
+        ),
+        3,
+        "{calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES} ")
+        ),
+        3,
+        "{calls:#?}"
+    );
+}
+
+/// Independent pixel/vertex texture and sampler swaps plus self-sampling tile barrier.
+#[test]
+fn independent_texture_sampler_changes_and_self_sampling_tile_barrier() {
+    use winemetal_sys::wire::{
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        WMT_RENDER_COMMAND_DISPATCH_THREADS_PER_TILE,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE, WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
+        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE,
+        WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE,
+    };
+    const DEVICE: u64 = 0x506;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = stored_buffer(&mut core, 1, 120);
+    let tex_a = mtld3d_core::ids::TextureId::from_raw(10);
+    let tex_b = mtld3d_core::ids::TextureId::from_raw(11);
+    let rt_desc = crate::device::fixture::twinned_ms_desc(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+        16,
+        1,
+    );
+    core.texture_create(tex_a, &rt_desc);
+    core.texture_create(tex_b, &rt_desc);
+    let samp_a = default_sampler(&mut core);
+    let samp_b = linear_sampler(&mut core);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let pkey = bound0_key(20);
+    let draw_tex = |core: &mut CoreDevice, binds: &[crate::device::TextureBind]| {
+        let data = DrawData {
+            streams: stream0_buffer(vb, 0),
+            textures: binds,
+            ..draw(3, 3, None, &[])
+        };
+        assert_eq!(core.draw(&pkey, &data), Ok(()));
+    };
+
+    // Pixel stage: sampler swap leaves texture deduped; view/texture swap leaves sampler deduped.
+    let px_a_samp_a = core
+        .texture_bind(
+            Stage::Pixel,
+            0,
+            tex_a,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            samp_a.clone(),
+        )
+        .expect("tex_a");
+    let px_a_samp_b = core
+        .texture_bind(
+            Stage::Pixel,
+            0,
+            tex_a,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            samp_b.clone(),
+        )
+        .expect("tex_a");
+    let px_a_plain = core
+        .texture_bind(Stage::Pixel, 0, tex_a, WMT_PIXEL_FORMAT_BGRA8_UNORM, None)
+        .expect("tex_a");
+    let px_a_srgb = core
+        .texture_bind(
+            Stage::Pixel,
+            0,
+            tex_a,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+            None,
+        )
+        .expect("tex_a srgb");
+    let px_other_plain = core
+        .texture_bind(Stage::Pixel, 0, tex_b, WMT_PIXEL_FORMAT_BGRA8_UNORM, None)
+        .expect("tex_b");
+
+    draw_tex(&mut core, &[px_a_samp_a]);
+    draw_tex(&mut core, &[px_a_samp_b]);
+    draw_tex(&mut core, &[px_a_plain]);
+    draw_tex(&mut core, &[px_a_srgb]);
+    draw_tex(&mut core, &[px_other_plain]);
+    core.drain();
+    let px_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_prefix(
+            &px_calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} ")
+        ),
+        3,
+        "{px_calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &px_calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_SAMPLER_STATE} ")
+        ),
+        3,
+        "{px_calls:#?}"
+    );
+
+    // Vertex stage independence.
+    let vx_a_samp_a = core
+        .texture_bind(
+            Stage::Vertex,
+            0,
+            tex_a,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            samp_a,
+        )
+        .expect("v tex_a");
+    let vx_a_samp_b = core
+        .texture_bind(
+            Stage::Vertex,
+            0,
+            tex_a,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            samp_b.clone(),
+        )
+        .expect("v tex_a");
+    let vx_other_samp = core
+        .texture_bind(
+            Stage::Vertex,
+            0,
+            tex_b,
+            WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            samp_b,
+        )
+        .expect("v tex_b");
+    draw_tex(&mut core, &[vx_a_samp_a]);
+    draw_tex(&mut core, &[vx_a_samp_b]);
+    draw_tex(&mut core, &[vx_other_samp]);
+    core.drain();
+    let vx_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_prefix(
+            &vx_calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_TEXTURE} ")
+        ),
+        2,
+        "{vx_calls:#?}"
+    );
+    assert_eq!(
+        count_prefix(
+            &vx_calls,
+            &format!("  render {WMT_RENDER_COMMAND_SET_VERTEX_SAMPLER_STATE} ")
+        ),
+        2,
+        "{vx_calls:#?}"
+    );
+
+    // Self-sampling tile barrier (`render 41`) with deduped PSO recovery on Draw 2.
+    assert!(core.set_target(crate::device::TargetRef::Texture {
+        id: tex_a,
+        level: 0,
+        face: None,
+    }));
+    draw_tex(&mut core, &[]);
+    let self_bind = core
+        .texture_bind(Stage::Pixel, 0, tex_a, WMT_PIXEL_FORMAT_BGRA8_UNORM, None)
+        .expect("self bind");
+    draw_tex(&mut core, &[self_bind]);
+    core.drain();
+    let tb_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&tb_calls).len(), 1, "{tb_calls:#?}");
+    let barrier_idx = find(
+        &tb_calls,
+        &format!("  render {WMT_RENDER_COMMAND_DISPATCH_THREADS_PER_TILE}"),
+    );
+    let pso_prefix = format!("  render {WMT_RENDER_COMMAND_SET_PSO} ");
+    let first_pso = tb_calls
+        .iter()
+        .find(|c| c.starts_with(&pso_prefix))
+        .expect("initial PSO");
+    let recovered_pso = tb_calls[barrier_idx + 1..]
+        .iter()
+        .find(|c| c.starts_with(&pso_prefix))
+        .expect("recovered PSO");
+    assert_eq!(first_pso, recovered_pso, "{tb_calls:#?}");
+}
+
+/// Occlusion queries (`bump_visibility_result_offset`) fire on all compact fast-path closures.
+#[test]
+fn occlusion_queries_bump_visibility_on_all_fast_path_closures() {
+    use winemetal_sys::wire::WMT_RENDER_COMMAND_SET_VISIBILITY_MODE;
+    const DEVICE: u64 = 0x507;
+    let mut core = core_on_fakes(DEVICE);
+    let vb = stored_buffer(&mut core, 1, 120);
+    let ib = stored_buffer(&mut core, 2, 64);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let vis_prefix = format!("  render {WMT_RENDER_COMMAND_SET_VISIBILITY_MODE}");
+    let mut q = crate::device::Occlusion::default();
+
+    // Closure A: non-indexed stored VB.
+    let k_stored = bound0_key(20);
+    let d_stored = DrawData {
+        streams: stream0_buffer(vb, 0),
+        ..draw(3, 3, None, &[])
+    };
+    assert_eq!(core.draw(&k_stored, &d_stored), Ok(()));
+    core.occlusion_begin(&mut q);
+    assert_eq!(core.draw(&k_stored, &d_stored), Ok(()));
+    core.occlusion_end(&mut q);
+    assert_eq!(core.draw(&k_stored, &d_stored), Ok(()));
+    core.drain();
+    let calls_a = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls_a).len(), 1, "{calls_a:#?}");
+    assert_eq!(count_prefix(&calls_a, &vis_prefix), 2, "{calls_a:#?}");
+
+    // Closure B: stored indexed.
+    let d_idx = DrawData {
+        streams: stream0_buffer(vb, 0),
+        indices: Some(Indices {
+            data: IndexData::Buffer { id: ib, offset: 0 },
+            index_type: 0,
+            count: 3,
+        }),
+        ..draw(3, 3, None, &[])
+    };
+    assert_eq!(core.draw(&k_stored, &d_idx), Ok(()));
+    core.occlusion_begin(&mut q);
+    assert_eq!(core.draw(&k_stored, &d_idx), Ok(()));
+    core.occlusion_end(&mut q);
+    assert_eq!(core.draw(&k_stored, &d_idx), Ok(()));
+    core.drain();
+    let calls_b = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls_b).len(), 1, "{calls_b:#?}");
+    assert_eq!(count_prefix(&calls_b, &vis_prefix), 3, "{calls_b:#?}");
+
+    // Closure C: single inline UP vertex draw.
+    let k_up = key(0xf);
+    let d_up = triangle(&[]);
+    assert_eq!(core.draw(&k_up, &d_up), Ok(()));
+    core.occlusion_begin(&mut q);
+    assert_eq!(core.draw(&k_up, &d_up), Ok(()));
+    core.occlusion_end(&mut q);
+    assert_eq!(core.draw(&k_up, &d_up), Ok(()));
+    core.drain();
+    let calls_c = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(passes(&calls_c).len(), 1, "{calls_c:#?}");
+    assert_eq!(count_prefix(&calls_c, &vis_prefix), 3, "{calls_c:#?}");
+}
+
+/// `PsoMemo` O(1) `key_gen` hit, MRU promotion, `key_gen == 0` bypass, >24 eviction, and refusals.
+#[test]
+fn pso_memo_key_gen_mru_eviction_and_refusal_exclusion() {
+    use winemetal_sys::wire::WMT_RENDER_COMMAND_SET_PSO;
+    const DEVICE: u64 = 0x508;
+    let mut core = core_on_fakes(DEVICE);
+    let binds = ff_binds();
+    let d_gen = |key_gen: u64| DrawData {
+        key_gen,
+        ..triangle(&binds)
+    };
+
+    // Index-0 `key_gen` hit + `last_draw_gen` fast-path.
+    let k_a = key(0xf);
+    let k_b = key(0xe);
+    assert_eq!(core.draw(&k_a, &d_gen(10)), Ok(()));
+    assert_eq!(core.draw(&k_a, &d_gen(10)), Ok(()));
+    assert_eq!(core.pipelines_len(), 1);
+    assert_eq!(core.pso_memo.len(), 1);
+
+    // Miss index 0 with `k_b` (`key_gen: 20`), then return to `k_a` with new `key_gen: 30`
+    // (MRU hit promotes `k_a` back to index 0 and refreshes `key_gen` to 30), then hit 30.
+    assert_eq!(core.draw(&k_b, &d_gen(20)), Ok(()));
+    assert_eq!(core.draw(&k_a, &d_gen(30)), Ok(()));
+    assert_eq!(core.draw(&k_a, &d_gen(30)), Ok(()));
+    assert_eq!(core.pipelines_len(), 2);
+    assert_eq!(core.pso_memo.len(), 2);
+
+    // `key_gen == 0` bypasses index-0 `key_gen` match and matches by `(key_hash, key)`.
+    assert_eq!(core.draw(&k_b, &d_gen(0)), Ok(()));
+    assert_eq!(core.draw(&k_b, &d_gen(0)), Ok(()));
+    assert_eq!(core.pipelines_len(), 2);
+
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(
+        count_prefix(&calls, &format!("  render {WMT_RENDER_COMMAND_SET_PSO} ")),
+        4,
+        "{calls:#?}"
+    );
+    assert_eq!(pipelines_made(&calls), 2, "{calls:#?}");
+
+    // >24 unique keys evicts oldest from `PsoMemo` while `PsoMap` still holds them.
+    let ps = code(&PS_C0);
+    let mut keys_26 = Vec::new();
+    for i in 0..26_u16 {
+        let mut s = [StreamKey::Unused; MAX_STREAMS as usize];
+        s[0] = StreamKey::Inline {
+            stride: 16 + u32::from(i) * 4,
+        };
+        keys_26.push(PipelineKey {
+            streams: s,
+            ..prog_key(code(&VS_POS), ps.clone())
+        });
+    }
+    for (idx, k) in keys_26.iter().enumerate() {
+        assert_eq!(core.draw(k, &draw(3, 3, None, &[])), Ok(()));
+        assert_eq!(idx + 1, idx + 1);
+    }
+    assert_eq!(core.pso_memo.len(), 24);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    // Drawing the evicted first key hits `PsoMap` without compiling a new pipeline.
+    assert_eq!(core.draw(&keys_26[0], &draw(3, 3, None, &[])), Ok(()));
+    core.drain();
+    let after_evict = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(pipelines_made(&after_evict), 0, "{after_evict:#?}");
+
+    // Refused layout (`DrawRefused::Fetch`) is never cached in `PsoMemo`.
+    let mut bad_core = core_on_fakes(0x509);
+    let refused_key = two_stream_key(0, up_with(bound(2, STREAM_FREQ_DEFAULT)));
+    assert_eq!(
+        bad_core.draw(&refused_key, &draw(3, 3, None, &[])),
+        Err(DrawRefused::Fetch)
+    );
+    assert_eq!(bad_core.pso_memo.len(), 0);
+
+    // Failed pipeline (`DrawRefused::Pipeline`) is never cached in `PsoMemo`.
+    let mut fail_core = core_on_fakes(dxmt_fakes::REFUSES_PIPELINES);
+    assert_eq!(
+        fail_core.draw(&key(0xf), &triangle(&binds)),
+        Err(DrawRefused::Pipeline)
+    );
+    assert_eq!(fail_core.pso_memo.len(), 0);
+}
+
+/// `target_gen` bumps on every target/depth/back-buffer mutator and stays unchanged on no-ops.
+#[test]
+fn target_gen_bumps_on_every_target_mutator() {
+    use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT};
+    const DEVICE: u64 = 0x50a;
+    let mut core = core_on_fakes(DEVICE);
+    let mut g = core.target_gen();
+
+    let (rt1, _) = target_texture(&mut core, DEVICE, 1, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+    let (rt2, _) = target_texture(&mut core, DEVICE, 2, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+    let rt2_desc = crate::device::fixture::target_desc(
+        WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        crate::device::TextureKind::Tex2d,
+        64,
+        1,
+        4,
+    );
+    let depth_id = mtld3d_core::ids::TextureId::from_raw(3);
+    core.texture_create(
+        depth_id,
+        &crate::device::fixture::depth_desc(WMT_PIXEL_FORMAT_DEPTH32_FLOAT, 64, 64, 1),
+    );
+    let unbound_id = texture(&mut core, 4);
+
+    // Unrelated texture creation did not bump `target_gen`.
+    assert_eq!(core.target_gen(), g);
+
+    // `set_target` bumps on change, no-op on same.
+    assert!(core.set_target(level0(rt1)));
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+    assert!(core.set_target(level0(rt1)));
+    assert_eq!(core.target_gen(), g);
+
+    // `set_extra_target` bumps on change, no-op on same.
+    assert!(core.set_extra_target(1, Some(level0(rt2))));
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+    assert!(core.set_extra_target(1, Some(level0(rt2))));
+    assert_eq!(core.target_gen(), g);
+
+    // `set_depth` bumps on change, no-op on same.
+    let dref = crate::device::DepthRef {
+        id: depth_id,
+        level: 0,
+    };
+    assert!(core.set_depth(Some(dref)));
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+    assert!(core.set_depth(Some(dref)));
+    assert_eq!(core.target_gen(), g);
+
+    // `texture_create` replacing a bound extra/target/depth bumps `target_gen`.
+    core.texture_create(rt2, &rt2_desc);
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+
+    // `forget_texture` on an unbound texture does not bump `target_gen`.
+    core.forget_texture(unbound_id);
+    assert_eq!(core.target_gen(), g);
+
+    // `forget_texture` on bound target/extra/depth bumps `target_gen`.
+    core.forget_texture(rt1);
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+    core.forget_texture(rt2);
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+    core.forget_texture(depth_id);
+    assert_ne!(core.target_gen(), g);
+    g = core.target_gen();
+
+    // `resize` (`make_back_buffer`) bumps `target_gen`.
+    core.resize(128, 64, 1);
+    assert_ne!(core.target_gen(), g);
+}

@@ -13,7 +13,11 @@
 //! names a depth format, and the scissor when the pass has not recorded that one last. The
 //! pipeline is built on the API thread and waited for (no asynchronous compile until C4d).
 
-use core::ffi::CStr;
+use core::{
+    ffi::CStr,
+    hash::{Hash as _, Hasher as _},
+    ptr::NonNull,
+};
 use std::{borrow::Cow, ops::Range, sync::Arc};
 
 use airconv_ir::dxso::spec::{StageSpec, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
@@ -21,8 +25,7 @@ use dxmt_core::{
     deptrack::Access,
     device::Device,
     encoder::{NO_NEXT, direct, stage},
-    pipeline_cache::Compiled,
-    resource::Buffer,
+    pipeline_cache::{Compiled, PsoMap},
     shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
 };
 use mtld3d_core::{
@@ -155,6 +158,8 @@ pub struct DrawData<'a> {
     ///
     /// For a draw whose key's blend reads it; none otherwise.
     pub blend_color: Option<[f32; 4]>,
+    /// Monotonic front-end draw-cache generation for O(1) PSO and pass-state reuse; 0 to bypass.
+    pub key_gen: u64,
 }
 
 /// Why a draw recorded nothing.
@@ -181,6 +186,197 @@ pub enum DrawRefused {
     /// Its colours are those of the pass set ([`CoreDevice::target_desc`]) under neither sRGB
     /// write (DXMTRS C4b-3d4); its count is target 0's (DXMTRS C4b-3d5).
     Target,
+}
+
+use dxmt_core::resource::{Buffer, Texture, TextureViewKey};
+use mtld3d_core::pipeline_state::StreamLayout;
+
+/// Maximum entries kept in [`PsoMemo`].
+const PSO_MEMO_CAP: usize = 24;
+
+/// A single active vertex-buffer slot binding precomputed from [`PipelineSource`].
+struct ActiveBinding {
+    slot: u8,
+    stream: u8,
+    advance: u32,
+    stride: u32,
+}
+
+impl ActiveBinding {
+    const EMPTY: Self = Self {
+        slot: 0,
+        stream: 0,
+        advance: 0,
+        stride: 0,
+    };
+}
+
+/// One resolved pipeline entry cached in [`PsoMemo`].
+struct PsoMemoEntry {
+    key_gen: u64,
+    key_hash: u64,
+    key: PipelineKey,
+    _entry: Arc<Compiled<Option<PipelineSource>>>,
+    pso: u64,
+    used_mask: u16,
+    bindings: [ActiveBinding; MAX_STREAMS as usize],
+    binding_count: u8,
+}
+
+impl PsoMemoEntry {
+    fn active_bindings(&self) -> &[ActiveBinding] {
+        &self.bindings[..usize::from(self.binding_count)]
+    }
+}
+
+/// Per-device 24-entry MRU cache over resolved pipelines.
+///
+/// Matches by front-end `key_gen` at index 0 in O(1) without hashing, falling back to
+/// `(key_hash, key)` across the MRU entries before consulting [`PsoMap`]. Refused or failed
+/// pipelines are never cached here.
+#[derive(Default)]
+pub(super) struct PsoMemo {
+    entries: Vec<PsoMemoEntry>,
+}
+
+impl PsoMemo {
+    fn lookup(
+        &mut self,
+        key: &PipelineKey,
+        key_gen: u64,
+        device: &Device,
+        pipelines: &PsoMap<PipelineKey, Option<PipelineSource>>,
+        functions: &mut StageFunctions,
+    ) -> Result<&PsoMemoEntry, DrawRefused> {
+        if key_gen != 0
+            && let Some(front) = self.entries.first()
+            && front.key_gen == key_gen
+        {
+            debug_assert_eq!(&front.key, key);
+            return Ok(&self.entries[0]);
+        }
+        let key_hash = hash_pipeline_key(key);
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .position(|entry| entry.key_hash == key_hash && entry.key == *key)
+        {
+            if key_gen != 0 {
+                self.entries[idx].key_gen = key_gen;
+            }
+            self.entries[..=idx].rotate_right(1);
+            return Ok(&self.entries[0]);
+        }
+        let entry = pipelines
+            .get(key)
+            .unwrap_or_else(|| insert_pipeline(device, pipelines, functions, key));
+        if entry.spec.as_ref().as_ref().is_some_and(refused_layout) {
+            return Err(DrawRefused::Fetch);
+        }
+        let (Some(pso), Some(source)) = (entry.ready(), entry.spec.as_ref().as_ref()) else {
+            return Err(DrawRefused::Pipeline);
+        };
+        let used_mask = (0_u16..)
+            .zip(&source.streams)
+            .filter(|(_, layout)| layout.is_used())
+            .fold(0_u16, |mask, (stream, _)| mask | (1 << stream));
+        let mut bindings = [const { ActiveBinding::EMPTY }; MAX_STREAMS as usize];
+        let mut binding_count = 0_u8;
+        for ((slot, layout), &(stream, advance)) in
+            (0_u8..).zip(&source.layouts).zip(&source.bindings)
+        {
+            if !layout.is_used() {
+                continue;
+            }
+            let stride = source
+                .streams
+                .get(usize::from(stream))
+                .map_or(0, |s: &StreamLayout| s.stride);
+            bindings[usize::from(binding_count)] = ActiveBinding {
+                slot,
+                stream,
+                advance,
+                stride,
+            };
+            binding_count += 1;
+        }
+        if self.entries.len() == PSO_MEMO_CAP {
+            self.entries.pop();
+        }
+        self.entries.insert(
+            0,
+            PsoMemoEntry {
+                key_gen,
+                key_hash,
+                key: key.clone(),
+                _entry: entry,
+                pso,
+                used_mask,
+                bindings,
+                binding_count,
+            },
+        );
+        Ok(&self.entries[0])
+    }
+
+    #[cfg(test)]
+    pub(super) const fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn hash_pipeline_key(key: &PipelineKey) -> u64 {
+    let mut hasher = rustc_hash::FxHasher::default();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Chunk-arena slice copied on the API thread and read once by the encode thread.
+struct ChunkSlice {
+    ptr: NonNull<u8>,
+    len: usize,
+}
+
+// SAFETY: allocated in the queue's current chunk via `Chunk::allocate_cpu` on the recording
+// thread and read only by the closure inside that same chunk on the encode thread before the
+// chunk is retired and reset.
+unsafe impl Send for ChunkSlice {}
+
+impl ChunkSlice {
+    /// # Safety
+    ///
+    /// The chunk that allocated this slice must still be live and un-retired.
+    const unsafe fn as_slice(&self) -> &[u8] {
+        // SAFETY: `self.ptr` points to `self.len` initialized bytes in the live chunk's arena.
+        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+/// Validated index feed before emission.
+enum PendingIndex<'a> {
+    Bytes(&'a [u8]),
+    Stored(Arc<Buffer>, u64),
+}
+
+/// Un-deduplicated state and draw payload for [`CoreDevice::emit_general`].
+struct GeneralEmit {
+    pso: Option<u64>,
+    dsso: Option<(u64, u8)>,
+    blend: Option<([f32; 4], u8)>,
+    viewport: Option<WMTViewport>,
+    scissor: Option<WMTScissorRect>,
+    rasterizer: Option<WmtcmdRenderSetrasterizerstate>,
+    stored: Vec<(u8, Arc<Buffer>, u64)>,
+    bytes: Vec<u8>,
+    binds: Vec<(Stage, u8, Range<usize>)>,
+    textures: Vec<(Stage, u8, Arc<Texture>, TextureViewKey)>,
+    samplers: Vec<(Stage, u8, Option<Arc<dxmt_core::sampler::Sampler>>)>,
+    indexed: Option<(IndexFeed, u8, u32)>,
+    primitive_type: u8,
+    vertex_start: u32,
+    vertex_count: u32,
+    instances: u32,
+    base_vertex: i32,
 }
 
 /// Where a recorded indexed draw reads its indices.
@@ -240,6 +436,7 @@ impl CoreDevice {
     /// not in the store, or a slot advanced past a crossing attribute's offset starts past its
     /// buffer. A draw whose scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
+        // Phase 1: pure validation with zero `PassBound` reads or writes.
         let Some(target) = self.shape(self.target) else {
             return Err(DrawRefused::NoBackBuffer);
         };
@@ -284,64 +481,118 @@ impl CoreDevice {
         let Some(scissor) = clamp_rect(draw.scissor, extent) else {
             return Ok(());
         };
-        let entry = self.pipeline(key)?;
-        let (Some(pso), Some(source)) = (entry.ready(), entry.spec.as_ref().as_ref()) else {
-            return Err(DrawRefused::Pipeline);
-        };
-        // The streams the pipeline reads: bit `n` for stream `n`.
-        let used = (0_u16..)
-            .zip(&source.streams)
-            .filter(|(_, layout)| layout.is_used())
-            .fold(0_u16, |mask, (stream, _)| mask | 1 << stream);
-        // Before anything is recorded, each vertex buffer slot the pipeline reads, from the stream
-        // it binds, past that stream's offset by its advance (mtld3d's fetch): a stored buffer at
-        // the slot's binding offset, refused when the store does not hold it or an advanced
-        // binding starts past its end; inline bytes from the advance, zero-filled to their length;
-        // or for a stream with nothing bound zeros of its stride, clamped to the zero feed as
-        // mtld3d clamps it.
-        let mut stored = Vec::new();
-        let mut bytes = Vec::new();
-        let mut binds = Vec::<(Stage, u8, Range<usize>)>::new();
-        for ((slot, layout), &(stream, advance)) in
-            (0_u8..).zip(&source.layouts).zip(&source.bindings)
-        {
-            if !layout.is_used() {
-                continue;
+        let (
+            pso,
+            used,
+            mut stored,
+            stored_len,
+            mut stream_bytes,
+            stream_bytes_len,
+            mut dyn_ids,
+            mut dyn_count,
+        ) = {
+            struct PendingStored {
+                slot: u8,
+                id: BufferId,
+                generation: u64,
+                buffer: Arc<Buffer>,
+                offset: u64,
             }
-            let fed = match draw.streams[usize::from(stream)] {
-                StreamData::Buffer { id, offset } => {
-                    let buffer = self.buffers.buffer(id).ok_or(DrawRefused::Buffer)?;
-                    debug_assert!(
-                        matches!(
-                            key.streams[usize::from(stream)],
-                            StreamKey::Bound { shift: s, .. } if offset_shift(offset) == s.into()
-                        ),
-                        "a bound stream's key carries its offset's shift"
-                    );
-                    if advance != 0
-                        && advanced_binding_offset(offset, advance, buffer.length()).is_err()
-                    {
-                        return Err(DrawRefused::Fetch);
+            struct PendingBytes<'a> {
+                slot: u8,
+                fed: Cow<'a, [u8]>,
+                unconditional: bool,
+            }
+            let pso_entry = self.pso_memo.lookup(
+                key,
+                draw.key_gen,
+                &self.device,
+                &self.pipelines,
+                &mut self.functions,
+            )?;
+            let pso = pso_entry.pso;
+            let used = pso_entry.used_mask;
+            let mut stored: [Option<PendingStored>; MAX_STREAMS as usize] =
+                [const { None }; MAX_STREAMS as usize];
+            let mut stored_len = 0_usize;
+            let mut stream_bytes: [Option<PendingBytes<'_>>; MAX_STREAMS as usize] =
+                [const { None }; MAX_STREAMS as usize];
+            let mut stream_bytes_len = 0_usize;
+            let mut dyn_ids = [BufferId::from_raw(0); MAX_STREAMS as usize + 1];
+            let mut dyn_count = 0_usize;
+            for binding in pso_entry.active_bindings() {
+                match draw.streams[usize::from(binding.stream)] {
+                    StreamData::Buffer { id, offset } => {
+                        let (buffer, generation, is_dynamic) =
+                            self.buffers.buffer_entry(id).ok_or(DrawRefused::Buffer)?;
+                        debug_assert!(
+                            matches!(
+                                key.streams[usize::from(binding.stream)],
+                                StreamKey::Bound { shift: s, .. }
+                                    if offset_shift(offset) == s.into()
+                            ),
+                            "a bound stream's key carries its offset's shift"
+                        );
+                        if binding.advance != 0
+                            && advanced_binding_offset(offset, binding.advance, buffer.length())
+                                .is_err()
+                        {
+                            return Err(DrawRefused::Fetch);
+                        }
+                        let at = slot_binding_offset(offset, binding.advance);
+                        if is_dynamic {
+                            dyn_ids[dyn_count] = id;
+                            dyn_count += 1;
+                        }
+                        stored[stored_len] = Some(PendingStored {
+                            slot: binding.slot,
+                            id,
+                            generation,
+                            buffer: Arc::clone(buffer),
+                            offset: u64::from(at),
+                        });
+                        stored_len += 1;
                     }
-                    let at = slot_binding_offset(offset, advance);
-                    stored.push((slot, Arc::clone(buffer), u64::from(at)));
-                    continue;
+                    StreamData::Bytes(fed) => {
+                        stream_bytes[stream_bytes_len] = Some(PendingBytes {
+                            slot: binding.slot,
+                            fed: slot_bytes(fed, binding.advance),
+                            unconditional: true,
+                        });
+                        stream_bytes_len += 1;
+                    }
+                    data @ (StreamData::Zeros | StreamData::None) => {
+                        debug_assert!(
+                            matches!(data, StreamData::Zeros),
+                            "a stream the pipeline reads has data"
+                        );
+                        debug_assert!(
+                            binding.advance == 0,
+                            "a stream with nothing bound never crosses"
+                        );
+                        let stride = binding.stride as usize;
+                        stream_bytes[stream_bytes_len] = Some(PendingBytes {
+                            slot: binding.slot,
+                            fed: Cow::Borrowed(
+                                &NULL_STREAM_ZEROS[..stride.min(NULL_STREAM_ZEROS.len())],
+                            ),
+                            unconditional: false,
+                        });
+                        stream_bytes_len += 1;
+                    }
                 }
-                StreamData::Bytes(fed) => slot_bytes(fed, advance),
-                data @ (StreamData::Zeros | StreamData::None) => {
-                    debug_assert!(
-                        matches!(data, StreamData::Zeros),
-                        "a stream the pipeline reads has data"
-                    );
-                    debug_assert!(advance == 0, "a stream with nothing bound never crosses");
-                    let stride = source.streams[usize::from(stream)].stride as usize;
-                    Cow::Borrowed(&NULL_STREAM_ZEROS[..stride.min(NULL_STREAM_ZEROS.len())])
-                }
-            };
-            let start = bytes.len();
-            bytes.extend_from_slice(&fed);
-            binds.push((Stage::Vertex, slot, start..bytes.len()));
-        }
+            }
+            (
+                pso,
+                used,
+                stored,
+                stored_len,
+                stream_bytes,
+                stream_bytes_len,
+                dyn_ids,
+                dyn_count,
+            )
+        };
         let indexed = match &draw.indices {
             None => None,
             Some(Indices {
@@ -350,10 +601,15 @@ impl CoreDevice {
                 count,
             }) => {
                 let feed = match *data {
-                    IndexData::Bytes(bytes) => IndexFeed::Ring(bytes.to_vec()),
+                    IndexData::Bytes(bytes) => PendingIndex::Bytes(bytes),
                     IndexData::Buffer { id, offset } => {
-                        let buffer = self.buffers.buffer(id).ok_or(DrawRefused::Buffer)?;
-                        IndexFeed::Stored(Arc::clone(buffer), offset)
+                        let (buffer, _, is_dynamic) =
+                            self.buffers.buffer_entry(id).ok_or(DrawRefused::Buffer)?;
+                        if is_dynamic {
+                            dyn_ids[dyn_count] = id;
+                            dyn_count += 1;
+                        }
+                        PendingIndex::Stored(Arc::clone(buffer), offset)
                     }
                 };
                 Some((feed, *index_type, *count))
@@ -363,75 +619,347 @@ impl CoreDevice {
         let instances = draw.instancing.map_or(1, |(word, instanced)| {
             instance_count(word, instanced & used != 0)
         });
-        // The state of the planes the pass has: no stencil test without the plane.
-        let depth_state = with_depth.then(|| {
-            let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
-            let gated = draw.depth_stencil.gated_on_stencil_attachment(has_stencil);
-            self.depth_state_handle(&gated)
-        });
-        let stencil_ref = draw.stencil_ref;
-        let blend_color = draw.blend_color;
+
+        // Phase 2: open or reuse the render pass (`open_pass` resets `pass_bound` on a new pass).
         self.open_pass(with_depth, colors);
-        // After the pass is open: `open_pass` ends one of the other depth kind, and a new pass
-        // has recorded none. Once a pass and on a change, not once a draw.
-        let scissor = (self.pass_scissor != Some(scissor)).then(|| {
-            self.pass_scissor = Some(scissor);
-            WMTScissorRect {
-                x: u64::from(scissor[0]),
-                y: u64::from(scissor[1]),
-                width: u64::from(scissor[2]),
-                height: u64::from(scissor[3]),
+
+        // Phase 3: diff `PassBound`, emit compact fast paths or general draw closure, stamp dynamic.
+        let fast_state = draw.key_gen != 0
+            && self.render_open
+            && self.pass_bound.last_draw_gen == draw.key_gen
+            && self.pass_bound.pso != 0;
+
+        let mut pso_emit = None;
+        let mut dsso_emit = None;
+        let mut blend_emit = None;
+        let mut viewport_emit = None;
+        let mut scissor_emit = None;
+        let mut rasterizer_emit = None;
+        let mut const_binds_emit: Vec<(Stage, u8, Range<usize>)> = Vec::new();
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut textures_emit: Vec<(Stage, u8, Arc<Texture>, TextureViewKey)> = Vec::new();
+        let mut samplers_emit: Vec<(Stage, u8, Option<Arc<dxmt_core::sampler::Sampler>>)> =
+            Vec::new();
+
+        if !fast_state {
+            if self.pass_bound.pso != pso {
+                self.pass_bound.pso = pso;
+                pso_emit = Some(pso);
             }
-        });
-        for bind in draw.binds.iter().filter(|b| !b.bytes.is_empty()) {
-            let start = bytes.len();
-            bytes.extend_from_slice(bind.bytes);
-            binds.push((bind.stage, bind.slot, start..bytes.len()));
+            if with_depth {
+                let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
+                let gated = draw.depth_stencil.gated_on_stencil_attachment(has_stencil);
+                let dsso = self.depth_state_handle(&gated);
+                let next = (dsso, draw.stencil_ref);
+                if self.pass_bound.dsso != Some(next) {
+                    self.pass_bound.dsso = Some(next);
+                    dsso_emit = Some(next);
+                }
+            }
+            if let Some(rgba) = draw.blend_color {
+                let bits = rgba.map(f32::to_bits);
+                if self.pass_bound.blend_color != Some(bits) {
+                    self.pass_bound.blend_color = Some(bits);
+                    blend_emit = Some((rgba, draw.stencil_ref));
+                }
+            }
+            let vp_bits = draw.viewport.map(f64::to_bits);
+            if self.pass_bound.viewport != Some(vp_bits) {
+                self.pass_bound.viewport = Some(vp_bits);
+                let [origin_x, origin_y, width, height, znear, zfar] = draw.viewport;
+                viewport_emit = Some(WMTViewport {
+                    origin_x,
+                    origin_y,
+                    width,
+                    height,
+                    znear,
+                    zfar,
+                });
+            }
+            if self.pass_bound.scissor != Some(scissor) {
+                self.pass_bound.scissor = Some(scissor);
+                scissor_emit = Some(WMTScissorRect {
+                    x: u64::from(scissor[0]),
+                    y: u64::from(scissor[1]),
+                    width: u64::from(scissor[2]),
+                    height: u64::from(scissor[3]),
+                });
+            }
+            let rast_key = (draw.fill_mode, draw.cull_mode, draw.slope_scale.to_bits());
+            if self.pass_bound.rasterizer != Some(rast_key) {
+                self.pass_bound.rasterizer = Some(rast_key);
+                rasterizer_emit = Some(WmtcmdRenderSetrasterizerstate {
+                    r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    fill_mode: draw.fill_mode,
+                    cull_mode: draw.cull_mode,
+                    depth_clip_mode: 0,
+                    winding: 0,
+                    depth_bias: 0.0,
+                    scole_scale: draw.slope_scale,
+                    depth_bias_clamp: 0.0,
+                });
+            }
+            for bind in draw.binds.iter().filter(|b| !b.bytes.is_empty()) {
+                if self
+                    .pass_bound
+                    .should_bind_bytes(bind.stage, bind.slot, bind.bytes)
+                {
+                    let start = bytes.len();
+                    bytes.extend_from_slice(bind.bytes);
+                    const_binds_emit.push((bind.stage, bind.slot, start..bytes.len()));
+                }
+            }
+            for t in draw.textures {
+                if self
+                    .pass_bound
+                    .should_bind_texture(t.stage, t.slot, &t.texture, t.key)
+                {
+                    textures_emit.push((t.stage, t.slot, Arc::clone(&t.texture), t.key));
+                }
+                if self
+                    .pass_bound
+                    .should_bind_sampler(t.stage, t.slot, t.sampler.as_ref())
+                {
+                    samplers_emit.push((t.stage, t.slot, t.sampler.clone()));
+                }
+            }
+            if draw.key_gen != 0 {
+                self.pass_bound.last_draw_gen = draw.key_gen;
+            }
         }
-        let [origin_x, origin_y, width, height, znear, zfar] = draw.viewport;
-        let viewport = WMTViewport {
-            origin_x,
-            origin_y,
-            width,
-            height,
-            znear,
-            zfar,
-        };
-        let rasterizer = WmtcmdRenderSetrasterizerstate {
-            r#type: WMT_RENDER_COMMAND_SET_RASTERIZER_STATE,
-            reserved: [0; 3],
-            next: NO_NEXT,
-            fill_mode: draw.fill_mode,
-            cull_mode: draw.cull_mode,
-            depth_clip_mode: 0,
-            winding: 0,
-            depth_bias: 0.0,
-            scole_scale: draw.slope_scale,
-            depth_bias_clamp: 0.0,
-        };
+
+        let mut stored_emit: [Option<(u8, Arc<Buffer>, u64)>; MAX_STREAMS as usize] =
+            [const { None }; MAX_STREAMS as usize];
+        let mut stored_emit_len = 0_usize;
+        for entry in &mut stored[..stored_len] {
+            if let Some(item) = entry.take()
+                && self.pass_bound.should_bind_vertex_buffer(
+                    item.slot,
+                    item.id,
+                    item.generation,
+                    item.offset,
+                )
+            {
+                stored_emit[stored_emit_len] = Some((item.slot, item.buffer, item.offset));
+                stored_emit_len += 1;
+            }
+        }
+
+        let mut stream_bytes_emit: [Option<(u8, Cow<'_, [u8]>)>; MAX_STREAMS as usize] =
+            [const { None }; MAX_STREAMS as usize];
+        let mut stream_bytes_emit_len = 0_usize;
+        let mut stream_bytes_single_unconditional = false;
+        for entry in &mut stream_bytes[..stream_bytes_len] {
+            if let Some(item) = entry.take()
+                && self.pass_bound.should_bind_stream_bytes(
+                    item.slot,
+                    &item.fed,
+                    item.unconditional,
+                )
+            {
+                stream_bytes_single_unconditional = item.unconditional;
+                stream_bytes_emit[stream_bytes_emit_len] = Some((item.slot, item.fed));
+                stream_bytes_emit_len += 1;
+            }
+        }
+
         let (primitive_type, vertex_count) = (draw.primitive, draw.vertex_count);
         let (vertex_start, base_vertex) = (draw.vertex_start, draw.base_vertex);
-        let textures: Vec<_> = draw
-            .textures
-            .iter()
-            .map(|t| {
-                (
-                    t.stage,
-                    t.slot,
-                    Arc::clone(&t.texture),
-                    t.key,
-                    t.sampler.clone(),
-                )
-            })
-            .collect();
-        self.emit(move |enc| {
-            enc.encode_render_command(WmtcmdRenderSetpso {
-                r#type: WMT_RENDER_COMMAND_SET_PSO,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                pso,
+        let no_state_changes = pso_emit.is_none()
+            && dsso_emit.is_none()
+            && blend_emit.is_none()
+            && viewport_emit.is_none()
+            && scissor_emit.is_none()
+            && rasterizer_emit.is_none()
+            && const_binds_emit.is_empty()
+            && textures_emit.is_empty()
+            && samplers_emit.is_empty();
+
+        if no_state_changes && stored_emit_len == 0 && stream_bytes_emit_len == 0 {
+            match indexed {
+                None => {
+                    // Closure A: Copy non-indexed draw with zero state or buffer changes.
+                    self.emit(move |enc| {
+                        enc.bump_visibility_result_offset();
+                        enc.encode_render_command(WmtcmdRenderDraw {
+                            r#type: WMT_RENDER_COMMAND_DRAW,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            primitive_type,
+                            vertex_start: u64::from(vertex_start),
+                            vertex_count: u64::from(vertex_count),
+                            instance_count: instances,
+                            base_instance: 0,
+                        });
+                    });
+                }
+                Some((PendingIndex::Stored(index_buf, index_offset), index_type, index_count)) => {
+                    // Closure B: zero-Vec stored indexed draw with zero state/VB changes.
+                    self.emit(move |enc| {
+                        let Some((allocation, at)) =
+                            enc.access_buffer::<{ stage::VERTEX }>(&index_buf, Access::READ)
+                        else {
+                            return;
+                        };
+                        enc.bump_visibility_result_offset();
+                        enc.encode_render_command(WmtcmdRenderDrawIndexed {
+                            r#type: WMT_RENDER_COMMAND_DRAW_INDEXED,
+                            reserved: [0; 3],
+                            next: NO_NEXT,
+                            primitive_type,
+                            index_type,
+                            index_count: u64::from(index_count),
+                            index_buffer: allocation.buffer(),
+                            index_buffer_offset: at + index_offset,
+                            instance_count: instances,
+                            base_vertex,
+                            base_instance: 0,
+                        });
+                    });
+                }
+                Some((PendingIndex::Bytes(index_bytes), index_type, index_count)) => {
+                    self.emit_general(GeneralEmit {
+                        pso: pso_emit,
+                        dsso: dsso_emit,
+                        blend: blend_emit,
+                        viewport: viewport_emit,
+                        scissor: scissor_emit,
+                        rasterizer: rasterizer_emit,
+                        stored: Vec::new(),
+                        bytes,
+                        binds: const_binds_emit,
+                        textures: textures_emit,
+                        samplers: samplers_emit,
+                        indexed: Some((
+                            IndexFeed::Ring(index_bytes.to_vec()),
+                            index_type,
+                            index_count,
+                        )),
+                        primitive_type,
+                        vertex_start,
+                        vertex_count,
+                        instances,
+                        base_vertex,
+                    });
+                }
+            }
+        } else if no_state_changes
+            && stored_emit_len == 0
+            && indexed.is_none()
+            && stream_bytes_emit_len == 1
+            && stream_bytes_single_unconditional
+            && let Some((slot, fed)) = stream_bytes_emit[0].take()
+        {
+            // Closure C: zero-heap-allocation single inline UP vertex draw.
+            let dst = self.device.queue_mut().chunk().allocate_cpu(fed.len(), 16);
+            if !fed.is_empty() {
+                // SAFETY: `dst` holds `fed.len()` writable bytes allocated in the current chunk
+                // and is disjoint from `fed`.
+                unsafe {
+                    dst.as_ptr()
+                        .copy_from_nonoverlapping(fed.as_ptr(), fed.len());
+                }
+            }
+            let chunk_slice = ChunkSlice {
+                ptr: dst,
+                len: fed.len(),
+            };
+            self.emit(move |enc| {
+                // SAFETY: `chunk_slice` lives in this chunk's arena until the chunk retires.
+                let bound = unsafe { chunk_slice.as_slice() };
+                direct::bind_bytes::<{ stage::VERTEX }>(enc, slot, bound);
+                enc.bump_visibility_result_offset();
+                enc.encode_render_command(WmtcmdRenderDraw {
+                    r#type: WMT_RENDER_COMMAND_DRAW,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    primitive_type,
+                    vertex_start: u64::from(vertex_start),
+                    vertex_count: u64::from(vertex_count),
+                    instance_count: instances,
+                    base_instance: 0,
+                });
             });
-            if let Some(dsso) = depth_state {
+        } else {
+            let mut stored_vec = Vec::with_capacity(stored_emit_len);
+            for slot_entry in &mut stored_emit[..stored_emit_len] {
+                if let Some(item) = slot_entry.take() {
+                    stored_vec.push(item);
+                }
+            }
+            let mut binds_emit = const_binds_emit;
+            for (slot, fed) in stream_bytes_emit[..stream_bytes_emit_len].iter().flatten() {
+                let start = bytes.len();
+                bytes.extend_from_slice(fed);
+                binds_emit.push((Stage::Vertex, *slot, start..bytes.len()));
+            }
+            let indexed_feed = indexed.map(|(feed, index_type, index_count)| {
+                let resolved = match feed {
+                    PendingIndex::Bytes(index_bytes) => IndexFeed::Ring(index_bytes.to_vec()),
+                    PendingIndex::Stored(buffer, offset) => IndexFeed::Stored(buffer, offset),
+                };
+                (resolved, index_type, index_count)
+            });
+            self.emit_general(GeneralEmit {
+                pso: pso_emit,
+                dsso: dsso_emit,
+                blend: blend_emit,
+                viewport: viewport_emit,
+                scissor: scissor_emit,
+                rasterizer: rasterizer_emit,
+                stored: stored_vec,
+                bytes,
+                binds: binds_emit,
+                textures: textures_emit,
+                samplers: samplers_emit,
+                indexed: indexed_feed,
+                primitive_type,
+                vertex_start,
+                vertex_count,
+                instances,
+                base_vertex,
+            });
+        }
+
+        // After the record: a lock that renames from here on leaves this draw its name.
+        if dyn_count != 0 {
+            self.stamp_dynamic_ids(&dyn_ids[..dyn_count]);
+        }
+        Ok(())
+    }
+
+    fn emit_general(&mut self, general: GeneralEmit) {
+        let GeneralEmit {
+            pso: pso_emit,
+            dsso: dsso_emit,
+            blend: blend_emit,
+            viewport: viewport_emit,
+            scissor: scissor_emit,
+            rasterizer: rasterizer_emit,
+            stored,
+            bytes,
+            binds: binds_emit,
+            textures: textures_emit,
+            samplers: samplers_emit,
+            indexed,
+            primitive_type,
+            vertex_start,
+            vertex_count,
+            instances,
+            base_vertex,
+        } = general;
+        self.emit(move |enc| {
+            if let Some(pso) = pso_emit {
+                enc.encode_render_command(WmtcmdRenderSetpso {
+                    r#type: WMT_RENDER_COMMAND_SET_PSO,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    pso,
+                });
+            }
+            if let Some((dsso, stencil_ref)) = dsso_emit {
                 enc.encode_render_command(WmtcmdRenderSetdsso {
                     r#type: WMT_RENDER_COMMAND_SET_DSSO,
                     reserved: [0; 3],
@@ -440,9 +968,7 @@ impl CoreDevice {
                     stencil_ref,
                 });
             }
-            if let Some([red, green, blue, alpha]) = blend_color {
-                // The record that carries the blend colour also sets the stencil reference: the
-                // draw's own, which the depth-stencil state just set.
+            if let Some(([red, green, blue, alpha], stencil_ref)) = blend_emit {
                 enc.encode_render_command(WmtcmdRenderSetblendcolor {
                     r#type: WMT_RENDER_COMMAND_SET_BLEND_FACTOR_AND_STENCIL_REF,
                     reserved: [0; 3],
@@ -454,19 +980,21 @@ impl CoreDevice {
                     stencil_ref,
                 });
             }
-            let slot = enc
-                .allocate_cpu(size_of::<WMTViewport>(), align_of::<WMTViewport>())
-                .cast::<WMTViewport>();
-            // SAFETY: the encoder's memory, sized and aligned for one viewport, nobody else's.
-            unsafe { slot.write(viewport) };
-            enc.encode_render_command(WmtcmdRenderSetviewports {
-                r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
-                reserved: [0; 3],
-                next: NO_NEXT,
-                viewports: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
-                viewport_count: 1,
-            });
-            if let Some(rect) = scissor {
+            if let Some(viewport) = viewport_emit {
+                let slot = enc
+                    .allocate_cpu(size_of::<WMTViewport>(), align_of::<WMTViewport>())
+                    .cast::<WMTViewport>();
+                // SAFETY: the encoder's memory, sized and aligned for one viewport, nobody else's.
+                unsafe { slot.write(viewport) };
+                enc.encode_render_command(WmtcmdRenderSetviewports {
+                    r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
+                    reserved: [0; 3],
+                    next: NO_NEXT,
+                    viewports: MemPtr::from_ptr(slot.as_ptr().cast::<u8>()),
+                    viewport_count: 1,
+                });
+            }
+            if let Some(rect) = scissor_emit {
                 let slot = enc
                     .allocate_cpu(size_of::<WMTScissorRect>(), align_of::<WMTScissorRect>())
                     .cast::<WMTScissorRect>();
@@ -480,11 +1008,13 @@ impl CoreDevice {
                     rect_count: 1,
                 });
             }
-            enc.encode_render_command(rasterizer);
+            if let Some(rasterizer) = rasterizer_emit {
+                enc.encode_render_command(rasterizer);
+            }
             for (slot, buffer, offset) in &stored {
                 direct::bind_buffer::<{ stage::VERTEX }>(enc, *slot, Some(buffer), *offset);
             }
-            for (stage, slot, range) in &binds {
+            for (stage, slot, range) in &binds_emit {
                 let bound = &bytes[range.clone()];
                 match stage {
                     Stage::Vertex => direct::bind_bytes::<{ stage::VERTEX }>(enc, *slot, bound),
@@ -493,20 +1023,25 @@ impl CoreDevice {
             }
             // The plain sampler state, not the cube twin: mtld3d's cube samples clamp in the
             // shader as its own binds do (C4b3b-5).
-            for (stage, slot, texture, key, sampler) in &textures {
-                let (view, sampler) = (Some((&**texture, *key)), sampler.as_ref());
+            for (stage, slot, texture, key) in &textures_emit {
+                let view = Some((&**texture, *key));
+                match stage {
+                    Stage::Vertex => direct::bind_texture::<{ stage::VERTEX }>(enc, *slot, view),
+                    Stage::Pixel => direct::bind_texture::<{ stage::PIXEL }>(enc, *slot, view),
+                }
+            }
+            for (stage, slot, sampler) in &samplers_emit {
+                let sampler = sampler.as_ref();
                 match stage {
                     Stage::Vertex => {
-                        direct::bind_texture::<{ stage::VERTEX }>(enc, *slot, view);
                         direct::bind_sampler::<{ stage::VERTEX }>(enc, *slot, sampler, false);
                     }
                     Stage::Pixel => {
-                        direct::bind_texture::<{ stage::PIXEL }>(enc, *slot, view);
                         direct::bind_sampler::<{ stage::PIXEL }>(enc, *slot, sampler, false);
                     }
                 }
             }
-            if !textures.is_empty() {
+            if !textures_emit.is_empty() {
                 // A texture read in a pass that wrote it waits on a tile barrier.
                 enc.resolve_render_pass_barrier(dxmt_core::encoder::Encoder::dispatch_tile_barrier);
             }
@@ -563,86 +1098,74 @@ impl CoreDevice {
                 base_instance: 0,
             });
         });
-        // After the record: a lock that renames from here on leaves this draw its name.
-        self.stamp_dynamic(draw);
-        Ok(())
     }
+}
 
-    /// The pipeline entry of `key`, which the device keeps for its life: its handle and source.
-    ///
-    /// Built on the first draw of `key`, unless no binding can fetch its layout
-    /// ([`refused_layout`]); a key that does not build is kept as handle 0, logged then, and never
-    /// built again.
-    fn pipeline(
-        &mut self,
-        key: &PipelineKey,
-    ) -> Result<Arc<Compiled<Option<PipelineSource>>>, DrawRefused> {
-        let entry = self
-            .pipelines
-            .get(key)
-            .unwrap_or_else(|| self.insert_pipeline(key));
-        if entry.spec.as_ref().as_ref().is_some_and(refused_layout) {
-            return Err(DrawRefused::Fetch);
-        }
-        Ok(entry)
+/// The entry of a key the device has not seen: built unless no binding can fetch its layout.
+///
+/// One that does not build is logged and kept as handle 0, never built again; one no binding
+/// can fetch is kept as handle 0 too, its fetch error logged.
+fn insert_pipeline(
+    device: &Device,
+    pipelines: &PsoMap<PipelineKey, Option<PipelineSource>>,
+    functions: &mut StageFunctions,
+    key: &PipelineKey,
+) -> Arc<Compiled<Option<PipelineSource>>> {
+    let source = pipeline_source(key)
+        .map_err(|e| {
+            log::debug!(target: LOG_TARGET, "d3d9 core: a vertex stage: {e:?}");
+        })
+        .ok();
+    if let Some(Err(e)) = source.as_ref().map(|source| &source.fetch) {
+        log::debug!(
+            target: LOG_TARGET,
+            "d3d9 core: no binding fetches a vertex layout ({e:?}); its draws are refused"
+        );
     }
-
-    /// The entry of a key the device has not seen: built unless no binding can fetch its layout.
-    ///
-    /// One that does not build is logged and kept as handle 0, never built again; one no binding
-    /// can fetch is kept as handle 0 too, its fetch error logged.
-    fn insert_pipeline(&mut self, key: &PipelineKey) -> Arc<Compiled<Option<PipelineSource>>> {
-        let source = pipeline_source(key)
-            .map_err(|e| {
-                log::debug!(target: LOG_TARGET, "d3d9 core: a vertex stage: {e:?}");
-            })
-            .ok();
-        if let Some(Err(e)) = source.as_ref().map(|source| &source.fetch) {
-            log::debug!(
-                target: LOG_TARGET,
-                "d3d9 core: no binding fetches a vertex layout ({e:?}); its draws are refused"
-            );
-        }
-        let refused = source.as_ref().is_some_and(refused_layout);
-        let pso = match &source {
-            Some(source) if !refused => build_pipeline(&self.device, source, &mut self.functions),
-            _ => None,
-        };
-        if pso.is_none() && !refused {
-            let streams = key
-                .streams
-                .iter()
-                .filter(|s| **s != StreamKey::Unused)
-                .collect::<Vec<_>>();
-            log::error!(
-                target: LOG_TARGET,
-                "d3d9 core: a pipeline (streams {streams:?}) does not build; its draws are dropped"
-            );
-            log::debug!(target: LOG_TARGET, "d3d9 core: the pipeline that does not build: {key:?}");
-        }
-        // A stream with nothing bound reads the zero feed, which its draws clamp to (as mtld3d's
-        // do): said once a key.
-        let zeros = NULL_STREAM_ZEROS.len();
-        for (stream, (entry, layout)) in source
+    let refused = source.as_ref().is_some_and(refused_layout);
+    let pso = match &source {
+        Some(source) if !refused => build_pipeline(device, source, functions),
+        _ => None,
+    };
+    if pso.is_none() && !refused {
+        let streams = key
+            .streams
             .iter()
-            .flat_map(|source| key.streams.iter().zip(&source.streams))
-            .enumerate()
-        {
-            if *entry == StreamKey::Null && layout.stride as usize > zeros {
-                log::warn!(
-                    target: LOG_TARGET,
-                    "d3d9 core: stream {stream} is unbound and its declaration extent {} exceeds \
-                     the zero feed; clamped",
-                    layout.stride
-                );
-            }
-        }
-        let handle = pso.as_ref().map_or(0, Obj::handle);
-        // Built and ready (C4b-1's ruling C4b-3): no job, so no scheduler.
-        let entry = Compiled::ready_with(Arc::new(source), handle, pso);
-        self.pipelines.insert_ready(key.clone(), entry)
+            .filter(|s| **s != StreamKey::Unused)
+            .collect::<Vec<_>>();
+        log::error!(
+            target: LOG_TARGET,
+            "d3d9 core: a pipeline (streams {streams:?}) does not build; its draws are dropped"
+        );
+        log::debug!(
+            target: LOG_TARGET,
+            "d3d9 core: the pipeline that does not build: {key:?}"
+        );
     }
+    // A stream with nothing bound reads the zero feed, which its draws clamp to (as mtld3d's
+    // do): said once a key.
+    let zeros = NULL_STREAM_ZEROS.len();
+    for (stream, (entry, layout)) in source
+        .iter()
+        .flat_map(|source| key.streams.iter().zip(&source.streams))
+        .enumerate()
+    {
+        if *entry == StreamKey::Null && layout.stride as usize > zeros {
+            log::warn!(
+                target: LOG_TARGET,
+                "d3d9 core: stream {stream} is unbound and its declaration extent {} exceeds \
+                 the zero feed; clamped",
+                layout.stride
+            );
+        }
+    }
+    let handle = pso.as_ref().map_or(0, Obj::handle);
+    // Built and ready (C4b-1's ruling C4b-3): no job, so no scheduler.
+    let entry = Compiled::ready_with(Arc::new(source), handle, pso);
+    pipelines.insert_ready(key.clone(), entry)
+}
 
+impl CoreDevice {
     /// The stage compiles so far.
     #[cfg(test)]
     pub const fn compiles(&self) -> usize {

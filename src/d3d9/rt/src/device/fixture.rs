@@ -242,6 +242,7 @@ pub const fn draw<'a>(
         stencil_ref: 0,
         slope_scale: 0.0,
         blend_color: None,
+        key_gen: 0,
     }
 }
 

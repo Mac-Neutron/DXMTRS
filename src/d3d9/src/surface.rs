@@ -1819,7 +1819,9 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
     {
         // SAFETY: a standalone surface forwards a device reference for its public lifetime, and
         // a bound one is released by the device's teardown before its core device goes.
-        if let Some(core) = unsafe { &mut *inner.device_inner }.core_mut() {
+        let dev = unsafe { &mut *inner.device_inner };
+        dev.clear_core_draw_cache();
+        if let Some(core) = dev.core_mut() {
             core.forget_texture(id);
         }
     }

@@ -35,6 +35,7 @@ impl CoreDevice {
             self.open_depth = None;
             self.open_colors = [0; 4];
             self.blit_open = false;
+            self.pass_bound.reset();
             self.emit(Encoder::end_pass);
         }
     }
@@ -78,7 +79,7 @@ impl CoreDevice {
             return;
         }
         self.close_pass();
-        self.pass_scissor = None;
+        self.pass_bound.reset();
         let set = self.pass_set();
         debug_assert!(
             colors.iter().zip(&set).all(|(&format, shape)| {

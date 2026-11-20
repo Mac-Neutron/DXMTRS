@@ -106,6 +106,8 @@ pub struct IndexBufferInner {
     /// accessors are fixed at `0`. Metal has no eviction-order hint, so this
     /// is app-visible state only and never acted upon.
     priority: u32,
+    #[cfg(feature = "core-runtime")]
+    core_created: bool,
 }
 
 impl IndexBufferInner {
@@ -253,8 +255,11 @@ impl IndexBufferInner {
         if matches!(self.map_mode, BufferMapMode::Direct) {
             return true;
         }
+        if self.core_created && self.dirty.is_empty() {
+            return true;
+        }
         let backing = self.backing.as_slice();
-        let made = !core.has_buffer(self.buffer_id);
+        let made = !self.core_created;
         let (offset, bytes) = if made {
             let length = u64::try_from(backing.len());
             if !length.is_ok_and(|length| core.buffer_create(self.buffer_id, length)) {
@@ -277,6 +282,7 @@ impl IndexBufferInner {
         if self.lock_count == 0 {
             self.dirty.clear();
         }
+        self.core_created = true;
         true
     }
 }
@@ -347,6 +353,8 @@ impl Direct3DIndexBuffer9 {
             lock_count: 0,
             state_block_refs: 0,
             priority: 0,
+            #[cfg(feature = "core-runtime")]
+            core_created: false,
         }));
         Some(Self {
             vtbl: &raw const DIRECT3D_INDEX_BUFFER9_VTBL,

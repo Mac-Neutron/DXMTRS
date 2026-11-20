@@ -133,6 +133,7 @@ impl CoreDevice {
                 self.close_pass();
             }
             self.target = target;
+            self.target_gen = self.target_gen.wrapping_add(1);
         }
         true
     }
@@ -202,6 +203,7 @@ impl CoreDevice {
                 self.close_pass();
             }
             self.extras[index] = target;
+            self.target_gen = self.target_gen.wrapping_add(1);
         }
         true
     }

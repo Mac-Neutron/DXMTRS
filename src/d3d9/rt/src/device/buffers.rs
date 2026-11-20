@@ -26,12 +26,13 @@ use mtld3d_core::{
     buffer_rename::{LockPlan, PreserveKind, plan_lock},
     ids::BufferId,
 };
+use mtld3d_types::{D3DLOCK_NOOVERWRITE, D3DLOCK_READONLY};
 use rustc_hash::FxHashMap;
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WmtcmdBlitCopyFromBufferToBuffer,
 };
 
-use super::{CoreDevice, DrawData, IndexData, LOG_TARGET, StreamData};
+use super::{CoreDevice, LOG_TARGET};
 
 /// The page a dynamic buffer's names are cut from or placed in: dxmt-core's page.
 const PAGE: u64 = 4096;
@@ -47,11 +48,22 @@ const DYNAMIC_FLAGS: BufferAllocationFlags = if cfg!(target_arch = "x86") {
 };
 
 /// The store's buffers by id, and whether a draw has read a dynamic one (DXMTRS C4c-2b).
-#[derive(Default)]
 pub struct BufferStore {
     map: FxHashMap<BufferId, Stored>,
     /// A draw has read a dynamic buffer in place, and the line saying so is logged.
     read_in_place: bool,
+    /// Monotonic generation assigned on creation and rename, starting at 1.
+    next_generation: u64,
+}
+
+impl Default for BufferStore {
+    fn default() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            read_in_place: false,
+            next_generation: 1,
+        }
+    }
 }
 
 impl BufferStore {
@@ -60,19 +72,35 @@ impl BufferStore {
     pub fn buffer(&self, id: BufferId) -> Option<&Arc<Buffer>> {
         self.map.get(&id).map(|stored| &stored.buffer)
     }
+
+    /// The core buffer, its monotonic generation, and whether it is dynamic.
+    pub(super) fn buffer_entry(&self, id: BufferId) -> Option<(&Arc<Buffer>, u64, bool)> {
+        self.map
+            .get(&id)
+            .map(|stored| (&stored.buffer, stored.generation, stored.dynamic.is_some()))
+    }
+
+    fn bump_generation(&mut self) -> u64 {
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        generation
+    }
 }
 
-/// One stored buffer: its core buffer and, for a dynamic one, its names.
+/// One stored buffer: its core buffer, generation, and, for a dynamic one, its names.
 struct Stored {
     buffer: Arc<Buffer>,
     dynamic: Option<Dynamic>,
+    generation: u64,
 }
 
-/// A dynamic buffer's names, its D3D9 length and the chunk that last read it.
+/// A dynamic buffer's names, its D3D9 length, cached mapped pointer, and last-read chunk.
 struct Dynamic {
     names: Arc<DynamicBuffer>,
     /// The D3D9 length: what a lock plans over and a copy reads up to.
     length: u32,
+    /// Cached `immediate_mapped_memory()` for the current suballocation.
+    mapped: *mut u8,
     /// The chunk of the last draw that read the immediate name; 0 when none has.
     ///
     /// Set after the draw is recorded; back to 0 when a lock takes a new name.
@@ -100,11 +128,14 @@ impl CoreDevice {
         }
         let replaced = buffer.rename(allocation);
         debug_assert!(replaced.is_none(), "a new buffer has no allocation");
+        let generation = self.buffers.bump_generation();
         let stored = Stored {
             buffer: Arc::new(buffer),
             dynamic: None,
+            generation,
         };
         self.buffers.map.insert(id, stored);
+        self.pass_bound.forget_buffer(id);
         true
     }
 
@@ -144,16 +175,20 @@ impl CoreDevice {
         debug_assert!(replaced.is_none(), "a new buffer has no allocation");
         let names = DynamicBuffer::new(Arc::clone(&buffer), DYNAMIC_FLAGS)
             .expect("a buffer just named has a name");
+        let generation = self.buffers.bump_generation();
         let dynamic = Dynamic {
             names: Arc::new(names),
             length,
+            mapped: memory,
             last_use: 0,
         };
         let stored = Stored {
             buffer,
             dynamic: Some(dynamic),
+            generation,
         };
         self.buffers.map.insert(id, stored);
+        self.pass_bound.forget_buffer(id);
         true
     }
 
@@ -169,6 +204,7 @@ impl CoreDevice {
     /// those an emitted rename installs, which its closure holds.
     pub fn forget_buffer(&mut self, id: BufferId) {
         self.buffers.map.remove(&id);
+        self.pass_bound.forget_buffer(id);
     }
 
     /// Locks `id`'s dynamic buffer: a pointer at byte `offset` of the memory the CPU writes.
@@ -191,9 +227,20 @@ impl CoreDevice {
         offset: u32,
         size: u32,
     ) -> *mut u8 {
+        if flags & (D3DLOCK_NOOVERWRITE | D3DLOCK_READONLY) != 0 {
+            let Some(dynamic) = self.buffers.map.get(&id).and_then(|s| s.dynamic.as_ref()) else {
+                return core::ptr::null_mut();
+            };
+            if offset > dynamic.length || dynamic.mapped.is_null() {
+                return core::ptr::null_mut();
+            }
+            // SAFETY: `offset` is at most the buffer's length, which a suballocation of every name
+            // holds, so the pointer is inside the name's memory or one past its end.
+            return unsafe { dynamic.mapped.add(offset as usize) };
+        }
         // The entry is not held across the rename: the hold, the emits and the ledger are the
         // device's.
-        let Some((names, length, last_use)) = self.dynamic(id) else {
+        let Some((names, length, last_use, mut base)) = self.dynamic(id) else {
             return core::ptr::null_mut();
         };
         if offset > length {
@@ -202,12 +249,18 @@ impl CoreDevice {
         let coherent = self.device.queue().coherent_seq();
         if let LockPlan::Rename { preserve } =
             plan_lock(flags, usage, length, offset, size, last_use, coherent)
-            && self.rename(&names, length, preserve)
-            && let Some(dynamic) = self.dynamic_mut(id)
+            && let Some(new_mapped) = self.rename(&names, base, length, preserve)
         {
-            dynamic.last_use = 0;
+            base = new_mapped;
+            let generation = self.buffers.bump_generation();
+            if let Some(stored) = self.buffers.map.get_mut(&id) {
+                stored.generation = generation;
+                if let Some(dynamic) = stored.dynamic.as_mut() {
+                    dynamic.last_use = 0;
+                    dynamic.mapped = new_mapped;
+                }
+            }
         }
-        let base = names.immediate_mapped_memory();
         if base.is_null() {
             // Every name taken has memory (checked as it is taken).
             return base;
@@ -311,28 +364,19 @@ impl CoreDevice {
         true
     }
 
-    /// Stamps the chunk being recorded on each dynamic buffer `draw` reads, its index buffer too.
+    /// Stamps the chunk being recorded on each dynamic buffer in `ids`.
     ///
     /// Called once the draw is recorded, with nothing committed since, so a lock before that
     /// chunk retires plans against the draw. The first stamp logs that dynamic buffers are read
     /// in place, once a device, at the level the gates read.
-    pub(super) fn stamp_dynamic(&mut self, draw: &DrawData<'_>) {
+    pub(super) fn stamp_dynamic_ids(&mut self, ids: &[BufferId]) {
         let seq = self.device.queue().current_seq();
-        let streams = draw.streams.iter().filter_map(|data| match *data {
-            StreamData::Buffer { id, .. } => Some(id),
-            StreamData::None | StreamData::Bytes(_) | StreamData::Zeros => None,
-        });
-        let index = draw
-            .indices
-            .as_ref()
-            .and_then(|indices| match indices.data {
-                IndexData::Buffer { id, .. } => Some(id),
-                IndexData::Bytes(_) => None,
-            });
         let mut stamped = false;
-        for id in streams.chain(index) {
+        for &id in ids {
             if let Some(dynamic) = self.dynamic_mut(id) {
-                dynamic.last_use = seq;
+                if dynamic.last_use != seq {
+                    dynamic.last_use = seq;
+                }
                 stamped = true;
             }
         }
@@ -346,41 +390,51 @@ impl CoreDevice {
         }
     }
 
-    /// `id`'s dynamic buffer: its names, its length and the chunk that last read it.
-    fn dynamic(&self, id: BufferId) -> Option<(Arc<DynamicBuffer>, u32, u64)> {
+    /// `id`'s dynamic buffer: its names, its length, the chunk that last read it and mapped ptr.
+    fn dynamic(&self, id: BufferId) -> Option<(Arc<DynamicBuffer>, u32, u64, *mut u8)> {
         let dynamic = self.buffers.map.get(&id)?.dynamic.as_ref()?;
-        Some((Arc::clone(&dynamic.names), dynamic.length, dynamic.last_use))
+        Some((
+            Arc::clone(&dynamic.names),
+            dynamic.length,
+            dynamic.last_use,
+            dynamic.mapped,
+        ))
     }
 
     fn dynamic_mut(&mut self, id: BufferId) -> Option<&mut Dynamic> {
         self.buffers.map.get_mut(&id)?.dynamic.as_mut()
     }
 
-    /// Gives `names` a new name for a lock, D3D11's discarding `Map`; false when none is taken.
+    /// Gives `names` a new name for a lock, D3D11's discarding `Map`; `None` when none is taken.
     ///
     /// The next suballocation of the immediate name, else a name the GPU is done with as of the
     /// coherent chunk read after the hold, or a new allocation. The step and the new name each
     /// reach the encode thread as a closure, after the draws recorded before; a new name puts
     /// the old one's bytes in the ledger. `PreserveKind::Cpu` copies the first `length` bytes of
-    /// the immediate suballocation as it was before the rename into the new one.
-    fn rename(&mut self, names: &DynamicBuffer, length: u32, preserve: PreserveKind) -> bool {
-        // Before the step, which moves the immediate suballocation.
-        let source = names.immediate_mapped_memory();
-        if let Some((name, next, _)) = names.next_suballocation() {
+    /// `source` (the immediate suballocation before the rename) into the new one.
+    fn rename(
+        &mut self,
+        names: &DynamicBuffer,
+        source: *mut u8,
+        length: u32,
+        preserve: PreserveKind,
+    ) -> Option<*mut u8> {
+        let to = if let Some((name, next, mapped_ptr)) = names.next_suballocation() {
             self.emit(move |_| name.use_suballocation(next));
+            mapped_ptr
         } else {
             self.hold_under_cap();
             let queue = self.device.queue();
             let (seq, coherent) = (queue.current_seq(), queue.coherent_seq());
             let name = names.allocate(coherent);
-            if mapped(&name).is_none() {
+            let Some((mapped_ptr, _)) = mapped(&name) else {
                 log::error!(
                     target: LOG_TARGET,
                     "d3d9 core: a dynamic buffer's new name has no mapped memory (Metal buffer {:#x}); the lock writes in place",
                     name.buffer()
                 );
-                return false;
-            }
+                return None;
+            };
             let old = names.immediate_name();
             names.update_immediate_name(seq, Arc::clone(&name), 0, false);
             let buffer = Arc::clone(names.buffer());
@@ -390,14 +444,14 @@ impl CoreDevice {
             });
             let held = old.suballocation_size() * u64::from(old.suballocation_count());
             self.retained.add(seq, held, coherent);
-        }
-        if preserve == PreserveKind::Cpu {
-            let to = names.immediate_mapped_memory();
+            mapped_ptr
+        };
+        if preserve == PreserveKind::Cpu && !source.is_null() && !to.is_null() {
             // SAFETY: `source` and `to` are suballocations of names taken with memory, each
             // holding the buffer's `length` bytes, and distinct (a step or another name).
             unsafe { core::ptr::copy_nonoverlapping(source, to, length as usize) };
         }
-        true
+        Some(to)
     }
 }
 
