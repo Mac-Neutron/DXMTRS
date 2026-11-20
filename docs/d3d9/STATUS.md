@@ -45,27 +45,28 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   queue's: a present waits until the GPU has finished the frame that many
   presents back, where mtld3d also waits for the display's pace, and a present
   to a hidden or minimised window counts no frame.
-- On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the
-  bound depth-stencil (one sample) or resolves it, sample 0 of each plane
-  (more samples), into level 0 of the depth texture bound at stage 0, at the
-  call, and stores the state, as mtld3d does. A RESZ the core cannot do (no
-  texture or one of no depth format at stage 0, no depth-stencil bound, a
-  destination of another size or sample count) is skipped with one warning
-  and answers `D3D_OK`. Two differences: with a depth-stencil bound, a
-  `D3DUSAGE_DYNAMIC` depth texture at stage 0 is refused by name with
-  `D3DERR_NOTAVAILABLE` and the state is not stored; and a multisampled source
-  of another pixel format than the destination's (D24X8, D16 or D32 into
-  INTZ, D24S8 or D24FS8 into DF24 or DF16) is skipped with a warning, where
-  mtld3d's transfer converts it. A multisampled source with a stencil plane is
-  first copied into a scratch texture the core makes at each such call.
+- On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
+  depth-stencil (one sample) or resolves it, sample 0 of each plane (more
+  samples), into level 0 of the depth texture bound at stage 0, at the call,
+  and stores the state, as mtld3d does. A RESZ the core cannot do (no texture
+  or one of no depth format at stage 0, no depth-stencil bound, a destination
+  of another size or pixel format, or the bound depth-stencil's own texture)
+  is skipped with one warning and answers `D3D_OK`. Two differences: with a
+  depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at stage 0 is
+  refused by name with `D3DERR_NOTAVAILABLE` and the state is neither stored
+  nor recorded into an open state block; and a multisampled source of another
+  pixel format than the destination's (D24X8, D16 or D32 into INTZ, D24S8 or
+  D24FS8 into DF24 or DF16) is skipped with a warning, where mtld3d's transfer
+  converts it. A multisampled source with a stencil plane is first copied into
+  a scratch texture the core makes at each such call.
 - On the core runtime `SetCursorProperties`, `SetCursorPosition` and
   `ShowCursor` answer as on mtld3d, through the same Win32 cursor. What shows
-  differs in three ways. The core installs no window subclass, so in a window
-  whose class has a cursor, that cursor shows again from the window's next
-  `WM_SETCURSOR` (the pointer's next move over it), and a hidden cursor comes
-  back the same way. The cursor's scale is fixed at 1, `cursor.scale` not
-  followed, so in Wine's Retina mode the pointer is half mtld3d's size. Nor is
-  `cursor.software` followed.
+  differs in three ways. The core installs no window subclass, so while the
+  Direct3D cursor shows, the window's next `WM_SETCURSOR` (the pointer's next
+  move over it) reaches the game's window procedure: the window class's
+  cursor, or one the game sets there, replaces it. The cursor's scale is fixed
+  at 1, `cursor.scale` not followed, so in Wine's Retina mode the pointer is
+  half mtld3d's size. Nor is `cursor.software` followed.
 - On the core runtime a windowed `Reset` and `ResetEx` answer as on mtld3d:
   the back buffer and the auto depth-stencil made again at the new size and
   sample count, in place, the view moved to another device window when one is
