@@ -15,18 +15,21 @@
 //! (DXMTRS C4c-4b), or resolves a multisampled one into a single-sample one, sample 0 of each
 //! plane (DXMTRS C4c-4d). The colour arm tests the destination itself, since on a core device the
 //! GPU writes nothing but targets. Every present, whatever its arguments and entry, presents the
-//! whole back buffer into the device window, as on mtld3d (DXMTRS C4c-6a). What an arm does not
-//! cover yet is refused with one warning (C4-13): of `StretchRect`, all in the colour arm, an
-//! extended device's whole-surface copy into a level that is no target (two faces of one cube
-//! included) or from a surface that is no plain one, a pair of plain surfaces whose formats no
-//! CPU conversion serves, and a multisampled source of a format this GPU does not resolve. Clear
+//! whole back buffer into the device window, as on mtld3d (DXMTRS C4c-6a). `resz` answers
+//! `SetRenderState(D3DRS_POINTSIZE, RESZ)`: the bound depth-stencil copied or resolved into the
+//! depth texture at stage 0 (DXMTRS C4c-7a). What an arm does not cover yet is refused with one
+//! warning (C4-13): of `StretchRect`, all in the colour arm, an extended device's whole-surface
+//! copy into a level that is no target (two faces of one cube included) or from a surface that is
+//! no plain one, a pair of plain surfaces whose formats no CPU conversion serves, and a
+//! multisampled source of a format this GPU does not resolve; of RESZ, a dynamic depth texture as
+//! its destination while a depth-stencil is bound. Clear
 //! and the read-back go to and come from the bound colour target (DXMTRS C4b-3d1). The UP draws
 //! are `core_draw`'s.
 
 use core::ffi::c_void;
 
 use d3d9_rt::device::{
-    CoreDevice, CoreTextureDesc, CoreTextureFlags, StretchQuad, TargetRef, TextureKind,
+    CoreDevice, CoreTextureDesc, CoreTextureFlags, DepthRef, StretchQuad, TargetRef, TextureKind,
     UploadRegion, view_format,
 };
 use mtld3d_core::{
@@ -46,7 +49,7 @@ use mtld3d_types::{
     D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
     D3DERR_NOTAVAILABLE, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, D3DPRESENT_PARAMETERS, D3DRECT,
     D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DSURFACE_DESC, D3DTEXF_LINEAR,
-    D3DUSAGE_RENDERTARGET,
+    D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
 };
 
 use super::{
@@ -712,6 +715,72 @@ pub fn stretch_depth(
         return D3DERR_INVALIDCALL;
     }
     D3D_OK
+}
+
+/// `SetRenderState(D3DRS_POINTSIZE, RESZ)`: the bound depth-stencil into the stage-0 depth texture.
+///
+/// Recorded at the call, after the draws recorded so far, as mtld3d's stream order has it (DXMTRS
+/// C4c-7a): a copy of the whole level from a one-sample depth-stencil, a resolve of sample 0 of
+/// each plane from a multisampled one, into level 0 of the depth texture bound at stage 0. The
+/// destination is named by the texture, made with `D3DUSAGE_DEPTHSTENCIL` or not, once its core
+/// form is made. A RESZ the core cannot do is skipped with one warning a reason and answers `Ok`,
+/// as mtld3d's skips answer `D3D_OK`: no texture at stage 0, one of no depth format, no
+/// depth-stencil bound, or a pair the core does not copy or resolve (another size, pixel format
+/// or sample count, or the depth-stencil's own level). The caller stores the state after every
+/// `Ok`.
+///
+/// # Errors
+///
+/// `D3DERR_NOTAVAILABLE`, refused by name before anything is made, for a `D3DUSAGE_DYNAMIC`
+/// depth texture at stage 0 while a depth-stencil is bound: its CPU staging would upload over
+/// what the RESZ wrote at its next bind. The caller returns it before the state is recorded or
+/// stored.
+#[cold]
+#[inline(never)]
+pub fn resz(dev: &mut DeviceInner) -> Result<(), i32> {
+    let texture = dev.stage_bindings().texture(0);
+    // SAFETY: null, or the texture bound at stage 0, live while its stage holds it; distinct from
+    // the device.
+    let Some(texture) = (unsafe { texture.as_mut() }) else {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "d3d9 core: RESZ skipped: no stage-0 texture bound");
+        return Ok(());
+    };
+    if !texture.is_depth_format() {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "d3d9 core: RESZ skipped: the stage-0 texture is of no depth format");
+        return Ok(());
+    }
+    // Always a core device: the caller's test.
+    let Some(core) = dev.core_mut() else {
+        return Ok(());
+    };
+    let Some(source) = core.depth() else {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "d3d9 core: RESZ skipped: no depth-stencil bound");
+        return Ok(());
+    };
+    if texture.d3d_usage() & D3DUSAGE_DYNAMIC != 0 {
+        refuse_under_core("IDirect3DDevice9::SetRenderState(RESZ) (into a dynamic depth texture)");
+        return Err(D3DERR_NOTAVAILABLE);
+    }
+    // A depth texture never bound or sampled gets its core form here.
+    let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+    let destination = DepthRef {
+        id: texture.texture_id(),
+        level: 0,
+    };
+    let recorded = if core.depth_samples().is_some_and(|samples| samples > 1) {
+        core.depth_resolve(source, destination)
+    } else {
+        core.copy_depth(source, destination)
+    };
+    if !recorded {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "d3d9 core: RESZ skipped: the core does not copy or resolve the pair ({source:?} into \
+             {destination:?})");
+    }
+    Ok(())
 }
 
 /// `ColorFill` of a colour target the core draws to: the back buffer, a render target or a level.

@@ -12037,11 +12037,17 @@ extern "system" fn device_set_render_state(this: *mut c_void, state: u32, value:
     // engines on the matching vendor path use it as their only way to
     // hand scene depth to a second depth consumer.
     if state == D3DRS_POINTSIZE && value == 0x7fa0_5000 {
-        refuse_under_core!(
-            dev.is_core(),
-            "IDirect3DDevice9::SetRenderState(RESZ)",
-            D3DERR_NOTAVAILABLE
-        );
+        // A core device's RESZ is the core's; a destination it refuses returns here, before the
+        // state is recorded or stored (DXMTRS C4c-7a).
+        #[cfg(feature = "core-runtime")]
+        if dev.is_core() {
+            if let Err(hr) = core_arms::resz(dev) {
+                return hr;
+            }
+        } else {
+            dev.resolve_resz_depth();
+        }
+        #[cfg(not(feature = "core-runtime"))]
         dev.resolve_resz_depth();
     }
     if let Some(rec) = dev.recording_state_block_mut() {
