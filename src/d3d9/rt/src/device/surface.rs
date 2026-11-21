@@ -17,7 +17,7 @@ use dxmt_core::{
 };
 use mtld3d_core::{
     dirty_rect::DirtyRect,
-    stretch_rect::{SameSurfaceRoute, StretchRegion, same_surface_route},
+    stretch_rect::{BlitDecode, SameSurfaceRoute, StretchRegion, same_surface_route},
 };
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
@@ -25,7 +25,7 @@ use winemetal_sys::wire::{
 };
 
 use super::{
-    CoreDevice, TargetRef,
+    CoreDevice, StretchQuad, TargetRef,
     target::{Resolved, Shape},
 };
 
@@ -53,14 +53,66 @@ impl CoreDevice {
         self.read_rect(target, whole, sizes, dst, dst_pitch)
     }
 
+    /// Copies `source` resampled to `logical_width` x `logical_height` into `dst`.
+    ///
+    /// When `source`'s physical extent matches `logical_width` x `logical_height`, delegates to
+    /// [`CoreDevice::read_back`]. Otherwise stretches `source` into a logical-sized single-sample
+    /// scratch texture via [`CoreDevice::stretch`] and reads the scratch back.
+    pub fn read_back_logical(
+        &mut self,
+        source: TargetRef,
+        logical_width: u32,
+        logical_height: u32,
+        dst: &mut [u8],
+        dst_pitch: usize,
+    ) -> bool {
+        let Some(target) = self.resolve(source) else {
+            return false;
+        };
+        let shape = target.shape;
+        if shape.samples > 1 || logical_width == 0 || logical_height == 0 {
+            return false;
+        }
+        if (shape.width, shape.height) == (logical_width, logical_height) {
+            return self.read_back(source, dst, dst_pitch);
+        }
+        let logical_shape = Shape {
+            width: logical_width,
+            height: logical_height,
+            ..shape
+        };
+        let whole = DirtyRect::full(logical_width, logical_height);
+        if rect_bytes(logical_shape, whole, dst.len(), dst_pitch).is_none()
+            || self.quad_pipeline(shape.pixel_format, 1).is_none()
+            || self.quad_sampler(true).is_none()
+        {
+            return false;
+        }
+        let Some(scratch @ TargetRef::Texture { id: scratch_id, .. }) =
+            self.scratch_like(source, logical_width, logical_height)
+        else {
+            return false;
+        };
+        let ok = self.stretch(&StretchQuad {
+            src: source,
+            src_rect: [0, 0, shape.width, shape.height],
+            src_view: shape.pixel_format,
+            dst: scratch,
+            dst_rect: [0, 0, logical_width, logical_height],
+            linear: true,
+            decode: BlitDecode::None.uniform(),
+        }) && self.read_back(scratch, dst, dst_pitch);
+        self.forget_texture(scratch_id);
+        ok
+    }
+
     /// Copies `rect` of the back buffer, as Present would show it now, into `dst`.
     ///
-    /// `rect` is in texels of the BGRA8 back buffer; its rows land `dst_pitch` bytes apart. A
-    /// multisampled back buffer is first resolved into the presented texture as Present resolves
-    /// it, through the view its last pass or Clear wrote it in; a single-sample one is read as
-    /// drawn. Then [`CoreDevice::read_back`]'s blit of the rect, wait and copy. False, and
-    /// nothing recorded, without a back buffer, for an empty rect or one that leaves the back
-    /// buffer, a pitch under the rect's row, or a `dst` too small (DXMTRS C4c-3a).
+    /// `rect` is in logical texels of the BGRA8 back buffer; its rows land `dst_pitch` bytes
+    /// apart. When rendered at a scaled resolution, resolves/stretches into a logical-sized
+    /// scratch texture first before reading `rect` back. False, and nothing recorded, without a
+    /// back buffer, for an empty rect or one that leaves the back buffer, a pitch under the
+    /// rect's row, or a `dst` too small (DXMTRS C4c-3a).
     #[must_use]
     pub fn read_presented(&mut self, rect: DirtyRect, dst: &mut [u8], dst_pitch: usize) -> bool {
         let (Some(shape), Some(back_buffer)) =
@@ -68,20 +120,55 @@ impl CoreDevice {
         else {
             return false;
         };
-        let Some(sizes) = rect_bytes(shape, rect, dst.len(), dst_pitch) else {
+        let (logical_w, logical_h) = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
+            self.drawable_size
+        } else {
+            (shape.width, shape.height)
+        };
+        let logical_shape = Shape {
+            width: logical_w,
+            height: logical_h,
+            samples: 1,
+            ..shape
+        };
+        let Some(sizes) = rect_bytes(logical_shape, rect, dst.len(), dst_pitch) else {
             return false;
         };
-        let (texture, key) = back_buffer.presented();
-        let presented = Resolved {
-            texture: Arc::clone(texture),
-            key,
-            shape: Shape {
-                samples: 1,
-                ..shape
-            },
+        if (logical_w, logical_h) == (shape.width, shape.height) {
+            let (texture, key) = back_buffer.presented();
+            let presented = Resolved {
+                texture: Arc::clone(texture),
+                key,
+                shape: Shape {
+                    samples: 1,
+                    ..shape
+                },
+            };
+            self.resolve_presented();
+            return self.read_rect(presented, rect, sizes, dst, dst_pitch);
+        }
+        if self.quad_pipeline(shape.pixel_format, 1).is_none() || self.quad_sampler(true).is_none()
+        {
+            return false;
+        }
+        let Some(scratch @ TargetRef::Texture { id: scratch_id, .. }) =
+            self.scratch_like(TargetRef::BackBuffer, logical_w, logical_h)
+        else {
+            return false;
         };
-        self.resolve_presented();
-        self.read_rect(presented, rect, sizes, dst, dst_pitch)
+        let ok = self.stretch(&StretchQuad {
+            src: TargetRef::BackBuffer,
+            src_rect: [0, 0, shape.width, shape.height],
+            src_view: shape.pixel_format,
+            dst: scratch,
+            dst_rect: [0, 0, logical_w, logical_h],
+            linear: true,
+            decode: BlitDecode::None.uniform(),
+        }) && self
+            .resolve(scratch)
+            .is_some_and(|resolved| self.read_rect(resolved, rect, sizes, dst, dst_pitch));
+        self.forget_texture(scratch_id);
+        ok
     }
 
     /// Copies `rect` of `source`'s one subresource into `dst`, rows `dst_pitch` bytes apart.

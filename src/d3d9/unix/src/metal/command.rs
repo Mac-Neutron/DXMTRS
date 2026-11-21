@@ -1237,11 +1237,10 @@ enum PresentRoute {
 ///
 /// Only ever compared, never measured against, so the axes stay in the
 /// tuples the Metal texture accessors hand back.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PresentGeometry {
-    pub src: (usize, usize),
-    pub dst: (usize, usize),
-}
+pub use mtld3d_core::present::PresentGeometry;
+#[cfg(test)]
+use mtld3d_core::present::SETTLED_PRESENTS;
+use mtld3d_core::present::geometry_settled;
 
 /// One attachment's running count of consecutive presents at one geometry.
 ///
@@ -1272,47 +1271,6 @@ impl Default for GeometryStreak {
     }
 }
 
-/// Consecutive presents at one geometry before `MetalFX` is worth building.
-///
-/// The drawable follows the layer every present, while the back buffer only
-/// follows the guest's `WM_SIZE`, so a window being dragged larger produces a
-/// *different* enlargement on almost every frame. Each one would be a fresh
-/// `newSpatialScalerWithDevice`, an expensive create that the scaler cache
-/// then keeps for the life of the process: a hitch per frame of the drag, and
-/// a leak that outlives it. Waiting for the geometry to hold still spends a
-/// scaler only on sizes the game settled on.
-///
-/// **Transience, not ratio, is the discriminator.** The tempting alternative
-/// is to skip the scaler for enlargements too small to see, but the two cases
-/// overlap: a live drag was measured producing ratios up to `1.004`
-/// (`2474x1546 → 2484x1552`) while `render.scale = 0.99` asks for `1.0098`.
-/// No threshold separates those without being a coincidence.
-///
-/// Half a second is long enough that a pause mid-drag rarely reaches it, and
-/// short enough to be invisible: the frames before it present through the
-/// shader's bilinear stretch, and they are frames right after a resize, a
-/// `Reset`, or device creation, which are about to change again anyway.
-const SETTLED_PRESENTS: u32 = 30;
-
-/// Advance the settle counter for `geometry`, and say whether it has settled.
-///
-/// A change of geometry restarts the count, so "settled" means
-/// [`SETTLED_PRESENTS`] presents in a row at the same pair rather than that
-/// many presents in total. `seen` is the caller's state so this stays a pure
-/// function of it.
-fn geometry_settled(seen: &mut Option<(PresentGeometry, u32)>, geometry: PresentGeometry) -> bool {
-    match seen {
-        Some((last, streak)) if *last == geometry => {
-            *streak = streak.saturating_add(1);
-            *streak >= SETTLED_PRESENTS
-        }
-        _ => {
-            *seen = Some((geometry, 1));
-            SETTLED_PRESENTS <= 1
-        }
-    }
-}
-
 /// Pick the present route for one frame's geometry.
 ///
 /// `MTLFXSpatialScaler` only enlarges, so anything else is the shader's,
@@ -1321,13 +1279,13 @@ fn geometry_settled(seen: &mut Option<(PresentGeometry, u32)>, geometry: Present
 /// the scaler rejects that pair.
 ///
 /// Whether an enlargement is *worth* a scaler is a separate question, and
-/// deliberately not asked here: see [`SETTLED_PRESENTS`].
+/// deliberately not asked here: see [`mtld3d_core::present::SETTLED_PRESENTS`].
 const fn present_route(
     src: (usize, usize),
     dst: (usize, usize),
     metalfx_available: bool,
 ) -> PresentRoute {
-    let enlarges = src.0 <= dst.0 && src.1 <= dst.1 && (src.0 < dst.0 || src.1 < dst.1);
+    let enlarges = PresentGeometry { src, dst }.enlarges();
     if metalfx_available && enlarges {
         PresentRoute::Upscale
     } else {

@@ -4596,24 +4596,23 @@ fn core_read_subresource_back(
     };
     let _ = core_flush_dirty(ti, core);
     let pitch = ti.mip_bytes_per_row(level) as usize;
-    let target = u32::try_from(level)
-        .ok()
-        .map(|level| d3d9_rt::device::TargetRef::Texture {
-            id: ti.texture_id,
-            level,
-            face: ti.cube.is_some().then_some(face),
-        });
+    let target = d3d9_rt::device::TargetRef::Texture {
+        id: ti.texture_id,
+        level: ti.metal_level(level),
+        face: ti.cube.is_some().then_some(face),
+    };
     // Formed only after the flush, which reads the same pages.
     let staging = ti
         .subresource_staging_backing(face, level)
         .and_then(|(ptr, len)| Some((usize::try_from(ptr).ok()?, len)));
-    let read = target.zip(staging).is_some_and(|(target, (addr, len))| {
+    let (logical_w, logical_h) = (ti.mip_width(level), ti.mip_height(level));
+    let read = staging.is_some_and(|(addr, len)| {
         let ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr);
         // SAFETY: the subresource's staging pages, `len` bytes at `ptr`, live while the
         // texture is; no other reference to them is alive (the API lock keeps this call alone,
         // and a core device's uploads copied them at record time).
         let bytes = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
-        core.read_back(target, bytes, pitch)
+        core.read_back_logical(target, logical_w, logical_h, bytes, pitch)
     });
     if dev.encoder_status().is_err() {
         return false;
@@ -5947,20 +5946,25 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
     // reach it here, each dirty level uploaded whole (DXMTRS C4c-3b); any other depth texture's
     // lock is the lock's depth check's `INVALIDCALL`, so it has no dirty level.
     if ti.flags.contains(TextureFlags::DEPTH_FORMAT) {
+        let (render_w, render_h) = ti.render_extent();
+        let metal_levels = ti.metal_levels();
         if !core.has_texture(ti.texture_id) {
             let desc = CoreTextureDesc {
                 pixel_format: ti.metal_pixel_format as u32,
                 kind: TextureKind::Tex2d,
-                width: ti.width,
-                height: ti.height,
+                width: render_w,
+                height: render_h,
                 depth: 1,
-                levels: ti.levels,
+                levels: metal_levels,
                 flags: CoreTextureFlags::RENDER_TARGET,
                 srgb_format: 0,
                 block: (1, 1, ti.block_bytes.max(1)),
                 samples: 1,
             };
             core.texture_create(ti.texture_id, &desc);
+            if !ti.render_scale().is_identity() {
+                core.set_texture_logical_size(ti.texture_id, ti.width, ti.height);
+            }
         }
         core_upload_depth_levels(ti, core);
         return true;
@@ -5969,6 +5973,9 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
     // nothing until a CPU write dirties a level (DXMTRS C4b-3d1).
     let render_target = ti.d3d_usage & mtld3d_types::D3DUSAGE_RENDERTARGET != 0;
     let id = ti.texture_id;
+    let scaled = !ti.render_scale().is_identity();
+    let (render_w, render_h) = ti.render_extent();
+    let metal_levels = ti.metal_levels();
     let decode = mtld3d_core::upload_pass::upload_decode(ti.d3d_format, ti.metal_pixel_format)
         .filter(|d| *d != mtld3d_core::upload_pass::UploadDecode::CopyBgra8);
     let cube = ti.flags.contains(TextureFlags::CUBE);
@@ -5997,10 +6004,10 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
         let desc = CoreTextureDesc {
             pixel_format: pixel_format as u32,
             kind,
-            width: ti.width,
-            height: ti.height,
+            width: render_w,
+            height: render_h,
             depth: ti.depth.max(1),
-            levels: ti.levels,
+            levels: metal_levels,
             flags,
             srgb_format: pixel_format.srgb_twin().map_or(0, |twin| twin as u32),
             block: if decode.is_some() {
@@ -6011,6 +6018,9 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
             samples: 1,
         };
         core.texture_create(id, &desc);
+        if scaled {
+            core.set_texture_logical_size(id, ti.width, ti.height);
+        }
     }
     // Every level of a texture just made, from its staging.
     let first_upload = fresh && !render_target;
@@ -6121,6 +6131,15 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut d3d9_rt::device::CoreD
                         u32::try_from(dst_pitch).unwrap_or(u32::MAX),
                         u32::try_from(dst_pitch * rect.h as usize).unwrap_or(u32::MAX),
                     )
+            } else if scaled {
+                let target = d3d9_rt::device::TargetRef::Texture {
+                    id,
+                    level: ti.metal_level(level),
+                    face: cube.then_some(face),
+                };
+                bytes.get(start..).is_some_and(|from| {
+                    core.write_target_logical(target, (w, h), rect, from, pitch)
+                })
             } else {
                 bytes.get(start..).is_some_and(|from| {
                     core.texture_upload(

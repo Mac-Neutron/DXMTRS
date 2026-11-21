@@ -601,3 +601,50 @@ fn a_draw_on_a_copied_subresource_waits_on_the_copy() {
         );
     }
 }
+
+#[test]
+fn read_back_logical_and_write_target_logical_resample_scaled_targets() {
+    const DEVICE: u64 = 0x436;
+    let mut core = core_on_fakes(DEVICE);
+    let desc = target_desc(BGRA8, TextureKind::Tex2d, 128, 1, 4);
+    let id = TextureId::from_raw(0x99);
+    core.texture_create(id, &desc);
+    core.set_texture_logical_size(id, 256, 128);
+    core.drain();
+    let _ = take_calls(DEVICE);
+
+    let target = TargetRef::Texture {
+        id,
+        level: 0,
+        face: None,
+    };
+    let rows = vec![0x55_u8; 256 * 128 * 4];
+    let whole_logical = DirtyRect::full(256, 128);
+    assert!(core.write_target_logical(target, (256, 128), whole_logical, &rows, 256 * 4));
+    core.drain();
+    let write_calls = take_calls(DEVICE);
+    assert!(
+        write_calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_renderCommandEncoder"),
+        "scaled write_target_logical must stretch into physical texture: {write_calls:#?}"
+    );
+
+    let mut read_buf = vec![0_u8; 256 * 128 * 4];
+    assert!(core.read_back_logical(target, 256, 128, &mut read_buf, 256 * 4));
+    core.drain();
+    let read_calls = take_calls(DEVICE);
+    assert!(
+        read_calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_renderCommandEncoder"),
+        "scaled read_back_logical must stretch into logical scratch first: {read_calls:#?}"
+    );
+    assert!(
+        read_calls
+            .iter()
+            .any(|c| c.trim_start().starts_with("copy_to_buffer ") && c.contains("size=256x128 ")),
+        "{read_calls:#?}"
+    );
+    assert_eq!(readback(&core).length(), 256_u64 * 128 * 4);
+}

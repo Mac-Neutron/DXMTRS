@@ -31,11 +31,12 @@ use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMT_COMMAND_BUFFER_STATUS_ERROR,
     WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMTBufferInfo,
-    WMTDepthStencilInfo, WMTEDRValue, WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps,
-    WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo, WMTSamplerInfo,
-    WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo,
-    WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
-    WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitGenerateMipmaps, WmtcmdRenderSetbytes,
+    WMTDepthStencilInfo, WMTEDRValue, WMTFXSpatialScalerInfo, WMTFunctionConstant, WMTHDRMetadata,
+    WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo,
+    WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo,
+    WMTVertexDescriptorInfo, WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer,
+    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
+    WmtcmdBlitGenerateMipmaps, WmtcmdRenderSetbytes,
 };
 
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
@@ -73,6 +74,10 @@ struct State {
     drawable_textures: BTreeSet<u64>,
     /// `(pixel_format, width, height)` recorded at `MTLDevice_newTexture`.
     texture_props: BTreeMap<u64, (u32, u64, u64)>,
+    /// Per-device `MetalFX` spatial scaler support returned by `MTLDevice_supportsFXSpatialScaler`.
+    spatial_scaler_supported: BTreeMap<u64, bool>,
+    /// Per-device flag forcing `MTLDevice_newSpatialScaler` to return `0`.
+    spatial_scaler_fail: BTreeMap<u64, bool>,
 }
 
 /// The fakes' one [`State`].
@@ -96,6 +101,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     drawable_size: BTreeMap::new(),
     drawable_textures: BTreeSet::new(),
     texture_props: BTreeMap::new(),
+    spatial_scaler_supported: BTreeMap::new(),
+    spatial_scaler_fail: BTreeMap::new(),
 });
 
 fn state() -> MutexGuard<'static, State> {
@@ -202,6 +209,16 @@ pub fn set_drawable_size(device: u64, size: Option<(u64, u64)>) {
     }
 }
 
+/// Controls whether `MTLDevice_supportsFXSpatialScaler` reports support on `device`.
+pub fn set_spatial_scaler_supported(device: u64, supported: bool) {
+    state().spatial_scaler_supported.insert(device, supported);
+}
+
+/// Controls whether `MTLDevice_newSpatialScaler` returns null (`0`) on `device`.
+pub fn set_spatial_scaler_fail(device: u64, fail: bool) {
+    state().spatial_scaler_fail.insert(device, fail);
+}
+
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
 pub const FAKE_DEVICES: [u64; 2] = [0xe1, 0xe2];
 
@@ -290,6 +307,50 @@ const extern "C-unwind" fn fake_supports_family(_device: u64, _family: u32) -> b
 #[unsafe(export_name = "MTLDevice_supportsBCTextureCompression")]
 const extern "C-unwind" fn fake_supports_bc(_device: u64) -> bool {
     true
+}
+
+#[unsafe(export_name = "MTLDevice_supportsFXSpatialScaler")]
+extern "C-unwind" fn fake_supports_fx_spatial_scaler(device: u64) -> bool {
+    state()
+        .spatial_scaler_supported
+        .get(&device)
+        .copied()
+        .unwrap_or(true)
+}
+
+#[unsafe(export_name = "MTLDevice_newSpatialScaler")]
+extern "C-unwind" fn fake_new_spatial_scaler(
+    device: u64,
+    info: *const WMTFXSpatialScalerInfo,
+) -> u64 {
+    let mut state = state();
+    let supported = state
+        .spatial_scaler_supported
+        .get(&device)
+        .copied()
+        .unwrap_or(true);
+    let fail = state
+        .spatial_scaler_fail
+        .get(&device)
+        .copied()
+        .unwrap_or(false);
+    if !supported || fail {
+        return 0;
+    }
+    // SAFETY: the caller passes a live `WMTFXSpatialScalerInfo` for the call.
+    let i = unsafe { &*info };
+    let handle = state.made_of(device);
+    let line = format!(
+        "MTLDevice_newSpatialScaler {}x{}->{}x{} fmt={}/{}",
+        i.input_width,
+        i.input_height,
+        i.output_width,
+        i.output_height,
+        i.color_format,
+        i.output_format,
+    );
+    state.say(device, line);
+    handle
 }
 
 #[unsafe(export_name = "MTLDevice_setShouldMaximizeConcurrentCompilation")]
@@ -1307,6 +1368,22 @@ extern "C-unwind" fn fake_drawable_texture(drawable: u64) -> u64 {
     let handle = state.made_of(drawable);
     state.drawable_textures.insert(handle);
     handle
+}
+
+#[unsafe(export_name = "MTLCommandBuffer_encodeSpatialScale")]
+extern "C-unwind" fn fake_encode_spatial_scale(
+    cmdbuf: u64,
+    scaler: u64,
+    color: u64,
+    output: u64,
+    fence: u64,
+) {
+    state().say(
+        cmdbuf,
+        format!(
+            "MTLCommandBuffer_encodeSpatialScale scaler=#{scaler} color=#{color} output=#{output} fence=#{fence}"
+        ),
+    );
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_presentDrawable")]

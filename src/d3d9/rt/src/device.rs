@@ -6,7 +6,7 @@
 use core::sync::atomic::Ordering;
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use dxmt_core::{
     device::Device, pipeline_cache::PsoMap, queue::QueueConfig, scheduler::CompileScheduler,
@@ -19,7 +19,8 @@ use mtld3d_core::{
     shader_prewarm::PrewarmHandle,
 };
 use winemetal_sys::{
-    MTLDevice_registryID, NSArray_count, NSArray_object, NSObject_release, Obj, WMTCopyAllDevices,
+    MTLDevice_registryID, MTLDevice_supportsFXSpatialScaler, NSArray_count, NSArray_object,
+    NSObject_release, Obj, WMTCopyAllDevices,
 };
 
 /// The `log` target of the core runtime's lines.
@@ -37,6 +38,8 @@ bitflags::bitflags! {
         const DISCARD_BACK_BUFFER = 1 << 2;
         /// One-shot log latch for the first skipped draw on this device.
         const LOGGED_SKIP = 1 << 3;
+        /// One-shot log latch when `MetalFX` spatial scaler creation/allocation fails.
+        const LOGGED_UPSCALE_FAIL = 1 << 4;
         /// Enable HDR/EDR output when the display supports it (`color.hdr.enable`).
         const HDR_ENABLE = 1 << 5;
     }
@@ -252,10 +255,18 @@ pub struct CoreDevice {
     /// each draw pass and each triangle pass of the device's own starts with counting off; any
     /// bracket left open at the device's end is logged.
     open_brackets: Option<u32>,
+    /// Open occlusion query scale slots updated on counted draws.
+    open_query_scales: Vec<Weak<query::QueryScale>>,
     /// Inline 256-entry `ushort4` gamma lookup table applied by the presenter, or none.
     gamma: Option<Arc<[u16; 1024]>>,
     /// Layer drawable size in pixels, preserved across `resize` and `retarget`.
     drawable_size: (u32, u32),
+    /// Consecutive present geometry streak for `MetalFX` settle hysteresis.
+    settled_geometry: Option<(mtld3d_core::present::PresentGeometry, u32)>,
+    /// Cached `MetalFX` spatial scaler and resources for the settled geometry.
+    ///
+    /// Holds the spatial scaler, output target, and lazy gamma scratch.
+    upscale: Option<swapchain::UpscaleResources>,
     /// Deadline of the last CPU-paced present (`cap_after > 0`), cleared on drain/resize/retarget.
     last_paced: Option<std::time::Instant>,
 }
@@ -371,8 +382,11 @@ impl CoreDevice {
             retained: retained::Retained::default(),
             retention_cap: 0,
             open_brackets: None,
+            open_query_scales: Vec::new(),
             gamma: None,
             drawable_size: (0, 0),
+            settled_geometry: None,
+            upscale: None,
             last_paced: None,
         };
 
@@ -697,6 +711,17 @@ const fn staged_budget(staging_block: u64) -> u64 {
     } else {
         256 << 20
     }
+}
+
+/// Whether `mtl` supports `MetalFX` spatial upscaling (`MTLFXSpatialScaler`).
+#[must_use]
+pub fn metalfx_available(mtl: &Obj) -> bool {
+    let handle = mtl.handle();
+    if handle == 0 {
+        return false;
+    }
+    // SAFETY: `mtl` holds a retained live `MTLDevice` handle.
+    unsafe { MTLDevice_supportsFXSpatialScaler(handle) }
 }
 
 /// D3D9's queue sizes in this process: [`queue_profile_for`] its pointer width.

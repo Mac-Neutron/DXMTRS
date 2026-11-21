@@ -459,6 +459,35 @@ impl Encoder {
         self.end_pass();
     }
 
+    /// Applies D3D9 gamma `lut` from `src` into `dst` ahead of spatial upscaling.
+    pub fn d3d9_gamma_pass(
+        &mut self,
+        src: &Arc<Texture>,
+        dst: &Arc<Texture>,
+        presenter: Arc<Presenter>,
+        lut: Arc<[u16; 1024]>,
+    ) {
+        let info = dst.info();
+        let dst_size = (info.width, info.height);
+        self.begin(
+            PassKind::D3d9Gamma(D3d9Gamma {
+                src: 0,
+                dst: 0,
+                dst_size,
+                presenter,
+                lut,
+            }),
+            None,
+        );
+        let src = self.whole::<false>(src);
+        let dst = self.whole::<true>(dst);
+        if let Some(PassKind::D3d9Gamma(gamma)) = self.current_kind() {
+            gamma.src = src;
+            gamma.dst = dst;
+        }
+        self.end_pass();
+    }
+
     /// Upscales `texture` into `upscaled` with the spatial `scaler`.
     pub fn upscale(&mut self, texture: &Texture, upscaled: &Texture, scaler: Arc<Scaler>) {
         self.begin(
@@ -730,6 +759,7 @@ pub(super) enum PassKind {
     Clear(Clear),
     Resolve(Resolve),
     Present(Present),
+    D3d9Gamma(D3d9Gamma),
     SpatialUpscale(SpatialUpscale),
     TemporalUpscale(TemporalUpscale),
     /// A shared event's signal at a value; `None` is the queue's own event.
@@ -764,6 +794,15 @@ pub(super) struct Present {
     pub(super) after: f64,
     pub(super) metadata: DXMTPresentMetadata,
     pub(super) d3d9: Option<D3d9PresentArgs>,
+}
+
+/// Offscreen D3D9 gamma pass into a render-sized scratch texture ahead of spatial upscaling.
+pub(super) struct D3d9Gamma {
+    pub(super) src: u64,
+    pub(super) dst: u64,
+    pub(super) dst_size: (u32, u32),
+    pub(super) presenter: Arc<Presenter>,
+    pub(super) lut: Arc<[u16; 1024]>,
 }
 
 pub(super) struct SpatialUpscale {

@@ -27,7 +27,7 @@ fn draw(core: &mut CoreDevice) {
 /// The bracket `occlusion` last began.
 fn bracket(occlusion: &Occlusion) -> Arc<VisibilityQuery> {
     match &occlusion.span {
-        Span::Open(query) | Span::Closed { query, .. } => Arc::clone(query),
+        Span::Open { query, .. } | Span::Closed { query, .. } => Arc::clone(query),
         Span::Never | Span::Empty => panic!("no bracket begun"),
     }
 }
@@ -389,4 +389,44 @@ fn the_clear_quads_record_no_visibility_mode() {
     assert_eq!(found.len(), 3, "{found:#?}");
     let counts: Vec<_> = found.iter().map(Vec::as_slice).map(modes).collect();
     assert_eq!(counts, [(2, 2), (0, 0), (2, 2)], "{found:#?}");
+}
+
+#[test]
+fn occlusion_poll_rescales_counts_by_logical_over_render_area() {
+    const DEVICE: u64 = 0x47c;
+    // SAFETY: `DEVICE` is a unique fake device handle for this test.
+    let mtl = unsafe { winemetal_sys::Obj::adopt(DEVICE) }.expect("a non-zero handle");
+    let mut core = CoreDevice::new(mtl, crate::device::queue_profile());
+    core.attach_scaled(1, 320, 180, 640, 360, 1);
+
+    let mut query = Occlusion::default();
+    core.occlusion_begin(&mut query);
+    draw(&mut core);
+    core.occlusion_end(&mut query);
+    let q = bracket(&query);
+    core.drain();
+    q.issue(q.end_at(), &[100]);
+    // logical_area / render_area = (640 * 360) / (320 * 180) = 4
+    assert_eq!(core.occlusion_poll(&query, false), Count(400));
+
+    // Scaled render target texture retains its own logical / render area ratio.
+    let rt_id = TextureId::from_raw(0x55);
+    core.texture_create(
+        rt_id,
+        &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 100, 1, 4),
+    );
+    core.set_texture_logical_size(rt_id, 200, 200);
+    assert!(core.set_target(TargetRef::Texture {
+        id: rt_id,
+        level: 0,
+        face: None,
+    }));
+    let mut rt_query = Occlusion::default();
+    core.occlusion_begin(&mut rt_query);
+    draw(&mut core);
+    core.occlusion_end(&mut rt_query);
+    let rt_q = bracket(&rt_query);
+    core.drain();
+    rt_q.issue(rt_q.end_at(), &[25]);
+    assert_eq!(core.occlusion_poll(&rt_query, false), Count(100));
 }

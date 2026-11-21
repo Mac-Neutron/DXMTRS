@@ -345,3 +345,42 @@ fn an_interval_that_names_no_interval_is_refused() {
     assert!(!present_params_are_valid(&pp, false));
     assert!(!present_params_are_valid(&pp, true));
 }
+
+#[test]
+fn present_geometry_enlarges_and_settles_with_hysteresis() {
+    use super::{PresentGeometry, SETTLED_PRESENTS, geometry_settled};
+
+    let enlarge = PresentGeometry {
+        src: (960, 540),
+        dst: (1920, 1080),
+    };
+    let same = PresentGeometry {
+        src: (1920, 1080),
+        dst: (1920, 1080),
+    };
+    let mixed = PresentGeometry {
+        src: (1280, 1080),
+        dst: (1920, 720),
+    };
+    assert!(enlarge.enlarges());
+    assert!(!same.enlarges());
+    assert!(!mixed.enlarges());
+    assert!(
+        PresentGeometry {
+            src: (1280, 1080),
+            dst: (1920, 1080),
+        }
+        .enlarges()
+    );
+
+    let mut seen = None;
+    for frame in 1..SETTLED_PRESENTS {
+        assert!(
+            !geometry_settled(&mut seen, enlarge),
+            "frame {frame} should not settle yet"
+        );
+    }
+    assert!(geometry_settled(&mut seen, enlarge));
+    assert!(!geometry_settled(&mut seen, mixed));
+    assert!(!geometry_settled(&mut seen, enlarge));
+}

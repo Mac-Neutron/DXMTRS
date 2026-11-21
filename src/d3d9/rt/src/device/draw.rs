@@ -650,6 +650,9 @@ impl CoreDevice {
         } else {
             0
         };
+        if self.open_brackets.is_some() {
+            self.record_open_query_areas();
+        }
         if let Some(pending) = pending_entry.as_ref() {
             let mut check_planes = ClearPlanes::COLOR;
             if with_depth && (depth_planes & 1 != 0) && draw.depth_stencil.uses_depth() {

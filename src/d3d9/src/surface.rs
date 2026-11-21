@@ -736,7 +736,7 @@ impl Direct3DSurface9 {
         (parent.d3d_usage() & mtld3d_types::D3DUSAGE_RENDERTARGET != 0).then(|| {
             TargetRef::Texture {
                 id: parent.texture_id(),
-                level: inner.mip_level,
+                level: parent.inner().metal_level(inner.mip_level as usize),
                 face: self.cube_face(),
             }
         })
@@ -767,7 +767,7 @@ impl Direct3DSurface9 {
         (parent.is_depth_format() && parent.d3d_usage() & D3DUSAGE_DEPTHSTENCIL != 0).then(|| {
             DepthRef {
                 id: parent.texture_id(),
-                level: inner.mip_level,
+                level: parent.inner().metal_level(inner.mip_level as usize),
             }
         })
     }
@@ -3687,10 +3687,13 @@ fn core_lockable_rt_read_back(
     if dev.encoder_status().is_err() {
         return false;
     }
+    let (width, height) = (inner.standalone_width, inner.standalone_height);
     let read = dev
         .core_mut()
         .zip(inner.system_memory.as_mut())
-        .is_some_and(|(core, page)| core.read_back(target, page.as_mut_slice(), pitch));
+        .is_some_and(|(core, page)| {
+            core.read_back_logical(target, width, height, page.as_mut_slice(), pitch)
+        });
     if dev.encoder_status().is_err() {
         return false;
     }
@@ -3715,16 +3718,12 @@ fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId
         .map_or(0, |mapping| mapping.bytes_per_pixel());
     let (width, height) = (inner.standalone_width, inner.standalone_height);
     let pitch = mtld3d_core::format::linear_row_pitch(width, bpp);
-    let region = d3d9_rt::device::UploadRegion {
+    let target = d3d9_rt::device::TargetRef::Texture {
+        id,
         level: 0,
-        slice: 0,
-        x: 0,
-        y: 0,
-        z: 0,
-        width,
-        height,
-        depth: 1,
+        face: None,
     };
+    let whole = mtld3d_core::dirty_rect::DirtyRect::full(width, height);
     // SAFETY: null, or the surface's live owning device, which outlives it and is a different
     // allocation from the staging.
     let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
@@ -3737,12 +3736,12 @@ fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId
         .core_mut()
         .zip(inner.system_memory.as_ref())
         .is_some_and(|(core, page)| {
-            core.texture_upload(
-                id,
-                region,
+            core.write_target_logical(
+                target,
+                (width, height),
+                whole,
                 page.as_slice(),
-                pitch,
-                pitch.saturating_mul(height),
+                pitch as usize,
             )
         });
     if !uploaded {

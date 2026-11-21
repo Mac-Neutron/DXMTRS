@@ -939,8 +939,85 @@ impl Presenter {
         } else {
             D3d9PresentVariant::Sdr
         };
-        let pipeline = self.d3d9_pso(variant, drawable_fmt);
-        let mut info = render_pass(texture);
+        // SAFETY: `cmdbuf`, `backbuffer`, and `texture` are live Metal objects.
+        unsafe {
+            self.encode_d3d9_quad(
+                cmdbuf,
+                &D3d9Quad {
+                    src: backbuffer,
+                    dst: texture,
+                    draw_size: (draw_width, draw_height),
+                    target_fmt: drawable_fmt,
+                    variant,
+                    gamma: args.gamma.as_deref(),
+                    peak_edr: args.peak_edr,
+                },
+                wait,
+                update,
+            );
+        }
+        drawable
+    }
+
+    /// Applies D3D9 gamma `lut` from `src` into `dst` (render-sized `BGRA8Unorm` texture).
+    ///
+    /// # Safety
+    ///
+    /// `cmdbuf`, `src`, and `dst` are live Metal objects.
+    pub unsafe fn encode_d3d9_gamma_to_texture(
+        &self,
+        cmdbuf: u64,
+        (src, dst): (u64, u64),
+        dst_size: (u32, u32),
+        lut: &[u16; 1024],
+        wait: impl FnOnce(u64),
+        update: impl FnOnce(u64),
+    ) {
+        if src == 0 || dst == 0 {
+            return;
+        }
+        // SAFETY: caller's promise for live `cmdbuf`, `src`, and `dst`.
+        unsafe {
+            self.encode_d3d9_quad(
+                cmdbuf,
+                &D3d9Quad {
+                    src,
+                    dst,
+                    draw_size: (f64::from(dst_size.0), f64::from(dst_size.1)),
+                    target_fmt: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+                    variant: D3d9PresentVariant::SdrGamma,
+                    gamma: Some(lut),
+                    peak_edr: 1.0,
+                },
+                wait,
+                update,
+            );
+        }
+    }
+
+    /// Encodes a fullscreen D3D9 present/gamma quad described by `quad`.
+    ///
+    /// # Safety
+    ///
+    /// `cmdbuf`, `quad.src`, and `quad.dst` are live Metal objects.
+    unsafe fn encode_d3d9_quad(
+        &self,
+        cmdbuf: u64,
+        quad: &D3d9Quad<'_>,
+        wait: impl FnOnce(u64),
+        update: impl FnOnce(u64),
+    ) {
+        let &D3d9Quad {
+            src,
+            dst,
+            draw_size: (draw_width, draw_height),
+            target_fmt,
+            variant,
+            gamma,
+            peak_edr,
+        } = quad;
+        let pipeline = self.d3d9_pso(variant, target_fmt);
+        let mut info = render_pass(dst);
         if pipeline.is_none() {
             info.colors[0].load_action = WMT_LOAD_ACTION_CLEAR;
         }
@@ -958,7 +1035,7 @@ impl Presenter {
             };
             let uniforms = variant
                 .uses_hdr_uniforms()
-                .then(|| d3d9_hdr_uniforms(args.peak_edr));
+                .then(|| d3d9_hdr_uniforms(peak_edr));
             let draw = WmtcmdRenderDraw {
                 r#type: WMT_RENDER_COMMAND_DRAW,
                 reserved: [0; 3],
@@ -983,18 +1060,17 @@ impl Presenter {
                 pso: pipeline.handle(),
             };
             let mut head = from_ref(&pso).cast::<WmtcmdBase>();
-            let gamma_cmd = args
-                .gamma
-                .as_deref()
-                .filter(|_| variant.uses_gamma())
-                .map(|lut| WmtcmdRenderSetbytes {
-                    r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
-                    reserved: [0; 3],
-                    next: MemPtr::from_ptr(head),
-                    bytes: MemPtr::from_ptr(lut.as_ptr()),
-                    length: 2048,
-                    index: 1,
-                });
+            let gamma_cmd =
+                gamma
+                    .filter(|_| variant.uses_gamma())
+                    .map(|lut| WmtcmdRenderSetbytes {
+                        r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+                        reserved: [0; 3],
+                        next: MemPtr::from_ptr(head),
+                        bytes: MemPtr::from_ptr(lut.as_ptr()),
+                        length: 2048,
+                        index: 1,
+                    });
             if let Some(cmd) = &gamma_cmd {
                 head = from_ref(cmd).cast::<WmtcmdBase>();
             }
@@ -1013,7 +1089,7 @@ impl Presenter {
                 r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
                 reserved: [0; 3],
                 next: MemPtr::from_ptr(head),
-                texture: backbuffer,
+                texture: src,
                 index: 0,
             };
             // SAFETY: the encoder `renderCommandEncoder` answered; the records and what they point
@@ -1028,7 +1104,6 @@ impl Presenter {
         update(encoder);
         // SAFETY: the same encoder, ended once.
         unsafe { MTLCommandEncoder_endEncoding(encoder) };
-        drawable
     }
 
     fn d3d9_pso(&self, variant: D3d9PresentVariant, format: u32) -> Option<Arc<Obj>> {
@@ -1352,6 +1427,16 @@ const D3D9_EDR_POLL_INTERVAL: u32 = 32;
 enum D3d9LayerMode {
     Sdr,
     Hdr,
+}
+
+struct D3d9Quad<'a> {
+    src: u64,
+    dst: u64,
+    draw_size: (f64, f64),
+    target_fmt: u32,
+    variant: D3d9PresentVariant,
+    gamma: Option<&'a [u16; 1024]>,
+    peak_edr: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -135,6 +135,8 @@ pub struct TextureBind {
 pub(super) struct Stored {
     texture: Arc<Texture>,
     desc: CoreTextureDesc,
+    /// Logical `(width, height)` reported to D3D9 before `RenderScale` downscaling.
+    logical_size: (u32, u32),
     /// The `WMTPixelFormat` of the view the last pass or Clear wrote it through.
     ///
     /// Its stored format or its sRGB twin's; the stored one until a pass or Clear writes it. A
@@ -240,9 +242,49 @@ impl CoreDevice {
             Stored {
                 texture,
                 desc: *desc,
+                logical_size: (desc.width, desc.height),
                 last_written: desc.pixel_format,
             },
         );
+    }
+
+    /// Records the logical `(width, height)` for `id` when created under `RenderScale`.
+    pub fn set_texture_logical_size(
+        &mut self,
+        id: TextureId,
+        logical_width: u32,
+        logical_height: u32,
+    ) {
+        if let Some(stored) = self.textures.get_mut(&id) {
+            stored.logical_size = (logical_width, logical_height);
+        }
+    }
+
+    /// Returns `(render_area, logical_area)` in pixels for the currently bound colour target 0.
+    pub(super) fn target_areas(&self) -> (u64, u64) {
+        match self.target {
+            TargetRef::BackBuffer => {
+                let Some(bb) = &self.back_buffer else {
+                    return (0, 0);
+                };
+                let render_area = u64::from(bb.width) * u64::from(bb.height);
+                let logical_area = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
+                    u64::from(self.drawable_size.0) * u64::from(self.drawable_size.1)
+                } else {
+                    render_area
+                };
+                (render_area, logical_area)
+            }
+            TargetRef::Texture { id, .. } => {
+                let Some(stored) = self.textures.get(&id) else {
+                    return (0, 0);
+                };
+                let render_area = u64::from(stored.desc.width) * u64::from(stored.desc.height);
+                let logical_area =
+                    u64::from(stored.logical_size.0) * u64::from(stored.logical_size.1);
+                (render_area, logical_area)
+            }
+        }
     }
 
     /// A new single-sample, one-level 2D render target of `width` x `height`, made like `like`.
@@ -594,64 +636,116 @@ impl CoreDevice {
 
     /// Writes `rect` of the back buffer from CPU rows of its BGRA8 texels.
     ///
-    /// `rect` is in texels of the back buffer. `bytes` starts at the rect's first texel and its
-    /// rows are `pitch` bytes apart, each at least the rect's row, as
-    /// [`CoreDevice::read_presented`]'s `dst`. In application order, as
-    /// [`CoreDevice::texture_upload`] records an upload: for a single-sample back buffer the rows
-    /// are packed in a staging-ring block now and a blit copies them into the rect at the chunk's
-    /// encode; for a multisampled back buffer they are uploaded into a transient single-sample
-    /// scratch texture and sampled into the multisampled companion via [`CoreDevice::stretch`].
-    /// A Clear recorded before stays under them, and the next pass on the back buffer loads them
-    /// (DXMTRS C4c-3b). False, and nothing recorded, without a back buffer, for an empty rect or
-    /// one that leaves the back buffer, a pitch under the rect's row or `bytes` short of its rows,
-    /// or when the multisampled scratch texture, pipeline or sampler cannot be made.
+    /// `rect` is in logical texels of the BGRA8 back buffer; `bytes` starts at the rect's first
+    /// texel and its rows are `pitch` bytes apart, each at least the rect's row. When rendered at a
+    /// scaled resolution or multisampled, uploads into a transient scratch texture and resamples
+    /// via [`CoreDevice::stretch`].
     #[must_use]
     pub fn write_presented(&mut self, rect: DirtyRect, bytes: &[u8], pitch: usize) -> bool {
-        let (Some(shape), Some(back_buffer)) =
-            (self.shape(TargetRef::BackBuffer), &self.back_buffer)
-        else {
+        let Some(shape) = self.shape(TargetRef::BackBuffer) else {
             return false;
         };
-        let Some((row_bytes, _)) = rect_bytes(shape, rect, bytes.len(), pitch) else {
-            return false;
+        let logical = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
+            self.drawable_size
+        } else {
+            (shape.width, shape.height)
         };
-        if shape.samples > 1 {
-            return self.write_presented_msaa(shape, rect, row_bytes, bytes, pitch);
-        }
-        let texture = Arc::clone(back_buffer.presented().0);
-        let copy = Blit {
-            slice: 0,
-            origin: WMTOrigin {
-                x: u64::from(rect.x),
-                y: u64::from(rect.y),
-                z: 0,
-            },
-            size: WMTSize {
-                width: u64::from(rect.w),
-                height: u64::from(rect.h),
-                depth: 1,
-            },
-            row_bytes,
-            rows: rect.h,
-            images: 1,
-        };
-        // One image: its pitch is never read.
-        self.upload(texture, 0, &copy, bytes, (pitch, 0))
+        self.write_target_logical(TargetRef::BackBuffer, logical, rect, bytes, pitch)
     }
 
-    /// Uploads `rect` into a transient single-sample scratch texture and stretches it into MSAA.
-    fn write_presented_msaa(
+    /// Writes `rect` of `dst` in `logical_size` coordinates from CPU rows.
+    ///
+    /// Reads CPU rows from `bytes` spaced by `pitch`. When `dst`'s physical extent equals
+    /// `logical_size` and `dst` is single-sample, uploads directly via blit; otherwise stages into
+    /// a logical-rect scratch texture and stretches onto the physical destination rect using
+    /// [`StretchQuad`].
+    #[must_use]
+    pub fn write_target_logical(
         &mut self,
-        shape: Shape,
+        dst: TargetRef,
+        logical_size: (u32, u32),
         rect: DirtyRect,
-        row_bytes: u32,
         bytes: &[u8],
         pitch: usize,
     ) -> bool {
+        let Some(shape) = self.shape(dst) else {
+            return false;
+        };
+        let (logical_w, logical_h) = logical_size;
+        if logical_w == 0 || logical_h == 0 {
+            return false;
+        }
+        let logical_shape = Shape {
+            width: logical_w,
+            height: logical_h,
+            ..shape
+        };
+        let Some((row_bytes, _)) = rect_bytes(logical_shape, rect, bytes.len(), pitch) else {
+            return false;
+        };
+        if (shape.width, shape.height) == logical_size && shape.samples <= 1 {
+            return match dst {
+                TargetRef::BackBuffer => {
+                    let Some(back_buffer) = &self.back_buffer else {
+                        return false;
+                    };
+                    let texture = Arc::clone(back_buffer.presented().0);
+                    let copy = Blit {
+                        slice: 0,
+                        origin: WMTOrigin {
+                            x: u64::from(rect.x),
+                            y: u64::from(rect.y),
+                            z: 0,
+                        },
+                        size: WMTSize {
+                            width: u64::from(rect.w),
+                            height: u64::from(rect.h),
+                            depth: 1,
+                        },
+                        row_bytes,
+                        rows: rect.h,
+                        images: 1,
+                    };
+                    self.upload(texture, 0, &copy, bytes, (pitch, 0))
+                }
+                TargetRef::Texture { id, level, face } => {
+                    let Some(stored) = self.textures.get(&id) else {
+                        return false;
+                    };
+                    let texture = Arc::clone(&stored.texture);
+                    let region = UploadRegion {
+                        level,
+                        slice: face.unwrap_or(0),
+                        x: rect.x,
+                        y: rect.y,
+                        z: 0,
+                        width: rect.w,
+                        height: rect.h,
+                        depth: 1,
+                    };
+                    let Some(copy) = Blit::of(&stored.desc, region) else {
+                        return false;
+                    };
+                    self.upload(texture, level, &copy, bytes, (pitch, 0))
+                }
+            };
+        }
+        let scale_edge = |edge: u32, from: u32, to: u32| -> u32 {
+            u32::try_from((u64::from(edge) * u64::from(to) + u64::from(from) / 2) / u64::from(from))
+                .unwrap_or(to)
+                .min(to)
+        };
+        let x0 = scale_edge(rect.x, logical_w, shape.width).min(shape.width.saturating_sub(1));
+        let y0 = scale_edge(rect.y, logical_h, shape.height).min(shape.height.saturating_sub(1));
+        let x1 = scale_edge(rect.x + rect.w, logical_w, shape.width);
+        let y1 = scale_edge(rect.y + rect.h, logical_h, shape.height);
+        let dst_w = x1.saturating_sub(x0).max(1).min(shape.width - x0);
+        let dst_h = y1.saturating_sub(y0).max(1).min(shape.height - y0);
+        let linear = !(dst_w > rect.w || dst_h > rect.h);
         if self
             .quad_pipeline(shape.pixel_format, shape.samples)
             .is_none()
-            || self.quad_sampler(false).is_none()
+            || self.quad_sampler(linear).is_none()
         {
             return false;
         }
@@ -697,9 +791,9 @@ impl CoreDevice {
                 },
                 src_rect: [0, 0, rect.w, rect.h],
                 src_view: shape.pixel_format,
-                dst: TargetRef::BackBuffer,
-                dst_rect: [rect.x, rect.y, rect.w, rect.h],
-                linear: false,
+                dst,
+                dst_rect: [x0, y0, dst_w, dst_h],
+                linear,
                 decode: BlitDecode::None.uniform(),
             });
         self.forget_texture(scratch);

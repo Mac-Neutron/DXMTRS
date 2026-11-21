@@ -35,6 +35,8 @@ use mtld3d_core::{
         viewport_depth_range,
     },
     pipeline_state::{PipelineRsBits, PipelineRsFlags, core_blend},
+    ps_draw::build_ps_draw_bytes,
+    render_scale::TargetExtent,
     sampler_state::{
         TEXTURE_LOD_SLOT, VertexLodTable, description_from_snapshot, key_from_snapshot, lod_table,
         sample_unfiltered, snapshot_from_state, srgb_texture_enabled, vertex_lod_table,
@@ -337,6 +339,8 @@ fn resolve(
     // whose draws record nothing.
     let (target, colors, hardware_srgb) =
         core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0);
+    let target0_extent = core_target0_extent(dev, target);
+    let target_scale = target0_extent.scale();
     let [color_format, f1, f2, f3] = colors;
     // Target 0's sample count, which the pass, its pipeline and its coverage follow (DXMTRS
     // C4b-3d5).
@@ -346,6 +350,21 @@ fn resolve(
     let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count)?;
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
+    let physical_vp = if viewport.width != 0 && viewport.height != 0 && !target_scale.is_identity()
+    {
+        let (px, py, pw, ph) =
+            target0_extent.rect(viewport.x, viewport.y, viewport.width, viewport.height);
+        mtld3d_types::D3DVIEWPORT9 {
+            x: px,
+            y: py,
+            width: pw,
+            height: ph,
+            min_z: viewport.min_z,
+            max_z: viewport.max_z,
+        }
+    } else {
+        viewport
+    };
     let mut binds = Binds::default();
     // A pre-transformed draw's outputs: the declaration elements its FF VS passes through.
     let mut ff_outputs = None;
@@ -458,7 +477,14 @@ fn resolve(
     );
     let (znear, zfar) = viewport_depth_range(viewport.min_z, viewport.max_z);
     let depth_bias = d3d_depth_bias_to_clip(rs[D3DRS_DEPTHBIAS as usize], znear, zfar);
-    let fixup = pos_fixup(&viewport, target, clamp_z, depth_bias).map(f32::to_le_bytes);
+    let fixup = pos_fixup(
+        &physical_vp,
+        target,
+        clamp_z,
+        target_scale.factor(),
+        depth_bias,
+    )
+    .map(f32::to_le_bytes);
     binds.push(Stage::Vertex, mtl::VS_POS_FIXUP_SLOT, fixup.as_flattened());
     let view = dev
         .ff_state()
@@ -518,13 +544,21 @@ fn resolve(
         .ff_state()
         .variant_key(&rs, layout.has_rhw(), dev.uses_automatic_fog());
     base.tt_projected_mask = dev.ff_state().tt_projected_mask();
+    let vpos_scale = ps_kind == StageKind::Prog
+        && !target_scale.is_identity()
+        && ps_core.is_some_and(|(_, meta)| meta.reads_vpos);
+    if vpos_scale {
+        let ps_draw = build_ps_draw_bytes(target_scale);
+        binds.push(Stage::Pixel, mtl::PS_DRAW_SLOT, &ps_draw);
+    }
     let variant = core_ps_variant(
         base,
-        ps_kind == StageKind::Prog,
+        ps_kind,
         point_list,
         linked,
         has_depth,
         extra_present([f1, f2, f3]),
+        vpos_scale,
     );
     // The sampled pixel slots: each one's texture (flushed to the core), view and sampler, or the
     // black.
@@ -554,13 +588,18 @@ fn resolve(
         });
     }
     let texldl = ps_core.map_or(0, |(_, meta)| meta.explicit_lod_mask);
+    let lod_bias = if dev.config().render_lod_bias && !target_scale.is_identity() {
+        target_scale.lod_bias()
+    } else {
+        0.0
+    };
     let table = lod_table(
         sampled_mask,
         masks.fetch4 | masks.fetch4_alpha,
         texldl,
         masks.depth,
         slots.iter().map(|s| (u32::from(s.slot), &s.states)),
-        0.0,
+        lod_bias,
     );
     if let Some(table) = &table {
         binds.push(Stage::Pixel, mtl::PS_LOD_BIAS_SLOT, &table.bytes());
@@ -698,6 +737,17 @@ fn resolve(
         .filter(|blend| blend.reads_blend_color())
         .map(|_| d3dcolor_to_rgba_f32(rs[D3DRS_BLENDFACTOR as usize]));
     let scissor_rect = dev.scissor_rect();
+    let scissor_test = rs[D3DRS_SCISSORTESTENABLE as usize] != 0;
+    let scissor = if scissor_test {
+        let [sx, sy, sw, sh] = core_scissor(true, scissor_rect, &physical_vp, target);
+        if sw == 0 || sh == 0 || target_scale.is_identity() {
+            [sx, sy, sw, sh]
+        } else {
+            target0_extent.rect(sx, sy, sw, sh).into()
+        }
+    } else {
+        core_scissor(false, scissor_rect, &physical_vp, target)
+    };
     Ok(ResolvedCoreDraw {
         point_list,
         streams: *streams,
@@ -708,20 +758,54 @@ fn resolve(
         sampled_vertex_mask: u8::try_from(vertex_sampled & 0xF).unwrap_or(0),
         cached_pixel_lods,
         cached_vertex_lods,
-        viewport: core_viewport(&viewport, target),
-        scissor: core_scissor(
-            rs[D3DRS_SCISSORTESTENABLE as usize] != 0,
-            scissor_rect,
-            &viewport,
-            target,
-        ),
+        viewport: core_viewport(&physical_vp, target),
+        scissor,
         fill_mode: d3d_to_metal_fill(rs[D3DRS_FILLMODE as usize]) as u8,
         cull_mode: d3d_to_metal_cull(rs[D3DRS_CULLMODE as usize]) as u8,
         depth_stencil: depth_snapshot(&rs),
         stencil_ref: rs[D3DRS_STENCILREF as usize].to_le_bytes()[0],
-        slope_scale: d3d_slope_scale_to_metal(rs[D3DRS_SLOPESCALEDEPTHBIAS as usize], 1.0),
+        slope_scale: d3d_slope_scale_to_metal(
+            rs[D3DRS_SLOPESCALEDEPTHBIAS as usize],
+            target_scale.factor(),
+        ),
         blend_color,
     })
+}
+
+/// Resolves bound colour target 0's `RenderScale` and logical-vs-physical extent mapping.
+fn core_target0_extent(dev: &DeviceInner, physical: (u32, u32)) -> TargetExtent {
+    let bound = dev.bound_rt().render_target(0);
+    // SAFETY: null, or the bound surface kept live by its slot reference for this call.
+    let Some(surface) = (unsafe { bound.as_ref() }) else {
+        return TargetExtent::new(
+            dev.render_scale(),
+            (dev.backbuffer_width(), dev.backbuffer_height()),
+            physical,
+        );
+    };
+    if surface.is_back_buffer() {
+        return TargetExtent::new(
+            dev.render_scale(),
+            (dev.backbuffer_width(), dev.backbuffer_height()),
+            physical,
+        );
+    }
+    let parent = surface.parent_texture();
+    if !parent.is_null() {
+        // SAFETY: `parent` is live while `surface` holds its parent reference.
+        let tex = unsafe { &*parent };
+        let lvl = surface.mip_level() as usize;
+        return TargetExtent::new(
+            tex.inner().render_scale(),
+            (tex.inner().mip_width(lvl), tex.inner().mip_height(lvl)),
+            physical,
+        );
+    }
+    TargetExtent::new(
+        surface.render_scale(),
+        (surface.standalone_width(), surface.standalone_height()),
+        physical,
+    )
 }
 
 /// The bound colour targets' size, the format a draw attaches each in, and whether that encodes.

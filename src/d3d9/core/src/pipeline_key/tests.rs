@@ -834,7 +834,7 @@ fn core_ps_variant_rules() {
             | VariantFlags::SAMPLE_MASK,
         ..VariantKey::default()
     };
-    let prog = core_ps_variant(base, true, false, 0b101, false, 0);
+    let prog = core_ps_variant(base, StageKind::Prog, false, 0b101, false, 0, false);
     assert_eq!(prog.color_out_mask, 0);
     assert_eq!(prog.linked_input_mask, 0b101);
     assert_eq!(prog.alpha_func, 5);
@@ -843,14 +843,19 @@ fn core_ps_variant_rules() {
         prog.flags,
         VariantFlags::SRGB_WRITE | VariantFlags::NO_DEPTH_ATTACHMENT
     );
+    let vpos = core_ps_variant(base, StageKind::Prog, false, 0, true, 0, true);
+    assert_eq!(
+        vpos.flags,
+        VariantFlags::SRGB_WRITE | VariantFlags::VPOS_SCALE
+    );
     // (extras the pass attaches, bit i slot i + 1) -> the programmable stage's outputs.
     for (extras, outputs) in [(0b101, 0b1010), (0b010, 0b0100), (0b111, 0b1110), (0, 0)] {
-        let prog = core_ps_variant(base, true, false, 0, false, extras);
+        let prog = core_ps_variant(base, StageKind::Prog, false, 0, false, extras, false);
         assert_eq!(prog.color_out_mask, outputs, "{extras:#b}");
     }
-    let points = core_ps_variant(base, true, true, 0, false, 0);
+    let points = core_ps_variant(base, StageKind::Prog, true, 0, false, 0, false);
     assert!(points.flags.contains(VariantFlags::POINT_SPRITE));
-    let ff = core_ps_variant(base, false, false, 0, false, 0b101);
+    let ff = core_ps_variant(base, StageKind::Ff, false, 0, false, 0b101, true);
     assert_eq!(ff.flags, VariantFlags::SRGB_WRITE);
     assert_eq!(ff.linked_input_mask, 0);
     assert_eq!(ff.color_out_mask, 0b110);
@@ -859,10 +864,10 @@ fn core_ps_variant_rules() {
         flags: base.flags | VariantFlags::NO_DEPTH_ATTACHMENT,
         ..base
     };
-    let with_depth = core_ps_variant(no_depth_base, true, false, 0, true, 0);
+    let with_depth = core_ps_variant(no_depth_base, StageKind::Prog, false, 0, true, 0, false);
     assert_eq!(with_depth.flags, VariantFlags::SRGB_WRITE);
     assert_eq!(
-        core_ps_variant(base, false, false, 0, true, 0).flags,
+        core_ps_variant(base, StageKind::Ff, false, 0, true, 0, false).flags,
         VariantFlags::SRGB_WRITE
     );
 }
@@ -1069,11 +1074,11 @@ fn pos_fixup_follows_the_drawn_viewport() {
     };
     let bits = |v: [f32; 5]| v.map(f32::to_bits);
     assert_eq!(
-        bits(pos_fixup(&viewport(128, 64), target, false, 0.0)),
-        bits([1.0 / 128.0, -1.0 / 64.0, 0.0, 1.0, 0.0])
+        bits(pos_fixup(&viewport(128, 64), target, false, 0.75, 0.0)),
+        bits([1.0 / 128.0, -1.0 / 64.0, 0.0, 0.75, 0.0])
     );
     assert_eq!(
-        bits(pos_fixup(&viewport(0, 64), target, true, -0.25)),
+        bits(pos_fixup(&viewport(0, 64), target, true, 1.0, -0.25)),
         bits([1.0 / 256.0, -1.0 / 128.0, 1.0, 1.0, -0.25])
     );
 }

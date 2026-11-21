@@ -350,3 +350,21 @@ fn core_meta_links_a_ps_3_0_input() {
     let plain = meta(&ShaderStage::Pixel, &PS_2_0_C0);
     assert!(plain.link_inputs.is_empty());
 }
+
+#[test]
+fn core_meta_tracks_vpos_reads() {
+    const PS_3_0_VPOS: [u32; 8] = [
+        0xffff_0300, // ps_3_0
+        0x0200_001f, // dcl vPos.xy
+        0x8000_0000,
+        0x9003_1000,
+        0x0200_0001, // mov oC0, vPos
+        0x800f_0800,
+        0x90e4_1000,
+        0x0000_ffff, // end
+    ];
+    let vpos = meta(&ShaderStage::Pixel, &PS_3_0_VPOS);
+    assert!(vpos.reads_vpos);
+    let plain = meta(&ShaderStage::Pixel, &PS_2_0_C0);
+    assert!(!plain.reads_vpos);
+}

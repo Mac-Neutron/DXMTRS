@@ -53,6 +53,14 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   pipelines on ramp changes. A present waits for the core queue's latency
   bound as well as minimum present duration pacing, and a hidden or minimised
   window counts no frame unless `debug.presentOccluded` is set.
+- On the core runtime `render.scale`, `render.lodBias` and `MetalFX` spatial
+  upscaling work as on `mtld3d`: scaled render targets, depth surfaces and
+  shortened mip chains use logical coordinates at D3D9 boundaries (resampling
+  CPU read-backs, CPU uploads, occlusion counts, `vPos`, point sizes,
+  slope-scale depth bias, viewports, scissors, `Clear`, `ColorFill` and
+  `StretchRect`), while settled enlarging presents engage `MTLFXSpatialScaler`
+  after `SETTLED_PRESENTS = 30` frames and apply any active gamma LUT into a
+  render-sized scratch texture ahead of scaling.
 - On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
   depth-stencil (one sample) or resolves it, sample 0 of each plane (more
   samples), into level 0 of the depth texture bound at stage 0, at the call,

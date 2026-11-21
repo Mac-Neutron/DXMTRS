@@ -476,6 +476,7 @@ src/d3d9/core/src/pipeline_state.rs PipelineSnapshot Clone
 src/d3d9/core/src/pipeline_state.rs StreamLayout Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d9/core/src/present.rs DisplaySync Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/present.rs LayerPacing Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/core/src/present.rs PresentGeometry Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/readback.rs ReadbackReject Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/render_scale.rs RenderScale Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/reset_summary.rs ResetDone Clone,Copy,PartialEq,Eq
@@ -678,7 +679,6 @@ src/d3d9/unix/src/encoder/compile/libraries.rs AirStage Clone,Debug,PartialEq,Eq
 src/d3d9/unix/src/metal/clear_quad.rs ClearQuadKey Hash,PartialEq,Eq,Clone,Copy
 src/d3d9/unix/src/metal/command.rs BlitSite Clone,Copy
 src/d3d9/unix/src/metal/command.rs CopyRejectReason Clone,Copy,PartialEq,Eq,Debug
-src/d3d9/unix/src/metal/command.rs PresentGeometry Clone,Copy,PartialEq,Eq
 src/d3d9/unix/src/metal/command.rs PresentRoute Clone,Copy,PartialEq,Eq,Debug
 src/d3d9/unix/src/metal/macdrv.rs ColorspaceFlags Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/unix/src/metal/macdrv.rs DisplayCaps Clone,Copy

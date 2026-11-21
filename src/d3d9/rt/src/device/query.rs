@@ -8,19 +8,44 @@
 //! first BEGIN on, each draw pass and each triangle pass of the device's own starts with counting
 //! off, since the core's optimizer may put a counting pass's records in front of it.
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dxmt_core::{
     encoder::{Encoder, NO_NEXT},
     query::VisibilityQuery,
 };
-use mtld3d_core::query_fence::{event_completed, event_needs_submit};
+use mtld3d_core::{
+    query_fence::{event_completed, event_needs_submit},
+    visibility::logical_samples,
+};
 use winemetal_sys::wire::{
     WMT_RENDER_COMMAND_SET_VISIBILITY_MODE, WMT_VISIBILITY_RESULT_MODE_DISABLED,
     WmtcmdRenderSetvisibilitymode,
 };
 
 use super::CoreDevice;
+
+/// Render vs logical area ratio captured for an open occlusion bracket on its counted draws.
+#[derive(Default)]
+pub(super) struct QueryScale {
+    render_area: AtomicU64,
+    logical_area: AtomicU64,
+}
+
+impl QueryScale {
+    fn record(&self, render_area: u64, logical_area: u64) {
+        self.render_area.store(render_area, Ordering::Relaxed);
+        self.logical_area.store(logical_area, Ordering::Relaxed);
+    }
+
+    fn areas(&self) -> (u64, u64) {
+        (
+            self.render_area.load(Ordering::Relaxed),
+            self.logical_area.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// An OCCLUSION query's core state, which the front end's query owns.
 ///
@@ -80,10 +105,16 @@ impl CoreDevice {
     pub fn occlusion_begin(&mut self, occlusion: &mut Occlusion) {
         self.occlusion_release(occlusion);
         let query = Arc::new(VisibilityQuery::new());
+        let scale = Arc::new(QueryScale::default());
+        let (render_area, logical_area) = self.target_areas();
+        scale.record(render_area, logical_area);
+        self.open_query_scales
+            .retain(|entry| entry.strong_count() > 0);
+        self.open_query_scales.push(Arc::downgrade(&scale));
         let begun = Arc::clone(&query);
         self.emit(move |enc| enc.begin_visibility_query(Arc::clone(&begun)));
         self.open_brackets = Some(self.open_brackets.map_or(1, |open| open + 1));
-        occlusion.span = Span::Open(query);
+        occlusion.span = Span::Open { query, scale };
     }
 
     /// Ends an OCCLUSION bracket: `D3DISSUE_END`.
@@ -93,12 +124,15 @@ impl CoreDevice {
     /// recorded; one already ended keeps its result. Both as mtld3d's.
     pub fn occlusion_end(&mut self, occlusion: &mut Occlusion) {
         occlusion.span = match core::mem::take(&mut occlusion.span) {
-            Span::Open(query) => {
+            Span::Open { query, scale } => {
+                self.open_query_scales
+                    .retain(|entry| entry.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &scale)));
                 let ended = Arc::clone(&query);
                 self.emit(move |enc| enc.end_visibility_query(Arc::clone(&ended)));
                 self.open_brackets = self.open_brackets.map(|open| open.saturating_sub(1));
                 Span::Closed {
                     query,
+                    scale,
                     end_seq: self.device.queue().current_seq(),
                 }
             }
@@ -109,19 +143,18 @@ impl CoreDevice {
 
     /// The samples an OCCLUSION bracket counted, once they are read back.
     ///
-    /// Pending while it is open, `flush` or not. An ended bracket's samples are read back once
-    /// the queue retired its END's chunk. With `flush` (`D3DGETDATA_FLUSH`) the call waits for
-    /// that, committing the chunk when it is the one being recorded; without it nothing is
-    /// committed, as mtld3d's poll without the flag submits nothing. dxmt-core reads a chunk back
-    /// only when its passes wrote results, so an END alone in its chunk is marked issued here once
-    /// that chunk retired: every earlier chunk's read-back ran before the queue retired it.
+    /// Rescaled by the bracket's recorded `logical_area / render_area` when targets are scaled.
     #[must_use]
     pub fn occlusion_poll(&mut self, occlusion: &Occlusion, flush: bool) -> OcclusionAnswer {
-        let (query, end_seq) = match &occlusion.span {
+        let (query, scale, end_seq) = match &occlusion.span {
             Span::Never => return OcclusionAnswer::Never,
-            Span::Open(_) => return OcclusionAnswer::Pending,
+            Span::Open { .. } => return OcclusionAnswer::Pending,
             Span::Empty => return OcclusionAnswer::Count(0),
-            Span::Closed { query, end_seq } => (query, *end_seq),
+            Span::Closed {
+                query,
+                scale,
+                end_seq,
+            } => (query, scale, *end_seq),
         };
         if flush && query.value().is_none() {
             self.sync_to(end_seq);
@@ -131,9 +164,10 @@ impl CoreDevice {
         if query.value().is_none() && self.device.queue().coherent_seq() >= end_seq {
             query.issue(end_seq, &[]);
         }
-        query
-            .value()
-            .map_or(OcclusionAnswer::Pending, OcclusionAnswer::Count)
+        query.value().map_or(OcclusionAnswer::Pending, |count| {
+            let (render_area, logical_area) = scale.areas();
+            OcclusionAnswer::Count(logical_samples(count, render_area, logical_area))
+        })
     }
 
     /// Ends an open OCCLUSION bracket: the query's final release.
@@ -142,9 +176,23 @@ impl CoreDevice {
     /// otherwise count on every later pass for the device's life. Nothing for a bracket that is
     /// not open.
     pub fn occlusion_release(&mut self, occlusion: &mut Occlusion) {
-        if matches!(occlusion.span, Span::Open(_)) {
+        if matches!(occlusion.span, Span::Open { .. }) {
             self.occlusion_end(occlusion);
         }
+    }
+
+    /// Updates open occlusion query brackets with the active target's render/logical pixel areas.
+    pub(super) fn record_open_query_areas(&mut self) {
+        if self.open_query_scales.is_empty() {
+            return;
+        }
+        let (render_area, logical_area) = self.target_areas();
+        self.open_query_scales.retain(|entry| {
+            entry.upgrade().is_some_and(|scale| {
+                scale.record(render_area, logical_area);
+                true
+            })
+        });
     }
 }
 
@@ -173,10 +221,14 @@ enum Span {
     #[default]
     Never,
     /// Begun, its END not yet recorded.
-    Open(Arc<VisibilityQuery>),
+    Open {
+        query: Arc<VisibilityQuery>,
+        scale: Arc<QueryScale>,
+    },
     /// Ended in chunk `end_seq`.
     Closed {
         query: Arc<VisibilityQuery>,
+        scale: Arc<QueryScale>,
         end_seq: u64,
     },
     /// Ended without a BEGIN: an empty span, nothing recorded, which answers 0.

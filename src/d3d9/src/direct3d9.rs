@@ -2415,16 +2415,23 @@ fn create_core_device(
     if cfg.hdr_enable {
         options.insert(d3d9_rt::device::CoreOptions::HDR_ENABLE);
     }
+    let render_scale = resolve_render_scale(
+        d3d9_rt::device::metalfx_available(&mtl),
+        cfg.render_scale_percent,
+    );
+    let (render_w, render_h) = render_scale.extent(pp.back_buffer_width, pp.back_buffer_height);
     let mut core = d3d9_rt::device::CoreDevice::with_options(mtl, profile, options);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
-    core.attach(
+    core.attach_scaled(
         isize::try_from(hwnd).unwrap_or_default(),
+        render_w,
+        render_h,
         pp.back_buffer_width,
         pp.back_buffer_height,
         samples,
     );
-    // The auto depth-stencil, of the back buffer's size; a format of 0 asks for none, as under
-    // mtld3d. The entry point checked the format before the runtimes part.
+    // The auto depth-stencil, of the back buffer's render size; a format of 0 asks for none, as
+    // under mtld3d. The entry point checked the format before the runtimes part.
     let auto_depth = (pp.enable_auto_depth_stencil != 0)
         .then(|| mtld3d_core::format::map_d3d_depth_format(pp.auto_depth_stencil_format))
         .flatten()
@@ -2433,8 +2440,8 @@ fn create_core_device(
             let desc = d3d9_rt::device::CoreTextureDesc {
                 pixel_format: pixel_format as u32,
                 kind: d3d9_rt::device::TextureKind::Tex2d,
-                width: pp.back_buffer_width,
-                height: pp.back_buffer_height,
+                width: render_w,
+                height: render_h,
                 depth: 1,
                 levels: 1,
                 flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
@@ -2443,6 +2450,9 @@ fn create_core_device(
                 samples,
             };
             core.texture_create(id, &desc);
+            if !render_scale.is_identity() {
+                core.set_texture_logical_size(id, pp.back_buffer_width, pp.back_buffer_height);
+            }
             let bound = core.set_depth(Some(d3d9_rt::device::DepthRef { id, level: 0 }));
             debug_assert!(bound, "a depth texture just made binds");
             id
@@ -2475,7 +2485,7 @@ fn create_core_device(
         depth_stencil_format: 0,
         backbuffer_width: pp.back_buffer_width,
         backbuffer_height: pp.back_buffer_height,
-        render_scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
+        render_scale,
         encoder: crate::device::Mtld3dOnly::absent(),
         current_frame: crate::device::Mtld3dOnly::absent(),
         core: Some(Box::new(core)),

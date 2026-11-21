@@ -128,6 +128,8 @@ pub struct CoreShaderMeta {
     pub sampler_mask: u16,
     /// The declared slots sampled at an explicit level (`texldl`), whose clamp the shader applies.
     pub explicit_lod_mask: u16,
+    /// Whether the program declares or reads the `vPos` pixel coordinate register.
+    pub reads_vpos: bool,
 }
 
 bitflags::bitflags! {
@@ -174,6 +176,7 @@ pub fn core_meta(program: &DxsoProgram) -> CoreShaderMeta {
         link_outputs: SemanticSet::vs_outputs(program),
         sampler_mask,
         explicit_lod_mask: crate::dxso::explicit_lod_samplers(program) & sampler_mask,
+        reads_vpos: program.reads_vpos(),
     }
 }
 

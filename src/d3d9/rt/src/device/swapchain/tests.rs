@@ -1077,3 +1077,376 @@ fn cpu_pacing_holds_cap_across_presents() {
     );
     core.drain();
 }
+
+/// Helper creating a `CoreDevice` on `dxmt-fakes` attached with separate render and drawable sizes.
+fn scaled_core_on_fakes(
+    device: u64,
+    render: (u32, u32),
+    drawable: (u32, u32),
+) -> crate::device::CoreDevice {
+    // SAFETY: `device` is a unique fake device handle for this test.
+    let mtl = unsafe { winemetal_sys::Obj::adopt(device) }.expect("a non-zero handle");
+    let mut core = crate::device::CoreDevice::new(mtl, crate::device::queue_profile());
+    core.attach_scaled(1, render.0, render.1, drawable.0, drawable.1, 1);
+    core
+}
+
+#[test]
+fn metalfx_spatial_scaler_engages_after_settled_presents() {
+    use mtld3d_core::present::SETTLED_PRESENTS;
+
+    const DEVICE: u64 = 0x48a;
+    let _guard = crate::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut core = scaled_core_on_fakes(DEVICE, (320, 176), (640, 352));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let ((), early_logs) = crate::device::fixture::capture_logs(|| {
+        for _ in 1..SETTLED_PRESENTS {
+            core.present(true, 0.0, 0.0, false);
+        }
+        core.drain();
+    });
+    let early_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !early_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newSpatialScaler")
+                || c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
+        "scaler must not engage before {SETTLED_PRESENTS} settled frames: {early_calls:#?}"
+    );
+    assert!(
+        !early_logs
+            .iter()
+            .any(|l| l.contains("MetalFX spatial scaler engaged")),
+        "{early_logs:#?}"
+    );
+
+    let ((), engage_logs) = crate::device::fixture::capture_logs(|| {
+        core.present(true, 0.0, 0.0, false);
+        core.drain();
+    });
+    let engage_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        engage_calls
+            .iter()
+            .any(|c| c == "MTLDevice_newSpatialScaler 320x176->640x352 fmt=80/80"),
+        "{engage_calls:#?}"
+    );
+    assert!(
+        engage_calls
+            .iter()
+            .any(|c| c.contains("size=640x352x1 array=1 bits=0x7")),
+        "upscaled output texture must be BGRA8Unorm 640x352 with RT|READ|WRITE (bits=0x7): {engage_calls:#?}"
+    );
+    assert_eq!(
+        engage_calls
+            .iter()
+            .filter(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale "))
+            .count(),
+        1,
+        "{engage_calls:#?}"
+    );
+    assert!(
+        engage_logs
+            .iter()
+            .any(|l| l == "d3d9 core: MetalFX spatial scaler engaged (320x176 -> 640x352)"),
+        "{engage_logs:#?}"
+    );
+
+    // Frame 31 reuses the cached scaler without recreating it.
+    let ((), reuse_logs) = crate::device::fixture::capture_logs(|| {
+        core.present(true, 0.0, 0.0, false);
+        core.drain();
+    });
+    let reuse_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !reuse_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newSpatialScaler")),
+        "{reuse_calls:#?}"
+    );
+    assert_eq!(
+        reuse_calls
+            .iter()
+            .filter(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale "))
+            .count(),
+        1,
+        "{reuse_calls:#?}"
+    );
+    assert!(
+        !reuse_logs
+            .iter()
+            .any(|l| l.contains("MetalFX spatial scaler engaged")),
+        "{reuse_logs:#?}"
+    );
+}
+
+#[test]
+fn gamma_before_metalfx_runs_gamma_into_scratch_and_presents_without_double_gamma() {
+    use mtld3d_core::present::SETTLED_PRESENTS;
+
+    const DEVICE: u64 = 0x48b;
+    let _guard = crate::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    dxmt_fakes::set_drawable_format(DEVICE, Some(80));
+    dxmt_fakes::set_drawable_size(DEVICE, Some((640, 360)));
+
+    let mut core = scaled_core_on_fakes(DEVICE, (320, 180), (640, 360));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for _ in 0..SETTLED_PRESENTS {
+        core.present(true, 0.0, 0.0, false);
+    }
+    core.drain();
+    let settled_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !settled_calls.iter().any(|c| c.contains(" size=320x180x1 ")),
+        "gamma scratch must be lazily allocated only when gamma is active: {settled_calls:#?}"
+    );
+
+    let mut lut = [0_u16; 1024];
+    lut[0] = 777;
+    core.set_gamma_ramp(Some(lut));
+    core.present(true, 0.0, 0.0, false);
+    core.drain();
+
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    dxmt_fakes::set_drawable_format(DEVICE, None);
+    dxmt_fakes::set_drawable_size(DEVICE, None);
+
+    let scratch_tex = calls
+        .iter()
+        .find_map(|c| {
+            c.starts_with("MTLDevice_newTexture ")
+                .then_some(c)
+                .filter(|line| line.contains(" size=320x180x1 ") && line.contains(" bits=0x5"))
+                .and_then(|line| line.split_whitespace().nth(1))
+        })
+        .unwrap_or_else(|| panic!("expected lazy render-sized gamma scratch: {calls:#?}"));
+    let upscale_idx = calls
+        .iter()
+        .position(|c| {
+            c.starts_with("MTLCommandBuffer_encodeSpatialScale ")
+                && c.contains(&format!("color={scratch_tex} "))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected MetalFX to consume gamma scratch {scratch_tex}: {calls:#?}")
+        });
+    let gamma_bytes_positions: Vec<usize> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.starts_with("    fragment_bytes index=1 length=2048 fnv="))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        gamma_bytes_positions.len(),
+        1,
+        "gamma LUT must run once (into scratch), never on final present: {calls:#?}"
+    );
+    assert!(
+        gamma_bytes_positions[0] < upscale_idx,
+        "gamma pass must encode before encodeSpatialScale: {calls:#?}"
+    );
+}
+
+#[test]
+fn mixed_axis_shrink_never_engages_metalfx() {
+    use mtld3d_core::present::SETTLED_PRESENTS;
+
+    const DEVICE: u64 = 0x48c;
+    let _guard = crate::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut core = scaled_core_on_fakes(DEVICE, (640, 540), (960, 360));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    for _ in 0..=SETTLED_PRESENTS {
+        core.present(true, 0.0, 0.0, false);
+    }
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newSpatialScaler")
+                || c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
+        "{calls:#?}"
+    );
+    at(&calls, "MTLCommandBuffer_presentDrawable");
+}
+
+#[test]
+fn metalfx_unsupported_or_creation_failure_falls_back_cleanly() {
+    use mtld3d_core::present::SETTLED_PRESENTS;
+
+    const DEVICE_UNSUPPORTED: u64 = 0x48d;
+    const DEVICE_FAIL: u64 = 0x48e;
+    let _guard = crate::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    dxmt_fakes::set_spatial_scaler_supported(DEVICE_UNSUPPORTED, false);
+    let mut unsupported = scaled_core_on_fakes(DEVICE_UNSUPPORTED, (320, 180), (640, 360));
+    unsupported.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE_UNSUPPORTED);
+    for _ in 0..=SETTLED_PRESENTS {
+        unsupported.present(true, 0.0, 0.0, false);
+    }
+    unsupported.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE_UNSUPPORTED);
+    dxmt_fakes::set_spatial_scaler_supported(DEVICE_UNSUPPORTED, true);
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newSpatialScaler")
+                || c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
+        "{calls:#?}"
+    );
+
+    dxmt_fakes::set_spatial_scaler_fail(DEVICE_FAIL, true);
+    let mut failing = scaled_core_on_fakes(DEVICE_FAIL, (320, 180), (640, 360));
+    failing.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE_FAIL);
+    let ((), logs) = crate::device::fixture::capture_logs(|| {
+        for _ in 0..=SETTLED_PRESENTS + 2 {
+            failing.present(true, 0.0, 0.0, false);
+        }
+        failing.drain();
+    });
+    let fail_calls = dxmt_fakes::take_calls(DEVICE_FAIL);
+    dxmt_fakes::set_spatial_scaler_fail(DEVICE_FAIL, false);
+    assert!(
+        !fail_calls
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
+        "{fail_calls:#?}"
+    );
+    let warn_count = logs
+        .iter()
+        .filter(|l| l.contains("MetalFX spatial scaler unavailable"))
+        .count();
+    assert_eq!(warn_count, 1, "{logs:#?}");
+    assert!(
+        !logs
+            .iter()
+            .any(|l| l.contains("does not build") || l.contains("nothing presents")),
+        "{logs:#?}"
+    );
+}
+
+#[test]
+fn resize_and_retarget_drop_scaler_and_reset_settle_count() {
+    use mtld3d_core::present::SETTLED_PRESENTS;
+
+    const DEVICE: u64 = 0x48f;
+    let _guard = crate::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut core = scaled_core_on_fakes(DEVICE, (320, 180), (640, 360));
+    for _ in 0..SETTLED_PRESENTS {
+        core.present(true, 0.0, 0.0, false);
+    }
+    core.drain();
+    let initial = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        initial
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale "))
+    );
+
+    assert!(core.resize_scaled(320, 180, 640, 360, 1));
+    assert!(core.upscale.is_none());
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for _ in 1..SETTLED_PRESENTS {
+        core.present(true, 0.0, 0.0, false);
+    }
+    core.drain();
+    let pre_settle_resize = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !pre_settle_resize
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale ")),
+        "{pre_settle_resize:#?}"
+    );
+    core.present(true, 0.0, 0.0, false);
+    core.drain();
+    let settled_resize = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        settled_resize
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale ")),
+        "{settled_resize:#?}"
+    );
+
+    assert!(core.retarget(2));
+    assert!(core.upscale.is_none());
+    let _ = dxmt_fakes::take_calls(DEVICE);
+    for _ in 1..SETTLED_PRESENTS {
+        core.present(true, 0.0, 0.0, false);
+    }
+    core.drain();
+    let pre_settle_retarget = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !pre_settle_retarget
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale ")),
+        "{pre_settle_retarget:#?}"
+    );
+    core.present(true, 0.0, 0.0, false);
+    core.drain();
+    let settled_retarget = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        settled_retarget
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale ")),
+        "{settled_retarget:#?}"
+    );
+}
+
+#[test]
+fn scaled_backbuffer_read_and_write_presented_round_trip() {
+    const DEVICE: u64 = 0x490;
+    let mut core = scaled_core_on_fakes(DEVICE, (32, 16), (64, 32));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let logical_rect = texels(0, 0, 64, 32);
+    let src = vec![0xaa_u8; 64 * 32 * 4];
+    assert!(core.write_presented(logical_rect, &src, 64 * 4));
+    core.drain();
+    let write_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        write_calls
+            .iter()
+            .any(|c| c.contains("blit copy_to_texture ") && c.contains("size=64x32x1")),
+        "{write_calls:#?}"
+    );
+    assert!(
+        write_calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_renderCommandEncoder"),
+        "scaled write_presented must resample via StretchQuad render pass: {write_calls:#?}"
+    );
+
+    let mut dst = vec![0_u8; 64 * 32 * 4];
+    assert!(core.read_presented(logical_rect, &mut dst, 64 * 4));
+    core.drain();
+    let read_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        read_calls
+            .iter()
+            .any(|c| c == "MTLCommandBuffer_renderCommandEncoder"),
+        "scaled read_presented must stretch to logical scratch before read_rect: {read_calls:#?}"
+    );
+    assert!(
+        read_calls
+            .iter()
+            .any(|c| c.trim_start().starts_with("copy_to_buffer ") && c.contains("size=64x32 ")),
+        "{read_calls:#?}"
+    );
+}

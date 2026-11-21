@@ -3573,7 +3573,8 @@ impl DeviceInner {
             .is_some_and(|id| core.depth() == Some(d3d9_rt::device::DepthRef { id, level: 0 }));
         let rt0_is_back_buffer = core.target() == d3d9_rt::device::TargetRef::BackBuffer;
         let samples = self.backbuffer_sample_count;
-        if !core.resize(new_width, new_height, samples) {
+        let (render_w, render_h) = self.render_scale.extent(new_width, new_height);
+        if !core.resize_scaled(render_w, render_h, new_width, new_height, samples) {
             if let Some(id) = self.core_auto_depth.take() {
                 core.forget_texture(id);
             }
@@ -6259,10 +6260,19 @@ fn reset_recreate_resources(
         dev.detach_held_implicit_surfaces(held);
         dev.set_backbuffer_dims(pp.back_buffer_width, pp.back_buffer_height);
         let (samples, format) = (dev.backbuffer_sample_count, dev.depth_stencil_format);
+        let (render_w, render_h) = dev
+            .render_scale
+            .extent(pp.back_buffer_width, pp.back_buffer_height);
         let Some(core) = dev.core.as_deref_mut() else {
             return Err(D3DERR_INVALIDCALL);
         };
-        let resized = core.resize(pp.back_buffer_width, pp.back_buffer_height, samples);
+        let resized = core.resize_scaled(
+            render_w,
+            render_h,
+            pp.back_buffer_width,
+            pp.back_buffer_height,
+            samples,
+        );
         dev.encoder_status()?;
         if !resized {
             if let Some(id) = dev.core_auto_depth.take()
@@ -6488,11 +6498,13 @@ fn reconcile_implicit_depth(dev: &mut DeviceInner, new_depth_format: u32) -> Res
 fn remake_core_auto_depth(dev: &mut DeviceInner, format: u32) -> Result<(), i32> {
     let old = dev.core_auto_depth.take();
     dev.depth_stencil_format = 0;
-    let (width, height, samples) = (
+    let (width, height, samples, scale) = (
         dev.backbuffer_width,
         dev.backbuffer_height,
         dev.backbuffer_sample_count,
+        dev.render_scale,
     );
+    let (render_w, render_h) = scale.extent(width, height);
     let Some(core) = dev.core.as_deref_mut() else {
         return Ok(());
     };
@@ -6510,8 +6522,8 @@ fn remake_core_auto_depth(dev: &mut DeviceInner, format: u32) -> Result<(), i32>
     let desc = d3d9_rt::device::CoreTextureDesc {
         pixel_format: pixel_format as u32,
         kind: d3d9_rt::device::TextureKind::Tex2d,
-        width,
-        height,
+        width: render_w,
+        height: render_h,
         depth: 1,
         levels: 1,
         flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
@@ -6520,6 +6532,9 @@ fn remake_core_auto_depth(dev: &mut DeviceInner, format: u32) -> Result<(), i32>
         samples,
     };
     core.texture_create(id, &desc);
+    if !scale.is_identity() {
+        core.set_texture_logical_size(id, width, height);
+    }
     dev.set_core_auto_depth(id, format);
     Ok(())
 }
@@ -8356,14 +8371,21 @@ fn core_color_target(
     let id = mtld3d_core::ids::TextureId::new_unique();
     let srgb_twin = mapping.metal_pixel_format().srgb_twin();
     // SAFETY: `device_inner` is the live owning device, non-null for every caller.
-    let core = unsafe { &mut *device_inner }.core_mut()?;
+    let device = unsafe { &mut *device_inner };
+    let scale = device.scale_for_created_target(
+        spec.width,
+        spec.height,
+        spec.usage & D3DUSAGE_RENDERTARGET != 0,
+    );
+    let (render_w, render_h) = scale.extent(spec.width, spec.height);
+    let core = device.core_mut()?;
     core.texture_create(
         id,
         &CoreTextureDesc {
             pixel_format: mapping.metal_pixel_format() as u32,
             kind: TextureKind::Tex2d,
-            width: spec.width,
-            height: spec.height,
+            width: render_w,
+            height: render_h,
             depth: 1,
             levels: 1,
             // sRGB write attaches the twin's view where the format has one, as a texture's.
@@ -8377,6 +8399,9 @@ fn core_color_target(
             samples: spec.multi_sample.sample_count,
         },
     );
+    if !scale.is_identity() {
+        core.set_texture_logical_size(id, spec.width, spec.height);
+    }
     let mut surf = Direct3DSurface9::new_color_target(&ColorTargetCreateInfo {
         device_inner,
         metal_color_handle: MetalHandle::NULL,
@@ -8387,7 +8412,7 @@ fn core_color_target(
         height: spec.height,
         format: spec.format,
         usage: spec.usage,
-        render_scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
+        render_scale: scale,
         multi_sample: spec.multi_sample,
     });
     surf.set_core_texture(id);
@@ -8538,7 +8563,10 @@ fn core_depth_surface(
     }
     let id = mtld3d_core::ids::TextureId::new_unique();
     // SAFETY: `device_inner` is the live owning device, non-null for the caller.
-    let Some(core) = unsafe { &mut *device_inner }.core_mut() else {
+    let device = unsafe { &mut *device_inner };
+    let scale = device.scale_for_created_target(width, height, true);
+    let (render_w, render_h) = scale.extent(width, height);
+    let Some(core) = device.core_mut() else {
         return Err(D3DERR_INVALIDCALL);
     };
     core.texture_create(
@@ -8546,8 +8574,8 @@ fn core_depth_surface(
         &CoreTextureDesc {
             pixel_format,
             kind: TextureKind::Tex2d,
-            width,
-            height,
+            width: render_w,
+            height: render_h,
             depth: 1,
             levels: 1,
             flags: CoreTextureFlags::RENDER_TARGET,
@@ -8557,13 +8585,16 @@ fn core_depth_surface(
             samples: multi_sample.sample_count,
         },
     );
+    if !scale.is_identity() {
+        core.set_texture_logical_size(id, width, height);
+    }
     let mut surf = Direct3DSurface9::new_depth_stencil(
         device_inner,
         MetalHandle::NULL,
         width,
         height,
         format,
-        mtld3d_core::render_scale::RenderScale::IDENTITY,
+        scale,
         multi_sample,
     );
     surf.set_core_texture(id);
@@ -10072,7 +10103,6 @@ extern "system" fn device_stretch_rect(
                 infos: [&src_info, &dst_info],
                 regions: [src_region, dst_region],
                 rects: [src_rect, dst_rect],
-                scaling,
                 planar_endpoint,
                 expand_packed16,
                 filter,

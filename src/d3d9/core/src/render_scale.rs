@@ -124,6 +124,12 @@ impl RenderScale {
         u32::try_from(scaled).unwrap_or(u32::MAX).max(1)
     }
 
+    /// Convert a logical `(width, height)` extent to render resolution.
+    #[must_use]
+    pub fn extent(self, width: u32, height: u32) -> (u32, u32) {
+        (self.dimension(width), self.dimension(height))
+    }
+
     /// Convert a logical `(x, y, width, height)` rect to render resolution.
     ///
     /// Scales the rect's **edges**, not its origin and size independently.

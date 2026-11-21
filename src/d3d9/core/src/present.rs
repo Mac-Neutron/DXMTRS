@@ -183,5 +183,56 @@ pub const fn carried_capture_marks(marks: (bool, bool), submitted: bool) -> (boo
     (start && !submitted, stop)
 }
 
+/// Render and drawable extents paired for present routing and settle tracking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentGeometry {
+    pub src: (usize, usize),
+    pub dst: (usize, usize),
+}
+
+impl PresentGeometry {
+    /// Whether presenting `src` into `dst` enlarges without shrinking either axis.
+    ///
+    /// Returns `true` when neither axis shrinks and at least one is strictly larger.
+    #[must_use]
+    pub const fn enlarges(self) -> bool {
+        self.src.0 <= self.dst.0
+            && self.src.1 <= self.dst.1
+            && (self.src.0 < self.dst.0 || self.src.1 < self.dst.1)
+    }
+}
+
+/// Consecutive presents at one geometry before `MetalFX` is worth building.
+///
+/// The drawable follows the layer every present while the back buffer follows guest `WM_SIZE`, so
+/// a live window drag produces a different enlargement on nearly every frame. Waiting for the
+/// geometry to hold still avoids building and leaking transient spatial scalers.
+pub const SETTLED_PRESENTS: u32 = 30;
+
+/// Advance the settle counter for `geometry`, and say whether it has settled.
+///
+/// A change of geometry restarts the count, so settled means [`SETTLED_PRESENTS`] presents in a
+/// row at the same pair rather than that many presents in total.
+pub const fn geometry_settled(
+    seen: &mut Option<(PresentGeometry, u32)>,
+    geometry: PresentGeometry,
+) -> bool {
+    match seen {
+        Some((last, streak))
+            if last.src.0 == geometry.src.0
+                && last.src.1 == geometry.src.1
+                && last.dst.0 == geometry.dst.0
+                && last.dst.1 == geometry.dst.1 =>
+        {
+            *streak = streak.saturating_add(1);
+            *streak >= SETTLED_PRESENTS
+        }
+        _ => {
+            *seen = Some((geometry, 1));
+            SETTLED_PRESENTS <= 1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

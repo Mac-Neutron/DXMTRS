@@ -514,11 +514,12 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
 #[must_use]
 pub fn core_ps_variant(
     base: VariantKey,
-    ps_is_prog: bool,
+    ps_kind: StageKind,
     point_list: bool,
     linked_input_mask: u8,
     has_depth: bool,
     extra_present: u8,
+    vpos_scale: bool,
 ) -> VariantKey {
     let mut variant = VariantKey {
         linked_input_mask,
@@ -531,12 +532,13 @@ pub fn core_ps_variant(
     if !point_list {
         variant.flags.remove(VariantFlags::POINT_SPRITE);
     }
-    if ps_is_prog {
+    if ps_kind == StageKind::Prog {
         // mtld3d's draw: the pass's extras shifted by one, colour 0 implied.
         variant.color_out_mask = extra_present << 1;
         variant
             .flags
             .set(VariantFlags::NO_DEPTH_ATTACHMENT, !has_depth);
+        variant.flags.set(VariantFlags::VPOS_SCALE, vpos_scale);
     }
     variant
 }
@@ -880,18 +882,24 @@ pub fn core_scissor(test: bool, rect: D3DRECT, v: &D3DVIEWPORT9, target: (u32, u
 
 /// The vertex stages' `PosFixup` of a draw through `v` on `target`.
 ///
-/// `(1 / width, -1 / height, depth clamp, render scale, depth bias)` of the drawn viewport, as
-/// mtld3d's draw binds it: the half-pixel offset; `clamp_z` ([`rhw_depth_clamp`]); no render
-/// scale; `depth_bias` in clip depth (`d3d_depth_bias_to_clip`), which the vertex stage adds.
+/// `(1 / width, -1 / height, depth clamp, point scale, depth bias)` of the drawn viewport: the
+/// half-pixel offset, `clamp_z` ([`rhw_depth_clamp`]), `point_scale` (physical-over-logical ratio
+/// on scaled targets), and `depth_bias` in clip depth (`d3d_depth_bias_to_clip`).
 #[must_use]
-pub fn pos_fixup(v: &D3DVIEWPORT9, target: (u32, u32), clamp_z: bool, depth_bias: f32) -> [f32; 5] {
+pub fn pos_fixup(
+    v: &D3DVIEWPORT9,
+    target: (u32, u32),
+    clamp_z: bool,
+    point_scale: f32,
+    depth_bias: f32,
+) -> [f32; 5] {
     let (_, _, width, height) = drawn_rect(v, target);
     let pixels = |n: u32| f32::from(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
     [
         1.0 / pixels(width),
         -1.0 / pixels(height),
         f32::from(u8::from(clamp_z)),
-        1.0,
+        point_scale,
         depth_bias,
     ]
 }

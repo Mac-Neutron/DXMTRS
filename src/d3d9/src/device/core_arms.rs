@@ -41,6 +41,7 @@ use mtld3d_core::{
     pipeline_key::drawn_rect,
     pixel_convert::{ConvertRegion, can_convert, convert_region},
     readback::{ReadbackDestination, ReadbackSource, reject_readback_dst},
+    render_scale::TargetExtent,
     render_state::scissor_region,
     stretch_rect::{BlitDecode, SameSurfaceRoute, StretchRegion, blit_decode, same_surface_route},
     upload_pass::is_expanded_upload,
@@ -73,6 +74,70 @@ fn core_device<'a>(this: *mut c_void) -> Option<&'a mut DeviceInner> {
     let obj = unsafe { InPtr::<Direct3DDevice9>::opt(this) }?;
     let dev = obj.inner();
     dev.is_core().then_some(dev)
+}
+
+/// Resolves the [`TargetExtent`] for a bound surface pointer (`null` means the back buffer).
+fn core_surface_target_extent(
+    dev: &DeviceInner,
+    bound: *mut Direct3DSurface9,
+    physical: (u32, u32),
+) -> TargetExtent {
+    // SAFETY: null, or a surface kept live by the bound slot / caller for this call.
+    let Some(surface) = (unsafe { bound.as_ref() }) else {
+        return TargetExtent::new(
+            dev.render_scale(),
+            (dev.backbuffer_width(), dev.backbuffer_height()),
+            physical,
+        );
+    };
+    if surface.is_back_buffer() {
+        return TargetExtent::new(
+            dev.render_scale(),
+            (dev.backbuffer_width(), dev.backbuffer_height()),
+            physical,
+        );
+    }
+    let parent = surface.parent_texture();
+    if !parent.is_null() {
+        // SAFETY: `parent` is live while `surface` holds its parent reference.
+        let tex = unsafe { &*parent };
+        let lvl = surface.mip_level() as usize;
+        return TargetExtent::new(
+            tex.inner().render_scale(),
+            (tex.inner().mip_width(lvl), tex.inner().mip_height(lvl)),
+            physical,
+        );
+    }
+    TargetExtent::new(
+        surface.render_scale(),
+        (surface.standalone_width(), surface.standalone_height()),
+        physical,
+    )
+}
+
+/// Converts logical `set_viewport` into physical coordinates for `extent`.
+fn scaled_viewport_rect(
+    set_viewport: &mtld3d_types::D3DVIEWPORT9,
+    extent: &TargetExtent,
+) -> (u32, u32, u32, u32) {
+    let raw = drawn_rect(set_viewport, extent.texture());
+    if set_viewport.width != 0 && set_viewport.height != 0 && !extent.scale().is_identity() {
+        extent.rect(raw.0, raw.1, raw.2, raw.3)
+    } else {
+        raw
+    }
+}
+
+/// Maps logical `clear_regions` into `extent`'s physical space.
+fn scale_clear_regions<'a>(
+    rects: &'a [(i32, i32, i32, i32)],
+    extent: &TargetExtent,
+) -> std::borrow::Cow<'a, [(i32, i32, i32, i32)]> {
+    if extent.scale().is_identity() {
+        std::borrow::Cow::Borrowed(rects)
+    } else {
+        std::borrow::Cow::Owned(rects.iter().map(|&r| extent.rect_edges_i32(r)).collect())
+    }
 }
 
 /// `Clear`: the rects, the scissor and the viewport bound it, as under mtld3d.
@@ -113,37 +178,57 @@ pub fn clear(
     let Some(target) = dev.core.as_deref()?.target_size() else {
         return Some(D3D_OK);
     };
+    let target0_bound = dev.bound_rt().render_target(0);
+    let target0_extent = core_surface_target_extent(dev, target0_bound, target);
+    let depth_bound = dev.bound_rt().depth_stencil();
     let set_viewport = dev.viewport();
-    let viewport = drawn_rect(&set_viewport, target);
+    let target0_vp = scaled_viewport_rect(&set_viewport, &target0_extent);
     if flags & D3DCLEAR_TARGET != 0 {
         let srgb = dev.render_state(D3DRS_SRGBWRITEENABLE as usize) != 0;
         let linear = d3dcolor_to_rgba_f32(color);
-        let core = dev.core.as_deref_mut()?;
         for slot in 0..RENDER_TARGET_SLOTS {
-            let Some(extent) = core.clear_size(slot) else {
+            let Some(extent) = dev.core.as_deref().and_then(|c| c.clear_size(slot)) else {
                 continue;
             };
-            match clear_area(
-                regions.as_deref(),
-                drawn_rect(&set_viewport, extent),
-                extent,
-            ) {
+            let slot_extent =
+                core_surface_target_extent(dev, dev.bound_rt().render_target(slot), extent);
+            let slot_regions = regions
+                .as_deref()
+                .map(|rects| scale_clear_regions(rects, &slot_extent));
+            let slot_vp = scaled_viewport_rect(&set_viewport, &slot_extent);
+            let Some(core) = dev.core.as_deref_mut() else {
+                return Some(D3D_OK);
+            };
+            match clear_area(slot_regions.as_deref(), slot_vp, extent) {
                 ClearArea::Whole => core.clear(slot, linear, srgb),
                 ClearArea::Regions(list) => core.clear_rects(slot, &list, linear, srgb),
             }
         }
     }
-    let core = dev.core.as_deref_mut()?;
+    let depth_extent_size = dev.core.as_deref().and_then(CoreDevice::depth_size);
     // A depth-stencil of another sample count than target 0's is in no pass, and mtld3d's Clear
     // of its planes does nothing (DXMTRS C4b-3d5).
     if depth_flags != 0
-        && core.depth_samples() == Some(core.target_samples())
-        && let Some(extent) = core.depth_size()
+        && dev
+            .core
+            .as_deref()
+            .is_some_and(|c| c.depth_samples() == Some(c.target_samples()))
+        && let Some(extent) = depth_extent_size
     {
+        let depth_extent = core_surface_target_extent(dev, depth_bound, extent);
+        let depth_regions = regions
+            .as_deref()
+            .map(|rects| scale_clear_regions(rects, &depth_extent));
+        let depth_vp = if depth_extent.scale() == target0_extent.scale() {
+            target0_vp
+        } else {
+            scaled_viewport_rect(&set_viewport, &depth_extent)
+        };
+        let core = dev.core.as_deref_mut()?;
         let planes = u32::from(flags & D3DCLEAR_ZBUFFER != 0)
             | u32::from(flags & D3DCLEAR_STENCIL != 0) << 1;
         let stencil = stencil.to_le_bytes()[0];
-        match clear_area(regions.as_deref(), viewport, extent) {
+        match clear_area(depth_regions.as_deref(), depth_vp, extent) {
             ClearArea::Whole => core.clear_depth_stencil(planes, z, stencil),
             ClearArea::Regions(list) => core.clear_depth_stencil_rects(&list, planes, z, stencil),
         }
@@ -261,7 +346,9 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
             // Its core texture exists from here, with every CPU write so far uploaded.
             let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
         }
-        core_read_pages(&desc, |bytes, pitch| core.read_back(source, bytes, pitch))
+        core_read_pages(&desc, |bytes, pitch| {
+            core.read_back_logical(source, from.width, from.height, bytes, pitch)
+        })
     };
     if let Err(hr) = dev.encoder_status() {
         return Some(hr);
@@ -310,8 +397,6 @@ pub struct StretchCall<'a> {
     pub regions: [StretchRegion; 2],
     /// The rects as passed: null, or the caller's `RECT`.
     pub rects: [*const c_void; 2],
-    /// The two regions differ in size.
-    pub scaling: bool,
     /// Either format is a planar YUV one.
     pub planar_endpoint: bool,
     /// The device's `expand_packed16`, as `copies_bytes` reads it.
@@ -375,6 +460,31 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     }
     let [src_info, dst_info] = call.infos;
     let [src_region, dst_region] = call.regions;
+    let planar = mtld3d_core::stretch_rect::is_planar_yuv(src_info.format);
+    let phys_src_region = if planar || src_info.scale.is_identity() {
+        src_region
+    } else {
+        let extent = TargetExtent::new(
+            src_info.scale,
+            (src_info.width, src_info.height),
+            src_info.texture_size,
+        );
+        let (x, y, w, h) = extent.rect(src_region.x, src_region.y, src_region.w, src_region.h);
+        StretchRegion { x, y, w, h }
+    };
+    let phys_dst_region = if dst_info.scale.is_identity() {
+        dst_region
+    } else {
+        let extent = TargetExtent::new(
+            dst_info.scale,
+            (dst_info.width, dst_info.height),
+            dst_info.texture_size,
+        );
+        let (x, y, w, h) = extent.rect(dst_region.x, dst_region.y, dst_region.w, dst_region.h);
+        StretchRegion { x, y, w, h }
+    };
+    let phys_scaling =
+        phys_src_region.w != phys_dst_region.w || phys_src_region.h != phys_dst_region.h;
     let cross_format = call.planar_endpoint
         || !super::copies_bytes(src_info.format, dst_info.format, call.expand_packed16);
     let plain_dst = dst_info
@@ -389,8 +499,8 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     let dst = unsafe { &*dst_surf };
     let (src_parent, dst_parent) = (src.parent_texture(), dst.parent_texture());
     let route = same_surface_route(
-        src_region,
-        dst_region,
+        phys_src_region,
+        phys_dst_region,
         src_info.mip_level,
         dst_info.mip_level,
         src_info.slice.unwrap_or(0),
@@ -406,7 +516,7 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             let parent = unsafe { src_parent.as_ref() }?;
             Some(TargetRef::Texture {
                 id: parent.texture_id(),
-                level: src.mip_level(),
+                level: parent.inner().metal_level(src.mip_level() as usize),
                 face: src.cube_face(),
             })
         });
@@ -450,6 +560,13 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             // Its owed uploads are recorded ahead of the copy, in the same blit pass.
             let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
         }
+        if phys_src_region.w == 0
+            || phys_src_region.h == 0
+            || phys_dst_region.w == 0
+            || phys_dst_region.h == 0
+        {
+            return D3D_OK;
+        }
         // The view the source is sampled through, as mtld3d's quad binds it (ruling SW): a level
         // of a texture that is no target through its swizzled view, every other source through
         // its stored format, never an sRGB twin. Read once each end's core texture exists.
@@ -472,11 +589,16 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         let view = stored.map(|format| view_format(format, swizzle));
         let not_recorded = || {
             log::error!(target: crate::LOG_TARGET,
-                "d3d9 core: StretchRect of {source:?} {src_region:?} into {destination:?} was not recorded → INVALIDCALL");
+                "d3d9 core: StretchRect of {source:?} {phys_src_region:?} into {destination:?} was not recorded → INVALIDCALL");
             D3DERR_INVALIDCALL
         };
         let answer = with_scratch(core, |core, scratch| {
-            let rect = [src_region.x, src_region.y, src_region.w, src_region.h];
+            let rect = [
+                phys_src_region.x,
+                phys_src_region.y,
+                phys_src_region.w,
+                phys_src_region.h,
+            ];
             let decode = blit_decode(src_info.format).uniform();
             // The source settled to a single-sample one, the view it is sampled through and its
             // decode.
@@ -563,7 +685,9 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
                 // core samples, is resolved whole into a scratch like it, then the source: its
                 // stored format, the call's rect, its own decode (an X8R8G8B8 one's alpha one).
                 // A format this GPU does not resolve is refused by name (ruling R-1).
-                let Some(made) = core.scratch_like(source, src_info.width, src_info.height) else {
+                let Some(made) =
+                    core.scratch_like(source, src_info.texture_size.0, src_info.texture_size.1)
+                else {
                     return not_recorded();
                 };
                 *scratch = Some(made);
@@ -596,8 +720,13 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
                 };
             // An unscaled copy whose bytes copy into a single-sample target is a blit (DXMTRS
             // C4c-4b); any other is sampled, into a multisampled target too.
-            let recorded = if !call.scaling && !cross_format && dst_info.sample_count == 1 {
-                core.copy(from, rect, destination, [dst_region.x, dst_region.y])
+            let recorded = if !phys_scaling && !cross_format && dst_info.sample_count == 1 {
+                core.copy(
+                    from,
+                    rect,
+                    destination,
+                    [phys_dst_region.x, phys_dst_region.y],
+                )
             } else {
                 view.is_some_and(|src_view| {
                     core.stretch(&StretchQuad {
@@ -605,7 +734,12 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
                         src_rect: rect,
                         src_view,
                         dst: destination,
-                        dst_rect: [dst_region.x, dst_region.y, dst_region.w, dst_region.h],
+                        dst_rect: [
+                            phys_dst_region.x,
+                            phys_dst_region.y,
+                            phys_dst_region.w,
+                            phys_dst_region.h,
+                        ],
                         linear: call.filter == D3DTEXF_LINEAR,
                         decode,
                     })
@@ -893,8 +1027,13 @@ pub fn color_fill(
         // Its core texture exists from here, with every CPU write so far uploaded.
         let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
     }
-    let rect = (region != DirtyRect::full(info.width, info.height))
-        .then_some([region.x, region.y, region.w, region.h]);
+    let dst_extent = TargetExtent::new(info.scale, (info.width, info.height), info.texture_size);
+    let (fx, fy, fw, fh) = dst_extent.rect(region.x, region.y, region.w, region.h);
+    if fw == 0 || fh == 0 {
+        return D3D_OK;
+    }
+    let phys = dst_extent.texture();
+    let rect = (fx != 0 || fy != 0 || fw != phys.0 || fh != phys.1).then_some([fx, fy, fw, fh]);
     if !core.fill(target, rect, d3dcolor_to_rgba_f32(color)) {
         log::error!(target: crate::LOG_TARGET,
             "d3d9 core: ColorFill of {target:?} (rect {rect:?}) was not recorded → INVALIDCALL");
@@ -943,22 +1082,25 @@ pub fn update_color_target(
             };
             core.write_presented(rect, rows, row_bytes)
         }
-        (Some(TargetRef::Texture { id, .. }), Some(core)) => {
-            let region = UploadRegion {
-                level: 0,
-                slice: 0,
+        (Some(target @ TargetRef::Texture { .. }), Some(core)) => {
+            let logical = {
+                let parent = surface.parent_texture();
+                if parent.is_null() {
+                    (surface.standalone_width(), surface.standalone_height())
+                } else {
+                    // SAFETY: `parent` is live while `surface` holds its parent reference.
+                    let tex = unsafe { &*parent };
+                    let lvl = surface.mip_level() as usize;
+                    (tex.inner().mip_width(lvl), tex.inner().mip_height(lvl))
+                }
+            };
+            let rect = DirtyRect {
                 x: origin.0,
                 y: origin.1,
-                z: 0,
-                width: extent.0,
-                height: extent.1,
-                depth: 1,
+                w: extent.0,
+                h: extent.1,
             };
-            u32::try_from(row_bytes).is_ok_and(|pitch| {
-                pitch
-                    .checked_mul(extent.1)
-                    .is_some_and(|image| core.texture_upload(id, region, rows, pitch, image))
-            })
+            core.write_target_logical(target, logical, rect, rows, row_bytes)
         }
         _ => false,
     };
