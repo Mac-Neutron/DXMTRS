@@ -1313,19 +1313,38 @@ fn metalfx_unsupported_or_creation_failure_falls_back_cleanly() {
     failing.drain();
     let _ = dxmt_fakes::take_calls(DEVICE_FAIL);
     let ((), logs) = crate::device::fixture::capture_logs(|| {
-        for _ in 0..=SETTLED_PRESENTS + 2 {
+        for _ in 0..SETTLED_PRESENTS {
+            failing.present(true, 0.0, 0.0, false);
+        }
+        assert!(matches!(
+            failing.upscale,
+            Some(super::UpscaleCache::Unavailable {
+                src: (320, 180),
+                dst: (640, 360),
+            })
+        ));
+        // Clear the fake failure before frames 31 and 32: negative cache must skip recreation.
+        dxmt_fakes::set_spatial_scaler_fail(DEVICE_FAIL, false);
+        for _ in 0..2 {
             failing.present(true, 0.0, 0.0, false);
         }
         failing.drain();
     });
     let fail_calls = dxmt_fakes::take_calls(DEVICE_FAIL);
-    dxmt_fakes::set_spatial_scaler_fail(DEVICE_FAIL, false);
     assert!(
         !fail_calls
             .iter()
-            .any(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
-        "{fail_calls:#?}"
+            .any(|c| c.starts_with("MTLDevice_newSpatialScaler")
+                || c.starts_with("MTLCommandBuffer_encodeSpatialScale")),
+        "negative cache must prevent scaler recreation on frames 31/32: {fail_calls:#?}"
     );
+    assert!(matches!(
+        failing.upscale,
+        Some(super::UpscaleCache::Unavailable {
+            src: (320, 180),
+            dst: (640, 360),
+        })
+    ));
     let warn_count = logs
         .iter()
         .filter(|l| l.contains("MetalFX spatial scaler unavailable"))

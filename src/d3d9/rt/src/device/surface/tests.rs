@@ -5,7 +5,8 @@ use dxmt_fakes::take_calls;
 use mtld3d_core::{dirty_rect::DirtyRect, ids::TextureId};
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE, WMT_PIXEL_FORMAT_BGRA8_UNORM,
-    WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMT_PIXEL_FORMAT_RGBA16_UNORM,
+    WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_RGBA8_UNORM,
+    WMT_PIXEL_FORMAT_RGBA16_UNORM,
 };
 
 use crate::device::{
@@ -647,4 +648,85 @@ fn read_back_logical_and_write_target_logical_resample_scaled_targets() {
         "{read_calls:#?}"
     );
     assert_eq!(readback(&core).length(), 256_u64 * 128 * 4);
+}
+
+#[test]
+fn r32_float_logical_read_and_write_use_nearest_sampler() {
+    const DEVICE_WRITE: u64 = 0x437;
+    const DEVICE_READ: u64 = 0x438;
+    const DEVICE_MSAA: u64 = 0x439;
+    let desc = target_desc(WMT_PIXEL_FORMAT_R32_FLOAT, TextureKind::Tex2d, 128, 1, 4);
+
+    let mut core_w = core_on_fakes(DEVICE_WRITE);
+    let id_w = TextureId::from_raw(0x9a);
+    core_w.texture_create(id_w, &desc);
+    core_w.set_texture_logical_size(id_w, 256, 128);
+    core_w.drain();
+    let _ = take_calls(DEVICE_WRITE);
+
+    let target_w = level_of(id_w, 0);
+    let rows = vec![0_u8; 256 * 128 * 4];
+    let whole_logical = DirtyRect::full(256, 128);
+    assert!(core_w.write_target_logical(target_w, (256, 128), whole_logical, &rows, 256 * 4));
+    core_w.drain();
+    let write_calls = take_calls(DEVICE_WRITE);
+    let write_samplers: Vec<_> = write_calls
+        .iter()
+        .filter(|c| c.starts_with("MTLDevice_newSamplerState "))
+        .collect();
+    assert!(!write_samplers.is_empty(), "{write_calls:#?}");
+    assert!(
+        write_samplers
+            .iter()
+            .all(|c| c.contains("min=0 mag=0 ") && !c.contains("min=1") && !c.contains("mag=1")),
+        "write_target_logical on R32Float must use nearest sampler: {write_samplers:#?}"
+    );
+
+    let mut core_r = core_on_fakes(DEVICE_READ);
+    let id_r = TextureId::from_raw(0x9b);
+    core_r.texture_create(id_r, &desc);
+    core_r.set_texture_logical_size(id_r, 256, 128);
+    core_r.drain();
+    let _ = take_calls(DEVICE_READ);
+
+    let target_r = level_of(id_r, 0);
+    let mut read_buf = vec![0_u8; 256 * 128 * 4];
+    assert!(core_r.read_back_logical(target_r, 256, 128, &mut read_buf, 256 * 4));
+    core_r.drain();
+    let read_calls = take_calls(DEVICE_READ);
+    let read_samplers: Vec<_> = read_calls
+        .iter()
+        .filter(|c| c.starts_with("MTLDevice_newSamplerState "))
+        .collect();
+    assert!(!read_samplers.is_empty(), "{read_calls:#?}");
+    assert!(
+        read_samplers
+            .iter()
+            .all(|c| c.contains("min=0 mag=0 ") && !c.contains("min=1") && !c.contains("mag=1")),
+        "read_back_logical on R32Float must use nearest sampler: {read_samplers:#?}"
+    );
+
+    let mut core_ms = core_on_fakes(DEVICE_MSAA);
+    let id_ms = stored(&mut core_ms, DEVICE_MSAA, 0x9c, &ms_desc(BGRA8, 64, 4));
+    let rows_ms = vec![0_u8; 64 * 64 * 4];
+    assert!(core_ms.write_target_logical(
+        level_of(id_ms, 0),
+        (64, 64),
+        DirtyRect::full(64, 64),
+        &rows_ms,
+        64 * 4,
+    ));
+    core_ms.drain();
+    let ms_calls = take_calls(DEVICE_MSAA);
+    let ms_samplers: Vec<_> = ms_calls
+        .iter()
+        .filter(|c| c.starts_with("MTLDevice_newSamplerState "))
+        .collect();
+    assert!(!ms_samplers.is_empty(), "{ms_calls:#?}");
+    assert!(
+        ms_samplers
+            .iter()
+            .all(|c| c.contains("min=0 mag=0 ") && !c.contains("min=1") && !c.contains("mag=1")),
+        "1:1 MSAA write_target_logical must use nearest sampler: {ms_samplers:#?}"
+    );
 }

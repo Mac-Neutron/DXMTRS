@@ -222,6 +222,8 @@ pub struct CoreDevice {
     resolve_pipelines: rustc_hash::FxHashMap<u32, Option<Obj>>,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
+    /// Optional logical `(width, height)` override for target 0 occlusion rescaling.
+    target_logical_size: Option<(u32, u32)>,
     /// The colour targets bound at index 1-3: `extras[i]` is slot `i + 1`'s (DXMTRS C4b-3d4).
     ///
     /// A draw's pass attaches those of the pass set ([`CoreDevice::target_desc`]).
@@ -263,10 +265,8 @@ pub struct CoreDevice {
     drawable_size: (u32, u32),
     /// Consecutive present geometry streak for `MetalFX` settle hysteresis.
     settled_geometry: Option<(mtld3d_core::present::PresentGeometry, u32)>,
-    /// Cached `MetalFX` spatial scaler and resources for the settled geometry.
-    ///
-    /// Holds the spatial scaler, output target, and lazy gamma scratch.
-    upscale: Option<swapchain::UpscaleResources>,
+    /// Cached `MetalFX` spatial scaler and resources (or negative cache) for settled geometry.
+    upscale: Option<swapchain::UpscaleCache>,
     /// Deadline of the last CPU-paced present (`cap_after > 0`), cleared on drain/resize/retarget.
     last_paced: Option<std::time::Instant>,
 }
@@ -368,6 +368,7 @@ impl CoreDevice {
             resolve_functions: OnceLock::new(),
             resolve_pipelines: rustc_hash::FxHashMap::default(),
             target: TargetRef::BackBuffer,
+            target_logical_size: None,
             extras: [None; 3],
             depth: None,
             target_gen: 0,

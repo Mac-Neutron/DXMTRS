@@ -135,7 +135,13 @@ impl CoreDevice {
             self.target = target;
             self.target_gen = self.target_gen.wrapping_add(1);
         }
+        self.target_logical_size = None;
         true
+    }
+
+    /// Sets the logical `(width, height)` override used for target 0 occlusion rescaling.
+    pub const fn set_target_logical_size(&mut self, logical: Option<(u32, u32)>) {
+        self.target_logical_size = logical;
     }
 
     /// The current colour target.
@@ -216,6 +222,7 @@ impl CoreDevice {
     /// depth-stencil bound.
     pub fn reset_targets(&mut self, depth: Option<DepthRef>) -> bool {
         let mut bound = self.set_target(TargetRef::BackBuffer);
+        self.target_logical_size = None;
         if !bound && self.target != TargetRef::BackBuffer {
             if self.render_open {
                 self.close_pass();

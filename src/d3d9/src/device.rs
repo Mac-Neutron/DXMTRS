@@ -11178,10 +11178,22 @@ extern "system" fn device_set_render_target(
     if dev.is_core() {
         const UNTARGETED: &str =
             "IDirect3DDevice9::SetRenderTarget (a surface the core does not target)";
-        let (target, parent) = {
+        let (target, parent, logical_size) = {
             // SAFETY: `surf` is the live surface validated above.
             let surf = unsafe { &*surf };
-            (surf.core_target(), surf.parent_texture())
+            let parent = surf.parent_texture();
+            let logical_size = if surf.is_back_buffer() {
+                None
+            } else if !parent.is_null() {
+                // SAFETY: `parent` is non-null (checked) and live while `surf` holds its
+                // reference.
+                let tex = unsafe { &*parent };
+                let lvl = surf.mip_level() as usize;
+                Some((tex.inner().mip_width(lvl), tex.inner().mip_height(lvl)))
+            } else {
+                Some((surf.standalone_width(), surf.standalone_height()))
+            };
+            (surf.core_target(), parent, logical_size)
         };
         let (Some(target), Some(core)) = (target, dev.core.as_deref_mut()) else {
             crate::device::refuse_under_core(UNTARGETED);
@@ -11194,7 +11206,11 @@ extern "system" fn device_set_render_target(
             let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
         }
         let bound = if slot == 0 {
-            core.set_target(target)
+            let ok = core.set_target(target);
+            if ok {
+                core.set_target_logical_size(logical_size);
+            }
+            ok
         } else {
             core.set_extra_target(slot, Some(target))
         };

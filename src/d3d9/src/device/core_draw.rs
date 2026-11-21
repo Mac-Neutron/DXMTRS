@@ -350,20 +350,23 @@ fn resolve(
     let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count)?;
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
-    let physical_vp = if viewport.width != 0 && viewport.height != 0 && !target_scale.is_identity()
-    {
-        let (px, py, pw, ph) =
-            target0_extent.rect(viewport.x, viewport.y, viewport.width, viewport.height);
-        mtld3d_types::D3DVIEWPORT9 {
-            x: px,
-            y: py,
-            width: pw,
-            height: ph,
-            min_z: viewport.min_z,
-            max_z: viewport.max_z,
+    let (px, py, pw, ph) = if viewport.width != 0 && viewport.height != 0 {
+        if target_scale.is_identity() {
+            (viewport.x, viewport.y, viewport.width, viewport.height)
+        } else {
+            target0_extent.rect(viewport.x, viewport.y, viewport.width, viewport.height)
         }
     } else {
-        viewport
+        (0, 0, target.0, target.1)
+    };
+    let vp_collapsed = pw == 0 || ph == 0;
+    let physical_vp = mtld3d_types::D3DVIEWPORT9 {
+        x: px,
+        y: py,
+        width: pw.max(1),
+        height: ph.max(1),
+        min_z: viewport.min_z,
+        max_z: viewport.max_z,
     };
     let mut binds = Binds::default();
     // A pre-transformed draw's outputs: the declaration elements its FF VS passes through.
@@ -738,7 +741,9 @@ fn resolve(
         .map(|_| d3dcolor_to_rgba_f32(rs[D3DRS_BLENDFACTOR as usize]));
     let scissor_rect = dev.scissor_rect();
     let scissor_test = rs[D3DRS_SCISSORTESTENABLE as usize] != 0;
-    let scissor = if scissor_test {
+    let scissor = if vp_collapsed {
+        [0, 0, 0, 0]
+    } else if scissor_test {
         let [sx, sy, sw, sh] = core_scissor(true, scissor_rect, &physical_vp, target);
         if sw == 0 || sh == 0 || target_scale.is_identity() {
             [sx, sy, sw, sh]

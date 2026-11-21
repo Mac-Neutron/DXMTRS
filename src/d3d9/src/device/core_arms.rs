@@ -180,7 +180,6 @@ pub fn clear(
     };
     let target0_bound = dev.bound_rt().render_target(0);
     let target0_extent = core_surface_target_extent(dev, target0_bound, target);
-    let depth_bound = dev.bound_rt().depth_stencil();
     let set_viewport = dev.viewport();
     let target0_vp = scaled_viewport_rect(&set_viewport, &target0_extent);
     if flags & D3DCLEAR_TARGET != 0 {
@@ -215,20 +214,14 @@ pub fn clear(
             .is_some_and(|c| c.depth_samples() == Some(c.target_samples()))
         && let Some(extent) = depth_extent_size
     {
-        let depth_extent = core_surface_target_extent(dev, depth_bound, extent);
         let depth_regions = regions
             .as_deref()
-            .map(|rects| scale_clear_regions(rects, &depth_extent));
-        let depth_vp = if depth_extent.scale() == target0_extent.scale() {
-            target0_vp
-        } else {
-            scaled_viewport_rect(&set_viewport, &depth_extent)
-        };
+            .map(|rects| scale_clear_regions(rects, &target0_extent));
         let core = dev.core.as_deref_mut()?;
         let planes = u32::from(flags & D3DCLEAR_ZBUFFER != 0)
             | u32::from(flags & D3DCLEAR_STENCIL != 0) << 1;
         let stencil = stencil.to_le_bytes()[0];
-        match clear_area(depth_regions.as_deref(), depth_vp, extent) {
+        match clear_area(depth_regions.as_deref(), target0_vp, extent) {
             ClearArea::Whole => core.clear_depth_stencil(planes, z, stencil),
             ClearArea::Regions(list) => core.clear_depth_stencil_rects(&list, planes, z, stencil),
         }
@@ -498,14 +491,6 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     // SAFETY: as above.
     let dst = unsafe { &*dst_surf };
     let (src_parent, dst_parent) = (src.parent_texture(), dst.parent_texture());
-    let route = same_surface_route(
-        phys_src_region,
-        phys_dst_region,
-        src_info.mip_level,
-        dst_info.mip_level,
-        src_info.slice.unwrap_or(0),
-        dst_info.slice.unwrap_or(0),
-    );
     if dst_info
         .flags
         .contains(StretchSurfaceFlags::IS_RENDER_TARGET)
@@ -534,7 +519,23 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             (TargetRef::Texture { id, .. }, TargetRef::Texture { id: to, .. }) => id == to,
             _ => false,
         };
-        if one_texture && route == SameSurfaceRoute::Skip {
+        let (src_level, src_slice) = match source {
+            TargetRef::Texture { level, face, .. } => (level, face.unwrap_or(0)),
+            TargetRef::BackBuffer => (0, 0),
+        };
+        let (dst_level, dst_slice) = match destination {
+            TargetRef::Texture { level, face, .. } => (level, face.unwrap_or(0)),
+            TargetRef::BackBuffer => (0, 0),
+        };
+        let gpu_route = same_surface_route(
+            phys_src_region,
+            phys_dst_region,
+            src_level,
+            dst_level,
+            src_slice,
+            dst_slice,
+        );
+        if one_texture && gpu_route == SameSurfaceRoute::Skip {
             return D3D_OK;
         }
         if dev.latched_encoder_status().is_err() {
@@ -704,20 +705,22 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
             // source's: it is a target) with its decode. `like` is a target: the source is a
             // level or face of the destination's render-target texture, the same standalone
             // target, or the back buffer an additional swap chain's aliases.
-            let (from, rect) =
-                if one_texture && src_info.sample_count == 1 && route != SameSurfaceRoute::Direct {
-                    let [_, _, width, height] = rect;
-                    let Some(staged) = core.scratch_like(from, width, height) else {
-                        return not_recorded();
-                    };
-                    *scratch = Some(staged);
-                    if !core.copy(from, rect, staged, [0, 0]) {
-                        return not_recorded();
-                    }
-                    (staged, [0, 0, width, height])
-                } else {
-                    (from, rect)
+            let (from, rect) = if one_texture
+                && src_info.sample_count == 1
+                && gpu_route != SameSurfaceRoute::Direct
+            {
+                let [_, _, width, height] = rect;
+                let Some(staged) = core.scratch_like(from, width, height) else {
+                    return not_recorded();
                 };
+                *scratch = Some(staged);
+                if !core.copy(from, rect, staged, [0, 0]) {
+                    return not_recorded();
+                }
+                (staged, [0, 0, width, height])
+            } else {
+                (from, rect)
+            };
             // An unscaled copy whose bytes copy into a single-sample target is a blit (DXMTRS
             // C4c-4b); any other is sampled, into a multisampled target too.
             let recorded = if !phys_scaling && !cross_format && dst_info.sample_count == 1 {
@@ -776,6 +779,14 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
     let point = (dst_region.x.cast_signed(), dst_region.y.cast_signed());
     // One surface or one texture at both ends: identical rects write what is there.
     if core::ptr::eq(src_surf, dst_surf) || (!src_parent.is_null() && src_parent == dst_parent) {
+        let route = same_surface_route(
+            src_region,
+            dst_region,
+            src_info.mip_level,
+            dst_info.mip_level,
+            src_info.slice.unwrap_or(0),
+            dst_info.slice.unwrap_or(0),
+        );
         if route == SameSurfaceRoute::Skip {
             return D3D_OK;
         }

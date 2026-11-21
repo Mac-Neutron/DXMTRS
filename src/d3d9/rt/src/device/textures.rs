@@ -275,14 +275,19 @@ impl CoreDevice {
                 };
                 (render_area, logical_area)
             }
-            TargetRef::Texture { id, .. } => {
+            TargetRef::Texture { id, level, .. } => {
                 let Some(stored) = self.textures.get(&id) else {
                     return (0, 0);
                 };
-                let render_area = u64::from(stored.desc.width) * u64::from(stored.desc.height);
-                let logical_area =
-                    u64::from(stored.logical_size.0) * u64::from(stored.logical_size.1);
-                (render_area, logical_area)
+                let rw = stored.desc.width.checked_shr(level).unwrap_or(0).max(1);
+                let rh = stored.desc.height.checked_shr(level).unwrap_or(0).max(1);
+                let (lw, lh) = self.target_logical_size.unwrap_or_else(|| {
+                    (
+                        stored.logical_size.0.checked_shr(level).unwrap_or(0).max(1),
+                        stored.logical_size.1.checked_shr(level).unwrap_or(0).max(1),
+                    )
+                });
+                (u64::from(rw) * u64::from(rh), u64::from(lw) * u64::from(lh))
             }
         }
     }
@@ -421,6 +426,7 @@ impl CoreDevice {
                 self.close_pass();
             }
             self.target = TargetRef::BackBuffer;
+            self.target_logical_size = None;
         }
         let had_extra = self.extras.iter().flatten().any(holds);
         if had_extra {
@@ -741,7 +747,8 @@ impl CoreDevice {
         let y1 = scale_edge(rect.y + rect.h, logical_h, shape.height);
         let dst_w = x1.saturating_sub(x0).max(1).min(shape.width - x0);
         let dst_h = y1.saturating_sub(y0).max(1).min(shape.height - y0);
-        let linear = !(dst_w > rect.w || dst_h > rect.h);
+        let linear = super::surface::supports_linear_filter(shape.pixel_format)
+            && (dst_w < rect.w || dst_h < rect.h);
         if self
             .quad_pipeline(shape.pixel_format, shape.samples)
             .is_none()

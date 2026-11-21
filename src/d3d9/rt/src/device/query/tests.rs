@@ -429,4 +429,53 @@ fn occlusion_poll_rescales_counts_by_logical_over_render_area() {
     core.drain();
     rt_q.issue(rt_q.end_at(), &[25]);
     assert_eq!(core.occlusion_poll(&rt_query, false), Count(100));
+
+    // Non-zero mip level scales by that mip's area, not the base level's.
+    let mip_id = TextureId::from_raw(0x56);
+    core.texture_create(
+        mip_id,
+        &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 101, 2, 4),
+    );
+    core.set_texture_logical_size(mip_id, 202, 202);
+    assert!(core.set_target(TargetRef::Texture {
+        id: mip_id,
+        level: 1,
+        face: None,
+    }));
+    let mut mip_query = Occlusion::default();
+    core.occlusion_begin(&mut mip_query);
+    draw(&mut core);
+    core.occlusion_end(&mut mip_query);
+    let mip_q = bracket(&mip_query);
+    core.drain();
+    mip_q.issue(mip_q.end_at(), &[2500]);
+    // Mip 1 physical is 50x50 (2500), logical fallback is 101x101 (10201).
+    assert_eq!(core.occlusion_poll(&mip_query, false), Count(10201));
+
+    // Explicit target_logical_size overrides mip fallback for that target.
+    core.set_target_logical_size(Some((150, 100)));
+    let mut override_query = Occlusion::default();
+    core.occlusion_begin(&mut override_query);
+    draw(&mut core);
+    core.occlusion_end(&mut override_query);
+    let override_q = bracket(&override_query);
+    core.drain();
+    override_q.issue(override_q.end_at(), &[10]);
+    // (150 * 100) / (50 * 50) = 6
+    assert_eq!(core.occlusion_poll(&override_query, false), Count(60));
+
+    // set_target clears the explicit override back to None.
+    assert!(core.set_target(TargetRef::Texture {
+        id: mip_id,
+        level: 1,
+        face: None,
+    }));
+    let mut cleared_query = Occlusion::default();
+    core.occlusion_begin(&mut cleared_query);
+    draw(&mut core);
+    core.occlusion_end(&mut cleared_query);
+    let cleared_q = bracket(&cleared_query);
+    core.drain();
+    cleared_q.issue(cleared_q.end_at(), &[2500]);
+    assert_eq!(core.occlusion_poll(&cleared_query, false), Count(10201));
 }

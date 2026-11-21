@@ -97,6 +97,21 @@ pub(super) struct UpscaleResources {
     gamma_scratch: Option<Arc<Texture>>,
 }
 
+/// Cached `MetalFX` spatial upscale state for one settled `(src, dst)` geometry.
+pub(super) enum UpscaleCache {
+    Ready(UpscaleResources),
+    Unavailable { src: (u32, u32), dst: (u32, u32) },
+}
+
+impl UpscaleCache {
+    const fn geometry(&self) -> ((u32, u32), (u32, u32)) {
+        match self {
+            Self::Ready(res) => (res.src, res.dst),
+            Self::Unavailable { src, dst } => (*src, *dst),
+        }
+    }
+}
+
 /// Resolved `MetalFX` spatial upscale handles for a single present.
 struct UpscaleStep {
     scaler: Arc<Scaler>,
@@ -155,6 +170,9 @@ impl CoreDevice {
         drawable_h: u32,
         samples: u8,
     ) {
+        if self.back_buffer.is_some() {
+            self.drain();
+        }
         self.drawable_size = (drawable_w, drawable_h);
         self.settled_geometry = None;
         self.upscale = None;
@@ -235,6 +253,21 @@ impl CoreDevice {
         self.window.is_some()
     }
 
+    /// Logs once when `MetalFX` spatial upscaler setup or allocation fails.
+    fn log_upscale_unavailable(&mut self, src: (u32, u32), dst: (u32, u32)) {
+        if !self.options.contains(CoreOptions::LOGGED_UPSCALE_FAIL) {
+            self.options.insert(CoreOptions::LOGGED_UPSCALE_FAIL);
+            log::warn!(
+                target: LOG_TARGET,
+                "d3d9 core: MetalFX spatial scaler unavailable ({}x{} -> {}x{}), using bilinear present",
+                src.0,
+                src.1,
+                dst.0,
+                dst.1
+            );
+        }
+    }
+
     /// Ensures cached `MetalFX` upscale state matches `(src, dst)` when geometry has settled.
     fn prepare_upscale_resources(
         &mut self,
@@ -245,9 +278,12 @@ impl CoreDevice {
         let stale = self
             .upscale
             .as_ref()
-            .is_some_and(|u| u.src != src || u.dst != dst);
+            .is_some_and(|u| u.geometry() != (src, dst));
         if stale {
             self.upscale = None;
+        }
+        if matches!(self.upscale, Some(UpscaleCache::Unavailable { .. })) {
+            return None;
         }
         if self.upscale.is_none() {
             let mtl = self.device.device();
@@ -273,49 +309,55 @@ impl CoreDevice {
                 )
             });
             let Some(upscaled_output) = upscaled_output.flatten() else {
-                if !self.options.contains(CoreOptions::LOGGED_UPSCALE_FAIL) {
-                    self.options.insert(CoreOptions::LOGGED_UPSCALE_FAIL);
-                    log::warn!(
-                        target: LOG_TARGET,
-                        "d3d9 core: MetalFX spatial scaler unavailable ({}x{} -> {}x{}), using bilinear present",
-                        src.0,
-                        src.1,
-                        dst.0,
-                        dst.1
-                    );
-                }
+                self.log_upscale_unavailable(src, dst);
+                self.upscale = Some(UpscaleCache::Unavailable { src, dst });
                 return None;
             };
-            log::info!(
+            log::log!(
                 target: LOG_TARGET,
+                super::gate_level(),
                 "d3d9 core: MetalFX spatial scaler engaged ({}x{} -> {}x{})",
                 src.0,
                 src.1,
                 dst.0,
                 dst.1
             );
-            self.upscale = Some(UpscaleResources {
+            self.upscale = Some(UpscaleCache::Ready(UpscaleResources {
                 src,
                 dst,
                 scaler: Arc::new(scaler),
                 upscaled_output,
                 gamma_scratch: None,
-            });
+            }));
         }
-        let res = self.upscale.as_mut()?;
         let gamma_scratch = if need_gamma_scratch {
-            if res.gamma_scratch.is_none() {
-                res.gamma_scratch = alloc_private_bgra8(
+            let existing = match self.upscale.as_ref() {
+                Some(UpscaleCache::Ready(res)) => res.gamma_scratch.as_ref().map(Arc::clone),
+                _ => None,
+            };
+            let scratch = existing.or_else(|| {
+                let allocated = alloc_private_bgra8(
                     self.device.device(),
                     src.0,
                     src.1,
                     WMT_TEXTURE_USAGE_RENDER_TARGET | WMT_TEXTURE_USAGE_SHADER_READ,
-                );
-            }
-            let scratch = res.gamma_scratch.as_ref().map(Arc::clone)?;
+                )?;
+                if let Some(UpscaleCache::Ready(res)) = self.upscale.as_mut() {
+                    res.gamma_scratch = Some(Arc::clone(&allocated));
+                }
+                Some(allocated)
+            });
+            let Some(scratch) = scratch else {
+                self.log_upscale_unavailable(src, dst);
+                self.upscale = Some(UpscaleCache::Unavailable { src, dst });
+                return None;
+            };
             Some(scratch)
         } else {
             None
+        };
+        let Some(UpscaleCache::Ready(res)) = self.upscale.as_ref() else {
+            return None;
         };
         Some(UpscaleStep {
             scaler: Arc::clone(&res.scaler),

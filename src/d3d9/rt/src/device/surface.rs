@@ -21,6 +21,7 @@ use mtld3d_core::{
 };
 use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
+    WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_RG32_FLOAT, WMT_PIXEL_FORMAT_RGBA32_FLOAT,
     WMTOrigin, WMTSize, WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitCopyFromTextureToTexture,
 };
 
@@ -28,6 +29,16 @@ use super::{
     CoreDevice, StretchQuad, TargetRef,
     target::{Resolved, Shape},
 };
+
+/// Whether Metal supports linear filtering on `pixel_format`.
+///
+/// 32-bit float formats (`R32Float`, `Rg32Float`, `Rgba32Float`) require nearest filtering.
+pub(super) const fn supports_linear_filter(pixel_format: u32) -> bool {
+    !matches!(
+        pixel_format,
+        WMT_PIXEL_FORMAT_R32_FLOAT | WMT_PIXEL_FORMAT_RG32_FLOAT | WMT_PIXEL_FORMAT_RGBA32_FLOAT
+    )
+}
 
 impl CoreDevice {
     /// Copies the target `source` into `dst`, rows `dst_pitch` bytes apart (`GetRenderTargetData`).
@@ -81,10 +92,11 @@ impl CoreDevice {
             height: logical_height,
             ..shape
         };
+        let linear = supports_linear_filter(shape.pixel_format);
         let whole = DirtyRect::full(logical_width, logical_height);
         if rect_bytes(logical_shape, whole, dst.len(), dst_pitch).is_none()
             || self.quad_pipeline(shape.pixel_format, 1).is_none()
-            || self.quad_sampler(true).is_none()
+            || self.quad_sampler(linear).is_none()
         {
             return false;
         }
@@ -99,7 +111,7 @@ impl CoreDevice {
             src_view: shape.pixel_format,
             dst: scratch,
             dst_rect: [0, 0, logical_width, logical_height],
-            linear: true,
+            linear,
             decode: BlitDecode::None.uniform(),
         }) && self.read_back(scratch, dst, dst_pitch);
         self.forget_texture(scratch_id);
