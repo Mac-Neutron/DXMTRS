@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use mtld3d_core::{
     convert::FanRewrite,
@@ -16,8 +16,8 @@ use super::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData, 
 use crate::device::{
     CoreDevice,
     fixture::{
-        at, bound, core_on_fakes, decl, descriptors, draw, ff_binds, inline, key, passes, stream0,
-        triangle, two_stream_key,
+        FAKE_GLOBAL_LOCK, at, bound, core_on_fakes, decl, descriptors, draw, ff_binds, inline, key,
+        passes, stream0, triangle, two_stream_key,
     },
 };
 
@@ -187,6 +187,10 @@ fn ff_pipeline_compiles_once_per_key() {
 #[test]
 fn ff_draw_with_a_failed_pipeline_records_nothing() {
     const DEVICE: u64 = dxmt_fakes::REFUSES_PIPELINES;
+    let _guard = FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let _ = dxmt_fakes::take_calls(DEVICE);
     let mut core = core_on_fakes(DEVICE);
     let binds = ff_binds();
     let refused = Err(DrawRefused::Pipeline);
@@ -2121,6 +2125,10 @@ fn pso_memo_key_gen_mru_eviction_and_refusal_exclusion() {
     assert_eq!(bad_core.pso_memo.len(), 0);
 
     // Failed pipeline (`DrawRefused::Pipeline`) is never cached in `PsoMemo`.
+    let _guard = FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let _ = dxmt_fakes::take_calls(dxmt_fakes::REFUSES_PIPELINES);
     let mut fail_core = core_on_fakes(dxmt_fakes::REFUSES_PIPELINES);
     assert_eq!(
         fail_core.draw(&key(0xf), &triangle(&binds)),
@@ -2253,7 +2261,7 @@ fn key_gen_zero_resets_last_draw_gen_in_open_pass() {
 
 #[test]
 fn async_compile_skips_rebuilt_target_until_ready_and_logs_once() {
-    use std::sync::{PoisonError, mpsc};
+    use std::sync::mpsc;
 
     use dxmt_core::{
         pipeline_cache::{CompileState, Compiled},
@@ -2264,7 +2272,7 @@ fn async_compile_skips_rebuilt_target_until_ready_and_logs_once() {
 
     use crate::device::{
         CoreOptions,
-        fixture::{FAKE_GLOBAL_LOCK, capture_logs, returns_within_10s},
+        fixture::{capture_logs, returns_within_10s},
         queue_profile,
     };
 
@@ -2448,6 +2456,10 @@ fn pass_bound_soundness_across_deferred_draw_and_failed_compile() {
 
     use crate::device::{CoreOptions, fixture::returns_within_10s, queue_profile};
 
+    let _guard = FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let _ = dxmt_fakes::take_calls(dxmt_fakes::REFUSES_PIPELINES);
     returns_within_10s(|| {
         const DEVICE: u64 = dxmt_fakes::REFUSES_PIPELINES;
         // SAFETY: made-up handle for dxmt-fakes.

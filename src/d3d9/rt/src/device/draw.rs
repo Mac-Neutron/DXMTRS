@@ -10,8 +10,9 @@
 //! pipeline reads, from the stream it binds (inline bytes, zeros, or a stored buffer, its read
 //! tracked), the stages' binds and the draw (its indices, if any, in the argument-buffer ring or a
 //! stored buffer) into the colour target's render pass, after the depth-stencil state when its key
-//! names a depth format, and the scissor when the pass has not recorded that one last. The
-//! pipeline is built on the API thread and waited for (no asynchronous compile until C4d).
+//! names a depth format, and the scissor when the pass has not recorded that one last. When
+//! asynchronous compile is enabled, new pipelines build on background workers and skippable draws
+//! targeting rebuilt surfaces are omitted until ready, while non-skippable ones wait on encode.
 
 use core::{
     hash::{Hash as _, Hasher as _},

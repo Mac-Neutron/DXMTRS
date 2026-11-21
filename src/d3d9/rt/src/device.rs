@@ -29,7 +29,7 @@ bitflags::bitflags! {
     /// Per-device runtime options and one-shot diagnostic latches for [`CoreDevice`].
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct CoreOptions: u8 {
-        /// Open and read/write the shared DXMT SQLite shader cache (`shader.cache`).
+        /// Open and read/write the shared DXMT SQLite shader cache (`shaderCache.enable`).
         const SHADER_CACHE = 1 << 0;
         /// Compile uncached shaders and pipelines asynchronously (`shader.asyncCompile`).
         const ASYNC_COMPILE = 1 << 1;
@@ -37,8 +37,6 @@ bitflags::bitflags! {
         const DISCARD_BACK_BUFFER = 1 << 2;
         /// One-shot log latch for the first skipped draw on this device.
         const LOGGED_SKIP = 1 << 3;
-        /// One-shot log latch for a deferred pipeline failure on the encode thread.
-        const LOGGED_DEFERRED_FAIL = 1 << 4;
     }
 }
 
@@ -73,7 +71,7 @@ impl PassReadTracker {
         depth: Option<(ClearTarget, u32)>,
     ) {
         if self.passes.len() >= MAX_TRACKED_PASSES {
-            self.active_pass = None;
+            self.active_pass = Some(usize::MAX);
             return;
         }
         let idx = self.passes.len();
@@ -398,11 +396,13 @@ impl CoreDevice {
                         pso_handle,
                         Some(pso),
                     );
-                    let _ = pipelines.insert_ready(key, entry);
-                    compile_ctx
-                        .stats
-                        .prewarmed_psos
-                        .fetch_add(1, Ordering::Relaxed);
+                    let kept = pipelines.insert_ready(key, Arc::clone(&entry));
+                    if Arc::ptr_eq(&kept, &entry) {
+                        compile_ctx
+                            .stats
+                            .prewarmed_psos
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 Some(())
             });

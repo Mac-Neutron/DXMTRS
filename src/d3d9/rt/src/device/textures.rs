@@ -234,6 +234,7 @@ impl CoreDevice {
             }
             self.target_gen = self.target_gen.wrapping_add(1);
         }
+        self.clear_history.forget(ClearTarget::Texture(id));
         self.textures.insert(
             id,
             Stored {

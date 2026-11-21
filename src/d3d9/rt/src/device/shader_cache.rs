@@ -84,6 +84,7 @@ pub fn close_shader_cache_on_detach() {
 /// Opens the shared SQLite [`Store`] for `metal_version` and logs the cache identity once.
 #[must_use]
 pub fn open_store(metal_version: u32) -> Arc<Store> {
+    let _pool = Pool::new();
     let version = shader_cache_version();
     let store = dxmt_core::shader_cache::instance(metal_version, version);
     CACHE_OPENED.store(true, Ordering::Release);
@@ -350,12 +351,12 @@ impl StageFunctions {
         }
 
         let data = compile_stage_data(stage.code.tokens(), &stage.spec, name)?;
+        let func = load_function(mtl_device, &data, name).ok()?;
         if let Some(store) = &self.cache
             && store.has_writer()
         {
             store.write(&cache_key, &data);
         }
-        let func = load_function(mtl_device, &data, name).ok()?;
         self.stats.stage_compiles.fetch_add(1, Ordering::Relaxed);
         Some(func)
     }
@@ -426,6 +427,7 @@ pub fn load_recipes(store: &Store, metal_version: u32) -> Vec<PipelineKey> {
     if !store.has_reader() {
         return Vec::new();
     }
+    let _pool = Pool::new();
     let key = recipe_cache_key(metal_version);
     let Some(data) = store.read(&key) else {
         return Vec::new();
@@ -499,6 +501,7 @@ impl RecipeRecorder {
         if !self.dirty || !store.has_writer() {
             return 0;
         }
+        let _pool = Pool::new();
         let existing = load_recipes(store, metal_version);
         let mut merged = Vec::with_capacity((self.keys.len() + existing.len()).min(MAX_RECIPES));
         let mut merged_seen = FxHashSet::default();
@@ -515,8 +518,12 @@ impl RecipeRecorder {
             return 0;
         }
         // SAFETY: `bytes` is alive for `DispatchData_alloc_init`, which copies the slice.
-        let handle =
-            unsafe { DispatchData_alloc_init(bytes.as_ptr().addr() as u64, bytes.len() as u64) };
+        let handle = unsafe {
+            DispatchData_alloc_init(
+                bytes.as_ptr().expose_provenance() as u64,
+                bytes.len() as u64,
+            )
+        };
         // SAFETY: `handle` is 0 or a newly retained `DispatchData`.
         let Some(obj) = (unsafe { Obj::adopt(handle) }) else {
             return 0;
@@ -821,7 +828,7 @@ fn decode_pipeline_key(
 ) -> Option<PipelineKey> {
     let vs = match r.u8()? {
         0 => VsStageKey::Ff(FfVsKey {
-            flags: FfVsFlags::from_bits_retain(r.u16()?),
+            flags: FfVsFlags::from_bits(r.u16()?)?,
             input_tex_coord_count: r.u8()?,
             tex_coord_count: r.u8()?,
             light_active_mask: r.u8()?,
@@ -879,7 +886,7 @@ fn decode_pipeline_key(
                 stage.alpha_op = r.u8()?;
                 stage.alpha_arg1 = r.u8()?;
                 stage.alpha_arg2 = r.u8()?;
-                stage.flags = FfStageFlags::from_bits_retain(r.u8()?);
+                stage.flags = FfStageFlags::from_bits(r.u8()?)?;
             }
             let specular_add = r.bool()?;
             let tt_projected_mask = r.u8()?;
@@ -911,7 +918,7 @@ fn decode_pipeline_key(
         tt_projected_mask: r.u8()?,
         color_out_mask: r.u8()?,
         sample_mask: r.u8()?,
-        flags: VariantFlags::from_bits_retain(r.u8()?),
+        flags: VariantFlags::from_bits(r.u8()?)?,
     };
 
     let decl_idx = usize::try_from(r.u32()?).ok()?;

@@ -211,8 +211,12 @@ fn dispatch_data_and_shader_cache_fakes_roundtrip() {
     let writer = unsafe { CacheWriter_alloc_init(path.as_ptr(), 0x1234) };
     assert_ne!(writer, 0);
     // SAFETY: `payload` is valid for its length.
-    let data =
-        unsafe { DispatchData_alloc_init(payload.as_ptr().addr() as u64, payload.len() as u64) };
+    let data = unsafe {
+        DispatchData_alloc_init(
+            payload.as_ptr().expose_provenance() as u64,
+            payload.len() as u64,
+        )
+    };
     assert_ne!(data, 0);
     // SAFETY: `writer`, `key`, and `data` are valid handles/slices.
     unsafe { CacheWriter_set(writer, key.as_ptr().cast(), key.len() as u64, data) };

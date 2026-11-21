@@ -260,20 +260,24 @@ fn cancel_unstarted_drops_queued_jobs_and_allows_wait_idle() {
     entered.wait();
 
     let ran = Arc::new(AtomicUsize::new(0));
+    let mut jobs = Vec::new();
     for lane in [
         CompileLane::Urgent,
         CompileLane::Pipeline,
         CompileLane::Normal,
     ] {
         let ran_w = Arc::clone(&ran);
-        let _ = sched.submit_lane(
-            CompileJob::from_fn(move || {
-                ran_w.fetch_add(1, Ordering::SeqCst);
-            }),
-            lane,
-        );
+        let job = CompileJob::from_fn(move || {
+            ran_w.fetch_add(1, Ordering::SeqCst);
+        });
+        let _ = sched.submit_lane(job.clone(), lane);
+        jobs.push(job);
     }
     sched.cancel_unstarted();
+    for job in &jobs {
+        job.wait();
+        assert!(job.is_done());
+    }
     release.wait();
     assert!(sched.wait_idle(5_000));
     assert_eq!(ran.load(Ordering::SeqCst), 0);

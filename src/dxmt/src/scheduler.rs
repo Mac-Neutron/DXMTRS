@@ -135,6 +135,18 @@ impl CompileJob {
         drop(guard);
     }
 
+    fn cancel(&self) {
+        let step = {
+            let mut guard = lock(&self.inner.step);
+            let step = guard.take();
+            self.inner.done.store(true, Ordering::Release);
+            self.inner.cv.notify_all();
+            drop(guard);
+            step
+        };
+        drop(step);
+    }
+
     fn run_step(&self) -> Option<Self> {
         if self.is_done() {
             return None;
@@ -489,16 +501,22 @@ impl CompileScheduler {
         promoted
     }
 
-    /// Drops all unstarted queued jobs from every lane without waiting on them.
+    /// Drops all unstarted queued jobs from every lane and wakes any waiters on them.
     pub fn cancel_unstarted(&self) {
-        let mut st = lock(&self.inner.state);
-        st.urgent.clear();
-        st.pipelines.clear();
-        st.normal.clear();
-        if st.in_flight == 0 {
-            self.inner.idle_cv.notify_all();
+        let (urgent, pipelines, normal) = {
+            let mut st = lock(&self.inner.state);
+            let urgent = core::mem::take(&mut st.urgent);
+            let pipelines = core::mem::take(&mut st.pipelines);
+            let normal = core::mem::take(&mut st.normal);
+            if st.in_flight == 0 {
+                self.inner.idle_cv.notify_all();
+            }
+            drop(st);
+            (urgent, pipelines, normal)
+        };
+        for (_, job) in urgent.into_iter().chain(pipelines).chain(normal) {
+            job.cancel();
         }
-        drop(st);
     }
 
     /// Promotes `job` to urgent, steals and executes it on the caller if appropriate, or waits.

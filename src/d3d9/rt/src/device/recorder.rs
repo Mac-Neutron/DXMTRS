@@ -30,6 +30,7 @@ impl CoreDevice {
 
     /// Ends the render or blit pass the last closure left open, if one is.
     pub fn close_pass(&mut self) {
+        self.pass_reads.active_pass = None;
         if self.render_open || self.blit_open {
             self.render_open = false;
             self.open_depth = None;
