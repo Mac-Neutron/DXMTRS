@@ -4,7 +4,10 @@
 //! multisampled texture beside the single-sample one, which draws and clears go to and Present
 //! resolves into the single-sample one; the presenter stays at one sample (DXMTRS C4b-3d5).
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use dxmt_core::{
     presenter::{D3d9PresentArgs, Presenter, PresenterDesc},
@@ -111,6 +114,7 @@ impl CoreDevice {
     #[must_use]
     pub fn resize(&mut self, width: u32, height: u32, samples: u8) -> bool {
         self.drain();
+        self.last_paced = None;
         self.clear_history.forget(ClearTarget::BackBuffer);
         self.make_back_buffer(width, height, samples);
         if self.back_buffer.is_none() {
@@ -135,6 +139,7 @@ impl CoreDevice {
     /// until the window is destroyed: a caller moves the device only to another window.
     pub fn retarget(&mut self, hwnd: isize) -> bool {
         self.drain();
+        self.last_paced = None;
         self.window = None;
         let Some((width, height)) = self.back_buffer.as_ref().map(|b| (b.width, b.height)) else {
             return false;
@@ -158,38 +163,53 @@ impl CoreDevice {
     /// through the view its last pass or Clear wrote it in (DXMTRS C4b-3d5): folded into the
     /// frame's last pass when that pass drew it, a resolve pass of its own otherwise. The inline
     /// gamma LUT and current EDR headroom are snapshotted per frame so queued presents never
-    /// stall or race with subsequent ramp changes.
-    pub fn present(&mut self, visible: bool, after: f64, display_sync: bool) {
+    /// stall or race with subsequent ramp changes. When `cap_after > 0.0`, steady-deadline CPU
+    /// pacing enforces the frame-rate cap on top of Metal presentation.
+    pub fn present(&mut self, visible: bool, after: f64, cap_after: f64, display_sync: bool) {
         let presenter = self.window.as_ref().and_then(|w| w.presenter.clone());
-        let (Some(presenter), Some(back_buffer), true) = (presenter, &self.back_buffer, visible)
-        else {
-            if self.dirty || self.render_open {
+        let bb_dims = self.back_buffer.as_ref().map(|bb| (bb.width, bb.height));
+        if let (Some(presenter), Some((bb_w, bb_h)), true) = (presenter, bb_dims, visible) {
+            let (dw, dh) = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
+                self.drawable_size
+            } else {
+                (bb_w, bb_h)
+            };
+            let peak_edr = presenter.prepare_d3d9_present(dw, dh, display_sync, || self.drain());
+            if let Some(back_buffer) = &self.back_buffer {
+                let args = D3d9PresentArgs {
+                    gamma: self.gamma.clone(),
+                    peak_edr,
+                };
+                let texture = Arc::clone(back_buffer.presented().0);
+                self.resolve_presented();
+                let queue = self.device.queue_mut();
+                let frame = queue.current_frame_seq();
+                queue.chunk().signal_frame_latency(frame);
+                self.emit(move |enc| {
+                    enc.present_d3d9(&texture, Arc::clone(&presenter), after, args.clone());
+                });
+                self.commit();
+                self.device.queue().present_boundary(true);
+            } else if self.dirty || self.render_open {
                 self.commit();
             }
-            self.end_frame_clear_tracking();
-            return;
-        };
-        let (dw, dh) = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
-            self.drawable_size
-        } else {
-            (back_buffer.width, back_buffer.height)
-        };
-        let peak_edr = presenter.prepare_d3d9_present(dw, dh, display_sync);
-        let args = D3d9PresentArgs {
-            gamma: self.gamma.clone(),
-            peak_edr,
-        };
-        let texture = Arc::clone(back_buffer.presented().0);
-        self.resolve_presented();
-        let queue = self.device.queue_mut();
-        let frame = queue.current_frame_seq();
-        queue.chunk().signal_frame_latency(frame);
-        self.emit(move |enc| {
-            enc.present_d3d9(&texture, Arc::clone(&presenter), after, args.clone());
-        });
-        self.commit();
-        self.device.queue().present_boundary(true);
+        } else if self.dirty || self.render_open {
+            self.commit();
+        }
         self.end_frame_clear_tracking();
+        if cap_after > 0.0 && cap_after.is_finite() {
+            let dur = Duration::from_secs_f64(cap_after);
+            let now = Instant::now();
+            let deadline = next_paced_deadline(self.last_paced, now, dur);
+            if let Some(wait) = deadline.checked_duration_since(now)
+                && !wait.is_zero()
+            {
+                std::thread::sleep(wait);
+            }
+            self.last_paced = Some(deadline);
+        } else {
+            self.last_paced = None;
+        }
     }
 
     /// Sets or clears the inline `[u16; 1024]` gamma lookup table applied from the next present.
@@ -336,25 +356,52 @@ impl CoreDevice {
     }
 }
 
-/// The seconds a present at D3D9 presentation `interval` waits after the last.
+/// Next CPU-paced present deadline, keeping cadence without bursting after stalls.
+pub(super) fn next_paced_deadline(
+    last: Option<Instant>,
+    now: Instant,
+    duration: Duration,
+) -> Instant {
+    last.and_then(|t| t.checked_add(duration))
+        .map_or(now, |at| at.max(now))
+}
+
+/// Computes `(after, cap_after)` in seconds from `pacing` and `refresh_hz`.
 ///
-/// Uses `mtld3d_core::present::layer_pacing_for` with `rate = 60` when `refresh_hz == 0`, taking
-/// the stricter of the vsync period and the frame-rate cap.
+/// Uses `rate = 60` only for the vsync period when `refresh_hz == 0` and `pacing.display_sync` is
+/// enabled, leaving divided-interval capping strictly governed by `pacing.max_fps`.
 #[must_use]
-pub fn present_after(interval: u32, refresh_hz: u32, max_fps: u32) -> f64 {
+pub fn present_pacing(pacing: mtld3d_core::present::LayerPacing, refresh_hz: u32) -> (f64, f64) {
     let rate = if refresh_hz == 0 { 60 } else { refresh_hz };
-    let pacing = mtld3d_core::present::layer_pacing_for(interval, rate, max_fps);
     let vsync = if pacing.display_sync {
         1.0 / f64::from(rate)
     } else {
         0.0
     };
-    let cap = if pacing.max_fps > 0 {
+    let cap_after = if pacing.max_fps > 0 {
         1.0 / f64::from(pacing.max_fps)
     } else {
         0.0
     };
-    vsync.max(cap)
+    (vsync.max(cap_after), cap_after)
+}
+
+/// Computes `(after, cap_after)` in seconds for D3D9 `interval`, `refresh_hz`, and `max_fps`.
+#[must_use]
+pub fn present_durations(interval: u32, refresh_hz: u32, max_fps: u32) -> (f64, f64) {
+    present_pacing(
+        mtld3d_core::present::layer_pacing_for(interval, refresh_hz, max_fps),
+        refresh_hz,
+    )
+}
+
+/// The seconds a present at D3D9 presentation `interval` waits after the last.
+///
+/// Uses `mtld3d_core::present::layer_pacing_for` with raw `refresh_hz` and falls back to `rate =
+/// 60` only for the vsync period when `refresh_hz == 0`.
+#[must_use]
+pub fn present_after(interval: u32, refresh_hz: u32, max_fps: u32) -> f64 {
+    present_durations(interval, refresh_hz, max_fps).0
 }
 
 #[cfg(test)]

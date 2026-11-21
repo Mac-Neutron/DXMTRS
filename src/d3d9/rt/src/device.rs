@@ -256,6 +256,8 @@ pub struct CoreDevice {
     gamma: Option<Arc<[u16; 1024]>>,
     /// Layer drawable size in pixels, preserved across `resize` and `retarget`.
     drawable_size: (u32, u32),
+    /// Deadline of the last CPU-paced present (`cap_after > 0`), cleared on drain/resize/retarget.
+    last_paced: Option<std::time::Instant>,
 }
 
 impl CoreDevice {
@@ -371,6 +373,7 @@ impl CoreDevice {
             open_brackets: None,
             gamma: None,
             drawable_size: (0, 0),
+            last_paced: None,
         };
 
         if !prewarm_recipes.is_empty() {
@@ -773,7 +776,7 @@ pub use mtld3d_core::async_compile::ClearPlanes;
 pub use query::{Occlusion, OcclusionAnswer};
 pub use shader_cache::close_shader_cache_on_detach;
 pub use stretch::StretchQuad;
-pub use swapchain::present_after;
+pub use swapchain::{present_after, present_durations, present_pacing};
 pub use target::TargetRef;
 pub use textures::{
     CoreTextureDesc, CoreTextureFlags, DepthPlanes, TextureBind, TextureKind, UploadRegion,

@@ -2294,7 +2294,7 @@ fn async_compile_skips_rebuilt_target_until_ready_and_logs_once() {
 
             // Two consecutive whole clears make `rt` rebuilt on frame 1.
             core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
-            core.present(false, 0.0, true);
+            core.present(false, 0.0, 0.0, true);
             core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
 
             let (tx1, rx1) = mpsc::channel::<()>();
@@ -2348,7 +2348,7 @@ fn async_compile_skips_rebuilt_target_until_ready_and_logs_once() {
             }
 
             // Frame 2: ready pipeline lands normally.
-            core.present(false, 0.0, true);
+            core.present(false, 0.0, 0.0, true);
             core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
             assert_eq!(core.draw(&k1, &triangle(&binds)), Ok(()));
             core.drain();
@@ -2415,7 +2415,7 @@ fn async_compile_keeps_draws_when_persistent_stretched_or_occlusion_active() {
         assert!(draws(&dxmt_fakes::take_calls(DEVICE)));
 
         // Advance to frame 1 with another clear: `rt` is now rebuilt, UNLESS marked feeds_persistent.
-        core.present(false, 0.0, true);
+        core.present(false, 0.0, 0.0, true);
         core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
         core.note_stretch_copy(level0(rt), TargetRef::BackBuffer, ClearPlanes::COLOR, true);
         let k2 = key(0x7);
@@ -2429,7 +2429,7 @@ fn async_compile_keeps_draws_when_persistent_stretched_or_occlusion_active() {
         let (rt2, _) = target_texture(&mut core, DEVICE, 12, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
         assert!(core.set_target(level0(rt2)));
         core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
-        core.present(false, 0.0, true);
+        core.present(false, 0.0, 0.0, true);
         core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
         let mut q = crate::device::Occlusion::default();
         core.occlusion_begin(&mut q);

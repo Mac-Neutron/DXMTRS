@@ -646,6 +646,26 @@ impl Encoder {
         }
         let drawable = drawable.as_ref().map_or(0, Obj::handle);
         if present.d3d9.is_some() && drawable == 0 {
+            if !pass.fence_wait.is_empty() || !pass.fence_update.is_empty() {
+                let Self { heap, fences, .. } = self;
+                let mut chain = Chain::new();
+                blit_fences(
+                    &mut chain,
+                    heap,
+                    fences,
+                    &pass.fence_wait,
+                    WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
+                );
+                blit_fences(
+                    &mut chain,
+                    heap,
+                    fences,
+                    &pass.fence_update,
+                    WMT_BLIT_COMMAND_UPDATE_FENCE,
+                );
+                // SAFETY: the caller's promise; the records live in the encoder's memory.
+                unsafe { blit_pass(cmdbuf, c"SkipPresentFences", &chain) };
+            }
             return;
         }
         if present.after > 0.0 {

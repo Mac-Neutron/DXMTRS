@@ -24,6 +24,7 @@ impl CoreDevice {
         }
         let last = self.device.queue().current_seq() - 1;
         self.device.queue().wait_cpu(last);
+        self.last_paced = None;
     }
 
     /// Ends the open render pass and hands the chunk to the encode thread.

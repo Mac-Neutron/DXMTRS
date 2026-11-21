@@ -1461,7 +1461,7 @@ fn d3d9_inline_gamma_never_stalls_or_rebuilds_pso() {
         "D3D9 presenter skips unused gamma_lut_texture"
     );
 
-    let peak1 = p.prepare_d3d9_present(1920, 1080, true);
+    let peak1 = p.prepare_d3d9_present(1920, 1080, true, || {});
     assert!((peak1 - 1.0).abs() < f32::EPSILON);
     let mut lut1 = [0_u16; 1024];
     lut1[0] = 111;
@@ -1496,7 +1496,7 @@ fn d3d9_inline_gamma_never_stalls_or_rebuilds_pso() {
         "gamma_lut_texture must never be bound at texture(1): {log1}"
     );
 
-    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    let _ = p.prepare_d3d9_present(1920, 1080, true, || {});
     // SAFETY: the fakes' objects.
     let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args2, |_| {}, |_| {}) };
     let log2 = take();
@@ -1529,7 +1529,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
 
     // Step 1: potential > 1.0, current == 1.0 -> setProps(RGBA16Float) then setColorSpace(HDR_scRGB)
     // and encode HdrPassthrough (no buffer(0)).
-    let peak1 = p.prepare_d3d9_present(1920, 1080, true);
+    let peak1 = p.prepare_d3d9_present(1920, 1080, true, || {});
     assert!((peak1 - 1.0).abs() < f32::EPSILON);
     let prep1 = take();
     let set_props = prep1
@@ -1540,6 +1540,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
         .expect("setColorSpace HDR_scRGB");
     assert!(set_props < set_cs, "{prep1}");
     assert!(prep1.contains("pixel_format=0x73"), "{prep1}");
+    assert!(prep1.contains("framebuffer_only=1"), "{prep1}");
 
     let args1 = D3d9PresentArgs {
         gamma: None,
@@ -1559,7 +1560,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
         maximum_edr_color_component_value: 2.0,
         maximum_potential_edr_color_component_value: 2.0,
     });
-    let peak2 = p.prepare_d3d9_present(1920, 1080, true);
+    let peak2 = p.prepare_d3d9_present(1920, 1080, true, || {});
     assert!((peak2 - 2.0).abs() < f32::EPSILON);
     let prep2 = take();
     assert!(!prep2.contains("MetalLayer_setProps"), "{prep2}");
@@ -1597,7 +1598,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
         maximum_potential_edr_color_component_value: 1.0,
     });
     fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
-    let peak3 = p.prepare_d3d9_present(2560, 1440, true);
+    let peak3 = p.prepare_d3d9_present(2560, 1440, true, || {});
     assert!((peak3 - 1.0).abs() < f32::EPSILON);
     let prep3 = take();
     let set_cs = prep3
@@ -1608,6 +1609,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
         .expect("setProps on HDR->SDR");
     assert!(set_cs < set_props, "{prep3}");
     assert!(prep3.contains("pixel_format=0x50"), "{prep3}");
+    assert!(prep3.contains("framebuffer_only=0"), "{prep3}");
 
     let args3 = D3d9PresentArgs {
         gamma: None,
@@ -1632,7 +1634,7 @@ fn d3d9_can_blit_disabled_by_gamma_or_hdr() {
     fake().source = (1920, 1080);
     fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
     let p = new_d3d9_presenter(1920, 1080, false);
-    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    let _ = p.prepare_d3d9_present(1920, 1080, true, || {});
     take();
 
     // Matching BGRA8 without gamma takes the blit path (0 PSOs built, no fragment draw).
@@ -1684,7 +1686,7 @@ fn d3d9_drawable_size_override_disables_blit_and_sets_viewport() {
     fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
     fake().drawable_size = Some((1280, 720));
     let p = new_d3d9_presenter(1920, 1080, false);
-    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    let _ = p.prepare_d3d9_present(1920, 1080, true, || {});
     take();
 
     let args = D3d9PresentArgs {
@@ -1701,4 +1703,116 @@ fn d3d9_drawable_size_override_disables_blit_and_sets_viewport() {
         "{log}"
     );
     drop(d);
+}
+
+#[test]
+fn d3d9_sdr_skips_edr_poll_and_redundant_layer_calls() {
+    let _serial = serial();
+    reset();
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 2.0,
+        maximum_potential_edr_color_component_value: 2.0,
+    });
+    let p = new_d3d9_presenter(1920, 1080, false);
+    take();
+
+    let mut mode_changes = 0_u32;
+    for _ in 0..40 {
+        let peak = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+        assert!((peak - 1.0).abs() < f32::EPSILON);
+    }
+    let log = take();
+    assert_eq!(mode_changes, 0);
+    assert!(!log.contains("MetalLayer_getEDRValue"), "{log}");
+    assert!(!log.contains("MetalLayer_setProps"), "{log}");
+    assert!(!log.contains("MetalLayer_setColorSpace"), "{log}");
+}
+
+#[test]
+fn d3d9_hdr_edr_polling_throttled_and_mode_change_callback() {
+    let _serial = serial();
+    reset();
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 1.0,
+        maximum_potential_edr_color_component_value: 1.0,
+    });
+    let p = new_d3d9_presenter(1920, 1080, true);
+    take();
+
+    let mut mode_changes = 0_u32;
+    // Frame 0 polls EDR; frames 1..=31 reuse cached SDR EDR; frame 32 polls again.
+    let _ = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+    assert_eq!(take().matches("MetalLayer_getEDRValue").count(), 1);
+    for _ in 1..32 {
+        let _ = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+    }
+    assert_eq!(take().matches("MetalLayer_getEDRValue").count(), 0);
+    let _ = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+    assert_eq!(take().matches("MetalLayer_getEDRValue").count(), 1);
+    assert_eq!(mode_changes, 0);
+
+    // Calling set_d3d9_drawable_size resets the countdown even when the size is unchanged.
+    p.set_d3d9_drawable_size(1920, 1080);
+    take();
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 1.0,
+        maximum_potential_edr_color_component_value: 2.0,
+    });
+    let peak = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+    assert!((peak - 1.0).abs() < f32::EPSILON);
+    assert_eq!(mode_changes, 1);
+    let sdr_to_hdr = take();
+    assert_eq!(sdr_to_hdr.matches("MetalLayer_getEDRValue").count(), 1);
+    assert!(sdr_to_hdr.contains("framebuffer_only=1"), "{sdr_to_hdr}");
+
+    // Very next frame after Sdr->Hdr immediately re-polls cur without invoking on_mode_change.
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 2.0,
+        maximum_potential_edr_color_component_value: 2.0,
+    });
+    let peak2 = p.prepare_d3d9_present(1920, 1080, true, || mode_changes += 1);
+    assert!((peak2 - 2.0).abs() < f32::EPSILON);
+    assert_eq!(mode_changes, 1);
+    let next_log = take();
+    assert_eq!(next_log.matches("MetalLayer_getEDRValue").count(), 1);
+    assert!(!next_log.contains("MetalLayer_setProps"), "{next_log}");
+
+    // Changing only display_sync does not invoke on_mode_change.
+    let _ = p.prepare_d3d9_present(1920, 1080, false, || mode_changes += 1);
+    assert_eq!(mode_changes, 1);
+    let sync_log = take();
+    assert!(sync_log.contains("display_sync=0"), "{sync_log}");
+
+    // Resizing resets countdown so Hdr->Sdr transition picks up immediately and sets framebuffer_only=0.
+    p.set_d3d9_drawable_size(1280, 720);
+    take();
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 1.0,
+        maximum_potential_edr_color_component_value: 1.0,
+    });
+    let peak3 = p.prepare_d3d9_present(1280, 720, false, || mode_changes += 1);
+    assert!((peak3 - 1.0).abs() < f32::EPSILON);
+    assert_eq!(mode_changes, 2);
+    let hdr_to_sdr = take();
+    assert!(hdr_to_sdr.contains("framebuffer_only=0"), "{hdr_to_sdr}");
+}
+
+#[test]
+fn d3d9_encode_returns_none_when_backbuffer_is_zero() {
+    let _serial = serial();
+    reset();
+    let p = new_d3d9_presenter(1920, 1080, false);
+    take();
+    let args = D3d9PresentArgs {
+        gamma: None,
+        peak_edr: 1.0,
+    };
+    // SAFETY: the fakes' objects; backbuffer 0 exercises the early-return guard.
+    let d = unsafe { p.encode_d3d9(CMDBUF, 0, &args, |_| {}, |_| {}) };
+    assert!(d.is_none());
+    let log = take();
+    assert!(
+        !log.contains("MTLCommandBuffer_renderCommandEncoder"),
+        "{log}"
+    );
 }

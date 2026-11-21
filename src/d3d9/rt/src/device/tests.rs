@@ -61,7 +61,7 @@ fn command_buffer_error_latches_core_device_has_error() {
         assert!(core.has_error());
 
         core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
-        core.present(true, 0.0, true);
+        core.present(true, 0.0, 0.0, true);
         core.drain();
         assert!(core.has_error());
     });

@@ -48,9 +48,9 @@ use mtld3d_core::{
 use mtld3d_shared::{InPtr, ValueIn};
 use mtld3d_types::{
     D3D_OK, D3DCLEAR_STENCIL, D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER, D3DERR_INVALIDCALL,
-    D3DERR_NOTAVAILABLE, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, D3DPRESENT_PARAMETERS, D3DRECT,
-    D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DSURFACE_DESC, D3DTEXF_LINEAR,
-    D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
+    D3DERR_NOTAVAILABLE, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, D3DPRESENT_INTERVAL_IMMEDIATE,
+    D3DPRESENT_PARAMETERS, D3DRECT, D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE,
+    D3DSURFACE_DESC, D3DTEXF_LINEAR, D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
 };
 
 use super::{
@@ -183,7 +183,11 @@ pub fn present(
              vsync"
         );
     }
-    let refresh_hz = crate::direct3d9::reported_display_mode(pp).refresh_rate;
+    let refresh_hz = if interval == D3DPRESENT_INTERVAL_IMMEDIATE {
+        0
+    } else {
+        crate::direct3d9::reported_display_mode(pp).refresh_rate
+    };
     if mtld3d_core::present::interval_divisor(interval) > 1 && refresh_hz == 0 {
         mtld3d_shared::log_once_warn!(
             target: crate::LOG_TARGET,
@@ -192,8 +196,8 @@ pub fn present(
         );
     }
     let pacing = mtld3d_core::present::layer_pacing_for(interval, refresh_hz, cfg.present_max_fps);
-    let after = d3d9_rt::device::present_after(interval, refresh_hz, cfg.present_max_fps);
-    core.present(visible, after, pacing.display_sync);
+    let (after, cap_after) = d3d9_rt::device::present_pacing(pacing, refresh_hz);
+    core.present(visible, after, cap_after, pacing.display_sync);
     D3D_OK
 }
 

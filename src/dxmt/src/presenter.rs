@@ -246,6 +246,7 @@ impl Presenter {
         height: u32,
         hdr_enable: bool,
     ) -> Arc<Self> {
+        debug_assert!(desc.sample_count <= 1);
         let mut layer_props = WMTLayerProps {
             device: 0,
             contents_scale: 0.0,
@@ -301,8 +302,10 @@ impl Presenter {
                 frame_requested: 0,
                 d3d9: Some(D3d9State {
                     hdr_enable,
-                    mode: D3d9LayerMode::Unset,
+                    mode: D3d9LayerMode::Sdr,
                     display_sync: true,
+                    edr_poll_countdown: 0,
+                    last_edr: (1.0, 1.0),
                     psos: FxHashMap::default(),
                 }),
             }),
@@ -314,18 +317,41 @@ impl Presenter {
 
     /// Synchronizes D3D9 layer EDR mode, drawable size, and vsync on the API thread.
     ///
-    /// Queries `MetalLayer_getEDRValue`, updates `CAMetalLayer` only when mode, size, or
-    /// `display_sync` changes (never calling `wait_presented`), and returns the effective peak
-    /// EDR multiplier for this frame (`> 1.0` for BT.2446-A, `1.0` otherwise).
-    pub fn prepare_d3d9_present(&self, width: u32, height: u32, display_sync: bool) -> f32 {
-        let mut edr = WMTEDRValue {
-            maximum_edr_color_component_value: 1.0,
-            maximum_potential_edr_color_component_value: 1.0,
+    /// Polls `MetalLayer_getEDRValue` at most once every 32 frames when `hdr_enable` is set,
+    /// invokes `on_mode_change` before SDR/HDR transitions, updates `CAMetalLayer` only when mode,
+    /// size, or `display_sync` changes, and returns the effective peak EDR multiplier
+    /// (`> 1.0` for BT.2446-A).
+    pub fn prepare_d3d9_present(
+        &self,
+        width: u32,
+        height: u32,
+        display_sync: bool,
+        on_mode_change: impl FnOnce(),
+    ) -> f32 {
+        let Some((should_poll, cached_edr)) = self.state().d3d9.as_ref().map(|d3d9| {
+            if d3d9.hdr_enable {
+                (d3d9.edr_poll_countdown == 0, d3d9.last_edr)
+            } else {
+                (false, (1.0, 1.0))
+            }
+        }) else {
+            return 1.0;
         };
-        // SAFETY: `self.layer` is live for the presenter's lifetime; `edr` is writable.
-        unsafe { MetalLayer_getEDRValue(self.layer, &raw mut edr) };
-        let pot = edr.maximum_potential_edr_color_component_value;
-        let cur = edr.maximum_edr_color_component_value;
+        let (cur, pot) = if should_poll {
+            let _pool = Pool::new();
+            let mut edr = WMTEDRValue {
+                maximum_edr_color_component_value: 1.0,
+                maximum_potential_edr_color_component_value: 1.0,
+            };
+            // SAFETY: `self.layer` is live for the presenter's lifetime; `edr` is writable.
+            unsafe { MetalLayer_getEDRValue(self.layer, &raw mut edr) };
+            (
+                edr.maximum_edr_color_component_value,
+                edr.maximum_potential_edr_color_component_value,
+            )
+        } else {
+            cached_edr
+        };
         let w = f64::from(width);
         let h = f64::from(height);
         let mut guard = self.state();
@@ -333,6 +359,12 @@ impl Presenter {
         let Some(d3d9) = state.d3d9.as_mut() else {
             return 1.0;
         };
+        if should_poll {
+            d3d9.last_edr = (cur, pot);
+            d3d9.edr_poll_countdown = D3D9_EDR_POLL_INTERVAL - 1;
+        } else if d3d9.hdr_enable {
+            d3d9.edr_poll_countdown = d3d9.edr_poll_countdown.saturating_sub(1);
+        }
         let want_hdr = d3d9.hdr_enable && pot > 1.0 && pot.is_finite();
         let want_mode = if want_hdr {
             D3d9LayerMode::Hdr
@@ -343,12 +375,24 @@ impl Presenter {
         let props_changed = state.layer_props.drawable_width.to_bits() != w.to_bits()
             || state.layer_props.drawable_height.to_bits() != h.to_bits()
             || d3d9.display_sync != display_sync;
-        if mode_changed || props_changed {
+        if mode_changed {
+            drop(guard);
+            on_mode_change();
+            self.invalidate_drawable();
+            guard = self.state();
+            let state = &mut *guard;
+            let Some(d3d9) = state.d3d9.as_mut() else {
+                return 1.0;
+            };
             d3d9.mode = want_mode;
             d3d9.display_sync = display_sync;
+            if want_hdr {
+                d3d9.edr_poll_countdown = 0;
+            }
             state.layer_props.drawable_width = w;
             state.layer_props.drawable_height = h;
             state.layer_props.display_sync_enabled = u8::from(display_sync);
+            state.layer_props.framebuffer_only = u8::from(want_hdr);
             state.layer_props.pixel_format = if want_hdr {
                 WMT_PIXEL_FORMAT_RGBA16_FLOAT
             } else {
@@ -359,20 +403,26 @@ impl Presenter {
             } else {
                 WMT_COLOR_SPACE_SRGB
             };
-            if mode_changed && want_hdr {
+            if want_hdr {
                 // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
                 unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
                 // SAFETY: a live layer (`new_d3d9`'s promise).
                 unsafe { MetalLayer_setColorSpace(self.layer, WMT_COLOR_SPACE_HDR_SC_RGB) };
-            } else if mode_changed {
+            } else {
                 // SAFETY: a live layer (`new_d3d9`'s promise).
                 unsafe { MetalLayer_setColorSpace(self.layer, WMT_COLOR_SPACE_SRGB) };
                 // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
                 unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
-            } else {
-                // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
-                unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
             }
+            drop(guard);
+            self.invalidate_drawable();
+        } else if props_changed {
+            d3d9.display_sync = display_sync;
+            state.layer_props.drawable_width = w;
+            state.layer_props.drawable_height = h;
+            state.layer_props.display_sync_enabled = u8::from(display_sync);
+            // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
+            unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
             drop(guard);
             self.invalidate_drawable();
         } else {
@@ -390,6 +440,9 @@ impl Presenter {
         let w = f64::from(width);
         let h = f64::from(height);
         let mut state = self.state();
+        if let Some(d3d9) = state.d3d9.as_mut() {
+            d3d9.edr_poll_countdown = 0;
+        }
         if state.layer_props.drawable_width.to_bits() == w.to_bits()
             && state.layer_props.drawable_height.to_bits() == h.to_bits()
         {
@@ -807,7 +860,7 @@ impl Presenter {
         // SAFETY: the drawable or null.
         let texture = unsafe { MetalDrawable_texture(drawable.as_ref().map_or(0, Obj::handle)) };
         if texture == 0 || backbuffer == 0 {
-            return drawable;
+            return None;
         }
         // SAFETY: `texture` is a live drawable texture (checked non-zero above).
         let tex_w = unsafe { MTLTexture_width(texture) };
@@ -888,6 +941,9 @@ impl Presenter {
         };
         let pipeline = self.d3d9_pso(variant, drawable_fmt);
         let mut info = render_pass(texture);
+        if pipeline.is_none() {
+            info.colors[0].load_action = WMT_LOAD_ACTION_CLEAR;
+        }
         // SAFETY: a live command buffer (the caller's promise); `info` is alive for the call.
         let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut info) };
         wait(encoder);
@@ -1005,17 +1061,38 @@ impl Presenter {
                 _ => None,
             };
             // SAFETY: the last error a call wrote, +1, or null.
-            drop(unsafe { Obj::adopt(error) });
+            let err_obj = unsafe { Obj::adopt(error) };
+            if pso.is_none() {
+                let detail = match (vs.as_ref(), fs.as_ref(), err_obj.as_ref()) {
+                    (None, _, _) => "missing vertex function vs_present_quad".to_owned(),
+                    (_, None, _) => format!(
+                        "missing fragment function {}",
+                        variant.entry_point().to_string_lossy()
+                    ),
+                    (Some(_), Some(_), Some(err)) => crate::library::description(err),
+                    (Some(_), Some(_), None) => "unknown Metal error".to_owned(),
+                };
+                crate::log::err(&format!(
+                    "d3d9 presenter: failed to create pipeline {variant:?} (format={format:#x}): {detail}"
+                ));
+            }
+            drop(err_obj);
             pso
         };
         let mut state = self.state();
-        if let Some(d3d9) = state.d3d9.as_mut() {
-            let kept = d3d9.psos.entry(key).or_insert(built).clone();
-            drop(state);
-            return kept;
-        }
+        let (kept, discarded) = if let Some(d3d9) = state.d3d9.as_mut() {
+            if let Some(existing) = d3d9.psos.get(&key) {
+                (existing.clone(), built)
+            } else {
+                d3d9.psos.insert(key, built.clone());
+                (built, None)
+            }
+        } else {
+            (built, None)
+        };
         drop(state);
-        built
+        drop(discarded);
+        kept
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -1269,9 +1346,10 @@ struct State {
     d3d9: Option<D3d9State>,
 }
 
+const D3D9_EDR_POLL_INTERVAL: u32 = 32;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum D3d9LayerMode {
-    Unset,
     Sdr,
     Hdr,
 }
@@ -1339,6 +1417,8 @@ struct D3d9State {
     hdr_enable: bool,
     mode: D3d9LayerMode,
     display_sync: bool,
+    edr_poll_countdown: u32,
+    last_edr: (f32, f32),
     psos: FxHashMap<(D3d9PresentVariant, u32), Option<Arc<Obj>>>,
 }
 

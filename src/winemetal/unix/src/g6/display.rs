@@ -217,15 +217,17 @@ pub unsafe extern "C-unwind" fn layer_edr_value(args: *mut c_void) -> i32 {
     let Some(layer) = (unsafe { obj::<CAMetalLayer>(p.handle) }) else {
         return STATUS_SUCCESS;
     };
-    let Some(screen) = layer_screen(layer) else {
-        return STATUS_SUCCESS;
-    };
-    value.maximum_edr_color_component_value = if layer.wantsExtendedDynamicRangeContent() {
-        f64_to_f32(screen.max_edr())
-    } else {
-        1.0
-    };
-    value.maximum_potential_edr_color_component_value = f64_to_f32(screen.max_potential_edr());
+    autoreleasepool(|_| {
+        if let Some(screen) = layer_screen(layer) {
+            value.maximum_edr_color_component_value = if layer.wantsExtendedDynamicRangeContent() {
+                f64_to_f32(screen.max_edr())
+            } else {
+                1.0
+            };
+            value.maximum_potential_edr_color_component_value =
+                f64_to_f32(screen.max_potential_edr());
+        }
+    });
     STATUS_SUCCESS
 }
 

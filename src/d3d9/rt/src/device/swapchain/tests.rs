@@ -12,7 +12,7 @@ fn present_records_present_signals_commits_then_bounds() {
     let mut core = core_on_fakes(DEVICE);
     core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
     assert_eq!(core.device().queue().current_frame_seq(), 1);
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     assert_eq!(core.device().queue().current_frame_seq(), 2);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -27,7 +27,7 @@ fn present_closes_the_open_pass() {
     const DEVICE: u64 = 0xa4;
     let mut core = core_on_fakes(DEVICE);
     core.open_render_pass();
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(&calls, "MTLCommandBuffer_presentDrawable");
@@ -45,10 +45,10 @@ fn hidden_presents_never_hang() {
         let hidden = core.device().queue().max_latency() + 2;
         for _ in 0..hidden {
             core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
-            core.present(false, 0.0, true);
+            core.present(false, 0.0, 0.0, true);
         }
         assert_eq!(core.device().queue().current_frame_seq(), 1);
-        core.present(true, 0.0, true);
+        core.present(true, 0.0, 0.0, true);
         assert_eq!(core.device().queue().current_frame_seq(), 2);
         core.drain();
     });
@@ -57,7 +57,13 @@ fn hidden_presents_never_hang() {
 /// Each D3D9 presentation interval waits its number of refreshes and honours `max_fps`.
 #[test]
 fn present_after_follows_the_interval() {
-    use super::present_after;
+    use mtld3d_types::{
+        D3DPRESENT_INTERVAL_FOUR, D3DPRESENT_INTERVAL_IMMEDIATE, D3DPRESENT_INTERVAL_ONE,
+        D3DPRESENT_INTERVAL_TWO,
+    };
+
+    use super::{present_after, present_durations};
+
     assert!((present_after(0x8000_0000, 60, 0) - 0.0).abs() < f64::EPSILON);
     assert!((present_after(0x8000_0000, 60, 30) - 1.0 / 30.0).abs() < 1e-9);
     assert!((present_after(0, 60, 0) - 1.0 / 60.0).abs() < 1e-9);
@@ -69,7 +75,33 @@ fn present_after_follows_the_interval() {
     assert!((present_after(4, 60, 0) - 3.0 / 60.0).abs() < 1e-9);
     assert!((present_after(8, 60, 0) - 4.0 / 60.0).abs() < 1e-9);
     assert!((present_after(1, 0, 0) - 1.0 / 60.0).abs() < 1e-9);
-    assert!((present_after(2, 0, 0) - 2.0 / 60.0).abs() < 1e-9);
+    assert!((present_after(2, 0, 0) - 1.0 / 60.0).abs() < 1e-9);
+
+    let check = |interval, hz, max_fps, want_after: f64, want_cap: f64| {
+        let (after, cap_after) = present_durations(interval, hz, max_fps);
+        assert!(
+            (after - want_after).abs() < 1e-9,
+            "after mismatch for ({interval:#x}, {hz}, {max_fps}): {after} != {want_after}"
+        );
+        assert!(
+            (cap_after - want_cap).abs() < 1e-9,
+            "cap_after mismatch for ({interval:#x}, {hz}, {max_fps}): {cap_after} != {want_cap}"
+        );
+    };
+    check(D3DPRESENT_INTERVAL_IMMEDIATE, 60, 0, 0.0, 0.0);
+    check(
+        D3DPRESENT_INTERVAL_IMMEDIATE,
+        60,
+        30,
+        1.0 / 30.0,
+        1.0 / 30.0,
+    );
+    check(D3DPRESENT_INTERVAL_ONE, 60, 0, 1.0 / 60.0, 0.0);
+    check(D3DPRESENT_INTERVAL_ONE, 60, 30, 1.0 / 30.0, 1.0 / 30.0);
+    check(D3DPRESENT_INTERVAL_TWO, 60, 0, 1.0 / 30.0, 1.0 / 30.0);
+    check(D3DPRESENT_INTERVAL_TWO, 0, 0, 1.0 / 60.0, 0.0);
+    check(D3DPRESENT_INTERVAL_FOUR, 60, 0, 1.0 / 15.0, 1.0 / 15.0);
+    check(D3DPRESENT_INTERVAL_FOUR, 60, 10, 1.0 / 10.0, 1.0 / 10.0);
 }
 
 /// A core device on the made-up handle `handle` with a 64x32 back buffer of `samples`.
@@ -131,12 +163,12 @@ fn a_multisampled_back_buffer_presents_resolved() {
         ..key(0xf)
     };
     assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
     assert_eq!(drawn, 1, "folded into the draw's pass: {calls:#?}");
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
@@ -153,7 +185,7 @@ fn a_single_sample_back_buffer_is_as_before() {
     assert_eq!(made.len(), 1, "{made:?}");
     let binds = ff_binds();
     assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(targets(&calls)[0].0, made[0], "{calls:#?}");
@@ -193,7 +225,7 @@ fn a_multisampled_back_buffer_is_read_resolved() {
         &format!("    copy_to_buffer {presented} level=0 slice=0 size=2x1 bytes_per_row=8"),
     );
     assert!(resolved < copy, "{calls:#?}");
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
@@ -418,12 +450,12 @@ fn a_multisampled_back_buffer_write_stretches_into_companion() {
     let full_bytes = vec![0x33_u8; 64 * 4 * 32];
     assert!(core.write_presented(DirtyRect::full(64, 32), &full_bytes, 64 * 4));
     assert!(core.textures.is_empty());
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
     assert_eq!(drawn, 1, "resolve folded into stretch pass: {calls:#?}");
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
@@ -437,7 +469,7 @@ fn back_buffer_writes_keep_their_order_around_a_present() {
     let mut core = core_with_samples(DEVICE, 1);
     let bytes = vec![0_u8; 64 * 4 * 32];
     assert!(core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     assert!(core.write_presented(DirtyRect::full(64, 32), &bytes, 64 * 4));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -554,7 +586,7 @@ fn a_resized_back_buffer_is_drawn_and_presented() {
             Some((u32::from(width), u32::from(height)))
         );
         assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
-        core.present(true, 0.0, true);
+        core.present(true, 0.0, 0.0, true);
         core.drain();
         let calls = dxmt_fakes::take_calls(DEVICE);
         assert_eq!(
@@ -590,7 +622,7 @@ fn a_resize_changes_the_sample_count_both_ways() {
         ..key(0xf)
     };
     assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let drawn = assert_resolved_then_presented(&calls, &companion, &presented);
@@ -606,7 +638,7 @@ fn a_resize_changes_the_sample_count_both_ways() {
     assert!(old.upgrade().is_none(), "the companion is held");
     assert_eq!(core.target_samples(), 1);
     assert_eq!(core.draw(&key(0xf), &triangle(&binds)), Ok(()));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_eq!(targets(&calls)[0].0, made[0], "{calls:#?}");
@@ -641,7 +673,7 @@ fn a_resize_without_a_window_makes_the_back_buffer() {
         ..key(0xf)
     };
     assert_eq!(core.draw(&four, &triangle(&binds)), Ok(()));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(&calls, "MTLCommandBuffer_commit");
@@ -692,13 +724,13 @@ fn a_retarget_keeps_the_back_buffer_and_makes_a_presenter() {
         "MetalLayer_setProps format=80 size=64x32 display_sync=1",
     );
     assert!(commit < set_props, "{calls:#?}");
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_presented_at(&calls, &back_buffer, 64, 32);
     assert!(!core.retarget(0));
     core.clear(0, [0.0, 1.0, 0.0, 1.0], false);
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(&calls, "MTLCommandBuffer_commit");
@@ -709,7 +741,7 @@ fn a_retarget_keeps_the_back_buffer_and_makes_a_presenter() {
         "{calls:#?}"
     );
     assert!(core.retarget(3));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     assert_presented_at(&calls, &back_buffer, 64, 32);
@@ -840,9 +872,9 @@ fn inline_gamma_binds_buffer_1_and_survives_retarget() {
     lut2[0] = 200;
 
     core.set_gamma_ramp(Some(lut1));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.set_gamma_ramp(Some(lut2));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
 
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -861,7 +893,7 @@ fn inline_gamma_binds_buffer_1_and_survives_retarget() {
     // Retarget keeps the active gamma ramp.
     assert!(core.retarget(2));
     let _ = dxmt_fakes::take_calls(DEVICE);
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let retarget_calls = dxmt_fakes::take_calls(DEVICE);
     assert!(
@@ -871,7 +903,7 @@ fn inline_gamma_binds_buffer_1_and_survives_retarget() {
 
     // Clearing the ramp stops binding buffer(1).
     core.set_gamma_ramp(None);
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let cleared_calls = dxmt_fakes::take_calls(DEVICE);
     assert!(
@@ -909,7 +941,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
         }),
     );
     dxmt_fakes::set_drawable_format(DEVICE, Some(WMT_PIXEL_FORMAT_RGBA16_FLOAT));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let step1 = dxmt_fakes::take_calls(DEVICE);
     let set_props = at(
@@ -933,7 +965,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
             maximum_potential_edr_color_component_value: 2.0,
         }),
     );
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let step2 = dxmt_fakes::take_calls(DEVICE);
     assert!(
@@ -964,7 +996,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
         }),
     );
     dxmt_fakes::set_drawable_format(DEVICE, Some(WMT_PIXEL_FORMAT_BGRA8_UNORM));
-    core.present(true, 0.0, true);
+    core.present(true, 0.0, 0.0, true);
     core.drain();
     let step3 = dxmt_fakes::take_calls(DEVICE);
     let set_cs = at(&step3, "MetalLayer_setColorSpace 0");
@@ -986,7 +1018,7 @@ fn present_after_and_display_sync_reach_layer_and_cmdbuf() {
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
 
-    core.present(true, 1.0 / 30.0, false);
+    core.present(true, 1.0 / 30.0, 0.0, false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     at(
@@ -999,4 +1031,49 @@ fn present_after_and_display_sync_reach_layer_and_cmdbuf() {
             .any(|c| c.starts_with("MTLCommandBuffer_presentDrawableAfterMinimumDuration after=")),
         "{calls:#?}"
     );
+}
+
+#[test]
+fn next_paced_deadline_keeps_steady_cadence_without_drift_or_burst() {
+    use std::time::{Duration, Instant};
+
+    use super::next_paced_deadline;
+
+    let start = Instant::now();
+    let period = Duration::from_millis(16);
+    assert_eq!(next_paced_deadline(None, start, period), start);
+
+    let d1 = start + period;
+    assert_eq!(
+        next_paced_deadline(Some(start), start + Duration::from_millis(2), period),
+        d1
+    );
+
+    let d2 = d1 + period;
+    assert_eq!(
+        next_paced_deadline(Some(d1), d1 + Duration::from_millis(3), period),
+        d2
+    );
+
+    let slow = d2 + Duration::from_millis(40);
+    assert_eq!(next_paced_deadline(Some(d2), slow, period), slow);
+}
+
+#[test]
+fn cpu_pacing_holds_cap_across_presents() {
+    use std::time::{Duration, Instant};
+
+    const DEVICE: u64 = 0x489;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let start = Instant::now();
+    for _ in 0..3 {
+        core.present(true, 0.015, 0.015, false);
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(25),
+        "3 paced presents with cap_after=0.015s took {elapsed:?}"
+    );
+    core.drain();
 }
