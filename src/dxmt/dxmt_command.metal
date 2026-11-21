@@ -20,6 +20,9 @@
 #include <metal_common>
 #include <metal_texture>
 #include <metal_math>
+#include <metal_integer>
+#include <metal_matrix>
+#include <metal_geometric>
 #include "dxmt_command_constants.hpp"
 
 using namespace metal;
@@ -370,6 +373,167 @@ float3 to_srgb(float3 linear) {
   else if (present_with_hdr_metadata)
     output_rgb = output_rgb / 80;
   return float4(output_rgb, output.w);
+}
+
+struct D3D9HdrUniforms {
+  float l_hdr_nits;
+  float p_hdr;
+  float log2_p_hdr;
+  float inv_p_minus_one;
+};
+
+constant float L_SDR = 100.0f;
+constant float P_SDR = 5.4395284707f;
+constant float LOG_P_SDR = 1.6937747f;
+
+inline float3 apply_gamma_ramp(float3 encoded, constant ushort4* lut) {
+  float3 x = clamp(encoded, 0.0f, 1.0f) * 255.0f;
+  float3 lo = floor(x);
+  float3 frac = x - lo;
+  uint3 i0 = uint3(lo);
+  uint3 i1 = min(i0 + 1u, uint3(255u));
+  float3 a = float3(lut[i0.x].r, lut[i0.y].g, lut[i0.z].b);
+  float3 b = float3(lut[i1.x].r, lut[i1.y].g, lut[i1.z].b);
+  return mix(a, b, frac) * (1.0f / 65535.0f);
+}
+
+inline float3 srgb_eotf(float3 encoded) {
+  return select(
+      pow((encoded + 0.055f) / 1.055f, float3(2.4f)),
+      encoded / 12.92f,
+      encoded <= float3(0.04045f)
+  );
+}
+
+constant float3x3 M_BT709_TO_LMS = float3x3(
+    float3(0.2958197875977f, 0.1562652587891f, 0.0351760864258f),
+    float3(0.6230921020508f, 0.7272338867188f, 0.1564789062500f),
+    float3(0.0810847778320f, 0.1164960937500f, 0.8083459472656f)
+);
+
+constant float3x3 M_LMS_TO_BT709 = float3x3(
+    float3( 6.1729507446289f, -1.3236293334961f, -0.0118084289551f),
+    float3(-5.3198394775391f,  2.5602416992188f, -0.2641143798828f),
+    float3( 0.1465606689453f, -0.2363464355469f,  1.2761764526367f)
+);
+
+constant float3x3 M_LMS_PQ_TO_ICTCP = float3x3(
+    float3(0.5f,  1.61370003f,  4.37806224f),
+    float3(0.5f, -3.32339620f, -4.24553966f),
+    float3(0.0f,  1.70969617f, -0.13252264f)
+);
+
+constant float3x3 M_ICTCP_TO_LMS_PQ = float3x3(
+    float3(1.0f, 1.0f, 1.0f),
+    float3(0.00860903f, -0.00860903f,  0.56003270f),
+    float3(0.11102963f, -0.11102963f, -0.32062717f)
+);
+
+inline float3 pq_oetf(float3 nits) {
+  constexpr float M1 = 2610.0f / 16384.0f;
+  constexpr float M2 = 2523.0f / 4096.0f * 128.0f;
+  constexpr float C1 = 3424.0f / 4096.0f;
+  constexpr float C2 = 2413.0f / 4096.0f * 32.0f;
+  constexpr float C3 = 2392.0f / 4096.0f * 32.0f;
+  float3 y = pow(max(nits, float3(0.0f)) / 10000.0f, float3(M1));
+  return pow((float3(C1) + C2 * y) / (float3(1.0f) + C3 * y), float3(M2));
+}
+
+inline float3 pq_eotf(float3 pq) {
+  constexpr float M1 = 2610.0f / 16384.0f;
+  constexpr float M2 = 2523.0f / 4096.0f * 128.0f;
+  constexpr float C1 = 3424.0f / 4096.0f;
+  constexpr float C2 = 2413.0f / 4096.0f * 32.0f;
+  constexpr float C3 = 2392.0f / 4096.0f * 32.0f;
+  float3 e = pow(max(pq, float3(0.0f)), float3(1.0f / M2));
+  float3 num = max(e - float3(C1), float3(0.0f));
+  float3 den = max(float3(C2) - C3 * e, float3(1e-20f));
+  return 10000.0f * pow(num / den, float3(1.0f / M1));
+}
+
+inline float3 bt2446_ictcp(float3 lin, constant D3D9HdrUniforms& u) {
+  float y_sdr = max(dot(lin, float3(0.2126f, 0.7152f, 0.0722f)), 1e-20f);
+  float yp_sdr = pow(y_sdr, 1.0f / 2.4f);
+  float yp_c = log((yp_sdr * (P_SDR - 1.0f)) + 1.0f) / LOG_P_SDR;
+  float yp_0 = yp_c / 1.0770f;
+  float yp_1 = (-2.7811f + sqrt(4.83307641f - 4.604f * yp_c)) / -2.302f;
+  float yp_2 = (yp_c - 0.5f) / 0.5f;
+  float yp_p = yp_0 <= 0.7399f ? yp_0
+             : (yp_2 >= 0.9909f ? yp_2 : yp_1);
+  float yp_hdr = (exp2(yp_p * u.log2_p_hdr) - 1.0f) * u.inv_p_minus_one;
+  float y_hdr_linear_nits = pow(yp_hdr, 2.4f) * u.l_hdr_nits;
+
+  float3 lms_nits = M_BT709_TO_LMS * (lin * L_SDR);
+  float3 lms_pq = pq_oetf(lms_nits);
+  float3 ictcp_in = M_LMS_PQ_TO_ICTCP * lms_pq;
+
+  float i_hdr = pq_oetf(float3(y_hdr_linear_nits)).x;
+  float i_ratio = i_hdr / max(ictcp_in.x, 1e-6f);
+  float3 ictcp_out = float3(i_hdr, ictcp_in.y * i_ratio, ictcp_in.z * i_ratio);
+  float3 lms_pq_out = M_ICTCP_TO_LMS_PQ * ictcp_out;
+  float3 lms_nits_out = pq_eotf(lms_pq_out);
+  float3 rgb_nits_out = M_LMS_TO_BT709 * lms_nits_out;
+
+  return max(rgb_nits_out, float3(0.0f)) / L_SDR;
+}
+
+[[fragment]] float4 fs_present_d3d9_sdr(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  return source.sample(s, input.uv);
+}
+
+[[fragment]] float4 fs_present_d3d9_sdr_gamma(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]],
+  constant ushort4* gamma_lut [[buffer(1)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  float4 sample = source.sample(s, input.uv);
+  return float4(apply_gamma_ramp(sample.rgb, gamma_lut), sample.a);
+}
+
+[[fragment]] float4 fs_present_d3d9_hdr_passthrough(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  float4 sample = source.sample(s, input.uv);
+  return float4(srgb_eotf(sample.rgb), sample.a);
+}
+
+[[fragment]] float4 fs_present_d3d9_hdr_passthrough_gamma(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]],
+  constant ushort4* gamma_lut [[buffer(1)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  float4 sample = source.sample(s, input.uv);
+  return float4(srgb_eotf(apply_gamma_ramp(sample.rgb, gamma_lut)), sample.a);
+}
+
+[[fragment]] float4 fs_present_d3d9_hdr_bt2446(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]],
+  constant D3D9HdrUniforms& u [[buffer(0)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  float4 sample = source.sample(s, input.uv);
+  return float4(bt2446_ictcp(srgb_eotf(sample.rgb), u), sample.a);
+}
+
+[[fragment]] float4 fs_present_d3d9_hdr_bt2446_gamma(
+  present_data input [[stage_in]],
+  texture2d<float> source [[texture(0)]],
+  constant D3D9HdrUniforms& u [[buffer(0)]],
+  constant ushort4* gamma_lut [[buffer(1)]]
+) {
+  constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+  float4 sample = source.sample(s, input.uv);
+  float3 ramped = apply_gamma_ramp(sample.rgb, gamma_lut);
+  return float4(bt2446_ictcp(srgb_eotf(ramped), u), sample.a);
 }
 
 struct DXMTDispatchArguments {

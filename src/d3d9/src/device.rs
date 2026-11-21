@@ -2279,7 +2279,7 @@ impl DeviceInner {
                 );
             }
             if let Some(core) = self.core.as_deref_mut() {
-                let _ = core_arms::present(core, &self.present_params);
+                let _ = core_arms::present(core, &self.present_params, &self.config);
             }
             return self
                 .encoder_status()
@@ -4262,11 +4262,11 @@ impl DeviceInner {
             if apply {
                 mtld3d_shared::log_once_info!(
                     target: crate::LOG_TARGET,
-                    "d3d9 core: the gamma ramp is applied by the presenter of a fullscreen device; \
-                     each change of it waits for the queued frames"
+                    "d3d9 core: the gamma ramp is applied inline by the presenter of a fullscreen \
+                     device"
                 );
             }
-            core.set_gamma_ramp(apply.then_some(&*self.gamma_ramp));
+            core.set_gamma_ramp(apply.then(|| mtld3d_core::gamma::to_lut(&self.gamma_ramp)));
             return;
         }
         if apply {

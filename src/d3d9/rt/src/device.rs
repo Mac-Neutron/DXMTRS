@@ -37,6 +37,8 @@ bitflags::bitflags! {
         const DISCARD_BACK_BUFFER = 1 << 2;
         /// One-shot log latch for the first skipped draw on this device.
         const LOGGED_SKIP = 1 << 3;
+        /// Enable HDR/EDR output when the display supports it (`color.hdr.enable`).
+        const HDR_ENABLE = 1 << 5;
     }
 }
 
@@ -250,8 +252,10 @@ pub struct CoreDevice {
     /// each draw pass and each triangle pass of the device's own starts with counting off; any
     /// bracket left open at the device's end is logged.
     open_brackets: Option<u32>,
-    /// The presenter's gamma ramp, one for the device's life, and whether it applies.
-    gamma: swapchain::Gamma,
+    /// Inline 256-entry `ushort4` gamma lookup table applied by the presenter, or none.
+    gamma: Option<Arc<[u16; 1024]>>,
+    /// Layer drawable size in pixels, preserved across `resize` and `retarget`.
+    drawable_size: (u32, u32),
 }
 
 impl CoreDevice {
@@ -365,7 +369,8 @@ impl CoreDevice {
             retained: retained::Retained::default(),
             retention_cap: 0,
             open_brackets: None,
-            gamma: swapchain::Gamma::default(),
+            gamma: None,
+            drawable_size: (0, 0),
         };
 
         if !prewarm_recipes.is_empty() {

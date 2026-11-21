@@ -158,15 +158,42 @@ pub fn clear(
 /// rect, window, region and flag it ignores, as mtld3d ignores them (DXMTRS C4c-6a). `pp` is the
 /// device's, so an additional swap chain presents the device's back buffer into the device window
 /// at the device's interval, as on mtld3d.
-pub fn present(core: &mut CoreDevice, pp: &D3DPRESENT_PARAMETERS) -> i32 {
+pub fn present(
+    core: &mut CoreDevice,
+    pp: &D3DPRESENT_PARAMETERS,
+    cfg: &mtld3d_core::config::Mtld3dConfig,
+) -> i32 {
     let window = pp.device_window as *mut c_void;
     let interval = pp.presentation_interval;
-    // A hidden or minimized window presents nothing (G4): its drawable would never come back.
-    // SAFETY: user32's query; any window handle, even a stale one, is a valid argument.
-    let visible = unsafe { IsWindowVisible(window) } != 0 && !dxmt_util::wsi::is_minimized(window);
-    let refresh = crate::direct3d9::current_adapter_display_mode().refresh_rate;
-    let after = d3d9_rt::device::present_after(interval, refresh);
-    core.present(visible, after);
+    // A hidden or minimized window presents nothing (G4): its drawable would never come back,
+    // unless `debug.presentOccluded` forces occluded presentation.
+    let visible = cfg.present_occluded
+        || (!window.is_null()
+            // SAFETY: user32's query; any window handle, even a stale one, is a valid argument.
+            && unsafe { IsWindowVisible(window) } != 0
+            && !dxmt_util::wsi::is_minimized(window));
+    if matches!(
+        mtld3d_core::present::display_sync_for(interval),
+        mtld3d_core::present::DisplaySync::Fallthrough
+    ) {
+        mtld3d_shared::log_once_warn_by!(
+            target: crate::LOG_TARGET,
+            key: u64::from(interval),
+            "PresentationInterval={interval:#x} names no interval; falling through to display-rate \
+             vsync"
+        );
+    }
+    let refresh_hz = crate::direct3d9::reported_display_mode(pp).refresh_rate;
+    if mtld3d_core::present::interval_divisor(interval) > 1 && refresh_hz == 0 {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "PresentationInterval={interval:#x}: the reported display mode carries no refresh rate \
+             to divide; pacing at display-rate vsync"
+        );
+    }
+    let pacing = mtld3d_core::present::layer_pacing_for(interval, refresh_hz, cfg.present_max_fps);
+    let after = d3d9_rt::device::present_after(interval, refresh_hz, cfg.present_max_fps);
+    core.present(visible, after, pacing.display_sync);
     D3D_OK
 }
 

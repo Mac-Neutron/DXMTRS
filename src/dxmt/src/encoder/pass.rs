@@ -25,7 +25,7 @@ use super::{ArgumentBuffer, Encoder, Record, Records, place, stage};
 use crate::{
     deptrack::{Access, BarrierState, FenceSet},
     format,
-    presenter::{DXMTPresentMetadata, Presenter},
+    presenter::{D3d9PresentArgs, DXMTPresentMetadata, Presenter},
     resource::{Texture, TextureAllocation, TextureViewKey},
     scaler::Scaler,
 };
@@ -419,6 +419,36 @@ impl Encoder {
                 presenter,
                 after,
                 metadata,
+                d3d9: None,
+            }),
+            None,
+        );
+        let backbuffer = self.whole::<false>(texture);
+        if let Some(PassKind::Present(present)) = self.current_kind() {
+            present.backbuffer = backbuffer;
+        }
+        self.end_pass();
+    }
+
+    /// Presents `texture` through `presenter` with D3D9 per-frame gamma and EDR state.
+    pub fn present_d3d9(
+        &mut self,
+        texture: &Texture,
+        presenter: Arc<Presenter>,
+        after: f64,
+        args: D3d9PresentArgs,
+    ) {
+        self.begin(
+            PassKind::Present(Present {
+                backbuffer: 0,
+                presenter,
+                after,
+                metadata: DXMTPresentMetadata {
+                    edr_scale: 1.0,
+                    max_content_luminance: 10000.0,
+                    max_display_luminance: 100.0,
+                },
+                d3d9: Some(args),
             }),
             None,
         );
@@ -733,6 +763,7 @@ pub(super) struct Present {
     pub(super) presenter: Arc<Presenter>,
     pub(super) after: f64,
     pub(super) metadata: DXMTPresentMetadata,
+    pub(super) d3d9: Option<D3d9PresentArgs>,
 }
 
 pub(super) struct SpatialUpscale {

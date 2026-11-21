@@ -33,20 +33,22 @@ use dxmt_util::{
     float_cast::{f32_to_u32, f64_to_f32, u32_to_f32, u64_to_f64},
     sync::lock,
 };
+use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLBlitCommandEncoder_encodeCommands, MTLCommandBuffer_blitCommandEncoder,
     MTLCommandBuffer_renderCommandEncoder, MTLCommandEncoder_endEncoding,
     MTLDevice_newRenderPipelineState, MTLDevice_newTexture, MTLLibrary_newFunction,
     MTLLibrary_newFunctionWithConstants, MTLRenderCommandEncoder_encodeCommands, MTLTexture_height,
     MTLTexture_pixelFormat, MTLTexture_replaceRegion, MTLTexture_width, MetalDrawable_texture,
-    MetalLayer_getProps, MetalLayer_nextDrawable, MetalLayer_setColorSpace, MetalLayer_setProps,
-    Obj, Pool, WMTQueryDisplaySettingForLayer,
+    MetalLayer_getEDRValue, MetalLayer_getProps, MetalLayer_nextDrawable, MetalLayer_setColorSpace,
+    MetalLayer_setProps, Obj, Pool, WMTQueryDisplaySettingForLayer,
     wire::{
         MemPtr, WMT_BLEND_FACTOR_ONE, WMT_BLEND_FACTOR_ZERO, WMT_BLEND_OPERATION_ADD,
         WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE, WMT_COLOR_SPACE_HDR_PQ,
         WMT_COLOR_SPACE_HDR_SC_RGB, WMT_COLOR_SPACE_SRGB, WMT_COLOR_WRITE_MASK_ALL,
         WMT_DATA_TYPE_BOOL, WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_DONT_CARE,
-        WMT_LOGIC_OPERATION_CLEAR, WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_RGBA32_FLOAT,
+        WMT_LOGIC_OPERATION_CLEAR, WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_INVALID,
+        WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMT_PIXEL_FORMAT_RGBA32_FLOAT,
         WMT_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED, WMT_PRIMITIVE_TYPE_TRIANGLE,
         WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
         WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE, WMT_RENDER_COMMAND_SET_PSO,
@@ -63,6 +65,17 @@ use winemetal_sys::{
 };
 
 use crate::format::forget_srgb;
+
+/// Per-frame D3D9 presentation parameters carried into the command encoder.
+///
+/// Snapshot on the API thread so queued frames never race with subsequent ramp or EDR updates.
+#[derive(Clone)]
+pub struct D3d9PresentArgs {
+    /// Packed 256-entry `ushort4` (`[R, G, B, 0xffff]`) gamma lookup table, when active.
+    pub gamma: Option<Arc<[u16; 1024]>>,
+    /// Effective EDR headroom multiplier (`> 1.0` enables BT.2446-A; `1.0` selects passthrough).
+    pub peak_edr: f32,
+}
 
 /// `DXMTPresentMetadata`: what the present pass's fragment function reads as its bytes.
 #[derive(Clone, Copy)]
@@ -210,11 +223,184 @@ impl Presenter {
                 fast_blit: false,
                 pipelines_valid: false,
                 frame_requested: 0,
+                d3d9: None,
             }),
             gamma_lut_texture,
             presented: Mutex::new(0),
             frame_done: Condvar::new(),
         }
+    }
+
+    /// Constructs a D3D9 presenter on `desc.layer` with initial `width` x `height` drawable size.
+    ///
+    /// Skips allocating the unused 1024x1 `gamma_lut_texture` and leaves layer properties ready
+    /// for [`Presenter::prepare_d3d9_present`] and [`Presenter::set_d3d9_drawable_size`].
+    ///
+    /// # Safety
+    ///
+    /// `desc`'s device, layer and library are live and outlive the presenter.
+    #[must_use]
+    pub unsafe fn new_d3d9(
+        desc: &PresenterDesc,
+        width: u32,
+        height: u32,
+        hdr_enable: bool,
+    ) -> Arc<Self> {
+        let mut layer_props = WMTLayerProps {
+            device: 0,
+            contents_scale: 0.0,
+            drawable_width: 0.0,
+            drawable_height: 0.0,
+            opaque: 0,
+            display_sync_enabled: 0,
+            framebuffer_only: 0,
+            pixel_format: WMT_PIXEL_FORMAT_INVALID,
+        };
+        // SAFETY: a live layer (the caller's promise); the props are written for the call.
+        unsafe { MetalLayer_getProps(desc.layer, &raw mut layer_props) };
+        layer_props.device = desc.device;
+        layer_props.opaque = 1;
+        layer_props.display_sync_enabled = 1;
+        layer_props.framebuffer_only = 0;
+        layer_props.contents_scale *= f64::from(desc.scale_factor);
+        layer_props.drawable_width = f64::from(width);
+        layer_props.drawable_height = f64::from(height);
+        layer_props.pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+        // SAFETY: a live layer (the caller's promise); the props are alive for the call.
+        unsafe { MetalLayer_setProps(desc.layer, &raw const layer_props) };
+        // SAFETY: a live layer (the caller's promise).
+        unsafe { MetalLayer_setColorSpace(desc.layer, WMT_COLOR_SPACE_SRGB) };
+        let prefetcher = if should_prefetch_drawables() {
+            DrawablePrefetcher::new(desc.layer)
+        } else {
+            None
+        };
+        Arc::new(Self {
+            prefetcher,
+            device: desc.device,
+            layer: desc.layer,
+            library: desc.library,
+            state: Mutex::new(State {
+                present_scale: None,
+                present_blit: None,
+                layer_props,
+                sample_count: desc.sample_count,
+                colorspace: WMT_COLOR_SPACE_SRGB,
+                hdr_metadata: None,
+                source_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+                display_setting_version: 0,
+                display_colorspace: WMT_COLOR_SPACE_SRGB,
+                display_hdr_metadata: NO_HDR_METADATA,
+                display_edr_value: WMTEDRValue {
+                    maximum_edr_color_component_value: 0.0,
+                    maximum_potential_edr_color_component_value: 1.0,
+                },
+                gamma_version: 0,
+                fast_blit: false,
+                pipelines_valid: false,
+                frame_requested: 0,
+                d3d9: Some(D3d9State {
+                    hdr_enable,
+                    mode: D3d9LayerMode::Unset,
+                    display_sync: true,
+                    psos: FxHashMap::default(),
+                }),
+            }),
+            gamma_lut_texture: None,
+            presented: Mutex::new(0),
+            frame_done: Condvar::new(),
+        })
+    }
+
+    /// Synchronizes D3D9 layer EDR mode, drawable size, and vsync on the API thread.
+    ///
+    /// Queries `MetalLayer_getEDRValue`, updates `CAMetalLayer` only when mode, size, or
+    /// `display_sync` changes (never calling `wait_presented`), and returns the effective peak
+    /// EDR multiplier for this frame (`> 1.0` for BT.2446-A, `1.0` otherwise).
+    pub fn prepare_d3d9_present(&self, width: u32, height: u32, display_sync: bool) -> f32 {
+        let mut edr = WMTEDRValue {
+            maximum_edr_color_component_value: 1.0,
+            maximum_potential_edr_color_component_value: 1.0,
+        };
+        // SAFETY: `self.layer` is live for the presenter's lifetime; `edr` is writable.
+        unsafe { MetalLayer_getEDRValue(self.layer, &raw mut edr) };
+        let pot = edr.maximum_potential_edr_color_component_value;
+        let cur = edr.maximum_edr_color_component_value;
+        let w = f64::from(width);
+        let h = f64::from(height);
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(d3d9) = state.d3d9.as_mut() else {
+            return 1.0;
+        };
+        let want_hdr = d3d9.hdr_enable && pot > 1.0 && pot.is_finite();
+        let want_mode = if want_hdr {
+            D3d9LayerMode::Hdr
+        } else {
+            D3d9LayerMode::Sdr
+        };
+        let mode_changed = d3d9.mode != want_mode;
+        let props_changed = state.layer_props.drawable_width.to_bits() != w.to_bits()
+            || state.layer_props.drawable_height.to_bits() != h.to_bits()
+            || d3d9.display_sync != display_sync;
+        if mode_changed || props_changed {
+            d3d9.mode = want_mode;
+            d3d9.display_sync = display_sync;
+            state.layer_props.drawable_width = w;
+            state.layer_props.drawable_height = h;
+            state.layer_props.display_sync_enabled = u8::from(display_sync);
+            state.layer_props.pixel_format = if want_hdr {
+                WMT_PIXEL_FORMAT_RGBA16_FLOAT
+            } else {
+                WMT_PIXEL_FORMAT_BGRA8_UNORM
+            };
+            state.colorspace = if want_hdr {
+                WMT_COLOR_SPACE_HDR_SC_RGB
+            } else {
+                WMT_COLOR_SPACE_SRGB
+            };
+            if mode_changed && want_hdr {
+                // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
+                unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+                // SAFETY: a live layer (`new_d3d9`'s promise).
+                unsafe { MetalLayer_setColorSpace(self.layer, WMT_COLOR_SPACE_HDR_SC_RGB) };
+            } else if mode_changed {
+                // SAFETY: a live layer (`new_d3d9`'s promise).
+                unsafe { MetalLayer_setColorSpace(self.layer, WMT_COLOR_SPACE_SRGB) };
+                // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
+                unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+            } else {
+                // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
+                unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+            }
+            drop(guard);
+            self.invalidate_drawable();
+        } else {
+            drop(guard);
+        }
+        if want_hdr && cur > 1.0 && cur.is_finite() {
+            cur
+        } else {
+            1.0
+        }
+    }
+
+    /// Updates the D3D9 layer's drawable size while preserving its current HDR or SDR mode.
+    pub fn set_d3d9_drawable_size(&self, width: u32, height: u32) {
+        let w = f64::from(width);
+        let h = f64::from(height);
+        let mut state = self.state();
+        if state.layer_props.drawable_width.to_bits() == w.to_bits()
+            && state.layer_props.drawable_height.to_bits() == h.to_bits()
+        {
+            return;
+        }
+        state.layer_props.drawable_width = w;
+        state.layer_props.drawable_height = h;
+        // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
+        unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+        drop(state);
+        self.invalidate_drawable();
     }
 
     /// The backbuffer's format, colour space, size and sample count (`changeLayerProperties`).
@@ -521,51 +707,17 @@ impl Presenter {
             return drawable;
         }
         if can_blit {
-            // Keep the fence callbacks on a render encoder, but make it a no-draw, no-store
-            // pass, and put the actual copy on a blit encoder.
-            let mut before = fence_pass(texture);
-            // SAFETY: a live command buffer; `before` is alive for the call.
-            let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut before) };
-            wait(encoder);
-            // SAFETY: the same encoder, ended once.
-            unsafe { MTLCommandEncoder_endEncoding(encoder) };
-
-            // SAFETY: `cmdbuf` is a live command buffer.
-            let blit_encoder = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf) };
-            let copy = WmtcmdBlitCopyFromTextureToTexture {
-                r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
-                reserved: [0; 3],
-                next: MemPtr::from_ptr(null::<u8>()),
-                src: backbuffer,
-                src_slice: 0,
-                src_level: 0,
-                src_origin: WMTOrigin { x: 0, y: 0, z: 0 },
-                src_size: WMTSize {
-                    width: source_width,
-                    height: source_height,
-                    depth: 1,
-                },
-                dst: texture,
-                dst_slice: 0,
-                dst_level: 0,
-                dst_origin: WMTOrigin { x: 0, y: 0, z: 0 },
-            };
-            // SAFETY: `blit_encoder` is live and `copy` is a valid record head.
+            // SAFETY: the caller's promises for `cmdbuf` and `backbuffer`; `texture` is live.
             unsafe {
-                MTLBlitCommandEncoder_encodeCommands(
-                    blit_encoder,
-                    (&raw const copy).cast::<WmtcmdBase>(),
+                encode_blit_present(
+                    cmdbuf,
+                    backbuffer,
+                    texture,
+                    (source_width, source_height),
+                    wait,
+                    update,
                 );
             }
-            // SAFETY: the same encoder, ended once.
-            unsafe { MTLCommandEncoder_endEncoding(blit_encoder) };
-
-            let mut after = fence_pass(texture);
-            // SAFETY: a live command buffer; `after` is alive for the call.
-            let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut after) };
-            update(encoder);
-            // SAFETY: the same encoder, ended once.
-            unsafe { MTLCommandEncoder_endEncoding(encoder) };
             return drawable;
         }
         let mut info = render_pass(texture);
@@ -636,6 +788,234 @@ impl Presenter {
         // SAFETY: the same encoder, ended once.
         unsafe { MTLCommandEncoder_endEncoding(encoder) };
         drawable
+    }
+
+    /// Draws `backbuffer` to the layer's next drawable using D3D9 per-frame gamma and EDR state.
+    ///
+    /// # Safety
+    ///
+    /// `cmdbuf` and `backbuffer` are live.
+    pub unsafe fn encode_d3d9(
+        &self,
+        cmdbuf: u64,
+        backbuffer: u64,
+        args: &D3d9PresentArgs,
+        wait: impl FnOnce(u64),
+        update: impl FnOnce(u64),
+    ) -> Option<Obj> {
+        let drawable = self.acquire_drawable();
+        // SAFETY: the drawable or null.
+        let texture = unsafe { MetalDrawable_texture(drawable.as_ref().map_or(0, Obj::handle)) };
+        if texture == 0 || backbuffer == 0 {
+            return drawable;
+        }
+        // SAFETY: `texture` is a live drawable texture (checked non-zero above).
+        let tex_w = unsafe { MTLTexture_width(texture) };
+        // SAFETY: as above.
+        let tex_h = unsafe { MTLTexture_height(texture) };
+        let (layer_width, layer_height, layer_format, sample_count) = {
+            let state = self.state();
+            (
+                state.layer_props.drawable_width,
+                state.layer_props.drawable_height,
+                state.layer_props.pixel_format,
+                state.sample_count,
+            )
+        };
+        let (draw_width, draw_height) = if tex_w > 0 && tex_h > 0 {
+            u32::try_from(tex_w)
+                .ok()
+                .zip(u32::try_from(tex_h).ok())
+                .map_or((layer_width, layer_height), |(tw, th)| {
+                    (f64::from(tw), f64::from(th))
+                })
+        } else {
+            (layer_width, layer_height)
+        };
+        // SAFETY: `texture` is a live drawable texture (checked non-zero above).
+        let raw_fmt = unsafe { MTLTexture_pixelFormat(texture) };
+        let drawable_fmt = if raw_fmt == 0 { layer_format } else { raw_fmt };
+        // SAFETY: `backbuffer` is a live texture (the caller's promise).
+        let source_width = unsafe { MTLTexture_width(backbuffer) };
+        // SAFETY: as above.
+        let source_height = unsafe { MTLTexture_height(backbuffer) };
+        let can_blit = if args.gamma.is_none()
+            && sample_count <= 1
+            && drawable_fmt == WMT_PIXEL_FORMAT_BGRA8_UNORM
+            && source_width > 0
+            && source_height > 0
+            && same(source_width, draw_width)
+            && same(source_height, draw_height)
+        {
+            // SAFETY: `backbuffer` is a live texture (the caller's promise).
+            let source_format = unsafe { MTLTexture_pixelFormat(backbuffer) };
+            source_format == drawable_fmt
+        } else {
+            false
+        };
+        if can_blit {
+            // SAFETY: the caller's promises for `cmdbuf` and `backbuffer`; `texture` is live.
+            unsafe {
+                encode_blit_present(
+                    cmdbuf,
+                    backbuffer,
+                    texture,
+                    (source_width, source_height),
+                    wait,
+                    update,
+                );
+            }
+            return drawable;
+        }
+        let has_gamma = args.gamma.is_some();
+        let has_hdr_headroom = args.peak_edr > 1.0 && args.peak_edr.is_finite();
+        let variant = if drawable_fmt == WMT_PIXEL_FORMAT_RGBA16_FLOAT {
+            if has_hdr_headroom {
+                if has_gamma {
+                    D3d9PresentVariant::HdrBt2446Gamma
+                } else {
+                    D3d9PresentVariant::HdrBt2446
+                }
+            } else if has_gamma {
+                D3d9PresentVariant::HdrPassthroughGamma
+            } else {
+                D3d9PresentVariant::HdrPassthrough
+            }
+        } else if has_gamma {
+            D3d9PresentVariant::SdrGamma
+        } else {
+            D3d9PresentVariant::Sdr
+        };
+        let pipeline = self.d3d9_pso(variant, drawable_fmt);
+        let mut info = render_pass(texture);
+        // SAFETY: a live command buffer (the caller's promise); `info` is alive for the call.
+        let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut info) };
+        wait(encoder);
+        if let Some(pipeline) = pipeline.as_deref() {
+            let viewport = WMTViewport {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: draw_width,
+                height: draw_height,
+                znear: 0.0,
+                zfar: 1.0,
+            };
+            let uniforms = variant
+                .uses_hdr_uniforms()
+                .then(|| d3d9_hdr_uniforms(args.peak_edr));
+            let draw = WmtcmdRenderDraw {
+                r#type: WMT_RENDER_COMMAND_DRAW,
+                reserved: [0; 3],
+                next: MemPtr::from_ptr(null::<u8>()),
+                primitive_type: WMT_PRIMITIVE_TYPE_TRIANGLE,
+                vertex_start: 0,
+                vertex_count: 3,
+                instance_count: 1,
+                base_instance: 0,
+            };
+            let viewports = WmtcmdRenderSetviewports {
+                r#type: WMT_RENDER_COMMAND_SET_VIEWPORTS,
+                reserved: [0; 3],
+                next: MemPtr::from_ptr(from_ref(&draw)),
+                viewports: MemPtr::from_ptr(from_ref(&viewport)),
+                viewport_count: 1,
+            };
+            let pso = WmtcmdRenderSetpso {
+                r#type: WMT_RENDER_COMMAND_SET_PSO,
+                reserved: [0; 3],
+                next: MemPtr::from_ptr(from_ref(&viewports)),
+                pso: pipeline.handle(),
+            };
+            let mut head = from_ref(&pso).cast::<WmtcmdBase>();
+            let gamma_cmd = args
+                .gamma
+                .as_deref()
+                .filter(|_| variant.uses_gamma())
+                .map(|lut| WmtcmdRenderSetbytes {
+                    r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+                    reserved: [0; 3],
+                    next: MemPtr::from_ptr(head),
+                    bytes: MemPtr::from_ptr(lut.as_ptr()),
+                    length: 2048,
+                    index: 1,
+                });
+            if let Some(cmd) = &gamma_cmd {
+                head = from_ref(cmd).cast::<WmtcmdBase>();
+            }
+            let uniforms_cmd = uniforms.as_ref().map(|u| WmtcmdRenderSetbytes {
+                r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+                reserved: [0; 3],
+                next: MemPtr::from_ptr(head),
+                bytes: MemPtr::from_ptr(u),
+                length: 16,
+                index: 0,
+            });
+            if let Some(cmd) = &uniforms_cmd {
+                head = from_ref(cmd).cast::<WmtcmdBase>();
+            }
+            let source = WmtcmdRenderSettexture {
+                r#type: WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE,
+                reserved: [0; 3],
+                next: MemPtr::from_ptr(head),
+                texture: backbuffer,
+                index: 0,
+            };
+            // SAFETY: the encoder `renderCommandEncoder` answered; the records and what they point
+            // to are alive for the call.
+            unsafe {
+                MTLRenderCommandEncoder_encodeCommands(
+                    encoder,
+                    from_ref(&source).cast::<WmtcmdBase>(),
+                );
+            };
+        }
+        update(encoder);
+        // SAFETY: the same encoder, ended once.
+        unsafe { MTLCommandEncoder_endEncoding(encoder) };
+        drawable
+    }
+
+    fn d3d9_pso(&self, variant: D3d9PresentVariant, format: u32) -> Option<Arc<Obj>> {
+        let key = (variant, format);
+        {
+            let state = self.state();
+            if let Some(cached) = state.d3d9.as_ref().and_then(|d| d.psos.get(&key)) {
+                return cached.clone();
+            }
+        }
+        let built = {
+            let _pool = Pool::new();
+            let mut error = 0;
+            // SAFETY: a live library (`new_d3d9`'s promise); a NUL-terminated name.
+            let vs = unsafe { MTLLibrary_newFunction(self.library, c"vs_present_quad".as_ptr()) };
+            // SAFETY: `newFunction` answers +1 or null.
+            let vs = unsafe { Obj::adopt(vs) };
+            // SAFETY: a live library (`new_d3d9`'s promise); a NUL-terminated name.
+            let fs =
+                unsafe { MTLLibrary_newFunction(self.library, variant.entry_point().as_ptr()) };
+            // SAFETY: `newFunction` answers +1 or null.
+            let fs = unsafe { Obj::adopt(fs) };
+            let pso = match (vs.as_ref(), fs.as_ref()) {
+                (Some(vs), Some(fs)) => {
+                    let mut info = pipeline_info(format);
+                    info.vertex_function = vs.handle();
+                    info.fragment_function = fs.handle();
+                    self.pipeline(&info, &mut error)
+                }
+                _ => None,
+            };
+            // SAFETY: the last error a call wrote, +1, or null.
+            drop(unsafe { Obj::adopt(error) });
+            pso
+        };
+        let mut state = self.state();
+        if let Some(d3d9) = state.d3d9.as_mut() {
+            let kept = d3d9.psos.entry(key).or_insert(built).clone();
+            drop(state);
+            return kept;
+        }
+        drop(state);
+        built
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -885,6 +1265,138 @@ struct State {
     fast_blit: bool,
     pipelines_valid: bool,
     frame_requested: u64,
+    /// Opt-in D3D9 presentation state, `None` for D3D11/D3D12 presenters.
+    d3d9: Option<D3d9State>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum D3d9LayerMode {
+    Unset,
+    Sdr,
+    Hdr,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum D3d9PresentVariant {
+    Sdr,
+    SdrGamma,
+    HdrPassthrough,
+    HdrPassthroughGamma,
+    HdrBt2446,
+    HdrBt2446Gamma,
+}
+
+impl D3d9PresentVariant {
+    const fn entry_point(self) -> &'static core::ffi::CStr {
+        match self {
+            Self::Sdr => c"fs_present_d3d9_sdr",
+            Self::SdrGamma => c"fs_present_d3d9_sdr_gamma",
+            Self::HdrPassthrough => c"fs_present_d3d9_hdr_passthrough",
+            Self::HdrPassthroughGamma => c"fs_present_d3d9_hdr_passthrough_gamma",
+            Self::HdrBt2446 => c"fs_present_d3d9_hdr_bt2446",
+            Self::HdrBt2446Gamma => c"fs_present_d3d9_hdr_bt2446_gamma",
+        }
+    }
+
+    const fn uses_hdr_uniforms(self) -> bool {
+        matches!(self, Self::HdrBt2446 | Self::HdrBt2446Gamma)
+    }
+
+    const fn uses_gamma(self) -> bool {
+        matches!(
+            self,
+            Self::SdrGamma | Self::HdrPassthroughGamma | Self::HdrBt2446Gamma
+        )
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct D3D9HdrUniforms {
+    l_hdr_nits: f32,
+    p_hdr: f32,
+    log2_p_hdr: f32,
+    inv_p_minus_one: f32,
+}
+
+const _: () = assert!(size_of::<[u16; 1024]>() == 2048);
+const _: () = assert!(size_of::<D3D9HdrUniforms>() == 16);
+
+fn d3d9_hdr_uniforms(peak: f32) -> D3D9HdrUniforms {
+    let l_hdr_nits = peak * 100.0;
+    let p_hdr = 32.0_f32.mul_add((l_hdr_nits / 10000.0).powf(1.0 / 2.4), 1.0);
+    let log2_p_hdr = p_hdr.log2();
+    let inv_p_minus_one = 1.0 / (p_hdr - 1.0);
+    D3D9HdrUniforms {
+        l_hdr_nits,
+        p_hdr,
+        log2_p_hdr,
+        inv_p_minus_one,
+    }
+}
+
+struct D3d9State {
+    hdr_enable: bool,
+    mode: D3d9LayerMode,
+    display_sync: bool,
+    psos: FxHashMap<(D3d9PresentVariant, u32), Option<Arc<Obj>>>,
+}
+
+/// Encodes a direct blit present between `wait` and `update` fence passes.
+///
+/// # Safety
+///
+/// `cmdbuf`, `backbuffer`, and `texture` are live Metal objects.
+unsafe fn encode_blit_present(
+    cmdbuf: u64,
+    backbuffer: u64,
+    texture: u64,
+    size: (u64, u64),
+    wait: impl FnOnce(u64),
+    update: impl FnOnce(u64),
+) {
+    // Keep the fence callbacks on a render encoder, but make it a no-draw, no-store
+    // pass, and put the actual copy on a blit encoder.
+    let mut before = fence_pass(texture);
+    // SAFETY: a live command buffer; `before` is alive for the call.
+    let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut before) };
+    wait(encoder);
+    // SAFETY: the same encoder, ended once.
+    unsafe { MTLCommandEncoder_endEncoding(encoder) };
+
+    // SAFETY: `cmdbuf` is a live command buffer.
+    let blit_encoder = unsafe { MTLCommandBuffer_blitCommandEncoder(cmdbuf) };
+    let copy = WmtcmdBlitCopyFromTextureToTexture {
+        r#type: WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_TEXTURE,
+        reserved: [0; 3],
+        next: MemPtr::from_ptr(null::<u8>()),
+        src: backbuffer,
+        src_slice: 0,
+        src_level: 0,
+        src_origin: WMTOrigin { x: 0, y: 0, z: 0 },
+        src_size: WMTSize {
+            width: size.0,
+            height: size.1,
+            depth: 1,
+        },
+        dst: texture,
+        dst_slice: 0,
+        dst_level: 0,
+        dst_origin: WMTOrigin { x: 0, y: 0, z: 0 },
+    };
+    // SAFETY: `blit_encoder` is live and `copy` is a valid record head.
+    unsafe {
+        MTLBlitCommandEncoder_encodeCommands(blit_encoder, (&raw const copy).cast::<WmtcmdBase>());
+    }
+    // SAFETY: the same encoder, ended once.
+    unsafe { MTLCommandEncoder_endEncoding(blit_encoder) };
+
+    let mut after = fence_pass(texture);
+    // SAFETY: a live command buffer; `after` is alive for the call.
+    let encoder = unsafe { MTLCommandBuffer_renderCommandEncoder(cmdbuf, &raw mut after) };
+    update(encoder);
+    // SAFETY: the same encoder, ended once.
+    unsafe { MTLCommandEncoder_endEncoding(encoder) };
 }
 
 /// The layer format a state needs.

@@ -63,6 +63,9 @@ struct Fake {
     display: (u64, u64, WMTHDRMetadata, WMTEDRValue),
     layer: WMTLayerProps,
     source: (u64, u64),
+    drawable_pixel_format: Option<u32>,
+    drawable_size: Option<(u64, u64)>,
+    edr_override: Option<WMTEDRValue>,
 }
 
 impl Fake {
@@ -84,6 +87,9 @@ impl Fake {
             ),
             layer: layer_props(2560.0, 1440.0, 2.0),
             source: (0, 0),
+            drawable_pixel_format: None,
+            drawable_size: None,
+            edr_override: None,
         }
     }
 
@@ -395,6 +401,13 @@ extern "C-unwind" fn fake_replace_region(
 
 #[unsafe(export_name = "MTLTexture_pixelFormat")]
 extern "C-unwind" fn fake_pixel_format(texture: u64) -> u32 {
+    let drawable_fmt = fake().drawable_pixel_format;
+    if let Some(fmt) = drawable_fmt {
+        if texture == BACKBUFFER {
+            return WMT_PIXEL_FORMAT_BGRA8_UNORM;
+        }
+        return fmt;
+    }
     // The golden replay exercises the render path; different formats keep the blit fast path
     // out of it while still answering the query the presenter makes.
     u32::from(texture != BACKBUFFER)
@@ -402,20 +415,37 @@ extern "C-unwind" fn fake_pixel_format(texture: u64) -> u32 {
 
 #[unsafe(export_name = "MTLTexture_width")]
 extern "C-unwind" fn fake_width(texture: u64) -> u64 {
+    let f = fake();
     if texture == BACKBUFFER {
-        fake().source.0
+        f.source.0
     } else {
-        0
+        f.drawable_size.map_or(0, |s| s.0)
     }
 }
 
 #[unsafe(export_name = "MTLTexture_height")]
 extern "C-unwind" fn fake_height(texture: u64) -> u64 {
+    let f = fake();
     if texture == BACKBUFFER {
-        fake().source.1
+        f.source.1
     } else {
-        0
+        f.drawable_size.map_or(0, |s| s.1)
     }
+}
+
+#[unsafe(export_name = "MetalLayer_getEDRValue")]
+extern "C-unwind" fn fake_get_edr_value(layer: u64, value: *mut WMTEDRValue) {
+    let mut f = fake();
+    let edr = f.edr_override.unwrap_or(f.display.3);
+    // SAFETY: the presenter's out pointer, writable.
+    unsafe { value.write(edr) };
+    let line = format!(
+        "  MetalLayer_getEDRValue {} -> edr={}/{}",
+        f.name(layer),
+        g(f64::from(edr.maximum_edr_color_component_value)),
+        g(f64::from(edr.maximum_potential_edr_color_component_value)),
+    );
+    f.say(&line);
 }
 
 #[unsafe(export_name = "MTLLibrary_newFunction")]
@@ -1405,4 +1435,270 @@ fn golden_replays() {
         assert_eq!(g, w, "line {} of the golden", i + 1);
     }
     assert_eq!(got.len(), want.len());
+}
+
+fn new_d3d9_presenter(width: u32, height: u32, hdr_enable: bool) -> Arc<Presenter> {
+    let desc = PresenterDesc {
+        device: DEVICE,
+        layer: LAYER,
+        library: LIBRARY,
+        scale_factor: 1.0,
+        sample_count: 1,
+    };
+    // SAFETY: the fakes' objects, alive for the test.
+    unsafe { Presenter::new_d3d9(&desc, width, height, hdr_enable) }
+}
+
+#[test]
+fn d3d9_inline_gamma_never_stalls_or_rebuilds_pso() {
+    let _serial = serial();
+    reset();
+    fake().source = (1280, 720);
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+    let p = new_d3d9_presenter(1920, 1080, false);
+    assert!(
+        !take().contains("MTLDevice_newTexture"),
+        "D3D9 presenter skips unused gamma_lut_texture"
+    );
+
+    let peak1 = p.prepare_d3d9_present(1920, 1080, true);
+    assert!((peak1 - 1.0).abs() < f32::EPSILON);
+    let mut lut1 = [0_u16; 1024];
+    lut1[0] = 111;
+    let mut lut2 = [0_u16; 1024];
+    lut2[0] = 222;
+    let args1 = D3d9PresentArgs {
+        gamma: Some(Arc::new(lut1)),
+        peak_edr: peak1,
+    };
+    let args2 = D3d9PresentArgs {
+        gamma: Some(Arc::new(lut2)),
+        peak_edr: peak1,
+    };
+
+    // Encode two back-to-back frames with distinct ramps without calling frame_done.
+    // SAFETY: the fakes' objects.
+    let d1 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args1, |_| {}, |_| {}) };
+    let log1 = take();
+    assert_eq!(pipelines_built(&log1), 1, "{log1}");
+    assert!(
+        log1.contains("MTLLibrary_newFunction library \"fs_present_d3d9_sdr_gamma\""),
+        "{log1}"
+    );
+    assert!(
+        log1.contains("SetFragmentBytes length=2048 index=1 bytes=6f00"),
+        "{log1}"
+    );
+    assert!(
+        !log1
+            .lines()
+            .any(|line| line.contains("SetFragmentTexture") && line.contains("index=1")),
+        "gamma_lut_texture must never be bound at texture(1): {log1}"
+    );
+
+    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    // SAFETY: the fakes' objects.
+    let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args2, |_| {}, |_| {}) };
+    let log2 = take();
+    assert_eq!(
+        pipelines_built(&log2),
+        0,
+        "changing inline gamma must not rebuild PSO: {log2}"
+    );
+    assert!(
+        log2.contains("SetFragmentBytes length=2048 index=1 bytes=de00"),
+        "{log2}"
+    );
+    assert!(!log2.contains("MetalLayer_setProps"), "{log2}");
+    drop(d1);
+    drop(d2);
+}
+
+#[test]
+fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
+    let _serial = serial();
+    reset();
+    fake().source = (1920, 1080);
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 1.0,
+        maximum_potential_edr_color_component_value: 2.0,
+    });
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_RGBA16_FLOAT);
+    let p = new_d3d9_presenter(1920, 1080, true);
+    take();
+
+    // Step 1: potential > 1.0, current == 1.0 -> setProps(RGBA16Float) then setColorSpace(HDR_scRGB)
+    // and encode HdrPassthrough (no buffer(0)).
+    let peak1 = p.prepare_d3d9_present(1920, 1080, true);
+    assert!((peak1 - 1.0).abs() < f32::EPSILON);
+    let prep1 = take();
+    let set_props = prep1
+        .find("MetalLayer_setProps layer")
+        .expect("setProps on SDR->HDR");
+    let set_cs = prep1
+        .find("MetalLayer_setColorSpace layer HDR_scRGB")
+        .expect("setColorSpace HDR_scRGB");
+    assert!(set_props < set_cs, "{prep1}");
+    assert!(prep1.contains("pixel_format=0x73"), "{prep1}");
+
+    let args1 = D3d9PresentArgs {
+        gamma: None,
+        peak_edr: peak1,
+    };
+    // SAFETY: the fakes' objects.
+    let d1 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args1, |_| {}, |_| {}) };
+    let enc1 = take();
+    assert!(
+        enc1.contains("MTLLibrary_newFunction library \"fs_present_d3d9_hdr_passthrough\""),
+        "{enc1}"
+    );
+    assert!(!enc1.contains("SetFragmentBytes"), "{enc1}");
+
+    // Step 2: current == 2.0 -> no layer change, encode HdrBt2446Gamma with 16B buffer(0) + 2048B buffer(1).
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 2.0,
+        maximum_potential_edr_color_component_value: 2.0,
+    });
+    let peak2 = p.prepare_d3d9_present(1920, 1080, true);
+    assert!((peak2 - 2.0).abs() < f32::EPSILON);
+    let prep2 = take();
+    assert!(!prep2.contains("MetalLayer_setProps"), "{prep2}");
+    assert!(!prep2.contains("MetalLayer_setColorSpace"), "{prep2}");
+
+    let args2 = D3d9PresentArgs {
+        gamma: Some(Arc::new([0x1234_u16; 1024])),
+        peak_edr: peak2,
+    };
+    // SAFETY: the fakes' objects.
+    let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args2, |_| {}, |_| {}) };
+    let enc2 = take();
+    assert!(
+        enc2.contains("MTLLibrary_newFunction library \"fs_present_d3d9_hdr_bt2446_gamma\""),
+        "{enc2}"
+    );
+    assert!(
+        enc2.contains("SetFragmentBytes length=16 index=0"),
+        "{enc2}"
+    );
+    assert!(
+        enc2.contains("SetFragmentBytes length=2048 index=1"),
+        "{enc2}"
+    );
+
+    // Resize while in HDR preserves RGBA16Float (0x73).
+    p.set_d3d9_drawable_size(2560, 1440);
+    let resize_log = take();
+    assert!(resize_log.contains("drawable=2560x1440"), "{resize_log}");
+    assert!(resize_log.contains("pixel_format=0x73"), "{resize_log}");
+
+    // Step 3: potential drops back to 1.0 -> setColorSpace(sRGB) then setProps(BGRA8Unorm) and Sdr.
+    fake().edr_override = Some(WMTEDRValue {
+        maximum_edr_color_component_value: 1.0,
+        maximum_potential_edr_color_component_value: 1.0,
+    });
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+    let peak3 = p.prepare_d3d9_present(2560, 1440, true);
+    assert!((peak3 - 1.0).abs() < f32::EPSILON);
+    let prep3 = take();
+    let set_cs = prep3
+        .find("MetalLayer_setColorSpace layer sRGB")
+        .expect("setColorSpace sRGB");
+    let set_props = prep3
+        .find("MetalLayer_setProps layer")
+        .expect("setProps on HDR->SDR");
+    assert!(set_cs < set_props, "{prep3}");
+    assert!(prep3.contains("pixel_format=0x50"), "{prep3}");
+
+    let args3 = D3d9PresentArgs {
+        gamma: None,
+        peak_edr: peak3,
+    };
+    // SAFETY: the fakes' objects.
+    let d3 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args3, |_| {}, |_| {}) };
+    let enc3 = take();
+    assert!(
+        enc3.contains("MTLLibrary_newFunction library \"fs_present_d3d9_sdr\""),
+        "{enc3}"
+    );
+    drop(d1);
+    drop(d2);
+    drop(d3);
+}
+
+#[test]
+fn d3d9_can_blit_disabled_by_gamma_or_hdr() {
+    let _serial = serial();
+    reset();
+    fake().source = (1920, 1080);
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+    let p = new_d3d9_presenter(1920, 1080, false);
+    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    take();
+
+    // Matching BGRA8 without gamma takes the blit path (0 PSOs built, no fragment draw).
+    let blit_args = D3d9PresentArgs {
+        gamma: None,
+        peak_edr: 1.0,
+    };
+    // SAFETY: the fakes' objects.
+    let d1 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &blit_args, |_| {}, |_| {}) };
+    let blit_log = take();
+    assert_eq!(pipelines_built(&blit_log), 0, "{blit_log}");
+    assert!(!blit_log.contains("Draw primitive="), "{blit_log}");
+
+    // Matching BGRA8 with gamma disables can_blit and draws via fs_present_d3d9_sdr_gamma.
+    let gamma_args = D3d9PresentArgs {
+        gamma: Some(Arc::new([0_u16; 1024])),
+        peak_edr: 1.0,
+    };
+    // SAFETY: the fakes' objects.
+    let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &gamma_args, |_| {}, |_| {}) };
+    let gamma_log = take();
+    assert_eq!(pipelines_built(&gamma_log), 1, "{gamma_log}");
+    assert!(gamma_log.contains("Draw primitive="), "{gamma_log}");
+    assert!(
+        gamma_log.contains("fs_present_d3d9_sdr_gamma"),
+        "{gamma_log}"
+    );
+
+    // Matching size on RGBA16Float disables can_blit even without gamma.
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_RGBA16_FLOAT);
+    // SAFETY: the fakes' objects.
+    let d3 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &blit_args, |_| {}, |_| {}) };
+    let hdr_log = take();
+    assert_eq!(pipelines_built(&hdr_log), 1, "{hdr_log}");
+    assert!(
+        hdr_log.contains("fs_present_d3d9_hdr_passthrough"),
+        "{hdr_log}"
+    );
+    drop(d1);
+    drop(d2);
+    drop(d3);
+}
+
+#[test]
+fn d3d9_drawable_size_override_disables_blit_and_sets_viewport() {
+    let _serial = serial();
+    reset();
+    fake().source = (1920, 1080);
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+    fake().drawable_size = Some((1280, 720));
+    let p = new_d3d9_presenter(1920, 1080, false);
+    let _ = p.prepare_d3d9_present(1920, 1080, true);
+    take();
+
+    let args = D3d9PresentArgs {
+        gamma: None,
+        peak_edr: 1.0,
+    };
+    // SAFETY: the fakes' objects.
+    let d = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args, |_| {}, |_| {}) };
+    let log = take();
+    assert_eq!(pipelines_built(&log), 1, "{log}");
+    assert!(log.contains("Draw primitive="), "{log}");
+    assert!(
+        log.contains("SetViewports count=1 {origin=0,0 size=1280x720"),
+        "{log}"
+    );
+    drop(d);
 }

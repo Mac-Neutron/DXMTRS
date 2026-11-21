@@ -701,6 +701,10 @@ src/dxmt/src/encoder.rs BufferSlice Clone,Copy,Default
 src/dxmt/src/encoder/pass.rs RenderUses Clone,Copy
 src/dxmt/src/frame_stats.rs CompatibilityFlags Clone,Copy,Default,PartialEq,Eq
 src/dxmt/src/library.rs ResourceAccess Clone,Copy
+src/dxmt/src/presenter.rs D3D9HdrUniforms Clone,Copy,Debug
+src/dxmt/src/presenter.rs D3d9LayerMode Clone,Copy,PartialEq,Eq
+src/dxmt/src/presenter.rs D3d9PresentArgs Clone
+src/dxmt/src/presenter.rs D3d9PresentVariant Clone,Copy,PartialEq,Eq,Hash,Debug
 src/dxmt/src/presenter.rs DXMTPresentMetadata Clone,Copy
 src/dxmt/src/presenter/framegen.rs Mode Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/residency.rs ResidencyMask Clone,Copy,PartialEq,Eq,Default

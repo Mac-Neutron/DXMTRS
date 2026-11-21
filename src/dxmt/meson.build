@@ -1,6 +1,7 @@
 dxmt_command_air = custom_target('dxmt_command_air',
   input   : 'dxmt_command.metal',
   output  : 'dxmt_command.air',
+  depend_files : 'dxmt_command_constants.hpp',
   command : [ xcrun, '-sdk', 'macosx', 'metal', '-o', '@OUTPUT@', '-c', '@INPUT@' ],
 )
 

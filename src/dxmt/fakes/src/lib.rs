@@ -21,7 +21,7 @@ use core::{
     ffi::{CStr, c_char, c_void},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Mutex, MutexGuard, PoisonError},
 };
 
@@ -30,12 +30,12 @@ use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMT_COMMAND_BUFFER_STATUS_ERROR,
-    WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMTBufferInfo, WMTDepthStencilInfo, WMTEDRValue,
-    WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
-    WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
-    WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo, WmtcmdBase,
-    WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
-    WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitGenerateMipmaps,
+    WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMTBufferInfo,
+    WMTDepthStencilInfo, WMTEDRValue, WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps,
+    WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo, WMTSamplerInfo,
+    WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo,
+    WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
+    WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitGenerateMipmaps, WmtcmdRenderSetbytes,
 };
 
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
@@ -63,6 +63,16 @@ struct State {
     cache_readers: BTreeMap<u64, String>,
     /// Open `CacheWriter` handles mapped to their database path.
     cache_writers: BTreeMap<u64, String>,
+    /// Opt-in per-device `WMTEDRValue` returned by `MetalLayer_getEDRValue`.
+    edr: BTreeMap<u64, WMTEDRValue>,
+    /// Opt-in per-device drawable pixel format returned by `MTLTexture_pixelFormat`.
+    drawable_format: BTreeMap<u64, u32>,
+    /// Opt-in per-device drawable size returned by `MTLTexture_width` / `height`.
+    drawable_size: BTreeMap<u64, (u64, u64)>,
+    /// Handles allocated by `MetalDrawable_texture`.
+    drawable_textures: BTreeSet<u64>,
+    /// `(pixel_format, width, height)` recorded at `MTLDevice_newTexture`.
+    texture_props: BTreeMap<u64, (u32, u64, u64)>,
 }
 
 /// The fakes' one [`State`].
@@ -81,6 +91,11 @@ static STATE: Mutex<State> = Mutex::new(State {
     cache_dbs: BTreeMap::new(),
     cache_readers: BTreeMap::new(),
     cache_writers: BTreeMap::new(),
+    edr: BTreeMap::new(),
+    drawable_format: BTreeMap::new(),
+    drawable_size: BTreeMap::new(),
+    drawable_textures: BTreeSet::new(),
+    texture_props: BTreeMap::new(),
 });
 
 fn state() -> MutexGuard<'static, State> {
@@ -146,6 +161,45 @@ pub fn reset_shader_cache() {
     state.cache_dbs.clear();
     state.cache_readers.clear();
     state.cache_writers.clear();
+}
+
+/// Sets or clears the opt-in `WMTEDRValue` returned by `MetalLayer_getEDRValue` for `device`.
+pub fn set_edr_value(device: u64, edr: Option<WMTEDRValue>) {
+    let mut state = state();
+    match edr {
+        Some(value) => {
+            state.edr.insert(device, value);
+        }
+        None => {
+            state.edr.remove(&device);
+        }
+    }
+}
+
+/// Sets or clears the opt-in drawable pixel format for `MTLTexture_pixelFormat` on `device`.
+pub fn set_drawable_format(device: u64, format: Option<u32>) {
+    let mut state = state();
+    match format {
+        Some(fmt) => {
+            state.drawable_format.insert(device, fmt);
+        }
+        None => {
+            state.drawable_format.remove(&device);
+        }
+    }
+}
+
+/// Sets or clears the opt-in drawable extent for `MTLTexture_width` / `height` on `device`.
+pub fn set_drawable_size(device: u64, size: Option<(u64, u64)>) {
+    let mut state = state();
+    match size {
+        Some(sz) => {
+            state.drawable_size.insert(device, sz);
+        }
+        None => {
+            state.drawable_size.remove(&device);
+        }
+    }
 }
 
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
@@ -344,6 +398,10 @@ extern "C-unwind" fn fake_new_texture(device: u64, info: *mut WMTTextureInfo) ->
     // SAFETY: the core's texture description, readable and writable for the call.
     let i = unsafe { &mut *info };
     i.gpu_resource_id = handle + 1;
+    state.texture_props.insert(
+        handle,
+        (i.pixel_format, u64::from(i.width), u64::from(i.height)),
+    );
     let line = format!(
         "MTLDevice_newTexture #{handle} format={} size={}x{}x{} array={} bits={:#x}",
         i.pixel_format, i.width, i.height, i.depth, i.array_length, i.bits
@@ -380,17 +438,44 @@ extern "C-unwind" fn fake_new_texture_view(
 }
 
 #[unsafe(export_name = "MTLTexture_pixelFormat")]
-const extern "C-unwind" fn fake_pixel_format(_texture: u64) -> u32 {
+extern "C-unwind" fn fake_pixel_format(texture: u64) -> u32 {
+    let state = state();
+    if let Some(device) = state.device_of(texture)
+        && let Some(&fmt) = state.drawable_format.get(&device)
+    {
+        if state.drawable_textures.contains(&texture) {
+            return fmt;
+        }
+        return state.texture_props.get(&texture).map_or(0, |p| p.0);
+    }
     0
 }
 
 #[unsafe(export_name = "MTLTexture_width")]
-const extern "C-unwind" fn fake_width(_texture: u64) -> u64 {
+extern "C-unwind" fn fake_width(texture: u64) -> u64 {
+    let state = state();
+    if let Some(device) = state.device_of(texture)
+        && let Some(&sz) = state.drawable_size.get(&device)
+    {
+        if state.drawable_textures.contains(&texture) {
+            return sz.0;
+        }
+        return state.texture_props.get(&texture).map_or(0, |p| p.1);
+    }
     0
 }
 
 #[unsafe(export_name = "MTLTexture_height")]
-const extern "C-unwind" fn fake_height(_texture: u64) -> u64 {
+extern "C-unwind" fn fake_height(texture: u64) -> u64 {
+    let state = state();
+    if let Some(device) = state.device_of(texture)
+        && let Some(&sz) = state.drawable_size.get(&device)
+    {
+        if state.drawable_textures.contains(&texture) {
+            return sz.1;
+        }
+        return state.texture_props.get(&texture).map_or(0, |p| p.2);
+    }
     0
 }
 
@@ -986,12 +1071,54 @@ extern "C-unwind" fn fake_compute_encode_commands(encoder: u64, head: *const Wmt
 
 #[unsafe(export_name = "MTLRenderCommandEncoder_encodeCommands")]
 extern "C-unwind" fn fake_render_encode_commands(encoder: u64, head: *const WmtcmdBase) {
-    encode(
-        "MTLRenderCommandEncoder_encodeCommands",
-        &Records::Render,
-        encoder,
-        head,
-    );
+    // SAFETY: the core hands winemetal a list of live render records.
+    let lines = unsafe { format_pass_records(&Records::Render, head) };
+    let mut details = Vec::new();
+    let mut at = head.expose_provenance() as u64;
+    while at != 0 {
+        let base_ptr = core::ptr::with_exposed_provenance::<WmtcmdBase>(
+            usize::try_from(at).expect("a pointer"),
+        );
+        // SAFETY: a record of the list.
+        let base = unsafe { &*base_ptr };
+        if base.r#type == WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES {
+            // SAFETY: a record of this type.
+            let c = unsafe { &*base_ptr.cast::<WmtcmdRenderSetbytes>() };
+            let len = usize::try_from(c.length).unwrap_or(0);
+            let payload = if c.bytes.ptr != 0 && len > 0 {
+                let ptr = core::ptr::with_exposed_provenance::<u8>(
+                    usize::try_from(c.bytes.ptr).expect("a pointer"),
+                );
+                // SAFETY: caller passes `len` readable bytes for the call.
+                unsafe { core::slice::from_raw_parts(ptr, len) }
+            } else {
+                &[]
+            };
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for &b in payload {
+                hash = (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            details.push(format!(
+                "  fragment_bytes index={} length={} fnv={hash:016x}",
+                c.index, c.length
+            ));
+        }
+        at = base.next.ptr;
+    }
+    let mut details = details.into_iter();
+    let tag = format!("render {WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES} ");
+    let mut state = state();
+    state.say(encoder, "MTLRenderCommandEncoder_encodeCommands".to_owned());
+    for line in lines {
+        let extra = line
+            .starts_with(&tag)
+            .then(|| details.next().expect("a decoded fragment_bytes record"));
+        state.say(encoder, format!("  {line}"));
+        if let Some(detail) = extra {
+            state.say(encoder, format!("  {detail}"));
+        }
+    }
+    drop(state);
 }
 
 /// A blit encoder's records, with the copies into textures and buffers and the mipmaps in full.
@@ -1117,17 +1244,38 @@ const extern "C-unwind" fn fake_layer_get_props(_layer: u64, props: *mut WMTLaye
 }
 
 #[unsafe(export_name = "MetalLayer_setProps")]
-const extern "C-unwind" fn fake_layer_set_props(_layer: u64, _props: *const WMTLayerProps) {}
+extern "C-unwind" fn fake_layer_set_props(layer: u64, props: *const WMTLayerProps) {
+    // SAFETY: caller passes a readable `WMTLayerProps` alive for the call.
+    let p = unsafe { &*props };
+    state().say(
+        layer,
+        format!(
+            "MetalLayer_setProps format={} size={}x{} display_sync={}",
+            p.pixel_format, p.drawable_width, p.drawable_height, p.display_sync_enabled
+        ),
+    );
+}
 
 #[unsafe(export_name = "MetalLayer_setColorSpace")]
-const extern "C-unwind" fn fake_layer_set_color_space(_layer: u64, _colorspace: u64) -> bool {
+extern "C-unwind" fn fake_layer_set_color_space(layer: u64, colorspace: u64) -> bool {
+    state().say(layer, format!("MetalLayer_setColorSpace {colorspace}"));
     true
 }
 
 #[unsafe(export_name = "MetalLayer_getEDRValue")]
-const extern "C-unwind" fn fake_layer_edr_value(_layer: u64, value: *mut WMTEDRValue) {
-    // SAFETY: the caller's value, writable; all-zero is a valid value of the plain fields.
-    unsafe { value.write_bytes(0, 1) };
+extern "C-unwind" fn fake_layer_edr_value(layer: u64, value: *mut WMTEDRValue) {
+    let state = state();
+    let edr = state
+        .device_of(layer)
+        .and_then(|d| state.edr.get(&d).copied());
+    drop(state);
+    if let Some(edr) = edr {
+        // SAFETY: the caller's value, writable.
+        unsafe { value.write(edr) };
+    } else {
+        // SAFETY: the caller's value, writable; all-zero is a valid value of the plain fields.
+        unsafe { value.write_bytes(0, 1) };
+    }
 }
 
 #[unsafe(export_name = "WMTQueryDisplaySettingForLayer")]
@@ -1155,7 +1303,10 @@ extern "C-unwind" fn fake_next_drawable(layer: u64) -> u64 {
 
 #[unsafe(export_name = "MetalDrawable_texture")]
 extern "C-unwind" fn fake_drawable_texture(drawable: u64) -> u64 {
-    state().made_of(drawable)
+    let mut state = state();
+    let handle = state.made_of(drawable);
+    state.drawable_textures.insert(handle);
+    handle
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_presentDrawable")]
@@ -1164,9 +1315,9 @@ extern "C-unwind" fn fake_present_drawable(cmdbuf: u64, _drawable: u64) {
 }
 
 #[unsafe(export_name = "MTLCommandBuffer_presentDrawableAfterMinimumDuration")]
-extern "C-unwind" fn fake_present_drawable_after(cmdbuf: u64, _drawable: u64, _after: f64) {
+extern "C-unwind" fn fake_present_drawable_after(cmdbuf: u64, _drawable: u64, after: f64) {
     state().say(
         cmdbuf,
-        "MTLCommandBuffer_presentDrawableAfterMinimumDuration".to_owned(),
+        format!("MTLCommandBuffer_presentDrawableAfterMinimumDuration after={after}"),
     );
 }

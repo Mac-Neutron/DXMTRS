@@ -2412,6 +2412,9 @@ fn create_core_device(
     if pp.swap_effect == mtld3d_types::D3DSWAPEFFECT_DISCARD {
         options.insert(d3d9_rt::device::CoreOptions::DISCARD_BACK_BUFFER);
     }
+    if cfg.hdr_enable {
+        options.insert(d3d9_rt::device::CoreOptions::HDR_ENABLE);
+    }
     let mut core = d3d9_rt::device::CoreDevice::with_options(mtl, profile, options);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
     core.attach(

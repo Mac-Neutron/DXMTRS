@@ -619,16 +619,35 @@ impl Encoder {
         // SAFETY: as above.
         let update = |encoder| unsafe { render_chain(encoder, &updates) };
         let t0 = std::time::Instant::now();
-        // SAFETY: the caller's promise for the command buffer and the backbuffer.
-        let drawable = unsafe {
-            present
-                .presenter
-                .encode(cmdbuf, present.backbuffer, &present.metadata, wait, update)
-        };
+        let drawable = present.d3d9.as_ref().map_or_else(
+            || {
+                // SAFETY: the caller's promise for the command buffer and the backbuffer.
+                unsafe {
+                    present.presenter.encode(
+                        cmdbuf,
+                        present.backbuffer,
+                        &present.metadata,
+                        wait,
+                        update,
+                    )
+                }
+            },
+            |d3d9| {
+                // SAFETY: the caller's promise for the command buffer and the backbuffer.
+                unsafe {
+                    present
+                        .presenter
+                        .encode_d3d9(cmdbuf, present.backbuffer, d3d9, wait, update)
+                }
+            },
+        );
         if !cfg!(feature = "perf-build") {
             self.frame_stats.drawable_blocking_interval += t0.elapsed();
         }
         let drawable = drawable.as_ref().map_or(0, Obj::handle);
+        if present.d3d9.is_some() && drawable == 0 {
+            return;
+        }
         if present.after > 0.0 {
             // SAFETY: the caller's promise; the drawable is alive until the end of the scope.
             unsafe {
