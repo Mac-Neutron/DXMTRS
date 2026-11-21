@@ -9,7 +9,7 @@ use winemetal_sys::Obj;
 use super::{
     Store, close_all, dxmt_shader_cache_create, dxmt_shader_cache_destroy,
     dxmt_shader_cache_has_reader, dxmt_shader_cache_has_writer, dxmt_shader_cache_read,
-    dxmt_shader_cache_write, instance, path, version,
+    dxmt_shader_cache_write, instance, path, try_close_all, version,
 };
 
 /// Serialises tests that touch the process-wide [`instance`] map.
@@ -406,4 +406,27 @@ fn close_all_closes_every_store() {
 
     drop(extra);
     assert_eq!(take(), "");
+}
+
+#[test]
+fn try_close_skips_locked_side_without_deadlocking() {
+    let _guard = INSTANCE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    close_all();
+    start();
+
+    let store = instance(310, 0x3333);
+    assert!(store.has_reader() && store.has_writer());
+    take();
+
+    let reader_guard = store.reader.lock().unwrap_or_else(PoisonError::into_inner);
+    try_close_all();
+    // Reader was locked (`WouldBlock`), so only writer was released.
+    assert_eq!(take(), "NSObject_release writer\n");
+    assert!(!store.has_writer());
+    drop(reader_guard);
+    assert!(store.has_reader());
+
+    store.try_close();
+    assert_eq!(take(), "NSObject_release reader\n");
+    assert!(!store.has_reader());
 }

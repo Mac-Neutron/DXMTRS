@@ -14,8 +14,8 @@ use mtld3d_types::{
     D3DCMP_ALWAYS, D3DRS_CCW_STENCILFAIL, D3DRS_CCW_STENCILFUNC, D3DRS_CCW_STENCILPASS,
     D3DRS_CCW_STENCILZFAIL, D3DRS_STENCILENABLE, D3DRS_STENCILFAIL, D3DRS_STENCILFUNC,
     D3DRS_STENCILMASK, D3DRS_STENCILPASS, D3DRS_STENCILWRITEMASK, D3DRS_STENCILZFAIL,
-    D3DRS_TWOSIDEDSTENCILMODE, D3DRS_ZENABLE, D3DRS_ZFUNC, D3DRS_ZWRITEENABLE, D3DSTENCILOP_KEEP,
-    D3DSTENCILOP_REPLACE, RENDER_STATE_COUNT,
+    D3DRS_TWOSIDEDSTENCILMODE, D3DRS_ZENABLE, D3DRS_ZFUNC, D3DRS_ZWRITEENABLE, D3DSTENCILOP_DECR,
+    D3DSTENCILOP_KEEP, D3DSTENCILOP_REPLACE, D3DSTENCILOP_ZERO, RENDER_STATE_COUNT,
 };
 
 use crate::convert::{d3d_to_metal_cmp, d3d_to_metal_stencil_op};
@@ -69,10 +69,14 @@ pub const STENCIL_MASK_BITS: u32 = 0xFF;
 /// truncating `as`; the asserts pin them to the ABI constants.
 const CMP_ALWAYS: u8 = 8;
 const OP_KEEP: u8 = 1;
+const OP_ZERO: u8 = 2;
 const OP_REPLACE: u8 = 3;
+const OP_DECR: u8 = 8;
 const _: () = assert!(CMP_ALWAYS as u32 == D3DCMP_ALWAYS);
 const _: () = assert!(OP_KEEP as u32 == D3DSTENCILOP_KEEP);
+const _: () = assert!(OP_ZERO as u32 == D3DSTENCILOP_ZERO);
 const _: () = assert!(OP_REPLACE as u32 == D3DSTENCILOP_REPLACE);
+const _: () = assert!(OP_DECR as u32 == D3DSTENCILOP_DECR);
 
 /// The D3D9 default face: always compare, never modify.
 ///
@@ -221,6 +225,20 @@ impl DepthStencilSnapshot {
         self.depth_enable != 0
             && (self.depth_write != 0
                 || d3d_to_metal_cmp(u32::from(self.depth_func)) != CompareFunc::Always)
+    }
+
+    /// Whether a draw under this state can modify the stencil plane when one is attached.
+    #[must_use]
+    pub const fn writes_stencil(&self) -> bool {
+        const fn op_keeps(op: u8) -> bool {
+            !matches!(op, OP_ZERO..=OP_DECR)
+        }
+        const fn face_keeps(face: StencilFaceState) -> bool {
+            op_keeps(face.fail_op) && op_keeps(face.depth_fail_op) && op_keeps(face.pass_op)
+        }
+        self.stencil_enable != 0
+            && self.write_mask & STENCIL_MASK_BITS != 0
+            && !(face_keeps(self.front) && face_keeps(self.back))
     }
 }
 

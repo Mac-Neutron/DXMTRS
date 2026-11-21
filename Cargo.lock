@@ -198,6 +198,7 @@ dependencies = [
  "bitflags 2.13.2",
  "dxmt-core",
  "dxmt-fakes",
+ "dxmt-util",
  "log",
  "mtld3d-core",
  "mtld3d-types",

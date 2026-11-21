@@ -2402,7 +2402,17 @@ fn create_core_device(
     let mut profile = d3d9_rt::device::queue_profile();
     profile.max_latency =
         mtld3d_core::frame_latency::enforced_frame_latency(None, cfg.present_max_frame_latency);
-    let mut core = d3d9_rt::device::CoreDevice::new(mtl, profile);
+    let mut options = d3d9_rt::device::CoreOptions::empty();
+    if cfg.shader_cache_enable {
+        options.insert(d3d9_rt::device::CoreOptions::SHADER_CACHE);
+    }
+    if cfg.shader_async_compile {
+        options.insert(d3d9_rt::device::CoreOptions::ASYNC_COMPILE);
+    }
+    if pp.swap_effect == mtld3d_types::D3DSWAPEFFECT_DISCARD {
+        options.insert(d3d9_rt::device::CoreOptions::DISCARD_BACK_BUFFER);
+    }
+    let mut core = d3d9_rt::device::CoreDevice::with_options(mtl, profile, options);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
     core.attach(
         isize::try_from(hwnd).unwrap_or_default(),

@@ -10,6 +10,7 @@
 //! whose pipeline is bound as a placeholder until their submission waits
 //! for it.
 
+use core::hash::Hash;
 use std::collections::VecDeque;
 
 use mtld3d_shared::{MetalHandle, mtl_handle::MTLTextureKind};
@@ -211,25 +212,22 @@ pub fn may_skip_draw(color: &[bool], depth: Option<bool>, stencil: Option<bool>)
         && stencil.is_none_or(|rebuilt| rebuilt)
 }
 
-/// Per texture, the recent frames that cleared its planes, and whether it feeds kept content.
+/// Per target, the recent frames that cleared its planes, and whether it feeds kept content.
 ///
-/// Keyed by the texture's identity handle. Each texture keeps, per subresource
-/// (slice in the low half, level in the high half for colour, the level for
-/// depth and stencil) and plane, the index of the last frame a whole clear
-/// reached it and of the frame before that, which is all "cleared this frame
-/// and the one before" needs; a clear of one face, level or plane says nothing
-/// about another. It also keeps the last frame its content was read into
-/// something kept (a copy out of it into a kept target, a pass into a kept
-/// target sampling it), which holds for [`FEED_MEMORY_FRAMES`] after it. A
-/// texture neither cleared in the current or the previous frame nor read that
-/// way within that span is dropped when the next frame begins, so the map holds
-/// only what was touched recently. Texture handles are addresses Metal hands
-/// out again, so a texture that is destroyed is forgotten ([`Self::forget`])
-/// before its address can name another.
-pub struct ClearHistory {
+/// Keyed by `K` (`MetalHandle<MTLTextureKind>` or a front-end target identity). Each target keeps,
+/// per subresource (slice in the low half, level in the high half for colour, or `slice | (level
+/// << 16)`) and plane, the index of the last frame a whole clear reached it and of the frame before
+/// that, which is all "cleared this frame and the one before" needs; a clear of one face, level or
+/// plane says nothing about another. It also keeps the last frame its content was read into
+/// something kept (a copy out of it into a kept target, a pass into a kept target sampling it),
+/// which holds for [`FEED_MEMORY_FRAMES`] after it. A target neither cleared in the current or the
+/// previous frame nor read that way within that span is dropped when the next frame begins, so the
+/// map holds only what was touched recently. Keys may be reused on destruction, so a destroyed
+/// target is forgotten ([`Self::forget`]) before its identity can name another.
+pub struct ClearHistory<K = MetalHandle<MTLTextureKind>> {
     /// Index of the current presented frame; starts at 1, so 0 means "never".
     frame: u64,
-    textures: FxHashMap<MetalHandle<MTLTextureKind>, TextureHistory>,
+    textures: FxHashMap<K, TextureHistory>,
 }
 
 #[derive(Default)]
@@ -245,13 +243,13 @@ struct ClearRecord {
     before: u64,
 }
 
-impl Default for ClearHistory {
+impl<K: Copy + Eq + Hash> Default for ClearHistory<K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ClearHistory {
+impl<K: Copy + Eq + Hash> ClearHistory<K> {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -260,13 +258,13 @@ impl ClearHistory {
         }
     }
 
-    /// Whether any texture has a recent clear or read on record.
+    /// Whether any target has a recent clear or read on record.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.textures.is_empty()
     }
 
-    /// Start the next presented frame, forgetting textures no recent frame cleared or read.
+    /// Start the next presented frame, forgetting targets no recent frame cleared or read.
     ///
     /// A mid-frame flush is not a new frame: the application's frame goes
     /// on, and so do its clears.
@@ -281,20 +279,10 @@ impl ClearHistory {
         });
     }
 
-    /// Remember that `planes` of `texture` at `subresource` were cleared whole this frame.
-    ///
-    /// A null texture is ignored.
-    pub fn record(
-        &mut self,
-        texture: MetalHandle<MTLTextureKind>,
-        subresource: u32,
-        planes: ClearPlanes,
-    ) {
-        if texture.is_null() {
-            return;
-        }
+    /// Remember that `planes` of `key` at `subresource` were cleared whole this frame.
+    pub fn record_key(&mut self, key: K, subresource: u32, planes: ClearPlanes) {
         let frame = self.frame;
-        let history = self.textures.entry(texture).or_default();
+        let history = self.textures.entry(key).or_default();
         for plane in planes.iter() {
             let bit = plane.bits();
             let position = history
@@ -315,19 +303,14 @@ impl ClearHistory {
         }
     }
 
-    /// Whether `plane` of `texture` at `subresource` was cleared whole in this frame and the last.
+    /// Whether `plane` of `key` at `subresource` was cleared whole in this frame and the last.
     ///
     /// Two consecutive frames are the evidence that the application rebuilds
     /// the attachment every frame: a clear in this frame alone is just as
     /// likely to open a one-off render whose draw a skip would lose.
     #[must_use]
-    pub fn regenerated(
-        &self,
-        texture: MetalHandle<MTLTextureKind>,
-        subresource: u32,
-        plane: ClearPlanes,
-    ) -> bool {
-        let Some(history) = self.textures.get(&texture) else {
+    pub fn regenerated(&self, key: K, subresource: u32, plane: ClearPlanes) -> bool {
+        let Some(history) = self.textures.get(&key) else {
             return false;
         };
         history
@@ -339,50 +322,43 @@ impl ClearHistory {
             })
     }
 
-    /// Whether `texture` has a recent clear on record, so a draw into it could ever be skipped.
+    /// Whether `key` has a recent clear on record, so a draw into it could ever be skipped.
     #[must_use]
-    pub fn tracks(&self, texture: MetalHandle<MTLTextureKind>) -> bool {
+    pub fn tracks(&self, key: K) -> bool {
         self.textures
-            .get(&texture)
+            .get(&key)
             .is_some_and(|history| !history.clears.is_empty())
     }
 
-    /// Remember that `texture`'s content was just read into something kept.
+    /// Remember that `key`'s content was just read into something kept.
     ///
     /// A `StretchRect` out of it into a target that is not rebuilt every
     /// frame, or a pass into such a target sampling it. A draw left out of
-    /// `texture` would then be baked into that kept content, so none is for
-    /// the next [`FEED_MEMORY_FRAMES`]. Answers whether the texture was not
-    /// marked before, so a caller propagating marks knows when to stop. A
-    /// null texture is ignored.
-    pub fn mark_feeds_persistent(&mut self, texture: MetalHandle<MTLTextureKind>) -> bool {
-        if texture.is_null() {
-            return false;
-        }
+    /// `key` would then be baked into that kept content, so none is for
+    /// the next [`FEED_MEMORY_FRAMES`]. Answers whether the target was not
+    /// marked before, so a caller propagating marks knows when to stop.
+    pub fn mark_feeds_persistent_key(&mut self, key: K) -> bool {
         let frame = self.frame;
-        let history = self.textures.entry(texture).or_default();
+        let history = self.textures.entry(key).or_default();
         let newly = !history.fed_within(frame);
         history.fed_kept = frame;
         newly
     }
 
-    /// Whether `texture`'s content was read into kept content in the last [`FEED_MEMORY_FRAMES`].
+    /// Whether `key`'s content was read into kept content in the last [`FEED_MEMORY_FRAMES`].
     #[must_use]
-    pub fn feeds_persistent(&self, texture: MetalHandle<MTLTextureKind>) -> bool {
+    pub fn feeds_persistent(&self, key: K) -> bool {
         self.textures
-            .get(&texture)
+            .get(&key)
             .is_some_and(|history| history.fed_within(self.frame))
     }
 
-    /// Forget everything about `texture`, which is being destroyed.
-    ///
-    /// Its address can name the next texture Metal creates, which must not
-    /// inherit this one's clears.
-    pub fn forget(&mut self, texture: MetalHandle<MTLTextureKind>) {
-        self.textures.remove(&texture);
+    /// Forget everything about `key`, which is being destroyed or resized.
+    pub fn forget(&mut self, key: K) {
+        self.textures.remove(&key);
     }
 
-    /// Forget every texture, at a device `Reset`.
+    /// Forget every target, at a device `Reset`.
     ///
     /// A `Reset` recreates the implicit surfaces and ends the application's
     /// frame without a `Present`, so no clear before it vouches for a frame
@@ -392,10 +368,73 @@ impl ClearHistory {
     }
 }
 
+impl ClearHistory<MetalHandle<MTLTextureKind>> {
+    /// Remember that `planes` of `texture` at `subresource` were cleared whole this frame.
+    ///
+    /// A null texture is ignored.
+    pub fn record(
+        &mut self,
+        texture: MetalHandle<MTLTextureKind>,
+        subresource: u32,
+        planes: ClearPlanes,
+    ) {
+        if texture.is_null() {
+            return;
+        }
+        self.record_key(texture, subresource, planes);
+    }
+
+    /// Remember that `texture`'s content was just read into something kept.
+    ///
+    /// A null texture is ignored.
+    pub fn mark_feeds_persistent(&mut self, texture: MetalHandle<MTLTextureKind>) -> bool {
+        if texture.is_null() {
+            return false;
+        }
+        self.mark_feeds_persistent_key(texture)
+    }
+}
+
 impl TextureHistory {
     /// Whether a read into kept content happened within [`FEED_MEMORY_FRAMES`] of `frame`.
     const fn fed_within(&self, frame: u64) -> bool {
         self.fed_kept != 0 && self.fed_kept + FEED_MEMORY_FRAMES >= frame
+    }
+}
+
+/// Propagate `feeds_persistent` marks across `reads` using `pass_is_kept` to judge each pass.
+pub fn mark_kept_reads_generic<K: Copy + Eq + Hash>(
+    reads: &[(usize, K)],
+    history: &mut ClearHistory<K>,
+    mut pass_is_kept: impl FnMut(&ClearHistory<K>, usize) -> bool,
+) {
+    if reads.is_empty() || history.is_empty() {
+        return;
+    }
+    // Each round that marks something marks at least one more target, so
+    // the reads bound the rounds.
+    for _ in 0..=reads.len() {
+        let mut marked = false;
+        let mut verdict: Option<(usize, bool)> = None;
+        for &(pass, key) in reads {
+            if !history.tracks(key) {
+                continue;
+            }
+            let kept = match verdict {
+                Some((judged, kept)) if judged == pass => kept,
+                _ => {
+                    let kept = pass_is_kept(history, pass);
+                    verdict = Some((pass, kept));
+                    kept
+                }
+            };
+            if kept {
+                marked |= history.mark_feeds_persistent_key(key);
+            }
+        }
+        if !marked {
+            break;
+        }
     }
 }
 
@@ -415,35 +454,9 @@ impl TextureHistory {
 /// is marked by then, and a link across a mid-frame flush is judged in the
 /// later submission, so each such link can leave one more frame unprotected.
 pub fn mark_kept_reads(passes: &PassState, history: &mut ClearHistory) {
-    let reads = passes.pass_reads();
-    if reads.is_empty() || history.is_empty() {
-        return;
-    }
-    // Each round that marks something marks at least one more texture, so
-    // the reads bound the rounds.
-    for _ in 0..=reads.len() {
-        let mut marked = false;
-        let mut verdict: Option<(usize, bool)> = None;
-        for &(pass, texture) in reads {
-            if !history.tracks(texture) {
-                continue;
-            }
-            let kept = match verdict {
-                Some((judged, kept)) if judged == pass => kept,
-                _ => {
-                    let kept = pass_is_kept(passes, history, pass);
-                    verdict = Some((pass, kept));
-                    kept
-                }
-            };
-            if kept {
-                marked |= history.mark_feeds_persistent(texture);
-            }
-        }
-        if !marked {
-            break;
-        }
-    }
+    mark_kept_reads_generic(passes.pass_reads(), history, |h, pass| {
+        pass_is_kept(passes, h, pass)
+    });
 }
 
 /// Whether recorded pass `index` writes into a target that is not rebuilt every frame.

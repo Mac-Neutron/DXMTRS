@@ -6,10 +6,7 @@
 use log::{Level, log_enabled, trace};
 use mtld3d_shared::{
     BlitCommand, BlitCommandType, Command, CommandType, MetalHandle,
-    mtl::{
-        CullMode, PixelFormat, StencilOp, TriangleFillMode, VERTEX_STREAM_SLOTS,
-        VisibilityResultMode,
-    },
+    mtl::{CullMode, PixelFormat, TriangleFillMode, VERTEX_STREAM_SLOTS, VisibilityResultMode},
     mtl_handle::{MTLRenderPipelineStateKind, MTLTextureKind},
 };
 use mtld3d_types::D3DSWAPEFFECT_DISCARD;
@@ -17,8 +14,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::{
     async_compile::DeferredPipelineId,
-    convert::d3d_to_metal_stencil_op,
-    depth_stencil_state::{DepthStencilSnapshot, STENCIL_MASK_BITS, StencilFaceState},
+    depth_stencil_state::DepthStencilSnapshot,
     dirty_range::DirtyRange,
     pipeline_state::{ExtraColorAttachments, PipelineAttachFlags, PipelineRsBits},
     render_scale::{RenderScale, TargetExtent},
@@ -6354,18 +6350,8 @@ impl PassState {
 ///
 /// It needs a stencil plane (`HAS_STENCIL` in `attach`), the stencil test on,
 /// a nonzero write mask, and an operation other than `KEEP` on either face.
-/// Operations are compared after translation, so they read exactly as the
-/// `MTLDepthStencilState` the draw would get.
-fn draw_writes_stencil(ds: &DepthStencilSnapshot, attach: PipelineAttachFlags) -> bool {
-    let face_keeps = |face: StencilFaceState| {
-        [face.fail_op, face.depth_fail_op, face.pass_op]
-            .iter()
-            .all(|&op| d3d_to_metal_stencil_op(u32::from(op)) == StencilOp::Keep)
-    };
-    attach.contains(PipelineAttachFlags::HAS_STENCIL)
-        && ds.stencil_enable != 0
-        && ds.write_mask & STENCIL_MASK_BITS != 0
-        && !(face_keeps(ds.front) && face_keeps(ds.back))
+const fn draw_writes_stencil(ds: &DepthStencilSnapshot, attach: PipelineAttachFlags) -> bool {
+    attach.contains(PipelineAttachFlags::HAS_STENCIL) && ds.writes_stencil()
 }
 
 /// The commands Rule J emits between the command lists of two passes it joins.

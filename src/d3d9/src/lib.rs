@@ -179,6 +179,10 @@ unsafe extern "system" {
 #[unsafe(export_name = "DllMain")]
 pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *mut c_void) -> i32 {
     if reason == DLL_PROCESS_DETACH && USED.load(Ordering::Relaxed) {
+        #[cfg(feature = "core-runtime")]
+        if RUNTIME.get() == Some(RuntimeMode::Core) {
+            d3d9_rt::close_shader_cache_on_detach();
+        }
         // The process is exiting. A device was created, which pinned the
         // image, so no `FreeLibrary` reaches this detach unless the pin
         // failed, which was logged; only process exit does (Wine passes

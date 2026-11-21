@@ -9,8 +9,8 @@ use std::{
 
 use winemetal_sys::Obj;
 
-use super::{Compiled, PsoMap};
-use crate::scheduler::CompileScheduler;
+use super::{CompileState, Compiled, PsoMap};
+use crate::scheduler::{CompileLane, CompileScheduler};
 
 thread_local! {
     /// The `NSObject_*` calls this test thread made.
@@ -150,4 +150,80 @@ fn insert_ready_keeps_the_first_entry() {
 fn insert_ready_refuses_a_pending_entry() {
     let map = PsoMap::<u32, ()>::default();
     drop(map.insert_ready(1, Compiled::pending(Arc::new(()), |()| None)));
+}
+
+#[test]
+fn try_ready_reports_pending_ready_and_failed() {
+    let ready_entry = Compiled::ready_with(Arc::new(()), 0x8001, fake_obj(0x8001));
+    assert_eq!(ready_entry.try_ready(), CompileState::Ready(0x8001));
+
+    let failed_entry = Compiled::ready_with(Arc::new(()), 0, None);
+    assert_eq!(failed_entry.try_ready(), CompileState::Failed);
+
+    let map = PsoMap::<u32, ()>::default();
+    let scheduler = OnceLock::new();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let pending = Compiled::pending(Arc::new(()), move |()| {
+        started_tx.send(()).expect("signal start");
+        release_rx.recv().expect("release");
+        None
+    });
+    let inserted = map.insert_or_existing_lane(
+        9,
+        pending,
+        &scheduler,
+        || CompileScheduler::with_bounds(1, 1),
+        CompileLane::Pipeline,
+    );
+    assert!(inserted.ticket().is_some());
+    started_rx.recv().expect("started");
+    assert_eq!(inserted.try_ready(), CompileState::Pending);
+    release_tx.send(()).expect("release");
+    assert_eq!(inserted.ready(), None);
+    assert_eq!(inserted.try_ready(), CompileState::Failed);
+    idle(&scheduler);
+}
+
+#[test]
+fn ready_or_steal_runs_unstarted_entry_on_caller_and_ticket_is_visible() {
+    let map = PsoMap::<u32, ()>::default();
+    let scheduler = OnceLock::new();
+    let (blocker_started_tx, blocker_started_rx) = mpsc::channel();
+    let (blocker_release_tx, blocker_release_rx) = mpsc::channel::<()>();
+    let blocker = Compiled::pending(Arc::new(()), move |()| {
+        blocker_started_tx.send(()).expect("blocker start");
+        blocker_release_rx.recv().expect("blocker release");
+        fake_obj(0x9001)
+    });
+    drop(map.insert_or_existing_lane(
+        1,
+        blocker,
+        &scheduler,
+        || CompileScheduler::with_bounds(1, 1),
+        CompileLane::Normal,
+    ));
+    blocker_started_rx.recv().expect("blocker running");
+
+    let target = Compiled::pending(Arc::new(()), |()| fake_obj(0x9002));
+    let inserted = map.insert_or_existing_lane(
+        2,
+        target,
+        &scheduler,
+        || CompileScheduler::with_bounds(1, 1),
+        CompileLane::Normal,
+    );
+    assert!(inserted.ticket().is_some());
+    assert_eq!(
+        map.get(&2).and_then(|e| e.ticket()),
+        inserted.ticket(),
+        "ticket must be visible immediately after map insertion"
+    );
+
+    // Worker is blocked on key 1, so caller must steal and compile key 2 itself.
+    assert_eq!(inserted.ready_or_steal(scheduler.get()), Some(0x9002));
+    assert_eq!(inserted.try_ready(), CompileState::Ready(0x9002));
+
+    blocker_release_tx.send(()).expect("release blocker");
+    idle(&scheduler);
 }

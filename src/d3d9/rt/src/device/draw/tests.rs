@@ -2250,3 +2250,265 @@ fn key_gen_zero_resets_last_draw_gen_in_open_pass() {
         "{calls:#?}"
     );
 }
+
+#[test]
+fn async_compile_skips_rebuilt_target_until_ready_and_logs_once() {
+    use std::sync::{PoisonError, mpsc};
+
+    use dxmt_core::{
+        pipeline_cache::{CompileState, Compiled},
+        scheduler::{CompileLane, CompileScheduler},
+    };
+    use mtld3d_core::pipeline_key::pipeline_source;
+    use winemetal_sys::{Obj, wire::WMT_PIXEL_FORMAT_BGRA8_UNORM};
+
+    use crate::device::{
+        CoreOptions,
+        fixture::{FAKE_GLOBAL_LOCK, capture_logs, returns_within_10s},
+        queue_profile,
+    };
+
+    const DEVICE: u64 = 0x50c;
+    const SKIP_MSG: &str = "d3d9 core: leaving draws out of their frame while their shader or pipeline builds (shader.asyncCompile); they appear once the build lands";
+
+    let _guard = FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    returns_within_10s(|| {
+        let ((), lines) = capture_logs(|| {
+            // SAFETY: made-up handle for dxmt-fakes.
+            let mtl = unsafe { Obj::adopt(DEVICE) }.expect("non-zero handle");
+            let mut core =
+                CoreDevice::with_options(mtl, queue_profile(), CoreOptions::ASYNC_COMPILE);
+            core.attach(1, 64, 32, 1);
+            let (rt, _) = target_texture(&mut core, DEVICE, 10, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+            assert!(core.set_target(level0(rt)));
+
+            // Two consecutive whole clears make `rt` rebuilt on frame 1.
+            core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+            core.present(false, 0.0);
+            core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+
+            let (tx1, rx1) = mpsc::channel::<()>();
+            let (tx2, rx2) = mpsc::channel::<()>();
+            let k1 = key(0xf);
+            let k2 = key(0x7);
+            let sched = core.scheduler.as_ref().expect("async scheduler");
+            let ctx1 = Arc::clone(&core.compile_ctx);
+            let ctx2 = Arc::clone(&core.compile_ctx);
+            let _ = core.pipelines.insert_or_existing_lane(
+                k1.clone(),
+                Compiled::pending(Arc::new(pipeline_source(&k1).ok()), move |spec| {
+                    let _ = rx1.recv();
+                    spec.as_ref().and_then(|s| super::build_pipeline(&ctx1, s))
+                }),
+                sched,
+                CompileScheduler::default,
+                CompileLane::Normal,
+            );
+            let _ = core.pipelines.insert_or_existing_lane(
+                k2.clone(),
+                Compiled::pending(Arc::new(pipeline_source(&k2).ok()), move |spec| {
+                    let _ = rx2.recv();
+                    spec.as_ref().and_then(|s| super::build_pipeline(&ctx2, s))
+                }),
+                sched,
+                CompileScheduler::default,
+                CompileLane::Normal,
+            );
+
+            let binds = ff_binds();
+            assert_eq!(core.draw(&k1, &triangle(&binds)), Ok(()));
+            assert_eq!(core.draw(&k2, &triangle(&binds)), Ok(()));
+            core.drain();
+            let skipped_calls = dxmt_fakes::take_calls(DEVICE);
+            assert!(!draws(&skipped_calls), "{skipped_calls:#?}");
+            assert_eq!(
+                core.compile_ctx
+                    .stats
+                    .draws_skipped
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                2
+            );
+
+            // Release gated builds and wait for worker completion.
+            let _ = tx1.send(());
+            let _ = tx2.send(());
+            let entry1 = core.pipelines.get(&k1).expect("k1 present");
+            while !matches!(entry1.try_ready(), CompileState::Ready(_)) {
+                std::thread::yield_now();
+            }
+
+            // Frame 2: ready pipeline lands normally.
+            core.present(false, 0.0);
+            core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+            assert_eq!(core.draw(&k1, &triangle(&binds)), Ok(()));
+            core.drain();
+            let landed_calls = dxmt_fakes::take_calls(DEVICE);
+            assert!(draws(&landed_calls), "{landed_calls:#?}");
+        });
+        assert_eq!(
+            lines.iter().filter(|l| *l == SKIP_MSG).count(),
+            1,
+            "{lines:#?}"
+        );
+    });
+}
+
+#[test]
+fn async_compile_keeps_draws_when_persistent_stretched_or_occlusion_active() {
+    use std::sync::mpsc;
+
+    use dxmt_core::{
+        pipeline_cache::Compiled,
+        scheduler::{CompileLane, CompileScheduler},
+    };
+    use mtld3d_core::pipeline_key::pipeline_source;
+    use winemetal_sys::{Obj, wire::WMT_PIXEL_FORMAT_BGRA8_UNORM};
+
+    use crate::device::{
+        ClearPlanes, CoreOptions, TargetRef, fixture::returns_within_10s, queue_profile,
+    };
+
+    returns_within_10s(|| {
+        const DEVICE: u64 = 0x50d;
+        // SAFETY: made-up handle for dxmt-fakes.
+        let mtl = unsafe { Obj::adopt(DEVICE) }.expect("non-zero handle");
+        let mut core = CoreDevice::with_options(mtl, queue_profile(), CoreOptions::ASYNC_COMPILE);
+        core.attach(1, 64, 32, 1);
+        let (rt, _) = target_texture(&mut core, DEVICE, 11, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+        assert!(core.set_target(level0(rt)));
+        let binds = ff_binds();
+
+        let seed_pending = |core: &CoreDevice, k: &PipelineKey| {
+            let (tx, rx) = mpsc::channel::<()>();
+            let sched = core.scheduler.as_ref().expect("async scheduler");
+            let ctx = Arc::clone(&core.compile_ctx);
+            let _ = core.pipelines.insert_or_existing_lane(
+                k.clone(),
+                Compiled::pending(Arc::new(pipeline_source(k).ok()), move |spec| {
+                    let _ = rx.recv();
+                    spec.as_ref().and_then(|s| super::build_pipeline(&ctx, s))
+                }),
+                sched,
+                CompileScheduler::default,
+                CompileLane::Normal,
+            );
+            tx
+        };
+
+        // 1. First frame whole clear (persistent, not cleared two frames in a row) -> kept.
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        let k1 = key(0xf);
+        let tx1 = seed_pending(&core, &k1);
+        assert_eq!(core.draw(&k1, &triangle(&binds)), Ok(()));
+        let _ = tx1.send(());
+        core.drain();
+        assert!(draws(&dxmt_fakes::take_calls(DEVICE)));
+
+        // Advance to frame 1 with another clear: `rt` is now rebuilt, UNLESS marked feeds_persistent.
+        core.present(false, 0.0);
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        core.note_stretch_copy(level0(rt), TargetRef::BackBuffer, ClearPlanes::COLOR, true);
+        let k2 = key(0x7);
+        let tx2 = seed_pending(&core, &k2);
+        assert_eq!(core.draw(&k2, &triangle(&binds)), Ok(()));
+        let _ = tx2.send(());
+        core.drain();
+        assert!(draws(&dxmt_fakes::take_calls(DEVICE)));
+
+        // Another rebuilt RT with an active occlusion bracket -> kept.
+        let (rt2, _) = target_texture(&mut core, DEVICE, 12, WMT_PIXEL_FORMAT_BGRA8_UNORM, 4);
+        assert!(core.set_target(level0(rt2)));
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        core.present(false, 0.0);
+        core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+        let mut q = crate::device::Occlusion::default();
+        core.occlusion_begin(&mut q);
+        let k3 = key(0x3);
+        let tx3 = seed_pending(&core, &k3);
+        assert_eq!(core.draw(&k3, &triangle(&binds)), Ok(()));
+        core.occlusion_end(&mut q);
+        let _ = tx3.send(());
+        core.drain();
+        assert!(draws(&dxmt_fakes::take_calls(DEVICE)));
+    });
+}
+
+#[test]
+fn pass_bound_soundness_across_deferred_draw_and_failed_compile() {
+    use std::sync::mpsc;
+
+    use dxmt_core::{
+        pipeline_cache::Compiled,
+        scheduler::{CompileLane, CompileScheduler},
+    };
+    use mtld3d_core::pipeline_key::pipeline_source;
+    use winemetal_sys::{Obj, wire::WMT_RENDER_COMMAND_SET_PSO};
+
+    use crate::device::{CoreOptions, fixture::returns_within_10s, queue_profile};
+
+    returns_within_10s(|| {
+        const DEVICE: u64 = dxmt_fakes::REFUSES_PIPELINES;
+        // SAFETY: made-up handle for dxmt-fakes.
+        let mtl = unsafe { Obj::adopt(DEVICE) }.expect("non-zero handle");
+        let mut core = CoreDevice::with_options(mtl, queue_profile(), CoreOptions::ASYNC_COMPILE);
+        core.attach(1, 64, 32, 1);
+        let _ = dxmt_fakes::take_calls(DEVICE);
+
+        let k_good = key(0xf);
+        let k_bad = key(0x7);
+        let _ = core.pipelines.insert_ready(
+            k_good.clone(),
+            Compiled::ready_with(Arc::new(pipeline_source(&k_good).ok()), 0x9999, None),
+        );
+
+        let (tx_bad, rx_bad) = mpsc::channel::<()>();
+        let sched = core.scheduler.as_ref().expect("async scheduler");
+        let ctx = Arc::clone(&core.compile_ctx);
+        let _ = core.pipelines.insert_or_existing_lane(
+            k_bad.clone(),
+            Compiled::pending(Arc::new(pipeline_source(&k_bad).ok()), move |spec| {
+                let _ = rx_bad.recv();
+                spec.as_ref().and_then(|s| super::build_pipeline(&ctx, s))
+            }),
+            sched,
+            CompileScheduler::default,
+            CompileLane::Normal,
+        );
+
+        let binds = ff_binds();
+        let d_good = DrawData {
+            key_gen: 1,
+            ..triangle(&binds)
+        };
+        let d_bad = DrawData {
+            key_gen: 2,
+            ..triangle(&binds)
+        };
+
+        // Draw 1: binds ready PSO 0x9999 with key_gen=1.
+        assert_eq!(core.draw(&k_good, &d_good), Ok(()));
+        // Draw 2: deferred compile on non-discard persistent BackBuffer, fails on encode thread.
+        assert_eq!(core.draw(&k_bad, &d_bad), Ok(()));
+        // Release gated failure before Draw 3 (`k_good` again with key_gen=1 must re-emit SetPSO).
+        let _ = tx_bad.send(());
+        assert_eq!(core.draw(&k_good, &d_good), Ok(()));
+        core.drain();
+
+        let calls = dxmt_fakes::take_calls(DEVICE);
+        let set_pso_prefix = format!("  render {WMT_RENDER_COMMAND_SET_PSO} ");
+        let pso_cmds = calls
+            .iter()
+            .filter(|c| c.starts_with(&set_pso_prefix))
+            .collect::<Vec<_>>();
+        assert_eq!(pso_cmds.len(), 2, "{calls:#?}");
+        assert!(
+            pso_cmds
+                .iter()
+                .all(|c| !c.ends_with(" 0") && !c.contains("pso=0")),
+            "{pso_cmds:#?}"
+        );
+        assert_eq!(count_prefix(&calls, "  render 19 "), 2, "{calls:#?}");
+    });
+}

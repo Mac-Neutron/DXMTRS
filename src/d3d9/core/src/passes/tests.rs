@@ -12,6 +12,7 @@ use mtld3d_shared::{
 };
 
 use super::*;
+use crate::depth_stencil_state::STENCIL_MASK_BITS;
 
 fn tex(raw: u64) -> MetalHandle<MTLTextureKind> {
     // SAFETY: tests; opaque values never dereferenced.

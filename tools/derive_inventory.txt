@@ -373,6 +373,7 @@ src/d3d12/src/sampler/tests.rs Input Clone,Copy
 src/d3d12/src/shader_cache.rs FunctionKind Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/core/src/async_compile.rs ClearPlanes Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/core/src/async_compile.rs JobTicket Clone,Copy,PartialEq,Eq,Hash,Debug
+src/d3d9/core/src/async_compile/tests.rs Key Clone,Copy,PartialEq,Eq,Hash,Debug
 src/d3d9/core/src/buffer_backing.rs BackingClass Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/buffer_backing.rs BackingState Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/buffer_rename.rs BufferMapMode Debug,Clone,Copy,PartialEq,Eq
@@ -554,9 +555,12 @@ src/d3d9/mtl/src/wmt.rs Size Default,Clone,Copy,PartialEq,Eq
 src/d3d9/mtl/src/wmt.rs SpatialScalerInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
+src/d3d9/rt/src/device.rs ClearTarget Clone,Copy,PartialEq,Eq,Hash,Debug
+src/d3d9/rt/src/device.rs CoreOptions Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/rt/src/device/depth.rs DepthRef Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
 src/d3d9/rt/src/device/draw.rs StreamData Clone,Copy
+src/d3d9/rt/src/device/shader_cache.rs StageFnKey Clone,PartialEq,Eq,Hash
 src/d3d9/rt/src/device/target.rs Shape Clone,Copy
 src/d3d9/rt/src/device/target.rs TargetRef Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/rt/src/device/textures.rs CoreTextureDesc Clone,Copy,Debug
@@ -709,6 +713,8 @@ src/dxmt/src/resource/texture.rs TextureViewKey Clone,Copy,Default,PartialEq,Eq,
 src/dxmt/src/resource/texture_info.rs Dimension Clone,Copy
 src/dxmt/src/resource/view.rs ViewDimension Clone,Copy
 src/dxmt/src/resource/view.rs ViewKind Clone,Copy
+src/dxmt/src/scheduler.rs CompileLane Clone,Copy,PartialEq,Eq,Debug
+src/dxmt/src/scheduler.rs JobTicket Clone,Copy,PartialEq,Eq,Hash,Debug
 src/dxmt/src/settings.rs Compression Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/settings.rs Flags Clone,Copy,Debug,PartialEq,Eq
 src/dxmt/src/stats.rs StatId Clone,Copy

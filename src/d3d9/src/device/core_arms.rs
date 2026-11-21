@@ -29,8 +29,8 @@
 use core::ffi::c_void;
 
 use d3d9_rt::device::{
-    CoreDevice, CoreTextureDesc, CoreTextureFlags, DepthRef, StretchQuad, TargetRef, TextureKind,
-    UploadRegion, view_format,
+    ClearPlanes, CoreDevice, CoreTextureDesc, CoreTextureFlags, DepthRef, StretchQuad, TargetRef,
+    TextureKind, UploadRegion, view_format,
 };
 use mtld3d_core::{
     buffer_rename::BufferMapMode,
@@ -585,6 +585,11 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         if answer != D3D_OK {
             return answer;
         }
+        let whole_dst = dst_region.x == 0
+            && dst_region.y == 0
+            && dst_region.w == dst_info.width
+            && dst_region.h == dst_info.height;
+        core.note_stretch_copy(source, destination, ClearPlanes::COLOR, whole_dst);
         if !dst_parent.is_null() {
             super::claim_dst_subresource_for_gpu(dst_surf, dst_info);
         }
@@ -718,11 +723,15 @@ pub fn stretch_depth(
                 return D3D_OK;
             }
             dev.core_mut().is_some_and(|core| {
-                if resolve {
+                let ok = if resolve {
                     core.depth_resolve(source, destination)
                 } else {
                     core.copy_depth(source, destination)
+                };
+                if ok {
+                    core.note_stretch_depth_copy(source, destination);
                 }
+                ok
             })
         }
         _ => false,
@@ -803,7 +812,9 @@ pub fn resz(dev: &mut DeviceInner) -> Result<(), i32> {
     } else {
         core.copy_depth(source, destination)
     };
-    if !recorded {
+    if recorded {
+        core.note_stretch_depth_copy(source, destination);
+    } else {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "d3d9 core: RESZ skipped: the core does not copy or resolve the pair ({source:?} into \
              {destination:?})");
@@ -1025,7 +1036,9 @@ fn resolve_shape(
         // Its core texture exists from here, with every CPU write so far uploaded.
         let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
     }
-    core.resolve_into(source, destination).then_some(())
+    core.resolve_into(source, destination).then(|| {
+        core.note_stretch_copy(source, destination, ClearPlanes::COLOR, true);
+    })
 }
 
 /// Runs `copy` with a slot for the one scratch texture it may make, then forgets that texture.

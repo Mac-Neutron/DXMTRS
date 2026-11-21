@@ -1509,12 +1509,14 @@ impl Encoder {
             width: 16,
             height: 16,
         });
-        self.encode_render_command(WmtcmdRenderSetpso {
-            r#type: WMT_RENDER_COMMAND_SET_PSO,
-            reserved: [0; 3],
-            next: MemPtr::NULL,
-            pso: recover_pso,
-        });
+        if recover_pso != 0 {
+            self.encode_render_command(WmtcmdRenderSetpso {
+                r#type: WMT_RENDER_COMMAND_SET_PSO,
+                reserved: [0; 3],
+                next: MemPtr::NULL,
+                pso: recover_pso,
+            });
+        }
     }
 
     /// Current frame id (`ArgumentEncodingContext::currentFrameId`).

@@ -22,7 +22,7 @@ use winemetal_sys::{
     },
 };
 
-use super::{CoreDevice, LOG_TARGET, TargetRef, textures::two_d};
+use super::{ClearTarget, CoreDevice, LOG_TARGET, TargetRef, textures::two_d};
 
 /// `D3DPRESENT_INTERVAL_IMMEDIATE`.
 const INTERVAL_IMMEDIATE: u32 = 0x8000_0000;
@@ -139,6 +139,7 @@ impl CoreDevice {
     #[must_use]
     pub fn resize(&mut self, width: u32, height: u32, samples: u8) -> bool {
         self.drain();
+        self.clear_history.forget(ClearTarget::BackBuffer);
         self.make_back_buffer(width, height, samples);
         if self.back_buffer.is_none() {
             return false;
@@ -187,6 +188,7 @@ impl CoreDevice {
             if self.dirty || self.render_open {
                 self.commit();
             }
+            self.end_frame_clear_tracking();
             return;
         };
         let texture = Arc::clone(back_buffer.presented().0);
@@ -202,6 +204,7 @@ impl CoreDevice {
         });
         self.commit();
         self.device.queue().present_boundary(true);
+        self.end_frame_clear_tracking();
     }
 
     /// The gamma ramp the presenter applies from the next present, or none (DXMTRS C4c-7d-1).

@@ -21,6 +21,7 @@ use dxmt_core::{
     resource::{Texture, TextureViewDescriptor, TextureViewKey},
 };
 use mtld3d_core::{
+    async_compile::ClearPlanes,
     depth_stencil_state::{
         DepthStencilSnapshot, StencilFaceDescription, description_from_snapshot, key_from_snapshot,
     },
@@ -238,6 +239,20 @@ impl CoreDevice {
         let Some((texture, key, planes)) = self.depth_clear(planes) else {
             return;
         };
+        if let Some(depth_ref) = self.depth {
+            let (clear_target, subresource) = super::depth_clear_key(depth_ref);
+            let mut clear_planes = ClearPlanes::empty();
+            if planes & 1 != 0 {
+                clear_planes.insert(ClearPlanes::DEPTH);
+            }
+            if planes & 2 != 0 {
+                clear_planes.insert(ClearPlanes::STENCIL);
+            }
+            if !clear_planes.is_empty() {
+                self.clear_history
+                    .record_key(clear_target, subresource, clear_planes);
+            }
+        }
         let depth = clear_depth(depth);
         self.close_pass();
         self.emit(move |enc| enc.clear_depth_stencil(&texture, key, 0, planes, depth, stencil));

@@ -16,7 +16,10 @@
 //! What the core logs goes to [`take_log`]. The capture manager and the scalers have no fakes: a
 //! call to one aborts the test (the test binary links with `-undefined dynamic_lookup`).
 
-use core::{alloc::Layout, ffi::c_char};
+use core::{
+    alloc::Layout,
+    ffi::{CStr, c_char, c_void},
+};
 use std::{
     collections::BTreeMap,
     sync::{Mutex, MutexGuard, PoisonError},
@@ -38,6 +41,8 @@ use winemetal_sys::wire::{
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
 const FIRST_HANDLE: u64 = 0x10_0000;
 
+type FakeCacheTable = BTreeMap<Vec<u8>, Vec<u8>>;
+
 /// What the fakes made and saw, for every thread: the encode thread calls them, not the test's.
 struct State {
     next: u64,
@@ -50,6 +55,14 @@ struct State {
     /// Each call a test reads, after its device.
     calls: Vec<(u64, String)>,
     log: Vec<(u32, String)>,
+    /// Byte payloads stored for `DispatchData_alloc_init` / `DispatchData_copyBytes`.
+    dispatch_data: BTreeMap<u64, Vec<u8>>,
+    /// In-memory SQLite cache simulation keyed by path: `(version, map<key, bytes>)`.
+    cache_dbs: BTreeMap<String, (u64, FakeCacheTable)>,
+    /// Open `CacheReader` handles mapped to their database path.
+    cache_readers: BTreeMap<u64, String>,
+    /// Open `CacheWriter` handles mapped to their database path.
+    cache_writers: BTreeMap<u64, String>,
 }
 
 /// The fakes' one [`State`].
@@ -64,6 +77,10 @@ static STATE: Mutex<State> = Mutex::new(State {
     cmdbuf_status: BTreeMap::new(),
     calls: Vec::new(),
     log: Vec::new(),
+    dispatch_data: BTreeMap::new(),
+    cache_dbs: BTreeMap::new(),
+    cache_readers: BTreeMap::new(),
+    cache_writers: BTreeMap::new(),
 });
 
 fn state() -> MutexGuard<'static, State> {
@@ -121,6 +138,14 @@ pub fn take_log() -> Vec<(u32, String)> {
 pub fn fail_next_command_buffer(device: u64) {
     let mut state = state();
     *state.fail_next.entry(device).or_insert(0) += 1;
+}
+
+/// Clears the in-memory fake shader cache databases and open reader/writer handles.
+pub fn reset_shader_cache() {
+    let mut state = state();
+    state.cache_dbs.clear();
+    state.cache_readers.clear();
+    state.cache_writers.clear();
 }
 
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
@@ -542,8 +567,160 @@ extern "C-unwind" fn fake_new_compute_pipeline(
 }
 
 #[unsafe(export_name = "DispatchData_alloc_init")]
-extern "C-unwind" fn fake_dispatch_data(_bytes: u64, _length: u64) -> u64 {
-    state().made_of(0)
+extern "C-unwind" fn fake_dispatch_data(bytes: u64, length: u64) -> u64 {
+    let len = usize::try_from(length).unwrap_or(0);
+    let payload = if bytes != 0 && len > 0 {
+        let ptr = core::ptr::with_exposed_provenance::<u8>(
+            usize::try_from(bytes).expect("a pointer that fits usize"),
+        );
+        // SAFETY: caller passes a readable buffer of `len` bytes for the call.
+        unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec()
+    } else {
+        Vec::new()
+    };
+    let mut state = state();
+    let handle = state.made_of(0);
+    state.dispatch_data.insert(handle, payload);
+    drop(state);
+    handle
+}
+
+#[unsafe(export_name = "DispatchData_copyBytes")]
+extern "C-unwind" fn fake_dispatch_data_copy_bytes(
+    data: u64,
+    buffer: *mut c_void,
+    capacity: u64,
+) -> u64 {
+    let state = state();
+    let Some(bytes) = state.dispatch_data.get(&data) else {
+        return 0;
+    };
+    let total = bytes.len() as u64;
+    if !buffer.is_null() {
+        let cap = usize::try_from(capacity).unwrap_or(usize::MAX);
+        let count = bytes.len().min(cap);
+        if count > 0 {
+            // SAFETY: caller passes a writable `buffer` of at least `capacity` bytes.
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), count);
+            }
+        }
+    }
+    drop(state);
+    total
+}
+
+fn cache_path(path: *const c_char) -> Option<String> {
+    if path.is_null() {
+        return None;
+    }
+    // SAFETY: caller passes a NUL-terminated path alive for the call.
+    Some(
+        unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+#[unsafe(export_name = "CacheWriter_alloc_init")]
+extern "C-unwind" fn fake_cache_writer_alloc_init(path: *const c_char, version: u64) -> u64 {
+    let Some(path) = cache_path(path) else {
+        return 0;
+    };
+    let mut state = state();
+    match state.cache_dbs.get(&path) {
+        Some((existing_ver, _)) if *existing_ver == version => {}
+        _ => {
+            state
+                .cache_dbs
+                .insert(path.clone(), (version, BTreeMap::new()));
+        }
+    }
+    let handle = state.made_of(0);
+    state.cache_writers.insert(handle, path);
+    drop(state);
+    handle
+}
+
+#[unsafe(export_name = "CacheReader_alloc_init")]
+extern "C-unwind" fn fake_cache_reader_alloc_init(path: *const c_char, version: u64) -> u64 {
+    let Some(path) = cache_path(path) else {
+        return 0;
+    };
+    let mut state = state();
+    if state
+        .cache_dbs
+        .get(&path)
+        .is_none_or(|(existing_ver, _)| *existing_ver != version)
+    {
+        return 0;
+    }
+    let handle = state.made_of(0);
+    state.cache_readers.insert(handle, path);
+    drop(state);
+    handle
+}
+
+#[unsafe(export_name = "CacheReader_get")]
+extern "C-unwind" fn fake_cache_reader_get(reader: u64, key: *const c_void, length: u64) -> u64 {
+    let Ok(len) = usize::try_from(length) else {
+        return 0;
+    };
+    if len > 0 && key.is_null() {
+        return 0;
+    }
+    let key_bytes = if len == 0 {
+        &[]
+    } else {
+        // SAFETY: caller passes a readable `key` slice of `len` bytes.
+        unsafe { core::slice::from_raw_parts(key.cast::<u8>(), len) }
+    };
+    let mut state = state();
+    let payload = state
+        .cache_readers
+        .get(&reader)
+        .and_then(|path| state.cache_dbs.get(path))
+        .and_then(|(_, db)| db.get(key_bytes))
+        .cloned();
+    let Some(payload) = payload else {
+        return 0;
+    };
+    let handle = state.made_of(0);
+    state.dispatch_data.insert(handle, payload);
+    drop(state);
+    handle
+}
+
+#[unsafe(export_name = "CacheWriter_set")]
+extern "C-unwind" fn fake_cache_writer_set(
+    writer: u64,
+    key: *const c_void,
+    key_length: u64,
+    value: u64,
+) {
+    let Ok(len) = usize::try_from(key_length) else {
+        return;
+    };
+    if len > 0 && key.is_null() {
+        return;
+    }
+    let key_bytes = if len == 0 {
+        &[]
+    } else {
+        // SAFETY: caller passes a readable `key` slice of `len` bytes.
+        unsafe { core::slice::from_raw_parts(key.cast::<u8>(), len) }
+    };
+    let mut state = state();
+    let Some(path) = state.cache_writers.get(&writer).cloned() else {
+        return;
+    };
+    let Some(payload) = state.dispatch_data.get(&value).cloned() else {
+        return;
+    };
+    if let Some((_, db)) = state.cache_dbs.get_mut(&path) {
+        db.insert(key_bytes.to_vec(), payload);
+    }
+    drop(state);
 }
 
 #[unsafe(export_name = "MTLDevice_newLibrary")]

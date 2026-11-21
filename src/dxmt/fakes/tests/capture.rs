@@ -2,6 +2,8 @@
 
 use dxmt_core::{device::Device, encoder::NO_NEXT, library, queue::QueueConfig};
 use winemetal_sys::{
+    CacheReader_alloc_init, CacheReader_get, CacheWriter_alloc_init, CacheWriter_set,
+    DispatchData_alloc_init, DispatchData_copyBytes,
     MTLDevice_newRenderPipelineStateWithVertexDescriptor,
     wire::{
         WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_FILL_BUFFER,
@@ -196,4 +198,49 @@ fn fail_next_command_buffer_latches_queue_has_error() {
     queue.commit();
     queue.wait_cpu(seq2);
     assert!(queue.has_error());
+}
+
+/// Fake `DispatchData` and SQLite `CacheReader`/`CacheWriter` round-trip payloads cleanly.
+#[test]
+fn dispatch_data_and_shader_cache_fakes_roundtrip() {
+    let path = c"/fake/capture_cache_test.db";
+    let key = b"cache-key";
+    let payload = b"hello-metal-cache";
+
+    // SAFETY: valid C string, pointer, and length for the duration of each fake call.
+    let writer = unsafe { CacheWriter_alloc_init(path.as_ptr(), 0x1234) };
+    assert_ne!(writer, 0);
+    // SAFETY: `payload` is valid for its length.
+    let data =
+        unsafe { DispatchData_alloc_init(payload.as_ptr().addr() as u64, payload.len() as u64) };
+    assert_ne!(data, 0);
+    // SAFETY: `writer`, `key`, and `data` are valid handles/slices.
+    unsafe { CacheWriter_set(writer, key.as_ptr().cast(), key.len() as u64, data) };
+
+    // SAFETY: valid C string matching `writer`'s version.
+    let reader = unsafe { CacheReader_alloc_init(path.as_ptr(), 0x1234) };
+    assert_ne!(reader, 0);
+    // SAFETY: `reader` and `key` are valid.
+    let read_data = unsafe { CacheReader_get(reader, key.as_ptr().cast(), key.len() as u64) };
+    assert_ne!(read_data, 0);
+
+    // SAFETY: null buffer queries full length.
+    let full_len = unsafe { DispatchData_copyBytes(read_data, core::ptr::null_mut(), 0) };
+    assert_eq!(full_len, payload.len() as u64);
+
+    let mut buf = vec![0_u8; payload.len()];
+    // SAFETY: `buf` is writable for `payload.len()` bytes.
+    let copied =
+        unsafe { DispatchData_copyBytes(read_data, buf.as_mut_ptr().cast(), buf.len() as u64) };
+    assert_eq!(copied, payload.len() as u64);
+    assert_eq!(buf, payload);
+
+    // Version mismatch drops table on new writer open.
+    // SAFETY: valid C string with new version.
+    let _writer2 = unsafe { CacheWriter_alloc_init(path.as_ptr(), 0x5678) };
+    // SAFETY: valid C string matching new version.
+    let reader2 = unsafe { CacheReader_alloc_init(path.as_ptr(), 0x5678) };
+    // SAFETY: `reader2` and `key` are valid.
+    let got = unsafe { CacheReader_get(reader2, key.as_ptr().cast(), key.len() as u64) };
+    assert_eq!(got, 0);
 }

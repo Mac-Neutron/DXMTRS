@@ -63,9 +63,26 @@ pub fn instance(metal_version: u32, version: u64) -> Arc<Store> {
 pub fn close_all() {
     let stores: Vec<Arc<Store>> = {
         let mut caches = lock(&CACHES);
-        caches.drain().map(|(_, store)| store).collect()
+        let drained = caches.drain().map(|(_, store)| store).collect();
+        drop(caches);
+        drained
     };
     for store in stores {
         store.close();
+    }
+}
+
+/// Non-blocking variant of [`close_all`] for `DLL_PROCESS_DETACH`.
+///
+/// Uses `try_lock` on the global cache map and each [`Store`]'s reader/writer mutexes so process
+/// detach never deadlocks when worker threads have already been terminated.
+pub fn try_close_all() {
+    let Ok(mut caches) = CACHES.try_lock() else {
+        return;
+    };
+    let stores: Vec<Arc<Store>> = caches.drain().map(|(_, store)| store).collect();
+    drop(caches);
+    for store in stores {
+        store.try_close();
     }
 }

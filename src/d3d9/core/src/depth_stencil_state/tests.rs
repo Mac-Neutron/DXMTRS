@@ -7,8 +7,8 @@
 //! the width `Stencil8` observes, and each clear-quad state keeps a key of its own.
 
 use mtld3d_types::{
-    D3DCMP_ALWAYS, D3DCMP_EQUAL, D3DCMP_LESSEQUAL, D3DSTENCILOP_KEEP, D3DSTENCILOP_REPLACE,
-    render_state_defaults,
+    D3DCMP_ALWAYS, D3DCMP_EQUAL, D3DCMP_LESSEQUAL, D3DSTENCILOP_INCRSAT, D3DSTENCILOP_KEEP,
+    D3DSTENCILOP_REPLACE, render_state_defaults,
 };
 
 use super::*;
@@ -318,4 +318,31 @@ fn snapshot_equality_sees_every_byte() {
         let copy = changed;
         assert_eq!(changed, copy, "edit {index} equals its copy");
     }
+}
+
+#[test]
+fn writes_stencil_checks_enable_write_mask_and_non_keep_ops() {
+    assert!(!DepthStencilSnapshot::inert().writes_stencil());
+    assert!(DepthStencilSnapshot::stencil_overwrite().writes_stencil());
+    assert!(DepthStencilSnapshot::depth_stencil_overwrite().writes_stencil());
+
+    let mut no_mask = DepthStencilSnapshot::stencil_overwrite();
+    no_mask.write_mask = 0x100; // Outside low 8 bits (`STENCIL_MASK_BITS`).
+    assert!(!no_mask.writes_stencil());
+
+    let mut keep_only = DepthStencilSnapshot::stencil_overwrite();
+    keep_only.front.fail_op = narrow(D3DSTENCILOP_KEEP);
+    keep_only.front.depth_fail_op = narrow(D3DSTENCILOP_KEEP);
+    keep_only.front.pass_op = narrow(D3DSTENCILOP_KEEP);
+    keep_only.back = keep_only.front;
+    assert!(!keep_only.writes_stencil());
+
+    let mut back_writes = keep_only;
+    back_writes.back.pass_op = narrow(D3DSTENCILOP_INCRSAT);
+    assert!(back_writes.writes_stencil());
+
+    // Out-of-range enum value maps to Keep.
+    let mut unmapped = keep_only;
+    unmapped.front.pass_op = 99;
+    assert!(!unmapped.writes_stencil());
 }

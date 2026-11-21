@@ -5919,6 +5919,11 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
         stored.device_window = dev.window();
     }
     dev.set_present_params(stored);
+    #[cfg(feature = "core-runtime")]
+    if let Some(core) = dev.core_mut() {
+        core.set_discard_back_buffer(stored.swap_effect == mtld3d_types::D3DSWAPEFFECT_DISCARD);
+        core.reset_clear_history();
+    }
 
     // 7. Reseed `current_frame` so it carries the new backbuffer/depth
     //    handles. The post-flush frame still referenced the destroyed

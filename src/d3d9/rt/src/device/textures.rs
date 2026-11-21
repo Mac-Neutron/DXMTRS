@@ -32,7 +32,7 @@ use winemetal_sys::wire::{
 };
 
 use super::{
-    CoreDevice, LOG_TARGET, TargetRef,
+    ClearTarget, CoreDevice, LOG_TARGET, TargetRef,
     draw::Stage,
     stretch::StretchQuad,
     surface::rect_bytes,
@@ -123,6 +123,7 @@ pub struct UploadRegion {
 
 /// A texture and sampler a draw binds at one slot of a stage.
 pub struct TextureBind {
+    pub(super) id: Option<TextureId>,
     pub(super) stage: Stage,
     pub(super) slot: u8,
     pub(super) texture: Arc<Texture>,
@@ -328,6 +329,7 @@ impl CoreDevice {
     ) -> Option<TextureBind> {
         let (texture, key) = self.texture_view(id, view_format)?;
         Some(TextureBind {
+            id: Some(id),
             stage,
             slot,
             texture,
@@ -345,6 +347,7 @@ impl CoreDevice {
     ) -> TextureBind {
         let (texture, key) = self.black();
         TextureBind {
+            id: None,
             stage,
             slot,
             texture,
@@ -397,6 +400,7 @@ impl CoreDevice {
         if had_target || had_extra || had_depth {
             self.target_gen = self.target_gen.wrapping_add(1);
         }
+        self.clear_history.forget(ClearTarget::Texture(id));
         self.textures.remove(&id);
     }
 

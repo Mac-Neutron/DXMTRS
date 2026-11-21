@@ -1,6 +1,7 @@
 //! A core device on `dxmt-fakes` for the recorder's tests, and what its queue's commits captured.
 
 use core::ffi::c_char;
+use std::sync::{Mutex, Once, PoisonError};
 
 use dxmt_fakes as _;
 use mtld3d_core::{
@@ -355,4 +356,57 @@ const extern "C-unwind" fn library_with_source(
     _error: *mut u64,
 ) -> u64 {
     SOURCE_LIBRARY
+}
+
+/// Process-wide test lock serializing tests that reset `dxmt_fakes`'s global shader cache or logs.
+pub static FAKE_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
+
+static TEST_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct TestLogger;
+
+impl log::Log for TestLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let mut logs = TEST_LOGS.lock().unwrap_or_else(PoisonError::into_inner);
+            logs.push(record.args().to_string());
+            drop(logs);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static TEST_LOGGER: TestLogger = TestLogger;
+static LOGGER_INIT: Once = Once::new();
+
+/// Installs the shared `d3d9-rt` unit-test logger once per test binary.
+pub fn ensure_test_logger() {
+    LOGGER_INIT.call_once(|| {
+        let _ = log::set_logger(&TEST_LOGGER);
+        log::set_max_level(log::LevelFilter::Info);
+    });
+}
+
+/// Runs `f` with `ensure_test_logger` active and returns every log line appended during `f`.
+pub fn capture_logs<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+    ensure_test_logger();
+    let start = {
+        let logs = TEST_LOGS.lock().unwrap_or_else(PoisonError::into_inner);
+        let len = logs.len();
+        drop(logs);
+        len
+    };
+    let res = f();
+    let lines = {
+        let logs = TEST_LOGS.lock().unwrap_or_else(PoisonError::into_inner);
+        let slice = logs.get(start..).unwrap_or_default().to_vec();
+        drop(logs);
+        slice
+    };
+    (res, lines)
 }

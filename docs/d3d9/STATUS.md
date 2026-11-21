@@ -9,8 +9,9 @@ divergences from D3D9 it keeps on purpose. The tested games are in
 
 - Shader models 1.x through 3.0 and the fixed-function stages, lowered from
   DXSO through the translator to AIR by default (`shader.backend=air`) and
-  cached on disk by content hash; `shader.backend=msl` is the escape, the MSL
-  emitter, unchanged until its deletion.
+  cached on disk by content hash (with `shaderCache.enable` and warm-start
+  pipeline recipe prewarming supported on both `mtld3d` and `runtime.mode = core`);
+  `shader.backend=msl` is the escape, the MSL emitter, unchanged until its deletion.
 - The fixed-function pipeline: lighting, texture-coordinate generation
   (camera-space normal, position and reflection vector, and sphere map), the
   texture-stage cascade (CURRENT/TEMP registers, per-stage constants,
@@ -460,7 +461,7 @@ is in [`CONFORMANCE.md`](../../tests/d3d9/conformance/CONFORMANCE.md#kept-diverg
   query counts,
   and appears once the build lands; D3D9 draws every call in its frame.
   Building inline stalls the frame for the length of a Metal compile.
-  `shader.asyncCompile`, on by default.
+  `shader.asyncCompile`, on by default (on both `mtld3d` and `runtime.mode = core`).
 - The fixed-function specular add clamps its sum to [0, 1] before fog
   blends it, where both reference implementations fog the unclamped sum. No
   knob.

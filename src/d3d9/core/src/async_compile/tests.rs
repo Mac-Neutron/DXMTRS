@@ -2,7 +2,8 @@ use mtld3d_shared::{Command, MetalHandle, mtl::PixelFormat, mtl_handle::MTLTextu
 
 use super::{
     ClearHistory, ClearPlanes, CompileLanes, DeferredPipelineId, DeferredPipelines, DeferredState,
-    FEED_MEMORY_FRAMES, JobTicket, LibrarySlot, TicketSource, mark_kept_reads, may_skip_draw,
+    FEED_MEMORY_FRAMES, JobTicket, LibrarySlot, TicketSource, mark_kept_reads,
+    mark_kept_reads_generic, may_skip_draw,
 };
 use crate::{
     depth_stencil_state::DepthStencilSnapshot,
@@ -702,4 +703,33 @@ fn lost_tickets_retry_pipelines_and_fail_libraries() {
         None,
         "a cleared record names nothing"
     );
+}
+
+/// Generic `ClearHistory<K>` and `mark_kept_reads_generic` propagate kept marks across custom keys.
+#[test]
+fn generic_clear_history_and_mark_kept_reads() {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    enum Key {
+        BackBuffer,
+        Tex(u32),
+    }
+
+    let mut history: ClearHistory<Key> = ClearHistory::new();
+    for _ in 0..2 {
+        history.begin_frame();
+        history.record_key(Key::Tex(1), 0, ClearPlanes::COLOR);
+        history.record_key(Key::Tex(2), 0, ClearPlanes::COLOR);
+    }
+    assert!(history.regenerated(Key::Tex(1), 0, ClearPlanes::COLOR));
+    assert!(history.regenerated(Key::Tex(2), 0, ClearPlanes::COLOR));
+
+    // Pass 0 writes Tex(2) and reads Tex(1); Pass 1 writes BackBuffer (persistent) and reads Tex(2).
+    let reads = [(0, Key::Tex(1)), (1, Key::Tex(2))];
+    mark_kept_reads_generic(&reads, &mut history, |h, pass| match pass {
+        0 => !h.regenerated(Key::Tex(2), 0, ClearPlanes::COLOR) || h.feeds_persistent(Key::Tex(2)),
+        1 => !h.regenerated(Key::BackBuffer, 0, ClearPlanes::COLOR),
+        _ => true,
+    });
+    assert!(history.feeds_persistent(Key::Tex(2)));
+    assert!(history.feeds_persistent(Key::Tex(1)));
 }

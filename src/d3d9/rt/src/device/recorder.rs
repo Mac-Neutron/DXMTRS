@@ -14,12 +14,12 @@ use dxmt_core::{
     encoder::{Encoder, stage},
     resource::{Texture, TextureViewKey},
 };
-use mtld3d_core::convert::linear_to_srgb_rgba;
+use mtld3d_core::{async_compile::ClearPlanes, convert::linear_to_srgb_rgba};
 use winemetal_sys::wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTClearColor, WMTScissorRect,
 };
 
-use super::{CoreDevice, TargetRef, depth, query, target::Resolved};
+use super::{ClearTarget, CoreDevice, CoreOptions, TargetRef, depth, query, target::Resolved};
 
 impl CoreDevice {
     /// Records `f`, which the encode thread runs once at the chunk's flush.
@@ -130,6 +130,21 @@ impl CoreDevice {
                 self.note_written(target, colors[slot]);
             }
         }
+        if self.options.contains(CoreOptions::ASYNC_COMPILE) {
+            let mut color_keys = [(ClearTarget::BackBuffer, 0); 4];
+            let mut color_present = [false; 4];
+            for (slot, view) in views.iter().enumerate() {
+                if view.is_some()
+                    && let Some(target) = self.slot_target(slot)
+                {
+                    color_keys[slot] = super::color_clear_key(target);
+                    color_present[slot] = true;
+                }
+            }
+            let depth_key = self.depth.filter(|_| attached).map(super::depth_clear_key);
+            self.pass_reads
+                .push_pass(color_keys, color_present, depth_key);
+        }
         let counted = self.open_brackets.is_some();
         self.emit(move |enc| {
             let planes = depth.as_ref().map_or(0, |d| depth::planes(d.pixel_format));
@@ -227,6 +242,11 @@ impl CoreDevice {
         };
         let (texture, key) = (target.texture, target.key);
         self.note_cleared(slot, key.format());
+        if let Some(target_ref) = self.slot_target(slot) {
+            let (clear_target, subresource) = super::color_clear_key(target_ref);
+            self.clear_history
+                .record_key(clear_target, subresource, ClearPlanes::COLOR);
+        }
         self.close_pass();
         let color = WMTClearColor {
             r: f64::from(rgba[0]),
@@ -294,6 +314,14 @@ impl CoreDevice {
             return false;
         }
         self.note_written(target, key.format());
+        let whole = rect.is_none_or(|[x, y, width, height]| {
+            x == 0 && y == 0 && width == shape.width && height == shape.height
+        });
+        if whole {
+            let (clear_target, subresource) = super::color_clear_key(target);
+            self.clear_history
+                .record_key(clear_target, subresource, ClearPlanes::COLOR);
+        }
         self.close_pass();
         if let Some(rect) = rect {
             self.emit_quad_clear(texture, key, scissor_rects(&[rect]), rgba);

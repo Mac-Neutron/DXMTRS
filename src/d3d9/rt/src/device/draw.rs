@@ -14,36 +14,35 @@
 //! pipeline is built on the API thread and waited for (no asynchronous compile until C4d).
 
 use core::{
-    ffi::CStr,
     hash::{Hash as _, Hasher as _},
     ptr::NonNull,
+    sync::atomic::Ordering,
 };
-use std::{borrow::Cow, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
-use airconv_ir::dxso::spec::{StageSpec, VARIANT_KEY_WIRE, VS_SPEC_WIRE};
 use dxmt_core::{
     deptrack::Access,
-    device::Device,
     encoder::{NO_NEXT, direct, stage},
-    pipeline_cache::{Compiled, PsoMap},
-    shader::{Entry, compile, compiled_data, initialize_dxso, load_function},
+    pipeline_cache::{CompileState, Compiled, PsoMap},
+    scheduler::{CompileLane, CompileScheduler},
 };
+use dxmt_util::sync::lock;
 use mtld3d_core::{
+    async_compile::ClearPlanes,
     clear_area::clamp_rect,
     depth_stencil_state::DepthStencilSnapshot,
     draw_data::NULL_STREAM_ZEROS,
     ids::BufferId,
-    pipeline_key::{
-        MAX_STREAMS, PipelineKey, PipelineSource, ShaderCode, StageSource, StreamKey,
-        pipeline_source,
-    },
+    pipeline_key::{MAX_STREAMS, PipelineKey, PipelineSource, StreamKey, pipeline_source},
     pipeline_state::{BlendFactor, BlendOperation, CoreBlend},
     streams::{advanced_binding_offset, instance_count, offset_shift, slot_binding_offset},
 };
-use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newRenderPipelineStateWithVertexDescriptor, Obj,
-    sm50::{SM50_SHADER_COMMON, SM50_SHADER_METAL_310, Sm50ShaderCommonData},
     wire::{
         MemPtr, WMT_BLEND_FACTOR_BLEND_COLOR, WMT_BLEND_FACTOR_DESTINATION_ALPHA,
         WMT_BLEND_FACTOR_DESTINATION_COLOR, WMT_BLEND_FACTOR_ONE,
@@ -65,7 +64,7 @@ use winemetal_sys::{
     },
 };
 
-use super::{CoreDevice, LOG_TARGET};
+use super::{ClearTarget, CompileContext, CoreDevice, CoreOptions, LOG_TARGET};
 
 /// The stage a [`Bind`] binds at.
 // Copy: one byte, copied into the closure's bind list.
@@ -229,31 +228,85 @@ impl PsoMemoEntry {
     }
 }
 
+/// Pipeline state emission mode for [`CoreDevice::emit_general`].
+enum PsoEmit {
+    None,
+    Handle(u64),
+    Deferred(
+        Arc<Compiled<Option<PipelineSource>>>,
+        Option<Arc<OnceLock<CompileScheduler>>>,
+    ),
+}
+
+/// Resolution of a pipeline lookup in [`PsoMemo::lookup`].
+enum ResolvedPso<'a> {
+    Ready(&'a PsoMemoEntry),
+    Pending {
+        entry: Arc<Compiled<Option<PipelineSource>>>,
+        used_mask: u16,
+        bindings: [ActiveBinding; MAX_STREAMS as usize],
+        binding_count: u8,
+    },
+}
+
+fn active_bindings_from_source(
+    source: &PipelineSource,
+) -> (u16, [ActiveBinding; MAX_STREAMS as usize], u8) {
+    let used_mask = (0_u16..)
+        .zip(&source.streams)
+        .filter(|(_, layout)| layout.is_used())
+        .fold(0_u16, |mask, (stream, _)| mask | (1 << stream));
+    let mut bindings = [const { ActiveBinding::EMPTY }; MAX_STREAMS as usize];
+    let mut binding_count = 0_u8;
+    for ((slot, layout), &(stream, advance)) in (0_u8..).zip(&source.layouts).zip(&source.bindings)
+    {
+        if !layout.is_used() {
+            continue;
+        }
+        let stride = source
+            .streams
+            .get(usize::from(stream))
+            .map_or(0, |s: &StreamLayout| s.stride);
+        bindings[usize::from(binding_count)] = ActiveBinding {
+            slot,
+            stream,
+            advance,
+            stride,
+        };
+        binding_count += 1;
+    }
+    (used_mask, bindings, binding_count)
+}
+
 /// Per-device 24-entry MRU cache over resolved pipelines.
 ///
 /// Matches by front-end `key_gen` at index 0 in O(1) without hashing, falling back to
-/// `(key_hash, key)` across the MRU entries before consulting [`PsoMap`]. Refused or failed
-/// pipelines are never cached here.
+/// `(key_hash, key)` across the MRU entries before consulting [`PsoMap`]. Refused, pending, or
+/// failed pipelines are never cached here.
 #[derive(Default)]
 pub(super) struct PsoMemo {
     entries: Vec<PsoMemoEntry>,
 }
 
 impl PsoMemo {
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     fn lookup(
         &mut self,
         key: &PipelineKey,
         key_gen: u64,
-        device: &Device,
+        ctx: &Arc<CompileContext>,
         pipelines: &PsoMap<PipelineKey, Option<PipelineSource>>,
-        functions: &mut StageFunctions,
-    ) -> Result<&PsoMemoEntry, DrawRefused> {
+        scheduler: Option<&Arc<OnceLock<CompileScheduler>>>,
+    ) -> Result<ResolvedPso<'_>, DrawRefused> {
         if key_gen != 0
             && let Some(front) = self.entries.first()
             && front.key_gen == key_gen
         {
             debug_assert_eq!(&front.key, key);
-            return Ok(&self.entries[0]);
+            return Ok(ResolvedPso::Ready(&self.entries[0]));
         }
         let key_hash = hash_pipeline_key(key);
         if let Some(idx) = self
@@ -265,41 +318,33 @@ impl PsoMemo {
                 self.entries[idx].key_gen = key_gen;
             }
             self.entries[..=idx].rotate_right(1);
-            return Ok(&self.entries[0]);
+            return Ok(ResolvedPso::Ready(&self.entries[0]));
         }
         let entry = pipelines
             .get(key)
-            .unwrap_or_else(|| insert_pipeline(device, pipelines, functions, key));
+            .unwrap_or_else(|| insert_pipeline(ctx, pipelines, scheduler, key));
         if entry.spec.as_ref().as_ref().is_some_and(refused_layout) {
             return Err(DrawRefused::Fetch);
         }
-        let (Some(pso), Some(source)) = (entry.ready(), entry.spec.as_ref().as_ref()) else {
+        let Some(source) = entry.spec.as_ref().as_ref() else {
             return Err(DrawRefused::Pipeline);
         };
-        let used_mask = (0_u16..)
-            .zip(&source.streams)
-            .filter(|(_, layout)| layout.is_used())
-            .fold(0_u16, |mask, (stream, _)| mask | (1 << stream));
-        let mut bindings = [const { ActiveBinding::EMPTY }; MAX_STREAMS as usize];
-        let mut binding_count = 0_u8;
-        for ((slot, layout), &(stream, advance)) in
-            (0_u8..).zip(&source.layouts).zip(&source.bindings)
-        {
-            if !layout.is_used() {
-                continue;
+        let (used_mask, bindings, binding_count) = active_bindings_from_source(source);
+        let pso = match entry.try_ready() {
+            CompileState::Ready(h) => h,
+            CompileState::Failed => return Err(DrawRefused::Pipeline),
+            CompileState::Pending => {
+                if scheduler.is_some() {
+                    return Ok(ResolvedPso::Pending {
+                        entry,
+                        used_mask,
+                        bindings,
+                        binding_count,
+                    });
+                }
+                entry.ready().ok_or(DrawRefused::Pipeline)?
             }
-            let stride = source
-                .streams
-                .get(usize::from(stream))
-                .map_or(0, |s: &StreamLayout| s.stride);
-            bindings[usize::from(binding_count)] = ActiveBinding {
-                slot,
-                stream,
-                advance,
-                stride,
-            };
-            binding_count += 1;
-        }
+        };
         if self.entries.len() == PSO_MEMO_CAP {
             self.entries.pop();
         }
@@ -316,7 +361,7 @@ impl PsoMemo {
                 binding_count,
             },
         );
-        Ok(&self.entries[0])
+        Ok(ResolvedPso::Ready(&self.entries[0]))
     }
 
     #[cfg(test)]
@@ -360,7 +405,7 @@ enum PendingIndex<'a> {
 
 /// Un-deduplicated state and draw payload for [`CoreDevice::emit_general`].
 struct GeneralEmit {
-    pso: Option<u64>,
+    pso: PsoEmit,
     dsso: Option<(u64, u8)>,
     blend: Option<([f32; 4], u8)>,
     viewport: Option<WMTViewport>,
@@ -385,43 +430,6 @@ enum IndexFeed {
     Ring(Vec<u8>),
     /// A stored buffer, from a byte offset.
     Stored(Arc<Buffer>, u64),
-}
-
-/// A compiled stage function's key: its program and its specialization's wire form.
-#[derive(PartialEq, Eq, Hash)]
-struct StageFnKey {
-    code: ShaderCode,
-    wire: (u32, [u8; VS_SPEC_WIRE], [u8; VARIANT_KEY_WIRE]),
-}
-
-/// The device's compiled stage functions, `None` for one that did not compile.
-///
-/// One per program and specialization, as D3D11's variants are: a vertex stage paired with many
-/// pixel stages compiles once.
-#[derive(Default)]
-pub struct StageFunctions {
-    map: FxHashMap<StageFnKey, Option<Obj>>,
-    /// The stage compiles so far.
-    #[cfg(test)]
-    compiles: usize,
-}
-
-impl StageFunctions {
-    /// The handle of `stage`'s function `name`, compiled on its first use.
-    fn function(&mut self, device: &Device, stage: &StageSource, name: &CStr) -> Option<u64> {
-        let key = StageFnKey {
-            code: stage.code.clone(),
-            wire: stage.spec.to_wire(),
-        };
-        let function = self.map.entry(key).or_insert_with(|| {
-            #[cfg(test)]
-            {
-                self.compiles += 1;
-            }
-            compile_stage(device, stage.code.tokens(), &stage.spec, name)
-        });
-        function.as_ref().map(Obj::handle)
-    }
 }
 
 impl CoreDevice {
@@ -482,7 +490,8 @@ impl CoreDevice {
             return Ok(());
         };
         let (
-            pso,
+            pending_entry,
+            pso_ready,
             used,
             mut stored,
             stored_len,
@@ -503,15 +512,29 @@ impl CoreDevice {
                 fed: Cow<'a, [u8]>,
                 unconditional: bool,
             }
-            let pso_entry = self.pso_memo.lookup(
+            let resolved = self.pso_memo.lookup(
                 key,
                 draw.key_gen,
-                &self.device,
+                &self.compile_ctx,
                 &self.pipelines,
-                &mut self.functions,
+                self.scheduler.as_ref(),
             )?;
-            let pso = pso_entry.pso;
-            let used = pso_entry.used_mask;
+            let (pending_entry, pso_ready, used, active_slice) = match &resolved {
+                ResolvedPso::Ready(entry) => {
+                    (None, entry.pso, entry.used_mask, entry.active_bindings())
+                }
+                ResolvedPso::Pending {
+                    entry,
+                    used_mask,
+                    bindings,
+                    binding_count,
+                } => (
+                    Some(Arc::clone(entry)),
+                    0,
+                    *used_mask,
+                    &bindings[..usize::from(*binding_count)],
+                ),
+            };
             let mut stored: [Option<PendingStored>; MAX_STREAMS as usize] =
                 [const { None }; MAX_STREAMS as usize];
             let mut stored_len = 0_usize;
@@ -520,7 +543,7 @@ impl CoreDevice {
             let mut stream_bytes_len = 0_usize;
             let mut dyn_ids = [BufferId::from_raw(0); MAX_STREAMS as usize + 1];
             let mut dyn_count = 0_usize;
-            for binding in pso_entry.active_bindings() {
+            for binding in active_slice {
                 match draw.streams[usize::from(binding.stream)] {
                     StreamData::Buffer { id, offset } => {
                         let (buffer, generation, is_dynamic) =
@@ -583,7 +606,8 @@ impl CoreDevice {
                 }
             }
             (
-                pso,
+                pending_entry,
+                pso_ready,
                 used,
                 stored,
                 stored_len,
@@ -620,16 +644,64 @@ impl CoreDevice {
             instance_count(word, instanced & used != 0)
         });
 
+        let depth_planes = if with_depth {
+            super::depth::planes(key.depth_format)
+        } else {
+            0
+        };
+        if let Some(pending) = pending_entry.as_ref() {
+            let mut check_planes = ClearPlanes::COLOR;
+            if with_depth && (depth_planes & 1 != 0) && draw.depth_stencil.uses_depth() {
+                check_planes.insert(ClearPlanes::DEPTH);
+            }
+            if with_depth && (depth_planes & 2 != 0) && draw.depth_stencil.stencil_enable != 0 {
+                check_planes.insert(ClearPlanes::STENCIL);
+            }
+            let skippable = self.options.contains(CoreOptions::ASYNC_COMPILE)
+                && self.open_brackets.is_none_or(|n| n == 0)
+                && self.targets_rebuilt(colors, check_planes);
+            if skippable {
+                self.compile_ctx
+                    .stats
+                    .draws_skipped
+                    .fetch_add(1, Ordering::Relaxed);
+                if !self.options.contains(CoreOptions::LOGGED_SKIP) {
+                    self.options.insert(CoreOptions::LOGGED_SKIP);
+                    log::log!(
+                        target: LOG_TARGET,
+                        super::gate_level(),
+                        "d3d9 core: leaving draws out of their frame while their shader or \
+                         pipeline builds (shader.asyncCompile); they appear once the build lands"
+                    );
+                }
+                return Ok(());
+            }
+            if let Some(sched) = self.scheduler.as_deref().and_then(OnceLock::get)
+                && let Some(ticket) = pending.ticket()
+            {
+                let _ = sched.promote(ticket);
+            }
+        }
+
         // Phase 2: open or reuse the render pass (`open_pass` resets `pass_bound` on a new pass).
         self.open_pass(with_depth, colors);
+        if self.options.contains(CoreOptions::ASYNC_COMPILE)
+            && with_depth
+            && (depth_planes & 2 != 0)
+            && draw.depth_stencil.writes_stencil()
+        {
+            self.pass_reads.mark_writes_stencil();
+        }
 
         // Phase 3: diff `PassBound`, emit compact fast paths or general draw closure, stamp dynamic.
-        let fast_state = draw.key_gen != 0
+        let is_deferred = pending_entry.is_some();
+        let fast_state = !is_deferred
+            && draw.key_gen != 0
             && self.render_open
             && self.pass_bound.last_draw_gen == draw.key_gen
             && self.pass_bound.pso != 0;
 
-        let mut pso_emit = None;
+        let mut pso_emit = PsoEmit::None;
         let mut dsso_emit = None;
         let mut blend_emit = None;
         let mut viewport_emit = None;
@@ -642,12 +714,14 @@ impl CoreDevice {
             Vec::new();
 
         if !fast_state {
-            if self.pass_bound.pso != pso {
-                self.pass_bound.pso = pso;
-                pso_emit = Some(pso);
+            if let Some(compiled) = pending_entry {
+                pso_emit = PsoEmit::Deferred(compiled, self.scheduler.clone());
+            } else if self.pass_bound.pso != pso_ready {
+                self.pass_bound.pso = pso_ready;
+                pso_emit = PsoEmit::Handle(pso_ready);
             }
             if with_depth {
-                let has_stencil = super::depth::planes(key.depth_format) & 2 != 0;
+                let has_stencil = depth_planes & 2 != 0;
                 let gated = draw.depth_stencil.gated_on_stencil_attachment(has_stencil);
                 let dsso = self.depth_state_handle(&gated);
                 let next = (dsso, draw.stencil_ref);
@@ -717,6 +791,11 @@ impl CoreDevice {
                     .should_bind_texture(t.stage, t.slot, &t.texture, t.key)
                 {
                     textures_emit.push((t.stage, t.slot, Arc::clone(&t.texture), t.key));
+                    if self.options.contains(CoreOptions::ASYNC_COMPILE)
+                        && let Some(id) = t.id
+                    {
+                        self.pass_reads.push_read(ClearTarget::Texture(id));
+                    }
                 }
                 if self
                     .pass_bound
@@ -726,6 +805,10 @@ impl CoreDevice {
                 }
             }
             self.pass_bound.last_draw_gen = draw.key_gen;
+        }
+        if is_deferred {
+            self.pass_bound.pso = 0;
+            self.pass_bound.last_draw_gen = 0;
         }
 
         let mut stored_emit: [Option<(u8, Arc<Buffer>, u64)>; MAX_STREAMS as usize] =
@@ -765,7 +848,7 @@ impl CoreDevice {
 
         let (primitive_type, vertex_count) = (draw.primitive, draw.vertex_count);
         let (vertex_start, base_vertex) = (draw.vertex_start, draw.base_vertex);
-        let no_state_changes = pso_emit.is_none()
+        let no_state_changes = matches!(pso_emit, PsoEmit::None)
             && dsso_emit.is_none()
             && blend_emit.is_none()
             && viewport_emit.is_none()
@@ -949,7 +1032,15 @@ impl CoreDevice {
             base_vertex,
         } = general;
         self.emit(move |enc| {
-            if let Some(pso) = pso_emit {
+            let (is_deferred, pso_handle) = match &pso_emit {
+                PsoEmit::None => (false, None),
+                PsoEmit::Handle(h) => (false, Some(*h)),
+                PsoEmit::Deferred(compiled, sched) => {
+                    let h = compiled.ready_or_steal(sched.as_deref().and_then(OnceLock::get));
+                    (true, h)
+                }
+            };
+            if let Some(pso) = pso_handle {
                 enc.encode_render_command(WmtcmdRenderSetpso {
                     r#type: WMT_RENDER_COMMAND_SET_PSO,
                     reserved: [0; 3],
@@ -1043,6 +1134,9 @@ impl CoreDevice {
                 // A texture read in a pass that wrote it waits on a tile barrier.
                 enc.resolve_render_pass_barrier(dxmt_core::encoder::Encoder::dispatch_tile_barrier);
             }
+            if is_deferred && pso_handle.is_none() {
+                return;
+            }
             // An application's draw counts into the occlusion queries active; no pass of the
             // device's own bumps (DXMTRS C4c-5).
             let Some((feed, index_type, index_count)) = &indexed else {
@@ -1099,14 +1193,30 @@ impl CoreDevice {
     }
 }
 
-/// The entry of a key the device has not seen: built unless no binding can fetch its layout.
+fn log_pipeline_failure(key: &PipelineKey) {
+    let streams = key
+        .streams
+        .iter()
+        .filter(|s| **s != StreamKey::Unused)
+        .collect::<Vec<_>>();
+    log::error!(
+        target: LOG_TARGET,
+        "d3d9 core: a pipeline (streams {streams:?}) does not build; its draws are dropped"
+    );
+    log::debug!(
+        target: LOG_TARGET,
+        "d3d9 core: the pipeline that does not build: {key:?}"
+    );
+}
+
+/// The entry of a key the device has not seen: built synchronously or queued on `scheduler`.
 ///
 /// One that does not build is logged and kept as handle 0, never built again; one no binding
 /// can fetch is kept as handle 0 too, its fetch error logged.
 fn insert_pipeline(
-    device: &Device,
+    ctx: &Arc<CompileContext>,
     pipelines: &PsoMap<PipelineKey, Option<PipelineSource>>,
-    functions: &mut StageFunctions,
+    scheduler: Option<&Arc<OnceLock<CompileScheduler>>>,
     key: &PipelineKey,
 ) -> Arc<Compiled<Option<PipelineSource>>> {
     let source = pipeline_source(key)
@@ -1121,25 +1231,6 @@ fn insert_pipeline(
         );
     }
     let refused = source.as_ref().is_some_and(refused_layout);
-    let pso = match &source {
-        Some(source) if !refused => build_pipeline(device, source, functions),
-        _ => None,
-    };
-    if pso.is_none() && !refused {
-        let streams = key
-            .streams
-            .iter()
-            .filter(|s| **s != StreamKey::Unused)
-            .collect::<Vec<_>>();
-        log::error!(
-            target: LOG_TARGET,
-            "d3d9 core: a pipeline (streams {streams:?}) does not build; its draws are dropped"
-        );
-        log::debug!(
-            target: LOG_TARGET,
-            "d3d9 core: the pipeline that does not build: {key:?}"
-        );
-    }
     // A stream with nothing bound reads the zero feed, which its draws clamp to (as mtld3d's
     // do): said once a key.
     let zeros = NULL_STREAM_ZEROS.len();
@@ -1157,8 +1248,46 @@ fn insert_pipeline(
             );
         }
     }
+    let Some(src_ref) = source.as_ref().filter(|_| !refused) else {
+        let entry = Compiled::ready_with(Arc::new(source), 0, None);
+        return pipelines.insert_ready(key.clone(), entry);
+    };
+
+    if let Some(sched_lock) = scheduler {
+        let lane = if ctx.functions.is_done(&src_ref.vs) && ctx.functions.is_done(&src_ref.ps) {
+            CompileLane::Pipeline
+        } else {
+            CompileLane::Normal
+        };
+        let ctx_cl = Arc::clone(ctx);
+        let key_cl = key.clone();
+        let entry = Compiled::pending(Arc::new(source), move |spec| {
+            let src = spec.as_ref()?;
+            let pso = build_pipeline(&ctx_cl, src);
+            if pso.is_some() {
+                ctx_cl.stats.async_compiled.fetch_add(1, Ordering::Relaxed);
+                lock(&ctx_cl.recipes).record(&key_cl);
+            } else {
+                log_pipeline_failure(&key_cl);
+            }
+            pso
+        });
+        return pipelines.insert_or_existing_lane(
+            key.clone(),
+            entry,
+            sched_lock,
+            || CompileScheduler::with_bounds(2, 4),
+            lane,
+        );
+    }
+
+    let pso = build_pipeline(ctx, src_ref);
+    if pso.is_some() {
+        lock(&ctx.recipes).record(key);
+    } else {
+        log_pipeline_failure(key);
+    }
     let handle = pso.as_ref().map_or(0, Obj::handle);
-    // Built and ready (C4b-1's ruling C4b-3): no job, so no scheduler.
     let entry = Compiled::ready_with(Arc::new(source), handle, pso);
     pipelines.insert_ready(key.clone(), entry)
 }
@@ -1166,8 +1295,8 @@ fn insert_pipeline(
 impl CoreDevice {
     /// The stage compiles so far.
     #[cfg(test)]
-    pub const fn compiles(&self) -> usize {
-        self.functions.compiles
+    pub fn compiles(&self) -> usize {
+        self.compile_ctx.functions.stage_compiles()
     }
 
     /// The pipelines kept, built or not.
@@ -1201,16 +1330,17 @@ fn slot_bytes(fed: &[u8], advance: u32) -> Cow<'_, [u8]> {
     Cow::Owned(bytes)
 }
 
-/// The pipeline `source` describes, its stages from `functions` (compiled there on a miss).
+/// The pipeline `source` describes, its stages from `ctx.functions` (compiled there on a miss).
 ///
-/// A free function, so a compile job can run it (C4d).
-fn build_pipeline(
-    device: &Device,
-    source: &PipelineSource,
-    functions: &mut StageFunctions,
-) -> Option<Obj> {
-    let vs = functions.function(device, &source.vs, c"d3d9_vs")?;
-    let ps = functions.function(device, &source.ps, c"d3d9_ps")?;
+/// A free function, so a compile job or prewarm worker can run it (C4d).
+pub(super) fn build_pipeline(ctx: &CompileContext, source: &PipelineSource) -> Option<Obj> {
+    let _pool = winemetal_sys::Pool::new();
+    let vs = ctx
+        .functions
+        .function(&ctx.mtl_device, ctx.metal_version, &source.vs, c"d3d9_vs")?;
+    let ps = ctx
+        .functions
+        .function(&ctx.mtl_device, ctx.metal_version, &source.ps, c"d3d9_ps")?;
     let mut info = dxmt_core::library::render_pipeline_info();
     info.vertex_function = vs;
     info.fragment_function = ps;
@@ -1279,7 +1409,7 @@ fn build_pipeline(
     // the call; the functions are retained by the pipeline.
     let pso = unsafe {
         MTLDevice_newRenderPipelineStateWithVertexDescriptor(
-            device.device().handle(),
+            ctx.mtl_device.handle(),
             &raw const info,
             &raw const vertex,
             &raw mut error,
@@ -1332,29 +1462,6 @@ const fn wire_op(op: BlendOperation) -> u8 {
         BlendOperation::Min => WMT_BLEND_OPERATION_MIN,
         BlendOperation::Max => WMT_BLEND_OPERATION_MAX,
     }
-}
-
-/// The function `name` of the DXSO stage `tokens`, translated with `spec`.
-fn compile_stage(device: &Device, tokens: &[u32], spec: &StageSpec, name: &CStr) -> Option<Obj> {
-    let bytes = tokens
-        .iter()
-        .flat_map(|t| t.to_le_bytes())
-        .collect::<Vec<u8>>();
-    let (shader, mut d3d9) = initialize_dxso(&bytes, spec.to_wire())
-        .map_err(|e| log::error!(target: LOG_TARGET, "d3d9 core: DXSO: {}", e.message()))
-        .ok()?;
-    let mut common = Sm50ShaderCommonData {
-        next: (&raw mut d3d9).cast(),
-        r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
-        flags: 0,
-    };
-    // SAFETY: `shader` is live; the chain (`common`, then `d3d9`) lives for the call.
-    let bitcode = unsafe { compile(&Entry::Shader, shader.0, 0, (&raw mut common).cast(), name) }
-        .map_err(|e| log::error!(target: LOG_TARGET, "d3d9 core: compile: {}", e.message()))
-        .ok()?;
-    let data = compiled_data(&bitcode)?;
-    load_function(device.device(), &data, name).ok()
 }
 
 #[cfg(test)]

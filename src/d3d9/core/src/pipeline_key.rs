@@ -15,7 +15,8 @@ use std::{
 };
 
 use airconv_ir::dxso::spec::{StageSpec, VariantFlags, VariantKey, VsSamplerKinds, VsSpec};
-use mtld3d_shared::{mtl::VertexStepFunction, shader_create::ShaderStage};
+pub use mtld3d_shared::mtl::VertexStepFunction;
+use mtld3d_shared::shader_create::ShaderStage;
 // The key holds one entry a stream: d3d9-rt, with no dependency of its own on the D3D9 types,
 // sizes its draws' streams by the same count.
 pub use mtld3d_types::MAX_STREAMS;
@@ -138,6 +139,12 @@ impl DeclCode {
             Some((end, elements)) if is_decl_end(end) => elements,
             _ => &self.with_end,
         }
+    }
+
+    /// All stored declaration elements including the trailing `D3DDECL_END` terminator.
+    #[must_use]
+    pub fn elements_with_end(&self) -> &[D3DVERTEXELEMENT9] {
+        &self.with_end
     }
 }
 

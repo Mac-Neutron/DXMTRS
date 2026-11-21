@@ -16,7 +16,7 @@ use core::{
 use std::{ffi::CString, sync::Mutex};
 
 use dxmt_util::{env::cache_exe_name, sync::lock};
-pub use instance::{close_all, instance};
+pub use instance::{close_all, instance, try_close_all};
 pub use version::version;
 use winemetal_sys::{
     CacheReader_alloc_init, CacheReader_get, CacheWriter_alloc_init, CacheWriter_set, Obj,
@@ -130,6 +130,23 @@ impl Store {
         drop(reader);
         let writer = lock(&self.writer).take();
         drop(writer);
+    }
+
+    /// Non-blocking variant of [`Self::close`] for `DLL_PROCESS_DETACH`.
+    ///
+    /// Skips any lock already held (for example by a terminated worker thread under `ExitProcess`),
+    /// avoiding loader-lock deadlocks.
+    pub fn try_close(&self) {
+        if let Ok(mut guard) = self.reader.try_lock() {
+            let reader = guard.take();
+            drop(guard);
+            drop(reader);
+        }
+        if let Ok(mut guard) = self.writer.try_lock() {
+            let writer = guard.take();
+            drop(guard);
+            drop(writer);
+        }
     }
 }
 

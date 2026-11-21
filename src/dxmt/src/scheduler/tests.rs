@@ -1,11 +1,11 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{
-    sync::{Arc, Barrier},
+    sync::{Arc, Barrier, Mutex},
     thread,
     time::Duration,
 };
 
-use super::{CompileJob, Scheduler, wait_schedulers_idle};
+use super::{CompileJob, CompileLane, Scheduler, wait_schedulers_idle};
 
 #[test]
 fn grows_to_twice_parallelism() {
@@ -135,4 +135,168 @@ fn worker_panic_aborts() {
         flag.load(Ordering::SeqCst),
         "unwinding drop must trigger process abort guard"
     );
+}
+
+#[test]
+fn three_lanes_pop_urgent_then_pipeline_then_normal_and_promote_moves() {
+    let sched = Scheduler::with_bounds(1, 1);
+    let gate = Arc::new(Barrier::new(2));
+    let gate_w = Arc::clone(&gate);
+    let order = Arc::new(Mutex::new(Vec::new()));
+
+    let blocker = CompileJob::from_fn(move || {
+        gate_w.wait();
+    });
+    sched.submit(blocker);
+
+    let push_tag = |tag: &'static str, lane: CompileLane| {
+        let order_w = Arc::clone(&order);
+        let job = CompileJob::from_fn(move || {
+            order_w.lock().unwrap().push(tag);
+        });
+        sched.submit_lane(job, lane)
+    };
+
+    let t_norm1 = push_tag("normal-1", CompileLane::Normal);
+    let _t_pipe1 = push_tag("pipeline-1", CompileLane::Pipeline);
+    let _t_urgent1 = push_tag("urgent-1", CompileLane::Urgent);
+    let _t_pipe2 = push_tag("pipeline-2", CompileLane::Pipeline);
+
+    assert!(sched.promote(t_norm1));
+
+    gate.wait();
+    assert!(sched.wait_idle(5_000));
+    assert!(!sched.promote(t_norm1));
+
+    let got = order.lock().unwrap().clone();
+    assert_eq!(got, ["urgent-1", "normal-1", "pipeline-1", "pipeline-2"]);
+}
+
+#[test]
+fn run_urgent_or_wait_steals_and_waits_for_multistep_continuation() {
+    let sched = Scheduler::with_bounds(1, 1);
+    let worker_entered = Arc::new(Barrier::new(2));
+    let worker_release = Arc::new(Barrier::new(2));
+    let worker_entered_w = Arc::clone(&worker_entered);
+    let worker_release_w = Arc::clone(&worker_release);
+
+    let blocker = CompileJob::from_fn(move || {
+        worker_entered_w.wait();
+        worker_release_w.wait();
+    });
+    sched.submit(blocker);
+    worker_entered.wait();
+
+    let dep_ran = Arc::new(AtomicBool::new(false));
+    let dep_ran_w = Arc::clone(&dep_ran);
+    let dep = CompileJob::from_fn(move || {
+        dep_ran_w.store(true, Ordering::SeqCst);
+    });
+    let dep_for_parent = dep;
+    let step = Arc::new(AtomicUsize::new(0));
+    let step_w = Arc::clone(&step);
+    let parent = CompileJob::new(move || {
+        let prev = step_w.fetch_add(1, Ordering::SeqCst);
+        if prev == 0 {
+            return Some(dep_for_parent.clone());
+        }
+        None
+    });
+
+    let ticket = sched.submit_lane(parent.clone(), CompileLane::Normal);
+
+    // Release the worker thread soon so the continuation can run after caller steals step 0.
+    let rel = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(15));
+        worker_release.wait();
+    });
+
+    // Caller steals step 0 while worker is blocked, re-queues dep + parent, and waits for done.
+    sched.run_urgent_or_wait(Some(ticket), &parent, false);
+    assert!(parent.is_done());
+    assert!(dep_ran.load(Ordering::SeqCst));
+    assert_eq!(step.load(Ordering::SeqCst), 2);
+    rel.join().expect("releaser");
+    assert!(sched.wait_idle(5_000));
+}
+
+#[test]
+fn run_urgent_or_wait_share_with_idle_leaves_job_for_idle_worker() {
+    let sched = Scheduler::with_bounds(1, 1);
+    // Let worker become idle first.
+    assert!(sched.wait_idle(5_000));
+
+    let gate = Arc::new(Barrier::new(2));
+    let gate_w = Arc::clone(&gate);
+    let ran_on = Arc::new(Mutex::new(None));
+    let ran_on_w = Arc::clone(&ran_on);
+    let job = CompileJob::from_fn(move || {
+        *ran_on_w.lock().unwrap() = Some(thread::current().id());
+        gate_w.wait();
+    });
+    let caller_id = thread::current().id();
+    // Submit directly into queue while worker might be idle; hold lock? Even better: just verify
+    // `run_urgent_or_wait(..., true)` completes without hanging regardless of who picks it up.
+    let ticket = sched.submit_lane(job.clone(), CompileLane::Normal);
+    gate.wait();
+    sched.run_urgent_or_wait(Some(ticket), &job, true);
+    assert!(job.is_done());
+    let worker_id = ran_on.lock().unwrap().expect("job ran");
+    assert_ne!(worker_id, caller_id);
+    assert!(sched.wait_idle(5_000));
+}
+
+#[test]
+fn cancel_unstarted_drops_queued_jobs_and_allows_wait_idle() {
+    let sched = Scheduler::with_bounds(1, 1);
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let entered_w = Arc::clone(&entered);
+    let release_w = Arc::clone(&release);
+    sched.submit(CompileJob::from_fn(move || {
+        entered_w.wait();
+        release_w.wait();
+    }));
+    entered.wait();
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    for lane in [
+        CompileLane::Urgent,
+        CompileLane::Pipeline,
+        CompileLane::Normal,
+    ] {
+        let ran_w = Arc::clone(&ran);
+        let _ = sched.submit_lane(
+            CompileJob::from_fn(move || {
+                ran_w.fetch_add(1, Ordering::SeqCst);
+            }),
+            lane,
+        );
+    }
+    sched.cancel_unstarted();
+    release.wait();
+    assert!(sched.wait_idle(5_000));
+    assert_eq!(ran.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn weak_schedulers_registry_survives_concurrent_drop() {
+    let sched = Arc::new(Scheduler::with_bounds(1, 1));
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let entered_w = Arc::clone(&entered);
+    let release_w = Arc::clone(&release);
+    sched.submit(CompileJob::from_fn(move || {
+        entered_w.wait();
+        release_w.wait();
+    }));
+    entered.wait();
+
+    let dropper = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        release.wait();
+        drop(sched);
+    });
+    assert!(wait_schedulers_idle(5_000));
+    dropper.join().expect("dropper");
 }

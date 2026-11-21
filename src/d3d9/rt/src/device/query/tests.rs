@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use dxmt_core::query::VisibilityQuery;
 use dxmt_fakes::take_calls;
@@ -12,7 +12,10 @@ use super::{
 };
 use crate::device::{
     CoreDevice, DrawData, IndexData, Indices, StretchQuad, TargetRef, TextureKind,
-    fixture::{core_on_fakes, ff_binds, key, passes, returns_within_10s, target_desc, triangle},
+    fixture::{
+        capture_logs, core_on_fakes, ff_binds, key, passes, returns_within_10s, target_desc,
+        triangle,
+    },
 };
 
 /// Draws the fixture's triangle into the bound target's pass.
@@ -93,26 +96,6 @@ fn draw_modes(core: &mut CoreDevice, device: u64, data: &DrawData<'_>) -> (usize
     let found = taken_passes(device);
     assert_eq!(found.len(), 1, "{found:#?}");
     modes(&found[0])
-}
-
-/// A `log` sink that keeps the text of every error line.
-struct Errors(Mutex<Vec<String>>);
-
-impl log::Log for Errors {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::Level::Error
-    }
-
-    fn log(&self, record: &log::Record<'_>) {
-        if self.enabled(record.metadata()) {
-            self.0
-                .lock()
-                .expect("the error sink")
-                .push(record.args().to_string());
-        }
-    }
-
-    fn flush(&self) {}
 }
 
 /// An EVENT whose chunk the queue retired is done, and the answer commits nothing.
@@ -294,22 +277,15 @@ fn a_second_end_keeps_the_result() {
 #[test]
 fn a_device_dropped_with_brackets_open_logs_them() {
     const LINE: &str = "d3d9 core: 2 occlusion queries' END was not recorded";
-    let errors: &'static Errors = Box::leak(Box::new(Errors(Mutex::new(Vec::new()))));
-    log::set_logger(errors).expect("the only logger");
-    log::set_max_level(log::LevelFilter::Error);
-    let mut core = core_on_fakes(0x478);
-    let (mut a, mut b) = (Occlusion::default(), Occlusion::default());
-    core.occlusion_begin(&mut a);
-    core.occlusion_begin(&mut b);
-    drop(core);
-    let logged = errors
-        .0
-        .lock()
-        .expect("the error sink")
-        .iter()
-        .filter(|line| *line == LINE)
-        .count();
-    assert_eq!(logged, 1);
+    let ((), lines) = capture_logs(|| {
+        let mut core = core_on_fakes(0x478);
+        let (mut a, mut b) = (Occlusion::default(), Occlusion::default());
+        core.occlusion_begin(&mut a);
+        core.occlusion_begin(&mut b);
+        drop(core);
+    });
+    let logged = lines.iter().filter(|line| *line == LINE).count();
+    assert_eq!(logged, 1, "{lines:#?}");
 }
 
 /// From the device's first BEGIN on, a draw pass starts with counting off; both draw records bump.

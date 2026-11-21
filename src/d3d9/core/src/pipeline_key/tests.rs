@@ -1299,3 +1299,26 @@ fn core_extras_follow_mtld3d() {
         (zero.op, zero.op_alpha, zero.op, zero.op_alpha)
     );
 }
+
+#[test]
+fn elements_with_end_preserves_terminator_verbatim() {
+    let custom_end = D3DVERTEXELEMENT9 {
+        stream: 0xff,
+        offset: 0,
+        type_: mtld3d_types::D3DDECLTYPE_UNUSED,
+        method: 0,
+        usage: 0,
+        usage_index: 7,
+    };
+    let pos = D3DVERTEXELEMENT9 {
+        stream: 0,
+        offset: 0,
+        type_: D3DDECLTYPE_FLOAT4,
+        method: D3DDECLMETHOD_DEFAULT,
+        usage: D3DDECLUSAGE_POSITION,
+        usage_index: 0,
+    };
+    let code = DeclCode::new(Arc::from([pos, custom_end]));
+    assert_eq!(code.elements(), &[pos]);
+    assert_eq!(code.elements_with_end(), &[pos, custom_end]);
+}
