@@ -32,7 +32,8 @@ else
   error('One of the options -Dwine_build_path or -Dwine_install_path is required')
 endif
 
-winemetal_def = files(get_option('guest_vm') ? 'winemetal-guest.def' : 'winemetal.def')
+winemetal_def_name = get_option('guest_vm') ? 'winemetal-guest.def' : 'winemetal.def'
+winemetal_def = files(winemetal_def_name)
 
 if cpu_family == 'aarch64'
   winemetal_llvm_mingw = fs.parent(fs.parent(find_program(cc.cmd_array()[0]).full_path()))
@@ -99,7 +100,7 @@ else
     name_prefix         : '',
     dependencies        : [ lib_winecrt0, lib_ntdll, lib_dbghelp, airconv_forward_dep, rust_runtime_dep ],
     link_with           : winemetal_rust,
-    vs_module_defs      : winemetal_def,
+    vs_module_defs      : winemetal_def_name,
     include_directories : dxmt_include_path,
     install             : true,
     install_dir         : windows_builtin_install_dir,
