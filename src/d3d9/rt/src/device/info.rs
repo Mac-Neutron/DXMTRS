@@ -26,7 +26,10 @@ pub struct DeviceInfo {
 
 /// Computes [`DeviceCapsFlags`] from device name, GPU families, and MSAA `[2, 4, 8]` bits.
 ///
-/// Mirrors the Unix adapter query parity rules without ever setting `PAGES_FROM_UNIX`.
+/// Mirrors the Unix adapter query parity rules without ever setting `PAGES_FROM_UNIX`. Note that
+/// `FLOAT32_FILTERING` uses `apple7 || mac2` (matching `mtld3d-mtl`, agreeing on Apple Silicon and
+/// modern AMD GPUs, whereas legacy Mac2 GPUs without 32-bit float filtering can differ from
+/// `mtld3d-unix`'s `supports32BitFloatFiltering`).
 #[must_use]
 pub fn device_caps_from(
     name: &str,

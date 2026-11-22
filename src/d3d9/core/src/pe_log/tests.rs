@@ -6,7 +6,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use super::{KEEP, OpenOutcome, PENDING_CAP, PeLog, TRUNCATED_NOTE, WriteOutcome};
+use super::{
+    KEEP, OpenOutcome, PENDING_CAP, PanicFlush, PeLog, State, TRUNCATED_NOTE, WriteOutcome,
+};
 
 struct TempDir(PathBuf);
 
@@ -164,7 +166,79 @@ fn open_error_falls_back_to_stderr_state() {
     let mut log = PeLog::new();
     assert_eq!(log.write_line(b"line\n"), WriteOutcome::Ok);
     let outcome = log.open(blocker, "app".into(), 9);
-    assert!(matches!(outcome, OpenOutcome::Stderr(_)));
+    assert!(matches!(
+        outcome,
+        OpenOutcome::Stderr {
+            ref why,
+            ref buffered,
+            truncated: false
+        } if !why.is_empty() && buffered == b"line\n"
+    ));
     assert!(log.file().is_none());
-    assert_eq!(log.write_line(b"after\n"), WriteOutcome::Ok);
+    assert_eq!(log.write_line(b"after\n"), WriteOutcome::WriteStderr);
+}
+
+#[test]
+fn materialize_for_panic_flushes_pending_and_opens_lazy() {
+    let mut pending = PeLog::new();
+    assert_eq!(pending.write_line(b"early\n"), WriteOutcome::Ok);
+    assert_eq!(
+        pending.materialize_for_panic(),
+        PanicFlush::Stderr {
+            buf: b"early\n".to_vec(),
+            truncated: false,
+        }
+    );
+    assert_eq!(pending.write_line(b"after\n"), WriteOutcome::WriteStderr);
+    assert_eq!(pending.materialize_for_panic(), PanicFlush::Nothing);
+
+    let dir = TempDir::new("panic-lazy");
+    let mut lazy = PeLog::new();
+    assert_eq!(
+        lazy.open(dir.path().to_path_buf(), "panic".into(), 33),
+        OpenOutcome::Deferred
+    );
+    assert_eq!(lazy.materialize_for_panic(), PanicFlush::Opened);
+    assert!(lazy.file().is_some());
+    let path = lazy.path().expect("open path").to_path_buf();
+    assert!(path.is_file());
+    assert_eq!(lazy.materialize_for_panic(), PanicFlush::Nothing);
+
+    let blocker = dir.path().join("blocker");
+    fs::write(&blocker, b"file").unwrap();
+    let mut bad_lazy = PeLog::new();
+    assert_eq!(
+        bad_lazy.open(blocker, "panic".into(), 34),
+        OpenOutcome::Deferred
+    );
+    assert!(matches!(
+        bad_lazy.materialize_for_panic(),
+        PanicFlush::Failed(_)
+    ));
+    assert!(bad_lazy.file().is_none());
+    assert_eq!(bad_lazy.write_line(b"line\n"), WriteOutcome::WriteStderr);
+}
+
+#[test]
+fn write_failure_retires_open_file_until_close() {
+    let dir = TempDir::new("retire");
+    let path = dir.path().join("ro.log");
+    fs::write(&path, b"seed\n").unwrap();
+    let ro_file = File::open(&path).unwrap();
+
+    let mut log = PeLog::new();
+    log.state = State::Open {
+        file: ro_file,
+        path,
+    };
+
+    let outcome = log.write_line(b"fails\n");
+    assert!(matches!(outcome, WriteOutcome::FellBackToStderr(_)));
+    assert!(log.file().is_none());
+    assert_eq!(log.retired.len(), 1);
+    assert_eq!(log.write_line(b"next\n"), WriteOutcome::WriteStderr);
+
+    log.close();
+    assert!(log.retired.is_empty());
+    assert_eq!(log.write_line(b"closed\n"), WriteOutcome::Ok);
 }

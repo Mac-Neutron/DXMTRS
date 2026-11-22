@@ -6,7 +6,7 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io::{self, ErrorKind, Write as _},
+    io::{ErrorKind, Write as _},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -14,7 +14,7 @@ use std::{
 /// Maximum number of log files retained in the log directory, matching the Unix sink.
 pub const KEEP: usize = 10;
 
-/// Maximum bytes buffered in [`PeLog::Pending`] before early lines are dropped.
+/// Maximum bytes buffered while pending before early lines are dropped.
 pub const PENDING_CAP: usize = 1024 * 1024;
 
 /// Maximum collision suffix tried when `{stem}-{pid}.log` already exists.
@@ -31,8 +31,15 @@ pub enum OpenOutcome {
     Opened(PathBuf),
     /// No early lines existed yet, so file creation waits for the first non-empty write.
     Deferred,
-    /// Creating or flushing the file failed; buffered lines fell back to stderr with this reason.
-    Stderr(String),
+    /// Creating or flushing the file failed; caller must flush `buffered` to stderr.
+    Stderr {
+        /// Failure reason suitable for a warning line.
+        why: String,
+        /// Buffered pre-open bytes to write to stderr outside any lock.
+        buffered: Vec<u8>,
+        /// Whether [`TRUNCATED_NOTE`] must follow `buffered`.
+        truncated: bool,
+    },
     /// `open` had already run for this [`PeLog`] instance and did nothing.
     AlreadyOpen,
 }
@@ -40,43 +47,56 @@ pub enum OpenOutcome {
 /// Result of calling [`PeLog::write_line`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteOutcome {
-    /// Line written (or dropped on pending overflow) without state transition to stderr.
+    /// Line written (or buffered/dropped) without needing a stderr write from the caller.
     Ok,
     /// First lazy write created this log file.
     Opened(PathBuf),
-    /// File creation or write failed and fell back to stderr with this reason.
+    /// Log is already in stderr fallback mode; caller must write the line to stderr.
+    WriteStderr,
+    /// File creation or write failed and fell back to stderr; caller writes warning and line.
     FellBackToStderr(String),
 }
 
-/// Process-wide PE log destination state machine.
-pub enum PeLog {
-    /// Before `Direct3DCreate9` resolves `log.dir`; holds up to [`PENDING_CAP`] bytes in memory.
-    Pending {
-        /// Buffered pre-open log bytes.
+/// Result of calling [`PeLog::materialize_for_panic`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum PanicFlush {
+    /// Pending lines moved to stderr fallback; caller must flush them outside any lock.
+    Stderr {
+        /// Buffered pre-open bytes to write to stderr.
         buf: Vec<u8>,
-        /// True once buffered lines exceeded [`PENDING_CAP`].
+        /// Whether [`TRUNCATED_NOTE`] must follow `buf`.
         truncated: bool,
     },
-    /// `open` ran with no early lines; directory and file wait until the first non-empty line.
+    /// Lazy state created the log file so panic lines can write to its handle.
+    Opened,
+    /// Lazy file creation failed and transitioned to stderr; caller writes warning outside locks.
+    Failed(String),
+    /// Already open, in stderr fallback, or closed; nothing to materialize.
+    Nothing,
+}
+
+enum State {
+    Pending {
+        buf: Vec<u8>,
+        truncated: bool,
+    },
     Lazy {
-        /// Target log directory (`mtld3d-logs` or `log.dir`).
         dir: PathBuf,
-        /// Executable stem used to name `{stem}-{pid}.log`.
         stem: String,
-        /// Process identifier embedded in the file name.
         pid: u32,
     },
-    /// Active unbuffered log file.
     Open {
-        /// Open log file handle.
         file: File,
-        /// Resolved path of `file`.
         path: PathBuf,
     },
-    /// Permanent fallback to `stderr` after an open or write error.
     Stderr,
-    /// Closed / handed off state (no-op on writes).
     Closed,
+}
+
+/// Process-wide PE log destination state machine.
+pub struct PeLog {
+    state: State,
+    retired: Vec<File>,
 }
 
 impl Default for PeLog {
@@ -86,53 +106,60 @@ impl Default for PeLog {
 }
 
 impl PeLog {
-    /// Creates a new [`PeLog`] in [`PeLog::Pending`] with an empty buffer.
+    /// Creates a new [`PeLog`] in the pending state with an empty buffer.
     #[must_use]
     pub const fn new() -> Self {
-        Self::Pending {
-            buf: Vec::new(),
-            truncated: false,
+        Self {
+            state: State::Pending {
+                buf: Vec::new(),
+                truncated: false,
+            },
+            retired: Vec::new(),
         }
     }
 
     /// Names `dir`, `stem`, and `pid`, flushing early lines or deferring file creation.
     ///
-    /// Idempotent once [`Self::Pending`] has already been left; never emits `log::*!` lines while
-    /// called so callers holding a mutex cannot deadlock.
+    /// Idempotent once the pending state has already been left; never emits `log::*!` lines or
+    /// touches `stderr` while called so callers holding a mutex cannot deadlock.
     pub fn open(&mut self, dir: PathBuf, stem: String, pid: u32) -> OpenOutcome {
-        if !matches!(self, Self::Pending { .. }) {
+        if !matches!(self.state, State::Pending { .. }) {
             return OpenOutcome::AlreadyOpen;
         }
-        let Self::Pending { buf, truncated } = core::mem::replace(self, Self::Stderr) else {
+        let State::Pending { buf, truncated } = core::mem::replace(&mut self.state, State::Stderr)
+        else {
             unreachable!("checked Pending variant above");
         };
         if buf.is_empty() && !truncated {
-            *self = Self::Lazy { dir, stem, pid };
+            self.state = State::Lazy { dir, stem, pid };
             return OpenOutcome::Deferred;
         }
         match create_log_file(&dir, &stem, pid, &buf, truncated) {
             Ok((file, path)) => {
-                *self = Self::Open {
+                self.state = State::Open {
                     file,
                     path: path.clone(),
                 };
                 OpenOutcome::Opened(path)
             }
             Err(why) => {
-                *self = Self::Stderr;
-                write_stderr(&buf, truncated);
-                OpenOutcome::Stderr(why)
+                self.state = State::Stderr;
+                OpenOutcome::Stderr {
+                    why,
+                    buffered: buf,
+                    truncated,
+                }
             }
         }
     }
 
-    /// Writes `bytes` according to the current state without echoing while a file is open.
+    /// Writes `bytes` according to the current state without locking `stderr`.
     ///
-    /// Materializes a [`Self::Lazy`] file on the first non-empty write and falls back to stderr on
-    /// I/O errors.
+    /// Materializes a lazy file on the first non-empty write, retires any failed [`File`] handle
+    /// until [`Self::close`], and tells callers when to write to `stderr` outside their lock.
     pub fn write_line(&mut self, bytes: &[u8]) -> WriteOutcome {
-        match self {
-            Self::Pending { buf, truncated } => {
+        match &mut self.state {
+            State::Pending { buf, truncated } => {
                 if !*truncated && buf.len().saturating_add(bytes.len()) <= PENDING_CAP {
                     buf.extend_from_slice(bytes);
                 } else {
@@ -140,85 +167,130 @@ impl PeLog {
                 }
                 WriteOutcome::Ok
             }
-            Self::Lazy { .. } => {
+            State::Lazy { .. } => {
                 if bytes.is_empty() {
                     return WriteOutcome::Ok;
                 }
-                let Self::Lazy { dir, stem, pid } = core::mem::replace(self, Self::Stderr) else {
+                let State::Lazy { dir, stem, pid } =
+                    core::mem::replace(&mut self.state, State::Stderr)
+                else {
                     unreachable!("matched Lazy variant above");
                 };
                 match create_log_file(&dir, &stem, pid, bytes, false) {
                     Ok((file, path)) => {
-                        *self = Self::Open {
+                        self.state = State::Open {
                             file,
                             path: path.clone(),
                         };
                         WriteOutcome::Opened(path)
                     }
                     Err(why) => {
-                        *self = Self::Stderr;
-                        write_stderr(bytes, false);
+                        self.state = State::Stderr;
                         WriteOutcome::FellBackToStderr(why)
                     }
                 }
             }
-            Self::Open { file, path } => {
+            State::Open { file, path } => {
                 if let Err(err) = file.write_all(bytes) {
                     let why = format!("{}: {err}", path.display());
-                    *self = Self::Stderr;
-                    write_stderr(bytes, false);
+                    let prev = core::mem::replace(&mut self.state, State::Stderr);
+                    if let State::Open { file: old_file, .. } = prev {
+                        self.retired.push(old_file);
+                    }
                     return WriteOutcome::FellBackToStderr(why);
                 }
                 WriteOutcome::Ok
             }
-            Self::Stderr => {
-                write_stderr(bytes, false);
-                WriteOutcome::Ok
-            }
-            Self::Closed => WriteOutcome::Ok,
+            State::Stderr => WriteOutcome::WriteStderr,
+            State::Closed => WriteOutcome::Ok,
         }
     }
 
-    /// Drains any buffered [`Self::Pending`] bytes and switches to [`Self::Closed`].
+    /// Materializes a pending or lazy destination ahead of a panic report.
+    ///
+    /// Never writes to `stderr` directly; callers flush returned [`PanicFlush::Stderr`] or
+    /// [`PanicFlush::Failed`] payloads after releasing any lock.
+    pub fn materialize_for_panic(&mut self) -> PanicFlush {
+        match self.state {
+            State::Pending { .. } => {
+                let State::Pending { buf, truncated } =
+                    core::mem::replace(&mut self.state, State::Stderr)
+                else {
+                    unreachable!("matched Pending variant above");
+                };
+                PanicFlush::Stderr { buf, truncated }
+            }
+            State::Lazy { .. } => {
+                let State::Lazy { dir, stem, pid } =
+                    core::mem::replace(&mut self.state, State::Stderr)
+                else {
+                    unreachable!("matched Lazy variant above");
+                };
+                match create_log_file(&dir, &stem, pid, b"", false) {
+                    Ok((file, path)) => {
+                        self.state = State::Open { file, path };
+                        PanicFlush::Opened
+                    }
+                    Err(why) => {
+                        self.state = State::Stderr;
+                        PanicFlush::Failed(why)
+                    }
+                }
+            }
+            State::Open { .. } | State::Stderr | State::Closed => PanicFlush::Nothing,
+        }
+    }
+
+    /// Drains any buffered pending bytes and switches to closed.
     ///
     /// Used when `runtime.mode = mtld3d` hands logging over to `mtld3d.so`.
     pub fn take_pending_and_close(&mut self) -> Option<(Vec<u8>, bool)> {
-        let prev = core::mem::replace(self, Self::Closed);
+        let prev = core::mem::replace(&mut self.state, State::Closed);
         match prev {
-            Self::Pending { buf, truncated } => Some((buf, truncated)),
+            State::Pending { buf, truncated } => Some((buf, truncated)),
+            State::Open { file, .. } => {
+                self.retired.push(file);
+                None
+            }
             _ => None,
         }
     }
 
-    /// Closes any open file handle and stops future PE-file writes.
+    /// Closes any active or retired file handles and stops future PE-file writes.
     pub fn close(&mut self) {
-        *self = Self::Closed;
+        self.state = State::Closed;
+        self.retired.clear();
     }
 
-    /// Flushes any buffered [`Self::Pending`] lines to stderr and switches to [`Self::Stderr`].
-    pub fn fall_back_to_stderr(&mut self) {
-        let prev = core::mem::replace(self, Self::Stderr);
-        if let Self::Pending { buf, truncated } = prev
-            && (!buf.is_empty() || truncated)
-        {
-            write_stderr(&buf, truncated);
+    /// Switches to stderr mode and returns any buffered pending lines to flush outside locks.
+    pub fn fall_back_to_stderr(&mut self) -> Option<(Vec<u8>, bool)> {
+        let prev = core::mem::replace(&mut self.state, State::Stderr);
+        match prev {
+            State::Pending { buf, truncated } if !buf.is_empty() || truncated => {
+                Some((buf, truncated))
+            }
+            State::Open { file, .. } => {
+                self.retired.push(file);
+                None
+            }
+            _ => None,
         }
     }
 
-    /// Returns the active log [`File`] when in [`Self::Open`].
+    /// Returns the active log [`File`] when open.
     #[must_use]
     pub const fn file(&self) -> Option<&File> {
-        match self {
-            Self::Open { file, .. } => Some(file),
+        match &self.state {
+            State::Open { file, .. } => Some(file),
             _ => None,
         }
     }
 
-    /// Returns the active log file path when in [`Self::Open`].
+    /// Returns the active log file path when open.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Open { path, .. } => Some(path.as_path()),
+        match &self.state {
+            State::Open { path, .. } => Some(path.as_path()),
             _ => None,
         }
     }
@@ -238,8 +310,10 @@ fn create_log_file(
     std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     prune_old_logs(dir, KEEP - 1);
     let (mut file, path) = open_unique_log(dir, stem, pid)?;
-    file.write_all(initial)
-        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if !initial.is_empty() {
+        file.write_all(initial)
+            .map_err(|err| format!("{}: {err}", path.display()))?;
+    }
     if truncated {
         file.write_all(TRUNCATED_NOTE)
             .map_err(|err| format!("{}: {err}", path.display()))?;
@@ -302,15 +376,6 @@ fn prune_old_logs(dir: &Path, keep: usize) {
     let doomed = aged.len() - keep;
     for (_, path) in aged.into_iter().take(doomed) {
         let _ = std::fs::remove_file(path);
-    }
-}
-
-/// Best-effort write to `stderr` when no log file could be opened or written.
-fn write_stderr(bytes: &[u8], truncated: bool) {
-    let mut err = io::stderr().lock();
-    let _ = err.write_all(bytes);
-    if truncated {
-        let _ = err.write_all(TRUNCATED_NOTE);
     }
 }
 

@@ -150,12 +150,6 @@ fn runtime_mode(cfg: &mtld3d_core::config::Mtld3dConfig) -> Result<RuntimeMode, 
     RUNTIME.latch(mode)
 }
 
-/// Returns the latched runtime mode if an interface has already set it.
-#[cfg(feature = "core-runtime")]
-pub fn runtime() -> Option<RuntimeMode> {
-    RUNTIME.get()
-}
-
 /// Returns true once the process runtime has latched to `RuntimeMode::Core`.
 #[cfg(feature = "core-runtime")]
 pub fn is_core() -> bool {
@@ -227,7 +221,9 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
         // into this image down with it.
         dxmt_util::crash::veh::uninstall();
         #[cfg(feature = "core-runtime")]
-        log_sink::close_on_unload();
+        if reserved.is_null() {
+            log_sink::close_on_unload();
+        }
         mode_list_hook::uninstall();
         exit_code_hook::uninstall();
     }

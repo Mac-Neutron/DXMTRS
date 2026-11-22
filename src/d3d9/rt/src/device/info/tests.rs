@@ -61,8 +61,14 @@ fn copy_utf8_prefix_truncates_on_scalar_boundary() {
 
 #[test]
 fn query_default_device_info_runs_on_fakes() {
-    if let Some(info) = query_default_device_info() {
-        assert!(!info.caps.contains(DeviceCapsFlags::PAGES_FROM_UNIX));
-        assert!(info.name_len <= info.name.len());
-    }
+    let info = query_default_device_info().expect("dxmt-fakes returns FAKE_DEVICES[0]");
+    assert_eq!(
+        info.registry_id,
+        dxmt_fakes::fake_registry_id(dxmt_fakes::FAKE_DEVICES[0])
+    );
+    assert!(!info.caps.contains(DeviceCapsFlags::PAGES_FROM_UNIX));
+    assert!(info.caps.contains(DeviceCapsFlags::SAMPLE_COUNT_2));
+    assert!(info.caps.contains(DeviceCapsFlags::SAMPLE_COUNT_4));
+    assert!(info.caps.contains(DeviceCapsFlags::SAMPLE_COUNT_8));
+    assert!(info.name_len <= info.name.len());
 }

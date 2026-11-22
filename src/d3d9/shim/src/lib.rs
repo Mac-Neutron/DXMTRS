@@ -4,7 +4,9 @@ use core::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 #[cfg(feature = "core-runtime")]
 use std::sync::Once;
 
-use log::{error, info};
+#[cfg(not(feature = "core-runtime"))]
+use log::error;
+use log::info;
 use mtld3d_shared::{LogLineKind, WriteLogParams, identity};
 
 const LOG_TARGET: &str = "mtld3d::shim";
@@ -94,14 +96,18 @@ fn ensure_unix_init() -> i32 {
         // SAFETY: Wine-published thunk; lazily initialized once on first `mtld3d_unix_call`.
         let status = unsafe { __wine_init_unix_call() };
         UNIX_INIT_STATUS.store(status, Ordering::Release);
-        mtld3d_shared::init_logger_to(Box::new(LogSink));
         if status == 0 {
+            mtld3d_shared::init_logger_to(Box::new(LogSink));
             let instance = INSTANCE.load(Ordering::Acquire);
             if !instance.is_null() {
                 log_identity(instance);
             }
         } else {
-            error!(target: LOG_TARGET, "__wine_init_unix_call failed");
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "[mtld3d::shim] __wine_init_unix_call failed ({status})"
+            );
         }
     });
     UNIX_INIT_STATUS.load(Ordering::Acquire)

@@ -75,4 +75,12 @@ fn dxmt_stats_emits_stats_txt_on_detach() {
     );
     let report = fs::read_to_string(&stats_path).expect("read stats.txt");
     assert!(report.contains("exit"), "expected exit report: {report}");
+    assert!(
+        report.contains("2 frames ("),
+        "expected 2-frame count in stats report: {report}"
+    );
+    assert!(
+        report.contains("counters:"),
+        "expected counters section in stats report: {report}"
+    );
 }
