@@ -12,7 +12,7 @@
 //!
 //! See `storage_policy` for the consumer fns.
 
-use mtld3d_shared::mtl::DeviceCapsFlags;
+pub use mtld3d_shared::mtl::DeviceCapsFlags;
 
 /// The linear-texture row alignment a Mac2 (Intel/AMD) device reports for `BGRA8Unorm`.
 ///

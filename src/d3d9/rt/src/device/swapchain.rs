@@ -178,6 +178,15 @@ impl CoreDevice {
         self.upscale = None;
         self.make_back_buffer(render_w, render_h, samples);
         self.window = self.open_window(hwnd, drawable_w, drawable_h);
+        self.hud.get_or_insert_with(|| {
+            let mut hud = dxmt_core::hud::Hud::instance();
+            hud.initialize(&dxmt_core::info::version_text(
+                9,
+                0x9300,
+                env!("DXMT_VERSION"),
+            ));
+            hud
+        });
     }
 
     /// Whether the device currently holds a live back buffer.
@@ -468,6 +477,12 @@ impl CoreDevice {
                     }
                     self.commit();
                     self.device.queue().present_boundary(true);
+                    #[cfg(all(debug_assertions, not(feature = "perf-build")))]
+                    if let Some(hud) = self.hud.as_mut() {
+                        let statistics = self.device.queue().statistics();
+                        hud.update_statistics(&statistics, frame);
+                        drop(statistics);
+                    }
                 } else if self.dirty || self.render_open {
                     self.commit();
                 }
@@ -478,6 +493,7 @@ impl CoreDevice {
             self.commit();
         }
         self.end_frame_clear_tracking();
+        crate::stats::frame();
         if cap_after > 0.0 && cap_after.is_finite() {
             let dur = Duration::from_secs_f64(cap_after);
             let now = Instant::now();

@@ -61,6 +61,16 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   `StretchRect`), while settled enlarging presents engage `MTLFXSpatialScaler`
   after `SETTLED_PRESENTS = 30` frames and apply any active gamma LUT into a
   render-sized scratch texture ahead of scaling.
+- On the core runtime (`runtime.mode = core`), adapter capability queries
+  (`GetDeviceInfo`), PE logging (`mtld3d-logs` / `log.dir` with 10-file
+  retention), and lock-free VEH crash reporting run directly on the PE side
+  without loading `mtld3d.so` (`mtld3d.dll` defers unix-call initialization
+  until `runtime.mode = mtld3d` is latched). Unified `DXMT_CONFIG`,
+  `DXMT_CONFIG_FILE`, and `dxmt.conf` settings apply without unknown-key
+  warnings on foreign `dxmt.*` or `d3d11.*` entries; `DXMT_STATS` records
+  presented frames and flushes `stats.txt` on `DLL_PROCESS_DETACH`; and
+  Metal's Developer HUD shows the DXMT D3D9 version label (plus per-frame
+  statistics in debug builds).
 - On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
   depth-stencil (one sample) or resolves it, sample 0 of each plane (more
   samples), into level 0 of the depth texture bound at stage 0, at the call,

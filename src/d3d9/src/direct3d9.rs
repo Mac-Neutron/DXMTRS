@@ -731,6 +731,27 @@ struct CachedDeviceInfo {
 /// The process-wide `GetDeviceInfo` answer, fetched once on first use.
 fn device_info() -> &'static CachedDeviceInfo {
     static INFO: std::sync::LazyLock<CachedDeviceInfo> = std::sync::LazyLock::new(|| {
+        #[cfg(feature = "core-runtime")]
+        if crate::is_core() {
+            if let Some(info) = d3d9_rt::device::query_default_device_info() {
+                return CachedDeviceInfo {
+                    name: info.name,
+                    name_len: info.name_len,
+                    registry_id: info.registry_id,
+                    caps: info.caps,
+                };
+            }
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: WMTCopyAllDevices returned no Metal device"
+            );
+            return CachedDeviceInfo {
+                name: [0; 256],
+                name_len: 0,
+                registry_id: 0,
+                caps: DeviceCapsFlags::empty(),
+            };
+        }
         let mut name = [0u8; 256];
         let mut params = GetDeviceInfoParams {
             name_ptr: name.as_mut_ptr() as u64,

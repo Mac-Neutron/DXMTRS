@@ -9,5 +9,7 @@
 pub mod device;
 #[cfg(feature = "guest-vm")]
 pub mod guest_pages;
+pub mod stats;
 
 pub use device::close_shader_cache_on_detach;
+pub use stats::flush_stats_on_detach;

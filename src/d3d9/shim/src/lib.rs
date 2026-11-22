@@ -1,4 +1,8 @@
 use core::ffi::c_void;
+#[cfg(feature = "core-runtime")]
+use core::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
+#[cfg(feature = "core-runtime")]
+use std::sync::Once;
 
 use log::{error, info};
 use mtld3d_shared::{LogLineKind, WriteLogParams, identity};
@@ -21,6 +25,13 @@ unsafe extern "system" {
     fn DisableThreadLibraryCalls(lib_module: *mut c_void) -> i32;
 }
 
+#[cfg(feature = "core-runtime")]
+static INSTANCE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+#[cfg(feature = "core-runtime")]
+static UNIX_INIT: Once = Once::new();
+#[cfg(feature = "core-runtime")]
+static UNIX_INIT_STATUS: AtomicI32 = AtomicI32::new(-1);
+
 #[unsafe(export_name = "DllMain")]
 pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason != 1 {
@@ -29,7 +40,10 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, _reserved: *
 
     // The dispatcher stub initialises the unix call on first use, so the
     // sink is usable from here; the unix side keeps the line for the
-    // process's log file.
+    // process's log file. When `core-runtime` is enabled, unix-call init
+    // is deferred until the first `mtld3d_unix_call` so `runtime.mode = core`
+    // never loads `mtld3d.so`.
+    #[cfg(not(feature = "core-runtime"))]
     mtld3d_shared::init_logger_to(Box::new(LogSink));
     attach_process(instance)
 }
@@ -64,7 +78,33 @@ impl std::io::Write for LogSink {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mtld3d_unix_call(code: u32, args: *mut c_void) -> i32 {
+    #[cfg(feature = "core-runtime")]
+    {
+        let status = ensure_unix_init();
+        if status != 0 {
+            return status;
+        }
+    }
     dispatch_unix_call(code, args)
+}
+
+#[cfg(feature = "core-runtime")]
+fn ensure_unix_init() -> i32 {
+    UNIX_INIT.call_once(|| {
+        // SAFETY: Wine-published thunk; lazily initialized once on first `mtld3d_unix_call`.
+        let status = unsafe { __wine_init_unix_call() };
+        UNIX_INIT_STATUS.store(status, Ordering::Release);
+        mtld3d_shared::init_logger_to(Box::new(LogSink));
+        if status == 0 {
+            let instance = INSTANCE.load(Ordering::Acquire);
+            if !instance.is_null() {
+                log_identity(instance);
+            }
+        } else {
+            error!(target: LOG_TARGET, "__wine_init_unix_call failed");
+        }
+    });
+    UNIX_INIT_STATUS.load(Ordering::Acquire)
 }
 
 /// `DLL_PROCESS_ATTACH` body.
@@ -76,15 +116,24 @@ fn attach_process(instance: *mut c_void) -> i32 {
     // SAFETY: `instance` is the HINSTANCE the loader passed to DllMain; Win32 accepts it as-is.
     unsafe { DisableThreadLibraryCalls(instance) };
 
-    // SAFETY: Wine-published thunk; init exactly once on PROCESS_ATTACH per the unix-call ABI.
-    let status = unsafe { __wine_init_unix_call() };
-    if status != 0 {
-        error!(target: LOG_TARGET, "__wine_init_unix_call failed");
-        return 0;
+    #[cfg(feature = "core-runtime")]
+    {
+        INSTANCE.store(instance, Ordering::Release);
+        1
     }
 
-    log_identity(instance);
-    1
+    #[cfg(not(feature = "core-runtime"))]
+    {
+        // SAFETY: Wine-published thunk; init exactly once on PROCESS_ATTACH per the unix-call ABI.
+        let status = unsafe { __wine_init_unix_call() };
+        if status != 0 {
+            error!(target: LOG_TARGET, "__wine_init_unix_call failed");
+            return 0;
+        }
+
+        log_identity(instance);
+        1
+    }
 }
 
 /// Name this build in the log, alongside the unix-call handshake it completes.

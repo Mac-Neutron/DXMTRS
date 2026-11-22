@@ -54,13 +54,15 @@ foreach crate : ['d3d9', 'mtld3d']
     features = d3d9_features[crate]
     env = d3d9_env
     depends = []
-    if crate == 'd3d9'
-      features += get_option('guest_vm') ? ['guest-vm'] : []
-      if d3d9_core and t != 'aarch64-pc-windows-msvc'
-        features += ['core-runtime']
+    if d3d9_core and t != 'aarch64-pc-windows-msvc'
+      features += ['core-runtime']
+      if crate == 'd3d9'
         env += d3d9_core_env
         depends = [dxmt_command_metallib, dxmt_version]
       endif
+    endif
+    if crate == 'd3d9'
+      features += get_option('guest_vm') ? ['guest-vm'] : []
     endif
     libs += custom_target(crate + '-' + t,
       output             : crate + '-' + t + '.lib',

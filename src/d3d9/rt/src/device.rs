@@ -269,6 +269,8 @@ pub struct CoreDevice {
     upscale: Option<swapchain::UpscaleCache>,
     /// Deadline of the last CPU-paced present (`cap_after > 0`), cleared on drain/resize/retarget.
     last_paced: Option<std::time::Instant>,
+    /// Metal Developer HUD labels, lazily initialized on first swapchain attach.
+    hud: Option<dxmt_core::hud::Hud>,
 }
 
 impl CoreDevice {
@@ -289,6 +291,7 @@ impl CoreDevice {
     /// When the queue's threads cannot be spawned.
     #[must_use]
     pub fn with_options(mtl: Obj, profile: QueueConfig, options: CoreOptions) -> Self {
+        crate::stats::init_once();
         let chunks = profile.chunks;
         let staging_block = profile.staging_block;
         let mtl_handle = mtl.handle();
@@ -389,6 +392,7 @@ impl CoreDevice {
             settled_geometry: None,
             upscale: None,
             last_paced: None,
+            hud: None,
         };
 
         if !prewarm_recipes.is_empty() {
@@ -783,6 +787,7 @@ pub fn select_device(registry_id: u64) -> Option<Obj> {
 mod buffers;
 mod depth;
 mod draw;
+pub mod info;
 mod pass_bound;
 mod query;
 mod recorder;
@@ -798,6 +803,7 @@ mod textures;
 
 pub use depth::DepthRef;
 pub use draw::{Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData};
+pub use info::query_default_device_info;
 pub use mtld3d_core::async_compile::ClearPlanes;
 pub use query::{Occlusion, OcclusionAnswer};
 pub use shader_cache::close_shader_cache_on_detach;
@@ -810,6 +816,6 @@ pub use textures::{
 };
 
 #[cfg(test)]
-mod fixture;
+pub(super) mod fixture;
 #[cfg(test)]
 mod tests;

@@ -66,6 +66,7 @@ pub mod multisample;
 pub mod page_box;
 pub mod page_box_pool;
 pub mod passes;
+pub mod pe_log;
 pub mod perf;
 pub mod pipeline_key;
 pub mod pipeline_memo;

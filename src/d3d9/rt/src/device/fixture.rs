@@ -358,6 +358,47 @@ const extern "C-unwind" fn library_with_source(
     SOURCE_LIBRARY
 }
 
+/// Stubs `MTLDevice_name` for unit-test binaries without `NSString` helpers.
+#[unsafe(export_name = "MTLDevice_name")]
+const extern "C-unwind" fn device_name(_device: u64) -> u64 {
+    0
+}
+
+/// Stubs `MTLDevice_supportsTextureSampleCount` for `d3d9-rt` unit-test binaries.
+#[unsafe(export_name = "MTLDevice_supportsTextureSampleCount")]
+const extern "C-unwind" fn device_supports_texture_sample_count(
+    _device: u64,
+    _sample_count: u8,
+) -> bool {
+    true
+}
+
+/// Stubs `NSString_alloc_init` for `dxmt_core::hud::Hud` symbols linked into `d3d9-rt` tests.
+#[unsafe(export_name = "NSString_alloc_init")]
+const extern "C-unwind" fn ns_string_alloc_init(_data: *const c_char, _encoding: u64) -> u64 {
+    0x7311
+}
+
+/// Stubs `DeveloperHUDProperties_instance` for `dxmt_core::hud::Hud` in `d3d9-rt` tests.
+#[unsafe(export_name = "DeveloperHUDProperties_instance")]
+const extern "C-unwind" fn developer_hud_instance() -> u64 {
+    0x7312
+}
+
+/// Stubs `DeveloperHUDProperties_addLabel` for `dxmt_core::hud::Hud` in `d3d9-rt` tests.
+#[unsafe(export_name = "DeveloperHUDProperties_addLabel")]
+const extern "C-unwind" fn developer_hud_add_label(_obj: u64, _label: u64, _after: u64) -> bool {
+    true
+}
+
+/// Stubs `DeveloperHUDProperties_updateLabel` for `dxmt_core::hud::Hud` in `d3d9-rt` tests.
+#[unsafe(export_name = "DeveloperHUDProperties_updateLabel")]
+const extern "C-unwind" fn developer_hud_update_label(_obj: u64, _label: u64, _value: u64) {}
+
+/// Stubs `DeveloperHUDProperties_remove` for `dxmt_core::hud::Hud` in `d3d9-rt` tests.
+#[unsafe(export_name = "DeveloperHUDProperties_remove")]
+const extern "C-unwind" fn developer_hud_remove(_obj: u64, _label: u64) {}
+
 /// Process-wide test lock serializing tests that reset `dxmt_fakes`'s global shader cache or logs.
 pub static FAKE_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
 

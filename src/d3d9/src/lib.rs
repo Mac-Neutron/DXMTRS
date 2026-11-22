@@ -45,6 +45,8 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use std::sync::Arc;
+#[cfg(feature = "core-runtime")]
+use std::sync::Once;
 
 use dxmt_util::crash::veh::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExA,
@@ -148,6 +150,18 @@ fn runtime_mode(cfg: &mtld3d_core::config::Mtld3dConfig) -> Result<RuntimeMode, 
     RUNTIME.latch(mode)
 }
 
+/// Returns the latched runtime mode if an interface has already set it.
+#[cfg(feature = "core-runtime")]
+pub fn runtime() -> Option<RuntimeMode> {
+    RUNTIME.get()
+}
+
+/// Returns true once the process runtime has latched to `RuntimeMode::Core`.
+#[cfg(feature = "core-runtime")]
+pub fn is_core() -> bool {
+    RUNTIME.get() == Some(RuntimeMode::Core)
+}
+
 /// The core's log writer (`dxmt_core::log`), forwarding to the `log` facade D3D9's lines take.
 #[cfg(feature = "core-runtime")]
 #[unsafe(export_name = "dxmt_log")]
@@ -181,6 +195,7 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
     if reason == DLL_PROCESS_DETACH && USED.load(Ordering::Relaxed) {
         #[cfg(feature = "core-runtime")]
         if RUNTIME.get() == Some(RuntimeMode::Core) {
+            d3d9_rt::flush_stats_on_detach();
             d3d9_rt::close_shader_cache_on_detach();
         }
         // The process is exiting. A device was created, which pinned the
@@ -211,6 +226,8 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
         // process exit before any device): take the process-wide pointers
         // into this image down with it.
         dxmt_util::crash::veh::uninstall();
+        #[cfg(feature = "core-runtime")]
+        log_sink::close_on_unload();
         mode_list_hook::uninstall();
         exit_code_hook::uninstall();
     }
@@ -352,13 +369,28 @@ fn create_interface(extended: bool) -> *mut Direct3D9 {
     // starts, so every line queued since `DllMain` lands in the file; a later
     // interface names it again and the unix side keeps the file it has.
     let cfg = config::load();
-    log_sink::open(&cfg);
-    if let Err(held) = runtime_mode(&cfg) {
-        mtld3d_shared::log_once_warn!(
-            target: LOG_TARGET,
-            "runtime.mode: the process runs {}; a device of this interface's mode is refused",
-            mtld3d_core::config::runtime_mode_label(held)
-        );
+    #[cfg(feature = "core-runtime")]
+    {
+        let latched = runtime_mode(&cfg);
+        log_sink::open(&cfg, latched.unwrap_or_else(|held| held));
+        if let Err(held) = latched {
+            mtld3d_shared::log_once_warn!(
+                target: LOG_TARGET,
+                "runtime.mode: the process runs {}; a device of this interface's mode is refused",
+                mtld3d_core::config::runtime_mode_label(held)
+            );
+        }
+    }
+    #[cfg(not(feature = "core-runtime"))]
+    {
+        log_sink::open(&cfg);
+        if let Err(held) = runtime_mode(&cfg) {
+            mtld3d_shared::log_once_warn!(
+                target: LOG_TARGET,
+                "runtime.mode: the process runs {}; a device of this interface's mode is refused",
+                mtld3d_core::config::runtime_mode_label(held)
+            );
+        }
     }
     direct3d9::install_page_allocator();
     // The page-box pool is one per process; the interface resolved most
@@ -427,6 +459,19 @@ fn init_logger(instance: *mut c_void) {
     mtld3d_shared::crumb::init();
     dxmt_util::crash::veh::install(instance, &crash::REPORTER);
     mtld3d_shared::crumb::set_write_sink(log_sink::write_fault);
+    #[cfg(not(feature = "core-runtime"))]
+    dispatch_init_logger();
+}
+
+/// Registers the `mtld3d.so` logger once when `runtime.mode = mtld3d` opens in `core-runtime`.
+#[cfg(feature = "core-runtime")]
+pub fn ensure_unix_logger_init() {
+    static UNIX_LOGGER_INIT: Once = Once::new();
+    UNIX_LOGGER_INIT.call_once(dispatch_init_logger);
+}
+
+/// Sends `InitLoggerParams` to `mtld3d.so` with the resolved filter and early log location.
+fn dispatch_init_logger() {
     // The resolved filter, which the unix side takes verbatim.
     let level = std::env::var("DXMT_LOG_LEVEL").ok();
     let user = std::env::var("RUST_LOG").ok();

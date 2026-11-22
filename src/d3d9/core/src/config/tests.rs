@@ -851,3 +851,36 @@ fn runtime_mode_bad_value_warns_and_keeps_mtld3d() {
         "a bad value keeps the earlier one"
     );
 }
+
+#[test]
+fn dxmt_file_and_four_layer_precedence_apply_in_order() {
+    let sources = Sources {
+        dxmt_file: Some((
+            b"DXMT_CONFIG_FILE".to_vec(),
+            b"present.maxFps = 40\nshader.backend = msl\n[game.exe]\nruntime.mode = core\n"
+                .to_vec(),
+        )),
+        mtld3d_file: Some(("mtld3d.conf".into(), Ok(b"present.maxFps = 50\n".to_vec()))),
+        dxmt_env: b"present.maxFps=60;dxmt.hud=1;d3d11.maxFeatureLevel=11_1".to_vec(),
+        mtld3d_env: b"present.maxFps=120".to_vec(),
+    };
+    let cfg = parse_sources(None, &sources, b"game.exe");
+    assert_eq!(cfg.present_max_fps, 120);
+    assert_eq!(cfg.shader_backend, ShaderBackend::Msl);
+    assert_eq!(cfg.runtime_mode, RuntimeMode::Core);
+}
+
+#[test]
+fn dxmt_config_only_and_foreign_keys_parse_without_error() {
+    let sources = Sources {
+        dxmt_file: Some((
+            b"dxmt.conf".to_vec(),
+            b"dxmt.shaderMetalVersion = 310\nd3d11.disableAsyncCompilation = true\n".to_vec(),
+        )),
+        dxmt_env: b"dxmt.hud=true;d3d11.samplerAnisotropy=8;d3d10.x=1;d3d12.y=2;dxgi.forceSDR=true;runtime.mode=core;present.maxFps=90".to_vec(),
+        ..Default::default()
+    };
+    let cfg = parse_sources(None, &sources, b"");
+    assert_eq!(cfg.runtime_mode, RuntimeMode::Core);
+    assert_eq!(cfg.present_max_fps, 90);
+}

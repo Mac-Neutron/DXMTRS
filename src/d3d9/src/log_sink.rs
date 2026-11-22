@@ -47,6 +47,10 @@
 //! lines, its build identity among them, wait in its backlog and go first.
 
 use core::ffi::c_void;
+#[cfg(feature = "core-runtime")]
+use core::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+#[cfg(feature = "core-runtime")]
+use std::path::PathBuf;
 use std::{
     os::windows::io::AsRawHandle,
     path::Path,
@@ -58,6 +62,11 @@ use std::{
 
 use dxmt_util::crash::veh::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExA};
 use log::warn;
+#[cfg(feature = "core-runtime")]
+use mtld3d_core::{
+    config::RuntimeMode,
+    pe_log::{OpenOutcome, PeLog, TRUNCATED_NOTE, WriteOutcome},
+};
 use mtld3d_shared::{LogLineKind, OpenLogParams, WriteLogParams, log_once_warn};
 
 use crate::{LOG_TARGET, unix_call::unix_call};
@@ -71,6 +80,18 @@ unsafe extern "system" {
     fn CloseHandle(handle: *mut c_void) -> i32;
     fn RtlGetCurrentPeb() -> *mut c_void;
     fn RtlIsCriticalSectionLockedByThread(section: *mut c_void) -> i32;
+}
+
+#[cfg(feature = "core-runtime")]
+unsafe extern "system" {
+    fn GetStdHandle(std_handle: u32) -> *mut c_void;
+    fn WriteFile(
+        file: *mut c_void,
+        buffer: *const c_void,
+        bytes_to_write: u32,
+        bytes_written: *mut u32,
+        overlapped: *mut c_void,
+    ) -> i32;
 }
 
 /// The log directory beside the executable when `log.dir` is empty.
@@ -89,6 +110,43 @@ const PEB_LOADER_LOCK_OFFSET: usize = 0xa0;
 #[cfg(target_pointer_width = "64")]
 const PEB_LOADER_LOCK_OFFSET: usize = 0x110;
 
+#[cfg(feature = "core-runtime")]
+const INVALID_LOG_HANDLE: isize = -1;
+#[cfg(feature = "core-runtime")]
+const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
+
+#[cfg(feature = "core-runtime")]
+static PE_LOG: Mutex<PeLog> = Mutex::new(PeLog::new());
+#[cfg(feature = "core-runtime")]
+static LOG_HANDLE: AtomicIsize = AtomicIsize::new(INVALID_LOG_HANDLE);
+#[cfg(feature = "core-runtime")]
+static UNIX_FORWARDED: AtomicBool = AtomicBool::new(false);
+
+/// Opens the PE-side log file (`RuntimeMode::Core`) or hands logging off to `mtld3d.so`.
+#[cfg(feature = "core-runtime")]
+pub fn open(cfg: &mtld3d_core::config::Mtld3dConfig, mode: RuntimeMode) {
+    match mode {
+        RuntimeMode::Core => open_core(cfg),
+        RuntimeMode::Mtld3d => {
+            crate::ensure_unix_logger_init();
+            open_unix(cfg);
+            let pending = {
+                let mut pe = PE_LOG.lock().expect("pe log lock poisoned");
+                UNIX_FORWARDED.store(true, Ordering::Release);
+                pe.take_pending_and_close()
+            };
+            if let Some((buf, truncated)) = pending {
+                for line in buf.split_inclusive(|&byte| byte == b'\n') {
+                    forward(line, LogLineKind::Ordinary);
+                }
+                if truncated {
+                    forward(TRUNCATED_NOTE, LogLineKind::Ordinary);
+                }
+            }
+        }
+    }
+}
+
 /// Name the process's log location to the unix side.
 ///
 /// The directory is `log.dir` resolved against the executable's directory
@@ -99,7 +157,82 @@ const PEB_LOADER_LOCK_OFFSET: usize = 0x110;
 /// releases its backlog to stderr instead of holding it forever. The same
 /// thunk carries `debug.mainThreadChecker`, the one resolved option the unix
 /// side acts on once per process.
+#[cfg(not(feature = "core-runtime"))]
 pub fn open(cfg: &mtld3d_core::config::Mtld3dConfig) {
+    open_unix(cfg);
+}
+
+#[cfg(feature = "core-runtime")]
+fn open_core(cfg: &mtld3d_core::config::Mtld3dConfig) {
+    let location = core_log_location(cfg);
+    let (dir, stem) = match location {
+        Ok(pair) => pair,
+        Err(why) => {
+            {
+                let mut pe = PE_LOG.lock().expect("pe log lock poisoned");
+                pe.fall_back_to_stderr();
+                LOG_HANDLE.store(INVALID_LOG_HANDLE, Ordering::Release);
+                drop(pe);
+            }
+            warn!(target: LOG_TARGET, "log file: {why}, logging to stderr");
+            return;
+        }
+    };
+    let outcome = {
+        let mut pe = PE_LOG.lock().expect("pe log lock poisoned");
+        let outcome = pe.open(dir, stem, std::process::id());
+        sync_log_handle(&pe);
+        drop(pe);
+        outcome
+    };
+    match outcome {
+        OpenOutcome::Opened(path) => {
+            let _ = &path;
+            log::info!(target: LOG_TARGET, "log file: {}", path.display());
+        }
+        OpenOutcome::Stderr(why) => {
+            warn!(target: LOG_TARGET, "log file: {why}, logging to stderr");
+        }
+        OpenOutcome::Deferred | OpenOutcome::AlreadyOpen => {}
+    }
+}
+
+#[cfg(feature = "core-runtime")]
+fn core_log_location(cfg: &mtld3d_core::config::Mtld3dConfig) -> Result<(PathBuf, String), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe() unavailable ({e})"))?;
+    let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
+    let dir = if cfg.log_dir.is_empty() {
+        exe_dir.join(DEFAULT_DIR)
+    } else if cfg.log_dir.starts_with('/') {
+        PathBuf::from(format!("Z:{}", cfg.log_dir))
+    } else {
+        exe_dir.join(&cfg.log_dir)
+    };
+    let stem = exe.file_stem().map_or_else(
+        || String::from("mtld3d"),
+        |s| s.to_string_lossy().into_owned(),
+    );
+    Ok((dir, stem))
+}
+
+#[cfg(feature = "core-runtime")]
+fn sync_log_handle(pe: &PeLog) {
+    let raw = pe
+        .file()
+        .map_or(INVALID_LOG_HANDLE, |file| file.as_raw_handle() as isize);
+    LOG_HANDLE.store(raw, Ordering::Release);
+}
+
+/// Closes any open PE log handle when `d3d9.dll` unloads unused after `veh::uninstall()`.
+#[cfg(feature = "core-runtime")]
+pub fn close_on_unload() {
+    LOG_HANDLE.store(INVALID_LOG_HANDLE, Ordering::Release);
+    if let Ok(mut pe) = PE_LOG.lock() {
+        pe.close();
+    }
+}
+
+fn open_unix(cfg: &mtld3d_core::config::Mtld3dConfig) {
     let location = log_location(cfg);
     let (unix_dir, stem) = match &location {
         Ok(pair) => (pair.0.as_str(), pair.1.as_str()),
@@ -204,6 +337,22 @@ pub struct Sink;
 
 impl std::io::Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        #[cfg(feature = "core-runtime")]
+        if !UNIX_FORWARDED.load(Ordering::Acquire) {
+            let mut pe = PE_LOG.lock().expect("pe log lock poisoned");
+            if !UNIX_FORWARDED.load(Ordering::Acquire) {
+                let outcome = pe.write_line(buf);
+                if matches!(
+                    outcome,
+                    WriteOutcome::Opened(_) | WriteOutcome::FellBackToStderr(_)
+                ) {
+                    sync_log_handle(&pe);
+                }
+                drop(pe);
+                return Ok(buf.len());
+            }
+            drop(pe);
+        }
         // A closed receiver means the logging thread failed to start; the
         // line is dropped rather than the caller failing.
         let _ = QUEUE.tx.send(Message::Line(buf.to_vec()));
@@ -222,6 +371,10 @@ impl std::io::Write for Sink {
 /// and gives it back only as it exits, so no `FreeLibrary` can unmap the
 /// image while it runs.
 pub fn acquire() {
+    #[cfg(feature = "core-runtime")]
+    if !UNIX_FORWARDED.load(Ordering::Acquire) {
+        return;
+    }
     let mut worker = QUEUE.worker.lock().expect("log worker lock poisoned");
     worker.interfaces += 1;
     if worker.thread_id.is_none() {
@@ -238,6 +391,10 @@ pub fn acquire() {
 /// lock is held throughout, so an interface created meanwhile starts its
 /// thread only once this one is gone.
 pub fn release() {
+    #[cfg(feature = "core-runtime")]
+    if !UNIX_FORWARDED.load(Ordering::Acquire) {
+        return;
+    }
     let mut worker = QUEUE.worker.lock().expect("log worker lock poisoned");
     worker.interfaces = worker.interfaces.saturating_sub(1);
     if worker.interfaces == 0 {
@@ -416,6 +573,20 @@ fn add_image_reference() -> Option<*mut c_void> {
 /// [`Sink`]. One unix call and nothing else: no thread-local and no
 /// allocation, so the exception handler may call it on any thread.
 pub fn write_crash(line: &[u8]) {
+    #[cfg(feature = "core-runtime")]
+    if crate::runtime() != Some(RuntimeMode::Mtld3d) {
+        let raw = LOG_HANDLE.load(Ordering::Acquire);
+        if is_valid_handle(raw) {
+            write_all_handle(raw as *mut c_void, line);
+        } else {
+            // SAFETY: Win32 query for the process stderr handle; lock-free and allocation-free.
+            let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+            if !stderr.is_null() && is_valid_handle(stderr as isize) {
+                write_all_handle(stderr, line);
+            }
+        }
+        return;
+    }
     forward(line, LogLineKind::CrashReport);
 }
 
@@ -424,7 +595,45 @@ pub fn write_crash(line: &[u8]) {
 /// As [`write_crash`], except that the fault may still be handled: the line
 /// goes where any line goes and opens no log. The crumb dump's sink.
 pub fn write_fault(line: &[u8]) {
+    #[cfg(feature = "core-runtime")]
+    if crate::runtime() != Some(RuntimeMode::Mtld3d) {
+        let raw = LOG_HANDLE.load(Ordering::Acquire);
+        if is_valid_handle(raw) {
+            write_all_handle(raw as *mut c_void, line);
+        }
+        return;
+    }
     forward(line, LogLineKind::FaultReport);
+}
+
+#[cfg(feature = "core-runtime")]
+const fn is_valid_handle(raw: isize) -> bool {
+    raw != 0 && raw != INVALID_LOG_HANDLE
+}
+
+#[cfg(feature = "core-runtime")]
+fn write_all_handle(handle: *mut c_void, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        let chunk = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        let mut written = 0_u32;
+        // SAFETY: `handle` is an open Win32 file/stderr handle, `bytes` is readable for `chunk`
+        // bytes, and `written` is a writable stack local for synchronous `WriteFile`.
+        let ok = unsafe {
+            WriteFile(
+                handle,
+                bytes.as_ptr().cast::<c_void>(),
+                chunk,
+                &raw mut written,
+                core::ptr::null_mut(),
+            )
+        };
+        if ok == 0 || written == 0 {
+            return;
+        }
+        bytes = &bytes[usize::try_from(written)
+            .unwrap_or(bytes.len())
+            .min(bytes.len())..];
+    }
 }
 
 /// Forward the lines waiting in the queue while no logging thread runs.
@@ -438,6 +647,10 @@ pub fn write_fault(line: &[u8]) {
 /// thread that holds it, or one the logging thread races for, leaves the
 /// lines where they are rather than waiting.
 pub fn forward_parked() {
+    #[cfg(feature = "core-runtime")]
+    if !UNIX_FORWARDED.load(Ordering::Acquire) {
+        return;
+    }
     let Ok(parked) = QUEUE.rx.try_lock() else {
         return;
     };
