@@ -2278,9 +2278,24 @@ impl DeviceInner {
                     "debug.failNextSubmit refused the submission",
                 );
             }
+            let pe_cs_reasons = self.cursor.sinks().take_client_surface_request().bits();
             if let Some(core) = self.core.as_deref_mut() {
-                let _ = core_arms::present(core, &self.present_params, &self.config);
+                let _ = core_arms::present(core, &self.present_params, &self.config, pe_cs_reasons);
             }
+            let cursor_scale = self.config().cursor_scale;
+            let (backing_scale, cursor_kick) =
+                self.core.as_deref_mut().map_or((0, false), |core| {
+                    (core.backing_scale(), core.take_cursor_kick())
+                });
+            if backing_scale != 0 {
+                self.cursor_mut().sinks().set_backing_scale(backing_scale);
+            }
+            if cursor_kick {
+                self.cursor_mut().sinks().set_cursor_kick();
+            }
+            self.cursor_mut().follow_published_scale(cursor_scale);
+            self.cursor_mut().sync_native_visibility();
+            self.cursor_mut().note_present();
             return self
                 .encoder_status()
                 .map_or_else(|hr| hr, |()| mtld3d_types::D3D_OK);
@@ -3746,6 +3761,9 @@ pub struct DeviceCreateInfo {
     /// The core runtime's device, `None` for one of mtld3d's.
     #[cfg(feature = "core-runtime")]
     pub core: Option<Box<d3d9_rt::device::CoreDevice>>,
+    /// Shared view and gamma handle for core cursor overlay updates.
+    #[cfg(feature = "core-runtime")]
+    pub core_overlay: Option<Arc<d3d9_rt::device::OverlaySink>>,
     pub render_states: [u32; RENDER_STATE_COUNT],
     pub sampler_states: [[u32; SAMPLER_STATE_COUNT]; STAGE_COUNT],
     pub direct3d: u64,
@@ -3921,6 +3939,8 @@ impl Direct3DDevice9 {
                 info.software_cursor,
                 info.view_handle,
                 info.display_sinks,
+                #[cfg(feature = "core-runtime")]
+                info.core_overlay,
             ),
             fullscreen: info.fullscreen,
             bound_rt: BoundRt::new(info.backbuffer_width, info.backbuffer_height),
@@ -4268,6 +4288,9 @@ impl DeviceInner {
                 );
             }
             core.set_gamma_ramp(apply.then(|| mtld3d_core::gamma::to_lut(&self.gamma_ramp)));
+            if self.cursor.is_software() {
+                self.cursor.push_overlay_state();
+            }
             return;
         }
         if apply {
@@ -6187,9 +6210,16 @@ fn retarget_device_window(
                  nowhere until a later Reset attaches one",
             );
         }
+        let raw_view = core.view_handle();
+        // SAFETY: `raw_view` is 0 or a live view handle owned by `core`.
+        let view_handle = unsafe { MetalHandle::new(raw_view) };
+        dev.view_handle = view_handle;
+        let (cursor_scale, _origin) =
+            crate::direct3d9::resolve_cursor_scale(core.backing_scale(), dev.config.cursor_scale);
         let dev_ptr = std::ptr::from_mut::<DeviceInner>(dev);
         dev.cursor
-            .retarget(hwnd as *mut c_void, MetalHandle::NULL, dev_ptr);
+            .retarget(hwnd as *mut c_void, view_handle, dev_ptr);
+        dev.cursor.follow_scale(cursor_scale);
         return Ok(());
     }
     // Ops already queued name the layer that is about to go, and the encoder

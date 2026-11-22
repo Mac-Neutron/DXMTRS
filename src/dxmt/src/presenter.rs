@@ -75,6 +75,14 @@ pub struct D3d9PresentArgs {
     pub gamma: Option<Arc<[u16; 1024]>>,
     /// Effective EDR headroom multiplier (`> 1.0` enables BT.2446-A; `1.0` selects passthrough).
     pub peak_edr: f32,
+    /// Attached view handle passed to `MTLDrawable_setPresentedEvent` (`0` when unmanaged).
+    pub view: u64,
+    /// Per-window `MTLSharedEvent` signaled when presented (`0` disables slot 163).
+    pub presented_event: u64,
+    /// Monotonic signal value paired with `presented_event`.
+    pub presented_value: u64,
+    /// Whether this present is paced (`WMT_PRESENTED_EVENT_FLAG_PACED` in slot 163).
+    pub paced: bool,
 }
 
 /// `DXMTPresentMetadata`: what the present pass's fragment function reads as its bytes.
@@ -246,6 +254,37 @@ impl Presenter {
         height: u32,
         hdr_enable: bool,
     ) -> Arc<Self> {
+        // SAFETY: the caller's promise.
+        unsafe { Self::new_d3d9_with_mode(desc, width, height, hdr_enable, false) }
+    }
+
+    /// Builds a D3D9 presenter whose `CAMetalLayer` properties belong to `WMTAttachMetalView`.
+    ///
+    /// Reads existing properties with `MetalLayer_getProps` and never invokes
+    /// `MetalLayer_setProps`, `MetalLayer_setColorSpace`, or `MetalLayer_getEDRValue`.
+    ///
+    /// # Safety
+    ///
+    /// `desc`'s device, layer and library are live and outlive the presenter.
+    #[must_use]
+    pub unsafe fn new_d3d9_managed(
+        desc: &PresenterDesc,
+        width: u32,
+        height: u32,
+        hdr_enable: bool,
+    ) -> Arc<Self> {
+        // SAFETY: the caller's promise.
+        unsafe { Self::new_d3d9_with_mode(desc, width, height, hdr_enable, true) }
+    }
+
+    #[must_use]
+    unsafe fn new_d3d9_with_mode(
+        desc: &PresenterDesc,
+        width: u32,
+        height: u32,
+        hdr_enable: bool,
+        managed_layer: bool,
+    ) -> Arc<Self> {
         debug_assert!(desc.sample_count <= 1);
         let mut layer_props = WMTLayerProps {
             device: 0,
@@ -260,17 +299,39 @@ impl Presenter {
         // SAFETY: a live layer (the caller's promise); the props are written for the call.
         unsafe { MetalLayer_getProps(desc.layer, &raw mut layer_props) };
         layer_props.device = desc.device;
-        layer_props.opaque = 1;
-        layer_props.display_sync_enabled = 1;
-        layer_props.framebuffer_only = 0;
-        layer_props.contents_scale *= f64::from(desc.scale_factor);
-        layer_props.drawable_width = f64::from(width);
-        layer_props.drawable_height = f64::from(height);
-        layer_props.pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
-        // SAFETY: a live layer (the caller's promise); the props are alive for the call.
-        unsafe { MetalLayer_setProps(desc.layer, &raw const layer_props) };
-        // SAFETY: a live layer (the caller's promise).
-        unsafe { MetalLayer_setColorSpace(desc.layer, WMT_COLOR_SPACE_SRGB) };
+        if managed_layer {
+            // `WMTAttachMetalView` owns the layer with `framebufferOnly = true`.
+            layer_props.framebuffer_only = 1;
+            if layer_props.drawable_width <= 0.0 || layer_props.drawable_height <= 0.0 {
+                layer_props.drawable_width = f64::from(width);
+                layer_props.drawable_height = f64::from(height);
+            }
+            if layer_props.pixel_format == WMT_PIXEL_FORMAT_INVALID {
+                layer_props.pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+            }
+        } else {
+            layer_props.opaque = 1;
+            layer_props.display_sync_enabled = 1;
+            layer_props.framebuffer_only = 0;
+            layer_props.contents_scale *= f64::from(desc.scale_factor);
+            layer_props.drawable_width = f64::from(width);
+            layer_props.drawable_height = f64::from(height);
+            layer_props.pixel_format = WMT_PIXEL_FORMAT_BGRA8_UNORM;
+            // SAFETY: a live layer (the caller's promise); the props are alive for the call.
+            unsafe { MetalLayer_setProps(desc.layer, &raw const layer_props) };
+            // SAFETY: a live layer (the caller's promise).
+            unsafe { MetalLayer_setColorSpace(desc.layer, WMT_COLOR_SPACE_SRGB) };
+        }
+        let init_mode =
+            if managed_layer && layer_props.pixel_format == WMT_PIXEL_FORMAT_RGBA16_FLOAT {
+                D3d9LayerMode::Hdr
+            } else {
+                D3d9LayerMode::Sdr
+            };
+        let init_colorspace = match init_mode {
+            D3d9LayerMode::Hdr => WMT_COLOR_SPACE_HDR_SC_RGB,
+            D3d9LayerMode::Sdr => WMT_COLOR_SPACE_SRGB,
+        };
         let prefetcher = if should_prefetch_drawables() {
             DrawablePrefetcher::new(desc.layer)
         } else {
@@ -286,7 +347,7 @@ impl Presenter {
                 present_blit: None,
                 layer_props,
                 sample_count: desc.sample_count,
-                colorspace: WMT_COLOR_SPACE_SRGB,
+                colorspace: init_colorspace,
                 hdr_metadata: None,
                 source_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
                 display_setting_version: 0,
@@ -302,8 +363,9 @@ impl Presenter {
                 frame_requested: 0,
                 d3d9: Some(D3d9State {
                     hdr_enable,
-                    mode: D3d9LayerMode::Sdr,
+                    mode: init_mode,
                     display_sync: true,
+                    managed_layer,
                     edr_poll_countdown: 0,
                     last_edr: (1.0, 1.0),
                     psos: FxHashMap::default(),
@@ -313,6 +375,55 @@ impl Presenter {
             presented: Mutex::new(0),
             frame_done: Condvar::new(),
         })
+    }
+
+    /// Updates cached D3D9 layer assumptions from `WMTViewSyncAndPoll` without mutating the layer.
+    ///
+    /// Invalidates cached drawables cleanly whenever `colorspace_changed`, HDR mode, or drawable
+    /// dimensions moved.
+    pub fn sync_d3d9_managed(
+        &self,
+        width: u32,
+        height: u32,
+        hdr_active: bool,
+        colorspace_changed: bool,
+    ) {
+        let w = f64::from(width);
+        let h = f64::from(height);
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(d3d9) = state.d3d9.as_mut() else {
+            return;
+        };
+        let want_mode = if d3d9.hdr_enable && hdr_active {
+            D3d9LayerMode::Hdr
+        } else {
+            D3d9LayerMode::Sdr
+        };
+        let mode_changed = d3d9.mode != want_mode;
+        let size_changed = state.layer_props.drawable_width.to_bits() != w.to_bits()
+            || state.layer_props.drawable_height.to_bits() != h.to_bits();
+        if !colorspace_changed && !mode_changed && !size_changed {
+            return;
+        }
+        d3d9.mode = want_mode;
+        state.layer_props.drawable_width = w;
+        state.layer_props.drawable_height = h;
+        state.layer_props.pixel_format = if want_mode == D3d9LayerMode::Hdr {
+            WMT_PIXEL_FORMAT_RGBA16_FLOAT
+        } else {
+            WMT_PIXEL_FORMAT_BGRA8_UNORM
+        };
+        state.colorspace = if want_mode == D3d9LayerMode::Hdr {
+            WMT_COLOR_SPACE_HDR_SC_RGB
+        } else {
+            WMT_COLOR_SPACE_SRGB
+        };
+        if colorspace_changed || mode_changed {
+            state.pipelines_valid = false;
+        }
+        drop(guard);
+        self.invalidate_drawable();
     }
 
     /// Synchronizes D3D9 layer EDR mode, drawable size, and vsync on the API thread.
@@ -328,15 +439,21 @@ impl Presenter {
         display_sync: bool,
         on_mode_change: impl FnOnce(),
     ) -> f32 {
-        let Some((should_poll, cached_edr)) = self.state().d3d9.as_ref().map(|d3d9| {
-            if d3d9.hdr_enable {
-                (d3d9.edr_poll_countdown == 0, d3d9.last_edr)
+        let Some((managed_hdr, should_poll, cached_edr)) = self.state().d3d9.as_ref().map(|d3d9| {
+            if d3d9.managed_layer {
+                (Some(d3d9.mode == D3d9LayerMode::Hdr), false, (1.0, 1.0))
+            } else if d3d9.hdr_enable {
+                (None, d3d9.edr_poll_countdown == 0, d3d9.last_edr)
             } else {
-                (false, (1.0, 1.0))
+                (None, false, (1.0, 1.0))
             }
         }) else {
             return 1.0;
         };
+        if let Some(hdr_active) = managed_hdr {
+            self.sync_d3d9_managed(width, height, hdr_active, false);
+            return 1.0;
+        }
         let (cur, pot) = if should_poll {
             let _pool = Pool::new();
             let mut edr = WMTEDRValue {
@@ -440,6 +557,7 @@ impl Presenter {
         let w = f64::from(width);
         let h = f64::from(height);
         let mut state = self.state();
+        let managed = state.d3d9.as_ref().is_some_and(|d3d9| d3d9.managed_layer);
         if let Some(d3d9) = state.d3d9.as_mut() {
             d3d9.edr_poll_countdown = 0;
         }
@@ -450,8 +568,10 @@ impl Presenter {
         }
         state.layer_props.drawable_width = w;
         state.layer_props.drawable_height = h;
-        // SAFETY: a live layer (`new_d3d9`'s promise); the props are alive for the call.
-        unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+        if !managed {
+            // SAFETY: a live layer (`new`'s promise); the props are alive for the call.
+            unsafe { MetalLayer_setProps(self.layer, &raw const state.layer_props) };
+        }
         drop(state);
         self.invalidate_drawable();
     }
@@ -866,13 +986,14 @@ impl Presenter {
         let tex_w = unsafe { MTLTexture_width(texture) };
         // SAFETY: as above.
         let tex_h = unsafe { MTLTexture_height(texture) };
-        let (layer_width, layer_height, layer_format, sample_count) = {
+        let (layer_width, layer_height, layer_format, sample_count, framebuffer_only) = {
             let state = self.state();
             (
                 state.layer_props.drawable_width,
                 state.layer_props.drawable_height,
                 state.layer_props.pixel_format,
                 state.sample_count,
+                state.layer_props.framebuffer_only != 0,
             )
         };
         let (draw_width, draw_height) = if tex_w > 0 && tex_h > 0 {
@@ -892,7 +1013,8 @@ impl Presenter {
         let source_width = unsafe { MTLTexture_width(backbuffer) };
         // SAFETY: as above.
         let source_height = unsafe { MTLTexture_height(backbuffer) };
-        let can_blit = if args.gamma.is_none()
+        let can_blit = if !framebuffer_only
+            && args.gamma.is_none()
             && sample_count <= 1
             && drawable_fmt == WMT_PIXEL_FORMAT_BGRA8_UNORM
             && source_width > 0
@@ -1502,6 +1624,7 @@ struct D3d9State {
     hdr_enable: bool,
     mode: D3d9LayerMode,
     display_sync: bool,
+    managed_layer: bool,
     edr_poll_countdown: u32,
     last_edr: (f32, f32),
     psos: FxHashMap<(D3d9PresentVariant, u32), Option<Arc<Obj>>>,

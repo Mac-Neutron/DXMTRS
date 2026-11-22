@@ -64,8 +64,8 @@ unsafe extern "C-unwind" fn record<T: Copy + 'static, const SLOT: u32>(args: *mu
 }
 
 /// `winemetal.so`'s call table with a recording handler in each SM50 slot.
-const fn table() -> [Option<Handler>; 158] {
-    let mut table: [Option<Handler>; 158] = [None; 158];
+const fn table() -> [Option<Handler>; 165] {
+    let mut table: [Option<Handler>; 165] = [None; 165];
     table[slot::SM50_INITIALIZE as usize] =
         Some(record::<Sm50InitializeParams, { slot::SM50_INITIALIZE }>);
     table[slot::SM50_DESTROY as usize] = Some(record::<Sm50DestroyParams, { slot::SM50_DESTROY }>);
@@ -106,7 +106,7 @@ const fn table() -> [Option<Handler>; 158] {
 
 /// The table the thunks call through natively, which `winemetal.so` defines in a real image.
 #[unsafe(export_name = "__wine_unix_call_funcs")]
-static UNIX_CALL_FUNCS: [Option<Handler>; 158] = table();
+static UNIX_CALL_FUNCS: [Option<Handler>; 165] = table();
 
 /// Scripts the next call: its status, and what it writes into its `T`.
 fn script<T: 'static>(status: i32, reply: fn(&mut T)) {

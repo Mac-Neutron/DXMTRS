@@ -2292,6 +2292,105 @@ WINEMETAL_API void MTLTexture_getBytes(
     struct WMTMemoryPointer data, uint64_t bytes_per_row, uint64_t bytes_per_image
 );
 
+enum WMTViewAttachFlag : uint32_t {
+  WMTViewAttachFlagHdrEnable = 1 << 0,
+  WMTViewAttachFlagColorSpaceAccurate = 1 << 1,
+  WMTViewAttachFlagSoftwareCursorOn = 1 << 2,
+  WMTViewAttachFlagSoftwareCursorOff = 1 << 3,
+  WMTViewAttachFlagPresentOccluded = 1 << 4,
+};
+
+enum WMTViewPollFlag : uint32_t {
+  WMTViewPollFlagHdrActive = 1 << 0,
+  WMTViewPollFlagSoftwareCursorActive = 1 << 1,
+  WMTViewPollFlagOccluded = 1 << 2,
+  WMTViewPollFlagDisplaysNothing = 1 << 3,
+  WMTViewPollFlagClientSurfaceDirty = 1 << 4,
+  WMTViewPollFlagCursorKick = 1 << 5,
+  WMTViewPollFlagColorspaceChanged = 1 << 6,
+};
+
+enum WMTRetireMetalViewFlag : uint32_t {
+  WMTRetireMetalViewFlagPark = 1 << 0,
+};
+
+enum WMTViewSyncFlag : uint32_t {
+  WMTViewSyncFlagForceRefresh = 1 << 0,
+};
+
+enum WMTClientSurfaceReason : uint32_t {
+  WMTClientSurfaceReasonViewHidden = 1 << 0,
+  WMTClientSurfaceReasonClientAreaChanged = 1 << 1,
+};
+
+enum WMTPresentedEventFlag : uint32_t {
+  WMTPresentedEventFlagPaced = 1 << 0,
+};
+
+enum WMTCursorOverlayFlag : uint32_t {
+  WMTCursorOverlayFlagVisible = 1 << 0,
+  WMTCursorOverlayFlagHardware = 1 << 1,
+  WMTCursorOverlayFlagNativeHidden = 1 << 2,
+};
+
+struct WMTViewAttachDesc {
+  uint32_t width;
+  uint32_t height;
+  uint32_t flags;
+  uint32_t reserved;
+};
+
+struct WMTViewPollOut {
+  uint32_t drawable_width;
+  uint32_t drawable_height;
+  uint32_t backing_scale;
+  float edr_current;
+  float edr_potential;
+  uint32_t panel_max_hz;
+  uint32_t flags;
+  uint32_t reserved;
+};
+
+struct WMTCursorOverlayParams {
+  obj_handle_t view;
+  struct WMTConstMemoryPointer pixels;
+  struct WMTConstMemoryPointer gamma_lut;
+  uint64_t gamma_revision;
+  uint32_t pixels_len;
+  uint32_t width;
+  uint32_t height;
+  uint32_t x_hotspot;
+  uint32_t y_hotspot;
+  uint32_t scale;
+  uint32_t flags;
+  uint32_t reserved;
+};
+
+STATIC_ASSERT(sizeof(WMTViewAttachDesc) == 16);
+STATIC_ASSERT(sizeof(WMTViewPollOut) == 32);
+STATIC_ASSERT(sizeof(WMTCursorOverlayParams) == 64);
+
+WINEMETAL_API uint64_t WMTDeclareLatencyCriticalActivity(void);
+
+WINEMETAL_API obj_handle_t WMTAttachMetalView(
+    intptr_t hwnd, obj_handle_t device, const struct WMTViewAttachDesc *desc, struct WMTViewPollOut *out_poll,
+    obj_handle_t *ret_layer
+);
+
+WINEMETAL_API void WMTRetireMetalView(obj_handle_t view, uint32_t flags);
+
+WINEMETAL_API void WMTViewSyncAndPoll(
+    obj_handle_t view, obj_handle_t layer, uint32_t flags, struct WMTViewPollOut *out_poll
+);
+
+WINEMETAL_API void WMTPresentClientSurface(obj_handle_t view, uint32_t reasons);
+
+WINEMETAL_API void MTLDrawable_setPresentedEvent(
+    obj_handle_t drawable, obj_handle_t view, obj_handle_t shared_event, uint64_t signal_value, uint32_t flags
+);
+
+WINEMETAL_API void WMTSetCursorOverlay(obj_handle_t view, const struct WMTCursorOverlayParams *params);
+
 #ifdef DXMT_GUEST_VM
 /* MacNeutron: memory a Metal object can be made over (a buffer's info.memory) in the EAC microVM's guest, where the
  * host maps it too: whole 16 KiB pages, page-aligned. Freed memory comes back for reuse only once every Metal object

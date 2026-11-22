@@ -717,13 +717,15 @@ fn a_retarget_keeps_the_back_buffer_and_makes_a_presenter() {
     assert!(core.retarget(2));
     let calls = dxmt_fakes::take_calls(DEVICE);
     let commit = at(&calls, "MTLCommandBuffer_commit");
+    let retire = at_prefix(&calls, "WMTRetireMetalView ");
+    let attach = at_prefix(&calls, "WMTAttachMetalView ");
     let made = made_at(&calls);
     assert!(made.is_empty(), "{calls:#?}");
-    let set_props = at(
-        &calls,
-        "MetalLayer_setProps format=80 size=64x32 display_sync=1",
+    assert!(commit < retire && retire < attach, "{calls:#?}");
+    assert!(
+        !calls.iter().any(|c| c.starts_with("MetalLayer_setProps")),
+        "managed layer must not emit MetalLayer_setProps: {calls:#?}"
     );
-    assert!(commit < set_props, "{calls:#?}");
     core.present(true, 0.0, 0.0, true);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
@@ -813,6 +815,14 @@ fn assert_presented_at(calls: &[String], presented: &str, width: u16, height: u1
     assert!(pass.contains(&viewport), "{calls:#?}");
 }
 
+/// Index of the first call in `calls` starting with `prefix`.
+fn at_prefix(calls: &[String], prefix: &str) -> usize {
+    calls
+        .iter()
+        .position(|c| c.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no {prefix:?} in {calls:#?}"))
+}
+
 /// Each texture `calls` shows made: its call's index and its line.
 fn made_at(calls: &[String]) -> Vec<(usize, &String)> {
     calls
@@ -861,7 +871,7 @@ fn back_buffers(calls: &[String]) -> Vec<String> {
 /// Inline `[u16; 1024]` gamma binds at fragment `buffer(1)` and survives `retarget`.
 #[test]
 fn inline_gamma_binds_buffer_1_and_survives_retarget() {
-    const DEVICE: u64 = 0x486;
+    const DEVICE: u64 = 0x49b;
     let mut core = core_on_fakes(DEVICE);
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
@@ -914,12 +924,15 @@ fn inline_gamma_binds_buffer_1_and_survives_retarget() {
     );
 }
 
-/// HDR two-step EDR switches layer props/colorspace in order and preserves HDR on `resize`.
+/// HDR two-step EDR switches BT.2446 uniforms via polled headroom and preserves state on `resize`.
 #[test]
 fn hdr_two_step_edr_switching_and_resize_preservation() {
     use winemetal_sys::{
         Obj,
-        wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_RGBA16_FLOAT, WMTEDRValue},
+        wire::{
+            WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+            WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED, WMTEDRValue, WMTViewPollOut,
+        },
     };
 
     use crate::device::{CoreDevice, CoreOptions, queue_profile};
@@ -932,7 +945,15 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
     core.drain();
     let _ = dxmt_fakes::take_calls(DEVICE);
 
-    // Step 1: potential > 1.0, current == 1.0 -> RGBA16Float then HDR_scRGB, Passthrough (no buffer(0)).
+    let has_layer_mutation = |calls: &[String]| {
+        calls.iter().any(|c| {
+            c.starts_with("MetalLayer_setProps")
+                || c.starts_with("MetalLayer_setColorSpace")
+                || c.starts_with("MetalLayer_getEDRValue")
+        })
+    };
+
+    // Step 1: potential > 1.0, current == 1.0 -> Passthrough (no buffer(0)) on managed layer.
     dxmt_fakes::set_edr_value(
         DEVICE,
         Some(WMTEDRValue {
@@ -944,12 +965,8 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
     core.present(true, 0.0, 0.0, true);
     core.drain();
     let step1 = dxmt_fakes::take_calls(DEVICE);
-    let set_props = at(
-        &step1,
-        "MetalLayer_setProps format=115 size=64x32 display_sync=1",
-    );
-    let set_cs = at(&step1, "MetalLayer_setColorSpace 5");
-    assert!(set_props < set_cs, "{step1:#?}");
+    assert!(!has_layer_mutation(&step1), "{step1:#?}");
+    at_prefix(&step1, "WMTViewSyncAndPoll ");
     assert!(
         !step1
             .iter()
@@ -957,7 +974,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
         "{step1:#?}"
     );
 
-    // Step 2: current == 2.0 -> no layer change, encodes BT.2446 uniforms at buffer(0).
+    // Step 2: current == 2.0 -> encodes BT.2446 uniforms at buffer(0) without layer mutations.
     dxmt_fakes::set_edr_value(
         DEVICE,
         Some(WMTEDRValue {
@@ -968,10 +985,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
     core.present(true, 0.0, 0.0, true);
     core.drain();
     let step2 = dxmt_fakes::take_calls(DEVICE);
-    assert!(
-        !step2.iter().any(|c| c.starts_with("MetalLayer_")),
-        "{step2:#?}"
-    );
+    assert!(!has_layer_mutation(&step2), "{step2:#?}");
     assert!(
         step2
             .iter()
@@ -979,15 +993,31 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
         "{step2:#?}"
     );
 
-    // Resize while in HDR preserves format=115 (RGBA16Float).
+    // Resize syncs via WMTViewSyncAndPoll FORCE_REFRESH without MetalLayer_setProps.
     assert!(core.resize(128, 64, 1));
     let resize_calls = dxmt_fakes::take_calls(DEVICE);
-    at(
-        &resize_calls,
-        "MetalLayer_setProps format=115 size=128x64 display_sync=1",
+    assert!(!has_layer_mutation(&resize_calls), "{resize_calls:#?}");
+    assert!(
+        resize_calls
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains("req_flags=0x1")),
+        "{resize_calls:#?}"
     );
 
-    // Step 3: potential drops to 1.0 -> sRGB colorspace then BGRA8Unorm props.
+    // Step 3: potential drops to 1.0 with COLORSPACE_CHANGED -> cleanly returns to SDR.
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 0,
+            drawable_height: 0,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED,
+            reserved: 0,
+        }),
+    );
     dxmt_fakes::set_edr_value(
         DEVICE,
         Some(WMTEDRValue {
@@ -999,18 +1029,20 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
     core.present(true, 0.0, 0.0, true);
     core.drain();
     let step3 = dxmt_fakes::take_calls(DEVICE);
-    let set_cs = at(&step3, "MetalLayer_setColorSpace 0");
-    let set_props = at(
-        &step3,
-        "MetalLayer_setProps format=80 size=128x64 display_sync=1",
+    assert!(!has_layer_mutation(&step3), "{step3:#?}");
+    assert!(
+        !step3
+            .iter()
+            .any(|c| c.contains("fragment_bytes index=0 length=16")),
+        "{step3:#?}"
     );
-    assert!(set_cs < set_props, "{step3:#?}");
 
+    dxmt_fakes::set_view_poll(DEVICE, None);
     dxmt_fakes::set_edr_value(DEVICE, None);
     dxmt_fakes::set_drawable_format(DEVICE, None);
 }
 
-/// `present_after` and `display_sync` propagate to the layer and command buffer.
+/// `present_after` reaches `presentDrawableAfterMinimumDuration` and attaches presented event.
 #[test]
 fn present_after_and_display_sync_reach_layer_and_cmdbuf() {
     const DEVICE: u64 = 0x488;
@@ -1021,9 +1053,16 @@ fn present_after_and_display_sync_reach_layer_and_cmdbuf() {
     core.present(true, 1.0 / 30.0, 0.0, false);
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
-    at(
-        &calls,
-        "MetalLayer_setProps format=80 size=64x32 display_sync=0",
+    at_prefix(&calls, "WMTViewSyncAndPoll ");
+    assert!(
+        !calls.iter().any(|c| c.starts_with("MetalLayer_setProps")),
+        "managed layer must not emit MetalLayer_setProps: {calls:#?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("MTLDrawable_setPresentedEvent ") && c.contains("flags=0x1")),
+        "{calls:#?}"
     );
     assert!(
         calls
@@ -1468,4 +1507,293 @@ fn scaled_backbuffer_read_and_write_presented_round_trip() {
             .any(|c| c.trim_start().starts_with("copy_to_buffer ") && c.contains("size=64x32 ")),
         "{read_calls:#?}"
     );
+}
+
+/// View attach, poll (`panel_max_hz` / EDR / scale / cursor), and retire PARK lifecycle.
+#[test]
+fn metal_view_attach_poll_retire_lifecycle_and_panel_max_hz_pacing() {
+    use mtld3d_types::D3DPRESENT_INTERVAL_ONE;
+    use winemetal_sys::{
+        Obj,
+        wire::{
+            WMT_VIEW_POLL_FLAG_HDR_ACTIVE, WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE,
+            WMTViewPollOut,
+        },
+    };
+
+    use crate::device::{CoreDevice, CoreOptions, queue_profile};
+
+    const DEVICE: u64 = 0x491;
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { Obj::adopt(DEVICE) }.expect("a non-zero handle");
+    let opts = CoreOptions::HDR_ENABLE
+        | CoreOptions::COLOR_SPACE_ACCURATE
+        | CoreOptions::SOFTWARE_CURSOR_ON;
+    let mut core = CoreDevice::with_options(mtl, queue_profile(), opts);
+    core.attach(1, 64, 32, 1);
+    core.drain();
+    let attach_calls = dxmt_fakes::take_calls(DEVICE);
+    at_prefix(&attach_calls, "WMTAttachMetalView ");
+    assert!(
+        !attach_calls.iter().any(|c| {
+            c.starts_with("MetalLayer_setProps")
+                || c.starts_with("MetalLayer_setColorSpace")
+                || c.starts_with("MetalLayer_getEDRValue")
+        }),
+        "{attach_calls:#?}"
+    );
+
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 2,
+            edr_current: 2.5,
+            edr_potential: 2.5,
+            panel_max_hz: 120,
+            flags: WMT_VIEW_POLL_FLAG_HDR_ACTIVE | WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE,
+            reserved: 0,
+        }),
+    );
+    core.present_paced(true, D3DPRESENT_INTERVAL_ONE, 60, 0, 0);
+    core.drain();
+    let present_calls = dxmt_fakes::take_calls(DEVICE);
+    assert_eq!(core.backing_scale(), 2);
+    assert!(core.software_cursor_active());
+    assert!(
+        present_calls
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains("hz=120")),
+        "{present_calls:#?}"
+    );
+    assert!(
+        present_calls
+            .iter()
+            .any(|c| c.starts_with("    fragment_bytes index=0 length=16 fnv=")),
+        "polled EDR headroom must drive BT.2446 uniforms: {present_calls:#?}"
+    );
+    let expected_after = format!(
+        "MTLCommandBuffer_presentDrawableAfterMinimumDuration after={}",
+        1.0 / 120.0
+    );
+    at(&present_calls, &expected_after);
+    assert!(
+        present_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDrawable_setPresentedEvent ")
+                && c.contains("value=1 flags=0x1")),
+        "{present_calls:#?}"
+    );
+
+    drop(core);
+    let drop_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        drop_calls
+            .iter()
+            .any(|c| c.starts_with("WMTRetireMetalView ") && c.contains("flags=0x1")),
+        "drop must retire Metal view with PARK flag: {drop_calls:#?}"
+    );
+    dxmt_fakes::set_view_poll(DEVICE, None);
+}
+
+/// `OCCLUDED` skips drawables unless overridden; `DISPLAYS_NOTHING` keeps presenting drawables.
+#[test]
+fn occluded_skips_drawable_while_displays_nothing_keeps_presenting_with_event() {
+    use winemetal_sys::{
+        Obj,
+        wire::{WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING, WMT_VIEW_POLL_FLAG_OCCLUDED, WMTViewPollOut},
+    };
+
+    use crate::device::{CoreDevice, CoreOptions, queue_profile};
+
+    const DEVICE: u64 = 0x492;
+    const DEVICE_OVR: u64 = 0x493;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    // 1. OCCLUDED skips drawable acquisition and presented event.
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_OCCLUDED,
+            reserved: 0,
+        }),
+    );
+    core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
+    core.present(true, 0.0, 0.0, true);
+    core.drain();
+    let occ_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !occ_calls
+            .iter()
+            .any(|c| c.starts_with("MetalLayer_nextDrawable")
+                || c.starts_with("MTLDrawable_setPresentedEvent")
+                || c.starts_with("MTLCommandBuffer_presentDrawable")),
+        "OCCLUDED must skip drawable acquisition: {occ_calls:#?}"
+    );
+
+    // 2. DISPLAYS_NOTHING keeps acquiring and presenting drawables with slot 163 attached.
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING,
+            reserved: 0,
+        }),
+    );
+    core.present(true, 0.001, 0.0, false);
+    core.present(true, 0.001, 0.0, false);
+    core.drain();
+    let dn_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        dn_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDrawable_setPresentedEvent ")
+                && c.contains("value=1 flags=0x1")),
+        "DISPLAYS_NOTHING must keep acquiring drawables with presented event: {dn_calls:#?}"
+    );
+    assert!(
+        dn_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDrawable_setPresentedEvent ")
+                && c.contains("value=2 flags=0x1")),
+        "monotonic presented_value must advance across DISPLAYS_NOTHING presents: {dn_calls:#?}"
+    );
+    assert!(
+        dn_calls
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_presentDrawableAfterMinimumDuration ")),
+        "{dn_calls:#?}"
+    );
+    dxmt_fakes::set_view_poll(DEVICE, None);
+
+    // 3. CoreOptions::PRESENT_OCCLUDED overrides OCCLUDED skip.
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { Obj::adopt(DEVICE_OVR) }.expect("a non-zero handle");
+    let mut override_core =
+        CoreDevice::with_options(mtl, queue_profile(), CoreOptions::PRESENT_OCCLUDED);
+    override_core.attach(1, 64, 32, 1);
+    override_core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE_OVR);
+    dxmt_fakes::set_view_poll(
+        DEVICE_OVR,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_OCCLUDED,
+            reserved: 0,
+        }),
+    );
+    override_core.present(true, 0.0, 0.0, true);
+    override_core.drain();
+    let ovr_calls = dxmt_fakes::take_calls(DEVICE_OVR);
+    assert!(
+        ovr_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDrawable_setPresentedEvent ")),
+        "PRESENT_OCCLUDED must override OCCLUDED skip: {ovr_calls:#?}"
+    );
+    dxmt_fakes::set_view_poll(DEVICE_OVR, None);
+}
+
+/// Zero `nextDrawable` signals shared event directly; dirty surface and cursor overlay propagate.
+#[test]
+fn presented_event_signals_directly_when_next_drawable_is_zero_and_overlay_syncs() {
+    use winemetal_sys::wire::{
+        WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED, WMT_CURSOR_OVERLAY_FLAG_VISIBLE,
+        WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY, WMTViewPollOut,
+    };
+
+    use super::CursorOverlayUpdate;
+
+    const DEVICE: u64 = 0x494;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    dxmt_fakes::set_next_drawable_zero(DEVICE, true);
+    core.present(true, 0.0, 0.0, true);
+    core.drain();
+    dxmt_fakes::set_next_drawable_zero(DEVICE, false);
+    let zero_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        zero_calls.iter().any(|c| {
+            c.starts_with("MTLDrawable_setPresentedEvent drawable=#0 ")
+                && c.contains("view=#")
+                && c.contains("event=#")
+                && c.contains("value=1")
+        }),
+        "zero nextDrawable must still call slot 163 with drawable=0: {zero_calls:#?}"
+    );
+    assert!(
+        !zero_calls
+            .iter()
+            .any(|c| c.starts_with("MTLCommandBuffer_presentDrawable")),
+        "{zero_calls:#?}"
+    );
+
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+            reserved: 0,
+        }),
+    );
+    core.present_paced(
+        true,
+        0,
+        60,
+        0,
+        WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED,
+    );
+    core.drain();
+    let cs_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        cs_calls
+            .iter()
+            .any(|c| c.starts_with("WMTPresentClientSurface ") && c.contains("reasons=0x3")),
+        "CLIENT_SURFACE_DIRTY must trigger WMTPresentClientSurface: {cs_calls:#?}"
+    );
+    dxmt_fakes::set_view_poll(DEVICE, None);
+
+    let mut lut = [0_u16; 1024];
+    lut[1] = 0x1234;
+    core.set_gamma_ramp(Some(lut));
+    assert!(
+        core.overlay_sink()
+            .set_cursor_overlay(&CursorOverlayUpdate {
+                flags: WMT_CURSOR_OVERLAY_FLAG_VISIBLE,
+                width: 0,
+                height: 0,
+                x_hotspot: 0,
+                y_hotspot: 0,
+                scale: 1,
+                pixels: None,
+            })
+    );
+    let overlay_calls = dxmt_fakes::take_calls(DEVICE);
+    at_prefix(&overlay_calls, "WMTSetCursorOverlay ");
 }

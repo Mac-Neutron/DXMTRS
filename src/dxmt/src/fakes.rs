@@ -305,3 +305,63 @@ extern "C-unwind" fn fake_present_drawable_after(_cmdbuf: u64, _drawable: u64, _
 extern "C-unwind" fn fake_cmdbuf_property(_cmdbuf: u64, _prop: u32) -> u64 {
     0
 }
+
+#[unsafe(export_name = "WMTDeclareLatencyCriticalActivity")]
+const extern "C-unwind" fn fake_declare_latency_critical_activity() -> u64 {
+    1
+}
+
+#[unsafe(export_name = "WMTAttachMetalView")]
+const extern "C-unwind" fn fake_attach_metal_view(
+    _hwnd: isize,
+    _device: u64,
+    _desc: *const winemetal_sys::wire::WMTViewAttachDesc,
+    out_poll: *mut winemetal_sys::wire::WMTViewPollOut,
+    ret_layer: *mut u64,
+) -> u64 {
+    if !ret_layer.is_null() {
+        // SAFETY: caller provides writable `ret_layer`.
+        unsafe { ret_layer.write(0) };
+    }
+    if !out_poll.is_null() {
+        // SAFETY: caller provides writable `out_poll`; all-zero bytes are valid.
+        unsafe { out_poll.write_bytes(0, 1) };
+    }
+    0
+}
+
+#[unsafe(export_name = "WMTRetireMetalView")]
+const extern "C-unwind" fn fake_retire_metal_view(_view: u64, _flags: u32) {}
+
+#[unsafe(export_name = "WMTViewSyncAndPoll")]
+const extern "C-unwind" fn fake_view_sync_and_poll(
+    _view: u64,
+    _layer: u64,
+    _flags: u32,
+    out_poll: *mut winemetal_sys::wire::WMTViewPollOut,
+) {
+    if !out_poll.is_null() {
+        // SAFETY: caller provides writable `out_poll`; all-zero bytes are valid.
+        unsafe { out_poll.write_bytes(0, 1) };
+    }
+}
+
+#[unsafe(export_name = "WMTPresentClientSurface")]
+const extern "C-unwind" fn fake_present_client_surface(_view: u64, _reasons: u32) {}
+
+#[unsafe(export_name = "MTLDrawable_setPresentedEvent")]
+const extern "C-unwind" fn fake_drawable_set_presented_event(
+    _drawable: u64,
+    _view: u64,
+    _shared_event: u64,
+    _signal_value: u64,
+    _flags: u32,
+) {
+}
+
+#[unsafe(export_name = "WMTSetCursorOverlay")]
+const extern "C-unwind" fn fake_set_cursor_overlay(
+    _view: u64,
+    _params: *const winemetal_sys::wire::WMTCursorOverlayParams,
+) {
+}

@@ -1449,6 +1449,17 @@ fn new_d3d9_presenter(width: u32, height: u32, hdr_enable: bool) -> Arc<Presente
     unsafe { Presenter::new_d3d9(&desc, width, height, hdr_enable) }
 }
 
+fn d3d9_args(gamma: Option<Arc<[u16; 1024]>>, peak_edr: f32) -> D3d9PresentArgs {
+    D3d9PresentArgs {
+        gamma,
+        peak_edr,
+        view: 0,
+        presented_event: 0,
+        presented_value: 0,
+        paced: false,
+    }
+}
+
 #[test]
 fn d3d9_inline_gamma_never_stalls_or_rebuilds_pso() {
     let _serial = serial();
@@ -1467,14 +1478,8 @@ fn d3d9_inline_gamma_never_stalls_or_rebuilds_pso() {
     lut1[0] = 111;
     let mut lut2 = [0_u16; 1024];
     lut2[0] = 222;
-    let args1 = D3d9PresentArgs {
-        gamma: Some(Arc::new(lut1)),
-        peak_edr: peak1,
-    };
-    let args2 = D3d9PresentArgs {
-        gamma: Some(Arc::new(lut2)),
-        peak_edr: peak1,
-    };
+    let args1 = d3d9_args(Some(Arc::new(lut1)), peak1);
+    let args2 = d3d9_args(Some(Arc::new(lut2)), peak1);
 
     // Encode two back-to-back frames with distinct ramps without calling frame_done.
     // SAFETY: the fakes' objects.
@@ -1542,10 +1547,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
     assert!(prep1.contains("pixel_format=0x73"), "{prep1}");
     assert!(prep1.contains("framebuffer_only=1"), "{prep1}");
 
-    let args1 = D3d9PresentArgs {
-        gamma: None,
-        peak_edr: peak1,
-    };
+    let args1 = d3d9_args(None, peak1);
     // SAFETY: the fakes' objects.
     let d1 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args1, |_| {}, |_| {}) };
     let enc1 = take();
@@ -1566,10 +1568,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
     assert!(!prep2.contains("MetalLayer_setProps"), "{prep2}");
     assert!(!prep2.contains("MetalLayer_setColorSpace"), "{prep2}");
 
-    let args2 = D3d9PresentArgs {
-        gamma: Some(Arc::new([0x1234_u16; 1024])),
-        peak_edr: peak2,
-    };
+    let args2 = d3d9_args(Some(Arc::new([0x1234_u16; 1024])), peak2);
     // SAFETY: the fakes' objects.
     let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args2, |_| {}, |_| {}) };
     let enc2 = take();
@@ -1611,10 +1610,7 @@ fn d3d9_two_step_edr_bootstrap_and_hdr_resize() {
     assert!(prep3.contains("pixel_format=0x50"), "{prep3}");
     assert!(prep3.contains("framebuffer_only=0"), "{prep3}");
 
-    let args3 = D3d9PresentArgs {
-        gamma: None,
-        peak_edr: peak3,
-    };
+    let args3 = d3d9_args(None, peak3);
     // SAFETY: the fakes' objects.
     let d3 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args3, |_| {}, |_| {}) };
     let enc3 = take();
@@ -1638,10 +1634,7 @@ fn d3d9_can_blit_disabled_by_gamma_or_hdr() {
     take();
 
     // Matching BGRA8 without gamma takes the blit path (0 PSOs built, no fragment draw).
-    let blit_args = D3d9PresentArgs {
-        gamma: None,
-        peak_edr: 1.0,
-    };
+    let blit_args = d3d9_args(None, 1.0);
     // SAFETY: the fakes' objects.
     let d1 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &blit_args, |_| {}, |_| {}) };
     let blit_log = take();
@@ -1649,10 +1642,7 @@ fn d3d9_can_blit_disabled_by_gamma_or_hdr() {
     assert!(!blit_log.contains("Draw primitive="), "{blit_log}");
 
     // Matching BGRA8 with gamma disables can_blit and draws via fs_present_d3d9_sdr_gamma.
-    let gamma_args = D3d9PresentArgs {
-        gamma: Some(Arc::new([0_u16; 1024])),
-        peak_edr: 1.0,
-    };
+    let gamma_args = d3d9_args(Some(Arc::new([0_u16; 1024])), 1.0);
     // SAFETY: the fakes' objects.
     let d2 = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &gamma_args, |_| {}, |_| {}) };
     let gamma_log = take();
@@ -1689,10 +1679,7 @@ fn d3d9_drawable_size_override_disables_blit_and_sets_viewport() {
     let _ = p.prepare_d3d9_present(1920, 1080, true, || {});
     take();
 
-    let args = D3d9PresentArgs {
-        gamma: None,
-        peak_edr: 1.0,
-    };
+    let args = d3d9_args(None, 1.0);
     // SAFETY: the fakes' objects.
     let d = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args, |_| {}, |_| {}) };
     let log = take();
@@ -1803,10 +1790,7 @@ fn d3d9_encode_returns_none_when_backbuffer_is_zero() {
     reset();
     let p = new_d3d9_presenter(1920, 1080, false);
     take();
-    let args = D3d9PresentArgs {
-        gamma: None,
-        peak_edr: 1.0,
-    };
+    let args = d3d9_args(None, 1.0);
     // SAFETY: the fakes' objects; backbuffer 0 exercises the early-return guard.
     let d = unsafe { p.encode_d3d9(CMDBUF, 0, &args, |_| {}, |_| {}) };
     assert!(d.is_none());
@@ -1815,4 +1799,38 @@ fn d3d9_encode_returns_none_when_backbuffer_is_zero() {
         !log.contains("MTLCommandBuffer_renderCommandEncoder"),
         "{log}"
     );
+}
+
+#[test]
+fn d3d9_managed_layer_skips_layer_mutations_and_disables_blit() {
+    let _serial = serial();
+    reset();
+    fake().source = (1920, 1080);
+    fake().drawable_pixel_format = Some(WMT_PIXEL_FORMAT_BGRA8_UNORM);
+    let desc = PresenterDesc {
+        device: DEVICE,
+        layer: LAYER,
+        library: LIBRARY,
+        scale_factor: 1.0,
+        sample_count: 1,
+    };
+    // SAFETY: the fakes' objects, alive for the test.
+    let p = unsafe { Presenter::new_d3d9_managed(&desc, 1920, 1080, true) };
+    let init_log = take();
+    assert!(!init_log.contains("MetalLayer_setProps"), "{init_log}");
+    assert!(!init_log.contains("MetalLayer_setColorSpace"), "{init_log}");
+    assert!(!init_log.contains("MetalLayer_getEDRValue"), "{init_log}");
+
+    p.sync_d3d9_managed(1920, 1080, true, true);
+    let sync_log = take();
+    assert!(!sync_log.contains("MetalLayer_setProps"), "{sync_log}");
+    assert!(!sync_log.contains("MetalLayer_setColorSpace"), "{sync_log}");
+
+    let args = d3d9_args(None, 1.0);
+    // SAFETY: the fakes' objects.
+    let d = unsafe { p.encode_d3d9(CMDBUF, BACKBUFFER, &args, |_| {}, |_| {}) };
+    let enc_log = take();
+    assert_eq!(pipelines_built(&enc_log), 1, "{enc_log}");
+    assert!(enc_log.contains("Draw primitive="), "{enc_log}");
+    drop(d);
 }

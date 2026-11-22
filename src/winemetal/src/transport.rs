@@ -62,13 +62,13 @@ type UnixCallHandler = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
 
 #[cfg(not(windows))]
 unsafe extern "C" {
-    static __wine_unix_call_funcs: [Option<UnixCallHandler>; 158];
+    static __wine_unix_call_funcs: [Option<UnixCallHandler>; 165];
 }
 
 /// Native `UNIX_CALL`: calls `winemetal`'s `__wine_unix_call_funcs[slot]` directly with `args`.
 #[cfg(not(windows))]
 pub fn unix_call(slot: u32, args: *mut c_void) -> i32 {
-    // SAFETY: `slot` is a `winemetal_wire::slot` constant in `0..158` whose handler is populated.
+    // SAFETY: `slot` is a `winemetal_wire::slot` constant in `0..165` whose handler is populated.
     let handler = unsafe { __wine_unix_call_funcs[slot as usize].unwrap_unchecked() };
     // SAFETY: `args` is the params structure of `slot` (or the caller's own pointer for `WMTForward`).
     unsafe { handler(args) }
@@ -149,6 +149,7 @@ params!(
     UnixcallMtldeviceNewsharedeventwithmachport,
     UnixcallMtldeviceNewtexture,
     UnixcallMtldeviceSampletimestamps,
+    UnixcallMtldrawableSetpresentedevent,
     UnixcallMtlheapNewbuffer,
     UnixcallMtlheapNewtexture,
     UnixcallMtllibraryNewfunctionWithConstants,
@@ -165,6 +166,8 @@ params!(
     UnixcallQueryDisplaySettingForLayer,
     UnixcallSetmetalcachepath,
     UnixcallUpdateDisplaySetting,
+    UnixcallWmtAttachMetalView,
+    UnixcallWmtViewSyncAndPoll,
     UnixcallWmtmemory,
 );
 

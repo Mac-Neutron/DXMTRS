@@ -38,8 +38,7 @@ endif
 d3d9_env = { 'MTLD3D_LLVM_MINGW': d3d9_llvm_mingw, 'MTLD3D_WINECRT0': d3d9_winecrt0 }
 
 # DXMTRS C4: d3d9_core_runtime builds the d3d9 crate's core-runtime feature (d3d9-rt on dxmt-core, runtime.mode=core)
-# into every half that can import winemetal.dll: arm64ec, x86_64 and i686. winemetal.dll has no native arm64 half, so
-# the ARM64X image's aarch64 half is built without it and a native arm64 process keeps mtld3d. That feature needs the
+# into every target half that imports winemetal.dll: aarch64, arm64ec, x86_64 and i686. That feature needs the
 # core's command library and the translator key, as d3d11's crate does; guest_vm builds d3d9's guest-vm feature.
 d3d9_core = get_option('d3d9_core_runtime')
 d3d9_core_env = {
@@ -54,7 +53,7 @@ foreach crate : ['d3d9', 'mtld3d']
     features = d3d9_features[crate]
     env = d3d9_env
     depends = []
-    if d3d9_core and t != 'aarch64-pc-windows-msvc'
+    if d3d9_core
       features += ['core-runtime']
       if crate == 'd3d9'
         env += d3d9_core_env
@@ -84,23 +83,13 @@ if cpu_family == 'aarch64'
   else
     d3d9_ntdll = wine_install_path / 'lib/wine' / windows_builtin_install_dir / 'libntdll.a'
   endif
-  # The core runtime's ARM64EC half imports winemetal.dll, whose own image is ARM64EC alone: an import library of the
-  # .def winemetal.dll exports, for that half only (arm64x-link.sh's --ec-import).
-  d3d9_ec_import = []
-  if d3d9_core
-    d3d9_ec_import = custom_target('winemetal-ec.lib',
-      input   : files('../winemetal/winemetal.def'),
-      output  : 'winemetal-ec.lib',
-      command : [d3d9_llvm_mingw / 'bin/llvm-dlltool', '-m', 'arm64ec', '-D', 'winemetal.dll', '-d', '@INPUT@',
-                 '-l', '@OUTPUT@'],
-    )
-  endif
+  # The core runtime imports winemetal.dll in both halves through winemetal_imp (hybrid ARM64X import archive).
   foreach dll : [['d3d9', files('d3d9.def', 'version.rc')], ['mtld3d', files('shim/mtld3d.def')]]
-    ec_import = dll[0] == 'd3d9' and d3d9_core ? ['--ec-import', d3d9_ec_import] : []
+    d3d9_import = dll[0] == 'd3d9' and d3d9_core ? ['--import', winemetal_imp] : []
     custom_target(dll[0] + '.dll',
       input       : dll[1],
       output      : dll[0] + '.dll',
-      command     : [arm64x_link] + ec_import + [d3d9_llvm_mingw / 'bin', winebuild, d3d9_ntdll, '@INPUT0@',
+      command     : [arm64x_link] + d3d9_import + [d3d9_llvm_mingw / 'bin', winebuild, d3d9_ntdll, '@INPUT0@',
                      '@OUTPUT@', d3d9_rust[dll[0]]] + (dll[0] == 'd3d9' ? ['@INPUT1@'] : []),
       install     : true,
       install_dir : windows_builtin_install_dir,

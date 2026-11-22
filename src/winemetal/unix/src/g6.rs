@@ -42,7 +42,12 @@ use crate::{
 };
 
 pub mod appkit;
+pub mod attachment;
+mod client_surface;
+pub mod cursor_overlay;
+mod delegate_forward;
 pub mod display;
+pub mod window;
 
 extern_class!(
     /// `MTLHUDService`, re-declared for its private metric selectors.
@@ -444,6 +449,7 @@ pub unsafe extern "C-unwind" fn release_metal_view(args: *mut c_void) -> i32 {
     let _guard = AbortOnPanic;
     // SAFETY: the caller's contract.
     let p = unsafe { params::<UnixcallGenericObjNoret>(args) };
+    let _ = window::detach_metal_view_if_attached(p.handle);
     let release = macdrv_functions().map_or_else(
         || {
             let release = symbol(c"macdrv_view_release_metal_view");

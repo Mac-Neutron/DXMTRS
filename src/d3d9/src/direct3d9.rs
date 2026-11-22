@@ -2253,6 +2253,8 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         })),
         #[cfg(feature = "core-runtime")]
         core: None,
+        #[cfg(feature = "core-runtime")]
+        core_overlay: None,
         render_states,
         sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
         direct3d: this as u64,
@@ -2436,6 +2438,21 @@ fn create_core_device(
     if cfg.hdr_enable {
         options.insert(d3d9_rt::device::CoreOptions::HDR_ENABLE);
     }
+    if cfg.color_space == mtld3d_shared::mtl::ColorSpacePolicy::Accurate {
+        options.insert(d3d9_rt::device::CoreOptions::COLOR_SPACE_ACCURATE);
+    }
+    match cfg.cursor_software {
+        mtld3d_shared::mtl::SoftwareCursorPolicy::On => {
+            options.insert(d3d9_rt::device::CoreOptions::SOFTWARE_CURSOR_ON);
+        }
+        mtld3d_shared::mtl::SoftwareCursorPolicy::Off => {
+            options.insert(d3d9_rt::device::CoreOptions::SOFTWARE_CURSOR_OFF);
+        }
+        mtld3d_shared::mtl::SoftwareCursorPolicy::Auto => {}
+    }
+    if cfg.present_occluded {
+        options.insert(d3d9_rt::device::CoreOptions::PRESENT_OCCLUDED);
+    }
     let render_scale = resolve_render_scale(
         d3d9_rt::device::metalfx_available(&mtl),
         cfg.render_scale_percent,
@@ -2451,6 +2468,12 @@ fn create_core_device(
         pp.back_buffer_height,
         samples,
     );
+    let raw_view = core.view_handle();
+    // SAFETY: `raw_view` is 0 or a live view handle owned by `core`.
+    let view_handle = unsafe { MetalHandle::new(raw_view) };
+    let (cursor_scale, _origin) = resolve_cursor_scale(core.backing_scale(), cfg.cursor_scale);
+    let software_cursor = core.software_cursor_active();
+    let core_overlay = Some(core.overlay_sink());
     // The auto depth-stencil, of the back buffer's render size; a format of 0 asks for none, as
     // under mtld3d. The entry point checked the format before the runtimes part.
     let auto_depth = (pp.enable_auto_depth_stencil != 0)
@@ -2491,7 +2514,7 @@ fn create_core_device(
     let dev = Direct3DDevice9::new(crate::device::DeviceCreateInfo {
         device_handle: MetalHandle::NULL,
         record_handle: DeviceRecordHandle::NULL,
-        view_handle: MetalHandle::NULL,
+        view_handle,
         layer_handle: MetalHandle::NULL,
         pacing: LayerPacing {
             display_sync: false,
@@ -2510,6 +2533,7 @@ fn create_core_device(
         encoder: crate::device::Mtld3dOnly::absent(),
         current_frame: crate::device::Mtld3dOnly::absent(),
         core: Some(Box::new(core)),
+        core_overlay,
         render_states,
         sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
         direct3d: this as u64,
@@ -2519,8 +2543,8 @@ fn create_core_device(
         creation_focus_window: focus_window as usize,
         present_params: stored,
         hwnd: hwnd as *mut c_void,
-        cursor_scale: 1,
-        software_cursor: false,
+        cursor_scale,
+        software_cursor,
         display_sinks: Box::new(crate::cursor::DisplaySinks::new()),
         fullscreen,
         config: Arc::clone(cfg),

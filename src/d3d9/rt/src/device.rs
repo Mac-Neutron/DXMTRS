@@ -6,7 +6,7 @@
 use core::sync::atomic::Ordering;
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Once, OnceLock, Weak};
 
 use dxmt_core::{
     device::Device, pipeline_cache::PsoMap, queue::QueueConfig, scheduler::CompileScheduler,
@@ -20,16 +20,18 @@ use mtld3d_core::{
 };
 use winemetal_sys::{
     MTLDevice_registryID, MTLDevice_supportsFXSpatialScaler, NSArray_count, NSArray_object,
-    NSObject_release, Obj, WMTCopyAllDevices,
+    NSObject_release, Obj, WMTCopyAllDevices, WMTDeclareLatencyCriticalActivity,
 };
 
 /// The `log` target of the core runtime's lines.
 pub const LOG_TARGET: &str = "mtld3d::d3d9::core";
 
+static LATENCY_CRITICAL_INIT: Once = Once::new();
+
 bitflags::bitflags! {
     /// Per-device runtime options and one-shot diagnostic latches for [`CoreDevice`].
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub struct CoreOptions: u8 {
+    pub struct CoreOptions: u16 {
         /// Open and read/write the shared DXMT SQLite shader cache (`shaderCache.enable`).
         const SHADER_CACHE = 1 << 0;
         /// Compile uncached shaders and pipelines asynchronously (`shader.asyncCompile`).
@@ -42,6 +44,18 @@ bitflags::bitflags! {
         const LOGGED_UPSCALE_FAIL = 1 << 4;
         /// Enable HDR/EDR output when the display supports it (`color.hdr.enable`).
         const HDR_ENABLE = 1 << 5;
+        /// Request sRGB-accurate colorspace tagging instead of display passthrough.
+        const COLOR_SPACE_ACCURATE = 1 << 6;
+        /// Force host-side software cursor overlay (`cursor.software = true`).
+        const SOFTWARE_CURSOR_ON = 1 << 7;
+        /// Force hardware cursor (`cursor.software = false`).
+        const SOFTWARE_CURSOR_OFF = 1 << 8;
+        /// Present drawables even when the host reports window occlusion.
+        const PRESENT_OCCLUDED = 1 << 9;
+        /// Latched state: host reported software cursor overlay active on the attached view.
+        const SOFTWARE_CURSOR_ACTIVE = 1 << 10;
+        /// Latched state: host requested a cursor re-apply kick since the last read.
+        const CURSOR_KICK_PENDING = 1 << 11;
     }
 }
 
@@ -261,6 +275,12 @@ pub struct CoreDevice {
     open_query_scales: Vec<Weak<query::QueryScale>>,
     /// Inline 256-entry `ushort4` gamma lookup table applied by the presenter, or none.
     gamma: Option<Arc<[u16; 1024]>>,
+    /// Monotonic revision bumped whenever `gamma` is installed (`0` when cleared).
+    gamma_revision: u64,
+    /// Shared view and gamma handle consumed by cursor overlay updates.
+    overlay: Arc<swapchain::OverlaySink>,
+    /// Display backing scale (`1..=8`) published by `WMTAttachMetalView` / `WMTViewSyncAndPoll`.
+    backing_scale: u32,
     /// Layer drawable size in pixels, preserved across `resize` and `retarget`.
     drawable_size: (u32, u32),
     /// Consecutive present geometry streak for `MetalFX` settle hysteresis.
@@ -292,6 +312,10 @@ impl CoreDevice {
     #[must_use]
     pub fn with_options(mtl: Obj, profile: QueueConfig, options: CoreOptions) -> Self {
         crate::stats::init_once();
+        LATENCY_CRITICAL_INIT.call_once(|| {
+            // SAFETY: slot 158 takes no inputs and retains a process-lifetime activity assertion.
+            let _ = unsafe { WMTDeclareLatencyCriticalActivity() };
+        });
         let chunks = profile.chunks;
         let staging_block = profile.staging_block;
         let mtl_handle = mtl.handle();
@@ -388,6 +412,9 @@ impl CoreDevice {
             open_brackets: None,
             open_query_scales: Vec::new(),
             gamma: None,
+            gamma_revision: 0,
+            overlay: Arc::new(swapchain::OverlaySink::new()),
+            backing_scale: 1,
             drawable_size: (0, 0),
             settled_geometry: None,
             upscale: None,
@@ -808,7 +835,9 @@ pub use mtld3d_core::async_compile::ClearPlanes;
 pub use query::{Occlusion, OcclusionAnswer};
 pub use shader_cache::close_shader_cache_on_detach;
 pub use stretch::StretchQuad;
-pub use swapchain::{present_after, present_durations, present_pacing};
+pub use swapchain::{
+    CursorOverlayUpdate, OverlaySink, present_after, present_durations, present_pacing,
+};
 pub use target::TargetRef;
 pub use textures::{
     CoreTextureDesc, CoreTextureFlags, DepthPlanes, TextureBind, TextureKind, UploadRegion,

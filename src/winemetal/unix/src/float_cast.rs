@@ -49,3 +49,15 @@ pub const fn f64_to_f32(v: f64) -> f32 {
 pub const fn f64_to_u64(v: f64) -> u64 {
     v as u64
 }
+
+/// Saturating `f64 -> u32`: non-finite or non-positive values become `0`.
+#[must_use]
+pub fn f64_to_u32_saturating(v: f64) -> u32 {
+    if !v.is_finite() || v <= 0.0 {
+        return 0;
+    }
+    if v >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    v as u32
+}

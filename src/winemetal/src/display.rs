@@ -4,9 +4,11 @@ use winemetal_wire::{
     UnixcallCreateMetalViewFromHwnd, UnixcallGenericObjConstptrNoret, UnixcallGenericObjNoret,
     UnixcallGenericObjObjNoret, UnixcallGenericObjObjObjNoret, UnixcallGenericObjObjObjUint64Ret,
     UnixcallGenericObjObjRet, UnixcallGenericObjPtrNoret, UnixcallGenericObjRet,
-    UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret, UnixcallQueryDisplaySetting,
-    UnixcallQueryDisplaySettingForLayer, UnixcallUpdateDisplaySetting, WMTDisplayDescription,
-    WMTEDRValue, WMTHDRMetadata, WMTLayerProps, slot,
+    UnixcallGenericObjUint64Noret, UnixcallGenericObjUint64Ret, UnixcallGenericObjUint64Uint64Ret,
+    UnixcallMtldrawableSetpresentedevent, UnixcallQueryDisplaySetting,
+    UnixcallQueryDisplaySettingForLayer, UnixcallUpdateDisplaySetting, UnixcallWmtAttachMetalView,
+    UnixcallWmtViewSyncAndPoll, WMTCursorOverlayParams, WMTDisplayDescription, WMTEDRValue,
+    WMTHDRMetadata, WMTLayerProps, WMTViewAttachDesc, WMTViewPollOut, slot,
 };
 
 use crate::transport::{call, low_half, mem_ptr};
@@ -152,5 +154,73 @@ exports! {
         unsafe { colorspace.write(p.colorspace) };
         // SAFETY: as above.
         unsafe { edr_value.write(p.edr_value) };
+    }
+
+    fn WMTDeclareLatencyCriticalActivity() -> u64 {
+        call(slot::WMT_DECLARE_LATENCY_CRITICAL_ACTIVITY, |_: &mut UnixcallGenericObjRet| ()).ret
+    }
+
+    fn WMTAttachMetalView(
+        hwnd: isize,
+        device: u64,
+        desc: *const WMTViewAttachDesc,
+        out_poll: *mut WMTViewPollOut,
+        ret_layer: *mut u64,
+    ) -> u64 {
+        let p = call(slot::WMT_ATTACH_METAL_VIEW, |p: &mut UnixcallWmtAttachMetalView| {
+            p.hwnd = hwnd.cast_unsigned() as u64;
+            p.device = device;
+            p.desc = mem_ptr(desc);
+            p.out_poll = mem_ptr(out_poll);
+        });
+        // SAFETY: valid for a write per the function contract.
+        unsafe { ret_layer.write(p.ret_layer) };
+        p.ret_view
+    }
+
+    fn WMTRetireMetalView(view: u64, flags: u32) {
+        call(slot::WMT_RETIRE_METAL_VIEW, |p: &mut UnixcallGenericObjUint64Noret| {
+            p.handle = view;
+            p.arg = u64::from(flags);
+        });
+    }
+
+    fn WMTViewSyncAndPoll(view: u64, layer: u64, flags: u32, out_poll: *mut WMTViewPollOut) {
+        call(slot::WMT_VIEW_SYNC_AND_POLL, |p: &mut UnixcallWmtViewSyncAndPoll| {
+            p.view = view;
+            p.layer = layer;
+            p.out = mem_ptr(out_poll);
+            p.flags = flags;
+        });
+    }
+
+    fn WMTPresentClientSurface(view: u64, reasons: u32) {
+        call(slot::WMT_PRESENT_CLIENT_SURFACE, |p: &mut UnixcallGenericObjUint64Noret| {
+            p.handle = view;
+            p.arg = u64::from(reasons);
+        });
+    }
+
+    fn MTLDrawable_setPresentedEvent(
+        drawable: u64,
+        view: u64,
+        shared_event: u64,
+        signal_value: u64,
+        flags: u32,
+    ) {
+        call(slot::MTL_DRAWABLE_SET_PRESENTED_EVENT, |p: &mut UnixcallMtldrawableSetpresentedevent| {
+            p.drawable = drawable;
+            p.view = view;
+            p.shared_event = shared_event;
+            p.signal_value = signal_value;
+            p.flags = flags;
+        });
+    }
+
+    fn WMTSetCursorOverlay(view: u64, params: *const WMTCursorOverlayParams) {
+        call(slot::WMT_SET_CURSOR_OVERLAY, |p: &mut UnixcallGenericObjConstptrNoret| {
+            p.handle = view;
+            p.arg = mem_ptr(params);
+        });
     }
 }

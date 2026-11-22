@@ -17,16 +17,18 @@
 //! the `WindowServer` cursor plane never toggles on our account.
 //!
 //! **The core runtime.** A device of the core runtime runs the three entry
-//! points and the subclass as they are (DXMTRS C4c-7a, C4c-6d, C4d-2a): the
-//! auto-resize on `WM_SIZE` resizes the core's back buffer, auto depth-stencil,
-//! viewport and scissor (`DeviceInner::apply_auto_resize`). Its cursor's scale
-//! stays 1, and it has no overlay view.
+//! points and the subclass as they are: the auto-resize on `WM_SIZE` resizes
+//! the core's back buffer, auto depth-stencil, viewport and scissor
+//! (`DeviceInner::apply_auto_resize`), while cursor scaling, software overlay
+//! (`WMTSetCursorOverlay`), and client-surface presentation flow through `d3d9-rt`.
 
 use core::{
     ffi::c_void,
     ptr::null_mut,
     sync::atomic::{AtomicU32, Ordering},
 };
+#[cfg(feature = "core-runtime")]
+use std::sync::Arc;
 use std::{
     hash::Hasher,
     sync::{LazyLock, Mutex},
@@ -443,6 +445,18 @@ impl DisplaySinks {
     pub fn take_cursor_kick(&self) -> bool {
         self.cursor_kick.swap(0, Ordering::AcqRel) != 0
     }
+
+    /// Publishes a display backing scale observed on the core runtime.
+    #[cfg(feature = "core-runtime")]
+    pub fn set_backing_scale(&self, scale: u32) {
+        self.backing_scale.store(scale, Ordering::Relaxed);
+    }
+
+    /// Arms a cursor re-apply kick observed on the core runtime.
+    #[cfg(feature = "core-runtime")]
+    pub fn set_cursor_kick(&self) {
+        self.cursor_kick.store(1, Ordering::Release);
+    }
 }
 
 impl Default for DisplaySinks {
@@ -584,6 +598,12 @@ pub struct CursorState {
     /// display on the game's next cursor change, which for a title that sets
     /// its pointer once is never. `None` until the first accepted call.
     source: Option<CursorSource>,
+    /// Shared view and gamma handle when running under the core runtime.
+    #[cfg(feature = "core-runtime")]
+    core_overlay: Option<Arc<d3d9_rt::device::OverlaySink>>,
+    /// Active sprite hash last uploaded through `WMTSetCursorOverlay`.
+    #[cfg(feature = "core-runtime")]
+    core_sprite_hash: u64,
 }
 
 /// A cursor bitmap in the shape `build_hcursor` consumes.
@@ -616,6 +636,7 @@ impl CursorState {
         software: bool,
         view_handle: MetalHandle<NSViewKind>,
         sinks: Box<DisplaySinks>,
+        #[cfg(feature = "core-runtime")] core_overlay: Option<Arc<d3d9_rt::device::OverlaySink>>,
     ) -> Self {
         // D3D9 starts the cursor hidden (ShowCursor reports FALSE until a
         // cursor image is set and shown).
@@ -636,6 +657,10 @@ impl CursorState {
             probe: HitchProbe::new(),
             scale: scale.clamp(1, 8),
             source: None,
+            #[cfg(feature = "core-runtime")]
+            core_overlay,
+            #[cfg(feature = "core-runtime")]
+            core_sprite_hash: 0,
         }
     }
 
@@ -665,6 +690,10 @@ impl CursorState {
     /// load; one after the client view was hidden or the window's client area
     /// moved sends `PresentClientSurface`.
     pub fn present_client_surface_if_asked(&self) {
+        #[cfg(feature = "core-runtime")]
+        if crate::is_core() {
+            return;
+        }
         if self.view_handle.is_null() {
             return;
         }
@@ -759,6 +788,29 @@ impl CursorState {
             mtld3d_shared::log_once_warn!(target: LOG_TARGET, "cursor: no source for sprite retry");
             return;
         };
+        #[cfg(feature = "core-runtime")]
+        if crate::is_core() {
+            let Some(sink) = self.core_overlay.as_ref() else {
+                return;
+            };
+            let needs_pixels = self.core_sprite_hash != hash;
+            let sprite = needs_pixels.then(|| upscale_sprite(source, self.scale));
+            let update = d3d9_rt::device::CursorOverlayUpdate {
+                flags: flags.bits(),
+                width: sprite.as_ref().map_or(0, |s| s.width),
+                height: sprite.as_ref().map_or(0, |s| s.height),
+                x_hotspot: sprite.as_ref().map_or(0, |s| s.x_hotspot),
+                y_hotspot: sprite.as_ref().map_or(0, |s| s.y_hotspot),
+                scale: sprite.as_ref().map_or(0, |s| s.scale),
+                pixels: sprite.as_ref().map(|s| s.pixels.as_slice()),
+            };
+            self.core_sprite_hash = if sink.set_cursor_overlay(&update) {
+                hash
+            } else {
+                0
+            };
+            return;
+        }
         let accepted = reconcile_upload(self.uploaded.contains(&hash), |with_pixels| {
             let sprite = with_pixels.then(|| upscale_sprite(source, self.scale));
             send_overlay_state(self.view_handle, hash, flags, sprite.as_ref())
@@ -770,23 +822,41 @@ impl CursorState {
         }
     }
 
+    /// Returns whether this cursor state routes sprites through the software overlay.
+    #[cfg(feature = "core-runtime")]
+    pub const fn is_software(&self) -> bool {
+        self.software()
+    }
+
     /// Ship the current visibility to the unix side.
     ///
     /// Software mode names the sprite too; the hardware path sends visibility
     /// alone, which the unix side's pointer watch needs to know whatever
     /// draws the cursor.
-    fn push_overlay_state(&mut self) {
+    pub fn push_overlay_state(&mut self) {
         if self.software() && self.source.is_some() {
             self.sync_sprite();
         } else {
+            let flags = self.overlay_flags() | CursorOverlayFlags::HARDWARE;
+            #[cfg(feature = "core-runtime")]
+            if crate::is_core() {
+                if let Some(sink) = self.core_overlay.as_ref() {
+                    let update = d3d9_rt::device::CursorOverlayUpdate {
+                        flags: flags.bits(),
+                        width: 0,
+                        height: 0,
+                        x_hotspot: 0,
+                        y_hotspot: 0,
+                        scale: 0,
+                        pixels: None,
+                    };
+                    let _ = sink.set_cursor_overlay(&update);
+                }
+                return;
+            }
             // Native visibility also belongs to games that draw their own cursor
             // and never supply a D3D sprite.
-            send_overlay_state(
-                self.view_handle,
-                0,
-                self.overlay_flags() | CursorOverlayFlags::HARDWARE,
-                None,
-            );
+            send_overlay_state(self.view_handle, 0, flags, None);
         }
     }
 
@@ -1217,6 +1287,10 @@ impl CursorState {
         self.set_hide_suppressed_in_resize(false);
         self.hwnd = hwnd;
         self.view_handle = view_handle;
+        #[cfg(feature = "core-runtime")]
+        {
+            self.core_sprite_hash = 0;
+        }
         self.install_subclass(dev_ptr);
         self.push_overlay_state();
     }
@@ -1710,6 +1784,10 @@ extern "system" fn cursor_wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: i
         let activating = activate_state != WA_INACTIVE;
         if activating {
             cur.set_dirty(true);
+            #[cfg(feature = "core-runtime")]
+            if crate::is_core() {
+                cur.request_client_surface();
+            }
         }
         debug!(
             target: LOG_TARGET,
@@ -1777,6 +1855,10 @@ extern "system" fn cursor_wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: i
         // SAFETY: see WM_SETCURSOR branch — `dev_ptr` is live for the
         // lifetime of the subclass.
         let cur = unsafe { (*dev_ptr).cursor_mut() };
+        #[cfg(feature = "core-runtime")]
+        if crate::is_core() && new_width != 0 && new_height != 0 {
+            cur.request_client_surface();
+        }
         let suppress = cur.enter_resize(wp);
         if suppress {
             DEVICE_INSTANCES

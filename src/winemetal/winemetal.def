@@ -86,6 +86,7 @@ EXPORTS
     MTLDevice_supportsFamily
     MTLDevice_supportsTextureSampleCount
     MTLDevice_temporalScalerScaleRange
+    MTLDrawable_setPresentedEvent
     MTLHeap_newBuffer
     MTLHeap_newTexture
     MTLLibrary_newFunction
@@ -143,14 +144,20 @@ EXPORTS
     SharedEventListener_create
     SharedEventListener_destroy
     SharedEventListener_start
+    WMTAttachMetalView
     WMTBootstrapLookUp
     WMTBootstrapRegister
     WMTCopyAllDevices
+    WMTDeclareLatencyCriticalActivity
     WMTGetDisplayDescription
     WMTGetOSVersion
     WMTGetPrimaryDisplayId
     WMTGetSecondaryDisplayId
+    WMTPresentClientSurface
     WMTQueryDisplaySetting
     WMTQueryDisplaySettingForLayer
+    WMTRetireMetalView
+    WMTSetCursorOverlay
     WMTSetMetalShaderCachePath
     WMTUpdateDisplaySetting
+    WMTViewSyncAndPoll

@@ -1,4 +1,8 @@
-use crate::{MemPtr, WMTIndirectCommandBufferInfo, WMTTextureInfo};
+use crate::{
+    MemPtr, UnixcallMtldrawableSetpresentedevent, UnixcallWmtAttachMetalView,
+    UnixcallWmtViewSyncAndPoll, WMTCursorOverlayParams, WMTIndirectCommandBufferInfo,
+    WMTTextureInfo, WMTViewAttachDesc, WMTViewPollOut, slot,
+};
 
 #[test]
 fn bitfield_getters_read_their_bits() {
@@ -62,4 +66,21 @@ fn mem_ptr_round_trips_addresses() {
             .as_ptr::<u8>()
             .is_null()
     );
+}
+
+#[test]
+fn pull_on_present_wire_sizes_and_slots() {
+    assert_eq!(size_of::<WMTViewAttachDesc>(), 16);
+    assert_eq!(size_of::<WMTViewPollOut>(), 32);
+    assert_eq!(size_of::<WMTCursorOverlayParams>(), 64);
+    assert_eq!(size_of::<UnixcallWmtAttachMetalView>(), 48);
+    assert_eq!(size_of::<UnixcallWmtViewSyncAndPoll>(), 32);
+    assert_eq!(size_of::<UnixcallMtldrawableSetpresentedevent>(), 40);
+    assert_eq!(slot::WMT_DECLARE_LATENCY_CRITICAL_ACTIVITY, 158);
+    assert_eq!(slot::WMT_ATTACH_METAL_VIEW, 159);
+    assert_eq!(slot::WMT_RETIRE_METAL_VIEW, 160);
+    assert_eq!(slot::WMT_VIEW_SYNC_AND_POLL, 161);
+    assert_eq!(slot::WMT_PRESENT_CLIENT_SURFACE, 162);
+    assert_eq!(slot::MTL_DRAWABLE_SET_PRESENTED_EVENT, 163);
+    assert_eq!(slot::WMT_SET_CURSOR_OVERLAY, 164);
 }

@@ -4,8 +4,9 @@
 //! multisampled texture beside the single-sample one, which draws and clears go to and Present
 //! resolves into the single-sample one; the presenter stays at one sample (DXMTRS C4b-3d5).
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -16,12 +17,21 @@ use dxmt_core::{
 };
 use mtld3d_core::present::{PresentGeometry, geometry_settled};
 use winemetal_sys::{
-    CreateMetalViewFromHWND, ReleaseMetalView,
+    MTLDevice_newSharedEvent, Obj, WMTAttachMetalView, WMTPresentClientSurface, WMTRetireMetalView,
+    WMTSetCursorOverlay, WMTViewSyncAndPoll,
     wire::{
-        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        MemPtr, WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN, WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RETIRE_METAL_VIEW_FLAG_PARK,
         WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-        WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTFXSpatialScalerInfo,
-        WMTTextureInfo,
+        WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
+        WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE, WMT_VIEW_ATTACH_FLAG_HDR_ENABLE,
+        WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF,
+        WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON, WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+        WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED, WMT_VIEW_POLL_FLAG_CURSOR_KICK,
+        WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING, WMT_VIEW_POLL_FLAG_HDR_ACTIVE,
+        WMT_VIEW_POLL_FLAG_OCCLUDED, WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE,
+        WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, WMTCursorOverlayParams, WMTFXSpatialScalerInfo,
+        WMTTextureInfo, WMTViewAttachDesc, WMTViewPollOut,
     },
 };
 
@@ -73,18 +83,120 @@ impl BackBuffer {
     }
 }
 
-/// The window's Metal view (slot 72) and the presenter on its layer.
+/// Parameters for updating the host-side software cursor overlay via `WMTSetCursorOverlay`.
+pub struct CursorOverlayUpdate<'a> {
+    pub flags: u32,
+    pub width: u32,
+    pub height: u32,
+    pub x_hotspot: u32,
+    pub y_hotspot: u32,
+    pub scale: u32,
+    pub pixels: Option<&'a [u8]>,
+}
+
+/// Shared view handle and gamma LUT state used by cursor overlay updates.
+pub struct OverlaySink {
+    view: AtomicU64,
+    gamma: Mutex<(u64, Option<Arc<[u16; 1024]>>)>,
+}
+
+impl OverlaySink {
+    pub(super) const fn new() -> Self {
+        Self {
+            view: AtomicU64::new(0),
+            gamma: Mutex::new((0, None)),
+        }
+    }
+
+    pub(super) fn set_view(&self, view: u64) {
+        self.view.store(view, Ordering::Release);
+    }
+
+    pub(super) fn clear_view(&self, expected: u64) {
+        let _ = self
+            .view
+            .compare_exchange(expected, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    pub(super) fn set_gamma(&self, revision: u64, lut: Option<Arc<[u16; 1024]>>) {
+        let mut guard = self.gamma.lock().unwrap_or_else(PoisonError::into_inner);
+        *guard = (revision, lut);
+    }
+
+    /// Returns the attached Metal view handle, or `0` when headless or detached.
+    #[must_use]
+    pub fn view_handle(&self) -> u64 {
+        self.view.load(Ordering::Acquire)
+    }
+
+    /// Sends a cursor overlay update (slot 164) with the active gamma LUT attached.
+    #[must_use]
+    pub fn set_cursor_overlay(&self, update: &CursorOverlayUpdate<'_>) -> bool {
+        let view = self.view.load(Ordering::Acquire);
+        if view == 0 {
+            return false;
+        }
+        let (gamma_revision, gamma_lut_arc) = {
+            let guard = self.gamma.lock().unwrap_or_else(PoisonError::into_inner);
+            (guard.0, guard.1.clone())
+        };
+        let (pixels, pixels_len) = match update.pixels {
+            Some(bytes) if !bytes.is_empty() => (
+                MemPtr::from_ptr(bytes.as_ptr()),
+                u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+            ),
+            _ => (MemPtr::NULL, 0),
+        };
+        let (gamma_lut, gamma_revision) = match gamma_lut_arc.as_deref() {
+            Some(lut) if gamma_revision != 0 => (MemPtr::from_ptr(lut.as_ptr()), gamma_revision),
+            _ => (MemPtr::NULL, 0),
+        };
+        let params = WMTCursorOverlayParams {
+            view,
+            pixels,
+            gamma_lut,
+            gamma_revision,
+            pixels_len,
+            width: update.width,
+            height: update.height,
+            x_hotspot: update.x_hotspot,
+            y_hotspot: update.y_hotspot,
+            scale: update.scale,
+            flags: update.flags,
+            reserved: 0,
+        };
+        // SAFETY: `view` is live or harmlessly missing on the host; `pixels` and `gamma_lut`
+        // outlive this synchronous call.
+        unsafe { WMTSetCursorOverlay(view, &raw const params) };
+        true
+    }
+}
+
+/// The window's Metal view (slot 159), adopted layer, presented shared event, and presenter.
 pub struct Window {
     view: u64,
+    layer: Option<Obj>,
     presenter: Option<Arc<Presenter>>,
+    presented_event: Option<Obj>,
+    next_signal: u64,
+    park_on_retire: bool,
+    overlay: Arc<OverlaySink>,
 }
 
 impl Drop for Window {
     fn drop(&mut self) {
-        // The presenter uses the layer the view holds: it goes first.
+        self.overlay.clear_view(self.view);
+        // Drop the presenter first so any drawable handles and prefetchers stop using the layer.
         self.presenter = None;
-        // SAFETY: the view `CreateMetalViewFromHWND` made, released once.
-        unsafe { ReleaseMetalView(self.view) };
+        self.layer = None;
+        let flags = if self.park_on_retire {
+            WMT_RETIRE_METAL_VIEW_FLAG_PARK
+        } else {
+            0
+        };
+        // SAFETY: `self.view` came from `WMTAttachMetalView` and is retired once here.
+        unsafe { WMTRetireMetalView(self.view, flags) };
+        self.presented_event = None;
     }
 }
 
@@ -170,9 +282,10 @@ impl CoreDevice {
         drawable_h: u32,
         samples: u8,
     ) {
-        if self.back_buffer.is_some() {
+        if self.back_buffer.is_some() || self.window.is_some() {
             self.drain();
         }
+        self.window = None;
         self.drawable_size = (drawable_w, drawable_h);
         self.settled_geometry = None;
         self.upscale = None;
@@ -228,9 +341,51 @@ impl CoreDevice {
             return false;
         }
         self.drawable_size = (drawable_w, drawable_h);
-        let presenter = self.window.as_ref().and_then(|w| w.presenter.as_deref());
-        if let Some(presenter) = presenter {
-            presenter.set_d3d9_drawable_size(drawable_w, drawable_h);
+        if let Some(w) = self.window.as_ref() {
+            let mut poll = WMTViewPollOut {
+                drawable_width: drawable_w,
+                drawable_height: drawable_h,
+                backing_scale: self.backing_scale,
+                edr_current: 1.0,
+                edr_potential: 1.0,
+                panel_max_hz: 0,
+                flags: 0,
+                reserved: 0,
+            };
+            let layer = w.layer.as_ref().map_or(0, Obj::handle);
+            // SAFETY: `w.view` and `layer` remain live while `w` is attached.
+            unsafe {
+                WMTViewSyncAndPoll(
+                    w.view,
+                    layer,
+                    WMT_VIEW_SYNC_FLAG_FORCE_REFRESH,
+                    &raw mut poll,
+                );
+            };
+            if poll.backing_scale != 0 {
+                self.backing_scale = poll.backing_scale.clamp(1, 8);
+            }
+            self.options.set(
+                CoreOptions::SOFTWARE_CURSOR_ACTIVE,
+                poll.flags & WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE != 0,
+            );
+            let dw = if poll.drawable_width > 0 {
+                poll.drawable_width
+            } else {
+                drawable_w
+            };
+            let dh = if poll.drawable_height > 0 {
+                poll.drawable_height
+            } else {
+                drawable_h
+            };
+            let hdr_active = self.options.contains(CoreOptions::HDR_ENABLE)
+                && ((poll.flags & WMT_VIEW_POLL_FLAG_HDR_ACTIVE != 0)
+                    || (poll.edr_potential > 1.0 && poll.edr_potential.is_finite()));
+            let colorspace_changed = poll.flags & WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED != 0;
+            if let Some(presenter) = w.presenter.as_deref() {
+                presenter.sync_d3d9_managed(dw, dh, hdr_active, colorspace_changed);
+            }
         }
         true
     }
@@ -375,27 +530,134 @@ impl CoreDevice {
         })
     }
 
+    /// Presents the back buffer using `panel_max_hz` from `WMTViewSyncAndPoll` for pacing.
+    ///
+    /// Computes `(after, cap_after)` from the host screen's `panel_max_hz` when non-zero, falling
+    /// back to `fallback_hz`. Combines `extra_cs_reasons` with
+    /// `WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY` into one `WMTPresentClientSurface` call.
+    pub fn present_paced(
+        &mut self,
+        visible: bool,
+        interval: u32,
+        fallback_hz: u32,
+        max_fps: u32,
+        extra_cs_reasons: u32,
+    ) {
+        let poll = self.poll_window(0, extra_cs_reasons);
+        let hz = poll.as_ref().map_or(fallback_hz, |p| {
+            if p.panel_max_hz > 0 {
+                p.panel_max_hz
+            } else {
+                fallback_hz
+            }
+        });
+        let pacing = mtld3d_core::present::layer_pacing_for(interval, hz, max_fps);
+        let (after, cap_after) = present_pacing(pacing, hz);
+        self.present_with_poll(poll, visible, after, cap_after, pacing.display_sync);
+    }
+
     /// Presents the back buffer `after` seconds after the last present (0: at once).
     ///
     /// D3D11's order: the present closure and the frame-latency signal in the chunk, the commit,
     /// then the frame's bound, which waits for the frame `max_latency` back. A hidden window
-    /// (`visible` false), or a device without one, presents nothing: its work is committed, and
-    /// no signal or bound is counted that nothing would signal. A multisampled back buffer's
-    /// companion is resolved into the presented texture first, every frame, drawn or not,
-    /// through the view its last pass or Clear wrote it in (DXMTRS C4b-3d5): folded into the
-    /// frame's last pass when that pass drew it, a resolve pass of its own otherwise. When settled
-    /// enlargement uses `MetalFX` spatial upscaling and a gamma ramp is active, gamma is applied
-    /// into a render-sized scratch texture ahead of scaling and the final present omits gamma.
+    /// (`visible` false), or an `OCCLUDED` window without `PRESENT_OCCLUDED`, skips drawable
+    /// acquisition and paces on the CPU clock; a `DISPLAYS_NOTHING` window keeps acquiring and
+    /// presenting drawables with slot 163 attached while pacing on the CPU clock.
     pub fn present(&mut self, visible: bool, after: f64, cap_after: f64, display_sync: bool) {
-        let presenter = self.window.as_ref().and_then(|w| w.presenter.clone());
+        let poll = self.poll_window(0, 0);
+        self.present_with_poll(poll, visible, after, cap_after, display_sync);
+    }
+
+    fn poll_window(&mut self, sync_flags: u32, extra_cs_reasons: u32) -> Option<WMTViewPollOut> {
+        let w = self.window.as_ref()?;
+        let mut poll = WMTViewPollOut {
+            drawable_width: self.drawable_size.0,
+            drawable_height: self.drawable_size.1,
+            backing_scale: self.backing_scale,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 0,
+            flags: 0,
+            reserved: 0,
+        };
+        let layer = w.layer.as_ref().map_or(0, Obj::handle);
+        // SAFETY: `w.view` and `layer` remain live while `w` is attached.
+        unsafe { WMTViewSyncAndPoll(w.view, layer, sync_flags, &raw mut poll) };
+        if poll.backing_scale != 0 {
+            self.backing_scale = poll.backing_scale.clamp(1, 8);
+        }
+        self.options.set(
+            CoreOptions::SOFTWARE_CURSOR_ACTIVE,
+            poll.flags & WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE != 0,
+        );
+        if poll.flags & WMT_VIEW_POLL_FLAG_CURSOR_KICK != 0 {
+            self.options.insert(CoreOptions::CURSOR_KICK_PENDING);
+        }
+        let mut cs_reasons = extra_cs_reasons;
+        if poll.flags & WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY != 0 {
+            cs_reasons |= WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN;
+        }
+        if cs_reasons != 0 {
+            // SAFETY: `w.view` is live while `w` is attached.
+            unsafe { WMTPresentClientSurface(w.view, cs_reasons) };
+        }
+        Some(poll)
+    }
+
+    fn present_with_poll(
+        &mut self,
+        poll: Option<WMTViewPollOut>,
+        visible: bool,
+        after: f64,
+        cap_after: f64,
+        display_sync: bool,
+    ) {
+        let occluded = poll
+            .as_ref()
+            .is_some_and(|p| p.flags & WMT_VIEW_POLL_FLAG_OCCLUDED != 0);
+        let displays_nothing = poll
+            .as_ref()
+            .is_some_and(|p| p.flags & WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING != 0);
+        let colorspace_changed = poll
+            .as_ref()
+            .is_some_and(|p| p.flags & WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED != 0);
+        let allow_present =
+            visible && (!occluded || self.options.contains(CoreOptions::PRESENT_OCCLUDED));
         let bb_dims = self.back_buffer.as_ref().map(|bb| (bb.width, bb.height));
-        if let (Some(presenter), Some((bb_w, bb_h)), true) = (presenter, bb_dims, visible) {
-            let (dw, dh) = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
-                self.drawable_size
-            } else {
-                (bb_w, bb_h)
+        let has_window = self.window.as_ref().is_some_and(|w| w.presenter.is_some());
+        if colorspace_changed && allow_present && has_window && bb_dims.is_some() {
+            self.drain();
+        }
+        if let (Some((bb_w, bb_h)), true, true) = (bb_dims, allow_present, has_window) {
+            let (dw, dh) = match poll.as_ref() {
+                Some(p) if p.drawable_width > 0 && p.drawable_height > 0 => {
+                    (p.drawable_width, p.drawable_height)
+                }
+                _ if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 => self.drawable_size,
+                _ => (bb_w, bb_h),
             };
-            let peak_edr = presenter.prepare_d3d9_present(dw, dh, display_sync, || self.drain());
+            let hdr_enable = self.options.contains(CoreOptions::HDR_ENABLE);
+            let hdr_active = hdr_enable
+                && poll.as_ref().is_some_and(|p| {
+                    (p.flags & WMT_VIEW_POLL_FLAG_HDR_ACTIVE != 0)
+                        || (p.edr_potential > 1.0 && p.edr_potential.is_finite())
+                });
+            let peak_edr = poll
+                .as_ref()
+                .filter(|p| hdr_active && p.edr_current > 1.0 && p.edr_current.is_finite())
+                .map_or(1.0, |p| p.edr_current);
+            let (presenter, view_handle, event_handle, signal_value) = {
+                let w = self.window.as_mut().expect("window checked present");
+                w.next_signal += 1;
+                (
+                    Arc::clone(w.presenter.as_ref().expect("presenter checked present")),
+                    w.view,
+                    w.presented_event.as_ref().map_or(0, Obj::handle),
+                    w.next_signal,
+                )
+            };
+            presenter.sync_d3d9_managed(dw, dh, hdr_active, colorspace_changed);
+            let paced = display_sync || after > 0.0 || cap_after > 0.0;
             if self.back_buffer.is_some() {
                 let geometry = PresentGeometry {
                     src: (
@@ -457,6 +719,10 @@ impl CoreDevice {
                         let args = D3d9PresentArgs {
                             gamma: None,
                             peak_edr,
+                            view: view_handle,
+                            presented_event: event_handle,
+                            presented_value: signal_value,
+                            paced,
                         };
                         self.emit(move |enc| {
                             enc.present_d3d9(
@@ -470,6 +736,10 @@ impl CoreDevice {
                         let args = D3d9PresentArgs {
                             gamma: self.gamma.clone(),
                             peak_edr,
+                            view: view_handle,
+                            presented_event: event_handle,
+                            presented_value: signal_value,
+                            paced,
                         };
                         self.emit(move |enc| {
                             enc.present_d3d9(&texture, Arc::clone(&presenter), after, args.clone());
@@ -494,8 +764,13 @@ impl CoreDevice {
         }
         self.end_frame_clear_tracking();
         crate::stats::frame();
-        if cap_after > 0.0 && cap_after.is_finite() {
-            let dur = Duration::from_secs_f64(cap_after);
+        let cpu_pace = if !allow_present || displays_nothing {
+            cap_after.max(after)
+        } else {
+            cap_after
+        };
+        if cpu_pace > 0.0 && cpu_pace.is_finite() {
+            let dur = Duration::from_secs_f64(cpu_pace);
             let now = Instant::now();
             let deadline = next_paced_deadline(self.last_paced, now, dur);
             if let Some(wait) = deadline.checked_duration_since(now)
@@ -511,7 +786,63 @@ impl CoreDevice {
 
     /// Sets or clears the inline `[u16; 1024]` gamma lookup table applied from the next present.
     pub fn set_gamma_ramp(&mut self, lut: Option<[u16; 1024]>) {
-        self.gamma = lut.map(Arc::new);
+        let arc = lut.map(Arc::new);
+        let rev = if arc.is_some() {
+            let next = self.gamma_revision.wrapping_add(1);
+            self.gamma_revision = if next == 0 { 1 } else { next };
+            self.gamma_revision
+        } else {
+            0
+        };
+        self.gamma.clone_from(&arc);
+        self.overlay.set_gamma(rev, arc);
+    }
+
+    /// Returns the attached Metal view handle (`0` when headless or detached).
+    #[must_use]
+    pub fn view_handle(&self) -> u64 {
+        self.window.as_ref().map_or(0, |w| w.view)
+    }
+
+    /// Returns the shared cursor overlay sink attached to this device.
+    #[must_use]
+    pub fn overlay_sink(&self) -> Arc<OverlaySink> {
+        Arc::clone(&self.overlay)
+    }
+
+    /// Updates the host-side software cursor overlay (slot 164) with the current gamma LUT.
+    #[must_use]
+    pub fn set_cursor_overlay(&self, update: &CursorOverlayUpdate<'_>) -> bool {
+        self.overlay.set_cursor_overlay(update)
+    }
+
+    /// Returns the display backing scale (`1..=8`) published by `WMTAttachMetalView` / poll.
+    #[must_use]
+    pub const fn backing_scale(&self) -> u32 {
+        self.backing_scale
+    }
+
+    /// Returns whether the host reported software cursor overlay mode active.
+    #[must_use]
+    pub const fn software_cursor_active(&self) -> bool {
+        self.options.contains(CoreOptions::SOFTWARE_CURSOR_ACTIVE)
+    }
+
+    /// Consumes the pending cursor re-apply kick latched by `WMTAttachMetalView` / poll.
+    pub fn take_cursor_kick(&mut self) -> bool {
+        let kicked = self.options.contains(CoreOptions::CURSOR_KICK_PENDING);
+        self.options.remove(CoreOptions::CURSOR_KICK_PENDING);
+        kicked
+    }
+
+    /// Calls `WMTPresentClientSurface` (slot 162) on the attached view with `reasons`.
+    pub fn present_client_surface(&self, reasons: u32) {
+        if reasons != 0
+            && let Some(w) = self.window.as_ref()
+        {
+            // SAFETY: `w.view` is live while `w` is attached.
+            unsafe { WMTPresentClientSurface(w.view, reasons) };
+        }
     }
 
     /// Ends the open pass, then resolves a multisampled back buffer into the presented texture.
@@ -619,36 +950,124 @@ impl CoreDevice {
         self.target_gen = self.target_gen.wrapping_add(1);
     }
 
-    /// A Metal view on window `hwnd` and a presenter on its layer, sized `width` x `height`.
+    /// Attaches a Metal view on window `hwnd` and builds a managed presenter on its layer.
     ///
     /// None for `hwnd` 0, and for a window winemetal gives no view or layer (logged).
-    fn open_window(&self, hwnd: isize, width: u32, height: u32) -> Option<Window> {
+    fn open_window(&mut self, hwnd: isize, width: u32, height: u32) -> Option<Window> {
         if hwnd == 0 {
             return None;
         }
         let mtl = self.device.device();
-        let mut layer = 0;
-        // SAFETY: winemetal's call; `layer` is writable for it.
-        let view = unsafe { CreateMetalViewFromHWND(hwnd, mtl.handle(), &raw mut layer) };
-        if view == 0 || layer == 0 {
+        let mut attach_flags = 0u32;
+        if self.options.contains(CoreOptions::HDR_ENABLE) {
+            attach_flags |= WMT_VIEW_ATTACH_FLAG_HDR_ENABLE;
+        }
+        if self.options.contains(CoreOptions::COLOR_SPACE_ACCURATE) {
+            attach_flags |= WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE;
+        }
+        if self.options.contains(CoreOptions::SOFTWARE_CURSOR_ON) {
+            attach_flags |= WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON;
+        }
+        if self.options.contains(CoreOptions::SOFTWARE_CURSOR_OFF) {
+            attach_flags |= WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF;
+        }
+        if self.options.contains(CoreOptions::PRESENT_OCCLUDED) {
+            attach_flags |= WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED;
+        }
+        let attach_desc = WMTViewAttachDesc {
+            width,
+            height,
+            flags: attach_flags,
+            reserved: 0,
+        };
+        let mut poll = WMTViewPollOut {
+            drawable_width: width,
+            drawable_height: height,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 0,
+            flags: 0,
+            reserved: 0,
+        };
+        let mut ret_layer = 0;
+        // SAFETY: winemetal's slot 159; `attach_desc`, `poll`, and `ret_layer` are valid.
+        let view = unsafe {
+            WMTAttachMetalView(
+                hwnd,
+                mtl.handle(),
+                &raw const attach_desc,
+                &raw mut poll,
+                &raw mut ret_layer,
+            )
+        };
+        if view == 0 || ret_layer == 0 {
+            if ret_layer != 0 {
+                // SAFETY: `ret_layer` is +1 if non-zero.
+                drop(unsafe { Obj::adopt(ret_layer) });
+            }
+            if view != 0 {
+                // SAFETY: `view` was just attached and is retired due to missing layer.
+                unsafe { WMTRetireMetalView(view, 0) };
+            }
             log::error!(target: LOG_TARGET, "d3d9 core: no Metal view for window {hwnd:#x}");
             return None;
         }
+        // SAFETY: `WMTAttachMetalView` returned a +1 retained `CAMetalLayer`.
+        let Some(layer) = (unsafe { Obj::adopt(ret_layer) }) else {
+            // SAFETY: `view` was just attached and has no usable layer.
+            unsafe { WMTRetireMetalView(view, 0) };
+            return None;
+        };
+        // SAFETY: `mtl` holds a live `MTLDevice`.
+        let raw_event = unsafe { MTLDevice_newSharedEvent(mtl.handle()) };
+        // SAFETY: `MTLDevice_newSharedEvent` returns a +1 retained `MTLSharedEvent` or null.
+        let presented_event = unsafe { Obj::adopt(raw_event) };
+        let init_w = if poll.drawable_width > 0 {
+            poll.drawable_width
+        } else {
+            width
+        };
+        let init_h = if poll.drawable_height > 0 {
+            poll.drawable_height
+        } else {
+            height
+        };
         let desc = PresenterDesc {
             device: mtl.handle(),
-            layer,
+            layer: layer.handle(),
             library: self.device.cmd_library_handle(),
             scale_factor: 1.0,
             sample_count: 1,
         };
         let hdr_enable = self.options.contains(CoreOptions::HDR_ENABLE);
-        // SAFETY: the device and the command library outlive every present the presenter
-        // encodes (the queue that encodes them drops first, with the device); the layer is held
-        // by `view`, released in the window's drop after the presenter.
-        let presenter = unsafe { Presenter::new_d3d9(&desc, width, height, hdr_enable) };
+        // SAFETY: the device and command library outlive every encoded present; `layer` stays
+        // retained on `Window` and drops after `presenter` in `Window::drop`.
+        let presenter = unsafe { Presenter::new_d3d9_managed(&desc, init_w, init_h, hdr_enable) };
+        if poll.backing_scale != 0 {
+            self.backing_scale = poll.backing_scale.clamp(1, 8);
+        }
+        self.options.set(
+            CoreOptions::SOFTWARE_CURSOR_ACTIVE,
+            poll.flags & WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE != 0,
+        );
+        self.options.set(
+            CoreOptions::CURSOR_KICK_PENDING,
+            poll.flags & WMT_VIEW_POLL_FLAG_CURSOR_KICK != 0,
+        );
+        self.overlay.set_view(view);
+        if poll.flags & WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY != 0 {
+            // SAFETY: `view` was just attached and is live.
+            unsafe { WMTPresentClientSurface(view, WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN) };
+        }
         Some(Window {
             view,
+            layer: Some(layer),
             presenter: Some(presenter),
+            presented_event,
+            next_signal: 0,
+            park_on_retire: true,
+            overlay: Arc::clone(&self.overlay),
         })
     }
 }

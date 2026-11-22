@@ -152,6 +152,13 @@ unsafe extern "C" {
     pub fn MTLDevice_newLibraryWithSource(device: u64, source: *const c_char, length: u64, err_out: *mut u64) -> u64;
     pub fn MTLDevice_newLibraryWithSourceOptions(device: u64, source: *const c_char, length: u64, options: *const wire::WMTCompileOptions, err_out: *mut u64) -> u64;
     pub fn MTLTexture_getBytes(texture: u64, origin: wire::WMTOrigin, size: wire::WMTSize, level: u64, slice: u64, data: wire::MemPtr, bytes_per_row: u64, bytes_per_image: u64);
+    pub fn WMTDeclareLatencyCriticalActivity() -> u64;
+    pub fn WMTAttachMetalView(hwnd: isize, device: u64, desc: *const wire::WMTViewAttachDesc, out_poll: *mut wire::WMTViewPollOut, ret_layer: *mut u64) -> u64;
+    pub fn WMTRetireMetalView(view: u64, flags: u32);
+    pub fn WMTViewSyncAndPoll(view: u64, layer: u64, flags: u32, out_poll: *mut wire::WMTViewPollOut);
+    pub fn WMTPresentClientSurface(view: u64, reasons: u32);
+    pub fn MTLDrawable_setPresentedEvent(drawable: u64, view: u64, shared_event: u64, signal_value: u64, flags: u32);
+    pub fn WMTSetCursorOverlay(view: u64, params: *const wire::WMTCursorOverlayParams);
     #[cfg(feature = "guest-vm")]
     pub fn WMTMemoryAlloc(length: u64) -> *mut c_void;
     #[cfg(feature = "guest-vm")]
@@ -304,6 +311,13 @@ unsafe extern "C-unwind" {
     pub fn MTLDevice_newLibraryWithSource(device: u64, source: *const c_char, length: u64, err_out: *mut u64) -> u64;
     pub fn MTLDevice_newLibraryWithSourceOptions(device: u64, source: *const c_char, length: u64, options: *const wire::WMTCompileOptions, err_out: *mut u64) -> u64;
     pub fn MTLTexture_getBytes(texture: u64, origin: wire::WMTOrigin, size: wire::WMTSize, level: u64, slice: u64, data: wire::MemPtr, bytes_per_row: u64, bytes_per_image: u64);
+    pub fn WMTDeclareLatencyCriticalActivity() -> u64;
+    pub fn WMTAttachMetalView(hwnd: isize, device: u64, desc: *const wire::WMTViewAttachDesc, out_poll: *mut wire::WMTViewPollOut, ret_layer: *mut u64) -> u64;
+    pub fn WMTRetireMetalView(view: u64, flags: u32);
+    pub fn WMTViewSyncAndPoll(view: u64, layer: u64, flags: u32, out_poll: *mut wire::WMTViewPollOut);
+    pub fn WMTPresentClientSurface(view: u64, reasons: u32);
+    pub fn MTLDrawable_setPresentedEvent(drawable: u64, view: u64, shared_event: u64, signal_value: u64, flags: u32);
+    pub fn WMTSetCursorOverlay(view: u64, params: *const wire::WMTCursorOverlayParams);
     #[cfg(feature = "guest-vm")]
     pub fn WMTMemoryAlloc(length: u64) -> *mut c_void;
     #[cfg(feature = "guest-vm")]

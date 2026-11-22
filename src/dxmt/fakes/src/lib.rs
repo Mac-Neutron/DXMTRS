@@ -30,13 +30,15 @@ use winemetal_sys::wire::{
     WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
     WMT_BLIT_COMMAND_COPY_FROM_TEXTURE_TO_BUFFER, WMT_BLIT_COMMAND_GENERATE_MIPMAPS,
     WMT_COMMAND_BUFFER_STATUS_COMPLETED, WMT_COMMAND_BUFFER_STATUS_ERROR,
-    WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMTBufferInfo,
-    WMTDepthStencilInfo, WMTEDRValue, WMTFXSpatialScalerInfo, WMTFunctionConstant, WMTHDRMetadata,
-    WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo, WMTSampleBufferAttachmentInfo,
-    WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels, WMTTileRenderPipelineInfo,
-    WMTVertexDescriptorInfo, WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer,
-    WmtcmdBlitCopyFromBufferToTexture, WmtcmdBlitCopyFromTextureToBuffer,
-    WmtcmdBlitGenerateMipmaps, WmtcmdRenderSetbytes,
+    WMT_COMMAND_BUFFER_STATUS_SCHEDULED, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
+    WMT_VIEW_ATTACH_FLAG_HDR_ENABLE, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON,
+    WMT_VIEW_POLL_FLAG_HDR_ACTIVE, WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE, WMTBufferInfo,
+    WMTCursorOverlayParams, WMTDepthStencilInfo, WMTEDRValue, WMTFXSpatialScalerInfo,
+    WMTFunctionConstant, WMTHDRMetadata, WMTLayerProps, WMTRenderPassInfo, WMTRenderPipelineInfo,
+    WMTSampleBufferAttachmentInfo, WMTSamplerInfo, WMTTextureInfo, WMTTextureSwizzleChannels,
+    WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo, WMTViewAttachDesc, WMTViewPollOut,
+    WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitCopyFromBufferToTexture,
+    WmtcmdBlitCopyFromTextureToBuffer, WmtcmdBlitGenerateMipmaps, WmtcmdRenderSetbytes,
 };
 
 /// The first handle the fakes make: above every made-up device handle (at most 0x1000).
@@ -78,6 +80,10 @@ struct State {
     spatial_scaler_supported: BTreeMap<u64, bool>,
     /// Per-device flag forcing `MTLDevice_newSpatialScaler` to return `0`.
     spatial_scaler_fail: BTreeMap<u64, bool>,
+    /// Opt-in per-device `WMTViewPollOut` returned by `WMTAttachMetalView` / `WMTViewSyncAndPoll`.
+    view_poll: BTreeMap<u64, WMTViewPollOut>,
+    /// Per-device flag forcing `MetalLayer_nextDrawable` to return `0` (simulating timeout).
+    next_drawable_zero: BTreeMap<u64, bool>,
 }
 
 /// The fakes' one [`State`].
@@ -103,6 +109,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     texture_props: BTreeMap::new(),
     spatial_scaler_supported: BTreeMap::new(),
     spatial_scaler_fail: BTreeMap::new(),
+    view_poll: BTreeMap::new(),
+    next_drawable_zero: BTreeMap::new(),
 });
 
 fn state() -> MutexGuard<'static, State> {
@@ -217,6 +225,29 @@ pub fn set_spatial_scaler_supported(device: u64, supported: bool) {
 /// Controls whether `MTLDevice_newSpatialScaler` returns null (`0`) on `device`.
 pub fn set_spatial_scaler_fail(device: u64, fail: bool) {
     state().spatial_scaler_fail.insert(device, fail);
+}
+
+/// Sets or clears the opt-in `WMTViewPollOut` returned for `device`.
+pub fn set_view_poll(device: u64, poll: Option<WMTViewPollOut>) {
+    let mut state = state();
+    match poll {
+        Some(value) => {
+            state.view_poll.insert(device, value);
+        }
+        None => {
+            state.view_poll.remove(&device);
+        }
+    }
+}
+
+/// Controls whether `MetalLayer_nextDrawable` returns `0` on `device`.
+pub fn set_next_drawable_zero(device: u64, zero: bool) {
+    let mut state = state();
+    if zero {
+        state.next_drawable_zero.insert(device, true);
+    } else {
+        state.next_drawable_zero.remove(&device);
+    }
 }
 
 /// The devices `WMTCopyAllDevices` lists, in order: made-up device handles.
@@ -393,6 +424,11 @@ extern "C-unwind" fn fake_new_shared_event(device: u64) -> u64 {
 #[unsafe(export_name = "MTLSharedEvent_signaledValue")]
 const extern "C-unwind" fn fake_signaled_value(_event: u64) -> u64 {
     0
+}
+
+#[unsafe(export_name = "MTLSharedEvent_signalValue")]
+extern "C-unwind" fn fake_shared_event_signal_value(event: u64, value: u64) {
+    state().say(event, format!("MTLSharedEvent_signalValue value={value}"));
 }
 
 #[unsafe(export_name = "MTLDevice_newEvent")]
@@ -1359,7 +1395,13 @@ const extern "C-unwind" fn fake_query_display_setting(
 
 #[unsafe(export_name = "MetalLayer_nextDrawable")]
 extern "C-unwind" fn fake_next_drawable(layer: u64) -> u64 {
-    state().made_of(layer)
+    let mut state = state();
+    if let Some(dev) = state.device_of(layer)
+        && state.next_drawable_zero.get(&dev).copied().unwrap_or(false)
+    {
+        return 0;
+    }
+    state.made_of(layer)
 }
 
 #[unsafe(export_name = "MetalDrawable_texture")]
@@ -1396,5 +1438,162 @@ extern "C-unwind" fn fake_present_drawable_after(cmdbuf: u64, _drawable: u64, af
     state().say(
         cmdbuf,
         format!("MTLCommandBuffer_presentDrawableAfterMinimumDuration after={after}"),
+    );
+}
+
+#[unsafe(export_name = "WMTDeclareLatencyCriticalActivity")]
+const extern "C-unwind" fn fake_declare_latency_critical_activity() -> u64 {
+    1
+}
+
+#[unsafe(export_name = "WMTAttachMetalView")]
+extern "C-unwind" fn fake_attach_metal_view(
+    _hwnd: isize,
+    device: u64,
+    desc: *const WMTViewAttachDesc,
+    out_poll: *mut WMTViewPollOut,
+    ret_layer: *mut u64,
+) -> u64 {
+    // SAFETY: caller supplies a readable `WMTViewAttachDesc` or null.
+    let attach_desc = unsafe { desc.as_ref() }.copied();
+    let mut state = state();
+    let (view, layer) = (state.made_of(device), state.made_of(device));
+    let mut poll = state.view_poll.get(&device).copied().unwrap_or_else(|| {
+        let flags = attach_desc.map_or(0, |d| {
+            let mut f = 0u32;
+            if d.flags & WMT_VIEW_ATTACH_FLAG_HDR_ENABLE != 0 {
+                f |= WMT_VIEW_POLL_FLAG_HDR_ACTIVE;
+            }
+            if d.flags & WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON != 0 {
+                f |= WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE;
+            }
+            f
+        });
+        WMTViewPollOut {
+            drawable_width: attach_desc.map_or(0, |d| d.width),
+            drawable_height: attach_desc.map_or(0, |d| d.height),
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags,
+            reserved: 0,
+        }
+    });
+    if let Some((w, h)) = state.drawable_size.get(&device).copied() {
+        poll.drawable_width = u32::try_from(w).unwrap_or(u32::MAX);
+        poll.drawable_height = u32::try_from(h).unwrap_or(u32::MAX);
+    }
+    state.say(
+        device,
+        format!(
+            "WMTAttachMetalView view=#{view} layer=#{layer} flags={:#x}",
+            poll.flags
+        ),
+    );
+    drop(state);
+    // SAFETY: caller provides writable `ret_layer`.
+    unsafe { ret_layer.write(layer) };
+    if !out_poll.is_null() {
+        // SAFETY: caller provides writable `out_poll`.
+        unsafe { out_poll.write(poll) };
+    }
+    view
+}
+
+#[unsafe(export_name = "WMTRetireMetalView")]
+extern "C-unwind" fn fake_retire_metal_view(view: u64, flags: u32) {
+    state().say(
+        view,
+        format!("WMTRetireMetalView view=#{view} flags={flags:#x}"),
+    );
+}
+
+#[unsafe(export_name = "WMTViewSyncAndPoll")]
+extern "C-unwind" fn fake_view_sync_and_poll(
+    view: u64,
+    layer: u64,
+    flags: u32,
+    out_poll: *mut WMTViewPollOut,
+) {
+    let mut state = state();
+    let dev = state
+        .device_of(view)
+        .or_else(|| state.device_of(layer))
+        .unwrap_or(0);
+    let mut poll = state
+        .view_poll
+        .get(&dev)
+        .copied()
+        .unwrap_or(WMTViewPollOut {
+            drawable_width: 0,
+            drawable_height: 0,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: 0,
+            reserved: 0,
+        });
+    if let Some((w, h)) = state.drawable_size.get(&dev).copied() {
+        poll.drawable_width = u32::try_from(w).unwrap_or(u32::MAX);
+        poll.drawable_height = u32::try_from(h).unwrap_or(u32::MAX);
+    }
+    if let Some(edr) = state.edr.get(&dev).copied() {
+        poll.edr_current = edr.maximum_edr_color_component_value;
+        poll.edr_potential = edr.maximum_potential_edr_color_component_value;
+    }
+    state.say(
+        dev,
+        format!(
+            "WMTViewSyncAndPoll view=#{view} req_flags={flags:#x} dw={} dh={} hz={} flags={:#x}",
+            poll.drawable_width, poll.drawable_height, poll.panel_max_hz, poll.flags
+        ),
+    );
+    drop(state);
+    if !out_poll.is_null() {
+        // SAFETY: caller provides writable `out_poll`.
+        unsafe { out_poll.write(poll) };
+    }
+}
+
+#[unsafe(export_name = "WMTPresentClientSurface")]
+extern "C-unwind" fn fake_present_client_surface(view: u64, reasons: u32) {
+    state().say(
+        view,
+        format!("WMTPresentClientSurface view=#{view} reasons={reasons:#x}"),
+    );
+}
+
+#[unsafe(export_name = "MTLDrawable_setPresentedEvent")]
+extern "C-unwind" fn fake_drawable_set_presented_event(
+    drawable: u64,
+    view: u64,
+    shared_event: u64,
+    signal_value: u64,
+    flags: u32,
+) {
+    let target = if drawable != 0 {
+        drawable
+    } else if view != 0 {
+        view
+    } else {
+        shared_event
+    };
+    state().say(
+        target,
+        format!(
+            "MTLDrawable_setPresentedEvent drawable=#{drawable} view=#{view} event=#{shared_event} value={signal_value} flags={flags:#x}"
+        ),
+    );
+}
+
+#[unsafe(export_name = "WMTSetCursorOverlay")]
+extern "C-unwind" fn fake_set_cursor_overlay(view: u64, params: *const WMTCursorOverlayParams) {
+    // SAFETY: caller supplies a readable `WMTCursorOverlayParams` or null.
+    let flags = unsafe { params.as_ref() }.map_or(0, |p| p.flags);
+    state().say(
+        view,
+        format!("WMTSetCursorOverlay view=#{view} flags={flags:#x}"),
     );
 }

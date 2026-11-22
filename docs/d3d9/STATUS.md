@@ -32,7 +32,10 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   at once, where mtld3d answers it once that frame retired.
 - On the core runtime the getters, the obsolete calls and every form of
   `Present` answer as on mtld3d, with four differences: a present skips
-  mtld3d's frame capture and cursor work; `EvictManagedResources` keeps the
+  mtld3d's frame capture (`winemetal` slots 158..=164 drive latency-critical
+  activity, pull-on-present `CAMetalLayer` ownership, presented shared-event
+  timing, `WMTPresentClientSurface`, and `WMTSetCursorOverlay` software cursor
+  plus gamma LUT directly on core); `EvictManagedResources` keeps the
   GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
   `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
   `ValidateDevice` answers one pass for a state whose draw that runtime
@@ -45,14 +48,18 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   samples a depth texture at a vertex sampler or samples the depth-stencil it
   tests or writes.
 - On the core runtime the gamma ramp, `color.hdr.enable` EDR inverse tone
-  mapping (BT.2446-A), `present.maxFps` / divided intervals, `debug.presentOccluded`,
-  the frame latency and the extended device's `CreateRenderTargetEx`,
-  `CreateOffscreenPlainSurfaceEx` and `CreateDepthStencilSurfaceEx` answer as
-  on mtld3d. The ramp of a fullscreen device is applied inline per frame by
-  the presenter (for both SDR and HDR output) without stalling or rebuilding
+  mapping (BT.2446-A from `WMTViewSyncAndPoll` EDR headroom), `present.maxFps`
+  / divided intervals (paced with host `panel_max_hz`),
+  `debug.presentOccluded`, the frame latency and the extended device's
+  `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
+  `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp of a fullscreen
+  device is applied inline per frame by the presenter (for both SDR and HDR
+  output) and synced into `WMTSetCursorOverlay` without stalling or rebuilding
   pipelines on ramp changes. A present waits for the core queue's latency
-  bound as well as minimum present duration pacing, and a hidden or minimised
-  window counts no frame unless `debug.presentOccluded` is set.
+  bound as well as minimum present duration pacing; an `OCCLUDED` or hidden
+  window skips drawable acquisition unless `debug.presentOccluded` is set, while
+  a `DISPLAYS_NOTHING` window keeps acquiring drawables with
+  `MTLDrawable_setPresentedEvent` attached and paces on the CPU clock.
 - On the core runtime `render.scale`, `render.lodBias` and `MetalFX` spatial
   upscaling work as on `mtld3d`: scaled render targets, depth surfaces and
   shortened mip chains use logical coordinates at D3D9 boundaries (resampling

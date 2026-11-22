@@ -829,6 +829,7 @@ src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewsamplerstate Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewsharedeventwithmachport Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewtexture Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceSampletimestamps Clone,Copy
+src/winemetal/wire/src/lib.rs UnixcallMtldrawableSetpresentedevent Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlheapNewbuffer Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlheapNewtexture Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtllibraryNewfunctionWithConstants Clone,Copy
@@ -845,6 +846,8 @@ src/winemetal/wire/src/lib.rs UnixcallQueryDisplaySetting Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallQueryDisplaySettingForLayer Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallSetmetalcachepath Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallUpdateDisplaySetting Clone,Copy
+src/winemetal/wire/src/lib.rs UnixcallWmtAttachMetalView Clone,Copy
+src/winemetal/wire/src/lib.rs UnixcallWmtViewSyncAndPoll Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallWmtmemory Clone,Copy
 src/winemetal/wire/src/lib.rs WMTBufferInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTCaptureInfo Clone,Copy
@@ -853,6 +856,7 @@ src/winemetal/wire/src/lib.rs WMTColorAttachmentBlendInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTColorAttachmentInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTCompileOptions Clone,Copy
 src/winemetal/wire/src/lib.rs WMTComputePipelineInfo Clone,Copy
+src/winemetal/wire/src/lib.rs WMTCursorOverlayParams Clone,Copy
 src/winemetal/wire/src/lib.rs WMTDepthAttachmentInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTDepthStencilInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTDisplayDescription Clone,Copy
@@ -886,6 +890,8 @@ src/winemetal/wire/src/lib.rs WMTTileRenderPipelineInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTVertexAttributeInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTVertexBufferLayoutInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTVertexDescriptorInfo Clone,Copy
+src/winemetal/wire/src/lib.rs WMTViewAttachDesc Clone,Copy
+src/winemetal/wire/src/lib.rs WMTViewPollOut Clone,Copy
 src/winemetal/wire/src/lib.rs WMTViewport Clone,Copy
 src/winemetal/wire/src/lib.rs WmtcmdBase Clone,Copy
 src/winemetal/wire/src/lib.rs WmtcmdBlitCopyFromBufferToBuffer Clone,Copy

@@ -18,7 +18,7 @@ use winemetal_sys::{
     MTLCommandBuffer_presentDrawable, MTLCommandBuffer_presentDrawableAfterMinimumDuration,
     MTLCommandBuffer_renderCommandEncoder, MTLCommandEncoder_endEncoding,
     MTLCommandEncoder_setLabel, MTLComputeCommandEncoder_encodeCommands,
-    MTLRenderCommandEncoder_encodeCommands, NSString_string, Obj,
+    MTLDrawable_setPresentedEvent, MTLRenderCommandEncoder_encodeCommands, NSString_string, Obj,
     wire::{
         SM50_BINDING_INDEX_ARGUMENT_TABLE, SM50_BINDING_INDEX_ARGUMENT_TABLE2,
         SM50_BINDING_INDEX_CONSTANT_BUFFER, SM50_BINDING_INDEX_CONSTANT_BUFFER2,
@@ -27,13 +27,13 @@ use winemetal_sys::{
         WMT_BLIT_COMMAND_UPDATE_FENCE, WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
         WMT_COMPUTE_COMMAND_SET_BUFFER, WMT_COMPUTE_COMMAND_UPDATE_FENCE,
         WMT_COMPUTE_COMMAND_WAIT_FOR_FENCE, WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD,
-        WMT_RENDER_COMMAND_MEMORY_BARRIER, WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER,
-        WMT_RENDER_COMMAND_SET_MESH_BUFFER, WMT_RENDER_COMMAND_SET_OBJECT_BUFFER,
-        WMT_RENDER_COMMAND_SET_VERTEX_BUFFER, WMT_RENDER_COMMAND_UPDATE_FENCE,
-        WMT_RENDER_COMMAND_USE_RESOURCE, WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
-        WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_MESH, WMT_RENDER_STAGE_OBJECT,
-        WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX, WMT_RESOURCE_USAGE_READ,
-        WMT_RESOURCE_USAGE_WRITE, WMT_STORE_ACTION_STORE,
+        WMT_PRESENTED_EVENT_FLAG_PACED, WMT_RENDER_COMMAND_MEMORY_BARRIER,
+        WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_MESH_BUFFER,
+        WMT_RENDER_COMMAND_SET_OBJECT_BUFFER, WMT_RENDER_COMMAND_SET_VERTEX_BUFFER,
+        WMT_RENDER_COMMAND_UPDATE_FENCE, WMT_RENDER_COMMAND_USE_RESOURCE,
+        WMT_RENDER_COMMAND_WAIT_FOR_FENCE, WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_MESH,
+        WMT_RENDER_STAGE_OBJECT, WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX,
+        WMT_RESOURCE_USAGE_READ, WMT_RESOURCE_USAGE_WRITE, WMT_STORE_ACTION_STORE,
         WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMTClearColor, WMTColorAttachmentInfo,
         WMTDepthAttachmentInfo, WMTRenderPassInfo, WMTRenderPassSampleBufferInfo,
         WMTSampleBufferAttachmentInfo, WMTStencilAttachmentInfo, WMTUTF8_STRING_ENCODING,
@@ -650,6 +650,25 @@ impl Encoder {
             self.frame_stats.drawable_blocking_interval += t0.elapsed();
         }
         let drawable = drawable.as_ref().map_or(0, Obj::handle);
+        if let Some(d3d9) = present.d3d9.as_ref()
+            && (d3d9.presented_event != 0 || d3d9.view != 0)
+        {
+            let flags = if d3d9.paced {
+                WMT_PRESENTED_EVENT_FLAG_PACED
+            } else {
+                0
+            };
+            // SAFETY: `drawable` (0 or live), `view`, and `presented_event` stay live across flush.
+            unsafe {
+                MTLDrawable_setPresentedEvent(
+                    drawable,
+                    d3d9.view,
+                    d3d9.presented_event,
+                    d3d9.presented_value,
+                    flags,
+                );
+            }
+        }
         if present.d3d9.is_some() && drawable == 0 {
             if !pass.fence_wait.is_empty() || !pass.fence_update.is_empty() {
                 let Self { heap, fences, .. } = self;

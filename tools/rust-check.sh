@@ -11,7 +11,7 @@
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
 #           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), the core's
 #           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD), and d3d9 with its
-#           core runtime (core-runtime) on arm64ec, x86_64 and i686, with guest-vm on the last two
+#           core runtime (core-runtime) on aarch64, arm64ec, x86_64 and i686, with guest-vm on the last two
 #   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 (also d3d9 with core-runtime) and the host
 #   test    the host unit tests, D3D9's also with perf-tracking (not mtld3d-mtl's integration tests: see unit_tests),
 #           winemetal's also with its native feature, dxmt-fakes' and d3d9-rt's (which link dxmt-fakes) each in a cargo
@@ -297,8 +297,8 @@ leg_clippy() {
   lint $I686 $CORE_PERF || rc=1
   lint $I686 -p d3d9 -p mtld3d --features d3d9/perf-build,mtld3d/perf-build || rc=1
   lint $HOST -p mtld3d-unix --features mtld3d-unix/perf-build || rc=1
-  # D3D9's core runtime, in the halves that carry it (winemetal.dll has no native arm64 half).
-  for t in arm64ec-pc-windows-msvc x86_64-pc-windows-msvc $I686; do
+  # D3D9's core runtime, in all halves that carry it.
+  for t in aarch64-pc-windows-msvc arm64ec-pc-windows-msvc x86_64-pc-windows-msvc $I686; do
     lint $t -p d3d9 -p d3d9-rt --features d3d9/core-runtime || rc=1
   done
   for t in x86_64-pc-windows-msvc $I686; do

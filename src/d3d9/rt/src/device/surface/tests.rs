@@ -605,7 +605,7 @@ fn a_draw_on_a_copied_subresource_waits_on_the_copy() {
 
 #[test]
 fn read_back_logical_and_write_target_logical_resample_scaled_targets() {
-    const DEVICE: u64 = 0x436;
+    const DEVICE: u64 = 0x49a;
     let mut core = core_on_fakes(DEVICE);
     let desc = target_desc(BGRA8, TextureKind::Tex2d, 128, 1, 4);
     let id = TextureId::from_raw(0x99);

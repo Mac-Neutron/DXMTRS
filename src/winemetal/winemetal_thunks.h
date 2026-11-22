@@ -509,6 +509,32 @@ struct unixcall_mtldevice_newicb {
   obj_handle_t ret;
 };
 
+struct unixcall_wmt_attach_metal_view {
+  uint64_t hwnd;
+  obj_handle_t device;
+  struct WMTConstMemoryPointer desc;
+  struct WMTMemoryPointer out_poll;
+  obj_handle_t ret_view;
+  obj_handle_t ret_layer;
+};
+
+struct unixcall_wmt_view_sync_and_poll {
+  obj_handle_t view;
+  obj_handle_t layer;
+  struct WMTMemoryPointer out;
+  uint32_t flags;
+  uint32_t reserved;
+};
+
+struct unixcall_mtldrawable_setpresentedevent {
+  obj_handle_t drawable;
+  obj_handle_t view;
+  obj_handle_t shared_event;
+  uint64_t signal_value;
+  uint32_t flags;
+  uint32_t reserved;
+};
+
 #ifdef DXMT_GUEST_VM
 /* MacNeutron: WMTMemoryAlloc (153) and WMTMemoryFree (154), answered in the EAC microVM's guest. */
 struct unixcall_wmtmemory {

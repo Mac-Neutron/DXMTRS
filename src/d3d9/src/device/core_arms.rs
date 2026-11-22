@@ -240,6 +240,7 @@ pub fn present(
     core: &mut CoreDevice,
     pp: &D3DPRESENT_PARAMETERS,
     cfg: &mtld3d_core::config::Mtld3dConfig,
+    client_surface_reasons: u32,
 ) -> i32 {
     let window = pp.device_window as *mut c_void;
     let interval = pp.presentation_interval;
@@ -273,9 +274,13 @@ pub fn present(
              to divide; pacing at display-rate vsync"
         );
     }
-    let pacing = mtld3d_core::present::layer_pacing_for(interval, refresh_hz, cfg.present_max_fps);
-    let (after, cap_after) = d3d9_rt::device::present_pacing(pacing, refresh_hz);
-    core.present(visible, after, cap_after, pacing.display_sync);
+    core.present_paced(
+        visible,
+        interval,
+        refresh_hz,
+        cfg.present_max_fps,
+        client_surface_reasons,
+    );
     D3D_OK
 }
 

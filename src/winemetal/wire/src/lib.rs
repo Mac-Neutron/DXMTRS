@@ -1351,6 +1351,45 @@ pub struct WMTEDRValue {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
+pub struct WMTViewAttachDesc {
+    pub width: u32,
+    pub height: u32,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct WMTViewPollOut {
+    pub drawable_width: u32,
+    pub drawable_height: u32,
+    pub backing_scale: u32,
+    pub edr_current: f32,
+    pub edr_potential: f32,
+    pub panel_max_hz: u32,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct WMTCursorOverlayParams {
+    pub view: u64,
+    pub pixels: MemPtr,
+    pub gamma_lut: MemPtr,
+    pub gamma_revision: u64,
+    pub pixels_len: u32,
+    pub width: u32,
+    pub height: u32,
+    pub x_hotspot: u32,
+    pub y_hotspot: u32,
+    pub scale: u32,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
 pub struct WMTFunctionConstant {
     pub data: MemPtr,
     pub r#type: u16,
@@ -2212,6 +2251,38 @@ pub struct UnixcallMtldeviceNewicb {
 pub struct UnixcallWmtmemory {
     pub length: u64,
     pub ptr: MemPtr,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UnixcallWmtAttachMetalView {
+    pub hwnd: u64,
+    pub device: u64,
+    pub desc: MemPtr,
+    pub out_poll: MemPtr,
+    pub ret_view: u64,
+    pub ret_layer: u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UnixcallWmtViewSyncAndPoll {
+    pub view: u64,
+    pub layer: u64,
+    pub out: MemPtr,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UnixcallMtldrawableSetpresentedevent {
+    pub drawable: u64,
+    pub view: u64,
+    pub shared_event: u64,
+    pub signal_value: u64,
+    pub flags: u32,
+    pub reserved: u32,
 }
 
 // airconv_thunks.h
@@ -3182,3 +3253,37 @@ pub const MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET: u32 = 1 << 5;
 pub const MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY: u32 = 1 << 6;
 pub const MTL_SM50_SHADER_ARGUMENT_READ_ACCESS: u32 = 1 << 10;
 pub const MTL_SM50_SHADER_ARGUMENT_WRITE_ACCESS: u32 = 1 << 11;
+
+// WMTViewAttachFlag
+pub const WMT_VIEW_ATTACH_FLAG_HDR_ENABLE: u32 = 1 << 0;
+pub const WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE: u32 = 1 << 1;
+pub const WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON: u32 = 1 << 2;
+pub const WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF: u32 = 1 << 3;
+pub const WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED: u32 = 1 << 4;
+
+// WMTViewPollFlag
+pub const WMT_VIEW_POLL_FLAG_HDR_ACTIVE: u32 = 1 << 0;
+pub const WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE: u32 = 1 << 1;
+pub const WMT_VIEW_POLL_FLAG_OCCLUDED: u32 = 1 << 2;
+pub const WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING: u32 = 1 << 3;
+pub const WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY: u32 = 1 << 4;
+pub const WMT_VIEW_POLL_FLAG_CURSOR_KICK: u32 = 1 << 5;
+pub const WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED: u32 = 1 << 6;
+
+// WMTRetireMetalViewFlag
+pub const WMT_RETIRE_METAL_VIEW_FLAG_PARK: u32 = 1 << 0;
+
+// WMTViewSyncFlag
+pub const WMT_VIEW_SYNC_FLAG_FORCE_REFRESH: u32 = 1 << 0;
+
+// WMTClientSurfaceReason
+pub const WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN: u32 = 1 << 0;
+pub const WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED: u32 = 1 << 1;
+
+// WMTPresentedEventFlag
+pub const WMT_PRESENTED_EVENT_FLAG_PACED: u32 = 1 << 0;
+
+// WMTCursorOverlayFlag
+pub const WMT_CURSOR_OVERLAY_FLAG_VISIBLE: u32 = 1 << 0;
+pub const WMT_CURSOR_OVERLAY_FLAG_HARDWARE: u32 = 1 << 1;
+pub const WMT_CURSOR_OVERLAY_FLAG_NATIVE_HIDDEN: u32 = 1 << 2;
