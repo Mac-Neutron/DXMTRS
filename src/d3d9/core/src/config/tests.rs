@@ -806,20 +806,24 @@ fn mtld3d_config_keeps_a_non_bmp_char() {
 }
 
 #[test]
-fn runtime_mode_defaults_to_mtld3d() {
-    assert_eq!(parse(None, "", None).runtime_mode, RuntimeMode::Mtld3d);
-    assert_eq!(RuntimeMode::default(), RuntimeMode::Mtld3d);
+fn runtime_mode_defaults_to_core() {
+    assert_eq!(parse(None, "", None).runtime_mode, RuntimeMode::Core);
+    assert_eq!(RuntimeMode::default(), RuntimeMode::Core);
 }
 
 #[test]
 fn runtime_mode_core_in_the_file() {
     assert_eq!(
-        parse(None, "runtime.mode = core\n", None).runtime_mode,
-        RuntimeMode::Core
-    );
-    assert_eq!(
         parse(None, "runtime.mode = MTLD3D\n", None).runtime_mode,
         RuntimeMode::Mtld3d
+    );
+    assert_eq!(
+        parse(None, "runtime.mode = mtld3d\n", None).runtime_mode,
+        RuntimeMode::Mtld3d
+    );
+    assert_eq!(
+        parse(None, "runtime.mode = mtld3d\nruntime.mode = core\n", None).runtime_mode,
+        RuntimeMode::Core
     );
 }
 
@@ -829,25 +833,38 @@ fn mtld3d_config_env_overrides_runtime_mode() {
         parse(None, "runtime.mode = core\n", Some("runtime.mode=mtld3d")).runtime_mode,
         RuntimeMode::Mtld3d
     );
-}
-
-#[test]
-fn dxmt_config_runtime_mode_reaches_d3d9() {
     assert_eq!(
-        parse_sources(None, &sources("runtime.mode=core", ""), b"").runtime_mode,
+        parse(None, "runtime.mode = mtld3d\n", Some("runtime.mode=core")).runtime_mode,
         RuntimeMode::Core
     );
 }
 
 #[test]
-fn runtime_mode_bad_value_warns_and_keeps_mtld3d() {
+fn dxmt_config_runtime_mode_reaches_d3d9() {
     assert_eq!(
-        parse(None, "runtime.mode = unix\n", None).runtime_mode,
+        parse_sources(None, &sources("runtime.mode=mtld3d", ""), b"").runtime_mode,
         RuntimeMode::Mtld3d
     );
     assert_eq!(
-        parse(None, "runtime.mode = core\nruntime.mode = pe\n", None).runtime_mode,
-        RuntimeMode::Core,
+        parse_sources(
+            None,
+            &sources("runtime.mode=mtld3d", "runtime.mode=core"),
+            b""
+        )
+        .runtime_mode,
+        RuntimeMode::Core
+    );
+}
+
+#[test]
+fn runtime_mode_bad_value_warns_and_keeps_current() {
+    assert_eq!(
+        parse(None, "runtime.mode = unix\n", None).runtime_mode,
+        RuntimeMode::Core
+    );
+    assert_eq!(
+        parse(None, "runtime.mode = mtld3d\nruntime.mode = pe\n", None).runtime_mode,
+        RuntimeMode::Mtld3d,
         "a bad value keeps the earlier one"
     );
 }
@@ -857,7 +874,7 @@ fn dxmt_file_and_four_layer_precedence_apply_in_order() {
     let sources = Sources {
         dxmt_file: Some((
             b"DXMT_CONFIG_FILE".to_vec(),
-            b"present.maxFps = 40\nshader.backend = msl\n[game.exe]\nruntime.mode = core\n"
+            b"present.maxFps = 40\nshader.backend = msl\n[game.exe]\nruntime.mode = mtld3d\n"
                 .to_vec(),
         )),
         mtld3d_file: Some(("mtld3d.conf".into(), Ok(b"present.maxFps = 50\n".to_vec()))),
@@ -867,7 +884,7 @@ fn dxmt_file_and_four_layer_precedence_apply_in_order() {
     let cfg = parse_sources(None, &sources, b"game.exe");
     assert_eq!(cfg.present_max_fps, 120);
     assert_eq!(cfg.shader_backend, ShaderBackend::Msl);
-    assert_eq!(cfg.runtime_mode, RuntimeMode::Core);
+    assert_eq!(cfg.runtime_mode, RuntimeMode::Mtld3d);
 }
 
 #[test]
@@ -877,10 +894,10 @@ fn dxmt_config_only_and_foreign_keys_parse_without_error() {
             b"dxmt.conf".to_vec(),
             b"dxmt.shaderMetalVersion = 310\nd3d11.disableAsyncCompilation = true\n".to_vec(),
         )),
-        dxmt_env: b"dxmt.hud=true;d3d11.samplerAnisotropy=8;d3d10.x=1;d3d12.y=2;dxgi.forceSDR=true;runtime.mode=core;present.maxFps=90".to_vec(),
+        dxmt_env: b"dxmt.hud=true;d3d11.samplerAnisotropy=8;d3d10.x=1;d3d12.y=2;dxgi.forceSDR=true;runtime.mode=mtld3d;present.maxFps=90".to_vec(),
         ..Default::default()
     };
     let cfg = parse_sources(None, &sources, b"");
-    assert_eq!(cfg.runtime_mode, RuntimeMode::Core);
+    assert_eq!(cfg.runtime_mode, RuntimeMode::Mtld3d);
     assert_eq!(cfg.present_max_fps, 90);
 }

@@ -33,7 +33,7 @@ fn resolved_configuration_preserves_nondefaults() {
     value.shader_cache_enable = !value.shader_cache_enable;
     value.shader_async_compile = !value.shader_async_compile;
     value.shader_backend = ShaderBackend::Msl;
-    value.runtime_mode = RuntimeMode::Core;
+    value.runtime_mode = RuntimeMode::Mtld3d;
     value.log_dir = "log_dir/utf8-ä".into();
     value.bytecode_dump_dir = "bytecode_dump_dir/utf8-ä".into();
     value.skip_shaders = vec![0, u64::MAX, 55];

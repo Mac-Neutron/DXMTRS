@@ -15,8 +15,8 @@ crate-type = ["staticlib"]
 perf-tracking = ["mtld3d-core/perf-tracking", "mtld3d-shared/perf-tracking"]
 # DXMT_PERF_BUILD: lines below warnings compiled out.
 perf-build = ["mtld3d-shared/perf-build", "d3d9-rt?/perf-build"]
-# DXMTRS C4: the core runtime (runtime.mode=core), d3d9-rt on dxmt-core; meson's d3d9_core_runtime, on the arm64ec,
-# x86_64 and i686 halves only (winemetal.dll has no native arm64 half).
+# DXMTRS C4: the core runtime (runtime.mode=core, default since C4e), d3d9-rt on dxmt-core; meson's d3d9_core_runtime
+# across all halves (aarch64, arm64ec, x86_64, i686), with runtime.mode=mtld3d kept as the escape hatch until C5.
 core-runtime = ["dep:d3d9-rt"]
 # The VM guest's build (meson's guest_vm): the core runtime's guest-only winemetal calls.
 guest-vm = ["d3d9-rt?/guest-vm"]

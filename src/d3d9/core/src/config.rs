@@ -151,7 +151,7 @@ pub struct Mtld3dConfig {
     /// Which runtime records the device's frames.
     ///
     /// `mtld3d` (`mtld3d.so` on the Unix side) or `core` (`d3d9.dll` on DXMT's core, DXMTRS C4).
-    /// Process-wide: the first interface latches it. Default: [`RuntimeMode::Mtld3d`]. File key:
+    /// Process-wide: the first interface latches it. Default: [`RuntimeMode::Core`]. File key:
     /// `runtime.mode`.
     pub runtime_mode: RuntimeMode,
     /// Directory the process's log file and GPU traces go into.
@@ -361,10 +361,10 @@ pub enum ShaderBackend {
 /// `runtime.mode`: which runtime records D3D9's frames (DXMTRS C4).
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub enum RuntimeMode {
-    /// `mtld3d.so`, through `mtld3d.dll`'s Unix calls: today's runtime.
-    #[default]
+    /// `mtld3d.so`, through `mtld3d.dll`'s Unix calls: the legacy escape hatch until C5.
     Mtld3d,
-    /// `d3d9.dll` on DXMT's core (`dxmt-core`), as D3D10-12.
+    /// `d3d9.dll` on DXMT's core (`dxmt-core`), as D3D10-12; default since C4e.
+    #[default]
     Core,
 }
 
@@ -429,7 +429,7 @@ impl Default for Mtld3dConfig {
             shader_cache_enable: true,
             shader_async_compile: true,
             shader_backend: ShaderBackend::Air,
-            runtime_mode: RuntimeMode::Mtld3d,
+            runtime_mode: RuntimeMode::Core,
             log_dir: String::new(),
             bytecode_dump_dir: String::new(),
             skip_shaders: Vec::new(),

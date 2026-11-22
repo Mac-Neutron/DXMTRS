@@ -7,6 +7,10 @@ divergences from D3D9 it keeps on purpose. The tested games are in
 
 ## Supported
 
+- Default runtime: `runtime.mode = core` (`d3d9.dll` on `dxmt-core` over
+  `winemetal.dll`, built with `-Dd3d9_core_runtime=true` across all halves
+  including native `aarch64`), with `runtime.mode = mtld3d` (`mtld3d.dll` /
+  `mtld3d.so`) kept as the escape hatch until C5.
 - Shader models 1.x through 3.0 and the fixed-function stages, lowered from
   DXSO through the translator to AIR by default (`shader.backend=air`) and
   cached on disk by content hash (with `shaderCache.enable` and warm-start
