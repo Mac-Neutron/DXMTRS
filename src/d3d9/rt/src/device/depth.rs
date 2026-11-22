@@ -18,7 +18,9 @@ use dxmt_core::{
     encoder::{NO_NEXT, direct, stage},
     format::depth_stencil_planar_flags,
     library::{render_pipeline, render_pipeline_info},
-    resource::{Texture, TextureViewDescriptor, TextureViewKey},
+    resource::{
+        Texture, TextureAllocationFlags, TextureViewDescriptor, TextureViewKey, texture_info,
+    },
 };
 use mtld3d_core::{
     async_compile::ClearPlanes,
@@ -31,13 +33,15 @@ use winemetal_sys::{
     Obj,
     wire::{
         WMT_LOAD_ACTION_DONT_CARE, WMT_PIXEL_FORMAT_X32_STENCIL8, WMT_PRIMITIVE_TYPE_TRIANGLE,
-        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_DSSO, WMT_STORE_ACTION_STORE,
-        WMTDepthStencilInfo, WMTStencilInfo, WmtcmdRenderDraw, WmtcmdRenderSetdsso,
+        WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_DSSO, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        WMT_STORE_ACTION_STORE, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+        WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ, WMTDepthStencilInfo,
+        WMTStencilInfo, WMTTextureInfo, WmtcmdRenderDraw, WmtcmdRenderSetdsso,
     },
 };
 
 use super::{
-    CoreDevice, CoreTextureDesc, CoreTextureFlags, LOG_TARGET, TextureKind,
+    CoreDevice, CoreOptions, CoreTextureDesc, CoreTextureFlags, LOG_TARGET, TextureKind,
     stretch::{compile_functions, encode_triangle_state},
     surface::blit_record,
     target::Shape,
@@ -111,10 +115,20 @@ const MATH_MODE_SAFE: u8 = 0;
 const _: () = assert!(RESOLVE_MSL.is_ascii());
 
 /// A depth-stencil: one level of a stored depth texture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DepthRef {
     pub id: TextureId,
     pub level: u32,
+}
+
+/// A private one-level copy of a bound depth-stencil level for draws that sample it while attached.
+pub(super) struct DepthSnapshot {
+    texture: Arc<Texture>,
+    width: u32,
+    height: u32,
+    pixel_format: u32,
+    samples: u8,
+    dirty: bool,
 }
 
 /// The depth-stencil as a pass attaches it and a Clear clears it.
@@ -252,6 +266,7 @@ impl CoreDevice {
                 self.clear_history
                     .record_key(clear_target, subresource, clear_planes);
             }
+            self.mark_depth_dirty(depth_ref);
         }
         let depth = clear_depth(depth);
         self.close_pass();
@@ -275,6 +290,9 @@ impl CoreDevice {
         let Some((texture, key, planes)) = self.depth_clear(planes) else {
             return;
         };
+        if let Some(depth_ref) = self.depth {
+            self.mark_depth_dirty(depth_ref);
+        }
         let depth = clear_depth(depth);
         let rects = super::recorder::scissor_rects(rects);
         self.close_pass();
@@ -343,6 +361,7 @@ impl CoreDevice {
                 [0, 0],
             ));
         });
+        self.mark_depth_dirty(dst);
         true
     }
 
@@ -491,7 +510,108 @@ impl CoreDevice {
             });
             enc.end_pass();
         });
+        self.mark_depth_dirty(dst);
         true
+    }
+
+    /// Marks any cached sampling snapshot for `depth` dirty so the next sampling draw refreshes it.
+    pub(super) fn mark_depth_dirty(&mut self, depth: DepthRef) {
+        if let Some(snap) = self.depth_snapshots.get_mut(&depth) {
+            snap.dirty = true;
+        }
+    }
+
+    /// Drops all cached sampling snapshots belonging to texture `id`.
+    pub(super) fn forget_depth_snapshots(&mut self, id: TextureId) {
+        self.depth_snapshots.retain(|depth, _| depth.id != id);
+    }
+
+    /// Returns a private single-level snapshot texture of `depth` for sampling while attached.
+    ///
+    /// Blits the full level from `depth` when the snapshot is first created or marked dirty by a
+    /// depth write, clear, upload, copy, or resolve.
+    pub(super) fn depth_snapshot_for_sampling(&mut self, depth: DepthRef) -> Option<Arc<Texture>> {
+        let (width, height, pixel_format, samples) = self.depth_level(depth.id, depth.level)?;
+        let source = self.stored_texture(depth.id)?;
+        if self.depth_snapshots.get(&depth).is_some_and(|snap| {
+            (snap.width, snap.height, snap.pixel_format, snap.samples)
+                != (width, height, pixel_format, samples)
+        }) {
+            self.depth_snapshots.remove(&depth);
+        }
+        let snap = self.depth_snapshots.entry(depth).or_insert_with(|| {
+            let usage = WMT_TEXTURE_USAGE_SHADER_READ
+                | WMT_TEXTURE_USAGE_RENDER_TARGET
+                | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+            let info = WMTTextureInfo {
+                pixel_format,
+                width,
+                height,
+                depth: 1,
+                array_length: 1,
+                bits: texture_info::info_bits(
+                    super::textures::two_d(samples),
+                    1,
+                    u32::from(samples),
+                    usage,
+                ),
+                options: WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+                flags: 0,
+                mach_port: 0,
+                gpu_resource_id: 0,
+            };
+            let texture = Arc::new(Texture::new(info, self.device.device()));
+            texture.rename(texture.allocate(TextureAllocationFlags::GPU_PRIVATE));
+            if !self.options.contains(CoreOptions::LOGGED_DEPTH_SNAPSHOT) {
+                self.options.insert(CoreOptions::LOGGED_DEPTH_SNAPSHOT);
+                log::info!(
+                    target: LOG_TARGET,
+                    "d3d9 core: depth snapshot: a draw samples the bound depth attachment; copying it ({width}x{height} format {pixel_format}) before such draws"
+                );
+            }
+            DepthSnapshot {
+                texture,
+                width,
+                height,
+                pixel_format,
+                samples,
+                dirty: true,
+            }
+        });
+        let snap_tex = Arc::clone(&snap.texture);
+        let needs_copy = snap.dirty;
+        snap.dirty = false;
+        if needs_copy {
+            let shape = |level| Shape {
+                width,
+                height,
+                pixel_format,
+                srgb_format: 0,
+                texel_bytes: 4,
+                level,
+                slice: 0,
+                samples,
+            };
+            let (src_shape, dst_shape) = (shape(depth.level), shape(0));
+            self.open_blit_pass();
+            let dst_tex = Arc::clone(&snap_tex);
+            self.emit(move |enc| {
+                let src = enc.access_texture::<{ stage::COMPUTE }>(
+                    &source,
+                    src_shape.level,
+                    0,
+                    Access::READ,
+                );
+                let dst = enc.access_texture::<{ stage::COMPUTE }>(&dst_tex, 0, 0, Access::WRITE);
+                enc.encode_blit_command(blit_record(
+                    (src, &src_shape),
+                    [0, 0, width, height],
+                    (dst, &dst_shape),
+                    [0, 0],
+                ));
+            });
+        }
+        Some(snap_tex)
     }
 
     /// The handle of the depth-stencil state of `snapshot`, made at its first request.

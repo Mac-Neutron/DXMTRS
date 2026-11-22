@@ -687,6 +687,15 @@ impl CoreDevice {
             }
         }
 
+        let bound_depth = self.depth.filter(|_| with_depth);
+        let depth_snap = bound_depth.and_then(|depth| {
+            draw.textures
+                .iter()
+                .any(|t| t.id == Some(depth.id))
+                .then(|| self.depth_snapshot_for_sampling(depth))
+                .flatten()
+        });
+
         // Phase 2: open or reuse the render pass (`open_pass` resets `pass_bound` on a new pass).
         self.open_pass(with_depth, colors);
         if self.options.contains(CoreOptions::ASYNC_COMPILE)
@@ -790,11 +799,23 @@ impl CoreDevice {
                 }
             }
             for t in draw.textures {
+                let (tex, key) = if let Some(snap_tex) = depth_snap.as_ref()
+                    && bound_depth.is_some_and(|d| t.id == Some(d.id))
+                {
+                    let mut desc = t.key.descriptor();
+                    desc.first_mip = 0;
+                    desc.mip_count = 1;
+                    desc.first_slice = 0;
+                    desc.array_size = 1;
+                    (snap_tex, desc.key())
+                } else {
+                    (&t.texture, t.key)
+                };
                 if self
                     .pass_bound
-                    .should_bind_texture(t.stage, t.slot, &t.texture, t.key)
+                    .should_bind_texture(t.stage, t.slot, tex, key)
                 {
-                    textures_emit.push((t.stage, t.slot, Arc::clone(&t.texture), t.key));
+                    textures_emit.push((t.stage, t.slot, Arc::clone(tex), key));
                     if self.options.contains(CoreOptions::ASYNC_COMPILE)
                         && let Some(id) = t.id
                     {
@@ -1011,6 +1032,17 @@ impl CoreDevice {
         // After the record: a lock that renames from here on leaves this draw its name.
         if dyn_count != 0 {
             self.stamp_dynamic_ids(&dyn_ids[..dyn_count]);
+        }
+        if !self.depth_snapshots.is_empty()
+            && let Some(depth) = bound_depth
+        {
+            let writes_depth = (depth_planes & 1 != 0)
+                && draw.depth_stencil.depth_enable != 0
+                && draw.depth_stencil.depth_write != 0;
+            let writes_stencil = (depth_planes & 2 != 0) && draw.depth_stencil.writes_stencil();
+            if writes_depth || writes_stencil {
+                self.mark_depth_dirty(depth);
+            }
         }
         Ok(())
     }

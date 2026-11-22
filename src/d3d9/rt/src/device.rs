@@ -56,6 +56,8 @@ bitflags::bitflags! {
         const SOFTWARE_CURSOR_ACTIVE = 1 << 10;
         /// Latched state: host requested a cursor re-apply kick since the last read.
         const CURSOR_KICK_PENDING = 1 << 11;
+        /// One-shot log latch when the first bound-depth sampling snapshot is created.
+        const LOGGED_DEPTH_SNAPSHOT = 1 << 12;
     }
 }
 
@@ -203,6 +205,11 @@ pub struct CoreDevice {
     pass_reads: PassReadTracker,
     /// The D3D9 textures' core textures, by id (C4b-3b).
     textures: rustc_hash::FxHashMap<mtld3d_core::ids::TextureId, textures::Stored>,
+    /// Cached per-level depth-stencil snapshot copies.
+    ///
+    /// Used for draws that sample the bound depth attachment while testing or writing it (Metal
+    /// forbids sampling a pass attachment).
+    depth_snapshots: rustc_hash::FxHashMap<depth::DepthRef, depth::DepthSnapshot>,
     /// The D3D9 vertex and index buffers' core buffers, by id (DXMTRS C4c-1).
     ///
     /// A dynamic one's with its names (DXMTRS C4c-2b).
@@ -387,6 +394,7 @@ impl CoreDevice {
             clear_history: ClearHistory::new(),
             pass_reads: PassReadTracker::default(),
             textures: rustc_hash::FxHashMap::default(),
+            depth_snapshots: rustc_hash::FxHashMap::default(),
             buffers: buffers::BufferStore::default(),
             samplers: rustc_hash::FxHashMap::default(),
             depth_states: rustc_hash::FxHashMap::default(),

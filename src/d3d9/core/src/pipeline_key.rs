@@ -717,8 +717,6 @@ pub enum CoreRefusal {
     NotCoreShader,
     /// A sampled vertex slot holds a depth-format texture (C4c).
     VertexDepthTexture,
-    /// The draw tests or writes the depth-stencil it samples (C4c).
-    BoundDepthSampled,
 }
 
 impl CoreRefusal {
@@ -731,9 +729,6 @@ impl CoreRefusal {
             }
             Self::VertexDepthTexture => {
                 "IDirect3DDevice9::Draw*PrimitiveUP (a depth texture at a vertex sampler)"
-            }
-            Self::BoundDepthSampled => {
-                "IDirect3DDevice9::Draw*PrimitiveUP (the depth-stencil sampled while bound)"
             }
         }
     }
@@ -770,39 +765,34 @@ pub const fn core_draw_kinds(f: DrawFacts) -> Result<(StageKind, StageKind), Cor
     Ok((vs, ps))
 }
 
-/// The depth format a core draw's key names, or why the core refuses the draw (C4b-3d2).
+/// The depth format a core draw's key names (C4b-3d2).
 ///
 /// `bound` is the bound depth-stencil's `WMTPixelFormat` (none: the key names none),
 /// `samples_bound` whether the draw samples it, `uses_plane` whether the draw's state tests or
 /// writes one of its planes, and `same_samples` whether its sample count is colour target 0's.
 /// One of another count is left out before anything else, as mtld3d's pass leaves it out: the
-/// key names none and nothing is refused (DXMTRS C4b-3d5). A depth-stencil the draw does not
-/// sample is the key's, whatever its size (C4b-3d3). A draw that samples it goes without it,
-/// which only a draw that uses no plane may.
-///
-/// # Errors
-///
-/// A draw that uses a plane of the depth-stencil it samples.
+/// key names none (DXMTRS C4b-3d5). A depth-stencil the draw does not sample is the key's,
+/// whatever its size (C4b-3d3). When a draw samples it and uses no plane, the depth-stencil is
+/// left out of the pass so no snapshot copy is needed; when it samples it and uses a plane, the
+/// key keeps `format` so the attachment stays in the pass while `d3d9-rt` blits a snapshot for
+/// sampling.
+#[must_use]
 pub const fn core_key_depth(
     bound: Option<u32>,
     samples_bound: bool,
     uses_plane: bool,
     same_samples: bool,
-) -> Result<u32, CoreRefusal> {
+) -> u32 {
     let Some(format) = bound else {
-        return Ok(0);
+        return 0;
     };
     if !same_samples {
-        return Ok(0);
+        return 0;
     }
-    if !samples_bound {
-        return Ok(format);
+    if samples_bound && !uses_plane {
+        return 0;
     }
-    if uses_plane {
-        Err(CoreRefusal::BoundDepthSampled)
-    } else {
-        Ok(0)
-    }
+    format
 }
 
 /// The float rows a stage binds: the whole 256-row file under relative addressing.

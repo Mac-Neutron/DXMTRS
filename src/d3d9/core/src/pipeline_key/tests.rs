@@ -875,7 +875,7 @@ fn core_ps_variant_rules() {
 /// Which stages a draw takes, or why the core refuses it.
 #[test]
 fn core_draw_kinds_cover_every_case() {
-    use CoreRefusal::{BoundDepthSampled, NotCoreShader, VertexDepthTexture};
+    use CoreRefusal::{NotCoreShader, VertexDepthTexture};
     use StageKind::{Ff, Prog};
     let facts = |flags| DrawFacts { flags };
     let both = DrawFlags::VS_BOUND | DrawFlags::VS_CORE | DrawFlags::PS_BOUND | DrawFlags::PS_CORE;
@@ -903,43 +903,38 @@ fn core_draw_kinds_cover_every_case() {
     for (i, (facts, expected)) in cases.into_iter().enumerate() {
         assert_eq!(core_draw_kinds(facts), expected, "case {i}");
     }
-    let refusals = [NotCoreShader, VertexDepthTexture, BoundDepthSampled];
+    let refusals = [NotCoreShader, VertexDepthTexture];
     for refusal in refusals {
         // Every refusal there is: one added or dropped does not compile until this names it.
         match refusal {
-            NotCoreShader | VertexDepthTexture | BoundDepthSampled => {}
+            NotCoreShader | VertexDepthTexture => {}
         }
     }
     let names = refusals.map(CoreRefusal::name);
     assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
 }
 
-/// The depth format a draw's key names, or why the core refuses the draw.
+/// The depth format a draw's key names.
 ///
-/// The bound depth-stencil's format when a pass can attach it and the draw does not sample it;
-/// otherwise none for a draw that uses no plane, and a refusal for one that does. One of another
-/// sample count than target 0 is none before anything else, never a refusal.
+/// The bound depth-stencil's format when a pass can attach it, except when the draw samples it
+/// without using any plane (left out so no snapshot copy is needed); when the draw samples it and
+/// uses a plane, the format is kept so `d3d9-rt` blits a snapshot for sampling. One of another
+/// sample count than target 0 is always 0.
 #[test]
 fn core_key_depth_covers_every_case() {
     const F: u32 = 260;
     // (bound, sampled by the draw, uses a plane, target 0's count) -> the key's format.
     let cases = [
-        (None, false, true, true, Ok(0)),
-        (None, false, false, true, Ok(0)),
-        (None, true, true, true, Ok(0)),
-        (Some(F), false, true, true, Ok(F)),
-        (Some(F), false, false, true, Ok(F)),
-        (Some(F), true, false, true, Ok(0)),
-        (
-            Some(F),
-            true,
-            true,
-            true,
-            Err(CoreRefusal::BoundDepthSampled),
-        ),
-        (Some(F), false, true, false, Ok(0)),
-        (Some(F), true, true, false, Ok(0)),
-        (None, false, true, false, Ok(0)),
+        (None, false, true, true, 0),
+        (None, false, false, true, 0),
+        (None, true, true, true, 0),
+        (Some(F), false, true, true, F),
+        (Some(F), false, false, true, F),
+        (Some(F), true, false, true, 0),
+        (Some(F), true, true, true, F),
+        (Some(F), false, true, false, 0),
+        (Some(F), true, true, false, 0),
+        (None, false, true, false, 0),
     ];
     for (bound, sampled, uses_plane, same_samples, expected) in cases {
         assert_eq!(

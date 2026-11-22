@@ -32,7 +32,7 @@ use winemetal_sys::wire::{
 };
 
 use super::{
-    ClearTarget, CoreDevice, LOG_TARGET, TargetRef,
+    ClearTarget, CoreDevice, DepthRef, LOG_TARGET, TargetRef,
     draw::Stage,
     stretch::StretchQuad,
     surface::rect_bytes,
@@ -237,6 +237,7 @@ impl CoreDevice {
             self.target_gen = self.target_gen.wrapping_add(1);
         }
         self.clear_history.forget(ClearTarget::Texture(id));
+        self.forget_depth_snapshots(id);
         self.textures.insert(
             id,
             Stored {
@@ -450,6 +451,7 @@ impl CoreDevice {
             self.target_gen = self.target_gen.wrapping_add(1);
         }
         self.clear_history.forget(ClearTarget::Texture(id));
+        self.forget_depth_snapshots(id);
         self.textures.remove(&id);
     }
 
@@ -869,7 +871,12 @@ impl CoreDevice {
                     rows: height,
                     images: 1,
                 };
-                self.upload(texture, level, &copy, depth, (depth_pitch, 0))
+                if self.upload(texture, level, &copy, depth, (depth_pitch, 0)) {
+                    self.mark_depth_dirty(DepthRef { id, level });
+                    true
+                } else {
+                    false
+                }
             }
             WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8 => {
                 let Some((stencil, stencil_pitch)) = stencil else {
@@ -914,6 +921,7 @@ impl CoreDevice {
                 if self.staged_bytes > self.staged_budget {
                     self.commit();
                 }
+                self.mark_depth_dirty(DepthRef { id, level });
                 true
             }
             _ => false,

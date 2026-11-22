@@ -558,7 +558,7 @@ src/d3d9/mtl/src/wmt.rs VertexAttributeInfo Default,Clone,Copy
 src/d3d9/mtl/src/wmt.rs VertexBufferLayoutInfo Default,Clone,Copy
 src/d3d9/rt/src/device.rs ClearTarget Clone,Copy,PartialEq,Eq,Hash,Debug
 src/d3d9/rt/src/device.rs CoreOptions Clone,Copy,Debug,Default,PartialEq,Eq
-src/d3d9/rt/src/device/depth.rs DepthRef Clone,Copy,Debug,PartialEq,Eq
+src/d3d9/rt/src/device/depth.rs DepthRef Clone,Copy,Debug,PartialEq,Eq,Hash
 src/d3d9/rt/src/device/draw.rs Stage Clone,Copy
 src/d3d9/rt/src/device/draw.rs StreamData Clone,Copy
 src/d3d9/rt/src/device/shader_cache.rs StageFnKey Clone,PartialEq,Eq,Hash

@@ -298,9 +298,10 @@ fn resolve(
         fetch4: fetch4 & sampled_mask,
         fetch4_alpha: fetch4_alpha & sampled_mask,
     };
-    // Whether a sampled pixel slot holds the bound depth-stencil's texture, at any level: Metal
-    // forbids sampling an attachment, and the core's tracking does not see it (the pass's write
-    // is recorded at its end), so this is the one guard.
+    // Whether a sampled pixel slot holds the bound depth-stencil's texture, at any level: when
+    // `samples_bound && !uses_plane` the pass omits the depth-stencil so no snapshot copy is
+    // needed, and when `samples_bound && uses_plane` `d3d9-rt` blits an up-to-date snapshot of
+    // the bound depth attachment for the sampler so Metal never samples an active pass attachment.
     let bound_depth = dev.core.as_deref().and_then(CoreDevice::depth);
     let samples_bound = bound_depth.is_some_and(|depth| {
         (0..16usize)
@@ -347,7 +348,7 @@ fn resolve(
     let sample_count = dev.core.as_deref().map_or(1, CoreDevice::target_samples);
     // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size, when it
     // has target 0's count; none for a draw that samples it and uses no plane of it.
-    let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count)?;
+    let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count);
     let has_depth = depth_format != 0;
     let viewport = dev.viewport();
     let (px, py, pw, ph) = if viewport.width != 0 && viewport.height != 0 {
@@ -879,16 +880,12 @@ fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
 /// samples the bound depth-stencil's texture, `samples` colour target 0's sample count. A bound
 /// depth-stencil of another count is left out of the pass, as mtld3d's draw leaves it out: the
 /// key names no format and the clamp sees none bound (DXMTRS C4b-3d5).
-///
-/// # Errors
-///
-/// `D3DERR_NOTAVAILABLE` ([`core_key_depth`]), logged once per reason.
 fn key_depth(
     dev: &DeviceInner,
     rs: &[u32; RENDER_STATE_COUNT],
     samples_bound: bool,
     samples: u8,
-) -> Result<(bool, u32), i32> {
+) -> (bool, u32) {
     let core = dev.core.as_deref();
     let bound = core.and_then(CoreDevice::depth_format);
     let same_samples = core.and_then(CoreDevice::depth_samples) == Some(samples);
@@ -898,12 +895,8 @@ fn key_depth(
         let gated = depth_snapshot(rs).gated_on_stencil_attachment(has_stencil);
         gated.uses_depth() || gated.stencil_enable != 0
     });
-    core_key_depth(bound, samples_bound, uses_plane, same_samples)
-        .map(|format| (bound.is_some() && same_samples, format))
-        .map_err(|refusal| {
-            refuse_under_core(refusal.name());
-            D3DERR_NOTAVAILABLE
-        })
+    let format = core_key_depth(bound, samples_bound, uses_plane, same_samples);
+    (bound.is_some() && same_samples, format)
 }
 
 /// Records a UP draw of `vertices` (and `indices`, if any) with the device state.

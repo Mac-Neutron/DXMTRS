@@ -1403,3 +1403,234 @@ fn a_clear_of_the_destination_folds_into_the_resolve() {
     let depth = line(pass, "  depth ").unwrap_or_default();
     assert!(depth.ends_with(" load=0 store=1 clear=0"), "{calls:#?}");
 }
+
+/// A snapshot testing depth with `D3DCMP_LESSEQUAL` without writing it.
+const fn tested_readonly() -> DepthStencilSnapshot {
+    let mut s = tested();
+    s.depth_write = 0;
+    s
+}
+
+/// Sampling the bound depth texture while attached blits and binds a snapshot.
+///
+/// The blit runs before the render pass and the pixel slot binds the snapshot, not the live depth
+/// attachment.
+#[test]
+fn sampling_bound_depth_while_attached_blits_and_binds_snapshot() {
+    let mut rig = Rig::new(0x460);
+    let (depth, depth_tex) = rig.depth(1, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling = DrawData {
+        depth_stencil: tested_readonly(),
+        textures: &textures,
+        key_gen: 1,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    let calls = rig.take();
+    let made = textures_made(&calls);
+    assert_eq!(made.len(), 1, "{calls:#?}");
+    let snap_tex = &made[0];
+    assert_ne!(snap_tex, &depth_tex, "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    assert!(
+        at(&calls, "MTLCommandBuffer_blitCommandEncoder")
+            < at(&calls, "MTLCommandBuffer_renderCommandEncoder"),
+        "{calls:#?}"
+    );
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    let attached = plane_handle(all[0], "depth").unwrap_or_else(|| panic!("{calls:#?}"));
+    assert_eq!(rig.texture_of(&attached), depth_tex, "{calls:#?}");
+    let tex_bind = line(
+        all[0],
+        &format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} "),
+    );
+    assert_eq!(
+        tex_bind,
+        Some(format!("texture={snap_tex} index=0").as_str()),
+        "{calls:#?}"
+    );
+}
+
+/// Consecutive read-only sampling draws reuse the snapshot without an extra blit.
+///
+/// Both draws stay in one open render pass, including along the same `key_gen` fast-state path.
+#[test]
+fn consecutive_readonly_sampling_draws_reuse_snapshot_and_pass() {
+    let mut rig = Rig::new(0x461);
+    let (depth, _) = rig.depth(1, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling = DrawData {
+        depth_stencil: tested_readonly(),
+        textures: &textures,
+        key_gen: 7,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    assert!(rig.core.render_open);
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    assert!(rig.core.render_open);
+    let calls = rig.take();
+    assert_eq!(textures_made(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    let all = passes(&calls);
+    assert_eq!(all.len(), 1, "{calls:#?}");
+    assert_eq!(
+        all[0].iter().filter(|c| *c == DRAW_3).count(),
+        2,
+        "{calls:#?}"
+    );
+    let next_gen = DrawData {
+        key_gen: 8,
+        ..sampling
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &next_gen), Ok(()));
+    let calls = rig.take();
+    assert!(textures_made(&calls).is_empty(), "{calls:#?}");
+    assert!(blit_records(&calls).is_empty(), "{calls:#?}");
+}
+
+/// Intervening depth writes, clears, or copies into the bound depth dirty the snapshot.
+///
+/// The next sampling draw emits a fresh blit before its render pass.
+#[test]
+fn depth_writes_clears_and_copies_dirty_snapshot() {
+    let mut rig = Rig::new(0x462);
+    let (depth, _) = rig.depth(1, D32F, (64, 32), 1);
+    let (src_depth, _) = rig.depth(2, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling = DrawData {
+        depth_stencil: tested_readonly(),
+        textures: &textures,
+        key_gen: 10,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    let calls = rig.take();
+    assert_eq!(textures_made(&calls).len(), 1, "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+
+    // 1. Intervening draw that writes depth.
+    assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
+    let _ = rig.take();
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    let calls = rig.take();
+    assert!(textures_made(&calls).is_empty(), "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    assert!(
+        at(&calls, "MTLCommandBuffer_blitCommandEncoder")
+            < at(&calls, "MTLCommandBuffer_renderCommandEncoder"),
+        "{calls:#?}"
+    );
+
+    // 2. Intervening clear_depth_stencil.
+    rig.core.clear_depth_stencil(1, 0.5, 0);
+    let _ = rig.take();
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    let calls = rig.take();
+    assert!(textures_made(&calls).is_empty(), "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    assert!(
+        at(&calls, "MTLCommandBuffer_blitCommandEncoder")
+            < at(&calls, "MTLCommandBuffer_renderCommandEncoder"),
+        "{calls:#?}"
+    );
+
+    // 3. Intervening copy_depth into the bound depth.
+    assert!(rig.core.copy_depth(level0(src_depth), level0(depth)));
+    let _ = rig.take();
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    let calls = rig.take();
+    assert!(textures_made(&calls).is_empty(), "{calls:#?}");
+    assert_eq!(blit_records(&calls), ["  blit 4"], "{calls:#?}");
+    assert!(
+        at(&calls, "MTLCommandBuffer_blitCommandEncoder")
+            < at(&calls, "MTLCommandBuffer_renderCommandEncoder"),
+        "{calls:#?}"
+    );
+}
+
+/// Consecutive depth-writing sampling draws with the same `key_gen` refresh and rebind.
+///
+/// Each draw blits a fresh snapshot, resets `pass_bound`, and rebinds the snapshot in the new
+/// render pass.
+#[test]
+fn consecutive_depth_writing_sampling_draws_same_key_gen_refresh_and_rebind() {
+    let mut rig = Rig::new(0x463);
+    let (depth, _) = rig.depth(1, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling_write = DrawData {
+        depth_stencil: tested(),
+        textures: &textures,
+        key_gen: 42,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling_write), Ok(()));
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling_write), Ok(()));
+    let calls = rig.take();
+    let made = textures_made(&calls);
+    assert_eq!(made.len(), 1, "{calls:#?}");
+    let snap_tex = &made[0];
+    assert_eq!(blit_records(&calls), ["  blit 4", "  blit 4"], "{calls:#?}");
+    let all = passes(&calls);
+    assert_eq!(all.len(), 2, "{calls:#?}");
+    let tex_prefix = format!("  render {WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE} ");
+    let expected_bind = format!("texture={snap_tex} index=0");
+    for pass in all {
+        assert_eq!(
+            line(pass, &tex_prefix),
+            Some(expected_bind.as_str()),
+            "{calls:#?}"
+        );
+        assert!(pass.iter().any(|c| c == DRAW_3), "{calls:#?}");
+    }
+}
+
+/// `forget_texture` drops any cached snapshot entries for that texture.
+#[test]
+fn forget_texture_clears_cached_depth_snapshots() {
+    let mut rig = Rig::new(0x464);
+    let (depth, _) = rig.depth(1, D32F, (64, 32), 1);
+    assert!(rig.core.set_depth(Some(level0(depth))));
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth, D32F, None)
+        .expect("the depth texture binds in its stored format");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling = DrawData {
+        depth_stencil: tested_readonly(),
+        textures: &textures,
+        key_gen: 1,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.core.draw(&key_with(D32F), &sampling), Ok(()));
+    assert_eq!(rig.core.depth_snapshots.len(), 1);
+    rig.core.forget_texture(depth);
+    assert!(rig.core.depth_snapshots.is_empty());
+}
