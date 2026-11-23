@@ -3,19 +3,20 @@ use mtld3d_shared::mtl::{PixelFormat, Swizzle};
 use mtld3d_types::{
     D3DFMT_A1R5G5B5, D3DFMT_A2B10G10R10, D3DFMT_A2R10G10B10, D3DFMT_A4R4G4B4, D3DFMT_A8,
     D3DFMT_A8B8G8R8, D3DFMT_A8L8, D3DFMT_A8R8G8B8, D3DFMT_A16B16G16R16, D3DFMT_A16B16G16R16F,
-    D3DFMT_A32B32G32R32F, D3DFMT_ATI1, D3DFMT_D15S1, D3DFMT_D16, D3DFMT_D16_LOCKABLE,
+    D3DFMT_A32B32G32R32F, D3DFMT_ATI1, D3DFMT_ATI2, D3DFMT_D15S1, D3DFMT_D16, D3DFMT_D16_LOCKABLE,
     D3DFMT_D24FS8, D3DFMT_D24S8, D3DFMT_D24X4S4, D3DFMT_D24X8, D3DFMT_D32, D3DFMT_D32F_LOCKABLE,
     D3DFMT_DF16, D3DFMT_DF24, D3DFMT_DXT1, D3DFMT_DXT2, D3DFMT_DXT3, D3DFMT_DXT4, D3DFMT_DXT5,
-    D3DFMT_G16R16, D3DFMT_G16R16F, D3DFMT_G32R32F, D3DFMT_INTZ, D3DFMT_L8, D3DFMT_L16, D3DFMT_NV12,
-    D3DFMT_Q8W8V8U8, D3DFMT_Q16W16V16U16, D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_R16F, D3DFMT_R32F,
-    D3DFMT_UYVY, D3DFMT_V8U8, D3DFMT_V16U16, D3DFMT_X1R5G5B5, D3DFMT_X8B8G8R8, D3DFMT_X8R8G8B8,
-    D3DFMT_YUY2, D3DFMT_YV12, D3DRTYPE_CUBETEXTURE, D3DRTYPE_INDEXBUFFER, D3DRTYPE_SURFACE,
-    D3DRTYPE_TEXTURE, D3DRTYPE_VERTEXBUFFER, D3DRTYPE_VOLUME, D3DRTYPE_VOLUMETEXTURE,
-    D3DUSAGE_AUTOGENMIPMAP, D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_DMAP, D3DUSAGE_DONOTCLIP,
-    D3DUSAGE_DYNAMIC, D3DUSAGE_NPATCHES, D3DUSAGE_POINTS, D3DUSAGE_QUERY_FILTER,
-    D3DUSAGE_QUERY_LEGACYBUMPMAP, D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING, D3DUSAGE_QUERY_SRGBREAD,
-    D3DUSAGE_QUERY_SRGBWRITE, D3DUSAGE_QUERY_VERTEXTEXTURE, D3DUSAGE_QUERY_WRAPANDMIP,
-    D3DUSAGE_RENDERTARGET, D3DUSAGE_RTPATCHES, D3DUSAGE_SOFTWAREPROCESSING,
+    D3DFMT_G16R16, D3DFMT_G16R16F, D3DFMT_G32R32F, D3DFMT_INTZ, D3DFMT_L8, D3DFMT_L16, D3DFMT_NULL,
+    D3DFMT_NV12, D3DFMT_Q8W8V8U8, D3DFMT_Q16W16V16U16, D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_R16F,
+    D3DFMT_R32F, D3DFMT_UYVY, D3DFMT_V8U8, D3DFMT_V16U16, D3DFMT_X1R5G5B5, D3DFMT_X8B8G8R8,
+    D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DFMT_YV12, D3DRTYPE_CUBETEXTURE, D3DRTYPE_INDEXBUFFER,
+    D3DRTYPE_SURFACE, D3DRTYPE_TEXTURE, D3DRTYPE_VERTEXBUFFER, D3DRTYPE_VOLUME,
+    D3DRTYPE_VOLUMETEXTURE, D3DUSAGE_AUTOGENMIPMAP, D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_DMAP,
+    D3DUSAGE_DONOTCLIP, D3DUSAGE_DYNAMIC, D3DUSAGE_NPATCHES, D3DUSAGE_POINTS,
+    D3DUSAGE_QUERY_FILTER, D3DUSAGE_QUERY_LEGACYBUMPMAP, D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
+    D3DUSAGE_QUERY_SRGBREAD, D3DUSAGE_QUERY_SRGBWRITE, D3DUSAGE_QUERY_VERTEXTEXTURE,
+    D3DUSAGE_QUERY_WRAPANDMIP, D3DUSAGE_RENDERTARGET, D3DUSAGE_RTPATCHES,
+    D3DUSAGE_SOFTWAREPROCESSING,
 };
 
 use super::LOG_TARGET;
@@ -195,6 +196,7 @@ pub const fn format_name(d3d_format: u32) -> &'static str {
         D3DFMT_G32R32F => "G32R32F",
         D3DFMT_A32B32G32R32F => "A32B32G32R32F",
         D3DFMT_ATI1 => "ATI1",
+        D3DFMT_ATI2 => "ATI2",
         D3DFMT_V8U8 => "V8U8",
         D3DFMT_A2B10G10R10 => "A2B10G10R10",
         D3DFMT_A2R10G10B10 => "A2R10G10B10",
@@ -222,6 +224,7 @@ pub const fn format_name(d3d_format: u32) -> &'static str {
         D3DFMT_INTZ => "INTZ",
         D3DFMT_DF24 => "DF24",
         D3DFMT_DF16 => "DF16",
+        D3DFMT_NULL => "NULL",
         _ => "D3DFMT_unknown",
     }
 }
@@ -305,6 +308,46 @@ pub const fn is_dxt_format(d3d_format: u32) -> bool {
     )
 }
 
+/// Whether a lock of the format reports a byte per texel over its compressed blocks.
+///
+/// D3D9 hands an `ATI2` lock a pitch of the level's width rounded up to the
+/// 4-texel block ([`lock_row_pitch`]) and a sub-rect pointer `y * pitch + x`
+/// bytes past the level's start, while the level holds its BC5 blocks in
+/// place. Such a pointer does not address the rect's own blocks, so a write
+/// through a sub-rect lock is published as a write of the whole level.
+#[must_use]
+pub const fn locks_byte_per_texel(d3d_format: u32) -> bool {
+    d3d_format == D3DFMT_ATI2
+}
+
+/// Whether a default-pool level of the format locks without `D3DUSAGE_DYNAMIC`.
+///
+/// D3D9 refuses the lock of a non-dynamic default-pool level, 2D or cube
+/// face, for every format but `ATI2`, whose level locks whatever its usage.
+/// The level keeps a CPU copy to hand out, read back from the GPU when it
+/// was released after an upload.
+#[must_use]
+pub const fn locks_in_default_pool_without_dynamic(d3d_format: u32) -> bool {
+    d3d_format == D3DFMT_ATI2
+}
+
+/// The row pitch a lock of a level reports, from the pitch the level is stored at.
+///
+/// `stored_pitch` is the level's row stride in its staging: one block row
+/// for a compressed format. A format that locks a byte per texel
+/// ([`locks_byte_per_texel`]) reports a quarter of a 16-byte block row,
+/// `4 * ceil(width / 4)`; its byte extent `pitch * height` never exceeds the
+/// stored level, `pitch * 4 * ceil(height / 4)` bytes. Every other format
+/// reports the stored pitch.
+#[must_use]
+pub const fn lock_row_pitch(d3d_format: u32, stored_pitch: u32, block_height: u32) -> u32 {
+    if locks_byte_per_texel(d3d_format) && block_height > 1 {
+        stored_pitch / block_height
+    } else {
+        stored_pitch
+    }
+}
+
 /// Map a D3D9 colour format to its Metal counterpart, warning when there is none.
 ///
 /// The lookup itself lives in `lookup_d3d_format`; this wrapper adds the
@@ -362,6 +405,63 @@ pub const fn uses_noautogen_fallback(d3d_format: u32) -> bool {
 /// sizes the level from the planar layout, takes this mapping.
 #[must_use]
 pub const fn planar_yuv_storage_mapping() -> FormatMapping {
+    FormatMapping {
+        metal_pixel_format: PixelFormat::R8Unorm,
+        bytes_per_pixel: 1,
+        block_width: 1,
+        block_height: 1,
+        block_bytes: 1,
+        swizzle: None,
+        has_alpha: false,
+    }
+}
+
+/// Bytes per texel of the CPU copy a lockable `NULL` render target hands to `LockRect`.
+///
+/// A `NULL` target has no colour storage, but D3D9 still hands a lock a
+/// writable buffer with a non-zero pitch; four bytes a texel is the width of
+/// the colour formats a title would otherwise have bound.
+pub const NULL_LOCK_BYTES_PER_PIXEL: u32 = 4;
+
+/// Whether `d3d_format` is `NULL`, the render-target format with no colour storage.
+///
+/// Kept out of the colour lookup, so no colour predicate
+/// ([`is_mapped_color_format`], the sampling answers) offers it: a `NULL`
+/// target is never sampled, blitted or filled.
+#[must_use]
+pub const fn is_null_render_target(d3d_format: u32) -> bool {
+    d3d_format == D3DFMT_NULL
+}
+
+/// Alias of [`is_null_render_target`] matching the short format-predicate naming.
+#[must_use]
+pub const fn is_null_format(d3d_format: u32) -> bool {
+    is_null_render_target(d3d_format)
+}
+
+/// Whether a `NULL` resource of `rtype` may carry `usage`: the one shape the format exists in.
+///
+/// A 2D render target, a surface or a texture, with `D3DUSAGE_RENDERTARGET`
+/// and no other validated usage bit (sampling, depth, mip generation, CPU
+/// access). `CheckDeviceFormat` and the create gates both ask this, so a
+/// probe and a create agree. Bits outside the validated set ride through, as
+/// for every other format.
+#[must_use]
+pub const fn null_render_target_usage_allowed(usage: u32, rtype: u32) -> bool {
+    matches!(rtype, D3DRTYPE_SURFACE | D3DRTYPE_TEXTURE)
+        && usage & D3DUSAGE_RENDERTARGET != 0
+        && usage & VALIDATED_USAGE & !D3DUSAGE_RENDERTARGET == 0
+}
+
+/// Storage behind a `NULL` render-target texture: one byte a texel that no draw writes.
+///
+/// A level of such a texture bound as a render target binds no colour
+/// texture at all, as a `NULL` surface does; the storage exists because the
+/// texture create path backs every texture it makes. Like
+/// [`planar_yuv_storage_mapping`] it is no row of the format lookup: only the
+/// render-target texture create takes it.
+#[must_use]
+pub const fn null_texture_storage_mapping() -> FormatMapping {
     FormatMapping {
         metal_pixel_format: PixelFormat::R8Unorm,
         bytes_per_pixel: 1,
@@ -493,6 +593,7 @@ pub const fn is_render_target_format(d3d_format: u32) -> bool {
             | D3DFMT_X8B8G8R8
             | D3DFMT_R5G6B5
             | D3DFMT_A1R5G5B5
+            | D3DFMT_L8
             | D3DFMT_G16R16
             | D3DFMT_A16B16G16R16
             | D3DFMT_R16F
@@ -529,6 +630,19 @@ pub const fn is_render_target_format_device(d3d_format: u32, native_packed16: bo
         && (native_packed16 || !matches!(d3d_format, D3DFMT_R5G6B5 | D3DFMT_A1R5G5B5))
 }
 
+/// Whether `D3DRS_SRGBWRITEENABLE` encodes a render target of this format.
+///
+/// D3D9 applies the sRGB write to the render-target formats with an sRGB
+/// counterpart and writes every other one linear. Here that is a format the
+/// device renders into whose Metal format has an sRGB twin, the view the pass
+/// attaches under the state.
+#[must_use]
+pub fn takes_srgb_write(d3d_format: u32) -> bool {
+    is_render_target_format(d3d_format)
+        && map_d3d_format(d3d_format)
+            .is_some_and(|mapping| mapping.metal_pixel_format().srgb_twin().is_some())
+}
+
 /// The device-dependent half of a `CheckDeviceFormat` usage query.
 ///
 /// `D3DUSAGE_QUERY_FILTER` asks whether a format samples with linear
@@ -540,14 +654,15 @@ pub const fn is_render_target_format_device(d3d_format: u32, native_packed16: bo
 /// members (R16F / G16R16F / A16B16G16R16F) filter on every family and stay
 /// advertised either way.
 ///
-/// `D3DUSAGE_QUERY_SRGBWRITE` asks whether the format encodes sRGB as it is
-/// written, which is a property of the render pass: the answer is the
-/// device's render-target answer for the format, whether or not the query
-/// also carries `D3DUSAGE_RENDERTARGET`. Every colour attachment encodes,
-/// through the sRGB twin view where the Metal format has one and through the
-/// pixel shader's OETF variant where it has not, so the twin table is the
-/// read side's question rather than this one. A format that is no colour
-/// attachment has nothing to encode into and answers no.
+/// `D3DUSAGE_QUERY_SRGBWRITE` asks whether `D3DRS_SRGBWRITEENABLE` encodes
+/// what is written into the format. It does for a render-target format
+/// whose Metal format has an sRGB twin, the 8-bit four-channel formats,
+/// whether or not the query also carries `D3DUSAGE_RENDERTARGET`: the pass
+/// attaches the twin view, and the encode follows the blender. Every other
+/// render-target format (R5G6B5, A1R5G5B5, L8, G16R16, A16B16G16R16 and
+/// the float formats) is written linear under the state, as D3D9 writes it,
+/// and answers no, so the answer and the stored values agree. A format that
+/// is no colour attachment has nothing to encode into and answers no.
 ///
 /// `D3DUSAGE_QUERY_LEGACYBUMPMAP` asks whether the format can be the source
 /// texture of the fixed-function bump-environment operations, which
@@ -566,20 +681,18 @@ pub const fn is_render_target_format_device(d3d_format: u32, native_packed16: bo
 /// target. Other usage policy stays with the caller; the float family is
 /// colour-renderable on both GPU families.
 #[must_use]
-pub const fn supports_usage_query(
+pub fn supports_usage_query(
     d3d_format: u32,
     usage: u32,
     float32_filtering: bool,
-    native_packed16: bool,
+    _native_packed16: bool,
 ) -> bool {
     if usage & D3DUSAGE_QUERY_LEGACYBUMPMAP != 0
         && !matches!(d3d_format, D3DFMT_V8U8 | D3DFMT_V16U16 | D3DFMT_Q8W8V8U8)
     {
         return false;
     }
-    if usage & D3DUSAGE_QUERY_SRGBWRITE != 0
-        && !is_render_target_format_device(d3d_format, native_packed16)
-    {
+    if usage & D3DUSAGE_QUERY_SRGBWRITE != 0 && !takes_srgb_write(d3d_format) {
         return false;
     }
     if usage & D3DUSAGE_QUERY_FILTER == 0 {
@@ -1011,6 +1124,19 @@ const fn lookup_d3d_format(d3d_format: u32) -> Option<FormatMapping> {
             block_height: 4,
             block_bytes: 8, // ATI1N (BC4): single red channel — replicate to RGB, alpha = 1.0.
             swizzle: Some([Swizzle::Red, Swizzle::Red, Swizzle::Red, Swizzle::One]),
+            has_alpha: false,
+        }),
+        D3DFMT_ATI2 => Some(FormatMapping {
+            // ATI2N is BC5 block for block. D3D9 reads green from the first
+            // eight bytes of a block and red from the second, which BC5
+            // decodes as red and green, so the view exchanges the two; blue
+            // and alpha sample as 1.0.
+            metal_pixel_format: PixelFormat::Bc5RgUnorm,
+            bytes_per_pixel: 0,
+            block_width: 4,
+            block_height: 4,
+            block_bytes: 16,
+            swizzle: Some([Swizzle::Green, Swizzle::Red, Swizzle::One, Swizzle::One]),
             has_alpha: false,
         }),
         _ => None,

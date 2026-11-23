@@ -103,6 +103,7 @@ impl CoreDevice {
         let viewable = match quad.src {
             TargetRef::BackBuffer => true,
             TargetRef::Texture { id, .. } => self.view_twins(id),
+            TargetRef::Null => false,
         };
         let planar = [BlitDecode::Yv12.uniform(), BlitDecode::Nv12.uniform()]
             .iter()

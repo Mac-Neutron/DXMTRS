@@ -273,6 +273,36 @@ pub fn drop_unscalable_sizes(
     dropped
 }
 
+/// Leave out of `settable` every size larger than the display's `panel` on either axis.
+///
+/// On a scaled desktop Win32 lists sizes up to the backing store, which is
+/// larger than the panel, and a mode above the panel renders pixels the
+/// display scales away. The desktop, the first entry, always stays: it is the
+/// adapter display mode, whatever its size. Every other entry keeps its
+/// place. A panel with a zero dimension is unknown and leaves the list as it
+/// is. Returns the sizes left out, in list order.
+pub fn drop_sizes_above_panel(
+    settable: &mut Vec<(u32, u32)>,
+    panel: (u32, u32),
+) -> Vec<(u32, u32)> {
+    let (panel_w, panel_h) = panel;
+    let Some(&desktop) = settable.first() else {
+        return Vec::new();
+    };
+    if panel_w == 0 || panel_h == 0 {
+        return Vec::new();
+    }
+    let mut dropped = Vec::new();
+    settable.retain(|&(w, h)| {
+        let keep = (w, h) == desktop || (w <= panel_w && h <= panel_h);
+        if !keep {
+            dropped.push((w, h));
+        }
+        keep
+    });
+    dropped
+}
+
 /// The sizes `EnumAdapterModes` serves: those that fill the display, then the standard sizes.
 ///
 /// The desktop (the first entry, which doubles as the adapter display mode)
@@ -309,6 +339,89 @@ pub fn served_mode_sizes(
         .chain(standard)
         .take(max.max(1))
         .collect()
+}
+
+/// The sizes `EnumAdapterModes` serves, from the settable ones: smallest first, at most `max`.
+///
+/// Every settable size is served, ordered by width and then height as a
+/// display driver lists its modes, unless `max` is non-zero and smaller than
+/// the number of sizes. The bound then keeps the `max` largest sizes by pixel
+/// count, ties going to the wider size, and always keeps the desktop (the
+/// first entry of `settable`), which is the adapter display mode. The
+/// largest sizes stay because they are the display's own and the ones a
+/// bounded menu is least able to do without; the smallest go first. The
+/// bound is on what a menu shows, not on what a fullscreen request may set,
+/// since this never touches [`select_mode_sizes`]' list. `max` comes from
+/// `display.maxResolutions`, 0 for no bound.
+#[must_use]
+pub fn served_sizes(settable: &[(u32, u32)], max: usize) -> Vec<(u32, u32)> {
+    let Some(&desktop) = settable.first() else {
+        return Vec::new();
+    };
+    let mut sizes = settable.to_vec();
+    sizes.sort_unstable();
+    sizes.dedup();
+    if max == 0 || sizes.len() <= max {
+        return sizes;
+    }
+    let mut by_area = sizes;
+    by_area.sort_unstable_by_key(|&size| Reverse((pixels(size), size)));
+    by_area.truncate(max);
+    if !by_area.contains(&desktop) {
+        by_area.pop();
+        by_area.push(desktop);
+    }
+    by_area.sort_unstable();
+    by_area
+}
+
+/// The refresh rate a Win32 mode means: its own, or `fallback` for Win32's "default" of 0 or 1.
+///
+/// `EnumDisplaySettings` reports 0 or 1 for a display whose rate it does not
+/// know; neither is a rate a game can ask for.
+#[must_use]
+pub const fn effective_refresh(hz: u32, fallback: u32) -> u32 {
+    if hz > 1 { hz } else { fallback }
+}
+
+/// The modes the adapter reads from Win32's list at the desktop's colour depth.
+///
+/// Each listed `((width, height), refresh_hz)` with its rate passed through
+/// [`effective_refresh`] against the desktop's rate, followed by the desktop
+/// mode itself, which a display that lists its own size only at other rates
+/// would otherwise leave out. Unsorted and possibly repeated; [`served_modes`]
+/// orders and dedups.
+#[must_use]
+pub fn listed_modes(
+    listed: impl IntoIterator<Item = ((u32, u32), u32)>,
+    desktop: ((u32, u32), u32),
+) -> Vec<((u32, u32), u32)> {
+    let (_, desktop_hz) = desktop;
+    listed
+        .into_iter()
+        .map(|(size, hz)| (size, effective_refresh(hz, desktop_hz)))
+        .chain(core::iter::once(desktop))
+        .collect()
+}
+
+/// The modes `EnumAdapterModes` serves: every listed refresh rate of each served size.
+///
+/// `modes` is the Win32 list as `((width, height), refresh_hz)` at the
+/// desktop's colour depth. Each mode whose size is in `served` is kept once,
+/// ordered by width, then height, then refresh rate, lowest first, so each
+/// size's rates sit together the way a driver lists them.
+#[must_use]
+pub fn served_modes(
+    modes: impl IntoIterator<Item = ((u32, u32), u32)>,
+    served: &[(u32, u32)],
+) -> Vec<((u32, u32), u32)> {
+    let mut kept: Vec<((u32, u32), u32)> = modes
+        .into_iter()
+        .filter(|(size, _)| served.contains(size))
+        .collect();
+    kept.sort_unstable();
+    kept.dedup();
+    kept
 }
 
 /// The positions in a mode list of the modes whose size is served.

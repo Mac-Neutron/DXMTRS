@@ -1081,42 +1081,6 @@ impl Presenter {
         drawable
     }
 
-    /// Applies D3D9 gamma `lut` from `src` into `dst` (render-sized `BGRA8Unorm` texture).
-    ///
-    /// # Safety
-    ///
-    /// `cmdbuf`, `src`, and `dst` are live Metal objects.
-    pub unsafe fn encode_d3d9_gamma_to_texture(
-        &self,
-        cmdbuf: u64,
-        (src, dst): (u64, u64),
-        dst_size: (u32, u32),
-        lut: &[u16; 1024],
-        wait: impl FnOnce(u64),
-        update: impl FnOnce(u64),
-    ) {
-        if src == 0 || dst == 0 {
-            return;
-        }
-        // SAFETY: caller's promise for live `cmdbuf`, `src`, and `dst`.
-        unsafe {
-            self.encode_d3d9_quad(
-                cmdbuf,
-                &D3d9Quad {
-                    src,
-                    dst,
-                    draw_size: (f64::from(dst_size.0), f64::from(dst_size.1)),
-                    target_fmt: WMT_PIXEL_FORMAT_BGRA8_UNORM,
-                    variant: D3d9PresentVariant::SdrGamma,
-                    gamma: Some(lut),
-                    peak_edr: 1.0,
-                },
-                wait,
-                update,
-            );
-        }
-    }
-
     /// Encodes a fullscreen D3D9 present/gamma quad described by `quad`.
     ///
     /// # Safety
@@ -1595,6 +1559,14 @@ impl D3d9PresentVariant {
     }
 }
 
+/// BT.2408's HDR reference white in nits: where the HDR picture puts the screen's SDR white.
+///
+/// Matches `dxmt_command.metal`'s `REFERENCE_WHITE_NITS`, so 203 nits show at EDR `1.0`.
+const REFERENCE_WHITE_NITS: f32 = 203.0;
+
+/// Top of PQ and of BT.2446, in nits.
+const PQ_PEAK_NITS: f32 = 10000.0;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct D3D9HdrUniforms {
@@ -1608,8 +1580,8 @@ const _: () = assert!(size_of::<[u16; 1024]>() == 2048);
 const _: () = assert!(size_of::<D3D9HdrUniforms>() == 16);
 
 fn d3d9_hdr_uniforms(peak: f32) -> D3D9HdrUniforms {
-    let l_hdr_nits = peak * 100.0;
-    let p_hdr = 32.0_f32.mul_add((l_hdr_nits / 10000.0).powf(1.0 / 2.4), 1.0);
+    let l_hdr_nits = (peak.max(1.0) * REFERENCE_WHITE_NITS).min(PQ_PEAK_NITS);
+    let p_hdr = 32.0_f32.mul_add((l_hdr_nits / PQ_PEAK_NITS).powf(1.0 / 2.4), 1.0);
     let log2_p_hdr = p_hdr.log2();
     let inv_p_minus_one = 1.0 / (p_hdr - 1.0);
     D3D9HdrUniforms {

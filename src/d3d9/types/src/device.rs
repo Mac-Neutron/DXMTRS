@@ -313,7 +313,7 @@ pub const D3DFMT_YV12: u32 = 0x3231_5659;
 pub const D3DFMT_NV12: u32 = 0x3231_564E;
 /// `MAKEFOURCC('A','T','I','1')` — ATI1N / BC4 single-channel block format.
 pub const D3DFMT_ATI1: u32 = 0x3149_5441;
-/// `MAKEFOURCC('A','T','I','2')`: ATI2N / BC5 two-channel block format, which no create takes.
+/// `MAKEFOURCC('A','T','I','2')`: ATI2N / BC5 two-channel block format (3Dc).
 pub const D3DFMT_ATI2: u32 = 0x3249_5441;
 
 // ── D3D9 sampler state types ──
@@ -387,6 +387,12 @@ pub const D3DFMT_DF16: u32 = 0x3631_4644; // 'DF16'
 
 /// `MAKEFOURCC('R','E','S','Z')`: probed to detect the depth-resolve hack.
 pub const D3DFMT_RESZ: u32 = 0x5A53_4552;
+
+/// `MAKEFOURCC('N','U','L','L')`: a render-target format with no colour storage.
+///
+/// Bound as render target 0 over a depth surface it takes no colour write,
+/// so a depth-only pass needs no colour target beside the depth surface.
+pub const D3DFMT_NULL: u32 = 0x4C4C_554E;
 
 /// Capability token for alpha-to-coverage, also written to `D3DRS_ADAPTIVETESS_Y`.
 pub const D3DFMT_ATOC: u32 = u32::from_le_bytes(*b"ATOC");
@@ -877,6 +883,13 @@ pub struct D3DCAPS9 {
 // D3DPRESENTFLAG_* bits for D3DPRESENT_PARAMETERS::flags. Only the
 // LOCKABLE_BACKBUFFER bit is honoured today (WoW portrait read-back path).
 pub const D3DPRESENTFLAG_LOCKABLE_BACKBUFFER: u32 = 0x0000_0001;
+pub const D3DPRESENTFLAG_DISCARD_DEPTHSTENCIL: u32 = 0x0000_0002;
+
+/// `CreateDevice` behaviour flag `D3DCREATE_FPU_PRESERVE`.
+///
+/// The device leaves the calling thread's x87 control word as the app set
+/// it, instead of switching it to single precision.
+pub const D3DCREATE_FPU_PRESERVE: u32 = 0x0000_0002;
 
 // D3DPRESENT_INTERVAL_* values of D3DPRESENT_PARAMETERS::PresentationInterval.
 // All but DEFAULT double as the bits of D3DCAPS9::PresentationIntervals; DEFAULT

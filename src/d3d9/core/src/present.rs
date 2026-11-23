@@ -5,11 +5,15 @@
 //! on top of it; the user's `present.maxFps` rides the same ceiling.
 
 use mtld3d_types::{
-    D3DPRESENT_BACK_BUFFERS_MAX, D3DPRESENT_BACK_BUFFERS_MAX_EX, D3DPRESENT_INTERVAL_DEFAULT,
-    D3DPRESENT_INTERVAL_FOUR, D3DPRESENT_INTERVAL_IMMEDIATE, D3DPRESENT_INTERVAL_ONE,
-    D3DPRESENT_INTERVAL_THREE, D3DPRESENT_INTERVAL_TWO, D3DPRESENT_PARAMETERS, D3DSWAPEFFECT_COPY,
+    D3DMULTISAMPLE_NONE, D3DPRESENT_BACK_BUFFERS_MAX, D3DPRESENT_BACK_BUFFERS_MAX_EX,
+    D3DPRESENT_INTERVAL_DEFAULT, D3DPRESENT_INTERVAL_FOUR, D3DPRESENT_INTERVAL_IMMEDIATE,
+    D3DPRESENT_INTERVAL_ONE, D3DPRESENT_INTERVAL_THREE, D3DPRESENT_INTERVAL_TWO,
+    D3DPRESENT_PARAMETERS, D3DPRESENTFLAG_LOCKABLE_BACKBUFFER, D3DSWAPEFFECT_COPY,
     D3DSWAPEFFECT_DISCARD, D3DSWAPEFFECT_FLIPEX,
 };
+
+/// The side of an additional swap chain whose request and window both leave it zero.
+pub const EMPTY_CLIENT_BACK_BUFFER_EXTENT: u32 = 8;
 
 /// Result of mapping a `D3DPRESENT_INTERVAL_*` to the vsync request.
 ///
@@ -78,6 +82,22 @@ pub const fn present_params_are_valid(pp: &D3DPRESENT_PARAMETERS, extended: bool
     )
 }
 
+/// Validate the presentation flags against the back buffer's multisample type.
+///
+/// The `CreateDevice`, `CreateAdditionalSwapChain` and `Reset` contract on
+/// both kinds of device; `false` is the call's `D3DERR_INVALIDCALL`. A
+/// multisampled surface cannot be locked, so `D3DPRESENTFLAG_LOCKABLE_BACKBUFFER`
+/// together with any `MultiSampleType` but `D3DMULTISAMPLE_NONE`
+/// (`D3DMULTISAMPLE_NONMASKABLE` included) asks for a back buffer that cannot
+/// exist. A `Reset` checks this apart from [`present_params_are_valid`]: it is
+/// refused where the new swap chain is built, after a plain device's state
+/// returned to its defaults, so the device then needs another `Reset`.
+#[must_use]
+pub const fn present_flags_are_valid(pp: &D3DPRESENT_PARAMETERS) -> bool {
+    pp.flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER == 0
+        || pp.multi_sample_type == D3DMULTISAMPLE_NONE
+}
+
 #[must_use]
 pub const fn display_sync_for(interval: u32) -> DisplaySync {
     match interval {
@@ -104,6 +124,16 @@ pub const fn interval_divisor(interval: u32) -> u32 {
         D3DPRESENT_INTERVAL_FOUR => 4,
         _ => 1,
     }
+}
+
+/// Whether two intervals ask the layer for the same pacing.
+///
+/// `DEFAULT` and `ONE` do, as does a pattern that names no interval, which runs
+/// at display rate.
+#[must_use]
+pub const fn intervals_pace_alike(a: u32, b: u32) -> bool {
+    display_sync_for(a).enabled() == display_sync_for(b).enabled()
+        && interval_divisor(a) == interval_divisor(b)
 }
 
 /// The frame-rate ceiling in Hz for `interval` on a `refresh_hz` mode, `0` for none.

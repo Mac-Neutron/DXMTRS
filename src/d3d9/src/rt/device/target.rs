@@ -23,7 +23,7 @@ use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_BGRA8_U
 
 use super::{CoreDevice, DepthRef};
 
-/// A colour target: the back buffer, or one level (and cube face) of a render-target texture.
+/// A colour target: the back buffer, one level of a render-target texture, or no colour target.
 ///
 /// The source of [`CoreDevice::copy`] (DXMTRS C4c-4b) and of [`CoreDevice::stretch`] (DXMTRS
 /// C4c-4c) may also name a level of a colour texture that is no target.
@@ -36,6 +36,8 @@ pub enum TargetRef {
         level: u32,
         face: Option<u32>,
     },
+    /// No colour target (`D3DFMT_NULL`): draws pass through to the bound depth-stencil alone.
+    Null,
 }
 
 /// A target's shape: what a draw checks and keys on, without holding the texture.
@@ -94,6 +96,7 @@ impl CoreDevice {
                 samples: back_buffer.drawn().2,
             }),
             TargetRef::Texture { id, level, face } => self.texture_shape(id, level, face),
+            TargetRef::Null => None,
         }
     }
 
@@ -117,6 +120,7 @@ impl CoreDevice {
                 }
             }),
             TargetRef::Texture { id, .. } => self.texture_target(id, shape),
+            TargetRef::Null => None,
         }
     }
 
@@ -125,7 +129,7 @@ impl CoreDevice {
     /// False, and nothing changed, when it does not resolve. A change ends the open render pass,
     /// whose attachment is the old target.
     pub fn set_target(&mut self, target: TargetRef) -> bool {
-        if self.shape(target).is_none() {
+        if !matches!(target, TargetRef::Null) && self.shape(target).is_none() {
             return false;
         }
         if target != self.target {
@@ -151,9 +155,15 @@ impl CoreDevice {
     }
 
     /// The current target's width and height; `None` when it does not resolve.
+    ///
+    /// A `Null` target 0 reports the bound depth-stencil's size.
     #[must_use]
     pub fn target_size(&self) -> Option<(u32, u32)> {
-        self.shape(self.target).map(|t| (t.width, t.height))
+        if matches!(self.target, TargetRef::Null) {
+            self.depth_size()
+        } else {
+            self.shape(self.target).map(|t| (t.width, t.height))
+        }
     }
 
     /// The `WMTPixelFormat` the current target is stored in; `None` when it does not resolve.
@@ -170,6 +180,9 @@ impl CoreDevice {
     /// for an empty slot, one whose target or target 0 does not resolve, and that one.
     #[must_use]
     pub fn clear_size(&self, slot: usize) -> Option<(u32, u32)> {
+        if matches!(self.target, TargetRef::Null) {
+            return None;
+        }
         let shape = self.shape(self.slot_target(slot)?)?;
         let first = self.shape(self.target)?;
         let size = (shape.width, shape.height);
@@ -178,10 +191,15 @@ impl CoreDevice {
 
     /// Colour target 0's sample count; 1 when it does not resolve (DXMTRS C4b-3d5).
     ///
-    /// Every draw's key names it, and its pass, pipeline and tile barrier take it.
+    /// A `Null` target 0 takes the bound depth-stencil's sample count. Every draw's key names it,
+    /// and its pass, pipeline and tile barrier take it.
     #[must_use]
     pub fn target_samples(&self) -> u8 {
-        self.shape(self.target).map_or(1, |shape| shape.samples)
+        if matches!(self.target, TargetRef::Null) {
+            self.depth_samples().unwrap_or(1)
+        } else {
+            self.shape(self.target).map_or(1, |shape| shape.samples)
+        }
     }
 
     /// The target bound at colour slot `slot` (0-3): target 0 or an extra; none for an empty one.
@@ -242,16 +260,20 @@ impl CoreDevice {
 
     /// Target 0's size and the `WMTPixelFormat` each slot of the pass set attaches.
     ///
-    /// 0 for a slot not in the set; `None` when target 0 does not resolve. Under `srgb_write`
-    /// (`D3DRS_SRGBWRITEENABLE`) every member is attached through its sRGB twin when every member
-    /// has one, and in its stored format otherwise, as mtld3d decides it: the draw's key names
-    /// these formats.
+    /// 0 for a slot not in the set; `None` when target 0 does not resolve. When target 0 is
+    /// [`TargetRef::Null`], returns the bound depth-stencil's size and `[0; 4]` (`None` when no
+    /// depth-stencil is bound). Under `srgb_write` (`D3DRS_SRGBWRITEENABLE`) each member is
+    /// attached through its own sRGB twin independently when it has one, and in its stored format
+    /// otherwise: the draw's key names these formats.
     #[must_use]
     pub fn target_desc(&self, srgb_write: bool) -> Option<((u32, u32), [u32; 4])> {
+        if matches!(self.target, TargetRef::Null) {
+            let size = self.depth_size()?;
+            return Some((size, [0; 4]));
+        }
         let set = self.pass_set();
         let first = set[0]?;
-        let twins = srgb_write && set.iter().flatten().all(|shape| shape.srgb_format != 0);
-        let formats = set.map(|shape| shape.map_or(0, |shape| shape.attached_format(twins)));
+        let formats = set.map(|shape| shape.map_or(0, |shape| shape.attached_format(srgb_write)));
         Some(((first.width, first.height), formats))
     }
 

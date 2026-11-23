@@ -82,6 +82,11 @@ pub enum ImplicitKind {
     ///
     /// Resolves color handle + dims from the device's current backbuffer.
     Backbuffer,
+    /// Additional swap chain back buffer (`CreateAdditionalSwapChain` -> `GetBackBuffer`).
+    ///
+    /// Owns its own standalone colour target texture, and pins the swap chain it
+    /// belongs to while referenced.
+    SwapChainBackbuffer,
     /// The implicit depth-stencil (`GetDepthStencilSurface`).
     ///
     /// Resolves depth handle + dims + format from the device's current
@@ -233,6 +238,53 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
+            implicit_kind: ImplicitKind::None,
+            container: 0,
+        }));
+        Self {
+            vtbl: &raw const DIRECT3D_SURFACE9_VTBL,
+            refcount: 1,
+            private_refcount: 0,
+            inner,
+        }
+    }
+
+    /// Standalone `D3DFMT_NULL` render-target surface (no Metal texture).
+    ///
+    /// `CreateRenderTarget` with `D3DFMT_NULL`: binds as `TargetRef::Null` so a
+    /// depth-only pass runs without allocating or clearing colour storage. A
+    /// `Lockable == TRUE` target attaches a CPU `PageBox` via
+    /// [`Self::set_lockable_staging`] after creation; a non-lockable one keeps no
+    /// host backing and rejects `LockRect`.
+    pub fn new_null_render_target(
+        device_inner: *mut DeviceInner,
+        width: u32,
+        height: u32,
+        multi_sample: SurfaceMultiSample,
+    ) -> Self {
+        let inner = Box::into_raw(Box::new(SurfaceInner {
+            device_inner,
+            parent_texture: core::ptr::null_mut(),
+            mip_level: 0,
+            cube_face: u32::MAX,
+            standalone_width: width,
+            standalone_height: height,
+            standalone_render_scale: RenderScale::IDENTITY,
+            standalone_format: mtld3d_types::D3DFMT_NULL,
+            standalone_usage: D3DUSAGE_RENDERTARGET,
+            standalone_pool: D3DPOOL_DEFAULT,
+            multi_sample,
+            readback: None,
+            readback_dims: (0, 0),
+            system_memory: None,
+            flags: SurfaceFlags::NULL_TARGET,
+            private_data: PrivateDataStore::default(),
+            dc_lock: DcLockState::default(),
+            lock_flags: 0,
+            state_owner_texture: core::ptr::null_mut(),
+            core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -280,6 +332,7 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -300,20 +353,6 @@ impl Direct3DSurface9 {
     /// [`ImplicitKind`]). `container` is the implicit swapchain wrapper
     /// `GetContainer` returns.
     pub fn new_implicit_backbuffer(device_inner: *mut DeviceInner, container: u64) -> Self {
-        Self::backbuffer(device_inner, container, SurfaceFlags::empty())
-    }
-
-    /// The back buffer of an additional swap chain, which pins that swap chain while referenced.
-    ///
-    /// Shaped like [`Self::new_implicit_backbuffer`]: the swap chain caches it
-    /// and frees it with itself, and it resolves its colour handle live from
-    /// the device. `swap_chain` is the `Direct3DSwapChain9` wrapper that is its
-    /// `GetContainer` and that it pins (see [`SurfaceFlags::PINS_SWAP_CHAIN`]).
-    pub fn new_swap_chain_backbuffer(device_inner: *mut DeviceInner, swap_chain: u64) -> Self {
-        Self::backbuffer(device_inner, swap_chain, SurfaceFlags::PINS_SWAP_CHAIN)
-    }
-
-    fn backbuffer(device_inner: *mut DeviceInner, container: u64, flags: SurfaceFlags) -> Self {
         let inner = Box::into_raw(Box::new(SurfaceInner {
             device_inner,
             parent_texture: core::ptr::null_mut(),
@@ -331,14 +370,67 @@ impl Direct3DSurface9 {
             readback: None,
             readback_dims: (0, 0),
             system_memory: None,
-            flags,
+            flags: SurfaceFlags::empty(),
             private_data: PrivateDataStore::default(),
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::Backbuffer,
             container,
+        }));
+        Self {
+            vtbl: &raw const DIRECT3D_SURFACE9_VTBL,
+            refcount: 0,
+            private_refcount: 0,
+            inner,
+        }
+    }
+
+    /// Back buffer of an additional swap chain, owning its colour target and pinning the chain.
+    ///
+    /// Shaped like [`Self::new_implicit_backbuffer`]: refcount starts at 0,
+    /// forwards the device refcount on the 0↔1 edge, is cached by the swap
+    /// chain and freed with it. Unlike the implicit back buffer, its geometry,
+    /// format, multisampling and core colour texture come from its own
+    /// [`ColorTargetCreateInfo`] rather than following the device across `Reset`.
+    /// `swap_chain` is the `Direct3DSwapChain9` wrapper that is its
+    /// `GetContainer` and that it pins (see [`SurfaceFlags::PINS_SWAP_CHAIN`]).
+    pub fn new_swap_chain_backbuffer(init: &ColorTargetCreateInfo, swap_chain: u64) -> Self {
+        let &ColorTargetCreateInfo {
+            device_inner,
+            width,
+            height,
+            format,
+            usage,
+            render_scale,
+            multi_sample,
+        } = init;
+        let inner = Box::into_raw(Box::new(SurfaceInner {
+            device_inner,
+            parent_texture: core::ptr::null_mut(),
+            mip_level: 0,
+            cube_face: u32::MAX,
+            standalone_width: width,
+            standalone_height: height,
+            standalone_render_scale: render_scale,
+            standalone_format: format,
+            standalone_usage: usage,
+            standalone_pool: D3DPOOL_DEFAULT,
+            multi_sample,
+            readback: None,
+            readback_dims: (0, 0),
+            system_memory: None,
+            flags: SurfaceFlags::PINS_SWAP_CHAIN,
+            private_data: PrivateDataStore::default(),
+            dc_lock: DcLockState::default(),
+            lock_flags: 0,
+            state_owner_texture: core::ptr::null_mut(),
+            core_texture: None,
+            departed_textures: None,
+            implicit_kind: ImplicitKind::SwapChainBackbuffer,
+            container: swap_chain,
         }));
         Self {
             vtbl: &raw const DIRECT3D_SURFACE9_VTBL,
@@ -376,6 +468,7 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::DepthStencil,
             container,
         }));
@@ -422,6 +515,7 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: parent_texture,
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -472,6 +566,7 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: parent_texture,
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -516,6 +611,7 @@ impl Direct3DSurface9 {
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -529,18 +625,22 @@ impl Direct3DSurface9 {
 
     /// System-memory offscreen plain surface.
     ///
-    /// Created by `CreateOffscreenPlainSurface` with `D3DPOOL_SYSTEMMEM`.
-    /// Backed by a page-aligned PE-heap buffer that `GetRenderTargetData` blits
-    /// into and `LockRect` reads back — the destination half of the conformance
-    /// / portrait readback path.
+    /// Created by `CreateOffscreenPlainSurface` with `D3DPOOL_SYSTEMMEM` or
+    /// `D3DPOOL_SCRATCH`. Backed by a page-aligned PE-heap buffer that
+    /// `GetRenderTargetData` blits into and `LockRect` reads back. When
+    /// `unwritten` is true the backing was allocated unzeroed and zero-fill is
+    /// deferred until the CPU reads it or a whole-surface read-back overwrites
+    /// it.
     pub fn new_system_memory(
         device_inner: *mut DeviceInner,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         format: u32,
         pool: u32,
         backing: PageBox,
+        unwritten: bool,
     ) -> Self {
+        let mut flags = SurfaceFlags::empty();
+        flags.set(SurfaceFlags::SYSTEM_MEMORY_UNWRITTEN, unwritten);
         let inner = Box::into_raw(Box::new(SurfaceInner {
             device_inner,
             parent_texture: core::ptr::null_mut(),
@@ -556,12 +656,13 @@ impl Direct3DSurface9 {
             readback: None,
             readback_dims: (0, 0),
             system_memory: Some(HeldPages::new(backing, PageHolder::Surface)),
-            flags: SurfaceFlags::empty(),
+            flags,
             private_data: PrivateDataStore::default(),
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
             core_texture: None,
+            departed_textures: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
         }));
@@ -607,7 +708,7 @@ impl Direct3DSurface9 {
         unsafe { &*self.vtbl }
     }
 
-    /// Whether this is a back buffer: the implicit one or an additional swap chain's.
+    /// Whether this is the device's implicit back buffer.
     pub fn is_back_buffer(&self) -> bool {
         self.inner().implicit_kind == ImplicitKind::Backbuffer
     }
@@ -620,19 +721,50 @@ impl Direct3DSurface9 {
         self.inner().parent_texture
     }
 
+    /// The D3D9 format `GetDesc` reports for this surface.
+    #[must_use]
+    pub fn reported_format(&self) -> u32 {
+        let inner = self.inner();
+        // SAFETY: `parent_texture` is null or the live parent texture kept alive by this surface.
+        unsafe { inner.parent_texture.as_ref() }
+            .map_or_else(|| inner.live_format(), Direct3DTexture9::d3d_format)
+    }
+
+    /// The logical `(width, height)` `GetDesc` reports for this surface.
+    #[must_use]
+    pub fn reported_extent(&self) -> (u32, u32) {
+        let inner = self.inner();
+        // SAFETY: `parent_texture` is null or the live parent texture kept alive by this surface.
+        unsafe { inner.parent_texture.as_ref() }.map_or_else(
+            || (inner.live_width(), inner.live_height()),
+            |tex| {
+                let level = inner.mip_level as usize;
+                (tex.inner().mip_width(level), tex.inner().mip_height(level))
+            },
+        )
+    }
+
     /// Gives a standalone render target or depth-stencil its core texture's id.
-    pub fn set_core_texture(&mut self, id: mtld3d_core::ids::TextureId) {
-        // SAFETY: `self.inner` is the live `SurfaceInner` of this wrapper, just made by
-        // `new_color_target`; access is exclusive under the device's API lock.
-        unsafe { &mut *self.inner }.core_texture = Some(id);
+    pub fn set_core_texture(
+        &mut self,
+        id: mtld3d_core::ids::TextureId,
+        departed_textures: std::sync::Arc<std::sync::Mutex<Vec<mtld3d_core::ids::TextureId>>>,
+    ) {
+        // SAFETY: `self.inner` is the live `SurfaceInner` of this wrapper;
+        // access is exclusive under the device's API lock.
+        let inner = unsafe { &mut *self.inner };
+        inner.core_texture = Some(id);
+        inner.departed_textures = Some(departed_textures);
     }
 
     /// The colour target this surface is to the device.
     ///
-    /// The back buffer for a back-buffer surface (the implicit one, and an additional swap
-    /// chain's, which aliases it), a render-target texture's level and face, or a
-    /// standalone render target's own core texture; `None` for a surface the core does not draw
-    /// to (a depth-stencil, an offscreen plain surface, a level of a texture that is no target).
+    /// The back buffer for the device's implicit back-buffer surface,
+    /// [`TargetRef::Null`] for a `D3DFMT_NULL` render target, a standalone render
+    /// target's or additional swap chain back buffer's own core texture, or a
+    /// render-target texture's level and face; `None` for a surface the core
+    /// does not draw to (a depth-stencil, an offscreen plain surface, a level of
+    /// a texture that is no target).
     pub fn core_target(&self) -> Option<crate::rt::device::TargetRef> {
         use crate::rt::device::TargetRef;
         if self.is_back_buffer() {
@@ -641,6 +773,9 @@ impl Direct3DSurface9 {
         let inner = self.inner();
         if inner.standalone_usage & D3DUSAGE_DEPTHSTENCIL != 0 {
             return None;
+        }
+        if mtld3d_core::format::is_null_render_target(self.reported_format()) {
+            return Some(TargetRef::Null);
         }
         if let Some(id) = inner.core_texture {
             return Some(TargetRef::Texture {
@@ -936,13 +1071,17 @@ impl Direct3DSurface9 {
 
     /// Record that a read-back rewrote this surface's system-memory bytes.
     ///
-    /// A standalone offscreen surface needs nothing: `LockRect` reads the
-    /// backing the blit just wrote. A texture level re-arms the level's dirty
-    /// state, so a later `UpdateTexture` from it copies the new content and a
-    /// bind for sampling uploads it.
+    /// A standalone offscreen surface clears any deferred zero-fill on the
+    /// active region and zeroes only its row padding so `LockRect` sees clean
+    /// padding bytes. A texture level re-arms the level's dirty state, so a
+    /// later `UpdateTexture` from it copies the new content and a bind for
+    /// sampling uploads it.
     pub fn note_system_memory_written(&self) {
         let inner = self.inner();
         if inner.parent_texture.is_null() {
+            // SAFETY: `self.inner` is a live `SurfaceInner`; access is exclusive
+            // under the device's API lock.
+            unsafe { &mut *self.inner }.readback_overwrote_system_memory();
             return;
         }
         let face = (inner.cube_face != u32::MAX).then_some(inner.cube_face);
@@ -967,7 +1106,9 @@ impl Direct3DSurface9 {
         if !self.inner().parent_texture.is_null() {
             return None;
         }
-        let inner = self.inner();
+        // SAFETY: `self.inner` is a live `SurfaceInner`; access is exclusive under the API lock.
+        let inner = unsafe { &mut *self.inner };
+        inner.expose_system_memory();
         let fmt = mtld3d_core::format::map_d3d_format(inner.standalone_format)?;
         let pitch = mtld3d_core::format::block_row_pitch(
             inner.standalone_width,
@@ -1022,6 +1163,14 @@ bitflags::bitflags! {
         /// surface. Clear on the device's own implicit back buffer, which the
         /// device keeps.
         const PINS_SWAP_CHAIN = 1 << 3;
+        /// System-memory `PageBox` allocated unzeroed and not yet exposed or overwritten.
+        ///
+        /// Cleared on first CPU read (`LockRect`, `GetDC`, `UpdateSurface` source)
+        /// by zeroing the logical bytes, or on a whole-surface read-back by
+        /// zeroing only the row padding.
+        const SYSTEM_MEMORY_UNWRITTEN = 1 << 4;
+        /// Standalone `D3DFMT_NULL` render target with no Metal texture.
+        const NULL_TARGET = 1 << 5;
     }
 }
 
@@ -1142,6 +1291,11 @@ struct SurfaceInner {
     /// The store's id for a `CreateRenderTarget` or `CreateDepthStencilSurface` surface, forgotten
     /// at this surface's finalize; `None` for every other surface.
     core_texture: Option<mtld3d_core::ids::TextureId>,
+    /// Queue shared with the owning device so finalization retires `core_texture`
+    ///
+    /// Pushed at finalize without dereferencing `device_inner`, which may be
+    /// mutably borrowed on the caller's stack during `bound_rt` or teardown.
+    departed_textures: Option<std::sync::Arc<std::sync::Mutex<Vec<mtld3d_core::ids::TextureId>>>>,
 }
 
 /// The GDI objects backing an outstanding `GetDC`.
@@ -1241,12 +1395,57 @@ impl SurfaceInner {
 }
 
 impl SurfaceInner {
+    /// Whether this surface's extent, scale, multisampling and format follow the device's.
+    ///
+    /// True for the device's own implicit back buffer and auto depth-stencil;
+    /// false for an additional swap chain's back buffer, which keeps its own.
+    const fn follows_device(&self) -> bool {
+        matches!(
+            self.implicit_kind,
+            ImplicitKind::Backbuffer | ImplicitKind::DepthStencil
+        ) && !self.device_inner.is_null()
+    }
+
+    /// Zero the logical bytes of an unwritten standalone system-memory backing.
+    fn expose_system_memory(&mut self) {
+        if !self.flags.contains(SurfaceFlags::SYSTEM_MEMORY_UNWRITTEN) {
+            return;
+        }
+        self.flags.remove(SurfaceFlags::SYSTEM_MEMORY_UNWRITTEN);
+        if let Some(page) = self.system_memory.as_mut() {
+            page.zero_logical();
+        }
+    }
+
+    /// Clear the unwritten marker after a whole-surface read-back and zero only row padding.
+    fn readback_overwrote_system_memory(&mut self) {
+        if !self.flags.contains(SurfaceFlags::SYSTEM_MEMORY_UNWRITTEN) {
+            return;
+        }
+        self.flags.remove(SurfaceFlags::SYSTEM_MEMORY_UNWRITTEN);
+        let Some(page) = self.system_memory.as_mut() else {
+            return;
+        };
+        if let Some(fmt) = mtld3d_core::format::map_d3d_format(self.standalone_format) {
+            let bpp = fmt.bytes_per_pixel();
+            if bpp > 0 {
+                let rows = self.standalone_height as usize;
+                let row_bytes = (self.standalone_width as usize).saturating_mul(bpp as usize);
+                let pitch =
+                    mtld3d_core::format::linear_row_pitch(self.standalone_width, bpp) as usize;
+                page.zero_row_padding(rows, row_bytes, pitch);
+            }
+            return;
+        }
+        page.zero_logical();
+    }
+
     /// Live multisample configuration.
     ///
     /// Both implicit surfaces take the swap chain's, which is the only
     /// configuration `CreateDevice` and `Reset` ever give them.
     fn live_multi_sample(&self) -> SurfaceMultiSample {
-        if self.implicit_kind != ImplicitKind::None && !self.device_inner.is_null() {
+        if self.follows_device() {
             // SAFETY: `device_inner` is the live owning device (see above).
             let dev = unsafe { &*self.device_inner };
             return SurfaceMultiSample {
@@ -1264,7 +1463,7 @@ impl SurfaceInner {
     /// (backbuffer and auto depth-stencil share the device dimensions), else
     /// the stored snapshot.
     fn live_width(&self) -> u32 {
-        if self.implicit_kind != ImplicitKind::None && !self.device_inner.is_null() {
+        if self.follows_device() {
             // SAFETY: `device_inner` is the live owning device (see above).
             unsafe { (*self.device_inner).backbuffer_width() }
         } else {
@@ -1274,7 +1473,7 @@ impl SurfaceInner {
 
     /// Live surface height — counterpart to [`Self::live_width`].
     fn live_height(&self) -> u32 {
-        if self.implicit_kind != ImplicitKind::None && !self.device_inner.is_null() {
+        if self.follows_device() {
             // SAFETY: `device_inner` is the live owning device (see above).
             unsafe { (*self.device_inner).backbuffer_height() }
         } else {
@@ -1288,7 +1487,7 @@ impl SurfaceInner {
     /// texture the device recreates at that scale on a `Reset` or a window
     /// resize), else the stored snapshot.
     fn live_render_scale(&self) -> RenderScale {
-        if self.implicit_kind != ImplicitKind::None && !self.device_inner.is_null() {
+        if self.follows_device() {
             // SAFETY: `device_inner` is the live owning device (see above).
             unsafe { (*self.device_inner).render_scale() }
         } else {
@@ -1301,7 +1500,7 @@ impl SurfaceInner {
     /// Implicit surfaces follow the device across Reset, including a change
     /// between A8 and X8 that keeps the same BGRA8 backbuffer storage.
     fn live_format(&self) -> u32 {
-        if self.implicit_kind != ImplicitKind::None && !self.device_inner.is_null() {
+        if self.follows_device() {
             // SAFETY: `device_inner` is the live owning device (see above).
             let device = unsafe { &*self.device_inner };
             if self.implicit_kind == ImplicitKind::DepthStencil {
@@ -1432,16 +1631,26 @@ extern "system" fn surface_release(this: *mut c_void) -> u32 {
         // additional swap chain. Decided before the engine call, which can
         // free an ordinary surface and, through the device release it
         // forwards, tear down a device whose binding was this surface's other
-        // reference; a release past zero is not the last reference.
-        let swap_chain = {
+        // reference; a release past zero is not the last reference. Hold the
+        // owning device across `com_release` -> `unpin_for_backbuffer` so
+        // `finalize_swapchain` can still forget the back buffer's core texture
+        // through `device_inner`.
+        let (swap_chain, device) = {
             // SAFETY: live wrapper per the thunk; the borrow ends before the engine call.
             let obj = unsafe { &*this.cast::<Direct3DSurface9>() };
             if obj.refcount == 1 && obj.private_refcount == 0 {
-                obj.pinned_swap_chain()
+                let sc = obj.pinned_swap_chain();
+                let dev = if sc != 0 {
+                    obj.inner().device_wrapper()
+                } else {
+                    core::ptr::null_mut()
+                };
+                (sc, dev)
             } else {
-                0
+                (0, core::ptr::null_mut())
             }
         };
+        crate::device::device_wrapper_add_ref(device);
         // SAFETY: a standalone/implicit surface — the central engine finalizes it
         // (or forwards the device release for a device-owned implicit surface).
         let rc = unsafe { crate::com_ref::com_release::<Direct3DSurface9>(this) };
@@ -1451,6 +1660,7 @@ extern "system" fn surface_release(this: *mut c_void) -> u32 {
             // chain and this surface with it, so it comes last.
             unsafe { crate::swapchain::unpin_for_backbuffer(swap_chain) };
         }
+        crate::device::device_wrapper_release(device);
         return rc;
     }
     // A texture sub-surface: drop our own refcount and free the surface Box once
@@ -1500,13 +1710,14 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
     // `Box::into_raw(SurfaceInner)` from `Self::new` and no other
     // reference can survive.
     let inner = unsafe { Box::from_raw(inner_ptr) };
-    // A device-owned implicit surface must reach this point ONLY via
-    // `finalize_implicit_surface` at device teardown (which clears `implicit_kind`
-    // first). Any other path here with a live `implicit_kind` is a gating bug
-    // that would free a surface the device still hands out — fail loudly.
+    // An implicit surface must reach this point ONLY via
+    // `finalize_implicit_surface` at its owner's teardown (which clears
+    // `implicit_kind` first). Any other path here with a live `implicit_kind`
+    // is a gating bug that would free a surface the owner still hands out:
+    // fail loudly.
     debug_assert!(
         inner.implicit_kind == ImplicitKind::None,
-        "device-owned implicit surface finalized outside device teardown"
+        "implicit surface finalized outside its owner's teardown"
     );
     // Same invariant for a container-cached sub-surface: only
     // `finalize_cached_surface` (from `finalize_texture`) may bring one here, and
@@ -1516,16 +1727,16 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
         !inner.flags.contains(SurfaceFlags::CONTAINER_CACHED),
         "container-cached sub-resource surface finalized outside its container's teardown"
     );
-    // A standalone render target or depth-stencil owns its core texture:
-    // the store forgets it; the closures already recorded hold their own reference.
+    // A standalone render target, depth-stencil, or additional swap chain's
+    // back buffer owns its core texture: queue its id for `DeviceInner` to
+    // forget without re-entrantly borrowing `device_inner`.
     if let Some(id) = inner.core_texture
-        && !inner.device_inner.is_null()
+        && let Some(departed) = inner.departed_textures.as_ref()
     {
-        // SAFETY: a standalone surface forwards a device reference for its public lifetime, and
-        // a bound one is released by the device's teardown before its core device goes.
-        let dev = unsafe { &mut *inner.device_inner };
-        dev.clear_core_draw_cache();
-        dev.core_mut().forget_texture(id);
+        departed
+            .lock()
+            .expect("departed_textures mutex poisoned")
+            .push(id);
     }
     // A texture shell has nothing of the texture to give back here. The
     // reference `GetSurfaceLevel` / `GetCubeMapSurface` took on it is dropped by
@@ -1558,31 +1769,31 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
     drop(unsafe { Box::from_raw(this) });
 }
 
-/// Finalize a device-owned implicit surface at device teardown.
+/// Finalize an owner-held implicit surface at its owner's teardown.
 ///
-/// Drop its `SurfaceInner` — which releases any registered `D3DSPD_IUNKNOWN`
-/// private-data object via `PrivateDataStore` — and free the wrapper shell.
-/// Device-owned implicit surfaces are never finalized by `surface_release`
+/// Drop its `SurfaceInner`, releasing any registered `D3DSPD_IUNKNOWN`
+/// private-data object via `PrivateDataStore`, and free the wrapper shell.
+/// Owner-held implicit surfaces are never finalized by `surface_release`
 /// (they outlive the app's `Release`), so this is the single finalize site,
-/// called once from `device_release` per cached surface.
+/// called once from `device_release` or `finalize_swapchain` per cached surface.
 ///
 /// # Safety
 /// `ptr` must be `0` or a live `*mut Direct3DSurface9` produced by
-/// `new_implicit_backbuffer`/`new_implicit_depth_stencil`; after this returns the
-/// pointer is dangling and must not be used again.
+/// `new_implicit_backbuffer`/`new_swap_chain_backbuffer`/`new_implicit_depth_stencil`;
+/// after this returns the pointer is dangling and must not be used again.
 pub unsafe fn finalize_implicit_surface(ptr: u64) {
     if ptr == 0 {
         return;
     }
     let surf = ptr as *mut Direct3DSurface9;
-    // Mark this surface as no longer device-owned before finalizing: teardown is
+    // Mark this surface as no longer owner-held before finalizing: teardown is
     // the one legitimate finalize of an implicit surface, so clearing the kind
     // lets `finalize_surface`'s invariant assert catch every OTHER path.
     // SAFETY: `surf` is the live cached implicit surface wrapper.
     let inner_ptr = unsafe { (*surf).inner };
     // SAFETY: `inner_ptr` is its valid `SurfaceInner` for the duration of teardown.
     unsafe { (*inner_ptr).implicit_kind = ImplicitKind::None };
-    // SAFETY: the caller guarantees `ptr` is a live device-owned implicit
+    // SAFETY: the caller guarantees `ptr` is a live owner-held implicit
     // surface wrapper; access is exclusive (D3D9 objects are single-threaded,
     // or serialised by the device `ApiLock` under `D3DCREATE_MULTITHREADED`),
     // so nothing else references it at teardown.
@@ -1687,6 +1898,7 @@ pub unsafe fn detach_implicit_surface(held: &HeldSurface) {
     let device = unsafe { &*inner.device_inner };
     if kind == ImplicitKind::DepthStencil {
         inner.core_texture = device.core_auto_depth();
+        inner.departed_textures = Some(device.departed_textures_handle());
     }
     inner.standalone_width = held.width;
     inner.standalone_height = held.height;
@@ -2196,6 +2408,7 @@ extern "system" fn surface_lock_rect(
         let (pool, usage) = (tex.d3d_pool(), tex.d3d_usage());
         if pool == D3DPOOL_DEFAULT
             && usage & D3DUSAGE_DYNAMIC == 0
+            && !mtld3d_core::format::locks_in_default_pool_without_dynamic(tex.d3d_format())
             && !obj
                 .inner()
                 .flags
@@ -2260,6 +2473,9 @@ extern "system" fn surface_lock_rect(
     if obj.inner().core_lockable_render_target().is_some() {
         return lockable_rt_lock_rect(&obj, locked_rect, rect, flags);
     }
+    if obj.inner().implicit_kind == ImplicitKind::SwapChainBackbuffer {
+        return swapchain_backbuffer_lock_readback(&obj, locked_rect, rect, flags);
+    }
     if obj.inner().core_texture.is_some()
         && obj.inner().standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0
     {
@@ -2270,6 +2486,12 @@ extern "system" fn surface_lock_rect(
     }
     if obj.inner().system_memory.is_some() {
         return systemmem_lock_rect(&obj, locked_rect, rect);
+    }
+    if obj.inner().flags.contains(SurfaceFlags::NULL_TARGET) {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "IDirect3DSurface9::LockRect on a non-lockable NULL render target → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
     }
     mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
         "IDirect3DSurface9::LockRect on a depth-stencil surface (a lockable depth format \
@@ -2385,6 +2607,178 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
         inner.readback_dims = (0, 0);
     }
     hr
+}
+
+/// Synchronous read-only lock of a non-lockable additional swap chain back buffer.
+///
+/// Mirrors [`backbuffer_lock_readback`], reading from the swap chain's own
+/// `core_texture` (`TargetRef::Texture`) into `inner.readback` and rejecting
+/// any lock that omits `D3DLOCK_READONLY`.
+fn swapchain_backbuffer_lock_readback(
+    obj: &Direct3DSurface9,
+    locked_rect: *mut D3DLOCKED_RECT,
+    rect: *const c_void,
+    flags: u32,
+) -> i32 {
+    if flags & D3DLOCK_READONLY == 0 {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "swap-chain backbuffer LockRect without D3DLOCK_READONLY (flags={flags:#x}) on a \
+             non-lockable swap chain → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    let inner_ptr = obj.inner;
+    // SAFETY: `inner_ptr` is the live `SurfaceInner` allocation for this wrapper; access is
+    // exclusive under the device API lock.
+    let inner = unsafe { &mut *inner_ptr };
+    if let Err(hr) = inner.try_begin_lock() {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "swap-chain backbuffer LockRect while already locked or a GetDC is outstanding → INVALIDCALL"
+        );
+        return hr;
+    }
+    let hr = swapchain_backbuffer_read_into_lock(inner, locked_rect, rect);
+    if hr == D3D_OK {
+        inner.lock_flags = flags;
+    } else {
+        let _ = inner.try_end_lock();
+    }
+    hr
+}
+
+/// Read a non-lockable additional swap chain back buffer into `inner.readback`.
+fn swapchain_backbuffer_read_into_lock(
+    inner: &mut SurfaceInner,
+    locked_rect: *mut D3DLOCKED_RECT,
+    rect: *const c_void,
+) -> i32 {
+    let full_w = inner.live_width();
+    let full_h = inner.live_height();
+    let (x, y, w, h) = parse_surface_rect(rect, full_w, full_h);
+    if w == 0 || h == 0 {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "swap-chain backbuffer LockRect: the locked area is empty → INVALIDCALL");
+        return D3DERR_INVALIDCALL;
+    }
+    let format = inner.live_format();
+    let Some(fmt) = mtld3d_core::format::map_d3d_format(format) else {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "colour-surface LockRect: no format mapping for {format:#x} → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    };
+    let bpp = fmt.bytes_per_pixel();
+    if bpp == 0 {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "colour-surface LockRect: block-compressed format {format:#x} has no read-back layout → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    let Some(target_id) = inner.core_texture else {
+        return D3DERR_INVALIDCALL;
+    };
+    let bytes_per_row = mtld3d_core::format::linear_row_pitch(full_w, bpp);
+    let bytes = (bytes_per_row as usize).saturating_mul(full_h as usize);
+    if bytes == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+    // allocation from the page.
+    let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if let Err(hr) = dev.encoder_status() {
+        return hr;
+    }
+    let mut page = PageBox::new_zeroed(bytes);
+    let read = read_swapchain_target(dev.core_mut(), target_id, inner, &mut page, bytes_per_row);
+    if let Err(hr) = dev.encoder_status() {
+        return hr;
+    }
+    if !read {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: LockRect of swap-chain backbuffer did not read {full_w}x{full_h} → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    let offset = (y as usize)
+        .saturating_mul(bytes_per_row as usize)
+        .saturating_add((x as usize).saturating_mul(bpp as usize));
+    if offset >= page.len() {
+        return D3DERR_INVALIDCALL;
+    }
+    let locked = D3DLOCKED_RECT {
+        pitch: bytes_per_row.cast_signed(),
+        bits: page.as_mut_slice()[offset..].as_mut_ptr().cast::<c_void>(),
+    };
+    // SAFETY: `locked_rect` is non-null (checked by the caller before entry) and per the D3D9 ABI
+    // points to a writable `D3DLOCKED_RECT` slot owned by the caller; alignment is not assumed.
+    unsafe { OutPtr::write_opt(locked_rect, locked) };
+    inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
+    D3D_OK
+}
+
+/// Copy a swap chain back buffer's `core_texture` into `page`, resolving MSAA when needed.
+fn read_swapchain_target(
+    core: &mut crate::rt::device::CoreDevice,
+    target_id: mtld3d_core::ids::TextureId,
+    inner: &SurfaceInner,
+    page: &mut PageBox,
+    bytes_per_row: u32,
+) -> bool {
+    let full_w = inner.live_width();
+    let full_h = inner.live_height();
+    let source = crate::rt::device::TargetRef::Texture {
+        id: target_id,
+        level: 0,
+        face: None,
+    };
+    if inner.multi_sample.sample_count <= 1 {
+        return core.read_back_logical(
+            source,
+            full_w,
+            full_h,
+            page.as_mut_slice(),
+            bytes_per_row as usize,
+        );
+    }
+    let Some(pixel_format) = core.texture_format(target_id) else {
+        return false;
+    };
+    let bpp = mtld3d_core::format::map_d3d_format(inner.live_format())
+        .map_or(4, |fmt| fmt.bytes_per_pixel().max(1));
+    let resolved_id = mtld3d_core::ids::TextureId::new_unique();
+    let (scaled_w, scaled_h) = inner.live_render_scale().extent(full_w, full_h);
+    core.texture_create(
+        resolved_id,
+        &crate::rt::device::CoreTextureDesc {
+            pixel_format,
+            kind: crate::rt::device::TextureKind::Tex2d,
+            width: scaled_w,
+            height: scaled_h,
+            depth: 1,
+            levels: 1,
+            flags: crate::rt::device::CoreTextureFlags::RENDER_TARGET,
+            srgb_format: 0,
+            block: (1, 1, bpp),
+            samples: 1,
+        },
+    );
+    let resolved = crate::rt::device::TargetRef::Texture {
+        id: resolved_id,
+        level: 0,
+        face: None,
+    };
+    let ok = core.resolve_into(source, resolved)
+        && core.read_back_logical(
+            resolved,
+            full_w,
+            full_h,
+            page.as_mut_slice(),
+            bytes_per_row as usize,
+        );
+    core.forget_texture(resolved_id);
+    ok
 }
 
 /// Synchronous backbuffer readback.
@@ -2692,10 +3086,8 @@ fn systemmem_lock_rect(
     if let Err(hr) = inner.try_begin_lock() {
         return hr;
     }
+    inner.expose_system_memory();
     let full_w = inner.standalone_width;
-    let Some(fmt) = mtld3d_core::format::map_d3d_format(inner.standalone_format) else {
-        return D3DERR_INVALIDCALL;
-    };
     // Standalone SYSTEMMEM/SCRATCH surfaces accept ANY lock rect and return
     // pBits at the RAW, unclamped origin `top*pitch + left*bpp` — the XP
     // accept-invalid behaviour. An out-of-bounds or negative rect yields a
@@ -2709,29 +3101,47 @@ fn systemmem_lock_rect(
         .map_or((0, 0), |r| (r.x1 as isize, r.y1 as isize));
     // Block-compressed surfaces lock at block granularity: the pitch is the
     // bytes per row of blocks (`ceil(width/block_width) * block_bytes`) and a
-    // sub-rect origin steps in whole blocks. Linear formats use the
-    // bytes-per-pixel row stride, rounded up to a 4-byte boundary (D3D9 reports
-    // a 4-byte-aligned pitch and the backing buffer is sized to match).
+    // sub-rect origin steps in whole blocks (except formats that lock a byte
+    // per texel like `ATI2`). Linear formats use the bytes-per-pixel row
+    // stride, rounded up to a 4-byte boundary (D3D9 reports a 4-byte-aligned
+    // pitch and the backing buffer is sized to match). A lockable `NULL`
+    // render target takes `NULL_LOCK_BYTES_PER_PIXEL`.
     let to_i = |v: u32| isize::try_from(v).unwrap_or(isize::MAX);
-    let bpp = fmt.bytes_per_pixel();
-    let (pitch, offset) = if bpp == 0 {
-        let bw = fmt.block_width().max(1);
-        let bh = fmt.block_height().max(1);
-        let bb = fmt.block_bytes();
-        let pitch = full_w.div_ceil(bw).saturating_mul(bb);
-        // Origin steps in whole blocks: block row `top / bh`, block column `left / bw`.
-        let offset = top
-            .div_euclid(to_i(bh))
-            .wrapping_mul(to_i(pitch))
-            .wrapping_add(left.div_euclid(to_i(bw)).wrapping_mul(to_i(bb)));
-        (pitch, offset)
-    } else {
-        let pitch = mtld3d_core::format::linear_row_pitch(full_w, bpp);
-        let offset = top
-            .wrapping_mul(to_i(pitch))
-            .wrapping_add(left.wrapping_mul(to_i(bpp)));
-        (pitch, offset)
-    };
+    let (pitch, offset) =
+        if let Some(fmt) = mtld3d_core::format::map_d3d_format(inner.standalone_format) {
+            let bpp = fmt.bytes_per_pixel();
+            if bpp == 0 {
+                let bw = fmt.block_width().max(1);
+                let bh = fmt.block_height().max(1);
+                let bb = fmt.block_bytes();
+                let block_pitch = full_w.div_ceil(bw).saturating_mul(bb);
+                let pitch =
+                    mtld3d_core::format::lock_row_pitch(inner.standalone_format, block_pitch, bh);
+                let offset = if mtld3d_core::format::locks_byte_per_texel(inner.standalone_format) {
+                    top.wrapping_mul(to_i(pitch)).wrapping_add(left)
+                } else {
+                    top.div_euclid(to_i(bh))
+                        .wrapping_mul(to_i(pitch))
+                        .wrapping_add(left.div_euclid(to_i(bw)).wrapping_mul(to_i(bb)))
+                };
+                (pitch, offset)
+            } else {
+                let pitch = mtld3d_core::format::linear_row_pitch(full_w, bpp);
+                let offset = top
+                    .wrapping_mul(to_i(pitch))
+                    .wrapping_add(left.wrapping_mul(to_i(bpp)));
+                (pitch, offset)
+            }
+        } else if mtld3d_core::format::is_null_render_target(inner.standalone_format) {
+            let bpp = mtld3d_core::format::NULL_LOCK_BYTES_PER_PIXEL;
+            let pitch = mtld3d_core::format::linear_row_pitch(full_w, bpp);
+            let offset = top
+                .wrapping_mul(to_i(pitch))
+                .wrapping_add(left.wrapping_mul(to_i(bpp)));
+            (pitch, offset)
+        } else {
+            return D3DERR_INVALIDCALL;
+        };
     let Some(page) = inner.system_memory.as_mut() else {
         return D3DERR_INVALIDCALL;
     };
@@ -3211,6 +3621,7 @@ fn create_dc_on_surface(inner: &mut SurfaceInner) -> Option<GdiDc> {
     if inner.core_lockable_render_target().is_some() && !refresh_lockable_rt_staging(inner) {
         return None;
     }
+    inner.expose_system_memory();
     if !refill_dc_texture_level(inner) {
         return None;
     }

@@ -10,7 +10,7 @@
 //! `__TEXT` maps no file offset 0. The crash-line tests pin D3D9's literals
 //! in the lines `dxmt_util::crash` builds.
 
-use dxmt_util::crash::{PanicLine, base_line, fatal_line, foreign_line};
+use dxmt_util::crash::{ForeignCaller, PanicLine, base_line, fatal_line, foreign_line};
 
 use super::*;
 
@@ -318,13 +318,14 @@ fn a_foreign_fault_names_its_module_or_a_question_mark() {
             0xC000_0005,
             0x10,
             Some((path.as_slice(), 0x40_0000)),
+            &ForeignCaller::None,
             (1, 1)
         )
         .bytes(),
         b"[mtld3d::d3d9] fault outside d3d9.dll: code=0x00000000c0000005 addr=0x0000000000000010 module=C:\\game\\x.dll base=0x0000000000400000 free_mib=0x0000000000000001 largest_free_mib=0x0000000000000001\n"
     );
     assert!(
-        foreign_line(FOREIGN_PREFIX, 1, 2, None, (0, 0))
+        foreign_line(FOREIGN_PREFIX, 1, 2, None, &ForeignCaller::None, (0, 0))
             .bytes()
             .windows(9)
             .any(|w| w == b"module=? ")

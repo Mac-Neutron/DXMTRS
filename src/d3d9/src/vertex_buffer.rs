@@ -223,12 +223,12 @@ impl VertexBufferInner {
     ///
     /// A `Staged` buffer missing from the core store is created at its backing's padded length and
     /// uploaded in full; otherwise any dirty span uploads. An accepted upload releases the backing
-    /// when D3D9 promises no readback unless `ignore_lock_bounds` is set.
+    /// when D3D9 promises no readback unless `keep_backing` is set.
     #[must_use]
     pub fn core_flush(
         &mut self,
         core: &mut crate::rt::device::CoreDevice,
-        ignore_lock_bounds: bool,
+        keep_backing: bool,
     ) -> bool {
         if matches!(self.map_mode, BufferMapMode::Direct) {
             return true;
@@ -275,7 +275,7 @@ impl VertexBufferInner {
         }
         self.core_created = true;
         self.backing.note_upload(offset, end);
-        release_backing_after_upload(self, ignore_lock_bounds);
+        release_backing_after_upload(self, keep_backing);
         true
     }
 }
@@ -836,9 +836,10 @@ extern "system" fn vb_unlock(this: *mut c_void) -> i32 {
         if let Err(hr) = dev.encoder_status() {
             return hr;
         }
-        if !inner.backing.may_widen_upload() {
-            let ignore = dev.config().buffer_ignore_lock_bounds;
-            if !inner.core_flush(dev.core_mut(), ignore) {
+        let cfg = dev.config();
+        if !cfg.buffer_draw_time_upload && !inner.backing.may_widen_upload() {
+            let keep_backing = cfg.buffer_ignore_lock_bounds || cfg.buffer_draw_time_upload;
+            if !inner.core_flush(dev.core_mut(), keep_backing) {
                 mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
                     "d3d9 core: a re-created vertex buffer's window did not upload at its Unlock; the next draw uploads it");
             }
@@ -874,16 +875,17 @@ fn ignore_lock_bounds(inner: &VertexBufferInner) -> bool {
 ///
 /// The trade is the one the texture-staging release already accepts: the GPU
 /// holds the only copy, so nothing can re-upload these buffers if the Metal
-/// device is recreated under them. `ignore_lock_bounds` is the device's
-/// `buffer.ignoreLockBounds`, which the caller reads: a core device's draw
-/// holds the device borrowed while it uploads (DXMTRS C4c-2b).
-fn release_backing_after_upload(inner: &mut VertexBufferInner, ignore_lock_bounds: bool) {
+/// device is recreated under them. `keep_backing` is set when
+/// `buffer.ignoreLockBounds` or `buffer.drawTimeUpload` is enabled, which the
+/// caller reads: a core device's draw holds the device borrowed while it
+/// uploads (DXMTRS C4c-2b).
+fn release_backing_after_upload(inner: &mut VertexBufferInner, keep_backing: bool) {
     // `buffer.ignoreLockBounds` says this title writes outside the windows it
-    // announces, and the only way to carry those writes is to upload the whole
-    // buffer out of the CPU copy. Releasing the copy would leave that upload
-    // nothing true to carry, so the knob keeps it.
+    // announces, and `buffer.drawTimeUpload` defers upload to draws so later
+    // writes through the pointer after `Unlock` must still find the backing
+    // alive; releasing it would leave those uploads nothing true to carry.
     if inner.lock_count != 0
-        || ignore_lock_bounds
+        || keep_backing
         || !may_release_backing(inner.usage, inner.pool)
         || !inner.backing.may_widen_upload()
     {

@@ -51,12 +51,30 @@ else
   # Every other cross build (the VM guest's x86_64 and i386 pairs): linked by meson's driver as nvngx.dll is, then
   # marked builtin. lld's MinGW driver does no ICF unless asked; llvm-mingw's CRT comes ahead of Wine's libntdll.a
   # (which meson places after these), so strlen, wcslen and mem* stay ucrt's, and kernel32 ahead of mincore's sets.
+  if cpu_family == 'x86'
+    # rustc exports each i386 stdcall entry under its decorated symbol (`_Name@N`), so an undecorated `.def` entry
+    # would lose its ordinal and `NONAME` to rustc's `.drectve` export. Rewrite each `Name @ord ... ; N` as
+    # `Name=Name@N @ord ...` for MinGW lld (which prepends `_` to match `_Name@N`).
+    d3d9_awk = find_program('awk')
+    d3d9_def = custom_target('d3d9.i686.def',
+      input   : 'd3d9.def',
+      output  : 'd3d9.i686.def',
+      capture : true,
+      command : [
+        d3d9_awk,
+        'BEGIN { in_exports = 0 } { line = $0; semi = index(line, ";"); if (semi > 0) { entry = substr(line, 1, semi - 1); comment = substr(line, semi + 1) } else { entry = line; comment = "" } gsub(/^[ \\t]+|[ \\t]+$/, "", entry); if (!in_exports || entry == "") { if (entry == "EXPORTS") in_exports = 1; print line; next } n = split(entry, f, /[ \\t]+/); name = f[1]; if (n < 2 || substr(f[2], 1, 1) != "@") { printf "d3d9.def: entry %s has no @ordinal\\n", name > "/dev/stderr"; exit 1 } gsub(/^[ \\t]+|[ \\t]+$/, "", comment); if (comment !~ /^[0-9]+$/) { printf "d3d9.def: entry %s has no i386 argument bytes after ;\\n", name > "/dev/stderr"; exit 1 } out = "    " name "=" name "@" comment " " f[2]; for (i = 3; i <= n; i++) out = out " " f[i]; print out }',
+        '@INPUT@',
+      ],
+    )
+  else
+    d3d9_def = 'd3d9.def'
+  endif
   d3d9_link_args = ['-Wl,--gc-sections', '-Wl,--icf=all', '-lmingw32', '-lmingwex', '-lucrt', '-lkernel32', '-lmincore',
                     '-luser32', '-ladvapi32', '-lgdi32', '-lws2_32', '-luserenv', '-lbcrypt', '-ldbghelp']
   d3d9_dll = shared_library('d3d9', wrc_generator.process('version.rc'),
     name_prefix    : '',
     link_with      : d3d9_rust,
-    vs_module_defs : 'd3d9.def',
+    vs_module_defs : d3d9_def,
     dependencies   : [lib_ntdll, rust_runtime_dep, winemetal_dep],
     link_args      : d3d9_link_args,
     install        : true,

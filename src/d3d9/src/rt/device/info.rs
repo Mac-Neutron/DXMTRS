@@ -178,5 +178,43 @@ pub fn query_default_device_info() -> Option<DeviceInfo> {
     })
 }
 
+/// Queries the main display panel's pixel size `(width, height)` before a device exists.
+///
+/// Uses `WMTViewSyncAndPoll` with `WMT_VIEW_SYNC_FLAG_MAIN_PANEL` (`view == 0`, `layer == 0`),
+/// returning `(0, 0)` on failure or in VM guests where slot 161 rejects `view == 0`.
+#[cfg(not(feature = "guest-vm"))]
+#[must_use]
+pub fn panel_size() -> (u32, u32) {
+    let mut poll = winemetal_sys::wire::WMTViewPollOut {
+        drawable_width: 0,
+        drawable_height: 0,
+        backing_scale: 0,
+        edr_current: 0.0,
+        edr_potential: 0.0,
+        panel_max_hz: 0,
+        flags: 0,
+        reserved: 0,
+    };
+    // SAFETY: `WMTViewSyncAndPoll` accepts `view == 0, layer == 0` with `MAIN_PANEL` on host.
+    unsafe {
+        winemetal_sys::WMTViewSyncAndPoll(
+            0,
+            0,
+            winemetal_sys::wire::WMT_VIEW_SYNC_FLAG_MAIN_PANEL,
+            &raw mut poll,
+        );
+    }
+    (poll.drawable_width, poll.drawable_height)
+}
+
+/// Queries the main display panel's pixel size `(width, height)` before a device exists.
+///
+/// Returns `(0, 0)` in VM guests where slot 161 rejects `view == 0`.
+#[cfg(feature = "guest-vm")]
+#[must_use]
+pub const fn panel_size() -> (u32, u32) {
+    (0, 0)
+}
+
 #[cfg(test)]
 mod tests;

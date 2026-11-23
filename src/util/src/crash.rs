@@ -18,6 +18,78 @@ const PANIC_LINE_CAPACITY: usize = 2048;
 /// What ends a [`PanicLine`] whose message did not fit, in place of the line break.
 const PANIC_LINE_TRUNCATED: &str = " [truncated]\n";
 
+/// `MEMORY_BASIC_INFORMATION.State` of a committed region.
+pub const MEM_COMMIT: u32 = 0x1000;
+
+/// `PAGE_GUARD`: the first touch of the page raises an exception.
+const PAGE_GUARD: u32 = 0x100;
+
+/// Base page protections that permit a read (`PAGE_NOACCESS` and `PAGE_EXECUTE` excluded).
+const PAGE_READABLE: u32 = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
+
+/// `ExceptionInformation[0]` value for a DEP / execute access violation.
+const EXCEPTION_EXECUTE_FAULT: usize = 8;
+
+/// One region of a PE process's address space, as `VirtualQuery` describes it.
+pub struct QueriedRegion {
+    base: usize,
+    size: usize,
+    state: u32,
+    protect: u32,
+}
+
+impl QueriedRegion {
+    /// The region of `size` bytes at `base`, with its `State` and `Protect` fields.
+    #[must_use]
+    pub const fn new(base: usize, size: usize, state: u32, protect: u32) -> Self {
+        Self {
+            base,
+            size,
+            state,
+            protect,
+        }
+    }
+}
+
+/// Whether an access violation record describes an execute fault (`ExceptionInformation[0] == 8`).
+#[must_use]
+pub const fn is_execute_fault(n_params: u32, access_type: usize) -> bool {
+    n_params >= 2 && access_type == EXCEPTION_EXECUTE_FAULT
+}
+
+/// Whether the `len` bytes at `addr` lie in `region` and can be read without a fault.
+///
+/// The region must be committed, readable, and not a guard page.
+#[must_use]
+pub const fn readable_span(region: &QueriedRegion, addr: usize, len: usize) -> bool {
+    if region.state != MEM_COMMIT
+        || region.protect & PAGE_GUARD != 0
+        || region.protect & PAGE_READABLE == 0
+    {
+        return false;
+    }
+    let Some(offset) = addr.checked_sub(region.base) else {
+        return false;
+    };
+    match offset.checked_add(len) {
+        Some(end) => end <= region.size,
+        None => false,
+    }
+}
+
+/// What the handler knows about the caller of an execute fault in unowned memory.
+pub enum ForeignCaller<'a> {
+    /// Not an execute fault in unowned memory: no `caller=` field is emitted.
+    None,
+    /// Execute fault in unowned memory, with no readable return address (`caller=?`).
+    Unknown,
+    /// Execute fault in unowned memory with return address and optional owning module.
+    Address {
+        addr: usize,
+        module: Option<(&'a [u16], usize)>,
+    },
+}
+
 /// A panic's thread, location and message, worded as std's default hook prints them.
 ///
 /// `<prefix>thread '<name>' (<id>) panicked at <file>:<line>:<column>:`,
@@ -155,33 +227,64 @@ pub fn fatal_line(prefix: &[u8], code: u32, addr: usize, free_mib: (u64, u64)) -
 /// The line for a fault in someone else's code, with the module it landed in.
 ///
 /// `module` is the owning module's path and load base, or `None` (`module=?`) when the lookup
-/// found none.
+/// found none. `caller` adds `caller=` (and `caller_module=` / `caller_base=` when the return
+/// address is known) for execute faults in unowned memory.
 #[must_use]
 pub fn foreign_line(
     prefix: &[u8],
     code: u32,
     addr: usize,
     module: Option<(&[u16], usize)>,
+    caller: &ForeignCaller<'_>,
     free_mib: (u64, u64),
-) -> Line<1024> {
-    let mut buf = [0u8; 1024];
+) -> Line<2048> {
+    let mut buf = [0u8; 2048];
     let mut pos = 0;
     push(&mut buf, &mut pos, prefix);
     push_hex(&mut buf, &mut pos, u64::from(code));
     push(&mut buf, &mut pos, b" addr=");
     push_hex(&mut buf, &mut pos, addr as u64);
-    push(&mut buf, &mut pos, b" module=");
-    match module {
-        None => push(&mut buf, &mut pos, b"?"),
-        Some((path, base)) => {
-            push_utf16(&mut buf, &mut pos, path);
-            push(&mut buf, &mut pos, b" base=");
-            push_hex(&mut buf, &mut pos, base as u64);
+    push_module(&mut buf, &mut pos, module, b" module=", b" base=");
+    match *caller {
+        ForeignCaller::None => {}
+        ForeignCaller::Unknown => push(&mut buf, &mut pos, b" caller=?"),
+        ForeignCaller::Address {
+            addr: caller_addr,
+            module: caller_module,
+        } => {
+            push(&mut buf, &mut pos, b" caller=");
+            push_hex(&mut buf, &mut pos, caller_addr as u64);
+            push_module(
+                &mut buf,
+                &mut pos,
+                caller_module,
+                b" caller_module=",
+                b" caller_base=",
+            );
         }
     }
     push_free_space(&mut buf, &mut pos, free_mib);
     push(&mut buf, &mut pos, b"\n");
     Line { buf, len: pos }
+}
+
+/// Append `label` and a module's path and `base_label` + base, or `label` + `?`.
+fn push_module(
+    buf: &mut [u8],
+    pos: &mut usize,
+    module: Option<(&[u16], usize)>,
+    label: &[u8],
+    base_label: &[u8],
+) {
+    push(buf, pos, label);
+    match module {
+        None => push(buf, pos, b"?"),
+        Some((path, base)) => {
+            push_utf16(buf, pos, path);
+            push(buf, pos, base_label);
+            push_hex(buf, pos, base as u64);
+        }
+    }
 }
 
 /// The load base of the image, so a frame's RVA can be computed (`pc - base`).

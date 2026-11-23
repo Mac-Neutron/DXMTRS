@@ -65,7 +65,11 @@ use mtld3d_types::{
     D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
 };
 
-use crate::{dirty_rect::DirtyRect, texture_flags::TextureFlags};
+use crate::{
+    dirty_rect::DirtyRect,
+    format::{lock_row_pitch, locks_byte_per_texel},
+    texture_flags::TextureFlags,
+};
 
 /// What the caller should do with the old backing's contents on a rename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,41 +313,69 @@ pub const fn decide_staging_write(write: &StagingWrite) -> LockAction {
     LockAction::FreshBox { preserve }
 }
 
-/// Whether a Lock of a released level has to read the level back from the GPU.
+/// How a released level's re-created staging starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleasedLevelFill {
+    /// The pages as the allocator hands them out, a released resource's bytes.
+    AsAllocated,
+    /// Zero, which is what a level the GPU never received holds there.
+    Zeroed,
+    /// The level read back from the GPU.
+    ReadBack,
+}
+
+/// How a Lock of a released level fills its re-created staging before the pointer goes out.
 ///
 /// A default-pool level whose staging was released keeps its only copy on the
 /// GPU, and D3D9 hands a `LockRect` the level's current contents. So the
-/// released staging is re-created and refilled from the GPU before the pointer
-/// goes out, unless the caller has declared the contents dead.
+/// released staging is re-created and refilled from the GPU, unless the
+/// caller has declared the contents dead or the GPU never received the level.
+/// A level the GPU never received holds zero there, as every new texture
+/// does, so its staging starts zeroed instead of holding a released
+/// resource's bytes.
 ///
-/// `D3DLOCK_DISCARD` is that declaration and the only flag that qualifies: it
+/// `D3DLOCK_DISCARD` is the declaration and the only flag that qualifies: it
 /// is defined for a whole-level lock and promises the caller reads nothing it
-/// did not just write. The caller passes the flags through
-/// [`honoured_lock_flags`] first, so a DISCARD on a partial lock never reaches
-/// this decision, nor does a `D3DLOCK_NOOVERWRITE`, which is not a texture
-/// lock flag. `D3DLOCK_READONLY` is the opposite promise. D3D9 has no
-/// write-only lock flag: the "no readback expected" hint for a texture is
-/// `D3DUSAGE_DYNAMIC` at create time, and a dynamic texture keeps its staging
-/// for its whole life, so no usage bit reaches this decision.
+/// did not just write, so it takes the pages as allocated. The caller passes
+/// the flags through [`honoured_lock_flags`] first, so a DISCARD on a partial
+/// lock never reaches this decision, nor does a `D3DLOCK_NOOVERWRITE`, which
+/// is not a texture lock flag. `D3DLOCK_READONLY` is the opposite promise.
+/// D3D9 has no write-only lock flag: the "no readback expected" hint for a
+/// texture is `D3DUSAGE_DYNAMIC` at create time, and a dynamic texture keeps
+/// its staging for its whole life, so no usage bit reaches this decision.
 #[must_use]
-pub const fn released_level_lock_needs_readback(flags: u32) -> bool {
-    flags & D3DLOCK_DISCARD == 0
+pub const fn released_level_lock_fill(flags: u32, was_uploaded: bool) -> ReleasedLevelFill {
+    if flags & D3DLOCK_DISCARD != 0 {
+        ReleasedLevelFill::AsAllocated
+    } else if was_uploaded {
+        ReleasedLevelFill::ReadBack
+    } else {
+        ReleasedLevelFill::Zeroed
+    }
 }
 
-/// Whether a CPU write into a released level has to read the level back first.
+/// How a CPU write into a released level fills its re-created staging first.
 ///
-/// A re-created staging holds nothing until the write lands, and the upload
-/// that follows is the bounding box of every write since the last flush. That
-/// box is only safe to upload while the staging holds the whole level: two
-/// writes before a flush otherwise push uninitialised bytes over the texels
-/// between them, which the GPU copy is the only holder of.
+/// A re-created staging holds a released resource's bytes until the write
+/// lands, and the upload that follows is the bounding box of every write since
+/// the last flush. That box is only safe to upload while the staging holds the
+/// whole level: two writes before a flush otherwise push those bytes over the
+/// texels between them.
 ///
-/// A write covering the whole level defines every byte itself, and a level
-/// the GPU never received has nothing on the GPU to preserve, so neither
-/// reads back. Every other write does.
+/// A write covering the whole level defines every byte itself and takes the
+/// pages as allocated. A level the GPU never received holds zero there, as
+/// every new texture does, so a partial write into one starts from zero. A
+/// partial write into an uploaded level reads it back, since the GPU copy is
+/// the only holder of the texels the write leaves alone.
 #[must_use]
-pub const fn released_level_write_needs_readback(whole_level: bool, was_uploaded: bool) -> bool {
-    !whole_level && was_uploaded
+pub const fn released_level_write_fill(whole_level: bool, was_uploaded: bool) -> ReleasedLevelFill {
+    if whole_level {
+        ReleasedLevelFill::AsAllocated
+    } else if was_uploaded {
+        ReleasedLevelFill::ReadBack
+    } else {
+        ReleasedLevelFill::Zeroed
+    }
 }
 
 /// Whether a texture's class ever lets a level release its staging after an upload.
@@ -440,6 +472,34 @@ pub const fn texture_lock_offset(
         }
         None => 0,
     }
+}
+
+/// The pitch a lock of one level reports and the byte offset of the rect it points at.
+///
+/// `stored_pitch` is the level's `mip_bytes_per_row` and `block` its block
+/// width, height and bytes. A format that locks a byte per texel
+/// ([`locks_byte_per_texel`]) reports [`lock_row_pitch`] and points
+/// `y * pitch + x` bytes in: for a rect inside the level, that start and the
+/// end of the rect's rows traversed at that pitch stay within
+/// `pitch * height` bytes, inside the stored level. Every other format
+/// reports the stored pitch and [`texture_lock_offset`].
+#[must_use]
+pub const fn level_lock_layout(
+    d3d_format: u32,
+    rect: Option<DirtyRect>,
+    stored_pitch: u32,
+    block: (u32, u32, u32),
+) -> (u32, usize) {
+    if !locks_byte_per_texel(d3d_format) {
+        let offset = texture_lock_offset(rect, stored_pitch, block.0, block.1, block.2);
+        return (stored_pitch, offset);
+    }
+    let pitch = lock_row_pitch(d3d_format, stored_pitch, block.1);
+    let offset = match rect {
+        Some(r) => r.y as usize * pitch as usize + r.x as usize,
+        None => 0,
+    };
+    (pitch, offset)
 }
 
 /// Where a partial upload's box sits in the staging, and the shape its snapshot takes.

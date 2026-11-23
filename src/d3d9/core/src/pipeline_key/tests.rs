@@ -1184,3 +1184,63 @@ fn elements_with_end_preserves_terminator_verbatim() {
     assert_eq!(code.elements(), &[pos]);
     assert_eq!(code.elements_with_end(), &[pos, custom_end]);
 }
+
+/// High-nibble linear overrides in `color_out_mask` and depth-only (`color_format == 0`) passes.
+///
+/// Bits 4..7 pass through to the pixel variant under `SRGB_WRITE` without tripping the extra-slot
+/// assertion, and a depth-only pass (`D3DFMT_NULL`, `color_format == 0`) tolerates any mismatch.
+#[test]
+fn pipeline_source_allows_srgb_linear_bits_and_depth_only_passes() {
+    const RGBA8: u32 = PixelFormat::Rgba8Unorm as u32;
+    let srgb_linear_key = PipelineKey {
+        variant: VariantKey {
+            flags: VariantFlags::SRGB_WRITE,
+            color_out_mask: 0b0010 | 0b0001_0000,
+            ..VariantKey::default()
+        },
+        extras: [Some(extra(RGBA8)), None, None],
+        ..prog_base()
+    };
+    let srgb_linear_src = source(&srgb_linear_key);
+    assert_eq!(
+        srgb_linear_src.ps.spec,
+        StageSpec::Ps(srgb_linear_key.variant)
+    );
+
+    let linear_only_key = PipelineKey {
+        variant: VariantKey {
+            flags: VariantFlags::SRGB_WRITE,
+            color_out_mask: 0b0011_0000,
+            ..VariantKey::default()
+        },
+        ..prog_base()
+    };
+    assert_eq!(
+        source(&linear_only_key).ps.spec,
+        StageSpec::Ps(linear_only_key.variant)
+    );
+
+    let depth_only_with_mask = PipelineKey {
+        color_format: 0,
+        depth_format: 260,
+        variant: VariantKey {
+            color_out_mask: 0b0010,
+            ..VariantKey::default()
+        },
+        ..prog_base()
+    };
+    let depth_only_src = source(&depth_only_with_mask);
+    assert_eq!(depth_only_src.color_format, 0);
+    assert_eq!(
+        depth_only_src.ps.spec,
+        StageSpec::Ps(depth_only_with_mask.variant)
+    );
+
+    let depth_only_with_extras = PipelineKey {
+        color_format: 0,
+        depth_format: 260,
+        extras: [Some(extra(RGBA8)), None, None],
+        ..prog_base()
+    };
+    assert_eq!(source(&depth_only_with_extras).color_format, 0);
+}

@@ -441,6 +441,7 @@ src/d3d9/core/src/texture_flags.rs TextureFlags Clone,Copy,Debug,Default,Partial
 src/d3d9/core/src/texture_staging.rs LockAction Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/texture_staging.rs MipShape Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/texture_staging.rs PreserveKind Debug,Clone,Copy,PartialEq,Eq
+src/d3d9/core/src/texture_staging.rs ReleasedLevelFill Debug,Clone,Copy,PartialEq,Eq
 src/d3d9/core/src/upload_pass.rs UploadDecode Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/shared/src/ffi_boundary/tests.rs Point Copy,Clone,Debug,PartialEq,Eq
 src/d3d9/shared/src/mtl.rs AddressMode Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr

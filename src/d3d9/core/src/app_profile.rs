@@ -3,7 +3,8 @@
 //! A few games need an option set no user should have to discover: an adapter
 //! identity their engine branches on, a capability they must not be told about,
 //! an era-driver behaviour their renderer was written against. A profile carries
-//! those values for one executable so the game runs correctly out of the box.
+//! those values for the executables of one game, its launcher included where
+//! the launcher loads D3D9 too, so the game runs correctly out of the box.
 //!
 //! A profile is the weakest configuration layer. `mtld3d.conf` and
 //! `MTLD3D_CONFIG` both beat it key by key, so a user can take one option back
@@ -11,10 +12,13 @@
 //!
 //! A profile is keyed by the version resource the vendor linked into the image,
 //! not by a path, so it follows the game wherever it is installed and cannot
-//! catch an unrelated program that happens to share a file name.
+//! catch an unrelated program that happens to share a file name. An image that
+//! carries no version resource is keyed by the Steam app id instead, which
+//! Steam sets in the environment of every game it starts.
 //!
-//! Pure logic: the PE side supplies the executable's name and the raw
-//! `VS_VERSIONINFO` blob, so everything here is host-testable.
+//! Pure logic: the PE side supplies the executable's name, the raw
+//! `VS_VERSIONINFO` blob and the `SteamAppId` variable, so everything here is
+//! host-testable.
 
 use log::info;
 
@@ -22,9 +26,84 @@ use super::LOG_TARGET;
 
 /// The profiles mtld3d ships.
 ///
-/// Every entry pins at least one version-resource field, so a rule can never
-/// fire on a same-named program from someone else.
+/// Every entry pins at least one version-resource field, or a Steam app id for
+/// an image without a version resource, so a rule can never fire on a
+/// same-named program from someone else.
 static PROFILES: &[AppProfile] = &[
+    // Counter-Strike: Global Offensive, the legacy build.
+    //
+    // With Apple's vendor id the game stops at start-up with its CSM error,
+    // and with NVIDIA's it fails to initialise NVAPI; with AMD's it starts.
+    //
+    // Loading a map, it writes through the pointer a `Lock` of a static
+    // write-only buffer returned after it has called `Unlock`. The layer
+    // frees that buffer's CPU copy at `Unlock`, so the write lands in freed
+    // memory and the process dies. `buffer.drawTimeUpload` keeps the copy and
+    // uploads it at the draw, so the late writes reach the GPU too.
+    //
+    // `csgo.exe` carries no version resource, so the entry is pinned on the
+    // Steam app id. The legacy build is its own app, 4465480, and the
+    // `steam_appid.txt` it ships names 730, so either id can reach the game.
+    // 730 is also Counter-Strike 2's app, whose executable is `cs2.exe`,
+    // which the name pin leaves out.
+    AppProfile {
+        name: "csgo",
+        exes: &["csgo.exe"],
+        company: None,
+        product: None,
+        original_filename: None,
+        steam_apps: &[4_465_480, 730],
+        settings: "adapter.spoof=amd;buffer.drawTimeUpload=true",
+    },
+    // Fallout 3.
+    //
+    // Its renderer turns "3.0 Lighting" on only for an adapter whose `Driver`
+    // string starts with `ati` or `nv`, and only when
+    // `PS20Caps.NumInstructionSlots` is above 255; the game counts the slots
+    // as 96 when `PS20Caps.NumTemps` is under 32. The layer reports 512 and
+    // 32, so a caps change past either threshold turns the flag off again.
+    // The game creates its type 0x1d shader properties whether the flag is on
+    // or not, and the shader lookup for that type returns null while it is
+    // off, which the game dereferences: New Game crashes without an `ati` or
+    // `nv` prefix.
+    //
+    // Either prefix sets the flag, and each runs a multi-GPU probe. The `ati`
+    // one calls `AtiQueryMgpuCount` in the `atimgpud.dll` the game ships, so
+    // it always runs. The `nv` one goes through NVAPI (`nvapi_QueryInterface`
+    // in `nvapi.dll`) and has no effect when the DLL is absent, so the
+    // identity is NVIDIA's. With it the game also probes the `ATOC` format
+    // and, when transparency multisampling is on, draws its alpha-tested
+    // geometry with alpha-to-coverage instead, which the layer implements.
+    //
+    // `Fallout3.exe` exits into `FalloutLauncher.exe` whenever the
+    // `sD3DDevice` that `FalloutPrefs.ini` holds differs from adapter 0's
+    // `Description`, and the launcher writes that key from its own D3D9
+    // adapter, so both executables need the same identity or each sends the
+    // player back to the other.
+    AppProfile {
+        name: "fallout3",
+        exes: &["Fallout3.exe", "FalloutLauncher.exe"],
+        company: Some("Bethesda Softworks"),
+        product: Some("Fallout 3"),
+        original_filename: None,
+        steam_apps: &[],
+        settings: "adapter.spoof=nvidia",
+    },
+    // Fallout: New Vegas.
+    //
+    // New Game crashes after the intro video unless the adapter reports an
+    // NVIDIA identity. The launcher gets the same identity on the assumption
+    // that New Vegas keeps the `sD3DDevice` check the `fallout3` entry
+    // describes, so neither executable sends the player back to the other.
+    AppProfile {
+        name: "falloutnv",
+        exes: &["FalloutNV.exe", "FalloutNVLauncher.exe"],
+        company: Some("Bethesda Softworks"),
+        product: Some("New Vegas"),
+        original_filename: None,
+        steam_apps: &[],
+        settings: "adapter.spoof=nvidia",
+    },
     // Grand Theft Auto IV.
     //
     // Its renderer branches on the reported adapter vendor, and the ATI
@@ -40,10 +119,11 @@ static PROFILES: &[AppProfile] = &[
     // allocation.
     AppProfile {
         name: "gta-iv",
-        exe: "GTAIV.exe",
+        exes: &["GTAIV.exe"],
         company: Some("Rockstar Games"),
         product: Some("Grand Theft Auto IV"),
         original_filename: None,
+        steam_apps: &[],
         settings: "adapter.spoof=amd;caps.dfFormats=false;depth.aliasSameSize=true",
     },
     // Halo 2.
@@ -54,11 +134,38 @@ static PROFILES: &[AppProfile] = &[
     // nothing.
     AppProfile {
         name: "halo2",
-        exe: "halo2.exe",
+        exes: &["halo2.exe"],
         company: Some("Microsoft Corporation"),
         product: Some("Halo 2 for Windows Vista"),
         original_filename: Some("Halo2.exe"),
+        steam_apps: &[],
         settings: "buffer.ignoreLockBounds=true",
+    },
+    // The Elder Scrolls IV: Oblivion.
+    //
+    // Its renderer takes its shader level from the prefix of the adapter's
+    // `Driver` string. Without an `ati` or `nv` prefix it stays on the basic
+    // 2.0 level whatever the caps say, and the Video menu greys Shadow
+    // Filtering and Shadows on Grass below the level `nv` reaches. The prefix
+    // needs the caps as well: `nv` reaches that level only when
+    // `PS20Caps.NumInstructionSlots` is above 96, and the game counts the
+    // slots as 96 when `PS20Caps.NumTemps` is under 32. The layer reports 512
+    // and 32, so a caps change past either threshold greys both options again.
+    //
+    // The identity is NVIDIA's because `nv` is the only prefix that keeps
+    // refraction under multisampling, which this profile therefore turns on.
+    // Each identity runs a multi-GPU probe. The `nv` one calls `NvCplGetDataInt`
+    // in `NVCPL.dll` and has no effect when the DLL is absent. The `ati` one
+    // calls `AtiQueryMgpuCount`, which goes through `ExtEscape`, in the
+    // `ATIMGPUD.dll` the game ships, so it always runs.
+    AppProfile {
+        name: "oblivion",
+        exes: &["Oblivion.exe"],
+        company: Some("Bethesda Softworks"),
+        product: Some("TES4: Oblivion"),
+        original_filename: None,
+        steam_apps: &[],
+        settings: "adapter.spoof=nvidia",
     },
     // World of Warcraft, the 1.12 and 3.3.5 clients alike.
     //
@@ -77,13 +184,23 @@ static PROFILES: &[AppProfile] = &[
     // far ahead the CPU can get. As with FLUSH, this profile assumes the polls
     // do not gate reuse of CPU-writable dynamic storage, which an early answer
     // cannot fence.
+    //
+    // The 1.12 client fills its resolution dropdown from `EnumDisplaySettingsA`,
+    // not `EnumAdapterModes`: it keeps every mode of at least 640x480 at 16
+    // bits or more, sorts them, and lists each size of at least 800x600 and
+    // an aspect of at least 1.248 once, whatever its depths and refresh rates.
+    // The dropdown holds 32 buttons (40 on Turtle WoW's interface), and
+    // opening Video Options with more sizes than that fails with a Lua error.
+    // Wine's emulated mode list runs to forty-odd sizes, so the profile offers
+    // at most 32; the refresh rates of each kept size do not add buttons.
     AppProfile {
         name: "wow",
-        exe: "WoW.exe",
+        exes: &["WoW.exe"],
         company: Some("Blizzard Entertainment"),
         product: Some("World of Warcraft"),
         original_filename: None,
-        settings: "query.flushImmediate=true;query.eventImmediate=true",
+        steam_apps: &[],
+        settings: "query.flushImmediate=true;query.eventImmediate=true;display.maxResolutions=32",
     },
 ];
 
@@ -94,10 +211,12 @@ static PROFILES: &[AppProfile] = &[
 /// every present and future key is available to one without new code.
 pub struct AppProfile {
     name: &'static str,
-    exe: &'static str,
+    exes: &'static [&'static str],
     company: Option<&'static str>,
     product: Option<&'static str>,
     original_filename: Option<&'static str>,
+    /// The Steam app ids the profile accepts; empty places no constraint.
+    steam_apps: &'static [u32],
     settings: &'static str,
 }
 
@@ -116,42 +235,55 @@ impl AppProfile {
 
     /// Whether this profile applies to `id`.
     ///
-    /// The executable name has to match, case-insensitively. Each version field
-    /// the profile pins is an additional case-insensitive substring test, so
-    /// `Rockstar Games` also matches a `CompanyName` of `Rockstar Games, Inc.`.
+    /// The executable name has to equal one of the profile's names,
+    /// case-insensitively. Each version field the profile pins is an additional
+    /// case-insensitive substring test, so `Rockstar Games` also matches a
+    /// `CompanyName` of `Rockstar Games, Inc.`. A profile that lists Steam app
+    /// ids also needs the process to carry one of them. The pins hold for every
+    /// listed executable alike.
     fn matches(&self, id: &AppIdentity) -> bool {
-        id.exe.eq_ignore_ascii_case(self.exe)
+        self.exes.iter().any(|exe| id.exe.eq_ignore_ascii_case(exe))
             && field_matches(self.company, &id.company)
             && field_matches(self.product, &id.product)
             && field_matches(self.original_filename, &id.original_filename)
+            && (self.steam_apps.is_empty()
+                || id
+                    .steam_app
+                    .is_some_and(|app| self.steam_apps.contains(&app)))
     }
 }
 
 /// Who the running application is.
 ///
-/// The executable's file name, plus the three `VS_VERSIONINFO` strings a vendor
-/// sets at link time. The version strings are empty when the image carries no
-/// version resource, which leaves it matchable by name alone.
+/// The executable's file name, the three `VS_VERSIONINFO` strings a vendor
+/// sets at link time, and the Steam app id the process was started under. The
+/// version strings are empty when the image carries no version resource, which
+/// leaves it matchable by name alone.
 pub struct AppIdentity {
     exe: String,
     company: String,
     product: String,
     original_filename: String,
+    steam_app: Option<u32>,
 }
 
 impl AppIdentity {
-    /// Build an identity from the executable's name and its version resource.
+    /// Build an identity from the executable's name, version resource and Steam app id.
     ///
     /// `version_blob` is the raw `RT_VERSION` resource as UTF-16 units, or
-    /// `None` for an image that has none.
+    /// `None` for an image that has none. `steam_app_id_var` is the value of
+    /// the `SteamAppId` environment variable, or `None` when it is unset. A
+    /// value that is empty, 0, or anything but decimal digits that fit a `u32`
+    /// carries no id (`steam_app_id`).
     #[must_use]
-    pub fn new(exe: String, version_blob: Option<&[u16]>) -> Self {
+    pub fn new(exe: String, version_blob: Option<&[u16]>, steam_app_id_var: Option<&str>) -> Self {
         let runs = version_blob.map(utf16_runs).unwrap_or_default();
         Self {
             exe,
             company: value_after(&runs, "CompanyName"),
             product: value_after(&runs, "ProductName"),
             original_filename: value_after(&runs, "OriginalFilename"),
+            steam_app: steam_app_id_var.and_then(steam_app_id),
         }
     }
 }
@@ -160,17 +292,26 @@ impl AppIdentity {
 ///
 /// Logs the outcome either way: which profile took effect and the options it
 /// sets, or that none did. Both answers are the first thing to establish when a
-/// game behaves differently than its options say it should.
+/// game behaves differently than its options say it should. A miss also logs
+/// the image's company and product and the Steam app id, so a new profile can
+/// be keyed from a user's log.
 #[must_use]
 pub fn lookup(id: &AppIdentity) -> Option<&'static AppProfile> {
     let profile = PROFILES.iter().find(|p| p.matches(id));
+    let steam_app = id
+        .steam_app
+        .map_or_else(|| "none".to_owned(), |app| app.to_string());
     match profile {
         Some(p) => info!(
             target: LOG_TARGET,
-            "app profile: {} matched {} ({}, {}): {}",
+            "app profile: {} matched {} ({}, {}, steam app {steam_app}): {}",
             p.name, id.exe, id.company, id.product, p.settings
         ),
-        None => info!(target: LOG_TARGET, "app profile: none for {}", id.exe),
+        None => info!(
+            target: LOG_TARGET,
+            "app profile: none for {} ({:?}, {:?}, steam app {steam_app})",
+            id.exe, id.company, id.product
+        ),
     }
     profile
 }
@@ -182,6 +323,17 @@ pub fn lookup(id: &AppIdentity) -> Option<&'static AppProfile> {
 #[must_use]
 pub fn builtin(name: &str) -> Option<&'static AppProfile> {
     PROFILES.iter().find(|p| p.name == name)
+}
+
+/// The Steam app id a `SteamAppId` value names.
+///
+/// A value that is empty, 0, or anything but decimal digits that fit a `u32`
+/// is no app id: Steam's own processes carry the variable empty.
+fn steam_app_id(digits: &str) -> Option<u32> {
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|&id| id != 0)
 }
 
 /// Whether an optional substring constraint holds, case-insensitively.

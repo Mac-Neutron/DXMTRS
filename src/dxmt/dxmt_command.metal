@@ -383,8 +383,10 @@ struct D3D9HdrUniforms {
 };
 
 constant float L_SDR = 100.0f;
-constant float P_SDR = 5.4395284707f;
-constant float LOG_P_SDR = 1.6937747f;
+constant float P_SDR = 5.6969576564f;
+constant float LOG_P_SDR = 1.7399322879f;
+constant float REFERENCE_WHITE_NITS = 203.0f;
+constant float ITM_SMOOTH = 0.12f;
 
 inline float3 apply_gamma_ramp(float3 encoded, constant ushort4* lut) {
   float3 x = clamp(encoded, 0.0f, 1.0f) * 255.0f;
@@ -412,9 +414,9 @@ constant float3x3 M_BT709_TO_LMS = float3x3(
 );
 
 constant float3x3 M_LMS_TO_BT709 = float3x3(
-    float3( 6.1729507446289f, -1.3236293334961f, -0.0118084289551f),
-    float3(-5.3198394775391f,  2.5602416992188f, -0.2641143798828f),
-    float3( 0.1465606689453f, -0.2363464355469f,  1.2761764526367f)
+    float3( 6.1740117436f, -1.3246879448f, -0.0122371492f),
+    float3(-5.3216416751f,  2.5608829838f, -0.2641562583f),
+    float3( 0.1476250327f, -0.2361870399f,  1.2763909094f)
 );
 
 constant float3x3 M_LMS_PQ_TO_ICTCP = float3x3(
@@ -424,9 +426,9 @@ constant float3x3 M_LMS_PQ_TO_ICTCP = float3x3(
 );
 
 constant float3x3 M_ICTCP_TO_LMS_PQ = float3x3(
-    float3(1.0f, 1.0f, 1.0f),
-    float3(0.00860903f, -0.00860903f,  0.56003270f),
-    float3(0.11102963f, -0.11102963f, -0.32062717f)
+    float3(1.0000000067f,  0.9999999933f,  0.9999999808f),
+    float3(0.0086064749f, -0.0086064749f,  0.5600462947f),
+    float3(0.1110335352f, -0.1110335352f, -0.3206319682f)
 );
 
 inline float3 pq_oetf(float3 nits) {
@@ -451,8 +453,7 @@ inline float3 pq_eotf(float3 pq) {
   return 10000.0f * pow(num / den, float3(1.0f / M1));
 }
 
-inline float3 bt2446_ictcp(float3 lin, constant D3D9HdrUniforms& u) {
-  float y_sdr = max(dot(lin, float3(0.2126f, 0.7152f, 0.0722f)), 1e-20f);
+inline float bt2446_a_nits(float y_sdr, constant D3D9HdrUniforms& u) {
   float yp_sdr = pow(y_sdr, 1.0f / 2.4f);
   float yp_c = log((yp_sdr * (P_SDR - 1.0f)) + 1.0f) / LOG_P_SDR;
   float yp_0 = yp_c / 1.0770f;
@@ -461,20 +462,27 @@ inline float3 bt2446_ictcp(float3 lin, constant D3D9HdrUniforms& u) {
   float yp_p = yp_0 <= 0.7399f ? yp_0
              : (yp_2 >= 0.9909f ? yp_2 : yp_1);
   float yp_hdr = (exp2(yp_p * u.log2_p_hdr) - 1.0f) * u.inv_p_minus_one;
-  float y_hdr_linear_nits = pow(yp_hdr, 2.4f) * u.l_hdr_nits;
+  return pow(yp_hdr, 2.4f) * u.l_hdr_nits;
+}
 
-  float3 lms_nits = M_BT709_TO_LMS * (lin * L_SDR);
-  float3 lms_pq = pq_oetf(lms_nits);
-  float3 ictcp_in = M_LMS_PQ_TO_ICTCP * lms_pq;
+inline float3 bt2446_ictcp(float3 lin, constant D3D9HdrUniforms& u) {
+  float y_sdr = max(dot(lin, float3(0.2126f, 0.7152f, 0.0722f)), 1e-20f);
+  float y_sdr_nits = y_sdr * REFERENCE_WHITE_NITS;
+  float a = log(y_sdr_nits);
+  float b = log(max(bt2446_a_nits(y_sdr, u), 1e-30f));
+  float k = clamp(u.l_hdr_nits * (1.0f / REFERENCE_WHITE_NITS) - 1.0f, 0.0f, ITM_SMOOTH);
+  if (b <= a - k) {
+    return lin;
+  }
+  float h = k > 0.0f ? max(k - abs(a - b), 0.0f) / k : 0.0f;
+  float y_out_nits = exp(max(a, b) + k * h * h * 0.25f);
+  float ratio = pq_oetf(float3(y_out_nits)).x
+              / max(pq_oetf(float3(y_sdr_nits)).x, 1e-9f);
 
-  float i_hdr = pq_oetf(float3(y_hdr_linear_nits)).x;
-  float i_ratio = i_hdr / max(ictcp_in.x, 1e-6f);
-  float3 ictcp_out = float3(i_hdr, ictcp_in.y * i_ratio, ictcp_in.z * i_ratio);
-  float3 lms_pq_out = M_ICTCP_TO_LMS_PQ * ictcp_out;
-  float3 lms_nits_out = pq_eotf(lms_pq_out);
-  float3 rgb_nits_out = M_LMS_TO_BT709 * lms_nits_out;
+  float3 ictcp = M_LMS_PQ_TO_ICTCP * pq_oetf(M_BT709_TO_LMS * (lin * REFERENCE_WHITE_NITS));
+  float3 rgb_nits = M_LMS_TO_BT709 * pq_eotf(M_ICTCP_TO_LMS_PQ * (ictcp * ratio));
 
-  return max(rgb_nits_out, float3(0.0f)) / L_SDR;
+  return max(rgb_nits, float3(0.0f)) / REFERENCE_WHITE_NITS;
 }
 
 [[fragment]] float4 fs_present_d3d9_sdr(
@@ -852,7 +860,8 @@ fragment float4 mtld3d_blit_ps(
     // src_level.x is the source mip level (the sampler's point mip filter
     // makes the explicit level exact); src_level.y is the source decode,
     // 0 = sample as-is, 1 = YUY2, 2 = UYVY, 3 = YV12, 4 = NV12, 5 = sample
-    // as-is with alpha one (an X format, whose padding bits carry no alpha).
+    // as-is with alpha one (an X format, whose padding bits carry no alpha),
+    // 6 = replicate luminance into RGB.
     // The numbering is owned by mtld3d_core::stretch_rect::BlitDecode.
     // src_level.zw is the source's logical extent, which only the planar
     // decodes read.
@@ -862,6 +871,10 @@ fragment float4 mtld3d_blit_ps(
     }
     if (decode == 5u) {
         return float4(src.sample(samp, in.texcoord, level(src_level.x)).rgb, 1.0);
+    }
+    if (decode == 6u) {
+        float4 c = src.sample(samp, in.texcoord, level(src_level.x));
+        return float4(c.r, c.r, c.r, 1.0f);
     }
     float y;
     float u;

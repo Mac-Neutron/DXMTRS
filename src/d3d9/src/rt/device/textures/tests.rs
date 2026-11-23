@@ -3,8 +3,8 @@ use winemetal_sys::wire::{WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_BGRA8_UNOR
 
 use super::{CoreTextureDesc, CoreTextureFlags, TextureKind, UploadRegion, plane_copies};
 use crate::rt::device::{
-    CoreDevice, TargetRef,
-    fixture::{at, core_on_fakes, ms_desc, twinned_ms_desc},
+    CoreDevice, DrawData, TargetRef,
+    fixture::{at, core_on_fakes, ff_binds, key, ms_desc, triangle, twinned_ms_desc},
     queue_profile_for,
 };
 
@@ -345,4 +345,72 @@ fn a_scratch_takes_a_resolve_through_the_twin() {
     };
     assert_eq!(core.scratch_like(unknown, 8, 8), None);
     assert_eq!(core.scratch_like(ms, 0, 8), None);
+}
+
+/// An `ATI2` texture stores `BC5_RG_UNORM` blocks and binds a `[G, R, One, One]` view swizzle.
+#[test]
+fn ati2_stores_bc5_and_binds_gr11_swizzle_view() {
+    use mtld3d_core::format::map_d3d_format;
+    use mtld3d_shared::mtl::{PixelFormat, Swizzle};
+    use mtld3d_types::D3DFMT_ATI2;
+    use winemetal_sys::wire::WMT_PIXEL_FORMAT_BC5_RG_UNORM;
+
+    const DEVICE: u64 = 0x449;
+    let mapping = map_d3d_format(D3DFMT_ATI2).expect("ATI2 maps to BC5");
+    assert_eq!(mapping.metal_pixel_format(), PixelFormat::Bc5RgUnorm);
+    assert_eq!(
+        PixelFormat::Bc5RgUnorm as u32,
+        WMT_PIXEL_FORMAT_BC5_RG_UNORM
+    );
+    assert_eq!(
+        mapping.swizzle(),
+        Some([Swizzle::Green, Swizzle::Red, Swizzle::One, Swizzle::One])
+    );
+
+    let mut core = core_on_fakes(DEVICE);
+    let id = TextureId::from_raw(42);
+    let desc = CoreTextureDesc {
+        pixel_format: WMT_PIXEL_FORMAT_BC5_RG_UNORM,
+        flags: CoreTextureFlags::VIEW_TWINS,
+        block: (
+            mapping.block_width(),
+            mapping.block_height(),
+            mapping.block_bytes(),
+        ),
+        ..bgra(8, 8, 1)
+    };
+    core.texture_create(id, &desc);
+    let bytes = [0xAA_u8; 4 * 16];
+    assert!(core.texture_upload(id, whole(0, 0), &bytes, 32, 64));
+    let swizzle = mapping.swizzle().map(|s| s.map(|c| c as u8));
+    let vf = crate::rt::device::view_format(WMT_PIXEL_FORMAT_BC5_RG_UNORM, swizzle);
+    let bound = core
+        .texture_bind(crate::rt::device::Stage::Pixel, 0, id, vf, None)
+        .expect("BC5 swizzled view binds");
+    assert_eq!(bound.key.format(), vf);
+    let binds = ff_binds();
+    assert_eq!(
+        core.draw(
+            &key(0xf),
+            &DrawData {
+                textures: &[bound],
+                ..triangle(&binds)
+            },
+        ),
+        Ok(())
+    );
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let made = lines(&calls, "MTLDevice_newTexture");
+    assert!(
+        made.iter().any(|c| c.contains(&format!(
+            "format={WMT_PIXEL_FORMAT_BC5_RG_UNORM} size=8x8x1"
+        ))),
+        "{calls:#?}"
+    );
+    let views = lines(&calls, "MTLTexture_newTextureView");
+    assert!(
+        views.iter().any(|c| c.contains(&format!("format={vf}"))),
+        "{calls:#?}"
+    );
 }

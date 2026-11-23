@@ -11,6 +11,8 @@ use std::{
 };
 
 use dxmt_core::{
+    deptrack::Access,
+    encoder::stage,
     presenter::{D3d9PresentArgs, Presenter, PresenterDesc},
     resource::{Texture, TextureAllocationFlags, TextureViewKey, texture_info},
     scaler::Scaler,
@@ -20,18 +22,19 @@ use winemetal_sys::{
     MTLDevice_newSharedEvent, Obj, WMTAttachMetalView, WMTPresentClientSurface, WMTRetireMetalView,
     WMTSetCursorOverlay, WMTViewSyncAndPoll,
     wire::{
-        MemPtr, WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN, WMT_PIXEL_FORMAT_BGRA8_UNORM,
-        WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RETIRE_METAL_VIEW_FLAG_PARK,
-        WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-        WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
-        WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE, WMT_VIEW_ATTACH_FLAG_HDR_ENABLE,
-        WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF,
-        WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON, WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
-        WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED, WMT_VIEW_POLL_FLAG_CURSOR_KICK,
-        WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING, WMT_VIEW_POLL_FLAG_HDR_ACTIVE,
-        WMT_VIEW_POLL_FLAG_OCCLUDED, WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE,
-        WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, WMTCursorOverlayParams, WMTFXSpatialScalerInfo,
-        WMTTextureInfo, WMTViewAttachDesc, WMTViewPollOut,
+        MemPtr, WMT_CLIENT_SURFACE_REASON_ATTACHED, WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
+        WMT_RETIRE_METAL_VIEW_FLAG_PARK, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+        WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ,
+        WMT_TEXTURE_USAGE_SHADER_WRITE, WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE,
+        WMT_VIEW_ATTACH_FLAG_HDR_ENABLE, WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED,
+        WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON,
+        WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY, WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED,
+        WMT_VIEW_POLL_FLAG_CURSOR_KICK, WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING,
+        WMT_VIEW_POLL_FLAG_HDR_ACTIVE, WMT_VIEW_POLL_FLAG_OCCLUDED,
+        WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE, WMT_VIEW_SYNC_FLAG_FORCE_REFRESH,
+        WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT, WMTCursorOverlayParams, WMTFXSpatialScalerInfo,
+        WMTTextureInfo, WMTViewAttachDesc, WMTViewPollOut, pack_source_extent,
     },
 };
 
@@ -180,6 +183,9 @@ pub struct Window {
     presented_event: Option<Obj>,
     next_signal: u64,
     park_on_retire: bool,
+    first_frame_present_pending: bool,
+    source_extent: (u32, u32),
+    msaa_present_resolve: Option<((u32, u32, u32), Arc<Texture>)>,
     overlay: Arc<OverlaySink>,
 }
 
@@ -187,6 +193,7 @@ impl Drop for Window {
     fn drop(&mut self) {
         self.overlay.clear_view(self.view);
         // Drop the presenter first so any drawable handles and prefetchers stop using the layer.
+        self.msaa_present_resolve = None;
         self.presenter = None;
         self.layer = None;
         let flags = if self.park_on_retire {
@@ -200,13 +207,12 @@ impl Drop for Window {
     }
 }
 
-/// Cached `MetalFX` spatial scaler and private scratch textures for one settled geometry.
+/// Cached `MetalFX` spatial scaler and private output texture for one settled geometry.
 pub(super) struct UpscaleResources {
     src: (u32, u32),
     dst: (u32, u32),
     scaler: Arc<Scaler>,
     upscaled_output: Arc<Texture>,
-    gamma_scratch: Option<Arc<Texture>>,
 }
 
 /// Cached `MetalFX` spatial upscale state for one settled `(src, dst)` geometry.
@@ -228,18 +234,18 @@ impl UpscaleCache {
 struct UpscaleStep {
     scaler: Arc<Scaler>,
     output: Arc<Texture>,
-    gamma_scratch: Option<Arc<Texture>>,
 }
 
-/// Allocates a private `BGRA8Unorm` 2D texture for `MetalFX` output or pre-upscale gamma.
-fn alloc_private_bgra8(
+/// Allocates a private 2D texture for `MetalFX` output or additional swapchain resolve.
+fn alloc_private_2d(
     device: &winemetal_sys::Obj,
+    pixel_format: u32,
     width: u32,
     height: u32,
     usage: u32,
 ) -> Option<Arc<Texture>> {
     let info = WMTTextureInfo {
-        pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        pixel_format,
         width,
         height,
         depth: 1,
@@ -290,7 +296,7 @@ impl CoreDevice {
         self.settled_geometry = None;
         self.upscale = None;
         self.make_back_buffer(render_w, render_h, samples);
-        self.window = self.open_window(hwnd, drawable_w, drawable_h);
+        self.window = self.open_window(hwnd, render_w, render_h);
         self.hud.get_or_insert_with(|| {
             let mut hud = dxmt_core::hud::Hud::instance();
             hud.initialize(&dxmt_core::info::version_text(
@@ -341,7 +347,16 @@ impl CoreDevice {
             return false;
         }
         self.drawable_size = (drawable_w, drawable_h);
-        if let Some(w) = self.window.as_ref() {
+        if let Some(w) = self.window.as_mut() {
+            let source = (render_w, render_h);
+            let mut sync_flags = WMT_VIEW_SYNC_FLAG_FORCE_REFRESH;
+            if w.source_extent != source {
+                let packed = pack_source_extent(source.0, source.1);
+                if packed != 0 {
+                    sync_flags |= packed;
+                    w.source_extent = source;
+                }
+            }
             let mut poll = WMTViewPollOut {
                 drawable_width: drawable_w,
                 drawable_height: drawable_h,
@@ -355,12 +370,7 @@ impl CoreDevice {
             let layer = w.layer.as_ref().map_or(0, Obj::handle);
             // SAFETY: `w.view` and `layer` remain live while `w` is attached.
             unsafe {
-                WMTViewSyncAndPoll(
-                    w.view,
-                    layer,
-                    WMT_VIEW_SYNC_FLAG_FORCE_REFRESH,
-                    &raw mut poll,
-                );
+                WMTViewSyncAndPoll(w.view, layer, sync_flags, &raw mut poll);
             };
             if poll.backing_scale != 0 {
                 self.backing_scale = poll.backing_scale.clamp(1, 8);
@@ -408,12 +418,7 @@ impl CoreDevice {
         let Some((width, height)) = self.back_buffer.as_ref().map(|b| (b.width, b.height)) else {
             return false;
         };
-        let (dw, dh) = if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 {
-            self.drawable_size
-        } else {
-            (width, height)
-        };
-        self.window = self.open_window(hwnd, dw, dh);
+        self.window = self.open_window(hwnd, width, height);
         self.window.is_some()
     }
 
@@ -437,7 +442,6 @@ impl CoreDevice {
         &mut self,
         src: (u32, u32),
         dst: (u32, u32),
-        need_gamma_scratch: bool,
     ) -> Option<UpscaleStep> {
         let stale = self
             .upscale
@@ -463,8 +467,9 @@ impl CoreDevice {
             let scaler = unsafe { Scaler::spatial(mtl.handle(), &info) };
             let scaler_ok = scaler.scaler().is_some() && scaler.fence().is_some();
             let upscaled_output = scaler_ok.then(|| {
-                alloc_private_bgra8(
+                alloc_private_2d(
                     mtl,
+                    WMT_PIXEL_FORMAT_BGRA8_UNORM,
                     dst.0,
                     dst.1,
                     WMT_TEXTURE_USAGE_RENDER_TARGET
@@ -491,42 +496,14 @@ impl CoreDevice {
                 dst,
                 scaler: Arc::new(scaler),
                 upscaled_output,
-                gamma_scratch: None,
             }));
         }
-        let gamma_scratch = if need_gamma_scratch {
-            let existing = match self.upscale.as_ref() {
-                Some(UpscaleCache::Ready(res)) => res.gamma_scratch.as_ref().map(Arc::clone),
-                _ => None,
-            };
-            let scratch = existing.or_else(|| {
-                let allocated = alloc_private_bgra8(
-                    self.device.device(),
-                    src.0,
-                    src.1,
-                    WMT_TEXTURE_USAGE_RENDER_TARGET | WMT_TEXTURE_USAGE_SHADER_READ,
-                )?;
-                if let Some(UpscaleCache::Ready(res)) = self.upscale.as_mut() {
-                    res.gamma_scratch = Some(Arc::clone(&allocated));
-                }
-                Some(allocated)
-            });
-            let Some(scratch) = scratch else {
-                self.log_upscale_unavailable(src, dst);
-                self.upscale = Some(UpscaleCache::Unavailable { src, dst });
-                return None;
-            };
-            Some(scratch)
-        } else {
-            None
-        };
         let Some(UpscaleCache::Ready(res)) = self.upscale.as_ref() else {
             return None;
         };
         Some(UpscaleStep {
             scaler: Arc::clone(&res.scaler),
             output: Arc::clone(&res.upscaled_output),
-            gamma_scratch,
         })
     }
 
@@ -534,7 +511,7 @@ impl CoreDevice {
     ///
     /// Computes `(after, cap_after)` from the host screen's `panel_max_hz` when non-zero, falling
     /// back to `fallback_hz`. Combines `extra_cs_reasons` with
-    /// `WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY` into one `WMTPresentClientSurface` call.
+    /// `WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY` and first-frame `ATTACHED` after commit.
     pub fn present_paced(
         &mut self,
         visible: bool,
@@ -543,7 +520,32 @@ impl CoreDevice {
         max_fps: u32,
         extra_cs_reasons: u32,
     ) {
-        let poll = self.poll_window(0, extra_cs_reasons);
+        self.present_paced_from(
+            visible,
+            interval,
+            fallback_hz,
+            max_fps,
+            extra_cs_reasons,
+            TargetRef::BackBuffer,
+        );
+    }
+
+    /// Presents `source` using `panel_max_hz` from `WMTViewSyncAndPoll` for pacing.
+    ///
+    /// Supports both [`TargetRef::BackBuffer`] and standalone [`TargetRef::Texture`] additional
+    /// swapchain targets, resolving multisampled sources and syncing source extent when needed.
+    pub fn present_paced_from(
+        &mut self,
+        visible: bool,
+        interval: u32,
+        fallback_hz: u32,
+        max_fps: u32,
+        extra_cs_reasons: u32,
+        source: TargetRef,
+    ) {
+        let source_extent = self.shape(source).map(|s| (s.width, s.height));
+        let sync_flags = self.sync_flags_for(source_extent);
+        let poll = self.poll_window(sync_flags, source_extent);
         let hz = poll.as_ref().map_or(fallback_hz, |p| {
             if p.panel_max_hz > 0 {
                 p.panel_max_hz
@@ -553,7 +555,13 @@ impl CoreDevice {
         });
         let pacing = mtld3d_core::present::layer_pacing_for(interval, hz, max_fps);
         let (after, cap_after) = present_pacing(pacing, hz);
-        self.present_with_poll(poll, visible, after, cap_after, pacing.display_sync);
+        self.present_with_poll(
+            poll,
+            visible,
+            (after, cap_after, pacing.display_sync),
+            extra_cs_reasons,
+            source,
+        );
     }
 
     /// Presents the back buffer `after` seconds after the last present (0: at once).
@@ -564,12 +572,39 @@ impl CoreDevice {
     /// acquisition and paces on the CPU clock; a `DISPLAYS_NOTHING` window keeps acquiring and
     /// presenting drawables with slot 163 attached while pacing on the CPU clock.
     pub fn present(&mut self, visible: bool, after: f64, cap_after: f64, display_sync: bool) {
-        let poll = self.poll_window(0, 0);
-        self.present_with_poll(poll, visible, after, cap_after, display_sync);
+        let source = TargetRef::BackBuffer;
+        let source_extent = self.shape(source).map(|s| (s.width, s.height));
+        let sync_flags = self.sync_flags_for(source_extent);
+        let poll = self.poll_window(sync_flags, source_extent);
+        self.present_with_poll(poll, visible, (after, cap_after, display_sync), 0, source);
     }
 
-    fn poll_window(&mut self, sync_flags: u32, extra_cs_reasons: u32) -> Option<WMTViewPollOut> {
-        let w = self.window.as_ref()?;
+    fn sync_flags_for(&self, source_extent: Option<(u32, u32)>) -> u32 {
+        let (Some(w), Some((sw, sh))) = (self.window.as_ref(), source_extent) else {
+            return 0;
+        };
+        if w.source_extent == (sw, sh) {
+            return 0;
+        }
+        let packed = pack_source_extent(sw, sh);
+        if packed != 0 {
+            WMT_VIEW_SYNC_FLAG_FORCE_REFRESH | packed
+        } else {
+            0
+        }
+    }
+
+    fn poll_window(
+        &mut self,
+        sync_flags: u32,
+        source_extent: Option<(u32, u32)>,
+    ) -> Option<WMTViewPollOut> {
+        let w = self.window.as_mut()?;
+        if sync_flags & WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT != 0
+            && let Some(extent) = source_extent
+        {
+            w.source_extent = extent;
+        }
         let mut poll = WMTViewPollOut {
             drawable_width: self.drawable_size.0,
             drawable_height: self.drawable_size.1,
@@ -593,14 +628,6 @@ impl CoreDevice {
         if poll.flags & WMT_VIEW_POLL_FLAG_CURSOR_KICK != 0 {
             self.options.insert(CoreOptions::CURSOR_KICK_PENDING);
         }
-        let mut cs_reasons = extra_cs_reasons;
-        if poll.flags & WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY != 0 {
-            cs_reasons |= WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN;
-        }
-        if cs_reasons != 0 {
-            // SAFETY: `w.view` is live while `w` is attached.
-            unsafe { WMTPresentClientSurface(w.view, cs_reasons) };
-        }
         Some(poll)
     }
 
@@ -608,9 +635,9 @@ impl CoreDevice {
         &mut self,
         poll: Option<WMTViewPollOut>,
         visible: bool,
-        after: f64,
-        cap_after: f64,
-        display_sync: bool,
+        (after, cap_after, display_sync): (f64, f64, bool),
+        extra_cs_reasons: u32,
+        source: TargetRef,
     ) {
         let occluded = poll
             .as_ref()
@@ -621,20 +648,25 @@ impl CoreDevice {
         let colorspace_changed = poll
             .as_ref()
             .is_some_and(|p| p.flags & WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED != 0);
+        let dirty_surface = poll
+            .as_ref()
+            .is_some_and(|p| p.flags & WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY != 0);
         let allow_present =
             visible && (!occluded || self.options.contains(CoreOptions::PRESENT_OCCLUDED));
-        let bb_dims = self.back_buffer.as_ref().map(|bb| (bb.width, bb.height));
+        let src_shape = self.shape(source);
         let has_window = self.window.as_ref().is_some_and(|w| w.presenter.is_some());
-        if colorspace_changed && allow_present && has_window && bb_dims.is_some() {
+        if colorspace_changed && allow_present && has_window && src_shape.is_some() {
             self.drain();
         }
-        if let (Some((bb_w, bb_h)), true, true) = (bb_dims, allow_present, has_window) {
+        let mut submitted_frame = false;
+        if let (Some(shape), true, true) = (src_shape, allow_present, has_window) {
+            let (src_w, src_h) = (shape.width, shape.height);
             let (dw, dh) = match poll.as_ref() {
                 Some(p) if p.drawable_width > 0 && p.drawable_height > 0 => {
                     (p.drawable_width, p.drawable_height)
                 }
                 _ if self.drawable_size.0 > 0 && self.drawable_size.1 > 0 => self.drawable_size,
-                _ => (bb_w, bb_h),
+                _ => (src_w, src_h),
             };
             let hdr_enable = self.options.contains(CoreOptions::HDR_ENABLE);
             let hdr_active = hdr_enable
@@ -658,11 +690,11 @@ impl CoreDevice {
             };
             presenter.sync_d3d9_managed(dw, dh, hdr_active, colorspace_changed);
             let paced = display_sync || after > 0.0 || cap_after > 0.0;
-            if self.back_buffer.is_some() {
+            if let Some(texture) = self.resolve_present_source(source) {
                 let geometry = PresentGeometry {
                     src: (
-                        usize::try_from(bb_w).unwrap_or(usize::MAX),
-                        usize::try_from(bb_h).unwrap_or(usize::MAX),
+                        usize::try_from(src_w).unwrap_or(usize::MAX),
+                        usize::try_from(src_h).unwrap_or(usize::MAX),
                     ),
                     dst: (
                         usize::try_from(dw).unwrap_or(usize::MAX),
@@ -670,97 +702,89 @@ impl CoreDevice {
                     ),
                 };
                 let settled = geometry_settled(&mut self.settled_geometry, geometry);
-                let upscale_bundle =
-                    if geometry.enlarges() && settled && metalfx_available(self.device.device()) {
-                        self.prepare_upscale_resources((bb_w, bb_h), (dw, dh), self.gamma.is_some())
-                    } else {
-                        if !geometry.enlarges() {
-                            self.upscale = None;
-                        }
-                        None
-                    };
-                if let Some(texture) = self
-                    .back_buffer
-                    .as_ref()
-                    .map(|bb| Arc::clone(bb.presented().0))
+                let upscale_bundle = if shape.pixel_format == WMT_PIXEL_FORMAT_BGRA8_UNORM
+                    && geometry.enlarges()
+                    && settled
+                    && metalfx_available(self.device.device())
                 {
-                    self.resolve_presented();
-                    let queue = self.device.queue_mut();
-                    let frame = queue.current_frame_seq();
-                    queue.chunk().signal_frame_latency(frame);
-                    if let Some(UpscaleStep {
-                        scaler,
-                        output: upscaled_output,
-                        gamma_scratch,
-                    }) = upscale_bundle
-                    {
-                        let upscale_input = if let (Some(lut), Some(scratch)) =
-                            (self.gamma.clone(), gamma_scratch)
-                        {
-                            let gamma_presenter = Arc::clone(&presenter);
-                            let src = Arc::clone(&texture);
-                            let dst = Arc::clone(&scratch);
-                            self.emit(move |enc| {
-                                enc.d3d9_gamma_pass(
-                                    &src,
-                                    &dst,
-                                    Arc::clone(&gamma_presenter),
-                                    Arc::clone(&lut),
-                                );
-                            });
-                            scratch
-                        } else {
-                            texture
-                        };
-                        let out = Arc::clone(&upscaled_output);
-                        self.emit(move |enc| {
-                            enc.upscale(&upscale_input, &out, Arc::clone(&scaler));
-                        });
-                        let args = D3d9PresentArgs {
-                            gamma: None,
-                            peak_edr,
-                            view: view_handle,
-                            presented_event: event_handle,
-                            presented_value: signal_value,
-                            paced,
-                        };
-                        self.emit(move |enc| {
-                            enc.present_d3d9(
-                                &upscaled_output,
-                                Arc::clone(&presenter),
-                                after,
-                                args.clone(),
-                            );
-                        });
-                    } else {
-                        let args = D3d9PresentArgs {
-                            gamma: self.gamma.clone(),
-                            peak_edr,
-                            view: view_handle,
-                            presented_event: event_handle,
-                            presented_value: signal_value,
-                            paced,
-                        };
-                        self.emit(move |enc| {
-                            enc.present_d3d9(&texture, Arc::clone(&presenter), after, args.clone());
-                        });
+                    self.prepare_upscale_resources((src_w, src_h), (dw, dh))
+                } else {
+                    if !geometry.enlarges() {
+                        self.upscale = None;
                     }
-                    self.commit();
-                    self.device.queue().present_boundary(true);
-                    #[cfg(all(debug_assertions, not(feature = "perf-build")))]
-                    if let Some(hud) = self.hud.as_mut() {
-                        let statistics = self.device.queue().statistics();
-                        hud.update_statistics(&statistics, frame);
-                        drop(statistics);
-                    }
-                } else if self.dirty || self.render_open {
-                    self.commit();
+                    None
+                };
+                let queue = self.device.queue_mut();
+                let frame = queue.current_frame_seq();
+                queue.chunk().signal_frame_latency(frame);
+                let args = D3d9PresentArgs {
+                    gamma: self.gamma.clone(),
+                    peak_edr,
+                    view: view_handle,
+                    presented_event: event_handle,
+                    presented_value: signal_value,
+                    paced,
+                };
+                if let Some(UpscaleStep {
+                    scaler,
+                    output: upscaled_output,
+                }) = upscale_bundle
+                {
+                    let out = Arc::clone(&upscaled_output);
+                    self.emit(move |enc| {
+                        enc.upscale(&texture, &out, Arc::clone(&scaler));
+                    });
+                    self.emit(move |enc| {
+                        enc.present_d3d9(
+                            &upscaled_output,
+                            Arc::clone(&presenter),
+                            after,
+                            args.clone(),
+                        );
+                    });
+                } else {
+                    self.emit(move |enc| {
+                        enc.present_d3d9(&texture, Arc::clone(&presenter), after, args.clone());
+                    });
+                }
+                self.commit();
+                submitted_frame = true;
+                self.device.queue().present_boundary(true);
+                #[cfg(all(debug_assertions, not(feature = "perf-build")))]
+                if let Some(hud) = self.hud.as_mut() {
+                    let statistics = self.device.queue().statistics();
+                    hud.update_statistics(&statistics, frame);
+                    drop(statistics);
                 }
             } else if self.dirty || self.render_open {
                 self.commit();
             }
         } else if self.dirty || self.render_open {
             self.commit();
+        }
+        let (view_for_cs, cs_reasons) = self.window.as_mut().map_or((0, 0), |w| {
+            if !submitted_frame && w.first_frame_present_pending {
+                (w.view, 0)
+            } else {
+                let mut reasons = extra_cs_reasons;
+                if dirty_surface {
+                    reasons |= WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN;
+                }
+                if submitted_frame && w.first_frame_present_pending {
+                    reasons |= WMT_CLIENT_SURFACE_REASON_ATTACHED;
+                }
+                if submitted_frame {
+                    w.first_frame_present_pending = false;
+                }
+                (w.view, reasons)
+            }
+        });
+        if view_for_cs != 0 && cs_reasons != 0 {
+            if submitted_frame {
+                self.drain();
+            }
+            // SAFETY: `view_for_cs` is live while `self.window` remains attached.
+            unsafe { WMTPresentClientSurface(view_for_cs, cs_reasons) };
         }
         self.end_frame_clear_tracking();
         crate::rt::stats::frame();
@@ -781,6 +805,85 @@ impl CoreDevice {
             self.last_paced = Some(deadline);
         } else {
             self.last_paced = None;
+        }
+    }
+
+    /// Closes any open pass and returns a single-sample, mip-0 2D texture ready to present.
+    fn resolve_present_source(&mut self, source: TargetRef) -> Option<Arc<Texture>> {
+        match source {
+            TargetRef::Null => None,
+            TargetRef::BackBuffer => {
+                self.resolve_presented();
+                self.back_buffer
+                    .as_ref()
+                    .map(|bb| Arc::clone(bb.presented().0))
+            }
+            TargetRef::Texture { .. } => {
+                self.close_pass();
+                let resolved = self.resolve(source)?;
+                let shape = resolved.shape;
+                if shape.samples == 1 && shape.level == 0 && shape.slice == 0 {
+                    return Some(resolved.texture);
+                }
+                let key = (shape.pixel_format, shape.width, shape.height);
+                let cached = self
+                    .window
+                    .as_ref()
+                    .and_then(|w| w.msaa_present_resolve.as_ref())
+                    .filter(|(k, _)| *k == key)
+                    .map(|(_, tex)| Arc::clone(tex));
+                let dst = cached.or_else(|| {
+                    let usage = WMT_TEXTURE_USAGE_RENDER_TARGET
+                        | WMT_TEXTURE_USAGE_SHADER_READ
+                        | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+                    let allocated = alloc_private_2d(
+                        self.device.device(),
+                        shape.pixel_format,
+                        shape.width,
+                        shape.height,
+                        usage,
+                    )?;
+                    if let Some(w) = self.window.as_mut() {
+                        w.msaa_present_resolve = Some((key, Arc::clone(&allocated)));
+                    }
+                    Some(allocated)
+                })?;
+                if shape.samples > 1 {
+                    let format = self.last_written(source).unwrap_or(shape.pixel_format);
+                    let src_key = resolved.key.with_format(format);
+                    let dst_key = dst.full_view().with_format(format);
+                    let src_tex = resolved.texture;
+                    let dst_tex = Arc::clone(&dst);
+                    self.emit(move |enc| enc.resolve_texture(&src_tex, src_key, &dst_tex, dst_key));
+                } else {
+                    let dst_shape = super::target::Shape {
+                        level: 0,
+                        slice: 0,
+                        ..shape
+                    };
+                    let src_tex = resolved.texture;
+                    let dst_tex = Arc::clone(&dst);
+                    self.open_blit_pass();
+                    self.emit(move |enc| {
+                        let src = enc.access_texture::<{ stage::COMPUTE }>(
+                            &src_tex,
+                            shape.level,
+                            shape.slice,
+                            Access::READ,
+                        );
+                        let dst =
+                            enc.access_texture::<{ stage::COMPUTE }>(&dst_tex, 0, 0, Access::WRITE);
+                        enc.encode_blit_command(super::surface::blit_record(
+                            (src, &shape),
+                            [0, 0, shape.width, shape.height],
+                            (dst, &dst_shape),
+                            [0, 0],
+                        ));
+                    });
+                    self.close_pass();
+                }
+                Some(dst)
+            }
         }
     }
 
@@ -974,6 +1077,16 @@ impl CoreDevice {
         if self.options.contains(CoreOptions::PRESENT_OCCLUDED) {
             attach_flags |= WMT_VIEW_ATTACH_FLAG_PRESENT_OCCLUDED;
         }
+        let fallback_width = if self.drawable_size.0 > 0 {
+            self.drawable_size.0
+        } else {
+            width
+        };
+        let fallback_height = if self.drawable_size.1 > 0 {
+            self.drawable_size.1
+        } else {
+            height
+        };
         let attach_desc = WMTViewAttachDesc {
             width,
             height,
@@ -981,8 +1094,8 @@ impl CoreDevice {
             reserved: 0,
         };
         let mut poll = WMTViewPollOut {
-            drawable_width: width,
-            drawable_height: height,
+            drawable_width: fallback_width,
+            drawable_height: fallback_height,
             backing_scale: 1,
             edr_current: 1.0,
             edr_potential: 1.0,
@@ -1026,12 +1139,12 @@ impl CoreDevice {
         let init_w = if poll.drawable_width > 0 {
             poll.drawable_width
         } else {
-            width
+            fallback_width
         };
         let init_h = if poll.drawable_height > 0 {
             poll.drawable_height
         } else {
-            height
+            fallback_height
         };
         let desc = PresenterDesc {
             device: mtl.handle(),
@@ -1056,10 +1169,6 @@ impl CoreDevice {
             poll.flags & WMT_VIEW_POLL_FLAG_CURSOR_KICK != 0,
         );
         self.overlay.set_view(view);
-        if poll.flags & WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY != 0 {
-            // SAFETY: `view` was just attached and is live.
-            unsafe { WMTPresentClientSurface(view, WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN) };
-        }
         Some(Window {
             view,
             layer: Some(layer),
@@ -1067,6 +1176,9 @@ impl CoreDevice {
             presented_event,
             next_signal: 0,
             park_on_retire: true,
+            first_frame_present_pending: true,
+            source_extent: (width, height),
+            msaa_present_resolve: None,
             overlay: Arc::clone(&self.overlay),
         })
     }

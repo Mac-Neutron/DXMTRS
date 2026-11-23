@@ -993,14 +993,19 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
         "{step2:#?}"
     );
 
-    // Resize syncs via WMTViewSyncAndPoll FORCE_REFRESH without MetalLayer_setProps.
+    // Resize syncs via WMTViewSyncAndPoll FORCE_REFRESH | SOURCE_EXTENT without MetalLayer_setProps.
     assert!(core.resize(128, 64, 1));
     let resize_calls = dxmt_fakes::take_calls(DEVICE);
     assert!(!has_layer_mutation(&resize_calls), "{resize_calls:#?}");
+    let expected_resize_flags = format!(
+        "req_flags={:#x}",
+        winemetal_sys::wire::WMT_VIEW_SYNC_FLAG_FORCE_REFRESH
+            | winemetal_sys::wire::pack_source_extent(128, 64)
+    );
     assert!(
         resize_calls
             .iter()
-            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains("req_flags=0x1")),
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains(&expected_resize_flags)),
         "{resize_calls:#?}"
     );
 
@@ -1224,7 +1229,7 @@ fn metalfx_spatial_scaler_engages_after_settled_presents() {
 }
 
 #[test]
-fn gamma_before_metalfx_runs_gamma_into_scratch_and_presents_without_double_gamma() {
+fn gamma_after_metalfx_runs_gamma_in_final_present_without_scratch() {
     use mtld3d_core::present::SETTLED_PRESENTS;
 
     const DEVICE: u64 = 0x48b;
@@ -1244,7 +1249,7 @@ fn gamma_before_metalfx_runs_gamma_into_scratch_and_presents_without_double_gamm
     let settled_calls = dxmt_fakes::take_calls(DEVICE);
     assert!(
         !settled_calls.iter().any(|c| c.contains(" size=320x180x1 ")),
-        "gamma scratch must be lazily allocated only when gamma is active: {settled_calls:#?}"
+        "no render-sized gamma scratch must ever be allocated: {settled_calls:#?}"
     );
 
     let mut lut = [0_u16; 1024];
@@ -1257,24 +1262,16 @@ fn gamma_before_metalfx_runs_gamma_into_scratch_and_presents_without_double_gamm
     dxmt_fakes::set_drawable_format(DEVICE, None);
     dxmt_fakes::set_drawable_size(DEVICE, None);
 
-    let scratch_tex = calls
-        .iter()
-        .find_map(|c| {
-            c.starts_with("MTLDevice_newTexture ")
-                .then_some(c)
-                .filter(|line| line.contains(" size=320x180x1 ") && line.contains(" bits=0x5"))
-                .and_then(|line| line.split_whitespace().nth(1))
-        })
-        .unwrap_or_else(|| panic!("expected lazy render-sized gamma scratch: {calls:#?}"));
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newTexture ") && c.contains(" size=320x180x1 ")),
+        "post-upscale gamma must allocate no render-sized scratch texture: {calls:#?}"
+    );
     let upscale_idx = calls
         .iter()
-        .position(|c| {
-            c.starts_with("MTLCommandBuffer_encodeSpatialScale ")
-                && c.contains(&format!("color={scratch_tex} "))
-        })
-        .unwrap_or_else(|| {
-            panic!("expected MetalFX to consume gamma scratch {scratch_tex}: {calls:#?}")
-        });
+        .position(|c| c.starts_with("MTLCommandBuffer_encodeSpatialScale "))
+        .unwrap_or_else(|| panic!("expected MetalFX spatial scale: {calls:#?}"));
     let gamma_bytes_positions: Vec<usize> = calls
         .iter()
         .enumerate()
@@ -1284,11 +1281,11 @@ fn gamma_before_metalfx_runs_gamma_into_scratch_and_presents_without_double_gamm
     assert_eq!(
         gamma_bytes_positions.len(),
         1,
-        "gamma LUT must run once (into scratch), never on final present: {calls:#?}"
+        "gamma LUT must run once on the final present: {calls:#?}"
     );
     assert!(
-        gamma_bytes_positions[0] < upscale_idx,
-        "gamma pass must encode before encodeSpatialScale: {calls:#?}"
+        gamma_bytes_positions[0] > upscale_idx,
+        "post-upscale gamma must encode in final present after encodeSpatialScale: {calls:#?}"
     );
 }
 
@@ -1796,4 +1793,307 @@ fn presented_event_signals_directly_when_next_drawable_is_zero_and_overlay_syncs
     );
     let overlay_calls = dxmt_fakes::take_calls(DEVICE);
     at_prefix(&overlay_calls, "WMTSetCursorOverlay ");
+}
+
+/// `WMTPresentClientSurface` defers `ATTACHED` until after the first committed present.
+#[test]
+fn first_frame_attached_reason_defers_until_first_present_commit() {
+    use winemetal_sys::{
+        Obj,
+        wire::{
+            WMT_CLIENT_SURFACE_REASON_ATTACHED, WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED,
+            WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN, WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+            WMT_VIEW_POLL_FLAG_OCCLUDED, WMTViewPollOut,
+        },
+    };
+
+    use crate::rt::device::{CoreDevice, queue_profile};
+
+    const DEVICE: u64 = 0x495;
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { Obj::adopt(DEVICE) }.expect("a non-zero handle");
+    let mut core = CoreDevice::new(mtl, queue_profile());
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+            reserved: 0,
+        }),
+    );
+    core.attach(1, 64, 32, 1);
+    core.drain();
+    let attach_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !attach_calls
+            .iter()
+            .any(|c| c.starts_with("WMTPresentClientSurface ")),
+        "open_window must not eagerly call WMTPresentClientSurface: {attach_calls:#?}"
+    );
+
+    // Hidden/occluded presents with DIRTY + extra reasons suppress WMTPresentClientSurface
+    // while first_frame_present_pending is still true.
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_OCCLUDED | WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+            reserved: 0,
+        }),
+    );
+    core.present_paced(
+        false,
+        0,
+        60,
+        0,
+        WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED,
+    );
+    core.present_paced(
+        true,
+        0,
+        60,
+        0,
+        WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED,
+    );
+    core.drain();
+    let hidden_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !hidden_calls
+            .iter()
+            .any(|c| c.starts_with("WMTPresentClientSurface ")),
+        "hidden/occluded pre-frame presents must suppress WMTPresentClientSurface: {hidden_calls:#?}"
+    );
+
+    // First visible present emits ATTACHED after commit (and DIRTY -> VIEW_HIDDEN if polled).
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 64,
+            drawable_height: 32,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
+            reserved: 0,
+        }),
+    );
+    core.present_paced(true, 0, 60, 0, 0);
+    core.drain();
+    dxmt_fakes::set_view_poll(DEVICE, None);
+    let first_calls = dxmt_fakes::take_calls(DEVICE);
+    let commit_idx = at(&first_calls, "MTLCommandBuffer_commit");
+    let expected_reasons = format!(
+        "reasons={:#x}",
+        WMT_CLIENT_SURFACE_REASON_ATTACHED | WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN
+    );
+    let cs_idx = first_calls
+        .iter()
+        .position(|c| c.starts_with("WMTPresentClientSurface ") && c.contains(&expected_reasons))
+        .unwrap_or_else(|| {
+            panic!("expected {expected_reasons} after first committed frame: {first_calls:#?}")
+        });
+    assert!(
+        cs_idx > commit_idx,
+        "WMTPresentClientSurface must follow commit: {first_calls:#?}"
+    );
+
+    // Second visible present never sends ATTACHED again.
+    core.present_paced(true, 0, 60, 0, 0);
+    core.drain();
+    let second_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        !second_calls
+            .iter()
+            .any(|c| c.starts_with("WMTPresentClientSurface ")),
+        "ATTACHED must only fire once per attached view: {second_calls:#?}"
+    );
+}
+
+/// Scaled attach/resize track render source extent and pack `SOURCE_EXTENT` only on changes.
+#[test]
+fn scaled_attach_and_resize_send_source_extent_to_winemetal() {
+    use winemetal_sys::wire::{WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, pack_source_extent};
+
+    const DEVICE: u64 = 0x496;
+    let _guard = crate::rt::device::fixture::FAKE_GLOBAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut core = scaled_core_on_fakes(DEVICE, (320, 180), (640, 360));
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    // Same source extent (320x180) with new drawable size sends FORCE_REFRESH only.
+    assert!(core.resize_scaled(320, 180, 960, 540, 1));
+    let same_src = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        same_src
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains("req_flags=0x1 ")),
+        "unchanged source extent must send FORCE_REFRESH only: {same_src:#?}"
+    );
+
+    // New source extent (640x360) packs SOURCE_EXTENT alongside FORCE_REFRESH.
+    assert!(core.resize_scaled(640, 360, 1280, 720, 1));
+    let changed_src = dxmt_fakes::take_calls(DEVICE);
+    let expected = format!(
+        "req_flags={:#x} ",
+        WMT_VIEW_SYNC_FLAG_FORCE_REFRESH | pack_source_extent(640, 360)
+    );
+    assert!(
+        changed_src
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains(&expected)),
+        "changed source extent must send {expected}: {changed_src:#?}"
+    );
+}
+
+/// `present_paced_from` presents single-sample and MSAA targets and syncs their extent.
+#[test]
+fn present_paced_from_presents_additional_single_and_msaa_targets() {
+    use mtld3d_core::ids::TextureId;
+    use winemetal_sys::wire::{
+        WMT_CLIENT_SURFACE_REASON_ATTACHED, WMT_PIXEL_FORMAT_BGRA8_UNORM,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB, WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, pack_source_extent,
+    };
+
+    use crate::rt::device::{CoreTextureDesc, CoreTextureFlags, TargetRef, TextureKind};
+
+    const DEVICE: u64 = 0x497;
+    let mut core = core_on_fakes(DEVICE);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    let single_id = TextureId::new_unique();
+    core.texture_create(
+        single_id,
+        &CoreTextureDesc {
+            pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            kind: TextureKind::Tex2d,
+            width: 128,
+            height: 64,
+            depth: 1,
+            levels: 1,
+            flags: CoreTextureFlags::RENDER_TARGET,
+            srgb_format: 0,
+            block: (1, 1, 4),
+            samples: 1,
+        },
+    );
+    core.drain();
+    let create_single = dxmt_fakes::take_calls(DEVICE);
+    let single_tex = textures_made(&create_single)
+        .into_iter()
+        .next()
+        .expect("single-sample target texture allocated");
+
+    let single_ref = TargetRef::Texture {
+        id: single_id,
+        level: 0,
+        face: None,
+    };
+    core.present_paced_from(true, 0, 60, 0, 0, single_ref);
+    core.drain();
+    let single_calls = dxmt_fakes::take_calls(DEVICE);
+    let expected_single_flags = format!(
+        "req_flags={:#x} ",
+        WMT_VIEW_SYNC_FLAG_FORCE_REFRESH | pack_source_extent(128, 64)
+    );
+    assert!(
+        single_calls
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains(&expected_single_flags)),
+        "{single_calls:#?}"
+    );
+    let fragment_tex = winemetal_sys::wire::WMT_RENDER_COMMAND_SET_FRAGMENT_TEXTURE;
+    let sampled_single = format!("  render {fragment_tex} texture={single_tex} index=0");
+    assert!(
+        single_calls.iter().any(|c| c == &sampled_single),
+        "present pass must sample single-sample additional target {single_tex}: {single_calls:#?}"
+    );
+    let attached_reason = format!("reasons={WMT_CLIENT_SURFACE_REASON_ATTACHED:#x}");
+    assert!(
+        single_calls
+            .iter()
+            .any(|c| c.starts_with("WMTPresentClientSurface ") && c.contains(&attached_reason)),
+        "first submitted frame via present_paced_from must emit ATTACHED: {single_calls:#?}"
+    );
+
+    let msaa_id = TextureId::new_unique();
+    core.texture_create(
+        msaa_id,
+        &CoreTextureDesc {
+            pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            kind: TextureKind::Tex2d,
+            width: 96,
+            height: 48,
+            depth: 1,
+            levels: 1,
+            flags: CoreTextureFlags::RENDER_TARGET | CoreTextureFlags::VIEW_TWINS,
+            srgb_format: WMT_PIXEL_FORMAT_BGRA8_UNORM_S_RGB,
+            block: (1, 1, 4),
+            samples: 4,
+        },
+    );
+    let msaa_ref = TargetRef::Texture {
+        id: msaa_id,
+        level: 0,
+        face: None,
+    };
+    assert!(core.set_target(msaa_ref));
+    core.clear(0, [0.25, 0.5, 0.75, 1.0], false);
+    core.drain();
+    let _ = dxmt_fakes::take_calls(DEVICE);
+
+    core.present_paced_from(true, 0, 60, 0, 0, msaa_ref);
+    core.drain();
+    let msaa_calls = dxmt_fakes::take_calls(DEVICE);
+    let expected_msaa_flags = format!(
+        "req_flags={:#x} ",
+        WMT_VIEW_SYNC_FLAG_FORCE_REFRESH | pack_source_extent(96, 48)
+    );
+    assert!(
+        msaa_calls
+            .iter()
+            .any(|c| c.starts_with("WMTViewSyncAndPoll ") && c.contains(&expected_msaa_flags)),
+        "{msaa_calls:#?}"
+    );
+    let resolve_tex = textures_made(&msaa_calls)
+        .into_iter()
+        .next()
+        .expect("single-sample resolve texture allocated for 4x MSAA target");
+    assert!(
+        msaa_calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newTexture ") && c.contains(" size=96x48x1 ")),
+        "{msaa_calls:#?}"
+    );
+    let sampled_resolve = format!("  render {fragment_tex} texture={resolve_tex} index=0");
+    assert!(
+        msaa_calls.iter().any(|c| c == &sampled_resolve),
+        "present pass must sample resolved single-sample texture {resolve_tex}: {msaa_calls:#?}"
+    );
+
+    // Second MSAA present reuses the cached single-sample resolve texture on Window.
+    core.present_paced_from(true, 0, 60, 0, 0, msaa_ref);
+    core.drain();
+    let msaa_reuse_calls = dxmt_fakes::take_calls(DEVICE);
+    assert!(
+        textures_made(&msaa_reuse_calls).is_empty(),
+        "cached MSAA resolve texture must be reused without reallocating: {msaa_reuse_calls:#?}"
+    );
+    assert!(
+        msaa_reuse_calls.iter().any(|c| c == &sampled_resolve),
+        "reused resolve texture {resolve_tex} must be sampled on second present: {msaa_reuse_calls:#?}"
+    );
 }

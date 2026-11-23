@@ -290,7 +290,7 @@ const CLIP_PLANE_SLOTS: usize = mtld3d_core::vs_draw::MAX_CLIP_PLANES;
 bitflags::bitflags! {
     /// Assorted per-device boolean state.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub struct DeviceFlags: u8 {
+    pub struct DeviceFlags: u16 {
         /// Set after the app called `SetDepthStencilSurface(NULL)` — depth is explicitly absent.
         ///
         /// Distinguishes "no override, use the auto depth" from "explicitly
@@ -339,6 +339,8 @@ bitflags::bitflags! {
         const RESET_FAILURE_LOGGED = 1 << 6;
         /// Set at device creation for `debug.failNextSubmit`; consumed on the first Present.
         const FAIL_NEXT_SUBMIT = 1 << 7;
+        /// Set once `CreateAdditionalSwapChain` succeeds; suppresses auto-resize rebuilds.
+        const MADE_SWAP_CHAIN = 1 << 8;
     }
 }
 
@@ -467,8 +469,8 @@ pub struct DeviceInner {
     last_sized_depth: Option<(crate::rt::device::DepthRef, u32, u32)>,
     /// Interned shader token arrays by id, so draws compare programs by pointer.
     programs: rustc_hash::FxHashMap<ProgramId, std::sync::Weak<[u32]>>,
-    /// Core texture IDs that migrated to another device, drained on the owning device's API thread.
-    departed_textures: Mutex<Vec<TextureId>>,
+    /// Core texture IDs queued for `CoreDevice::forget_texture` on the owning device's API thread.
+    departed_textures: Arc<Mutex<Vec<TextureId>>>,
     /// First latched device failure (`D3D_OK` until a failure).
     core_failure: AtomicI32,
     /// Address-space watch state: this device's present-sampling counter and its watch thread.
@@ -1158,10 +1160,16 @@ impl DeviceInner {
         self.invalidate_core_draw();
         self.bound_rt_mut()
             .replace_render_target(slot, core::ptr::null_mut(), 0, 0);
+        self.drain_departed_textures();
     }
 
     /// Present the current back buffer and advance per-frame state.
     pub fn present(&mut self) -> i32 {
+        self.present_from(crate::rt::device::TargetRef::BackBuffer)
+    }
+
+    /// Present `source` through the device's Metal layer and advance per-frame state.
+    pub fn present_from(&mut self, source: crate::rt::device::TargetRef) -> i32 {
         if let Err(hr) = self.encoder_status() {
             return hr;
         }
@@ -1181,11 +1189,12 @@ impl DeviceInner {
         }
         self.drain_departed_textures();
         let pe_cs_reasons = self.cursor.sinks().take_client_surface_request().bits();
-        let _ = core_arms::present(
+        let _ = core_arms::present_from(
             &mut self.core,
             &self.present_params,
             &self.config,
             pe_cs_reasons,
+            source,
         );
         let cursor_scale = self.config().cursor_scale;
         let backing_scale = self.core.backing_scale();
@@ -1299,7 +1308,13 @@ impl DeviceInner {
         departed.retain(|&entry| entry != id);
     }
 
-    /// Drop core-side copies of textures that migrated to another device.
+    /// Shared queue handle for retiring core textures without borrowing `self`.
+    #[must_use]
+    pub fn departed_textures_handle(&self) -> Arc<Mutex<Vec<TextureId>>> {
+        Arc::clone(&self.departed_textures)
+    }
+
+    /// Drop core-side copies of retired standalone targets or migrated textures.
     pub fn drain_departed_textures(&mut self) {
         let departed = {
             let mut guard = self
@@ -1311,6 +1326,7 @@ impl DeviceInner {
             }
             core::mem::take(&mut *guard)
         };
+        self.clear_core_draw_cache();
         for id in departed {
             self.core.forget_texture(id);
         }
@@ -1651,6 +1667,7 @@ impl DeviceInner {
             "the back buffer and the auto depth-stencil bind"
         );
         self.bound_rt.teardown();
+        self.drain_departed_textures();
         self.last_sized_depth = None;
         self.flags.remove(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND);
     }
@@ -1815,6 +1832,14 @@ impl DeviceInner {
                 target: LOG_TARGET,
                 "WM_SIZE ({new_width}x{new_height}) during the device's release ignored; the \
                  back buffer is being destroyed, not resized",
+            );
+            return;
+        }
+        if self.flags.contains(DeviceFlags::MADE_SWAP_CHAIN) {
+            debug!(
+                target: LOG_TARGET,
+                "WM_SIZE ({new_width}x{new_height}) ignored; the device has created an \
+                 additional swap chain",
             );
             return;
         }
@@ -2000,7 +2025,7 @@ impl Direct3DDevice9 {
             core: info.core,
             core_auto_depth: None,
             last_sized_depth: None,
-            departed_textures: Mutex::new(Vec::new()),
+            departed_textures: Arc::new(Mutex::new(Vec::new())),
             programs: rustc_hash::FxHashMap::default(),
             core_failure: AtomicI32::new(D3D_OK),
             mem_watch: mem_watch::MemWatchState::new(),
@@ -2538,25 +2563,59 @@ const fn create_kind_key(kind: &mtld3d_core::extended::CreateKind) -> u64 {
 
 /// Copy an extended create's user memory into the level that backs it.
 ///
-/// `rows` is the level's packed extent and `pitch` the row pitch of `level`.
-/// A level too small for the rows is left as it was, warned once.
+/// `rows` is the level's packed extent and `pitch` the row pitch of `page`.
+/// Returns `true` when the packed rows fit and row padding (plus any trailing
+/// bytes) was zeroed; returns `false` when the backing is too short, leaving it
+/// uninitialised and warned once.
 fn copy_user_memory(
     memory: NonNull<u8>,
     rows: &mtld3d_core::extended::PackedRows,
-    level: &mut [u8],
+    page: &mut PageBox,
     pitch: usize,
-) {
+) -> bool {
+    let needed = match rows.rows {
+        0 => 0,
+        count => (count - 1)
+            .saturating_mul(pitch)
+            .saturating_add(rows.row_bytes),
+    };
+    if pitch < rows.row_bytes || page.logical_len() < needed {
+        mtld3d_shared::log_once_warn!(target: LOG_TARGET,
+            "user memory: {} rows of {} bytes do not fit a level of pitch {pitch} and {} bytes; \
+             the level starts uninitialised",
+            rows.rows, rows.row_bytes, page.logical_len());
+        return false;
+    }
     // SAFETY: an extended device's user-memory contract: the application's
     // pointer covers the level's tightly packed rows, which `rows` sizes from
     // the create's own extent and format, and it stays valid for the create.
     let src =
         unsafe { core::slice::from_raw_parts(memory.as_ptr().cast_const(), rows.total_bytes()) };
-    if !mtld3d_core::extended::copy_packed_rows(src, rows, level, pitch) {
-        mtld3d_shared::log_once_warn!(target: LOG_TARGET,
-            "user memory: {} rows of {} bytes do not fit a level of pitch {pitch} and {} bytes; \
-             the level starts uninitialised",
-            rows.rows, rows.row_bytes, level.len());
+    let dst = page.as_mut_ptr();
+    if rows.row_bytes > 0 {
+        for (row, src_row) in src.chunks_exact(rows.row_bytes).take(rows.rows).enumerate() {
+            let row_start = row.saturating_mul(pitch);
+            // SAFETY: `row_start < needed <= page.logical_len() <= page.len()` stays within the
+            // allocation.
+            let row_dst = unsafe { dst.add(row_start) };
+            // SAFETY: `row_start + rows.row_bytes <= needed <= page.logical_len() <= page.len()`
+            // lies inside the unique writable allocation, non-overlapping with `src_row`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(src_row.as_ptr(), row_dst, rows.row_bytes);
+            }
+        }
     }
+    page.zero_row_padding(rows.rows, rows.row_bytes, pitch);
+    let covered = rows.rows.saturating_mul(pitch);
+    if covered < page.logical_len() {
+        let tail = page.logical_len() - covered;
+        // SAFETY: `covered < page.logical_len() <= page.len()` stays within the allocation.
+        let tail_dst = unsafe { dst.add(covered) };
+        // SAFETY: `covered + tail == page.logical_len() <= page.len()` lies inside the unique
+        // writable allocation.
+        unsafe { tail_dst.write_bytes(0, tail) };
+    }
+    true
 }
 
 /// Hold the device's API lock for the thunk; a no-op unless the app asked for `MULTITHREADED`.
@@ -3169,19 +3228,96 @@ extern "system" fn device_create_additional_swap_chain(
         );
         return D3DERR_INVALIDCALL;
     }
+    if !mtld3d_core::present::present_flags_are_valid(&pp) {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateAdditionalSwapChain: D3DPRESENTFLAG_LOCKABLE_BACKBUFFER with \
+             MultiSampleType {}, a multisampled back buffer cannot be locked",
+            pp.multi_sample_type,
+        );
+        return D3DERR_INVALIDCALL;
+    }
     // Resolve a zero-dimension windowed request against the target window's
-    // client rect (the device window when device_window is NULL), and clamp a
-    // zero back-buffer count to one — then report both back to the caller.
+    // client rect (the device window when device_window is NULL), falling back
+    // to `EMPTY_CLIENT_BACK_BUFFER_EXTENT` when the client rect is empty, and
+    // clamp a zero back-buffer count to one.
     let target_window: usize = if pp.device_window != 0 {
         pp.device_window
     } else {
         dev.window()
     };
     crate::direct3d9::resolve_backbuffer_dims(target_window as u64, &mut pp);
+    if pp.back_buffer_width == 0 {
+        pp.back_buffer_width = mtld3d_core::present::EMPTY_CLIENT_BACK_BUFFER_EXTENT;
+    }
+    if pp.back_buffer_height == 0 {
+        pp.back_buffer_height = mtld3d_core::present::EMPTY_CLIENT_BACK_BUFFER_EXTENT;
+    }
     if pp.back_buffer_format == 0 {
         pp.back_buffer_format = crate::direct3d9::adapter_display_format();
     }
     pp.back_buffer_count = pp.back_buffer_count.max(1);
+    let expand_packed16 = dev.config().expand_packed16;
+    let requested_format = mtld3d_core::format::backbuffer_surface_format(pp.back_buffer_format);
+    let surface_format =
+        if crate::direct3d9::is_render_target_format_on_device(requested_format, expand_packed16) {
+            requested_format
+        } else {
+            crate::direct3d9::warn_unsupported_backbuffer_format(pp.back_buffer_format);
+            mtld3d_types::D3DFMT_X8R8G8B8
+        };
+    let Ok(sample_count) = mtld3d_core::multisample::resolve_sample_count(
+        pp.multi_sample_type,
+        pp.multi_sample_quality,
+        surface_format,
+        crate::direct3d9::device_caps_flags(),
+    )
+    .map(|count| u8::try_from(count).expect("sample count ≤ 16 fits u8")) else {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateAdditionalSwapChain: MultiSampleType={} Quality={} on format {} → INVALIDCALL",
+            pp.multi_sample_type, pp.multi_sample_quality, pp.back_buffer_format
+        );
+        return D3DERR_INVALIDCALL;
+    };
+    let multi_sample = SurfaceMultiSample {
+        multi_sample_type: pp.multi_sample_type,
+        multi_sample_quality: pp.multi_sample_quality,
+        sample_count,
+    };
+    let staging_bytes = if pp.flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER != 0 {
+        lockable_staging_bytes(surface_format, pp.back_buffer_width, pp.back_buffer_height)
+    } else {
+        0
+    };
+    let staging = if staging_bytes == 0 {
+        None
+    } else {
+        let Some(staging) = PageBox::try_new_zeroed(staging_bytes) else {
+            return refuse_unallocatable_staging("CreateAdditionalSwapChain", swap_chain);
+        };
+        Some(staging)
+    };
+    dev.drain_departed_textures();
+    let Some((color_id, render_scale)) = allocate_color_target(
+        dev,
+        &ColorTargetSpec {
+            width: pp.back_buffer_width,
+            height: pp.back_buffer_height,
+            format: surface_format,
+            usage: D3DUSAGE_RENDERTARGET,
+            multi_sample,
+        },
+        expand_packed16,
+    ) else {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateAdditionalSwapChain({}x{}, format={}) → INVALIDCALL \
+             (failed allocating colour target)",
+            pp.back_buffer_width, pp.back_buffer_height, pp.back_buffer_format
+        );
+        return D3DERR_INVALIDCALL;
+    };
     // SAFETY: `present_params` is the non-null pointer the request was read from, writable
     // per the ABI; alignment is not assumed.
     unsafe { report_resolved_geometry(present_params, &pp) };
@@ -3189,11 +3325,30 @@ extern "system" fn device_create_additional_swap_chain(
     // real target window even when the caller passed NULL.
     pp.device_window = target_window;
     let sc = crate::swapchain::Direct3DSwapChain9::new(obj.inner_ptr(), pp);
-    // SAFETY: vtable out-param; `swap_chain` is *mut *mut c_void per the ABI.
     let sc_ptr = Box::into_raw(Box::new(sc));
+    let mut back_buffer = Direct3DSurface9::new_swap_chain_backbuffer(
+        &ColorTargetCreateInfo {
+            device_inner: obj.inner_ptr(),
+            width: pp.back_buffer_width,
+            height: pp.back_buffer_height,
+            format: surface_format,
+            usage: D3DUSAGE_RENDERTARGET,
+            render_scale,
+            multi_sample,
+        },
+        sc_ptr as u64,
+    );
+    back_buffer.set_core_texture(color_id, dev.departed_textures_handle());
+    if let Some(staging) = staging {
+        back_buffer.set_lockable_staging(staging);
+    }
+    let back_buffer_ptr = Box::into_raw(Box::new(back_buffer));
+    // SAFETY: `sc_ptr` is the freshly boxed swap chain just created above.
+    unsafe { (*sc_ptr).set_back_buffer(back_buffer_ptr as u64) };
     // SAFETY: `sc_ptr` is a freshly created, live additional swapchain at
     // refcount 1.
     unsafe { crate::com_ref::com_register_child(sc_ptr) };
+    dev.flags.insert(DeviceFlags::MADE_SWAP_CHAIN);
     // SAFETY: vtable out-param; `swap_chain` is *mut *mut c_void per the ABI.
     unsafe { OutPtr::write_opt(swap_chain, sc_ptr.cast::<c_void>()) };
     D3D_OK
@@ -3420,6 +3575,19 @@ fn reset_impl(this: *mut c_void, present_params: *mut c_void, call: ResetCall) -
             format_args!(
                 "rejected, {blockers} D3DPOOL_DEFAULT resource(s) or implicit surface(s) still \
                  referenced"
+            ),
+            ResetFailureEffect::Unchanged,
+        );
+        return reject_reset(dev);
+    }
+    if !mtld3d_core::present::present_flags_are_valid(&pp) {
+        log_failed_reset(
+            dev,
+            &log,
+            &pp,
+            format_args!(
+                "rejected, D3DPRESENTFLAG_LOCKABLE_BACKBUFFER with MultiSampleType {}",
+                pp.multi_sample_type
             ),
             ResetFailureEffect::Unchanged,
         );
@@ -3722,6 +3890,16 @@ fn apply_reset_window_mode(dev: &mut DeviceInner, pp: &mtld3d_types::D3DPRESENT_
     if dev.fullscreen_window() == Some(target) {
         dev.update_fullscreen(mode);
         return;
+    }
+    // Activate the focus window on a windowed -> fullscreen transition only,
+    // outside `enter`'s `DrivingGuard` (not when moving between fullscreen windows).
+    if dev.fullscreen_window().is_none() {
+        let focus = if dev.creation_focus_window != 0 {
+            dev.creation_focus_window as *mut c_void
+        } else {
+            target
+        };
+        crate::fullscreen::activate_focus_window(focus);
     }
     // A Reset may retarget the device at another window. The session is
     // handed over rather than given back: the window left behind keeps the
@@ -4360,7 +4538,20 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
     // non-renderable colour attachment with an abort rather than a returned
     // error: a lenient create costs the process at the first draw into the
     // texture instead of costing the application one handled failure here.
-    if usage_rt && !crate::direct3d9::is_render_target_format_on_device(format, expand_packed16) {
+    if mtld3d_core::format::is_null_render_target(format) {
+        if offscreen_plain
+            || pool != D3DPOOL_DEFAULT
+            || !mtld3d_core::format::null_render_target_usage_allowed(
+                usage,
+                mtld3d_types::D3DRTYPE_TEXTURE,
+            )
+        {
+            null_out(texture);
+            return D3DERR_INVALIDCALL;
+        }
+    } else if usage_rt
+        && !crate::direct3d9::is_render_target_format_on_device(format, expand_packed16)
+    {
         mtld3d_shared::log_once_warn_by!(
             target: crate::LOG_TARGET,
             key: u64::from(format),
@@ -4474,7 +4665,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         // Every offset a planar lock, upload or decode forms is derived from
         // the layout, so the allocation has to be exactly the layout's size.
         if !lazy_staging {
-            match PageBox::try_new_zeroed(layout.total_bytes()) {
+            match PageBox::try_new_uninit(layout.total_bytes()) {
                 Some(page) => {
                     debug_assert_eq!(page.logical_len(), layout.total_bytes());
                     staging.push(page);
@@ -4490,7 +4681,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         for level in 0..actual_levels {
             let (mw, mh, size, bpr) = compute_mip_size(width, height, level, &fmt);
             if !lazy_staging {
-                let Some(page) = PageBox::try_new_zeroed(size as usize) else {
+                let Some(page) = PageBox::try_new_uninit(size as usize) else {
                     out_of_memory = true;
                     break;
                 };
@@ -4506,7 +4697,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
     }
     // An extended device's single-level system-memory texture starts with the
     // application's pixels, packed row after row, copied into the level once.
-    if let Some(memory) = user_memory {
+    let staging_unwritten = user_memory.is_none_or(|memory| {
         let rows = mtld3d_core::extended::PackedRows::of_level(
             width,
             height,
@@ -4514,8 +4705,8 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
             (fmt.block_width(), fmt.block_height(), fmt.block_bytes()),
         );
         let pitch = usize::try_from(mip_bytes_per_row[0]).expect("a row pitch fits usize");
-        copy_user_memory(memory, &rows, staging[0].as_mut_slice(), pitch);
-    }
+        !copy_user_memory(memory, &rows, &mut staging[0], pitch)
+    });
     // A render target the game created at the reported back-buffer size is its
     // main view and shares the back buffer's scale. A texture it uploads pixels
     // into never does: its staging layout is keyed to the reported size.
@@ -4541,6 +4732,7 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         block_h: fmt.block_height(),
         block_bytes: fmt.block_bytes(),
         staging,
+        staging_unwritten,
         mip_widths,
         mip_heights,
         mip_bytes_per_row,
@@ -4584,6 +4776,9 @@ fn resolve_texture_storage(
     FormatMapping,
     Option<mtld3d_core::planar_yuv::PlanarYuvLayout>,
 )> {
+    if mtld3d_core::format::is_null_render_target(format) {
+        return Some((mtld3d_core::format::null_texture_storage_mapping(), None));
+    }
     if !mtld3d_core::stretch_rect::is_planar_yuv(format) {
         let mapping = crate::direct3d9::map_for_device(format, expand_packed16);
         if mapping.is_none() {
@@ -4778,7 +4973,7 @@ fn create_depth_texture_path(info: &DepthTextureCreateInfo) -> i32 {
             .iter()
             .zip(&mip_heights)
             .map(|(&pitch, &rows)| {
-                PageBox::try_new_zeroed((pitch as usize).saturating_mul(rows as usize))
+                PageBox::try_new_uninit((pitch as usize).saturating_mul(rows as usize))
             })
             .collect();
         let Some(staging) = staging else {
@@ -4807,6 +5002,7 @@ fn create_depth_texture_path(info: &DepthTextureCreateInfo) -> i32 {
         block_h: 1,
         block_bytes: bytes_per_pixel,
         staging,
+        staging_unwritten: true,
         mip_widths,
         mip_heights,
         mip_bytes_per_row,
@@ -4956,7 +5152,7 @@ extern "system" fn device_create_volume_texture(
         let md = (depth >> level).max(1);
         let box_bytes = (slice_size as usize).saturating_mul(md as usize);
         // The staging is the one allocation of a create that may fail.
-        let Some(page) = PageBox::try_new_zeroed(box_bytes) else {
+        let Some(page) = PageBox::try_new_uninit(box_bytes) else {
             break;
         };
         staging.push(page);
@@ -4994,6 +5190,7 @@ extern "system" fn device_create_volume_texture(
         block_h: fmt.block_height(),
         block_bytes: fmt.block_bytes(),
         staging,
+        staging_unwritten: true,
         mip_widths,
         mip_heights,
         mip_bytes_per_row,
@@ -5158,7 +5355,7 @@ extern "system" fn device_create_cube_texture(
     'faces: for _face in 0..CUBE_FACE_COUNT {
         for level in 0..actual_levels {
             let (_, _, size, _) = compute_mip_size(edge_length, edge_length, level, &fmt);
-            let Some(page) = PageBox::try_new_zeroed(size as usize) else {
+            let Some(page) = PageBox::try_new_uninit(size as usize) else {
                 break 'faces;
             };
             staging.push(page);
@@ -5194,6 +5391,7 @@ extern "system" fn device_create_cube_texture(
         block_h: fmt.block_height(),
         block_bytes: fmt.block_bytes(),
         staging,
+        staging_unwritten: true,
         mip_widths,
         mip_heights,
         mip_bytes_per_row,
@@ -5420,20 +5618,16 @@ struct ColorTargetSpec {
     multi_sample: SurfaceMultiSample,
 }
 
-/// Create a persistent render-target-capable color `MTLTexture` and wrap it as a surface.
+/// Allocate a persistent render-target-capable colour texture on `device`'s core runtime.
 ///
-/// The wrapper is a standalone `Direct3DSurface9`, mirroring the depth path.
-/// `CreateRenderTarget` (usage = `D3DUSAGE_RENDERTARGET`) is its only caller
-/// today; the usage-0 shape a `D3DPOOL_DEFAULT` offscreen plain would take is
-/// answered too, because the two differ only in which format question they ask.
-/// Returns the boxed wrapper pointer, or `None` (caller maps to `INVALIDCALL`)
-/// for an unmappable or compressed color format, for a format whose usage the
-/// device cannot honour, or if the Metal allocation fails.
-fn create_color_target_surface(
-    device_inner: *mut DeviceInner,
+/// Shared by `CreateRenderTarget` and `CreateAdditionalSwapChain`. Returns
+/// `(id, render_scale)`, or `None` when the format has no renderable mapping or
+/// the extent exceeds device limits.
+fn allocate_color_target(
+    device: &mut DeviceInner,
     spec: &ColorTargetSpec,
     expand_packed16: bool,
-) -> Option<*mut Direct3DSurface9> {
+) -> Option<(TextureId, mtld3d_core::render_scale::RenderScale)> {
     let &ColorTargetSpec {
         width,
         height,
@@ -5467,8 +5661,6 @@ fn create_color_target_surface(
     }
     let id = mtld3d_core::ids::TextureId::new_unique();
     let srgb_twin = mapping.metal_pixel_format().srgb_twin();
-    // SAFETY: `device_inner` is the live owning device, non-null for every caller.
-    let device = unsafe { &mut *device_inner };
     let scale = device.scale_for_created_target(width, height, usage & D3DUSAGE_RENDERTARGET != 0);
     let (render_w, render_h) = scale.extent(width, height);
     device.core.texture_create(
@@ -5494,6 +5686,44 @@ fn create_color_target_surface(
     if !scale.is_identity() {
         device.core.set_texture_logical_size(id, width, height);
     }
+    Some((id, scale))
+}
+
+/// CPU staging byte count for a lockable render target or swap-chain back buffer.
+fn lockable_staging_bytes(format: u32, width: u32, height: u32) -> usize {
+    let bpp = if mtld3d_core::format::is_null_render_target(format) {
+        mtld3d_core::format::NULL_LOCK_BYTES_PER_PIXEL
+    } else {
+        map_d3d_format(format).map_or(0, |m| m.bytes_per_pixel())
+    };
+    (linear_row_pitch(width, bpp) as usize).saturating_mul(height as usize)
+}
+
+/// Create a persistent render-target-capable color `MTLTexture` and wrap it as a surface.
+///
+/// The wrapper is a standalone `Direct3DSurface9`, mirroring the depth path.
+/// `CreateRenderTarget` (usage = `D3DUSAGE_RENDERTARGET`) is its only caller
+/// today; the usage-0 shape a `D3DPOOL_DEFAULT` offscreen plain would take is
+/// answered too, because the two differ only in which format question they ask.
+/// Returns the boxed wrapper pointer, or `None` (caller maps to `INVALIDCALL`)
+/// for an unmappable or compressed color format, for a format whose usage the
+/// device cannot honour, or if the Metal allocation fails.
+fn create_color_target_surface(
+    device_inner: *mut DeviceInner,
+    spec: &ColorTargetSpec,
+    expand_packed16: bool,
+) -> Option<*mut Direct3DSurface9> {
+    let &ColorTargetSpec {
+        width,
+        height,
+        format,
+        usage,
+        multi_sample,
+    } = spec;
+    // SAFETY: `device_inner` is the live owning device, non-null for every caller.
+    let device = unsafe { &mut *device_inner };
+    device.drain_departed_textures();
+    let (id, scale) = allocate_color_target(device, spec, expand_packed16)?;
     let mut surf = Direct3DSurface9::new_color_target(&ColorTargetCreateInfo {
         device_inner,
         width,
@@ -5503,7 +5733,7 @@ fn create_color_target_surface(
         render_scale: scale,
         multi_sample,
     });
-    surf.set_core_texture(id);
+    surf.set_core_texture(id, device.departed_textures_handle());
     let surf_ptr = Box::into_raw(Box::new(surf));
     // SAFETY: `surf_ptr` is a freshly created, live standalone render-target surface at refcount 1.
     unsafe { crate::com_ref::com_register_child(surf_ptr) };
@@ -5580,8 +5810,7 @@ extern "system" fn device_create_render_target(
     let staging_bytes = if lockable == 0 {
         0
     } else {
-        let bpp = map_d3d_format(format).map_or(0, |m| m.bytes_per_pixel());
-        (linear_row_pitch(width, bpp) as usize).saturating_mul(height as usize)
+        lockable_staging_bytes(format, width, height)
     };
     // Zero-initialise the staging (defence-in-depth): a `LockRect` before any
     // render, or any path that skips the read-back fill, reads defined bytes
@@ -5596,6 +5825,19 @@ extern "system" fn device_create_render_target(
         };
         Some(staging)
     };
+    if mtld3d_core::format::is_null_render_target(format) {
+        let mut surf =
+            Direct3DSurface9::new_null_render_target(obj.inner_ptr(), width, height, multi_sample);
+        if let Some(staging) = staging {
+            surf.set_lockable_staging(staging);
+        }
+        let surf_ptr = Box::into_raw(Box::new(surf));
+        // SAFETY: `surf_ptr` is a freshly created, live standalone NULL render-target surface at refcount 1.
+        unsafe { crate::com_ref::com_register_child(surf_ptr) };
+        // SAFETY: vtable out-param; `surface` is *mut *mut c_void per IDirect3DDevice9 ABI.
+        unsafe { OutPtr::write_opt(surface, surf_ptr.cast::<c_void>()) };
+        return D3D_OK;
+    }
     let Some(surf_ptr) = create_color_target_surface(
         obj.inner_ptr(),
         &ColorTargetSpec {
@@ -5644,6 +5886,7 @@ fn core_depth_surface(
     let id = mtld3d_core::ids::TextureId::new_unique();
     // SAFETY: `device_inner` is the live owning device, non-null for the caller.
     let device = unsafe { &mut *device_inner };
+    device.drain_departed_textures();
     let scale = device.scale_for_created_target(width, height, true);
     let (render_w, render_h) = scale.extent(width, height);
     device.core.texture_create(
@@ -5673,7 +5916,7 @@ fn core_depth_surface(
         scale,
         multi_sample,
     );
-    surf.set_core_texture(id);
+    surf.set_core_texture(id, device.departed_textures_handle());
     let surf_ptr = Box::into_raw(Box::new(surf));
     // SAFETY: `surf_ptr` is a freshly created, live standalone depth-stencil at refcount 1.
     unsafe { crate::com_ref::com_register_child(surf_ptr) };
@@ -5797,9 +6040,9 @@ fn copy_systemmem_to_default(
     copy: impl FnOnce(&mut crate::texture::TextureInner, &crate::texture::TextureInner) -> i32,
 ) -> i32 {
     // SAFETY: `src_parent` is a live texture pointer, distinct from `dst_parent`
-    // (the caller checks `ptr::eq`), so this immutable borrow does not alias the
-    // mutable `dst_parent` borrow below.
-    let src_tex = unsafe { &*src_parent };
+    // (the caller checks `ptr::eq`), so this mutable borrow does not alias the
+    // `dst_parent` borrow below.
+    let src_tex = unsafe { &mut *src_parent };
     // SAFETY: `dst_parent` is a live texture pointer, distinct from `src_parent`.
     let dst_tex = unsafe { &mut *dst_parent };
     if src_tex.d3d_pool() != D3DPOOL_SYSTEMMEM || dst_tex.d3d_pool() != D3DPOOL_DEFAULT {
@@ -5818,6 +6061,7 @@ fn copy_systemmem_to_default(
         );
         return D3DERR_INVALIDCALL;
     }
+    src_tex.inner_mut().expose_all_staging();
     // SAFETY: re-borrow of the immutable src inner via a raw pointer; the
     // allocation is distinct from the dst inner (src_parent != dst_parent).
     let src_inner = unsafe { &*core::ptr::from_ref(src_tex.inner()) };
@@ -6095,11 +6339,12 @@ fn update_surface_into_color_target(
         }
     } else {
         // SAFETY: a non-null parent is the live `Direct3DTexture9` the source
-        // surface holds a reference on.
-        let tex = unsafe { &*src_parent };
+        // surface holds a reference on; distinct from the standalone `dst_surf`.
+        let tex = unsafe { &mut *src_parent };
         if tex.d3d_pool() != D3DPOOL_SYSTEMMEM {
             return reject(4, "the source is not D3DPOOL_SYSTEMMEM");
         }
+        tex.inner_mut().expose_all_staging();
         let Some(image) = tex
             .inner()
             .surface_source_image(src_surf.cube_face(), src_surf.mip_level() as usize)
@@ -6493,6 +6738,15 @@ extern "system" fn device_stretch_rect(
         );
         return D3DERR_INVALIDCALL;
     };
+    if mtld3d_core::format::is_null_render_target(src_info.format)
+        || mtld3d_core::format::is_null_render_target(dst_info.format)
+    {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "reject StretchRect: D3DFMT_NULL render target has no colour storage → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
 
     // Depth-stencil StretchRect: if either surface is a
     // depth-stencil, BOTH must be — and they must share the Metal depth format
@@ -7215,6 +7469,11 @@ extern "system" fn device_color_fill(
             mtld3d_core::format::format_name(info.format));
         return D3D_OK;
     }
+    if mtld3d_core::format::is_null_render_target(info.format) {
+        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+            "ColorFill: D3DFMT_NULL render target has no colour storage → surface left unfilled");
+        return D3D_OK;
+    }
     let extent = (info.width, info.height);
     let Some(region) = color_fill_region(rect, extent) else {
         return D3D_OK;
@@ -7250,6 +7509,16 @@ extern "system" fn device_create_offscreen_plain_surface(
     }
     // `D3DPOOL_MANAGED_EX` is the managed pool, which no plain surface takes.
     let pool = mtld3d_core::pool::resolve(pool);
+    if format == mtld3d_types::D3DFMT_ATI2 && pool != D3DPOOL_SCRATCH {
+        mtld3d_shared::log_once_warn_by!(
+            target: crate::LOG_TARGET,
+            key: (u64::from(pool) << 32) | u64::from(format),
+            "reject CreateOffscreenPlainSurface(format=ATI2, pool={pool}) → INVALIDCALL \
+             (ATI2 offscreen surfaces exist in D3DPOOL_SCRATCH only)"
+        );
+        null_out(surface);
+        return D3DERR_INVALIDCALL;
+    }
     // A plain device refuses a non-null pSharedHandle with E_NOTIMPL; an
     // extended one reads it as user memory for a system-memory surface and as
     // a shared resource, which it does not create, in the default pool.
@@ -7365,12 +7634,13 @@ extern "system" fn device_create_offscreen_plain_surface(
         (linear_row_pitch(width, bpp) as usize).saturating_mul(height as usize)
     };
     // The surface's bytes are the one allocation of the create that may fail.
-    let Some(mut backing) = PageBox::try_new_zeroed(bytes) else {
+    let Some(mut backing) = PageBox::try_new_uninit(bytes) else {
         return refuse_unallocatable_staging("CreateOffscreenPlainSurface", surface);
     };
     // An extended device's system-memory surface starts with the
-    // application's packed pixels, copied once at the lock pitch.
-    if let Some(memory) = user_memory {
+    // application's packed pixels, copied once at the lock pitch; otherwise
+    // zero-fill is deferred until first CPU read or whole-surface read-back.
+    let unwritten = user_memory.is_none_or(|memory| {
         let rows = mtld3d_core::extended::PackedRows::of_level(
             width,
             height,
@@ -7382,10 +7652,16 @@ extern "system" fn device_create_offscreen_plain_surface(
         } else {
             linear_row_pitch(width, bpp) as usize
         };
-        copy_user_memory(memory, &rows, backing.as_mut_slice(), pitch);
-    }
-    let surf =
-        Direct3DSurface9::new_system_memory(obj.inner_ptr(), width, height, format, pool, backing);
+        !copy_user_memory(memory, &rows, &mut backing, pitch)
+    });
+    let surf = Direct3DSurface9::new_system_memory(
+        obj.inner_ptr(),
+        (width, height),
+        format,
+        pool,
+        backing,
+        unwritten,
+    );
     let surf_ptr = Box::into_raw(Box::new(surf));
     // SAFETY: `surf_ptr` is a freshly created, live system-memory surface at
     // refcount 1.
@@ -7393,6 +7669,20 @@ extern "system" fn device_create_offscreen_plain_surface(
     // SAFETY: vtable out-param; `surface` is *mut *mut c_void per IDirect3DDevice9 ABI.
     unsafe { OutPtr::write_opt(surface, surf_ptr.cast::<c_void>()) };
     D3D_OK
+}
+
+/// Logical `(width, height)` of the device's currently bound depth-stencil, or `None`.
+fn current_depth_logical_size(dev: &DeviceInner) -> Option<(u32, u32)> {
+    if !dev.depth_stencil_bound() {
+        return None;
+    }
+    let bound_ds = dev.bound_rt().depth_stencil();
+    if bound_ds.is_null() {
+        Some((dev.backbuffer_width, dev.backbuffer_height))
+    } else {
+        // SAFETY: `bound_ds` is the live depth surface held by `dev.bound_rt()`.
+        Some(unsafe { &*bound_ds }.reported_extent())
+    }
 }
 
 extern "system" fn device_set_render_target(
@@ -7504,17 +7794,32 @@ extern "system" fn device_set_render_target(
         crate::device::refuse_under_core(untargeted);
         return mtld3d_types::D3DERR_NOTAVAILABLE;
     };
-    // SAFETY: null, or the surface's parent texture, live while the surface is and distinct
-    // from the device.
-    if let Some(parent) = unsafe { parent.as_mut() } {
-        crate::texture::rehydrate_for_device(parent, dev);
-        // Its core texture exists from here, with every CPU write so far uploaded.
-        let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
+    if slot != 0 && target == crate::rt::device::TargetRef::Null {
+        mtld3d_shared::log_once_warn!(
+            target: LOG_TARGET,
+            "reject SetRenderTarget(index={slot}, D3DFMT_NULL) → INVALIDCALL \
+             (NULL render target is valid only at index 0)"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    if target != crate::rt::device::TargetRef::Null {
+        // SAFETY: null, or the surface's parent texture, live while the surface is and distinct
+        // from the device.
+        if let Some(parent) = unsafe { parent.as_mut() } {
+            crate::texture::rehydrate_for_device(parent, dev);
+            // Its core texture exists from here, with every CPU write so far uploaded.
+            let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
+        }
     }
     let bound = if slot == 0 {
         let ok = dev.core.set_target(target);
         if ok {
-            dev.core.set_target_logical_size(logical_size);
+            let logical = if target == crate::rt::device::TargetRef::Null {
+                current_depth_logical_size(dev)
+            } else {
+                logical_size
+            };
+            dev.core.set_target_logical_size(logical);
         }
         ok
     } else {
@@ -7537,6 +7842,7 @@ extern "system" fn device_set_render_target(
     // The surface the core device now draws to at the slot: a draw asks it its format.
     dev.bound_rt_mut()
         .replace_render_target(slot, surf, desc.width, desc.height);
+    dev.drain_departed_textures();
     if slot != 0 {
         dev.invalidate_core_draw();
         return D3D_OK;
@@ -7688,8 +7994,14 @@ extern "system" fn device_set_depth_stencil_surface(
     }
     dev.last_sized_depth = sized_depth;
     dev.bound_rt_mut().replace_depth_stencil(surf);
+    dev.drain_departed_textures();
     dev.flags
         .set(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND, surf.is_null());
+    if dev.core.target() == crate::rt::device::TargetRef::Null {
+        dev.core.set_target(crate::rt::device::TargetRef::Null);
+        dev.core
+            .set_target_logical_size(current_depth_logical_size(dev));
+    }
     dev.invalidate_core_draw();
     D3D_OK
 }

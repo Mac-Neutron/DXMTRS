@@ -12,8 +12,8 @@ use mtld3d_types::{
 };
 
 use super::{
-    DisplaySync, LayerPacing, display_sync_for, effective_max_fps, interval_divisor,
-    layer_pacing_for, queued_pacing,
+    DisplaySync, EMPTY_CLIENT_BACK_BUFFER_EXTENT, LayerPacing, display_sync_for, effective_max_fps,
+    interval_divisor, intervals_pace_alike, layer_pacing_for, queued_pacing,
 };
 
 const fn pacing(display_sync: bool, max_fps: u32) -> LayerPacing {
@@ -21,6 +21,36 @@ const fn pacing(display_sync: bool, max_fps: u32) -> LayerPacing {
         display_sync,
         max_fps,
     }
+}
+
+#[test]
+fn empty_client_back_buffer_extent_is_non_zero() {
+    assert_eq!(EMPTY_CLIENT_BACK_BUFFER_EXTENT, 8);
+}
+
+#[test]
+fn intervals_pace_alike_when_the_layer_could_not_tell_them_apart() {
+    assert!(intervals_pace_alike(
+        D3DPRESENT_INTERVAL_DEFAULT,
+        D3DPRESENT_INTERVAL_ONE
+    ));
+    assert!(intervals_pace_alike(D3DPRESENT_INTERVAL_ONE, 0x1234));
+    assert!(intervals_pace_alike(
+        D3DPRESENT_INTERVAL_TWO,
+        D3DPRESENT_INTERVAL_TWO
+    ));
+    assert!(!intervals_pace_alike(
+        D3DPRESENT_INTERVAL_DEFAULT,
+        D3DPRESENT_INTERVAL_IMMEDIATE
+    ));
+    assert!(!intervals_pace_alike(
+        D3DPRESENT_INTERVAL_ONE,
+        D3DPRESENT_INTERVAL_TWO
+    ));
+    assert!(!intervals_pace_alike(
+        D3DPRESENT_INTERVAL_THREE,
+        D3DPRESENT_INTERVAL_FOUR
+    ));
 }
 
 #[test]
@@ -339,4 +369,45 @@ fn present_geometry_enlarges_and_settles_with_hysteresis() {
     assert!(geometry_settled(&mut seen, enlarge));
     assert!(!geometry_settled(&mut seen, mixed));
     assert!(!geometry_settled(&mut seen, enlarge));
+}
+
+#[test]
+fn a_lockable_back_buffer_is_refused_only_when_multisampled() {
+    use mtld3d_types::{
+        D3DMULTISAMPLE_2_SAMPLES, D3DMULTISAMPLE_4_SAMPLES, D3DMULTISAMPLE_NONE,
+        D3DMULTISAMPLE_NONMASKABLE, D3DPRESENTFLAG_DISCARD_DEPTHSTENCIL,
+        D3DPRESENTFLAG_LOCKABLE_BACKBUFFER, D3DSWAPEFFECT_DISCARD,
+    };
+
+    use super::{present_flags_are_valid, present_params_are_valid};
+    let mut pp = present_params(D3DSWAPEFFECT_DISCARD, 1);
+    for samples in [
+        D3DMULTISAMPLE_NONE,
+        D3DMULTISAMPLE_NONMASKABLE,
+        D3DMULTISAMPLE_2_SAMPLES,
+        D3DMULTISAMPLE_4_SAMPLES,
+    ] {
+        pp.multi_sample_type = samples;
+        pp.flags = 0;
+        assert!(present_flags_are_valid(&pp), "type {samples}, not lockable");
+    }
+    pp.flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+    pp.multi_sample_type = D3DMULTISAMPLE_NONE;
+    assert!(present_flags_are_valid(&pp), "lockable, single-sampled");
+    for samples in [
+        D3DMULTISAMPLE_NONMASKABLE,
+        D3DMULTISAMPLE_2_SAMPLES,
+        D3DMULTISAMPLE_4_SAMPLES,
+    ] {
+        pp.multi_sample_type = samples;
+        assert!(!present_flags_are_valid(&pp), "lockable, type {samples}");
+        // The swap-effect, count and interval rules do not read the flags.
+        assert!(present_params_are_valid(&pp, false));
+        assert!(present_params_are_valid(&pp, true));
+    }
+    // Other flag bits beside the lockable one change nothing.
+    pp.flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER | D3DPRESENTFLAG_DISCARD_DEPTHSTENCIL;
+    assert!(!present_flags_are_valid(&pp));
+    pp.flags = D3DPRESENTFLAG_DISCARD_DEPTHSTENCIL;
+    assert!(present_flags_are_valid(&pp));
 }

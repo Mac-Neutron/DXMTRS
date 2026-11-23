@@ -41,7 +41,7 @@ use super::{
 /// The usage-query rules below are properties of the whole table rather than
 /// of the formats that once carried a rule of their own, so they are asserted
 /// over all of it.
-const COLOUR_FORMATS: [u32; 37] = [
+const COLOUR_FORMATS: [u32; 38] = [
     mtld3d_types::D3DFMT_A8R8G8B8,
     mtld3d_types::D3DFMT_X8R8G8B8,
     mtld3d_types::D3DFMT_A8B8G8R8,
@@ -64,6 +64,7 @@ const COLOUR_FORMATS: [u32; 37] = [
     mtld3d_types::D3DFMT_G32R32F,
     mtld3d_types::D3DFMT_A32B32G32R32F,
     mtld3d_types::D3DFMT_ATI1,
+    mtld3d_types::D3DFMT_ATI2,
     mtld3d_types::D3DFMT_V8U8,
     mtld3d_types::D3DFMT_A2B10G10R10,
     mtld3d_types::D3DFMT_A2R10G10B10,
@@ -363,6 +364,71 @@ fn planar_yuv_stays_out_of_the_generic_mapping() {
     assert!(!storage.has_alpha());
 }
 
+/// `NULL` stays out of every colour predicate and exists only as a 2D render target.
+///
+/// The usage rule is the one `CheckDeviceFormat` answers with and the create
+/// gates enforce: `D3DUSAGE_RENDERTARGET` on a surface or a texture, with no
+/// other validated bit beside it.
+#[test]
+fn null_is_a_2d_render_target_and_no_colour_format() {
+    use mtld3d_types::D3DFMT_NULL;
+
+    assert!(super::is_null_render_target(D3DFMT_NULL));
+    assert!(super::is_null_format(D3DFMT_NULL));
+    assert!(!super::is_null_render_target(D3DFMT_A8R8G8B8));
+    assert!(!is_mapped_color_format(D3DFMT_NULL));
+    assert!(super::lookup_d3d_format(D3DFMT_NULL).is_none());
+    assert!(!super::is_render_target_format(D3DFMT_NULL));
+    assert!(!is_depth_format(D3DFMT_NULL));
+    assert!(!is_volume_texture_format(D3DFMT_NULL));
+    assert_eq!(format_name(D3DFMT_NULL), "NULL");
+    assert_eq!(surface_bytes(128, 128, D3DFMT_NULL), 0);
+
+    let allowed = super::null_render_target_usage_allowed;
+    for rtype in [D3DRTYPE_SURFACE, D3DRTYPE_TEXTURE] {
+        assert!(allowed(D3DUSAGE_RENDERTARGET, rtype), "rtype {rtype}");
+        // A bit the runtime strips before it validates rides through.
+        assert!(
+            allowed(D3DUSAGE_RENDERTARGET | D3DUSAGE_WRITEONLY, rtype),
+            "rtype {rtype}"
+        );
+        assert!(!allowed(0, rtype), "rtype {rtype}");
+        for extra in [
+            D3DUSAGE_DEPTHSTENCIL,
+            D3DUSAGE_DYNAMIC,
+            D3DUSAGE_AUTOGENMIPMAP,
+            D3DUSAGE_QUERY_FILTER,
+            D3DUSAGE_QUERY_SRGBREAD,
+            D3DUSAGE_QUERY_SRGBWRITE,
+            D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
+            D3DUSAGE_QUERY_VERTEXTEXTURE,
+            D3DUSAGE_QUERY_WRAPANDMIP,
+        ] {
+            assert!(
+                !allowed(D3DUSAGE_RENDERTARGET | extra, rtype),
+                "rtype {rtype} usage {extra:#x}"
+            );
+        }
+    }
+    for rtype in [
+        D3DRTYPE_CUBETEXTURE,
+        D3DRTYPE_VOLUME,
+        D3DRTYPE_VOLUMETEXTURE,
+        D3DRTYPE_VERTEXBUFFER,
+        D3DRTYPE_INDEXBUFFER,
+    ] {
+        assert!(!allowed(D3DUSAGE_RENDERTARGET, rtype), "rtype {rtype}");
+    }
+
+    let storage = super::null_texture_storage_mapping();
+    assert_eq!(storage.metal_pixel_format(), PixelFormat::R8Unorm);
+    assert_eq!(storage.bytes_per_pixel(), 1);
+    assert!(storage.swizzle().is_none());
+    // The lock pitch of a lockable `NULL` surface is never zero.
+    assert_eq!(linear_row_pitch(1, super::NULL_LOCK_BYTES_PER_PIXEL), 4);
+    assert_eq!(linear_row_pitch(128, super::NULL_LOCK_BYTES_PER_PIXEL), 512);
+}
+
 #[test]
 fn volume_texture_formats_include_native_bc1_bc2_bc3() {
     for fmt in [
@@ -435,6 +501,76 @@ fn format_name_renders_mapped_names_and_a_fixed_unknown() {
     // The fallback carries no code, so a caller that needs one logs it
     // alongside the name.
     assert_eq!(format_name(0xFFFF_FFFF), "D3DFMT_unknown");
+}
+
+/// `ATI2` is BC5 storage sampled with red and green exchanged.
+///
+/// D3D9 reads green from the first eight bytes of a block and red from the
+/// second, BC5 decodes them as red and green, and blue and alpha read one.
+/// The format is no render target, has no sRGB twin, is no GPU volume, and
+/// locks a byte per texel at the stored block row over four.
+#[test]
+fn ati2_maps_to_bc5_with_red_and_green_exchanged() {
+    use mtld3d_types::{D3DFMT_ATI1, D3DFMT_ATI2};
+
+    let ati2 = map_d3d_format(D3DFMT_ATI2).expect("ATI2 is mapped");
+    assert_eq!(ati2.metal_pixel_format(), PixelFormat::Bc5RgUnorm);
+    assert_eq!(
+        ati2.swizzle(),
+        Some([Swizzle::Green, Swizzle::Red, Swizzle::One, Swizzle::One])
+    );
+    assert_eq!(ati2.bytes_per_pixel(), 0, "the compressed-layout marker");
+    assert_eq!(
+        (ati2.block_width(), ati2.block_height(), ati2.block_bytes()),
+        (4, 4, 16)
+    );
+    assert!(ati2.is_compressed());
+    assert!(!ati2.has_alpha());
+    assert_eq!(ati2.metal_pixel_format().srgb_twin(), None);
+    assert!(is_mapped_color_format(D3DFMT_ATI2));
+    assert!(!super::is_render_target_format(D3DFMT_ATI2));
+    assert!(!is_volume_texture_format(D3DFMT_ATI2));
+    assert!(!super::is_dxt_format(D3DFMT_ATI2));
+    assert_eq!(format_name(D3DFMT_ATI2), "ATI2");
+    // A 257-texel row stores 65 blocks of 16 bytes and locks at 260.
+    assert_eq!(
+        compute_mip_size(257, 257, 0, &ati2),
+        (257, 257, 67_600, 1040)
+    );
+    assert_eq!(super::lock_row_pitch(D3DFMT_ATI2, 1040, 4), 260);
+    // A 1x1 tail level keeps one whole block and locks at four.
+    assert_eq!(compute_mip_size(257, 257, 8, &ati2), (1, 1, 16, 16));
+    assert_eq!(super::lock_row_pitch(D3DFMT_ATI2, 16, 4), 4);
+
+    assert!(super::locks_byte_per_texel(D3DFMT_ATI2));
+    for other in [D3DFMT_ATI1, D3DFMT_DXT1, D3DFMT_A8R8G8B8] {
+        assert!(!super::locks_byte_per_texel(other), "format {other:#x}");
+        assert_eq!(super::lock_row_pitch(other, 1040, 4), 1040);
+    }
+}
+
+/// Only an `ATI2` level locks in the default pool without dynamic usage.
+///
+/// The rule is its own predicate: the byte-per-texel lock layout says
+/// nothing about which pool a level locks in.
+#[test]
+fn only_ati2_locks_in_the_default_pool_without_dynamic_usage() {
+    use mtld3d_types::{D3DFMT_ATI1, D3DFMT_ATI2, D3DFMT_DXT5};
+
+    assert!(super::locks_in_default_pool_without_dynamic(D3DFMT_ATI2));
+    for other in [
+        D3DFMT_ATI1,
+        D3DFMT_DXT1,
+        D3DFMT_DXT5,
+        D3DFMT_A8R8G8B8,
+        D3DFMT_D24S8,
+        D3DFMT_INTZ,
+    ] {
+        assert!(
+            !super::locks_in_default_pool_without_dynamic(other),
+            "format {other:#x}"
+        );
+    }
 }
 
 #[test]
@@ -521,6 +657,7 @@ fn the_render_target_family_holds_the_formats_a_colour_attachment_accepts() {
         D3DFMT_X8B8G8R8,
         D3DFMT_R5G6B5,
         D3DFMT_A1R5G5B5,
+        D3DFMT_L8,
         D3DFMT_G16R16,
         D3DFMT_A16B16G16R16,
         D3DFMT_R16F,
@@ -534,15 +671,13 @@ fn the_render_target_family_holds_the_formats_a_colour_attachment_accepts() {
     }
     // The swizzled pair reads through a channel correction a render write
     // cannot undo, R8G8B8 has no Metal counterpart and is widened on upload,
-    // and the compressed and single-channel formats no D3D9 device rendered
-    // into stay out.
+    // and compressed formats and A8 (Metal cannot render into A8Unorm) stay out.
     for fmt in [
         D3DFMT_X1R5G5B5,
         D3DFMT_A4R4G4B4,
         D3DFMT_R8G8B8,
         D3DFMT_DXT1,
         D3DFMT_A8,
-        D3DFMT_L8,
         D3DFMT_D24S8,
     ] {
         assert!(
@@ -1384,18 +1519,18 @@ fn ten_bit_formats_use_native_packed_storage_without_attachment_support() {
     }
 }
 
-/// The sRGB-write query is the render-target answer, for every format.
+/// The sRGB-write query answers yes for the render targets whose Metal format has an sRGB twin.
 ///
-/// The encode belongs to the render pass, and every colour attachment takes
-/// it: the pass binds the sRGB twin view where the Metal format has one and
-/// the pixel shader emits the OETF where it has not. So the answer tracks
-/// `is_render_target_format_device` across the whole table and on either
-/// device, with no format carrying a rule of its own, and it does not depend
-/// on the bits the query is combined with.
+/// D3D9 encodes those under `D3DRS_SRGBWRITEENABLE` and writes every other
+/// render target linear, so the answer is a render-target format with a twin,
+/// across the whole table, and it does not depend on the bits the query is
+/// combined with.
 #[test]
 fn srgb_write_queries_follow_render_target_capability() {
     use mtld3d_types::{
-        D3DFMT_A8R8G8B8, D3DFMT_DXT1, D3DFMT_L8, D3DFMT_R5G6B5, D3DFMT_R32F, D3DFMT_V8U8,
+        D3DFMT_A1R5G5B5, D3DFMT_A8B8G8R8, D3DFMT_A8R8G8B8, D3DFMT_A16B16G16R16,
+        D3DFMT_A16B16G16R16F, D3DFMT_A32B32G32R32F, D3DFMT_DXT1, D3DFMT_G16R16, D3DFMT_L8,
+        D3DFMT_R5G6B5, D3DFMT_R16F, D3DFMT_R32F, D3DFMT_V8U8, D3DFMT_X8B8G8R8, D3DFMT_X8R8G8B8,
     };
 
     const COMBINED: [u32; 6] = [
@@ -1409,7 +1544,10 @@ fn srgb_write_queries_follow_render_target_capability() {
 
     for native_packed16 in [false, true] {
         for format in COLOUR_FORMATS {
-            let renderable = super::is_render_target_format_device(format, native_packed16);
+            let encodes = super::is_render_target_format(format)
+                && map_d3d_format(format)
+                    .is_some_and(|m| m.metal_pixel_format().srgb_twin().is_some());
+            assert_eq!(super::takes_srgb_write(format), encodes, "format {format}");
             for extra in COMBINED {
                 assert_eq!(
                     super::supports_usage_query(
@@ -1418,45 +1556,46 @@ fn srgb_write_queries_follow_render_target_capability() {
                         true,
                         native_packed16
                     ),
-                    renderable,
+                    encodes,
                     "format {format} extra {extra:#x} packed16 {native_packed16}"
                 );
             }
         }
-        // The two ends of the rule, named: a colour attachment answers yes
-        // whether or not its Metal format has an sRGB twin, and a sampled
-        // format answers no whether or not it has one.
-        for format in [D3DFMT_A8R8G8B8, D3DFMT_R32F] {
-            assert!(super::supports_usage_query(
-                format,
-                D3DUSAGE_QUERY_SRGBWRITE,
-                true,
-                native_packed16
-            ));
-        }
-        for format in [D3DFMT_DXT1, D3DFMT_L8, D3DFMT_V8U8] {
-            assert!(!super::supports_usage_query(
-                format,
-                D3DUSAGE_QUERY_SRGBWRITE,
-                true,
-                native_packed16
-            ));
-        }
     }
-    // A device that widens the packed 16-bit formats renders into neither,
-    // so the encode goes with the render target.
-    assert!(super::supports_usage_query(
+    // The rule, named: the 8-bit four-channel render targets answer yes,
+    // every other render target answers no, and so does a sampled format
+    // whether or not it has a twin.
+    for format in [
+        D3DFMT_A8R8G8B8,
+        D3DFMT_X8R8G8B8,
+        D3DFMT_A8B8G8R8,
+        D3DFMT_X8B8G8R8,
+    ] {
+        assert!(super::supports_usage_query(
+            format,
+            D3DUSAGE_QUERY_SRGBWRITE,
+            true,
+            true
+        ));
+    }
+    for format in [
         D3DFMT_R5G6B5,
-        D3DUSAGE_QUERY_SRGBWRITE,
-        true,
-        true
-    ));
-    assert!(!super::supports_usage_query(
-        D3DFMT_R5G6B5,
-        D3DUSAGE_QUERY_SRGBWRITE,
-        true,
-        false
-    ));
+        D3DFMT_A1R5G5B5,
+        D3DFMT_G16R16,
+        D3DFMT_A16B16G16R16,
+        D3DFMT_R16F,
+        D3DFMT_A16B16G16R16F,
+        D3DFMT_R32F,
+        D3DFMT_A32B32G32R32F,
+        D3DFMT_DXT1,
+        D3DFMT_L8,
+        D3DFMT_V8U8,
+    ] {
+        assert!(
+            !super::supports_usage_query(format, D3DUSAGE_QUERY_SRGBWRITE, true, true),
+            "format {format}"
+        );
+    }
 }
 
 /// The legacy bump-map query answers yes for the signed `(du, dv)` formats alone.

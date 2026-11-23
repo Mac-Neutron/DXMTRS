@@ -136,16 +136,17 @@ impl PassReadTracker {
 }
 
 /// Maps a colour [`TargetRef`] to its [`ClearTarget`] key and `slice | (level << 16)` subresource.
-pub(super) const fn color_clear_key(target: TargetRef) -> (ClearTarget, u32) {
+pub(super) const fn color_clear_key(target: TargetRef) -> Option<(ClearTarget, u32)> {
     match target {
-        TargetRef::BackBuffer => (ClearTarget::BackBuffer, 0),
+        TargetRef::BackBuffer => Some((ClearTarget::BackBuffer, 0)),
         TargetRef::Texture { id, level, face } => {
             let slice = match face {
                 Some(f) => f,
                 None => 0,
             };
-            (ClearTarget::Texture(id), slice | (level << 16))
+            Some((ClearTarget::Texture(id), slice | (level << 16)))
         }
+        TargetRef::Null => None,
     }
 }
 
@@ -502,8 +503,11 @@ impl CoreDevice {
         if !self.options.contains(CoreOptions::ASYNC_COMPILE) {
             return;
         }
-        let (src_key, _) = color_clear_key(src);
-        let (dst_key, dst_sub) = color_clear_key(dst);
+        let (Some((src_key, _)), Some((dst_key, dst_sub))) =
+            (color_clear_key(src), color_clear_key(dst))
+        else {
+            return;
+        };
         self.note_copy_keys(src_key, dst_key, dst_sub, planes, whole_dst);
     }
 
@@ -599,24 +603,31 @@ impl CoreDevice {
 
     /// Returns whether every attached color target and active depth/stencil plane was rebuilt.
     pub(super) fn targets_rebuilt(&self, colors: [u32; 4], planes: ClearPlanes) -> bool {
+        if planes.is_empty() {
+            return false;
+        }
         let discard_bb = self.options.contains(CoreOptions::DISCARD_BACK_BUFFER);
-        let set = self.pass_set();
-        for slot in 0..4 {
-            if colors[slot] == 0 {
-                continue;
-            }
-            if set[slot].is_none() {
-                return false;
-            }
-            let Some(target) = self.slot_target(slot) else {
-                return false;
-            };
-            let (key, sub) = color_clear_key(target);
-            let rebuilt = ((key == ClearTarget::BackBuffer && discard_bb)
-                || self.clear_history.regenerated(key, sub, ClearPlanes::COLOR))
-                && !self.clear_history.feeds_persistent(key);
-            if !rebuilt {
-                return false;
+        if colors[0] != 0 {
+            let set = self.pass_set();
+            for slot in 0..4 {
+                if colors[slot] == 0 {
+                    continue;
+                }
+                if set[slot].is_none() {
+                    return false;
+                }
+                let Some(target) = self.slot_target(slot) else {
+                    return false;
+                };
+                let Some((key, sub)) = color_clear_key(target) else {
+                    return false;
+                };
+                let rebuilt = ((key == ClearTarget::BackBuffer && discard_bb)
+                    || self.clear_history.regenerated(key, sub, ClearPlanes::COLOR))
+                    && !self.clear_history.feeds_persistent(key);
+                if !rebuilt {
+                    return false;
+                }
             }
         }
         if planes.intersects(ClearPlanes::DEPTH | ClearPlanes::STENCIL) {

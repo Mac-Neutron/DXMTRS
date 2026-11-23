@@ -407,6 +407,7 @@ impl CoreDevice {
                 .level_shape(id, level, face)
                 .zip(self.stored_texture(id))
                 .map(|(shape, texture)| (texture, shape, false)),
+            TargetRef::Null => None,
         }
     }
 

@@ -20,7 +20,7 @@ use mtld3d_core::{
     depth_stencil_state::{DepthStencilSnapshot, snapshot_from_state as depth_snapshot},
     dxso::{SemanticSet, VsSamplerKinds},
     ff_state::FfState,
-    format::{FormatMapping, map_d3d_format},
+    format::{FormatMapping, is_null_render_target, map_d3d_format, takes_srgb_write},
     multisample::{alpha_to_coverage_requested, effective_sample_mask},
     pipeline_key::{
         DrawFacts, DrawFlags, PipelineKey, PsStageKey, SampledMasks, ShaderCode, StageKind,
@@ -343,13 +343,35 @@ fn resolve(
         refuse_under_core(refusal.name());
         D3DERR_NOTAVAILABLE
     })?;
+    // When RT0 is `D3DFMT_NULL` / `TargetRef::Null`, draws go to the bound depth-stencil alone.
+    // A NULL RT0 draw with no depth-stencil bound records nothing; bound RTs 1..3 beside NULL RT0
+    // are dropped (logged once each).
+    let null_rt0 = matches!(dev.core.target(), crate::rt::device::TargetRef::Null)
+        || slot_surface_desc(dev, 0).is_some_and(|desc| is_null_render_target(desc.format));
+    if null_rt0 {
+        if dev.core.depth().is_none() {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: NULL RT0 draw dropped because no depth-stencil is bound"
+            );
+            return Err(D3D_OK);
+        }
+        if (1..crate::bound_rt::RENDER_TARGET_SLOTS)
+            .any(|slot| !dev.bound_rt().render_target(slot).is_null())
+        {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "d3d9 core: ignoring colour render targets 1..3 bound beside NULL RT0"
+            );
+        }
+    }
     // The bound colour targets' size and the format the draw attaches each slot of the pass set
-    // in (DXMTRS C4b-3d1, C4b-3d4): the sRGB twins' under sRGB write when every member has one,
-    // which then encode (C4b-3d3). The present parameters' for a device with no back buffer,
-    // whose draws record nothing.
-    let (target, colors, hardware_srgb) =
-        core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0);
-    let target0_extent = core_target0_extent(dev, target);
+    // in (DXMTRS C4b-3d1, C4b-3d4): each sRGB-capable slot attaches its own twin independently
+    // under sRGB write, and any sRGB-capable slot lacking a twin triggers shader OETF encoding on
+    // that slot alone while linear/float and twin-attached slots stay linear.
+    let (target, colors, srgb_linear_mask, hardware_srgb) =
+        core_target_of(dev, rs[D3DRS_SRGBWRITEENABLE as usize] != 0, null_rt0);
+    let target0_extent = core_target0_extent(dev, target, null_rt0);
     let target_scale = target0_extent.scale();
     let [color_format, f1, f2, f3] = colors;
     // Target 0's sample count, which the pass, its pipeline and its coverage follow (DXMTRS
@@ -617,10 +639,13 @@ fn resolve(
     if let Some(table) = &table {
         binds.push(Stage::Pixel, mtl::PS_LOD_BIAS_SLOT, &table.bytes());
     }
-    let variant = core_srgb_variant(
+    let mut variant = core_srgb_variant(
         core_texture_variant(variant, &masks, table.is_some()),
         hardware_srgb,
     );
+    if !hardware_srgb && srgb_linear_mask != 0 {
+        variant.color_out_mask |= srgb_linear_mask << 4;
+    }
     // Coverage follows target 0, not the device (DXMTRS C4b-3d5): mtld3d's own predicates. The
     // sample mask narrowed against target 0's count and type (a non-maskable or single-sample
     // target ignores it); alpha-to-coverage, requested by `D3DRS_ADAPTIVETESS_Y` or the A2M
@@ -631,14 +656,20 @@ fn resolve(
         alpha_to_coverage_requested(&rs, dev.a2m_enabled()),
     );
     let alpha_to_coverage = requested.alpha_to_coverage(sample_count);
+    let target0_bound = if null_rt0 {
+        dev.bound_rt().depth_stencil()
+    } else {
+        dev.bound_rt().render_target(0)
+    };
     let variant = core_coverage_variant(
         variant,
         effective_sample_mask(
             rs[mtld3d_types::D3DRS_MULTISAMPLEMASK as usize],
             sample_count,
-            // A null slot 0 is the device's own back buffer, never set: its type, as mtld3d reads it.
-            // SAFETY: null, or the surface bound at slot 0, which its slot's refcount keeps live.
-            unsafe { dev.bound_rt().render_target(0).as_ref() }.map_or_else(
+            // A null slot 0 (with non-NULL RT0) is the device's own back buffer; with NULL RT0,
+            // target 0's count and multisample type come from the bound depth-stencil.
+            // SAFETY: null, or the bound surface kept live by its slot refcount for this call.
+            unsafe { target0_bound.as_ref() }.map_or_else(
                 || dev.backbuffer_multi_sample_type(),
                 |surface| surface.multi_sample().multi_sample_type,
             ),
@@ -796,9 +827,13 @@ fn resolve(
     })
 }
 
-/// Resolves bound colour target 0's `RenderScale` and logical-vs-physical extent mapping.
-fn core_target0_extent(dev: &DeviceInner, physical: (u32, u32)) -> TargetExtent {
-    let bound = dev.bound_rt().render_target(0);
+/// Resolves bound target 0's (or depth-stencil under `null_rt0`) `RenderScale` and extent mapping.
+fn core_target0_extent(dev: &DeviceInner, physical: (u32, u32), null_rt0: bool) -> TargetExtent {
+    let bound = if null_rt0 {
+        dev.bound_rt().depth_stencil()
+    } else {
+        dev.bound_rt().render_target(0)
+    };
     // SAFETY: null, or the bound surface kept live by its slot reference for this call.
     let Some(surface) = (unsafe { bound.as_ref() }) else {
         return TargetExtent::new(
@@ -832,43 +867,73 @@ fn core_target0_extent(dev: &DeviceInner, physical: (u32, u32)) -> TargetExtent 
     )
 }
 
-/// The bound colour targets' size, the format a draw attaches each in, and whether that encodes.
+/// The bound colour targets' size, attached formats, linear mask, and hardware sRGB status.
 ///
-/// The `WMTPixelFormat`s are [`CoreDevice::target_desc`]'s, one a slot, 0 for a slot not in the
-/// pass set: each target's own, or under `srgb_write` (`D3DRS_SRGBWRITEENABLE`) every one's sRGB
-/// twin's when every one has one; the flag says colour 0's is the twin's (DXMTRS C4b-3d1,
-/// C4b-3d3, C4b-3d4). The back buffer's from the present parameters when target 0 does not
-/// resolve (a device with no back buffer, whose draws record nothing).
-fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), [u32; 4], bool) {
-    dev.core.target_desc(srgb_write).map_or_else(
-        || {
-            let pp = dev.present_params();
+/// Under `null_rt0` returns the depth extent (or PP fallback), `[0; 4]`, `0`, and `true`.
+/// Under `srgb_write`, each bound slot `i` that is non-sRGB/float or got its hardware twin sets
+/// bit `i` of `linear_mask`; `hardware_srgb` is `true` whenever no bound slot needs shader OETF.
+fn core_target_of(
+    dev: &DeviceInner,
+    srgb_write: bool,
+    null_rt0: bool,
+) -> ((u32, u32), [u32; 4], u8, bool) {
+    if null_rt0 {
+        let size = dev.core.target_desc(false).map_or_else(
+            || {
+                let pp = dev.present_params();
+                (pp.back_buffer_width, pp.back_buffer_height)
+            },
+            |(size, _)| size,
+        );
+        return (size, [0; 4], 0, true);
+    }
+    let Some((_, stored)) = dev.core.target_desc(false) else {
+        let pp = dev.present_params();
+        return (
+            (pp.back_buffer_width, pp.back_buffer_height),
+            [mtl::PixelFormat::Bgra8Unorm as u32, 0, 0, 0],
+            0,
+            true,
+        );
+    };
+    let Some((size, formats)) = dev.core.target_desc(srgb_write) else {
+        return (
             (
-                (pp.back_buffer_width, pp.back_buffer_height),
-                [mtl::PixelFormat::Bgra8Unorm as u32, 0, 0, 0],
-                false,
-            )
-        },
-        |(size, formats)| {
-            let stored = dev.core.target_format();
-            (size, formats, srgb_write && stored != Some(formats[0]))
-        },
-    )
+                dev.present_params().back_buffer_width,
+                dev.present_params().back_buffer_height,
+            ),
+            stored,
+            0,
+            true,
+        );
+    };
+    if !srgb_write {
+        return (size, formats, 0, true);
+    }
+    let mut linear_mask = 0_u8;
+    let mut needs_shader_srgb = false;
+    for slot in 0..4 {
+        if formats[slot] == 0 {
+            continue;
+        }
+        let takes_srgb = slot_takes_srgb_write(dev, slot);
+        let got_twin = formats[slot] != stored[slot];
+        if takes_srgb && !got_twin {
+            needs_shader_srgb = true;
+        } else {
+            linear_mask |= 1 << slot;
+        }
+    }
+    (size, formats, linear_mask, !needs_shader_srgb)
 }
 
-/// Whether the colour target at `slot` stores alpha, as mtld3d's blend factors see it.
-///
-/// A back buffer does, whatever its format (mtld3d binds it so), and so does an empty slot;
-/// another target by its format, one the format table does not know counting as alpha-bearing
-/// (DXMTRS C4b-3d3, C4b-3d4).
-fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
+/// Reads `GetDesc` for a custom (non-backbuffer) surface bound at colour `slot`.
+fn slot_surface_desc(dev: &DeviceInner, slot: usize) -> Option<D3DSURFACE_DESC> {
     let bound = dev.bound_rt().render_target(slot);
     // SAFETY: null, or the bound surface, which its slot's refcount keeps live for the call.
-    let Some(surface) = (unsafe { bound.as_ref() }) else {
-        return true;
-    };
+    let surface = unsafe { bound.as_ref() }?;
     if surface.is_back_buffer() {
-        return true;
+        return None;
     }
     let mut desc = D3DSURFACE_DESC {
         format: 0,
@@ -882,9 +947,31 @@ fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
     };
     // SAFETY: the surface's own `GetDesc` thunk, with the surface as `this` and a writable
     // description.
-    if unsafe { (surface.vtbl().get_desc)(bound.cast(), &raw mut desc) } != 0 {
+    (unsafe { (surface.vtbl().get_desc)(bound.cast(), &raw mut desc) } == 0).then_some(desc)
+}
+
+/// Whether the colour target at `slot` takes D3D9 sRGB write encoding.
+fn slot_takes_srgb_write(dev: &DeviceInner, slot: usize) -> bool {
+    let bound = dev.bound_rt().render_target(slot);
+    // SAFETY: null, or the bound surface, which its slot's refcount keeps live for the call.
+    let Some(surface) = (unsafe { bound.as_ref() }) else {
+        return slot == 0;
+    };
+    if surface.is_back_buffer() {
         return true;
     }
+    slot_surface_desc(dev, slot).is_some_and(|desc| takes_srgb_write(desc.format))
+}
+
+/// Whether the colour target at `slot` stores alpha, as mtld3d's blend factors see it.
+///
+/// A back buffer does, whatever its format (mtld3d binds it so), and so does an empty slot;
+/// another target by its format, one the format table does not know counting as alpha-bearing
+/// (DXMTRS C4b-3d3, C4b-3d4).
+fn slot_has_alpha(dev: &DeviceInner, slot: usize) -> bool {
+    let Some(desc) = slot_surface_desc(dev, slot) else {
+        return true;
+    };
     map_d3d_format(desc.format)
         .as_ref()
         .is_none_or(FormatMapping::has_alpha)
@@ -1524,7 +1611,8 @@ fn flush(
     index: Option<*mut Direct3DIndexBuffer9>,
 ) -> bool {
     // Read before the core is borrowed: a vertex buffer's release decision takes it.
-    let ignore_lock_bounds = dev.config().buffer_ignore_lock_bounds;
+    let cfg = dev.config();
+    let keep_backing = cfg.buffer_ignore_lock_bounds || cfg.buffer_draw_time_upload;
     let core = &mut *dev.core;
     let mut remaining = bound.present_mask;
     while remaining != 0 {
@@ -1535,7 +1623,7 @@ fn flush(
         // live while bound and distinct from the device.
         let inner = unsafe { &mut *vb }.inner_mut();
         if !matches!(inner.map_mode(), BufferMapMode::Direct)
-            && !inner.core_flush(core, ignore_lock_bounds)
+            && !inner.core_flush(core, keep_backing)
         {
             return false;
         }

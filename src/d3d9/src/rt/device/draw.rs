@@ -446,12 +446,20 @@ impl CoreDevice {
     /// buffer. A draw whose scissor holds no pixel of the pass records nothing and is no error.
     pub fn draw(&mut self, key: &PipelineKey, draw: &DrawData<'_>) -> Result<(), DrawRefused> {
         // Phase 1: pure validation with zero `PassBound` reads or writes.
-        let Some(target) = self.shape(self.target) else {
-            return Err(DrawRefused::NoBackBuffer);
+        let (target_w, target_h, target_samples) = match self.shape(self.target) {
+            Some(target) => (target.width, target.height, target.samples),
+            None if matches!(self.target, super::TargetRef::Null) => {
+                let (Some((w, h)), Some(samples)) = (self.depth_size(), self.depth_samples())
+                else {
+                    return Err(DrawRefused::Depth);
+                };
+                (w, h, samples)
+            }
+            None => return Err(DrawRefused::NoBackBuffer),
         };
         // A pass and its pipeline share one sample count, target 0's, whatever pass is open: an
         // open pass on the same colours does not excuse another count (DXMTRS C4b-3d5).
-        if key.samples != target.samples {
+        if key.samples != target_samples {
             return Err(DrawRefused::Target);
         }
         // The key decides the pass's colour slots and formats. An open pass on them was checked
@@ -468,14 +476,18 @@ impl CoreDevice {
         }
         // The key decides the pass: with the depth-stencil exactly when it names a format. An
         // open pass with it was checked when it opened, and a change of either binding closed it.
+        // A `TargetRef::Null` depth-only pass requires an attached depth-stencil.
         let with_depth = key.depth_format != 0;
+        if matches!(self.target, super::TargetRef::Null) && !with_depth {
+            return Err(DrawRefused::Depth);
+        }
         let bound = || self.depth_format() == Some(key.depth_format);
         if with_depth && self.open_depth.is_none() && !bound() {
             return Err(DrawRefused::Depth);
         }
         // A depth-stencil of another count than target 0 is left out of the pass: a key that
         // names it is not the draw's (DXMTRS C4b-3d5).
-        if with_depth && self.depth_samples() != Some(target.samples) {
+        if with_depth && self.depth_samples() != Some(target_samples) {
             return Err(DrawRefused::Depth);
         }
         debug_assert!(
@@ -484,9 +496,7 @@ impl CoreDevice {
         );
         // Metal takes no scissor past the pass's extent, nor an empty one: a draw cut to nothing
         // writes no pixel, so it records nothing.
-        let extent = self
-            .pass_extent(with_depth)
-            .unwrap_or((target.width, target.height));
+        let extent = self.pass_extent(with_depth).unwrap_or((target_w, target_h));
         let Some(scissor) = clamp_rect(draw.scissor, extent) else {
             return Ok(());
         };
@@ -654,7 +664,11 @@ impl CoreDevice {
             self.record_open_query_areas();
         }
         if let Some(pending) = pending_entry.as_ref() {
-            let mut check_planes = ClearPlanes::COLOR;
+            let mut check_planes = if colors[0] != 0 {
+                ClearPlanes::COLOR
+            } else {
+                ClearPlanes::empty()
+            };
             if with_depth && (depth_planes & 1 != 0) && draw.depth_stencil.uses_depth() {
                 check_planes.insert(ClearPlanes::DEPTH);
             }
@@ -1381,9 +1395,11 @@ pub(super) fn build_pipeline(ctx: &CompileContext, source: &PipelineSource) -> O
     info.vertex_function = vs;
     info.fragment_function = ps;
     info.colors[0].pixel_format = source.color_format;
-    info.colors[0].write_mask = source.write_mask;
-    if let Some(blend) = &source.blend {
-        set_blend(&mut info.colors[0], blend);
+    if source.color_format != 0 {
+        info.colors[0].write_mask = source.write_mask;
+        if let Some(blend) = &source.blend {
+            set_blend(&mut info.colors[0], blend);
+        }
     }
     // Slots 1-3 at their own index; an empty one keeps the invalid format, as its pass's slot
     // holds no attachment.

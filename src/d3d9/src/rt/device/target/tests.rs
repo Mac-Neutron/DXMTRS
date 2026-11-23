@@ -726,9 +726,9 @@ fn forgetting_an_extra_unbinds_it() {
     );
 }
 
-/// Under sRGB write the set attaches every member's twin when every one has one; none otherwise.
+/// Under sRGB write each member of the set attaches through its own twin independently.
 #[test]
-fn srgb_twins_are_all_or_nothing() {
+fn srgb_twins_attach_per_slot() {
     const DEVICE: u64 = 0x348;
     let (mut core, _) = core_and_back_buffer(DEVICE);
     let (t0, _) = stored_desc(&mut core, DEVICE, 1, &twinned(flat(BGRA8, 64, 4), SRGB));
@@ -751,10 +751,7 @@ fn srgb_twins_are_all_or_nothing() {
         Some(((64, 64), [BGRA8, RGBA8, 0, 0]))
     );
     assert!(core.set_extra_target(1, Some(level0(float))));
-    assert_eq!(
-        core.target_desc(true),
-        Some(((64, 64), [BGRA8, R32F, 0, 0]))
-    );
+    assert_eq!(core.target_desc(true), Some(((64, 64), [SRGB, R32F, 0, 0])));
     assert!(core.set_extra_target(1, Some(level0(small))));
     assert_eq!(core.target_desc(true), Some(((64, 64), [SRGB, 0, 0, 0])));
 }
@@ -949,11 +946,10 @@ fn a_clear_of_a_target_outside_the_set_is_its_own_pass() {
     );
 }
 
-/// Under sRGB write a Clear stores its colour encoded exactly once.
+/// Under sRGB write a Clear stores its colour encoded exactly once per target capability.
 ///
-/// A target with a twin, alone, is cleared through the twin with the linear colour. With an
-/// extra that has none, both are cleared through their stored views with the encoded colour,
-/// and both Clears fold into the pass of the set.
+/// A target with a twin is cleared through its twin with the linear colour even when paired with a
+/// linear/float extra target; a linear/float target without an sRGB twin is never encoded.
 #[test]
 fn a_clear_encodes_once() {
     const DEVICE: u64 = 0x34d;
@@ -973,30 +969,32 @@ fn a_clear_encodes_once() {
         "{calls:#?}"
     );
     let cleared = targets(&calls);
-    assert!(is_view(&calls, &cleared[0].0, &h0, SRGB), "{calls:#?}");
+    let srgb_view = cleared[0].0.clone();
+    assert!(is_view(&calls, &srgb_view, &h0, SRGB), "{calls:#?}");
     assert!(core.set_extra_target(1, Some(level0(float))));
     core.clear(0, linear, true);
     core.clear(1, linear, true);
     let binds = ff_binds();
-    let named = key_extras([Some(extra(R32F, 0xf)), None, None]);
+    let named = PipelineKey {
+        color_format: SRGB,
+        ..key_extras([Some(extra(R32F, 0xf)), None, None])
+    };
     assert_eq!(core.draw(&named, &triangle(&binds)), Ok(()));
     core.drain();
     let calls = dxmt_fakes::take_calls(DEVICE);
     let found = passes(&calls);
     assert_eq!(found.len(), 1, "{calls:#?}");
-    let [r, g, b, a] = mtld3d_core::convert::linear_to_srgb_rgba(linear).map(f64::from);
-    let encoded = format!("load=2 store=1 clear={r},{g},{b},{a}");
     assert_eq!(
         line(found[0], "  color0 "),
-        Some(encoded.as_str()),
+        Some("load=2 store=1 clear=0.5,0.5,0.5,1"),
         "{calls:#?}"
     );
     assert_eq!(
         line(found[0], "  color1 "),
-        Some(encoded.as_str()),
+        Some("load=2 store=1 clear=0.5,0.5,0.5,1"),
         "{calls:#?}"
     );
-    assert_eq!(targets(&calls)[0].0, h0, "{calls:#?}");
+    assert_eq!(targets(&calls)[0].0, srgb_view, "{calls:#?}");
     assert_eq!(
         line(found[0], "  target1 "),
         Some(h_float.as_str()),
@@ -2147,4 +2145,61 @@ fn reset_targets_clears_custom_rt0_when_back_buffer_is_missing() {
     assert!(!core.render_open);
     assert_eq!(core.target(), TargetRef::BackBuffer);
     assert_ne!(core.target_gen(), gen_before);
+}
+
+/// Binding `TargetRef::Null` opens a depth-only render pass using the depth surface's geometry.
+///
+/// `target_desc` returns the depth extent and `[0; 4]` (or `None` without depth), `target_samples`
+/// follows the bound depth surface's sample count, draws emit a `color0=0` depth-only pipeline and
+/// render pass, and region depth/stencil clears work without a colour attachment.
+#[test]
+fn null_target_draws_and_clears_depth_only() {
+    const DEVICE: u64 = 0x706;
+    const D32F: u32 = winemetal_sys::wire::WMT_PIXEL_FORMAT_DEPTH32_FLOAT;
+    let (mut core, _) = core_and_back_buffer(DEVICE);
+    assert!(core.set_target(TargetRef::Null));
+    assert_eq!(core.target_desc(false), None);
+    assert_eq!(core.target_size(), None);
+    assert_eq!(core.target_format(), None);
+    assert_eq!(core.clear_size(0), None);
+    let binds = ff_binds();
+    let depth_only = PipelineKey {
+        color_format: 0,
+        depth_format: D32F,
+        samples: 4,
+        ..key(0xf)
+    };
+    assert_eq!(
+        core.draw(&depth_only, &triangle(&binds)),
+        Err(DrawRefused::Depth)
+    );
+    let (depth, _) = stored_desc(
+        &mut core,
+        DEVICE,
+        1,
+        &CoreTextureDesc {
+            samples: 4,
+            ..depth_desc(D32F, 48, 32, 1)
+        },
+    );
+    assert!(core.set_depth(Some(DepthRef {
+        id: depth,
+        level: 0
+    })));
+    assert_eq!(core.target_samples(), 4);
+    assert_eq!(core.target_size(), Some((48, 32)));
+    assert_eq!(core.target_desc(false), Some(((48, 32), [0; 4])));
+    assert_eq!(core.draw(&depth_only, &triangle(&binds)), Ok(()));
+    core.clear_depth_stencil_rects(&[[4, 4, 16, 16]], 1, 0.5, 0);
+    core.drain();
+    let calls = dxmt_fakes::take_calls(DEVICE);
+    let found = passes(&calls);
+    assert_eq!(found.len(), 2, "{calls:#?}");
+    assert!(line(found[0], "  depth ").is_some(), "{calls:#?}");
+    assert_eq!(line(found[0], "  color0 "), None, "{calls:#?}");
+    assert!(calls.contains(&"  pso color0=0".to_owned()), "{calls:#?}");
+    assert!(
+        calls.contains(&"  pso samples=4 a2c=0".to_owned()),
+        "{calls:#?}"
+    );
 }

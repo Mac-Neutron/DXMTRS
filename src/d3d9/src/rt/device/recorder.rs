@@ -98,9 +98,6 @@ impl CoreDevice {
             self.resolve_as(target, format)
                 .map(|resolved| (resolved.texture, resolved.key))
         });
-        let Some(first) = set[0].filter(|_| views[0].is_some()) else {
-            return;
-        };
         // The optimizer compares and folds the first `count` slots: up to the highest attached.
         let count = colors
             .iter()
@@ -115,14 +112,30 @@ impl CoreDevice {
             None
         };
         let attached = depth.is_some();
-        // Metal draws to the smallest attachment; the area is said, so a Clear folds into this
-        // pass only when the pass reaches all of the cleared view. Every set member has target
-        // 0's size.
-        let (width, height) = self
-            .pass_extent(attached)
-            .unwrap_or((first.width, first.height));
-        // Every attachment has target 0's sample count (the set's rule), which the barrier takes.
-        let samples = u32::from(first.samples);
+        // When colour slot 0 is 0 (`TargetRef::Null`), open a depth-only render pass sized and
+        // sampled from the bound depth-stencil. Otherwise attach slot 0..3 around target 0's shape.
+        let (width, height, samples) = if colors[0] == 0 {
+            if !attached {
+                return;
+            }
+            let (Some((width, height)), Some(samples)) = (self.depth_size(), self.depth_samples())
+            else {
+                return;
+            };
+            (width, height, u32::from(samples))
+        } else {
+            let Some(first) = set[0].filter(|_| views[0].is_some()) else {
+                return;
+            };
+            // Metal draws to the smallest attachment; the area is said, so a Clear folds into this
+            // pass only when the pass reaches all of the cleared view. Every set member has target
+            // 0's size.
+            let (width, height) = self
+                .pass_extent(attached)
+                .unwrap_or((first.width, first.height));
+            // Every attachment has target 0's sample count (the set's rule), which the barrier takes.
+            (width, height, u32::from(first.samples))
+        };
         // The view each attached target is written through, which a resolve of it reads.
         for (slot, view) in views.iter().enumerate() {
             if view.is_some()
@@ -137,8 +150,9 @@ impl CoreDevice {
             for (slot, view) in views.iter().enumerate() {
                 if view.is_some()
                     && let Some(target) = self.slot_target(slot)
+                    && let Some(key) = super::color_clear_key(target)
                 {
-                    color_keys[slot] = super::color_clear_key(target);
+                    color_keys[slot] = key;
                     color_present[slot] = true;
                 }
             }
@@ -220,7 +234,7 @@ impl CoreDevice {
             .and_then(|(_, formats)| formats.get(slot).copied())
             .filter(|&format| format != 0)
             .unwrap_or_else(|| shape.attached_format(srgb_write));
-        let rgba = if srgb_write && format == shape.pixel_format {
+        let rgba = if srgb_write && shape.srgb_format != 0 && format == shape.pixel_format {
             linear_to_srgb_rgba(linear)
         } else {
             linear
@@ -243,8 +257,9 @@ impl CoreDevice {
         };
         let (texture, key) = (target.texture, target.key);
         self.note_cleared(slot, key.format());
-        if let Some(target_ref) = self.slot_target(slot) {
-            let (clear_target, subresource) = super::color_clear_key(target_ref);
+        if let Some(target_ref) = self.slot_target(slot)
+            && let Some((clear_target, subresource)) = super::color_clear_key(target_ref)
+        {
             self.clear_history
                 .record_key(clear_target, subresource, ClearPlanes::COLOR);
         }
@@ -318,8 +333,7 @@ impl CoreDevice {
         let whole = rect.is_none_or(|[x, y, width, height]| {
             x == 0 && y == 0 && width == shape.width && height == shape.height
         });
-        if whole {
-            let (clear_target, subresource) = super::color_clear_key(target);
+        if whole && let Some((clear_target, subresource)) = super::color_clear_key(target) {
             self.clear_history
                 .record_key(clear_target, subresource, ClearPlanes::COLOR);
         }

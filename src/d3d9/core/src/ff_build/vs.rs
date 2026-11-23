@@ -817,9 +817,9 @@ impl Vs<'_> {
                     self.mov(d(raw, "xyz"), s(refl, "xyzw"));
                     self.mov(d(raw, "w"), zero);
                 } else {
-                    // `(R.xy / m + 0.5, 0, 0)`, `m = 2 * length(R + (0, 0, 1))`.
+                    // `(R.xy / m + 0.5, 0, 0)`, `m = 2 * length(R + (0, 0, -1))`.
                     let sphere = self.a.temp();
-                    let up = self.a.vec4([0.0, 0.0, 1.0, 0.0]);
+                    let up = self.a.vec4([0.0, 0.0, -1.0, 0.0]);
                     self.a.op(Add, d(sphere, "xyz"), [s(refl, "xyzw"), up]);
                     self.a
                         .op(Dp3, d(sphere, "w"), [s(sphere, "xyzw"), s(sphere, "xyzw")]);

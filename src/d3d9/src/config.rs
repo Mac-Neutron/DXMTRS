@@ -1,8 +1,9 @@
 //! The [`Mtld3dConfig`] an `IDirect3D9` resolves at `Direct3DCreate9`.
 //!
 //! Its lookups: the built-in [`AppProfile`] for this application, if it has
-//! one, from the executable's name plus the version resource of the image the
-//! loader mapped; then the four sources every API reads
+//! one, from the executable's name, the version resource of the image the
+//! loader mapped and the `SteamAppId` variable of the process's Windows
+//! environment; then the four sources every API reads
 //! ([`Sources::read`]): `dxmt.conf` (`DXMT_CONFIG_FILE` or the working
 //! folder), the optional `mtld3d.conf` beside the executable
 //! (`std::env::current_exe()`'s folder; a missing file is fine),
@@ -37,12 +38,28 @@ unsafe extern "system" {
 /// process that creates several interfaces gives each the options in force
 /// when it was created.
 pub fn load() -> Mtld3dConfig {
-    let profile = app_profile();
-    let sources = Sources::read();
+    let (sources, cfg) = resolve_with_sources();
     log_sources(&sources);
-    let cfg = parse_sources(profile, &sources, dxmt_util::env::exe_name().as_bytes());
     log_options(&cfg);
     cfg
+}
+
+/// The `display.maxResolutions` the process's configuration resolves to now.
+///
+/// For the `EnumDisplaySettings` redirect, which serves the main module
+/// before or without any `IDirect3D9`. Resolves the same layers an interface
+/// would, without logging every option again.
+#[must_use]
+pub fn max_resolutions() -> u32 {
+    resolve_with_sources().1.max_resolutions
+}
+
+/// The built-in profile and the configuration sources, combined.
+fn resolve_with_sources() -> (Sources, Mtld3dConfig) {
+    let profile = app_profile();
+    let sources = Sources::read();
+    let cfg = parse_sources(profile, &sources, dxmt_util::env::exe_name().as_bytes());
+    (sources, cfg)
 }
 
 /// The built-in profile for the executable this library was loaded into.
@@ -56,7 +73,12 @@ fn app_profile() -> Option<&'static AppProfile> {
     // SAFETY: `main` is a handle the loader owns, so the image behind it is
     // mapped for the life of the process.
     let blob = unsafe { version_blob(main) };
-    mtld3d_core::app_profile::lookup(&AppIdentity::new(name, blob.as_deref()))
+    let steam_app = std::env::var("SteamAppId").ok();
+    mtld3d_core::app_profile::lookup(&AppIdentity::new(
+        name,
+        blob.as_deref(),
+        steam_app.as_deref(),
+    ))
 }
 
 /// Name in D3D9's log what was read: `mtld3d.conf`, `dxmt.conf` and the two variables.

@@ -290,6 +290,12 @@ impl CoreDevice {
                 });
                 (u64::from(rw) * u64::from(rh), u64::from(lw) * u64::from(lh))
             }
+            TargetRef::Null => {
+                let area = self
+                    .depth_size()
+                    .map_or(0, |(w, h)| u64::from(w) * u64::from(h));
+                (area, area)
+            }
         }
     }
 
@@ -340,6 +346,7 @@ impl CoreDevice {
                 .and_then(|back_buffer| back_buffer.companion.as_ref())
                 .map(|companion| companion.last_written),
             TargetRef::Texture { id, .. } => self.textures.get(&id).map(|s| s.last_written),
+            TargetRef::Null => None,
         }
     }
 
@@ -354,6 +361,7 @@ impl CoreDevice {
             TargetRef::Texture { id, .. } => {
                 self.textures.get_mut(&id).map(|s| &mut s.last_written)
             }
+            TargetRef::Null => None,
         };
         if let Some(written) = written {
             *written = format;
@@ -419,7 +427,7 @@ impl CoreDevice {
     pub fn forget_texture(&mut self, id: TextureId) {
         let holds = |target: &TargetRef| match *target {
             TargetRef::Texture { id: held, .. } => held == id,
-            TargetRef::BackBuffer => false,
+            TargetRef::BackBuffer | TargetRef::Null => false,
         };
         let had_target = holds(&self.target);
         if had_target {
@@ -736,6 +744,7 @@ impl CoreDevice {
                     };
                     self.upload(texture, level, &copy, bytes, (pitch, 0))
                 }
+                TargetRef::Null => false,
             };
         }
         let scale_edge = |edge: u32, from: u32, to: u32| -> u32 {

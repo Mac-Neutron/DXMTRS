@@ -1,7 +1,8 @@
 use super::{
     MAX_SERVED_SIZES, ModeRequest, ModeSetOutcome, RegistryRestore, STANDARD_SIZES,
-    drop_unscalable_sizes, fills_display, gcd, mode_set_attempts, monitor_ratio_fits,
-    physical_extent, pixels, select_mode_sizes, served_mode_indices, served_mode_sizes,
+    drop_sizes_above_panel, drop_unscalable_sizes, effective_refresh, fills_display, gcd,
+    listed_modes, mode_set_attempts, monitor_ratio_fits, physical_extent, pixels,
+    select_mode_sizes, served_mode_indices, served_mode_sizes, served_modes, served_sizes,
 };
 
 const MBP: (u32, u32) = (3456, 2234);
@@ -710,5 +711,247 @@ fn a_registry_restore_names_both_modes_and_a_failure_code() {
     assert_eq!(
         RegistryRestore::Unreadable.to_string(),
         "display mode unreadable, left as it is"
+    );
+}
+
+/// The sizes the adapter serves from a Win32 list, bounded to `max`.
+fn served_at(desktop: (u32, u32), sizes: &[(u32, u32)], max: usize) -> Vec<(u32, u32)> {
+    let settable = select_mode_sizes(desktop, sizes.iter().copied());
+    let served = served_sizes(&settable, max);
+    let mut distinct = served.clone();
+    distinct.dedup();
+    assert_eq!(distinct.len(), served.len(), "{served:?}");
+    served
+}
+
+#[test]
+fn every_settable_size_is_served_smallest_first_without_a_bound() {
+    let mut expected = MBP_WINE_SIZES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(served_at(MBP, &MBP_WINE_SIZES, 0), expected);
+}
+
+#[test]
+fn a_scaled_desktop_serves_the_panel_size_and_the_default_size() {
+    let served = served_at((4112, 2658), &MBP_WINE_SIZES, 0);
+    assert_eq!(served.len(), MBP_WINE_SIZES.len() + 1, "{served:?}");
+    for size in [MBP, (1728, 1117), (2992, 1934), (1168, 730)] {
+        assert!(served.contains(&size), "{size:?} missing from {served:?}");
+    }
+    assert_eq!(served.last(), Some(&(4112, 2658)));
+}
+
+/// The desktop of a 3456x2234 panel at "More Space", the backing store.
+const MORE_SPACE: (u32, u32) = (4112, 2658);
+
+#[test]
+fn sizes_above_the_panel_are_left_out_and_the_desktop_stays_first() {
+    let mut settable = select_mode_sizes(
+        MORE_SPACE,
+        [
+            (640, 480),
+            (3840, 2160),
+            MBP,
+            (3200, 2400),
+            (1728, 1117),
+            (2560, 1600),
+        ],
+    );
+    let dropped = drop_sizes_above_panel(&mut settable, MBP);
+    assert_eq!(
+        settable,
+        vec![MORE_SPACE, (640, 480), MBP, (1728, 1117), (2560, 1600)]
+    );
+    assert_eq!(dropped, vec![(3840, 2160), (3200, 2400)]);
+    assert!(settable[1..].iter().all(|&(w, h)| w <= MBP.0 && h <= MBP.1));
+}
+
+#[test]
+fn drop_sizes_above_panel_layers_cleanly_with_drop_unscalable_sizes() {
+    let mut settable = select_mode_sizes(
+        MORE_SPACE,
+        [(640, 480), (3840, 2160), MBP, (2992, 1934), (1728, 1117)],
+    );
+    let physical = physical_extent(MORE_SPACE, settable.iter().copied());
+    drop_sizes_above_panel(&mut settable, MBP);
+    drop_unscalable_sizes(&mut settable, physical, 96);
+    assert_eq!(settable.first(), Some(&MORE_SPACE));
+    assert!(settable[1..].iter().all(|&(w, h)| w <= MBP.0 && h <= MBP.1));
+    assert!(
+        settable
+            .iter()
+            .all(|&size| size == MORE_SPACE || monitor_ratio_fits(size, physical, 96))
+    );
+}
+
+#[test]
+fn a_panel_equal_to_the_desktop_or_unknown_leaves_the_list_alone() {
+    let list = select_mode_sizes(MBP, MBP_WINE_SIZES);
+    for panel in [MBP, (0, 0), (MBP.0, 0), (0, MBP.1)] {
+        let mut settable = list.clone();
+        assert_eq!(
+            drop_sizes_above_panel(&mut settable, panel),
+            [] as [(u32, u32); 0],
+            "panel {panel:?}"
+        );
+        assert_eq!(settable, list, "panel {panel:?}");
+    }
+}
+
+#[test]
+fn sizes_in_points_with_retina_mode_off_all_fit_the_panel() {
+    let list = select_mode_sizes((2056, 1329), MBP_NORETINA_WINE_SIZES);
+    let mut settable = list.clone();
+    assert_eq!(
+        drop_sizes_above_panel(&mut settable, MBP),
+        [] as [(u32, u32); 0]
+    );
+    assert_eq!(settable, list);
+}
+
+#[test]
+fn an_empty_settable_list_drops_nothing_above_the_panel() {
+    let mut settable = Vec::new();
+    assert_eq!(
+        drop_sizes_above_panel(&mut settable, MBP),
+        [] as [(u32, u32); 0]
+    );
+    assert_eq!(settable, [] as [(u32, u32); 0]);
+}
+
+#[test]
+fn the_same_panel_with_retina_mode_off_serves_its_whole_list_unbounded() {
+    let served = served_at((1728, 1117), &MBP_NORETINA_WINE_SIZES, 0);
+    assert_eq!(served.len(), MBP_NORETINA_WINE_SIZES.len(), "{served:?}");
+    assert_eq!(served.first(), Some(&(640, 480)));
+    assert_eq!(served.last(), Some(&(1728, 1117)));
+}
+
+const PANEL_HOST_SIZES: [(u32, u32); 8] = [
+    (2560, 1664),
+    (1470, 956),
+    (1470, 918),
+    (1280, 832),
+    (1280, 800),
+    (1024, 666),
+    (1024, 640),
+    (960, 600),
+];
+
+#[test]
+fn a_host_mode_list_serves_every_size_that_fits_on_the_desktop() {
+    let expected = vec![
+        (960, 600),
+        (1024, 640),
+        (1024, 666),
+        (1280, 800),
+        (1280, 832),
+        (1470, 918),
+        (1470, 956),
+    ];
+    assert_eq!(served_at((1470, 956), &PANEL_HOST_SIZES, 0), expected);
+    assert_eq!(served_at((1470, 956), &PANEL_HOST_SIZES, 32), expected);
+    assert_eq!(
+        served_mode_indices(PANEL_HOST_SIZES, &expected),
+        vec![1, 2, 3, 4, 5, 6, 7]
+    );
+}
+
+#[test]
+fn a_bound_keeps_the_largest_sizes_and_the_desktop() {
+    let served = served_at(MBP, &MBP_WINE_SIZES, 32);
+    assert_eq!(served.len(), 32);
+    for size in [(640, 480), (800, 600), (1280, 800)] {
+        assert!(!served.contains(&size), "{size:?} served");
+    }
+    assert!(served.contains(&(1312, 820)));
+    assert!(served.contains(&MBP));
+    assert!(served.is_sorted(), "{served:?}");
+}
+
+#[test]
+fn a_bound_at_or_above_the_size_count_changes_nothing() {
+    let unbounded = served_at(MBP, &MBP_WINE_SIZES, 0);
+    assert_eq!(served_at(MBP, &MBP_WINE_SIZES, 44), unbounded);
+    assert_eq!(served_at(MBP, &MBP_WINE_SIZES, 43), unbounded);
+}
+
+#[test]
+fn a_tight_bound_keeps_the_largest_by_pixel_count() {
+    let settable = [(2560, 1600), (1920, 800), (1600, 1200), (640, 480)];
+    assert_eq!(served_sizes(&settable, 2), vec![(1600, 1200), (2560, 1600)]);
+    assert_eq!(
+        served_sizes(&[(2000, 2000), (1000, 4000), (4000, 1000)], 2),
+        vec![(2000, 2000), (4000, 1000)]
+    );
+}
+
+#[test]
+fn the_desktop_survives_a_bound_even_when_it_is_not_among_the_largest() {
+    let settable = [(1024, 768), (3456, 2234), (2624, 1696), (640, 480)];
+    assert_eq!(served_sizes(&settable, 2), vec![(1024, 768), (3456, 2234)]);
+}
+
+#[test]
+fn a_bound_of_one_serves_the_desktop_alone() {
+    assert_eq!(served_sizes(&[MBP, (640, 480), (2624, 1696)], 1), vec![MBP]);
+}
+
+#[test]
+fn served_sizes_of_an_empty_settable_list_serves_nothing() {
+    assert_eq!(served_sizes(&[], 5), [] as [(u32, u32); 0]);
+    assert_eq!(served_sizes(&[], 0), [] as [(u32, u32); 0]);
+}
+
+#[test]
+fn every_refresh_rate_of_a_served_size_is_served_lowest_first() {
+    let modes = [
+        ((1440, 900), 120),
+        ((640, 480), 120),
+        ((1440, 900), 60),
+        ((3456, 2234), 120),
+        ((640, 480), 60),
+        ((1440, 900), 120),
+        ((3456, 2234), 60),
+        ((1168, 730), 120),
+    ];
+    assert_eq!(
+        served_modes(modes, &[(640, 480), (1440, 900), (3456, 2234)]),
+        vec![
+            ((640, 480), 60),
+            ((640, 480), 120),
+            ((1440, 900), 60),
+            ((1440, 900), 120),
+            ((3456, 2234), 60),
+            ((3456, 2234), 120),
+        ]
+    );
+}
+
+#[test]
+fn a_default_rate_reads_as_the_desktops_and_the_desktop_mode_is_always_listed() {
+    let listed = [((640, 480), 0), ((1024, 768), 1), ((2048, 1536), 0)];
+    let modes = listed_modes(listed, ((2048, 1536), 60));
+    assert_eq!(
+        served_modes(modes, &[(640, 480), (1024, 768), (2048, 1536)]),
+        vec![((640, 480), 60), ((1024, 768), 60), ((2048, 1536), 60)]
+    );
+    let modes = listed_modes([(MBP, 60)], (MBP, 120));
+    assert_eq!(served_modes(modes, &[MBP]), vec![(MBP, 60), (MBP, 120)]);
+}
+
+#[test]
+fn a_known_rate_passes_through_and_an_unknown_one_takes_the_fallback() {
+    assert_eq!(effective_refresh(120, 60), 120);
+    assert_eq!(effective_refresh(2, 60), 2);
+    assert_eq!(effective_refresh(1, 60), 60);
+    assert_eq!(effective_refresh(0, 75), 75);
+}
+
+#[test]
+fn a_size_left_out_of_the_served_sizes_has_no_modes() {
+    assert_eq!(
+        served_modes([((1168, 730), 120), ((1168, 730), 60)], &[MBP]),
+        [] as [((u32, u32), u32); 0]
     );
 }

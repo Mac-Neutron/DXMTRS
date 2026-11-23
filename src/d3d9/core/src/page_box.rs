@@ -471,6 +471,46 @@ impl PageBox {
         unsafe { core::ptr::write_bytes(self.ptr.as_ptr(), 0, self.len) };
     }
 
+    /// Zero the first `logical_len` bytes, the ones a lock or an upload can reach, in one memset.
+    ///
+    /// The padding past them up to the page multiple is left as it is: no lock
+    /// pitch, upload or read back reaches it.
+    pub const fn zero_logical(&mut self) {
+        // SAFETY: the allocation spans `len >= logical_len` writable bytes, and
+        // `&mut self` makes the write exclusive under the constructor's access
+        // contract.
+        unsafe { self.ptr.as_ptr().write_bytes(0, self.logical_len) };
+    }
+
+    /// Zero the bytes past `row_bytes` in each of the first `rows` rows of `pitch` bytes.
+    ///
+    /// For a level a read back wrote row by row at a pitch wider than its
+    /// pixels: the rows keep the read back's bytes and only the padding
+    /// between them is zeroed. A no-op when the pitch has no padding.
+    pub const fn zero_row_padding(&mut self, rows: usize, row_bytes: usize, pitch: usize) {
+        if pitch <= row_bytes {
+            return;
+        }
+        let pad = pitch - row_bytes;
+        let mut row = 0usize;
+        while row < rows {
+            let row_start = row.saturating_mul(pitch);
+            let pad_start = row_start.saturating_add(row_bytes);
+            if pad_start >= self.logical_len {
+                break;
+            }
+            let avail = self.logical_len - pad_start;
+            let count = if pad < avail { pad } else { avail };
+            // SAFETY: `pad_start < self.logical_len <= self.len` stays within the allocation.
+            let pad_dst = unsafe { self.ptr.as_ptr().add(pad_start) };
+            // SAFETY: `pad_start + count <= self.logical_len <= self.len` is inside the unique
+            // writable allocation, and `&mut self` grants exclusive access without creating a
+            // `&mut [u8]` over uninitialized bytes.
+            unsafe { pad_dst.write_bytes(0, count) };
+            row += 1;
+        }
+    }
+
     /// Padded length (page multiple).
     ///
     /// This is what the Metal `MTLBuffer` wrapper sees.

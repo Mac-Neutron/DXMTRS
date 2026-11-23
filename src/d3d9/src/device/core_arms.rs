@@ -171,16 +171,36 @@ pub fn clear(
         (!rects.is_null()).then(|| super::clear_target_rects(count, rects)),
         scissor_on.then(|| scissor_region(dev.scissor_rect())),
     );
-    // A core device always has a target (its back buffer is made with it); were there none, the
-    // Clear would have nothing to clear.
+    let null_target0 = dev.core.target() == TargetRef::Null;
+    if null_target0
+        && flags & D3DCLEAR_TARGET != 0
+        && (1..RENDER_TARGET_SLOTS).any(|slot| !dev.bound_rt().render_target(slot).is_null())
+    {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "Clear(TARGET) with a NULL render target 0 leaves render targets 1..3 uncleared"
+        );
+    }
+    // A core device always has a target unless target 0 is `D3DFMT_NULL` with
+    // no depth-stencil bound, in which case `Clear` has nothing to clear.
     let Some(target) = dev.core.target_size() else {
+        if null_target0 && flags & D3DCLEAR_TARGET != 0 {
+            mtld3d_shared::log_once_warn!(
+                target: crate::LOG_TARGET,
+                "Clear(TARGET) with a NULL render target 0 and no depth-stencil clears nothing"
+            );
+        }
         return D3D_OK;
     };
-    let target0_bound = dev.bound_rt().render_target(0);
+    let target0_bound = if null_target0 {
+        dev.bound_rt().depth_stencil()
+    } else {
+        dev.bound_rt().render_target(0)
+    };
     let target0_extent = core_surface_target_extent(dev, target0_bound, target);
     let set_viewport = dev.viewport();
     let target0_vp = scaled_viewport_rect(&set_viewport, &target0_extent);
-    if flags & D3DCLEAR_TARGET != 0 {
+    if flags & D3DCLEAR_TARGET != 0 && !null_target0 {
         let srgb = dev.render_state(D3DRS_SRGBWRITEENABLE as usize) != 0;
         let linear = d3dcolor_to_rgba_f32(color);
         for slot in 0..RENDER_TARGET_SLOTS {
@@ -222,18 +242,19 @@ pub fn clear(
     D3D_OK
 }
 
-/// A present of the whole back buffer into the device window, paced by its interval.
+/// Present `source` into the device window, paced by `pp`'s interval.
 ///
-/// Every present of a core device: `DeviceInner::present` calls it first, for `Present`,
-/// `PresentEx` and a swap chain's `Present` alike, after mtld3d's entry code warned once for each
+/// Every present of a core device calls this, for `Present`, `PresentEx`
+/// and a swap chain's `Present` alike, after mtld3d's entry code warned once for each
 /// rect, window, region and flag it ignores, as mtld3d ignores them (DXMTRS C4c-6a). `pp` is the
-/// device's, so an additional swap chain presents the device's back buffer into the device window
-/// at the device's interval, as on mtld3d.
-pub fn present(
+/// device's, so an additional swap chain presents into the device window at the device's
+/// interval, from its own standalone colour target.
+pub fn present_from(
     core: &mut CoreDevice,
     pp: &D3DPRESENT_PARAMETERS,
     cfg: &mtld3d_core::config::Mtld3dConfig,
     client_surface_reasons: u32,
+    source: TargetRef,
 ) -> i32 {
     let window = pp.device_window as *mut c_void;
     let interval = pp.presentation_interval;
@@ -267,12 +288,13 @@ pub fn present(
              to divide; pacing at display-rate vsync"
         );
     }
-    core.present_paced(
+    core.present_paced_from(
         visible,
         interval,
         refresh_hz,
         cfg.present_max_fps,
         client_surface_reasons,
+        source,
     );
     D3D_OK
 }
@@ -522,11 +544,11 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         };
         let (src_level, src_slice) = match source {
             TargetRef::Texture { level, face, .. } => (level, face.unwrap_or(0)),
-            TargetRef::BackBuffer => (0, 0),
+            TargetRef::BackBuffer | TargetRef::Null => (0, 0),
         };
         let (dst_level, dst_slice) = match destination {
             TargetRef::Texture { level, face, .. } => (level, face.unwrap_or(0)),
-            TargetRef::BackBuffer => (0, 0),
+            TargetRef::BackBuffer | TargetRef::Null => (0, 0),
         };
         let gpu_route = same_surface_route(
             phys_src_region,
@@ -577,6 +599,7 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
                 crate::direct3d9::map_for_device(src_info.format, call.expand_packed16)
                     .map(|mapping| mapping.metal_pixel_format() as u32)
             }
+            TargetRef::Null => None,
         };
         let swizzle = if src_target.is_some() {
             None

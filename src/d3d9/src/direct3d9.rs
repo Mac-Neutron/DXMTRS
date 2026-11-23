@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 use std::sync::{
-    Arc, LazyLock,
+    Arc, LazyLock, OnceLock,
     atomic::{AtomicU32, Ordering, fence},
 };
 
@@ -9,8 +9,8 @@ use mtld3d_core::{
     caps,
     config::{CursorScale, Mtld3dConfig},
     display_mode::{
-        MAX_SERVED_SIZES, ModeRequest, drop_unscalable_sizes, physical_extent, select_mode_sizes,
-        served_mode_sizes,
+        ModeRequest, drop_sizes_above_panel, drop_unscalable_sizes, effective_refresh,
+        listed_modes, physical_extent, select_mode_sizes, served_modes, served_sizes,
     },
     format_probe::FormatProbeKey,
     multisample,
@@ -19,16 +19,16 @@ use mtld3d_shared::{InPtr, OutPtr, ValueIn, VtableThis, mtl::DeviceCapsFlags};
 use mtld3d_types::{
     D3DADAPTER_IDENTIFIER9, D3DCAPS9, D3DDEVTYPE_HAL, D3DDISPLAYMODE, D3DDISPLAYMODEEX,
     D3DDISPLAYMODEEX_SIZE, D3DDISPLAYMODEFILTER, D3DDISPLAYROTATION_IDENTITY, D3DFMT_A8B8G8R8,
-    D3DFMT_A8R8G8B8, D3DFMT_ATI1, D3DFMT_DF16, D3DFMT_DF24, D3DFMT_DXT1, D3DFMT_DXT2, D3DFMT_DXT3,
-    D3DFMT_DXT4, D3DFMT_DXT5, D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_RESZ, D3DFMT_UYVY,
-    D3DFMT_X8B8G8R8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DMULTISAMPLE_NONE, D3DMULTISAMPLE_NONMASKABLE,
-    D3DOK_NOAUTOGEN, D3DPRESENT_PARAMETERS, D3DRTYPE_CUBETEXTURE, D3DRTYPE_INDEXBUFFER,
-    D3DRTYPE_SURFACE, D3DRTYPE_TEXTURE, D3DRTYPE_VERTEXBUFFER, D3DRTYPE_VOLUME,
-    D3DRTYPE_VOLUMETEXTURE, D3DSCANLINEORDERING_INTERLACED, D3DSCANLINEORDERING_PROGRESSIVE,
-    D3DUSAGE_AUTOGENMIPMAP, D3DUSAGE_DEPTHSTENCIL, D3DUSAGE_DYNAMIC,
-    D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING, D3DUSAGE_QUERY_SRGBREAD, D3DUSAGE_QUERY_SRGBWRITE,
-    D3DUSAGE_QUERY_VERTEXTEXTURE, D3DUSAGE_RENDERTARGET, Guid, IDirect3D9ExVtbl, IDirect3D9Vtbl,
-    LUID,
+    D3DFMT_A8R8G8B8, D3DFMT_ATI1, D3DFMT_ATI2, D3DFMT_DF16, D3DFMT_DF24, D3DFMT_DXT1, D3DFMT_DXT2,
+    D3DFMT_DXT3, D3DFMT_DXT4, D3DFMT_DXT5, D3DFMT_L8, D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_RESZ,
+    D3DFMT_UYVY, D3DFMT_X8B8G8R8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DMULTISAMPLE_NONE,
+    D3DMULTISAMPLE_NONMASKABLE, D3DOK_NOAUTOGEN, D3DPRESENT_PARAMETERS, D3DRTYPE_CUBETEXTURE,
+    D3DRTYPE_INDEXBUFFER, D3DRTYPE_SURFACE, D3DRTYPE_TEXTURE, D3DRTYPE_VERTEXBUFFER,
+    D3DRTYPE_VOLUME, D3DRTYPE_VOLUMETEXTURE, D3DSCANLINEORDERING_INTERLACED,
+    D3DSCANLINEORDERING_PROGRESSIVE, D3DUSAGE_AUTOGENMIPMAP, D3DUSAGE_DEPTHSTENCIL,
+    D3DUSAGE_DYNAMIC, D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING, D3DUSAGE_QUERY_SRGBREAD,
+    D3DUSAGE_QUERY_SRGBWRITE, D3DUSAGE_QUERY_VERTEXTEXTURE, D3DUSAGE_RENDERTARGET, Guid,
+    IDirect3D9ExVtbl, IDirect3D9Vtbl, LUID,
 };
 
 use super::{
@@ -41,10 +41,11 @@ use super::{
 // enumeration call or the first fullscreen device, from the Win32 mode list
 // (`EnumDisplaySettingsW`, see `build_adapter_modes`): a fullscreen device
 // sets the mode a game picks through user32, so the list a game picks from
-// has to be the list user32 validates against. The first entry is the
-// desktop mode at the time the table was built and doubles as the current
+// has to be the list user32 validates against. Its desktop entry is the
+// desktop mode at the time the table was built and backs the current
 // adapter display mode, which is why the table is forced before the first
-// mode-set.
+// mode-set. What an interface enumerates from it follows that interface's
+// `display.maxResolutions`.
 static ADAPTER_MODES: LazyLock<AdapterModes> = LazyLock::new(build_adapter_modes);
 
 // Adapter color formats enumerated. X8R8G8B8 = "32-bit" in most game UIs
@@ -69,7 +70,7 @@ const PRIMARY_DISPLAY_NAME: &str = "\\\\.\\DISPLAY1";
 ///
 /// A windowed back buffer requested as `D3DFMT_UNKNOWN` resolves to this.
 pub fn adapter_display_format() -> u32 {
-    ADAPTER_MODES.served[0].format
+    ADAPTER_MODES.desktop.format
 }
 
 /// The adapter's display mode right now, as `GetAdapterDisplayMode` reports it.
@@ -80,15 +81,11 @@ pub fn adapter_display_format() -> u32 {
 /// rect from. The format is the table's, the one colour format the desktop
 /// is advertised at; a failed query falls back to the table's desktop entry.
 pub fn current_adapter_display_mode() -> D3DDISPLAYMODE {
-    let desktop = ADAPTER_MODES.served[0];
+    let desktop = ADAPTER_MODES.desktop;
     crate::fullscreen::current_display_mode().map_or(desktop, |mode| D3DDISPLAYMODE {
         width: mode.width,
         height: mode.height,
-        refresh_rate: if mode.refresh_hz != 0 {
-            mode.refresh_hz
-        } else {
-            desktop.refresh_rate
-        },
+        refresh_rate: effective_refresh(mode.refresh_hz, desktop.refresh_rate),
         format: desktop.format,
     })
 }
@@ -104,7 +101,7 @@ pub fn reported_display_mode(pp: &D3DPRESENT_PARAMETERS) -> D3DDISPLAYMODE {
         let refresh_rate = if pp.full_screen_refresh_rate_in_hz != 0 {
             pp.full_screen_refresh_rate_in_hz
         } else {
-            ADAPTER_MODES.served[0].refresh_rate
+            ADAPTER_MODES.desktop.refresh_rate
         };
         D3DDISPLAYMODE {
             width: pp.back_buffer_width,
@@ -122,23 +119,27 @@ struct AdapterModes {
     /// Every size a fullscreen request may set, desktop first.
     ///
     /// Win32's list under [`select_mode_sizes`]' filters, less the sizes
-    /// [`drop_unscalable_sizes`] leaves out: a subset of what user32 accepts
-    /// a mode-set for.
+    /// [`drop_unscalable_sizes`] and [`drop_sizes_above_panel`] leave out: a
+    /// subset of what user32 accepts a mode-set for.
     settable: Vec<(u32, u32)>,
-    /// The sizes games enumerate: the settable ones bounded to [`MAX_SERVED_SIZES`].
+    /// Every mode Win32 lists at a settable size, as `((width, height), refresh_hz)`.
     ///
-    /// Shared by `EnumAdapterModes` and the `EnumDisplaySettings` redirect
-    /// (`mode_list_hook`), so both menu paths show one list.
-    served_sizes: Vec<(u32, u32)>,
-    /// The entries `GetAdapterModeCount` / `EnumAdapterModes` serve.
-    ///
-    /// The served sizes once per adapter format; entry 0 is the desktop mode.
-    served: Vec<D3DDISPLAYMODE>,
+    /// The desktop's colour depth only; a rate Win32 leaves unset reads as
+    /// the desktop's. [`served_modes`] picks what an interface serves from it.
+    modes: Vec<((u32, u32), u32)>,
+    /// The desktop mode when the table was built, the adapter display mode's fallback.
+    desktop: D3DDISPLAYMODE,
 }
 
-/// The sizes games enumerate, desktop first.
-pub fn served_sizes() -> &'static [(u32, u32)] {
-    &ADAPTER_MODES.served_sizes
+/// The sizes games enumerate under a bound of `max` sizes, 0 for none, smallest first.
+///
+/// Shared by `EnumAdapterModes` and the `EnumDisplaySettings` redirect
+/// (`mode_list_hook`), so both menu paths show one list.
+pub fn served_sizes_for(max: u32) -> Vec<(u32, u32)> {
+    served_sizes(
+        &ADAPTER_MODES.settable,
+        usize::try_from(max).unwrap_or(usize::MAX),
+    )
 }
 
 fn build_adapter_modes() -> AdapterModes {
@@ -154,10 +155,7 @@ fn build_adapter_modes() -> AdapterModes {
     let host = crate::fullscreen::current_display_mode();
     let host_w = host.map_or(1920, |mode| mode.width);
     let host_h = host.map_or(1080, |mode| mode.height);
-    let host_hz = host
-        .map(|mode| mode.refresh_hz)
-        .filter(|&hz| hz > 0)
-        .unwrap_or(60);
+    let host_hz = effective_refresh(host.map_or(0, |mode| mode.refresh_hz), 60);
     let host_bpp = host.map(|mode| mode.bits_per_pel);
 
     // Win32 lists every size once per colour depth; the desktop's depth is
@@ -186,7 +184,19 @@ fn build_adapter_modes() -> AdapterModes {
             physical.1
         );
     }
-    let sizes = served_mode_sizes(&settable, physical, MAX_SERVED_SIZES);
+    // On a scaled desktop Win32 lists sizes up to the backing store; the
+    // panel shows no more pixels than its own, so a driver lists none above.
+    let panel = crate::rt::device::info::panel_size();
+    let above_panel = drop_sizes_above_panel(&mut settable, panel);
+    if !above_panel.is_empty() {
+        mtld3d_shared::log_once_info!(
+            target: LOG_TARGET,
+            "adapter modes: {} sizes larger than the {}x{} panel left out: {above_panel:?}",
+            above_panel.len(),
+            panel.0,
+            panel.1
+        );
+    }
     if enumerated.is_empty() {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -194,35 +204,57 @@ fn build_adapter_modes() -> AdapterModes {
              current mode only",
         );
     }
-
-    let mut modes = Vec::with_capacity(sizes.len() * ADAPTER_FORMATS.len());
-    for &fmt in ADAPTER_FORMATS {
-        for &(w, h) in &sizes {
-            modes.push(D3DDISPLAYMODE {
-                width: w,
-                height: h,
-                refresh_rate: host_hz,
-                format: fmt,
-            });
-        }
-    }
+    // Every rate Win32 lists for a settable size is served: a game may filter
+    // its menu by refresh rate, and the panel's own rate need not pass where
+    // 60 Hz does.
+    let listed = enumerated
+        .iter()
+        .filter(|mode| host_bpp.is_none_or(|bpp| mode.bits_per_pel == bpp))
+        .map(|mode| ((mode.width, mode.height), mode.refresh_hz));
+    let mut modes = listed_modes(listed, ((host_w, host_h), host_hz));
+    modes.retain(|(size, _)| settable.contains(size));
 
     info!(
         target: LOG_TARGET,
-        "adapter modes: host {host_w}x{host_h}@{host_hz}Hz on a {}x{} display; {} sizes \
-         settable of {} enumerated modes, {} served ({} entries): {sizes:?}",
+        "adapter modes: host {host_w}x{host_h}@{host_hz}Hz on a {}x{} display ({}x{} panel); {} \
+         sizes settable of {} enumerated modes",
         physical.0,
         physical.1,
+        panel.0,
+        panel.1,
         settable.len(),
         enumerated.len(),
-        sizes.len(),
-        modes.len()
     );
     AdapterModes {
         settable,
-        served_sizes: sizes,
-        served: modes,
+        modes,
+        desktop: D3DDISPLAYMODE {
+            width: host_w,
+            height: host_h,
+            refresh_rate: host_hz,
+            format: ADAPTER_FORMATS[0],
+        },
     }
+}
+
+/// The modes an interface bounded to `max` sizes serves, 0 for no bound.
+///
+/// Logs the list once per interface, the first time it is asked for.
+fn served_table(max: u32) -> Vec<((u32, u32), u32)> {
+    let sizes = served_sizes_for(max);
+    let modes = served_modes(ADAPTER_MODES.modes.iter().copied(), &sizes);
+    let bound = if max == 0 {
+        "no bound".to_owned()
+    } else {
+        format!("display.maxResolutions = {max}")
+    };
+    info!(
+        target: LOG_TARGET,
+        "adapter modes served ({bound}): {} sizes, {} modes per format: {sizes:?}",
+        sizes.len(),
+        modes.len()
+    );
+    modes
 }
 
 /// The display mode a fullscreen request asks the device to set.
@@ -296,6 +328,12 @@ pub struct Direct3D9Inner {
     ///
     /// Every device it creates is extended, whichever create made it.
     extended: bool,
+    /// The modes `GetAdapterModeCount` / `EnumAdapterModes` serve, as `((width, height), hz)`.
+    ///
+    /// Built from the mode table on the first enumeration, under this
+    /// interface's `display.maxResolutions`; each adapter format serves the
+    /// same list.
+    served: OnceLock<Vec<((u32, u32), u32)>>,
 }
 
 impl Direct3D9 {
@@ -303,8 +341,31 @@ impl Direct3D9 {
         Self {
             vtbl: &raw const DIRECT3D9_VTBL.base,
             refcount: AtomicU32::new(1),
-            inner: Box::new(Direct3D9Inner { config, extended }),
+            inner: Box::new(Direct3D9Inner {
+                config,
+                extended,
+                served: OnceLock::new(),
+            }),
         }
+    }
+
+    /// The modes this interface's enumeration serves, smallest size first.
+    fn served_modes(&self) -> &[((u32, u32), u32)] {
+        self.inner
+            .served
+            .get_or_init(|| served_table(self.inner.config.max_resolutions))
+    }
+
+    /// The `index`-th mode this interface serves in `format`, `None` past the end.
+    fn served_mode(&self, format: u32, index: u32) -> Option<D3DDISPLAYMODE> {
+        let &((width, height), refresh_rate) =
+            self.served_modes().get(usize::try_from(index).ok()?)?;
+        Some(D3DDISPLAYMODE {
+            width,
+            height,
+            refresh_rate,
+            format,
+        })
     }
 
     /// Whether `Direct3DCreate9Ex` made this interface.
@@ -373,6 +434,11 @@ fn is_format_conversion_supported(src: u32, dst: u32, expand_packed16: bool) -> 
     if src == dst {
         return true;
     }
+    // L8 renders, but Windows drivers answer NOTAVAILABLE for a conversion into
+    // it, and as a source it keeps the identity-only answer.
+    if src == D3DFMT_L8 || dst == D3DFMT_L8 {
+        return false;
+    }
     is_conversion_source(src) && is_render_target_format_on_device(dst, expand_packed16)
 }
 
@@ -406,12 +472,15 @@ const fn is_texture_format(fmt: u32) -> bool {
 
 /// Formats `CreateOffscreenPlainSurface` accepts, the `D3DRTYPE_SURFACE` answer without usage.
 ///
-/// Every texture format, plus the YUV formats, which have no sampling path:
-/// the packed 4:2:2 pair as an offscreen plain in any pool, and the planar
-/// 4:2:0 pair as a default-pool one only. Both are lockable `StretchRect`
-/// sources, so every texture-typed query for them stays refused.
+/// Every texture format but ATI2, plus the YUV formats, which have no
+/// sampling path: the packed 4:2:2 pair as an offscreen plain in any pool,
+/// and the planar 4:2:0 pair as a default-pool one only. Both are lockable
+/// `StretchRect` sources, so every texture-typed query for them stays
+/// refused. D3D9 refuses an ATI2 plain in the default and system-memory
+/// pools and creates one in the scratch pool alone, which a query, having no
+/// pool, answers no for.
 const fn is_plain_surface_format(fmt: u32) -> bool {
-    is_texture_format(fmt)
+    (is_texture_format(fmt) && fmt != D3DFMT_ATI2)
         || mtld3d_core::stretch_rect::is_packed_yuv(fmt)
         || mtld3d_core::stretch_rect::is_planar_yuv(fmt)
 }
@@ -804,22 +873,18 @@ struct SpoofIdentity {
 }
 
 extern "system" fn d3d9_get_adapter_mode_count(
-    _this: *mut c_void,
+    this: *mut c_void,
     adapter: u32,
     format: u32,
 ) -> u32 {
-    if adapter != 0 || !is_display_format(format) {
+    // SAFETY: vtable thunk; `this` is *mut Direct3D9 per IDirect3D9 ABI.
+    let d3d = unsafe { InPtr::<Direct3D9>::opt(this) };
+    let Some(d3d) = d3d.filter(|_| adapter == 0 && is_display_format(format)) else {
         warn!(target: LOG_TARGET, "reject GetAdapterModeCount(adapter={adapter}, format={format}) → 0");
         return 0;
-    }
-    let count = u32::try_from(
-        ADAPTER_MODES
-            .served
-            .iter()
-            .filter(|m| m.format == format)
-            .count(),
-    )
-    .expect("ADAPTER_MODES is a small static table");
+    };
+    let count =
+        u32::try_from(d3d.served_modes().len()).expect("the mode table is a small Win32 list");
     mtld3d_shared::log_once_trace_by!(
         target: DISPLAY_TRACE_TARGET,
         key: u64::from(format),
@@ -829,25 +894,24 @@ extern "system" fn d3d9_get_adapter_mode_count(
 }
 
 extern "system" fn d3d9_enum_adapter_modes(
-    _this: *mut c_void,
+    this: *mut c_void,
     adapter: u32,
     format: u32,
     mode: u32,
     display_mode: *mut c_void,
 ) -> i32 {
-    if adapter != 0 || display_mode.is_null() || !is_display_format(format) {
+    // SAFETY: vtable thunk; `this` is *mut Direct3D9 per IDirect3D9 ABI.
+    let d3d = unsafe { InPtr::<Direct3D9>::opt(this) };
+    let Some(d3d) =
+        d3d.filter(|_| adapter == 0 && !display_mode.is_null() && is_display_format(format))
+    else {
         warn!(
             target: LOG_TARGET,
             "reject EnumAdapterModes(adapter={adapter}, format={format}, mode={mode}) → INVALIDCALL"
         );
         return D3DERR_INVALIDCALL;
-    }
-    let Some(entry) = ADAPTER_MODES
-        .served
-        .iter()
-        .filter(|m| m.format == format)
-        .nth(mode as usize)
-    else {
+    };
+    let Some(entry) = d3d.served_mode(format, mode) else {
         trace!(
             target: LOG_TARGET,
             "reject EnumAdapterModes(adapter={adapter}, format={format}, mode={mode}) → INVALIDCALL (out of range)"
@@ -855,7 +919,7 @@ extern "system" fn d3d9_enum_adapter_modes(
         return D3DERR_INVALIDCALL;
     };
     // SAFETY: vtable out-param; `display_mode` is *mut D3DDISPLAYMODE per IDirect3D9 ABI.
-    unsafe { OutPtr::write_opt(display_mode.cast::<D3DDISPLAYMODE>(), *entry) };
+    unsafe { OutPtr::write_opt(display_mode.cast::<D3DDISPLAYMODE>(), entry) };
     D3D_OK
 }
 
@@ -880,38 +944,28 @@ extern "system" fn d3d9_get_adapter_display_mode(
     D3D_OK
 }
 
-/// The modes an extended enumeration keeps under `filter`, `None` for a filter that keeps none.
+/// Whether an extended enumeration under `filter` lists anything.
 ///
 /// Every listed mode is progressive, so a filter asking for interlaced modes
 /// keeps none, as does a format the adapter lists no mode in.
-fn filtered_modes(filter: &D3DDISPLAYMODEFILTER) -> Option<impl Iterator<Item = &D3DDISPLAYMODE>> {
-    if filter.scan_line_ordering == D3DSCANLINEORDERING_INTERLACED
-        || !is_display_format(filter.format)
-    {
-        return None;
-    }
-    let format = filter.format;
-    Some(
-        ADAPTER_MODES
-            .served
-            .iter()
-            .filter(move |m| m.format == format),
-    )
+const fn filter_lists_modes(filter: &D3DDISPLAYMODEFILTER) -> bool {
+    filter.scan_line_ordering != D3DSCANLINEORDERING_INTERLACED && is_display_format(filter.format)
 }
 
 extern "system" fn d3d9_get_adapter_mode_count_ex(
-    _this: *mut c_void,
+    this: *mut c_void,
     adapter: u32,
     filter: *const D3DDISPLAYMODEFILTER,
 ) -> u32 {
     // SAFETY: vtable in-param; `filter` is null or a readable
     // `D3DDISPLAYMODEFILTER` per the IDirect3D9Ex ABI.
     let filter = unsafe { ValueIn::<D3DDISPLAYMODEFILTER>::read_opt(filter.cast()) };
-    let Some(modes) = filter
+    // SAFETY: vtable thunk; `this` is *mut Direct3D9 per IDirect3D9Ex ABI.
+    let d3d = unsafe { InPtr::<Direct3D9>::opt(this) };
+    let listed = filter
         .as_ref()
-        .filter(|_| adapter == 0)
-        .and_then(filtered_modes)
-    else {
+        .is_some_and(|filter| adapter == 0 && filter_lists_modes(filter));
+    let Some(d3d) = d3d.filter(|_| listed) else {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
             "GetAdapterModeCountEx(adapter={adapter}): no filter, another adapter, an interlaced \
@@ -919,11 +973,11 @@ extern "system" fn d3d9_get_adapter_mode_count_ex(
         );
         return 0;
     };
-    u32::try_from(modes.count()).expect("ADAPTER_MODES is a small static table")
+    u32::try_from(d3d.served_modes().len()).expect("the mode table is a small Win32 list")
 }
 
 extern "system" fn d3d9_enum_adapter_modes_ex(
-    _this: *mut c_void,
+    this: *mut c_void,
     adapter: u32,
     filter: *const D3DDISPLAYMODEFILTER,
     mode_index: u32,
@@ -932,11 +986,13 @@ extern "system" fn d3d9_enum_adapter_modes_ex(
     // SAFETY: vtable in-param; `filter` is null or a readable
     // `D3DDISPLAYMODEFILTER` per the IDirect3D9Ex ABI.
     let filter = unsafe { ValueIn::<D3DDISPLAYMODEFILTER>::read_opt(filter.cast()) };
+    // SAFETY: vtable thunk; `this` is *mut Direct3D9 per IDirect3D9Ex ABI.
+    let d3d = unsafe { InPtr::<Direct3D9>::opt(this) };
     let entry = filter
         .as_ref()
-        .filter(|_| adapter == 0)
-        .and_then(filtered_modes)
-        .and_then(|mut modes| modes.nth(usize::try_from(mode_index).ok()?));
+        .filter(|filter| adapter == 0 && filter_lists_modes(filter))
+        .zip(d3d)
+        .and_then(|(filter, d3d)| d3d.served_mode(filter.format, mode_index));
     let Some(entry) = entry.filter(|_| !mode.is_null()) else {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -947,7 +1003,7 @@ extern "system" fn d3d9_enum_adapter_modes_ex(
     };
     // SAFETY: vtable out-param; `mode` is non-null (checked) and points to a
     // writable `D3DDISPLAYMODEEX` per the IDirect3D9Ex ABI.
-    unsafe { OutPtr::write_opt(mode, display_mode_ex(entry)) };
+    unsafe { OutPtr::write_opt(mode, display_mode_ex(&entry)) };
     D3D_OK
 }
 
@@ -1265,6 +1321,15 @@ extern "system" fn d3d9_check_device_format(
             D3DERR_NOTAVAILABLE
         };
     }
+    // NULL, the render-target format with no colour storage, exists as a 2D
+    // render target alone: a depth-only pass binds it as render target 0.
+    if mtld3d_core::format::is_null_render_target(check_format) {
+        return if mtld3d_core::format::null_render_target_usage_allowed(usage, rtype) {
+            D3D_OK
+        } else {
+            D3DERR_NOTAVAILABLE
+        };
+    }
     // A query may only carry the usage bits its resource type expresses.
     // The sampling-only group (FILTER, SRGBREAD, VERTEXTEXTURE, WRAPANDMIP,
     // DYNAMIC, SOFTWAREPROCESSING) presumes a shader-resource binding, so it
@@ -1479,7 +1544,8 @@ extern "system" fn d3d9_check_depth_stencil_match(
     if adapter != 0
         || dev_type != D3DDEVTYPE_HAL
         || !is_display_format(adapter_format)
-        || !is_render_target_format_on_device(rt_format, cfg.expand_packed16)
+        || !(is_render_target_format_on_device(rt_format, cfg.expand_packed16)
+            || mtld3d_core::format::is_null_render_target(rt_format))
         || !is_depth_stencil_format(ds_format)
     {
         warn!(
@@ -1868,6 +1934,15 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         );
         return D3DERR_INVALIDCALL;
     }
+    if !mtld3d_core::present::present_flags_are_valid(&pp) {
+        warn!(
+            target: LOG_TARGET,
+            "reject CreateDevice: D3DPRESENTFLAG_LOCKABLE_BACKBUFFER with MultiSampleType {}, a \
+             multisampled back buffer cannot be locked",
+            pp.multi_sample_type,
+        );
+        return D3DERR_INVALIDCALL;
+    }
     // An auto depth-stencil the depth answers refuse is refused here too,
     // before the window or the display mode moves. A format of 0 keeps
     // standing for no depth-stencil.
@@ -1937,6 +2012,12 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
     let manage_window = behavior_flags & mtld3d_types::D3DCREATE_NOWINDOWCHANGES == 0;
     let fullscreen = (pp.windowed == 0).then(|| {
         let mode = fullscreen_mode_request(&pp);
+        let focus = if focus_window.is_null() {
+            pp.device_window as *mut c_void
+        } else {
+            focus_window
+        };
+        crate::fullscreen::activate_focus_window(focus);
         crate::fullscreen::enter(hwnd as *mut c_void, manage_window, mode)
     });
     resolve_backbuffer_dims(hwnd, &mut pp);
@@ -2090,9 +2171,42 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
             "CreateDevice: D3DCREATE_MULTITHREADED, device entry points serialised"
         );
     }
+    apply_device_control_word(behavior_flags);
     info!(target: LOG_TARGET, "CreateDevice succeeded (extended={extended})");
     D3D_OK
 }
+
+/// Give the calling thread the device's x87 control word, unless `behavior_flags` keeps it.
+#[cfg(target_arch = "x86")]
+fn apply_device_control_word(behavior_flags: u32) {
+    if !mtld3d_core::fpu::sets_control_word(behavior_flags) {
+        return;
+    }
+    let mut current: u16 = 0;
+    // SAFETY: `fnstcw` stores the 16-bit control word through the pointer,
+    // which names `current`, a live writable `u16`; it touches no flags or stack.
+    unsafe {
+        core::arch::asm!(
+            "fnstcw word ptr [{}]",
+            in(reg) &raw mut current,
+            options(nostack, preserves_flags),
+        );
+    }
+    let word = mtld3d_core::fpu::device_control_word(current);
+    // SAFETY: `fldcw` reads the 16-bit control word from `word`, a live `u16`;
+    // every exception is masked in it, so loading it raises none.
+    unsafe {
+        core::arch::asm!(
+            "fldcw word ptr [{}]",
+            in(reg) &raw const word,
+            options(nostack, readonly, preserves_flags),
+        );
+    }
+}
+
+/// A non-x86 device leaves the control word alone, so there is nothing to apply.
+#[cfg(not(target_arch = "x86"))]
+const fn apply_device_control_word(_behavior_flags: u32) {}
 
 /// Retain the parent `IDirect3D9` for `IDirect3DDevice9::GetDirect3D`.
 ///

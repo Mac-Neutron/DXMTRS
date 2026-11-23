@@ -463,13 +463,16 @@ pub fn pipeline_source(key: &PipelineKey) -> Result<PipelineSource, ShaderCreate
         PsStageKey::Ff(ps) => ff_code(ff_build::pixel(ps).tokens),
         PsStageKey::Prog(code) => {
             // The key names the extras twice, in its variant and in `extras`: a programmable
-            // stage exports exactly the slots the pass attaches.
-            let [_, f1, f2, f3] = key.color_formats();
-            debug_assert_eq!(
-                variant.color_out_mask,
-                extra_present([f1, f2, f3]) << 1,
-                "a programmable stage exports colour 0 and the key's extras"
-            );
+            // stage exports exactly the slots the pass attaches. Depth-only (`color_format == 0`)
+            // passes attach no colour targets, and bits 4..7 carry per-RT linear overrides.
+            if *color_format != 0 {
+                let [_, f1, f2, f3] = key.color_formats();
+                debug_assert_eq!(
+                    variant.color_out_mask & 0x0F,
+                    extra_present([f1, f2, f3]) << 1,
+                    "a programmable stage exports colour 0 and the key's extras"
+                );
+            }
             code.clone()
         }
     };

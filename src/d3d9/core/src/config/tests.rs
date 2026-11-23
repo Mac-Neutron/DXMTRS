@@ -43,11 +43,13 @@ fn defaults_match_documented_values() {
     assert!(!d.query_flush_immediate);
     assert!(!d.query_event_immediate);
     assert!(!d.buffer_ignore_lock_bounds);
+    assert!(!d.buffer_draw_time_upload);
     assert_eq!(d.vbib_retention_cap_bytes, 512 * 1024 * 1024);
     assert_eq!(d.pagebox_pool_cap_bytes, 128 * 1024 * 1024);
     assert_eq!(d.present_max_fps, 0);
     assert_eq!(d.present_max_frame_latency, 0, "auto");
     assert_eq!(d.render_scale_percent, 100);
+    assert_eq!(d.max_resolutions, 0);
 }
 
 /// The advertised video-memory ceiling defaults by guest width.
@@ -118,6 +120,25 @@ fn present_max_fps_zero_means_uncapped() {
 fn present_max_fps_garbage_keeps_default() {
     let cfg = parse(None, "present.maxFps = fast\n", None);
     assert_eq!(cfg.present_max_fps, 0);
+}
+
+#[test]
+fn display_max_resolutions_defaults_to_every_size_and_takes_a_count() {
+    assert_eq!(parse(None, "", None).max_resolutions, 0);
+    let cfg = parse(None, "display.maxResolutions = 32\n", None);
+    assert_eq!(cfg.max_resolutions, 32);
+    let cleared = parse(
+        None,
+        "display.maxResolutions = 32\n",
+        Some("display.maxResolutions=0"),
+    );
+    assert_eq!(cleared.max_resolutions, 0);
+    let garbage = parse(
+        None,
+        "display.maxResolutions = 32\ndisplay.maxResolutions = all\n",
+        None,
+    );
+    assert_eq!(garbage.max_resolutions, 32);
 }
 
 #[test]
@@ -245,6 +266,24 @@ fn buffer_ignore_lock_bounds_defaults_off_and_round_trips() {
     assert!(cfg.buffer_ignore_lock_bounds);
     let cfg = parse(None, "buffer.ignoreLockBounds = false\n", None);
     assert!(!cfg.buffer_ignore_lock_bounds);
+}
+
+#[test]
+fn buffer_draw_time_upload_defaults_off_and_round_trips() {
+    let cfg = parse(None, "", None);
+    assert!(!cfg.buffer_draw_time_upload);
+    let cfg = parse(None, "buffer.drawTimeUpload = true\n", None);
+    assert!(cfg.buffer_draw_time_upload);
+    assert!(
+        !cfg.buffer_ignore_lock_bounds,
+        "the two buffer keys are independent"
+    );
+    let cfg = parse(
+        None,
+        "buffer.drawTimeUpload = true\n",
+        Some("buffer.drawTimeUpload=false"),
+    );
+    assert!(!cfg.buffer_draw_time_upload);
 }
 
 #[test]

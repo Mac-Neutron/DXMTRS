@@ -47,8 +47,7 @@ use winemetal_wire::MemPtr;
 use super::{
     Encoder, Record, binding_index,
     pass::{
-        Clear, D3d9Gamma, Pass, PassKind, Present, RenderTargets, RenderUses, Resolve, Target,
-        argument_buffer,
+        Clear, Pass, PassKind, Present, RenderTargets, RenderUses, Resolve, Target, argument_buffer,
     },
     place,
 };
@@ -132,10 +131,6 @@ impl Encoder {
             PassKind::Present(present) => {
                 // SAFETY: the caller's promise.
                 unsafe { self.encode_present(cmdbuf, pass, present) };
-            }
-            PassKind::D3d9Gamma(gamma) => {
-                // SAFETY: the caller's promise.
-                unsafe { self.encode_d3d9_gamma(cmdbuf, pass, gamma) };
             }
             PassKind::SpatialUpscale(u) => {
                 let scale = |scaler, fence| {
@@ -704,66 +699,6 @@ impl Encoder {
         } else {
             // SAFETY: as above.
             unsafe { MTLCommandBuffer_presentDrawable(cmdbuf, drawable) };
-        }
-    }
-
-    /// # Safety
-    ///
-    /// As [`Encoder::flush`].
-    unsafe fn encode_d3d9_gamma(&mut self, cmdbuf: u64, pass: &Pass, gamma: &D3d9Gamma) {
-        let Self { heap, fences, .. } = self;
-        if gamma.src == 0 || gamma.dst == 0 {
-            if !pass.fence_wait.is_empty() || !pass.fence_update.is_empty() {
-                let mut chain = Chain::new();
-                blit_fences(
-                    &mut chain,
-                    heap,
-                    fences,
-                    &pass.fence_wait,
-                    WMT_BLIT_COMMAND_WAIT_FOR_FENCE,
-                );
-                blit_fences(
-                    &mut chain,
-                    heap,
-                    fences,
-                    &pass.fence_update,
-                    WMT_BLIT_COMMAND_UPDATE_FENCE,
-                );
-                // SAFETY: the caller's promise; the records live in the encoder's memory.
-                unsafe { blit_pass(cmdbuf, c"SkipGammaFences", &chain) };
-            }
-            return;
-        }
-        let mut waits = Chain::new();
-        render_fences(
-            &mut waits,
-            heap,
-            fences,
-            &pass.fence_wait,
-            WMT_RENDER_COMMAND_WAIT_FOR_FENCE,
-        );
-        let mut updates = Chain::new();
-        render_fences(
-            &mut updates,
-            heap,
-            fences,
-            &pass.fence_update,
-            WMT_RENDER_COMMAND_UPDATE_FENCE,
-        );
-        // SAFETY: `encode_d3d9_gamma_to_texture` hands each callback the pass's live encoder.
-        let wait = |encoder| unsafe { render_chain(encoder, &waits) };
-        // SAFETY: as above.
-        let update = |encoder| unsafe { render_chain(encoder, &updates) };
-        // SAFETY: the caller's promise for live command buffer and retained texture handles.
-        unsafe {
-            gamma.presenter.encode_d3d9_gamma_to_texture(
-                cmdbuf,
-                (gamma.src, gamma.dst),
-                gamma.dst_size,
-                &gamma.lut,
-                wait,
-                update,
-            );
         }
     }
 
