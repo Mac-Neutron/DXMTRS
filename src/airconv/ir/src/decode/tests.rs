@@ -126,3 +126,68 @@ fn operands_the_cxx_could_not_read_are_errors() {
         Err(INDEX_64)
     );
 }
+
+#[test]
+fn dynamic_control_point_input_and_output_decode_regid() {
+    let make_op = |ty| Operand {
+        ty,
+        num_components: operand::FOUR_COMPONENT,
+        selection: operand::SWIZZLE_MODE,
+        index_dimension: operand::INDEX_2D,
+        index_type: [operand::INDEX_IMMEDIATE32, operand::INDEX_RELATIVE, 0],
+        index: [
+            tokens::Index {
+                reg: 2,
+                ..tokens::Index::default()
+            },
+            tokens::Index {
+                rel_type: operand_type::TEMP,
+                rel_index: 0,
+                rel_component: 1,
+                ..tokens::Index::default()
+            },
+            tokens::Index::default(),
+        ],
+        ..Operand::default()
+    };
+    let expected_cpid = OperandIndex::Immediate(2);
+    let expected_regid = OperandIndex::Temp {
+        regid: 0,
+        phase: NO_PHASE,
+        component: 1,
+        offset: 0,
+    };
+    let icp = read_src_operand(
+        &make_op(operand_type::INPUT_CONTROL_POINT),
+        NO_PHASE,
+        OperandDataType::Float,
+    )
+    .unwrap();
+    assert!(matches!(
+        icp,
+        SrcOperand::InputIcp { cpid, regid, .. }
+            if cpid == expected_cpid && regid == expected_regid
+    ));
+    let ocp = read_src_operand(
+        &make_op(operand_type::OUTPUT_CONTROL_POINT),
+        NO_PHASE,
+        OperandDataType::Float,
+    )
+    .unwrap();
+    assert!(matches!(
+        ocp,
+        SrcOperand::InputOcp { cpid, regid, .. }
+            if cpid == expected_cpid && regid == expected_regid
+    ));
+    let input_2d = read_src_operand(
+        &make_op(operand_type::INPUT),
+        NO_PHASE,
+        OperandDataType::Float,
+    )
+    .unwrap();
+    assert!(matches!(
+        input_2d,
+        SrcOperand::InputIcp { cpid, regid, .. }
+            if cpid == expected_cpid && regid == expected_regid
+    ));
+}

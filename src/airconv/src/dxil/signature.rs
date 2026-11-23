@@ -372,7 +372,7 @@ impl Io {
             match e.kind {
                 semantic_kind::POSITION => {
                     let index = fs.define_input(FunctionInput::Position {
-                        interpolation: air_interpolation(e.interpolation),
+                        interpolation: Interpolation::CenterNoPerspective,
                     });
                     self.signature_handlers.push(SignatureHandler::InitInput {
                         index,
@@ -666,14 +666,15 @@ impl Io {
                     target,
                     component_type,
                 } => {
-                    // A target past the eighth reads as no format (the C++ read past its array).
-                    let format = formats.get(target as usize).copied().unwrap_or(0);
-                    let mut ty = component_type_from_pixel_format(format);
-                    if dual || ty == UNKNOWN {
-                        ty = component_type;
-                    }
                     if dual && target > 1 {
                         continue;
+                    }
+                    let slot = if dual { 0 } else { target as usize };
+                    // A target past the eighth reads as no format (the C++ read past its array).
+                    let format = formats.get(slot).copied().unwrap_or(0);
+                    let mut ty = component_type_from_pixel_format(format);
+                    if ty == UNKNOWN {
+                        ty = component_type;
                     }
                     let index = desc.define_output(FunctionOutput::RenderTarget {
                         dual_source_blending: dual,

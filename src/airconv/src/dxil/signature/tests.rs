@@ -174,3 +174,95 @@ fn pixel_outputs_record_their_handlers() {
         Some(b"DXIL: pixel shader output SV_Target not supported".to_vec())
     );
 }
+
+#[test]
+fn pixel_position_always_uses_center_no_perspective() {
+    for mode in [0, 2, interpolation::LINEAR_SAMPLE] {
+        let mut pos = element(b"SV_Position", semantic_kind::POSITION, 1, (0, 0), 4);
+        pos.interpolation = mode;
+        let shader = entry(shader_kind::PIXEL, vec![pos], vec![]);
+        let mut io = Io::default();
+        ok(io.add_signature_handlers(&shader, &BTreeSet::new(), false, false));
+        assert_eq!(
+            io.func_signature.inputs(),
+            [FunctionInput::Position {
+                interpolation: Interpolation::CenterNoPerspective,
+            }]
+        );
+    }
+}
+
+#[test]
+fn pixel_dual_source_blending_uses_first_format_with_fallback() {
+    let mut rt0 = element(b"SV_Target", semantic_kind::TARGET, 1, (0, 0), 4);
+    rt0.semantic_indices = vec![0];
+    rt0.ty = component_type::U32;
+    let mut rt1 = element(b"SV_Target", semantic_kind::TARGET, 1, (1, 0), 4);
+    rt1.semantic_indices = vec![1];
+    rt1.ty = component_type::U32;
+    let shader = entry(shader_kind::PIXEL, vec![], vec![rt0, rt1]);
+    let mut io = Io::default();
+    ok(io.add_signature_handlers(&shader, &BTreeSet::new(), false, false));
+
+    let mut pixel = crate::abi::Sm50ShaderPsoPixelShaderData {
+        next: core::ptr::null_mut(),
+        r#type: crate::abi::SM50_SHADER_PSO_PIXEL_SHADER,
+        sample_mask: u32::MAX,
+        dual_source_blending: 1,
+        disable_depth_output: 0,
+        unorm_output_reg_mask: 0,
+        pixel_formats: [70, 0, 0, 0, 0, 0, 0, 0],
+    };
+    let mut desc = io.func_signature.clone();
+    ok(io.record(
+        &mut desc,
+        &Options {
+            ia_layout: None,
+            pixel: Some(&pixel),
+            pull_mode_reg_mask: 0,
+            skip_vertex_output: false,
+        },
+    ));
+    assert_eq!(
+        desc.outputs(),
+        [
+            FunctionOutput::RenderTarget {
+                dual_source_blending: true,
+                index: 0,
+                ty: MslValue::FLOAT4,
+            },
+            FunctionOutput::RenderTarget {
+                dual_source_blending: true,
+                index: 1,
+                ty: MslValue::FLOAT4,
+            },
+        ]
+    );
+
+    pixel.pixel_formats = [0; 8];
+    let mut fallback = io.func_signature.clone();
+    ok(io.record(
+        &mut fallback,
+        &Options {
+            ia_layout: None,
+            pixel: Some(&pixel),
+            pull_mode_reg_mask: 0,
+            skip_vertex_output: false,
+        },
+    ));
+    assert_eq!(
+        fallback.outputs(),
+        [
+            FunctionOutput::RenderTarget {
+                dual_source_blending: true,
+                index: 0,
+                ty: MslValue::UINT4,
+            },
+            FunctionOutput::RenderTarget {
+                dual_source_blending: true,
+                index: 1,
+                ty: MslValue::UINT4,
+            },
+        ]
+    );
+}

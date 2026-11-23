@@ -772,7 +772,7 @@ pub fn read_src_operand(
         operand_type::INPUT if o.index_dimension == operand::INDEX_2D => SrcOperand::InputIcp {
             common: common(),
             cpid: read_index(i0, t0, phase)?,
-            regid: i1.reg,
+            regid: read_index(i1, t1, phase)?,
         },
         operand_type::INPUT if t0 == operand::INDEX_IMMEDIATE32 => SrcOperand::Input {
             common: common(),
@@ -785,12 +785,12 @@ pub fn read_src_operand(
         operand_type::INPUT_CONTROL_POINT => SrcOperand::InputIcp {
             common: common(),
             cpid: read_index(i0, t0, phase)?,
-            regid: i1.reg,
+            regid: read_index(i1, t1, phase)?,
         },
         operand_type::OUTPUT_CONTROL_POINT => SrcOperand::InputOcp {
             common: common(),
             cpid: read_index(i0, t0, phase)?,
-            regid: i1.reg,
+            regid: read_index(i1, t1, phase)?,
         },
         operand_type::INPUT_PATCH_CONSTANT => SrcOperand::InputPc {
             common: common(),

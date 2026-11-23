@@ -719,23 +719,72 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         self.air().create_count_zero(low, true)
     }
 
+    /// Splits a 64-bit integer into `(low, high)` 32-bit integers.
+    fn split_i64(&self, v: Val<'cx>) -> (Val<'cx>, Val<'cx>) {
+        let b = self.b();
+        let i32_ty = self.tcx().int(32);
+        let shift = self.cx().const_int(v.ty(), 32, false);
+        (b.trunc(v, i32_ty), b.trunc(b.lshr(v, shift), i32_ty))
+    }
+
+    /// Reconstructs a 64-bit integer from `(low, high)` 32-bit integers.
+    fn join_i64(&self, lo: Val<'cx>, hi: Val<'cx>) -> Val<'cx> {
+        let b = self.b();
+        let i64_ty = self.tcx().int(64);
+        let shift = self.cx().const_int(i64_ty, 32, false);
+        b.or(b.zext(lo, i64_ty), b.shl(b.zext(hi, i64_ty), shift))
+    }
+
+    /// A lane or quad shuffle (`air.simd_shuffle`, `air.quad_shuffle`, `air.quad_shuffle_xor`).
+    ///
+    /// Splits `i64` into two `i32` operations because Metal AIR lacks 64-bit integer shuffles.
+    fn simd_shuffle(&self, base: &[u8], v: Val<'cx>, arg: Val<'cx>) -> Result<Val<'cx>, Error> {
+        let tcx = self.tcx();
+        let ty = v.ty();
+        if tcx.kind(ty) == TyKind::Int(64) {
+            let i32_ty = tcx.int(32);
+            let name = [base, &simd_suffix(tcx, i32_ty, false)[..]].concat();
+            let (lo, hi) = self.split_i64(v);
+            let lo = self.simd(&name, i32_ty, &[lo, arg])?;
+            let hi = self.simd(&name, i32_ty, &[hi, arg])?;
+            return Ok(self.join_i64(lo, hi));
+        }
+        let name = [base, &simd_suffix(tcx, ty, false)[..]].concat();
+        self.simd(&name, ty, &[v, arg])
+    }
+
+    /// `air.simd_broadcast_first`, splitting `i64` into two `i32` broadcasts.
+    fn simd_broadcast_first(&self, v: Val<'cx>) -> Result<Val<'cx>, Error> {
+        let tcx = self.tcx();
+        let ty = v.ty();
+        if tcx.kind(ty) == TyKind::Int(64) {
+            let i32_ty = tcx.int(32);
+            let name = [
+                b"air.simd_broadcast_first",
+                &simd_suffix(tcx, i32_ty, false)[..],
+            ]
+            .concat();
+            let (lo, hi) = self.split_i64(v);
+            let lo = self.simd(&name, i32_ty, &[lo])?;
+            let hi = self.simd(&name, i32_ty, &[hi])?;
+            return Ok(self.join_i64(lo, hi));
+        }
+        let name = [
+            b"air.simd_broadcast_first",
+            &simd_suffix(tcx, ty, false)[..],
+        ]
+        .concat();
+        self.simd(&name, ty, &[v])
+    }
+
     /// `v` of the first lane taking part (`read_first`).
     fn read_first(&self, v: Val<'cx>) -> Result<Val<'cx>, Error> {
-        let suffix = simd_suffix(self.tcx(), v.ty(), false);
         if let Some(lanes) = self.wave_lanes()? {
             let first = self.first_lane(lanes)?;
             let lane = self.b().trunc(first, self.tcx().int(16));
-            return self.simd(
-                &[b"air.simd_shuffle", &suffix[..]].concat(),
-                v.ty(),
-                &[v, lane],
-            );
+            return self.simd_shuffle(b"air.simd_shuffle", v, lane);
         }
-        self.simd(
-            &[b"air.simd_broadcast_first", &suffix[..]].concat(),
-            v.ty(),
-            &[v],
-        )
+        self.simd_broadcast_first(v)
     }
 
     // Compute shaders, which have no air.dfdx (spec 3.3).
@@ -996,8 +1045,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             op::QUAD_READ_LANE_AT => {
                 let v = arg(1)?;
                 let lane = b.trunc(arg(2)?, i16_ty);
-                let value = self.simd(&named(b"air.quad_shuffle", v.ty()), v.ty(), &[v, lane])?;
-                Ok(Some(value))
+                Ok(Some(self.simd_shuffle(b"air.quad_shuffle", v, lane)?))
             }
             // (123, T, i8 op): read across X (0), Y (1) or the diagonal (2): the quad lane XOR 1,
             // 2 or 3.
@@ -1005,21 +1053,26 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let v = arg(1)?;
                 let mask = const_arg(call, 2, 0).wrapping_add(1);
                 let mask = cx.const_int(i16_ty, mask.into(), false);
-                let name = named(b"air.quad_shuffle_xor", v.ty());
-                Ok(Some(self.simd(&name, v.ty(), &[v, mask])?))
+                Ok(Some(self.simd_shuffle(b"air.quad_shuffle_xor", v, mask)?))
             }
             // (117, T, i32 lane)
             op::WAVE_READ_LANE_AT => {
                 let v = arg(1)?;
                 let lane = b.trunc(arg(2)?, i16_ty);
-                let value = self.simd(&named(b"air.simd_shuffle", v.ty()), v.ty(), &[v, lane])?;
-                Ok(Some(value))
+                Ok(Some(self.simd_shuffle(b"air.simd_shuffle", v, lane)?))
             }
             // (118, T)
             op::WAVE_READ_LANE_FIRST => Ok(Some(self.read_first(arg(1)?)?)),
             // (119/121, T, i8 op: 0 sum, 1 product, 2 min, 3 max, i8 sign: 0 signed, 1 unsigned)
             op::WAVE_ACTIVE_OP | op::WAVE_PREFIX_OP => {
                 let v = arg(1)?;
+                let ty = v.ty();
+                if tcx.kind(ty) == TyKind::Int(64) {
+                    return Err(Error::new(b"dxil: 64-bit integer wave op not supported"));
+                }
+                if tcx.kind(ty) == TyKind::Double {
+                    return Err(unsupported(call));
+                }
                 let kind = const_arg(call, 2, 0);
                 let is_signed = const_arg(call, 3, 0) == 0;
                 let active = opcode == op::WAVE_ACTIVE_OP;
@@ -1032,7 +1085,6 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     (false, 1) => b"air.simd_prefix_exclusive_product",
                     _ => return Err(unsupported(call)),
                 };
-                let ty = v.ty();
                 let name = [base, &suffix(ty, is_signed)[..]].concat();
                 // The identity of each: x op identity = x (a float sum's is -0.0, for x = -0.0
                 // too).
@@ -1064,13 +1116,22 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                     2 => b"air.simd_xor",
                     _ => return Err(unsupported(call)),
                 };
+                let ty = v.ty();
                 let identity = if base == b"air.simd_and" {
-                    cx.all_ones(v.ty())
+                    cx.all_ones(ty)
                 } else {
-                    cx.null(v.ty())
+                    cx.null(ty)
                 };
-                let value =
-                    self.simd(&named(base, v.ty()), v.ty(), &[self.masked(v, identity)?])?;
+                let masked = self.masked(v, identity)?;
+                let value = if tcx.kind(ty) == TyKind::Int(64) {
+                    let name = named(base, i32_ty);
+                    let (lo, hi) = self.split_i64(masked);
+                    let lo = self.simd(&name, i32_ty, &[lo])?;
+                    let hi = self.simd(&name, i32_ty, &[hi])?;
+                    self.join_i64(lo, hi)
+                } else {
+                    self.simd(&named(base, ty), ty, &[masked])?
+                };
                 Ok(Some(value))
             }
             // (135/136, i1): lanes (below this one) where the value is true
@@ -1109,7 +1170,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 // SAFETY: an unconditional branch, whose successor 0 is `done`.
                 unsafe { sys::set_successor(branch, 0, looped.raw()) };
                 b.position_at_end(looped);
-                let first = self.simd(&named(b"air.simd_broadcast_first", ty), ty, &[v])?;
+                let first = self.simd_broadcast_first(v)?;
                 let same = if is_fp(tcx, ty) {
                     let equal = b.fcmp(sys::REAL_OEQ, v, first);
                     b.or(equal, self.simd(b"air.simd_is_first", i1, &[])?)
@@ -1177,9 +1238,12 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let ballot = self.simd(b"air.simd_ballot.i64", i64_ty, &[participates])?;
                 let from = b.and(below, b.trunc(ballot, i32_ty));
                 // ponytail: 32 shuffles a call; a partitioned scan if a shader ever leans on it
-                let name = named(b"air.simd_shuffle", ty);
                 for j in 0..32_u32 {
-                    let x = self.simd(&name, ty, &[v, cx.const_int(i16_ty, j.into(), false)])?;
+                    let x = self.simd_shuffle(
+                        b"air.simd_shuffle",
+                        v,
+                        cx.const_int(i16_ty, j.into(), false),
+                    )?;
                     let bit = b.and(from, self.int(1 << j));
                     let taken = b.icmp(sys::INT_NE, bit, self.int(0));
                     acc = b.select(taken, b.binop(bin, acc, x), acc);
@@ -1442,3 +1506,6 @@ pub fn branch_at_end<'cx>(cx: &'cx Context, bb: Block<'cx>, next: Block<'cx>) ->
     b.position_at_end(bb);
     b.br(next)
 }
+
+#[cfg(test)]
+mod tests;

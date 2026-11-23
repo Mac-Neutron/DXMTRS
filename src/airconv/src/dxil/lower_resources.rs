@@ -107,20 +107,19 @@ impl<'cx> Lowering<'_, 'cx> {
                 else {
                     return Ok(Some(cx.null(ty)));
                 };
-                let offset = arg(2)?;
-                let row = b.lshr(offset, self.int(4));
-                let column = b.and(b.lshr(offset, self.int(2)), self.int(3));
-                let word_ptr = b.gep(air.int_ty(4), d.pointer, &[row, column]);
-                let mut word = b.load(i32_ty, word_ptr);
-                match primitive_bits(tcx, ty) {
-                    16 => {
-                        let shift = b.shl(b.and(offset, self.int(2)), self.int(3));
-                        word = b.trunc(b.lshr(word, shift), tcx.int(16));
-                    }
-                    64 => return Err(Error::new(b"DXIL: 64-bit cbufferLoad not supported")),
-                    _ => {}
+                let align = arg(3)?
+                    .const_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or_else(|| Error::new(b"dxil: non-constant cbufferLoad alignment"))?;
+                if align != 0 && (!align.is_power_of_two() || align > (1 << 29)) {
+                    return Err(Error::new(b"dxil: invalid cbufferLoad alignment"));
                 }
-                Ok(Some(b.bitcast(word, ty)))
+                let space = tcx.addrspace(d.pointer.ty()).unwrap_or(0);
+                let i8_ty = tcx.int(8);
+                let bytes = b.pointer_cast(d.pointer, tcx.ptr(i8_ty, space));
+                let offset_ptr = b.gep(i8_ty, bytes, &[arg(2)?]);
+                let ptr = b.pointer_cast(offset_ptr, tcx.ptr(ty, space));
+                Ok(Some(b.aligned_load(ty, ptr, align.max(1))))
             }
             // (139, handle, i32 index, i32 elementOffset, i8 mask, i32 alignment)
             op::RAW_BUFFER_LOAD => {
@@ -414,11 +413,7 @@ impl<'cx> Lowering<'_, 'cx> {
             return Ok(Some(self.cx().null(ty)));
         };
         let (tex, handle, metadata, coherent, _) = parts(d);
-        let mut address = b.add(index, self.decode_low(metadata));
-        if !bounds::off() {
-            let oob = b.icmp(sys::INT_UGE, index, self.decode_high(metadata));
-            address = b.select(oob, self.cx().all_ones(address.ty()), address);
-        }
+        let address = self.typed_buffer_address(index, metadata);
         if matches!(tex.memory_access, MemoryAccess::ReadWrite) {
             // As the DXBC typed UAV load: see earlier writes.
             air.create_texture_fence(&tex, handle)?;
@@ -460,7 +455,7 @@ impl<'cx> Lowering<'_, 'cx> {
                 let value = self.cast(self.arg(call, 4 + c)?, element);
                 texel = b.insert_element_u64(texel, value, c.into());
             }
-            let address = b.add(index, self.decode_low(metadata));
+            let address = self.typed_buffer_address(index, metadata);
             let at = TexelAt {
                 pos: address,
                 array_index: None,
@@ -470,6 +465,16 @@ impl<'cx> Lowering<'_, 'cx> {
             air.create_write(&tex, handle, &at, texel, coherent)?;
         }
         Ok(None)
+    }
+
+    /// A typed buffer's shifted index, or `~0u` when `index` is out of bounds.
+    fn typed_buffer_address(&self, index: Val<'cx>, metadata: Val<'cx>) -> Val<'cx> {
+        let b = self.b();
+        let oob = (!bounds::off()).then(|| b.icmp(sys::INT_UGE, index, self.decode_high(metadata)));
+        let address = b.add(index, self.decode_low(metadata));
+        oob.map_or(address, |oob| {
+            b.select(oob, self.cx().all_ones(address.ty()), address)
+        })
     }
 
     /// Texture loads, stores, atomics, samples, gathers and LODs (`LowerTexture`).
@@ -1310,3 +1315,6 @@ fn extracted_components(call: Val<'_>) -> u32 {
     }
     if mask == 0 { 1 } else { mask }
 }
+
+#[cfg(test)]
+mod tests;

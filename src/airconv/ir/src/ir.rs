@@ -118,12 +118,12 @@ pub enum SrcOperand {
     InputIcp {
         common: SrcOperandCommon,
         cpid: OperandIndex,
-        regid: u32,
+        regid: OperandIndex,
     },
     InputOcp {
         common: SrcOperandCommon,
         cpid: OperandIndex,
-        regid: u32,
+        regid: OperandIndex,
     },
     InputPc {
         common: SrcOperandCommon,

@@ -511,11 +511,23 @@ impl Recorder<'_> {
                 match d.inst.name() {
                     sb_name::CLIP_DISTANCE => {
                         push_scalars(&mut s.clip_distance_scalars, reg, mask);
-                        raise(&mut s.max_output_register, reg);
+                        push_mesh_vertex_data(
+                            s,
+                            reg,
+                            mask,
+                            format!("SV_ClipDistance{reg}"),
+                            MslValue::FLOAT4,
+                        );
                     }
                     sb_name::CULL_DISTANCE => {
                         push_scalars(&mut s.cull_distance_scalars, reg, mask);
-                        raise(&mut s.max_output_register, reg);
+                        push_mesh_vertex_data(
+                            s,
+                            reg,
+                            mask,
+                            format!("SV_CullDistance{reg}"),
+                            MslValue::FLOAT4,
+                        );
                     }
                     sb_name::POSITION => {
                         s.func_signature
@@ -546,21 +558,13 @@ impl Recorder<'_> {
                 let found = find(self.output, reg, mask);
                 raise(&mut s.max_output_register, reg);
                 if let Some(p) = found {
-                    let index = s.num_mesh_vertex_data;
-                    s.num_mesh_vertex_data = index.wrapping_add(1);
-                    let ty = msl_value(p.component_type)?;
-                    s.func_signature
-                        .define_mesh_vertex_output(MeshVertexOutput::Data(MeshData {
-                            user: attribute_name(p),
-                            ty,
-                            index,
-                        }));
-                    s.mesh_output_handlers.push(MeshOutputHandler::VertexData {
+                    push_mesh_vertex_data(
+                        s,
                         reg,
                         mask,
-                        index,
-                        ty,
-                    });
+                        attribute_name(p),
+                        msl_value(p.component_type)?,
+                    );
                 }
             }
             _ => {}
@@ -663,6 +667,46 @@ pub const fn air_interpolation(mode: u32) -> Result<Interpolation, Error> {
 const fn bitfield_reg(reg: u32) -> u8 {
     let [low, ..] = (reg & 0x3f).to_le_bytes();
     low
+}
+
+/// Registers a vertex data output element and its mesh output handler.
+///
+/// Merges component masks when multiple packed declarations share the same `(reg, user)`.
+fn push_mesh_vertex_data(s: &mut SignatureState, reg: u32, mask: u32, user: String, ty: MslValue) {
+    let existing = s
+        .func_signature
+        .mesh_vertex_outputs()
+        .iter()
+        .find_map(|output| match output {
+            MeshVertexOutput::Data(data) if data.user == user => Some(data.index),
+            _ => None,
+        });
+    if let Some(index) = existing
+        && let Some(MeshOutputHandler::VertexData { mask: combined, .. }) =
+            s.mesh_output_handlers.iter_mut().find(|h| {
+                matches!(
+                    h,
+                    MeshOutputHandler::VertexData {
+                        reg: r,
+                        index: i,
+                        ..
+                    } if *r == reg && *i == index
+                )
+            })
+    {
+        *combined |= mask;
+        return;
+    }
+    let index = s.num_mesh_vertex_data;
+    s.num_mesh_vertex_data = index.wrapping_add(1);
+    s.func_signature
+        .define_mesh_vertex_output(MeshVertexOutput::Data(MeshData { user, ty, index }));
+    s.mesh_output_handlers.push(MeshOutputHandler::VertexData {
+        reg,
+        mask,
+        index,
+        ty,
+    });
 }
 
 /// One scalar per component of `mask`.

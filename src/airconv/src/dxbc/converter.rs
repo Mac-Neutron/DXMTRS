@@ -573,7 +573,8 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             } => {
                 let handle = req(self.res.input.ptr_int4, "no input register file")?;
                 let cp = self.load_operand_index(cpid)?;
-                self.load_vec4_array(common, handle, &[self.int(0), cp, self.int(*regid)], mask)
+                let reg = self.load_operand_index(regid)?;
+                self.load_vec4_array(common, handle, &[self.int(0), cp, reg], mask)
             }
             SrcOperand::InputPc { common, regindex } => {
                 let handle = req(
@@ -590,7 +591,8 @@ impl<'a, 'cx> Converter<'a, 'cx> {
             } => {
                 let handle = req(self.res.output.ptr_int4, "no output register file")?;
                 let cp = self.load_operand_index(cpid)?;
-                self.load_vec4_array(common, handle, &[self.int(0), cp, self.int(*regid)], mask)
+                let reg = self.load_operand_index(regid)?;
+                self.load_vec4_array(common, handle, &[self.int(0), cp, reg], mask)
             }
         }
     }
@@ -3343,3 +3345,6 @@ const fn low16(v: u32) -> u16 {
 fn lane(swizzle: &Swizzle, i: u32) -> i32 {
     i32::from(swizzle.0.get(i as usize).copied().unwrap_or(0))
 }
+
+#[cfg(test)]
+mod tests;

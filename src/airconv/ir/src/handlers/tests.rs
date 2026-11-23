@@ -145,3 +145,147 @@ fn vertex_input_raises_the_input_count() {
     assert_eq!(recorder.state.signature_handlers, [handler]);
     assert_eq!(recorder.state.max_input_register, 8);
 }
+
+#[test]
+fn mesh_outputs_pass_through_clip_and_cull_distances() {
+    let input = Signature::default();
+    let output = Signature::default();
+    let make_decl = |reg, mask: u32, name| {
+        let mut decl = tokens::Instruction {
+            opcode: opcode::DCL_OUTPUT_SIV,
+            payload: tokens::Payload::SystemValue {
+                interpolation: 0,
+                name,
+            },
+            ..Default::default()
+        };
+        decl.operands[0].ty = operand_type::OUTPUT;
+        decl.operands[0].index[0].reg = reg;
+        decl.operands[0].mask_or_swizzle = mask << 4;
+        decl
+    };
+    let clip = make_decl(1, 0b0011, sb_name::CLIP_DISTANCE);
+    let cull = make_decl(2, 0b1111, sb_name::CULL_DISTANCE);
+    for stage in [program_type::DOMAIN, program_type::GEOMETRY] {
+        let mut recorder = Recorder::new(stage, &input, &output);
+        let mut info = ShaderInfo::default();
+        recorder.signature(&clip, NO_PHASE, &mut info).unwrap();
+        recorder.signature(&cull, NO_PHASE, &mut info).unwrap();
+        assert_eq!(
+            recorder.state.clip_distance_scalars,
+            [
+                ScalarInfo {
+                    component: 0,
+                    reg: 1
+                },
+                ScalarInfo {
+                    component: 1,
+                    reg: 1
+                },
+            ]
+        );
+        assert_eq!(
+            recorder.state.cull_distance_scalars,
+            (0..4)
+                .map(|component| ScalarInfo { component, reg: 2 })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            recorder.state.func_signature.mesh_vertex_outputs(),
+            [
+                MeshVertexOutput::Data(MeshData {
+                    user: "SV_ClipDistance1".into(),
+                    ty: MslValue::FLOAT4,
+                    index: 0,
+                }),
+                MeshVertexOutput::Data(MeshData {
+                    user: "SV_CullDistance2".into(),
+                    ty: MslValue::FLOAT4,
+                    index: 1,
+                }),
+            ]
+        );
+        assert_eq!(
+            recorder.state.mesh_output_handlers,
+            [
+                MeshOutputHandler::VertexData {
+                    reg: 1,
+                    mask: 0b0011,
+                    index: 0,
+                    ty: MslValue::FLOAT4,
+                },
+                MeshOutputHandler::VertexData {
+                    reg: 2,
+                    mask: 0b1111,
+                    index: 1,
+                    ty: MslValue::FLOAT4,
+                },
+            ]
+        );
+        assert_eq!(recorder.state.max_output_register, 3);
+    }
+}
+
+#[test]
+fn mesh_outputs_deduplicate_packed_clip_and_cull_distances() {
+    let input = Signature::default();
+    let output = Signature::default();
+    let make_decl = |reg, mask: u32, name| {
+        let mut decl = tokens::Instruction {
+            opcode: opcode::DCL_OUTPUT_SIV,
+            payload: tokens::Payload::SystemValue {
+                interpolation: 0,
+                name,
+            },
+            ..Default::default()
+        };
+        decl.operands[0].ty = operand_type::OUTPUT;
+        decl.operands[0].index[0].reg = reg;
+        decl.operands[0].mask_or_swizzle = mask << 4;
+        decl
+    };
+    let clip_x = make_decl(1, 0b0001, sb_name::CLIP_DISTANCE);
+    let clip_y = make_decl(1, 0b0010, sb_name::CLIP_DISTANCE);
+    let cull_z = make_decl(1, 0b0100, sb_name::CULL_DISTANCE);
+
+    for stage in [program_type::DOMAIN, program_type::GEOMETRY] {
+        let mut recorder = Recorder::new(stage, &input, &output);
+        let mut info = ShaderInfo::default();
+        recorder.signature(&clip_x, NO_PHASE, &mut info).unwrap();
+        recorder.signature(&clip_y, NO_PHASE, &mut info).unwrap();
+        recorder.signature(&cull_z, NO_PHASE, &mut info).unwrap();
+        assert_eq!(
+            recorder.state.func_signature.mesh_vertex_outputs(),
+            [
+                MeshVertexOutput::Data(MeshData {
+                    user: "SV_ClipDistance1".into(),
+                    ty: MslValue::FLOAT4,
+                    index: 0,
+                }),
+                MeshVertexOutput::Data(MeshData {
+                    user: "SV_CullDistance1".into(),
+                    ty: MslValue::FLOAT4,
+                    index: 1,
+                }),
+            ]
+        );
+        assert_eq!(
+            recorder.state.mesh_output_handlers,
+            [
+                MeshOutputHandler::VertexData {
+                    reg: 1,
+                    mask: 0b0011,
+                    index: 0,
+                    ty: MslValue::FLOAT4,
+                },
+                MeshOutputHandler::VertexData {
+                    reg: 1,
+                    mask: 0b0100,
+                    index: 1,
+                    ty: MslValue::FLOAT4,
+                },
+            ]
+        );
+        assert_eq!(recorder.state.num_mesh_vertex_data, 2);
+    }
+}
