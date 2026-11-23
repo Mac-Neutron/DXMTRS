@@ -140,7 +140,6 @@ params!(
     UnixcallMtldeviceNewicb,
     UnixcallMtldeviceNewlibrary,
     UnixcallMtldeviceNewlibrarywithsource,
-    UnixcallMtldeviceNewlibrarywithsourceOptions,
     UnixcallMtldeviceNewmeshrenderpso,
     UnixcallMtldeviceNewrenderpso,
     UnixcallMtldeviceNewrenderpsoVertex,

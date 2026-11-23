@@ -1,12 +1,12 @@
 //! `StretchRect`'s sampled copy on the core (DXMTRS C4c-4c): mtld3d's blit quad, a pass of its own.
 //!
 //! One render pass on the destination's view samples one subresource of the source through the
-//! shader mtld3d compiles ([`BLIT_MSL`]): the copy that scales, converts, decodes packed YUV or
-//! writes a multisampled target. The library is compiled once a device, at its first such copy,
-//! and its pipelines are kept by the destination's stored format and sample count. The pass is
-//! recorded here whole: the pass, the pipeline, the viewport, the scissor, the rasterizer state
-//! and the draw repeat what `draw.rs` and `open_pass` encode for a draw, kept apart so the draw
-//! path is left as it is.
+//! internal command library's `mtld3d_blit_vs` and `mtld3d_blit_ps` functions: the copy that
+//! scales, converts, decodes packed YUV or writes a multisampled target. The functions are loaded
+//! once per device, at its first such copy, and its pipelines are kept by the destination's
+//! stored format and sample count. The pass is recorded here whole: the pass, the pipeline, the
+//! viewport, the scissor, the rasterizer state and the draw repeat what `draw.rs` and `open_pass`
+//! encode for a draw, kept apart so the draw path is left as it is.
 
 use std::{ffi::CStr, sync::Arc};
 
@@ -14,37 +14,32 @@ use dxmt_core::{
     deptrack::Access,
     device::Device,
     encoder::{Encoder, NO_NEXT, direct, stage},
-    library::{description, render_pipeline, render_pipeline_info},
+    library::{render_pipeline, render_pipeline_info},
     resource::TextureViewDescriptor,
     sampler::Sampler,
 };
 use mtld3d_core::{
     sampler_state::{description_from_snapshot, key_from_snapshot, snapshot_from_state},
-    stretch_rect::{BLIT_MSL, BLIT_PS, BLIT_VS, BlitDecode},
+    stretch_rect::{BLIT_PS, BLIT_VS, BlitDecode},
 };
 use mtld3d_types::{
     D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
     D3DSAMP_MIPFILTER, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_POINT, SAMPLER_STATE_COUNT,
 };
 use winemetal_sys::{
-    MTLDevice_newLibraryWithSourceOptions, MTLLibrary_newFunction, Obj,
+    MTLLibrary_newFunction, Obj,
     wire::{
         MemPtr, WMT_CULL_MODE_NONE, WMT_DEPTH_CLIP_MODE_CLIP, WMT_LOAD_ACTION_LOAD,
         WMT_PRIMITIVE_TYPE_TRIANGLE, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_PSO,
         WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_RENDER_COMMAND_SET_SCISSOR_RECTS,
         WMT_RENDER_COMMAND_SET_VIEWPORTS, WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE2D,
-        WMT_TRIANGLE_FILL_MODE_FILL, WMT_WINDING_CLOCKWISE, WMTCompileOptions, WMTScissorRect,
-        WMTViewport, WmtcmdRenderDraw, WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate,
+        WMT_TRIANGLE_FILL_MODE_FILL, WMT_WINDING_CLOCKWISE, WMTScissorRect, WMTViewport,
+        WmtcmdRenderDraw, WmtcmdRenderSetpso, WmtcmdRenderSetrasterizerstate,
         WmtcmdRenderSetscissorrects, WmtcmdRenderSetviewports, original_format,
     },
 };
 
 use super::{CoreDevice, LOG_TARGET, TargetRef, query, surface::inside, target::Shape};
-
-/// `MTLLanguageVersion2_4`: the quad's and the depth resolve's language version, as mtld3d's.
-const LANGUAGE_VERSION_2_4: u64 = (2 << 16) | 4;
-/// `MTLMathModeFast`, as mtld3d compiles the quad's source.
-const MATH_MODE_FAST: u8 = 2;
 
 /// One sampled copy: a rect of a source's subresource onto a rect of a target.
 pub struct StretchQuad {
@@ -90,8 +85,8 @@ impl CoreDevice {
     /// texture (a pass does not sample what it attaches), `quad.decode` is a planar one (the
     /// core's planar texture holds its luma alone), `quad.src_view`'s base format is neither the
     /// source's stored format nor its twin or differs from the stored format on a texture made
-    /// without views in another format, or Metal makes no library, pipeline or sampler for it.
-    /// The library is compiled only once nothing else refuses: a refused call compiles nothing.
+    /// without views in another format, or Metal makes no function, pipeline or sampler for it.
+    /// Functions are loaded only once nothing else refuses: a refused call loads nothing.
     #[must_use]
     pub fn stretch(&mut self, quad: &StretchQuad) -> bool {
         let (Some((from, shape, resolve_first)), Some(to)) =
@@ -191,7 +186,7 @@ impl CoreDevice {
     ///
     /// Through dxmt-core's `render_pipeline`, as its own clears make theirs: the quad's two
     /// functions, colour 0 in `format`, no blending, no depth. One Metal does not make is logged
-    /// and kept as none, never made again; none while the library does not build.
+    /// and kept as none, never made again; none when the command library or a function is missing.
     pub(super) fn quad_pipeline(&mut self, format: u32, samples: u8) -> Option<u64> {
         if let Some(pso) = self.quad_pipelines.get(&(format, samples)) {
             return pso.as_ref().map(Obj::handle);
@@ -199,12 +194,10 @@ impl CoreDevice {
         let [vs, ps] = self
             .quad_functions
             .get_or_init(|| {
-                compile_functions(
+                load_internal_functions(
                     &self.device,
-                    BLIT_MSL,
                     [BLIT_VS, BLIT_PS],
-                    MATH_MODE_FAST,
-                    "the StretchRect quad's",
+                    "the StretchRect quad",
                     "sampled copies",
                 )
             })
@@ -325,62 +318,35 @@ pub(super) fn encode_triangle_state(enc: &mut Encoder, pso: u64, rect: [u32; 4],
     });
 }
 
-/// The functions `names` of a library Metal compiles from `source` on `device`, in that order.
+/// Loads the functions `names` from `device`'s internal command library, in that order.
 ///
-/// Metal language 2.4 in `math_mode` (`MTLMathMode`). The library is released once its functions
-/// are made, as mtld3d releases its own: they hold it. None, and Metal's error logged as
-/// `owner`'s with what is then `refused`, when Metal makes no library or no function; the caller
-/// keeps the none and does not try again. Every `source` is a constant whose ASCII is asserted.
-pub(super) fn compile_functions<const N: usize>(
+/// Logs and returns `None` when a live device has no command library or a function is missing;
+/// callers latch the `None` and do not retry. On `dxmt-fakes` unit-test devices (`<= 0x1000`),
+/// `cmd_library_handle()` is `0` and `MTLLibrary_newFunction` returns fake handles.
+pub(super) fn load_internal_functions<const N: usize>(
     device: &Device,
-    source: &str,
     names: [&CStr; N],
-    math_mode: u8,
-    owner: &str,
+    what: &str,
     refused: &str,
 ) -> Option<[Obj; N]> {
-    let options = WMTCompileOptions {
-        language_version: LANGUAGE_VERSION_2_4,
-        preserve_invariance: 0,
-        math_mode,
-        padding: [0; 6],
-    };
-    let length = u64::try_from(source.len()).unwrap_or(0);
-    let mut error = 0;
-    // SAFETY: a live device; the source is `length` bytes of ASCII (each caller's constant), and
-    // the options and the error slot are alive for the call.
-    let library = unsafe {
-        MTLDevice_newLibraryWithSourceOptions(
-            device.device().handle(),
-            source.as_ptr().cast(),
-            length,
-            &raw const options,
-            &raw mut error,
-        )
-    };
-    // SAFETY: a new library's handle carries its reference.
-    let library = unsafe { Obj::adopt(library) };
-    // SAFETY: a new error's handle carries its reference; beside a library it holds warnings.
-    let error = unsafe { Obj::adopt(error) };
-    let Some(library) = library else {
-        let text = error
-            .as_ref()
-            .map_or_else(|| "no error".to_owned(), description);
+    let lib = device.cmd_library_handle();
+    if lib == 0 && device.device().handle() > 0x1000 {
         log::error!(
             target: LOG_TARGET,
-            "d3d9 core: {owner} library does not build ({text}); {refused} are refused"
+            "d3d9 core: no command library for {what}; {refused} are refused"
         );
         return None;
-    };
+    }
     let function = |name: &CStr| {
-        // SAFETY: the library is live and `name` is NUL-terminated for the call.
-        let function = unsafe { MTLLibrary_newFunction(library.handle(), name.as_ptr()) };
+        // SAFETY: `lib` is the device's live command library (or `0` on `dxmt-fakes`), and `name`
+        // is NUL-terminated for the call.
+        let function = unsafe { MTLLibrary_newFunction(lib, name.as_ptr()) };
         // SAFETY: a new function's handle carries its reference.
         let function = unsafe { Obj::adopt(function) };
         if function.is_none() {
             log::error!(
                 target: LOG_TARGET,
-                "d3d9 core: {owner} function {name:?} does not build; {refused} are refused"
+                "d3d9 core: missing {name:?} in command library for {what}; {refused} are refused"
             );
         }
         function

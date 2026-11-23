@@ -1,7 +1,7 @@
 //! Libraries, functions, pipeline states and binary archives.
 //!
-//! Slots 25 and 26 (a library from metallib data, a function by name), 144 and 157 (a library
-//! from source), 98 (a function with constant values), 29, 34, 35, 131 and 156 (compute, render,
+//! Slots 25 and 26 (a library from metallib data, a function by name), 144 (a library from
+//! source), 98 (a function with constant values), 29, 34, 35, 131 and 156 (compute, render,
 //! mesh, tile and vertex-described pipelines) and 112 and 113 (a binary archive, serialised).
 //! Every `new*` result is +1 and so is every error, which the C retained (`ret_error`).
 //!
@@ -26,7 +26,7 @@ use objc2_metal::{
     MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLBlendFactor, MTLBlendOperation,
     MTLColorWriteMask, MTLCompileOptions, MTLComputePipelineDescriptor, MTLComputePipelineState,
     MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues, MTLLanguageVersion, MTLLibrary,
-    MTLMathMode, MTLMeshRenderPipelineDescriptor, MTLMutability, MTLPipelineBufferDescriptorArray,
+    MTLMeshRenderPipelineDescriptor, MTLMutability, MTLPipelineBufferDescriptorArray,
     MTLPipelineOption, MTLPrimitiveTopologyClass, MTLRenderPipelineColorAttachmentDescriptorArray,
     MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLTessellationFactorStepFunction,
     MTLTessellationPartitionMode, MTLTileRenderPipelineDescriptor, MTLVertexAttributeDescriptor,
@@ -36,12 +36,11 @@ use objc2_metal::{
 use winemetal_wire::{
     MemPtr, UnixcallGenericObjUint64ObjRet, UnixcallMtlbinaryarchiveSerialize,
     UnixcallMtldeviceNewbinaryarchive, UnixcallMtldeviceNewcomputepso, UnixcallMtldeviceNewlibrary,
-    UnixcallMtldeviceNewlibrarywithsource, UnixcallMtldeviceNewlibrarywithsourceOptions,
-    UnixcallMtldeviceNewmeshrenderpso, UnixcallMtldeviceNewrenderpso,
-    UnixcallMtldeviceNewrenderpsoVertex, UnixcallMtllibraryNewfunctionWithConstants,
-    WMTColorAttachmentBlendInfo, WMTCompileOptions, WMTComputePipelineInfo, WMTFunctionConstant,
-    WMTMeshRenderPipelineInfo, WMTRenderPipelineInfo, WMTTileRenderPipelineInfo,
-    WMTVertexDescriptorInfo,
+    UnixcallMtldeviceNewlibrarywithsource, UnixcallMtldeviceNewmeshrenderpso,
+    UnixcallMtldeviceNewrenderpso, UnixcallMtldeviceNewrenderpsoVertex,
+    UnixcallMtllibraryNewfunctionWithConstants, WMTColorAttachmentBlendInfo,
+    WMTComputePipelineInfo, WMTFunctionConstant, WMTMeshRenderPipelineInfo, WMTRenderPipelineInfo,
+    WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo,
 };
 
 use crate::{
@@ -1024,41 +1023,6 @@ pub unsafe extern "C-unwind" fn mtl_device_new_library_with_source(args: *mut c_
     let source = string_from_bytes(bytes, ASCII);
     let options = MTLCompileOptions::new();
     options.setLanguageVersion(MTLLanguageVersion::Version3_1);
-    let (library, error) = with_error(|error| {
-        device(p.device)?.new_library_with_source(source.as_deref(), &options, error)
-    });
-    p.ret_library = ret_owned(library);
-    p.ret_error = ret_owned(error);
-    STATUS_SUCCESS
-}
-
-/// Slot 157: slot 144 with compile options.
-///
-/// # Safety
-///
-/// `args` points to the slot's `UnixcallMtldeviceNewlibrarywithsourceOptions`.
-#[unsafe(export_name = "_MTLDevice_newLibraryWithSourceOptions")]
-pub unsafe extern "C-unwind" fn mtl_device_new_library_with_source_options(
-    args: *mut c_void,
-) -> i32 {
-    let _guard = AbortOnPanic;
-    // SAFETY: the caller's contract.
-    let p = unsafe { params::<UnixcallMtldeviceNewlibrarywithsourceOptions>(args) };
-    // SAFETY: the guest's options block, null is the C's fault.
-    let Some(info) = (unsafe { mem_ref::<WMTCompileOptions>(p.options) }) else {
-        return STATUS_SUCCESS;
-    };
-    // SAFETY: the guest's source holds `length` bytes; null with a length is the C's fault.
-    let Some(bytes) = (unsafe { mem_slice::<u8>(p.source, p.length) }) else {
-        return STATUS_SUCCESS;
-    };
-    let source = string_from_bytes(bytes, ASCII);
-    let options = MTLCompileOptions::new();
-    if info.language_version != 0 {
-        options.setLanguageVersion(MTLLanguageVersion(u64_to_usize(info.language_version)));
-    }
-    options.setPreserveInvariance(flag(info.preserve_invariance));
-    options.setMathMode(MTLMathMode(isize::from(info.math_mode)));
     let (library, error) = with_error(|error| {
         device(p.device)?.new_library_with_source(source.as_deref(), &options, error)
     });

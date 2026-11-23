@@ -285,20 +285,6 @@ fn null_info_blocks_write_nothing() {
         0
     );
     assert_eq!((c.ret_pso, c.ret_error), (FILL, FILL));
-    let mut o = UnixcallMtldeviceNewlibrarywithsourceOptions {
-        device: 0,
-        source: MemPtr { ptr: 0 },
-        length: 0,
-        options: MemPtr { ptr: 0 },
-        ret_error: FILL,
-        ret_library: FILL,
-    };
-    assert_eq!(
-        // SAFETY: a live params block.
-        unsafe { mtl_device_new_library_with_source_options(core::ptr::from_mut(&mut o).cast()) },
-        0
-    );
-    assert_eq!((o.ret_library, o.ret_error), (FILL, FILL));
 }
 
 #[test]

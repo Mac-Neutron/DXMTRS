@@ -125,15 +125,7 @@ struct unixcall_mtldevice_newlibrarywithsource {
   obj_handle_t ret_library;
 };
 
-/* Slot 157 (MacNeutron). */
-struct unixcall_mtldevice_newlibrarywithsource_options {
-  obj_handle_t device;
-  struct WMTConstMemoryPointer source;
-  uint64_t length;
-  struct WMTConstMemoryPointer options;
-  obj_handle_t ret_error;
-  obj_handle_t ret_library;
-};
+/* Slot 157 retired (C5). */
 
 struct unixcall_mtldevice_newcomputepso {
   obj_handle_t device;

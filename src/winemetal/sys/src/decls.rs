@@ -150,7 +150,6 @@ unsafe extern "C" {
     pub fn MTLHeap_newTexture(heap: u64, info: *mut wire::WMTTextureInfo, offset: u64) -> u64;
     pub fn MTLDevice_newIndirectCommandBuffer(device: u64, info: *mut wire::WMTIndirectCommandBufferInfo, max_count: u64, options: u64) -> u64;
     pub fn MTLDevice_newLibraryWithSource(device: u64, source: *const c_char, length: u64, err_out: *mut u64) -> u64;
-    pub fn MTLDevice_newLibraryWithSourceOptions(device: u64, source: *const c_char, length: u64, options: *const wire::WMTCompileOptions, err_out: *mut u64) -> u64;
     pub fn MTLTexture_getBytes(texture: u64, origin: wire::WMTOrigin, size: wire::WMTSize, level: u64, slice: u64, data: wire::MemPtr, bytes_per_row: u64, bytes_per_image: u64);
     pub fn WMTDeclareLatencyCriticalActivity() -> u64;
     pub fn WMTAttachMetalView(hwnd: isize, device: u64, desc: *const wire::WMTViewAttachDesc, out_poll: *mut wire::WMTViewPollOut, ret_layer: *mut u64) -> u64;
@@ -309,7 +308,6 @@ unsafe extern "C-unwind" {
     pub fn MTLHeap_newTexture(heap: u64, info: *mut wire::WMTTextureInfo, offset: u64) -> u64;
     pub fn MTLDevice_newIndirectCommandBuffer(device: u64, info: *mut wire::WMTIndirectCommandBufferInfo, max_count: u64, options: u64) -> u64;
     pub fn MTLDevice_newLibraryWithSource(device: u64, source: *const c_char, length: u64, err_out: *mut u64) -> u64;
-    pub fn MTLDevice_newLibraryWithSourceOptions(device: u64, source: *const c_char, length: u64, options: *const wire::WMTCompileOptions, err_out: *mut u64) -> u64;
     pub fn MTLTexture_getBytes(texture: u64, origin: wire::WMTOrigin, size: wire::WMTSize, level: u64, slice: u64, data: wire::MemPtr, bytes_per_row: u64, bytes_per_image: u64);
     pub fn WMTDeclareLatencyCriticalActivity() -> u64;
     pub fn WMTAttachMetalView(hwnd: isize, device: u64, desc: *const wire::WMTViewAttachDesc, out_poll: *mut wire::WMTViewPollOut, ret_layer: *mut u64) -> u64;

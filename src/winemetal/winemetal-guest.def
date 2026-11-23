@@ -63,7 +63,6 @@ EXPORTS
     MTLDevice_newIndirectCommandBuffer
     MTLDevice_newLibrary
     MTLDevice_newLibraryWithSource
-    MTLDevice_newLibraryWithSourceOptions
     MTLDevice_newMeshRenderPipelineState
     MTLDevice_newRenderPipelineState
     MTLDevice_newRenderPipelineStateWithVertexDescriptor

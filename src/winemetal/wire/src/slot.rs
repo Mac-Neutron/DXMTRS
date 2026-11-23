@@ -1,8 +1,8 @@
 //! winemetal's slots: each Unix call's index in its two tables, named after its PE function.
 //!
-//! The shader translator's are named after `airconv_unixcalls`. 83 has no function: both tables
-//! hold null there. 153 to 155 are the VM guest's own: `WMTMemoryAlloc`, `WMTMemoryFree` and the
-//! call `WMTForward` passes on.
+//! The shader translator's are named after `airconv_unixcalls`. 83 and 157 have no function:
+//! both tables hold null there. 153 to 155 are the VM guest's own: `WMTMemoryAlloc`,
+//! `WMTMemoryFree` and the call `WMTForward` passes on.
 
 pub const NS_OBJECT_RETAIN: u32 = 0;
 pub const NS_OBJECT_RELEASE: u32 = 1;
@@ -161,7 +161,7 @@ pub const WMT_MEMORY_ALLOC: u32 = 153;
 pub const WMT_MEMORY_FREE: u32 = 154;
 pub const WMT_FORWARD: u32 = 155;
 pub const MTL_DEVICE_NEW_RENDER_PIPELINE_STATE_WITH_VERTEX_DESCRIPTOR: u32 = 156;
-pub const MTL_DEVICE_NEW_LIBRARY_WITH_SOURCE_OPTIONS: u32 = 157;
+// 157 retired (C5)
 pub const WMT_DECLARE_LATENCY_CRITICAL_ACTIVITY: u32 = 158;
 pub const WMT_ATTACH_METAL_VIEW: u32 = 159;
 pub const WMT_RETIRE_METAL_VIEW: u32 = 160;

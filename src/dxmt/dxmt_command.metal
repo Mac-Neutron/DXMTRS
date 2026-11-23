@@ -817,3 +817,158 @@ struct DXMTClearUintMetadata {
 [[kernel]] void tile_barrier(ushort2 pos [[thread_position_in_threadgroup]]) {
   // empty
 }
+
+struct BlitVsOut {
+    float4 position [[position]];
+    float2 texcoord;
+};
+
+vertex BlitVsOut mtld3d_blit_vs(
+    uint vid [[vertex_id]],
+    constant float4 &xform [[buffer(0)]]
+) {
+    // Fullscreen triangle, normalised quad coord q (top-left origin):
+    //   vid=0 -> q=(0,0), vid=1 -> q=(2,0), vid=2 -> q=(0,2).
+    // Visible region q in [0,1]^2 covers the whole Metal viewport.
+    float2 q = float2(float((vid << 1u) & 2u), float(vid & 2u));
+    // Clip position: q.x in [0,2] -> x in [-1,3]; q.y=0 (top) -> y=+1,
+    // q.y=2 -> y=-3. Metal NDC +Y maps to the top of the framebuffer, so
+    // q=(0,0) lands at the viewport's top-left.
+    float2 pos = float2(q.x * 2.0 - 1.0, 1.0 - q.y * 2.0);
+    BlitVsOut out;
+    out.position = float4(pos, 0.0, 1.0);
+    // Map the quad coord across the source rect (normalised to the source
+    // texture size) so the destination samples exactly srcRect.
+    out.texcoord = q * xform.xy + xform.zw;
+    return out;
+}
+
+fragment float4 mtld3d_blit_ps(
+    BlitVsOut in [[stage_in]],
+    texture2d<float> src [[texture(0)]],
+    sampler samp [[sampler(0)]],
+    constant float4 &src_level [[buffer(0)]]
+) {
+    // src_level.x is the source mip level (the sampler's point mip filter
+    // makes the explicit level exact); src_level.y is the source decode,
+    // 0 = sample as-is, 1 = YUY2, 2 = UYVY, 3 = YV12, 4 = NV12, 5 = sample
+    // as-is with alpha one (an X format, whose padding bits carry no alpha).
+    // The numbering is owned by mtld3d_core::stretch_rect::BlitDecode.
+    // src_level.zw is the source's logical extent, which only the planar
+    // decodes read.
+    uint decode = uint(src_level.y);
+    if (decode == 0u) {
+        return src.sample(samp, in.texcoord, level(src_level.x));
+    }
+    if (decode == 5u) {
+        return float4(src.sample(samp, in.texcoord, level(src_level.x)).rgb, 1.0);
+    }
+    float y;
+    float u;
+    float v;
+    if (decode == 1u || decode == 2u) {
+        // Packed 4:2:2 YUV backed by an RG8 texture: one texel per pixel, the
+        // even/odd texel pair is one macropixel. YUY2 texels are (Y0,U)
+        // (Y1,V), UYVY texels are (U,Y0) (V,Y1). Luma comes from the pixel's
+        // own texel, chroma from its pair, all fetched unfiltered: a linear
+        // sample across the pair would mix U into V.
+        uint lvl = uint(src_level.x);
+        float2 size = float2(max(src.get_width(lvl), 1u), max(src.get_height(lvl), 1u));
+        uint2 texel = uint2(clamp(in.texcoord * size, float2(0.0), size - 1.0));
+        uint even_x = texel.x & ~1u;
+        uint odd_x = min(even_x + 1u, uint(size.x) - 1u);
+        float2 own = src.read(texel, lvl).rg;
+        float2 even = src.read(uint2(even_x, texel.y), lvl).rg;
+        float2 odd = src.read(uint2(odd_x, texel.y), lvl).rg;
+        bool yuy2 = decode == 1u;
+        y = yuy2 ? own.r : own.g;
+        u = yuy2 ? even.g : even.r;
+        v = yuy2 ? odd.g : odd.r;
+    } else {
+        // Planar 4:2:0 YUV in one single-level R8 texture that holds the
+        // locked bytes verbatim: `logical.y` luma rows, then the chroma
+        // planes, every row as wide as the lock pitch, which is the texture
+        // width. The byte at offset o of the allocation is texel
+        // (o % pitch, o / pitch). The texcoord is normalised to the logical
+        // extent, not to the texture.
+        float2 logical = max(src_level.zw, float2(1.0));
+        float2 p = clamp(in.texcoord * logical, float2(0.5), logical - 0.5);
+        uint pitch = max(src.get_width(), 1u);
+        float storage_rows = float(max(src.get_height(), 1u));
+        // Luma through the bound sampler, so POINT and LINEAR both apply. The
+        // clamp keeps a linear footprint inside the luma plane: out of the row
+        // padding on the right and out of the first chroma row below.
+        y = src.sample(samp, float2(p.x / float(pitch), p.y / storage_rows), level(0.0)).r;
+        // Chroma is the unfiltered sample the texel's 2x2 block shares. The
+        // layout keeps every chroma byte of a well-formed source inside the
+        // texture; the clamps only keep a read defined if the extent in the
+        // uniform ever disagreed with the texture.
+        uint luma_rows = uint(logical.y);
+        uint last_row = max(src.get_height(), 1u) - 1u;
+        uint2 block = uint2(p) >> 1u;
+        if (decode == 3u) {
+            // YV12: a V plane then a U plane, each of ceil(rows / 2) rows that
+            // stride half the pitch.
+            uint half_pitch = pitch / 2u;
+            uint v_offset = block.y * half_pitch + block.x;
+            uint u_offset = ((luma_rows + 1u) / 2u) * half_pitch + v_offset;
+            v = src.read(uint2(v_offset % pitch, min(luma_rows + v_offset / pitch, last_row))).r;
+            u = src.read(uint2(u_offset % pitch, min(luma_rows + u_offset / pitch, last_row))).r;
+        } else {
+            // NV12: one plane of pitch-wide rows, U and V interleaved.
+            uint row = min(luma_rows + block.y, last_row);
+            u = src.read(uint2(min(2u * block.x, pitch - 1u), row)).r;
+            v = src.read(uint2(min(2u * block.x + 1u, pitch - 1u), row)).r;
+        }
+    }
+    // Reduced-range Y'CbCr to RGB (BT.601 coefficients, luma scaled from
+    // [16, 235], chroma centred on 128); the CPU twin is
+    // mtld3d_core::stretch_rect::yuv_to_rgb8, keep them in step.
+    float l = (y - 0.063) * 1.164;
+    float cu = u - 0.5;
+    float cv = v - 0.5;
+    float3 rgb = float3(l + 1.596 * cv, l - 0.392 * cu - 0.813 * cv, l + 2.017 * cu);
+    return float4(saturate(rgb), 1.0);
+}
+
+struct resolve_vs_out {
+    float4 position [[position]];
+};
+
+struct resolve_depth_out {
+    float depth [[depth(any)]];
+};
+
+struct resolve_depth_stencil_out {
+    float depth [[depth(any)]];
+    uint stencil [[stencil]];
+};
+
+vertex resolve_vs_out resolve_depth_vs(ushort id [[vertex_id]]) {
+    // id 0, 1, 2 -> (0, 0), (2, 0), (0, 2): the clip-space triangle (-1, 1), (3, 1), (-1, -3).
+    float2 uv = float2((id << 1) & 2, id & 2);
+    resolve_vs_out out;
+    out.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return out;
+}
+
+fragment resolve_depth_out resolve_depth_fs(
+    float4 position [[position]],
+    depth2d_ms<float, access::read> depth [[texture(0)]]
+) {
+    resolve_depth_out out;
+    out.depth = depth.read(uint2(position.xy), 0);
+    return out;
+}
+
+fragment resolve_depth_stencil_out resolve_depth_stencil_fs(
+    float4 position [[position]],
+    depth2d_ms<float, access::read> depth [[texture(0)]],
+    texture2d_ms<uint, access::read> stencil [[texture(1)]]
+) {
+    uint2 texel = uint2(position.xy);
+    resolve_depth_stencil_out out;
+    out.depth = depth.read(texel, 0);
+    out.stencil = stencil.read(texel, 0).r;
+    return out;
+}

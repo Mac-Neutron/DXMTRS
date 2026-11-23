@@ -42,77 +42,17 @@ use winemetal_sys::{
 
 use super::{
     CoreDevice, CoreOptions, CoreTextureDesc, CoreTextureFlags, LOG_TARGET, TextureKind,
-    stretch::{compile_functions, encode_triangle_state},
+    stretch::{encode_triangle_state, load_internal_functions},
     surface::blit_record,
     target::Shape,
 };
 
-/// The depth-stencil resolve's Metal source: a covering triangle and sample 0 of each plane.
-///
-/// The vertex function makes one triangle over the whole target from the vertex index alone, at
-/// z 0 and w 1, as dxmt-core's `vs_present_quad`. Each fragment function reads sample 0 of the
-/// source texel under its pixel and writes it as the fragment's depth: the depth plane alone,
-/// or the depth plane and the stencil plane (an `X32_Stencil8` view), whose value the fragment
-/// writes as its stencil. mtld3d resolves with a compute kernel, so there is no text to share.
-const RESOLVE_MSL: &str = r"
-#include <metal_stdlib>
-using namespace metal;
-
-struct resolve_vs_out {
-    float4 position [[position]];
-};
-
-struct resolve_depth_out {
-    float depth [[depth(any)]];
-};
-
-struct resolve_depth_stencil_out {
-    float depth [[depth(any)]];
-    uint stencil [[stencil]];
-};
-
-vertex resolve_vs_out resolve_depth_vs(ushort id [[vertex_id]]) {
-    // id 0, 1, 2 -> (0, 0), (2, 0), (0, 2): the clip-space triangle (-1, 1), (3, 1), (-1, -3).
-    float2 uv = float2((id << 1) & 2, id & 2);
-    resolve_vs_out out;
-    out.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-    return out;
-}
-
-fragment resolve_depth_out resolve_depth_fs(
-    float4 position [[position]],
-    depth2d_ms<float, access::read> depth [[texture(0)]]
-) {
-    resolve_depth_out out;
-    out.depth = depth.read(uint2(position.xy), 0);
-    return out;
-}
-
-fragment resolve_depth_stencil_out resolve_depth_stencil_fs(
-    float4 position [[position]],
-    depth2d_ms<float, access::read> depth [[texture(0)]],
-    texture2d_ms<uint, access::read> stencil [[texture(1)]]
-) {
-    uint2 texel = uint2(position.xy);
-    resolve_depth_stencil_out out;
-    out.depth = depth.read(texel, 0);
-    out.stencil = stencil.read(texel, 0).r;
-    return out;
-}
-";
-
-/// [`RESOLVE_MSL`]'s functions: the vertex one, then the fragment ones of depth and of both.
+/// The depth-stencil resolve's functions: the vertex one, then depth-only and depth-stencil.
 const RESOLVE_FUNCTIONS: [&CStr; 3] = [
     c"resolve_depth_vs",
     c"resolve_depth_fs",
     c"resolve_depth_stencil_fs",
 ];
-
-/// `MTLMathModeSafe`, as mtld3d compiles its depth-stencil transfer kernel.
-const MATH_MODE_SAFE: u8 = 0;
-
-// winemetal's thunk decodes a library's source as ASCII.
-const _: () = assert!(RESOLVE_MSL.is_ascii());
 
 /// A depth-stencil: one level of a stored depth texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -385,8 +325,8 @@ impl CoreDevice {
     ///
     /// False, and nothing recorded, unless both name a level of a stored depth texture, `src` has
     /// more than one sample and `dst` one, and their width, height and pixel format are equal; or
-    /// when Metal makes no library, function or pipeline for it (each logged once, then kept as
-    /// none) or no depth-stencil state (logged). Those are made before anything is recorded.
+    /// when Metal makes no function or pipeline for it (each logged once, then kept as none) or
+    /// no depth-stencil state (logged). Those are made before anything is recorded.
     #[must_use]
     pub fn depth_resolve(&mut self, src: DepthRef, dst: DepthRef) -> bool {
         let (Some(from), Some(into)) = (
@@ -670,7 +610,7 @@ impl CoreDevice {
     /// Through dxmt-core's `render_pipeline`: the vertex function and the fragment function of
     /// the format's planes, the depth pixel format `format` and the stencil one too for a format
     /// with a stencil plane, no colour, one sample. One Metal does not make is logged and kept as
-    /// none, never made again; none while the library does not build.
+    /// none, never made again; none when the command library or a function is missing.
     fn resolve_pipeline(&mut self, format: u32) -> Option<u64> {
         if let Some(pso) = self.resolve_pipelines.get(&format) {
             return pso.as_ref().map(Obj::handle);
@@ -678,12 +618,10 @@ impl CoreDevice {
         let [vs, depth_fs, stencil_fs] = self
             .resolve_functions
             .get_or_init(|| {
-                compile_functions(
+                load_internal_functions(
                     &self.device,
-                    RESOLVE_MSL,
                     RESOLVE_FUNCTIONS,
-                    MATH_MODE_SAFE,
-                    "the depth-stencil resolve's",
+                    "the depth-stencil resolve",
                     "depth-stencil resolves",
                 )
             })

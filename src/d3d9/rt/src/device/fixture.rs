@@ -19,18 +19,12 @@ use mtld3d_types::{
     D3DDECLUSAGE_COLOR, D3DDECLUSAGE_POSITIONT, D3DFVF_DIFFUSE, D3DFVF_XYZRHW, D3DVERTEXELEMENT9,
     render_state_defaults,
 };
-use winemetal_sys::{Obj, wire::WMTCompileOptions};
+use winemetal_sys::Obj;
 
 use super::{
     Bind, CoreDevice, CoreTextureDesc, CoreTextureFlags, DrawData, Indices, Stage, StreamData,
     TextureKind, queue_profile,
 };
-
-/// The library a sampled copy compiles in a test: a handle no fake makes and no test's device.
-///
-/// Below the fakes' first handle, so the functions made of it are its own and their calls, which
-/// print nothing, are no test's.
-const SOURCE_LIBRARY: u64 = 0xb117;
 
 /// A core device on the made-up handle `handle` with a 64x32 back buffer and a window.
 pub fn core_on_fakes(handle: u64) -> CoreDevice {
@@ -340,22 +334,6 @@ pub fn descriptors(calls: &[String]) -> Vec<Vec<&str>> {
 /// The first line of `pass` starting with `prefix`, without it.
 pub fn line<'a>(pass: &'a [String], prefix: &str) -> Option<&'a str> {
     pass.iter().find_map(|c| c.strip_prefix(prefix))
-}
-
-/// `MTLDevice_newLibraryWithSourceOptions`, which the fakes leave out: [`SOURCE_LIBRARY`].
-///
-/// The test binary links with dynamic lookup, so the fixture defines the one winemetal call the
-/// recorder makes that `dxmt-fakes` does not, as `dxmt-core`'s own tests define theirs. Every
-/// source compiles; the options, the source and the error slot are not read.
-#[unsafe(export_name = "MTLDevice_newLibraryWithSourceOptions")]
-const extern "C-unwind" fn library_with_source(
-    _device: u64,
-    _source: *const c_char,
-    _length: u64,
-    _options: *const WMTCompileOptions,
-    _error: *mut u64,
-) -> u64 {
-    SOURCE_LIBRARY
 }
 
 /// Stubs `MTLDevice_name` for unit-test binaries without `NSString` helpers.

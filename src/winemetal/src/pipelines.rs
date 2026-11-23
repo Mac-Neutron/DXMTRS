@@ -5,11 +5,11 @@ use core::ffi::c_char;
 use winemetal_wire::{
     UnixcallGenericObjUint64ObjRet, UnixcallMtlbinaryarchiveSerialize,
     UnixcallMtldeviceNewbinaryarchive, UnixcallMtldeviceNewcomputepso, UnixcallMtldeviceNewlibrary,
-    UnixcallMtldeviceNewlibrarywithsource, UnixcallMtldeviceNewlibrarywithsourceOptions,
-    UnixcallMtldeviceNewmeshrenderpso, UnixcallMtldeviceNewrenderpso,
-    UnixcallMtldeviceNewrenderpsoVertex, UnixcallMtllibraryNewfunctionWithConstants,
-    WMTCompileOptions, WMTComputePipelineInfo, WMTFunctionConstant, WMTMeshRenderPipelineInfo,
-    WMTRenderPipelineInfo, WMTTileRenderPipelineInfo, WMTVertexDescriptorInfo, slot,
+    UnixcallMtldeviceNewlibrarywithsource, UnixcallMtldeviceNewmeshrenderpso,
+    UnixcallMtldeviceNewrenderpso, UnixcallMtldeviceNewrenderpsoVertex,
+    UnixcallMtllibraryNewfunctionWithConstants, WMTComputePipelineInfo, WMTFunctionConstant,
+    WMTMeshRenderPipelineInfo, WMTRenderPipelineInfo, WMTTileRenderPipelineInfo,
+    WMTVertexDescriptorInfo, slot,
 };
 
 use crate::transport::{addr, call, mem_ptr, write_if};
@@ -127,27 +127,6 @@ exports! {
             p.source = mem_ptr(source);
             p.length = length;
         });
-        // SAFETY: null or valid for a write (the function's contract).
-        unsafe { write_if(err_out, p.ret_error) };
-        p.ret_library
-    }
-
-    fn MTLDevice_newLibraryWithSourceOptions(
-        device: u64,
-        source: *const c_char,
-        length: u64,
-        options: *const WMTCompileOptions,
-        err_out: *mut u64,
-    ) -> u64 {
-        let p = call(
-            slot::MTL_DEVICE_NEW_LIBRARY_WITH_SOURCE_OPTIONS,
-            |p: &mut UnixcallMtldeviceNewlibrarywithsourceOptions| {
-                p.device = device;
-                p.source = mem_ptr(source);
-                p.length = length;
-                p.options = mem_ptr(options);
-            },
-        );
         // SAFETY: null or valid for a write (the function's contract).
         unsafe { write_if(err_out, p.ret_error) };
         p.ret_library

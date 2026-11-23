@@ -820,7 +820,6 @@ src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewheap Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewicb Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewlibrary Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewlibrarywithsource Clone,Copy
-src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewlibrarywithsourceOptions Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewmeshrenderpso Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewrenderpso Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewrenderpsoVertex Clone,Copy
@@ -854,7 +853,6 @@ src/winemetal/wire/src/lib.rs WMTCaptureInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTClearColor Clone,Copy
 src/winemetal/wire/src/lib.rs WMTColorAttachmentBlendInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTColorAttachmentInfo Clone,Copy
-src/winemetal/wire/src/lib.rs WMTCompileOptions Clone,Copy
 src/winemetal/wire/src/lib.rs WMTComputePipelineInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTCursorOverlayParams Clone,Copy
 src/winemetal/wire/src/lib.rs WMTDepthAttachmentInfo Clone,Copy

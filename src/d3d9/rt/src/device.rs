@@ -220,10 +220,10 @@ pub struct CoreDevice {
     ///
     /// Never cleared, as the pipelines: a recorded closure names its state by handle.
     depth_states: rustc_hash::FxHashMap<u64, Obj>,
-    /// The `StretchRect` quad's two functions, made at the first sampled copy (DXMTRS C4c-4c).
+    /// The `StretchRect` quad's two functions, loaded at the first sampled copy (DXMTRS C4c-4c).
     ///
-    /// Of the library compiled from mtld3d's source; none inside once Metal made no library or
-    /// function, which the device does not try again.
+    /// Of the internal command library; none inside once a command library or function is missing,
+    /// which the device does not try again.
     quad_functions: OnceLock<Option<[Obj; 2]>>,
     /// The quad's pipelines by the destination's stored format and sample count.
     ///

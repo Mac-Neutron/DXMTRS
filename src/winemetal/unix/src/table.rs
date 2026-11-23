@@ -2,8 +2,8 @@
 //!
 //! Wine's loader finds them in `winemetal.so` by their names, `__wine_unix_call_funcs` and
 //! `__wine_unix_call_wow64_funcs`; the native `winemetal.dylib`'s C thunks call through the
-//! first. The slots are the C's: 165 in the 64-bit table, 83 empty, 153-155 the VM guest's own;
-//! the `WoW64` table has all 165 slots with the 32-bit translator thunks in place.
+//! first. The slots are the C's: 165 in the 64-bit table, 83 and 157 empty, 153-155 the VM
+//! guest's own; the `WoW64` table has all 165 slots with the 32-bit translator thunks in place.
 
 use core::ffi::c_void;
 
@@ -180,7 +180,7 @@ const FUNCS: [Option<Handler>; 165] = [
     Some(guest_only),                                                      // 154
     Some(guest_only),                                                      // 155
     Some(g4::mtl_device_new_render_pipeline_state_with_vertex_descriptor), // 156
-    Some(g4::mtl_device_new_library_with_source_options),                  // 157
+    None,                                                                  // 157 (retired C5)
     Some(g6::window::wmt_declare_latency_critical_activity),               // 158
     Some(g6::window::wmt_attach_metal_view),                               // 159
     Some(g6::window::wmt_retire_metal_view),                               // 160

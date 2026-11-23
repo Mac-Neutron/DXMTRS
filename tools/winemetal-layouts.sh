@@ -15,7 +15,7 @@
 # constants SCREAMING_SNAKE_CASE (WMTPixelFormatBGRX8Unorm: WMT_PIXEL_FORMAT_BGRX8_UNORM). A struct's bitfields are
 # one integer field, bits, with <FIELD>_SHIFT and <FIELD>_WIDTH constants. Fails when a struct of winemetal_thunks.h or
 # airconv_thunks.h is missing from a dump or has no mirror, when a mirror or a constant names nothing in the C, on a
-# bitfield it cannot place, and when the slots are not 0..164 once each or differ from slot.rs's. A compile_error! stops a
+# bitfield it cannot place, and when the slots are not 0..164 (less retired hole 157) once each or differ from slot.rs's. A compile_error! stops a
 # build for any other target.
 #
 # With --protos it prints winemetal-pe's src/protos.rs instead, the compile-time asserts that pin the PE thunks'
@@ -414,7 +414,7 @@ EOF
   while read -r target cfg; do
     ast "$target" "$t/api.c" $flags
     printf '\n#[cfg(%s)]\nconst _: () = {\n' "$cfg"
-    printer -v out=protos -v imp=1 -v want=152 -v wp=wire:: >"$t/out" || fail "$target: $(tail -1 "$t/out")"
+    printer -v out=protos -v imp=1 -v want=151 -v wp=wire:: >"$t/out" || fail "$target: $(tail -1 "$t/out")"
     cat "$t/out"
     printf '};\n'
   done
@@ -434,7 +434,7 @@ if [ "$mode" = decls ]; then
     *-apple-*) ast "$target" "$t/api.c" $flags; set -- -v pick="$(tr '\n' ' ' <"$t/set")" -v lp64=1 ;;
     *) ast "$target" "$t/api.c" $flags; set -- -v imp=1 ;;
     esac
-    printer "$@" -v out=decl -v want=152 -v guest="$guest" -v wp=wire:: >"$t/body-$target" ||
+    printer "$@" -v out=decl -v want=151 -v guest="$guest" -v wp=wire:: >"$t/body-$target" ||
       fail "$target: $(tail -1 "$t/body-$target")"
     [ -f "$t/body" ] || cp "$t/body-$target" "$t/body"
     cmp -s "$t/body" "$t/body-$target" || {
@@ -1116,10 +1116,10 @@ awk "$names"'
 sort "$t/consts.rs"
 printf '};\n'
 
-# Each slot once, 0..164, and slot.rs's names exactly those.
+# Each slot once, 0..164 with retired hole 157, and slot.rs's names exactly those.
 sed -n 's/.*crate::slot::\([A-Z0-9_]*\) == \([0-9]*\));/\1 \2/p' "$t/consts.rs" | sort -k2n >"$t/slotlist"
-awk '$2 != NR - 1 { exit 1 } END { if (NR != 165) exit 1 }' "$t/slotlist" ||
-  fail "slots are not 0..164 once each: $(awk '{print $2}' "$t/slotlist" | tr '\n' ' ')"
+awk '$2 != (NR <= 157 ? NR - 1 : NR) { exit 1 } END { if (NR != 164) exit 1 }' "$t/slotlist" ||
+  fail "slots are not {0..164} \\ {157} once each: $(awk '{print $2}' "$t/slotlist" | tr '\n' ' ')"
 awk '{print $1}' "$t/slotlist" | sort >"$t/slotnames"
 /usr/bin/grep -oE '^pub const [A-Z0-9_]+' "$wire/slot.rs" | awk '{print $3}' | sort | diff "$t/slotnames" - >&2 ||
   fail "slot.rs's constants differ from the slots (< the C, > slot.rs)"

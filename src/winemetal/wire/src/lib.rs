@@ -1588,15 +1588,6 @@ impl WMTIndirectCommandBufferInfo {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct WMTCompileOptions {
-    pub language_version: u64,
-    pub preserve_invariance: u8,
-    pub math_mode: u8,
-    pub padding: [u8; 6],
-}
-
 // winemetal_thunks.h
 
 #[derive(Clone, Copy)]
@@ -1752,17 +1743,6 @@ pub struct UnixcallMtldeviceNewlibrarywithsource {
     pub device: u64,
     pub source: MemPtr,
     pub length: u64,
-    pub ret_error: u64,
-    pub ret_library: u64,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct UnixcallMtldeviceNewlibrarywithsourceOptions {
-    pub device: u64,
-    pub source: MemPtr,
-    pub length: u64,
-    pub options: MemPtr,
     pub ret_error: u64,
     pub ret_library: u64,
 }
