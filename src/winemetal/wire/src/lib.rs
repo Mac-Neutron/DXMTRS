@@ -3255,10 +3255,34 @@ pub const WMT_RETIRE_METAL_VIEW_FLAG_PARK: u32 = 1 << 0;
 
 // WMTViewSyncFlag
 pub const WMT_VIEW_SYNC_FLAG_FORCE_REFRESH: u32 = 1 << 0;
+pub const WMT_VIEW_SYNC_FLAG_MAIN_PANEL: u32 = 1 << 1;
+pub const WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT: u32 = 1 << 2;
+
+/// Pack source dimensions `(w, h)` (`1..=16384`) into `WMTViewSyncFlag`, or `0` if out of range.
+///
+/// Sets [`WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT`] alongside `(w - 1) & 0x3FFF` in bits `4..=17` and
+/// `(h - 1) & 0x3FFF` in bits `18..=31`.
+#[must_use]
+pub const fn pack_source_extent(w: u32, h: u32) -> u32 {
+    if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
+        return 0;
+    }
+    WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT | (((w - 1) & 0x3FFF) << 4) | (((h - 1) & 0x3FFF) << 18)
+}
+
+/// Unpack source dimensions from `WMTViewSyncFlag`, returning `None` when the extent flag is unset.
+#[must_use]
+pub const fn unpack_source_extent(flags: u32) -> Option<(u32, u32)> {
+    if flags & WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT == 0 {
+        return None;
+    }
+    Some((((flags >> 4) & 0x3FFF) + 1, ((flags >> 18) & 0x3FFF) + 1))
+}
 
 // WMTClientSurfaceReason
 pub const WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN: u32 = 1 << 0;
 pub const WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED: u32 = 1 << 1;
+pub const WMT_CLIENT_SURFACE_REASON_ATTACHED: u32 = 1 << 2;
 
 // WMTPresentedEventFlag
 pub const WMT_PRESENTED_EVENT_FLAG_PACED: u32 = 1 << 0;

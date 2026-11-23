@@ -22,6 +22,8 @@ use winemetal_wire::{
     WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE, WMTViewPollOut,
 };
 
+use super::display::ScreenPixels;
+
 /// How many polls may pass between asynchronous main-thread display refreshes.
 pub const HEADROOM_REFRESH_POLLS: u64 = 32;
 
@@ -57,6 +59,22 @@ pub struct AttachLatches {
     pub panel_max_hz: u32,
     pub screen_id: u32,
     pub client_surface: usize,
+    pub source_size: Option<(u32, u32)>,
+    pub screen_pixels: ScreenPixels,
+    pub panel_display: u32,
+}
+
+fn pack_size_u64(size: Option<(u32, u32)>) -> u64 {
+    match size {
+        Some((w, h)) if w != 0 && h != 0 => (u64::from(w) << 32) | u64::from(h),
+        _ => 0,
+    }
+}
+
+fn unpack_size_u64(bits: u64) -> Option<(u32, u32)> {
+    let w = u32::try_from(bits >> 32).expect("masked upper 32 bits fit u32");
+    let h = u32::try_from(bits & 0xffff_ffff).expect("masked lower 32 bits fit u32");
+    (w != 0 && h != 0).then_some((w, h))
 }
 
 /// Per-view display, HDR, occlusion, and latched dirty state.
@@ -67,6 +85,7 @@ pub struct Attachment {
     client_surface: usize,
     client_view_watch: AtomicUsize,
     attached_at: Instant,
+    drew_frame: AtomicBool,
     static_flags: u8,
     software_cursor_policy: u8,
     window: AtomicUsize,
@@ -77,6 +96,10 @@ pub struct Attachment {
     edr_potential_bits: AtomicU32,
     panel_max_hz: AtomicU32,
     backing_scale: AtomicU32,
+    screen_pixels: AtomicU64,
+    panel_display: AtomicU32,
+    drawable_capped: AtomicBool,
+    source_size: AtomicU64,
     headroom_refresh_pending: AtomicBool,
     polls_since_refresh: AtomicU64,
     undisplayed_paced: AtomicU32,
@@ -94,6 +117,7 @@ impl Attachment {
             client_surface: latches.client_surface,
             client_view_watch: AtomicUsize::new(0),
             attached_at: Instant::now(),
+            drew_frame: AtomicBool::new(false),
             static_flags: latches.static_flags,
             software_cursor_policy: latches.software_cursor_policy,
             window: AtomicUsize::new(0),
@@ -104,6 +128,10 @@ impl Attachment {
             edr_potential_bits: AtomicU32::new(latches.edr_potential.to_bits()),
             panel_max_hz: AtomicU32::new(latches.panel_max_hz),
             backing_scale: AtomicU32::new(latches.backing_scale.clamp(1, 8)),
+            screen_pixels: AtomicU64::new(latches.screen_pixels.pack()),
+            panel_display: AtomicU32::new(latches.panel_display),
+            drawable_capped: AtomicBool::new(false),
+            source_size: AtomicU64::new(pack_size_u64(latches.source_size)),
             headroom_refresh_pending: AtomicBool::new(false),
             polls_since_refresh: AtomicU64::new(0),
             undisplayed_paced: AtomicU32::new(0),
@@ -131,6 +159,48 @@ impl Attachment {
     #[must_use]
     pub const fn client_surface(&self) -> usize {
         self.client_surface
+    }
+
+    pub fn note_frame_submitted(&self) {
+        self.drew_frame.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn drew_frame(&self) -> bool {
+        self.drew_frame.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn screen_pixels(&self) -> ScreenPixels {
+        ScreenPixels::unpack(self.screen_pixels.load(Ordering::Relaxed))
+    }
+
+    pub fn set_screen_pixels(&self, pixels: &ScreenPixels) -> bool {
+        let packed = pixels.pack();
+        self.screen_pixels.swap(packed, Ordering::Relaxed) != packed
+    }
+
+    #[must_use]
+    pub fn panel_display(&self) -> u32 {
+        self.panel_display.load(Ordering::Relaxed)
+    }
+
+    pub fn set_panel_display(&self, display: u32) {
+        self.panel_display.store(display, Ordering::Relaxed);
+    }
+
+    pub fn note_drawable_capped(&self, capped: bool) -> bool {
+        self.drawable_capped.swap(capped, Ordering::Relaxed) != capped
+    }
+
+    #[must_use]
+    pub fn source_size(&self) -> Option<(u32, u32)> {
+        unpack_size_u64(self.source_size.load(Ordering::Relaxed))
+    }
+
+    pub fn set_source_size(&self, w: u32, h: u32) {
+        let packed = pack_size_u64((w != 0 && h != 0).then_some((w, h)));
+        self.source_size.store(packed, Ordering::Relaxed);
     }
 
     #[must_use]
@@ -365,22 +435,42 @@ pub fn live() -> Vec<Arc<Attachment>> {
     map.values().map(Arc::clone).collect()
 }
 
+/// What [`retain_newest_surface_on`] found on a window.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NewestSurface {
+    /// No live record on the window holds a surface, or the retain refused it.
+    None,
+    /// The newest record's device has not submitted a frame; its surface, not retained.
+    NotDrawn(usize),
+    /// The newest record's surface, with the reference the caller gives back.
+    Retained(usize),
+}
+
 /// Retain the newest live client surface on `hwnd` while holding the registry lock.
 pub fn retain_newest_surface_on(
     hwnd: u64,
     retain_fn: impl FnOnce(usize) -> usize,
-) -> Option<usize> {
+) -> NewestSurface {
     if hwnd == 0 {
-        return None;
+        return NewestSurface::None;
     }
     let map = lock_attachments();
-    let newest = map
+    let found = map
         .values()
         .filter(|att| att.hwnd == hwnd && att.client_surface != 0)
-        .max_by_key(|att| att.attached_at)?;
-    let retained = retain_fn(newest.client_surface);
+        .max_by_key(|att| att.attached_at)
+        .map(|newest| {
+            if newest.drew_frame() {
+                NewestSurface::Retained(retain_fn(newest.client_surface))
+            } else {
+                NewestSurface::NotDrawn(newest.client_surface)
+            }
+        });
     drop(map);
-    (retained != 0).then_some(retained)
+    match found {
+        Some(NewestSurface::Retained(0)) | None => NewestSurface::None,
+        Some(found) => found,
+    }
 }
 
 /// Set the client-surface dirty latch on `view` if the record is still live.

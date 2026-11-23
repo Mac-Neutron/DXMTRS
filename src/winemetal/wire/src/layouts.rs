@@ -7197,6 +7197,7 @@ const _: () = {
     assert!(crate::WMT_BLIT_OPTION_STENCIL_FROM_DEPTH_STENCIL == 2);
     assert!(crate::WMT_CAPTURE_DESTINATION_DEVELOPER_TOOLS == 1);
     assert!(crate::WMT_CAPTURE_DESTINATION_GPU_TRACE_DOCUMENT == 2);
+    assert!(crate::WMT_CLIENT_SURFACE_REASON_ATTACHED == 4);
     assert!(crate::WMT_CLIENT_SURFACE_REASON_CLIENT_AREA_CHANGED == 2);
     assert!(crate::WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN == 1);
     assert!(crate::WMT_COLOR_SPACE_BT2020 == 2);
@@ -7654,6 +7655,8 @@ const _: () = {
     assert!(crate::WMT_VIEW_POLL_FLAG_OCCLUDED == 4);
     assert!(crate::WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE == 2);
     assert!(crate::WMT_VIEW_SYNC_FLAG_FORCE_REFRESH == 1);
+    assert!(crate::WMT_VIEW_SYNC_FLAG_MAIN_PANEL == 2);
+    assert!(crate::WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT == 4);
     assert!(crate::WMT_VISIBILITY_RESULT_MODE_BOOLEAN == 1);
     assert!(crate::WMT_VISIBILITY_RESULT_MODE_COUNTING == 2);
     assert!(crate::WMT_VISIBILITY_RESULT_MODE_DISABLED == 0);

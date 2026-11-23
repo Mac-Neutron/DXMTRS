@@ -905,7 +905,11 @@ impl Lower<'_> {
         self.fog(c0)?;
         let exported = self.exported();
         if self.ps.key.flags.contains(VariantFlags::SRGB_WRITE) {
+            let linear_colors = self.ps.key.color_out_mask >> 4;
             for i in exported.clone() {
+                if linear_colors & (1 << i) != 0 {
+                    continue;
+                }
                 if let Some(t) = self.ps.colors.get(i).copied() {
                     self.srgb(t)?;
                 }
@@ -929,9 +933,13 @@ impl Lower<'_> {
     }
 
     /// The colour targets exported: written and attached, target 0 always.
+    ///
+    /// Bits `0..4` of `color_out_mask` carry the attached targets; bits `4..8` carry the per-RT
+    /// linear overrides under `SRGB_WRITE`.
     fn exported(&self) -> Vec<usize> {
         let written = self.program.color_out_mask().0;
-        let exported = (written & self.ps.key.color_out_mask) | 1;
+        let attached = self.ps.key.color_out_mask & 0x0F;
+        let exported = (written & attached) | 1;
         (0..RENDER_TARGETS)
             .filter(|i| exported & (1 << i) != 0)
             .filter_map(|i| usize::try_from(i).ok())
@@ -1018,19 +1026,30 @@ impl Lower<'_> {
                     let e = self.unary(FloatUnaryOp::Exp2, e)?;
                     self.emit(mov_sat(fdst(f, MASK_X), lane(e, 0), true))?;
                 }
-                // LINEAR: `range == 0 ? 0 : saturate((end - c) / range)`.
+                // LINEAR: `range == 0 ? (c < end ? 1 : 0) : saturate((end - c) / range)`.
                 _ => {
                     let (start, end) = (lane(params.clone(), 0), lane(params, 1));
                     let range = self.binary(FloatBinaryOp::Add, end.clone(), negate(start))?;
-                    let left = self.binary(FloatBinaryOp::Add, end, negate(c))?;
+                    let left = self.binary(FloatBinaryOp::Add, end.clone(), negate(c.clone()))?;
                     let q = self.binary(FloatBinaryOp::Div, left, range.clone())?;
                     let q = {
                         let s = self.scratch();
                         self.emit(mov_sat(fdst(s, MASK_X), lane(q, 0), true))?;
                         lane(ftemp(s), 0)
                     };
+                    let step = {
+                        let below = self.mask(FloatComparison::LessThan, c, end)?;
+                        let s = self.scratch();
+                        self.emit(movc(
+                            fdst(s, MASK_X),
+                            lane(below, 0),
+                            fsplat(1.0),
+                            fsplat(0.0),
+                        ))?;
+                        lane(ftemp(s), 0)
+                    };
                     let empty = self.mask(FloatComparison::Equal, range, fsplat(0.0))?;
-                    self.emit(movc(fdst(f, MASK_X), lane(empty, 0), fsplat(0.0), q))?;
+                    self.emit(movc(fdst(f, MASK_X), lane(empty, 0), step, q))?;
                 }
             }
         }

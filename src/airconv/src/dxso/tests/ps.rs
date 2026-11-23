@@ -817,7 +817,35 @@ fn table_fog_linear_exp_exp2_z_and_w() {
             );
             match mode {
                 1 | 2 => assert_eq!((exps, divides), (1, 0), "mode {mode}"),
-                _ => assert_eq!((exps, divides), (0, 1), "mode {mode}"),
+                _ => {
+                    assert_eq!((exps, divides), (0, 1), "mode {mode}");
+                    // Zero range steps at `end`: `range == 0 ? (c < end ? 1 : 0) : saturate((end - c) / range)`.
+                    let zero = 0.0_f32.to_bits();
+                    let one = 1.0_f32.to_bits();
+                    assert!(instructions(&l).any(|i| matches!(
+                        i,
+                        Instruction::FloatCompare(c)
+                            if c.cmp == FloatComparison::LessThan
+                                && fog(&c.src1, 1)
+                                && matches!(
+                                    &c.src1,
+                                    SrcOperand::ConstantBuffer { common, .. }
+                                        if common.swizzle.0 == [1; 4]
+                                )
+                    )));
+                    assert!(instructions(&l).any(|i| matches!(
+                        i,
+                        Instruction::FloatCompare(c)
+                            if c.cmp == FloatComparison::Equal
+                                && matches!(c.src1, SrcOperand::Immediate32 { value: [v, ..], .. } if v == zero)
+                    )));
+                    assert!(instructions(&l).any(|i| matches!(
+                        i,
+                        Instruction::MovConditional(m)
+                            if matches!(m.src0, SrcOperand::Immediate32 { value: [v, ..], .. } if v == one)
+                                && matches!(m.src1, SrcOperand::Immediate32 { value: [v, ..], .. } if v == zero)
+                    )));
+                }
             }
             // The blend toward `fog_data[0]`, alpha kept.
             assert!(
@@ -893,6 +921,44 @@ fn srgb_write() {
         ),
         0
     );
+}
+
+#[test]
+fn srgb_write_skips_linear_override_targets() {
+    let t = two_targets();
+    let encoded_regs = |out_mask: u8, expected_log2: usize| -> Vec<u32> {
+        let k = key(|k| {
+            k.flags = VariantFlags::SRGB_WRITE;
+            k.color_out_mask = out_mask;
+        });
+        let l = plowered(&t, k);
+        assert_eq!(render_targets(&l), vec![0, 1], "mask {out_mask:#b}");
+        assert_eq!(
+            count(
+                &l,
+                |i| matches!(i, Instruction::FloatUnaryOp(u) if u.op == FloatUnaryOp::Log2)
+            ),
+            expected_log2,
+            "mask {out_mask:#b}"
+        );
+        pmetallib(&t, k);
+        instructions(&l)
+            .filter_map(|i| match i {
+                Instruction::MovConditional(m) if mask(&m.dst) == 0b0111 => match m.dst {
+                    DstOperand::Temp { regid, .. } => Some(regid),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    let both = encoded_regs(0b0011, 2);
+    assert_eq!(both.len(), 2);
+    assert_ne!(both[0], both[1]);
+    // Bits 4..7 mark linear targets under `SRGB_WRITE`: bit 4 leaves RT 0 linear, bit 5 leaves RT 1 linear.
+    assert_eq!(encoded_regs(0b0001_0011, 1), vec![both[1]]);
+    assert_eq!(encoded_regs(0b0010_0011, 1), vec![both[0]]);
+    assert_eq!(encoded_regs(0b0011_0011, 0), Vec::<u32>::new());
 }
 
 #[test]
@@ -1235,6 +1301,9 @@ fn mrt_color_out_mask() {
         (0b0011, vec![0, 1]),
         (0b0111, vec![0, 1, 2]),
         (0b1101, vec![0, 2]),
+        // Bits 4..7 carry sRGB linear-override flags and never attach extra targets.
+        (0b1111_0001, vec![0]),
+        (0b1100_0011, vec![0, 1]),
     ] {
         let k = key(|k| k.color_out_mask = mask);
         assert_eq!(render_targets(&plowered(&t, k)), targets, "mask {mask:#b}");

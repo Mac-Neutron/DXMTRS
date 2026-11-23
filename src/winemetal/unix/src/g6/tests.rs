@@ -3,24 +3,31 @@ use core::{ffi::c_void, ptr};
 use objc2_core_graphics::CGMainDisplayID;
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLSharedEvent};
 use winemetal_wire::{
-    MemPtr, UnixcallGenericObjRet, UnixcallMtldrawableSetpresentedevent,
-    UnixcallQueryDisplaySetting, UnixcallUpdateDisplaySetting, UnixcallWmtViewSyncAndPoll,
-    WMT_COLOR_SPACE_INVALID, WMT_PRESENTED_EVENT_FLAG_PACED,
+    MemPtr, UnixcallGenericObjRet, UnixcallGenericObjUint64Noret,
+    UnixcallMtldrawableSetpresentedevent, UnixcallQueryDisplaySetting,
+    UnixcallUpdateDisplaySetting, UnixcallWmtViewSyncAndPoll, WMT_CLIENT_SURFACE_REASON_ATTACHED,
+    WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN, WMT_COLOR_SPACE_INVALID, WMT_PRESENTED_EVENT_FLAG_PACED,
     WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY, WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED,
     WMT_VIEW_POLL_FLAG_CURSOR_KICK, WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING,
     WMT_VIEW_POLL_FLAG_HDR_ACTIVE, WMT_VIEW_POLL_FLAG_OCCLUDED,
-    WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE, WMTHDRMetadata, WMTViewPollOut,
+    WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE, WMT_VIEW_SYNC_FLAG_FORCE_REFRESH,
+    WMT_VIEW_SYNC_FLAG_MAIN_PANEL, WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT, WMTHDRMetadata,
+    WMTViewPollOut, pack_source_extent, unpack_source_extent,
 };
 
 use super::{
     attachment::{
-        self, AttachLatches, CURSOR_POLICY_AUTO, STATIC_HDR_ENABLE, UNDISPLAYED_PACED_LIMIT,
+        self, AttachLatches, CURSOR_POLICY_AUTO, NewestSurface, STATIC_HDR_ENABLE,
+        UNDISPLAYED_PACED_LIMIT, retain_newest_surface_on,
     },
     cursor_overlay::sprite_hash,
-    display::{query_display_setting, update_display_setting, xy},
+    display::{
+        ScreenPixels, backing_pixels, native_panel_pixels, panel_drawable_size,
+        query_display_setting, scaled_down_to_panel, update_display_setting, xy,
+    },
     window::{
         detach_metal_view_if_attached, mtl_drawable_set_presented_event,
-        wmt_declare_latency_critical_activity, wmt_view_sync_and_poll,
+        wmt_declare_latency_critical_activity, wmt_present_client_surface, wmt_view_sync_and_poll,
     },
     *,
 };
@@ -163,6 +170,9 @@ fn view_sync_and_poll_reads_and_clears_latched_flags() {
             panel_max_hz: 120,
             screen_id: 0,
             client_surface: 0,
+            source_size: None,
+            screen_pixels: ScreenPixels::UNKNOWN,
+            panel_display: 0,
         },
     );
     assert!(prev.is_none());
@@ -237,6 +247,9 @@ fn presented_event_tracks_undisplayed_run_and_signals_missing_drawable() {
             panel_max_hz: 60,
             screen_id: 0,
             client_surface: 0,
+            source_size: None,
+            screen_pixels: ScreenPixels::UNKNOWN,
+            panel_display: 0,
         },
     );
     att.set_window_occluded(true);
@@ -317,4 +330,376 @@ fn cursor_sprite_hash_distinguishes_hotspot_and_avoids_zero() {
     assert_ne!(h3, 0);
     assert_ne!(h1, h2);
     assert_ne!(h1, h3);
+}
+
+const AIR_POINTS: (u32, u32) = (1470, 956);
+const AIR_BACKING: (u32, u32) = (2940, 1912);
+const AIR_PANEL: (u32, u32) = (2560, 1664);
+
+const MBP16_BACKING: (u32, u32) = (4112, 2658);
+const MBP16_PANEL: (u32, u32) = (3456, 2234);
+
+#[test]
+fn panel_drawable_size_caps_scaled_fullscreen_and_letterbox_to_panel() {
+    assert_eq!(
+        panel_drawable_size(
+            AIR_BACKING,
+            Some(AIR_BACKING),
+            Some(AIR_PANEL),
+            Some((1280, 720)),
+        ),
+        AIR_PANEL
+    );
+    assert_eq!(
+        panel_drawable_size(
+            MBP16_BACKING,
+            Some(MBP16_BACKING),
+            Some(MBP16_PANEL),
+            Some((1920, 1080)),
+        ),
+        MBP16_PANEL
+    );
+    // A 16:9 letterboxed view across a scaled Air screen caps proportionally.
+    assert_eq!(
+        panel_drawable_size(
+            (2940, 1654),
+            Some(AIR_BACKING),
+            Some(AIR_PANEL),
+            Some((1920, 1080)),
+        ),
+        (2560, 1439)
+    );
+}
+
+#[test]
+fn panel_drawable_size_caps_window_and_checks_source_fit_and_extremes() {
+    assert_eq!(
+        panel_drawable_size(
+            (2940, 1800),
+            Some(AIR_BACKING),
+            Some(AIR_PANEL),
+            Some((1470, 900)),
+        ),
+        (2560, 1567)
+    );
+    let cap = |source| {
+        panel_drawable_size(
+            AIR_BACKING,
+            Some(AIR_BACKING),
+            Some(AIR_PANEL),
+            Some(source),
+        )
+    };
+    assert_eq!(cap(AIR_PANEL), AIR_PANEL);
+    assert_eq!(cap((2561, 1000)), AIR_BACKING);
+    assert_eq!(cap((1000, 1665)), AIR_BACKING);
+    assert_eq!(cap(AIR_BACKING), AIR_BACKING);
+
+    // Unknown/zero/non-shrinking inputs keep `natural`.
+    assert_eq!(
+        panel_drawable_size(AIR_BACKING, Some(AIR_BACKING), None, Some((1024, 768))),
+        AIR_BACKING
+    );
+    assert_eq!(
+        panel_drawable_size(AIR_BACKING, None, Some(AIR_PANEL), Some((1024, 768))),
+        AIR_BACKING
+    );
+    assert_eq!(
+        panel_drawable_size(AIR_BACKING, Some(AIR_BACKING), Some(AIR_PANEL), None),
+        AIR_BACKING
+    );
+    assert_eq!(
+        panel_drawable_size(
+            AIR_BACKING,
+            Some((0, 1912)),
+            Some(AIR_PANEL),
+            Some((1024, 768))
+        ),
+        AIR_BACKING
+    );
+    assert_eq!(
+        panel_drawable_size((1, 1), Some(AIR_BACKING), Some(AIR_PANEL), Some((1, 1))),
+        (1, 1)
+    );
+    assert_eq!(
+        panel_drawable_size(
+            (1200, 800),
+            Some((1470, 956)),
+            Some(AIR_PANEL),
+            Some((640, 480))
+        ),
+        (1200, 800)
+    );
+
+    // Extreme u32::MAX inputs do not overflow.
+    let max = (u32::MAX, u32::MAX);
+    let panel = (u32::MAX - 1, u32::MAX - 1);
+    assert_eq!(
+        panel_drawable_size(max, Some(max), Some(panel), Some((1, 1))),
+        panel
+    );
+    assert_eq!(
+        panel_drawable_size(max, Some((1, 1)), Some(max), Some((1, 1))),
+        max
+    );
+}
+
+#[test]
+fn backing_scaled_down_and_screen_pixels_round_trip() {
+    assert_eq!(backing_pixels(Some(AIR_POINTS), 2.0), Some(AIR_BACKING));
+    assert_eq!(backing_pixels(Some(AIR_POINTS), 1.0), Some(AIR_POINTS));
+    assert_eq!(backing_pixels(None, 2.0), None);
+    assert_eq!(backing_pixels(Some(AIR_POINTS), 0.0), None);
+
+    assert!(scaled_down_to_panel(Some(AIR_BACKING), Some(AIR_PANEL)));
+    assert!(scaled_down_to_panel(Some((2561, 1000)), Some(AIR_PANEL)));
+    assert!(!scaled_down_to_panel(Some(AIR_PANEL), Some(AIR_PANEL)));
+    assert!(!scaled_down_to_panel(Some(AIR_POINTS), Some(AIR_PANEL)));
+    assert!(!scaled_down_to_panel(None, Some(AIR_PANEL)));
+    assert!(!scaled_down_to_panel(Some(AIR_BACKING), None));
+
+    let round = ScreenPixels::unpack(
+        ScreenPixels {
+            panel: Some(AIR_PANEL),
+            frame: Some(AIR_POINTS),
+        }
+        .pack(),
+    );
+    assert_eq!(
+        (round.panel, round.frame),
+        (Some(AIR_PANEL), Some(AIR_POINTS))
+    );
+
+    let unknown = ScreenPixels::unpack(ScreenPixels::UNKNOWN.pack());
+    assert_eq!((unknown.panel, unknown.frame), (None, None));
+
+    let overflow = ScreenPixels::unpack(
+        ScreenPixels {
+            panel: Some((70_000, 1664)),
+            frame: Some(AIR_POINTS),
+        }
+        .pack(),
+    );
+    assert_eq!((overflow.panel, overflow.frame), (None, Some(AIR_POINTS)));
+}
+
+#[test]
+fn source_extent_pack_and_unpack_round_trip_and_bounds() {
+    let packed = pack_source_extent(1920, 1080);
+    assert_ne!(packed & WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT, 0);
+    assert_eq!(unpack_source_extent(packed), Some((1920, 1080)));
+    assert_eq!(
+        unpack_source_extent(packed | WMT_VIEW_SYNC_FLAG_FORCE_REFRESH),
+        Some((1920, 1080))
+    );
+
+    assert_eq!(unpack_source_extent(pack_source_extent(1, 1)), Some((1, 1)));
+    assert_eq!(
+        unpack_source_extent(pack_source_extent(16_384, 16_384)),
+        Some((16_384, 16_384))
+    );
+
+    assert_eq!(pack_source_extent(0, 1080), 0);
+    assert_eq!(pack_source_extent(1920, 0), 0);
+    assert_eq!(pack_source_extent(16_385, 1080), 0);
+    assert_eq!(pack_source_extent(1920, 16_385), 0);
+
+    assert_eq!(unpack_source_extent(0), None);
+    assert_eq!(unpack_source_extent(WMT_VIEW_SYNC_FLAG_MAIN_PANEL), None);
+    assert_eq!(
+        unpack_source_extent(!WMT_VIEW_SYNC_FLAG_SOURCE_EXTENT),
+        None
+    );
+}
+
+#[test]
+fn retain_newest_surface_gates_on_first_submitted_frame() {
+    let hwnd = 0x7001u64;
+    let view1 = 0x1000_0050usize;
+    let view2 = 0x1000_0060usize;
+    let latches = |surface| AttachLatches {
+        hwnd,
+        static_flags: 0,
+        hdr_active: false,
+        software_cursor_policy: CURSOR_POLICY_AUTO,
+        backing_scale: 1,
+        edr_current: 1.0,
+        edr_potential: 1.0,
+        panel_max_hz: 60,
+        screen_id: 0,
+        client_surface: surface,
+        source_size: None,
+        screen_pixels: ScreenPixels::UNKNOWN,
+        panel_display: 0,
+    };
+
+    assert_eq!(retain_newest_surface_on(0, |s| s), NewestSurface::None);
+    assert_eq!(retain_newest_surface_on(hwnd, |s| s), NewestSurface::None);
+
+    let (att1, _) = attachment::register(view1, 0x1000_0051, &latches(101));
+    assert!(!att1.drew_frame());
+    let mut called = false;
+    assert_eq!(
+        retain_newest_surface_on(hwnd, |s| {
+            called = true;
+            s
+        }),
+        NewestSurface::NotDrawn(101)
+    );
+    assert!(!called);
+
+    att1.note_frame_submitted();
+    assert!(att1.drew_frame());
+    assert_eq!(
+        retain_newest_surface_on(hwnd, |s| s + 1000),
+        NewestSurface::Retained(1101)
+    );
+    assert_eq!(retain_newest_surface_on(hwnd, |_| 0), NewestSurface::None);
+
+    let (att2, _) = attachment::register(view2, 0x1000_0061, &latches(202));
+    assert!(!att2.drew_frame());
+    assert_eq!(
+        retain_newest_surface_on(hwnd, |s| s + 1000),
+        NewestSurface::NotDrawn(202)
+    );
+
+    // Retiring the undrawn newer attachment leaves the drawn older one active.
+    assert!(detach_metal_view_if_attached(view2 as u64).is_some());
+    assert_eq!(
+        retain_newest_surface_on(hwnd, |s| s + 1000),
+        NewestSurface::Retained(1101)
+    );
+    assert!(detach_metal_view_if_attached(view1 as u64).is_some());
+}
+
+#[test]
+fn view_sync_and_poll_main_panel_and_source_extent() {
+    let mut out = WMTViewPollOut {
+        drawable_width: 99,
+        drawable_height: 99,
+        backing_scale: 9,
+        edr_current: 9.0,
+        edr_potential: 9.0,
+        panel_max_hz: 9,
+        flags: 9,
+        reserved: 9,
+    };
+    let mut panel_args = UnixcallWmtViewSyncAndPoll {
+        view: 0,
+        layer: 0,
+        out: MemPtr {
+            ptr: ptr::from_mut(&mut out).expose_provenance() as u64,
+        },
+        flags: WMT_VIEW_SYNC_FLAG_MAIN_PANEL,
+        reserved: 0,
+    };
+    // SAFETY: live stack params block for pre-device slot 161 panel query.
+    let status = unsafe { wmt_view_sync_and_poll(ptr::from_mut(&mut panel_args).cast::<c_void>()) };
+    assert_eq!(status, 0);
+    let expected = native_panel_pixels(CGMainDisplayID());
+    assert_eq!((out.drawable_width, out.drawable_height), expected);
+    assert_eq!(out.backing_scale, 1);
+    assert_eq!(out.edr_current.to_bits(), 1.0_f32.to_bits());
+    assert_eq!(out.edr_potential.to_bits(), 1.0_f32.to_bits());
+    assert_eq!(out.panel_max_hz, 0);
+    assert_eq!(out.flags, 0);
+    assert_eq!(out.reserved, 0);
+
+    let mut null_args = UnixcallWmtViewSyncAndPoll {
+        view: 0,
+        layer: 0,
+        out: MemPtr::NULL,
+        flags: WMT_VIEW_SYNC_FLAG_MAIN_PANEL,
+        reserved: 0,
+    };
+    // SAFETY: slot 161 panel query with null output pointer.
+    let null_status =
+        unsafe { wmt_view_sync_and_poll(ptr::from_mut(&mut null_args).cast::<c_void>()) };
+    assert_eq!(null_status, 0);
+
+    let view = 0x1000_0070usize;
+    let (att, _) = attachment::register(
+        view,
+        0x1000_0071,
+        &AttachLatches {
+            hwnd: 0x7002,
+            static_flags: 0,
+            hdr_active: false,
+            software_cursor_policy: CURSOR_POLICY_AUTO,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            screen_id: 0,
+            client_surface: 0,
+            source_size: Some((1280, 720)),
+            screen_pixels: ScreenPixels::UNKNOWN,
+            panel_display: 0,
+        },
+    );
+    assert_eq!(att.source_size(), Some((1280, 720)));
+    let mut extent_args = UnixcallWmtViewSyncAndPoll {
+        view: view as u64,
+        layer: 0,
+        out: MemPtr::NULL,
+        flags: pack_source_extent(1920, 1080),
+        reserved: 0,
+    };
+    // SAFETY: live stack params block for slot 161 source-extent update.
+    let extent_status =
+        unsafe { wmt_view_sync_and_poll(ptr::from_mut(&mut extent_args).cast::<c_void>()) };
+    assert_eq!(extent_status, 0);
+    assert_eq!(att.source_size(), Some((1920, 1080)));
+    assert!(!att.drew_frame());
+    let mut non_frame_args = UnixcallGenericObjUint64Noret {
+        handle: view as u64,
+        arg: u64::from(WMT_CLIENT_SURFACE_REASON_VIEW_HIDDEN),
+    };
+    // SAFETY: live stack params block for slot 162 with non-ATTACHED reason.
+    let non_frame_status =
+        unsafe { wmt_present_client_surface(ptr::from_mut(&mut non_frame_args).cast::<c_void>()) };
+    assert_eq!(non_frame_status, 0);
+    assert!(!att.drew_frame());
+
+    let mut attached_args = UnixcallGenericObjUint64Noret {
+        handle: view as u64,
+        arg: u64::from(WMT_CLIENT_SURFACE_REASON_ATTACHED),
+    };
+    // SAFETY: live stack params block for slot 162 with ATTACHED reason.
+    let attached_status =
+        unsafe { wmt_present_client_surface(ptr::from_mut(&mut attached_args).cast::<c_void>()) };
+    assert_eq!(attached_status, 0);
+    assert!(att.drew_frame());
+    assert!(detach_metal_view_if_attached(view as u64).is_some());
+
+    let view2 = 0x1000_0080usize;
+    let (att2, _) = attachment::register(
+        view2,
+        0x1000_0081,
+        &AttachLatches {
+            hwnd: 0x7003,
+            static_flags: 0,
+            hdr_active: false,
+            software_cursor_policy: CURSOR_POLICY_AUTO,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            screen_id: 0,
+            client_surface: 0,
+            source_size: None,
+            screen_pixels: ScreenPixels::UNKNOWN,
+            panel_display: 0,
+        },
+    );
+    let mut legacy_args = UnixcallGenericObjUint64Noret {
+        handle: view2 as u64,
+        arg: 0,
+    };
+    // SAFETY: live stack params block for slot 162 legacy zero-reason mark.
+    let legacy_status =
+        unsafe { wmt_present_client_surface(ptr::from_mut(&mut legacy_args).cast::<c_void>()) };
+    assert_eq!(legacy_status, 0);
+    assert!(att2.drew_frame());
+    assert!(detach_metal_view_if_attached(view2 as u64).is_some());
 }

@@ -2302,11 +2302,14 @@ enum WMTRetireMetalViewFlag : uint32_t {
 
 enum WMTViewSyncFlag : uint32_t {
   WMTViewSyncFlagForceRefresh = 1 << 0,
+  WMTViewSyncFlagMainPanel = 1 << 1,
+  WMTViewSyncFlagSourceExtent = 1 << 2,
 };
 
 enum WMTClientSurfaceReason : uint32_t {
   WMTClientSurfaceReasonViewHidden = 1 << 0,
   WMTClientSurfaceReasonClientAreaChanged = 1 << 1,
+  WMTClientSurfaceReasonAttached = 1 << 2,
 };
 
 enum WMTPresentedEventFlag : uint32_t {

@@ -11,9 +11,10 @@ use objc2::{
     rc::{Retained, autoreleasepool},
     runtime::NSObjectProtocol,
 };
-use objc2_core_foundation::{CFData, CFRetained, CFString, CFType};
+use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFString, CFType};
 use objc2_core_graphics::{
-    CGDirectDisplayID, CGDisplayMirrorsDisplay, CGGetOnlineDisplayList, CGMainDisplayID,
+    CGDirectDisplayID, CGDisplayCopyAllDisplayModes, CGDisplayMirrorsDisplay, CGDisplayMode,
+    CGGetOnlineDisplayList, CGMainDisplayID, kCGDisplayShowDuplicateLowResolutionModes,
     kCGNullDirectDisplay,
 };
 use objc2_foundation::ns_string;
@@ -27,7 +28,7 @@ use winemetal_wire::{
 use super::appkit::{Screen, View};
 use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params},
-    float_cast::{f64_to_f32, u64_to_u32},
+    float_cast::{f64_to_f32, f64_to_u32_saturating, u64_to_u32},
     handle::obj,
 };
 
@@ -367,4 +368,150 @@ pub unsafe extern "C-unwind" fn query_display_setting_for_layer(args: *mut c_voi
             f64_to_f32(screen.max_potential_edr());
     });
     STATUS_SUCCESS
+}
+
+/// The sizes of the screen under a window, which cap its drawable.
+///
+/// Published together by the main thread and read together when sizing the drawable, so the pair
+/// always names one screen.
+pub struct ScreenPixels {
+    /// The panel's native pixel size, `None` = unknown.
+    pub panel: Option<(u32, u32)>,
+    /// The screen's frame in points, `None` = unknown.
+    pub frame: Option<(u32, u32)>,
+}
+
+impl ScreenPixels {
+    /// Nothing known yet: the drawable keeps the layer's own size.
+    pub const UNKNOWN: Self = Self {
+        panel: None,
+        frame: None,
+    };
+
+    /// Fold both sizes into one word, 16 bits per dimension; a size that does not fit is unknown.
+    #[must_use]
+    pub fn pack(&self) -> u64 {
+        let half = |size: Option<(u32, u32)>| {
+            size.and_then(|(width, height)| {
+                Some(
+                    (u64::from(u16::try_from(width).ok()?) << 16)
+                        | u64::from(u16::try_from(height).ok()?),
+                )
+            })
+            .unwrap_or(0)
+        };
+        (half(self.panel) << 32) | half(self.frame)
+    }
+
+    /// Read back what [`Self::pack`] wrote.
+    #[must_use]
+    pub fn unpack(bits: u64) -> Self {
+        let half = |half: u64| {
+            let width = u32::try_from((half >> 16) & 0xffff).unwrap_or(0);
+            let height = u32::try_from(half & 0xffff).unwrap_or(0);
+            (width != 0 && height != 0).then_some((width, height))
+        };
+        Self {
+            panel: half(bits >> 32),
+            frame: half(bits & 0xffff_ffff),
+        }
+    }
+}
+
+/// A screen frame in points, in the pixels of a layer at `scale`; `None` when unknown or empty.
+#[must_use]
+pub fn backing_pixels(frame: Option<(u32, u32)>, scale: f64) -> Option<(u32, u32)> {
+    let (width, height) = frame?;
+    let pixels = (
+        f64_to_u32_saturating((f64::from(width) * scale).round()),
+        f64_to_u32_saturating((f64::from(height) * scale).round()),
+    );
+    (pixels.0 != 0 && pixels.1 != 0).then_some(pixels)
+}
+
+/// Whether the display scales the backing store down to the panel, in either axis.
+///
+/// That is when the drawable can be capped below the layer's size and the compositor magnifies it
+/// back, so the layer's magnification filter is linear then and nearest otherwise.
+#[must_use]
+pub const fn scaled_down_to_panel(backing: Option<(u32, u32)>, panel: Option<(u32, u32)>) -> bool {
+    matches!(
+        (backing, panel),
+        (Some((backing_w, backing_h)), Some((panel_w, panel_h)))
+            if backing_w > panel_w || backing_h > panel_h
+    )
+}
+
+/// The drawable size for a layer whose own size is `natural`, capped at the panel's pixels.
+///
+/// In a scaled display mode the screen's backing store has more pixels than the panel, and the
+/// display scales every composited frame down to it. The cap scales `natural` per axis by panel
+/// over backing, so a layer covering the whole screen comes out at exactly the panel size, and
+/// the compositor takes the rest of the way. It applies only when it shrinks the drawable and the
+/// source still fits in the capped size. Any unknown input leaves `natural`, and nothing is ever
+/// enlarged.
+#[must_use]
+pub fn panel_drawable_size(
+    natural: (u32, u32),
+    backing: Option<(u32, u32)>,
+    panel: Option<(u32, u32)>,
+    source: Option<(u32, u32)>,
+) -> (u32, u32) {
+    let (Some((backing_w, backing_h)), Some((panel_w, panel_h)), Some((source_w, source_h))) =
+        (backing, panel, source)
+    else {
+        return natural;
+    };
+    if backing_w == 0 || backing_h == 0 {
+        return natural;
+    }
+    let scale = |size: u32, num: u32, den: u32| {
+        let scaled =
+            (u128::from(size) * u128::from(num) * 2 + u128::from(den)) / (u128::from(den) * 2);
+        u32::try_from(scaled.min(u128::from(size)))
+            .unwrap_or(size)
+            .max(1)
+    };
+    let (natural_w, natural_h) = natural;
+    let capped_w = scale(natural_w, panel_w, backing_w).min(natural_w);
+    let capped_h = scale(natural_h, panel_h, backing_h).min(natural_h);
+    let shrinks = natural_w > capped_w || natural_h > capped_h;
+    let source_fits = source_w <= capped_w && source_h <= capped_h;
+    if shrinks && source_fits {
+        (capped_w, capped_h)
+    } else {
+        natural
+    }
+}
+
+/// The native pixel size of `display`, or `(0, 0)` when unavailable.
+///
+/// A display flags one native mode per refresh rate, and with the duplicate low-resolution modes
+/// listed also the scaled modes whose pixels are the panel's, so the largest flagged pixel size
+/// is taken. Pure CoreGraphics, safe to call on any thread.
+#[must_use]
+pub fn native_panel_pixels(display: u32) -> (u32, u32) {
+    native_panel_pixels_opt(display).unwrap_or((0, 0))
+}
+
+fn native_panel_pixels_opt(display: u32) -> Option<(u32, u32)> {
+    /// `kDisplayModeNativeFlag` (`IOKit` `IOGraphicsTypes.h`), which no `objc2` crate binds.
+    const DISPLAY_MODE_NATIVE_FLAG: u32 = 0x0200_0000;
+
+    // SAFETY: `kCGDisplayShowDuplicateLowResolutionModes` is a static CoreGraphics string key.
+    let key = unsafe { kCGDisplayShowDuplicateLowResolutionModes };
+    let options = CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[CFBoolean::new(true)]);
+    // SAFETY: `options` maps `key` to `CFBoolean`, as CoreGraphics documents for display modes.
+    let modes = unsafe { CGDisplayCopyAllDisplayModes(display, Some(options.as_ref())) }?;
+    // SAFETY: CoreGraphics documents every element of the returned array as a `CGDisplayMode`.
+    let modes = unsafe { modes.cast_unchecked::<CGDisplayMode>() };
+    modes
+        .iter()
+        .filter(|mode| CGDisplayMode::io_flags(Some(mode)) & DISPLAY_MODE_NATIVE_FLAG != 0)
+        .filter_map(|mode| {
+            let width = u32::try_from(CGDisplayMode::pixel_width(Some(&mode))).ok()?;
+            let height = u32::try_from(CGDisplayMode::pixel_height(Some(&mode))).ok()?;
+            (width != 0 && height != 0).then_some((width, height))
+        })
+        .max_by_key(|&(width, height)| u64::from(width) * u64::from(height))
 }

@@ -33,22 +33,27 @@ use objc2_foundation::{
     NSString, NSThread, ns_string,
 };
 use objc2_metal::{MTLDevice, MTLDrawable, MTLPixelFormat, MTLSharedEvent};
-use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer, CATransaction, kCAGravityResizeAspect};
+use objc2_quartz_core::{
+    CAMetalDrawable, CAMetalLayer, CATransaction, kCAFilterLinear, kCAFilterNearest,
+    kCAGravityResize,
+};
 use winemetal_wire::{
     UnixcallGenericObjRet, UnixcallGenericObjUint64Noret, UnixcallMtldrawableSetpresentedevent,
-    UnixcallWmtAttachMetalView, UnixcallWmtViewSyncAndPoll, WMT_PRESENTED_EVENT_FLAG_PACED,
-    WMT_RETIRE_METAL_VIEW_FLAG_PARK, WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE,
-    WMT_VIEW_ATTACH_FLAG_HDR_ENABLE, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF,
-    WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON, WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, WMTViewAttachDesc,
-    WMTViewPollOut,
+    UnixcallWmtAttachMetalView, UnixcallWmtViewSyncAndPoll, WMT_CLIENT_SURFACE_REASON_ATTACHED,
+    WMT_PRESENTED_EVENT_FLAG_PACED, WMT_RETIRE_METAL_VIEW_FLAG_PARK,
+    WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE, WMT_VIEW_ATTACH_FLAG_HDR_ENABLE,
+    WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_OFF, WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON,
+    WMT_VIEW_SYNC_FLAG_FORCE_REFRESH, WMT_VIEW_SYNC_FLAG_MAIN_PANEL, WMTViewAttachDesc,
+    WMTViewPollOut, unpack_source_extent,
 };
 
 use super::{
     attachment::{
         self, AttachLatches, Attachment, CURSOR_POLICY_AUTO, CURSOR_POLICY_OFF, CURSOR_POLICY_ON,
-        STATIC_ACCURATE_COLORSPACE, STATIC_HDR_ENABLE,
+        NewestSurface, STATIC_ACCURATE_COLORSPACE, STATIC_HDR_ENABLE,
     },
     client_surface, cursor_overlay, delegate_forward,
+    display::{self, ScreenPixels},
 };
 use crate::{
     ffi::{AbortOnPanic, STATUS_SUCCESS, mem_mut, mem_ref, params},
@@ -771,31 +776,86 @@ fn apply_layer_color(layer: &CAMetalLayer, screen: Option<&NSScreen>, hdr: bool,
     layer.setWantsExtendedDynamicRangeContent(hdr);
 }
 
-fn natural_drawable_size(layer: &CAMetalLayer) -> (u32, u32) {
-    let bounds = layer.bounds();
-    let scale = layer.contentsScale();
-    (
-        f64_to_u32_saturating((bounds.size.width * scale).round()),
-        f64_to_u32_saturating((bounds.size.height * scale).round()),
-    )
+fn screen_frame_points(screen: &NSScreen) -> Option<(u32, u32)> {
+    let size = screen.frame().size;
+    let width = f64_to_u32_saturating(size.width.round());
+    let height = f64_to_u32_saturating(size.height.round());
+    (width != 0 && height != 0).then_some((width, height))
 }
 
-fn sync_drawable_size(layer: &CAMetalLayer) -> (u32, u32) {
-    let (native_w, native_h) = natural_drawable_size(layer);
-    if native_w == 0 || native_h == 0 {
-        return (native_w, native_h);
+fn panel_pixels_for_display(display: u32) -> Option<(u32, u32)> {
+    if display == 0 {
+        return None;
     }
+    let (pw, ph) = display::native_panel_pixels(display);
+    (pw != 0 && ph != 0).then_some((pw, ph))
+}
+
+fn apply_magnification_filter(layer: &CAMetalLayer, pixels: &ScreenPixels) {
+    let backing = display::backing_pixels(pixels.frame, layer.contentsScale());
+    let scaled_down = display::scaled_down_to_panel(backing, pixels.panel);
+    let filter = if scaled_down {
+        // SAFETY: process-lifetime CoreAnimation filter constant.
+        unsafe { kCAFilterLinear }
+    } else {
+        // SAFETY: process-lifetime CoreAnimation filter constant.
+        unsafe { kCAFilterNearest }
+    };
+    if *layer.magnificationFilter() != *filter {
+        layer.setMagnificationFilter(filter);
+    }
+}
+
+fn follow_screen_pixels(att: &Attachment, screen: &NSScreen, layer: &CAMetalLayer, display: u32) {
+    let panel = if display == 0 {
+        att.set_panel_display(0);
+        None
+    } else if display == att.panel_display() {
+        att.screen_pixels().panel
+    } else {
+        att.set_panel_display(display);
+        panel_pixels_for_display(display)
+    };
+    let pixels = ScreenPixels {
+        panel,
+        frame: screen_frame_points(screen),
+    };
+    att.set_screen_pixels(&pixels);
+    apply_magnification_filter(layer, &pixels);
+}
+
+fn sync_drawable_size(
+    layer: &CAMetalLayer,
+    screen: &ScreenPixels,
+    source: Option<(u32, u32)>,
+    att: Option<&Attachment>,
+) -> (u32, u32) {
+    let bounds = layer.bounds();
+    let scale = layer.contentsScale();
+    let natural = (
+        f64_to_u32_saturating((bounds.size.width * scale).round()),
+        f64_to_u32_saturating((bounds.size.height * scale).round()),
+    );
+    if natural.0 == 0 || natural.1 == 0 {
+        return natural;
+    }
+    let backing = display::backing_pixels(screen.frame, scale);
+    let drawable = display::panel_drawable_size(natural, backing, screen.panel, source);
+    if let Some(att) = att {
+        att.note_drawable_capped(drawable != natural);
+    }
+    let (native_w, native_h) = drawable;
     let current = layer.drawableSize();
     let width = f64::from(native_w);
     let height = f64::from(native_h);
     if (current.width - width).abs() <= 0.0 && (current.height - height).abs() <= 0.0 {
-        return (native_w, native_h);
+        return drawable;
     }
     CATransaction::begin();
     CATransaction::setDisableActions(true);
     layer.setDrawableSize(CGSize { width, height });
     CATransaction::commit();
-    (native_w, native_h)
+    drawable
 }
 
 fn rect_covers(inner: CGRect, outer: CGRect) -> bool {
@@ -969,6 +1029,7 @@ fn install_screen_params_filter(mtm: MainThreadMarker) {
                 return;
             }
             for att in attachment::live() {
+                att.set_panel_display(0);
                 refresh_attachment_on_main(&att);
             }
             let delegate_ptr = WINE_APP_DELEGATE_PTR.load(Ordering::Acquire);
@@ -1055,6 +1116,7 @@ fn refresh_attachment_on_main(att: &Arc<Attachment>) {
         if let Some(layer) = attachment::retain_layer(att, mtm) {
             let scale = f64_to_u32_saturating(layer.contentsScale().round()).clamp(1, 8);
             att.set_backing_scale(scale);
+            follow_screen_pixels(att, screen, &layer, screen_id);
         }
         if let Some(v) = view_obj.as_deref() {
             clear_covered_window_layers(v);
@@ -1083,7 +1145,10 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
             return STATUS_SUCCESS;
         };
         // SAFETY: caller provides readable `WMTViewAttachDesc` or null.
-        let attach_flags = unsafe { mem_ref::<WMTViewAttachDesc>(p.desc) }.map_or(0, |d| d.flags);
+        let attach_desc = unsafe { mem_ref::<WMTViewAttachDesc>(p.desc) }.copied();
+        let attach_flags = attach_desc.map_or(0, |d| d.flags);
+        let source_size = attach_desc
+            .and_then(|d| (d.width != 0 && d.height != 0).then_some((d.width, d.height)));
         let hdr_enable = attach_flags & WMT_VIEW_ATTACH_FLAG_HDR_ENABLE != 0;
         let accurate = attach_flags & WMT_VIEW_ATTACH_FLAG_COLOR_SPACE_ACCURATE != 0;
         let cursor_policy = if attach_flags & WMT_VIEW_ATTACH_FLAG_SOFTWARE_CURSOR_ON != 0 {
@@ -1127,6 +1192,8 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
         let mut dw = 0u32;
         let mut dh = 0u32;
         let mut screen_id = 0u32;
+        let mut panel_display = 0u32;
+        let mut screen_pixels = ScreenPixels::UNKNOWN;
 
         run_on_main_thread_sync(|| {
             let Some(mtm) = MainThreadMarker::new() else {
@@ -1162,6 +1229,11 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
                 panel_max_hz = screen_max_hz(s);
                 screen_id = screen_number(s);
                 hdr_active = layer_hdr_active(potential, hdr_enable);
+                panel_display = screen_id;
+                screen_pixels = ScreenPixels {
+                    panel: panel_pixels_for_display(screen_id),
+                    frame: screen_frame_points(s),
+                };
             }
             client_surface::bypass_present_hook(layer as *mut c_void, can_present, mtm);
             // SAFETY: `layer` is owned by `view` and stays alive for this call.
@@ -1175,8 +1247,9 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
             apply_layer_color(&layer_obj, screen.as_deref(), hdr_active, accurate);
             layer_obj.setOpaque(true);
             // SAFETY: process-lifetime CoreAnimation constant.
-            let gravity = unsafe { kCAGravityResizeAspect };
+            let gravity = unsafe { kCAGravityResize };
             layer_obj.setContentsGravity(gravity);
+            apply_magnification_filter(&layer_obj, &screen_pixels);
             let backdrop = CGColor::new_generic_gray(0.0, 1.0);
             layer_obj.setBackgroundColor(Some(&backdrop));
             layer_obj.setFramebufferOnly(true);
@@ -1185,7 +1258,7 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
             layer_obj.setAllowsNextDrawableTimeout(true);
             layer_obj.setPresentsWithTransaction(false);
             if cocoa_ok {
-                (dw, dh) = sync_drawable_size(&layer_obj);
+                (dw, dh) = sync_drawable_size(&layer_obj, &screen_pixels, source_size, None);
                 if let Some(v) = view_obj.as_deref() {
                     clear_covered_window_layers(v);
                 }
@@ -1214,6 +1287,9 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
                 panel_max_hz,
                 screen_id,
                 client_surface,
+                source_size,
+                screen_pixels,
+                panel_display,
             },
         );
         if let Some(stale) = stale {
@@ -1241,9 +1317,6 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
                 install_occlusion_observer_once();
             });
         }
-        if let Some(calls) = &surface_calls {
-            calls.present(client_surface);
-        }
         // SAFETY: caller provides writable `WMTViewPollOut` or null.
         if let Some(out) = unsafe { mem_mut::<WMTViewPollOut>(p.out_poll) } {
             att.write_poll_out(dw, dh, out);
@@ -1260,7 +1333,8 @@ fn cleanup_detached_record(att: &Arc<Attachment>) {
     client_surface::unwatch(att);
     cursor_overlay::detach(att);
     if let Some(calls) = client_surface::SurfaceCalls::load() {
-        if let Some(sibling) = attachment::retain_newest_surface_on(att.hwnd(), |s| calls.retain(s))
+        if let NewestSurface::Retained(sibling) =
+            attachment::retain_newest_surface_on(att.hwnd(), |s| calls.retain(s))
         {
             calls.present(sibling);
             calls.release(sibling);
@@ -1358,19 +1432,47 @@ pub unsafe extern "C-unwind" fn wmt_view_sync_and_poll(args: *mut c_void) -> i32
         let _guard = AbortOnPanic;
         // SAFETY: slot 161 carries `UnixcallWmtViewSyncAndPoll`.
         let p = unsafe { params::<UnixcallWmtViewSyncAndPoll>(args) };
+        if p.view == 0 && p.layer == 0 && (p.flags & WMT_VIEW_SYNC_FLAG_MAIN_PANEL != 0) {
+            let (pw, ph) = display::native_panel_pixels(CGMainDisplayID());
+            // SAFETY: caller provides writable `WMTViewPollOut` or null.
+            if let Some(out) = unsafe { mem_mut::<WMTViewPollOut>(p.out) } {
+                *out = WMTViewPollOut {
+                    drawable_width: pw,
+                    drawable_height: ph,
+                    backing_scale: 1,
+                    edr_current: 1.0,
+                    edr_potential: 1.0,
+                    panel_max_hz: 0,
+                    flags: 0,
+                    reserved: 0,
+                };
+            }
+            return STATUS_SUCCESS;
+        }
         let att = if p.view != 0 {
             attachment::find(u64_to_usize(p.view))
         } else {
             None
         };
+        if let Some((sw, sh)) = unpack_source_extent(p.flags)
+            && let Some(att) = &att
+        {
+            att.set_source_size(sw, sh);
+        }
         let layer_handle = if p.layer != 0 {
             p.layer
         } else {
             att.as_ref().map_or(0, |a| a.layer() as u64)
         };
+        let screen_pixels = att
+            .as_deref()
+            .map_or(ScreenPixels::UNKNOWN, Attachment::screen_pixels);
+        let source_size = att.as_deref().and_then(Attachment::source_size);
         let (dw, dh) = if has_cocoa_window() && layer_handle != 0 {
             // SAFETY: caller provides a live `CAMetalLayer` handle or attachment keeps one live.
-            unsafe { obj::<CAMetalLayer>(layer_handle) }.map_or((0, 0), sync_drawable_size)
+            unsafe { obj::<CAMetalLayer>(layer_handle) }.map_or((0, 0), |layer| {
+                sync_drawable_size(layer, &screen_pixels, source_size, att.as_deref())
+            })
         } else {
             (0, 0)
         };
@@ -1421,10 +1523,14 @@ pub unsafe extern "C-unwind" fn wmt_present_client_surface(args: *mut c_void) ->
         let Some(att) = attachment::find(u64_to_usize(p.handle)) else {
             return STATUS_SUCCESS;
         };
+        if p.arg == 0 || (p.arg & u64::from(WMT_CLIENT_SURFACE_REASON_ATTACHED)) != 0 {
+            att.note_frame_submitted();
+        }
         let Some(calls) = client_surface::SurfaceCalls::load() else {
             return STATUS_SUCCESS;
         };
-        if let Some(surface) = attachment::retain_newest_surface_on(att.hwnd(), |s| calls.retain(s))
+        if let NewestSurface::Retained(surface) =
+            attachment::retain_newest_surface_on(att.hwnd(), |s| calls.retain(s))
         {
             calls.present(surface);
             calls.release(surface);
