@@ -35,10 +35,3 @@ fn other_lines_and_broken_lengths_name_no_window() {
         assert!(window_secs(line).is_none(), "{line}");
     }
 }
-
-#[cfg(perf_tracking)]
-#[test]
-fn the_lines_the_layer_writes_read_back() {
-    let kv = super::super::KvLine::new(2.004, 3, 3).finish();
-    assert!(names(&kv, 2.004));
-}

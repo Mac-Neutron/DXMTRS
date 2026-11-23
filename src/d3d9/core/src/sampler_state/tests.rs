@@ -14,7 +14,6 @@ use mtld3d_types::{
 };
 
 use super::*;
-use crate::passes::LastBoundCache;
 
 /// The D3DSAMP array the tests start from, with the three filters on LINEAR.
 fn linear_state() -> [u32; SAMPLER_STATE_COUNT] {
@@ -398,24 +397,11 @@ fn lod_bias_table_cache_keys_signed_zero_and_nan_by_bits() {
 #[test]
 fn lod_bias_table_cache_is_independent_of_pass_bindings() {
     let mut table = LodBiasTableCache::new();
-    let mut bound = LastBoundCache::new();
     let mut biases = [0.0_f32; LOD_BIAS_SLOTS];
     biases[0] = -0.75;
 
     assert!(table.update(&biases, &EXPLICIT_LOD_OPEN_ROWS));
-    assert!(bound.ps_lod_bias_changed(table.bytes()));
     assert!(!table.update(&biases, &EXPLICIT_LOD_OPEN_ROWS));
-    assert!(!bound.ps_lod_bias_changed(table.bytes()));
-
-    bound.reset();
-    assert!(
-        !table.update(&biases, &EXPLICIT_LOD_OPEN_ROWS),
-        "a new pass reuses the derived table"
-    );
-    assert!(
-        bound.ps_lod_bias_changed(table.bytes()),
-        "a new pass still binds the table"
-    );
 }
 
 /// [`linear_state`] with an anisotropic min filter.
@@ -760,19 +746,6 @@ fn a_vertex_lod_table_ignores_slots_past_the_four_vertex_samplers() {
     table.set_slot(VS_LOD_SLOTS, &lod_state(3, 1, D3DTEXF_POINT));
     assert_eq!(table.mask(), 0);
     assert_eq!(table.bytes(), VertexLodTable::new().bytes());
-}
-
-#[test]
-fn the_last_bound_cache_rebinds_the_vertex_lod_table_once_per_pass_and_change() {
-    let mut bound = LastBoundCache::new();
-    let mut table = VertexLodTable::new();
-    table.set_slot(0, &lod_state(2, 0, D3DTEXF_POINT));
-    assert!(bound.vs_lod_changed(table.bytes()));
-    assert!(!bound.vs_lod_changed(table.bytes()));
-    table.set_slot(0, &lod_state(3, 0, D3DTEXF_POINT));
-    assert!(bound.vs_lod_changed(table.bytes()), "a new row rebinds");
-    bound.reset();
-    assert!(bound.vs_lod_changed(table.bytes()), "a new pass rebinds");
 }
 
 /// The draw's LOD table follows the sampled slots.

@@ -143,17 +143,6 @@ pub struct Mtld3dConfig {
     /// its submission waiting for the build. `false` keeps every such draw.
     /// Default: `true`. File key: `shader.asyncCompile`.
     pub shader_async_compile: bool,
-    /// Which compiler builds D3D9 shader libraries.
-    ///
-    /// The MSL emitter or the translator's AIR.
-    /// Default: [`ShaderBackend::Air`]. File key: `shader.backend`.
-    pub shader_backend: ShaderBackend,
-    /// Which runtime records the device's frames.
-    ///
-    /// `mtld3d` (`mtld3d.so` on the Unix side) or `core` (`d3d9.dll` on DXMT's core, DXMTRS C4).
-    /// Process-wide: the first interface latches it. Default: [`RuntimeMode::Core`]. File key:
-    /// `runtime.mode`.
-    pub runtime_mode: RuntimeMode,
     /// Directory the process's log file and GPU traces go into.
     ///
     /// Resolved against the executable's directory; an absolute path stands
@@ -345,29 +334,6 @@ pub struct Mtld3dConfig {
     pub df_formats: bool,
 }
 
-/// `shader.backend` policy: how a D3D9 shader becomes a Metal library.
-///
-/// Also the backend a shader pair is built with (`ShaderRef`, index keys).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum ShaderBackend {
-    /// Emit MSL and compile it: the escape while it lasts.
-    Msl = 0,
-    /// Lower through the translator to AIR.
-    #[default]
-    Air = 1,
-}
-
-/// `runtime.mode`: which runtime records D3D9's frames (DXMTRS C4).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub enum RuntimeMode {
-    /// `mtld3d.so`, through `mtld3d.dll`'s Unix calls: the legacy escape hatch until C5.
-    Mtld3d,
-    /// `d3d9.dll` on DXMT's core (`dxmt-core`), as D3D10-12; default since C4e.
-    #[default]
-    Core,
-}
-
 /// `adapter.spoof` policy: the vendor identity `GetAdapterIdentifier` reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterSpoof {
@@ -428,8 +394,6 @@ impl Default for Mtld3dConfig {
             cursor_software: SoftwareCursorPolicy::Off,
             shader_cache_enable: true,
             shader_async_compile: true,
-            shader_backend: ShaderBackend::Air,
-            runtime_mode: RuntimeMode::Core,
             log_dir: String::new(),
             bytecode_dump_dir: String::new(),
             skip_shaders: Vec::new(),
@@ -598,14 +562,6 @@ pub fn log_options(cfg: &Mtld3dConfig) {
         target: crate::LOG_TARGET,
         "config: shader.asyncCompile = {}", cfg.shader_async_compile
     );
-    info!(
-        target: crate::LOG_TARGET,
-        "config: shader.backend = {}", shader_backend_label(cfg.shader_backend)
-    );
-    info!(
-        target: crate::LOG_TARGET,
-        "config: runtime.mode = {}", runtime_mode_label(cfg.runtime_mode)
-    );
     info!(target: crate::LOG_TARGET, "config: log.dir = {:?}", cfg.log_dir);
     info!(
         target: crate::LOG_TARGET,
@@ -731,8 +687,6 @@ fn apply(cfg: &mut Mtld3dConfig, source: &str, key: &str, value: &str) {
         "cursor.software" => assign_cursor_software(source, value, &mut cfg.cursor_software),
         "shaderCache.enable" => assign_bool(source, key, value, &mut cfg.shader_cache_enable),
         "shader.asyncCompile" => assign_bool(source, key, value, &mut cfg.shader_async_compile),
-        "shader.backend" => assign_shader_backend(source, value, &mut cfg.shader_backend),
-        "runtime.mode" => assign_runtime_mode(source, value, &mut cfg.runtime_mode),
         "log.dir" => value.clone_into(&mut cfg.log_dir),
         "debug.bytecodeDumpDir" => value.clone_into(&mut cfg.bytecode_dump_dir),
         "debug.skipShaders" => cfg.skip_shaders = parse_hex_list(value),
@@ -793,46 +747,6 @@ fn assign_cursor_software(source: &str, value: &str, slot: &mut SoftwareCursorPo
             "{source}: 'cursor.software = {other}' is not auto, true or false → kept {kept}",
             kept = cursor_software_label(*slot)
         ),
-    }
-}
-
-fn assign_shader_backend(source: &str, value: &str, slot: &mut ShaderBackend) {
-    match value.to_ascii_lowercase().as_str() {
-        "msl" => *slot = ShaderBackend::Msl,
-        "air" => *slot = ShaderBackend::Air,
-        other => log_once_warn!(
-            target: crate::LOG_TARGET,
-            "{source}: 'shader.backend = {other}' is not msl or air → kept {kept}",
-            kept = shader_backend_label(*slot)
-        ),
-    }
-}
-
-const fn shader_backend_label(b: ShaderBackend) -> &'static str {
-    match b {
-        ShaderBackend::Msl => "msl",
-        ShaderBackend::Air => "air",
-    }
-}
-
-fn assign_runtime_mode(source: &str, value: &str, slot: &mut RuntimeMode) {
-    match value.to_ascii_lowercase().as_str() {
-        "mtld3d" => *slot = RuntimeMode::Mtld3d,
-        "core" => *slot = RuntimeMode::Core,
-        other => log_once_warn!(
-            target: crate::LOG_TARGET,
-            "{source}: 'runtime.mode = {other}' is not mtld3d or core → kept {kept}",
-            kept = runtime_mode_label(*slot)
-        ),
-    }
-}
-
-/// `runtime.mode`'s value as the file spells it.
-#[must_use]
-pub const fn runtime_mode_label(m: RuntimeMode) -> &'static str {
-    match m {
-        RuntimeMode::Mtld3d => "mtld3d",
-        RuntimeMode::Core => "core",
     }
 }
 

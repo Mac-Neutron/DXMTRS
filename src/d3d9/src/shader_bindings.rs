@@ -225,20 +225,17 @@ impl ShaderBindings {
     }
 
     /// The first `rows` VS float constants as the bytes a core draw binds (`vs_c`).
-    #[cfg(feature = "core-runtime")]
     pub fn vs_constant_bytes(&self, rows: u32) -> &[u8] {
         float_file_bytes(&self.vs_constants, rows)
     }
 
     /// The first `rows` PS float constants as the bytes a core draw binds (`ps_c`).
-    #[cfg(feature = "core-runtime")]
     pub fn ps_constant_bytes(&self, rows: u32) -> &[u8] {
         float_file_bytes(&self.ps_constants, rows)
     }
 }
 
 /// The first `rows` of a float register file as native-endian bytes, at most the whole file.
-#[cfg(feature = "core-runtime")]
 fn float_file_bytes(file: &[[f32; 4]; CONSTANT_ROWS], rows: u32) -> &[u8] {
     let rows = &file[..usize::try_from(rows).map_or(CONSTANT_ROWS, |r| r.min(CONSTANT_ROWS))];
     // SAFETY: `[f32; 4]` rows have no padding and every byte of an `f32` is initialized; the

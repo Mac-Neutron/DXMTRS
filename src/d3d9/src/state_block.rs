@@ -513,7 +513,7 @@ impl RecordingStateBlock {
                     dev.shader_bindings_mut().write_ps_constants(*start, values);
                     crate::device::propagate_ps_const_delta(dev, *start, values);
                 }
-                // Int/bool constants are stored only — no encoder mirror to
+                // Int/bool constants are stored only; no encoder mirror to
                 // propagate into (see `device_set_vertex_shader_constant_i`).
                 StateOp::VertexShaderConstantI { start, values } => {
                     dev.shader_bindings_mut()
@@ -793,7 +793,7 @@ impl StateSnapshot {
                 .write_ps_constants(0, self.ps_constants.as_ref());
             crate::device::propagate_ps_const_delta(dev, 0, self.ps_constants.as_ref());
         }
-        // Int/bool constants are stored only — no encoder mirror to
+        // Int/bool constants are stored only; no encoder mirror to
         // propagate into (see `device_set_vertex_shader_constant_i`).
         if block_type.includes_vertex_pipeline() {
             dev.shader_bindings_mut()

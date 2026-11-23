@@ -1,8 +1,6 @@
 use core::ffi::c_void;
 
-use mtld3d_core::{
-    convert::InputSemantic, ids::ProgramId, pipeline_key::ShaderCode, shader_create::CoreShaderMeta,
-};
+use mtld3d_core::{pipeline_key::ShaderCode, shader_create::CoreShaderMeta};
 use mtld3d_shared::InPtr;
 use mtld3d_types::{Guid, IDirect3DVertexShader9Vtbl};
 
@@ -20,10 +18,6 @@ static DIRECT3D_VERTEX_SHADER9_VTBL: IDirect3DVertexShader9Vtbl = IDirect3DVerte
 };
 
 /// PE-side wrapper for `IDirect3DVertexShader9`.
-///
-/// The parsed DXSO program lives on the encoder thread
-/// (`FrameEncoder::program_cache`, keyed on `shader_id`). The wrapper itself
-/// only records the identity bits the API path needs to read synchronously.
 #[repr(C)]
 pub struct Direct3DVertexShader9 {
     vtbl: *const IDirect3DVertexShader9Vtbl,
@@ -39,21 +33,17 @@ pub struct Direct3DVertexShader9 {
 impl Direct3DVertexShader9 {
     pub fn new(
         device_inner: *mut DeviceInner,
-        shader_id: ProgramId,
         max_const_used: u32,
         flags: VsConstUsage,
-        input_semantics: Vec<InputSemantic>,
         bytecode: std::sync::Arc<[u32]>,
+        core: CoreProgram,
     ) -> Self {
         let inner = Box::into_raw(Box::new(VertexShaderInner {
             device_inner,
-            shader_id,
             max_const_used,
             flags,
-            input_semantics,
             bytecode,
-            #[cfg(feature = "core-runtime")]
-            core: None,
+            core,
         }));
         Self {
             vtbl: &raw const DIRECT3D_VERTEX_SHADER9_VTBL,
@@ -67,10 +57,6 @@ impl Direct3DVertexShader9 {
         // SAFETY: `self.vtbl` is the `'static` `DIRECT3D_VERTEX_SHADER9_VTBL`
         // installed at `Self::new`.
         unsafe { &*self.vtbl }
-    }
-
-    pub fn shader_id(&self) -> ProgramId {
-        self.inner().shader_id
     }
 
     pub fn max_const_used(&self) -> u32 {
@@ -100,23 +86,9 @@ impl Direct3DVertexShader9 {
         self.inner().flags.contains(VsConstUsage::USES_BOOL_CONST)
     }
 
-    pub fn input_semantics(&self) -> &[InputSemantic] {
-        &self.inner().input_semantics
-    }
-
-    /// The shader of a core device: `code` (its tokens the `GetFunction` bytecode) and `meta`.
-    #[cfg(feature = "core-runtime")]
-    #[must_use]
-    pub fn with_core(self, code: ShaderCode, meta: CoreShaderMeta) -> Self {
-        // SAFETY: `new`'s own box, which nothing else reaches yet.
-        unsafe { (*self.inner).core = Some((code, meta)) };
-        self
-    }
-
-    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
-    #[cfg(feature = "core-runtime")]
-    pub fn core(&self) -> Option<&CoreProgram> {
-        self.inner().core.as_ref()
+    /// The program as the core runtime keys and inspects it for draws.
+    pub fn core(&self) -> &CoreProgram {
+        &self.inner().core
     }
 
     fn inner(&self) -> &VertexShaderInner {
@@ -155,18 +127,15 @@ bitflags::bitflags! {
 
 struct VertexShaderInner {
     device_inner: *mut DeviceInner,
-    shader_id: ProgramId,
     max_const_used: u32,
     flags: VsConstUsage,
-    input_semantics: Vec<InputSemantic>,
     /// The token stream the app passed to `CreateVertexShader`.
     ///
     /// Kept verbatim so `GetFunction` can hand it back. Nothing else reads
     /// it: the translation works from the parsed `DxsoProgram`.
     bytecode: std::sync::Arc<[u32]>,
-    /// The program as a core device keys and refuses its draws, `None` for one of mtld3d's.
-    #[cfg(feature = "core-runtime")]
-    core: Option<CoreProgram>,
+    /// The program as the core runtime keys and inspects it for draws.
+    core: CoreProgram,
 }
 
 #[inline]

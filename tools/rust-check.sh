@@ -10,14 +10,13 @@
 #           changed without its regeneration would otherwise still compile (needs Xcode's clang and jq)
 #   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
 #           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), the core's
-#           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD), and d3d9 with its
-#           core runtime (core-runtime) on aarch64, arm64ec, x86_64 and i686, with guest-vm on the last two
-#   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 (also d3d9 with core-runtime) and the host
-#   test    the host unit tests, D3D9's also with perf-tracking (not mtld3d-mtl's integration tests: see unit_tests),
-#           winemetal's also with its native feature, dxmt-fakes' and d3d9-rt's (which link dxmt-fakes) each in a cargo
-#           command of its own
+#           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD), and d3d9 with
+#           guest-vm on x86_64 and i686
+#   doc     `cargo doc --no-deps` with rustdoc warnings denied, for i686 and the host
+#   test    the host unit tests, D3D9's also with perf-tracking, winemetal's also with its native feature,
+#           dxmt-fakes' and d3d9's (which link dxmt-fakes) each in a cargo command of its own
 #   audit   tools/audit.sh; refuses while an untracked .rs, .toml or .md file exists (the audit reads tracked files)
-# The PE legs compile build scripts that need C and Wine's archives, so the inputs are variables (docs/DEVELOPMENT.md,
+# The PE legs compile build scripts that need C, so the inputs are variables (docs/DEVELOPMENT.md,
 # "tools/rust-check.sh"); MacNeutron sets them from its pins. cargo runs offline: fetch the locked crates first.
 #   MTLD3D_RUST          the rustup toolchain, with clippy (default: meson.options' cargo_toolchain); `rustc +<it>` must
 #                        run, so rustup's proxy is on PATH, with lld-link and llvm-lib (MacNeutron: the folder
@@ -25,15 +24,13 @@
 #   MTLD3D_RUST_NIGHTLY  the pinned nightly, as rustup names it, e.g. nightly-2026-10-30 (MacNeutron: dxmt/pins)
 #   RUST_NIGHTLY_BIN     optional: that nightly's bin folder (default: rustup's nightly-aarch64-apple-darwin)
 #   MTLD3D_LLVM_MINGW    llvm-mingw's root
-#   WINE_BUILD           the Mac Wine build tree (libs/winecrt0/aarch64-windows/libwinecrt0.a)
-#   GUEST_WINE_SDK       the VM guest's Wine SDK (lib/wine/{x86_64,i386}-windows/libwinecrt0.a)
 #   AIRCONV_LLVM         the LLVM 23 install airconv links, built from tools/llvm.sh's commit (lib/, .complete;
 #                        MacNeutron: build/wine-arm64-src/llvm23-arm64-nolto, which make llvm-nolto installs)
 #   AIRCONV_XCRUN        xcrun, or a sh script taking xcrun's arguments, for airconv's Metal helpers (MacNeutron:
 #                        wine-arm64/tools/xcrun-metal.sh)
 #   CARGO_TARGET_DIR     optional: an absolute folder for cargo's output (default: target/ in the tree, ignored by git)
-# Linux targets are not linted here (the guest build compiles them); the unit tests run under cargo test, one process
-# per test binary, where the Makefile's nextest ran one per test.
+# Linux targets are not linted here; the unit tests run under cargo test, one process per test binary, where the
+# Makefile's nextest ran one per test.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -43,8 +40,6 @@ MTLD3D_RUST=${MTLD3D_RUST:-$(sed -n "s/^option('cargo_toolchain'.*value : '\([^'
 : "${MTLD3D_RUST:?names the rustup toolchain (default: cargo_toolchain in meson.options; MacNeutron: MTLD3D_RUST in dxmt/pins)}"
 : "${MTLD3D_RUST_NIGHTLY:?names the pinned nightly, such as nightly-2026-10-30 (MacNeutron: MTLD3D_RUST_NIGHTLY in dxmt/pins)}"
 : "${MTLD3D_LLVM_MINGW:?names the llvm-mingw root (MacNeutron: the parent of the folder sh dxmt/toolchain.sh prints)}"
-: "${WINE_BUILD:?names the Mac Wine build tree (MacNeutron: build/wine-arm64-src/wine-build)}"
-: "${GUEST_WINE_SDK:?names the VM guest Wine SDK (MacNeutron: build/eac-vm-work/guest-wine-sdk)}"
 : "${AIRCONV_LLVM:?names the LLVM 23 install airconv builds against (MacNeutron: build/wine-arm64-src/llvm23-arm64-nolto, from make llvm-nolto)}"
 : "${AIRCONV_XCRUN:?names xcrun, or a sh script taking its arguments (MacNeutron: wine-arm64/tools/xcrun-metal.sh)}"
 NIGHTLY_BIN=${RUST_NIGHTLY_BIN:-${RUSTUP_HOME:-$HOME/.rustup}/toolchains/nightly-aarch64-apple-darwin/bin}
@@ -62,13 +57,13 @@ case $(rustc --version) in
      exit 2 ;;
 esac
 
-PE_P='-p d3d9 -p mtld3d -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
-  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p d3d9-rt --features d3d11/front-end'
+PE_P='-p d3d9 -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p winemetal-pe -p dxgi -p d3d10core -p dxmt-util -p airconv-ir
+  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys --features d3d9/front-end,d3d11/front-end'
 PE64_P="$PE_P -p nvngx -p nvapi"
-HOST_P='-p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-unix -p mtld3d-mtl -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p winemetal-pe -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
-  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p dxmt-fakes -p d3d9-rt'
-# The core's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
-CORE_PERF='-p dxmt-core -p d3d11 -p d3d12 --features dxmt-core/perf-build,d3d11/perf-build,d3d11/front-end,d3d12/perf-build'
+HOST_P='-p d3d9 -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire -p winemetal -p winemetal-pe -p dxmt-util -p nvapi -p nvngx -p dxgi -p d3d10core -p airconv-ir -p airconv
+  -p dxmt-core -p d3d11 -p d3d12 -p dxmt-replay -p winemetal-sys -p dxmt-fakes'
+# The core's and D3D9's crates with DXMT_PERF_BUILD's feature, which compiles the statistics and the dump folder out.
+CORE_PERF='-p d3d9 -p dxmt-core -p d3d11 -p d3d12 --features d3d9/perf-build,dxmt-core/perf-build,d3d11/perf-build,d3d11/front-end,d3d12/perf-build'
 HOST=aarch64-apple-darwin
 I686=i686-pc-windows-msvc
 
@@ -78,30 +73,12 @@ cargo_() {
   cargo "$@"
 }
 
-# The libwinecrt0.a the mtld3d shim bundles into a PE target's static library.
-winecrt0() {
-  case $1 in
-    aarch64-*|arm64ec-*) # one ARM64X archive carries both halves
-      for d in libs dlls; do
-        [ -f "$WINE_BUILD/$d/winecrt0/aarch64-windows/libwinecrt0.a" ] && { echo "$WINE_BUILD/$d/winecrt0/aarch64-windows/libwinecrt0.a"; return 0; }
-      done
-      echo "rust-check: no libwinecrt0.a under WINE_BUILD=$WINE_BUILD (libs/ or dlls/winecrt0/aarch64-windows)" >&2
-      return 1 ;;
-    x86_64-*) f=$GUEST_WINE_SDK/lib/wine/x86_64-windows/libwinecrt0.a ;;
-    i686-*) f=$GUEST_WINE_SDK/lib/wine/i386-windows/libwinecrt0.a ;;
-  esac
-  [ -f "$f" ] || { echo "rust-check: no $f (GUEST_WINE_SDK=$GUEST_WINE_SDK)" >&2; return 1; }
-  echo "$f"
-}
-
-# pe <target> <command...>: run <command> with <target>'s C environment (tools/mingw-cc.sh env) and its Wine archive.
+# pe <target> <command...>: run <command> with <target>'s C environment (tools/mingw-cc.sh env).
 pe() {
   (
     t=$1; shift
     e=$(sh tools/mingw-cc.sh env "$t" "$T/cc") || exit 1
     eval "$e"
-    MTLD3D_WINECRT0=$(winecrt0 "$t") || exit 1
-    export MTLD3D_WINECRT0
     "$@"
   )
 }
@@ -288,21 +265,14 @@ leg_clippy() {
     lint $t -p mtld3d-tests --all-targets || rc=1
   done
   lint arm64ec-pc-windows-msvc $PE64_P || rc=1
-  lint $HOST --all-targets $HOST_P --features mtld3d-core/disk-cache,airconv/oracle,d3d11/front-end || rc=1
-  lint $HOST -p mtld3d-unix --features mtld3d-unix/winemetal --all-targets || rc=1
+  lint $HOST --all-targets $HOST_P --features airconv/oracle,d3d11/front-end || rc=1
   lint $HOST --all-targets -p winemetal --features native || rc=1
-  lint $HOST --all-targets -p mtld3d-core -p mtld3d-unix --features mtld3d-core/disk-cache,mtld3d-unix/perf-tracking || rc=1
+  lint $HOST --all-targets -p mtld3d-core --features mtld3d-core/perf-tracking || rc=1
   lint $I686 $PE_P,d3d9/perf-tracking || rc=1
   lint $HOST --all-targets $CORE_PERF || rc=1
-  lint $I686 $CORE_PERF || rc=1
-  lint $I686 -p d3d9 -p mtld3d --features d3d9/perf-build,mtld3d/perf-build || rc=1
-  lint $HOST -p mtld3d-unix --features mtld3d-unix/perf-build || rc=1
-  # D3D9's core runtime, in all halves that carry it.
-  for t in aarch64-pc-windows-msvc arm64ec-pc-windows-msvc x86_64-pc-windows-msvc $I686; do
-    lint $t -p d3d9 -p d3d9-rt --features d3d9/core-runtime || rc=1
-  done
+  lint $I686 $CORE_PERF,d3d9/front-end || rc=1
   for t in x86_64-pc-windows-msvc $I686; do
-    lint $t -p d3d9 -p d3d9-rt --features d3d9/core-runtime,d3d9/guest-vm || rc=1
+    lint $t -p d3d9 --features d3d9/front-end,d3d9/guest-vm || rc=1
   done
   return $rc
 }
@@ -310,26 +280,17 @@ leg_clippy() {
 leg_doc() {
   rc=0
   RUSTDOCFLAGS='-D warnings'; export RUSTDOCFLAGS
-  pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 $PE_P --features mtld3d-core/disk-cache || rc=1
-  pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 -p d3d9 -p d3d9-rt --features d3d9/core-runtime \
-    || rc=1
-  cargo_ doc --no-deps --offline --keep-going --target $HOST $HOST_P --features mtld3d-core/disk-cache,d3d11/front-end || rc=1
+  pe $I686 cargo_ doc --no-deps --offline --keep-going --target $I686 $PE_P || rc=1
+  cargo_ doc --no-deps --offline --keep-going --target $HOST $HOST_P --features d3d11/front-end || rc=1
   unset RUSTDOCFLAGS
   return $rc
 }
 
-# The facade's integration tests (mtld3d-mtl's tests/) need a winemetal.so beside stand-ins for the Wine libraries it
-# links, which MacNeutron's dxmt/mtld3d-facade-test.sh builds and runs; here only its unit tests run.
-# unit_tests [perf]: with perf, D3D9's perf-tracking feature. The perf run's --features names the topmost D3D9 crate of
-# each line, so no crate built without the cfg links one built with it; mtld3d-mtl has no perf cfg.
+# unit_tests [perf]: with perf, D3D9's perf-tracking feature.
 unit_tests() {
-  r=0
-  core=mtld3d-core/disk-cache unix=
-  if [ "${1:-}" = perf ]; then core=$core,mtld3d-core/perf-tracking unix='--features mtld3d-unix/perf-tracking'; fi
-  tst -p mtld3d-core -p mtld3d-types --features $core || r=1
-  tst -p mtld3d-unix -p mtld3d-shared -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire $unix || r=1
-  tst -p mtld3d-mtl --lib || r=1
-  return $r
+  feat=
+  if [ "${1:-}" = perf ]; then feat='--features mtld3d-core/perf-tracking'; fi
+  tst -p mtld3d-core -p mtld3d-types -p mtld3d-shared -p mtld3d-conformance -p mtld3d-e2e -p winemetal-wire $feat
 }
 
 leg_test() {
@@ -349,7 +310,7 @@ leg_test() {
   # core's, d3d11's or d3d12's own (one symbol, two definitions).
   tst -p dxmt-fakes \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
-  tst -p d3d9-rt \
+  tst -p d3d9 \
     --config 'target.aarch64-apple-darwin.rustflags=["-C","link-arg=-Wl,-undefined,dynamic_lookup"]' || rc=1
   return $rc
 }

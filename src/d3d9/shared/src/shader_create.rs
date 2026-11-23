@@ -5,8 +5,6 @@
 
 use bitflags::bitflags;
 
-use crate::{Thunk, Thunks};
-
 /// Shader stage requested by the API entry point.
 #[repr(u32)]
 #[derive(Debug, PartialEq, Eq)]
@@ -42,52 +40,7 @@ bitflags! {
     }
 }
 
-/// Synchronous creation request and bounded API metadata output.
-///
-/// The caller initializes outputs to failure and retains both pointed-to buffers until return.
-/// Only matching PE and native builds may exchange this typed wire record. The stage must be
-/// a valid variant before forming a reference to this record. A native registration is published
-/// only after validation and after verifying the semantic output capacity.
-#[repr(C, align(8))]
-pub struct CreateShaderProgramParams {
-    pub runtime: u64,
-    pub tokens_ptr: u64,
-    pub semantics_ptr: u64,
-    pub stage: ShaderStage,
-    pub token_count: u32,
-    pub semantic_capacity: u32,
-    pub result: i32,
-    pub program_id: u64,
-    pub registration: u64,
-    pub max_const_used: u32,
-    pub semantic_count: u32,
-    pub usage: ShaderUsage,
-    pub color_out_mask: u8,
-    pub padding: [u8; 6],
-}
-
-/// Cancel one registration that was not transferred to an admitted frame.
-#[repr(C, align(8))]
-pub struct CancelShaderProgramParams {
-    pub runtime: u64,
-    pub registration: u64,
-}
-
-impl Thunk for CreateShaderProgramParams {
-    const CODE: u32 = Thunks::CreateShaderProgram as u32;
-}
-
-impl Thunk for CancelShaderProgramParams {
-    const CODE: u32 = Thunks::CancelShaderProgram as u32;
-}
-
 const _: () = {
-    assert!(size_of::<CancelShaderProgramParams>() == 16);
-    assert!(align_of::<CancelShaderProgramParams>() == 8);
     assert!(size_of::<ShaderInputSemantic>() == 4);
     assert!(align_of::<ShaderInputSemantic>() == 2);
-    assert!(size_of::<CreateShaderProgramParams>() == 72);
-    assert!(align_of::<CreateShaderProgramParams>() == 8);
-    assert!(core::mem::offset_of!(CreateShaderProgramParams, program_id) == 40);
-    assert!(core::mem::offset_of!(CreateShaderProgramParams, usage) == 64);
 };

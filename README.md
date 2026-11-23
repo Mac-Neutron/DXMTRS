@@ -14,8 +14,9 @@ The most recent development builds can be found [here](https://github.com/3Shain
 
 The tree also holds a Direct3D 9 implementation for Wine on macOS, backed by Metal. It is the former
 [mtld3d](https://github.com/athei/mtld3d), version 0.14.1, altered here: it lives in `src/d3d9` with its tests in
-`tests/d3d9`, builds with this tree's one Cargo workspace and one meson build, and still has its own runtime beside
-DXMT's. [`docs/d3d9/README.md`](docs/d3d9/README.md) describes it; [`mtld3d.conf`](mtld3d.conf) lists its options.
+`tests/d3d9`, builds with this tree's one Cargo workspace and one meson build, and runs on `dxmt-core` over
+`winemetal.dll` and `winemetal.so`. [`docs/d3d9/README.md`](docs/d3d9/README.md) describes it;
+[`mtld3d.conf`](mtld3d.conf) lists its options.
 
 
 ## Build
@@ -40,8 +41,8 @@ came from elsewhere keep their own notices, and this is where they are:
   patched for ARM64EC; the crate's notice is [`vendor/snmalloc-sys/LICENSE`](vendor/snmalloc-sys/LICENSE) and
   snmalloc's is [`vendor/snmalloc-sys/upstream/LICENSE`](vendor/snmalloc-sys/upstream/LICENSE). D3D9's allocator comes
   from it.
-- **dxmt-util is LGPL and is linked into every D3D9 binary** (`d3d9.dll`, `mtld3d.dll`, `mtld3d.so`, the Mac's and the
-  VM's), which are LGPL combined works; the source offer is this repository. Its files from mtld3d keep the zlib notice:
+- **dxmt-util is LGPL and is linked into `d3d9.dll`**, making it an LGPL combined work; the source offer is this
+  repository. Its files from mtld3d keep the zlib notice:
   `src/util/src/log/once.rs` (+tests), `src/util/src/log/paths.rs` (+tests),
   `src/util/src/config/mtld3d.rs` (+tests), `src/util/src/crash.rs` (+tests), `src/util/src/crash/veh.rs`.
 - **airconv's DXBC readers are MIT.** `src/airconv/ir`'s container, signature and token readers are ported from

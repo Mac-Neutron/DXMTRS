@@ -7,14 +7,11 @@
 //! validation rules and the instance-count derivation follow the D3D9
 //! runtime's observable behaviour.
 
-use mtld3d_shared::{
-    VertexAttrDesc,
-    mtl::{VertexFormat, VertexStepFunction},
-};
+use mtld3d_shared::mtl::{VertexFormat, VertexStepFunction};
 use mtld3d_types::{D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA, MAX_STREAMS};
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
-use crate::pipeline_state::StreamLayout;
+use crate::{convert::VertexAttrDesc, pipeline_state::StreamLayout};
 
 /// Mask of the count half of a frequency word.
 ///

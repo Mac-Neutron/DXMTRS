@@ -1,13 +1,13 @@
 //! Which part of an attachment a `Clear` reaches.
 //!
 //! D3D9's `Clear` takes rects, is bounded by the scissor rect while the scissor test is on, and
-//! by the viewport always. [`clear_regions`] is the first half, which both runtimes call: the
-//! rects and the scissor as one list. mtld3d's encoder then clips that list to the viewport
-//! ([`clip_rect_to_viewport`]) and folds a region that covers the attachment into a whole clear;
-//! the core runtime decides the same on the API thread, an attachment at a time
-//! ([`clear_area`]), and cuts what is left to the attachment ([`clamp_rect`]).
+//! by the viewport always. [`clear_regions`] is the first half: the rects and the scissor as one
+//! list. [`clear_area`] decides an attachment at a time, and cuts what is left to the attachment
+//! ([`clamp_rect`]).
 
-use crate::passes::region_covers_extent;
+const fn region_covers_extent(region: (u32, u32, u32, u32), extent: (u32, u32)) -> bool {
+    region.0 == 0 && region.1 == 0 && region.2 >= extent.0 && region.3 >= extent.1
+}
 
 /// Intersects two half-open D3D9 rects `(x1, y1, x2, y2)`.
 ///

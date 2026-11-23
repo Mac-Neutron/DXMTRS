@@ -29,8 +29,8 @@ It points at the files that own the rules:
   does not, and the divergences kept on purpose.
 - [`docs/d3d9/GAMES.md`](docs/d3d9/GAMES.md), the D3D9 games tested so far and
   how far each one gets.
-- [`docs/d3d9/ARCHITECTURE.md`](docs/d3d9/ARCHITECTURE.md), the PE/Unix boundary
-  contract of D3D9, its threading model, and its diagnostic toolkits.
+- [`docs/d3d9/ARCHITECTURE.md`](docs/d3d9/ARCHITECTURE.md), how D3D9 runs on `dxmt-core`
+  over `winemetal`, its threading model, and its diagnostic toolkits.
 - [`docs/d3d9/TESTING.md`](docs/d3d9/TESTING.md), how to read a D3D9 test run,
   how conformance work is organised, benchmarks, and the companion edits that
   belong in the same change.

@@ -23,18 +23,8 @@ COVERAGE_TESTS=tests/d3d9/programs/tests
 
 # Files permitted to hold each narrowly-scoped exception. These are sets, not
 # counts: a new site fails even if an old one was deleted in the same change.
-ALLOW_SITES='src/d3d9/mtl/src/foundation.rs
-src/d3d9/mtl/src/lib.rs
-src/d3d9/mtl/src/metal.rs
-src/d3d9/mtl/src/metal/command.rs
-src/d3d9/mtl/src/metal/types.rs
-src/d3d9/mtl/src/metal_fx.rs
-src/d3d9/mtl/src/quartz_core.rs
-src/d3d9/mtl/tests/common.rs
-src/d3d9/shared/src/ftol.rs
+ALLOW_SITES='src/d3d9/shared/src/ftol.rs
 src/d3d9/shared/src/trig.rs
-src/d3d9/unix/src/metal/command.rs
-src/d3d9/unix/src/metal/macdrv.rs
 src/winemetal/unix/src/float_cast.rs
 src/winemetal/unix/src/g3/blit.rs
 src/winemetal/unix/src/g3/render.rs
@@ -44,13 +34,7 @@ src/util/src/float_cast.rs
 src/airconv/ir/src/float_cast.rs'
 
 ONCELOCK_SITES='src/d3d9/shared/src/crumb.rs
-src/d3d9/core/src/page_box.rs
-src/d3d9/unix/src/metal/blit.rs
-src/d3d9/unix/src/metal/clear_quad.rs
-src/d3d9/unix/src/metal/null_texture.rs
-src/d3d9/unix/src/metal/present.rs
-src/d3d9/unix/src/metal/upload_quad.rs
-src/d3d9/unix/src/metal/upscale.rs'
+src/d3d9/core/src/page_box.rs'
 
 INLINE_ALWAYS_SITES='src/d3d9/shared/src/crumb.rs'
 
@@ -81,9 +65,9 @@ PE_JOIN_MESSAGE='thread join on the PE side: poll JoinHandle::is_finished, then 
 PE_JOIN_EXEMPT='^tests/d3d9/|/tests(\.rs$|/)'
 
 # The PE side: the crates that build for -pc-windows-msvc, each named by its src/ and build.rs, and the programs of
-# the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/d3d9/*.rs would also select
-# src/d3d9/unix/** and src/winemetal/*.rs its unix/ and wire/, which run on the Mac.
-PE_CRATES='src/d3d9 src/d3d9/shim src/d3d9/core src/d3d9/rt src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10
+# the end-to-end suite. A directory glob would not do: git's `*` crosses `/`, so src/winemetal/*.rs would also select
+# its unix/ and wire/, which run on the Mac.
+PE_CRATES='src/d3d9 src/d3d9/core src/d3d9/types src/util src/nvapi src/nvngx src/winemetal src/dxgi src/d3d10
     src/dxmt src/d3d11 src/d3d12 src/replay src/winemetal/sys'
 is_pe() {
     for crate in $PE_CRATES; do

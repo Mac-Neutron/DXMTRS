@@ -2,9 +2,10 @@
 
 Direct3D 9 for Wine on macOS, backed by Metal.
 
-mtld3d replaces Wine's `d3d9.dll`. The PE side implements the
-application-facing D3D9 API and records commands for the native Unix runtime,
-which translates them into Metal command buffers and submits them. The goal is
+`d3d9.dll` replaces Wine's stock `d3d9.dll`. The PE side implements the
+application-facing D3D9 API, encodes commands on `dxmt-core`, lowers shaders
+through `airconv`, and calls `winemetal.dll` / `winemetal.so`, which submits Metal
+command buffers on macOS. The goal is
 the fastest Direct3D 9 implementation for Wine on macOS. Direct3D 8 on the
 same core is planned ([#788](https://github.com/athei/mtld3d/issues/788)).
 Direct3D 10 and later are not this component's job: DXMT serves them, built from
@@ -17,16 +18,13 @@ and no game breaks, speed wins. Those trades are listed in
 ## Features
 
 - **Shader translation.** Shader Model 1 to 3 and the fixed-function
-  pipeline are translated to Metal Shading Language by mtld3d's own
-  translator.
-- **Multithreading.** The game's thread records each draw and state change into
-  fixed records. Translation into Metal, submission and presentation run in a
-  three-thread pipeline in the native Unix library. The game's `Present` waits
+  pipeline are lowered from DXSO through `airconv` to Apple IR (AIR).
+- **Multithreading.** The game's thread records each draw and state change,
+  while encoding on `dxmt-core` and Metal submission and presentation through
+  `winemetal` run asynchronously. The game's `Present` waits
   until no more than the device's maximum frame latency of frames, three by
   default, are still on their way to the screen, so a GPU-bound game does not
-  run further ahead and its input latency stays bounded. Those threads and the
-  shader workers take no address space from a 32-bit game, and under an arm64
-  Wine they run as native arm64 code.
+  run further ahead and its input latency stays bounded.
 - **Background shader builds.** Shaders and pipelines a game uses for the
   first time build on worker threads. A frame waits once for all the builds
   it needs, not once per draw, and a pipeline whose shaders are ready builds
@@ -87,8 +85,8 @@ yet, what never will be, and the divergences from D3D9 kept on purpose.
 
 ## Installation
 
-MacNeutron ships this component inside its own Wine: `d3d9.dll` and `mtld3d.dll`
-as Wine builtins and `mtld3d.so` beside them, in place of the stock d3d9. There is
+MacNeutron ships `d3d9.dll` as a Wine builtin alongside DXMT's `winemetal.dll`
+and `winemetal.so`, in place of the stock d3d9. There is
 no standalone bundle to download any more. Wine only loads a builtin whose name
 has a marker in the prefix, and `wineboot` writes the markers when it creates a
 prefix, so a build installed later reaches prefixes created after it, or an
@@ -146,20 +144,19 @@ Command blocks it, since Wine's Mac driver reports Command as Alt.
 [`GAMES.md`](GAMES.md) lists the games tested so far and
 [how to report one](GAMES.md#reporting-a-game) that fails.
 
-Every run writes two lines into its log before the game draws anything, and no
-`RUST_LOG` setting is needed to see them. They say mtld3d is live:
+Every run writes an identity line into its log before the game draws anything,
+and no `RUST_LOG` setting is needed to see it. It says `d3d9.dll` is live:
 
 ```
-[mtld3d::shim] mtld3d.dll <version> <id>, unix call initialized as <arch>
 [mtld3d::d3d9] d3d9.dll <version> <id> loaded at <address> as <arch>
 ```
 
 `<arch>` is the build the process runs: `i686` for a 32-bit game, `x86_64` for
 the x86_64 build, `arm64ec` for the ARM64X build in an x64 game on an arm64
-Wine, and `aarch64` in a native ARM64 program. If the lines are absent,
-`d3d9.dll` never mapped. Check the prefix's markers first: `mtld3d.dll` has to
-exist in the prefix's `syswow64` (32-bit game) or `system32` (64-bit game),
-because `d3d9.dll` imports it.
+Wine, and `aarch64` in a native ARM64 program. If the line is absent,
+`d3d9.dll` never mapped. Check the prefix's markers first: `d3d9.dll` and
+`winemetal.dll` have to exist in the prefix's `syswow64` (32-bit game) or
+`system32` (64-bit game), because `d3d9.dll` imports `winemetal.dll`.
 
 ## Building from source
 
@@ -227,21 +224,18 @@ is set again on activation.
 ## Architecture
 
 ![Component diagram: game.exe calls d3d9.dll through the D3D9 COM API;
-d3d9.dll, which links mtld3d-core, records each frame and calls the function
-mtld3d_unix_call exported by mtld3d.dll; mtld3d.dll crosses the Wine PE/Unix
-boundary into mtld3d.so, the native runtime, whose encoder, submit, presenter
-and worker threads drive Metal. The PE side is i386 or x86_64, one chain per
-architecture, and on an arm64 Wine an x64 game loads ARM64X builds of
-d3d9.dll and mtld3d.dll instead; the host side is Mach-O in Wine's own
-architecture.](architecture.svg)
+d3d9.dll links mtld3d-core and dxmt-core, lowers shaders through airconv, and
+calls winemetal.dll; winemetal.dll crosses the Wine PE/Unix boundary into
+winemetal.so, the native unix library that drives Metal. The PE side is i386 or
+x86_64, one chain per architecture, and on an arm64 Wine an x64 game loads
+ARM64X builds of d3d9.dll and winemetal.dll instead; the host side is Mach-O in
+Wine's own architecture.](architecture.svg)
 
 `d3d9.dll` implements the COM API, keeps the state the game can observe, and
-records each frame into fixed records. `mtld3d.dll` is the PE shim that owns
-Wine's unix-call globals. `mtld3d.so` is the native runtime on the host: an
-encoder thread translates the recorded frame into Metal commands, a submit
-thread commits them, a presenter thread presents, and worker threads compile
-shaders and pipelines and prewarm the shader cache.
-[`ARCHITECTURE.md`](ARCHITECTURE.md) has the boundary contract, the
+drives `dxmt-core` (via `d3d9::rt`) and `airconv`. `winemetal.dll` is the PE
+bridge that crosses the Wine PE/Unix boundary into `winemetal.so`, which
+executes Metal commands, compiles pipelines, and presents frames on the host.
+[`ARCHITECTURE.md`](ARCHITECTURE.md) has the architecture, the
 threading model and the debugging toolkits.
 
 ## Contributing

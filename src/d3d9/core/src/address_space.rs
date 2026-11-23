@@ -181,25 +181,6 @@ pub struct PageBoxHolders {
     pub surfaces: u64,
     /// The CPU backing of live vertex and index buffers.
     pub vertex_index_backing: u64,
-    /// Renamed backings and upload snapshots the encoder still reads.
-    ///
-    /// Kept until the encoder acknowledges its last use, which follows the
-    /// GPU retiring the frame that read them.
-    pub encoder_leases: u64,
-    /// Texture staging only upload leases still keep, after the texture let go of it.
-    ///
-    /// Kept until native code drops its last owner of the pages (the upload
-    /// read, a cached wrapper) and the PE side sees the acknowledgment.
-    /// Staging a texture still holds counts as texture staging, not here.
-    pub upload_leases: u64,
-    /// Chunks of the device's texture upload-snapshot arena, read or not.
-    ///
-    /// Copies of the box a partial upload carries, for the levels whose
-    /// partial locks would otherwise rename their staging
-    /// (`crate::upload_snapshot`). Held for the device's life, at most 16 MiB.
-    pub texture_snapshots: u64,
-    /// Retired boxes parked in the recycle pool for reuse.
-    pub pool_parked: u64,
 }
 
 impl PageBoxHolders {
@@ -209,11 +190,7 @@ impl PageBoxHolders {
         self.total.saturating_sub(
             self.texture_staging
                 .saturating_add(self.surfaces)
-                .saturating_add(self.vertex_index_backing)
-                .saturating_add(self.encoder_leases)
-                .saturating_add(self.upload_leases)
-                .saturating_add(self.texture_snapshots)
-                .saturating_add(self.pool_parked),
+                .saturating_add(self.vertex_index_backing),
         )
     }
 }
@@ -223,16 +200,11 @@ impl fmt::Display for PageBoxHolders {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "page boxes {} MiB: texture staging {}, surfaces {}, vertex/index backing {}, \
-             encoder leases {}, upload leases {}, texture snapshots {}, pool parked {}, other {}",
+            "page boxes {} MiB: texture staging {}, surfaces {}, vertex/index backing {}, other {}",
             self.total >> 20,
             self.texture_staging >> 20,
             self.surfaces >> 20,
             self.vertex_index_backing >> 20,
-            self.encoder_leases >> 20,
-            self.upload_leases >> 20,
-            self.texture_snapshots >> 20,
-            self.pool_parked >> 20,
             self.other() >> 20
         )
     }

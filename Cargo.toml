@@ -9,12 +9,8 @@ members = [
     "src/d3d12",
     "src/d3d9",
     "src/d3d9/core",
-    "src/d3d9/mtl",
-    "src/d3d9/rt",
     "src/d3d9/shared",
-    "src/d3d9/shim",
     "src/d3d9/types",
-    "src/d3d9/unix",
     "src/dxgi",
     "src/dxmt",
     "src/dxmt/fakes",
@@ -33,11 +29,10 @@ members = [
 # A command without -p takes the crates that build and test on the host. It leaves the PE crates out, and winemetal:
 # its unit test binary references symbols only the link of winemetal.so or the native winemetal.dylib provides
 # (NtSetEvent, sqlite3_*, SM50*), so its tests run on their own, `cargo test -p winemetal` with `-undefined
-# dynamic_lookup`. airconv too: its build script needs AIRCONV_LLVM and AIRCONV_XCRUN (tools/rust-check.sh), and so mtld3d-unix, which links it.
+# dynamic_lookup`. airconv too: its build script needs AIRCONV_LLVM and AIRCONV_XCRUN (tools/rust-check.sh).
 default-members = [
     "src/airconv/ir",
     "src/d3d9/core",
-    "src/d3d9/mtl",
     "src/d3d9/shared",
     "src/d3d9/types",
     "src/replay",
@@ -59,11 +54,9 @@ repository = "https://github.com/Mac-Neutron/DXMTRS"
 [workspace.dependencies]
 airconv = { path = "src/airconv" }
 airconv-ir = { path = "src/airconv/ir" }
-d3d9-rt = { path = "src/d3d9/rt" }
 dxmt-core = { path = "src/dxmt" }
 dxmt-util = { path = "src/util" }
 mtld3d-core = { path = "src/d3d9/core" }
-mtld3d-mtl = { path = "src/d3d9/mtl" }
 mtld3d-shared = { path = "src/d3d9/shared" }
 mtld3d-types = { path = "src/d3d9/types" }
 winemetal-pe = { path = "src/winemetal" }
@@ -141,13 +134,12 @@ objc2-metal = { version = "0.3", features = [
 objc2-metal-fx = { version = "0.3", features = ["MTLFXSpatialScaler"] }
 objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CATransaction", "objc2-metal"] }
 rustc-hash = "2"
-# The global allocator of D3D9's DLLs and of its mtld3d.so, one `build_cc` configuration for both. The `snmalloc_drift`
-# tests (mtld3d-core's, and tests/d3d9/programs' on Windows) catch a bump that changes the allocator's shape.
+# The global allocator of `d3d9.dll`, one `build_cc` configuration. The `snmalloc_drift` tests (`mtld3d-core`'s, and
+# `tests/d3d9/programs`' on Windows) catch a bump that changes the allocator's shape.
 snmalloc-rs = { version = "0.7.6", features = ["build_cc"] }
 strum = { version = "0.28", default-features = false }
 xbr = { version = "0.2", default-features = false }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
-zstd = { version = "0.14", default-features = false }
 
 [profile.dev]
 panic = "abort"
@@ -155,12 +147,12 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 lto = "thin"
-# Limited debug info for post-mortem symbolication of crash backtraces (the `abort_backtrace` handler in d3d9, an
-# NSException stack trace in mtld3d.so, any game-side crash dumper). Function names + line tables + inline frame chain
-# — the last bit is load-bearing because the code uses `#[inline(always)]` heavily, so `line-tables-only` would
-# collapse most call sites into their parents. Skips variable type info (only useful in a live debugger). On MSVC the
-# bytes land in the side-by-side `.pdb`, not the DLL; on macOS cargo's `split-debuginfo = "unpacked"` leaves the DWARF
-# in the compiler's `.o` files and the dylib carries only a debug map (`OSO` stabs) naming them by absolute path.
+# Limited debug info for post-mortem symbolication of crash backtraces (the crash handler in d3d9, any game-side crash
+# dumper). Function names + line tables + inline frame chain; the last bit is load-bearing because the code uses
+# `#[inline(always)]` heavily, so `line-tables-only` would collapse most call sites into their parents. Skips variable
+# type info (only useful in a live debugger). On MSVC the bytes land in the side-by-side `.pdb`, not the DLL; on macOS
+# cargo's `split-debuginfo = "unpacked"` leaves the DWARF in the compiler's `.o` files and the dylib carries only a
+# debug map (`OSO` stabs) naming them by absolute path.
 debug = 1
 
 # `release` is the dev/test profile, so a `cfg(debug_assertions)` guard (and `overflow-checks`) would otherwise be
@@ -170,21 +162,15 @@ debug = 1
 debug-assertions = true
 overflow-checks = true
 
-# snmalloc-sys 0.7's and zstd-sys's build scripts read cargo's `DEBUG` env var (set when the package's debuginfo is
-# enabled): snmalloc-sys then builds its C++ as a `Debug` build (`-g`, and on windows-msvc `msvcrtd`), and cc-rs gives
-# zstd-sys's C `-g` (`/MDd` on windows-msvc). Keep both release builds in every profile, since dev defaults to
-# `debug = 2`. Under LTO rustc links the dylib against a filtered copy of each rlib in a temporary directory it deletes
-# after the link, so a debug map would name objects that no longer exist. `NDEBUG` is not these overrides' job.
+# snmalloc-sys 0.7's build script reads cargo's `DEBUG` env var (set when the package's debuginfo is enabled) and then
+# builds its C++ as a `Debug` build (`-g`, and on windows-msvc `msvcrtd`). Keep it a release build in every profile,
+# since dev defaults to `debug = 2`. Under LTO rustc links the dylib against a filtered copy of each rlib in a temporary
+# directory it deletes after the link, so a debug map would name objects that no longer exist. `NDEBUG` is not these
+# overrides' job.
 [profile.release.package.snmalloc-sys]
 debug = 0
 
 [profile.dev.package.snmalloc-sys]
-debug = 0
-
-[profile.release.package.zstd-sys]
-debug = 0
-
-[profile.dev.package.zstd-sys]
 debug = 0
 
 # Shipped builds — fat cross-crate LTO + a single codegen unit so the linker can inline and DCE across the whole

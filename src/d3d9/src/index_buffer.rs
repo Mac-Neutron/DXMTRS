@@ -4,22 +4,18 @@
 //! swap and the reported resource type differ.
 
 use core::ffi::c_void;
-use std::sync::atomic::Ordering;
 
 use mtld3d_core::{
-    buffer_backing::{BackingState, BufferBacking, classify_backing, may_release_backing},
-    buffer_rename::{
-        BufferMapMode, LockPlan, PreserveKind, classify_map_mode, may_trust_lock_bounds, plan_lock,
-        records_dirty_range,
-    },
+    buffer_backing::{BufferBacking, classify_backing},
+    buffer_rename::{BufferMapMode, classify_map_mode, may_trust_lock_bounds, records_dirty_range},
     dirty_range::DirtyRange,
     ids::BufferId,
     page_box::PageBox,
 };
 use mtld3d_shared::{InPtr, InPtrMut, OutPtr, ValueIn};
 use mtld3d_types::{
-    D3DINDEXBUFFER_DESC, D3DLOCK_DISCARD, D3DLOCK_KNOWN_BITS, D3DLOCK_NOOVERWRITE,
-    D3DLOCK_READONLY, D3DRTYPE_INDEXBUFFER, Guid, IDirect3DIndexBuffer9Vtbl,
+    D3DINDEXBUFFER_DESC, D3DLOCK_DISCARD, D3DLOCK_KNOWN_BITS, D3DLOCK_READONLY,
+    D3DRTYPE_INDEXBUFFER, Guid, IDirect3DIndexBuffer9Vtbl,
 };
 
 use super::{
@@ -77,15 +73,8 @@ pub struct IndexBufferInner {
     dirty: DirtyRange,
     /// Canonical CPU backing.
     ///
-    /// Released like a vertex buffer's once an upload has carried every
-    /// byte of a buffer D3D9 promises no readback (see
-    /// `mtld3d_core::buffer_backing`). The indexed triangle-fan rewrite is
-    /// the one path that still reads these bytes on the CPU; it reads them
-    /// back off the GPU instead and pins what it installs. A `Direct` buffer
-    /// of a core device is released from the start: the CPU writes the
-    /// core's memory, which the fan reads (DXMTRS C4c-2b).
+    /// Released at creation for `Direct` buffers (the CPU writes the core's memory).
     backing: BufferBacking,
-    last_submit_seq: u64,
     /// Number of `Lock`s not yet ended by an `Unlock`.
     ///
     /// D3D9 lets a locked buffer be locked again, and every pointer handed
@@ -106,36 +95,12 @@ pub struct IndexBufferInner {
     /// accessors are fixed at `0`. Metal has no eviction-order hint, so this
     /// is app-visible state only and never acted upon.
     priority: u32,
-    #[cfg(feature = "core-runtime")]
     core_created: bool,
 }
 
 impl IndexBufferInner {
     pub const fn buffer_id(&self) -> BufferId {
         self.buffer_id
-    }
-
-    /// The buffer's D3D9-visible length in bytes.
-    pub const fn length(&self) -> u32 {
-        self.length
-    }
-
-    /// Whether CPU reads need a complete copy from the device buffer.
-    ///
-    /// A released backing has no bytes; a partial backing holds only the
-    /// ranges written since its restoration. Neither can supply fan indices
-    /// outside those ranges until readback completes the mirror.
-    #[must_use]
-    pub const fn backing_needs_readback(&self) -> bool {
-        !matches!(self.backing.state(), BackingState::Mirrors)
-    }
-
-    /// Adopt index bytes read back out of the device buffer.
-    ///
-    /// Installs them as the backing and pins it, so the buffer never pays
-    /// the read's GPU stall twice.
-    pub fn adopt_device_copy(&mut self, page_box: PageBox) {
-        self.backing.adopt_device_copy(page_box);
     }
 
     /// Give a released buffer a backing again, zeroed.
@@ -158,49 +123,6 @@ impl IndexBufferInner {
         );
     }
 
-    /// Upload a still-mapped `Staged` buffer's dirty span without ending the lock.
-    ///
-    /// So an indexed draw issued while the buffer is mapped reads the latest
-    /// CPU writes, per D3D9 behaviour. `dirty` is left set so `Unlock` (and any
-    /// later draw) re-flushes. No-op unless locked + `Staged` + dirty. Mirrors
-    /// `ib_unlock`'s upload, minus the clear.
-    #[inline]
-    pub fn flush_staged_if_mapped(&mut self, dev: &mut DeviceInner) {
-        if self.lock_count == 0 || !matches!(self.map_mode, BufferMapMode::Staged) {
-            return;
-        }
-        self.flush_mapped_dirty_span(dev);
-    }
-
-    /// The upload behind [`Self::flush_staged_if_mapped`], for a locked `Staged` buffer.
-    ///
-    /// Out of line and cold so a draw inlines only the lock test: a draw
-    /// issued while its buffer is still mapped is rare.
-    #[cold]
-    #[inline(never)]
-    fn flush_mapped_dirty_span(&mut self, dev: &mut DeviceInner) {
-        let Some((min, max)) = self.dirty.span() else {
-            return;
-        };
-        let Some(src) = self.backing.read_ptr_at(min as usize) else {
-            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                "flush_staged_if_mapped: no CPU backing behind a mapped dirty range");
-            return;
-        };
-        let size = (max - min) as usize;
-        let mut transient = match dev.alloc_pagebox_capped(size) {
-            Ok(value) => value,
-            Err(_hr) => return,
-        };
-        // SAFETY: `src` spans `[min, max)` of the backing; `transient` is a
-        // fresh `PageBox` of ≥ `size` bytes; the two allocations are disjoint.
-        unsafe {
-            core::ptr::copy_nonoverlapping(src, transient.as_mut_ptr(), size);
-        }
-        self.backing.note_upload(min, max);
-        dev.push_stage_upload(self.buffer_id, transient, min, max - min);
-    }
-
     pub const fn map_mode(&self) -> BufferMapMode {
         self.map_mode
     }
@@ -209,49 +131,18 @@ impl IndexBufferInner {
         self.format
     }
 
-    pub fn current_backing_ptr(&self) -> usize {
-        self.backing.ptr()
-    }
-
-    /// The current backing allocation's identity (see `BufferBacking::generation`).
-    pub fn current_backing_generation(&self) -> u64 {
-        self.backing.generation()
-    }
-
-    pub const fn current_backing_len(&self) -> usize {
-        self.backing.padded_len()
-    }
-
-    pub const fn stamp_submit_seq(&mut self, seq: u64) {
-        if seq > self.last_submit_seq {
-            self.last_submit_seq = seq;
-        }
-    }
-
-    /// The backing's bytes, its padded length; empty for a released one (DXMTRS C4c-1).
-    ///
-    /// What a core device's indexed triangle fan reads a staged buffer's indices from; a buffer
-    /// the core maps directly has none, and its fan reads the core's memory (DXMTRS C4c-2b).
-    #[cfg(feature = "core-runtime")]
+    /// The backing's bytes, its padded length; empty for a released one.
     #[must_use]
     pub fn backing(&self) -> &[u8] {
         self.backing.as_slice()
     }
 
-    /// Brings the buffer's core form up to its backing before a draw reads it (DXMTRS C4c-1).
+    /// Brings the buffer's core form up to its backing before a draw reads it.
     ///
-    /// The twin of the vertex buffer's: a buffer the core's store lacks is made at the backing's
-    /// padded length and takes the whole backing; otherwise the dirty span, if any, uploads,
-    /// cleared after an accepted upload unless a lock is out. False when the core makes no
-    /// buffer or refuses the upload (a buffer it made then leaves the store).
-    ///
-    /// Unlike the vertex buffer's, an upload never releases the backing, whatever the usage: an
-    /// indexed triangle fan reads its indices out of it, and the core runtime has no read-back
-    /// of a buffer to restore it from (DXMTRS C4c-2b). A buffer the core maps directly owes
-    /// nothing.
-    #[cfg(feature = "core-runtime")]
+    /// Unlike vertex buffers, `Staged` index buffers keep their CPU backing so the indexed
+    /// triangle-fan rewrite can read indices without a GPU readback.
     #[must_use]
-    pub fn core_flush(&mut self, core: &mut d3d9_rt::device::CoreDevice) -> bool {
+    pub fn core_flush(&mut self, core: &mut crate::rt::device::CoreDevice) -> bool {
         if matches!(self.map_mode, BufferMapMode::Direct) {
             return true;
         }
@@ -312,18 +203,14 @@ impl Direct3DIndexBuffer9 {
         let buffer_id = BufferId::new_unique();
         let class = classify_backing(info.usage, info.pool);
         let map_mode = classify_map_mode(info.usage, info.pool);
-        #[cfg(feature = "core-runtime")]
         // SAFETY: `info.device_inner` is null or the creating device, live, whose create entry
         // point uses no other reference to it until this returns.
         let core_mode = unsafe {
             crate::vertex_buffer::core_map_mode(info.device_inner, map_mode, buffer_id, info.length)
         };
-        #[cfg(feature = "core-runtime")]
         let (map_mode, released) = core_mode.map_or((map_mode, false), |mode| {
             (mode, matches!(mode, BufferMapMode::Direct))
         });
-        #[cfg(not(feature = "core-runtime"))]
-        let released = false;
         let backing = if released {
             BufferBacking::released(info.length, class)
         } else {
@@ -349,11 +236,9 @@ impl Direct3DIndexBuffer9 {
             map_mode,
             dirty,
             backing,
-            last_submit_seq: 0,
             lock_count: 0,
             state_block_refs: 0,
             priority: 0,
-            #[cfg(feature = "core-runtime")]
             core_created: false,
         }));
         Some(Self {
@@ -456,19 +341,15 @@ unsafe fn finalize_index_buffer(this: *mut Direct3DIndexBuffer9) {
     // `Box::into_raw(IndexBufferInner)` from `Self::new` and no
     // other reference can survive.
     let mut inner_box = unsafe { Box::from_raw(inner_ptr) };
-    let current_box = inner_box.backing.release();
-    let IndexBufferInner {
-        device_inner,
-        buffer_id,
-        last_submit_seq,
-        ..
-    } = *inner_box;
+    drop(inner_box.backing.release());
+    let buffer_id = inner_box.buffer_id;
+    let device_inner = inner_box.device_inner;
     if !device_inner.is_null() {
         // SAFETY: `device_inner` was stamped at `Self::new` from a
         // live `DeviceInner`; the device outlives all its child
         // resources per D3D9 lifetime rules.
         let dev = unsafe { &mut *device_inner };
-        dev.retire_released_buffer(buffer_id, current_box, last_submit_seq);
+        dev.core_mut().forget_buffer(buffer_id);
     }
     // SAFETY: both counters reached zero; `this` is the original
     // `Box::into_raw(Direct3DIndexBuffer9)` allocation.
@@ -638,17 +519,6 @@ extern "system" fn ib_get_type(this: *mut c_void) -> u32 {
 
 // ── IDirect3DIndexBuffer9 ──
 
-/// Whether `device`, a buffer's, runs the core runtime (DXMTRS C4b-3a).
-///
-/// Its buffers are staged, and a draw uploads what it reads (DXMTRS C4c-1), but for those the
-/// core maps directly (DXMTRS C4c-2b).
-#[cfg(feature = "core-runtime")]
-fn on_core_device(device: *mut DeviceInner) -> bool {
-    // SAFETY: null, or a buffer's device, which outlives it (D3D9 lifetime rules, as its
-    // finalizer relies on).
-    !device.is_null() && unsafe { &*device }.is_core()
-}
-
 extern "system" fn ib_lock(
     this: *mut c_void,
     offset_to_lock: u32,
@@ -678,33 +548,25 @@ extern "system" fn ib_lock(
             inner.length
         );
     }
-    // A buffer the core maps directly takes the core's pointer, as a vertex buffer's (DXMTRS
-    // C4c-2b).
-    #[cfg(feature = "core-runtime")]
-    {
-        // SAFETY: the buffer's device, null or live (it outlives its buffers); this entry point
-        // uses no other reference to it during the call.
-        let direct = unsafe {
-            crate::vertex_buffer::core_lock(
-                inner.device_inner,
-                inner.map_mode,
-                inner.buffer_id,
-                inner.usage,
-                offset_to_lock,
-                size_to_lock,
-                flags,
-            )
-        };
-        if let Some(ptr) = direct {
-            // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
-            return unsafe { answer_lock(inner, flags, ptr, pp_data) };
-        }
+    // SAFETY: the buffer's device, null or live (it outlives its buffers); this entry point
+    // uses no other reference to it during the call.
+    let direct = unsafe {
+        crate::vertex_buffer::core_lock(
+            inner.device_inner,
+            inner.map_mode,
+            inner.buffer_id,
+            inner.usage,
+            offset_to_lock,
+            size_to_lock,
+            flags,
+        )
+    };
+    if let Some(ptr) = direct {
+        // SAFETY: `pp_data` is non-null (checked above), the caller's writable slot.
+        return unsafe { answer_lock(inner, flags, ptr, pp_data) };
     }
 
     if inner.backing.is_released() {
-        // The bytes live on the GPU alone. A read through this pointer sees
-        // zeros rather than the buffer's contents, which is why only the
-        // usages D3D9 promises no readback release their backing at all.
         if flags & D3DLOCK_READONLY != 0 {
             mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
                 "ib_lock: D3DLOCK_READONLY on a D3DUSAGE_WRITEONLY buffer whose backing was released; the mapped bytes read as zero");
@@ -712,154 +574,40 @@ extern "system" fn ib_lock(
         inner.restore_backing();
     }
 
-    if matches!(inner.map_mode, BufferMapMode::Staged) {
-        // Separate CPU staging: record the dirtied range for the Unlock
-        // upload. No rename / no `plan_lock` — the GPU reads a distinct
-        // device buffer, so a partial write can't race an in-flight draw.
-        // `records_dirty_range` drops the locks that leave the device
-        // buffer nothing to pick up: READONLY, in the one pool that keeps
-        // a system-memory copy whose upload it can skip, and
-        // NO_DIRTY_UPDATE is not honoured: it is not a promise that
-        // nothing was written, and this path has no later upload to carry
-        // the bytes, so dropping the range would drop the write.
-        if records_dirty_range(flags, inner.pool) {
-            // The buffer's own class, not its mode: a core device stages a DYNAMIC buffer it
-            // could not map (DXMTRS C4c-2b's fall-back).
-            if flags & D3DLOCK_DISCARD != 0
-                && matches!(
-                    classify_map_mode(inner.usage, inner.pool),
-                    BufferMapMode::Staged
-                )
-            {
-                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                    "ib_lock: D3DLOCK_DISCARD on a non-DYNAMIC (Staged) buffer — treating as a normal dirtied-range upload");
-            }
-            // `(0, 0)` is `conjoin`'s "to end of buffer"; see the twin
-            // comment in `vb_lock`, which also carries the reason a
-            // re-created backing may not widen.
-            let trusted = may_trust_lock_bounds(
-                flags,
-                inner.usage,
-                inner.pool,
-                size_to_lock,
-                ignore_lock_bounds(inner),
-            );
-            // A buffer mtld3d maps directly dirties the whole of it on a core device, as a
-            // vertex buffer's (DXMTRS C4c-1).
-            #[cfg(feature = "core-runtime")]
-            let trusted = trusted
-                && (matches!(
-                    classify_map_mode(inner.usage, inner.pool),
-                    BufferMapMode::Staged
-                ) || !on_core_device(inner.device_inner));
-            let discard = flags & D3DLOCK_DISCARD != 0;
-            let widen = !trusted && (inner.backing.may_widen_upload() || discard);
-            if !trusted && !widen {
-                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                    "ib_lock: keeping the announced lock window on a re-created backing; a widened upload would overwrite device bytes the buffer no longer holds");
-            }
-            let (dirty_offset, dirty_size) = if widen {
-                (0, 0)
-            } else {
-                (offset_to_lock, size_to_lock)
-            };
-            inner.dirty.conjoin(dirty_offset, dirty_size, inner.length);
+    if matches!(inner.map_mode, BufferMapMode::Staged) && records_dirty_range(flags, inner.pool) {
+        if flags & D3DLOCK_DISCARD != 0
+            && matches!(
+                classify_map_mode(inner.usage, inner.pool),
+                BufferMapMode::Staged
+            )
+        {
+            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                "ib_lock: D3DLOCK_DISCARD on a non-DYNAMIC (Staged) buffer: treating as a normal dirtied-range upload");
         }
-    }
-
-    let bypass_rename = flags & (D3DLOCK_NOOVERWRITE | D3DLOCK_READONLY) != 0;
-    if matches!(inner.map_mode, BufferMapMode::Direct)
-        && !bypass_rename
-        && inner.device_inner.is_null()
-    {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET, "ib_lock: device_inner null on rename path");
-    }
-
-    if matches!(inner.map_mode, BufferMapMode::Direct)
-        && !bypass_rename
-        && !inner.device_inner.is_null()
-    {
-        // SAFETY: `inner.device_inner` was stamped at `Self::new` from a
-        // live `DeviceInner`; the device outlives all its child
-        // resources per D3D9 lifetime rules.
-        let dev = unsafe { &mut *inner.device_inner };
-        let coh = dev.coherent_seq_arc().load(Ordering::Acquire);
-        // The same contention test `plan_lock` applies, named here so
-        // both it and the plan read one sampled `coh`. A stale `coh` is
-        // a lower bound on GPU progress (only the unix side raises it,
-        // with a `fetch_max` once the GPU retires the frame), so it can
-        // turn a legal in-place write into an unnecessary rename, never
-        // the reverse.
-        let contended = inner.last_submit_seq > coh;
-        match plan_lock(
+        let trusted = may_trust_lock_bounds(
             flags,
             inner.usage,
-            inner.length,
-            offset_to_lock,
+            inner.pool,
             size_to_lock,
-            inner.last_submit_seq,
-            coh,
-        ) {
-            LockPlan::Rename { preserve } => {
-                let buffer_id = inner.buffer_id;
-                let old_seq = inner.last_submit_seq;
-                let logical_len = inner.length as usize;
-                let fresh = match dev.alloc_pagebox_capped(logical_len) {
-                    Ok(value) => value,
-                    Err(hr) => return hr,
-                };
-                // `Direct` buffers never release their backing (the GPU
-                // reads it), so the swap always hands the old one back.
-                let Some(old_box) = inner.backing.replace(fresh) else {
-                    mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                        "ib_lock: rename found no backing to retain");
-                    return D3DERR_INVALIDCALL;
-                };
-                match preserve {
-                    PreserveKind::None => {
-                        // Rename without preserve. Either explicit DISCARD
-                        // or whole-buffer WRITEONLY contended.
-                        dev.perf_mut().bump_ib_discard();
-                    }
-                    PreserveKind::Cpu => {
-                        // Whole-buffer non-WRITEONLY contended: the game
-                        // might read the whole buffer through the Lock
-                        // pointer, so carry the old bytes across
-                        // synchronously.
-                        dev.perf_mut().bump_vbib_preserve_cpu();
-                        let dst = inner
-                            .backing
-                            .write_ptr_at(0)
-                            .expect("the fresh rename backing was just installed");
-                        // SAFETY: both `old_box` and the fresh backing are
-                        // `PageBox`es of `logical_len` bytes; the two
-                        // allocations don't alias.
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(old_box.as_ptr(), dst, logical_len);
-                        }
-                    }
-                }
-                dev.perf_mut().bump_ib_rename();
-                let renamed_bytes = inner.backing.padded_len();
-                dev.perf_mut().bump_vbib_rename_bytes(renamed_bytes);
-                dev.queue_vbib_retention(buffer_id, old_box, old_seq);
-                inner.last_submit_seq = 0;
-            }
-            LockPlan::WriteInPlace => {
-                // Count the kept divergence: a contended partial Lock
-                // without DISCARD or NOOVERWRITE hands back a pointer
-                // into the backing a queued draw may still be reading
-                // (`docs/d3d9/STATUS.md#kept-divergences`). Counted and not
-                // warned because it is a by-design no-op on a per-frame
-                // batcher path, not a stub or a fallback. The other two
-                // ways to reach `WriteInPlace` (NOOVERWRITE/READONLY,
-                // uncontended) are conformant, so it takes both tests to
-                // select this arm.
-                if contended && !bypass_rename {
-                    dev.perf_mut().bump_vbib_write_in_place_contended();
-                }
-            }
+            ignore_lock_bounds(inner),
+        );
+        let trusted = trusted
+            && (matches!(
+                classify_map_mode(inner.usage, inner.pool),
+                BufferMapMode::Staged
+            ) || inner.device_inner.is_null());
+        let discard = flags & D3DLOCK_DISCARD != 0;
+        let widen = !trusted && (inner.backing.may_widen_upload() || discard);
+        if !trusted && !widen {
+            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
+                "ib_lock: keeping the announced lock window on a re-created backing; a widened upload would overwrite device bytes the buffer no longer holds");
         }
+        let (dirty_offset, dirty_size) = if widen {
+            (0, 0)
+        } else {
+            (offset_to_lock, size_to_lock)
+        };
+        inner.dirty.conjoin(dirty_offset, dirty_size, inner.length);
     }
 
     // `offset_to_lock <= inner.length` is checked above and the backing is
@@ -917,62 +665,19 @@ extern "system" fn ib_unlock(this: *mut c_void) -> i32 {
     } else {
         inner.lock_count -= 1;
         if inner.lock_count != 0 {
-            // An earlier lock is still out and its pointer maps this
-            // backing: the writes publish at the Unlock that ends the last
-            // lock, as D3D9 counts them.
             return D3D_OK;
         }
     }
-    // A core device's dirty range waits for the draw that reads it (DXMTRS C4c-1).
-    #[cfg(feature = "core-runtime")]
-    if on_core_device(inner.device_inner) {
-        if matches!(inner.map_mode, BufferMapMode::Staged) && inner.dirty.span().is_some() {
-            // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
-            // finalizer relies on); nothing else of it is borrowed in this entry point.
-            let dev = unsafe { &*inner.device_inner };
-            if let Err(hr) = dev.encoder_status() {
-                return hr;
-            }
-        }
-        return D3D_OK;
-    }
-    if matches!(inner.map_mode, BufferMapMode::Staged)
-        && let Some((min, max)) = inner.dirty.span()
-        && !inner.device_inner.is_null()
+    if !inner.device_inner.is_null()
+        && matches!(inner.map_mode, BufferMapMode::Staged)
+        && inner.dirty.span().is_some()
     {
-        // SAFETY: `inner.device_inner` was stamped at `Self::new` from
-        // a live `DeviceInner` that outlives its children.
-        let dev = unsafe { &mut *inner.device_inner };
-        let Some(src) = inner.backing.read_ptr_at(min as usize) else {
-            mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                "ib_unlock: dirty range with no CPU backing behind it, dropping the upload");
-            inner.dirty.clear();
-            return D3D_OK;
-        };
-        let size = (max - min) as usize;
-        let mut transient = match dev.alloc_pagebox_capped(size) {
-            Ok(value) => value,
-            Err(hr) => return hr,
-        };
-        // SAFETY: `src` spans `[min, max)` of the backing; `transient` is
-        // a fresh `PageBox` of ≥ `size` bytes; the two allocations are
-        // disjoint.
-        unsafe {
-            core::ptr::copy_nonoverlapping(src, transient.as_mut_ptr(), size);
-        }
-        // Push the upload as an inline op so the encoder sees it in
-        // draw order (for rename-at-overlap). No Metal thunk here.
-        inner.backing.note_upload(min, max);
-        dev.push_stage_upload(inner.buffer_id, transient, min, max - min);
+        // SAFETY: a core device, which outlives its buffers (D3D9 lifetime rules, as the
+        // finalizer relies on); nothing else of it is borrowed in this entry point.
+        let dev = unsafe { &*inner.device_inner };
         if let Err(hr) = dev.encoder_status() {
             return hr;
         }
-        // Only once the upload is actually queued: the range is the
-        // only record that these bytes still owe a copy to the device
-        // buffer, so clearing it on a path that queued nothing would
-        // drop them silently.
-        inner.dirty.clear();
-        release_backing_after_upload(inner);
     }
     D3D_OK
 }
@@ -992,31 +697,6 @@ fn ignore_lock_bounds(inner: &IndexBufferInner) -> bool {
     // lifetime rules.
     let dev = unsafe { &*inner.device_inner };
     dev.config().buffer_ignore_lock_bounds
-}
-
-/// Release the CPU backing of an index buffer whose upload just carried every byte.
-///
-/// Same class and same guards as the vertex-buffer release: the transient
-/// the upload owns holds the bytes until the GPU has them, `D3DPOOL_DEFAULT`
-/// `D3DUSAGE_WRITEONLY` is the one class D3D9 promises no readback, and
-/// `buffer.ignoreLockBounds` names the titles whose uploads have to be able
-/// to widen out of the CPU copy. A pinned backing is the extra guard an
-/// index buffer needs: the indexed triangle-fan rewrite has already paid a
-/// GPU stall to read these bytes back, so releasing them would only buy
-/// another one.
-fn release_backing_after_upload(inner: &mut IndexBufferInner) {
-    if inner.lock_count != 0
-        || inner.backing.is_pinned()
-        || ignore_lock_bounds(inner)
-        || !may_release_backing(inner.usage, inner.pool)
-        || !inner.backing.may_widen_upload()
-    {
-        return;
-    }
-    // The release is this class's ordinary path and logs nothing. What would
-    // be a bug is a read of the bytes afterwards, and the one read a lock
-    // declares, `D3DLOCK_READONLY`, warns in `ib_lock`.
-    drop(inner.backing.release());
 }
 
 extern "system" fn ib_get_desc(this: *mut c_void, desc: *mut D3DINDEXBUFFER_DESC) -> i32 {

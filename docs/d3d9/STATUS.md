@@ -7,15 +7,11 @@ divergences from D3D9 it keeps on purpose. The tested games are in
 
 ## Supported
 
-- Default runtime: `runtime.mode = core` (`d3d9.dll` on `dxmt-core` over
-  `winemetal.dll`, built with `-Dd3d9_core_runtime=true` across all halves
-  including native `aarch64`), with `runtime.mode = mtld3d` (`mtld3d.dll` /
-  `mtld3d.so`) kept as the escape hatch until C5.
+- Runtime: `d3d9.dll` on `dxmt-core` over `winemetal.dll` and `winemetal.so`
+  across all targets (`i686`, `x86_64`, and ARM64X `aarch64` / `arm64ec`).
 - Shader models 1.x through 3.0 and the fixed-function stages, lowered from
-  DXSO through the translator to AIR by default (`shader.backend=air`) and
-  cached on disk by content hash (with `shaderCache.enable` and warm-start
-  pipeline recipe prewarming supported on both `mtld3d` and `runtime.mode = core`);
-  `shader.backend=msl` is the escape, the MSL emitter, unchanged until its deletion.
+  DXSO through `airconv` to AIR and cached on disk by content hash (with
+  `shaderCache.enable` and warm-start pipeline recipe prewarming).
 - The fixed-function pipeline: lighting, texture-coordinate generation
   (camera-space normal, position and reflection vector, and sphere map), the
   texture-stage cascade (CURRENT/TEMP registers, per-stage constants,
@@ -29,75 +25,63 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   EXP and EXP2; SM3 shaders own their fog.
 - Every draw call and primitive type, point sprites, user clip planes, all
   sixteen vertex streams, hardware instancing.
-- State blocks, occlusion and event queries, on the core runtime
-  (`runtime.mode = core`) too. There only an application's draws count toward
-  an occlusion query, where mtld3d also counts a scaled `StretchRect` into the
-  bound target right after a counted draw, and an END with no BEGIN answers 0
-  at once, where mtld3d answers it once that frame retired.
-- On the core runtime the getters, the obsolete calls and every form of
-  `Present` answer as on mtld3d, with four differences: a present skips
-  mtld3d's frame capture (`winemetal` slots 158..=164 drive latency-critical
-  activity, pull-on-present `CAMetalLayer` ownership, presented shared-event
-  timing, `WMTPresentClientSurface`, and `WMTSetCursorOverlay` software cursor
-  plus gamma LUT directly on core); `EvictManagedResources` keeps the
-  GPU copies; `GetAvailableTextureMem` does not count `CreateRenderTarget` and
-  `CreateDepthStencilSurface` surfaces, nor those of their `Ex` forms;
-  `ValidateDevice` answers one pass for a state whose draw that runtime
-  refuses. Still refused there, each once by name with `D3DERR_NOTAVAILABLE`:
-  a `Reset` to a back-buffer format the core does not make; a
-  `SetRenderTarget` or `SetDepthStencilSurface` of a surface the core does not
-  target or attach; a RESZ into a dynamic depth texture; a `StretchRect` of a
-  pair the core does not copy; and a draw whose layout no binding can fetch,
-  that reads a buffer of another device, binds a shader no core device created,
-  samples a depth texture at a vertex sampler or samples the depth-stencil it
-  tests or writes.
-- On the core runtime the gamma ramp, `color.hdr.enable` EDR inverse tone
-  mapping (BT.2446-A from `WMTViewSyncAndPoll` EDR headroom), `present.maxFps`
-  / divided intervals (paced with host `panel_max_hz`),
-  `debug.presentOccluded`, the frame latency and the extended device's
-  `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx` and
-  `CreateDepthStencilSurfaceEx` answer as on mtld3d. The ramp of a fullscreen
-  device is applied inline per frame by the presenter (for both SDR and HDR
-  output) and synced into `WMTSetCursorOverlay` without stalling or rebuilding
-  pipelines on ramp changes. A present waits for the core queue's latency
-  bound as well as minimum present duration pacing; an `OCCLUDED` or hidden
-  window skips drawable acquisition unless `debug.presentOccluded` is set, while
-  a `DISPLAYS_NOTHING` window keeps acquiring drawables with
+- State blocks, occlusion and event queries. Only an application's draws count
+  toward an occlusion query, and an END with no BEGIN answers 0 at once.
+- Getters, obsolete calls, and every form of `Present` (`winemetal` slots
+  158..=164 drive latency-critical activity, pull-on-present `CAMetalLayer`
+  ownership, presented shared-event timing, `WMTPresentClientSurface`, and
+  `WMTSetCursorOverlay` software cursor plus gamma LUT directly on core);
+  `EvictManagedResources` keeps the GPU copies; `GetAvailableTextureMem` does
+  not count `CreateRenderTarget` and `CreateDepthStencilSurface` surfaces, nor
+  those of their `Ex` forms; `ValidateDevice` answers one pass for a state
+  whose draw the runtime refuses. Refused, each once by name with
+  `D3DERR_NOTAVAILABLE`: a `Reset` to an unsupported back-buffer format; a
+  `SetRenderTarget` or `SetDepthStencilSurface` of an unsupported surface; a
+  RESZ into a dynamic depth texture; a `StretchRect` of an unsupported pair;
+  and a draw whose layout no binding can fetch, that reads a buffer of another
+  device, binds an unrecognized shader, samples a depth texture at a vertex
+  sampler or samples the depth-stencil it tests or writes.
+- Gamma ramp, `color.hdr.enable` EDR inverse tone mapping (BT.2446-A from
+  `WMTViewSyncAndPoll` EDR headroom), `present.maxFps` / divided intervals
+  (paced with host `panel_max_hz`), `debug.presentOccluded`, frame latency, and
+  the extended device's `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx`
+  and `CreateDepthStencilSurfaceEx`. The ramp of a fullscreen device is applied
+  inline per frame by the presenter (for both SDR and HDR output) and synced
+  into `WMTSetCursorOverlay` without stalling or rebuilding pipelines on ramp
+  changes. A present waits for the core queue's latency bound as well as
+  minimum present duration pacing; an `OCCLUDED` or hidden window skips
+  drawable acquisition unless `debug.presentOccluded` is set, while a
+  `DISPLAYS_NOTHING` window keeps acquiring drawables with
   `MTLDrawable_setPresentedEvent` attached and paces on the CPU clock.
-- On the core runtime `render.scale`, `render.lodBias` and `MetalFX` spatial
-  upscaling work as on `mtld3d`: scaled render targets, depth surfaces and
-  shortened mip chains use logical coordinates at D3D9 boundaries (resampling
-  CPU read-backs, CPU uploads, occlusion counts, `vPos`, point sizes,
-  slope-scale depth bias, viewports, scissors, `Clear`, `ColorFill` and
-  `StretchRect`), while settled enlarging presents engage `MTLFXSpatialScaler`
-  after `SETTLED_PRESENTS = 30` frames and apply any active gamma LUT into a
-  render-sized scratch texture ahead of scaling.
-- On the core runtime (`runtime.mode = core`), adapter capability queries
-  (`GetDeviceInfo`), PE logging (`mtld3d-logs` / `log.dir` with 10-file
-  retention), and lock-free VEH crash reporting run directly on the PE side
-  without loading `mtld3d.so` (`mtld3d.dll` defers unix-call initialization
-  until `runtime.mode = mtld3d` is latched). Unified `DXMT_CONFIG`,
-  `DXMT_CONFIG_FILE`, and `dxmt.conf` settings apply without unknown-key
-  warnings on foreign `dxmt.*` or `d3d11.*` entries; `DXMT_STATS` records
-  presented frames and flushes `stats.txt` on `DLL_PROCESS_DETACH`; and
-  Metal's Developer HUD shows the DXMT D3D9 version label (plus per-frame
-  statistics in debug builds).
-- On the core runtime `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound
-  depth-stencil (one sample) or resolves it, sample 0 of each plane (more
-  samples), into level 0 of the depth texture bound at stage 0, at the call,
-  and stores the state, as mtld3d does. A RESZ the core cannot do (no texture
-  or one of no depth format at stage 0, no depth-stencil bound, a destination
-  of another size or, from a one-sample source, of another pixel format) is
-  skipped with one warning and answers `D3D_OK`. Four differences: with a
-  depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at stage 0 is
-  refused by name with `D3DERR_NOTAVAILABLE` and the state is neither stored
-  nor recorded into an open state block; a multisampled source of another
-  pixel format than the destination's (D24X8, D16 or D32 into INTZ, D24S8 or
-  D24FS8 into DF24 or DF16) is skipped with a warning, where mtld3d's transfer
-  converts it; a one-sample source of another pixel format than the
-  destination's (seen for D24X8 into INTZ) is skipped with a warning and the
-  destination keeps its contents, where mtld3d leaves the destination reading
-  zero; and the bound depth-stencil's own texture at stage 0 is skipped with a
+- `render.scale`, `render.lodBias` and `MetalFX` spatial upscaling: scaled
+  render targets, depth surfaces and shortened mip chains use logical
+  coordinates at D3D9 boundaries (resampling CPU read-backs, CPU uploads,
+  occlusion counts, `vPos`, point sizes, slope-scale depth bias, viewports,
+  scissors, `Clear`, `ColorFill` and `StretchRect`), while settled enlarging
+  presents engage `MTLFXSpatialScaler` after `SETTLED_PRESENTS = 30` frames and
+  apply any active gamma LUT into a render-sized scratch texture ahead of
+  scaling.
+- Adapter capability queries (`GetDeviceInfo`), PE logging (`mtld3d-logs` /
+  `log.dir` with 10-file retention), and lock-free VEH crash reporting run
+  directly on the PE side. Unified `DXMT_CONFIG`, `DXMT_CONFIG_FILE`, and
+  `dxmt.conf` settings apply without unknown-key warnings on foreign `dxmt.*` or
+  `d3d11.*` entries; `DXMT_STATS` records presented frames and flushes
+  `stats.txt` on `DLL_PROCESS_DETACH`; and Metal's Developer HUD shows the DXMT
+  D3D9 version label (plus per-frame statistics in debug builds).
+- `SetRenderState(D3DRS_POINTSIZE, RESZ)` copies the bound depth-stencil (one
+  sample) or resolves it, sample 0 of each plane (more samples), into level 0
+  of the depth texture bound at stage 0, at the call, and stores the state. A
+  RESZ that cannot run (no texture or one of no depth format at stage 0, no
+  depth-stencil bound, a destination of another size or, from a one-sample
+  source, of another pixel format) is skipped with one warning and answers
+  `D3D_OK`. With a depth-stencil bound, a `D3DUSAGE_DYNAMIC` depth texture at
+  stage 0 is refused by name with `D3DERR_NOTAVAILABLE` and the state is
+  neither stored nor recorded into an open state block; a multisampled source of
+  another pixel format than the destination's (D24X8, D16 or D32 into INTZ,
+  D24S8 or D24FS8 into DF24 or DF16) is skipped with a warning; a one-sample
+  source of another pixel format than the destination's (seen for D24X8 into
+  INTZ) is skipped with a warning and the destination keeps its contents; and
+  the bound depth-stencil's own texture at stage 0 is skipped with a
   warning, where mtld3d copies the texture onto itself. A multisampled source
   with a stencil plane is first copied into a scratch texture the core makes
   at each such call.
@@ -360,8 +344,7 @@ unless its entry says otherwise.
   this one does not fail cleanly. Metal leaves the result undefined, and an
   Apple GPU returns the target's contents from before the pass began rather
   than the pixels the pass has written. Depth has this handled: a draw that
-  samples the bound depth attachment reads a snapshot copy
-  (`depth_snapshot_for_sampling` in `src/d3d9/unix/src/encoder.rs`). Colour
+  samples the bound depth attachment reads a snapshot copy. Colour
   has no equivalent. DXVK detects the bind and resolves it; it is not built
   here because no known title needs it.
 
@@ -486,7 +469,7 @@ is in [`CONFORMANCE.md`](../../tests/d3d9/conformance/CONFORMANCE.md#kept-diverg
   query counts,
   and appears once the build lands; D3D9 draws every call in its frame.
   Building inline stalls the frame for the length of a Metal compile.
-  `shader.asyncCompile`, on by default (on both `mtld3d` and `runtime.mode = core`).
+  `shader.asyncCompile`, on by default.
 - The fixed-function specular add clamps its sum to [0, 1] before fog
   blends it, where both reference implementations fog the unclamped sum. No
   knob.

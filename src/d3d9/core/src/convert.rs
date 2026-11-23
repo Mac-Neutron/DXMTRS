@@ -1,11 +1,8 @@
 use std::hash::{Hash, Hasher};
 
-use mtld3d_shared::{
-    VertexAttrDesc,
-    mtl::{
-        AddressMode, BlendFactor, BlendOperation, ColorWriteMask, CompareFunc, CullMode, IndexType,
-        MinMagFilter, MipFilter, PrimitiveType, StencilOp, TriangleFillMode, VertexFormat,
-    },
+use mtld3d_shared::mtl::{
+    AddressMode, BlendFactor, BlendOperation, ColorWriteMask, CompareFunc, CullMode, IndexType,
+    MinMagFilter, MipFilter, PrimitiveType, StencilOp, TriangleFillMode, VertexFormat,
 };
 use mtld3d_types::{
     D3DBLEND_BLENDFACTOR, D3DBLEND_BOTHINVSRCALPHA, D3DBLEND_BOTHSRCALPHA, D3DBLEND_DESTALPHA,
@@ -1070,6 +1067,15 @@ pub fn fvf_to_elements(fvf: u32) -> (Vec<D3DVERTEXELEMENT9>, u32) {
             .expect("Metal vertex format size ≤ 16 bytes");
     }
     (elements, u32::from(offset))
+}
+
+/// One resolved Metal vertex attribute fed by a D3D9 stream.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct VertexAttrDesc {
+    pub attr_index: u32,
+    pub buffer_index: u32,
+    pub offset: u32,
+    pub format: VertexFormat,
 }
 
 /// The Metal vertex attributes a declaration resolves to, plus what each stream it names needs.

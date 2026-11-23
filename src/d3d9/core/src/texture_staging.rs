@@ -475,6 +475,9 @@ impl SnapshotLayout {
     }
 }
 
+/// Maximum byte footprint of one partial-upload snapshot box (256 KiB).
+pub const SNAPSHOT_MAX_BYTES: usize = 256 * 1024;
+
 /// What a partial upload of a marked level does with its box.
 pub enum SnapshotBox {
     /// The box covers the whole level and reads the staging by design.
@@ -485,8 +488,7 @@ pub enum SnapshotBox {
     /// The arena cannot take the box.
     ///
     /// A compressed rect off the block grid, whose upload the encoder widens
-    /// to the whole level, or a snapshot over
-    /// [`crate::upload_snapshot::SNAPSHOT_MAX_BYTES`].
+    /// to the whole level, or a snapshot over [`SNAPSHOT_MAX_BYTES`].
     Declined,
     /// The box is copied with this layout.
     Copy(SnapshotLayout),
@@ -519,7 +521,7 @@ pub fn snapshot_box(
     let row_bytes = cols * u64::from(block_bytes);
     let pitch = row_bytes.next_multiple_of(u64::from(pitch_align));
     let len = pitch * rows;
-    if row_bytes == 0 || len > crate::upload_snapshot::SNAPSHOT_MAX_BYTES as u64 {
+    if row_bytes == 0 || len > SNAPSHOT_MAX_BYTES as u64 {
         return SnapshotBox::Declined;
     }
     let (Ok(row_bytes), Ok(rows), Ok(pitch), Ok(len)) = (

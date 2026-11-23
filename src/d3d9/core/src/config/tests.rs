@@ -12,10 +12,7 @@
 use dxmt_util::config::Sources;
 use mtld3d_shared::mtl::{ColorSpacePolicy, SoftwareCursorPolicy};
 
-use super::{
-    AdapterSpoof, CursorScale, Mtld3dConfig, RuntimeMode, ShaderBackend, foreign_key, parse,
-    parse_sources,
-};
+use super::{AdapterSpoof, CursorScale, Mtld3dConfig, foreign_key, parse, parse_sources};
 
 #[test]
 fn empty_input_returns_defaults() {
@@ -664,65 +661,6 @@ fn df_formats_defaults_on_and_parses_off() {
     assert!(!parse(None, "caps.dfFormats = false\n", None).df_formats);
 }
 
-#[test]
-fn shader_backend_defaults_to_air() {
-    assert_eq!(parse(None, "", None).shader_backend, ShaderBackend::Air);
-    assert_eq!(ShaderBackend::default(), ShaderBackend::Air);
-}
-
-#[test]
-fn shader_backend_msl_in_the_file_is_kept() {
-    assert_eq!(
-        parse(None, "shader.backend = msl\n", None).shader_backend,
-        ShaderBackend::Msl
-    );
-}
-
-#[test]
-fn shader_backend_air_parses() {
-    assert_eq!(
-        parse(None, "shader.backend = air\n", None).shader_backend,
-        ShaderBackend::Air
-    );
-    assert_eq!(
-        parse(None, "shader.backend = AIR\n", None).shader_backend,
-        ShaderBackend::Air
-    );
-    assert_eq!(
-        parse(None, "shader.backend = Msl\n", None).shader_backend,
-        ShaderBackend::Msl
-    );
-}
-
-#[test]
-fn shader_backend_bad_value_warns_and_keeps_the_value_in_effect() {
-    assert_eq!(
-        parse(None, "shader.backend = metal\n", None).shader_backend,
-        ShaderBackend::Air
-    );
-    assert_eq!(
-        parse(None, "shader.backend = msl\nshader.backend = metal\n", None).shader_backend,
-        ShaderBackend::Msl,
-        "a bad value keeps the earlier one"
-    );
-}
-
-#[test]
-fn mtld3d_config_env_overrides_the_file_for_shader_backend() {
-    assert_eq!(
-        parse(None, "shader.backend = msl\n", Some("shader.backend=air")).shader_backend,
-        ShaderBackend::Air
-    );
-}
-
-#[test]
-fn mtld3d_config_env_msl_overrides_a_file_saying_air() {
-    assert_eq!(
-        parse(None, "shader.backend = air\n", Some("shader.backend=msl")).shader_backend,
-        ShaderBackend::Msl
-    );
-}
-
 fn sources(dxmt_env: &str, mtld3d_env: &str) -> Sources {
     Sources {
         dxmt_env: dxmt_env.into(),
@@ -736,14 +674,6 @@ fn dxmt_config_sets_a_d3d9_key() {
     assert_eq!(
         parse_sources(None, &sources("present.maxFps=60", ""), b"").present_max_fps,
         60
-    );
-}
-
-#[test]
-fn dxmt_config_msl_reaches_d3d9() {
-    assert_eq!(
-        parse_sources(None, &sources("shader.backend=msl", ""), b"").shader_backend,
-        ShaderBackend::Msl
     );
 }
 
@@ -806,75 +736,11 @@ fn mtld3d_config_keeps_a_non_bmp_char() {
 }
 
 #[test]
-fn runtime_mode_defaults_to_core() {
-    assert_eq!(parse(None, "", None).runtime_mode, RuntimeMode::Core);
-    assert_eq!(RuntimeMode::default(), RuntimeMode::Core);
-}
-
-#[test]
-fn runtime_mode_core_in_the_file() {
-    assert_eq!(
-        parse(None, "runtime.mode = MTLD3D\n", None).runtime_mode,
-        RuntimeMode::Mtld3d
-    );
-    assert_eq!(
-        parse(None, "runtime.mode = mtld3d\n", None).runtime_mode,
-        RuntimeMode::Mtld3d
-    );
-    assert_eq!(
-        parse(None, "runtime.mode = mtld3d\nruntime.mode = core\n", None).runtime_mode,
-        RuntimeMode::Core
-    );
-}
-
-#[test]
-fn mtld3d_config_env_overrides_runtime_mode() {
-    assert_eq!(
-        parse(None, "runtime.mode = core\n", Some("runtime.mode=mtld3d")).runtime_mode,
-        RuntimeMode::Mtld3d
-    );
-    assert_eq!(
-        parse(None, "runtime.mode = mtld3d\n", Some("runtime.mode=core")).runtime_mode,
-        RuntimeMode::Core
-    );
-}
-
-#[test]
-fn dxmt_config_runtime_mode_reaches_d3d9() {
-    assert_eq!(
-        parse_sources(None, &sources("runtime.mode=mtld3d", ""), b"").runtime_mode,
-        RuntimeMode::Mtld3d
-    );
-    assert_eq!(
-        parse_sources(
-            None,
-            &sources("runtime.mode=mtld3d", "runtime.mode=core"),
-            b""
-        )
-        .runtime_mode,
-        RuntimeMode::Core
-    );
-}
-
-#[test]
-fn runtime_mode_bad_value_warns_and_keeps_current() {
-    assert_eq!(
-        parse(None, "runtime.mode = unix\n", None).runtime_mode,
-        RuntimeMode::Core
-    );
-    assert_eq!(
-        parse(None, "runtime.mode = mtld3d\nruntime.mode = pe\n", None).runtime_mode,
-        RuntimeMode::Mtld3d,
-        "a bad value keeps the earlier one"
-    );
-}
-
-#[test]
 fn dxmt_file_and_four_layer_precedence_apply_in_order() {
     let sources = Sources {
         dxmt_file: Some((
             b"DXMT_CONFIG_FILE".to_vec(),
-            b"present.maxFps = 40\nshader.backend = msl\n[game.exe]\nruntime.mode = mtld3d\n"
+            b"present.maxFps = 40\npresent.maxFrameLatency = 2\n[game.exe]\nrender.scale = 0.75\n"
                 .to_vec(),
         )),
         mtld3d_file: Some(("mtld3d.conf".into(), Ok(b"present.maxFps = 50\n".to_vec()))),
@@ -883,8 +749,8 @@ fn dxmt_file_and_four_layer_precedence_apply_in_order() {
     };
     let cfg = parse_sources(None, &sources, b"game.exe");
     assert_eq!(cfg.present_max_fps, 120);
-    assert_eq!(cfg.shader_backend, ShaderBackend::Msl);
-    assert_eq!(cfg.runtime_mode, RuntimeMode::Mtld3d);
+    assert_eq!(cfg.present_max_frame_latency, 2);
+    assert_eq!(cfg.render_scale_percent, 75);
 }
 
 #[test]
@@ -894,10 +760,9 @@ fn dxmt_config_only_and_foreign_keys_parse_without_error() {
             b"dxmt.conf".to_vec(),
             b"dxmt.shaderMetalVersion = 310\nd3d11.disableAsyncCompilation = true\n".to_vec(),
         )),
-        dxmt_env: b"dxmt.hud=true;d3d11.samplerAnisotropy=8;d3d10.x=1;d3d12.y=2;dxgi.forceSDR=true;runtime.mode=mtld3d;present.maxFps=90".to_vec(),
+        dxmt_env: b"dxmt.hud=true;d3d11.samplerAnisotropy=8;d3d10.x=1;d3d12.y=2;dxgi.forceSDR=true;present.maxFps=90".to_vec(),
         ..Default::default()
     };
     let cfg = parse_sources(None, &sources, b"");
-    assert_eq!(cfg.runtime_mode, RuntimeMode::Mtld3d);
     assert_eq!(cfg.present_max_fps, 90);
 }

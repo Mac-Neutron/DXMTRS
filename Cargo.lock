@@ -16,12 +16,6 @@ name = "airconv"
 version = "0.14.1"
 dependencies = [
  "airconv-ir",
- "dispatch2",
- "mtld3d-core",
- "mtld3d-shared",
- "objc2",
- "objc2-foundation",
- "objc2-metal",
  "rustc-hash",
 ]
 
@@ -110,16 +104,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838"
 dependencies = [
  "find-msvc-tools",
- "jobserver",
- "libc",
  "shlex",
 ]
-
-[[package]]
-name = "cfg-if"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "cmake"
@@ -177,23 +163,6 @@ dependencies = [
 name = "d3d9"
 version = "0.14.1"
 dependencies = [
- "bitflags 2.13.2",
- "d3d9-rt",
- "dxmt-util",
- "log",
- "mtld3d-core",
- "mtld3d-shared",
- "mtld3d-types",
- "rustc-hash",
- "snmalloc-rs",
- "xbr",
- "xxhash-rust",
-]
-
-[[package]]
-name = "d3d9-rt"
-version = "0.14.1"
-dependencies = [
  "airconv-ir",
  "bitflags 2.13.2",
  "dxmt-core",
@@ -201,9 +170,13 @@ dependencies = [
  "dxmt-util",
  "log",
  "mtld3d-core",
+ "mtld3d-shared",
  "mtld3d-types",
  "rustc-hash",
+ "snmalloc-rs",
  "winemetal-sys",
+ "xbr",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -324,17 +297,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "getrandom"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
-dependencies = [
- "cfg-if",
- "libc",
- "r-efi",
-]
-
-[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -384,30 +346,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "jobserver"
-version = "0.1.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
-dependencies = [
- "getrandom",
- "libc",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
-
-[[package]]
-name = "libloading"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
 
 [[package]]
 name = "log"
@@ -420,15 +362,6 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
-
-[[package]]
-name = "mtld3d"
-version = "0.14.1"
-dependencies = [
- "dxmt-util",
- "log",
- "mtld3d-shared",
-]
 
 [[package]]
 name = "mtld3d-conformance"
@@ -447,14 +380,10 @@ dependencies = [
  "log",
  "mtld3d-shared",
  "mtld3d-types",
- "objc2",
- "objc2-foundation",
- "objc2-metal",
  "rustc-hash",
  "snmalloc-rs",
  "strum",
  "xxhash-rust",
- "zstd",
 ]
 
 [[package]]
@@ -464,16 +393,6 @@ dependencies = [
  "libc",
  "mtld3d-shared",
  "mtld3d-types",
-]
-
-[[package]]
-name = "mtld3d-mtl"
-version = "0.14.1"
-dependencies = [
- "airconv-ir",
- "bitflags 2.13.2",
- "log",
- "rustc-hash",
 ]
 
 [[package]]
@@ -498,8 +417,6 @@ dependencies = [
  "mtld3d-shared",
  "mtld3d-types",
  "snmalloc-rs",
- "xxhash-rust",
- "zstd",
 ]
 
 [[package]]
@@ -507,36 +424,6 @@ name = "mtld3d-types"
 version = "0.14.1"
 dependencies = [
  "bitflags 2.13.2",
-]
-
-[[package]]
-name = "mtld3d-unix"
-version = "0.14.1"
-dependencies = [
- "airconv",
- "airconv-ir",
- "bitflags 2.13.2",
- "block2",
- "dispatch2",
- "dxmt-util",
- "libc",
- "libloading",
- "log",
- "mtld3d-core",
- "mtld3d-mtl",
- "mtld3d-shared",
- "mtld3d-types",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-metal",
- "objc2-metal-fx",
- "objc2-quartz-core",
- "rustc-hash",
- "snmalloc-rs",
- "strum",
 ]
 
 [[package]]
@@ -699,12 +586,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "pkg-config"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -736,12 +617,6 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "r-efi"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "regex"
@@ -964,31 +839,3 @@ name = "xxhash-rust"
 version = "0.8.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
-
-[[package]]
-name = "zstd"
-version = "0.14.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "057cfd910cfac363a0ada849592624b4c9ff2e10bef504c3433810d78ed96f93"
-dependencies = [
- "zstd-safe",
-]
-
-[[package]]
-name = "zstd-safe"
-version = "8.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd44c6a7284e91f3717755b24315a302edd9153a01f753c3cba3d765e8eafac"
-dependencies = [
- "zstd-sys",
-]
-
-[[package]]
-name = "zstd-sys"
-version = "2.1.1+zstd.1.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeec9eaf2dffbbd09201e23bd0ffcbaa33bb8e9266a10734fd7ed90a85eca078"
-dependencies = [
- "cc",
- "pkg-config",
-]

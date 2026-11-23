@@ -33,7 +33,7 @@ use mtld3d_types::{
 use super::{FfProgram, vertex, vs};
 use crate::dxso::{
     FfPsKey, FfStage, FfStageFlags, FfStageResult, FfVsFlags, FfVsKey, decl_passthrough_code,
-    emit_ps_ff_named, emit_vs_ff_named, tci_entry,
+    tci_entry,
 };
 
 /// TCI modes, the high nibble of an `FfVsKey::tci` entry.
@@ -826,49 +826,6 @@ fn relative_rows(p: &DxsoProgram) -> BTreeSet<u16> {
         .collect()
 }
 
-/// The `vs_c` rows the MSL reads: every `vs_c[<n>]`, and a sequential bone's four palette rows.
-fn msl_rows(text: &str) -> BTreeSet<u16> {
-    let mut rows = BTreeSet::new();
-    for (prefix, bone) in [("vs_c[", false), ("uint idx = ", true)] {
-        let mut rest = text;
-        while let Some(at) = rest.find(prefix) {
-            rest = &rest[at + prefix.len()..];
-            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-            let tail = &rest[digits.len()..];
-            let Ok(n) = digits.parse::<u16>() else {
-                continue;
-            };
-            if bone && tail.starts_with("u;") {
-                rows.extend((0..4).map(|j| PALETTE + 4 * n + j));
-            } else if !bone && tail.starts_with(']') {
-                rows.insert(n);
-            }
-        }
-    }
-    rows
-}
-
-/// Texture matrix rows the MSL reads into lanes its output drops.
-///
-/// `COUNT2`'s z and w, `COUNT3`'s w.
-fn dead_rows(key: &FfVsKey) -> BTreeSet<u16> {
-    let mut rows = BTreeSet::new();
-    if key.has_rhw() {
-        return rows;
-    }
-    for stage in 0..usize::from(key.tex_coord_count).min(8) {
-        let base = 63 + 4 * u16::try_from(stage).unwrap_or(0);
-        match key.tt_flags[stage] & 7 {
-            2 => rows.extend([base + 2, base + 3]),
-            3 => {
-                rows.insert(base + 3);
-            }
-            _ => {}
-        }
-    }
-    rows
-}
-
 /// The window rows the builder reads beyond the epilogue's own.
 fn expected_window(key: &FfVsKey) -> BTreeSet<u16> {
     let mut rows = BTreeSet::new();
@@ -884,19 +841,6 @@ fn expected_window(key: &FfVsKey) -> BTreeSet<u16> {
     }
     if key.clip_plane_count > 0 {
         rows.extend(VS_WINDOW + 2..VS_WINDOW + 6);
-    }
-    rows
-}
-
-/// The `[[attribute(N)]]` indices the MSL's `VertexIn` declares.
-fn msl_attributes(text: &str) -> BTreeSet<u16> {
-    let prefix = "[[attribute(";
-    let mut rows = BTreeSet::new();
-    let mut rest = text;
-    while let Some(at) = rest.find(prefix) {
-        rest = &rest[at + prefix.len()..];
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        rows.insert(digits.parse().expect("an attribute index"));
     }
     rows
 }
@@ -924,25 +868,11 @@ fn every_synthetic_vs_key_lowers() {
 }
 
 #[test]
-fn vs_reads_the_rows_the_msl_reads() {
+fn vs_reads_expected_palette_and_window_rows() {
     for key in &all_vs_keys() {
         let (_, p) = built(key);
-        let text = emit_vs_ff_named(key, "t");
-        let msl = msl_rows(&text);
         let direct = direct_rows(&p);
-        assert!(
-            direct.is_subset(&msl),
-            "{key:?}: reads {:?} the MSL does not",
-            direct.difference(&msl).collect::<Vec<_>>()
-        );
-        let unread: BTreeSet<u16> = msl.difference(&direct).copied().collect();
         let indexed = key.vertex_blend_count > 0 && key.vertex_blend_indexed();
-        let unread_ok = dead_rows(key);
-        assert!(
-            unread.is_subset(&unread_ok),
-            "{key:?}: leaves {:?} unread",
-            unread.difference(&unread_ok).collect::<Vec<_>>()
-        );
         // The indexed palette only relatively, from its first row.
         let relative = relative_rows(&p);
         if indexed {
@@ -951,75 +881,21 @@ fn vs_reads_the_rows_the_msl_reads() {
         } else {
             assert!(relative.is_empty(), "{key:?}");
         }
-        // The window only where `ff.rs` reads `vs_draw`/`pos_fixup` itself.
         let window = window_rows(&p);
         assert_eq!(window, expected_window(key), "{key:?}");
-        assert_eq!(
-            text.contains("vs_draw.point_scale"),
-            window.contains(&(VS_WINDOW + 1)),
-            "{key:?}"
-        );
-        assert_eq!(
-            text.contains("vs_draw.inv_view"),
-            window.contains(&(VS_WINDOW + 2)),
-            "{key:?}"
-        );
     }
 }
 
 #[test]
-fn vs_declares_the_msl_inputs() {
+fn vs_input_mask_matches_declared_inputs() {
     for key in &all_vs_keys() {
         let (program, p) = built(key);
-        let text = emit_vs_ff_named(key, "t");
         let declared = declared_inputs(&p);
-        assert_eq!(declared, msl_attributes(&text), "{key:?}");
         let mask = declared
             .iter()
             .filter(|r| **r < 16)
             .fold(0u16, |m, r| m | 1 << r);
         assert_eq!(program.provided_input_mask, mask, "{key:?}");
-    }
-}
-
-/// The vertex inputs the MSL's body reads: `in.v<N>`, the blend inputs, the size, `in.p<k>`.
-fn msl_reads(text: &str) -> BTreeSet<u16> {
-    let body = text.split_once(") {").map_or(text, |(_, body)| body);
-    let mut reads = BTreeSet::new();
-    let mut rest = body;
-    while let Some(at) = rest.find("in.") {
-        rest = &rest[at + 3..];
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect();
-        let index = match name.as_str() {
-            "blend_weight" => Some(12),
-            "blend_indices" => Some(13),
-            "psize" => Some(14),
-            _ => name
-                .strip_prefix('v')
-                .and_then(|n| n.parse().ok())
-                .or_else(|| {
-                    name.strip_prefix('p')
-                        .and_then(|k| k.parse::<u16>().ok())
-                        .map(|k| 15 + k)
-                }),
-        };
-        reads.extend(index);
-    }
-    reads
-}
-
-#[test]
-fn vs_reads_the_inputs_the_msl_reads() {
-    for key in &all_vs_keys() {
-        let (_, p) = built(key);
-        let read: BTreeSet<u16> = all_srcs(&p)
-            .filter(|s| s.reg.kind == RegKind::Input)
-            .map(|s| s.reg.index)
-            .collect();
-        assert_eq!(read, msl_reads(&emit_vs_ff_named(key, "t")), "{key:?}");
     }
 }
 
@@ -1278,14 +1154,8 @@ fn vs_warns_where_ff_rs_warns() {
 }
 
 #[test]
-fn ps_key_lists_emit() {
+fn ps_key_lists_match_expected_count() {
     assert_eq!(synthetic_ps_keys().len(), 52, "synthetic_ff's pixel keys");
-    for (key, variant) in &all_ps_keys() {
-        assert!(
-            emit_ps_ff_named(key, *variant, "t").contains("fragment"),
-            "{key:?}"
-        );
-    }
 }
 
 /// The rows `ff_vs_rows` binds for the key of `state` under `rs` and `layout`, and that key.

@@ -1110,7 +1110,6 @@ fn ff_vs_row_count_sizes_the_palette_from_the_blend_mode() {
 fn the_palette_section_carries_unset_world_matrices_as_identity() {
     use mtld3d_types::{D3DTS_VIEW, D3DTS_WORLD};
 
-    use crate::scratch::ScratchArena;
     // Only D3DTS_WORLD is set, so every other matrix a blended draw reads is
     // the identity D3D9 defines, and reaches the shader as identity times
     // the view.
@@ -1129,14 +1128,11 @@ fn the_palette_section_carries_unset_world_matrices_as_identity() {
         (blend_key_with(4, false), 4),
         (blend_key_with(2, true), cap + 1),
     ] {
-        let mut scratch = ScratchArena::new();
-        let (start, rows, ptr) = state
-            .build_palette_section(&key, &mut scratch)
-            .expect("vertex blending is on");
-        assert_eq!(start, super::FF_VS_PALETTE_BASE_ROW);
+        let rows = state.palette_section_rows(&key);
         assert_eq!(usize::from(rows), matrices * 4, "{matrices} matrices");
-        // SAFETY: the builder initialized `rows` 16-byte rows at `ptr`.
-        let packed = unsafe { read_section_rows(ptr, usize::from(rows)) };
+        let packed = fill_rows(usize::from(rows), |dst| {
+            state.fill_palette_section(&key, dst);
+        });
         for (bone, chunk) in packed.as_chunks::<4>().0.iter().enumerate() {
             let expected = if bone == 0 { &first } else { &unset };
             for (row, lanes) in chunk.iter().enumerate() {
@@ -1150,107 +1146,6 @@ fn the_palette_section_carries_unset_world_matrices_as_identity() {
             }
         }
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Drift guard: regex over the emitted MSL must agree with our
-// inline `max_const_row` derivation. Catches any future edit that
-// reorders rows in the emitter without updating the derivation.
-// ─────────────────────────────────────────────────────────────────────
-
-fn emitter_high_water(key: &super::FfVsKey) -> u16 {
-    use crate::dxso::emit_vs_ff;
-    let msl = emit_vs_ff(key);
-    let mut max: u16 = 0;
-    let mut scanner = msl.as_str();
-    while let Some(pos) = scanner.find("vs_c[") {
-        let rest = &scanner[pos + "vs_c[".len()..];
-        let end = rest.find(']').expect("vs_c[ without closing ]");
-        let n: u16 = rest[..end].parse().expect("vs_c index must be u16");
-        if n > max {
-            max = n;
-        }
-        scanner = &rest[end + 1..];
-    }
-    max
-}
-
-fn derive_max_const_row(state: &FfState, key: &super::FfVsKey) -> u16 {
-    state.ff_vs_row_count(key) - 1
-}
-
-#[test]
-fn max_const_row_matches_emitter_high_water_unlit() {
-    let key = make_vs_key(super::FfVsFlags::empty(), 0);
-    let state = FfState::new();
-    // Emitter reads diffuse fallback row 10. Our derive matches.
-    let emit = emitter_high_water(&key);
-    let derive = derive_max_const_row(&state, &key);
-    assert!(
-        emit <= derive,
-        "emitter reads vs_c[{emit}] but we only wrote rows 0..={derive}"
-    );
-}
-
-#[test]
-fn max_const_row_matches_emitter_high_water_lit_no_lights() {
-    let mut key = make_vs_key(super::FfVsFlags::LIGHTING_ENABLED, 0);
-    key.flags.set(super::FfVsFlags::HAS_NORMAL, true);
-    let state = FfState::new();
-    let emit = emitter_high_water(&key);
-    let derive = derive_max_const_row(&state, &key);
-    assert!(
-        emit <= derive,
-        "emitter reads vs_c[{emit}] but we only wrote rows 0..={derive}"
-    );
-}
-
-#[test]
-fn max_const_row_matches_emitter_high_water_lit_light0() {
-    let mut key = make_vs_key(super::FfVsFlags::LIGHTING_ENABLED, 0);
-    key.flags.set(super::FfVsFlags::HAS_NORMAL, true);
-    key.light_active_mask = 1;
-    key.light_directional_mask = 1;
-    let state = FfState::new();
-    let emit = emitter_high_water(&key);
-    let derive = derive_max_const_row(&state, &key);
-    assert!(
-        emit <= derive,
-        "emitter reads vs_c[{emit}] but we only wrote rows 0..={derive}"
-    );
-}
-
-#[test]
-fn max_const_row_matches_emitter_high_water_lit_light7() {
-    let mut key = make_vs_key(super::FfVsFlags::LIGHTING_ENABLED, 0);
-    key.flags.set(super::FfVsFlags::HAS_NORMAL, true);
-    key.light_active_mask = 1 << 7;
-    let state = FfState::new();
-    let emit = emitter_high_water(&key);
-    let derive = derive_max_const_row(&state, &key);
-    assert!(
-        emit <= derive,
-        "emitter reads vs_c[{emit}] but we only wrote rows 0..={derive}"
-    );
-}
-
-#[test]
-fn max_const_row_matches_emitter_high_water_lit_fog_tt_stage_4() {
-    let mut key = make_vs_key(super::FfVsFlags::LIGHTING_ENABLED, 3);
-    key.flags.set(super::FfVsFlags::HAS_NORMAL, true);
-    key.light_active_mask = 1;
-    key.light_directional_mask = 1;
-    // Emitter reads tt_flags[s] to gate the TTFF rows; mirror in key.
-    key.tt_flags[4] = 2;
-    key.tex_coord_count = 5;
-    let mut state = FfState::new();
-    state.set_texture_stage_state(4, D3DTSS_TEXTURETRANSFORMFLAGS as usize, 2);
-    let emit = emitter_high_water(&key);
-    let derive = derive_max_const_row(&state, &key);
-    assert!(
-        emit <= derive,
-        "emitter reads vs_c[{emit}] but we only wrote rows 0..={derive}"
-    );
 }
 
 #[test]
@@ -1393,26 +1288,16 @@ fn unread_vs_state_leaves_the_key() {
 // Sparse-light compaction + eye-space packing.
 // ─────────────────────────────────────────────────────────────────────
 
-/// Read `rows` packed `[f32; 4]` rows back out of a section pointer.
-///
-/// Decodes the raw bytes, sidestepping any pointer-alignment cast.
-///
-/// # Safety
-///
-/// `ptr` must point at `rows` consecutive `[f32; 4]` values (16 bytes
-/// each), as returned by a `build_*_section` helper.
-unsafe fn read_section_rows(ptr: *mut u8, rows: usize) -> Vec<[f32; 4]> {
-    let byte_len = rows * 16;
-    // SAFETY: caller guarantees `rows * 16` initialized bytes at `ptr`.
-    let bytes = unsafe { core::slice::from_raw_parts(ptr.cast_const(), byte_len) };
-    bytes
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|row| {
-            let (lanes, _) = row.as_chunks::<4>();
-            core::array::from_fn(|k| f32::from_le_bytes(lanes[k]))
-        })
+/// Allocate `rows` zero-initialised rows, call `fill`, and return the result.
+fn fill_rows(
+    rows: usize,
+    fill: impl FnOnce(&mut [core::mem::MaybeUninit<[f32; 4]>]),
+) -> Vec<[f32; 4]> {
+    let mut buf = vec![core::mem::MaybeUninit::new([0.0f32; 4]); rows];
+    fill(&mut buf);
+    buf.into_iter()
+        // SAFETY: every row was zero-initialised before `fill`.
+        .map(|row| unsafe { row.assume_init() })
         .collect()
 }
 
@@ -1520,7 +1405,6 @@ fn build_vs_key_compacts_sparse_lights_in_index_order() {
 fn eye_space_point_light_position_matches_hand_calc() {
     use mtld3d_types::{D3DLIGHT_POINT, D3DLIGHT9, D3DMATRIX, D3DTS_VIEW, D3DVECTOR};
 
-    use crate::scratch::ScratchArena;
     // VIEW = pure translation {0.5, 0.5, 0}.
     let view = D3DMATRIX {
         m: [
@@ -1547,14 +1431,11 @@ fn eye_space_point_light_position_matches_hand_calc() {
     state.set_light_enabled(0, true);
 
     let key = lit_vs_key(&state);
-    let mut scratch = ScratchArena::new();
-    let (start, rows, ptr) = state
-        .build_lights_section(&key, &mut scratch)
-        .expect("one active light → section present");
-    assert_eq!(start, 15);
+    let rows = FfState::lights_section_rows(&key);
     assert_eq!(rows, 6, "one light = 6 rows");
-    // SAFETY: build_lights_section wrote `rows` [f32;4] rows at `ptr`.
-    let data = unsafe { read_section_rows(ptr, rows as usize) };
+    let data = fill_rows(usize::from(rows), |dst| {
+        state.fill_lights_section(&key, dst);
+    });
     // Row 0 = eye-space position + type-w. Hand calc for `v * view`:
     //   x' = 1*1 + 2*0 + 3*0 + 0.5 = 1.5
     //   y' = 1*0 + 2*1 + 3*0 + 0.5 = 2.5
@@ -1571,7 +1452,6 @@ fn contiguous_index0_light_packing_is_byte_identical() {
     // can't silently drift them.
     use mtld3d_types::{D3DCOLORVALUE, D3DLIGHT_POINT, D3DLIGHT9, D3DVECTOR};
 
-    use crate::scratch::ScratchArena;
     let mut state = FfState::new();
     state.set_light(
         0,
@@ -1606,11 +1486,11 @@ fn contiguous_index0_light_packing_is_byte_identical() {
     let key = lit_vs_key(&state);
     // Identity VIEW ⇒ compacted slot 0 == physical slot 0, eye == world.
     assert_eq!(key.light_active_mask, 0b1);
-    let mut scratch = ScratchArena::new();
-    let (start, rows, ptr) = state.build_lights_section(&key, &mut scratch).unwrap();
-    assert_eq!((start, rows), (15, 6));
-    // SAFETY: 6 [f32;4] rows written at ptr.
-    let data = unsafe { read_section_rows(ptr, 6) };
+    let rows = FfState::lights_section_rows(&key);
+    assert_eq!(rows, 6);
+    let data = fill_rows(usize::from(rows), |dst| {
+        state.fill_lights_section(&key, dst);
+    });
     // Position row: world == eye under identity view; POINT type-w = 1.
     assert_row_eq(data[0], [4.0, 5.0, 6.0, 1.0], "position row");
     // Diffuse colour row (row base+2), carrying the specular alpha in .w:
@@ -2075,19 +1955,10 @@ fn range_fog_keys_only_computed_vertex_fog() {
 }
 
 #[test]
-fn shader_owned_fog_reuses_the_existing_disabled_key_and_source() {
-    use crate::{
-        dxso::{emit_ps_programmable, parse},
-        shader_key::ff_key_hash,
-    };
-
-    let shader =
-        parse(&[0xffff_0300, 0x0200_0001, 0x800f_0800, 0xa0e4_0000, 0xffff]).expect("constant PS3");
+fn shader_owned_fog_reuses_the_existing_disabled_key() {
     let mut ff = FfState::new();
     let mut states = rs();
     let disabled = ff.variant_key(&states, false, true);
-    let source = emit_ps_programmable(&shader, disabled).expect("disabled shader");
-    assert!(!source.contains("fog_data"));
     states[D3DRS_FOGENABLE as usize] = 1;
     for projection_w in [1.0, 2.0] {
         let mut projection = D3DMATRIX::IDENTITY;
@@ -2099,9 +1970,7 @@ fn shader_owned_fog_reuses_the_existing_disabled_key_and_source() {
                 states[D3DRS_FOGVERTEXMODE as usize] = vertex_mode;
                 let canonical = ff.variant_key(&states, false, false);
                 assert_eq!(canonical, disabled);
-                assert_eq!(ff_key_hash(&canonical), ff_key_hash(&disabled));
                 assert_eq!(build_fog_color_bytes(&states, canonical).1, 0);
-                assert_eq!(emit_ps_programmable(&shader, canonical).unwrap(), source);
                 assert_ne!(ff.variant_key(&states, false, true), canonical);
             }
         }
@@ -2142,8 +2011,6 @@ fn resultarg_narrows_to_the_typed_destination_and_preserves_raw_state() {
 fn per_stage_constants_pack_fresh_prefix_without_changing_keys() {
     use mtld3d_types::{D3DTA_CONSTANT, D3DTOP_SELECTARG1, D3DTSS_COLORARG1, D3DTSS_CONSTANT};
 
-    use crate::scratch::ScratchArena;
-
     let mut ff = FfState::new();
     let states = rs();
     for stage in 0..8 {
@@ -2152,13 +2019,11 @@ fn per_stage_constants_pack_fresh_prefix_without_changing_keys() {
         ff.set_texture_stage_state(stage, D3DTSS_CONSTANT as usize, 0x8040_2010);
     }
     let key = ff.build_ps_key(&states, 0);
-    let mut scratch = ScratchArena::new();
-    let ptr = ff.build_ps_stage_constants(&states, key.constant_rows(), &mut scratch);
-    // SAFETY: the builder initialized nine 16-byte rows retained in scratch.
-    let first = unsafe { core::slice::from_raw_parts(ptr, 144) };
-    assert_eq!(&first[..16], &ff.build_ps_constants(&states));
+    let mut first = vec![[0u8; 16]; usize::from(key.constant_rows())];
+    ff.fill_ps_stage_constants(&states, &mut first);
+    assert_eq!(first[0], ff.build_ps_constants(&states));
     let expected = [64.0_f32 / 255.0, 32.0 / 255.0, 16.0 / 255.0, 128.0 / 255.0];
-    for row in first[16..].as_chunks::<16>().0 {
+    for row in &first[1..] {
         for (bytes, expected) in row.as_chunks::<4>().0.iter().zip(expected) {
             assert_eq!(*bytes, expected.to_le_bytes());
         }
@@ -2169,15 +2034,12 @@ fn per_stage_constants_pack_fresh_prefix_without_changing_keys() {
         ff.build_ps_key(&states, 0),
         "values are not shader identity"
     );
-    let next = ff.build_ps_stage_constants(&states, 9, &mut scratch);
-    assert_ne!(ptr, next, "queued draws keep immutable constant rows");
-    // SAFETY: this second allocation also contains nine initialized rows.
-    let second = unsafe { core::slice::from_raw_parts(next, 144) };
-    assert_ne!(&first[128..], &second[128..]);
-    let short = ff.build_ps_stage_constants(&states, 2, &mut scratch);
-    // SAFETY: the requested two initialized rows occupy 32 bytes.
-    let short = unsafe { core::slice::from_raw_parts(short, 32) };
-    assert_eq!(short, &first[..32]);
+    let mut second = vec![[0u8; 16]; 9];
+    ff.fill_ps_stage_constants(&states, &mut second);
+    assert_ne!(first[8], second[8]);
+    let mut short = vec![[0u8; 16]; 2];
+    ff.fill_ps_stage_constants(&states, &mut short);
+    assert_eq!(short, first[..2]);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2241,8 +2103,7 @@ fn ff_vs_row_count_stops_at_the_advertised_palette_index() {
 }
 
 #[test]
-fn build_palette_section_packs_no_matrix_past_the_advertised_index() {
-    use crate::scratch::ScratchArena;
+fn fill_palette_section_packs_no_matrix_past_the_advertised_index() {
     let cap = usize::try_from(super::MAX_VERTEX_BLEND_MATRIX_INDEX).expect("cap fits usize");
     let key = blend_key();
     for index in [cap, cap + 1, 255] {
@@ -2257,22 +2118,19 @@ fn build_palette_section_packs_no_matrix_past_the_advertised_index() {
         past.m[0] = 5.0;
         state.set_transform(256 + u32::try_from(cap + 1).expect("cap fits u32"), &past);
 
-        let mut scratch = ScratchArena::new();
-        let (start, rows, ptr) = state
-            .build_palette_section(&key, &mut scratch)
-            .expect("vertex blending is on");
-        assert_eq!(start, super::FF_VS_PALETTE_BASE_ROW);
+        let rows = state.palette_section_rows(&key);
         let expected = u16::try_from((cap + 1) * 4).expect("palette rows fit u16");
         assert_eq!(
             rows, expected,
             "D3DTS_WORLDMATRIX({index}) packed extra rows"
         );
         assert!(
-            start + rows <= FF_VS_CONST_ROWS,
+            super::FF_VS_PALETTE_BASE_ROW + rows <= FF_VS_CONST_ROWS,
             "D3DTS_WORLDMATRIX({index}) packs past the FF VS constant block"
         );
-        // SAFETY: the builder initialized `rows` 16-byte rows at `ptr`.
-        let packed = unsafe { read_section_rows(ptr, usize::from(rows)) };
+        let packed = fill_rows(usize::from(rows), |dst| {
+            state.fill_palette_section(&key, dst);
+        });
         assert!(
             (packed[cap * 4][0] - 9.0).abs() < f32::EPSILON,
             "the last matrix the block holds was not packed"

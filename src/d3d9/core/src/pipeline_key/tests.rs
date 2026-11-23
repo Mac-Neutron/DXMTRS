@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
     hash::{Hash, Hasher},
-    ptr::NonNull,
     sync::Arc,
 };
 
@@ -11,8 +10,7 @@ use mtld3d_types::{
     D3DDECL_END, D3DDECLMETHOD_DEFAULT, D3DDECLTYPE_D3DCOLOR, D3DDECLTYPE_FLOAT2,
     D3DDECLTYPE_FLOAT3, D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_COLOR, D3DDECLUSAGE_NORMAL,
     D3DDECLUSAGE_POSITION, D3DDECLUSAGE_POSITIONT, D3DDECLUSAGE_TEXCOORD, D3DFVF_DIFFUSE,
-    D3DFVF_SPECULAR, D3DFVF_XYZRHW, D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA,
-    D3DVERTEXELEMENT9, D3DVIEWPORT9, render_state_defaults,
+    D3DFVF_SPECULAR, D3DFVF_XYZRHW, D3DVERTEXELEMENT9, D3DVIEWPORT9, render_state_defaults,
 };
 use rustc_hash::FxHashMap;
 use xxhash_rust::xxh3::Xxh3;
@@ -25,14 +23,12 @@ use super::{
     pipeline_source, pos_fixup, rhw_depth_clamp, up_byte_count, viewport_depth_range,
 };
 use crate::{
-    convert::{ff_vs_layout_from_elements, fvf_to_elements, resolve_attrs_for_ff, rhw_passthrough},
-    draw_data::{AttrSnapshot, DeclarationHeader, StreamBinding},
+    convert::{ff_vs_layout_from_elements, fvf_to_elements, rhw_passthrough},
     dxso::{
         FF_PASSTHROUGH_ATTR_BASE, FfVsKey, VariantFlags, VariantKey, ff_attr_index_for_semantic,
     },
-    encoder_draw::draw_record::{StreamRecord, VertexBytes, VertexView, stream_layouts_view},
     ff_state::FfState,
-    ids::{BufferId, ProgramId},
+    ids::ProgramId,
     multisample::SAMPLE_MASK_ALL,
     pipeline_state::StreamLayout,
     streams::{STREAM_FREQ_DEFAULT, VertexFetchError, stream_step},
@@ -680,140 +676,6 @@ fn an_attribute_wider_than_its_stride_cannot_be_fetched() {
     );
     assert_eq!(source.layouts, source.streams);
     assert_eq!(source.bindings, own_slots());
-}
-
-/// The core's layouts are mtld3d's for every way a stream is fed.
-///
-/// Stream by stream against `stream_layouts_view`, the closure mtld3d's draws run, over the same
-/// declaration and bindings: inline, bound, a zero stride under each kind of word, per instance,
-/// an instance rate of 0, nothing bound, and strides short of their extent. The crossing streams
-/// too.
-#[test]
-fn layouts_are_mtld3ds_for_every_feed() {
-    let elements = [
-        element(0, 0, D3DDECLTYPE_FLOAT3, D3DDECLUSAGE_POSITION, 0),
-        element(1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0),
-        element(2, 0, D3DDECLTYPE_FLOAT2, D3DDECLUSAGE_TEXCOORD, 0),
-    ];
-    let vs = ff_vs(&elements);
-    let resolved = resolve_attrs_for_ff(&elements, &vs.passthrough);
-    assert_eq!(resolved.used_streams, 0b111);
-    assert_eq!(resolved.extents[..3], [12, 4, 8]);
-    let header = DeclarationHeader {
-        vdecl_hash: 0,
-        extents: resolved.extents,
-        count: u32::try_from(resolved.attrs.len()).expect("three attributes"),
-        used_streams: resolved.used_streams,
-        reserved: 0,
-    };
-    // SAFETY: the attributes and the header outlive the token, which is only read below.
-    let attrs =
-        unsafe { AttrSnapshot::new(NonNull::from(&resolved.attrs[0]), NonNull::from(&header)) };
-    let base = PipelineKey {
-        vs: VsStageKey::Ff(vs),
-        layout: decl(&elements),
-        ..ff_base()
-    };
-    let mtld3d = |view: &VertexView<'_>| {
-        let mut layouts = [StreamLayout::UNUSED; MAX_STREAMS as usize];
-        let (mut crossing, mut offsets) = (0, 0);
-        stream_layouts_view(&mut layouts, view, &attrs, &mut crossing, &mut offsets);
-        (layouts, crossing)
-    };
-    let core = |streams| {
-        let source = source(&PipelineKey {
-            streams,
-            ..base.clone()
-        });
-        (source.streams, source.crossing)
-    };
-
-    // A UP draw 16 bytes a vertex: stream 0 inline, the other two nothing bound.
-    let bytes = VertexBytes {
-        address: 0,
-        length: 0,
-        size: 0,
-    };
-    let up = VertexView::Up {
-        record: &bytes,
-        stride: 16,
-    };
-    let mut streams = inline(16);
-    streams[1] = StreamKey::Null;
-    streams[2] = StreamKey::Null;
-    assert_eq!(core(streams), mtld3d(&up), "inline");
-
-    let (indexed, instanced) = (D3DSTREAMSOURCE_INDEXEDDATA, D3DSTREAMSOURCE_INSTANCEDATA);
-    let default = Some((12, STREAM_FREQ_DEFAULT));
-    // Each stream's binding, `(stride, frequency word)`, none for nothing bound; the crossing
-    // streams.
-    let cases = [
-        (
-            "per vertex",
-            [default, Some((4, indexed | 3)), Some((8, 1))],
-            0,
-        ),
-        (
-            "zero strides",
-            [
-                Some((0, indexed | 3)),
-                Some((0, instanced | 2)),
-                Some((0, 1)),
-            ],
-            0,
-        ),
-        (
-            "zero stride, rate 0",
-            [default, Some((0, instanced)), None],
-            0,
-        ),
-        (
-            "per instance",
-            [default, Some((4, instanced | 2)), Some((8, instanced | 1))],
-            0,
-        ),
-        (
-            "instance rate 0",
-            [default, Some((4, instanced)), Some((8, instanced))],
-            0,
-        ),
-        ("nothing bound", [default, None, None], 0),
-        (
-            "short strides",
-            [Some((8, 1)), Some((4, 1)), Some((4, instanced | 2))],
-            0b101,
-        ),
-    ];
-    for (name, bindings, crossing) in cases {
-        let records = (0_u8..)
-            .zip(bindings)
-            .filter_map(|(stream, binding)| {
-                binding.map(|(stride, freq)| {
-                    StreamRecord::from_binding(&StreamBinding {
-                        stream,
-                        buffer_id: BufferId::from_raw(1),
-                        backing_ptr: 0,
-                        backing_len: 64,
-                        backing_generation: 0,
-                        offset: 0,
-                        stride,
-                        freq,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let view = VertexView::Bound {
-            records: &records,
-            stream0_freq: STREAM_FREQ_DEFAULT,
-        };
-        let mut streams = [StreamKey::Unused; MAX_STREAMS as usize];
-        for (key, binding) in streams.iter_mut().zip(bindings) {
-            *key = binding.map_or(StreamKey::Null, |(stride, freq)| bound(stride, freq));
-        }
-        let expected = mtld3d(&view);
-        assert_eq!(expected.1, crossing, "{name}");
-        assert_eq!(core(streams), expected, "{name}");
-    }
 }
 
 /// Core's pixel variant: no samplers, one sample, its linked inputs and the pass's extras.

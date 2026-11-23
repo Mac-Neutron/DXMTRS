@@ -11,41 +11,35 @@
 //! is keyed by the window the message arrived on.
 //!
 //! **Software mode.** With `cursor.software` resolved on, the game's cursor is
-//! drawn by the unix side in an overlay window: `SetCursorProperties` ships the
-//! upscaled bitmap through the `SetCursorOverlay` thunk, `ShowCursor` ships the
-//! visibility, and the Win32 cursor this module realizes is a blank HCURSOR, so
-//! the `WindowServer` cursor plane never toggles on our account.
+//! drawn by `CoreDevice` in an overlay window: `SetCursorProperties` ships the
+//! upscaled bitmap through [`crate::rt::device::OverlaySink`], `ShowCursor`
+//! ships visibility, and the Win32 cursor this module realizes is a blank
+//! HCURSOR, so the `WindowServer` cursor plane never toggles on our account.
 //!
-//! **The core runtime.** A device of the core runtime runs the three entry
-//! points and the subclass as they are: the auto-resize on `WM_SIZE` resizes
-//! the core's back buffer, auto depth-stencil, viewport and scissor
-//! (`DeviceInner::apply_auto_resize`), while cursor scaling, software overlay
-//! (`WMTSetCursorOverlay`), and client-surface presentation flow through `d3d9-rt`.
+//! **Auto-resize.** The subclass's `WM_SIZE` auto-resizes the core's back
+//! buffer, auto depth-stencil, viewport and scissor
+//! (`DeviceInner::apply_auto_resize`), while cursor scaling, software overlay,
+//! and client-surface presentation flow through `crate::rt`.
 
 use core::{
     ffi::c_void,
     ptr::null_mut,
     sync::atomic::{AtomicU32, Ordering},
 };
-#[cfg(feature = "core-runtime")]
-use std::sync::Arc;
 use std::{
     hash::Hasher,
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::Instant,
 };
 
 use log::{Level, debug, error, info, log_enabled, trace, warn};
 use mtld3d_core::{
-    cursor::{BitmapLayout, reconcile_upload},
-    perf::DeviceSubCategory,
-    window_subclass::WindowSubclasses,
+    cursor::BitmapLayout, perf::DeviceSubCategory, window_subclass::WindowSubclasses,
 };
 use mtld3d_shared::{
-    InPtr, MetalHandle, PresentClientSurfaceParams, SetCursorOverlayParams,
+    InPtr,
     bounded_cache::BoundedCache,
     mtl::{CURSOR_SPRITE_CACHE_ENTRIES, ClientSurfaceRequest, CursorOverlayFlags},
-    mtl_handle::NSViewKind,
 };
 use mtld3d_types::{
     CURSOR_SHOWING, CURSORINFO, D3DLOCK_READONLY, D3DLOCKED_RECT, D3DSURFACE_DESC, ICONINFO,
@@ -57,7 +51,6 @@ use super::{
     D3D_OK, D3DERR_INVALIDCALL,
     device::{DeviceInner, Direct3DDevice9, device_api_lock, device_timer},
     fullscreen::set_window_long_ptr,
-    unix_call::unix_call,
 };
 
 /// Cursor-specific log sub-target.
@@ -395,11 +388,6 @@ impl DisplaySinks {
         }
     }
 
-    /// The address `AttachMetalLayerParams::client_surface_request_ptr` carries.
-    pub fn client_surface_request_ptr(&self) -> u64 {
-        (&raw const self.client_surface_request) as u64
-    }
-
     /// Ask the next `Present` to have Wine show the client surface again, for `reason`.
     pub fn request_client_surface(&self, reason: ClientSurfaceRequest) {
         self.client_surface_request
@@ -420,16 +408,6 @@ impl DisplaySinks {
         )
     }
 
-    /// The address `AttachMetalLayerParams::backing_scale_ptr` carries.
-    pub fn backing_scale_ptr(&self) -> u64 {
-        (&raw const self.backing_scale) as u64
-    }
-
-    /// The address `AttachMetalLayerParams::cursor_kick_ptr` carries.
-    pub fn cursor_kick_ptr(&self) -> u64 {
-        (&raw const self.cursor_kick) as u64
-    }
-
     /// Wine's retina factor as last published, or `None` before attach published one.
     pub fn display_backing_scale(&self) -> Option<u32> {
         match self.backing_scale.load(Ordering::Relaxed) {
@@ -447,13 +425,11 @@ impl DisplaySinks {
     }
 
     /// Publishes a display backing scale observed on the core runtime.
-    #[cfg(feature = "core-runtime")]
     pub fn set_backing_scale(&self, scale: u32) {
         self.backing_scale.store(scale, Ordering::Relaxed);
     }
 
     /// Arms a cursor re-apply kick observed on the core runtime.
-    #[cfg(feature = "core-runtime")]
     pub fn set_cursor_kick(&self) {
         self.cursor_kick.store(1, Ordering::Release);
     }
@@ -549,13 +525,7 @@ const HITCH_MAX_INTERVAL_US: u64 = 500_000;
 /// writes them, so cursor invariants don't leak into the rest of `d3d9`.
 pub struct CursorState {
     hwnd: *mut c_void,
-    /// The metal view the device attached, naming its unix-side attachment record.
-    ///
-    /// Every `SetCursorOverlay` carries it so the overlay follows this
-    /// device's window. Null for a headless device, which then sends no
-    /// overlay state at all.
-    view_handle: MetalHandle<NSViewKind>,
-    /// The words the unix side publishes the backing scale and the cursor kick into.
+    /// Shared sinks for backing scale, cursor kick, and client-surface requests.
     sinks: Box<DisplaySinks>,
     /// The HCURSOR realized while the D3D cursor is shown.
     ///
@@ -576,12 +546,6 @@ pub struct CursorState {
     ///
     /// Destroyed by the next eviction that finds them out of use, or at release.
     retired: Vec<*mut c_void>,
-    /// Sprite hashes the unix overlay is expected to hold (software mode).
-    ///
-    /// Mirrors `cache` for the other mode: a hash in here goes out with no
-    /// pixels attached. Bounded alike; a stale entry costs one rejected
-    /// hash-only call, which is answered by sending the pixels.
-    uploaded: BoundedCache<u64, ()>,
     probe: HitchProbe,
     /// Nearest-neighbor upscale factor applied to the cursor bitmap.
     ///
@@ -598,11 +562,9 @@ pub struct CursorState {
     /// display on the game's next cursor change, which for a title that sets
     /// its pointer once is never. `None` until the first accepted call.
     source: Option<CursorSource>,
-    /// Shared view and gamma handle when running under the core runtime.
-    #[cfg(feature = "core-runtime")]
-    core_overlay: Option<Arc<d3d9_rt::device::OverlaySink>>,
+    /// Shared view and cursor-overlay sink owned by `CoreDevice`.
+    core_overlay: Arc<crate::rt::device::OverlaySink>,
     /// Active sprite hash last uploaded through `WMTSetCursorOverlay`.
-    #[cfg(feature = "core-runtime")]
     core_sprite_hash: u64,
 }
 
@@ -634,9 +596,8 @@ impl CursorState {
         hwnd: *mut c_void,
         scale: u32,
         software: bool,
-        view_handle: MetalHandle<NSViewKind>,
         sinks: Box<DisplaySinks>,
-        #[cfg(feature = "core-runtime")] core_overlay: Option<Arc<d3d9_rt::device::OverlaySink>>,
+        core_overlay: Arc<crate::rt::device::OverlaySink>,
     ) -> Self {
         // D3D9 starts the cursor hidden (ShowCursor reports FALSE until a
         // cursor image is set and shown).
@@ -646,30 +607,21 @@ impl CursorState {
         }
         Self {
             hwnd,
-            view_handle,
             sinks,
             handle: null_mut(),
             flags,
             hash: 0,
             cache: BoundedCache::new(CURSOR_SPRITE_CACHE_ENTRIES),
             retired: Vec::new(),
-            uploaded: BoundedCache::new(CURSOR_SPRITE_CACHE_ENTRIES),
             probe: HitchProbe::new(),
             scale: scale.clamp(1, 8),
             source: None,
-            #[cfg(feature = "core-runtime")]
             core_overlay,
-            #[cfg(feature = "core-runtime")]
             core_sprite_hash: 0,
         }
     }
 
-    /// Follow the backing scale the unix side last published for this device's window.
-    ///
-    /// Called once per `Present`: one relaxed load and a compare on an
-    /// unchanged value, which is every frame that stays put. The unix side
-    /// republishes whenever the window's display changes the factor, so the
-    /// cursor upscale follows the window between displays without a thunk.
+    /// Follow the backing scale last published for this device's window.
     pub fn follow_published_scale(&mut self, cursor_scale: mtld3d_core::config::CursorScale) {
         if let Some(backing_scale) = self.sinks.display_backing_scale() {
             let (scale, _origin) =
@@ -678,42 +630,9 @@ impl CursorState {
         }
     }
 
-    /// Take the pending cursor re-apply request, if the unix side left one for this device.
+    /// Take the pending cursor re-apply request, if one was left for this device.
     pub fn take_cursor_kick(&self) -> bool {
         self.sinks.take_cursor_kick()
-    }
-
-    /// Have Wine show this device's client surface again, sized to the client area, if asked.
-    ///
-    /// Called once per `Present`, on the API thread, a Wine thread, which
-    /// win32u's surface calls need. A frame nothing asked on pays one relaxed
-    /// load; one after the client view was hidden or the window's client area
-    /// moved sends `PresentClientSurface`.
-    pub fn present_client_surface_if_asked(&self) {
-        #[cfg(feature = "core-runtime")]
-        if crate::is_core() {
-            return;
-        }
-        if self.view_handle.is_null() {
-            return;
-        }
-        let reasons = self.sinks.take_client_surface_request();
-        if reasons.is_empty() {
-            return;
-        }
-        let mut params = PresentClientSurfaceParams {
-            view_handle: self.view_handle,
-            reasons,
-            pad0: 0,
-        };
-        let status = unix_call(&mut params);
-        if status != 0 {
-            mtld3d_shared::log_once_warn!(
-                target: LOG_TARGET,
-                "PresentClientSurface ({reasons:?}) failed (status={status:#x}); the client surface \
-                 stays as Wine left it",
-            );
-        }
     }
 
     /// Ask the next `Present` to show the client surface again: the client area may have moved.
@@ -776,8 +695,8 @@ impl CursorState {
 
     /// Ship the current sprite and visibility to the overlay (software mode).
     ///
-    /// Pixels ride along only for a hash the overlay has not seen; every other
-    /// call is the hash and the visible flag. Nothing here touches Win32.
+    /// Pixels ride along only when the sprite hash changed since the last upload; every other
+    /// call updates flags only. Nothing here touches Win32.
     fn sync_sprite(&mut self) {
         let hash = self.hash;
         if hash == 0 {
@@ -788,75 +707,45 @@ impl CursorState {
             mtld3d_shared::log_once_warn!(target: LOG_TARGET, "cursor: no source for sprite retry");
             return;
         };
-        #[cfg(feature = "core-runtime")]
-        if crate::is_core() {
-            let Some(sink) = self.core_overlay.as_ref() else {
-                return;
-            };
-            let needs_pixels = self.core_sprite_hash != hash;
-            let sprite = needs_pixels.then(|| upscale_sprite(source, self.scale));
-            let update = d3d9_rt::device::CursorOverlayUpdate {
-                flags: flags.bits(),
-                width: sprite.as_ref().map_or(0, |s| s.width),
-                height: sprite.as_ref().map_or(0, |s| s.height),
-                x_hotspot: sprite.as_ref().map_or(0, |s| s.x_hotspot),
-                y_hotspot: sprite.as_ref().map_or(0, |s| s.y_hotspot),
-                scale: sprite.as_ref().map_or(0, |s| s.scale),
-                pixels: sprite.as_ref().map(|s| s.pixels.as_slice()),
-            };
-            self.core_sprite_hash = if sink.set_cursor_overlay(&update) {
-                hash
-            } else {
-                0
-            };
-            return;
-        }
-        let accepted = reconcile_upload(self.uploaded.contains(&hash), |with_pixels| {
-            let sprite = with_pixels.then(|| upscale_sprite(source, self.scale));
-            send_overlay_state(self.view_handle, hash, flags, sprite.as_ref())
-        });
-        if accepted {
-            self.uploaded.insert(hash, ());
+        let needs_pixels = self.core_sprite_hash != hash;
+        let sprite = needs_pixels.then(|| upscale_sprite(source, self.scale));
+        let update = crate::rt::device::CursorOverlayUpdate {
+            flags: flags.bits(),
+            width: sprite.as_ref().map_or(0, |s| s.width),
+            height: sprite.as_ref().map_or(0, |s| s.height),
+            x_hotspot: sprite.as_ref().map_or(0, |s| s.x_hotspot),
+            y_hotspot: sprite.as_ref().map_or(0, |s| s.y_hotspot),
+            scale: sprite.as_ref().map_or(0, |s| s.scale),
+            pixels: sprite.as_ref().map(|s| s.pixels.as_slice()),
+        };
+        self.core_sprite_hash = if self.core_overlay.set_cursor_overlay(&update) {
+            hash
         } else {
-            self.uploaded.remove(&hash);
-        }
+            0
+        };
     }
 
     /// Returns whether this cursor state routes sprites through the software overlay.
-    #[cfg(feature = "core-runtime")]
     pub const fn is_software(&self) -> bool {
         self.software()
     }
 
-    /// Ship the current visibility to the unix side.
-    ///
-    /// Software mode names the sprite too; the hardware path sends visibility
-    /// alone, which the unix side's pointer watch needs to know whatever
-    /// draws the cursor.
+    /// Ship the current cursor visibility and (in software mode) sprite to `OverlaySink`.
     pub fn push_overlay_state(&mut self) {
         if self.software() && self.source.is_some() {
             self.sync_sprite();
         } else {
             let flags = self.overlay_flags() | CursorOverlayFlags::HARDWARE;
-            #[cfg(feature = "core-runtime")]
-            if crate::is_core() {
-                if let Some(sink) = self.core_overlay.as_ref() {
-                    let update = d3d9_rt::device::CursorOverlayUpdate {
-                        flags: flags.bits(),
-                        width: 0,
-                        height: 0,
-                        x_hotspot: 0,
-                        y_hotspot: 0,
-                        scale: 0,
-                        pixels: None,
-                    };
-                    let _ = sink.set_cursor_overlay(&update);
-                }
-                return;
-            }
-            // Native visibility also belongs to games that draw their own cursor
-            // and never supply a D3D sprite.
-            send_overlay_state(self.view_handle, 0, flags, None);
+            let update = crate::rt::device::CursorOverlayUpdate {
+                flags: flags.bits(),
+                width: 0,
+                height: 0,
+                x_hotspot: 0,
+                y_hotspot: 0,
+                scale: 0,
+                pixels: None,
+            };
+            let _ = self.core_overlay.set_cursor_overlay(&update);
         }
     }
 
@@ -1271,26 +1160,11 @@ impl CursorState {
     /// swap chain, not the cursor the application set. The resize hide
     /// suppression does not: it belongs to a message dispatch on the window
     /// the device leaves, whose end would no longer find the device there.
-    ///
-    /// `view_handle` names the view the new window's attach produced, null
-    /// when it produced none. The overlay state is re-sent against it because
-    /// the record the previous state named is gone; the sprites themselves are
-    /// content-addressed on the unix side and outlive the detach, so the
-    /// uploaded set stays valid.
-    pub fn retarget(
-        &mut self,
-        hwnd: *mut c_void,
-        view_handle: MetalHandle<NSViewKind>,
-        dev_ptr: *mut DeviceInner,
-    ) {
+    pub fn retarget(&mut self, hwnd: *mut c_void, dev_ptr: *mut DeviceInner) {
         self.uninstall_subclass(dev_ptr);
         self.set_hide_suppressed_in_resize(false);
         self.hwnd = hwnd;
-        self.view_handle = view_handle;
-        #[cfg(feature = "core-runtime")]
-        {
-            self.core_sprite_hash = 0;
-        }
+        self.core_sprite_hash = 0;
         self.install_subclass(dev_ptr);
         self.push_overlay_state();
     }
@@ -1418,7 +1292,7 @@ pub extern "system" fn device_set_cursor_properties(
         };
         let outcome = if hash == prev_hash {
             "unchanged"
-        } else if cur.uploaded.contains(&hash) {
+        } else if hash == cur.core_sprite_hash {
             "sprite-known"
         } else {
             "sprite-upload"
@@ -1784,10 +1658,7 @@ extern "system" fn cursor_wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: i
         let activating = activate_state != WA_INACTIVE;
         if activating {
             cur.set_dirty(true);
-            #[cfg(feature = "core-runtime")]
-            if crate::is_core() {
-                cur.request_client_surface();
-            }
+            cur.request_client_surface();
         }
         debug!(
             target: LOG_TARGET,
@@ -1855,8 +1726,7 @@ extern "system" fn cursor_wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: i
         // SAFETY: see WM_SETCURSOR branch — `dev_ptr` is live for the
         // lifetime of the subclass.
         let cur = unsafe { (*dev_ptr).cursor_mut() };
-        #[cfg(feature = "core-runtime")]
-        if crate::is_core() && new_width != 0 && new_height != 0 {
+        if new_width != 0 && new_height != 0 {
             cur.request_client_surface();
         }
         let suppress = cur.enter_resize(wp);
@@ -2056,67 +1926,6 @@ fn upscale_sprite(source: &CursorSource, scale: u32) -> SpriteUpload {
         scale,
         pixels: u32_to_u8_vec(&pixels),
     }
-}
-
-/// One `SetCursorOverlay` call: the wanted sprite and visibility, pixels attached or not.
-///
-/// Returns whether the unix side accepted it. The pixel buffer only has to
-/// outlive the call: the unix side copies what it keeps. A device with no
-/// metal view (headless) has no attachment record for the overlay to follow,
-/// so nothing is sent and the call reports as not accepted.
-fn send_overlay_state(
-    view_handle: MetalHandle<NSViewKind>,
-    hash: u64,
-    flags: CursorOverlayFlags,
-    sprite: Option<&SpriteUpload>,
-) -> bool {
-    if view_handle.is_null() {
-        mtld3d_shared::log_once_info!(
-            target: LOG_TARGET,
-            "SetCursorOverlay: no metal view attached (headless device), overlay state not sent",
-        );
-        return false;
-    }
-    let started = Instant::now();
-    let mut params = SetCursorOverlayParams {
-        hash,
-        pixels_ptr: 0,
-        pixels_len: 0,
-        width: 0,
-        height: 0,
-        x_hotspot: 0,
-        y_hotspot: 0,
-        scale: 0,
-        flags,
-        pad0: 0,
-        view_handle,
-    };
-    if let Some(s) = sprite {
-        params.pixels_ptr = s.pixels.as_ptr() as u64;
-        params.pixels_len =
-            u32::try_from(s.pixels.len()).expect("a cursor sprite is far below 4 GiB");
-        params.width = s.width;
-        params.height = s.height;
-        params.x_hotspot = s.x_hotspot;
-        params.y_hotspot = s.y_hotspot;
-        params.scale = s.scale;
-    }
-    let status = unix_call(&mut params);
-    let us = elapsed_us(started);
-    if status != 0 {
-        warn!(
-            target: LOG_TARGET,
-            "SetCursorOverlay: hash={hash:#018x} flags={flags:?} pixels={} rejected (status={status:#x}) us={us}",
-            sprite.is_some(),
-        );
-        return false;
-    }
-    debug!(
-        target: LOG_TARGET,
-        "SetCursorOverlay: hash={hash:#018x} flags={flags:?} pixels={} us={us}",
-        sprite.is_some(),
-    );
-    true
 }
 
 /// Build the transparent HCURSOR software mode realizes.

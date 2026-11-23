@@ -201,50 +201,6 @@ fn the_answer_is_the_whole_queue_not_a_delta() {
     assert_eq!(queued_pacing(held, pacing(true, 0)), None);
 }
 
-#[test]
-fn capture_marks_bracket_the_run() {
-    use super::capture_marks;
-    assert_eq!(capture_marks(1, 3), (true, false));
-    assert_eq!(capture_marks(2, 3), (false, false));
-    assert_eq!(capture_marks(3, 3), (false, true));
-}
-
-#[test]
-fn capture_marks_one_frame_run_starts_and_stops() {
-    use super::capture_marks;
-    assert_eq!(capture_marks(1, 1), (true, true));
-}
-
-#[test]
-fn capture_marks_outside_the_run_carry_nothing() {
-    use super::capture_marks;
-    assert_eq!(capture_marks(0, 3), (false, false));
-    assert_eq!(capture_marks(4, 3), (false, false));
-}
-
-#[test]
-fn a_submitted_frame_hands_on_the_stop_and_keeps_the_start() {
-    use super::carried_capture_marks;
-    assert_eq!(carried_capture_marks((true, false), true), (false, false));
-    assert_eq!(carried_capture_marks((false, true), true), (false, true));
-    assert_eq!(carried_capture_marks((true, true), true), (false, true));
-}
-
-#[test]
-fn a_dropped_frame_hands_on_every_mark_it_holds() {
-    use super::carried_capture_marks;
-    assert_eq!(carried_capture_marks((false, true), false), (false, true));
-    assert_eq!(carried_capture_marks((true, true), false), (true, true));
-    assert_eq!(carried_capture_marks((true, false), false), (true, false));
-}
-
-#[test]
-fn an_unmarked_frame_hands_on_nothing() {
-    use super::carried_capture_marks;
-    assert_eq!(carried_capture_marks((false, false), true), (false, false));
-    assert_eq!(carried_capture_marks((false, false), false), (false, false));
-}
-
 fn present_params(swap_effect: u32, back_buffer_count: u32) -> mtld3d_types::D3DPRESENT_PARAMETERS {
     mtld3d_types::D3DPRESENT_PARAMETERS {
         back_buffer_width: 640,

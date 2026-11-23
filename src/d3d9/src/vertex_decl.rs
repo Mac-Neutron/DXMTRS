@@ -43,7 +43,6 @@ pub struct VertexDeclInner {
     /// Terminator included, so `GetDeclaration` can memcpy the whole slice
     /// back.
     elements_with_end: Vec<D3DVERTEXELEMENT9>,
-    hash: u64,
     /// Bit `s` set: some element lives on stream `s`.
     stream_mask: u16,
     /// The elements a pre-transformed draw passes to the pixel stage by semantic.
@@ -53,7 +52,6 @@ pub struct VertexDeclInner {
     /// The FVF `SetFVF` built this declaration for, 0 for one the game created.
     fvf: u32,
     /// The elements as the core runtime's pipeline key holds them, built once here.
-    #[cfg(feature = "core-runtime")]
     code: mtld3d_core::pipeline_key::DeclCode,
 }
 
@@ -66,10 +64,6 @@ impl VertexDeclInner {
 
     pub fn elements_with_end(&self) -> &[D3DVERTEXELEMENT9] {
         &self.elements_with_end
-    }
-
-    pub const fn hash(&self) -> u64 {
-        self.hash
     }
 
     /// Bit `s` set: some element lives on stream `s`.
@@ -92,7 +86,6 @@ impl VertexDeclInner {
     }
 
     /// The elements as the core runtime's pipeline key holds them.
-    #[cfg(feature = "core-runtime")]
     pub const fn code(&self) -> &mtld3d_core::pipeline_key::DeclCode {
         &self.code
     }
@@ -113,12 +106,10 @@ impl Direct3DVertexDeclaration9 {
         let packed = pack_vertex_decl(info.elements)?;
         let inner = Box::into_raw(Box::new(VertexDeclInner {
             device_inner: info.device_inner,
-            #[cfg(feature = "core-runtime")]
             code: mtld3d_core::pipeline_key::DeclCode::new(
                 packed.elements_with_end.as_slice().into(),
             ),
             elements_with_end: packed.elements_with_end,
-            hash: packed.hash,
             stream_mask: packed.stream_mask,
             passthrough: packed.passthrough,
             fvf: info.fvf,

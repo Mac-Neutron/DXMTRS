@@ -174,10 +174,11 @@ pub extern "system" fn set_maximum_frame_latency(this: *mut c_void, latency: u32
     let first = bound.set(stored);
     let enforced = bound.enforced();
     let configured = mtld3d_core::config::frame_latency_label(bound.configured());
-    #[cfg(feature = "core-runtime")]
-    if let Some(core) = obj.inner().core_mut() {
-        core.device().queue().set_max_latency(enforced);
-    }
+    obj.inner()
+        .core_mut()
+        .device()
+        .queue()
+        .set_max_latency(enforced);
     if first {
         log::info!(
             target: LOG_TARGET,

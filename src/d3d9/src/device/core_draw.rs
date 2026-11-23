@@ -1,20 +1,15 @@
-//! The core runtime's draws and shader creation (DXMTRS C4b-2, C4c-1): thin arms over `d3d9_rt`.
+//! The core runtime's draws and shader creation (DXMTRS C4b-2, C4c-1): thin arms over `crate::rt`.
 //!
-//! A shader of a core device is parsed in-process and its tokens interned on the device, so a
-//! draw's key compares programs by pointer. A draw resolves its [`PipelineKey`] and binds from the
-//! device state with `mtld3d_core::pipeline_key`'s host-tested decisions ([`core_draw_kinds`],
-//! [`core_ps_variant`], [`float_rows`], [`core_viewport`], [`pos_fixup`]); `d3d9_rt` builds the
-//! pipeline on a miss and records the draw. A UP draw feeds the call's bytes; a draw from the
-//! bound buffers first uploads what each buffer it reads owes its core form, and answers in
-//! mtld3d's order. A draw the core does not cover yet answers `D3DERR_NOTAVAILABLE` with one
-//! warning per reason.
+//! A shader is parsed in-process and its tokens interned on the device, so a draw's key compares
+//! programs by pointer. A draw resolves its [`PipelineKey`] and binds from the device state with
+//! `mtld3d_core::pipeline_key`'s host-tested decisions ([`core_draw_kinds`], [`core_ps_variant`],
+//! [`float_rows`], [`core_viewport`], [`pos_fixup`]); `crate::rt` builds the pipeline on a miss
+//! and records the draw. A UP draw feeds the call's bytes; a draw from the bound buffers first
+//! uploads what each buffer it reads owes its core form, and answers in order. A draw the core
+//! does not cover yet answers `D3DERR_NOTAVAILABLE` with one warning per reason.
 
 use core::{ffi::c_void, ops::Range};
 
-use d3d9_rt::device::{
-    Bind, CoreDevice, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData, TextureBind,
-    view_format,
-};
 use mtld3d_core::{
     buffer_rename::BufferMapMode,
     convert::{
@@ -60,7 +55,13 @@ use mtld3d_types::{
 
 use super::{DeviceInner, refuse_under_core};
 use crate::{
-    com_ref::ComChild, index_buffer::Direct3DIndexBuffer9, vertex_buffer::Direct3DVertexBuffer9,
+    com_ref::ComChild,
+    index_buffer::Direct3DIndexBuffer9,
+    rt::device::{
+        Bind, DrawData, DrawRefused, IndexData, Indices, Stage, StreamData, TextureBind,
+        view_format,
+    },
+    vertex_buffer::Direct3DVertexBuffer9,
 };
 
 /// The UP draws' refusal of a layout no binding can fetch (DXMTRS C4c-2a).
@@ -272,9 +273,10 @@ fn resolve(
     // SAFETY: as the vertex shader's.
     let ps = unsafe { dev.shader_bindings().pixel_shader().as_ref() };
     let layout = ff_vs_layout_from_elements(decl.elements());
-    let vs_core = vs.and_then(|s| s.core());
-    let ps_core = ps.and_then(|s| s.core());
-    // The pixel stages' bound textures (`cached_bound_texture_mask` is mtld3d's snapshot's, 0 here).
+    dev.cached_ff_vs_layout = layout;
+    let vs_core = vs.map(crate::vertex_shader::Direct3DVertexShader9::core);
+    let ps_core = ps.map(crate::pixel_shader::Direct3DPixelShader9::core);
+    // The pixel stages' bound textures (`cached_bound_texture_mask` was legacy, 0 here).
     let bound_mask = dev.stage_bindings().bound_mask();
     let bound = bound_mask.to_le_bytes()[0];
     let ff_ps = ps
@@ -287,7 +289,7 @@ fn resolve(
         (None, None) => 0,
     };
     let bindings = dev.stage_bindings();
-    // The sampled pixel slots by what they hold, as mtld3d's draw folds them into its variant.
+    // The sampled pixel slots by what they hold, folded into the variant.
     let (fetch4, fetch4_alpha) = bindings.fetch4().masks();
     let masks = SampledMasks {
         volume: bindings.volume_sampler_mask() & sampled_mask,
@@ -300,9 +302,9 @@ fn resolve(
     };
     // Whether a sampled pixel slot holds the bound depth-stencil's texture, at any level: when
     // `samples_bound && !uses_plane` the pass omits the depth-stencil so no snapshot copy is
-    // needed, and when `samples_bound && uses_plane` `d3d9-rt` blits an up-to-date snapshot of
+    // needed, and when `samples_bound && uses_plane` `crate::rt` blits an up-to-date snapshot of
     // the bound depth attachment for the sampler so Metal never samples an active pass attachment.
-    let bound_depth = dev.core.as_deref().and_then(CoreDevice::depth);
+    let bound_depth = dev.core.depth();
     let samples_bound = bound_depth.is_some_and(|depth| {
         (0..16usize)
             .filter(|slot| sampled_mask & (1 << slot) != 0)
@@ -345,7 +347,7 @@ fn resolve(
     let [color_format, f1, f2, f3] = colors;
     // Target 0's sample count, which the pass, its pipeline and its coverage follow (DXMTRS
     // C4b-3d5).
-    let sample_count = dev.core.as_deref().map_or(1, CoreDevice::target_samples);
+    let sample_count = dev.core.target_samples();
     // The depth-stencil the draw has (DXMTRS C4b-3d2): the bound one, whatever its size, when it
     // has target 0's count; none for a draw that samples it and uses no plane of it.
     let (depth_bound, depth_format) = key_depth(dev, &rs, samples_bound, sample_count);
@@ -636,7 +638,8 @@ fn resolve(
         ),
         alpha_to_coverage,
     );
-    if let Some(core) = dev.core.as_deref_mut() {
+    {
+        let core = &mut *dev.core;
         let every_slot = slots
             .iter()
             .map(|s| (Stage::Pixel, s))
@@ -822,22 +825,20 @@ fn core_target0_extent(dev: &DeviceInner, physical: (u32, u32)) -> TargetExtent 
 /// C4b-3d3, C4b-3d4). The back buffer's from the present parameters when target 0 does not
 /// resolve (a device with no back buffer, whose draws record nothing).
 fn core_target_of(dev: &DeviceInner, srgb_write: bool) -> ((u32, u32), [u32; 4], bool) {
-    let core = dev.core.as_deref();
-    core.and_then(|core| core.target_desc(srgb_write))
-        .map_or_else(
-            || {
-                let pp = dev.present_params();
-                (
-                    (pp.back_buffer_width, pp.back_buffer_height),
-                    [mtl::PixelFormat::Bgra8Unorm as u32, 0, 0, 0],
-                    false,
-                )
-            },
-            |(size, formats)| {
-                let stored = core.and_then(CoreDevice::target_format);
-                (size, formats, srgb_write && stored != Some(formats[0]))
-            },
-        )
+    dev.core.target_desc(srgb_write).map_or_else(
+        || {
+            let pp = dev.present_params();
+            (
+                (pp.back_buffer_width, pp.back_buffer_height),
+                [mtl::PixelFormat::Bgra8Unorm as u32, 0, 0, 0],
+                false,
+            )
+        },
+        |(size, formats)| {
+            let stored = dev.core.target_format();
+            (size, formats, srgb_write && stored != Some(formats[0]))
+        },
+    )
 }
 
 /// Whether the colour target at `slot` stores alpha, as mtld3d's blend factors see it.
@@ -886,9 +887,8 @@ fn key_depth(
     samples_bound: bool,
     samples: u8,
 ) -> (bool, u32) {
-    let core = dev.core.as_deref();
-    let bound = core.and_then(CoreDevice::depth_format);
-    let same_samples = core.and_then(CoreDevice::depth_samples) == Some(samples);
+    let bound = dev.core.depth_format();
+    let same_samples = dev.core.depth_samples() == Some(samples);
     // What the draw's state tests or writes of the planes that depth-stencil has.
     let uses_plane = bound.is_some_and(|format| {
         let has_stencil = format == PixelFormat::Depth32FloatStencil8 as u32;
@@ -949,7 +949,7 @@ fn draw(
 /// Records a draw of `primitive`, as Metal's `metal_primitive`, from `feed` with the device state.
 ///
 /// A layout no binding can fetch answers `D3DERR_NOTAVAILABLE` under `feed`'s name (logged once);
-/// a draw `d3d9_rt` drops for another reason answers `D3D_OK`, as under C4a, one whose colour
+/// a draw `crate::rt` drops for another reason answers `D3D_OK`, one whose colour
 /// targets, depth-stencil or buffer are not its key's or the store's logged once (unreachable
 /// while the key's colours, count and depth format are `target_desc`'s, `target_samples`' and
 /// `key_depth`'s, and the arms flush every buffer they read).
@@ -970,7 +970,7 @@ fn record(
         fetch,
     } = feed;
     let point_list = primitive == D3DPT_POINTLIST;
-    let target_gen = dev.core.as_deref().map_or(0, CoreDevice::target_gen);
+    let target_gen = dev.core.target_gen();
     let cache_hit = !dev.core_draw_cache.dirty
         && dev.core_draw_cache.cached.as_ref().is_some_and(|cached| {
             cached.point_list == point_list
@@ -1001,9 +1001,6 @@ fn record(
         core,
         ..
     } = dev;
-    let Some(core) = core.as_deref_mut() else {
-        return D3D_OK;
-    };
     let result = {
         let Some(resolved) = core_draw_cache.cached.as_ref() else {
             return D3D_OK;
@@ -1080,38 +1077,35 @@ fn record(
 
 /// `DrawPrimitiveUP` on the core, after the entry point's shared checks (C4b2-7).
 ///
-/// `None` for a device of mtld3d's runtime. A fan draws as an indexed triangle list.
+/// A fan draws as an indexed triangle list.
 pub fn draw_primitive_up(
     dev: &mut DeviceInner,
     primitive: u32,
     primitive_count: u32,
     data: *const c_void,
     stride: u32,
-) -> Option<i32> {
-    if !dev.is_core() {
-        return None;
-    }
+) -> i32 {
     let count = vertex_count(primitive, primitive_count);
     let Some(byte_count) = up_byte_count(stride, count) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     if data.is_null() || byte_count == 0 {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     }
     // SAFETY: per the DrawPrimitiveUP ABI, `data` holds `count` vertices `stride` bytes apart,
     // read here; alignment is not assumed.
     let vertices = unsafe { slice_from_caller(data.cast::<u8>(), byte_count) };
     if primitive != D3DPT_TRIANGLEFAN {
         if let Err(hr) = dev.encoder_status() {
-            return Some(hr);
+            return hr;
         }
-        return Some(draw(dev, primitive, stride, &vertices, count, None));
+        return draw(dev, primitive, stride, &vertices, count, None);
     }
     let Some(fan) = FanRewrite::sequential(0, primitive_count) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     if let Err(hr) = dev.encoder_status() {
-        return Some(hr);
+        return hr;
     }
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
@@ -1120,14 +1114,7 @@ pub fn draw_primitive_up(
         index_type: fan.index_type() as u8,
         count: fan.index_count(),
     };
-    Some(draw(
-        dev,
-        primitive,
-        stride,
-        &vertices,
-        count,
-        Some(indices),
-    ))
+    draw(dev, primitive, stride, &vertices, count, Some(indices))
 }
 
 /// A `DrawIndexedPrimitiveUP`'s arguments, as the entry point received them.
@@ -1144,25 +1131,22 @@ pub struct IndexedUp {
 
 /// `DrawIndexedPrimitiveUP` on the core, after the entry point's shared checks (C4b2-7).
 ///
-/// `None` for a device of mtld3d's runtime. The vertices are `[0, min_vertex_index +
-/// num_vertices)`, the indices absolute; a fan draws as an indexed triangle list.
-pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Option<i32> {
-    if !dev.is_core() {
-        return None;
-    }
+/// The vertices are `[0, min_vertex_index + num_vertices)`, the indices absolute; a fan draws as
+/// an indexed triangle list.
+pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> i32 {
     let Some((index_type, index_size)) = index_format(up.index_format) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     let vertex_total = indexed_up_vertices(up.min_vertex_index, up.num_vertices);
     let Some(byte_count) = vertex_total.and_then(|total| up_byte_count(up.stride, total)) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     let count = vertex_count(up.primitive, up.primitive_count);
     let Some(index_bytes) = up_byte_count(u32::from(index_size), count) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     if byte_count == 0 || index_bytes == 0 {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     }
     let vertex_total = vertex_total.unwrap_or_default();
     // SAFETY: per the DrawIndexedPrimitiveUP ABI, `vertex_data` holds the vertices up to
@@ -1174,28 +1158,28 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
     let (primitive, stride) = (up.primitive, up.stride);
     if primitive != D3DPT_TRIANGLEFAN {
         if let Err(hr) = dev.encoder_status() {
-            return Some(hr);
+            return hr;
         }
         let indices = Indices {
             data: IndexData::Bytes(&source),
             index_type: index_type as u8,
             count,
         };
-        return Some(draw(
+        return draw(
             dev,
             primitive,
             stride,
             &vertices,
             vertex_total,
             Some(indices),
-        ));
+        );
     }
     let Some(fan) = FanRewrite::indexed(&source, usize::from(index_size), 0, up.primitive_count)
     else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     if let Err(hr) = dev.encoder_status() {
-        return Some(hr);
+        return hr;
     }
     let mut list = vec![0; fan.byte_len()];
     fan.write(&mut list);
@@ -1204,52 +1188,48 @@ pub fn draw_indexed_primitive_up(dev: &mut DeviceInner, up: &IndexedUp) -> Optio
         index_type: fan.index_type() as u8,
         count: fan.index_count(),
     };
-    Some(draw(
+    draw(
         dev,
         primitive,
         stride,
         &vertices,
         vertex_total,
         Some(indices),
-    ))
+    )
 }
 
 /// `DrawPrimitive` on the core, after the entry point's shared checks (DXMTRS C4c-1).
 ///
-/// `None` for a device of mtld3d's runtime. Answers in mtld3d's order: a fan first
-/// ([`sequential_fan`]); then the primitive type, the vertex count and no declared stream with a
-/// buffer, each `D3DERR_INVALIDCALL`. A draw that is no fan never instances; a fan off mtld3d's
-/// shared pattern does ([`sequential_fan`]).
+/// Answers in order: a fan first ([`sequential_fan`]); then the primitive type, the vertex count
+/// and no declared stream with a buffer, each `D3DERR_INVALIDCALL`. A draw that is no fan never
+/// instances; a fan off the shared pattern does ([`sequential_fan`]).
 #[must_use]
 pub fn draw_primitive(
     dev: &mut DeviceInner,
     primitive: u32,
     start_vertex: u32,
     primitive_count: u32,
-) -> Option<i32> {
-    if !dev.is_core() {
-        return None;
-    }
+) -> i32 {
     if primitive == D3DPT_TRIANGLEFAN {
-        return Some(sequential_fan(dev, start_vertex, primitive_count));
+        return sequential_fan(dev, start_vertex, primitive_count);
     }
     let Some(metal_primitive) = d3d_to_metal_primitive(primitive) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     let count = vertex_count(primitive, primitive_count);
     if count == 0 {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     }
     if let Err(hr) = dev.latched_encoder_status() {
-        return Some(hr);
+        return hr;
     }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
-        Ok(None) => return Some(invalid("DrawPrimitive: no vertex buffer bound")),
-        Err(hr) => return Some(hr),
+        Ok(None) => return invalid("DrawPrimitive: no vertex buffer bound"),
+        Err(hr) => return hr,
     };
     if !flush(dev, &bound, None) {
-        return Some(dropped());
+        return dropped();
     }
     let feed = Feed {
         keys: bound.keys,
@@ -1261,16 +1241,16 @@ pub fn draw_primitive(
         indices: None,
         fetch: BUFFER_FETCH,
     };
-    Some(record(dev, primitive, metal_primitive, feed))
+    record(dev, primitive, metal_primitive, feed)
 }
 
 /// `DrawIndexedPrimitive` on the core, after the entry point's shared checks (DXMTRS C4c-1).
 ///
-/// `None` for a device of mtld3d's runtime. Answers in mtld3d's order: a fan first
-/// ([`indexed_fan`]); then the primitive type and the index count (`D3DERR_INVALIDCALL`), no
-/// declared stream with a buffer (`D3D_OK`, nothing drawn, the index buffer not looked at), no
-/// index buffer (`D3DERR_INVALIDCALL`). The indices are the index buffer's from `start_index`,
-/// `base_vertex` added to each; the draw instances by stream 0's frequency word.
+/// Answers in order: a fan first ([`indexed_fan`]); then the primitive type and the index count
+/// (`D3DERR_INVALIDCALL`), no declared stream with a buffer (`D3D_OK`, nothing drawn, the index
+/// buffer not looked at), no index buffer (`D3DERR_INVALIDCALL`). The indices are the index
+/// buffer's from `start_index`, `base_vertex` added to each; the draw instances by stream 0's
+/// frequency word.
 #[must_use]
 pub fn draw_indexed_primitive(
     dev: &mut DeviceInner,
@@ -1278,32 +1258,29 @@ pub fn draw_indexed_primitive(
     base_vertex: i32,
     start_index: u32,
     primitive_count: u32,
-) -> Option<i32> {
-    if !dev.is_core() {
-        return None;
-    }
+) -> i32 {
     if primitive == D3DPT_TRIANGLEFAN {
-        return Some(indexed_fan(dev, base_vertex, start_index, primitive_count));
+        return indexed_fan(dev, base_vertex, start_index, primitive_count);
     }
     let Some(metal_primitive) = d3d_to_metal_primitive(primitive) else {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     };
     let count = vertex_count(primitive, primitive_count);
     if count == 0 {
-        return Some(D3DERR_INVALIDCALL);
+        return D3DERR_INVALIDCALL;
     }
     if let Err(hr) = dev.latched_encoder_status() {
-        return Some(hr);
+        return hr;
     }
     let bound = match bound_streams(dev) {
         Ok(Some(bound)) => bound,
-        Ok(None) => return Some(D3D_OK),
-        Err(hr) => return Some(hr),
+        Ok(None) => return D3D_OK,
+        Err(hr) => return hr,
     };
     let index = match bound_index(dev) {
         Ok(Some(index)) => index,
-        Ok(None) => return Some(invalid("DrawIndexedPrimitive: no index buffer bound")),
-        Err(hr) => return Some(hr),
+        Ok(None) => return invalid("DrawIndexedPrimitive: no index buffer bound"),
+        Err(hr) => return hr,
     };
     let (format, id) = {
         // SAFETY: the bound index buffer, live while bound.
@@ -1311,10 +1288,10 @@ pub fn draw_indexed_primitive(
         (inner.format(), inner.buffer_id())
     };
     let Some((index_type, size)) = index_format(format) else {
-        return Some(invalid("DrawIndexedPrimitive: unsupported index format"));
+        return invalid("DrawIndexedPrimitive: unsupported index format");
     };
     if !flush(dev, &bound, Some(index)) {
-        return Some(dropped());
+        return dropped();
     }
     let offset = u64::from(start_index) * u64::from(size);
     let feed = Feed {
@@ -1331,7 +1308,7 @@ pub fn draw_indexed_primitive(
         }),
         fetch: BUFFER_FETCH,
     };
-    Some(record(dev, primitive, metal_primitive, feed))
+    record(dev, primitive, metal_primitive, feed)
 }
 
 /// A `DrawPrimitive` fan, its answers in mtld3d's order.
@@ -1344,7 +1321,7 @@ fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32
     let Some(fan) = FanRewrite::sequential(start_vertex, primitive_count) else {
         return super::reject_unaddressable_fan("DrawPrimitive", primitive_count);
     };
-    if let Err(hr) = dev.known_encoder_status() {
+    if let Err(hr) = dev.latched_encoder_status() {
         return hr;
     }
     let bound = match bound_streams(dev) {
@@ -1356,7 +1333,7 @@ fn sequential_fan(dev: &mut DeviceInner, start_vertex: u32, primitive_count: u32
     fan_draw(dev, &fan, &bound, generated.then_some(bound.instancing))
 }
 
-/// A `DrawIndexedPrimitive` fan, in mtld3d's order (its `bound_index_fan`, then its draw).
+/// A `DrawIndexedPrimitive` fan, in order (its `bound_index_fan`, then its draw).
 ///
 /// No index buffer, a fan that reads past the index buffer's pages, or a rewrite that cannot
 /// address it answers `D3DERR_INVALIDCALL`; then no declared stream with a buffer `D3D_OK`. The
@@ -1387,11 +1364,8 @@ fn indexed_fan(
     let copied;
     let src = if matches!(inner.map_mode(), BufferMapMode::Direct) {
         // Copied out: the draw below borrows the device the core's memory is reached through.
-        copied = window.and_then(|(first, len)| {
-            dev.core
-                .as_deref()?
-                .dynamic_copy(inner.buffer_id(), first, len)
-        });
+        copied =
+            window.and_then(|(first, len)| dev.core.dynamic_copy(inner.buffer_id(), first, len));
         copied.as_deref()
     } else {
         window.and_then(|(first, len)| inner.backing().get(first..)?.get(..len))
@@ -1403,7 +1377,7 @@ fn indexed_fan(
     else {
         return D3DERR_INVALIDCALL;
     };
-    if let Err(hr) = dev.known_encoder_status() {
+    if let Err(hr) = dev.latched_encoder_status() {
         return hr;
     }
     let bound = match bound_streams(dev) {
@@ -1536,9 +1510,7 @@ fn flush(
 ) -> bool {
     // Read before the core is borrowed: a vertex buffer's release decision takes it.
     let ignore_lock_bounds = dev.config().buffer_ignore_lock_bounds;
-    let Some(core) = dev.core.as_deref_mut() else {
-        return false;
-    };
+    let core = &mut *dev.core;
     let mut remaining = bound.present_mask;
     while remaining != 0 {
         let stream = remaining.trailing_zeros() as usize;

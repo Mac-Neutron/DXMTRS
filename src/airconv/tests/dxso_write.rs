@@ -1,82 +1,4 @@
-//! The DXSO writer over the parity corpus: `parse ∘ write` keeps every program the corpus holds.
-//!
-//! Each record source of `tests/d3d9/dxso-corpus/*.bin` (read through mtld3d-core, which
-//! airconv-ir cannot depend on) is parsed, written and parsed again, and the two programs are
-//! compared field by field (`def` floats by bits). The written stream is also a fixpoint: writing
-//! its parse gives it back. `synthetic.bin` must be there and hold sources.
-
-use std::{fs, path::PathBuf};
-
-use airconv_ir::{
-    dxso::{DxsoProgram, ir::Register, parse},
-    dxso_write::write,
-};
-use mtld3d_core::shader_cache::{CacheHeader, read_header, read_records};
-
-fn def_bits(p: &DxsoProgram) -> Vec<(Register, [u32; 4])> {
-    p.def_constants
-        .iter()
-        .map(|d| (d.reg, d.value.map(f32::to_bits)))
-        .collect()
-}
-
-/// Asserts that `a` and `b` agree in every public field but `bytecode`.
-fn same(a: &DxsoProgram, b: &DxsoProgram, what: &str) {
-    assert_eq!(a.shader_type, b.shader_type, "{what}");
-    assert_eq!((a.major, a.minor), (b.major, b.minor), "{what}");
-    assert_eq!(a.declarations, b.declarations, "{what}");
-    assert_eq!(def_bits(a), def_bits(b), "{what}");
-    assert_eq!(a.def_int_constants, b.def_int_constants, "{what}");
-    assert_eq!(a.def_bool_constants, b.def_bool_constants, "{what}");
-    assert_eq!(a.instructions, b.instructions, "{what}");
-    assert_eq!(a.subroutines, b.subroutines, "{what}");
-}
-
-#[test]
-fn round_trips_the_parity_corpus() {
-    let dir = PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/d3d9/dxso-corpus"
-    ));
-    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|e| e.expect("a directory entry").path())
-        .filter(|p| p.extension().is_some_and(|x| x == "bin"))
-        .collect();
-    files.sort();
-    assert!(
-        files.iter().any(|p| p.ends_with("synthetic.bin")),
-        "no synthetic.bin in {}",
-        dir.display()
-    );
-    let mut checked = 0usize;
-    for path in &files {
-        let name = path.file_name().expect("a file name").to_string_lossy();
-        let bytes = fs::read(path).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(
-            read_header(&bytes).ok(),
-            Some(CacheHeader::CURRENT),
-            "{name}: not a current shader cache"
-        );
-        let mut sources = 0usize;
-        for entry in &read_records(&bytes).shaders {
-            let Some(source) = entry.source() else {
-                continue;
-            };
-            let what = format!("{name} {:?} {:016x}", entry.kind, entry.key);
-            let program = parse(source.tokens()).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let written = write(&program);
-            let back = parse(&written).unwrap_or_else(|e| panic!("{what} written: {e:?}"));
-            same(&program, &back, &what);
-            assert_eq!(write(&back), written, "{what}: not a fixpoint");
-            sources += 1;
-        }
-        println!("dxso-write: {name}: {sources} sources round-trip");
-        assert!(sources > 0, "{name}: no record source");
-        checked += sources;
-    }
-    println!("dxso-write: {checked} sources in {} files", files.len());
-}
+//! The DXSO writer constructed from parts outside `airconv-ir`.
 
 /// A builder outside `airconv-ir` constructs a program from its parts, as `ff_build` does.
 #[test]
@@ -91,8 +13,9 @@ fn builds_a_program_from_parts_outside_the_crate() {
                 WriteMask,
             },
             opcode::Opcode,
+            parse,
         },
-        dxso_write::{ProgramParts, dst, instruction, src, write_parts},
+        dxso_write::{ProgramParts, dst, instruction, src, write, write_parts},
     };
 
     let declarations = [

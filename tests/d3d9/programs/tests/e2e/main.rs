@@ -19,7 +19,6 @@ mod bench;
 mod bench_api_cost;
 mod bench_buffers;
 mod bench_clock;
-mod bench_cold_start;
 mod bench_crossing;
 mod bench_frame_shape;
 mod bench_query;

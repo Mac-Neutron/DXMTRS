@@ -3,7 +3,7 @@ name = "d3d9"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license = "Zlib"
+license = "LGPL-2.1-or-later AND Zlib"
 description = "Direct3D 9 translation layer for Wine on macOS, backed by Metal"
 authors = ["Alexander Theissen <alex.theissen@me.com>"]
 
@@ -11,28 +11,33 @@ authors = ["Alexander Theissen <alex.theissen@me.com>"]
 crate-type = ["staticlib"]
 
 [features]
-# D3D9's developer timers; mtld3d.so needs the same (meson's d3d9_perf_tracking sets both).
+# Windows PE COM front end (DllMain, exports, SnMalloc, win32 hooks, dxmt_log). Host unit
+# tests compile without it so they only link rt + dxmt-fakes on macOS.
+front-end = ["dep:snmalloc-rs"]
+# D3D9's developer timers (meson's d3d9_perf_tracking).
 perf-tracking = ["mtld3d-core/perf-tracking", "mtld3d-shared/perf-tracking"]
 # DXMT_PERF_BUILD: lines below warnings compiled out.
-perf-build = ["mtld3d-shared/perf-build", "d3d9-rt?/perf-build"]
-# DXMTRS C4: the core runtime (runtime.mode=core, default since C4e), d3d9-rt on dxmt-core; meson's d3d9_core_runtime
-# across all halves (aarch64, arm64ec, x86_64, i686), with runtime.mode=mtld3d kept as the escape hatch until C5.
-core-runtime = ["dep:d3d9-rt"]
-# The VM guest's build (meson's guest_vm): the core runtime's guest-only winemetal calls.
-guest-vm = ["d3d9-rt?/guest-vm"]
+perf-build = ["mtld3d-shared/perf-build", "dxmt-core/perf-build"]
+# The VM guest's build (meson's guest_vm): guest-only winemetal calls.
+guest-vm = ["dxmt-core/guest-vm", "winemetal-sys/guest-vm"]
 
 [dependencies]
+airconv-ir = { workspace = true }
 bitflags = { workspace = true }
-d3d9-rt = { workspace = true, optional = true }
+dxmt-core = { workspace = true }
 dxmt-util = { workspace = true }
 mtld3d-core = { workspace = true }
 mtld3d-shared = { workspace = true }
 mtld3d-types = { workspace = true }
 log = { workspace = true }
 rustc-hash = { workspace = true }
-snmalloc-rs = { workspace = true }
+snmalloc-rs = { workspace = true, optional = true }
+winemetal-sys = { workspace = true }
 xbr = { workspace = true }
 xxhash-rust = { workspace = true }
+
+[dev-dependencies]
+dxmt-fakes = { path = "../dxmt/fakes" }
 
 [lints]
 workspace = true

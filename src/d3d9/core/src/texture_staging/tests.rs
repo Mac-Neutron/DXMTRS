@@ -24,10 +24,7 @@ use std::sync::Arc;
 use mtld3d_types::{D3DPOOL_MANAGED, D3DPOOL_SYSTEMMEM};
 
 use super::*;
-use crate::{
-    page_box::{PageBox, PageBoxRead},
-    upload_recovery::{MAX_REISSUE_ATTEMPTS, UploadFate, UploadRecoveryQueue},
-};
+use crate::page_box::{PageBox, PageBoxRead};
 
 const DEFAULT_FLAGS: u32 = 0;
 const NO_USAGE: u32 = 0;
@@ -53,163 +50,11 @@ fn recovery_staging(value: u8) -> Arc<PageBox> {
     Arc::new(backing)
 }
 
-fn recovery_bytes(backing: &PageBox) -> Vec<u8> {
-    // SAFETY: the test initializes every logical byte and accesses them serially.
-    unsafe { std::slice::from_raw_parts(backing.as_ptr(), RECOVERY_BYTES) }.to_vec()
-}
-
 /// The write facts of pages an upload of an earlier frame may still read, or none.
 fn readers(has_readers: bool) -> StagingWrite {
     let mut write = StagingWrite::empty();
     write.set(StagingWrite::HAS_READERS, has_readers);
     write
-}
-
-fn write_retired_staging(backing: &mut Arc<PageBox>, original_seq: u64, retired: u64) {
-    let contended = is_in_flight(original_seq, retired) || backing.has_readers();
-    let action = decide_lock_action(
-        &readers(contended),
-        0,
-        D3DPOOL_MANAGED,
-        None,
-        RECOVERY_SHAPE,
-    );
-    if let LockAction::FreshBox { preserve } = action {
-        assert_eq!(preserve, PreserveKind::Cpu);
-        let mut fresh = PageBox::new_zeroed(RECOVERY_BYTES);
-        // SAFETY: distinct initialized allocations with equal logical lengths.
-        unsafe {
-            std::ptr::copy_nonoverlapping(backing.as_ptr(), fresh.as_mut_ptr(), RECOVERY_BYTES);
-        }
-        assert_eq!(recovery_bytes(&fresh), recovery_bytes(backing));
-        *backing = Arc::new(fresh);
-    }
-    // SAFETY: accesses are serial and this allocation holds RECOVERY_BYTES initialized bytes.
-    unsafe {
-        backing
-            .as_ptr()
-            .cast_mut()
-            .write_bytes(0x22, RECOVERY_BYTES);
-    };
-}
-
-#[test]
-fn failed_upload_preserves_bytes_before_recovery_runs() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(Arc::clone(&backing)));
-    write_retired_staging(&mut backing, 5, 5);
-    let entries = queue.settle(5, 5);
-    assert_eq!(entries[0].0, UploadFate::Reissue);
-    assert_eq!(
-        recovery_bytes(entries[0].1.payload().backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn requeued_upload_preserves_bytes_after_original_retirement() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(Arc::clone(&backing)));
-    let (fate, entry) = queue.settle(5, 5).pop().expect("one upload");
-    assert_eq!(fate, UploadFate::Reissue);
-    queue.requeue(entry, 6);
-    write_retired_staging(&mut backing, 5, 5);
-    let entries = queue.settle(6, 5);
-    assert_eq!(entries[0].0, UploadFate::Released);
-    assert_eq!(
-        recovery_bytes(entries[0].1.payload().backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn poisoned_newer_upload_preserves_bytes_after_its_successful_retirement() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(recovery_staging(0x33)));
-    queue.push(1, 6, PageBoxRead::new(Arc::clone(&backing)));
-    for (fate, entry) in queue.settle(6, 5) {
-        assert_eq!(fate, UploadFate::Reissue);
-        queue.requeue(entry, 7);
-    }
-    write_retired_staging(&mut backing, 6, 6);
-    let entries = queue.settle(7, 5);
-    assert_eq!(
-        recovery_bytes(entries[1].1.payload().backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn successful_but_replayable_upload_preserves_bytes_before_a_later_failure() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(Arc::clone(&backing)));
-    write_retired_staging(&mut backing, 5, 5);
-    let entries = queue.settle(6, 6);
-    assert_eq!(entries[0].0, UploadFate::Reissue);
-    assert_eq!(
-        recovery_bytes(entries[0].1.payload().backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn abandoned_unretired_replay_keeps_its_emitted_reader() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 1, PageBoxRead::new(Arc::clone(&backing)));
-    let mut seq = 1;
-    for _ in 0..MAX_REISSUE_ATTEMPTS {
-        let (fate, entry) = queue.settle(seq, seq).pop().expect("retry");
-        assert_eq!(fate, UploadFate::Reissue);
-        seq += 1;
-        queue.requeue(entry, seq);
-    }
-    let emitted = PageBoxRead::new(Arc::clone(&backing));
-    let entries = queue.settle(seq - 1, seq);
-    assert_eq!(entries[0].0, UploadFate::Abandoned);
-    drop(entries);
-    write_retired_staging(&mut backing, 1, seq - 1);
-    assert_eq!(
-        recovery_bytes(emitted.backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn declined_replay_keeps_an_earlier_emitted_reader() {
-    let mut backing = recovery_staging(0x11);
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(Arc::clone(&backing)));
-    let emitted = PageBoxRead::new(Arc::clone(&backing));
-    let entries = queue.settle(4, 5);
-    assert_eq!(entries[0].0, UploadFate::Reissue);
-    drop(entries);
-    write_retired_staging(&mut backing, 5, 5);
-    assert_eq!(
-        recovery_bytes(emitted.backing()),
-        vec![0x11; RECOVERY_BYTES]
-    );
-}
-
-#[test]
-fn acknowledged_upload_reuses_staging_with_a_cached_wrapper() {
-    let mut backing = recovery_staging(0x11);
-    let cached = Arc::clone(&backing);
-    let pointer = backing.as_ptr();
-    let mut queue = UploadRecoveryQueue::new();
-    queue.push(1, 5, PageBoxRead::new(Arc::clone(&backing)));
-    let emitted = PageBoxRead::new(Arc::clone(&backing));
-    drop(queue.settle(5, 0));
-    assert!(backing.has_readers());
-    drop(emitted);
-    assert!(!backing.has_readers());
-    write_retired_staging(&mut backing, 5, 5);
-    assert_eq!(backing.as_ptr(), pointer);
-    assert_eq!(recovery_bytes(&cached), vec![0x22; RECOVERY_BYTES]);
 }
 
 #[test]
@@ -1660,10 +1505,7 @@ fn a_large_box_snapshots_whenever_it_fits_a_chunk() {
     assert_eq!((intel.pitch, intel.len), (1024, 204_800));
     // 255 rows of 256 texels fill all but one row of a chunk.
     let edge = layout(rect(0, 0, 256, 255), (1, 1), 4, 1024, 256).expect("fits a chunk");
-    assert_eq!(
-        edge.len as usize,
-        crate::upload_snapshot::SNAPSHOT_MAX_BYTES - 1024
-    );
+    assert_eq!(edge.len as usize, super::SNAPSHOT_MAX_BYTES - 1024);
     // The largest sprite of the sprite-atlas shape, at either pitch.
     assert!(layout(rect(0, 0, 129, 112), (1, 1), 4, 1024, 256).is_some());
 }

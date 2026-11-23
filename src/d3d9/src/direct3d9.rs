@@ -1,10 +1,7 @@
 use core::ffi::c_void;
-use std::{
-    path::Path,
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicU32, Ordering, fence},
-    },
+use std::sync::{
+    Arc, LazyLock,
+    atomic::{AtomicU32, Ordering, fence},
 };
 
 use log::{error, info, trace, warn};
@@ -17,17 +14,8 @@ use mtld3d_core::{
     },
     format_probe::FormatProbeKey,
     multisample,
-    passes::BackbufferContents,
-    present::LayerPacing,
 };
-use mtld3d_shared::{
-    AttachMetalLayerParams, CreateBackbufferParams, CreateCommandQueueParams,
-    CreateDepthTextureParams, DestroyCommandQueueParams, GetDeviceInfoParams, InPtr, MetalHandle,
-    OutPtr, ValueIn, VtableThis,
-    mtl::{DeviceCapsFlags, PresentDebugFlags},
-    mtl_handle::{MTLDeviceKind, MTLTextureKind, NSViewKind},
-    record_handle::DeviceRecordHandle,
-};
+use mtld3d_shared::{InPtr, OutPtr, ValueIn, VtableThis, mtl::DeviceCapsFlags};
 use mtld3d_types::{
     D3DADAPTER_IDENTIFIER9, D3DCAPS9, D3DDEVTYPE_HAL, D3DDISPLAYMODE, D3DDISPLAYMODEEX,
     D3DDISPLAYMODEEX_SIZE, D3DDISPLAYMODEFILTER, D3DDISPLAYROTATION_IDENTITY, D3DFMT_A8B8G8R8,
@@ -44,13 +32,8 @@ use mtld3d_types::{
 };
 
 use super::{
-    D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, LOG_TARGET,
-    device::Direct3DDevice9,
-    encoder::{EncoderThread, FrameData, FrameInit},
-    fullscreen::Rect,
-    null_out,
-    stage_bindings::STAGE_COUNT,
-    unix_call::unix_call,
+    D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, LOG_TARGET, device::Direct3DDevice9,
+    fullscreen::Rect, null_out, stage_bindings::STAGE_COUNT,
 };
 
 // The display-mode table behind GetAdapterModeCount / EnumAdapterModes /
@@ -315,14 +298,6 @@ pub struct Direct3D9Inner {
     extended: bool,
 }
 
-impl Drop for Direct3D9Inner {
-    fn drop(&mut self) {
-        // The last interface retires the logging thread and waits for it, so
-        // a `FreeLibrary` that follows this `Release` finds no thread of ours.
-        crate::log_sink::release();
-    }
-}
-
 impl Direct3D9 {
     pub fn new(config: Arc<Mtld3dConfig>, extended: bool) -> Self {
         Self {
@@ -491,25 +466,6 @@ pub fn map_for_device(
 /// take without the `LockRect` the format promises.
 pub const fn is_depth_stencil_format(fmt: u32) -> bool {
     mtld3d_core::format::is_advertised_depth_format(fmt)
-}
-
-/// Subset of depth-stencil formats that carry a stencil plane.
-///
-/// Drives Metal pipeline state: pipelines matched against depth-only
-/// attachments must leave `stencilAttachmentPixelFormat` at Invalid, or Metal
-/// rejects the pipeline.
-pub const fn depth_format_has_stencil(fmt: u32) -> bool {
-    // Must agree with `map_d3d_depth_format`: every D3D depth/stencil format
-    // that maps to the combined Metal `Depth32Float_Stencil8` texture carries a
-    // stencil plane the render pipeline MUST also declare, or the pipeline's
-    // depth/stencil attachment formats desync from the bound depth texture — a
-    // Metal validation failure, and heap-corrupting undefined behaviour with
-    // the layer off. Deriving from the same mapping keeps them in lockstep:
-    // D24FS8 and INTZ are combined formats too, not just D24S8.
-    matches!(
-        mtld3d_core::format::map_d3d_depth_format(fmt),
-        Some(mtld3d_shared::mtl::PixelFormat::Depth32FloatStencil8)
-    )
 }
 
 // D3D9 colour formats whose Metal counterpart has an sRGB twin. Mirror of
@@ -728,104 +684,46 @@ struct CachedDeviceInfo {
     caps: DeviceCapsFlags,
 }
 
-/// The process-wide `GetDeviceInfo` answer, fetched once on first use.
+/// The process-wide Metal device info, fetched once on first use.
 fn device_info() -> &'static CachedDeviceInfo {
     static INFO: std::sync::LazyLock<CachedDeviceInfo> = std::sync::LazyLock::new(|| {
-        #[cfg(feature = "core-runtime")]
-        if crate::is_core() {
-            if let Some(info) = d3d9_rt::device::query_default_device_info() {
-                return CachedDeviceInfo {
-                    name: info.name,
-                    name_len: info.name_len,
-                    registry_id: info.registry_id,
-                    caps: info.caps,
-                };
-            }
-            mtld3d_shared::log_once_warn!(
-                target: crate::LOG_TARGET,
-                "d3d9 core: WMTCopyAllDevices returned no Metal device"
-            );
+        if let Some(info) = crate::rt::device::query_default_device_info() {
             return CachedDeviceInfo {
-                name: [0; 256],
-                name_len: 0,
-                registry_id: 0,
-                caps: DeviceCapsFlags::empty(),
+                name: info.name,
+                name_len: info.name_len,
+                registry_id: info.registry_id,
+                caps: info.caps,
             };
         }
-        let mut name = [0u8; 256];
-        let mut params = GetDeviceInfoParams {
-            name_ptr: name.as_mut_ptr() as u64,
-            name_buf_len: 256,
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "d3d9 core: WMTCopyAllDevices returned no Metal device"
+        );
+        CachedDeviceInfo {
+            name: [0; 256],
             name_len: 0,
             registry_id: 0,
             caps: DeviceCapsFlags::empty(),
-            pad0: 0,
-        };
-        unix_call(&mut params);
-        // `name_len` is the untruncated length and can exceed the buffer;
-        // clamp to what `name` actually holds.
-        let name_len = usize::try_from(params.name_len)
-            .unwrap_or(usize::MAX)
-            .min(name.len());
-        CachedDeviceInfo {
-            name,
-            name_len,
-            registry_id: params.registry_id,
-            caps: params.caps,
         }
     });
     &INFO
 }
 
-/// `PageBox` pages from the Unix side when it asks.
-///
-/// The `PAGES_FROM_UNIX` case of the winemetal facade's build: the question is named at the first
-/// interface and asked at the first page.
+/// `PageBox` pages from the guest VM's winemetal when built with `guest-vm`.
+#[cfg(feature = "guest-vm")]
 pub fn install_page_allocator() {
-    mtld3d_core::page_box::set_page_allocator_source(page_allocator);
+    mtld3d_core::page_box::set_page_allocator_source(|| {
+        log::info!(target: LOG_TARGET, "page boxes: pages from the guest's winemetal");
+        Some(mtld3d_core::page_box::PageAllocator {
+            alloc: crate::rt::guest_pages::alloc,
+            free: crate::rt::guest_pages::free,
+        })
+    });
 }
 
-/// The Unix side's page allocator when it asks for one (`PAGES_FROM_UNIX`).
-///
-/// Asked at the first `PageBox`, which is when the device is first queried, as it was before the
-/// hook.
-fn page_allocator() -> Option<mtld3d_core::page_box::PageAllocator> {
-    fn alloc(len: usize) -> Option<core::ptr::NonNull<u8>> {
-        let mut params = mtld3d_shared::AllocPagesParams {
-            len: len as u64,
-            ptr: 0,
-        };
-        unix_call(&mut params);
-        // The low `usize` bytes, as the cast kept them (a 32-bit guest's Unix side answers below 4 GiB).
-        let mut word = [0; size_of::<usize>()];
-        word.copy_from_slice(&params.ptr.to_le_bytes()[..size_of::<usize>()]);
-        core::ptr::NonNull::new(usize::from_le_bytes(word) as *mut u8)
-    }
-    fn free(ptr: core::ptr::NonNull<u8>, len: usize) {
-        let mut params = mtld3d_shared::FreePagesParams {
-            ptr: ptr.as_ptr() as usize as u64,
-            len: len as u64,
-        };
-        unix_call(&mut params);
-    }
-    #[cfg(all(feature = "core-runtime", feature = "guest-vm"))]
-    if crate::RUNTIME.get() == Some(mtld3d_core::config::RuntimeMode::Core) {
-        // The core runtime has no Unix side of its own: the guest's winemetal serves the pages.
-        log::info!(target: LOG_TARGET, "page boxes: pages from the guest's winemetal");
-        return Some(mtld3d_core::page_box::PageAllocator {
-            alloc: d3d9_rt::guest_pages::alloc,
-            free: d3d9_rt::guest_pages::free,
-        });
-    }
-    if !device_info()
-        .caps
-        .contains(DeviceCapsFlags::PAGES_FROM_UNIX)
-    {
-        return None;
-    }
-    log::info!(target: LOG_TARGET, "page boxes: pages from the unix side (winemetal)");
-    Some(mtld3d_core::page_box::PageAllocator { alloc, free })
-}
+/// `PageBox` pages stay native outside `guest-vm`.
+#[cfg(not(feature = "guest-vm"))]
+pub const fn install_page_allocator() {}
 
 /// Whether the Metal device can create border-colour samplers.
 ///
@@ -1991,374 +1889,11 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         return D3DERR_INVALIDCALL;
     }
 
-    // One runtime per process (DXMTRS C4): a device of the mode the process did not latch is
-    // refused, and the core runtime's device is the core's (no mtld3d.so queue, layer or encoder).
-    match crate::runtime_mode(cfg) {
-        Err(held) => {
-            warn!(
-                target: LOG_TARGET,
-                "reject CreateDevice: the process runs runtime.mode = {}, this interface asks for \
-                 the other",
-                mtld3d_core::config::runtime_mode_label(held)
-            );
-            return D3DERR_NOTAVAILABLE;
-        }
-        Ok(mtld3d_core::config::RuntimeMode::Core) => {
-            return create_core_device(args, cfg, pp, extended);
-        }
-        Ok(mtld3d_core::config::RuntimeMode::Mtld3d) => {}
-    }
-
-    // Create Metal device + command queue
-    let gate = present_gate_unix_path(cfg);
-    let mut present_debug = PresentDebugFlags::empty();
-    present_debug.set(PresentDebugFlags::PRESENT_OCCLUDED, cfg.present_occluded);
-    let mut cq_params = CreateCommandQueueParams {
-        device_handle: MetalHandle::NULL,
-        record_handle: DeviceRecordHandle::NULL,
-        unified_memory: 0,
-        min_linear_texture_align: 0,
-        gate_file_ptr: gate.as_ref().map_or(0, |path| path.as_ptr() as u64),
-        gate_file_len: gate.as_ref().map_or(0, |path| {
-            u32::try_from(path.len()).expect("a gate path fits u32")
-        }),
-        present_debug,
-    };
-    let status = unix_call(&mut cq_params);
-    if status != 0 {
-        error!(target: LOG_TARGET, "CreateCommandQueue failed (0x{status:08X})");
-        return D3DERR_INVALIDCALL;
-    }
-
-    // Determine HWND for layer attachment
     let hwnd = if pp.device_window != 0 {
         pp.device_window as u64
     } else {
         focus_window as u64
     };
-
-    // A fullscreen request must still be well-formed even though its size is
-    // not used: the D3D9 "zero means the client area" rule is windowed-only,
-    // so zero dimensions here are a malformed request. Checked before the
-    // window moves, so a rejected create leaves it untouched.
-    if pp.windowed == 0 && (pp.back_buffer_width == 0 || pp.back_buffer_height == 0) {
-        warn!(
-            target: LOG_TARGET,
-            "reject CreateDevice({}x{}) — a fullscreen request may not carry zero dimensions",
-            pp.back_buffer_width, pp.back_buffer_height,
-        );
-        destroy_partial_device(&cq_params, MetalHandle::NULL, None);
-        return D3DERR_INVALIDCALL;
-    }
-
-    // A fullscreen device sets the requested mode and owns its window unless
-    // the app kept it (`D3DCREATE_NOWINDOWCHANGES`). Both come first: the
-    // back-buffer size is resolved from the resulting client rect, and the
-    // metal view is sized from the window Wine hands us at attach time, so
-    // both have to see the mode in place and the window covering the monitor.
-    let manage_window = behavior_flags & mtld3d_types::D3DCREATE_NOWINDOWCHANGES == 0;
-    let fullscreen = (pp.windowed == 0).then(|| {
-        let mode = fullscreen_mode_request(&pp);
-        crate::fullscreen::enter(hwnd as *mut c_void, manage_window, mode)
-    });
-
-    // Resolve the logical backbuffer size against the window now that its
-    // geometry is final, before any Metal resource is sized from it.
-    resolve_backbuffer_dims(hwnd, &mut pp);
-    // Resolve D3DFMT_UNKNOWN to the display format and a zero back-buffer count
-    // to one, so the geometry written back to the caller's present params is
-    // concrete.
-    if pp.windowed != 0 && pp.back_buffer_format == 0 {
-        pp.back_buffer_format = adapter_display_format();
-    }
-    pp.back_buffer_count = pp.back_buffer_count.max(1);
-
-    warn_unsupported_backbuffer_format(pp.back_buffer_format);
-    crate::device::warn_present_params_fields_once(&pp);
-
-    // The words the unix side publishes into for this device, boxed so their
-    // addresses hold for the device's lifetime; owned by its cursor state.
-    let display_sinks = Box::new(crate::cursor::DisplaySinks::new());
-    let layer_params = attach_metal_layer(hwnd, cq_params.device_handle, &pp, cfg, &display_sinks);
-
-    // A still-zero dimension here (no usable client rect, or a fullscreen
-    // request with zero dims) would abort Metal's texture validation. Reject
-    // it as INVALIDCALL instead, matching `device_reset`.
-    if pp.back_buffer_width == 0 || pp.back_buffer_height == 0 {
-        warn!(
-            target: LOG_TARGET,
-            "reject CreateDevice — zero backbuffer dims (windowed={}, hwnd=0x{hwnd:x})",
-            pp.windowed,
-        );
-        destroy_partial_device(&cq_params, layer_params.view_handle, None);
-        restore_from_fullscreen(fullscreen.as_ref());
-        return D3DERR_INVALIDCALL;
-    }
-    let (cursor_scale, scale_origin) =
-        resolve_cursor_scale(layer_params.backing_scale, cfg.cursor_scale);
-    let software_cursor = layer_params.software_cursor_active != 0;
-    info!(
-        target: LOG_TARGET,
-        "cursor: {} at {cursor_scale}x ({scale_origin}; cursor.software = {:?})",
-        if software_cursor { "software overlay" } else { "hardware HCURSOR" },
-        cfg.cursor_software,
-    );
-
-    // `render.scale` splits the back buffer in two from here on: `pp` keeps
-    // the logical size D3D9 reports, while the Metal texture is rasterized at
-    // `render_scale` of it and MetalFX resamples on present. Without MetalFX
-    // there is nothing that could resample, so the scale is forced to
-    // identity rather than silently presenting a mis-sized frame.
-    let render_scale = resolve_render_scale(
-        layer_params.metalfx_available != 0,
-        cfg.render_scale_percent,
-    );
-    let render_width = render_scale.dimension(pp.back_buffer_width);
-    let render_height = render_scale.dimension(pp.back_buffer_height);
-
-    // The swap chain's multisample type applies to the back buffer and to the
-    // auto depth-stencil surface alike; the two attachments have to agree for
-    // Metal to accept the pass at all.
-    let sample_count = match multisample::resolve_sample_count(
-        pp.multi_sample_type,
-        pp.multi_sample_quality,
-        pp.back_buffer_format,
-        device_caps_flags(),
-    ) {
-        Ok(count) => u8::try_from(count).expect("sample count ≤ 16 fits u8"),
-        Err(reject) => {
-            warn!(
-                target: LOG_TARGET,
-                "reject CreateDevice: MultiSampleType={} Quality={} on back-buffer format {} is {}",
-                pp.multi_sample_type,
-                pp.multi_sample_quality,
-                pp.back_buffer_format,
-                if matches!(reject, multisample::MultiSampleReject::Invalid) {
-                    "not a valid sample count"
-                } else {
-                    "not available on this device"
-                },
-            );
-            destroy_partial_device(&cq_params, layer_params.view_handle, None);
-            restore_from_fullscreen(fullscreen.as_ref());
-            return D3DERR_INVALIDCALL;
-        }
-    };
-
-    // Create backbuffer texture
-    let mut bb_params = CreateBackbufferParams {
-        device_handle: cq_params.device_handle,
-        record_handle: cq_params.record_handle,
-        width: render_width,
-        height: render_height,
-        sample_count: u32::from(sample_count),
-        pad0: 0,
-        texture_handle: MetalHandle::NULL,
-        srgb_texture_handle: MetalHandle::NULL,
-        msaa_texture_handle: MetalHandle::NULL,
-        msaa_srgb_texture_handle: MetalHandle::NULL,
-    };
-    let status = unix_call(&mut bb_params);
-    if status != 0 {
-        error!(
-            target: LOG_TARGET,
-            "CreateBackbuffer failed (0x{status:08X}) for {}x{} (render {}x{}) samples={} fmt={}",
-            pp.back_buffer_width,
-            pp.back_buffer_height,
-            bb_params.width,
-            bb_params.height,
-            bb_params.sample_count,
-            pp.back_buffer_format,
-        );
-        destroy_partial_device(&cq_params, layer_params.view_handle, None);
-        restore_from_fullscreen(fullscreen.as_ref());
-        return D3DERR_INVALIDCALL;
-    }
-
-    // Create depth/stencil texture if requested
-    let depth_handle = match create_auto_depth_stencil(&cq_params, &layer_params, &bb_params, &pp) {
-        Ok(handle) => handle,
-        Err(hr) => {
-            restore_from_fullscreen(fullscreen.as_ref());
-            return hr;
-        }
-    };
-
-    let mut render_states = mtld3d_types::render_state_defaults();
-    if depth_handle.is_null() {
-        render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;
-    }
-
-    let encoder = match spawn_native_encoder(&cq_params, cfg) {
-        Ok(encoder) => encoder,
-        Err(result) => {
-            if !depth_handle.is_null() {
-                let handles = [depth_handle.raw()];
-                let mut destroy = mtld3d_shared::DestroyResourcesBulkParams {
-                    kind: mtld3d_shared::mtl::DestroyKind::Texture,
-                    pad0: 0,
-                    handles_ptr: handles.as_ptr() as u64,
-                    count: 1,
-                    pad1: 0,
-                };
-                unix_call(&mut destroy);
-            }
-            destroy_partial_device(&cq_params, layer_params.view_handle, Some(&bb_params));
-            restore_from_fullscreen(fullscreen.as_ref());
-            return result;
-        }
-    };
-    addref_parent_direct3d9(this);
-
-    let dev = Direct3DDevice9::new(crate::device::DeviceCreateInfo {
-        device_handle: cq_params.device_handle,
-        record_handle: cq_params.record_handle,
-        view_handle: layer_params.view_handle,
-        layer_handle: layer_params.layer_handle,
-        pacing: attached_pacing(&layer_params),
-        backbuffer_handle: bb_params.texture_handle,
-        backbuffer_srgb_handle: bb_params.srgb_texture_handle,
-        backbuffer_msaa_handle: bb_params.msaa_texture_handle,
-        backbuffer_msaa_srgb_handle: bb_params.msaa_srgb_texture_handle,
-        backbuffer_sample_count: sample_count,
-        depth_stencil_handle: depth_handle,
-        depth_stencil_format: if depth_handle.is_null() {
-            0
-        } else {
-            pp.auto_depth_stencil_format
-        },
-        backbuffer_width: pp.back_buffer_width,
-        backbuffer_height: pp.back_buffer_height,
-        render_scale,
-        encoder: crate::device::Mtld3dOnly::new(encoder),
-        current_frame: crate::device::Mtld3dOnly::new(FrameData::new(&FrameInit {
-            device_handle: cq_params.device_handle,
-            record_handle: cq_params.record_handle,
-            backbuffer_handle: bb_params.texture_handle,
-            backbuffer_srgb_handle: bb_params.srgb_texture_handle,
-            backbuffer_msaa_handle: bb_params.msaa_texture_handle,
-            backbuffer_msaa_srgb_handle: bb_params.msaa_srgb_texture_handle,
-            backbuffer_sample_count: sample_count,
-            layer_handle: layer_params.layer_handle,
-            view_handle: layer_params.view_handle,
-            // Logical, paired with the scale below: `PassState::reset_frame`
-            // derives the rasterized extent from the two.
-            backbuffer_width: pp.back_buffer_width,
-            backbuffer_height: pp.back_buffer_height,
-            backbuffer_format: mtld3d_shared::mtl::PixelFormat::Bgra8Unorm,
-            render_scale,
-            backbuffer_contents: BackbufferContents::from_swap_effect(pp.swap_effect),
-            depth_texture: depth_handle,
-            depth_has_stencil: depth_format_has_stencil(pp.auto_depth_stencil_format),
-        })),
-        #[cfg(feature = "core-runtime")]
-        core: None,
-        #[cfg(feature = "core-runtime")]
-        core_overlay: None,
-        render_states,
-        sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
-        direct3d: this as u64,
-        creation_adapter: adapter,
-        creation_device_type: dev_type,
-        creation_behavior_flags: behavior_flags,
-        creation_focus_window: focus_window as usize,
-        present_params: {
-            // The implicit swapchain reports a back-buffer count of at least
-            // one (D3D9 treats a requested 0 as 1) and resolves a NULL
-            // hDeviceWindow to the real target window, so GetPresentParameters
-            // hands back concrete values.
-            let mut stored = pp;
-            stored.back_buffer_count = stored.back_buffer_count.max(1);
-            if stored.device_window == 0 {
-                // A NULL device window resolves to the focus window — the same
-                // resolution `hwnd` used above (pointer→usize, no truncation).
-                stored.device_window = focus_window as usize;
-            }
-            stored
-        },
-        hwnd: hwnd as *mut c_void,
-        cursor_scale,
-        software_cursor,
-        display_sinks,
-        fullscreen,
-        config: Arc::clone(cfg),
-        initial_flags: if extended {
-            crate::device::DeviceFlags::EXTENDED
-        } else {
-            crate::device::DeviceFlags::empty()
-        },
-    });
-
-    // Install the cursor wndproc subclass. Must happen after `DeviceInner` is
-    // boxed so the subclass's global back-pointer resolves to a live device.
-    let inner_ptr = std::ptr::from_mut::<crate::device::DeviceInner>(dev.inner());
-    // SAFETY: `inner_ptr` was just derived from a live `DeviceInner` we
-    // own via `dev`; the borrow is local to this expression and `dev`
-    // outlives it.
-    unsafe { (*inner_ptr).cursor().install_subclass(inner_ptr) };
-
-    let dev_ptr = Box::into_raw(Box::new(dev));
-    // Stamp the wrapper pointer so resource `GetDevice` thunks can hand it back
-    // (AddRef'd) instead of leaving the caller's out-param uninitialised.
-    // SAFETY: `dev_ptr` is a freshly-boxed, live `Direct3DDevice9`.
-    unsafe {
-        (*dev_ptr)
-            .inner()
-            .set_device_wrapper(dev_ptr.cast::<c_void>());
-    };
-    // Report the resolved geometry back to the caller. D3D9 leaves hDeviceWindow
-    // and the mode flags as the caller set them.
-    // SAFETY: `present_params` is the non-null pointer the request was read from, writable
-    // per the ABI; alignment is not assumed.
-    unsafe { crate::device::report_resolved_geometry(present_params, &pp) };
-    // SAFETY: vtable out-param; `device` is *mut *mut c_void per IDirect3D9 ABI; alignment is not
-    // assumed.
-    unsafe { OutPtr::write_opt(device, dev_ptr.cast::<c_void>()) };
-    if behavior_flags & mtld3d_types::D3DCREATE_MULTITHREADED != 0 {
-        info!(
-            target: LOG_TARGET,
-            "CreateDevice: D3DCREATE_MULTITHREADED, device entry points serialised"
-        );
-    }
-    info!(target: LOG_TARGET, "CreateDevice succeeded (extended={extended})");
-    D3D_OK
-}
-
-/// `CreateDevice` under the core runtime: a device whose frames DXMT's core records.
-///
-/// No `mtld3d.so` object is made: the core device takes winemetal's Metal device that has the
-/// registry ID `GetDeviceInfo` reported, with D3D9's queue profile and mtld3d's frame-latency
-/// bound (DXMTRS C4c-7a). What the core runtime does not implement yet is refused as an
-/// unsupported feature is (C4-13): a back buffer other than `X8R8G8B8`/`A8R8G8B8`. A fullscreen
-/// device is mtld3d's (DXMTRS C4c-6d): every check that reads no window first, then mtld3d's
-/// entry into fullscreen (the mode set, the window covering the monitor), then the size resolved
-/// from the window; the device keeps the session, which its release leaves. An auto
-/// depth-stencil is a depth texture in the core's store, bound at once (DXMTRS C4b-3d2). The
-/// multisample type is mtld3d's check with its answer: the back buffer and the auto
-/// depth-stencil take its count (DXMTRS C4b-3d5).
-#[cfg(feature = "core-runtime")]
-fn create_core_device(
-    args: &CreateDeviceArgs,
-    cfg: &Arc<Mtld3dConfig>,
-    mut pp: D3DPRESENT_PARAMETERS,
-    extended: bool,
-) -> i32 {
-    let &CreateDeviceArgs {
-        this,
-        adapter,
-        dev_type,
-        focus_window,
-        behavior_flags,
-        present_params,
-        device,
-    } = args;
-    let hwnd = if pp.device_window != 0 {
-        pp.device_window as u64
-    } else {
-        focus_window as u64
-    };
-    // mtld3d's check and answer: "zero means the client area" is a windowed request's rule, so
-    // a fullscreen request with a zero dimension is malformed.
     if pp.windowed == 0 && (pp.back_buffer_width == 0 || pp.back_buffer_height == 0) {
         warn!(
             target: LOG_TARGET,
@@ -2367,14 +1902,10 @@ fn create_core_device(
         );
         return D3DERR_INVALIDCALL;
     }
-    // `D3DFMT_UNKNOWN` is the display's format for a windowed device alone, as under mtld3d.
     if pp.windowed != 0 && pp.back_buffer_format == 0 {
         pp.back_buffer_format = adapter_display_format();
     }
     pp.back_buffer_count = pp.back_buffer_count.max(1);
-    // mtld3d's predicate and answer, one count for the back buffer and the auto depth-stencil,
-    // ahead of the format refusal: a fullscreen request's zero format names no surface to the
-    // check, which answers `D3DERR_INVALIDCALL` as mtld3d's create does.
     let Ok(count) = multisample::resolve_sample_count(
         pp.multi_sample_type,
         pp.multi_sample_quality,
@@ -2383,7 +1914,7 @@ fn create_core_device(
     ) else {
         warn!(
             target: LOG_TARGET,
-            "reject CreateDevice: MultiSampleType={} Quality={} on back-buffer format {} → \
+            "reject CreateDevice: MultiSampleType={} Quality={} on back-buffer format {} -> \
              INVALIDCALL",
             pp.multi_sample_type,
             pp.multi_sample_quality,
@@ -2394,19 +1925,15 @@ fn create_core_device(
     if !matches!(pp.back_buffer_format, D3DFMT_X8R8G8B8 | D3DFMT_A8R8G8B8) {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
-            "reject CreateDevice: runtime.mode = core takes an X8R8G8B8 or A8R8G8B8 back buffer \
-             → D3DERR_NOTAVAILABLE"
+            "reject CreateDevice: requires an X8R8G8B8 or A8R8G8B8 back buffer -> D3DERR_NOTAVAILABLE"
         );
         return D3DERR_NOTAVAILABLE;
     }
     let samples = u8::try_from(count).expect("a sample count of at most 16");
-    let Some(mtl) = d3d9_rt::device::select_device(device_info().registry_id) else {
+    let Some(mtl) = crate::rt::device::select_device(device_info().registry_id) else {
         error!(target: LOG_TARGET, "reject CreateDevice: winemetal lists no Metal device");
         return D3DERR_NOTAVAILABLE;
     };
-    // Every check that reads no window is behind: a fullscreen device sets the requested mode
-    // and owns its window unless the app kept it (`D3DCREATE_NOWINDOWCHANGES`), mtld3d's own
-    // entry, before the size is resolved from the client rect the window then has.
     let manage_window = behavior_flags & mtld3d_types::D3DCREATE_NOWINDOWCHANGES == 0;
     let fullscreen = (pp.windowed == 0).then(|| {
         let mode = fullscreen_mode_request(&pp);
@@ -2414,51 +1941,48 @@ fn create_core_device(
     });
     resolve_backbuffer_dims(hwnd, &mut pp);
     crate::device::warn_present_params_fields_once(&pp);
-    // A fullscreen request does not get here: it is non-zero, and a size no mode has keeps it
-    // when the client rect is empty. The window goes back all the same, should one ever.
     if pp.back_buffer_width == 0 || pp.back_buffer_height == 0 {
         warn!(target: LOG_TARGET, "reject CreateDevice: zero back-buffer dimensions (hwnd=0x{hwnd:x})");
         restore_from_fullscreen(fullscreen.as_ref());
         return D3DERR_INVALIDCALL;
     }
-    // The frame latency mtld3d enforces on a device no `SetMaximumFrameLatency` has reached.
-    let mut profile = d3d9_rt::device::queue_profile();
+    let mut profile = crate::rt::device::queue_profile();
     profile.max_latency =
         mtld3d_core::frame_latency::enforced_frame_latency(None, cfg.present_max_frame_latency);
-    let mut options = d3d9_rt::device::CoreOptions::empty();
+    let mut options = crate::rt::device::CoreOptions::empty();
     if cfg.shader_cache_enable {
-        options.insert(d3d9_rt::device::CoreOptions::SHADER_CACHE);
+        options.insert(crate::rt::device::CoreOptions::SHADER_CACHE);
     }
     if cfg.shader_async_compile {
-        options.insert(d3d9_rt::device::CoreOptions::ASYNC_COMPILE);
+        options.insert(crate::rt::device::CoreOptions::ASYNC_COMPILE);
     }
     if pp.swap_effect == mtld3d_types::D3DSWAPEFFECT_DISCARD {
-        options.insert(d3d9_rt::device::CoreOptions::DISCARD_BACK_BUFFER);
+        options.insert(crate::rt::device::CoreOptions::DISCARD_BACK_BUFFER);
     }
     if cfg.hdr_enable {
-        options.insert(d3d9_rt::device::CoreOptions::HDR_ENABLE);
+        options.insert(crate::rt::device::CoreOptions::HDR_ENABLE);
     }
     if cfg.color_space == mtld3d_shared::mtl::ColorSpacePolicy::Accurate {
-        options.insert(d3d9_rt::device::CoreOptions::COLOR_SPACE_ACCURATE);
+        options.insert(crate::rt::device::CoreOptions::COLOR_SPACE_ACCURATE);
     }
     match cfg.cursor_software {
         mtld3d_shared::mtl::SoftwareCursorPolicy::On => {
-            options.insert(d3d9_rt::device::CoreOptions::SOFTWARE_CURSOR_ON);
+            options.insert(crate::rt::device::CoreOptions::SOFTWARE_CURSOR_ON);
         }
         mtld3d_shared::mtl::SoftwareCursorPolicy::Off => {
-            options.insert(d3d9_rt::device::CoreOptions::SOFTWARE_CURSOR_OFF);
+            options.insert(crate::rt::device::CoreOptions::SOFTWARE_CURSOR_OFF);
         }
         mtld3d_shared::mtl::SoftwareCursorPolicy::Auto => {}
     }
     if cfg.present_occluded {
-        options.insert(d3d9_rt::device::CoreOptions::PRESENT_OCCLUDED);
+        options.insert(crate::rt::device::CoreOptions::PRESENT_OCCLUDED);
     }
     let render_scale = resolve_render_scale(
-        d3d9_rt::device::metalfx_available(&mtl),
+        crate::rt::device::metalfx_available(&mtl),
         cfg.render_scale_percent,
     );
     let (render_w, render_h) = render_scale.extent(pp.back_buffer_width, pp.back_buffer_height);
-    let mut core = d3d9_rt::device::CoreDevice::with_options(mtl, profile, options);
+    let mut core = crate::rt::device::CoreDevice::with_options(mtl, profile, options);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
     core.attach_scaled(
         isize::try_from(hwnd).unwrap_or_default(),
@@ -2468,27 +1992,28 @@ fn create_core_device(
         pp.back_buffer_height,
         samples,
     );
-    let raw_view = core.view_handle();
-    // SAFETY: `raw_view` is 0 or a live view handle owned by `core`.
-    let view_handle = unsafe { MetalHandle::new(raw_view) };
-    let (cursor_scale, _origin) = resolve_cursor_scale(core.backing_scale(), cfg.cursor_scale);
+    let (cursor_scale, scale_origin) = resolve_cursor_scale(core.backing_scale(), cfg.cursor_scale);
     let software_cursor = core.software_cursor_active();
-    let core_overlay = Some(core.overlay_sink());
-    // The auto depth-stencil, of the back buffer's render size; a format of 0 asks for none, as
-    // under mtld3d. The entry point checked the format before the runtimes part.
+    info!(
+        target: LOG_TARGET,
+        "cursor: {} at {cursor_scale}x ({scale_origin}; cursor.software = {:?})",
+        if software_cursor { "software overlay" } else { "hardware HCURSOR" },
+        cfg.cursor_software,
+    );
+    let core_overlay = core.overlay_sink();
     let auto_depth = (pp.enable_auto_depth_stencil != 0)
         .then(|| mtld3d_core::format::map_d3d_depth_format(pp.auto_depth_stencil_format))
         .flatten()
         .map(|pixel_format| {
             let id = mtld3d_core::ids::TextureId::new_unique();
-            let desc = d3d9_rt::device::CoreTextureDesc {
+            let desc = crate::rt::device::CoreTextureDesc {
                 pixel_format: pixel_format as u32,
-                kind: d3d9_rt::device::TextureKind::Tex2d,
+                kind: crate::rt::device::TextureKind::Tex2d,
                 width: render_w,
                 height: render_h,
                 depth: 1,
                 levels: 1,
-                flags: d3d9_rt::device::CoreTextureFlags::RENDER_TARGET,
+                flags: crate::rt::device::CoreTextureFlags::RENDER_TARGET,
                 srgb_format: 0,
                 block: (1, 1, 4),
                 samples,
@@ -2497,42 +2022,26 @@ fn create_core_device(
             if !render_scale.is_identity() {
                 core.set_texture_logical_size(id, pp.back_buffer_width, pp.back_buffer_height);
             }
-            let bound = core.set_depth(Some(d3d9_rt::device::DepthRef { id, level: 0 }));
+            let bound = core.set_depth(Some(crate::rt::device::DepthRef { id, level: 0 }));
             debug_assert!(bound, "a depth texture just made binds");
             id
         });
     addref_parent_direct3d9(this);
-    // D3DRS_ZENABLE defaults to TRUE exactly when the device has an auto depth-stencil.
     let mut render_states = mtld3d_types::render_state_defaults();
     if auto_depth.is_none() {
         render_states[mtld3d_types::D3DRS_ZENABLE as usize] = 0;
     }
     let mut stored = pp;
+    stored.back_buffer_count = stored.back_buffer_count.max(1);
     if stored.device_window == 0 {
         stored.device_window = focus_window as usize;
     }
     let dev = Direct3DDevice9::new(crate::device::DeviceCreateInfo {
-        device_handle: MetalHandle::NULL,
-        record_handle: DeviceRecordHandle::NULL,
-        view_handle,
-        layer_handle: MetalHandle::NULL,
-        pacing: LayerPacing {
-            display_sync: false,
-            max_fps: 0,
-        },
-        backbuffer_handle: MetalHandle::NULL,
-        backbuffer_srgb_handle: MetalHandle::NULL,
-        backbuffer_msaa_handle: MetalHandle::NULL,
-        backbuffer_msaa_srgb_handle: MetalHandle::NULL,
         backbuffer_sample_count: samples,
-        depth_stencil_handle: MetalHandle::NULL,
-        depth_stencil_format: 0,
         backbuffer_width: pp.back_buffer_width,
         backbuffer_height: pp.back_buffer_height,
         render_scale,
-        encoder: crate::device::Mtld3dOnly::absent(),
-        current_frame: crate::device::Mtld3dOnly::absent(),
-        core: Some(Box::new(core)),
+        core: Box::new(core),
         core_overlay,
         render_states,
         sampler_states: [mtld3d_types::sampler_state_defaults(); STAGE_COUNT],
@@ -2567,9 +2076,6 @@ fn create_core_device(
     if let Some(id) = auto_depth {
         inner.set_core_auto_depth(id, pp.auto_depth_stencil_format);
     }
-    // The window subclass, as mtld3d's create installs it, once nothing is left to fail: its
-    // registry keeps this address until the release unregisters it, before anything is freed.
-    // Its `WM_SIZE` handler drives `DeviceInner::apply_auto_resize` on both runtimes.
     let inner_ptr = std::ptr::from_mut::<crate::device::DeviceInner>(inner);
     inner.cursor().install_subclass(inner_ptr);
     // SAFETY: `present_params` is the non-null pointer the request was read from, writable
@@ -2578,69 +2084,14 @@ fn create_core_device(
     // SAFETY: vtable out-param; `device` is *mut *mut c_void per IDirect3D9 ABI; alignment is not
     // assumed.
     unsafe { OutPtr::write_opt(device, dev_ptr.cast::<c_void>()) };
-    info!(target: LOG_TARGET, "CreateDevice succeeded on the core runtime (extended={extended})");
+    if behavior_flags & mtld3d_types::D3DCREATE_MULTITHREADED != 0 {
+        info!(
+            target: LOG_TARGET,
+            "CreateDevice: D3DCREATE_MULTITHREADED, device entry points serialised"
+        );
+    }
+    info!(target: LOG_TARGET, "CreateDevice succeeded (extended={extended})");
     D3D_OK
-}
-
-/// `CreateDevice` under the core runtime in a build without it, which never latches it.
-#[cfg(not(feature = "core-runtime"))]
-const fn create_core_device(
-    _args: &CreateDeviceArgs,
-    _cfg: &Arc<Mtld3dConfig>,
-    _pp: D3DPRESENT_PARAMETERS,
-    _extended: bool,
-) -> i32 {
-    D3DERR_NOTAVAILABLE
-}
-
-/// Attach a `CAMetalLayer` to the game window.
-///
-/// Optional — `hwnd == 0` produces a fully-initialised
-/// `AttachMetalLayerParams` with `view_handle == 0`, which the rest of
-/// `CreateDevice` treats as "no presentation surface" rather than an error.
-/// Failures to attach when an HWND is present are also non-fatal: the device
-/// works, but Present is a no-op.
-pub fn attach_metal_layer(
-    hwnd: u64,
-    device_handle: MetalHandle<MTLDeviceKind>,
-    pp: &D3DPRESENT_PARAMETERS,
-    cfg: &Mtld3dConfig,
-    sinks: &crate::cursor::DisplaySinks,
-) -> AttachMetalLayerParams {
-    let pacing = crate::device::resolve_layer_pacing(pp, cfg);
-    let mut layer_params = AttachMetalLayerParams {
-        hwnd,
-        device_handle,
-        width: pp.back_buffer_width,
-        height: pp.back_buffer_height,
-        view_handle: MetalHandle::NULL,
-        layer_handle: MetalHandle::NULL,
-        backing_scale: 1,
-        display_sync_enabled: u32::from(pacing.display_sync),
-        hdr_enable: u32::from(cfg.hdr_enable),
-        color_space: cfg.color_space,
-        max_fps: pacing.max_fps,
-        metalfx_available: 0,
-        backing_scale_ptr: sinks.backing_scale_ptr(),
-        software_cursor: cfg.cursor_software,
-        software_cursor_active: 0,
-        cursor_kick_ptr: sinks.cursor_kick_ptr(),
-        client_surface_request_ptr: sinks.client_surface_request_ptr(),
-    };
-    if hwnd != 0 {
-        unix_call(&mut layer_params);
-    }
-    layer_params
-}
-
-/// The pacing an attach was called with, read back off its parameters.
-///
-/// What a later `Reset` compares its own pacing against.
-pub const fn attached_pacing(layer_params: &AttachMetalLayerParams) -> LayerPacing {
-    LayerPacing {
-        display_sync: layer_params.display_sync_enabled != 0,
-        max_fps: layer_params.max_fps,
-    }
 }
 
 /// Retain the parent `IDirect3D9` for `IDirect3DDevice9::GetDirect3D`.
@@ -2655,37 +2106,7 @@ fn addref_parent_direct3d9(this: *mut c_void) {
     }
 }
 
-/// Create native encoder, submit, compile and shader-cache prewarm workers.
-fn spawn_native_encoder(
-    cq: &CreateCommandQueueParams,
-    cfg: &Arc<Mtld3dConfig>,
-) -> Result<EncoderThread, i32> {
-    // Resolve overrides once so both runtime sides use identical GPU capabilities.
-    let gpu_caps = mtld3d_core::gpu_caps::GpuCaps {
-        unified_memory: cq.unified_memory != 0,
-        min_linear_texture_align: cq.min_linear_texture_align,
-        device_caps: device_caps_flags(),
-    }
-    .with_intel_overrides(cfg.managed_memory, cfg.linear_align256);
-    EncoderThread::spawn(cq.device_handle, cq.record_handle, gpu_caps, cfg)
-}
-
-/// `CAMetalLayer.pixelFormat` and the backbuffer are hardcoded to `BGRA8Unorm` on the unix side.
-///
-/// That matches `D3DFMT_A8R8G8B8` / `D3DFMT_X8R8G8B8` byte-for-byte, which is
-/// all `WoW` requests. `CheckDeviceType` advertises the 16-bit back-buffer
-/// formats the device renders into too (it answers with the `StretchRect`
-/// conversion predicate, as the runtime requires), and offers no format
-/// outside the D3D9 back-buffer set. Any other request, a 16-bit one or a
-/// format no query offers, is substituted by decision rather than plumbed or
-/// refused: a real 16-bit backbuffer would need a conversion pass on every
-/// present, and a float one would need the whole present path to carry a
-/// format (a second drawable format, a present pipeline per format, and
-/// format-derived read-back pitches), while refusing would end a title that
-/// creates its device without probing. Games that render HDR internally do it
-/// in their own off-screen float targets and tone-map into an 8-bit
-/// backbuffer, so nothing has needed it. Warn once so a game that asked shows
-/// up.
+/// `CAMetalLayer.pixelFormat` and the backbuffer are hardcoded `BGRA8Unorm`.
 pub fn warn_unsupported_backbuffer_format(format: u32) {
     if !matches!(format, D3DFMT_A8R8G8B8 | D3DFMT_X8R8G8B8) {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
@@ -2695,15 +2116,6 @@ pub fn warn_unsupported_backbuffer_format(format: u32) {
 }
 
 /// Match the cursor bitmap to Wine's retina factor by default.
-///
-/// In retina mode the game draws at physical pixels and a cursor pixel comes
-/// out at half a point, so the bitmap is doubled; in non-retina mode macOS
-/// already doubles everything the game draws and the bitmap stays. The same
-/// factor feeds the hardware HCURSOR and the software sprite. `cursor.scale`
-/// in `mtld3d.conf` (`cursor_scale`, the interface's setting) overrides:
-/// `auto` (the default) follows the retina mode; a positive integer forces a
-/// fixed multiplier. Both paths clamp to `[1, 8]`, the range the downstream
-/// HCURSOR builder asserts.
 pub const fn resolve_cursor_scale(
     backing_scale: u32,
     cursor_scale: CursorScale,
@@ -2714,38 +2126,6 @@ pub const fn resolve_cursor_scale(
         CursorScale::Fixed(_) => "cursor.scale override",
     };
     (scale, origin)
-}
-
-/// Resolve `render.scale` (`render_scale_percent`) against what the GPU can actually do.
-///
-/// `MetalFX` is the only thing that can resample a frame at present time, so a
-/// GPU without it has to render at exactly the presented size. Say so once
-/// rather than quietly ignoring the user's setting.
-/// The unix path of `debug.presentGateFile`, or `None` when there is no gate.
-///
-/// Relative paths join the executable's directory, as the log directory
-/// does; a path Wine cannot map disables the gate with a warning, since a
-/// presenter that never parks is the safe failure of a test seam.
-fn present_gate_unix_path(cfg: &Mtld3dConfig) -> Option<String> {
-    if cfg.present_gate_file.is_empty() {
-        return None;
-    }
-    let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let dos = exe_dir.join(&cfg.present_gate_file);
-    let Some(unix) = crate::wine_path::unix_path(&dos) else {
-        warn!(
-            target: LOG_TARGET,
-            "debug.presentGateFile = {}: no unix path, the presenter is not gated",
-            dos.display(),
-        );
-        return None;
-    };
-    info!(
-        target: LOG_TARGET,
-        "present gate: {unix} (the presenter parks before each drawable while it exists)"
-    );
-    Some(unix)
 }
 
 fn resolve_render_scale(
@@ -2761,7 +2141,7 @@ fn resolve_render_scale(
     if !metalfx_available {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
-            "render.scale = {} ignored — this GPU has no MetalFX spatial upscaler, so the \
+            "render.scale = {} ignored: this GPU has no MetalFX spatial upscaler, so the \
              frame is rendered at full resolution",
             f64::from(requested.percent()) / 100.0,
         );
@@ -2769,7 +2149,7 @@ fn resolve_render_scale(
     }
     info!(
         target: LOG_TARGET,
-        "render.scale = {} — rendering at {}% of the presented resolution",
+        "render.scale = {}: rendering at {}% of the presented resolution",
         f64::from(requested.percent()) / 100.0,
         requested.percent(),
     );
@@ -2777,14 +2157,7 @@ fn resolve_render_scale(
 }
 
 /// Give the window back when device creation fails mid-way.
-///
-/// A fullscreen `CreateDevice` takes the window over before it builds
-/// anything, so every later failure has to undo it. Otherwise a rejected
-/// device leaves the game's window stripped of its decoration and pinned over
-/// the monitor.
 fn restore_from_fullscreen(saved: Option<&crate::fullscreen::SavedWindow>) {
-    // A create that fails puts the window back where it was, whatever kind of
-    // device it was creating: nothing it did should outlive it.
     if let Some(saved) = saved {
         crate::fullscreen::leave(
             saved,
@@ -2792,100 +2165,4 @@ fn restore_from_fullscreen(saved: Option<&crate::fullscreen::SavedWindow>) {
             &mtld3d_core::fullscreen_log::LeaveReason::FailedCreate,
         );
     }
-}
-
-/// Tear down the partial device handles assembled so far.
-///
-/// Called on any failure between `CreateCommandQueue` and the final
-/// `Box::into_raw`. `view_handle` is `MetalHandle::NULL` when the failure
-/// happens before the layer is attached, and `backbuffer` is `None` when it
-/// happens before `CreateBackbuffer` answered. Only the base texture has a
-/// slot on the queue-destroy thunk, so the two sRGB twin views and the
-/// multisampled companion leave through a bulk release ahead of it, the twins
-/// first: each holds a retain on the texture released after it.
-fn destroy_partial_device(
-    cq: &CreateCommandQueueParams,
-    view_handle: MetalHandle<NSViewKind>,
-    backbuffer: Option<&CreateBackbufferParams>,
-) {
-    let implicit_handles: Vec<u64> = backbuffer
-        .into_iter()
-        .flat_map(|bb| {
-            [
-                bb.srgb_texture_handle.raw(),
-                bb.msaa_srgb_texture_handle.raw(),
-                bb.msaa_texture_handle.raw(),
-            ]
-        })
-        .filter(|&handle| handle != 0)
-        .collect();
-    if !implicit_handles.is_empty() {
-        let mut destroy = mtld3d_shared::DestroyResourcesBulkParams {
-            kind: mtld3d_shared::mtl::DestroyKind::Texture,
-            pad0: 0,
-            handles_ptr: implicit_handles.as_ptr() as u64,
-            count: u32::try_from(implicit_handles.len()).expect("at most 3 handles"),
-            pad1: 0,
-        };
-        unix_call(&mut destroy);
-    }
-    let mut destroy = DestroyCommandQueueParams {
-        device_handle: cq.device_handle,
-        record_handle: cq.record_handle,
-        view_handle,
-        backbuffer_handle: backbuffer.map_or(MetalHandle::NULL, |bb| bb.texture_handle),
-        depth_texture_handle: MetalHandle::NULL,
-    };
-    unix_call(&mut destroy);
-}
-
-/// Create the auto depth/stencil texture if the present params requested one.
-///
-/// Returns `Ok(MetalHandle::NULL)` when no depth was requested, `Ok(handle)`
-/// on success, or `Err(hr)` after tearing down the partial device.
-fn create_auto_depth_stencil(
-    cq_params: &CreateCommandQueueParams,
-    layer_params: &AttachMetalLayerParams,
-    bb_params: &CreateBackbufferParams,
-    pp: &D3DPRESENT_PARAMETERS,
-) -> Result<MetalHandle<MTLTextureKind>, i32> {
-    if pp.enable_auto_depth_stencil == 0 || pp.auto_depth_stencil_format == 0 {
-        return Ok(MetalHandle::NULL);
-    }
-    let Some(ds_pixel_format) =
-        mtld3d_core::format::map_d3d_depth_format(pp.auto_depth_stencil_format)
-    else {
-        error!(
-            target: LOG_TARGET,
-            "auto depth-stencil format {} has no Metal mapping",
-            pp.auto_depth_stencil_format
-        );
-        destroy_partial_device(cq_params, layer_params.view_handle, Some(bb_params));
-        return Err(D3DERR_INVALIDCALL);
-    };
-    // Sized from the back buffer rather than the present params: the depth
-    // attachment has to match the colour one exactly, and the back buffer is
-    // already at render resolution when `render.scale` is in play.
-    let mut ds_params = CreateDepthTextureParams {
-        device_handle: cq_params.device_handle,
-        width: bb_params.width,
-        height: bb_params.height,
-        pixel_format: ds_pixel_format,
-        // Matches the back buffer: Metal takes a pass's sample count from its
-        // attachments and rejects one where they disagree.
-        sample_count: bb_params.sample_count,
-        texture_handle: MetalHandle::NULL,
-    };
-    let status = unix_call(&mut ds_params);
-    if status != 0 {
-        error!(target: LOG_TARGET, "CreateDepthTexture failed (0x{status:08X})");
-        destroy_partial_device(cq_params, layer_params.view_handle, Some(bb_params));
-        return Err(D3DERR_INVALIDCALL);
-    }
-    info!(
-        target: LOG_TARGET,
-        "created depth/stencil texture (format={})",
-        pp.auto_depth_stencil_format
-    );
-    Ok(ds_params.texture_handle)
 }

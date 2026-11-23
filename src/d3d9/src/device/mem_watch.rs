@@ -11,29 +11,23 @@
 //! how close the process was and who owned the space.
 //!
 //! The page boxes are reported by holder (texture staging, surfaces,
-//! vertex/index backing, encoder leases, upload leases, texture snapshots, the
-//! recycle pool)
-//! with the rest as `other`, and the texture staging and vertex/index backing
-//! are split again by the class that decides whether the copy can be released
-//! at all, so the line names which holder keeps the space rather than leaving
-//! it to a guess. Beside them goes what `d3d9.dll`'s heap has committed, page
-//! boxes included, which bounds everything else the image allocates.
+//! vertex/index backing) with the rest as `other`, and the texture staging and
+//! vertex/index backing are split again by the class that decides whether the
+//! copy can be released at all, so the line names which holder keeps the space
+//! rather than leaving it to a guess. Beside them goes what `d3d9.dll`'s heap
+//! has committed, page boxes included, which bounds everything else the image
+//! allocates.
 //!
 //! The walk runs on a thread of the device's own (`mtld3d-mem-watch`), never
 //! on the presenting thread, which pays a counter bump and a load per present
 //! and hands the thread a sample index every `SAMPLE_EVERY` presents
 //! (`mtld3d_core::watch_handoff` holds the protocol). The thread walks,
 //! advances the threshold latches, reads the process-wide holder figures,
-//! formats and logs. Two figures only the API thread can read safely: the
-//! live textures' footprint (staging the API thread changes without a lock),
-//! the upload leases (behind the encoder's retirement lock) and the
-//! upload-snapshot arena (the API thread's alone). The thread
-//! asks for them only when a line is due, and the next present answers, so a
-//! line is logged a present or two after its walk. When no present answers
-//! within `FIGURES_WAIT`, the threshold lines are logged without those figures
-//! and the breakdown is dropped. After each walk the thread also stores the
-//! largest free block in an atomic the native encoder reads for the Metal HUD
-//! rows (`mtld3d_core::hud_stats`).
+//! formats and logs. The live textures' footprint is read on the API thread
+//! (staging the API thread changes without a lock) only when a line is due,
+//! and the next present answers, so a line is logged a present or two after
+//! its walk. When no present answers within `FIGURES_WAIT`, the threshold lines
+//! are logged without those figures and the breakdown is dropped.
 //!
 //! The periodic breakdown logs at debug on its own target, so
 //! `RUST_LOG=mtld3d::d3d9::mem_watch=debug` turns it on without the rest of
@@ -43,9 +37,8 @@
 //! thresholds, and keeps the breakdown, logged from the present, which still
 //! says what the layer holds in memory.
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::{
-    sync::Arc,
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -56,7 +49,6 @@ use mtld3d_core::{
         FREE_THRESHOLDS_MIB, FreeSpace, LARGEST_THRESHOLDS_MIB, PageBoxHolders, ThresholdReport,
         UNSAMPLED, cycles_to_micros, threshold_step,
     },
-    hud_stats::largest_free_word,
     thread_wait::wait_until_finished,
     watch_handoff::{self, ApiLink, Offer, Watch},
 };
@@ -130,18 +122,10 @@ pub struct MemWatchState {
 
 impl MemWatchState {
     /// Start the watch, with its thread in a 32-bit build.
-    ///
-    /// The thread stores each walk's largest free block into
-    /// `largest_free_word`, as `mtld3d_core::hud_stats::largest_free_word`
-    /// encodes it, which the encoder reads for the Metal HUD rows.
-    pub fn new(largest_free_word: Arc<AtomicU64>) -> Self {
+    pub fn new() -> Self {
         Self {
             presents: AtomicU32::new(0),
-            worker: if WALKS {
-                MemWatchWorker::spawn(largest_free_word)
-            } else {
-                None
-            },
+            worker: if WALKS { MemWatchWorker::spawn() } else { None },
         }
     }
 
@@ -179,15 +163,9 @@ impl TextureFootprint {
 
 /// The device's share of a line, computed on the API thread when the watch thread asks.
 ///
-/// `live_texture_footprint` reads texture staging the API thread changes
-/// without a lock, and `upload_lease_bytes` takes the encoder's retirement
-/// lock, which the API thread's own maintenance contends for, so the watch
-/// thread gets both as plain figures rather than reading them itself.
+/// `live_texture_footprint` reads texture staging the API thread changes without a lock.
 struct DeviceFigures {
     footprint: TextureFootprint,
-    upload_leases: u64,
-    /// Chunks of the upload-snapshot arena, which only the API thread changes.
-    texture_snapshots: u64,
 }
 
 /// One sample's walk, with what it cost.
@@ -230,13 +208,7 @@ struct Sample {
 }
 
 /// The watch thread's half of the hand-off: the Win32 walk, the latches and the lines.
-struct AddressSpaceWatch {
-    /// Where each walk's largest free block goes for the encoder's Metal HUD rows.
-    ///
-    /// Stored as [`largest_free_word`] encodes it, so a walk that found less
-    /// than 1 MiB free still reads as walked.
-    largest_free_word: Arc<AtomicU64>,
-}
+struct AddressSpaceWatch;
 
 impl Watch for AddressSpaceWatch {
     type Sample = Sample;
@@ -245,10 +217,6 @@ impl Watch for AddressSpaceWatch {
     /// Walk for sample `index` and advance both threshold latches on what the walk found.
     fn take(&mut self, index: u32) -> Sample {
         let walk = Walk::now();
-        self.largest_free_word.store(
-            largest_free_word(walk.space.largest_mib()),
-            Ordering::Relaxed,
-        );
         let free = advance(
             &NEXT_FREE_THRESHOLD,
             &FREE_THRESHOLDS_MIB,
@@ -322,8 +290,7 @@ impl Watch for AddressSpaceWatch {
                         || {
                             format!(
                                 "no present answered within {} s of the walk, so the device's \
-                                 textures, mip data, texture staging, upload leases and texture \
-                                 snapshots are not counted; {}",
+                                 textures, mip data and texture staging are not counted; {}",
                                 FIGURES_WAIT.as_secs(),
                                 process_page_boxes()
                             )
@@ -374,12 +341,12 @@ struct MemWatchWorker {
 
 impl MemWatchWorker {
     /// Start the device's watch thread; `None`, logged once, when it cannot start.
-    fn spawn(largest_free_word: Arc<AtomicU64>) -> Option<Self> {
+    fn spawn() -> Option<Self> {
         let (link, worker_link) = watch_handoff::link(FIGURES_WAIT);
         match thread::Builder::new()
             .name("mtld3d-mem-watch".into())
             .stack_size(WATCH_STACK_BYTES)
-            .spawn(move || worker_link.run(&mut AddressSpaceWatch { largest_free_word }))
+            .spawn(move || worker_link.run(&mut AddressSpaceWatch))
         {
             Ok(handle) => Some(Self {
                 link: Some(link),
@@ -463,8 +430,6 @@ impl DeviceInner {
     fn device_figures(&self) -> DeviceFigures {
         DeviceFigures {
             footprint: self.live_texture_footprint(),
-            upload_leases: self.encoder.upload_lease_bytes(),
-            texture_snapshots: self.texture_snapshot_bytes(),
         }
     }
 
@@ -525,7 +490,7 @@ fn breakdown_due(index: u32) -> bool {
         && log::log_enabled!(target: LOG_TARGET, log::Level::Debug)
 }
 
-/// The live page boxes split by holder, with the device's textures and leases as holders.
+/// The live page boxes split by holder.
 ///
 /// The process-wide figures are read here, right after the device's
 /// arrived, so the two sets are as close in time as the hand-off allows.
@@ -535,27 +500,20 @@ fn page_box_holders(figures: &DeviceFigures) -> PageBoxHolders {
         texture_staging: figures.footprint.staging(),
         surfaces: mtld3d_core::held_pages::live_surface_bytes(),
         vertex_index_backing: mtld3d_core::buffer_backing::live_backing_bytes().total(),
-        encoder_leases: mtld3d_core::held_pages::live_encoder_lease_bytes(),
-        upload_leases: figures.upload_leases,
-        texture_snapshots: figures.texture_snapshots,
-        pool_parked: crate::page_box_pool::PAGEBOX_POOL.pooled_bytes() as u64,
     }
 }
 
 /// The page-box clause the watch thread can give without the device's figures.
 ///
-/// The process-wide holders only: with the device's texture staging, upload
-/// leases and texture snapshots unknown, an `other` figure would count them, so the clause
-/// names no `other` and says the rest is not split.
+/// The process-wide holders only: with the device's texture staging unknown,
+/// an `other` figure would count it, so the clause names no `other` and says
+/// the rest is not split.
 fn process_page_boxes() -> String {
     format!(
-        "page boxes {} MiB: surfaces {}, vertex/index backing {}, encoder leases {}, pool \
-         parked {}, the rest not split",
+        "page boxes {} MiB: surfaces {}, vertex/index backing {}, the rest not split",
         mtld3d_core::page_box::live_bytes() >> 20,
         mtld3d_core::held_pages::live_surface_bytes() >> 20,
         mtld3d_core::buffer_backing::live_backing_bytes().total() >> 20,
-        mtld3d_core::held_pages::live_encoder_lease_bytes() >> 20,
-        crate::page_box_pool::PAGEBOX_POOL.pooled_bytes() >> 20
     )
 }
 

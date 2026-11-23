@@ -120,26 +120,21 @@ output stays out of the source tree: every cargo run outside meson sets an absol
 
 ### Which target builds what
 
-- `aarch64-apple-darwin`: the Unix side that runs in the Mac's Wine, `winemetal.so` and D3D9's `mtld3d.so`.
-- `aarch64-pc-windows-msvc` and `arm64ec-pc-windows-msvc`: the two halves of the ARM64X images `d3d9.dll` and
-  `mtld3d.dll`. Rust has no ARM64X target, so each crate is built once per half as a static library and
-  `tools/arm64x-link.sh` links both into one image. It needs LLD 23 or newer (llvm-mingw's own `lld-link`, never the one
-  on `PATH`) and an llvm-mingw whose `aarch64-w64-mingw32` sysroot carries the ARM64 and ARM64EC halves together.
-  `nvngx.dll`, `nvapi64.dll` and `winemetal.dll` are built for both targets too. With meson's `d3d9_core_runtime`
-  (DXMTRS C4, on by default since C4e: `runtime.mode = core`, with `runtime.mode = mtld3d` kept as the escape hatch
-  until C5), all halves (`aarch64`, `arm64ec`, `x86_64`, `i686`) of the `d3d9` crate carry its `core-runtime` feature
-  (`src/d3d9/rt` on `dxmt-core`) and import `winemetal.dll`.
+- `aarch64-apple-darwin`: the Unix side that runs in the Mac's Wine, `winemetal.so`.
+- `aarch64-pc-windows-msvc` and `arm64ec-pc-windows-msvc`: the two halves of the ARM64X image `d3d9.dll`. Rust has no
+  ARM64X target, so `d3d9` (with `front-end`) is built once per half as a static library and `tools/arm64x-link.sh`
+  links both into one image, importing `winemetal.dll`. It needs LLD 23 or newer (llvm-mingw's own `lld-link`, never the
+  one on `PATH`) and an llvm-mingw whose `aarch64-w64-mingw32` sysroot carries the ARM64 and ARM64EC halves together.
+  `nvngx.dll`, `nvapi64.dll` and `winemetal.dll` are built for both targets too. `d3d9` runs on `dxmt-core`
+  (`src/d3d9/src/rt`) over `winemetal.dll` across all halves (`aarch64`, `arm64ec`, `x86_64`, `i686`).
 - `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`: the PE side of the VM guest, linked by meson's own driver
-  (`i686` is D3D9 and `winemetal.dll` only).
-- `x86_64-unknown-linux-gnu` and `i686-unknown-linux-gnu`: the guest's `mtld3d.so`, built through
-  `tools/linux-cargo.sh` against a Fedora sysroot (`MTLD3D_SYSROOT`; `MTLD3D_LINUX` picks the architecture).
+  (`i686` is `d3d9.dll` and `winemetal.dll` only).
 
 The per-target C and C++ environment that cc-rs reads (compiler, flags, file-prefix remaps) comes from
 `tools/mingw-cc.sh env`, which `tools/cargo-staticlib.sh` evaluates when `MTLD3D_LLVM_MINGW` is set. Only
-`src/d3d9`'s meson targets set it. They also pass `MTLD3D_WINECRT0`, the path of Wine's `libwinecrt0.a`, which the
-`mtld3d.dll` shim bundles. Both are build-time variables, not runtime ones.
+`src/d3d9`'s meson targets set it. It is a build-time variable, not a runtime one.
 
-None of this tree's own sources goes through cc-rs: what it compiles belongs to crates (snmalloc-sys, zstd-sys). Meson
+None of this tree's own sources goes through cc-rs: what it compiles belongs to crates (`snmalloc-sys`). Meson
 compiles no C or C++ of this tree: a target made of Rust archives alone takes `rust_no_source`, an empty generated C
 file, for its link driver.
 
@@ -166,8 +161,8 @@ SSE4.2 ceiling neither costs nor buys anything measurable.
 The Rust gate. It runs, from the root, the nightly `cargo fmt --check`, the generated bindings' regeneration (each
 compared with its committed file), clippy with `nursery` and `pedantic` and warnings denied (1.99.0, on `aarch64-apple-darwin` and on every `-pc-windows-msvc` target a crate ships on, plus the
 host and i686 lines with D3D9's `perf-tracking` feature, and D3D9's and the core's `perf-build` lines), `cargo doc`
-with rustdoc warnings denied, the host unit tests with `cargo test` (D3D9's again with `perf-tracking`, the `mtld3d-core/disk-cache`
-feature, and `winemetal`'s tests with `-undefined dynamic_lookup`), and `tools/audit.sh`. It prints `rust-check: ok`
+with rustdoc warnings denied, the host unit tests with `cargo test` (D3D9's again with `perf-tracking`, `d3d9`'s host
+runtime tests over `dxmt-fakes`, and `winemetal`'s tests with `-undefined dynamic_lookup`), and `tools/audit.sh`. It prints `rust-check: ok`
 and exits 0 when every leg passed. Run it from a clean checkout: its audit
 leg refuses while `git ls-files --others --exclude-standard` lists a `.rs`, `.toml` or `.md` file, since the audit
 reads tracked files only.
@@ -181,14 +176,11 @@ pins:
 | `MTLD3D_RUST_NIGHTLY` | The pinned nightly rustfmt needs (`rustfmt.toml` uses unstable options), as rustup names it, such as `nightly-2026-10-30`. |
 | `RUST_NIGHTLY_BIN` | Optional. The `bin` folder of that nightly; default `~/.rustup/toolchains/nightly-aarch64-apple-darwin/bin`. The script refuses unless the installed nightly's channel date is the pin's. |
 | `MTLD3D_LLVM_MINGW` | The llvm-mingw root. Its `bin` folder is also on `PATH`. |
-| `WINE_BUILD` | The Mac Wine build tree, for `libntdll.a` and `libwinecrt0.a`. |
-| `GUEST_WINE_SDK` | The VM guest's Wine SDK. |
 | `AIRCONV_LLVM` | The LLVM 23 install airconv links, built from `tools/llvm.sh`'s commit of our fork (`lib`, `.complete`). |
 | `AIRCONV_XCRUN` | `xcrun`, or a `sh` script taking `xcrun`'s arguments (run through `/bin/sh` when it is not executable), for airconv's Metal helpers. |
 | `CARGO_TARGET_DIR` | Optional. An absolute folder outside the tree. |
 
-The script does no sysroot work and has no Linux leg: no leg compiles a Linux target. The guest build does, and
-Linux-only code is not linted (pre-existing). Generated files (`src/winemetal/wire/src/layouts.rs`,
+The script does no sysroot work and has no Linux leg: no leg compiles a Linux target. Generated files (`src/winemetal/wire/src/layouts.rs`,
 `src/winemetal/src/protos.rs`, `src/winemetal/sys/src/decls.rs`, each seam's `abi.rs` (`src/dxmt/src/<seam>/abi.rs`,
 `src/winemetal/src/sm50/abi.rs`, `src/winemetal/unix/src/native_win32/abi.rs`) and
 `src/airconv/src/abi/layouts.rs`, from `tools/winemetal-layouts.sh`) are skipped by rustfmt; the `gen` leg regenerates

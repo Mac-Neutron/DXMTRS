@@ -26,7 +26,7 @@ at it.
   `tools/rust-check.sh` ([`DEVELOPMENT.md`](../DEVELOPMENT.md#rust)). They are
   the only D3D9 tests the gate runs.
 - The conformance suite and the checks that read the product (`d3d9-check`,
-  the facade test, the VM's `d3d9-gate`) belong to MacNeutron, which builds
+  the VM's `d3d9-gate`) belong to MacNeutron, which builds
   and installs the tree; see "Working on conformance".
 - The end-to-end programs in `tests/d3d9/programs` and their runner in
   `tests/d3d9/runner` are built as Windows programs for `i686`, `x86_64`,
@@ -185,7 +185,7 @@ count as quiet: both process reads must succeed and include the sampler itself.
 Some macOS hosts do not expose `kernel_task` to `ps`; its CPU share then remains
 unavailable, explicitly recorded in each idle sample, and only the
 foreign-process thresholds can be checked. Each attempt stays in the round's
-`idle-<binary>/sample-*.txt` files (or `idle-host/`), including rejected
+`idle-<binary>/sample-*.txt` files, including rejected
 samples, and `idle-<binary>.txt` records the wait and its outcome. The final
 accepted sample is the ordinary `machine-<binary>.txt` that the report reads. A
 timeout ends the run with exit 2 and no performance verdict, preserving
@@ -251,24 +251,15 @@ An exact count a change moved on purpose fails every comparison against a base
 from before that change, so such a run names it in `--accept`, and only that
 run: the next change to the count fails again.
 
-The host benchmark needs no Wine: it times DXSO parsing and MSL emission (the
-`shader.backend=msl` escape; the default is `air`) on this
-machine over two synthetic corpora and any shader cache `--host-corpus` names
-(`host::emit_corpus`). `bench-ab` runs it too when it is given each leg's
-`emit_corpus` (`--base-host`, `--cand-host`), in rounds of its own before the
-others, the run's first benchmark processes (only the short Wine process that
-lists the benchmarks comes before), so no benchmark's Wine process can still be
-exiting on the cores it times: each leg runs its own tree's emitter, both read
-the same corpus, and its MSL byte counts are exact, so a change that alters the
-emitted code shows up there even when its time per shader stays inside the
-noise. The same caches are what `cold_start` measures in both legs (`--corpus-dir`
-stages them). A cache only one build can read (a format or schema change between
-them) is skipped for both with a note. `cold_start` counts a cache's records with
-the candidate's reader, so when the base's layer writes another schema the base
-leg reports its timings without those counts, and their rows read as added. Any
-other difference in what a benchmark ran, such as its own configuration entries
-or the depth path it took, stops the comparison: only the build and the run may
-differ between the legs.
+The runner runs the Wine benchmark binaries for each leg; the cache cold-start
+benchmark (`cold_start`) stages the shader caches (`--corpus-dir` stages them). A
+cache only one build can read (a format or schema change between them) is skipped
+for both with a note. `cold_start` counts a cache's records with the candidate's
+reader, so when the base's layer writes another schema the base leg reports its
+timings without those counts, and their rows read as added. Any other difference
+in what a benchmark ran, such as its own configuration entries or the depth path
+it took, stops the comparison: only the build and the run may differ between the
+legs.
 
 After its timed rounds, each scene benchmark (one whose metrics declare its
 frame in `shape` lines) runs once more per leg with the pass trace on
@@ -310,7 +301,7 @@ Run it by hand when building or reshaping a scene that stands for a game; it is
 no gate.
 
 Bench numbers come from production-profile builds with D3D9's perf-tracking only
-(`-Dd3d9_perf_tracking=true`, or the cargo features `d3d9/perf-tracking` and `mtld3d-unix/perf-tracking`):
+(`-Dd3d9_perf_tracking=true`, or the cargo feature `d3d9/perf-tracking`):
 `release` carries debug assertions that cost more than the frame does. Nothing
 else may run on the machine during a benchmark: no test leg, no conformance run,
 no build in another worktree, no game. Each of them takes the same cores and GPU
@@ -399,9 +390,8 @@ MacNeutron's `dxmt/mtld3d-triaged.txt` fail anew. `eac-vm/dxmt/d3d9-gate.sh`
 runs the same suite in the VM: its x64 lane is held to the macOS product's
 figures at most, and its i386 lane to its baseline's failures and crashes at
 most. Both lanes run one build of Wine's tests, so the `file:line` sites of the
-baseline hold under either. MacNeutron's `dxmt/d3d9-check.sh` (D3D9 through the
-launcher) and `dxmt/mtld3d-facade-test.sh` (the winemetal facade's tests) are the
-smaller checks on the product.
+baseline hold under either. MacNeutron's `dxmt/d3d9-check.sh` (D3D9 through the launcher) is the smaller check
+on the product.
 
 The rules that are easy to get wrong:
 

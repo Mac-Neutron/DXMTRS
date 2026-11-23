@@ -1,74 +1,103 @@
-#[cfg(windows)]
+pub mod rt;
+
+#[cfg(all(feature = "front-end", windows))]
 mod arm64_crt;
+#[cfg(feature = "front-end")]
 mod bound_buffers;
+#[cfg(feature = "front-end")]
 mod bound_rt;
-mod capture;
+#[cfg(feature = "front-end")]
 mod com_ref;
+#[cfg(feature = "front-end")]
 mod config;
+#[cfg(feature = "front-end")]
 mod crash;
-#[cfg(mtld3d_crumb)]
+#[cfg(all(feature = "front-end", mtld3d_crumb))]
 mod crumb_allocator;
+#[cfg(feature = "front-end")]
 mod cursor;
+#[cfg(feature = "front-end")]
 mod device;
+#[cfg(feature = "front-end")]
 mod direct3d9;
-mod draw;
-mod encoder;
+#[cfg(feature = "front-end")]
 mod exit_code_hook;
+#[cfg(feature = "front-end")]
 mod fullscreen;
-#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+#[cfg(all(feature = "front-end", target_arch = "x86_64", target_os = "windows"))]
 mod guest_mem;
+#[cfg(feature = "front-end")]
 #[macro_use]
 mod hookable;
+#[cfg(feature = "front-end")]
 mod import_patch;
+#[cfg(feature = "front-end")]
 mod index_buffer;
+#[cfg(feature = "front-end")]
 mod log_sink;
+#[cfg(feature = "front-end")]
 mod mode_list_hook;
-mod page_box_pool;
+#[cfg(feature = "front-end")]
 mod pixel_shader;
+#[cfg(feature = "front-end")]
 mod private_data;
+#[cfg(feature = "front-end")]
 mod query;
+#[cfg(feature = "front-end")]
 mod shader_bindings;
+#[cfg(feature = "front-end")]
 mod shader_validator;
+#[cfg(feature = "front-end")]
 mod stage_bindings;
+#[cfg(feature = "front-end")]
 mod state_block;
+#[cfg(feature = "front-end")]
 mod surface;
+#[cfg(feature = "front-end")]
 mod swapchain;
+#[cfg(feature = "front-end")]
 mod texture;
-mod unix_call;
+#[cfg(feature = "front-end")]
 mod vertex_buffer;
+#[cfg(feature = "front-end")]
 mod vertex_decl;
+#[cfg(feature = "front-end")]
 mod vertex_shader;
-mod wine_path;
 
+#[cfg(feature = "front-end")]
 use core::{
     ffi::c_void,
     sync::atomic::{AtomicBool, Ordering},
 };
+#[cfg(feature = "front-end")]
 use std::sync::Arc;
-#[cfg(feature = "core-runtime")]
-use std::sync::Once;
 
+#[cfg(feature = "front-end")]
 use dxmt_util::crash::veh::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExA,
 };
-use mtld3d_core::config::RuntimeMode;
-use mtld3d_shared::{InitLoggerParams, identity};
+#[cfg(feature = "front-end")]
+use mtld3d_shared::identity;
 // HRESULT codes live in `mtld3d_types` (shared with the integration-test
 // harness); re-exported under the crate root so every in-crate
-// `use super::{D3D_OK, …}` path stays valid.
+// `use super::{D3D_OK, ...}` path stays valid.
+#[cfg(feature = "front-end")]
 use mtld3d_types::{
     D3D_OK, D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3DERR_NOTFOUND, E_FAIL, E_NOINTERFACE,
     S_FALSE,
 };
 
-use crate::{direct3d9::Direct3D9, unix_call::unix_call};
+#[cfg(feature = "front-end")]
+use crate::direct3d9::Direct3D9;
 
+#[cfg(feature = "front-end")]
 const DLL_PROCESS_ATTACH: u32 = 1;
+#[cfg(feature = "front-end")]
 const DLL_PROCESS_DETACH: u32 = 0;
 /// The reason a thread's exit gives a TLS callback.
 ///
 /// Which `arm64_crt`'s TLS callback reads.
-#[cfg(windows)]
+#[cfg(all(feature = "front-end", windows))]
 const DLL_THREAD_DETACH: u32 = 3;
 
 /// Single source of truth for the `log` crate target, so callers don't hard-code the string.
@@ -76,6 +105,7 @@ const DLL_THREAD_DETACH: u32 = 3;
 /// Every `log!(target: LOG_TARGET, ...)` site in the crate uses it. Lives
 /// under the project-wide `mtld3d::*` root so `RUST_LOG=mtld3d=...` flips the
 /// whole project; `RUST_LOG=mtld3d::d3d9=...` scopes to the COM layer.
+#[cfg(feature = "front-end")]
 const LOG_TARGET: &str = "mtld3d::d3d9";
 
 // The baseline this replaces is not a modern libc malloc. With no global
@@ -83,26 +113,26 @@ const LOG_TARGET: &str = "mtld3d::d3d9";
 // which under Wine is RtlAllocateHeap: one shared heap lock across the
 // API and encoder threads, and a per-block virtual mapping for large
 // blocks, paid from emulated x86 crossing the PE/unix boundary. snmalloc
-// serves from per-thread slabs and never calls HeapAlloc at any size —
+// serves from per-thread slabs and never calls HeapAlloc at any size:
 // it takes address space from VirtualAlloc directly.
 //
 // Its lock-free remote-free ring also batches cross-thread frees, though
 // not for PageBox: the ring's budget is 16 KiB and a PageBox is at least
 // one 16 KiB page, so every box posts on its own. The batching earns its
 // keep on the smaller traffic crossing the same boundary (Arc control
-// blocks, boxed closures, FrameData internals).
+// blocks, boxed closures).
 //
 // mimalloc is not usable here: its cross-thread free path faults on
 // 16 KiB-aligned PageBox allocations.
 //
 // Under `cfg(mtld3d_crumb)` the allocator is swapped for
-// `crumb_allocator::CrumbAllocator` — a thin `SnMalloc` wrapper that
+// `crumb_allocator::CrumbAllocator`, a thin `SnMalloc` wrapper that
 // records PageBox-shape alloc/dealloc events into the shared crash
 // breadcrumb. Production builds get plain `SnMalloc` with zero overhead.
-#[cfg(not(mtld3d_crumb))]
+#[cfg(all(feature = "front-end", not(mtld3d_crumb)))]
 #[global_allocator]
 static ALLOCATOR: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
-#[cfg(mtld3d_crumb)]
+#[cfg(all(feature = "front-end", mtld3d_crumb))]
 #[global_allocator]
 static ALLOCATOR: crate::crumb_allocator::CrumbAllocator = crate::crumb_allocator::CrumbAllocator;
 
@@ -123,41 +153,11 @@ static ALLOCATOR: crate::crumb_allocator::CrumbAllocator = crate::crumb_allocato
 /// probe-call it to verify the export resolves, then `FreeLibrary`, and that
 /// unload has to stay real. `CreateDevice` requires a real HWND and
 /// presentation parameters, so reaching it implies actual use.
+#[cfg(feature = "front-end")]
 pub static USED: AtomicBool = AtomicBool::new(false);
 
-/// The process's runtime mode (`runtime.mode`): the first interface's wins.
-///
-/// A static because the resource is process-wide: one process runs one runtime, `mtld3d.so`'s or
-/// DXMT's core, and every interface and device of it is of that one.
-static RUNTIME: mtld3d_core::runtime_latch::RuntimeLatch =
-    mtld3d_core::runtime_latch::RuntimeLatch::new();
-
-/// Whether this half of `d3d9.dll` carries the core runtime (`core-runtime`).
-const CORE_BUILT: bool = cfg!(feature = "core-runtime");
-
-/// The mode `cfg` asks for, as this build can run it, latched for the process.
-///
-/// `Err` holds the mode the process latched first, when it is not this one.
-fn runtime_mode(cfg: &mtld3d_core::config::Mtld3dConfig) -> Result<RuntimeMode, RuntimeMode> {
-    let mode = mtld3d_core::runtime_latch::effective_mode(cfg.runtime_mode, CORE_BUILT);
-    if mode != cfg.runtime_mode {
-        mtld3d_shared::log_once_warn!(
-            target: LOG_TARGET,
-            "runtime.mode = core: this d3d9.dll ({}) carries no core runtime, so mtld3d runs",
-            mtld3d_shared::identity::ARCH
-        );
-    }
-    RUNTIME.latch(mode)
-}
-
-/// Returns true once the process runtime has latched to `RuntimeMode::Core`.
-#[cfg(feature = "core-runtime")]
-pub fn is_core() -> bool {
-    RUNTIME.get() == Some(RuntimeMode::Core)
-}
-
 /// The core's log writer (`dxmt_core::log`), forwarding to the `log` facade D3D9's lines take.
-#[cfg(feature = "core-runtime")]
+#[cfg(feature = "front-end")]
 #[unsafe(export_name = "dxmt_log")]
 extern "C" fn dxmt_log(level: u32, message: *const u8, length: usize) {
     if message.is_null() {
@@ -178,20 +178,19 @@ extern "C" fn dxmt_log(level: u32, message: *const u8, length: usize) {
     log::log!(target: "mtld3d::dxmt", level, "{text}");
 }
 
+#[cfg(feature = "front-end")]
 unsafe extern "system" {
     fn DisableThreadLibraryCalls(lib_module: *mut c_void) -> i32;
     fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
     fn GetCurrentProcess() -> *mut c_void;
 }
 
+#[cfg(feature = "front-end")]
 #[unsafe(export_name = "DllMain")]
 pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *mut c_void) -> i32 {
     if reason == DLL_PROCESS_DETACH && USED.load(Ordering::Relaxed) {
-        #[cfg(feature = "core-runtime")]
-        if RUNTIME.get() == Some(RuntimeMode::Core) {
-            d3d9_rt::flush_stats_on_detach();
-            d3d9_rt::close_shader_cache_on_detach();
-        }
+        rt::flush_stats_on_detach();
+        rt::close_shader_cache_on_detach();
         // The process is exiting. A device was created, which pinned the
         // image, so no `FreeLibrary` reaches this detach unless the pin
         // failed, which was logged; only process exit does (Wine passes
@@ -220,7 +219,6 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
         // process exit before any device): take the process-wide pointers
         // into this image down with it.
         dxmt_util::crash::veh::uninstall();
-        #[cfg(feature = "core-runtime")]
         if reserved.is_null() {
             log_sink::close_on_unload();
         }
@@ -248,6 +246,7 @@ pub extern "system" fn dll_main(instance: *mut c_void, reason: u32, reserved: *m
 /// pointing into unmapped code. The pin waits for a device rather than
 /// happening at load, because a load that only probes `Direct3DCreate9` and
 /// frees the library again has to unload for real.
+#[cfg(feature = "front-end")]
 pub fn pin_image() {
     let mut module: *mut c_void = core::ptr::null_mut();
     // SAFETY: kernel32 export; `USED` is a static of this image, so its
@@ -270,12 +269,14 @@ pub fn pin_image() {
 // The exports of the d3d9 API. Each is an entry with a fixed prologue that hook
 // engines relocate (`hookable.rs`), and jumps to the function after `=`.
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `Direct3DCreate9`: an `IDirect3D9`.
     #[must_use]
     "Direct3DCreate9" => fn direct3d_create9(sdk_version: u32) -> *mut c_void = create9;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `Direct3DCreate9Ex`: an `IDirect3D9Ex`, the factory of extended devices.
     ///
@@ -286,6 +287,7 @@ hookable_export! {
     "Direct3DCreate9Ex" => fn direct3d_create9_ex(sdk_version: u32, out: *mut *mut c_void) -> i32 = create9_ex;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `Direct3DShaderValidatorCreate9`: the shader validator interface.
     #[must_use]
@@ -300,6 +302,7 @@ hookable_export! {
 // d3d9.dll: an in-game overlay SDK refuses to initialise when any of them
 // resolves to null, even though the game itself renders fine.
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_BeginEvent`: opens a PIX event; returns the nesting level.
     ///
@@ -308,43 +311,51 @@ hookable_export! {
     "D3DPERF_BeginEvent" => fn d3dperf_begin_event(color: u32, name: *const u16) -> i32 = perf_begin_event;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_EndEvent`: closes a PIX event; returns the nesting level.
     #[must_use]
     "D3DPERF_EndEvent" => const fn d3dperf_end_event() -> i32 = perf_end_event;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_SetMarker`: a single PIX marker, not forwarded.
     "D3DPERF_SetMarker" => const fn d3dperf_set_marker(color: u32, name: *const u16) = perf_set_marker;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_SetRegion`: a PIX region marker, not forwarded.
     "D3DPERF_SetRegion" => const fn d3dperf_set_region(color: u32, name: *const u16) = perf_set_region;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_QueryRepeatFrame`: `FALSE`, no profiler asks for a frame replay.
     #[must_use]
     "D3DPERF_QueryRepeatFrame" => const fn d3dperf_query_repeat_frame() -> i32 = perf_query_repeat_frame;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_SetOptions`: profiler permission flags, nothing to apply them to.
     "D3DPERF_SetOptions" => const fn d3dperf_set_options(options: u32) = perf_set_options;
 }
 
+#[cfg(feature = "front-end")]
 hookable_export! {
     /// `D3DPERF_GetStatus`: `0`, no profiler attached.
     #[must_use]
     "D3DPERF_GetStatus" => const fn d3dperf_get_status() -> u32 = perf_get_status;
 }
 
+#[cfg(feature = "front-end")]
 extern "system" fn create9(_sdk_version: u32) -> *mut c_void {
     create_interface(false).cast::<c_void>()
 }
 
+#[cfg(feature = "front-end")]
 extern "system" fn create9_ex(_sdk_version: u32, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         mtld3d_shared::log_once_warn!(
@@ -359,54 +370,21 @@ extern "system" fn create9_ex(_sdk_version: u32, out: *mut *mut c_void) -> i32 {
 }
 
 /// Create the interface both factory exports hand out, `extended` for `Direct3DCreate9Ex`.
+#[cfg(feature = "front-end")]
 fn create_interface(extended: bool) -> *mut Direct3D9 {
-    // Resolves `mtld3d.conf` for this interface and logs the option set. The
-    // log location it names reaches the unix side before the logging thread
-    // starts, so every line queued since `DllMain` lands in the file; a later
-    // interface names it again and the unix side keeps the file it has.
+    // Resolves `mtld3d.conf` for this interface and logs the option set, then opens the log file.
     let cfg = config::load();
-    #[cfg(feature = "core-runtime")]
-    {
-        let latched = runtime_mode(&cfg);
-        log_sink::open(&cfg, latched.unwrap_or_else(|held| held));
-        if let Err(held) = latched {
-            mtld3d_shared::log_once_warn!(
-                target: LOG_TARGET,
-                "runtime.mode: the process runs {}; a device of this interface's mode is refused",
-                mtld3d_core::config::runtime_mode_label(held)
-            );
-        }
-    }
-    #[cfg(not(feature = "core-runtime"))]
-    {
-        log_sink::open(&cfg);
-        if let Err(held) = runtime_mode(&cfg) {
-            mtld3d_shared::log_once_warn!(
-                target: LOG_TARGET,
-                "runtime.mode: the process runs {}; a device of this interface's mode is refused",
-                mtld3d_core::config::runtime_mode_label(held)
-            );
-        }
-    }
+    log_sink::open(&cfg);
     direct3d9::install_page_allocator();
-    // The page-box pool is one per process; the interface resolved most
-    // recently sizes it.
-    page_box_pool::PAGEBOX_POOL
-        .set_cap(usize::try_from(cfg.pagebox_pool_cap_bytes).unwrap_or(usize::MAX));
-    let interface = Box::into_raw(Box::new(Direct3D9::new(Arc::new(cfg), extended)));
-    // The first entry point outside `DllMain`: the logging thread can start
-    // here (DllMain runs under the loader lock and must not spawn threads).
-    // It runs until the last interface is released, holding this image. Last,
-    // so the lines the interface's creation logged are among those `acquire`
-    // forwards before it returns.
-    log_sink::acquire();
-    interface
+    Box::into_raw(Box::new(Direct3D9::new(Arc::new(cfg), extended)))
 }
 
+#[cfg(feature = "front-end")]
 extern "system" fn shader_validator_create9() -> *mut c_void {
     shader_validator::create()
 }
 
+#[cfg(feature = "front-end")]
 extern "system" fn perf_begin_event(_color: u32, _name: *const u16) -> i32 {
     mtld3d_shared::log_once_info!(
         target: LOG_TARGET,
@@ -415,85 +393,43 @@ extern "system" fn perf_begin_event(_color: u32, _name: *const u16) -> i32 {
     0
 }
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_end_event() -> i32 {
     0
 }
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_set_marker(_color: u32, _name: *const u16) {}
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_set_region(_color: u32, _name: *const u16) {}
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_query_repeat_frame() -> i32 {
     0
 }
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_set_options(_options: u32) {}
 
+#[cfg(feature = "front-end")]
 const extern "system" fn perf_get_status() -> u32 {
     0
 }
 
-// Wires up the PE-side `env_logger` for this cdylib, then fires a
-// one-shot `InitLogger` thunk so the unix .so registers its own
-// (each cdylib has its own `log` crate statics). Runs from DllMain
-// after mtld3d.dll's DllMain has already wired up the unix-call
-// dispatcher — DLL load ordering is guaranteed by d3d9.dll's implicit
-// import of `mtld3d_unix_call` from mtld3d.dll.
+#[cfg(feature = "front-end")]
 fn init_logger(instance: *mut c_void) {
     mtld3d_shared::init_logger_to(Box::new(log_sink::Sink));
     log_identity(instance);
-    // Latch the d3d9-side perf-tracking gate (`PERF_TRACKING_ENABLED`)
-    // from `RUST_LOG`. Per-cdylib because each cdylib has its own
-    // `log` statics; the unix side latches its own copy in
-    // `init_logger_handler`.
     mtld3d_core::perf::init_tracking_enabled();
     mtld3d_core::state_trace::init_enabled();
-    // Map the shared crash crumb (cfg-gated no-op in production) and
-    // install the always-on VEH-based crash handler. Both sides write
-    // into the same `/tmp/mtld3d-crumb.bin` file so PE+unix events
-    // interleave by seq.
     mtld3d_shared::crumb::init();
     dxmt_util::crash::veh::install(instance, &crash::REPORTER);
     mtld3d_shared::crumb::set_write_sink(log_sink::write_fault);
-    #[cfg(not(feature = "core-runtime"))]
-    dispatch_init_logger();
-}
-
-/// Registers the `mtld3d.so` logger once when `runtime.mode = mtld3d` opens in `core-runtime`.
-#[cfg(feature = "core-runtime")]
-pub fn ensure_unix_logger_init() {
-    static UNIX_LOGGER_INIT: Once = Once::new();
-    UNIX_LOGGER_INIT.call_once(dispatch_init_logger);
-}
-
-/// Sends `InitLoggerParams` to `mtld3d.so` with the resolved filter and early log location.
-fn dispatch_init_logger() {
-    // The resolved filter, which the unix side takes verbatim.
-    let level = std::env::var("DXMT_LOG_LEVEL").ok();
-    let user = std::env::var("RUST_LOG").ok();
-    let filter = mtld3d_shared::resolved_log_filter(level.as_deref(), user.as_deref());
-    // Where a crash report goes if one comes before `Direct3DCreate9`
-    // names the log location; empty when it cannot be derived.
-    let (early_dir, early_stem) = log_sink::early_location().unwrap_or_else(|| {
-        mtld3d_shared::log_once_warn!(
-            target: LOG_TARGET,
-            "log file: no default location at load, a crash before Direct3DCreate9 reports to stderr"
-        );
-        (String::new(), String::new())
-    });
-    let mut params = InitLoggerParams {
-        filter_ptr: filter.as_ptr() as u64,
-        early_dir_ptr: early_dir.as_ptr() as u64,
-        early_stem_ptr: early_stem.as_ptr() as u64,
-        filter_len: u32::try_from(filter.len()).unwrap_or(0),
-        early_dir_len: u32::try_from(early_dir.len()).unwrap_or(0),
-        early_stem_len: u32::try_from(early_stem.len()).unwrap_or(0),
-        pad0: 0,
-    };
-    unix_call(&mut params);
 }
 
 /// The identity line's level: warn in the performance build, which compiles out every info line.
+#[cfg(feature = "front-end")]
 const IDENTITY_LEVEL: log::Level = if cfg!(feature = "perf-build") {
     log::Level::Warn
 } else {
@@ -505,6 +441,7 @@ const IDENTITY_LEVEL: log::Level = if cfg!(feature = "perf-build") {
 /// [`identity::BUILD`] says which release the source came from; the image ID is
 /// the PDB GUID the linker assigned, which names this exact binary and picks
 /// the `.pdb` that symbolicates it out of the release's debug archive.
+#[cfg(feature = "front-end")]
 fn log_identity(instance: *mut c_void) {
     // SAFETY: `instance` is the HMODULE the loader passed to `DllMain` during
     // `DLL_PROCESS_ATTACH`, so this image is mapped in full.
@@ -523,6 +460,7 @@ fn log_identity(instance: *mut c_void) {
 /// Callers that ignore the HRESULT and read the out-pointer get `null`
 /// instead of stack garbage, which would otherwise read as a bogus COM
 /// `this` pointer.
+#[cfg(feature = "front-end")]
 fn null_out(out: *mut *mut c_void) {
     write_out(out, core::ptr::null_mut());
 }
@@ -531,6 +469,7 @@ fn null_out(out: *mut *mut c_void) {
 ///
 /// A private helper so the exported entry point that calls it stays a safe
 /// function; `out` is null or a writable slot per the COM ABI.
+#[cfg(feature = "front-end")]
 fn write_out(out: *mut *mut c_void, value: *mut c_void) {
     // SAFETY: per the COM ABI `out` is null, which `write_opt` skips, or a
     // writable `*mut c_void` slot owned by the caller.
@@ -539,10 +478,10 @@ fn write_out(out: *mut *mut c_void, value: *mut c_void) {
 
 /// `DLL_PROCESS_ATTACH` body.
 ///
-/// Private helper so the exported `dll_main` stub stays safe — clippy's
+/// Private helper so the exported `dll_main` stub stays safe; clippy's
 /// `not_unsafe_ptr_arg_deref` only checks `pub` functions.
-/// `DisableThreadLibraryCalls` so per-thread `DllMain` notifications don't
-/// fire.
+/// `DisableThreadLibraryCalls` keeps per-thread `DllMain` notifications from
+/// firing.
 ///
 /// The main module's imports are redirected only when the loader maps this
 /// image with the process (`static_load`: a non-null `lpvReserved`, the
@@ -550,6 +489,7 @@ fn write_out(out: *mut *mut c_void, value: *mut c_void) {
 /// built on Direct3D 9 has it. A run-time load, such as a diagnostics or
 /// video component's in a game built on another API, leaves them alone: a
 /// protected executable that finds its import table changed ends itself.
+#[cfg(feature = "front-end")]
 fn attach_process(instance: *mut c_void, static_load: bool) {
     // SAFETY: `instance` is the HMODULE passed by the loader to `DllMain`
     // during `DLL_PROCESS_ATTACH`; Win32 `DisableThreadLibraryCalls` is

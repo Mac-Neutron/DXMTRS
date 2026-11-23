@@ -18,9 +18,6 @@ use std::{
     sync::{Arc, atomic::AtomicU32},
 };
 
-#[cfg(not(windows))]
-use mtld3d_shared::encoder_wire::{LeaseCompletion, LeaseCompletionPtr};
-
 /// Bytes held by live `PageBox`es, always on: one add per alloc, one sub per free.
 ///
 /// The address-space watch reports it next to the free-space figures, so a
@@ -311,11 +308,6 @@ enum PageOwnership {
     Native(Layout),
     /// Pages from the [`PageAllocator`].
     Hooked,
-    #[cfg(not(windows))]
-    Guest {
-        completion: LeaseCompletionPtr,
-        readers: u64,
-    },
 }
 
 // SAFETY: The allocation is owned here or pinned by a guest lease until Drop.
@@ -429,69 +421,8 @@ impl PageBox {
             != 0
     }
 
-    /// Borrow pages retained by the guest until this lease is acknowledged.
-    ///
-    /// Native wrappers may retain the resulting box but cannot recycle its allocation.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` names a `len`-byte allocation with `PAGE_SIZE` alignment, `len` is a
-    /// nonzero page multiple, and `logical_len <= len`. Every range the consumer
-    /// reads must be initialized, as with an owned `new_uninit` allocation;
-    /// transferring a lease does not initialize unused pages or padding. The caller keeps the
-    /// allocation and the aligned completion cell alive until the completion is
-    /// observed with Acquire ordering. The lease grants the same externally
-    /// synchronized access as an owned box, and this is its sole native owner.
-    /// `readers` names the original box's aligned `AtomicU32` reader count and
-    /// stays alive for the same lease. A read guard must already exist before
-    /// publication whenever the native consumer will acquire a new read.
-    #[must_use]
-    #[cfg(not(windows))]
-    pub const unsafe fn from_guest_lease(
-        ptr: NonNull<u8>,
-        len: usize,
-        logical_len: usize,
-        generation: u64,
-        completion: LeaseCompletionPtr,
-        readers: u64,
-    ) -> Self {
-        Self {
-            ptr,
-            len,
-            logical_len,
-            ownership: PageOwnership::Guest {
-                completion,
-                readers,
-            },
-            generation,
-            readers: AtomicU32::new(0),
-        }
-    }
-
-    /// Whether the allocating runtime can park this box in its recycle pool.
-    #[must_use]
-    pub const fn is_native_owned(&self) -> bool {
-        matches!(
-            self.ownership,
-            PageOwnership::Native(_) | PageOwnership::Hooked
-        )
-    }
-
-    /// Address of the fixed-width reader count kept alive by a page lease.
-    #[must_use]
-    pub fn reader_count_ptr(&self) -> u64 {
-        core::ptr::from_ref(self.reader_count()) as u64
-    }
-
     const fn reader_count(&self) -> &AtomicU32 {
-        match &self.ownership {
-            PageOwnership::Native(_) | PageOwnership::Hooked => &self.readers,
-            #[cfg(not(windows))]
-            PageOwnership::Guest { readers, .. } => {
-                // SAFETY: from_guest_lease pins the original aligned counter until Drop.
-                unsafe { &*(*readers as *const AtomicU32) }
-            }
-        }
+        &self.readers
     }
 
     #[must_use]
@@ -618,13 +549,6 @@ impl Drop for PageBox {
                 if let Some(allocator) = page_allocator() {
                     (allocator.free)(self.ptr, self.len);
                 }
-                return;
-            }
-            #[cfg(not(windows))]
-            PageOwnership::Guest { completion, .. } => {
-                // SAFETY: from_guest_lease keeps this cell alive until this final acknowledgment.
-                let completion = unsafe { &*(completion.raw() as *const LeaseCompletion) };
-                completion.publish();
                 return;
             }
         };

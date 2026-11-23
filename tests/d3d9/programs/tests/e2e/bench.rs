@@ -598,11 +598,6 @@ impl LayerLog {
         Self { path }
     }
 
-    /// The log at `path`: another process's, whose file the benchmark that ran it knows.
-    pub const fn at(path: PathBuf) -> Self {
-        Self { path: Some(path) }
-    }
-
     /// The log's current length, the position a measured phase starts or ends at.
     pub fn mark(&self) -> u64 {
         self.path

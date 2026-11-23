@@ -1,4 +1,4 @@
-//! The startup lines reach the log of a process that ends right after `Direct3DCreate9`.
+//! The startup line reaches the log of a process that ends right after `Direct3DCreate9`.
 //!
 //! A probe that only asks which d3d9 it got, such as an installer's or a
 //! launcher's, calls `Direct3DCreate9` and ends at once. The layer's lines
@@ -8,10 +8,9 @@
 //! `ExitProcess` the moment its interface exists, without releasing it, and
 //! the parent reads the log it left.
 //!
-//! Each of the three startup lines also names the arch its half runs as:
+//! The startup line also names the arch `d3d9.dll` runs as:
 //! `i686` for a 32-bit process, `x86_64` or, for the ARM64X build, `arm64ec`
-//! for an x64 one, `aarch64` for a native ARM64 one, and the unix library its
-//! own arch, followed by `, under Rosetta 2` when Rosetta translates it.
+//! for an x64 one, and `aarch64` for a native ARM64 one.
 
 use mtld3d_tests::Harness;
 
@@ -35,7 +34,7 @@ const PE_ARCHES: &[&str] = if cfg!(target_arch = "x86") {
     &["aarch64"]
 };
 
-/// The three startup lines are in the log of a process that ends at once.
+/// The startup line is in the log of a process that ends at once.
 #[test]
 fn a_process_ending_right_after_direct3dcreate9_keeps_its_startup_lines() {
     if running_as(CHILD_NAME) {
@@ -56,24 +55,10 @@ fn a_process_ending_right_after_direct3dcreate9_keeps_its_startup_lines() {
         String::from_utf8_lossy(&output.stderr)
     );
     let d3d9 = find_line(&log, "] d3d9.dll ", " loaded at ");
-    let shim = find_line(&log, "] mtld3d.dll ", ", unix call initialized as ");
-    let unix = find_line(&log, "] mtld3d.so ", " initialized as ");
     let d3d9_arch = d3d9.rsplit_once(" as ").map_or("", |(_, arch)| arch);
-    let shim_arch = shim.rsplit_once(" as ").map_or("", |(_, arch)| arch);
     assert!(
         PE_ARCHES.contains(&d3d9_arch),
         "d3d9.dll names {d3d9_arch:?}, not one of {PE_ARCHES:?}: {d3d9}"
-    );
-    assert_eq!(
-        shim_arch, d3d9_arch,
-        "mtld3d.dll runs as the same half as d3d9.dll: {shim}"
-    );
-    let (_, execution) = unix
-        .split_once(" initialized as ")
-        .expect("found by that text");
-    assert!(
-        ["aarch64", "x86_64", "x86_64, under Rosetta 2"].contains(&execution),
-        "mtld3d.so names its arch, and Rosetta 2 when it runs under it: {unix}"
     );
 }
 

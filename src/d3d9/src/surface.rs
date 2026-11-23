@@ -3,17 +3,12 @@ use core::ffi::c_void;
 use log::trace;
 use mtld3d_core::{
     api_lock::ApiGuard,
-    encoder_data::{ColorRegionUpdate, StretchKind},
     held_pages::{HeldPages, PageHolder},
     page_box::PageBox,
     perf::SurfaceSubCategory,
-    render_scale::{RenderScale, TargetExtent},
-    surface_lock::{ColorSurfaceLock, classify_color_surface_lock},
+    render_scale::RenderScale,
 };
-use mtld3d_shared::{
-    BlitTextureToBufferParams, InPtr, InPtrMut, MetalHandle, OutPtr, ValueIn, VtableThis,
-    mtl_handle::MTLTextureKind,
-};
+use mtld3d_shared::{InPtr, InPtrMut, OutPtr, ValueIn, VtableThis};
 use mtld3d_types::{
     D3DFMT_A1R5G5B5, D3DFMT_A8R8G8B8, D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_X1R5G5B5,
     D3DFMT_X8R8G8B8, D3DLOCK_DISCARD, D3DLOCK_READONLY, D3DLOCKED_RECT, D3DPOOL_DEFAULT,
@@ -22,9 +17,8 @@ use mtld3d_types::{
 };
 
 use super::{
-    D3D_OK, D3DERR_INVALIDCALL, LOG_TARGET, com_ref::ComUnknown, device::DeviceInner,
-    encoder::ResampledUpload, null_out, private_data::PrivateDataStore, texture::Direct3DTexture9,
-    unix_call::unix_call,
+    D3D_OK, D3DERR_INVALIDCALL, LOG_TARGET, com_ref::ComUnknown, device::DeviceInner, null_out,
+    private_data::PrivateDataStore, texture::Direct3DTexture9,
 };
 
 static DIRECT3D_SURFACE9_VTBL: IDirect3DSurface9Vtbl = IDirect3DSurface9Vtbl {
@@ -179,13 +173,6 @@ impl SurfaceMultiSample {
 /// `D3DPOOL_DEFAULT` surface. The multisample trio travels as one value.
 pub struct ColorTargetCreateInfo {
     pub device_inner: *mut DeviceInner,
-    pub metal_color_handle: MetalHandle<MTLTextureKind>,
-    /// sRGB twin view of the colour texture, NULL when the format has none.
-    pub metal_color_srgb_handle: MetalHandle<MTLTextureKind>,
-    /// Multisampled companion, NULL when the surface is single-sampled.
-    pub metal_msaa_handle: MetalHandle<MTLTextureKind>,
-    /// sRGB twin view of that companion, NULL whenever the companion is.
-    pub metal_msaa_srgb_handle: MetalHandle<MTLTextureKind>,
     pub width: u32,
     pub height: u32,
     pub format: u32,
@@ -218,10 +205,6 @@ impl Direct3DSurface9 {
     pub fn new_color_target(init: &ColorTargetCreateInfo) -> Self {
         let &ColorTargetCreateInfo {
             device_inner,
-            metal_color_handle,
-            metal_color_srgb_handle,
-            metal_msaa_handle,
-            metal_msaa_srgb_handle,
             width,
             height,
             format,
@@ -240,11 +223,6 @@ impl Direct3DSurface9 {
             standalone_format: format,
             standalone_usage: usage,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle,
-            metal_color_srgb_handle,
-            metal_msaa_handle,
-            metal_msaa_srgb_handle,
             multi_sample,
             readback: None,
             readback_dims: (0, 0),
@@ -254,7 +232,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -267,21 +244,14 @@ impl Direct3DSurface9 {
         }
     }
 
-    /// Standalone depth-stencil surface backed by a real Metal depth texture.
-    ///
-    /// `SetDepthStencilSurface` reads `metal_depth_handle()` and binds it to
-    /// the next pass; without a backing handle the bind would silently fall
-    /// back to the device default depth, mismatching the color attachment's
-    /// size when `WoW` renders to an offscreen RT.
+    /// Standalone depth-stencil surface.
     ///
     /// It owns no parent texture because D3D9 exposes none: a
     /// `CreateDepthStencilSurface` surface is reachable by no `SetTexture`,
     /// and its `MTLTexture` is allocated `RenderTarget`-only to match. That
-    /// is what `depth_is_sampleable` reports, and why binding one carries no
-    /// keep-Store exemption.
+    /// is what `depth_is_sampleable` reports.
     pub fn new_depth_stencil(
         device_inner: *mut DeviceInner,
-        metal_depth_handle: MetalHandle<MTLTextureKind>,
         width: u32,
         height: u32,
         format: u32,
@@ -297,14 +267,9 @@ impl Direct3DSurface9 {
             standalone_height: height,
             standalone_render_scale: render_scale,
             standalone_format: format,
-            // CreateDepthStencilSurface → a D3DUSAGE_DEPTHSTENCIL surface.
+            // CreateDepthStencilSurface -> a D3DUSAGE_DEPTHSTENCIL surface.
             standalone_usage: D3DUSAGE_DEPTHSTENCIL,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample,
             readback: None,
             readback_dims: (0, 0),
@@ -314,7 +279,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -363,11 +327,6 @@ impl Direct3DSurface9 {
             // The implicit backbuffer/render target.
             standalone_usage: D3DUSAGE_RENDERTARGET,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -377,7 +336,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::Backbuffer,
             container,
@@ -393,12 +351,8 @@ impl Direct3DSurface9 {
     /// The device's implicit depth-stencil (`GetDepthStencilSurface`).
     ///
     /// Device-owned exactly like [`Self::new_implicit_backbuffer`]; resolves its
-    /// depth handle + dimensions + format live from the device. `container` is
+    /// depth texture + dimensions + format live from the device. `container` is
     /// the device wrapper `GetContainer` returns.
-    ///
-    /// The handle it resolves is the device's auto depth-stencil, allocated
-    /// `RenderTarget`-only like every standalone depth texture, so it owns no
-    /// parent texture and `depth_is_sampleable` reports false for it.
     pub fn new_implicit_depth_stencil(device_inner: *mut DeviceInner, container: u64) -> Self {
         let inner = Box::into_raw(Box::new(SurfaceInner {
             device_inner,
@@ -412,11 +366,6 @@ impl Direct3DSurface9 {
             // The implicit depth-stencil surface.
             standalone_usage: D3DUSAGE_DEPTHSTENCIL,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -426,7 +375,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::DepthStencil,
             container,
@@ -464,11 +412,6 @@ impl Direct3DSurface9 {
             standalone_format: 0,
             standalone_usage: 0,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -478,7 +421,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: parent_texture,
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -520,11 +462,6 @@ impl Direct3DSurface9 {
             standalone_format: 0,
             standalone_usage: 0,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -534,7 +471,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: parent_texture,
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -552,9 +488,9 @@ impl Direct3DSurface9 {
     /// A `D3DPOOL_DEFAULT` offscreen-plain surface backed by an internal
     /// texture the app never sees. Takes over the texture's single create-ref
     /// (no `AddRef`); `finalize_surface` `Release`s it. Lock/Unlock/upload
-    /// reuse the texture machinery (CPU staging + encoder
-    /// `CopyBufferToTexture`), and `StretchRect` resolves the texture's Metal
-    /// handle — so a single storage-with-CPU-sync path covers the surface.
+    /// reuse the texture machinery (CPU staging + GPU upload), and
+    /// `StretchRect` resolves the texture's backing store so a single
+    /// storage-with-CPU-sync path covers the surface.
     pub fn new_owned_texture_backed(
         device_inner: *mut DeviceInner,
         parent_texture: *mut Direct3DTexture9,
@@ -570,11 +506,6 @@ impl Direct3DSurface9 {
             standalone_format: 0,
             standalone_usage: 0,
             standalone_pool: D3DPOOL_DEFAULT,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -584,7 +515,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -622,11 +552,6 @@ impl Direct3DSurface9 {
             standalone_format: format,
             standalone_usage: 0,
             standalone_pool: pool,
-            metal_depth_handle: MetalHandle::NULL,
-            metal_color_handle: MetalHandle::NULL,
-            metal_color_srgb_handle: MetalHandle::NULL,
-            metal_msaa_handle: MetalHandle::NULL,
-            metal_msaa_srgb_handle: MetalHandle::NULL,
             multi_sample: SurfaceMultiSample::NONE,
             readback: None,
             readback_dims: (0, 0),
@@ -636,7 +561,6 @@ impl Direct3DSurface9 {
             dc_lock: DcLockState::default(),
             lock_flags: 0,
             state_owner_texture: core::ptr::null_mut(),
-            #[cfg(feature = "core-runtime")]
             core_texture: None,
             implicit_kind: ImplicitKind::None,
             container: 0,
@@ -683,8 +607,7 @@ impl Direct3DSurface9 {
         unsafe { &*self.vtbl }
     }
 
-    /// Whether this is a back buffer: the implicit one or an additional swap chain's (C4b3a-4).
-    #[cfg(feature = "core-runtime")]
+    /// Whether this is a back buffer: the implicit one or an additional swap chain's.
     pub fn is_back_buffer(&self) -> bool {
         self.inner().implicit_kind == ImplicitKind::Backbuffer
     }
@@ -692,30 +615,26 @@ impl Direct3DSurface9 {
     /// Non-null parent for texture-backed surfaces (from `GetSurfaceLevel`).
     ///
     /// Null for standalone surfaces (backbuffer from `GetBackBuffer`,
-    /// depth-stencil from `CreateDepthStencilSurface`). Used by the
-    /// `SetRenderTarget` pass-break path to decide between rebinding a
-    /// texture's Metal handle and restoring the backbuffer.
+    /// depth-stencil from `CreateDepthStencilSurface`).
     pub fn parent_texture(&self) -> *mut Direct3DTexture9 {
         self.inner().parent_texture
     }
 
-    /// Gives a standalone render target or depth-stencil its core texture's id (DXMTRS C4b-3d1).
-    #[cfg(feature = "core-runtime")]
+    /// Gives a standalone render target or depth-stencil its core texture's id.
     pub fn set_core_texture(&mut self, id: mtld3d_core::ids::TextureId) {
         // SAFETY: `self.inner` is the live `SurfaceInner` of this wrapper, just made by
         // `new_color_target`; access is exclusive under the device's API lock.
         unsafe { &mut *self.inner }.core_texture = Some(id);
     }
 
-    /// The colour target this surface is to a device of the core runtime (DXMTRS C4b-3d1).
+    /// The colour target this surface is to the device.
     ///
     /// The back buffer for a back-buffer surface (the implicit one, and an additional swap
-    /// chain's, which aliases it: C4b3d1-4), a render-target texture's level and face, or a
+    /// chain's, which aliases it), a render-target texture's level and face, or a
     /// standalone render target's own core texture; `None` for a surface the core does not draw
     /// to (a depth-stencil, an offscreen plain surface, a level of a texture that is no target).
-    #[cfg(feature = "core-runtime")]
-    pub fn core_target(&self) -> Option<d3d9_rt::device::TargetRef> {
-        use d3d9_rt::device::TargetRef;
+    pub fn core_target(&self) -> Option<crate::rt::device::TargetRef> {
+        use crate::rt::device::TargetRef;
         if self.is_back_buffer() {
             return Some(TargetRef::BackBuffer);
         }
@@ -742,14 +661,13 @@ impl Direct3DSurface9 {
         })
     }
 
-    /// The core depth-stencil this surface is (DXMTRS C4b-3d2).
+    /// The core depth-stencil this surface is.
     ///
     /// The device's auto depth-stencil for the implicit surface; a standalone depth-stencil's
     /// own core texture; a level of a depth texture made with `D3DUSAGE_DEPTHSTENCIL`. `None`
     /// for a surface the core does not attach as one.
-    #[cfg(feature = "core-runtime")]
-    pub fn core_depth(&self) -> Option<d3d9_rt::device::DepthRef> {
-        use d3d9_rt::device::DepthRef;
+    pub fn core_depth(&self) -> Option<crate::rt::device::DepthRef> {
+        use crate::rt::device::DepthRef;
         let inner = self.inner();
         if inner.implicit_kind == ImplicitKind::DepthStencil {
             // SAFETY: null, or the device that owns its implicit surface and outlives it.
@@ -880,66 +798,6 @@ impl Direct3DSurface9 {
             .contains(SurfaceFlags::OWNS_PARENT_TEXTURE)
     }
 
-    /// Metal depth texture backing this *standalone* surface, or null.
-    ///
-    /// Texture-backed depth surfaces (sampleable shadow maps from
-    /// `CreateTexture(D24X8, DEPTHSTENCIL)` → `GetSurfaceLevel`) report
-    /// null here — call `depth_texture_info` instead and resolve the
-    /// Metal handle on the encoder thread via `get_or_create_texture`.
-    pub fn metal_depth_handle(&self) -> MetalHandle<MTLTextureKind> {
-        self.inner().live_depth_handle()
-    }
-
-    /// Snapshot the parent depth-format texture's `TextureInfo`.
-    ///
-    /// For `SetDepthStencilSurface` lazy-fetch. Returns `None` for standalone
-    /// surfaces (use `metal_depth_handle()` instead) and for texture-backed
-    /// color surfaces.
-    pub fn depth_texture_info(&self) -> Option<crate::encoder::TextureInfo> {
-        let parent = self.inner().parent_texture;
-        if parent.is_null() {
-            return None;
-        }
-        // SAFETY: `parent` is non-null (checked above); texture-backed
-        // surfaces are created by `GetSurfaceLevel` with a live
-        // `Direct3DTexture9*`, and the parent texture's refcount keeps
-        // it alive for as long as this surface is live.
-        let tex = unsafe { &*parent };
-        if !tex.is_depth_format() {
-            return None;
-        }
-        Some(tex.inner().texture_info())
-    }
-
-    /// Whether binding this surface as depth/stencil attaches a texture the app can sample.
-    ///
-    /// True only for a texture-backed depth surface: `CreateTexture` with a
-    /// depth format and `D3DUSAGE_DEPTHSTENCIL`, reached through
-    /// `GetSurfaceLevel`. Its `MTLTexture` is allocated shader-readable, and
-    /// a later `SetTexture` of the parent samples the depth the pass wrote,
-    /// possibly frames later, which is what earns the attachment its
-    /// unconditional `Store`.
-    ///
-    /// Both handle-carrying shapes answer false, and answer it here rather
-    /// than by falling through a bind-path `else`: a
-    /// `CreateDepthStencilSurface` surface and the implicit depth-stencil
-    /// shell name `RenderTarget`-only Metal textures that no D3D9 call can
-    /// hand to a sampler.
-    ///
-    /// The same predicate [`Self::depth_texture_info`] answers `Some` on,
-    /// without building the `TextureInfo` the bind needs.
-    pub fn depth_is_sampleable(&self) -> bool {
-        let parent = self.inner().parent_texture;
-        if parent.is_null() {
-            return false;
-        }
-        // SAFETY: `parent` is non-null (checked above); texture-backed
-        // surfaces are created by `GetSurfaceLevel` with a live
-        // `Direct3DTexture9*`, and the parent texture's refcount keeps
-        // it alive for as long as this surface is live.
-        unsafe { (*parent).is_depth_format() }
-    }
-
     /// D3D9 format the standalone surface was created with (D3DFMT_*).
     ///
     /// Only meaningful when `parent_texture()` is null — texture-backed
@@ -972,28 +830,6 @@ impl Direct3DSurface9 {
         // SAFETY: `parent` is non-null (checked above) and a surface keeps a
         // reference on its parent texture for its whole lifetime.
         unsafe { &*parent }.d3d_usage()
-    }
-
-    /// D3D9 format of this surface when bound as a depth attachment (D3DFMT_*).
-    ///
-    /// Texture-backed depth surfaces report the parent texture's format;
-    /// standalone and implicit surfaces resolve their own (live) format.
-    /// The snapshot and `SetDepthStencilSurface` both derive `has_stencil`
-    /// from this, so the pipeline's declared depth/stencil formats always
-    /// match the texture the pass actually binds — a texture-backed D24S8
-    /// depth surface creates a `Depth32Float_Stencil8` Metal texture, and a
-    /// pipeline declaring plain `Depth32Float` against it is a Metal
-    /// validation error.
-    pub fn depth_attachment_format(&self) -> u32 {
-        let parent = self.inner().parent_texture;
-        if parent.is_null() {
-            return self.inner().live_format();
-        }
-        // SAFETY: `parent` is non-null (checked above); texture-backed
-        // surfaces are created by `GetSurfaceLevel` with a live
-        // `Direct3DTexture9*`, and the parent texture's refcount keeps
-        // it alive for as long as this surface is live.
-        unsafe { (*parent).d3d_format() }
     }
 
     /// Width of a standalone surface (backbuffer / depth-stencil).
@@ -1030,49 +866,12 @@ impl Direct3DSurface9 {
         (self.inner().cube_face != u32::MAX).then_some(self.inner().cube_face)
     }
 
-    /// Persistent `MTLTexture*` for standalone color surfaces.
-    ///
-    /// The backbuffer returned by `GetBackBuffer`. Null on texture-backed or
-    /// depth-stencil surfaces — `StretchRect` uses this to source / destination
-    /// the backbuffer in a Metal blit without touching the transient
-    /// `CAMetalLayer` drawable.
-    pub fn metal_color_handle(&self) -> MetalHandle<MTLTextureKind> {
-        self.inner().live_color_handle()
-    }
-
-    /// sRGB twin view of [`Self::metal_color_handle`], or null.
-    ///
-    /// The implicit back buffer answers with the device's current twin, which
-    /// `Reset` and an auto-resize replace along with the texture itself.
-    pub fn metal_color_srgb_handle(&self) -> MetalHandle<MTLTextureKind> {
-        let inner = self.inner();
-        if inner.implicit_kind == ImplicitKind::Backbuffer && !inner.device_inner.is_null() {
-            // SAFETY: `device_inner` is the live owning device; it outlives
-            // its child surfaces per D3D9 lifetime rules.
-            return unsafe { (*inner.device_inner).backbuffer_srgb_handle() };
-        }
-        inner.metal_color_srgb_handle
-    }
-
-    /// Multisampled companion of the colour texture, null when there is none.
-    ///
-    /// The implicit back buffer resolves the device's current companion live,
-    /// exactly as it does its colour handle.
-    pub fn metal_msaa_handle(&self) -> MetalHandle<MTLTextureKind> {
-        self.inner().live_msaa_handle()
-    }
-
-    /// sRGB twin view of that companion, null whenever the companion is.
-    pub fn metal_msaa_srgb_handle(&self) -> MetalHandle<MTLTextureKind> {
-        self.inner().live_msaa_srgb_handle()
-    }
-
     /// Multisample type, quality and sample count this surface carries.
     pub fn multi_sample(&self) -> SurfaceMultiSample {
         self.inner().live_multi_sample()
     }
 
-    /// This surface as a `BlitTextureToBuffer` destination, or `None`.
+    /// This surface as a read-back destination, or `None`.
     ///
     /// The two system-memory shapes D3D9 accepts as the destination of
     /// `GetRenderTargetData` / `GetFrontBufferData`: a `D3DPOOL_SYSTEMMEM` or
@@ -1081,20 +880,15 @@ impl Direct3DSurface9 {
     /// staging. The pointer stays valid for the surface's lifetime.
     ///
     /// A lockable render target also owns a CPU staging buffer, but it is a
-    /// `D3DPOOL_DEFAULT` render target (it keeps its renderable colour handle),
+    /// `D3DPOOL_DEFAULT` render target (it owns a core texture),
     /// which D3D9 rejects as a destination, so this returns `None` for it, as
     /// it does for a level of a `D3DPOOL_DEFAULT` or `D3DPOOL_MANAGED` texture.
-    /// On a core device it is told apart by its core texture (DXMTRS C4c-3a).
     pub fn system_memory_blit_dst(&self) -> Option<SystemMemoryDst> {
         // SAFETY: `self.inner` is the live `SurfaceInner` for this wrapper;
         // access is exclusive (D3D9 objects are single-threaded, or serialised
         // by the device `ApiLock` under `D3DCREATE_MULTITHREADED`), so the
         // transient exclusive borrow taken to read the buffer pointer is sound.
         let inner = unsafe { &mut *self.inner };
-        if !inner.metal_color_handle.is_null() {
-            return None;
-        }
-        #[cfg(feature = "core-runtime")]
         if inner.core_texture.is_some() {
             return None;
         }
@@ -1279,37 +1073,6 @@ struct SurfaceInner {
     /// (`D3DPOOL_SYSTEMMEM` or `D3DPOOL_SCRATCH`) for a system-memory
     /// offscreen-plain surface.
     standalone_pool: u32,
-    /// Non-null for depth-stencil standalone surfaces created via `CreateDepthStencilSurface`.
-    ///
-    /// Holds the retained `MTLTexture*`, which the surface owns: it goes on
-    /// the encoder's seq-gated retention queue when the surface finalizes.
-    metal_depth_handle: MetalHandle<MTLTextureKind>,
-    /// Non-null for standalone color surfaces (the backbuffer returned by `GetBackBuffer`).
-    ///
-    /// Holds the persistent offscreen `MTLTexture*` (same handle
-    /// `DeviceInner::backbuffer_handle` carries). Enables synchronous
-    /// `LockRect` readback via texture→buffer blit.
-    metal_color_handle: MetalHandle<MTLTextureKind>,
-    /// sRGB twin view of `metal_color_handle`, or null.
-    ///
-    /// Created with the colour texture and retired with it. The render pass
-    /// attaches it in place of the base under `D3DRS_SRGBWRITEENABLE`, which
-    /// puts the encode after the blender.
-    metal_color_srgb_handle: MetalHandle<MTLTextureKind>,
-    /// Multisampled companion of `metal_color_handle`, or null.
-    ///
-    /// Non-null only for a `CreateRenderTarget` surface asked for a
-    /// multisample type. It is what a render pass attaches; every other
-    /// consumer (sampling, `StretchRect`, `LockRect`, `GetRenderTargetData`,
-    /// Present) keeps reading `metal_color_handle`, which the pass resolves
-    /// into.
-    metal_msaa_handle: MetalHandle<MTLTextureKind>,
-    /// sRGB twin view of `metal_msaa_handle`, or null.
-    ///
-    /// Created and retired with the companion. A multisampled pass encoding
-    /// on write attaches it and resolves into `metal_color_srgb_handle`,
-    /// which Metal requires to carry the same pixel format.
-    metal_msaa_srgb_handle: MetalHandle<MTLTextureKind>,
     /// Multisample type, quality and resolved sample count of a standalone surface.
     ///
     /// [`SurfaceMultiSample::NONE`] for every texture-backed or system-memory
@@ -1374,12 +1137,10 @@ struct SurfaceInner {
     /// every other surface, including the offscreen plain that owns a private
     /// backing texture no second shell can reach.
     state_owner_texture: *mut Direct3DTexture9,
-    /// A standalone target's core texture, on a device of the core runtime (DXMTRS C4b-3d1).
+    /// A standalone target's core texture.
     ///
     /// The store's id for a `CreateRenderTarget` or `CreateDepthStencilSurface` surface, forgotten
-    /// at this surface's finalize; `None` for every other surface and on a device of mtld3d's
-    /// runtime.
-    #[cfg(feature = "core-runtime")]
+    /// at this surface's finalize; `None` for every other surface.
     core_texture: Option<mtld3d_core::ids::TextureId>,
 }
 
@@ -1466,20 +1227,10 @@ impl SurfaceInner {
         D3D_OK
     }
 
-    /// Whether the surface's device runs the core runtime (`runtime.mode = core`).
-    #[cfg(feature = "core-runtime")]
-    fn on_core_device(&self) -> bool {
-        // SAFETY: null, or the surface's live owning device, which outlives it.
-        unsafe { self.device_inner.as_ref() }.is_some_and(DeviceInner::is_core)
-    }
-
-    /// A lockable render target's core texture, on a device of the core runtime (DXMTRS C4c-3b).
+    /// A lockable render target's core texture.
     ///
     /// A surface with a core texture and a CPU staging that is no depth-stencil:
-    /// `CreateRenderTarget` with `Lockable == TRUE`. Its lock, `GetDC` and `ReleaseDC` test it
-    /// where mtld3d tests `is_lockable_render_target`, which a core device's target, with no Metal
-    /// handle, never answers. `None` for every other surface and on mtld3d's runtime.
-    #[cfg(feature = "core-runtime")]
+    /// `CreateRenderTarget` with `Lockable == TRUE`. Its lock, `GetDC` and `ReleaseDC` test it.
     const fn core_lockable_render_target(&self) -> Option<mtld3d_core::ids::TextureId> {
         if self.system_memory.is_some() && self.standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0 {
             self.core_texture
@@ -1490,48 +1241,6 @@ impl SurfaceInner {
 }
 
 impl SurfaceInner {
-    /// Live Metal color handle.
-    ///
-    /// The device's current backbuffer for an implicit `Backbuffer` surface,
-    /// else the stored snapshot. Implicit surfaces never observe a stale handle
-    /// after a resize/`Reset` recreates the backbuffer.
-    fn live_color_handle(&self) -> MetalHandle<MTLTextureKind> {
-        if self.implicit_kind == ImplicitKind::Backbuffer && !self.device_inner.is_null() {
-            // SAFETY: `device_inner` is the live owning device; it outlives its
-            // child surfaces per D3D9 lifetime rules.
-            unsafe { (*self.device_inner).backbuffer_handle() }
-        } else {
-            self.metal_color_handle
-        }
-    }
-
-    /// Live multisampled colour companion.
-    ///
-    /// The device's current one for the implicit back buffer, else the stored
-    /// snapshot. Null for every surface that is not multisampled.
-    fn live_msaa_handle(&self) -> MetalHandle<MTLTextureKind> {
-        if self.implicit_kind == ImplicitKind::Backbuffer && !self.device_inner.is_null() {
-            // SAFETY: `device_inner` is the live owning device; it outlives its
-            // child surfaces per D3D9 lifetime rules.
-            unsafe { (*self.device_inner).backbuffer_msaa_handle() }
-        } else {
-            self.metal_msaa_handle
-        }
-    }
-
-    /// Live sRGB twin view of the multisampled colour companion.
-    ///
-    /// Resolved the same way `live_msaa_handle` is, and null wherever that is.
-    fn live_msaa_srgb_handle(&self) -> MetalHandle<MTLTextureKind> {
-        if self.implicit_kind == ImplicitKind::Backbuffer && !self.device_inner.is_null() {
-            // SAFETY: `device_inner` is the live owning device; it outlives its
-            // child surfaces per D3D9 lifetime rules.
-            unsafe { (*self.device_inner).backbuffer_msaa_srgb_handle() }
-        } else {
-            self.metal_msaa_srgb_handle
-        }
-    }
-
     /// Live multisample configuration.
     ///
     /// Both implicit surfaces take the swap chain's, which is the only
@@ -1547,19 +1256,6 @@ impl SurfaceInner {
             };
         }
         self.multi_sample
-    }
-
-    /// Live Metal depth handle.
-    ///
-    /// The device's current depth-stencil for an implicit `DepthStencil`
-    /// surface, else the stored snapshot.
-    fn live_depth_handle(&self) -> MetalHandle<MTLTextureKind> {
-        if self.implicit_kind == ImplicitKind::DepthStencil && !self.device_inner.is_null() {
-            // SAFETY: `device_inner` is the live owning device (see above).
-            unsafe { (*self.device_inner).depth_stencil_handle() }
-        } else {
-            self.metal_depth_handle
-        }
     }
 
     /// Live surface width.
@@ -1820,10 +1516,8 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
         !inner.flags.contains(SurfaceFlags::CONTAINER_CACHED),
         "container-cached sub-resource surface finalized outside its container's teardown"
     );
-    // A core device's standalone render target or depth-stencil owns its core texture (DXMTRS
-    // C4b-3d1, C4b-3d2): the store forgets it; the closures already recorded hold their own
-    // reference.
-    #[cfg(feature = "core-runtime")]
+    // A standalone render target or depth-stencil owns its core texture:
+    // the store forgets it; the closures already recorded hold their own reference.
     if let Some(id) = inner.core_texture
         && !inner.device_inner.is_null()
     {
@@ -1831,61 +1525,7 @@ unsafe fn finalize_surface(this: *mut Direct3DSurface9) {
         // a bound one is released by the device's teardown before its core device goes.
         let dev = unsafe { &mut *inner.device_inner };
         dev.clear_core_draw_cache();
-        if let Some(core) = dev.core_mut() {
-            core.forget_texture(id);
-        }
-    }
-    // A standalone colour target owns its Metal colour texture, the
-    // multisampled companion it resolves from, and the sRGB twin view taken
-    // of each. All of them go on the encoder's seq-gated retention queue so a
-    // blit or pass this frame still referencing them finishes first, and the
-    // twin's registration goes with them.
-    if inner.parent_texture.is_null()
-        && !inner.metal_color_handle.is_null()
-        && !inner.device_inner.is_null()
-    {
-        let retired = crate::encoder::RetiredColorTarget {
-            base: inner.metal_color_handle,
-            srgb: inner.metal_color_srgb_handle,
-            msaa: inner.metal_msaa_handle,
-            msaa_srgb: inner.metal_msaa_srgb_handle,
-        };
-        // SAFETY: a standalone surface forwards a device reference for its
-        // public lifetime, so the device outlives this finalize.
-        unsafe { &*inner.device_inner }.deregister_standalone_surface(
-            inner.standalone_width,
-            inner.standalone_height,
-            inner.standalone_format,
-            u32::from(inner.multi_sample.sample_count),
-            mtld3d_core::format::StandaloneSurfaceKind::ColorTarget,
-            inner.standalone_render_scale,
-        );
-        // SAFETY: a standalone surface forwards a device reference for its
-        // public lifetime, so the device outlives this finalize.
-        unsafe { &mut *inner.device_inner }.retire_color_target(retired);
-    }
-    // A standalone depth-stencil target owns its Metal depth texture the same
-    // way, and retires it the same way. The implicit auto depth-stencil
-    // surface leaves the field null and resolves the device's handle live, so
-    // only a `CreateDepthStencilSurface` surface reaches this.
-    if inner.parent_texture.is_null()
-        && !inner.metal_depth_handle.is_null()
-        && !inner.device_inner.is_null()
-    {
-        let depth = inner.metal_depth_handle;
-        // SAFETY: a standalone surface forwards a device reference for its
-        // public lifetime, so the device outlives this finalize.
-        unsafe { &*inner.device_inner }.deregister_standalone_surface(
-            inner.standalone_width,
-            inner.standalone_height,
-            inner.standalone_format,
-            u32::from(inner.multi_sample.sample_count),
-            mtld3d_core::format::StandaloneSurfaceKind::DepthStencil,
-            inner.standalone_render_scale,
-        );
-        // SAFETY: a standalone surface forwards a device reference for its
-        // public lifetime, so the device outlives this finalize.
-        unsafe { &mut *inner.device_inner }.retire_depth_target(depth);
+        dev.core_mut().forget_texture(id);
     }
     // A texture shell has nothing of the texture to give back here. The
     // reference `GetSurfaceLevel` / `GetCubeMapSurface` took on it is dropped by
@@ -2045,26 +1685,7 @@ pub unsafe fn detach_implicit_surface(held: &HeldSurface) {
     // SAFETY: `hold_implicit_surface` checked the device pointer, and the
     // device is live during its `Reset`.
     let device = unsafe { &*inner.device_inner };
-    let standalone_kind = if kind == ImplicitKind::Backbuffer {
-        inner.metal_color_handle = device.backbuffer_handle();
-        inner.metal_color_srgb_handle = device.backbuffer_srgb_handle();
-        inner.metal_msaa_handle = device.backbuffer_msaa_handle();
-        inner.metal_msaa_srgb_handle = device.backbuffer_msaa_srgb_handle();
-        mtld3d_core::format::StandaloneSurfaceKind::ColorTarget
-    } else {
-        inner.metal_depth_handle = device.depth_stencil_handle();
-        mtld3d_core::format::StandaloneSurfaceKind::DepthStencil
-    };
-    // On a core device the depth-stencil takes the auto depth-stencil's core texture over under
-    // its id, which its final release forgets; the back buffer takes nothing: the core makes its
-    // back buffer again in place, so the held one is no target of the core (ruling R6c-4). Neither
-    // is charged, as a core device counts no standalone surface (DXMTRS C4b3d1-7, C4c-6c).
-    #[cfg(feature = "core-runtime")]
-    let core = device.is_core();
-    #[cfg(not(feature = "core-runtime"))]
-    let core = false;
-    #[cfg(feature = "core-runtime")]
-    if core && kind == ImplicitKind::DepthStencil {
+    if kind == ImplicitKind::DepthStencil {
         inner.core_texture = device.core_auto_depth();
     }
     inner.standalone_width = held.width;
@@ -2073,16 +1694,6 @@ pub unsafe fn detach_implicit_surface(held: &HeldSurface) {
     inner.standalone_render_scale = held.render_scale;
     inner.standalone_pool = D3DPOOL_DEFAULT;
     inner.multi_sample = held.multi_sample;
-    if !core {
-        device.register_standalone_surface(
-            held.width,
-            held.height,
-            held.format,
-            u32::from(held.multi_sample.sample_count),
-            standalone_kind,
-            held.render_scale,
-        );
-    }
     inner.container = device.device_wrapper() as u64;
     inner.implicit_kind = ImplicitKind::None;
 }
@@ -2639,22 +2250,16 @@ extern "system" fn surface_lock_rect(
     }
     // A standalone colour surface is one of three things, and only two of them
     // have bytes a lock can hand back: a lockable render target
-    // (`CreateRenderTarget` with `Lockable == TRUE`) carries BOTH a renderable
-    // colour handle AND a CPU staging buffer, and the implicit back buffer is
-    // read back on demand. A `Lockable == FALSE` render target has neither.
-    // On a core device none of them has a Metal handle (DXMTRS C4c-3a). The back buffer is read
-    // back through the core; a `CreateRenderTarget` surface has a core texture in the handle's
-    // place: with its staging it locks as a lockable render target, and without it (a
-    // non-lockable or multisampled one) it has no bytes to hand back.
-    #[cfg(feature = "core-runtime")]
-    if obj.is_back_buffer() && obj.inner().on_core_device() {
+    // (`CreateRenderTarget` with `Lockable == TRUE`) carries both a core texture
+    // and a CPU staging buffer, and the implicit back buffer is read back on
+    // demand. A `Lockable == FALSE` or multisampled render target has no bytes
+    // to hand back.
+    if obj.is_back_buffer() {
         return backbuffer_lock_readback(&obj, locked_rect, rect, flags);
     }
-    #[cfg(feature = "core-runtime")]
     if obj.inner().core_lockable_render_target().is_some() {
         return lockable_rt_lock_rect(&obj, locked_rect, rect, flags);
     }
-    #[cfg(feature = "core-runtime")]
     if obj.inner().core_texture.is_some()
         && obj.inner().standalone_usage & D3DUSAGE_DEPTHSTENCIL == 0
     {
@@ -2662,27 +2267,6 @@ extern "system" fn surface_lock_rect(
             "IDirect3DSurface9::LockRect on a non-lockable render target → INVALIDCALL"
         );
         return D3DERR_INVALIDCALL;
-    }
-    if !obj.inner().live_color_handle().is_null() {
-        let route = {
-            let inner = obj.inner();
-            classify_color_surface_lock(
-                inner.system_memory.is_some(),
-                inner.implicit_kind == ImplicitKind::Backbuffer,
-            )
-        };
-        return match route {
-            ColorSurfaceLock::Staging => lockable_rt_lock_rect(&obj, locked_rect, rect, flags),
-            ColorSurfaceLock::BackBufferReadback => {
-                backbuffer_lock_readback(&obj, locked_rect, rect, flags)
-            }
-            ColorSurfaceLock::Reject => {
-                mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-                    "IDirect3DSurface9::LockRect on a non-lockable render target → INVALIDCALL"
-                );
-                D3DERR_INVALIDCALL
-            }
-        };
     }
     if obj.inner().system_memory.is_some() {
         return systemmem_lock_rect(&obj, locked_rect, rect);
@@ -2767,19 +2351,11 @@ extern "system" fn surface_unlock_rect(this: *mut c_void) -> i32 {
         // never wrote the staging (it only read the read-back), so uploading it
         // would clobber the rendered pixels with a stale copy — skip the upload.
         let read_only = inner.lock_flags & D3DLOCK_READONLY != 0;
-        // On a core device the colour texture is the target's core texture (DXMTRS C4c-3a).
-        #[cfg(feature = "core-runtime")]
         if inner.flags.contains(SurfaceFlags::MAPPED)
             && !read_only
             && let Some(id) = inner.core_texture
         {
             core_lockable_rt_upload(inner, id);
-        }
-        if inner.flags.contains(SurfaceFlags::MAPPED)
-            && !read_only
-            && !inner.live_color_handle().is_null()
-        {
-            lockable_rt_upload(inner);
         }
         // A system-memory surface (offscreen-plain or a cube-map face shell)
         // tracks the lock/DC state machine: a double-`UnlockRect` returns
@@ -2916,19 +2492,16 @@ fn backbuffer_map_for_write(
 /// Read the back buffer, or `rect` of it, into the page a successful back-buffer lock maps.
 ///
 /// The caller has recorded the lock; on a failure it is the caller that
-/// takes the record back. On a core device the core reads it
-/// (`core_backbuffer_read_into_lock`, DXMTRS C4c-3a).
+/// takes the record back.
 fn backbuffer_read_into_lock(
     inner: &mut SurfaceInner,
     locked_rect: *mut D3DLOCKED_RECT,
     rect: *const c_void,
 ) -> i32 {
-    // Implicit backbuffer surface resolves its extent + Metal handle live from
-    // the device (see `ImplicitKind`) — read before borrowing `device_inner`
-    // below so the two derefs of the raw device pointer never overlap.
+    // Implicit backbuffer surface resolves its extent live from the device
+    // (see `ImplicitKind`).
     let full_w = inner.live_width();
     let full_h = inner.live_height();
-    let tex_handle = inner.live_color_handle();
     let (x, y, w, h) = parse_surface_rect(rect, full_w, full_h);
     if w == 0 || h == 0 {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
@@ -2961,80 +2534,16 @@ fn backbuffer_read_into_lock(
             "back-buffer LockRect: the read-back page would be empty → INVALIDCALL");
         return D3DERR_INVALIDCALL;
     }
-    #[cfg(feature = "core-runtime")]
-    if inner.on_core_device() {
-        let rect = mtld3d_core::dirty_rect::DirtyRect { x, y, w, h };
-        return core_backbuffer_read_into_lock(inner, locked_rect, rect, bytes_per_row, bytes);
-    }
-    let mut page = PageBox::new_uninit(bytes);
-
-    if inner.device_inner.is_null() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer LockRect: the surface has no owning device → INVALIDCALL");
-        return D3DERR_INVALIDCALL;
-    }
-    // SAFETY: `inner.device_inner` was stamped at `Self::new` from a
-    // live `DeviceInner`; non-null here, and the device outlives all
-    // its child resources per D3D9 lifetime rules.
-    let device_inner = unsafe { &mut *inner.device_inner };
-    if let Err(hr) = device_inner.flush_current_frame_blocking() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer LockRect: flushing the frame before the read-back failed → {hr:#x}");
-        return hr;
-    }
-
-    let mut params = BlitTextureToBufferParams {
-        planes: mtld3d_shared::mtl::ReadbackPlanes::Color,
-        stencil_bytes_per_row: 0,
-        stencil_offset: 0,
-        record_handle: device_inner.record_handle(),
-        device_handle: device_inner.device_handle(),
-        tex_handle,
-        dst_ptr: page.as_mut_ptr() as u64,
-        dst_len: page.len() as u64,
-        mip_level: 0,
-        origin_x: x,
-        origin_y: y,
-        width: w,
-        height: h,
-        bytes_per_row,
-        slice: 0,
-        // `x/y/w/h` are a sub-rect of the full logical surface, which is what
-        // `parse_surface_rect` clamped them against. The unix side resolves the
-        // whole frame to this size before cropping, so the sub-rect lands where
-        // the game expects and `bytes_per_row` above stays logical.
-        source_width: full_w,
-        source_height: full_h,
-        // BGRA8 back buffer: a block row is a pixel row.
-        block_height: 1,
-    };
-    let status = unix_call(&mut params);
-    if status != 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "backbuffer LockRect: BlitTextureToBuffer failed status={status:#x} → INVALIDCALL"
-        );
-        return D3DERR_INVALIDCALL;
-    }
-
-    let locked = D3DLOCKED_RECT {
-        pitch: bytes_per_row.cast_signed(),
-        bits: page.as_mut_ptr().cast::<c_void>(),
-    };
-    // SAFETY: `locked_rect` is non-null (checked by the caller before
-    // entry) and per the D3D9 ABI points to a writable `D3DLOCKED_RECT`
-    // slot owned by the caller; alignment is not assumed.
-    unsafe { OutPtr::write_opt(locked_rect, locked) };
-    inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
-    D3D_OK
+    let rect = mtld3d_core::dirty_rect::DirtyRect { x, y, w, h };
+    core_backbuffer_read_into_lock(inner, locked_rect, rect, bytes_per_row, bytes)
 }
 
-/// Reads `rect` of a core device's back buffer into the page its lock maps (DXMTRS C4c-3a).
+/// Reads `rect` of the back buffer into the page its lock maps.
 ///
-/// The twin of `backbuffer_read_into_lock`'s read, out structure and page: the rect as Present
-/// would show it now (a multisampled back buffer resolved first) into a zeroed page of `bytes`,
-/// rows `bytes_per_row` apart, which the lock reports and `UnlockRect` drops. `INVALIDCALL`, with
-/// one error line, when the read fails; the caller takes the lock back.
-#[cfg(feature = "core-runtime")]
+/// The rect as Present would show it now (a multisampled back buffer resolved
+/// first) into a zeroed page of `bytes`, rows `bytes_per_row` apart, which the
+/// lock reports and `UnlockRect` drops. `INVALIDCALL`, with one error line,
+/// when the read fails; the caller takes the lock back.
 fn core_backbuffer_read_into_lock(
     inner: &mut SurfaceInner,
     locked_rect: *mut D3DLOCKED_RECT,
@@ -3055,7 +2564,7 @@ fn core_backbuffer_read_into_lock(
     let mut page = PageBox::new_zeroed(bytes);
     let read = dev
         .core_mut()
-        .is_some_and(|core| core.read_presented(rect, page.as_mut_slice(), bytes_per_row as usize));
+        .read_presented(rect, page.as_mut_slice(), bytes_per_row as usize);
     if let Err(hr) = dev.encoder_status() {
         return hr;
     }
@@ -3080,99 +2589,37 @@ fn core_backbuffer_read_into_lock(
 ///
 /// The page is held on `inner.readback`, returning `(width, height,
 /// bytes_per_row)` or `None` on failure. Used by `GetDC` on the backbuffer and
-/// by a writable `LockRect` of a lockable one (the read-only `LockRect`
-/// portrait path has its own sub-rect variant above). The page is
-/// what the DC's DIB wraps, so it is sized and written at the surface format's
-/// host-visible pitch, which is the stride GDI derives for a DIB of the same
-/// width and bit count. On a core device the core reads it as Present would
-/// show it (DXMTRS C4c-3b).
+/// by a writable `LockRect` of a lockable one. The page is what the DC's DIB
+/// wraps, so it is sized and written at the surface format's host-visible pitch,
+/// which is the stride GDI derives for a DIB of the same width and bit count.
 fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)> {
     if inner.device_inner.is_null() {
         mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
             "back-buffer GetDC: the surface has no owning device → INVALIDCALL");
         return None;
     }
-    #[cfg(feature = "core-runtime")]
-    if inner.on_core_device() {
-        let (w, h) = (inner.live_width(), inner.live_height());
-        // A core device's back buffer is BGRA8, four bytes a texel; zeroed, since the read
-        // writes the page through a slice.
-        let bytes_per_row = mtld3d_core::format::linear_row_pitch(w, 4);
-        // SAFETY: the surface's live owning device (non-null, checked above), which outlives it
-        // and is a different allocation from the page.
-        let dev = unsafe { &mut *inner.device_inner };
-        if dev.encoder_status().is_err() {
-            return None;
-        }
-        let mut page = PageBox::new_zeroed((bytes_per_row as usize).saturating_mul(h as usize));
-        let whole = mtld3d_core::dirty_rect::DirtyRect::full(w, h);
-        let read = dev.core_mut().is_some_and(|core| {
-            core.read_presented(whole, page.as_mut_slice(), bytes_per_row as usize)
-        });
-        if dev.encoder_status().is_err() {
-            return None;
-        }
-        if !read {
-            log::error!(target: LOG_TARGET,
-                "d3d9 core: a CPU read of the back buffer did not read {w}x{h} → INVALIDCALL"
-            );
-            return None;
-        }
-        inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
-        inner.readback_dims = (w, h);
-        return Some((w, h, bytes_per_row));
-    }
-    let w = inner.live_width();
-    let h = inner.live_height();
-    let tex_handle = inner.live_color_handle();
-    let format = inner.live_format();
-    let bytes_per_pixel =
-        mtld3d_core::format::map_d3d_format(format).map_or(0, |mapping| mapping.bytes_per_pixel());
-    let bytes_per_row = mtld3d_core::format::linear_row_pitch(w, bytes_per_pixel);
-    let bytes = (bytes_per_row as usize).saturating_mul(h as usize);
-    if tex_handle.is_null() || bytes == 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer GetDC: nothing to read back ({w}x{h}, format {format:#x}, \
-             texture {:#x}) → INVALIDCALL", tex_handle.raw());
+    let (w, h) = (inner.live_width(), inner.live_height());
+    // The back buffer is BGRA8, four bytes a texel; zeroed, since the read
+    // writes the page through a slice.
+    let bytes_per_row = mtld3d_core::format::linear_row_pitch(w, 4);
+    // SAFETY: the surface's live owning device (non-null, checked above), which outlives it
+    // and is a different allocation from the page.
+    let dev = unsafe { &mut *inner.device_inner };
+    if dev.encoder_status().is_err() {
         return None;
     }
-    let mut page = PageBox::new_uninit(bytes);
-    // SAFETY: `device_inner` is non-null (checked) and points to the live owning
-    // device, which outlives its child surfaces per D3D9 lifetime rules.
-    let device_inner = unsafe { &mut *inner.device_inner };
-    if let Err(hr) = device_inner.flush_current_frame_blocking() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer GetDC: flushing the frame failed ({hr:#x}) → INVALIDCALL");
+    let mut page = PageBox::new_zeroed((bytes_per_row as usize).saturating_mul(h as usize));
+    let whole = mtld3d_core::dirty_rect::DirtyRect::full(w, h);
+    let read = dev
+        .core_mut()
+        .read_presented(whole, page.as_mut_slice(), bytes_per_row as usize);
+    if dev.encoder_status().is_err() {
         return None;
     }
-    let mut params = BlitTextureToBufferParams {
-        planes: mtld3d_shared::mtl::ReadbackPlanes::Color,
-        stencil_bytes_per_row: 0,
-        stencil_offset: 0,
-        record_handle: device_inner.record_handle(),
-        device_handle: device_inner.device_handle(),
-        tex_handle,
-        dst_ptr: page.as_mut_ptr() as u64,
-        dst_len: page.len() as u64,
-        mip_level: 0,
-        origin_x: 0,
-        origin_y: 0,
-        width: w,
-        height: h,
-        bytes_per_row,
-        slice: 0,
-        // Whole-surface read at its logical size; a scaled back buffer's
-        // texture is smaller and gets resolved up to this first, so the DIB
-        // this seeds is the size `GetDC` promised.
-        source_width: w,
-        source_height: h,
-        // BGRA8 back buffer: a block row is a pixel row.
-        block_height: 1,
-    };
-    let status = unix_call(&mut params);
-    if status != 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer GetDC: BlitTextureToBuffer failed status={status:#x} → INVALIDCALL");
+    if !read {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: a CPU read of the back buffer did not read {w}x{h} → INVALIDCALL"
+        );
         return None;
     }
     inner.readback = Some(HeldPages::new(page, PageHolder::Surface));
@@ -3182,21 +2629,8 @@ fn readback_full_backbuffer(inner: &mut SurfaceInner) -> Option<(u32, u32, u32)>
 
 /// Push the back buffer's whole-surface snapshot page back into its colour texture.
 ///
-/// The write half of [`readback_full_backbuffer`]. The DIB `GetDC` handed out
-/// and the pointer a writable `LockRect` handed out both point into that page,
-/// not the back buffer itself, so what was drawn or written lives only there
-/// until it is copied back. The copy rides the frame's leading blit pass, so
-/// it lands before the next draw (`GetDC` and the lock read the back buffer
-/// back, which flushed everything before them).
-///
-/// A `render.scale` below 100% rasterizes the back buffer into a texture
-/// smaller than the extent the DIB was handed out at, so the page cannot be
-/// copied in as it stands. It goes through a scratch texture at its own extent
-/// and a linear-filtered quad instead, the downscale counterpart of the
-/// `MetalFX` resolve that seeded the page at `GetDC`.
-///
-/// On a core device the core writes the page into the back buffer in application order, over
-/// what was drawn before (DXMTRS C4c-3b).
+/// The write half of [`readback_full_backbuffer`]. Writes the page into the
+/// back buffer in application order, over what was drawn before.
 fn backbuffer_page_upload(inner: &mut SurfaceInner) {
     let (width, height) = (inner.live_width(), inner.live_height());
     if inner.readback_dims != (width, height) {
@@ -3208,96 +2642,27 @@ fn backbuffer_page_upload(inner: &mut SurfaceInner) {
         );
         return;
     }
-    #[cfg(feature = "core-runtime")]
-    if inner.on_core_device() {
-        // The page `readback_full_backbuffer`'s core arm read: BGRA8 rows, four bytes a texel.
-        let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, 4) as usize;
-        // SAFETY: null, or the surface's live owning device, which outlives it and is a different
-        // allocation from the page.
-        let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
-            return;
-        };
-        if dev.latched_encoder_status().is_err() {
-            return;
-        }
-        let whole = mtld3d_core::dirty_rect::DirtyRect::full(width, height);
-        let written = dev
-            .core_mut()
-            .zip(inner.readback.as_ref())
-            .is_some_and(|(core, page)| {
-                core.write_presented(whole, page.as_slice(), bytes_per_row)
-            });
-        if !written {
-            log::error!(target: LOG_TARGET,
-                "d3d9 core: a CPU write-back of the back buffer did not write {width}x{height} \
-                 (a page held: {}); it keeps its texels",
-                inner.readback.is_some()
-            );
-        }
-        return;
-    }
-    let color_handle = inner.live_color_handle().raw();
-    let live_format = inner.live_format();
-    let Some(mapping) = mtld3d_core::format::map_d3d_format(live_format) else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer write-back: format {live_format:#x} has no mapping; the page is not \
-             written back");
+    let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, 4) as usize;
+    // SAFETY: null, or the surface's live owning device, which outlives it and is a different
+    // allocation from the page.
+    let Some(dev) = (unsafe { inner.device_inner.as_mut() }) else {
         return;
     };
-    let format = mapping.metal_pixel_format();
-    let bpp = mapping.bytes_per_pixel();
-    if bpp == 0 || width == 0 || height == 0 || color_handle == 0 || inner.device_inner.is_null() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer write-back: nothing to write back into ({width}x{height}, {bpp} bytes \
-             per pixel, texture {color_handle:#x}); the page is not written back");
+    if dev.latched_encoder_status().is_err() {
         return;
     }
-    // SAFETY: `device_inner` is non-null (checked above) and points to the live
-    // owning device, which outlives its child surfaces.
-    let scale = unsafe { (*inner.device_inner).scale_for_created_target(width, height, true) };
-    let needed = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(bpp as usize);
-    let Some(page) = inner.readback.as_ref() else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer write-back: the snapshot page is gone; nothing is written back");
-        return;
-    };
-    if page.len() < needed {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "back-buffer write-back: the snapshot page holds {} bytes, {needed} needed; the \
-             page is not written back", page.len());
-        return;
+    let whole = mtld3d_core::dirty_rect::DirtyRect::full(width, height);
+    let written = inner.readback.as_ref().is_some_and(|page| {
+        dev.core_mut()
+            .write_presented(whole, page.as_slice(), bytes_per_row)
+    });
+    if !written {
+        log::error!(target: LOG_TARGET,
+            "d3d9 core: a CPU write-back of the back buffer did not write {width}x{height} \
+             (a page held: {}); it keeps its texels",
+            inner.readback.is_some()
+        );
     }
-    // Capture into frame-owned bytes before the caller can drop the page.
-    // SAFETY: `inner.device_inner` is non-null (checked above) and points to
-    // the live owning device, a different allocation from the page above.
-    let device_inner = unsafe { &mut *inner.device_inner };
-    // SAFETY: the captured token moves directly into this frame's upload operation.
-    let bytes = unsafe { device_inner.capture_frame_bytes(&page.as_slice()[..needed]) };
-    // The snapshot page is tightly packed, so a row is exactly `width` pixels.
-    let src_stride = width * bpp;
-    if scale.is_identity() && inner.live_multi_sample().sample_count <= 1 {
-        device_inner.push_control(crate::device::UploadColorOp {
-            color_handle,
-            bytes,
-            width,
-            height,
-            src_stride,
-        });
-        return;
-    }
-    let target = ResampledUpload {
-        color_handle,
-        format,
-        logical: (width, height),
-        texture: (scale.dimension(width), scale.dimension(height)),
-        bytes_per_row: src_stride,
-        msaa: inner.live_msaa_handle(),
-        msaa_srgb: inner.live_msaa_srgb_handle(),
-        sample_count: inner.live_multi_sample().sample_count,
-    };
-    device_inner.push_control(crate::device::UploadResampledOp { target, bytes });
 }
 
 /// `LockRect` for a system-memory offscreen surface.
@@ -3488,192 +2853,22 @@ fn refresh_lockable_rt_staging(inner: &mut SurfaceInner) -> bool {
 /// only part of the requested pixels. On a core device the target's core
 /// texture is read back instead (`core_lockable_rt_read_back`).
 fn lockable_rt_readback_fill(inner: &mut SurfaceInner, bpp: u32) -> bool {
-    #[cfg(feature = "core-runtime")]
-    if let Some(id) = inner.core_texture {
-        return core_lockable_rt_read_back(inner, id, bpp);
-    }
-    let (width, height) = (inner.standalone_width, inner.standalone_height);
-    let tex_handle = inner.live_color_handle();
-    if bpp == 0 || width == 0 || height == 0 || tex_handle.is_null() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT read-back skipped: bpp={bpp} extent={width}x{height} color_handle={:#x} (readback failed)",
-            tex_handle.raw()
-        );
-        return false;
-    }
-    let bytes_per_row = mtld3d_core::format::linear_row_pitch(width, bpp);
-    let needed = (bytes_per_row as usize).saturating_mul(height as usize);
-    if needed == 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT read-back skipped: zero byte size for {width}x{height} at {bpp} bpp (readback failed)"
-        );
-        return false;
-    }
-    let device_ptr = inner.device_inner;
-    if device_ptr.is_null() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT read-back skipped: surface has no owning device (readback failed)"
-        );
-        return false;
-    }
-    // Borrow the staging (the blit destination) and the device separately;
-    // `device_inner` is a distinct allocation from the `system_memory` PageBox,
-    // so the two raw-pointer derefs never overlap.
-    let Some(page) = inner.system_memory.as_mut() else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT read-back skipped: surface carries no CPU staging buffer"
-        );
-        return false;
-    };
-    if page.len() < needed {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT read-back skipped: staging {} bytes, {needed} needed for {width}x{height} at {bpp} bpp (readback failed)",
-            page.len()
-        );
-        return false;
-    }
-    let dst_ptr = page.as_mut_ptr() as u64;
-    let dst_len = page.len() as u64;
-    // SAFETY: `device_ptr` was stamped at `Self::new` from a live `DeviceInner`;
-    // non-null here, and the device outlives all its child resources per D3D9
-    // lifetime rules. It is a different allocation from `page` above.
-    let device_inner = unsafe { &mut *device_ptr };
-    // This blit reads the RT right after the flush. Mark it read-back BEFORE
-    // the flush so the store-action rules treat it as live and never discard
-    // its colour store.
-    device_inner.push_control(crate::device::NoteColorReadOp { src: tex_handle });
-    if device_inner.flush_current_frame_blocking().is_err() {
-        return false;
-    }
-    let mut params = BlitTextureToBufferParams {
-        planes: mtld3d_shared::mtl::ReadbackPlanes::Color,
-        stencil_bytes_per_row: 0,
-        stencil_offset: 0,
-        record_handle: device_inner.record_handle(),
-        device_handle: device_inner.device_handle(),
-        tex_handle,
-        dst_ptr,
-        dst_len,
-        mip_level: 0,
-        origin_x: 0,
-        origin_y: 0,
-        width,
-        height,
-        bytes_per_row,
-        slice: 0,
-        // Whole-surface read, in the extent D3D9 reports. A lockable render
-        // target at the back-buffer size is rasterized at `render.scale`, so
-        // the unix side resolves the level up to this extent before the copy;
-        // at any other size the two already agree and the resolve is skipped.
-        source_width: width,
-        source_height: height,
-        // A lockable render target has a non-zero `bpp`, so its format is
-        // uncompressed and a block row is a pixel row.
-        block_height: 1,
-    };
-    let status = unix_call(&mut params);
-    if status != 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT LockRect read-back: BlitTextureToBuffer failed status={status:#x} (readback failed)"
-        );
-        return false;
-    }
-    true
+    inner
+        .core_texture
+        .is_some_and(|id| core_lockable_rt_read_back(inner, id, bpp))
 }
 
-/// `UnlockRect` and `ReleaseDC` upload for a lockable standalone render target.
-///
-/// Push the CPU staging buffer up to the renderable colour `MTLTexture` so a
-/// subsequent `StretchRect` / sample observes the just-written pixels. The
-/// staging rows are *copied* into the frame's capture at the staging's own row
-/// pitch, so the surface's `PageBox` is never aliased across the API/encoder
-/// boundary.
-///
-/// The write goes out as a whole-surface colour region update, the op an
-/// `UpdateSurface` into a render target sends, so it lands in application
-/// order: after a draw earlier in the frame and under a draw after it, which a
-/// `D3DLOCK_DISCARD` lock, reading nothing back first, does not otherwise
-/// separate. The staging is laid out at the extent D3D9 reports and the colour
-/// texture at `render.scale` of it; the region update copies the rows as they
-/// are at the identity and resamples them through a scratch of the surface's
-/// own otherwise.
-fn lockable_rt_upload(inner: &mut SurfaceInner) {
-    let Some(fmt) = mtld3d_core::format::map_d3d_format(inner.standalone_format) else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT staging upload skipped: unmapped surface format {:#x} (colour texture left as-is)",
-            inner.standalone_format
-        );
-        return;
-    };
-    let bpp = fmt.bytes_per_pixel();
-    let (width, height) = (inner.standalone_width, inner.standalone_height);
-    let color_handle = inner.live_color_handle().raw();
-    if bpp == 0 || width == 0 || height == 0 || color_handle == 0 {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT staging upload skipped: bpp={bpp} extent={width}x{height} color_handle={color_handle:#x} (colour texture left as-is)"
-        );
-        return;
-    }
-    let Some(page) = inner.system_memory.as_ref() else {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT staging upload skipped: surface carries no CPU staging buffer"
-        );
-        return;
-    };
-    let pitch = mtld3d_core::format::linear_row_pitch(width, bpp);
-    let needed = (pitch as usize).saturating_mul(height as usize);
-    if page.len() < needed {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT staging upload skipped: staging {} bytes, {needed} needed for {width}x{height} at {bpp} bpp (colour texture left as-is)",
-            page.len()
-        );
-        return;
-    }
-    // Capture into the frame arena before the application can rewrite staging.
-    if inner.device_inner.is_null() {
-        mtld3d_shared::log_once_warn!(target: crate::LOG_TARGET,
-            "lockable RT staging upload skipped: surface has no owning device (colour texture left as-is)"
-        );
-        return;
-    }
-    let scale = inner.live_render_scale();
-    // SAFETY: `inner.device_inner` was stamped at `Self::new` from a live
-    // `DeviceInner`; non-null here, and the device outlives all its child
-    // resources per D3D9 lifetime rules. It is a different allocation from the
-    // surface, so the borrows below never overlap.
-    let device_inner = unsafe { &mut *inner.device_inner };
-    // SAFETY: the captured token moves directly into this frame's upload operation.
-    let bytes = unsafe { device_inner.capture_frame_bytes(&page.as_slice()[..needed]) };
-    // A lockable render target is never multisampled (`CreateRenderTarget`
-    // refuses the pair), so the region update has no companion to resolve.
-    device_inner.push_control(crate::device::UpdateColorRegionOp {
-        kind: StretchKind::Backbuffer(inner.live_color_handle()),
-        target: ColorRegionUpdate {
-            level: 0,
-            format: fmt.metal_pixel_format(),
-            origin: (0, 0),
-            extent: (width, height),
-            logical: (width, height),
-            texture: TargetExtent::whole(scale, (width, height)).texture(),
-            scale,
-            bytes_per_row: pitch,
-        },
-        bytes,
-    });
-}
-
-/// Reads a core device's lockable render target into its staging (DXMTRS C4c-3a).
+/// Reads a lockable render target into its staging.
 ///
 /// The whole core texture `id`, `bpp` bytes a texel, at the staging's pitch, through the core's
-/// read-back (`GetRenderTargetData`'s), which waits for the passes that wrote it. False, with one
-/// error line, when the surface has no core device or no staging, or the read fails.
-#[cfg(feature = "core-runtime")]
+/// read-back, which waits for the passes that wrote it. False, with one error line, when the
+/// surface has no device or no staging, or the read fails.
 fn core_lockable_rt_read_back(
     inner: &mut SurfaceInner,
     id: mtld3d_core::ids::TextureId,
     bpp: u32,
 ) -> bool {
-    let target = d3d9_rt::device::TargetRef::Texture {
+    let target = crate::rt::device::TargetRef::Texture {
         id,
         level: 0,
         face: None,
@@ -3688,12 +2883,10 @@ fn core_lockable_rt_read_back(
         return false;
     }
     let (width, height) = (inner.standalone_width, inner.standalone_height);
-    let read = dev
-        .core_mut()
-        .zip(inner.system_memory.as_mut())
-        .is_some_and(|(core, page)| {
-            core.read_back_logical(target, width, height, page.as_mut_slice(), pitch)
-        });
+    let read = inner.system_memory.as_mut().is_some_and(|page| {
+        dev.core_mut()
+            .read_back_logical(target, width, height, page.as_mut_slice(), pitch)
+    });
     if dev.encoder_status().is_err() {
         return false;
     }
@@ -3706,19 +2899,17 @@ fn core_lockable_rt_read_back(
     read
 }
 
-/// Uploads a core device's lockable render target's staging to its core texture (DXMTRS C4c-3a).
+/// Uploads a lockable render target's staging to its core texture.
 ///
 /// The whole surface, at the staging's pitch, into core texture `id` at record time: a draw
-/// recorded before keeps the old texels and one recorded after sees the write, the order
-/// `lockable_rt_upload`'s region update keeps. A failed upload logs one error line and leaves the
-/// texture as it was.
-#[cfg(feature = "core-runtime")]
+/// recorded before keeps the old texels and one recorded after sees the write. A failed upload
+/// logs one error line and leaves the texture as it was.
 fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId) {
     let bpp = mtld3d_core::format::map_d3d_format(inner.standalone_format)
         .map_or(0, |mapping| mapping.bytes_per_pixel());
     let (width, height) = (inner.standalone_width, inner.standalone_height);
     let pitch = mtld3d_core::format::linear_row_pitch(width, bpp);
-    let target = d3d9_rt::device::TargetRef::Texture {
+    let target = crate::rt::device::TargetRef::Texture {
         id,
         level: 0,
         face: None,
@@ -3732,18 +2923,15 @@ fn core_lockable_rt_upload(inner: &SurfaceInner, id: mtld3d_core::ids::TextureId
     if dev.latched_encoder_status().is_err() {
         return;
     }
-    let uploaded = dev
-        .core_mut()
-        .zip(inner.system_memory.as_ref())
-        .is_some_and(|(core, page)| {
-            core.write_target_logical(
-                target,
-                (width, height),
-                whole,
-                page.as_slice(),
-                pitch as usize,
-            )
-        });
+    let uploaded = inner.system_memory.as_ref().is_some_and(|page| {
+        dev.core_mut().write_target_logical(
+            target,
+            (width, height),
+            whole,
+            page.as_slice(),
+            pitch as usize,
+        )
+    });
     if !uploaded {
         log::error!(target: LOG_TARGET,
             "d3d9 core: a CPU write-back of a lockable render target did not upload texture {:#x}; it keeps its texels",
@@ -3883,20 +3071,6 @@ impl SurfaceInner {
                 != 0
     }
 
-    /// True for a lockable standalone render target.
-    ///
-    /// `CreateRenderTarget` with `Lockable == TRUE`: a standalone colour
-    /// surface that also carries CPU staging, so its pixels live in two
-    /// places. Every CPU read of it has to refresh the staging from the
-    /// colour texture first and every CPU write has to be pushed back.
-    /// Mirrors the dispatch in [`surface_lock_rect`]: the implicit backbuffer
-    /// keeps no staging, so it never lands here.
-    fn is_lockable_render_target(&self) -> bool {
-        self.parent_texture.is_null()
-            && self.system_memory.is_some()
-            && !self.live_color_handle().is_null()
-    }
-
     /// Resolve the CPU pixel store this surface exposes through `GetDC`.
     ///
     /// `None` for a surface kind with no host-readable pixels (a GPU-only
@@ -4023,28 +3197,6 @@ fn refill_dc_texture_level(inner: &SurfaceInner) -> bool {
     texture.prepare_subresource_for_dc(face, inner.mip_level as usize)
 }
 
-/// Hold a texture level's staging for as long as a device context maps it.
-///
-/// The DIB aliases the level's staging pages directly and `ReleaseDC` keeps
-/// what GDI drew in them, so an upload that retires while the DC is open must
-/// not release the level: the DIB would alias a page nothing owns and the
-/// drawing would reach the GPU nowhere. It pairs with
-/// [`refill_dc_texture_level`] and skips the level classes that never release
-/// their staging in the first place.
-fn pin_dc_texture_level(inner: &SurfaceInner, open: bool) {
-    if inner.parent_texture.is_null()
-        || inner.flags.contains(SurfaceFlags::OWNS_PARENT_TEXTURE)
-        || inner.cube_face != u32::MAX
-    {
-        return;
-    }
-    // SAFETY: `parent_texture` is non-null (checked above) and points to a live
-    // `Direct3DTexture9` whose refcount keeps it alive for as long as this
-    // surface is live; it is a distinct allocation from the surface inner.
-    let texture = unsafe { (*inner.parent_texture).inner_mut() };
-    texture.set_level_dc_open(inner.mip_level as usize, open);
-}
-
 /// Prepare `inner`'s host pixel store and wrap it in a memory DC and DIB section.
 ///
 /// Refreshes lockable render-target and texture staging when needed, validates the
@@ -4056,13 +3208,7 @@ fn create_dc_on_surface(inner: &mut SurfaceInner) -> Option<GdiDc> {
     // `ColorFill`, a draw or a `StretchRect` into the surface is invisible to
     // the DC, exactly as it would be to a `LockRect` that skipped the same
     // read-back.
-    // On a core device the colour texture is the target's core texture, which
-    // `lockable_rt_readback_fill` reads back (DXMTRS C4c-3b).
-    #[cfg(feature = "core-runtime")]
     if inner.core_lockable_render_target().is_some() && !refresh_lockable_rt_staging(inner) {
-        return None;
-    }
-    if inner.is_lockable_render_target() && !refresh_lockable_rt_staging(inner) {
         return None;
     }
     if !refill_dc_texture_level(inner) {
@@ -4193,9 +3339,6 @@ extern "system" fn surface_get_dc(this: *mut c_void, hdc: *mut *mut c_void) -> i
         return D3DERR_INVALIDCALL;
     };
 
-    // The DC now maps the level, so nothing may release the staging under it
-    // until `ReleaseDC` drops the pin.
-    pin_dc_texture_level(inner, true);
     // SAFETY: `dc_lock_ptr` returns the live resource-wide state; the prior
     // immutable borrow above ended, so this exclusive deref does not alias it.
     let dc_lock = unsafe { &mut *inner.dc_lock_ptr() };
@@ -4277,13 +3420,8 @@ extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i3
     // GDI drew is in the staging alone: push it to the colour texture the way
     // `UnlockRect` does, or the next read-back overwrites it with the pixels
     // the GPU still holds.
-    // On a core device the colour texture is the target's core texture (DXMTRS C4c-3b).
-    #[cfg(feature = "core-runtime")]
     if let Some(id) = inner.core_lockable_render_target() {
         core_lockable_rt_upload(inner, id);
-    }
-    if inner.is_lockable_render_target() {
-        lockable_rt_upload(inner);
     }
     // The back buffer's DC wraps the read-back snapshot page rather than any
     // persistent store, so GDI's drawing exists only there: push it back into
@@ -4296,9 +3434,6 @@ extern "system" fn surface_release_dc(this: *mut c_void, hdc: *mut c_void) -> i3
     // every other surface kind (their `readback` is already None here).
     inner.readback = None;
     inner.readback_dims = (0, 0);
-    // Nothing maps the level any more, so the upload the dirty mark above
-    // schedules may release its staging again once it has carried GDI's rows.
-    pin_dc_texture_level(inner, false);
     // SAFETY: `dc_lock_ptr` returns the live resource-wide state; the prior
     // borrows ended, so this exclusive deref does not alias them.
     let dc_lock = unsafe { &mut *inner.dc_lock_ptr() };

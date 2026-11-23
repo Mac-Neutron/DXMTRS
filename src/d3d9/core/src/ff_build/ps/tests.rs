@@ -1,8 +1,7 @@
-//! The pixel builder against `ff.rs`'s MSL for the same key.
+//! Fixed-function pixel builder tests.
 //!
 //! Every key of `ff_build::tests`'s lists, and a sweep of every op and a set of arguments, is
-//! built, parsed and lowered; the rows, textures, samples and `bump_env` rows the program names
-//! are the ones the MSL text names.
+//! built, parsed, and lowered.
 
 use std::collections::BTreeSet;
 
@@ -10,7 +9,7 @@ use airconv_ir::{
     dxso::{
         Declaration, DxsoProgram, RegKind,
         ir::{InstrFlags, SrcModifier, SrcOperand},
-        lower::{self, range},
+        lower,
         opcode::Opcode,
         parse,
         spec::{VariantFlags, VariantKey},
@@ -25,7 +24,7 @@ use mtld3d_types::{
 
 use super::{WARN_ARGUMENT, WARN_MODIFIER, WARN_OP, pixel};
 use crate::{
-    dxso::{FfPsKey, FfStageFlags, FfStageResult, emit_ps_ff_named},
+    dxso::{FfPsKey, FfStageFlags, FfStageResult},
     ff_build::{
         FfProgram,
         asm::TEMP_LIMIT,
@@ -170,22 +169,6 @@ fn all_srcs(p: &DxsoProgram) -> impl Iterator<Item = &SrcOperand> {
     p.instructions.iter().flat_map(|i| &i.srcs)
 }
 
-/// The numbers `text` names as `<prefix><n><suffix>`.
-fn named(text: &str, prefix: &str, suffix: &str) -> BTreeSet<u16> {
-    let mut found = BTreeSet::new();
-    let mut rest = text;
-    while let Some(at) = rest.find(prefix) {
-        rest = &rest[at + prefix.len()..];
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        if rest[digits.len()..].starts_with(suffix)
-            && let Ok(n) = digits.parse()
-        {
-            found.insert(n);
-        }
-    }
-    found
-}
-
 fn mask_bits(mask: u16) -> BTreeSet<u16> {
     (0..16).filter(|i| mask & (1 << i) != 0).collect()
 }
@@ -215,15 +198,9 @@ fn every_synthetic_ps_key_lowers() {
 }
 
 #[test]
-fn ps_reads_the_rows_the_msl_reads() {
-    for (key, variant) in &keys() {
+fn ps_uses_no_relative_constant_reads() {
+    for (key, _) in &keys() {
         let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
-        let direct: BTreeSet<u16> = all_srcs(&p)
-            .filter(|s| s.reg.kind == RegKind::Const && s.reg.index < 16)
-            .map(|s| s.reg.index)
-            .collect();
-        assert_eq!(direct, named(&text, "ps_c[", "]"), "{key:?}");
         assert!(
             all_srcs(&p).all(|s| s.rel_addr.is_none()),
             "{key:?}: no relative read"
@@ -232,13 +209,11 @@ fn ps_reads_the_rows_the_msl_reads() {
 }
 
 #[test]
-fn ps_declares_the_msl_textures() {
+fn ps_declares_and_binds_sampled_textures() {
     for (key, variant) in &keys() {
         let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
         let declared = declared_samplers(&p);
         assert_eq!(declared, mask_bits(key.sampled_stage_mask()), "{key:?}");
-        assert_eq!(declared, named(&text, "[[texture(", ")]]"), "{key:?}");
         let bound: BTreeSet<u16> = lower::ps_bindings(&p, variant)
             .samplers
             .into_keys()
@@ -248,10 +223,9 @@ fn ps_declares_the_msl_textures() {
 }
 
 #[test]
-fn ps_samples_what_the_msl_samples() {
-    for (key, variant) in &keys() {
+fn ps_samples_each_stage_at_most_once() {
+    for (key, _) in &keys() {
         let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
         let sampled: Vec<u16> = p
             .instructions
             .iter()
@@ -260,62 +234,18 @@ fn ps_samples_what_the_msl_samples() {
             .collect();
         let unique: BTreeSet<u16> = sampled.iter().copied().collect();
         assert_eq!(unique.len(), sampled.len(), "{key:?}: each stage once");
-        assert_eq!(unique, named(&text, "float4 t", " = "), "{key:?}");
     }
 }
 
 #[test]
-fn ps_binds_bump_env_when_the_msl_does() {
-    for (key, variant) in &keys() {
+fn ps_guards_each_projected_sample_or_divide() {
+    for (key, _) in &keys() {
         let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
-        let msl = text.contains("bump_env [[buffer(12)]]");
-        let bound = lower::ps_bindings(&p, variant)
-            .ranges
-            .contains(&range::BUMP_ENV);
-        assert_eq!(bound, msl, "{key:?}");
-    }
-}
-
-#[test]
-fn ps_reads_the_bump_rows_the_msl_reads() {
-    for (key, variant) in &keys() {
-        let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
-        let matrices: BTreeSet<u16> = p
-            .instructions
-            .iter()
-            .filter(|i| i.opcode == Opcode::Bem)
-            .filter_map(|i| i.dst.map(|d| 2 * d.reg.index))
-            .collect();
-        let luminance: BTreeSet<u16> = all_srcs(&p)
-            .filter(|s| s.reg.kind == RegKind::Output)
-            .map(|s| s.reg.index)
-            .collect();
-        let msl = named(&text, "bump_env[", "]");
-        let even: BTreeSet<u16> = msl.iter().copied().filter(|r| r % 2 == 0).collect();
-        let odd: BTreeSet<u16> = msl.iter().copied().filter(|r| r % 2 == 1).collect();
-        assert_eq!(matrices, even, "{key:?}: bem matrices");
-        assert_eq!(luminance, odd, "{key:?}: luminance rows");
-    }
-}
-
-#[test]
-fn ps_guards_the_projections_the_msl_guards() {
-    for (key, variant) in &keys() {
-        let (_, p) = built(key);
-        let text = emit_ps_ff_named(key, *variant, "t");
-        let guarded: BTreeSet<u16> = p
+        let guarded = p
             .instructions
             .iter()
             .filter(|i| i.opcode == Opcode::Cmp)
-            .map(|i| i.srcs[2].reg.index - 2)
-            .collect();
-        let msl: BTreeSet<u16> = named(&text, "in.texcoord", ".w != 0.0")
-            .union(&named(&text, "(in.texcoord", ".w != 0.0"))
-            .copied()
-            .collect();
-        assert_eq!(guarded, msl, "{key:?}");
+            .count();
         let projected = p
             .instructions
             .iter()
@@ -324,11 +254,7 @@ fn ps_guards_the_projections_the_msl_guards() {
             .instructions
             .iter()
             .filter(|i| i.srcs.iter().any(|s| s.modifier == SrcModifier::Dw));
-        assert_eq!(
-            projected.count() + divided.count(),
-            guarded.len(),
-            "{key:?}"
-        );
+        assert_eq!(projected.count() + divided.count(), guarded, "{key:?}");
     }
 }
 
