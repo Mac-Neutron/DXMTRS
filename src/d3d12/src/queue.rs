@@ -104,6 +104,19 @@ unsafe extern "system" {
 /// Default and maximum number of in-flight command buffer slots (`kCommandQueueSlots = 64`).
 pub const COMMAND_QUEUE_SLOTS: u32 = 64;
 
+/// Render stage waited on when joining prior fences into a render encoder.
+///
+/// Object/mesh passes (geometry or tessellation) join at `PRE_RASTER`, whereas ordinary vertex
+/// passes join at `VERTEX`.
+#[must_use]
+pub const fn render_join_stage(data: &RenderEncoderData) -> u8 {
+    if data.use_geometry || data.use_tessellation {
+        WMT_RENDER_STAGE_PRE_RASTER
+    } else {
+        WMT_RENDER_STAGE_VERTEX
+    }
+}
+
 /// Clamps `DXMT_D3D12_CMDBUF_SLOTS` to `1..=64`, defaulting to `64` (`SlotsFromEnv`,
 ///
 /// `d3d12_command_queue.cpp:1494-1504`).
@@ -1106,11 +1119,7 @@ impl Queue {
                                 tail = unsafe { (*m_render).cmd_tail };
                             }
                         }
-                        let stage = if data.use_geometry {
-                            WMT_RENDER_STAGE_PRE_RASTER
-                        } else {
-                            WMT_RENDER_STAGE_VERTEX
-                        };
+                        let stage = render_join_stage(data);
                         // SAFETY: `current` heads a valid `RenderEncoderData`.
                         let head =
                             unsafe { &raw mut (*current.cast::<RenderEncoderData>()).cmd_head }

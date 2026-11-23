@@ -248,8 +248,13 @@ pub unsafe fn execute_indirect(
 
     if sig.command_type != D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH && !list.pso_graphics.is_null() {
         // SAFETY: `list.pso_graphics` is a valid `Graphics` pointer when non-null.
-        if unsafe { (*list.pso_graphics).geometry } {
+        let pso = unsafe { &*list.pso_graphics };
+        if pso.geometry {
             crate::err!("ExecuteIndirect: draws with a geometry shader not supported");
+            return;
+        }
+        if pso.tessellation {
+            crate::err!("ExecuteIndirect: draws with a tessellation shader not supported");
             return;
         }
     }

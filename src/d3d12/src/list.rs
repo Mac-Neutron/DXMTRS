@@ -71,6 +71,7 @@ pub enum DrawCallStatus {
     Invalid,
     Valid,
     Geometry,
+    Tessellation,
 }
 
 /// Deferred MSAA resolve recorded inside a render pass (`PendingResolve`,
@@ -129,6 +130,7 @@ pub struct List {
     pub bound_rasterizer: [u32; 7],
     pub bound_vb_slot_mask: u32,
     pub bound_geometry: bool,
+    pub bound_tessellation: bool,
     pub vertex_buffers: [(u64, u32, u32); 32],
     pub ib_cache: [(u64, u64, u64); 4],
     pub ib_cache_next: u8,
@@ -239,6 +241,7 @@ impl List {
             bound_rasterizer: [u32::MAX; 7],
             bound_vb_slot_mask: u32::MAX,
             bound_geometry: false,
+            bound_tessellation: false,
             vertex_buffers: [(0, 0, 0); 32],
             ib_cache: [(0, 0, 0); 4],
             ib_cache_next: 0,

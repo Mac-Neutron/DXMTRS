@@ -16,12 +16,12 @@ use winemetal_sys::{
         MemPtr, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_BUFFER, WMT_BLIT_COMMAND_FILL_BUFFER,
         WMT_BLIT_COMMAND_UPDATE_FENCE, WMT_BLIT_COMMAND_WAIT_FOR_FENCE, WMT_LOAD_ACTION_CLEAR,
         WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW,
-        WMT_RENDER_COMMAND_SET_PSO, WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE,
-        WMTBufferInfo, WMTClearColor, WMTColorAttachmentInfo, WMTDepthAttachmentInfo,
-        WMTRenderPassInfo, WMTRenderPassSampleBufferInfo, WMTSampleBufferAttachmentInfo,
-        WMTStencilAttachmentInfo, WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitFenceOp,
-        WmtcmdBlitFillbuffer, WmtcmdBlitNop, WmtcmdComputeNop, WmtcmdRenderDraw, WmtcmdRenderNop,
-        WmtcmdRenderSetpso,
+        WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX,
+        WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMTBufferInfo, WMTClearColor,
+        WMTColorAttachmentInfo, WMTDepthAttachmentInfo, WMTRenderPassInfo,
+        WMTRenderPassSampleBufferInfo, WMTSampleBufferAttachmentInfo, WMTStencilAttachmentInfo,
+        WmtcmdBase, WmtcmdBlitCopyFromBufferToBuffer, WmtcmdBlitFenceOp, WmtcmdBlitFillbuffer,
+        WmtcmdBlitNop, WmtcmdComputeNop, WmtcmdRenderDraw, WmtcmdRenderNop, WmtcmdRenderSetpso,
     },
 };
 
@@ -29,7 +29,7 @@ use super::{
     Queue,
     merge::{MergePlan, apply_clear, clear_target, same_target},
     order::{FENCE_COUNT, FrameGenOrder, NO_FENCE, OrderState, draws, serial_from_env},
-    slots_from_env,
+    render_join_stage, slots_from_env,
     timestamp::{DONT_SAMPLE, LoneReason, RingSampling, TimestampState},
 };
 use crate::{
@@ -710,4 +710,32 @@ fn framegen_order_joins() {
             (0xB002, WMT_BLIT_COMMAND_UPDATE_FENCE, 2002),
         ]
     );
+}
+
+#[test]
+fn same_target_rejects_tessellation_mismatch() {
+    let mut plain = List::empty_render_pass();
+    let mut tess = List::empty_render_pass();
+    tess.use_tessellation = true;
+
+    assert!(same_target(&plain, &plain));
+    assert!(same_target(&tess, &tess));
+    assert!(!same_target(&plain, &tess));
+    assert!(!same_target(&tess, &plain));
+
+    plain.use_geometry = true;
+    assert!(!same_target(&plain, &tess));
+}
+
+#[test]
+fn render_join_stage_picks_pre_raster_for_tessellation() {
+    let mut data = List::empty_render_pass();
+    assert_eq!(render_join_stage(&data), WMT_RENDER_STAGE_VERTEX);
+
+    data.use_tessellation = true;
+    assert_eq!(render_join_stage(&data), WMT_RENDER_STAGE_PRE_RASTER);
+
+    data.use_tessellation = false;
+    data.use_geometry = true;
+    assert_eq!(render_join_stage(&data), WMT_RENDER_STAGE_PRE_RASTER);
 }

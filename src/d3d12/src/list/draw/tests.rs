@@ -11,11 +11,16 @@ use dxmt_util::{
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::{
-    WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_SET_BLEND_FACTOR, WmtcmdBase, WmtcmdRenderDraw,
-    WmtcmdRenderSetblendcolor,
+    WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
+    WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
+    WmtcmdBase, WmtcmdRenderDraw, WmtcmdRenderDxmtTessellationMeshDraw,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderSetblendcolor,
 };
 
-use super::{draw_instanced, geometry_warp};
+use super::{
+    draw_indexed_instanced, draw_instanced, geometry_warp, patch_control_point_count,
+    pre_draw_with_options,
+};
 use crate::{
     abi::{
         list_state::{
@@ -28,7 +33,7 @@ use crate::{
     com::{IID_ID3D12_GRAPHICS_COMMAND_LIST, release_com},
     encoder::{EncoderType, RenderEncoderData},
     list::{
-        LIST_VTBL, List,
+        DrawCallStatus, LIST_VTBL, List,
         state::{
             close, create_command_list, get_type, ia_set_primitive_topology, om_set_blend_factor,
             om_set_stencil_ref, reset, rs_set_scissor_rects, rs_set_viewports,
@@ -446,4 +451,178 @@ fn draw_primitive_and_strip_as_cpp() {
             "topology {topo}"
         );
     }
+}
+
+#[test]
+fn patch_control_point_count_covers_1_to_32() {
+    for cp in 1..=32 {
+        let topo = topology::PATCHLIST_1 + cp - 1;
+        assert_eq!(patch_control_point_count(topo), Some(cp));
+    }
+    assert_eq!(patch_control_point_count(0), None);
+    assert_eq!(
+        patch_control_point_count(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST),
+        None
+    );
+    assert_eq!(patch_control_point_count(topology::PATCHLIST_1 - 1), None);
+    assert_eq!(patch_control_point_count(topology::PATCHLIST_32 + 1), None);
+}
+
+#[test]
+fn tessellation_draws_emit_tessellation_mesh_commands() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    pso.tessellation = true;
+    pso.threads_per_patch = 4;
+    pso.patch_per_group = 8;
+    {
+        let mut variants = dxmt_util::sync::lock(&pso.tessellation_variants);
+        // SAFETY: fake retained object handle; `crate::tests` fakes `NSObject_retain`/`_release`.
+        variants[0] = unsafe { Obj::adopt(0x7701) };
+        // SAFETY: fake retained object handle.
+        variants[1] = unsafe { Obj::adopt(0x7702) };
+    }
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid test pointers.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `raw_list` is a live `List` with a 4-CP patch list topology.
+    unsafe { ia_set_primitive_topology(raw_list, topology::PATCHLIST_1 + 3) };
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { draw_instanced(raw_list, 40, 2, 0, 0) };
+    // Null index buffer must return early without encoding an indexed draw.
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { draw_indexed_instanced(raw_list, 36, 3, 4, 1, 2) };
+    // SAFETY: `raw_list` is a live `List`; bind a non-zero test index buffer handle.
+    unsafe { (*raw_list.cast::<List>()).index_buffer = 0x8800 };
+    // SAFETY: `raw_list` is a valid recording command list with a bound index buffer.
+    unsafe { draw_indexed_instanced(raw_list, 36, 3, 4, 1, 2) };
+
+    // SAFETY: `alloc` holds the active `RenderEncoderData` in `encoder_current`.
+    let render_ptr = unsafe { (*alloc).encoder_current }.cast::<RenderEncoderData>();
+    // SAFETY: `render_ptr` points to a valid `RenderEncoderData` in the CPU heap.
+    let render_data = unsafe { &*render_ptr };
+    assert!(render_data.use_tessellation);
+    assert!(!render_data.use_geometry);
+
+    let mut found_draw = None;
+    let mut found_indexed = None;
+    let mut cursor = ptr::with_exposed_provenance::<WmtcmdBase>(
+        usize::try_from(render_data.cmd_head.next.ptr).unwrap_or(0),
+    );
+    while !cursor.is_null() {
+        // SAFETY: `cursor` walks the linked render command list allocated in `alloc.cpu_heap`.
+        let header = unsafe { *cursor };
+        if header.r#type == WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW {
+            // SAFETY: `header.r#type` identifies `WmtcmdRenderDxmtTessellationMeshDraw`.
+            let c = unsafe { &*cursor.cast::<WmtcmdRenderDxmtTessellationMeshDraw>() };
+            found_draw = Some((
+                c.instance_count,
+                c.threads_per_patch,
+                c.patch_per_group,
+                c.patch_per_mesh_instance,
+            ));
+        } else if header.r#type == WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED {
+            // SAFETY: `header.r#type` identifies `WmtcmdRenderDxmtTessellationMeshDrawIndexed`.
+            let c = unsafe { &*cursor.cast::<WmtcmdRenderDxmtTessellationMeshDrawIndexed>() };
+            found_indexed = Some((
+                c.instance_count,
+                c.threads_per_patch,
+                c.patch_per_group,
+                c.patch_per_mesh_instance,
+            ));
+        }
+        cursor = ptr::with_exposed_provenance::<WmtcmdBase>(
+            usize::try_from(header.next.ptr).unwrap_or(0),
+        );
+    }
+    // 40 verts / 4 CP = 10 patches; div_ceil(8) = 2 groups.
+    assert_eq!(found_draw, Some((2, 4, 8, 2)));
+    // 36 indices / 4 CP = 9 patches; div_ceil(8) = 2 groups.
+    assert_eq!(found_indexed, Some((3, 4, 8, 2)));
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn tessellation_topology_mismatch_is_rejected_before_encoder_mutation() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut tess_pso = new_test_graphics_pso();
+    tess_pso.tessellation = true;
+    tess_pso.threads_per_patch = 4;
+    tess_pso.patch_per_group = 8;
+    {
+        let mut variants = dxmt_util::sync::lock(&tess_pso.tessellation_variants);
+        // SAFETY: fake retained object handle; `crate::tests` fakes `NSObject_retain`/`_release`.
+        variants[0] = unsafe { Obj::adopt(0x7703) };
+    }
+    let plain_pso = new_test_graphics_pso();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    let tess_ptr: *mut c_void = (&raw mut *tess_pso).cast();
+    // SAFETY: `alloc`, `tess_ptr`, `iid`, and `raw_list` are valid test pointers.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            tess_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+
+    // 1. Tessellation PSO with non-patch topology must be rejected before opening a render pass.
+    // SAFETY: `raw_list` is a live `List`.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+    // SAFETY: `raw_list` is a live `List`.
+    let status_tess = pre_draw_with_options(unsafe { &mut *raw_list.cast::<List>() }, false, false);
+    assert_eq!(status_tess, DrawCallStatus::Invalid);
+    // SAFETY: `alloc` is valid.
+    assert!(unsafe { (*alloc).encoder_current }.is_null());
+
+    // 2. Non-tessellation PSO with patch-list topology must also be rejected up front.
+    // SAFETY: `raw_list` is a live `List`.
+    let orig_pso = unsafe { (*raw_list.cast::<List>()).pso_graphics };
+    // SAFETY: `raw_list` is a live `List`; `plain_pso` outlives this scope.
+    unsafe { (*raw_list.cast::<List>()).pso_graphics = (&raw const *plain_pso).cast() };
+    // SAFETY: `raw_list` is a live `List`.
+    unsafe { ia_set_primitive_topology(raw_list, topology::PATCHLIST_1 + 3) };
+    // SAFETY: `raw_list` is a live `List`.
+    let status_plain =
+        pre_draw_with_options(unsafe { &mut *raw_list.cast::<List>() }, false, false);
+    // Restore `orig_pso` so COM refcounts stay balanced across `List::drop` and `Box::drop`.
+    // SAFETY: `raw_list` is a live `List`.
+    unsafe { (*raw_list.cast::<List>()).pso_graphics = orig_pso };
+    assert_eq!(status_plain, DrawCallStatus::Invalid);
+    // SAFETY: `alloc` is valid.
+    assert!(unsafe { (*alloc).encoder_current }.is_null());
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
 }

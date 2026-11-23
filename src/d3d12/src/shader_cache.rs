@@ -21,10 +21,11 @@ use winemetal_sys::{
     DispatchData_alloc_init, DispatchData_copyBytes, Obj,
     sm50::{
         AIRCONV_VERSION, MtlShaderReflection, SM50_SHADER_COMMON, SM50_SHADER_IA_INPUT_LAYOUT,
-        SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_ROOT_SIGNATURE,
-        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData,
-        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
-        Sm50ShaderRootSignatureData,
+        SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR,
+        SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2, Sm50IaInputElement,
+        Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData, Sm50ShaderIaInputLayoutData,
+        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
     },
 };
 
@@ -50,6 +51,8 @@ pub enum FunctionKind {
     Shader,
     GeometryVertex,
     GeometryMesh,
+    TessellationHull,
+    TessellationDomain,
 }
 
 static REFLECTION_MEM_CACHE: LazyLock<Mutex<FxHashMap<Sha1Digest, MtlShaderReflection>>> =
@@ -272,7 +275,7 @@ pub unsafe fn hash_compile_args(
                 h.update(&d.flags.to_le_bytes());
                 h.update(&d.metal_version.to_le_bytes());
             }
-            SM50_SHADER_ROOT_SIGNATURE => {
+            SM50_SHADER_ROOT_SIGNATURE | SM50_SHADER_ROOT_SIGNATURE2 => {
                 // SAFETY: `node.type` identifies a `Sm50ShaderRootSignatureData` node.
                 let d = unsafe { &*cur.cast::<Sm50ShaderRootSignatureData>() };
                 let length = d.bytecode_length as u64;
@@ -324,6 +327,11 @@ pub unsafe fn hash_compile_args(
                 let d = unsafe { &*cur.cast::<Sm50ShaderPsoGeometryShaderData>() };
                 h.update(&[d.strip_topology]);
             }
+            SM50_SHADER_PSO_TESSELLATOR => {
+                // SAFETY: `node.type` identifies a `Sm50ShaderPsoTessellatorData` node.
+                let d = unsafe { &*cur.cast::<Sm50ShaderPsoTessellatorData>() };
+                h.update(&d.max_potential_tess_factor.to_le_bytes());
+            }
             _ => return None,
         }
         cur = node.next.cast::<Sm50ShaderCompilationArgumentData>();
@@ -331,14 +339,13 @@ pub unsafe fn hash_compile_args(
     Some(h.finalize().0)
 }
 
-/// Computes the 40-byte function cache key (`d3d12_shader_cache.cpp:180-190`).
-#[must_use]
-pub fn function_key_from_digests(
+fn function_key_inner(
     first: &Sha1Digest,
     second: Option<&Sha1Digest>,
     name: &str,
     variant: &Sha1Digest,
     bounds: &str,
+    kind_tag: Option<&[u8]>,
 ) -> [u8; 40] {
     static TAG: LazyLock<Sha1Digest> = LazyLock::new(|| sha1(b"d3d12-function"));
 
@@ -351,6 +358,9 @@ pub fn function_key_from_digests(
 
     let mut ver = Sha1::new();
     ver.update(&*TAG);
+    if let Some(tag) = kind_tag {
+        ver.update(tag);
+    }
     ver.update(name.as_bytes());
     ver.update(variant);
     if !bounds.is_empty() {
@@ -362,6 +372,39 @@ pub fn function_key_from_digests(
     key[..20].copy_from_slice(&shaders_digest);
     key[20..].copy_from_slice(&ver_digest);
     key
+}
+
+/// Computes the 40-byte function cache key (`d3d12_shader_cache.cpp:180-190`).
+#[must_use]
+pub fn function_key_from_digests(
+    first: &Sha1Digest,
+    second: Option<&Sha1Digest>,
+    name: &str,
+    variant: &Sha1Digest,
+    bounds: &str,
+) -> [u8; 40] {
+    function_key_inner(first, second, name, variant, bounds, None)
+}
+
+/// Computes the 40-byte function cache key scoped by [`FunctionKind`].
+///
+/// `Shader`, `GeometryVertex`, and `GeometryMesh` keep the legacy key encoding unchanged, while
+/// `TessellationHull` and `TessellationDomain` include stage tags so both stay distinct.
+#[must_use]
+pub fn function_key_for_kind(
+    kind: FunctionKind,
+    first: &Sha1Digest,
+    second: Option<&Sha1Digest>,
+    name: &str,
+    variant: &Sha1Digest,
+    bounds: &str,
+) -> [u8; 40] {
+    let kind_tag = match kind {
+        FunctionKind::Shader | FunctionKind::GeometryVertex | FunctionKind::GeometryMesh => None,
+        FunctionKind::TessellationHull => Some(b"ts-hull".as_slice()),
+        FunctionKind::TessellationDomain => Some(b"ts-domain".as_slice()),
+    };
+    function_key_inner(first, second, name, variant, bounds, kind_tag)
 }
 
 fn probe_on() -> bool {
@@ -467,7 +510,7 @@ pub unsafe fn compile_function_with_env(
         // SAFETY: caller guarantees `args` is null or a valid argument chain.
         unsafe { hash_compile_args(args) }.map(|variant| {
             let sec_digest = second.as_deref().map(CachedShader::digest);
-            function_key_from_digests(first.digest(), sec_digest, name, &variant, bounds)
+            function_key_for_kind(kind, first.digest(), sec_digest, name, &variant, bounds)
         })
     };
 
@@ -509,6 +552,8 @@ pub unsafe fn compile_function_with_env(
         FunctionKind::Shader => Entry::Shader,
         FunctionKind::GeometryVertex => Entry::GeometryVertex,
         FunctionKind::GeometryMesh => Entry::Geometry,
+        FunctionKind::TessellationHull => Entry::TessellationHull,
+        FunctionKind::TessellationDomain => Entry::TessellationDomain,
     };
     // SAFETY: `s0` and `s1` are live shader handles (`s1` is unused for one shader); the caller
     // guarantees `args`.

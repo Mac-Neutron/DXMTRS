@@ -23,7 +23,8 @@ use winemetal_wire::{
     WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_BUFFER,
     WMT_COMPUTE_COMMAND_SET_PSO, WMT_INDEX_TYPE_U_INT32, WMT_RENDER_COMMAND_DRAW,
     WMT_RENDER_COMMAND_DRAW_INDEXED, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW,
-    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED, WMT_RENDER_COMMAND_NOP,
+    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED, WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
+    WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_NOP,
     WMT_RENDER_COMMAND_SET_BLEND_FACTOR, WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
     WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_MESH_BUFFER,
     WMT_RENDER_COMMAND_SET_OBJECT_BUFFER, WMT_RENDER_COMMAND_SET_PSO,
@@ -34,7 +35,8 @@ use winemetal_wire::{
     WMT_VISIBILITY_RESULT_MODE_DISABLED, WMTScissorRect, WMTSize, WMTViewport, WmtcmdBase,
     WmtcmdComputeDispatch, WmtcmdComputeNop, WmtcmdComputeSetbuffer, WmtcmdComputeSetpso,
     WmtcmdRenderDraw, WmtcmdRenderDrawIndexed, WmtcmdRenderDxmtGeometryDraw,
-    WmtcmdRenderDxmtGeometryDrawIndexed, WmtcmdRenderNop, WmtcmdRenderSetblendcolor,
+    WmtcmdRenderDxmtGeometryDrawIndexed, WmtcmdRenderDxmtTessellationMeshDraw,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderNop, WmtcmdRenderSetblendcolor,
     WmtcmdRenderSetbuffer, WmtcmdRenderSetdepthstencilstate, WmtcmdRenderSetpso,
     WmtcmdRenderSetrasterizerstate, WmtcmdRenderSetscissorrects, WmtcmdRenderSetstencilref,
     WmtcmdRenderSetviewports, WmtcmdRenderSetvisibilitymode,
@@ -167,6 +169,15 @@ const fn geometry_warp(topo: u32) -> (u32, u32) {
         topology::geometry_warp(topo, 0)
     } else {
         (0, 0)
+    }
+}
+
+/// Control-point count (`1..=32`) for `D3D_PRIMITIVE_TOPOLOGY_{1..32}_CONTROL_POINT_PATCHLIST`.
+#[must_use]
+pub const fn patch_control_point_count(topo: u32) -> Option<u32> {
+    match topo {
+        topology::PATCHLIST_1..=topology::PATCHLIST_32 => Some(topo - topology::PATCHLIST_1 + 1),
+        _ => None,
     }
 }
 
@@ -365,6 +376,13 @@ pub fn pre_draw_with_options(
     if list.allocator.is_null() {
         return DrawCallStatus::Invalid;
     }
+    if !list.pso_graphics.is_null() {
+        // SAFETY: `list.pso_graphics` is a valid `Graphics`.
+        let pso_gfx = unsafe { &*list.pso_graphics };
+        if pso_gfx.tessellation != patch_control_point_count(list.primitive_topology).is_some() {
+            return DrawCallStatus::Invalid;
+        }
+    }
     // SAFETY: `list.allocator` is valid while recording.
     let alloc = unsafe { &mut *list.allocator };
     let current = alloc.encoder_current;
@@ -447,6 +465,7 @@ pub fn pre_draw_with_options(
         list.bound_rasterizer = [u32::MAX; 7];
         list.bound_vb_slot_mask = u32::MAX;
         list.bound_geometry = false;
+        list.bound_tessellation = false;
 
         if !alloc.encoder_last.is_null() && !alloc.clears_from.is_null() {
             let folded = alloc.fold_clears(render);
@@ -526,20 +545,30 @@ pub fn pre_draw_with_options(
     // SAFETY: `list.pso_graphics` is a valid `Graphics`.
     let pso_gfx = unsafe { &*list.pso_graphics };
     let geometry = pso_gfx.geometry;
+    let tessellation = pso_gfx.tessellation;
+    let mesh_pipeline = geometry || tessellation;
+    let format = if !indexed {
+        SM50_INDEX_BUFFER_FORMAT_NONE
+    } else if list.index_buffer_format == u32::from(WMT_INDEX_TYPE_U_INT32) {
+        SM50_INDEX_BUFFER_FORMAT_UINT32
+    } else {
+        SM50_INDEX_BUFFER_FORMAT_UINT16
+    };
     let pso_handle = if geometry {
-        let format = if !indexed {
-            SM50_INDEX_BUFFER_FORMAT_NONE
-        } else if list.index_buffer_format == u32::from(WMT_INDEX_TYPE_U_INT32) {
-            SM50_INDEX_BUFFER_FORMAT_UINT32
-        } else {
-            SM50_INDEX_BUFFER_FORMAT_UINT16
-        };
         let handle = pso_gfx.geometry_pipeline(topology::is_strip(list.primitive_topology), format);
         if handle == 0 {
             return DrawCallStatus::Invalid;
         }
         // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).use_geometry = true };
+        handle
+    } else if tessellation {
+        let handle = pso_gfx.tessellation_pipeline(format);
+        if handle == 0 {
+            return DrawCallStatus::Invalid;
+        }
+        // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
+        unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).use_tessellation = true };
         handle
     } else {
         pso_gfx.pso.as_ref().map_or(0, Obj::handle)
@@ -548,12 +577,13 @@ pub fn pre_draw_with_options(
         // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).uav_writes = true };
     }
-    if geometry != list.bound_geometry {
+    if geometry != list.bound_geometry || tessellation != list.bound_tessellation {
         list.bound_vb_slot_mask = u32::MAX;
         list.dirty_state.insert(
             DirtyFlags::VERTEX_BUFFERS | DirtyFlags::ROOT_ARGS | DirtyFlags::STATIC_SAMPLERS,
         );
         list.bound_geometry = geometry;
+        list.bound_tessellation = tessellation;
     }
     if pso_handle != list.bound_pso {
         list.dirty_state.insert(DirtyFlags::PSO);
@@ -570,7 +600,7 @@ pub fn pre_draw_with_options(
             },
         );
         list.bound_pso = pso_handle;
-        if geometry {
+        if mesh_pipeline {
             let buffer = alloc.gpu_heap_buffer.as_ref().map_or(0, Obj::handle);
             encode_render_cmd(
                 alloc,
@@ -641,7 +671,7 @@ pub fn pre_draw_with_options(
         if stride != 0 {
             bind_render_heap_buffer(
                 alloc,
-                geometry,
+                mesh_pipeline,
                 u8::try_from(SM50_BINDING_INDEX_VERTEX_BUFFER).unwrap_or(0),
                 offset as u64,
                 true,
@@ -666,7 +696,7 @@ pub fn pre_draw_with_options(
             };
             bind_render_heap_buffer(
                 alloc,
-                geometry,
+                mesh_pipeline,
                 u8::try_from(SM50_BINDING_INDEX_ROOT_ARGUMENTS).unwrap_or(0),
                 offset,
                 false,
@@ -683,7 +713,7 @@ pub fn pre_draw_with_options(
                 let offset = encode_static_samplers_cached(list, alloc, rs);
                 bind_render_heap_buffer(
                     alloc,
-                    geometry,
+                    mesh_pipeline,
                     u8::try_from(SM50_BINDING_INDEX_STATIC_SAMPLERS).unwrap_or(0),
                     offset as u64,
                     false,
@@ -796,6 +826,8 @@ pub fn pre_draw_with_options(
 
     if geometry {
         DrawCallStatus::Geometry
+    } else if tessellation {
+        DrawCallStatus::Tessellation
     } else {
         DrawCallStatus::Valid
     }
@@ -1010,6 +1042,51 @@ pub unsafe fn draw_instanced(
         );
         return;
     }
+    if status == DrawCallStatus::Tessellation {
+        let Some(control_point_count) = patch_control_point_count(list.primitive_topology) else {
+            return;
+        };
+        let patch_count = vertex_count_per_instance / control_point_count;
+        if patch_count == 0 {
+            return;
+        }
+        // SAFETY: `list.pso_graphics` is non-null and live after `pre_draw_with_options`.
+        let (threads_per_patch, patch_per_group) = unsafe {
+            let pso = &*list.pso_graphics;
+            (pso.threads_per_patch.max(1), pso.patch_per_group.max(1))
+        };
+        let (args_ptr, offset) = alloc_gpu_heap(alloc, size_of::<D3d12DrawArguments>(), 32);
+        if args_ptr.is_null() {
+            return;
+        }
+        let dst = args_ptr.cast::<c_void>().cast::<D3d12DrawArguments>();
+        // SAFETY: `dst` points to 32-byte aligned storage for `D3d12DrawArguments` in `gpu_heap`.
+        unsafe {
+            ptr::write(
+                dst,
+                D3d12DrawArguments {
+                    vertex_count_per_instance,
+                    instance_count,
+                    start_vertex_location,
+                    start_instance_location,
+                },
+            );
+        }
+        encode_render_cmd(
+            alloc,
+            WmtcmdRenderDxmtTessellationMeshDraw {
+                r#type: WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
+                reserved: [0; 3],
+                next: MemPtr::NULL,
+                draw_arguments_offset: offset as u64,
+                instance_count,
+                threads_per_patch,
+                patch_per_group,
+                patch_per_mesh_instance: patch_count.div_ceil(patch_per_group),
+            },
+        );
+        return;
+    }
 
     encode_render_cmd(
         alloc,
@@ -1045,6 +1122,9 @@ pub unsafe fn draw_indexed_instanced(
     }
     // SAFETY: `this` is a live `List`.
     let list = unsafe { &mut *this.cast::<List>() };
+    if list.index_buffer == 0 {
+        return;
+    }
     let Some((primitive_type, _cp_count)) = topology::draw_primitive(list.primitive_topology)
     else {
         return;
@@ -1092,6 +1172,56 @@ pub unsafe fn draw_indexed_instanced(
                 warp_count: (index_count_per_instance - 1) / increment + 1,
                 instance_count,
                 vertex_per_warp,
+            },
+        );
+        return;
+    }
+    if status == DrawCallStatus::Tessellation {
+        let Some(control_point_count) = patch_control_point_count(list.primitive_topology) else {
+            return;
+        };
+        let patch_count = index_count_per_instance / control_point_count;
+        if patch_count == 0 {
+            return;
+        }
+        // SAFETY: `list.pso_graphics` is non-null and live after `pre_draw_with_options`.
+        let (threads_per_patch, patch_per_group) = unsafe {
+            let pso = &*list.pso_graphics;
+            (pso.threads_per_patch.max(1), pso.patch_per_group.max(1))
+        };
+        let (args_ptr, offset) = alloc_gpu_heap(alloc, size_of::<D3d12DrawIndexedArguments>(), 32);
+        if args_ptr.is_null() {
+            return;
+        }
+        let dst = args_ptr
+            .cast::<c_void>()
+            .cast::<D3d12DrawIndexedArguments>();
+        // SAFETY: `dst` points to 32-byte aligned storage for `D3d12DrawIndexedArguments`.
+        unsafe {
+            ptr::write(
+                dst,
+                D3d12DrawIndexedArguments {
+                    index_count_per_instance,
+                    instance_count,
+                    start_index_location,
+                    base_vertex_location,
+                    start_instance_location,
+                },
+            );
+        }
+        encode_render_cmd(
+            alloc,
+            WmtcmdRenderDxmtTessellationMeshDrawIndexed {
+                r#type: WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED,
+                reserved: [0; 3],
+                next: MemPtr::NULL,
+                draw_arguments_offset: offset as u64,
+                index_buffer: list.index_buffer,
+                index_buffer_offset: list.index_buffer_offset,
+                instance_count,
+                threads_per_patch,
+                patch_per_group,
+                patch_per_mesh_instance: patch_count.div_ceil(patch_per_group),
             },
         );
         return;

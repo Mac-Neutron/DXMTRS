@@ -171,6 +171,7 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.bound_rasterizer = [u32::MAX; 7];
     list.bound_vb_slot_mask = u32::MAX;
     list.bound_geometry = false;
+    list.bound_tessellation = false;
     list.viewport_count = 0;
     list.viewports = [WMTViewport {
         origin_x: 0.0,

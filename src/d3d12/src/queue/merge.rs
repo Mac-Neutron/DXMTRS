@@ -516,6 +516,7 @@ pub fn same_target(a: &RenderEncoderData, b: &RenderEncoderData) -> bool {
         && a.dsv_readonly_flags == b.dsv_readonly_flags
         && a.visibility_buffer == b.visibility_buffer
         && a.use_geometry == b.use_geometry
+        && a.use_tessellation == b.use_tessellation
 }
 
 fn barrier_names(sub: &Submission, after: u32, until: u32, texture: *const c_void) -> bool {

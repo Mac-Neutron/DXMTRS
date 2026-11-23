@@ -10,7 +10,7 @@ use core::{
 use std::sync::{Arc, Mutex};
 
 use airconv_ir::{
-    container::{Code, Container, Error as IrError},
+    container::{Code, Container, Error as IrError, fourcc},
     signature::{self, Signature},
 };
 use dxmt_core::{
@@ -25,15 +25,18 @@ use dxmt_util::{
 };
 use rustc_hash::FxHasher;
 use winemetal_sys::{
-    MTLDevice_newMeshRenderPipelineState, MTLDevice_newRenderPipelineState, Obj,
+    MTLDevice_newMeshRenderPipelineState, MTLDevice_newRenderPipelineState,
+    MTLDevice_supportsFamily, Obj,
     sm50::{
-        MtlShaderReflection, SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
+        MTL_TESSELLATOR_OUTPUT_TRIANGLE_CW, MTL_TESSELLATOR_TRIANGLE_CCW, MtlShaderReflection,
+        SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
         SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
         SM50_INDEX_BUFFER_FORMAT_NONE, SM50_SHADER_COMMON, SM50_SHADER_IA_INPUT_LAYOUT,
         SM50_SHADER_METAL_310, SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER,
-        SM50_SHADER_ROOT_SIGNATURE, Sm50IaInputElement, Sm50ShaderCommonData,
-        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
-        Sm50ShaderRootSignatureData,
+        SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2,
+        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderIaInputLayoutData,
+        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
     },
 };
 use winemetal_wire::{
@@ -45,7 +48,8 @@ use winemetal_wire::{
     WMT_PRIMITIVE_TOPOLOGY_CLASS_POINT, WMT_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE,
     WMT_STENCIL_OPERATION_KEEP, WMT_STENCIL_OPERATION_ZERO, WMT_TRIANGLE_FILL_MODE_FILL,
     WMT_TRIANGLE_FILL_MODE_LINES, WMT_WINDING_CLOCKWISE, WMT_WINDING_COUNTER_CLOCKWISE,
-    WMTColorAttachmentBlendInfo, WMTDepthStencilInfo, WMTMeshRenderPipelineInfo, original_format,
+    WMTColorAttachmentBlendInfo, WMTDepthStencilInfo, WMTGPU_FAMILY_APPLE7, WMTGPU_FAMILY_APPLE9,
+    WMTMeshRenderPipelineInfo, original_format,
 };
 
 use crate::{
@@ -53,7 +57,7 @@ use crate::{
         pipeline::{
             BlendDesc, DEPTH_WRITE_MASK_ALL, DepthStencilDesc, E_NOTIMPL, FILL_MODE_SOLID,
             GraphicsPipelineStateDesc, InputElementDesc, InputLayoutDesc, RasterizerDesc,
-            StreamOutputDesc,
+            ShaderBytecode, StreamOutputDesc,
         },
         vtbl::{ID3D12PipelineStateVtbl, IUnknownVtbl},
     },
@@ -76,6 +80,10 @@ use crate::{
     shader_cache::{CachedShader, CompileTarget, FunctionKind, Sha1Digest, compile_function},
 };
 
+static TS_GLOBAL_MUTEX: Mutex<()> = Mutex::new(());
+
+const D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH: u32 = 4;
+
 struct GeometryState {
     vertex_shader: Arc<CachedShader>,
     geometry_shader: Arc<CachedShader>,
@@ -85,6 +93,19 @@ struct GeometryState {
     geometry_info: WMTMeshRenderPipelineInfo,
     capture_line: String,
     failed: [bool; 6],
+}
+
+struct TessellationState {
+    vertex_shader: Arc<CachedShader>,
+    hull_shader: Arc<CachedShader>,
+    domain_shader: Arc<CachedShader>,
+    elements: Vec<Sm50IaInputElement>,
+    rootsig_blob: Vec<u8>,
+    _ps_func: Option<Obj>,
+    tess_info: WMTMeshRenderPipelineInfo,
+    max_potential_tess_factor: u32,
+    capture_line: String,
+    failed: [bool; 3],
 }
 
 /// `MTLD3D12GraphicsPipelineState` (`d3d12_device.hpp:251-274`).
@@ -107,10 +128,15 @@ pub struct Graphics {
     pub depth_bias_clamp: f32,
     pub forced_sample_count: u32,
     pub geometry: bool,
+    pub tessellation: bool,
     pub writes_uav: bool,
+    pub threads_per_patch: u32,
+    pub patch_per_group: u32,
     pub depth_stencil_states: [Option<Obj>; 6],
     pub geometry_variants: Mutex<[Option<Obj>; 6]>,
     geometry_state: Option<Mutex<GeometryState>>,
+    pub tessellation_variants: Mutex<[Option<Obj>; 3]>,
+    tessellation_state: Option<Mutex<TessellationState>>,
 }
 
 impl ComRefCounted for Graphics {
@@ -161,6 +187,53 @@ impl Graphics {
                 &mut state,
                 strip,
                 index_format,
+            )
+        } {
+            let handle = pso.handle();
+            variants[idx] = Some(pso);
+            drop(state);
+            drop(variants);
+            handle
+        } else {
+            state.failed[idx] = true;
+            drop(state);
+            drop(variants);
+            0
+        }
+    }
+
+    /// Returns (compiling on first use) the tessellation mesh PSO handle for `index_format`
+    ///
+    /// (`0` = non-indexed, `1` = 16-bit index, `2` = 32-bit index).
+    #[must_use]
+    pub fn tessellation_pipeline(&self, index_format: u32) -> u64 {
+        let idx = (index_format as usize).min(2);
+        let mut variants = lock(&self.tessellation_variants);
+        if let Some(obj) = variants[idx].as_ref() {
+            return obj.handle();
+        }
+        let Some(state_mu) = self.tessellation_state.as_ref() else {
+            return 0;
+        };
+        let mut state = lock(state_mu);
+        if state.failed[idx] || self.device.is_null() {
+            return 0;
+        }
+        // SAFETY: `self.device` is non-null and kept alive by `self`.
+        let dev = unsafe { &*self.device };
+        let Some(metal) = dev.mtl.as_ref() else {
+            state.failed[idx] = true;
+            return 0;
+        };
+        let fmt = u32::try_from(idx).unwrap_or(0);
+        // SAFETY: `state` holds valid shader/layout buffers for the duration of the compile.
+        if let Ok(pso) = unsafe {
+            compile_tessellation_variant(
+                metal,
+                &dev.shader_functions,
+                self.slot_mask,
+                &mut state,
+                fmt,
             )
         } {
             let handle = pso.handle();
@@ -979,18 +1052,209 @@ unsafe fn compile_geometry_variant(
     Ok(pso)
 }
 
+unsafe fn compile_tessellation_variant(
+    metal: &Obj,
+    cache: &crate::shader_cache::ShaderFunctionCache,
+    slot_mask: u32,
+    state: &mut TessellationState,
+    index_format: u32,
+) -> Result<Obj, Hresult> {
+    let mut common = Sm50ShaderCommonData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_COMMON,
+        metal_version: SM50_SHADER_METAL_310,
+        flags: 0,
+    };
+    let mut tess_data = Sm50ShaderPsoTessellatorData {
+        next: (&raw mut common).cast(),
+        r#type: SM50_SHADER_PSO_TESSELLATOR,
+        max_potential_tess_factor: state.max_potential_tess_factor,
+    };
+    let mut ia = Sm50ShaderIaInputLayoutData {
+        next: (&raw mut tess_data).cast(),
+        r#type: SM50_SHADER_IA_INPUT_LAYOUT,
+        index_buffer_format: index_format,
+        slot_mask,
+        num_elements: u32::try_from(state.elements.len()).unwrap_or(0),
+        elements: state.elements.as_mut_ptr(),
+    };
+    let mut rootsig2 = Sm50ShaderRootSignatureData {
+        next: (&raw mut ia).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE2,
+        bytecode: state.rootsig_blob.as_ptr().cast::<c_void>(),
+        bytecode_length: state.rootsig_blob.len(),
+    };
+    let mut object_args = Sm50ShaderRootSignatureData {
+        next: (&raw mut rootsig2).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: state.rootsig_blob.as_ptr().cast::<c_void>(),
+        bytecode_length: state.rootsig_blob.len(),
+    };
+    let mut mesh_args = Sm50ShaderRootSignatureData {
+        next: (&raw mut tess_data).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: state.rootsig_blob.as_ptr().cast::<c_void>(),
+        bytecode_length: state.rootsig_blob.len(),
+    };
+
+    let Some(vs_mut) = Arc::get_mut(&mut state.vertex_shader) else {
+        return Err(E_FAIL);
+    };
+    let Some(hs_mut) = Arc::get_mut(&mut state.hull_shader) else {
+        return Err(E_FAIL);
+    };
+    let Some(ds_mut) = Arc::get_mut(&mut state.domain_shader) else {
+        return Err(E_FAIL);
+    };
+    // SAFETY: `object_args` is a valid null-terminated `SM50_SHADER_COMPILATION_ARGUMENT_DATA` chain.
+    let object_function = unsafe {
+        compile_function(
+            metal,
+            cache,
+            FunctionKind::TessellationHull,
+            vs_mut,
+            Some(hs_mut),
+            (&raw mut object_args).cast(),
+            &CompileTarget {
+                name: "vshs_main",
+                stage: "vs/hs (tessellation pipeline)",
+            },
+        )
+    }?;
+    // SAFETY: `mesh_args` is a valid null-terminated `SM50_SHADER_COMPILATION_ARGUMENT_DATA` chain.
+    let mesh_function = unsafe {
+        compile_function(
+            metal,
+            cache,
+            FunctionKind::TessellationDomain,
+            hs_mut,
+            Some(ds_mut),
+            (&raw mut mesh_args).cast(),
+            &CompileTarget {
+                name: "ds_main",
+                stage: "ds (tessellation pipeline)",
+            },
+        )
+    }?;
+
+    let mut info = state.tess_info;
+    info.object_function = object_function.handle();
+    info.mesh_function = mesh_function.handle();
+    let mut err_handle = 0u64;
+    let pso_handle = {
+        let _guard = lock(&TS_GLOBAL_MUTEX);
+        // SAFETY: `metal` is a live `MTLDevice`; `info` and `err_handle` are valid for the call.
+        unsafe {
+            MTLDevice_newMeshRenderPipelineState(
+                metal.handle(),
+                &raw const info,
+                &raw mut err_handle,
+            )
+        }
+    };
+    // SAFETY: `err_handle` is 0 or a newly retained `NSError` handle.
+    let err_obj = unsafe { Obj::adopt(err_handle) };
+    // SAFETY: `pso_handle` is 0 or a newly retained `MTLRenderPipelineState` handle.
+    let Some(pso) = (unsafe { Obj::adopt(pso_handle) }) else {
+        let msg = err_obj
+            .as_ref()
+            .map_or_else(String::new, library::description);
+        crate::err!("Failed to create tessellation PSO: {msg}");
+        return Err(E_FAIL);
+    };
+    name_pipeline(
+        pso.handle(),
+        format!("{} tessellation={index_format}", state.capture_line),
+    );
+    Ok(pso)
+}
+
+#[must_use]
+pub(super) const fn has_bytecode(bc: &ShaderBytecode) -> bool {
+    !bc.shader_bytecode.is_null() && bc.bytecode_length != 0
+}
+
+#[must_use]
+pub(super) fn embedded_root_signature<'a>(candidates: &[&'a [u8]]) -> Option<&'a [u8]> {
+    for bytes in candidates {
+        if !bytes.is_empty()
+            && let Ok(container) = Container::parse(bytes)
+            && container.find(fourcc::RTS0).is_some()
+        {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+#[must_use]
+pub(super) const fn compute_max_tess_factor(domain_max: u32, supports_apple9: bool) -> u32 {
+    let factor = if domain_max == 0 || domain_max > 64 {
+        64
+    } else {
+        domain_max
+    };
+    if supports_apple9 || factor <= 8 {
+        factor
+    } else {
+        8
+    }
+}
+
+#[must_use]
+pub(super) const fn compute_patch_per_group(threads_per_patch: u32) -> u32 {
+    let tpp = if threads_per_patch == 0 {
+        1
+    } else {
+        threads_per_patch
+    };
+    let ppg = 32 / tpp;
+    if ppg == 0 { 1 } else { ppg }
+}
+
+pub(super) fn validate_shader_stages(d: &GraphicsPipelineStateDesc) -> Result<bool, Hresult> {
+    if d.stream_output.num_entries != 0 {
+        crate::err!("CreatePipelineState: SO not supported");
+        return Err(E_NOTIMPL);
+    }
+    let has_hull = has_bytecode(&d.hs);
+    let has_domain = has_bytecode(&d.ds);
+    let has_geom = has_bytecode(&d.gs);
+    if has_hull != has_domain {
+        crate::err!(
+            "CreatePipelineState: partial tessellation shaders not supported (need both HS and DS)"
+        );
+        return Err(E_INVALIDARG);
+    }
+    if has_geom && has_hull {
+        crate::err!("CreatePipelineState: GS + tessellation combination not supported");
+        return Err(E_NOTIMPL);
+    }
+    if has_hull != (d.primitive_topology_type == D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH) {
+        crate::err!(
+            "CreatePipelineState: patch primitive topology type must match hull/domain shaders"
+        );
+        return Err(E_INVALIDARG);
+    }
+    Ok(has_hull)
+}
+
 fn build_capture_line(
     desc: &GraphicsPipelineStateDesc,
     vertex_bytes: &[u8],
     pixel_bytes: &[u8],
     geometry_bytes: &[u8],
+    hull_bytes: &[u8],
+    domain_bytes: &[u8],
     rs_blob: Option<&[u8]>,
 ) -> String {
     let mut line = format!(
-        "gfx{}{}{}{}",
+        "gfx{}{}{}{}{}{}",
         captured_shader("vs", vertex_bytes),
         captured_shader("ps", pixel_bytes),
         captured_shader("gs", geometry_bytes),
+        captured_shader("hs", hull_bytes),
+        captured_shader("ds", domain_bytes),
         captured_root_signature(rs_blob)
     );
     line.push_str(" rtv=");
@@ -1058,9 +1322,14 @@ struct CompiledPipeline {
     slot_mask: u32,
     writes_uav: bool,
     geometry: bool,
+    tessellation: bool,
+    threads_per_patch: u32,
+    patch_per_group: u32,
     mtl_pso: Option<Obj>,
     geometry_variants: [Option<Obj>; 6],
     geometry_state: Option<Mutex<GeometryState>>,
+    tessellation_variants: [Option<Obj>; 3],
+    tessellation_state: Option<Mutex<TessellationState>>,
     vertex_digest: Sha1Digest,
     pixel_digest: Sha1Digest,
     geometry_digest: Sha1Digest,
@@ -1074,7 +1343,7 @@ unsafe fn build_geometry_pso(
     rs_blob: Option<&[u8]>,
     capture_line: String,
 ) -> Result<CompiledPipeline, Hresult> {
-    if d.vs.shader_bytecode.is_null() {
+    if !has_bytecode(&d.vs) || !has_bytecode(&d.gs) {
         return Err(E_INVALIDARG);
     }
     // SAFETY: `d.vs` and `d.gs` are non-null and valid for their lengths.
@@ -1085,13 +1354,13 @@ unsafe fn build_geometry_pso(
     let geometry_bytes = unsafe {
         core::slice::from_raw_parts(d.gs.shader_bytecode.cast::<u8>(), d.gs.bytecode_length)
     };
-    let pixel_bytes = if d.ps.shader_bytecode.is_null() || d.ps.bytecode_length == 0 {
-        &[][..]
-    } else {
+    let pixel_bytes = if has_bytecode(&d.ps) {
         // SAFETY: `d.ps` is non-null for `bytecode_length` bytes.
         unsafe {
             core::slice::from_raw_parts(d.ps.shader_bytecode.cast::<u8>(), d.ps.bytecode_length)
         }
+    } else {
+        &[][..]
     };
     let mut vertex_shader = CachedShader::new(vertex_bytes)?;
     let mut geometry_shader = CachedShader::new(geometry_bytes)?;
@@ -1114,8 +1383,7 @@ unsafe fn build_geometry_pso(
     // SAFETY: `vertex_bytes` and `input_elems_slice` are valid.
     let (elements, slot_mask) = unsafe { extract_input_layout(vertex_bytes, input_elems_slice) }?;
     let rootsig_blob = rs_blob.map_or_else(|| vertex_bytes.to_vec(), <[u8]>::to_vec);
-    let (mut pixel_shader_opt, pixel_refl) =
-        reflect_optional_ps(!d.ps.shader_bytecode.is_null(), pixel_bytes)?;
+    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
     let writes_uav =
         vertex_refl.writes_uav != 0 || geometry_refl.writes_uav != 0 || pixel_refl.writes_uav != 0;
     // SAFETY: Pixel shader reflection populates the `pixel_shader` union arm.
@@ -1164,7 +1432,7 @@ unsafe fn build_geometry_pso(
     let geometry_digest = *geometry_shader.digest();
     geo_info.fragment_function = ps_func.as_ref().map_or(0, Obj::handle);
     geo_info.payload_memory_length = 16256;
-    geo_info.rasterization_enabled = u8::from(!d.ps.shader_bytecode.is_null() || d.dsv_format != 0);
+    geo_info.rasterization_enabled = u8::from(has_bytecode(&d.ps) || d.dsv_format != 0);
     geo_info.support_indirect_command_buffers = 0;
 
     let mut state = GeometryState {
@@ -1194,12 +1462,206 @@ unsafe fn build_geometry_pso(
         slot_mask,
         writes_uav,
         geometry: true,
+        tessellation: false,
+        threads_per_patch: 0,
+        patch_per_group: 0,
         mtl_pso: None,
         geometry_variants,
         geometry_state: Some(Mutex::new(state)),
+        tessellation_variants: [const { None }; 3],
+        tessellation_state: None,
         vertex_digest,
         pixel_digest,
         geometry_digest,
+    })
+}
+
+unsafe fn build_tessellation_pso(
+    dev: &Device,
+    metal: &Obj,
+    d: &GraphicsPipelineStateDesc,
+    input_elems_slice: &[InputElementDesc],
+    rs_blob: Option<&[u8]>,
+    capture_line: String,
+) -> Result<CompiledPipeline, Hresult> {
+    if !has_bytecode(&d.vs) || !has_bytecode(&d.hs) || !has_bytecode(&d.ds) {
+        return Err(E_INVALIDARG);
+    }
+    // SAFETY: `d.vs`, `d.hs`, and `d.ds` are non-null and valid for their declared lengths.
+    let vertex_bytes = unsafe {
+        core::slice::from_raw_parts(d.vs.shader_bytecode.cast::<u8>(), d.vs.bytecode_length)
+    };
+    // SAFETY: `d.hs.shader_bytecode` was checked non-null above.
+    let hull_bytes = unsafe {
+        core::slice::from_raw_parts(d.hs.shader_bytecode.cast::<u8>(), d.hs.bytecode_length)
+    };
+    // SAFETY: `d.ds.shader_bytecode` was checked non-null above.
+    let domain_bytes = unsafe {
+        core::slice::from_raw_parts(d.ds.shader_bytecode.cast::<u8>(), d.ds.bytecode_length)
+    };
+    let pixel_bytes = if has_bytecode(&d.ps) {
+        // SAFETY: `d.ps` is non-null for `bytecode_length` bytes.
+        unsafe {
+            core::slice::from_raw_parts(d.ps.shader_bytecode.cast::<u8>(), d.ps.bytecode_length)
+        }
+    } else {
+        &[][..]
+    };
+
+    let mut vertex_shader = CachedShader::new(vertex_bytes)?;
+    let mut hull_shader = CachedShader::new(hull_bytes)?;
+    let mut domain_shader = CachedShader::new(domain_bytes)?;
+    // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
+    let mut vertex_refl = unsafe { zeroed::<MtlShaderReflection>() };
+    // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
+    let mut hull_refl = unsafe { zeroed::<MtlShaderReflection>() };
+    // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
+    let mut domain_refl = unsafe { zeroed::<MtlShaderReflection>() };
+
+    let vertex_hr = Arc::get_mut(&mut vertex_shader)
+        .ok_or(E_FAIL)?
+        .reflection(&mut vertex_refl);
+    if vertex_hr < 0 {
+        return Err(vertex_hr);
+    }
+    let hull_hr = Arc::get_mut(&mut hull_shader)
+        .ok_or(E_FAIL)?
+        .reflection(&mut hull_refl);
+    if hull_hr < 0 {
+        return Err(hull_hr);
+    }
+    let domain_hr = Arc::get_mut(&mut domain_shader)
+        .ok_or(E_FAIL)?
+        .reflection(&mut domain_refl);
+    if domain_hr < 0 {
+        return Err(domain_hr);
+    }
+
+    // SAFETY: Hull shader reflection populates the `tessellator` union arm.
+    let tess_refl = unsafe { hull_refl.u.tessellator };
+    if tess_refl.output_primitive != MTL_TESSELLATOR_OUTPUT_TRIANGLE_CW
+        && tess_refl.output_primitive != MTL_TESSELLATOR_TRIANGLE_CCW
+    {
+        crate::err!(
+            "CreatePipelineState: unsupported tessellator output primitive {}",
+            tess_refl.output_primitive
+        );
+        return Err(E_NOTIMPL);
+    }
+
+    // SAFETY: `vertex_bytes` and `input_elems_slice` are valid.
+    let (elements, slot_mask) = unsafe { extract_input_layout(vertex_bytes, input_elems_slice) }?;
+    let rootsig_blob = rs_blob
+        .or_else(|| embedded_root_signature(&[vertex_bytes, hull_bytes, domain_bytes, pixel_bytes]))
+        .unwrap_or(vertex_bytes)
+        .to_vec();
+    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
+    let writes_uav = vertex_refl.writes_uav != 0
+        || hull_refl.writes_uav != 0
+        || domain_refl.writes_uav != 0
+        || pixel_refl.writes_uav != 0;
+    // SAFETY: Pixel shader reflection populates the `pixel_shader` union arm.
+    let has_cov = unsafe { pixel_refl.u.pixel_shader.has_coverage_output } != 0;
+
+    // SAFETY: Domain shader reflection populates the `post_tessellator` union arm.
+    let ds_max_factor = unsafe { domain_refl.u.post_tessellator.max_potential_tess_factor };
+    let threads_per_patch = hull_refl.threads_per_patch.max(1);
+    let patch_per_group = compute_patch_per_group(threads_per_patch);
+
+    // SAFETY: `metal` is a live `MTLDevice` handle.
+    let supports_apple7 = unsafe { MTLDevice_supportsFamily(metal.handle(), WMTGPU_FAMILY_APPLE7) };
+    // SAFETY: `metal` is a live `MTLDevice` handle.
+    let supports_apple9 = unsafe { MTLDevice_supportsFamily(metal.handle(), WMTGPU_FAMILY_APPLE9) };
+    let max_potential_tess_factor = compute_max_tess_factor(ds_max_factor, supports_apple9);
+
+    let mut tess_info = mesh_render_pipeline_info();
+    let mut dual_source = false;
+    let hr = initialize_pso_fields(
+        dev,
+        d,
+        has_cov,
+        &mut PsoCommonTarget {
+            colors: &mut tess_info.colors,
+            depth_pixel_format: &mut tess_info.depth_pixel_format,
+            stencil_pixel_format: &mut tess_info.stencil_pixel_format,
+            input_primitive_topology: None,
+            raster_sample_count: &mut tess_info.raster_sample_count,
+            support_icb: &mut tess_info.support_indirect_command_buffers,
+            alpha_to_coverage_enabled: &mut tess_info.alpha_to_coverage_enabled,
+            dual_source_blending: &mut dual_source,
+        },
+    );
+    if hr < 0 {
+        return Err(hr);
+    }
+
+    let mut pixel_digest = [0u8; 20];
+    let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
+        let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
+        // SAFETY: `metal`, `d`, `ps_mut`, and `tess_info.colors` are valid.
+        let f = unsafe {
+            compile_pixel_shader(
+                metal,
+                &dev.shader_functions,
+                d,
+                ps_mut,
+                &tess_info.colors,
+                dual_source,
+            )
+        }?;
+        pixel_digest = *ps_mut.digest();
+        Some(f)
+    } else {
+        None
+    };
+
+    let vertex_digest = *vertex_shader.digest();
+    tess_info.fragment_function = ps_func.as_ref().map_or(0, Obj::handle);
+    tess_info.payload_memory_length = if supports_apple7 { 0 } else { 16_384 };
+    tess_info.mesh_tgsize_is_multiple_of_sgwidth = 1;
+    tess_info.object_tgsize_is_multiple_of_sgwidth = 1;
+    tess_info.rasterization_enabled = u8::from(has_bytecode(&d.ps) || d.dsv_format != 0);
+    tess_info.support_indirect_command_buffers = 0;
+
+    let mut state = TessellationState {
+        vertex_shader,
+        hull_shader,
+        domain_shader,
+        elements,
+        rootsig_blob,
+        _ps_func: ps_func,
+        tess_info,
+        max_potential_tess_factor,
+        capture_line,
+        failed: [false; 3],
+    };
+    // SAFETY: `metal` and `state` are valid.
+    let default_variant = unsafe {
+        compile_tessellation_variant(
+            metal,
+            &dev.shader_functions,
+            slot_mask,
+            &mut state,
+            SM50_INDEX_BUFFER_FORMAT_NONE,
+        )
+    }?;
+    let mut tessellation_variants: [Option<Obj>; 3] = [const { None }; 3];
+    tessellation_variants[0] = Some(default_variant);
+    Ok(CompiledPipeline {
+        slot_mask,
+        writes_uav,
+        geometry: false,
+        tessellation: true,
+        threads_per_patch,
+        patch_per_group,
+        mtl_pso: None,
+        geometry_variants: [const { None }; 6],
+        geometry_state: None,
+        tessellation_variants,
+        tessellation_state: Some(Mutex::new(state)),
+        vertex_digest,
+        pixel_digest,
+        geometry_digest: [0; 20],
     })
 }
 
@@ -1211,7 +1673,7 @@ unsafe fn build_vertex_pso(
     rs_blob: Option<&[u8]>,
     capture_line: String,
 ) -> Result<CompiledPipeline, Hresult> {
-    if d.vs.shader_bytecode.is_null() {
+    if !has_bytecode(&d.vs) {
         crate::err!("no vertex shader");
         return Err(E_INVALIDARG);
     }
@@ -1219,13 +1681,13 @@ unsafe fn build_vertex_pso(
     let vertex_bytes = unsafe {
         core::slice::from_raw_parts(d.vs.shader_bytecode.cast::<u8>(), d.vs.bytecode_length)
     };
-    let pixel_bytes = if d.ps.shader_bytecode.is_null() || d.ps.bytecode_length == 0 {
-        &[][..]
-    } else {
+    let pixel_bytes = if has_bytecode(&d.ps) {
         // SAFETY: `d.ps` is non-null for `bytecode_length` bytes.
         unsafe {
             core::slice::from_raw_parts(d.ps.shader_bytecode.cast::<u8>(), d.ps.bytecode_length)
         }
+    } else {
+        &[][..]
     };
     let mut vertex_shader = CachedShader::new(vertex_bytes)?;
     // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
@@ -1279,8 +1741,7 @@ unsafe fn build_vertex_pso(
     }?;
     let vertex_digest = *vs_mut.digest();
 
-    let (mut pixel_shader_opt, pixel_refl) =
-        reflect_optional_ps(!d.ps.shader_bytecode.is_null(), pixel_bytes)?;
+    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
     let writes_uav = vertex_refl.writes_uav != 0 || pixel_refl.writes_uav != 0;
     // SAFETY: Pixel shader reflection populates the `pixel_shader` union arm.
     let has_cov = unsafe { pixel_refl.u.pixel_shader.has_coverage_output } != 0;
@@ -1350,9 +1811,14 @@ unsafe fn build_vertex_pso(
         slot_mask,
         writes_uav,
         geometry: false,
+        tessellation: false,
+        threads_per_patch: 0,
+        patch_per_group: 0,
         mtl_pso: Some(p),
         geometry_variants: [const { None }; 6],
         geometry_state: None,
+        tessellation_variants: [const { None }; 3],
+        tessellation_state: None,
         vertex_digest,
         pixel_digest,
         geometry_digest: [0; 20],
@@ -1417,21 +1883,25 @@ pub unsafe fn create_graphics_pipeline_state(
         unsafe { cast_root_signature(d.root_signature) }.map(|rs| &*rs.blob)
     };
     let capture_line = if dxil_capture_mode() {
-        let line = build_capture_line(d, vertex_bytes, pixel_bytes, geometry_bytes, rs_blob);
+        let line = build_capture_line(
+            d,
+            vertex_bytes,
+            pixel_bytes,
+            geometry_bytes,
+            hull_bytes,
+            domain_bytes,
+            rs_blob,
+        );
         log_pipeline(&line);
         line
     } else {
         String::new()
     };
 
-    if d.stream_output.num_entries != 0 {
-        crate::err!("CreatePipelineState: SO not supported");
-        return E_NOTIMPL;
-    }
-    if !d.hs.shader_bytecode.is_null() || !d.ds.shader_bytecode.is_null() {
-        crate::err!("CreatePipelineState: Tess not supported");
-        return E_NOTIMPL;
-    }
+    let tessellation = match validate_shader_stages(d) {
+        Ok(t) => t,
+        Err(hr) => return hr,
+    };
 
     let Some(metal) = dev.mtl.as_ref() else {
         return E_FAIL;
@@ -1452,9 +1922,7 @@ pub unsafe fn create_graphics_pipeline_state(
 
     // SAFETY: `desc` is valid.
     let desc_hash = unsafe { hash_graphics_desc(desc) };
-    let standard = d.gs.shader_bytecode.is_null()
-        && d.hs.shader_bytecode.is_null()
-        && d.ds.shader_bytecode.is_null();
+    let standard = !has_bytecode(&d.gs) && !tessellation;
     let cached = if standard {
         let cache = lock(&dev.graphics_psos);
         cache.get(&desc_hash).map(|cached| {
@@ -1477,9 +1945,14 @@ pub unsafe fn create_graphics_pipeline_state(
             slot_mask,
             writes_uav,
             geometry: false,
+            tessellation: false,
+            threads_per_patch: 0,
+            patch_per_group: 0,
             mtl_pso: pso,
             geometry_variants: [const { None }; 6],
             geometry_state: None,
+            tessellation_variants: [const { None }; 3],
+            tessellation_state: None,
             vertex_digest,
             pixel_digest,
             geometry_digest: [0; 20],
@@ -1488,6 +1961,11 @@ pub unsafe fn create_graphics_pipeline_state(
         let compiled = if standard {
             // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
             unsafe { build_vertex_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
+        } else if tessellation {
+            // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
+            unsafe {
+                build_tessellation_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line)
+            }
         } else {
             // SAFETY: `dev`, `metal`, `d`, and `input_elems_slice` are valid.
             unsafe { build_geometry_pso(dev, metal, d, input_elems_slice, rs_blob, capture_line) }
@@ -1569,10 +2047,15 @@ pub unsafe fn create_graphics_pipeline_state(
         depth_bias_clamp: d.rasterizer_state.depth_bias_clamp,
         forced_sample_count: d.rasterizer_state.forced_sample_count,
         geometry: compiled.geometry,
+        tessellation: compiled.tessellation,
         writes_uav: compiled.writes_uav,
+        threads_per_patch: compiled.threads_per_patch,
+        patch_per_group: compiled.patch_per_group,
         depth_stencil_states,
         geometry_variants: Mutex::new(compiled.geometry_variants),
         geometry_state: compiled.geometry_state,
+        tessellation_variants: Mutex::new(compiled.tessellation_variants),
+        tessellation_state: compiled.tessellation_state,
     }));
     // SAFETY: `raw` is a freshly allocated `Graphics` with 1 initial public ref.
     let hr = unsafe { (VTBL.query_interface)(raw.cast::<c_void>(), riid, pso) };
@@ -1604,10 +2087,18 @@ impl Graphics {
             depth_bias_clamp: 0.0,
             forced_sample_count: 0,
             geometry: false,
+            tessellation: false,
             writes_uav: false,
+            threads_per_patch: 0,
+            patch_per_group: 0,
             depth_stencil_states: [const { None }; 6],
             geometry_variants: Mutex::new([const { None }; 6]),
             geometry_state: None,
+            tessellation_variants: Mutex::new([const { None }; 3]),
+            tessellation_state: None,
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

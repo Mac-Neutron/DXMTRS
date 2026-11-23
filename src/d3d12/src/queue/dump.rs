@@ -1509,7 +1509,7 @@ pub fn pixel_history(
         unsafe { (*vis_cmd).r#type = nop_type };
     }
 
-    let join_stage = if data.use_geometry {
+    let join_stage = if data.use_geometry || data.use_tessellation {
         WMT_RENDER_STAGE_PRE_RASTER
     } else {
         WMT_RENDER_STAGE_VERTEX

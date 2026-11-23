@@ -3,27 +3,27 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use dxmt_util::sync::lock;
 use winemetal_sys::{
     Obj,
     sm50::{
         MtlShaderReflection, MtlShaderReflectionUnion, SM50_INDEX_BUFFER_FORMAT_UINT16,
-        SM50_SHADER_COMMON, SM50_SHADER_FLAG_DEFUSE_FMA, SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO,
-        SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_METAL_310, SM50_SHADER_PSO_GEOMETRY_SHADER,
-        SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE,
-        Sm50CompiledBitcode, Sm50IaInputElement, Sm50ShaderCommonData,
-        Sm50ShaderCompilationArgumentData, Sm50ShaderIaInputLayoutData,
-        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        SM50_SHADER_ARGUMENT_TYPE_MAX, SM50_SHADER_COMMON, SM50_SHADER_FLAG_DEFUSE_FMA,
+        SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO, SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_METAL_310,
+        SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR,
+        SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2, Sm50CompiledBitcode,
+        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData,
+        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
         Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
     },
 };
 
 use super::{
     CachedShader, CompileEnv, FunctionKind, Sha1Digest, ShaderFunctionCache,
-    compile_function_with_env, decode_reflection, encode_reflection, function_key_from_digests,
-    hash_compile_args, reflection_key, sha1,
+    compile_function_with_env, decode_reflection, encode_reflection, function_key_for_kind,
+    function_key_from_digests, hash_compile_args, reflection_key, sha1,
 };
 
 static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -170,6 +170,30 @@ extern "C-unwind" fn fake_sm50_compile_gs_gs(
     error: *mut u64,
 ) -> i32 {
     fake_sm50_compile(gs, args, function_name, bitcode, error)
+}
+
+#[unsafe(export_name = "SM50CompileTessellationPipelineHull")]
+extern "C-unwind" fn fake_sm50_compile_ts_hull(
+    vs: u64,
+    _hs: u64,
+    args: *mut Sm50ShaderCompilationArgumentData,
+    function_name: *const c_char,
+    bitcode: *mut u64,
+    error: *mut u64,
+) -> i32 {
+    fake_sm50_compile(vs, args, function_name, bitcode, error)
+}
+
+#[unsafe(export_name = "SM50CompileTessellationPipelineDomain")]
+extern "C-unwind" fn fake_sm50_compile_ts_domain(
+    _hs: u64,
+    ds: u64,
+    args: *mut Sm50ShaderCompilationArgumentData,
+    function_name: *const c_char,
+    bitcode: *mut u64,
+    error: *mut u64,
+) -> i32 {
+    fake_sm50_compile(ds, args, function_name, bitcode, error)
 }
 
 #[unsafe(export_name = "SM50GetCompiledBitcode")]
@@ -341,19 +365,18 @@ fn unknown_kind_gives_up() {
     // SAFETY: `known` is a valid 1-node chain.
     assert!(unsafe { hash_compile_args((&raw const known).cast()) }.is_some());
 
-    let mut tess = Sm50ShaderPsoTessellatorData {
+    let mut unknown = Sm50ShaderCompilationArgumentData {
         next: ptr::null_mut(),
-        r#type: SM50_SHADER_PSO_TESSELLATOR,
-        max_potential_tess_factor: 16,
+        r#type: SM50_SHADER_ARGUMENT_TYPE_MAX,
     };
     let common = Sm50ShaderCommonData {
-        next: (&raw mut tess).cast(),
+        next: (&raw mut unknown).cast(),
         r#type: SM50_SHADER_COMMON,
         metal_version: SM50_SHADER_METAL_310,
         flags: 0,
     };
 
-    // SAFETY: `common` heads a valid 2-node chain ending in an unknown argument type (`PsoTessellator`).
+    // SAFETY: `common` heads a valid 2-node chain ending in an unknown argument type.
     let got = unsafe { hash_compile_args((&raw const common).cast()) };
     assert_eq!(got, None);
 }
@@ -494,4 +517,202 @@ fn parse_refuses_a_non_dxbc_blob_without_a_crash() {
         reflection: golden_reflection(),
     };
     assert_eq!(shader.parse().err(), Some(super::E_FAIL));
+}
+
+#[test]
+fn hash_compile_args_supports_tessellator_and_rootsig2() {
+    let rs1_bytes: [u8; 4] = [0x10, 0x20, 0x30, 0x40];
+    let rs2_bytes: [u8; 4] = [0x50, 0x60, 0x70, 0x80];
+    let mut tess_16 = Sm50ShaderPsoTessellatorData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_PSO_TESSELLATOR,
+        max_potential_tess_factor: 16,
+    };
+    let mut rs2_for_16 = Sm50ShaderRootSignatureData {
+        next: (&raw mut tess_16).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE2,
+        bytecode: rs2_bytes.as_ptr().cast(),
+        bytecode_length: rs2_bytes.len(),
+    };
+    let chain_16 = Sm50ShaderRootSignatureData {
+        next: (&raw mut rs2_for_16).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: rs1_bytes.as_ptr().cast(),
+        bytecode_length: rs1_bytes.len(),
+    };
+
+    // SAFETY: `chain_16` heads a valid 3-node argument chain.
+    let h1 = unsafe { hash_compile_args((&raw const chain_16).cast()) };
+    // SAFETY: `chain_16` heads the exact same chain again.
+    let h2 = unsafe { hash_compile_args((&raw const chain_16).cast()) };
+    assert!(h1.is_some());
+    assert_eq!(h1, h2);
+
+    let mut tess_8 = Sm50ShaderPsoTessellatorData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_PSO_TESSELLATOR,
+        max_potential_tess_factor: 8,
+    };
+    let mut rs2_for_8 = Sm50ShaderRootSignatureData {
+        next: (&raw mut tess_8).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE2,
+        bytecode: rs2_bytes.as_ptr().cast(),
+        bytecode_length: rs2_bytes.len(),
+    };
+    let chain_8 = Sm50ShaderRootSignatureData {
+        next: (&raw mut rs2_for_8).cast(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: rs1_bytes.as_ptr().cast(),
+        bytecode_length: rs1_bytes.len(),
+    };
+    // SAFETY: `chain_8` heads a valid 3-node argument chain with a smaller tessellation factor.
+    let h_diff_factor = unsafe { hash_compile_args((&raw const chain_8).cast()) };
+    assert_ne!(h1, h_diff_factor);
+
+    let single_rs1 = Sm50ShaderRootSignatureData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE,
+        bytecode: rs1_bytes.as_ptr().cast(),
+        bytecode_length: rs1_bytes.len(),
+    };
+    let single_rs2 = Sm50ShaderRootSignatureData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_ROOT_SIGNATURE2,
+        bytecode: rs1_bytes.as_ptr().cast(),
+        bytecode_length: rs1_bytes.len(),
+    };
+    // SAFETY: valid 1-node chains distinguishing `ROOT_SIGNATURE` from `ROOT_SIGNATURE2`.
+    let key_rs1 = unsafe { hash_compile_args((&raw const single_rs1).cast()) };
+    // SAFETY: valid 1-node chain.
+    let key_rs2 = unsafe { hash_compile_args((&raw const single_rs2).cast()) };
+    assert_ne!(key_rs1, key_rs2);
+}
+
+#[test]
+fn function_key_for_kind_distinguishes_tessellation_stages() {
+    let variant = sha1(b"variant");
+    for legacy in [
+        FunctionKind::Shader,
+        FunctionKind::GeometryVertex,
+        FunctionKind::GeometryMesh,
+    ] {
+        assert_eq!(
+            function_key_for_kind(
+                legacy,
+                &GOLDEN_SHADER_1_DIGEST,
+                Some(&GOLDEN_SHADER_2_DIGEST),
+                "main",
+                &variant,
+                "",
+            ),
+            function_key_from_digests(
+                &GOLDEN_SHADER_1_DIGEST,
+                Some(&GOLDEN_SHADER_2_DIGEST),
+                "main",
+                &variant,
+                "",
+            ),
+        );
+    }
+
+    let hull_key = function_key_for_kind(
+        FunctionKind::TessellationHull,
+        &GOLDEN_SHADER_1_DIGEST,
+        Some(&GOLDEN_SHADER_2_DIGEST),
+        "main",
+        &variant,
+        "",
+    );
+    let domain_key = function_key_for_kind(
+        FunctionKind::TessellationDomain,
+        &GOLDEN_SHADER_1_DIGEST,
+        Some(&GOLDEN_SHADER_2_DIGEST),
+        "main",
+        &variant,
+        "",
+    );
+    let shader_key = function_key_from_digests(
+        &GOLDEN_SHADER_1_DIGEST,
+        Some(&GOLDEN_SHADER_2_DIGEST),
+        "main",
+        &variant,
+        "",
+    );
+    assert_ne!(hull_key, domain_key);
+    assert_ne!(hull_key, shader_key);
+    assert_ne!(domain_key, shader_key);
+}
+
+const fn minimal_dxbc(tag: u8) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes[0] = b'D';
+    bytes[1] = b'X';
+    bytes[2] = b'B';
+    bytes[3] = b'C';
+    bytes[4] = tag;
+    bytes[20] = 1; // version_major = 1
+    bytes[24] = 32; // container_size = 32
+    bytes
+}
+
+#[test]
+fn compile_function_tessellation_stages() {
+    let _guard = lock(&CACHE_TEST_LOCK);
+    SM50_COMPILE_CALLS.store(0, Ordering::Relaxed);
+
+    // SAFETY: fake Metal device handle; the test fakes `NSObject_retain`/`_release`.
+    let device = unsafe { Obj::adopt(0x7010) }.expect("non-null device");
+    let mut vs_arc = CachedShader::new(&minimal_dxbc(1)).expect("DXBC header");
+    let mut hs_arc = CachedShader::new(&minimal_dxbc(2)).expect("DXBC header");
+    let mut ds_arc = CachedShader::new(&minimal_dxbc(3)).expect("DXBC header");
+    let vs = Arc::get_mut(&mut vs_arc).expect("unique vs");
+    let hs = Arc::get_mut(&mut hs_arc).expect("unique hs");
+    let ds = Arc::get_mut(&mut ds_arc).expect("unique ds");
+    let mut common = Sm50ShaderCommonData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_COMMON,
+        metal_version: SM50_SHADER_METAL_310,
+        flags: 0,
+    };
+
+    // SAFETY: `common` is a valid 1-node chain and `vs`/`hs` are distinct cached shaders.
+    let hull_fn = unsafe {
+        compile_function_with_env(
+            &device,
+            None,
+            FunctionKind::TessellationHull,
+            vs,
+            Some(hs),
+            (&raw mut common).cast(),
+            &CompileEnv {
+                name: "vshs_main",
+                stage: "vs/hs",
+                probe: true,
+                bounds: "",
+            },
+        )
+    }
+    .expect("tessellation hull compile succeeds");
+    assert_eq!(hull_fn.handle(), 0x7006);
+
+    // SAFETY: `common` is a valid 1-node chain and `hs`/`ds` are distinct cached shaders.
+    let domain_fn = unsafe {
+        compile_function_with_env(
+            &device,
+            None,
+            FunctionKind::TessellationDomain,
+            hs,
+            Some(ds),
+            (&raw mut common).cast(),
+            &CompileEnv {
+                name: "ds_main",
+                stage: "ds",
+                probe: true,
+                bounds: "",
+            },
+        )
+    }
+    .expect("tessellation domain compile succeeds");
+    assert_eq!(domain_fn.handle(), 0x7006);
+    assert_eq!(SM50_COMPILE_CALLS.load(Ordering::Relaxed), 2);
 }
