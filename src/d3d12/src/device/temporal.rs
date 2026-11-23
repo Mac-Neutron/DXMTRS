@@ -25,7 +25,9 @@ use dxmt_util::{
     private_data::PrivateData,
     sync::lock,
 };
-use winemetal_sys::MTLDevice_temporalScalerScaleRange;
+use winemetal_sys::{
+    MTLDevice_supportsFXTemporalDenoisedScaler, MTLDevice_temporalScalerScaleRange,
+};
 use winemetal_wire::{
     WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8,
     WMT_PIXEL_FORMAT_INVALID, WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_UINT,
@@ -36,13 +38,16 @@ use winemetal_wire::{
     WMT_PIXEL_FORMAT_RGBA16_UNORM, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
     WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_TYPE2D,
     WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTFXTemporalScalerInfo,
-    WMTTextureInfo,
+    WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTFXTemporalDenoisedScalerInfo,
+    WMTFXTemporalScalerInfo, WMTTextureInfo,
 };
 
 use crate::{
     abi::{
-        ext::{D3D12ScalerDesc, D3D12TemporalScalerVtbl, IID_D3D12_TEMPORAL_SCALER},
+        ext::{
+            D3D12DenoisedScalerDesc, D3D12ScalerDesc, D3D12TemporalScalerVtbl,
+            IID_D3D12_TEMPORAL_SCALER,
+        },
         vtbl::IUnknownVtbl,
     },
     com::{
@@ -63,6 +68,74 @@ pub enum Scratch {
     Output,
 }
 
+/// Which extra input scratch slot a denoised temporal upscale needs (`DLSSD`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum DenoisedScratch {
+    DiffuseAlbedo = 0,
+    SpecularAlbedo = 1,
+    Normal = 2,
+    Roughness = 3,
+    SpecularHitDistance = 4,
+    DenoiseStrengthMask = 5,
+    TransparencyOverlay = 6,
+    ReactiveMask = 7,
+}
+
+const fn zeroed_denoised_desc() -> D3D12DenoisedScalerDesc {
+    D3D12DenoisedScalerDesc {
+        input_width: 0,
+        input_height: 0,
+        output_width: 0,
+        output_height: 0,
+        color_format: 0,
+        depth_format: 0,
+        motion_format: 0,
+        diffuse_albedo_format: 0,
+        specular_albedo_format: 0,
+        normal_format: 0,
+        roughness_format: 0,
+        specular_hit_distance_format: 0,
+        denoise_strength_mask_format: 0,
+        transparency_overlay_format: 0,
+        reactive_mask_format: 0,
+        output_format: 0,
+        synchronous_init: 0,
+        auto_exposure: 0,
+        reactive_mask_enabled: 0,
+        specular_hit_distance_enabled: 0,
+        denoise_strength_mask_enabled: 0,
+        transparency_overlay_enabled: 0,
+    }
+}
+
+const fn zeroed_denoised_info() -> WMTFXTemporalDenoisedScalerInfo {
+    WMTFXTemporalDenoisedScalerInfo {
+        color_format: 0,
+        depth_format: 0,
+        motion_format: 0,
+        diffuse_albedo_format: 0,
+        specular_albedo_format: 0,
+        normal_format: 0,
+        roughness_format: 0,
+        specular_hit_distance_format: 0,
+        denoise_strength_mask_format: 0,
+        transparency_overlay_format: 0,
+        reactive_mask_format: 0,
+        output_format: 0,
+        input_width: 0,
+        input_height: 0,
+        output_width: 0,
+        output_height: 0,
+        synchronous_init: 0,
+        auto_exposure: 0,
+        reactive_mask_enabled: 0,
+        specular_hit_distance_enabled: 0,
+        denoise_strength_mask_enabled: 0,
+        transparency_overlay_enabled: 0,
+        pad: [0; 2],
+    }
+}
+
 /// `MTLD3D12TemporalScalerImpl` (`d3d12_device.hpp:156-165`, `d3d12_device.cpp:267-321`).
 #[repr(C)]
 pub struct TemporalScalerObject {
@@ -72,11 +145,15 @@ pub struct TemporalScalerObject {
     pub device: *mut Device,
     pub desc: D3D12ScalerDesc,
     pub info: WMTFXTemporalScalerInfo,
+    pub denoised: bool,
+    pub denoised_desc: D3D12DenoisedScalerDesc,
+    pub denoised_info: WMTFXTemporalDenoisedScalerInfo,
     pub scaler: Arc<TemporalScaler>,
     pub fresh: AtomicBool,
     pub depth_scratch: Mutex<Option<Arc<Texture>>>,
     pub motion_scratch: Mutex<Option<Arc<Texture>>>,
     pub output_scratch: Mutex<Option<Arc<Texture>>>,
+    pub denoised_scratches: [Mutex<Option<Arc<Texture>>>; 8],
 }
 
 impl ComRefCounted for TemporalScalerObject {
@@ -164,46 +241,83 @@ impl TemporalScalerObject {
             Scratch::Motion => (&self.motion_scratch, self.info.motion_format),
             Scratch::Output => (&self.output_scratch, self.info.output_format),
         };
-        let usage = WMT_TEXTURE_USAGE_SHADER_READ
-            | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW
-            | if which == Scratch::Output {
-                WMT_TEXTURE_USAGE_SHADER_WRITE | WMT_TEXTURE_USAGE_RENDER_TARGET
-            } else {
-                0
-            };
-        let mut guard = lock(slot);
-        if let Some(tex) = guard.as_ref() {
-            return Some(Arc::clone(tex));
-        }
-        let bits = (WMT_TEXTURE_TYPE2D & 0xff)
-            | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
-            | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
-            | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
-        let lossless = settings().d3d12_compression != Compression::Off;
-        let info = WMTTextureInfo {
-            pixel_format: format,
-            width,
-            height,
-            depth: 1,
-            array_length: 1,
-            bits,
-            options: WMT_RESOURCE_STORAGE_MODE_PRIVATE
-                | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-            flags: if lossless {
-                WMT_TEXTURE_FLAG_LOSSLESS
-            } else {
-                0
-            },
-            mach_port: 0,
-            gpu_resource_id: 0,
-        };
-        let tex = Arc::new(Texture::new(info, mtl));
-        let alloc = tex.allocate(TextureAllocationFlags::GPU_PRIVATE);
-        let _ = tex.rename(alloc);
-        *guard = Some(Arc::clone(&tex));
-        drop(guard);
-        Some(tex)
+        let is_output = which == Scratch::Output;
+        Some(get_or_create_scratch(
+            mtl, slot, width, height, format, is_output,
+        ))
     }
+
+    /// Returns (creating on first use) the denoised input scratch texture for `which`.
+    #[must_use]
+    pub fn get_denoised_scratch(
+        &self,
+        which: DenoisedScratch,
+        format: u32,
+    ) -> Option<Arc<Texture>> {
+        if self.device.is_null() {
+            return None;
+        }
+        // SAFETY: `self.device` is kept alive for the lifetime of `self`.
+        let dev = unsafe { &*self.device };
+        let mtl = dev.mtl.as_ref()?;
+        let slot = &self.denoised_scratches[which as usize];
+        Some(get_or_create_scratch(
+            mtl,
+            slot,
+            self.denoised_desc.input_width,
+            self.denoised_desc.input_height,
+            format,
+            false,
+        ))
+    }
+}
+
+fn get_or_create_scratch(
+    mtl: &winemetal_sys::Obj,
+    slot: &Mutex<Option<Arc<Texture>>>,
+    width: u32,
+    height: u32,
+    format: u32,
+    is_output: bool,
+) -> Arc<Texture> {
+    let usage = WMT_TEXTURE_USAGE_SHADER_READ
+        | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW
+        | if is_output {
+            WMT_TEXTURE_USAGE_SHADER_WRITE | WMT_TEXTURE_USAGE_RENDER_TARGET
+        } else {
+            0
+        };
+    let mut guard = lock(slot);
+    if let Some(tex) = guard.as_ref() {
+        return Arc::clone(tex);
+    }
+    let bits = (WMT_TEXTURE_TYPE2D & 0xff)
+        | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
+        | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
+        | ((usage & 0xff) << WMTTextureInfo::USAGE_SHIFT);
+    let lossless = settings().d3d12_compression != Compression::Off;
+    let info = WMTTextureInfo {
+        pixel_format: format,
+        width,
+        height,
+        depth: 1,
+        array_length: 1,
+        bits,
+        options: WMT_RESOURCE_STORAGE_MODE_PRIVATE | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+        flags: if lossless {
+            WMT_TEXTURE_FLAG_LOSSLESS
+        } else {
+            0
+        },
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    let tex = Arc::new(Texture::new(info, mtl));
+    let alloc = tex.allocate(TextureAllocationFlags::GPU_PRIVATE);
+    let _ = tex.rename(alloc);
+    *guard = Some(Arc::clone(&tex));
+    drop(guard);
+    tex
 }
 
 /// Casts a non-null `IMTLD3D12TemporalScaler` pointer if its vtable matches
@@ -248,6 +362,81 @@ pub unsafe fn get_temporal_scaler_scale_range(
     S_OK
 }
 
+fn depth_pixel_format(dxgi_format: u32) -> u32 {
+    let (hr, depth_f) = query_dxgi(dxgi_format);
+    if hr < 0 {
+        return WMT_PIXEL_FORMAT_INVALID;
+    }
+    match depth_f.pixel_format {
+        WMT_PIXEL_FORMAT_DEPTH32_FLOAT
+        | WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8
+        | WMT_PIXEL_FORMAT_R32_FLOAT
+        | WMT_PIXEL_FORMAT_R32_UINT => WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
+        _ => WMT_PIXEL_FORMAT_INVALID,
+    }
+}
+
+fn motion_pixel_format(dxgi_format: u32) -> u32 {
+    let (hr, motion_f) = query_dxgi(dxgi_format);
+    if hr < 0 {
+        return WMT_PIXEL_FORMAT_INVALID;
+    }
+    match motion_f.pixel_format {
+        WMT_PIXEL_FORMAT_RG16_UINT
+        | WMT_PIXEL_FORMAT_RG16_FLOAT
+        | WMT_PIXEL_FORMAT_RG16_SINT
+        | WMT_PIXEL_FORMAT_RG16_SNORM
+        | WMT_PIXEL_FORMAT_RG16_UNORM => WMT_PIXEL_FORMAT_RG16_FLOAT,
+        WMT_PIXEL_FORMAT_RG32_UINT | WMT_PIXEL_FORMAT_RG32_FLOAT | WMT_PIXEL_FORMAT_RG32_SINT => {
+            WMT_PIXEL_FORMAT_RG32_FLOAT
+        }
+        WMT_PIXEL_FORMAT_RGBA16_SINT
+        | WMT_PIXEL_FORMAT_RGBA16_SNORM
+        | WMT_PIXEL_FORMAT_RGBA16_UINT
+        | WMT_PIXEL_FORMAT_RGBA16_UNORM
+        | WMT_PIXEL_FORMAT_RGBA16_FLOAT => WMT_PIXEL_FORMAT_RGBA16_FLOAT,
+        _ => WMT_PIXEL_FORMAT_INVALID,
+    }
+}
+
+fn optional_colour_pixel_format(enabled: i32, dxgi_format: u32) -> Option<(u8, u32)> {
+    if enabled == 0 {
+        return Some((0, WMT_PIXEL_FORMAT_INVALID));
+    }
+    if dxgi_format == DXGI_FORMAT_UNKNOWN {
+        return None;
+    }
+    let fmt = colour_pixel_format(typed_dxgi_format(dxgi_format));
+    (fmt != WMT_PIXEL_FORMAT_INVALID).then_some((1, fmt))
+}
+
+const fn denoised_info_eq(
+    a: &WMTFXTemporalDenoisedScalerInfo,
+    b: &WMTFXTemporalDenoisedScalerInfo,
+) -> bool {
+    a.color_format == b.color_format
+        && a.depth_format == b.depth_format
+        && a.motion_format == b.motion_format
+        && a.diffuse_albedo_format == b.diffuse_albedo_format
+        && a.specular_albedo_format == b.specular_albedo_format
+        && a.normal_format == b.normal_format
+        && a.roughness_format == b.roughness_format
+        && a.specular_hit_distance_format == b.specular_hit_distance_format
+        && a.denoise_strength_mask_format == b.denoise_strength_mask_format
+        && a.transparency_overlay_format == b.transparency_overlay_format
+        && a.reactive_mask_format == b.reactive_mask_format
+        && a.output_format == b.output_format
+        && a.input_width == b.input_width
+        && a.input_height == b.input_height
+        && a.output_width == b.output_width
+        && a.output_height == b.output_height
+        && a.synchronous_init == b.synchronous_init
+        && a.auto_exposure == b.auto_exposure
+        && a.reactive_mask_enabled == b.reactive_mask_enabled
+        && a.specular_hit_distance_enabled == b.specular_hit_distance_enabled
+        && a.denoise_strength_mask_enabled == b.denoise_strength_mask_enabled
+        && a.transparency_overlay_enabled == b.transparency_overlay_enabled
+}
 const fn info_eq(a: &WMTFXTemporalScalerInfo, b: &WMTFXTemporalScalerInfo) -> bool {
     a.color_format == b.color_format
         && a.output_format == b.output_format
@@ -358,40 +547,8 @@ pub unsafe fn create_temporal_scaler(
         return E_INVALIDARG;
     }
 
-    let (hr_d, depth_f) = query_dxgi(d.depth_format);
-    let depth = if hr_d < 0 {
-        WMT_PIXEL_FORMAT_INVALID
-    } else {
-        match depth_f.pixel_format {
-            WMT_PIXEL_FORMAT_DEPTH32_FLOAT
-            | WMT_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8
-            | WMT_PIXEL_FORMAT_R32_FLOAT
-            | WMT_PIXEL_FORMAT_R32_UINT => WMT_PIXEL_FORMAT_DEPTH32_FLOAT,
-            _ => WMT_PIXEL_FORMAT_INVALID,
-        }
-    };
-
-    let (hr_m, motion_f) = query_dxgi(d.motion_format);
-    let motion = if hr_m < 0 {
-        WMT_PIXEL_FORMAT_INVALID
-    } else {
-        match motion_f.pixel_format {
-            WMT_PIXEL_FORMAT_RG16_UINT
-            | WMT_PIXEL_FORMAT_RG16_FLOAT
-            | WMT_PIXEL_FORMAT_RG16_SINT
-            | WMT_PIXEL_FORMAT_RG16_SNORM
-            | WMT_PIXEL_FORMAT_RG16_UNORM => WMT_PIXEL_FORMAT_RG16_FLOAT,
-            WMT_PIXEL_FORMAT_RG32_UINT
-            | WMT_PIXEL_FORMAT_RG32_FLOAT
-            | WMT_PIXEL_FORMAT_RG32_SINT => WMT_PIXEL_FORMAT_RG32_FLOAT,
-            WMT_PIXEL_FORMAT_RGBA16_SINT
-            | WMT_PIXEL_FORMAT_RGBA16_SNORM
-            | WMT_PIXEL_FORMAT_RGBA16_UINT
-            | WMT_PIXEL_FORMAT_RGBA16_UNORM
-            | WMT_PIXEL_FORMAT_RGBA16_FLOAT => WMT_PIXEL_FORMAT_RGBA16_FLOAT,
-            _ => WMT_PIXEL_FORMAT_INVALID,
-        }
-    };
+    let depth = depth_pixel_format(d.depth_format);
+    let motion = motion_pixel_format(d.motion_format);
 
     let color_format = colour_pixel_format(typed_dxgi_format(d.color_format));
     let output_format = colour_pixel_format(typed_dxgi_format(d.output_format));
@@ -452,11 +609,15 @@ pub unsafe fn create_temporal_scaler(
         device: dev_ptr,
         desc: d,
         info,
+        denoised: false,
+        denoised_desc: zeroed_denoised_desc(),
+        denoised_info: zeroed_denoised_info(),
         scaler: fx,
         fresh: AtomicBool::new(true),
         depth_scratch: Mutex::new(None),
         motion_scratch: Mutex::new(None),
         output_scratch: Mutex::new(None),
+        denoised_scratches: Default::default(),
     });
     // SAFETY: `scaler` was validated non-null above.
     unsafe { scaler.write_unaligned(Box::into_raw(obj).cast::<c_void>()) };
@@ -507,3 +668,234 @@ pub fn release_temporal_scaler(
     let mut pool = lock(&device.upscalers);
     pool.push((info, scaler));
 }
+
+/// `IMTLD3D12DeviceExt1::SupportsTemporalDenoisedScaler`.
+///
+/// # Safety
+///
+/// `this` is a caller-supplied `IMTLD3D12DeviceExt1` companion pointer.
+pub unsafe fn supports_temporal_denoised_scaler(this: *mut c_void) -> i32 {
+    if this.is_null() {
+        return 0;
+    }
+    // SAFETY: `this` is the companion pointer at `Device::EXT_OFFSET` inside a live `Device`.
+    let dev_ptr = unsafe { com::from_companion::<Device>(this, Device::EXT_OFFSET) };
+    // SAFETY: `dev_ptr` points to the enclosing `Device`.
+    let dev = unsafe { &*dev_ptr };
+    let Some(mtl) = dev.mtl.as_ref() else {
+        return 0;
+    };
+    let h = mtl.handle();
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    i32::from(unsafe { MTLDevice_supportsFXTemporalDenoisedScaler(h) })
+}
+
+/// `IMTLD3D12DeviceExt1::CreateTemporalDenoisedScaler`.
+///
+/// # Safety
+///
+/// `this`, `desc`, and `scaler` are caller-supplied pointers.
+pub unsafe fn create_temporal_denoised_scaler(
+    this: *mut c_void,
+    desc: *const D3D12DenoisedScalerDesc,
+    scaler: *mut *mut c_void,
+) -> Hresult {
+    crate::scope!("device.CreateTemporalDenoisedScaler");
+    if this.is_null() || desc.is_null() || scaler.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: `scaler` is non-null.
+    unsafe { com::init_out_ptr(scaler) };
+    // SAFETY: `this` is the companion pointer at `Device::EXT_OFFSET` inside a live `Device`.
+    let dev_ptr = unsafe { com::from_companion::<Device>(this, Device::EXT_OFFSET) };
+    // SAFETY: `dev_ptr` points to the enclosing `Device`.
+    let dev = unsafe { &*dev_ptr };
+    if !dev.temporal_supported {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    let Some(mtl) = dev.mtl.as_ref() else {
+        return DXGI_ERROR_UNSUPPORTED;
+    };
+    let h = mtl.handle();
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    if !unsafe { MTLDevice_supportsFXTemporalDenoisedScaler(h) } {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    // SAFETY: `desc` is non-null.
+    let d = unsafe { desc.read_unaligned() };
+    if d.input_width == 0 || d.input_height == 0 || d.output_width == 0 || d.output_height == 0 {
+        return E_INVALIDARG;
+    }
+
+    let color_format = colour_pixel_format(typed_dxgi_format(d.color_format));
+    let output_format = colour_pixel_format(typed_dxgi_format(d.output_format));
+    let depth_format = depth_pixel_format(d.depth_format);
+    let motion_format = motion_pixel_format(d.motion_format);
+    let diffuse_albedo_format = colour_pixel_format(typed_dxgi_format(d.diffuse_albedo_format));
+    let specular_albedo_format = colour_pixel_format(typed_dxgi_format(d.specular_albedo_format));
+    let normal_format = colour_pixel_format(typed_dxgi_format(d.normal_format));
+    let roughness_format = colour_pixel_format(typed_dxgi_format(d.roughness_format));
+
+    if color_format == WMT_PIXEL_FORMAT_INVALID
+        || output_format == WMT_PIXEL_FORMAT_INVALID
+        || depth_format == WMT_PIXEL_FORMAT_INVALID
+        || motion_format == WMT_PIXEL_FORMAT_INVALID
+        || diffuse_albedo_format == WMT_PIXEL_FORMAT_INVALID
+        || specular_albedo_format == WMT_PIXEL_FORMAT_INVALID
+        || normal_format == WMT_PIXEL_FORMAT_INVALID
+        || roughness_format == WMT_PIXEL_FORMAT_INVALID
+    {
+        return E_INVALIDARG;
+    }
+
+    let Some((specular_hit_distance_enabled, specular_hit_distance_format)) =
+        optional_colour_pixel_format(
+            d.specular_hit_distance_enabled,
+            d.specular_hit_distance_format,
+        )
+    else {
+        return E_INVALIDARG;
+    };
+    let Some((denoise_strength_mask_enabled, denoise_strength_mask_format)) =
+        optional_colour_pixel_format(
+            d.denoise_strength_mask_enabled,
+            d.denoise_strength_mask_format,
+        )
+    else {
+        return E_INVALIDARG;
+    };
+    let Some((transparency_overlay_enabled, transparency_overlay_format)) =
+        optional_colour_pixel_format(
+            d.transparency_overlay_enabled,
+            d.transparency_overlay_format,
+        )
+    else {
+        return E_INVALIDARG;
+    };
+    let Some((reactive_mask_enabled, reactive_mask_format)) =
+        optional_colour_pixel_format(d.reactive_mask_enabled, d.reactive_mask_format)
+    else {
+        return E_INVALIDARG;
+    };
+
+    let info = WMTFXTemporalDenoisedScalerInfo {
+        color_format,
+        depth_format,
+        motion_format,
+        diffuse_albedo_format,
+        specular_albedo_format,
+        normal_format,
+        roughness_format,
+        specular_hit_distance_format,
+        denoise_strength_mask_format,
+        transparency_overlay_format,
+        reactive_mask_format,
+        output_format,
+        input_width: d.input_width,
+        input_height: d.input_height,
+        output_width: d.output_width,
+        output_height: d.output_height,
+        synchronous_init: u8::from(d.synchronous_init != 0),
+        auto_exposure: u8::from(d.auto_exposure != 0),
+        reactive_mask_enabled,
+        specular_hit_distance_enabled,
+        denoise_strength_mask_enabled,
+        transparency_overlay_enabled,
+        pad: [0; 2],
+    };
+
+    let Some(fx) = acquire_temporal_denoised_scaler(dev, &info) else {
+        crate::err!(
+            "CreateTemporalDenoisedScaler: MetalFX made no denoised upscaler for {}x{} to {}x{}",
+            d.input_width,
+            d.input_height,
+            d.output_width,
+            d.output_height
+        );
+        return E_OUTOFMEMORY;
+    };
+
+    // SAFETY: `dev_ptr` is a live `Device`; retains a public reference for `TemporalScalerObject`.
+    let _ = unsafe { com::add_ref_com(dev_ptr) };
+
+    let base_desc = D3D12ScalerDesc {
+        input_width: d.input_width,
+        input_height: d.input_height,
+        output_width: d.output_width,
+        output_height: d.output_height,
+        color_format: d.color_format,
+        output_format: d.output_format,
+        depth_format: d.depth_format,
+        motion_format: d.motion_format,
+        reactive_mask_format: if reactive_mask_enabled != 0 {
+            d.reactive_mask_format
+        } else {
+            DXGI_FORMAT_UNKNOWN
+        },
+        input_content_min_scale: 1.0,
+        input_content_max_scale: 1.0,
+        auto_exposure: d.auto_exposure,
+        output_resolution_motion_vectors: 0,
+        jittered_motion_vectors: 0,
+    };
+    let base_info = *fx.info();
+    let obj = Box::new(TemporalScalerObject {
+        vtbl: &TEMPORAL_SCALER_VTBL,
+        com: ComObject::with_initial_ref(),
+        private_data: PrivateData::default(),
+        device: dev_ptr,
+        desc: base_desc,
+        info: base_info,
+        denoised: true,
+        denoised_desc: d,
+        denoised_info: info,
+        scaler: fx,
+        fresh: AtomicBool::new(true),
+        depth_scratch: Mutex::new(None),
+        motion_scratch: Mutex::new(None),
+        output_scratch: Mutex::new(None),
+        denoised_scratches: Default::default(),
+    });
+    // SAFETY: `scaler` was validated non-null above.
+    unsafe { scaler.write_unaligned(Box::into_raw(obj).cast::<c_void>()) };
+    S_OK
+}
+
+/// Acquires or creates a `MetalFX` temporal denoised scaler matching `info`.
+#[must_use]
+pub fn acquire_temporal_denoised_scaler(
+    device: &Device,
+    info: &WMTFXTemporalDenoisedScalerInfo,
+) -> Option<Arc<TemporalScaler>> {
+    let mut pool = lock(&device.denoised_upscalers);
+    let metal = if let Some(pos) = pool
+        .iter()
+        .position(|(k, v)| denoised_info_eq(k, info) && Arc::strong_count(v) == 1)
+    {
+        let (_, obj) = pool.remove(pos);
+        obj
+    } else {
+        let mtl = device.mtl.as_ref()?;
+        let h = mtl.handle();
+        // SAFETY: `h` is a live `MTLDevice` handle.
+        let ts = unsafe { TemporalScaler::new_denoised(h, info) };
+        ts.scaler().is_some().then(|| Arc::new(ts))?
+    };
+    pool.push((*info, Arc::clone(&metal)));
+    while pool
+        .iter()
+        .filter(|(_, s)| Arc::strong_count(s) == 1)
+        .count()
+        > 4
+    {
+        if let Some(pos) = pool.iter().position(|(_, s)| Arc::strong_count(s) == 1) {
+            let _ = pool.remove(pos);
+        }
+    }
+    drop(pool);
+    Some(metal)
+}
+
+#[cfg(test)]
+mod tests;

@@ -654,6 +654,7 @@ src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferBlitcommandencoderwithsamp
 src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferComputecommandencoderwithsamplebuffers Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferFrameInterpolate Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferSpatialScale Clone,Copy
+src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferTemporalDenoisedScale Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlcommandbufferTemporalScale Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlcountersamplebufferNewtimestampbuffer Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtlcountersamplebufferResolvecounterrange Clone,Copy
@@ -666,6 +667,7 @@ src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewcomputepso Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewdepthstencilstate Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewfxframeinterpolator Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewfxspatialscaler Clone,Copy
+src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewfxtemporaldenoisedscaler Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewfxtemporalscaler Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewheap Clone,Copy
 src/winemetal/wire/src/lib.rs UnixcallMtldeviceNewicb Clone,Copy
@@ -713,6 +715,8 @@ src/winemetal/wire/src/lib.rs WMTEDRValue Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFXFrameInterpolatorInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFXFrameInterpolatorProps Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFXSpatialScalerInfo Clone,Copy
+src/winemetal/wire/src/lib.rs WMTFXTemporalDenoisedScalerInfo Clone,Copy
+src/winemetal/wire/src/lib.rs WMTFXTemporalDenoisedScalerProps Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFXTemporalScalerInfo Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFXTemporalScalerProps Clone,Copy
 src/winemetal/wire/src/lib.rs WMTFunctionConstant Clone,Copy

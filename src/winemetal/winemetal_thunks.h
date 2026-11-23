@@ -430,6 +430,33 @@ struct unixcall_mtlcommandbuffer_frame_interpolate {
   obj_handle_t output;
   obj_handle_t fence;
   struct WMTConstMemoryPointer props;
+  obj_handle_t ui_texture;
+};
+
+struct unixcall_mtldevice_newfxtemporaldenoisedscaler {
+  obj_handle_t device;
+  struct WMTConstMemoryPointer info;
+  obj_handle_t ret;
+};
+
+struct unixcall_mtlcommandbuffer_temporal_denoised_scale {
+  obj_handle_t cmdbuf;
+  obj_handle_t scaler;
+  obj_handle_t color;
+  obj_handle_t output;
+  obj_handle_t depth;
+  obj_handle_t motion;
+  obj_handle_t diffuse_albedo;
+  obj_handle_t specular_albedo;
+  obj_handle_t normal;
+  obj_handle_t roughness;
+  obj_handle_t specular_hit_distance;
+  obj_handle_t denoise_strength_mask;
+  obj_handle_t transparency_overlay;
+  obj_handle_t exposure;
+  obj_handle_t reactive_mask;
+  obj_handle_t fence;
+  struct WMTConstMemoryPointer props;
 };
 
 struct unixcall_mtldevice_fxtemporalscaler_scale {

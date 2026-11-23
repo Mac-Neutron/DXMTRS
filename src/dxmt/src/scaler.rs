@@ -10,8 +10,9 @@ mod abi;
 use core::ffi::c_void;
 
 use winemetal_sys::{
-    MTLDevice_newFence, MTLDevice_newSpatialScaler, MTLDevice_newTemporalScaler, Obj,
-    wire::{WMTFXSpatialScalerInfo, WMTFXTemporalScalerInfo},
+    MTLDevice_newFence, MTLDevice_newSpatialScaler, MTLDevice_newTemporalDenoisedScaler,
+    MTLDevice_newTemporalScaler, Obj,
+    wire::{WMTFXSpatialScalerInfo, WMTFXTemporalDenoisedScalerInfo, WMTFXTemporalScalerInfo},
 };
 
 /// A `MetalFX` scaler and its fence, each `None` when Metal made none.
@@ -44,6 +45,19 @@ impl Scaler {
     pub unsafe fn temporal(device: u64, info: &WMTFXTemporalScalerInfo) -> Self {
         // SAFETY: the caller's promise; the info is alive for the call.
         let scaler = unsafe { MTLDevice_newTemporalScaler(device, info) };
+        // SAFETY: as above, and `scaler` is +1 or null.
+        unsafe { Self::with_fence(device, scaler) }
+    }
+
+    /// A temporal denoised scaler for `info`, then its fence.
+    ///
+    /// # Safety
+    ///
+    /// `device` is a live `MTLDevice`.
+    #[must_use]
+    pub unsafe fn temporal_denoised(device: u64, info: &WMTFXTemporalDenoisedScalerInfo) -> Self {
+        // SAFETY: the caller's promise; the info is alive for the call.
+        let scaler = unsafe { MTLDevice_newTemporalDenoisedScaler(device, info) };
         // SAFETY: as above, and `scaler` is +1 or null.
         unsafe { Self::with_fence(device, scaler) }
     }

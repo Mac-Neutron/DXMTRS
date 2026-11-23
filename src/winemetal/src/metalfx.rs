@@ -2,11 +2,13 @@
 
 use winemetal_wire::{
     UnixcallGenericObjUint64Ret, UnixcallMtlcommandbufferFrameInterpolate,
-    UnixcallMtlcommandbufferSpatialScale, UnixcallMtlcommandbufferTemporalScale,
-    UnixcallMtldeviceFxtemporalscalerScale, UnixcallMtldeviceNewfxframeinterpolator,
-    UnixcallMtldeviceNewfxspatialscaler, UnixcallMtldeviceNewfxtemporalscaler,
+    UnixcallMtlcommandbufferSpatialScale, UnixcallMtlcommandbufferTemporalDenoisedScale,
+    UnixcallMtlcommandbufferTemporalScale, UnixcallMtldeviceFxtemporalscalerScale,
+    UnixcallMtldeviceNewfxframeinterpolator, UnixcallMtldeviceNewfxspatialscaler,
+    UnixcallMtldeviceNewfxtemporaldenoisedscaler, UnixcallMtldeviceNewfxtemporalscaler,
     WMTFXFrameInterpolatorInfo, WMTFXFrameInterpolatorProps, WMTFXSpatialScalerInfo,
-    WMTFXTemporalScalerInfo, WMTFXTemporalScalerProps, slot,
+    WMTFXTemporalDenoisedScalerInfo, WMTFXTemporalDenoisedScalerProps, WMTFXTemporalScalerInfo,
+    WMTFXTemporalScalerProps, slot,
 };
 
 use crate::transport::{call, mem_ptr};
@@ -102,6 +104,7 @@ exports! {
         output: u64,
         fence: u64,
         props: *const WMTFXFrameInterpolatorProps,
+        ui_texture: u64,
     ) {
         call(slot::MTL_COMMAND_BUFFER_ENCODE_FRAME_INTERPOLATE, |p: &mut UnixcallMtlcommandbufferFrameInterpolate| {
             p.cmdbuf = cmdbuf;
@@ -113,6 +116,72 @@ exports! {
             p.output = output;
             p.fence = fence;
             p.props = mem_ptr(props);
+            p.ui_texture = ui_texture;
         });
+    }
+
+    fn MTLDevice_supportsFXTemporalDenoisedScaler(device: u64) -> bool {
+        call(
+            slot::MTL_DEVICE_SUPPORTS_FX_TEMPORAL_DENOISED_SCALER,
+            |p: &mut UnixcallGenericObjUint64Ret| p.handle = device,
+        )
+        .ret != 0
+    }
+
+    fn MTLDevice_newTemporalDenoisedScaler(
+        device: u64,
+        info: *const WMTFXTemporalDenoisedScalerInfo,
+    ) -> u64 {
+        call(
+            slot::MTL_DEVICE_NEW_TEMPORAL_DENOISED_SCALER,
+            |p: &mut UnixcallMtldeviceNewfxtemporaldenoisedscaler| {
+                p.device = device;
+                p.info = mem_ptr(info);
+            },
+        )
+        .ret
+    }
+
+    fn MTLCommandBuffer_encodeTemporalDenoisedScale(
+        cmdbuf: u64,
+        scaler: u64,
+        color: u64,
+        output: u64,
+        depth: u64,
+        motion: u64,
+        diffuse_albedo: u64,
+        specular_albedo: u64,
+        normal: u64,
+        roughness: u64,
+        specular_hit_distance: u64,
+        denoise_strength_mask: u64,
+        transparency_overlay: u64,
+        exposure: u64,
+        reactive_mask: u64,
+        fence: u64,
+        props: *const WMTFXTemporalDenoisedScalerProps,
+    ) {
+        call(
+            slot::MTL_COMMAND_BUFFER_ENCODE_TEMPORAL_DENOISED_SCALE,
+            |p: &mut UnixcallMtlcommandbufferTemporalDenoisedScale| {
+                p.cmdbuf = cmdbuf;
+                p.scaler = scaler;
+                p.color = color;
+                p.output = output;
+                p.depth = depth;
+                p.motion = motion;
+                p.diffuse_albedo = diffuse_albedo;
+                p.specular_albedo = specular_albedo;
+                p.normal = normal;
+                p.roughness = roughness;
+                p.specular_hit_distance = specular_hit_distance;
+                p.denoise_strength_mask = denoise_strength_mask;
+                p.transparency_overlay = transparency_overlay;
+                p.exposure = exposure;
+                p.reactive_mask = reactive_mask;
+                p.fence = fence;
+                p.props = mem_ptr(props);
+            },
+        );
     }
 }

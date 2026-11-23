@@ -16,6 +16,7 @@ use dxmt_core::{
 use dxmt_util::{
     com::ComObject,
     dxgi_consts::DXGI_FORMAT_UNKNOWN,
+    float_cast::u32_to_f32,
     private_data::{self, HasPrivateData, PrivateData},
     sync::lock,
 };
@@ -31,6 +32,10 @@ use winemetal_sys::wire::{
 
 use crate::{
     abi::{
+        agility::{
+            D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES, D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR,
+            SamplerDesc2,
+        },
         objects::{
             D3D12_BUFFER_SRV_FLAG_RAW, D3D12_BUFFER_UAV_FLAG_RAW,
             D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -1182,6 +1187,65 @@ pub unsafe fn create_sampler(
     crate::scope!("device.CreateSampler");
     // SAFETY: Forwarding `sampler_desc` and `dest_descriptor` to `write_sampler`.
     let _ = unsafe { write_sampler(dest_descriptor, sampler_desc) };
+}
+
+/// `ID3D12Device11::CreateSampler2`.
+///
+/// # Safety
+///
+/// `this` and `sampler_desc` are caller-supplied pointers.
+pub unsafe fn create_sampler2(
+    this: *mut c_void,
+    sampler_desc: *const SamplerDesc2,
+    dest_descriptor: D3d12CpuDescriptorHandle,
+) {
+    static WARNED_UINT_BORDER: AtomicBool = AtomicBool::new(false);
+    static WARNED_NON_NORMALIZED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("device.CreateSampler2");
+    if sampler_desc.is_null() {
+        return;
+    }
+    // SAFETY: `sampler_desc` was checked non-null; reading `D3D12_SAMPLER_DESC2`.
+    let desc2 = unsafe { read_unaligned(sampler_desc) };
+    let border_color = if (desc2.flags & D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR) != 0 {
+        if !WARNED_UINT_BORDER.swap(true, Ordering::Relaxed) {
+            crate::warn!(
+                "D3D12Device11::CreateSampler2: UINT_BORDER_COLOR is converted to float border color"
+            );
+        }
+        // SAFETY: `SamplerBorderColor` is a POD union; reading `uint_border_color` variant.
+        let uint = unsafe { desc2.border_color.uint_border_color };
+        [
+            u32_to_f32(uint[0]),
+            u32_to_f32(uint[1]),
+            u32_to_f32(uint[2]),
+            u32_to_f32(uint[3]),
+        ]
+    } else {
+        // SAFETY: `SamplerBorderColor` is a POD union; reading `float_border_color` variant.
+        unsafe { desc2.border_color.float_border_color }
+    };
+    if (desc2.flags & D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES) != 0
+        && !WARNED_NON_NORMALIZED.swap(true, Ordering::Relaxed)
+    {
+        crate::warn!(
+            "D3D12Device11::CreateSampler2: NON_NORMALIZED_COORDINATES is ignored; using normalized coordinates"
+        );
+    }
+    let desc = SamplerDesc {
+        filter: desc2.filter,
+        address_u: desc2.address_u,
+        address_v: desc2.address_v,
+        address_w: desc2.address_w,
+        mip_lod_bias: desc2.mip_lod_bias,
+        max_anisotropy: desc2.max_anisotropy,
+        comparison_func: desc2.comparison_func,
+        border_color,
+        min_lod: desc2.min_lod,
+        max_lod: desc2.max_lod,
+    };
+    // SAFETY: `desc` is stack-allocated and lives across the synchronous `create_sampler` call.
+    unsafe { create_sampler(this, (&raw const desc).cast::<c_void>(), dest_descriptor) };
 }
 
 /// Copies `count` contiguous descriptors from `(src_heap, src_idx)` to `(dst_heap, dst_idx)`.

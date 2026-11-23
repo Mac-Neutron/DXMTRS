@@ -2,13 +2,14 @@ use core::{ffi::c_void, ptr};
 
 use super::{ext_query_interface, ext_release, query_interface};
 use crate::{
-    abi::ext::{IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT},
+    abi::ext::{IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IID_IMTL_D3D12_DEVICE_EXT1},
     com::{
         E_NOINTERFACE, E_POINTER, Guid, IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE,
         IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2, IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4,
         IID_ID3D11_DEVICE5, IID_ID3D12_DEVICE, IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2,
         IID_ID3D12_DEVICE3, IID_ID3D12_DEVICE4, IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6,
         IID_ID3D12_DEVICE7, IID_ID3D12_DEVICE8, IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10,
+        IID_ID3D12_DEVICE11, IID_ID3D12_DEVICE12, IID_ID3D12_DEVICE13, IID_ID3D12_DEVICE14,
         IID_ID3D12_OBJECT, IID_IDXGI_DEVICE, IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2,
         IID_IDXGI_DEVICE3, IID_IDXGI_DEVICE4, IID_IUNKNOWN, S_OK, release_com,
     },
@@ -40,6 +41,10 @@ fn qi_matrix_as_probe() {
         IID_ID3D12_DEVICE8,
         IID_ID3D12_DEVICE9,
         IID_ID3D12_DEVICE10,
+        IID_ID3D12_DEVICE11,
+        IID_ID3D12_DEVICE12,
+        IID_ID3D12_DEVICE13,
+        IID_ID3D12_DEVICE14,
     ];
     for iid in answered {
         let mut out: *mut c_void = ptr::null_mut();
@@ -88,12 +93,19 @@ fn ext_only_with_temporal_scaler() {
     // Without temporal scaler support (`new_dummy` defaults to `false`), `IMTLD3D12DeviceExt` is
     // refused with `E_NOINTERFACE`.
     let iid_ext = IID_D3D12_DEVICE_EXT;
+    let iid_ext1 = IID_IMTL_D3D12_DEVICE_EXT1;
     let iid_unk = IID_IUNKNOWN;
     let mut out: *mut c_void = ptr::without_provenance_mut(0xdead);
     // SAFETY: `this`, `iid_ext`, and `out` are valid pointers.
     let hr = unsafe { query_interface(this, (&raw const iid_ext).cast(), &raw mut out) };
     assert_eq!(hr, E_NOINTERFACE);
     assert!(out.is_null());
+
+    let mut out1: *mut c_void = ptr::without_provenance_mut(0xdead);
+    // SAFETY: `this`, `iid_ext1`, and `out1` are valid pointers.
+    let hr = unsafe { query_interface(this, (&raw const iid_ext1).cast(), &raw mut out1) };
+    assert_eq!(hr, E_NOINTERFACE);
+    assert!(out1.is_null());
 
     // Enable temporal scaler support and verify companion pointer + COM identity law.
     // SAFETY: `raw` is uniquely owned here.
@@ -103,14 +115,21 @@ fn ext_only_with_temporal_scaler() {
     assert_eq!(hr, S_OK);
     assert_eq!(out.addr(), raw.addr() + Device::EXT_OFFSET);
 
+    // SAFETY: `this`, `iid_ext1`, and `out1` are valid pointers.
+    let hr = unsafe { query_interface(this, (&raw const iid_ext1).cast(), &raw mut out1) };
+    assert_eq!(hr, S_OK);
+    assert_eq!(out1, out);
+
     let mut unk: *mut c_void = ptr::null_mut();
     // SAFETY: `out` is the companion pointer at `Device::EXT_OFFSET`.
     let hr = unsafe { ext_query_interface(out, (&raw const iid_unk).cast(), &raw mut unk) };
     assert_eq!(hr, S_OK);
     assert_eq!(unk, this);
 
-    // SAFETY: release `unk`, `out`, and the initial reference on `raw`.
-    assert_eq!(unsafe { release_com(raw) }, 2);
+    // SAFETY: release `unk`, `out1`, `out`, and the initial reference on `raw`.
+    assert_eq!(unsafe { release_com(raw) }, 3);
+    // SAFETY: `out1` is at `Device::EXT_OFFSET` inside `raw`.
+    assert_eq!(unsafe { ext_release(out1) }, 2);
     // SAFETY: `out` is at `Device::EXT_OFFSET` inside `raw`.
     assert_eq!(unsafe { ext_release(out) }, 1);
     // SAFETY: releases the final public reference on `raw`.

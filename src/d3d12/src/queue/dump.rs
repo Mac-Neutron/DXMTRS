@@ -62,8 +62,15 @@ const SINGLE_FRAME_DUMP_BUDGET: u64 = 3 << 30;
 const BURST_FRAME_DUMP_BUDGET: u64 = 12 << 30;
 
 /// Pass kind names written to `passes.txt` (`d3d12_command_queue.cpp:881`).
-const PASS_KINDS: [&str; 7] = [
-    "null", "clear", "render", "blit", "compute", "resolve", "upscale",
+const PASS_KINDS: [&str; 8] = [
+    "null",
+    "clear",
+    "render",
+    "blit",
+    "compute",
+    "resolve",
+    "upscale",
+    "denoised_upscale",
 ];
 
 /// Blit command names written to `passes.txt` (`d3d12_command_queue.cpp:888-890`).

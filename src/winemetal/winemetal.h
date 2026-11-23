@@ -1823,6 +1823,8 @@ struct WMTFXFrameInterpolatorInfo {
   uint32_t output_width;
   uint32_t output_height;
   obj_handle_t scaler;
+  enum WMTPixelFormat ui_format;
+  uint32_t pad;
 };
 
 WINEMETAL_API obj_handle_t MTLDevice_newFrameInterpolator(obj_handle_t device, const struct WMTFXFrameInterpolatorInfo *info);
@@ -1840,13 +1842,81 @@ struct WMTFXFrameInterpolatorProps {
   bool reset;
   bool depth_reversed;
   bool ui_composited;
+  uint8_t pad;
+  uint32_t content_width;
+  uint32_t content_height;
+  uint32_t depth_content_offset_x;
+  uint32_t depth_content_offset_y;
+  uint32_t motion_content_offset_x;
+  uint32_t motion_content_offset_y;
+  uint32_t output_offset_x;
+  uint32_t output_offset_y;
+  uint8_t has_matrices;
+  uint8_t pad_m[3];
+  float world_to_view_matrix[16];
+  float view_to_clip_matrix[16];
 };
 
 /* Interpolates between `prev_color` and `color` into `output` (MetalFX encodes its own passes, behind and ahead of
  * `fence`). */
 WINEMETAL_API void MTLCommandBuffer_encodeFrameInterpolate(
     obj_handle_t cmdbuf, obj_handle_t interpolator, obj_handle_t color, obj_handle_t prev_color, obj_handle_t depth,
-    obj_handle_t motion, obj_handle_t output, obj_handle_t fence, const struct WMTFXFrameInterpolatorProps *props
+    obj_handle_t motion, obj_handle_t output, obj_handle_t fence, const struct WMTFXFrameInterpolatorProps *props,
+    obj_handle_t ui_texture
+);
+
+struct WMTFXTemporalDenoisedScalerInfo {
+  enum WMTPixelFormat color_format;
+  enum WMTPixelFormat depth_format;
+  enum WMTPixelFormat motion_format;
+  enum WMTPixelFormat diffuse_albedo_format;
+  enum WMTPixelFormat specular_albedo_format;
+  enum WMTPixelFormat normal_format;
+  enum WMTPixelFormat roughness_format;
+  enum WMTPixelFormat specular_hit_distance_format;
+  enum WMTPixelFormat denoise_strength_mask_format;
+  enum WMTPixelFormat transparency_overlay_format;
+  enum WMTPixelFormat reactive_mask_format;
+  enum WMTPixelFormat output_format;
+  uint32_t input_width;
+  uint32_t input_height;
+  uint32_t output_width;
+  uint32_t output_height;
+  bool synchronous_init;
+  bool auto_exposure;
+  bool reactive_mask_enabled;
+  bool specular_hit_distance_enabled;
+  bool denoise_strength_mask_enabled;
+  bool transparency_overlay_enabled;
+  uint8_t pad[2];
+};
+
+WINEMETAL_API obj_handle_t MTLDevice_newTemporalDenoisedScaler(
+    obj_handle_t device, const struct WMTFXTemporalDenoisedScalerInfo *info
+);
+
+struct WMTFXTemporalDenoisedScalerProps {
+  float pre_exposure;
+  float jitter_offset_x;
+  float jitter_offset_y;
+  float motion_vector_scale_x;
+  float motion_vector_scale_y;
+  uint32_t input_content_width;
+  uint32_t input_content_height;
+  bool reset;
+  bool depth_reversed;
+  uint8_t has_matrices;
+  uint8_t pad;
+  float world_to_view_matrix[16];
+  float view_to_clip_matrix[16];
+};
+
+WINEMETAL_API void MTLCommandBuffer_encodeTemporalDenoisedScale(
+    obj_handle_t cmdbuf, obj_handle_t scaler, obj_handle_t color, obj_handle_t output, obj_handle_t depth,
+    obj_handle_t motion, obj_handle_t diffuse_albedo, obj_handle_t specular_albedo, obj_handle_t normal,
+    obj_handle_t roughness, obj_handle_t specular_hit_distance, obj_handle_t denoise_strength_mask,
+    obj_handle_t transparency_overlay, obj_handle_t exposure, obj_handle_t reactive_mask, obj_handle_t fence,
+    const struct WMTFXTemporalDenoisedScalerProps *props
 );
 
 WINEMETAL_API void MTLCommandBuffer_encodeSpatialScale(
@@ -1872,6 +1942,8 @@ WINEMETAL_API obj_handle_t MetalLayer_nextDrawable(obj_handle_t layer);
 WINEMETAL_API bool MTLDevice_supportsFXSpatialScaler(obj_handle_t device);
 
 WINEMETAL_API bool MTLDevice_supportsFXTemporalScaler(obj_handle_t device);
+
+WINEMETAL_API bool MTLDevice_supportsFXTemporalDenoisedScaler(obj_handle_t device);
 
 struct WMTLayerProps {
   obj_handle_t device;

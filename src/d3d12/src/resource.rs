@@ -333,7 +333,7 @@ pub unsafe fn get_device(this: *mut c_void, riid: *const c_void, out: *mut *mut 
     // SAFETY: `res.device` is a valid `Device` COM pointer.
     let vtbl = unsafe { (*res.device).vtbl };
     // SAFETY: `query_interface` is the device's COM `QueryInterface` slot.
-    unsafe { (vtbl.query_interface)(res.device.cast(), riid, out) }
+    unsafe { (vtbl.base.query_interface)(res.device.cast(), riid, out) }
 }
 
 /// Completes a resource factory call via `QueryInterface(riid, out)`.

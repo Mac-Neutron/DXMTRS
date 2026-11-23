@@ -20,9 +20,10 @@ use winemetal_wire::{
     WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
-    WMT_TEXTURE_TYPE2D, WMTTextureInfo, WmtcmdBase, WmtcmdRenderDraw,
-    WmtcmdRenderDxmtTessellationMeshDraw, WmtcmdRenderDxmtTessellationMeshDrawIndexed,
-    WmtcmdRenderSetblendcolor,
+    WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_TEXTURE_TYPE2D, WMTTextureInfo, WmtcmdBase,
+    WmtcmdRenderDraw, WmtcmdRenderDxmtTessellationMeshDraw,
+    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderSetblendcolor,
+    WmtcmdRenderSetrasterizerstate,
 };
 
 use super::{
@@ -58,8 +59,8 @@ use crate::{
         clear::{begin_render_pass, discard_resource, end_render_pass},
         state::{
             close, create_command_list, get_type, ia_set_primitive_topology, om_set_blend_factor,
-            om_set_render_targets, om_set_stencil_ref, reset, rs_set_scissor_rects,
-            rs_set_viewports,
+            om_set_render_targets, om_set_stencil_ref, reset, rs_set_depth_bias,
+            rs_set_scissor_rects, rs_set_viewports, set_pipeline_state,
         },
     },
     pipeline::Graphics,
@@ -920,6 +921,92 @@ fn discard_resource_consumes_on_draw_and_respects_write_purge() {
     let second_load = unsafe { (*second_enc).colors[0].load_action };
     assert_eq!(second_load, WMT_LOAD_ACTION_LOAD);
     assert!(list2.discarded_resources.is_empty());
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn dynamic_depth_bias_overrides_and_resets_on_pso_bind() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    pso.fill_mode = 1;
+    pso.cull_mode = 2;
+    pso.depth_clip_mode = 1;
+    pso.winding = 1;
+    pso.depth_bias = 1.0;
+    pso.slope_scale = 0.25;
+    pso.depth_bias_clamp = 0.5;
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid pointers for `CreateCommandList`.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+    // Draw 1: emits PSO rasterizer state.
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { draw_instanced(raw_list, 3, 1, 0, 0) };
+    // Override depth bias dynamically and draw 2.
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { rs_set_depth_bias(raw_list, 5.0, 1.25, 2.5) };
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { draw_instanced(raw_list, 3, 1, 0, 0) };
+    // Rebinding the same graphics PSO must restore PSO depth bias on draw 3.
+    // SAFETY: `raw_list` and `pso_ptr` are valid pointers.
+    unsafe { set_pipeline_state(raw_list, pso_ptr) };
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { draw_instanced(raw_list, 3, 1, 0, 0) };
+
+    // SAFETY: `alloc` holds the active `RenderEncoderData` in `encoder_current`.
+    let render_ptr = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    assert!(!render_ptr.is_null());
+    // SAFETY: `render_ptr` points to a valid `RenderEncoderData` in the CPU heap.
+    let head_next = unsafe { (*render_ptr).cmd_head.next.ptr };
+    let mut cursor =
+        ptr::with_exposed_provenance::<WmtcmdBase>(usize::try_from(head_next).unwrap_or(0));
+    let mut rast_cmds = Vec::new();
+    while !cursor.is_null() {
+        // SAFETY: `cursor` points to a command node allocated in the CPU heap.
+        if unsafe { (*cursor).r#type } == WMT_RENDER_COMMAND_SET_RASTERIZER_STATE {
+            // SAFETY: command type matches `WmtcmdRenderSetrasterizerstate`.
+            let r = unsafe { &*cursor.cast::<WmtcmdRenderSetrasterizerstate>() };
+            rast_cmds.push((
+                r.fill_mode,
+                r.cull_mode,
+                r.depth_clip_mode,
+                r.winding,
+                r.depth_bias,
+                r.scole_scale,
+                r.depth_bias_clamp,
+            ));
+        }
+        // SAFETY: `cursor` is a valid `WmtcmdBase` node.
+        let next_ptr = unsafe { (*cursor).next.ptr };
+        cursor = ptr::with_exposed_provenance::<WmtcmdBase>(usize::try_from(next_ptr).unwrap_or(0));
+    }
+
+    assert_eq!(rast_cmds.len(), 3);
+    assert_eq!(rast_cmds[0], (1, 2, 1, 1, 1.0, 0.25, 0.5));
+    assert_eq!(rast_cmds[1], (1, 2, 1, 1, 5.0, 2.5, 1.25));
+    assert_eq!(rast_cmds[2], (1, 2, 1, 1, 1.0, 0.25, 0.5));
 
     // SAFETY: `raw_list` is recording on `alloc`.
     assert_eq!(unsafe { close(raw_list) }, S_OK);

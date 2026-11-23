@@ -99,6 +99,20 @@ pub static IID_D3D12_COMMAND_LIST_EXT: Guid = Guid::new(
     0x4b37,
     [0x8b, 0xbd, 0x73, 0x0d, 0x0f, 0xdb, 0x2c, 0xec],
 );
+/// DXMT's `IMTLD3D12DeviceExt1` (additive denoised scaler creation and capability check).
+pub static IID_IMTL_D3D12_DEVICE_EXT1: Guid = Guid::new(
+    0x7c4a_1e92,
+    0x3b81,
+    0x4d06,
+    [0x9a, 0x2f, 0x44, 0x81, 0xe3, 0x19, 0x5c, 0x01],
+);
+/// DXMT's `IMTLD3D12CommandListExt1` (additive denoised upscale and DLSSG UI metadata).
+pub static IID_IMTL_D3D12_COMMAND_LIST_EXT1: Guid = Guid::new(
+    0x9f2e_6c14,
+    0x8a05,
+    0x4e73,
+    [0xa1, 0x3d, 0x58, 0xc2, 0x70, 0x4b, 0x91, 0x02],
+);
 
 /// `MTL_FEATURE_METALFX_TEMPORAL_SCALER`, the feature `CheckFeatureSupport` answers.
 pub const FEATURE_METALFX_TEMPORAL_SCALER: u32 = 0;
@@ -223,6 +237,101 @@ pub struct D3D12CommandListExtVtbl {
     pub unknown: IUnknownVtbl,
     pub temporal_upscale:
         unsafe extern "system" fn(*mut c_void, *mut c_void, *const D3D12UpscaleDesc) -> Hresult,
+}
+
+/// `MTL_TEMPORAL_DENOISED_SCALER_DESC`.
+#[repr(C)]
+pub struct D3D12DenoisedScalerDesc {
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub color_format: u32,
+    pub depth_format: u32,
+    pub motion_format: u32,
+    pub diffuse_albedo_format: u32,
+    pub specular_albedo_format: u32,
+    pub normal_format: u32,
+    pub roughness_format: u32,
+    pub specular_hit_distance_format: u32,
+    pub denoise_strength_mask_format: u32,
+    pub transparency_overlay_format: u32,
+    pub reactive_mask_format: u32,
+    pub output_format: u32,
+    pub synchronous_init: i32,
+    pub auto_exposure: i32,
+    pub reactive_mask_enabled: i32,
+    pub specular_hit_distance_enabled: i32,
+    pub denoise_strength_mask_enabled: i32,
+    pub transparency_overlay_enabled: i32,
+}
+
+/// `MTL_TEMPORAL_DENOISED_UPSCALE_D3D12_DESC`.
+#[repr(C)]
+pub struct D3D12DenoisedUpscaleDesc {
+    pub color: *mut c_void,
+    pub output: *mut c_void,
+    pub depth: *mut c_void,
+    pub motion_vector: *mut c_void,
+    pub diffuse_albedo: *mut c_void,
+    pub specular_albedo: *mut c_void,
+    pub normal: *mut c_void,
+    pub roughness: *mut c_void,
+    pub specular_hit_distance: *mut c_void,
+    pub denoise_strength_mask: *mut c_void,
+    pub transparency_overlay: *mut c_void,
+    pub exposure: *mut c_void,
+    pub reactive_mask: *mut c_void,
+    pub input_content_width: u32,
+    pub input_content_height: u32,
+    pub jitter_offset: [f32; 2],
+    pub motion_vector_scale: [f32; 2],
+    pub pre_exposure: f32,
+    pub reset: i32,
+    pub depth_reversed: i32,
+    pub has_matrices: i32,
+    pub world_to_view_matrix: [f32; 16],
+    pub view_to_clip_matrix: [f32; 16],
+}
+
+/// `MTL_FRAME_GEN_UI_D3D12_DESC`.
+#[repr(C)]
+pub struct D3D12FrameGenUiDesc {
+    pub ui_texture: *mut c_void,
+    pub ui_composited: i32,
+    pub content_width: u32,
+    pub content_height: u32,
+    pub depth_offset: [u32; 2],
+    pub motion_offset: [u32; 2],
+    pub output_offset: [u32; 2],
+    pub has_matrices: i32,
+    pub world_to_view_matrix: [f32; 16],
+    pub view_to_clip_matrix: [f32; 16],
+}
+
+/// `IMTLD3D12DeviceExt1`: additive temporal denoised scaler support and creation.
+#[repr(C)]
+pub struct D3D12DeviceExt1Vtbl {
+    pub base: D3D12DeviceExtVtbl,
+    pub supports_temporal_denoised_scaler: unsafe extern "system" fn(*mut c_void) -> i32,
+    pub create_temporal_denoised_scaler: unsafe extern "system" fn(
+        *mut c_void,
+        *const D3D12DenoisedScalerDesc,
+        *mut *mut c_void,
+    ) -> Hresult,
+}
+
+/// `IMTLD3D12CommandListExt1`: additive denoised upscale and frame-generation UI metadata.
+#[repr(C)]
+pub struct D3D12CommandListExt1Vtbl {
+    pub base: D3D12CommandListExtVtbl,
+    pub temporal_denoised_upscale: unsafe extern "system" fn(
+        *mut c_void,
+        *mut c_void,
+        *const D3D12DenoisedUpscaleDesc,
+    ) -> Hresult,
+    pub set_frame_gen_ui:
+        unsafe extern "system" fn(*mut c_void, *const D3D12FrameGenUiDesc) -> Hresult,
 }
 
 /// `IUnknown` and `IDXGIObject`'s slots, which the factory, adapter and output start with.
@@ -602,6 +711,21 @@ const _: () = {
     assert!(offset_of!(D3D11DeviceExtVtbl, set_shader_extension_slot) == 3 * slot);
     assert!(offset_of!(D3D12DeviceExtVtbl, create_temporal_scaler) == 4 * slot);
     assert!(offset_of!(D3D12CommandListExtVtbl, temporal_upscale) == 3 * slot);
+    assert!(offset_of!(D3D12DeviceExt1Vtbl, supports_temporal_denoised_scaler) == 5 * slot);
+    assert!(offset_of!(D3D12DeviceExt1Vtbl, create_temporal_denoised_scaler) == 6 * slot);
+    assert!(size_of::<D3D12DeviceExt1Vtbl>() == 7 * slot);
+    assert!(offset_of!(D3D12CommandListExt1Vtbl, temporal_denoised_upscale) == 4 * slot);
+    assert!(offset_of!(D3D12CommandListExt1Vtbl, set_frame_gen_ui) == 5 * slot);
+    assert!(size_of::<D3D12CommandListExt1Vtbl>() == 6 * slot);
+    assert!(
+        size_of::<D3D12DenoisedScalerDesc>() == 88 && align_of::<D3D12DenoisedScalerDesc>() == 4
+    );
+    assert!(offset_of!(D3D12DenoisedUpscaleDesc, input_content_width) == 13 * slot);
+    assert!(offset_of!(D3D12DenoisedUpscaleDesc, world_to_view_matrix) == 13 * slot + 40);
+    assert!(size_of::<D3D12DenoisedUpscaleDesc>() == if wide { 272 } else { 220 });
+    assert!(offset_of!(D3D12FrameGenUiDesc, ui_composited) == slot);
+    assert!(offset_of!(D3D12FrameGenUiDesc, world_to_view_matrix) == slot + 40);
+    assert!(size_of::<D3D12FrameGenUiDesc>() == if wide { 176 } else { 172 });
     assert!(offset_of!(IMTLDXGIAdapterVtbl, get_mtl_device) == 19 * slot);
     assert!(offset_of!(IMTLDXGIAdapterVtbl, get_local_d3dkmt) == 20 * slot);
     assert!(size_of::<IMTLDXGIAdapterVtbl>() == 21 * slot);

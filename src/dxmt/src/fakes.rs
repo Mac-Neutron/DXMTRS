@@ -295,6 +295,28 @@ extern "C-unwind" fn fake_temporal_scale(
 ) {
 }
 
+#[unsafe(export_name = "MTLCommandBuffer_encodeTemporalDenoisedScale")]
+extern "C-unwind" fn fake_temporal_denoised_scale(
+    _cmdbuf: u64,
+    _scaler: u64,
+    _color: u64,
+    _out: u64,
+    _depth: u64,
+    _motion: u64,
+    _diffuse_albedo: u64,
+    _specular_albedo: u64,
+    _normal: u64,
+    _roughness: u64,
+    _specular_hit_distance: u64,
+    _denoise_strength_mask: u64,
+    _transparency_overlay: u64,
+    _exposure: u64,
+    _reactive_mask: u64,
+    _fence: u64,
+    _props: *const winemetal_sys::wire::WMTFXTemporalDenoisedScalerProps,
+) {
+}
+
 #[unsafe(export_name = "MTLCommandBuffer_presentDrawable")]
 extern "C-unwind" fn fake_present_drawable(_cmdbuf: u64, _drawable: u64) {}
 

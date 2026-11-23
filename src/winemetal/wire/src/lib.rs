@@ -1298,6 +1298,8 @@ pub struct WMTFXFrameInterpolatorInfo {
     pub output_width: u32,
     pub output_height: u32,
     pub scaler: u64,
+    pub ui_format: u32,
+    pub pad: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -1315,6 +1317,65 @@ pub struct WMTFXFrameInterpolatorProps {
     pub reset: u8,
     pub depth_reversed: u8,
     pub ui_composited: u8,
+    pub pad: u8,
+    pub content_width: u32,
+    pub content_height: u32,
+    pub depth_content_offset_x: u32,
+    pub depth_content_offset_y: u32,
+    pub motion_content_offset_x: u32,
+    pub motion_content_offset_y: u32,
+    pub output_offset_x: u32,
+    pub output_offset_y: u32,
+    pub has_matrices: u8,
+    pub pad_m: [u8; 3],
+    pub world_to_view_matrix: [f32; 16],
+    pub view_to_clip_matrix: [f32; 16],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct WMTFXTemporalDenoisedScalerInfo {
+    pub color_format: u32,
+    pub depth_format: u32,
+    pub motion_format: u32,
+    pub diffuse_albedo_format: u32,
+    pub specular_albedo_format: u32,
+    pub normal_format: u32,
+    pub roughness_format: u32,
+    pub specular_hit_distance_format: u32,
+    pub denoise_strength_mask_format: u32,
+    pub transparency_overlay_format: u32,
+    pub reactive_mask_format: u32,
+    pub output_format: u32,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub synchronous_init: u8,
+    pub auto_exposure: u8,
+    pub reactive_mask_enabled: u8,
+    pub specular_hit_distance_enabled: u8,
+    pub denoise_strength_mask_enabled: u8,
+    pub transparency_overlay_enabled: u8,
+    pub pad: [u8; 2],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct WMTFXTemporalDenoisedScalerProps {
+    pub pre_exposure: f32,
+    pub jitter_offset_x: f32,
+    pub jitter_offset_y: f32,
+    pub motion_vector_scale_x: f32,
+    pub motion_vector_scale_y: f32,
+    pub input_content_width: u32,
+    pub input_content_height: u32,
+    pub reset: u8,
+    pub depth_reversed: u8,
+    pub has_matrices: u8,
+    pub pad: u8,
+    pub world_to_view_matrix: [f32; 16],
+    pub view_to_clip_matrix: [f32; 16],
 }
 
 #[derive(Clone, Copy)]
@@ -2133,6 +2194,37 @@ pub struct UnixcallMtlcommandbufferFrameInterpolate {
     pub depth: u64,
     pub motion: u64,
     pub output: u64,
+    pub fence: u64,
+    pub props: MemPtr,
+    pub ui_texture: u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UnixcallMtldeviceNewfxtemporaldenoisedscaler {
+    pub device: u64,
+    pub info: MemPtr,
+    pub ret: u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UnixcallMtlcommandbufferTemporalDenoisedScale {
+    pub cmdbuf: u64,
+    pub scaler: u64,
+    pub color: u64,
+    pub output: u64,
+    pub depth: u64,
+    pub motion: u64,
+    pub diffuse_albedo: u64,
+    pub specular_albedo: u64,
+    pub normal: u64,
+    pub roughness: u64,
+    pub specular_hit_distance: u64,
+    pub denoise_strength_mask: u64,
+    pub transparency_overlay: u64,
+    pub exposure: u64,
+    pub reactive_mask: u64,
     pub fence: u64,
     pub props: MemPtr,
 }

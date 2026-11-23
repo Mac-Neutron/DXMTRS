@@ -71,7 +71,9 @@ unsafe extern "C" {
     pub fn MTLDevice_newSpatialScaler(device: u64, info: *const wire::WMTFXSpatialScalerInfo) -> u64;
     pub fn MTLCommandBuffer_encodeTemporalScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, depth: u64, motion: u64, exposure: u64, fence: u64, props: *const wire::WMTFXTemporalScalerProps, reactive_mask: u64);
     pub fn MTLDevice_newFrameInterpolator(device: u64, info: *const wire::WMTFXFrameInterpolatorInfo) -> u64;
-    pub fn MTLCommandBuffer_encodeFrameInterpolate(cmdbuf: u64, interpolator: u64, color: u64, prev_color: u64, depth: u64, motion: u64, output: u64, fence: u64, props: *const wire::WMTFXFrameInterpolatorProps);
+    pub fn MTLCommandBuffer_encodeFrameInterpolate(cmdbuf: u64, interpolator: u64, color: u64, prev_color: u64, depth: u64, motion: u64, output: u64, fence: u64, props: *const wire::WMTFXFrameInterpolatorProps, ui_texture: u64);
+    pub fn MTLDevice_newTemporalDenoisedScaler(device: u64, info: *const wire::WMTFXTemporalDenoisedScalerInfo) -> u64;
+    pub fn MTLCommandBuffer_encodeTemporalDenoisedScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, depth: u64, motion: u64, diffuse_albedo: u64, specular_albedo: u64, normal: u64, roughness: u64, specular_hit_distance: u64, denoise_strength_mask: u64, transparency_overlay: u64, exposure: u64, reactive_mask: u64, fence: u64, props: *const wire::WMTFXTemporalDenoisedScalerProps);
     pub fn MTLCommandBuffer_encodeSpatialScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, fence: u64);
     pub fn NSString_string(data: *const c_char, encoding: u64) -> u64;
     pub fn NSString_alloc_init(data: *const c_char, encoding: u64) -> u64;
@@ -83,6 +85,7 @@ unsafe extern "C" {
     pub fn MetalLayer_nextDrawable(layer: u64) -> u64;
     pub fn MTLDevice_supportsFXSpatialScaler(device: u64) -> bool;
     pub fn MTLDevice_supportsFXTemporalScaler(device: u64) -> bool;
+    pub fn MTLDevice_supportsFXTemporalDenoisedScaler(device: u64) -> bool;
     pub fn MetalLayer_setProps(layer: u64, props: *const wire::WMTLayerProps);
     pub fn MetalLayer_getProps(layer: u64, props: *mut wire::WMTLayerProps);
     pub fn CreateMetalViewFromHWND(hwnd: isize, device: u64, layer: *mut u64) -> u64;
@@ -229,7 +232,9 @@ unsafe extern "C-unwind" {
     pub fn MTLDevice_newSpatialScaler(device: u64, info: *const wire::WMTFXSpatialScalerInfo) -> u64;
     pub fn MTLCommandBuffer_encodeTemporalScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, depth: u64, motion: u64, exposure: u64, fence: u64, props: *const wire::WMTFXTemporalScalerProps, reactive_mask: u64);
     pub fn MTLDevice_newFrameInterpolator(device: u64, info: *const wire::WMTFXFrameInterpolatorInfo) -> u64;
-    pub fn MTLCommandBuffer_encodeFrameInterpolate(cmdbuf: u64, interpolator: u64, color: u64, prev_color: u64, depth: u64, motion: u64, output: u64, fence: u64, props: *const wire::WMTFXFrameInterpolatorProps);
+    pub fn MTLCommandBuffer_encodeFrameInterpolate(cmdbuf: u64, interpolator: u64, color: u64, prev_color: u64, depth: u64, motion: u64, output: u64, fence: u64, props: *const wire::WMTFXFrameInterpolatorProps, ui_texture: u64);
+    pub fn MTLDevice_newTemporalDenoisedScaler(device: u64, info: *const wire::WMTFXTemporalDenoisedScalerInfo) -> u64;
+    pub fn MTLCommandBuffer_encodeTemporalDenoisedScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, depth: u64, motion: u64, diffuse_albedo: u64, specular_albedo: u64, normal: u64, roughness: u64, specular_hit_distance: u64, denoise_strength_mask: u64, transparency_overlay: u64, exposure: u64, reactive_mask: u64, fence: u64, props: *const wire::WMTFXTemporalDenoisedScalerProps);
     pub fn MTLCommandBuffer_encodeSpatialScale(cmdbuf: u64, scaler: u64, color: u64, output: u64, fence: u64);
     pub fn NSString_string(data: *const c_char, encoding: u64) -> u64;
     pub fn NSString_alloc_init(data: *const c_char, encoding: u64) -> u64;
@@ -241,6 +246,7 @@ unsafe extern "C-unwind" {
     pub fn MetalLayer_nextDrawable(layer: u64) -> u64;
     pub fn MTLDevice_supportsFXSpatialScaler(device: u64) -> bool;
     pub fn MTLDevice_supportsFXTemporalScaler(device: u64) -> bool;
+    pub fn MTLDevice_supportsFXTemporalDenoisedScaler(device: u64) -> bool;
     pub fn MetalLayer_setProps(layer: u64, props: *const wire::WMTLayerProps);
     pub fn MetalLayer_getProps(layer: u64, props: *mut wire::WMTLayerProps);
     pub fn CreateMetalViewFromHWND(hwnd: isize, device: u64, layer: *mut u64) -> u64;

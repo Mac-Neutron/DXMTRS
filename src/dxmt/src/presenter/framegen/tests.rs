@@ -11,14 +11,15 @@ use rustc_hash::FxHashMap;
 use winemetal_sys::{
     Obj,
     wire::{
-        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMTFXFrameInterpolatorInfo, WMTFXTemporalScalerInfo,
-        WMTTextureInfo,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM, WMT_PIXEL_FORMAT_RGBA8_UNORM, WMTFXFrameInterpolatorInfo,
+        WMTFXFrameInterpolatorProps, WMTFXTemporalScalerInfo, WMTTextureInfo,
     },
 };
 
 use super::{
-    Backend, CameraParams, EnqueueArgs, FrameGen, InterpolateArgs, Order, PresentArgs,
-    PresentMetadata, TemporalScaler, WmtFxTemporalScalerProps, record_upscale, set_camera_params,
+    Backend, CameraParams, EnqueueArgs, FrameGen, FrameGenUi, InterpolateArgs, Order, PresentArgs,
+    PresentMetadata, TemporalScaler, WmtFxTemporalScalerProps, record_frame_gen_ui, record_upscale,
+    set_camera_params,
 };
 
 const DEVICE_HANDLE: u64 = 0x1000;
@@ -126,6 +127,9 @@ struct RecordingBackend {
     names: FxHashMap<u64, String>,
     log: RcLog,
     generated_frames: Vec<(u64, bool)>,
+    interp_infos: Vec<WMTFXFrameInterpolatorInfo>,
+    encoded_ui_textures: Vec<u64>,
+    encoded_props: Vec<WMTFXFrameInterpolatorProps>,
 }
 
 struct RcLog(Rc<RefCell<String>>);
@@ -162,6 +166,9 @@ impl RecordingBackend {
             names,
             log,
             generated_frames: Vec::new(),
+            interp_infos: Vec::new(),
+            encoded_ui_textures: Vec::new(),
+            encoded_props: Vec::new(),
         }
     }
 
@@ -214,8 +221,9 @@ impl Backend for RecordingBackend {
     fn new_frame_interpolator(
         &mut self,
         _device: u64,
-        _info: &WMTFXFrameInterpolatorInfo,
+        info: &WMTFXFrameInterpolatorInfo,
     ) -> Option<Obj> {
+        self.interp_infos.push(*info);
         Some(self.alloc("fg.interpolator"))
     }
 
@@ -284,6 +292,9 @@ impl Backend for RecordingBackend {
 
     fn encode_interpolate(&mut self, args: &InterpolateArgs<'_>) {
         let p = args.props;
+        self.encoded_ui_textures
+            .push(args.ui_texture.map_or(0, Obj::handle));
+        self.encoded_props.push(*p);
         self.log.line(&format!(
             "{}.encodeFrameInterpolate(interpolator={}, color={}, prev={}, depth={}, motion={}, \
              output={}, fence={}, props={{motion_vector_scale_x={:.3}, \
@@ -896,4 +907,226 @@ fn camera_params_forward_positive_and_default_invalid() {
         "expected default camera params on invalid inputs in: {text2}"
     );
     set_camera_params(&CameraParams::ZERO);
+}
+
+#[test]
+fn default_ui_and_matrices_are_zeroed() {
+    let _guard = slot_lock();
+    let cmdbuf = obj(CMDBUF_HANDLE);
+    let frame = obj(FRAME_HANDLE);
+    let depth = obj(DEPTH_HANDLE);
+    let motion = obj(MOTION_HANDLE);
+    let scaler = scaler_1280_to_1920();
+    let props = default_props();
+    let metadata = default_metadata();
+
+    let log = RcLog::new();
+    let mut backend = RecordingBackend::new(log.share());
+    let mut fg = FrameGen::new();
+    fg.set_always(true);
+    let mut now = Instant::now();
+
+    record_frame_gen_ui(None, &FrameGenUi::ZERO);
+    record_upscale(&scaler, &depth, &motion, &props);
+    let mut order = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order,
+    ));
+    fg.set_committed(fg.enqueued());
+
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order1 = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order1,
+    ));
+
+    assert_eq!(backend.interp_infos.len(), 1);
+    assert_eq!(backend.interp_infos[0].ui_format, 0);
+    assert_eq!(backend.encoded_ui_textures, vec![0]);
+    assert_eq!(backend.encoded_props.len(), 1);
+    let p = backend.encoded_props[0];
+    assert_eq!(p.ui_composited, 0);
+    assert_eq!(p.content_width, 0);
+    assert_eq!(p.content_height, 0);
+    assert_eq!(p.depth_content_offset_x, 0);
+    assert_eq!(p.depth_content_offset_y, 0);
+    assert_eq!(p.motion_content_offset_x, 0);
+    assert_eq!(p.motion_content_offset_y, 0);
+    assert_eq!(p.output_offset_x, 0);
+    assert_eq!(p.output_offset_y, 0);
+    assert_eq!(p.has_matrices, 0);
+    assert_eq!(p.world_to_view_matrix, [0.0; 16]);
+    assert_eq!(p.view_to_clip_matrix, [0.0; 16]);
+}
+
+#[test]
+fn ui_texture_matrices_and_format_rebuild() {
+    const UI_HANDLE: u64 = 0x1055;
+    let _guard = slot_lock();
+    let cmdbuf = obj(CMDBUF_HANDLE);
+    let frame = obj(FRAME_HANDLE);
+    let depth = obj(DEPTH_HANDLE);
+    let motion = obj(MOTION_HANDLE);
+    let ui_tex = obj(UI_HANDLE);
+    let scaler = scaler_1280_to_1920();
+    let props = default_props();
+    let metadata = default_metadata();
+
+    let log = RcLog::new();
+    let mut backend = RecordingBackend::new(log.share());
+    let mut fg = FrameGen::new();
+    fg.set_always(true);
+    let mut now = Instant::now();
+
+    // Frame 0 initializes ring without UI.
+    record_frame_gen_ui(None, &FrameGenUi::ZERO);
+    record_upscale(&scaler, &depth, &motion, &props);
+    let mut order0 = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order0,
+    ));
+    fg.set_committed(fg.enqueued());
+
+    // Frame 1 generates without UI (`ui_format = 0`).
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order1 = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order1,
+    ));
+    fg.set_committed(fg.enqueued());
+    assert_eq!(backend.interp_infos.len(), 1);
+    assert_eq!(backend.interp_infos[0].ui_format, 0);
+
+    // Frame 2 attaches UI texture + matrices; `ui_format` change rebuilds interpolator.
+    let mut wtv = [0.0f32; 16];
+    let mut vtc = [0.0f32; 16];
+    wtv[0] = 1.0;
+    wtv[5] = 2.0;
+    vtc[10] = -1.0;
+    vtc[15] = 1.0;
+    record_frame_gen_ui(
+        Some((&ui_tex, WMT_PIXEL_FORMAT_BGRA8_UNORM)),
+        &FrameGenUi {
+            ui_composited: true,
+            content_width: 1200,
+            content_height: 700,
+            depth_offset: [4, 8],
+            motion_offset: [12, 16],
+            output_offset: [20, 24],
+            has_matrices: true,
+            world_to_view_matrix: wtv,
+            view_to_clip_matrix: vtc,
+        },
+    );
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order2 = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order2,
+    ));
+    fg.set_committed(fg.enqueued());
+
+    assert_eq!(backend.interp_infos.len(), 2);
+    assert_eq!(
+        backend.interp_infos[1].ui_format,
+        WMT_PIXEL_FORMAT_BGRA8_UNORM
+    );
+    assert_eq!(backend.encoded_ui_textures, vec![0, UI_HANDLE]);
+    let p2 = backend.encoded_props[1];
+    assert_eq!(p2.ui_composited, 1);
+    assert_eq!(p2.content_width, 1200);
+    assert_eq!(p2.content_height, 700);
+    assert_eq!(p2.depth_content_offset_x, 4);
+    assert_eq!(p2.depth_content_offset_y, 8);
+    assert_eq!(p2.motion_content_offset_x, 12);
+    assert_eq!(p2.motion_content_offset_y, 16);
+    assert_eq!(p2.output_offset_x, 20);
+    assert_eq!(p2.output_offset_y, 24);
+    assert_eq!(p2.has_matrices, 1);
+    assert_eq!(p2.world_to_view_matrix, wtv);
+    assert_eq!(p2.view_to_clip_matrix, vtc);
+
+    // Frame 3 changes `ui_format` to RGBA8 -> rebuilds interpolator again.
+    record_frame_gen_ui(
+        Some((&ui_tex, WMT_PIXEL_FORMAT_RGBA8_UNORM)),
+        &FrameGenUi::ZERO,
+    );
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order3 = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order3,
+    ));
+    assert_eq!(backend.interp_infos.len(), 3);
+    assert_eq!(
+        backend.interp_infos[2].ui_format,
+        WMT_PIXEL_FORMAT_RGBA8_UNORM
+    );
+    assert_eq!(backend.encoded_ui_textures, vec![0, UI_HANDLE, UI_HANDLE]);
+    assert_eq!(backend.encoded_props[2].ui_composited, 0);
+    assert_eq!(backend.encoded_props[2].has_matrices, 0);
+
+    record_frame_gen_ui(None, &FrameGenUi::ZERO);
 }

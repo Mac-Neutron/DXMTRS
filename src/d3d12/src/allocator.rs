@@ -1508,7 +1508,7 @@ unsafe extern "system-unwind" fn allocator_get_device(
         return E_NOINTERFACE;
     }
     // SAFETY: `alloc.device` is a valid `Device` COM object retained by `alloc`.
-    let qi = unsafe { (*alloc.device).vtbl.query_interface };
+    let qi = unsafe { (*alloc.device).vtbl.base.query_interface };
     // SAFETY: forwarding `QueryInterface` to the owning `ID3D12Device`.
     unsafe { qi(alloc.device.cast(), riid, ppv_device) }
 }

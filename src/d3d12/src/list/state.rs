@@ -18,7 +18,8 @@ use winemetal_wire::{
 
 use crate::{
     abi::{
-        ext::IID_D3D12_COMMAND_LIST_EXT,
+        agility::{DispatchGraphDesc, SetProgramDesc},
+        ext::{IID_D3D12_COMMAND_LIST_EXT, IID_IMTL_D3D12_COMMAND_LIST_EXT1},
         list_state::{
             D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_SHADING_RATE_1X1,
             D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT,
@@ -34,7 +35,9 @@ use crate::{
         IID_ID3D12_GRAPHICS_COMMAND_LIST1, IID_ID3D12_GRAPHICS_COMMAND_LIST2,
         IID_ID3D12_GRAPHICS_COMMAND_LIST3, IID_ID3D12_GRAPHICS_COMMAND_LIST4,
         IID_ID3D12_GRAPHICS_COMMAND_LIST5, IID_ID3D12_GRAPHICS_COMMAND_LIST6,
-        IID_ID3D12_GRAPHICS_COMMAND_LIST7, IID_ID3D12_OBJECT, IID_IUNKNOWN, S_OK,
+        IID_ID3D12_GRAPHICS_COMMAND_LIST7, IID_ID3D12_GRAPHICS_COMMAND_LIST8,
+        IID_ID3D12_GRAPHICS_COMMAND_LIST9, IID_ID3D12_GRAPHICS_COMMAND_LIST10, IID_ID3D12_OBJECT,
+        IID_IUNKNOWN, S_OK,
     },
     descriptor_heap::{self, Heap},
     device::{Device, null, residency},
@@ -198,6 +201,7 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     }; 16];
     list.blend_factor = [1.0; 4];
     list.stencil_ref = 0;
+    list.dynamic_depth_bias = None;
     list.active_visibility_offset = u64::MAX;
     list.render_pass_visibility_buffer = 0;
     set_root_sig_graphics(list, ptr::null());
@@ -453,10 +457,16 @@ pub unsafe fn query_interface(
                         IID_ID3D12_GRAPHICS_COMMAND_LIST5,
                         IID_ID3D12_GRAPHICS_COMMAND_LIST6,
                         IID_ID3D12_GRAPHICS_COMMAND_LIST7,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST8,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST9,
+                        IID_ID3D12_GRAPHICS_COMMAND_LIST10,
                     ],
                     this,
                 ),
-                (&[IID_D3D12_COMMAND_LIST_EXT], ext_ptr),
+                (
+                    &[IID_D3D12_COMMAND_LIST_EXT, IID_IMTL_D3D12_COMMAND_LIST_EXT1],
+                    ext_ptr,
+                ),
             ],
             add_ref,
             &qi,
@@ -944,6 +954,9 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
     if pipeline_state.is_null() {
         set_pso_graphics(list, ptr::null());
         set_pso_compute(list, ptr::null());
+        if list.dynamic_depth_bias.take().is_some() {
+            list.dirty_state.insert(DirtyFlags::RASTERIZER);
+        }
         list.dirty_state.insert(DirtyFlags::PSO);
         return;
     }
@@ -960,6 +973,9 @@ pub unsafe fn set_pipeline_state(this: *mut c_void, pipeline_state: *mut c_void)
         return;
     }
     let graphics_pso = pipeline_state.cast::<Graphics>().cast_const();
+    if list.dynamic_depth_bias.take().is_some() {
+        list.dirty_state.insert(DirtyFlags::RASTERIZER);
+    }
     if ptr::eq(list.pso_graphics, graphics_pso) {
         return;
     }
@@ -1929,6 +1945,96 @@ pub unsafe fn rs_set_shading_rate_image(_this: *mut c_void, shading_rate_image: 
         crate::warn!(
             "RSSetShadingRateImage: variable rate shading not supported (VariableShadingRateTier NOT_SUPPORTED)"
         );
+    }
+}
+
+/// `ID3D12GraphicsCommandList8::OMSetFrontAndBackStencilRef`.
+///
+/// # Safety
+///
+/// `this` is a valid `List` pointer.
+pub unsafe fn om_set_front_and_back_stencil_ref(
+    this: *mut c_void,
+    front_stencil_ref: u32,
+    back_stencil_ref: u32,
+) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("list.OMSetFrontAndBackStencilRef");
+    if this.is_null() {
+        return;
+    }
+    let front = front_stencil_ref & 0xff;
+    let back = back_stencil_ref & 0xff;
+    if front != back && !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!(
+            "OMSetFrontAndBackStencilRef: separate back stencil ref is not supported; using front ref"
+        );
+    }
+    // SAFETY: `this` is a live `List`.
+    let list = unsafe { &mut *this.cast::<List>() };
+    list.stencil_ref = front;
+    list.dirty_state.insert(DirtyFlags::STENCIL_REF);
+}
+
+/// `ID3D12GraphicsCommandList9::RSSetDepthBias`.
+///
+/// # Safety
+///
+/// `this` is a valid `List` pointer.
+pub unsafe fn rs_set_depth_bias(
+    this: *mut c_void,
+    depth_bias: f32,
+    depth_bias_clamp: f32,
+    slope_scaled_depth_bias: f32,
+) {
+    crate::scope!("list.RSSetDepthBias");
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: `this` is a live `List`.
+    let list = unsafe { &mut *this.cast::<List>() };
+    list.dynamic_depth_bias = Some((depth_bias, depth_bias_clamp, slope_scaled_depth_bias));
+    list.dirty_state.insert(DirtyFlags::RASTERIZER);
+}
+
+/// `ID3D12GraphicsCommandList9::IASetIndexBufferStripCutValue`.
+///
+/// # Safety
+///
+/// `this` is a valid `List` pointer.
+pub unsafe fn ia_set_index_buffer_strip_cut_value(_this: *mut c_void, ib_strip_cut_value: u32) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("list.IASetIndexBufferStripCutValue");
+    if ib_strip_cut_value == 0 && !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!(
+            "IASetIndexBufferStripCutValue: disabled strip cut value is ignored; Metal always cuts at max index"
+        );
+    }
+}
+
+/// `ID3D12GraphicsCommandList10::SetProgram`.
+///
+/// # Safety
+///
+/// `this` and `desc` are caller-supplied pointers.
+pub unsafe fn set_program(_this: *mut c_void, _desc: *const SetProgramDesc) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("list.SetProgram");
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!("SetProgram: work graphs and generic programs are not supported");
+    }
+}
+
+/// `ID3D12GraphicsCommandList10::DispatchGraph`.
+///
+/// # Safety
+///
+/// `this` and `desc` are caller-supplied pointers.
+pub unsafe fn dispatch_graph(_this: *mut c_void, _desc: *const DispatchGraphDesc) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("list.DispatchGraph");
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!("DispatchGraph: work graphs are not supported");
     }
 }
 

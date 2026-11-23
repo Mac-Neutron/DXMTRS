@@ -1,4 +1,4 @@
-//! `ID3D12GraphicsCommandList7` and `IMTLD3D12CommandListExt` (`d3d12_command_list.cpp`,
+//! `ID3D12GraphicsCommandList10` and `IMTLD3D12CommandListExt` (`d3d12_command_list.cpp`,
 //!
 //! `d3d12_device.hpp:68-95`): the command list struct, recording state, encoder open/close seams,
 //! and vtable dispatch.
@@ -20,7 +20,11 @@ use winemetal_wire::{WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMTScissorRec
 
 use crate::{
     abi::{
-        ext::{D3D12CommandListExtVtbl, D3D12UpscaleDesc},
+        agility::{DispatchGraphDesc, ID3D12GraphicsCommandList10Vtbl, SetProgramDesc},
+        ext::{
+            D3D12CommandListExt1Vtbl, D3D12CommandListExtVtbl, D3D12DenoisedUpscaleDesc,
+            D3D12FrameGenUiDesc, D3D12UpscaleDesc,
+        },
         vtbl::{
             D3d12CpuDescriptorHandle, D3d12GpuDescriptorHandle, ID3D12GraphicsCommandList7Vtbl,
             IUnknownVtbl,
@@ -60,6 +64,7 @@ bitflags! {
         const DESCRIPTOR_HEAP = 1 << 11;
         const VISIBILITY_BUFFER = 1 << 12;
         const DEPTH_BOUNDS = 1 << 13;
+        const RASTERIZER = 1 << 14;
     }
 }
 
@@ -151,12 +156,12 @@ pub type RetainedObject = (*mut c_void, unsafe fn(*mut c_void));
 
 /// `MTLD3D12GraphicsCommandListImpl` (`d3d12_command_list.cpp:41-190`).
 ///
-/// Primary vtable pointer (`ID3D12GraphicsCommandList7`) sits at offset 0; the companion
-/// `IMTLD3D12CommandListExt` vtable pointer sits at [`List::EXT_OFFSET`].
+/// Primary vtable pointer (`ID3D12GraphicsCommandList10`) sits at offset 0; the companion
+/// `IMTLD3D12CommandListExt1` vtable pointer sits at [`List::EXT_OFFSET`].
 #[repr(C)]
 pub struct List {
-    pub vtbl: &'static ID3D12GraphicsCommandList7Vtbl,
-    pub ext_vtbl: &'static D3D12CommandListExtVtbl,
+    pub vtbl: &'static ID3D12GraphicsCommandList10Vtbl,
+    pub ext_vtbl: &'static D3D12CommandListExt1Vtbl,
     pub com: ComObject,
     pub private_data: PrivateData,
     pub device: *mut Device,
@@ -204,6 +209,7 @@ pub struct List {
     pub sm50_index_buffer_format: u32,
     pub blend_factor: [f32; 4],
     pub stencil_ref: u32,
+    pub dynamic_depth_bias: Option<(f32, f32, f32)>,
     pub dirty_state: DirtyFlags,
     pub retained_objects: Vec<RetainedObject>,
     pub barrier_scratch: Vec<*const c_void>,
@@ -319,6 +325,7 @@ impl List {
             sm50_index_buffer_format: 0,
             blend_factor: [1.0; 4],
             stencil_ref: 0,
+            dynamic_depth_bias: None,
             dirty_state: DirtyFlags::empty(),
             retained_objects: Vec::new(),
             barrier_scratch: Vec::with_capacity(16),
@@ -371,919 +378,987 @@ pub unsafe fn cast_list<'a>(raw: *mut c_void) -> Option<&'a List> {
     }
 }
 
-/// Primary `ID3D12GraphicsCommandList7` vtable for [`List`].
-pub static LIST_VTBL: ID3D12GraphicsCommandList7Vtbl = ID3D12GraphicsCommandList7Vtbl {
-    query_interface: slot!(
-        (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
+/// Primary `ID3D12GraphicsCommandList10` vtable for [`List`].
+pub static LIST_VTBL: ID3D12GraphicsCommandList10Vtbl = ID3D12GraphicsCommandList10Vtbl {
+    base: ID3D12GraphicsCommandList7Vtbl {
+        query_interface: slot!(
+            (this: *mut c_void, riid: *const c_void, ppv_object: *mut *mut c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::query_interface(this, riid, ppv_object) }
+            }
+        ),
+        add_ref: slot!((this: *mut c_void) -> u32 => {
+            // SAFETY: `this` is a live `List` COM pointer.
+            unsafe { com::add_ref_com(this.cast::<List>()) }
+        }),
+        release: slot!((this: *mut c_void) -> u32 => {
+            // SAFETY: `this` is a live `List` COM pointer.
+            unsafe { com::release_com(this.cast::<List>()) }
+        }),
+        get_private_data: slot!(
+            (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::get_private_data(this, guid, data_size, data) }
+            }
+        ),
+        set_private_data: slot!(
+            (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::set_private_data(this, guid, data_size, data) }
+            }
+        ),
+        set_private_data_interface: slot!(
+            (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::set_private_data_interface(this, guid, data) }
+            }
+        ),
+        set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
             // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::query_interface(this, riid, ppv_object) }
+            unsafe { state::set_name(this, name) }
+        }),
+        get_device: slot!(
+            (this: *mut c_void, riid: *const c_void, device: *mut *mut c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::get_device(this, riid, device) }
+            }
+        ),
+        get_type: slot!((this: *mut c_void) -> u32 => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::get_type(this) }
+        }),
+        close: slot!((this: *mut c_void) -> Hresult => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::close(this) }
+        }),
+        reset: slot!(
+            (this: *mut c_void, allocator: *mut c_void, initial_state: *mut c_void) -> Hresult => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::reset(this, allocator, initial_state) }
+            }
+        ),
+        clear_state: slot!((this: *mut c_void, pipeline_state: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::clear_state(this, pipeline_state) }
+        }),
+        draw_instanced: slot!(
+            (
+                this: *mut c_void,
+                vertex_count_per_instance: u32,
+                instance_count: u32,
+                start_vertex_location: u32,
+                start_instance_location: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::draw_instanced(
+                        this,
+                        vertex_count_per_instance,
+                        instance_count,
+                        start_vertex_location,
+                        start_instance_location,
+                    );
+                }
+            }
+        ),
+        draw_indexed_instanced: slot!(
+            (
+                this: *mut c_void,
+                index_count_per_instance: u32,
+                instance_count: u32,
+                start_index_location: u32,
+                base_vertex_location: i32,
+                start_instance_location: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::draw_indexed_instanced(
+                        this,
+                        index_count_per_instance,
+                        instance_count,
+                        start_index_location,
+                        base_vertex_location,
+                        start_instance_location,
+                    );
+                }
+            }
+        ),
+        dispatch: slot!(
+            (this: *mut c_void, x: u32, y: u32, z: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { draw::dispatch(this, x, y, z) }
+            }
+        ),
+        copy_buffer_region: slot!(
+            (
+                this: *mut c_void,
+                dst_buffer: *mut c_void,
+                dst_offset: u64,
+                src_buffer: *mut c_void,
+                src_offset: u64,
+                num_bytes: u64
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::copy_buffer_region(
+                        this,
+                        dst_buffer,
+                        dst_offset,
+                        src_buffer,
+                        src_offset,
+                        num_bytes,
+                    );
+                }
+            }
+        ),
+        copy_texture_region: slot!(
+            (
+                this: *mut c_void,
+                dst: *const c_void,
+                dst_x: u32,
+                dst_y: u32,
+                dst_z: u32,
+                src: *const c_void,
+                src_box: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { copy::copy_texture_region(this, dst, dst_x, dst_y, dst_z, src, src_box) }
+            }
+        ),
+        copy_resource: slot!(
+            (this: *mut c_void, dst_resource: *mut c_void, src_resource: *mut c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { copy::copy_resource(this, dst_resource, src_resource) }
+            }
+        ),
+        copy_tiles: slot!(
+            (
+                this: *mut c_void,
+                tiled_resource: *mut c_void,
+                tile_region_start_coord: *const c_void,
+                tile_region_size: *const c_void,
+                buffer: *mut c_void,
+                buffer_start_offset_in_bytes: u64,
+                flags: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::copy_tiles(
+                        this,
+                        tiled_resource,
+                        tile_region_start_coord,
+                        tile_region_size,
+                        buffer,
+                        buffer_start_offset_in_bytes,
+                        flags,
+                    );
+                }
+            }
+        ),
+        resolve_subresource: slot!(
+            (
+                this: *mut c_void,
+                dst_resource: *mut c_void,
+                dst_subresource: u32,
+                src_resource: *mut c_void,
+                src_subresource: u32,
+                format: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::resolve_subresource(
+                        this,
+                        dst_resource,
+                        dst_subresource,
+                        src_resource,
+                        src_subresource,
+                        format,
+                    );
+                }
+            }
+        ),
+        ia_set_primitive_topology: slot!((this: *mut c_void, topology: u32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::ia_set_primitive_topology(this, topology) }
+        }),
+        rs_set_viewports: slot!(
+            (this: *mut c_void, num_viewports: u32, viewports: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::rs_set_viewports(this, num_viewports, viewports) }
+            }
+        ),
+        rs_set_scissor_rects: slot!(
+            (this: *mut c_void, num_rects: u32, rects: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::rs_set_scissor_rects(this, num_rects, rects) }
+            }
+        ),
+        om_set_blend_factor: slot!((this: *mut c_void, blend_factor: *const f32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::om_set_blend_factor(this, blend_factor) }
+        }),
+        om_set_stencil_ref: slot!((this: *mut c_void, stencil_ref: u32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::om_set_stencil_ref(this, stencil_ref) }
+        }),
+        set_pipeline_state: slot!((this: *mut c_void, pipeline_state: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_pipeline_state(this, pipeline_state) }
+        }),
+        resource_barrier: slot!(
+            (this: *mut c_void, num_barriers: u32, barriers: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { barrier::resource_barrier(this, num_barriers, barriers) }
+            }
+        ),
+        execute_bundle: slot!((this: *mut c_void, command_list: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::execute_bundle(this, command_list) }
+        }),
+        set_descriptor_heaps: slot!(
+            (this: *mut c_void, num_descriptor_heaps: u32, descriptor_heaps: *const *mut c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::set_descriptor_heaps(this, num_descriptor_heaps, descriptor_heaps) }
+            }
+        ),
+        set_compute_root_signature: slot!((this: *mut c_void, root_signature: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_compute_root_signature(this, root_signature) }
+        }),
+        set_graphics_root_signature: slot!((this: *mut c_void, root_signature: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_graphics_root_signature(this, root_signature) }
+        }),
+        set_compute_root_descriptor_table: slot!(
+            (this: *mut c_void, root_parameter_index: u32, base_descriptor: D3d12GpuDescriptorHandle) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root_descriptor_table(this, root_parameter_index, base_descriptor);
+                }
+            }
+        ),
+        set_graphics_root_descriptor_table: slot!(
+            (this: *mut c_void, root_parameter_index: u32, base_descriptor: D3d12GpuDescriptorHandle) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root_descriptor_table(
+                        this,
+                        root_parameter_index,
+                        base_descriptor,
+                    );
+                }
+            }
+        ),
+        set_compute_root32_bit_constant: slot!(
+            (
+                this: *mut c_void,
+                root_parameter_index: u32,
+                src_data: u32,
+                dest_offset_in32_bit_values: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root32_bit_constant(
+                        this,
+                        root_parameter_index,
+                        src_data,
+                        dest_offset_in32_bit_values,
+                    );
+                }
+            }
+        ),
+        set_graphics_root32_bit_constant: slot!(
+            (
+                this: *mut c_void,
+                root_parameter_index: u32,
+                src_data: u32,
+                dest_offset_in32_bit_values: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root32_bit_constant(
+                        this,
+                        root_parameter_index,
+                        src_data,
+                        dest_offset_in32_bit_values,
+                    );
+                }
+            }
+        ),
+        set_compute_root32_bit_constants: slot!(
+            (
+                this: *mut c_void,
+                root_parameter_index: u32,
+                num32_bit_values_to_set: u32,
+                src_data: *const c_void,
+                dest_offset_in32_bit_values: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root32_bit_constants(
+                        this,
+                        root_parameter_index,
+                        num32_bit_values_to_set,
+                        src_data,
+                        dest_offset_in32_bit_values,
+                    );
+                }
+            }
+        ),
+        set_graphics_root32_bit_constants: slot!(
+            (
+                this: *mut c_void,
+                root_parameter_index: u32,
+                num32_bit_values_to_set: u32,
+                src_data: *const c_void,
+                dest_offset_in32_bit_values: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root32_bit_constants(
+                        this,
+                        root_parameter_index,
+                        num32_bit_values_to_set,
+                        src_data,
+                        dest_offset_in32_bit_values,
+                    );
+                }
+            }
+        ),
+        set_compute_root_constant_buffer_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root_constant_buffer_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        set_graphics_root_constant_buffer_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root_constant_buffer_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        set_compute_root_shader_resource_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root_shader_resource_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        set_graphics_root_shader_resource_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root_shader_resource_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        set_compute_root_unordered_access_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_compute_root_unordered_access_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        set_graphics_root_unordered_access_view: slot!(
+            (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_graphics_root_unordered_access_view(
+                        this,
+                        root_parameter_index,
+                        buffer_location,
+                    );
+                }
+            }
+        ),
+        ia_set_index_buffer: slot!((this: *mut c_void, view: *const c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::ia_set_index_buffer(this, view) }
+        }),
+        ia_set_vertex_buffers: slot!(
+            (this: *mut c_void, start_slot: u32, num_views: u32, views: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::ia_set_vertex_buffers(this, start_slot, num_views, views) }
+            }
+        ),
+        so_set_targets: slot!(
+            (this: *mut c_void, start_slot: u32, num_views: u32, views: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::so_set_targets(this, start_slot, num_views, views) }
+            }
+        ),
+        om_set_render_targets: slot!(
+            (
+                this: *mut c_void,
+                num_render_target_descriptors: u32,
+                render_target_descriptors: *const c_void,
+                rts_single_handle_to_descriptor_range: i32,
+                depth_stencil_descriptor: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::om_set_render_targets(
+                        this,
+                        num_render_target_descriptors,
+                        render_target_descriptors,
+                        rts_single_handle_to_descriptor_range,
+                        depth_stencil_descriptor,
+                    );
+                }
+            }
+        ),
+        clear_depth_stencil_view: slot!(
+            (
+                this: *mut c_void,
+                depth_stencil_view: D3d12CpuDescriptorHandle,
+                clear_flags: u32,
+                depth: f32,
+                stencil: u8,
+                num_rects: u32,
+                rects: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    clear::clear_depth_stencil_view(
+                        this,
+                        depth_stencil_view,
+                        clear_flags,
+                        depth,
+                        stencil,
+                        num_rects,
+                        rects,
+                    );
+                }
+            }
+        ),
+        clear_render_target_view: slot!(
+            (
+                this: *mut c_void,
+                render_target_view: D3d12CpuDescriptorHandle,
+                color_rgba: *const f32,
+                num_rects: u32,
+                rects: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    clear::clear_render_target_view(
+                        this,
+                        render_target_view,
+                        color_rgba,
+                        num_rects,
+                        rects,
+                    );
+                }
+            }
+        ),
+        clear_unordered_access_view_uint: slot!(
+            (
+                this: *mut c_void,
+                view_gpu_handle_in_current_heap: D3d12GpuDescriptorHandle,
+                view_cpu_handle: D3d12CpuDescriptorHandle,
+                resource: *mut c_void,
+                values: *const u32,
+                num_rects: u32,
+                rects: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    clear::clear_unordered_access_view_uint(
+                        this,
+                        view_gpu_handle_in_current_heap,
+                        view_cpu_handle,
+                        resource,
+                        values,
+                        num_rects,
+                        rects,
+                    );
+                }
+            }
+        ),
+        clear_unordered_access_view_float: slot!(
+            (
+                this: *mut c_void,
+                view_gpu_handle_in_current_heap: D3d12GpuDescriptorHandle,
+                view_cpu_handle: D3d12CpuDescriptorHandle,
+                resource: *mut c_void,
+                values: *const f32,
+                num_rects: u32,
+                rects: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    clear::clear_unordered_access_view_float(
+                        this,
+                        view_gpu_handle_in_current_heap,
+                        view_cpu_handle,
+                        resource,
+                        values,
+                        num_rects,
+                        rects,
+                    );
+                }
+            }
+        ),
+        discard_resource: slot!(
+            (this: *mut c_void, resource: *mut c_void, region: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { clear::discard_resource(this, resource, region) }
+            }
+        ),
+        begin_query: slot!(
+            (this: *mut c_void, query_heap: *mut c_void, query_type: u32, index: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { copy::begin_query(this, query_heap, query_type, index) }
+            }
+        ),
+        end_query: slot!(
+            (this: *mut c_void, query_heap: *mut c_void, query_type: u32, index: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { copy::end_query(this, query_heap, query_type, index) }
+            }
+        ),
+        resolve_query_data: slot!(
+            (
+                this: *mut c_void,
+                query_heap: *mut c_void,
+                query_type: u32,
+                start_index: u32,
+                num_queries: u32,
+                destination_buffer: *mut c_void,
+                aligned_destination_buffer_offset: u64
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::resolve_query_data(
+                        this,
+                        query_heap,
+                        query_type,
+                        start_index,
+                        num_queries,
+                        destination_buffer,
+                        aligned_destination_buffer_offset,
+                    );
+                }
+            }
+        ),
+        set_predication: slot!(
+            (this: *mut c_void, buffer: *mut c_void, aligned_buffer_offset: u64, operation: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::set_predication(this, buffer, aligned_buffer_offset, operation) }
+            }
+        ),
+        set_marker: slot!(
+            (this: *mut c_void, metadata: u32, data: *const c_void, size: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::set_marker(this, metadata, data, size) }
+            }
+        ),
+        begin_event: slot!(
+            (this: *mut c_void, metadata: u32, data: *const c_void, size: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::begin_event(this, metadata, data, size) }
+            }
+        ),
+        end_event: slot!((this: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::end_event(this) }
+        }),
+        execute_indirect: slot!(
+            (
+                this: *mut c_void,
+                command_signature: *mut c_void,
+                max_command_count: u32,
+                argument_buffer: *mut c_void,
+                argument_buffer_offset: u64,
+                count_buffer: *mut c_void,
+                count_buffer_offset: u64
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    indirect::execute_indirect(
+                        this,
+                        command_signature,
+                        max_command_count,
+                        argument_buffer,
+                        argument_buffer_offset,
+                        count_buffer,
+                        count_buffer_offset,
+                    );
+                }
+            }
+        ),
+        atomic_copy_buffer_uint: slot!(
+            (
+                this: *mut c_void,
+                dst_buffer: *mut c_void,
+                dst_offset: u64,
+                src_buffer: *mut c_void,
+                src_offset: u64,
+                dependencies: u32,
+                dependent_resources: *const *mut c_void,
+                dependent_subresource_ranges: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::atomic_copy_buffer_uint(
+                        this,
+                        dst_buffer,
+                        dst_offset,
+                        src_buffer,
+                        src_offset,
+                        dependencies,
+                        dependent_resources,
+                        dependent_subresource_ranges,
+                    );
+                }
+            }
+        ),
+        atomic_copy_buffer_uint64: slot!(
+            (
+                this: *mut c_void,
+                dst_buffer: *mut c_void,
+                dst_offset: u64,
+                src_buffer: *mut c_void,
+                src_offset: u64,
+                dependencies: u32,
+                dependent_resources: *const *mut c_void,
+                dependent_subresource_ranges: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::atomic_copy_buffer_uint64(
+                        this,
+                        dst_buffer,
+                        dst_offset,
+                        src_buffer,
+                        src_offset,
+                        dependencies,
+                        dependent_resources,
+                        dependent_subresource_ranges,
+                    );
+                }
+            }
+        ),
+        om_set_depth_bounds: slot!((this: *mut c_void, min: f32, max: f32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::om_set_depth_bounds(this, min, max) }
+        }),
+        set_sample_positions: slot!(
+            (
+                this: *mut c_void,
+                num_samples_per_pixel: u32,
+                num_pixels: u32,
+                sample_positions: *mut c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    state::set_sample_positions(
+                        this,
+                        num_samples_per_pixel,
+                        num_pixels,
+                        sample_positions,
+                    );
+                }
+            }
+        ),
+        resolve_subresource_region: slot!(
+            (
+                this: *mut c_void,
+                dst_resource: *mut c_void,
+                dst_subresource: u32,
+                dst_x: u32,
+                dst_y: u32,
+                src_resource: *mut c_void,
+                src_subresource: u32,
+                src_rect: *mut c_void,
+                format: u32,
+                resolve_mode: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    copy::resolve_subresource_region(
+                        this,
+                        dst_resource,
+                        dst_subresource,
+                        dst_x,
+                        dst_y,
+                        src_resource,
+                        src_subresource,
+                        src_rect,
+                        format,
+                        resolve_mode,
+                    );
+                }
+            }
+        ),
+        set_view_instance_mask: slot!((this: *mut c_void, mask: u32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_view_instance_mask(this, mask) }
+        }),
+        write_buffer_immediate: slot!(
+            (this: *mut c_void, count: u32, params: *const c_void, modes: *const u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { copy::write_buffer_immediate(this, count, params, modes) }
+            }
+        ),
+        set_protected_resource_session: slot!((this: *mut c_void, session: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_protected_resource_session(this, session) }
+        }),
+        begin_render_pass: slot!(
+            (
+                this: *mut c_void,
+                num_render_targets: u32,
+                render_targets: *const c_void,
+                depth_stencil: *const c_void,
+                flags: u32
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    clear::begin_render_pass(
+                        this,
+                        num_render_targets,
+                        render_targets,
+                        depth_stencil,
+                        flags,
+                    );
+                }
+            }
+        ),
+        end_render_pass: slot!((this: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { clear::end_render_pass(this) }
+        }),
+        initialize_meta_command: slot!(
+            (
+                this: *mut c_void,
+                meta_command: *mut c_void,
+                initialization_parameters_data: *const c_void,
+                initialization_parameters_data_size_in_bytes: usize
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::initialize_meta_command(
+                        this,
+                        meta_command,
+                        initialization_parameters_data,
+                        initialization_parameters_data_size_in_bytes,
+                    );
+                }
+            }
+        ),
+        execute_meta_command: slot!(
+            (
+                this: *mut c_void,
+                meta_command: *mut c_void,
+                execution_parameters_data: *const c_void,
+                execution_parameters_data_size_in_bytes: usize
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::execute_meta_command(
+                        this,
+                        meta_command,
+                        execution_parameters_data,
+                        execution_parameters_data_size_in_bytes,
+                    );
+                }
+            }
+        ),
+        build_raytracing_acceleration_structure: slot!(
+            (
+                this: *mut c_void,
+                desc: *const c_void,
+                num_postbuild_info_descs: u32,
+                postbuild_info_descs: *const c_void
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::build_raytracing_acceleration_structure(
+                        this,
+                        desc,
+                        num_postbuild_info_descs,
+                        postbuild_info_descs,
+                    );
+                }
+            }
+        ),
+        emit_raytracing_acceleration_structure_postbuild_info: slot!(
+            (
+                this: *mut c_void,
+                desc: *const c_void,
+                num_source_acceleration_structures: u32,
+                source_acceleration_structure_data: *const u64
+            ) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::emit_raytracing_acceleration_structure_postbuild_info(
+                        this,
+                        desc,
+                        num_source_acceleration_structures,
+                        source_acceleration_structure_data,
+                    );
+                }
+            }
+        ),
+        copy_raytracing_acceleration_structure: slot!(
+            (this: *mut c_void, dest_acceleration_structure_data: u64, source_acceleration_structure_data: u64, mode: u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe {
+                    draw::copy_raytracing_acceleration_structure(
+                        this,
+                        dest_acceleration_structure_data,
+                        source_acceleration_structure_data,
+                        mode,
+                    );
+                }
+            }
+        ),
+        set_pipeline_state1: slot!((this: *mut c_void, state_object: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::set_pipeline_state1(this, state_object) }
+        }),
+        dispatch_rays: slot!((this: *mut c_void, desc: *const c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { draw::dispatch_rays(this, desc) }
+        }),
+        rs_set_shading_rate: slot!(
+            (this: *mut c_void, base_shading_rate: u32, combiners: *const u32) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { state::rs_set_shading_rate(this, base_shading_rate, combiners) }
+            }
+        ),
+        rs_set_shading_rate_image: slot!((this: *mut c_void, shading_rate_image: *mut c_void) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { state::rs_set_shading_rate_image(this, shading_rate_image) }
+        }),
+        dispatch_mesh: slot!((this: *mut c_void, x: u32, y: u32, z: u32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { draw::dispatch_mesh(this, x, y, z) }
+        }),
+        barrier: slot!(
+            (this: *mut c_void, num_barrier_groups: u32, barrier_groups: *const c_void) => {
+                // SAFETY: caller forwards COM slot arguments.
+                unsafe { barrier::barrier(this, num_barrier_groups, barrier_groups) }
+            }
+        ),
+    },
+    om_set_front_and_back_stencil_ref: slot!(
+        (this: *mut c_void, front_stencil_ref: u32, back_stencil_ref: u32) => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe {
+                state::om_set_front_and_back_stencil_ref(
+                    this,
+                    front_stencil_ref,
+                    back_stencil_ref,
+                );
+            }
         }
     ),
-    add_ref: slot!((this: *mut c_void) -> u32 => {
-        // SAFETY: `this` is a live `List` COM pointer.
-        unsafe { com::add_ref_com(this.cast::<List>()) }
-    }),
-    release: slot!((this: *mut c_void) -> u32 => {
-        // SAFETY: `this` is a live `List` COM pointer.
-        unsafe { com::release_com(this.cast::<List>()) }
-    }),
-    get_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: *mut u32, data: *mut c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::get_private_data(this, guid, data_size, data) }
-        }
-    ),
-    set_private_data: slot!(
-        (this: *mut c_void, guid: *const c_void, data_size: u32, data: *const c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::set_private_data(this, guid, data_size, data) }
-        }
-    ),
-    set_private_data_interface: slot!(
-        (this: *mut c_void, guid: *const c_void, data: *const c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::set_private_data_interface(this, guid, data) }
-        }
-    ),
-    set_name: slot!((this: *mut c_void, name: *const c_void) -> Hresult => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_name(this, name) }
-    }),
-    get_device: slot!(
-        (this: *mut c_void, riid: *const c_void, device: *mut *mut c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::get_device(this, riid, device) }
-        }
-    ),
-    get_type: slot!((this: *mut c_void) -> u32 => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::get_type(this) }
-    }),
-    close: slot!((this: *mut c_void) -> Hresult => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::close(this) }
-    }),
-    reset: slot!(
-        (this: *mut c_void, allocator: *mut c_void, initial_state: *mut c_void) -> Hresult => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::reset(this, allocator, initial_state) }
-        }
-    ),
-    clear_state: slot!((this: *mut c_void, pipeline_state: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::clear_state(this, pipeline_state) }
-    }),
-    draw_instanced: slot!(
+    rs_set_depth_bias: slot!(
         (
             this: *mut c_void,
-            vertex_count_per_instance: u32,
-            instance_count: u32,
-            start_vertex_location: u32,
-            start_instance_location: u32
+            depth_bias: f32,
+            depth_bias_clamp: f32,
+            slope_scaled_depth_bias: f32
         ) => {
             // SAFETY: caller forwards COM slot arguments.
             unsafe {
-                draw::draw_instanced(
+                state::rs_set_depth_bias(
                     this,
-                    vertex_count_per_instance,
-                    instance_count,
-                    start_vertex_location,
-                    start_instance_location,
+                    depth_bias,
+                    depth_bias_clamp,
+                    slope_scaled_depth_bias,
                 );
             }
         }
     ),
-    draw_indexed_instanced: slot!(
-        (
-            this: *mut c_void,
-            index_count_per_instance: u32,
-            instance_count: u32,
-            start_index_location: u32,
-            base_vertex_location: i32,
-            start_instance_location: u32
-        ) => {
+    ia_set_index_buffer_strip_cut_value: slot!(
+        (this: *mut c_void, ib_strip_cut_value: u32) => {
             // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::draw_indexed_instanced(
-                    this,
-                    index_count_per_instance,
-                    instance_count,
-                    start_index_location,
-                    base_vertex_location,
-                    start_instance_location,
-                );
-            }
+            unsafe { state::ia_set_index_buffer_strip_cut_value(this, ib_strip_cut_value) }
         }
     ),
-    dispatch: slot!(
-        (this: *mut c_void, x: u32, y: u32, z: u32) => {
+    set_program: slot!(
+        (this: *mut c_void, p_desc: *const SetProgramDesc) => {
             // SAFETY: caller forwards COM slot arguments.
-            unsafe { draw::dispatch(this, x, y, z) }
+            unsafe { state::set_program(this, p_desc) }
         }
     ),
-    copy_buffer_region: slot!(
-        (
-            this: *mut c_void,
-            dst_buffer: *mut c_void,
-            dst_offset: u64,
-            src_buffer: *mut c_void,
-            src_offset: u64,
-            num_bytes: u64
-        ) => {
+    dispatch_graph: slot!(
+        (this: *mut c_void, p_desc: *const DispatchGraphDesc) => {
             // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::copy_buffer_region(
-                    this,
-                    dst_buffer,
-                    dst_offset,
-                    src_buffer,
-                    src_offset,
-                    num_bytes,
-                );
-            }
-        }
-    ),
-    copy_texture_region: slot!(
-        (
-            this: *mut c_void,
-            dst: *const c_void,
-            dst_x: u32,
-            dst_y: u32,
-            dst_z: u32,
-            src: *const c_void,
-            src_box: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { copy::copy_texture_region(this, dst, dst_x, dst_y, dst_z, src, src_box) }
-        }
-    ),
-    copy_resource: slot!(
-        (this: *mut c_void, dst_resource: *mut c_void, src_resource: *mut c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { copy::copy_resource(this, dst_resource, src_resource) }
-        }
-    ),
-    copy_tiles: slot!(
-        (
-            this: *mut c_void,
-            tiled_resource: *mut c_void,
-            tile_region_start_coord: *const c_void,
-            tile_region_size: *const c_void,
-            buffer: *mut c_void,
-            buffer_start_offset_in_bytes: u64,
-            flags: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::copy_tiles(
-                    this,
-                    tiled_resource,
-                    tile_region_start_coord,
-                    tile_region_size,
-                    buffer,
-                    buffer_start_offset_in_bytes,
-                    flags,
-                );
-            }
-        }
-    ),
-    resolve_subresource: slot!(
-        (
-            this: *mut c_void,
-            dst_resource: *mut c_void,
-            dst_subresource: u32,
-            src_resource: *mut c_void,
-            src_subresource: u32,
-            format: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::resolve_subresource(
-                    this,
-                    dst_resource,
-                    dst_subresource,
-                    src_resource,
-                    src_subresource,
-                    format,
-                );
-            }
-        }
-    ),
-    ia_set_primitive_topology: slot!((this: *mut c_void, topology: u32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::ia_set_primitive_topology(this, topology) }
-    }),
-    rs_set_viewports: slot!(
-        (this: *mut c_void, num_viewports: u32, viewports: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::rs_set_viewports(this, num_viewports, viewports) }
-        }
-    ),
-    rs_set_scissor_rects: slot!(
-        (this: *mut c_void, num_rects: u32, rects: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::rs_set_scissor_rects(this, num_rects, rects) }
-        }
-    ),
-    om_set_blend_factor: slot!((this: *mut c_void, blend_factor: *const f32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::om_set_blend_factor(this, blend_factor) }
-    }),
-    om_set_stencil_ref: slot!((this: *mut c_void, stencil_ref: u32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::om_set_stencil_ref(this, stencil_ref) }
-    }),
-    set_pipeline_state: slot!((this: *mut c_void, pipeline_state: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_pipeline_state(this, pipeline_state) }
-    }),
-    resource_barrier: slot!(
-        (this: *mut c_void, num_barriers: u32, barriers: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { barrier::resource_barrier(this, num_barriers, barriers) }
-        }
-    ),
-    execute_bundle: slot!((this: *mut c_void, command_list: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::execute_bundle(this, command_list) }
-    }),
-    set_descriptor_heaps: slot!(
-        (this: *mut c_void, num_descriptor_heaps: u32, descriptor_heaps: *const *mut c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::set_descriptor_heaps(this, num_descriptor_heaps, descriptor_heaps) }
-        }
-    ),
-    set_compute_root_signature: slot!((this: *mut c_void, root_signature: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_compute_root_signature(this, root_signature) }
-    }),
-    set_graphics_root_signature: slot!((this: *mut c_void, root_signature: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_graphics_root_signature(this, root_signature) }
-    }),
-    set_compute_root_descriptor_table: slot!(
-        (this: *mut c_void, root_parameter_index: u32, base_descriptor: D3d12GpuDescriptorHandle) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root_descriptor_table(this, root_parameter_index, base_descriptor);
-            }
-        }
-    ),
-    set_graphics_root_descriptor_table: slot!(
-        (this: *mut c_void, root_parameter_index: u32, base_descriptor: D3d12GpuDescriptorHandle) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root_descriptor_table(
-                    this,
-                    root_parameter_index,
-                    base_descriptor,
-                );
-            }
-        }
-    ),
-    set_compute_root32_bit_constant: slot!(
-        (
-            this: *mut c_void,
-            root_parameter_index: u32,
-            src_data: u32,
-            dest_offset_in32_bit_values: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root32_bit_constant(
-                    this,
-                    root_parameter_index,
-                    src_data,
-                    dest_offset_in32_bit_values,
-                );
-            }
-        }
-    ),
-    set_graphics_root32_bit_constant: slot!(
-        (
-            this: *mut c_void,
-            root_parameter_index: u32,
-            src_data: u32,
-            dest_offset_in32_bit_values: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root32_bit_constant(
-                    this,
-                    root_parameter_index,
-                    src_data,
-                    dest_offset_in32_bit_values,
-                );
-            }
-        }
-    ),
-    set_compute_root32_bit_constants: slot!(
-        (
-            this: *mut c_void,
-            root_parameter_index: u32,
-            num32_bit_values_to_set: u32,
-            src_data: *const c_void,
-            dest_offset_in32_bit_values: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root32_bit_constants(
-                    this,
-                    root_parameter_index,
-                    num32_bit_values_to_set,
-                    src_data,
-                    dest_offset_in32_bit_values,
-                );
-            }
-        }
-    ),
-    set_graphics_root32_bit_constants: slot!(
-        (
-            this: *mut c_void,
-            root_parameter_index: u32,
-            num32_bit_values_to_set: u32,
-            src_data: *const c_void,
-            dest_offset_in32_bit_values: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root32_bit_constants(
-                    this,
-                    root_parameter_index,
-                    num32_bit_values_to_set,
-                    src_data,
-                    dest_offset_in32_bit_values,
-                );
-            }
-        }
-    ),
-    set_compute_root_constant_buffer_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root_constant_buffer_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    set_graphics_root_constant_buffer_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root_constant_buffer_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    set_compute_root_shader_resource_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root_shader_resource_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    set_graphics_root_shader_resource_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root_shader_resource_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    set_compute_root_unordered_access_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_compute_root_unordered_access_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    set_graphics_root_unordered_access_view: slot!(
-        (this: *mut c_void, root_parameter_index: u32, buffer_location: u64) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_graphics_root_unordered_access_view(
-                    this,
-                    root_parameter_index,
-                    buffer_location,
-                );
-            }
-        }
-    ),
-    ia_set_index_buffer: slot!((this: *mut c_void, view: *const c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::ia_set_index_buffer(this, view) }
-    }),
-    ia_set_vertex_buffers: slot!(
-        (this: *mut c_void, start_slot: u32, num_views: u32, views: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::ia_set_vertex_buffers(this, start_slot, num_views, views) }
-        }
-    ),
-    so_set_targets: slot!(
-        (this: *mut c_void, start_slot: u32, num_views: u32, views: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::so_set_targets(this, start_slot, num_views, views) }
-        }
-    ),
-    om_set_render_targets: slot!(
-        (
-            this: *mut c_void,
-            num_render_target_descriptors: u32,
-            render_target_descriptors: *const c_void,
-            rts_single_handle_to_descriptor_range: i32,
-            depth_stencil_descriptor: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::om_set_render_targets(
-                    this,
-                    num_render_target_descriptors,
-                    render_target_descriptors,
-                    rts_single_handle_to_descriptor_range,
-                    depth_stencil_descriptor,
-                );
-            }
-        }
-    ),
-    clear_depth_stencil_view: slot!(
-        (
-            this: *mut c_void,
-            depth_stencil_view: D3d12CpuDescriptorHandle,
-            clear_flags: u32,
-            depth: f32,
-            stencil: u8,
-            num_rects: u32,
-            rects: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                clear::clear_depth_stencil_view(
-                    this,
-                    depth_stencil_view,
-                    clear_flags,
-                    depth,
-                    stencil,
-                    num_rects,
-                    rects,
-                );
-            }
-        }
-    ),
-    clear_render_target_view: slot!(
-        (
-            this: *mut c_void,
-            render_target_view: D3d12CpuDescriptorHandle,
-            color_rgba: *const f32,
-            num_rects: u32,
-            rects: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                clear::clear_render_target_view(
-                    this,
-                    render_target_view,
-                    color_rgba,
-                    num_rects,
-                    rects,
-                );
-            }
-        }
-    ),
-    clear_unordered_access_view_uint: slot!(
-        (
-            this: *mut c_void,
-            view_gpu_handle_in_current_heap: D3d12GpuDescriptorHandle,
-            view_cpu_handle: D3d12CpuDescriptorHandle,
-            resource: *mut c_void,
-            values: *const u32,
-            num_rects: u32,
-            rects: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                clear::clear_unordered_access_view_uint(
-                    this,
-                    view_gpu_handle_in_current_heap,
-                    view_cpu_handle,
-                    resource,
-                    values,
-                    num_rects,
-                    rects,
-                );
-            }
-        }
-    ),
-    clear_unordered_access_view_float: slot!(
-        (
-            this: *mut c_void,
-            view_gpu_handle_in_current_heap: D3d12GpuDescriptorHandle,
-            view_cpu_handle: D3d12CpuDescriptorHandle,
-            resource: *mut c_void,
-            values: *const f32,
-            num_rects: u32,
-            rects: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                clear::clear_unordered_access_view_float(
-                    this,
-                    view_gpu_handle_in_current_heap,
-                    view_cpu_handle,
-                    resource,
-                    values,
-                    num_rects,
-                    rects,
-                );
-            }
-        }
-    ),
-    discard_resource: slot!(
-        (this: *mut c_void, resource: *mut c_void, region: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { clear::discard_resource(this, resource, region) }
-        }
-    ),
-    begin_query: slot!(
-        (this: *mut c_void, query_heap: *mut c_void, query_type: u32, index: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { copy::begin_query(this, query_heap, query_type, index) }
-        }
-    ),
-    end_query: slot!(
-        (this: *mut c_void, query_heap: *mut c_void, query_type: u32, index: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { copy::end_query(this, query_heap, query_type, index) }
-        }
-    ),
-    resolve_query_data: slot!(
-        (
-            this: *mut c_void,
-            query_heap: *mut c_void,
-            query_type: u32,
-            start_index: u32,
-            num_queries: u32,
-            destination_buffer: *mut c_void,
-            aligned_destination_buffer_offset: u64
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::resolve_query_data(
-                    this,
-                    query_heap,
-                    query_type,
-                    start_index,
-                    num_queries,
-                    destination_buffer,
-                    aligned_destination_buffer_offset,
-                );
-            }
-        }
-    ),
-    set_predication: slot!(
-        (this: *mut c_void, buffer: *mut c_void, aligned_buffer_offset: u64, operation: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::set_predication(this, buffer, aligned_buffer_offset, operation) }
-        }
-    ),
-    set_marker: slot!(
-        (this: *mut c_void, metadata: u32, data: *const c_void, size: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::set_marker(this, metadata, data, size) }
-        }
-    ),
-    begin_event: slot!(
-        (this: *mut c_void, metadata: u32, data: *const c_void, size: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::begin_event(this, metadata, data, size) }
-        }
-    ),
-    end_event: slot!((this: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::end_event(this) }
-    }),
-    execute_indirect: slot!(
-        (
-            this: *mut c_void,
-            command_signature: *mut c_void,
-            max_command_count: u32,
-            argument_buffer: *mut c_void,
-            argument_buffer_offset: u64,
-            count_buffer: *mut c_void,
-            count_buffer_offset: u64
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                indirect::execute_indirect(
-                    this,
-                    command_signature,
-                    max_command_count,
-                    argument_buffer,
-                    argument_buffer_offset,
-                    count_buffer,
-                    count_buffer_offset,
-                );
-            }
-        }
-    ),
-    atomic_copy_buffer_uint: slot!(
-        (
-            this: *mut c_void,
-            dst_buffer: *mut c_void,
-            dst_offset: u64,
-            src_buffer: *mut c_void,
-            src_offset: u64,
-            dependencies: u32,
-            dependent_resources: *const *mut c_void,
-            dependent_subresource_ranges: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::atomic_copy_buffer_uint(
-                    this,
-                    dst_buffer,
-                    dst_offset,
-                    src_buffer,
-                    src_offset,
-                    dependencies,
-                    dependent_resources,
-                    dependent_subresource_ranges,
-                );
-            }
-        }
-    ),
-    atomic_copy_buffer_uint64: slot!(
-        (
-            this: *mut c_void,
-            dst_buffer: *mut c_void,
-            dst_offset: u64,
-            src_buffer: *mut c_void,
-            src_offset: u64,
-            dependencies: u32,
-            dependent_resources: *const *mut c_void,
-            dependent_subresource_ranges: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::atomic_copy_buffer_uint64(
-                    this,
-                    dst_buffer,
-                    dst_offset,
-                    src_buffer,
-                    src_offset,
-                    dependencies,
-                    dependent_resources,
-                    dependent_subresource_ranges,
-                );
-            }
-        }
-    ),
-    om_set_depth_bounds: slot!((this: *mut c_void, min: f32, max: f32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::om_set_depth_bounds(this, min, max) }
-    }),
-    set_sample_positions: slot!(
-        (
-            this: *mut c_void,
-            num_samples_per_pixel: u32,
-            num_pixels: u32,
-            sample_positions: *mut c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                state::set_sample_positions(
-                    this,
-                    num_samples_per_pixel,
-                    num_pixels,
-                    sample_positions,
-                );
-            }
-        }
-    ),
-    resolve_subresource_region: slot!(
-        (
-            this: *mut c_void,
-            dst_resource: *mut c_void,
-            dst_subresource: u32,
-            dst_x: u32,
-            dst_y: u32,
-            src_resource: *mut c_void,
-            src_subresource: u32,
-            src_rect: *mut c_void,
-            format: u32,
-            resolve_mode: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                copy::resolve_subresource_region(
-                    this,
-                    dst_resource,
-                    dst_subresource,
-                    dst_x,
-                    dst_y,
-                    src_resource,
-                    src_subresource,
-                    src_rect,
-                    format,
-                    resolve_mode,
-                );
-            }
-        }
-    ),
-    set_view_instance_mask: slot!((this: *mut c_void, mask: u32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_view_instance_mask(this, mask) }
-    }),
-    write_buffer_immediate: slot!(
-        (this: *mut c_void, count: u32, params: *const c_void, modes: *const u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { copy::write_buffer_immediate(this, count, params, modes) }
-        }
-    ),
-    set_protected_resource_session: slot!((this: *mut c_void, session: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_protected_resource_session(this, session) }
-    }),
-    begin_render_pass: slot!(
-        (
-            this: *mut c_void,
-            num_render_targets: u32,
-            render_targets: *const c_void,
-            depth_stencil: *const c_void,
-            flags: u32
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                clear::begin_render_pass(
-                    this,
-                    num_render_targets,
-                    render_targets,
-                    depth_stencil,
-                    flags,
-                );
-            }
-        }
-    ),
-    end_render_pass: slot!((this: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { clear::end_render_pass(this) }
-    }),
-    initialize_meta_command: slot!(
-        (
-            this: *mut c_void,
-            meta_command: *mut c_void,
-            initialization_parameters_data: *const c_void,
-            initialization_parameters_data_size_in_bytes: usize
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::initialize_meta_command(
-                    this,
-                    meta_command,
-                    initialization_parameters_data,
-                    initialization_parameters_data_size_in_bytes,
-                );
-            }
-        }
-    ),
-    execute_meta_command: slot!(
-        (
-            this: *mut c_void,
-            meta_command: *mut c_void,
-            execution_parameters_data: *const c_void,
-            execution_parameters_data_size_in_bytes: usize
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::execute_meta_command(
-                    this,
-                    meta_command,
-                    execution_parameters_data,
-                    execution_parameters_data_size_in_bytes,
-                );
-            }
-        }
-    ),
-    build_raytracing_acceleration_structure: slot!(
-        (
-            this: *mut c_void,
-            desc: *const c_void,
-            num_postbuild_info_descs: u32,
-            postbuild_info_descs: *const c_void
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::build_raytracing_acceleration_structure(
-                    this,
-                    desc,
-                    num_postbuild_info_descs,
-                    postbuild_info_descs,
-                );
-            }
-        }
-    ),
-    emit_raytracing_acceleration_structure_postbuild_info: slot!(
-        (
-            this: *mut c_void,
-            desc: *const c_void,
-            num_source_acceleration_structures: u32,
-            source_acceleration_structure_data: *const u64
-        ) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::emit_raytracing_acceleration_structure_postbuild_info(
-                    this,
-                    desc,
-                    num_source_acceleration_structures,
-                    source_acceleration_structure_data,
-                );
-            }
-        }
-    ),
-    copy_raytracing_acceleration_structure: slot!(
-        (this: *mut c_void, dest_acceleration_structure_data: u64, source_acceleration_structure_data: u64, mode: u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe {
-                draw::copy_raytracing_acceleration_structure(
-                    this,
-                    dest_acceleration_structure_data,
-                    source_acceleration_structure_data,
-                    mode,
-                );
-            }
-        }
-    ),
-    set_pipeline_state1: slot!((this: *mut c_void, state_object: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::set_pipeline_state1(this, state_object) }
-    }),
-    dispatch_rays: slot!((this: *mut c_void, desc: *const c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { draw::dispatch_rays(this, desc) }
-    }),
-    rs_set_shading_rate: slot!(
-        (this: *mut c_void, base_shading_rate: u32, combiners: *const u32) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { state::rs_set_shading_rate(this, base_shading_rate, combiners) }
-        }
-    ),
-    rs_set_shading_rate_image: slot!((this: *mut c_void, shading_rate_image: *mut c_void) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { state::rs_set_shading_rate_image(this, shading_rate_image) }
-    }),
-    dispatch_mesh: slot!((this: *mut c_void, x: u32, y: u32, z: u32) => {
-        // SAFETY: caller forwards COM slot arguments.
-        unsafe { draw::dispatch_mesh(this, x, y, z) }
-    }),
-    barrier: slot!(
-        (this: *mut c_void, num_barrier_groups: u32, barrier_groups: *const c_void) => {
-            // SAFETY: caller forwards COM slot arguments.
-            unsafe { barrier::barrier(this, num_barrier_groups, barrier_groups) }
+            unsafe { state::dispatch_graph(this, p_desc) }
         }
     ),
 };
 
-/// Companion `IMTLD3D12CommandListExt` vtable for [`List`], seated at [`List::EXT_OFFSET`].
-pub static LIST_EXT_VTBL: D3D12CommandListExtVtbl = D3D12CommandListExtVtbl {
-    unknown: IUnknownVtbl {
-        query_interface: slot!(
-            (this: *mut c_void, riid: *const c_void, object: *mut *mut c_void) -> Hresult => {
+/// Companion `IMTLD3D12CommandListExt1` vtable for [`List`], seated at [`List::EXT_OFFSET`].
+pub static LIST_EXT_VTBL: D3D12CommandListExt1Vtbl = D3D12CommandListExt1Vtbl {
+    base: D3D12CommandListExtVtbl {
+        unknown: IUnknownVtbl {
+            query_interface: slot!(
+                (this: *mut c_void, riid: *const c_void, object: *mut *mut c_void) -> Hresult => {
+                    // SAFETY: caller forwards COM slot arguments.
+                    unsafe { state::ext_query_interface(this, riid, object) }
+                }
+            ),
+            add_ref: slot!((this: *mut c_void) -> u32 => {
+                // SAFETY: `this` is a live `List` companion pointer at `List::EXT_OFFSET`.
+                unsafe { state::ext_add_ref(this) }
+            }),
+            release: slot!((this: *mut c_void) -> u32 => {
+                // SAFETY: `this` is a live `List` companion pointer at `List::EXT_OFFSET`.
+                unsafe { state::ext_release(this) }
+            }),
+        },
+        temporal_upscale: slot!(
+            (this: *mut c_void, scaler: *mut c_void, desc: *const D3D12UpscaleDesc) -> Hresult => {
                 // SAFETY: caller forwards COM slot arguments.
-                unsafe { state::ext_query_interface(this, riid, object) }
+                unsafe { upscale::temporal_upscale(this, scaler, desc) }
             }
         ),
-        add_ref: slot!((this: *mut c_void) -> u32 => {
-            // SAFETY: `this` is a live `List` companion pointer at `List::EXT_OFFSET`.
-            unsafe { state::ext_add_ref(this) }
-        }),
-        release: slot!((this: *mut c_void) -> u32 => {
-            // SAFETY: `this` is a live `List` companion pointer at `List::EXT_OFFSET`.
-            unsafe { state::ext_release(this) }
-        }),
     },
-    temporal_upscale: slot!(
-        (this: *mut c_void, scaler: *mut c_void, desc: *const D3D12UpscaleDesc) -> Hresult => {
+    temporal_denoised_upscale: slot!(
+        (
+            this: *mut c_void,
+            scaler: *mut c_void,
+            desc: *const D3D12DenoisedUpscaleDesc
+        ) -> Hresult => {
             // SAFETY: caller forwards COM slot arguments.
-            unsafe { upscale::temporal_upscale(this, scaler, desc) }
+            unsafe { upscale::temporal_denoised_upscale(this, scaler, desc) }
+        }
+    ),
+    set_frame_gen_ui: slot!(
+        (this: *mut c_void, desc: *const D3D12FrameGenUiDesc) -> Hresult => {
+            // SAFETY: caller forwards COM slot arguments.
+            unsafe { upscale::set_frame_gen_ui(this, desc) }
         }
     ),
 };

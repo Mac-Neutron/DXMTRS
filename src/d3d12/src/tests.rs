@@ -82,8 +82,8 @@ use super::{
     D3D_FEATURE_LEVEL_11_0, D3D12CreateDevice, D3D12GetDebugInterface, D3D12GetInterface,
     abi::{
         ext::{
-            D3D12CommandListExtVtbl, D3D12DeviceExtVtbl, D3D12TemporalScalerVtbl,
-            IMTLSwapChainFactoryVtbl,
+            D3D12CommandListExt1Vtbl, D3D12CommandListExtVtbl, D3D12DeviceExt1Vtbl,
+            D3D12DeviceExtVtbl, D3D12TemporalScalerVtbl, IMTLSwapChainFactoryVtbl,
         },
         vtbl::{
             ID3D10BlobVtbl, ID3D12CommandAllocatorVtbl, ID3D12CommandQueueVtbl,
@@ -150,7 +150,9 @@ fn vtables_have_the_cpp_slot_counts() {
     assert_eq!(size_of::<ID3D12CommandQueueVtbl>(), 19 * PTR);
     assert_eq!(size_of::<ID3D12Device10Vtbl>(), 79 * PTR);
     assert_eq!(size_of::<D3D12DeviceExtVtbl>(), 5 * PTR);
+    assert_eq!(size_of::<D3D12DeviceExt1Vtbl>(), 7 * PTR);
     assert_eq!(size_of::<D3D12CommandListExtVtbl>(), 4 * PTR);
+    assert_eq!(size_of::<D3D12CommandListExt1Vtbl>(), 6 * PTR);
     assert_eq!(size_of::<D3D12TemporalScalerVtbl>(), 3 * PTR);
     assert_eq!(size_of::<IMTLSwapChainFactoryVtbl>(), 4 * PTR);
 }

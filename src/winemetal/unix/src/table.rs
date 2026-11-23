@@ -2,8 +2,8 @@
 //!
 //! Wine's loader finds them in `winemetal.so` by their names, `__wine_unix_call_funcs` and
 //! `__wine_unix_call_wow64_funcs`; the native `winemetal.dylib`'s C thunks call through the
-//! first. The slots are the C's: 165 in the 64-bit table, 83 and 157 empty, 153-155 the VM
-//! guest's own; the `WoW64` table has all 165 slots with the 32-bit translator thunks in place.
+//! first. The slots are the C's: 168 in the 64-bit table, 83 and 157 empty, 153-155 the VM
+//! guest's own; the `WoW64` table has all 168 slots with the 32-bit translator thunks in place.
 
 use core::ffi::c_void;
 
@@ -22,7 +22,7 @@ pub extern "C-unwind" fn guest_only(_args: *mut c_void) -> i32 {
 }
 
 /// The 64-bit table, as the C's.
-const FUNCS: [Option<Handler>; 165] = [
+const FUNCS: [Option<Handler>; 168] = [
     Some(g1::nsobject_retain),                                             // 0
     Some(g1::nsobject_release),                                            // 1
     Some(g1::nsarray_object),                                              // 2
@@ -188,19 +188,22 @@ const FUNCS: [Option<Handler>; 165] = [
     Some(g6::window::wmt_present_client_surface),                          // 162
     Some(g6::window::mtl_drawable_set_presented_event),                    // 163
     Some(g6::cursor_overlay::wmt_set_cursor_overlay),                      // 164
+    Some(g5::supports_fx_temporal_denoised_scaler),                        // 165
+    Some(g5::new_temporal_denoised_scaler),                                // 166
+    Some(g5::encode_temporal_denoised_scale),                              // 167
 ];
 
 /// The 64-bit Unix-call table: the handler of each slot.
 #[unsafe(export_name = "__wine_unix_call_funcs")]
-pub static UNIX_CALL_FUNCS: [Option<Handler>; 165] = FUNCS;
+pub static UNIX_CALL_FUNCS: [Option<Handler>; 168] = FUNCS;
 
 /// The `WoW64` Unix-call table, in the Wine build only.
 ///
-/// Slots 0-164 of the 64-bit table, with a 32-bit caller's translator thunks (74, 76, 77, 79, 81,
+/// Slots 0-167 of the 64-bit table, with a 32-bit caller's translator thunks (74, 76, 77, 79, 81,
 /// 82, 84, 85, 88) through their converters.
 #[cfg(not(feature = "native"))]
 #[unsafe(export_name = "__wine_unix_call_wow64_funcs")]
-pub static UNIX_CALL_WOW64_FUNCS: [Option<Handler>; 165] = {
+pub static UNIX_CALL_WOW64_FUNCS: [Option<Handler>; 168] = {
     let mut t = FUNCS;
     t[74] = Some(g10::sm50_initialize_32);
     t[76] = Some(g10::sm50_compile_32);

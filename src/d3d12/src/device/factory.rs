@@ -1,6 +1,9 @@
 //! Device creation, `IUnknown`/`ID3D12Object`, and device-level stub methods (`d3d12_device.cpp`).
 
-use core::ffi::c_void;
+use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use std::{
     sync::{Mutex, OnceLock, PoisonError},
     time::Duration,
@@ -27,14 +30,18 @@ use winemetal_sys::{
 };
 
 use crate::{
-    abi::ext::{IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IMTLDXGIAdapterVtbl},
+    abi::ext::{
+        IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IID_IMTL_D3D12_DEVICE_EXT1,
+        IMTLDXGIAdapterVtbl,
+    },
     com::{
         self, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, Guid, Hresult, IID_ID3D10_DEVICE,
         IID_ID3D10_DEVICE1, IID_ID3D11_DEVICE, IID_ID3D11_DEVICE1, IID_ID3D11_DEVICE2,
         IID_ID3D11_DEVICE3, IID_ID3D11_DEVICE4, IID_ID3D11_DEVICE5, IID_ID3D12_DEVICE,
         IID_ID3D12_DEVICE1, IID_ID3D12_DEVICE2, IID_ID3D12_DEVICE3, IID_ID3D12_DEVICE4,
         IID_ID3D12_DEVICE5, IID_ID3D12_DEVICE6, IID_ID3D12_DEVICE7, IID_ID3D12_DEVICE8,
-        IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_OBJECT, IID_IDXGI_DEVICE,
+        IID_ID3D12_DEVICE9, IID_ID3D12_DEVICE10, IID_ID3D12_DEVICE11, IID_ID3D12_DEVICE12,
+        IID_ID3D12_DEVICE13, IID_ID3D12_DEVICE14, IID_ID3D12_OBJECT, IID_IDXGI_DEVICE,
         IID_IDXGI_DEVICE1, IID_IDXGI_DEVICE2, IID_IDXGI_DEVICE3, IID_IDXGI_DEVICE4, IID_IUNKNOWN,
         S_FALSE, S_OK,
     },
@@ -207,6 +214,7 @@ pub unsafe fn create(
         compute_psos: Mutex::new(FxHashMap::default()),
         events: Some(EventListener::new()),
         upscalers: Mutex::new(Vec::new()),
+        denoised_upscalers: Mutex::new(Vec::new()),
         timestamp_frequency: OnceLock::new(),
     });
     let raw = Box::into_raw(dev);
@@ -236,7 +244,7 @@ pub unsafe fn query_interface(
     let dev = unsafe { &*this.cast::<Device>() };
     // SAFETY: `Device::EXT_OFFSET` is within `Device`.
     let ext_ptr = unsafe { com::to_companion(this.cast::<Device>(), Device::EXT_OFFSET) };
-    // Refused without a line; `IID_D3D12_DEVICE_EXT`, last, only while temporal scaling is off.
+    // Refused without a line; extension IIDs are silent only while temporal scaling is off.
     let silent = [
         IID_IDXGI_DEVICE,
         IID_IDXGI_DEVICE1,
@@ -253,10 +261,11 @@ pub unsafe fn query_interface(
         IID_ID3D11_DEVICE5,
         IID_D3D12_DEVICE_DOWNLEVEL,
         IID_D3D12_DEVICE_EXT,
+        IID_IMTL_D3D12_DEVICE_EXT1,
     ];
     let qi = com::Qi {
         null_riid: E_INVALIDARG,
-        silent: &silent[..silent.len() - usize::from(dev.temporal_supported)],
+        silent: &silent[..silent.len() - 2 * usize::from(dev.temporal_supported)],
         log: &crate::LOG,
         miss: com::QiMiss::Once {
             object: &IID_ID3D12_DEVICE1,
@@ -264,7 +273,7 @@ pub unsafe fn query_interface(
         },
     };
     let ext: &[Guid] = if dev.temporal_supported {
-        &[IID_D3D12_DEVICE_EXT]
+        &[IID_D3D12_DEVICE_EXT, IID_IMTL_D3D12_DEVICE_EXT1]
     } else {
         &[]
     };
@@ -293,6 +302,10 @@ pub unsafe fn query_interface(
                         IID_ID3D12_DEVICE8,
                         IID_ID3D12_DEVICE9,
                         IID_ID3D12_DEVICE10,
+                        IID_ID3D12_DEVICE11,
+                        IID_ID3D12_DEVICE12,
+                        IID_ID3D12_DEVICE13,
+                        IID_ID3D12_DEVICE14,
                     ],
                     this,
                 ),
@@ -715,6 +728,54 @@ pub unsafe fn create_shader_cache_session(
 pub unsafe fn shader_cache_control(this: *mut c_void, _kinds: u32, _flags: u32) -> Hresult {
     crate::scope!("device.ShaderCacheControl");
     let _ = Option::from(this);
+    E_NOTIMPL
+}
+
+/// `ID3D12Device13::OpenExistingHeapFromAddress1`.
+///
+/// # Safety
+///
+/// `this`, `riid`, and `heap` are caller-supplied pointers.
+pub unsafe fn open_existing_heap_from_address1(
+    this: *mut c_void,
+    _address: *const c_void,
+    _size: usize,
+    _riid: *const Guid,
+    heap: *mut *mut c_void,
+) -> Hresult {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("device.OpenExistingHeapFromAddress1");
+    let _ = Option::from(this);
+    // SAFETY: `heap` is a caller out-pointer (or null).
+    unsafe { com::init_out_ptr(heap) };
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!("D3D12Device13::OpenExistingHeapFromAddress1: not implemented");
+    }
+    E_NOTIMPL
+}
+
+/// `ID3D12Device14::CreateRootSignatureFromSubobjectInLibrary`.
+///
+/// # Safety
+///
+/// `this`, `blob`, `subobject_name`, `riid`, and `root_sig` are caller-supplied pointers.
+pub unsafe fn create_root_signature_from_subobject_in_library(
+    this: *mut c_void,
+    _node_mask: u32,
+    _blob: *const c_void,
+    _length: usize,
+    _subobject_name: *const u16,
+    _riid: *const Guid,
+    root_sig: *mut *mut c_void,
+) -> Hresult {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    crate::scope!("device.CreateRootSignatureFromSubobjectInLibrary");
+    let _ = Option::from(this);
+    // SAFETY: `root_sig` is a caller out-pointer (or null).
+    unsafe { com::init_out_ptr(root_sig) };
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        crate::warn!("D3D12Device14::CreateRootSignatureFromSubobjectInLibrary: not implemented");
+    }
     E_NOTIMPL
 }
 

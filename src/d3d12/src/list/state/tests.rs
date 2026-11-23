@@ -19,16 +19,25 @@ use winemetal_sys::{
     },
 };
 
-use super::{ia_set_index_buffer, om_set_render_targets};
+use super::{
+    ext_query_interface, ext_release, ia_set_index_buffer, om_set_front_and_back_stencil_ref,
+    om_set_render_targets, query_interface, reset_state, rs_set_depth_bias, set_pipeline_state,
+};
 use crate::{
     abi::{
+        ext::{IID_D3D12_COMMAND_LIST_EXT, IID_IMTL_D3D12_COMMAND_LIST_EXT1},
         list_state::D3d12IndexBufferView,
         objects::D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-        vtbl::{D3d12CpuDescriptorHandle, ID3D12DescriptorHeapVtbl},
+        vtbl::{D3d12CpuDescriptorHandle, ID3D12DescriptorHeapVtbl, ID3D12PipelineStateVtbl},
+    },
+    com::{
+        IID_ID3D12_GRAPHICS_COMMAND_LIST8, IID_ID3D12_GRAPHICS_COMMAND_LIST9,
+        IID_ID3D12_GRAPHICS_COMMAND_LIST10, IID_IUNKNOWN, S_OK, add_ref_com, release_com,
     },
     descriptor_heap::{EmbeddedDescriptorHandle, Heap, RenderTargetDesc},
     device::{Device, residency},
-    list::{LIST_VTBL, List},
+    list::{DirtyFlags, LIST_VTBL, List},
+    pipeline::Graphics,
 };
 
 fn make_test_texture(pixel_format: u32, sample_count: u32) -> Arc<Texture> {
@@ -235,4 +244,125 @@ fn om_set_render_targets_readonly_dsv_sets_dont_care_and_skips_write() {
     assert_eq!(list.render_pass.dsv_readonly_flags, 1);
     let writes = &list.render_pass.base.writes[..usize::from(list.render_pass.base.write_count)];
     assert!(writes.contains(&tex_ptr));
+}
+
+#[test]
+fn list8_through_10_qi_stencil_and_dynamic_depth_bias() {
+    let dev_ptr = Box::into_raw(Device::new_dummy());
+    // SAFETY: `dev_ptr` is live; `List::drop` releases this reference.
+    unsafe { add_ref_com(dev_ptr) };
+    let mut list = List::new_closed(dev_ptr);
+    let list_ptr: *mut c_void = (&raw mut *list).cast();
+    // SAFETY: `list_ptr` is live; gives `list` initial refcount 1 so QI/Release stays > 0.
+    unsafe { add_ref_com(list_ptr.cast::<List>()) };
+
+    for iid in [
+        IID_ID3D12_GRAPHICS_COMMAND_LIST8,
+        IID_ID3D12_GRAPHICS_COMMAND_LIST9,
+        IID_ID3D12_GRAPHICS_COMMAND_LIST10,
+    ] {
+        let mut out: *mut c_void = ptr::null_mut();
+        // SAFETY: `list_ptr`, `iid`, and `out` are valid pointers.
+        let hr = unsafe { query_interface(list_ptr, (&raw const iid).cast(), &raw mut out) };
+        assert_eq!(hr, S_OK);
+        assert_eq!(out, list_ptr);
+        // SAFETY: balancing the reference added by `query_interface`.
+        assert_eq!(unsafe { release_com(list_ptr.cast::<List>()) }, 1);
+    }
+
+    // SAFETY: `list_ptr` is a live `List`.
+    unsafe { om_set_front_and_back_stencil_ref(list_ptr, 0x1ab, 0x2cd) };
+    assert_eq!(list.stencil_ref, 0xab);
+    assert!(list.dirty_state.contains(DirtyFlags::STENCIL_REF));
+
+    // SAFETY: `list_ptr` is a live `List`.
+    unsafe { (LIST_VTBL.om_set_front_and_back_stencil_ref)(list_ptr, 0x34, 0x34) };
+    assert_eq!(list.stencil_ref, 0x34);
+
+    // SAFETY: `LIST_VTBL` is larger than `ID3D12PipelineStateVtbl`; slots are never invoked.
+    let pso_vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12PipelineStateVtbl>() };
+    // SAFETY: `crate::tests` provides no-op `Obj::retain`/`release` stubs.
+    let pso_obj = unsafe { Obj::adopt(1) };
+    let mut pso = Graphics::new_dummy(pso_vtbl, pso_obj);
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+
+    // SAFETY: `list_ptr` and `pso_ptr` are valid pointers.
+    unsafe { set_pipeline_state(list_ptr, pso_ptr) };
+    list.dirty_state
+        .remove(DirtyFlags::PSO | DirtyFlags::RASTERIZER);
+
+    // SAFETY: `list_ptr` is a live `List`.
+    unsafe { rs_set_depth_bias(list_ptr, 2.0, 0.5, 1.5) };
+    assert_eq!(list.dynamic_depth_bias, Some((2.0, 0.5, 1.5)));
+    assert!(list.dirty_state.contains(DirtyFlags::RASTERIZER));
+
+    // Rebinding the same graphics PSO clears dynamic depth bias and dirties RASTERIZER.
+    list.dirty_state.remove(DirtyFlags::RASTERIZER);
+    // SAFETY: `list_ptr` and `pso_ptr` are valid pointers.
+    unsafe { set_pipeline_state(list_ptr, pso_ptr) };
+    assert_eq!(list.dynamic_depth_bias, None);
+    assert!(list.dirty_state.contains(DirtyFlags::RASTERIZER));
+
+    // `RSSetDepthBias` vtable dispatch + `reset_state` clears dynamic depth bias.
+    // SAFETY: `list_ptr` is a live `List`.
+    unsafe { (LIST_VTBL.rs_set_depth_bias)(list_ptr, 3.0, 0.25, 0.75) };
+    assert_eq!(list.dynamic_depth_bias, Some((3.0, 0.25, 0.75)));
+    reset_state(&mut list, core::ptr::null_mut());
+    assert_eq!(list.dynamic_depth_bias, None);
+
+    // SAFETY: `list_ptr` is valid; disabled strip cut value and graph stubs are safe no-ops.
+    unsafe { (LIST_VTBL.ia_set_index_buffer_strip_cut_value)(list_ptr, 0) };
+    // SAFETY: `list_ptr` is valid; null desc is a safe no-op.
+    unsafe { (LIST_VTBL.set_program)(list_ptr, ptr::null()) };
+    // SAFETY: `list_ptr` is valid; null desc is a safe no-op.
+    unsafe { (LIST_VTBL.dispatch_graph)(list_ptr, ptr::null()) };
+
+    drop(list);
+    drop(pso);
+    // SAFETY: `dev_ptr` was allocated by `Box::into_raw` with refcount 1.
+    unsafe { release_com(dev_ptr) };
+}
+
+#[test]
+fn ext_and_ext1_qi_return_companion_pointer() {
+    let dev_ptr = Box::into_raw(Device::new_dummy());
+    // SAFETY: `dev_ptr` is live; `List::drop` releases this reference.
+    unsafe { add_ref_com(dev_ptr) };
+    let mut list = List::new_closed(dev_ptr);
+    let list_ptr: *mut c_void = (&raw mut *list).cast();
+    // SAFETY: `list_ptr` is live; gives `list` initial refcount 1 so QI/Release stays > 0.
+    unsafe { add_ref_com(list_ptr.cast::<List>()) };
+
+    let mut ext0: *mut c_void = ptr::null_mut();
+    let mut ext1: *mut c_void = ptr::null_mut();
+    let iid_ext = IID_D3D12_COMMAND_LIST_EXT;
+    let iid_ext1 = IID_IMTL_D3D12_COMMAND_LIST_EXT1;
+    let iid_unk = IID_IUNKNOWN;
+
+    // SAFETY: `list_ptr`, `iid_ext`, and `ext0` are valid pointers.
+    let hr = unsafe { query_interface(list_ptr, (&raw const iid_ext).cast(), &raw mut ext0) };
+    assert_eq!(hr, S_OK);
+    assert_eq!(ext0.addr(), list_ptr.addr() + List::EXT_OFFSET);
+
+    // SAFETY: `list_ptr`, `iid_ext1`, and `ext1` are valid pointers.
+    let hr = unsafe { query_interface(list_ptr, (&raw const iid_ext1).cast(), &raw mut ext1) };
+    assert_eq!(hr, S_OK);
+    assert_eq!(ext1, ext0);
+
+    let mut unk: *mut c_void = ptr::null_mut();
+    // SAFETY: `ext1` is the companion pointer at `List::EXT_OFFSET`.
+    let hr = unsafe { ext_query_interface(ext1, (&raw const iid_unk).cast(), &raw mut unk) };
+    assert_eq!(hr, S_OK);
+    assert_eq!(unk, list_ptr);
+
+    // SAFETY: balance `unk`, `ext1`, and `ext0` references while keeping `list`'s initial ref.
+    assert_eq!(unsafe { release_com(list_ptr.cast::<List>()) }, 3);
+    // SAFETY: `ext1` is at `List::EXT_OFFSET`.
+    assert_eq!(unsafe { ext_release(ext1) }, 2);
+    // SAFETY: `ext0` is at `List::EXT_OFFSET`.
+    assert_eq!(unsafe { ext_release(ext0) }, 1);
+
+    drop(list);
+    // SAFETY: `dev_ptr` was allocated by `Box::into_raw` with refcount 1.
+    unsafe { release_com(dev_ptr) };
 }

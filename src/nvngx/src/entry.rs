@@ -10,8 +10,12 @@ use dxmt_util::float_cast::{f32_to_u32, u32_to_f32};
 
 use crate::{
     ngx::{
-        FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FeatureDiscoveryInfo,
-        FeatureRequirement, INVALID_PARAMETER, OK, SUPPORTED, UNSUPPORTED,
+        FAIL, FEATURE_FRAME_GENERATION, FEATURE_NOT_SUPPORTED, FEATURE_RAY_RECONSTRUCTION,
+        FEATURE_SUPERSAMPLING, FeatureDiscoveryInfo, FeatureRequirement, INVALID_PARAMETER, OK,
+        PARAM_DLSSD_AVAILABLE, PARAM_DLSSD_FEATURE_INIT_RESULT, PARAM_DLSSD_MIN_DRIVER_MAJOR,
+        PARAM_DLSSD_MIN_DRIVER_MINOR, PARAM_DLSSD_NEEDS_UPDATED_DRIVER, PARAM_DLSSG_AVAILABLE,
+        PARAM_DLSSG_FEATURE_INIT_RESULT, PARAM_DLSSG_MIN_DRIVER_MAJOR,
+        PARAM_DLSSG_MIN_DRIVER_MINOR, PARAM_DLSSG_NEEDS_UPDATED_DRIVER, SUPPORTED, UNSUPPORTED,
     },
     parameter::{Parameters, Value},
 };
@@ -80,6 +84,29 @@ extern "C" fn stats(params: *mut Parameters) -> u32 {
     OK
 }
 
+/// Parses `MACNEUTRON_FRAMEGEN`, returning `true` unless unset, empty, `0`, `off`, or `false`.
+#[must_use]
+pub const fn parse_framegen_env(val: Option<&str>) -> bool {
+    let Some(raw) = val else {
+        return false;
+    };
+    let trimmed = raw.as_bytes().trim_ascii();
+    if trimmed.is_empty() {
+        return false;
+    }
+    !(trimmed.eq_ignore_ascii_case(b"0")
+        || trimmed.eq_ignore_ascii_case(b"off")
+        || trimmed.eq_ignore_ascii_case(b"false"))
+}
+
+/// Whether `MACNEUTRON_FRAMEGEN` opts into frame generation.
+#[must_use]
+pub fn framegen_enabled() -> bool {
+    static ENABLED: LazyLock<bool> =
+        LazyLock::new(|| parse_framegen_env(std::env::var("MACNEUTRON_FRAMEGEN").ok().as_deref()));
+    *ENABLED
+}
+
 /// Fills `params` with the capability map.
 pub fn populate_capabilities(params: &mut Parameters) {
     params.set(c"SuperSampling.Available", Value::U32(1));
@@ -95,6 +122,32 @@ pub fn populate_capabilities(params: &mut Parameters) {
         params.set(name, Value::I32(0));
     }
     params.set(c"SuperSampling.FeatureInitResult", Value::U32(1));
+    let denoised = crate::d3d12::denoised_scaler_supported();
+    params.set(PARAM_DLSSD_AVAILABLE, Value::U32(u32::from(denoised)));
+    params.set(
+        PARAM_DLSSD_FEATURE_INIT_RESULT,
+        Value::U32(if denoised { OK } else { FEATURE_NOT_SUPPORTED }),
+    );
+    for name in [
+        PARAM_DLSSD_MIN_DRIVER_MAJOR,
+        PARAM_DLSSD_MIN_DRIVER_MINOR,
+        PARAM_DLSSD_NEEDS_UPDATED_DRIVER,
+    ] {
+        params.set(name, Value::I32(0));
+    }
+    let framegen = framegen_enabled();
+    params.set(PARAM_DLSSG_AVAILABLE, Value::U32(u32::from(framegen)));
+    params.set(
+        PARAM_DLSSG_FEATURE_INIT_RESULT,
+        Value::U32(if framegen { OK } else { FEATURE_NOT_SUPPORTED }),
+    );
+    for name in [
+        PARAM_DLSSG_MIN_DRIVER_MAJOR,
+        PARAM_DLSSG_MIN_DRIVER_MINOR,
+        PARAM_DLSSG_NEEDS_UPDATED_DRIVER,
+    ] {
+        params.set(name, Value::I32(0));
+    }
     let callback: extern "C" fn(*mut Parameters) -> u32 = optimal_settings;
     params.set(
         c"DLSSOptimalSettingsCallback",
@@ -145,11 +198,13 @@ fn give(out: *mut *mut Parameters, capabilities: bool) -> u32 {
     OK
 }
 
-/// Answers whether `info`'s feature is DLSS super resolution, and its requirements.
+/// Answers whether `info`'s feature is supported, and its requirements.
 fn requirements(
+    device: *mut c_void,
     info: *const FeatureDiscoveryInfo,
     requirement: *mut FeatureRequirement,
     other: u32,
+    d3d12: bool,
 ) -> u32 {
     // SAFETY: the game's pointers, each null or a live structure.
     let (Some(info), Some(requirement)) =
@@ -157,7 +212,13 @@ fn requirements(
     else {
         return INVALID_PARAMETER;
     };
-    if info.feature_id == FEATURE_SUPERSAMPLING {
+    let supported = match info.feature_id {
+        FEATURE_SUPERSAMPLING => true,
+        FEATURE_RAY_RECONSTRUCTION => d3d12 && crate::d3d12::query_denoised_supported(device),
+        FEATURE_FRAME_GENERATION => d3d12 && framegen_enabled(),
+        _ => false,
+    };
+    if supported {
         requirement.feature_supported = SUPPORTED;
         requirement.min_hw_architecture = 0;
         let version = b"10.0.16299.0\0";
@@ -238,7 +299,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_DestroyParameters(params: *mut Parameters
 /// No scratch memory: `MetalFX` holds its own.
 #[unsafe(no_mangle)]
 pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(
-    _: u32,
+    feature: u32,
     _: *const Parameters,
     out: *mut usize,
 ) -> u32 {
@@ -246,7 +307,10 @@ pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(
         // SAFETY: the game's out pointer, checked non-null.
         unsafe { out.write(0) };
     }
-    OK
+    match feature {
+        FEATURE_SUPERSAMPLING | FEATURE_FRAME_GENERATION | FEATURE_RAY_RECONSTRUCTION => OK,
+        _ => FEATURE_NOT_SUPPORTED,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -260,11 +324,11 @@ pub const extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D12_GetFeatureRequirements(
-    _: *mut c_void,
+    device: *mut c_void,
     info: *const FeatureDiscoveryInfo,
     requirement: *mut FeatureRequirement,
 ) -> u32 {
-    requirements(info, requirement, FEATURE_NOT_SUPPORTED)
+    requirements(device, info, requirement, FEATURE_NOT_SUPPORTED, true)
 }
 
 #[unsafe(no_mangle)]
@@ -273,7 +337,7 @@ pub extern "system" fn NVSDK_NGX_D3D11_GetFeatureRequirements(
     info: *const FeatureDiscoveryInfo,
     requirement: *mut FeatureRequirement,
 ) -> u32 {
-    requirements(info, requirement, FAIL)
+    requirements(core::ptr::null_mut(), info, requirement, FAIL, false)
 }
 
 #[unsafe(no_mangle)]

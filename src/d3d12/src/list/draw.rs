@@ -608,7 +608,8 @@ pub fn pre_draw_with_options(
                 | DirtyFlags::SCISSOR
                 | DirtyFlags::BLEND_FACTOR
                 | DirtyFlags::STENCIL_REF
-                | DirtyFlags::PSO,
+                | DirtyFlags::PSO
+                | DirtyFlags::RASTERIZER,
         );
         if list.active_visibility_offset != u64::MAX {
             list.dirty_state.insert(DirtyFlags::VISIBILITY_BUFFER);
@@ -753,14 +754,24 @@ pub fn pre_draw_with_options(
             );
             list.bound_dss = dss_handle;
         }
+    }
+    if list
+        .dirty_state
+        .intersects(DirtyFlags::PSO | DirtyFlags::RASTERIZER)
+    {
+        let (depth_bias, depth_bias_clamp, slope_scale) = list.dynamic_depth_bias.unwrap_or((
+            pso_gfx.depth_bias,
+            pso_gfx.depth_bias_clamp,
+            pso_gfx.slope_scale,
+        ));
         let rast_key = [
             pso_gfx.fill_mode,
             pso_gfx.cull_mode,
             pso_gfx.depth_clip_mode,
             pso_gfx.winding,
-            pso_gfx.depth_bias.to_bits(),
-            pso_gfx.slope_scale.to_bits(),
-            pso_gfx.depth_bias_clamp.to_bits(),
+            depth_bias.to_bits(),
+            slope_scale.to_bits(),
+            depth_bias_clamp.to_bits(),
         ];
         if rast_key != list.bound_rasterizer {
             encode_render_cmd(
@@ -773,15 +784,16 @@ pub fn pre_draw_with_options(
                     cull_mode: u8::try_from(pso_gfx.cull_mode).unwrap_or(0),
                     depth_clip_mode: u8::try_from(pso_gfx.depth_clip_mode).unwrap_or(0),
                     winding: u8::try_from(pso_gfx.winding).unwrap_or(0),
-                    depth_bias: pso_gfx.depth_bias,
-                    scole_scale: pso_gfx.slope_scale,
-                    depth_bias_clamp: pso_gfx.depth_bias_clamp,
+                    depth_bias,
+                    scole_scale: slope_scale,
+                    depth_bias_clamp,
                 },
             );
             list.bound_rasterizer = rast_key;
         }
-        list.dirty_state.remove(DirtyFlags::PSO);
+        list.dirty_state.remove(DirtyFlags::RASTERIZER);
     }
+    list.dirty_state.remove(DirtyFlags::PSO);
 
     if list.dirty_state.contains(DirtyFlags::VERTEX_BUFFERS) {
         let slot_mask = pso_gfx.slot_mask;

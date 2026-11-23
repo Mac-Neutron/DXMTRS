@@ -14,21 +14,21 @@ use dxmt_core::{fence::EventListener, library::Library, presenter::framegen::Tem
 use dxmt_util::{com::ComObject, private_data::PrivateData};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{Obj, sm50::SM50_SHADER_METAL_310};
-use winemetal_wire::WMTFXTemporalScalerInfo;
+use winemetal_wire::{WMTFXTemporalDenoisedScalerInfo, WMTFXTemporalScalerInfo};
 
 use crate::{
-    abi::{ext::D3D12DeviceExtVtbl, vtbl::ID3D12Device10Vtbl},
+    abi::{agility::ID3D12Device14Vtbl, ext::D3D12DeviceExt1Vtbl},
     com::ComRefCounted,
 };
 
 /// `MTLD3D12Device` (`d3d12_device.cpp:341-370`).
 ///
-/// Primary vtable pointer (`ID3D12Device10`) sits at offset 0; the companion `IMTLD3D12DeviceExt`
+/// Primary vtable pointer (`ID3D12Device14`) sits at offset 0; the companion `IMTLD3D12DeviceExt1`
 /// vtable pointer sits at [`Device::EXT_OFFSET`].
 #[repr(C)]
 pub struct Device {
-    pub vtbl: &'static ID3D12Device10Vtbl,
-    pub ext_vtbl: &'static D3D12DeviceExtVtbl,
+    pub vtbl: &'static ID3D12Device14Vtbl,
+    pub ext_vtbl: &'static D3D12DeviceExt1Vtbl,
     pub com: ComObject,
     pub private_data: PrivateData,
     pub adapter: *mut c_void,
@@ -49,6 +49,7 @@ pub struct Device {
     pub compute_psos: Mutex<FxHashMap<u64, crate::pipeline::compute::CachedComputePso>>,
     pub events: Option<EventListener>,
     pub upscalers: Mutex<Vec<(WMTFXTemporalScalerInfo, Arc<TemporalScaler>)>>,
+    pub denoised_upscalers: Mutex<Vec<(WMTFXTemporalDenoisedScalerInfo, Arc<TemporalScaler>)>>,
     pub timestamp_frequency: OnceLock<u64>,
 }
 
@@ -93,6 +94,7 @@ impl Device {
             compute_psos: Mutex::new(FxHashMap::default()),
             events: None,
             upscalers: Mutex::new(Vec::new()),
+            denoised_upscalers: Mutex::new(Vec::new()),
             timestamp_frequency: OnceLock::new(),
         })
     }

@@ -14,10 +14,11 @@ use dxmt_util::{com::Hresult, ext as util_ext};
 pub use dxmt_util::{
     com::iid::{IID_D3D12_COMMAND_QUEUE_DOWNLEVEL, IID_D3D12_DEVICE_DOWNLEVEL},
     ext::{
-        D3D12ScalerDesc, D3D12UpscaleDesc, Hwnd, IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
-        IID_D3D12_TEMPORAL_SCALER, IID_IMTL_DXGI_ADAPTER, IID_IMTL_SWAP_CHAIN_FACTORY,
-        IMTLDXGIAdapterVtbl, Luid, Rational, Rect, SampleDesc, SwapChainDesc, SwapChainDesc1,
-        SwapChainFullscreenDesc,
+        D3D12DenoisedScalerDesc, D3D12DenoisedUpscaleDesc, D3D12FrameGenUiDesc, D3D12ScalerDesc,
+        D3D12UpscaleDesc, Hwnd, IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
+        IID_D3D12_TEMPORAL_SCALER, IID_IMTL_D3D12_COMMAND_LIST_EXT1, IID_IMTL_D3D12_DEVICE_EXT1,
+        IID_IMTL_DXGI_ADAPTER, IID_IMTL_SWAP_CHAIN_FACTORY, IMTLDXGIAdapterVtbl, Luid, Rational,
+        Rect, SampleDesc, SwapChainDesc, SwapChainDesc1, SwapChainFullscreenDesc,
     },
 };
 
@@ -47,6 +48,34 @@ pub struct D3D12CommandListExtVtbl {
         this: *mut c_void,
         scaler: *mut c_void,
         desc: *const D3D12UpscaleDesc,
+    ) -> Hresult,
+}
+
+/// `IMTLD3D12DeviceExt1` vtable (`d3d12_interfaces.hpp`).
+#[repr(C)]
+pub struct D3D12DeviceExt1Vtbl {
+    pub base: D3D12DeviceExtVtbl,
+    pub supports_temporal_denoised_scaler:
+        unsafe extern "system-unwind" fn(this: *mut c_void) -> i32,
+    pub create_temporal_denoised_scaler: unsafe extern "system-unwind" fn(
+        this: *mut c_void,
+        desc: *const D3D12DenoisedScalerDesc,
+        out: *mut *mut c_void,
+    ) -> Hresult,
+}
+
+/// `IMTLD3D12CommandListExt1` vtable (`d3d12_interfaces.hpp`).
+#[repr(C)]
+pub struct D3D12CommandListExt1Vtbl {
+    pub base: D3D12CommandListExtVtbl,
+    pub temporal_denoised_upscale: unsafe extern "system-unwind" fn(
+        this: *mut c_void,
+        scaler: *mut c_void,
+        desc: *const D3D12DenoisedUpscaleDesc,
+    ) -> Hresult,
+    pub set_frame_gen_ui: unsafe extern "system-unwind" fn(
+        this: *mut c_void,
+        desc: *const D3D12FrameGenUiDesc,
     ) -> Hresult,
 }
 
@@ -92,6 +121,41 @@ const _: () = {
     assert!(
         offset_of!(D3D12CommandListExtVtbl, temporal_upscale)
             == offset_of!(util_ext::D3D12CommandListExtVtbl, temporal_upscale)
+    );
+
+    assert!(size_of::<D3D12DeviceExt1Vtbl>() == size_of::<util_ext::D3D12DeviceExt1Vtbl>());
+    assert!(align_of::<D3D12DeviceExt1Vtbl>() == align_of::<util_ext::D3D12DeviceExt1Vtbl>());
+    assert!(
+        offset_of!(D3D12DeviceExt1Vtbl, supports_temporal_denoised_scaler)
+            == offset_of!(
+                util_ext::D3D12DeviceExt1Vtbl,
+                supports_temporal_denoised_scaler
+            )
+    );
+    assert!(
+        offset_of!(D3D12DeviceExt1Vtbl, create_temporal_denoised_scaler)
+            == offset_of!(
+                util_ext::D3D12DeviceExt1Vtbl,
+                create_temporal_denoised_scaler
+            )
+    );
+
+    assert!(
+        size_of::<D3D12CommandListExt1Vtbl>() == size_of::<util_ext::D3D12CommandListExt1Vtbl>()
+    );
+    assert!(
+        align_of::<D3D12CommandListExt1Vtbl>() == align_of::<util_ext::D3D12CommandListExt1Vtbl>()
+    );
+    assert!(
+        offset_of!(D3D12CommandListExt1Vtbl, temporal_denoised_upscale)
+            == offset_of!(
+                util_ext::D3D12CommandListExt1Vtbl,
+                temporal_denoised_upscale
+            )
+    );
+    assert!(
+        offset_of!(D3D12CommandListExt1Vtbl, set_frame_gen_ui)
+            == offset_of!(util_ext::D3D12CommandListExt1Vtbl, set_frame_gen_ui)
     );
 
     assert!(size_of::<D3D12TemporalScalerVtbl>() == 3 * size_of::<usize>());

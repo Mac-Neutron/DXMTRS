@@ -28,6 +28,7 @@ EXPORTS
     MTLCommandBuffer_encodeFrameInterpolate
     MTLCommandBuffer_encodeSignalEvent
     MTLCommandBuffer_encodeSpatialScale
+    MTLCommandBuffer_encodeTemporalDenoisedScale
     MTLCommandBuffer_encodeTemporalScale
     MTLCommandBuffer_encodeWaitForEvent
     MTLCommandBuffer_error
@@ -72,6 +73,7 @@ EXPORTS
     MTLDevice_newSharedEventWithMachPort
     MTLDevice_newSharedTexture
     MTLDevice_newSpatialScaler
+    MTLDevice_newTemporalDenoisedScaler
     MTLDevice_newTemporalScaler
     MTLDevice_newTexture
     MTLDevice_newTileRenderPipelineState
@@ -81,6 +83,7 @@ EXPORTS
     MTLDevice_setShouldMaximizeConcurrentCompilation
     MTLDevice_supportsBCTextureCompression
     MTLDevice_supportsFXSpatialScaler
+    MTLDevice_supportsFXTemporalDenoisedScaler
     MTLDevice_supportsFXTemporalScaler
     MTLDevice_supportsFamily
     MTLDevice_supportsTextureSampleCount

@@ -11,7 +11,8 @@ pub use dxmt_core::presenter::framegen::TemporalScaler;
 use dxmt_core::resource::{Texture, TextureAllocation, TextureViewKey};
 use winemetal_wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMTClearColor,
-    WMTFXTemporalScalerProps, WmtcmdBase, WmtcmdBlitNop, WmtcmdComputeNop, WmtcmdRenderNop,
+    WMTFXTemporalDenoisedScalerProps, WMTFXTemporalScalerProps, WmtcmdBase, WmtcmdBlitNop,
+    WmtcmdComputeNop, WmtcmdRenderNop,
 };
 
 /// Strong reference to a [`Texture`], its [`TextureAllocation`], and a cached view key.
@@ -85,6 +86,7 @@ pub enum EncoderType {
     Compute = 4,
     Resolve = 5,
     TemporalUpscale = 6,
+    TemporalDenoisedScale = 7,
 }
 
 /// Timestamp sample recorded at the end of an encoder (`d3d12_command_encoder.hpp:44`).
@@ -418,6 +420,38 @@ pub struct TemporalUpscaleEncoderData {
     pub props: WMTFXTemporalScalerProps,
 }
 
+/// `MetalFX` temporal denoised upscale encoder record (`DLSSD`).
+#[repr(C)]
+pub struct TemporalDenoisedUpscaleEncoderData {
+    pub base: EncoderData,
+    pub scaler: Option<Arc<TemporalScaler>>,
+    pub color: Option<TextureViewRef>,
+    pub output: Option<TextureViewRef>,
+    pub depth: Option<TextureViewRef>,
+    pub motion: Option<TextureViewRef>,
+    pub diffuse_albedo: Option<TextureViewRef>,
+    pub specular_albedo: Option<TextureViewRef>,
+    pub normal: Option<TextureViewRef>,
+    pub roughness: Option<TextureViewRef>,
+    pub specular_hit_distance: Option<TextureViewRef>,
+    pub denoise_strength_mask: Option<TextureViewRef>,
+    pub transparency_overlay: Option<TextureViewRef>,
+    pub exposure: Option<TextureViewRef>,
+    pub reactive: Option<TextureViewRef>,
+    pub depth_scratch: Option<Arc<Texture>>,
+    pub motion_scratch: Option<Arc<Texture>>,
+    pub output_scratch: Option<Arc<Texture>>,
+    pub diffuse_albedo_scratch: Option<Arc<Texture>>,
+    pub specular_albedo_scratch: Option<Arc<Texture>>,
+    pub normal_scratch: Option<Arc<Texture>>,
+    pub roughness_scratch: Option<Arc<Texture>>,
+    pub specular_hit_distance_scratch: Option<Arc<Texture>>,
+    pub denoise_strength_mask_scratch: Option<Arc<Texture>>,
+    pub transparency_overlay_scratch: Option<Arc<Texture>>,
+    pub reactive_scratch: Option<Arc<Texture>>,
+    pub props: WMTFXTemporalDenoisedScalerProps,
+}
+
 /// CPU-side timestamp resolve deferred until command-buffer completion (`d3d12_device.hpp:56-66`).
 pub struct TimestampResolve {
     pub samples: u64,
@@ -521,6 +555,11 @@ pub unsafe fn drop_encoder_in_place(encoder: *mut EncoderData) {
             // SAFETY: `kind == TemporalUpscale` guarantees `encoder` heads a
             // `TemporalUpscaleEncoderData`.
             unsafe { ptr::drop_in_place(encoder.cast::<TemporalUpscaleEncoderData>()) };
+        }
+        EncoderType::TemporalDenoisedScale => {
+            // SAFETY: `kind == TemporalDenoisedScale` guarantees `encoder` heads a
+            // `TemporalDenoisedUpscaleEncoderData`.
+            unsafe { ptr::drop_in_place(encoder.cast::<TemporalDenoisedUpscaleEncoderData>()) };
         }
     }
 }

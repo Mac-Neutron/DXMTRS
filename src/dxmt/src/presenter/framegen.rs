@@ -34,7 +34,8 @@ use winemetal_sys::{
         WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
         WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ,
         WMT_TEXTURE_USAGE_SHADER_WRITE, WMTFXFrameInterpolatorInfo, WMTFXFrameInterpolatorProps,
-        WMTTextureInfo, WmtcmdBase, WmtcmdBlitCopyTexture, WmtcmdBlitFenceOp,
+        WMTFXTemporalDenoisedScalerInfo, WMTTextureInfo, WmtcmdBase, WmtcmdBlitCopyTexture,
+        WmtcmdBlitFenceOp,
     },
 };
 use winemetal_wire::MemPtr;
@@ -92,6 +93,7 @@ fn retain(obj: &Obj) -> Obj {
 pub struct TemporalScaler {
     pub scaler: Scaler,
     pub info: WMTFXTemporalScalerInfo,
+    denoised: bool,
 }
 
 impl TemporalScaler {
@@ -104,7 +106,52 @@ impl TemporalScaler {
     pub unsafe fn new(device: u64, info: WMTFXTemporalScalerInfo) -> Self {
         // SAFETY: `device` is a live `MTLDevice` and `info` is valid for the call.
         let scaler = unsafe { Scaler::temporal(device, &info) };
-        Self { scaler, info }
+        Self {
+            scaler,
+            info,
+            denoised: false,
+        }
+    }
+
+    /// Creates a temporal denoised scaler and its fence on `device` for `denoised`.
+    ///
+    /// # Safety
+    ///
+    /// `device` must be a live `MTLDevice` handle.
+    #[must_use]
+    pub unsafe fn new_denoised(device: u64, denoised: &WMTFXTemporalDenoisedScalerInfo) -> Self {
+        // SAFETY: `device` is a live `MTLDevice` and `denoised` is valid for the call.
+        let scaler = unsafe { Scaler::temporal_denoised(device, denoised) };
+        let info = WMTFXTemporalScalerInfo {
+            color_format: denoised.color_format,
+            output_format: denoised.output_format,
+            depth_format: denoised.depth_format,
+            motion_format: denoised.motion_format,
+            input_width: denoised.input_width,
+            input_height: denoised.input_height,
+            output_width: denoised.output_width,
+            output_height: denoised.output_height,
+            input_content_min_scale: 1.0,
+            input_content_max_scale: 1.0,
+            auto_exposure: denoised.auto_exposure,
+            input_content_properties_enabled: 1,
+            requires_synchronous_initialization: denoised.synchronous_init,
+            reactive_mask_enabled: denoised.reactive_mask_enabled,
+            reactive_mask_format: denoised.reactive_mask_format,
+            output_resolution_motion_vectors: 0,
+            jittered_motion_vectors: 0,
+        };
+        Self {
+            scaler,
+            info,
+            denoised: true,
+        }
+    }
+
+    /// Whether this scaler was created as a temporal denoised scaler (`DLSSD`).
+    #[must_use]
+    pub const fn is_denoised(&self) -> bool {
+        self.denoised
     }
 
     /// The `MTLFXTemporalScaler` handle, or `None` when Metal made none.
@@ -212,12 +259,43 @@ const ZERO_PROPS: WmtFxTemporalScalerProps = WmtFxTemporalScalerProps {
     output_offset_y: 0,
 };
 
+/// Optional UI overlay, content offsets, and camera matrices for `MTLFXFrameInterpolator`.
+pub struct FrameGenUi {
+    pub ui_composited: bool,
+    pub content_width: u32,
+    pub content_height: u32,
+    pub depth_offset: [u32; 2],
+    pub motion_offset: [u32; 2],
+    pub output_offset: [u32; 2],
+    pub has_matrices: bool,
+    pub world_to_view_matrix: [f32; 16],
+    pub view_to_clip_matrix: [f32; 16],
+}
+
+impl FrameGenUi {
+    /// All fields zeroed (no UI compositing flag, offsets, or camera matrices).
+    pub const ZERO: Self = Self {
+        ui_composited: false,
+        content_width: 0,
+        content_height: 0,
+        depth_offset: [0; 2],
+        motion_offset: [0; 2],
+        output_offset: [0; 2],
+        has_matrices: false,
+        world_to_view_matrix: [0.0; 16],
+        view_to_clip_matrix: [0.0; 16],
+    };
+}
+
 struct Slot {
     scaler: Option<RecordedScaler>,
     depth: Option<Obj>,
     motion: Option<Obj>,
     props: WmtFxTemporalScalerProps,
     camera: CameraParams,
+    ui_texture: Option<Obj>,
+    ui_format: u32,
+    ui: FrameGenUi,
     fresh: bool,
 }
 
@@ -227,6 +305,9 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
     motion: None,
     props: ZERO_PROPS,
     camera: CameraParams::ZERO,
+    ui_texture: None,
+    ui_format: 0,
+    ui: FrameGenUi::ZERO,
     fresh: false,
 });
 
@@ -238,6 +319,34 @@ pub fn set_camera_params(camera: &CameraParams) {
         far_plane: camera.far_plane,
         field_of_view: camera.field_of_view,
         aspect_ratio: camera.aspect_ratio,
+    };
+}
+
+/// Updates the optional UI texture, content layout, and camera matrices on the slot.
+///
+/// Passing `None` (or a zero format) clears the UI texture while still forwarding `ui`.
+pub fn record_frame_gen_ui(ui_texture: Option<(&Obj, u32)>, ui: &FrameGenUi) {
+    let mut slot = lock(&SLOT);
+    match ui_texture {
+        Some((tex, fmt)) if fmt != 0 => {
+            slot.ui_texture = Some(retain(tex));
+            slot.ui_format = fmt;
+        }
+        _ => {
+            slot.ui_texture = None;
+            slot.ui_format = 0;
+        }
+    }
+    slot.ui = FrameGenUi {
+        ui_composited: ui.ui_composited,
+        content_width: ui.content_width,
+        content_height: ui.content_height,
+        depth_offset: ui.depth_offset,
+        motion_offset: ui.motion_offset,
+        output_offset: ui.output_offset,
+        has_matrices: ui.has_matrices,
+        world_to_view_matrix: ui.world_to_view_matrix,
+        view_to_clip_matrix: ui.view_to_clip_matrix,
     };
 }
 
@@ -261,30 +370,48 @@ pub fn record_upscale(
     slot.fresh = true;
 }
 
-fn take_slot() -> (
-    bool,
-    Option<RecordedScaler>,
-    Option<Obj>,
-    Option<Obj>,
-    WmtFxTemporalScalerProps,
-    CameraParams,
-) {
+struct SlotSnapshot {
+    fresh: bool,
+    scaler: Option<RecordedScaler>,
+    depth: Option<Obj>,
+    motion: Option<Obj>,
+    props: WmtFxTemporalScalerProps,
+    camera: CameraParams,
+    ui_texture: Option<Obj>,
+    ui_format: u32,
+    ui: FrameGenUi,
+}
+
+fn take_slot() -> SlotSnapshot {
     let mut slot = lock(&SLOT);
     let fresh = slot.fresh;
     slot.fresh = false;
-    (
+    SlotSnapshot {
         fresh,
-        slot.scaler.clone(),
-        slot.depth.as_ref().map(retain),
-        slot.motion.as_ref().map(retain),
-        slot.props,
-        CameraParams {
+        scaler: slot.scaler.clone(),
+        depth: slot.depth.as_ref().map(retain),
+        motion: slot.motion.as_ref().map(retain),
+        props: slot.props,
+        camera: CameraParams {
             near_plane: slot.camera.near_plane,
             far_plane: slot.camera.far_plane,
             field_of_view: slot.camera.field_of_view,
             aspect_ratio: slot.camera.aspect_ratio,
         },
-    )
+        ui_texture: slot.ui_texture.as_ref().map(retain),
+        ui_format: slot.ui_format,
+        ui: FrameGenUi {
+            ui_composited: slot.ui.ui_composited,
+            content_width: slot.ui.content_width,
+            content_height: slot.ui.content_height,
+            depth_offset: slot.ui.depth_offset,
+            motion_offset: slot.ui.motion_offset,
+            output_offset: slot.ui.output_offset,
+            has_matrices: slot.ui.has_matrices,
+            world_to_view_matrix: slot.ui.world_to_view_matrix,
+            view_to_clip_matrix: slot.ui.view_to_clip_matrix,
+        },
+    }
 }
 
 /// Fence-ring ordering callbacks supplied by the command queue
@@ -352,6 +479,7 @@ struct InterpolateArgs<'a> {
     output: &'a Obj,
     fence: &'a Obj,
     props: &'a WMTFXFrameInterpolatorProps,
+    ui_texture: Option<&'a Obj>,
 }
 
 struct PresentArgs<'a> {
@@ -573,6 +701,7 @@ impl Backend for ProdBackend {
                 args.output.handle(),
                 args.fence.handle(),
                 args.props,
+                args.ui_texture.map_or(0, Obj::handle),
             );
         }
     }
@@ -669,6 +798,8 @@ const ZERO_INTERP_INFO: WMTFXFrameInterpolatorInfo = WMTFXFrameInterpolatorInfo 
     output_width: 0,
     output_height: 0,
     scaler: 0,
+    ui_format: 0,
+    pad: 0,
 };
 
 const fn same_interpolator_info(
@@ -684,6 +815,7 @@ const fn same_interpolator_info(
         && a.output_width == b.output_width
         && a.output_height == b.output_height
         && a.scaler == b.scaler
+        && a.ui_format == b.ui_format
 }
 
 fn ring_texture_info(width: u64, height: u64, pixel_format: u32) -> WMTTextureInfo {
@@ -838,7 +970,20 @@ impl FrameGen {
                 since
             };
         }
-        let (fresh, scaler, depth, motion, props, camera) = take_slot();
+        let recorded = take_slot();
+        let fresh = recorded.fresh;
+        let scaler = recorded.scaler;
+        let depth = recorded.depth;
+        let motion = recorded.motion;
+        let props = recorded.props;
+        let camera = recorded.camera;
+        let ui_texture = recorded.ui_texture;
+        let ui_format = if ui_texture.is_some() {
+            recorded.ui_format
+        } else {
+            0
+        };
+        let ui = recorded.ui;
         if self.failed {
             return false;
         }
@@ -909,6 +1054,8 @@ impl FrameGen {
                 output_width: sc.info.output_width,
                 output_height: sc.info.output_height,
                 scaler: sc.handle.handle(),
+                ui_format,
+                pad: 0,
             };
             if self.interpolator.is_none() || !same_interpolator_info(&info, &self.info) {
                 scope!("queue.(frame generation: make the interpolator)");
@@ -977,7 +1124,20 @@ impl FrameGen {
                 jitter_offset_y: props.jitter_offset_y,
                 reset: 0,
                 depth_reversed: props.depth_reversed,
-                ui_composited: 0,
+                ui_composited: u8::from(ui.ui_composited),
+                pad: 0,
+                content_width: ui.content_width,
+                content_height: ui.content_height,
+                depth_content_offset_x: ui.depth_offset[0],
+                depth_content_offset_y: ui.depth_offset[1],
+                motion_content_offset_x: ui.motion_offset[0],
+                motion_content_offset_y: ui.motion_offset[1],
+                output_offset_x: ui.output_offset[0],
+                output_offset_y: ui.output_offset[1],
+                has_matrices: u8::from(ui.has_matrices),
+                pad_m: [0; 3],
+                world_to_view_matrix: ui.world_to_view_matrix,
+                view_to_clip_matrix: ui.view_to_clip_matrix,
             };
             let interpolator = self
                 .interpolator
@@ -999,6 +1159,7 @@ impl FrameGen {
                 output: out_tex,
                 fence: &fence,
                 props: &interp_props,
+                ui_texture: ui_texture.as_ref(),
             });
         }
         let real_slot = retain(self.real[slot].as_ref().expect("real slot initialized"));

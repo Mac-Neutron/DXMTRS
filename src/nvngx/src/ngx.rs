@@ -9,8 +9,12 @@ pub const FEATURE_NOT_SUPPORTED: u32 = 0xbad0_0001;
 /// `NVSDK_NGX_Result_FAIL_InvalidParameter`.
 pub const INVALID_PARAMETER: u32 = 0xbad0_0005;
 
-/// `NVSDK_NGX_Feature_SuperSampling`: DLSS super resolution, the one feature nvngx makes.
+/// `NVSDK_NGX_Feature_SuperSampling`: DLSS super resolution.
 pub const FEATURE_SUPERSAMPLING: u32 = 1;
+/// `NVSDK_NGX_Feature_FrameGeneration`: DLSS-G frame generation.
+pub const FEATURE_FRAME_GENERATION: u32 = 11;
+/// `NVSDK_NGX_Feature_RayReconstruction`: DLSS-D ray reconstruction.
+pub const FEATURE_RAY_RECONSTRUCTION: u32 = 13;
 
 /// `NVSDK_NGX_DLSS_Feature_Flags`: motion vectors at the render resolution.
 pub const FLAG_MV_LOWRES: u32 = 1 << 1;
@@ -62,6 +66,110 @@ pub const PARAM_DLSSG_CAMERA_FAR: &core::ffi::CStr = c"DLSSG.CameraFar";
 pub const PARAM_DLSSG_CAMERA_FOV: &core::ffi::CStr = c"DLSSG.CameraFOV";
 /// `NVSDK_NGX_Parameter_DLSSG_CameraAspectRatio`.
 pub const PARAM_DLSSG_CAMERA_ASPECT: &core::ffi::CStr = c"DLSSG.CameraAspectRatio";
+
+/// `NVSDK_NGX_Parameter_SuperSamplingDenoising_Available`.
+pub const PARAM_DLSSD_AVAILABLE: &core::ffi::CStr = c"SuperSamplingDenoising.Available";
+/// `NVSDK_NGX_Parameter_SuperSamplingDenoising_FeatureInitResult`.
+pub const PARAM_DLSSD_FEATURE_INIT_RESULT: &core::ffi::CStr =
+    c"SuperSamplingDenoising.FeatureInitResult";
+/// `NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver`.
+pub const PARAM_DLSSD_NEEDS_UPDATED_DRIVER: &core::ffi::CStr =
+    c"SuperSamplingDenoising.NeedsUpdatedDriver";
+/// `NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor`.
+pub const PARAM_DLSSD_MIN_DRIVER_MAJOR: &core::ffi::CStr =
+    c"SuperSamplingDenoising.MinDriverVersionMajor";
+/// `NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor`.
+pub const PARAM_DLSSD_MIN_DRIVER_MINOR: &core::ffi::CStr =
+    c"SuperSamplingDenoising.MinDriverVersionMinor";
+
+/// `NVSDK_NGX_Parameter_DiffuseAlbedo`.
+pub const PARAM_DIFFUSE_ALBEDO: &core::ffi::CStr = c"DiffuseAlbedo";
+/// `NVSDK_NGX_Parameter_SpecularAlbedo`.
+pub const PARAM_SPECULAR_ALBEDO: &core::ffi::CStr = c"SpecularAlbedo";
+/// `NVSDK_NGX_Parameter_Normals`.
+pub const PARAM_NORMALS: &core::ffi::CStr = c"Normals";
+/// `NVSDK_NGX_Parameter_Roughness`.
+pub const PARAM_ROUGHNESS: &core::ffi::CStr = c"Roughness";
+/// `NVSDK_NGX_Parameter_SpecularHitDistance`.
+pub const PARAM_SPECULAR_HIT_DISTANCE: &core::ffi::CStr = c"SpecularHitDistance";
+/// `NVSDK_NGX_Parameter_WorldToViewMatrix`.
+pub const PARAM_WORLD_TO_VIEW_MATRIX: &core::ffi::CStr = c"WorldToViewMatrix";
+/// `NVSDK_NGX_Parameter_ViewToClipMatrix`.
+pub const PARAM_VIEW_TO_CLIP_MATRIX: &core::ffi::CStr = c"ViewToClipMatrix";
+/// `DenoiseStrengthMask`.
+pub const PARAM_DENOISE_STRENGTH_MASK: &core::ffi::CStr = c"DenoiseStrengthMask";
+/// `TransparencyOverlay`.
+pub const PARAM_TRANSPARENCY_OVERLAY: &core::ffi::CStr = c"TransparencyOverlay";
+
+/// `DLSSD.DiffuseAlbedo`.
+pub const PARAM_DLSSD_DIFFUSE_ALBEDO: &core::ffi::CStr = c"DLSSD.DiffuseAlbedo";
+/// `DLSSD.SpecularAlbedo`.
+pub const PARAM_DLSSD_SPECULAR_ALBEDO: &core::ffi::CStr = c"DLSSD.SpecularAlbedo";
+/// `DLSSD.Normals`.
+pub const PARAM_DLSSD_NORMALS: &core::ffi::CStr = c"DLSSD.Normals";
+/// `DLSSD.Roughness`.
+pub const PARAM_DLSSD_ROUGHNESS: &core::ffi::CStr = c"DLSSD.Roughness";
+/// `DLSSD.SpecularHitDistance`.
+pub const PARAM_DLSSD_SPECULAR_HIT_DISTANCE: &core::ffi::CStr = c"DLSSD.SpecularHitDistance";
+/// `DLSSD.WorldToViewMatrix`.
+pub const PARAM_DLSSD_WORLD_TO_VIEW_MATRIX: &core::ffi::CStr = c"DLSSD.WorldToViewMatrix";
+/// `DLSSD.ViewToClipMatrix`.
+pub const PARAM_DLSSD_VIEW_TO_CLIP_MATRIX: &core::ffi::CStr = c"DLSSD.ViewToClipMatrix";
+/// `DLSSD.DenoiseStrengthMask`.
+pub const PARAM_DLSSD_DENOISE_STRENGTH_MASK: &core::ffi::CStr = c"DLSSD.DenoiseStrengthMask";
+/// `DLSSD.TransparencyOverlay`.
+pub const PARAM_DLSSD_TRANSPARENCY_OVERLAY: &core::ffi::CStr = c"DLSSD.TransparencyOverlay";
+
+/// `NVSDK_NGX_Parameter_FrameGeneration_Available`.
+pub const PARAM_DLSSG_AVAILABLE: &core::ffi::CStr = c"FrameGeneration.Available";
+/// `NVSDK_NGX_Parameter_FrameGeneration_FeatureInitResult`.
+pub const PARAM_DLSSG_FEATURE_INIT_RESULT: &core::ffi::CStr = c"FrameGeneration.FeatureInitResult";
+/// `NVSDK_NGX_Parameter_FrameGeneration_NeedsUpdatedDriver`.
+pub const PARAM_DLSSG_NEEDS_UPDATED_DRIVER: &core::ffi::CStr =
+    c"FrameGeneration.NeedsUpdatedDriver";
+/// `NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMajor`.
+pub const PARAM_DLSSG_MIN_DRIVER_MAJOR: &core::ffi::CStr = c"FrameGeneration.MinDriverVersionMajor";
+/// `NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMinor`.
+pub const PARAM_DLSSG_MIN_DRIVER_MINOR: &core::ffi::CStr = c"FrameGeneration.MinDriverVersionMinor";
+
+/// `DLSSG.HUDLess`.
+pub const PARAM_DLSSG_HUDLESS: &core::ffi::CStr = c"DLSSG.HUDLess";
+/// `DLSSG.UI`.
+pub const PARAM_DLSSG_UI: &core::ffi::CStr = c"DLSSG.UI";
+/// `DLSSG.UIColorAndAlpha`.
+pub const PARAM_DLSSG_UI_COLOR_AND_ALPHA: &core::ffi::CStr = c"DLSSG.UIColorAndAlpha";
+/// `DLSSG.UIComposited`.
+pub const PARAM_DLSSG_UI_COMPOSITED: &core::ffi::CStr = c"DLSSG.UIComposited";
+/// `DLSSG.MvecScaleX`.
+pub const PARAM_DLSSG_MVEC_SCALE_X: &core::ffi::CStr = c"DLSSG.MvecScaleX";
+/// `DLSSG.MvecScaleY`.
+pub const PARAM_DLSSG_MVEC_SCALE_Y: &core::ffi::CStr = c"DLSSG.MvecScaleY";
+/// `DLSSG.JitterOffsetX`.
+pub const PARAM_DLSSG_JITTER_OFFSET_X: &core::ffi::CStr = c"DLSSG.JitterOffsetX";
+/// `DLSSG.JitterOffsetY`.
+pub const PARAM_DLSSG_JITTER_OFFSET_Y: &core::ffi::CStr = c"DLSSG.JitterOffsetY";
+/// `DLSSG.WorldToViewMatrix`.
+pub const PARAM_DLSSG_WORLD_TO_VIEW_MATRIX: &core::ffi::CStr = c"DLSSG.WorldToViewMatrix";
+/// `DLSSG.ViewToClipMatrix`.
+pub const PARAM_DLSSG_VIEW_TO_CLIP_MATRIX: &core::ffi::CStr = c"DLSSG.ViewToClipMatrix";
+/// `DLSSG.DepthSubrectBase.X`.
+pub const PARAM_DLSSG_DEPTH_SUBRECT_BASE_X: &core::ffi::CStr = c"DLSSG.DepthSubrectBase.X";
+/// `DLSSG.DepthSubrectBase.Y`.
+pub const PARAM_DLSSG_DEPTH_SUBRECT_BASE_Y: &core::ffi::CStr = c"DLSSG.DepthSubrectBase.Y";
+/// `DLSSG.MvecSubrectBase.X`.
+pub const PARAM_DLSSG_MVEC_SUBRECT_BASE_X: &core::ffi::CStr = c"DLSSG.MvecSubrectBase.X";
+/// `DLSSG.MvecSubrectBase.Y`.
+pub const PARAM_DLSSG_MVEC_SUBRECT_BASE_Y: &core::ffi::CStr = c"DLSSG.MvecSubrectBase.Y";
+/// `DLSSG.BackbufferSubrectBase.X`.
+pub const PARAM_DLSSG_BACKBUFFER_SUBRECT_BASE_X: &core::ffi::CStr =
+    c"DLSSG.BackbufferSubrectBase.X";
+/// `DLSSG.BackbufferSubrectBase.Y`.
+pub const PARAM_DLSSG_BACKBUFFER_SUBRECT_BASE_Y: &core::ffi::CStr =
+    c"DLSSG.BackbufferSubrectBase.Y";
+/// `DLSSG.ContentWidth`.
+pub const PARAM_DLSSG_CONTENT_WIDTH: &core::ffi::CStr = c"DLSSG.ContentWidth";
+/// `DLSSG.ContentHeight`.
+pub const PARAM_DLSSG_CONTENT_HEIGHT: &core::ffi::CStr = c"DLSSG.ContentHeight";
 
 /// Private `ID3D12Object` data GUID carrying `DLSSG.Camera*` parameters to `d3d12`.
 pub const DLSSG_CAMERA_GUID: dxmt_util::com::Guid = dxmt_util::com::Guid::new(

@@ -45,7 +45,7 @@ use crate::abi::{
         ShaderCache, ShaderModel,
     },
     pipeline::{E_NOTIMPL, S_OK},
-    root_signature::{D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1},
+    root_signature::D3D_ROOT_SIGNATURE_VERSION_1_2,
 };
 
 /// What the device decides about its answers.
@@ -236,12 +236,17 @@ pub unsafe fn check_feature_support(
         }),
         D3D12_FEATURE_ROOT_SIGNATURE => sized!(data, RootSignature, {
             let version = get(data, offset_of!(RootSignature, highest_version));
-            if version == D3D_ROOT_SIGNATURE_VERSION_1_0
-                || version == D3D_ROOT_SIGNATURE_VERSION_1_1
-            {
-                S_OK
-            } else {
+            if version == 0 {
                 E_INVALIDARG
+            } else {
+                if version > D3D_ROOT_SIGNATURE_VERSION_1_2 {
+                    put(
+                        data,
+                        offset_of!(RootSignature, highest_version),
+                        D3D_ROOT_SIGNATURE_VERSION_1_2,
+                    );
+                }
+                S_OK
             }
         }),
         D3D12_FEATURE_FEATURE_LEVELS => sized!(data, FeatureLevels, {
@@ -322,8 +327,8 @@ pub unsafe fn check_feature_support(
             set!(
                 data,
                 Options16 {
-                    gpu_upload_heap_supported: 0,
-                    dynamic_depth_bias_supported: 0,
+                    gpu_upload_heap_supported: u32::from(!device.advertise_numa()),
+                    dynamic_depth_bias_supported: 1,
                 }
             );
             S_OK
@@ -380,7 +385,7 @@ pub unsafe fn check_feature_support(
             set!(
                 data,
                 Options12 {
-                    relaxed_format_casting_supported: 0,
+                    relaxed_format_casting_supported: 1,
                     enhanced_barriers_supported: 1,
                     ms_primitives_pipeline_statistic_includes_culled_primitives: 0,
                 }

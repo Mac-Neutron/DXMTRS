@@ -40,8 +40,8 @@ use winemetal_sys::{
     MTLCommandBuffer_blitCommandEncoderWithSampleBuffers, MTLCommandBuffer_commit,
     MTLCommandBuffer_computeCommandEncoder,
     MTLCommandBuffer_computeCommandEncoderWithSampleBuffers, MTLCommandBuffer_encodeSignalEvent,
-    MTLCommandBuffer_encodeTemporalScale, MTLCommandBuffer_encodeWaitForEvent,
-    MTLCommandBuffer_error, MTLCommandBuffer_presentDrawable,
+    MTLCommandBuffer_encodeTemporalDenoisedScale, MTLCommandBuffer_encodeTemporalScale,
+    MTLCommandBuffer_encodeWaitForEvent, MTLCommandBuffer_error, MTLCommandBuffer_presentDrawable,
     MTLCommandBuffer_presentDrawableAfterMinimumDuration, MTLCommandBuffer_renderCommandEncoder,
     MTLCommandBuffer_status, MTLCommandBuffer_waitUntilCompleted, MTLCommandEncoder_endEncoding,
     MTLCommandEncoder_setLabel, MTLCommandQueue_addResidencySet, MTLCommandQueue_commandBuffer,
@@ -56,9 +56,10 @@ use winemetal_sys::{
         WMT_COMMAND_BUFFER_STATUS_ERROR, WMT_COMMAND_BUFFER_STATUS_SCHEDULED,
         WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_UPDATE_FENCE,
         WMT_RENDER_STAGE_FRAGMENT, WMT_RENDER_STAGE_PRE_RASTER, WMT_RENDER_STAGE_VERTEX,
-        WMT_STORE_ACTION_STORE, WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMTRenderPassInfo,
-        WMTRenderPassSampleBufferInfo, WMTSampleBufferAttachmentInfo, WMTUTF8_STRING_ENCODING,
-        WmtcmdBase, WmtcmdBlitFenceOp, WmtcmdRenderFenceOp,
+        WMT_STORE_ACTION_STORE, WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE,
+        WMTFXTemporalScalerProps, WMTRenderPassInfo, WMTRenderPassSampleBufferInfo,
+        WMTSampleBufferAttachmentInfo, WMTUTF8_STRING_ENCODING, WmtcmdBase, WmtcmdBlitFenceOp,
+        WmtcmdRenderFenceOp,
     },
 };
 
@@ -85,8 +86,8 @@ use crate::{
     device::Device,
     encoder::{
         BlitEncoderData, ClearEncoderData, ComputeEncoderData, EncoderData, EncoderType,
-        RenderEncoderData, ResolveEncoderData, TemporalUpscaleEncoderData, TextureViewRef,
-        TimestampResolve,
+        RenderEncoderData, ResolveEncoderData, TemporalDenoisedUpscaleEncoderData,
+        TemporalUpscaleEncoderData, TextureViewRef, TimestampResolve,
     },
     fence::{self, FenceObject},
     list::{self, List},
@@ -806,7 +807,7 @@ impl Queue {
                 let mut pass = 0u32;
                 if crate::stats::on() {
                     #[cfg(not(feature = "perf-build"))]
-                    static IDS: std::sync::LazyLock<[crate::stats::StatId; 9]> =
+                    static IDS: std::sync::LazyLock<[crate::stats::StatId; 10]> =
                         std::sync::LazyLock::new(|| {
                             [
                                 crate::stats::id("#null encoders"),
@@ -816,6 +817,7 @@ impl Queue {
                                 crate::stats::id("#compute passes"),
                                 crate::stats::id("#resolve passes"),
                                 crate::stats::id("#temporal upscale passes"),
+                                crate::stats::id("#temporal denoised upscale passes"),
                                 crate::stats::id("#encoder boundaries"),
                                 crate::stats::id("#encoder boundaries with no barrier"),
                             ]
@@ -831,18 +833,19 @@ impl Queue {
                             EncoderType::Compute => 4,
                             EncoderType::Resolve => 5,
                             EncoderType::TemporalUpscale => 6,
+                            EncoderType::TemporalDenoisedScale => 7,
                         };
                         crate::stats::count_id(IDS[kind_idx], 1);
                     }
                     if cur_ref.kind != EncoderType::Null {
                         if !previous.is_null() {
                             #[cfg(not(feature = "perf-build"))]
-                            crate::stats::count_id(IDS[7], 1);
+                            crate::stats::count_id(IDS[8], 1);
                             // SAFETY: `previous` points to an earlier valid encoder in `sub`.
                             let prev_barriers = unsafe { (*previous).barriers };
                             if cur_ref.barriers == prev_barriers {
                                 #[cfg(not(feature = "perf-build"))]
-                                crate::stats::count_id(IDS[8], 1);
+                                crate::stats::count_id(IDS[9], 1);
                             }
                         }
                         previous = current;
@@ -1448,22 +1451,35 @@ impl Queue {
                         // SAFETY: `encoder` is ended once.
                         unsafe { MTLCommandEncoder_endEncoding(encoder) };
                     }
-                    EncoderType::TemporalUpscale => {
-                        crate::scope!("queue.(encode temporal upscale)");
-                        let data = current.cast::<TemporalUpscaleEncoderData>();
-                        // SAFETY: `cur_ref.kind == EncoderType::TemporalUpscale` guarantees
-                        // `TemporalUpscaleEncoderData`.
-                        let data = unsafe { &*data };
-                        let scaler_fence = data
-                            .scaler
-                            .as_deref()
-                            .and_then(|s| s.fence())
-                            .map_or(0, Obj::handle);
-                        let scaler_handle = data
-                            .scaler
-                            .as_deref()
-                            .and_then(|s| s.scaler())
-                            .map_or(0, Obj::handle);
+                    EncoderType::TemporalUpscale | EncoderType::TemporalDenoisedScale => {
+                        let is_denoised = cur_ref.kind == EncoderType::TemporalDenoisedScale;
+                        if is_denoised {
+                            crate::scope!("queue.(encode temporal denoised upscale)");
+                        } else {
+                            crate::scope!("queue.(encode temporal upscale)");
+                        }
+                        let (scaler_fence, scaler_handle, label) = if is_denoised {
+                            // SAFETY: `cur_ref.kind == EncoderType::TemporalDenoisedScale`
+                            // guarantees `TemporalDenoisedUpscaleEncoderData`.
+                            let data =
+                                unsafe { &*current.cast::<TemporalDenoisedUpscaleEncoderData>() };
+                            let s = data.scaler.as_deref();
+                            (
+                                s.and_then(|x| x.fence()).map_or(0, Obj::handle),
+                                s.and_then(|x| x.scaler()).map_or(0, Obj::handle),
+                                "denoised_upscale",
+                            )
+                        } else {
+                            // SAFETY: `cur_ref.kind == EncoderType::TemporalUpscale` guarantees
+                            // `TemporalUpscaleEncoderData`.
+                            let data = unsafe { &*current.cast::<TemporalUpscaleEncoderData>() };
+                            let s = data.scaler.as_deref();
+                            (
+                                s.and_then(|x| x.fence()).map_or(0, Obj::handle),
+                                s.and_then(|x| x.scaler()).map_or(0, Obj::handle),
+                                "upscale",
+                            )
+                        };
                         let mut first = WMTSampleBufferAttachmentInfo {
                             sample_buffer: 0,
                             start_of_encoder_sample_index: DONT_SAMPLE,
@@ -1520,7 +1536,7 @@ impl Queue {
                                 )
                             }
                         };
-                        label_pass(begin, pass, "upscale", None);
+                        label_pass(begin, pass, label, None);
                         for idx in 0..commit.order.waits.len() {
                             let wait = commit.order.waits[idx];
                             let op = WmtcmdBlitFenceOp {
@@ -1559,45 +1575,130 @@ impl Queue {
                         }
                         // SAFETY: `begin` is ended once.
                         unsafe { MTLCommandEncoder_endEncoding(begin) };
-                        let color_tex = data.color.as_ref().map_or(0, TextureViewRef::texture);
-                        let output_tex = data.output.as_ref().map_or(0, TextureViewRef::texture);
-                        let depth_tex = data.depth.as_ref().map_or(0, TextureViewRef::texture);
-                        let motion_tex = data.motion.as_ref().map_or(0, TextureViewRef::texture);
-                        let exposure_tex =
-                            data.exposure.as_ref().map_or(0, TextureViewRef::texture);
-                        let reactive_tex =
-                            data.reactive.as_ref().map_or(0, TextureViewRef::texture);
-                        // SAFETY: `cmdbuf_handle` is live and `data.props` is valid.
-                        unsafe {
-                            MTLCommandBuffer_encodeTemporalScale(
-                                cmdbuf_handle,
-                                scaler_handle,
-                                color_tex,
-                                output_tex,
-                                depth_tex,
-                                motion_tex,
-                                exposure_tex,
-                                scaler_fence,
-                                &raw const data.props,
-                                reactive_tex,
-                            );
-                        }
+
+                        let (scaler_opt, depth_tex, motion_tex, fg_props) = if is_denoised {
+                            // SAFETY: `cur_ref.kind == EncoderType::TemporalDenoisedScale`
+                            // guarantees `TemporalDenoisedUpscaleEncoderData`.
+                            let data =
+                                unsafe { &*current.cast::<TemporalDenoisedUpscaleEncoderData>() };
+                            let color_tex = data.color.as_ref().map_or(0, TextureViewRef::texture);
+                            let output_tex =
+                                data.output.as_ref().map_or(0, TextureViewRef::texture);
+                            let depth_tex = data.depth.as_ref().map_or(0, TextureViewRef::texture);
+                            let motion_tex =
+                                data.motion.as_ref().map_or(0, TextureViewRef::texture);
+                            let diffuse_tex = data
+                                .diffuse_albedo
+                                .as_ref()
+                                .map_or(0, TextureViewRef::texture);
+                            let specular_tex = data
+                                .specular_albedo
+                                .as_ref()
+                                .map_or(0, TextureViewRef::texture);
+                            let normal_tex =
+                                data.normal.as_ref().map_or(0, TextureViewRef::texture);
+                            let roughness_tex =
+                                data.roughness.as_ref().map_or(0, TextureViewRef::texture);
+                            let hit_dist_tex = data
+                                .specular_hit_distance
+                                .as_ref()
+                                .map_or(0, TextureViewRef::texture);
+                            let strength_tex = data
+                                .denoise_strength_mask
+                                .as_ref()
+                                .map_or(0, TextureViewRef::texture);
+                            let trans_tex = data
+                                .transparency_overlay
+                                .as_ref()
+                                .map_or(0, TextureViewRef::texture);
+                            let exposure_tex =
+                                data.exposure.as_ref().map_or(0, TextureViewRef::texture);
+                            let reactive_tex =
+                                data.reactive.as_ref().map_or(0, TextureViewRef::texture);
+                            // SAFETY: `cmdbuf_handle` is live and `data.props` is valid.
+                            unsafe {
+                                MTLCommandBuffer_encodeTemporalDenoisedScale(
+                                    cmdbuf_handle,
+                                    scaler_handle,
+                                    color_tex,
+                                    output_tex,
+                                    depth_tex,
+                                    motion_tex,
+                                    diffuse_tex,
+                                    specular_tex,
+                                    normal_tex,
+                                    roughness_tex,
+                                    hit_dist_tex,
+                                    strength_tex,
+                                    trans_tex,
+                                    exposure_tex,
+                                    reactive_tex,
+                                    scaler_fence,
+                                    &raw const data.props,
+                                );
+                            }
+                            let fg_props = WMTFXTemporalScalerProps {
+                                input_content_width: data.props.input_content_width,
+                                input_content_height: data.props.input_content_height,
+                                reset: data.props.reset,
+                                depth_reversed: data.props.depth_reversed,
+                                motion_vector_scale_x: data.props.motion_vector_scale_x,
+                                motion_vector_scale_y: data.props.motion_vector_scale_y,
+                                jitter_offset_x: data.props.jitter_offset_x,
+                                jitter_offset_y: data.props.jitter_offset_y,
+                                pre_exposure: data.props.pre_exposure,
+                                color_content_offset_x: 0,
+                                color_content_offset_y: 0,
+                                depth_content_offset_x: 0,
+                                depth_content_offset_y: 0,
+                                motion_content_offset_x: 0,
+                                motion_content_offset_y: 0,
+                                reactive_mask_content_offset_x: 0,
+                                reactive_mask_content_offset_y: 0,
+                                output_offset_x: 0,
+                                output_offset_y: 0,
+                            };
+                            (data.scaler.as_deref(), depth_tex, motion_tex, fg_props)
+                        } else {
+                            // SAFETY: `cur_ref.kind == EncoderType::TemporalUpscale` guarantees
+                            // `TemporalUpscaleEncoderData`.
+                            let data = unsafe { &*current.cast::<TemporalUpscaleEncoderData>() };
+                            let color_tex = data.color.as_ref().map_or(0, TextureViewRef::texture);
+                            let output_tex =
+                                data.output.as_ref().map_or(0, TextureViewRef::texture);
+                            let depth_tex = data.depth.as_ref().map_or(0, TextureViewRef::texture);
+                            let motion_tex =
+                                data.motion.as_ref().map_or(0, TextureViewRef::texture);
+                            let exposure_tex =
+                                data.exposure.as_ref().map_or(0, TextureViewRef::texture);
+                            let reactive_tex =
+                                data.reactive.as_ref().map_or(0, TextureViewRef::texture);
+                            // SAFETY: `cmdbuf_handle` is live and `data.props` is valid.
+                            unsafe {
+                                MTLCommandBuffer_encodeTemporalScale(
+                                    cmdbuf_handle,
+                                    scaler_handle,
+                                    color_tex,
+                                    output_tex,
+                                    depth_tex,
+                                    motion_tex,
+                                    exposure_tex,
+                                    scaler_fence,
+                                    &raw const data.props,
+                                    reactive_tex,
+                                );
+                            }
+                            (data.scaler.as_deref(), depth_tex, motion_tex, data.props)
+                        };
                         if framegen::mode() != framegen::Mode::Off {
                             // SAFETY: `depth_tex` is 0 or a live `MTLTexture` handle.
                             let depth_obj = unsafe { Obj::retain(depth_tex) };
                             // SAFETY: `motion_tex` is 0 or a live `MTLTexture` handle.
                             let motion_obj = unsafe { Obj::retain(motion_tex) };
-                            if let (Some(scaler), Some(depth_ref), Some(motion_ref)) = (
-                                data.scaler.as_deref(),
-                                depth_obj.as_ref(),
-                                motion_obj.as_ref(),
-                            ) {
-                                framegen::record_upscale(
-                                    scaler,
-                                    depth_ref,
-                                    motion_ref,
-                                    &data.props,
-                                );
+                            if let (Some(scaler), Some(depth_ref), Some(motion_ref)) =
+                                (scaler_opt, depth_obj.as_ref(), motion_obj.as_ref())
+                            {
+                                framegen::record_upscale(scaler, depth_ref, motion_ref, &fg_props);
                             }
                         }
                         let end_enc = if last.end_of_encoder_sample_index == DONT_SAMPLE {

@@ -416,3 +416,89 @@ fn the_enumerations_compare_as_signed_numbers_as_cpp() {
     }
     assert_eq!(checked, 54);
 }
+
+#[test]
+fn agility_feature_caps_match_uma_and_numa() {
+    struct NumaDevice;
+    impl Device for NumaDevice {
+        fn sm6_caps(&self) -> bool {
+            true
+        }
+
+        fn advertise_numa(&self) -> bool {
+            true
+        }
+
+        fn supports_texture_sample_count(&self, count: u32) -> bool {
+            matches!(count, 1 | 2 | 4 | 8)
+        }
+    }
+
+    let uma = Recorded { sm6: true };
+
+    let mut zero = [0_u8; size_of::<RootSignature>()];
+    assert_eq!(
+        call(&uma, D3D12_FEATURE_ROOT_SIGNATURE, &mut zero),
+        E_INVALIDARG
+    );
+
+    let mut clamp = 5_u32.to_le_bytes();
+    assert_eq!(call(&uma, D3D12_FEATURE_ROOT_SIGNATURE, &mut clamp), S_OK);
+    assert_eq!(u32::from_le_bytes(clamp), D3D_ROOT_SIGNATURE_VERSION_1_2);
+
+    let mut opt12 = [0_u8; size_of::<Options12>()];
+    assert_eq!(call(&uma, D3D12_FEATURE_D3D12_OPTIONS12, &mut opt12), S_OK);
+    assert_eq!(
+        get(
+            &opt12,
+            offset_of!(Options12, relaxed_format_casting_supported)
+        ),
+        1
+    );
+    assert_eq!(
+        get(&opt12, offset_of!(Options12, enhanced_barriers_supported)),
+        1
+    );
+
+    let mut opt16_uma = [0_u8; size_of::<Options16>()];
+    assert_eq!(
+        call(&uma, D3D12_FEATURE_D3D12_OPTIONS16, &mut opt16_uma),
+        S_OK
+    );
+    assert_eq!(
+        get(
+            &opt16_uma,
+            offset_of!(Options16, dynamic_depth_bias_supported)
+        ),
+        1
+    );
+    assert_eq!(
+        get(&opt16_uma, offset_of!(Options16, gpu_upload_heap_supported)),
+        1
+    );
+
+    let mut discrete_opt16 = [0_u8; size_of::<Options16>()];
+    // SAFETY: `discrete_opt16` is a stack buffer sized for `Options16`.
+    let hr_numa = unsafe {
+        check_feature_support(
+            &NumaDevice,
+            D3D12_FEATURE_D3D12_OPTIONS16,
+            &mut discrete_opt16,
+        )
+    };
+    assert_eq!(hr_numa, S_OK);
+    assert_eq!(
+        get(
+            &discrete_opt16,
+            offset_of!(Options16, dynamic_depth_bias_supported)
+        ),
+        1
+    );
+    assert_eq!(
+        get(
+            &discrete_opt16,
+            offset_of!(Options16, gpu_upload_heap_supported)
+        ),
+        0
+    );
+}
