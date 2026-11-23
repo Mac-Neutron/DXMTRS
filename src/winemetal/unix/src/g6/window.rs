@@ -1243,6 +1243,8 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
             backing_scale = f64_to_u32_saturating(layer_obj.contentsScale().round()).clamp(1, 8);
             // SAFETY: caller provides live `MTLDevice` handle for this attach.
             let dev = unsafe { obj::<ProtocolObject<dyn MTLDevice>>(device_addr as u64) };
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
             layer_obj.setDevice(dev);
             apply_layer_color(&layer_obj, screen.as_deref(), hdr_active, accurate);
             layer_obj.setOpaque(true);
@@ -1262,6 +1264,10 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
                 if let Some(v) = view_obj.as_deref() {
                     clear_covered_window_layers(v);
                 }
+            }
+            CATransaction::commit();
+            CATransaction::flush();
+            if cocoa_ok {
                 install_screen_params_filter(mtm);
             }
             cursor_overlay::install_pointer_watch(mtm);
