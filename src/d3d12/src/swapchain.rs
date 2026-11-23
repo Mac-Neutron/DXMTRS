@@ -1076,6 +1076,23 @@ pub static SWAPCHAIN_VTBL: IDXGISwapChain4Vtbl = IDXGISwapChain4Vtbl {
     ),
 };
 
+/// Validates and reads a `DXGI_SWAP_CHAIN_DESC1` pointer for swap-chain creation.
+///
+/// # Safety
+///
+/// If non-null, `desc` must point to a readable `SwapChainDesc1`.
+const unsafe fn validate_create_desc(desc: *const c_void) -> Result<SwapChainDesc1, Hresult> {
+    if desc.is_null() {
+        return Err(E_INVALIDARG);
+    }
+    // SAFETY: `desc` was checked non-null and the caller guarantees it points to a `SwapChainDesc1`.
+    let sc_desc = unsafe { desc.cast::<SwapChainDesc1>().read_unaligned() };
+    if convert_format(sc_desc.format) == WMT_PIXEL_FORMAT_INVALID {
+        return Err(E_INVALIDARG);
+    }
+    Ok(sc_desc)
+}
+
 /// Creates a D3D12 [`SwapChain`] (`CreateSwapChain`, `d3d12_swapchain.cpp:981`).
 ///
 /// # Safety
@@ -1092,11 +1109,15 @@ pub unsafe fn create(
 ) -> Hresult {
     static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load(&crate::LOG));
 
-    if desc.is_null() {
-        return E_INVALIDARG;
+    if !out.is_null() {
+        // SAFETY: `out` is a non-null caller output slot.
+        unsafe { *out = ptr::null_mut() };
     }
-    // SAFETY: `desc` was checked non-null.
-    let mut sc_desc = unsafe { desc.cast::<SwapChainDesc1>().read_unaligned() };
+    // SAFETY: `desc` is caller-supplied (null or a readable `SwapChainDesc1` per `create`'s contract).
+    let mut sc_desc = match unsafe { validate_create_desc(desc) } {
+        Ok(d) => d,
+        Err(hr) => return hr,
+    };
     let fs_desc = if fullscreen_desc.is_null() {
         SwapChainFullscreenDesc {
             refresh_rate: WsiRational {

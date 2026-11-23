@@ -19,8 +19,9 @@ use winemetal_sys::{
 };
 
 use super::{
-    D3D11_CREATE_DEVICE_D3D10_INTERNAL, DEFAULT_FEATURE_LEVELS, DxgiDevice, create_with_core,
-    max_feature_level_from_config, select_feature_level,
+    D3D11_CREATE_DEVICE_D3D10_INTERNAL, D3D11_CREATE_DEVICE_SINGLETHREADED, DEFAULT_FEATURE_LEVELS,
+    DXGI_ERROR_INVALID_CALL, DxgiDevice, create_with_core, max_feature_level_from_config,
+    select_feature_level,
 };
 use crate::abi::{
     IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1, IID_ID3D10_MULTITHREAD, IID_ID3D11_DEVICE,
@@ -239,118 +240,131 @@ fn d3d10_flag_selects_d3d10() {
 
 #[test]
 fn qi_set_as_cpp() {
-    let raw = new_test_device(0xb000, 0);
-    let root_iface = raw.cast::<c_void>();
-    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-    let d3d11_iface = unsafe { (&raw mut (*raw).d3d11).cast::<c_void>() };
-    // SAFETY: `d3d11_iface` is a valid `Device` pointer.
-    let d3d11_vtbl_ptr = unsafe { *d3d11_iface.cast::<*const ID3D11Device5Vtbl>() };
-    // SAFETY: `d3d11_vtbl_ptr` points to the static `ID3D11Device5Vtbl`.
-    let d3d11_vtbl = unsafe { &*d3d11_vtbl_ptr };
+    fn verify_device_qi(flags: u32, expect_d3d10: bool) {
+        let raw = new_test_device(0xb000, flags);
+        let root_iface = raw.cast::<c_void>();
+        // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+        let d3d11_iface = unsafe { (&raw mut (*raw).d3d11).cast::<c_void>() };
+        // SAFETY: `d3d11_iface` is a valid `Device` pointer.
+        let d3d11_vtbl_ptr = unsafe { *d3d11_iface.cast::<*const ID3D11Device5Vtbl>() };
+        // SAFETY: `d3d11_vtbl_ptr` points to the static `ID3D11Device5Vtbl`.
+        let d3d11_vtbl = unsafe { &*d3d11_vtbl_ptr };
 
-    // Null output pointer -> E_POINTER.
-    // SAFETY: Testing `query_interface` with null `out`.
-    let hr_null = unsafe {
-        (d3d11_vtbl.query_interface)(
-            d3d11_iface,
-            ptr::from_ref(&IID_IUNKNOWN).cast(),
-            ptr::null_mut(),
-        )
-    };
-    assert_eq!(hr_null, E_POINTER);
-
-    let positive_iids: &[Guid] = &[
-        IID_IUNKNOWN,
-        IID_ID3D11_DEVICE,
-        IID_ID3D11_DEVICE_1,
-        IID_ID3D11_DEVICE_2,
-        IID_ID3D11_DEVICE_3,
-        IID_ID3D11_DEVICE_4,
-        IID_ID3D11_DEVICE_5,
-        IID_IDXGI_OBJECT,
-        IID_IDXGI_DEVICE,
-        IID_IDXGI_DEVICE_1,
-        IID_IDXGI_DEVICE_2,
-        IID_IDXGI_DEVICE_3,
-        IID_IMTL_DXGI_DEVICE,
-        IID_D3D11_DEVICE_EXT,
-        IID_IMTL_SWAP_CHAIN_FACTORY,
-        IID_ID3D11_MULTITHREAD,
-        IID_ID3D10_MULTITHREAD,
-        IID_ID3D10_DEVICE,
-        IID_ID3D10_DEVICE1,
-    ];
-
-    for iid in positive_iids {
-        let mut out: *mut c_void = ptr::null_mut();
-        // SAFETY: Querying a positive IID on `d3d11_iface`.
-        let hr = unsafe {
-            (d3d11_vtbl.query_interface)(d3d11_iface, ptr::from_ref(iid).cast(), &raw mut out)
+        // Null output pointer -> E_POINTER.
+        // SAFETY: Testing `query_interface` with null `out`.
+        let hr_null = unsafe {
+            (d3d11_vtbl.query_interface)(
+                d3d11_iface,
+                ptr::from_ref(&IID_IUNKNOWN).cast(),
+                ptr::null_mut(),
+            )
         };
-        assert_eq!(hr, S_OK, "expected S_OK for positive IID {iid}");
-        assert!(!out.is_null(), "expected non-null pointer for IID {iid}");
+        assert_eq!(hr_null, E_POINTER);
 
-        // Verify COM identity: querying IID_IUnknown on `out` must return `root_iface`.
-        let mut unk: *mut c_void = ptr::null_mut();
-        // SAFETY: `out` is a valid COM interface pointer with an `IUnknownVtbl` header.
-        let out_vtbl = unsafe { *out.cast::<*const IUnknownVtbl>() };
-        // SAFETY: `out_vtbl` is a valid `IUnknownVtbl`.
-        let qi = unsafe { (*out_vtbl).query_interface };
-        // SAFETY: Querying `IID_IUNKNOWN` on `out`.
-        let hr_unk = unsafe { qi(out, ptr::from_ref(&IID_IUNKNOWN), &raw mut unk) };
-        assert_eq!(hr_unk, S_OK);
-        assert_eq!(unk, root_iface, "COM identity mismatch for IID {iid}");
+        let common_positive_iids: &[Guid] = &[
+            IID_IUNKNOWN,
+            IID_ID3D11_DEVICE,
+            IID_ID3D11_DEVICE_1,
+            IID_ID3D11_DEVICE_2,
+            IID_ID3D11_DEVICE_3,
+            IID_ID3D11_DEVICE_4,
+            IID_ID3D11_DEVICE_5,
+            IID_IDXGI_OBJECT,
+            IID_IDXGI_DEVICE,
+            IID_IDXGI_DEVICE_1,
+            IID_IDXGI_DEVICE_2,
+            IID_IDXGI_DEVICE_3,
+            IID_IMTL_DXGI_DEVICE,
+            IID_D3D11_DEVICE_EXT,
+            IID_IMTL_SWAP_CHAIN_FACTORY,
+            IID_ID3D11_MULTITHREAD,
+            IID_ID3D10_MULTITHREAD,
+        ];
+        let d3d10_iids: &[Guid] = &[IID_ID3D10_DEVICE, IID_ID3D10_DEVICE1];
 
-        // SAFETY: Releasing `unk`.
-        unsafe {
-            release(unk);
+        let positive_iter =
+            common_positive_iids
+                .iter()
+                .chain(if expect_d3d10 { d3d10_iids } else { &[] });
+
+        for iid in positive_iter {
+            let mut out: *mut c_void = ptr::null_mut();
+            // SAFETY: Querying a positive IID on `d3d11_iface`.
+            let hr = unsafe {
+                (d3d11_vtbl.query_interface)(d3d11_iface, ptr::from_ref(iid).cast(), &raw mut out)
+            };
+            assert_eq!(hr, S_OK, "expected S_OK for positive IID {iid}");
+            assert!(!out.is_null(), "expected non-null pointer for IID {iid}");
+
+            // Verify COM identity: querying IID_IUnknown on `out` must return `root_iface`.
+            let mut unk: *mut c_void = ptr::null_mut();
+            // SAFETY: `out` is a valid COM interface pointer with an `IUnknownVtbl` header.
+            let out_vtbl = unsafe { *out.cast::<*const IUnknownVtbl>() };
+            // SAFETY: `out_vtbl` is a valid `IUnknownVtbl`.
+            let qi = unsafe { (*out_vtbl).query_interface };
+            // SAFETY: Querying `IID_IUNKNOWN` on `out`.
+            let hr_unk = unsafe { qi(out, ptr::from_ref(&IID_IUNKNOWN), &raw mut unk) };
+            assert_eq!(hr_unk, S_OK);
+            assert_eq!(unk, root_iface, "COM identity mismatch for IID {iid}");
+
+            // SAFETY: Releasing `unk`.
+            unsafe {
+                release(unk);
+            }
+            // SAFETY: `out_vtbl` is a valid `IUnknownVtbl`.
+            let rel = unsafe { (*out_vtbl).release };
+            // SAFETY: Releasing `out` and checking the remaining reference count.
+            let rc = unsafe { rel(out) };
+            assert_eq!(rc, 1, "refcount imbalance after releasing IID {iid}");
         }
-        // SAFETY: `out_vtbl` is a valid `IUnknownVtbl`.
-        let rel = unsafe { (*out_vtbl).release };
-        // SAFETY: Releasing `out` and checking the remaining reference count.
-        let rc = unsafe { rel(out) };
-        assert_eq!(rc, 1, "refcount imbalance after releasing IID {iid}");
+
+        let iid_dxgi_device4 = Guid::new(
+            0x95b4_f95f,
+            0xd8da,
+            0x4ca4,
+            [0x9e, 0xe6, 0x3b, 0x76, 0xd5, 0x96, 0x8a, 0x10],
+        );
+        let iid_bogus = Guid::new(
+            0xdead_beef,
+            0x0000,
+            0x1111,
+            [0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55, 0x55],
+        );
+        // Pre-register the non-silent negative IIDs with `qi_log` so host tests do not write `_d3d11.log`.
+        let _ = qi_log(&IID_IMTL_DXGI_DEVICE, &iid_dxgi_device4);
+        let _ = qi_log(&IID_IMTL_DXGI_DEVICE, &iid_bogus);
+        let common_negative_iids: &[Guid] = &[
+            iid_dxgi_device4,
+            super::IID_ID3D11_DEBUG,
+            super::IID_ID3D11_INFO_QUEUE,
+            IID_D3D11_CONTEXT_EXT,
+            super::IID_RENDERDOC,
+            super::IID_PIX,
+            super::IID_GPA,
+            iid_bogus,
+        ];
+        let negative_iter =
+            common_negative_iids
+                .iter()
+                .chain(if expect_d3d10 { &[] } else { d3d10_iids });
+
+        for iid in negative_iter {
+            let mut out: *mut c_void = ptr::without_provenance_mut(0x1234);
+            // SAFETY: Querying a negative IID on `d3d11_iface`.
+            let hr = unsafe {
+                (d3d11_vtbl.query_interface)(d3d11_iface, ptr::from_ref(iid).cast(), &raw mut out)
+            };
+            assert_eq!(hr, E_NOINTERFACE, "expected E_NOINTERFACE for IID {iid}");
+            assert!(out.is_null(), "expected null out pointer for IID {iid}");
+        }
+
+        // SAFETY: Calling `release` on `d3d11_iface` to release the final reference.
+        let final_rc = unsafe { (d3d11_vtbl.release)(d3d11_iface) };
+        assert_eq!(final_rc, 0);
     }
 
-    let iid_dxgi_device4 = Guid::new(
-        0x95b4_f95f,
-        0xd8da,
-        0x4ca4,
-        [0x9e, 0xe6, 0x3b, 0x76, 0xd5, 0x96, 0x8a, 0x10],
-    );
-    let iid_bogus = Guid::new(
-        0xdead_beef,
-        0x0000,
-        0x1111,
-        [0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55, 0x55],
-    );
-    // Pre-register the non-silent negative IIDs with `qi_log` so host tests do not write `_d3d11.log`.
-    let _ = qi_log(&IID_IMTL_DXGI_DEVICE, &iid_dxgi_device4);
-    let _ = qi_log(&IID_IMTL_DXGI_DEVICE, &iid_bogus);
-    let negative_iids: &[Guid] = &[
-        iid_dxgi_device4,
-        super::IID_ID3D11_DEBUG,
-        super::IID_ID3D11_INFO_QUEUE,
-        IID_D3D11_CONTEXT_EXT,
-        super::IID_RENDERDOC,
-        super::IID_PIX,
-        super::IID_GPA,
-        iid_bogus,
-    ];
-
-    for iid in negative_iids {
-        let mut out: *mut c_void = ptr::without_provenance_mut(0x1234);
-        // SAFETY: Querying a negative IID on `d3d11_iface`.
-        let hr = unsafe {
-            (d3d11_vtbl.query_interface)(d3d11_iface, ptr::from_ref(iid).cast(), &raw mut out)
-        };
-        assert_eq!(hr, E_NOINTERFACE, "expected E_NOINTERFACE for IID {iid}");
-        assert!(out.is_null(), "expected null out pointer for IID {iid}");
-    }
-
-    // SAFETY: Calling `release` on `d3d11_iface` to release the final reference.
-    let final_rc = unsafe { (d3d11_vtbl.release)(d3d11_iface) };
-    assert_eq!(final_rc, 0);
+    verify_device_qi(0, false);
+    verify_device_qi(D3D11_CREATE_DEVICE_D3D10_INTERNAL, true);
 }
 
 #[test]
@@ -437,4 +451,59 @@ fn multithread_protection_starts_off() {
     assert!(!unsafe { &(*raw).d3d11 }.mutex.get_protected());
     // SAFETY: Releasing the initial ref on `raw`.
     unsafe { release(raw.cast::<c_void>()) };
+}
+
+#[test]
+fn create_deferred_context_rejects_singlethreaded_device() {
+    let st_raw = new_test_device(0xb000, D3D11_CREATE_DEVICE_SINGLETHREADED);
+    // SAFETY: `st_raw` is a valid `DxgiDevice` pointer.
+    let st_iface = unsafe { (&raw mut (*st_raw).d3d11).cast::<c_void>() };
+    // SAFETY: `st_iface` is a valid `Device` pointer.
+    let st_vtbl_ptr = unsafe { *st_iface.cast::<*const ID3D11Device5Vtbl>() };
+    // SAFETY: `st_vtbl_ptr` points to the static `ID3D11Device5Vtbl`.
+    let st_vtbl = unsafe { &*st_vtbl_ptr };
+
+    for create_fn in [
+        st_vtbl.create_deferred_context,
+        st_vtbl.create_deferred_context1,
+        st_vtbl.create_deferred_context2,
+        st_vtbl.create_deferred_context3,
+    ] {
+        let mut out_ctx: *mut c_void = ptr::without_provenance_mut(0xDEAD);
+        // SAFETY: `st_iface` is a live `ID3D11Device5` and `out_ctx` is a writable local slot.
+        let hr = unsafe { create_fn(st_iface, 0, &raw mut out_ctx) };
+        assert_eq!(hr, DXGI_ERROR_INVALID_CALL);
+        assert!(out_ctx.is_null());
+
+        // SAFETY: `st_iface` is a live `ID3D11Device5` and null `out` returns `DXGI_ERROR_INVALID_CALL`.
+        let hr_null = unsafe { create_fn(st_iface, 0, ptr::null_mut()) };
+        assert_eq!(hr_null, DXGI_ERROR_INVALID_CALL);
+    }
+    // SAFETY: Releasing the initial ref on `st_raw`.
+    unsafe { release(st_raw.cast::<c_void>()) };
+
+    let mt_raw = new_test_device(0xb000, 0);
+    // SAFETY: `mt_raw` is a valid `DxgiDevice` pointer.
+    let mt_iface = unsafe { (&raw mut (*mt_raw).d3d11).cast::<c_void>() };
+    // SAFETY: `mt_iface` is a valid `Device` pointer.
+    let mt_vtbl_ptr = unsafe { *mt_iface.cast::<*const ID3D11Device5Vtbl>() };
+    // SAFETY: `mt_vtbl_ptr` points to the static `ID3D11Device5Vtbl`.
+    let mt_vtbl = unsafe { &*mt_vtbl_ptr };
+
+    for create_fn in [
+        mt_vtbl.create_deferred_context,
+        mt_vtbl.create_deferred_context1,
+        mt_vtbl.create_deferred_context2,
+        mt_vtbl.create_deferred_context3,
+    ] {
+        let mut out_ctx: *mut c_void = ptr::null_mut();
+        // SAFETY: `mt_iface` is a live `ID3D11Device5` and `out_ctx` is a writable local slot.
+        let hr = unsafe { create_fn(mt_iface, 0, &raw mut out_ctx) };
+        assert_eq!(hr, S_OK);
+        assert!(!out_ctx.is_null());
+        // SAFETY: `out_ctx` is a live `ID3D11DeviceContext` returned by `CreateDeferredContext*`.
+        unsafe { release(out_ctx) };
+    }
+    // SAFETY: Releasing the initial ref on `mt_raw`.
+    unsafe { release(mt_raw.cast::<c_void>()) };
 }

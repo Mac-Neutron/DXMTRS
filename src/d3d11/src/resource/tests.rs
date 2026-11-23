@@ -3241,3 +3241,166 @@ fn dynamic_buffer_renames_on_the_caller() {
         FIRST_BUFFER + 1
     );
 }
+
+#[test]
+fn dxgi_resource_get_usage_matches_d3d11_usage_and_bind_flags() {
+    use core::{ffi::c_void, ptr};
+
+    use dxmt_util::dxgi_consts::{
+        DXGI_CPU_ACCESS_DYNAMIC, DXGI_CPU_ACCESS_NONE, DXGI_CPU_ACCESS_READ_WRITE,
+        DXGI_USAGE_RENDER_TARGET_OUTPUT, DXGI_USAGE_SHADER_INPUT, DXGI_USAGE_UNORDERED_ACCESS,
+    };
+
+    use super::{Common, Resource, ResourceDesc, ResourceKind};
+    use crate::{
+        abi::{
+            IID_IDXGI_RESOURCE,
+            vtbl::{IDXGIResource1Vtbl, IUnknownVtbl},
+        },
+        com::{E_INVALIDARG, vtbl},
+    };
+
+    let make_buf_desc = |usage, bind_flags| {
+        ResourceDesc::Buffer(D3d11BufferDesc {
+            byte_width: 256,
+            usage,
+            bind_flags,
+            cpu_access_flags: 0,
+            misc_flags: 0,
+            structure_byte_stride: 0,
+        })
+    };
+    let make_tex2d_desc = |usage, bind_flags| {
+        ResourceDesc::Texture2d(D3d11Texture2dDesc1 {
+            width: 64,
+            height: 64,
+            mip_levels: 1,
+            array_size: 1,
+            format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            sample_desc: DxgiSampleDesc {
+                count: 1,
+                quality: 0,
+            },
+            usage,
+            bind_flags,
+            cpu_access_flags: 0,
+            misc_flags: 0,
+            texture_layout: 0,
+        })
+    };
+
+    let cases = [
+        (
+            ResourceKind::DefaultBuffer,
+            D3D11_USAGE_DEFAULT,
+            D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+            DXGI_CPU_ACCESS_NONE | DXGI_USAGE_SHADER_INPUT | DXGI_USAGE_UNORDERED_ACCESS,
+            true,
+        ),
+        (
+            ResourceKind::DefaultBuffer,
+            D3D11_USAGE_DYNAMIC,
+            D3D11_BIND_CONSTANT_BUFFER,
+            DXGI_CPU_ACCESS_DYNAMIC | DXGI_USAGE_SHADER_INPUT,
+            true,
+        ),
+        (
+            ResourceKind::DefaultBuffer,
+            D3D11_USAGE_IMMUTABLE,
+            D3D11_BIND_SHADER_RESOURCE,
+            DXGI_CPU_ACCESS_NONE | DXGI_USAGE_SHADER_INPUT,
+            true,
+        ),
+        (
+            ResourceKind::StagingBuffer,
+            D3D11_USAGE_STAGING,
+            0,
+            DXGI_CPU_ACCESS_READ_WRITE,
+            true,
+        ),
+        (
+            ResourceKind::DeviceTexture,
+            D3D11_USAGE_DEFAULT,
+            D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+            DXGI_CPU_ACCESS_NONE
+                | DXGI_USAGE_RENDER_TARGET_OUTPUT
+                | DXGI_USAGE_SHADER_INPUT
+                | DXGI_USAGE_UNORDERED_ACCESS,
+            false,
+        ),
+        (
+            ResourceKind::DeviceTexture,
+            D3D11_USAGE_IMMUTABLE,
+            D3D11_BIND_SHADER_RESOURCE,
+            DXGI_CPU_ACCESS_NONE | DXGI_USAGE_SHADER_INPUT,
+            false,
+        ),
+        (
+            ResourceKind::DynamicLinearTexture,
+            D3D11_USAGE_DYNAMIC,
+            D3D11_BIND_SHADER_RESOURCE,
+            DXGI_CPU_ACCESS_DYNAMIC | DXGI_USAGE_SHADER_INPUT,
+            false,
+        ),
+        (
+            ResourceKind::DynamicTexture,
+            D3D11_USAGE_DYNAMIC,
+            D3D11_BIND_SHADER_RESOURCE,
+            DXGI_CPU_ACCESS_DYNAMIC | DXGI_USAGE_SHADER_INPUT,
+            false,
+        ),
+        (
+            ResourceKind::StagingTexture,
+            D3D11_USAGE_STAGING,
+            0,
+            DXGI_CPU_ACCESS_READ_WRITE,
+            false,
+        ),
+    ];
+
+    for (kind, usage, bind_flags, expected, is_buf) in cases {
+        let desc = if is_buf {
+            make_buf_desc(usage, bind_flags)
+        } else {
+            make_tex2d_desc(usage, bind_flags)
+        };
+        let common = Common {
+            bind_flags,
+            usage,
+            ..Common::default()
+        };
+        let raw = Resource::into_raw(common, kind, desc).cast::<c_void>();
+        // SAFETY: `raw` is a live COM `Resource` pointer.
+        let unk = unsafe { vtbl::<IUnknownVtbl>(raw) };
+        let mut dxgi_res: *mut c_void = ptr::null_mut();
+        // SAFETY: `raw` is live and `dxgi_res` is a writable output pointer.
+        let qi_hr = unsafe {
+            (unk.query_interface)(
+                raw,
+                ptr::from_ref(&IID_IDXGI_RESOURCE).cast(),
+                &raw mut dxgi_res,
+            )
+        };
+        assert_eq!(qi_hr, S_OK);
+        assert!(!dxgi_res.is_null());
+
+        // SAFETY: `dxgi_res` is a live `IDXGIResource1` tear-off.
+        let res_vtbl = unsafe { vtbl::<IDXGIResource1Vtbl>(dxgi_res) };
+        let mut got_usage = u32::MAX;
+        // SAFETY: `dxgi_res` is live and `got_usage` is a writable output slot.
+        let usage_hr = unsafe { (res_vtbl.get_usage)(dxgi_res, &raw mut got_usage) };
+        assert_eq!(usage_hr, S_OK);
+        assert_eq!(got_usage, expected);
+
+        // SAFETY: `dxgi_res` is live and null `out` must return `E_INVALIDARG`.
+        let null_hr = unsafe { (res_vtbl.get_usage)(dxgi_res, ptr::null_mut()) };
+        assert_eq!(null_hr, E_INVALIDARG);
+
+        // SAFETY: releasing the tear-off reference from `query_interface`.
+        let rc_tear = unsafe { (res_vtbl.release)(dxgi_res) };
+        assert_eq!(rc_tear, 1);
+        // SAFETY: releasing the initial reference on `raw`.
+        let rc_root = unsafe { (unk.release)(raw) };
+        assert_eq!(rc_root, 0);
+    }
+}

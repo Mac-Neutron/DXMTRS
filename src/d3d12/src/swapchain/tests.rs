@@ -70,3 +70,79 @@ fn background_leave_minimises() {
     assert_eq!(logged_fg.get(), None);
     assert_eq!(minimised_fg.get(), None);
 }
+
+#[test]
+fn invalid_pixel_format_returns_invalid_arg() {
+    use core::{ffi::c_void, ptr};
+
+    use dxmt_util::{
+        dxgi_consts::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        },
+        ext::{SampleDesc, SwapChainDesc1},
+    };
+
+    use super::{create, validate_create_desc};
+    use crate::{com::E_INVALIDARG, device::Device, queue::Queue};
+
+    // SAFETY: null `desc` is explicitly handled by `validate_create_desc`.
+    let null_res = unsafe { validate_create_desc(ptr::null()) };
+    assert_eq!(null_res.err(), Some(E_INVALIDARG));
+
+    let make_desc = |format| SwapChainDesc1 {
+        width: 64,
+        height: 64,
+        format,
+        stereo: 0,
+        sample_desc: SampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        buffer_usage: 0x20,
+        buffer_count: 2,
+        scaling: 0,
+        swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        alpha_mode: 0,
+        flags: 0,
+    };
+
+    let mut dev = Device::new_dummy();
+    let queue = Queue::new_for_test(&raw mut *dev);
+
+    for bad_format in [DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R32G32B32A32_FLOAT, 999] {
+        let desc = make_desc(bad_format);
+        // SAFETY: `desc` is a valid local `SwapChainDesc1`.
+        let bad_res = unsafe { validate_create_desc((&raw const desc).cast()) };
+        assert_eq!(bad_res.err(), Some(E_INVALIDARG));
+
+        let mut out: *mut c_void = ptr::without_provenance_mut(0xDEAD);
+        // SAFETY: `desc` is a valid local `SwapChainDesc1` and `out` is a writable local slot.
+        let hr = unsafe {
+            create(
+                ptr::null_mut(),
+                &dev,
+                &queue,
+                ptr::null_mut(),
+                (&raw const desc).cast(),
+                ptr::null(),
+                &raw mut out,
+            )
+        };
+        assert_eq!(hr, E_INVALIDARG);
+        assert!(out.is_null());
+    }
+
+    for good_format in [
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        DXGI_FORMAT_R10G10B10A2_UNORM,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+    ] {
+        let desc = make_desc(good_format);
+        // SAFETY: `desc` is a valid local `SwapChainDesc1`.
+        let good_res = unsafe { validate_create_desc((&raw const desc).cast()) };
+        assert!(good_res.is_ok());
+    }
+}

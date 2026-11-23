@@ -799,3 +799,177 @@ fn swapchain_com_methods_and_format_helpers() {
     // SAFETY: `raw` has 1 remaining reference.
     assert_eq!(unsafe { release_ref(raw) }, 0);
 }
+
+#[test]
+fn invalid_pixel_format_returns_invalid_arg() {
+    use dxmt_util::dxgi_consts::DXGI_FORMAT_R32G32B32A32_FLOAT;
+
+    use super::DXGI_FORMAT_UNKNOWN;
+
+    let hwnd = ptr::without_provenance_mut(0x1234);
+    for bad_format in [DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R32G32B32A32_FLOAT, 999] {
+        let desc = DxgiSwapChainDesc1 {
+            width: 64,
+            height: 64,
+            format: bad_format,
+            stereo: 0,
+            sample_desc: DxgiSampleDesc {
+                count: 1,
+                quality: 0,
+            },
+            buffer_usage: 0x20,
+            buffer_count: 2,
+            scaling: 0,
+            swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            alpha_mode: 0,
+            flags: 0,
+        };
+        let mut out = ptr::without_provenance_mut(0xDEAD);
+        assert_eq!(
+            create(
+                ptr::null_mut(),
+                ptr::null_mut(),
+                hwnd,
+                &raw const desc,
+                ptr::null(),
+                ptr::null_mut(),
+                &raw mut out,
+            ),
+            E_INVALIDARG
+        );
+        assert!(out.is_null());
+    }
+}
+
+#[test]
+fn resize_buffers_failure_fails_swapchain_creation() {
+    use core::sync::atomic::AtomicI32;
+
+    use dxmt_util::ext::IID_IMTL_DXGI_DEVICE;
+
+    use crate::{
+        abi::vtbl::ID3D11Device5Vtbl,
+        com::{E_FAIL, E_NOINTERFACE, Guid},
+    };
+
+    #[repr(C)]
+    struct FakeDevice {
+        vtbl: *const ID3D11Device5Vtbl,
+        ref_count: AtomicI32,
+    }
+
+    unsafe extern "system-unwind" fn fake_qi(
+        this: *mut c_void,
+        riid: *const c_void,
+        out: *mut *mut c_void,
+    ) -> Hresult {
+        if out.is_null() {
+            return E_INVALIDARG;
+        }
+        // SAFETY: `riid` points to a valid `Guid`.
+        let guid = unsafe { *riid.cast::<Guid>() };
+        if guid == IID_IMTL_DXGI_DEVICE {
+            // SAFETY: `this` points to a live `FakeDevice`.
+            unsafe {
+                (*this.cast::<FakeDevice>())
+                    .ref_count
+                    .fetch_add(1, Ordering::SeqCst)
+            };
+            // SAFETY: `out` was checked non-null.
+            unsafe { *out = this };
+            return S_OK;
+        }
+        // SAFETY: `out` was checked non-null.
+        unsafe { *out = ptr::null_mut() };
+        E_NOINTERFACE
+    }
+
+    unsafe extern "system-unwind" fn fake_add_ref(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to a live `FakeDevice`.
+        let prev = unsafe {
+            (*this.cast::<FakeDevice>())
+                .ref_count
+                .fetch_add(1, Ordering::SeqCst)
+        };
+        u32::try_from(prev + 1).unwrap_or(0)
+    }
+
+    unsafe extern "system-unwind" fn fake_release(this: *mut c_void) -> u32 {
+        // SAFETY: `this` points to a live `FakeDevice`.
+        let prev = unsafe {
+            (*this.cast::<FakeDevice>())
+                .ref_count
+                .fetch_sub(1, Ordering::SeqCst)
+        };
+        u32::try_from(prev - 1).unwrap_or(0)
+    }
+
+    unsafe extern "system-unwind" fn fake_get_immediate_context(
+        _this: *mut c_void,
+        out: *mut *mut c_void,
+    ) {
+        if !out.is_null() {
+            // SAFETY: `out` was checked non-null.
+            unsafe { *out = ptr::null_mut() };
+        }
+    }
+
+    unsafe extern "system-unwind" fn fake_create_texture2d1_fail(
+        _this: *mut c_void,
+        _desc: *const c_void,
+        _init: *const c_void,
+        out: *mut *mut c_void,
+    ) -> Hresult {
+        if !out.is_null() {
+            // SAFETY: `out` was checked non-null.
+            unsafe { *out = ptr::null_mut() };
+        }
+        E_FAIL
+    }
+
+    // SAFETY: `crate::device::impl_::VTBL` is a static struct of function pointers with no `Drop`.
+    let mut mock_vtbl: ID3D11Device5Vtbl =
+        unsafe { ptr::read(&raw const crate::device::impl_::VTBL) };
+    mock_vtbl.query_interface = fake_qi;
+    mock_vtbl.add_ref = fake_add_ref;
+    mock_vtbl.release = fake_release;
+    mock_vtbl.get_immediate_context = fake_get_immediate_context;
+    mock_vtbl.create_texture2d1 = fake_create_texture2d1_fail;
+
+    let mut fake_dev = FakeDevice {
+        vtbl: &raw const mock_vtbl,
+        ref_count: AtomicI32::new(1),
+    };
+    let desc = DxgiSwapChainDesc1 {
+        width: 64,
+        height: 64,
+        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        stereo: 0,
+        sample_desc: DxgiSampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        buffer_usage: 0x20,
+        buffer_count: 2,
+        scaling: 0,
+        swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        alpha_mode: 0,
+        flags: 0,
+    };
+    let mut out = ptr::without_provenance_mut(0xDEAD);
+    let hwnd = ptr::without_provenance_mut(0x1234);
+    assert_eq!(
+        create(
+            ptr::null_mut(),
+            (&raw mut fake_dev).cast::<c_void>(),
+            hwnd,
+            &raw const desc,
+            ptr::null(),
+            ptr::null_mut(),
+            &raw mut out,
+        ),
+        E_FAIL
+    );
+    assert!(out.is_null());
+    assert_eq!(fake_dev.ref_count.load(Ordering::SeqCst), 1);
+}

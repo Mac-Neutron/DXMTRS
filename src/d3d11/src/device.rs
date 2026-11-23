@@ -53,6 +53,8 @@ pub mod impl_;
 #[cfg(test)]
 mod tests;
 
+/// Single-threaded device creation flag (`D3D11_CREATE_DEVICE_SINGLETHREADED`).
+pub const D3D11_CREATE_DEVICE_SINGLETHREADED: u32 = 0x1;
 /// Internal flag passed by `CreateD3D10Device` to select DirectX 10 behavior.
 pub const D3D11_CREATE_DEVICE_D3D10_INTERNAL: u32 = 0x8000_0000;
 
@@ -360,7 +362,9 @@ fn create_with_core(
     let d3d11_iface = ptr::from_mut(dev).cast::<c_void>();
     dev.pipeline_cache.set_device(d3d11_iface);
     dev.immediate = Box::into_raw(Context::new_immediate(d3d11_iface));
-    dev.d3d10 = Some(d3d10::Device::new(d3d11_iface, dev.immediate.cast()));
+    if (flags & D3D11_CREATE_DEVICE_D3D10_INTERNAL) != 0 {
+        dev.d3d10 = Some(d3d10::Device::new(d3d11_iface, dev.immediate.cast()));
+    }
     raw
 }
 
@@ -441,10 +445,12 @@ pub unsafe fn container_query_interface(
     riid: *const c_void,
     out: *mut *mut c_void,
 ) -> Hresult {
-    // SAFETY: `raw` is a valid `DxgiDevice` pointer; only the field's address is taken.
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
     let d3d11 = unsafe { (&raw mut (*raw).d3d11).cast::<c_void>() };
     // SAFETY: `raw` is a valid `DxgiDevice` pointer.
-    let d3d10_device = unsafe { (*raw).d3d11.d3d10.as_deref() };
+    let is_d3d10 = unsafe { ((*raw).d3d11.flags & D3D11_CREATE_DEVICE_D3D10_INTERNAL) != 0 };
+    // SAFETY: `raw` is a valid `DxgiDevice` pointer.
+    let d3d10_device = unsafe { (*raw).d3d11.d3d10.as_deref() }.filter(|_| is_d3d10);
     let d3d10 = d3d10_device.map_or(ptr::null_mut(), |d| ptr::from_ref(d).cast_mut().cast());
     // Without a D3D10 device its IIDs are refused with no line, like the debug layer and the tools.
     let (d3d10_iids, silent): (&[Guid], &[Guid]) = if d3d10_device.is_some() {

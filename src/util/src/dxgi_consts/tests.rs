@@ -5,6 +5,10 @@ fn values_are_the_sdk_ones() {
     assert_eq!(DXGI_FORMAT_R8G8B8A8_UNORM, 28);
     assert_eq!(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, 91);
     assert_eq!(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020, 17);
+    assert_eq!(DXGI_CPU_ACCESS_NONE, 0);
+    assert_eq!(DXGI_CPU_ACCESS_DYNAMIC, 1);
+    assert_eq!(DXGI_CPU_ACCESS_READ_WRITE, 2);
+    assert_eq!(DXGI_CPU_ACCESS_SCRATCH, 3);
     assert_eq!(DXGI_USAGE_UNORDERED_ACCESS, 0x400);
     assert_eq!(DXGI_USAGE_BACK_BUFFER, 0x40);
     assert_eq!(D3D11_BIND_UNORDERED_ACCESS, 0x80);

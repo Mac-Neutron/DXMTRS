@@ -16,7 +16,7 @@ use dxmt_core::{
     ring::{DEFERRED_BLOCK, RingBump},
     staging::Staging,
 };
-use dxmt_util::private_data::PrivateData;
+use dxmt_util::{com::hresult::DXGI_ERROR_INVALID_CALL, private_data::PrivateData};
 use rustc_hash::FxHashMap;
 
 use super::{
@@ -28,6 +28,7 @@ use super::{
 use crate::{
     abi::ext::IMTLD3D11DeviceContextVtbl,
     com::{E_INVALIDARG, Hresult, Managed, S_OK, iface_of},
+    device::{D3D11_CREATE_DEVICE_SINGLETHREADED, Device},
     state::Defaults,
 };
 
@@ -344,6 +345,14 @@ const fn write_deferred_out(out: *mut *mut c_void, iface: *mut c_void) {
 
 /// Creates a deferred context (`ID3D11Device::CreateDeferredContext*`).
 pub fn create_deferred(device: *mut c_void, context_flags: u32, out: *mut *mut c_void) -> Hresult {
+    if !out.is_null() {
+        write_deferred_out(out, ptr::null_mut());
+    }
+    if let Some(dev) = Device::from_iface(device)
+        && (dev.raw_flags() & D3D11_CREATE_DEVICE_SINGLETHREADED) != 0
+    {
+        return DXGI_ERROR_INVALID_CALL;
+    }
     if out.is_null() {
         return E_INVALIDARG;
     }

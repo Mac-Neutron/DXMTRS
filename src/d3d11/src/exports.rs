@@ -26,6 +26,28 @@ use crate::{
 
 const D3D_DRIVER_TYPE_UNKNOWN: u32 = 0;
 const D3D_DRIVER_TYPE_HARDWARE: u32 = 1;
+const D3D_DRIVER_TYPE_REFERENCE: u32 = 2;
+const D3D_DRIVER_TYPE_NULL: u32 = 3;
+const D3D_DRIVER_TYPE_SOFTWARE: u32 = 4;
+const D3D_DRIVER_TYPE_WARP: u32 = 5;
+
+const fn validate_driver_type(has_adapter: bool, driver_type: u32, has_software: bool) -> Hresult {
+    if has_adapter {
+        return if driver_type == D3D_DRIVER_TYPE_UNKNOWN && !has_software {
+            S_OK
+        } else {
+            E_INVALIDARG
+        };
+    }
+    match driver_type {
+        D3D_DRIVER_TYPE_HARDWARE
+        | D3D_DRIVER_TYPE_REFERENCE
+        | D3D_DRIVER_TYPE_NULL
+        | D3D_DRIVER_TYPE_WARP => S_OK,
+        D3D_DRIVER_TYPE_SOFTWARE if has_software => S_OK,
+        _ => E_INVALIDARG,
+    }
+}
 
 /// `D3D11CoreCreateDevice`.
 ///
@@ -226,6 +248,9 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
     let mut dxgi_factory: *mut c_void = ptr::null_mut();
     let mut owned_adapter: *mut c_void = ptr::null_mut();
     let active_adapter = if adapter.is_null() {
+        if validate_driver_type(false, driver_type, !software.is_null()) < 0 {
+            return E_INVALIDARG;
+        }
         if driver_type != D3D_DRIVER_TYPE_HARDWARE {
             dxmt_util::warn!(
                 LOG,
@@ -251,6 +276,9 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
         }
         owned_adapter
     } else {
+        if validate_driver_type(true, driver_type, !software.is_null()) < 0 {
+            return E_INVALIDARG;
+        }
         // SAFETY: `adapter` is a valid `IDXGIAdapter*` (`IDXGIObject*`).
         let obj_vtbl = unsafe { *adapter.cast::<*const IDXGIObjectVtbl>() };
         // SAFETY: `obj_vtbl` is a valid `IDXGIObjectVtbl`.
@@ -265,13 +293,6 @@ pub unsafe extern "system" fn d3d11_create_device_and_swap_chain(
         };
         if hr_parent < 0 || dxgi_factory.is_null() {
             LOG.err("D3D11CreateDevice: Failed to query DXGI factory from DXGI adapter");
-            return E_INVALIDARG;
-        }
-        if driver_type != D3D_DRIVER_TYPE_UNKNOWN || !software.is_null() {
-            // SAFETY: Releasing `dxgi_factory`.
-            unsafe {
-                release(dxgi_factory);
-            }
             return E_INVALIDARG;
         }
         adapter
@@ -489,3 +510,6 @@ pub unsafe extern "system" fn dll_main(
 pub extern "C-unwind" fn mtld3d11_wait_idle() -> i32 {
     i32::from(crate::scheduler::wait_idle(10_000))
 }
+
+#[cfg(test)]
+mod tests;

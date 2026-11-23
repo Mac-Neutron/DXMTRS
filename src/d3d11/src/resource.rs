@@ -14,6 +14,7 @@ use dxmt_util::{
         D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET,
         D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_STREAM_OUTPUT, D3D11_BIND_UNORDERED_ACCESS,
         D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING,
+        DXGI_CPU_ACCESS_DYNAMIC, DXGI_CPU_ACCESS_NONE, DXGI_CPU_ACCESS_READ_WRITE,
         DXGI_RESOURCE_PRIORITY_NORMAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, DXGI_USAGE_SHADER_INPUT,
         DXGI_USAGE_UNORDERED_ACCESS,
     },
@@ -788,6 +789,24 @@ unsafe extern "system-unwind" fn dxgi_res_get_shared_handle(
     S_OK
 }
 
+const fn dxgi_usage_for(usage: u32, bind_flags: u32) -> u32 {
+    let mut dxgi_usage = match usage {
+        D3D11_USAGE_DYNAMIC => DXGI_CPU_ACCESS_DYNAMIC,
+        D3D11_USAGE_STAGING => DXGI_CPU_ACCESS_READ_WRITE,
+        _ => DXGI_CPU_ACCESS_NONE,
+    };
+    if (bind_flags & (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_CONSTANT_BUFFER)) != 0 {
+        dxgi_usage |= DXGI_USAGE_SHADER_INPUT;
+    }
+    if (bind_flags & D3D11_BIND_RENDER_TARGET) != 0 {
+        dxgi_usage |= DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    }
+    if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 {
+        dxgi_usage |= DXGI_USAGE_UNORDERED_ACCESS;
+    }
+    dxgi_usage
+}
+
 unsafe extern "system-unwind" fn dxgi_res_get_usage(this: *mut c_void, out: *mut u32) -> Hresult {
     if out.is_null() {
         return E_INVALIDARG;
@@ -796,19 +815,7 @@ unsafe extern "system-unwind" fn dxgi_res_get_usage(this: *mut c_void, out: *mut
     let outer = unsafe { (*this.cast::<TearOff<IDXGIResource1Vtbl>>()).outer };
     // SAFETY: `outer` is a live `Resource`.
     let res = unsafe { Resource::from_ptr(outer) };
-    let mut usage = 0u32;
-    if res.kind == ResourceKind::DefaultBuffer {
-        if (res.common.bind_flags & D3D11_BIND_RENDER_TARGET) != 0 {
-            usage |= DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        }
-        if (res.common.bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 {
-            usage |= DXGI_USAGE_UNORDERED_ACCESS;
-        }
-        if (res.common.bind_flags & (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_CONSTANT_BUFFER)) != 0
-        {
-            usage |= DXGI_USAGE_SHADER_INPUT;
-        }
-    }
+    let usage = dxgi_usage_for(res.common.usage, res.common.bind_flags);
     // SAFETY: `out` was checked non-null.
     unsafe { *out = usage };
     S_OK

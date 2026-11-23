@@ -914,6 +914,9 @@ fn create_impl(
     unsafe { *out = ptr::null_mut() };
     // SAFETY: `desc` is non-null, the caller's; read unaligned.
     let mut d = unsafe { desc.cast::<SwapChainDesc1>().read_unaligned() };
+    if convert_format(d.format) == WMT_PIXEL_FORMAT_INVALID {
+        return E_INVALIDARG;
+    }
     if d.width == 0 || d.height == 0 {
         let (w, h) = SwapChain::window_size(hwnd);
         d.width = w;
@@ -1073,7 +1076,10 @@ fn create_impl(
             },
         ),
     });
-    let _ = sc.resize_buffers_impl(0, d.width, d.height, DXGI_FORMAT_UNKNOWN, d.flags);
+    let hr = sc.resize_buffers_impl(0, d.width, d.height, DXGI_FORMAT_UNKNOWN, d.flags);
+    if hr < 0 {
+        return hr;
+    }
     if fs_desc.windowed == 0 {
         // SAFETY: a null target: the window's own output.
         let _ = unsafe { fullscreen::enter_fullscreen_mode(&*sc, ptr::null_mut()) };
