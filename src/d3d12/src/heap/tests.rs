@@ -8,11 +8,15 @@ use winemetal_wire::{WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_RESOURCE_STORAGE_MOD
 
 use crate::{
     abi::{
-        barrier::{D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD},
+        barrier::{
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_GPU_UPLOAD, D3D12_HEAP_TYPE_READBACK,
+            D3D12_HEAP_TYPE_UPLOAD,
+        },
         objects::{D3D12_HEAP_FLAG_ALLOW_DISPLAY, HeapDesc},
         resource::{
-            D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
-            D3D12_MEMORY_POOL_UNKNOWN, HeapProperties,
+            D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
+            D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER,
+            D3D12_MEMORY_POOL_L0, D3D12_MEMORY_POOL_UNKNOWN, HeapProperties,
         },
     },
     com::{
@@ -198,4 +202,96 @@ fn native_cpu_heap_through_hooks() {
         )
     };
     assert_eq!(hr_map, E_NOTIMPL);
+}
+
+#[test]
+fn gpu_upload_heap_validation_and_storage() {
+    let gpu_upload_props = HeapProperties {
+        r#type: D3D12_HEAP_TYPE_GPU_UPLOAD,
+        cpu_page_property: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        memory_pool_preference: D3D12_MEMORY_POOL_UNKNOWN,
+        creation_node_mask: 1,
+        visible_node_mask: 1,
+    };
+    assert!(heap::is_cpu_visible_heap(&gpu_upload_props));
+    assert!(!heap::is_private_heap(&gpu_upload_props, true));
+    assert_eq!(
+        heap::validate_heap_properties(&gpu_upload_props, 0, false),
+        S_OK
+    );
+    assert_eq!(
+        heap::validate_heap_properties(&gpu_upload_props, 0, true),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        heap::validate_heap_properties(
+            &gpu_upload_props,
+            D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER,
+            false
+        ),
+        E_INVALIDARG
+    );
+
+    let bad_page = HeapProperties {
+        cpu_page_property: D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
+        ..gpu_upload_props
+    };
+    assert_eq!(
+        heap::validate_heap_properties(&bad_page, 0, false),
+        E_INVALIDARG
+    );
+
+    let bad_pool = HeapProperties {
+        memory_pool_preference: D3D12_MEMORY_POOL_L0,
+        ..gpu_upload_props
+    };
+    assert_eq!(
+        heap::validate_heap_properties(&bad_pool, 0, false),
+        E_INVALIDARG
+    );
+
+    let gpu_upload_desc = HeapDesc {
+        size_in_bytes: 5000,
+        properties: gpu_upload_props,
+        alignment: 0,
+        flags: 0,
+    };
+    assert_eq!(
+        heap::plan_heap_allocation(&gpu_upload_desc, true, false),
+        HeapAllocChoice::MetalHeap {
+            size: 65536,
+            options: WMT_RESOURCE_STORAGE_MODE_SHARED,
+        }
+    );
+    assert_eq!(
+        heap::plan_heap_allocation(&gpu_upload_desc, true, true),
+        HeapAllocChoice::NativeCpuBuffer {
+            aligned_size: 65536,
+        }
+    );
+
+    // SAFETY: Testing `CreateHeap` probe with `GPU_UPLOAD` and null out-pointer returns `S_FALSE`.
+    let hr_probe = unsafe {
+        heap::create_heap(
+            ptr::null_mut(),
+            (&raw const gpu_upload_desc).cast(),
+            ptr::from_ref(&IID_ID3D12_HEAP).cast(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(hr_probe, S_FALSE);
+
+    let mut numa_dev = crate::device::Device::new_dummy();
+    numa_dev.advertise_numa = true;
+    let numa_ptr: *mut crate::device::Device = &raw mut *numa_dev;
+    // SAFETY: Testing `CreateHeap` with `GPU_UPLOAD` on a NUMA device rejects with `E_INVALIDARG`.
+    let hr_numa = unsafe {
+        heap::create_heap(
+            numa_ptr.cast(),
+            (&raw const gpu_upload_desc).cast(),
+            ptr::from_ref(&IID_ID3D12_HEAP).cast(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(hr_numa, E_INVALIDARG);
 }

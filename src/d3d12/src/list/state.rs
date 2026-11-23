@@ -12,8 +12,8 @@ use std::sync::Arc;
 use dxmt_core::{format::depth_stencil_planar_flags, topology};
 use dxmt_util::private_data;
 use winemetal_wire::{
-    WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTScissorRect,
-    WMTViewport,
+    WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE,
+    WMT_STORE_ACTION_STORE, WMTScissorRect, WMTViewport,
 };
 
 use crate::{
@@ -165,6 +165,14 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.render_pass = List::empty_render_pass();
     list.deferred_clears.clear();
     list.pending_resolves.clear();
+    list.render_pass_state.reset();
+    list.discarded_resources.clear();
+    if !list.allocator.is_null() {
+        // SAFETY: `list.allocator` is valid while `list` is recording.
+        let alloc = unsafe { &mut *list.allocator };
+        alloc.discard_tracking = false;
+        alloc.discard_purges.clear();
+    }
     list.primitive_topology = 0;
     list.bound_pso = 0;
     list.bound_dss = u64::MAX;
@@ -201,12 +209,14 @@ pub fn reset_state(list: &mut List, initial_state: *mut c_void) {
     list.vertex_buffers = [(0, 0, 0); 32];
     list.ib_cache = [(0, 0, 0); 4];
     list.ib_cache_next = 0;
+    list.ib_cache_generation = 0;
     list.static_sampler_cache = [(ptr::null(), 0); 4];
     list.static_sampler_cache_next = 0;
     list.gpu_vb_table_cache = None;
     list.gpu_graphics_root_args_offset = None;
     list.gpu_compute_root_args_offset = None;
     list.index_buffer = 0;
+    list.index_buffer_va = 0;
     list.index_buffer_offset = 0;
     list.index_buffer_size = 0;
     list.index_buffer_format = u32::from(WMT_INDEX_TYPE_U_INT16);
@@ -1521,9 +1531,16 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
         let ibv = unsafe { view.cast::<D3d12IndexBufferView>().read_unaligned() };
         let va = ibv.buffer_location;
         if va != 0 {
-            if va == list.index_buffer_size
+            // SAFETY: `list.device` is a valid `Device`.
+            let dev = unsafe { &*list.device };
+            let generation = dev.residency.va_generation.load(Ordering::Acquire);
+            if generation != list.ib_cache_generation {
+                list.ib_cache = [(0, 0, 0); 4];
+                list.ib_cache_generation = generation;
+            } else if va == list.index_buffer_va
                 && list.index_buffer != 0
                 && ibv.format == list.sm50_index_buffer_format
+                && u64::from(ibv.size_in_bytes) == list.index_buffer_size
             {
                 return;
             }
@@ -1534,25 +1551,24 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
                     break;
                 }
             }
-            if found.is_none() {
-                // SAFETY: `list.device` is a valid `Device`.
-                let dev = unsafe { &*list.device };
-                if let Some((buf, offset)) = residency::lookup_buffer_by_va(dev, va) {
-                    let mtl_buf = buf.current().map_or(0, |a| a.buffer());
-                    let base_va = va.wrapping_sub(offset);
-                    let end_va = base_va.saturating_add(buf.length());
-                    if mtl_buf != 0 && end_va > base_va {
-                        let slot = usize::from(list.ib_cache_next) & 3;
-                        list.ib_cache[slot] = (base_va, end_va, mtl_buf);
-                        list.ib_cache_next = list.ib_cache_next.wrapping_add(1);
-                    }
-                    found = Some((mtl_buf, offset));
+            if found.is_none()
+                && let Some((buf, offset)) = residency::lookup_buffer_by_va(dev, va)
+            {
+                let mtl_buf = buf.current().map_or(0, |a| a.buffer());
+                let base_va = va.wrapping_sub(offset);
+                let end_va = base_va.saturating_add(buf.length());
+                if mtl_buf != 0 && end_va > base_va {
+                    let slot = usize::from(list.ib_cache_next) & 3;
+                    list.ib_cache[slot] = (base_va, end_va, mtl_buf);
+                    list.ib_cache_next = list.ib_cache_next.wrapping_add(1);
                 }
+                found = Some((mtl_buf, offset));
             }
             if let Some((mtl_buf, offset)) = found {
-                list.index_buffer_size = va;
+                list.index_buffer_va = va;
                 list.index_buffer = mtl_buf;
                 list.index_buffer_offset = offset;
+                list.index_buffer_size = u64::from(ibv.size_in_bytes);
                 list.index_buffer_format = u32::from(topology::index_type_and_stride(ibv.format).0);
                 list.sm50_index_buffer_format = ibv.format;
                 list.dirty_state.insert(DirtyFlags::INDEX_BUFFER);
@@ -1560,6 +1576,7 @@ pub unsafe fn ia_set_index_buffer(this: *mut c_void, view: *const c_void) {
             }
         }
     }
+    list.index_buffer_va = 0;
     list.index_buffer_size = 0;
     list.index_buffer = 0;
     list.index_buffer_offset = 0;
@@ -1705,25 +1722,35 @@ pub unsafe fn om_set_render_targets(
             if let Some(desc) = unsafe { descriptor_heap::render_target(dsv) }
                 && let Some(tex) = desc.texture
             {
-                record_pass_write(&mut new_pass, Arc::as_ptr(&tex).cast::<c_void>());
                 let planar =
                     u8::try_from(depth_stencil_planar_flags(desc.view.format())).unwrap_or(0);
+                let ro = u8::try_from(desc.flags & D3D12_DSV_READONLY_MASK).unwrap_or(0);
+                if (planar & !ro) != 0 {
+                    record_pass_write(&mut new_pass, Arc::as_ptr(&tex).cast::<c_void>());
+                }
                 let view_ref = TextureViewRef::from_texture(&tex, desc.view);
                 if (planar & 1) != 0 {
                     new_pass.depth.attachment.clone_from(&view_ref);
                     new_pass.depth.depth_plane = 0;
                     new_pass.depth.load_action = WMT_LOAD_ACTION_LOAD;
-                    new_pass.depth.store_action = WMT_STORE_ACTION_STORE;
+                    new_pass.depth.store_action = if (ro & 1) != 0 {
+                        WMT_STORE_ACTION_DONT_CARE
+                    } else {
+                        WMT_STORE_ACTION_STORE
+                    };
                 }
                 if (planar & 2) != 0 {
                     new_pass.stencil.attachment = view_ref;
                     new_pass.stencil.depth_plane = 0;
                     new_pass.stencil.load_action = WMT_LOAD_ACTION_LOAD;
-                    new_pass.stencil.store_action = WMT_STORE_ACTION_STORE;
+                    new_pass.stencil.store_action = if (ro & 2) != 0 {
+                        WMT_STORE_ACTION_DONT_CARE
+                    } else {
+                        WMT_STORE_ACTION_STORE
+                    };
                 }
                 new_pass.dsv_planar_flags = planar;
-                new_pass.dsv_readonly_flags =
-                    u8::try_from(desc.flags & D3D12_DSV_READONLY_MASK).unwrap_or(0);
+                new_pass.dsv_readonly_flags = ro;
                 width = width.min(desc.width);
                 height = height.min(desc.height);
                 array_length = array_length.max(desc.render_target_array_length);
@@ -1904,3 +1931,6 @@ pub unsafe fn rs_set_shading_rate_image(_this: *mut c_void, shading_rate_image: 
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

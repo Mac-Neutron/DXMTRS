@@ -32,12 +32,12 @@ use winemetal_wire::{
     WMT_COMPUTE_COMMAND_SET_BUFFER, WMT_COMPUTE_COMMAND_SET_BYTES, WMT_COMPUTE_COMMAND_SET_PSO,
     WMT_COMPUTE_COMMAND_SET_TEXTURE, WMT_COMPUTE_COMMAND_USE_RESOURCE,
     WMT_INDIRECT_COMMAND_TYPE_CONCURRENT_DISPATCH, WMT_INDIRECT_COMMAND_TYPE_DRAW,
-    WMT_INDIRECT_COMMAND_TYPE_DRAW_INDEXED, WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD,
-    WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_EXECUTE_COMMANDS_IN_BUFFER, WMT_RENDER_COMMAND_NOP,
-    WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE, WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES,
-    WMT_RENDER_COMMAND_SET_PSO, WMT_RENDER_COMMAND_SET_SCISSOR_RECT,
-    WMT_RENDER_COMMAND_SET_STENCIL_REF, WMT_RENDER_COMMAND_SET_VIEWPORT,
-    WMT_RENDER_COMMAND_USE_RESOURCE, WMT_RENDER_STAGE_VERTEX,
+    WMT_INDIRECT_COMMAND_TYPE_DRAW_INDEXED, WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_DONT_CARE,
+    WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_EXECUTE_COMMANDS_IN_BUFFER,
+    WMT_RENDER_COMMAND_NOP, WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
+    WMT_RENDER_COMMAND_SET_FRAGMENT_BYTES, WMT_RENDER_COMMAND_SET_PSO,
+    WMT_RENDER_COMMAND_SET_SCISSOR_RECT, WMT_RENDER_COMMAND_SET_STENCIL_REF,
+    WMT_RENDER_COMMAND_SET_VIEWPORT, WMT_RENDER_COMMAND_USE_RESOURCE, WMT_RENDER_STAGE_VERTEX,
     WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_RESOURCE_STORAGE_MODE_PRIVATE,
     WMT_RESOURCE_STORAGE_MODE_SHARED, WMT_RESOURCE_USAGE_READ, WMT_RESOURCE_USAGE_WRITE,
     WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE3D, WMTBufferInfo, WMTComputePipelineInfo,
@@ -168,6 +168,8 @@ pub struct Allocator {
     pub clear_rtv: Option<ClearRtv>,
     pub copy_temp_allocator: Option<RingBump>,
     pub copy_temp_version: u64,
+    pub discard_tracking: bool,
+    pub discard_purges: Vec<*const c_void>,
 }
 
 impl ComRefCounted for Allocator {
@@ -260,11 +262,11 @@ fn fold_clear_into_render(c: &ClearEncoderData, r: &mut RenderEncoderData, apply
         return false;
     }
     if slot == CLEAR_DEPTH_STENCIL {
-        if apply && (c.clear_dsv & 1) != 0 {
+        if apply && (c.clear_dsv & 1) != 0 && r.depth.load_action != WMT_LOAD_ACTION_DONT_CARE {
             r.depth.load_action = WMT_LOAD_ACTION_CLEAR;
             r.depth.clear_depth = c.depth_stencil.0;
         }
-        if apply && (c.clear_dsv & 2) != 0 {
+        if apply && (c.clear_dsv & 2) != 0 && r.stencil.load_action != WMT_LOAD_ACTION_DONT_CARE {
             r.stencil.load_action = WMT_LOAD_ACTION_CLEAR;
             r.stencil.clear_stencil = c.depth_stencil.1;
         }
@@ -272,8 +274,10 @@ fn fold_clear_into_render(c: &ClearEncoderData, r: &mut RenderEncoderData, apply
     }
     if apply {
         let idx = usize::try_from(slot).unwrap_or(0);
-        r.colors[idx].load_action = WMT_LOAD_ACTION_CLEAR;
-        r.colors[idx].clear_color = c.color;
+        if r.colors[idx].load_action != WMT_LOAD_ACTION_DONT_CARE {
+            r.colors[idx].load_action = WMT_LOAD_ACTION_CLEAR;
+            r.colors[idx].clear_color = c.color;
+        }
     }
     true
 }
@@ -322,6 +326,8 @@ impl Allocator {
         self.encoder_current = ptr::null_mut();
         self.encoder_last = ptr::null_mut();
         self.encoder_count = 0;
+        self.discard_tracking = false;
+        self.discard_purges.clear();
 
         for pooled in self.icb.drain(..) {
             self.icb_free.entry(pooled.key).or_default().push(pooled);
@@ -497,6 +503,8 @@ impl Allocator {
         self.group.clear();
         self.transitions.clear();
         self.clears_from = ptr::null_mut();
+        self.discard_tracking = false;
+        self.discard_purges.clear();
 
         let mut head = Box::new(EncoderData::new(EncoderType::Null, 0));
         let head_ptr: *mut EncoderData = &raw mut *head;
@@ -745,6 +753,10 @@ impl Allocator {
     pub fn writes(&mut self, resource: *const c_void) {
         if self.encoder_current.is_null() {
             return;
+        }
+        if self.discard_tracking && !resource.is_null() && !self.discard_purges.contains(&resource)
+        {
+            self.discard_purges.push(resource);
         }
         // SAFETY: `self.encoder_current` is a live `EncoderData` node.
         let enc = unsafe { &mut *self.encoder_current };
@@ -1620,6 +1632,8 @@ pub unsafe fn create_command_allocator(
         clear_rtv: None,
         copy_temp_allocator,
         copy_temp_version: 0,
+        discard_tracking: false,
+        discard_purges: Vec::new(),
     });
     let raw_alloc = Box::into_raw(boxed);
 

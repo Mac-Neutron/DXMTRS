@@ -7,8 +7,9 @@ use dxmt_core::resource::{Texture, TextureAllocationFlags, TextureViewDescriptor
 use dxmt_util::com;
 use winemetal_sys::Obj;
 use winemetal_wire::{
-    WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE,
-    WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE2D, WMTClearColor, WMTTextureInfo,
+    WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD,
+    WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE2D, WMTClearColor,
+    WMTTextureInfo,
 };
 
 use super::{Allocator, CPU_HEAP_SIZE, cast_allocator, create_command_allocator};
@@ -463,6 +464,132 @@ fn reset_refused_while_recording() {
     assert_eq!(hr_ok, com::S_OK);
     assert_eq!(alloc.spilled_cpu_heap.len(), 0);
     assert_eq!(alloc.cpu_heap_offset, 0);
+
+    // SAFETY: `raw` is the allocator COM pointer created at the start of the test.
+    unsafe { release_test_allocator(raw) };
+}
+
+#[test]
+fn fold_clears_preserves_dont_care_and_drops_dead_clear() {
+    let (raw, alloc_ptr) = new_test_allocator();
+    // SAFETY: `alloc_ptr` is valid for the duration of the test before `release_test_allocator`.
+    let alloc = unsafe { &mut *alloc_ptr };
+    let _head = alloc.start_record().expect("start_record should succeed");
+
+    let view_rt0 = make_test_view(70, 0);
+    let view_ds = make_test_view(260, 0);
+
+    for (res, view, clear_dsv) in [
+        (view_rt0.descriptor_ptr(), &view_rt0, 0_u32),
+        (view_ds.descriptor_ptr(), &view_ds, 3_u32),
+    ] {
+        let ptr = alloc
+            .allocate_cpu_heap(
+                size_of::<ClearEncoderData>(),
+                align_of::<ClearEncoderData>(),
+            )
+            .cast::<c_void>()
+            .cast::<ClearEncoderData>();
+        assert!(!ptr.is_null());
+        let mut base = EncoderData::new(EncoderType::Clear, 0);
+        base.writes_unknown = false;
+        base.barriers = alloc.barriers;
+        base.barriers_last = alloc.barriers;
+        let clear = ClearEncoderData {
+            base,
+            color: WMTClearColor {
+                r: 1.0,
+                g: 0.25,
+                b: 0.0,
+                a: 1.0,
+            },
+            depth_stencil: (0.5, 9),
+            attachment: Some(view.clone()),
+            clear_dsv,
+            array_length: 1,
+            width: 64,
+            height: 64,
+            depth_plane: 0,
+        };
+        // SAFETY: `ptr` is valid aligned CPU heap memory for `ClearEncoderData`.
+        unsafe { ptr::write(ptr, clear) };
+        alloc.encoder_current = ptr.cast::<EncoderData>();
+        alloc.writes(res);
+        alloc.invalidate_current_pass();
+    }
+
+    let r_ptr = alloc
+        .allocate_cpu_heap(
+            size_of::<RenderEncoderData>(),
+            align_of::<RenderEncoderData>(),
+        )
+        .cast::<c_void>()
+        .cast::<RenderEncoderData>();
+    assert!(!r_ptr.is_null());
+    let mut r_base = EncoderData::new(EncoderType::Render, 0);
+    r_base.writes_unknown = false;
+    r_base.barriers = alloc.barriers;
+    r_base.barriers_last = alloc.barriers;
+
+    let mut colors: [RenderEncoderColorAttachmentData; 8] = Default::default();
+    colors[0] = RenderEncoderColorAttachmentData {
+        attachment: Some(view_rt0),
+        load_action: WMT_LOAD_ACTION_DONT_CARE,
+        store_action: WMT_STORE_ACTION_STORE,
+        ..Default::default()
+    };
+    let depth = RenderEncoderDepthAttachmentData {
+        attachment: Some(view_ds.clone()),
+        load_action: WMT_LOAD_ACTION_DONT_CARE,
+        store_action: WMT_STORE_ACTION_DONT_CARE,
+        ..Default::default()
+    };
+    let stencil = RenderEncoderStencilAttachmentData {
+        attachment: Some(view_ds),
+        load_action: WMT_LOAD_ACTION_DONT_CARE,
+        store_action: WMT_STORE_ACTION_DONT_CARE,
+        ..Default::default()
+    };
+    let render_init = RenderEncoderData {
+        base: r_base,
+        colors,
+        depth,
+        stencil,
+        default_raster_sample_count: 1,
+        render_target_array_length: 1,
+        render_target_height: 64,
+        render_target_width: 64,
+        // SAFETY: `WmtcmdRenderNop` is a C POD struct valid when zeroed.
+        cmd_head: unsafe { core::mem::zeroed() },
+        cmd_tail: ptr::null_mut(),
+        dsv_planar_flags: 3,
+        dsv_readonly_flags: 0,
+        render_target_count: 1,
+        use_visibility_result: false,
+        visibility_buffer: 0,
+        use_tessellation: false,
+        use_geometry: false,
+        uav_writes: false,
+        // SAFETY: `WmtcmdComputeNop` is a C POD struct valid when zeroed.
+        pre_head: unsafe { core::mem::zeroed() },
+        pre_tail: ptr::null_mut(),
+    };
+    // SAFETY: `r_ptr` points to valid CPU heap memory for `RenderEncoderData`.
+    unsafe { ptr::write(r_ptr, render_init) };
+
+    // SAFETY: `r_ptr` was just initialized above.
+    let folded = alloc.fold_clears(unsafe { &mut *r_ptr });
+    assert_eq!(folded, 2);
+
+    // SAFETY: `r_ptr` remains valid in the CPU heap.
+    let render = unsafe { &*r_ptr };
+    assert_eq!(render.colors[0].load_action, WMT_LOAD_ACTION_DONT_CARE);
+    assert_eq!(render.depth.load_action, WMT_LOAD_ACTION_DONT_CARE);
+    assert_eq!(render.stencil.load_action, WMT_LOAD_ACTION_DONT_CARE);
+
+    alloc.invalidate_current_pass();
+    let remaining_passes = alloc.end_record().expect("end_record should succeed");
+    assert_eq!(remaining_passes, 1);
 
     // SAFETY: `raw` is the allocator COM pointer created at the start of the test.
     unsafe { release_test_allocator(raw) };

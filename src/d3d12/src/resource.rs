@@ -3,17 +3,13 @@
 pub mod buffer;
 pub mod texture;
 
-use core::{
-    ffi::c_void,
-    mem::ManuallyDrop,
-    ptr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{ffi::c_void, mem::ManuallyDrop, ptr};
 use std::sync::Arc;
 
 use dxmt_core::{
     format::{
-        CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER, MTL_DXGI_FORMAT_STENCIL_PLANER,
+        CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
+        MTL_DXGI_FORMAT_STENCIL_PLANER, MtlDxgiFormatDesc,
     },
     resource::{
         Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor,
@@ -30,14 +26,14 @@ use dxmt_util::{
 use winemetal_sys::{
     MTLDevice_heapTextureSizeAndAlign, MTLDevice_supportsFamily,
     wire::{
-        WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_R16_FLOAT,
-        WMT_PIXEL_FORMAT_R16_SINT, WMT_PIXEL_FORMAT_R16_SNORM, WMT_PIXEL_FORMAT_R16_UINT,
-        WMT_PIXEL_FORMAT_R16_UNORM, WMT_PIXEL_FORMAT_R32_FLOAT, WMT_PIXEL_FORMAT_R32_SINT,
-        WMT_PIXEL_FORMAT_R32_UINT, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
-        WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
-        WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_ATOMIC,
-        WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTGPU_FAMILY_APPLE8,
-        WMTTextureInfo,
+        WMT_PIXEL_FORMAT_DEPTH16_UNORM, WMT_PIXEL_FORMAT_DEPTH32_FLOAT, WMT_PIXEL_FORMAT_INVALID,
+        WMT_PIXEL_FORMAT_R16_FLOAT, WMT_PIXEL_FORMAT_R16_SINT, WMT_PIXEL_FORMAT_R16_SNORM,
+        WMT_PIXEL_FORMAT_R16_UINT, WMT_PIXEL_FORMAT_R16_UNORM, WMT_PIXEL_FORMAT_R32_FLOAT,
+        WMT_PIXEL_FORMAT_R32_SINT, WMT_PIXEL_FORMAT_R32_UINT,
+        WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED, WMT_TEXTURE_FLAG_LOSSLESS,
+        WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMT_TEXTURE_USAGE_RENDER_TARGET,
+        WMT_TEXTURE_USAGE_SHADER_ATOMIC, WMT_TEXTURE_USAGE_SHADER_READ,
+        WMT_TEXTURE_USAGE_SHADER_WRITE, WMTGPU_FAMILY_APPLE8, WMTTextureInfo,
     },
 };
 
@@ -907,6 +903,7 @@ pub fn extract_entire_dsv(desc: &ResourceDesc) -> Result<DepthStencilViewDesc, H
 pub unsafe fn populate_texture_info_opt(
     device: *const Device,
     desc: &ResourceDesc,
+    castable_formats: &[u32],
     info: &mut WMTTextureInfo,
 ) -> Hresult {
     let (hr, fmt) = dxmt_core::format::query_dxgi(desc.format);
@@ -969,6 +966,9 @@ pub unsafe fn populate_texture_info_opt(
     let mtl_opt = dev_opt.and_then(|d| d.mtl.as_ref());
 
     let mut usage = WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+    if !castable_formats.is_empty() {
+        usage |= WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+    }
     if (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) != 0 {
         usage |= WMT_TEXTURE_USAGE_RENDER_TARGET;
     }
@@ -1012,6 +1012,7 @@ pub unsafe fn populate_texture_info_opt(
     let uav = (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0;
     info.flags = 0;
     if lossless(settings().d3d12_compression, info.pixel_format, uav)
+        && !castable_formats_disable_lossless(desc.format, castable_formats)
         && (desc.flags & D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER) == 0
         && desc.layout == D3D12_TEXTURE_LAYOUT_UNKNOWN
         && desc.alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT
@@ -1066,14 +1067,94 @@ pub fn populate_wmt_texture_info(
     info: &mut WMTTextureInfo,
 ) -> Hresult {
     // SAFETY: `device` is a valid reference.
-    unsafe { populate_texture_info_opt(ptr::from_ref(device), desc, info) }
+    unsafe { populate_texture_info_opt(ptr::from_ref(device), desc, &[], info) }
 }
 
-fn ignore_castable_formats(num_castable_formats: u32) {
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if num_castable_formats != 0 && !WARNED.swap(true, Ordering::Relaxed) {
-        crate::warn!("CreateCommittedResource3/CreatePlacedResource2: castable formats ignored");
+/// Returns whether `castable_formats` contains any format outside `base_format`'s family.
+///
+/// Cross-layout casts (such as viewing `R8G8B8A8_UNORM` as `R32_UINT` or `R16G16_UINT`)
+/// require disabling Apple GPU lossless compression so view writes cannot corrupt compressed
+/// tile metadata.
+#[must_use]
+pub fn castable_formats_disable_lossless(base_format: u32, castable_formats: &[u32]) -> bool {
+    if castable_formats.is_empty() {
+        return false;
     }
+    let Some(base_family) = format_family(base_format) else {
+        return true;
+    };
+    castable_formats
+        .iter()
+        .any(|&fmt| format_family(fmt).as_ref() != Some(&base_family))
+}
+
+/// Validates a `castable_formats` slice against `desc`.
+///
+/// Rejects buffers with castable formats, unknown or unsupported DXGI formats, and formats
+/// whose texel or block byte size, compression class, or plane count differs from `desc.format`.
+#[must_use]
+pub fn validate_castable_formats(desc: &ResourceDesc, castable_formats: &[u32]) -> Hresult {
+    if castable_formats.is_empty() {
+        return S_OK;
+    }
+    if desc.dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        return E_INVALIDARG;
+    }
+    let (base_hr, base_fmt) = dxmt_core::format::query_dxgi(desc.format);
+    if base_hr != S_OK || base_fmt.pixel_format == WMT_PIXEL_FORMAT_INVALID {
+        return E_INVALIDARG;
+    }
+    let base_bytes = format_texel_bytes(desc.format, base_fmt);
+    if base_bytes == 0 {
+        return E_INVALIDARG;
+    }
+    let base_bc = (base_fmt.flag & MTL_DXGI_FORMAT_BC) != 0;
+    for &fmt in castable_formats {
+        let (hr, info) = dxmt_core::format::query_dxgi(fmt);
+        if hr != S_OK || info.pixel_format == WMT_PIXEL_FORMAT_INVALID {
+            return E_INVALIDARG;
+        }
+        let fmt_bytes = format_texel_bytes(fmt, info);
+        let fmt_bc = (info.flag & MTL_DXGI_FORMAT_BC) != 0;
+        if fmt_bytes != base_bytes
+            || fmt_bc != base_bc
+            || info.planar_count != base_fmt.planar_count
+        {
+            return E_INVALIDARG;
+        }
+    }
+    S_OK
+}
+
+/// Reads `num_castable_formats` `DXGI_FORMAT` values from a caller-supplied array.
+///
+/// # Errors
+///
+/// Returns `E_INVALIDARG` when `num_castable_formats > 0` and `castable_formats` is null.
+///
+/// # Safety
+///
+/// When `num_castable_formats > 0` and `castable_formats` is non-null, `castable_formats` must
+/// point to at least `num_castable_formats` readable `u32` elements.
+pub unsafe fn read_castable_formats(
+    num_castable_formats: u32,
+    castable_formats: *const u32,
+) -> Result<Vec<u32>, Hresult> {
+    if num_castable_formats == 0 {
+        return Ok(Vec::new());
+    }
+    if castable_formats.is_null() {
+        return Err(E_INVALIDARG);
+    }
+    let count = usize::try_from(num_castable_formats).map_err(|_| E_INVALIDARG)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        // SAFETY: `i` is within the caller's `num_castable_formats` element array.
+        let elem = unsafe { castable_formats.add(i) };
+        // SAFETY: `elem` points to a readable `u32`.
+        out.push(unsafe { elem.read_unaligned() });
+    }
+    Ok(out)
 }
 
 /// `ID3D12Device::CreateConstantBufferView` (`d3d12_device.cpp:1023`).
@@ -1288,57 +1369,24 @@ pub unsafe extern "system-unwind" fn create_committed_resource(
     if heap_props.is_null() || desc.is_null() {
         return E_INVALIDARG;
     }
-    // SAFETY: `heap_props` and `desc` were checked non-null above.
-    let hp = unsafe { &*heap_props.cast::<HeapProperties>() };
+    // SAFETY: `heap_props` was checked non-null above.
+    let hp = unsafe { heap_props.cast::<HeapProperties>().read_unaligned() };
     // SAFETY: `desc` was checked non-null above.
-    let rd = unsafe { &*desc.cast::<ResourceDesc>() };
-    let dev_ptr = this.cast::<Device>();
-    // SAFETY: if non-null, `dev_ptr` is a valid `Device` pointer.
-    let advertise_numa = (!dev_ptr.is_null()) && unsafe { (*dev_ptr).advertise_numa };
-
-    let hr = validate_heap_properties(hp, heap_flags, advertise_numa);
-    if hr != S_OK {
-        return hr;
-    }
-    let hr = validate_resource_descs(rd, hp);
-    if hr != S_OK {
-        return hr;
-    }
-    let hr = validate_resource_states(initial_state, hp);
-    if hr != S_OK {
-        return hr;
-    }
-
-    match rd.dimension {
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE2D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            if initial_state == D3D12_RESOURCE_STATE_RENDER_TARGET
-                && (rd.flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) == 0
-            {
-                return E_INVALIDARG;
-            }
-            // SAFETY: pointers are validated caller inputs.
-            unsafe {
-                texture::create(
-                    dev_ptr,
-                    (hp, heap_flags),
-                    rd,
-                    optimized_clear,
-                    None,
-                    &[],
-                    (riid, resource),
-                )
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            if !optimized_clear.is_null() {
-                return E_INVALIDARG;
-            }
-            // SAFETY: pointers are validated caller inputs.
-            unsafe { buffer::create(dev_ptr, hp, heap_flags, rd, None, riid, resource) }
-        }
-        _ => E_INVALIDARG,
+    let rd = unsafe { desc.cast::<ResourceDesc>().read_unaligned() };
+    // SAFETY: pointers are validated caller inputs.
+    unsafe {
+        create_resource_inner(&CreateArgs {
+            device: this.cast::<Device>(),
+            heap_props: &hp,
+            heap_flags,
+            desc: &rd,
+            initial_state,
+            optimized_clear,
+            placed: None,
+            castable_formats: &[],
+            riid,
+            resource,
+        })
     }
 }
 
@@ -1370,64 +1418,21 @@ pub unsafe extern "system-unwind" fn create_placed_resource(
     // SAFETY: `heap_obj` is a non-null `ID3D12Heap` pointer.
     let hdesc = unsafe { heap_desc(heap_obj) };
     // SAFETY: `desc` was checked non-null above.
-    let rd = unsafe { &*desc.cast::<ResourceDesc>() };
-    let dev_ptr = this.cast::<Device>();
-    // SAFETY: if non-null, `dev_ptr` is a valid `Device` pointer.
-    let advertise_numa = (!dev_ptr.is_null()) && unsafe { (*dev_ptr).advertise_numa };
-
-    let hr = validate_heap_properties(&hdesc.properties, hdesc.flags, advertise_numa);
-    if hr != S_OK {
-        return hr;
-    }
-    let hr = validate_resource_descs(rd, &hdesc.properties);
-    if hr != S_OK {
-        return hr;
-    }
-    let hr = validate_resource_states(initial_state, &hdesc.properties);
-    if hr != S_OK {
-        return hr;
-    }
-
-    match rd.dimension {
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE2D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            if initial_state == D3D12_RESOURCE_STATE_RENDER_TARGET
-                && (rd.flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) == 0
-            {
-                return E_INVALIDARG;
-            }
-            // SAFETY: pointers are validated caller inputs.
-            unsafe {
-                texture::create(
-                    dev_ptr,
-                    (&hdesc.properties, hdesc.flags),
-                    rd,
-                    optimized_clear,
-                    Some((heap_obj, heap_offset)),
-                    &[],
-                    (riid, resource),
-                )
-            }
-        }
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            if !optimized_clear.is_null() {
-                return E_INVALIDARG;
-            }
-            // SAFETY: pointers are validated caller inputs.
-            unsafe {
-                buffer::create(
-                    dev_ptr,
-                    &hdesc.properties,
-                    hdesc.flags,
-                    rd,
-                    Some((heap_obj, heap_offset)),
-                    riid,
-                    resource,
-                )
-            }
-        }
-        _ => E_INVALIDARG,
+    let rd = unsafe { desc.cast::<ResourceDesc>().read_unaligned() };
+    // SAFETY: pointers are validated caller inputs.
+    unsafe {
+        create_resource_inner(&CreateArgs {
+            device: this.cast::<Device>(),
+            heap_props: &hdesc.properties,
+            heap_flags: hdesc.flags,
+            desc: &rd,
+            initial_state,
+            optimized_clear,
+            placed: Some((heap_obj, heap_offset)),
+            castable_formats: &[],
+            riid,
+            resource,
+        })
     }
 }
 
@@ -1594,7 +1599,7 @@ pub unsafe extern "system-unwind" fn create_committed_resource3(
     optimized_clear: *const c_void,
     protected_session: *mut c_void,
     num_castable_formats: u32,
-    _castable_formats: *mut u32,
+    castable_formats: *mut u32,
     riid: *const c_void,
     resource: *mut *mut c_void,
 ) -> Hresult {
@@ -1603,26 +1608,39 @@ pub unsafe extern "system-unwind" fn create_committed_resource3(
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
     }
-    if heap_props.is_null() {
+    if heap_props.is_null() || desc.is_null() {
         return E_INVALIDARG;
     }
-    ignore_castable_formats(num_castable_formats);
+    if !protected_session.is_null() {
+        return E_NOTIMPL;
+    }
+    // SAFETY: `castable_formats` is null or points to `num_castable_formats` readable `u32`s.
+    let castable =
+        match unsafe { read_castable_formats(num_castable_formats, castable_formats.cast_const()) }
+        {
+            Ok(v) => v,
+            Err(hr) => return hr,
+        };
+    // SAFETY: `desc` was checked non-null above (`D3D12_RESOURCE_DESC1`).
+    let rd1 = unsafe { desc.cast::<ResourceDesc1>().read_unaligned() };
+    let plain = plain_desc(&rd1);
     // SAFETY: `heap_props` was checked non-null above.
-    let heap_type = unsafe { (*heap_props.cast::<HeapProperties>()).r#type };
-    let state = crate::barrier::initial_state(initial_layout, heap_type);
-    // SAFETY: arguments are forwarded to `create_committed_resource2`.
+    let hp = unsafe { heap_props.cast::<HeapProperties>().read_unaligned() };
+    let state = crate::barrier::initial_state(initial_layout, hp.r#type);
+    // SAFETY: pointers are validated caller inputs.
     unsafe {
-        create_committed_resource2(
-            this,
-            heap_props,
+        create_resource_inner(&CreateArgs {
+            device: this.cast::<Device>(),
+            heap_props: &hp,
             heap_flags,
-            desc,
-            state,
+            desc: &plain,
+            initial_state: state,
             optimized_clear,
-            protected_session,
+            placed: None,
+            castable_formats: &castable,
             riid,
             resource,
-        )
+        })
     }
 }
 
@@ -1640,7 +1658,7 @@ pub unsafe extern "system-unwind" fn create_placed_resource2(
     initial_layout: u32,
     optimized_clear: *const c_void,
     num_castable_formats: u32,
-    _castable_formats: *mut u32,
+    castable_formats: *mut u32,
     riid: *const c_void,
     resource: *mut *mut c_void,
 ) -> Hresult {
@@ -1649,25 +1667,37 @@ pub unsafe extern "system-unwind" fn create_placed_resource2(
         // SAFETY: `resource` was checked non-null above.
         unsafe { com::init_out_ptr(resource) };
     }
-    if heap.is_null() {
+    if heap.is_null() || desc.is_null() {
         return E_INVALIDARG;
     }
-    ignore_castable_formats(num_castable_formats);
-    // SAFETY: `heap` is a non-null `ID3D12Heap` pointer.
-    let heap_type = unsafe { heap_desc(heap.cast()).properties.r#type };
-    let state = crate::barrier::initial_state(initial_layout, heap_type);
-    // SAFETY: arguments are forwarded to `create_placed_resource1`.
+    // SAFETY: `castable_formats` is null or points to `num_castable_formats` readable `u32`s.
+    let castable =
+        match unsafe { read_castable_formats(num_castable_formats, castable_formats.cast_const()) }
+        {
+            Ok(v) => v,
+            Err(hr) => return hr,
+        };
+    // SAFETY: `desc` was checked non-null above (`D3D12_RESOURCE_DESC1`).
+    let rd1 = unsafe { desc.cast::<ResourceDesc1>().read_unaligned() };
+    let plain = plain_desc(&rd1);
+    let heap_obj = heap.cast::<HeapObject>();
+    // SAFETY: `heap_obj` is a non-null `ID3D12Heap` pointer.
+    let hdesc = unsafe { heap_desc(heap_obj) };
+    let state = crate::barrier::initial_state(initial_layout, hdesc.properties.r#type);
+    // SAFETY: pointers are validated caller inputs.
     unsafe {
-        create_placed_resource1(
-            this,
-            heap,
-            heap_offset,
-            desc,
-            state,
+        create_resource_inner(&CreateArgs {
+            device: this.cast::<Device>(),
+            heap_props: &hdesc.properties,
+            heap_flags: hdesc.flags,
+            desc: &plain,
+            initial_state: state,
             optimized_clear,
+            placed: Some((heap_obj, heap_offset)),
+            castable_formats: &castable,
             riid,
             resource,
-        )
+        })
     }
 }
 
@@ -1694,6 +1724,165 @@ pub unsafe extern "system-unwind" fn create_reserved_resource2(
         unsafe { com::init_out_ptr(resource) };
     }
     E_NOTIMPL
+}
+
+#[derive(PartialEq, Eq)]
+enum FormatFamily {
+    R32G32B32A32,
+    R32G32B32,
+    R16G16B16A16,
+    R32G32,
+    R32G8X24,
+    R10G10B10A2,
+    R11G11B10,
+    R8G8B8A8,
+    R16G16,
+    R32,
+    R24G8,
+    R8G8,
+    R16,
+    R8,
+    A8,
+    R9G9B9E5,
+    R8G8B8G8,
+    G8R8G8B8,
+    Bc1,
+    Bc2,
+    Bc3,
+    Bc4,
+    Bc5,
+    B5G6R5,
+    B5G5R5A1,
+    B8G8R8A8,
+    B8G8R8X8,
+    Bc6H,
+    Bc7,
+    B4G4R4A4,
+}
+
+const fn format_family(dxgi_format: u32) -> Option<FormatFamily> {
+    match dxgi_format {
+        1..=4 => Some(FormatFamily::R32G32B32A32),
+        5..=8 => Some(FormatFamily::R32G32B32),
+        9..=14 => Some(FormatFamily::R16G16B16A16),
+        15..=18 => Some(FormatFamily::R32G32),
+        19..=22 => Some(FormatFamily::R32G8X24),
+        23..=25 => Some(FormatFamily::R10G10B10A2),
+        26 => Some(FormatFamily::R11G11B10),
+        27..=32 => Some(FormatFamily::R8G8B8A8),
+        33..=38 => Some(FormatFamily::R16G16),
+        39..=43 => Some(FormatFamily::R32),
+        44..=47 => Some(FormatFamily::R24G8),
+        48..=52 => Some(FormatFamily::R8G8),
+        53..=59 => Some(FormatFamily::R16),
+        60..=64 => Some(FormatFamily::R8),
+        65 => Some(FormatFamily::A8),
+        67 => Some(FormatFamily::R9G9B9E5),
+        68 => Some(FormatFamily::R8G8B8G8),
+        69 => Some(FormatFamily::G8R8G8B8),
+        70..=72 => Some(FormatFamily::Bc1),
+        73..=75 => Some(FormatFamily::Bc2),
+        76..=78 => Some(FormatFamily::Bc3),
+        79..=81 => Some(FormatFamily::Bc4),
+        82..=84 => Some(FormatFamily::Bc5),
+        85 => Some(FormatFamily::B5G6R5),
+        86 => Some(FormatFamily::B5G5R5A1),
+        87 | 90 | 91 => Some(FormatFamily::B8G8R8A8),
+        88 | 92 | 93 => Some(FormatFamily::B8G8R8X8),
+        94..=96 => Some(FormatFamily::Bc6H),
+        97..=99 => Some(FormatFamily::Bc7),
+        115 => Some(FormatFamily::B4G4R4A4),
+        _ => None,
+    }
+}
+
+const fn format_texel_bytes(dxgi_format: u32, desc: &MtlDxgiFormatDesc) -> u32 {
+    if desc.bytes_per_texel != 0 {
+        desc.bytes_per_texel
+    } else {
+        match dxgi_format {
+            20..=22 => 8,
+            45..=47 => 4,
+            _ => 0,
+        }
+    }
+}
+
+struct CreateArgs<'a> {
+    device: *mut Device,
+    heap_props: &'a HeapProperties,
+    heap_flags: u32,
+    desc: &'a ResourceDesc,
+    initial_state: u32,
+    optimized_clear: *const c_void,
+    placed: Option<(*mut HeapObject, u64)>,
+    castable_formats: &'a [u32],
+    riid: *const c_void,
+    resource: *mut *mut c_void,
+}
+
+unsafe fn create_resource_inner(args: &CreateArgs<'_>) -> Hresult {
+    // SAFETY: if non-null, `args.device` is a valid `Device` pointer.
+    let advertise_numa = (!args.device.is_null()) && unsafe { (*args.device).advertise_numa };
+
+    let hr = validate_heap_properties(args.heap_props, args.heap_flags, advertise_numa);
+    if hr != S_OK {
+        return hr;
+    }
+    let hr = validate_resource_descs(args.desc, args.heap_props);
+    if hr != S_OK {
+        return hr;
+    }
+    let hr = validate_resource_states(args.initial_state, args.heap_props);
+    if hr != S_OK {
+        return hr;
+    }
+    let hr = validate_castable_formats(args.desc, args.castable_formats);
+    if hr != S_OK {
+        return hr;
+    }
+
+    match args.desc.dimension {
+        D3D12_RESOURCE_DIMENSION_TEXTURE1D
+        | D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
+            if args.initial_state == D3D12_RESOURCE_STATE_RENDER_TARGET
+                && (args.desc.flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) == 0
+            {
+                return E_INVALIDARG;
+            }
+            // SAFETY: pointers are validated caller inputs.
+            unsafe {
+                texture::create(
+                    args.device,
+                    (args.heap_props, args.heap_flags),
+                    args.desc,
+                    args.optimized_clear,
+                    args.placed,
+                    args.castable_formats,
+                    (args.riid, args.resource),
+                )
+            }
+        }
+        D3D12_RESOURCE_DIMENSION_BUFFER => {
+            if !args.optimized_clear.is_null() {
+                return E_INVALIDARG;
+            }
+            // SAFETY: pointers are validated caller inputs.
+            unsafe {
+                buffer::create(
+                    args.device,
+                    args.heap_props,
+                    args.heap_flags,
+                    args.desc,
+                    args.placed,
+                    args.riid,
+                    args.resource,
+                )
+            }
+        }
+        _ => E_INVALIDARG,
+    }
 }
 
 #[cfg(test)]

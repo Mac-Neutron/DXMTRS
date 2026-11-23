@@ -1,9 +1,15 @@
 //! Unit tests for command-list state, root arguments, draws, and dispatches.
 
-use core::{alloc::Layout, ffi::c_void, ptr};
-use std::alloc;
+use core::{alloc::Layout, ffi::c_void, mem::ManuallyDrop, ptr, sync::atomic::AtomicBool};
+use std::{
+    alloc,
+    sync::{Arc, Mutex},
+};
 
-use dxmt_core::topology;
+use dxmt_core::{
+    resource::{Texture, TextureAllocationFlags, TextureViewDescriptor},
+    topology,
+};
 use dxmt_util::{
     com::{ComObject, S_OK},
     private_data::PrivateData,
@@ -11,10 +17,12 @@ use dxmt_util::{
 use rustc_hash::FxHashMap;
 use winemetal_sys::Obj;
 use winemetal_wire::{
-    WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
+    WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW,
+    WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
-    WmtcmdBase, WmtcmdRenderDraw, WmtcmdRenderDxmtTessellationMeshDraw,
-    WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderSetblendcolor,
+    WMT_TEXTURE_TYPE2D, WMTTextureInfo, WmtcmdBase, WmtcmdRenderDraw,
+    WmtcmdRenderDxmtTessellationMeshDraw, WmtcmdRenderDxmtTessellationMeshDrawIndexed,
+    WmtcmdRenderSetblendcolor,
 };
 
 use super::{
@@ -23,23 +31,39 @@ use super::{
 };
 use crate::{
     abi::{
+        list_ops::{
+            D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD,
+            D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE, RenderPassBeginningAccess,
+            RenderPassBeginningAccessBody, RenderPassEndingAccess, RenderPassEndingAccessBody,
+            RenderPassRenderTargetDesc,
+        },
         list_state::{
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D12_COMMAND_LIST_TYPE_COMPUTE,
             D3D12_COMMAND_LIST_TYPE_DIRECT, D3d12Rect, D3d12Viewport,
         },
-        vtbl::{ID3D12CommandAllocatorVtbl, ID3D12PipelineStateVtbl},
+        objects::D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        pipeline::SampleDesc,
+        resource::{D3D12_RESOURCE_DIMENSION_TEXTURE2D, HeapProperties, ResourceDesc},
+        vtbl::{
+            D3d12CpuDescriptorHandle, ID3D12CommandAllocatorVtbl, ID3D12DescriptorHeapVtbl,
+            ID3D12PipelineStateVtbl, ID3D12Resource2Vtbl,
+        },
     },
     allocator::{Allocator, CPU_HEAP_SIZE, GPU_HEAP_SIZE},
     com::{IID_ID3D12_GRAPHICS_COMMAND_LIST, release_com},
+    descriptor_heap::{EmbeddedDescriptorHandle, Heap, RenderTargetDesc},
     encoder::{EncoderType, RenderEncoderData},
     list::{
         DrawCallStatus, LIST_VTBL, List,
+        clear::{begin_render_pass, discard_resource, end_render_pass},
         state::{
             close, create_command_list, get_type, ia_set_primitive_topology, om_set_blend_factor,
-            om_set_stencil_ref, reset, rs_set_scissor_rects, rs_set_viewports,
+            om_set_render_targets, om_set_stencil_ref, reset, rs_set_scissor_rects,
+            rs_set_viewports,
         },
     },
     pipeline::Graphics,
+    resource::Resource,
     tests::count_allocs,
 };
 
@@ -102,6 +126,8 @@ fn new_test_allocator(list_type: u32) -> *mut Allocator {
         clear_rtv: None,
         copy_temp_allocator: None,
         copy_temp_version: 0,
+        discard_tracking: false,
+        discard_purges: Vec::new(),
     }));
     // SAFETY: `raw` is a freshly allocated `Allocator`; retain the test caller's public reference.
     unsafe { crate::com::add_ref_com(raw) };
@@ -618,6 +644,282 @@ fn tessellation_topology_mismatch_is_rejected_before_encoder_mutation() {
     assert_eq!(status_plain, DrawCallStatus::Invalid);
     // SAFETY: `alloc` is valid.
     assert!(unsafe { (*alloc).encoder_current }.is_null());
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+fn make_draw_test_texture(pixel_format: u32) -> Arc<Texture> {
+    let info = WMTTextureInfo {
+        pixel_format,
+        width: 64,
+        height: 64,
+        depth: 1,
+        array_length: 1,
+        bits: (WMT_TEXTURE_TYPE2D & 0xff) | (1 << 8) | (1 << 16),
+        options: 0,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    // SAFETY: `crate::tests` stubs `NSObject_retain`/`NSObject_release` for test `Obj` handles.
+    let obj = unsafe { Obj::adopt(1) }.expect("non-zero fake handle");
+    let tex = Arc::new(Texture::new(info, &obj));
+    let alloc = tex.allocate(TextureAllocationFlags::SHARED);
+    let _ = tex.rename(alloc);
+    tex
+}
+
+fn make_draw_test_heap(entries: Vec<RenderTargetDesc>) -> Box<Heap> {
+    // SAFETY: `LIST_VTBL` is larger than `ID3D12DescriptorHeapVtbl` and consists of non-null
+    // function pointers; tests never dispatch through heap vtable slots.
+    let vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12DescriptorHeapVtbl>() };
+    Box::new(Heap {
+        vtbl,
+        com: ComObject::new(),
+        private_data: PrivateData::default(),
+        device: ptr::null_mut(),
+        heap_type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        num_descriptors: u32::try_from(entries.len()).unwrap_or(0),
+        flags: 0,
+        gpu_buffer: None,
+        gpu_mapped_ptr: ptr::null_mut(),
+        gpu_base_address: 0,
+        cpu_words_ptr: ptr::null_mut(),
+        has_cpu_descriptors: AtomicBool::new(false),
+        cpu_descriptors: Mutex::new(Vec::new()),
+        samplers: Mutex::new(Vec::new()),
+        render_targets: Mutex::new(entries),
+    })
+}
+
+#[test]
+fn render_pass_discard_applies_only_to_first_encoder_across_mid_pass_split() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid test pointers.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `raw_list` is a valid `List` pointer.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+
+    let tex = make_draw_test_texture(70);
+    let view = TextureViewDescriptor {
+        format: 70,
+        texture_type: WMT_TEXTURE_TYPE2D,
+        first_mip: 0,
+        mip_count: 1,
+        first_slice: 0,
+        array_size: 1,
+    }
+    .key();
+    let heap = make_draw_test_heap(vec![RenderTargetDesc {
+        texture: Some(tex),
+        view,
+        width: 64,
+        height: 64,
+        depth_plane: 0,
+        render_target_array_length: 1,
+        flags: 0,
+    }]);
+    let rtv: D3d12CpuDescriptorHandle = EmbeddedDescriptorHandle::pack(&raw const *heap, 0);
+
+    let rt_desc = RenderPassRenderTargetDesc {
+        cpu_descriptor: rtv,
+        beginning_access: RenderPassBeginningAccess {
+            r#type: D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD,
+            access: RenderPassBeginningAccessBody {
+                // SAFETY: zeroed union is valid when `r#type == DISCARD`.
+                clear: ManuallyDrop::new(unsafe { core::mem::zeroed() }),
+            },
+        },
+        ending_access: RenderPassEndingAccess {
+            r#type: D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE,
+            access: RenderPassEndingAccessBody {
+                // SAFETY: zeroed union is valid when `r#type == PRESERVE`.
+                resolve: ManuallyDrop::new(unsafe { core::mem::zeroed() }),
+            },
+        },
+    };
+    // SAFETY: `raw_list` and `&rt_desc` are valid test pointers.
+    unsafe { begin_render_pass(raw_list, 1, (&raw const rt_desc).cast(), ptr::null(), 0) };
+
+    // SAFETY: `raw_list` is a live `List`.
+    let list = unsafe { &mut *raw_list.cast::<List>() };
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` was just opened by `pre_draw_with_options`.
+    let first_enc = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    assert!(!first_enc.is_null());
+    // SAFETY: `first_enc` points to a valid `RenderEncoderData`.
+    let first_load = unsafe { (*first_enc).colors[0].load_action };
+    assert_eq!(first_load, WMT_LOAD_ACTION_DONT_CARE);
+
+    // Simulate a mid-pass encoder split before a second draw inside the same render pass.
+    // SAFETY: `alloc` is valid.
+    unsafe { (*alloc).invalidate_current_pass() };
+    list.inside_render_pass = false;
+
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` was opened by the second draw.
+    let second_enc = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    assert!(!second_enc.is_null());
+    assert_ne!(first_enc, second_enc);
+    // SAFETY: `second_enc` points to a valid `RenderEncoderData`.
+    let second_load = unsafe { (*second_enc).colors[0].load_action };
+    assert_eq!(second_load, WMT_LOAD_ACTION_LOAD);
+
+    // SAFETY: `raw_list` is a valid `List` pointer.
+    unsafe { end_render_pass(raw_list) };
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn discard_resource_consumes_on_draw_and_respects_write_purge() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid test pointers.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `raw_list` is a valid `List` pointer.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+
+    let tex = make_draw_test_texture(70);
+    let tex_ptr = Arc::as_ptr(&tex).cast::<c_void>();
+    // SAFETY: `LIST_VTBL` is larger than `ID3D12Resource2Vtbl` and consists of non-null pointers.
+    let res_vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12Resource2Vtbl>() };
+    let mut res = Box::new(Resource {
+        vtbl: res_vtbl,
+        com: ComObject::with_initial_ref(),
+        private_data: PrivateData::default(),
+        device: ptr::null_mut(),
+        texture: Some(Arc::clone(&tex)),
+        buffer: None,
+        placed_heap: ptr::null_mut(),
+        desc: ResourceDesc {
+            dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            alignment: 0,
+            width: 64,
+            height: 64,
+            depth_or_array_size: 1,
+            mip_levels: 1,
+            format: 28,
+            sample_desc: SampleDesc {
+                count: 1,
+                quality: 0,
+            },
+            layout: 0,
+            flags: 0,
+        },
+        heap_props: HeapProperties {
+            r#type: 1,
+            cpu_page_property: 0,
+            memory_pool_preference: 0,
+            creation_node_mask: 1,
+            visible_node_mask: 1,
+        },
+    });
+    let view = TextureViewDescriptor {
+        format: 70,
+        texture_type: WMT_TEXTURE_TYPE2D,
+        first_mip: 0,
+        mip_count: 1,
+        first_slice: 0,
+        array_size: 1,
+    }
+    .key();
+    let heap = make_draw_test_heap(vec![RenderTargetDesc {
+        texture: Some(tex),
+        view,
+        width: 64,
+        height: 64,
+        depth_plane: 0,
+        render_target_array_length: 1,
+        flags: 0,
+    }]);
+    let rtv: D3d12CpuDescriptorHandle = EmbeddedDescriptorHandle::pack(&raw const *heap, 0);
+    let res_ptr: *mut c_void = (&raw mut *res).cast();
+
+    // 1. DiscardResource followed by OMSetRenderTargets + Draw consumes the discard to DONT_CARE.
+    // SAFETY: `raw_list` and `res_ptr` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, ptr::null()) };
+    // SAFETY: `raw_list` and `&rtv` are valid test pointers.
+    unsafe { om_set_render_targets(raw_list, 1, (&raw const rtv).cast(), 0, ptr::null()) };
+    // SAFETY: `raw_list` is a live `List`.
+    let list = unsafe { &mut *raw_list.cast::<List>() };
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` was just opened by `pre_draw_with_options`.
+    let first_enc = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    // SAFETY: `first_enc` points to a valid `RenderEncoderData`.
+    let first_load = unsafe { (*first_enc).colors[0].load_action };
+    assert_eq!(first_load, WMT_LOAD_ACTION_DONT_CARE);
+    assert!(list.discarded_resources.is_empty());
+
+    // 2. DiscardResource followed by an intervening `alloc.writes(tex_ptr)` is purged on next draw.
+    // SAFETY: `raw_list` and `res_ptr` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, ptr::null()) };
+    // SAFETY: `alloc` is valid and has `first_enc` active to record the write purge.
+    unsafe { (*alloc).writes(tex_ptr) };
+    // SAFETY: `alloc` is valid.
+    unsafe { (*alloc).invalidate_current_pass() };
+    // SAFETY: `raw_list` is a live `List`.
+    let list2 = unsafe { &mut *raw_list.cast::<List>() };
+    list2.inside_render_pass = false;
+    assert_eq!(
+        pre_draw_with_options(list2, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` was opened by the second draw.
+    let second_enc = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    // SAFETY: `second_enc` points to a valid `RenderEncoderData`.
+    let second_load = unsafe { (*second_enc).colors[0].load_action };
+    assert_eq!(second_load, WMT_LOAD_ACTION_LOAD);
+    assert!(list2.discarded_resources.is_empty());
 
     // SAFETY: `raw_list` is recording on `alloc`.
     assert_eq!(unsafe { close(raw_list) }, S_OK);

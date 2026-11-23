@@ -3,7 +3,10 @@
 use core::ffi::c_void;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use dxmt_core::resource::{Buffer, BufferAllocationFlags, Texture, TextureAllocationFlags};
@@ -24,6 +27,8 @@ pub struct Residency {
     /// Additions batched until the next command buffer commit, and whether one is owed.
     pub pending: Mutex<PendingResidency>,
     pub va_map: RwLock<BTreeMap<u64, Vec<Arc<Buffer>>>>,
+    /// Monotonic counter bumped whenever GPU virtual address mappings change.
+    pub va_generation: AtomicU64,
 }
 
 /// The additions the next commit sends, and whether the set changed since the last commit.
@@ -74,6 +79,7 @@ impl Residency {
                 dirty: false,
             }),
             va_map: RwLock::new(BTreeMap::new()),
+            va_generation: AtomicU64::new(1),
         }
     }
 }
@@ -181,6 +187,10 @@ pub fn register_with_va(device: &Device, buffer: &Arc<Buffer>) {
         }
         let mut map = write(&device.residency.va_map);
         insert_va(&mut map, va, Arc::clone(buffer));
+        device
+            .residency
+            .va_generation
+            .fetch_add(1, Ordering::Release);
     }
 }
 
@@ -195,6 +205,10 @@ pub fn unregister(device: &Device, buffer: &Arc<Buffer>, gpu_va: u64) {
     }
     let mut map = write(&device.residency.va_map);
     remove_va(&mut map, gpu_va, buffer);
+    device
+        .residency
+        .va_generation
+        .fetch_add(1, Ordering::Release);
 }
 
 /// Looks up the newest buffer whose GPU VA range contains `address` (`d3d12_device.cpp:2025`).

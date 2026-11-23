@@ -8,10 +8,12 @@ use core::{fmt::Write as _, mem::ManuallyDrop, ptr};
 
 use dxmt_core::resource::TextureViewKey;
 use dxmt_util::dxgi_consts::{
-    DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16_TYPELESS,
-    DXGI_FORMAT_R32_TYPELESS,
+    DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_UINT,
 };
-use winemetal_wire::WMTTextureInfo;
+use winemetal_wire::{
+    WMT_TEXTURE_FLAG_LOSSLESS, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, WMTTextureInfo,
+};
 
 use super::{dsv_target, rtv_target, srv_view, uav_views};
 use crate::{
@@ -502,7 +504,7 @@ fn generate_infos() -> String {
             gpu_resource_id: 0,
         };
         // SAFETY: a null device is allowed: the description alone decides.
-        let hr = unsafe { populate_texture_info_opt(ptr::null(), desc, &mut info) };
+        let hr = unsafe { populate_texture_info_opt(ptr::null(), desc, &[], &mut info) };
         let _ = writeln!(
             out,
             "INFO {i} hr=0x{:08x} pf={} {}x{}x{} arr={} bits=0x{:08x} opt=0x{:x} flags=0x{:x}",
@@ -528,4 +530,46 @@ fn views_as_the_golden() {
 #[test]
 fn texture_infos_as_the_golden() {
     assert_eq!(generate_infos(), INFOS);
+}
+
+#[test]
+fn castable_formats_control_lossless_compression() {
+    let rt_desc = resource(
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        [128, 64, 1],
+        1,
+        1,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    );
+    let mut info = WMTTextureInfo {
+        pixel_format: 0,
+        width: 0,
+        height: 0,
+        depth: 0,
+        array_length: 0,
+        bits: 0,
+        options: 0,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+
+    // Same-family cast preserves lossless compression and pixel-format-view usage.
+    let same_family = [DXGI_FORMAT_R8G8B8A8_UNORM_SRGB];
+    // SAFETY: null device is valid for descriptor population.
+    let hr_same =
+        unsafe { populate_texture_info_opt(ptr::null(), &rt_desc, &same_family, &mut info) };
+    assert_eq!(hr_same, crate::com::S_OK);
+    assert_ne!(info.flags & WMT_TEXTURE_FLAG_LOSSLESS, 0);
+    assert_ne!(info.usage() & WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, 0);
+
+    // Cross-layout cast disables lossless compression while preserving pixel-format-view usage.
+    let cross_layout = [DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R32_UINT];
+    // SAFETY: null device is valid for descriptor population.
+    let hr_cross =
+        unsafe { populate_texture_info_opt(ptr::null(), &rt_desc, &cross_layout, &mut info) };
+    assert_eq!(hr_cross, crate::com::S_OK);
+    assert_eq!(info.flags & WMT_TEXTURE_FLAG_LOSSLESS, 0);
+    assert_ne!(info.usage() & WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, 0);
 }

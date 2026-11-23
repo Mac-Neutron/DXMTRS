@@ -1,5 +1,6 @@
 //! D3D12's structures and constants as the API defines them, asserted against the C headers.
 
+pub mod agility;
 pub mod barrier;
 pub mod ext;
 pub mod feature;

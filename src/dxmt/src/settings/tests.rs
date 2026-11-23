@@ -20,6 +20,7 @@ fn unset_variables_give_the_defaults() {
             | Flags::DEFER_RESOLVES
             | Flags::SM6
             | Flags::INDIRECT_WITHOUT_ICB
+            | Flags::DISCARD_LOAD_STORE
     );
     assert_eq!(s.capture_frame, None);
     assert_eq!((s.mtl_capture_enabled, s.capture_executable), (None, None));
@@ -33,8 +34,12 @@ fn on_by_default_flags_turn_off_only_for_zero() {
         ("DXMT_D3D12_SM6", "0"),
         ("DXMT_D3D12_DEFER_RESOLVES", "no"),
         ("DXMT_D3D12_INDIRECT", "icb"),
+        ("DXMT_D3D12_DISCARD", "0"),
     ]);
     assert_eq!(s.flags, Flags::DEFER_RESOLVES);
+
+    let s = with(&[("DXMT_D3D12_DISCARD", "no")]);
+    assert!(s.flags.contains(Flags::DISCARD_LOAD_STORE));
 }
 
 #[test]

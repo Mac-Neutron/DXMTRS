@@ -203,29 +203,12 @@ fn populate_vertex_buffer_table(
     (offset as u64, u32::try_from(stride).unwrap_or(0))
 }
 
-fn resolve_index_buffer_va(list: &List) -> u64 {
+const fn resolve_index_buffer_va(list: &List) -> u64 {
     if list.index_buffer == 0 {
-        return 0;
+        0
+    } else {
+        list.index_buffer_va
     }
-    if list.index_buffer_size > u64::from(u32::MAX) {
-        return list.index_buffer_size;
-    }
-    if !list.device.is_null() {
-        // SAFETY: `list.device` is a valid `Device` pointer when non-null.
-        let dev = unsafe { &*list.device };
-        if let Ok(map) = dev.residency.va_map.read() {
-            for (&base_va, buffers) in map.iter() {
-                for buf in buffers {
-                    if let Some(alloc) = buf.current()
-                        && alloc.buffer() == list.index_buffer
-                    {
-                        return base_va.wrapping_add(list.index_buffer_offset);
-                    }
-                }
-            }
-        }
-    }
-    list.index_buffer_size
 }
 
 /// `ID3D12GraphicsCommandList::ExecuteIndirect` (`d3d12_command_list.cpp:1992`).

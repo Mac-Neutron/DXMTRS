@@ -3,8 +3,8 @@
 use core::{ffi::c_void, ptr};
 
 use winemetal_sys::wire::{
-    WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_STORE, WMTRenderPassInfo,
-    WMTRenderPassSampleBufferInfo,
+    WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE,
+    WMT_STORE_ACTION_STORE, WMTRenderPassInfo, WMTRenderPassSampleBufferInfo,
 };
 
 use super::timestamp::DONT_SAMPLE;
@@ -498,13 +498,19 @@ pub fn same_target(a: &RenderEncoderData, b: &RenderEncoderData) -> bool {
         && a.depth.slice == b.depth.slice
         && a.depth.depth_plane == b.depth.depth_plane
         && (b.depth.attachment.is_none() || b.depth.load_action == WMT_LOAD_ACTION_LOAD)
-        && (a.depth.attachment.is_none() || a.depth.store_action == WMT_STORE_ACTION_STORE);
+        && (a.depth.attachment.is_none()
+            || a.depth.store_action == WMT_STORE_ACTION_STORE
+            || (a.depth.store_action == WMT_STORE_ACTION_DONT_CARE
+                && (a.dsv_readonly_flags & 1) != 0));
     let stencil_ok = a.stencil.attachment == b.stencil.attachment
         && a.stencil.level == b.stencil.level
         && a.stencil.slice == b.stencil.slice
         && a.stencil.depth_plane == b.stencil.depth_plane
         && (b.stencil.attachment.is_none() || b.stencil.load_action == WMT_LOAD_ACTION_LOAD)
-        && (a.stencil.attachment.is_none() || a.stencil.store_action == WMT_STORE_ACTION_STORE);
+        && (a.stencil.attachment.is_none()
+            || a.stencil.store_action == WMT_STORE_ACTION_STORE
+            || (a.stencil.store_action == WMT_STORE_ACTION_DONT_CARE
+                && (a.dsv_readonly_flags & 2) != 0));
 
     depth_ok
         && stencil_ok
@@ -619,19 +625,22 @@ pub unsafe fn clear_target<S: AsSubmission>(
 pub fn apply_clear(c: &ClearEncoderData, r: &RenderEncoderData, info: &mut WMTRenderPassInfo) {
     let slot = clear_slot(c, r);
     if slot == CLEAR_DEPTH_STENCIL {
-        if (c.clear_dsv & 1) != 0 && r.depth.load_action != WMT_LOAD_ACTION_CLEAR {
+        if (c.clear_dsv & 1) != 0 && r.depth.load_action == WMT_LOAD_ACTION_LOAD {
             info.depth.load_action = WMT_LOAD_ACTION_CLEAR;
             info.depth.clear_depth = c.depth_stencil.0;
         }
-        if (c.clear_dsv & 2) != 0 && r.stencil.load_action != WMT_LOAD_ACTION_CLEAR {
+        if (c.clear_dsv & 2) != 0 && r.stencil.load_action == WMT_LOAD_ACTION_LOAD {
             info.stencil.load_action = WMT_LOAD_ACTION_CLEAR;
             info.stencil.clear_stencil = c.depth_stencil.1;
         }
     } else if let Ok(idx) = usize::try_from(slot)
         && idx < r.colors.len()
-        && r.colors[idx].load_action != WMT_LOAD_ACTION_CLEAR
+        && r.colors[idx].load_action == WMT_LOAD_ACTION_LOAD
     {
         info.colors[idx].load_action = WMT_LOAD_ACTION_CLEAR;
         info.colors[idx].clear_color = c.color;
     }
 }
+
+#[cfg(test)]
+mod tests;

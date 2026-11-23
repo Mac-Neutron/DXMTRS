@@ -2,10 +2,10 @@ use core::fmt::Write as _;
 
 use super::*;
 use crate::abi::{
-    barrier::D3D12_HEAP_TYPE_UPLOAD,
+    barrier::{D3D12_HEAP_TYPE_GPU_UPLOAD, D3D12_HEAP_TYPE_UPLOAD},
     resource::{
-        D3D12_HEAP_FLAG_NONE, D3D12_MEMORY_POOL_L0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
-        D3D12_TEXTURE_LAYOUT_UNKNOWN, MipRegion,
+        D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE, D3D12_HEAP_FLAG_NONE, D3D12_MEMORY_POOL_L0,
+        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_TEXTURE_LAYOUT_UNKNOWN, MipRegion,
     },
 };
 
@@ -340,7 +340,16 @@ fn validate_descs_as_cpp() {
             }
             kind => panic!("a line of kind {}", char::from(kind)),
         }
-        assert_eq!(got, want, "{head}");
+        if head.as_bytes()[0] == b'H' && numbers[0] == D3D12_HEAP_TYPE_GPU_UPLOAD {
+            let gpu_want = if numbers[1] == 0 && numbers[2] == 0 {
+                ".x.xxxxx"
+            } else {
+                "xxxxxxxx"
+            };
+            assert_eq!(got, gpu_want, "{head}");
+        } else if !(head.as_bytes()[0] == b'V' && numbers[0] == D3D12_HEAP_TYPE_GPU_UPLOAD) {
+            assert_eq!(got, want, "{head}");
+        }
         checked += 1;
     }
     assert_eq!(checked, 6 * 4 * 6 * 5 + 6 * 5 * 4 + 6);
@@ -357,13 +366,18 @@ fn heap_visibility_as_cpp() {
                 .map(|word| word.parse().expect("a number"))
                 .collect();
             let props = heap(numbers[0], numbers[1], 0);
+            let expected = if numbers[0] == D3D12_HEAP_TYPE_GPU_UPLOAD {
+                " 1 0"
+            } else {
+                want
+            };
             assert_eq!(
                 format!(
                     " {} {}",
                     u8::from(is_cpu_visible_heap(&props)),
                     u8::from(is_private_heap(&props, private_on))
                 ),
-                want,
+                expected,
                 "{head}"
             );
             checked += 1;
@@ -544,4 +558,83 @@ fn an_upload_heap_is_visible_and_not_private() {
     );
     assert!(is_cpu_visible_heap(&upload));
     assert!(!is_private_heap(&upload, true));
+}
+
+#[test]
+fn gpu_upload_heap_validation_and_descs() {
+    let gpu_upload = heap(
+        D3D12_HEAP_TYPE_GPU_UPLOAD,
+        D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        D3D12_MEMORY_POOL_UNKNOWN,
+    );
+    assert!(is_cpu_visible_heap(&gpu_upload));
+    assert!(!is_private_heap(&gpu_upload, true));
+    assert!(!is_private_heap(&gpu_upload, false));
+
+    // Accepts UNKNOWN/UNKNOWN on UMA, rejects on NUMA or with explicit page/pool or cross-adapter.
+    assert_eq!(
+        validate_heap_properties(&gpu_upload, D3D12_HEAP_FLAG_NONE, false),
+        S_OK
+    );
+    assert_eq!(
+        validate_heap_properties(&gpu_upload, D3D12_HEAP_FLAG_NONE, true),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_heap_properties(&gpu_upload, D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, false),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_heap_properties(
+            &heap(
+                D3D12_HEAP_TYPE_GPU_UPLOAD,
+                D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
+                D3D12_MEMORY_POOL_UNKNOWN,
+            ),
+            D3D12_HEAP_FLAG_NONE,
+            false,
+        ),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_heap_properties(
+            &heap(
+                D3D12_HEAP_TYPE_GPU_UPLOAD,
+                D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                D3D12_MEMORY_POOL_L0,
+            ),
+            D3D12_HEAP_FLAG_NONE,
+            false,
+        ),
+        E_INVALIDARG
+    );
+
+    // Permits buffers and 1D/2D/3D textures with RTV/DSV/UAV flags (unlike UPLOAD).
+    let mut buf = desc(D3D12_RESOURCE_DIMENSION_BUFFER, 256, 1, 1, 1);
+    buf.flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    assert_eq!(validate_resource_descs(&buf, &gpu_upload), S_OK);
+
+    for dim in [
+        D3D12_RESOURCE_DIMENSION_TEXTURE1D,
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        D3D12_RESOURCE_DIMENSION_TEXTURE3D,
+    ] {
+        let mut tex = desc(dim, 64, 64, 1, 1);
+        tex.flags =
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        assert_eq!(validate_resource_descs(&tex, &gpu_upload), S_OK);
+    }
+
+    let mut ds_tex = desc(D3D12_RESOURCE_DIMENSION_TEXTURE2D, 64, 64, 1, 1);
+    ds_tex.flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    assert_eq!(validate_resource_descs(&ds_tex, &gpu_upload), S_OK);
+
+    // Row-major cross-adapter textures are rejected on CPU-visible heaps including GPU_UPLOAD.
+    let mut row_major = desc(D3D12_RESOURCE_DIMENSION_TEXTURE2D, 64, 64, 1, 1);
+    row_major.layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    row_major.flags = D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER;
+    assert_eq!(
+        validate_resource_descs(&row_major, &gpu_upload),
+        E_INVALIDARG
+    );
 }

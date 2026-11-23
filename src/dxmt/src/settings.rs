@@ -55,6 +55,8 @@ bitflags::bitflags! {
         const STATS = 1 << 9;
         /// `DXMT_CAPTURE_FRAME` is set, whatever it says.
         const CAPTURE_FRAME_SET = 1 << 10;
+        /// `DXMT_D3D12_DISCARD`: on unless `0`. Enables `DONT_CARE` load/store actions.
+        const DISCARD_LOAD_STORE = 1 << 11;
     }
 }
 
@@ -102,6 +104,7 @@ impl Settings {
             ),
             (Flags::STATS, is("DXMT_STATS", "1")),
             (Flags::CAPTURE_FRAME_SET, capture_frame.is_some()),
+            (Flags::DISCARD_LOAD_STORE, !is("DXMT_D3D12_DISCARD", "0")),
         ];
         let flags = table
             .into_iter()

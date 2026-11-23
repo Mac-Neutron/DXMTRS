@@ -80,6 +80,7 @@ pub unsafe fn check_feature_support(
 unsafe fn compute_allocation_info(
     device: &Device,
     descs: &[ResourceDesc],
+    castable_per_desc: &[Option<Vec<u32>>],
     info1_out: *mut c_void,
 ) -> ResourceAllocationInfo {
     if descs.is_empty() {
@@ -88,69 +89,96 @@ unsafe fn compute_allocation_info(
             alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
         };
     }
-    let infos = resource_math::allocation_info(descs, |d| match d.dimension {
-        D3D12_RESOURCE_DIMENSION_BUFFER => {
-            if d.alignment != 0 && d.alignment != D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT {
-                crate::debug!(
-                    "GetResourceAllocationInfo: invalid alignment {} for buffer resource.\n",
-                    d.alignment
-                );
+    let mut desc_index = 0usize;
+    let infos = resource_math::allocation_info(descs, |d| {
+        let i = desc_index;
+        desc_index += 1;
+        let castable = if castable_per_desc.is_empty() {
+            &[][..]
+        } else {
+            let Some(Some(list)) = castable_per_desc.get(i) else {
+                crate::debug!("GetResourceAllocationInfo: null castable formats array\n");
                 return None;
-            }
-            device.mtl.as_ref().map_or_else(
-                || {
-                    Some(HeapSizeAndAlign {
-                        size: u32::try_from(d.width).unwrap_or(u32::MAX),
-                        align: 256,
-                    })
-                },
-                |mtl| {
-                    let h = mtl.handle();
-                    // SAFETY: `h` is a live `MTLDevice` handle.
-                    let sa = unsafe { MTLDevice_heapBufferSizeAndAlign(h, d.width, 0) };
-                    Some(HeapSizeAndAlign {
-                        size: sa.size,
-                        align: sa.align,
-                    })
-                },
-            )
-        }
-        D3D12_RESOURCE_DIMENSION_TEXTURE1D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE2D
-        | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
-            let mut tex_info = WMTTextureInfo {
-                pixel_format: 0,
-                width: 0,
-                height: 0,
-                depth: 0,
-                array_length: 0,
-                bits: 0,
-                options: 0,
-                flags: 0,
-                mach_port: 0,
-                gpu_resource_id: 0,
             };
-            if crate::resource::populate_wmt_texture_info(device, d, &mut tex_info) != S_OK {
-                crate::debug!("GetResourceAllocationInfo: invalid texture descriptor\n");
-                return None;
-            }
-            device.mtl.as_ref().map_or(
-                Some(HeapSizeAndAlign {
-                    size: 4096,
-                    align: 4096,
-                }),
-                |mtl| {
-                    let h = mtl.handle();
-                    // SAFETY: `h` is a live `MTLDevice` handle and `tex_info` is initialized.
-                    let sa = unsafe { MTLDevice_heapTextureSizeAndAlign(h, &raw mut tex_info) };
-                    Some(HeapSizeAndAlign {
-                        size: sa.size,
-                        align: sa.align,
-                    })
-                },
-            )
+            list.as_slice()
+        };
+        if crate::resource::validate_castable_formats(d, castable) != S_OK {
+            crate::debug!("GetResourceAllocationInfo: invalid castable formats\n");
+            return None;
         }
-        _ => None,
+        match d.dimension {
+            D3D12_RESOURCE_DIMENSION_BUFFER => {
+                if d.alignment != 0 && d.alignment != D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT {
+                    crate::debug!(
+                        "GetResourceAllocationInfo: invalid alignment {} for buffer resource.\n",
+                        d.alignment
+                    );
+                    return None;
+                }
+                device.mtl.as_ref().map_or_else(
+                    || {
+                        Some(HeapSizeAndAlign {
+                            size: u32::try_from(d.width).unwrap_or(u32::MAX),
+                            align: 256,
+                        })
+                    },
+                    |mtl| {
+                        let h = mtl.handle();
+                        // SAFETY: `h` is a live `MTLDevice` handle.
+                        let sa = unsafe { MTLDevice_heapBufferSizeAndAlign(h, d.width, 0) };
+                        Some(HeapSizeAndAlign {
+                            size: sa.size,
+                            align: sa.align,
+                        })
+                    },
+                )
+            }
+            D3D12_RESOURCE_DIMENSION_TEXTURE1D
+            | D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            | D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
+                let mut tex_info = WMTTextureInfo {
+                    pixel_format: 0,
+                    width: 0,
+                    height: 0,
+                    depth: 0,
+                    array_length: 0,
+                    bits: 0,
+                    options: 0,
+                    flags: 0,
+                    mach_port: 0,
+                    gpu_resource_id: 0,
+                };
+                // SAFETY: `device` is a valid `Device` reference.
+                if unsafe {
+                    crate::resource::populate_texture_info_opt(
+                        core::ptr::from_ref(device),
+                        d,
+                        castable,
+                        &mut tex_info,
+                    )
+                } != S_OK
+                {
+                    crate::debug!("GetResourceAllocationInfo: invalid texture descriptor\n");
+                    return None;
+                }
+                device.mtl.as_ref().map_or(
+                    Some(HeapSizeAndAlign {
+                        size: 4096,
+                        align: 4096,
+                    }),
+                    |mtl| {
+                        let h = mtl.handle();
+                        // SAFETY: `h` is a live `MTLDevice` handle and `tex_info` is initialized.
+                        let sa = unsafe { MTLDevice_heapTextureSizeAndAlign(h, &raw mut tex_info) };
+                        Some(HeapSizeAndAlign {
+                            size: sa.size,
+                            align: sa.align,
+                        })
+                    },
+                )
+            }
+            _ => None,
+        }
     });
     if !info1_out.is_null() {
         let out_ptr = info1_out.cast::<ResourceAllocationInfo1>();
@@ -200,7 +228,7 @@ pub unsafe fn get_resource_allocation_info(
             plain.push(unsafe { elem.read_unaligned() });
         }
         // SAFETY: `plain` is valid and `info1_out` is null.
-        unsafe { compute_allocation_info(dev, &plain, core::ptr::null_mut()) }
+        unsafe { compute_allocation_info(dev, &plain, &[], core::ptr::null_mut()) }
     };
     if !ret.is_null() {
         // SAFETY: `ret` is a valid caller-provided sret pointer.
@@ -409,7 +437,7 @@ pub unsafe fn get_resource_allocation_info1(
             plain.push(unsafe { elem.read_unaligned() });
         }
         // SAFETY: `plain` is valid and `info1` is forwarded from the COM caller.
-        unsafe { compute_allocation_info(dev, &plain, info1) }
+        unsafe { compute_allocation_info(dev, &plain, &[], info1) }
     };
     if !ret.is_null() {
         // SAFETY: `ret` is a valid caller-provided sret pointer.
@@ -451,7 +479,72 @@ pub unsafe fn get_resource_allocation_info2(
             plain.push(plain_desc(&d1));
         }
         // SAFETY: `plain` is valid and `info1` is forwarded from the COM caller.
-        unsafe { compute_allocation_info(dev, &plain, info1) }
+        unsafe { compute_allocation_info(dev, &plain, &[], info1) }
+    };
+    if !ret.is_null() {
+        // SAFETY: `ret` is a valid caller-provided sret pointer.
+        unsafe { ret.cast::<ResourceAllocationInfo>().write_unaligned(result) };
+    }
+    ret
+}
+
+/// `ID3D12Device12::GetResourceAllocationInfo3` (`d3d12_device.cpp`).
+///
+/// # Safety
+///
+/// `this`, `ret`, `descs`, `num_castable_formats`, `castable_formats`, and `info1` are
+/// caller-supplied pointers.
+pub unsafe extern "system-unwind" fn get_resource_allocation_info3(
+    this: *mut c_void,
+    ret: *mut c_void,
+    _visible_mask: u32,
+    num_descs: u32,
+    descs: *const c_void,
+    num_castable_formats: *const u32,
+    castable_formats: *const *const u32,
+    info1: *mut c_void,
+) -> *mut c_void {
+    crate::scope!("device.GetResourceAllocationInfo3");
+    let result = if this.is_null() || num_descs == 0 || descs.is_null() {
+        ResourceAllocationInfo {
+            size_in_bytes: u64::MAX,
+            alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+        }
+    } else {
+        // SAFETY: `this` is a non-null `Device` pointer.
+        let dev = unsafe { &*this.cast::<Device>() };
+        let count = num_descs as usize;
+        let mut plain = Vec::with_capacity(count);
+        let mut castable = Vec::with_capacity(count);
+        let ptr = descs.cast::<ResourceDesc1>();
+        for i in 0..count {
+            // SAFETY: `i` is within `count` elements.
+            let elem = unsafe { ptr.add(i) };
+            // SAFETY: `elem` points to a readable `ResourceDesc1`.
+            let d1 = unsafe { elem.read_unaligned() };
+            plain.push(plain_desc(&d1));
+            let fmt_count = if num_castable_formats.is_null() {
+                0
+            } else {
+                // SAFETY: `i` is within `count` elements of `num_castable_formats`.
+                let count_ptr = unsafe { num_castable_formats.add(i) };
+                // SAFETY: `count_ptr` points to a readable `u32`.
+                unsafe { count_ptr.read_unaligned() }
+            };
+            let fmt_ptr = if fmt_count == 0 || castable_formats.is_null() {
+                core::ptr::null()
+            } else {
+                // SAFETY: `i` is within `count` elements of `castable_formats`.
+                let list_ptr = unsafe { castable_formats.add(i) };
+                // SAFETY: `list_ptr` points to a readable `*const u32`.
+                unsafe { list_ptr.read_unaligned() }
+            };
+            // SAFETY: `fmt_ptr` is null or points to `fmt_count` readable `u32` formats.
+            let parsed = unsafe { crate::resource::read_castable_formats(fmt_count, fmt_ptr) }.ok();
+            castable.push(parsed);
+        }
+        // SAFETY: `plain`, `castable`, and `info1` are validated inputs from the COM caller.
+        unsafe { compute_allocation_info(dev, &plain, &castable, info1) }
     };
     if !ret.is_null() {
         // SAFETY: `ret` is a valid caller-provided sret pointer.
@@ -497,3 +590,6 @@ pub unsafe extern "system-unwind" fn get_copyable_footprints1(
         copyable_footprints_inner(d.as_ref(), first_sub, num_sub, base_offset, &out);
     };
 }
+
+#[cfg(test)]
+mod tests;

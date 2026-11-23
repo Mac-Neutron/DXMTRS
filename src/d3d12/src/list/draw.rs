@@ -21,9 +21,10 @@ use winemetal_wire::{
     MemPtr, SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
     SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
     WMT_COMPUTE_COMMAND_DISPATCH, WMT_COMPUTE_COMMAND_NOP, WMT_COMPUTE_COMMAND_SET_BUFFER,
-    WMT_COMPUTE_COMMAND_SET_PSO, WMT_INDEX_TYPE_U_INT32, WMT_RENDER_COMMAND_DRAW,
-    WMT_RENDER_COMMAND_DRAW_INDEXED, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW,
-    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED, WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
+    WMT_COMPUTE_COMMAND_SET_PSO, WMT_INDEX_TYPE_U_INT32, WMT_LOAD_ACTION_DONT_CARE,
+    WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW, WMT_RENDER_COMMAND_DRAW_INDEXED,
+    WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW, WMT_RENDER_COMMAND_DXMT_GEOMETRY_DRAW_INDEXED,
+    WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_NOP,
     WMT_RENDER_COMMAND_SET_BLEND_FACTOR, WMT_RENDER_COMMAND_SET_DEPTH_STENCIL_STATE,
     WMT_RENDER_COMMAND_SET_FRAGMENT_BUFFER, WMT_RENDER_COMMAND_SET_MESH_BUFFER,
@@ -46,12 +47,102 @@ use crate::{
     abi::list_state::{D3d12DrawArguments, D3d12DrawIndexedArguments},
     allocator::{Allocator, CPU_HEAP_SIZE, GPU_HEAP_SIZE},
     device::null,
-    encoder::{ComputeEncoderData, EncoderData, EncoderType, RenderEncoderData},
-    list::{DirtyFlags, DrawCallStatus, List},
+    encoder::{ComputeEncoderData, EncoderData, EncoderType, RenderEncoderData, TextureViewRef},
+    list::{DirtyFlags, DiscardedSubresource, DrawCallStatus, List},
     root_signature::object::RootSignature,
 };
 
 const MAX_SCISSOR_DIM: u64 = 16384;
+
+fn match_and_mark_discarded(
+    discarded: &[DiscardedSubresource],
+    consumed: &mut [bool],
+    att: &TextureViewRef,
+    mip_offset: u16,
+    slice_offset: u16,
+    plane: u32,
+) -> bool {
+    let tex_ptr = att.descriptor_ptr();
+    let mip = att.key.first_mip().saturating_add(u32::from(mip_offset));
+    let slice = att
+        .key
+        .first_slice()
+        .saturating_add(u32::from(slice_offset));
+    let mut matched = false;
+    for (idx, entry) in discarded.iter().enumerate() {
+        if entry.tex_ptr == tex_ptr
+            && (entry.all || (entry.mip == mip && entry.slice == slice && entry.plane == plane))
+        {
+            consumed[idx] = true;
+            matched = true;
+        }
+    }
+    matched
+}
+
+fn apply_discarded_resources(list: &mut List, alloc: &mut Allocator, pass: &mut RenderEncoderData) {
+    if !alloc.discard_purges.is_empty() {
+        list.discarded_resources
+            .retain(|entry| !alloc.discard_purges.contains(&entry.tex_ptr));
+        alloc.discard_purges.clear();
+    }
+    if list.discarded_resources.is_empty() {
+        alloc.discard_tracking = false;
+        return;
+    }
+
+    let mut consumed = vec![false; list.discarded_resources.len()];
+    for color in &mut pass.colors {
+        if color.load_action == WMT_LOAD_ACTION_LOAD
+            && let Some(att) = color.attachment.as_ref()
+            && match_and_mark_discarded(
+                &list.discarded_resources,
+                &mut consumed,
+                att,
+                color.level,
+                color.slice,
+                0,
+            )
+        {
+            color.load_action = WMT_LOAD_ACTION_DONT_CARE;
+        }
+    }
+    if pass.depth.load_action == WMT_LOAD_ACTION_LOAD
+        && let Some(att) = pass.depth.attachment.as_ref()
+        && match_and_mark_discarded(
+            &list.discarded_resources,
+            &mut consumed,
+            att,
+            pass.depth.level,
+            pass.depth.slice,
+            0,
+        )
+    {
+        pass.depth.load_action = WMT_LOAD_ACTION_DONT_CARE;
+    }
+    let stencil_plane = u32::from((pass.dsv_planar_flags & 1) != 0);
+    if pass.stencil.load_action == WMT_LOAD_ACTION_LOAD
+        && let Some(att) = pass.stencil.attachment.as_ref()
+        && match_and_mark_discarded(
+            &list.discarded_resources,
+            &mut consumed,
+            att,
+            pass.stencil.level,
+            pass.stencil.slice,
+            stencil_plane,
+        )
+    {
+        pass.stencil.load_action = WMT_LOAD_ACTION_DONT_CARE;
+    }
+
+    let mut idx = 0_usize;
+    list.discarded_resources.retain(|_| {
+        let keep = !consumed[idx];
+        idx += 1;
+        keep
+    });
+    alloc.discard_tracking = !list.discarded_resources.is_empty();
+}
 
 /// Entry in the vertex buffer binding table uploaded to the GPU heap (`VERTEX_BUFFER_ENTRY`,
 ///
@@ -453,6 +544,33 @@ pub fn pre_draw_with_options(
         pass.base.writes_unknown = list.render_pass.base.writes_unknown;
         pass.base.writes = list.render_pass.base.writes;
         pass.base.write_count = list.render_pass.base.write_count;
+
+        if list.render_pass_state.active {
+            for (slot, color) in pass.colors.iter_mut().enumerate() {
+                if color.attachment.is_some()
+                    && list.render_pass_state.color_load_override[slot] != WMT_LOAD_ACTION_LOAD
+                {
+                    color.load_action = list.render_pass_state.color_load_override[slot];
+                }
+            }
+            if pass.depth.attachment.is_some()
+                && list.render_pass_state.depth_load_override != WMT_LOAD_ACTION_LOAD
+            {
+                pass.depth.load_action = list.render_pass_state.depth_load_override;
+            }
+            if pass.stencil.attachment.is_some()
+                && list.render_pass_state.stencil_load_override != WMT_LOAD_ACTION_LOAD
+            {
+                pass.stencil.load_action = list.render_pass_state.stencil_load_override;
+            }
+            list.render_pass_state.color_load_override = [WMT_LOAD_ACTION_LOAD; 8];
+            list.render_pass_state.depth_load_override = WMT_LOAD_ACTION_LOAD;
+            list.render_pass_state.stencil_load_override = WMT_LOAD_ACTION_LOAD;
+        }
+        if !list.discarded_resources.is_empty() {
+            apply_discarded_resources(list, alloc, &mut pass);
+        }
+
         // SAFETY: `render_ptr` points to freshly allocated aligned CPU heap storage.
         unsafe { ptr::write(render_ptr, pass) };
         // SAFETY: `render_ptr` was just initialized.

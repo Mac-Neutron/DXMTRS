@@ -89,6 +89,8 @@ fn new_test_allocator() -> *mut Allocator {
         clear_rtv: None,
         copy_temp_allocator: None,
         copy_temp_version: 0,
+        discard_tracking: false,
+        discard_purges: Vec::new(),
     }));
     // SAFETY: `raw` is a freshly allocated `Allocator`; retain the test caller's public reference.
     unsafe { add_ref_com(raw) };
@@ -454,4 +456,18 @@ fn compute_execute_indirect_falls_back_to_icb_when_unaligned_or_counted() {
     unsafe { release_com::<List>(raw_list.cast()) };
     // SAFETY: `alloc` was created by `new_test_allocator`.
     unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn resolve_index_buffer_va_reads_cached_va_in_constant_time() {
+    let mut list = List::new_closed(ptr::null_mut());
+    assert_eq!(resolve_index_buffer_va(&list), 0);
+
+    list.index_buffer = 0x1234;
+    list.index_buffer_va = 0xDEAD_BEEF_0040;
+    list.index_buffer_size = 128;
+    assert_eq!(resolve_index_buffer_va(&list), 0xDEAD_BEEF_0040);
+
+    list.index_buffer = 0;
+    assert_eq!(resolve_index_buffer_va(&list), 0);
 }

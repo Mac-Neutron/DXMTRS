@@ -16,7 +16,7 @@ use core::{ffi::c_void, mem::offset_of, ptr};
 
 use bitflags::bitflags;
 use dxmt_util::{com::ComObject, private_data::PrivateData};
-use winemetal_wire::{WMT_INDEX_TYPE_U_INT16, WMTScissorRect, WMTViewport};
+use winemetal_wire::{WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMTScissorRect, WMTViewport};
 
 use crate::{
     abi::{
@@ -90,6 +90,62 @@ pub struct PendingResolve {
     pub same_size: bool,
 }
 
+/// Active `BeginRenderPass`..`EndRenderPass` state tracked across encoder splits.
+pub struct RenderPassState {
+    pub active: bool,
+    pub flags: u32,
+    pub color_ending_discard: u8,
+    pub dsv_ending_discard: u8,
+    pub color_load_override: [u32; 8],
+    pub depth_load_override: u32,
+    pub stencil_load_override: u32,
+    pub pending_resolve_inline: Vec<(bool, bool)>,
+}
+
+impl RenderPassState {
+    /// Returns an inactive render-pass state with `LOAD` defaults.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            active: false,
+            flags: 0,
+            color_ending_discard: 0,
+            dsv_ending_discard: 0,
+            color_load_override: [WMT_LOAD_ACTION_LOAD; 8],
+            depth_load_override: WMT_LOAD_ACTION_LOAD,
+            stencil_load_override: WMT_LOAD_ACTION_LOAD,
+            pending_resolve_inline: Vec::new(),
+        }
+    }
+
+    /// Resets all render-pass fields back to inactive `LOAD` defaults.
+    pub fn reset(&mut self) {
+        self.active = false;
+        self.flags = 0;
+        self.color_ending_discard = 0;
+        self.dsv_ending_discard = 0;
+        self.color_load_override = [WMT_LOAD_ACTION_LOAD; 8];
+        self.depth_load_override = WMT_LOAD_ACTION_LOAD;
+        self.stencil_load_override = WMT_LOAD_ACTION_LOAD;
+        self.pending_resolve_inline.clear();
+    }
+}
+
+impl Default for RenderPassState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Discarded subresource entry awaiting its next render-pass load.
+pub struct DiscardedSubresource {
+    pub tex_ptr: *const c_void,
+    pub mip: u32,
+    pub slice: u32,
+    pub plane: u32,
+    pub all: bool,
+}
+
 /// Retained COM object pointer and its private release thunk (`retained_objects_`).
 pub type RetainedObject = (*mut c_void, unsafe fn(*mut c_void));
 
@@ -134,12 +190,14 @@ pub struct List {
     pub vertex_buffers: [(u64, u32, u32); 32],
     pub ib_cache: [(u64, u64, u64); 4],
     pub ib_cache_next: u8,
+    pub ib_cache_generation: u64,
     pub static_sampler_cache: [(*const RootSignature, u64); 4],
     pub static_sampler_cache_next: u8,
     pub gpu_vb_table_cache: Option<(u32, u64, u32)>,
     pub gpu_graphics_root_args_offset: Option<(*const RootSignature, u64)>,
     pub gpu_compute_root_args_offset: Option<(*const RootSignature, u64)>,
     pub index_buffer: u64,
+    pub index_buffer_va: u64,
     pub index_buffer_offset: u64,
     pub index_buffer_size: u64,
     pub index_buffer_format: u32,
@@ -151,6 +209,8 @@ pub struct List {
     pub barrier_scratch: Vec<*const c_void>,
     pub legacy_barriers: Vec<crate::abi::barrier::ResourceBarrier>,
     pub inside_render_pass: bool,
+    pub render_pass_state: RenderPassState,
+    pub discarded_resources: Vec<DiscardedSubresource>,
 }
 
 impl ComRefCounted for List {
@@ -245,12 +305,14 @@ impl List {
             vertex_buffers: [(0, 0, 0); 32],
             ib_cache: [(0, 0, 0); 4],
             ib_cache_next: 0,
+            ib_cache_generation: 0,
             static_sampler_cache: [(ptr::null(), 0); 4],
             static_sampler_cache_next: 0,
             gpu_vb_table_cache: None,
             gpu_graphics_root_args_offset: None,
             gpu_compute_root_args_offset: None,
             index_buffer: 0,
+            index_buffer_va: 0,
             index_buffer_offset: 0,
             index_buffer_size: 0,
             index_buffer_format: u32::from(WMT_INDEX_TYPE_U_INT16),
@@ -262,6 +324,8 @@ impl List {
             barrier_scratch: Vec::with_capacity(16),
             legacy_barriers: Vec::new(),
             inside_render_pass: false,
+            render_pass_state: RenderPassState::new(),
+            discarded_resources: Vec::new(),
         })
     }
 

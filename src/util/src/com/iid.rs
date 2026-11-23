@@ -1248,6 +1248,30 @@ pub const IID_ID3D12_GRAPHICS_COMMAND_LIST7: Guid = Guid::new(
     [0x90, 0xe3, 0x16, 0x0c, 0xcd, 0xe4, 0xe2, 0xc1],
 );
 
+/// `ID3D12GraphicsCommandList8`.
+pub const IID_ID3D12_GRAPHICS_COMMAND_LIST8: Guid = Guid::new(
+    0xee93_6ef9,
+    0x599d,
+    0x4d28,
+    [0x93, 0x8e, 0x23, 0xc4, 0xad, 0x05, 0xce, 0x51],
+);
+
+/// `ID3D12GraphicsCommandList9`.
+pub const IID_ID3D12_GRAPHICS_COMMAND_LIST9: Guid = Guid::new(
+    0x34ed_2808,
+    0xffe6,
+    0x4c2b,
+    [0xb1, 0x1a, 0xca, 0xbd, 0x2b, 0x0c, 0x59, 0xe1],
+);
+
+/// `ID3D12GraphicsCommandList10`.
+pub const IID_ID3D12_GRAPHICS_COMMAND_LIST10: Guid = Guid::new(
+    0x7013_c015,
+    0xd161,
+    0x4b63,
+    [0xa0, 0x8c, 0x23, 0x85, 0x52, 0xdd, 0x8a, 0xcc],
+);
+
 /// `ID3D12CommandQueue`.
 pub const IID_ID3D12_COMMAND_QUEUE: Guid = Guid::new(
     0x0ec8_70a6,
@@ -1358,6 +1382,38 @@ pub const IID_ID3D12_DEVICE10: Guid = Guid::new(
     0xaa66,
     0x49f9,
     [0xb0, 0x2b, 0xa7, 0xab, 0x89, 0xc0, 0x60, 0x31],
+);
+
+/// `ID3D12Device11`.
+pub const IID_ID3D12_DEVICE11: Guid = Guid::new(
+    0x5405_c344,
+    0xd457,
+    0x444e,
+    [0xb4, 0xdd, 0x23, 0x66, 0xe4, 0x5a, 0xee, 0x39],
+);
+
+/// `ID3D12Device12`.
+pub const IID_ID3D12_DEVICE12: Guid = Guid::new(
+    0x5af5_c532,
+    0x4c91,
+    0x4cd0,
+    [0xb5, 0x41, 0x15, 0xa4, 0x05, 0x39, 0x5f, 0xc5],
+);
+
+/// `ID3D12Device13`.
+pub const IID_ID3D12_DEVICE13: Guid = Guid::new(
+    0x14ee_cffc,
+    0x4df8,
+    0x40f7,
+    [0xa1, 0x18, 0x5c, 0x81, 0x6f, 0x45, 0x69, 0x5e],
+);
+
+/// `ID3D12Device14`.
+pub const IID_ID3D12_DEVICE14: Guid = Guid::new(
+    0x5f6e_592d,
+    0xd895,
+    0x44c2,
+    [0x8e, 0x4a, 0x88, 0xad, 0x49, 0x26, 0xd3, 0x23],
 );
 
 /// Downlevel device query UUID (`d3d12_device.cpp:40`), refused silently without a warning.
@@ -1553,6 +1609,9 @@ const ALL: &[Guid] = &[
     IID_ID3D12_GRAPHICS_COMMAND_LIST5,
     IID_ID3D12_GRAPHICS_COMMAND_LIST6,
     IID_ID3D12_GRAPHICS_COMMAND_LIST7,
+    IID_ID3D12_GRAPHICS_COMMAND_LIST8,
+    IID_ID3D12_GRAPHICS_COMMAND_LIST9,
+    IID_ID3D12_GRAPHICS_COMMAND_LIST10,
     IID_ID3D12_COMMAND_QUEUE,
     IID_ID3D12_PIPELINE_LIBRARY,
     IID_ID3D12_PIPELINE_LIBRARY1,
@@ -1567,6 +1626,10 @@ const ALL: &[Guid] = &[
     IID_ID3D12_DEVICE8,
     IID_ID3D12_DEVICE9,
     IID_ID3D12_DEVICE10,
+    IID_ID3D12_DEVICE11,
+    IID_ID3D12_DEVICE12,
+    IID_ID3D12_DEVICE13,
+    IID_ID3D12_DEVICE14,
     IID_D3D12_DEVICE_DOWNLEVEL,
     IID_D3D12_COMMAND_QUEUE_DOWNLEVEL,
     IID_RENDERDOC,

@@ -23,12 +23,13 @@ use dxmt_util::com::Hresult;
 use crate::abi::{
     E_INVALIDARG,
     barrier::{
-        D3D12_HEAP_TYPE_CUSTOM, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK,
-        D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_STREAM_OUT,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE,
-        D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE, D3D12_RESOURCE_STATE_VIDEO_PROCESS_WRITE,
+        D3D12_HEAP_TYPE_CUSTOM, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_GPU_UPLOAD,
+        D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_DEST,
+        D3D12_RESOURCE_STATE_STREAM_OUT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE, D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE,
+        D3D12_RESOURCE_STATE_VIDEO_PROCESS_WRITE,
     },
     pipeline::{S_OK, SampleDesc},
     resource::{
@@ -202,7 +203,7 @@ pub const fn is_box_in_bounds(inner: &D3d12Box, bounds: &D3d12Box) -> bool {
 #[must_use]
 pub const fn is_cpu_visible_heap(heap: &HeapProperties) -> bool {
     match heap.r#type {
-        D3D12_HEAP_TYPE_UPLOAD | D3D12_HEAP_TYPE_READBACK => true,
+        D3D12_HEAP_TYPE_UPLOAD | D3D12_HEAP_TYPE_READBACK | D3D12_HEAP_TYPE_GPU_UPLOAD => true,
         D3D12_HEAP_TYPE_CUSTOM => heap.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE,
         _ => false,
     }
@@ -244,7 +245,7 @@ pub const fn validate_resource_descs(desc: &ResourceDesc, heap: &HeapProperties)
                 return E_INVALIDARG;
             }
         }
-        D3D12_HEAP_TYPE_DEFAULT | D3D12_HEAP_TYPE_CUSTOM => {}
+        D3D12_HEAP_TYPE_DEFAULT | D3D12_HEAP_TYPE_CUSTOM | D3D12_HEAP_TYPE_GPU_UPLOAD => {}
         _ => return E_INVALIDARG,
     }
     match desc.dimension {
@@ -291,6 +292,16 @@ pub const fn validate_heap_properties(
             }
         }
         D3D12_HEAP_TYPE_UPLOAD => {
+            if heap.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_UNKNOWN
+                || heap.memory_pool_preference != D3D12_MEMORY_POOL_UNKNOWN
+            {
+                return E_INVALIDARG;
+            }
+        }
+        D3D12_HEAP_TYPE_GPU_UPLOAD => {
+            if adapter_is_numa {
+                return E_INVALIDARG;
+            }
             if heap.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_UNKNOWN
                 || heap.memory_pool_preference != D3D12_MEMORY_POOL_UNKNOWN
             {

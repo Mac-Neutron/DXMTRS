@@ -3,7 +3,11 @@ use core::{cell::Cell, ffi::c_void, mem::size_of, ptr};
 use dxmt_util::{
     com::ComObject,
     dxgi_consts::{
-        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R32_TYPELESS,
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC7_TYPELESS,
+        DXGI_FORMAT_BC7_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UINT,
+        DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+        DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT,
         DXGI_FORMAT_UNKNOWN,
     },
     private_data::PrivateData,
@@ -24,8 +28,8 @@ use super::*;
 use crate::{
     abi::{
         barrier::{
-            D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_COMMON,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_GPU_UPLOAD, D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_GENERIC_READ,
         },
         pipeline::SampleDesc,
         resource::{
@@ -985,4 +989,472 @@ fn texture_create_and_subresource_validation() {
     assert_eq!(hr_oob_box, E_INVALIDARG);
     // SAFETY: release the single COM reference.
     unsafe { (ct.vtbl.release)(cpu_tex) };
+}
+
+#[test]
+fn castable_formats_validation_and_lossless_guard() {
+    assert!(!castable_formats_disable_lossless(
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        &[]
+    ));
+    assert!(!castable_formats_disable_lossless(
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        &[
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        ]
+    ));
+    assert!(!castable_formats_disable_lossless(
+        DXGI_FORMAT_BC7_TYPELESS,
+        &[DXGI_FORMAT_BC7_UNORM]
+    ));
+
+    // Cross-layout casts disable Apple lossless compression.
+    assert!(castable_formats_disable_lossless(
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        &[DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R32_UINT]
+    ));
+    assert!(castable_formats_disable_lossless(
+        DXGI_FORMAT_R16G16_FLOAT,
+        &[DXGI_FORMAT_R32_FLOAT]
+    ));
+    assert!(castable_formats_disable_lossless(
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        &[DXGI_FORMAT_R16G16_FLOAT]
+    ));
+    assert!(castable_formats_disable_lossless(
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        &[DXGI_FORMAT_B8G8R8A8_UNORM]
+    ));
+    assert!(castable_formats_disable_lossless(
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        &[DXGI_FORMAT_R32G32_UINT]
+    ));
+
+    let tex_desc = ResourceDesc {
+        dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        alignment: 0,
+        width: 64,
+        height: 64,
+        depth_or_array_size: 1,
+        mip_levels: 1,
+        format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        sample_desc: SampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    };
+    assert_eq!(
+        validate_castable_formats(
+            &tex_desc,
+            &[DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R32_UINT]
+        ),
+        S_OK
+    );
+    assert_eq!(
+        validate_castable_formats(&tex_desc, &[DXGI_FORMAT_R16_UINT]),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_castable_formats(&tex_desc, &[DXGI_FORMAT_UNKNOWN]),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_castable_formats(&tex_desc, &[DXGI_FORMAT_BC1_UNORM]),
+        E_INVALIDARG
+    );
+    let buf_desc = buffer_resource_desc(256);
+    assert_eq!(
+        validate_castable_formats(&buf_desc, &[DXGI_FORMAT_R32_UINT]),
+        E_INVALIDARG
+    );
+
+    // `create_committed_resource3` and `create_placed_resource2` reject null array with count > 0
+    // and accept valid castable formats while suppressing lossless for cross-layout casts.
+    // Use `Device::new_dummy()` (`mtl: None`) for resource instantiation since `MTLDevice_newTexture`
+    // and `MTLHeap_newTexture` are not exported in this test binary.
+    let mut dev = Device::new_dummy();
+    let dev_ptr = &raw mut *dev;
+    let riid = IID_ID3D12_RESOURCE;
+    let default_hp = HeapProperties {
+        r#type: D3D12_HEAP_TYPE_DEFAULT,
+        cpu_page_property: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        memory_pool_preference: D3D12_MEMORY_POOL_UNKNOWN,
+        creation_node_mask: 1,
+        visible_node_mask: 1,
+    };
+    let tex_desc1 = ResourceDesc1 {
+        dimension: tex_desc.dimension,
+        alignment: tex_desc.alignment,
+        width: tex_desc.width,
+        height: tex_desc.height,
+        depth_or_array_size: tex_desc.depth_or_array_size,
+        mip_levels: tex_desc.mip_levels,
+        format: tex_desc.format,
+        sample_desc: SampleDesc {
+            count: tex_desc.sample_desc.count,
+            quality: tex_desc.sample_desc.quality,
+        },
+        layout: tex_desc.layout,
+        flags: tex_desc.flags,
+        sampler_feedback_mip_region: crate::abi::resource::MipRegion {
+            width: 0,
+            height: 0,
+            depth: 0,
+        },
+    };
+
+    // SAFETY: pointers are valid local test structs; null castable array with count 1 fails.
+    let hr_null_cast = unsafe {
+        create_committed_resource3(
+            dev_ptr.cast(),
+            (&raw const default_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const tex_desc1).cast(),
+            crate::abi::barrier::D3D12_BARRIER_LAYOUT_COMMON,
+            ptr::null(),
+            ptr::null_mut(),
+            1,
+            ptr::null_mut(),
+            (&raw const riid).cast(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(hr_null_cast, E_INVALIDARG);
+
+    let mut bad_cast = [DXGI_FORMAT_R16_UINT];
+    // SAFETY: pointers are valid local test structs; mismatched texel size fails.
+    let hr_bad_cast = unsafe {
+        create_committed_resource3(
+            dev_ptr.cast(),
+            (&raw const default_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const tex_desc1).cast(),
+            crate::abi::barrier::D3D12_BARRIER_LAYOUT_COMMON,
+            ptr::null(),
+            ptr::null_mut(),
+            1,
+            bad_cast.as_mut_ptr(),
+            (&raw const riid).cast(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(hr_bad_cast, E_INVALIDARG);
+
+    let mut valid_cast = [DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R32_UINT];
+    let mut out_tex: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_valid = unsafe {
+        create_committed_resource3(
+            dev_ptr.cast(),
+            (&raw const default_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const tex_desc1).cast(),
+            crate::abi::barrier::D3D12_BARRIER_LAYOUT_COMMON,
+            ptr::null(),
+            ptr::null_mut(),
+            2,
+            valid_cast.as_mut_ptr(),
+            (&raw const riid).cast(),
+            &raw mut out_tex,
+        )
+    };
+    assert_eq!(hr_valid, S_OK);
+    // SAFETY: `out_tex` was returned by `create_committed_resource3`.
+    let res = unsafe { cast_resource(out_tex) }.expect("cast_resource succeeds");
+    // SAFETY: release the single COM reference.
+    unsafe { (res.vtbl.release)(out_tex) };
+
+    // Verify `populate_texture_info_opt` suppresses lossless on cross-layout castable formats
+    // and preserves lossless on same-family castable formats.
+    let mut info = WMTTextureInfo {
+        pixel_format: 0,
+        width: 0,
+        height: 0,
+        depth: 0,
+        array_length: 0,
+        bits: 0,
+        options: 0,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    // SAFETY: `dev_ptr` is a valid `Device` pointer.
+    let hr_info_cross =
+        unsafe { populate_texture_info_opt(dev_ptr, &tex_desc, &valid_cast, &mut info) };
+    assert_eq!(hr_info_cross, S_OK);
+    assert_eq!(info.flags & WMT_TEXTURE_FLAG_LOSSLESS, 0);
+    assert_ne!(info.usage() & WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, 0);
+
+    // Same-family castable list keeps lossless compression.
+    let mut same_cast = [DXGI_FORMAT_R8G8B8A8_UNORM_SRGB];
+    // SAFETY: `dev_ptr` is a valid `Device` pointer.
+    let hr_info_same =
+        unsafe { populate_texture_info_opt(dev_ptr, &tex_desc, &same_cast, &mut info) };
+    assert_eq!(hr_info_same, S_OK);
+    assert_ne!(info.flags & WMT_TEXTURE_FLAG_LOSSLESS, 0);
+    assert_ne!(info.usage() & WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW, 0);
+
+    let mut out_same: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_same = unsafe {
+        create_committed_resource3(
+            dev_ptr.cast(),
+            (&raw const default_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const tex_desc1).cast(),
+            crate::abi::barrier::D3D12_BARRIER_LAYOUT_COMMON,
+            ptr::null(),
+            ptr::null_mut(),
+            1,
+            same_cast.as_mut_ptr(),
+            (&raw const riid).cast(),
+            &raw mut out_same,
+        )
+    };
+    assert_eq!(hr_same, S_OK);
+    // SAFETY: `out_same` was returned by `create_committed_resource3`.
+    let res_same = unsafe { cast_resource(out_same) }.expect("cast_resource succeeds");
+    // SAFETY: release the single COM reference.
+    unsafe { (res_same.vtbl.release)(out_same) };
+
+    // `create_placed_resource2` rejects buffer with castable formats and validates placed texture.
+    // SAFETY: fake non-zero `MTLHeap` handle.
+    let fake_heap = unsafe { Obj::adopt(0x4004) }.expect("non-zero handle");
+    let mut mtl_heap = TestHeap {
+        inner: HeapObject {
+            vtbl: &TEST_HEAP_VTBL,
+            com: ComObject::with_initial_ref(),
+            private_data: PrivateData::default(),
+            device: ptr::null_mut(),
+            heap: Some(fake_heap),
+            cpu_buffer: None,
+            cpu_memory: ptr::null_mut(),
+        },
+        desc: D3d12HeapDesc {
+            size_in_bytes: 65536,
+            properties: clone_heap_props(&default_hp),
+            alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+            flags: D3D12_HEAP_FLAG_NONE,
+        },
+    };
+    let mut out_placed: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_placed = unsafe {
+        create_placed_resource2(
+            dev_ptr.cast(),
+            (&raw mut mtl_heap).cast(),
+            0,
+            (&raw const tex_desc1).cast(),
+            crate::abi::barrier::D3D12_BARRIER_LAYOUT_COMMON,
+            ptr::null(),
+            2,
+            valid_cast.as_mut_ptr(),
+            (&raw const riid).cast(),
+            &raw mut out_placed,
+        )
+    };
+    assert_eq!(hr_placed, S_OK);
+    // SAFETY: `out_placed` was returned by `create_placed_resource2`.
+    let placed_res = unsafe { cast_resource(out_placed) }.expect("cast_resource succeeds");
+    // SAFETY: release the single COM reference.
+    unsafe { (placed_res.vtbl.release)(out_placed) };
+}
+
+#[test]
+fn gpu_upload_heap_buffers_and_textures() {
+    let mut dev = Device::new_dummy();
+    let dev_ptr = &raw mut *dev;
+    let mut mtl_dev = test_device();
+    let mtl_dev_ptr = &raw mut *mtl_dev;
+    let riid = IID_ID3D12_RESOURCE;
+    let gpu_upload_hp = HeapProperties {
+        r#type: D3D12_HEAP_TYPE_GPU_UPLOAD,
+        cpu_page_property: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        memory_pool_preference: D3D12_MEMORY_POOL_UNKNOWN,
+        creation_node_mask: 1,
+        visible_node_mask: 1,
+    };
+
+    // 1. Committed UAV buffer on `GPU_UPLOAD` supports `Map`/`Unmap`.
+    let mut uav_buf = buffer_resource_desc(512);
+    uav_buf.flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    let mut out_buf: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_buf = unsafe {
+        create_committed_resource(
+            dev_ptr.cast(),
+            (&raw const gpu_upload_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const uav_buf).cast(),
+            D3D12_RESOURCE_STATE_COMMON,
+            ptr::null(),
+            (&raw const riid).cast(),
+            &raw mut out_buf,
+        )
+    };
+    assert_eq!(hr_buf, S_OK);
+    // SAFETY: `out_buf` was returned by `create_committed_resource`.
+    let buf_res = unsafe { cast_resource(out_buf) }.expect("cast_resource succeeds");
+    let mut mapped: *mut c_void = ptr::null_mut();
+    // SAFETY: `out_buf` and `mapped` are valid.
+    let hr_buf_map = unsafe { (buf_res.vtbl.map)(out_buf, 0, ptr::null(), &raw mut mapped) };
+    assert_eq!(hr_buf_map, S_OK);
+    // SAFETY: `out_buf` is valid.
+    unsafe { (buf_res.vtbl.unmap)(out_buf, 0, ptr::null()) };
+    // SAFETY: release the single COM reference.
+    unsafe { (buf_res.vtbl.release)(out_buf) };
+
+    // 2. Committed texture with RTV+UAV on `GPU_UPLOAD` succeeds and allows `Map`/`WriteToSubresource`.
+    let rt_uav_tex = ResourceDesc {
+        dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        alignment: 0,
+        width: 32,
+        height: 32,
+        depth_or_array_size: 1,
+        mip_levels: 1,
+        format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        sample_desc: SampleDesc {
+            count: 1,
+            quality: 0,
+        },
+        layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+    };
+    let mut out_tex: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_tex = unsafe {
+        create_committed_resource(
+            dev_ptr.cast(),
+            (&raw const gpu_upload_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const rt_uav_tex).cast(),
+            D3D12_RESOURCE_STATE_COMMON,
+            ptr::null(),
+            (&raw const riid).cast(),
+            &raw mut out_tex,
+        )
+    };
+    assert_eq!(hr_tex, S_OK);
+    // SAFETY: `out_tex` was returned by `create_committed_resource`.
+    let tex_res = unsafe { cast_resource(out_tex) }.expect("cast_resource succeeds");
+    // SAFETY: `out_tex` is valid.
+    let hr_tex_map = unsafe { (tex_res.vtbl.map)(out_tex, 0, ptr::null(), ptr::null_mut()) };
+    assert_eq!(hr_tex_map, S_OK);
+    let empty_box = D3d12Box {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: 0,
+        bottom: 4,
+        back: 1,
+    };
+    // SAFETY: `out_tex` and `empty_box` are valid.
+    let hr_tex_write = unsafe {
+        (tex_res.vtbl.write_to_subresource)(
+            out_tex,
+            0,
+            (&raw const empty_box).cast(),
+            ptr::null(),
+            128,
+            0,
+        )
+    };
+    assert_eq!(hr_tex_write, S_OK);
+    // SAFETY: release the single COM reference.
+    unsafe { (tex_res.vtbl.release)(out_tex) };
+
+    // 3. Placed buffer (with fake `MTLHeap_newBuffer` backing) and placed texture on `GPU_UPLOAD` succeed.
+    let mut backing = vec![0u8; 2048];
+    let base_ptr = backing.as_mut_ptr();
+    FAKE_BACKING_PTR.with(|c| c.set(base_ptr as usize));
+    // SAFETY: fake non-zero `MTLHeap` handle.
+    let fake_gpu_heap = unsafe { Obj::adopt(0x5005) }.expect("non-zero handle");
+    let mut gpu_heap = TestHeap {
+        inner: HeapObject {
+            vtbl: &TEST_HEAP_VTBL,
+            com: ComObject::with_initial_ref(),
+            private_data: PrivateData::default(),
+            device: ptr::null_mut(),
+            heap: Some(fake_gpu_heap),
+            cpu_buffer: None,
+            cpu_memory: ptr::null_mut(),
+        },
+        desc: D3d12HeapDesc {
+            size_in_bytes: 65536,
+            properties: clone_heap_props(&gpu_upload_hp),
+            alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+            flags: D3D12_HEAP_FLAG_NONE,
+        },
+    };
+    let mut out_placed_buf: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_placed_buf = unsafe {
+        create_placed_resource(
+            mtl_dev_ptr.cast(),
+            (&raw mut gpu_heap).cast(),
+            128,
+            (&raw const uav_buf).cast(),
+            D3D12_RESOURCE_STATE_COMMON,
+            ptr::null(),
+            (&raw const riid).cast(),
+            &raw mut out_placed_buf,
+        )
+    };
+    assert_eq!(hr_placed_buf, S_OK);
+    // SAFETY: `out_placed_buf` was returned by `create_placed_resource`.
+    let placed_buf_res = unsafe { cast_resource(out_placed_buf) }.expect("cast_resource succeeds");
+    // SAFETY: `out_placed_buf` and `mapped` are valid.
+    let hr_placed_buf_map =
+        unsafe { (placed_buf_res.vtbl.map)(out_placed_buf, 0, ptr::null(), &raw mut mapped) };
+    assert_eq!(hr_placed_buf_map, S_OK);
+    // SAFETY: `base_ptr` has 2048 bytes, so `+ 128` is in bounds.
+    let expected_ptr = unsafe { base_ptr.add(128).cast::<c_void>() };
+    assert_eq!(mapped, expected_ptr);
+    // SAFETY: release the single COM reference.
+    unsafe { (placed_buf_res.vtbl.release)(out_placed_buf) };
+
+    let mut out_placed_tex: *mut c_void = ptr::null_mut();
+    // SAFETY: pointers are valid local test structs.
+    let hr_placed_tex = unsafe {
+        create_placed_resource(
+            dev_ptr.cast(),
+            (&raw mut gpu_heap).cast(),
+            0,
+            (&raw const rt_uav_tex).cast(),
+            D3D12_RESOURCE_STATE_COMMON,
+            ptr::null(),
+            (&raw const riid).cast(),
+            &raw mut out_placed_tex,
+        )
+    };
+    assert_eq!(hr_placed_tex, S_OK);
+    // SAFETY: `out_placed_tex` was returned by `create_placed_resource`.
+    let placed_tex_res = unsafe { cast_resource(out_placed_tex) }.expect("cast_resource succeeds");
+    // SAFETY: `out_placed_tex` is valid.
+    let hr_placed_tex_map =
+        unsafe { (placed_tex_res.vtbl.map)(out_placed_tex, 0, ptr::null(), ptr::null_mut()) };
+    assert_eq!(hr_placed_tex_map, S_OK);
+    // SAFETY: release the single COM reference.
+    unsafe { (placed_tex_res.vtbl.release)(out_placed_tex) };
+
+    // 4. `GPU_UPLOAD` is rejected on NUMA devices.
+    dev.advertise_numa = true;
+    // SAFETY: pointers are valid local test structs.
+    let hr_numa = unsafe {
+        create_committed_resource(
+            dev_ptr.cast(),
+            (&raw const gpu_upload_hp).cast(),
+            D3D12_HEAP_FLAG_NONE,
+            (&raw const uav_buf).cast(),
+            D3D12_RESOURCE_STATE_COMMON,
+            ptr::null(),
+            (&raw const riid).cast(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(hr_numa, E_INVALIDARG);
+    FAKE_BACKING_PTR.with(|c| c.set(0));
 }

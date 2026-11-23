@@ -20,8 +20,8 @@ use winemetal_wire::{
 use crate::{
     abi::{
         barrier::{
-            D3D12_HEAP_TYPE_CUSTOM, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK,
-            D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_HEAP_TYPE_CUSTOM, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_GPU_UPLOAD,
+            D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
         },
         objects::{D3D12_HEAP_FLAG_ALLOW_DISPLAY, HeapDesc},
         resource::{
@@ -190,7 +190,7 @@ unsafe extern "system-unwind" fn heap_get_desc(this: *mut c_void, ret: *mut c_vo
 
 const fn is_cpu_visible_heap(props: &HeapProperties) -> bool {
     match props.r#type {
-        D3D12_HEAP_TYPE_UPLOAD | D3D12_HEAP_TYPE_READBACK => true,
+        D3D12_HEAP_TYPE_UPLOAD | D3D12_HEAP_TYPE_READBACK | D3D12_HEAP_TYPE_GPU_UPLOAD => true,
         D3D12_HEAP_TYPE_CUSTOM => props.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE,
         _ => false,
     }
@@ -225,6 +225,16 @@ const fn validate_heap_properties(
             }
         }
         D3D12_HEAP_TYPE_UPLOAD => {
+            if props.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_UNKNOWN
+                || props.memory_pool_preference != D3D12_MEMORY_POOL_UNKNOWN
+            {
+                return E_INVALIDARG;
+            }
+        }
+        D3D12_HEAP_TYPE_GPU_UPLOAD => {
+            if advertise_numa {
+                return E_INVALIDARG;
+            }
             if props.cpu_page_property != D3D12_CPU_PAGE_PROPERTY_UNKNOWN
                 || props.memory_pool_preference != D3D12_MEMORY_POOL_UNKNOWN
             {

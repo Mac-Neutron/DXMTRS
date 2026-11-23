@@ -397,7 +397,7 @@ pub unsafe fn create(
 ) -> Hresult {
     let (heap_props, heap_flags) = heap;
     let (riid, out) = out_com;
-    let _ = (optimized_clear, castable_formats);
+    let _ = optimized_clear;
 
     if placed.is_some() {
         let is_rt_ds = (desc.flags
@@ -425,7 +425,9 @@ pub unsafe fn create(
         gpu_resource_id: 0,
     };
     // SAFETY: `device` is null or a valid `Device` pointer.
-    let hr = unsafe { super::populate_texture_info_opt(device, desc, &mut texture_info) };
+    let hr = unsafe {
+        super::populate_texture_info_opt(device, desc, castable_formats, &mut texture_info)
+    };
     if hr != S_OK {
         return hr;
     }
@@ -434,6 +436,7 @@ pub unsafe fn create(
     // cannot be copied can live entirely in tile memory. The fallback below keeps a rejected
     // allocation working on a device without memoryless depth.
     let memoryless = placed.is_none()
+        && !is_cpu_visible_heap(heap_props)
         && super::memoryless_enabled()
         && desc.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
         && (desc.flags

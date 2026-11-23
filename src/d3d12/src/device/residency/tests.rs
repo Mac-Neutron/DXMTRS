@@ -58,3 +58,32 @@ fn a_removal_leaves_the_set_before_its_handle_can_die() {
     // The removal still needs the next flush's commit.
     assert!(pending.dirty);
 }
+
+#[test]
+fn va_generation_increments_on_register_and_unregister() {
+    use std::sync::atomic::Ordering;
+
+    use dxmt_core::resource::{Buffer, BufferAllocationFlags};
+    use winemetal_sys::Obj;
+
+    let dev = Device::new_dummy();
+    assert_eq!(dev.residency.va_generation.load(Ordering::Acquire), 1);
+
+    // SAFETY: `crate::tests` provides no-op `NSObject_retain`/`NSObject_release` stubs.
+    let mtl = unsafe { Obj::adopt(1) }.expect("nonzero fake handle");
+    let buf = Arc::new(Buffer::new(256, &mtl));
+    let alloc = buf.allocate(BufferAllocationFlags::empty());
+    let _ = buf.rename(alloc);
+
+    if let Some(current) = buf.current() {
+        let va = current.gpu_address();
+        drop(current);
+        super::register_with_va(&dev, &buf);
+        let gen_after_reg = dev.residency.va_generation.load(Ordering::Acquire);
+        assert_eq!(gen_after_reg, 2);
+
+        super::unregister(&dev, &buf, va);
+        let gen_after_unreg = dev.residency.va_generation.load(Ordering::Acquire);
+        assert_eq!(gen_after_unreg, 3);
+    }
+}
