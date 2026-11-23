@@ -300,7 +300,7 @@ static RECORD_PATH: LazyLock<String> = LazyLock::new(|| {
     if folder.starts_with('/') {
         folder = format!("Z:{folder}");
     }
-    let _ = std::fs::create_dir(&folder);
+    let _ = std::fs::create_dir_all(&folder);
     let exe = cache_exe_name();
     let exe = if exe.is_empty() { "game" } else { exe.as_str() };
     format!("{folder}/{exe}.pipelines")

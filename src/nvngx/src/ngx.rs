@@ -44,6 +44,44 @@ pub const SUPPORTED: u32 = 0;
 /// `NVSDK_NGX_FeatureSupportResult_NotImplemented`, as DXMT answers any other feature.
 pub const UNSUPPORTED: u32 = 1;
 
+/// `NVSDK_NGX_Parameter_DLSS_Exposure_Scale`.
+pub const PARAM_EXPOSURE_SCALE: &core::ffi::CStr = c"DLSS.Exposure.Scale";
+/// `NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Active`.
+pub const PARAM_REACTIVE_ACTIVE: &core::ffi::CStr = c"DLSS.Input.Bias.Current.Color.Active";
+/// `NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask`.
+pub const PARAM_REACTIVE_MASK: &core::ffi::CStr = c"DLSS.Input.Bias.Current.Color.Mask";
+/// `NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X`.
+pub const PARAM_REACTIVE_BASE_X: &core::ffi::CStr = c"DLSS.Input.Bias.Current.Color.SubrectBase.X";
+/// `NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y`.
+pub const PARAM_REACTIVE_BASE_Y: &core::ffi::CStr = c"DLSS.Input.Bias.Current.Color.SubrectBase.Y";
+/// `NVSDK_NGX_Parameter_DLSSG_CameraNear`.
+pub const PARAM_DLSSG_CAMERA_NEAR: &core::ffi::CStr = c"DLSSG.CameraNear";
+/// `NVSDK_NGX_Parameter_DLSSG_CameraFar`.
+pub const PARAM_DLSSG_CAMERA_FAR: &core::ffi::CStr = c"DLSSG.CameraFar";
+/// `NVSDK_NGX_Parameter_DLSSG_CameraFOV`.
+pub const PARAM_DLSSG_CAMERA_FOV: &core::ffi::CStr = c"DLSSG.CameraFOV";
+/// `NVSDK_NGX_Parameter_DLSSG_CameraAspectRatio`.
+pub const PARAM_DLSSG_CAMERA_ASPECT: &core::ffi::CStr = c"DLSSG.CameraAspectRatio";
+
+/// Private `ID3D12Object` data GUID carrying `DLSSG.Camera*` parameters to `d3d12`.
+pub const DLSSG_CAMERA_GUID: dxmt_util::com::Guid = dxmt_util::com::Guid::new(
+    0x7a3f_91c4,
+    0x5e82,
+    0x4b1d,
+    [0x93, 0xa7, 0x2c, 0x41, 0x8f, 0xd0, 0x62, 0x19],
+);
+
+/// Camera parameters forwarded from `DLSSG.Camera*` NGX keys to `MetalFX`'s interpolator.
+///
+/// Zero fields mean "absent; use the interpolator default".
+#[repr(C)]
+pub struct DlssgCameraParams {
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub field_of_view: f32,
+    pub aspect_ratio: f32,
+}
+
 const _: () = {
     use core::mem::offset_of;
     assert!(
@@ -54,6 +92,7 @@ const _: () = {
         size_of::<FeatureRequirement>() == 264
             && offset_of!(FeatureRequirement, min_os_version) == 8
     );
+    assert!(size_of::<DlssgCameraParams>() == 16);
 };
 
 /// A feature's head, which both APIs' features start with: the game's handle is its address.

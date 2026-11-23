@@ -26,7 +26,11 @@ use crate::ffi::AbortOnPanic;
 
 const HOOK_LAYER_CLASS: &CStr = c"WineMetalLayer";
 const CLIENT_VIEW_CLASS: &CStr = c"WineContentView";
-const CLIENT_SURFACE_IVARS: [&CStr; 2] = [c"d3dmetal_client_surface", c"dxmt_client_surface"];
+const CLIENT_SURFACE_IVARS: [&CStr; 3] = [
+    c"d3dmetal_client_surface",
+    c"dxmt_client_surface",
+    c"client_surface",
+];
 const HIDDEN_KEY: &str = "hidden";
 
 type SurfaceFn = unsafe extern "C" fn(*mut c_void);

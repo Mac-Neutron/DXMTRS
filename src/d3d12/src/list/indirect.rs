@@ -8,9 +8,9 @@ use dxmt_core::{
 };
 use dxmt_util::dxgi_consts::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT};
 use winemetal_wire::{
-    MemPtr, WMT_INDEX_TYPE_U_INT32, WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT,
-    WMT_RENDER_COMMAND_DRAW_INDIRECT, WmtcmdBase, WmtcmdRenderDrawIndexedIndirect,
-    WmtcmdRenderDrawIndirect,
+    MemPtr, WMT_COMPUTE_COMMAND_DISPATCH_INDIRECT, WMT_INDEX_TYPE_U_INT32,
+    WMT_RENDER_COMMAND_DRAW_INDEXED_INDIRECT, WMT_RENDER_COMMAND_DRAW_INDIRECT, WmtcmdBase,
+    WmtcmdComputeDispatchIndirect, WmtcmdRenderDrawIndexedIndirect, WmtcmdRenderDrawIndirect,
 };
 
 use crate::{
@@ -25,6 +25,37 @@ use crate::{
     resource::Resource,
     root_signature::object::RootSignature,
 };
+
+const DISPATCH_ARGUMENTS_SIZE: u64 = 12;
+
+fn can_use_native_compute_dispatch(
+    indirect_without_icb: bool,
+    sig: &CommandSignature,
+    max_command_count: u32,
+    argument_buffer_offset: u64,
+    count_buffer_is_null: bool,
+    arg_buf_len: u64,
+    arg_buf_handle: u64,
+) -> bool {
+    if !indirect_without_icb
+        || sig.update_root_arguments
+        || !count_buffer_is_null
+        || max_command_count == 0
+        || arg_buf_handle == 0
+        || (argument_buffer_offset & 3) != 0
+        || (sig.byte_stride & 3) != 0
+    {
+        return false;
+    }
+    let span = u64::from(max_command_count - 1) * u64::from(sig.byte_stride);
+    let Some(last_off) = argument_buffer_offset.checked_add(span) else {
+        return false;
+    };
+    let Some(last_end) = last_off.checked_add(DISPATCH_ARGUMENTS_SIZE) else {
+        return false;
+    };
+    last_end <= arg_buf_len
+}
 
 #[repr(C)]
 struct VertexBufferEntry {
@@ -266,6 +297,38 @@ pub unsafe fn execute_indirect(
         {
             return;
         }
+        if max_command_count == 0 {
+            return;
+        }
+        if can_use_native_compute_dispatch(
+            settings().enabled(Flags::INDIRECT_WITHOUT_ICB),
+            sig,
+            max_command_count,
+            argument_buffer_offset,
+            count_buffer.is_null(),
+            arg_buf.length(),
+            arg_alloc.buffer(),
+        ) {
+            crate::count!("#ExecuteIndirect native", 1);
+            let args = arg_alloc.buffer();
+            // SAFETY: `list.allocator` was checked non-null above.
+            let alloc = unsafe { &mut *list.allocator };
+            let stride = u64::from(sig.byte_stride);
+            for i in 0..max_command_count {
+                let offset = argument_buffer_offset.wrapping_add(u64::from(i).wrapping_mul(stride));
+                super::draw::encode_compute_cmd(
+                    alloc,
+                    WmtcmdComputeDispatchIndirect {
+                        r#type: WMT_COMPUTE_COMMAND_DISPATCH_INDIRECT,
+                        reserved: [0; 3],
+                        next: MemPtr::NULL,
+                        indirect_args_buffer: args,
+                        indirect_args_offset: offset,
+                    },
+                );
+            }
+            return;
+        }
         // SAFETY: `list.pso_compute` was checked non-null above.
         let pso_compute = unsafe { &*list.pso_compute };
         // SAFETY: `list.allocator` was checked non-null above.
@@ -401,3 +464,6 @@ pub unsafe fn execute_indirect(
     cmd.vertex_argbuf_stride = vb_stride;
     cmd.vertex_slot_mask = pso_graphics.slot_mask;
 }
+
+#[cfg(test)]
+mod tests;

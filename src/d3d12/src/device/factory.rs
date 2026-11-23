@@ -17,9 +17,14 @@ use dxmt_util::{com::ComObject, private_data, private_data::PrivateData, qpc};
 use rustc_hash::FxHashMap;
 use winemetal_sys::{
     MTLDevice_newCommandQueue, MTLDevice_newResidencySet, MTLDevice_registryID,
-    MTLDevice_sampleTimestamps, MTLDevice_supportsFXTemporalScaler, Obj,
+    MTLDevice_sampleTimestamps, MTLDevice_supportsFXTemporalScaler, MTLDevice_supportsFamily, Obj,
+    WMTGetOSVersion,
+    sm50::{SM50_SHADER_METAL_310, SM50_SHADER_METAL_320},
+    wire::{
+        WMT_COMPARE_FUNCTION_ALWAYS, WMT_METAL310, WMT_METAL320, WMTDepthStencilInfo,
+        WMTGPU_FAMILY_APPLE7, WMTStencilInfo,
+    },
 };
-use winemetal_wire::{WMT_COMPARE_FUNCTION_ALWAYS, WMTDepthStencilInfo, WMTStencilInfo};
 
 use crate::{
     abi::ext::{IID_D3D12_DEVICE_DOWNLEVEL, IID_D3D12_DEVICE_EXT, IMTLDXGIAdapterVtbl},
@@ -162,6 +167,18 @@ pub unsafe fn create(
     let library = Library::new(&mtl).ok();
     // SAFETY: `h` is a live `MTLDevice` handle.
     let temporal_supported = unsafe { MTLDevice_supportsFXTemporalScaler(h) };
+    let (mut major, mut minor, mut patch) = (0_u64, 0_u64, 0_u64);
+    // SAFETY: all three pointers reference valid stack locals.
+    unsafe { WMTGetOSVersion(&raw mut major, &raw mut minor, &raw mut patch) };
+    // SAFETY: `h` is a live `MTLDevice` handle.
+    let supports_apple7 = unsafe { MTLDevice_supportsFamily(h, WMTGPU_FAMILY_APPLE7) };
+    let metal_version_env = std::env::var("DXMT_D3D12_METAL_VERSION").ok();
+    let metal_version = select_metal_version(
+        parse_metal_version_override(metal_version_env.as_deref()),
+        major,
+        minor,
+        supports_apple7,
+    );
     let advertise_numa = settings().enabled(Flags::ADVERTISE_NUMA);
 
     let mut dev_residency = residency::Residency::new();
@@ -177,6 +194,7 @@ pub unsafe fn create(
         min_feature_level,
         advertise_numa,
         temporal_supported,
+        metal_version,
         residency: dev_residency,
         null: null::NullResources::new(),
         library,
@@ -729,6 +747,33 @@ pub fn timestamp_frequency(device: &Device) -> u64 {
             1
         }
     })
+}
+
+fn parse_metal_version_override(override_val: Option<&str>) -> i32 {
+    match override_val.map(str::trim) {
+        Some("310") => WMT_METAL310.cast_signed(),
+        Some("320") => WMT_METAL320.cast_signed(),
+        _ => 0,
+    }
+}
+
+const fn select_metal_version(
+    metal_version_option: i32,
+    macos_major: u64,
+    macos_minor: u64,
+    supports_apple7: bool,
+) -> u32 {
+    let (wmt_ver, _, _) = dxmt_core::device::Device::select_caps(
+        metal_version_option,
+        macos_major,
+        macos_minor,
+        supports_apple7,
+    );
+    if wmt_ver == WMT_METAL320 {
+        SM50_SHADER_METAL_320
+    } else {
+        SM50_SHADER_METAL_310
+    }
 }
 
 #[cfg(test)]

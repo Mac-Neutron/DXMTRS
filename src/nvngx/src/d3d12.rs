@@ -9,11 +9,19 @@
 
 use core::ffi::{CStr, c_void};
 use std::sync::{
-    Mutex,
+    LazyLock, Mutex,
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use dxmt_util::{
+    com::{Guid, Hresult, IUnknownVtbl},
+    dxgi_consts::{
+        DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_TYPELESS,
+        DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16_TYPELESS,
+        DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS,
+        DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_UNKNOWN,
+    },
     ext::{
         D3D12CommandListExtVtbl, D3D12DeviceExtVtbl, D3D12ScalerDesc, D3D12UpscaleDesc,
         IID_D3D12_COMMAND_LIST_EXT, IID_D3D12_DEVICE_EXT,
@@ -26,11 +34,28 @@ use crate::{
         CommandList12Vtbl, IID_ID3D12_DEVICE, Resource12Vtbl, ResourceDesc12, query, release, vtbl,
     },
     ngx::{
-        Dlss, FAIL, FEATURE_NOT_SUPPORTED, FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE,
-        FLAG_DEPTH_INVERTED, FLAG_MV_JITTERED, FLAG_MV_LOWRES, INVALID_PARAMETER, OK, hex, note,
-        pointer,
+        DLSSG_CAMERA_GUID, Dlss, DlssgCameraParams, FAIL, FEATURE_NOT_SUPPORTED,
+        FEATURE_SUPERSAMPLING, FLAG_AUTO_EXPOSURE, FLAG_DEPTH_INVERTED, FLAG_MV_JITTERED,
+        FLAG_MV_LOWRES, INVALID_PARAMETER, OK, PARAM_DLSSG_CAMERA_ASPECT, PARAM_DLSSG_CAMERA_FAR,
+        PARAM_DLSSG_CAMERA_FOV, PARAM_DLSSG_CAMERA_NEAR, PARAM_EXPOSURE_SCALE,
+        PARAM_REACTIVE_ACTIVE, PARAM_REACTIVE_BASE_X, PARAM_REACTIVE_BASE_Y, PARAM_REACTIVE_MASK,
+        hex, note, pointer,
     },
     parameter::Parameters,
+};
+
+/// `ID3D12Object` prefix of `ID3D12GraphicsCommandList` up to `SetPrivateData`.
+#[repr(C)]
+struct ObjectList12Vtbl {
+    unknown: IUnknownVtbl,
+    get_private_data: *const c_void,
+    set_private_data:
+        unsafe extern "system" fn(*mut c_void, *const Guid, u32, *const c_void) -> Hresult,
+}
+
+const _: () = {
+    assert!(core::mem::offset_of!(ObjectList12Vtbl, set_private_data) == 4 * size_of::<usize>());
+    assert!(size_of::<DlssgCameraParams>() == 16);
 };
 
 /// Writes `message` to the game's log (stderr), the first time `latch` is reached.
@@ -49,6 +74,8 @@ struct Feature {
     /// The device's `IMTLD3D12DeviceExt`, released with the feature.
     ext: *mut c_void,
     scaler: Mutex<Scaler>,
+    camera_params_seen: AtomicBool,
+    unsupported_reactive_format: AtomicU32,
 }
 
 /// The upscaler made for the textures last evaluated, and what it was made for.
@@ -194,6 +221,8 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
             scaler: core::ptr::null_mut(),
             desc: D3D12ScalerDesc::default(),
         }),
+        camera_params_seen: AtomicBool::new(false),
+        unsupported_reactive_format: AtomicU32::new(DXGI_FORMAT_UNKNOWN),
     });
     // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
     let slots = unsafe { vtbl::<D3D12DeviceExtVtbl>(ext) };
@@ -308,6 +337,88 @@ fn extent(desc: &ResourceDesc12, x: u32, y: u32) -> (u32, u32) {
     (width.saturating_sub(x), desc.height.saturating_sub(y))
 }
 
+/// Whether reactive mask forwarding is enabled (`MACNEUTRON_DLSS_REACTIVE != "0"`).
+fn reactive_mask_enabled() -> bool {
+    static ENABLED: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("MACNEUTRON_DLSS_REACTIVE").ok().as_deref() != Some("0"));
+    *ENABLED
+}
+
+/// Resolves typeless DXGI formats used for reactive masks into concrete typed formats.
+const fn resolve_reactive_format(format: u32) -> u32 {
+    match format {
+        DXGI_FORMAT_R8_TYPELESS => DXGI_FORMAT_R8_UNORM,
+        DXGI_FORMAT_R16_TYPELESS => DXGI_FORMAT_R16_UNORM,
+        DXGI_FORMAT_R8G8B8A8_TYPELESS => DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_B8G8R8A8_TYPELESS => DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_R10G10B10A2_TYPELESS => DXGI_FORMAT_R10G10B10A2_UNORM,
+        DXGI_FORMAT_R16G16B16A16_TYPELESS => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R32G32B32A32_TYPELESS => DXGI_FORMAT_R32G32B32A32_FLOAT,
+        other => other,
+    }
+}
+
+/// Computes pre-exposure from `DLSS.Pre.Exposure` and `DLSS.Exposure.Scale`.
+fn effective_pre_exposure(params: &Parameters) -> f32 {
+    let positive = |name: &CStr| params.f32(name).filter(|v| v.is_finite() && *v > 0.0);
+    let pre = positive(c"DLSS.Pre.Exposure").unwrap_or(1.0);
+    let scale = positive(PARAM_EXPOSURE_SCALE).unwrap_or(1.0);
+    let combined = pre * scale;
+    if combined.is_finite() && combined > 0.0 {
+        combined
+    } else {
+        1.0
+    }
+}
+
+/// Extracts valid positive finite `DLSSG.Camera*` parameters, returning `None` if all absent.
+fn extract_camera_params(params: &Parameters) -> Option<DlssgCameraParams> {
+    let pos = |primary: &CStr, fallback: &CStr| {
+        params
+            .f32(primary)
+            .or_else(|| params.f32(fallback))
+            .filter(|v| v.is_finite() && *v > 0.0)
+    };
+    let near_plane = pos(PARAM_DLSSG_CAMERA_NEAR, c"CameraNear");
+    let far_plane = pos(PARAM_DLSSG_CAMERA_FAR, c"CameraFar");
+    let field_of_view = pos(PARAM_DLSSG_CAMERA_FOV, c"CameraFOV");
+    let aspect_ratio = pos(PARAM_DLSSG_CAMERA_ASPECT, c"CameraAspectRatio");
+    if near_plane.is_none()
+        && far_plane.is_none()
+        && field_of_view.is_none()
+        && aspect_ratio.is_none()
+    {
+        return None;
+    }
+    Some(DlssgCameraParams {
+        near_plane: near_plane.unwrap_or(0.0),
+        far_plane: far_plane.unwrap_or(0.0),
+        field_of_view: field_of_view.unwrap_or(0.0),
+        aspect_ratio: aspect_ratio.unwrap_or(0.0),
+    })
+}
+
+/// Forwards `DLSSG.Camera*` parameters to `d3d12` via `ID3D12Object::SetPrivateData` on `list`.
+fn forward_camera_params(feature: &Feature, list: *mut c_void, params: &Parameters) {
+    let guid = DLSSG_CAMERA_GUID;
+    if let Some(cam) = extract_camera_params(params) {
+        feature.camera_params_seen.store(true, Ordering::Relaxed);
+        // SAFETY: `list` is a live `ID3D12GraphicsCommandList` COM object.
+        let list_slots = unsafe { vtbl::<ObjectList12Vtbl>(list) };
+        let cam_size = u32::try_from(size_of::<DlssgCameraParams>()).unwrap_or(16);
+        // SAFETY: `guid` and `cam` are valid for the duration of `SetPrivateData`.
+        let _ = unsafe {
+            (list_slots.set_private_data)(list, &raw const guid, cam_size, (&raw const cam).cast())
+        };
+    } else if feature.camera_params_seen.load(Ordering::Relaxed) {
+        // SAFETY: `list` is a live `ID3D12GraphicsCommandList` COM object.
+        let list_slots = unsafe { vtbl::<ObjectList12Vtbl>(list) };
+        // SAFETY: null data erases any prior camera private data on `list`.
+        let _ =
+            unsafe { (list_slots.set_private_data)(list, &raw const guid, 0, core::ptr::null()) };
+    }
+}
+
 /// One evaluation: the upscaler for these textures, then DXMT's temporal upscale on `list`.
 fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &Parameters) -> u32 {
     /// Per-call-site log-once latches.
@@ -315,6 +426,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     static LOGGED_MISSING: AtomicBool = AtomicBool::new(false);
     static LOGGED_SMALL: AtomicBool = AtomicBool::new(false);
     static LOGGED_SCALER: AtomicBool = AtomicBool::new(false);
+    static LOGGED_REACTIVE_DROP: AtomicBool = AtomicBool::new(false);
     static LOGGED_FOREIGN: AtomicBool = AtomicBool::new(false);
     static LOGGED_REFUSED: AtomicBool = AtomicBool::new(false);
     let dlss = &feature.dlss;
@@ -370,6 +482,39 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     if iw == 0 || ih == 0 {
         (iw, ih) = (dlss.width, dlss.height);
     }
+    let reactive_active = params.i32(PARAM_REACTIVE_ACTIVE).unwrap_or(0) != 0;
+    let mut reactive_mask = if reactive_active && reactive_mask_enabled() {
+        resource(params, PARAM_REACTIVE_MASK)
+    } else {
+        core::ptr::null_mut()
+    };
+    let (mut rx, mut ry) = if reactive_mask.is_null() {
+        (0, 0)
+    } else {
+        (base(PARAM_REACTIVE_BASE_X), base(PARAM_REACTIVE_BASE_Y))
+    };
+    let reactive_desc = if reactive_mask.is_null() {
+        None
+    } else {
+        Some(desc(reactive_mask))
+    };
+    let mut reactive_format = reactive_desc
+        .as_ref()
+        .map_or(DXGI_FORMAT_UNKNOWN, |rd| resolve_reactive_format(rd.format));
+    if reactive_format == DXGI_FORMAT_UNKNOWN
+        || reactive_format == feature.unsupported_reactive_format.load(Ordering::Relaxed)
+    {
+        reactive_mask = core::ptr::null_mut();
+        (rx, ry) = (0, 0);
+        reactive_format = DXGI_FORMAT_UNKNOWN;
+    }
+    let (rw, rh) = if reactive_mask.is_null() {
+        (u32::MAX, u32::MAX)
+    } else {
+        reactive_desc
+            .as_ref()
+            .map_or((u32::MAX, u32::MAX), |rd| extent(rd, rx, ry))
+    };
     let (cd, dd, md, od) = (desc(color), desc(depth), desc(motion), desc(output));
     let ((cw, ch), (dw, dh), (mut mw, mut mh), (ow, oh)) = (
         extent(&cd, cx, cy),
@@ -383,14 +528,15 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         float(c"Jitter.Offset.Y", 0.0),
     );
     let (scale_x, scale_y) = (float(c"MV.Scale.X", 1.0), float(c"MV.Scale.Y", 1.0));
-    let pre_exposure = float(c"DLSS.Pre.Exposure", 1.0);
+    let pre_exposure = effective_pre_exposure(params);
     let reset = params.i32(c"Reset").unwrap_or(0);
     if !LOGGED_INPUTS.swap(true, Ordering::Relaxed) {
         note(format_args!(
             "flags {} quality {}; render {iw}x{ih} of {}x{}, output {}x{}; formats colour {} depth {} \
-             motion {} output {}; sizes colour {}x{} depth {}x{} motion {}x{} output {}x{}; bases colour {cx},{cy} \
-             depth {dx},{dy} motion {mx},{my} output {ox},{oy}; exposure texture {}; jitter {jitter_x:.6},{jitter_y:.6}; \
-             motion scale {scale_x:.6},{scale_y:.6}; pre-exposure {pre_exposure:.6}; reset {reset}",
+             motion {} output {} reactive {}; sizes colour {}x{} depth {}x{} motion {}x{} output {}x{}; \
+             bases colour {cx},{cy} depth {dx},{dy} motion {mx},{my} reactive {rx},{ry} output {ox},{oy}; \
+             exposure texture {}; jitter {jitter_x:.6},{jitter_y:.6}; motion scale {scale_x:.6},{scale_y:.6}; \
+             pre-exposure {pre_exposure:.6}; reset {reset}",
             hex(flag),
             dlss.quality,
             dlss.width,
@@ -401,6 +547,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
             dd.format,
             md.format,
             od.format,
+            reactive_format,
             cd.width,
             cd.height,
             dd.width,
@@ -423,6 +570,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         depth_format: dd.format,
         motion_format: md.format,
         output_format: od.format,
+        reactive_mask_format: reactive_format,
         auto_exposure: i32::from(flag & FLAG_AUTO_EXPOSURE != 0),
         output_resolution_motion_vectors: i32::from(flag & FLAG_MV_LOWRES == 0),
         jittered_motion_vectors: i32::from(flag & FLAG_MV_JITTERED != 0),
@@ -446,8 +594,8 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
             (u32::MAX, u32::MAX)
         };
     }
-    let tw = cw.min(dw).min(mw).min(want.output_width);
-    let th = ch.min(dh).min(mh).min(want.output_height);
+    let tw = cw.min(dw).min(mw).min(rw).min(want.output_width);
+    let th = ch.min(dh).min(mh).min(rh).min(want.output_height);
     if tw < iw || th < ih {
         once(
             &LOGGED_SMALL,
@@ -473,21 +621,41 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         // SAFETY: `ext` is DXMT's `IMTLD3D12DeviceExt`.
         let slots = unsafe { vtbl::<D3D12DeviceExtVtbl>(ext) };
         // SAFETY: `want` outlives the call; the new upscaler is the feature's reference.
-        let hr =
+        let mut hr =
             unsafe { (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler) };
+        if hr < 0 && want.reactive_mask_format != DXGI_FORMAT_UNKNOWN {
+            let dropped = want.reactive_mask_format;
+            feature
+                .unsupported_reactive_format
+                .store(dropped, Ordering::Relaxed);
+            once(
+                &LOGGED_REACTIVE_DROP,
+                format_args!(
+                    "EvaluateFeature: reactive mask format {dropped} unsupported by MetalFX, disabling reactive mask"
+                ),
+            );
+            want.reactive_mask_format = DXGI_FORMAT_UNKNOWN;
+            reactive_mask = core::ptr::null_mut();
+            (rx, ry) = (0, 0);
+            // SAFETY: `want` outlives the call; retrying without reactive mask.
+            hr = unsafe {
+                (slots.create_temporal_scaler)(ext, &raw const want, &raw mut scaler.scaler)
+            };
+        }
         if hr < 0 {
             scaler.scaler = core::ptr::null_mut();
             once(
                 &LOGGED_SCALER,
                 format_args!(
                     "EvaluateFeature: no MetalFX upscaler for {tw}x{th} to {}x{}, formats colour {} depth {} motion {} \
-                     output {}: {}",
+                     output {} reactive {}: {}",
                     want.output_width,
                     want.output_height,
                     want.color_format,
                     want.depth_format,
                     want.motion_format,
                     want.output_format,
+                    want.reactive_mask_format,
                     hex(hr.cast_unsigned())
                 ),
             );
@@ -506,27 +674,24 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         );
         return INVALID_PARAMETER;
     };
+    forward_camera_params(feature, list, params);
     let d = D3D12UpscaleDesc {
         color,
         depth,
         motion_vector: motion,
         exposure,
-        reactive_mask: core::ptr::null_mut(),
+        reactive_mask,
         output,
         input_content_width: iw,
         input_content_height: ih,
         color_offset: [cx, cy],
         depth_offset: [dx, dy],
         motion_offset: [mx, my],
-        reactive_offset: [0, 0],
+        reactive_offset: [rx, ry],
         output_offset: [ox, oy],
         jitter_offset: [jitter_x, jitter_y],
         motion_vector_scale: [scale_x, scale_y],
-        pre_exposure: if pre_exposure > 0.0 {
-            pre_exposure
-        } else {
-            1.0
-        },
+        pre_exposure,
         reset: i32::from(reset != 0),
         depth_reversed: i32::from(flag & FLAG_DEPTH_INVERTED != 0),
     };
@@ -550,3 +715,6 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     }
     OK
 }
+
+#[cfg(test)]
+mod tests;

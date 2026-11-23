@@ -34,8 +34,6 @@ use crate::{
     shader::Sm50Shader,
 };
 
-const D3D12_CACHE_MAGIC: u32 = 310;
-
 static FUNCTION_HITS: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_MISSES: AtomicU64 = AtomicU64::new(0);
 static REFLECTION_HITS: AtomicU64 = AtomicU64::new(0);
@@ -58,17 +56,17 @@ pub enum FunctionKind {
 static REFLECTION_MEM_CACHE: LazyLock<Mutex<FxHashMap<Sha1Digest, MtlShaderReflection>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
-fn store() -> &'static Store {
-    static STORE: LazyLock<Arc<Store>> = LazyLock::new(|| {
-        let key = if env!("DXMT_TRANSLATOR_KEY").is_empty() {
-            env!("DXMT_VERSION")
-        } else {
-            env!("DXMT_TRANSLATOR_KEY")
-        };
-        let ver = dxmt_core::shader_cache::version(key, AIRCONV_VERSION);
-        dxmt_core::shader_cache::instance(D3D12_CACHE_MAGIC, ver)
-    });
-    &STORE
+const fn cache_version() -> u64 {
+    let key = if env!("DXMT_TRANSLATOR_KEY").is_empty() {
+        env!("DXMT_VERSION")
+    } else {
+        env!("DXMT_TRANSLATOR_KEY")
+    };
+    dxmt_core::shader_cache::version(key, AIRCONV_VERSION)
+}
+
+fn store(metal_version: u32) -> Arc<Store> {
+    dxmt_core::shader_cache::instance(metal_version, cache_version())
 }
 
 fn count_function_lookup() {
@@ -169,7 +167,7 @@ impl CachedShader {
     /// Reads (or computes and caches) the shader's [`MtlShaderReflection`] (`Reflection`,
     ///
     /// `d3d12_shader_cache.cpp:95-119`).
-    pub fn reflection(&mut self, out: &mut MtlShaderReflection) -> Hresult {
+    pub fn reflection(&mut self, metal_version: u32, out: &mut MtlShaderReflection) -> Hresult {
         if !self.reflected {
             let mem_hit = lock(&REFLECTION_MEM_CACHE).get(&self.digest).copied();
             if let Some(mem_refl) = mem_hit {
@@ -179,7 +177,7 @@ impl CachedShader {
                 *out = self.reflection;
                 return S_OK;
             }
-            let cache = store();
+            let cache = store(metal_version);
             let enabled = cache.has_reader();
             let key = reflection_key(&self.digest);
             let cached = if let Some(data) = cache.read(&key) {
@@ -462,18 +460,21 @@ impl ShaderFunctionCache {
     }
 }
 
-/// The entry point a shader function is compiled under.
+/// The entry point and Metal target a shader function is compiled under.
 pub struct CompileTarget<'a> {
     /// Metal entry-point name.
     pub name: &'a str,
     /// Shader stage, for error messages.
     pub stage: &'a str,
+    /// `SM50_SHADER_METAL_*` target version (`Device::metal_version`).
+    pub metal_version: u32,
 }
 
 /// Environment overrides for [`compile_function_with_env`].
 pub struct CompileEnv<'a> {
     pub name: &'a str,
     pub stage: &'a str,
+    pub metal_version: u32,
     pub probe: bool,
     pub bounds: &'a str,
 }
@@ -500,6 +501,7 @@ pub unsafe fn compile_function_with_env(
     let CompileEnv {
         name,
         stage,
+        metal_version,
         probe,
         bounds,
     } = *env;
@@ -520,7 +522,7 @@ pub unsafe fn compile_function_with_env(
             count_function_lookup();
             return Ok(function);
         }
-        let disk = store();
+        let disk = store(metal_version);
         let enabled = disk.has_reader();
         if let Some(data) = disk.read(key) {
             static REJECTED_ONCE: Once = Once::new();
@@ -563,7 +565,7 @@ pub unsafe fn compile_function_with_env(
     let func = dxmt_core::shader::load_function(device, &data, &c_name).map_err(|_| E_FAIL)?;
 
     if let Some(ref key) = key {
-        let disk = store();
+        let disk = store(metal_version);
         if disk.has_writer() {
             disk.write(key, &data);
         }
@@ -608,6 +610,7 @@ pub unsafe fn compile_function(
             &CompileEnv {
                 name: target.name,
                 stage: target.stage,
+                metal_version: target.metal_version,
                 probe: probe_on(),
                 bounds: bounds_env(),
             },

@@ -12,10 +12,11 @@ use winemetal_sys::{
         MtlShaderReflection, MtlShaderReflectionUnion, SM50_INDEX_BUFFER_FORMAT_UINT16,
         SM50_SHADER_ARGUMENT_TYPE_MAX, SM50_SHADER_COMMON, SM50_SHADER_FLAG_DEFUSE_FMA,
         SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO, SM50_SHADER_IA_INPUT_LAYOUT, SM50_SHADER_METAL_310,
-        SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR,
-        SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2, Sm50CompiledBitcode,
-        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderCompilationArgumentData,
-        Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
+        SM50_SHADER_METAL_320, SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER,
+        SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2,
+        Sm50CompiledBitcode, Sm50IaInputElement, Sm50ShaderCommonData,
+        Sm50ShaderCompilationArgumentData, Sm50ShaderIaInputLayoutData,
+        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
         Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
     },
 };
@@ -23,7 +24,7 @@ use winemetal_sys::{
 use super::{
     CachedShader, CompileEnv, FunctionKind, Sha1Digest, ShaderFunctionCache,
     compile_function_with_env, decode_reflection, encode_reflection, function_key_for_kind,
-    function_key_from_digests, hash_compile_args, reflection_key, sha1,
+    function_key_from_digests, hash_compile_args, reflection_key, sha1, store,
 };
 
 static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -456,6 +457,7 @@ fn probe_bypasses_the_cache() {
             &CompileEnv {
                 name: "vertex_main",
                 stage: "vs",
+                metal_version: SM50_SHADER_METAL_310,
                 probe: true,
                 bounds: "",
             },
@@ -482,6 +484,7 @@ fn probe_bypasses_the_cache() {
             &CompileEnv {
                 name: "vertex_main",
                 stage: "vs",
+                metal_version: SM50_SHADER_METAL_310,
                 probe: false,
                 bounds: "",
             },
@@ -687,6 +690,7 @@ fn compile_function_tessellation_stages() {
             &CompileEnv {
                 name: "vshs_main",
                 stage: "vs/hs",
+                metal_version: SM50_SHADER_METAL_310,
                 probe: true,
                 bounds: "",
             },
@@ -707,6 +711,7 @@ fn compile_function_tessellation_stages() {
             &CompileEnv {
                 name: "ds_main",
                 stage: "ds",
+                metal_version: SM50_SHADER_METAL_310,
                 probe: true,
                 bounds: "",
             },
@@ -715,4 +720,35 @@ fn compile_function_tessellation_stages() {
     .expect("tessellation domain compile succeeds");
     assert_eq!(domain_fn.handle(), 0x7006);
     assert_eq!(SM50_COMPILE_CALLS.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn store_separates_metal_310_and_320_caches() {
+    let _guard = lock(&CACHE_TEST_LOCK);
+    dxmt_core::shader_cache::close_all();
+
+    let s310 = store(SM50_SHADER_METAL_310);
+    let s320 = store(SM50_SHADER_METAL_320);
+    assert!(!Arc::ptr_eq(&s310, &s320));
+    assert!(Arc::ptr_eq(&s310, &store(SM50_SHADER_METAL_310)));
+    assert!(Arc::ptr_eq(&s320, &store(SM50_SHADER_METAL_320)));
+
+    let c310 = Sm50ShaderCommonData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_COMMON,
+        metal_version: SM50_SHADER_METAL_310,
+        flags: 0,
+    };
+    let c320 = Sm50ShaderCommonData {
+        next: ptr::null_mut(),
+        r#type: SM50_SHADER_COMMON,
+        metal_version: SM50_SHADER_METAL_320,
+        flags: 0,
+    };
+    // SAFETY: both structs are valid 1-node argument chains.
+    let h310 = unsafe { hash_compile_args((&raw const c310).cast()) };
+    // SAFETY: both structs are valid 1-node argument chains.
+    let h320 = unsafe { hash_compile_args((&raw const c320).cast()) };
+    assert!(h310.is_some());
+    assert_ne!(h310, h320);
 }

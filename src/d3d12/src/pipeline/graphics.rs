@@ -32,11 +32,10 @@ use winemetal_sys::{
         SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_ROOT_ARGUMENTS,
         SM50_BINDING_INDEX_STATIC_SAMPLERS, SM50_BINDING_INDEX_VERTEX_BUFFER,
         SM50_INDEX_BUFFER_FORMAT_NONE, SM50_SHADER_COMMON, SM50_SHADER_IA_INPUT_LAYOUT,
-        SM50_SHADER_METAL_310, SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER,
-        SM50_SHADER_PSO_TESSELLATOR, SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2,
-        Sm50IaInputElement, Sm50ShaderCommonData, Sm50ShaderIaInputLayoutData,
-        Sm50ShaderPsoGeometryShaderData, Sm50ShaderPsoPixelShaderData,
-        Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
+        SM50_SHADER_PSO_GEOMETRY_SHADER, SM50_SHADER_PSO_PIXEL_SHADER, SM50_SHADER_PSO_TESSELLATOR,
+        SM50_SHADER_ROOT_SIGNATURE, SM50_SHADER_ROOT_SIGNATURE2, Sm50IaInputElement,
+        Sm50ShaderCommonData, Sm50ShaderIaInputLayoutData, Sm50ShaderPsoGeometryShaderData,
+        Sm50ShaderPsoPixelShaderData, Sm50ShaderPsoTessellatorData, Sm50ShaderRootSignatureData,
     },
 };
 use winemetal_wire::{
@@ -180,14 +179,7 @@ impl Graphics {
         };
         // SAFETY: `state` holds valid shader/layout buffers for the duration of the compile.
         if let Ok(pso) = unsafe {
-            compile_geometry_variant(
-                metal,
-                &dev.shader_functions,
-                self.slot_mask,
-                &mut state,
-                strip,
-                index_format,
-            )
+            compile_geometry_variant(dev, metal, self.slot_mask, &mut state, strip, index_format)
         } {
             let handle = pso.handle();
             variants[idx] = Some(pso);
@@ -227,15 +219,9 @@ impl Graphics {
         };
         let fmt = u32::try_from(idx).unwrap_or(0);
         // SAFETY: `state` holds valid shader/layout buffers for the duration of the compile.
-        if let Ok(pso) = unsafe {
-            compile_tessellation_variant(
-                metal,
-                &dev.shader_functions,
-                self.slot_mask,
-                &mut state,
-                fmt,
-            )
-        } {
+        let compiled =
+            unsafe { compile_tessellation_variant(dev, metal, self.slot_mask, &mut state, fmt) };
+        if let Ok(pso) = compiled {
             let handle = pso.handle();
             variants[idx] = Some(pso);
             drop(state);
@@ -885,8 +871,8 @@ fn initialize_dsso(
 }
 
 unsafe fn compile_pixel_shader(
+    dev: &Device,
     metal: &Obj,
-    cache: &crate::shader_cache::ShaderFunctionCache,
     desc: &GraphicsPipelineStateDesc,
     shader_ps: &mut CachedShader,
     colors: &[WMTColorAttachmentBlendInfo; 8],
@@ -895,7 +881,7 @@ unsafe fn compile_pixel_shader(
     let mut common = Sm50ShaderCommonData {
         next: ptr::null_mut(),
         r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
+        metal_version: dev.metal_version,
         flags: 0,
     };
     let mut pixel_formats = [0u32; 8];
@@ -932,7 +918,7 @@ unsafe fn compile_pixel_shader(
     unsafe {
         compile_function(
             metal,
-            cache,
+            &dev.shader_functions,
             FunctionKind::Shader,
             shader_ps,
             None,
@@ -940,14 +926,15 @@ unsafe fn compile_pixel_shader(
             &CompileTarget {
                 name: &ps_name,
                 stage: "ps",
+                metal_version: dev.metal_version,
             },
         )
     }
 }
 
 unsafe fn compile_geometry_variant(
+    dev: &Device,
     metal: &Obj,
-    cache: &crate::shader_cache::ShaderFunctionCache,
     slot_mask: u32,
     state: &mut GeometryState,
     strip: bool,
@@ -956,7 +943,7 @@ unsafe fn compile_geometry_variant(
     let mut common = Sm50ShaderCommonData {
         next: ptr::null_mut(),
         r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
+        metal_version: dev.metal_version,
         flags: 0,
     };
     let mut gs_data = Sm50ShaderPsoGeometryShaderData {
@@ -995,7 +982,7 @@ unsafe fn compile_geometry_variant(
     let object_function = unsafe {
         compile_function(
             metal,
-            cache,
+            &dev.shader_functions,
             FunctionKind::GeometryVertex,
             vs_mut,
             Some(gs_mut),
@@ -1003,6 +990,7 @@ unsafe fn compile_geometry_variant(
             &CompileTarget {
                 name: "vsgs_main",
                 stage: "vs (geometry pipeline)",
+                metal_version: dev.metal_version,
             },
         )
     }?;
@@ -1010,7 +998,7 @@ unsafe fn compile_geometry_variant(
     let mesh_function = unsafe {
         compile_function(
             metal,
-            cache,
+            &dev.shader_functions,
             FunctionKind::GeometryMesh,
             vs_mut,
             Some(gs_mut),
@@ -1018,6 +1006,7 @@ unsafe fn compile_geometry_variant(
             &CompileTarget {
                 name: "gs_main",
                 stage: "gs",
+                metal_version: dev.metal_version,
             },
         )
     }?;
@@ -1053,8 +1042,8 @@ unsafe fn compile_geometry_variant(
 }
 
 unsafe fn compile_tessellation_variant(
+    dev: &Device,
     metal: &Obj,
-    cache: &crate::shader_cache::ShaderFunctionCache,
     slot_mask: u32,
     state: &mut TessellationState,
     index_format: u32,
@@ -1062,7 +1051,7 @@ unsafe fn compile_tessellation_variant(
     let mut common = Sm50ShaderCommonData {
         next: ptr::null_mut(),
         r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
+        metal_version: dev.metal_version,
         flags: 0,
     };
     let mut tess_data = Sm50ShaderPsoTessellatorData {
@@ -1110,7 +1099,7 @@ unsafe fn compile_tessellation_variant(
     let object_function = unsafe {
         compile_function(
             metal,
-            cache,
+            &dev.shader_functions,
             FunctionKind::TessellationHull,
             vs_mut,
             Some(hs_mut),
@@ -1118,6 +1107,7 @@ unsafe fn compile_tessellation_variant(
             &CompileTarget {
                 name: "vshs_main",
                 stage: "vs/hs (tessellation pipeline)",
+                metal_version: dev.metal_version,
             },
         )
     }?;
@@ -1125,7 +1115,7 @@ unsafe fn compile_tessellation_variant(
     let mesh_function = unsafe {
         compile_function(
             metal,
-            cache,
+            &dev.shader_functions,
             FunctionKind::TessellationDomain,
             hs_mut,
             Some(ds_mut),
@@ -1133,6 +1123,7 @@ unsafe fn compile_tessellation_variant(
             &CompileTarget {
                 name: "ds_main",
                 stage: "ds (tessellation pipeline)",
+                metal_version: dev.metal_version,
             },
         )
     }?;
@@ -1290,6 +1281,7 @@ fn build_capture_line(
 }
 
 fn reflect_optional_ps(
+    metal_version: u32,
     has_ps: bool,
     pixel_bytes: &[u8],
 ) -> Result<(Option<Arc<CachedShader>>, MtlShaderReflection), Hresult> {
@@ -1302,7 +1294,7 @@ fn reflect_optional_ps(
     let Some(ps_mut) = Arc::get_mut(&mut pixel_shader) else {
         return Err(E_FAIL);
     };
-    let hr = ps_mut.reflection(&mut pixel_refl);
+    let hr = ps_mut.reflection(metal_version, &mut pixel_refl);
     if hr < 0 {
         return Err(hr);
     }
@@ -1370,20 +1362,21 @@ unsafe fn build_geometry_pso(
     let mut geometry_refl = unsafe { zeroed::<MtlShaderReflection>() };
     let vertex_hr = Arc::get_mut(&mut vertex_shader)
         .ok_or(E_FAIL)?
-        .reflection(&mut vertex_refl);
+        .reflection(dev.metal_version, &mut vertex_refl);
     if vertex_hr < 0 {
         return Err(vertex_hr);
     }
     let geometry_hr = Arc::get_mut(&mut geometry_shader)
         .ok_or(E_FAIL)?
-        .reflection(&mut geometry_refl);
+        .reflection(dev.metal_version, &mut geometry_refl);
     if geometry_hr < 0 {
         return Err(geometry_hr);
     }
     // SAFETY: `vertex_bytes` and `input_elems_slice` are valid.
     let (elements, slot_mask) = unsafe { extract_input_layout(vertex_bytes, input_elems_slice) }?;
     let rootsig_blob = rs_blob.map_or_else(|| vertex_bytes.to_vec(), <[u8]>::to_vec);
-    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
+    let (mut pixel_shader_opt, pixel_refl) =
+        reflect_optional_ps(dev.metal_version, has_bytecode(&d.ps), pixel_bytes)?;
     let writes_uav =
         vertex_refl.writes_uav != 0 || geometry_refl.writes_uav != 0 || pixel_refl.writes_uav != 0;
     // SAFETY: Pixel shader reflection populates the `pixel_shader` union arm.
@@ -1413,16 +1406,8 @@ unsafe fn build_geometry_pso(
     let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
         let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
         // SAFETY: `metal`, `d`, `ps_mut`, and `geo_info.colors` are valid.
-        let f = unsafe {
-            compile_pixel_shader(
-                metal,
-                &dev.shader_functions,
-                d,
-                ps_mut,
-                &geo_info.colors,
-                dual_source,
-            )
-        }?;
+        let f =
+            unsafe { compile_pixel_shader(dev, metal, d, ps_mut, &geo_info.colors, dual_source) }?;
         pixel_digest = *ps_mut.digest();
         Some(f)
     } else {
@@ -1448,8 +1433,8 @@ unsafe fn build_geometry_pso(
     // SAFETY: `metal` and `state` are valid.
     let default_variant = unsafe {
         compile_geometry_variant(
+            dev,
             metal,
-            &dev.shader_functions,
             slot_mask,
             &mut state,
             false,
@@ -1520,19 +1505,19 @@ unsafe fn build_tessellation_pso(
 
     let vertex_hr = Arc::get_mut(&mut vertex_shader)
         .ok_or(E_FAIL)?
-        .reflection(&mut vertex_refl);
+        .reflection(dev.metal_version, &mut vertex_refl);
     if vertex_hr < 0 {
         return Err(vertex_hr);
     }
     let hull_hr = Arc::get_mut(&mut hull_shader)
         .ok_or(E_FAIL)?
-        .reflection(&mut hull_refl);
+        .reflection(dev.metal_version, &mut hull_refl);
     if hull_hr < 0 {
         return Err(hull_hr);
     }
     let domain_hr = Arc::get_mut(&mut domain_shader)
         .ok_or(E_FAIL)?
-        .reflection(&mut domain_refl);
+        .reflection(dev.metal_version, &mut domain_refl);
     if domain_hr < 0 {
         return Err(domain_hr);
     }
@@ -1555,7 +1540,8 @@ unsafe fn build_tessellation_pso(
         .or_else(|| embedded_root_signature(&[vertex_bytes, hull_bytes, domain_bytes, pixel_bytes]))
         .unwrap_or(vertex_bytes)
         .to_vec();
-    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
+    let (mut pixel_shader_opt, pixel_refl) =
+        reflect_optional_ps(dev.metal_version, has_bytecode(&d.ps), pixel_bytes)?;
     let writes_uav = vertex_refl.writes_uav != 0
         || hull_refl.writes_uav != 0
         || domain_refl.writes_uav != 0
@@ -1599,16 +1585,8 @@ unsafe fn build_tessellation_pso(
     let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
         let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
         // SAFETY: `metal`, `d`, `ps_mut`, and `tess_info.colors` are valid.
-        let f = unsafe {
-            compile_pixel_shader(
-                metal,
-                &dev.shader_functions,
-                d,
-                ps_mut,
-                &tess_info.colors,
-                dual_source,
-            )
-        }?;
+        let f =
+            unsafe { compile_pixel_shader(dev, metal, d, ps_mut, &tess_info.colors, dual_source) }?;
         pixel_digest = *ps_mut.digest();
         Some(f)
     } else {
@@ -1638,8 +1616,8 @@ unsafe fn build_tessellation_pso(
     // SAFETY: `metal` and `state` are valid.
     let default_variant = unsafe {
         compile_tessellation_variant(
+            dev,
             metal,
-            &dev.shader_functions,
             slot_mask,
             &mut state,
             SM50_INDEX_BUFFER_FORMAT_NONE,
@@ -1693,7 +1671,7 @@ unsafe fn build_vertex_pso(
     // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
     let mut vertex_refl = unsafe { zeroed::<MtlShaderReflection>() };
     let vs_mut = Arc::get_mut(&mut vertex_shader).ok_or(E_FAIL)?;
-    let hr = vs_mut.reflection(&mut vertex_refl);
+    let hr = vs_mut.reflection(dev.metal_version, &mut vertex_refl);
     if hr < 0 {
         return Err(hr);
     }
@@ -1704,7 +1682,7 @@ unsafe fn build_vertex_pso(
     let mut common = Sm50ShaderCommonData {
         next: ptr::null_mut(),
         r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
+        metal_version: dev.metal_version,
         flags: 0,
     };
     let mut data_ia = Sm50ShaderIaInputLayoutData {
@@ -1736,12 +1714,14 @@ unsafe fn build_vertex_pso(
             &CompileTarget {
                 name: "vs_main",
                 stage: "vs",
+                metal_version: dev.metal_version,
             },
         )
     }?;
     let vertex_digest = *vs_mut.digest();
 
-    let (mut pixel_shader_opt, pixel_refl) = reflect_optional_ps(has_bytecode(&d.ps), pixel_bytes)?;
+    let (mut pixel_shader_opt, pixel_refl) =
+        reflect_optional_ps(dev.metal_version, has_bytecode(&d.ps), pixel_bytes)?;
     let writes_uav = vertex_refl.writes_uav != 0 || pixel_refl.writes_uav != 0;
     // SAFETY: Pixel shader reflection populates the `pixel_shader` union arm.
     let has_cov = unsafe { pixel_refl.u.pixel_shader.has_coverage_output } != 0;
@@ -1771,16 +1751,7 @@ unsafe fn build_vertex_pso(
     let ps_func = if let Some(pixel_shader) = pixel_shader_opt.as_mut() {
         let ps_mut = Arc::get_mut(pixel_shader).ok_or(E_FAIL)?;
         // SAFETY: `metal`, `d`, `ps_mut`, and `info.colors` are valid.
-        let f = unsafe {
-            compile_pixel_shader(
-                metal,
-                &dev.shader_functions,
-                d,
-                ps_mut,
-                &info.colors,
-                dual_source,
-            )
-        }?;
+        let f = unsafe { compile_pixel_shader(dev, metal, d, ps_mut, &info.colors, dual_source) }?;
         pixel_digest = *ps_mut.digest();
         Some(f)
     } else {

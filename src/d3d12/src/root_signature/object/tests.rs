@@ -20,21 +20,28 @@ use crate::{
     abi::{
         root_signature::{
             D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1,
-            D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE,
+            D3D_ROOT_SIGNATURE_VERSION_1_2, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE,
             D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE, D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-            D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE,
-            D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS, D3D12_ROOT_PARAMETER_TYPE_CBV,
-            D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, DescriptorRange, DescriptorRange1,
-            RootConstants, RootDescriptor, RootDescriptorTable, RootDescriptorTable1,
+            D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC,
+            D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            D3D12_ROOT_PARAMETER_TYPE_CBV, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED,
+            D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
+            D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES, D3D12_SAMPLER_FLAG_NONE,
+            D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR, DescriptorRange, DescriptorRange1, RootConstants,
+            RootDescriptor, RootDescriptor1, RootDescriptorTable, RootDescriptorTable1,
             RootParameter, RootParameter1, RootParameter1Payload, RootParameterPayload,
-            RootSignatureDesc, RootSignatureDesc1, StaticSamplerDesc, VersionedDesc,
-            VersionedRootSignatureDesc,
+            RootSignatureDesc, RootSignatureDesc1, RootSignatureDesc2, StaticSamplerDesc,
+            StaticSamplerDesc1, VersionedDesc, VersionedRootSignatureDesc,
         },
         sampler::{
             STATIC_BORDER_COLOR_OPAQUE_BLACK, STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
             TEXTURE_ADDRESS_MODE_BORDER, TEXTURE_ADDRESS_MODE_CLAMP, TEXTURE_ADDRESS_MODE_WRAP,
         },
-        vtbl::{ID3D12RootSignatureDeserializerVtbl, ID3D12VersionedRootSignatureDeserializerVtbl},
+        vtbl::{
+            ID3D10BlobVtbl, ID3D12RootSignatureDeserializerVtbl,
+            ID3D12VersionedRootSignatureDeserializerVtbl,
+        },
     },
     com::{
         self, E_INVALIDARG, IID_ID3D12_ROOT_SIGNATURE, IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER,
@@ -711,4 +718,419 @@ fn versioned_deserializer_as_cpp() {
 
     // SAFETY: `release` drops the single reference on `vdeser`.
     unsafe { (vvtbl.release)(vdeser) };
+}
+
+fn serialize_blob_bytes(desc: &VersionedRootSignatureDesc) -> Vec<u8> {
+    let mut blob_ptr: *mut c_void = ptr::null_mut();
+    let mut err_ptr: *mut c_void = ptr::null_mut();
+    // SAFETY: `desc`, `blob_ptr`, and `err_ptr` are valid caller pointers.
+    let hr = unsafe {
+        D3D12SerializeVersionedRootSignature(
+            ptr::from_ref(desc).cast(),
+            &raw mut blob_ptr,
+            &raw mut err_ptr,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    assert!(!blob_ptr.is_null());
+    assert!(err_ptr.is_null());
+    // SAFETY: `blob_ptr` is a live `ID3D10Blob` returned by `D3D12SerializeVersionedRootSignature`.
+    let blob_vtbl = unsafe { com::vtbl::<ID3D10BlobVtbl>(blob_ptr) };
+    // SAFETY: calling `GetBufferPointer` on a live blob.
+    let ptr = unsafe { (blob_vtbl.get_buffer_pointer)(blob_ptr) }.cast::<u8>();
+    // SAFETY: calling `GetBufferSize` on a live blob.
+    let size = unsafe { (blob_vtbl.get_buffer_size)(blob_ptr) };
+    // SAFETY: `ptr` points to `size` immutable bytes inside the blob.
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, size) }.to_vec();
+    // SAFETY: `release` drops the single reference on `blob_ptr`.
+    unsafe { (blob_vtbl.release)(blob_ptr) };
+    bytes
+}
+
+#[test]
+fn v1_2_round_trip_with_flags_and_object_creation() {
+    let _guard = lock(&SAMPLER_LOCK);
+    lock(&SAMPLER_INFOS).clear();
+    NEXT_SAMPLER_ID.store(1, Ordering::Relaxed);
+
+    let range = DescriptorRange1 {
+        range_type: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        num_descriptors: 2,
+        base_shader_register: 0,
+        register_space: 0,
+        flags: D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE,
+        offset_in_descriptors_from_table_start: 0,
+    };
+    let params = [
+        RootParameter1 {
+            parameter_type: D3D12_ROOT_PARAMETER_TYPE_CBV,
+            payload: RootParameter1Payload {
+                descriptor: ManuallyDrop::new(RootDescriptor1 {
+                    shader_register: 1,
+                    register_space: 0,
+                    flags: D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC,
+                }),
+            },
+            shader_visibility: 0,
+        },
+        RootParameter1 {
+            parameter_type: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            payload: RootParameter1Payload {
+                descriptor_table: ManuallyDrop::new(RootDescriptorTable1 {
+                    num_descriptor_ranges: 1,
+                    p_descriptor_ranges: &raw const range,
+                }),
+            },
+            shader_visibility: 5,
+        },
+    ];
+    let samplers = [
+        StaticSamplerDesc1 {
+            filter: 0x15,
+            address_u: TEXTURE_ADDRESS_MODE_WRAP,
+            address_v: TEXTURE_ADDRESS_MODE_WRAP,
+            address_w: TEXTURE_ADDRESS_MODE_WRAP,
+            mip_lod_bias: 0.5,
+            max_anisotropy: 4,
+            comparison_func: 1,
+            border_color: STATIC_BORDER_COLOR_OPAQUE_BLACK,
+            min_lod: 0.0,
+            max_lod: 16.0,
+            shader_register: 0,
+            register_space: 0,
+            shader_visibility: 5,
+            flags: D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR,
+        },
+        StaticSamplerDesc1 {
+            filter: 0x00,
+            address_u: TEXTURE_ADDRESS_MODE_CLAMP,
+            address_v: TEXTURE_ADDRESS_MODE_CLAMP,
+            address_w: TEXTURE_ADDRESS_MODE_CLAMP,
+            mip_lod_bias: 0.0,
+            max_anisotropy: 1,
+            comparison_func: 1,
+            border_color: STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+            min_lod: 0.0,
+            max_lod: 8.0,
+            shader_register: 1,
+            register_space: 2,
+            shader_visibility: 0,
+            flags: D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES,
+        },
+    ];
+    let flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+        | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+    let desc_1_2 = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+        desc: VersionedDesc {
+            desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                num_parameters: 2,
+                p_parameters: params.as_ptr(),
+                num_static_samplers: 2,
+                p_static_samplers: samplers.as_ptr(),
+                flags,
+            }),
+        },
+    };
+    let blob_bytes = serialize_blob_bytes(&desc_1_2);
+
+    let mut vdeser: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob_bytes` is valid for its length and `vdeser` is a writable out-pointer.
+    let hr = unsafe {
+        D3D12CreateVersionedRootSignatureDeserializer(
+            blob_bytes.as_ptr().cast(),
+            blob_bytes.len(),
+            &IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER,
+            &raw mut vdeser,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `vdeser` is a live `ID3D12VersionedRootSignatureDeserializer`.
+    let vvtbl = unsafe { com::vtbl::<ID3D12VersionedRootSignatureDeserializerVtbl>(vdeser) };
+    // SAFETY: calling `GetUnconvertedRootSignatureDesc` on a live deserializer.
+    let unconverted = unsafe { (vvtbl.get_unconverted_root_signature_desc)(vdeser) }
+        .cast::<VersionedRootSignatureDesc>();
+    assert!(!unconverted.is_null());
+    // SAFETY: `unconverted` points into `vdeser`.
+    let unconverted_ref = unsafe { &*unconverted };
+    assert_eq!(unconverted_ref.version, D3D_ROOT_SIGNATURE_VERSION_1_2);
+    // SAFETY: `unconverted_ref.version` is `D3D_ROOT_SIGNATURE_VERSION_1_2`.
+    let d12 = unsafe { &unconverted_ref.desc.desc_1_2 };
+    assert_eq!(d12.num_parameters, 2);
+    assert_eq!(d12.num_static_samplers, 2);
+    assert_eq!(d12.flags, flags);
+    // SAFETY: `d12.p_static_samplers` has 2 elements.
+    let got_samplers = unsafe { core::slice::from_raw_parts(d12.p_static_samplers, 2) };
+    assert_eq!(got_samplers[0].flags, D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR);
+    assert_eq!(
+        got_samplers[1].flags,
+        D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES
+    );
+
+    let mut at_1_2: *const c_void = ptr::null();
+    // SAFETY: `vdeser` is live and `at_1_2` is a writable out-pointer.
+    let hr = unsafe {
+        (vvtbl.get_root_signature_desc_at_version)(
+            vdeser,
+            D3D_ROOT_SIGNATURE_VERSION_1_2,
+            (&raw mut at_1_2).cast(),
+        )
+    };
+    assert_eq!(hr, S_OK);
+    assert_eq!(at_1_2.cast::<VersionedRootSignatureDesc>(), unconverted);
+
+    let sentinel: *const c_void = ptr::without_provenance(1);
+    for down_ver in [
+        D3D_ROOT_SIGNATURE_VERSION_1_0,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+    ] {
+        let mut out = sentinel;
+        // SAFETY: `vdeser` is live; non-zero sampler flags prevent down-conversion.
+        let hr = unsafe {
+            (vvtbl.get_root_signature_desc_at_version)(vdeser, down_ver, (&raw mut out).cast())
+        };
+        assert_eq!(hr, E_INVALIDARG);
+        assert_eq!(out, sentinel);
+    }
+    // SAFETY: `release` drops the single reference on `vdeser`.
+    unsafe { (vvtbl.release)(vdeser) };
+
+    let mut deser_1_0: *mut c_void = ptr::dangling_mut();
+    // SAFETY: `blob_bytes` is valid; non-zero sampler flags cannot convert to 1.0.
+    let hr = unsafe {
+        D3D12CreateRootSignatureDeserializer(
+            blob_bytes.as_ptr().cast(),
+            blob_bytes.len(),
+            &IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER,
+            &raw mut deser_1_0,
+        )
+    };
+    assert_eq!(hr, E_INVALIDARG);
+    assert!(deser_1_0.is_null());
+
+    let mut rs_out: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob_bytes` is valid for its length and `rs_out` is a writable out-pointer.
+    let hr = unsafe {
+        super::create_root_signature(
+            ptr::null_mut(),
+            0,
+            blob_bytes.as_ptr().cast(),
+            blob_bytes.len(),
+            ptr::from_ref(&IID_ID3D12_ROOT_SIGNATURE).cast(),
+            &raw mut rs_out,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `rs_out` is a live `RootSignature`.
+    let rs = unsafe { super::cast_root_signature(rs_out) }.expect("cast RootSignature");
+    assert_eq!(rs.flags, flags);
+    assert_eq!(rs.parameter_slots(), 2);
+    assert_eq!(rs.heap_qword_offset(), 2);
+    assert_eq!(rs.lock_qword_offset(), 4);
+    assert_eq!(rs.upload_qwords(), 5);
+    assert_eq!(rs.encoded_static_samplers().len(), 8);
+    // SAFETY: `rs_out` is a live `RootSignature` with refcount 1.
+    unsafe { com::release_com::<super::RootSignature>(rs_out.cast()) };
+}
+
+#[test]
+fn v1_2_without_sampler_flags_downconverts_and_v1_0_upconverts() {
+    let sampler_1_2 = StaticSamplerDesc1 {
+        filter: 0x15,
+        address_u: TEXTURE_ADDRESS_MODE_WRAP,
+        address_v: TEXTURE_ADDRESS_MODE_WRAP,
+        address_w: TEXTURE_ADDRESS_MODE_WRAP,
+        mip_lod_bias: 0.0,
+        max_anisotropy: 1,
+        comparison_func: 1,
+        border_color: STATIC_BORDER_COLOR_OPAQUE_BLACK,
+        min_lod: 0.0,
+        max_lod: 10.0,
+        shader_register: 3,
+        register_space: 1,
+        shader_visibility: 5,
+        flags: D3D12_SAMPLER_FLAG_NONE,
+    };
+    let desc_1_2 = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+        desc: VersionedDesc {
+            desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                num_parameters: 0,
+                p_parameters: ptr::null(),
+                num_static_samplers: 1,
+                p_static_samplers: &raw const sampler_1_2,
+                flags: 0x1,
+            }),
+        },
+    };
+    let blob_1_2 = serialize_blob_bytes(&desc_1_2);
+
+    let mut vdeser: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob_1_2` is valid for its length.
+    let hr = unsafe {
+        D3D12CreateVersionedRootSignatureDeserializer(
+            blob_1_2.as_ptr().cast(),
+            blob_1_2.len(),
+            &IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER,
+            &raw mut vdeser,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `vdeser` is a live `ID3D12VersionedRootSignatureDeserializer`.
+    let vvtbl = unsafe { com::vtbl::<ID3D12VersionedRootSignatureDeserializerVtbl>(vdeser) };
+    for ver in [
+        D3D_ROOT_SIGNATURE_VERSION_1_0,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+        D3D_ROOT_SIGNATURE_VERSION_1_2,
+    ] {
+        let mut out: *const c_void = ptr::null();
+        // SAFETY: `vdeser` is live and `out` is writable.
+        let hr = unsafe {
+            (vvtbl.get_root_signature_desc_at_version)(vdeser, ver, (&raw mut out).cast())
+        };
+        assert_eq!(hr, S_OK, "version {ver}");
+        assert!(!out.is_null());
+        // SAFETY: `out` points to a `VersionedRootSignatureDesc` owned by `vdeser`.
+        let got_ver = unsafe { (*out.cast::<VersionedRootSignatureDesc>()).version };
+        assert_eq!(got_ver, ver);
+    }
+    // SAFETY: `release` drops the single reference on `vdeser`.
+    unsafe { (vvtbl.release)(vdeser) };
+
+    let mut deser_1_0: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob_1_2` with `flags == 0` converts cleanly to 1.0.
+    let hr = unsafe {
+        D3D12CreateRootSignatureDeserializer(
+            blob_1_2.as_ptr().cast(),
+            blob_1_2.len(),
+            &IID_ID3D12_ROOT_SIGNATURE_DESERIALIZER,
+            &raw mut deser_1_0,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `deser_1_0` is a live `ID3D12RootSignatureDeserializer`.
+    let vtbl_1_0 = unsafe { com::vtbl::<ID3D12RootSignatureDeserializerVtbl>(deser_1_0) };
+    // SAFETY: calling `GetRootSignatureDesc` on a live deserializer.
+    let d10 = unsafe { (vtbl_1_0.get_root_signature_desc)(deser_1_0) }.cast::<RootSignatureDesc>();
+    // SAFETY: `d10` points into `deser_1_0`.
+    let num_static_samplers = unsafe { (*d10).num_static_samplers };
+    assert_eq!(num_static_samplers, 1);
+    // SAFETY: `release` drops the single reference on `deser_1_0`.
+    unsafe { (vtbl_1_0.release)(deser_1_0) };
+
+    let sampler_1_0 = StaticSamplerDesc {
+        filter: 0x15,
+        address_u: TEXTURE_ADDRESS_MODE_WRAP,
+        address_v: TEXTURE_ADDRESS_MODE_WRAP,
+        address_w: TEXTURE_ADDRESS_MODE_WRAP,
+        mip_lod_bias: 0.0,
+        max_anisotropy: 1,
+        comparison_func: 1,
+        border_color: STATIC_BORDER_COLOR_OPAQUE_BLACK,
+        min_lod: 0.0,
+        max_lod: 10.0,
+        shader_register: 4,
+        register_space: 0,
+        shader_visibility: 5,
+    };
+    let desc_1_0 = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_0,
+        desc: VersionedDesc {
+            desc_1_0: ManuallyDrop::new(RootSignatureDesc {
+                num_parameters: 0,
+                p_parameters: ptr::null(),
+                num_static_samplers: 1,
+                p_static_samplers: &raw const sampler_1_0,
+                flags: 0,
+            }),
+        },
+    };
+    let blob_1_0 = serialize_blob_bytes(&desc_1_0);
+    let mut vdeser_1_0: *mut c_void = ptr::null_mut();
+    // SAFETY: `blob_1_0` is valid for its length.
+    let hr = unsafe {
+        D3D12CreateVersionedRootSignatureDeserializer(
+            blob_1_0.as_ptr().cast(),
+            blob_1_0.len(),
+            &IID_ID3D12_VERSIONED_ROOT_SIGNATURE_DESERIALIZER,
+            &raw mut vdeser_1_0,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `vdeser_1_0` is a live `ID3D12VersionedRootSignatureDeserializer`.
+    let deser_vtbl_1_0 =
+        unsafe { com::vtbl::<ID3D12VersionedRootSignatureDeserializerVtbl>(vdeser_1_0) };
+    let mut at_1_2: *const c_void = ptr::null();
+    // SAFETY: `vdeser_1_0` is live and `at_1_2` is writable.
+    let hr = unsafe {
+        (deser_vtbl_1_0.get_root_signature_desc_at_version)(
+            vdeser_1_0,
+            D3D_ROOT_SIGNATURE_VERSION_1_2,
+            (&raw mut at_1_2).cast(),
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `at_1_2` points to `vdeser_1_0`'s 1.2 converted description.
+    let at_1_2_ref = unsafe { &*at_1_2.cast::<VersionedRootSignatureDesc>() };
+    // SAFETY: `at_1_2_ref` was returned for `D3D_ROOT_SIGNATURE_VERSION_1_2`.
+    let d12 = unsafe { &at_1_2_ref.desc.desc_1_2 };
+    assert_eq!(d12.num_static_samplers, 1);
+    // SAFETY: `d12.p_static_samplers` has 1 element.
+    let upconverted_sampler = unsafe { &*d12.p_static_samplers };
+    assert_eq!(upconverted_sampler.shader_register, 4);
+    assert_eq!(upconverted_sampler.flags, D3D12_SAMPLER_FLAG_NONE);
+    // SAFETY: `release` drops the single reference on `vdeser_1_0`.
+    unsafe { (deser_vtbl_1_0.release)(vdeser_1_0) };
+}
+
+#[test]
+fn v1_2_serialize_invalid_sampler_flags_writes_error_blob() {
+    let bad_sampler = StaticSamplerDesc1 {
+        filter: 0x15,
+        address_u: TEXTURE_ADDRESS_MODE_WRAP,
+        address_v: TEXTURE_ADDRESS_MODE_WRAP,
+        address_w: TEXTURE_ADDRESS_MODE_WRAP,
+        mip_lod_bias: 0.0,
+        max_anisotropy: 1,
+        comparison_func: 1,
+        border_color: STATIC_BORDER_COLOR_OPAQUE_BLACK,
+        min_lod: 0.0,
+        max_lod: 10.0,
+        shader_register: 0,
+        register_space: 0,
+        shader_visibility: 5,
+        flags: 0x4,
+    };
+    let desc_1_2 = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+        desc: VersionedDesc {
+            desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                num_parameters: 0,
+                p_parameters: ptr::null(),
+                num_static_samplers: 1,
+                p_static_samplers: &raw const bad_sampler,
+                flags: 0,
+            }),
+        },
+    };
+    let mut blob_ptr: *mut c_void = ptr::dangling_mut();
+    let mut err_ptr: *mut c_void = ptr::null_mut();
+    // SAFETY: `desc_1_2`, `blob_ptr`, and `err_ptr` are valid caller pointers.
+    let hr = unsafe {
+        D3D12SerializeVersionedRootSignature(
+            (&raw const desc_1_2).cast(),
+            &raw mut blob_ptr,
+            &raw mut err_ptr,
+        )
+    };
+    assert_eq!(hr, E_INVALIDARG);
+    assert!(blob_ptr.is_null());
+    assert!(!err_ptr.is_null());
+    // SAFETY: `err_ptr` is a live `ID3D10Blob` error blob.
+    let err_vtbl = unsafe { com::vtbl::<ID3D10BlobVtbl>(err_ptr) };
+    // SAFETY: calling `GetBufferSize` on a live blob.
+    let size = unsafe { (err_vtbl.get_buffer_size)(err_ptr) };
+    assert!(size > 1);
+    // SAFETY: `release` drops the single reference on `err_ptr`.
+    unsafe { (err_vtbl.release)(err_ptr) };
 }

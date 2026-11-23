@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use dxmt_core::{fence::EventListener, library::Library, presenter::framegen::TemporalScaler};
 use dxmt_util::{com::ComObject, private_data::PrivateData};
 use rustc_hash::FxHashMap;
-use winemetal_sys::Obj;
+use winemetal_sys::{Obj, sm50::SM50_SHADER_METAL_310};
 use winemetal_wire::WMTFXTemporalScalerInfo;
 
 use crate::{
@@ -36,6 +36,7 @@ pub struct Device {
     pub min_feature_level: u32,
     pub advertise_numa: bool,
     pub temporal_supported: bool,
+    pub metal_version: u32,
     pub residency: residency::Residency,
     pub null: null::NullResources,
     pub library: Option<Library>,
@@ -79,6 +80,7 @@ impl Device {
             min_feature_level: crate::D3D_FEATURE_LEVEL_11_0,
             advertise_numa: false,
             temporal_supported: false,
+            metal_version: SM50_SHADER_METAL_310,
             residency: residency::Residency::new(),
             null: null::NullResources::new(),
             library: None,

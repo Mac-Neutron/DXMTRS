@@ -10,18 +10,33 @@ use std::sync::Arc;
 
 use dxmt_core::{
     format::{self, MtlDxgiFormatDesc},
+    presenter::framegen::{self, CameraParams},
     resource::{Texture, TextureAllocationFlags, TextureViewKey},
 };
+use dxmt_util::{
+    com::Guid,
+    dxgi_consts::{
+        DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_TYPELESS,
+        DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16_TYPELESS,
+        DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS,
+        DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32G32B32A32_TYPELESS,
+    },
+};
 use winemetal_wire::{
-    WMT_PIXEL_FORMAT_INVALID, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_RENDER_TARGET,
-    WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE, WMTFXTemporalScalerProps,
-    WMTOrigin, WMTSize,
+    WMT_PIXEL_FORMAT_INVALID, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+    WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
+    WMT_TEXTURE_USAGE_RENDER_TARGET, WMT_TEXTURE_USAGE_SHADER_READ, WMT_TEXTURE_USAGE_SHADER_WRITE,
+    WMTFXTemporalScalerProps, WMTOrigin, WMTSize, WMTTextureInfo, original_format,
 };
 
 use crate::{
     abi::ext::D3D12UpscaleDesc,
     com::{E_INVALIDARG, Hresult, S_OK},
-    device::temporal::{Scratch, TemporalScalerObject},
+    device::{
+        Device,
+        temporal::{Scratch, TemporalScalerObject},
+    },
     encoder::{EncoderData, EncoderType, TemporalUpscaleEncoderData, TextureViewRef},
     list::{List, copy},
     resource::Resource,
@@ -30,6 +45,13 @@ use crate::{
 const WRITABLE_USAGE: u32 = WMT_TEXTURE_USAGE_SHADER_READ
     | WMT_TEXTURE_USAGE_SHADER_WRITE
     | WMT_TEXTURE_USAGE_RENDER_TARGET;
+
+const DLSSG_CAMERA_GUID: Guid = Guid::new(
+    0x7a3f_91c4,
+    0x5e82,
+    0x4b1d,
+    [0x93, 0xa7, 0x2c, 0x41, 0x8f, 0xd0, 0x62, 0x19],
+);
 
 const fn as_format_desc(pixel_format: u32, bytes_per_texel: u32) -> MtlDxgiFormatDesc {
     MtlDxgiFormatDesc {
@@ -41,13 +63,29 @@ const fn as_format_desc(pixel_format: u32, bytes_per_texel: u32) -> MtlDxgiForma
     }
 }
 
-fn take_texture(
+const fn reactive_format_compatible(res_format: u32, scaler_format: u32) -> bool {
+    if res_format == scaler_format {
+        return true;
+    }
+    match res_format {
+        DXGI_FORMAT_R8_TYPELESS => scaler_format == DXGI_FORMAT_R8_UNORM,
+        DXGI_FORMAT_R16_TYPELESS => scaler_format == DXGI_FORMAT_R16_UNORM,
+        DXGI_FORMAT_R8G8B8A8_TYPELESS => scaler_format == DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_B8G8R8A8_TYPELESS => scaler_format == DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_R10G10B10A2_TYPELESS => scaler_format == DXGI_FORMAT_R10G10B10A2_UNORM,
+        DXGI_FORMAT_R16G16B16A16_TYPELESS => scaler_format == DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R32G32B32A32_TYPELESS => scaler_format == DXGI_FORMAT_R32G32B32A32_FLOAT,
+        _ => false,
+    }
+}
+
+fn take_texture_matching(
     resource: *mut c_void,
-    format: u32,
     x: u32,
     y: u32,
     w: u32,
     h: u32,
+    format_ok: impl FnOnce(u32) -> bool,
 ) -> Option<Arc<Texture>> {
     if resource.is_null() {
         return None;
@@ -56,13 +94,37 @@ fn take_texture(
     let res_obj = unsafe { &*resource.cast::<Resource>() };
     let tex = res_obj.texture.as_ref()?;
     if tex.info().r#type() != WMT_TEXTURE_TYPE2D
-        || res_obj.desc_scoped().format != format
+        || !format_ok(res_obj.desc_scoped().format)
         || u64::from(x) + u64::from(w) > u64::from(tex.info().width)
         || u64::from(y) + u64::from(h) > u64::from(tex.info().height)
     {
         return None;
     }
     Some(Arc::clone(tex))
+}
+
+fn take_texture(
+    resource: *mut c_void,
+    format: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Option<Arc<Texture>> {
+    take_texture_matching(resource, x, y, w, h, |res_fmt| res_fmt == format)
+}
+
+fn take_reactive_texture(
+    resource: *mut c_void,
+    format: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Option<Arc<Texture>> {
+    take_texture_matching(resource, x, y, w, h, |res_fmt| {
+        reactive_format_compatible(res_fmt, format)
+    })
 }
 
 const fn readable(t: &Texture, format: u32) -> bool {
@@ -76,6 +138,77 @@ const fn same_layout(t: &Texture, format: u32) -> bool {
     }
     let own = format::unsigned_integer(pix);
     own != WMT_PIXEL_FORMAT_INVALID && own == format::unsigned_integer(format)
+}
+
+const fn can_view_directly(t: &Texture, format: u32) -> bool {
+    same_layout(t, format) && (t.info().usage() & WMT_TEXTURE_USAGE_SHADER_READ) != 0
+}
+
+fn allocate_reactive_scratch(
+    device: *mut Device,
+    width: u32,
+    height: u32,
+    pixel_format: u32,
+) -> Option<Arc<Texture>> {
+    if device.is_null() {
+        return None;
+    }
+    // SAFETY: `device` is a live `Device` pointer owning `mtl`.
+    let mtl = unsafe { (*device).mtl.as_ref() }?;
+    let usage = WMT_TEXTURE_USAGE_SHADER_READ | WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+    let bits = (WMT_TEXTURE_TYPE2D << WMTTextureInfo::TYPE_SHIFT)
+        | (1 << WMTTextureInfo::MIPMAP_LEVEL_COUNT_SHIFT)
+        | (1 << WMTTextureInfo::SAMPLE_COUNT_SHIFT)
+        | (usage << WMTTextureInfo::USAGE_SHIFT);
+    let info = WMTTextureInfo {
+        pixel_format: original_format(pixel_format),
+        width,
+        height,
+        depth: 1,
+        array_length: 1,
+        bits,
+        options: WMT_RESOURCE_STORAGE_MODE_PRIVATE | WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    let scratch = Arc::new(Texture::new(info, mtl));
+    let alloc = scratch.allocate(TextureAllocationFlags::GPU_PRIVATE);
+    let _ = scratch.rename(alloc);
+    Some(scratch)
+}
+
+fn read_camera_params(list: &List) -> CameraParams {
+    #[repr(C)]
+    struct RawCamera {
+        near_plane: f32,
+        far_plane: f32,
+        field_of_view: f32,
+        aspect_ratio: f32,
+    }
+    let mut raw = RawCamera {
+        near_plane: 0.0,
+        far_plane: 0.0,
+        field_of_view: 0.0,
+        aspect_ratio: 0.0,
+    };
+    let expected = u32::try_from(size_of::<RawCamera>()).unwrap_or(16);
+    let mut size = expected;
+    // SAFETY: `raw` is a local `RawCamera` of `size` writable bytes.
+    let hr = unsafe {
+        list.private_data
+            .get_data(DLSSG_CAMERA_GUID, &raw mut size, (&raw mut raw).cast())
+    };
+    if hr >= 0 && size == expected {
+        CameraParams {
+            near_plane: raw.near_plane,
+            far_plane: raw.far_plane,
+            field_of_view: raw.field_of_view,
+            aspect_ratio: raw.aspect_ratio,
+        }
+    } else {
+        CameraParams::ZERO
+    }
 }
 
 fn check_view_use_format(texture: &Texture, format: u32) -> TextureViewKey {
@@ -159,8 +292,8 @@ pub unsafe fn temporal_upscale(
         sd.output_width,
         sd.output_height,
     );
-    let mask = if masked {
-        take_texture(
+    let mut mask = if masked {
+        take_reactive_texture(
             d.reactive_mask,
             sd.reactive_mask_format,
             d.reactive_offset[0],
@@ -192,9 +325,6 @@ pub unsafe fn temporal_upscale(
         || (!masked && !d.reactive_mask.is_null())
         || !same_layout(&color, info.color_format)
         || (color.info().usage() & WMT_TEXTURE_USAGE_SHADER_READ) == 0
-        || mask
-            .as_ref()
-            .is_some_and(|m| !readable(m, info.reactive_mask_format))
         || !same_layout(&output, info.output_format)
     {
         return E_INVALIDARG;
@@ -237,6 +367,29 @@ pub unsafe fn temporal_upscale(
         output_offset_y: d.output_offset[1],
     };
 
+    let reactive_scratch = if let Some(ref m) = mask
+        && !can_view_directly(m, info.reactive_mask_format)
+    {
+        if format::texel_size(m.info().pixel_format)
+            != format::texel_size(info.reactive_mask_format)
+        {
+            return E_INVALIDARG;
+        }
+        let Some(scratch) = allocate_reactive_scratch(
+            list.device,
+            sd.input_width,
+            sd.input_height,
+            info.reactive_mask_format,
+        ) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    } else {
+        None
+    };
+
+    framegen::set_camera_params(&read_camera_params(list));
+
     let mut depth_scratch: Option<Arc<Texture>> = None;
     let mut motion_scratch: Option<Arc<Texture>> = None;
     let mut output_scratch: Option<Arc<Texture>> = None;
@@ -244,7 +397,10 @@ pub unsafe fn temporal_upscale(
     // SAFETY: `list.allocator` was checked non-null above.
     let alloc = unsafe { &mut *list.allocator };
 
-    if !readable(&depth, info.depth_format) || !readable(&motion, info.motion_format) {
+    if !readable(&depth, info.depth_format)
+        || !readable(&motion, info.motion_format)
+        || reactive_scratch.is_some()
+    {
         crate::count!("#upscale input copied", 1);
         alloc.invalidate_current_pass();
         copy::pre_blit(alloc, ptr::null(), false);
@@ -326,6 +482,49 @@ pub unsafe fn temporal_upscale(
             motion = Arc::clone(&scratch);
             motion_scratch = Some(scratch);
         }
+        if let Some(scratch) = reactive_scratch
+            && let Some(ref m) = mask
+        {
+            alloc.writes(Arc::as_ptr(&scratch).cast::<c_void>());
+            let src_fmt = as_format_desc(
+                m.info().pixel_format,
+                format::texel_size(m.info().pixel_format),
+            );
+            let dst_fmt = as_format_desc(
+                info.reactive_mask_format,
+                format::texel_size(info.reactive_mask_format),
+            );
+            copy::copy_reinterpret(
+                alloc,
+                &copy::CopyReinterpretSide {
+                    texture: m,
+                    format: &src_fmt,
+                    level: 0,
+                    slice: 0,
+                    origin: WMTOrigin {
+                        x: u64::from(d.reactive_offset[0]),
+                        y: u64::from(d.reactive_offset[1]),
+                        z: 0,
+                    },
+                },
+                WMTSize {
+                    width: u64::from(sd.input_width),
+                    height: u64::from(sd.input_height),
+                    depth: 1,
+                },
+                &copy::CopyReinterpretSide {
+                    texture: &scratch,
+                    format: &dst_fmt,
+                    level: 0,
+                    slice: 0,
+                    origin: WMTOrigin { x: 0, y: 0, z: 0 },
+                },
+            );
+            props.reactive_mask_content_offset_x = 0;
+            props.reactive_mask_content_offset_y = 0;
+            alloc.keep_texture(Arc::clone(&scratch));
+            mask = Some(scratch);
+        }
     }
 
     let mut target = Arc::clone(&output);
@@ -366,9 +565,9 @@ pub unsafe fn temporal_upscale(
         exposure: exposure_tex
             .as_ref()
             .and_then(|t| TextureViewRef::from_texture(t, t.full_view())),
-        reactive: mask
-            .as_ref()
-            .and_then(|t| TextureViewRef::from_texture(t, t.full_view())),
+        reactive: mask.as_ref().and_then(|t| {
+            TextureViewRef::from_texture(t, check_view_use_format(t, info.reactive_mask_format))
+        }),
         output: TextureViewRef::from_texture(
             &target,
             check_view_use_format(&target, info.output_format),

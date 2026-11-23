@@ -4,6 +4,7 @@ use core::{
     ffi::c_void,
     mem::{ManuallyDrop, zeroed},
     ptr,
+    sync::atomic::{AtomicBool, Ordering},
 };
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -22,7 +23,9 @@ use crate::{
     abi::{
         root_signature::{
             D3D12_DESCRIPTOR_RANGE_TYPE_CBV, D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-            D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_DESCRIPTOR_RANGE_TYPE_UAV, RootSignatureDesc1,
+            D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+            D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES, D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR,
+            RootSignatureDesc1,
         },
         sampler::StaticSamplerDesc as SamplerStaticSamplerDesc,
         vtbl::{ID3D12RootSignatureVtbl, IUnknownVtbl},
@@ -286,13 +289,10 @@ pub unsafe fn create_root_signature(
     // SAFETY: `converted.desc_1_1` was initialized with the `desc_1_1` union arm.
     let desc_1_1: &RootSignatureDesc1 = unsafe { &converted.desc_1_1.desc.desc_1_1 };
 
-    let sampler_count = usize::try_from(desc_1_1.num_static_samplers).unwrap_or(0);
+    let sampler_count = ir.static_samplers.len();
     let mut static_samplers = Vec::with_capacity(sampler_count * 4);
     let mut live_samplers = Vec::with_capacity(sampler_count);
     if sampler_count > 0 {
-        // SAFETY: `desc_1_1.p_static_samplers` points to `sampler_count` static sampler descriptors.
-        let descs =
-            unsafe { core::slice::from_raw_parts(desc_1_1.p_static_samplers, sampler_count) };
         let device_mtl = if this.is_null() {
             None
         } else {
@@ -305,7 +305,8 @@ pub unsafe fn create_root_signature(
             return E_FAIL;
         };
 
-        for sampler_desc in descs {
+        for sampler_desc in &ir.static_samplers {
+            warn_static_sampler_flags(sampler_desc.flags);
             // SAFETY: `WMTSamplerInfo` is a plain C struct of integer and float fields.
             let mut info: WMTSamplerInfo = unsafe { zeroed() };
             let abi_sampler = SamplerStaticSamplerDesc {
@@ -315,13 +316,13 @@ pub unsafe fn create_root_signature(
                 address_w: sampler_desc.address_w,
                 mip_lod_bias: sampler_desc.mip_lod_bias,
                 max_anisotropy: sampler_desc.max_anisotropy,
-                comparison_func: sampler_desc.comparison_func,
+                comparison_func: sampler_desc.comparison,
                 border_color: sampler_desc.border_color,
                 min_lod: sampler_desc.min_lod,
                 max_lod: sampler_desc.max_lod,
-                shader_register: sampler_desc.shader_register,
-                register_space: sampler_desc.register_space,
-                shader_visibility: sampler_desc.shader_visibility,
+                shader_register: sampler_desc.register,
+                register_space: sampler_desc.space,
+                shader_visibility: sampler_desc.visibility,
             };
             crate::sampler::populate_static_sampler_info(&mut info, &abi_sampler, &mut |w| {
                 crate::warn!("{w}");
@@ -376,6 +377,25 @@ pub unsafe fn create_root_signature(
         drop(unsafe { Box::from_raw(raw) });
     }
     hr
+}
+
+fn warn_static_sampler_flags(flags: u32) {
+    static WARNED_UINT_BORDER: AtomicBool = AtomicBool::new(false);
+    static WARNED_NON_NORMALIZED: AtomicBool = AtomicBool::new(false);
+    if flags & D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR != 0
+        && !WARNED_UINT_BORDER.swap(true, Ordering::Relaxed)
+    {
+        crate::warn!(
+            "CreateRootSignature: D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR on static sampler is not supported, using float border color"
+        );
+    }
+    if flags & D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES != 0
+        && !WARNED_NON_NORMALIZED.swap(true, Ordering::Relaxed)
+    {
+        crate::warn!(
+            "CreateRootSignature: D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES on static sampler is not supported, using normalized coordinates"
+        );
+    }
 }
 
 #[cfg(test)]

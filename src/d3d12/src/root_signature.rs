@@ -25,11 +25,14 @@ use crate::abi::{
     E_INVALIDARG, E_OUTOFMEMORY,
     root_signature::{
         D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1,
-        D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS, D3D12_ROOT_PARAMETER_TYPE_CBV,
-        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, D3D12_ROOT_PARAMETER_TYPE_SRV,
-        D3D12_ROOT_PARAMETER_TYPE_UAV, D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED,
-        D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED, RootParameter, RootParameter1,
-        RootSignatureDesc, RootSignatureDesc1, VersionedRootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1_2, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+        D3D12_ROOT_PARAMETER_TYPE_CBV, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+        D3D12_ROOT_PARAMETER_TYPE_SRV, D3D12_ROOT_PARAMETER_TYPE_UAV,
+        D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED,
+        D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
+        D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES, D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR,
+        RootParameter, RootParameter1, RootSignatureDesc, RootSignatureDesc1, RootSignatureDesc2,
+        StaticSamplerDesc1, VersionedRootSignatureDesc,
     },
 };
 
@@ -39,6 +42,8 @@ mod md5;
 const CONTAINER_HEADER_SIZE: u32 = 44;
 /// Where the container's header says the part (its fourcc) starts.
 const PART_AT: u32 = 36;
+const VALID_SAMPLER_FLAGS: u32 =
+    D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR | D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES;
 
 /// Where each root parameter's arguments sit among the qwords a command list uploads.
 pub struct QwordOffsets {
@@ -58,28 +63,52 @@ pub struct QwordOffsets {
 ///
 /// # Errors
 ///
-/// `E_INVALIDARG` for a version other than 1.0 and 1.1, as the C++, or for a null array whose
-/// count is not 0; `E_OUTOFMEMORY` for a blob of 4 GiB or more.
+/// `E_INVALIDARG` for a version outside 1.0, 1.1, and 1.2, invalid static sampler flags, or a
+/// null array whose count is not 0; `E_OUTOFMEMORY` for a blob of 4 GiB or more.
 ///
 /// # Safety
 ///
 /// Each array of the description `desc.version` names, its parameters, their ranges and its
 /// static samplers, is null or holds as many readable elements as its count says.
 pub unsafe fn serialize_versioned(desc: &VersionedRootSignatureDesc) -> Result<Vec<u8>, Hresult> {
+    // SAFETY: the caller's.
+    unsafe { serialize_versioned_with_error(desc) }.map_err(|(hr, _)| hr)
+}
+
+/// `D3D12SerializeVersionedRootSignature`'s blob of `desc`, with an optional error message.
+///
+/// # Errors
+///
+/// `E_INVALIDARG` for a version outside 1.0, 1.1, and 1.2, invalid static sampler flags, or a
+/// null array whose count is not 0; `E_OUTOFMEMORY` for a blob of 4 GiB or more.
+///
+/// # Safety
+///
+/// Each array of the description `desc.version` names, its parameters, their ranges and its
+/// static samplers, is null or holds as many readable elements as its count says.
+pub unsafe fn serialize_versioned_with_error(
+    desc: &VersionedRootSignatureDesc,
+) -> Result<Vec<u8>, (Hresult, Option<&'static str>)> {
     match desc.version {
         D3D_ROOT_SIGNATURE_VERSION_1_0 => {
             // SAFETY: the version names the 1.0 arm, and either arm is integers and pointers.
             let desc_1_0 = unsafe { &desc.desc.desc_1_0 };
             // SAFETY: the caller's, for the arm the version names.
-            unsafe { serialize_1_0(desc_1_0) }
+            unsafe { serialize_1_0(desc_1_0) }.map_err(|hr| (hr, None))
         }
         D3D_ROOT_SIGNATURE_VERSION_1_1 => {
             // SAFETY: the version names the 1.1 arm, and either arm is integers and pointers.
             let desc_1_1 = unsafe { &desc.desc.desc_1_1 };
             // SAFETY: the caller's, for the arm the version names.
-            unsafe { serialize_1_1(desc_1_1) }
+            unsafe { serialize_1_1(desc_1_1) }.map_err(|hr| (hr, None))
         }
-        _ => Err(E_INVALIDARG),
+        D3D_ROOT_SIGNATURE_VERSION_1_2 => {
+            // SAFETY: the version names the 1.2 arm, and every arm is integers and pointers.
+            let desc_1_2 = unsafe { &desc.desc.desc_1_2 };
+            // SAFETY: the caller's, for the arm the version names.
+            unsafe { serialize_1_2(desc_1_2) }
+        }
+        _ => Err((E_INVALIDARG, None)),
     }
 }
 
@@ -215,13 +244,73 @@ unsafe fn serialize_1_0(desc: &RootSignatureDesc) -> Result<Vec<u8>, Hresult> {
 /// As [`serialize`].
 unsafe fn serialize_1_1(desc: &RootSignatureDesc1) -> Result<Vec<u8>, Hresult> {
     // SAFETY: the caller's.
-    let bytes = unsafe { array(desc.p_parameters, desc.num_parameters) }?;
-    let mut part = Part::new(
-        D3D_ROOT_SIGNATURE_VERSION_1_1,
-        desc.flags,
-        desc.num_parameters,
-        desc.num_static_samplers,
-    )?;
+    let samplers = unsafe { array(desc.p_static_samplers, desc.num_static_samplers) }?;
+    // SAFETY: the caller's.
+    unsafe {
+        serialize_1_1_params(
+            D3D_ROOT_SIGNATURE_VERSION_1_1,
+            desc.flags,
+            desc.num_parameters,
+            desc.p_parameters,
+            desc.num_static_samplers,
+            samplers,
+        )
+    }
+}
+
+/// `SerializeVersionedRootSignatureImpl` for a 1.2 description.
+///
+/// Its parameters and ranges match 1.1; its static samplers carry a trailing `flags` word.
+///
+/// # Safety
+///
+/// As [`serialize_versioned`].
+unsafe fn serialize_1_2(
+    desc: &RootSignatureDesc2,
+) -> Result<Vec<u8>, (Hresult, Option<&'static str>)> {
+    // SAFETY: the caller's.
+    let samplers = unsafe { array(desc.p_static_samplers, desc.num_static_samplers) }
+        .map_err(|hr| (hr, None))?;
+    // SAFETY: `StaticSamplerDesc1` is integers and floats.
+    for sampler in unsafe { elements::<StaticSamplerDesc1>(samplers) } {
+        if sampler.flags & !VALID_SAMPLER_FLAGS != 0 {
+            return Err((
+                E_INVALIDARG,
+                Some("Static sampler flags contain unsupported bits.\0"),
+            ));
+        }
+    }
+    // SAFETY: the caller's.
+    unsafe {
+        serialize_1_1_params(
+            D3D_ROOT_SIGNATURE_VERSION_1_2,
+            desc.flags,
+            desc.num_parameters,
+            desc.p_parameters,
+            desc.num_static_samplers,
+            samplers,
+        )
+    }
+    .map_err(|hr| (hr, None))
+}
+
+/// Shared parameter and descriptor-range encoding for 1.1 and 1.2 descriptions.
+///
+/// # Safety
+///
+/// `p_parameters` is null or holds `num_parameters` readable `RootParameter1`s and their tables'
+/// ranges.
+unsafe fn serialize_1_1_params(
+    version: u32,
+    flags: u32,
+    num_parameters: u32,
+    p_parameters: *const RootParameter1,
+    num_static_samplers: u32,
+    samplers: &[u8],
+) -> Result<Vec<u8>, Hresult> {
+    // SAFETY: the caller's.
+    let bytes = unsafe { array(p_parameters, num_parameters) }?;
+    let mut part = Part::new(version, flags, num_parameters, num_static_samplers)?;
     // SAFETY: a parameter is integers, pointers and a union of them.
     for (i, parameter) in unsafe { elements::<RootParameter1>(bytes) }.enumerate() {
         let (kind, visibility) = (parameter.parameter_type, parameter.shader_visibility);
@@ -251,8 +340,6 @@ unsafe fn serialize_1_1(desc: &RootSignatureDesc1) -> Result<Vec<u8>, Hresult> {
             _ => part.record(i, kind, visibility, 0),
         }
     }
-    // SAFETY: the caller's.
-    let samplers = unsafe { array(desc.p_static_samplers, desc.num_static_samplers) }?;
     part.finish(samplers)
 }
 

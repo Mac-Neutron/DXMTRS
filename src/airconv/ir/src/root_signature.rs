@@ -1,4 +1,4 @@
-//! Root signatures: the RTS0 part and its 1.0 and 1.1 descriptions.
+//! Root signatures: the RTS0 part and its 1.0, 1.1, and 1.2 descriptions.
 //!
 //! Ported from `RootSignatureDeserializer` of `dxbc_root_signature.hpp`. The blob is read in the
 //! version it holds and the other version's description is made from it, with the flags
@@ -9,6 +9,7 @@ use crate::container::{Code, Container, Error, fourcc, read_u32};
 
 pub const VERSION_1_0: u32 = 1;
 pub const VERSION_1_1: u32 = 2;
+pub const VERSION_1_2: u32 = 3;
 pub const PARAMETER_TYPE_DESCRIPTOR_TABLE: u32 = 0;
 pub const PARAMETER_TYPE_32BIT_CONSTANTS: u32 = 1;
 pub const PARAMETER_TYPE_CBV: u32 = 2;
@@ -18,6 +19,9 @@ pub const RANGE_TYPE_SAMPLER: u32 = 3;
 pub const RANGE_FLAG_DESCRIPTORS_VOLATILE: u32 = 0x1;
 pub const RANGE_FLAG_DATA_VOLATILE: u32 = 0x2;
 pub const DESCRIPTOR_FLAG_DATA_VOLATILE: u32 = 0x2;
+pub const SAMPLER_FLAG_NONE: u32 = 0;
+pub const SAMPLER_FLAG_UINT_BORDER_COLOR: u32 = 0x1;
+pub const SAMPLER_FLAG_NON_NORMALIZED_COORDINATES: u32 = 0x2;
 
 /// The blob's records, as `#[repr(C)]` types with the C++'s sizes.
 pub mod raw {
@@ -117,12 +121,12 @@ pub mod raw {
 /// A root signature in both versions' descriptions.
 #[derive(Debug)]
 pub struct RootSignature {
-    /// The version the blob holds, [`VERSION_1_0`] or [`VERSION_1_1`].
+    /// The version the blob holds: [`VERSION_1_0`], [`VERSION_1_1`], or [`VERSION_1_2`].
     pub version: u32,
     /// The 1.0 description; its ranges and descriptors have no flags (0).
     pub v1_0: Description,
     pub v1_1: Description,
-    /// The static samplers, which both versions' descriptions share.
+    /// The static samplers, which all versions' descriptions share (`flags` is 0 before 1.2).
     pub static_samplers: Vec<StaticSampler>,
 }
 
@@ -181,7 +185,7 @@ pub struct Descriptor {
     pub flags: u32,
 }
 
-/// `D3D12_STATIC_SAMPLER_DESC`: the enumerations stay the integers the blob holds.
+/// `D3D12_STATIC_SAMPLER_DESC` / `D3D12_STATIC_SAMPLER_DESC1`: enumerations stay blob integers.
 #[derive(Debug)]
 pub struct StaticSampler {
     pub filter: u32,
@@ -197,12 +201,16 @@ pub struct StaticSampler {
     pub register: u32,
     pub space: u32,
     pub visibility: u32,
+    pub flags: u32,
 }
 
 const RAN_PAST: Error = Error::fail("Invalid DXBC bytecode: a root signature ran past its part");
 const RANGE_STRIDE_1_0: usize = 20;
 const RANGE_STRIDE_1_1: usize = 24;
 const SAMPLER_STRIDE: usize = 52;
+const SAMPLER_STRIDE_1_2: usize = 56;
+const SAMPLER_FLAGS_MASK: u32 =
+    SAMPLER_FLAG_UINT_BORDER_COLOR | SAMPLER_FLAG_NON_NORMALIZED_COORDINATES;
 
 /// The root signature part of a container (`DXBCGetRootSignature`).
 ///
@@ -223,14 +231,15 @@ impl RootSignature {
     ///
     /// # Errors
     ///
-    /// [`Code::InvalidArg`] for a version but 1.0 and 1.1; [`Code::OutOfMemory`] for a
-    /// descriptor table without ranges, which the C++ answered so, as it allocated nothing for
-    /// them; [`Code::Fail`] for any read past the part.
+    /// [`Code::InvalidArg`] for a version outside 1.0, 1.1, and 1.2 or unsupported static sampler
+    /// flags; [`Code::OutOfMemory`] for a descriptor table without ranges, which the C++ answered
+    /// so, as it allocated nothing for them; [`Code::Fail`] for any read past the part.
     pub fn deserialize(blob: &[u8]) -> Result<Self, Error> {
         let version = read_u32(blob, 0).ok_or(RAN_PAST)?;
-        let from_1_1 = match version {
-            VERSION_1_0 => false,
-            VERSION_1_1 => true,
+        let (from_1_1, from_1_2) = match version {
+            VERSION_1_0 => (false, false),
+            VERSION_1_1 => (true, false),
+            VERSION_1_2 => (true, true),
             _ => {
                 return Err(Error::new(
                     Code::InvalidArg,
@@ -256,7 +265,7 @@ impl RootSignature {
             version,
             v1_0,
             v1_1,
-            static_samplers: read_samplers(blob, &desc)?,
+            static_samplers: read_samplers(blob, &desc, from_1_2)?,
         })
     }
 }
@@ -410,16 +419,25 @@ fn read_ranges(blob: &[u8], table_at: usize, v1_1: bool) -> Result<Vec<Range>, E
         .collect()
 }
 
-fn read_samplers(blob: &[u8], desc: &raw::RootSignatureDesc) -> Result<Vec<StaticSampler>, Error> {
+fn read_samplers(
+    blob: &[u8],
+    desc: &raw::RootSignatureDesc,
+    v1_2: bool,
+) -> Result<Vec<StaticSampler>, Error> {
+    let stride = if v1_2 {
+        SAMPLER_STRIDE_1_2
+    } else {
+        SAMPLER_STRIDE
+    };
     let (start, count) = array(
         blob,
         desc.static_samplers_offset,
         desc.num_static_samplers,
-        SAMPLER_STRIDE,
+        stride,
     )?;
     (0..count)
         .map(|index| {
-            let at = start + index * SAMPLER_STRIDE;
+            let at = start + index * stride;
             let [
                 filter,
                 address_u,
@@ -435,6 +453,18 @@ fn read_samplers(blob: &[u8], desc: &raw::RootSignatureDesc) -> Result<Vec<Stati
                 space,
                 visibility,
             ] = words(blob, at).ok_or(RAN_PAST)?;
+            let flags = if v1_2 {
+                let flags = read_u32(blob, at + SAMPLER_STRIDE).ok_or(RAN_PAST)?;
+                if flags & !SAMPLER_FLAGS_MASK != 0 {
+                    return Err(Error::new(
+                        Code::InvalidArg,
+                        "Invalid DXBC bytecode: static sampler has unsupported flags",
+                    ));
+                }
+                flags
+            } else {
+                0
+            };
             Ok(StaticSampler {
                 filter,
                 address_u,
@@ -449,6 +479,7 @@ fn read_samplers(blob: &[u8], desc: &raw::RootSignatureDesc) -> Result<Vec<Stati
                 register,
                 space,
                 visibility,
+                flags,
             })
         })
         .collect()

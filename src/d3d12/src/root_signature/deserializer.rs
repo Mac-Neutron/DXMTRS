@@ -15,11 +15,12 @@ use dxmt_util::com::ComObject;
 use crate::{
     abi::{
         root_signature::{
-            D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1, DescriptorRange,
-            DescriptorRange1, RootConstants, RootDescriptor, RootDescriptor1, RootDescriptorTable,
-            RootDescriptorTable1, RootParameter, RootParameter1, RootParameter1Payload,
-            RootParameterPayload, RootSignatureDesc, RootSignatureDesc1, StaticSamplerDesc,
-            VersionedDesc, VersionedRootSignatureDesc,
+            D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1,
+            D3D_ROOT_SIGNATURE_VERSION_1_2, DescriptorRange, DescriptorRange1, RootConstants,
+            RootDescriptor, RootDescriptor1, RootDescriptorTable, RootDescriptorTable1,
+            RootParameter, RootParameter1, RootParameter1Payload, RootParameterPayload,
+            RootSignatureDesc, RootSignatureDesc1, RootSignatureDesc2, StaticSamplerDesc,
+            StaticSamplerDesc1, VersionedDesc, VersionedRootSignatureDesc,
         },
         vtbl::{ID3D12RootSignatureDeserializerVtbl, ID3D12VersionedRootSignatureDeserializerVtbl},
     },
@@ -31,19 +32,22 @@ use crate::{
     slot,
 };
 
-/// Owned 1.0 and 1.1 `D3D12_VERSIONED_ROOT_SIGNATURE_DESC` trees with stable heap backing arrays.
+/// Owned 1.0, 1.1, and 1.2 `D3D12_VERSIONED_ROOT_SIGNATURE_DESC` trees with stable heap backing.
 pub struct ConvertedRootSignature {
     _samplers: Box<[StaticSamplerDesc]>,
+    _samplers_1_2: Vec<StaticSamplerDesc1>,
     _ranges_1_0: Box<[Box<[DescriptorRange]>]>,
     _params_1_0: Box<[RootParameter]>,
     _ranges_1_1: Box<[Box<[DescriptorRange1]>]>,
     _params_1_1: Box<[RootParameter1]>,
+    has_sampler_flags: bool,
     pub desc_1_0: VersionedRootSignatureDesc,
     pub desc_1_1: VersionedRootSignatureDesc,
+    pub desc_1_2: VersionedRootSignatureDesc,
 }
 
 impl ConvertedRootSignature {
-    /// Converts a deserialized `airconv_ir` root signature into owned 1.0 and 1.1 ABI structs.
+    /// Converts a deserialized `airconv_ir` root signature into 1.0, 1.1, and 1.2 ABI structs.
     #[must_use]
     pub fn from_ir(ir: &IrRootSignature) -> Self {
         let samplers: Box<[StaticSamplerDesc]> = ir
@@ -56,7 +60,18 @@ impl ConvertedRootSignature {
         } else {
             samplers.as_ptr()
         };
+        let samplers_1_2: Vec<StaticSamplerDesc1> = ir
+            .static_samplers
+            .iter()
+            .map(convert_static_sampler_1)
+            .collect();
+        let samplers_1_2_ptr = if samplers_1_2.is_empty() {
+            ptr::null()
+        } else {
+            samplers_1_2.as_ptr()
+        };
         let num_samplers = u32::try_from(samplers.len()).unwrap_or(u32::MAX);
+        let has_sampler_flags = ir.static_samplers.iter().any(|s| s.flags != 0);
 
         let mut ranges_1_0 = Vec::new();
         let mut params_1_0 = Vec::with_capacity(ir.v1_0.parameters.len());
@@ -219,15 +234,30 @@ impl ConvertedRootSignature {
                 }),
             },
         };
+        let desc_1_2 = VersionedRootSignatureDesc {
+            version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+            desc: VersionedDesc {
+                desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                    num_parameters: num_params_1_1,
+                    p_parameters: params_1_1_ptr,
+                    num_static_samplers: num_samplers,
+                    p_static_samplers: samplers_1_2_ptr,
+                    flags: ir.v1_1.flags,
+                }),
+            },
+        };
 
         Self {
             _samplers: samplers,
+            _samplers_1_2: samplers_1_2,
             _ranges_1_0: ranges_1_0,
             _params_1_0: params_1_0,
             _ranges_1_1: ranges_1_1,
             _params_1_1: params_1_1,
+            has_sampler_flags,
             desc_1_0,
             desc_1_1,
+            desc_1_2,
         }
     }
 }
@@ -247,6 +277,25 @@ const fn convert_static_sampler(s: &StaticSampler) -> StaticSamplerDesc {
         shader_register: s.register,
         register_space: s.space,
         shader_visibility: s.visibility,
+    }
+}
+
+const fn convert_static_sampler_1(s: &StaticSampler) -> StaticSamplerDesc1 {
+    StaticSamplerDesc1 {
+        filter: s.filter,
+        address_u: s.address_u,
+        address_v: s.address_v,
+        address_w: s.address_w,
+        mip_lod_bias: s.mip_lod_bias,
+        max_anisotropy: s.max_anisotropy,
+        comparison_func: s.comparison,
+        border_color: s.border_color,
+        min_lod: s.min_lod,
+        max_lod: s.max_lod,
+        shader_register: s.register,
+        register_space: s.space,
+        shader_visibility: s.visibility,
+        flags: s.flags,
     }
 }
 
@@ -400,19 +449,24 @@ static VERSIONED_DESERIALIZER_VTBL: ID3D12VersionedRootSignatureDeserializerVtbl
                 }
                 // SAFETY: `this` is a live `VersionedRootSignatureDeserializer`.
                 let deser = unsafe { &*this.cast::<VersionedRootSignatureDeserializer>() };
-                match convert_to_version {
-                    D3D_ROOT_SIGNATURE_VERSION_1_0 => {
-                        // SAFETY: `pp_desc` is a non-null writable out-pointer.
-                        unsafe { *pp_desc = ptr::from_ref(&deser.converted.desc_1_0).cast_mut().cast() };
-                        S_OK
-                    }
-                    D3D_ROOT_SIGNATURE_VERSION_1_1 => {
-                        // SAFETY: `pp_desc` is a non-null writable out-pointer.
-                        unsafe { *pp_desc = ptr::from_ref(&deser.converted.desc_1_1).cast_mut().cast() };
-                        S_OK
-                    }
-                    _ => E_INVALIDARG,
+                let (desc, supported) = match convert_to_version {
+                    D3D_ROOT_SIGNATURE_VERSION_1_0 => (
+                        &deser.converted.desc_1_0,
+                        !deser.converted.has_sampler_flags,
+                    ),
+                    D3D_ROOT_SIGNATURE_VERSION_1_1 => (
+                        &deser.converted.desc_1_1,
+                        !deser.converted.has_sampler_flags,
+                    ),
+                    D3D_ROOT_SIGNATURE_VERSION_1_2 => (&deser.converted.desc_1_2, true),
+                    _ => return E_INVALIDARG,
+                };
+                if !supported {
+                    return E_INVALIDARG;
                 }
+                // SAFETY: `pp_desc` is a non-null writable out-pointer.
+                unsafe { *pp_desc = ptr::from_ref(desc).cast_mut().cast() };
+                S_OK
             }
         ),
         get_unconverted_root_signature_desc: slot!(
@@ -420,11 +474,12 @@ static VERSIONED_DESERIALIZER_VTBL: ID3D12VersionedRootSignatureDeserializerVtbl
             (this: *mut c_void) -> *const c_void => {
                 // SAFETY: `this` is a live `VersionedRootSignatureDeserializer`.
                 let deser = unsafe { &*this.cast::<VersionedRootSignatureDeserializer>() };
-                if deser.unconverted_version == D3D_ROOT_SIGNATURE_VERSION_1_0 {
-                    ptr::from_ref(&deser.converted.desc_1_0).cast()
-                } else {
-                    ptr::from_ref(&deser.converted.desc_1_1).cast()
-                }
+                let desc = match deser.unconverted_version {
+                    D3D_ROOT_SIGNATURE_VERSION_1_0 => &deser.converted.desc_1_0,
+                    D3D_ROOT_SIGNATURE_VERSION_1_2 => &deser.converted.desc_1_2,
+                    _ => &deser.converted.desc_1_1,
+                };
+                ptr::from_ref(desc).cast()
             }
         ),
     };
@@ -455,6 +510,9 @@ pub unsafe fn create_deserializer(
         Ok(ir) => ir,
         Err(hr) => return hr,
     };
+    if ir.static_samplers.iter().any(|s| s.flags != 0) {
+        return E_INVALIDARG;
+    }
     let raw = Box::into_raw(Box::new(RootSignatureDeserializer {
         vtbl: &DESERIALIZER_VTBL,
         com: ComObject::new(),
@@ -554,6 +612,8 @@ pub unsafe fn serialize_versioned_root_signature(
     blob: *mut *mut c_void,
     error_blob: *mut *mut c_void,
 ) -> Hresult {
+    // SAFETY: `blob` is a caller out-pointer (or null).
+    unsafe { com::init_out_ptr(blob) };
     // SAFETY: `error_blob` is a caller out-pointer (or null).
     unsafe { com::init_out_ptr(error_blob) };
     if blob.is_null() || root_signature.is_null() {
@@ -566,9 +626,17 @@ pub unsafe fn serialize_versioned_root_signature(
             .read_unaligned()
     };
     // SAFETY: caller guarantees the arrays referenced by `desc` are readable for their counts.
-    match unsafe { super::serialize_versioned(&desc) } {
+    match unsafe { super::serialize_versioned_with_error(&desc) } {
         // SAFETY: `blob` is non-null and writable.
         Ok(bytes) => unsafe { crate::blob::create_blob(bytes, blob) },
-        Err(hr) => hr,
+        Err((hr, msg)) => {
+            if let Some(msg) = msg
+                && !error_blob.is_null()
+            {
+                // SAFETY: `error_blob` was checked non-null.
+                let _ = unsafe { crate::blob::create_blob_from_slice(msg.as_bytes(), error_blob) };
+            }
+            hr
+        }
     }
 }

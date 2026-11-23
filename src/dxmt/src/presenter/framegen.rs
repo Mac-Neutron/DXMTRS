@@ -155,6 +155,27 @@ pub fn mode() -> Mode {
     *MODE
 }
 
+/// Optional camera parameters (`DLSSG.Camera*`) forwarded to `MTLFXFrameInterpolator`.
+///
+/// Non-positive or non-finite fields fall back to `MetalFX` defaults (`0.1`, `10000.0`,
+/// `70.0`, `width / height`).
+pub struct CameraParams {
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub field_of_view: f32,
+    pub aspect_ratio: f32,
+}
+
+impl CameraParams {
+    /// All fields zero (use interpolator defaults).
+    pub const ZERO: Self = Self {
+        near_plane: 0.0,
+        far_plane: 0.0,
+        field_of_view: 0.0,
+        aspect_ratio: 0.0,
+    };
+}
+
 struct RecordedScaler {
     handle: Obj,
     info: WMTFXTemporalScalerInfo,
@@ -196,6 +217,7 @@ struct Slot {
     depth: Option<Obj>,
     motion: Option<Obj>,
     props: WmtFxTemporalScalerProps,
+    camera: CameraParams,
     fresh: bool,
 }
 
@@ -204,8 +226,20 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
     depth: None,
     motion: None,
     props: ZERO_PROPS,
+    camera: CameraParams::ZERO,
     fresh: false,
 });
+
+/// Updates the optional `DLSSG.Camera*` parameters on the process-wide frame-generation slot.
+pub fn set_camera_params(camera: &CameraParams) {
+    let mut slot = lock(&SLOT);
+    slot.camera = CameraParams {
+        near_plane: camera.near_plane,
+        far_plane: camera.far_plane,
+        field_of_view: camera.field_of_view,
+        aspect_ratio: camera.aspect_ratio,
+    };
+}
 
 /// Records the most recent temporal upscale into the process-wide frame-generation slot
 ///
@@ -233,6 +267,7 @@ fn take_slot() -> (
     Option<Obj>,
     Option<Obj>,
     WmtFxTemporalScalerProps,
+    CameraParams,
 ) {
     let mut slot = lock(&SLOT);
     let fresh = slot.fresh;
@@ -243,6 +278,12 @@ fn take_slot() -> (
         slot.depth.as_ref().map(retain),
         slot.motion.as_ref().map(retain),
         slot.props,
+        CameraParams {
+            near_plane: slot.camera.near_plane,
+            far_plane: slot.camera.far_plane,
+            field_of_view: slot.camera.field_of_view,
+            aspect_ratio: slot.camera.aspect_ratio,
+        },
     )
 }
 
@@ -797,7 +838,7 @@ impl FrameGen {
                 since
             };
         }
-        let (fresh, scaler, depth, motion, props) = take_slot();
+        let (fresh, scaler, depth, motion, props, camera) = take_slot();
         if self.failed {
             return false;
         }
@@ -922,14 +963,16 @@ impl FrameGen {
             count!("#frames generated", 1);
             let aspect_w = u32_to_f32(u32::try_from(self.width).unwrap_or(u32::MAX));
             let aspect_h = u32_to_f32(u32::try_from(self.height).unwrap_or(u32::MAX));
+            let positive =
+                |v: f32, default: f32| if v.is_finite() && v > 0.0 { v } else { default };
             let interp_props = WMTFXFrameInterpolatorProps {
                 motion_vector_scale_x: props.motion_vector_scale_x,
                 motion_vector_scale_y: props.motion_vector_scale_y,
                 delta_time: f64_to_f32(self.interval),
-                near_plane: 0.1,
-                far_plane: 10000.0,
-                field_of_view: 70.0,
-                aspect_ratio: aspect_w / aspect_h,
+                near_plane: positive(camera.near_plane, 0.1),
+                far_plane: positive(camera.far_plane, 10000.0),
+                field_of_view: positive(camera.field_of_view, 70.0),
+                aspect_ratio: positive(camera.aspect_ratio, aspect_w / aspect_h),
                 jitter_offset_x: props.jitter_offset_x,
                 jitter_offset_y: props.jitter_offset_y,
                 reset: 0,

@@ -1,5 +1,10 @@
 use core::{mem::ManuallyDrop, ptr};
 
+use airconv_ir::{
+    container::Container,
+    root_signature::{Payload, RootSignature as IrRootSignature, VERSION_1_2, from_container},
+};
+
 use super::*;
 use crate::abi::root_signature::{
     D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC,
@@ -19,7 +24,7 @@ use crate::abi::root_signature::{
     D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS,
     D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS,
     D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS, D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_AMPLIFICATION,
+    D3D12_SAMPLER_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_AMPLIFICATION,
     D3D12_SHADER_VISIBILITY_DOMAIN, D3D12_SHADER_VISIBILITY_GEOMETRY, D3D12_SHADER_VISIBILITY_HULL,
     D3D12_SHADER_VISIBILITY_MESH, D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SHADER_VISIBILITY_VERTEX,
     DescriptorRange, DescriptorRange1, RootConstants, RootDescriptor, RootDescriptor1,
@@ -322,7 +327,7 @@ fn qword_offsets_as_cpp() {
 fn bad_desc_errors_as_cpp() {
     // The C++ `d3d12.dylib`'s answers (a host harness over Task 0's native build).
     let empty = desc(&[], &[], D3D12_ROOT_SIGNATURE_FLAG_NONE);
-    for version in [0, 3, u32::MAX] {
+    for version in [0, 4, u32::MAX] {
         let desc = VersionedRootSignatureDesc {
             version,
             desc: VersionedDesc {
@@ -333,7 +338,11 @@ fn bad_desc_errors_as_cpp() {
         let blob = unsafe { serialize_versioned(&desc) };
         assert_eq!(blob, Err(E_INVALIDARG), "{version}");
     }
-    for version in [0, D3D_ROOT_SIGNATURE_VERSION_1_1, 3] {
+    for version in [
+        0,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+        D3D_ROOT_SIGNATURE_VERSION_1_2,
+    ] {
         // SAFETY: the description has no arrays.
         let blob = unsafe { serialize(&empty, version) };
         assert_eq!(blob, Err(E_INVALIDARG), "{version}");
@@ -722,4 +731,128 @@ fn table1(ranges: &[DescriptorRange1], visibility: u32) -> RootParameter1 {
         },
         shader_visibility: visibility,
     }
+}
+
+fn samplers_1(flags: [u32; 3]) -> [StaticSamplerDesc1; 3] {
+    samplers()
+        .into_iter()
+        .zip(flags)
+        .map(|(s, f)| StaticSamplerDesc1 {
+            filter: s.filter,
+            address_u: s.address_u,
+            address_v: s.address_v,
+            address_w: s.address_w,
+            mip_lod_bias: s.mip_lod_bias,
+            max_anisotropy: s.max_anisotropy,
+            comparison_func: s.comparison_func,
+            border_color: s.border_color,
+            min_lod: s.min_lod,
+            max_lod: s.max_lod,
+            shader_register: s.shader_register,
+            register_space: s.register_space,
+            shader_visibility: s.shader_visibility,
+            flags: f,
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
+}
+
+#[test]
+fn v1_2_serializes_with_56_byte_static_samplers_and_flags() {
+    let ranges = ranges_9();
+    let params = [
+        constants1(0, 0, 4, ALL),
+        descriptor1(
+            D3D12_ROOT_PARAMETER_TYPE_SRV,
+            2,
+            1,
+            D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC,
+            PS,
+        ),
+        table1(&ranges[..2], VS),
+    ];
+    let samplers = samplers_1([
+        D3D12_SAMPLER_FLAG_NONE,
+        D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR,
+        D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR | D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES,
+    ]);
+    let flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+        | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+    let desc_1_2 = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+        desc: VersionedDesc {
+            desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                num_parameters: count(&params),
+                p_parameters: pointer(&params),
+                num_static_samplers: count(&samplers),
+                p_static_samplers: pointer(&samplers),
+                flags,
+            }),
+        },
+    };
+    // SAFETY: every array of `desc_1_2` is a local slice counted by its length.
+    let blob = unsafe { serialize_versioned(&desc_1_2) }.expect("v1.2 serializes");
+
+    let container = Container::parse(&blob).expect("valid DXBC container");
+    let rts0 = from_container(&container).expect("RTS0 present");
+    let ir = IrRootSignature::deserialize(rts0).expect("v1.2 IR deserializes");
+    assert_eq!(ir.version, VERSION_1_2);
+    assert_eq!(ir.v1_1.flags, flags);
+    assert_eq!(ir.v1_1.parameters.len(), 3);
+    assert!(matches!(
+        &ir.v1_1.parameters[1].payload,
+        Payload::Srv(d) if d.register == 2 && d.space == 1 && d.flags == D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC
+    ));
+    assert_eq!(ir.static_samplers.len(), 3);
+    assert_eq!(ir.static_samplers[0].flags, D3D12_SAMPLER_FLAG_NONE);
+    assert_eq!(
+        ir.static_samplers[1].flags,
+        D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR
+    );
+    assert_eq!(
+        ir.static_samplers[2].flags,
+        D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR | D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES
+    );
+}
+
+#[test]
+fn v1_2_rejects_invalid_static_sampler_flags_and_null_samplers() {
+    for bad_flags in [0x4, 0x8000_0000] {
+        let samplers = samplers_1([D3D12_SAMPLER_FLAG_NONE, bad_flags, D3D12_SAMPLER_FLAG_NONE]);
+        let desc_1_2 = VersionedRootSignatureDesc {
+            version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+            desc: VersionedDesc {
+                desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                    num_parameters: 0,
+                    p_parameters: ptr::null(),
+                    num_static_samplers: count(&samplers),
+                    p_static_samplers: pointer(&samplers),
+                    flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
+                }),
+            },
+        };
+        // SAFETY: `samplers` is a valid local array of 3 `StaticSamplerDesc1`s.
+        let err = unsafe { serialize_versioned_with_error(&desc_1_2) }.unwrap_err();
+        assert_eq!(err.0, E_INVALIDARG);
+        assert!(err.1.is_some());
+        // SAFETY: same valid array.
+        assert_eq!(unsafe { serialize_versioned(&desc_1_2) }, Err(E_INVALIDARG));
+    }
+
+    let null_samplers = VersionedRootSignatureDesc {
+        version: D3D_ROOT_SIGNATURE_VERSION_1_2,
+        desc: VersionedDesc {
+            desc_1_2: ManuallyDrop::new(RootSignatureDesc2 {
+                num_parameters: 0,
+                p_parameters: ptr::null(),
+                num_static_samplers: 1,
+                p_static_samplers: ptr::null(),
+                flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
+            }),
+        },
+    };
+    // SAFETY: null pointer with non-zero count is checked before dereferencing.
+    let res = unsafe { serialize_versioned(&null_samplers) };
+    assert_eq!(res, Err(E_INVALIDARG));
 }

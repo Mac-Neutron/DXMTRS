@@ -220,8 +220,8 @@ fn static_samplers_keep_the_bits_of_their_floats() {
 }
 
 #[test]
-fn deserialize_refuses_versions_but_1_0_and_1_1() {
-    for version in [0, 3, 0x100, u32::MAX] {
+fn deserialize_refuses_versions_but_1_0_to_1_2() {
+    for version in [0, 4, 0x100, u32::MAX] {
         let error = error_of(&[version, 0, 0, 0, 0, 0]);
         assert_eq!(error.code, Code::InvalidArg, "{version:#x}");
     }
@@ -348,5 +348,121 @@ fn from_container_wants_a_non_empty_rts0() {
     ] {
         let bytes = crate::container::build(parts).unwrap();
         assert!(from_container(&Container::parse(&bytes).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn v1_2_static_samplers_round_trip() {
+    let mut words = vec![
+        VERSION_1_2,
+        1,
+        24, // parameters offset
+        2,
+        48,    // samplers offset: 24 + 12 (param) + 12 (cbv) = 48
+        0xc00, // directly indexed heaps
+        PARAMETER_TYPE_CBV,
+        5,  // pixel visibility
+        36, // payload offset
+        3,  // register
+        1,  // space
+        DESCRIPTOR_FLAG_DATA_VOLATILE,
+    ];
+    // Sampler 0: 14 words (56 bytes), flags = UINT_BORDER_COLOR.
+    words.extend_from_slice(&[
+        0x15,
+        1,
+        2,
+        3,
+        0.5_f32.to_bits(),
+        8,
+        4,
+        1,
+        0.25_f32.to_bits(),
+        9.0_f32.to_bits(),
+        0,
+        0,
+        5,
+        SAMPLER_FLAG_UINT_BORDER_COLOR,
+    ]);
+    // Sampler 1: 14 words (56 bytes), flags = UINT_BORDER_COLOR | NON_NORMALIZED_COORDINATES.
+    words.extend_from_slice(&[
+        0x0,
+        3,
+        3,
+        3,
+        (-1.0_f32).to_bits(),
+        1,
+        1,
+        2,
+        0.0_f32.to_bits(),
+        4.0_f32.to_bits(),
+        2,
+        4,
+        0,
+        SAMPLER_FLAG_UINT_BORDER_COLOR | SAMPLER_FLAG_NON_NORMALIZED_COORDINATES,
+    ]);
+
+    let rs = RootSignature::deserialize(&blob(&words)).unwrap();
+    assert_eq!(rs.version, VERSION_1_2);
+    assert_eq!((rs.v1_0.flags, rs.v1_1.flags), (0xc00, 0xc00));
+    let (Payload::Cbv(v1_0), Payload::Cbv(v1_1)) = (
+        &rs.v1_0.parameters[0].payload,
+        &rs.v1_1.parameters[0].payload,
+    ) else {
+        panic!("a CBV");
+    };
+    assert_eq!((v1_0.register, v1_0.space, v1_0.flags), (3, 1, 0));
+    assert_eq!(
+        (v1_1.register, v1_1.space, v1_1.flags),
+        (3, 1, DESCRIPTOR_FLAG_DATA_VOLATILE)
+    );
+    assert_eq!(rs.static_samplers.len(), 2);
+    assert_eq!(rs.static_samplers[0].filter, 0x15);
+    assert_eq!(
+        rs.static_samplers[0].mip_lod_bias.to_bits(),
+        0.5_f32.to_bits()
+    );
+    assert_eq!(rs.static_samplers[0].flags, SAMPLER_FLAG_UINT_BORDER_COLOR);
+    assert_eq!(rs.static_samplers[1].register, 2);
+    assert_eq!(rs.static_samplers[1].space, 4);
+    assert_eq!(
+        rs.static_samplers[1].flags,
+        SAMPLER_FLAG_UINT_BORDER_COLOR | SAMPLER_FLAG_NON_NORMALIZED_COORDINATES
+    );
+}
+
+#[test]
+fn v1_1_and_v1_0_static_samplers_default_flags_to_zero() {
+    let rs_1_1 = of_container(SAMPLERS).unwrap();
+    assert_eq!(rs_1_1.version, VERSION_1_1);
+    assert!(rs_1_1.static_samplers.iter().all(|s| s.flags == 0));
+
+    let mut words_1_0 = vec![VERSION_1_0, 0, 0, 1, 24, 0];
+    words_1_0.extend_from_slice(&[0; 13]);
+    let rs_1_0 = RootSignature::deserialize(&blob(&words_1_0)).unwrap();
+    assert_eq!(rs_1_0.version, VERSION_1_0);
+    assert_eq!(rs_1_0.static_samplers.len(), 1);
+    assert_eq!(rs_1_0.static_samplers[0].flags, 0);
+}
+
+#[test]
+fn v1_2_truncated_static_sampler_is_rejected() {
+    // Only 52 bytes (13 words) for a v1.2 static sampler instead of 56 bytes (14 words).
+    let mut words = vec![VERSION_1_2, 0, 0, 1, 24, 0];
+    words.extend_from_slice(&[0; 13]);
+    assert_eq!(error_of(&words).code, Code::Fail);
+}
+
+#[test]
+fn v1_2_invalid_static_sampler_flags_is_rejected() {
+    for bad_flags in [0x4, 0x8000_0000] {
+        let mut words = vec![VERSION_1_2, 0, 0, 1, 24, 0];
+        words.extend_from_slice(&[0; 13]);
+        words.push(bad_flags);
+        assert_eq!(
+            error_of(&words).code,
+            Code::InvalidArg,
+            "flags={bad_flags:#x}"
+        );
     }
 }

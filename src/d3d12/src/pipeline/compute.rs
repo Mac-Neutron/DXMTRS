@@ -19,8 +19,8 @@ use winemetal_sys::{
     MTLDevice_newComputePipelineState, Obj,
     sm50::{
         MtlShaderReflection, SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
-        SM50_SHADER_COMMON, SM50_SHADER_METAL_310, SM50_SHADER_ROOT_SIGNATURE,
-        Sm50ShaderCommonData, Sm50ShaderRootSignatureData,
+        SM50_SHADER_COMMON, SM50_SHADER_ROOT_SIGNATURE, Sm50ShaderCommonData,
+        Sm50ShaderRootSignatureData,
     },
 };
 use winemetal_wire::{MemPtr, WMTComputePipelineInfo, WMTSize};
@@ -233,7 +233,7 @@ unsafe fn initialize_compute(
     let mut common = Sm50ShaderCommonData {
         next: (&raw mut rootsig).cast(),
         r#type: SM50_SHADER_COMMON,
-        metal_version: SM50_SHADER_METAL_310,
+        metal_version: dev.metal_version,
         flags: 0,
     };
 
@@ -243,7 +243,7 @@ unsafe fn initialize_compute(
     };
     // SAFETY: `MtlShaderReflection` is an all-zero-valid POD C struct.
     let mut ref_cs = unsafe { zeroed::<MtlShaderReflection>() };
-    let hr = cs_mut.reflection(&mut ref_cs);
+    let hr = cs_mut.reflection(dev.metal_version, &mut ref_cs);
     if hr < 0 {
         return Err(hr);
     }
@@ -270,6 +270,7 @@ unsafe fn initialize_compute(
             &CompileTarget {
                 name: "cs_main",
                 stage: "cs",
+                metal_version: dev.metal_version,
             },
         )
     }?;

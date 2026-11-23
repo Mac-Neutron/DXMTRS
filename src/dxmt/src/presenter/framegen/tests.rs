@@ -17,8 +17,8 @@ use winemetal_sys::{
 };
 
 use super::{
-    Backend, EnqueueArgs, FrameGen, InterpolateArgs, Order, PresentArgs, PresentMetadata,
-    TemporalScaler, WmtFxTemporalScalerProps, record_upscale,
+    Backend, CameraParams, EnqueueArgs, FrameGen, InterpolateArgs, Order, PresentArgs,
+    PresentMetadata, TemporalScaler, WmtFxTemporalScalerProps, record_upscale, set_camera_params,
 };
 
 const DEVICE_HANDLE: u64 = 0x1000;
@@ -790,4 +790,110 @@ fn vsync_present_not_generated() {
     assert_eq!(fg.enqueued(), 1);
     assert_eq!(fg.committed(), 1);
     let _ = thread::yield_now;
+}
+
+#[test]
+fn camera_params_forward_positive_and_default_invalid() {
+    let _guard = slot_lock();
+    let _ = take_stderr();
+    let cmdbuf = obj(CMDBUF_HANDLE);
+    let frame = obj(FRAME_HANDLE);
+    let depth = obj(DEPTH_HANDLE);
+    let motion = obj(MOTION_HANDLE);
+    let scaler = scaler_1280_to_1920();
+    let props = default_props();
+    let metadata = default_metadata();
+
+    let log = RcLog::new();
+    let mut backend = RecordingBackend::new(log.share());
+    let mut fg = FrameGen::new();
+    fg.set_always(true);
+    let mut now = Instant::now();
+
+    // Frame 0 initializes the ring.
+    set_camera_params(&CameraParams::ZERO);
+    record_upscale(&scaler, &depth, &motion, &props);
+    let mut order = RecordingOrder::new(log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order,
+    ));
+    fg.set_committed(fg.enqueued());
+
+    // Frame 1: valid positive camera parameters override the defaults.
+    let frame1_log = RcLog::new();
+    backend.log = frame1_log.share();
+    set_camera_params(&CameraParams {
+        near_plane: 0.25,
+        far_plane: 5000.0,
+        field_of_view: 60.0,
+        aspect_ratio: 1.5,
+    });
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order1 = RecordingOrder::new(frame1_log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order1,
+    ));
+    fg.set_committed(fg.enqueued());
+    let text1 = frame1_log.text();
+    assert!(
+        text1.contains(
+            "near_plane=0.250, far_plane=5000.000, field_of_view=60.000, aspect_ratio=1.500"
+        ),
+        "expected forwarded camera params in: {text1}"
+    );
+
+    // Frame 2: non-positive / NaN fields fall back to defaults.
+    let frame2_log = RcLog::new();
+    backend.log = frame2_log.share();
+    set_camera_params(&CameraParams {
+        near_plane: -1.0,
+        far_plane: 0.0,
+        field_of_view: f32::NAN,
+        aspect_ratio: f32::INFINITY,
+    });
+    record_upscale(&scaler, &depth, &motion, &props);
+    now += Duration::from_millis(20);
+    let mut order2 = RecordingOrder::new(frame2_log.share());
+    assert!(fg.present_with(
+        &mut backend,
+        &PresentArgs {
+            now,
+            cmdbuf: &cmdbuf,
+            presenter: None,
+            device: DEVICE_HANDLE,
+            frame: &frame,
+            metadata: &metadata,
+            refresh: 120.0,
+        },
+        &mut order2,
+    ));
+    let text2 = frame2_log.text();
+    assert!(
+        text2.contains(
+            "near_plane=0.100, far_plane=10000.000, field_of_view=70.000, aspect_ratio=1.778"
+        ),
+        "expected default camera params on invalid inputs in: {text2}"
+    );
+    set_camera_params(&CameraParams::ZERO);
 }

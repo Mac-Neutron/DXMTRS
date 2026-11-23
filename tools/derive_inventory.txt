@@ -349,6 +349,8 @@ src/d3d11/src/input_layout.rs StreamOutputElement Clone,Copy,Default
 src/d3d11/src/subresource.rs ResourceSubset Clone,Copy,Default,PartialEq,Eq
 src/d3d12/src/abi/pipeline.rs CachedPipelineState Clone,Copy
 src/d3d12/src/abi/pipeline.rs DepthStencilOpDesc Clone,Copy
+src/d3d12/src/abi/root_signature.rs RootSignatureDesc2 Clone,Copy
+src/d3d12/src/abi/root_signature.rs StaticSamplerDesc1 Clone,Copy
 src/d3d12/src/abi/vtbl.rs D3d12CpuDescriptorHandle Clone,Copy,Default,PartialEq,Eq
 src/d3d12/src/abi/vtbl.rs D3d12GpuDescriptorHandle Clone,Copy,Default,PartialEq,Eq
 src/d3d12/src/descriptor_heap.rs BufferSlice Clone,Copy,Debug,Default,PartialEq,Eq

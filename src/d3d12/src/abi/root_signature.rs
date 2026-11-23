@@ -1,4 +1,4 @@
-//! The root signature descriptions, versions 1.0 and 1.1.
+//! The root signature descriptions, versions 1.0, 1.1, and 1.2.
 //!
 //! `d3d12.h`'s structures, fields in snake case, and the constants their users name. A struct's
 //! layout is the C's on every target, asserted at the end against clang's record layouts
@@ -12,6 +12,7 @@ use core::mem::{ManuallyDrop, offset_of};
 
 pub const D3D_ROOT_SIGNATURE_VERSION_1_0: u32 = 1;
 pub const D3D_ROOT_SIGNATURE_VERSION_1_1: u32 = 2;
+pub const D3D_ROOT_SIGNATURE_VERSION_1_2: u32 = 3;
 
 pub const D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE: u32 = 0;
 pub const D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS: u32 = 1;
@@ -58,6 +59,10 @@ pub const D3D12_ROOT_SIGNATURE_FLAG_ALLOW_STREAM_OUTPUT: u32 = 0x40;
 pub const D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED: u32 = 0x400;
 pub const D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED: u32 = 0x800;
 
+pub const D3D12_SAMPLER_FLAG_NONE: u32 = 0;
+pub const D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR: u32 = 0x1;
+pub const D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES: u32 = 0x2;
+
 /// `D3D12_VERSIONED_ROOT_SIGNATURE_DESC`: `version` says which arm of `desc` holds it.
 #[repr(C)]
 pub struct VersionedRootSignatureDesc {
@@ -70,6 +75,7 @@ pub struct VersionedRootSignatureDesc {
 pub union VersionedDesc {
     pub desc_1_0: ManuallyDrop<RootSignatureDesc>,
     pub desc_1_1: ManuallyDrop<RootSignatureDesc1>,
+    pub desc_1_2: ManuallyDrop<RootSignatureDesc2>,
 }
 
 /// `D3D12_ROOT_SIGNATURE_DESC`.
@@ -89,6 +95,17 @@ pub struct RootSignatureDesc1 {
     pub p_parameters: *const RootParameter1,
     pub num_static_samplers: u32,
     pub p_static_samplers: *const StaticSamplerDesc,
+    pub flags: u32,
+}
+
+/// `D3D12_ROOT_SIGNATURE_DESC2`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RootSignatureDesc2 {
+    pub num_parameters: u32,
+    pub p_parameters: *const RootParameter1,
+    pub num_static_samplers: u32,
+    pub p_static_samplers: *const StaticSamplerDesc1,
     pub flags: u32,
 }
 
@@ -200,6 +217,26 @@ pub struct StaticSamplerDesc {
     pub shader_visibility: u32,
 }
 
+/// `D3D12_STATIC_SAMPLER_DESC1`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct StaticSamplerDesc1 {
+    pub filter: u32,
+    pub address_u: u32,
+    pub address_v: u32,
+    pub address_w: u32,
+    pub mip_lod_bias: f32,
+    pub max_anisotropy: u32,
+    pub comparison_func: u32,
+    pub border_color: u32,
+    pub min_lod: f32,
+    pub max_lod: f32,
+    pub shader_register: u32,
+    pub register_space: u32,
+    pub shader_visibility: u32,
+    pub flags: u32,
+}
+
 // The layouts of clang's `-fdump-record-layouts` over `d3d12.h`: every mirrored struct's and
 // union's size, alignment and field offsets, per target. The three 64-bit PE targets' dumps are
 // the same.
@@ -263,6 +300,12 @@ const _: () = {
     assert!(offset_of!(RootSignatureDesc1, num_static_samplers) == 8);
     assert!(offset_of!(RootSignatureDesc1, p_static_samplers) == 12);
     assert!(offset_of!(RootSignatureDesc1, flags) == 16);
+    assert!(size_of::<RootSignatureDesc2>() == 20 && align_of::<RootSignatureDesc2>() == 4);
+    assert!(offset_of!(RootSignatureDesc2, num_parameters) == 0);
+    assert!(offset_of!(RootSignatureDesc2, p_parameters) == 4);
+    assert!(offset_of!(RootSignatureDesc2, num_static_samplers) == 8);
+    assert!(offset_of!(RootSignatureDesc2, p_static_samplers) == 12);
+    assert!(offset_of!(RootSignatureDesc2, flags) == 16);
     assert!(size_of::<StaticSamplerDesc>() == 52 && align_of::<StaticSamplerDesc>() == 4);
     assert!(offset_of!(StaticSamplerDesc, filter) == 0);
     assert!(offset_of!(StaticSamplerDesc, address_u) == 4);
@@ -277,9 +320,25 @@ const _: () = {
     assert!(offset_of!(StaticSamplerDesc, shader_register) == 40);
     assert!(offset_of!(StaticSamplerDesc, register_space) == 44);
     assert!(offset_of!(StaticSamplerDesc, shader_visibility) == 48);
+    assert!(size_of::<StaticSamplerDesc1>() == 56 && align_of::<StaticSamplerDesc1>() == 4);
+    assert!(offset_of!(StaticSamplerDesc1, filter) == 0);
+    assert!(offset_of!(StaticSamplerDesc1, address_u) == 4);
+    assert!(offset_of!(StaticSamplerDesc1, address_v) == 8);
+    assert!(offset_of!(StaticSamplerDesc1, address_w) == 12);
+    assert!(offset_of!(StaticSamplerDesc1, mip_lod_bias) == 16);
+    assert!(offset_of!(StaticSamplerDesc1, max_anisotropy) == 20);
+    assert!(offset_of!(StaticSamplerDesc1, comparison_func) == 24);
+    assert!(offset_of!(StaticSamplerDesc1, border_color) == 28);
+    assert!(offset_of!(StaticSamplerDesc1, min_lod) == 32);
+    assert!(offset_of!(StaticSamplerDesc1, max_lod) == 36);
+    assert!(offset_of!(StaticSamplerDesc1, shader_register) == 40);
+    assert!(offset_of!(StaticSamplerDesc1, register_space) == 44);
+    assert!(offset_of!(StaticSamplerDesc1, shader_visibility) == 48);
+    assert!(offset_of!(StaticSamplerDesc1, flags) == 52);
     assert!(size_of::<VersionedDesc>() == 20 && align_of::<VersionedDesc>() == 4);
     assert!(offset_of!(VersionedDesc, desc_1_0) == 0);
     assert!(offset_of!(VersionedDesc, desc_1_1) == 0);
+    assert!(offset_of!(VersionedDesc, desc_1_2) == 0);
     assert!(
         size_of::<VersionedRootSignatureDesc>() == 24
             && align_of::<VersionedRootSignatureDesc>() == 4
@@ -347,6 +406,12 @@ const _: () = {
     assert!(offset_of!(RootSignatureDesc1, num_static_samplers) == 16);
     assert!(offset_of!(RootSignatureDesc1, p_static_samplers) == 24);
     assert!(offset_of!(RootSignatureDesc1, flags) == 32);
+    assert!(size_of::<RootSignatureDesc2>() == 40 && align_of::<RootSignatureDesc2>() == 8);
+    assert!(offset_of!(RootSignatureDesc2, num_parameters) == 0);
+    assert!(offset_of!(RootSignatureDesc2, p_parameters) == 8);
+    assert!(offset_of!(RootSignatureDesc2, num_static_samplers) == 16);
+    assert!(offset_of!(RootSignatureDesc2, p_static_samplers) == 24);
+    assert!(offset_of!(RootSignatureDesc2, flags) == 32);
     assert!(size_of::<StaticSamplerDesc>() == 52 && align_of::<StaticSamplerDesc>() == 4);
     assert!(offset_of!(StaticSamplerDesc, filter) == 0);
     assert!(offset_of!(StaticSamplerDesc, address_u) == 4);
@@ -361,9 +426,25 @@ const _: () = {
     assert!(offset_of!(StaticSamplerDesc, shader_register) == 40);
     assert!(offset_of!(StaticSamplerDesc, register_space) == 44);
     assert!(offset_of!(StaticSamplerDesc, shader_visibility) == 48);
+    assert!(size_of::<StaticSamplerDesc1>() == 56 && align_of::<StaticSamplerDesc1>() == 4);
+    assert!(offset_of!(StaticSamplerDesc1, filter) == 0);
+    assert!(offset_of!(StaticSamplerDesc1, address_u) == 4);
+    assert!(offset_of!(StaticSamplerDesc1, address_v) == 8);
+    assert!(offset_of!(StaticSamplerDesc1, address_w) == 12);
+    assert!(offset_of!(StaticSamplerDesc1, mip_lod_bias) == 16);
+    assert!(offset_of!(StaticSamplerDesc1, max_anisotropy) == 20);
+    assert!(offset_of!(StaticSamplerDesc1, comparison_func) == 24);
+    assert!(offset_of!(StaticSamplerDesc1, border_color) == 28);
+    assert!(offset_of!(StaticSamplerDesc1, min_lod) == 32);
+    assert!(offset_of!(StaticSamplerDesc1, max_lod) == 36);
+    assert!(offset_of!(StaticSamplerDesc1, shader_register) == 40);
+    assert!(offset_of!(StaticSamplerDesc1, register_space) == 44);
+    assert!(offset_of!(StaticSamplerDesc1, shader_visibility) == 48);
+    assert!(offset_of!(StaticSamplerDesc1, flags) == 52);
     assert!(size_of::<VersionedDesc>() == 40 && align_of::<VersionedDesc>() == 8);
     assert!(offset_of!(VersionedDesc, desc_1_0) == 0);
     assert!(offset_of!(VersionedDesc, desc_1_1) == 0);
+    assert!(offset_of!(VersionedDesc, desc_1_2) == 0);
     assert!(
         size_of::<VersionedRootSignatureDesc>() == 48
             && align_of::<VersionedRootSignatureDesc>() == 8
@@ -431,6 +512,12 @@ const _: () = {
     assert!(offset_of!(RootSignatureDesc1, num_static_samplers) == 16);
     assert!(offset_of!(RootSignatureDesc1, p_static_samplers) == 24);
     assert!(offset_of!(RootSignatureDesc1, flags) == 32);
+    assert!(size_of::<RootSignatureDesc2>() == 40 && align_of::<RootSignatureDesc2>() == 8);
+    assert!(offset_of!(RootSignatureDesc2, num_parameters) == 0);
+    assert!(offset_of!(RootSignatureDesc2, p_parameters) == 8);
+    assert!(offset_of!(RootSignatureDesc2, num_static_samplers) == 16);
+    assert!(offset_of!(RootSignatureDesc2, p_static_samplers) == 24);
+    assert!(offset_of!(RootSignatureDesc2, flags) == 32);
     assert!(size_of::<StaticSamplerDesc>() == 52 && align_of::<StaticSamplerDesc>() == 4);
     assert!(offset_of!(StaticSamplerDesc, filter) == 0);
     assert!(offset_of!(StaticSamplerDesc, address_u) == 4);
@@ -445,9 +532,25 @@ const _: () = {
     assert!(offset_of!(StaticSamplerDesc, shader_register) == 40);
     assert!(offset_of!(StaticSamplerDesc, register_space) == 44);
     assert!(offset_of!(StaticSamplerDesc, shader_visibility) == 48);
+    assert!(size_of::<StaticSamplerDesc1>() == 56 && align_of::<StaticSamplerDesc1>() == 4);
+    assert!(offset_of!(StaticSamplerDesc1, filter) == 0);
+    assert!(offset_of!(StaticSamplerDesc1, address_u) == 4);
+    assert!(offset_of!(StaticSamplerDesc1, address_v) == 8);
+    assert!(offset_of!(StaticSamplerDesc1, address_w) == 12);
+    assert!(offset_of!(StaticSamplerDesc1, mip_lod_bias) == 16);
+    assert!(offset_of!(StaticSamplerDesc1, max_anisotropy) == 20);
+    assert!(offset_of!(StaticSamplerDesc1, comparison_func) == 24);
+    assert!(offset_of!(StaticSamplerDesc1, border_color) == 28);
+    assert!(offset_of!(StaticSamplerDesc1, min_lod) == 32);
+    assert!(offset_of!(StaticSamplerDesc1, max_lod) == 36);
+    assert!(offset_of!(StaticSamplerDesc1, shader_register) == 40);
+    assert!(offset_of!(StaticSamplerDesc1, register_space) == 44);
+    assert!(offset_of!(StaticSamplerDesc1, shader_visibility) == 48);
+    assert!(offset_of!(StaticSamplerDesc1, flags) == 52);
     assert!(size_of::<VersionedDesc>() == 40 && align_of::<VersionedDesc>() == 8);
     assert!(offset_of!(VersionedDesc, desc_1_0) == 0);
     assert!(offset_of!(VersionedDesc, desc_1_1) == 0);
+    assert!(offset_of!(VersionedDesc, desc_1_2) == 0);
     assert!(
         size_of::<VersionedRootSignatureDesc>() == 48
             && align_of::<VersionedRootSignatureDesc>() == 8
