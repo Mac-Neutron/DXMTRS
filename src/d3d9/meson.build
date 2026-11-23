@@ -62,7 +62,7 @@ else
       capture : true,
       command : [
         d3d9_awk,
-        'BEGIN { in_exports = 0 } { line = $0; semi = index(line, ";"); if (semi > 0) { entry = substr(line, 1, semi - 1); comment = substr(line, semi + 1) } else { entry = line; comment = "" } gsub(/^[ \\t]+|[ \\t]+$/, "", entry); if (!in_exports || entry == "") { if (entry == "EXPORTS") in_exports = 1; print line; next } n = split(entry, f, /[ \\t]+/); name = f[1]; if (n < 2 || substr(f[2], 1, 1) != "@") { printf "d3d9.def: entry %s has no @ordinal\\n", name > "/dev/stderr"; exit 1 } gsub(/^[ \\t]+|[ \\t]+$/, "", comment); if (comment !~ /^[0-9]+$/) { printf "d3d9.def: entry %s has no i386 argument bytes after ;\\n", name > "/dev/stderr"; exit 1 } out = "    " name "=" name "@" comment " " f[2]; for (i = 3; i <= n; i++) out = out " " f[i]; print out }',
+        'BEGIN { in_exports = 0 } { line = $0; semi = index(line, ";"); if (semi > 0) { entry = substr(line, 1, semi - 1); comment = substr(line, semi + 1) } else { entry = line; comment = "" } gsub(/^[[:blank:]]+|[[:blank:]]+$/, "", entry); if (!in_exports || entry == "") { if (entry == "EXPORTS") in_exports = 1; print line; next } n = split(entry, f, /[[:blank:]]+/); name = f[1]; if (n < 2 || substr(f[2], 1, 1) != "@") { print "d3d9.def: entry " name " has no @ordinal" > "/dev/stderr"; exit 1 } gsub(/^[[:blank:]]+|[[:blank:]]+$/, "", comment); if (comment !~ /^[0-9]+$/) { print "d3d9.def: entry " name " has no i386 argument bytes after ;" > "/dev/stderr"; exit 1 } out = "    " name "=" name "@" comment " " f[2]; for (i = 3; i <= n; i++) out = out " " f[i]; print out }',
         '@INPUT@',
       ],
     )

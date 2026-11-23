@@ -1854,13 +1854,10 @@ fn msl_float_constant(name: &str) -> f64 {
         .unwrap_or_else(|_| panic!("{name} must be a float literal, found {literal}"))
 }
 
-/// BT.2446 SDR constants match their formula.
-///
-/// `P_SDR` and `LOG_P_SDR` are folded into the MSL from `L_SDR`, so nothing else ties the three
-/// together.
+/// BT.2446 SDR constants match their formula at `L_SDR = 100`.
 #[test]
 fn d3d9_bt2446_sdr_constants_match_the_formula() {
-    let sdr_nits = msl_float_constant("L_SDR");
+    let sdr_nits = 100.0_f64;
     let p_sdr = msl_float_constant("P_SDR");
     let log_p_sdr = msl_float_constant("LOG_P_SDR");
     let expected = 32.0_f64.mul_add((sdr_nits / 10000.0).powf(1.0 / 2.4), 1.0);

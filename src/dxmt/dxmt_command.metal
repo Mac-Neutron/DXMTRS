@@ -382,7 +382,6 @@ struct D3D9HdrUniforms {
   float inv_p_minus_one;
 };
 
-constant float L_SDR = 100.0f;
 constant float P_SDR = 5.6969576564f;
 constant float LOG_P_SDR = 1.7399322879f;
 constant float REFERENCE_WHITE_NITS = 203.0f;
