@@ -99,12 +99,10 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   destination that the GPU still reads whole is renamed with a CPU copy, so a
   lock the application holds on it across the call writes the old memory,
   where mtld3d writes in place.
-- On the core runtime `SetCursorProperties`, `SetCursorPosition` and
-  `ShowCursor` answer as on mtld3d, through the same Win32 cursor, and the
-  window subclass keeps the Direct3D cursor at the window's `WM_SETCURSOR` on
-  both runtimes. What shows differs in two ways. The cursor's scale is fixed
-  at 1, `cursor.scale` not followed, so in Wine's Retina mode the pointer is
-  half mtld3d's size. Nor is `cursor.software` followed.
+- `SetCursorProperties`, `SetCursorPosition` and `ShowCursor` drive the Win32
+  hardware cursor and the `WMTSetCursorOverlay` software cursor
+  (`cursor.software`), with `cursor.scale` applied in Retina mode and the
+  window subclass restoring the Direct3D cursor on `WM_SETCURSOR`.
 - On the core runtime the window subclass is installed on the device window
   and does what it does on mtld3d (the Direct3D cursor at `WM_SETCURSOR`, the
   registry's display mode put back while the application is inactive and the
@@ -112,18 +110,12 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   again after another hand resized it, and a windowed device's back buffer,
   auto depth-stencil, viewport and scissor following `WM_SIZE`), and it follows
   the device to another window at a `Reset` that names one.
-- On the core runtime `CreateDevice` and `CreateDeviceEx` make a fullscreen
-  device as mtld3d makes it: the requested display mode set when it is a
-  settable one other than the current, the device window made a borderless
-  window covering the primary monitor unless `D3DCREATE_NOWINDOWCHANGES`, the
-  back buffer at the mode's size, and at the device's release the mode and the
-  window put back. Two differences. The layer's drawable has the back
-  buffer's size, so under Wine's emulated mode sets (the launcher's setting) a
-  mode other than the desktop's is magnified to the screen by Core Animation
-  with nearest-neighbour filtering, where mtld3d's present pass resamples it.
-  And a fullscreen device keeps presenting into its window while another
-  application covers it, where mtld3d drops those presents (a windowed device
-  of the core runtime does the same).
+- `CreateDevice` and `CreateDeviceEx` configure a fullscreen device by setting
+  the requested display mode when it is a settable one other than the current,
+  making the device window a borderless window covering the primary monitor
+  unless `D3DCREATE_NOWINDOWCHANGES`, sizing the back buffer to the mode, and
+  restoring the mode and window at device release. Under Wine's emulated mode
+  sets, Core Animation magnifies a mode other than the desktop's to the screen.
 - On the core runtime `Reset` and `ResetEx` answer as on mtld3d: the back
   buffer and the auto depth-stencil made again at the new size and sample
   count, in place, the view and the window subclass moved to another device

@@ -118,9 +118,13 @@ impl StretchSurfaceInfo {
     }
 }
 
-/// Logs one process-wide warning for a D3D9 capability the core runtime refuses.
+/// Logs one process-wide warning per `feature` for a D3D9 capability the core runtime refuses.
 pub fn refuse_under_core(feature: &'static str) {
-    mtld3d_shared::log_once_warn!(target: LOG_TARGET, "{feature}: not supported");
+    mtld3d_shared::log_once_warn_by!(
+        target: LOG_TARGET,
+        key: feature.as_ptr() as u64,
+        "d3d9 core: {feature} is not implemented \u{2192} D3DERR_NOTAVAILABLE"
+    );
 }
 
 /// Sub-target for the once-per-distinct texture-create diagnostic in `device_create_texture`.
@@ -459,8 +463,12 @@ pub struct DeviceInner {
     core: Box<crate::rt::device::CoreDevice>,
     /// The auto depth-stencil's core texture id (DXMTRS C4b-3d2), `None` when made without one.
     core_auto_depth: Option<mtld3d_core::ids::TextureId>,
+    /// Most recent texture-backed depth surface and mip size for `depth.aliasSameSize`.
+    last_sized_depth: Option<(crate::rt::device::DepthRef, u32, u32)>,
     /// Interned shader token arrays by id, so draws compare programs by pointer.
     programs: rustc_hash::FxHashMap<ProgramId, std::sync::Weak<[u32]>>,
+    /// Core texture IDs that migrated to another device, drained on the owning device's API thread.
+    departed_textures: Mutex<Vec<TextureId>>,
     /// First latched device failure (`D3D_OK` until a failure).
     core_failure: AtomicI32,
     /// Address-space watch state: this device's present-sampling counter and its watch thread.
@@ -1171,6 +1179,7 @@ impl DeviceInner {
                 "debug.failNextSubmit refused the submission",
             );
         }
+        self.drain_departed_textures();
         let pe_cs_reasons = self.cursor.sinks().take_client_surface_request().bits();
         let _ = core_arms::present(
             &mut self.core,
@@ -1270,6 +1279,40 @@ impl DeviceInner {
                 self.vram_bytes_used
                     .fetch_sub(tex.allocated_bytes(), Ordering::AcqRel);
             }
+        }
+    }
+
+    /// Record a texture ID that migrated away so its core copy can be dropped.
+    pub fn push_departed_texture(&self, id: TextureId) {
+        self.departed_textures
+            .lock()
+            .expect("departed_textures mutex poisoned")
+            .push(id);
+    }
+
+    /// Cancel pending core cleanup when a departed texture returns to this device.
+    pub fn remove_departed_texture(&self, id: TextureId) {
+        let mut departed = self
+            .departed_textures
+            .lock()
+            .expect("departed_textures mutex poisoned");
+        departed.retain(|&entry| entry != id);
+    }
+
+    /// Drop core-side copies of textures that migrated to another device.
+    pub fn drain_departed_textures(&mut self) {
+        let departed = {
+            let mut guard = self
+                .departed_textures
+                .lock()
+                .expect("departed_textures mutex poisoned");
+            if guard.is_empty() {
+                return;
+            }
+            core::mem::take(&mut *guard)
+        };
+        for id in departed {
+            self.core.forget_texture(id);
         }
     }
 
@@ -1594,6 +1637,7 @@ impl DeviceInner {
     /// the depth stencil goes back to the implicit surface, or to none on a
     /// swap chain without one.
     fn reset_targets_to_implicit(&mut self) {
+        self.drain_departed_textures();
         let autogen = core::mem::replace(&mut self.cur_autogen_rt_ids, [None; RENDER_TARGET_SLOTS]);
         for old_id in autogen.into_iter().flatten() {
             self.core.texture_generate_mips(old_id);
@@ -1607,6 +1651,7 @@ impl DeviceInner {
             "the back buffer and the auto depth-stencil bind"
         );
         self.bound_rt.teardown();
+        self.last_sized_depth = None;
         self.flags.remove(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND);
     }
 
@@ -1954,6 +1999,8 @@ impl Direct3DDevice9 {
             core_draw_cache: core_draw::DrawCache::new(),
             core: info.core,
             core_auto_depth: None,
+            last_sized_depth: None,
+            departed_textures: Mutex::new(Vec::new()),
             programs: rustc_hash::FxHashMap::default(),
             core_failure: AtomicI32::new(D3D_OK),
             mem_watch: mem_watch::MemWatchState::new(),
@@ -2721,6 +2768,7 @@ extern "system" fn device_release(this: *mut c_void) -> u32 {
         // SAFETY: as above.
         unsafe { crate::surface::finalize_implicit_surface(implicit_ds) };
 
+        device_inner.drain_departed_textures();
         device_inner.core_draw_cache.clear();
         drop(device_inner);
         obj.refcount = 0;
@@ -4401,7 +4449,16 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
     // on non-UMA Macs (Intel/AMD). Each level pops a parked box of its
     // padded size from the page-box pool before it falls back to the
     // allocator; the device counts both outcomes once per create.
-    let mut staging: Vec<PageBox> = Vec::with_capacity(actual_levels as usize);
+    let mut flags = TextureFlags::empty();
+    flags.set(TextureFlags::AUTOGEN_MIPMAP, autogen_mipmap);
+    flags.set(TextureFlags::OFFSCREEN_PLAIN, offscreen_plain);
+    let lazy_staging = mtld3d_core::texture_staging::staging_lazy_class(pool, usage, flags, 1);
+
+    let mut staging: Vec<PageBox> = Vec::with_capacity(if lazy_staging {
+        0
+    } else {
+        actual_levels as usize
+    });
     let mut mip_widths = Vec::with_capacity(actual_levels as usize);
     let mut mip_heights = Vec::with_capacity(actual_levels as usize);
     let mut mip_bytes_per_row = Vec::with_capacity(actual_levels as usize);
@@ -4414,25 +4471,31 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         // height: the chroma planes follow the luma rows in the same box, and
         // the lock pitch strides all of them. The per-level arrays keep the
         // logical extent, which is what `GetDesc` and rect validation read.
-        match PageBox::try_new_zeroed(layout.total_bytes()) {
-            Some(page) => staging.push(page),
-            None => out_of_memory = true,
+        // Every offset a planar lock, upload or decode forms is derived from
+        // the layout, so the allocation has to be exactly the layout's size.
+        if !lazy_staging {
+            match PageBox::try_new_zeroed(layout.total_bytes()) {
+                Some(page) => {
+                    debug_assert_eq!(page.logical_len(), layout.total_bytes());
+                    staging.push(page);
+                }
+                None => out_of_memory = true,
+            }
         }
         mip_widths.push(width);
         mip_heights.push(height);
         mip_bytes_per_row.push(layout.pitch());
-        // Every offset a planar lock, upload or decode forms is derived from
-        // the layout, so the allocation has to be exactly the layout's size.
-        debug_assert!(out_of_memory || staging[0].logical_len() == layout.total_bytes());
         debug_assert_eq!(actual_levels, 1);
     } else {
         for level in 0..actual_levels {
             let (mw, mh, size, bpr) = compute_mip_size(width, height, level, &fmt);
-            let Some(page) = PageBox::try_new_zeroed(size as usize) else {
-                out_of_memory = true;
-                break;
-            };
-            staging.push(page);
+            if !lazy_staging {
+                let Some(page) = PageBox::try_new_zeroed(size as usize) else {
+                    out_of_memory = true;
+                    break;
+                };
+                staging.push(page);
+            }
             mip_widths.push(mw);
             mip_heights.push(mh);
             mip_bytes_per_row.push(bpr);
@@ -4453,9 +4516,6 @@ fn create_texture_path(info: &TextureCreateArgs) -> i32 {
         let pitch = usize::try_from(mip_bytes_per_row[0]).expect("a row pitch fits usize");
         copy_user_memory(memory, &rows, staging[0].as_mut_slice(), pitch);
     }
-    let mut flags = TextureFlags::empty();
-    flags.set(TextureFlags::AUTOGEN_MIPMAP, autogen_mipmap);
-    flags.set(TextureFlags::OFFSCREEN_PLAIN, offscreen_plain);
     // A render target the game created at the reported back-buffer size is its
     // main view and shares the back buffer's scale. A texture it uploads pixels
     // into never does: its staging layout is keyed to the reported size.
@@ -7447,6 +7507,7 @@ extern "system" fn device_set_render_target(
     // SAFETY: null, or the surface's parent texture, live while the surface is and distinct
     // from the device.
     if let Some(parent) = unsafe { parent.as_mut() } {
+        crate::texture::rehydrate_for_device(parent, dev);
         // Its core texture exists from here, with every CPU write so far uploaded.
         let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
     }
@@ -7588,7 +7649,7 @@ extern "system" fn device_set_depth_stencil_surface(
     let unattached =
         "IDirect3DDevice9::SetDepthStencilSurface (a surface the core does not attach)";
     // SAFETY: null, or the live surface validated above.
-    let depth = if let Some(surf) = unsafe { surf.as_ref() } {
+    let (depth, sized_depth) = if let Some(surf) = unsafe { surf.as_ref() } {
         let own = surf.device_inner() == obj.inner_ptr();
         let Some(depth) = surf.core_depth().filter(|_| own) else {
             crate::device::refuse_under_core(unattached);
@@ -7596,17 +7657,36 @@ extern "system" fn device_set_depth_stencil_surface(
         };
         // SAFETY: null, or the surface's parent texture, live while the surface is and
         // distinct from the device.
-        if let Some(parent) = unsafe { surf.parent_texture().as_mut() } {
+        let sized = if let Some(parent) = unsafe { surf.parent_texture().as_mut() } {
+            crate::texture::rehydrate_for_device(parent, dev);
             let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
-        }
-        Some(depth)
+            let lvl = surf.mip_level() as usize;
+            Some((
+                depth,
+                parent.inner().mip_width(lvl),
+                parent.inner().mip_height(lvl),
+            ))
+        } else {
+            None
+        };
+        (Some(depth), sized)
     } else {
-        None
+        (None, None)
     };
     if !dev.core.set_depth(depth) {
         crate::device::refuse_under_core(unattached);
         return mtld3d_types::D3DERR_NOTAVAILABLE;
     }
+    if dev.config().depth_alias_same_size
+        && let (Some((prev_depth, pw, ph)), Some((cur_depth, cw, ch))) =
+            (dev.last_sized_depth, sized_depth)
+        && prev_depth != cur_depth
+        && (pw, ph) == (cw, ch)
+        && dev.core.copy_depth(prev_depth, cur_depth)
+    {
+        dev.core.note_stretch_depth_copy(prev_depth, cur_depth);
+    }
+    dev.last_sized_depth = sized_depth;
     dev.bound_rt_mut().replace_depth_stencil(surf);
     dev.flags
         .set(DeviceFlags::DEPTH_EXPLICITLY_UNBOUND, surf.is_null());

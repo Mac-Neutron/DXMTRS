@@ -212,7 +212,7 @@ impl Binds {
     }
 }
 
-/// Whether any sampled pixel or vertex slot holds a dirty texture or a changed LOD setting.
+/// Whether any sampled slot holds a dirty, migrated, or LOD-changed texture.
 fn any_bound_texture_dirty_or_lod_changed(
     dev: &DeviceInner,
     sampled_pixel_mask: u16,
@@ -220,6 +220,7 @@ fn any_bound_texture_dirty_or_lod_changed(
     cached_pixel_lods: &[u32; 16],
     cached_vertex_lods: &[u32; 4],
 ) -> bool {
+    let dev_ptr = core::ptr::from_ref(dev) as u64;
     let bindings = dev.stage_bindings();
     let mut px_rem = sampled_pixel_mask;
     while px_rem != 0 {
@@ -229,7 +230,10 @@ fn any_bound_texture_dirty_or_lod_changed(
         if !tex.is_null() {
             // SAFETY: a bound texture, live while its stage holds it.
             let inner = unsafe { &*tex }.inner();
-            if inner.has_any_dirty() || inner.lod() != cached_pixel_lods[slot] {
+            if inner.has_any_dirty()
+                || inner.lod() != cached_pixel_lods[slot]
+                || inner.device_inner() != dev_ptr
+            {
                 return true;
             }
         }
@@ -242,7 +246,10 @@ fn any_bound_texture_dirty_or_lod_changed(
         if !tex.is_null() {
             // SAFETY: a bound texture, live while its vertex slot holds it.
             let inner = unsafe { &*tex }.inner();
-            if inner.has_any_dirty() || inner.lod() != cached_vertex_lods[slot] {
+            if inner.has_any_dirty()
+                || inner.lod() != cached_vertex_lods[slot]
+                || inner.device_inner() != dev_ptr
+            {
                 return true;
             }
         }
@@ -639,6 +646,14 @@ fn resolve(
         alpha_to_coverage,
     );
     {
+        dev.drain_departed_textures();
+        for s in slots.iter().chain(vertex_slots.iter()) {
+            if !s.texture.is_null() {
+                // SAFETY: a bound texture, live while its slot holds it; distinct from `dev`.
+                let tex = unsafe { &mut *s.texture };
+                crate::texture::rehydrate_for_device(tex, dev);
+            }
+        }
         let core = &mut *dev.core;
         let every_slot = slots
             .iter()

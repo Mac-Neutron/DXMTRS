@@ -332,13 +332,14 @@ pub fn get_render_target_data(this: *mut c_void, rt: *mut c_void, dst: *mut c_vo
         return hr;
     }
     let ok = {
-        let core = &mut *dev.core;
         // SAFETY: null, or the source level's parent texture, live while the level is and distinct
         // from the device.
         if let Some(parent) = unsafe { src.parent_texture().as_mut() } {
+            crate::texture::rehydrate_for_device(parent, dev);
             // Its core texture exists from here, with every CPU write so far uploaded.
-            let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+            let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
         }
+        let core = &mut *dev.core;
         core_read_pages(&desc, |bytes, pitch| {
             core.read_back_logical(source, from.width, from.height, bytes, pitch)
         })
@@ -541,22 +542,24 @@ pub fn stretch_colour(this: *mut c_void, obj: &Direct3DDevice9, call: &StretchCa
         if dev.latched_encoder_status().is_err() {
             return D3D_OK;
         }
-        let core = &mut *dev.core;
         let planar = mtld3d_core::stretch_rect::is_planar_yuv(src_info.format);
         // SAFETY: null, or the source level's parent texture, live while the level is and
         // distinct from the device.
         if !planar && let Some(texture) = unsafe { src_parent.as_mut() } {
+            crate::texture::rehydrate_for_device(texture, dev);
             // Its core texture exists from here, with every CPU write so far uploaded. A planar
             // surface's would hold its luma alone: its staging is decoded below instead.
-            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), &mut dev.core);
         }
         let separate = dst_parent != src_parent;
         // SAFETY: null, or the destination level's parent texture, live while the level is and
         // distinct from the device and from the source's.
         if separate && let Some(texture) = unsafe { dst_parent.as_mut() } {
+            crate::texture::rehydrate_for_device(texture, dev);
             // Its owed uploads are recorded ahead of the copy, in the same blit pass.
-            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+            let _ = crate::texture::core_flush_dirty(texture.inner_mut(), &mut dev.core);
         }
+        let core = &mut *dev.core;
         if phys_src_region.w == 0
             || phys_src_region.h == 0
             || phys_dst_region.w == 0
@@ -966,6 +969,7 @@ pub fn resz(dev: &mut DeviceInner) -> Result<(), i32> {
     if dev.latched_encoder_status().is_err() {
         return Ok(());
     }
+    crate::texture::rehydrate_for_device(texture, dev);
     let core = &mut *dev.core;
     // A depth texture never bound or sampled gets its core form here.
     let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
@@ -1016,14 +1020,16 @@ pub fn color_fill(
     if dev.latched_encoder_status().is_err() {
         return D3D_OK;
     }
-    let core = &mut *dev.core;
     let parent = surface.parent_texture();
     // SAFETY: null, or the level's parent texture, live while the level is and distinct from the
     // device.
-    if let Some(texture) = unsafe { parent.as_mut() } {
+    let parent_ref = unsafe { parent.as_mut() };
+    if let Some(texture) = parent_ref {
+        crate::texture::rehydrate_for_device(texture, dev);
         // Its core texture exists from here, with every CPU write so far uploaded.
-        let _ = crate::texture::core_flush_dirty(texture.inner_mut(), core);
+        let _ = crate::texture::core_flush_dirty(texture.inner_mut(), &mut dev.core);
     }
+    let core = &mut *dev.core;
     let dst_extent = TargetExtent::new(info.scale, (info.width, info.height), info.texture_size);
     let (fx, fy, fw, fh) = dst_extent.rect(region.x, region.y, region.w, region.h);
     if fw == 0 || fh == 0 {
@@ -1194,16 +1200,17 @@ fn resolve_shape(
     if dev.latched_encoder_status().is_err() {
         return Some(());
     }
-    let core = &mut *dev.core;
     // SAFETY: null, or the destination level's parent texture, live while the level is and
     // distinct from the device.
     if let Some(parent) = unsafe { dst.parent_texture().as_mut() } {
         if parent.inner().autogen_mipmap() {
             return None;
         }
+        crate::texture::rehydrate_for_device(parent, dev);
         // Its core texture exists from here, with every CPU write so far uploaded.
-        let _ = crate::texture::core_flush_dirty(parent.inner_mut(), core);
+        let _ = crate::texture::core_flush_dirty(parent.inner_mut(), &mut dev.core);
     }
+    let core = &mut *dev.core;
     core.resolve_into(source, destination).then(|| {
         core.note_stretch_copy(source, destination, ClearPlanes::COLOR, true);
     })

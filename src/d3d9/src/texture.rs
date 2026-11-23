@@ -720,29 +720,32 @@ impl TextureInner {
     /// `D3DLOCK_DISCARD` lock, or a GPU read-back of the level. Partial CPU writes
     /// go through [`Self::ensure_staging_for_write`] and `LockRect` calls through
     /// [`Self::ensure_staging_for_lock`], both of which use
-    /// [`Self::ensure_zeroed_staging`] when a never-uploaded level must keep zeroed
+    /// [`Self::try_ensure_zeroed_staging`] when a never-uploaded level must keep zeroed
     /// unwritten texels.
-    fn ensure_staging(&mut self, level: usize) {
-        self.ensure_staging_with(level, false);
+    fn try_ensure_staging(&mut self, level: usize) -> bool {
+        self.try_ensure_staging_with(level, false)
     }
 
     /// Give released `level` zeroed staging, the contents of a level nothing has written.
-    fn ensure_zeroed_staging(&mut self, level: usize) {
-        self.ensure_staging_with(level, true);
+    fn try_ensure_zeroed_staging(&mut self, level: usize) -> bool {
+        self.try_ensure_staging_with(level, true)
     }
 
     /// Re-create released `level`'s staging, zero-initialized when `zeroed` is true.
-    fn ensure_staging_with(&mut self, level: usize, zeroed: bool) {
+    fn try_ensure_staging_with(&mut self, level: usize, zeroed: bool) -> bool {
         if self.dropped_staging & (1u32 << level) == 0 {
-            return;
+            return true;
         }
         let block_rows = self.mip_heights[level].div_ceil(self.block_h.max(1));
         let len = (self.mip_bytes_per_row[level] as usize).saturating_mul(block_rows as usize);
         // The slot holds the shared placeholder, never its last owner.
         let page = if zeroed {
-            take_zeroed_staging_for(self.device_inner, len.max(1))
+            try_take_zeroed_staging_for(self.device_inner, len.max(1))
         } else {
-            take_staging_for(self.device_inner, len.max(1))
+            try_take_staging_for(self.device_inner, len.max(1))
+        };
+        let Some(page) = page else {
+            return false;
         };
         self.staging[level] = Arc::new(page);
         self.dropped_staging &= !(1u32 << level);
@@ -756,6 +759,7 @@ impl TextureInner {
             "texture {:#x}: staging re-created for level {level} after a write",
             self.texture_id.raw()
         );
+        true
     }
 
     /// Re-materialise `level`'s released staging for a `LockRect`.
@@ -774,10 +778,13 @@ impl TextureInner {
             mtld3d_core::texture_staging::released_level_lock_needs_readback(flags);
         let readback = needs_readback && self.was_uploaded[level];
         if !readback {
-            if needs_readback {
-                self.ensure_zeroed_staging(level);
+            let allocated = if needs_readback {
+                self.try_ensure_zeroed_staging(level)
             } else {
-                self.ensure_staging(level);
+                self.try_ensure_staging(level)
+            };
+            if !allocated {
+                return false;
             }
             mtld3d_shared::log_once_info_by!(
                 target: crate::LOG_TARGET,
@@ -816,10 +823,10 @@ impl TextureInner {
     /// lands. It then keeps its staging (`kept_staging`): a level written in part
     /// after its release is written again, and each release would cost the same
     /// blocking read at the next write. A whole-level write takes uninitialized
-    /// pages via [`Self::ensure_staging`]; a partial write of a level the GPU
-    /// never received takes zeroed pages via [`Self::ensure_zeroed_staging`] so
-    /// unwritten texels remain zero. Returns false when the read back fails,
-    /// which rejects the write.
+    /// pages via [`Self::try_ensure_staging`]; a partial write of a level the GPU
+    /// never received takes zeroed pages via [`Self::try_ensure_zeroed_staging`] so
+    /// unwritten texels remain zero. Returns false when allocation or readback
+    /// fails, which rejects the write.
     fn ensure_staging_for_write(&mut self, level: usize, whole_level: bool) -> bool {
         if self.dropped_staging & (1u32 << level) == 0 {
             return true;
@@ -828,12 +835,11 @@ impl TextureInner {
             whole_level,
             self.was_uploaded[level],
         ) {
-            if whole_level {
-                self.ensure_staging(level);
+            return if whole_level {
+                self.try_ensure_staging(level)
             } else {
-                self.ensure_zeroed_staging(level);
-            }
-            return true;
+                self.try_ensure_zeroed_staging(level)
+            };
         }
         if self.read_released_level_back(level) {
             mtld3d_shared::log_once_info_by!(
@@ -867,7 +873,9 @@ impl TextureInner {
         if dev_ptr == 0 {
             return false;
         }
-        self.ensure_staging(level);
+        if !self.try_ensure_staging(level) {
+            return false;
+        }
         if !core_read_subresource_back(self, DeviceInner::from_ptr(dev_ptr), 0, level) {
             self.level_authority.gpu_wrote(0, level);
             return false;
@@ -2078,7 +2086,9 @@ impl TextureInner {
     ) -> bool {
         // A fill is a write: a level whose staging was never materialized (or
         // was dropped after its upload) gets one here, like any first write.
-        self.ensure_staging(level);
+        if !self.try_ensure_staging(level) {
+            return false;
+        }
         if level >= self.staging.len() {
             return false;
         }
@@ -2189,7 +2199,9 @@ impl TextureInner {
         if level >= self.staging.len() {
             return None;
         }
-        self.ensure_staging(level);
+        if !self.try_ensure_staging(level) {
+            return None;
+        }
         self.prepare_staging_read_back(0, level, false);
         Some((
             self.staging[level].as_ptr() as u64,
@@ -3064,14 +3076,106 @@ impl TextureInner {
     }
 }
 
-/// One staging allocation.
+/// Bind `tex` to `dev` when it belongs to an earlier device or is detached.
+#[inline]
+pub fn rehydrate_for_device(tex: &mut Direct3DTexture9, dev: &mut DeviceInner) {
+    let dev_ptr = core::ptr::from_mut(dev) as u64;
+    if tex.inner().device_inner == dev_ptr {
+        return;
+    }
+    rehydrate_for_device_slow(tex, dev, dev_ptr);
+}
+
+#[cold]
+fn rehydrate_for_device_slow(tex: &mut Direct3DTexture9, dev: &mut DeviceInner, dev_ptr: u64) {
+    let tex_id = tex.inner().texture_id;
+    let left_ptr = tex.inner().device_inner;
+    let is_managed = tex.inner().d3d_pool == mtld3d_types::D3DPOOL_MANAGED;
+    let forwards_device = tex.refcount > 0 && !is_managed;
+    let blocks_reset =
+        forwards_device && tex.inner().is_default_pool() && tex.inner().state_block_refs == 0;
+
+    // Acquire the adopting device's forwarding ref and Reset blocker before
+    // releasing the previous device so neither wrapper tears down prematurely.
+    if forwards_device {
+        let dev_wrapper = dev.device_wrapper();
+        crate::device::device_wrapper_add_ref(dev_wrapper);
+        if blocks_reset {
+            crate::device::device_wrapper_note_reset_blocker(dev_wrapper, true);
+        }
+    }
+
+    let left_wrapper = if left_ptr != 0 {
+        let left = DeviceInner::from_ptr(left_ptr);
+        left.deregister_texture(tex.inner);
+        left.push_departed_texture(tex_id);
+        forwards_device.then(|| left.device_wrapper())
+    } else {
+        None
+    };
+
+    let api_lock_ptr = dev.api_lock_ptr();
+    let tex_ptr = tex.inner;
+    {
+        let ti = tex.inner_mut();
+        ti.device_inner = dev_ptr;
+        ti.api_lock.store(api_lock_ptr, Ordering::Release);
+        ti.last_submit_seq.fill(0);
+        if let Some(cube) = ti.cube.as_deref_mut() {
+            cube.last_submit_seq.fill(0);
+        }
+        ti.point_cached_surfaces_at(core::ptr::from_mut(dev));
+    }
+
+    dev.remove_departed_texture(tex_id);
+    dev.register_texture(tex_ptr);
+
+    if !dev.core_mut().has_texture(tex_id) {
+        let ti = tex.inner_mut();
+        if let Some(cube) = ti.cube.as_deref_mut() {
+            let levels = ti.levels as usize;
+            let level_mask = if levels >= 32 {
+                u32::MAX
+            } else {
+                (1u32 << levels) - 1
+            };
+            for mask in &mut cube.dirty_masks {
+                *mask |= level_mask;
+            }
+            cube.pending_upload_rects.fill(None);
+        } else {
+            for level in 0..ti.staging.len().min(32) {
+                if (ti.dropped_staging & (1u32 << level)) == 0 {
+                    ti.dirty_mask |= 1u32 << level;
+                    if let Some(rect) = ti.pending_upload_rects.get_mut(level) {
+                        *rect = None;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(lw) = left_wrapper {
+        if blocks_reset {
+            crate::device::device_wrapper_note_reset_blocker(lw, false);
+        }
+        crate::device::device_wrapper_release(lw);
+    }
+}
+
+/// One uninitialized staging allocation.
 fn take_staging_for(_device_inner: u64, len: usize) -> PageBox {
     PageBox::new_uninit(len)
 }
 
-/// One zeroed staging allocation.
-fn take_zeroed_staging_for(_device_inner: u64, len: usize) -> PageBox {
-    PageBox::new_zeroed(len)
+/// One fallible uninitialized staging allocation.
+fn try_take_staging_for(_device_inner: u64, len: usize) -> Option<PageBox> {
+    PageBox::try_new_uninit(len)
+}
+
+/// One fallible zeroed staging allocation.
+fn try_take_zeroed_staging_for(_device_inner: u64, len: usize) -> Option<PageBox> {
+    PageBox::try_new_zeroed(len)
 }
 
 /// Parameters for `Direct3DTexture9::new`.
@@ -3149,13 +3253,6 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
     // upload path), so size the per-mip tracking arrays from
     // `levels` instead. For color textures the two are equal.
     let is_cube = info.flags.contains(TextureFlags::CUBE);
-    let mip_count = if is_cube {
-        0
-    } else if info.flags.contains(TextureFlags::DEPTH_FORMAT) {
-        info.levels as usize
-    } else {
-        info.staging.len()
-    };
     let dev_ptr = info.device_inner;
     // The two system-memory pools get no Metal texture, so the residency bit
     // is derived from the pool here rather than restated at each Create*.
@@ -3164,6 +3261,19 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
         TextureFlags::CPU_ONLY,
         mtld3d_core::pool::is_cpu_only(info.d3d_pool),
     );
+    let lazy_staging = mtld3d_core::texture_staging::staging_lazy_class(
+        info.d3d_pool,
+        info.d3d_usage,
+        flags,
+        info.depth,
+    );
+    let mip_count = if is_cube {
+        0
+    } else if info.flags.contains(TextureFlags::DEPTH_FORMAT) || lazy_staging {
+        info.levels as usize
+    } else {
+        info.staging.len()
+    };
     // A freshly created texture is fully dirty as an UpdateTexture source until
     // its first copy (per the D3D9 spec, a managed texture starts full-dirty).
     let update_dirty: Vec<Option<DirtyRect>> = (0..mip_count)
@@ -3188,9 +3298,26 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
                 info.height,
             ))),
         )
+    } else if lazy_staging {
+        let placeholder = dropped_staging_placeholder();
+        (
+            (0..mip_count).map(|_| Arc::clone(&placeholder)).collect(),
+            None,
+        )
     } else {
         (info.staging.into_iter().map(Arc::new).collect(), None)
     };
+    let dropped_staging = if lazy_staging {
+        (0..mip_count.min(32)).fold(0u32, |mask, level| mask | (1u32 << level))
+    } else {
+        0
+    };
+    let mut level_authority = LevelAuthorityMask::new();
+    if lazy_staging {
+        for level in 0..mip_count.min(32) {
+            level_authority.gpu_wrote(0, level);
+        }
+    }
     let boxed = Box::new(TextureInner {
         texture_id: info.texture_id,
         device_inner: info.device_inner,
@@ -3211,10 +3338,10 @@ fn build_texture_inner(info: TextureCreateInfo) -> *mut TextureInner {
         d3d_pool: info.d3d_pool,
         priority: 0,
         staging,
-        dropped_staging: 0,
+        dropped_staging,
         observed_staging: 0,
         snapshot_staging: 0,
-        level_authority: LevelAuthorityMask::new(),
+        level_authority,
         mip_widths: info.mip_widths,
         mip_heights: info.mip_heights,
         mip_bytes_per_row: info.mip_bytes_per_row,
@@ -3960,6 +4087,14 @@ fn core_read_subresource_back(
         return false;
     }
     let core = dev.core_mut();
+    if ti.cube.is_none() && (ti.dropped_staging & (1u32 << level)) != 0 {
+        if !core.has_texture(ti.texture_id) && ti.dirty_mask == 0 {
+            return ti.try_ensure_zeroed_staging(level);
+        }
+        if !ti.try_ensure_staging(level) {
+            return false;
+        }
+    }
     let _ = core_flush_dirty(ti, core);
     let pitch = ti.mip_bytes_per_row(level) as usize;
     let target = crate::rt::device::TargetRef::Texture {
@@ -4578,6 +4713,8 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut crate::rt::device::Cor
                     continue;
                 };
                 ti.cube.as_deref().map(|c| Arc::clone(&c.staging[index]))
+            } else if (ti.dropped_staging & (1u32 << level)) != 0 {
+                None
             } else {
                 ti.staging.get(level).map(Arc::clone)
             };

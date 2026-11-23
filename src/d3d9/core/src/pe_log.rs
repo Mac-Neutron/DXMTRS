@@ -1,4 +1,4 @@
-//! Cross-platform PE-side log file state machine (`runtime.mode = core`).
+//! Cross-platform PE-side log file state machine.
 //!
 //! Buffers early lines up to 1 MiB before `Direct3DCreate9` opens the log directory, creates the
 //! file lazily on the first written line, prunes old `*.log` files beyond the retention limit, and
@@ -238,21 +238,6 @@ impl PeLog {
                 }
             }
             State::Open { .. } | State::Stderr | State::Closed => PanicFlush::Nothing,
-        }
-    }
-
-    /// Drains any buffered pending bytes and switches to closed.
-    ///
-    /// Used when `runtime.mode = mtld3d` hands logging over to `mtld3d.so`.
-    pub fn take_pending_and_close(&mut self) -> Option<(Vec<u8>, bool)> {
-        let prev = core::mem::replace(&mut self.state, State::Closed);
-        match prev {
-            State::Pending { buf, truncated } => Some((buf, truncated)),
-            State::Open { file, .. } => {
-                self.retired.push(file);
-                None
-            }
-            _ => None,
         }
     }
 
