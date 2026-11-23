@@ -1240,14 +1240,26 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         interpolant: Val<'cx>,
         perspective: bool,
     ) -> Result<Val<'cx>, Error> {
-        let name: &[u8] = if perspective {
-            b"air.interpolate_center_perspective.v4f32"
+        self.create_interpolate_at_center_typed(interpolant, perspective, self.float_ty(4))
+    }
+
+    /// `air.interpolate_center_*` returning `ty`.
+    ///
+    /// # Errors
+    ///
+    /// None in practice: only P15's name check, which the names pass.
+    pub fn create_interpolate_at_center_typed(
+        &self,
+        interpolant: Val<'cx>,
+        perspective: bool,
+        ty: Ty,
+    ) -> Result<Val<'cx>, Error> {
+        let base: &[u8] = if perspective {
+            b"air.interpolate_center_perspective"
         } else {
-            b"air.interpolate_center_no_perspective.v4f32"
+            b"air.interpolate_center_no_perspective"
         };
-        let mut call = Call::new(self);
-        call.push(interpolant.ty(), interpolant);
-        call.finish(name, self.float_ty(4), READ)
+        self.interpolate_call(base, ty, &[(interpolant.ty(), interpolant)], READ)
     }
 
     /// `air.interpolate_centroid_*` (`CreateInterpolateAtCentroid`).
@@ -1260,14 +1272,26 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         interpolant: Val<'cx>,
         perspective: bool,
     ) -> Result<Val<'cx>, Error> {
-        let name: &[u8] = if perspective {
-            b"air.interpolate_centroid_perspective.v4f32"
+        self.create_interpolate_at_centroid_typed(interpolant, perspective, self.float_ty(4))
+    }
+
+    /// `air.interpolate_centroid_*` returning `ty`.
+    ///
+    /// # Errors
+    ///
+    /// None in practice: only P15's name check, which the names pass.
+    pub fn create_interpolate_at_centroid_typed(
+        &self,
+        interpolant: Val<'cx>,
+        perspective: bool,
+        ty: Ty,
+    ) -> Result<Val<'cx>, Error> {
+        let base: &[u8] = if perspective {
+            b"air.interpolate_centroid_perspective"
         } else {
-            b"air.interpolate_centroid_no_perspective.v4f32"
+            b"air.interpolate_centroid_no_perspective"
         };
-        let mut call = Call::new(self);
-        call.push(interpolant.ty(), interpolant);
-        call.finish(name, self.float_ty(4), READ)
+        self.interpolate_call(base, ty, &[(interpolant.ty(), interpolant)], READ)
     }
 
     /// `air.interpolate_sample_*` (`CreateInterpolateAtSample`).
@@ -1281,15 +1305,32 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         sample: Val<'cx>,
         perspective: bool,
     ) -> Result<Val<'cx>, Error> {
-        let name: &[u8] = if perspective {
-            b"air.interpolate_sample_perspective.v4f32"
+        self.create_interpolate_at_sample_typed(interpolant, sample, perspective, self.float_ty(4))
+    }
+
+    /// `air.interpolate_sample_*` returning `ty`.
+    ///
+    /// # Errors
+    ///
+    /// None in practice: only P15's name check, which the names pass.
+    pub fn create_interpolate_at_sample_typed(
+        &self,
+        interpolant: Val<'cx>,
+        sample: Val<'cx>,
+        perspective: bool,
+        ty: Ty,
+    ) -> Result<Val<'cx>, Error> {
+        let base: &[u8] = if perspective {
+            b"air.interpolate_sample_perspective"
         } else {
-            b"air.interpolate_sample_no_perspective.v4f32"
+            b"air.interpolate_sample_no_perspective"
         };
-        let mut call = Call::new(self);
-        call.push(interpolant.ty(), interpolant);
-        call.push(self.int_ty(1), sample);
-        call.finish(name, self.float_ty(4), INTERPOLATE_SAMPLE)
+        self.interpolate_call(
+            base,
+            ty,
+            &[(interpolant.ty(), interpolant), (self.int_ty(1), sample)],
+            INTERPOLATE_SAMPLE,
+        )
     }
 
     /// `air.interpolate_offset_*` (`CreateInterpolateAtOffset`).
@@ -1303,15 +1344,32 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
         offset: Val<'cx>,
         perspective: bool,
     ) -> Result<Val<'cx>, Error> {
-        let name: &[u8] = if perspective {
-            b"air.interpolate_offset_perspective.v4f32"
+        self.create_interpolate_at_offset_typed(interpolant, offset, perspective, self.float_ty(4))
+    }
+
+    /// `air.interpolate_offset_*` returning `ty`.
+    ///
+    /// # Errors
+    ///
+    /// None in practice: only P15's name check, which the names pass.
+    pub fn create_interpolate_at_offset_typed(
+        &self,
+        interpolant: Val<'cx>,
+        offset: Val<'cx>,
+        perspective: bool,
+        ty: Ty,
+    ) -> Result<Val<'cx>, Error> {
+        let base: &[u8] = if perspective {
+            b"air.interpolate_offset_perspective"
         } else {
-            b"air.interpolate_offset_no_perspective.v4f32"
+            b"air.interpolate_offset_no_perspective"
         };
-        let mut call = Call::new(self);
-        call.push(interpolant.ty(), interpolant);
-        call.push(self.float_ty(2), offset);
-        call.finish(name, self.float_ty(4), READ)
+        self.interpolate_call(
+            base,
+            ty,
+            &[(interpolant.ty(), interpolant), (self.float_ty(2), offset)],
+            READ,
+        )
     }
 
     // Object and mesh shaders: the function's mesh or grid argument is the call's first.
@@ -1957,6 +2015,26 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
             call.push(ty, v);
         }
         call.finish(name, self.void_ty(), WRITE)
+    }
+
+    /// `air.interpolate_*` returning `ty` with `args` and `attrs`.
+    fn interpolate_call(
+        &self,
+        base: &[u8],
+        ty: Ty,
+        args: &[(Ty, Val<'cx>)],
+        attrs: &Attrs,
+    ) -> Result<Val<'cx>, Error> {
+        let name = [
+            base,
+            &self.type_overload_suffix(ty, Signedness::DontCare)[..],
+        ]
+        .concat();
+        let mut call = Call::new(self);
+        for &(param_ty, val) in args {
+            call.push(param_ty, val);
+        }
+        call.finish(&name, ty, attrs)
     }
 
     /// The first argument of type `ty` of the function the builder is in.

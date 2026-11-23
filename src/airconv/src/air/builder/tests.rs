@@ -248,3 +248,63 @@ fn type_overload_suffix_matches_the_cxx() {
     ];
     assert_eq!(spelled, expected);
 }
+
+/// Typed interpolation intrinsics emit the requested return type and attributes.
+#[test]
+fn typed_interpolation_intrinsics_emit_expected_overloads() {
+    let text = with_function(
+        |tcx| vec![tcx.ptr(tcx.named_struct(c"struct._interpolant_t"), 1)],
+        0,
+        |air, args| {
+            let tcx = air.builder().cx().tcx();
+            let interpolant = args[0];
+            let sample = air.get_int(1);
+            let offset = air.get_float2(0.25, -0.5);
+            let types = [
+                air.float_ty(1),
+                air.float_ty(2),
+                air.float_ty(3),
+                air.float_ty(4),
+                air.half_ty(1),
+                tcx.vector(air.half_ty(1), 2),
+            ];
+            for ty in types {
+                for perspective in [true, false] {
+                    ok(air.create_interpolate_at_center_typed(interpolant, perspective, ty));
+                    ok(air.create_interpolate_at_centroid_typed(interpolant, perspective, ty));
+                    ok(air.create_interpolate_at_sample_typed(
+                        interpolant,
+                        sample,
+                        perspective,
+                        ty,
+                    ));
+                    ok(air.create_interpolate_at_offset_typed(
+                        interpolant,
+                        offset,
+                        perspective,
+                        ty,
+                    ));
+                }
+            }
+        },
+    );
+    let decls = declarations(&text);
+    for suffix in ["f32", "v2f32", "v3f32", "v4f32", "f16", "v2f16"] {
+        for mode in ["perspective", "no_perspective"] {
+            for kind in ["center", "centroid", "offset"] {
+                let name = format!("air.interpolate_{kind}_{mode}.{suffix}");
+                let decl = decls.get(&name).unwrap_or_else(|| panic!("missing {name}"));
+                assert!(decl.contains("readonly"), "{decl}");
+            }
+            let sample_name = format!("air.interpolate_sample_{mode}.{suffix}");
+            let sample_decl = decls
+                .get(&sample_name)
+                .unwrap_or_else(|| panic!("missing {sample_name}"));
+            assert!(
+                sample_decl.contains("memory(argmem: readwrite)")
+                    && !sample_decl.contains("memory(argmem: read)"),
+                "{sample_decl}"
+            );
+        }
+    }
+}

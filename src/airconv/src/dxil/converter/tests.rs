@@ -370,3 +370,859 @@ fn rebuilt_refuses_a_folded_cast() {
     assert!(text.contains("freeze i32 7"), "{text}");
     assert!(text.contains("ret void"), "{text}");
 }
+
+#[test]
+fn standalone_convert_rejects_hull_and_domain() {
+    use airconv_ir::shader_info::{Declarations, ShaderInfo};
+
+    use crate::dxil::{
+        initialize::DxilShader,
+        signature::Io,
+        types::{EntryInfo, shader_kind},
+    };
+
+    let cx = Context::new();
+    // SAFETY: a null chain is the empty one.
+    let args = unsafe { ArgChain::walk(core::ptr::null()) };
+    for kind in [shader_kind::HULL, shader_kind::DOMAIN] {
+        let shader = DxilShader {
+            program_type: kind,
+            info: ShaderInfo::default(),
+            decls: Declarations::default(),
+            io: Io::default(),
+            bitcode: Vec::new(),
+            entry: EntryInfo {
+                kind,
+                ..EntryInfo::default()
+            },
+            lane_index_arg: u32::MAX,
+            lane_count_arg: u32::MAX,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        };
+        let Err(err) = convert(&shader, b"main", &cx, &args) else {
+            panic!("expected linked-stage refusal for kind {kind}");
+        };
+        assert_eq!(
+            err.text(),
+            b"DXIL: geometry, hull and domain shaders compile only with their linked stage"
+        );
+    }
+}
+
+#[test]
+fn tessellation_hull_and_domain_compile_end_to_end() {
+    use std::collections::BTreeSet;
+
+    use airconv_ir::{
+        metallib::FunctionKind,
+        shader_info::{Declarations, ShaderFlags, ShaderInfo},
+        tokens::tessellator,
+    };
+
+    use super::{convert_tessellation_domain, convert_tessellation_hull};
+    use crate::{
+        dxil::{
+            initialize::DxilShader,
+            signature::Io,
+            types::{EntryInfo, SignatureElement, component_type, op, semantic_kind, shader_kind},
+        },
+        entry::{compile_domain, compile_hull},
+        llvm::Module,
+        shader::{Dxil, EntryView},
+    };
+
+    let empty_view = |stage| EntryView {
+        is_dxil: true,
+        stage,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        resources: Vec::new(),
+        _names: Vec::new(),
+        _semantic_indices: Box::new([]),
+    };
+
+    let build_bitcode = |build: &dyn Fn(&Context, &Module<'_>)| -> Vec<u8> {
+        let cx = Context::new();
+        let m = Module::new(&cx, c"dxil_src");
+        build(&cx, &m);
+        let ml = ok(writer::write(&m, &[]));
+        metallib::parse(&ml).unwrap().0
+    };
+
+    let sig_el = |id, name: &[u8], kind, rows, cols, start: (i32, i32)| SignatureElement {
+        id,
+        name: name.to_vec(),
+        semantic_indices: (0..rows).collect(),
+        ty: component_type::F32,
+        kind,
+        interpolation: 1,
+        rows,
+        cols,
+        start_row: start.0,
+        start_col: start.1,
+    };
+
+    // Vertex shader writing SV_Position.x at output 0.
+    let vertex_bc = build_bitcode(&|cx, m| {
+        let tcx = cx.tcx();
+        let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+        let store_out = ok(m.add_function(
+            b"dx.op.storeOutput.f32",
+            tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+        ));
+        let vs_fn = ok(m.add_function(b"vsmain", tcx.function(tcx.void(), &[], false)));
+        let bb = vs_fn.append_block(cx, c"entry").unwrap();
+        let b = Builder::new(cx);
+        b.position_at_end(bb);
+        let _ = b.call(
+            store_out,
+            &[
+                cx.const_int(i32_ty, u64::from(op::STORE_OUTPUT), false),
+                cx.const_int(i32_ty, 0, false),
+                cx.const_int(i32_ty, 0, false),
+                cx.const_int(i8_ty, 0, false),
+                cx.const_real(f32_ty, 1.0),
+            ],
+        );
+        b.ret_void();
+    });
+    let vertex_entry = EntryInfo {
+        kind: shader_kind::VERTEX,
+        sm_major: 6,
+        sm_minor: 0,
+        name: b"vsmain".to_vec(),
+        outputs: vec![sig_el(
+            0,
+            b"SV_Position",
+            semantic_kind::POSITION,
+            1,
+            4,
+            (0, 0),
+        )],
+        ..EntryInfo::default()
+    };
+    let mut vertex_io = Io::default();
+    ok(vertex_io.add_signature_handlers(
+        &vertex_entry,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        false,
+        false,
+    ));
+    let vertex_shader = Shader::Dxil(Dxil {
+        ir: DxilShader {
+            program_type: shader_kind::VERTEX,
+            info: ShaderInfo::default(),
+            decls: Declarations::default(),
+            io: vertex_io,
+            bitcode: vertex_bc,
+            entry: vertex_entry,
+            lane_index_arg: u32::MAX,
+            lane_count_arg: u32::MAX,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        },
+        entry: empty_view(shader_kind::VERTEX),
+    });
+
+    // Helper for building both non-passthrough and passthrough DXIL hull shaders.
+    let make_hs = |with_cp: bool| -> Shader {
+        let hull_bc = build_bitcode(&|cx, m| {
+            let tcx = cx.tcx();
+            let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+            let c32 = |v: u32| cx.const_int(i32_ty, u64::from(v), false);
+            let c8 = |v: u8| cx.const_int(i8_ty, u64::from(v), false);
+            let store_pc = ok(m.add_function(
+                b"dx.op.storePatchConstant.f32",
+                tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+            ));
+            let b = Builder::new(cx);
+            if with_cp {
+                let store_out = ok(m.add_function(
+                    b"dx.op.storeOutput.f32",
+                    tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+                ));
+                let cp_fn = ok(m.add_function(b"hsmain", tcx.function(tcx.void(), &[], false)));
+                b.position_at_end(cp_fn.append_block(cx, c"entry").unwrap());
+                let _ = b.call(
+                    store_out,
+                    &[
+                        c32(op::STORE_OUTPUT),
+                        c32(0),
+                        c32(0),
+                        c8(0),
+                        cx.const_real(f32_ty, 2.0),
+                    ],
+                );
+                b.ret_void();
+            }
+            let pcf_fn = ok(m.add_function(b"pcf", tcx.function(tcx.void(), &[], false)));
+            b.position_at_end(pcf_fn.append_block(cx, c"entry").unwrap());
+            for row in 0..3 {
+                let _ = b.call(
+                    store_pc,
+                    &[
+                        c32(op::STORE_PATCH_CONSTANT),
+                        c32(0),
+                        c32(row),
+                        c8(0),
+                        cx.const_real(f32_ty, 4.0),
+                    ],
+                );
+            }
+            b.ret_void();
+        });
+        let hull_entry = EntryInfo {
+            kind: shader_kind::HULL,
+            sm_major: 6,
+            sm_minor: 0,
+            name: if with_cp {
+                b"hsmain".to_vec()
+            } else {
+                Vec::new()
+            },
+            hs_patch_constant_name: b"pcf".to_vec(),
+            hs_input_control_point_count: 3,
+            hs_output_control_point_count: 3,
+            tess_domain: tessellator::DOMAIN_TRI,
+            hs_partitioning: tessellator::PARTITIONING_INTEGER,
+            hs_output_primitive: tessellator::OUTPUT_TRIANGLE_CW,
+            hs_max_tess_factor: 16.0,
+            inputs: vec![sig_el(
+                0,
+                b"SV_Position",
+                semantic_kind::POSITION,
+                1,
+                4,
+                (0, 0),
+            )],
+            outputs: vec![sig_el(
+                0,
+                b"SV_Position",
+                semantic_kind::POSITION,
+                1,
+                4,
+                (0, 0),
+            )],
+            patch_constants: vec![sig_el(
+                0,
+                b"SV_TessFactor",
+                semantic_kind::TESS_FACTOR,
+                3,
+                1,
+                (0, 0),
+            )],
+            ..EntryInfo::default()
+        };
+        let mut hull_io = Io::default();
+        ok(hull_io.add_signature_handlers(
+            &hull_entry,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            false,
+            false,
+        ));
+        let mut hull_info = ShaderInfo::default();
+        hull_info
+            .flags
+            .insert(ShaderFlags::NO_CONTROL_POINT_PHASE_PASSTHROUGH);
+        let hull_decls = Declarations {
+            tessellation_domain: tessellator::DOMAIN_TRI,
+            tessellation_partition: tessellator::PARTITIONING_INTEGER,
+            tessellator_output_primitive: tessellator::OUTPUT_TRIANGLE_CW,
+            max_tessellation_factor: 16.0,
+            input_control_point_count: 3,
+            output_control_point_count: 3,
+            hull_maximum_threads_per_patch: 3,
+            ..Declarations::default()
+        };
+        Shader::Dxil(Dxil {
+            ir: DxilShader {
+                program_type: shader_kind::HULL,
+                info: hull_info,
+                decls: hull_decls,
+                io: hull_io,
+                bitcode: hull_bc,
+                entry: hull_entry,
+                lane_index_arg: u32::MAX,
+                lane_count_arg: u32::MAX,
+                include_helper_lanes: false,
+                quads_2d: false,
+                gs_locks: 0,
+                capture_hash: 0,
+                writes_uav: false,
+            },
+            entry: empty_view(shader_kind::HULL),
+        })
+    };
+
+    let hs_cp = make_hs(true);
+    let hs_passthrough = make_hs(false);
+
+    // Domain shader reading domainLocation.x + patch constant, writing SV_Position + SV_ClipDistance.
+    let domain_bc = build_bitcode(&|cx, m| {
+        let tcx = cx.tcx();
+        let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+        let c32 = |v: u32| cx.const_int(i32_ty, u64::from(v), false);
+        let c8 = |v: u8| cx.const_int(i8_ty, u64::from(v), false);
+        let dom_loc = ok(m.add_function(
+            b"dx.op.domainLocation.f32",
+            tcx.function(f32_ty, &[i32_ty, i8_ty], false),
+        ));
+        let load_pc = ok(m.add_function(
+            b"dx.op.loadPatchConstant.f32",
+            tcx.function(f32_ty, &[i32_ty, i32_ty, i32_ty, i8_ty], false),
+        ));
+        let store_out = ok(m.add_function(
+            b"dx.op.storeOutput.f32",
+            tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+        ));
+        let ds_fn = ok(m.add_function(b"dsmain", tcx.function(tcx.void(), &[], false)));
+        let b = Builder::new(cx);
+        b.position_at_end(ds_fn.append_block(cx, c"entry").unwrap());
+        let u = b.call(dom_loc, &[c32(op::DOMAIN_LOCATION), c8(0)]);
+        let pc = b.call(
+            load_pc,
+            &[c32(op::LOAD_PATCH_CONSTANT), c32(0), c32(0), c8(0)],
+        );
+        let sum = b.fadd(u, pc);
+        let _ = b.call(
+            store_out,
+            &[c32(op::STORE_OUTPUT), c32(0), c32(0), c8(0), sum],
+        );
+        let _ = b.call(
+            store_out,
+            &[c32(op::STORE_OUTPUT), c32(1), c32(0), c8(0), u],
+        );
+        b.ret_void();
+    });
+    let domain_entry = EntryInfo {
+        kind: shader_kind::DOMAIN,
+        sm_major: 6,
+        sm_minor: 0,
+        name: b"dsmain".to_vec(),
+        tess_domain: tessellator::DOMAIN_TRI,
+        ds_input_control_point_count: 3,
+        outputs: vec![
+            sig_el(0, b"SV_Position", semantic_kind::POSITION, 1, 4, (0, 0)),
+            sig_el(
+                1,
+                b"SV_ClipDistance",
+                semantic_kind::CLIP_DISTANCE,
+                1,
+                1,
+                (1, 0),
+            ),
+        ],
+        patch_constants: vec![sig_el(
+            0,
+            b"SV_TessFactor",
+            semantic_kind::TESS_FACTOR,
+            3,
+            1,
+            (0, 0),
+        )],
+        ..EntryInfo::default()
+    };
+    let mut domain_io = Io::default();
+    ok(domain_io.add_signature_handlers(
+        &domain_entry,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        false,
+        false,
+    ));
+    let domain_shader = Shader::Dxil(Dxil {
+        ir: DxilShader {
+            program_type: shader_kind::DOMAIN,
+            info: ShaderInfo::default(),
+            decls: Declarations {
+                tessellation_domain: tessellator::DOMAIN_TRI,
+                ..Declarations::default()
+            },
+            io: domain_io,
+            bitcode: domain_bc,
+            entry: domain_entry,
+            lane_index_arg: u32::MAX,
+            lane_count_arg: u32::MAX,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        },
+        entry: empty_view(shader_kind::DOMAIN),
+    });
+
+    // SAFETY: a null chain is the empty one.
+    let args = unsafe { ArgChain::walk(core::ptr::null()) };
+
+    // Non-passthrough HS emits cp_start guard, pcf_start guard, and threadgroup barriers.
+    let hull_cx = Context::new();
+    let hull_m = ok(convert_tessellation_hull(
+        &vertex_shader,
+        &hs_cp,
+        b"hull_obj",
+        &hull_cx,
+        &args,
+    ));
+    let hull_ir = String::from_utf8(hull_m.print()).unwrap();
+    assert!(hull_ir.contains("hs_cp_start:"), "{hull_ir}");
+    assert!(hull_ir.contains("hs_pcf_start:"), "{hull_ir}");
+    assert!(hull_ir.contains("call void @air.wg.barrier("), "{hull_ir}");
+    assert!(hull_ir.contains("!air.object"), "{hull_ir}");
+
+    // Passthrough HS still emits hs_cp_start guard + semantic copy before hs_pcf_start.
+    let pass_cx = Context::new();
+    let pass_m = ok(convert_tessellation_hull(
+        &vertex_shader,
+        &hs_passthrough,
+        b"hull_pass",
+        &pass_cx,
+        &args,
+    ));
+    let pass_ir = String::from_utf8(pass_m.print()).unwrap();
+    assert!(pass_ir.contains("hs_cp_start:"), "{pass_ir}");
+    assert!(pass_ir.contains("hs_cp_copy:"), "{pass_ir}");
+    assert!(pass_ir.contains("hs_pcf_start:"), "{pass_ir}");
+
+    // Domain converter emits air.mesh and clip-distance/vertex outputs.
+    let dom_cx = Context::new();
+    let dom_m = ok(convert_tessellation_domain(
+        &domain_shader,
+        &hs_cp,
+        b"dom_mesh",
+        &dom_cx,
+        &args,
+    ));
+    let dom_ir = String::from_utf8(dom_m.print()).unwrap();
+    assert!(dom_ir.contains("!air.mesh"), "{dom_ir}");
+    assert!(dom_ir.contains("@air.set_clip_distance_mesh("), "{dom_ir}");
+    assert!(
+        dom_ir.contains("@air.set_vertex_data_mesh.v4f32("),
+        "{dom_ir}"
+    );
+
+    // Full entry compile_hull / compile_domain round-trip into valid metallibs.
+    let hull_ml = ok(compile_hull(&vertex_shader, &hs_cp, &args, c"hull_obj"));
+    let (_, hull_entries) = metallib::parse(&hull_ml).unwrap();
+    assert_eq!(hull_entries.len(), 1);
+    assert!(matches!(hull_entries[0].kind, FunctionKind::Object));
+
+    let dom_ml = ok(compile_domain(&hs_cp, &domain_shader, &args, c"dom_mesh"));
+    let (_, dom_entries) = metallib::parse(&dom_ml).unwrap();
+    assert_eq!(dom_entries.len(), 1);
+    assert!(matches!(dom_entries[0].kind, FunctionKind::Mesh));
+}
+
+#[test]
+fn tessellation_relinks_custom_patch_constant_passthrough_and_wave_inputs() {
+    use std::collections::BTreeSet;
+
+    use airconv_ir::{
+        shader_info::{Declarations, ShaderFlags, ShaderInfo},
+        tokens::tessellator,
+    };
+
+    use super::{convert_tessellation_domain, convert_tessellation_hull};
+    use crate::{
+        dxil::{
+            initialize::DxilShader,
+            signature::Io,
+            types::{EntryInfo, SignatureElement, component_type, op, semantic_kind, shader_kind},
+        },
+        llvm::Module,
+        shader::{Dxil, EntryView},
+    };
+
+    let empty_view = |stage| EntryView {
+        is_dxil: true,
+        stage,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        resources: Vec::new(),
+        _names: Vec::new(),
+        _semantic_indices: Box::new([]),
+    };
+    let build_bc = |build: &dyn Fn(&Context, &Module<'_>)| -> Vec<u8> {
+        let cx = Context::new();
+        let m = Module::new(&cx, c"dxil_src");
+        build(&cx, &m);
+        let ml = ok(writer::write(&m, &[]));
+        metallib::parse(&ml).unwrap().0
+    };
+    let sig_el = |id, name: &[u8], kind, rows, cols, start: (i32, i32)| SignatureElement {
+        id,
+        name: name.to_vec(),
+        semantic_indices: (0..rows).collect(),
+        ty: component_type::F32,
+        kind,
+        interpolation: 1,
+        rows,
+        cols,
+        start_row: start.0,
+        start_col: start.1,
+    };
+
+    // 1) VS uses WaveGetLaneIndex (index 0 in VS) and outputs SV_Position at row 0 only
+    //    (max_vertex_output = 1 < max_hull_output = 2).
+    let vertex_bc = build_bc(&|cx, m| {
+        let tcx = cx.tcx();
+        let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+        let lane_fn = ok(m.add_function(
+            b"dx.op.waveGetLaneIndex.i32",
+            tcx.function(i32_ty, &[i32_ty], false),
+        ));
+        let store_out = ok(m.add_function(
+            b"dx.op.storeOutput.f32",
+            tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+        ));
+        let vs_fn = ok(m.add_function(b"vsmain", tcx.function(tcx.void(), &[], false)));
+        let b = Builder::new(cx);
+        b.position_at_end(vs_fn.append_block(cx, c"entry").unwrap());
+        let lane = b.call(
+            lane_fn,
+            &[cx.const_int(i32_ty, u64::from(op::WAVE_GET_LANE_INDEX), false)],
+        );
+        let lane_f = b.uitofp(lane, f32_ty);
+        let _ = b.call(
+            store_out,
+            &[
+                cx.const_int(i32_ty, u64::from(op::STORE_OUTPUT), false),
+                cx.const_int(i32_ty, 0, false),
+                cx.const_int(i32_ty, 0, false),
+                cx.const_int(i8_ty, 0, false),
+                lane_f,
+            ],
+        );
+        b.ret_void();
+    });
+    let vertex_entry = EntryInfo {
+        kind: shader_kind::VERTEX,
+        sm_major: 6,
+        sm_minor: 0,
+        name: b"vsmain".to_vec(),
+        outputs: vec![sig_el(
+            0,
+            b"SV_Position",
+            semantic_kind::POSITION,
+            1,
+            4,
+            (0, 0),
+        )],
+        ..EntryInfo::default()
+    };
+    let mut vertex_io = Io::default();
+    ok(vertex_io.add_signature_handlers(
+        &vertex_entry,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        false,
+        false,
+    ));
+    let vs_ops = BTreeSet::from([op::WAVE_GET_LANE_INDEX]);
+    let (vs_lane_idx, vs_lane_cnt) = vertex_io.add_wave_inputs(&vs_ops, shader_kind::VERTEX);
+    let vertex_shader = Shader::Dxil(Dxil {
+        ir: DxilShader {
+            program_type: shader_kind::VERTEX,
+            info: ShaderInfo::default(),
+            decls: Declarations::default(),
+            io: vertex_io,
+            bitcode: vertex_bc,
+            entry: vertex_entry,
+            lane_index_arg: vs_lane_idx,
+            lane_count_arg: vs_lane_cnt,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        },
+        entry: empty_view(shader_kind::VERTEX),
+    });
+
+    // 2) Pass-through HS places SV_Position at output row 1 (max_hull_output = 2 > max_vertex_output),
+    //    uses WaveGetLaneCount in PCF, reads output control point via LOAD_OUTPUT_CONTROL_POINT,
+    //    and writes custom patch constant PATCHDATA at row 4.
+    let hull_bc = build_bc(&|cx, m| {
+        let tcx = cx.tcx();
+        let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+        let c32 = |v: u32| cx.const_int(i32_ty, u64::from(v), false);
+        let c8 = |v: u8| cx.const_int(i8_ty, u64::from(v), false);
+        let cnt_fn = ok(m.add_function(
+            b"dx.op.waveGetLaneCount.i32",
+            tcx.function(i32_ty, &[i32_ty], false),
+        ));
+        let load_ocp = ok(m.add_function(
+            b"dx.op.loadOutputControlPoint.f32",
+            tcx.function(f32_ty, &[i32_ty, i32_ty, i32_ty, i8_ty, i32_ty], false),
+        ));
+        let store_pc = ok(m.add_function(
+            b"dx.op.storePatchConstant.f32",
+            tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+        ));
+        let pcf_fn = ok(m.add_function(b"pcf", tcx.function(tcx.void(), &[], false)));
+        let b = Builder::new(cx);
+        b.position_at_end(pcf_fn.append_block(cx, c"entry").unwrap());
+        let lane_cnt = b.call(cnt_fn, &[c32(op::WAVE_GET_LANE_COUNT)]);
+        let ocp_val = b.call(
+            load_ocp,
+            &[
+                c32(op::LOAD_OUTPUT_CONTROL_POINT),
+                c32(0),
+                c32(0),
+                c8(0),
+                c32(1),
+            ],
+        );
+        let combined = b.fadd(ocp_val, b.uitofp(lane_cnt, f32_ty));
+        for row in 0..3 {
+            let _ = b.call(
+                store_pc,
+                &[
+                    c32(op::STORE_PATCH_CONSTANT),
+                    c32(0),
+                    c32(row),
+                    c8(0),
+                    cx.const_real(f32_ty, 4.0),
+                ],
+            );
+        }
+        let _ = b.call(
+            store_pc,
+            &[
+                c32(op::STORE_PATCH_CONSTANT),
+                c32(1),
+                c32(0),
+                c8(0),
+                combined,
+            ],
+        );
+        b.ret_void();
+    });
+    let hull_entry = EntryInfo {
+        kind: shader_kind::HULL,
+        sm_major: 6,
+        sm_minor: 0,
+        name: Vec::new(),
+        hs_patch_constant_name: b"pcf".to_vec(),
+        hs_input_control_point_count: 3,
+        hs_output_control_point_count: 3,
+        tess_domain: tessellator::DOMAIN_TRI,
+        hs_partitioning: tessellator::PARTITIONING_INTEGER,
+        hs_output_primitive: tessellator::OUTPUT_TRIANGLE_CW,
+        hs_max_tess_factor: 16.0,
+        inputs: vec![sig_el(
+            0,
+            b"SV_Position",
+            semantic_kind::POSITION,
+            1,
+            4,
+            (0, 0),
+        )],
+        outputs: vec![sig_el(
+            0,
+            b"SV_Position",
+            semantic_kind::POSITION,
+            1,
+            4,
+            (1, 0),
+        )],
+        patch_constants: vec![
+            sig_el(
+                0,
+                b"SV_TessFactor",
+                semantic_kind::TESS_FACTOR,
+                3,
+                1,
+                (0, 0),
+            ),
+            sig_el(1, b"PATCHDATA", semantic_kind::ARBITRARY, 1, 1, (4, 0)),
+        ],
+        ..EntryInfo::default()
+    };
+    let mut hull_io = Io::default();
+    ok(hull_io.add_signature_handlers(
+        &hull_entry,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        false,
+        false,
+    ));
+    // Reverse wave input order in HS alone (ThreadsPerSimdgroup first) to verify remapping.
+    let hs_lane_cnt = hull_io
+        .func_signature
+        .define_input(airconv_ir::binding::FunctionInput::ThreadsPerSimdgroup);
+    let mut hull_info = ShaderInfo::default();
+    hull_info
+        .flags
+        .insert(ShaderFlags::NO_CONTROL_POINT_PHASE_PASSTHROUGH);
+    hull_info
+        .flags
+        .insert(ShaderFlags::OUTPUT_CONTROL_POINT_READ);
+    let hull_shader = Shader::Dxil(Dxil {
+        ir: DxilShader {
+            program_type: shader_kind::HULL,
+            info: hull_info,
+            decls: Declarations {
+                tessellation_domain: tessellator::DOMAIN_TRI,
+                tessellation_partition: tessellator::PARTITIONING_INTEGER,
+                tessellator_output_primitive: tessellator::OUTPUT_TRIANGLE_CW,
+                max_tessellation_factor: 16.0,
+                input_control_point_count: 3,
+                output_control_point_count: 3,
+                hull_maximum_threads_per_patch: 3,
+                ..Declarations::default()
+            },
+            io: hull_io,
+            bitcode: hull_bc,
+            entry: hull_entry,
+            lane_index_arg: u32::MAX,
+            lane_count_arg: hs_lane_cnt,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        },
+        entry: empty_view(shader_kind::HULL),
+    });
+
+    // 3) DS declares ONLY PATCHDATA at row 0 (differing PSG1 from HS row 4).
+    let domain_bc = build_bc(&|cx, m| {
+        let tcx = cx.tcx();
+        let (i8_ty, i32_ty, f32_ty) = (tcx.int(8), tcx.int(32), tcx.float());
+        let c32 = |v: u32| cx.const_int(i32_ty, u64::from(v), false);
+        let c8 = |v: u8| cx.const_int(i8_ty, u64::from(v), false);
+        let load_pc = ok(m.add_function(
+            b"dx.op.loadPatchConstant.f32",
+            tcx.function(f32_ty, &[i32_ty, i32_ty, i32_ty, i8_ty], false),
+        ));
+        let store_out = ok(m.add_function(
+            b"dx.op.storeOutput.f32",
+            tcx.function(tcx.void(), &[i32_ty, i32_ty, i32_ty, i8_ty, f32_ty], false),
+        ));
+        let ds_fn = ok(m.add_function(b"dsmain", tcx.function(tcx.void(), &[], false)));
+        let b = Builder::new(cx);
+        b.position_at_end(ds_fn.append_block(cx, c"entry").unwrap());
+        let pc = b.call(
+            load_pc,
+            &[c32(op::LOAD_PATCH_CONSTANT), c32(0), c32(0), c8(0)],
+        );
+        let _ = b.call(
+            store_out,
+            &[c32(op::STORE_OUTPUT), c32(0), c32(0), c8(0), pc],
+        );
+        b.ret_void();
+    });
+    let domain_entry = EntryInfo {
+        kind: shader_kind::DOMAIN,
+        sm_major: 6,
+        sm_minor: 0,
+        name: b"dsmain".to_vec(),
+        tess_domain: tessellator::DOMAIN_TRI,
+        ds_input_control_point_count: 3,
+        outputs: vec![sig_el(
+            0,
+            b"SV_Position",
+            semantic_kind::POSITION,
+            1,
+            4,
+            (0, 0),
+        )],
+        patch_constants: vec![sig_el(
+            0,
+            b"PATCHDATA",
+            semantic_kind::ARBITRARY,
+            1,
+            1,
+            (0, 0),
+        )],
+        ..EntryInfo::default()
+    };
+    let mut domain_io = Io::default();
+    ok(domain_io.add_signature_handlers(
+        &domain_entry,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        false,
+        false,
+    ));
+    let domain_shader = Shader::Dxil(Dxil {
+        ir: DxilShader {
+            program_type: shader_kind::DOMAIN,
+            info: ShaderInfo::default(),
+            decls: Declarations {
+                tessellation_domain: tessellator::DOMAIN_TRI,
+                ..Declarations::default()
+            },
+            io: domain_io,
+            bitcode: domain_bc,
+            entry: domain_entry,
+            lane_index_arg: u32::MAX,
+            lane_count_arg: u32::MAX,
+            include_helper_lanes: false,
+            quads_2d: false,
+            gs_locks: 0,
+            capture_hash: 0,
+            writes_uav: false,
+        },
+        entry: empty_view(shader_kind::DOMAIN),
+    });
+
+    // SAFETY: a null chain is the empty one.
+    let args = unsafe { ArgChain::walk(core::ptr::null()) };
+
+    let hull_cx = Context::new();
+    let hull_m = ok(convert_tessellation_hull(
+        &vertex_shader,
+        &hull_shader,
+        b"hull_relink",
+        &hull_cx,
+        &args,
+    ));
+    let hull_text = String::from_utf8(hull_m.print()).unwrap();
+    // Pass-through copy stores VS row 0 -> HS output row 1, and PCF loads HS output row 1.
+    assert!(hull_text.contains("hs_cp_copy:"), "{hull_text}");
+    assert!(
+        hull_text.contains("@hull_control_point_phase_out"),
+        "{hull_text}"
+    );
+    assert!(
+        hull_text.contains("getelementptr [3 x [2 x <4 x i32>]], ptr addrspace(3)"),
+        "{hull_text}"
+    );
+    // VS WaveGetLaneIndex and HS WaveGetLaneCount must bind to distinct merged parameters.
+    let uitofp_sources: Vec<_> = hull_text
+        .lines()
+        .filter_map(|line| line.split_once("uitofp i32 ").map(|(_, rhs)| rhs.trim()))
+        .collect();
+    assert_eq!(uitofp_sources.len(), 2, "{hull_text}");
+    assert_ne!(uitofp_sources[0], uitofp_sources[1], "{hull_text}");
+
+    let dom_cx = Context::new();
+    let dom_m = ok(convert_tessellation_domain(
+        &domain_shader,
+        &hull_shader,
+        b"dom_relink",
+        &dom_cx,
+        &args,
+    ));
+    let dom_ir = String::from_utf8(dom_m.print()).unwrap();
+    // DS allocates 5 patch-constant rows and relinks PATCHDATA from DS row 0 to HS row 4.
+    assert!(dom_ir.contains("alloca [5 x <4 x i32>]"), "{dom_ir}");
+    assert!(
+        dom_ir
+            .lines()
+            .any(|l| l.contains("getelementptr [5 x <4 x i32>], ptr %")
+                && l.contains(", i32 0, i32 4, i32 0")),
+        "{dom_ir}"
+    );
+}

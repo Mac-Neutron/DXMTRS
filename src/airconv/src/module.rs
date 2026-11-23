@@ -96,6 +96,17 @@ pub fn initialize<'cx>(cx: &'cx Context, name: &CStr) -> Module<'cx> {
     m
 }
 
+/// Set only the AIR target triple and data layout on `m`.
+///
+/// Used before linking a second DXIL module into `m` so target/layout match without adding
+/// duplicate module flags.
+pub fn set_target_and_layout(m: &Module<'_>) {
+    // SAFETY: a live module; a NUL-terminated triple.
+    unsafe { sys::set_target(m.raw(), TRIPLE.as_ptr()) };
+    // SAFETY: a live module; a NUL-terminated data layout LLVM parses.
+    unsafe { sys::set_data_layout(m.raw(), DATA_LAYOUT.as_ptr()) };
+}
+
 /// `initializeModule`: AIR's source name, triple, data layout, SDK version 15.0 and nine flags.
 ///
 /// The flags are added after any the module has, each as `Module::addModuleFlag` makes it.
@@ -108,10 +119,7 @@ pub fn set_up(m: &Module<'_>) {
             SOURCE_FILE_NAME.len(),
         );
     };
-    // SAFETY: a live module; a NUL-terminated triple.
-    unsafe { sys::set_target(m.raw(), TRIPLE.as_ptr()) };
-    // SAFETY: a live module; a NUL-terminated data layout LLVM parses.
-    unsafe { sys::set_data_layout(m.raw(), DATA_LAYOUT.as_ptr()) };
+    set_target_and_layout(m);
     let cx = m.cx();
     // `Module::setSDKVersion(VersionTuple(15, 0))`: a `Warning` flag whose value is the version's
     // parts as a data array of `i32`.

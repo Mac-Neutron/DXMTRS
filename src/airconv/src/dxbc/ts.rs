@@ -19,26 +19,27 @@ use airconv_ir::{
     },
     estimators::{self, next_pow2},
     handlers::MeshOutputHandler,
-    initialize::DxbcShader,
     shader_info::ShaderFlags,
     tokens::{program_type, tessellator},
 };
 
 use super::{
-    binding_rootsig::{root_signature_bytes, setup_binding_rootsig, setup_bindings},
+    binding_rootsig::{
+        RootSigTarget, root_signature_bytes, setup_binding_rootsig_with_extras, uses_heap,
+    },
     binding_sm50::setup_binding_table2,
-    blocks,
     converter::{BindingMap, Converter, OutputPrimitive, Partitioning, invalid, req},
+    gs::{MeshHandlers, ShaderBody, Stage},
     replay::{
-        self, Options, input_layout, pop_mesh_output_position,
-        pop_mesh_output_render_target_array_index, pop_mesh_output_vertex_data,
-        pop_mesh_output_viewport_array_index,
+        Options, input_layout, pop_mesh_output_position, pop_mesh_output_render_target_array_index,
+        pop_mesh_output_vertex_data, pop_mesh_output_viewport_array_index,
     },
     resources::{Resources, setup_immediate_constant_buffer, setup_temp_register},
 };
 use crate::{
     abi::{
-        ArgChain, SM50_BINDING_INDEX_ARGUMENT_TABLE2, SM50_BINDING_INDEX_CONSTANT_BUFFER2,
+        ArgChain, SM50_BINDING_INDEX_ARGUMENT_TABLE, SM50_BINDING_INDEX_ARGUMENT_TABLE2,
+        SM50_BINDING_INDEX_CONSTANT_BUFFER, SM50_BINDING_INDEX_CONSTANT_BUFFER2,
         SM50_BINDING_INDEX_DRAW_ARGUMENTS, SM50_BINDING_INDEX_INDEX_BUFFER,
         SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
         SM50_SHADER_METAL_310,
@@ -50,6 +51,7 @@ use crate::{
         ty::AirTypes,
     },
     api::Error,
+    dxil::signature::MeshOutputHandler as DxilMeshHandler,
     llvm::{Builder, Module, Ty, TyCx, Val, sys},
 };
 
@@ -66,38 +68,43 @@ const FACTORS: usize = 6;
 
 /// Lowers `vertex` and `hull` into `m` as the object function `name`.
 ///
+/// `vertex_body` and `hull_body` lower each stage's blocks (DXBC: `blocks::convert`, DXIL:
+/// `dxil::converter::lower_hull`).
+///
 /// # Errors
 ///
 /// An unreadable root signature, a hull shader whose control points pass through but whose
 /// vertex shader writes fewer registers, a payload over 4 GiB, and what the lowering refuses.
-pub fn convert_hull(
-    vertex: &DxbcShader,
-    hull: &DxbcShader,
+pub fn convert_hull<'cx>(
+    vertex: Stage<'_>,
+    hull: Stage<'_>,
+    vertex_body: impl ShaderBody<'cx>,
+    hull_body: impl ShaderBody<'cx>,
     name: &[u8],
-    m: &Module<'_>,
+    m: &Module<'cx>,
     args: &ArgChain<'_>,
 ) -> Result<(), Error> {
-    if vertex.program_type != program_type::VERTEX || hull.program_type != program_type::HULL {
+    if vertex.program_type() != program_type::VERTEX || hull.program_type() != program_type::HULL {
         return Err(wrong_stage());
     }
     let cx = m.cx();
     let tcx = cx.tcx();
     // The vertex stage's own signature only defines outputs the object function does not need,
-    // and the hull's defines nothing yet.
-    let mut desc = hull.io.func_signature.clone();
-    let vertex_info = &vertex.cfg.info;
-    let hull_info = &hull.cfg.info;
-    let decls = &hull.cfg.decls;
+    // and the hull's defines nothing yet. Merge vertex inputs (e.g. wave lane inputs) so both
+    // stages find their parameters in the combined object function signature.
+    let mut desc = hull.func_signature().clone();
+    for input in vertex.func_signature().inputs() {
+        desc.define_input(input.clone());
+    }
+    let vertex_info = vertex.info();
+    let hull_info = hull.info();
+    let decls = hull.decls();
 
-    let max_vertex_input = vertex.io.max_input_register;
-    let max_vertex_output = vertex
-        .output
-        .rasterized()
-        .parameters
-        .iter()
-        .fold(0, |max, out| max.max(out.register.wrapping_add(1)));
-    let max_hull_output = hull.io.max_output_register;
-    let max_patch_constant_output_register = hull.io.max_patch_constant_output_register;
+    let max_vertex_input = vertex.max_input_register();
+    let max_vertex_output = vertex.max_vertex_output_register();
+    let max_hull_output = hull.max_output_register();
+    let max_patch_constant_output_register = hull.max_patch_constant_output_register();
+    let patch_constant_scalars = hull.patch_constant_scalars();
     let control_points_in = decls.input_control_point_count;
     let control_points_out = decls.output_control_point_count;
 
@@ -120,8 +127,7 @@ pub fn convert_hull(
     let mut handles = Handles::default();
 
     // The vertex shader's outputs stay in threadgroup memory, so its handlers define no output.
-    let vertex_replay = replay::record(
-        &vertex.io.signature_handlers,
+    let vertex_replay = vertex.record(
         &mut desc,
         &Options {
             ia_layout,
@@ -130,8 +136,7 @@ pub fn convert_hull(
             skip_vertex_output: true,
         },
     )?;
-    let hull_replay = replay::record(
-        &hull.io.signature_handlers,
+    let hull_replay = hull.record(
         &mut desc,
         &Options {
             ia_layout: None,
@@ -141,34 +146,37 @@ pub fn convert_hull(
         },
     )?;
 
-    // The vertex stage's own root signature (the chain's second) and argument slots.
-    let vertex_binding: Box<dyn BindingMap<'_> + '_> = match args.root_signature2 {
-        Some(rootsig) => {
-            // SAFETY: the chain's root signature (`SM50Compile`'s contract).
-            let bytecode = unsafe { root_signature_bytes(rootsig) };
-            Box::new(setup_binding_rootsig(
-                vertex_info,
-                &mut desc,
-                m,
-                &mut handles,
-                program_type::VERTEX,
-                bytecode,
-                (
-                    SM50_BINDING_INDEX_ROOT_ARGUMENTS,
-                    SM50_BINDING_INDEX_STATIC_SAMPLERS,
-                ),
-            )?)
-        }
-        None => Box::new(setup_binding_table2(
-            vertex,
-            &mut desc,
-            m,
-            &mut handles,
-            SM50_BINDING_INDEX_CONSTANT_BUFFER2,
-            SM50_BINDING_INDEX_ARGUMENT_TABLE2,
-        )?),
+    // Both stages share slot 0's argument-buffer struct when root signatures are used, so emit the
+    // union of their heap and atomic64 tail fields on both.
+    let force_heap = uses_heap(vertex_info) || uses_heap(hull_info);
+    let force_atomic64 = vertex_info.flags.contains(ShaderFlags::USE_ATOMIC64_LOCKS)
+        || hull_info.flags.contains(ShaderFlags::USE_ATOMIC64_LOCKS);
+    let shared_target = RootSigTarget {
+        slots: (
+            SM50_BINDING_INDEX_ROOT_ARGUMENTS,
+            SM50_BINDING_INDEX_STATIC_SAMPLERS,
+        ),
+        force_heap,
+        force_atomic64,
     };
-    let hull_binding = setup_bindings(hull, &mut desc, m, &mut handles, args)?;
+    let vertex_binding = hull_stage_binding(
+        vertex,
+        &mut desc,
+        m,
+        &mut handles,
+        args,
+        &shared_target,
+        true,
+    )?;
+    let hull_binding = hull_stage_binding(
+        hull,
+        &mut desc,
+        m,
+        &mut handles,
+        args,
+        &shared_target,
+        false,
+    )?;
 
     // 32 threads make up a threadgroup: `next_pow2` is never 0.
     let threads_per_patch = next_pow2(decls.hull_maximum_threads_per_patch);
@@ -181,7 +189,7 @@ pub fn convert_hull(
         max_hull_output,
         control_points_out,
         patch_per_group,
-        hull.io.patch_constant_scalars.len(),
+        patch_constant_scalars.len(),
     );
     let hs_pcout_per_patch = tcx.array(types.int4, max_patch_constant_output_register);
     let hs_pcout_per_group = tcx.array(hs_pcout_per_patch, patch_per_group);
@@ -250,6 +258,19 @@ pub fn convert_hull(
             .param(tcx, index)
             .ok_or_else(|| invalid("a tessellation input of no argument"))
     };
+    let merged_param = |target: &FunctionInput| -> Option<Val<'_>> {
+        desc.inputs()
+            .iter()
+            .position(|input| input == target)
+            .and_then(|idx| u32::try_from(idx).ok())
+            .and_then(|idx| function.param(tcx, idx))
+    };
+    let merged_lane_index = merged_param(&FunctionInput::ThreadIndexInSimdgroup);
+    let merged_lane_count = merged_param(&FunctionInput::ThreadsPerSimdgroup);
+    vertex_res.thread_index_in_simdgroup = merged_lane_index;
+    vertex_res.threads_per_simdgroup = merged_lane_count;
+    hull_res.thread_index_in_simdgroup = merged_lane_index;
+    hull_res.threads_per_simdgroup = merged_lane_count;
 
     setup_temp_register(vertex_info, &mut vertex_res, &types, &b);
     setup_temp_register(hull_info, &mut hull_res, &types, &b);
@@ -371,11 +392,11 @@ pub fn convert_hull(
             res: &vertex_res,
             types: &types,
             pso_sample_mask: u32::MAX,
-            shader_type: vertex.program_type,
+            shader_type: vertex.program_type(),
             metal_version,
             geometry: None,
         };
-        let real_entry = blocks::convert(&conv, &vertex.cfg.blocks, epilogue_bb)?;
+        let real_entry = vertex_body(&conv, epilogue_bb)?;
         b.br(real_entry);
 
         b.position_at_end(epilogue_bb);
@@ -516,14 +537,56 @@ pub fn convert_hull(
             res: &hull_res,
             types: &types,
             pso_sample_mask: u32::MAX,
-            shader_type: hull.program_type,
+            shader_type: hull.program_type(),
             metal_version,
             geometry: None,
         };
-        let real_entry = blocks::convert(&conv, &hull.cfg.blocks, epilogue_bb)?;
+        let real_entry = hull_body(&conv, epilogue_bb)?;
         b.br(real_entry);
 
         b.position_at_end(epilogue_bb);
+
+        if hull_info
+            .flags
+            .contains(ShaderFlags::OUTPUT_CONTROL_POINT_READ)
+            || !hull_info
+                .flags
+                .contains(ShaderFlags::NO_CONTROL_POINT_PHASE_PASSTHROUGH)
+        {
+            // If fork/join phases read the control point phase output, or there is no control
+            // point phase, copy control points from threadgroup memory to payload memory;
+            // otherwise they were already written directly to payload memory.
+            let active = block(c"write_control_point")?;
+            let sync = block(c"write_control_point_end")?;
+            let test = b.icmp(
+                sys::INT_ULT,
+                thread_id_in_patch,
+                air.get_int(control_points_out),
+            );
+            b.cond_br(test, active, sync);
+            b.position_at_end(active);
+
+            let ty = hull_res
+                .hull_cp_passthrough_type
+                .ok_or_else(|| invalid("no control point pass-through"))?;
+            let mut src = req(
+                hull_res.hull_cp_passthrough_src,
+                "no control point pass-through",
+            )?;
+            let dst = req(
+                hull_res.hull_cp_passthrough_dst,
+                "no control point pass-through",
+            )?;
+            if tcx.pointee(src.ty()) != Some(ty) {
+                let addrspace = tcx.addrspace(src.ty()).unwrap_or(0);
+                src = b.bitcast(src, tcx.ptr(ty, addrspace));
+            }
+            b.store(b.load(ty, src), dst);
+
+            b.br(sync);
+            b.position_at_end(sync);
+            air.create_barrier(MemFlags::THREADGROUP, false)?;
+        }
 
         // Populate the patch constant output.
         let write_patch_constant = block(c"write_patch_constant")?;
@@ -538,7 +601,7 @@ pub fn convert_hull(
 
         let mut tess_factors = [air.get_float(0.0); FACTORS];
         let max_tess_factor_value = air.get_float(final_max_tess_factor);
-        for (i, scalar) in (0_u32..).zip(&hull.io.patch_constant_scalars) {
+        for (i, scalar) in (0_u32..).zip(patch_constant_scalars) {
             let dst_ptr = b.gep(
                 payload_ty,
                 payload,
@@ -655,27 +718,33 @@ pub fn convert_hull(
 
 /// Lowers `domain`, fed by `hull`, into `m` as the mesh function `name`.
 ///
+/// `body` lowers the shader's blocks (DXBC: `blocks::convert`, DXIL:
+/// `dxil::converter::lower_domain`).
+///
 /// # Errors
 ///
 /// An unreadable root signature, a payload over 4 GiB, and what the lowering refuses.
-pub fn convert_domain(
-    domain: &DxbcShader,
-    hull: &DxbcShader,
+pub fn convert_domain<'cx>(
+    domain: Stage<'_>,
+    hull: Stage<'_>,
     name: &[u8],
-    m: &Module<'_>,
+    m: &Module<'cx>,
     args: &ArgChain<'_>,
+    body: impl ShaderBody<'cx>,
 ) -> Result<(), Error> {
-    if domain.program_type != program_type::DOMAIN || hull.program_type != program_type::HULL {
+    if domain.program_type() != program_type::DOMAIN || hull.program_type() != program_type::HULL {
         return Err(wrong_stage());
     }
     let cx = m.cx();
     let tcx = cx.tcx();
-    let mut desc = domain.io.func_signature.clone();
-    let info = &domain.cfg.info;
-    let decls = &hull.cfg.decls;
+    let mut desc = domain.func_signature().clone();
+    let info = domain.info();
+    let decls = hull.decls();
 
-    let max_input_register = domain.io.max_input_register;
-    let max_output_register = domain.io.max_output_register;
+    let max_output_register = domain.max_output_register();
+    let max_hull_output = hull.max_output_register();
+    let patch_constant_scalars = hull.patch_constant_scalars();
+    let clip_distances = domain.clip_distances();
     let rasterization_disabled = args
         .gs_pass_through
         .is_some_and(|pt| pt.rasterization_disabled != 0);
@@ -697,8 +766,7 @@ pub fn convert_domain(
 
     // The domain shader's handlers are built into no prologue or epilogue: the C++ only lets
     // them define into the signature.
-    replay::record(
-        &domain.io.signature_handlers,
+    domain.record(
         &mut desc,
         &Options {
             ia_layout: None,
@@ -708,7 +776,7 @@ pub fn convert_domain(
         },
     )?;
 
-    let binding = setup_bindings(domain, &mut desc, m, &mut handles, args)?;
+    let binding = domain.bindings(&mut desc, m, &mut handles, args)?;
 
     let rta = pass_through
         .filter(|pt| pt.render_target_array_index_reg != NO_REGISTER)
@@ -739,10 +807,10 @@ pub fn convert_domain(
     let hs = HullTypes::new(
         tcx,
         &types,
-        hull.io.max_output_register,
+        max_hull_output,
         decls.output_control_point_count,
         patch_per_group,
-        hull.io.patch_constant_scalars.len(),
+        patch_constant_scalars.len(),
     );
 
     // n segments has n + 1 points.
@@ -790,9 +858,9 @@ pub fn convert_domain(
     if point_rasterization {
         desc.define_mesh_vertex_output(MeshVertexOutput::PointSize);
     }
-    if !domain.io.clip_distance_scalars.is_empty() {
+    if !clip_distances.is_empty() {
         desc.define_mesh_vertex_output(MeshVertexOutput::ClipDistance {
-            count: domain.io.clip_distance_scalars.len(),
+            count: clip_distances.len(),
         });
     }
 
@@ -839,7 +907,7 @@ pub fn convert_domain(
         res: &no_resources,
         types: &types,
         pso_sample_mask: u32::MAX,
-        shader_type: domain.program_type,
+        shader_type: domain.program_type(),
         metal_version,
         geometry: None,
     };
@@ -862,14 +930,18 @@ pub fn convert_domain(
     );
     res.input.ptr_int4 = Some(input);
     res.input.ptr_float4 = Some(b.bitcast(input, tcx.ptr(hs.per_patch_float, PAYLOAD)));
-    res.input_element_count = hull.io.max_output_register;
+    res.input_element_count = max_hull_output;
 
-    let constants_ty = tcx.array(types.int4, max_input_register);
+    let max_patch_constants = match domain {
+        Stage::Dxbc(_) => domain.max_input_register(),
+        Stage::Dxil(_) => hull.max_patch_constant_output_register(),
+    };
+    let constants_ty = tcx.array(types.int4, max_patch_constants);
     let constants = b.alloca(constants_ty, c"");
     res.patch_constant_output.ptr_int4 = Some(constants);
     res.patch_constant_output.ptr_float4 = Some(b.bitcast(
         constants,
-        tcx.ptr(tcx.array(types.float4, max_input_register), 0),
+        tcx.ptr(tcx.array(types.float4, max_patch_constants), 0),
     ));
 
     let output_ty = tcx.array(types.int4, max_output_register);
@@ -881,8 +953,8 @@ pub fn convert_domain(
     res.output_element_count = max_output_register;
 
     // Set up the patch constant registers.
-    for (i, scalar) in (0_u32..).zip(&hull.io.patch_constant_scalars) {
-        if u32::from(scalar.reg) >= max_input_register {
+    for (i, scalar) in (0_u32..).zip(patch_constant_scalars) {
+        if u32::from(scalar.reg) >= max_patch_constants {
             continue;
         }
         let src_ptr = b.gep(
@@ -939,44 +1011,91 @@ pub fn convert_domain(
         res: &res,
         ..helpers
     };
-    let real_entry = blocks::convert(&conv, &domain.cfg.blocks, vertex_emit)?;
+    let real_entry = body(&conv, vertex_emit)?;
     b.cond_br(active, real_entry, vertex_end);
 
     b.position_at_end(vertex_emit);
 
     let vertex_id = actual_thread_index;
     let primitive_id = actual_thread_index;
-    for handler in &domain.io.mesh_output_handlers {
-        match *handler {
-            MeshOutputHandler::Position { reg, .. } => {
-                pop_mesh_output_position(&air, &res, reg, vertex_id)?;
+    match domain.mesh_handlers() {
+        MeshHandlers::Dxbc(dxbc_ops) => {
+            for handler in dxbc_ops {
+                match *handler {
+                    MeshOutputHandler::Position { reg, .. } => {
+                        pop_mesh_output_position(&air, &res, reg, vertex_id)?;
+                    }
+                    MeshOutputHandler::RenderTargetArrayIndex { reg, mask } => {
+                        pop_mesh_output_render_target_array_index(
+                            &air,
+                            &res,
+                            reg,
+                            mask,
+                            primitive_id,
+                        )?;
+                    }
+                    MeshOutputHandler::ViewportArrayIndex { reg, mask } => {
+                        pop_mesh_output_viewport_array_index(&air, &res, reg, mask, primitive_id)?;
+                    }
+                    MeshOutputHandler::VertexData {
+                        reg,
+                        mask,
+                        index,
+                        ty,
+                    } => {
+                        pop_mesh_output_vertex_data(
+                            &air,
+                            &res,
+                            reg,
+                            mask,
+                            index,
+                            vertex_id,
+                            value_ty(tcx, ty),
+                        )?;
+                    }
+                }
             }
-            MeshOutputHandler::RenderTargetArrayIndex { reg, mask } => {
-                pop_mesh_output_render_target_array_index(&air, &res, reg, mask, primitive_id)?;
-            }
-            MeshOutputHandler::ViewportArrayIndex { reg, mask } => {
-                pop_mesh_output_viewport_array_index(&air, &res, reg, mask, primitive_id)?;
-            }
-            MeshOutputHandler::VertexData {
-                reg,
-                mask,
-                index,
-                ty,
-            } => {
-                pop_mesh_output_vertex_data(
-                    &air,
-                    &res,
-                    reg,
-                    mask,
-                    index,
-                    vertex_id,
-                    value_ty(tcx, ty),
-                )?;
+        }
+        MeshHandlers::Dxil(dxil_ops) => {
+            for handler in dxil_ops {
+                match *handler {
+                    DxilMeshHandler::Position { reg } => {
+                        pop_mesh_output_position(&air, &res, reg, vertex_id)?;
+                    }
+                    DxilMeshHandler::RenderTargetArrayIndex { reg, mask } => {
+                        pop_mesh_output_render_target_array_index(
+                            &air,
+                            &res,
+                            reg,
+                            mask,
+                            primitive_id,
+                        )?;
+                    }
+                    DxilMeshHandler::ViewportArrayIndex { reg, mask } => {
+                        pop_mesh_output_viewport_array_index(&air, &res, reg, mask, primitive_id)?;
+                    }
+                    DxilMeshHandler::Shifted {
+                        reg,
+                        col,
+                        cols,
+                        index,
+                        ty,
+                    } => {
+                        crate::dxil::signature::pop_mesh_shifted(
+                            &air,
+                            &res,
+                            (reg, col, cols),
+                            index,
+                            vertex_id,
+                            value_ty(tcx, ty),
+                        )?;
+                    }
+                }
             }
         }
     }
 
-    for (i, scalar) in (0_u32..).zip(&domain.io.clip_distance_scalars) {
+    for (i, scalar) in (0_u32..).zip(clip_distances) {
         if u32::from(scalar.reg) >= max_output_register {
             continue;
         }
@@ -1211,4 +1330,56 @@ fn alloc_size(m: &Module<'_>, ty: Ty) -> Result<u32, Error> {
     // SAFETY: the module's layout and a sized type of its context.
     let size = unsafe { abi_size_of_type(layout, raw) };
     u32::try_from(size).map_err(|_| invalid("a payload of 4 GiB or more"))
+}
+
+/// Set up resource bindings for one stage of a vertex-hull object function.
+fn hull_stage_binding<'s, 'cx>(
+    stage: Stage<'s>,
+    desc: &mut airconv_ir::binding::FunctionSignatureDesc,
+    m: &Module<'_>,
+    handles: &mut Handles,
+    args: &ArgChain<'_>,
+    target: &RootSigTarget,
+    is_vertex: bool,
+) -> Result<Box<dyn BindingMap<'cx> + 's>, Error> {
+    let rootsig = if is_vertex {
+        match stage {
+            Stage::Dxbc(_) => args.root_signature2,
+            Stage::Dxil(_) => args.root_signature2.or(args.root_signature),
+        }
+    } else {
+        args.root_signature
+    };
+    if let Some(rootsig) = rootsig {
+        // SAFETY: the chain's root signature (`SM50Compile`'s contract).
+        let bytecode = unsafe { root_signature_bytes(rootsig) };
+        return Ok(Box::new(setup_binding_rootsig_with_extras(
+            stage.info(),
+            desc,
+            m,
+            handles,
+            stage.program_type(),
+            bytecode,
+            target,
+        )?));
+    }
+    match stage {
+        Stage::Dxbc(s) => {
+            let (cb_slot, arg_slot) = if is_vertex {
+                (
+                    SM50_BINDING_INDEX_CONSTANT_BUFFER2,
+                    SM50_BINDING_INDEX_ARGUMENT_TABLE2,
+                )
+            } else {
+                (
+                    SM50_BINDING_INDEX_CONSTANT_BUFFER,
+                    SM50_BINDING_INDEX_ARGUMENT_TABLE,
+                )
+            };
+            Ok(Box::new(setup_binding_table2(
+                s, desc, m, handles, cb_slot, arg_slot,
+            )?))
+        }
+        Stage::Dxil(s) => crate::dxil::converter::setup_bindings(s, desc, m, handles, args),
+    }
 }

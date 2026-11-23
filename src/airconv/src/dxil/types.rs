@@ -62,6 +62,8 @@ pub mod semantic_kind {
     pub const POSITION: u32 = 3;
     pub const RENDER_TARGET_ARRAY_INDEX: u32 = 4;
     pub const VIEWPORT_ARRAY_INDEX: u32 = 5;
+    pub const CLIP_DISTANCE: u32 = 6;
+    pub const CULL_DISTANCE: u32 = 7;
     pub const PRIMITIVE_ID: u32 = 10;
     pub const GS_INSTANCE_ID: u32 = 11;
     pub const SAMPLE_INDEX: u32 = 12;
@@ -72,6 +74,8 @@ pub mod semantic_kind {
     pub const DEPTH_LESS_EQUAL: u32 = 18;
     pub const DEPTH_GREATER_EQUAL: u32 = 19;
     pub const STENCIL_REF: u32 = 20;
+    pub const TESS_FACTOR: u32 = 25;
+    pub const INSIDE_TESS_FACTOR: u32 = 26;
 }
 
 /// `Interpolation`.
@@ -169,6 +173,9 @@ pub mod op {
     pub const DERIV_COARSE_Y: u32 = 84;
     pub const DERIV_FINE_X: u32 = 85;
     pub const DERIV_FINE_Y: u32 = 86;
+    pub const EVAL_SNAPPED: u32 = 87;
+    pub const EVAL_SAMPLE_INDEX: u32 = 88;
+    pub const EVAL_CENTROID: u32 = 89;
     pub const SAMPLE_INDEX: u32 = 90;
     pub const COVERAGE: u32 = 91;
     pub const THREAD_ID: u32 = 93;
@@ -181,6 +188,11 @@ pub mod op {
     pub const GS_INSTANCE_ID: u32 = 100;
     pub const MAKE_DOUBLE: u32 = 101;
     pub const SPLIT_DOUBLE: u32 = 102;
+    pub const LOAD_OUTPUT_CONTROL_POINT: u32 = 103;
+    pub const LOAD_PATCH_CONSTANT: u32 = 104;
+    pub const DOMAIN_LOCATION: u32 = 105;
+    pub const STORE_PATCH_CONSTANT: u32 = 106;
+    pub const OUTPUT_CONTROL_POINT_ID: u32 = 107;
     pub const PRIMITIVE_ID: u32 = 108;
     pub const WAVE_IS_FIRST_LANE: u32 = 110;
     pub const WAVE_GET_LANE_INDEX: u32 = 111;
@@ -334,8 +346,18 @@ pub struct EntryInfo {
     pub gs_stream_mask: u32,
     pub gs_output_topology: u32,
     pub gs_instances: u32,
+    /// `HSState` and `DSState`.
+    pub hs_patch_constant_name: Vec<u8>,
+    pub hs_input_control_point_count: u32,
+    pub hs_output_control_point_count: u32,
+    pub tess_domain: u32,
+    pub hs_partitioning: u32,
+    pub hs_output_primitive: u32,
+    pub hs_max_tess_factor: f32,
+    pub ds_input_control_point_count: u32,
     pub inputs: Vec<SignatureElement>,
     pub outputs: Vec<SignatureElement>,
+    pub patch_constants: Vec<SignatureElement>,
     /// All four classes, then the heap ranges.
     pub resources: Vec<Resource>,
 }
@@ -356,8 +378,17 @@ impl Default for EntryInfo {
             gs_stream_mask: 0,
             gs_output_topology: 0,
             gs_instances: 1,
+            hs_patch_constant_name: Vec::new(),
+            hs_input_control_point_count: 0,
+            hs_output_control_point_count: 0,
+            tess_domain: 0,
+            hs_partitioning: 0,
+            hs_output_primitive: 0,
+            hs_max_tess_factor: 0.0,
+            ds_input_control_point_count: 0,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            patch_constants: Vec::new(),
             resources: Vec::new(),
         }
     }

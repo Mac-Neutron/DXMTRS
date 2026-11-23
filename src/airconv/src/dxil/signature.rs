@@ -15,7 +15,8 @@ use airconv_ir::{
         DepthArgument, FunctionInput, FunctionOutput, FunctionSignatureDesc, Interpolation,
         MeshData, MeshPrimitiveOutput, MeshVertexOutput, MslScalar, MslValue, MslVector,
     },
-    handlers::{SignatureHandler as DxbcHandler, msl_value},
+    handlers::{PatchConstantScalarInfo, ScalarInfo, SignatureHandler as DxbcHandler, msl_value},
+    tokens::tessellator,
 };
 
 use crate::{
@@ -24,13 +25,13 @@ use crate::{
     dxbc::{
         converter::{invalid, req},
         replay::{self, Options, load_from_array_at},
-        resources::Resources,
+        resources::{DxilInterpolant, Resources},
     },
     dxil::types::{
         EntryInfo, SignatureElement, UNPACKED_INSTANCE_ID, UNPACKED_VERTEX_ID, component_type,
         interpolation, op, semantic_kind, shader_kind, user_name,
     },
-    llvm::{Func, Ty, Val},
+    llvm::{Func, Ty, TyCx, Val},
 };
 
 /// A signature handler (`std::function<void(SignatureContext &)>`), as what its lambda captured.
@@ -87,6 +88,18 @@ pub enum SignatureHandler {
         col: u32,
         cols: u32,
     },
+    /// A pull-mode varying row: interpolant `index` recorded and stored into input `reg`.
+    InitInterpolatedShifted {
+        element_id: u32,
+        row: u32,
+        index: u32,
+        reg: u32,
+        col: u32,
+        cols: u32,
+        interpolation: Interpolation,
+        ty: MslValue,
+        sample_index: Option<u32>,
+    },
     /// Render target `target`, defined at compile time from its pixel format.
     ///
     /// Where the format says nothing, the signature's `component_type` (a
@@ -141,6 +154,10 @@ pub struct Io {
     pub mesh_output_handlers: Vec<MeshOutputHandler>,
     pub max_input_register: u32,
     pub max_output_register: u32,
+    pub max_patch_constant_output_register: u32,
+    pub patch_constant_scalars: Vec<PatchConstantScalarInfo>,
+    pub clip_distance_scalars: Vec<ScalarInfo>,
+    pub cull_distance_scalars: Vec<ScalarInfo>,
     pub pso_valid_output_reg_mask: u32,
     pub ps_has_coverage_output: u32,
     pub num_mesh_vertex_data: u32,
@@ -167,6 +184,7 @@ impl Io {
         &mut self,
         entry: &EntryInfo,
         ops: &BTreeSet<u32>,
+        pull_mode_elements: &BTreeSet<u32>,
         quads_2d: bool,
         flat_index: bool,
     ) -> Result<(), Error> {
@@ -176,8 +194,10 @@ impl Io {
                 Ok(())
             }
             shader_kind::VERTEX => self.add_vertex(entry),
-            shader_kind::PIXEL => self.add_pixel(entry),
+            shader_kind::PIXEL => self.add_pixel(entry, pull_mode_elements),
             shader_kind::GEOMETRY => self.add_geometry(entry),
+            shader_kind::HULL => self.add_hull(entry),
+            shader_kind::DOMAIN => self.add_domain(entry),
             _ => Err(unsupported(b"this shader stage")),
         }
     }
@@ -365,7 +385,11 @@ impl Io {
         Ok(())
     }
 
-    fn add_pixel(&mut self, entry: &EntryInfo) -> Result<(), Error> {
+    fn add_pixel(
+        &mut self,
+        entry: &EntryInfo,
+        pull_mode_elements: &BTreeSet<u32>,
+    ) -> Result<(), Error> {
         for e in &entry.inputs {
             let (reg, mask) = (e.start_row.cast_unsigned(), mask(e));
             let fs = &mut self.func_signature;
@@ -409,6 +433,10 @@ impl Io {
                     }
                 }
                 semantic_kind::ARBITRARY => {
+                    let interp = air_interpolation(e.interpolation);
+                    let pull_mode = pull_mode_elements.contains(&e.id)
+                        && interp != Interpolation::Flat
+                        && register_type(e.ty) == FLOAT;
                     for r in 0..e.rows {
                         let (user, ty) = varying(e, r)?;
                         let index =
@@ -416,15 +444,37 @@ impl Io {
                                 .define_input(FunctionInput::FragmentStageIn {
                                     user,
                                     ty,
-                                    interpolation: air_interpolation(e.interpolation),
-                                    pull_mode: false,
+                                    interpolation: interp.clone(),
+                                    pull_mode,
                                 });
-                        self.signature_handlers.push(SignatureHandler::InitShifted {
-                            index,
-                            reg: reg.wrapping_add(r),
-                            col: e.start_col.cast_unsigned(),
-                            cols: e.cols,
-                        });
+                        if pull_mode {
+                            let sample_index = matches!(
+                                interp,
+                                Interpolation::SamplePerspective
+                                    | Interpolation::SampleNoPerspective
+                            )
+                            .then(|| self.func_signature.define_input(FunctionInput::SampleIndex));
+                            self.signature_handlers.push(
+                                SignatureHandler::InitInterpolatedShifted {
+                                    element_id: e.id,
+                                    row: r,
+                                    index,
+                                    reg: reg.wrapping_add(r),
+                                    col: e.start_col.cast_unsigned(),
+                                    cols: e.cols,
+                                    interpolation: interp.clone(),
+                                    ty,
+                                    sample_index,
+                                },
+                            );
+                        } else {
+                            self.signature_handlers.push(SignatureHandler::InitShifted {
+                                index,
+                                reg: reg.wrapping_add(r),
+                                col: e.start_col.cast_unsigned(),
+                                cols: e.cols,
+                            });
+                        }
                     }
                 }
                 _ => return Err(unsupported_element(b"pixel shader input ", e)),
@@ -491,48 +541,212 @@ impl Io {
             return Err(unsupported_element(b"geometry shader input ", e));
         }
         for e in &entry.outputs {
-            let (reg, mask) = (e.start_row.cast_unsigned(), mask(e));
-            let fs = &mut self.func_signature;
-            let mesh = &mut self.mesh_output_handlers;
+            self.add_mesh_output(e, b"geometry shader output ", false)?;
+        }
+        Ok(())
+    }
+
+    /// A hull shader's elements.
+    ///
+    /// Control-point inputs and outputs only track register counts; patch constants record
+    /// tessellation factor and arbitrary scalar mappings into the payload buffer.
+    fn add_hull(&mut self, entry: &EntryInfo) -> Result<(), Error> {
+        for e in &entry.inputs {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"hull shader input ", e));
+            }
+            grow(&mut self.max_input_register, e);
+        }
+        for e in &entry.outputs {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"hull shader output ", e));
+            }
+            grow(&mut self.max_output_register, e);
+        }
+        for e in &entry.patch_constants {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"hull shader patch constant ", e));
+            }
+            grow(&mut self.max_patch_constant_output_register, e);
+            let start_row = e.start_row.cast_unsigned();
+            let start_col = e.start_col.cast_unsigned();
             match e.kind {
-                semantic_kind::POSITION => {
-                    fs.define_mesh_vertex_output(MeshVertexOutput::Position {
-                        ty: MslValue::FLOAT4,
-                    });
-                    mesh.push(MeshOutputHandler::Position { reg });
-                }
-                semantic_kind::RENDER_TARGET_ARRAY_INDEX => {
-                    fs.define_mesh_primitive_output(MeshPrimitiveOutput::RenderTargetArrayIndex);
-                    mesh.push(MeshOutputHandler::RenderTargetArrayIndex { reg, mask });
-                }
-                semantic_kind::VIEWPORT_ARRAY_INDEX => {
-                    fs.define_mesh_primitive_output(MeshPrimitiveOutput::ViewportArrayIndex);
-                    mesh.push(MeshOutputHandler::ViewportArrayIndex { reg, mask });
+                semantic_kind::TESS_FACTOR | semantic_kind::INSIDE_TESS_FACTOR => {
+                    let base = if e.kind == semantic_kind::INSIDE_TESS_FACTOR {
+                        if entry.tess_domain == tessellator::DOMAIN_QUAD {
+                            4usize
+                        } else {
+                            3usize
+                        }
+                    } else {
+                        0usize
+                    };
+                    for r in 0..e.rows {
+                        let sem = e
+                            .semantic_indices
+                            .get(usize::try_from(r).unwrap_or(usize::MAX))
+                            .copied()
+                            .unwrap_or(r);
+                        let idx = base.saturating_add(usize::try_from(sem).unwrap_or(0));
+                        let reg = start_row.wrapping_add(r);
+                        self.patch_constant_scalars.push(PatchConstantScalarInfo {
+                            component: u8::try_from(start_col).unwrap_or(0),
+                            reg: u8::try_from(reg & 0x3f).unwrap_or(0),
+                            tess_factor_index: i8::try_from(idx).unwrap_or(-1),
+                        });
+                    }
                 }
                 semantic_kind::ARBITRARY => {
                     for r in 0..e.rows {
-                        let (user, ty) = varying(e, r)?;
-                        let index = self.num_mesh_vertex_data;
-                        self.num_mesh_vertex_data = index.wrapping_add(1);
-                        fs.define_mesh_vertex_output(MeshVertexOutput::Data(MeshData {
+                        let reg = start_row.wrapping_add(r);
+                        for c in 0..e.cols {
+                            let col = start_col.wrapping_add(c);
+                            self.patch_constant_scalars.push(PatchConstantScalarInfo {
+                                component: u8::try_from(col).unwrap_or(0),
+                                reg: u8::try_from(reg & 0x3f).unwrap_or(0),
+                                tess_factor_index: -1,
+                            });
+                        }
+                    }
+                }
+                _ => return Err(unsupported_element(b"hull shader patch constant ", e)),
+            }
+        }
+        Ok(())
+    }
+
+    /// A domain shader's elements.
+    ///
+    /// `max_input_register` tracks patch-constant inputs (matching `dxbc::ts`); outputs feed the
+    /// mesh function's vertex and primitive outputs.
+    fn add_domain(&mut self, entry: &EntryInfo) -> Result<(), Error> {
+        for e in &entry.inputs {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"domain shader input ", e));
+            }
+        }
+        for e in &entry.patch_constants {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"domain shader patch constant ", e));
+            }
+            grow(&mut self.max_input_register, e);
+        }
+        for e in &entry.outputs {
+            if e.start_row < 0 || e.start_col < 0 {
+                return Err(unsupported_element(b"domain shader output ", e));
+            }
+            self.add_mesh_output(e, b"domain shader output ", true)?;
+        }
+        Ok(())
+    }
+
+    /// Register one mesh vertex or primitive output element for GS or DS.
+    fn add_mesh_output(
+        &mut self,
+        e: &SignatureElement,
+        err_prefix: &[u8],
+        allow_clip_cull: bool,
+    ) -> Result<(), Error> {
+        let (reg, mask) = (e.start_row.cast_unsigned(), mask(e));
+        match e.kind {
+            semantic_kind::POSITION => {
+                self.func_signature
+                    .define_mesh_vertex_output(MeshVertexOutput::Position {
+                        ty: MslValue::FLOAT4,
+                    });
+                self.mesh_output_handlers
+                    .push(MeshOutputHandler::Position { reg });
+            }
+            semantic_kind::RENDER_TARGET_ARRAY_INDEX => {
+                self.func_signature
+                    .define_mesh_primitive_output(MeshPrimitiveOutput::RenderTargetArrayIndex);
+                self.mesh_output_handlers
+                    .push(MeshOutputHandler::RenderTargetArrayIndex { reg, mask });
+            }
+            semantic_kind::VIEWPORT_ARRAY_INDEX => {
+                self.func_signature
+                    .define_mesh_primitive_output(MeshPrimitiveOutput::ViewportArrayIndex);
+                self.mesh_output_handlers
+                    .push(MeshOutputHandler::ViewportArrayIndex { reg, mask });
+            }
+            semantic_kind::ARBITRARY => {
+                for r in 0..e.rows {
+                    let (user, ty) = varying(e, r)?;
+                    let index = self.num_mesh_vertex_data;
+                    self.num_mesh_vertex_data = index.wrapping_add(1);
+                    self.func_signature
+                        .define_mesh_vertex_output(MeshVertexOutput::Data(MeshData {
                             user,
                             ty,
                             index,
                         }));
-                        mesh.push(MeshOutputHandler::Shifted {
-                            reg: reg.wrapping_add(r),
-                            col: e.start_col.cast_unsigned(),
-                            cols: e.cols,
-                            index,
-                            ty,
-                        });
-                    }
+                    self.mesh_output_handlers.push(MeshOutputHandler::Shifted {
+                        reg: reg.wrapping_add(r),
+                        col: e.start_col.cast_unsigned(),
+                        cols: e.cols,
+                        index,
+                        ty,
+                    });
                 }
-                _ => return Err(unsupported_element(b"geometry shader output ", e)),
             }
-            grow(&mut self.max_output_register, e);
+            semantic_kind::CLIP_DISTANCE | semantic_kind::CULL_DISTANCE if allow_clip_cull => {
+                self.add_clip_cull_output(e, e.kind == semantic_kind::CLIP_DISTANCE);
+            }
+            _ => return Err(unsupported_element(err_prefix, e)),
         }
+        grow(&mut self.max_output_register, e);
         Ok(())
+    }
+
+    /// Record clip or cull distance scalars and one `float4` mesh output per packed register.
+    fn add_clip_cull_output(&mut self, e: &SignatureElement, is_clip: bool) {
+        let base_reg = e.start_row.cast_unsigned();
+        let start_col = e.start_col.cast_unsigned();
+        let scalars = if is_clip {
+            &mut self.clip_distance_scalars
+        } else {
+            &mut self.cull_distance_scalars
+        };
+        let prefix = if is_clip {
+            "SV_ClipDistance"
+        } else {
+            "SV_CullDistance"
+        };
+        for r in 0..e.rows {
+            let row_reg = base_reg.wrapping_add(r);
+            for c in 0..e.cols {
+                scalars.push(ScalarInfo {
+                    component: u8::try_from(start_col.wrapping_add(c)).unwrap_or(0),
+                    reg: u8::try_from(row_reg & 0x3f).unwrap_or(0),
+                });
+            }
+            let user = format!("{prefix}{row_reg}");
+            let already_defined = self
+                .func_signature
+                .mesh_vertex_outputs()
+                .iter()
+                .any(|output| match output {
+                    MeshVertexOutput::Data(data) => data.user == user,
+                    _ => false,
+                });
+            if !already_defined {
+                let index = self.num_mesh_vertex_data;
+                self.num_mesh_vertex_data = index.wrapping_add(1);
+                self.func_signature
+                    .define_mesh_vertex_output(MeshVertexOutput::Data(MeshData {
+                        user,
+                        ty: MslValue::FLOAT4,
+                        index,
+                    }));
+                self.mesh_output_handlers.push(MeshOutputHandler::Shifted {
+                    reg: row_reg,
+                    col: 0,
+                    cols: 4,
+                    index,
+                    ty: MslValue::FLOAT4,
+                });
+            }
+        }
     }
 
     /// The handlers' pass against a compile's options (their `SignatureContext` pass).
@@ -659,6 +873,27 @@ impl Io {
                     col,
                     cols,
                 }),
+                SignatureHandler::InitInterpolatedShifted {
+                    element_id,
+                    row,
+                    index,
+                    reg,
+                    col,
+                    cols,
+                    ref interpolation,
+                    ty,
+                    sample_index,
+                } => steps.push(Step::InitInterpolatedShifted(InterpolatedSlot {
+                    element_id,
+                    row,
+                    index,
+                    reg,
+                    col,
+                    cols,
+                    interpolation: interpolation.clone(),
+                    ty,
+                    sample_index,
+                })),
                 // As DCL_OUTPUT in handle_signature_ps, with the semantic index as the target.
                 SignatureHandler::RenderTarget {
                     reg,
@@ -778,6 +1013,9 @@ impl Replay<'_> {
                     col,
                     cols,
                 } => init_shifted(air, function, res, index, reg, col, cols)?,
+                Step::InitInterpolatedShifted(ref slot) => {
+                    init_interpolated_shifted(air, function, res, slot)?;
+                }
                 Step::Alloca(Output::Depth) => {
                     res.depth_output_reg = Some(b.alloca(types.float, c""));
                 }
@@ -865,6 +1103,7 @@ impl Replay<'_> {
                 Step::ComputeQuads { .. }
                 | Step::Special { .. }
                 | Step::InitShifted { .. }
+                | Step::InitInterpolatedShifted(..)
                 | Step::Alloca(..) => value,
             };
         }
@@ -1020,6 +1259,7 @@ enum Step<'a> {
         col: u32,
         cols: u32,
     },
+    InitInterpolatedShifted(InterpolatedSlot),
     PopShifted {
         reg: u32,
         col: u32,
@@ -1095,6 +1335,19 @@ fn compute_quads<'cx>(
     Ok(())
 }
 
+/// A pull-mode varying row's recorded state for [`init_interpolated_shifted`].
+struct InterpolatedSlot {
+    element_id: u32,
+    row: u32,
+    index: u32,
+    reg: u32,
+    col: u32,
+    cols: u32,
+    interpolation: Interpolation,
+    ty: MslValue,
+    sample_index: Option<u32>,
+}
+
 /// `InitShifted`: argument `index`'s x, y, … into input register `reg`'s `[col, col + cols)`.
 fn init_shifted<'cx>(
     air: &AirBuilder<'_, 'cx>,
@@ -1135,6 +1388,114 @@ fn init_shifted<'cx>(
         b.store(component, at);
     }
     Ok(())
+}
+
+/// Pull-mode varying row recorded in `dxil_interpolant_map` and stored into input `reg`.
+fn init_interpolated_shifted<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    function: Func<'cx>,
+    res: &mut Resources<'cx>,
+    slot: &InterpolatedSlot,
+) -> Result<(), Error> {
+    let b = air.builder();
+    let tcx = b.cx().tcx();
+    let handle = param(air, function, slot.index)?;
+    let perspective = matches!(
+        slot.interpolation,
+        Interpolation::SamplePerspective
+            | Interpolation::CenterPerspective
+            | Interpolation::CentroidPerspective
+    );
+    let llvm_ty = msl_llvm_ty(tcx, slot.ty);
+    res.dxil_interpolant_map.insert(
+        (slot.element_id, slot.row),
+        DxilInterpolant {
+            handle,
+            perspective,
+            ty: llvm_ty,
+            cols: slot.cols,
+        },
+    );
+    let sample = slot
+        .sample_index
+        .map(|i| param(air, function, i))
+        .transpose()?;
+    let value = interpolate_typed(air, handle, &slot.interpolation, sample, llvm_ty)?;
+    let array = req(res.input.ptr_int4, "no input register file")?;
+    let array_ty = tcx
+        .pointee(array.ty())
+        .ok_or_else(|| invalid("a register file is not a pointer"))?;
+    for i in 0..slot.cols {
+        let lane = if slot.cols == 1 {
+            value
+        } else {
+            b.extract_element_u64(value, i.into())
+        };
+        let word = b.bitcast(lane, air.types().int);
+        let at = b.gep(
+            array_ty,
+            array,
+            &[
+                air.get_int(0),
+                air.get_int(slot.reg),
+                air.get_int(slot.col.wrapping_add(i)),
+            ],
+        );
+        b.store(word, at);
+    }
+    Ok(())
+}
+
+/// Interpolates `handle` at its default `interpolation` mode, returning `ty`.
+fn interpolate_typed<'cx>(
+    air: &AirBuilder<'_, 'cx>,
+    handle: Val<'cx>,
+    interpolation: &Interpolation,
+    sample: Option<Val<'cx>>,
+    ty: Ty,
+) -> Result<Val<'cx>, Error> {
+    let at_sample = |perspective| {
+        let sample = sample.ok_or_else(|| invalid("a per-sample input of no sample index"))?;
+        air.create_interpolate_at_sample_typed(handle, sample, perspective, ty)
+    };
+    match interpolation {
+        Interpolation::CenterPerspective => {
+            air.create_interpolate_at_center_typed(handle, true, ty)
+        }
+        Interpolation::CenterNoPerspective => {
+            air.create_interpolate_at_center_typed(handle, false, ty)
+        }
+        Interpolation::CentroidPerspective => {
+            air.create_interpolate_at_centroid_typed(handle, true, ty)
+        }
+        Interpolation::CentroidNoPerspective => {
+            air.create_interpolate_at_centroid_typed(handle, false, ty)
+        }
+        Interpolation::SamplePerspective => at_sample(true),
+        Interpolation::SampleNoPerspective => at_sample(false),
+        Interpolation::Flat => Err(invalid("a flat input interpolated in the shader")),
+    }
+}
+
+/// The LLVM type corresponding to `ty` (a scalar when `dimension == 1`).
+fn msl_llvm_ty(tcx: &TyCx, ty: MslValue) -> Ty {
+    let (scalar, dim) = match ty {
+        MslValue::Scalar(s) => (s, 1),
+        MslValue::Vector(v) => (v.scalar, v.dimension),
+    };
+    let base = match scalar {
+        MslScalar::Float => tcx.float(),
+        MslScalar::Int | MslScalar::Uint => tcx.int(32),
+        MslScalar::Bool => tcx.int(1),
+        MslScalar::Half => tcx.half(),
+        MslScalar::Ushort => tcx.int(16),
+        MslScalar::Ulong => tcx.int(64),
+    };
+    if dim == 1 {
+        base
+    } else {
+        tcx.vector(base, dim)
+    }
 }
 
 #[cfg(test)]

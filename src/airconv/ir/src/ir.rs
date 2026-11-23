@@ -906,11 +906,6 @@ pub enum Target {
         active: BlockId,
         sync: BlockId,
     },
-    /// A hull shader's control points copied out, then `epilogue`.
-    HullShaderWriteOutput {
-        instance_count: u32,
-        epilogue: BlockId,
-    },
     /// A call, before inlining replaces it (a function's own blocks keep theirs).
     Call {
         func_id: u32,

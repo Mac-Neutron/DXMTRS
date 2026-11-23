@@ -35,3 +35,11 @@ pub const fn f64_to_u32(x: f64) -> u32 {
 pub const fn u32_to_f32(x: u32) -> f32 {
     x as f32
 }
+
+/// A `double` narrowed to a `float` (`ConstantFP::getValueAPF().convertToFloat()`).
+///
+/// Rounded to the nearest `float`.
+#[must_use]
+pub const fn f64_to_f32(x: f64) -> f32 {
+    x as f32
+}

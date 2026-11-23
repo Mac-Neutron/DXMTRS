@@ -50,6 +50,16 @@ pub struct Interpolant<'cx> {
     pub perspective: bool,
 }
 
+/// A DXIL pixel shader input an `eval_*` interpolates.
+///
+/// Holds the interpolant handle, perspective flag, AIR return type, and component count.
+pub struct DxilInterpolant<'cx> {
+    pub handle: Val<'cx>,
+    pub perspective: bool,
+    pub ty: Ty,
+    pub cols: u32,
+}
+
 /// What a compile's prologue, body and epilogue share (`io_binding_map`).
 ///
 /// A value no stage set is `None`, the C++'s null.
@@ -60,6 +70,7 @@ pub struct Resources<'cx> {
     /// Each threadgroup buffer's structure stride (0 raw) and its global.
     pub tgsm_map: FxHashMap<u32, (u32, Val<'cx>)>,
     pub interpolant_map: FxHashMap<u32, Interpolant<'cx>>,
+    pub dxil_interpolant_map: FxHashMap<(u32, u32), DxilInterpolant<'cx>>,
 
     pub input: RegisterFile<'cx>,
     pub output: RegisterFile<'cx>,
@@ -80,6 +91,8 @@ pub struct Resources<'cx> {
     pub patch_id: Option<Val<'cx>>,
     pub thread_id_in_patch: Option<Val<'cx>>,
     pub gs_instance_id: Option<Val<'cx>>,
+    pub thread_index_in_simdgroup: Option<Val<'cx>>,
+    pub threads_per_simdgroup: Option<Val<'cx>>,
 
     // Special registers (output).
     pub depth_output_reg: Option<Val<'cx>>,

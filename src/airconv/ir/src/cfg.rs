@@ -13,6 +13,8 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use crate::tokens::program_type;
 use crate::{
     container::Error,
     decode,
@@ -25,8 +27,7 @@ use crate::{
         UavFlags, UnorderedAccessViewInfo,
     },
     tokens::{
-        self, Payload, Program, instruction, opcode, operand, program_type, resource_dimension,
-        return_type,
+        self, Payload, Program, instruction, opcode, operand, resource_dimension, return_type,
     },
 };
 
@@ -100,7 +101,6 @@ pub fn read(program: &Program, sink: &mut dyn DeclSink) -> Result<Cfg, Error> {
     let mut func_return_point: Option<BlockId> = None;
     let mut call_targets: Vec<Slot> = Vec::new();
     let sm51 = program.major_version() == 5 && program.minor_version() >= 1;
-    let shader_type = program.program_type();
 
     for inst in program.instructions() {
         let inst = inst?;
@@ -599,20 +599,7 @@ pub fn read(program: &Program, sink: &mut dyn DeclSink) -> Result<Cfg, Error> {
     }
 
     if current != Slot::Block(ret) {
-        // A hull shader copies its control points out from threadgroup memory when a later
-        // phase reads them or it has no control point phase; otherwise they are already out.
-        let flags = walk.info.flags;
-        walk.at(current)?.target = if shader_type == program_type::HULL
-            && (flags.contains(ShaderFlags::OUTPUT_CONTROL_POINT_READ)
-                || !flags.contains(ShaderFlags::NO_CONTROL_POINT_PHASE_PASSTHROUGH))
-        {
-            Target::HullShaderWriteOutput {
-                instance_count: walk.decls.output_control_point_count,
-                epilogue: ret,
-            }
-        } else {
-            Target::UnconditionalBranch(ret)
-        };
+        walk.at(current)?.target = Target::UnconditionalBranch(ret);
     }
 
     walk.inline_calls(call_targets, &func_entries)?;
@@ -770,13 +757,6 @@ impl Walk {
                                 sync,
                             }
                         }
-                        Target::HullShaderWriteOutput {
-                            instance_count,
-                            epilogue,
-                        } => Target::HullShaderWriteOutput {
-                            instance_count,
-                            epilogue: self.copy(&mut copies, epilogue)?,
-                        },
                         Target::Call {
                             func_id,
                             return_point,

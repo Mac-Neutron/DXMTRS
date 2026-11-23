@@ -117,7 +117,7 @@ fn finish_dxil(m: &Module<'_>, msad: bool, samplepos: bool) -> Result<Vec<u8>, E
 }
 
 /// A shader's helper flags, of either front end.
-fn flags(shader: &Shader) -> ShaderFlags {
+pub(super) fn flags(shader: &Shader) -> ShaderFlags {
     match shader {
         Shader::Dxbc(s) => s.ir.cfg.info.flags,
         Shader::Dxil(s) => s.ir.info.flags,

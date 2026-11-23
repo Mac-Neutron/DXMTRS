@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     abi::SM50_SHADER_METAL_320,
-    air::builder::{AirBuilder, IntUnOp, MemFlags, ThreadScope},
+    air::builder::{AirBuilder, IntUnOp, MemFlags, Signedness, ThreadScope},
     api::Error,
     dxbc::converter::{Converter, invalid, req},
     dxil::types::{component_type, semantic_kind, shader_kind},
@@ -583,10 +583,40 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         self.unpacked_input(e.id)
     }
 
-    /// Element `e`'s row `row`, column `col` in a register file (`RegisterElementPointer`).
+    /// Element `e`'s row `row`, column `col` in a 3D `[0, reg, col]` register file.
     fn register_element_pointer(
         &self,
         file: Option<Val<'cx>>,
+        e: &SignatureElement,
+        row: Val<'cx>,
+        col: u32,
+    ) -> Result<Val<'cx>, Error> {
+        let reg = self.b().add(self.int(e.start_row.cast_unsigned()), row);
+        let col = e.start_col.cast_unsigned().wrapping_add(col);
+        self.register_pointer_at(file, reg, col)
+    }
+
+    /// Dynamic row `reg` and constant column `col` in a 3D `[0, reg, col]` register file.
+    fn register_pointer_at(
+        &self,
+        file: Option<Val<'cx>>,
+        reg: Val<'cx>,
+        col: u32,
+    ) -> Result<Val<'cx>, Error> {
+        let b = self.b();
+        let file = req(file, "no register file")?;
+        let array_ty = self
+            .tcx()
+            .pointee(file.ty())
+            .ok_or_else(|| invalid("a register file is not a pointer"))?;
+        Ok(b.gep(array_ty, file, &[self.int(0), reg, self.int(col)]))
+    }
+
+    /// Element `e`'s row `row`, column `col` at control point `cp_id` in a 4D register file.
+    fn register_4d_element_pointer(
+        &self,
+        file: Option<Val<'cx>>,
+        cp_id: Val<'cx>,
         e: &SignatureElement,
         row: Val<'cx>,
         col: u32,
@@ -599,57 +629,93 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             .ok_or_else(|| invalid("a register file is not a pointer"))?;
         let reg = b.add(self.int(e.start_row.cast_unsigned()), row);
         let col = e.start_col.cast_unsigned().wrapping_add(col);
-        Ok(b.gep(array_ty, file, &[self.int(0), reg, self.int(col)]))
+        Ok(b.gep(array_ty, file, &[self.int(0), cp_id, reg, self.int(col)]))
     }
 
-    /// The vertex shader output register and column holding geometry input `e`'s row and column.
+    /// Load a 32-bit register word from `ptr` and convert it to `ty`.
+    fn load_register_word(&self, ptr: Val<'cx>, ty: Ty) -> Val<'cx> {
+        let b = self.b();
+        let tcx = self.tcx();
+        let word = b.load(tcx.int(32), ptr);
+        match tcx.kind(ty) {
+            TyKind::Int(1) => b.icmp(sys::INT_NE, word, self.int(0)),
+            TyKind::Half => b.fptrunc(b.bitcast(word, tcx.float()), ty),
+            _ => self.cast(word, ty),
+        }
+    }
+
+    /// Convert `value` (typed for signature element `e`) to a 32-bit register word and store it.
+    fn store_register_word(&self, ptr: Val<'cx>, e: &SignatureElement, value: Val<'cx>) {
+        let b = self.b();
+        let tcx = self.tcx();
+        let i32_ty = tcx.int(32);
+        let word = match tcx.kind(value.ty()) {
+            TyKind::Int(1) => b.sext(value, i32_ty),
+            TyKind::Int(16) if e.ty == component_type::I16 => b.sext(value, i32_ty),
+            TyKind::Half => b.bitcast(b.fpext(value, tcx.float()), i32_ty),
+            _ => self.cast(value, i32_ty),
+        };
+        b.store(word, ptr);
+    }
+
+    /// Upstream output register holding control-point input `e`'s row, column, and `cp_id`.
     ///
-    /// `VertexOutputPointer`: the vertex shader element with the same semantic (position by
-    /// kind; others by name and index). Rows are consecutive semantic indices on both sides, so
-    /// a dynamic row keeps its offset.
-    fn vertex_output_pointer(
+    /// Relinks by semantic against `self.vertex_outputs` when supplied, otherwise addresses
+    /// `res.input.ptr_int4` directly via `e.start_row` / `e.start_col`.
+    fn control_point_input_pointer(
         &self,
         e: &SignatureElement,
         row: Val<'cx>,
         col: u32,
-        vertex: Val<'cx>,
+        cp_id: Val<'cx>,
     ) -> Result<Val<'cx>, Error> {
+        let Some(upstream) = self.vertex_outputs else {
+            return self.register_4d_element_pointer(
+                self.conv.res.input.ptr_int4,
+                cp_id,
+                e,
+                row,
+                col,
+            );
+        };
         let b = self.b();
-        let first = e.semantic_indices.first().copied().unwrap_or(0);
-        let arbitrary = e.kind == semantic_kind::ARBITRARY;
-        for f in self.vertex_outputs.map_or(&[][..], |v| &v.outputs) {
-            if f.start_row < 0
-                || f.kind != e.kind
-                || (arbitrary && !f.name.eq_ignore_ascii_case(&e.name))
-            {
-                continue;
-            }
-            for r in 0..f.rows {
-                let same = usize::try_from(r)
-                    .ok()
-                    .and_then(|r| f.semantic_indices.get(r))
-                    .is_some_and(|&index| index == first);
-                if arbitrary && !same {
-                    continue;
-                }
-                let input = req(self.conv.res.input.ptr_int4, "no input register file")?;
-                let array_ty = self
-                    .tcx()
-                    .pointee(input.ty())
-                    .ok_or_else(|| invalid("a register file is not a pointer"))?;
-                let reg = b.add(self.int(f.start_row.cast_unsigned().wrapping_add(r)), row);
-                let col = f.start_col.cast_unsigned().wrapping_add(col);
-                return Ok(b.gep(array_ty, input, &[self.int(0), vertex, reg, self.int(col)]));
-            }
-        }
-        Err(Error::new(
-            &[
-                &b"DXIL: geometry shader input "[..],
-                &e.name,
-                b" isn't a vertex shader output",
-            ]
-            .concat(),
-        ))
+        let (f, base_row) = match_semantic_element(e, &upstream.outputs).ok_or_else(|| {
+            Error::new(
+                &[
+                    &b"DXIL: control point input "[..],
+                    &e.name,
+                    b" isn't an upstream stage output",
+                ]
+                .concat(),
+            )
+        })?;
+        let input = req(self.conv.res.input.ptr_int4, "no input register file")?;
+        let array_ty = self
+            .tcx()
+            .pointee(input.ty())
+            .ok_or_else(|| invalid("a register file is not a pointer"))?;
+        let reg = b.add(
+            self.int(f.start_row.cast_unsigned().wrapping_add(base_row)),
+            row,
+        );
+        let col = f.start_col.cast_unsigned().wrapping_add(col);
+        Ok(b.gep(array_ty, input, &[self.int(0), cp_id, reg, self.int(col)]))
+    }
+
+    /// Simdgroup lane index (`ThreadIndexInSimdgroup`), using merged stage inputs when present.
+    fn lane_index(&self) -> Result<Val<'cx>, Error> {
+        self.conv
+            .res
+            .thread_index_in_simdgroup
+            .map_or_else(|| self.param(self.dxil.lane_index_arg), Ok)
+    }
+
+    /// Simdgroup lane count (`ThreadsPerSimdgroup`), using merged stage inputs when present.
+    fn lane_count(&self) -> Result<Val<'cx>, Error> {
+        self.conv
+            .res
+            .threads_per_simdgroup
+            .map_or_else(|| self.param(self.dxil.lane_count_arg), Ok)
     }
 
     // Wave operations. A pixel shader whose entry lacks [WaveOpsIncludeHelperLanes] leaves its
@@ -811,7 +877,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
         let (mut from, mut to) = (self.int(0), self.int(if y { 2 } else { 1 }));
         if fine {
             // The lane index is defined for these ops in a compute shader (`add_wave_inputs`).
-            let l = b.and(self.param(self.dxil.lane_index_arg)?, self.int(3));
+            let l = b.and(self.lane_index()?, self.int(3));
             from = b.and(l, self.int(if y { 1 } else { 2 }));
             to = b.or(l, self.int(if y { 2 } else { 1 }));
         }
@@ -865,8 +931,11 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 if let Some(v) = self.unpacked_input(e.id) {
                     return Ok(Some(self.cast(v, call.ty())));
                 }
-                let ptr = if self.entry.kind == shader_kind::GEOMETRY {
-                    self.vertex_output_pointer(e, arg(2)?, const_arg(call, 3, 0), arg(4)?)?
+                let ptr = if matches!(
+                    self.entry.kind,
+                    shader_kind::GEOMETRY | shader_kind::HULL | shader_kind::DOMAIN
+                ) {
+                    self.control_point_input_pointer(e, arg(2)?, const_arg(call, 3, 0), arg(4)?)?
                 } else {
                     self.register_element_pointer(
                         res.input.ptr_int4,
@@ -875,16 +944,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                         const_arg(call, 3, 0),
                     )?
                 };
-                // Signature registers hold 32-bit values: a half element reads a float and
-                // narrows it; i16 truncates (`cast`).
-                let word = b.load(i32_ty, ptr);
-                let ty = call.ty();
-                let value = match tcx.kind(ty) {
-                    TyKind::Int(1) => b.icmp(sys::INT_NE, word, self.int(0)),
-                    TyKind::Half => b.fptrunc(b.bitcast(word, tcx.float()), ty),
-                    _ => self.cast(word, ty),
-                };
-                Ok(Some(value))
+                Ok(Some(self.load_register_word(ptr, call.ty())))
             }
             // (5, i32 outputSigId, i32 row, i8 col, T value)
             op::STORE_OUTPUT => {
@@ -913,22 +973,24 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                         b.store(stencil, req(res.stencil_ref_reg, "no stencil output")?);
                     }
                     _ => {
-                        // As 32-bit values (`LoadInput`): a half widened to a float, an I16
-                        // element sign-extended, U16 zero-extended.
-                        let ty = value.ty();
-                        let word = match tcx.kind(ty) {
-                            TyKind::Int(1) => b.sext(value, i32_ty),
-                            TyKind::Int(16) if e.ty == component_type::I16 => b.sext(value, i32_ty),
-                            TyKind::Half => b.bitcast(b.fpext(value, tcx.float()), i32_ty),
-                            _ => self.cast(value, i32_ty),
+                        let ptr = if self.entry.kind == shader_kind::HULL {
+                            let cp_id = req(res.thread_id_in_patch, "no thread id in patch")?;
+                            self.register_4d_element_pointer(
+                                res.output.ptr_int4,
+                                cp_id,
+                                e,
+                                arg(2)?,
+                                const_arg(call, 3, 0),
+                            )?
+                        } else {
+                            self.register_element_pointer(
+                                res.output.ptr_int4,
+                                e,
+                                arg(2)?,
+                                const_arg(call, 3, 0),
+                            )?
                         };
-                        let ptr = self.register_element_pointer(
-                            res.output.ptr_int4,
-                            e,
-                            arg(2)?,
-                            const_arg(call, 3, 0),
-                        )?;
-                        b.store(word, ptr);
+                        self.store_register_word(ptr, e, value);
                     }
                 }
                 Ok(None)
@@ -956,8 +1018,117 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 };
                 Ok(Some(value))
             }
-            // The input primitive's index in the draw (`dxbc/gs.rs`).
-            op::PRIMITIVE_ID if self.entry.kind == shader_kind::GEOMETRY => Ok(res.patch_id),
+            // (87, i32 inputSigId, i32 row, i8 col, i32 xOffset, i32 yOffset)
+            // (88, i32 inputSigId, i32 row, i8 col, i32 sampleIndex)
+            // (89, i32 inputSigId, i32 row, i8 col)
+            op::EVAL_SNAPPED | op::EVAL_SAMPLE_INDEX | op::EVAL_CENTROID => {
+                Ok(Some(self.lower_eval(opcode, call)?))
+            }
+            // (103, i32 outputSigId, i32 row, i8 col, i32 outputControlPointID)
+            op::LOAD_OUTPUT_CONTROL_POINT => {
+                let id = const_arg(call, 1, 0);
+                let e = self
+                    .entry
+                    .outputs
+                    .iter()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| {
+                        Error::new(b"DXIL: loadOutputControlPoint names an undeclared output")
+                    })?;
+                let ptr = self.register_4d_element_pointer(
+                    res.output.ptr_int4,
+                    arg(4)?,
+                    e,
+                    arg(2)?,
+                    const_arg(call, 3, 0),
+                )?;
+                Ok(Some(self.load_register_word(ptr, call.ty())))
+            }
+            // (104, i32 patchConstSigId, i32 row, i8 col)
+            op::LOAD_PATCH_CONSTANT => {
+                let id = const_arg(call, 1, 0);
+                let e = self
+                    .entry
+                    .patch_constants
+                    .iter()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| {
+                        Error::new(b"DXIL: loadPatchConstant names an undeclared element")
+                    })?;
+                let col_offset = const_arg(call, 3, 0);
+                let ptr = if self.entry.kind == shader_kind::DOMAIN
+                    && let Some(upstream) = self.vertex_outputs
+                {
+                    let (f, base_row) = match_semantic_element(e, &upstream.patch_constants)
+                        .ok_or_else(|| {
+                            Error::new(
+                                &[
+                                    &b"DXIL: domain shader patch constant "[..],
+                                    &e.name,
+                                    b" isn't a hull shader patch constant",
+                                ]
+                                .concat(),
+                            )
+                        })?;
+                    let reg = b.add(
+                        self.int(f.start_row.cast_unsigned().wrapping_add(base_row)),
+                        arg(2)?,
+                    );
+                    let col = f.start_col.cast_unsigned().wrapping_add(col_offset);
+                    self.register_pointer_at(res.patch_constant_output.ptr_int4, reg, col)?
+                } else {
+                    self.register_element_pointer(
+                        res.patch_constant_output.ptr_int4,
+                        e,
+                        arg(2)?,
+                        col_offset,
+                    )?
+                };
+                Ok(Some(self.load_register_word(ptr, call.ty())))
+            }
+            // (105, i8 col)
+            op::DOMAIN_LOCATION => {
+                let col = const_arg(call, 1, u32::MAX);
+                if col >= 3 {
+                    return Err(Error::new(b"DXIL: domainLocation component out of range"));
+                }
+                if call.ty() != tcx.float() {
+                    return Err(Error::new(b"DXIL: unsupported domainLocation type"));
+                }
+                let domain = req(res.domain, "no domain location")?;
+                Ok(Some(b.extract_element_u64(domain, col.into())))
+            }
+            // (106, i32 patchConstSigId, i32 row, i8 col, T value)
+            op::STORE_PATCH_CONSTANT => {
+                let id = const_arg(call, 1, 0);
+                let e = self
+                    .entry
+                    .patch_constants
+                    .iter()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| {
+                        Error::new(b"DXIL: storePatchConstant names an undeclared element")
+                    })?;
+                let ptr = self.register_element_pointer(
+                    res.patch_constant_output.ptr_int4,
+                    e,
+                    arg(2)?,
+                    const_arg(call, 3, 0),
+                )?;
+                self.store_register_word(ptr, e, arg(4)?);
+                Ok(None)
+            }
+            // (107)
+            op::OUTPUT_CONTROL_POINT_ID => Ok(res.thread_id_in_patch),
+            // The input primitive or patch index in the draw (`dxbc/gs.rs`, `dxbc/ts.rs`).
+            op::PRIMITIVE_ID
+                if matches!(
+                    self.entry.kind,
+                    shader_kind::GEOMETRY | shader_kind::HULL | shader_kind::DOMAIN
+                ) =>
+            {
+                Ok(res.patch_id)
+            }
             // (100)
             op::GS_INSTANCE_ID => Ok(res.gs_instance_id),
             // (97/98/99, i8 stream): stream 0 only (Initialize refuses others).
@@ -988,21 +1159,15 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             op::WAVE_IS_FIRST_LANE => {
                 let value = match self.wave_lanes()? {
                     Some(lanes) => {
-                        let lane = self.param(self.dxil.lane_index_arg)?;
+                        let lane = self.lane_index()?;
                         b.icmp(sys::INT_EQ, lane, self.first_lane(lanes)?)
                     }
                     None => self.simd(b"air.simd_is_first", i1, &[])?,
                 };
                 Ok(Some(value))
             }
-            op::WAVE_GET_LANE_INDEX | op::WAVE_GET_LANE_COUNT => {
-                let index = if opcode == op::WAVE_GET_LANE_INDEX {
-                    self.dxil.lane_index_arg
-                } else {
-                    self.dxil.lane_count_arg
-                };
-                Ok(Some(self.param(index)?))
-            }
+            op::WAVE_GET_LANE_INDEX => Ok(Some(self.lane_index()?)),
+            op::WAVE_GET_LANE_COUNT => Ok(Some(self.lane_count()?)),
             op::WAVE_ANY_TRUE | op::WAVE_ALL_TRUE => {
                 let any = opcode == op::WAVE_ANY_TRUE;
                 let v = self.masked(arg(1)?, air.get_bool(!any))?;
@@ -1139,7 +1304,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
                 let v = self.masked(arg(1)?, air.get_bool(false))?;
                 let mut ballot = self.simd(b"air.simd_ballot.i64", i64_ty, &[v])?;
                 if opcode == op::WAVE_PREFIX_BIT_COUNT {
-                    let lane = b.zext(self.param(self.dxil.lane_index_arg)?, i64_ty);
+                    let lane = b.zext(self.lane_index()?, i64_ty);
                     let one = cx.const_int(i64_ty, 1, false);
                     ballot = b.and(ballot, b.sub(b.shl(one, lane), one));
                 }
@@ -1200,7 +1365,7 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             op::WAVE_MULTI_PREFIX_OP | op::WAVE_MULTI_PREFIX_BIT_COUNT => {
                 // The lanes below this one in its partition, mask0 (lanes are 32 wide); D3D
                 // ignores the inactive and helper ones.
-                let lane = self.param(self.dxil.lane_index_arg)?;
+                let lane = self.lane_index()?;
                 let below = b.and(arg(2)?, b.sub(b.shl(self.int(1), lane), self.int(1)));
                 if opcode == op::WAVE_MULTI_PREFIX_BIT_COUNT {
                     let v = self.masked(arg(1)?, air.get_bool(false))?;
@@ -1355,6 +1520,113 @@ impl<'a, 'cx> Lowering<'a, 'cx> {
             _ => Err(unsupported(call)),
         }
     }
+
+    /// Pull-mode evaluation (`EvalSnapped`, `EvalSampleIndex`, `EvalCentroid`).
+    fn lower_eval(&self, opcode: u32, call: Val<'cx>) -> Result<Val<'cx>, Error> {
+        let b = self.b();
+        let air = self.air();
+        let cx = self.cx();
+        let tcx = self.tcx();
+        let id = const_arg(call, 1, u32::MAX);
+        let row = const_arg(call, 2, u32::MAX);
+        let col = const_arg(call, 3, u32::MAX);
+        if id == u32::MAX || row == u32::MAX || col == u32::MAX {
+            return Err(Error::new(b"DXIL: non-constant eval index"));
+        }
+        let e = self
+            .entry
+            .inputs
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| Error::new(b"DXIL: eval names an undeclared input"))?;
+        if e.start_row < 0 || e.start_col < 0 {
+            return Err(Error::new(b"DXIL: eval signature element is not mapped"));
+        }
+        if col >= e.cols {
+            return Err(Error::new(b"DXIL: eval component out of range"));
+        }
+        let ty = call.ty();
+        if !matches!(tcx.kind(ty), TyKind::Float | TyKind::Half) {
+            return Err(Error::new(b"DXIL: unsupported eval type"));
+        }
+        let Some(itp) = self.conv.res.dxil_interpolant_map.get(&(e.id, row)) else {
+            return Err(Error::new(b"DXIL: no eval interpolant"));
+        };
+        let interpolated = match opcode {
+            op::EVAL_SAMPLE_INDEX => {
+                let sample = self.arg(call, 4)?;
+                air.create_interpolate_at_sample_typed(itp.handle, sample, itp.perspective, itp.ty)?
+            }
+            op::EVAL_SNAPPED => {
+                let (dx, dy) = (self.arg(call, 4)?, self.arg(call, 5)?);
+                let xy = b.insert_element_u64(
+                    b.insert_element_u64(cx.poison(air.int_ty(2)), dx, 0),
+                    dy,
+                    1,
+                );
+                let truncated = b.and(b.add(xy, air.get_int2(8, 8)), air.get_int2(0b1111, 0b1111));
+                let offset_float = b.fmul(
+                    air.create_convert_to_float(truncated, Signedness::Signed)?,
+                    air.get_float2(1.0 / 16.0, 1.0 / 16.0),
+                );
+                air.create_interpolate_at_offset_typed(
+                    itp.handle,
+                    offset_float,
+                    itp.perspective,
+                    itp.ty,
+                )?
+            }
+            _ => air.create_interpolate_at_centroid_typed(itp.handle, itp.perspective, itp.ty)?,
+        };
+        let scalar = if itp.cols == 1 {
+            interpolated
+        } else {
+            b.extract_element_u64(interpolated, u64::from(col))
+        };
+        if !is_fp(tcx, scalar.ty()) {
+            return Err(Error::new(b"DXIL: eval on non-float interpolant"));
+        }
+        Ok(if scalar.ty() == ty {
+            scalar
+        } else {
+            b.fp_cast(scalar, ty)
+        })
+    }
+}
+
+/// Find the upstream signature element and base row offset matching `e`'s semantic.
+///
+/// Matches `kind`, case-insensitive `name` for `ARBITRARY`, and `e.semantic_indices[0]` against
+/// each row's `semantic_indices` entry across all semantic kinds (distinguishing e.g.
+/// `SV_ClipDistance0` vs `SV_ClipDistance1`).
+pub(super) fn match_semantic_element<'a>(
+    e: &SignatureElement,
+    candidates: &'a [SignatureElement],
+) -> Option<(&'a SignatureElement, u32)> {
+    let first = e.semantic_indices.first().copied().unwrap_or(0);
+    let arbitrary = e.kind == semantic_kind::ARBITRARY;
+    for f in candidates {
+        if f.start_row < 0
+            || f.start_col < 0
+            || f.kind != e.kind
+            || (arbitrary && !f.name.eq_ignore_ascii_case(&e.name))
+        {
+            continue;
+        }
+        for r in 0..f.rows {
+            let same = usize::try_from(r)
+                .ok()
+                .and_then(|r| f.semantic_indices.get(r))
+                .copied()
+                .unwrap_or(0)
+                == first;
+            if !same {
+                continue;
+            }
+            return Some((f, r));
+        }
+    }
+    None
 }
 
 /// The parsed module's value `raw` of `cx`, with its type.

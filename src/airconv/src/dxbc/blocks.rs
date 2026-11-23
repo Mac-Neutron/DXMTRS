@@ -10,7 +10,6 @@ use airconv_ir::ir::{BasicBlock, SrcOperand, Target};
 
 use super::converter::{Converter, MASK_X};
 use crate::{
-    air::builder::MemFlags,
     api::Error,
     llvm::{Block, name, sys},
 };
@@ -74,7 +73,6 @@ pub fn convert<'cx>(
                 to_visit.push(active.index());
                 to_visit.push(sync.index());
             }
-            Target::HullShaderWriteOutput { epilogue, .. } => to_visit.push(epilogue.index()),
             Target::Call { return_point, .. } => to_visit.push(return_point.index()),
         }
     }
@@ -141,10 +139,6 @@ pub fn convert<'cx>(
                 let test = ir.icmp(sys::INT_ULT, in_patch, conv.air.get_int(*instance_count));
                 ir.cond_br(test, then, otherwise);
             }
-            Target::HullShaderWriteOutput {
-                instance_count,
-                epilogue,
-            } => write_control_point(conv, *instance_count, target(epilogue.index())?)?,
             Target::Call { .. } => {
                 return Err(Error::new(b"call terminator must be lowered"));
             }
@@ -169,46 +163,4 @@ fn load_condition<'cx>(
         sys::INT_EQ
     };
     Ok(conv.ir.icmp(pred, element, conv.air.get_int(0)))
-}
-
-/// A hull shader's control points copied out by the first `instance_count` threads.
-///
-/// Then a threadgroup barrier and the branch to `epilogue`.
-fn write_control_point<'cx>(
-    conv: &Converter<'_, 'cx>,
-    instance_count: u32,
-    epilogue: Block<'cx>,
-) -> Result<(), Error> {
-    let ir = conv.ir;
-    let cx = ir.cx();
-    let tcx = cx.tcx();
-    let missing = || Error::new(b"invalid operation: no control point pass-through.");
-    let no_block = || Error::new(b"invalid operation: a block of no function.");
-    let active = conv
-        .function
-        .append_block(cx, c"write_control_point")
-        .ok_or_else(no_block)?;
-    let sync = conv
-        .function
-        .append_block(cx, c"write_control_point_end")
-        .ok_or_else(no_block)?;
-    let in_patch = conv.res.thread_id_in_patch.ok_or_else(missing)?;
-    let test = ir.icmp(sys::INT_ULT, in_patch, conv.air.get_int(instance_count));
-    ir.cond_br(test, active, sync);
-    ir.position_at_end(active);
-
-    let ty = conv.res.hull_cp_passthrough_type.ok_or_else(missing)?;
-    let mut src = conv.res.hull_cp_passthrough_src.ok_or_else(missing)?;
-    let dst = conv.res.hull_cp_passthrough_dst.ok_or_else(missing)?;
-    if tcx.pointee(src.ty()) != Some(ty) {
-        let addrspace = tcx.addrspace(src.ty()).unwrap_or(0);
-        src = ir.bitcast(src, tcx.ptr(ty, addrspace));
-    }
-    ir.store(ir.load(ty, src), dst);
-
-    ir.br(sync);
-    ir.position_at_end(sync);
-    conv.air.create_barrier(MemFlags::THREADGROUP, false)?;
-    ir.br(epilogue);
-    Ok(())
 }

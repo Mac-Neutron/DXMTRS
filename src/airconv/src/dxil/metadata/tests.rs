@@ -162,3 +162,109 @@ fn a_handle_that_annotates_itself_is_refused() {
         b"DXIL: resource handle through phi/select"
     );
 }
+
+#[test]
+fn hull_and_domain_properties_and_patch_constants_read() {
+    use crate::dxil::types::semantic_kind;
+
+    let cx = Context::new();
+    let float_md = |v: f32| cx.const_real(cx.tcx().float(), f64::from(v)).as_metadata();
+    let tess_el = cx.md_node(&[
+        int(&cx, 0),
+        cx.md_string(b"SV_TessFactor"),
+        int(&cx, 9),
+        int(&cx, semantic_kind::TESS_FACTOR.into()),
+        cx.md_node(&[int(&cx, 0), int(&cx, 1), int(&cx, 2)]),
+        int(&cx, 1),
+        int(&cx, 3),
+        int(&cx, 1),
+        int(&cx, 0),
+        int(&cx, 0),
+    ]);
+    let sigs = cx.md_node(&[ptr::null_mut(), ptr::null_mut(), cx.md_node(&[tess_el])]);
+
+    // Passthrough hull shader: null entry function operand with HSState tag 6.
+    let hull_mod = Module::new(&cx, c"hs");
+    let pcf = hull_mod
+        .add_function(b"pcf", cx.tcx().function(cx.tcx().void(), &[], false))
+        .unwrap_or_else(|_| panic!("add_function"));
+    let hull_state = cx.md_node(&[
+        pcf.val().as_metadata(),
+        int(&cx, 3),
+        int(&cx, 3),
+        int(&cx, 1),
+        int(&cx, 2),
+        int(&cx, 3),
+        float_md(16.5),
+    ]);
+    let hull_props = cx.md_node(&[int(&cx, 6), hull_state]);
+    let hull_point = cx.md_node(&[
+        ptr::null_mut(),
+        cx.md_string(b""),
+        sigs,
+        ptr::null_mut(),
+        hull_props,
+    ]);
+    add(
+        &hull_mod,
+        c"dx.shaderModel",
+        cx.md_node(&[cx.md_string(b"hs"), int(&cx, 6), int(&cx, 0)]),
+    );
+    add(&hull_mod, c"dx.entryPoints", hull_point);
+    let hull_entry =
+        read_entry(&hull_mod).unwrap_or_else(|e| panic!("{}", String::from_utf8_lossy(e.text())));
+    assert_eq!(hull_entry.kind, shader_kind::HULL);
+    assert_eq!(hull_entry.name.as_slice(), b"");
+    assert_eq!(hull_entry.hs_patch_constant_name, b"pcf");
+    assert_eq!(hull_entry.hs_input_control_point_count, 3);
+    assert_eq!(hull_entry.hs_output_control_point_count, 3);
+    assert_eq!(hull_entry.tess_domain, 1);
+    assert_eq!(hull_entry.hs_partitioning, 2);
+    assert_eq!(hull_entry.hs_output_primitive, 3);
+    assert!((hull_entry.hs_max_tess_factor - 16.5).abs() < f32::EPSILON);
+    assert_eq!(hull_entry.patch_constants.len(), 1);
+    assert_eq!(
+        hull_entry.patch_constants[0].kind,
+        semantic_kind::TESS_FACTOR
+    );
+
+    // Non-hull shader with null entry function is rejected.
+    let bad_ds_mod = Module::new(&cx, c"bad_ds");
+    add(
+        &bad_ds_mod,
+        c"dx.shaderModel",
+        cx.md_node(&[cx.md_string(b"ds"), int(&cx, 6), int(&cx, 0)]),
+    );
+    add(&bad_ds_mod, c"dx.entryPoints", hull_point);
+    assert_eq!(
+        text(read_entry(&bad_ds_mod)),
+        b"DXIL: entry function missing"
+    );
+
+    // Domain shader with DSState tag 7 and patch constant signature.
+    let domain_mod = Module::new(&cx, c"ds");
+    let ds_fn = domain_mod
+        .add_function(b"dsmain", cx.tcx().function(cx.tcx().void(), &[], false))
+        .unwrap_or_else(|_| panic!("add_function"));
+    let domain_state = cx.md_node(&[int(&cx, 2), int(&cx, 4)]);
+    let domain_props = cx.md_node(&[int(&cx, 7), domain_state]);
+    let domain_point = cx.md_node(&[
+        ds_fn.val().as_metadata(),
+        cx.md_string(b"dsmain"),
+        sigs,
+        ptr::null_mut(),
+        domain_props,
+    ]);
+    add(
+        &domain_mod,
+        c"dx.shaderModel",
+        cx.md_node(&[cx.md_string(b"ds"), int(&cx, 6), int(&cx, 0)]),
+    );
+    add(&domain_mod, c"dx.entryPoints", domain_point);
+    let domain_entry =
+        read_entry(&domain_mod).unwrap_or_else(|e| panic!("{}", String::from_utf8_lossy(e.text())));
+    assert_eq!(domain_entry.kind, shader_kind::DOMAIN);
+    assert_eq!(domain_entry.tess_domain, 2);
+    assert_eq!(domain_entry.ds_input_control_point_count, 4);
+    assert_eq!(domain_entry.patch_constants.len(), 1);
+}

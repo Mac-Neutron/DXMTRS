@@ -11,7 +11,7 @@
 //! here) are LLVM C++ calls this API lacks on LLVM 23, which our fork gives C names.
 
 use core::{
-    ffi::{c_char, c_int, c_longlong, c_uint, c_ulonglong, c_void},
+    ffi::{c_char, c_double, c_int, c_longlong, c_uint, c_ulonglong, c_void},
     marker::{PhantomData, PhantomPinned},
 };
 
@@ -499,6 +499,8 @@ unsafe extern "C" {
     pub fn is_a_constant_expr(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAConstantInt"]
     pub fn is_a_constant_int(val: ValueRef) -> ValueRef;
+    #[link_name = "LLVMIsAConstantFP"]
+    pub fn is_a_constant_fp(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAGlobalObject"]
     pub fn is_a_global_object(val: ValueRef) -> ValueRef;
     #[link_name = "LLVMIsAFunction"]
@@ -569,6 +571,8 @@ unsafe extern "C" {
     pub fn const_int_get_z_ext_value(constant_val: ValueRef) -> c_ulonglong;
     #[link_name = "LLVMConstIntGetSExtValue"]
     pub fn const_int_get_s_ext_value(constant_val: ValueRef) -> c_longlong;
+    #[link_name = "LLVMConstRealGetDouble"]
+    pub fn const_real_get_double(constant_val: ValueRef, loses_info: *mut c_int) -> c_double;
     #[link_name = "LLVMConstArray"]
     pub fn const_array(
         element_ty: TypeRef,

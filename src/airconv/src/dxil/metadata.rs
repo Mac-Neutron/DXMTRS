@@ -71,14 +71,23 @@ pub fn read_entry(m: &Module<'_>) -> Result<EntryInfo, Error> {
     let [function, _, sigs, res, props, ..] = point[..] else {
         return Err(missing(b"entry point fields"));
     };
-    // SAFETY: null or a value of the module (a metadata operand).
-    if function.is_null() || unsafe { sys::is_a_function(function) }.is_null() {
-        return Err(missing(b"entry function"));
+    if function.is_null() {
+        if entry.kind != shader_kind::HULL {
+            return Err(missing(b"entry function"));
+        }
+    } else {
+        // SAFETY: non-null value of the module (a metadata operand).
+        if unsafe { sys::is_a_function(function) }.is_null() {
+            return Err(missing(b"entry function"));
+        }
+        entry.name = value_name(function);
     }
-    entry.name = value_name(function);
     if let Some(sigs) = operands(sigs) {
         entry.inputs = read_signature(operands(at(&sigs, 0)?))?;
         entry.outputs = read_signature(operands(at(&sigs, 1)?))?;
+        if sigs.len() > 2 {
+            entry.patch_constants = read_signature(operands(at(&sigs, 2)?))?;
+        }
     }
     if let Some(res) = operands(res) {
         for (i, cls) in [
@@ -437,6 +446,22 @@ fn int(v: sys::ValueRef) -> Result<i64, Error> {
     Ok(unsafe { sys::const_int_get_s_ext_value(v) })
 }
 
+/// A floating-point operand, narrowed to `f32` (`ConstantFP`).
+///
+/// # Errors
+///
+/// [`MALFORMED`] for anything but a constant float.
+fn float(v: sys::ValueRef) -> Result<f32, Error> {
+    // SAFETY: null checked first; else a value of the module.
+    if v.is_null() || unsafe { sys::is_a_constant_fp(v) }.is_null() {
+        return Err(malformed());
+    }
+    let mut loses_info = 0;
+    // SAFETY: a constant float; `loses_info` is writable.
+    let value = unsafe { sys::const_real_get_double(v, &raw mut loses_info) };
+    Ok(airconv_ir::float_cast::f64_to_f32(value))
+}
+
 /// `ReadSignature`: a signature's elements.
 ///
 /// `!{i32 ID, !"Name", i8 CompType, i8 SemanticKind, !{i32 SemIdx...}, i8 Interp, i32 Rows, i8
@@ -577,7 +602,8 @@ fn read_extra(extra: Option<Vec<sys::ValueRef>>, r: &mut Resource) -> Result<(),
 
 /// The entry's properties, tag/value pairs.
 ///
-/// `NumThreads` (4), `GSState` (1), `WaveSize` (11) and `WaveSizeRange` (23).
+/// `GSState` (1), `NumThreads` (4), `HSState` (6), `DSState` (7), `WaveSize` (11) and
+/// `WaveSizeRange` (23).
 fn read_properties(props: &[sys::ValueRef], entry: &mut EntryInfo) -> Result<(), Error> {
     for &[tag, value] in props.as_chunks::<2>().0 {
         let tag = int(tag)?;
@@ -596,6 +622,27 @@ fn read_properties(props: &[sys::ValueRef], entry: &mut EntryInfo) -> Result<(),
                 entry.gs_output_topology = low32(int(at(&n, 3)?)?);
                 entry.gs_instances = low32(int(at(&n, 4)?)?);
             }
+            // pcf_fn, input_cp, output_cp, domain, partitioning, output_primitive, max_tess_factor
+            (6, Some(n)) => {
+                let pcf = at(&n, 0)?;
+                // SAFETY: null checked first; else a value of the module.
+                if pcf.is_null() || unsafe { sys::is_a_function(pcf) }.is_null() {
+                    return Err(malformed());
+                }
+                entry.hs_patch_constant_name = value_name(pcf);
+                entry.hs_input_control_point_count = low32(int(at(&n, 1)?)?);
+                entry.hs_output_control_point_count = low32(int(at(&n, 2)?)?);
+                entry.tess_domain = low32(int(at(&n, 3)?)?);
+                entry.hs_partitioning = low32(int(at(&n, 4)?)?);
+                entry.hs_output_primitive = low32(int(at(&n, 5)?)?);
+                entry.hs_max_tess_factor = float(at(&n, 6)?)?;
+            }
+            // domain, input_cp
+            (7, Some(n)) => {
+                entry.tess_domain = low32(int(at(&n, 0)?)?);
+                entry.ds_input_control_point_count = low32(int(at(&n, 1)?)?);
+            }
+            (6 | 7, None) => return Err(malformed()),
             // WaveSize: N; WaveSizeRange: min, max (0: min alone), preferred. A node too short is
             // refused by Initialize, not skipped.
             (11 | 23, n) => match (tag, n.as_deref()) {

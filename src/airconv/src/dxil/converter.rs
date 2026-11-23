@@ -12,7 +12,7 @@ use airconv_ir::binding::{FunctionInput, FunctionOutput};
 
 use super::{
     initialize::DxilShader,
-    lower::{Lowering, erase_terminator, has_uses, lift, walk_blocks},
+    lower::{Lowering, erase_terminator, has_uses, lift, match_semantic_element, walk_blocks},
     metadata::{op_code, value_name},
     probe,
     types::{EntryInfo, ResourceFlags, resource_class, shader_kind},
@@ -20,7 +20,7 @@ use super::{
 use crate::{
     abi::{
         ArgChain, SM50_BINDING_INDEX_ROOT_ARGUMENTS, SM50_BINDING_INDEX_STATIC_SAMPLERS,
-        SM50_SHADER_METAL_310,
+        SM50_SHADER_METAL_310, Sm50ShaderRootSignatureData,
     },
     air::{
         builder::{AirBuilder, MemFlags},
@@ -36,6 +36,7 @@ use crate::{
         gs::{self, Stage},
         replay::{Options, input_layout, zero_return},
         resources::{Resources, setup_io_registers},
+        ts,
     },
     llvm::{self, Block, Builder, Context, FastMath, Module, Val, sys},
     module,
@@ -77,12 +78,15 @@ pub fn convert<'cx>(
     args: &ArgChain<'_>,
 ) -> Result<Module<'cx>, Error> {
     let entry = &shader.entry;
-    if entry.kind == shader_kind::GEOMETRY {
+    if matches!(
+        entry.kind,
+        shader_kind::GEOMETRY | shader_kind::HULL | shader_kind::DOMAIN
+    ) {
         return Err(Error::new(
-            b"DXIL: a geometry shader compiles only with its vertex shader",
+            b"DXIL: geometry, hull and domain shaders compile only with their linked stage",
         ));
     }
-    check_heap_flags(entry, args)?;
+    check_heap_flags(entry, args.root_signature)?;
     let (m, dxil_main) = load(shader, cx)?;
 
     let tcx = cx.tcx();
@@ -191,7 +195,7 @@ pub fn convert<'cx>(
         c"air.kernel"
     };
     add_entry(&m, stage, function_entry);
-    finish(&m, dxil_main)?;
+    finish(&m, &[dxil_main])?;
     Ok(m)
 }
 
@@ -224,7 +228,7 @@ pub fn convert_geometry_pipeline<'cx>(
         ));
     }
     let stage = if object { vs } else { gs };
-    check_heap_flags(&stage.entry, args)?;
+    check_heap_flags(&stage.entry, args.root_signature)?;
     let (m, dxil_main) = load(stage, cx)?;
     let vertex_outputs = (!object).then_some(&vs.entry);
     let body = |conv: &Converter<'_, 'cx>, epilogue: Block<'cx>| {
@@ -235,8 +239,274 @@ pub fn convert_geometry_pipeline<'cx>(
     } else {
         gs::convert_geometry(Stage::Dxil(gs), Stage::Dxil(vs), name, &m, args, body)?;
     }
-    finish(&m, dxil_main)?;
+    finish(&m, &[dxil_main])?;
     Ok(m)
+}
+
+/// Link DXIL vertex and hull shaders into a single AIR object function module.
+///
+/// # Errors
+///
+/// Returns stage-mismatch, bitcode parse/link, heap-flag, lowering, or verification errors.
+pub fn convert_tessellation_hull<'cx>(
+    vertex: &Shader,
+    hull: &Shader,
+    name: &[u8],
+    cx: &'cx Context,
+    args: &ArgChain<'_>,
+) -> Result<Module<'cx>, Error> {
+    let (Shader::Dxil(vs), Shader::Dxil(hs)) = (vertex, hull) else {
+        return Err(Error::new(
+            b"DXIL: a tessellation hull pipeline needs a DXIL vertex and hull shader",
+        ));
+    };
+    let (vs, hs) = (&vs.ir, &hs.ir);
+    if vs.entry.kind != shader_kind::VERTEX || hs.entry.kind != shader_kind::HULL {
+        return Err(Error::new(
+            b"DXIL: a tessellation hull pipeline needs a DXIL vertex and hull shader",
+        ));
+    }
+    check_heap_flags(&vs.entry, args.root_signature2.or(args.root_signature))?;
+    check_heap_flags(&hs.entry, args.root_signature)?;
+    let (m, vs_entry) = load_as(vs, cx, b"dxil.vs.entry")?;
+
+    let m_hs = module::parse(
+        cx,
+        &hs.bitcode,
+        b"dxil_hs",
+        b"DXIL: can't read the bitcode: ",
+        module::Layout::Dxil,
+    )?;
+    let has_cp = !hs.entry.name.is_empty();
+    if has_cp {
+        rename_function(&m_hs, &hs.entry.name, b"dxil.hs.entry")?;
+    }
+    rename_function(&m_hs, &hs.entry.hs_patch_constant_name, b"dxil.hs.pcf")?;
+    module::set_target_and_layout(&m_hs);
+    erase_named_metadata(&m_hs, true);
+    // SAFETY: both modules are live and of `cx`; linking takes ownership of `m_hs`.
+    let link_failed = unsafe { sys::air_link_modules(m.raw(), m_hs.into_raw(), 0) } != 0;
+    if let Some(error) = cx.take_error() {
+        return Err(error);
+    }
+    if link_failed {
+        return Err(Error::new(b"DXIL: failed to link hull shader module"));
+    }
+
+    let hs_cp_entry = if has_cp {
+        // SAFETY: a live module; a NUL-terminated static name.
+        let f = unsafe { sys::get_named_function(m.raw(), c"dxil.hs.entry".as_ptr()) };
+        if f.is_null() {
+            return Err(Error::new(b"DXIL: linked hull entry function missing"));
+        }
+        Some(f)
+    } else {
+        None
+    };
+    // SAFETY: a live module; a NUL-terminated static name.
+    let hs_pcf_entry = unsafe { sys::get_named_function(m.raw(), c"dxil.hs.pcf".as_ptr()) };
+    if hs_pcf_entry.is_null() {
+        return Err(Error::new(
+            b"DXIL: linked hull patch constant function missing",
+        ));
+    }
+
+    let vertex_body = |conv: &Converter<'_, 'cx>, epilogue: Block<'cx>| {
+        lower_body(vs, conv, &m, vs_entry, epilogue, None)
+    };
+    let hull_body = |conv: &Converter<'_, 'cx>, epilogue: Block<'cx>| {
+        lower_hull_body(vs, hs, conv, &m, (hs_cp_entry, hs_pcf_entry), epilogue)
+    };
+    ts::convert_hull(
+        Stage::Dxil(vs),
+        Stage::Dxil(hs),
+        vertex_body,
+        hull_body,
+        name,
+        &m,
+        args,
+    )?;
+    if let Some(cp) = hs_cp_entry {
+        finish(&m, &[vs_entry, cp, hs_pcf_entry])?;
+    } else {
+        finish(&m, &[vs_entry, hs_pcf_entry])?;
+    }
+    Ok(m)
+}
+
+/// Convert a DXIL domain shader fed by a DXIL hull shader into an AIR mesh function module.
+///
+/// # Errors
+///
+/// Returns stage-mismatch, bitcode parse, heap-flag, lowering, or verification errors.
+pub fn convert_tessellation_domain<'cx>(
+    domain: &Shader,
+    hull: &Shader,
+    name: &[u8],
+    cx: &'cx Context,
+    args: &ArgChain<'_>,
+) -> Result<Module<'cx>, Error> {
+    let (Shader::Dxil(ds), Shader::Dxil(hs)) = (domain, hull) else {
+        return Err(Error::new(
+            b"DXIL: a tessellation domain pipeline needs a DXIL domain and hull shader",
+        ));
+    };
+    let (ds, hs) = (&ds.ir, &hs.ir);
+    if ds.entry.kind != shader_kind::DOMAIN || hs.entry.kind != shader_kind::HULL {
+        return Err(Error::new(
+            b"DXIL: a tessellation domain pipeline needs a DXIL domain and hull shader",
+        ));
+    }
+    check_heap_flags(&ds.entry, args.root_signature)?;
+    let (m, dxil_main) = load(ds, cx)?;
+    let body = |conv: &Converter<'_, 'cx>, epilogue: Block<'cx>| {
+        lower_body(ds, conv, &m, dxil_main, epilogue, Some(&hs.entry))
+    };
+    ts::convert_domain(Stage::Dxil(ds), Stage::Dxil(hs), name, &m, args, body)?;
+    finish(&m, &[dxil_main])?;
+    Ok(m)
+}
+
+/// Lower optional hull control-point phase and patch-constant phase with guards and barriers.
+fn lower_hull_body<'cx>(
+    vs: &DxilShader,
+    hs: &DxilShader,
+    conv: &Converter<'_, 'cx>,
+    m: &Module<'cx>,
+    (cp_fn, pcf_fn): (Option<sys::ValueRef>, sys::ValueRef),
+    epilogue: Block<'cx>,
+) -> Result<Block<'cx>, Error> {
+    let cx = m.cx();
+    let caller_ip = conv
+        .ir
+        .insert_block()
+        .ok_or_else(|| invalid("an unpositioned builder"))?;
+    let no_block = || invalid("a block of no function");
+    let thread_id = req(conv.res.thread_id_in_patch, "no thread id in patch")?;
+
+    let pcf_start = conv
+        .function
+        .append_block(cx, c"hs_pcf_start")
+        .ok_or_else(no_block)?;
+    let pcf_end = conv
+        .function
+        .append_block(cx, c"hs_pcf_end")
+        .ok_or_else(no_block)?;
+    let pcf_entry = lower_body(hs, conv, m, pcf_fn, pcf_end, Some(&vs.entry))?;
+
+    let cp_start = conv
+        .function
+        .append_block(cx, c"hs_cp_start")
+        .ok_or_else(no_block)?;
+    let cp_end = conv
+        .function
+        .append_block(cx, c"hs_cp_end")
+        .ok_or_else(no_block)?;
+    let cp_entry = if let Some(cp_fn) = cp_fn {
+        lower_body(hs, conv, m, cp_fn, cp_end, Some(&vs.entry))?
+    } else {
+        let cp_copy = conv
+            .function
+            .append_block(cx, c"hs_cp_copy")
+            .ok_or_else(no_block)?;
+        conv.ir.position_at_end(cp_copy);
+        copy_passthrough_control_points(vs, hs, conv, m, thread_id)?;
+        conv.ir.br(cp_end);
+        cp_copy
+    };
+
+    conv.ir.position_at_end(cp_start);
+    let out_cp = conv.air.get_int(hs.decls.output_control_point_count);
+    let active_cp = conv.ir.icmp(sys::INT_ULT, thread_id, out_cp);
+    conv.ir.cond_br(active_cp, cp_entry, cp_end);
+
+    conv.ir.position_at_end(cp_end);
+    conv.air.create_barrier(MemFlags::THREADGROUP, false)?;
+    conv.ir.br(pcf_start);
+
+    conv.ir.position_at_end(pcf_start);
+    let is_first = conv.ir.icmp(sys::INT_EQ, thread_id, conv.air.get_int(0));
+    conv.ir.cond_br(is_first, pcf_entry, pcf_end);
+
+    conv.ir.position_at_end(pcf_end);
+    conv.air.create_barrier(MemFlags::THREADGROUP, false)?;
+    conv.ir.br(epilogue);
+
+    conv.ir.position_at_end(caller_ip);
+    Ok(cp_start)
+}
+
+/// Copy VS control-point outputs into HS output layout by semantic for pass-through hull shaders.
+fn copy_passthrough_control_points<'cx>(
+    vs: &DxilShader,
+    hs: &DxilShader,
+    conv: &Converter<'_, 'cx>,
+    m: &Module<'cx>,
+    thread_id: Val<'cx>,
+) -> Result<(), Error> {
+    if hs.entry.outputs.is_empty() {
+        return Ok(());
+    }
+    let tcx = m.cx().tcx();
+    let in_file = req(conv.res.input.ptr_int4, "no hull input register file")?;
+    let out_file = req(conv.res.output.ptr_int4, "no hull output register file")?;
+    let in_ty = tcx
+        .pointee(in_file.ty())
+        .ok_or_else(|| invalid("a register file is not a pointer"))?;
+    let out_ty = tcx
+        .pointee(out_file.ty())
+        .ok_or_else(|| invalid("a register file is not a pointer"))?;
+    let zero = conv.air.get_int(0);
+    for e in &hs.entry.outputs {
+        if e.start_row < 0 || e.start_col < 0 {
+            return Err(Error::new(
+                &[
+                    &b"DXIL: hull shader output "[..],
+                    &e.name,
+                    b" is not mapped",
+                ]
+                .concat(),
+            ));
+        }
+        let (f, base_row) = match_semantic_element(e, &vs.entry.outputs).ok_or_else(|| {
+            Error::new(
+                &[
+                    &b"DXIL: hull shader output "[..],
+                    &e.name,
+                    b" isn't a vertex shader output",
+                ]
+                .concat(),
+            )
+        })?;
+        for r in 0..e.rows {
+            let src_reg = conv.air.get_int(
+                f.start_row
+                    .cast_unsigned()
+                    .wrapping_add(base_row)
+                    .wrapping_add(r),
+            );
+            let dst_reg = conv
+                .air
+                .get_int(e.start_row.cast_unsigned().wrapping_add(r));
+            for c in 0..e.cols {
+                let src_col = conv
+                    .air
+                    .get_int(f.start_col.cast_unsigned().wrapping_add(c));
+                let dst_col = conv
+                    .air
+                    .get_int(e.start_col.cast_unsigned().wrapping_add(c));
+                let src_ptr = conv
+                    .ir
+                    .gep(in_ty, in_file, &[zero, thread_id, src_reg, src_col]);
+                let dst_ptr = conv
+                    .ir
+                    .gep(out_ty, out_file, &[zero, thread_id, dst_reg, dst_col]);
+                let word = conv.ir.load(conv.types.int, src_ptr);
+                conv.ir.store(word, dst_ptr);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A DXIL stage's bindings: the chain's root signature's when it has one, else D3D11's tables.
@@ -382,10 +652,29 @@ fn move_constants_to_constant_space(m: &Module<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The shader's module, set up for AIR, and its DXIL entry function, renamed (`Load`).
-///
-/// The caller may ask for the entry's own name (`main`), so it becomes `dxil.entry`.
-fn load<'cx>(shader: &DxilShader, cx: &'cx Context) -> Result<(Module<'cx>, sys::ValueRef), Error> {
+/// Find function `old_name` in `m`, rename it to `new_name`, and return its LLVM value ref.
+fn rename_function(
+    m: &Module<'_>,
+    old_name: &[u8],
+    new_name: &[u8],
+) -> Result<sys::ValueRef, Error> {
+    let entry_name = llvm::name(old_name)?;
+    // SAFETY: a live module; a NUL-terminated name.
+    let function = unsafe { sys::get_named_function(m.raw(), entry_name.as_ptr()) };
+    if function.is_null() {
+        return Err(Error::new(b"DXIL: entry function missing"));
+    }
+    // SAFETY: a function of the module; the name holds its length.
+    unsafe { sys::set_value_name2(function, new_name.as_ptr().cast(), new_name.len()) };
+    Ok(function)
+}
+
+/// The shader's module, set up for AIR, and its DXIL entry function, renamed to `renamed`.
+fn load_as<'cx>(
+    shader: &DxilShader,
+    cx: &'cx Context,
+    renamed: &[u8],
+) -> Result<(Module<'cx>, sys::ValueRef), Error> {
     let m = module::parse(
         cx,
         &shader.bitcode,
@@ -393,25 +682,36 @@ fn load<'cx>(shader: &DxilShader, cx: &'cx Context) -> Result<(Module<'cx>, sys:
         b"DXIL: can't read the bitcode: ",
         module::Layout::Dxil,
     )?;
-    let entry_name = llvm::name(&shader.entry.name)?;
-    // SAFETY: a live module; a NUL-terminated name.
-    let dxil_main = unsafe { sys::get_named_function(m.raw(), entry_name.as_ptr()) };
-    if dxil_main.is_null() {
-        return Err(Error::new(b"DXIL: entry function missing"));
+    let dxil_main = rename_function(&m, &shader.entry.name, renamed)?;
+    // Drop any pre-existing module flags before `module::set_up` adds AIR's flags once.
+    // SAFETY: a live module; the name holds its length.
+    unsafe {
+        sys::air_erase_named_metadata(
+            m.raw(),
+            c"llvm.module.flags".as_ptr(),
+            b"llvm.module.flags".len(),
+        );
     }
-    let renamed = b"dxil.entry";
-    // SAFETY: a function of the module; the name holds its length.
-    unsafe { sys::set_value_name2(dxil_main, renamed.as_ptr().cast(), renamed.len()) };
     // The AIR triple, data layout, SDK version and module flags.
     module::set_up(&m);
     Ok((m, dxil_main))
+}
+
+/// The shader's module, set up for AIR, and its DXIL entry function, renamed (`Load`).
+///
+/// The caller may ask for the entry's own name (`main`), so it becomes `dxil.entry`.
+fn load<'cx>(shader: &DxilShader, cx: &'cx Context) -> Result<(Module<'cx>, sys::ValueRef), Error> {
+    load_as(shader, cx, b"dxil.entry")
 }
 
 /// A shader that indexes a descriptor heap needs its root signature to say so (`CheckHeapFlags`).
 ///
 /// Only then do the heap bases follow its parameters in the root arguments (spec 3.4). The
 /// view heap's flag is checked first.
-fn check_heap_flags(entry: &EntryInfo, args: &ArgChain<'_>) -> Result<(), Error> {
+fn check_heap_flags(
+    entry: &EntryInfo,
+    rootsig: Option<&Sm50ShaderRootSignatureData>,
+) -> Result<(), Error> {
     let (mut views, mut samplers) = (false, false);
     for r in &entry.resources {
         if r.flags.contains(ResourceFlags::HEAP) {
@@ -425,7 +725,7 @@ fn check_heap_flags(entry: &EntryInfo, args: &ArgChain<'_>) -> Result<(), Error>
     if !views && !samplers {
         return Ok(());
     }
-    let Some(rootsig) = args.root_signature else {
+    let Some(rootsig) = rootsig else {
         return Err(Error::new(
             b"DXIL: ResourceDescriptorHeap needs a root signature",
         ));
@@ -603,11 +903,15 @@ fn zero_group_shared_locks<'cx>(
 
 /// What is left of DXIL removed once the AIR function is built, and the module checked.
 ///
-/// `Finish`: the emptied entry and the unused `dx.op` declarations go, `static const` arrays
+/// `Finish`: the emptied entries and the unused `dx.op` declarations go, `static const` arrays
 /// move to constant space, DXIL's metadata and type names go, then the verifier.
-fn finish(m: &Module<'_>, dxil_main: sys::ValueRef) -> Result<(), Error> {
-    // SAFETY: the DXIL entry function, emptied of its blocks.
-    unsafe { sys::delete_function(dxil_main) };
+fn finish(m: &Module<'_>, dxil_entries: &[sys::ValueRef]) -> Result<(), Error> {
+    for &dxil_main in dxil_entries {
+        if !dxil_main.is_null() {
+            // SAFETY: the DXIL entry function, emptied of its blocks.
+            unsafe { sys::delete_function(dxil_main) };
+        }
+    }
     // SAFETY: a live module.
     let mut function = unsafe { sys::get_first_function(m.raw()) };
     while !function.is_null() {
@@ -647,11 +951,11 @@ fn finish(m: &Module<'_>, dxil_main: sys::ValueRef) -> Result<(), Error> {
     Ok(())
 }
 
-/// What only DXIL tools read removed: named metadata, instruction metadata, DXIL's type names.
+/// Erase DXIL and identity named metadata from `m`.
 ///
-/// `StripDXIL`: the `dx.*` and `llvm.ident` named metadata, every attachment but the debug
-/// location, and `dx.types.*` struct names, which become `dxil.*`.
-fn strip_dxil(m: &Module<'_>) {
+/// When `erase_module_flags` is true (before linking a secondary DXIL module), `air.*` and
+/// `llvm.module.flags` are also removed.
+fn erase_named_metadata(m: &Module<'_>, erase_module_flags: bool) {
     let mut named = Vec::new();
     // SAFETY: a live module.
     let mut node = unsafe { sys::get_first_named_metadata(m.raw()) };
@@ -665,7 +969,10 @@ fn strip_dxil(m: &Module<'_>) {
             // SAFETY: LLVM answers `len` bytes at `name`.
             unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) }.to_vec()
         };
-        if name.starts_with(b"dx.") || name == b"llvm.ident" {
+        if name.starts_with(b"dx.")
+            || name == b"llvm.ident"
+            || (erase_module_flags && (name.starts_with(b"air.") || name == b"llvm.module.flags"))
+        {
             named.push(name);
         }
         // SAFETY: as above.
@@ -677,6 +984,14 @@ fn strip_dxil(m: &Module<'_>) {
             sys::air_erase_named_metadata(m.raw(), name.as_ptr().cast(), name.len());
         };
     }
+}
+
+/// What only DXIL tools read removed: named metadata, instruction metadata, DXIL's type names.
+///
+/// `StripDXIL`: the `dx.*` and `llvm.ident` named metadata, every attachment but the debug
+/// location, and `dx.types.*` struct names, which become `dxil.*`.
+fn strip_dxil(m: &Module<'_>) {
+    erase_named_metadata(m, false);
     // SAFETY: a live module.
     let first = unsafe { sys::get_first_function(m.raw()) };
     for function in super::metadata::walk(first, |f| {

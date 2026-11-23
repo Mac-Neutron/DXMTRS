@@ -412,6 +412,33 @@ pub fn root_signature_flags(bytecode: &[u8]) -> u32 {
     read_root_signature(bytecode).map_or(0, |rs| rs.v1_1.flags)
 }
 
+/// Target slots and shared-stage tail flags for [`setup_binding_rootsig_with_extras`].
+///
+/// Setting `force_heap` or `force_atomic64` forces the `heap`/`sampler_heap` or `atomic64_locks`
+/// tail fields into `rootsig` so linked stages sharing one argument-buffer slot emit the same
+/// struct layout.
+#[derive(Default)]
+pub struct RootSigTarget {
+    pub slots: (u32, u32),
+    pub force_heap: bool,
+    pub force_atomic64: bool,
+}
+
+/// Whether `info` references any descriptor-heap resource range (`space == u32::MAX`).
+#[must_use]
+pub fn uses_heap(info: &ShaderInfo) -> bool {
+    info.srv_map.values().any(|s| s.range.space == HEAP_SPACE)
+        || info.uav_map.values().any(|s| s.range.space == HEAP_SPACE)
+        || info
+            .cbuffer_map
+            .values()
+            .any(|s| s.range.space == HEAP_SPACE)
+        || info
+            .sampler_map
+            .values()
+            .any(|s| s.range.space == HEAP_SPACE)
+}
+
 /// `setup_binding_rootsig`: the root argument buffer of a root signature.
 ///
 /// `bytecode` is a container holding an `RTS0` part; the buffer is defined as the `rootsig`
@@ -430,7 +457,37 @@ pub fn setup_binding_rootsig<'s>(
     bytecode: &[u8],
     slots: (u32, u32),
 ) -> Result<RootSignatureBindings<'s>, Error> {
-    let (root_sig_slot, static_sampler_slot) = slots;
+    setup_binding_rootsig_with_extras(
+        info,
+        desc,
+        m,
+        handles,
+        shader_type,
+        bytecode,
+        &RootSigTarget {
+            slots,
+            force_heap: false,
+            force_atomic64: false,
+        },
+    )
+}
+
+/// `setup_binding_rootsig` with optional forced tail fields for shared multi-stage root arguments.
+///
+/// # Errors
+///
+/// A container without a readable root signature, a descriptor range of an unknown type, or
+/// [`build_argument_buffer`]'s errors.
+pub fn setup_binding_rootsig_with_extras<'s>(
+    info: &'s ShaderInfo,
+    desc: &mut FunctionSignatureDesc,
+    m: &Module<'_>,
+    handles: &mut Handles,
+    shader_type: u32,
+    bytecode: &[u8],
+    target: &RootSigTarget,
+) -> Result<RootSignatureBindings<'s>, Error> {
+    let (root_sig_slot, static_sampler_slot) = target.slots;
     let rs = read_root_signature(bytecode)?;
     let root_sig = &rs.v1_1;
     let mut map = RootSignatureBindings {
@@ -607,17 +664,9 @@ pub fn setup_binding_rootsig<'s>(
     // reads its heap from descriptor 0, so a heap index is a descriptor index. DXIL 64-bit
     // atomics: the lock table's address is the qword after those (declared then even in a shader
     // that indexes no heap), or after the last parameter's without the flags.
-    let atomic64 = info.flags.contains(ShaderFlags::USE_ATOMIC64_LOCKS);
-    let in_heap = info.srv_map.values().any(|s| s.range.space == HEAP_SPACE)
-        || info.uav_map.values().any(|s| s.range.space == HEAP_SPACE)
-        || info
-            .cbuffer_map
-            .values()
-            .any(|s| s.range.space == HEAP_SPACE)
-        || info
-            .sampler_map
-            .values()
-            .any(|s| s.range.space == HEAP_SPACE);
+    let own_atomic64 = info.flags.contains(ShaderFlags::USE_ATOMIC64_LOCKS);
+    let atomic64 = own_atomic64 || target.force_atomic64;
+    let in_heap = uses_heap(info) || target.force_heap;
     if root_sig.flags & HEAP_DIRECTLY_INDEXED != 0 && (in_heap || atomic64) {
         let heap = buffer(
             &mut table,
@@ -666,7 +715,7 @@ pub fn setup_binding_rootsig<'s>(
         );
     }
     if atomic64 {
-        map.atomic64_locks = buffer(
+        let locks = buffer(
             &mut table,
             "atomic64_locks".into(),
             AddressSpace::Device,
@@ -674,6 +723,9 @@ pub fn setup_binding_rootsig<'s>(
             MslValue::UINT,
             attribute(),
         );
+        if own_atomic64 {
+            map.atomic64_locks = locks;
+        }
     }
 
     let (struct_type, struct_type_info) = build_argument_buffer(m, &table, handles)?;

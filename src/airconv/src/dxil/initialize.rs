@@ -7,10 +7,11 @@
 //! order.
 
 use core::ffi::c_ulonglong;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use airconv_ir::{
     dxil_part::DxilPart,
+    estimators::{self, HullCounts},
     reflection::{Reflection, StageReflection},
     shader_info::{
         ConstantBufferInfo, Declarations, ResourceRange, ResourceType, SamplerInfo, ScalerDataType,
@@ -18,12 +19,17 @@ use airconv_ir::{
     },
 };
 
+/// Largest object payload a tessellation threadgroup may allocate (Metal limit).
+const MAX_PAYLOAD: u64 = 16384;
+/// Largest mesh a domain shader may output (Metal limit).
+const MAX_MESH: u64 = 32768;
+
 use crate::{
     api::Error,
     dxil::{
         metadata::{
-            arg, call_users, called_ops, dx_op_functions, heap_handle, op_code, read_entry,
-            resolve_handle, walk,
+            arg, call_users, called_ops, const_u32, dx_op_functions, heap_handle, op_code,
+            read_entry, resolve_handle, walk,
         },
         signature::Io,
         types::{
@@ -132,9 +138,49 @@ pub fn initialize(part: &DxilPart<'_>, capture_hash: u64) -> Result<DxilShader, 
             decls.gs_instance_count = entry.gs_instances;
             entry.kind
         }
+        shader_kind::HULL => {
+            if entry.hs_patch_constant_name.is_empty() {
+                return Err(Error::new(
+                    b"DXIL: hull shader missing patch constant function",
+                ));
+            }
+            if entry.hs_input_control_point_count == 0 || entry.hs_input_control_point_count > 32 {
+                return Err(Error::new(
+                    b"DXIL: hull input control point count out of range",
+                ));
+            }
+            if entry.hs_output_control_point_count > 32 {
+                return Err(Error::new(
+                    b"DXIL: hull output control point count out of range",
+                ));
+            }
+            if !(1..=4).contains(&entry.hs_partitioning) {
+                return Err(Error::new(b"DXIL: hull partitioning mode not supported"));
+            }
+            if !entry.hs_max_tess_factor.is_finite() {
+                return Err(Error::new(
+                    b"DXIL: hull max tessellation factor is not finite",
+                ));
+            }
+            decls.tessellation_domain = entry.tess_domain;
+            decls.max_tessellation_factor = entry.hs_max_tess_factor.clamp(1.0, 64.0);
+            decls.input_control_point_count = entry.hs_input_control_point_count;
+            decls.output_control_point_count = entry.hs_output_control_point_count;
+            decls.hull_maximum_threads_per_patch = entry
+                .hs_input_control_point_count
+                .max(entry.hs_output_control_point_count)
+                .max(1);
+            decls.tessellation_partition = entry.hs_partitioning;
+            decls.tessellator_output_primitive = entry.hs_output_primitive;
+            entry.kind
+        }
+        shader_kind::DOMAIN => {
+            decls.tessellation_domain = entry.tess_domain;
+            entry.kind
+        }
         _ => {
             return Err(Error::new(
-                b"DXIL: only vertex, pixel, geometry and compute shaders are supported",
+                b"DXIL: only vertex, pixel, geometry, hull, domain and compute shaders are supported",
             ));
         }
     };
@@ -168,6 +214,14 @@ pub fn initialize(part: &DxilPart<'_>, capture_hash: u64) -> Result<DxilShader, 
     if uses_atomic64_locks(&m) {
         info.flags.insert(ShaderFlags::USE_ATOMIC64_LOCKS);
     }
+    if entry.kind == shader_kind::HULL {
+        // Always allocate HS outputs separately so pass-through HS can semantically relink VS->HS.
+        info.flags
+            .insert(ShaderFlags::NO_CONTROL_POINT_PHASE_PASSTHROUGH);
+        if ops.contains(&op::LOAD_OUTPUT_CONTROL_POINT) {
+            info.flags.insert(ShaderFlags::OUTPUT_CONTROL_POINT_READ);
+        }
+    }
     // 2D compute quads (HLSL_SM_6_6_Derivatives.md): numthreads X and Y even (Y = 1 is the 1D
     // layout, Metal's own), in a shader that takes derivatives, samples with an implicit LOD,
     // calculates a LOD or reads its quad.
@@ -190,15 +244,20 @@ pub fn initialize(part: &DxilPart<'_>, capture_hash: u64) -> Result<DxilShader, 
         && x % 2 == 0
         && y % 2 == 0
         && quad_ops.iter().any(|o| ops.contains(o));
+    let pull_mode = pull_mode_elements(&m)?;
     let mut io = Io::default();
-    io.add_signature_handlers(&entry, &ops, quads_2d, gs_locks != 0)?;
+    io.add_signature_handlers(&entry, &ops, &pull_mode, quads_2d, gs_locks != 0)?;
+    if entry.kind == shader_kind::HULL {
+        fit_hull(&mut decls, &io)?;
+    }
     let (lane_index_arg, lane_count_arg) = io.add_wave_inputs(&ops, program_type);
     if entry.kind == shader_kind::COMPUTE {
         decls.threadgroup_size = entry.numthreads;
         io.func_signature
             .use_max_work_group_size(x.wrapping_mul(y).wrapping_mul(z));
     }
-    let include_helper_lanes = helper_lanes_included(&m, &entry.name);
+    let include_helper_lanes =
+        entry.kind == shader_kind::PIXEL && helper_lanes_included(&m, &entry.name);
     Ok(DxilShader {
         program_type,
         info,
@@ -236,6 +295,22 @@ impl DxilShader {
                 valid_render_targets: self.io.pso_valid_output_reg_mask,
                 has_coverage_output: self.io.ps_has_coverage_output,
             },
+            shader_kind::HULL => StageReflection::Hull {
+                threads_per_patch: self.decls.hull_maximum_threads_per_patch,
+                partition: self.decls.tessellation_partition,
+                max_factor: self.decls.max_tessellation_factor,
+                output_primitive: self.decls.tessellator_output_primitive,
+            },
+            shader_kind::DOMAIN => {
+                let max_output_register = self.io.max_output_register;
+                let max_potential_tess_factor = (1..=64)
+                    .take_while(|&f| estimators::mesh_size(max_output_register, f) <= MAX_MESH)
+                    .last()
+                    .unwrap_or(1);
+                StageReflection::Domain {
+                    max_potential_tess_factor,
+                }
+            }
             _ => StageReflection::None,
         };
         Reflection {
@@ -254,6 +329,51 @@ impl DxilShader {
             writes_uav: u32::from(self.writes_uav),
         }
     }
+}
+
+/// Fit hull threadgroup size and maximum tessellation factor to Metal's 16 KiB payload limit.
+///
+/// Matches `airconv_ir::initialize::DxbcShader::fit_hull`.
+///
+/// # Errors
+///
+/// Too many threads per patch (`> 32`) or payload exceeds 16 KiB even at tessellation factor 1.
+fn fit_hull(decls: &mut Declarations, io: &Io) -> Result<(), Error> {
+    let threads_per_patch = estimators::next_pow2(decls.hull_maximum_threads_per_patch);
+    if threads_per_patch > 32 {
+        return Err(Error::new(
+            b"Threadgroup size of tessellation pipeline is too large.",
+        ));
+    }
+    let counts = HullCounts {
+        partition: decls.tessellation_partition,
+        domain: decls.tessellation_domain,
+        max_output_register: io.max_output_register,
+        output_control_point_count: decls.output_control_point_count,
+        patch_constant_scalars: io.patch_constant_scalars.len(),
+    };
+    let mut patch_per_group = 32 / threads_per_patch;
+    let mut factor = decls.max_tessellation_factor;
+    while estimators::payload_size(&counts, factor, patch_per_group) > MAX_PAYLOAD {
+        if patch_per_group != 1 {
+            patch_per_group >>= 1;
+        } else if factor > 1.0 {
+            let lowered = factor - 2.0;
+            if lowered >= factor {
+                return Err(Error::new(
+                    b"Payload size of tessellation pipeline is too large.",
+                ));
+            }
+            factor = if lowered < 1.0 { 1.0 } else { lowered };
+        } else {
+            return Err(Error::new(
+                b"Payload size of tessellation pipeline is too large.",
+            ));
+        }
+    }
+    decls.hull_maximum_threads_per_patch = 32 / patch_per_group;
+    decls.max_tessellation_factor = factor;
+    Ok(())
 }
 
 /// `GroupSharedLocks`: the threadgroup lock array of 64-bit groupshared atomics.
@@ -587,6 +707,30 @@ fn uses_atomic64_locks(m: &Module<'_>) -> bool {
                 op::ATOMIC_BIN_OP | op::ATOMIC_COMPARE_EXCHANGE
             )
         })
+}
+
+/// Signature element IDs read by pull-mode evaluation ops.
+///
+/// Scans `dx.op.*` calls for `EvalSnapped`, `EvalSampleIndex`, and `EvalCentroid`.
+///
+/// # Errors
+///
+/// `DXIL: non-constant eval index` if an eval op's input element ID is not a constant integer.
+fn pull_mode_elements(m: &Module<'_>) -> Result<BTreeSet<u32>, Error> {
+    let mut elements = BTreeSet::new();
+    for call in dx_op_functions(m).into_iter().flat_map(call_users) {
+        if matches!(
+            op_code(call),
+            op::EVAL_SNAPPED | op::EVAL_SAMPLE_INDEX | op::EVAL_CENTROID
+        ) {
+            let id = const_u32(arg(call, 1), u32::MAX);
+            if id == u32::MAX {
+                return Err(Error::new(b"DXIL: non-constant eval index"));
+            }
+            elements.insert(id);
+        }
+    }
+    Ok(elements)
 }
 
 /// Whether the entry function `name` has `"waveops-include-helper-lanes"`.

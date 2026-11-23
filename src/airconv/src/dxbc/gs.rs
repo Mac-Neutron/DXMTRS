@@ -20,7 +20,7 @@ use airconv_ir::{
         AddressSpace, BufferBinding, FunctionInput, FunctionSignatureDesc, MemoryAccess,
         MeshOutputTopology, MeshVertexOutput, MslScalar, MslType, MslValue, MslVector,
     },
-    handlers::{MeshOutputHandler, ScalarInfo},
+    handlers::{MeshOutputHandler, PatchConstantScalarInfo, ScalarInfo},
     initialize::DxbcShader,
     shader_info::{Declarations, ShaderInfo},
     tokens::program_type,
@@ -98,56 +98,82 @@ pub enum Stage<'s> {
 }
 
 impl<'s> Stage<'s> {
-    const fn program_type(self) -> u32 {
+    pub(super) const fn program_type(self) -> u32 {
         match self {
             Self::Dxbc(s) => s.program_type,
             Self::Dxil(s) => s.program_type,
         }
     }
 
-    const fn func_signature(self) -> &'s FunctionSignatureDesc {
+    pub(super) const fn func_signature(self) -> &'s FunctionSignatureDesc {
         match self {
             Self::Dxbc(s) => &s.io.func_signature,
             Self::Dxil(s) => &s.io.func_signature,
         }
     }
 
-    const fn info(self) -> &'s ShaderInfo {
+    pub(super) const fn info(self) -> &'s ShaderInfo {
         match self {
             Self::Dxbc(s) => &s.cfg.info,
             Self::Dxil(s) => &s.info,
         }
     }
 
-    const fn decls(self) -> &'s Declarations {
+    pub(super) const fn decls(self) -> &'s Declarations {
         match self {
             Self::Dxbc(s) => &s.cfg.decls,
             Self::Dxil(s) => &s.decls,
         }
     }
 
-    const fn max_input_register(self) -> u32 {
+    pub(super) const fn max_input_register(self) -> u32 {
         match self {
             Self::Dxbc(s) => s.io.max_input_register,
             Self::Dxil(s) => s.io.max_input_register,
         }
     }
 
-    const fn max_output_register(self) -> u32 {
+    pub(super) const fn max_output_register(self) -> u32 {
         match self {
             Self::Dxbc(s) => s.io.max_output_register,
             Self::Dxil(s) => s.io.max_output_register,
         }
     }
 
-    const fn clip_distances(self) -> &'s [ScalarInfo] {
+    pub(super) fn max_vertex_output_register(self) -> u32 {
         match self {
-            Self::Dxbc(s) => s.io.clip_distance_scalars.as_slice(),
-            Self::Dxil(_) => &[],
+            Self::Dxbc(s) => s
+                .output
+                .rasterized()
+                .parameters
+                .iter()
+                .fold(0, |max, out| max.max(out.register.wrapping_add(1))),
+            Self::Dxil(s) => s.io.max_output_register,
         }
     }
 
-    const fn mesh_handlers(self) -> MeshHandlers<'s> {
+    pub(super) const fn max_patch_constant_output_register(self) -> u32 {
+        match self {
+            Self::Dxbc(s) => s.io.max_patch_constant_output_register,
+            Self::Dxil(s) => s.io.max_patch_constant_output_register,
+        }
+    }
+
+    pub(super) const fn patch_constant_scalars(self) -> &'s [PatchConstantScalarInfo] {
+        match self {
+            Self::Dxbc(s) => s.io.patch_constant_scalars.as_slice(),
+            Self::Dxil(s) => s.io.patch_constant_scalars.as_slice(),
+        }
+    }
+
+    pub(super) const fn clip_distances(self) -> &'s [ScalarInfo] {
+        match self {
+            Self::Dxbc(s) => s.io.clip_distance_scalars.as_slice(),
+            Self::Dxil(s) => s.io.clip_distance_scalars.as_slice(),
+        }
+    }
+
+    pub(super) const fn mesh_handlers(self) -> MeshHandlers<'s> {
         match self {
             Self::Dxbc(s) => MeshHandlers::Dxbc(s.io.mesh_output_handlers.as_slice()),
             Self::Dxil(s) => MeshHandlers::Dxil(s.io.mesh_output_handlers.as_slice()),
@@ -155,7 +181,7 @@ impl<'s> Stage<'s> {
     }
 
     /// The handlers' pass (`SignatureContext`).
-    fn record<'a>(
+    pub(super) fn record<'a>(
         self,
         desc: &mut FunctionSignatureDesc,
         options: &Options<'a>,
@@ -169,7 +195,7 @@ impl<'s> Stage<'s> {
     }
 
     /// The stage's bindings at the default slots.
-    fn bindings<'cx>(
+    pub(super) fn bindings<'cx>(
         self,
         desc: &mut FunctionSignatureDesc,
         m: &Module<'_>,
@@ -1085,19 +1111,19 @@ impl<'cx> MeshOutput<'_, 'cx> {
 }
 
 /// A stage's mesh output handlers, of its front end.
-enum MeshHandlers<'a> {
+pub(super) enum MeshHandlers<'a> {
     Dxbc(&'a [MeshOutputHandler]),
     Dxil(&'a [dxil::signature::MeshOutputHandler]),
 }
 
 /// A stage's replayed handlers, of its front end.
-enum StageReplay<'a> {
+pub(super) enum StageReplay<'a> {
     Dxbc(replay::Replay<'a>),
     Dxil(dxil::signature::Replay<'a>),
 }
 
 impl StageReplay<'_> {
-    fn prologue<'cx>(
+    pub(super) fn prologue<'cx>(
         &self,
         air: &AirBuilder<'_, 'cx>,
         function: Func<'cx>,
@@ -1109,7 +1135,7 @@ impl StageReplay<'_> {
         }
     }
 
-    fn epilogue<'cx>(
+    pub(super) fn epilogue<'cx>(
         &self,
         air: &AirBuilder<'_, 'cx>,
         res: &Resources<'cx>,
