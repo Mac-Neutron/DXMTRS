@@ -309,14 +309,12 @@ fn presented_event_tracks_undisplayed_run_and_signals_missing_drawable() {
 
 #[test]
 fn table_preserves_slot_83_and_wires_158_through_164() {
-    assert_eq!(crate::table::UNIX_CALL_FUNCS.len(), 168);
-    assert!(crate::table::UNIX_CALL_FUNCS[83].is_none());
-    for slot_idx in 158..=164 {
-        assert!(
-            crate::table::UNIX_CALL_FUNCS[slot_idx].is_some(),
-            "slot {slot_idx}"
-        );
-    }
+    let t = &crate::table::UNIX_CALL_FUNCS;
+    assert_eq!(t.len(), 168);
+    assert!(t[83].is_none());
+    assert!(t[157].is_none());
+    assert!(t[158..=164].iter().all(Option::is_some));
+    assert!(t[165..168].iter().all(Option::is_some));
 }
 
 #[test]

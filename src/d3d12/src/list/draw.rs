@@ -68,6 +68,33 @@ fn match_and_mark_discarded(
         .key
         .first_slice()
         .saturating_add(u32::from(slice_offset));
+    let array_size = att.key.array_size().max(1);
+    if array_size > 1 {
+        let slice_end = slice.saturating_add(array_size);
+        let covered = (0..array_size).all(|off| {
+            let target = slice.saturating_add(off);
+            discarded.iter().any(|entry| {
+                entry.tex_ptr == tex_ptr
+                    && (entry.all
+                        || (entry.mip == mip && entry.slice == target && entry.plane == plane))
+            })
+        });
+        if !covered {
+            return false;
+        }
+        for (idx, entry) in discarded.iter().enumerate() {
+            if entry.tex_ptr == tex_ptr
+                && (entry.all
+                    || (entry.mip == mip
+                        && entry.slice >= slice
+                        && entry.slice < slice_end
+                        && entry.plane == plane))
+            {
+                consumed[idx] = true;
+            }
+        }
+        return true;
+    }
     let mut matched = false;
     for (idx, entry) in discarded.iter().enumerate() {
         if entry.tex_ptr == tex_ptr
@@ -695,6 +722,9 @@ pub fn pre_draw_with_options(
     if pso_gfx.writes_uav {
         // SAFETY: `alloc.encoder_current` is the active `RenderEncoderData`.
         unsafe { (*alloc.encoder_current.cast::<RenderEncoderData>()).uav_writes = true };
+        list.discarded_resources.clear();
+        alloc.discard_tracking = false;
+        alloc.discard_purges.clear();
     }
     if geometry != list.bound_geometry || tessellation != list.bound_tessellation {
         list.bound_vb_slot_mask = u32::MAX;
@@ -977,6 +1007,9 @@ pub fn pre_dispatch_with_options(list: &mut List, skip_resource_binding: bool) -
     }
     // SAFETY: `list.allocator` is valid while recording.
     let alloc = unsafe { &mut *list.allocator };
+    list.discarded_resources.clear();
+    alloc.discard_tracking = false;
+    alloc.discard_purges.clear();
     let need_new_pass = if alloc.encoder_current.is_null() {
         true
     } else {

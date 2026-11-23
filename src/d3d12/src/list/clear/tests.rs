@@ -354,6 +354,8 @@ fn begin_and_end_render_pass_handle_discard_and_ro_dsv() {
     let list_after = unsafe { &*list_ptr };
     assert!(!list_after.render_pass_state.active);
     assert!(!list_after.inside_render_pass);
+    // SAFETY: `alloc_ptr` remains valid.
+    assert!(unsafe { &*alloc_ptr }.encoder_current.is_null());
 
     // SAFETY: `raw_list` is recording on `alloc`.
     assert_eq!(unsafe { close(raw_list) }, S_OK);
@@ -426,6 +428,107 @@ fn discard_resource_records_and_purges_on_clear() {
     let clear_color = [0.25_f32, 0.5, 0.75, 1.0];
     // SAFETY: `raw_list` and `clear_color.as_ptr()` are valid test pointers.
     unsafe { clear_render_target_view(raw_list, rtv_handle, clear_color.as_ptr(), 0, ptr::null()) };
+    // SAFETY: `list_ptr` is live for the test.
+    assert!(unsafe { &*list_ptr }.discarded_resources.is_empty());
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` and `raw_alloc` hold one refcount each.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `raw_alloc` holds one refcount.
+    unsafe { release_com::<Allocator>(raw_alloc.cast()) };
+}
+
+#[test]
+fn discard_resource_region_respects_subresource_bounds_and_open_pass() {
+    let (raw_alloc, alloc_ptr, raw_list, list_ptr) = new_recording_list();
+    let tex = make_test_texture(70, 1);
+    let tex_ptr = Arc::as_ptr(&tex).cast::<c_void>();
+    // 1 mip x 128 slices = 128 total subresources.
+    let mut res = make_test_texture_resource(Arc::clone(&tex), 128, 1);
+    let res_ptr: *mut c_void = (&raw mut *res).cast();
+
+    // Partial region (> 64 subresources, < total) must NOT widen to `all: true`.
+    let partial_large = DiscardRegion {
+        num_rects: 0,
+        rects: ptr::null(),
+        first_subresource: 0,
+        num_subresources: 65,
+    };
+    // SAFETY: `raw_list`, `res_ptr`, and `&partial_large` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, (&raw const partial_large).cast()) };
+    // SAFETY: `list_ptr` is live for the test.
+    assert!(unsafe { &*list_ptr }.discarded_resources.is_empty());
+    // SAFETY: `alloc_ptr` is valid while recording.
+    assert!(!unsafe { &*alloc_ptr }.discard_tracking);
+
+    // Non-zero `first_subresource` (> 64 subresources) also must NOT widen to `all: true`.
+    let offset_large = DiscardRegion {
+        num_rects: 0,
+        rects: ptr::null(),
+        first_subresource: 1,
+        num_subresources: 127,
+    };
+    // SAFETY: `raw_list`, `res_ptr`, and `&offset_large` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, (&raw const offset_large).cast()) };
+    // SAFETY: `list_ptr` is live for the test.
+    assert!(unsafe { &*list_ptr }.discarded_resources.is_empty());
+
+    // Planar format (D24_UNORM_S8_UINT = 45, 2 planes x 64 slices = 128 total) counts planes too.
+    let mut dsv_res = make_test_texture_resource(Arc::clone(&tex), 64, 1);
+    dsv_res.desc.format = 45;
+    let dsv_res_ptr: *mut c_void = (&raw mut *dsv_res).cast();
+    // SAFETY: `raw_list`, `dsv_res_ptr`, and `&partial_large` are valid test pointers.
+    unsafe { discard_resource(raw_list, dsv_res_ptr, (&raw const partial_large).cast()) };
+    // SAFETY: `list_ptr` is live for the test.
+    assert!(unsafe { &*list_ptr }.discarded_resources.is_empty());
+
+    // Full range (`first == 0 && count >= total`) sets `all: true`.
+    let full_large = DiscardRegion {
+        num_rects: 0,
+        rects: ptr::null(),
+        first_subresource: 0,
+        num_subresources: 128,
+    };
+    // SAFETY: `raw_list`, `res_ptr`, and `&full_large` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, (&raw const full_large).cast()) };
+    // SAFETY: `list_ptr` is live for the test.
+    let entries = &unsafe { &*list_ptr }.discarded_resources;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].tex_ptr, tex_ptr);
+    assert!(entries[0].all);
+
+    // Discarding a resource currently bound in an active open render pass must skip recording.
+    // SAFETY: `list_ptr` is mutable and exclusive to this test.
+    unsafe { &mut *list_ptr }.discarded_resources.clear();
+    let key = TextureViewDescriptor {
+        format: 70,
+        texture_type: WMT_TEXTURE_TYPE2D,
+        first_mip: 0,
+        mip_count: 1,
+        first_slice: 0,
+        array_size: 1,
+    }
+    .key();
+    // SAFETY: `alloc_ptr` is valid while recording.
+    let alloc = unsafe { &mut *alloc_ptr };
+    let r_ptr = alloc
+        .allocate_cpu_heap(
+            size_of::<RenderEncoderData>(),
+            align_of::<RenderEncoderData>(),
+        )
+        .cast::<c_void>()
+        .cast::<RenderEncoderData>();
+    assert!(!r_ptr.is_null());
+    let mut r_pass = List::empty_render_pass();
+    r_pass.base = EncoderData::new(EncoderType::Render, 0);
+    r_pass.colors[0].attachment = TextureViewRef::from_texture(&tex, key);
+    // SAFETY: `r_ptr` points to aligned writable CPU heap memory.
+    unsafe { ptr::write(r_ptr, r_pass) };
+    alloc.encoder_current = r_ptr.cast::<EncoderData>();
+
+    // SAFETY: `raw_list` and `res_ptr` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, ptr::null()) };
     // SAFETY: `list_ptr` is live for the test.
     assert!(unsafe { &*list_ptr }.discarded_resources.is_empty());
 

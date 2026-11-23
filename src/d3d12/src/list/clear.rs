@@ -16,7 +16,8 @@ use dxmt_core::{
 };
 use winemetal_wire::{
     WMT_LOAD_ACTION_DONT_CARE, WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_MULTISAMPLE_RESOLVE,
-    WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMTClearColor, WMTScissorRect, original_format,
+    WMT_STORE_ACTION_STORE, WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMT_TEXTURE_TYPE2D,
+    WMTClearColor, WMTScissorRect, original_format,
 };
 
 use crate::{
@@ -42,7 +43,25 @@ use crate::{
     encoder::{ClearEncoderData, EncoderData, EncoderType, RenderEncoderData, TextureViewRef},
     list::{DiscardedSubresource, List, PendingResolve, copy, state},
     resource::Resource,
+    resource_math::decompose_subresource,
 };
+
+fn render_encoder_binds_tex(render: &RenderEncoderData, tex_ptr: *const c_void) -> bool {
+    render.colors.iter().any(|c| {
+        c.attachment
+            .as_ref()
+            .is_some_and(|a| a.descriptor_ptr() == tex_ptr)
+    }) || render
+        .depth
+        .attachment
+        .as_ref()
+        .is_some_and(|a| a.descriptor_ptr() == tex_ptr)
+        || render
+            .stencil
+            .attachment
+            .as_ref()
+            .is_some_and(|a| a.descriptor_ptr() == tex_ptr)
+}
 
 fn purge_discarded(list: &mut List, tex_ptr: *const c_void) {
     if tex_ptr.is_null() || list.discarded_resources.is_empty() {
@@ -555,6 +574,24 @@ pub unsafe fn discard_resource(this: *mut c_void, resource: *mut c_void, region:
         return;
     };
     let tex_ptr = Arc::as_ptr(tex).cast::<c_void>();
+    if list.inside_render_pass && render_encoder_binds_tex(&list.render_pass, tex_ptr) {
+        return;
+    }
+    if !list.allocator.is_null() {
+        // SAFETY: `list.allocator` is valid while `list` is recording.
+        let enc = unsafe { (*list.allocator).encoder_current };
+        if !enc.is_null() {
+            // SAFETY: `enc` points to the active encoder node on `alloc`.
+            let kind = unsafe { (*enc).kind };
+            if kind == EncoderType::Render {
+                // SAFETY: `kind == EncoderType::Render` guarantees `RenderEncoderData`.
+                let render = unsafe { &*enc.cast::<RenderEncoderData>() };
+                if render_encoder_binds_tex(render, tex_ptr) {
+                    return;
+                }
+            }
+        }
+    }
     if region.is_null() {
         list.discarded_resources.push(DiscardedSubresource {
             tex_ptr,
@@ -569,22 +606,32 @@ pub unsafe fn discard_resource(this: *mut c_void, resource: *mut c_void, region:
         if reg.num_rects != 0 || reg.num_subresources == 0 {
             return;
         }
-        let mip_levels = u32::from(res.desc.mip_levels).max(1);
+        let mip_levels = if res.desc.mip_levels == 0 {
+            decompose_subresource(&res.desc, 0).mip_levels.max(1)
+        } else {
+            u32::from(res.desc.mip_levels)
+        };
         let array_size = if res.desc.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D {
             1
         } else {
             u32::from(res.desc.depth_or_array_size).max(1)
         };
+        let planes = u32::from(format::query_dxgi(res.desc.format).1.planar_count).max(1);
         let plane_stride = mip_levels.saturating_mul(array_size);
+        let total_subresources = plane_stride.saturating_mul(planes);
         let max_expand = 64_u32;
         if reg.num_subresources > max_expand {
-            list.discarded_resources.push(DiscardedSubresource {
-                tex_ptr,
-                mip: 0,
-                slice: 0,
-                plane: 0,
-                all: true,
-            });
+            if reg.first_subresource == 0 && reg.num_subresources >= total_subresources {
+                list.discarded_resources.push(DiscardedSubresource {
+                    tex_ptr,
+                    mip: 0,
+                    slice: 0,
+                    plane: 0,
+                    all: true,
+                });
+            } else {
+                return;
+            }
         } else {
             for i in 0..reg.num_subresources {
                 let sub = reg.first_subresource.saturating_add(i);
@@ -702,8 +749,8 @@ fn try_inline_resolve(
                 )
             } else {
                 let key = TextureViewDescriptor {
-                    format: fmt_desc.pixel_format,
-                    texture_type: dst_view.descriptor.info().r#type(),
+                    format: target_fmt,
+                    texture_type: WMT_TEXTURE_TYPE2D,
                     first_mip: dst_level,
                     mip_count: 1,
                     first_slice: dst_slice,
@@ -720,7 +767,8 @@ fn try_inline_resolve(
         color.resolve_level = resolve_level;
         color.resolve_slice = resolve_slice;
         color.resolve_depth_plane = 0;
-        color.store_action = if preserve {
+        let allow_discard = settings().flags.contains(Flags::DISCARD_LOAD_STORE);
+        color.store_action = if preserve || !allow_discard {
             WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE
         } else {
             WMT_STORE_ACTION_MULTISAMPLE_RESOLVE
@@ -742,11 +790,20 @@ fn apply_ro_dsv_render_pass_flags(list: &mut List, flags: u32) {
         return;
     }
     list.render_pass.dsv_readonly_flags |= extra_ro;
+    let allow_discard = settings().flags.contains(Flags::DISCARD_LOAD_STORE);
     if (extra_ro & 1) != 0 && list.render_pass.depth.attachment.is_some() {
-        list.render_pass.depth.store_action = WMT_STORE_ACTION_DONT_CARE;
+        list.render_pass.depth.store_action = if allow_discard {
+            WMT_STORE_ACTION_DONT_CARE
+        } else {
+            WMT_STORE_ACTION_STORE
+        };
     }
     if (extra_ro & 2) != 0 && list.render_pass.stencil.attachment.is_some() {
-        list.render_pass.stencil.store_action = WMT_STORE_ACTION_DONT_CARE;
+        list.render_pass.stencil.store_action = if allow_discard {
+            WMT_STORE_ACTION_DONT_CARE
+        } else {
+            WMT_STORE_ACTION_STORE
+        };
     }
     let ro = list.render_pass.dsv_readonly_flags;
     if (list.render_pass.dsv_planar_flags & !ro) == 0
@@ -991,6 +1048,7 @@ pub unsafe fn end_render_pass(this: *mut c_void) {
             alloc.writes(tex_ptr);
             alloc.keep_texture(tex);
         }
+        alloc.invalidate_current_pass();
     }
 
     list.inside_render_pass = false;

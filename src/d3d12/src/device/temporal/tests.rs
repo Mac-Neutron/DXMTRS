@@ -1,13 +1,17 @@
 use core::{ffi::c_void, ptr};
 
 use dxmt_util::dxgi_consts::{
-    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_UINT, DXGI_FORMAT_UNKNOWN,
+    DXGI_FORMAT_R8_TYPELESS, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UNORM,
+    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+    DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_UNKNOWN,
 };
 use winemetal_wire::WMT_PIXEL_FORMAT_INVALID;
 
 use super::{
+    DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R32G32_TYPELESS, colour_pixel_format,
     create_temporal_denoised_scaler, denoised_info_eq, optional_colour_pixel_format,
-    supports_temporal_denoised_scaler, zeroed_denoised_desc, zeroed_denoised_info,
+    supports_temporal_denoised_scaler, typed_dxgi_format, zeroed_denoised_desc,
+    zeroed_denoised_info,
 };
 use crate::{
     com::{DXGI_ERROR_UNSUPPORTED, E_INVALIDARG, release_com},
@@ -65,4 +69,45 @@ fn optional_colour_format_and_info_eq_behave_as_expected() {
     assert!(denoised_info_eq(&a, &b));
     b.transparency_overlay_enabled = 1;
     assert!(!denoised_info_eq(&a, &b));
+}
+
+#[test]
+fn typed_dxgi_format_resolves_scalar_and_two_channel_typeless() {
+    assert_eq!(
+        typed_dxgi_format(DXGI_FORMAT_R8_TYPELESS),
+        DXGI_FORMAT_R8_UNORM
+    );
+    assert_eq!(
+        typed_dxgi_format(DXGI_FORMAT_R16_TYPELESS),
+        DXGI_FORMAT_R16_UNORM
+    );
+    assert_eq!(
+        typed_dxgi_format(DXGI_FORMAT_R32_TYPELESS),
+        DXGI_FORMAT_R32_FLOAT
+    );
+    assert_eq!(
+        typed_dxgi_format(DXGI_FORMAT_R16G16_TYPELESS),
+        DXGI_FORMAT_R16G16_FLOAT
+    );
+    assert_eq!(
+        typed_dxgi_format(DXGI_FORMAT_R32G32_TYPELESS),
+        DXGI_FORMAT_R32G32_FLOAT
+    );
+
+    for fmt in [
+        DXGI_FORMAT_R8_TYPELESS,
+        DXGI_FORMAT_R16_TYPELESS,
+        DXGI_FORMAT_R32_TYPELESS,
+        DXGI_FORMAT_R16G16_TYPELESS,
+        DXGI_FORMAT_R32G32_TYPELESS,
+    ] {
+        assert_ne!(
+            colour_pixel_format(typed_dxgi_format(fmt)),
+            WMT_PIXEL_FORMAT_INVALID
+        );
+    }
+    assert!(matches!(
+        optional_colour_pixel_format(1, DXGI_FORMAT_R8_TYPELESS),
+        Some((1, fmt)) if fmt != WMT_PIXEL_FORMAT_INVALID
+    ));
 }

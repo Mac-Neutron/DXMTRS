@@ -86,8 +86,9 @@ use crate::{
     device::Device,
     encoder::{
         BlitEncoderData, ClearEncoderData, ComputeEncoderData, EncoderData, EncoderType,
-        RenderEncoderData, ResolveEncoderData, TemporalDenoisedUpscaleEncoderData,
-        TemporalUpscaleEncoderData, TextureViewRef, TimestampResolve,
+        FrameGenUiEncoderData, RenderEncoderData, ResolveEncoderData,
+        TemporalDenoisedUpscaleEncoderData, TemporalUpscaleEncoderData, TextureViewRef,
+        TimestampResolve,
     },
     fence::{self, FenceObject},
     list::{self, List},
@@ -799,15 +800,16 @@ impl Queue {
                     current = cur_ref.next;
                     continue;
                 }
-                let mut strict =
-                    serial || (cur_ref.kind != EncoderType::Null && commit.timestamps.pending_join);
-                if cur_ref.kind != EncoderType::Null {
+                let is_meta =
+                    cur_ref.kind == EncoderType::Null || cur_ref.kind == EncoderType::FrameGenUi;
+                let mut strict = serial || (!is_meta && commit.timestamps.pending_join);
+                if !is_meta {
                     commit.timestamps.pending_join = false;
                 }
                 let mut pass = 0u32;
                 if crate::stats::on() {
                     #[cfg(not(feature = "perf-build"))]
-                    static IDS: std::sync::LazyLock<[crate::stats::StatId; 10]> =
+                    static IDS: std::sync::LazyLock<[crate::stats::StatId; 11]> =
                         std::sync::LazyLock::new(|| {
                             [
                                 crate::stats::id("#null encoders"),
@@ -818,6 +820,7 @@ impl Queue {
                                 crate::stats::id("#resolve passes"),
                                 crate::stats::id("#temporal upscale passes"),
                                 crate::stats::id("#temporal denoised upscale passes"),
+                                crate::stats::id("#framegen ui records"),
                                 crate::stats::id("#encoder boundaries"),
                                 crate::stats::id("#encoder boundaries with no barrier"),
                             ]
@@ -834,18 +837,19 @@ impl Queue {
                             EncoderType::Resolve => 5,
                             EncoderType::TemporalUpscale => 6,
                             EncoderType::TemporalDenoisedScale => 7,
+                            EncoderType::FrameGenUi => 8,
                         };
                         crate::stats::count_id(IDS[kind_idx], 1);
                     }
-                    if cur_ref.kind != EncoderType::Null {
+                    if !is_meta {
                         if !previous.is_null() {
                             #[cfg(not(feature = "perf-build"))]
-                            crate::stats::count_id(IDS[8], 1);
+                            crate::stats::count_id(IDS[9], 1);
                             // SAFETY: `previous` points to an earlier valid encoder in `sub`.
                             let prev_barriers = unsafe { (*previous).barriers };
                             if cur_ref.barriers == prev_barriers {
                                 #[cfg(not(feature = "perf-build"))]
-                                crate::stats::count_id(IDS[9], 1);
+                                crate::stats::count_id(IDS[10], 1);
                             }
                         }
                         previous = current;
@@ -853,6 +857,30 @@ impl Queue {
                 }
                 match cur_ref.kind {
                     EncoderType::Null => {}
+                    EncoderType::FrameGenUi => {
+                        if framegen::mode() != framegen::Mode::Off {
+                            // SAFETY: `cur_ref.kind == EncoderType::FrameGenUi` guarantees
+                            // `FrameGenUiEncoderData`.
+                            let data = unsafe { &*current.cast::<FrameGenUiEncoderData>() };
+                            let tex_handle =
+                                data.ui_texture.as_ref().map_or(0, TextureViewRef::texture);
+                            // SAFETY: `tex_handle` is 0 or a live `MTLTexture` handle owned by
+                            // `data.ui_texture`.
+                            let ui_obj = unsafe { Obj::retain(tex_handle) };
+                            let ui_tex = ui_obj
+                                .as_ref()
+                                .filter(|_| data.ui_format != 0)
+                                .map(|obj| (obj, data.ui_format));
+                            framegen::record_frame_gen_ui(
+                                ui_tex,
+                                (data.ui_width, data.ui_height),
+                                &data.ui,
+                            );
+                            if let Some(cam) = &data.camera {
+                                framegen::set_camera_params(cam);
+                            }
+                        }
+                    }
                     EncoderType::Clear => {
                         crate::scope!("queue.(encode clear)");
                         let data = current.cast::<ClearEncoderData>();
@@ -1576,7 +1604,7 @@ impl Queue {
                         // SAFETY: `begin` is ended once.
                         unsafe { MTLCommandEncoder_endEncoding(begin) };
 
-                        let (scaler_opt, depth_tex, motion_tex, fg_props) = if is_denoised {
+                        let (scaler_opt, depth_tex, motion_tex, fg_props, camera) = if is_denoised {
                             // SAFETY: `cur_ref.kind == EncoderType::TemporalDenoisedScale`
                             // guarantees `TemporalDenoisedUpscaleEncoderData`.
                             let data =
@@ -1658,7 +1686,13 @@ impl Queue {
                                 output_offset_x: 0,
                                 output_offset_y: 0,
                             };
-                            (data.scaler.as_deref(), depth_tex, motion_tex, fg_props)
+                            (
+                                data.scaler.as_deref(),
+                                depth_tex,
+                                motion_tex,
+                                fg_props,
+                                &data.camera,
+                            )
                         } else {
                             // SAFETY: `cur_ref.kind == EncoderType::TemporalUpscale` guarantees
                             // `TemporalUpscaleEncoderData`.
@@ -1688,9 +1722,18 @@ impl Queue {
                                     reactive_tex,
                                 );
                             }
-                            (data.scaler.as_deref(), depth_tex, motion_tex, data.props)
+                            (
+                                data.scaler.as_deref(),
+                                depth_tex,
+                                motion_tex,
+                                data.props,
+                                &data.camera,
+                            )
                         };
                         if framegen::mode() != framegen::Mode::Off {
+                            if camera.is_nonzero() {
+                                framegen::set_camera_params(camera);
+                            }
                             // SAFETY: `depth_tex` is 0 or a live `MTLTexture` handle.
                             let depth_obj = unsafe { Obj::retain(depth_tex) };
                             // SAFETY: `motion_tex` is 0 or a live `MTLTexture` handle.

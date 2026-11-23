@@ -132,8 +132,6 @@ pub const PARAM_DLSSG_MIN_DRIVER_MAJOR: &core::ffi::CStr = c"FrameGeneration.Min
 /// `NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMinor`.
 pub const PARAM_DLSSG_MIN_DRIVER_MINOR: &core::ffi::CStr = c"FrameGeneration.MinDriverVersionMinor";
 
-/// `DLSSG.HUDLess`.
-pub const PARAM_DLSSG_HUDLESS: &core::ffi::CStr = c"DLSSG.HUDLess";
 /// `DLSSG.UI`.
 pub const PARAM_DLSSG_UI: &core::ffi::CStr = c"DLSSG.UI";
 /// `DLSSG.UIColorAndAlpha`.

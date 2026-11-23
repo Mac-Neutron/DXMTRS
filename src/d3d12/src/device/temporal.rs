@@ -15,10 +15,12 @@ use dxmt_core::{
 use dxmt_util::{
     com::ComObject,
     dxgi_consts::{
-        DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS,
-        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS,
-        DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
-        DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT,
+        DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_TYPELESS,
+        DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16_TYPELESS,
+        DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_TYPELESS,
+        DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
         DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_UNKNOWN,
     },
     float_cast::u32_to_f32,
@@ -457,6 +459,9 @@ const fn info_eq(a: &WMTFXTemporalScalerInfo, b: &WMTFXTemporalScalerInfo) -> bo
         && a.jittered_motion_vectors == b.jittered_motion_vectors
 }
 
+const DXGI_FORMAT_R32G32_TYPELESS: u32 = 15;
+const DXGI_FORMAT_R16G16_TYPELESS: u32 = 33;
+
 const fn typed_dxgi_format(format: u32) -> u32 {
     match format {
         DXGI_FORMAT_R16G16B16A16_TYPELESS => DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -464,6 +469,11 @@ const fn typed_dxgi_format(format: u32) -> u32 {
         DXGI_FORMAT_R10G10B10A2_TYPELESS => DXGI_FORMAT_R10G10B10A2_UNORM,
         DXGI_FORMAT_R8G8B8A8_TYPELESS => DXGI_FORMAT_R8G8B8A8_UNORM,
         DXGI_FORMAT_B8G8R8A8_TYPELESS => DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_R32G32_TYPELESS => DXGI_FORMAT_R32G32_FLOAT,
+        DXGI_FORMAT_R16G16_TYPELESS => DXGI_FORMAT_R16G16_FLOAT,
+        DXGI_FORMAT_R32_TYPELESS => DXGI_FORMAT_R32_FLOAT,
+        DXGI_FORMAT_R16_TYPELESS => DXGI_FORMAT_R16_UNORM,
+        DXGI_FORMAT_R8_TYPELESS => DXGI_FORMAT_R8_UNORM,
         other => other,
     }
 }
@@ -554,7 +564,7 @@ pub unsafe fn create_temporal_scaler(
     let output_format = colour_pixel_format(typed_dxgi_format(d.output_format));
     let reactive_mask_enabled = u8::from(d.reactive_mask_format != DXGI_FORMAT_UNKNOWN);
     let reactive_mask_format = if reactive_mask_enabled != 0 {
-        colour_pixel_format(d.reactive_mask_format)
+        colour_pixel_format(typed_dxgi_format(d.reactive_mask_format))
     } else {
         WMT_PIXEL_FORMAT_INVALID
     };

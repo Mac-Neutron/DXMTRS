@@ -7,7 +7,10 @@ use core::ptr::{from_ref, null};
 use std::{
     collections::VecDeque,
     io::Write as _,
-    sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock, PoisonError},
+    sync::{
+        Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -221,6 +224,15 @@ impl CameraParams {
         field_of_view: 0.0,
         aspect_ratio: 0.0,
     };
+
+    /// Returns `true` when any camera parameter is non-zero.
+    #[must_use]
+    pub const fn is_nonzero(&self) -> bool {
+        self.near_plane != 0.0
+            || self.far_plane != 0.0
+            || self.field_of_view != 0.0
+            || self.aspect_ratio != 0.0
+    }
 }
 
 struct RecordedScaler {
@@ -295,6 +307,8 @@ struct Slot {
     camera: CameraParams,
     ui_texture: Option<Obj>,
     ui_format: u32,
+    ui_width: u32,
+    ui_height: u32,
     ui: FrameGenUi,
     fresh: bool,
 }
@@ -307,6 +321,8 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
     camera: CameraParams::ZERO,
     ui_texture: None,
     ui_format: 0,
+    ui_width: 0,
+    ui_height: 0,
     ui: FrameGenUi::ZERO,
     fresh: false,
 });
@@ -325,16 +341,20 @@ pub fn set_camera_params(camera: &CameraParams) {
 /// Updates the optional UI texture, content layout, and camera matrices on the slot.
 ///
 /// Passing `None` (or a zero format) clears the UI texture while still forwarding `ui`.
-pub fn record_frame_gen_ui(ui_texture: Option<(&Obj, u32)>, ui: &FrameGenUi) {
+pub fn record_frame_gen_ui(ui_texture: Option<(&Obj, u32)>, ui_dims: (u32, u32), ui: &FrameGenUi) {
     let mut slot = lock(&SLOT);
     match ui_texture {
         Some((tex, fmt)) if fmt != 0 => {
             slot.ui_texture = Some(retain(tex));
             slot.ui_format = fmt;
+            slot.ui_width = ui_dims.0;
+            slot.ui_height = ui_dims.1;
         }
         _ => {
             slot.ui_texture = None;
             slot.ui_format = 0;
+            slot.ui_width = 0;
+            slot.ui_height = 0;
         }
     }
     slot.ui = FrameGenUi {
@@ -379,6 +399,8 @@ struct SlotSnapshot {
     camera: CameraParams,
     ui_texture: Option<Obj>,
     ui_format: u32,
+    ui_width: u32,
+    ui_height: u32,
     ui: FrameGenUi,
 }
 
@@ -386,6 +408,14 @@ fn take_slot() -> SlotSnapshot {
     let mut slot = lock(&SLOT);
     let fresh = slot.fresh;
     slot.fresh = false;
+    let ui_texture = slot.ui_texture.take();
+    let ui_format = slot.ui_format;
+    let ui_width = slot.ui_width;
+    let ui_height = slot.ui_height;
+    slot.ui_format = 0;
+    slot.ui_width = 0;
+    slot.ui_height = 0;
+    let ui = core::mem::replace(&mut slot.ui, FrameGenUi::ZERO);
     SlotSnapshot {
         fresh,
         scaler: slot.scaler.clone(),
@@ -398,19 +428,11 @@ fn take_slot() -> SlotSnapshot {
             field_of_view: slot.camera.field_of_view,
             aspect_ratio: slot.camera.aspect_ratio,
         },
-        ui_texture: slot.ui_texture.as_ref().map(retain),
-        ui_format: slot.ui_format,
-        ui: FrameGenUi {
-            ui_composited: slot.ui.ui_composited,
-            content_width: slot.ui.content_width,
-            content_height: slot.ui.content_height,
-            depth_offset: slot.ui.depth_offset,
-            motion_offset: slot.ui.motion_offset,
-            output_offset: slot.ui.output_offset,
-            has_matrices: slot.ui.has_matrices,
-            world_to_view_matrix: slot.ui.world_to_view_matrix,
-            view_to_clip_matrix: slot.ui.view_to_clip_matrix,
-        },
+        ui_texture,
+        ui_format,
+        ui_width,
+        ui_height,
+        ui,
     }
 }
 
@@ -977,12 +999,6 @@ impl FrameGen {
         let motion = recorded.motion;
         let props = recorded.props;
         let camera = recorded.camera;
-        let ui_texture = recorded.ui_texture;
-        let ui_format = if ui_texture.is_some() {
-            recorded.ui_format
-        } else {
-            0
-        };
         let ui = recorded.ui;
         if self.failed {
             return false;
@@ -1027,6 +1043,15 @@ impl FrameGen {
                 backend.spawn_pacer(self);
             }
         }
+        let (mut ui_texture, ui_format) = if recorded.ui_texture.is_some()
+            && recorded.ui_format != 0
+            && u64::from(recorded.ui_width) == self.width
+            && u64::from(recorded.ui_height) == self.height
+        {
+            (recorded.ui_texture, recorded.ui_format)
+        } else {
+            (None, 0)
+        };
         let generate = fresh
             && self.has_prev
             && props.reset == 0
@@ -1044,7 +1069,7 @@ impl FrameGen {
             let motion_tex = motion.as_ref().expect("checked in generate");
             let (_, _, depth_fmt) = backend.texture_size_format(depth_tex);
             let (_, _, motion_fmt) = backend.texture_size_format(motion_tex);
-            let info = WMTFXFrameInterpolatorInfo {
+            let mut info = WMTFXFrameInterpolatorInfo {
                 color_format: self.format,
                 output_format: self.format,
                 depth_format: depth_fmt,
@@ -1059,7 +1084,25 @@ impl FrameGen {
             };
             if self.interpolator.is_none() || !same_interpolator_info(&info, &self.info) {
                 scope!("queue.(frame generation: make the interpolator)");
-                self.interpolator = backend.new_frame_interpolator(args.device, &info);
+                let mut made = backend.new_frame_interpolator(args.device, &info);
+                if made.is_none() && info.ui_format != 0 {
+                    static UI_FORMAT_WARNED: AtomicBool = AtomicBool::new(false);
+                    if !UI_FORMAT_WARNED.swap(true, Ordering::Relaxed) {
+                        log_stderr(&format!(
+                            "macneutron-framegen: MetalFX rejected UI format {}: retrying without \
+                             UI texture",
+                            info.ui_format,
+                        ));
+                    }
+                    info.ui_format = 0;
+                    ui_texture = None;
+                    if self.interpolator.is_some() && same_interpolator_info(&info, &self.info) {
+                        made = self.interpolator.take();
+                    } else {
+                        made = backend.new_frame_interpolator(args.device, &info);
+                    }
+                }
+                self.interpolator = made;
                 self.info = info;
                 if self.interpolator.is_none() {
                     log_stderr(&format!(

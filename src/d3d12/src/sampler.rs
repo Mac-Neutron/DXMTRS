@@ -16,8 +16,10 @@ use winemetal_wire::{
 };
 
 use crate::abi::sampler::{
-    STATIC_BORDER_COLOR_OPAQUE_BLACK, STATIC_BORDER_COLOR_TRANSPARENT_BLACK, SamplerDesc,
-    StaticSamplerDesc, decode_is_comparison_filter,
+    STATIC_BORDER_COLOR_OPAQUE_BLACK, STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT,
+    STATIC_BORDER_COLOR_OPAQUE_WHITE, STATIC_BORDER_COLOR_OPAQUE_WHITE_UINT,
+    STATIC_BORDER_COLOR_TRANSPARENT_BLACK, SamplerDesc, StaticSamplerDesc,
+    decode_is_comparison_filter,
 };
 
 /// Fills `info` from a root signature's static sampler.
@@ -41,7 +43,12 @@ pub fn populate_static_sampler_info(
     populate(info, &common, warn);
     info.border_color = match desc.border_color {
         STATIC_BORDER_COLOR_TRANSPARENT_BLACK => WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK,
-        STATIC_BORDER_COLOR_OPAQUE_BLACK => WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK,
+        STATIC_BORDER_COLOR_OPAQUE_BLACK | STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT => {
+            WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK
+        }
+        STATIC_BORDER_COLOR_OPAQUE_WHITE | STATIC_BORDER_COLOR_OPAQUE_WHITE_UINT => {
+            WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE
+        }
         _ => WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE,
     };
 }

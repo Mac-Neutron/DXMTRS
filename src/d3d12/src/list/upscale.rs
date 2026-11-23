@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use dxmt_core::{
     format::{self, MtlDxgiFormatDesc},
-    presenter::framegen::{self, CameraParams, FrameGenUi},
+    presenter::framegen::{CameraParams, FrameGenUi},
     resource::{Texture, TextureAllocationFlags, TextureViewKey},
 };
 use dxmt_util::{
@@ -23,7 +23,6 @@ use dxmt_util::{
         DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32G32B32A32_TYPELESS,
     },
 };
-use winemetal_sys::Obj;
 use winemetal_wire::{
     WMT_PIXEL_FORMAT_INVALID, WMT_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED,
     WMT_RESOURCE_STORAGE_MODE_PRIVATE, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_USAGE_PIXEL_FORMAT_VIEW,
@@ -41,8 +40,8 @@ use crate::{
         temporal::{DenoisedScratch, Scratch, TemporalScalerObject, cast_temporal_scaler},
     },
     encoder::{
-        EncoderData, EncoderType, TemporalDenoisedUpscaleEncoderData, TemporalUpscaleEncoderData,
-        TextureViewRef,
+        EncoderData, EncoderType, FrameGenUiEncoderData, TemporalDenoisedUpscaleEncoderData,
+        TemporalUpscaleEncoderData, TextureViewRef,
     },
     list::{List, copy},
     resource::Resource,
@@ -184,7 +183,7 @@ fn allocate_reactive_scratch(
     Some(scratch)
 }
 
-fn read_camera_params(list: &List) -> CameraParams {
+fn read_camera_params(list: &List) -> Option<CameraParams> {
     #[repr(C)]
     struct RawCamera {
         near_plane: f32,
@@ -206,14 +205,15 @@ fn read_camera_params(list: &List) -> CameraParams {
             .get_data(DLSSG_CAMERA_GUID, &raw mut size, (&raw mut raw).cast())
     };
     if hr >= 0 && size == expected {
-        CameraParams {
+        let cam = CameraParams {
             near_plane: raw.near_plane,
             far_plane: raw.far_plane,
             field_of_view: raw.field_of_view,
             aspect_ratio: raw.aspect_ratio,
-        }
+        };
+        cam.is_nonzero().then_some(cam)
     } else {
-        CameraParams::ZERO
+        None
     }
 }
 
@@ -356,6 +356,58 @@ pub unsafe fn temporal_upscale(
         return E_INVALIDARG;
     }
 
+    let reactive_scratch = if let Some(ref m) = mask
+        && !can_view_directly(m, info.reactive_mask_format)
+    {
+        if format::texel_size(m.info().pixel_format)
+            != format::texel_size(info.reactive_mask_format)
+        {
+            return E_INVALIDARG;
+        }
+        let Some(scratch) = allocate_reactive_scratch(
+            list.device,
+            sd.input_width,
+            sd.input_height,
+            info.reactive_mask_format,
+        ) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    } else {
+        None
+    };
+
+    let depth_scratch = if readable(&depth, info.depth_format) {
+        None
+    } else {
+        let Some(scratch) = scaler.get_scratch(Scratch::Depth) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    };
+    let motion_scratch = if readable(&motion, info.motion_format) {
+        None
+    } else {
+        let Some(scratch) = scaler.get_scratch(Scratch::Motion) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    };
+
+    let output_private = output
+        .current()
+        .is_some_and(|a| a.flags().contains(TextureAllocationFlags::GPU_PRIVATE));
+    let output_scratch =
+        if (output.info().usage() & WRITABLE_USAGE) != WRITABLE_USAGE || !output_private {
+            let Some(scratch) = scaler.get_scratch(Scratch::Output) else {
+                return E_INVALIDARG;
+            };
+            Some(scratch)
+        } else {
+            None
+        };
+
+    let camera = read_camera_params(list).unwrap_or(CameraParams::ZERO);
     let mut props = WMTFXTemporalScalerProps {
         input_content_width: d.input_content_width,
         input_content_height: d.input_content_height,
@@ -378,47 +430,15 @@ pub unsafe fn temporal_upscale(
         output_offset_y: d.output_offset[1],
     };
 
-    let reactive_scratch = if let Some(ref m) = mask
-        && !can_view_directly(m, info.reactive_mask_format)
-    {
-        if format::texel_size(m.info().pixel_format)
-            != format::texel_size(info.reactive_mask_format)
-        {
-            return E_INVALIDARG;
-        }
-        let Some(scratch) = allocate_reactive_scratch(
-            list.device,
-            sd.input_width,
-            sd.input_height,
-            info.reactive_mask_format,
-        ) else {
-            return E_INVALIDARG;
-        };
-        Some(scratch)
-    } else {
-        None
-    };
-
-    framegen::set_camera_params(&read_camera_params(list));
-
-    let mut depth_scratch: Option<Arc<Texture>> = None;
-    let mut motion_scratch: Option<Arc<Texture>> = None;
-    let mut output_scratch: Option<Arc<Texture>> = None;
-
     // SAFETY: `list.allocator` was checked non-null above.
     let alloc = unsafe { &mut *list.allocator };
 
-    if !readable(&depth, info.depth_format)
-        || !readable(&motion, info.motion_format)
-        || reactive_scratch.is_some()
-    {
+    if depth_scratch.is_some() || motion_scratch.is_some() || reactive_scratch.is_some() {
         crate::count!("#upscale input copied", 1);
         alloc.invalidate_current_pass();
         copy::pre_blit(alloc, ptr::null(), false);
-        if !readable(&depth, info.depth_format)
-            && let Some(scratch) = scaler.get_scratch(Scratch::Depth)
-        {
-            alloc.writes(Arc::as_ptr(&scratch).cast::<c_void>());
+        if let Some(ref scratch) = depth_scratch {
+            alloc.writes(Arc::as_ptr(scratch).cast::<c_void>());
             let src_fmt = as_format_desc(depth.info().pixel_format, 4);
             let dst_fmt = as_format_desc(info.depth_format, 4);
             copy::copy_reinterpret(
@@ -440,7 +460,7 @@ pub unsafe fn temporal_upscale(
                     depth: 1,
                 },
                 &copy::CopyReinterpretSide {
-                    texture: &scratch,
+                    texture: scratch,
                     format: &dst_fmt,
                     level: 0,
                     slice: 0,
@@ -449,13 +469,10 @@ pub unsafe fn temporal_upscale(
             );
             props.depth_content_offset_x = 0;
             props.depth_content_offset_y = 0;
-            depth = Arc::clone(&scratch);
-            depth_scratch = Some(scratch);
+            depth = Arc::clone(scratch);
         }
-        if !readable(&motion, info.motion_format)
-            && let Some(scratch) = scaler.get_scratch(Scratch::Motion)
-        {
-            alloc.writes(Arc::as_ptr(&scratch).cast::<c_void>());
+        if let Some(ref scratch) = motion_scratch {
+            alloc.writes(Arc::as_ptr(scratch).cast::<c_void>());
             let src_fmt = as_format_desc(
                 motion.info().pixel_format,
                 format::texel_size(motion.info().pixel_format),
@@ -481,7 +498,7 @@ pub unsafe fn temporal_upscale(
                     depth: 1,
                 },
                 &copy::CopyReinterpretSide {
-                    texture: &scratch,
+                    texture: scratch,
                     format: &dst_fmt,
                     level: 0,
                     slice: 0,
@@ -490,8 +507,7 @@ pub unsafe fn temporal_upscale(
             );
             props.motion_content_offset_x = 0;
             props.motion_content_offset_y = 0;
-            motion = Arc::clone(&scratch);
-            motion_scratch = Some(scratch);
+            motion = Arc::clone(scratch);
         }
         if let Some(scratch) = reactive_scratch
             && let Some(ref m) = mask
@@ -538,19 +554,15 @@ pub unsafe fn temporal_upscale(
         }
     }
 
-    let mut target = Arc::clone(&output);
-    let output_private = output
-        .current()
-        .is_some_and(|a| a.flags().contains(TextureAllocationFlags::GPU_PRIVATE));
-    if (output.info().usage() & WRITABLE_USAGE) != WRITABLE_USAGE || !output_private {
-        crate::count!("#upscale output copied", 1);
-        if let Some(scratch) = scaler.get_scratch(Scratch::Output) {
+    let target = output_scratch.as_ref().map_or_else(
+        || Arc::clone(&output),
+        |scratch| {
+            crate::count!("#upscale output copied", 1);
             props.output_offset_x = 0;
             props.output_offset_y = 0;
-            target = Arc::clone(&scratch);
-            output_scratch = Some(scratch);
-        }
-    }
+            Arc::clone(scratch)
+        },
+    );
 
     alloc.invalidate_current_pass();
     let barriers = alloc.barriers;
@@ -587,6 +599,7 @@ pub unsafe fn temporal_upscale(
         motion_scratch,
         output_scratch: output_scratch.clone(),
         props,
+        camera,
     };
     // SAFETY: `ptr` points to freshly allocated aligned CPU heap storage for
     // `TemporalUpscaleEncoderData`.
@@ -677,14 +690,11 @@ fn copy_input_scratch(
     );
 }
 
-fn prepare_denoised_channel(
-    alloc: &mut Allocator,
-    pre_blitted: &mut bool,
+fn alloc_denoised_scratch(
     scaler: &TemporalScalerObject,
     channel: DenoisedScratch,
-    tex: &mut Arc<Texture>,
+    tex: &Texture,
     target_format: u32,
-    dims: (u32, u32),
 ) -> Result<Option<Arc<Texture>>, Hresult> {
     if can_view_directly(tex, target_format) {
         return Ok(None);
@@ -692,20 +702,33 @@ fn prepare_denoised_channel(
     if format::texel_size(tex.info().pixel_format) != format::texel_size(target_format) {
         return Err(E_INVALIDARG);
     }
-    let Some(scratch) = scaler.get_denoised_scratch(channel, target_format) else {
-        return Err(E_INVALIDARG);
+    scaler
+        .get_denoised_scratch(channel, target_format)
+        .map(Some)
+        .ok_or(E_INVALIDARG)
+}
+
+fn emit_denoised_copy(
+    alloc: &mut Allocator,
+    pre_blitted: &mut bool,
+    scratch: Option<&Arc<Texture>>,
+    tex: &mut Arc<Texture>,
+    target_format: u32,
+    dims: (u32, u32),
+) {
+    let Some(scratch) = scratch else {
+        return;
     };
     copy_input_scratch(
         alloc,
         pre_blitted,
         tex,
-        &scratch,
+        scratch,
         target_format,
         dims.0,
         dims.1,
     );
-    *tex = Arc::clone(&scratch);
-    Ok(Some(scratch))
+    *tex = Arc::clone(scratch);
 }
 
 fn take_optional_denoised(
@@ -877,6 +900,120 @@ pub unsafe fn temporal_denoised_upscale(
         return E_INVALIDARG;
     };
 
+    let depth_scratch = if readable(&depth, info.depth_format) {
+        None
+    } else {
+        let Some(scratch) = scaler.get_scratch(Scratch::Depth) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    };
+    let motion_scratch = if readable(&motion, info.motion_format) {
+        None
+    } else {
+        let Some(scratch) = scaler.get_scratch(Scratch::Motion) else {
+            return E_INVALIDARG;
+        };
+        Some(scratch)
+    };
+
+    let Ok(diffuse_albedo_scratch) = alloc_denoised_scratch(
+        scaler,
+        DenoisedScratch::DiffuseAlbedo,
+        &diffuse_albedo,
+        info.diffuse_albedo_format,
+    ) else {
+        return E_INVALIDARG;
+    };
+    let Ok(specular_albedo_scratch) = alloc_denoised_scratch(
+        scaler,
+        DenoisedScratch::SpecularAlbedo,
+        &specular_albedo,
+        info.specular_albedo_format,
+    ) else {
+        return E_INVALIDARG;
+    };
+    let Ok(normal_scratch) =
+        alloc_denoised_scratch(scaler, DenoisedScratch::Normal, &normal, info.normal_format)
+    else {
+        return E_INVALIDARG;
+    };
+    let Ok(roughness_scratch) = alloc_denoised_scratch(
+        scaler,
+        DenoisedScratch::Roughness,
+        &roughness,
+        info.roughness_format,
+    ) else {
+        return E_INVALIDARG;
+    };
+
+    let specular_hit_distance_scratch = if let Some(ref tex) = specular_hit_distance {
+        match alloc_denoised_scratch(
+            scaler,
+            DenoisedScratch::SpecularHitDistance,
+            tex,
+            info.specular_hit_distance_format,
+        ) {
+            Ok(s) => s,
+            Err(hr) => return hr,
+        }
+    } else {
+        None
+    };
+    let denoise_strength_mask_scratch = if let Some(ref tex) = denoise_strength_mask {
+        match alloc_denoised_scratch(
+            scaler,
+            DenoisedScratch::DenoiseStrengthMask,
+            tex,
+            info.denoise_strength_mask_format,
+        ) {
+            Ok(s) => s,
+            Err(hr) => return hr,
+        }
+    } else {
+        None
+    };
+    let transparency_overlay_scratch = if let Some(ref tex) = transparency_overlay {
+        match alloc_denoised_scratch(
+            scaler,
+            DenoisedScratch::TransparencyOverlay,
+            tex,
+            info.transparency_overlay_format,
+        ) {
+            Ok(s) => s,
+            Err(hr) => return hr,
+        }
+    } else {
+        None
+    };
+    let reactive_scratch = if let Some(ref tex) = mask {
+        match alloc_denoised_scratch(
+            scaler,
+            DenoisedScratch::ReactiveMask,
+            tex,
+            info.reactive_mask_format,
+        ) {
+            Ok(s) => s,
+            Err(hr) => return hr,
+        }
+    } else {
+        None
+    };
+
+    let output_private = output
+        .current()
+        .is_some_and(|a| a.flags().contains(TextureAllocationFlags::GPU_PRIVATE));
+    let output_scratch =
+        if (output.info().usage() & WRITABLE_USAGE) != WRITABLE_USAGE || !output_private {
+            let Some(scratch) = scaler.get_scratch(Scratch::Output) else {
+                return E_INVALIDARG;
+            };
+            Some(scratch)
+        } else {
+            None
+        };
+
+    let camera = read_camera_params(list).unwrap_or(CameraParams::ZERO);
     let props = WMTFXTemporalDenoisedScalerProps {
         pre_exposure: d.pre_exposure,
         jitter_offset_x: d.jitter_offset[0],
@@ -893,167 +1030,106 @@ pub unsafe fn temporal_denoised_upscale(
         view_to_clip_matrix: d.view_to_clip_matrix,
     };
 
-    framegen::set_camera_params(&read_camera_params(list));
-
     // SAFETY: `list.allocator` was checked non-null above.
     let alloc = unsafe { &mut *list.allocator };
     let mut pre_blitted = false;
-    let mut depth_scratch = None;
-    let mut motion_scratch = None;
 
-    if !readable(&depth, info.depth_format)
-        && let Some(scratch) = scaler.get_scratch(Scratch::Depth)
-    {
-        copy_input_scratch(
-            alloc,
-            &mut pre_blitted,
-            &depth,
-            &scratch,
-            info.depth_format,
-            iw,
-            ih,
-        );
-        depth = Arc::clone(&scratch);
-        depth_scratch = Some(scratch);
-    }
-    if !readable(&motion, info.motion_format)
-        && let Some(scratch) = scaler.get_scratch(Scratch::Motion)
-    {
-        copy_input_scratch(
-            alloc,
-            &mut pre_blitted,
-            &motion,
-            &scratch,
-            info.motion_format,
-            iw,
-            ih,
-        );
-        motion = Arc::clone(&scratch);
-        motion_scratch = Some(scratch);
-    }
-
-    let Ok(diffuse_albedo_scratch) = prepare_denoised_channel(
+    emit_denoised_copy(
         alloc,
         &mut pre_blitted,
-        scaler,
-        DenoisedScratch::DiffuseAlbedo,
+        depth_scratch.as_ref(),
+        &mut depth,
+        info.depth_format,
+        (iw, ih),
+    );
+    emit_denoised_copy(
+        alloc,
+        &mut pre_blitted,
+        motion_scratch.as_ref(),
+        &mut motion,
+        info.motion_format,
+        (iw, ih),
+    );
+    emit_denoised_copy(
+        alloc,
+        &mut pre_blitted,
+        diffuse_albedo_scratch.as_ref(),
         &mut diffuse_albedo,
         info.diffuse_albedo_format,
         (iw, ih),
-    ) else {
-        return E_INVALIDARG;
-    };
-    let Ok(specular_albedo_scratch) = prepare_denoised_channel(
+    );
+    emit_denoised_copy(
         alloc,
         &mut pre_blitted,
-        scaler,
-        DenoisedScratch::SpecularAlbedo,
+        specular_albedo_scratch.as_ref(),
         &mut specular_albedo,
         info.specular_albedo_format,
         (iw, ih),
-    ) else {
-        return E_INVALIDARG;
-    };
-    let Ok(normal_scratch) = prepare_denoised_channel(
+    );
+    emit_denoised_copy(
         alloc,
         &mut pre_blitted,
-        scaler,
-        DenoisedScratch::Normal,
+        normal_scratch.as_ref(),
         &mut normal,
         info.normal_format,
         (iw, ih),
-    ) else {
-        return E_INVALIDARG;
-    };
-    let Ok(roughness_scratch) = prepare_denoised_channel(
+    );
+    emit_denoised_copy(
         alloc,
         &mut pre_blitted,
-        scaler,
-        DenoisedScratch::Roughness,
+        roughness_scratch.as_ref(),
         &mut roughness,
         info.roughness_format,
         (iw, ih),
-    ) else {
-        return E_INVALIDARG;
-    };
-
-    let specular_hit_distance_scratch = if let Some(ref mut tex) = specular_hit_distance {
-        match prepare_denoised_channel(
+    );
+    if let Some(ref mut tex) = specular_hit_distance {
+        emit_denoised_copy(
             alloc,
             &mut pre_blitted,
-            scaler,
-            DenoisedScratch::SpecularHitDistance,
+            specular_hit_distance_scratch.as_ref(),
             tex,
             info.specular_hit_distance_format,
             (iw, ih),
-        ) {
-            Ok(s) => s,
-            Err(hr) => return hr,
-        }
-    } else {
-        None
-    };
-    let denoise_strength_mask_scratch = if let Some(ref mut tex) = denoise_strength_mask {
-        match prepare_denoised_channel(
+        );
+    }
+    if let Some(ref mut tex) = denoise_strength_mask {
+        emit_denoised_copy(
             alloc,
             &mut pre_blitted,
-            scaler,
-            DenoisedScratch::DenoiseStrengthMask,
+            denoise_strength_mask_scratch.as_ref(),
             tex,
             info.denoise_strength_mask_format,
             (iw, ih),
-        ) {
-            Ok(s) => s,
-            Err(hr) => return hr,
-        }
-    } else {
-        None
-    };
-    let transparency_overlay_scratch = if let Some(ref mut tex) = transparency_overlay {
-        match prepare_denoised_channel(
+        );
+    }
+    if let Some(ref mut tex) = transparency_overlay {
+        emit_denoised_copy(
             alloc,
             &mut pre_blitted,
-            scaler,
-            DenoisedScratch::TransparencyOverlay,
+            transparency_overlay_scratch.as_ref(),
             tex,
             info.transparency_overlay_format,
             (iw, ih),
-        ) {
-            Ok(s) => s,
-            Err(hr) => return hr,
-        }
-    } else {
-        None
-    };
-    let reactive_scratch = if let Some(ref mut tex) = mask {
-        match prepare_denoised_channel(
+        );
+    }
+    if let Some(ref mut tex) = mask {
+        emit_denoised_copy(
             alloc,
             &mut pre_blitted,
-            scaler,
-            DenoisedScratch::ReactiveMask,
+            reactive_scratch.as_ref(),
             tex,
             info.reactive_mask_format,
             (iw, ih),
-        ) {
-            Ok(s) => s,
-            Err(hr) => return hr,
-        }
-    } else {
-        None
-    };
-
-    let mut output_scratch: Option<Arc<Texture>> = None;
-    let mut target = Arc::clone(&output);
-    let output_private = output
-        .current()
-        .is_some_and(|a| a.flags().contains(TextureAllocationFlags::GPU_PRIVATE));
-    if (output.info().usage() & WRITABLE_USAGE) != WRITABLE_USAGE || !output_private {
-        crate::count!("#upscale output copied", 1);
-        if let Some(scratch) = scaler.get_scratch(Scratch::Output) {
-            target = Arc::clone(&scratch);
-            output_scratch = Some(scratch);
-        }
+        );
     }
+
+    let target = output_scratch.as_ref().map_or_else(
+        || Arc::clone(&output),
+        |scratch| {
+            crate::count!("#upscale output copied", 1);
+            Arc::clone(scratch)
+        },
+    );
 
     alloc.invalidate_current_pass();
     let barriers = alloc.barriers;
@@ -1124,6 +1200,7 @@ pub unsafe fn temporal_denoised_upscale(
         transparency_overlay_scratch,
         reactive_scratch,
         props,
+        camera,
     };
     // SAFETY: `ptr` points to freshly allocated aligned CPU heap storage for
     // `TemporalDenoisedUpscaleEncoderData`.
@@ -1187,6 +1264,9 @@ pub unsafe fn set_frame_gen_ui(this: *mut c_void, desc: *const D3D12FrameGenUiDe
     let base_ptr = unsafe { this.byte_sub(List::EXT_OFFSET).cast::<List>() };
     // SAFETY: `base_ptr` is the enclosing `List` allocation.
     let list = unsafe { &mut *base_ptr };
+    if list.allocator.is_null() {
+        return E_INVALIDARG;
+    }
     // SAFETY: `desc` was validated non-null above.
     let d = unsafe { desc.read_unaligned() };
     let ui = FrameGenUi {
@@ -1200,32 +1280,64 @@ pub unsafe fn set_frame_gen_ui(this: *mut c_void, desc: *const D3D12FrameGenUiDe
         world_to_view_matrix: d.world_to_view_matrix,
         view_to_clip_matrix: d.view_to_clip_matrix,
     };
-    if d.ui_texture.is_null() {
-        framegen::record_frame_gen_ui(None, &ui);
-        return S_OK;
-    }
-    // SAFETY: `d.ui_texture` is a non-null caller-supplied `ID3D12Resource` pointer.
-    let res_obj = unsafe { &*d.ui_texture.cast::<Resource>() };
-    let Some(tex) = res_obj.texture.as_ref() else {
-        return E_INVALIDARG;
-    };
-    let fmt = tex.info().pixel_format;
-    if tex.info().r#type() != WMT_TEXTURE_TYPE2D || fmt == WMT_PIXEL_FORMAT_INVALID {
-        return E_INVALIDARG;
-    }
-    let Some(view_ref) = TextureViewRef::from_texture(tex, tex.full_view()) else {
-        return E_INVALIDARG;
-    };
-    // SAFETY: `view_ref.texture()` is a live `MTLTexture` handle kept alive by `view_ref`.
-    let Some(obj) = (unsafe { Obj::retain(view_ref.texture()) }) else {
-        return E_INVALIDARG;
-    };
-    if !list.allocator.is_null() {
-        // SAFETY: `list.allocator` was checked non-null.
+    let (ui_texture, ui_format, ui_width, ui_height) = if d.ui_texture.is_null() {
+        (None, 0, 0, 0)
+    } else {
+        // SAFETY: `d.ui_texture` is a non-null caller-supplied `ID3D12Resource` pointer.
+        let res_obj = unsafe { &*d.ui_texture.cast::<Resource>() };
+        let Some(tex) = res_obj.texture.as_ref() else {
+            return E_INVALIDARG;
+        };
+        let info = tex.info();
+        let fmt = info.pixel_format;
+        let base_fmt = original_format(fmt);
+        if info.r#type() != WMT_TEXTURE_TYPE2D
+            || base_fmt == WMT_PIXEL_FORMAT_INVALID
+            || (info.usage() & WMT_TEXTURE_USAGE_SHADER_READ) == 0
+            || format::is_integer(base_fmt)
+            || format::is_bc(base_fmt)
+            || format::depth_stencil_planar_flags(base_fmt) != 0
+        {
+            return E_INVALIDARG;
+        }
+        let Some(view_ref) = TextureViewRef::from_texture(tex, tex.full_view()) else {
+            return E_INVALIDARG;
+        };
+        // SAFETY: `list.allocator` was checked non-null above.
         let alloc = unsafe { &mut *list.allocator };
         alloc.keep_texture(Arc::clone(tex));
-    }
-    framegen::record_frame_gen_ui(Some((&obj, fmt)), &ui);
+        (Some(view_ref), fmt, info.width, info.height)
+    };
+    let camera = read_camera_params(list);
+    // SAFETY: `list.allocator` was checked non-null above.
+    let alloc = unsafe { &mut *list.allocator };
+    alloc.invalidate_current_pass();
+    let barriers = alloc.barriers;
+    let ptr = alloc
+        .allocate_cpu_heap(
+            size_of::<FrameGenUiEncoderData>(),
+            align_of::<FrameGenUiEncoderData>(),
+        )
+        .cast::<c_void>()
+        .cast::<FrameGenUiEncoderData>();
+    let mut base = EncoderData::new(EncoderType::FrameGenUi, 0);
+    base.barriers = barriers;
+    base.barriers_last = barriers;
+    base.writes_unknown = false;
+    let init = FrameGenUiEncoderData {
+        base,
+        ui_texture,
+        ui_format,
+        ui_width,
+        ui_height,
+        ui,
+        camera,
+    };
+    // SAFETY: `ptr` points to freshly allocated aligned CPU heap storage for
+    // `FrameGenUiEncoderData`.
+    unsafe { ptr::write(ptr, init) };
+    alloc.encoder_current = ptr.cast::<EncoderData>();
+    alloc.invalidate_current_pass();
     S_OK
 }
 

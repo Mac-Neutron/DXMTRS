@@ -487,7 +487,10 @@ pub fn same_target(a: &RenderEncoderData, b: &RenderEncoderData) -> bool {
             && x.level == y.level
             && x.slice == y.slice
             && x.depth_plane == y.depth_plane
-            && (y.attachment.is_none() || y.load_action == WMT_LOAD_ACTION_LOAD)
+            && y.resolve_attachment.is_none()
+            && (y.attachment.is_none()
+                || (y.load_action == WMT_LOAD_ACTION_LOAD
+                    && y.store_action == WMT_STORE_ACTION_STORE))
             && (x.attachment.is_none() || x.store_action == WMT_STORE_ACTION_STORE);
         if !ok {
             return false;
@@ -499,18 +502,22 @@ pub fn same_target(a: &RenderEncoderData, b: &RenderEncoderData) -> bool {
         && a.depth.depth_plane == b.depth.depth_plane
         && (b.depth.attachment.is_none() || b.depth.load_action == WMT_LOAD_ACTION_LOAD)
         && (a.depth.attachment.is_none()
-            || a.depth.store_action == WMT_STORE_ACTION_STORE
-            || (a.depth.store_action == WMT_STORE_ACTION_DONT_CARE
-                && (a.dsv_readonly_flags & 1) != 0));
+            || (a.depth.store_action == b.depth.store_action
+                && (a.depth.store_action == WMT_STORE_ACTION_STORE
+                    || (a.depth.store_action == WMT_STORE_ACTION_DONT_CARE
+                        && (a.dsv_readonly_flags & 1) != 0
+                        && (b.dsv_readonly_flags & 1) != 0))));
     let stencil_ok = a.stencil.attachment == b.stencil.attachment
         && a.stencil.level == b.stencil.level
         && a.stencil.slice == b.stencil.slice
         && a.stencil.depth_plane == b.stencil.depth_plane
         && (b.stencil.attachment.is_none() || b.stencil.load_action == WMT_LOAD_ACTION_LOAD)
         && (a.stencil.attachment.is_none()
-            || a.stencil.store_action == WMT_STORE_ACTION_STORE
-            || (a.stencil.store_action == WMT_STORE_ACTION_DONT_CARE
-                && (a.dsv_readonly_flags & 2) != 0));
+            || (a.stencil.store_action == b.stencil.store_action
+                && (a.stencil.store_action == WMT_STORE_ACTION_STORE
+                    || (a.stencil.store_action == WMT_STORE_ACTION_DONT_CARE
+                        && (a.dsv_readonly_flags & 2) != 0
+                        && (b.dsv_readonly_flags & 2) != 0))));
 
     depth_ok
         && stencil_ok

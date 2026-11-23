@@ -9,7 +9,7 @@ use std::sync::Arc;
 use dxmt_core::{
     format::{
         CAP_COLOR, MTL_DXGI_FORMAT_BC, MTL_DXGI_FORMAT_DEPTH_PLANER,
-        MTL_DXGI_FORMAT_STENCIL_PLANER, MtlDxgiFormatDesc,
+        MTL_DXGI_FORMAT_STENCIL_PLANER, MTL_DXGI_FORMAT_TYPELESS, MtlDxgiFormatDesc,
     },
     resource::{
         Buffer, Texture, TextureAllocationFlags, TextureViewDescriptor,
@@ -1111,7 +1111,10 @@ pub fn validate_castable_formats(desc: &ResourceDesc, castable_formats: &[u32]) 
     let base_bc = (base_fmt.flag & MTL_DXGI_FORMAT_BC) != 0;
     for &fmt in castable_formats {
         let (hr, info) = dxmt_core::format::query_dxgi(fmt);
-        if hr != S_OK || info.pixel_format == WMT_PIXEL_FORMAT_INVALID {
+        if hr != S_OK
+            || info.pixel_format == WMT_PIXEL_FORMAT_INVALID
+            || (info.flag & MTL_DXGI_FORMAT_TYPELESS) != 0
+        {
             return E_INVALIDARG;
         }
         let fmt_bytes = format_texel_bytes(fmt, info);

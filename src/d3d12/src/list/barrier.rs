@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::{
     abi::{
         barrier::{
-            BarrierGroup, D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY,
+            BarrierGroup, D3D12_BARRIER_TYPE_BUFFER, D3D12_BARRIER_TYPE_GLOBAL,
+            D3D12_BARRIER_TYPE_TEXTURE, D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY,
             D3D12_RESOURCE_BARRIER_FLAG_END_ONLY, D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
             D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_BARRIER_TYPE_UAV,
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST,
@@ -180,6 +181,11 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
                 // SAFETY: `tr.resource` is null or a valid `Resource`.
                 let key = unsafe { resource_key(tr.resource.cast_const()) };
                 list.submission.barrier_names.push((call, key));
+                if key.is_null() {
+                    list.discarded_resources.clear();
+                } else {
+                    list.discarded_resources.retain(|d| d.tex_ptr != key);
+                }
             }
             D3D12_RESOURCE_BARRIER_TYPE_UAV => {
                 // SAFETY: `b.r#type == D3D12_RESOURCE_BARRIER_TYPE_UAV` selects `uav`.
@@ -187,6 +193,7 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
                 // SAFETY: `uav.resource` is null or a valid `Resource`.
                 let key = unsafe { resource_key(uav.resource.cast_const()) };
                 list.submission.barrier_names.push((call, key));
+                list.discarded_resources.clear();
             }
             _ => {
                 // SAFETY: `b.r#type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING` selects `aliasing`.
@@ -205,6 +212,70 @@ pub unsafe fn resource_barrier(this: *mut c_void, num_barriers: u32, barriers: *
                 };
                 list.submission.barrier_names.push((call, before_key));
                 list.submission.barrier_names.push((call, after_key));
+                list.discarded_resources.clear();
+            }
+        }
+    }
+    if !list.allocator.is_null() && list.discarded_resources.is_empty() {
+        // SAFETY: `list.allocator` is a valid `Allocator` while recording.
+        let alloc = unsafe { &mut *list.allocator };
+        alloc.discard_tracking = false;
+        alloc.discard_purges.clear();
+    }
+}
+
+/// Purge stale discard hints on enhanced barrier targets (including `SYNC_NONE` transitions).
+///
+/// # Safety
+///
+/// Every group's `barriers` pointer must remain valid for `num_barriers` elements.
+unsafe fn purge_discarded_enhanced(list: &mut List, groups: &[BarrierGroup]) {
+    if list.discarded_resources.is_empty() {
+        return;
+    }
+    for group in groups {
+        match group.r#type {
+            D3D12_BARRIER_TYPE_TEXTURE if group.num_barriers > 0 => {
+                // SAFETY: `group.r#type == D3D12_BARRIER_TYPE_TEXTURE` selects `texture_barriers`.
+                let ptr = unsafe { group.barriers.texture_barriers };
+                if ptr.is_null() {
+                    list.discarded_resources.clear();
+                    return;
+                }
+                // SAFETY: `ptr` points to `group.num_barriers` valid `TextureBarrier` entries.
+                let items = unsafe { slice::from_raw_parts(ptr, group.num_barriers as usize) };
+                for tb in items {
+                    // SAFETY: `tb.resource` is null or a valid `Resource`.
+                    let key = unsafe { resource_key(tb.resource.cast_const()) };
+                    if key.is_null() {
+                        list.discarded_resources.clear();
+                        return;
+                    }
+                    list.discarded_resources.retain(|d| d.tex_ptr != key);
+                }
+            }
+            D3D12_BARRIER_TYPE_BUFFER if group.num_barriers > 0 => {
+                // SAFETY: `group.r#type == D3D12_BARRIER_TYPE_BUFFER` selects `buffer_barriers`.
+                let ptr = unsafe { group.barriers.buffer_barriers };
+                if ptr.is_null() {
+                    list.discarded_resources.clear();
+                    return;
+                }
+                // SAFETY: `ptr` points to `group.num_barriers` valid `BufferBarrier` entries.
+                let items = unsafe { slice::from_raw_parts(ptr, group.num_barriers as usize) };
+                if items.iter().any(|bb| bb.resource.is_null()) {
+                    list.discarded_resources.clear();
+                    return;
+                }
+            }
+            D3D12_BARRIER_TYPE_GLOBAL if group.num_barriers > 0 => {
+                list.discarded_resources.clear();
+                return;
+            }
+            D3D12_BARRIER_TYPE_TEXTURE | D3D12_BARRIER_TYPE_BUFFER | D3D12_BARRIER_TYPE_GLOBAL => {}
+            _ => {
+                list.discarded_resources.clear();
+                return;
             }
         }
     }
@@ -236,6 +307,21 @@ pub unsafe fn barrier(this: *mut c_void, num_barrier_groups: u32, barrier_groups
     for b in &legacy {
         // SAFETY: `this` is valid and `b` is a valid `ResourceBarrier`.
         unsafe { resource_barrier(this, 1, (&raw const *b).cast()) };
+    }
+    // SAFETY: `barrier_groups` points to `num_barrier_groups` contiguous `BarrierGroup` items.
+    let groups = unsafe {
+        slice::from_raw_parts(
+            barrier_groups.cast::<BarrierGroup>(),
+            num_barrier_groups as usize,
+        )
+    };
+    // SAFETY: nested barrier arrays in `groups` are valid for the duration of this call.
+    unsafe { purge_discarded_enhanced(list, groups) };
+    if !list.allocator.is_null() && list.discarded_resources.is_empty() {
+        // SAFETY: `list.allocator` is a valid `Allocator` while recording.
+        let alloc = unsafe { &mut *list.allocator };
+        alloc.discard_tracking = false;
+        alloc.discard_purges.clear();
     }
     // Keep the allocation for the next enhanced barrier on this list.
     list.legacy_barriers = legacy;

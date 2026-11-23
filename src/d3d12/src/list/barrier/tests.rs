@@ -1,22 +1,30 @@
 use core::{mem::ManuallyDrop, ptr};
 use std::sync::Arc;
 
-use dxmt_core::resource::Buffer;
+use dxmt_core::resource::{Buffer, Texture, TextureAllocationFlags};
 use dxmt_util::{com::ComObject, private_data::PrivateData};
-use winemetal_sys::Obj;
+use winemetal_sys::{
+    Obj,
+    wire::{WMT_TEXTURE_TYPE2D, WMTTextureInfo},
+};
 
 use super::*;
 use crate::{
     abi::{
         barrier::{
-            D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY, D3D12_RESOURCE_BARRIER_FLAG_END_ONLY,
-            D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
-            D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_BARRIER_TYPE_UAV,
-            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            ResourceAliasingBarrier, ResourceBarrier, ResourceBarrierBody,
-            ResourceTransitionBarrier, ResourceUavBarrier,
+            BarrierGroup, BarrierGroupBarriers, BarrierSubresourceRange,
+            D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+            D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+            D3D12_BARRIER_SYNC_ALL, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_TYPE_GLOBAL,
+            D3D12_BARRIER_TYPE_TEXTURE, D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY,
+            D3D12_RESOURCE_BARRIER_FLAG_END_ONLY, D3D12_RESOURCE_BARRIER_FLAG_NONE,
+            D3D12_RESOURCE_BARRIER_TYPE_ALIASING, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+            D3D12_RESOURCE_BARRIER_TYPE_UAV, D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, GlobalBarrier, ResourceAliasingBarrier,
+            ResourceBarrier, ResourceBarrierBody, ResourceTransitionBarrier, ResourceUavBarrier,
+            TextureBarrier,
         },
         pipeline::SampleDesc,
         resource::{
@@ -26,7 +34,7 @@ use crate::{
         vtbl::ID3D12Resource2Vtbl,
     },
     encoder::BarrierOpacity,
-    list::List,
+    list::{DiscardedSubresource, List},
     resource::Resource,
 };
 
@@ -257,4 +265,166 @@ fn barrier_classification_as_cpp() {
     unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_write_ends).cast()) };
     assert_eq!(list.submission.barrier_opaque.len(), 8);
     assert_eq!(list.submission.barrier_count, 11);
+}
+
+#[test]
+fn barrier_purges_and_clears_discarded_resources() {
+    let dev = test_device();
+    let info = WMTTextureInfo {
+        pixel_format: 70,
+        width: 32,
+        height: 32,
+        depth: 1,
+        array_length: 1,
+        bits: (WMT_TEXTURE_TYPE2D & 0xff) | (1 << 8) | (1 << 16),
+        options: 0,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    let tex_a = Arc::new(Texture::new(info, &dev));
+    let alloc_a = tex_a.allocate(TextureAllocationFlags::SHARED);
+    let _ = tex_a.rename(alloc_a);
+    let tex_b = Arc::new(Texture::new(info, &dev));
+    let alloc_b = tex_b.allocate(TextureAllocationFlags::SHARED);
+    let _ = tex_b.rename(alloc_b);
+
+    let key_a = Arc::as_ptr(&tex_a).cast::<c_void>();
+    let key_b = Arc::as_ptr(&tex_b).cast::<c_void>();
+
+    let mut res_a = dummy_resource();
+    res_a.texture = Some(tex_a);
+    let mut res_b = dummy_resource();
+    res_b.texture = Some(tex_b);
+    let ptr_a = (&raw mut *res_a).cast::<c_void>();
+    let ptr_b = (&raw mut *res_b).cast::<c_void>();
+
+    let mut list = List::new_closed(ptr::null_mut());
+    list.discarded_resources = vec![
+        DiscardedSubresource {
+            tex_ptr: key_a,
+            mip: 0,
+            slice: 0,
+            plane: 0,
+            all: true,
+        },
+        DiscardedSubresource {
+            tex_ptr: key_b,
+            mip: 0,
+            slice: 0,
+            plane: 0,
+            all: true,
+        },
+    ];
+
+    // Transition on `res_a` purges `key_a` only, leaving `key_b`.
+    let b_tr_a = transition_barrier(
+        D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        ptr_a,
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+    );
+    // SAFETY: `list` and `b_tr_a` are valid.
+    unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_tr_a).cast()) };
+    assert_eq!(list.discarded_resources.len(), 1);
+    assert_eq!(list.discarded_resources[0].tex_ptr, key_b);
+
+    // UAV barrier clears all remaining discard entries.
+    let b_uav = ResourceBarrier {
+        r#type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        barrier: ResourceBarrierBody {
+            uav: ManuallyDrop::new(ResourceUavBarrier { resource: ptr_b }),
+        },
+    };
+    // SAFETY: `list` and `b_uav` are valid.
+    unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_uav).cast()) };
+    assert!(list.discarded_resources.is_empty());
+
+    // Aliasing barrier clears all discard entries.
+    list.discarded_resources.push(DiscardedSubresource {
+        tex_ptr: key_a,
+        mip: 0,
+        slice: 0,
+        plane: 0,
+        all: true,
+    });
+    let b_alias = ResourceBarrier {
+        r#type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
+        flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        barrier: ResourceBarrierBody {
+            aliasing: ManuallyDrop::new(ResourceAliasingBarrier {
+                resource_before: ptr_a,
+                resource_after: ptr_b,
+            }),
+        },
+    };
+    // SAFETY: `list` and `b_alias` are valid.
+    unsafe { resource_barrier((&raw mut *list).cast(), 1, (&raw const b_alias).cast()) };
+    assert!(list.discarded_resources.is_empty());
+
+    // Enhanced `Barrier` with `SYNC_NONE` texture barrier purges matching `key_a` only.
+    list.discarded_resources = vec![
+        DiscardedSubresource {
+            tex_ptr: key_a,
+            mip: 0,
+            slice: 0,
+            plane: 0,
+            all: true,
+        },
+        DiscardedSubresource {
+            tex_ptr: key_b,
+            mip: 0,
+            slice: 0,
+            plane: 0,
+            all: true,
+        },
+    ];
+    let tex_bar = TextureBarrier {
+        sync_before: D3D12_BARRIER_SYNC_NONE,
+        sync_after: D3D12_BARRIER_SYNC_ALL,
+        access_before: D3D12_BARRIER_ACCESS_COMMON,
+        access_after: D3D12_BARRIER_ACCESS_RENDER_TARGET,
+        layout_before: D3D12_BARRIER_LAYOUT_COMMON,
+        layout_after: D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+        resource: ptr_a,
+        subresources: BarrierSubresourceRange {
+            index_or_first_mip_level: 0,
+            num_mip_levels: 1,
+            first_array_slice: 0,
+            num_array_slices: 1,
+            first_plane: 0,
+            num_planes: 1,
+        },
+        flags: 0,
+    };
+    let tex_group = BarrierGroup {
+        r#type: D3D12_BARRIER_TYPE_TEXTURE,
+        num_barriers: 1,
+        barriers: BarrierGroupBarriers {
+            texture_barriers: &raw const tex_bar,
+        },
+    };
+    // SAFETY: `list` and `tex_group` are valid.
+    unsafe { barrier((&raw mut *list).cast(), 1, (&raw const tex_group).cast()) };
+    assert_eq!(list.discarded_resources.len(), 1);
+    assert_eq!(list.discarded_resources[0].tex_ptr, key_b);
+
+    // Enhanced `Barrier` global barrier clears all remaining discard entries.
+    let global_bar = GlobalBarrier {
+        sync_before: D3D12_BARRIER_SYNC_NONE,
+        sync_after: D3D12_BARRIER_SYNC_ALL,
+        access_before: D3D12_BARRIER_ACCESS_COMMON,
+        access_after: D3D12_BARRIER_ACCESS_COMMON,
+    };
+    let global_group = BarrierGroup {
+        r#type: D3D12_BARRIER_TYPE_GLOBAL,
+        num_barriers: 1,
+        barriers: BarrierGroupBarriers {
+            global_barriers: &raw const global_bar,
+        },
+    };
+    // SAFETY: `list` and `global_group` are valid.
+    unsafe { barrier((&raw mut *list).cast(), 1, (&raw const global_group).cast()) };
+    assert!(list.discarded_resources.is_empty());
 }

@@ -374,6 +374,8 @@ trait InterpolatorSends {
     fn set_motion_content_offset_y(&self, offset: usize);
     fn set_output_offset_x(&self, offset: usize);
     fn set_output_offset_y(&self, offset: usize);
+    fn input_width(&self) -> usize;
+    fn input_height(&self) -> usize;
     fn responds_to_selector(&self, sel: Sel) -> bool;
     fn encode_to_command_buffer(&self, cmdbuf: Option<&ProtocolObject<dyn MTLCommandBuffer>>);
 }
@@ -434,6 +436,10 @@ impl InterpolatorSends for ProtocolObject<dyn MTLFXFrameInterpolator> {
         fn set_output_offset_x(&self, offset: usize);
         #[unsafe(method(setOutputOffsetY:))]
         fn set_output_offset_y(&self, offset: usize);
+        #[unsafe(method(inputWidth))]
+        fn input_width(&self) -> usize;
+        #[unsafe(method(inputHeight))]
+        fn input_height(&self) -> usize;
         #[unsafe(method(respondsToSelector:))]
         fn responds_to_selector(&self, sel: Sel) -> bool;
         #[unsafe(method(encodeToCommandBuffer:))]
@@ -863,43 +869,43 @@ fn apply_interpolator_macos27(
     interpolator: &ProtocolObject<dyn MTLFXFrameInterpolator>,
     props: &WMTFXFrameInterpolatorProps,
 ) {
-    if props.content_width != 0
-        && interpolator.responds_to_selector(Sel::register(c"setContentWidth:"))
-    {
-        interpolator.set_content_width(props.content_width as usize);
+    if interpolator.responds_to_selector(Sel::register(c"setContentWidth:")) {
+        let width = if props.content_width != 0 {
+            props.content_width as usize
+        } else if interpolator.responds_to_selector(Sel::register(c"inputWidth")) {
+            interpolator.input_width()
+        } else {
+            0
+        };
+        interpolator.set_content_width(width);
     }
-    if props.content_height != 0
-        && interpolator.responds_to_selector(Sel::register(c"setContentHeight:"))
-    {
-        interpolator.set_content_height(props.content_height as usize);
+    if interpolator.responds_to_selector(Sel::register(c"setContentHeight:")) {
+        let height = if props.content_height != 0 {
+            props.content_height as usize
+        } else if interpolator.responds_to_selector(Sel::register(c"inputHeight")) {
+            interpolator.input_height()
+        } else {
+            0
+        };
+        interpolator.set_content_height(height);
     }
-    let has_subrect = props.content_width != 0
-        || props.content_height != 0
-        || props.depth_content_offset_x != 0
-        || props.depth_content_offset_y != 0
-        || props.motion_content_offset_x != 0
-        || props.motion_content_offset_y != 0
-        || props.output_offset_x != 0
-        || props.output_offset_y != 0;
-    if has_subrect {
-        if interpolator.responds_to_selector(Sel::register(c"setDepthContentOffsetX:")) {
-            interpolator.set_depth_content_offset_x(props.depth_content_offset_x as usize);
-        }
-        if interpolator.responds_to_selector(Sel::register(c"setDepthContentOffsetY:")) {
-            interpolator.set_depth_content_offset_y(props.depth_content_offset_y as usize);
-        }
-        if interpolator.responds_to_selector(Sel::register(c"setMotionContentOffsetX:")) {
-            interpolator.set_motion_content_offset_x(props.motion_content_offset_x as usize);
-        }
-        if interpolator.responds_to_selector(Sel::register(c"setMotionContentOffsetY:")) {
-            interpolator.set_motion_content_offset_y(props.motion_content_offset_y as usize);
-        }
-        if interpolator.responds_to_selector(Sel::register(c"setOutputOffsetX:")) {
-            interpolator.set_output_offset_x(props.output_offset_x as usize);
-        }
-        if interpolator.responds_to_selector(Sel::register(c"setOutputOffsetY:")) {
-            interpolator.set_output_offset_y(props.output_offset_y as usize);
-        }
+    if interpolator.responds_to_selector(Sel::register(c"setDepthContentOffsetX:")) {
+        interpolator.set_depth_content_offset_x(props.depth_content_offset_x as usize);
+    }
+    if interpolator.responds_to_selector(Sel::register(c"setDepthContentOffsetY:")) {
+        interpolator.set_depth_content_offset_y(props.depth_content_offset_y as usize);
+    }
+    if interpolator.responds_to_selector(Sel::register(c"setMotionContentOffsetX:")) {
+        interpolator.set_motion_content_offset_x(props.motion_content_offset_x as usize);
+    }
+    if interpolator.responds_to_selector(Sel::register(c"setMotionContentOffsetY:")) {
+        interpolator.set_motion_content_offset_y(props.motion_content_offset_y as usize);
+    }
+    if interpolator.responds_to_selector(Sel::register(c"setOutputOffsetX:")) {
+        interpolator.set_output_offset_x(props.output_offset_x as usize);
+    }
+    if interpolator.responds_to_selector(Sel::register(c"setOutputOffsetY:")) {
+        interpolator.set_output_offset_y(props.output_offset_y as usize);
     }
     if props.has_matrices != 0 {
         let sel_w2v = Sel::register(c"setWorldToViewMatrix:");

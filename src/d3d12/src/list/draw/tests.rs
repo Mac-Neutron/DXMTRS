@@ -20,15 +20,15 @@ use winemetal_wire::{
     WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD, WMT_RENDER_COMMAND_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW,
     WMT_RENDER_COMMAND_DXMT_TESSELLATION_MESH_DRAW_INDEXED, WMT_RENDER_COMMAND_SET_BLEND_FACTOR,
-    WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_TEXTURE_TYPE2D, WMTTextureInfo, WmtcmdBase,
-    WmtcmdRenderDraw, WmtcmdRenderDxmtTessellationMeshDraw,
+    WMT_RENDER_COMMAND_SET_RASTERIZER_STATE, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE2D_ARRAY, WMTSize,
+    WMTTextureInfo, WmtcmdBase, WmtcmdRenderDraw, WmtcmdRenderDxmtTessellationMeshDraw,
     WmtcmdRenderDxmtTessellationMeshDrawIndexed, WmtcmdRenderSetblendcolor,
     WmtcmdRenderSetrasterizerstate,
 };
 
 use super::{
     draw_indexed_instanced, draw_instanced, geometry_warp, patch_control_point_count,
-    pre_draw_with_options,
+    pre_dispatch_with_options, pre_draw_with_options,
 };
 use crate::{
     abi::{
@@ -63,7 +63,7 @@ use crate::{
             rs_set_scissor_rects, rs_set_viewports, set_pipeline_state,
         },
     },
-    pipeline::Graphics,
+    pipeline::{Compute, Graphics},
     resource::Resource,
     tests::count_allocs,
 };
@@ -78,6 +78,28 @@ fn new_test_graphics_pso() -> Box<Graphics> {
     // SAFETY: `crate::tests` provides no-op `NSObject_retain`/`NSObject_release` for unit tests.
     let pso = unsafe { Obj::adopt(1) };
     Graphics::new_dummy(vtbl, pso)
+}
+
+fn new_test_compute_pso() -> Compute {
+    // SAFETY: `LIST_VTBL` is larger than `ID3D12PipelineStateVtbl` and consists of non-null
+    // function pointers; tests do not invoke PSO vtable slots directly.
+    let vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12PipelineStateVtbl>() };
+    // SAFETY: `crate::tests` provides no-op `NSObject_retain`/`NSObject_release` for unit tests.
+    let pso = unsafe { Obj::adopt(1) };
+    Compute {
+        vtbl,
+        com: ComObject::with_initial_ref(),
+        private_data: PrivateData::default(),
+        device: ptr::null_mut(),
+        is_compute: true,
+        desc_hash: 0,
+        pso,
+        threadgroup_size: WMTSize {
+            width: 4,
+            height: 1,
+            depth: 1,
+        },
+    }
 }
 
 fn new_test_allocator(list_type: u32) -> *mut Allocator {
@@ -1007,6 +1029,228 @@ fn dynamic_depth_bias_overrides_and_resets_on_pso_bind() {
     assert_eq!(rast_cmds[0], (1, 2, 1, 1, 1.0, 0.25, 0.5));
     assert_eq!(rast_cmds[1], (1, 2, 1, 1, 5.0, 2.5, 1.25));
     assert_eq!(rast_cmds[2], (1, 2, 1, 1, 1.0, 0.25, 0.5));
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn dispatch_and_uav_graphics_pso_purge_discarded_resources() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    pso.writes_uav = true;
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid pointers for `CreateCommandList`.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+
+    let tex = make_draw_test_texture(70);
+    // SAFETY: `LIST_VTBL` is larger than `ID3D12Resource2Vtbl` and consists of non-null pointers.
+    let res_vtbl = unsafe { &*(&raw const LIST_VTBL).cast::<ID3D12Resource2Vtbl>() };
+    let mut res = Box::new(Resource {
+        vtbl: res_vtbl,
+        com: ComObject::with_initial_ref(),
+        private_data: PrivateData::default(),
+        device: ptr::null_mut(),
+        texture: Some(tex),
+        buffer: None,
+        placed_heap: ptr::null_mut(),
+        desc: ResourceDesc {
+            dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            alignment: 0,
+            width: 64,
+            height: 64,
+            depth_or_array_size: 1,
+            mip_levels: 1,
+            format: 28,
+            sample_desc: SampleDesc {
+                count: 1,
+                quality: 0,
+            },
+            layout: 0,
+            flags: 0,
+        },
+        heap_props: HeapProperties {
+            r#type: 1,
+            cpu_page_property: 0,
+            memory_pool_preference: 0,
+            creation_node_mask: 1,
+            visible_node_mask: 1,
+        },
+    });
+    let res_ptr: *mut c_void = (&raw mut *res).cast();
+
+    // 1. `pre_dispatch_with_options` clears pending discarded resources and `discard_tracking`.
+    // SAFETY: `raw_list` and `res_ptr` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, ptr::null()) };
+    // SAFETY: `raw_list` is a live `List`.
+    let list = unsafe { &mut *raw_list.cast::<List>() };
+    assert_eq!(list.discarded_resources.len(), 1);
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    assert!(unsafe { (*alloc).discard_tracking });
+
+    let mut compute_pso = new_test_compute_pso();
+    list.pso_compute = (&raw mut compute_pso).cast();
+    assert_eq!(
+        pre_dispatch_with_options(list, false),
+        DrawCallStatus::Valid
+    );
+    list.pso_compute = ptr::null();
+    assert!(list.discarded_resources.is_empty());
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    assert!(!unsafe { (*alloc).discard_tracking });
+
+    // 2. `pre_draw_with_options` with `pso.writes_uav` clears unrelated discarded resources.
+    // SAFETY: `raw_list` and `res_ptr` are valid test pointers.
+    unsafe { discard_resource(raw_list, res_ptr, ptr::null()) };
+    assert_eq!(list.discarded_resources.len(), 1);
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    assert!(list.discarded_resources.is_empty());
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    assert!(!unsafe { (*alloc).discard_tracking });
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
+}
+
+#[test]
+fn layered_rtv_requires_all_slices_discarded() {
+    let alloc = new_test_allocator(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    let mut pso = new_test_graphics_pso();
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid pointers for `CreateCommandList`.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+    // SAFETY: `raw_list` is a valid recording command list.
+    unsafe { ia_set_primitive_topology(raw_list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+
+    let info = WMTTextureInfo {
+        pixel_format: 70,
+        width: 64,
+        height: 64,
+        depth: 1,
+        array_length: 4,
+        bits: (WMT_TEXTURE_TYPE2D_ARRAY & 0xff) | (1 << 8) | (1 << 16),
+        options: 0,
+        flags: 0,
+        mach_port: 0,
+        gpu_resource_id: 0,
+    };
+    // SAFETY: `crate::tests` stubs `NSObject_retain`/`NSObject_release` for test `Obj` handles.
+    let obj = unsafe { Obj::adopt(1) }.expect("non-zero fake handle");
+    let tex = Arc::new(Texture::new(info, &obj));
+    let tex_alloc = tex.allocate(TextureAllocationFlags::SHARED);
+    let _ = tex.rename(tex_alloc);
+    let tex_ptr = Arc::as_ptr(&tex).cast::<c_void>();
+
+    let view = TextureViewDescriptor {
+        format: 70,
+        texture_type: WMT_TEXTURE_TYPE2D_ARRAY,
+        first_mip: 0,
+        mip_count: 1,
+        first_slice: 0,
+        array_size: 4,
+    }
+    .key();
+    let heap = make_draw_test_heap(vec![RenderTargetDesc {
+        texture: Some(tex),
+        view,
+        width: 64,
+        height: 64,
+        depth_plane: 0,
+        render_target_array_length: 4,
+        flags: 0,
+    }]);
+    let rtv: D3d12CpuDescriptorHandle = EmbeddedDescriptorHandle::pack(&raw const *heap, 0);
+
+    // 1. Discarding only slice 0 must NOT mark a 4-slice layered RTV as `DONT_CARE`.
+    // SAFETY: `raw_list` is a live `List`.
+    let list = unsafe { &mut *raw_list.cast::<List>() };
+    list.discarded_resources
+        .push(crate::list::DiscardedSubresource {
+            tex_ptr,
+            mip: 0,
+            slice: 0,
+            plane: 0,
+            all: false,
+        });
+    // SAFETY: `raw_list` and `&rtv` are valid test pointers.
+    unsafe { om_set_render_targets(raw_list, 1, (&raw const rtv).cast(), 0, ptr::null()) };
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` holds the opened `RenderEncoderData`.
+    let enc1 = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    // SAFETY: `enc1` points to a valid `RenderEncoderData`.
+    let load1 = unsafe { (*enc1).colors[0].load_action };
+    assert_eq!(load1, WMT_LOAD_ACTION_LOAD);
+    assert_eq!(list.discarded_resources.len(), 1);
+
+    // 2. Discarding slices 1..4 alongside slice 0 covers the full range -> `DONT_CARE`.
+    // SAFETY: `alloc` is valid.
+    unsafe { (*alloc).invalidate_current_pass() };
+    for slice in 1..4 {
+        list.discarded_resources
+            .push(crate::list::DiscardedSubresource {
+                tex_ptr,
+                mip: 0,
+                slice,
+                plane: 0,
+                all: false,
+            });
+    }
+    // SAFETY: `raw_list` and `&rtv` are valid test pointers.
+    unsafe { om_set_render_targets(raw_list, 1, (&raw const rtv).cast(), 0, ptr::null()) };
+    assert_eq!(
+        pre_draw_with_options(list, false, false),
+        DrawCallStatus::Valid
+    );
+    // SAFETY: `alloc` is valid and `encoder_current` holds the opened `RenderEncoderData`.
+    let enc2 = unsafe { (*alloc).encoder_current.cast::<RenderEncoderData>() };
+    // SAFETY: `enc2` points to a valid `RenderEncoderData`.
+    let load2 = unsafe { (*enc2).colors[0].load_action };
+    assert_eq!(load2, WMT_LOAD_ACTION_DONT_CARE);
+    assert!(list.discarded_resources.is_empty());
 
     // SAFETY: `raw_list` is recording on `alloc`.
     assert_eq!(unsafe { close(raw_list) }, S_OK);

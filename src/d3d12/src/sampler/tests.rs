@@ -387,7 +387,9 @@ fn static_border_colours_are_the_enumeration() {
         (0, WMT_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK),
         (1, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK),
         (2, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE),
-        (3, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE),
+        (3, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK),
+        (4, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE),
+        (5, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE),
         (u32::MAX, WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE),
     ] {
         let mut info = untouched();
@@ -559,6 +561,11 @@ fn sampler_infos_replay_the_cpp_oracle() {
                 shader_visibility: 0,
             };
             populate_static_sampler_info(&mut info, &desc, &mut |w| warnings.push(w));
+            // The golden table predates RS 1.2 `OPAQUE_BLACK_UINT` (`3 -> OPAQUE_BLACK`).
+            if n[6] == crate::abi::sampler::STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT {
+                assert_eq!(info.border_color, WMT_SAMPLER_BORDER_COLOR_OPAQUE_BLACK);
+                info.border_color = WMT_SAMPLER_BORDER_COLOR_OPAQUE_WHITE;
+            }
         } else {
             let desc = SamplerDesc {
                 filter: n[0],

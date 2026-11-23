@@ -95,9 +95,12 @@ fn parse_framegen_env_handles_truthy_and_falsy() {
     assert!(!crate::entry::parse_framegen_env(Some("OFF")));
     assert!(!crate::entry::parse_framegen_env(Some("false")));
     assert!(!crate::entry::parse_framegen_env(Some("False")));
+    assert!(!crate::entry::parse_framegen_env(Some("true")));
+    assert!(!crate::entry::parse_framegen_env(Some("on")));
+    assert!(!crate::entry::parse_framegen_env(Some("ALWAYS")));
+    assert!(!crate::entry::parse_framegen_env(Some(" 1 ")));
     assert!(crate::entry::parse_framegen_env(Some("1")));
     assert!(crate::entry::parse_framegen_env(Some("always")));
-    assert!(crate::entry::parse_framegen_env(Some("true")));
 }
 
 #[test]
@@ -157,21 +160,37 @@ fn extract_matrices_reads_both_unaligned_or_returns_zero() {
 }
 
 #[test]
-fn build_frame_gen_ui_desc_handles_ui_hudless_and_subrects() {
+fn build_frame_gen_ui_desc_ignores_hudless_and_handles_ui_and_subrects() {
     let mut bag = ParamBag::new();
     let p = bag.get();
     assert!(!has_frame_gen_ui_params(p));
 
     let hudless = core::ptr::without_provenance_mut::<c_void>(0x1000);
+    let ui_alpha = core::ptr::without_provenance_mut::<c_void>(0x1800);
     let ui = core::ptr::without_provenance_mut::<c_void>(0x2000);
-    p.set(PARAM_DLSSG_HUDLESS, Value::D3D12(hudless));
-    assert!(has_frame_gen_ui_params(p));
+    p.set(c"DLSSG.HUDLess", Value::D3D12(hudless));
+    assert!(!has_frame_gen_ui_params(p));
     let desc_hudless = build_frame_gen_ui_desc(p, 640, 360);
-    assert_eq!(desc_hudless.ui_texture, hudless);
-    assert_eq!(desc_hudless.content_width, 640);
-    assert_eq!(desc_hudless.content_height, 360);
+    assert!(desc_hudless.ui_texture.is_null());
 
-    // Explicit DLSSG.UI takes priority over DLSSG.HUDLess.
+    // Non-DLSSG matrices (such as DLSSD's) do not trigger FrameGeneration UI forwarding.
+    let mut mat = [0.0f32; 16];
+    mat[0] = 1.0;
+    p.set(
+        PARAM_WORLD_TO_VIEW_MATRIX,
+        Value::Ptr((&raw mut mat).cast()),
+    );
+    p.set(PARAM_VIEW_TO_CLIP_MATRIX, Value::Ptr((&raw mut mat).cast()));
+    assert!(!has_frame_gen_ui_params(p));
+
+    p.set(PARAM_DLSSG_UI_COLOR_AND_ALPHA, Value::D3D12(ui_alpha));
+    assert!(has_frame_gen_ui_params(p));
+    let desc_alpha = build_frame_gen_ui_desc(p, 640, 360);
+    assert_eq!(desc_alpha.ui_texture, ui_alpha);
+    assert_eq!(desc_alpha.content_width, 640);
+    assert_eq!(desc_alpha.content_height, 360);
+
+    // Explicit DLSSG.UI takes priority over DLSSG.UIColorAndAlpha.
     p.set(PARAM_DLSSG_UI, Value::D3D12(ui));
     p.set(PARAM_DLSSG_UI_COMPOSITED, Value::I32(1));
     p.set(PARAM_DLSSG_CONTENT_WIDTH, Value::U32(1280));
@@ -205,4 +224,121 @@ fn denoised_scaler_desc_eq_detects_field_changes() {
     b.roughness_format = 0;
     b.transparency_overlay_enabled = 1;
     assert!(!denoised_scaler_desc_eq(&a, &b));
+}
+
+#[test]
+fn denoised_output_mv_rejects_mismatched_and_upscaled_without_lowres() {
+    assert!(denoised_output_mv_unsupported(
+        0,
+        (1280, 720),
+        (640, 360),
+        (1280, 720)
+    ));
+    assert!(denoised_output_mv_unsupported(
+        0,
+        (640, 360),
+        (640, 360),
+        (1280, 720)
+    ));
+    assert!(!denoised_output_mv_unsupported(
+        0,
+        (1280, 720),
+        (1280, 720),
+        (1280, 720)
+    ));
+    assert!(!denoised_output_mv_unsupported(
+        FLAG_MV_LOWRES,
+        (640, 360),
+        (640, 360),
+        (1280, 720),
+    ));
+}
+
+#[test]
+fn d3d11_capabilities_and_scratch_refuse_dlssd_and_dlssg() {
+    let mut bag = ParamBag::new();
+    let p = bag.get();
+    crate::entry::populate_capabilities(p, false);
+    assert_eq!(p.u32(c"SuperSampling.Available"), Some(1));
+    assert_eq!(p.u32(crate::ngx::PARAM_DLSSD_AVAILABLE), Some(0));
+    assert_eq!(
+        p.u32(crate::ngx::PARAM_DLSSD_FEATURE_INIT_RESULT),
+        Some(FEATURE_NOT_SUPPORTED)
+    );
+    assert_eq!(p.u32(crate::ngx::PARAM_DLSSG_AVAILABLE), Some(0));
+    assert_eq!(
+        p.u32(crate::ngx::PARAM_DLSSG_FEATURE_INIT_RESULT),
+        Some(FEATURE_NOT_SUPPORTED)
+    );
+
+    let mut size = usize::MAX;
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D11_GetScratchBufferSize(
+            FEATURE_SUPERSAMPLING,
+            core::ptr::null(),
+            &raw mut size,
+        ),
+        OK
+    );
+    assert_eq!(size, 0);
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D11_GetScratchBufferSize(
+            FEATURE_RAY_RECONSTRUCTION,
+            core::ptr::null(),
+            &raw mut size,
+        ),
+        FEATURE_NOT_SUPPORTED
+    );
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D11_GetScratchBufferSize(
+            FEATURE_FRAME_GENERATION,
+            core::ptr::null(),
+            &raw mut size,
+        ),
+        FEATURE_NOT_SUPPORTED
+    );
+}
+
+#[test]
+fn shared_12_refreshes_dlssd_availability_after_init_probe() {
+    let prev = DENOISED_SCALER_SUPPORTED.swap(false, Ordering::Relaxed);
+    crate::entry::refresh_shared_d3d12();
+
+    let mut shared = core::ptr::null_mut();
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D12_GetParameters(&raw mut shared),
+        OK
+    );
+    assert!(!shared.is_null());
+    // SAFETY: `NVSDK_NGX_D3D12_GetParameters` returns the live leaked `SHARED_12` map.
+    let map = unsafe { &*shared };
+    assert_eq!(map.u32(crate::ngx::PARAM_DLSSD_AVAILABLE), Some(0));
+
+    DENOISED_SCALER_SUPPORTED.store(true, Ordering::Relaxed);
+    crate::entry::refresh_shared_d3d12();
+    let mut shared_after = core::ptr::null_mut();
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D12_GetParameters(&raw mut shared_after),
+        OK
+    );
+    assert_eq!(shared_after, shared);
+    // SAFETY: `shared_after` points to the live `SHARED_12` map.
+    let map = unsafe { &*shared_after };
+    assert_eq!(map.u32(crate::ngx::PARAM_DLSSD_AVAILABLE), Some(1));
+    assert_eq!(
+        map.u32(crate::ngx::PARAM_DLSSD_FEATURE_INIT_RESULT),
+        Some(OK)
+    );
+
+    DENOISED_SCALER_SUPPORTED.store(false, Ordering::Relaxed);
+    assert_eq!(
+        crate::entry::NVSDK_NGX_D3D12_GetParameters(&raw mut shared_after),
+        OK
+    );
+    // SAFETY: `shared_after` points to the live `SHARED_12` map.
+    let map = unsafe { &*shared_after };
+    assert_eq!(map.u32(crate::ngx::PARAM_DLSSD_AVAILABLE), Some(0));
+
+    DENOISED_SCALER_SUPPORTED.store(prev, Ordering::Relaxed);
+    crate::entry::refresh_shared_d3d12();
 }

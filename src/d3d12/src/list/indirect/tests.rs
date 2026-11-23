@@ -312,6 +312,38 @@ fn native_compute_dispatch_eligibility() {
         128,
         0x9000
     ));
+
+    let mut sig_vb = new_test_dispatch_signature(16, false);
+    sig_vb.update_vertex_buffers = true;
+    assert!(!can_use_native_compute_dispatch(
+        true, &sig_vb, 1, 0, true, 128, 0x9000
+    ));
+
+    let mut index_sig = new_test_dispatch_signature(16, false);
+    index_sig.update_index_buffer = true;
+    assert!(!can_use_native_compute_dispatch(
+        true, &index_sig, 1, 0, true, 128, 0x9000
+    ));
+
+    let sig_small_stride = new_test_dispatch_signature(8, false);
+    assert!(!can_use_native_compute_dispatch(
+        true,
+        &sig_small_stride,
+        2,
+        0,
+        true,
+        128,
+        0x9000
+    ));
+    assert!(can_use_native_compute_dispatch(
+        true,
+        &sig_small_stride,
+        1,
+        0,
+        true,
+        128,
+        0x9000
+    ));
 }
 
 #[test]
@@ -470,4 +502,90 @@ fn resolve_index_buffer_va_reads_cached_va_in_constant_time() {
 
     list.index_buffer = 0;
     assert_eq!(resolve_index_buffer_va(&list), 0);
+}
+
+#[test]
+fn compute_execute_indirect_zero_count_noops_and_splits_after_barrier() {
+    let alloc = new_test_allocator();
+    let mut pso = Box::new(new_test_compute_pso());
+    let pso_ptr: *mut c_void = (&raw mut *pso).cast();
+    let iid = IID_ID3D12_GRAPHICS_COMMAND_LIST;
+    let mut raw_list: *mut c_void = ptr::null_mut();
+
+    // SAFETY: `alloc`, `pso_ptr`, `iid`, and `raw_list` are valid test pointers.
+    let hr = unsafe {
+        create_command_list(
+            ptr::null_mut(),
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            alloc.cast(),
+            pso_ptr,
+            (&raw const iid).cast(),
+            &raw mut raw_list,
+        )
+    };
+    assert_eq!(hr, S_OK);
+
+    // SAFETY: `crate::tests` provides no-op `NSObject_retain`/`NSObject_release` stubs.
+    let dev = unsafe { Obj::adopt(1) }.expect("nonzero fake handle");
+    let mut arg_res = new_test_buffer_resource(&dev, 4096);
+    let mut sig = Box::new(new_test_dispatch_signature(12, false));
+
+    // `max_command_count == 0` must return before `pre_dispatch_with_options` opens an encoder.
+    // SAFETY: `raw_list`, `sig`, and `arg_res` are valid for the call.
+    unsafe {
+        execute_indirect(
+            raw_list,
+            (&raw mut *sig).cast(),
+            0,
+            (&raw mut *arg_res).cast(),
+            0,
+            ptr::null_mut(),
+            0,
+        );
+    }
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    assert!(unsafe { (*alloc).encoder_current }.is_null());
+
+    // Open a compute encoder, record an intervening barrier, then run `execute_indirect`.
+    // SAFETY: `raw_list` is valid for `Dispatch`.
+    unsafe { crate::list::draw::dispatch(raw_list, 1, 1, 1) };
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    let first_enc = unsafe { (*alloc).encoder_current };
+    assert!(!first_enc.is_null());
+    // SAFETY: `alloc` is valid; simulate `ResourceBarrier(UAV -> INDIRECT_ARGUMENT)`.
+    unsafe { (*alloc).barrier(true, &[]) };
+
+    // SAFETY: `raw_list`, `sig`, and `arg_res` are valid for the call.
+    unsafe {
+        execute_indirect(
+            raw_list,
+            (&raw mut *sig).cast(),
+            1,
+            (&raw mut *arg_res).cast(),
+            0,
+            ptr::null_mut(),
+            0,
+        );
+    }
+    // SAFETY: `alloc` is valid for the test's lifetime.
+    let second_enc = unsafe { (*alloc).encoder_current };
+    assert!(!second_enc.is_null());
+    assert_ne!(first_enc, second_enc);
+    // SAFETY: `first_enc` remains valid in `alloc`'s CPU heap.
+    let first_last = unsafe { (*first_enc).barriers_last };
+    // SAFETY: `second_enc` remains valid in `alloc`'s CPU heap.
+    let second_barriers = unsafe { (*second_enc).barriers };
+    // SAFETY: `second_enc` remains valid in `alloc`'s CPU heap.
+    let second_last = unsafe { (*second_enc).barriers_last };
+    assert_eq!(first_last, 0);
+    assert_eq!(second_barriers, 1);
+    assert_eq!(second_last, 1);
+
+    // SAFETY: `raw_list` is recording on `alloc`.
+    assert_eq!(unsafe { close(raw_list) }, S_OK);
+    // SAFETY: `raw_list` is a valid `List` COM pointer.
+    unsafe { release_com::<List>(raw_list.cast()) };
+    // SAFETY: `alloc` was created by `new_test_allocator`.
+    unsafe { free_test_allocator(alloc) };
 }

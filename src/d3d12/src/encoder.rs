@@ -7,7 +7,7 @@
 use core::{ffi::c_void, ptr};
 use std::sync::Arc;
 
-pub use dxmt_core::presenter::framegen::TemporalScaler;
+pub use dxmt_core::presenter::framegen::{CameraParams, FrameGenUi, TemporalScaler};
 use dxmt_core::resource::{Texture, TextureAllocation, TextureViewKey};
 use winemetal_wire::{
     WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMTClearColor,
@@ -87,6 +87,7 @@ pub enum EncoderType {
     Resolve = 5,
     TemporalUpscale = 6,
     TemporalDenoisedScale = 7,
+    FrameGenUi = 8,
 }
 
 /// Timestamp sample recorded at the end of an encoder (`d3d12_command_encoder.hpp:44`).
@@ -360,8 +361,10 @@ pub fn clear_slot(c: &ClearEncoderData, r: &RenderEncoderData) -> i32 {
         return -1;
     }
     if c.clear_dsv != 0 {
-        let depth_mismatch = (c.clear_dsv & 1) != 0 && r.depth.attachment != c.attachment;
-        let stencil_mismatch = (c.clear_dsv & 2) != 0 && r.stencil.attachment != c.attachment;
+        let depth_mismatch = (c.clear_dsv & 1) != 0
+            && (r.depth.attachment != c.attachment || (r.dsv_readonly_flags & 1) != 0);
+        let stencil_mismatch = (c.clear_dsv & 2) != 0
+            && (r.stencil.attachment != c.attachment || (r.dsv_readonly_flags & 2) != 0);
         return if depth_mismatch || stencil_mismatch {
             -1
         } else {
@@ -418,6 +421,7 @@ pub struct TemporalUpscaleEncoderData {
     pub motion_scratch: Option<Arc<Texture>>,
     pub output_scratch: Option<Arc<Texture>>,
     pub props: WMTFXTemporalScalerProps,
+    pub camera: CameraParams,
 }
 
 /// `MetalFX` temporal denoised upscale encoder record (`DLSSD`).
@@ -450,6 +454,19 @@ pub struct TemporalDenoisedUpscaleEncoderData {
     pub transparency_overlay_scratch: Option<Arc<Texture>>,
     pub reactive_scratch: Option<Arc<Texture>>,
     pub props: WMTFXTemporalDenoisedScalerProps,
+    pub camera: CameraParams,
+}
+
+/// Frame-generation UI and camera metadata encoder record (`SetFrameGenUI`).
+#[repr(C)]
+pub struct FrameGenUiEncoderData {
+    pub base: EncoderData,
+    pub ui_texture: Option<TextureViewRef>,
+    pub ui_format: u32,
+    pub ui_width: u32,
+    pub ui_height: u32,
+    pub ui: FrameGenUi,
+    pub camera: Option<CameraParams>,
 }
 
 /// CPU-side timestamp resolve deferred until command-buffer completion (`d3d12_device.hpp:56-66`).
@@ -560,6 +577,10 @@ pub unsafe fn drop_encoder_in_place(encoder: *mut EncoderData) {
             // SAFETY: `kind == TemporalDenoisedScale` guarantees `encoder` heads a
             // `TemporalDenoisedUpscaleEncoderData`.
             unsafe { ptr::drop_in_place(encoder.cast::<TemporalDenoisedUpscaleEncoderData>()) };
+        }
+        EncoderType::FrameGenUi => {
+            // SAFETY: `kind == FrameGenUi` guarantees `encoder` heads a `FrameGenUiEncoderData`.
+            unsafe { ptr::drop_in_place(encoder.cast::<FrameGenUiEncoderData>()) };
         }
     }
 }

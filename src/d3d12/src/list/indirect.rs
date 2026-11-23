@@ -20,7 +20,7 @@ use crate::{
     allocator::Allocator,
     command_signature::CommandSignature,
     device,
-    encoder::RenderEncoderData,
+    encoder::{EncoderType, RenderEncoderData},
     list::{DrawCallStatus, List},
     resource::Resource,
     root_signature::object::RootSignature,
@@ -39,8 +39,11 @@ fn can_use_native_compute_dispatch(
 ) -> bool {
     if !indirect_without_icb
         || sig.update_root_arguments
+        || sig.update_vertex_buffers
+        || sig.update_index_buffer
         || !count_buffer_is_null
         || max_command_count == 0
+        || (max_command_count > 1 && u64::from(sig.byte_stride) < DISPATCH_ARGUMENTS_SIZE)
         || arg_buf_handle == 0
         || (argument_buffer_offset & 3) != 0
         || (sig.byte_stride & 3) != 0
@@ -274,13 +277,22 @@ pub unsafe fn execute_indirect(
     }
 
     if sig.command_type == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH {
+        if max_command_count == 0 {
+            return;
+        }
+        // SAFETY: `list.allocator` was checked non-null above.
+        let alloc = unsafe { &mut *list.allocator };
+        if !alloc.encoder_current.is_null() {
+            // SAFETY: `alloc.encoder_current` points to the active encoder node.
+            let enc = unsafe { &*alloc.encoder_current };
+            if enc.kind == EncoderType::Compute && alloc.barriers > enc.barriers_last {
+                alloc.invalidate_current_pass();
+            }
+        }
         if super::draw::pre_dispatch_with_options(list, sig.update_root_arguments)
             == DrawCallStatus::Invalid
             || list.pso_compute.is_null()
         {
-            return;
-        }
-        if max_command_count == 0 {
             return;
         }
         if can_use_native_compute_dispatch(

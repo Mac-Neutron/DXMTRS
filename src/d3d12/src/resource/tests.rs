@@ -1065,6 +1065,14 @@ fn castable_formats_validation_and_lossless_guard() {
         validate_castable_formats(&tex_desc, &[DXGI_FORMAT_BC1_UNORM]),
         E_INVALIDARG
     );
+    assert_eq!(
+        validate_castable_formats(&tex_desc, &[DXGI_FORMAT_R8G8B8A8_TYPELESS]),
+        E_INVALIDARG
+    );
+    assert_eq!(
+        validate_castable_formats(&tex_desc, &[DXGI_FORMAT_R32_TYPELESS]),
+        E_INVALIDARG
+    );
     let buf_desc = buffer_resource_desc(256);
     assert_eq!(
         validate_castable_formats(&buf_desc, &[DXGI_FORMAT_R32_UINT]),

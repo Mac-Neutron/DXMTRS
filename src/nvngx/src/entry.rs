@@ -4,9 +4,12 @@
 //! driver update needed, and the callback that picks a quality mode's render size.
 
 use core::ffi::c_void;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
-use dxmt_util::float_cast::{f32_to_u32, u32_to_f32};
+use dxmt_util::{
+    float_cast::{f32_to_u32, u32_to_f32},
+    sync::lock,
+};
 
 use crate::{
     ngx::{
@@ -84,19 +87,16 @@ extern "C" fn stats(params: *mut Parameters) -> u32 {
     OK
 }
 
-/// Parses `MACNEUTRON_FRAMEGEN`, returning `true` unless unset, empty, `0`, `off`, or `false`.
+/// The deprecated map NGX's SDK manages for Direct3D 12: one per process, never freed.
+static SHARED_12: Mutex<usize> = Mutex::new(0);
+
+/// Parses `MACNEUTRON_FRAMEGEN`, returning `true` only for `"1"` or `"always"`.
 #[must_use]
 pub const fn parse_framegen_env(val: Option<&str>) -> bool {
-    let Some(raw) = val else {
-        return false;
-    };
-    let trimmed = raw.as_bytes().trim_ascii();
-    if trimmed.is_empty() {
-        return false;
+    match val {
+        Some(s) => matches!(s.as_bytes(), b"1" | b"always"),
+        None => false,
     }
-    !(trimmed.eq_ignore_ascii_case(b"0")
-        || trimmed.eq_ignore_ascii_case(b"off")
-        || trimmed.eq_ignore_ascii_case(b"false"))
 }
 
 /// Whether `MACNEUTRON_FRAMEGEN` opts into frame generation.
@@ -107,8 +107,73 @@ pub fn framegen_enabled() -> bool {
     *ENABLED
 }
 
-/// Fills `params` with the capability map.
-pub fn populate_capabilities(params: &mut Parameters) {
+/// Refreshes `DLSSD` and `DLSSG` availability on `SHARED_12` when it has been allocated.
+pub fn refresh_shared_d3d12() {
+    let guard = lock(&SHARED_12);
+    let addr = *guard;
+    drop(guard);
+    if addr != 0 {
+        let ptr = core::ptr::with_exposed_provenance_mut::<Parameters>(addr);
+        // SAFETY: `SHARED_12` holds a live leaked `Parameters` allocated by `new_capabilities`.
+        if needs_feature_refresh(unsafe { &*ptr }, true) {
+            // SAFETY: `SHARED_12` holds the mutex serialising mutations to the shared map.
+            set_feature_capabilities(unsafe { &mut *ptr }, true);
+        }
+    }
+}
+
+/// Writes `DLSSD` and `DLSSG` availability and driver fields onto `params`.
+fn set_feature_capabilities(params: &mut Parameters, d3d12: bool) {
+    let denoised = d3d12 && crate::d3d12::denoised_scaler_supported();
+    params.set(PARAM_DLSSD_AVAILABLE, Value::U32(u32::from(denoised)));
+    params.set(
+        PARAM_DLSSD_FEATURE_INIT_RESULT,
+        Value::U32(if denoised { OK } else { FEATURE_NOT_SUPPORTED }),
+    );
+    for name in [
+        PARAM_DLSSD_MIN_DRIVER_MAJOR,
+        PARAM_DLSSD_MIN_DRIVER_MINOR,
+        PARAM_DLSSD_NEEDS_UPDATED_DRIVER,
+    ] {
+        params.set(name, Value::I32(0));
+    }
+    let framegen = d3d12 && framegen_enabled();
+    params.set(PARAM_DLSSG_AVAILABLE, Value::U32(u32::from(framegen)));
+    params.set(
+        PARAM_DLSSG_FEATURE_INIT_RESULT,
+        Value::U32(if framegen { OK } else { FEATURE_NOT_SUPPORTED }),
+    );
+    for name in [
+        PARAM_DLSSG_MIN_DRIVER_MAJOR,
+        PARAM_DLSSG_MIN_DRIVER_MINOR,
+        PARAM_DLSSG_NEEDS_UPDATED_DRIVER,
+    ] {
+        params.set(name, Value::I32(0));
+    }
+}
+
+/// Answers whether `DLSSD` or `DLSSG` capability entries on `params` are stale.
+fn needs_feature_refresh(params: &Parameters, d3d12: bool) -> bool {
+    let denoised = u32::from(d3d12 && crate::d3d12::denoised_scaler_supported());
+    let denoised_init = if denoised != 0 {
+        OK
+    } else {
+        FEATURE_NOT_SUPPORTED
+    };
+    let framegen = u32::from(d3d12 && framegen_enabled());
+    let framegen_init = if framegen != 0 {
+        OK
+    } else {
+        FEATURE_NOT_SUPPORTED
+    };
+    params.u32(PARAM_DLSSD_AVAILABLE) != Some(denoised)
+        || params.u32(PARAM_DLSSD_FEATURE_INIT_RESULT) != Some(denoised_init)
+        || params.u32(PARAM_DLSSG_AVAILABLE) != Some(framegen)
+        || params.u32(PARAM_DLSSG_FEATURE_INIT_RESULT) != Some(framegen_init)
+}
+
+/// Fills `params` with the capability map (`d3d12`: `true` for Direct3D 12, `false` for 11).
+pub fn populate_capabilities(params: &mut Parameters, d3d12: bool) {
     params.set(c"SuperSampling.Available", Value::U32(1));
     params.set(c"#\x01", Value::U32(1));
     for name in [
@@ -122,32 +187,7 @@ pub fn populate_capabilities(params: &mut Parameters) {
         params.set(name, Value::I32(0));
     }
     params.set(c"SuperSampling.FeatureInitResult", Value::U32(1));
-    let denoised = crate::d3d12::denoised_scaler_supported();
-    params.set(PARAM_DLSSD_AVAILABLE, Value::U32(u32::from(denoised)));
-    params.set(
-        PARAM_DLSSD_FEATURE_INIT_RESULT,
-        Value::U32(if denoised { OK } else { FEATURE_NOT_SUPPORTED }),
-    );
-    for name in [
-        PARAM_DLSSD_MIN_DRIVER_MAJOR,
-        PARAM_DLSSD_MIN_DRIVER_MINOR,
-        PARAM_DLSSD_NEEDS_UPDATED_DRIVER,
-    ] {
-        params.set(name, Value::I32(0));
-    }
-    let framegen = framegen_enabled();
-    params.set(PARAM_DLSSG_AVAILABLE, Value::U32(u32::from(framegen)));
-    params.set(
-        PARAM_DLSSG_FEATURE_INIT_RESULT,
-        Value::U32(if framegen { OK } else { FEATURE_NOT_SUPPORTED }),
-    );
-    for name in [
-        PARAM_DLSSG_MIN_DRIVER_MAJOR,
-        PARAM_DLSSG_MIN_DRIVER_MINOR,
-        PARAM_DLSSG_NEEDS_UPDATED_DRIVER,
-    ] {
-        params.set(name, Value::I32(0));
-    }
+    set_feature_capabilities(params, d3d12);
     let callback: extern "C" fn(*mut Parameters) -> u32 = optimal_settings;
     params.set(
         c"DLSSOptimalSettingsCallback",
@@ -176,20 +216,20 @@ pub fn populate_capabilities(params: &mut Parameters) {
 }
 
 /// A new capability map.
-fn new_capabilities() -> *mut Parameters {
+fn new_capabilities(d3d12: bool) -> *mut Parameters {
     let params = Parameters::allocate();
     // SAFETY: `allocate` returns a live map.
-    populate_capabilities(unsafe { &mut *params });
+    populate_capabilities(unsafe { &mut *params }, d3d12);
     params
 }
 
 /// Writes a new map (`capabilities`: filled with the capability map) to `out`.
-fn give(out: *mut *mut Parameters, capabilities: bool) -> u32 {
+fn give(out: *mut *mut Parameters, capabilities: bool, d3d12: bool) -> u32 {
     if out.is_null() {
         return INVALID_PARAMETER;
     }
     let params = if capabilities {
-        new_capabilities()
+        new_capabilities(d3d12)
     } else {
         Parameters::allocate()
     };
@@ -235,17 +275,14 @@ fn requirements(
     other
 }
 
-/// The deprecated map NGX's SDK manages for Direct3D 12: one per process, never freed.
-static SHARED_12: LazyLock<usize> = LazyLock::new(|| new_capabilities() as usize);
-
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D12_GetCapabilityParameters(out: *mut *mut Parameters) -> u32 {
-    give(out, true)
+    give(out, true, true)
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D11_GetCapabilityParameters(out: *mut *mut Parameters) -> u32 {
-    give(out, true)
+    give(out, true, false)
 }
 
 #[unsafe(no_mangle)]
@@ -253,25 +290,40 @@ pub extern "system" fn NVSDK_NGX_D3D12_GetParameters(out: *mut *mut Parameters) 
     if out.is_null() {
         return INVALID_PARAMETER;
     }
+    let mut guard = lock(&SHARED_12);
+    let ptr = if *guard == 0 {
+        let made = new_capabilities(true);
+        *guard = made.expose_provenance();
+        made
+    } else {
+        let ptr = core::ptr::with_exposed_provenance_mut::<Parameters>(*guard);
+        // SAFETY: `SHARED_12` holds a live leaked `Parameters` allocated by `new_capabilities`.
+        if needs_feature_refresh(unsafe { &*ptr }, true) {
+            // SAFETY: `SHARED_12` holds the mutex serialising mutations to the shared map.
+            set_feature_capabilities(unsafe { &mut *ptr }, true);
+        }
+        ptr
+    };
+    drop(guard);
     // SAFETY: the game's out pointer, checked non-null.
-    unsafe { out.write(*SHARED_12 as *mut Parameters) };
+    unsafe { out.write(ptr) };
     OK
 }
 
 /// A new capability map each call, as DXMT's Direct3D 11 entry point gives it.
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D11_GetParameters(out: *mut *mut Parameters) -> u32 {
-    give(out, true)
+    give(out, true, false)
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D12_AllocateParameters(out: *mut *mut Parameters) -> u32 {
-    give(out, false)
+    give(out, false, true)
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn NVSDK_NGX_D3D11_AllocateParameters(out: *mut *mut Parameters) -> u32 {
-    give(out, false)
+    give(out, false, false)
 }
 
 #[unsafe(no_mangle)]
@@ -280,7 +332,7 @@ pub extern "system" fn NVSDK_NGX_D3D12_PopulateParameters_Impl(params: *mut Para
     let Some(params) = (unsafe { params.as_mut() }) else {
         return INVALID_PARAMETER;
     };
-    populate_capabilities(params);
+    populate_capabilities(params, true);
     OK
 }
 
@@ -316,10 +368,17 @@ pub const extern "system" fn NVSDK_NGX_D3D12_GetScratchBufferSize(
 #[unsafe(no_mangle)]
 pub const extern "system" fn NVSDK_NGX_D3D11_GetScratchBufferSize(
     feature: u32,
-    params: *const Parameters,
+    _: *const Parameters,
     out: *mut usize,
 ) -> u32 {
-    NVSDK_NGX_D3D12_GetScratchBufferSize(feature, params, out)
+    if !out.is_null() {
+        // SAFETY: the game's out pointer, checked non-null.
+        unsafe { out.write(0) };
+    }
+    match feature {
+        FEATURE_SUPERSAMPLING => OK,
+        _ => FEATURE_NOT_SUPPORTED,
+    }
 }
 
 #[unsafe(no_mangle)]

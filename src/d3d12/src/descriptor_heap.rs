@@ -1215,12 +1215,16 @@ pub unsafe fn create_sampler2(
         }
         // SAFETY: `SamplerBorderColor` is a POD union; reading `uint_border_color` variant.
         let uint = unsafe { desc2.border_color.uint_border_color };
-        [
-            u32_to_f32(uint[0]),
-            u32_to_f32(uint[1]),
-            u32_to_f32(uint[2]),
-            u32_to_f32(uint[3]),
-        ]
+        if uint[0] == 0 && uint[1] == 0 && uint[2] == 0 && uint[3] != 0 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [
+                u32_to_f32(uint[0]),
+                u32_to_f32(uint[1]),
+                u32_to_f32(uint[2]),
+                u32_to_f32(uint[3]),
+            ]
+        }
     } else {
         // SAFETY: `SamplerBorderColor` is a POD union; reading `float_border_color` variant.
         unsafe { desc2.border_color.float_border_color }

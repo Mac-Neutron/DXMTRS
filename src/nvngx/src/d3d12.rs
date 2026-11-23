@@ -47,10 +47,10 @@ use crate::{
         PARAM_DLSSG_BACKBUFFER_SUBRECT_BASE_Y, PARAM_DLSSG_CAMERA_ASPECT, PARAM_DLSSG_CAMERA_FAR,
         PARAM_DLSSG_CAMERA_FOV, PARAM_DLSSG_CAMERA_NEAR, PARAM_DLSSG_CONTENT_HEIGHT,
         PARAM_DLSSG_CONTENT_WIDTH, PARAM_DLSSG_DEPTH_SUBRECT_BASE_X,
-        PARAM_DLSSG_DEPTH_SUBRECT_BASE_Y, PARAM_DLSSG_HUDLESS, PARAM_DLSSG_JITTER_OFFSET_X,
-        PARAM_DLSSG_JITTER_OFFSET_Y, PARAM_DLSSG_MVEC_SCALE_X, PARAM_DLSSG_MVEC_SCALE_Y,
-        PARAM_DLSSG_MVEC_SUBRECT_BASE_X, PARAM_DLSSG_MVEC_SUBRECT_BASE_Y, PARAM_DLSSG_UI,
-        PARAM_DLSSG_UI_COLOR_AND_ALPHA, PARAM_DLSSG_UI_COMPOSITED, PARAM_DLSSG_VIEW_TO_CLIP_MATRIX,
+        PARAM_DLSSG_DEPTH_SUBRECT_BASE_Y, PARAM_DLSSG_JITTER_OFFSET_X, PARAM_DLSSG_JITTER_OFFSET_Y,
+        PARAM_DLSSG_MVEC_SCALE_X, PARAM_DLSSG_MVEC_SCALE_Y, PARAM_DLSSG_MVEC_SUBRECT_BASE_X,
+        PARAM_DLSSG_MVEC_SUBRECT_BASE_Y, PARAM_DLSSG_UI, PARAM_DLSSG_UI_COLOR_AND_ALPHA,
+        PARAM_DLSSG_UI_COMPOSITED, PARAM_DLSSG_VIEW_TO_CLIP_MATRIX,
         PARAM_DLSSG_WORLD_TO_VIEW_MATRIX, PARAM_EXPOSURE_SCALE, PARAM_NORMALS,
         PARAM_REACTIVE_ACTIVE, PARAM_REACTIVE_BASE_X, PARAM_REACTIVE_BASE_Y, PARAM_REACTIVE_MASK,
         PARAM_ROUGHNESS, PARAM_SPECULAR_ALBEDO, PARAM_SPECULAR_HIT_DISTANCE,
@@ -77,6 +77,7 @@ pub fn denoised_scaler_supported() -> bool {
 pub fn query_denoised_supported(device: *mut c_void) -> bool {
     if let Some(supported) = probe_device_ext1(device) {
         DENOISED_SCALER_SUPPORTED.store(supported, Ordering::Relaxed);
+        crate::entry::refresh_shared_d3d12();
         return supported;
     }
     denoised_scaler_supported()
@@ -123,7 +124,6 @@ struct Feature {
     scaler: Mutex<Scaler>,
     denoised_scaler: Mutex<DenoisedScaler>,
     camera_params_seen: AtomicBool,
-    ui_params_seen: AtomicBool,
     unsupported_reactive_format: AtomicU32,
 }
 
@@ -180,6 +180,7 @@ fn init_with(device: *mut c_void) -> u32 {
     // SAFETY: the game's device, a live COM object.
     let Some(ext) = (unsafe { query(device, &IID_D3D12_DEVICE_EXT) }) else {
         DENOISED_SCALER_SUPPORTED.store(false, Ordering::Relaxed);
+        crate::entry::refresh_shared_d3d12();
         once(
             &LOGGED,
             format_args!(
@@ -192,6 +193,7 @@ fn init_with(device: *mut c_void) -> u32 {
     unsafe { release(ext) };
     let denoised = probe_device_ext1(device).unwrap_or(false);
     DENOISED_SCALER_SUPPORTED.store(denoised, Ordering::Relaxed);
+    crate::entry::refresh_shared_d3d12();
     OK
 }
 
@@ -343,7 +345,6 @@ pub extern "system" fn NVSDK_NGX_D3D12_CreateFeature(
             desc: zero_denoised_scaler_desc(),
         }),
         camera_params_seen: AtomicBool::new(false),
-        ui_params_seen: AtomicBool::new(false),
         unsupported_reactive_format: AtomicU32::new(DXGI_FORMAT_UNKNOWN),
     });
     // SAFETY: `ext` starts with DXMT's `IMTLD3D12DeviceExt`.
@@ -600,15 +601,8 @@ const fn denoised_scaler_desc_eq(a: &D3D12DenoisedScalerDesc, b: &D3D12DenoisedS
 
 /// Whether `params` carries any `DLSSG.*` UI, subrect, content, or camera matrix parameters.
 fn has_frame_gen_ui_params(params: &Parameters) -> bool {
-    let has_tex = !resource_any(
-        params,
-        &[
-            PARAM_DLSSG_UI,
-            PARAM_DLSSG_UI_COLOR_AND_ALPHA,
-            PARAM_DLSSG_HUDLESS,
-        ],
-    )
-    .is_null();
+    let has_tex =
+        !resource_any(params, &[PARAM_DLSSG_UI, PARAM_DLSSG_UI_COLOR_AND_ALPHA]).is_null();
     if has_tex {
         return true;
     }
@@ -630,8 +624,8 @@ fn has_frame_gen_ui_params(params: &Parameters) -> bool {
     }
     let (has_matrices, _, _) = extract_matrices(
         params,
-        &[PARAM_DLSSG_WORLD_TO_VIEW_MATRIX, PARAM_WORLD_TO_VIEW_MATRIX],
-        &[PARAM_DLSSG_VIEW_TO_CLIP_MATRIX, PARAM_VIEW_TO_CLIP_MATRIX],
+        &[PARAM_DLSSG_WORLD_TO_VIEW_MATRIX],
+        &[PARAM_DLSSG_VIEW_TO_CLIP_MATRIX],
     );
     has_matrices != 0
 }
@@ -642,14 +636,7 @@ fn build_frame_gen_ui_desc(
     default_width: u32,
     default_height: u32,
 ) -> D3D12FrameGenUiDesc {
-    let ui_texture = resource_any(
-        params,
-        &[
-            PARAM_DLSSG_UI,
-            PARAM_DLSSG_UI_COLOR_AND_ALPHA,
-            PARAM_DLSSG_HUDLESS,
-        ],
-    );
+    let ui_texture = resource_any(params, &[PARAM_DLSSG_UI, PARAM_DLSSG_UI_COLOR_AND_ALPHA]);
     let ui_composited = i32::from(params.i32(PARAM_DLSSG_UI_COMPOSITED).unwrap_or(0) != 0);
     let content_width = params
         .u32(PARAM_DLSSG_CONTENT_WIDTH)
@@ -699,9 +686,7 @@ fn apply_frame_gen_ui(
     feature: &Feature,
     list: *mut c_void,
     params: &Parameters,
-    has_ui: bool,
 ) -> Option<Hresult> {
-    feature.ui_params_seen.store(has_ui, Ordering::Relaxed);
     let ui_desc = build_frame_gen_ui_desc(params, feature.dlss.width, feature.dlss.height);
     // SAFETY: `list` is a live `ID3D12GraphicsCommandList` COM object.
     let list_ext1 = unsafe { query(list, &IID_IMTL_D3D12_COMMAND_LIST_EXT1) }?;
@@ -1078,9 +1063,8 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
         return INVALID_PARAMETER;
     };
     forward_camera_params(feature, list, params);
-    let has_ui = has_frame_gen_ui_params(params);
-    if has_ui || feature.ui_params_seen.load(Ordering::Relaxed) {
-        let _ = apply_frame_gen_ui(feature, list, params, has_ui);
+    if has_frame_gen_ui_params(params) {
+        let _ = apply_frame_gen_ui(feature, list, params);
     }
     let d = D3D12UpscaleDesc {
         color,
@@ -1123,7 +1107,7 @@ fn evaluate(feature: &Feature, scaler: &mut Scaler, list: *mut c_void, params: &
     OK
 }
 
-/// Evaluates `FEATURE_FRAME_GENERATION`: forwards UI/HUD-less, subrect, matrix, and camera data.
+/// Evaluates `FEATURE_FRAME_GENERATION`: forwards UI, subrect, matrix, and camera data.
 fn evaluate_frame_gen(feature: &Feature, list: *mut c_void, params: &Parameters) -> u32 {
     static LOGGED_FOREIGN: AtomicBool = AtomicBool::new(false);
     static LOGGED_REFUSED: AtomicBool = AtomicBool::new(false);
@@ -1131,8 +1115,7 @@ fn evaluate_frame_gen(feature: &Feature, list: *mut c_void, params: &Parameters)
         return INVALID_PARAMETER;
     }
     forward_camera_params(feature, list, params);
-    let has_ui = has_frame_gen_ui_params(params);
-    if let Some(hr) = apply_frame_gen_ui(feature, list, params, has_ui) {
+    if let Some(hr) = apply_frame_gen_ui(feature, list, params) {
         if hr < 0 {
             once(
                 &LOGGED_REFUSED,
@@ -1161,6 +1144,20 @@ fn evaluate_frame_gen(feature: &Feature, list: *mut c_void, params: &Parameters)
     OK
 }
 
+/// Returns `true` when `DLSSD` receives output-resolution motion vectors for upscaling.
+const fn denoised_output_mv_unsupported(
+    flag: u32,
+    mv_extent: (u32, u32),
+    input: (u32, u32),
+    output: (u32, u32),
+) -> bool {
+    flag & FLAG_MV_LOWRES == 0
+        && (mv_extent.0 != input.0
+            || mv_extent.1 != input.1
+            || input.0 != output.0
+            || input.1 != output.1)
+}
+
 /// Evaluates `FEATURE_RAY_RECONSTRUCTION` through `IMTLD3D12DeviceExt1` and command list Ext1.
 fn evaluate_denoised(
     feature: &Feature,
@@ -1170,6 +1167,7 @@ fn evaluate_denoised(
 ) -> u32 {
     static LOGGED_INPUTS: AtomicBool = AtomicBool::new(false);
     static LOGGED_MISSING: AtomicBool = AtomicBool::new(false);
+    static LOGGED_OUTPUT_MV: AtomicBool = AtomicBool::new(false);
     static LOGGED_SMALL: AtomicBool = AtomicBool::new(false);
     static LOGGED_SCALER: AtomicBool = AtomicBool::new(false);
     static LOGGED_REACTIVE_DROP: AtomicBool = AtomicBool::new(false);
@@ -1290,12 +1288,21 @@ fn evaluate_denoised(
 
     let (cw, ch) = extent(&color_desc, 0, 0);
     let (dw, dh) = extent(&depth_desc, 0, 0);
-    let (mut mw, mut mh) = extent(&motion_desc, 0, 0);
+    let (mw, mh) = extent(&motion_desc, 0, 0);
     let (ow, oh) = extent(&output_desc, 0, 0);
     let (daw, dah) = extent(&diffuse_desc, 0, 0);
     let (saw, sah) = extent(&specular_desc, 0, 0);
     let (nw, nh) = extent(&normal_desc, 0, 0);
     let (rgh_w, rgh_h) = extent(&rough_desc, 0, 0);
+    let (hw, hh) = hit_desc
+        .as_ref()
+        .map_or((u32::MAX, u32::MAX), |d| extent(d, 0, 0));
+    let (dnw, dnh) = denoise_desc
+        .as_ref()
+        .map_or((u32::MAX, u32::MAX), |d| extent(d, 0, 0));
+    let (ovw, ovh) = overlay_desc
+        .as_ref()
+        .map_or((u32::MAX, u32::MAX), |d| extent(d, 0, 0));
 
     let (jitter_x, jitter_y) = (
         float_any(
@@ -1356,12 +1363,20 @@ fn evaluate_denoised(
         );
         return INVALID_PARAMETER;
     }
-    if flag & FLAG_MV_LOWRES == 0 {
-        (mw, mh) = if mw < dlss.target_width || mh < dlss.target_height {
-            (0, 0)
-        } else {
-            (u32::MAX, u32::MAX)
-        };
+    if denoised_output_mv_unsupported(
+        flag,
+        (mw, mh),
+        (iw, ih),
+        (dlss.target_width, dlss.target_height),
+    ) {
+        once(
+            &LOGGED_OUTPUT_MV,
+            format_args!(
+                "EvaluateFeature(DLSSD): output-resolution motion vectors ({mw}x{mh} for {iw}x{ih} to {}x{}) unsupported",
+                dlss.target_width, dlss.target_height
+            ),
+        );
+        return INVALID_PARAMETER;
     }
     let tw = cw
         .min(dw)
@@ -1370,6 +1385,9 @@ fn evaluate_denoised(
         .min(saw)
         .min(nw)
         .min(rgh_w)
+        .min(hw)
+        .min(dnw)
+        .min(ovw)
         .min(rw)
         .min(dlss.target_width);
     let th = ch
@@ -1379,6 +1397,9 @@ fn evaluate_denoised(
         .min(sah)
         .min(nh)
         .min(rgh_h)
+        .min(hh)
+        .min(dnh)
+        .min(ovh)
         .min(rh)
         .min(dlss.target_height);
     if tw < iw || th < ih {
@@ -1391,9 +1412,10 @@ fn evaluate_denoised(
         return INVALID_PARAMETER;
     }
 
+    let (req_w, req_h) = (iw.min(tw), ih.min(th));
     let mut want = D3D12DenoisedScalerDesc {
-        input_width: denoised.desc.input_width,
-        input_height: denoised.desc.input_height,
+        input_width: req_w,
+        input_height: req_h,
         output_width: dlss.target_width,
         output_height: dlss.target_height,
         color_format: color_desc.format,
@@ -1420,17 +1442,10 @@ fn evaluate_denoised(
         transparency_overlay_enabled: i32::from(!transparency_overlay.is_null()),
     };
 
-    if denoised.scaler.is_null()
-        || !denoised_scaler_desc_eq(&want, &denoised.desc)
-        || tw < want.input_width
-        || th < want.input_height
-        || iw > want.input_width
-        || ih > want.input_height
-    {
+    if denoised.scaler.is_null() || !denoised_scaler_desc_eq(&want, &denoised.desc) {
         // SAFETY: the feature's reference to its last denoised scaler, if any.
         unsafe { release(denoised.scaler) };
         denoised.scaler = core::ptr::null_mut();
-        (want.input_width, want.input_height) = (tw, th);
         let ext1 = feature.ext;
         // SAFETY: `ext1` is DXMT's `IMTLD3D12DeviceExt1` for `RayReconstruction`.
         let slots = unsafe { vtbl::<D3D12DeviceExt1Vtbl>(ext1) };
@@ -1466,7 +1481,9 @@ fn evaluate_denoised(
             once(
                 &LOGGED_SCALER,
                 format_args!(
-                    "EvaluateFeature(DLSSD): no MetalFX denoised scaler for {tw}x{th} to {}x{}: {}",
+                    "EvaluateFeature(DLSSD): no MetalFX denoised scaler for {}x{} to {}x{}: {}",
+                    want.input_width,
+                    want.input_height,
                     want.output_width,
                     want.output_height,
                     hex(hr.cast_unsigned())
@@ -1489,6 +1506,9 @@ fn evaluate_denoised(
         return FEATURE_NOT_SUPPORTED;
     };
     forward_camera_params(feature, list, params);
+    if has_frame_gen_ui_params(params) {
+        let _ = apply_frame_gen_ui(feature, list, params);
+    }
     let desc = D3D12DenoisedUpscaleDesc {
         color,
         output,

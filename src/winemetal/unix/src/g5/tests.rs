@@ -122,7 +122,6 @@ getters!(DenoisedGetters for NSObject {
     specularHitDistanceTextureUsage specular_hit_distance_texture_usage -> MTLTextureUsage;
     denoiseStrengthMaskTextureUsage denoise_strength_mask_texture_usage -> MTLTextureUsage;
     transparencyOverlayTextureUsage transparency_overlay_texture_usage -> MTLTextureUsage;
-    reactiveMaskTextureUsage reactive_mask_texture_usage -> MTLTextureUsage;
     outputTextureUsage output_texture_usage -> MTLTextureUsage;
     preExposure pre_exposure -> f32;
     jitterOffsetX jitter_offset_x -> f32;
@@ -145,6 +144,23 @@ getters!(DenoisedGetters for NSObject {
     reactiveMaskTexture reactive_mask_texture -> Option<Retained<ProtocolObject<dyn MTLTexture>>>;
     fence fence -> Option<Retained<ProtocolObject<dyn MTLFence>>>;
 });
+
+trait DenoisedReactiveUsage {
+    fn has_selector(&self, sel: Sel) -> bool;
+    fn reactive_mask_texture_usage(&self) -> MTLTextureUsage;
+    fn reactive_texture_usage(&self) -> MTLTextureUsage;
+}
+
+impl DenoisedReactiveUsage for NSObject {
+    extern_methods!(
+        #[unsafe(method(respondsToSelector:))]
+        fn has_selector(&self, sel: Sel) -> bool;
+        #[unsafe(method(reactiveMaskTextureUsage))]
+        fn reactive_mask_texture_usage(&self) -> MTLTextureUsage;
+        #[unsafe(method(reactiveTextureUsage))]
+        fn reactive_texture_usage(&self) -> MTLTextureUsage;
+    );
+}
 
 fn device() -> Retained<ProtocolObject<dyn MTLDevice>> {
     MTLCreateSystemDefaultDevice().expect("a Metal device")
@@ -245,20 +261,23 @@ unsafe fn send_get_float4x4(obj: *const AnyObject, sel: Sel) -> [f32; 16] {
     out
 }
 
-/// Reads a 4x4 float matrix getter (`simd_float4x4`) via `objc_msgSend`.
+/// Reads a 4x4 float matrix getter (`simd_float4x4`) via `objc_msgSend_stret`.
 ///
 /// # Safety
 ///
 /// `obj` must point to a valid Objective-C receiver implementing `sel` returning `simd_float4x4`.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(target_arch = "x86_64")]
 unsafe fn send_get_float4x4(obj: *const AnyObject, sel: Sel) -> [f32; 16] {
-    type SendFn = unsafe extern "C-unwind" fn(*const AnyObject, Sel) -> [[f32; 4]; 4];
+    #[repr(C, align(16))]
+    struct Mat4([[f32; 4]; 4]);
 
-    let raw = objc2::ffi::objc_msgSend as *const ();
-    // SAFETY: `objc_msgSend` returns a 64-byte `[[f32; 4]; 4]` matching `simd_float4x4` layout.
+    type SendFn = unsafe extern "C-unwind" fn(*const AnyObject, Sel) -> Mat4;
+
+    let raw = objc2::ffi::objc_msgSend_stret as *const ();
+    // SAFETY: `objc_msgSend_stret` returns a 64-byte `Mat4` via `sret` matching `simd_float4x4`.
     let send = unsafe { core::mem::transmute::<*const (), SendFn>(raw) };
     // SAFETY: the caller guarantees `obj` is valid and `sel` returns `simd_float4x4`.
-    let [c0, c1, c2, c3] = unsafe { send(obj, sel) };
+    let Mat4([c0, c1, c2, c3]) = unsafe { send(obj, sel) };
     [
         c0[0], c0[1], c0[2], c0[3], c1[0], c1[1], c1[2], c1[3], c2[0], c2[1], c2[2], c2[3], c3[0],
         c3[1], c3[2], c3[3],
@@ -721,6 +740,48 @@ fn interpolate_encode_sets_every_property() {
         assert_eq!(interpolator.output_offset_x(), 12);
         assert_eq!(interpolator.output_offset_y(), 16);
     }
+    // Re-encoding with zeroed content size and offsets must reset sticky macOS 27 subrects.
+    let reset_cmdbuf = queue.commandBuffer().expect("a reset command buffer");
+    let reset_props = WMTFXFrameInterpolatorProps {
+        content_width: 0,
+        content_height: 0,
+        depth_content_offset_x: 0,
+        depth_content_offset_y: 0,
+        motion_content_offset_x: 0,
+        motion_content_offset_y: 0,
+        output_offset_x: 0,
+        output_offset_y: 0,
+        has_matrices: 0,
+        ..props
+    };
+    let mut reset_p = UnixcallMtlcommandbufferFrameInterpolate {
+        cmdbuf: handle_of(&*reset_cmdbuf),
+        interpolator: handle_of(&*interpolator),
+        color: handle_of(&*color),
+        prev_color: handle_of(&*prev),
+        depth: handle_of(&*depth),
+        motion: handle_of(&*motion),
+        output: handle_of(&*output),
+        fence: handle_of(&*fence),
+        props: mem(&reset_props),
+        ui_texture: handle_of(&*ui),
+    };
+    assert_eq!(call(encode_frame_interpolate, &mut reset_p), 0);
+    reset_cmdbuf.commit();
+    reset_cmdbuf.waitUntilCompleted();
+    assert_eq!(reset_cmdbuf.status(), MTLCommandBufferStatus::Completed);
+    if interpolator.responds_to_selector(Sel::register(c"contentWidth")) {
+        assert_eq!(interpolator.content_width(), interpolator.input_width());
+        assert_eq!(interpolator.content_height(), interpolator.input_height());
+    }
+    if interpolator.responds_to_selector(Sel::register(c"depthContentOffsetX")) {
+        assert_eq!(interpolator.depth_content_offset_x(), 0);
+        assert_eq!(interpolator.depth_content_offset_y(), 0);
+        assert_eq!(interpolator.motion_content_offset_x(), 0);
+        assert_eq!(interpolator.motion_content_offset_y(), 0);
+        assert_eq!(interpolator.output_offset_x(), 0);
+        assert_eq!(interpolator.output_offset_y(), 0);
+    }
     let w2v_sel = Sel::register(c"worldToViewMatrix");
     if interpolator.responds_to_selector(w2v_sel) {
         // SAFETY: `interpolator` is live and responds to `worldToViewMatrix`.
@@ -849,7 +910,12 @@ fn denoised_encode_sets_every_property() {
         scaler.transparency_overlay_texture_usage(),
     );
     let exposure = texture(&device, r16f, 1, MTLTextureUsage::ShaderRead);
-    let reactive = texture(&device, r8u, 64, scaler.reactive_mask_texture_usage());
+    let reactive_usage = if scaler.has_selector(Sel::register(c"reactiveMaskTextureUsage")) {
+        scaler.reactive_mask_texture_usage()
+    } else {
+        scaler.reactive_texture_usage()
+    };
+    let reactive = texture(&device, r8u, 64, reactive_usage);
     let output = texture(&device, rgba16f, 128, scaler.output_texture_usage());
     let fence = device.newFence().expect("a fence");
     let world_to_view = [

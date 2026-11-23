@@ -267,7 +267,7 @@ pub unsafe fn get_custom_heap_properties(
             creation_node_mask: 1,
             visible_node_mask: 1,
         },
-        2 | 5 => HeapProperties {
+        2 | 5 if heap_type == 2 || !advertise_numa => HeapProperties {
             r#type: D3D12_HEAP_TYPE_CUSTOM,
             cpu_page_property: D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
             memory_pool_preference: D3D12_MEMORY_POOL_L0,

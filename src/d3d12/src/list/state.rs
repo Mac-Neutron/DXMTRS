@@ -9,7 +9,11 @@ use core::{
 };
 use std::sync::Arc;
 
-use dxmt_core::{format::depth_stencil_planar_flags, topology};
+use dxmt_core::{
+    format::depth_stencil_planar_flags,
+    settings::{Flags, settings},
+    topology,
+};
 use dxmt_util::private_data;
 use winemetal_wire::{
     WMT_INDEX_TYPE_U_INT16, WMT_LOAD_ACTION_LOAD, WMT_STORE_ACTION_DONT_CARE,
@@ -1744,12 +1748,13 @@ pub unsafe fn om_set_render_targets(
                 if (planar & !ro) != 0 {
                     record_pass_write(&mut new_pass, Arc::as_ptr(&tex).cast::<c_void>());
                 }
+                let allow_discard = settings().flags.contains(Flags::DISCARD_LOAD_STORE);
                 let view_ref = TextureViewRef::from_texture(&tex, desc.view);
                 if (planar & 1) != 0 {
                     new_pass.depth.attachment.clone_from(&view_ref);
                     new_pass.depth.depth_plane = 0;
                     new_pass.depth.load_action = WMT_LOAD_ACTION_LOAD;
-                    new_pass.depth.store_action = if (ro & 1) != 0 {
+                    new_pass.depth.store_action = if (ro & 1) != 0 && allow_discard {
                         WMT_STORE_ACTION_DONT_CARE
                     } else {
                         WMT_STORE_ACTION_STORE
@@ -1759,7 +1764,7 @@ pub unsafe fn om_set_render_targets(
                     new_pass.stencil.attachment = view_ref;
                     new_pass.stencil.depth_plane = 0;
                     new_pass.stencil.load_action = WMT_LOAD_ACTION_LOAD;
-                    new_pass.stencil.store_action = if (ro & 2) != 0 {
+                    new_pass.stencil.store_action = if (ro & 2) != 0 && allow_discard {
                         WMT_STORE_ACTION_DONT_CARE
                     } else {
                         WMT_STORE_ACTION_STORE

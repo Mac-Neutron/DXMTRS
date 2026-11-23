@@ -7,7 +7,8 @@ use winemetal_sys::{
     Obj,
     wire::{
         WMT_LOAD_ACTION_CLEAR, WMT_LOAD_ACTION_DONT_CARE, WMT_LOAD_ACTION_LOAD,
-        WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_STORE, WMT_TEXTURE_TYPE2D, WMTClearColor,
+        WMT_STORE_ACTION_DONT_CARE, WMT_STORE_ACTION_MULTISAMPLE_RESOLVE, WMT_STORE_ACTION_STORE,
+        WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE, WMT_TEXTURE_TYPE2D, WMTClearColor,
         WMTRenderPassInfo, WMTTextureInfo,
     },
 };
@@ -174,4 +175,46 @@ fn apply_clear_preserves_dont_care_load_action() {
     assert_eq!(info.colors[0].load_action, WMT_LOAD_ACTION_CLEAR);
     assert_eq!(info.depth.load_action, WMT_LOAD_ACTION_CLEAR);
     assert_eq!(info.stencil.load_action, WMT_LOAD_ACTION_CLEAR);
+}
+
+#[test]
+fn same_target_rejects_resolve_or_mismatched_store_action() {
+    let rt0 = make_test_view(70);
+    let resolve_dst = make_test_view(70);
+
+    let mut a = List::empty_render_pass();
+    let mut b = List::empty_render_pass();
+    a.colors[0].attachment = Some(rt0.clone());
+    b.colors[0].attachment = Some(rt0);
+    a.colors[0].load_action = WMT_LOAD_ACTION_LOAD;
+    b.colors[0].load_action = WMT_LOAD_ACTION_LOAD;
+    a.colors[0].store_action = WMT_STORE_ACTION_STORE;
+    b.colors[0].store_action = WMT_STORE_ACTION_STORE;
+    assert!(same_target(&a, &b));
+
+    // Pass B with an inline MSAA resolve attachment must not merge into pass A.
+    b.colors[0].resolve_attachment = Some(resolve_dst);
+    b.colors[0].store_action = WMT_STORE_ACTION_MULTISAMPLE_RESOLVE;
+    assert!(!same_target(&a, &b));
+
+    b.colors[0].store_action = WMT_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE;
+    assert!(!same_target(&a, &b));
+
+    // Pass B ending with DONT_CARE on color must not merge into a STORE pass A.
+    b.colors[0].resolve_attachment = None;
+    b.colors[0].store_action = WMT_STORE_ACTION_DONT_CARE;
+    assert!(!same_target(&a, &b));
+
+    // Depth/stencil: STORE pass A must not merge a DONT_CARE pass B (would lose ending discard).
+    let ds = make_test_view(260);
+    a = List::empty_render_pass();
+    b = List::empty_render_pass();
+    a.depth.attachment = Some(ds.clone());
+    b.depth.attachment = Some(ds);
+    a.depth.load_action = WMT_LOAD_ACTION_LOAD;
+    b.depth.load_action = WMT_LOAD_ACTION_LOAD;
+    a.depth.store_action = WMT_STORE_ACTION_STORE;
+    b.depth.store_action = WMT_STORE_ACTION_DONT_CARE;
+    b.dsv_readonly_flags = 1;
+    assert!(!same_target(&a, &b));
 }
