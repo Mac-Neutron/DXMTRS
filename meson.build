@@ -239,8 +239,10 @@ endif
 # rust_no_source: an image linked from Rust archives alone still needs one compiled input, from which meson takes its
 # link driver; an empty C file meson writes into the build folder is that input. The MSVC runtime symbols x86 needs
 # (_fltused, __chkstk, __tls_array) are Rust: dxmt_dll!'s pe_rt part (src/util/src/boot.rs), named at each crate's root.
+# Rust 1.100+'s Windows std::sys::sync::futex also imports WaitOnAddress / WakeByAddress* from
+# api-ms-win-core-synch-l1-2-0.dll (-lsynchronization).
 rust_no_source = configure_file(output : 'rust_no_source.c', capture : true, command : ['true'])
-rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll'] : [],
+rust_runtime_dep = declare_dependency(link_args : dxmt_crossbuild ? ['-lntdll', '-lsynchronization'] : [],
   dependencies : rust_pe_wine_ntdll,
   sources : rust_no_source)
 
