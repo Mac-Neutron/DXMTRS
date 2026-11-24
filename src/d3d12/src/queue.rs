@@ -2184,8 +2184,7 @@ fn flush_pending(
     let mut owed = false;
     match ring {
         None => {
-            for idx in 0..timestamps.pending_samples.len() {
-                let s = &timestamps.pending_samples[idx];
+            for s in &timestamps.pending_samples {
                 sample_after(cmdbuf, mtl_device, order, s.buffer, u64::from(s.index), why);
             }
         }

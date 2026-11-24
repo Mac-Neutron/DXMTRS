@@ -41,6 +41,16 @@ fn a_reduced_scale_maps_one_render_pixel_to_its_inverse_in_logical_pixels() {
 }
 
 #[test]
+fn a_per_axis_scale_carries_its_own_inverse_in_each_lane() {
+    let fit =
+        crate::render_scale::panel_fit(true, (2048, 1536), Some((1920, 1080)), Some((2048, 1536)));
+    let [x, y, z, w] = lanes(&build_ps_draw_bytes(fit));
+    assert!((x - 2048.0 / 1920.0).abs() < 1e-6);
+    assert!((y - 1536.0 / 1080.0).abs() < 1e-6);
+    assert_eq!([z, w].map(f32::to_bits), [0.0f32, 0.0].map(f32::to_bits));
+}
+
+#[test]
 fn the_msl_view_names_the_one_row_the_bytes_carry() {
     assert!(PS_DRAW_MSL.contains("float4 vpos_scale;"));
     assert_eq!(PS_DRAW_BYTES, 16);

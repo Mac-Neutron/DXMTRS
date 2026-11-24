@@ -2748,7 +2748,8 @@ fn read_swapchain_target(
     let bpp = mtld3d_core::format::map_d3d_format(inner.live_format())
         .map_or(4, |fmt| fmt.bytes_per_pixel().max(1));
     let resolved_id = mtld3d_core::ids::TextureId::new_unique();
-    let (scaled_w, scaled_h) = inner.live_render_scale().extent(full_w, full_h);
+    let scale = inner.live_render_scale();
+    let (scaled_w, scaled_h) = scale.size((full_w, full_h));
     core.texture_create(
         resolved_id,
         &crate::rt::device::CoreTextureDesc {

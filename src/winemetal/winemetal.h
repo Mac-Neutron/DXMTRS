@@ -2410,6 +2410,7 @@ struct WMTViewPollOut {
   uint32_t panel_max_hz;
   uint32_t flags;
   uint32_t reserved;
+  uint64_t screen_sizes;
 };
 
 struct WMTCursorOverlayParams {
@@ -2428,7 +2429,7 @@ struct WMTCursorOverlayParams {
 };
 
 STATIC_ASSERT(sizeof(WMTViewAttachDesc) == 16);
-STATIC_ASSERT(sizeof(WMTViewPollOut) == 32);
+STATIC_ASSERT(sizeof(WMTViewPollOut) == 40);
 STATIC_ASSERT(sizeof(WMTCursorOverlayParams) == 64);
 
 WINEMETAL_API uint64_t WMTDeclareLatencyCriticalActivity(void);

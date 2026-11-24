@@ -172,6 +172,7 @@ fn view_sync_and_poll_reads_and_clears_latched_flags() {
             client_surface: 0,
             source_size: None,
             screen_pixels: ScreenPixels::UNKNOWN,
+            screen_sizes: display::pack_screen_sizes(Some((3024, 1964)), Some((2560, 1600))),
             panel_display: 0,
         },
     );
@@ -190,6 +191,7 @@ fn view_sync_and_poll_reads_and_clears_latched_flags() {
         panel_max_hz: 0,
         flags: 0,
         reserved: 1,
+        screen_sizes: 0,
     };
     let mut args = UnixcallWmtViewSyncAndPoll {
         view: view as u64,
@@ -206,6 +208,10 @@ fn view_sync_and_poll_reads_and_clears_latched_flags() {
     assert_eq!(out.edr_current.to_bits(), 2.5_f32.to_bits());
     assert_eq!(out.edr_potential.to_bits(), 4.0_f32.to_bits());
     assert_eq!(out.panel_max_hz, 120);
+    assert_eq!(
+        out.screen_sizes,
+        display::pack_screen_sizes(Some((3024, 1964)), Some((2560, 1600)))
+    );
     assert_eq!(
         out.flags,
         WMT_VIEW_POLL_FLAG_HDR_ACTIVE
@@ -249,6 +255,7 @@ fn presented_event_tracks_undisplayed_run_and_signals_missing_drawable() {
             client_surface: 0,
             source_size: None,
             screen_pixels: ScreenPixels::UNKNOWN,
+            screen_sizes: 0,
             panel_display: 0,
         },
     );
@@ -275,6 +282,7 @@ fn presented_event_tracks_undisplayed_run_and_signals_missing_drawable() {
         panel_max_hz: 0,
         flags: 0,
         reserved: 0,
+        screen_sizes: 0,
     };
     att.write_poll_out(0, 0, &mut out);
     assert_ne!(out.flags & WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING, 0);
@@ -528,6 +536,7 @@ fn retain_newest_surface_gates_on_first_submitted_frame() {
         client_surface: surface,
         source_size: None,
         screen_pixels: ScreenPixels::UNKNOWN,
+        screen_sizes: 0,
         panel_display: 0,
     };
 
@@ -581,6 +590,7 @@ fn view_sync_and_poll_main_panel_and_source_extent() {
         panel_max_hz: 9,
         flags: 9,
         reserved: 9,
+        screen_sizes: 9,
     };
     let mut panel_args = UnixcallWmtViewSyncAndPoll {
         view: 0,
@@ -602,6 +612,7 @@ fn view_sync_and_poll_main_panel_and_source_extent() {
     assert_eq!(out.panel_max_hz, 0);
     assert_eq!(out.flags, 0);
     assert_eq!(out.reserved, 0);
+    assert_eq!(out.screen_sizes, 0);
 
     let mut null_args = UnixcallWmtViewSyncAndPoll {
         view: 0,
@@ -632,6 +643,7 @@ fn view_sync_and_poll_main_panel_and_source_extent() {
             client_surface: 0,
             source_size: Some((1280, 720)),
             screen_pixels: ScreenPixels::UNKNOWN,
+            screen_sizes: 0,
             panel_display: 0,
         },
     );
@@ -687,6 +699,7 @@ fn view_sync_and_poll_main_panel_and_source_extent() {
             client_surface: 0,
             source_size: None,
             screen_pixels: ScreenPixels::UNKNOWN,
+            screen_sizes: 0,
             panel_display: 0,
         },
     );

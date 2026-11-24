@@ -756,8 +756,8 @@ impl StateSnapshot {
         }
 
         // Sampler states — per-type membership, every stage.
-        for stage in 0..STAGE_COUNT {
-            for (samp_ty, &val) in (0u32..).zip(self.sampler_states[stage].iter()) {
+        for (stage, states) in self.sampler_states.iter().enumerate() {
+            for (samp_ty, &val) in (0u32..).zip(states.iter()) {
                 if block_type.includes_sampler_state(samp_ty) {
                     dev.stage_bindings_mut()
                         .set_sampler_state(stage, samp_ty as usize, val);

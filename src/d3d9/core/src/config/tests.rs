@@ -49,6 +49,8 @@ fn defaults_match_documented_values() {
     assert_eq!(d.present_max_fps, 0);
     assert_eq!(d.present_max_frame_latency, 0, "auto");
     assert_eq!(d.render_scale_percent, 100);
+    assert!(d.render_lod_bias);
+    assert!(d.render_panel_fit);
     assert_eq!(d.max_resolutions, 0);
 }
 
@@ -434,6 +436,17 @@ fn render_lod_bias_defaults_on_and_parses_off() {
     assert!(parse(None, "render.lodBias = true\n", None).render_lod_bias);
     assert!(
         parse(None, "render.lodBias = maybe\n", None).render_lod_bias,
+        "an unparsable value keeps the default"
+    );
+}
+
+#[test]
+fn render_panel_fit_defaults_on_and_parses_off() {
+    assert!(parse(None, "", None).render_panel_fit, "on by default");
+    assert!(!parse(None, "render.panelFit = false\n", None).render_panel_fit);
+    assert!(parse(None, "render.panelFit = true\n", None).render_panel_fit);
+    assert!(
+        parse(None, "render.panelFit = maybe\n", None).render_panel_fit,
         "an unparsable value keeps the default"
     );
 }

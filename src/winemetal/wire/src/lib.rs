@@ -1430,6 +1430,7 @@ pub struct WMTViewPollOut {
     pub panel_max_hz: u32,
     pub flags: u32,
     pub reserved: u32,
+    pub screen_sizes: u64,
 }
 
 #[derive(Clone, Copy)]

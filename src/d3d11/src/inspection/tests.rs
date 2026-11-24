@@ -61,6 +61,17 @@ fn features_are_the_probe_golden() {
 }
 
 #[test]
+fn options5_reports_shared_resource_tier_3() {
+    let insp = Inspection::default_apple8_profile();
+    let mut tier = 0u32;
+    let hr = insp
+        .check_feature_support(19, (&raw mut tier).cast(), 4)
+        .cast_unsigned();
+    assert_eq!(hr, 0);
+    assert_eq!(tier, 3);
+}
+
+#[test]
 fn format_support_is_the_probe_golden() {
     let insp = Inspection::default_apple8_profile();
     let mut fmt_count = 0usize;

@@ -133,11 +133,13 @@ impl CoreDevice {
             return false;
         }
         if target != self.target {
+            self.close_depth_span();
             if self.render_open {
                 self.close_pass();
             }
             self.target = target;
             self.target_gen = self.target_gen.wrapping_add(1);
+            self.depth_plane.forget_targets();
         }
         self.target_logical_size = None;
         true

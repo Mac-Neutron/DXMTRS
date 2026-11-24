@@ -306,9 +306,9 @@ impl MergePlan {
             let next_ref = unsafe { &*next_ptr };
             let mut n = samples;
             let mut ok = next_ref.pre_tail.is_null() && same_target(base_ref, next_ref);
-            for i in 0..self.folds.len() {
-                // SAFETY: `self.folds[i]` is a valid `EncoderData` pointer.
-                let fold_ref = unsafe { &*self.folds[i] };
+            for &fold_ptr in &self.folds {
+                // SAFETY: `fold_ptr` is a valid `EncoderData` pointer.
+                let fold_ref = unsafe { &*fold_ptr };
                 ok = ok && fits_samples(fold_ref, &mut n, info, sampling);
             }
             ok = ok && fits_samples(&next_ref.base, &mut n, info, sampling);
@@ -318,8 +318,8 @@ impl MergePlan {
                 -1
             };
             if !ok || why >= 0 {
-                for j in samples..n {
-                    info.sample_buffers[j] = WMTRenderPassSampleBufferInfo {
+                for sb in &mut info.sample_buffers[samples..n] {
+                    *sb = WMTRenderPassSampleBufferInfo {
                         sample_buffer: 0,
                         end_of_fragment_sample_index: 0,
                         start_of_vertex_sample_index: 0,
@@ -377,19 +377,20 @@ fn fits_samples(
         return true;
     }
     let count = usize::from(e.num_samples);
-    for k in 0..count {
+    for sample in &e.samples[..count] {
         if *n == info.sample_buffers.len() {
             return false;
         }
-        let buf = e.samples[k].buffer;
-        for j in 0..*n {
-            if info.sample_buffers[j].sample_buffer == buf {
-                return false;
-            }
+        let buf = sample.buffer;
+        if info.sample_buffers[..*n]
+            .iter()
+            .any(|sb| sb.sample_buffer == buf)
+        {
+            return false;
         }
         info.sample_buffers[*n] = WMTRenderPassSampleBufferInfo {
             sample_buffer: buf,
-            end_of_fragment_sample_index: u64::from(e.samples[k].index),
+            end_of_fragment_sample_index: u64::from(sample.index),
             start_of_vertex_sample_index: DONT_SAMPLE,
         };
         *n += 1;

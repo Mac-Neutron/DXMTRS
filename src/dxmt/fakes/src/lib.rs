@@ -426,6 +426,15 @@ const extern "C-unwind" fn fake_signaled_value(_event: u64) -> u64 {
     0
 }
 
+#[unsafe(export_name = "MTLSharedEvent_waitUntilSignaledValue")]
+const extern "C-unwind" fn fake_wait_until_signaled_value(
+    _event: u64,
+    _value: u64,
+    _timeout: u64,
+) -> bool {
+    true
+}
+
 #[unsafe(export_name = "MTLSharedEvent_signalValue")]
 extern "C-unwind" fn fake_shared_event_signal_value(event: u64, value: u64) {
     state().say(event, format!("MTLSharedEvent_signalValue value={value}"));
@@ -1478,6 +1487,7 @@ extern "C-unwind" fn fake_attach_metal_view(
             panel_max_hz: 60,
             flags,
             reserved: 0,
+            screen_sizes: 0,
         }
     });
     if let Some((w, h)) = state.drawable_size.get(&device).copied() {
@@ -1534,6 +1544,7 @@ extern "C-unwind" fn fake_view_sync_and_poll(
             panel_max_hz: 60,
             flags: 0,
             reserved: 0,
+            screen_sizes: 0,
         });
     if let Some((w, h)) = state.drawable_size.get(&dev).copied() {
         poll.drawable_width = u32::try_from(w).unwrap_or(u32::MAX);

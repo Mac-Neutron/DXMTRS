@@ -359,7 +359,7 @@ fn dxt_volume_partial_boxes_preserve_other_blocks_and_publish_update_texture() {
             back: 1,
         };
         src.write_blocks(1, Some(&edge), &blue);
-        let mut tail = red.clone();
+        let mut tail = red;
         tail.extend_from_slice(&blue);
         assert_eq!(src.read_blocks(1).2, tail);
         let (_, dst) = h.try_create_volume_texture([12, 8, 3], 2, 0, format, D3DPOOL_DEFAULT);

@@ -920,9 +920,9 @@ pub fn pre_draw_with_options(
                 .cast::<c_void>()
                 .cast::<WMTScissorRect>();
             if !p.is_null() {
-                for i in 0..vp_count {
+                for (i, &sc) in list.scissor_rects[..vp_count].iter().enumerate() {
                     let rect = if i < sc_count {
-                        list.scissor_rects[i]
+                        sc
                     } else {
                         WMTScissorRect {
                             x: 0,

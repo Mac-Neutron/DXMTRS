@@ -535,6 +535,8 @@ fn create_device_texture_1d_inner(
             return E_FAIL;
         };
         initialize(setup.allocation);
+        let initializer = dev.queue().initializer();
+        initializer.wait(initializer.flush_to_wait());
         local_kmt = setup.local_kmt;
         global_kmt = setup.global_kmt;
         keyed_mutex = setup.keyed_mutex;
@@ -658,6 +660,8 @@ fn create_device_texture_2d_inner(
             return E_FAIL;
         };
         initialize(setup.allocation);
+        let initializer = dev.queue().initializer();
+        initializer.wait(initializer.flush_to_wait());
         local_kmt = setup.local_kmt;
         global_kmt = setup.global_kmt;
         keyed_mutex = setup.keyed_mutex;
@@ -781,6 +785,8 @@ fn create_device_texture_3d_inner(
             return E_FAIL;
         };
         initialize(setup.allocation);
+        let initializer = dev.queue().initializer();
+        initializer.wait(initializer.flush_to_wait());
         local_kmt = setup.local_kmt;
         global_kmt = setup.global_kmt;
         keyed_mutex = setup.keyed_mutex;

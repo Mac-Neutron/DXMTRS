@@ -429,6 +429,20 @@ pub fn backing_pixels(frame: Option<(u32, u32)>, scale: f64) -> Option<(u32, u32
     (pixels.0 != 0 && pixels.1 != 0).then_some(pixels)
 }
 
+/// Folds `(panel, backing)` into one word (16 bits per dimension, panel high).
+#[must_use]
+pub fn pack_screen_sizes(panel: Option<(u32, u32)>, backing: Option<(u32, u32)>) -> u64 {
+    let half = |size: Option<(u32, u32)>| {
+        size.and_then(|(width, height)| {
+            let width = u16::try_from(width).ok().filter(|&w| w != 0)?;
+            let height = u16::try_from(height).ok().filter(|&h| h != 0)?;
+            Some((u64::from(width) << 16) | u64::from(height))
+        })
+        .unwrap_or(0)
+    };
+    (half(panel) << 32) | half(backing)
+}
+
 /// Whether the display scales the backing store down to the panel, in either axis.
 ///
 /// That is when the drawable can be capped below the layer's size and the compositor magnifies it

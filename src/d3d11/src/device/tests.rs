@@ -86,6 +86,15 @@ extern "C-unwind" fn fake_shared_event_signaled_value(_event: u64) -> u64 {
     0
 }
 
+#[unsafe(export_name = "MTLSharedEvent_waitUntilSignaledValue")]
+extern "C-unwind" fn fake_shared_event_wait_until_signaled_value(
+    _event: u64,
+    _value: u64,
+    _timeout: u64,
+) -> bool {
+    true
+}
+
 #[unsafe(export_name = "MTLDevice_setShouldMaximizeConcurrentCompilation")]
 extern "C-unwind" fn fake_set_maximize_concurrent(_device: u64, _value: bool) {}
 

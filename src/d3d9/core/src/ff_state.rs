@@ -562,12 +562,16 @@ impl FfState {
             len: 0,
         };
         let active = self.light_active_mask();
-        for i in 0..MAX_ACTIVE_LIGHTS as usize {
+        for (i, &light) in self
+            .lights
+            .iter()
+            .enumerate()
+            .take(MAX_ACTIVE_LIGHTS as usize)
+        {
             if out.len == MAX_ACTIVE_LIGHTS as usize {
                 return out;
             }
             if (active & (1u8 << i)) != 0 {
-                let light = self.lights[i];
                 out.lights[out.len] = ActiveLight {
                     light,
                     ty: light.type_,

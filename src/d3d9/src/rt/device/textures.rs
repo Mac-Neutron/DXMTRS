@@ -74,6 +74,12 @@ bitflags::bitflags! {
         ///
         /// Made with the render-target usage, tracked a subresource at a time, and zeroed.
         const RENDER_TARGET = 1 << 1;
+        /// A depth-stencil texture created for shader sampling (`CreateTexture(DEPTHSTENCIL)`).
+        ///
+        /// Standalone `CreateDepthStencilSurface` and auto depth-stencil surfaces leave this clear;
+        /// pixel shaders only bind `DEPTH_SAMPLEABLE` textures, which guides `#1271` stand-in
+        /// write-back tracking.
+        const DEPTH_SAMPLEABLE = 1 << 2;
     }
 }
 
@@ -137,6 +143,8 @@ pub(super) struct Stored {
     desc: CoreTextureDesc,
     /// Logical `(width, height)` reported to D3D9 before `RenderScale` downscaling.
     logical_size: (u32, u32),
+    /// Render scale applied when allocating this texture (`RenderScale::IDENTITY` unless scaled).
+    scale: mtld3d_core::render_scale::RenderScale,
     /// The `WMTPixelFormat` of the view the last pass or Clear wrote it through.
     ///
     /// Its stored format or its sRGB twin's; the stored one until a pass or Clear writes it. A
@@ -231,10 +239,12 @@ impl CoreDevice {
                 .any(|t| matches!(*t, TargetRef::Texture { id: held, .. } if held == id))
             || self.depth.is_some_and(|depth| depth.id == id);
         if replaces_bound {
+            self.close_depth_span();
             if self.render_open {
                 self.close_pass();
             }
             self.target_gen = self.target_gen.wrapping_add(1);
+            self.depth_plane.forget_targets();
         }
         self.clear_history.forget(ClearTarget::Texture(id));
         self.forget_depth_snapshots(id);
@@ -244,6 +254,7 @@ impl CoreDevice {
                 texture,
                 desc: *desc,
                 logical_size: (desc.width, desc.height),
+                scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
                 last_written: desc.pixel_format,
             },
         );
@@ -259,6 +270,41 @@ impl CoreDevice {
         if let Some(stored) = self.textures.get_mut(&id) {
             stored.logical_size = (logical_width, logical_height);
         }
+    }
+
+    /// Records the [`mtld3d_core::render_scale::RenderScale`] for `id`.
+    pub fn set_texture_scale(
+        &mut self,
+        id: TextureId,
+        scale: mtld3d_core::render_scale::RenderScale,
+    ) {
+        if let Some(stored) = self.textures.get_mut(&id) {
+            stored.scale = scale;
+        }
+    }
+
+    /// Render scale of `id`'s texture (`RenderScale::IDENTITY` when absent or unscaled).
+    #[must_use]
+    pub(super) fn texture_scale(&self, id: TextureId) -> mtld3d_core::render_scale::RenderScale {
+        self.textures
+            .get(&id)
+            .map_or(mtld3d_core::render_scale::RenderScale::IDENTITY, |s| {
+                s.scale
+            })
+    }
+
+    /// Logical `(width, height)` stored for `id`, or `None` if absent.
+    #[must_use]
+    pub(super) fn texture_logical_size(&self, id: TextureId) -> Option<(u32, u32)> {
+        self.textures.get(&id).map(|s| s.logical_size)
+    }
+
+    /// Whether `id` is a sampleable depth texture (`CoreTextureFlags::DEPTH_SAMPLEABLE`).
+    #[must_use]
+    pub(super) fn is_depth_sampleable(&self, id: TextureId) -> bool {
+        self.textures
+            .get(&id)
+            .is_some_and(|s| s.desc.flags.contains(CoreTextureFlags::DEPTH_SAMPLEABLE))
     }
 
     /// Returns `(render_area, logical_area)` in pixels for the currently bound colour target 0.
@@ -430,6 +476,10 @@ impl CoreDevice {
             TargetRef::BackBuffer | TargetRef::Null => false,
         };
         let had_target = holds(&self.target);
+        let had_depth = self.depth.is_some_and(|depth| depth.id == id);
+        if had_target || had_depth || self.depth_plane.span_surface().is_some_and(|s| s.id == id) {
+            self.close_depth_span();
+        }
         if had_target {
             if self.render_open {
                 self.close_pass();
@@ -448,7 +498,6 @@ impl CoreDevice {
                 }
             }
         }
-        let had_depth = self.depth.is_some_and(|depth| depth.id == id);
         if had_depth {
             if self.render_open {
                 self.close_pass();
@@ -457,6 +506,7 @@ impl CoreDevice {
         }
         if had_target || had_extra || had_depth {
             self.target_gen = self.target_gen.wrapping_add(1);
+            self.depth_plane.forget_targets();
         }
         self.clear_history.forget(ClearTarget::Texture(id));
         self.forget_depth_snapshots(id);
@@ -840,6 +890,9 @@ impl CoreDevice {
             stencil,
         }: DepthPlanes<'_>,
     ) -> bool {
+        if self.depth_plane.span_surface().is_some_and(|s| s.id == id) {
+            self.close_depth_span();
+        }
         let Some((width, height, pixel_format, samples)) = self.depth_level(id, level) else {
             return false;
         };

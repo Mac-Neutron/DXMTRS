@@ -1250,11 +1250,11 @@ fn build_capture_line(
     );
     line.push_str(" rtv=");
     let num_rt = (desc.num_render_targets as usize).min(8);
-    for i in 0..num_rt {
+    for (i, fmt) in desc.rtv_formats[..num_rt].iter().enumerate() {
         if i > 0 {
             line.push(',');
         }
-        let _ = write!(line, "{}", desc.rtv_formats[i]);
+        let _ = write!(line, "{fmt}");
     }
     let _ = write!(
         line,

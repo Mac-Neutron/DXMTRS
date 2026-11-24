@@ -100,8 +100,7 @@ impl TimestampState {
         let fits = own == 0 || own == last.buffer;
         let len = self.pending_samples.len();
         let flush_count = if fits { len - 1 } else { len };
-        for k in 0..flush_count {
-            let sample = &self.pending_samples[k];
+        for (k, sample) in self.pending_samples[..flush_count].iter().enumerate() {
             let reason = if k + 1 < len {
                 LoneReason::Several
             } else {

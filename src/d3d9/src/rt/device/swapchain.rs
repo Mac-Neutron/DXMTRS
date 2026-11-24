@@ -275,6 +275,67 @@ impl CoreDevice {
         self.attach_scaled(hwnd, width, height, width, height, samples);
     }
 
+    /// Attaches to `hwnd`, resolves the back buffer's scale, and allocates the back buffer.
+    ///
+    /// Evaluates `resolve` once `open_window` reports the window's attached screen sizes.
+    pub fn attach_with_screen(
+        &mut self,
+        hwnd: isize,
+        drawable_w: u32,
+        drawable_h: u32,
+        samples: u8,
+        resolve: impl FnOnce(u64) -> (mtld3d_core::render_scale::RenderScale, u32, u32),
+    ) {
+        if self.back_buffer.is_some() || self.window.is_some() {
+            self.drain();
+        }
+        self.window = None;
+        self.screen_sizes = 0;
+        self.drawable_size = (drawable_w, drawable_h);
+        self.settled_geometry = None;
+        self.upscale = None;
+        self.window = self.open_window(hwnd, drawable_w, drawable_h);
+        let (scale, render_w, render_h) = resolve(self.screen_sizes);
+        self.back_buffer_scale = scale;
+        self.make_back_buffer(render_w, render_h, samples);
+        if (render_w, render_h) != (drawable_w, drawable_h) && self.window.is_some() {
+            let _ = self.poll_window(
+                self.sync_flags_for(Some((render_w, render_h))),
+                Some((render_w, render_h)),
+            );
+        }
+        self.hud.get_or_insert_with(|| {
+            let mut hud = dxmt_core::hud::Hud::instance();
+            hud.initialize(&dxmt_core::info::version_text(
+                9,
+                0x9300,
+                env!("DXMT_VERSION"),
+            ));
+            hud
+        });
+    }
+
+    /// Packed `ScreenSizes` (`0` until published by `WMTAttachMetalView` / `WMTViewSyncAndPoll`).
+    #[must_use]
+    pub const fn screen_sizes(&self) -> u64 {
+        self.screen_sizes
+    }
+
+    /// Updates the cached scale of the back buffer (`RenderScale::IDENTITY` until set).
+    pub fn set_back_buffer_scale(&mut self, scale: mtld3d_core::render_scale::RenderScale) {
+        if self.back_buffer_scale != scale {
+            self.close_depth_span();
+            self.depth_plane.forget_targets();
+            self.back_buffer_scale = scale;
+        }
+    }
+
+    /// Scale the back buffer is currently rasterized at.
+    #[must_use]
+    pub const fn back_buffer_scale(&self) -> mtld3d_core::render_scale::RenderScale {
+        self.back_buffer_scale
+    }
+
     /// Makes a scaled back buffer and presents into a Metal layer.
     ///
     /// Creates a `render_w` x `render_h` back buffer and presents into a `drawable_w` x
@@ -292,6 +353,7 @@ impl CoreDevice {
             self.drain();
         }
         self.window = None;
+        self.screen_sizes = 0;
         self.drawable_size = (drawable_w, drawable_h);
         self.settled_geometry = None;
         self.upscale = None;
@@ -366,6 +428,7 @@ impl CoreDevice {
                 panel_max_hz: 0,
                 flags: 0,
                 reserved: 0,
+                screen_sizes: 0,
             };
             let layer = w.layer.as_ref().map_or(0, Obj::handle);
             // SAFETY: `w.view` and `layer` remain live while `w` is attached.
@@ -374,6 +437,9 @@ impl CoreDevice {
             };
             if poll.backing_scale != 0 {
                 self.backing_scale = poll.backing_scale.clamp(1, 8);
+            }
+            if poll.screen_sizes != 0 {
+                self.screen_sizes = poll.screen_sizes;
             }
             self.options.set(
                 CoreOptions::SOFTWARE_CURSOR_ACTIVE,
@@ -414,6 +480,7 @@ impl CoreDevice {
         self.last_paced = None;
         self.upscale = None;
         self.settled_geometry = None;
+        self.screen_sizes = 0;
         self.window = None;
         let Some((width, height)) = self.back_buffer.as_ref().map(|b| (b.width, b.height)) else {
             return false;
@@ -614,12 +681,16 @@ impl CoreDevice {
             panel_max_hz: 0,
             flags: 0,
             reserved: 0,
+            screen_sizes: 0,
         };
         let layer = w.layer.as_ref().map_or(0, Obj::handle);
         // SAFETY: `w.view` and `layer` remain live while `w` is attached.
         unsafe { WMTViewSyncAndPoll(w.view, layer, sync_flags, &raw mut poll) };
         if poll.backing_scale != 0 {
             self.backing_scale = poll.backing_scale.clamp(1, 8);
+        }
+        if poll.screen_sizes != 0 {
+            self.screen_sizes = poll.screen_sizes;
         }
         self.options.set(
             CoreOptions::SOFTWARE_CURSOR_ACTIVE,
@@ -756,10 +827,10 @@ impl CoreDevice {
                     hud.update_statistics(&statistics, frame);
                     drop(statistics);
                 }
-            } else if self.dirty || self.render_open {
+            } else if self.dirty || self.render_open || self.depth_plane.span_open() {
                 self.commit();
             }
-        } else if self.dirty || self.render_open {
+        } else if self.dirty || self.render_open || self.depth_plane.span_open() {
             self.commit();
         }
         let (view_for_cs, cs_reasons) = self.window.as_mut().map_or((0, 0), |w| {
@@ -1102,6 +1173,7 @@ impl CoreDevice {
             panel_max_hz: 0,
             flags: 0,
             reserved: 0,
+            screen_sizes: 0,
         };
         let mut ret_layer = 0;
         // SAFETY: winemetal's slot 159; `attach_desc`, `poll`, and `ret_layer` are valid.
@@ -1125,6 +1197,9 @@ impl CoreDevice {
             }
             log::error!(target: LOG_TARGET, "d3d9 core: no Metal view for window {hwnd:#x}");
             return None;
+        }
+        if poll.screen_sizes != 0 {
+            self.screen_sizes = poll.screen_sizes;
         }
         // SAFETY: `WMTAttachMetalView` returned a +1 retained `CAMetalLayer`.
         let Some(layer) = (unsafe { Obj::adopt(ret_layer) }) else {

@@ -620,8 +620,7 @@ impl Allocator {
         self.group.truncate(self.group.len() - self.clears.len());
 
         let mut folded = 0u32;
-        for i in 0..self.clears.len() {
-            let c_ptr = self.clears[i];
+        for &c_ptr in &self.clears {
             if !c_ptr.is_null() {
                 // SAFETY: `c_ptr` is a valid `ClearEncoderData` selected to fold.
                 let c = unsafe { &*c_ptr };

@@ -277,7 +277,7 @@ impl AppIdentity {
     /// carries no id (`steam_app_id`).
     #[must_use]
     pub fn new(exe: String, version_blob: Option<&[u16]>, steam_app_id_var: Option<&str>) -> Self {
-        let runs = version_blob.map(utf16_runs).unwrap_or_default();
+        let runs = version_blob.map_or_else(Vec::new, utf16_runs);
         Self {
             exe,
             company: value_after(&runs, "CompanyName"),

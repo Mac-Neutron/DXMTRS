@@ -324,6 +324,13 @@ pub struct Mtld3dConfig {
     /// spatial-upscaler integration guides prescribe. Nothing changes at the
     /// identity. File key: `render.lodBias`.
     pub render_lod_bias: bool,
+    /// Rasterize back buffers larger than the display panel at the panel's pixels.
+    ///
+    /// On a screen scaled down to its panel, a back buffer larger than the
+    /// panel on either axis scales by panel over backing per axis so present
+    /// copies 1:1. Needs no `MetalFX`. Default: `true`. File key:
+    /// `render.panelFit`.
+    pub render_panel_fit: bool,
     /// Present the adapter as a well-known GPU vendor.
     ///
     /// D3D9-era engines pick vendor-specific render paths (a depth copy
@@ -441,6 +448,7 @@ impl Default for Mtld3dConfig {
             present_max_frame_latency: 0,
             render_scale_percent: 100,
             render_lod_bias: true,
+            render_panel_fit: true,
             adapter_spoof: AdapterSpoof::None,
             df_formats: true,
             max_resolutions: 0,
@@ -656,6 +664,11 @@ pub fn log_options(cfg: &Mtld3dConfig) {
     info!(target: crate::LOG_TARGET, "config: render.lodBias = {}", cfg.render_lod_bias);
     info!(
         target: crate::LOG_TARGET,
+        "config: render.panelFit = {}",
+        cfg.render_panel_fit
+    );
+    info!(
+        target: crate::LOG_TARGET,
         "config: adapter.spoof = {}",
         adapter_spoof_label(cfg.adapter_spoof)
     );
@@ -749,6 +762,7 @@ fn apply(cfg: &mut Mtld3dConfig, source: &str, key: &str, value: &str) {
         }
         "render.scale" => assign_render_scale(source, value, &mut cfg.render_scale_percent),
         "render.lodBias" => assign_bool(source, key, value, &mut cfg.render_lod_bias),
+        "render.panelFit" => assign_bool(source, key, value, &mut cfg.render_panel_fit),
         "adapter.spoof" => assign_adapter_spoof(source, value, &mut cfg.adapter_spoof),
         "caps.dfFormats" => assign_bool(source, key, value, &mut cfg.df_formats),
         "display.maxResolutions" => {
@@ -882,7 +896,7 @@ fn assign_frame_latency(source: &str, value: &str, slot: &mut u32) {
 /// Lowest render scale the knob accepts, as a percentage.
 ///
 /// Just above zero: the only real constraint is that a scaled dimension must
-/// not collapse, and `RenderScale::dimension` already floors it at one pixel.
+/// not collapse, and `RenderScale::size` already floors it at one pixel.
 /// Anything tighter would be an invented limit, and a user who asks for a
 /// silly resolution can see the result for themselves.
 const RENDER_SCALE_MIN_PERCENT: u32 = 1;

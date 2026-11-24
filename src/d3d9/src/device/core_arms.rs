@@ -219,9 +219,12 @@ pub fn clear(
             }
         }
     }
-    let depth_extent_size = dev.core.depth_size();
     // A depth-stencil of another sample count than target 0's is in no pass, and Clear
     // of its planes does nothing (DXMTRS C4b-3d5).
+    if depth_flags != 0 && dev.core.depth_samples() == Some(dev.core.target_samples()) {
+        dev.core.open_depth_span();
+    }
+    let depth_extent_size = dev.core.depth_size();
     if depth_flags != 0
         && dev.core.depth_samples() == Some(dev.core.target_samples())
         && let Some(extent) = depth_extent_size

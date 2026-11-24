@@ -1021,6 +1021,7 @@ fn hdr_two_step_edr_switching_and_resize_preservation() {
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_COLORSPACE_CHANGED,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     dxmt_fakes::set_edr_value(
@@ -1551,6 +1552,7 @@ fn metal_view_attach_poll_retire_lifecycle_and_panel_max_hz_pacing() {
             panel_max_hz: 120,
             flags: WMT_VIEW_POLL_FLAG_HDR_ACTIVE | WMT_VIEW_POLL_FLAG_SOFTWARE_CURSOR_ACTIVE,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.present_paced(true, D3DPRESENT_INTERVAL_ONE, 60, 0, 0);
@@ -1622,6 +1624,7 @@ fn occluded_skips_drawable_while_displays_nothing_keeps_presenting_with_event() 
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_OCCLUDED,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.clear(0, [0.0, 0.0, 0.0, 1.0], false);
@@ -1649,6 +1652,7 @@ fn occluded_skips_drawable_while_displays_nothing_keeps_presenting_with_event() 
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_DISPLAYS_NOTHING,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.present(true, 0.001, 0.0, false);
@@ -1696,6 +1700,7 @@ fn occluded_skips_drawable_while_displays_nothing_keeps_presenting_with_event() 
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_OCCLUDED,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     override_core.present(true, 0.0, 0.0, true);
@@ -1757,6 +1762,7 @@ fn presented_event_signals_directly_when_next_drawable_is_zero_and_overlay_syncs
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.present_paced(
@@ -1824,6 +1830,7 @@ fn first_frame_attached_reason_defers_until_first_present_commit() {
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.attach(1, 64, 32, 1);
@@ -1849,6 +1856,7 @@ fn first_frame_attached_reason_defers_until_first_present_commit() {
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_OCCLUDED | WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.present_paced(
@@ -1886,6 +1894,7 @@ fn first_frame_attached_reason_defers_until_first_present_commit() {
             panel_max_hz: 60,
             flags: WMT_VIEW_POLL_FLAG_CLIENT_SURFACE_DIRTY,
             reserved: 0,
+            screen_sizes: 0,
         }),
     );
     core.present_paced(true, 0, 60, 0, 0);
@@ -2096,4 +2105,100 @@ fn present_paced_from_presents_additional_single_and_msaa_targets() {
         msaa_reuse_calls.iter().any(|c| c == &sampled_resolve),
         "reused resolve texture {resolve_tex} must be sampled on second present: {msaa_reuse_calls:#?}"
     );
+}
+
+/// `attach_with_screen` reads `screen_sizes` for panel-fit scaling, and polls update it.
+#[test]
+fn attach_with_screen_picks_panel_fit_and_poll_updates_screen_sizes() {
+    use mtld3d_core::render_scale::{BackBufferScale, RenderScale};
+    use mtld3d_shared::render_size::ScreenSizes;
+    use winemetal_sys::{Obj, wire::WMTViewPollOut};
+
+    use crate::rt::device::{CoreDevice, queue_profile};
+
+    const DEVICE: u64 = 0x496;
+    let initial_sizes = ScreenSizes {
+        panel: Some((2560, 1664)),
+        backing: Some((2940, 1912)),
+    }
+    .pack();
+    let updated_sizes = ScreenSizes {
+        panel: Some((3840, 2160)),
+        backing: Some((3840, 2160)),
+    }
+    .pack();
+
+    // SAFETY: a made-up handle, which only the fakes see.
+    let mtl = unsafe { Obj::adopt(DEVICE) }.expect("a non-zero handle");
+    let mut core = CoreDevice::new(mtl, queue_profile());
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 2560,
+            drawable_height: 1664,
+            backing_scale: 2,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: 0,
+            reserved: 0,
+            screen_sizes: initial_sizes,
+        }),
+    );
+
+    let mut back_buffer_scale = BackBufferScale::new(RenderScale::IDENTITY, true);
+    let mut resolved = RenderScale::IDENTITY;
+    core.attach_with_screen(1, 2940, 1912, 1, |screen_sizes| {
+        let sizes = ScreenSizes::unpack(screen_sizes);
+        back_buffer_scale.set_screen(sizes.panel, sizes.backing);
+        resolved = back_buffer_scale.for_back_buffer((2940, 1912));
+        let (rw, rh) = resolved.size((2940, 1912));
+        (resolved, rw, rh)
+    });
+    assert_eq!(core.screen_sizes(), initial_sizes);
+    assert_eq!(core.back_buffer_scale(), resolved);
+    assert_eq!(resolved.size((2940, 1912)), (2560, 1664));
+    assert_eq!(core.target_size(), Some((2560, 1664)));
+
+    // Polling a zero screen_sizes preserves the last published sizes; non-zero updates them.
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 2560,
+            drawable_height: 1664,
+            backing_scale: 2,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: 0,
+            reserved: 0,
+            screen_sizes: 0,
+        }),
+    );
+    core.present_paced(true, 0, 60, 0, 0);
+    assert_eq!(core.screen_sizes(), initial_sizes);
+
+    dxmt_fakes::set_view_poll(
+        DEVICE,
+        Some(WMTViewPollOut {
+            drawable_width: 2940,
+            drawable_height: 1912,
+            backing_scale: 1,
+            edr_current: 1.0,
+            edr_potential: 1.0,
+            panel_max_hz: 60,
+            flags: 0,
+            reserved: 0,
+            screen_sizes: updated_sizes,
+        }),
+    );
+    core.present_paced(true, 0, 60, 0, 0);
+    assert_eq!(core.screen_sizes(), updated_sizes);
+    assert!(back_buffer_scale.follow_published(core.screen_sizes()));
+    assert!(
+        back_buffer_scale
+            .for_back_buffer((2940, 1912))
+            .is_identity()
+    );
+    dxmt_fakes::set_view_poll(DEVICE, None);
 }

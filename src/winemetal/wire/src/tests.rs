@@ -71,7 +71,7 @@ fn mem_ptr_round_trips_addresses() {
 #[test]
 fn pull_on_present_wire_sizes_and_slots() {
     assert_eq!(size_of::<WMTViewAttachDesc>(), 16);
-    assert_eq!(size_of::<WMTViewPollOut>(), 32);
+    assert_eq!(size_of::<WMTViewPollOut>(), 40);
     assert_eq!(size_of::<WMTCursorOverlayParams>(), 64);
     assert_eq!(size_of::<UnixcallWmtAttachMetalView>(), 48);
     assert_eq!(size_of::<UnixcallWmtViewSyncAndPoll>(), 32);

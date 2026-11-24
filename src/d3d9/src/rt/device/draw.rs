@@ -494,6 +494,9 @@ impl CoreDevice {
             !with_depth || bound(),
             "a draw's key names the bound depth-stencil's format"
         );
+        if with_depth {
+            self.open_depth_span_for_draw(&draw.depth_stencil);
+        }
         // Metal takes no scissor past the pass's extent, nor an empty one: a draw cut to nothing
         // writes no pixel, so it records nothing.
         let extent = self.pass_extent(with_depth).unwrap_or((target_w, target_h));
@@ -701,6 +704,7 @@ impl CoreDevice {
             }
         }
 
+        self.write_back_depth_stand_in(draw.textures);
         let bound_depth = self.depth.filter(|_| with_depth);
         let depth_snap = bound_depth.and_then(|depth| {
             draw.textures
@@ -1047,14 +1051,17 @@ impl CoreDevice {
         if dyn_count != 0 {
             self.stamp_dynamic_ids(&dyn_ids[..dyn_count]);
         }
-        if !self.depth_snapshots.is_empty()
-            && let Some(depth) = bound_depth
-        {
-            let writes_depth = (depth_planes & 1 != 0)
-                && draw.depth_stencil.depth_enable != 0
-                && draw.depth_stencil.depth_write != 0;
-            let writes_stencil = (depth_planes & 2 != 0) && draw.depth_stencil.writes_stencil();
-            if writes_depth || writes_stencil {
+        let writes_depth = (depth_planes & 1 != 0)
+            && draw.depth_stencil.depth_enable != 0
+            && draw.depth_stencil.depth_write != 0;
+        let writes_stencil = (depth_planes & 2 != 0) && draw.depth_stencil.writes_stencil();
+        if writes_depth || writes_stencil {
+            if self.depth_plane.span_open() && with_depth {
+                self.depth_plane_write_epoch = self.depth_plane_write_epoch.wrapping_add(1);
+            }
+            if !self.depth_snapshots.is_empty()
+                && let Some(depth) = bound_depth
+            {
                 self.mark_depth_dirty(depth);
             }
         }

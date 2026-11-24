@@ -821,6 +821,8 @@ fn follow_screen_pixels(att: &Attachment, screen: &NSScreen, layer: &CAMetalLaye
         frame: screen_frame_points(screen),
     };
     att.set_screen_pixels(&pixels);
+    let backing = display::backing_pixels(pixels.frame, layer.contentsScale());
+    att.set_screen_sizes(display::pack_screen_sizes(pixels.panel, backing));
     apply_magnification_filter(layer, &pixels);
 }
 
@@ -1194,6 +1196,7 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
         let mut screen_id = 0u32;
         let mut panel_display = 0u32;
         let mut screen_pixels = ScreenPixels::UNKNOWN;
+        let mut screen_sizes = 0u64;
 
         run_on_main_thread_sync(|| {
             let Some(mtm) = MainThreadMarker::new() else {
@@ -1240,7 +1243,12 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
             let Some(layer_obj) = (unsafe { Retained::retain(layer as *mut CAMetalLayer) }) else {
                 return;
             };
-            backing_scale = f64_to_u32_saturating(layer_obj.contentsScale().round()).clamp(1, 8);
+            let layer_scale = layer_obj.contentsScale();
+            backing_scale = f64_to_u32_saturating(layer_scale.round()).clamp(1, 8);
+            screen_sizes = display::pack_screen_sizes(
+                screen_pixels.panel,
+                display::backing_pixels(screen_pixels.frame, layer_scale),
+            );
             // SAFETY: caller provides live `MTLDevice` handle for this attach.
             let dev = unsafe { obj::<ProtocolObject<dyn MTLDevice>>(device_addr as u64) };
             CATransaction::begin();
@@ -1295,6 +1303,7 @@ pub unsafe extern "C-unwind" fn wmt_attach_metal_view(args: *mut c_void) -> i32 
                 client_surface,
                 source_size,
                 screen_pixels,
+                screen_sizes,
                 panel_display,
             },
         );
@@ -1451,6 +1460,7 @@ pub unsafe extern "C-unwind" fn wmt_view_sync_and_poll(args: *mut c_void) -> i32
                     panel_max_hz: 0,
                     flags: 0,
                     reserved: 0,
+                    screen_sizes: 0,
                 };
             }
             return STATUS_SUCCESS;
@@ -1504,6 +1514,7 @@ pub unsafe extern "C-unwind" fn wmt_view_sync_and_poll(args: *mut c_void) -> i32
                     panel_max_hz: 0,
                     flags: 0,
                     reserved: 0,
+                    screen_sizes: 0,
                 };
             }
         }

@@ -19,7 +19,7 @@ impl CoreDevice {
     /// Commits the chunk if it holds work, then waits for the last chunk committed (a clean chunk
     /// is never committed, so it waits for nothing of its own).
     pub fn drain(&mut self) {
-        if self.dirty || self.render_open || self.blit_open {
+        if self.dirty || self.render_open || self.blit_open || self.depth_plane.span_open() {
             self.commit();
         }
         let last = self.device.queue().current_seq() - 1;
@@ -29,6 +29,7 @@ impl CoreDevice {
 
     /// Ends the open render pass and hands the chunk to the encode thread.
     pub fn commit(&mut self) {
+        self.close_depth_span();
         self.close_pass();
         self.device.queue_mut().commit();
         self.dirty = false;

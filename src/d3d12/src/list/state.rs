@@ -808,7 +808,10 @@ pub unsafe fn rs_set_viewports(this: *mut c_void, num_viewports: u32, viewports:
     let mut changed = list.viewport_count != new_count;
     list.viewport_count = new_count;
     let vp_ptr = viewports.cast::<D3d12Viewport>();
-    for i in 0..(num_viewports as usize) {
+    for (i, cur) in list.viewports[..num_viewports as usize]
+        .iter_mut()
+        .enumerate()
+    {
         // SAFETY: `i < num_viewports`, so `vp_ptr.add(i)` is in-bounds.
         let elem = unsafe { vp_ptr.add(i) };
         // SAFETY: `elem` points to a readable `D3d12Viewport`.
@@ -821,7 +824,6 @@ pub unsafe fn rs_set_viewports(this: *mut c_void, num_viewports: u32, viewports:
             znear: f64::from(vp.min_depth),
             zfar: f64::from(vp.max_depth),
         };
-        let cur = &list.viewports[i];
         if cur.origin_x.to_bits() != next.origin_x.to_bits()
             || cur.origin_y.to_bits() != next.origin_y.to_bits()
             || cur.width.to_bits() != next.width.to_bits()
@@ -829,7 +831,7 @@ pub unsafe fn rs_set_viewports(this: *mut c_void, num_viewports: u32, viewports:
             || cur.znear.to_bits() != next.znear.to_bits()
             || cur.zfar.to_bits() != next.zfar.to_bits()
         {
-            list.viewports[i] = next;
+            *cur = next;
             changed = true;
         }
     }
@@ -859,7 +861,10 @@ pub unsafe fn rs_set_scissor_rects(this: *mut c_void, num_rects: u32, rects: *co
     let mut changed = list.scissor_rect_count != new_count;
     list.scissor_rect_count = new_count;
     let rect_ptr = rects.cast::<D3d12Rect>();
-    for i in 0..(num_rects as usize) {
+    for (i, cur) in list.scissor_rects[..num_rects as usize]
+        .iter_mut()
+        .enumerate()
+    {
         // SAFETY: `i < num_rects`, so `rect_ptr.add(i)` is in-bounds.
         let elem = unsafe { rect_ptr.add(i) };
         // SAFETY: `elem` points to a readable `D3d12Rect`.
@@ -874,13 +879,12 @@ pub unsafe fn rs_set_scissor_rects(this: *mut c_void, num_rects: u32, rects: *co
             width: u64::try_from(right - left).unwrap_or(0),
             height: u64::try_from(bottom - top).unwrap_or(0),
         };
-        let cur = &list.scissor_rects[i];
         if cur.x != next.x
             || cur.y != next.y
             || cur.width != next.width
             || cur.height != next.height
         {
-            list.scissor_rects[i] = next;
+            *cur = next;
             changed = true;
         }
     }
@@ -1627,18 +1631,18 @@ pub unsafe fn ia_set_vertex_buffers(
         .min(list.vertex_buffers.len());
     let vbv_ptr = views.cast::<D3d12VertexBufferView>();
     let mut changed = false;
-    for slot in start..end {
+    for (offset, dst) in list.vertex_buffers[start..end].iter_mut().enumerate() {
         let next = if vbv_ptr.is_null() {
             (0, 0, 0)
         } else {
-            // SAFETY: `slot - start < num_views`, so `vbv_ptr.add(slot - start)` is in-bounds.
-            let elem = unsafe { vbv_ptr.add(slot - start) };
+            // SAFETY: `offset < num_views`, so `vbv_ptr.add(offset)` is in-bounds.
+            let elem = unsafe { vbv_ptr.add(offset) };
             // SAFETY: `elem` points to a readable `D3d12VertexBufferView`.
             let v = unsafe { elem.read_unaligned() };
             (v.buffer_location, v.stride_in_bytes, v.size_in_bytes)
         };
-        if list.vertex_buffers[slot] != next {
-            list.vertex_buffers[slot] = next;
+        if *dst != next {
+            *dst = next;
             changed = true;
         }
     }

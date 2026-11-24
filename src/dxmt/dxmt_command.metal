@@ -984,3 +984,41 @@ fragment resolve_depth_stencil_out resolve_depth_stencil_fs(
     out.stencil = stencil.read(texel, 0).r;
     return out;
 }
+
+struct transfer_vs_out {
+    float4 position [[position]];
+    float2 texcoord;
+};
+
+vertex transfer_vs_out transfer_depth_vs(ushort id [[vertex_id]]) {
+    // id 0, 1, 2 -> (0, 0), (2, 0), (0, 2): covers the viewport with UV [0, 1]^2.
+    float2 uv = float2((id << 1) & 2, id & 2);
+    transfer_vs_out out;
+    out.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    out.texcoord = uv;
+    return out;
+}
+
+fragment resolve_depth_out transfer_depth_fs(
+    transfer_vs_out in [[stage_in]],
+    depth2d<float, access::read> depth [[texture(0)]]
+) {
+    uint2 size = uint2(max(depth.get_width(), 1u), max(depth.get_height(), 1u));
+    uint2 texel = min(uint2(max(in.texcoord, 0.0) * float2(size)), size - 1u);
+    resolve_depth_out out;
+    out.depth = depth.read(texel, 0);
+    return out;
+}
+
+fragment resolve_depth_stencil_out transfer_depth_stencil_fs(
+    transfer_vs_out in [[stage_in]],
+    depth2d<float, access::read> depth [[texture(0)]],
+    texture2d<uint, access::read> stencil [[texture(1)]]
+) {
+    uint2 size = uint2(max(depth.get_width(), 1u), max(depth.get_height(), 1u));
+    uint2 texel = min(uint2(max(in.texcoord, 0.0) * float2(size)), size - 1u);
+    resolve_depth_stencil_out out;
+    out.depth = depth.read(texel, 0);
+    out.stencil = stencil.read(texel, 0).r;
+    return out;
+}

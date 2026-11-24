@@ -1,9 +1,12 @@
+use core::cell::RefCell;
+
 use winemetal_sys::wire::{
     WMT_PIXEL_FORMAT_BC1_RGBA, WMT_PIXEL_FORMAT_R8_UNORM, WMT_PIXEL_FORMAT_RGBA8_UNORM,
     WMT_TEXTURE_TYPE1D, WMT_TEXTURE_TYPE2D, WMT_TEXTURE_TYPE3D,
 };
 
 use super::*;
+use crate::resource::{Buffer, BufferAllocationFlags};
 
 /// The layout's row, row count, image and depth.
 fn shape(l: &Layout) -> (usize, usize, usize, u32) {
@@ -77,4 +80,45 @@ fn depth_stencil_splits_as_cpp() {
         [0, 1, 2, 3, 8, 9, 10, 11, 20, 21, 22, 23, 28, 29, 30, 31]
     );
     assert_eq!(stencil, [4, 12, 0, 0, 24, 32, 0, 0]);
+}
+
+#[test]
+fn wait_flushes_and_waits_for_nonzero_seq() {
+    thread_local! {
+        static WAITS: RefCell<Vec<(u64, u64, u64)>> = const { RefCell::new(Vec::new()) };
+    }
+    fn record_wait(event: u64, value: u64, timeout: u64) {
+        WAITS.with_borrow_mut(|waits| waits.push((event, value, timeout)));
+    }
+
+    WAITS.with_borrow_mut(Vec::clear);
+    crate::fakes::on_wait_until_signaled(Some(record_wait));
+    // SAFETY: `0x9001` is a synthetic device handle for test fakes.
+    let device = unsafe { Obj::adopt(0x9001) }.expect("non-zero handle");
+    let init = ResourceInitializer::new(&device);
+    let event = init.event();
+    assert_ne!(event, 0);
+
+    // Waiting for 0 must not call `MTLSharedEvent_waitUntilSignaledValue`.
+    init.wait(0);
+    assert!(WAITS.with_borrow(Vec::is_empty));
+
+    let buf = Buffer::new(64, &device);
+    let alloc = buf.allocate(BufferAllocationFlags::GPU_PRIVATE);
+    let seq = init.init_buffer_zero(&alloc, 0, 64);
+    assert_eq!(seq, 1);
+
+    let flushed = init.flush_to_wait();
+    assert_eq!(flushed, 1);
+    init.wait(flushed);
+    assert_eq!(WAITS.with_borrow(Clone::clone), [(event, 1, u64::MAX)]);
+
+    // Second flush while event is still unsignaled keeps returning seq 1; once signaled it yields 0.
+    // SAFETY: `event` is a fake shared event registered in `fence::tests` on this thread.
+    unsafe { winemetal_sys::MTLSharedEvent_signalValue(event, 1) };
+    let idle = init.flush_to_wait();
+    assert_eq!(idle, 0);
+    init.wait(idle);
+    assert_eq!(WAITS.with_borrow(Vec::len), 1);
+    crate::fakes::on_wait_until_signaled(None);
 }

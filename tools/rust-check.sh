@@ -8,7 +8,7 @@
 #           and native_win32 seams' abi.rs and each seam's src/dxmt/src/<seam>/abi.rs (the header its first line names,
 #           with crate::<seam>); a C declaration
 #           changed without its regeneration would otherwise still compile (needs Xcode's clang and jq)
-#   clippy  1.99.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
+#   clippy  1.100.0, `-D warnings`, on aarch64-apple-darwin and on every -pc-windows-msvc target a crate ships on, then
 #           the same host and i686 lines with D3D9's perf-tracking feature (cfg(perf_tracking) code), the core's
 #           and D3D9's crates on the host and i686 with their perf-build feature (DXMT_PERF_BUILD), and d3d9 with
 #           guest-vm on x86_64 and i686

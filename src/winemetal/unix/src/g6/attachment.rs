@@ -61,6 +61,7 @@ pub struct AttachLatches {
     pub client_surface: usize,
     pub source_size: Option<(u32, u32)>,
     pub screen_pixels: ScreenPixels,
+    pub screen_sizes: u64,
     pub panel_display: u32,
 }
 
@@ -97,6 +98,7 @@ pub struct Attachment {
     panel_max_hz: AtomicU32,
     backing_scale: AtomicU32,
     screen_pixels: AtomicU64,
+    screen_sizes: AtomicU64,
     panel_display: AtomicU32,
     drawable_capped: AtomicBool,
     source_size: AtomicU64,
@@ -129,6 +131,7 @@ impl Attachment {
             panel_max_hz: AtomicU32::new(latches.panel_max_hz),
             backing_scale: AtomicU32::new(latches.backing_scale.clamp(1, 8)),
             screen_pixels: AtomicU64::new(latches.screen_pixels.pack()),
+            screen_sizes: AtomicU64::new(latches.screen_sizes),
             panel_display: AtomicU32::new(latches.panel_display),
             drawable_capped: AtomicBool::new(false),
             source_size: AtomicU64::new(pack_size_u64(latches.source_size)),
@@ -178,6 +181,10 @@ impl Attachment {
     pub fn set_screen_pixels(&self, pixels: &ScreenPixels) -> bool {
         let packed = pixels.pack();
         self.screen_pixels.swap(packed, Ordering::Relaxed) != packed
+    }
+
+    pub fn set_screen_sizes(&self, packed: u64) {
+        self.screen_sizes.store(packed, Ordering::Relaxed);
     }
 
     #[must_use]
@@ -397,6 +404,7 @@ impl Attachment {
         out.panel_max_hz = self.panel_max_hz.load(Ordering::Relaxed);
         out.flags = flags;
         out.reserved = 0;
+        out.screen_sizes = self.screen_sizes.load(Ordering::Relaxed);
     }
 }
 

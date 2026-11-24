@@ -39,5 +39,5 @@ _fltused: .long 0
 ASM
 export E2E_LINK_STAGE=link MTLD3D_LLVM_MINGW=$E2E_LLVM_MINGW
 eval "$(sh "$here/tools/mingw-cc.sh" env x86_64-pc-windows-msvc "$tgt/e2e-link/cc")" # snmalloc-sys's C++
-PATH=$llvm:$(dirname "$(rustup which cargo --toolchain 1.99.0)"):$PATH exec cargo test --no-run -p mtld3d-tests --target x86_64-pc-windows-msvc \
+PATH=$llvm:$(dirname "$(rustup which cargo --toolchain 1.100.0)"):$PATH exec cargo test --no-run -p mtld3d-tests --target x86_64-pc-windows-msvc \
   --config "target.x86_64-pc-windows-msvc.linker=\"$here/tools/e2e-link.sh\"" "$@"

@@ -1916,8 +1916,8 @@ impl<'a, 'cx> AirBuilder<'a, 'cx> {
             (TyKind::Int(bits), Signedness::Unsigned) => ("u.", format!("i{bits}")),
             _ => return b".unknown_type_overload".to_vec(),
         };
-        let space = addrspace.map(|a| format!("p{a}")).unwrap_or_default();
-        let lanes = lanes.map(|n| format!("v{n}")).unwrap_or_default();
+        let space = addrspace.map_or_else(String::new, |a| format!("p{a}"));
+        let lanes = lanes.map_or_else(String::new, |n| format!("v{n}"));
         format!(".{sign_part}{space}{lanes}{element}").into_bytes()
     }
 

@@ -7,6 +7,7 @@ pub mod identity;
 mod log_filter;
 pub mod mtl;
 pub mod perf;
+pub mod render_size;
 pub mod shader_create;
 pub mod trig;
 pub mod tsc;

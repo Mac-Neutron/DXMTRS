@@ -124,6 +124,7 @@ extern "C-unwind" fn fake_signal_value(event: u64, value: u64) {
 
 #[unsafe(export_name = "MTLSharedEvent_waitUntilSignaledValue")]
 extern "C-unwind" fn fake_wait_until_signaled_value(event: u64, value: u64, timeout: u64) -> bool {
+    crate::fakes::notify_wait_until_signaled(event, value, timeout);
     STATE.with_borrow_mut(|state| {
         let current = state.signaled.get(&event).copied().unwrap_or(0);
         state.log.push(format!(

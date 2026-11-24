@@ -484,6 +484,7 @@ src/d3d9/shared/src/mtl.rs TriangleFillMode Clone,Copy,Debug,PartialEq,Eq,FromRe
 src/d3d9/shared/src/mtl.rs VertexFormat Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
 src/d3d9/shared/src/mtl.rs VertexStepFunction Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
 src/d3d9/shared/src/mtl.rs VisibilityResultMode Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
+src/d3d9/shared/src/render_size.rs RenderScaleWire Clone,Copy,Debug,PartialEq,Eq
 src/d3d9/src/cursor.rs CursorFlags Clone,Copy,Debug,Default,PartialEq,Eq
 src/d3d9/src/device.rs DepthTextureCreateInfo Clone,Copy
 src/d3d9/src/device.rs DeviceFlags Clone,Copy,Debug,Default,PartialEq,Eq

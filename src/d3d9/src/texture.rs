@@ -962,10 +962,7 @@ impl TextureInner {
     /// that addresses the Metal texture directly (a full-surface blit, an
     /// attachment extent) has to be measured here instead.
     pub fn render_extent(&self) -> (u32, u32) {
-        (
-            self.render_scale.dimension(self.width),
-            self.render_scale.dimension(self.height),
-        )
+        self.render_scale.size((self.width, self.height))
     }
 
     /// Mip levels the backing Metal texture holds.
@@ -4770,7 +4767,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut crate::rt::device::Cor
                 height: render_h,
                 depth: 1,
                 levels: metal_levels,
-                flags: CoreTextureFlags::RENDER_TARGET,
+                flags: CoreTextureFlags::RENDER_TARGET | CoreTextureFlags::DEPTH_SAMPLEABLE,
                 srgb_format: 0,
                 block: (1, 1, ti.block_bytes.max(1)),
                 samples: 1,
@@ -4778,6 +4775,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut crate::rt::device::Cor
             core.texture_create(ti.texture_id, &desc);
             if !ti.render_scale().is_identity() {
                 core.set_texture_logical_size(ti.texture_id, ti.width, ti.height);
+                core.set_texture_scale(ti.texture_id, ti.render_scale());
             }
         }
         core_upload_depth_levels(ti, core);
@@ -4834,6 +4832,7 @@ pub fn core_flush_dirty(ti: &mut TextureInner, core: &mut crate::rt::device::Cor
         core.texture_create(id, &desc);
         if scaled {
             core.set_texture_logical_size(id, ti.width, ti.height);
+            core.set_texture_scale(id, ti.render_scale());
         }
     }
     // Every level of a texture just made, from its staging.

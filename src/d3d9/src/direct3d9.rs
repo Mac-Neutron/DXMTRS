@@ -2058,21 +2058,32 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
     if cfg.present_occluded {
         options.insert(crate::rt::device::CoreOptions::PRESENT_OCCLUDED);
     }
-    let render_scale = resolve_render_scale(
-        crate::rt::device::metalfx_available(&mtl),
-        cfg.render_scale_percent,
+    let mut back_buffer_scale = mtld3d_core::render_scale::BackBufferScale::new(
+        resolve_render_scale(
+            crate::rt::device::metalfx_available(&mtl),
+            cfg.render_scale_percent,
+        ),
+        cfg.render_panel_fit,
     );
-    let (render_w, render_h) = render_scale.extent(pp.back_buffer_width, pp.back_buffer_height);
+    let back_buffer = (pp.back_buffer_width, pp.back_buffer_height);
     let mut core = crate::rt::device::CoreDevice::with_options(mtl, profile, options);
     core.set_retention_cap(cfg.vbib_retention_cap_bytes);
-    core.attach_scaled(
+    let mut render_scale = mtld3d_core::render_scale::RenderScale::IDENTITY;
+    let mut render_extent = back_buffer;
+    core.attach_with_screen(
         isize::try_from(hwnd).unwrap_or_default(),
-        render_w,
-        render_h,
         pp.back_buffer_width,
         pp.back_buffer_height,
         samples,
+        |screen_sizes| {
+            adopt_attached_screen(&mut back_buffer_scale, screen_sizes);
+            render_scale = back_buffer_scale.for_back_buffer(back_buffer);
+            render_extent = render_scale.size(back_buffer);
+            (render_scale, render_extent.0, render_extent.1)
+        },
     );
+    let (render_w, render_h) = render_extent;
+    log_render_size(&back_buffer_scale, back_buffer, render_extent);
     let (cursor_scale, scale_origin) = resolve_cursor_scale(core.backing_scale(), cfg.cursor_scale);
     let software_cursor = core.software_cursor_active();
     info!(
@@ -2102,6 +2113,7 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
             core.texture_create(id, &desc);
             if !render_scale.is_identity() {
                 core.set_texture_logical_size(id, pp.back_buffer_width, pp.back_buffer_height);
+                core.set_texture_scale(id, render_scale);
             }
             let bound = core.set_depth(Some(crate::rt::device::DepthRef { id, level: 0 }));
             debug_assert!(bound, "a depth texture just made binds");
@@ -2122,6 +2134,7 @@ fn create_device_impl(args: &CreateDeviceArgs) -> i32 {
         backbuffer_width: pp.back_buffer_width,
         backbuffer_height: pp.back_buffer_height,
         render_scale,
+        back_buffer_scale,
         core: Box::new(core),
         core_overlay,
         render_states,
@@ -2242,6 +2255,27 @@ pub const fn resolve_cursor_scale(
     (scale, origin)
 }
 
+/// Size `scale` against the window's screen an attach published; `true` when its sizes changed.
+///
+/// Falls back to the primary display's panel and desktop backing size when no window screen was
+/// published (`screen_sizes == 0` or zero backing).
+pub fn adopt_attached_screen(
+    scale: &mut mtld3d_core::render_scale::BackBufferScale,
+    screen_sizes: u64,
+) -> bool {
+    let sizes = mtld3d_shared::render_size::ScreenSizes::unpack(screen_sizes);
+    if sizes.backing.is_some() {
+        return scale.set_screen(sizes.panel, sizes.backing);
+    }
+    let known = |w: u32, h: u32| (w != 0 && h != 0).then_some((w, h));
+    let (panel_w, panel_h) = crate::rt::device::info::panel_size();
+    let desktop = ADAPTER_MODES.desktop;
+    scale.set_screen(
+        known(panel_w, panel_h),
+        known(desktop.width, desktop.height),
+    )
+}
+
 fn resolve_render_scale(
     metalfx_available: bool,
     render_scale_percent: u32,
@@ -2257,17 +2291,37 @@ fn resolve_render_scale(
             target: LOG_TARGET,
             "render.scale = {} ignored: this GPU has no MetalFX spatial upscaler, so the \
              frame is rendered at full resolution",
-            f64::from(requested.percent()) / 100.0,
+            f64::from(render_scale_percent) / 100.0,
         );
         return RenderScale::IDENTITY;
     }
     info!(
         target: LOG_TARGET,
-        "render.scale = {}: rendering at {}% of the presented resolution",
-        f64::from(requested.percent()) / 100.0,
-        requested.percent(),
+        "render.scale = {}: rendering at {render_scale_percent}% of the presented resolution",
+        f64::from(render_scale_percent) / 100.0,
     );
     requested
+}
+
+/// Say once per device what the back buffer rasterizes at and the screen it was sized against.
+fn log_render_size(
+    scale: &mtld3d_core::render_scale::BackBufferScale,
+    back_buffer: (u32, u32),
+    render: (u32, u32),
+) {
+    let fmt = |size: Option<(u32, u32)>| {
+        size.map_or_else(|| "unknown".to_owned(), |(w, h)| format!("{w}x{h}"))
+    };
+    info!(
+        target: LOG_TARGET,
+        "render size: back buffer {}x{} rasterizes at {}x{} (panel {}, backing {})",
+        back_buffer.0,
+        back_buffer.1,
+        render.0,
+        render.1,
+        fmt(scale.panel()),
+        fmt(scale.backing()),
+    );
 }
 
 /// Give the window back when device creation fails mid-way.

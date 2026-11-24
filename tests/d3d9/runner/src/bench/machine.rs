@@ -440,8 +440,10 @@ fn image_origin(pid: u32, legs: &[PathBuf]) -> Option<bool> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default();
+        .map_or_else(
+            |_| String::new(),
+            |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+        );
     let images: Vec<&str> = listing
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
@@ -586,8 +588,10 @@ fn ps(args: &[&str]) -> String {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default()
+        .map_or_else(
+            |_| String::new(),
+            |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
 }
 
 #[cfg(test)]

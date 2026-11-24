@@ -28,7 +28,7 @@ use winemetal_sys::{
 use super::{
     Queue,
     merge::{MergePlan, apply_clear, clear_target, same_target},
-    order::{FENCE_COUNT, FrameGenOrder, NO_FENCE, OrderState, draws, serial_from_env},
+    order::{FrameGenOrder, NO_FENCE, OrderState, draws, serial_from_env},
     render_join_stage, slots_from_env,
     timestamp::{DONT_SAMPLE, LoneReason, RingSampling, TimestampState},
 };
@@ -238,8 +238,8 @@ fn make_blit_encoder(position: u32) -> BlitEncoderData {
 #[test]
 fn order_as_cpp() {
     let mut state = OrderState::new(false);
-    for i in 0..FENCE_COUNT {
-        state.fence_handles[i] = 1000 + i as u64;
+    for (i, handle) in state.fence_handles.iter_mut().enumerate() {
+        *handle = 1000 + i as u64;
     }
 
     // Encoder 0: a drawing render pass with `join = true` in overlap mode (`!serial`) allocates
@@ -669,8 +669,8 @@ fn execute_commits_at_once() {
 #[test]
 fn framegen_order_joins() {
     let mut state = OrderState::new(false);
-    for i in 0..FENCE_COUNT {
-        state.fence_handles[i] = 2000 + i as u64;
+    for (i, handle) in state.fence_handles.iter_mut().enumerate() {
+        *handle = 2000 + i as u64;
     }
 
     // Populate the frontier with two overlapping encoders (fences 0 and 1, handles 2000 and 2001).

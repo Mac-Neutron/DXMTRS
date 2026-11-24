@@ -194,6 +194,7 @@ pub fn panel_size() -> (u32, u32) {
         panel_max_hz: 0,
         flags: 0,
         reserved: 0,
+        screen_sizes: 0,
     };
     // SAFETY: `WMTViewSyncAndPoll` accepts `view == 0, layer == 0` with `MAIN_PANEL` on host.
     unsafe {

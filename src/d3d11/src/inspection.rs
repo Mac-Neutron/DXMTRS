@@ -35,6 +35,7 @@ const D3D11_FEATURE_D3D11_OPTIONS3: u32 = 15;
 const D3D11_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT: u32 = 16;
 const D3D11_FEATURE_SHADER_CACHE: u32 = 18;
 const D3D11_FEATURE_D3D11_OPTIONS5: u32 = 19;
+const D3D11_SHARED_RESOURCE_TIER_3: u32 = 3;
 
 /// Resolved DXGI format descriptor together with its Metal format capability bits.
 pub struct FormatInfo {
@@ -231,9 +232,14 @@ impl Inspection {
             D3D11_FEATURE_THREADING => {
                 write_words(p_feature_support_data, feature_support_data_size, &[1, 1])
             }
-            D3D11_FEATURE_DOUBLES | D3D11_FEATURE_D3D11_OPTIONS5 => {
+            D3D11_FEATURE_DOUBLES => {
                 write_words(p_feature_support_data, feature_support_data_size, &[0])
             }
+            D3D11_FEATURE_D3D11_OPTIONS5 => write_words(
+                p_feature_support_data,
+                feature_support_data_size,
+                &[D3D11_SHARED_RESOURCE_TIER_3],
+            ),
             D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS
             | D3D11_FEATURE_D3D9_OPTIONS
             | D3D11_FEATURE_D3D9_SHADOW_SUPPORT

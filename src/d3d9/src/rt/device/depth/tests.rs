@@ -1634,3 +1634,253 @@ fn forget_texture_clears_cached_depth_snapshots() {
     rig.core.forget_texture(depth);
     assert!(rig.core.depth_snapshots.is_empty());
 }
+
+/// Unscaled RT0 over a scaled single-sample depth opens a plane on active draws and carries back.
+#[test]
+fn unscaled_rt_over_scaled_depth_opens_plane_only_when_active_and_carries_back() {
+    use mtld3d_core::render_scale::RenderScale;
+
+    let mut rig = Rig::new(0x465);
+    let scale = RenderScale::from_percent(75);
+    let (depth_id, depth_tex) = rig.depth(10, D32F_S8, scale.size((64, 32)), 1);
+    rig.core.set_texture_logical_size(depth_id, 64, 32);
+    rig.core.set_texture_scale(depth_id, scale);
+    assert!(rig.core.set_depth(Some(level0(depth_id))));
+
+    // Inert draw (no depth/stencil read or write) neither allocates nor transfers a plane.
+    assert_eq!(rig.draw(&key_with(D32F_S8), INERT), Ok(()));
+    let inert_calls = rig.take();
+    assert!(
+        textures_made(&inert_calls).is_empty(),
+        "inert draw must not allocate an unscaled plane: {inert_calls:#?}"
+    );
+    let inert_passes = passes(&inert_calls);
+    assert_eq!(inert_passes.len(), 1, "{inert_calls:#?}");
+    let inert_depth = plane_handle(inert_passes[0], "depth").expect("depth attachment");
+    assert_eq!(rig.texture_of(&inert_depth), depth_tex, "{inert_calls:#?}");
+
+    // Depth-writing draw allocates the 64x32 plane, carries depth+stencil in, draws onto the plane,
+    // and on drain/commit carries the plane back into the scaled 48x24 depth surface.
+    assert_eq!(rig.draw(&key_with(D32F_S8), (tested(), 0, 0.0)), Ok(()));
+    assert_eq!(rig.core.depth_size(), Some((64, 32)));
+    let calls = rig.take();
+    assert!(!rig.core.depth_plane.span_open());
+    assert_eq!(rig.core.depth_size(), Some(scale.size((64, 32))));
+
+    let made = textures_made(&calls);
+    // Depth32FloatStencil8 carry-in also blits via one VIEW_TWINS scratch before transfer-in.
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("MTLDevice_newTexture ") && c.contains(" size=64x32x1 ")),
+        "expected 64x32 unscaled depth plane allocation: {calls:#?}"
+    );
+    let plane_tex = made
+        .iter()
+        .find(|t| {
+            calls.iter().any(|c| {
+                c.starts_with(&format!("MTLDevice_newTexture {t} ")) && c.contains(" size=64x32x1 ")
+            })
+        })
+        .expect("64x32 plane handle")
+        .clone();
+
+    // Filter to rendered passes (each transfer/draw emits `DRAW_3`), skipping the scratch zero clear.
+    let render_passes: Vec<_> = passes(&calls)
+        .into_iter()
+        .filter(|p| p.iter().any(|c| c == DRAW_3))
+        .collect();
+    // Passes: transfer-in (onto plane) -> main draw pass (onto plane) -> transfer-back (onto depth_tex).
+    assert_eq!(render_passes.len(), 3, "{calls:#?}");
+    assert_eq!(
+        rig.texture_of(&plane_handle(render_passes[0], "depth").expect("carry-in dst")),
+        plane_tex,
+        "pass 0 must transfer into unscaled plane: {calls:#?}"
+    );
+    assert_eq!(
+        rig.texture_of(&plane_handle(render_passes[1], "depth").expect("draw depth attachment")),
+        plane_tex,
+        "draw pass must bind unscaled plane: {calls:#?}"
+    );
+    assert_eq!(
+        scissor_of(render_passes[1]).as_deref(),
+        Some("64 32"),
+        "draw scissor must cover unscaled target: {calls:#?}"
+    );
+    assert_eq!(
+        rig.texture_of(&plane_handle(render_passes[2], "depth").expect("carry-back dst")),
+        depth_tex,
+        "closing pass must transfer plane back into scaled depth texture: {calls:#?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c == "MTLDevice_newRenderPipelineState")
+            && calls
+                .iter()
+                .any(|c| c.contains(" cmp=7 write=1 front=1,7,2,2,2,0,255")),
+        "expected depth transfer pipeline and overwrite dsso: {calls:#?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("MTLTexture_newTextureView ") && c.contains(" format=261 ")),
+        "expected X32_Stencil8 view for stencil carry-in/carry-back: {calls:#?}"
+    );
+}
+
+/// Depth/stencil Clear over mixed targets opens the unscaled plane and clears it directly.
+#[test]
+fn mixed_depth_clear_opens_unscaled_plane_and_carries_back() {
+    use mtld3d_core::render_scale::RenderScale;
+
+    let mut rig = Rig::new(0x466);
+    let scale = RenderScale::from_percent(75);
+    let (depth_id, depth_tex) = rig.depth(11, D32F, scale.size((64, 32)), 1);
+    rig.core.set_texture_logical_size(depth_id, 64, 32);
+    rig.core.set_texture_scale(depth_id, scale);
+    assert!(rig.core.set_depth(Some(level0(depth_id))));
+
+    rig.core.open_depth_span();
+    assert_eq!(rig.core.depth_size(), Some((64, 32)));
+    rig.core.clear_depth_stencil(1, 0.25, 0);
+    let calls = rig.take();
+    let made = textures_made(&calls);
+    assert_eq!(
+        made.len(),
+        1,
+        "D32F carry-in needs no stencil scratch: {calls:#?}"
+    );
+    let plane_tex = &made[0];
+    let all = passes(&calls);
+    // Passes: transfer-in (plane) -> clear pass (plane) -> transfer-back (depth_tex).
+    assert_eq!(all.len(), 3, "{calls:#?}");
+    assert_eq!(
+        rig.texture_of(&plane_handle(all[1], "depth").expect("clear depth attachment")),
+        *plane_tex,
+        "clear pass must target the unscaled plane: {calls:#?}"
+    );
+    assert_eq!(
+        rig.texture_of(&plane_handle(all[2], "depth").expect("carry-back dst")),
+        depth_tex,
+        "{calls:#?}"
+    );
+}
+
+/// Sampleable depth texture level writes back stand-in once per write epoch (#1271).
+#[test]
+fn sampleable_depth_level_writes_back_stand_in_before_sampling() {
+    use mtld3d_core::render_scale::RenderScale;
+
+    let mut rig = Rig::new(0x467);
+    let scale = RenderScale::from_percent(75);
+    let color_id = TextureId::from_raw(20);
+    rig.core.texture_create(
+        color_id,
+        &target_desc(WMT_PIXEL_FORMAT_BGRA8_UNORM, TextureKind::Tex2d, 32, 1, 4),
+    );
+    assert!(rig.core.set_target(TargetRef::Texture {
+        id: color_id,
+        level: 0,
+        face: None,
+    }));
+
+    let depth_id = TextureId::from_raw(21);
+    let (scaled_w, scaled_h) = scale.size((64, 64));
+    let mut desc = depth_desc(D32F, scaled_w, scaled_h, 2);
+    desc.flags |= crate::rt::device::CoreTextureFlags::DEPTH_SAMPLEABLE;
+    rig.core.texture_create(depth_id, &desc);
+    rig.core.set_texture_logical_size(depth_id, 64, 64);
+    rig.core.set_texture_scale(depth_id, scale);
+    let _ = rig.take();
+    let level1 = DepthRef {
+        id: depth_id,
+        level: 1,
+    };
+    assert!(rig.core.set_depth(Some(level1)));
+
+    // 1. Write depth into unscaled 32x32 plane (opens span over mip 1 -> 24x24 scaled).
+    assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
+    assert!(rig.core.depth_plane.span_open());
+    let epoch_after_write = rig.core.depth_plane_write_epoch;
+
+    // 2. Sample the bound depth texture in PS -> triggers one stand-in write-back to mip 1.
+    let bind = rig
+        .core
+        .texture_bind(Stage::Pixel, 0, depth_id, D32F, None)
+        .expect("sampleable depth texture binds");
+    let binds = ff_binds();
+    let textures = [bind];
+    let sampling_readonly = DrawData {
+        depth_stencil: DepthStencilSnapshot::inert(),
+        textures: &textures,
+        key_gen: 1,
+        ..triangle(&binds)
+    };
+    assert_eq!(rig.draw(&key_with(0), INERT), Ok(()));
+    assert_eq!(rig.core.draw(&key_with(0), &sampling_readonly), Ok(()));
+    assert_eq!(rig.core.depth_stand_in_epoch, epoch_after_write);
+    // Sampling again without an intervening depth write must not write back a second time.
+    assert_eq!(rig.core.draw(&key_with(0), &sampling_readonly), Ok(()));
+
+    let calls = rig.take();
+    // Expect 4 render passes: carry-in -> draw1(write) + draw_inert(same color/no-depth) -> wait:
+    // draw(key_with(0)) closes depth pass -> write-back (level 1 of depth_id) -> sampling pass -> close_span (level 1).
+    let depth_target_passes: Vec<_> = passes(&calls)
+        .into_iter()
+        .filter(|p| {
+            plane_handle(p, "depth").is_some_and(|h| rig.mip_of(&h).as_deref() == Some("1"))
+        })
+        .collect();
+    // Expect exactly 2 write-backs targeting mip 1: one on stand-in readback, one on span close.
+    assert_eq!(
+        depth_target_passes.len(),
+        2,
+        "stand-in must write back once before sampling and once on close: {calls:#?}"
+    );
+}
+
+/// Scaled render target over an unscaled depth surface is `Pairing::Unserved` and opens no plane.
+#[test]
+fn scaled_target_over_unscaled_depth_opens_no_plane() {
+    use mtld3d_core::render_scale::RenderScale;
+
+    let mut rig = Rig::new(0x468);
+    let scale = RenderScale::from_percent(75);
+    let rt_id = TextureId::from_raw(30);
+    let (rw, rh) = scale.size((64, 64));
+    rig.core.texture_create(
+        rt_id,
+        &CoreTextureDesc {
+            pixel_format: WMT_PIXEL_FORMAT_BGRA8_UNORM,
+            kind: TextureKind::Tex2d,
+            width: rw,
+            height: rh,
+            depth: 1,
+            levels: 1,
+            flags: crate::rt::device::CoreTextureFlags::RENDER_TARGET,
+            srgb_format: 0,
+            block: (1, 1, 4),
+            samples: 1,
+        },
+    );
+    rig.core.set_texture_logical_size(rt_id, 64, 64);
+    rig.core.set_texture_scale(rt_id, scale);
+    assert!(rig.core.set_target(TargetRef::Texture {
+        id: rt_id,
+        level: 0,
+        face: None,
+    }));
+
+    let (depth_id, _) = rig.depth(31, D32F, (64, 64), 1);
+    assert!(rig.core.set_depth(Some(level0(depth_id))));
+    let _ = rig.take();
+
+    assert_eq!(rig.draw(&key_with(D32F), (tested(), 0, 0.0)), Ok(()));
+    assert!(!rig.core.depth_plane.span_open());
+    let calls = rig.take();
+    assert!(
+        textures_made(&calls).is_empty(),
+        "unserved scaled target over unscaled depth must allocate no plane: {calls:#?}"
+    );
+}

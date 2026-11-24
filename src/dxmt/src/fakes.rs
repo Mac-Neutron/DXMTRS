@@ -25,6 +25,9 @@ pub type QueueCommandBufferHandler = fn(u64, u64) -> u64;
 /// Thread-local hook for `NSObject_description` and `NSString` readback.
 pub type DescriptionHook = fn(u64) -> Option<&'static str>;
 
+/// Thread-local hook for `MTLSharedEvent_waitUntilSignaledValue`.
+pub type WaitUntilSignaledHook = fn(u64, u64, u64);
+
 static NEXT_CMDBUF: AtomicU64 = AtomicU64::new(0x8000_0001);
 static QUEUE_CMDBUF_HANDLER: Mutex<Option<QueueCommandBufferHandler>> = Mutex::new(None);
 
@@ -36,6 +39,7 @@ thread_local! {
     static POOL_HOOK: Cell<Option<PoolHook>> = const { Cell::new(None) };
     static COMMAND_BUFFER_HOOK: Cell<Option<CommandBufferHook>> = const { Cell::new(None) };
     static DESCRIPTION_HOOK: Cell<Option<DescriptionHook>> = const { Cell::new(None) };
+    static WAIT_UNTIL_SIGNALED_HOOK: Cell<Option<WaitUntilSignaledHook>> = const { Cell::new(None) };
 }
 
 /// Sends this thread's `NSObject_retain` and `NSObject_release` calls to `hook`.
@@ -68,6 +72,18 @@ pub fn register_command_buffer_handler(handler: QueueCommandBufferHandler) {
 /// Routes this thread's `NSObject_description` and `NSString` queries through `hook`.
 pub fn on_description(hook: Option<DescriptionHook>) {
     DESCRIPTION_HOOK.set(hook);
+}
+
+/// Routes this thread's `MTLSharedEvent_waitUntilSignaledValue` calls through `hook`.
+pub fn on_wait_until_signaled(hook: Option<WaitUntilSignaledHook>) {
+    WAIT_UNTIL_SIGNALED_HOOK.set(hook);
+}
+
+/// Notifies the thread-local hook installed via [`on_wait_until_signaled`].
+pub fn notify_wait_until_signaled(event: u64, value: u64, timeout: u64) {
+    if let Some(hook) = WAIT_UNTIL_SIGNALED_HOOK.get() {
+        hook(event, value, timeout);
+    }
 }
 
 fn call(name: &'static str, object: u64) {

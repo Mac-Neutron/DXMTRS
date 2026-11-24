@@ -6,8 +6,10 @@
 //! at `<out>/<leg>/<round>`, where each benchmark writes its
 //! `bench-<name>.metrics` and names itself in it (`meta test`). Round `r`
 //! runs the base first when `r` is even and the candidate first when it is
-//! odd. The benchmarks run in libtest's order, by test path, the same in
-//! both legs and every round, so what one leaves in the process for the
+//! odd. Before round 0 both legs run one unmeasured round, the base first,
+//! into `<out>/<leg>/warmup` (see [`schedule`]). The benchmarks run in
+//! libtest's order, by test path, the same in both legs and every round,
+//! so what one leaves in the process for the
 //! next (the process-wide pipeline cache, the page-box pool, the address
 //! space its memory rows sample) is the same on both sides of each pair;
 //! each still creates its own device, whose first perf window opens with
@@ -47,7 +49,7 @@ use std::{
 };
 
 use super::{
-    LAYOUTS_FILE, Leg, SAME_IMAGE_FILE, SHAPE_DIR, WINE_FILE,
+    LAYOUTS_FILE, Leg, SAME_IMAGE_FILE, SHAPE_DIR, WARMUP_DIR, WINE_FILE,
     compare::{self, Layouts, Options},
     machine,
     metrics::{self, Class, MetricsFile},
@@ -148,6 +150,8 @@ pub struct Images {
 /// One run of the A/B schedule.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
+    /// The unmeasured round in `leg` of the benchmarks of test binary `group`, as a judged one.
+    Warmup { group: usize, leg: Leg },
     /// Round `round` in `leg` of the benchmarks of test binary `group`, one process for all.
     Round { group: usize, round: u32, leg: Leg },
     /// The untimed run of benchmark `bench` in `leg` under the pass trace.
@@ -213,8 +217,8 @@ pub fn run(config: &AbConfig) -> Result<ExitCode, String> {
     }
     let groups = group_by_binary(&benches);
     println!(
-        "bench-ab: {} benchmarks in {} process{} a leg a round{}, {} rounds, both legs each \
-         round, into {}",
+        "bench-ab: {} benchmarks in {} process{} a leg a round{}, one unmeasured round and then \
+         {} rounds, both legs each round, into {}",
         benches.len(),
         groups.len(),
         if groups.len() == 1 { "" } else { "es" },
@@ -244,25 +248,34 @@ pub fn run(config: &AbConfig) -> Result<ExitCode, String> {
         config.runs,
     ) {
         let leg = match &step {
-            Step::Round { leg, .. } | Step::Shape { leg, .. } | Step::Host { leg, .. } => leg,
+            Step::Warmup { leg, .. }
+            | Step::Round { leg, .. }
+            | Step::Shape { leg, .. }
+            | Step::Host { leg, .. } => leg,
         };
         let spec = match leg {
             Leg::Base => &config.base,
             Leg::Cand => &config.cand,
         };
         match step {
+            Step::Warmup { group, leg } => {
+                let dir = out.join(leg.dir()).join(WARMUP_DIR);
+                for (at, path, file) in
+                    run_group(config, spec, &benches, &groups[group], &dir, &wines)?
+                {
+                    println!(
+                        "bench-ab: {} unmeasured round {}: {}",
+                        benches[at].id,
+                        leg.dir(),
+                        progress(&path, &file)
+                    );
+                }
+            }
             Step::Round { group, round, leg } => {
-                let members: Vec<&Bench> = groups[group].iter().map(|&at| &benches[at]).collect();
                 let dir = out.join(leg.dir()).join(round.to_string());
-                machine::keep_when_ready(
-                    &dir,
-                    &binary_name(&members[0].exe),
-                    &wines,
-                    config.wait_idle,
-                )?;
-                for (member, path, file) in run_round(config, spec, &members, &dir)? {
-                    let at = groups[group][member];
-                    check_stamp(&path, &file, spec)?;
+                for (at, path, file) in
+                    run_group(config, spec, &benches, &groups[group], &dir, &wines)?
+                {
                     declares_shape[at] |= !file.shape.is_empty();
                     timed[at].note(&leg, &path, &file);
                     println!(
@@ -345,6 +358,12 @@ pub fn run(config: &AbConfig) -> Result<ExitCode, String> {
 /// of the `groups` test binaries' processes in both legs the same way, and
 /// after the last round each of the `benches` gets its shape runs, the
 /// base's first.
+/// Before round 0 each group runs once in both legs, the base first, as an
+/// unmeasured round. The run's first end-to-end benchmark process reads
+/// faster than the same leg's later ones (3 to 5 % on `texture_streaming`'s
+/// frame and API times), and only the candidate's prefix has run the
+/// binary before it, for the `--list`; without that round both fall on the
+/// base's round 0 and bias every pair's first ratio.
 #[must_use]
 pub fn schedule(groups: usize, benches: usize, host: bool, runs: u32) -> Vec<Step> {
     let legs = |round: u32| {
@@ -360,6 +379,11 @@ pub fn schedule(groups: usize, benches: usize, host: bool, runs: u32) -> Vec<Ste
             for leg in legs(round) {
                 order.push(Step::Host { round, leg });
             }
+        }
+    }
+    for group in 0..groups {
+        for leg in [Leg::Base, Leg::Cand] {
+            order.push(Step::Warmup { group, leg });
         }
     }
     for round in 0..runs {
@@ -594,6 +618,35 @@ pub fn run_config(shared: &str, leg: &LegSpec, dir: &Path) -> String {
     }
 }
 
+/// Run the round of one group under `spec` into `dir` once the machine is quiet.
+///
+/// `members` are the group's indices into `benches`. Returns every metrics
+/// file the process wrote, each with the index in `benches` of the
+/// benchmark that wrote it, once its stamp is checked against the leg's.
+///
+/// # Errors
+///
+/// Returns a message when the machine does not quiet down in time, the
+/// round fails ([`run_round`]), or a file names another layer.
+fn run_group(
+    config: &AbConfig,
+    spec: &LegSpec,
+    benches: &[Bench],
+    members: &[usize],
+    dir: &Path,
+    wines: &[PathBuf],
+) -> Result<Vec<(usize, PathBuf, MetricsFile)>, String> {
+    let group: Vec<&Bench> = members.iter().map(|&at| &benches[at]).collect();
+    machine::keep_when_ready(dir, &binary_name(&group[0].exe), wines, config.wait_idle)?;
+    run_round(config, spec, &group, dir)?
+        .into_iter()
+        .map(|(member, path, file)| {
+            check_stamp(&path, &file, spec)?;
+            Ok((members[member], path, file))
+        })
+        .collect()
+}
+
 /// Run one round of `benches`, all carried by one test binary, in one process under `spec`.
 ///
 /// Returns every metrics file the process wrote into `dir`, each with the
@@ -808,8 +861,7 @@ fn run_shape(
     let stem = bench
         .exe
         .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
     let log = dir.join(mtld3d_shared::log_paths::log_file_name(&stem, end.pid));
     Ok((log, end.kind))
 }

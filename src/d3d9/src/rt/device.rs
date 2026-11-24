@@ -242,6 +242,16 @@ pub struct CoreDevice {
     /// None for one Metal does not make, never made again. Never cleared, as the pipelines: a
     /// recorded closure names its pipeline by handle.
     resolve_pipelines: rustc_hash::FxHashMap<u32, Option<Obj>>,
+    /// Unscaled scratch depth plane serving unscaled RT0 over a scaled single-sample depth surface.
+    depth_plane: mtld3d_core::depth_plane::DepthPlane<Arc<dxmt_core::resource::Texture>>,
+    /// Single-sample nearest-texel depth transfer functions (`transfer_depth_*`).
+    transfer_functions: OnceLock<Option<[Obj; 3]>>,
+    /// Single-sample depth transfer pipelines by destination `WMTPixelFormat`.
+    transfer_pipelines: rustc_hash::FxHashMap<u32, Option<Obj>>,
+    /// Monotonic epoch bumped whenever the open depth plane receives a write or clear.
+    depth_plane_write_epoch: u64,
+    /// `depth_plane_write_epoch` at which a sampleable depth texture level last matched the plane.
+    depth_stand_in_epoch: u64,
     /// The colour target draws and clears go to (C4b-3d1).
     target: TargetRef,
     /// Optional logical `(width, height)` override for target 0 occlusion rescaling.
@@ -289,6 +299,10 @@ pub struct CoreDevice {
     overlay: Arc<swapchain::OverlaySink>,
     /// Display backing scale (`1..=8`) published by `WMTAttachMetalView` / `WMTViewSyncAndPoll`.
     backing_scale: u32,
+    /// Packed `ScreenSizes` (`mtld3d_shared::render_size::ScreenSizes`) published by winemetal.
+    screen_sizes: u64,
+    /// Current back buffer's render scale (`RenderScale::IDENTITY` until set).
+    back_buffer_scale: mtld3d_core::render_scale::RenderScale,
     /// Layer drawable size in pixels, preserved across `resize` and `retarget`.
     drawable_size: (u32, u32),
     /// Consecutive present geometry streak for `MetalFX` settle hysteresis.
@@ -403,6 +417,11 @@ impl CoreDevice {
             quad_pipelines: rustc_hash::FxHashMap::default(),
             resolve_functions: OnceLock::new(),
             resolve_pipelines: rustc_hash::FxHashMap::default(),
+            depth_plane: mtld3d_core::depth_plane::DepthPlane::new(),
+            transfer_functions: OnceLock::new(),
+            transfer_pipelines: rustc_hash::FxHashMap::default(),
+            depth_plane_write_epoch: 0,
+            depth_stand_in_epoch: 0,
             target: TargetRef::BackBuffer,
             target_logical_size: None,
             extras: [None; 3],
@@ -424,6 +443,8 @@ impl CoreDevice {
             gamma_revision: 0,
             overlay: Arc::new(swapchain::OverlaySink::new()),
             backing_scale: 1,
+            screen_sizes: 0,
+            back_buffer_scale: mtld3d_core::render_scale::RenderScale::IDENTITY,
             drawable_size: (0, 0),
             settled_geometry: None,
             upscale: None,
@@ -697,6 +718,7 @@ impl Drop for CoreDevice {
             prewarm.cancel_and_join();
         }
         self.drain();
+        let _ = self.depth_plane.take_plane();
         // A bracket the front end never ended counted on every pass since its BEGIN.
         if let Some(open @ 1..) = self.open_brackets {
             log::error!(

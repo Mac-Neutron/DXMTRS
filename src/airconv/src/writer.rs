@@ -56,8 +56,9 @@ pub fn function_entries(m: &Module<'_>) -> Vec<FunctionEntry> {
                 entry.vertex_attributes = operands
                     .get(2)
                     .and_then(|&inputs| node_operands(inputs))
-                    .map(|inputs| inputs.into_iter().filter_map(vertex_input).collect())
-                    .unwrap_or_default();
+                    .map_or_else(Vec::new, |inputs| {
+                        inputs.into_iter().filter_map(vertex_input).collect()
+                    });
             }
             entries.push(entry);
         }

@@ -24,7 +24,8 @@ use winemetal_sys::{
     MTLCommandBuffer_blitCommandEncoder, MTLCommandBuffer_commit,
     MTLCommandBuffer_encodeSignalEvent, MTLCommandBuffer_renderCommandEncoder,
     MTLCommandEncoder_endEncoding, MTLCommandQueue_commandBuffer, MTLDevice_newBuffer,
-    MTLDevice_newCommandQueue, MTLDevice_newSharedEvent, MTLSharedEvent_signaledValue, Obj, Pool,
+    MTLDevice_newCommandQueue, MTLDevice_newSharedEvent, MTLSharedEvent_signaledValue,
+    MTLSharedEvent_waitUntilSignaledValue, Obj, Pool,
     wire::{
         MemPtr, WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE,
         WMT_BLIT_COMMAND_COPY_FROM_BUFFER_TO_TEXTURE_WITH_BLIT_OPTION,
@@ -216,6 +217,15 @@ impl ResourceInitializer {
         batch.coherent = unsafe { MTLSharedEvent_signaledValue(self.event()) };
         batch.release_coherent();
         if batch.coherent == last { 0 } else { last }
+    }
+
+    /// Waits on the host until the initializer's shared event reaches `seq` (no-op for `0`).
+    pub fn wait(&self, seq: u64) {
+        if seq == 0 {
+            return;
+        }
+        // SAFETY: the initializer's live shared event, or nil, which returns false.
+        unsafe { MTLSharedEvent_waitUntilSignaledValue(self.event(), seq, u64::MAX) };
     }
 
     fn lock(&self) -> MutexGuard<'_, Batch> {
