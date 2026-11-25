@@ -19,7 +19,15 @@ set -eu
 }
 root=$(cd "$(dirname "$0")/.." && pwd)
 profile=${6:-production}
-case $2 in *-apple-darwin) export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-27.0}" ;; esac
+ch=${CARGO_HOME:-$HOME/.cargo}
+case $2 in
+  *-apple-darwin)
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-27.0}"
+    maps="-ffile-prefix-map=$HOME=~ -ffile-prefix-map=$ch/registry/src=crates -ffile-prefix-map=$root=dxmtrs"
+    export CFLAGS="${CFLAGS:+$CFLAGS }$maps"
+    export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }$maps"
+    ;;
+esac
 case $2 in
   *-linux-gnu) ;; # tools/linux-cargo.sh sets its own
   *) if [ -n "${MTLD3D_LLVM_MINGW:-}" ]; then
@@ -27,7 +35,6 @@ case $2 in
        eval "$e"
      fi ;;
 esac
-ch=${CARGO_HOME:-$HOME/.cargo}
 lib=$(echo "$3" | tr - _)
 link= f=lib$lib.a
 case $2 in *-windows-msvc) f=$lib.lib ;; esac
